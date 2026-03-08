@@ -2,7 +2,7 @@
 CLI for rsi-python.
 
 Main command:
-    rsi <subcommand> [options]
+    rsi-tpw <subcommand> [options]
 
 Subcommands:
     info     — Print summary of .p file(s)
@@ -387,7 +387,7 @@ def _add_chi_parser(subparsers):
                    choices=["single_pole", "double_pole"],
                    help="FP07 transfer function model (default: single_pole)")
     p.add_argument("--epsilon-dir", metavar="DIR", default=None,
-                   help="Directory with epsilon .nc files from 'rsi eps' (Method 1). "
+                   help="Directory with epsilon .nc files from 'rsi-tpw eps' (Method 1). "
                         "If omitted, uses Method 2 (spectral fitting).")
     p.add_argument("--fit-method", default="mle",
                    choices=["mle", "iterative"],
@@ -441,7 +441,7 @@ def _add_pipeline_parser(subparsers):
 def main():
     """Main CLI entry point for rsi-python."""
     parser = argparse.ArgumentParser(
-        prog="rsi",
+        prog="rsi-tpw",
         description="rsi-python: Tools for Rockland Scientific microprofiler data.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -463,29 +463,29 @@ def main():
 
 def p2nc():
     """Legacy entry point for p2nc."""
-    sys.argv = ["rsi", "nc"] + sys.argv[1:]
+    sys.argv = ["rsi-tpw", "nc"] + sys.argv[1:]
     main()
 
 
 def pinfo():
     """Legacy entry point for pinfo."""
-    sys.argv = ["rsi", "info"] + sys.argv[1:]
+    sys.argv = ["rsi-tpw", "info"] + sys.argv[1:]
     main()
 
 
 def p2prof():
     """Legacy entry point for p2prof."""
-    sys.argv = ["rsi", "prof"] + sys.argv[1:]
+    sys.argv = ["rsi-tpw", "prof"] + sys.argv[1:]
     main()
 
 
 def p2eps():
     """Legacy entry point for p2eps."""
-    sys.argv = ["rsi", "eps"] + sys.argv[1:]
+    sys.argv = ["rsi-tpw", "eps"] + sys.argv[1:]
     main()
 
 
 def p2chi():
     """Legacy entry point for p2chi."""
-    sys.argv = ["rsi", "chi"] + sys.argv[1:]
+    sys.argv = ["rsi-tpw", "chi"] + sys.argv[1:]
     main()
