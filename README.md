@@ -104,11 +104,11 @@ This package is a Python implementation derived from:
 
 ### Key papers
 
-- Lueck, R.G., 2022: The statistics of oceanic turbulence measurements. Part 1: Shear variance and dissipation rates. *J. Atmos. Oceanic Technol.*, 39, 1259–1276.
-- McMillan, J.M., A.E. Hay, R.G. Lueck, and F. Wolk, 2016: Rates of dissipation of turbulent kinetic energy in a high Reynolds number tidal channel. *J. Atmos. Oceanic Technol.*, 33, 817–837.
-- Oakey, N.S., 1982: Determination of the rate of dissipation of turbulent energy from simultaneous temperature and velocity shear microstructure measurements. *J. Phys. Oceanogr.*, 12, 256–271.
-- Goodman, L., E.R. Levine, and R.G. Lueck, 2006: On measuring the terms of the turbulent kinetic energy budget from an AUV. *J. Atmos. Oceanic Technol.*, 23, 977–990.
-- Macoun, P. and R.G. Lueck, 2004: Modeling the spatial response of the airfoil shear probe using different sized probes. *J. Atmos. Oceanic Technol.*, 21, 284–297.
+- Lueck, R.G., 2022: [The statistics of oceanic turbulence measurements. Part 1: Shear variance and dissipation rates.](https://doi.org/10.1175/JTECH-D-21-0051.1) *J. Atmos. Oceanic Technol.*, 39, 1259–1276.
+- McMillan, J.M., A.E. Hay, R.G. Lueck, and F. Wolk, 2016: [Rates of dissipation of turbulent kinetic energy in a high Reynolds number tidal channel.](https://doi.org/10.1175/JTECH-D-15-0167.1) *J. Atmos. Oceanic Technol.*, 33, 817–837.
+- Oakey, N.S., 1982: [Determination of the rate of dissipation of turbulent energy from simultaneous temperature and velocity shear microstructure measurements.](https://doi.org/10.1175/1520-0485(1982)012%3C0256:DOTROD%3E2.0.CO;2) *J. Phys. Oceanogr.*, 12, 256–271.
+- Goodman, L., E.R. Levine, and R.G. Lueck, 2006: [On measuring the terms of the turbulent kinetic energy budget from an AUV.](https://doi.org/10.1175/JTECH1889.1) *J. Atmos. Oceanic Technol.*, 23, 977–990.
+- Macoun, P. and R.G. Lueck, 2004: [Modeling the spatial response of the airfoil shear probe using different sized probes.](https://doi.org/10.1175/1520-0426(2004)021%3C0284:MTSROT%3E2.0.CO;2) *J. Atmos. Oceanic Technol.*, 21, 284–297.
 
 ## Testing
 
