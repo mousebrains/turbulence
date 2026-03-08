@@ -1,10 +1,10 @@
-# rsktools
+# rsi-python
 
 Python tools for reading Rockland Scientific microprofiler data and computing turbulent dissipation rates from VMP (Vertical Microstructure Profiler) and MicroRider instruments.
 
 ## Overview
 
-**rsktools** provides a complete processing pipeline for ocean turbulence measurements from Rockland Scientific instruments equipped with shear probes and fast thermistors (FP07). The package reads proprietary `.p` binary data files, converts channels to physical units, detects profiles, and computes the rate of dissipation of turbulent kinetic energy (epsilon) following the methods described in the Rockland Scientific ODAS MATLAB Library and associated Technical Notes.
+**rsi-python** provides a complete processing pipeline for ocean turbulence measurements from Rockland Scientific instruments equipped with shear probes and fast thermistors (FP07). The package reads proprietary `.p` binary data files, converts channels to physical units, detects profiles, and computes the rate of dissipation of turbulent kinetic energy (epsilon) following the methods described in the Rockland Scientific ODAS MATLAB Library and associated Technical Notes.
 
 ### What it computes
 
@@ -64,7 +64,7 @@ p2eps VMP/*.p -o epsilon/ -j 0
 ### Python API
 
 ```python
-from rsktools import PFile, get_diss
+from rsi_python import PFile, get_diss
 
 # Read a .p file
 pf = PFile("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
@@ -98,7 +98,7 @@ ds["spec_nasmyth"]    # fitted Nasmyth spectra
 
 This package is a Python implementation derived from:
 
-- **Rockland Scientific ODAS MATLAB Library** (v4.5.1) — the canonical reference implementation for processing VMP/MicroRider data. Available from [Rockland Scientific](https://github.com/mousebrains/turbulence).
+- **Rockland Scientific ODAS MATLAB Library** (v4.5.1) — the canonical reference implementation for processing VMP/MicroRider data. Available from [Rockland Scientific](https://rocklandscientific.com/support/software/).
 
 - **Rockland Scientific Technical Notes** — detailed descriptions of the `.p` file format (TN-051), dissipation rate estimation (TN-028), and Goodman noise removal bias correction (TN-061). Available at [rocklandscientific.com/support/technical-notes](https://rocklandscientific.com/support/technical-notes/).
 

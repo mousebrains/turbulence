@@ -26,7 +26,7 @@ def p_to_netcdf(p_filepath, nc_filepath=None):
         The parsed data object and the output path.
     """
     import netCDF4 as nc
-    from rsktools.p_file import PFile
+    from rsi_python.p_file import PFile
 
     pf = PFile(p_filepath)
     if nc_filepath is None:

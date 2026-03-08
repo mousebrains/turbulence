@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from rsktools.channels import CONVERTERS
+from rsi_python.channels import CONVERTERS
 
 # ---------------------------------------------------------------------------
 # Header parsing

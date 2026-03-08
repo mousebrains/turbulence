@@ -198,7 +198,7 @@ def extract_profiles(source, output_dir, **profile_kwargs):
 
 def _load_source(source):
     """Load data from PFile, .p path, or .nc path into a common dict."""
-    from rsktools.p_file import PFile
+    from rsi_python.p_file import PFile
 
     if isinstance(source, PFile):
         return _load_from_pfile(source)

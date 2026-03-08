@@ -7,7 +7,7 @@ accelerometer cross-spectra.
 
 import numpy as np
 
-from rsktools.spectral import csd_matrix
+from rsi_python.spectral import csd_matrix
 
 
 def clean_shear_spec(accel, shear, nfft, rate):

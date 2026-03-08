@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from rsktools.p_file import PFile
+from rsi_python.p_file import PFile
 
 DATA_DIR = Path(__file__).parent.parent / "VMP"
 SAMPLE_FILE = DATA_DIR / "ARCTERX_Thompson_2025_SN479_0001.p"

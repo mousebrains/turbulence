@@ -11,17 +11,17 @@ import pytest
 
 class TestVisc35:
     def test_zero_celsius(self):
-        from rsktools.ocean import visc35
+        from rsi_python.ocean import visc35
         nu = visc35(0.0)
         assert 1.7e-6 < nu < 1.9e-6, f"visc35(0) = {nu}"
 
     def test_twenty_celsius(self):
-        from rsktools.ocean import visc35
+        from rsi_python.ocean import visc35
         nu = visc35(20.0)
         assert 1.0e-6 < nu < 1.1e-6, f"visc35(20) = {nu}"
 
     def test_array(self):
-        from rsktools.ocean import visc35
+        from rsi_python.ocean import visc35
         T = np.array([0.0, 10.0, 20.0])
         nu = visc35(T)
         assert nu.shape == (3,)
@@ -34,19 +34,19 @@ class TestVisc35:
 
 class TestNasmyth:
     def test_shape(self):
-        from rsktools.nasmyth import nasmyth
+        from rsi_python.nasmyth import nasmyth
         k = np.logspace(-1, 3, 100)
         phi = nasmyth(1e-7, 1.2e-6, k)
         assert phi.shape == (100,)
 
     def test_positive(self):
-        from rsktools.nasmyth import nasmyth
+        from rsi_python.nasmyth import nasmyth
         k = np.logspace(-1, 3, 100)
         phi = nasmyth(1e-7, 1.2e-6, k)
         assert np.all(phi > 0)
 
     def test_higher_epsilon_higher_spectrum(self):
-        from rsktools.nasmyth import nasmyth
+        from rsi_python.nasmyth import nasmyth
         k = np.logspace(0, 2, 50)
         nu = 1e-6
         phi_low = nasmyth(1e-9, nu, k)
@@ -55,7 +55,7 @@ class TestNasmyth:
         assert np.mean(phi_high) > np.mean(phi_low)
 
     def test_nondim(self):
-        from rsktools.nasmyth import nasmyth_nondim
+        from rsi_python.nasmyth import nasmyth_nondim
         x = np.logspace(-4, 0, 100)
         G2 = nasmyth_nondim(x)
         assert G2.shape == (100,)
@@ -63,7 +63,7 @@ class TestNasmyth:
 
     def test_lueck_coefficients(self):
         """Verify we use the Lueck coefficients, not older Oakey ones."""
-        from rsktools.nasmyth import _nasmyth_g2
+        from rsi_python.nasmyth import _nasmyth_g2
         x = np.array([0.01])
         G2 = _nasmyth_g2(x)
         # Lueck: 8.05 * 0.01^(1/3) / (1 + (20.6*0.01)^3.715)
@@ -78,7 +78,7 @@ class TestNasmyth:
 class TestCSD:
     def test_white_noise_flat(self):
         """White noise should produce an approximately flat spectrum."""
-        from rsktools.spectral import csd_odas
+        from rsi_python.spectral import csd_odas
         rng = np.random.default_rng(42)
         x = rng.standard_normal(10000)
         nfft = 256
@@ -93,7 +93,7 @@ class TestCSD:
 
     def test_variance_preservation(self):
         """Integral of auto-spectrum should approximate signal variance."""
-        from rsktools.spectral import csd_odas
+        from rsi_python.spectral import csd_odas
         rng = np.random.default_rng(123)
         x = rng.standard_normal(8192)
         nfft = 256
@@ -103,7 +103,7 @@ class TestCSD:
         assert abs(integral - np.var(x)) / np.var(x) < 0.15
 
     def test_cross_spectrum_returns_all(self):
-        from rsktools.spectral import csd_odas
+        from rsi_python.spectral import csd_odas
         rng = np.random.default_rng(42)
         x = rng.standard_normal(2048)
         y = rng.standard_normal(2048)
@@ -113,7 +113,7 @@ class TestCSD:
         assert Cyy is not None
 
     def test_matrix_auto(self):
-        from rsktools.spectral import csd_matrix
+        from rsi_python.spectral import csd_matrix
         rng = np.random.default_rng(42)
         x = rng.standard_normal((4096, 2))
         Cxy, F, _, _ = csd_matrix(x, None, 256, 512.0)
@@ -124,7 +124,7 @@ class TestCSD:
         assert np.all(np.real(Cxy[:, 1, 1]) > 0)
 
     def test_matrix_cross(self):
-        from rsktools.spectral import csd_matrix
+        from rsi_python.spectral import csd_matrix
         rng = np.random.default_rng(42)
         x = rng.standard_normal((4096, 2))
         y = rng.standard_normal((4096, 3))
@@ -141,7 +141,7 @@ class TestCSD:
 class TestDespike:
     def test_clean_signal_unchanged(self):
         """A clean sinusoidal signal should not be modified."""
-        from rsktools.despike import despike
+        from rsi_python.despike import despike
         t = np.arange(0, 10, 1 / 512)
         x = np.sin(2 * np.pi * 5 * t)
         y, spikes, n_passes, frac = despike(x, 512.0, thresh=8, smooth=0.5)
@@ -151,7 +151,7 @@ class TestDespike:
 
     def test_spike_detected(self):
         """An obvious spike should be detected and removed."""
-        from rsktools.despike import despike
+        from rsi_python.despike import despike
         t = np.arange(0, 10, 1 / 512)
         x = np.sin(2 * np.pi * 5 * t) * 0.1
         # Add a large spike
@@ -168,7 +168,7 @@ class TestDespike:
 
 class TestGetProfiles:
     def test_single_profile(self):
-        from rsktools.profile import get_profiles
+        from rsi_python.profile import get_profiles
         fs = 64.0
         t = np.arange(0, 60, 1 / fs)
         # Simulate a profile: ramp down from 0 to 50 dbar over 60 s
@@ -182,7 +182,7 @@ class TestGetProfiles:
         assert (e - s) / fs >= 7.0
 
     def test_no_profile(self):
-        from rsktools.profile import get_profiles
+        from rsi_python.profile import get_profiles
         fs = 64.0
         P = np.zeros(1000)  # no depth
         W = np.zeros(1000)
@@ -190,7 +190,7 @@ class TestGetProfiles:
         assert profiles == []
 
     def test_two_profiles(self):
-        from rsktools.profile import get_profiles
+        from rsi_python.profile import get_profiles
         fs = 64.0
         # Two ramp-down profiles separated by a surface interval
         t = np.arange(0, 120, 1 / fs)
@@ -214,7 +214,7 @@ class TestGetProfiles:
 class TestGoodman:
     def test_clean_shear_reduces_noise(self):
         """Goodman cleaning should reduce coherent noise."""
-        from rsktools.goodman import clean_shear_spec
+        from rsi_python.goodman import clean_shear_spec
         rng = np.random.default_rng(42)
         N = 4096
         # Create vibration signal
@@ -249,8 +249,8 @@ class TestIntegration:
 
     def test_profile_detection(self, skip_no_data):
         """File 0005 should have at least one profile."""
-        from rsktools.p_file import PFile
-        from rsktools.profile import get_profiles, _smooth_fall_rate
+        from rsi_python.p_file import PFile
+        from rsi_python.profile import get_profiles, _smooth_fall_rate
         pf = PFile(PROFILE_FILE)
         P = pf.channels["P"]
         W = _smooth_fall_rate(P, pf.fs_slow)
@@ -260,7 +260,7 @@ class TestIntegration:
 
     def test_load_channels(self, skip_no_data):
         """load_channels should find shear and accel channels."""
-        from rsktools.dissipation import load_channels
+        from rsi_python.dissipation import load_channels
         data = load_channels(PROFILE_FILE)
         assert len(data["shear"]) >= 1
         assert len(data["accel"]) >= 1
@@ -268,7 +268,7 @@ class TestIntegration:
 
     def test_get_diss_produces_valid_epsilon(self, skip_no_data):
         """Epsilon values should be in a reasonable range."""
-        from rsktools.dissipation import get_diss
+        from rsi_python.dissipation import get_diss
         results = get_diss(PROFILE_FILE, fft_length=256, goodman=True)
         assert len(results) >= 1
         ds = results[0]
@@ -281,8 +281,8 @@ class TestIntegration:
 
     def test_pipeline_p2prof_p2eps(self, skip_no_data, tmp_path):
         """Full pipeline: .p → p2prof → p2eps."""
-        from rsktools.profile import extract_profiles
-        from rsktools.dissipation import compute_diss_file
+        from rsi_python.profile import extract_profiles
+        from rsi_python.dissipation import compute_diss_file
 
         prof_dir = tmp_path / "profiles"
         prof_paths = extract_profiles(PROFILE_FILE, prof_dir)
@@ -300,8 +300,8 @@ class TestIntegration:
 
     def test_direct_vs_chained(self, skip_no_data, tmp_path):
         """Direct .p→epsilon should produce same as chained pipeline."""
-        from rsktools.dissipation import get_diss
-        from rsktools.profile import extract_profiles
+        from rsi_python.dissipation import get_diss
+        from rsi_python.profile import extract_profiles
 
         # Direct
         results_direct = get_diss(PROFILE_FILE, fft_length=256, goodman=True)

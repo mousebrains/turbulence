@@ -3,7 +3,7 @@ requires = ["setuptools>=64", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rsktools"
+name = "rsi-python"
 version = "0.1.0"
 description = "Tools for reading Rockland Scientific microprofiler data and computing turbulent dissipation rates"
 requires-python = ">=3.10"
@@ -21,10 +21,11 @@ dev = [
 ]
 
 [project.scripts]
-p2nc = "rsktools.cli:p2nc"
-pinfo = "rsktools.cli:pinfo"
-p2prof = "rsktools.cli:p2prof"
-p2eps = "rsktools.cli:p2eps"
+p2nc = "rsi_python.cli:p2nc"
+pinfo = "rsi_python.cli:pinfo"
+p2prof = "rsi_python.cli:p2prof"
+p2eps = "rsi_python.cli:p2eps"
+p2chi = "rsi_python.cli:p2chi"
 
 [tool.setuptools.packages.find]
 where = ["src"]

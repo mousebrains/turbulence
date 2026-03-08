@@ -9,11 +9,11 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from rsktools.despike import despike
-from rsktools.goodman import clean_shear_spec
-from rsktools.nasmyth import LUECK_A, X_95, nasmyth
-from rsktools.ocean import visc35
-from rsktools.spectral import csd_matrix
+from rsi_python.despike import despike
+from rsi_python.goodman import clean_shear_spec
+from rsi_python.nasmyth import LUECK_A, X_95, nasmyth
+from rsi_python.ocean import visc35
+from rsi_python.spectral import csd_matrix
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ def load_channels(source, shear_pattern=r"^sh\d+$", accel_pattern=r"^A[xyz]$",
         is_profile : bool — whether source is a per-profile file
         metadata : dict
     """
-    from rsktools.p_file import PFile
+    from rsi_python.p_file import PFile
 
     if isinstance(source, PFile):
         return _channels_from_pfile(source, shear_pattern, accel_pattern,
@@ -233,7 +233,7 @@ def get_diss(source, fft_length=256, diss_length=None, overlap=None,
         # Already a single profile — use entire record
         profiles_slow = [(0, len(P_slow) - 1)]
     else:
-        from rsktools.profile import get_profiles, _smooth_fall_rate
+        from rsi_python.profile import get_profiles, _smooth_fall_rate
         W_slow = _smooth_fall_rate(P_slow, fs_slow)
         profiles_slow = get_profiles(P_slow, W_slow, fs_slow, direction=direction)
         if not profiles_slow:
@@ -243,7 +243,7 @@ def get_diss(source, fft_length=256, diss_length=None, overlap=None,
     if speed is not None:
         speed_fast = np.full(len(t_fast), abs(speed))
     else:
-        from rsktools.profile import _smooth_fall_rate
+        from rsi_python.profile import _smooth_fall_rate
         W_slow = _smooth_fall_rate(P_slow, fs_slow)
         speed_fast = np.abs(np.interp(t_fast, t_slow, W_slow))
 

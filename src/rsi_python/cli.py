@@ -1,11 +1,12 @@
 """
-CLI entry points for rsktools.
+CLI entry points for rsi-python.
 
 Commands:
     p2nc   — Convert .p files to NetCDF
     pinfo  — Print summary of .p file(s)
     p2prof — Extract profiles from .p or full-record .nc files
     p2eps  — Compute epsilon (TKE dissipation) from any pipeline stage
+    p2chi  — Compute chi (thermal variance dissipation) from any pipeline stage
 """
 
 import argparse
@@ -81,7 +82,7 @@ def p2nc():
     )
     args = parser.parse_args()
 
-    from rsktools.convert import p_to_netcdf, convert_all
+    from rsi_python.convert import p_to_netcdf, convert_all
 
     p_files = _resolve_p_files(args.files)
 
@@ -105,7 +106,7 @@ def pinfo():
     )
     args = parser.parse_args()
 
-    from rsktools.p_file import PFile
+    from rsi_python.p_file import PFile
 
     p_files = _resolve_p_files(args.files)
     for i, pf_path in enumerate(p_files):
@@ -143,7 +144,7 @@ def p2prof():
                         help="Minimum profile duration [s] (default: 7)")
     args = parser.parse_args()
 
-    from rsktools.profile import extract_profiles, _extract_one
+    from rsi_python.profile import extract_profiles, _extract_one
 
     files = _resolve_files(args.files, {".p", ".nc"})
 
@@ -202,7 +203,7 @@ def p2eps():
                         help="Anti-aliasing filter cutoff [Hz] (default: 98)")
     args = parser.parse_args()
 
-    from rsktools.dissipation import compute_diss_file, _compute_diss_one
+    from rsi_python.dissipation import compute_diss_file, _compute_diss_one
 
     files = _resolve_files(args.files, {".p", ".nc"})
 
@@ -239,6 +240,120 @@ def p2eps():
         print(f"Processing {len(work)} files with {jobs} workers")
         with ProcessPoolExecutor(max_workers=jobs) as pool:
             futures = {pool.submit(_compute_diss_one, w): w for w in work}
+            for future in as_completed(futures):
+                src, _, _ = futures[future]
+                try:
+                    name, n_profiles = future.result()
+                    print(f"  {Path(name).name}: {n_profiles} profile(s)")
+                except Exception as e:
+                    print(f"  {src.name}: ERROR: {e}")
+
+
+def p2chi():
+    """Compute chi (thermal variance dissipation rate) from any pipeline stage."""
+    parser = argparse.ArgumentParser(
+        prog="p2chi",
+        description="Compute thermal variance dissipation rate (chi) from VMP data.",
+    )
+    parser.add_argument(
+        "files", nargs="+", metavar="FILE",
+        help=".p, full-record .nc, or per-profile .nc file(s)",
+    )
+    parser.add_argument(
+        "-o", "--output", metavar="DIR", default=None,
+        help="Output directory for chi .nc files",
+    )
+    parser.add_argument(
+        "-j", "--jobs", type=int, default=1, metavar="N",
+        help="Parallel workers (0 = all cores, default: 1)",
+    )
+    parser.add_argument("--fft-length", type=int, default=512,
+                        help="FFT segment length [samples] (default: 512)")
+    parser.add_argument("--diss-length", type=int, default=None,
+                        help="Dissipation window [samples] (default: 3*fft-length)")
+    parser.add_argument("--overlap", type=int, default=None,
+                        help="Window overlap [samples] (default: diss-length//2)")
+    parser.add_argument("--speed", type=float, default=None,
+                        help="Fixed profiling speed [m/s] (default: from dP/dt)")
+    parser.add_argument("--direction", default="down", choices=["up", "down"],
+                        help="Profile direction (default: down)")
+    parser.add_argument("--fp07-model", default="single_pole",
+                        choices=["single_pole", "double_pole"],
+                        help="FP07 transfer function model (default: single_pole)")
+    parser.add_argument("--epsilon-dir", metavar="DIR", default=None,
+                        help="Directory with epsilon .nc files from p2eps (Method 1). "
+                             "If omitted, uses Method 2 (spectral fitting).")
+    parser.add_argument("--fit-method", default="mle",
+                        choices=["mle", "iterative"],
+                        help="Method 2 fitting: mle (Ruddick 2000) or iterative "
+                             "(Peterson & Fer 2014). Default: mle")
+    parser.add_argument("--spectrum-model", default="batchelor",
+                        choices=["batchelor", "kraichnan"],
+                        help="Theoretical spectrum model (default: batchelor)")
+    parser.add_argument("--f-AA", type=float, default=98.0,
+                        help="Anti-aliasing filter cutoff [Hz] (default: 98)")
+    args = parser.parse_args()
+
+    from rsi_python.chi import compute_chi_file, _compute_chi_one
+
+    files = _resolve_files(args.files, {".p", ".nc"})
+
+    chi_kwargs = {
+        "fft_length": args.fft_length,
+        "f_AA": args.f_AA,
+        "direction": args.direction,
+        "fp07_model": args.fp07_model,
+        "fit_method": args.fit_method,
+        "spectrum_model": args.spectrum_model,
+    }
+    if args.diss_length is not None:
+        chi_kwargs["diss_length"] = args.diss_length
+    if args.overlap is not None:
+        chi_kwargs["overlap"] = args.overlap
+    if args.speed is not None:
+        chi_kwargs["speed"] = args.speed
+
+    # Load epsilon datasets if Method 1
+    if args.epsilon_dir is not None:
+        import xarray as xr
+        eps_dir = Path(args.epsilon_dir)
+        # Will be matched per-file below
+        chi_kwargs["_epsilon_dir"] = eps_dir
+
+    jobs = args.jobs
+    if jobs == 0:
+        jobs = os.cpu_count() or 1
+
+    if jobs == 1:
+        for f in files:
+            output_dir = Path(args.output) if args.output else f.parent
+            print(f"{f.name}:")
+
+            # Match epsilon file if Method 1
+            kw = dict(chi_kwargs)
+            eps_dir = kw.pop("_epsilon_dir", None)
+            if eps_dir is not None:
+                import xarray as xr
+                eps_file = eps_dir / f"{f.stem}_eps.nc"
+                if eps_file.exists():
+                    kw["epsilon_ds"] = xr.open_dataset(eps_file)
+                else:
+                    print(f"  Warning: no epsilon file {eps_file.name}, using Method 2")
+
+            try:
+                compute_chi_file(f, output_dir, **kw)
+            except Exception as e:
+                print(f"  ERROR: {e}")
+    else:
+        work = []
+        for f in files:
+            output_dir = Path(args.output) if args.output else f.parent
+            kw = dict(chi_kwargs)
+            kw.pop("_epsilon_dir", None)
+            work.append((f, output_dir, kw))
+        print(f"Processing {len(work)} files with {jobs} workers")
+        with ProcessPoolExecutor(max_workers=jobs) as pool:
+            futures = {pool.submit(_compute_chi_one, w): w for w in work}
             for future in as_completed(futures):
                 src, _, _ = futures[future]
                 try:
