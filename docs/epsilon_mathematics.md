@@ -1,6 +1,6 @@
 # Mathematics of Epsilon Estimation
 
-This document describes the mathematical foundations for computing epsilon, the rate of dissipation of turbulent kinetic energy, as implemented in `rsi-python`. All equation numbers, constants, and algorithmic details correspond to the actual code in `src/rsi_python/dissipation.py`, `spectral.py`, `goodman.py`, `despike.py`, `nasmyth.py`, and `ocean.py`.
+This document describes the mathematical foundations for computing epsilon, the rate of dissipation of turbulent kinetic energy, as implemented in `rsi-python`. All equation numbers, constants, and algorithmic details correspond to the actual code in [`dissipation.py`](../src/rsi_python/dissipation.py), [`spectral.py`](../src/rsi_python/spectral.py), [`goodman.py`](../src/rsi_python/goodman.py), [`despike.py`](../src/rsi_python/despike.py), [`nasmyth.py`](../src/rsi_python/nasmyth.py), and [`ocean.py`](../src/rsi_python/ocean.py).
 
 ## Contents
 
@@ -21,7 +21,7 @@ This document describes the mathematical foundations for computing epsilon, the 
 
 ## 1. Definition of Epsilon
 
-The rate of dissipation of turbulent kinetic energy (epsilon) quantifies how quickly turbulent motions are converted to heat by viscous friction. Under the assumption of local isotropy, epsilon is related to the one-dimensional shear wavenumber spectrum by (Oakey 1982):
+The rate of dissipation of turbulent kinetic energy (epsilon) quantifies how quickly turbulent motions are converted to heat by viscous friction. Under the assumption of local isotropy, epsilon is related to the one-dimensional shear wavenumber spectrum by ([Oakey 1982](https://doi.org/10.1175/1520-0485(1982)012%3C0256:DOTROD%3E2.0.CO;2)):
 
 ```
 epsilon = 7.5 * nu * integral_0^inf  Phi_shear(k)  dk       [W/kg]
@@ -40,14 +40,14 @@ The shear spectrum is measured by airfoil shear probes sampling at ~512 Hz on a 
 k = f / W       [cpm]
 ```
 
-(`dissipation.py: _compute_profile_diss`)
+([`dissipation.py: _compute_profile_diss`](../src/rsi_python/dissipation.py))
 
 In practice, the integral is truncated at a finite upper wavenumber `K_max` determined by instrument noise, spectral shape, or the anti-aliasing filter. A correction factor accounts for the unresolved variance beyond `K_max`.
 
 
 ## 2. Nasmyth Universal Shear Spectrum
 
-The Nasmyth (1970) spectrum describes the universal shape of the one-dimensional shear spectrum across inertial and viscous subranges. The implementation uses Lueck's improved empirical fit (McMillan et al. 2016):
+The Nasmyth (1970) spectrum describes the universal shape of the one-dimensional shear spectrum across inertial and viscous subranges. The implementation uses Lueck's improved empirical fit ([McMillan et al. 2016](https://doi.org/10.1175/JTECH-D-15-0167.1)):
 
 ### Non-dimensional form
 
@@ -55,7 +55,7 @@ The Nasmyth (1970) spectrum describes the universal shape of the one-dimensional
 G2(x) = 8.05 * x^(1/3) / (1 + (20.6 * x)^3.715)
 ```
 
-(`nasmyth.py: _nasmyth_g2`)
+([`nasmyth.py: _nasmyth_g2`](../src/rsi_python/nasmyth.py))
 
 where `x = k / k_s` is the non-dimensional wavenumber and `k_s` is the Kolmogorov wavenumber:
 
@@ -71,7 +71,7 @@ The dimensional shear spectrum in `[s^-2 / cpm]` is:
 Phi_nasmyth(k) = epsilon^(3/4) * nu^(-1/4) * G2(k / k_s)
 ```
 
-(`nasmyth.py: nasmyth`)
+([`nasmyth.py: nasmyth`](../src/rsi_python/nasmyth.py))
 
 ### Key properties
 
@@ -87,14 +87,14 @@ The relationship between dissipation integrated to 10 cpm (`e_10`) and total dis
 e_total = e_10 * sqrt(1 + LUECK_A * e_10)
 ```
 
-where `LUECK_A = 1.0774e9` is derived from the non-dimensional integral of the Nasmyth spectrum (Lueck 2022).
+where `LUECK_A = 1.0774e9` is derived from the non-dimensional integral of the Nasmyth spectrum ([Lueck 2022](https://doi.org/10.1175/JTECH-D-21-0051.1)).
 
-(`nasmyth.py`, `dissipation.py: _estimate_epsilon`)
+([`nasmyth.py`](../src/rsi_python/nasmyth.py), [`dissipation.py: _estimate_epsilon`](../src/rsi_python/dissipation.py))
 
 
 ## 3. Spectral Estimation
 
-Cross-spectral density is computed using Welch's averaged periodogram method with a cosine (Hann) window (Welch 1967), porting `csd_odas.m` from the ODAS MATLAB library.
+Cross-spectral density is computed using Welch's averaged periodogram method with a cosine (Hann) window ([Welch 1967](https://doi.org/10.1109/TAU.1967.1161901)), porting `csd_odas.m` from the ODAS MATLAB library.
 
 ### Cosine window
 
@@ -103,7 +103,7 @@ w[i] = 1 + cos(pi * (-1 + 2*i/N))     for i = 0, 1, ..., N-1
 w = w / sqrt(mean(w^2))
 ```
 
-(`spectral.py: _cosine_window`)
+([`spectral.py: _cosine_window`](../src/rsi_python/spectral.py))
 
 The RMS normalization ensures that the window preserves spectral power.
 
@@ -142,7 +142,7 @@ Given a signal of length `L`, FFT length `N_fft`, and overlap `N_ov` (default `N
    F[j] = j * f_s / N_fft      for j = 0, 1, ..., N_fft/2
    ```
 
-(`spectral.py: csd_odas`)
+([`spectral.py: csd_odas`](../src/rsi_python/spectral.py))
 
 ### Degrees of freedom
 
@@ -164,7 +164,7 @@ C_xy[f, i, j] = <Y_j(f) * conj(X_i(f))>
 
 where `< >` denotes the average over FFT segments.
 
-(`spectral.py: csd_matrix`)
+([`spectral.py: csd_matrix`](../src/rsi_python/spectral.py))
 
 
 ## 4. Shear Probe Despiking
@@ -209,12 +209,12 @@ For each iteration (up to `max_passes = 10`):
 
 6. **Iterate** until no new spikes are detected or `max_passes` reached.
 
-(`despike.py: despike, _single_despike`)
+([`despike.py: despike, _single_despike`](../src/rsi_python/despike.py))
 
 
 ## 5. Goodman Coherent Noise Removal
 
-Platform vibrations contaminate shear spectra with energy coherent between shear probes and accelerometers. The Goodman et al. (2006) method removes this coherent component, with a bias correction from RSI Technical Note 61.
+Platform vibrations contaminate shear spectra with energy coherent between shear probes and accelerometers. The [Goodman et al. (2006)](https://doi.org/10.1175/JTECH1889.1) method removes this coherent component, with a bias correction from [RSI Technical Note 61](https://rocklandscientific.com/support/technical-notes/).
 
 ### Mathematical basis
 
@@ -247,7 +247,7 @@ where `H(f) = C_ua(f) / C_aa(f)` is the frequency-dependent transfer function fr
    ```
    where `^H` denotes the conjugate transpose. If `C_aa(f)` is singular, the original spectrum is retained.
 
-3. **Apply bias correction** (RSI TN-61):
+3. **Apply bias correction** ([RSI TN-61](https://rocklandscientific.com/support/technical-notes/)):
    ```
    n_fft_segments = 2 * N / N_fft - 1
    R = 1 / (1 - 1.02 * n_ac / n_fft_segments)
@@ -255,12 +255,12 @@ where `H(f) = C_ua(f) / C_aa(f)` is the frequency-dependent transfer function fr
    ```
    This corrects for the degrees-of-freedom lost in estimating the transfer function.
 
-(`goodman.py: clean_shear_spec`)
+([`goodman.py: clean_shear_spec`](../src/rsi_python/goodman.py))
 
 
 ## 6. Macoun-Lueck Wavenumber Correction
 
-The airfoil shear probe has a finite spatial extent that attenuates the measured shear at low wavenumbers. The Macoun & Lueck (2004) correction compensates for this:
+The airfoil shear probe has a finite spatial extent that attenuates the measured shear at low wavenumbers. The [Macoun & Lueck (2004)](https://doi.org/10.1175/1520-0426(2004)021%3C0284:MTSROT%3E2.0.CO;2) correction compensates for this:
 
 ```
 correction(k) = 1 + (k / 48)^2       for k <= 150 cpm
@@ -273,7 +273,7 @@ The correction is applied multiplicatively to the wavenumber spectrum:
 Phi_corrected(k) = Phi_observed(k) * correction(k)
 ```
 
-(`dissipation.py: _compute_profile_diss`)
+([`dissipation.py: _compute_profile_diss`](../src/rsi_python/dissipation.py))
 
 The denominator wavenumber 48 cpm corresponds to the probe's half-power point. At `k = 48` cpm, the correction is a factor of 2. The correction is only applied below 150 cpm because the empirical fit is not validated at higher wavenumbers.
 
@@ -367,7 +367,7 @@ To find the wavenumber where the observed spectrum departs from the turbulence s
 
 If no suitable minimum is found (polynomial fit order is decreased until one is found, down to order 3), `K_max = K_limit`.
 
-(`dissipation.py: _estimate_epsilon`)
+([`dissipation.py: _estimate_epsilon`](../src/rsi_python/dissipation.py))
 
 ### Step 5: Final integration
 
@@ -441,12 +441,12 @@ The method returns:
 - `epsilon`: fitted dissipation rate
 - `K_max`: highest wavenumber in the fit range
 
-(`dissipation.py: _inertial_subrange`)
+([`dissipation.py: _inertial_subrange`](../src/rsi_python/dissipation.py))
 
 
 ## 9. Iterative Variance Correction
 
-The observed shear spectrum is truncated at `K_max`, so some fraction of the total variance is unresolved. The Lueck (2022) resolved-variance model provides the correction.
+The observed shear spectrum is truncated at `K_max`, so some fraction of the total variance is unresolved. The [Lueck (2022)](https://doi.org/10.1175/JTECH-D-21-0051.1) resolved-variance model provides the correction.
 
 ### Resolved variance fraction
 
@@ -458,7 +458,7 @@ x_43 = x^(4/3)
 V_resolved(x) = tanh(48 * x_43) - 2.9 * x_43 * exp(-22.3 * x_43)
 ```
 
-This empirical fit (Lueck 2022) captures the shape of the cumulative Nasmyth spectrum integral. At `x = X_95 = 0.1205`, `V_resolved = 0.95` (95% of variance).
+This empirical fit ([Lueck 2022](https://doi.org/10.1175/JTECH-D-21-0051.1)) captures the shape of the cumulative Nasmyth spectrum integral. At `x = X_95 = 0.1205`, `V_resolved = 0.95` (95% of variance).
 
 ### Iterative correction
 
@@ -482,7 +482,7 @@ For iteration = 1, 2, ..., max_iter (default 50):
 
 The iteration typically converges in 3-5 steps. The correction is larger when `K_max` is low relative to the Kolmogorov wavenumber.
 
-(`dissipation.py: _variance_correction`)
+([`dissipation.py: _variance_correction`](../src/rsi_python/dissipation.py))
 
 
 ## 10. Seawater Viscosity
@@ -502,7 +502,7 @@ p_2 =  1.199552027472192e-09
 p_3 = -1.131311019739306e-11
 ```
 
-(`ocean.py: visc35`)
+([`ocean.py: visc35`](../src/rsi_python/ocean.py))
 
 Valid for 0 <= T <= 20 degrees C. Typical values: ~1.3e-6 m^2/s at 10 degrees C, ~1.0e-6 m^2/s at 20 degrees C.
 
@@ -513,9 +513,9 @@ Valid for 0 <= T <= 20 degrees C. Typical values: ~1.3e-6 m^2/s at 10 degrees C,
 
 | Constant | Value | Description | Source |
 |----------|-------|-------------|--------|
-| `LUECK_A` | `1.0774e9` | e/e_10 model constant | Lueck 2022 |
-| `X_95` | `0.1205` | Non-dimensional wavenumber for 95% variance | Lueck 2022 |
-| Isotropy factor | `7.5` | `15/2 * nu` relates shear variance to epsilon | Oakey 1982 |
+| `LUECK_A` | `1.0774e9` | e/e_10 model constant | [Lueck 2022](https://doi.org/10.1175/JTECH-D-21-0051.1) |
+| `X_95` | `0.1205` | Non-dimensional wavenumber for 95% variance | [Lueck 2022](https://doi.org/10.1175/JTECH-D-21-0051.1) |
+| Isotropy factor | `7.5` | `15/2 * nu` relates shear variance to epsilon | [Oakey 1982](https://doi.org/10.1175/1520-0485(1982)012%3C0256:DOTROD%3E2.0.CO;2) |
 
 ### Default processing parameters
 
@@ -541,7 +541,7 @@ Valid for 0 <= T <= 20 degrees C. Typical values: ~1.3e-6 m^2/s at 10 degrees C,
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Bias factor | `1.02 * n_accel / n_segments` | Degrees-of-freedom correction (TN-61) |
+| Bias factor | `1.02 * n_accel / n_segments` | Degrees-of-freedom correction ([TN-61](https://rocklandscientific.com/support/technical-notes/)) |
 
 
 ## 12. References
@@ -554,13 +554,13 @@ Valid for 0 <= T <= 20 degrees C. Typical values: ~1.3e-6 m^2/s at 10 degrees C,
 
 ### Spectral methods
 
-- Welch, P.D., 1967: The use of fast Fourier transform for the estimation of power spectra. *IEEE Trans. Audio Electroacoust.*, AU-15, 70-73.
+- Welch, P.D., 1967: [The use of fast Fourier transform for the estimation of power spectra.](https://doi.org/10.1109/TAU.1967.1161901) *IEEE Trans. Audio Electroacoust.*, AU-15, 70-73.
 - Nuttall, A.H., 1971: Spectral estimation by means of overlapped fast Fourier transform processing of windowed data. Naval Underwater Systems Center Report No. 4169.
 
 ### Coherent noise removal
 
 - Goodman, L., E.R. Levine, and R.G. Lueck, 2006: [On measuring the terms of the turbulent kinetic energy budget from an AUV.](https://doi.org/10.1175/JTECH1889.1) *J. Atmos. Oceanic Technol.*, 23, 977-990.
-- Rockland Scientific, Technical Note 061: Bias correction for Goodman coherent noise removal.
+- Rockland Scientific, [Technical Note 061](https://rocklandscientific.com/support/technical-notes/): Bias correction for Goodman coherent noise removal.
 
 ### Shear probe response
 
@@ -572,7 +572,6 @@ Valid for 0 <= T <= 20 degrees C. Typical values: ~1.3e-6 m^2/s at 10 degrees C,
 
 ### Rockland Scientific Technical Notes
 
-- **TN-028:** Dissipation rate estimation
-- **TN-051:** P file format
-- **TN-061:** Goodman noise removal bias correction
-- Available at [rocklandscientific.com/support/technical-notes](https://rocklandscientific.com/support/technical-notes/)
+- [**TN-028:**](https://rocklandscientific.com/support/technical-notes/) Dissipation rate estimation
+- [**TN-051:**](https://rocklandscientific.com/support/technical-notes/) P file format
+- [**TN-061:**](https://rocklandscientific.com/support/technical-notes/) Goodman noise removal bias correction

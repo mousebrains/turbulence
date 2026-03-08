@@ -1,6 +1,6 @@
 # Mathematics of Chi Estimation
 
-This document describes the mathematical foundations for computing chi, the rate of dissipation of thermal variance, as implemented in `rsi-python`. All equation numbers, constants, and algorithmic details correspond to the actual code in `src/rsi_python/batchelor.py`, `fp07.py`, `scalar_spectra.py`, and `chi.py`.
+This document describes the mathematical foundations for computing chi, the rate of dissipation of thermal variance, as implemented in `rsi-python`. All equation numbers, constants, and algorithmic details correspond to the actual code in [`batchelor.py`](../src/rsi_python/batchelor.py), [`fp07.py`](../src/rsi_python/fp07.py), [`scalar_spectra.py`](../src/rsi_python/scalar_spectra.py), and [`chi.py`](../src/rsi_python/chi.py).
 
 ## Contents
 
@@ -20,7 +20,7 @@ This document describes the mathematical foundations for computing chi, the rate
 
 ## 1. Definition of Chi
 
-The rate of dissipation of thermal variance, chi, quantifies how quickly temperature microstructure is smoothed out by molecular thermal diffusion. It is defined as (Dillon & Caldwell 1980, eq. 2):
+The rate of dissipation of thermal variance, chi, quantifies how quickly temperature microstructure is smoothed out by molecular thermal diffusion. It is defined as ([Dillon & Caldwell 1980](https://doi.org/10.1029/JC085iC04p01910), eq. 2):
 
 ```
 chi = 6 * kappa_T * integral_0^inf  Phi_{dT/dz}(k)  dk       [K^2/s]
@@ -44,7 +44,7 @@ In practice, the integral is truncated at a finite upper wavenumber `k_max` due 
 
 ## 2. Batchelor Temperature Gradient Spectrum
 
-The Batchelor (1959) model describes the one-dimensional temperature gradient spectrum in the viscous-convective and viscous-diffusive subranges. Following the formulation of Dillon & Caldwell (1980, eqs. 1 and 3):
+The [Batchelor (1959)](https://doi.org/10.1017/S002211205900009X) model describes the one-dimensional temperature gradient spectrum in the viscous-convective and viscous-diffusive subranges. Following the formulation of [Dillon & Caldwell (1980)](https://doi.org/10.1029/JC085iC04p01910), eqs. 1 and 3:
 
 ### Batchelor wavenumber
 
@@ -54,7 +54,7 @@ The Batchelor wavenumber sets the rolloff scale where molecular diffusion begins
 kB = (1 / (2*pi)) * (epsilon / (nu * kappa_T^2))^(1/4)     [cpm]
 ```
 
-(`batchelor.py: batchelor_kB`)
+([`batchelor.py: batchelor_kB`](../src/rsi_python/batchelor.py))
 
 where `epsilon` is the TKE dissipation rate [W/kg] and `nu` is the kinematic viscosity [m^2/s]. The `1/(2*pi)` converts from rad/m to cpm.
 
@@ -64,7 +64,7 @@ where `epsilon` is the TKE dissipation rate [W/kg] and `nu` is the kinematic vis
 f(alpha) = alpha * [ exp(-alpha^2 / 2)  -  alpha * sqrt(pi/2) * erfc(alpha / sqrt(2)) ]
 ```
 
-(`batchelor.py: batchelor_nondim`)
+([`batchelor.py: batchelor_nondim`](../src/rsi_python/batchelor.py))
 
 where `alpha = sqrt(2*q) * k / kB` is the non-dimensional wavenumber and `erfc` is the complementary error function. This function:
 
@@ -78,7 +78,7 @@ where `alpha = sqrt(2*q) * k / kB` is the non-dimensional wavenumber and `erfc` 
 S(k) = sqrt(q/2) * chi / (kB * kappa_T) * f(alpha)     [(K/m)^2 / cpm]
 ```
 
-(`batchelor.py: batchelor_grad`)
+([`batchelor.py: batchelor_grad`](../src/rsi_python/batchelor.py))
 
 **Normalization check.** Substituting `u = alpha`, `dk = kB / sqrt(2*q) * du`:
 
@@ -88,29 +88,29 @@ integral_0^inf S(k) dk  =  sqrt(q/2) * chi / (kB * kappa_T) * kB / sqrt(2*q) * i
                          =  chi / (6 * kappa_T)
 ```
 
-This is consistent with the definition `chi = 6 * kappa_T * integral S(k) dk`. Verified numerically in `tests/test_chi.py::TestBatchelorGrad::test_integral_equals_chi_over_6kT`.
+This is consistent with the definition `chi = 6 * kappa_T * integral S(k) dk`. Verified numerically in [`tests/test_chi.py::TestBatchelorGrad::test_integral_equals_chi_over_6kT`](../tests/test_chi.py).
 
 ### Universal constant q
 
-- `q = 3.7 +/- 1.5` (Oakey 1982, from field observations)
-- `q = 3.9 +/- 0.25` (Bogucki et al. 1997, from DNS)
+- `q = 3.7 +/- 1.5` ([Oakey 1982](https://doi.org/10.1175/1520-0485(1982)012%3C0256:DOTROD%3E2.0.CO;2), from field observations)
+- `q = 3.9 +/- 0.25` ([Bogucki et al. 1997](https://doi.org/10.1017/S0022112097005727), from DNS)
 
 The code uses `Q_BATCHELOR = 3.7` as default.
 
 
 ## 3. Kraichnan Temperature Gradient Spectrum
 
-The Kraichnan (1968) model provides an alternative shape for the viscous-diffusive subrange. Bogucki et al. (1997) showed via DNS that the Kraichnan form fits simulated data significantly better than the Batchelor form, especially at high wavenumbers near and beyond `kB`, reducing epsilon estimation error from ~25% to ~2.5%.
+The [Kraichnan (1968)](https://doi.org/10.1063/1.1692063) model provides an alternative shape for the viscous-diffusive subrange. [Bogucki et al. (1997)](https://doi.org/10.1017/S0022112097005727) showed via DNS that the Kraichnan form fits simulated data significantly better than the Batchelor form, especially at high wavenumbers near and beyond `kB`, reducing epsilon estimation error from ~25% to ~2.5%.
 
 ### Dimensional gradient spectrum
 
-The 1D temperature gradient spectrum in cpm, derived from Bogucki et al. (1997, eq. 11) and normalized to integrate to `chi / (6 * kappa_T)`:
+The 1D temperature gradient spectrum in cpm, derived from [Bogucki et al. (1997)](https://doi.org/10.1017/S0022112097005727), eq. 11, and normalized to integrate to `chi / (6 * kappa_T)`:
 
 ```
 S(k) = chi * q / (3 * kappa_T * kB^2) * k * (1 + sqrt(6*q) * y) * exp(-sqrt(6*q) * y)
 ```
 
-(`batchelor.py: kraichnan_grad`)
+([`batchelor.py: kraichnan_grad`](../src/rsi_python/batchelor.py))
 
 where `y = k / kB` is the non-dimensional wavenumber.
 
@@ -142,11 +142,11 @@ So:
 integral S dk  =  chi * q / (3 * kappa_T) * 1/(2*q)  =  chi / (6 * kappa_T)
 ```
 
-Verified numerically in `tests/test_chi.py::TestKraichnanGrad::test_integral_equals_chi_over_6kT`.
+Verified numerically in [`tests/test_chi.py::TestKraichnanGrad::test_integral_equals_chi_over_6kT`](../tests/test_chi.py).
 
 ### Universal constant q
 
-- `q_K = 5.26 +/- 0.25` (Bogucki et al. 1997, from DNS)
+- `q_K = 5.26 +/- 0.25` ([Bogucki et al. 1997](https://doi.org/10.1017/S0022112097005727), from DNS)
 
 The code uses `Q_KRAICHNAN = 5.26` as default.
 
@@ -155,15 +155,15 @@ The code uses `Q_KRAICHNAN = 5.26` as default.
 
 The FP07 glass-bead thermistor has a finite thermal response time that attenuates high-frequency (high-wavenumber) temperature fluctuations. This must be corrected when computing chi.
 
-### Single-pole model (Lueck et al. 1977)
+### Single-pole model ([Lueck et al. 1977](https://doi.org/10.1016/0146-6291(77)90565-3))
 
 ```
 |H(f)|^2 = 1 / (1 + (2*pi*f*tau_0)^2)
 ```
 
-(`fp07.py: fp07_transfer`)
+([`fp07.py: fp07_transfer`](../src/rsi_python/fp07.py))
 
-### Double-pole model (Gregg & Meagher 1980)
+### Double-pole model ([Gregg & Meagher 1980](https://doi.org/10.1029/JC085iC05p02779))
 
 Accounts for both the glass bead thermal mass and the thermal boundary layer:
 
@@ -171,7 +171,7 @@ Accounts for both the glass bead thermal mass and the thermal boundary layer:
 |H(f)|^2 = 1 / (1 + (2*pi*f*tau_0)^2)^2
 ```
 
-(`fp07.py: fp07_double_pole`)
+([`fp07.py: fp07_double_pole`](../src/rsi_python/fp07.py))
 
 ### Speed-dependent time constant
 
@@ -179,20 +179,20 @@ The FP07 time constant depends on the flow speed past the sensor, which controls
 
 | Model | Formula | Reference |
 |-------|---------|-----------|
-| Lueck | `tau_0 = 0.01 * (1/W)^0.5` | Lueck et al. 1977 |
-| Peterson | `tau_0 = 0.012 * W^(-0.32)` | Peterson & Fer 2014 |
-| Goto | `tau_0 = 0.003` (fixed) | Goto et al. 2016 |
+| Lueck | `tau_0 = 0.01 * (1/W)^0.5` | [Lueck et al. 1977](https://doi.org/10.1016/0146-6291(77)90565-3) |
+| Peterson | `tau_0 = 0.012 * W^(-0.32)` | [Peterson & Fer 2014](https://doi.org/10.1016/j.mio.2014.05.002) |
+| Goto | `tau_0 = 0.003` (fixed) | [Goto et al. 2016](https://doi.org/10.1175/JTECH-D-15-0220.1) |
 
-(`fp07.py: fp07_tau`)
+([`fp07.py: fp07_tau`](../src/rsi_python/fp07.py))
 
 At a typical profiling speed of `W = 0.7 m/s`, the Lueck model gives `tau_0 ~ 0.012 s`, corresponding to a half-power frequency of `f_{3dB} = 1/(2*pi*tau_0) ~ 13 Hz` or roughly `k_{3dB} ~ 19 cpm`. This means the FP07 attenuates the observed spectrum significantly in the viscous-diffusive subrange where the Batchelor spectrum rolls off — the correction for this attenuation is a central part of chi estimation.
 
 
 ## 5. Electronics Noise Model
 
-The noise model determines the frequency-dependent noise floor of the temperature gradient measurement, which sets the upper integration limit for chi. It is ported from the ODAS MATLAB functions `noise_thermchannel.m` and `gradT_noise_odas.m` (RSI Technical Note 040).
+The noise model determines the frequency-dependent noise floor of the temperature gradient measurement, which sets the upper integration limit for chi. It is ported from the ODAS MATLAB functions `noise_thermchannel.m` and `gradT_noise_odas.m` ([RSI Technical Note 040](https://rocklandscientific.com/support/technical-notes/)).
 
-(`fp07.py: noise_thermchannel`)
+([`fp07.py: noise_thermchannel`](../src/rsi_python/fp07.py))
 
 The noise propagates through four stages of the signal chain:
 
@@ -258,9 +258,9 @@ The conversion from frequency spectrum to wavenumber spectrum is: `Phi_noise(k) 
 
 ## 6. Method 1: Chi from Known Epsilon
 
-When shear probes provide an independent estimate of epsilon (from `get_diss`), the Batchelor wavenumber is fully determined and chi can be computed by integrating the observed temperature gradient spectrum with corrections for sensor rolloff and unresolved variance.
+When shear probes provide an independent estimate of epsilon (from [`get_diss`](../src/rsi_python/dissipation.py)), the Batchelor wavenumber is fully determined and chi can be computed by integrating the observed temperature gradient spectrum with corrections for sensor rolloff and unresolved variance.
 
-(`chi.py: _chi_from_epsilon`)
+([`chi.py: _chi_from_epsilon`](../src/rsi_python/chi.py))
 
 ### Algorithm
 
@@ -318,9 +318,9 @@ Note that `chi_trial` cancels in the ratio `C = V_total / V_resolved` because bo
 
 When no independent epsilon is available (e.g., MicroRider deployments without shear probes), the Batchelor wavenumber `kB` is treated as a free parameter and estimated by fitting the theoretical spectrum to the observed spectrum. This simultaneously yields both chi and epsilon from temperature data alone.
 
-(`chi.py: _mle_fit_kB`)
+([`chi.py: _mle_fit_kB`](../src/rsi_python/chi.py))
 
-### Theory (Ruddick et al. 2000)
+### Theory ([Ruddick et al. 2000](https://doi.org/10.1175/1520-0426(2000)017%3C1541:MLSFTB%3E2.0.CO;2))
 
 Spectral estimates from Welch's method are chi-squared distributed. For `d` degrees of freedom and a model spectrum `Phi_model(k_i)`, the negative log-likelihood is:
 
@@ -338,7 +338,7 @@ The **only free parameter is `kB`**. Given an initial estimate of chi from integ
 
 ### Grid search algorithm
 
-The MLE is solved by grid search rather than gradient optimization, following Ruddick et al. (2000). Two passes:
+The MLE is solved by grid search rather than gradient optimization, following [Ruddick et al. (2000)](https://doi.org/10.1175/1520-0426(2000)017%3C1541:MLSFTB%3E2.0.CO;2). Two passes:
 
 1. **Coarse search:** 100 log-spaced `kB` values over `[1, 10^4.5]` cpm. Evaluate `-ln L` at each and find the minimum.
 
@@ -370,15 +370,15 @@ chi = 6 * kappa_T * integral_0^{5*kB}  Phi_Batchelor(k; kB_fit, chi_obs)  dk
 
 ### Properties
 
-- MLE bias is < 0.25% (essentially unbiased per Monte Carlo tests in Ruddick et al. 2000)
+- MLE bias is < 0.25% (essentially unbiased per Monte Carlo tests in [Ruddick et al. 2000](https://doi.org/10.1175/1520-0426(2000)017%3C1541:MLSFTB%3E2.0.CO;2))
 - Error bars can be obtained from the region where `ln L` drops by 0.5 from the maximum (1-sigma confidence)
 
 
 ## 8. Method 2b: Iterative Integration
 
-Peterson & Fer (2014) extended the MLE approach with iterative refinement of the integration limits and correction for unresolved variance at both low and high wavenumbers.
+[Peterson & Fer (2014)](https://doi.org/10.1016/j.mio.2014.05.002) extended the MLE approach with iterative refinement of the integration limits and correction for unresolved variance at both low and high wavenumbers.
 
-(`chi.py: _iterative_fit`)
+([`chi.py: _iterative_fit`](../src/rsi_python/chi.py))
 
 ### Algorithm (3 iterations)
 
@@ -429,7 +429,7 @@ chi = chi_low + chi_obs + chi_high
 
 7. Re-fit `kB` by MLE with the updated chi.
 
-### Quality control (Peterson & Fer 2014)
+### Quality control ([Peterson & Fer 2014](https://doi.org/10.1016/j.mio.2014.05.002))
 
 The following checks (not yet enforced as hard filters in the code, but available for post-processing):
 
@@ -443,7 +443,7 @@ The following checks (not yet enforced as hard filters in the code, but availabl
 
 ### Welch's method
 
-Temperature gradient spectra are computed using `csd_odas` (ported from ODAS `csd_odas.m`):
+Temperature gradient spectra are computed using [`csd_odas`](../src/rsi_python/spectral.py) (ported from ODAS `csd_odas.m`):
 
 - Window: Hann (cosine) window normalized to RMS = 1
 - Overlap: 50% (default `fft_length // 2`)
@@ -467,7 +467,7 @@ When the temperature gradient is obtained by first-differencing the deconvolved 
 C_FD(f) = ( pi*f / (f_s * sin(pi*f/f_s)) )^2       for f > 0
 ```
 
-(`scalar_spectra.py: get_scalar_spectra`, `chi.py: _compute_profile_chi`)
+([`scalar_spectra.py: get_scalar_spectra`](../src/rsi_python/scalar_spectra.py), [`chi.py: _compute_profile_chi`](../src/rsi_python/chi.py))
 
 This correction approaches 1 at low frequencies and diverges at the Nyquist frequency. The corrected spectrum is:
 
@@ -480,7 +480,7 @@ Phi_corrected(k) = Phi_raw(k) * C_FD(f)
 The profile is divided into overlapping windows of length `diss_length` samples (default `3 * fft_length = 1536` samples at 512 Hz = 3 seconds of data). Adjacent windows overlap by `overlap` samples (default `diss_length // 2`). Within each window:
 
 - Mean pressure, temperature, speed, and time are computed
-- Kinematic viscosity `nu` is computed from `visc35(T_mean)`
+- Kinematic viscosity `nu` is computed from [`visc35(T_mean)`](../src/rsi_python/ocean.py)
 - The spectral estimate uses `2 * (diss_length // fft_length) - 1` overlapping FFT segments
 - Degrees of freedom: `d = 1.9 * num_ffts` (Nuttall 1971)
 
@@ -492,8 +492,8 @@ The profile is divided into overlapping windows of length `diss_length` samples 
 | Symbol | Value | Description | Source |
 |--------|-------|-------------|--------|
 | `kappa_T` | `1.4e-7 m^2/s` | Molecular thermal diffusivity of seawater | Standard value |
-| `q_B` | `3.7` | Batchelor universal constant | Oakey 1982 |
-| `q_K` | `5.26` | Kraichnan universal constant | Bogucki et al. 1997 |
+| `q_B` | `3.7` | Batchelor universal constant | [Oakey 1982](https://doi.org/10.1175/1520-0485(1982)012%3C0256:DOTROD%3E2.0.CO;2) |
+| `q_K` | `5.26` | Kraichnan universal constant | [Bogucki et al. 1997](https://doi.org/10.1017/S0022112097005727) |
 
 ### Default instrument parameters
 
@@ -528,32 +528,32 @@ The profile is divided into overlapping windows of length `diss_length` samples 
 
 ### Batchelor spectrum and chi theory
 
-- Batchelor, G.K., 1959: Small-scale variation of convected quantities like temperature in turbulent fluid. *J. Fluid Mech.*, **5**, 113-133.
-- Kraichnan, R.H., 1968: Small-scale structure of a scalar field convected by turbulence. *Phys. Fluids*, **11**, 945-953.
-- Dillon, T.M. and D.R. Caldwell, 1980: The Batchelor spectrum and dissipation in the upper ocean. *J. Geophys. Res.*, **85**, 1910-1916.
-- Oakey, N.S., 1982: Determination of the rate of dissipation of turbulent energy from simultaneous temperature and velocity shear microstructure measurements. *J. Phys. Oceanogr.*, **12**, 256-271.
+- Batchelor, G.K., 1959: [Small-scale variation of convected quantities like temperature in turbulent fluid.](https://doi.org/10.1017/S002211205900009X) *J. Fluid Mech.*, **5**, 113-133.
+- Kraichnan, R.H., 1968: [Small-scale structure of a scalar field convected by turbulence.](https://doi.org/10.1063/1.1692063) *Phys. Fluids*, **11**, 945-953.
+- Dillon, T.M. and D.R. Caldwell, 1980: [The Batchelor spectrum and dissipation in the upper ocean.](https://doi.org/10.1029/JC085iC04p01910) *J. Geophys. Res.*, **85**, 1910-1916.
+- Oakey, N.S., 1982: [Determination of the rate of dissipation of turbulent energy from simultaneous temperature and velocity shear microstructure measurements.](https://doi.org/10.1175/1520-0485(1982)012%3C0256:DOTROD%3E2.0.CO;2) *J. Phys. Oceanogr.*, **12**, 256-271.
 
 ### Chi estimation methods
 
-- Ruddick, B., A. Anis, and K. Thompson, 2000: Maximum likelihood spectral fitting: The Batchelor spectrum. *J. Atmos. Oceanic Technol.*, **17**, 1541-1555.
-- Peterson, A.K. and I. Fer, 2014: Dissipation measurements using temperature microstructure from an underwater glider. *Methods in Oceanography*, **10**, 44-69.
-- Osborn, T.R. and C.S. Cox, 1972: Oceanic fine structure. *Geophys. Fluid Dyn.*, **3**, 321-345.
+- Ruddick, B., A. Anis, and K. Thompson, 2000: [Maximum likelihood spectral fitting: The Batchelor spectrum.](https://doi.org/10.1175/1520-0426(2000)017%3C1541:MLSFTB%3E2.0.CO;2) *J. Atmos. Oceanic Technol.*, **17**, 1541-1555.
+- Peterson, A.K. and I. Fer, 2014: [Dissipation measurements using temperature microstructure from an underwater glider.](https://doi.org/10.1016/j.mio.2014.05.002) *Methods in Oceanography*, **10**, 44-69.
+- Osborn, T.R. and C.S. Cox, 1972: [Oceanic fine structure.](https://doi.org/10.1080/03091927208236085) *Geophys. Fluid Dyn.*, **3**, 321-345.
 
 ### FP07 thermistor response
 
-- Lueck, R.G., O. Hertzman, and T.R. Osborn, 1977: The spectral response of thermistors. *Deep-Sea Res.*, **24**, 951-970.
-- Gregg, M.C. and T.B. Meagher, 1980: The dynamic response of glass rod thermistors. *J. Geophys. Res.*, **85**, 2779-2786.
-- Goto, Y., I. Yasuda, and M. Nagasawa, 2016: Comparison of turbulence intensity from CTD-attached and free-fall microstructure profilers. *J. Atmos. Oceanic Technol.*, **33**, 1065-1081.
-- Nash, J.D., T.B. Caldwell, M.J. Zelman, and J.N. Moum, 1999: A thermocouple probe for high-speed temperature measurement in the ocean. *J. Atmos. Oceanic Technol.*, **16**, 1474-1482.
+- Lueck, R.G., O. Hertzman, and T.R. Osborn, 1977: [The spectral response of thermistors.](https://doi.org/10.1016/0146-6291(77)90565-3) *Deep-Sea Res.*, **24**, 951-970.
+- Gregg, M.C. and T.B. Meagher, 1980: [The dynamic response of glass rod thermistors.](https://doi.org/10.1029/JC085iC05p02779) *J. Geophys. Res.*, **85**, 2779-2786.
+- Goto, Y., I. Yasuda, and M. Nagasawa, 2016: [Comparison of turbulence intensity from CTD-attached and free-fall microstructure profilers.](https://doi.org/10.1175/JTECH-D-15-0220.1) *J. Atmos. Oceanic Technol.*, **33**, 1065-1081.
+- Nash, J.D., T.B. Caldwell, M.J. Zelman, and J.N. Moum, 1999: [A thermocouple probe for high-speed temperature measurement in the ocean.](https://doi.org/10.1175/1520-0426(1999)016%3C1474:ATPFHS%3E2.0.CO;2) *J. Atmos. Oceanic Technol.*, **16**, 1474-1482.
 
 ### Noise model
 
-- Rockland Scientific, Technical Note 040: Noise in Temperature Gradient Measurements. Available at [rocklandscientific.com/support/technical-notes](https://rocklandscientific.com/support/technical-notes/).
+- Rockland Scientific, [Technical Note 040](https://rocklandscientific.com/support/technical-notes/): Noise in Temperature Gradient Measurements.
 
 ### DNS and empirical validation
 
-- Bogucki, D., J.A. Domaradzki, and P.K. Yeung, 1997: Direct numerical simulations of passive scalars with Pr > 1 advected by turbulent flow. *J. Fluid Mech.*, **343**, 111-130.
+- Bogucki, D., J.A. Domaradzki, and P.K. Yeung, 1997: [Direct numerical simulations of passive scalars with Pr > 1 advected by turbulent flow.](https://doi.org/10.1017/S0022112097005727) *J. Fluid Mech.*, **343**, 111-130.
 
 ### Software
 
-- Rockland Scientific ODAS MATLAB Library (v4.5.1). Available at [rocklandscientific.com/support/software](https://rocklandscientific.com/support/software/).
+- Rockland Scientific [ODAS MATLAB Library](https://rocklandscientific.com/support/software/) (v4.5.1).
