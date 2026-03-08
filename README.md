@@ -168,7 +168,6 @@ ds["epsilon_T"]       # epsilon estimated from temperature
 | `chi.py` | Chi (thermal variance dissipation) calculation, Methods 1 and 2 (`rsi-tpw chi`) |
 | `batchelor.py` | Batchelor and Kraichnan temperature gradient spectra |
 | `fp07.py` | FP07 thermistor transfer function and electronics noise model |
-| `scalar_spectra.py` | Temperature gradient spectrum computation |
 | `spectral.py` | Cross-spectral density estimation (Welch method, cosine window) |
 | `goodman.py` | Goodman coherent noise removal using accelerometer spectra |
 | `despike.py` | Iterative spike removal for shear probe signals |
@@ -202,6 +201,7 @@ This package is a Python implementation derived from:
 - Nash, J.D., T.B. Caldwell, M.J. Zelman, and J.N. Moum, 1999: [A thermocouple probe for high-speed temperature measurement in the ocean.](https://doi.org/10.1175/1520-0426(1999)016%3C1474:ATPFHS%3E2.0.CO;2) *J. Atmos. Oceanic Technol.*, 16, 1474–1482.
 - Gregg, M.C. and T.B. Meagher, 1980: [The dynamic response of glass rod thermistors.](https://doi.org/10.1029/JC085iC05p02779) *J. Geophys. Res.*, 85, 2779–2786.
 - Osborn, T.R. and C.S. Cox, 1972: [Oceanic fine structure.](https://doi.org/10.1080/03091927208236085) *Geophys. Fluid Dyn.*, 3, 321–345.
+- **CEOAS Ocean Mixing Group** (Oregon State University) — [mixing.ceoas.oregonstate.edu](https://mixing.ceoas.oregonstate.edu/)
 
 ## Testing
 

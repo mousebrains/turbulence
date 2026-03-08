@@ -1,6 +1,6 @@
 # Mathematics of Chi Estimation
 
-This document describes the mathematical foundations for computing chi, the rate of dissipation of thermal variance, as implemented in `rsi-python`. All equation numbers, constants, and algorithmic details correspond to the actual code in [`batchelor.py`](../src/rsi_python/batchelor.py), [`fp07.py`](../src/rsi_python/fp07.py), [`scalar_spectra.py`](../src/rsi_python/scalar_spectra.py), and [`chi.py`](../src/rsi_python/chi.py).
+This document describes the mathematical foundations for computing chi, the rate of dissipation of thermal variance, as implemented in `rsi-python`. All equation numbers, constants, and algorithmic details correspond to the actual code in [`batchelor.py`](../src/rsi_python/batchelor.py), [`fp07.py`](../src/rsi_python/fp07.py), and [`chi.py`](../src/rsi_python/chi.py).
 
 ## Contents
 
@@ -467,7 +467,7 @@ When the temperature gradient is obtained by first-differencing the deconvolved 
 C_FD(f) = ( pi*f / (f_s * sin(pi*f/f_s)) )^2       for f > 0
 ```
 
-([`scalar_spectra.py: get_scalar_spectra`](../src/rsi_python/scalar_spectra.py), [`chi.py: _compute_profile_chi`](../src/rsi_python/chi.py))
+([`chi.py: _compute_profile_chi`](../src/rsi_python/chi.py))
 
 This correction approaches 1 at low frequencies and diverges at the Nyquist frequency. The corrected spectrum is:
 

@@ -1,3 +1,4 @@
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Goodman coherent noise removal for shear probe spectra.
 
 Port of clean_shear_spec.m from the ODAS MATLAB library.
@@ -5,12 +6,19 @@ Removes vibration-coherent noise from shear spectra using
 accelerometer cross-spectra.
 """
 
+from __future__ import annotations
+
 import numpy as np
 
 from rsi_python.spectral import csd_matrix
 
 
-def clean_shear_spec(accel, shear, nfft, rate):
+def clean_shear_spec(
+    accel: np.ndarray,
+    shear: np.ndarray,
+    nfft: int,
+    rate: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Remove acceleration-coherent noise from shear spectra.
 
     Parameters
@@ -51,17 +59,17 @@ def clean_shear_spec(accel, shear, nfft, rate):
 
     # Compute all spectra in one call: x=shear, y=accel
     # Returns Cxy=(n_freq, n_sh, n_ac), Cxx=(n_freq, n_sh, n_sh), Cyy=(n_freq, n_ac, n_ac)
-    UA, F, UU, AA = csd_matrix(shear, accel, nfft, rate,
-                               overlap=nfft // 2, detrend="linear")
+    UA, F, UU, AA = csd_matrix(shear, accel, nfft, rate, overlap=nfft // 2, detrend="linear")
+    assert UU is not None and AA is not None  # always returned when y is provided
 
     # UU, AA, UA are complex; extract real diagonal for auto-spectra
     n_freq = len(F)
     clean_UU = np.zeros_like(UU)
 
     for f in range(n_freq):
-        uu = UU[f]         # (n_sh, n_sh)
-        ua = UA[f]         # (n_sh, n_ac)
-        aa = AA[f]         # (n_ac, n_ac)
+        uu = UU[f]  # (n_sh, n_sh)
+        ua = UA[f]  # (n_sh, n_ac)
+        aa = AA[f]  # (n_ac, n_ac)
         # clean = UU - UA @ inv(AA) @ conj(UA).T
         # MATLAB: UU - (UA/AA) * conj(UA).'
         try:
@@ -73,7 +81,17 @@ def clean_shear_spec(accel, shear, nfft, rate):
 
     # Bias correction (ODAS Technical Note 61)
     fft_segments = 2 * shear.shape[0] // nfft - 1
-    R = 1.0 / (1.0 - 1.02 * n_accel / fft_segments)
+    if fft_segments <= 1.02 * n_accel:
+        import warnings
+
+        warnings.warn(
+            f"Insufficient FFT segments ({fft_segments}) for Goodman bias "
+            f"correction with {n_accel} accelerometers; skipping correction",
+            stacklevel=2,
+        )
+        R = 1.0
+    else:
+        R = 1.0 / (1.0 - 1.02 * n_accel / fft_segments)
     clean_UU *= R
 
     return clean_UU, AA, UU, UA, F

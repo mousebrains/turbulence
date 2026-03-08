@@ -1,3 +1,4 @@
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Tests for the chi (thermal variance dissipation) pipeline modules."""
 
 from pathlib import Path
@@ -5,14 +6,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # batchelor.py
 # ---------------------------------------------------------------------------
 
+
 class TestBatchelorKB:
     def test_higher_eps_higher_kB(self):
         from rsi_python.batchelor import batchelor_kB
+
         nu = 1.2e-6
         kB_low = batchelor_kB(1e-9, nu)
         kB_high = batchelor_kB(1e-5, nu)
@@ -20,16 +22,18 @@ class TestBatchelorKB:
 
     def test_known_value(self):
         """Check kB against hand calculation."""
-        from rsi_python.batchelor import batchelor_kB, KAPPA_T
+        from rsi_python.batchelor import KAPPA_T, batchelor_kB
+
         nu = 1.2e-6
         eps = 1e-7
-        expected = (1 / (2 * np.pi)) * (eps / (nu * KAPPA_T**2))**0.25
+        expected = (1 / (2 * np.pi)) * (eps / (nu * KAPPA_T**2)) ** 0.25
         np.testing.assert_allclose(batchelor_kB(eps, nu), expected)
 
 
 class TestBatchelorNondim:
     def test_shape_and_positive(self):
         from rsi_python.batchelor import batchelor_nondim
+
         alpha = np.linspace(0.01, 10, 200)
         f = batchelor_nondim(alpha)
         assert f.shape == (200,)
@@ -37,6 +41,7 @@ class TestBatchelorNondim:
 
     def test_peak_near_alpha_1(self):
         from rsi_python.batchelor import batchelor_nondim
+
         alpha = np.linspace(0.01, 5, 1000)
         f = batchelor_nondim(alpha)
         peak_alpha = alpha[np.argmax(f)]
@@ -47,7 +52,8 @@ class TestBatchelorNondim:
 class TestBatchelorGrad:
     def test_integral_equals_chi_over_6kT(self):
         """Batchelor gradient spectrum should integrate to chi/(6*kappa_T)."""
-        from rsi_python.batchelor import batchelor_grad, batchelor_kB, KAPPA_T
+        from rsi_python.batchelor import KAPPA_T, batchelor_grad, batchelor_kB
+
         chi = 1e-7
         nu = 1.2e-6
         eps = 1e-7
@@ -61,6 +67,7 @@ class TestBatchelorGrad:
 
     def test_higher_eps_broader(self):
         from rsi_python.batchelor import batchelor_grad, batchelor_kB
+
         chi = 1e-7
         nu = 1.2e-6
         kB_low = batchelor_kB(1e-9, nu)
@@ -77,7 +84,8 @@ class TestBatchelorGrad:
 class TestKraichnanGrad:
     def test_integral_equals_chi_over_6kT(self):
         """Kraichnan gradient spectrum should integrate to chi/(6*kappa_T)."""
-        from rsi_python.batchelor import kraichnan_grad, batchelor_kB, KAPPA_T
+        from rsi_python.batchelor import KAPPA_T, batchelor_kB, kraichnan_grad
+
         chi = 1e-7
         nu = 1.2e-6
         eps = 1e-7
@@ -91,7 +99,8 @@ class TestKraichnanGrad:
 
     def test_exponential_vs_gaussian_rolloff(self):
         """Kraichnan should have more power at high wavenumbers than Batchelor."""
-        from rsi_python.batchelor import batchelor_grad, kraichnan_grad, batchelor_kB
+        from rsi_python.batchelor import batchelor_grad, batchelor_kB, kraichnan_grad
+
         chi = 1e-7
         nu = 1.2e-6
         eps = 1e-7
@@ -100,22 +109,24 @@ class TestKraichnanGrad:
         k_high = np.array([2.0 * kB])
         S_batch = batchelor_grad(k_high, kB, chi)
         S_kraich = kraichnan_grad(k_high, kB, chi)
-        assert S_kraich[0] > S_batch[0], \
-            "Kraichnan should exceed Batchelor at k = 2*kB"
+        assert S_kraich[0] > S_batch[0], "Kraichnan should exceed Batchelor at k = 2*kB"
 
 
 # ---------------------------------------------------------------------------
 # fp07.py
 # ---------------------------------------------------------------------------
 
+
 class TestFP07Transfer:
     def test_unity_at_dc(self):
         from rsi_python.fp07 import fp07_transfer
+
         H2 = fp07_transfer(np.array([0.0]), 0.01)
         np.testing.assert_allclose(H2, 1.0)
 
     def test_rolloff(self):
         from rsi_python.fp07 import fp07_transfer
+
         f = np.logspace(-1, 3, 100)
         H2 = fp07_transfer(f, 0.01)
         assert H2[0] > H2[-1]
@@ -123,7 +134,8 @@ class TestFP07Transfer:
         assert np.all(np.diff(H2) <= 0)
 
     def test_double_pole_faster_rolloff(self):
-        from rsi_python.fp07 import fp07_transfer, fp07_double_pole
+        from rsi_python.fp07 import fp07_double_pole, fp07_transfer
+
         f = np.array([50.0])
         H2_single = fp07_transfer(f, 0.01)
         H2_double = fp07_double_pole(f, 0.01)
@@ -133,11 +145,13 @@ class TestFP07Transfer:
 class TestFP07Tau:
     def test_lueck(self):
         from rsi_python.fp07 import fp07_tau
+
         tau = fp07_tau(1.0, model="lueck")
         assert 0.005 < tau < 0.02
 
     def test_speed_dependence(self):
         from rsi_python.fp07 import fp07_tau
+
         tau_slow = fp07_tau(0.5)
         tau_fast = fp07_tau(1.5)
         assert tau_slow > tau_fast  # slower speed = larger time constant
@@ -146,12 +160,14 @@ class TestFP07Tau:
 class TestNoiseModel:
     def test_noise_positive(self):
         from rsi_python.fp07 import noise_thermchannel
+
         F = np.logspace(-1, 2, 50)
         noise = noise_thermchannel(F, 10.0)
         assert np.all(noise > 0)
 
     def test_noise_shape(self):
         from rsi_python.fp07 import noise_thermchannel
+
         F = np.logspace(-1, 2, 50)
         noise = noise_thermchannel(F, 10.0)
         assert noise.shape == (50,)
@@ -161,12 +177,13 @@ class TestNoiseModel:
 # chi.py — synthetic spectrum recovery
 # ---------------------------------------------------------------------------
 
+
 class TestChiFromEpsilon:
     def test_synthetic_batchelor_recovery(self):
         """Method 1: recover chi from a synthetic Batchelor spectrum with FP07 rolloff."""
-        from rsi_python.batchelor import batchelor_grad, batchelor_kB, KAPPA_T
-        from rsi_python.fp07 import fp07_transfer, fp07_tau
+        from rsi_python.batchelor import batchelor_grad, batchelor_kB
         from rsi_python.chi import _chi_from_epsilon
+        from rsi_python.fp07 import fp07_tau, fp07_transfer
 
         chi_true = 1e-7
         eps_true = 1e-7
@@ -188,8 +205,18 @@ class TestChiFromEpsilon:
         spec_obs = np.maximum(spec_obs, 1e-20)
 
         chi_est, kB_est, K_max, _, fom, K_max_ratio = _chi_from_epsilon(
-            spec_obs, K, eps_true, nu, 10.0, speed, 98.0,
-            "single_pole", "batchelor", fs, 0.94, fft_length,
+            spec_obs,
+            K,
+            eps_true,
+            nu,
+            10.0,
+            speed,
+            98.0,
+            "single_pole",
+            "batchelor",
+            fs,
+            0.94,
+            fft_length,
         )
 
         assert np.isfinite(chi_est)
@@ -201,7 +228,7 @@ class TestChiFromEpsilon:
 class TestMLEFit:
     def test_synthetic_recovery(self):
         """Method 2 MLE: fit kB from synthetic Batchelor spectrum."""
-        from rsi_python.batchelor import batchelor_grad, batchelor_kB, KAPPA_T
+        from rsi_python.batchelor import batchelor_grad, batchelor_kB
         from rsi_python.chi import _mle_fit_kB
 
         chi_true = 1e-7
@@ -220,8 +247,18 @@ class TestMLEFit:
         spec_obs = np.maximum(spec_obs, 1e-20)
 
         kB_fit, chi_fit, eps_fit, K_max, _, fom, K_max_ratio = _mle_fit_kB(
-            spec_obs, K, chi_true, nu, 10.0, speed, 98.0,
-            "single_pole", "batchelor", fs, 0.94, fft_length,
+            spec_obs,
+            K,
+            chi_true,
+            nu,
+            10.0,
+            speed,
+            98.0,
+            "single_pole",
+            "batchelor",
+            fs,
+            0.94,
+            fft_length,
         )
 
         assert np.isfinite(kB_fit)
@@ -234,15 +271,15 @@ class TestMLEFit:
 # Integration test on real VMP data
 # ---------------------------------------------------------------------------
 
-DATA_DIR = Path(__file__).parent.parent / "VMP"
-PROFILE_FILE = DATA_DIR / "ARCTERX_Thompson_2025_SN479_0005.p"
+TEST_DATA_DIR = Path(__file__).parent / "data"
+PROFILE_FILE = TEST_DATA_DIR / "SN479_0006.p"
 
 
 class TestChiIntegration:
     @pytest.fixture
     def skip_no_data(self):
         if not PROFILE_FILE.exists():
-            pytest.skip("VMP test data not available")
+            pytest.skip("Test data not available")
 
     def test_get_chi_method2(self, skip_no_data):
         """Method 2 (no epsilon) should produce chi in reasonable range."""
@@ -261,8 +298,8 @@ class TestChiIntegration:
 
     def test_get_chi_method1(self, skip_no_data):
         """Method 1 (with epsilon) should produce chi in reasonable range."""
-        from rsi_python.dissipation import get_diss
         from rsi_python.chi import get_chi
+        from rsi_python.dissipation import get_diss
 
         # First compute epsilon
         eps_results = get_diss(PROFILE_FILE, fft_length=256, goodman=True)
@@ -287,9 +324,23 @@ class TestChiIntegration:
         ds = results[0]
 
         # Check required variables exist (including new QC variables)
-        for var in ["chi", "epsilon_T", "kB", "K_max_T", "fom", "K_max_ratio",
-                     "speed", "nu", "P_mean", "T_mean", "spec_gradT",
-                     "spec_batch", "spec_noise", "K", "F"]:
+        for var in [
+            "chi",
+            "epsilon_T",
+            "kB",
+            "K_max_T",
+            "fom",
+            "K_max_ratio",
+            "speed",
+            "nu",
+            "P_mean",
+            "T_mean",
+            "spec_gradT",
+            "spec_batch",
+            "spec_noise",
+            "K",
+            "F",
+        ]:
             assert var in ds, f"Missing variable: {var}"
 
         # Check dimensions
@@ -317,6 +368,7 @@ class TestChiIntegration:
         assert len(out_paths) >= 1
 
         import xarray as xr
+
         ds = xr.open_dataset(out_paths[0])
         assert "chi" in ds
         assert "kB" in ds
@@ -325,5 +377,6 @@ class TestChiIntegration:
     def test_python_api(self, skip_no_data):
         """Top-level import should work."""
         from rsi_python import get_chi
+
         results = get_chi(PROFILE_FILE, fft_length=512)
         assert len(results) >= 1

@@ -1,16 +1,26 @@
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """
 NetCDF conversion for Rockland .p files.
 """
+
+from __future__ import annotations
 
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rsi_python.p_file import PFile
 
 import numpy as np
 
 
-def p_to_netcdf(p_filepath, nc_filepath=None):
+def p_to_netcdf(
+    p_filepath: str | Path,
+    nc_filepath: str | Path | None = None,
+) -> tuple[PFile, Path]:
     """Convert a single .p file to NetCDF4.
 
     Parameters
@@ -26,6 +36,7 @@ def p_to_netcdf(p_filepath, nc_filepath=None):
         The parsed data object and the output path.
     """
     import netCDF4 as nc
+
     from rsi_python.p_file import PFile
 
     pf = PFile(p_filepath)
@@ -83,7 +94,7 @@ def _convert_one(args):
     return p_path.name, nc_path.name, size_mb
 
 
-def convert_all(p_files, output_dir=None, jobs=1):
+def convert_all(p_files: list[Path], output_dir: Path | None = None, jobs: int = 1) -> None:
     """Convert multiple .p files to NetCDF.
 
     Parameters

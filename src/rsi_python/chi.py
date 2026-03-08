@@ -1,3 +1,4 @@
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Chi (thermal variance dissipation rate) calculation.
 
 Two methods:
@@ -15,23 +16,33 @@ Peterson, A.K. and I. Fer, 2014: Dissipation measurements using temperature
     microstructure from an underwater glider. Methods in Oceanography, 10, 44-69.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import numpy.typing as npt
 import xarray as xr
 
-from rsi_python.batchelor import (
-    KAPPA_T, Q_BATCHELOR, Q_KRAICHNAN,
-    batchelor_kB, batchelor_grad, kraichnan_grad,
-)
-from rsi_python.fp07 import fp07_transfer, fp07_tau, gradT_noise
-from rsi_python.ocean import visc35
-from rsi_python.spectral import csd_odas
+if TYPE_CHECKING:
+    from rsi_python.p_file import PFile
 
+from rsi_python.batchelor import (
+    KAPPA_T,
+    Q_BATCHELOR,
+    Q_KRAICHNAN,
+    batchelor_grad,
+    batchelor_kB,
+    kraichnan_grad,
+)
+from rsi_python.fp07 import fp07_tau, fp07_transfer, gradT_noise
+from rsi_python.spectral import csd_odas
 
 # ---------------------------------------------------------------------------
 # Spectrum model dispatcher
 # ---------------------------------------------------------------------------
+
 
 def _spectrum_func(model):
     if model == "batchelor":
@@ -46,8 +57,21 @@ def _spectrum_func(model):
 # Method 1: Chi from known epsilon
 # ---------------------------------------------------------------------------
 
-def _chi_from_epsilon(spec_obs, K, epsilon, nu, T_mean, speed, f_AA,
-                      fp07_model, spectrum_model, fs, diff_gain, fft_length):
+
+def _chi_from_epsilon(
+    spec_obs,
+    K,
+    epsilon,
+    nu,
+    T_mean,
+    speed,
+    f_AA,
+    fp07_model,
+    spectrum_model,
+    fs,
+    diff_gain,
+    fft_length,
+):
     """Compute chi for one probe in one window, given epsilon.
 
     Returns (chi, kB, K_max, spec_batch).
@@ -61,8 +85,8 @@ def _chi_from_epsilon(spec_obs, K, epsilon, nu, T_mean, speed, f_AA,
     # FP07 transfer function
     tau0 = fp07_tau(speed)
     F = K * speed
-    H2 = fp07_transfer(F, tau0) if fp07_model == "single_pole" else \
-         fp07_transfer(F, tau0)  # default single-pole for now
+    # FP07 transfer function (single-pole for now; H2 used below as H2_fine)
+    fp07_transfer(F, tau0) if fp07_model == "single_pole" else fp07_transfer(F, tau0)
 
     # Noise spectrum
     noise_f = gradT_noise(F, T_mean, speed, fs=fs, diff_gain=diff_gain)[0]
@@ -101,8 +125,9 @@ def _chi_from_epsilon(spec_obs, K, epsilon, nu, T_mean, speed, f_AA,
     F_fine = K_fine * speed
     H2_fine = fp07_transfer(F_fine, tau0)
     mask_resolved = K_fine <= K_max
-    V_resolved = np.trapezoid(spec_batch_fine[mask_resolved] * H2_fine[mask_resolved],
-                              K_fine[mask_resolved])
+    V_resolved = np.trapezoid(
+        spec_batch_fine[mask_resolved] * H2_fine[mask_resolved], K_fine[mask_resolved]
+    )
 
     if V_resolved <= 0 or V_total <= 0:
         return np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan
@@ -129,8 +154,21 @@ def _chi_from_epsilon(spec_obs, K, epsilon, nu, T_mean, speed, f_AA,
 # Method 2: MLE spectral fitting (Ruddick et al. 2000)
 # ---------------------------------------------------------------------------
 
-def _mle_fit_kB(spec_obs, K, chi_obs, nu, T_mean, speed, f_AA,
-                fp07_model, spectrum_model, fs, diff_gain, fft_length):
+
+def _mle_fit_kB(
+    spec_obs,
+    K,
+    chi_obs,
+    nu,
+    T_mean,
+    speed,
+    f_AA,
+    fp07_model,
+    spectrum_model,
+    fs,
+    diff_gain,
+    fft_length,
+):
     """Maximum likelihood fit for kB, one probe, one window.
 
     Returns (kB_best, chi, epsilon, K_max, spec_batch).
@@ -198,7 +236,7 @@ def _mle_fit_kB(spec_obs, K, chi_obs, nu, T_mean, speed, f_AA,
         kB_best = kB_fine[np.argmin(nll_fine)]
 
     # Recover epsilon from kB
-    epsilon = (2 * np.pi * kB_best)**4 * nu * KAPPA_T**2
+    epsilon = (2 * np.pi * kB_best) ** 4 * nu * KAPPA_T**2
 
     # Compute chi by integrating fitted Batchelor spectrum
     K_fine = np.linspace(K[1] * 0.01, kB_best * 5, 10000)
@@ -221,8 +259,9 @@ def _mle_fit_kB(spec_obs, K, chi_obs, nu, T_mean, speed, f_AA,
     return kB_best, chi, epsilon, K_max_fit, spec_batch, fom, K_max_ratio_val
 
 
-def _iterative_fit(spec_obs, K, nu, T_mean, speed, f_AA,
-                   fp07_model, spectrum_model, fs, diff_gain, fft_length):
+def _iterative_fit(
+    spec_obs, K, nu, T_mean, speed, f_AA, fp07_model, spectrum_model, fs, diff_gain, fft_length
+):
     """Iterative MLE fitting (Peterson & Fer 2014).
 
     Three iterations refining the integration limits and unresolved variance.
@@ -234,7 +273,7 @@ def _iterative_fit(spec_obs, K, nu, T_mean, speed, f_AA,
     # FP07 transfer function
     tau0 = fp07_tau(speed)
     F = K * speed
-    H2 = fp07_transfer(F, tau0)
+    fp07_transfer(F, tau0)  # evaluated but not used directly here
 
     # Noise spectrum
     noise_K, _ = gradT_noise(F, T_mean, speed, fs=fs, diff_gain=diff_gain)
@@ -250,16 +289,17 @@ def _iterative_fit(spec_obs, K, nu, T_mean, speed, f_AA,
     if len(valid_idx) < 6:
         return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
 
-    k_l = K[valid_idx[0]]
     k_u = K[valid_idx[-1]]
 
     # Initial chi estimate
     mask_init = valid & (spec_obs > noise_K)
     if np.sum(mask_init) < 3:
         mask_init = valid
-    chi_obs = 6 * KAPPA_T * np.trapezoid(
-        np.maximum(spec_obs[mask_init] - noise_K[mask_init], 0),
-        K[mask_init])
+    chi_obs = (
+        6
+        * KAPPA_T
+        * np.trapezoid(np.maximum(spec_obs[mask_init] - noise_K[mask_init], 0), K[mask_init])
+    )
 
     if chi_obs <= 0:
         chi_obs = 1e-10
@@ -271,8 +311,18 @@ def _iterative_fit(spec_obs, K, nu, T_mean, speed, f_AA,
     for iteration in range(3):
         # MLE fit for kB
         kB_best, chi_fit, epsilon, K_max, _, _, _ = _mle_fit_kB(
-            spec_obs, K, chi_obs, nu, T_mean, speed, f_AA,
-            fp07_model, spectrum_model, fs, diff_gain, fft_length,
+            spec_obs,
+            K,
+            chi_obs,
+            nu,
+            T_mean,
+            speed,
+            f_AA,
+            fp07_model,
+            spectrum_model,
+            fs,
+            diff_gain,
+            fft_length,
         )
 
         if not np.isfinite(kB_best) or kB_best < 1:
@@ -288,18 +338,20 @@ def _iterative_fit(spec_obs, K, nu, T_mean, speed, f_AA,
         if np.sum(mask_refined) < 3:
             break
 
-        chi_obs_new = 6 * KAPPA_T * np.trapezoid(
-            np.maximum(spec_obs[mask_refined] - noise_K[mask_refined], 0),
-            K[mask_refined])
+        chi_obs_new = (
+            6
+            * KAPPA_T
+            * np.trapezoid(
+                np.maximum(spec_obs[mask_refined] - noise_K[mask_refined], 0), K[mask_refined]
+            )
+        )
 
         # Unresolved variance from Batchelor model
         K_fine = np.linspace(K[1] * 0.01, kB_best * 5, 10000)
         spec_fine = grad_func(K_fine, kB_best, chi_obs_new if chi_obs_new > 0 else chi_obs)
 
-        chi_low = 6 * KAPPA_T * np.trapezoid(
-            spec_fine[K_fine < k_l_new], K_fine[K_fine < k_l_new])
-        chi_high = 6 * KAPPA_T * np.trapezoid(
-            spec_fine[K_fine > k_u_new], K_fine[K_fine > k_u_new])
+        chi_low = 6 * KAPPA_T * np.trapezoid(spec_fine[K_fine < k_l_new], K_fine[K_fine < k_l_new])
+        chi_high = 6 * KAPPA_T * np.trapezoid(spec_fine[K_fine > k_u_new], K_fine[K_fine > k_u_new])
 
         chi_obs = max(chi_obs_new, 0) + chi_low + chi_high
 
@@ -331,12 +383,22 @@ def _iterative_fit(spec_obs, K, nu, T_mean, speed, f_AA,
 # Main API
 # ---------------------------------------------------------------------------
 
-def get_chi(source, epsilon_ds=None, fft_length=512, diss_length=None,
-            overlap=None, speed=None, direction="down",
-            fp07_model="single_pole", goodman=False,
-            f_AA=98.0, fit_method="mle",
-            spectrum_model="batchelor",
-            salinity=None):
+
+def get_chi(
+    source: PFile | str | Path,
+    epsilon_ds: xr.Dataset | None = None,
+    fft_length: int = 512,
+    diss_length: int | None = None,
+    overlap: int | None = None,
+    speed: float | None = None,
+    direction: str = "down",
+    fp07_model: str = "single_pole",
+    goodman: bool = False,
+    f_AA: float = 98.0,
+    fit_method: str = "mle",
+    spectrum_model: str = "batchelor",
+    salinity: npt.ArrayLike | None = None,
+) -> list[xr.Dataset]:
     """Compute chi from temperature gradient spectra.
 
     Parameters
@@ -396,9 +458,6 @@ def get_chi(source, epsilon_ds=None, fft_length=512, diss_length=None,
 
     # Load channels including thermistor data
     data = _load_therm_channels(source)
-    fs_fast = data["fs_fast"]
-    fs_slow = data["fs_slow"]
-    ratio = round(fs_fast / fs_slow)
 
     therm_names = [t[0] for t in data["therm"]]
     therm_arrays = [t[1] for t in data["therm"]]
@@ -408,51 +467,17 @@ def get_chi(source, epsilon_ds=None, fft_length=512, diss_length=None,
     if n_therm == 0:
         raise ValueError("No thermistor gradient channels found")
 
-    # Determine profiles
-    P_slow = data["P"]
-    T_slow = data["T"]
-    t_fast = data["t_fast"]
-    t_slow = data["t_slow"]
+    # Profile detection, speed, P/T interpolation, salinity
+    from rsi_python.dissipation import _prepare_profiles
 
-    if data["is_profile"]:
-        profiles_slow = [(0, len(P_slow) - 1)]
-    else:
-        from rsi_python.profile import get_profiles, _smooth_fall_rate
-        W_slow = _smooth_fall_rate(P_slow, fs_slow)
-        profiles_slow = get_profiles(P_slow, W_slow, fs_slow, direction=direction)
-        if not profiles_slow:
-            return []
-
-    # Compute speed
-    if speed is not None:
-        speed_fast = np.full(len(t_fast), abs(speed))
-    else:
-        from rsi_python.profile import _smooth_fall_rate
-        W_slow = _smooth_fall_rate(P_slow, fs_slow)
-        speed_fast = np.abs(np.interp(t_fast, t_slow, W_slow))
-
-    # Interpolate P and T to fast rate
-    P_fast = np.interp(t_fast, t_slow, P_slow)
-    T_fast = np.interp(t_fast, t_slow, T_slow)
+    prepared = _prepare_profiles(data, speed, direction, salinity)
+    if prepared is None:
+        return []
+    (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, fs_slow, ratio, t_fast) = (
+        prepared
+    )
 
     f_AA_eff = 0.9 * f_AA
-
-    # Handle salinity
-    if salinity is not None:
-        salinity = np.asarray(salinity, dtype=float)
-        if salinity.ndim > 0:
-            if len(salinity) == len(t_slow):
-                sal_fast = np.interp(t_fast, t_slow, salinity)
-            elif len(salinity) == len(t_fast):
-                sal_fast = salinity
-            else:
-                raise ValueError(
-                    f"salinity array length {len(salinity)} doesn't match "
-                    f"slow ({len(t_slow)}) or fast ({len(t_fast)}) time series")
-        else:
-            sal_fast = float(salinity)
-    else:
-        sal_fast = None
 
     results = []
     for s_slow, e_slow in profiles_slow:
@@ -471,11 +496,23 @@ def get_chi(source, epsilon_ds=None, fft_length=512, diss_length=None,
             sal_prof = sal_fast  # None or scalar
 
         ds = _compute_profile_chi(
-            therm_prof, therm_names, diff_gains,
-            p_prof, t_prof, spd_prof, time_prof,
-            fs_fast, fft_length, diss_length, overlap,
-            f_AA_eff, fp07_model, spectrum_model, fit_method,
-            epsilon_ds, salinity=sal_prof,
+            therm_prof,
+            therm_names,
+            diff_gains,
+            p_prof,
+            t_prof,
+            spd_prof,
+            time_prof,
+            fs_fast,
+            fft_length,
+            diss_length,
+            overlap,
+            f_AA_eff,
+            fp07_model,
+            spectrum_model,
+            fit_method,
+            epsilon_ds,
+            salinity=sal_prof,
         )
         ds.attrs.update(data["metadata"])
         results.append(ds)
@@ -490,6 +527,7 @@ def _load_therm_channels(source):
     or falls back to T1/T2 channels for first-difference gradient.
     """
     import re
+
     from rsi_python.dissipation import load_channels
 
     # First load standard channels
@@ -517,7 +555,11 @@ def _load_therm_channels(source):
             if dT_re.match(name):
                 therm.append((name, pf.channels[name]))
                 # Get diff_gain from config
-                dg = pf.config.get(name, {}).get("diff_gain", "0.94")
+                ch_cfg = next(
+                    (ch for ch in pf.config["channels"] if ch.get("name") == name),
+                    {},
+                )
+                dg = ch_cfg.get("diff_gain", "0.94")
                 diff_gains.append(float(dg))
 
         # If no pre-emphasized channels, use T channels with first-difference
@@ -531,6 +573,7 @@ def _load_therm_channels(source):
     else:
         # NetCDF source — look for gradient channels or T channels
         import netCDF4 as nc
+
         ds = nc.Dataset(str(source), "r")
         dT_re = re.compile(r"^T\d+_dT\d+$")
         T_re = re.compile(r"^T\d+$")
@@ -557,11 +600,25 @@ def _load_therm_channels(source):
     return data
 
 
-def _compute_profile_chi(therm_arrays, therm_names, diff_gains,
-                          P, T, speed, t_fast,
-                          fs_fast, fft_length, diss_length, overlap,
-                          f_AA, fp07_model, spectrum_model, fit_method,
-                          epsilon_ds, salinity=None):
+def _compute_profile_chi(
+    therm_arrays,
+    therm_names,
+    diff_gains,
+    P,
+    T,
+    speed,
+    t_fast,
+    fs_fast,
+    fft_length,
+    diss_length,
+    overlap,
+    f_AA,
+    fp07_model,
+    spectrum_model,
+    fit_method,
+    epsilon_ds,
+    salinity=None,
+):
     """Compute chi for a single profile."""
     N = len(P)
     n_therm = len(therm_arrays)
@@ -618,12 +675,9 @@ def _compute_profile_chi(therm_arrays, therm_names, diff_gains,
         mean_T = np.mean(T[sel])
         mean_P = np.mean(P[sel])
         mean_t = np.mean(t_fast[sel])
-        if salinity is not None:
-            from rsi_python.ocean import visc
-            mean_S = np.mean(salinity[sel]) if np.ndim(salinity) > 0 else float(salinity)
-            nu = visc(mean_T, mean_S, mean_P)
-        else:
-            nu = visc35(mean_T)
+        from rsi_python.dissipation import _compute_nu
+
+        nu = _compute_nu(mean_T, mean_P, salinity, sel)
 
         K = np.arange(n_freq) * fs_fast / fft_length / W
         F = np.arange(n_freq) * fs_fast / fft_length
@@ -654,8 +708,12 @@ def _compute_profile_chi(therm_arrays, therm_names, diff_gains,
             # Compute auto-spectrum of gradient signal
             seg = therm_arrays[ci][sel]
             Pxx, F_spec = csd_odas(
-                seg, None, fft_length, fs_fast,
-                overlap=fft_length // 2, detrend="linear",
+                seg,
+                None,
+                fft_length,
+                fs_fast,
+                overlap=fft_length // 2,
+                detrend="linear",
             )[:2]
 
             # Convert to wavenumber spectrum
@@ -663,9 +721,10 @@ def _compute_profile_chi(therm_arrays, therm_names, diff_gains,
 
             # First-difference correction
             correction = np.ones(n_freq)
-            with np.errstate(divide='ignore', invalid='ignore'):
-                correction[1:] = (np.pi * F_spec[1:]
-                                  / (fs_fast * np.sin(np.pi * F_spec[1:] / fs_fast)))**2
+            with np.errstate(divide="ignore", invalid="ignore"):
+                correction[1:] = (
+                    np.pi * F_spec[1:] / (fs_fast * np.sin(np.pi * F_spec[1:] / fs_fast))
+                ) ** 2
             correction = np.where(np.isfinite(correction), correction, 1.0)
             spec_obs = spec_obs * correction
 
@@ -673,11 +732,22 @@ def _compute_profile_chi(therm_arrays, therm_names, diff_gains,
 
             if epsilon_val is not None:
                 # Method 1: chi from known epsilon
-                chi_val, kB_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = \
+                chi_val, kB_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = (
                     _chi_from_epsilon(
-                        spec_obs, K, epsilon_val, nu, mean_T, W, f_AA,
-                        fp07_model, spectrum_model, fs_fast, diff_gains[ci], fft_length,
+                        spec_obs,
+                        K,
+                        epsilon_val,
+                        nu,
+                        mean_T,
+                        W,
+                        f_AA,
+                        fp07_model,
+                        spectrum_model,
+                        fs_fast,
+                        diff_gains[ci],
+                        fft_length,
                     )
+                )
                 chi_out[ci, idx] = chi_val
                 eps_out[ci, idx] = epsilon_val
                 kB_out[ci, idx] = kB_val
@@ -697,17 +767,38 @@ def _compute_profile_chi(therm_arrays, therm_names, diff_gains,
                     chi_obs = 1e-10
 
                 if fit_method == "iterative":
-                    kB_val, chi_val, eps_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = \
+                    kB_val, chi_val, eps_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = (
                         _iterative_fit(
-                            spec_obs, K, nu, mean_T, W, f_AA,
-                            fp07_model, spectrum_model, fs_fast, diff_gains[ci], fft_length,
+                            spec_obs,
+                            K,
+                            nu,
+                            mean_T,
+                            W,
+                            f_AA,
+                            fp07_model,
+                            spectrum_model,
+                            fs_fast,
+                            diff_gains[ci],
+                            fft_length,
                         )
+                    )
                 else:
-                    kB_val, chi_val, eps_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = \
+                    kB_val, chi_val, eps_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = (
                         _mle_fit_kB(
-                            spec_obs, K, chi_obs, nu, mean_T, W, f_AA,
-                            fp07_model, spectrum_model, fs_fast, diff_gains[ci], fft_length,
+                            spec_obs,
+                            K,
+                            chi_obs,
+                            nu,
+                            mean_T,
+                            W,
+                            f_AA,
+                            fp07_model,
+                            spectrum_model,
+                            fs_fast,
+                            diff_gains[ci],
+                            fft_length,
                         )
+                    )
 
                 chi_out[ci, idx] = chi_val
                 eps_out[ci, idx] = eps_val
@@ -759,7 +850,12 @@ def _compute_profile_chi(therm_arrays, therm_names, diff_gains,
 # File-level processing
 # ---------------------------------------------------------------------------
 
-def compute_chi_file(source_path, output_dir, **chi_kwargs):
+
+def compute_chi_file(
+    source_path: str | Path,
+    output_dir: str | Path,
+    **chi_kwargs: Any,
+) -> list[Path]:
     """Compute chi for one file and write NetCDF output(s).
 
     Parameters
@@ -791,8 +887,10 @@ def compute_chi_file(source_path, output_dir, **chi_kwargs):
         out_path = output_dir / out_name
         ds.to_netcdf(out_path)
         output_paths.append(out_path)
-        print(f"  {out_path.name}: {ds.sizes['time']} estimates, "
-              f"P={float(ds.P_mean.min()):.0f}-{float(ds.P_mean.max()):.0f} dbar")
+        print(
+            f"  {out_path.name}: {ds.sizes['time']} estimates, "
+            f"P={float(ds.P_mean.min()):.0f}-{float(ds.P_mean.max()):.0f} dbar"
+        )
 
     return output_paths
 

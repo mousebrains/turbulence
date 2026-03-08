@@ -1,6 +1,5 @@
 # Data files (large)
 VMP/
-*.p
 
 # Rockland ODAS MATLAB reference (third-party)
 odas/

@@ -1,3 +1,4 @@
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Batchelor and Kraichnan temperature gradient spectra.
 
 References
@@ -11,23 +12,29 @@ Oakey, N.S., 1982: Determination of the rate of dissipation of turbulent
     energy. J. Phys. Oceanogr., 12, 256-271.
 """
 
+from __future__ import annotations
+
 import numpy as np
+import numpy.typing as npt
 from scipy.special import erfc
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-KAPPA_T = 1.4e-7        # Thermal diffusivity of seawater [m^2/s]
-Q_BATCHELOR = 3.7       # Batchelor universal constant (Oakey 1982)
-Q_KRAICHNAN = 5.26      # Kraichnan universal constant (Bogucki et al. 1997)
+KAPPA_T = 1.4e-7  # Thermal diffusivity of seawater [m^2/s]
+Q_BATCHELOR = 3.7  # Batchelor universal constant (Oakey 1982)
+Q_KRAICHNAN = 5.26  # Kraichnan universal constant (Bogucki et al. 1997)
 
 
 # ---------------------------------------------------------------------------
 # Batchelor wavenumber
 # ---------------------------------------------------------------------------
 
-def batchelor_kB(epsilon, nu, kappa_T=KAPPA_T):
+
+def batchelor_kB(
+    epsilon: float | np.ndarray, nu: float, kappa_T: float = KAPPA_T
+) -> float | np.ndarray:
     """Batchelor wavenumber [cpm].
 
     kB = (1/(2*pi)) * (epsilon / (nu * kappa_T^2))^(1/4)
@@ -46,14 +53,15 @@ def batchelor_kB(epsilon, nu, kappa_T=KAPPA_T):
     kB : float or array
         Batchelor wavenumber [cpm].
     """
-    return (1 / (2 * np.pi)) * (epsilon / (nu * kappa_T**2))**0.25
+    return (1 / (2 * np.pi)) * (epsilon / (nu * kappa_T**2)) ** 0.25
 
 
 # ---------------------------------------------------------------------------
 # Batchelor spectrum (Dillon & Caldwell 1980)
 # ---------------------------------------------------------------------------
 
-def batchelor_nondim(alpha):
+
+def batchelor_nondim(alpha: npt.ArrayLike) -> np.ndarray:
     """Non-dimensional Batchelor gradient spectrum f_B(alpha).
 
     f(alpha) = alpha * [exp(-alpha^2/2) - alpha * sqrt(pi/2) * erfc(alpha/sqrt(2))]
@@ -70,11 +78,16 @@ def batchelor_nondim(alpha):
     f : ndarray
     """
     alpha = np.asarray(alpha, dtype=np.float64)
-    return alpha * (np.exp(-alpha**2 / 2)
-                    - alpha * np.sqrt(np.pi / 2) * erfc(alpha / np.sqrt(2)))
+    return alpha * (np.exp(-(alpha**2) / 2) - alpha * np.sqrt(np.pi / 2) * erfc(alpha / np.sqrt(2)))
 
 
-def batchelor_grad(k, kB, chi, kappa_T=KAPPA_T, q=Q_BATCHELOR):
+def batchelor_grad(
+    k: npt.ArrayLike,
+    kB: float,
+    chi: float,
+    kappa_T: float = KAPPA_T,
+    q: float = Q_BATCHELOR,
+) -> np.ndarray:
     """Batchelor temperature gradient spectrum [(K/m)^2 / cpm].
 
     S(k) = sqrt(q/2) * chi / (kB * kappa_T) * f(alpha)
@@ -111,7 +124,14 @@ def batchelor_grad(k, kB, chi, kappa_T=KAPPA_T, q=Q_BATCHELOR):
 # Kraichnan spectrum (Bogucki et al. 1997)
 # ---------------------------------------------------------------------------
 
-def kraichnan_grad(k, kB, chi, kappa_T=KAPPA_T, q=Q_KRAICHNAN):
+
+def kraichnan_grad(
+    k: npt.ArrayLike,
+    kB: float,
+    chi: float,
+    kappa_T: float = KAPPA_T,
+    q: float = Q_KRAICHNAN,
+) -> np.ndarray:
     """Kraichnan temperature gradient spectrum [(K/m)^2 / cpm].
 
     S(k) = chi*q / (3*kappa_T*kB^2) * k * (1 + sqrt(6q)*y) * exp(-sqrt(6q)*y)
@@ -144,7 +164,7 @@ def kraichnan_grad(k, kB, chi, kappa_T=KAPPA_T, q=Q_KRAICHNAN):
     k = np.asarray(k, dtype=np.float64)
     y = k / kB
     sq6q = np.sqrt(6 * q)
-    with np.errstate(divide='ignore', invalid='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore"):
         S = chi * q / (3 * kappa_T * kB**2) * k * (1 + sq6q * y) * np.exp(-sq6q * y)
     S = np.where(np.isfinite(S), S, 0.0)
     return S

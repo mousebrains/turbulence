@@ -1,13 +1,24 @@
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Spike removal for shear probe and micro-conductivity signals.
 
 Port of despike.m from the ODAS MATLAB library.
 """
 
+from __future__ import annotations
+
 import numpy as np
+import numpy.typing as npt
 from scipy.signal import butter, filtfilt
 
 
-def despike(signal_in, fs, thresh=8, smooth=0.5, N=None, max_passes=10):
+def despike(
+    signal_in: npt.ArrayLike,
+    fs: float,
+    thresh: float = 8,
+    smooth: float = 0.5,
+    N: int | None = None,
+    max_passes: int = 10,
+) -> tuple[np.ndarray, np.ndarray, int, float]:
     """Iterative spike removal.
 
     Identifies spikes by comparing the instantaneous rectified HP-filtered
@@ -70,11 +81,13 @@ def _single_despike(dv, thresh, smooth, fs, N):
 
     # Zero-pad with reflected ends to handle edge effects
     pad_len = min(length, 2 * int(fs / smooth))
-    dv_padded = np.concatenate([
-        dv[pad_len - 1::-1],
-        dv,
-        dv[-1:-pad_len - 1:-1],
-    ])
+    dv_padded = np.concatenate(
+        [
+            dv[pad_len - 1 :: -1],
+            dv,
+            dv[-1 : -pad_len - 1 : -1],
+        ]
+    )
     rng = slice(pad_len, pad_len + length)
 
     # High-pass filter at 0.5 Hz, rectify
@@ -118,7 +131,9 @@ def _single_despike(dv, thresh, smooth, fs, N):
     for s_bad, e_bad in zip(starts, ends):
         # Average from region R before start
         before_idx = np.arange(max(0, s_bad - R), s_bad)
-        before_vals = dv_padded[before_idx[good[before_idx]]] if len(before_idx) > 0 else np.array([])
+        before_vals = (
+            dv_padded[before_idx[good[before_idx]]] if len(before_idx) > 0 else np.array([])
+        )
 
         # Average from region R after end
         after_idx = np.arange(e_bad, min(len(good), e_bad + R))

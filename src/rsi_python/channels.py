@@ -1,20 +1,25 @@
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """
 Channel conversion functions: raw counts -> physical units.
 
 Ported from the ODAS MATLAB Library convert_odas.m.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import numpy as np
 
 
-def _safe_float(s, default=0.0):
+def _safe_float(s: Any, default: float = 0.0) -> float:
     try:
         return float(s)
     except (ValueError, TypeError):
         return default
 
 
-def convert_therm(data, params):
+def convert_therm(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """FP07 thermistor: Steinhart-Hart via half-bridge."""
     a = _safe_float(params.get("a", "0"))
     b = _safe_float(params.get("b", "1"))
@@ -40,7 +45,7 @@ def convert_therm(data, params):
     return 1.0 / inv_T - 273.15, "deg_C"
 
 
-def convert_shear(data, params):
+def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """Shear probe."""
     adc_fs = _safe_float(params.get("adc_fs", "4.096"))
     adc_bits = _safe_float(params.get("adc_bits", "16"))
@@ -53,7 +58,7 @@ def convert_shear(data, params):
     return phys, "s-1"
 
 
-def convert_poly(data, params):
+def convert_poly(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """Polynomial conversion (pressure, etc.)."""
     coeffs = []
     for i in range(10):
@@ -69,7 +74,7 @@ def convert_poly(data, params):
     return phys, units or "unknown"
 
 
-def convert_voltage(data, params):
+def convert_voltage(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     adc_fs = _safe_float(params.get("adc_fs", "1"))
     adc_bits = _safe_float(params.get("adc_bits", "0"))
     gain = _safe_float(params.get("g", "1"))
@@ -78,12 +83,12 @@ def convert_voltage(data, params):
     return phys, "V"
 
 
-def convert_piezo(data, params):
+def convert_piezo(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     a_0 = _safe_float(params.get("a_0", "0"))
     return data - a_0, "counts"
 
 
-def convert_inclxy(data, params):
+def convert_inclxy(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """ADIS inclinometer X or Y."""
     raw = data.astype(np.int32)
     val = (raw >> 2).astype(np.float64)
@@ -93,7 +98,7 @@ def convert_inclxy(data, params):
     return coef1 * val + coef0, "deg"
 
 
-def convert_inclt(data, params):
+def convert_inclt(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """ADIS inclinometer temperature."""
     raw = data.astype(np.int32)
     val = (raw >> 2).astype(np.float64)
@@ -103,7 +108,7 @@ def convert_inclt(data, params):
     return coef1 * val + coef0, "deg_C"
 
 
-def convert_jac_c(data, params):
+def convert_jac_c(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """JAC conductivity (32-bit combined channel)."""
     i_part = np.floor(data / 2**16)
     v_part = np.mod(data, 2**16)
@@ -115,7 +120,7 @@ def convert_jac_c(data, params):
     return np.polyval([c, b, a], ratio), "mS_cm-1"
 
 
-def convert_jac_t(data, params):
+def convert_jac_t(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """JAC temperature."""
     d = data.copy()
     d[d < 0] = d[d < 0] + 2**16
@@ -128,18 +133,18 @@ def convert_jac_t(data, params):
     return np.polyval([f, e, d_coef, c, b, a], d), "deg_C"
 
 
-def convert_raw(data, params):
+def convert_raw(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     return data, "counts"
 
 
-def convert_aroft_o2(data, params):
+def convert_aroft_o2(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """RINKO FT dissolved oxygen."""
     d = data.copy()
     d[d < 0] = d[d < 0] + 2**16
     return d / 100.0, "umol_L-1"
 
 
-def convert_aroft_t(data, params):
+def convert_aroft_t(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """RINKO FT temperature."""
     d = data.copy()
     d[d < 0] = d[d < 0] + 2**16

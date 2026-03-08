@@ -1,4 +1,5 @@
-"""Basic tests for PFile reader using the real VMP data."""
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
+"""Basic tests for PFile reader using trimmed test data."""
 
 from pathlib import Path
 
@@ -7,14 +8,14 @@ import pytest
 
 from rsi_python.p_file import PFile
 
-DATA_DIR = Path(__file__).parent.parent / "VMP"
-SAMPLE_FILE = DATA_DIR / "ARCTERX_Thompson_2025_SN479_0001.p"
+TEST_DATA_DIR = Path(__file__).parent / "data"
+SAMPLE_FILE = TEST_DATA_DIR / "SN479_0006.p"
 
 
 @pytest.fixture
 def pf():
     if not SAMPLE_FILE.exists():
-        pytest.skip("VMP test data not available")
+        pytest.skip("Test data not available")
     return PFile(SAMPLE_FILE)
 
 
@@ -38,18 +39,15 @@ def test_sampling_rates(pf):
 
 
 def test_channels_present(pf):
-    expected_fast = {"Ax", "Ay", "sh1", "sh2", "T1_dT1", "T2_dT2",
-                     "Chlorophyll", "Turbidity"}
-    expected_slow = {"P", "T1", "T2", "V_Bat", "Incl_X", "Incl_Y",
-                     "Incl_T", "JAC_C", "JAC_T"}
+    expected_fast = {"Ax", "Ay", "sh1", "sh2", "T1_dT1", "T2_dT2", "Chlorophyll", "Turbidity"}
+    expected_slow = {"P", "T1", "T2", "V_Bat", "Incl_X", "Incl_Y", "Incl_T", "JAC_C", "JAC_T"}
     assert expected_fast.issubset(pf._fast_channels)
     assert expected_slow.issubset(pf._slow_channels)
 
 
-def test_pressure_near_surface(pf):
+def test_pressure_reasonable(pf):
     P = pf.channels["P"]
-    # File 0001 is on deck / near surface
-    assert np.nanmean(P) < 5.0
+    assert np.nanmax(P) < 500.0
 
 
 def test_temperature_reasonable(pf):

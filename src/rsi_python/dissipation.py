@@ -1,13 +1,21 @@
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Core epsilon (TKE dissipation rate) calculation.
 
 Port of get_diss_odas.m from the ODAS MATLAB library.
 """
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import numpy.typing as npt
 import xarray as xr
+
+if TYPE_CHECKING:
+    from rsi_python.p_file import PFile
 
 from rsi_python.despike import despike
 from rsi_python.goodman import clean_shear_spec
@@ -15,13 +23,18 @@ from rsi_python.nasmyth import LUECK_A, X_95, nasmyth
 from rsi_python.ocean import visc35
 from rsi_python.spectral import csd_matrix
 
-
 # ---------------------------------------------------------------------------
 # Channel loading
 # ---------------------------------------------------------------------------
 
-def load_channels(source, shear_pattern=r"^sh\d+$", accel_pattern=r"^A[xyz]$",
-                  pressure_name="P", temperature_name="T1"):
+
+def load_channels(
+    source: PFile | str | Path,
+    shear_pattern: str = r"^sh\d+$",
+    accel_pattern: str = r"^A[xyz]$",
+    pressure_name: str = "P",
+    temperature_name: str = "T1",
+) -> dict[str, Any]:
     """Load channel data from any supported source.
 
     Parameters
@@ -55,17 +68,20 @@ def load_channels(source, shear_pattern=r"^sh\d+$", accel_pattern=r"^A[xyz]$",
     from rsi_python.p_file import PFile
 
     if isinstance(source, PFile):
-        return _channels_from_pfile(source, shear_pattern, accel_pattern,
-                                    pressure_name, temperature_name)
+        return _channels_from_pfile(
+            source, shear_pattern, accel_pattern, pressure_name, temperature_name
+        )
 
     source = Path(source)
     if source.suffix.lower() == ".p":
         pf = PFile(source)
-        return _channels_from_pfile(pf, shear_pattern, accel_pattern,
-                                    pressure_name, temperature_name)
+        return _channels_from_pfile(
+            pf, shear_pattern, accel_pattern, pressure_name, temperature_name
+        )
     elif source.suffix.lower() == ".nc":
-        return _channels_from_nc(source, shear_pattern, accel_pattern,
-                                 pressure_name, temperature_name)
+        return _channels_from_nc(
+            source, shear_pattern, accel_pattern, pressure_name, temperature_name
+        )
     else:
         raise ValueError(f"Unsupported file type: {source.suffix}")
 
@@ -148,14 +164,115 @@ def _channels_from_nc(nc_path, sh_pat, ac_pat, p_name, t_name):
 
 
 # ---------------------------------------------------------------------------
+# Shared helpers (used by both dissipation.py and chi.py)
+# ---------------------------------------------------------------------------
+
+
+def _prepare_profiles(
+    data: dict[str, Any],
+    speed: float | None,
+    direction: str,
+    salinity: npt.ArrayLike | None,
+) -> tuple | None:
+    """Profile detection, speed computation, and salinity interpolation.
+
+    Encapsulates the duplicated profile-setup code used by both
+    get_diss() and get_chi().
+
+    Returns (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast,
+    fs_slow, ratio).
+    """
+    fs_fast = data["fs_fast"]
+    fs_slow = data["fs_slow"]
+    ratio = round(fs_fast / fs_slow)
+
+    P_slow = data["P"]
+    T_slow = data["T"]
+    t_fast = data["t_fast"]
+    t_slow = data["t_slow"]
+
+    if data["is_profile"]:
+        profiles_slow = [(0, len(P_slow) - 1)]
+    else:
+        from rsi_python.profile import _smooth_fall_rate, get_profiles
+
+        W_slow = _smooth_fall_rate(P_slow, fs_slow)
+        profiles_slow = get_profiles(P_slow, W_slow, fs_slow, direction=direction)
+        if not profiles_slow:
+            return None
+
+    if speed is not None:
+        speed_fast = np.full(len(t_fast), abs(speed))
+    else:
+        from rsi_python.profile import _smooth_fall_rate
+
+        W_slow = _smooth_fall_rate(P_slow, fs_slow)
+        speed_fast = np.abs(np.interp(t_fast, t_slow, W_slow))
+
+    P_fast = np.interp(t_fast, t_slow, P_slow)
+    T_fast = np.interp(t_fast, t_slow, T_slow)
+
+    if salinity is not None:
+        salinity = np.asarray(salinity, dtype=float)
+        if salinity.ndim > 0:
+            if len(salinity) == len(t_slow):
+                sal_fast = np.interp(t_fast, t_slow, salinity)
+            elif len(salinity) == len(t_fast):
+                sal_fast = salinity
+            else:
+                raise ValueError(
+                    f"salinity array length {len(salinity)} doesn't match "
+                    f"slow ({len(t_slow)}) or fast ({len(t_fast)}) time series"
+                )
+        else:
+            sal_fast = float(salinity)
+    else:
+        sal_fast = None
+
+    return (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, fs_slow, ratio, t_fast)
+
+
+def _compute_nu(
+    mean_T: float, mean_P: float, salinity: float | np.ndarray | None, sel: slice
+) -> float:
+    """Compute kinematic viscosity, dispatching to visc35 or visc.
+
+    Parameters
+    ----------
+    mean_T : float
+    mean_P : float
+    salinity : float, ndarray, or None
+    sel : slice
+        Used to index salinity when it's an array.
+    """
+    if salinity is not None:
+        from rsi_python.ocean import visc
+
+        mean_S = float(np.mean(salinity[sel]) if np.ndim(salinity) > 0 else salinity)
+        return float(visc(mean_T, mean_S, mean_P))
+    return float(visc35(mean_T))
+
+
+# ---------------------------------------------------------------------------
 # Core dissipation calculation
 # ---------------------------------------------------------------------------
 
-def get_diss(source, fft_length=256, diss_length=None, overlap=None,
-             speed=None, direction="down", goodman=True,
-             f_AA=98.0, f_limit=None, fit_order=3,
-             despike_thresh=8, despike_smooth=0.5,
-             salinity=None):
+
+def get_diss(
+    source: PFile | str | Path,
+    fft_length: int = 256,
+    diss_length: int | None = None,
+    overlap: int | None = None,
+    speed: float | None = None,
+    direction: str = "down",
+    goodman: bool = True,
+    f_AA: float = 98.0,
+    f_limit: float | None = None,
+    fit_order: int = 3,
+    despike_thresh: float = 8,
+    despike_smooth: float = 0.5,
+    salinity: npt.ArrayLike | None = None,
+) -> list[xr.Dataset]:
     """Compute epsilon from any source.
 
     Parameters
@@ -204,9 +321,6 @@ def get_diss(source, fft_length=256, diss_length=None, overlap=None,
         f_limit = np.inf
 
     data = load_channels(source)
-    fs_fast = data["fs_fast"]
-    fs_slow = data["fs_slow"]
-    ratio = round(fs_fast / fs_slow)
 
     # Get shear and accel arrays
     shear_names = [s[0] for s in data["shear"]]
@@ -221,61 +335,27 @@ def get_diss(source, fft_length=256, diss_length=None, overlap=None,
         raise ValueError("No accelerometer channels found (required for Goodman)")
 
     # Despike shear data
+    fs_fast = data["fs_fast"]
     for i in range(n_shear):
         shear_arrays[i], _, _, _ = despike(
-            shear_arrays[i], fs_fast,
-            thresh=despike_thresh, smooth=despike_smooth,
+            shear_arrays[i],
+            fs_fast,
+            thresh=despike_thresh,
+            smooth=despike_smooth,
         )
 
-    # Determine profiles
-    P_slow = data["P"]
-    T_slow = data["T"]
-    t_fast = data["t_fast"]
-    t_slow = data["t_slow"]
-
-    if data["is_profile"]:
-        # Already a single profile — use entire record
-        profiles_slow = [(0, len(P_slow) - 1)]
-    else:
-        from rsi_python.profile import get_profiles, _smooth_fall_rate
-        W_slow = _smooth_fall_rate(P_slow, fs_slow)
-        profiles_slow = get_profiles(P_slow, W_slow, fs_slow, direction=direction)
-        if not profiles_slow:
-            return []
-
-    # Compute speed from pressure (interpolated to fast rate)
-    if speed is not None:
-        speed_fast = np.full(len(t_fast), abs(speed))
-    else:
-        from rsi_python.profile import _smooth_fall_rate
-        W_slow = _smooth_fall_rate(P_slow, fs_slow)
-        speed_fast = np.abs(np.interp(t_fast, t_slow, W_slow))
-
-    # Interpolate P and T to fast rate
-    P_fast = np.interp(t_fast, t_slow, P_slow)
-    T_fast = np.interp(t_fast, t_slow, T_slow)
+    # Profile detection, speed, P/T interpolation, salinity
+    prepared = _prepare_profiles(data, speed, direction, salinity)
+    if prepared is None:
+        return []
+    (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, fs_slow, ratio, t_fast) = (
+        prepared
+    )
 
     # Effective AA cutoff
     f_AA_eff = 0.9 * f_AA
     if f_limit < f_AA_eff:
         f_AA_eff = f_limit
-
-    # Handle salinity
-    if salinity is not None:
-        salinity = np.asarray(salinity, dtype=float)
-        if salinity.ndim > 0:
-            if len(salinity) == len(t_slow):
-                sal_fast = np.interp(t_fast, t_slow, salinity)
-            elif len(salinity) == len(t_fast):
-                sal_fast = salinity
-            else:
-                raise ValueError(
-                    f"salinity array length {len(salinity)} doesn't match "
-                    f"slow ({len(t_slow)}) or fast ({len(t_fast)}) time series")
-        else:
-            sal_fast = float(salinity)
-    else:
-        sal_fast = None
 
     results = []
     for s_slow, e_slow in profiles_slow:
@@ -296,9 +376,21 @@ def get_diss(source, fft_length=256, diss_length=None, overlap=None,
             sal_prof = sal_fast  # None or scalar
 
         ds = _compute_profile_diss(
-            sh_mat, ac_mat, p_prof, t_prof, spd_prof, time_prof,
-            shear_names, fs_fast, fft_length, diss_length, overlap,
-            goodman, f_AA_eff, fit_order, salinity=sal_prof,
+            sh_mat,
+            ac_mat,
+            p_prof,
+            t_prof,
+            spd_prof,
+            time_prof,
+            shear_names,
+            fs_fast,
+            fft_length,
+            diss_length,
+            overlap,
+            goodman,
+            f_AA_eff,
+            fit_order,
+            salinity=sal_prof,
         )
         ds.attrs.update(data["metadata"])
         results.append(ds)
@@ -306,10 +398,23 @@ def get_diss(source, fft_length=256, diss_length=None, overlap=None,
     return results
 
 
-def _compute_profile_diss(shear, accel, P, T, speed, t_fast,
-                          shear_names, fs_fast,
-                          fft_length, diss_length, overlap,
-                          do_goodman, f_AA, fit_order, salinity=None):
+def _compute_profile_diss(
+    shear,
+    accel,
+    P,
+    T,
+    speed,
+    t_fast,
+    shear_names,
+    fs_fast,
+    fft_length,
+    diss_length,
+    overlap,
+    do_goodman,
+    f_AA,
+    fit_order,
+    salinity=None,
+):
     """Compute dissipation for a single profile.
 
     Parameters
@@ -376,12 +481,19 @@ def _compute_profile_diss(shear, accel, P, T, speed, t_fast,
         # Compute spectra
         if do_goodman:
             P_sh_clean, AA, P_sh, UA, F = clean_shear_spec(
-                ac_seg, sh_seg, fft_length, fs_fast,
+                ac_seg,
+                sh_seg,
+                fft_length,
+                fs_fast,
             )
         else:
             P_sh, F, _, _ = csd_matrix(
-                sh_seg, None, fft_length, fs_fast,
-                overlap=fft_length // 2, detrend="linear",
+                sh_seg,
+                None,
+                fft_length,
+                fs_fast,
+                overlap=fft_length // 2,
+                detrend="linear",
             )
             P_sh = np.real(P_sh)
             P_sh_clean = P_sh.copy()
@@ -393,12 +505,7 @@ def _compute_profile_diss(shear, accel, P, T, speed, t_fast,
         mean_T = np.mean(T[sel])
         mean_P = np.mean(P[sel])
         mean_t = np.mean(t_fast[sel])
-        if salinity is not None:
-            from rsi_python.ocean import visc
-            mean_S = np.mean(salinity[sel]) if np.ndim(salinity) > 0 else float(salinity)
-            nu = visc(mean_T, mean_S, mean_P)
-        else:
-            nu = visc35(mean_T)
+        nu = _compute_nu(mean_T, mean_P, salinity, sel)
 
         # Convert frequency to wavenumber
         K = F / W
@@ -437,10 +544,14 @@ def _compute_profile_diss(shear, accel, P, T, speed, t_fast,
             else:
                 shear_spec = np.real(P_sh_clean[:, ci, ci])
 
-            e_4, k_max, mad, meth, nas_spec, fom_val, K_max_ratio_val = \
-                _estimate_epsilon(
-                    K, shear_spec, nu, K_AA, fit_order, e_isr_threshold,
-                )
+            e_4, k_max, mad, meth, nas_spec, fom_val, K_max_ratio_val = _estimate_epsilon(
+                K,
+                shear_spec,
+                nu,
+                K_AA,
+                fit_order,
+                e_isr_threshold,
+            )
             epsilon[ci, idx] = e_4
             K_max_out[ci, idx] = k_max
             mad_out[ci, idx] = mad
@@ -508,14 +619,13 @@ def _estimate_epsilon(K, shear_spectrum, nu, K_AA, fit_order, e_isr_threshold):
         # Variance method
         # Check if enough points for ISR refinement
         x_isr = 0.02  # 2 * 0.01 (matches MATLAB code)
-        isr_limit = x_isr * (e_1 / nu ** 3) ** 0.25
+        isr_limit = x_isr * (e_1 / nu**3) ** 0.25
         if len(np.where(K <= isr_limit)[0]) >= 20:
-            e_2, _ = _inertial_subrange(K, shear_spectrum, e_1, nu,
-                                        min(150, K_AA))
+            e_2, _ = _inertial_subrange(K, shear_spectrum, e_1, nu, min(150, K_AA))
         else:
             e_2 = e_1
 
-        K_95 = X_95 * (e_2 / nu ** 3) ** 0.25
+        K_95 = X_95 * (e_2 / nu**3) ** 0.25
         valid_K_limit = min(K_AA, K_95)
         valid_K_limit = np.clip(valid_K_limit, 7, 150)
         valid_idx = np.where(K <= valid_K_limit)[0]
@@ -558,7 +668,7 @@ def _estimate_epsilon(K, shear_spectrum, nu, K_AA, fit_order, e_isr_threshold):
         K_limit_log = min(K_limit_log, np.log10(K_95), np.log10(K_AA))
         K_limit_log = np.clip(K_limit_log, np.log10(7), np.log10(150))
 
-        Range = np.where(K <= 10 ** K_limit_log)[0]
+        Range = np.where(K <= 10**K_limit_log)[0]
         if len(Range) > 0 and K[Range[-1]] < 7:
             # Extend to include at least 7 cpm
             Range = np.append(Range, Range[-1] + 1)
@@ -612,7 +722,7 @@ def _estimate_epsilon(K, shear_spectrum, nu, K_AA, fit_order, e_isr_threshold):
         fom = np.nan
 
     # K_max / K_95: fraction of theoretical spectrum resolved
-    K_95 = X_95 * (max(e_4, 1e-15) / nu ** 3) ** 0.25
+    K_95 = X_95 * (max(e_4, 1e-15) / nu**3) ** 0.25
     K_max_ratio_val = k_max / K_95 if K_95 > 0 else np.nan
 
     return e_4, k_max, mad, method, nas_spec, fom, K_max_ratio_val
@@ -622,7 +732,7 @@ def _variance_correction(e_3, K_upper, nu, max_iter=50):
     """Iterative variance correction using Lueck's resolved-variance model."""
     e_new = e_3
     for _ in range(max_iter):
-        x_limit = K_upper * (nu ** 3 / e_new) ** 0.25
+        x_limit = K_upper * (nu**3 / e_new) ** 0.25
         x_limit = x_limit ** (4 / 3)
         variance_resolved = np.tanh(48 * x_limit) - 2.9 * x_limit * np.exp(-22.3 * x_limit)
         if variance_resolved <= 0:
@@ -641,7 +751,7 @@ def _inertial_subrange(K, shear_spectrum, e, nu, K_limit):
     """
     x_isr = 0.02  # 2 * 0.01 (matches MATLAB)
 
-    isr_limit = min(x_isr * (e / nu ** 3) ** 0.25, K_limit)
+    isr_limit = min(x_isr * (e / nu**3) ** 0.25, K_limit)
     fit_range = np.where(K <= isr_limit)[0]
     if len(fit_range) < 3:
         fit_range = np.arange(min(3, len(K)))
@@ -696,7 +806,12 @@ def _inertial_subrange(K, shear_spectrum, e, nu, K_limit):
 # File-level processing
 # ---------------------------------------------------------------------------
 
-def compute_diss_file(source_path, output_dir, **diss_kwargs):
+
+def compute_diss_file(
+    source_path: str | Path,
+    output_dir: str | Path,
+    **diss_kwargs: Any,
+) -> list[Path]:
     """Compute epsilon for one file and write NetCDF output(s).
 
     Parameters
@@ -728,8 +843,10 @@ def compute_diss_file(source_path, output_dir, **diss_kwargs):
         out_path = output_dir / out_name
         ds.to_netcdf(out_path)
         output_paths.append(out_path)
-        print(f"  {out_path.name}: {ds.sizes['time']} estimates, "
-              f"P={float(ds.P_mean.min()):.0f}–{float(ds.P_mean.max()):.0f} dbar")
+        print(
+            f"  {out_path.name}: {ds.sizes['time']} estimates, "
+            f"P={float(ds.P_mean.min()):.0f}–{float(ds.P_mean.max()):.0f} dbar"
+        )
 
     return output_paths
 

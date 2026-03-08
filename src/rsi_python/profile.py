@@ -1,15 +1,22 @@
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Profile detection and extraction for vertical profilers.
 
 Port of get_profile.m from the ODAS MATLAB library, plus NetCDF I/O
 for per-profile files.
 """
 
-import re
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import numpy.typing as npt
 from scipy.ndimage import uniform_filter1d
+
+if TYPE_CHECKING:
+    from rsi_python.p_file import PFile
 
 
 def _smooth_fall_rate(P, fs, smooth_window=2.0):
@@ -37,8 +44,15 @@ def _smooth_fall_rate(P, fs, smooth_window=2.0):
     return np.gradient(P_smooth, 1.0 / fs)
 
 
-def get_profiles(P, W, fs, P_min=0.5, W_min=0.3, direction="down",
-                 min_duration=7.0):
+def get_profiles(
+    P: npt.ArrayLike,
+    W: npt.ArrayLike,
+    fs: float,
+    P_min: float = 0.5,
+    W_min: float = 0.3,
+    direction: str = "down",
+    min_duration: float = 7.0,
+) -> list[tuple[int, int]]:
     """Find profiling segments in pressure data.
 
     Parameters
@@ -95,7 +109,11 @@ def get_profiles(P, W, fs, P_min=0.5, W_min=0.3, direction="down",
     return profiles
 
 
-def extract_profiles(source, output_dir, **profile_kwargs):
+def extract_profiles(
+    source: PFile | str | Path,
+    output_dir: str | Path,
+    **profile_kwargs: Any,
+) -> list[Path]:
     """Extract profiles from a PFile or full-record NetCDF.
 
     Parameters
@@ -153,10 +171,7 @@ def extract_profiles(source, output_dir, **profile_kwargs):
         ds.profile_P_end = float(P_slow[e_slow])
         ds.profile_duration_s = float((e_slow - s_slow) / fs_slow)
         ds.profile_mean_speed = float(np.mean(np.abs(W[s_slow:s_slow_end])))
-        ds.history = (
-            f"Profile {pi} extracted on "
-            f"{datetime.now(timezone.utc).isoformat()}"
-        )
+        ds.history = f"Profile {pi} extracted on {datetime.now(timezone.utc).isoformat()}"
 
         n_fast = e_fast - s_fast
         n_slow = s_slow_end - s_slow
@@ -190,8 +205,10 @@ def extract_profiles(source, output_dir, **profile_kwargs):
         ds.fs_slow = float(fs_slow)
         ds.close()
         output_paths.append(prof_path)
-        print(f"  Profile {pi}: P={P_slow[s_slow]:.1f}–{P_slow[e_slow]:.1f} dbar, "
-              f"{(e_slow - s_slow) / fs_slow:.1f} s → {prof_path.name}")
+        print(
+            f"  Profile {pi}: P={P_slow[s_slow]:.1f}–{P_slow[e_slow]:.1f} dbar, "
+            f"{(e_slow - s_slow) / fs_slow:.1f} s → {prof_path.name}"
+        )
 
     return output_paths
 
@@ -268,8 +285,12 @@ def _load_from_nc(nc_path):
 
     t_fast = ds.variables["t_fast"][:].data
     t_slow = ds.variables["t_slow"][:].data
-    t_fast_units = ds.variables["t_fast"].units if hasattr(ds.variables["t_fast"], "units") else "seconds"
-    t_slow_units = ds.variables["t_slow"].units if hasattr(ds.variables["t_slow"], "units") else "seconds"
+    t_fast_units = (
+        ds.variables["t_fast"].units if hasattr(ds.variables["t_fast"], "units") else "seconds"
+    )
+    t_slow_units = (
+        ds.variables["t_slow"].units if hasattr(ds.variables["t_slow"], "units") else "seconds"
+    )
 
     P = ds.variables["P"][:].data
 

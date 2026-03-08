@@ -1,9 +1,13 @@
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Cross-spectral density estimation.
 
 Port of csd_odas.m and csd_matrix_odas.m from the ODAS MATLAB library.
 """
 
+from __future__ import annotations
+
 import numpy as np
+import numpy.typing as npt
 from scipy import signal
 
 
@@ -14,7 +18,7 @@ def _cosine_window(n):
     This is the Hann window.
     """
     w = 1.0 + np.cos(np.pi * (-1.0 + 2.0 * np.arange(n) / n))
-    w /= np.sqrt(np.mean(w ** 2))
+    w /= np.sqrt(np.mean(w**2))
     return w
 
 
@@ -32,7 +36,15 @@ def _detrend_segment(seg, method, ramp):
     return seg - np.polyval(p, ramp)
 
 
-def csd_odas(x, y, nfft, rate, window=None, overlap=None, detrend="linear"):
+def csd_odas(
+    x: npt.ArrayLike,
+    y: npt.ArrayLike | None,
+    nfft: int,
+    rate: float,
+    window: npt.ArrayLike | None = None,
+    overlap: int | None = None,
+    detrend: str = "linear",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
     """Cross-spectral density using Welch's method with cosine window.
 
     Parameters
@@ -88,7 +100,7 @@ def csd_odas(x, y, nfft, rate, window=None, overlap=None, detrend="linear"):
         Cxy = np.zeros(n_freq)
         for i in range(n_seg):
             s = i * step
-            seg = _detrend_segment(x[s:s + nfft], detrend, ramp) * window
+            seg = _detrend_segment(x[s : s + nfft], detrend, ramp) * window
             X = np.fft.rfft(seg, n=nfft)
             Cxy += np.abs(X) ** 2
         Cxy /= n_seg
@@ -104,8 +116,8 @@ def csd_odas(x, y, nfft, rate, window=None, overlap=None, detrend="linear"):
     Cyy = np.zeros(n_freq)
     for i in range(n_seg):
         s = i * step
-        sx = _detrend_segment(x[s:s + nfft], detrend, ramp) * window
-        sy = _detrend_segment(y[s:s + nfft], detrend, ramp) * window
+        sx = _detrend_segment(x[s : s + nfft], detrend, ramp) * window
+        sy = _detrend_segment(y[s : s + nfft], detrend, ramp) * window
         X = np.fft.rfft(sx, n=nfft)
         Y = np.fft.rfft(sy, n=nfft)
         Cxy += Y * np.conj(X)
@@ -125,7 +137,15 @@ def csd_odas(x, y, nfft, rate, window=None, overlap=None, detrend="linear"):
     return Cxy, F, Cxx, Cyy
 
 
-def csd_matrix(x, y, nfft, rate, window=None, overlap=None, detrend="linear"):
+def csd_matrix(
+    x: np.ndarray,
+    y: np.ndarray | None,
+    nfft: int,
+    rate: float,
+    window: npt.ArrayLike | None = None,
+    overlap: int | None = None,
+    detrend: str = "linear",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
     """Multi-channel cross-spectral density matrix.
 
     Parameters
@@ -183,7 +203,7 @@ def csd_matrix(x, y, nfft, rate, window=None, overlap=None, detrend="linear"):
             s = i * step
             seg = np.empty((nfft, n_x))
             for c in range(n_x):
-                seg[:, c] = _detrend_segment(x[s:s + nfft, c], detrend, ramp) * window
+                seg[:, c] = _detrend_segment(x[s : s + nfft, c], detrend, ramp) * window
             fft_x = np.fft.rfft(seg, n=nfft, axis=0)  # (n_freq, n_x)
             # Cxy[f, i, j] = fft_x[f, j] * conj(fft_x[f, i])
             Cxy += np.conj(fft_x[:, :, np.newaxis]) * fft_x[:, np.newaxis, :]
@@ -204,9 +224,9 @@ def csd_matrix(x, y, nfft, rate, window=None, overlap=None, detrend="linear"):
         seg_x = np.empty((nfft, n_x))
         seg_y = np.empty((nfft, n_y))
         for c in range(n_x):
-            seg_x[:, c] = _detrend_segment(x[s:s + nfft, c], detrend, ramp) * window
+            seg_x[:, c] = _detrend_segment(x[s : s + nfft, c], detrend, ramp) * window
         for c in range(n_y):
-            seg_y[:, c] = _detrend_segment(y[s:s + nfft, c], detrend, ramp) * window
+            seg_y[:, c] = _detrend_segment(y[s : s + nfft, c], detrend, ramp) * window
         fft_x = np.fft.rfft(seg_x, n=nfft, axis=0)
         fft_y = np.fft.rfft(seg_y, n=nfft, axis=0)
         # Cxx[f,i,j] = fft_x[f,j] * conj(fft_x[f,i])

@@ -1,13 +1,14 @@
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """rsi-python — Tools for Rockland Scientific microprofiler data."""
 
-from rsi_python.p_file import PFile, parse_config
-from rsi_python.convert import p_to_netcdf, convert_all
-from rsi_python.ocean import visc35, visc, density, buoyancy_freq
-from rsi_python.nasmyth import nasmyth
-from rsi_python.profile import get_profiles, extract_profiles
-from rsi_python.dissipation import get_diss, load_channels
-from rsi_python.chi import get_chi
 from rsi_python.batchelor import batchelor_grad, batchelor_kB
+from rsi_python.chi import get_chi
+from rsi_python.convert import convert_all, p_to_netcdf
+from rsi_python.dissipation import get_diss, load_channels
+from rsi_python.nasmyth import nasmyth
+from rsi_python.ocean import buoyancy_freq, density, visc, visc35
+from rsi_python.p_file import PFile, parse_config
+from rsi_python.profile import extract_profiles, get_profiles
 
 __all__ = [
     "PFile",

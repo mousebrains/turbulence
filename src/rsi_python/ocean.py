@@ -1,9 +1,13 @@
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Seawater properties for turbulence calculations."""
 
+from __future__ import annotations
+
 import numpy as np
+import numpy.typing as npt
 
 
-def visc35(T):
+def visc35(T: npt.ArrayLike) -> np.ndarray:
     """Kinematic viscosity of seawater at S=35, P=0 [m²/s].
 
     Parameters
@@ -19,16 +23,18 @@ def visc35(T):
     Reference: ODAS visc35.m — 3rd-order polynomial fit,
     error < 1% for 0 ≤ T ≤ 20 °C, 30 ≤ S ≤ 40 PSU, atmospheric pressure.
     """
-    pol = np.array([
-        -1.131311019739306e-011,
-         1.199552027472192e-009,
-        -5.864346822839289e-008,
-         1.828297985908266e-006,
-    ])
+    pol = np.array(
+        [
+            -1.131311019739306e-011,
+            1.199552027472192e-009,
+            -5.864346822839289e-008,
+            1.828297985908266e-006,
+        ]
+    )
     return np.polyval(pol, T)
 
 
-def visc(T, S=35, P=0):
+def visc(T: npt.ArrayLike, S: npt.ArrayLike = 35, P: npt.ArrayLike = 0) -> np.ndarray:
     """Kinematic viscosity of seawater [m²/s].
 
     For S=35, P=0 falls back to the visc35 polynomial (matches ODAS).
@@ -59,7 +65,7 @@ def visc(T, S=35, P=0):
     import gsw
 
     # Dynamic viscosity of pure water [Pa·s] — Sharqawy et al. (2010) Eq. 22
-    mu_w = 4.2844e-5 + (0.157 * (T + 64.993)**2 - 91.296)**(-1)
+    mu_w = 4.2844e-5 + (0.157 * (T + 64.993) ** 2 - 91.296) ** (-1)
 
     # Salinity correction — Sharqawy et al. (2010) Eq. 23
     A = 1.541 + 1.998e-2 * T - 9.52e-5 * T**2
@@ -75,7 +81,7 @@ def visc(T, S=35, P=0):
     return mu / rho
 
 
-def density(T, S, P):
+def density(T: npt.ArrayLike, S: npt.ArrayLike, P: npt.ArrayLike) -> np.ndarray:
     """In-situ density of seawater [kg/m³] via TEOS-10.
 
     Parameters
@@ -93,12 +99,18 @@ def density(T, S, P):
         In-situ density [kg/m³].
     """
     import gsw
+
     SA = gsw.SA_from_SP(S, P, 0, 0)
     CT = gsw.CT_from_t(SA, T, P)
     return gsw.rho(SA, CT, P)
 
 
-def buoyancy_freq(T, S, P, lat=0):
+def buoyancy_freq(
+    T: npt.ArrayLike,
+    S: npt.ArrayLike,
+    P: npt.ArrayLike,
+    lat: float = 0,
+) -> tuple[np.ndarray, np.ndarray]:
     """Buoyancy frequency squared N² [s⁻²] from profiles.
 
     Parameters
@@ -120,6 +132,7 @@ def buoyancy_freq(T, S, P, lat=0):
         Mid-point pressures [dbar], length len(P)-1.
     """
     import gsw
+
     SA = gsw.SA_from_SP(S, P, 0, 0)
     CT = gsw.CT_from_t(SA, T, P)
     N2, p_mid = gsw.Nsquared(SA, CT, P, lat)

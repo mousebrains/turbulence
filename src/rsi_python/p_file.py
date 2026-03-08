@@ -1,3 +1,4 @@
+# Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """
 Read Rockland Scientific .p binary data files.
 
@@ -6,11 +7,14 @@ Anatomy) and mirrors the conversion logic in the ODAS MATLAB Library
 (read_odas.m, convert_odas.m).
 """
 
-import struct
+from __future__ import annotations
+
 import re
+import struct
 import warnings
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -85,7 +89,8 @@ def _parse_header(raw: bytes, endian: str) -> dict:
 # Configuration string parsing
 # ---------------------------------------------------------------------------
 
-def parse_config(config_str: str) -> dict:
+
+def parse_config(config_str: str) -> dict[str, Any]:
     """Parse the INI-style configuration string embedded in the P file.
 
     Returns dict with keys:
@@ -95,8 +100,13 @@ def parse_config(config_str: str) -> dict:
       'cruise_info': dict
       'root': dict
     """
-    result = {"matrix": [], "channels": [], "instrument_info": {},
-              "cruise_info": {}, "root": {}}
+    result: dict[str, Any] = {
+        "matrix": [],
+        "channels": [],
+        "instrument_info": {},
+        "cruise_info": {},
+        "root": {},
+    }
 
     lines = config_str.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     cleaned = []
@@ -107,7 +117,7 @@ def parse_config(config_str: str) -> dict:
         cleaned.append(line.strip())
 
     current_section = "root"
-    current_channel = None
+    current_channel: dict[str, str] | None = None
 
     for line in cleaned:
         if not line:
@@ -142,10 +152,11 @@ def parse_config(config_str: str) -> dict:
 # Main reader
 # ---------------------------------------------------------------------------
 
+
 class PFile:
     """Represents a parsed Rockland .p data file."""
 
-    def __init__(self, filepath):
+    def __init__(self, filepath: str | Path) -> None:
         self.filepath = Path(filepath)
         self._read()
 
@@ -175,8 +186,12 @@ class PFile:
 
             h = self.header
             self.start_time = datetime(
-                h["year"], h["month"], h["day"],
-                h["hour"], h["minute"], h["second"],
+                h["year"],
+                h["month"],
+                h["day"],
+                h["hour"],
+                h["minute"],
+                h["second"],
                 h["millisecond"] * 1000,
                 tzinfo=timezone(timedelta(minutes=h["timezone_min"])),
             )
@@ -235,10 +250,13 @@ class PFile:
 
                     if all_rows_same:
                         col_idx = col_positions[1][0]
-                        raw_ch = raw_flat[:matrix_count * self.n_rows, col_idx].astype(np.float64)
+                        raw_ch = raw_flat[: matrix_count * self.n_rows, col_idx].astype(np.float64)
                     else:
                         row_idx, col_idx = col_positions[0][0], col_positions[1][0]
-                        raw_ch = raw_flat[row_idx:matrix_count * self.n_rows:self.n_rows, col_idx].astype(np.float64)
+                        raw_ch = raw_flat[
+                            row_idx : matrix_count * self.n_rows : self.n_rows,
+                            col_idx,
+                        ].astype(np.float64)
 
                     self.channels_raw[ch_name] = raw_ch
 
@@ -250,8 +268,14 @@ class PFile:
                     col_o = np.where(matrix == id_odd)
                     row_e, ce = col_e[0][0], col_e[1][0]
                     row_o, co = col_o[0][0], col_o[1][0]
-                    even_data = raw_flat[row_e:matrix_count * self.n_rows:self.n_rows, ce].astype(np.float64)
-                    odd_data = raw_flat[row_o:matrix_count * self.n_rows:self.n_rows, co].astype(np.float64)
+                    even_data = raw_flat[
+                        row_e : matrix_count * self.n_rows : self.n_rows,
+                        ce,
+                    ].astype(np.float64)
+                    odd_data = raw_flat[
+                        row_o : matrix_count * self.n_rows : self.n_rows,
+                        co,
+                    ].astype(np.float64)
                     even_data[even_data < 0] += 2**16
                     odd_data[odd_data < 0] += 2**16
                     self.channels_raw[ch_name] = odd_data * 2**16 + even_data
@@ -293,14 +317,18 @@ class PFile:
     def is_fast(self, ch_name: str) -> bool:
         return ch_name in self._fast_channels
 
-    def summary(self):
+    def summary(self) -> None:
         print(f"File: {self.filepath.name}")
-        print(f"Instrument: {self.config['instrument_info'].get('model', '?')} "
-              f"SN {self.config['instrument_info'].get('sn', '?')}")
+        print(
+            f"Instrument: {self.config['instrument_info'].get('model', '?')} "
+            f"SN {self.config['instrument_info'].get('sn', '?')}"
+        )
         print(f"Start: {self.start_time.isoformat()}")
         print(f"Endian: {'big' if self.endian == '>' else 'little'}")
-        print(f"Matrix: {self.n_rows} rows x {self.n_cols} cols "
-              f"({self.fast_cols} fast + {self.slow_cols} slow)")
+        print(
+            f"Matrix: {self.n_rows} rows x {self.n_cols} cols "
+            f"({self.fast_cols} fast + {self.slow_cols} slow)"
+        )
         print(f"fs_fast = {self.fs_fast:.3f} Hz, fs_slow = {self.fs_slow:.3f} Hz")
         print(f"Duration: {self.t_fast[-1]:.1f} s")
         print(f"\nChannels ({len(self.channels)}):")

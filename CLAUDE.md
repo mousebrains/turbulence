@@ -20,7 +20,6 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/rsi_
 - `chi.py` — Chi (thermal variance dissipation) calculation, Methods 1 and 2, QC metrics.
 - `batchelor.py` — Batchelor and Kraichnan temperature gradient spectra.
 - `fp07.py` — FP07 thermistor transfer function and electronics noise model.
-- `scalar_spectra.py` — Temperature gradient spectrum computation.
 - `spectral.py` — Cross-spectral density estimation (Welch method, cosine window).
 - `goodman.py` — Goodman coherent noise removal using accelerometer spectra.
 - `despike.py` — Iterative spike removal for shear probe signals.
