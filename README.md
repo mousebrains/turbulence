@@ -1,4 +1,4 @@
-# rsi-python
+# rsi-python v0.1.0
 
 Python tools for reading Rockland Scientific microprofiler data and computing turbulent dissipation rates from VMP (Vertical Microstructure Profiler) and MicroRider instruments.
 
@@ -23,6 +23,8 @@ Python tools for reading Rockland Scientific microprofiler data and computing tu
   - Method 1: chi from known epsilon (shear probes) with unresolved variance correction
   - Method 2a: MLE Batchelor spectrum fitting (Ruddick et al. 2000)
   - Method 2b: Iterative integration (Peterson & Fer 2014)
+
+A **MATLAB implementation** of the chi calculation is also available — see [matlab/MATLAB.md](matlab/MATLAB.md).
 
 ## Installation
 

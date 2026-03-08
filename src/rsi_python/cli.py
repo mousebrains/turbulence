@@ -613,9 +613,14 @@ def _add_pipeline_parser(subparsers):
 
 def main() -> None:
     """Main CLI entry point for rsi-python."""
+    from rsi_python import __version__
+
     parser = argparse.ArgumentParser(
         prog="rsi-tpw",
         description="rsi-python: Tools for Rockland Scientific microprofiler data.",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

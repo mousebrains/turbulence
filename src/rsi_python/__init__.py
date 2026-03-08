@@ -1,6 +1,10 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """rsi-python — Tools for Rockland Scientific microprofiler data."""
 
+from importlib.metadata import version
+
+__version__ = version("rsi-python")
+
 from rsi_python.batchelor import batchelor_grad, batchelor_kB
 from rsi_python.chi import get_chi
 from rsi_python.convert import convert_all, p_to_netcdf
