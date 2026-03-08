@@ -4,7 +4,7 @@ Python tools for reading Rockland Scientific microprofiler data and computing tu
 
 ## Overview
 
-**rsi-python** provides a complete processing pipeline for ocean turbulence measurements from Rockland Scientific instruments equipped with shear probes and fast thermistors (FP07). The package reads proprietary `.p` binary data files, converts channels to physical units, detects profiles, and computes the rate of dissipation of turbulent kinetic energy (epsilon) following the methods described in the Rockland Scientific ODAS MATLAB Library and associated Technical Notes.
+**rsi-python** provides a complete processing pipeline for ocean turbulence measurements from Rockland Scientific instruments equipped with shear probes and fast thermistors (FP07). The package reads proprietary `.p` binary data files, converts channels to physical units, detects profiles, and computes both the rate of dissipation of turbulent kinetic energy (epsilon) and the rate of dissipation of thermal variance (chi), following the methods described in the Rockland Scientific ODAS MATLAB Library and associated Technical Notes.
 
 ### What it computes
 
@@ -16,6 +16,14 @@ Python tools for reading Rockland Scientific microprofiler data and computing tu
   - Iterative variance correction using Lueck's resolved-variance model
   - Integration limit detection via polynomial fit to log-log spectra
 
+- **Chi (thermal variance dissipation rate)** from FP07 thermistor spectra, including:
+  - Batchelor and Kraichnan theoretical temperature gradient spectra
+  - FP07 single-pole and double-pole transfer function correction
+  - Electronics noise model (Johnson + amplifier + anti-aliasing + ADC)
+  - Method 1: chi from known epsilon (shear probes) with unresolved variance correction
+  - Method 2a: MLE Batchelor spectrum fitting (Ruddick et al. 2000)
+  - Method 2b: Iterative integration (Peterson & Fer 2014)
+
 ## Installation
 
 ```bash
@@ -24,18 +32,49 @@ pip install -e ".[dev]"
 
 Requires Python >= 3.10. Dependencies: `numpy`, `netCDF4`, `scipy`, `xarray`.
 
-## Pipeline
+## CLI
 
-The processing pipeline has three stages. Each stage produces NetCDF files, and any later stage can start from any earlier stage's output:
+All commands are available through the `rsi` command:
 
 ```
-.p files ──> p2nc ──> full-record .nc ──> p2prof ──> per-profile .nc ──> p2eps ──> epsilon .nc
+rsi <subcommand> [options]
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `rsi info`     | Print summary of `.p` file(s) |
+| `rsi nc`       | Convert `.p` files to NetCDF |
+| `rsi prof`     | Extract profiles from `.p` or full-record `.nc` files |
+| `rsi eps`      | Compute epsilon (TKE dissipation) |
+| `rsi chi`      | Compute chi (thermal variance dissipation) |
+| `rsi pipeline` | Run full pipeline (`.p` → epsilon → chi) |
+
+Legacy standalone commands (`p2nc`, `pinfo`, `p2prof`, `p2eps`, `p2chi`) are still available.
+
+## Pipeline
+
+The processing pipeline has four stages. Each stage produces NetCDF files, and any later stage can start from any earlier stage's output:
+
+```
+.p files ──> nc ──> full-record .nc ──> prof ──> per-profile .nc ──> eps ──> epsilon .nc
+                                                                  ──> chi ──> chi .nc
+```
+
+### Full pipeline (recommended)
+
+Run all stages at once from raw `.p` files through epsilon and chi:
+
+```bash
+# Process all .p files, output to results/
+rsi pipeline VMP/*.p -o results/
+
+# Writes results/epsilon/ and results/chi/
 ```
 
 ### Stage 1: Convert `.p` files to NetCDF
 
 ```bash
-p2nc VMP/*.p -o nc/
+rsi nc VMP/*.p -o nc/
 ```
 
 ### Stage 2: Extract profiles
@@ -43,7 +82,7 @@ p2nc VMP/*.p -o nc/
 Detects profiling segments from pressure data and writes per-profile NetCDF files:
 
 ```bash
-p2prof VMP/ARCTERX_Thompson_2025_SN479_0005.p -o profiles/
+rsi prof VMP/ARCTERX_Thompson_2025_SN479_0005.p -o profiles/
 ```
 
 ### Stage 3: Compute epsilon
@@ -52,19 +91,34 @@ Computes TKE dissipation rate from shear probe spectra:
 
 ```bash
 # From raw .p files (profiles detected automatically)
-p2eps VMP/ARCTERX_Thompson_2025_SN479_0005.p -o epsilon/
+rsi eps VMP/ARCTERX_Thompson_2025_SN479_0005.p -o epsilon/
 
 # From per-profile .nc files
-p2eps profiles/*_prof*.nc -o epsilon/
+rsi eps profiles/*_prof*.nc -o epsilon/
 
 # Parallel processing
-p2eps VMP/*.p -o epsilon/ -j 0
+rsi eps VMP/*.p -o epsilon/ -j 0
+```
+
+### Stage 4: Compute chi
+
+Computes thermal variance dissipation rate from FP07 thermistor spectra:
+
+```bash
+# Method 1: chi from known epsilon (uses shear probe results)
+rsi chi VMP/*.p --epsilon-dir epsilon/ -o chi/
+
+# Method 2: chi without epsilon (MLE Batchelor spectrum fitting)
+rsi chi VMP/*.p -o chi/
+
+# Method 2 with Kraichnan spectrum model
+rsi chi VMP/*.p --spectrum-model kraichnan -o chi/
 ```
 
 ### Python API
 
 ```python
-from rsi_python import PFile, get_diss
+from rsi_python import PFile, get_diss, get_chi
 
 # Read a .p file
 pf = PFile("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
@@ -72,11 +126,25 @@ pf.channels["sh1"]   # shear probe 1 [s⁻¹]
 pf.channels["P"]     # pressure [dbar]
 
 # Compute epsilon (returns list of xarray.Datasets, one per profile)
-results = get_diss("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
-ds = results[0]
+eps_results = get_diss("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
+ds = eps_results[0]
 ds["epsilon"]         # dissipation rate [W/kg]
 ds["spec_shear"]      # shear wavenumber spectra
 ds["spec_nasmyth"]    # fitted Nasmyth spectra
+
+# Compute chi from known epsilon (Method 1)
+chi_results = get_chi("VMP/ARCTERX_Thompson_2025_SN479_0005.p",
+                      epsilon_ds=eps_results[0])
+ds = chi_results[0]
+ds["chi"]             # thermal dissipation rate [K²/s]
+ds["spec_gradT"]      # temperature gradient spectra
+ds["spec_batch"]      # fitted Batchelor spectra
+
+# Compute chi without epsilon (Method 2: MLE fitting)
+chi_results = get_chi("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
+ds = chi_results[0]
+ds["chi"]             # thermal dissipation rate [K²/s]
+ds["epsilon_T"]       # epsilon estimated from temperature
 ```
 
 ## Modules
@@ -85,9 +153,13 @@ ds["spec_nasmyth"]    # fitted Nasmyth spectra
 |--------|-------------|
 | `p_file.py` | `PFile` class: reads `.p` binary files, parses headers, demultiplexes address matrix, converts to physical units |
 | `channels.py` | Sensor conversion functions (raw counts to physical units) |
-| `convert.py` | Full-record NetCDF export (`p2nc`) |
-| `profile.py` | Profile detection and per-profile NetCDF extraction (`p2prof`) |
-| `dissipation.py` | Core epsilon calculation with multi-source input (`p2eps`) |
+| `convert.py` | Full-record NetCDF export (`rsi nc`) |
+| `profile.py` | Profile detection and per-profile NetCDF extraction (`rsi prof`) |
+| `dissipation.py` | Core epsilon calculation with multi-source input (`rsi eps`) |
+| `chi.py` | Chi (thermal variance dissipation) calculation, Methods 1 and 2 (`rsi chi`) |
+| `batchelor.py` | Batchelor and Kraichnan temperature gradient spectra |
+| `fp07.py` | FP07 thermistor transfer function and electronics noise model |
+| `scalar_spectra.py` | Temperature gradient spectrum computation |
 | `spectral.py` | Cross-spectral density estimation (Welch method, cosine window) |
 | `goodman.py` | Goodman coherent noise removal using accelerometer spectra |
 | `despike.py` | Iterative spike removal for shear probe signals |

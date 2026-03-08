@@ -1,12 +1,16 @@
 """
-CLI entry points for rsi-python.
+CLI for rsi-python.
 
-Commands:
-    p2nc   — Convert .p files to NetCDF
-    pinfo  — Print summary of .p file(s)
-    p2prof — Extract profiles from .p or full-record .nc files
-    p2eps  — Compute epsilon (TKE dissipation) from any pipeline stage
-    p2chi  — Compute chi (thermal variance dissipation) from any pipeline stage
+Main command:
+    rsi <subcommand> [options]
+
+Subcommands:
+    info     — Print summary of .p file(s)
+    nc       — Convert .p files to NetCDF
+    prof     — Extract profiles from .p or full-record .nc files
+    eps      — Compute epsilon (TKE dissipation) from any pipeline stage
+    chi      — Compute chi (thermal variance dissipation) from any pipeline stage
+    pipeline — Run full processing pipeline (.p → profiles → epsilon → chi)
 """
 
 import argparse
@@ -62,26 +66,12 @@ def _resolve_files(patterns, extensions=None):
     return files
 
 
-def p2nc():
-    """Convert Rockland .p files to NetCDF4."""
-    parser = argparse.ArgumentParser(
-        prog="p2nc",
-        description="Convert Rockland Scientific .p data files to NetCDF4.",
-    )
-    parser.add_argument(
-        "files", nargs="+", metavar="FILE",
-        help=".p file(s) or glob pattern(s) to convert",
-    )
-    parser.add_argument(
-        "-o", "--output", metavar="PATH", default=None,
-        help="Output file (single input) or directory (multiple inputs)",
-    )
-    parser.add_argument(
-        "-j", "--jobs", type=int, default=1, metavar="N",
-        help="Number of parallel workers (0 = all cores, default: 1)",
-    )
-    args = parser.parse_args()
+# ---------------------------------------------------------------------------
+# Subcommand implementations
+# ---------------------------------------------------------------------------
 
+def _cmd_nc(args):
+    """Convert Rockland .p files to NetCDF4."""
     from rsi_python.convert import p_to_netcdf, convert_all
 
     p_files = _resolve_p_files(args.files)
@@ -94,18 +84,8 @@ def p2nc():
         convert_all(p_files, output_dir, jobs=args.jobs)
 
 
-def pinfo():
+def _cmd_info(args):
     """Print summary information about .p file(s)."""
-    parser = argparse.ArgumentParser(
-        prog="pinfo",
-        description="Print summary of Rockland Scientific .p data files.",
-    )
-    parser.add_argument(
-        "files", nargs="+", metavar="FILE",
-        help=".p file(s) or glob pattern(s)",
-    )
-    args = parser.parse_args()
-
     from rsi_python.p_file import PFile
 
     p_files = _resolve_p_files(args.files)
@@ -116,35 +96,9 @@ def pinfo():
         pf.summary()
 
 
-def p2prof():
+def _cmd_prof(args):
     """Extract profiles from .p or full-record .nc files."""
-    parser = argparse.ArgumentParser(
-        prog="p2prof",
-        description="Extract profiles from Rockland .p or full-record .nc files.",
-    )
-    parser.add_argument(
-        "files", nargs="+", metavar="FILE",
-        help=".p or .nc file(s) or glob pattern(s)",
-    )
-    parser.add_argument(
-        "-o", "--output", metavar="DIR", default=None,
-        help="Output directory for per-profile .nc files",
-    )
-    parser.add_argument(
-        "-j", "--jobs", type=int, default=1, metavar="N",
-        help="Parallel workers (0 = all cores, default: 1)",
-    )
-    parser.add_argument("--P-min", type=float, default=0.5,
-                        help="Minimum pressure [dbar] (default: 0.5)")
-    parser.add_argument("--W-min", type=float, default=0.3,
-                        help="Minimum fall rate [dbar/s] (default: 0.3)")
-    parser.add_argument("--direction", default="down", choices=["up", "down"],
-                        help="Profile direction (default: down)")
-    parser.add_argument("--min-duration", type=float, default=7.0,
-                        help="Minimum profile duration [s] (default: 7)")
-    args = parser.parse_args()
-
-    from rsi_python.profile import extract_profiles, _extract_one
+    from rsi_python.profile import extract_profiles
 
     files = _resolve_files(args.files, {".p", ".nc"})
 
@@ -155,54 +109,14 @@ def p2prof():
         "min_duration": args.min_duration,
     }
 
-    jobs = args.jobs
-    if jobs == 0:
-        jobs = os.cpu_count() or 1
-
     for f in files:
         output_dir = Path(args.output) if args.output else f.parent
         print(f"{f.name}:")
-        if jobs == 1:
-            extract_profiles(f, output_dir, **profile_kwargs)
-        else:
-            # For p2prof, each file is processed independently
-            extract_profiles(f, output_dir, **profile_kwargs)
+        extract_profiles(f, output_dir, **profile_kwargs)
 
 
-def p2eps():
+def _cmd_eps(args):
     """Compute epsilon (TKE dissipation rate) from any pipeline stage."""
-    parser = argparse.ArgumentParser(
-        prog="p2eps",
-        description="Compute TKE dissipation rate (epsilon) from VMP data.",
-    )
-    parser.add_argument(
-        "files", nargs="+", metavar="FILE",
-        help=".p, full-record .nc, or per-profile .nc file(s)",
-    )
-    parser.add_argument(
-        "-o", "--output", metavar="DIR", default=None,
-        help="Output directory for epsilon .nc files",
-    )
-    parser.add_argument(
-        "-j", "--jobs", type=int, default=1, metavar="N",
-        help="Parallel workers (0 = all cores, default: 1)",
-    )
-    parser.add_argument("--fft-length", type=int, default=256,
-                        help="FFT segment length [samples] (default: 256)")
-    parser.add_argument("--diss-length", type=int, default=None,
-                        help="Dissipation window [samples] (default: 2*fft-length)")
-    parser.add_argument("--overlap", type=int, default=None,
-                        help="Window overlap [samples] (default: diss-length//2)")
-    parser.add_argument("--speed", type=float, default=None,
-                        help="Fixed profiling speed [m/s] (default: from dP/dt)")
-    parser.add_argument("--direction", default="down", choices=["up", "down"],
-                        help="Profile direction (default: down)")
-    parser.add_argument("--no-goodman", action="store_true",
-                        help="Disable Goodman coherent noise removal")
-    parser.add_argument("--f-AA", type=float, default=98.0,
-                        help="Anti-aliasing filter cutoff [Hz] (default: 98)")
-    args = parser.parse_args()
-
     from rsi_python.dissipation import compute_diss_file, _compute_diss_one
 
     files = _resolve_files(args.files, {".p", ".nc"})
@@ -249,51 +163,8 @@ def p2eps():
                     print(f"  {src.name}: ERROR: {e}")
 
 
-def p2chi():
+def _cmd_chi(args):
     """Compute chi (thermal variance dissipation rate) from any pipeline stage."""
-    parser = argparse.ArgumentParser(
-        prog="p2chi",
-        description="Compute thermal variance dissipation rate (chi) from VMP data.",
-    )
-    parser.add_argument(
-        "files", nargs="+", metavar="FILE",
-        help=".p, full-record .nc, or per-profile .nc file(s)",
-    )
-    parser.add_argument(
-        "-o", "--output", metavar="DIR", default=None,
-        help="Output directory for chi .nc files",
-    )
-    parser.add_argument(
-        "-j", "--jobs", type=int, default=1, metavar="N",
-        help="Parallel workers (0 = all cores, default: 1)",
-    )
-    parser.add_argument("--fft-length", type=int, default=512,
-                        help="FFT segment length [samples] (default: 512)")
-    parser.add_argument("--diss-length", type=int, default=None,
-                        help="Dissipation window [samples] (default: 3*fft-length)")
-    parser.add_argument("--overlap", type=int, default=None,
-                        help="Window overlap [samples] (default: diss-length//2)")
-    parser.add_argument("--speed", type=float, default=None,
-                        help="Fixed profiling speed [m/s] (default: from dP/dt)")
-    parser.add_argument("--direction", default="down", choices=["up", "down"],
-                        help="Profile direction (default: down)")
-    parser.add_argument("--fp07-model", default="single_pole",
-                        choices=["single_pole", "double_pole"],
-                        help="FP07 transfer function model (default: single_pole)")
-    parser.add_argument("--epsilon-dir", metavar="DIR", default=None,
-                        help="Directory with epsilon .nc files from p2eps (Method 1). "
-                             "If omitted, uses Method 2 (spectral fitting).")
-    parser.add_argument("--fit-method", default="mle",
-                        choices=["mle", "iterative"],
-                        help="Method 2 fitting: mle (Ruddick 2000) or iterative "
-                             "(Peterson & Fer 2014). Default: mle")
-    parser.add_argument("--spectrum-model", default="batchelor",
-                        choices=["batchelor", "kraichnan"],
-                        help="Theoretical spectrum model (default: batchelor)")
-    parser.add_argument("--f-AA", type=float, default=98.0,
-                        help="Anti-aliasing filter cutoff [Hz] (default: 98)")
-    args = parser.parse_args()
-
     from rsi_python.chi import compute_chi_file, _compute_chi_one
 
     files = _resolve_files(args.files, {".p", ".nc"})
@@ -315,10 +186,7 @@ def p2chi():
 
     # Load epsilon datasets if Method 1
     if args.epsilon_dir is not None:
-        import xarray as xr
-        eps_dir = Path(args.epsilon_dir)
-        # Will be matched per-file below
-        chi_kwargs["_epsilon_dir"] = eps_dir
+        chi_kwargs["_epsilon_dir"] = Path(args.epsilon_dir)
 
     jobs = args.jobs
     if jobs == 0:
@@ -329,7 +197,6 @@ def p2chi():
             output_dir = Path(args.output) if args.output else f.parent
             print(f"{f.name}:")
 
-            # Match epsilon file if Method 1
             kw = dict(chi_kwargs)
             eps_dir = kw.pop("_epsilon_dir", None)
             if eps_dir is not None:
@@ -361,3 +228,264 @@ def p2chi():
                     print(f"  {Path(name).name}: {n_profiles} profile(s)")
                 except Exception as e:
                     print(f"  {src.name}: ERROR: {e}")
+
+
+def _cmd_pipeline(args):
+    """Run full processing pipeline: .p → profiles → epsilon → chi."""
+    from rsi_python.dissipation import compute_diss_file
+    from rsi_python.chi import compute_chi_file
+
+    p_files = _resolve_p_files(args.files)
+
+    output_dir = Path(args.output) if args.output else Path(".")
+    eps_dir = output_dir / "epsilon"
+    chi_dir = output_dir / "chi"
+    eps_dir.mkdir(parents=True, exist_ok=True)
+    chi_dir.mkdir(parents=True, exist_ok=True)
+
+    diss_kwargs = {
+        "fft_length": args.eps_fft_length,
+        "goodman": not args.no_goodman,
+        "f_AA": args.f_AA,
+        "direction": args.direction,
+    }
+    if args.speed is not None:
+        diss_kwargs["speed"] = args.speed
+
+    chi_kwargs = {
+        "fft_length": args.chi_fft_length,
+        "f_AA": args.f_AA,
+        "direction": args.direction,
+        "fp07_model": args.fp07_model,
+        "spectrum_model": args.spectrum_model,
+    }
+    if args.speed is not None:
+        chi_kwargs["speed"] = args.speed
+
+    for f in p_files:
+        print(f"\n{'=' * 60}")
+        print(f"{f.name}")
+        print(f"{'=' * 60}")
+
+        # Step 1: Compute epsilon
+        print("\n--- Epsilon ---")
+        try:
+            eps_paths = compute_diss_file(f, eps_dir, **diss_kwargs)
+        except Exception as e:
+            print(f"  ERROR computing epsilon: {e}")
+            continue
+
+        # Step 2: Compute chi with epsilon (Method 1)
+        print("\n--- Chi (Method 1: from epsilon) ---")
+        for eps_path in eps_paths:
+            import xarray as xr
+            eps_ds = xr.open_dataset(eps_path)
+            kw = dict(chi_kwargs)
+            kw["epsilon_ds"] = eps_ds
+            try:
+                compute_chi_file(f, chi_dir, **kw)
+            except Exception as e:
+                print(f"  ERROR computing chi: {e}")
+            finally:
+                eps_ds.close()
+
+    print(f"\nPipeline complete. Output in {output_dir}/")
+    print(f"  Epsilon: {eps_dir}/")
+    print(f"  Chi:     {chi_dir}/")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand parsers
+# ---------------------------------------------------------------------------
+
+def _add_nc_parser(subparsers):
+    p = subparsers.add_parser("nc", help="Convert .p files to NetCDF",
+                              description="Convert Rockland Scientific .p data files to NetCDF4.")
+    p.add_argument("files", nargs="+", metavar="FILE",
+                   help=".p file(s) or glob pattern(s)")
+    p.add_argument("-o", "--output", metavar="PATH", default=None,
+                   help="Output file (single input) or directory (multiple inputs)")
+    p.add_argument("-j", "--jobs", type=int, default=1, metavar="N",
+                   help="Parallel workers (0 = all cores, default: 1)")
+    p.set_defaults(func=_cmd_nc)
+
+
+def _add_info_parser(subparsers):
+    p = subparsers.add_parser("info", help="Print .p file summary",
+                              description="Print summary of Rockland Scientific .p data files.")
+    p.add_argument("files", nargs="+", metavar="FILE",
+                   help=".p file(s) or glob pattern(s)")
+    p.set_defaults(func=_cmd_info)
+
+
+def _add_prof_parser(subparsers):
+    p = subparsers.add_parser("prof", help="Extract profiles",
+                              description="Extract profiles from .p or full-record .nc files.")
+    p.add_argument("files", nargs="+", metavar="FILE",
+                   help=".p or .nc file(s) or glob pattern(s)")
+    p.add_argument("-o", "--output", metavar="DIR", default=None,
+                   help="Output directory for per-profile .nc files")
+    p.add_argument("-j", "--jobs", type=int, default=1, metavar="N",
+                   help="Parallel workers (0 = all cores, default: 1)")
+    p.add_argument("--P-min", type=float, default=0.5,
+                   help="Minimum pressure [dbar] (default: 0.5)")
+    p.add_argument("--W-min", type=float, default=0.3,
+                   help="Minimum fall rate [dbar/s] (default: 0.3)")
+    p.add_argument("--direction", default="down", choices=["up", "down"],
+                   help="Profile direction (default: down)")
+    p.add_argument("--min-duration", type=float, default=7.0,
+                   help="Minimum profile duration [s] (default: 7)")
+    p.set_defaults(func=_cmd_prof)
+
+
+def _add_eps_parser(subparsers):
+    p = subparsers.add_parser("eps", help="Compute epsilon (TKE dissipation)",
+                              description="Compute TKE dissipation rate (epsilon) from VMP data.")
+    p.add_argument("files", nargs="+", metavar="FILE",
+                   help=".p, full-record .nc, or per-profile .nc file(s)")
+    p.add_argument("-o", "--output", metavar="DIR", default=None,
+                   help="Output directory for epsilon .nc files")
+    p.add_argument("-j", "--jobs", type=int, default=1, metavar="N",
+                   help="Parallel workers (0 = all cores, default: 1)")
+    p.add_argument("--fft-length", type=int, default=256,
+                   help="FFT segment length [samples] (default: 256)")
+    p.add_argument("--diss-length", type=int, default=None,
+                   help="Dissipation window [samples] (default: 2*fft-length)")
+    p.add_argument("--overlap", type=int, default=None,
+                   help="Window overlap [samples] (default: diss-length//2)")
+    p.add_argument("--speed", type=float, default=None,
+                   help="Fixed profiling speed [m/s] (default: from dP/dt)")
+    p.add_argument("--direction", default="down", choices=["up", "down"],
+                   help="Profile direction (default: down)")
+    p.add_argument("--no-goodman", action="store_true",
+                   help="Disable Goodman coherent noise removal")
+    p.add_argument("--f-AA", type=float, default=98.0,
+                   help="Anti-aliasing filter cutoff [Hz] (default: 98)")
+    p.set_defaults(func=_cmd_eps)
+
+
+def _add_chi_parser(subparsers):
+    p = subparsers.add_parser("chi", help="Compute chi (thermal dissipation)",
+                              description="Compute thermal variance dissipation rate (chi) from VMP data.")
+    p.add_argument("files", nargs="+", metavar="FILE",
+                   help=".p, full-record .nc, or per-profile .nc file(s)")
+    p.add_argument("-o", "--output", metavar="DIR", default=None,
+                   help="Output directory for chi .nc files")
+    p.add_argument("-j", "--jobs", type=int, default=1, metavar="N",
+                   help="Parallel workers (0 = all cores, default: 1)")
+    p.add_argument("--fft-length", type=int, default=512,
+                   help="FFT segment length [samples] (default: 512)")
+    p.add_argument("--diss-length", type=int, default=None,
+                   help="Dissipation window [samples] (default: 3*fft-length)")
+    p.add_argument("--overlap", type=int, default=None,
+                   help="Window overlap [samples] (default: diss-length//2)")
+    p.add_argument("--speed", type=float, default=None,
+                   help="Fixed profiling speed [m/s] (default: from dP/dt)")
+    p.add_argument("--direction", default="down", choices=["up", "down"],
+                   help="Profile direction (default: down)")
+    p.add_argument("--fp07-model", default="single_pole",
+                   choices=["single_pole", "double_pole"],
+                   help="FP07 transfer function model (default: single_pole)")
+    p.add_argument("--epsilon-dir", metavar="DIR", default=None,
+                   help="Directory with epsilon .nc files from 'rsi eps' (Method 1). "
+                        "If omitted, uses Method 2 (spectral fitting).")
+    p.add_argument("--fit-method", default="mle",
+                   choices=["mle", "iterative"],
+                   help="Method 2 fitting: mle or iterative (default: mle)")
+    p.add_argument("--spectrum-model", default="batchelor",
+                   choices=["batchelor", "kraichnan"],
+                   help="Theoretical spectrum model (default: batchelor)")
+    p.add_argument("--f-AA", type=float, default=98.0,
+                   help="Anti-aliasing filter cutoff [Hz] (default: 98)")
+    p.set_defaults(func=_cmd_chi)
+
+
+def _add_pipeline_parser(subparsers):
+    p = subparsers.add_parser(
+        "pipeline",
+        help="Run full pipeline (.p -> epsilon -> chi)",
+        description="Run the full processing pipeline from raw .p files through "
+                    "epsilon (TKE dissipation) and chi (thermal dissipation). "
+                    "Profiles are detected automatically. Chi is computed using "
+                    "Method 1 (from shear-probe epsilon).",
+    )
+    p.add_argument("files", nargs="+", metavar="FILE",
+                   help=".p file(s) or glob pattern(s)")
+    p.add_argument("-o", "--output", metavar="DIR", default=".",
+                   help="Base output directory (default: current directory)")
+    p.add_argument("--direction", default="down", choices=["up", "down"],
+                   help="Profile direction (default: down)")
+    p.add_argument("--speed", type=float, default=None,
+                   help="Fixed profiling speed [m/s] (default: from dP/dt)")
+    p.add_argument("--eps-fft-length", type=int, default=256,
+                   help="FFT length for epsilon [samples] (default: 256)")
+    p.add_argument("--chi-fft-length", type=int, default=512,
+                   help="FFT length for chi [samples] (default: 512)")
+    p.add_argument("--no-goodman", action="store_true",
+                   help="Disable Goodman coherent noise removal for epsilon")
+    p.add_argument("--fp07-model", default="single_pole",
+                   choices=["single_pole", "double_pole"],
+                   help="FP07 transfer function model (default: single_pole)")
+    p.add_argument("--spectrum-model", default="batchelor",
+                   choices=["batchelor", "kraichnan"],
+                   help="Theoretical spectrum model for chi (default: batchelor)")
+    p.add_argument("--f-AA", type=float, default=98.0,
+                   help="Anti-aliasing filter cutoff [Hz] (default: 98)")
+    p.set_defaults(func=_cmd_pipeline)
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    """Main CLI entry point for rsi-python."""
+    parser = argparse.ArgumentParser(
+        prog="rsi",
+        description="rsi-python: Tools for Rockland Scientific microprofiler data.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    _add_info_parser(subparsers)
+    _add_nc_parser(subparsers)
+    _add_prof_parser(subparsers)
+    _add_eps_parser(subparsers)
+    _add_chi_parser(subparsers)
+    _add_pipeline_parser(subparsers)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+# ---------------------------------------------------------------------------
+# Legacy entry points (kept for backwards compatibility)
+# ---------------------------------------------------------------------------
+
+def p2nc():
+    """Legacy entry point for p2nc."""
+    sys.argv = ["rsi", "nc"] + sys.argv[1:]
+    main()
+
+
+def pinfo():
+    """Legacy entry point for pinfo."""
+    sys.argv = ["rsi", "info"] + sys.argv[1:]
+    main()
+
+
+def p2prof():
+    """Legacy entry point for p2prof."""
+    sys.argv = ["rsi", "prof"] + sys.argv[1:]
+    main()
+
+
+def p2eps():
+    """Legacy entry point for p2eps."""
+    sys.argv = ["rsi", "eps"] + sys.argv[1:]
+    main()
+
+
+def p2chi():
+    """Legacy entry point for p2chi."""
+    sys.argv = ["rsi", "chi"] + sys.argv[1:]
+    main()
