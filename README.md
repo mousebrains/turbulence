@@ -8,7 +8,7 @@ Python tools for reading Rockland Scientific microprofiler data and computing tu
 
 ### What it computes
 
-- **Epsilon (TKE dissipation rate)** from shear probe spectra, including:
+- **Epsilon (TKE dissipation rate)** from shear probe spectra ([detailed mathematics](docs/epsilon_mathematics.md)), including:
   - Iterative despiking of shear signals
   - Goodman coherent noise removal using accelerometer cross-spectra
   - Macoun & Lueck wavenumber correction for shear probe spatial response
