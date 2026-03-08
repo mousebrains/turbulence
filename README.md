@@ -16,7 +16,7 @@ Python tools for reading Rockland Scientific microprofiler data and computing tu
   - Iterative variance correction using Lueck's resolved-variance model
   - Integration limit detection via polynomial fit to log-log spectra
 
-- **Chi (thermal variance dissipation rate)** from FP07 thermistor spectra, including:
+- **Chi (thermal variance dissipation rate)** from FP07 thermistor spectra ([detailed mathematics](docs/chi_mathematics.md)), including:
   - Batchelor and Kraichnan theoretical temperature gradient spectra
   - FP07 single-pole and double-pole transfer function correction
   - Electronics noise model (Johnson + amplifier + anti-aliasing + ADC)
