@@ -154,7 +154,8 @@ def _channels_from_nc(nc_path, sh_pat, ac_pat, p_name, t_name):
 def get_diss(source, fft_length=256, diss_length=None, overlap=None,
              speed=None, direction="down", goodman=True,
              f_AA=98.0, f_limit=None, fit_order=3,
-             despike_thresh=8, despike_smooth=0.5):
+             despike_thresh=8, despike_smooth=0.5,
+             salinity=None):
     """Compute epsilon from any source.
 
     Parameters
@@ -184,13 +185,16 @@ def get_diss(source, fft_length=256, diss_length=None, overlap=None,
         Despike threshold. Default: 8.
     despike_smooth : float
         Despike smoothing frequency [Hz]. Default: 0.5.
+    salinity : float or array_like or None
+        Practical salinity [PSU]. If provided, uses gsw-based viscosity
+        instead of visc35. Scalar or array matching slow time series.
 
     Returns
     -------
     list of xarray.Dataset
         One Dataset per profile. Each contains:
         epsilon, K_max, speed, nu, T_mean, P_mean, spec_shear,
-        spec_nasmyth, K, mad.
+        spec_nasmyth, K, mad, fom, K_max_ratio.
     """
     if diss_length is None:
         diss_length = 2 * fft_length
@@ -256,6 +260,23 @@ def get_diss(source, fft_length=256, diss_length=None, overlap=None,
     if f_limit < f_AA_eff:
         f_AA_eff = f_limit
 
+    # Handle salinity
+    if salinity is not None:
+        salinity = np.asarray(salinity, dtype=float)
+        if salinity.ndim > 0:
+            if len(salinity) == len(t_slow):
+                sal_fast = np.interp(t_fast, t_slow, salinity)
+            elif len(salinity) == len(t_fast):
+                sal_fast = salinity
+            else:
+                raise ValueError(
+                    f"salinity array length {len(salinity)} doesn't match "
+                    f"slow ({len(t_slow)}) or fast ({len(t_fast)}) time series")
+        else:
+            sal_fast = float(salinity)
+    else:
+        sal_fast = None
+
     results = []
     for s_slow, e_slow in profiles_slow:
         s_fast = s_slow * ratio
@@ -269,10 +290,15 @@ def get_diss(source, fft_length=256, diss_length=None, overlap=None,
         spd_prof = speed_fast[s_fast:e_fast]
         time_prof = t_fast[s_fast:e_fast]
 
+        if isinstance(sal_fast, np.ndarray):
+            sal_prof = sal_fast[s_fast:e_fast]
+        else:
+            sal_prof = sal_fast  # None or scalar
+
         ds = _compute_profile_diss(
             sh_mat, ac_mat, p_prof, t_prof, spd_prof, time_prof,
             shear_names, fs_fast, fft_length, diss_length, overlap,
-            goodman, f_AA_eff, fit_order,
+            goodman, f_AA_eff, fit_order, salinity=sal_prof,
         )
         ds.attrs.update(data["metadata"])
         results.append(ds)
@@ -283,7 +309,7 @@ def get_diss(source, fft_length=256, diss_length=None, overlap=None,
 def _compute_profile_diss(shear, accel, P, T, speed, t_fast,
                           shear_names, fs_fast,
                           fft_length, diss_length, overlap,
-                          do_goodman, f_AA, fit_order):
+                          do_goodman, f_AA, fit_order, salinity=None):
     """Compute dissipation for a single profile.
 
     Parameters
@@ -297,6 +323,7 @@ def _compute_profile_diss(shear, accel, P, T, speed, t_fast,
     do_goodman : bool
     f_AA : float
     fit_order : int
+    salinity : float, ndarray, or None
 
     Returns
     -------
@@ -316,6 +343,8 @@ def _compute_profile_diss(shear, accel, P, T, speed, t_fast,
     epsilon = np.full((n_shear, n_est), np.nan)
     K_max_out = np.full((n_shear, n_est), np.nan)
     mad_out = np.full((n_shear, n_est), np.nan)
+    fom_out = np.full((n_shear, n_est), np.nan)
+    K_max_ratio_out = np.full((n_shear, n_est), np.nan)
     method_out = np.zeros((n_shear, n_est), dtype=np.int8)
     nu_out = np.full(n_est, np.nan)
     speed_out = np.full(n_est, np.nan)
@@ -364,7 +393,12 @@ def _compute_profile_diss(shear, accel, P, T, speed, t_fast,
         mean_T = np.mean(T[sel])
         mean_P = np.mean(P[sel])
         mean_t = np.mean(t_fast[sel])
-        nu = visc35(mean_T)
+        if salinity is not None:
+            from rsi_python.ocean import visc
+            mean_S = np.mean(salinity[sel]) if np.ndim(salinity) > 0 else float(salinity)
+            nu = visc(mean_T, mean_S, mean_P)
+        else:
+            nu = visc35(mean_T)
 
         # Convert frequency to wavenumber
         K = F / W
@@ -403,12 +437,15 @@ def _compute_profile_diss(shear, accel, P, T, speed, t_fast,
             else:
                 shear_spec = np.real(P_sh_clean[:, ci, ci])
 
-            e_4, k_max, mad, meth, nas_spec = _estimate_epsilon(
-                K, shear_spec, nu, K_AA, fit_order, e_isr_threshold,
-            )
+            e_4, k_max, mad, meth, nas_spec, fom_val, K_max_ratio_val = \
+                _estimate_epsilon(
+                    K, shear_spec, nu, K_AA, fit_order, e_isr_threshold,
+                )
             epsilon[ci, idx] = e_4
             K_max_out[ci, idx] = k_max
             mad_out[ci, idx] = mad
+            fom_out[ci, idx] = fom_val
+            K_max_ratio_out[ci, idx] = K_max_ratio_val
             method_out[ci, idx] = meth
             spec_shear[ci, :, idx] = shear_spec
             spec_nasmyth[ci, :, idx] = nas_spec
@@ -419,6 +456,8 @@ def _compute_profile_diss(shear, accel, P, T, speed, t_fast,
             "epsilon": (["probe", "time"], epsilon),
             "K_max": (["probe", "time"], K_max_out),
             "mad": (["probe", "time"], mad_out),
+            "fom": (["probe", "time"], fom_out),
+            "K_max_ratio": (["probe", "time"], K_max_ratio_out),
             "method": (["probe", "time"], method_out),
             "speed": (["time"], speed_out),
             "nu": (["time"], nu_out),
@@ -564,7 +603,19 @@ def _estimate_epsilon(K, shear_spectrum, nu, K_AA, fit_order, e_isr_threshold):
     else:
         mad = np.nan
 
-    return e_4, k_max, mad, method, nas_spec
+    # Figure of merit: observed/Nasmyth variance ratio in fit range
+    if len(Range) > 1:
+        obs_var = np.trapezoid(shear_spectrum[Range[1:]], K[Range[1:]])
+        nas_var = np.trapezoid(nas_spec[Range[1:]], K[Range[1:]])
+        fom = obs_var / nas_var if nas_var > 0 else np.nan
+    else:
+        fom = np.nan
+
+    # K_max / K_95: fraction of theoretical spectrum resolved
+    K_95 = X_95 * (max(e_4, 1e-15) / nu ** 3) ** 0.25
+    K_max_ratio_val = k_max / K_95 if K_95 > 0 else np.nan
+
+    return e_4, k_max, mad, method, nas_spec, fom, K_max_ratio_val
 
 
 def _variance_correction(e_3, K_upper, nu, max_iter=50):

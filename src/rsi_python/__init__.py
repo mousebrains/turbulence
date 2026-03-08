@@ -2,7 +2,7 @@
 
 from rsi_python.p_file import PFile, parse_config
 from rsi_python.convert import p_to_netcdf, convert_all
-from rsi_python.ocean import visc35
+from rsi_python.ocean import visc35, visc, density, buoyancy_freq
 from rsi_python.nasmyth import nasmyth
 from rsi_python.profile import get_profiles, extract_profiles
 from rsi_python.dissipation import get_diss, load_channels
@@ -15,6 +15,9 @@ __all__ = [
     "p_to_netcdf",
     "convert_all",
     "visc35",
+    "visc",
+    "density",
+    "buoyancy_freq",
     "nasmyth",
     "get_profiles",
     "extract_profiles",

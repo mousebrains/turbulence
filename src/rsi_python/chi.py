@@ -56,7 +56,7 @@ def _chi_from_epsilon(spec_obs, K, epsilon, nu, T_mean, speed, f_AA,
 
     kB = batchelor_kB(epsilon, nu)
     if kB < 1:
-        return np.nan, kB, np.nan, np.zeros_like(K)
+        return np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan
 
     # FP07 transfer function
     tau0 = fp07_tau(speed)
@@ -76,7 +76,7 @@ def _chi_from_epsilon(spec_obs, K, epsilon, nu, T_mean, speed, f_AA,
         # Fall back to AA limit
         valid = (K > 0) & (K <= K_AA)
     if np.sum(valid) < 3:
-        return np.nan, kB, np.nan, np.zeros_like(K)
+        return np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan
 
     valid_idx = np.where(valid)[0]
     K_max = K[valid_idx[-1]]
@@ -88,7 +88,7 @@ def _chi_from_epsilon(spec_obs, K, epsilon, nu, T_mean, speed, f_AA,
     # Use trial chi = 6*kappa_T*obs_var as initial
     chi_trial = 6 * KAPPA_T * obs_var
     if chi_trial <= 0:
-        return np.nan, kB, K_max, np.zeros_like(K)
+        return np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan
 
     # Theoretical Batchelor spectrum
     K_fine = np.linspace(0, max(K_max * 5, kB * 5), 10000)
@@ -105,7 +105,7 @@ def _chi_from_epsilon(spec_obs, K, epsilon, nu, T_mean, speed, f_AA,
                               K_fine[mask_resolved])
 
     if V_resolved <= 0 or V_total <= 0:
-        return np.nan, kB, K_max, np.zeros_like(K)
+        return np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan
 
     correction = V_total / V_resolved
     chi = 6 * KAPPA_T * obs_var * correction
@@ -113,7 +113,16 @@ def _chi_from_epsilon(spec_obs, K, epsilon, nu, T_mean, speed, f_AA,
     # Compute fitted Batchelor spectrum for output
     spec_batch = grad_func(K, kB, chi)
 
-    return chi, kB, K_max, spec_batch
+    # Figure of merit: observed/model variance in integration range
+    if np.sum(valid) >= 3 and np.isfinite(chi):
+        mod_v = np.trapezoid(spec_batch[valid], K[valid])
+        fom = obs_var / mod_v if mod_v > 0 else np.nan
+    else:
+        fom = np.nan
+
+    K_max_ratio_val = K_max / kB if kB > 0 else np.nan
+
+    return chi, kB, K_max, spec_batch, fom, K_max_ratio_val
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +152,7 @@ def _mle_fit_kB(spec_obs, K, chi_obs, nu, T_mean, speed, f_AA,
     if np.sum(fit_mask) < 6:
         fit_mask = (K > 0) & (K <= K_AA)
     if np.sum(fit_mask) < 6:
-        return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K)
+        return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
 
     fit_idx = np.where(fit_mask)[0]
     K_fit = K[fit_idx]
@@ -166,7 +175,7 @@ def _mle_fit_kB(spec_obs, K, chi_obs, nu, T_mean, speed, f_AA,
             nll_coarse[i] = nll
 
     if np.all(np.isinf(nll_coarse)):
-        return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K)
+        return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
 
     best_coarse = kB_coarse[np.argmin(nll_coarse)]
 
@@ -199,7 +208,17 @@ def _mle_fit_kB(spec_obs, K, chi_obs, nu, T_mean, speed, f_AA,
     # Fitted spectrum for output
     spec_batch = grad_func(K, kB_best, chi)
 
-    return kB_best, chi, epsilon, K_max_fit, spec_batch
+    # Figure of merit
+    if np.isfinite(chi) and np.sum(fit_mask) >= 3:
+        mod_v = np.trapezoid(spec_batch[fit_idx], K_fit)
+        obs_v = np.trapezoid(spec_fit, K_fit)
+        fom = obs_v / mod_v if mod_v > 0 else np.nan
+    else:
+        fom = np.nan
+
+    K_max_ratio_val = K_max_fit / kB_best if kB_best > 0 else np.nan
+
+    return kB_best, chi, epsilon, K_max_fit, spec_batch, fom, K_max_ratio_val
 
 
 def _iterative_fit(spec_obs, K, nu, T_mean, speed, f_AA,
@@ -229,7 +248,7 @@ def _iterative_fit(spec_obs, K, nu, T_mean, speed, f_AA,
 
     valid_idx = np.where(valid)[0]
     if len(valid_idx) < 6:
-        return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K)
+        return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
 
     k_l = K[valid_idx[0]]
     k_u = K[valid_idx[-1]]
@@ -251,7 +270,7 @@ def _iterative_fit(spec_obs, K, nu, T_mean, speed, f_AA,
 
     for iteration in range(3):
         # MLE fit for kB
-        kB_best, chi_fit, epsilon, K_max, _ = _mle_fit_kB(
+        kB_best, chi_fit, epsilon, K_max, _, _, _ = _mle_fit_kB(
             spec_obs, K, chi_obs, nu, T_mean, speed, f_AA,
             fp07_model, spectrum_model, fs, diff_gain, fft_length,
         )
@@ -291,7 +310,21 @@ def _iterative_fit(spec_obs, K, nu, T_mean, speed, f_AA,
     chi = chi_obs
     spec_batch = grad_func(K, kB_best, chi) if np.isfinite(kB_best) else np.zeros_like(K)
 
-    return kB_best, chi, epsilon, k_u, spec_batch
+    # Figure of merit
+    if np.isfinite(kB_best) and np.isfinite(chi):
+        valid_fom = (K > 0) & (K <= k_u)
+        if np.sum(valid_fom) >= 3:
+            obs_v = np.trapezoid(spec_obs[valid_fom], K[valid_fom])
+            mod_v = np.trapezoid(spec_batch[valid_fom], K[valid_fom])
+            fom = obs_v / mod_v if mod_v > 0 else np.nan
+        else:
+            fom = np.nan
+    else:
+        fom = np.nan
+
+    K_max_ratio_val = k_u / kB_best if np.isfinite(kB_best) and kB_best > 0 else np.nan
+
+    return kB_best, chi, epsilon, k_u, spec_batch, fom, K_max_ratio_val
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +335,8 @@ def get_chi(source, epsilon_ds=None, fft_length=512, diss_length=None,
             overlap=None, speed=None, direction="down",
             fp07_model="single_pole", goodman=False,
             f_AA=98.0, fit_method="mle",
-            spectrum_model="batchelor"):
+            spectrum_model="batchelor",
+            salinity=None):
     """Compute chi from temperature gradient spectra.
 
     Parameters
@@ -333,6 +367,9 @@ def get_chi(source, epsilon_ds=None, fft_length=512, diss_length=None,
         (Peterson & Fer 2014).
     spectrum_model : str
         'batchelor' or 'kraichnan'.
+    salinity : float or array_like or None
+        Practical salinity [PSU]. If provided, uses gsw-based viscosity
+        instead of visc35. Scalar or array matching slow time series.
 
     Returns
     -------
@@ -341,6 +378,8 @@ def get_chi(source, epsilon_ds=None, fft_length=512, diss_length=None,
         epsilon_T   (probe, time) — epsilon from T (Method 2) or input epsilon
         kB          (probe, time) — Batchelor wavenumber [cpm]
         K_max_T     (probe, time) — integration limit [cpm]
+        fom         (probe, time) — figure of merit (obs/model variance)
+        K_max_ratio (probe, time) — K_max / kB (spectral resolution)
         speed       (time) — profiling speed [m/s]
         nu          (time) — kinematic viscosity [m^2/s]
         T_mean      (time) — mean temperature [deg C]
@@ -398,6 +437,23 @@ def get_chi(source, epsilon_ds=None, fft_length=512, diss_length=None,
 
     f_AA_eff = 0.9 * f_AA
 
+    # Handle salinity
+    if salinity is not None:
+        salinity = np.asarray(salinity, dtype=float)
+        if salinity.ndim > 0:
+            if len(salinity) == len(t_slow):
+                sal_fast = np.interp(t_fast, t_slow, salinity)
+            elif len(salinity) == len(t_fast):
+                sal_fast = salinity
+            else:
+                raise ValueError(
+                    f"salinity array length {len(salinity)} doesn't match "
+                    f"slow ({len(t_slow)}) or fast ({len(t_fast)}) time series")
+        else:
+            sal_fast = float(salinity)
+    else:
+        sal_fast = None
+
     results = []
     for s_slow, e_slow in profiles_slow:
         s_fast = s_slow * ratio
@@ -409,12 +465,17 @@ def get_chi(source, epsilon_ds=None, fft_length=512, diss_length=None,
         spd_prof = speed_fast[s_fast:e_fast]
         time_prof = t_fast[s_fast:e_fast]
 
+        if isinstance(sal_fast, np.ndarray):
+            sal_prof = sal_fast[s_fast:e_fast]
+        else:
+            sal_prof = sal_fast  # None or scalar
+
         ds = _compute_profile_chi(
             therm_prof, therm_names, diff_gains,
             p_prof, t_prof, spd_prof, time_prof,
             fs_fast, fft_length, diss_length, overlap,
             f_AA_eff, fp07_model, spectrum_model, fit_method,
-            epsilon_ds,
+            epsilon_ds, salinity=sal_prof,
         )
         ds.attrs.update(data["metadata"])
         results.append(ds)
@@ -500,7 +561,7 @@ def _compute_profile_chi(therm_arrays, therm_names, diff_gains,
                           P, T, speed, t_fast,
                           fs_fast, fft_length, diss_length, overlap,
                           f_AA, fp07_model, spectrum_model, fit_method,
-                          epsilon_ds):
+                          epsilon_ds, salinity=None):
     """Compute chi for a single profile."""
     N = len(P)
     n_therm = len(therm_arrays)
@@ -516,6 +577,8 @@ def _compute_profile_chi(therm_arrays, therm_names, diff_gains,
     eps_out = np.full((n_therm, n_est), np.nan)
     kB_out = np.full((n_therm, n_est), np.nan)
     K_max_out = np.full((n_therm, n_est), np.nan)
+    fom_out = np.full((n_therm, n_est), np.nan)
+    K_max_ratio_out = np.full((n_therm, n_est), np.nan)
     nu_out = np.full(n_est, np.nan)
     speed_out = np.full(n_est, np.nan)
     P_out = np.full(n_est, np.nan)
@@ -555,7 +618,12 @@ def _compute_profile_chi(therm_arrays, therm_names, diff_gains,
         mean_T = np.mean(T[sel])
         mean_P = np.mean(P[sel])
         mean_t = np.mean(t_fast[sel])
-        nu = visc35(mean_T)
+        if salinity is not None:
+            from rsi_python.ocean import visc
+            mean_S = np.mean(salinity[sel]) if np.ndim(salinity) > 0 else float(salinity)
+            nu = visc(mean_T, mean_S, mean_P)
+        else:
+            nu = visc35(mean_T)
 
         K = np.arange(n_freq) * fs_fast / fft_length / W
         F = np.arange(n_freq) * fs_fast / fft_length
@@ -605,14 +673,17 @@ def _compute_profile_chi(therm_arrays, therm_names, diff_gains,
 
             if epsilon_val is not None:
                 # Method 1: chi from known epsilon
-                chi_val, kB_val, K_max_val, batch_spec = _chi_from_epsilon(
-                    spec_obs, K, epsilon_val, nu, mean_T, W, f_AA,
-                    fp07_model, spectrum_model, fs_fast, diff_gains[ci], fft_length,
-                )
+                chi_val, kB_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = \
+                    _chi_from_epsilon(
+                        spec_obs, K, epsilon_val, nu, mean_T, W, f_AA,
+                        fp07_model, spectrum_model, fs_fast, diff_gains[ci], fft_length,
+                    )
                 chi_out[ci, idx] = chi_val
                 eps_out[ci, idx] = epsilon_val
                 kB_out[ci, idx] = kB_val
                 K_max_out[ci, idx] = K_max_val
+                fom_out[ci, idx] = fom_val
+                K_max_ratio_out[ci, idx] = K_max_ratio_val
                 spec_batch[ci, :, idx] = batch_spec
             else:
                 # Method 2: fit kB
@@ -626,20 +697,24 @@ def _compute_profile_chi(therm_arrays, therm_names, diff_gains,
                     chi_obs = 1e-10
 
                 if fit_method == "iterative":
-                    kB_val, chi_val, eps_val, K_max_val, batch_spec = _iterative_fit(
-                        spec_obs, K, nu, mean_T, W, f_AA,
-                        fp07_model, spectrum_model, fs_fast, diff_gains[ci], fft_length,
-                    )
+                    kB_val, chi_val, eps_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = \
+                        _iterative_fit(
+                            spec_obs, K, nu, mean_T, W, f_AA,
+                            fp07_model, spectrum_model, fs_fast, diff_gains[ci], fft_length,
+                        )
                 else:
-                    kB_val, chi_val, eps_val, K_max_val, batch_spec = _mle_fit_kB(
-                        spec_obs, K, chi_obs, nu, mean_T, W, f_AA,
-                        fp07_model, spectrum_model, fs_fast, diff_gains[ci], fft_length,
-                    )
+                    kB_val, chi_val, eps_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = \
+                        _mle_fit_kB(
+                            spec_obs, K, chi_obs, nu, mean_T, W, f_AA,
+                            fp07_model, spectrum_model, fs_fast, diff_gains[ci], fft_length,
+                        )
 
                 chi_out[ci, idx] = chi_val
                 eps_out[ci, idx] = eps_val
                 kB_out[ci, idx] = kB_val
                 K_max_out[ci, idx] = K_max_val
+                fom_out[ci, idx] = fom_val
+                K_max_ratio_out[ci, idx] = K_max_ratio_val
                 spec_batch[ci, :, idx] = batch_spec
 
     # Build xarray Dataset
@@ -649,6 +724,8 @@ def _compute_profile_chi(therm_arrays, therm_names, diff_gains,
             "epsilon_T": (["probe", "time"], eps_out),
             "kB": (["probe", "time"], kB_out),
             "K_max_T": (["probe", "time"], K_max_out),
+            "fom": (["probe", "time"], fom_out),
+            "K_max_ratio": (["probe", "time"], K_max_ratio_out),
             "speed": (["time"], speed_out),
             "nu": (["time"], nu_out),
             "P_mean": (["time"], P_out),

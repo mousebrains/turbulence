@@ -41,7 +41,7 @@ pip install git+https://github.com/mousebrains/turbulence.git
 pipx install git+https://github.com/mousebrains/turbulence.git
 ```
 
-Requires Python >= 3.10. Dependencies: `numpy`, `netCDF4`, `scipy`, `xarray`.
+Requires Python >= 3.10. Dependencies: `numpy`, `netCDF4`, `scipy`, `xarray`, `gsw`.
 
 ## CLI
 
@@ -59,8 +59,6 @@ rsi-tpw <subcommand> [options]
 | `rsi-tpw eps`      | Compute epsilon (TKE dissipation) |
 | `rsi-tpw chi`      | Compute chi (thermal variance dissipation) |
 | `rsi-tpw pipeline` | Run full pipeline (`.p` → epsilon → chi) |
-
-Legacy standalone commands (`p2nc`, `pinfo`, `p2prof`, `p2eps`, `p2chi`) are still available.
 
 ## Pipeline
 
@@ -175,7 +173,7 @@ ds["epsilon_T"]       # epsilon estimated from temperature
 | `goodman.py` | Goodman coherent noise removal using accelerometer spectra |
 | `despike.py` | Iterative spike removal for shear probe signals |
 | `nasmyth.py` | Nasmyth universal shear spectrum (Lueck improved fit) |
-| `ocean.py` | Seawater viscosity at S=35 |
+| `ocean.py` | Seawater properties: viscosity, density, buoyancy frequency (gsw/TEOS-10) |
 
 ## References
 

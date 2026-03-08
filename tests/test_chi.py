@@ -187,7 +187,7 @@ class TestChiFromEpsilon:
         spec_obs = spec_true * H2
         spec_obs = np.maximum(spec_obs, 1e-20)
 
-        chi_est, kB_est, K_max, _ = _chi_from_epsilon(
+        chi_est, kB_est, K_max, _, fom, K_max_ratio = _chi_from_epsilon(
             spec_obs, K, eps_true, nu, 10.0, speed, 98.0,
             "single_pole", "batchelor", fs, 0.94, fft_length,
         )
@@ -219,7 +219,7 @@ class TestMLEFit:
         spec_obs = batchelor_grad(K, kB_true, chi_true)
         spec_obs = np.maximum(spec_obs, 1e-20)
 
-        kB_fit, chi_fit, eps_fit, K_max, _ = _mle_fit_kB(
+        kB_fit, chi_fit, eps_fit, K_max, _, fom, K_max_ratio = _mle_fit_kB(
             spec_obs, K, chi_true, nu, 10.0, speed, 98.0,
             "single_pole", "batchelor", fs, 0.94, fft_length,
         )
@@ -286,16 +286,28 @@ class TestChiIntegration:
         results = get_chi(PROFILE_FILE, fft_length=512)
         ds = results[0]
 
-        # Check required variables exist
-        for var in ["chi", "epsilon_T", "kB", "K_max_T", "speed", "nu",
-                     "P_mean", "T_mean", "spec_gradT", "spec_batch",
-                     "spec_noise", "K", "F"]:
+        # Check required variables exist (including new QC variables)
+        for var in ["chi", "epsilon_T", "kB", "K_max_T", "fom", "K_max_ratio",
+                     "speed", "nu", "P_mean", "T_mean", "spec_gradT",
+                     "spec_batch", "spec_noise", "K", "F"]:
             assert var in ds, f"Missing variable: {var}"
 
         # Check dimensions
         assert "probe" in ds.dims
         assert "time" in ds.dims
         assert "freq" in ds.dims
+
+    def test_qc_variables_in_output(self, skip_no_data):
+        """Output should contain fom and K_max_ratio QC variables."""
+        from rsi_python.chi import get_chi
+
+        results = get_chi(PROFILE_FILE, fft_length=512)
+        ds = results[0]
+        assert "fom" in ds, "Missing fom variable"
+        assert "K_max_ratio" in ds, "Missing K_max_ratio variable"
+        # Should have same shape as chi
+        assert ds["fom"].shape == ds["chi"].shape
+        assert ds["K_max_ratio"].shape == ds["chi"].shape
 
     def test_chi_file_output(self, skip_no_data, tmp_path):
         """compute_chi_file should write valid NetCDF."""

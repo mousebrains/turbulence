@@ -28,6 +28,52 @@ class TestVisc35:
         assert nu[0] > nu[1] > nu[2]  # viscosity decreases with temperature
 
 
+class TestVisc:
+    def test_s35_p0_matches_visc35(self):
+        """visc(T, S=35, P=0) should match visc35(T)."""
+        from rsi_python.ocean import visc, visc35
+        T = np.array([0.0, 10.0, 20.0])
+        np.testing.assert_array_equal(visc(T, 35, 0), visc35(T))
+
+    def test_different_salinity(self):
+        """Non-default salinity should give different viscosity."""
+        from rsi_python.ocean import visc
+        nu_35 = visc(10.0, 35, 0)
+        nu_30 = visc(10.0, 30, 0)
+        assert nu_35 != nu_30
+
+    def test_scalar(self):
+        from rsi_python.ocean import visc
+        nu = visc(10.0, 34.5, 100.0)
+        assert 1e-7 < nu < 1e-5
+
+
+class TestDensity:
+    def test_reasonable_range(self):
+        from rsi_python.ocean import density
+        rho = density(10.0, 35.0, 0.0)
+        assert 1020 < rho < 1030
+
+    def test_salinity_increases_density(self):
+        from rsi_python.ocean import density
+        rho_low = density(10.0, 30.0, 0.0)
+        rho_high = density(10.0, 38.0, 0.0)
+        assert rho_high > rho_low
+
+
+class TestBuoyancyFreq:
+    def test_stable_stratification(self):
+        from rsi_python.ocean import buoyancy_freq
+        T = np.array([20.0, 15.0, 10.0, 5.0])
+        S = np.full(4, 35.0)
+        P = np.array([0.0, 100.0, 200.0, 300.0])
+        N2, p_mid = buoyancy_freq(T, S, P)
+        assert len(N2) == 3
+        assert len(p_mid) == 3
+        # Stable stratification should have positive N²
+        assert np.all(N2[np.isfinite(N2)] > 0)
+
+
 # ---------------------------------------------------------------------------
 # nasmyth.py
 # ---------------------------------------------------------------------------
@@ -278,6 +324,34 @@ class TestIntegration:
         # Epsilon should span a wide range but be physically reasonable
         assert np.min(valid) > 1e-14, f"min epsilon too small: {np.min(valid)}"
         assert np.max(valid) < 1e0, f"max epsilon too large: {np.max(valid)}"
+
+    def test_qc_variables_in_output(self, skip_no_data):
+        """Output should contain fom and K_max_ratio QC variables."""
+        from rsi_python.dissipation import get_diss
+        results = get_diss(PROFILE_FILE, fft_length=256, goodman=True)
+        ds = results[0]
+        assert "fom" in ds, "Missing fom variable"
+        assert "K_max_ratio" in ds, "Missing K_max_ratio variable"
+        # fom should have some finite values
+        fom = ds["fom"].values
+        assert np.any(np.isfinite(fom)), "No finite fom values"
+        # K_max_ratio should have some finite positive values
+        kmr = ds["K_max_ratio"].values
+        valid_kmr = kmr[np.isfinite(kmr)]
+        assert len(valid_kmr) > 0, "No finite K_max_ratio values"
+        assert np.all(valid_kmr > 0), "K_max_ratio should be positive"
+
+    def test_salinity_passthrough(self, skip_no_data):
+        """get_diss with salinity should use gsw-based viscosity."""
+        from rsi_python.dissipation import get_diss
+        results_default = get_diss(PROFILE_FILE, fft_length=256, goodman=True)
+        results_sal = get_diss(PROFILE_FILE, fft_length=256, goodman=True, salinity=34.5)
+        assert len(results_sal) >= 1
+        # Viscosity should differ from default (S=35)
+        nu_default = results_default[0]["nu"].values
+        nu_sal = results_sal[0]["nu"].values
+        assert not np.allclose(nu_default, nu_sal, rtol=1e-6, atol=0), \
+            "Viscosity should change with different salinity"
 
     def test_pipeline_p2prof_p2eps(self, skip_no_data, tmp_path):
         """Full pipeline: .p → p2prof → p2eps."""

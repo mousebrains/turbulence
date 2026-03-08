@@ -13,6 +13,7 @@ dependencies = [
     "netCDF4",
     "scipy",
     "xarray",
+    "gsw",
 ]
 
 [project.optional-dependencies]
@@ -22,11 +23,6 @@ dev = [
 
 [project.scripts]
 rsi-tpw = "rsi_python.cli:main"
-p2nc = "rsi_python.cli:p2nc"
-pinfo = "rsi_python.cli:pinfo"
-p2prof = "rsi_python.cli:p2prof"
-p2eps = "rsi_python.cli:p2eps"
-p2chi = "rsi_python.cli:p2chi"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -26,3 +26,101 @@ def visc35(T):
          1.828297985908266e-006,
     ])
     return np.polyval(pol, T)
+
+
+def visc(T, S=35, P=0):
+    """Kinematic viscosity of seawater [m²/s].
+
+    For S=35, P=0 falls back to the visc35 polynomial (matches ODAS).
+    Otherwise uses Sharqawy et al. (2010) for dynamic viscosity
+    and gsw (TEOS-10) for in-situ density.
+
+    Parameters
+    ----------
+    T : float or array_like
+        In-situ temperature [°C].
+    S : float or array_like
+        Practical salinity [PSU]. Default: 35.
+    P : float or array_like
+        Pressure [dbar]. Default: 0.
+
+    Returns
+    -------
+    nu : float or ndarray
+        Kinematic viscosity [m²/s].
+    """
+    T = np.asarray(T, dtype=float)
+    S = np.asarray(S, dtype=float)
+    P = np.asarray(P, dtype=float)
+
+    if np.all(S == 35) and np.all(P == 0):
+        return visc35(T)
+
+    import gsw
+
+    # Dynamic viscosity of pure water [Pa·s] — Sharqawy et al. (2010) Eq. 22
+    mu_w = 4.2844e-5 + (0.157 * (T + 64.993)**2 - 91.296)**(-1)
+
+    # Salinity correction — Sharqawy et al. (2010) Eq. 23
+    A = 1.541 + 1.998e-2 * T - 9.52e-5 * T**2
+    B = 7.974 - 7.561e-2 * T + 4.724e-4 * T**2
+    S_frac = S * 1e-3  # PSU to mass fraction
+    mu = mu_w * (1 + A * S_frac + B * S_frac**2)
+
+    # In-situ density from gsw (TEOS-10)
+    SA = gsw.SA_from_SP(S, P, 0, 0)
+    CT = gsw.CT_from_t(SA, T, P)
+    rho = gsw.rho(SA, CT, P)
+
+    return mu / rho
+
+
+def density(T, S, P):
+    """In-situ density of seawater [kg/m³] via TEOS-10.
+
+    Parameters
+    ----------
+    T : float or array_like
+        In-situ temperature [°C].
+    S : float or array_like
+        Practical salinity [PSU].
+    P : float or array_like
+        Pressure [dbar].
+
+    Returns
+    -------
+    rho : float or ndarray
+        In-situ density [kg/m³].
+    """
+    import gsw
+    SA = gsw.SA_from_SP(S, P, 0, 0)
+    CT = gsw.CT_from_t(SA, T, P)
+    return gsw.rho(SA, CT, P)
+
+
+def buoyancy_freq(T, S, P, lat=0):
+    """Buoyancy frequency squared N² [s⁻²] from profiles.
+
+    Parameters
+    ----------
+    T : array_like
+        In-situ temperature profile [°C].
+    S : array_like
+        Practical salinity profile [PSU].
+    P : array_like
+        Pressure profile [dbar].
+    lat : float
+        Latitude [°N]. Default: 0.
+
+    Returns
+    -------
+    N2 : ndarray
+        Buoyancy frequency squared [s⁻²], length len(P)-1.
+    p_mid : ndarray
+        Mid-point pressures [dbar], length len(P)-1.
+    """
+    import gsw
+    SA = gsw.SA_from_SP(S, P, 0, 0)
+    CT = gsw.CT_from_t(SA, T, P)
+    N2, p_mid = gsw.Nsquared(SA, CT, P, lat)
+    return N2, p_mid

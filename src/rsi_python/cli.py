@@ -133,6 +133,8 @@ def _cmd_eps(args):
         diss_kwargs["overlap"] = args.overlap
     if args.speed is not None:
         diss_kwargs["speed"] = args.speed
+    if args.salinity is not None:
+        diss_kwargs["salinity"] = args.salinity
 
     jobs = args.jobs
     if jobs == 0:
@@ -183,6 +185,8 @@ def _cmd_chi(args):
         chi_kwargs["overlap"] = args.overlap
     if args.speed is not None:
         chi_kwargs["speed"] = args.speed
+    if args.salinity is not None:
+        chi_kwargs["salinity"] = args.salinity
 
     # Load epsilon datasets if Method 1
     if args.epsilon_dir is not None:
@@ -251,6 +255,8 @@ def _cmd_pipeline(args):
     }
     if args.speed is not None:
         diss_kwargs["speed"] = args.speed
+    if args.salinity is not None:
+        diss_kwargs["salinity"] = args.salinity
 
     chi_kwargs = {
         "fft_length": args.chi_fft_length,
@@ -261,6 +267,8 @@ def _cmd_pipeline(args):
     }
     if args.speed is not None:
         chi_kwargs["speed"] = args.speed
+    if args.salinity is not None:
+        chi_kwargs["salinity"] = args.salinity
 
     for f in p_files:
         print(f"\n{'=' * 60}")
@@ -361,6 +369,8 @@ def _add_eps_parser(subparsers):
                    help="Disable Goodman coherent noise removal")
     p.add_argument("--f-AA", type=float, default=98.0,
                    help="Anti-aliasing filter cutoff [Hz] (default: 98)")
+    p.add_argument("--salinity", type=float, default=None,
+                   help="Salinity [PSU] for viscosity (default: 35, fixed S)")
     p.set_defaults(func=_cmd_eps)
 
 
@@ -397,6 +407,8 @@ def _add_chi_parser(subparsers):
                    help="Theoretical spectrum model (default: batchelor)")
     p.add_argument("--f-AA", type=float, default=98.0,
                    help="Anti-aliasing filter cutoff [Hz] (default: 98)")
+    p.add_argument("--salinity", type=float, default=None,
+                   help="Salinity [PSU] for viscosity (default: 35, fixed S)")
     p.set_defaults(func=_cmd_chi)
 
 
@@ -431,6 +443,8 @@ def _add_pipeline_parser(subparsers):
                    help="Theoretical spectrum model for chi (default: batchelor)")
     p.add_argument("--f-AA", type=float, default=98.0,
                    help="Anti-aliasing filter cutoff [Hz] (default: 98)")
+    p.add_argument("--salinity", type=float, default=None,
+                   help="Salinity [PSU] for viscosity (default: 35, fixed S)")
     p.set_defaults(func=_cmd_pipeline)
 
 
@@ -457,35 +471,3 @@ def main():
     args.func(args)
 
 
-# ---------------------------------------------------------------------------
-# Legacy entry points (kept for backwards compatibility)
-# ---------------------------------------------------------------------------
-
-def p2nc():
-    """Legacy entry point for p2nc."""
-    sys.argv = ["rsi-tpw", "nc"] + sys.argv[1:]
-    main()
-
-
-def pinfo():
-    """Legacy entry point for pinfo."""
-    sys.argv = ["rsi-tpw", "info"] + sys.argv[1:]
-    main()
-
-
-def p2prof():
-    """Legacy entry point for p2prof."""
-    sys.argv = ["rsi-tpw", "prof"] + sys.argv[1:]
-    main()
-
-
-def p2eps():
-    """Legacy entry point for p2eps."""
-    sys.argv = ["rsi-tpw", "eps"] + sys.argv[1:]
-    main()
-
-
-def p2chi():
-    """Legacy entry point for p2chi."""
-    sys.argv = ["rsi-tpw", "chi"] + sys.argv[1:]
-    main()
