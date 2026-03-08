@@ -1,0 +1,28 @@
+# Data files (large)
+VMP/
+*.p
+
+# Rockland ODAS MATLAB reference (third-party)
+odas/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+*.so
+
+# Testing / IDE
+.pytest_cache/
+.benchmarks/
+.coverage
+htmlcov/
+
+# Environment
+.env
+.venv/
+
+# Claude Code
+.claude/
