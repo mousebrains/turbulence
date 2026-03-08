@@ -4,6 +4,9 @@ VMP/
 # Rockland ODAS MATLAB reference (third-party)
 odas/
 
+# Reference papers (large PDFs)
+papers/
+
 # Python
 __pycache__/
 *.py[cod]
