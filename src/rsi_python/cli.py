@@ -617,9 +617,7 @@ def main() -> None:
         prog="rsi-tpw",
         description="rsi-python: Tools for Rockland Scientific microprofiler data.",
     )
-    parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {__version__}"
-    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     _add_info_parser(subparsers)

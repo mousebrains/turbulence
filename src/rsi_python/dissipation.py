@@ -5,6 +5,7 @@ Port of get_diss_odas.m from the ODAS MATLAB library.
 """
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -109,6 +110,7 @@ def _channels_from_pfile(pf, sh_pat, ac_pat, p_name, t_name):
             "source": str(pf.filepath),
             "instrument": pf.config["instrument_info"].get("model", ""),
             "sn": pf.config["instrument_info"].get("sn", ""),
+            "start_time": pf.start_time.isoformat(),
         },
     }
 
@@ -141,7 +143,7 @@ def _channels_from_nc(nc_path, sh_pat, ac_pat, p_name, t_name):
                 accel.append((vname, data))
 
     metadata = {"source": str(nc_path)}
-    for attr in ("instrument_model", "instrument_sn", "source_file"):
+    for attr in ("instrument_model", "instrument_sn", "source_file", "start_time"):
         if hasattr(ds, attr):
             metadata[attr] = getattr(ds, attr)
 
@@ -391,6 +393,21 @@ def get_diss(
             salinity=sal_prof,
         )
         ds.attrs.update(data["metadata"])
+        ds.attrs["history"] = (
+            f"Computed with rsi-python on {datetime.now(timezone.utc).isoformat()}"
+        )
+        # CF time coordinate attributes
+        start_time = data["metadata"].get("start_time", "")
+        t_units = f"seconds since {start_time}" if start_time else "seconds"
+        ds.coords["t"].attrs.update(
+            {
+                "standard_name": "time",
+                "long_name": "time of dissipation estimate",
+                "units": t_units,
+                "calendar": "standard",
+                "axis": "T",
+            }
+        )
         results.append(ds)
 
     return results
@@ -562,26 +579,129 @@ def _compute_profile_diss(
     # Build xarray Dataset
     ds = xr.Dataset(
         {
-            "epsilon": (["probe", "time"], epsilon),
-            "K_max": (["probe", "time"], K_max_out),
-            "mad": (["probe", "time"], mad_out),
-            "fom": (["probe", "time"], fom_out),
-            "K_max_ratio": (["probe", "time"], K_max_ratio_out),
-            "method": (["probe", "time"], method_out),
-            "speed": (["time"], speed_out),
-            "nu": (["time"], nu_out),
-            "P_mean": (["time"], P_out),
-            "T_mean": (["time"], T_out),
-            "spec_shear": (["probe", "freq", "time"], spec_shear),
-            "spec_nasmyth": (["probe", "freq", "time"], spec_nasmyth),
-            "K": (["freq", "time"], K_out),
-            "F": (["freq", "time"], F_out),
+            "epsilon": (
+                ["probe", "time"],
+                epsilon,
+                {
+                    "units": "W kg-1",
+                    "long_name": "TKE dissipation rate",
+                },
+            ),
+            "K_max": (
+                ["probe", "time"],
+                K_max_out,
+                {
+                    "units": "cpm",
+                    "long_name": "upper wavenumber integration limit",
+                },
+            ),
+            "mad": (
+                ["probe", "time"],
+                mad_out,
+                {
+                    "units": "1",
+                    "long_name": "mean absolute deviation of spectral fit in log10 space",
+                },
+            ),
+            "fom": (
+                ["probe", "time"],
+                fom_out,
+                {
+                    "units": "1",
+                    "long_name": "figure of merit (observed/Nasmyth variance ratio)",
+                },
+            ),
+            "K_max_ratio": (
+                ["probe", "time"],
+                K_max_ratio_out,
+                {
+                    "units": "1",
+                    "long_name": "K_max / K_95 spectral resolution ratio",
+                },
+            ),
+            "method": (
+                ["probe", "time"],
+                method_out,
+                {
+                    "long_name": "spectral fitting method",
+                    "flag_values": np.array([0, 1], dtype=np.int8),
+                    "flag_meanings": "variance inertial_subrange",
+                },
+            ),
+            "speed": (
+                ["time"],
+                speed_out,
+                {
+                    "units": "m s-1",
+                    "long_name": "profiling speed",
+                },
+            ),
+            "nu": (
+                ["time"],
+                nu_out,
+                {
+                    "units": "m2 s-1",
+                    "long_name": "kinematic viscosity of sea water",
+                },
+            ),
+            "P_mean": (
+                ["time"],
+                P_out,
+                {
+                    "units": "dbar",
+                    "long_name": "mean sea water pressure",
+                    "standard_name": "sea_water_pressure",
+                    "positive": "down",
+                },
+            ),
+            "T_mean": (
+                ["time"],
+                T_out,
+                {
+                    "units": "degree_Celsius",
+                    "long_name": "mean sea water temperature",
+                    "standard_name": "sea_water_temperature",
+                },
+            ),
+            "spec_shear": (
+                ["probe", "freq", "time"],
+                spec_shear,
+                {
+                    "units": "s-2 cpm-1",
+                    "long_name": "shear wavenumber spectrum (observed, cleaned)",
+                },
+            ),
+            "spec_nasmyth": (
+                ["probe", "freq", "time"],
+                spec_nasmyth,
+                {
+                    "units": "s-2 cpm-1",
+                    "long_name": "Nasmyth theoretical shear spectrum",
+                },
+            ),
+            "K": (
+                ["freq", "time"],
+                K_out,
+                {
+                    "units": "cpm",
+                    "long_name": "wavenumber (cycles per metre)",
+                },
+            ),
+            "F": (
+                ["freq", "time"],
+                F_out,
+                {
+                    "units": "Hz",
+                    "long_name": "frequency",
+                },
+            ),
         },
         coords={
             "probe": shear_names,
             "t": (["time"], t_out),
         },
         attrs={
+            "Conventions": "CF-1.13",
             "fft_length": fft_length,
             "diss_length": diss_length,
             "overlap": overlap,
@@ -592,6 +712,7 @@ def _compute_profile_diss(
             "fit_order": fit_order,
         },
     )
+    ds.coords["probe"].attrs["long_name"] = "shear probe name"
     return ds
 
 

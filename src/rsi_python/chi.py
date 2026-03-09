@@ -16,6 +16,7 @@ Peterson, A.K. and I. Fer, 2014: Dissipation measurements using temperature
     microstructure from an underwater glider. Methods in Oceanography, 10, 44-69.
 """
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -513,6 +514,21 @@ def get_chi(
             salinity=sal_prof,
         )
         ds.attrs.update(data["metadata"])
+        ds.attrs["history"] = (
+            f"Computed with rsi-python on {datetime.now(timezone.utc).isoformat()}"
+        )
+        # CF time coordinate attributes
+        start_time = data["metadata"].get("start_time", "")
+        t_units = f"seconds since {start_time}" if start_time else "seconds"
+        ds.coords["t"].attrs.update(
+            {
+                "standard_name": "time",
+                "long_name": "time of chi estimate",
+                "units": t_units,
+                "calendar": "standard",
+                "axis": "T",
+            }
+        )
         results.append(ds)
 
     return results
@@ -809,27 +825,136 @@ def _compute_profile_chi(
     # Build xarray Dataset
     ds = xr.Dataset(
         {
-            "chi": (["probe", "time"], chi_out),
-            "epsilon_T": (["probe", "time"], eps_out),
-            "kB": (["probe", "time"], kB_out),
-            "K_max_T": (["probe", "time"], K_max_out),
-            "fom": (["probe", "time"], fom_out),
-            "K_max_ratio": (["probe", "time"], K_max_ratio_out),
-            "speed": (["time"], speed_out),
-            "nu": (["time"], nu_out),
-            "P_mean": (["time"], P_out),
-            "T_mean": (["time"], T_out),
-            "spec_gradT": (["probe", "freq", "time"], spec_gradT),
-            "spec_batch": (["probe", "freq", "time"], spec_batch),
-            "spec_noise": (["freq", "time"], spec_noise_out),
-            "K": (["freq", "time"], K_out),
-            "F": (["freq", "time"], F_out),
+            "chi": (
+                ["probe", "time"],
+                chi_out,
+                {
+                    "units": "K2 s-1",
+                    "long_name": "thermal variance dissipation rate",
+                },
+            ),
+            "epsilon_T": (
+                ["probe", "time"],
+                eps_out,
+                {
+                    "units": "W kg-1",
+                    "long_name": "TKE dissipation rate from temperature",
+                },
+            ),
+            "kB": (
+                ["probe", "time"],
+                kB_out,
+                {
+                    "units": "cpm",
+                    "long_name": "Batchelor wavenumber",
+                },
+            ),
+            "K_max_T": (
+                ["probe", "time"],
+                K_max_out,
+                {
+                    "units": "cpm",
+                    "long_name": "upper wavenumber integration limit for chi",
+                },
+            ),
+            "fom": (
+                ["probe", "time"],
+                fom_out,
+                {
+                    "units": "1",
+                    "long_name": "figure of merit (observed/model variance ratio)",
+                },
+            ),
+            "K_max_ratio": (
+                ["probe", "time"],
+                K_max_ratio_out,
+                {
+                    "units": "1",
+                    "long_name": "K_max / kB spectral resolution ratio",
+                },
+            ),
+            "speed": (
+                ["time"],
+                speed_out,
+                {
+                    "units": "m s-1",
+                    "long_name": "profiling speed",
+                },
+            ),
+            "nu": (
+                ["time"],
+                nu_out,
+                {
+                    "units": "m2 s-1",
+                    "long_name": "kinematic viscosity of sea water",
+                },
+            ),
+            "P_mean": (
+                ["time"],
+                P_out,
+                {
+                    "units": "dbar",
+                    "long_name": "mean sea water pressure",
+                    "standard_name": "sea_water_pressure",
+                    "positive": "down",
+                },
+            ),
+            "T_mean": (
+                ["time"],
+                T_out,
+                {
+                    "units": "degree_Celsius",
+                    "long_name": "mean sea water temperature",
+                    "standard_name": "sea_water_temperature",
+                },
+            ),
+            "spec_gradT": (
+                ["probe", "freq", "time"],
+                spec_gradT,
+                {
+                    "units": "K2 m-1",
+                    "long_name": "temperature gradient wavenumber spectrum (observed)",
+                },
+            ),
+            "spec_batch": (
+                ["probe", "freq", "time"],
+                spec_batch,
+                {
+                    "units": "K2 m-1",
+                    "long_name": "fitted Batchelor temperature gradient spectrum",
+                },
+            ),
+            "spec_noise": (
+                ["freq", "time"],
+                spec_noise_out,
+                {
+                    "units": "K2 m-1",
+                    "long_name": "FP07 electronics noise spectrum",
+                },
+            ),
+            "K": (
+                ["freq", "time"],
+                K_out,
+                {
+                    "units": "cpm",
+                    "long_name": "wavenumber (cycles per metre)",
+                },
+            ),
+            "F": (
+                ["freq", "time"],
+                F_out,
+                {
+                    "units": "Hz",
+                    "long_name": "frequency",
+                },
+            ),
         },
         coords={
             "probe": therm_names,
             "t": (["time"], t_out),
         },
         attrs={
+            "Conventions": "CF-1.13",
             "fft_length": fft_length,
             "diss_length": diss_length,
             "overlap": overlap,
@@ -841,6 +966,7 @@ def _compute_profile_chi(
             "f_AA": f_AA,
         },
     )
+    ds.coords["probe"].attrs["long_name"] = "thermistor probe name"
     return ds
 
 

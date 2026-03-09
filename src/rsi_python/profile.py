@@ -161,6 +161,8 @@ def extract_profiles(
         for attr in data["global_attrs"]:
             setattr(ds, attr, data["global_attrs"][attr])
 
+        ds.Conventions = "CF-1.13"
+
         # Profile metadata
         ds.profile_number = pi
         ds.profile_start_index_slow = int(s_slow)
@@ -181,11 +183,17 @@ def extract_profiles(
         t_fast_var[:] = data["t_fast"][s_fast:e_fast]
         t_fast_var.units = data.get("t_fast_units", "seconds")
         t_fast_var.long_name = "time (fast channels)"
+        t_fast_var.standard_name = "time"
+        t_fast_var.calendar = "standard"
+        t_fast_var.axis = "T"
 
         t_slow_var = ds.createVariable("t_slow", "f8", ("time_slow",), zlib=True)
         t_slow_var[:] = data["t_slow"][s_slow:s_slow_end]
         t_slow_var.units = data.get("t_slow_units", "seconds")
         t_slow_var.long_name = "time (slow channels)"
+        t_slow_var.standard_name = "time"
+        t_slow_var.calendar = "standard"
+        t_slow_var.axis = "T"
 
         # Channel data
         for ch_name, ch_data, dim, attrs in data["channels"]:
@@ -240,6 +248,7 @@ def _load_from_pfile(pf):
         channels.append((ch_name, ch_data, dim, attrs))
 
     global_attrs = {
+        "Conventions": "CF-1.13",
         "instrument_model": pf.config["instrument_info"].get("model", ""),
         "instrument_sn": pf.config["instrument_info"].get("sn", ""),
         "operator": pf.config["cruise_info"].get("operator", ""),

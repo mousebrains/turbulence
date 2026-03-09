@@ -47,3 +47,42 @@ def test_p_to_netcdf_roundtrip(skip_no_data, tmp_path):
     np.testing.assert_allclose(P_nc, pf.channels["P"].astype(np.float32), rtol=1e-5)
 
     ds.close()
+
+
+def test_cf_compliance(skip_no_data, tmp_path):
+    """Output NetCDF should be CF-1.13 compliant."""
+    import netCDF4 as nc
+
+    from rsi_python.convert import p_to_netcdf
+
+    out_path = tmp_path / "test_cf.nc"
+    pf, nc_path = p_to_netcdf(SAMPLE_FILE, out_path)
+    ds = nc.Dataset(str(nc_path), "r")
+
+    # Required global attributes
+    assert ds.Conventions == "CF-1.13"
+    assert hasattr(ds, "title")
+    assert hasattr(ds, "history")
+
+    # Time coordinate variables
+    for tvar_name in ("t_fast", "t_slow"):
+        tvar = ds.variables[tvar_name]
+        assert tvar.standard_name == "time"
+        assert tvar.calendar == "standard"
+        assert tvar.axis == "T"
+        assert "seconds since" in tvar.units
+
+    # Pressure variable CF attributes
+    P_var = ds.variables["P"]
+    assert P_var.standard_name == "sea_water_pressure"
+    assert P_var.positive == "down"
+
+    # All data variables should have units and long_name
+    for vname in ds.variables:
+        if vname in ("t_fast", "t_slow"):
+            continue
+        var = ds.variables[vname]
+        assert hasattr(var, "units"), f"{vname} missing units"
+        assert hasattr(var, "long_name"), f"{vname} missing long_name"
+
+    ds.close()

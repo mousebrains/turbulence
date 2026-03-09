@@ -359,6 +359,14 @@ class TestIntegration:
         assert len(data["accel"]) >= 1
         assert data["fs_fast"] > 400
 
+    def test_load_channels_has_start_time(self, skip_no_data):
+        """load_channels metadata should include start_time for CF time units."""
+        from rsi_python.dissipation import load_channels
+
+        data = load_channels(PROFILE_FILE)
+        assert "start_time" in data["metadata"]
+        assert len(data["metadata"]["start_time"]) > 0
+
     def test_get_diss_produces_valid_epsilon(self, skip_no_data):
         """Epsilon values should be in a reasonable range."""
         from rsi_python.dissipation import get_diss
@@ -389,6 +397,86 @@ class TestIntegration:
         valid_kmr = kmr[np.isfinite(kmr)]
         assert len(valid_kmr) > 0, "No finite K_max_ratio values"
         assert np.all(valid_kmr > 0), "K_max_ratio should be positive"
+
+    def test_epsilon_cf_compliance(self, skip_no_data):
+        """Epsilon dataset should have CF-1.13 attributes on all variables."""
+        from rsi_python.dissipation import get_diss
+
+        results = get_diss(PROFILE_FILE, fft_length=256, goodman=True)
+        ds = results[0]
+
+        # Global attributes
+        assert ds.attrs["Conventions"] == "CF-1.13"
+        assert "history" in ds.attrs
+
+        # Time coordinate
+        t = ds.coords["t"]
+        assert t.attrs["standard_name"] == "time"
+        assert t.attrs["calendar"] == "standard"
+        assert t.attrs["axis"] == "T"
+        assert "seconds since" in t.attrs["units"]
+
+        # All data variables should have units and long_name
+        for vname in ds.data_vars:
+            var = ds[vname]
+            assert "long_name" in var.attrs, f"{vname} missing long_name"
+            if vname == "method":
+                assert "flag_values" in var.attrs, "method missing flag_values"
+                assert "flag_meanings" in var.attrs, "method missing flag_meanings"
+            else:
+                assert "units" in var.attrs, f"{vname} missing units"
+
+        # Standard names on known physical variables
+        assert ds["P_mean"].attrs["standard_name"] == "sea_water_pressure"
+        assert ds["P_mean"].attrs["positive"] == "down"
+        assert ds["T_mean"].attrs["standard_name"] == "sea_water_temperature"
+
+        # Specific units checks
+        assert ds["epsilon"].attrs["units"] == "W kg-1"
+        assert ds["speed"].attrs["units"] == "m s-1"
+        assert ds["nu"].attrs["units"] == "m2 s-1"
+        assert ds["P_mean"].attrs["units"] == "dbar"
+        assert ds["T_mean"].attrs["units"] == "degree_Celsius"
+        assert ds["K"].attrs["units"] == "cpm"
+        assert ds["F"].attrs["units"] == "Hz"
+
+        # Probe coordinate
+        assert "long_name" in ds.coords["probe"].attrs
+
+    def test_epsilon_file_cf_compliance(self, skip_no_data, tmp_path):
+        """Epsilon NetCDF file should roundtrip with CF attributes intact."""
+        import xarray as xr
+
+        from rsi_python.dissipation import compute_diss_file
+
+        eps_paths = compute_diss_file(PROFILE_FILE, tmp_path, fft_length=256, goodman=True)
+        ds = xr.open_dataset(eps_paths[0])
+        assert ds.attrs["Conventions"] == "CF-1.13"
+        assert ds["epsilon"].attrs["units"] == "W kg-1"
+        assert "history" in ds.attrs
+        ds.close()
+
+    def test_profile_cf_compliance(self, skip_no_data, tmp_path):
+        """Profile NetCDF should have CF-1.13 attributes."""
+        import netCDF4 as nc
+
+        from rsi_python.profile import extract_profiles
+
+        prof_dir = tmp_path / "prof_cf"
+        prof_paths = extract_profiles(PROFILE_FILE, prof_dir)
+        assert len(prof_paths) >= 1
+
+        ds = nc.Dataset(str(prof_paths[0]), "r")
+        assert ds.Conventions == "CF-1.13"
+
+        for tvar_name in ("t_fast", "t_slow"):
+            tvar = ds.variables[tvar_name]
+            assert tvar.standard_name == "time"
+            assert tvar.calendar == "standard"
+            assert tvar.axis == "T"
+            assert "seconds since" in tvar.units
+
+        ds.close()
 
     def test_salinity_passthrough(self, skip_no_data):
         """get_diss with salinity should use gsw-based viscosity."""

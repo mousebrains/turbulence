@@ -44,6 +44,7 @@ def p_to_netcdf(
 
     ds = nc.Dataset(str(nc_filepath), "w", format="NETCDF4")
 
+    ds.Conventions = "CF-1.13"
     ds.title = f"VMP data from {pf.filepath.name}"
     ds.instrument_model = pf.config["instrument_info"].get("model", "")
     ds.instrument_sn = pf.config["instrument_info"].get("sn", "")
@@ -63,11 +64,17 @@ def p_to_netcdf(
     t_fast_var[:] = pf.t_fast
     t_fast_var.units = f"seconds since {pf.start_time.isoformat()}"
     t_fast_var.long_name = "time (fast channels)"
+    t_fast_var.standard_name = "time"
+    t_fast_var.calendar = "standard"
+    t_fast_var.axis = "T"
 
     t_slow_var = ds.createVariable("t_slow", "f8", ("time_slow",), zlib=True)
     t_slow_var[:] = pf.t_slow
     t_slow_var.units = f"seconds since {pf.start_time.isoformat()}"
     t_slow_var.long_name = "time (slow channels)"
+    t_slow_var.standard_name = "time"
+    t_slow_var.calendar = "standard"
+    t_slow_var.axis = "T"
 
     for ch_name, data in pf.channels.items():
         info = pf.channel_info[ch_name]
@@ -78,6 +85,9 @@ def p_to_netcdf(
         var.units = info["units"]
         var.sensor_type = info["type"]
         var.long_name = ch_name
+        if var_name == "P":
+            var.standard_name = "sea_water_pressure"
+            var.positive = "down"
 
     ds.configuration_string = pf.config_str
     ds.close()

@@ -360,6 +360,65 @@ class TestChiIntegration:
         assert ds["fom"].shape == ds["chi"].shape
         assert ds["K_max_ratio"].shape == ds["chi"].shape
 
+    def test_chi_cf_compliance(self, skip_no_data):
+        """Chi dataset should have CF-1.13 attributes on all variables."""
+        from rsi_python.chi import get_chi
+
+        results = get_chi(PROFILE_FILE, fft_length=512)
+        ds = results[0]
+
+        # Global attributes
+        assert ds.attrs["Conventions"] == "CF-1.13"
+        assert "history" in ds.attrs
+
+        # Time coordinate
+        t = ds.coords["t"]
+        assert t.attrs["standard_name"] == "time"
+        assert t.attrs["calendar"] == "standard"
+        assert t.attrs["axis"] == "T"
+        assert "seconds since" in t.attrs["units"]
+
+        # All data variables should have units and long_name
+        for vname in ds.data_vars:
+            var = ds[vname]
+            assert "units" in var.attrs, f"{vname} missing units"
+            assert "long_name" in var.attrs, f"{vname} missing long_name"
+
+        # Standard names on known physical variables
+        assert ds["P_mean"].attrs["standard_name"] == "sea_water_pressure"
+        assert ds["P_mean"].attrs["positive"] == "down"
+        assert ds["T_mean"].attrs["standard_name"] == "sea_water_temperature"
+
+        # Chi-specific units checks
+        assert ds["chi"].attrs["units"] == "K2 s-1"
+        assert ds["epsilon_T"].attrs["units"] == "W kg-1"
+        assert ds["kB"].attrs["units"] == "cpm"
+        assert ds["speed"].attrs["units"] == "m s-1"
+        assert ds["nu"].attrs["units"] == "m2 s-1"
+        assert ds["P_mean"].attrs["units"] == "dbar"
+        assert ds["T_mean"].attrs["units"] == "degree_Celsius"
+        assert ds["spec_gradT"].attrs["units"] == "K2 m-1"
+        assert ds["spec_batch"].attrs["units"] == "K2 m-1"
+        assert ds["spec_noise"].attrs["units"] == "K2 m-1"
+        assert ds["K"].attrs["units"] == "cpm"
+        assert ds["F"].attrs["units"] == "Hz"
+
+        # Probe coordinate
+        assert "long_name" in ds.coords["probe"].attrs
+
+    def test_chi_file_cf_compliance(self, skip_no_data, tmp_path):
+        """Chi NetCDF file should roundtrip with CF attributes intact."""
+        import xarray as xr
+
+        from rsi_python.chi import compute_chi_file
+
+        out_paths = compute_chi_file(PROFILE_FILE, tmp_path, fft_length=512)
+        ds = xr.open_dataset(out_paths[0])
+        assert ds.attrs["Conventions"] == "CF-1.13"
+        assert ds["chi"].attrs["units"] == "K2 s-1"
+        assert "history" in ds.attrs
+        ds.close()
+
     def test_chi_file_output(self, skip_no_data, tmp_path):
         """compute_chi_file should write valid NetCDF."""
         from rsi_python.chi import compute_chi_file
