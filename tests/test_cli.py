@@ -353,7 +353,7 @@ class TestMergeForSection:
 
 
 class TestSetupOutputDir:
-    def test_creates_dir_with_touchfile_and_config(self, tmp_path):
+    def test_creates_dir_with_signature_file_and_config(self, tmp_path):
         from rsi_python.cli import _setup_output_dir
 
         args = SimpleNamespace(output=str(tmp_path))
@@ -373,8 +373,8 @@ class TestSetupOutputDir:
         # config.yaml should have both sections
         import json
 
-        touchfiles = list(d.glob(".params_sha256_*"))
-        content = json.loads(touchfiles[0].read_text())
+        signature_files = list(d.glob(".params_sha256_*"))
+        content = json.loads(signature_files[0].read_text())
         assert "epsilon" in content
         assert "chi" in content
 

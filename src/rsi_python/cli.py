@@ -176,7 +176,7 @@ def _merge_for_section(args, section):
 
 
 def _setup_output_dir(args, prefix, section, params, upstream=None):
-    """Resolve the sequential output directory, write touchfile and config.yaml.
+    """Resolve the sequential output directory, write signature file and config.yaml.
 
     Parameters
     ----------
@@ -716,6 +716,49 @@ def _add_pipeline_parser(subparsers):
     p.set_defaults(func=_cmd_pipeline)
 
 
+def _cmd_ql(args):
+    """Interactive quick-look viewer."""
+    from rsi_python.quick_look import quick_look
+
+    p_files = _resolve_p_files(args.files)
+    for pf_path in p_files:
+        quick_look(
+            pf_path,
+            fft_length=args.fft_length or 256,
+            f_AA=args.f_AA or 98.0,
+            goodman=not args.no_goodman,
+            direction=args.direction or "down",
+        )
+
+
+def _add_ql_parser(subparsers):
+    p = subparsers.add_parser(
+        "ql",
+        help="Interactive quick-look viewer",
+        description="Open an interactive multi-panel viewer with profile navigation.",
+    )
+    p.add_argument("files", nargs="+", metavar="FILE", help=".p file(s) or glob pattern(s)")
+    p.add_argument(
+        "--fft-length", type=int, default=None, help="FFT segment length [samples] (default: 256)"
+    )
+    p.add_argument(
+        "--f-AA", type=float, default=None, help="Anti-aliasing filter cutoff [Hz] (default: 98)"
+    )
+    p.add_argument(
+        "--no-goodman",
+        action="store_true",
+        default=False,
+        help="Disable Goodman coherent noise removal",
+    )
+    p.add_argument(
+        "--direction",
+        default=None,
+        choices=["up", "down"],
+        help="Profile direction (default: down)",
+    )
+    p.set_defaults(func=_cmd_ql)
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -746,6 +789,7 @@ def main() -> None:
     _add_eps_parser(subparsers)
     _add_chi_parser(subparsers)
     _add_pipeline_parser(subparsers)
+    _add_ql_parser(subparsers)
 
     args = parser.parse_args()
     args.func(args)

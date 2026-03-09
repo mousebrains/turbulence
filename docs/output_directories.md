@@ -7,7 +7,7 @@ The `rsi-tpw` CLI uses a sequential, hash-tracked output directory scheme for th
 ```
 results/
   eps_00/
-    .params_sha256_<64-char-hex>      # hash touchfile
+    .params_sha256_<64-char-hex>      # parameter signature file
     config.yaml                        # resolved configuration (human-readable)
     SN479_0001_eps.nc
     SN479_0002_eps.nc
@@ -35,7 +35,7 @@ The `-o/--output` flag specifies the **base directory**. Within it, sequential s
 
 ## How directories are matched
 
-Each output directory contains a hidden **touchfile** named `.params_sha256_<hash>`, where `<hash>` is the full 64-character SHA-256 hex digest of the canonicalized parameters.
+Each output directory contains a hidden **signature file** named `.params_sha256_<hash>`, where `<hash>` is the full 64-character SHA-256 hex digest of the canonicalized parameters.
 
 When you run a command:
 
@@ -43,7 +43,7 @@ When you run a command:
 2. The SHA-256 hash of that string is computed
 3. Existing `{prefix}_NN` directories under the base are scanned for a matching `.params_sha256_<hash>` file
 4. **If found** → that directory is reused (new output files are written there)
-5. **If not found** → the next sequential directory is created with a new touchfile
+5. **If not found** → the next sequential directory is created with a new signature file
 
 This means:
 
@@ -63,7 +63,7 @@ rsi-tpw eps VMP/*.p -o results/ --fft-length 256
 
 ## Touchfile contents
 
-The touchfile is not just a marker — it contains the **canonical JSON** representation of the full parameter set. This makes it possible to inspect exactly which parameters produced a given directory:
+The signature file is not just a marker — it contains the **canonical JSON** representation of the full parameter set. This makes it possible to inspect exactly which parameters produced a given directory:
 
 ```bash
 cat results/eps_00/.params_sha256_*
@@ -104,7 +104,7 @@ For standalone commands (`rsi-tpw eps`, `rsi-tpw chi` without `--epsilon-dir`), 
 
 ## Pipeline subcommand
 
-The `pipeline` subcommand creates both `eps_NN/` and `chi_NN/` subdirectories under the base output directory, each with their own touchfile and resolved config:
+The `pipeline` subcommand creates both `eps_NN/` and `chi_NN/` subdirectories under the base output directory, each with their own signature file and resolved config:
 
 ```bash
 rsi-tpw pipeline VMP/*.p -o results/

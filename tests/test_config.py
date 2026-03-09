@@ -16,7 +16,7 @@ from rsi_python.config import (
     resolve_output_dir,
     validate_config,
     write_resolved_config,
-    write_touchfile,
+    write_signature,
 )
 
 # ---------------------------------------------------------------------------
@@ -273,24 +273,24 @@ class TestDirectoryManagement:
         d_again = resolve_output_dir(tmp_path, "eps", "epsilon", {"fft_length": 256})
         assert d0 == d_again
 
-    def test_touchfile_contains_valid_json(self, tmp_path):
+    def test_signature_file_contains_valid_json(self, tmp_path):
         d = resolve_output_dir(tmp_path, "eps", "epsilon", {"fft_length": 256})
-        touchfiles = list(d.glob(".params_sha256_*"))
-        assert len(touchfiles) == 1
-        content = touchfiles[0].read_text()
+        signature_files = list(d.glob(".params_sha256_*"))
+        assert len(signature_files) == 1
+        content = signature_files[0].read_text()
         parsed = json.loads(content)
         assert parsed["epsilon"]["fft_length"] == 256
 
-    def test_touchfile_name_has_hash(self, tmp_path):
+    def test_signature_file_name_has_hash(self, tmp_path):
         params = {"fft_length": 256}
         d = resolve_output_dir(tmp_path, "eps", "epsilon", params)
         expected_hash = compute_hash("epsilon", params)
-        touchfiles = list(d.glob(".params_sha256_*"))
-        assert len(touchfiles) == 1
-        assert touchfiles[0].name == f".params_sha256_{expected_hash}"
+        signature_files = list(d.glob(".params_sha256_*"))
+        assert len(signature_files) == 1
+        assert signature_files[0].name == f".params_sha256_{expected_hash}"
 
-    def test_write_touchfile_standalone(self, tmp_path):
-        tf = write_touchfile(tmp_path, "epsilon", {"fft_length": 256})
+    def test_write_signature_standalone(self, tmp_path):
+        tf = write_signature(tmp_path, "epsilon", {"fft_length": 256})
         assert tf.exists()
         content = json.loads(tf.read_text())
         assert "fft_length" in content["epsilon"]
@@ -311,13 +311,13 @@ class TestDirectoryManagement:
         d1 = resolve_output_dir(tmp_path, "chi", "chi", {}, upstream=ups)
         assert d0 == d1
 
-    def test_touchfile_with_upstream_contains_all_sections(self, tmp_path):
+    def test_signature_file_with_upstream_contains_all_sections(self, tmp_path):
         """Touchfile should contain both upstream and primary section."""
         ups = [("epsilon", {"fft_length": 256})]
         d = resolve_output_dir(tmp_path, "chi", "chi", {}, upstream=ups)
-        touchfiles = list(d.glob(".params_sha256_*"))
-        assert len(touchfiles) == 1
-        content = json.loads(touchfiles[0].read_text())
+        signature_files = list(d.glob(".params_sha256_*"))
+        assert len(signature_files) == 1
+        content = json.loads(signature_files[0].read_text())
         assert "epsilon" in content
         assert "chi" in content
 

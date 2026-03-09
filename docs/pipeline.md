@@ -75,6 +75,6 @@ See [chi_mathematics.md](chi_mathematics.md) for the mathematical details.
 Output directories use a sequential, hash-tracked naming scheme (`eps_00/`, `eps_01/`, ...) that automatically deduplicates runs with identical parameters. Each output directory contains:
 - NetCDF data files
 - `config.yaml` with the resolved parameters used
-- `.params_sha256_<hash>` touchfile for parameter tracking
+- `.params_sha256_<hash>` signature file for parameter tracking
 
 See [output_directories.md](output_directories.md) for details.

@@ -13,6 +13,7 @@ from rsi_python.nasmyth import nasmyth
 from rsi_python.ocean import buoyancy_freq, density, visc, visc35
 from rsi_python.p_file import PFile, parse_config
 from rsi_python.profile import extract_profiles, get_profiles
+from rsi_python.quick_look import quick_look
 
 __all__ = [
     "PFile",
@@ -31,4 +32,5 @@ __all__ = [
     "get_chi",
     "batchelor_grad",
     "batchelor_kB",
+    "quick_look",
 ]

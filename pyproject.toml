@@ -15,6 +15,7 @@ dependencies = [
     "xarray",
     "gsw",
     "ruamel.yaml>=0.18",
+    "matplotlib",
 ]
 
 [project.optional-dependencies]

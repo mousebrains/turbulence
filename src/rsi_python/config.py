@@ -240,9 +240,9 @@ def resolve_output_dir(
 ) -> Path:
     """Find or create a sequential output directory matching *params*.
 
-    Scans ``base/{prefix}_NN/`` directories for a hash-matching touchfile.
+    Scans ``base/{prefix}_NN/`` directories for a hash-matching signature file.
     If found, returns that directory.  Otherwise creates the next sequential
-    directory and writes the touchfile.
+    directory and writes the signature file.
 
     Parameters
     ----------
@@ -279,31 +279,31 @@ def resolve_output_dir(
         max_seq = max(max_seq, seq)
         if not dp.is_dir():
             continue
-        # Check for matching touchfile
-        touchfile = dp / f".params_sha256_{target_hash}"
-        if touchfile.exists():
+        # Check for matching signature file
+        sig_file = dp / f".params_sha256_{target_hash}"
+        if sig_file.exists():
             return dp
 
     # No match — create next sequential directory
     next_seq = max_seq + 1
     new_dir = base / f"{prefix}_{next_seq:02d}"
     new_dir.mkdir(parents=True, exist_ok=True)
-    write_touchfile(new_dir, section, params, upstream=upstream)
+    write_signature(new_dir, section, params, upstream=upstream)
     return new_dir
 
 
-def write_touchfile(
+def write_signature(
     directory: Path,
     section: str,
     params: dict,
     upstream: list[tuple[str, dict]] | None = None,
 ) -> Path:
-    """Write a ``.params_sha256_<hash>`` touchfile with canonical JSON contents."""
+    """Write a ``.params_sha256_<hash>`` signature file with canonical JSON contents."""
     h = compute_hash(section, params, upstream=upstream)
     canonical = canonicalize(section, params, upstream=upstream)
-    touchfile = directory / f".params_sha256_{h}"
-    touchfile.write_text(canonical)
-    return touchfile
+    sig_file = directory / f".params_sha256_{h}"
+    sig_file.write_text(canonical)
+    return sig_file
 
 
 def write_resolved_config(
