@@ -34,7 +34,7 @@ from rsi_python.batchelor import (
     batchelor_kB,
     kraichnan_grad,
 )
-from rsi_python.fp07 import fp07_tau, fp07_transfer, gradT_noise
+from rsi_python.fp07 import fp07_double_pole, fp07_tau, fp07_transfer, gradT_noise
 from rsi_python.spectral import csd_odas
 
 # ---------------------------------------------------------------------------
@@ -83,8 +83,8 @@ def _chi_from_epsilon(
     # FP07 transfer function
     tau0 = fp07_tau(speed)
     F = K * speed
-    # FP07 transfer function (single-pole for now; H2 used below as H2_fine)
-    fp07_transfer(F, tau0) if fp07_model == "single_pole" else fp07_transfer(F, tau0)
+    # FP07 transfer function selector
+    _h2 = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
 
     # Noise spectrum
     noise_f = gradT_noise(F, T_mean, speed, fs=fs, diff_gain=diff_gain)[0]
@@ -121,7 +121,7 @@ def _chi_from_epsilon(
 
     # Resolved Batchelor variance (with FP07 rolloff)
     F_fine = K_fine * speed
-    H2_fine = fp07_transfer(F_fine, tau0)
+    H2_fine = _h2(F_fine, tau0)
     mask_resolved = K_fine <= K_max
     V_resolved = np.trapezoid(
         spec_batch_fine[mask_resolved] * H2_fine[mask_resolved], K_fine[mask_resolved]
@@ -300,7 +300,7 @@ def _iterative_fit(
     )
 
     if chi_obs <= 0:
-        chi_obs = 1e-10
+        chi_obs = 1e-11
 
     # Iterative refinement (3 iterations)
     kB_best = np.nan
@@ -354,7 +354,7 @@ def _iterative_fit(
         chi_obs = max(chi_obs_new, 0) + chi_low + chi_high
 
         if chi_obs <= 0:
-            chi_obs = 1e-10
+            chi_obs = 1e-11
 
     # Final values
     chi = chi_obs
@@ -762,7 +762,7 @@ def _compute_profile_chi(
                     continue
                 chi_obs = 6 * KAPPA_T * np.trapezoid(obs_above_noise[mask], K[mask])
                 if chi_obs <= 0:
-                    chi_obs = 1e-10
+                    chi_obs = 1e-11
 
                 if fit_method == "iterative":
                     kB_val, chi_val, eps_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = (
