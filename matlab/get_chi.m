@@ -140,6 +140,10 @@ function results = get_chi(gradT, P_fast, T_slow, speed, fs_fast, options)
         nu = visc35(T_mean);  % uses ODAS visc35 or our simple version
         nu_out(j) = nu;
 
+        if ~isfinite(nu) || nu <= 0
+            continue  % skip windows with unphysical viscosity
+        end
+
         K = F ./ W_mean;
         K_out(:, j) = K;
 
