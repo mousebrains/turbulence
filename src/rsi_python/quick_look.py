@@ -800,51 +800,88 @@ class QuickLookViewer:
         K, F, obs_spectra, methods_results, noise_K, mean_speed, nu = self._cached_chi
 
         # Line styles for each method
-        method_styles = {
-            "M1": ("--", 0.7),
-            "M2-MLE": ("-.", 0.7),
-            "M2-Iter": (":", 0.7),
-        }
+        method_styles = [
+            ("M1", "--", 0.7),
+            ("M2-MLE", "-.", 0.7),
+            ("M2-Iter", ":", 0.7),
+        ]
         colors = ["C3", "C1", "C4", "C5"]
+        n_probes = len(self.therm_fast)
+
+        # Plot all lines (no labels yet — legend order controlled manually)
+        obs_lines = []
+        method_lines = {m: [] for m, _, _ in method_styles}
         for i, (name, _) in enumerate(self.therm_fast):
             c = colors[i % len(colors)]
             valid = np.isfinite(obs_spectra[i]) & (obs_spectra[i] > 0)
             if np.any(valid):
-                ax.loglog(K[valid], obs_spectra[i][valid], c, linewidth=0.8, label=name)
+                (line,) = ax.loglog(K[valid], obs_spectra[i][valid], c, linewidth=0.8)
+                obs_lines.append((line, name))
+            else:
+                obs_lines.append(None)
 
-            for method_name, (ls, alpha) in method_styles.items():
+            for method_name, ls, alpha in method_styles:
                 batch_spec, chi_val, kB_val = methods_results[method_name][i]
                 valid_b = np.isfinite(batch_spec) & (batch_spec > 0)
                 if np.any(valid_b):
                     chi_str = f"{chi_val:.1e}" if np.isfinite(chi_val) else "N/A"
-                    ax.loglog(
+                    (line,) = ax.loglog(
                         K[valid_b],
                         batch_spec[valid_b],
                         c,
                         linewidth=0.5,
                         linestyle=ls,
                         alpha=alpha,
-                        label=f"{method_name} χ={chi_str}",
                     )
+                    method_lines[method_name].append((line, f"{method_name} χ={chi_str}"))
+                else:
+                    method_lines[method_name].append(None)
 
         valid_n = np.isfinite(noise_K) & (noise_K > 0) & (K > 0)
+        noise_line = None
         if np.any(valid_n):
-            ax.loglog(
-                K[valid_n],
-                noise_K[valid_n],
-                "0.5",
-                linewidth=0.8,
-                linestyle=":",
-                label="Noise",
-            )
+            (nl,) = ax.loglog(K[valid_n], noise_K[valid_n], "0.5", linewidth=0.8, linestyle=":")
+            noise_line = (nl, "Noise")
 
         K_AA = self.f_AA / mean_speed
         ax.axvline(K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5)
 
+        # Build legend: left column = probe 0, right column = probe 1.
+        # matplotlib ncol fills column-major: entries 0..N/2-1 go in left col,
+        # N/2..N-1 in right col.  So we build per-column lists then concatenate.
+        rows = [obs_lines] + [method_lines[m] for m, _, _ in method_styles]
+        columns = [[] for _ in range(n_probes)]
+        for col in range(n_probes):
+            for row in rows:
+                if col < len(row) and row[col] is not None:
+                    columns[col].append(row[col])
+                else:
+                    (ph,) = ax.plot([], [], alpha=0)
+                    columns[col].append((ph, ""))
+            # Noise in the last row of each column
+            if col == 0 and noise_line is not None:
+                columns[col].append(noise_line)
+            else:
+                (ph,) = ax.plot([], [], alpha=0)
+                columns[col].append((ph, ""))
+
+        # Pad columns to equal length
+        max_len = max(len(c) for c in columns)
+        for col in columns:
+            while len(col) < max_len:
+                (ph,) = ax.plot([], [], alpha=0)
+                col.append((ph, ""))
+
+        handles, labels = [], []
+        for col in columns:
+            for h, lbl in col:
+                handles.append(h)
+                labels.append(lbl)
+
         ax.set_xlabel("Wavenumber [cpm]")
         ax.set_ylabel("Φ_T(k) [(K/m)² cpm⁻¹]")
         ax.set_xlim(0.5, 300)
-        ax.legend(fontsize=5, loc="best", ncol=2)
+        ax.legend(handles, labels, fontsize=5, loc="best", ncol=n_probes)
         ax.set_title(f"Temperature gradient spectra (speed={mean_speed:.2f} m/s)", fontsize=9)
         ax.grid(True, alpha=0.3, which="both")
 
