@@ -998,37 +998,37 @@ class QuickLookViewer:
             self._draw()
 
     def _on_spec_up(self, event):
-        """Shift spectral pressure range upward (shallower) by one bin width."""
+        """Shift spectral pressure range upward (shallower) by the window width."""
         s_slow, e_slow = self.profiles[self.profile_idx]
         P_top = float(min(self.P[s_slow], self.P[e_slow]))
         bw = self._spec_bin_width or 1.0
         if self.spec_P_range is None:
-            # Initialize to first bin at top of profile
             self.spec_P_range = (P_top, P_top + bw)
         else:
-            new_lo = self.spec_P_range[0] - bw
-            new_hi = self.spec_P_range[1] - bw
+            step = self.spec_P_range[1] - self.spec_P_range[0]
+            new_lo = self.spec_P_range[0] - step
+            new_hi = self.spec_P_range[1] - step
             if new_lo < P_top:
                 new_lo = P_top
-                new_hi = P_top + bw
+                new_hi = P_top + step
             self.spec_P_range = (new_lo, new_hi)
         self._draw()
 
     def _on_spec_dn(self, event):
-        """Shift spectral pressure range downward (deeper) by one bin width."""
+        """Shift spectral pressure range downward (deeper) by the window width."""
         s_slow, e_slow = self.profiles[self.profile_idx]
         P_bot = float(max(self.P[s_slow], self.P[e_slow]))
         P_top = float(min(self.P[s_slow], self.P[e_slow]))
         bw = self._spec_bin_width or 1.0
         if self.spec_P_range is None:
-            # Initialize to first bin at top of profile
             self.spec_P_range = (P_top, P_top + bw)
         else:
-            new_lo = self.spec_P_range[0] + bw
-            new_hi = self.spec_P_range[1] + bw
+            step = self.spec_P_range[1] - self.spec_P_range[0]
+            new_lo = self.spec_P_range[0] + step
+            new_hi = self.spec_P_range[1] + step
             if new_hi > P_bot:
                 new_hi = P_bot
-                new_lo = P_bot - bw
+                new_lo = P_bot - step
             self.spec_P_range = (new_lo, new_hi)
         self._draw()
 
