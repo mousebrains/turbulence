@@ -80,6 +80,75 @@ class TestConvertPoly:
         assert units == "counts"
 
 
+class TestSafeFloat:
+    def test_invalid_string(self):
+        from rsi_python.channels import _safe_float
+
+        assert _safe_float("invalid") == 0.0
+
+    def test_invalid_string_custom_default(self):
+        from rsi_python.channels import _safe_float
+
+        assert _safe_float("invalid", default=42.0) == 42.0
+
+    def test_none(self):
+        from rsi_python.channels import _safe_float
+
+        assert _safe_float(None) == 0.0
+
+    def test_none_custom_default(self):
+        from rsi_python.channels import _safe_float
+
+        assert _safe_float(None, default=-1.0) == -1.0
+
+    def test_valid_string(self):
+        from rsi_python.channels import _safe_float
+
+        assert _safe_float("3.14") == 3.14
+
+
+class TestConvertThermBeta3:
+    def test_beta3_path(self):
+        """Thermistor conversion with beta_2 and beta_3 set."""
+        params = {
+            "a": "0",
+            "b": "1",
+            "adc_fs": "4.096",
+            "adc_bits": "16",
+            "g": "6.0",
+            "e_b": "0.68",
+            "t_0": "289.0",
+            "beta_1": "3000",
+            "beta_2": "50000",
+            "beta_3": "1000000",
+        }
+        data = np.array([0.0, 1000.0, 5000.0, 10000.0, 15000.0])
+        T, units = convert_therm(data, params)
+        assert units == "deg_C"
+        assert np.all(np.isfinite(T))
+        # With beta_2 and beta_3, temperatures should still be in plausible range
+        assert np.all(T > -20)
+        assert np.all(T < 60)
+
+    def test_beta2_only(self):
+        """Thermistor conversion with beta_2 but no beta_3."""
+        params = {
+            "a": "0",
+            "b": "1",
+            "adc_fs": "4.096",
+            "adc_bits": "16",
+            "g": "6.0",
+            "e_b": "0.68",
+            "t_0": "289.0",
+            "beta_1": "3000",
+            "beta_2": "50000",
+        }
+        data = np.array([0.0, 1000.0, 5000.0])
+        T, units = convert_therm(data, params)
+        assert units == "deg_C"
+        assert np.all(np.isfinite(T))
+
+
 class TestConvertRaw:
     def test_passthrough(self):
         """Raw converter is identity."""

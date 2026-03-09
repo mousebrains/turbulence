@@ -435,3 +435,251 @@ def test_init_default_path(monkeypatch, tmp_path):
 
     main()
     assert (tmp_path / "config.yaml").exists()
+
+
+# ---------------------------------------------------------------------------
+# _resolve_p_files / _resolve_files tests
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_p_files_single(sample_p_file):
+    """_resolve_p_files with a real .p file path should return it."""
+    from rsi_python.cli import _resolve_p_files
+
+    result = _resolve_p_files([str(sample_p_file)])
+    assert len(result) == 1
+    assert result[0].name == sample_p_file.name
+
+
+def test_resolve_p_files_no_match():
+    """_resolve_p_files with no matching glob should exit(1)."""
+    from rsi_python.cli import _resolve_p_files
+
+    with pytest.raises(SystemExit) as exc_info:
+        _resolve_p_files(["nonexistent_dir_xyz/*.p"])
+    assert exc_info.value.code == 1
+
+
+def test_resolve_files_with_extensions(sample_p_file):
+    """_resolve_files should filter by extension set."""
+    from rsi_python.cli import _resolve_files
+
+    result = _resolve_files([str(sample_p_file)], extensions={".p"})
+    assert len(result) == 1
+    assert result[0].suffix == ".p"
+
+
+def test_resolve_files_no_match():
+    """_resolve_files with no matching files should exit(1)."""
+    from rsi_python.cli import _resolve_files
+
+    with pytest.raises(SystemExit) as exc_info:
+        _resolve_files(["nonexistent_dir_xyz/*"], extensions={".p", ".nc"})
+    assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# CLI command execution tests (real data)
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_info(monkeypatch, sample_p_file, capsys):
+    """rsi-tpw info should print file summary."""
+    monkeypatch.setattr(sys, "argv", ["rsi-tpw", "info", str(sample_p_file)])
+    from rsi_python.cli import main
+
+    main()
+    captured = capsys.readouterr()
+    assert "SN479" in captured.out or "479" in captured.out
+
+
+def test_cmd_nc_to_dir(monkeypatch, sample_p_file, tmp_path):
+    """rsi-tpw nc <file> -o <dir> should create a .nc file."""
+    out_dir = tmp_path / "nc_out"
+    out_dir.mkdir()
+    monkeypatch.setattr(sys, "argv", ["rsi-tpw", "nc", str(sample_p_file), "-o", str(out_dir)])
+    from rsi_python.cli import main
+
+    main()
+    nc_files = list(out_dir.glob("*.nc"))
+    assert len(nc_files) == 1
+
+
+def test_cmd_nc_to_file(monkeypatch, sample_p_file, tmp_path):
+    """rsi-tpw nc with single file and explicit output path."""
+    out_file = tmp_path / "output.nc"
+    monkeypatch.setattr(sys, "argv", ["rsi-tpw", "nc", str(sample_p_file), "-o", str(out_file)])
+    from rsi_python.cli import main
+
+    main()
+    assert out_file.exists()
+    assert out_file.stat().st_size > 0
+
+
+def test_cmd_prof(monkeypatch, sample_p_file, tmp_path):
+    """rsi-tpw prof should extract profiles to sequential output dir."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["rsi-tpw", "prof", str(sample_p_file), "-o", str(tmp_path)],
+    )
+    from rsi_python.cli import main
+
+    main()
+    # Should create a sequential directory like prof_00/
+    prof_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("prof_")]
+    assert len(prof_dirs) >= 1
+    # Should have at least one profile .nc file
+    nc_files = list(prof_dirs[0].glob("*.nc"))
+    assert len(nc_files) >= 1
+
+
+def test_cmd_eps_serial(monkeypatch, sample_p_file, tmp_path):
+    """rsi-tpw eps with jobs=1 (serial) should produce epsilon output."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rsi-tpw",
+            "eps",
+            str(sample_p_file),
+            "-o",
+            str(tmp_path),
+            "-j",
+            "1",
+        ],
+    )
+    from rsi_python.cli import main
+
+    main()
+    eps_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("eps_")]
+    assert len(eps_dirs) >= 1
+    nc_files = list(eps_dirs[0].glob("*_eps.nc"))
+    assert len(nc_files) >= 1
+
+
+def test_cmd_eps_parallel(monkeypatch, sample_p_file, tmp_path):
+    """rsi-tpw eps with -j 2 (parallel) should produce epsilon output."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rsi-tpw",
+            "eps",
+            str(sample_p_file),
+            "-o",
+            str(tmp_path),
+            "-j",
+            "2",
+        ],
+    )
+    from rsi_python.cli import main
+
+    main()
+    eps_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("eps_")]
+    assert len(eps_dirs) >= 1
+    nc_files = list(eps_dirs[0].glob("*_eps.nc"))
+    assert len(nc_files) >= 1
+
+
+def test_cmd_chi_method2(monkeypatch, sample_p_file, tmp_path):
+    """rsi-tpw chi without --epsilon-dir should use Method 2."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rsi-tpw",
+            "chi",
+            str(sample_p_file),
+            "-o",
+            str(tmp_path),
+            "-j",
+            "1",
+        ],
+    )
+    from rsi_python.cli import main
+
+    main()
+    chi_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("chi_")]
+    assert len(chi_dirs) >= 1
+    nc_files = list(chi_dirs[0].glob("*_chi.nc"))
+    assert len(nc_files) >= 1
+
+
+def test_cmd_chi_method1(monkeypatch, sample_p_file, tmp_path):
+    """rsi-tpw chi with --epsilon-dir should use Method 1."""
+    from rsi_python.dissipation import compute_diss_file
+
+    eps_dir = tmp_path / "eps_input"
+    eps_dir.mkdir()
+    compute_diss_file(sample_p_file, eps_dir, fft_length=256, goodman=True)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rsi-tpw",
+            "chi",
+            str(sample_p_file),
+            "--epsilon-dir",
+            str(eps_dir),
+            "-o",
+            str(tmp_path),
+            "-j",
+            "1",
+        ],
+    )
+    from rsi_python.cli import main
+
+    main()
+    chi_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("chi_")]
+    assert len(chi_dirs) >= 1
+
+
+def test_cmd_chi_missing_epsilon_warns(monkeypatch, sample_p_file, tmp_path, capsys):
+    """--epsilon-dir pointing to empty dir should warn and use Method 2."""
+    empty_eps_dir = tmp_path / "empty_eps"
+    empty_eps_dir.mkdir()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rsi-tpw",
+            "chi",
+            str(sample_p_file),
+            "--epsilon-dir",
+            str(empty_eps_dir),
+            "-o",
+            str(tmp_path),
+            "-j",
+            "1",
+        ],
+    )
+    from rsi_python.cli import main
+
+    main()
+    captured = capsys.readouterr()
+    assert "Warning" in captured.out or "Method 2" in captured.out
+
+
+def test_cmd_pipeline(monkeypatch, sample_p_file, tmp_path):
+    """rsi-tpw pipeline should produce both eps and chi output."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rsi-tpw",
+            "pipeline",
+            str(sample_p_file),
+            "-o",
+            str(tmp_path),
+        ],
+    )
+    from rsi_python.cli import main
+
+    main()
+    eps_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("eps_")]
+    chi_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("chi_")]
+    assert len(eps_dirs) >= 1
+    assert len(chi_dirs) >= 1

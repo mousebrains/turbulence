@@ -156,6 +156,28 @@ class TestFP07Tau:
         tau_fast = fp07_tau(1.5)
         assert tau_slow > tau_fast  # slower speed = larger time constant
 
+    def test_peterson(self):
+        from rsi_python.fp07 import fp07_tau
+
+        tau = fp07_tau(1.0, model="peterson")
+        # tau = 0.012 * 1.0^(-0.32) = 0.012
+        np.testing.assert_allclose(tau, 0.012, rtol=1e-10)
+
+    def test_goto(self):
+        from rsi_python.fp07 import fp07_tau
+
+        tau = fp07_tau(1.0, model="goto")
+        assert tau == 0.003
+        # goto model is speed-independent
+        tau2 = fp07_tau(0.5, model="goto")
+        assert tau2 == 0.003
+
+    def test_unknown_raises(self):
+        from rsi_python.fp07 import fp07_tau
+
+        with pytest.raises(ValueError, match="Unknown FP07 tau model"):
+            fp07_tau(1.0, model="invalid_model")
+
 
 class TestNoiseModel:
     def test_noise_positive(self):

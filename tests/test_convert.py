@@ -49,6 +49,42 @@ def test_p_to_netcdf_roundtrip(skip_no_data, tmp_path):
     ds.close()
 
 
+def test_p_to_netcdf_default_path(skip_no_data, tmp_path, monkeypatch):
+    """p_to_netcdf with nc_filepath=None should write next to the .p file."""
+    import shutil
+
+    # Copy .p file to tmp_path so the default .nc goes there
+    local_p = tmp_path / SAMPLE_FILE.name
+    shutil.copy2(SAMPLE_FILE, local_p)
+
+    from rsi_python.convert import p_to_netcdf
+
+    pf, nc_path = p_to_netcdf(local_p)
+    assert nc_path.exists()
+    assert nc_path.suffix == ".nc"
+    assert nc_path.parent == tmp_path
+
+
+def test_convert_all_serial(skip_no_data, tmp_path):
+    """convert_all with jobs=1 (serial) should convert files."""
+    from rsi_python.convert import convert_all
+
+    convert_all([SAMPLE_FILE], tmp_path, jobs=1)
+    nc_files = list(tmp_path.glob("*.nc"))
+    assert len(nc_files) == 1
+    assert nc_files[0].stat().st_size > 0
+
+
+def test_convert_all_parallel(skip_no_data, tmp_path):
+    """convert_all with jobs=2 (parallel) should convert files."""
+    from rsi_python.convert import convert_all
+
+    convert_all([SAMPLE_FILE], tmp_path, jobs=2)
+    nc_files = list(tmp_path.glob("*.nc"))
+    assert len(nc_files) == 1
+    assert nc_files[0].stat().st_size > 0
+
+
 def test_cf_compliance(skip_no_data, tmp_path):
     """Output NetCDF should be CF-1.13 compliant."""
     import netCDF4 as nc

@@ -1,4 +1,10 @@
-# rsi-python v0.1.0
+# rsi-python
+
+[![CI](https://github.com/mousebrains/turbulence/actions/workflows/ci.yml/badge.svg)](https://github.com/mousebrains/turbulence/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![codecov](https://codecov.io/gh/mousebrains/turbulence/graph/badge.svg)](https://codecov.io/gh/mousebrains/turbulence)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 Python tools for reading Rockland Scientific microprofiler data and computing turbulent dissipation rates from VMP (Vertical Microstructure Profiler) and MicroRider instruments.
 
@@ -8,186 +14,52 @@ Python tools for reading Rockland Scientific microprofiler data and computing tu
 
 ### What it computes
 
-- **Epsilon (TKE dissipation rate)** from shear probe spectra ([detailed mathematics](docs/epsilon_mathematics.md)), including:
-  - Iterative despiking of shear signals
-  - Goodman coherent noise removal using accelerometer cross-spectra
-  - Macoun & Lueck wavenumber correction for shear probe spatial response
-  - Nasmyth universal spectrum fitting with Lueck's improved coefficients
-  - Iterative variance correction using Lueck's resolved-variance model
-  - Integration limit detection via polynomial fit to log-log spectra
+- **Epsilon (TKE dissipation rate)** from shear probe spectra ([detailed mathematics](docs/epsilon_mathematics.md)), including Goodman coherent noise removal, Nasmyth spectrum fitting, and Macoun & Lueck wavenumber correction.
 
-- **Chi (thermal variance dissipation rate)** from FP07 thermistor spectra ([detailed mathematics](docs/chi_mathematics.md)), including:
-  - Batchelor and Kraichnan theoretical temperature gradient spectra
-  - FP07 single-pole and double-pole transfer function correction
-  - Electronics noise model (Johnson + amplifier + anti-aliasing + ADC)
-  - Method 1: chi from known epsilon (shear probes) with unresolved variance correction
-  - Method 2a: MLE Batchelor spectrum fitting (Ruddick et al. 2000)
-  - Method 2b: Iterative integration (Peterson & Fer 2014)
+- **Chi (thermal variance dissipation rate)** from FP07 thermistor spectra ([detailed mathematics](docs/chi_mathematics.md)), including Batchelor/Kraichnan spectrum models, FP07 transfer function correction, and MLE spectral fitting.
 
 A **MATLAB implementation** of the chi calculation is also available — see [matlab/MATLAB.md](matlab/MATLAB.md).
 
 ## Installation
 
 ```bash
-# From source (editable, with test dependencies)
-pip install -e ".[dev]"
-
-# From source (standard)
-pip install .
-
-# With pipx (installs CLI tools in isolated environment)
-pipx install .
-
-# From GitHub
-pip install git+https://github.com/mousebrains/turbulence.git
-pipx install git+https://github.com/mousebrains/turbulence.git
+pip install -e ".[dev]"    # editable install with dev dependencies
+pip install .              # standard install
 ```
 
-Requires Python >= 3.10. Dependencies: `numpy`, `netCDF4`, `scipy`, `xarray`, `gsw`.
+See [docs/installation.md](docs/installation.md) for more options.
 
-## CLI
-
-All commands are available through the `rsi-tpw` command:
-
-```
-rsi-tpw <subcommand> [options]
-```
-
-| Subcommand | Description |
-|------------|-------------|
-| `rsi-tpw info`     | Print summary of `.p` file(s) |
-| `rsi-tpw nc`       | Convert `.p` files to NetCDF |
-| `rsi-tpw prof`     | Extract profiles from `.p` or full-record `.nc` files |
-| `rsi-tpw eps`      | Compute epsilon (TKE dissipation) |
-| `rsi-tpw chi`      | Compute chi (thermal variance dissipation) |
-| `rsi-tpw pipeline` | Run full pipeline (`.p` → epsilon → chi) |
-| `rsi-tpw init`     | Generate a template YAML configuration file |
-
-## Configuration
-
-Processing parameters can be set via a YAML configuration file (`-c/--config`) and/or CLI flags. Generate a template with all defaults:
+## Quick Start
 
 ```bash
-rsi-tpw init                    # writes config.yaml
-rsi-tpw eps VMP/*.p -c config.yaml -o results/
-rsi-tpw eps VMP/*.p -c config.yaml -o results/ --fft-length 512  # CLI overrides config
-```
-
-Output directories use a sequential, hash-tracked scheme (`eps_00/`, `eps_01/`, ...) that automatically deduplicates runs with identical parameters. See [docs/output_directories.md](docs/output_directories.md) for details.
-
-## Pipeline
-
-The processing pipeline has four stages. Each stage produces NetCDF files, and any later stage can start from any earlier stage's output:
-
-```
-.p files ──> nc ──> full-record .nc ──> prof ──> per-profile .nc ──> eps ──> epsilon .nc
-                                                                  ──> chi ──> chi .nc
-```
-
-### Full pipeline (recommended)
-
-Run all stages at once from raw `.p` files through epsilon and chi:
-
-```bash
-# Process all .p files, output to results/
+# Full pipeline: .p files → epsilon → chi
 rsi-tpw pipeline VMP/*.p -o results/
 
-# Writes results/epsilon/ and results/chi/
-```
-
-### Stage 1: Convert `.p` files to NetCDF
-
-```bash
-rsi-tpw nc VMP/*.p -o nc/
-```
-
-### Stage 2: Extract profiles
-
-Detects profiling segments from pressure data and writes per-profile NetCDF files:
-
-```bash
-rsi-tpw prof VMP/ARCTERX_Thompson_2025_SN479_0005.p -o profiles/
-```
-
-### Stage 3: Compute epsilon
-
-Computes TKE dissipation rate from shear probe spectra:
-
-```bash
-# From raw .p files (profiles detected automatically)
-rsi-tpw eps VMP/ARCTERX_Thompson_2025_SN479_0005.p -o epsilon/
-
-# From per-profile .nc files
-rsi-tpw eps profiles/*_prof*.nc -o epsilon/
-
-# Parallel processing
-rsi-tpw eps VMP/*.p -o epsilon/ -j 0
-```
-
-### Stage 4: Compute chi
-
-Computes thermal variance dissipation rate from FP07 thermistor spectra:
-
-```bash
-# Method 1: chi from known epsilon (uses shear probe results)
+# Or run individual stages
+rsi-tpw eps VMP/*.p -o epsilon/
 rsi-tpw chi VMP/*.p --epsilon-dir epsilon/ -o chi/
-
-# Method 2: chi without epsilon (MLE Batchelor spectrum fitting)
-rsi-tpw chi VMP/*.p -o chi/
-
-# Method 2 with Kraichnan spectrum model
-rsi-tpw chi VMP/*.p --spectrum-model kraichnan -o chi/
 ```
-
-### Python API
 
 ```python
 from rsi_python import PFile, get_diss, get_chi
 
-# Read a .p file
-pf = PFile("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
-pf.channels["sh1"]   # shear probe 1 [s⁻¹]
-pf.channels["P"]     # pressure [dbar]
-
-# Compute epsilon (returns list of xarray.Datasets, one per profile)
-eps_results = get_diss("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
-ds = eps_results[0]
-ds["epsilon"]         # dissipation rate [W/kg]
-ds["spec_shear"]      # shear wavenumber spectra
-ds["spec_nasmyth"]    # fitted Nasmyth spectra
-
-# Compute chi from known epsilon (Method 1)
-chi_results = get_chi("VMP/ARCTERX_Thompson_2025_SN479_0005.p",
-                      epsilon_ds=eps_results[0])
-ds = chi_results[0]
-ds["chi"]             # thermal dissipation rate [K²/s]
-ds["spec_gradT"]      # temperature gradient spectra
-ds["spec_batch"]      # fitted Batchelor spectra
-
-# Compute chi without epsilon (Method 2: MLE fitting)
-chi_results = get_chi("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
-ds = chi_results[0]
-ds["chi"]             # thermal dissipation rate [K²/s]
-ds["epsilon_T"]       # epsilon estimated from temperature
+eps_results = get_diss("VMP/file.p")
+chi_results = get_chi("VMP/file.p", epsilon_ds=eps_results[0])
 ```
 
-## Modules
+## Documentation
 
-| Module | Description |
-|--------|-------------|
-| `p_file.py` | `PFile` class: reads `.p` binary files, parses headers, demultiplexes address matrix, converts to physical units |
-| `channels.py` | Sensor conversion functions (raw counts to physical units) |
-| `convert.py` | Full-record NetCDF export (`rsi-tpw nc`) |
-| `profile.py` | Profile detection and per-profile NetCDF extraction (`rsi-tpw prof`) |
-| `dissipation.py` | Core epsilon calculation with multi-source input (`rsi-tpw eps`) |
-| `chi.py` | Chi (thermal variance dissipation) calculation, Methods 1 and 2 (`rsi-tpw chi`) |
-| `batchelor.py` | Batchelor and Kraichnan temperature gradient spectra |
-| `fp07.py` | FP07 thermistor transfer function and electronics noise model |
-| `spectral.py` | Cross-spectral density estimation (Welch method, cosine window) |
-| `goodman.py` | Goodman coherent noise removal using accelerometer spectra |
-| `despike.py` | Iterative spike removal for shear probe signals |
-| `nasmyth.py` | Nasmyth universal shear spectrum (Lueck improved fit) |
-| `ocean.py` | Seawater properties: viscosity, density, buoyancy frequency (gsw/TEOS-10) |
+| Document | Description |
+|----------|-------------|
+| [CLI Reference](docs/cli.md) | All `rsi-tpw` subcommands and flags |
+| [Configuration](docs/configuration.md) | YAML config file format and all parameter defaults |
+| [Pipeline](docs/pipeline.md) | Processing stages and data flow |
+| [Python API](docs/python_api.md) | Using rsi-python from Python code |
+| [Epsilon Mathematics](docs/epsilon_mathematics.md) | TKE dissipation algorithm details |
+| [Chi Mathematics](docs/chi_mathematics.md) | Thermal dissipation algorithm details |
+| [Output Directories](docs/output_directories.md) | Sequential hash-tracked output scheme |
+| [MATLAB](matlab/MATLAB.md) | MATLAB chi implementation |
+| [Changelog](CHANGELOG.md) | Version history |
 
 ## References
 

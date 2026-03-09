@@ -179,6 +179,28 @@ class TestCSD:
         assert Cxx is not None
         assert Cyy is not None
 
+    def test_parabolic_detrend(self):
+        """Parabolic detrend should produce valid spectrum."""
+        from rsi_python.spectral import csd_odas
+
+        rng = np.random.default_rng(42)
+        x = rng.standard_normal(4096) + np.linspace(0, 1, 4096) ** 2
+        Pxx, F, _, _ = csd_odas(x, None, 256, 512.0, detrend="parabolic")
+        assert Pxx.shape == (129,)
+        assert np.all(Pxx > 0)
+        assert np.all(np.isfinite(Pxx))
+
+    def test_cubic_detrend(self):
+        """Cubic detrend should produce valid spectrum."""
+        from rsi_python.spectral import csd_odas
+
+        rng = np.random.default_rng(42)
+        x = rng.standard_normal(4096) + np.linspace(0, 1, 4096) ** 3
+        Pxx, F, _, _ = csd_odas(x, None, 256, 512.0, detrend="cubic")
+        assert Pxx.shape == (129,)
+        assert np.all(Pxx > 0)
+        assert np.all(np.isfinite(Pxx))
+
     def test_matrix_auto(self):
         from rsi_python.spectral import csd_matrix
 
@@ -232,6 +254,35 @@ class TestDespike:
         assert len(spikes) > 0
         assert abs(y[2560]) < 1.0  # spike removed
         assert frac > 0
+
+    def test_spike_at_start(self):
+        """Spike at index 0 should be handled without error."""
+        from rsi_python.despike import despike
+
+        t = np.arange(0, 10, 1 / 512)
+        x = np.sin(2 * np.pi * 5 * t) * 0.1
+        x[0] = 50.0
+        y, spikes, n_passes, frac = despike(x, 512.0, thresh=8, smooth=0.5)
+        assert np.all(np.isfinite(y))
+
+    def test_spike_at_end(self):
+        """Spike at last index should be handled without error."""
+        from rsi_python.despike import despike
+
+        t = np.arange(0, 10, 1 / 512)
+        x = np.sin(2 * np.pi * 5 * t) * 0.1
+        x[-1] = 50.0
+        y, spikes, n_passes, frac = despike(x, 512.0, thresh=8, smooth=0.5)
+        assert np.all(np.isfinite(y))
+
+    def test_all_spike_signal(self):
+        """All-constant signal with a huge spike everywhere → replacement=0 path."""
+        from rsi_python.despike import despike
+
+        # Signal where most values are huge → they all look like spikes
+        x = np.full(5120, 100.0)
+        y, spikes, n_passes, frac = despike(x, 512.0, thresh=2, smooth=0.5)
+        assert np.all(np.isfinite(y))
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +350,34 @@ class TestGoodman:
             clean_UU, AA, UU, UA, F = clean_shear_spec(accel, shear, 64, 512.0)
         # Should still return valid arrays
         assert clean_UU.shape[0] == 64 // 2 + 1
+        assert np.all(np.isfinite(np.real(clean_UU)))
+
+    def test_transposed_input(self):
+        """Passing (n_chan, n_samples) shape should be auto-transposed."""
+        from rsi_python.goodman import clean_shear_spec
+
+        rng = np.random.default_rng(42)
+        N = 4096
+        # Pass transposed shapes: (n_chan, N) instead of (N, n_chan)
+        shear = rng.standard_normal((1, N))  # 1 channel, N samples
+        accel = rng.standard_normal((2, N))  # 2 channels, N samples
+        clean_UU, AA, UU, UA, F = clean_shear_spec(accel, shear, 256, 512.0)
+        assert clean_UU.shape[0] == 256 // 2 + 1
+        assert np.all(np.isfinite(np.real(clean_UU)))
+
+    def test_bias_warning_with_few_segments(self):
+        """Signal with barely enough segments should trigger bias warning."""
+        from rsi_python.goodman import clean_shear_spec
+
+        rng = np.random.default_rng(99)
+        # 2 accel channels, nfft=64: need > 1.02*2 ~ 2.04 segments
+        # segments = 2*N/nfft - 1; for N=100, nfft=64: segments = 2*100/64 - 1 = 2.125
+        # 2.125 <= 1.02*2 = 2.04 → True, so warning fires
+        N = 100
+        shear = rng.standard_normal((N, 1))
+        accel = rng.standard_normal((N, 2))
+        with pytest.warns(UserWarning, match="Insufficient FFT segments"):
+            clean_UU, AA, UU, UA, F = clean_shear_spec(accel, shear, 64, 512.0)
         assert np.all(np.isfinite(np.real(clean_UU)))
 
     def test_clean_shear_reduces_noise(self):
@@ -541,3 +620,25 @@ class TestIntegration:
             if np.sum(valid) > 0:
                 ratio = np.log10(d[valid]) - np.log10(c[valid])
                 assert np.median(np.abs(ratio)) < 1.0  # within an order of magnitude
+
+    def test_get_diss_no_goodman(self, skip_no_data):
+        """get_diss with goodman=False should produce valid epsilon."""
+        from rsi_python.dissipation import get_diss
+
+        results = get_diss(PROFILE_FILE, fft_length=256, goodman=False)
+        assert len(results) >= 1
+        ds = results[0]
+        eps = ds["epsilon"].values
+        valid = eps[np.isfinite(eps) & (eps > 0)]
+        assert len(valid) > 0
+
+    def test_get_diss_fixed_speed(self, skip_no_data):
+        """get_diss with speed=0.5 should use fixed speed."""
+        from rsi_python.dissipation import get_diss
+
+        results = get_diss(PROFILE_FILE, fft_length=256, goodman=True, speed=0.5)
+        assert len(results) >= 1
+        ds = results[0]
+        # All speed values should be the fixed speed
+        speeds = ds["speed"].values
+        np.testing.assert_allclose(speeds, 0.5)
