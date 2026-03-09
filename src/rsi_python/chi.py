@@ -16,8 +16,6 @@ Peterson, A.K. and I. Fer, 2014: Dissipation measurements using temperature
     microstructure from an underwater glider. Methods in Oceanography, 10, 44-69.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 

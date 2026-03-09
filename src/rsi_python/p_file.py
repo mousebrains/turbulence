@@ -7,8 +7,6 @@ Anatomy) and mirrors the conversion logic in the ODAS MATLAB Library
 (read_odas.m, convert_odas.m).
 """
 
-from __future__ import annotations
-
 import re
 import struct
 import warnings

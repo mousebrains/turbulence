@@ -12,8 +12,6 @@ Oakey, N.S., 1982: Determination of the rate of dissipation of turbulent
     energy. J. Phys. Oceanogr., 12, 256-271.
 """
 
-from __future__ import annotations
-
 import numpy as np
 import numpy.typing as npt
 from scipy.special import erfc

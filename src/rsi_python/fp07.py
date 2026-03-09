@@ -12,8 +12,6 @@ Peterson, A.K. and I. Fer, 2014: Dissipation measurements using temperature
 RSI Technical Note 040: Noise in Temperature Gradient Measurements.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import numpy as np

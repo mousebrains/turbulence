@@ -5,8 +5,6 @@ Port of get_profile.m from the ODAS MATLAB library, plus NetCDF I/O
 for per-profile files.
 """
 
-from __future__ import annotations
-
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any

@@ -1,8 +1,6 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Seawater properties for turbulence calculations."""
 
-from __future__ import annotations
-
 import numpy as np
 import numpy.typing as npt
 

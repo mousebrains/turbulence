@@ -4,8 +4,6 @@
 Port of csd_odas.m and csd_matrix_odas.m from the ODAS MATLAB library.
 """
 
-from __future__ import annotations
-
 import numpy as np
 import numpy.typing as npt
 from scipy import signal

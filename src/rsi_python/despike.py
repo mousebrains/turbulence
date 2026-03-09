@@ -4,8 +4,6 @@
 Port of despike.m from the ODAS MATLAB library.
 """
 
-from __future__ import annotations
-
 import numpy as np
 import numpy.typing as npt
 from scipy.signal import butter, filtfilt

@@ -14,8 +14,6 @@ Subcommands:
     pipeline — Run full processing pipeline (.p → profiles → epsilon → chi)
 """
 
-from __future__ import annotations
-
 import argparse
 import os
 import sys

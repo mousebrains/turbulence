@@ -5,8 +5,6 @@ Channel conversion functions: raw counts -> physical units.
 Ported from the ODAS MATLAB Library convert_odas.m.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import numpy as np

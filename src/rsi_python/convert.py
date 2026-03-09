@@ -3,8 +3,6 @@
 NetCDF conversion for Rockland .p files.
 """
 
-from __future__ import annotations
-
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone

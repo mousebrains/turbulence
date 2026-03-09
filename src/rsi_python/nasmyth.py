@@ -5,8 +5,6 @@ Uses Lueck's improved fit from ODAS v4.5.1, documented in
 McMillan et al. (2016), J. Atmos. Oceanic Techno., 33, 817–837.
 """
 
-from __future__ import annotations
-
 import numpy as np
 import numpy.typing as npt
 

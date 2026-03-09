@@ -4,8 +4,6 @@
 Port of get_diss_odas.m from the ODAS MATLAB library.
 """
 
-from __future__ import annotations
-
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any

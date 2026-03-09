@@ -6,8 +6,6 @@ Removes vibration-coherent noise from shear spectra using
 accelerometer cross-spectra.
 """
 
-from __future__ import annotations
-
 import numpy as np
 
 from rsi_python.spectral import csd_matrix
