@@ -1,12 +1,14 @@
-% probar.m — Test script for chi calculation from a .p file
+% example00.m — Test script for chi calculation from a .p file
 % Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 
 %% Paths
-addpath('/Users/pat/tpw/chi/odas');    % ODAS library
-addpath('/Users/pat/tpw/chi/matlab');  % chi functions
+myPath = fileparts(mfilename("fullpath"));
+rootPath = fullfile(myPath, '..');
+addpath(fullfile(rootPath, 'odas'));    % ODAS library
+addpath(myPath);                        % chi functions
 
 %% 1. Convert .p file to MATLAB workspace
-fname = '/Users/pat/tpw/chi/VMP/ARCTERX_Thompson_2025_SN479_0006.p';
+fname = fullfile(rootPath, 'VMP', 'ARCTERX_Thompson_2025_SN479_0006.p');
 fprintf('Reading %s\n', fname);
 d = odas_p2mat(fname);
 
