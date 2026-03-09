@@ -720,6 +720,10 @@ def _cmd_ql(args):
     """Interactive quick-look viewer."""
     from rsi_python.quick_look import quick_look
 
+    spec_P_range = None
+    if args.spec_P_range is not None:
+        spec_P_range = tuple(args.spec_P_range)
+
     p_files = _resolve_p_files(args.files)
     for pf_path in p_files:
         quick_look(
@@ -728,6 +732,8 @@ def _cmd_ql(args):
             f_AA=args.f_AA or 98.0,
             goodman=not args.no_goodman,
             direction=args.direction or "down",
+            spec_P_range=spec_P_range,
+            chi_method=args.chi_method,
         )
 
 
@@ -755,6 +761,21 @@ def _add_ql_parser(subparsers):
         default=None,
         choices=["up", "down"],
         help="Profile direction (default: down)",
+    )
+    p.add_argument(
+        "--spec-P-range",
+        type=float,
+        nargs=2,
+        metavar=("P_MIN", "P_MAX"),
+        default=None,
+        help="Pressure range [dbar] for spectral calculations (default: full profile)",
+    )
+    p.add_argument(
+        "--chi-method",
+        type=int,
+        default=1,
+        choices=[1, 2],
+        help="Chi method for profile estimates: 1 = from epsilon, 2 = MLE fit (default: 1)",
     )
     p.set_defaults(func=_cmd_ql)
 
