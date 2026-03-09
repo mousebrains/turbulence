@@ -61,6 +61,19 @@ rsi-tpw <subcommand> [options]
 | `rsi-tpw eps`      | Compute epsilon (TKE dissipation) |
 | `rsi-tpw chi`      | Compute chi (thermal variance dissipation) |
 | `rsi-tpw pipeline` | Run full pipeline (`.p` → epsilon → chi) |
+| `rsi-tpw init`     | Generate a template YAML configuration file |
+
+## Configuration
+
+Processing parameters can be set via a YAML configuration file (`-c/--config`) and/or CLI flags. Generate a template with all defaults:
+
+```bash
+rsi-tpw init                    # writes config.yaml
+rsi-tpw eps VMP/*.p -c config.yaml -o results/
+rsi-tpw eps VMP/*.p -c config.yaml -o results/ --fft-length 512  # CLI overrides config
+```
+
+Output directories use a sequential, hash-tracked scheme (`eps_00/`, `eps_01/`, ...) that automatically deduplicates runs with identical parameters. See [docs/output_directories.md](docs/output_directories.md) for details.
 
 ## Pipeline
 

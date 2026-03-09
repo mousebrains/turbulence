@@ -12,6 +12,7 @@ Subcommands:
     eps      — Compute epsilon (TKE dissipation) from any pipeline stage
     chi      — Compute chi (thermal variance dissipation) from any pipeline stage
     pipeline — Run full processing pipeline (.p → profiles → epsilon → chi)
+    init     — Generate a template configuration file
 """
 
 import argparse
@@ -70,6 +71,127 @@ def _resolve_files(patterns, extensions=None):
 
 
 # ---------------------------------------------------------------------------
+# Config integration helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_file_config(args):
+    """Load config from the -c/--config flag, or return empty dict."""
+    if getattr(args, "config", None) is not None:
+        from rsi_python.config import load_config
+
+        return load_config(args.config)
+    return {}
+
+
+def _extract_cli_overrides(args, section):
+    """Extract CLI-provided overrides for a config section.
+
+    Only includes values that were explicitly specified on the command line
+    (i.e., not None).  Handles arg-name → config-key mapping and the
+    --no-goodman inversion.
+    """
+    # Map from argparse attr name → config key name
+    # Most are identity; only renames are listed explicitly.
+    if section == "profiles":
+        mapping = {
+            "P_min": "P_min",
+            "W_min": "W_min",
+            "direction": "direction",
+            "min_duration": "min_duration",
+        }
+    elif section == "epsilon":
+        mapping = {
+            "fft_length": "fft_length",
+            "diss_length": "diss_length",
+            "overlap": "overlap",
+            "speed": "speed",
+            "direction": "direction",
+            "f_AA": "f_AA",
+            "salinity": "salinity",
+        }
+    elif section == "chi":
+        mapping = {
+            "fft_length": "fft_length",
+            "diss_length": "diss_length",
+            "overlap": "overlap",
+            "speed": "speed",
+            "direction": "direction",
+            "fp07_model": "fp07_model",
+            "f_AA": "f_AA",
+            "fit_method": "fit_method",
+            "spectrum_model": "spectrum_model",
+            "salinity": "salinity",
+        }
+    elif section == "epsilon_pipeline":
+        # pipeline uses different attr names for fft_length
+        mapping = {
+            "eps_fft_length": "fft_length",
+            "direction": "direction",
+            "f_AA": "f_AA",
+            "speed": "speed",
+            "salinity": "salinity",
+        }
+    elif section == "chi_pipeline":
+        mapping = {
+            "chi_fft_length": "fft_length",
+            "direction": "direction",
+            "f_AA": "f_AA",
+            "fp07_model": "fp07_model",
+            "spectrum_model": "spectrum_model",
+            "speed": "speed",
+            "salinity": "salinity",
+        }
+    else:
+        return {}
+
+    overrides = {}
+    for attr, key in mapping.items():
+        val = getattr(args, attr, None)
+        if val is not None:
+            overrides[key] = val
+
+    # Handle --no-goodman (store_const: None=not specified, True=specified)
+    if section in ("epsilon", "epsilon_pipeline"):
+        no_goodman = getattr(args, "no_goodman", None)
+        if no_goodman is True:
+            overrides["goodman"] = False
+
+    return overrides
+
+
+def _merge_for_section(args, section):
+    """Load config file + CLI overrides and merge for the given section.
+
+    Returns the merged kwargs dict (None values stripped).
+    """
+    from rsi_python.config import merge_config
+
+    file_config = _load_file_config(args)
+    # For pipeline pseudo-sections, map to the real config section name
+    real_section = section.replace("_pipeline", "")
+    file_values = file_config.get(real_section, {})
+    cli_overrides = _extract_cli_overrides(args, section)
+    return merge_config(real_section, file_values, cli_overrides)
+
+
+def _setup_output_dir(args, prefix, section, params, upstream=None):
+    """Resolve the sequential output directory, write touchfile and config.yaml.
+
+    Parameters
+    ----------
+    upstream : list of (section, params) tuples, optional
+        Upstream sections to include in the hash for cumulative tracking.
+    """
+    from rsi_python.config import resolve_output_dir, write_resolved_config
+
+    real_section = section.replace("_pipeline", "")
+    output_dir = resolve_output_dir(args.output, prefix, real_section, params, upstream=upstream)
+    write_resolved_config(output_dir, real_section, params, upstream=upstream)
+    return output_dir
+
+
+# ---------------------------------------------------------------------------
 # Subcommand implementations
 # ---------------------------------------------------------------------------
 
@@ -100,23 +222,31 @@ def _cmd_info(args):
         pf.summary()
 
 
+def _cmd_init(args):
+    """Generate a template configuration file."""
+    from rsi_python.config import generate_template
+
+    path = Path(args.path)
+    if path.exists() and not args.force:
+        print(f"Error: {path} already exists (use --force to overwrite)", file=sys.stderr)
+        sys.exit(1)
+    generate_template(path)
+    print(f"Wrote template config to {path}")
+
+
 def _cmd_prof(args):
     """Extract profiles from .p or full-record .nc files."""
     from rsi_python.profile import extract_profiles
 
     files = _resolve_files(args.files, {".p", ".nc"})
 
-    profile_kwargs = {
-        "P_min": args.P_min,
-        "W_min": args.W_min,
-        "direction": args.direction,
-        "min_duration": args.min_duration,
-    }
+    merged = _merge_for_section(args, "profiles")
+    output_dir = _setup_output_dir(args, "prof", "profiles", merged)
+    print(f"Output directory: {output_dir}")
 
     for f in files:
-        output_dir = Path(args.output) if args.output else f.parent
         print(f"{f.name}:")
-        extract_profiles(f, output_dir, **profile_kwargs)
+        extract_profiles(f, output_dir, **merged)
 
 
 def _cmd_eps(args):
@@ -125,20 +255,9 @@ def _cmd_eps(args):
 
     files = _resolve_files(args.files, {".p", ".nc"})
 
-    diss_kwargs = {
-        "fft_length": args.fft_length,
-        "goodman": not args.no_goodman,
-        "f_AA": args.f_AA,
-        "direction": args.direction,
-    }
-    if args.diss_length is not None:
-        diss_kwargs["diss_length"] = args.diss_length
-    if args.overlap is not None:
-        diss_kwargs["overlap"] = args.overlap
-    if args.speed is not None:
-        diss_kwargs["speed"] = args.speed
-    if args.salinity is not None:
-        diss_kwargs["salinity"] = args.salinity
+    merged = _merge_for_section(args, "epsilon")
+    output_dir = _setup_output_dir(args, "eps", "epsilon", merged)
+    print(f"Output directory: {output_dir}")
 
     jobs = args.jobs
     if jobs == 0:
@@ -146,17 +265,15 @@ def _cmd_eps(args):
 
     if jobs == 1:
         for f in files:
-            output_dir = Path(args.output) if args.output else f.parent
             print(f"{f.name}:")
             try:
-                compute_diss_file(f, output_dir, **diss_kwargs)
+                compute_diss_file(f, output_dir, **merged)
             except Exception as e:
                 print(f"  ERROR: {e}")
     else:
         work = []
         for f in files:
-            output_dir = Path(args.output) if args.output else f.parent
-            work.append((f, output_dir, diss_kwargs))
+            work.append((f, output_dir, merged))
         print(f"Processing {len(work)} files with {jobs} workers")
         with ProcessPoolExecutor(max_workers=jobs) as pool:
             futures = {pool.submit(_compute_diss_one, w): w for w in work}
@@ -175,26 +292,12 @@ def _cmd_chi(args):
 
     files = _resolve_files(args.files, {".p", ".nc"})
 
-    chi_kwargs = {
-        "fft_length": args.fft_length,
-        "f_AA": args.f_AA,
-        "direction": args.direction,
-        "fp07_model": args.fp07_model,
-        "fit_method": args.fit_method,
-        "spectrum_model": args.spectrum_model,
-    }
-    if args.diss_length is not None:
-        chi_kwargs["diss_length"] = args.diss_length
-    if args.overlap is not None:
-        chi_kwargs["overlap"] = args.overlap
-    if args.speed is not None:
-        chi_kwargs["speed"] = args.speed
-    if args.salinity is not None:
-        chi_kwargs["salinity"] = args.salinity
+    merged = _merge_for_section(args, "chi")
+    output_dir = _setup_output_dir(args, "chi", "chi", merged)
+    print(f"Output directory: {output_dir}")
 
     # Load epsilon datasets if Method 1
-    if args.epsilon_dir is not None:
-        chi_kwargs["_epsilon_dir"] = Path(args.epsilon_dir)
+    epsilon_dir = getattr(args, "epsilon_dir", None)
 
     jobs = args.jobs
     if jobs == 0:
@@ -202,15 +305,13 @@ def _cmd_chi(args):
 
     if jobs == 1:
         for f in files:
-            output_dir = Path(args.output) if args.output else f.parent
             print(f"{f.name}:")
 
-            kw = dict(chi_kwargs)
-            eps_dir = kw.pop("_epsilon_dir", None)
-            if eps_dir is not None:
+            kw = dict(merged)
+            if epsilon_dir is not None:
                 import xarray as xr
 
-                eps_file = eps_dir / f"{f.stem}_eps.nc"
+                eps_file = Path(epsilon_dir) / f"{f.stem}_eps.nc"
                 if eps_file.exists():
                     kw["epsilon_ds"] = xr.open_dataset(eps_file)
                 else:
@@ -223,10 +324,7 @@ def _cmd_chi(args):
     else:
         work = []
         for f in files:
-            output_dir = Path(args.output) if args.output else f.parent
-            kw = dict(chi_kwargs)
-            kw.pop("_epsilon_dir", None)
-            work.append((f, output_dir, kw))
+            work.append((f, output_dir, merged))
         print(f"Processing {len(work)} files with {jobs} workers")
         with ProcessPoolExecutor(max_workers=jobs) as pool:
             futures = {pool.submit(_compute_chi_one, w): w for w in work}
@@ -246,34 +344,14 @@ def _cmd_pipeline(args):
 
     p_files = _resolve_p_files(args.files)
 
-    output_dir = Path(args.output) if args.output else Path(".")
-    eps_dir = output_dir / "epsilon"
-    chi_dir = output_dir / "chi"
-    eps_dir.mkdir(parents=True, exist_ok=True)
-    chi_dir.mkdir(parents=True, exist_ok=True)
+    eps_merged = _merge_for_section(args, "epsilon_pipeline")
+    chi_merged = _merge_for_section(args, "chi_pipeline")
 
-    diss_kwargs = {
-        "fft_length": args.eps_fft_length,
-        "goodman": not args.no_goodman,
-        "f_AA": args.f_AA,
-        "direction": args.direction,
-    }
-    if args.speed is not None:
-        diss_kwargs["speed"] = args.speed
-    if args.salinity is not None:
-        diss_kwargs["salinity"] = args.salinity
-
-    chi_kwargs = {
-        "fft_length": args.chi_fft_length,
-        "f_AA": args.f_AA,
-        "direction": args.direction,
-        "fp07_model": args.fp07_model,
-        "spectrum_model": args.spectrum_model,
-    }
-    if args.speed is not None:
-        chi_kwargs["speed"] = args.speed
-    if args.salinity is not None:
-        chi_kwargs["salinity"] = args.salinity
+    eps_dir = _setup_output_dir(args, "eps", "epsilon_pipeline", eps_merged)
+    chi_upstream = [("epsilon", eps_merged)]
+    chi_dir = _setup_output_dir(args, "chi", "chi_pipeline", chi_merged, upstream=chi_upstream)
+    print(f"Epsilon output: {eps_dir}")
+    print(f"Chi output:     {chi_dir}")
 
     for f in p_files:
         print(f"\n{'=' * 60}")
@@ -283,7 +361,7 @@ def _cmd_pipeline(args):
         # Step 1: Compute epsilon
         print("\n--- Epsilon ---")
         try:
-            eps_paths = compute_diss_file(f, eps_dir, **diss_kwargs)
+            eps_paths = compute_diss_file(f, eps_dir, **eps_merged)
         except Exception as e:
             print(f"  ERROR computing epsilon: {e}")
             continue
@@ -294,7 +372,7 @@ def _cmd_pipeline(args):
             import xarray as xr
 
             eps_ds = xr.open_dataset(eps_path)
-            kw = dict(chi_kwargs)
+            kw = dict(chi_merged)
             kw["epsilon_ds"] = eps_ds
             try:
                 compute_chi_file(f, chi_dir, **kw)
@@ -303,7 +381,7 @@ def _cmd_pipeline(args):
             finally:
                 eps_ds.close()
 
-    print(f"\nPipeline complete. Output in {output_dir}/")
+    print("\nPipeline complete.")
     print(f"  Epsilon: {eps_dir}/")
     print(f"  Chi:     {chi_dir}/")
 
@@ -348,6 +426,26 @@ def _add_info_parser(subparsers):
     p.set_defaults(func=_cmd_info)
 
 
+def _add_init_parser(subparsers):
+    p = subparsers.add_parser(
+        "init",
+        help="Generate a template configuration file",
+        description="Write a fully-commented template config.yaml with all default values.",
+    )
+    p.add_argument(
+        "path",
+        nargs="?",
+        default="config.yaml",
+        help="Output path (default: config.yaml)",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing file",
+    )
+    p.set_defaults(func=_cmd_init)
+
+
 def _add_prof_parser(subparsers):
     p = subparsers.add_parser(
         "prof",
@@ -359,7 +457,7 @@ def _add_prof_parser(subparsers):
         "-o",
         "--output",
         metavar="DIR",
-        default=None,
+        required=True,
         help="Output directory for per-profile .nc files",
     )
     p.add_argument(
@@ -371,19 +469,19 @@ def _add_prof_parser(subparsers):
         help="Parallel workers (0 = all cores, default: 1)",
     )
     p.add_argument(
-        "--P-min", type=float, default=0.5, help="Minimum pressure [dbar] (default: 0.5)"
+        "--P-min", type=float, default=None, help="Minimum pressure [dbar] (default: 0.5)"
     )
     p.add_argument(
-        "--W-min", type=float, default=0.3, help="Minimum fall rate [dbar/s] (default: 0.3)"
+        "--W-min", type=float, default=None, help="Minimum fall rate [dbar/s] (default: 0.3)"
     )
     p.add_argument(
         "--direction",
-        default="down",
+        default=None,
         choices=["up", "down"],
         help="Profile direction (default: down)",
     )
     p.add_argument(
-        "--min-duration", type=float, default=7.0, help="Minimum profile duration [s] (default: 7)"
+        "--min-duration", type=float, default=None, help="Minimum profile duration [s] (default: 7)"
     )
     p.set_defaults(func=_cmd_prof)
 
@@ -398,7 +496,11 @@ def _add_eps_parser(subparsers):
         "files", nargs="+", metavar="FILE", help=".p, full-record .nc, or per-profile .nc file(s)"
     )
     p.add_argument(
-        "-o", "--output", metavar="DIR", default=None, help="Output directory for epsilon .nc files"
+        "-o",
+        "--output",
+        metavar="DIR",
+        required=True,
+        help="Output directory for epsilon .nc files",
     )
     p.add_argument(
         "-j",
@@ -409,7 +511,7 @@ def _add_eps_parser(subparsers):
         help="Parallel workers (0 = all cores, default: 1)",
     )
     p.add_argument(
-        "--fft-length", type=int, default=256, help="FFT segment length [samples] (default: 256)"
+        "--fft-length", type=int, default=None, help="FFT segment length [samples] (default: 256)"
     )
     p.add_argument(
         "--diss-length",
@@ -431,15 +533,19 @@ def _add_eps_parser(subparsers):
     )
     p.add_argument(
         "--direction",
-        default="down",
+        default=None,
         choices=["up", "down"],
         help="Profile direction (default: down)",
     )
     p.add_argument(
-        "--no-goodman", action="store_true", help="Disable Goodman coherent noise removal"
+        "--no-goodman",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Disable Goodman coherent noise removal",
     )
     p.add_argument(
-        "--f-AA", type=float, default=98.0, help="Anti-aliasing filter cutoff [Hz] (default: 98)"
+        "--f-AA", type=float, default=None, help="Anti-aliasing filter cutoff [Hz] (default: 98)"
     )
     p.add_argument(
         "--salinity",
@@ -460,7 +566,11 @@ def _add_chi_parser(subparsers):
         "files", nargs="+", metavar="FILE", help=".p, full-record .nc, or per-profile .nc file(s)"
     )
     p.add_argument(
-        "-o", "--output", metavar="DIR", default=None, help="Output directory for chi .nc files"
+        "-o",
+        "--output",
+        metavar="DIR",
+        required=True,
+        help="Output directory for chi .nc files",
     )
     p.add_argument(
         "-j",
@@ -471,7 +581,7 @@ def _add_chi_parser(subparsers):
         help="Parallel workers (0 = all cores, default: 1)",
     )
     p.add_argument(
-        "--fft-length", type=int, default=512, help="FFT segment length [samples] (default: 512)"
+        "--fft-length", type=int, default=None, help="FFT segment length [samples] (default: 512)"
     )
     p.add_argument(
         "--diss-length",
@@ -493,13 +603,13 @@ def _add_chi_parser(subparsers):
     )
     p.add_argument(
         "--direction",
-        default="down",
+        default=None,
         choices=["up", "down"],
         help="Profile direction (default: down)",
     )
     p.add_argument(
         "--fp07-model",
-        default="single_pole",
+        default=None,
         choices=["single_pole", "double_pole"],
         help="FP07 transfer function model (default: single_pole)",
     )
@@ -512,18 +622,18 @@ def _add_chi_parser(subparsers):
     )
     p.add_argument(
         "--fit-method",
-        default="mle",
+        default=None,
         choices=["mle", "iterative"],
         help="Method 2 fitting: mle or iterative (default: mle)",
     )
     p.add_argument(
         "--spectrum-model",
-        default="batchelor",
+        default=None,
         choices=["batchelor", "kraichnan"],
         help="Theoretical spectrum model (default: batchelor)",
     )
     p.add_argument(
-        "--f-AA", type=float, default=98.0, help="Anti-aliasing filter cutoff [Hz] (default: 98)"
+        "--f-AA", type=float, default=None, help="Anti-aliasing filter cutoff [Hz] (default: 98)"
     )
     p.add_argument(
         "--salinity",
@@ -548,12 +658,12 @@ def _add_pipeline_parser(subparsers):
         "-o",
         "--output",
         metavar="DIR",
-        default=".",
-        help="Base output directory (default: current directory)",
+        required=True,
+        help="Base output directory",
     )
     p.add_argument(
         "--direction",
-        default="down",
+        default=None,
         choices=["up", "down"],
         help="Profile direction (default: down)",
     )
@@ -566,34 +676,36 @@ def _add_pipeline_parser(subparsers):
     p.add_argument(
         "--eps-fft-length",
         type=int,
-        default=256,
+        default=None,
         help="FFT length for epsilon [samples] (default: 256)",
     )
     p.add_argument(
         "--chi-fft-length",
         type=int,
-        default=512,
+        default=None,
         help="FFT length for chi [samples] (default: 512)",
     )
     p.add_argument(
         "--no-goodman",
-        action="store_true",
+        action="store_const",
+        const=True,
+        default=None,
         help="Disable Goodman coherent noise removal for epsilon",
     )
     p.add_argument(
         "--fp07-model",
-        default="single_pole",
+        default=None,
         choices=["single_pole", "double_pole"],
         help="FP07 transfer function model (default: single_pole)",
     )
     p.add_argument(
         "--spectrum-model",
-        default="batchelor",
+        default=None,
         choices=["batchelor", "kraichnan"],
         help="Theoretical spectrum model for chi (default: batchelor)",
     )
     p.add_argument(
-        "--f-AA", type=float, default=98.0, help="Anti-aliasing filter cutoff [Hz] (default: 98)"
+        "--f-AA", type=float, default=None, help="Anti-aliasing filter cutoff [Hz] (default: 98)"
     )
     p.add_argument(
         "--salinity",
@@ -618,10 +730,18 @@ def main() -> None:
         description="rsi-python: Tools for Rockland Scientific microprofiler data.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "-c",
+        "--config",
+        metavar="YAML",
+        default=None,
+        help="Configuration file (YAML). Generate a template with 'rsi-tpw init'.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     _add_info_parser(subparsers)
     _add_nc_parser(subparsers)
+    _add_init_parser(subparsers)
     _add_prof_parser(subparsers)
     _add_eps_parser(subparsers)
     _add_chi_parser(subparsers)

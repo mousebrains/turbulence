@@ -14,6 +14,7 @@ dependencies = [
     "scipy",
     "xarray",
     "gsw",
+    "ruamel.yaml>=0.18",
 ]
 
 [project.optional-dependencies]
