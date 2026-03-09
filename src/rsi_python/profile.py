@@ -108,7 +108,7 @@ def get_profiles(
 
 
 def extract_profiles(
-    source: PFile | str | Path,
+    source: "PFile | str | Path",
     output_dir: str | Path,
     **profile_kwargs: Any,
 ) -> list[Path]:

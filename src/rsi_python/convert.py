@@ -18,7 +18,7 @@ import numpy as np
 def p_to_netcdf(
     p_filepath: str | Path,
     nc_filepath: str | Path | None = None,
-) -> tuple[PFile, Path]:
+) -> "tuple[PFile, Path]":
     """Convert a single .p file to NetCDF4.
 
     Parameters

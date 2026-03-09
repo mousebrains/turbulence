@@ -27,7 +27,7 @@ from rsi_python.spectral import csd_matrix
 
 
 def load_channels(
-    source: PFile | str | Path,
+    source: "PFile | str | Path",
     shear_pattern: str = r"^sh\d+$",
     accel_pattern: str = r"^A[xyz]$",
     pressure_name: str = "P",
@@ -257,7 +257,7 @@ def _compute_nu(
 
 
 def get_diss(
-    source: PFile | str | Path,
+    source: "PFile | str | Path",
     fft_length: int = 256,
     diss_length: int | None = None,
     overlap: int | None = None,

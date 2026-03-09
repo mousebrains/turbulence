@@ -383,7 +383,7 @@ def _iterative_fit(
 
 
 def get_chi(
-    source: PFile | str | Path,
+    source: "PFile | str | Path",
     epsilon_ds: xr.Dataset | None = None,
     fft_length: int = 512,
     diss_length: int | None = None,
