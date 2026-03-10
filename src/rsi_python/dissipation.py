@@ -2,6 +2,18 @@
 """Core epsilon (TKE dissipation rate) calculation.
 
 Port of get_diss_odas.m from the ODAS MATLAB library.
+
+References
+----------
+Lueck, R.G., 2022a: The statistics of oceanic turbulence measurements.
+    Part 1: Shear variance and dissipation rates. J. Atmos. Oceanic
+    Technol., 39, 1259-1276.
+Lueck, R.G., 2022b: The statistics of oceanic turbulence measurements.
+    Part 2: Shear spectra and a new spectral model. J. Atmos. Oceanic
+    Technol., 39, 1273-1282.
+Lueck, R.G., and 27 coauthors, 2024: Best practices recommendations for
+    estimating dissipation rates from shear probes. Front. Mar. Sci.,
+    11, 1334327.
 """
 
 import re
@@ -464,6 +476,7 @@ def _compute_profile_diss(
     K_max_out = np.full((n_shear, n_est), np.nan)
     mad_out = np.full((n_shear, n_est), np.nan)
     fom_out = np.full((n_shear, n_est), np.nan)
+    FM_out = np.full((n_shear, n_est), np.nan)
     K_max_ratio_out = np.full((n_shear, n_est), np.nan)
     method_out = np.zeros((n_shear, n_est), dtype=np.int8)
     nu_out = np.full(n_est, np.nan)
@@ -477,9 +490,12 @@ def _compute_profile_diss(
     K_out = np.full((n_freq, n_est), np.nan)
     F_out = np.full((n_freq, n_est), np.nan)
 
-    # Degrees of freedom
+    # Degrees of freedom — Lueck (2022a,b)
+    # N_f = number of FFT segments, N_v = number of vibration signals
+    # removed by Goodman cleaning.
     num_ffts = 2 * (diss_length // fft_length) - 1
-    dof_spec = 1.9 * num_ffts  # Nuttall (1971)
+    n_v = accel.shape[1] if do_goodman else 0
+    dof_spec = 1.9 * max(num_ffts - n_v, 1)  # Nuttall (1971), Lueck (2022a)
 
     e_isr_threshold = 1.5e-5  # Switch to ISR method above this [W/kg]
 
@@ -559,18 +575,21 @@ def _compute_profile_diss(
             else:
                 shear_spec = np.real(P_sh_clean[:, ci, ci])
 
-            e_4, k_max, mad, meth, nas_spec, fom_val, K_max_ratio_val = _estimate_epsilon(
+            e_4, k_max, mad, meth, nas_spec, fom_val, K_max_ratio_val, FM_val = _estimate_epsilon(
                 K,
                 shear_spec,
                 nu,
                 K_AA,
                 fit_order,
                 e_isr_threshold,
+                num_ffts=num_ffts,
+                n_v=n_v,
             )
             epsilon[ci, idx] = e_4
             K_max_out[ci, idx] = k_max
             mad_out[ci, idx] = mad
             fom_out[ci, idx] = fom_val
+            FM_out[ci, idx] = FM_val
             K_max_ratio_out[ci, idx] = K_max_ratio_val
             method_out[ci, idx] = meth
             spec_shear[ci, :, idx] = shear_spec
@@ -609,6 +628,15 @@ def _compute_profile_diss(
                 {
                     "units": "1",
                     "long_name": "figure of merit (observed/Nasmyth variance ratio)",
+                },
+            ),
+            "FM": (
+                ["probe", "time"],
+                FM_out,
+                {
+                    "units": "1",
+                    "long_name": "Lueck figure of merit (MAD * sqrt(dof))",
+                    "comment": "FM < 1 for 97.5% of good spectra (Lueck, 2022a,b)",
                 },
             ),
             "K_max_ratio": (
@@ -716,10 +744,10 @@ def _compute_profile_diss(
     return ds
 
 
-def _estimate_epsilon(K, shear_spectrum, nu, K_AA, fit_order, e_isr_threshold):
+def _estimate_epsilon(K, shear_spectrum, nu, K_AA, fit_order, e_isr_threshold, num_ffts=3, n_v=0):
     """Estimate epsilon from a single shear wavenumber spectrum.
 
-    Returns (epsilon, K_max, mad, method, nasmyth_spectrum).
+    Returns (epsilon, K_max, mad, method, nasmyth_spectrum, fom, K_max_ratio, FM).
     method: 0 = variance, 1 = inertial subrange.
     """
     n_freq = len(K)
@@ -821,7 +849,7 @@ def _estimate_epsilon(K, shear_spectrum, nu, K_AA, fit_order, e_isr_threshold):
     # Compute Nasmyth spectrum at final epsilon
     nas_spec = nasmyth(max(e_4, 1e-15), nu, K + 1e-30)
 
-    # Mean absolute deviation
+    # Mean absolute deviation (log10, matching ODAS convention)
     if len(Range) > 1:
         spec_ratio = shear_spectrum[Range[1:]] / (nas_spec[Range[1:]] + 1e-30)
         spec_ratio = spec_ratio[spec_ratio > 0]
@@ -840,11 +868,26 @@ def _estimate_epsilon(K, shear_spectrum, nu, K_AA, fit_order, e_isr_threshold):
     else:
         fom = np.nan
 
+    # Lueck (2022a,b) figure of merit — FM < 1 for 97.5% of good spectra.
+    #   σ²_ln_Ψ = (5/4)(N_f - N_v)^(-7/9)     spectral log-variance
+    #   T_M      = 0.8 + sqrt(1.56 / N_s)       97.5th percentile of MAD
+    #   FM       = MAD_ln / (T_M · σ_ln_Ψ)
+    # Uses natural log (not log10).
+    if len(Range) > 1 and len(spec_ratio) > 0:
+        N_s = len(spec_ratio)
+        mad_ln = np.mean(np.abs(np.log(spec_ratio)))  # natural log
+        N_eff = max(num_ffts - n_v, 1)
+        sigma_ln = np.sqrt(1.25 * N_eff ** (-7 / 9))
+        T_M = 0.8 + np.sqrt(1.56 / N_s)
+        FM = mad_ln / (T_M * sigma_ln)
+    else:
+        FM = np.nan
+
     # K_max / K_95: fraction of theoretical spectrum resolved
     K_95 = X_95 * (max(e_4, 1e-15) / nu**3) ** 0.25
     K_max_ratio_val = k_max / K_95 if K_95 > 0 else np.nan
 
-    return e_4, k_max, mad, method, nas_spec, fom, K_max_ratio_val
+    return e_4, k_max, mad, method, nas_spec, fom, K_max_ratio_val, FM
 
 
 def _variance_correction(e_3, K_upper, nu, max_iter=50):

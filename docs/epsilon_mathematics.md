@@ -13,9 +13,10 @@ This document describes the mathematical foundations for computing epsilon, the 
 7. [Epsilon Estimation: Variance Method](#7-epsilon-estimation-variance-method)
 8. [Epsilon Estimation: Inertial Subrange Method](#8-epsilon-estimation-inertial-subrange-method)
 9. [Iterative Variance Correction](#9-iterative-variance-correction)
-10. [Seawater Viscosity](#10-seawater-viscosity)
-11. [Constants and Parameters](#11-constants-and-parameters)
-12. [References](#12-references)
+10. [Quality Control Metrics](#10-quality-control-metrics)
+11. [Seawater Viscosity](#11-seawater-viscosity)
+12. [Constants and Parameters](#12-constants-and-parameters)
+13. [References](#13-references)
 
 ---
 
@@ -485,7 +486,75 @@ The iteration typically converges in 3-5 steps. The correction is larger when `K
 ([`dissipation.py: _variance_correction`](../src/rsi_python/dissipation.py))
 
 
-## 10. Seawater Viscosity
+## 10. Quality Control Metrics
+
+Three quality metrics assess the reliability of each dissipation estimate ([Lueck 2022a](https://doi.org/10.1175/JTECH-D-21-0051.1), [Lueck 2022b](https://doi.org/10.1175/JTECH-D-21-0050.1), [Lueck et al. 2024](https://doi.org/10.3389/fmars.2024.1334327)).
+
+### Mean absolute deviation (MAD)
+
+The MAD quantifies the log-space scatter of the observed spectrum relative to the Nasmyth model over the wavenumber range used to estimate epsilon:
+
+```
+mad = mean( |log_10( Phi_obs(k) / Phi_nasmyth(k) )| )       for k in Range
+```
+
+Smaller values indicate better agreement. Typical values for clean data are MAD < 0.2.
+
+### Figure of merit — variance ratio (fom)
+
+The variance-ratio figure of merit compares the integrated observed and Nasmyth variance over the fitting range:
+
+```
+fom = integral Phi_obs(k) dk  /  integral Phi_nasmyth(k) dk       for k in Range
+```
+
+Values near 1.0 indicate the estimated epsilon correctly predicts the observed variance.
+
+### Figure of merit — Lueck (FM)
+
+The FM metric ([Lueck 2022a](https://doi.org/10.1175/JTECH-D-21-0051.1), [Lueck 2022b](https://doi.org/10.1175/JTECH-D-21-0050.1)) normalizes the natural-log MAD by its theoretically expected distribution, so that FM < 1 for 97.5% of spectra when measurement quality is good:
+
+```
+MAD_ln = mean( |ln( Phi_obs(k) / Phi_nasmyth(k) )| )       for k in Range
+```
+
+The expected log-spectral uncertainty for `N_f` FFT segments with 50% overlap and a cosine window, after Goodman removal of `N_v` vibration signals:
+
+```
+sigma^2_ln = (5/4) * (N_f - N_v)^(-7/9)
+```
+
+The 97.5th-percentile threshold for the MAD of `N_s` samples from a half-normal distribution with standard deviation `sigma_ln`:
+
+```
+T_M = 0.8 + sqrt(1.56 / N_s)
+```
+
+where `N_s` is the number of spectral points in the fitting range. The figure of merit is:
+
+```
+FM = MAD_ln / (T_M * sigma_ln)
+```
+
+**Interpretation:**
+- FM < 1: spectrum is consistent with the Nasmyth model (97.5% of good spectra)
+- FM > 1: flag for review; possible contamination, poor spectral resolution, or violation of isotropy
+- Recommended threshold: FM < 1.15 (stringent) to FM < 1.4 (conservative), to allow for ~15% ambiguity among spectral models
+
+### K_max ratio
+
+The spectral resolution ratio indicates what fraction of the theoretical spectrum is directly resolved:
+
+```
+K_max_ratio = K_max / K_95
+```
+
+where `K_95 = X_95 * (epsilon / nu^3)^(1/4)` is the wavenumber containing 95% of the Nasmyth variance. Values near 1.0 mean most variance is resolved; values below 0.5 mean most variance is extrapolated via the variance correction.
+
+([`dissipation.py: _estimate_epsilon`](../src/rsi_python/dissipation.py))
+
+
+## 11. Seawater Viscosity
 
 Kinematic viscosity at salinity S = 35 PSU and atmospheric pressure is computed from a 3rd-order polynomial fit (porting `visc35.m` from ODAS):
 
@@ -507,7 +576,7 @@ p_3 = -1.131311019739306e-11
 Valid for 0 <= T <= 20 degrees C. Typical values: ~1.3e-6 m^2/s at 10 degrees C, ~1.0e-6 m^2/s at 20 degrees C.
 
 
-## 11. Constants and Parameters
+## 12. Constants and Parameters
 
 ### Physical constants
 
@@ -544,11 +613,13 @@ Valid for 0 <= T <= 20 degrees C. Typical values: ~1.3e-6 m^2/s at 10 degrees C,
 | Bias factor | `1.02 * n_accel / n_segments` | Degrees-of-freedom correction ([TN-61](https://rocklandscientific.com/support/technical-notes/)) |
 
 
-## 12. References
+## 13. References
 
 ### Epsilon estimation
 
-- Lueck, R.G., 2022: [The statistics of oceanic turbulence measurements. Part 1: Shear variance and dissipation rates.](https://doi.org/10.1175/JTECH-D-21-0051.1) *J. Atmos. Oceanic Technol.*, 39, 1259-1276.
+- Lueck, R.G., 2022a: [The statistics of oceanic turbulence measurements. Part 1: Shear variance and dissipation rates.](https://doi.org/10.1175/JTECH-D-21-0051.1) *J. Atmos. Oceanic Technol.*, 39, 1259-1276.
+- Lueck, R.G., 2022b: [The statistics of oceanic turbulence measurements. Part 2: Shear spectra and a new spectral model.](https://doi.org/10.1175/JTECH-D-21-0050.1) *J. Atmos. Oceanic Technol.*, 39, 1273-1282.
+- Lueck, R.G., and 27 coauthors, 2024: [Best practices recommendations for estimating dissipation rates from shear probes.](https://doi.org/10.3389/fmars.2024.1334327) *Front. Mar. Sci.*, 11, 1334327.
 - McMillan, J.M., A.E. Hay, R.G. Lueck, and F. Wolk, 2016: [Rates of dissipation of turbulent kinetic energy in a high Reynolds number tidal channel.](https://doi.org/10.1175/JTECH-D-15-0167.1) *J. Atmos. Oceanic Technol.*, 33, 817-837.
 - Oakey, N.S., 1982: [Determination of the rate of dissipation of turbulent energy from simultaneous temperature and velocity shear microstructure measurements.](https://doi.org/10.1175/1520-0485(1982)012%3C0256:DOTROD%3E2.0.CO;2) *J. Phys. Oceanogr.*, 12, 256-271.
 
