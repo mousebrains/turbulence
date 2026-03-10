@@ -15,6 +15,7 @@ from rsi_python.ocean import buoyancy_freq, density, visc, visc35
 from rsi_python.p_file import PFile, parse_config
 from rsi_python.profile import extract_profiles, get_profiles
 from rsi_python.quick_look import quick_look
+from rsi_python.shear_noise import noise_shearchannel as shear_noise
 
 __all__ = [
     "PFile",
@@ -35,4 +36,5 @@ __all__ = [
     "batchelor_kB",
     "quick_look",
     "diss_look",
+    "shear_noise",
 ]

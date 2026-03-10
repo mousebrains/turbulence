@@ -12,6 +12,8 @@ import numpy as np
 import pytest
 import scipy.io
 
+pytestmark = pytest.mark.matlab
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -122,6 +124,18 @@ class TestFastChannels:
         ml_T2_fast = mat["T2_fast"]
         np.testing.assert_allclose(py_T2_fast, ml_T2_fast, rtol=1e-10, atol=1e-10)
 
+    def test_accelerometer_Ax(self, pf, mat):
+        """Ax should exactly match MATLAB Ax (same convert_odas path as shear)."""
+        py_Ax = pf.channels["Ax"]
+        ml_Ax = mat["Ax"]
+        np.testing.assert_allclose(py_Ax, ml_Ax, rtol=1e-10, atol=1e-10)
+
+    def test_accelerometer_Ay(self, pf, mat):
+        """Ay should exactly match MATLAB Ay (same convert_odas path as shear)."""
+        py_Ay = pf.channels["Ay"]
+        ml_Ay = mat["Ay"]
+        np.testing.assert_allclose(py_Ay, ml_Ay, rtol=1e-10, atol=1e-10)
+
     def test_shear_conversion_factor(self, pf, mat):
         """Python shear = MATLAB shear * speed^2 (ODAS divides by speed^2).
 
@@ -187,8 +201,8 @@ class TestFallRate:
             assert corr > 0.99, f"Speed correlation {corr:.4f} < 0.99"
             # Median relative difference during profiling should be small
             rel_diff = np.abs(py_speed[fast_mask] - ml_speed[fast_mask]) / ml_speed[fast_mask]
-            assert np.median(rel_diff) < 0.05, (
-                f"Median speed relative diff {np.median(rel_diff):.4f} > 0.05"
+            assert np.median(rel_diff) < 0.02, (
+                f"Median speed relative diff {np.median(rel_diff):.4f} > 0.02"
             )
 
 

@@ -52,6 +52,14 @@ def _spectrum_func(model):
         raise ValueError(f"Unknown spectrum model: {model!r}")
 
 
+def _default_tau_model(fp07_model: str) -> str:
+    """Auto-select FP07 tau model based on transfer function model.
+
+    double_pole pairs with Goto (tau=0.003); single_pole with Lueck.
+    """
+    return "goto" if fp07_model == "double_pole" else "lueck"
+
+
 # ---------------------------------------------------------------------------
 # Method 1: Chi from known epsilon
 # ---------------------------------------------------------------------------
@@ -82,10 +90,11 @@ def _chi_from_epsilon(
         return np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan
 
     # FP07 transfer function
-    tau0 = fp07_tau(speed)
+    tau0 = fp07_tau(speed, model=_default_tau_model(fp07_model))
     F = K * speed
     # FP07 transfer function selector
     _h2 = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
+    H2 = _h2(F, tau0)
 
     # Noise spectrum
     noise_f = gradT_noise(F, T_mean, speed, fs=fs, diff_gain=diff_gain)[0]
@@ -137,9 +146,9 @@ def _chi_from_epsilon(
     # Compute fitted Batchelor spectrum for output
     spec_batch = grad_func(K, kB, chi)
 
-    # Figure of merit: observed/model variance in integration range
+    # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise)
     if np.sum(valid) >= 3 and np.isfinite(chi):
-        mod_v = np.trapezoid(spec_batch[valid], K[valid])
+        mod_v = np.trapezoid(spec_batch[valid] * H2[valid] + noise_f[valid], K[valid])
         fom = obs_var / mod_v if mod_v > 0 else np.nan
     else:
         fom = np.nan
@@ -176,7 +185,7 @@ def _mle_fit_kB(
 
     # FP07 transfer function — respect fp07_model parameter
     _h2 = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
-    tau0 = fp07_tau(speed)
+    tau0 = fp07_tau(speed, model=_default_tau_model(fp07_model))
     F = K * speed
     H2 = _h2(F, tau0)
 
@@ -257,9 +266,11 @@ def _mle_fit_kB(
     # Fitted spectrum for output
     spec_batch = grad_func(K, kB_best, chi)
 
-    # Figure of merit
+    # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise)
     if np.isfinite(chi) and np.sum(fit_mask) >= 3:
-        mod_v = np.trapezoid(spec_batch[fit_idx], K_fit)
+        mod_v = np.trapezoid(
+            spec_batch[fit_idx] * H2[fit_idx] + noise_K[fit_idx], K_fit
+        )
         obs_v = np.trapezoid(spec_fit, K_fit)
         fom = obs_v / mod_v if mod_v > 0 else np.nan
     else:
@@ -282,9 +293,10 @@ def _iterative_fit(
     grad_func, q = _spectrum_func(spectrum_model)
 
     # FP07 transfer function
-    tau0 = fp07_tau(speed)
+    tau0 = fp07_tau(speed, model=_default_tau_model(fp07_model))
     F = K * speed
-    fp07_transfer(F, tau0)  # evaluated but not used directly here
+    _h2 = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
+    H2 = _h2(F, tau0)
 
     # Noise spectrum
     noise_K, _ = gradT_noise(F, T_mean, speed, fs=fs, diff_gain=diff_gain)
@@ -373,12 +385,15 @@ def _iterative_fit(
     chi = chi_obs
     spec_batch = grad_func(K, kB_best, chi) if np.isfinite(kB_best) else np.zeros_like(K)
 
-    # Figure of merit
+    # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise)
     if np.isfinite(kB_best) and np.isfinite(chi):
         valid_fom = (K > 0) & (K <= k_u)
         if np.sum(valid_fom) >= 3:
             obs_v = np.trapezoid(spec_obs[valid_fom], K[valid_fom])
-            mod_v = np.trapezoid(spec_batch[valid_fom], K[valid_fom])
+            mod_v = np.trapezoid(
+                spec_batch[valid_fom] * H2[valid_fom] + noise_K[valid_fom],
+                K[valid_fom],
+            )
             fom = obs_v / mod_v if mod_v > 0 else np.nan
         else:
             fom = np.nan
@@ -404,7 +419,7 @@ def get_chi(
     speed: float | None = None,
     direction: str = "down",
     fp07_model: str = "single_pole",
-    goodman: bool = False,
+    goodman: bool = True,
     f_AA: float = 98.0,
     fit_method: str = "iterative",
     spectrum_model: str = "kraichnan",
@@ -432,7 +447,7 @@ def get_chi(
     fp07_model : str
         'single_pole' or 'double_pole' for FP07 transfer function.
     goodman : bool
-        Apply Goodman coherent noise removal using accelerometers.
+        Apply Goodman coherent noise removal using accelerometers (default True).
     f_AA : float
         Anti-aliasing filter cutoff [Hz].
     fit_method : str
@@ -459,7 +474,7 @@ def get_chi(
         P_mean      (time) — mean pressure [dbar]
         spec_gradT  (probe, freq, time) — temperature gradient spectra
         spec_batch  (probe, freq, time) — fitted Batchelor spectra
-        spec_noise  (freq, time) — noise spectra
+        spec_noise  (probe, freq, time) — noise spectra (per-probe)
         K           (freq, time) — wavenumber vectors
     """
     if diss_length is None:
@@ -746,7 +761,7 @@ def _compute_profile_chi(
 
     spec_gradT = np.full((n_therm, n_freq, n_est), np.nan)
     spec_batch = np.full((n_therm, n_freq, n_est), np.nan)
-    spec_noise_out = np.full((n_freq, n_est), np.nan)
+    spec_noise_out = np.full((n_therm, n_freq, n_est), np.nan)
     K_out = np.full((n_freq, n_est), np.nan)
     F_out = np.full((n_freq, n_est), np.nan)
 
@@ -792,16 +807,6 @@ def _compute_profile_chi(
         T_out[idx] = mean_T
         t_out[idx] = mean_t
 
-        # Noise spectrum for this window (use first probe's calibration)
-        cal_0 = (therm_cal[0] if therm_cal else {}) if therm_cal else {}
-        noise_kwargs = {k: v for k, v in cal_0.items() if k in (
-            "e_b", "gain", "beta_1", "adc_fs", "adc_bits",
-        )}
-        noise_K, _ = gradT_noise(
-            F, mean_T, W, fs=fs_fast, diff_gain=diff_gains[0], **noise_kwargs
-        )
-        spec_noise_out[:, idx] = noise_K
-
         # Scalar Goodman cleaning: remove accelerometer-coherent noise
         do_goodman = accel_arrays is not None and len(accel_arrays) > 0
         clean_spectra = {}
@@ -824,7 +829,22 @@ def _compute_profile_chi(
             if not np.isfinite(epsilon_val) or epsilon_val <= 0:
                 epsilon_val = None
 
+        # NOTE: gradient method is 'first_difference' (Python default).
+        # ODAS uses 'high_pass' for VMP data, which applies a scale factor
+        # involving beta_2/beta_3 from Steinhart-Hart. This is a known
+        # difference; see TODO for high_pass gradient implementation.
+
         for ci in range(n_therm):
+            # Per-probe noise spectrum
+            cal_ci = (therm_cal[ci] if therm_cal else {}) if therm_cal else {}
+            noise_kwargs = {k: v for k, v in cal_ci.items() if k in (
+                "e_b", "gain", "beta_1", "adc_fs", "adc_bits",
+            )}
+            noise_K, _ = gradT_noise(
+                F, mean_T, W, fs=fs_fast, diff_gain=diff_gains[ci], **noise_kwargs
+            )
+            spec_noise_out[ci, :, idx] = noise_K
+
             if do_goodman and ci in clean_spectra:
                 # Use Goodman-cleaned spectrum
                 Pxx = clean_spectra[ci]
@@ -885,7 +905,7 @@ def _compute_profile_chi(
                 spec_batch[ci, :, idx] = batch_spec
             else:
                 # Method 2: fit kB
-                # Initial chi estimate from observed spectrum
+                # Initial chi estimate from observed spectrum (per-probe noise)
                 obs_above_noise = np.maximum(spec_obs - noise_K, 0)
                 mask = (K > 0) & (K <= f_AA / W)
                 if np.sum(mask) < 3:
@@ -1039,7 +1059,7 @@ def _compute_profile_chi(
                 },
             ),
             "spec_noise": (
-                ["freq", "time"],
+                ["probe", "freq", "time"],
                 spec_noise_out,
                 {
                     "units": "K2 m-1",

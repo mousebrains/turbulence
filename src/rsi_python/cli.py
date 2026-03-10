@@ -152,7 +152,7 @@ def _extract_cli_overrides(args, section):
             overrides[key] = val
 
     # Handle --no-goodman (store_const: None=not specified, True=specified)
-    if section in ("epsilon", "epsilon_pipeline"):
+    if section in ("epsilon", "epsilon_pipeline", "chi", "chi_pipeline"):
         no_goodman = getattr(args, "no_goodman", None)
         if no_goodman is True:
             overrides["goodman"] = False
@@ -608,6 +608,13 @@ def _add_chi_parser(subparsers):
         help="Profile direction (default: down)",
     )
     p.add_argument(
+        "--no-goodman",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Disable Goodman coherent noise removal",
+    )
+    p.add_argument(
         "--fp07-model",
         default=None,
         choices=["single_pole", "double_pole"],
@@ -624,7 +631,7 @@ def _add_chi_parser(subparsers):
         "--fit-method",
         default=None,
         choices=["mle", "iterative"],
-        help="Method 2 fitting: mle or iterative (default: mle)",
+        help="Method 2 fitting: mle or iterative (default: iterative)",
     )
     p.add_argument(
         "--spectrum-model",
@@ -690,7 +697,7 @@ def _add_pipeline_parser(subparsers):
         action="store_const",
         const=True,
         default=None,
-        help="Disable Goodman coherent noise removal for epsilon",
+        help="Disable Goodman coherent noise removal for epsilon and chi",
     )
     p.add_argument(
         "--fp07-model",

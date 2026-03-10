@@ -15,6 +15,8 @@ import scipy.io
 
 h5py = pytest.importorskip("h5py")
 
+pytestmark = pytest.mark.matlab
+
 VMP_DIR = Path(__file__).parents[1] / "VMP"
 
 # Discover all matched .mat/.p pairs

@@ -196,6 +196,91 @@ class TestNoiseModel:
 
 
 # ---------------------------------------------------------------------------
+# shear_noise.py — shear probe electronics noise model
+# ---------------------------------------------------------------------------
+
+
+class TestShearNoiseModel:
+    def test_noise_positive(self):
+        from rsi_python.shear_noise import noise_shearchannel
+
+        F = np.logspace(-1, 2, 100)
+        noise = noise_shearchannel(F)
+        assert np.all(noise > 0)
+
+    def test_noise_shape(self):
+        from rsi_python.shear_noise import noise_shearchannel
+
+        F = np.logspace(-1, 2, 50)
+        noise = noise_shearchannel(F)
+        assert noise.shape == (50,)
+
+    def test_noise_increases_with_frequency(self):
+        """Shear noise should generally increase at high frequencies
+        due to the differentiator gain."""
+        from rsi_python.shear_noise import noise_shearchannel
+
+        F = np.array([1.0, 10.0, 100.0])
+        noise = noise_shearchannel(F)
+        # Differentiator gain rises with frequency, so noise rises
+        assert noise[2] > noise[0]
+
+    def test_probe_capacitance_effect(self):
+        """Adding probe capacitance should increase noise at high frequencies."""
+        from rsi_python.shear_noise import noise_shearchannel
+
+        F = np.logspace(0, 2, 50)
+        noise_no_probe = noise_shearchannel(F, CP=0)
+        noise_with_probe = noise_shearchannel(F, CP=1e-9)
+        # Probe capacitance increases first-stage noise gain at high f
+        ratio = noise_with_probe[-1] / noise_no_probe[-1]
+        assert ratio > 1.0
+
+    def test_default_parameters_match_odas(self):
+        """Verify default parameter values match ODAS noise_shearchannel.m."""
+        from rsi_python.shear_noise import noise_shearchannel
+        import inspect
+
+        sig = inspect.signature(noise_shearchannel)
+        defaults = {k: v.default for k, v in sig.parameters.items()
+                    if v.default is not inspect.Parameter.empty}
+        assert defaults["R1"] == 1e9
+        assert defaults["C1"] == 1.5e-9
+        assert defaults["R2"] == 499
+        assert defaults["C2"] == 0.94e-6
+        assert defaults["R3"] == 1e6
+        assert defaults["C3"] == 470e-12
+        assert defaults["CP"] == 0
+        assert defaults["E_1"] == 9e-9
+        assert defaults["fc"] == 50
+        assert defaults["I_1"] == 0.56e-15
+        assert defaults["f_AA"] == 110
+        assert defaults["fs"] == 512
+        assert defaults["VFS"] == 4.096
+        assert defaults["Bits"] == 16
+        assert defaults["gamma_RSI"] == 2.5
+        assert defaults["T_K"] == 295
+        assert defaults["K_B"] == 1.382e-23
+
+    def test_adc_quantization_floor(self):
+        """At very low frequencies, ADC quantization noise should dominate."""
+        from rsi_python.shear_noise import noise_shearchannel
+
+        # With very small E_1, I_1, R1, the circuit noise vanishes;
+        # only ADC quantization remains
+        F = np.array([1.0, 10.0, 100.0])
+        noise = noise_shearchannel(
+            F, E_1=0, I_1=0, R1=0, CP=0,
+        )
+        # ADC quantization floor: gamma_RSI * delta_s^2 / (12 * fN) / delta_s^2
+        # = gamma_RSI / (12 * fN)
+        fN = 512 / 2
+        expected_floor = 2.5 / (12 * fN)
+        # Circuit noise is zero, so only ADC floor plus tiny AA-filtered remnant
+        np.testing.assert_allclose(noise[0], expected_floor, rtol=0.01)
+
+
+# ---------------------------------------------------------------------------
 # chi.py — synthetic spectrum recovery
 # ---------------------------------------------------------------------------
 

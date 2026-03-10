@@ -272,11 +272,11 @@ For each dissipation window:
 kB = (1/(2*pi)) * (epsilon / (nu * kappa_T^2))^(1/4)     [cpm]
 ```
 
-**Step 2.** Compute the FP07 transfer function `|H(k)|^2` using the speed-dependent time constant:
+**Step 2.** Compute the FP07 transfer function `|H(k)|^2` using the speed-dependent time constant. The tau model is auto-selected based on `fp07_model`: `single_pole` uses the Lueck model; `double_pole` uses the Goto model (see Section 4).
 
 ```
-tau_0 = 0.01 * (1/W)^0.5       [s]
-|H(f)|^2 = 1 / (1 + (2*pi*f*tau_0)^2)
+|H(f)|^2 = 1 / (1 + (2*pi*f*tau_0)^2)       (single_pole)
+|H(f)|^2 = 1 / (1 + (2*pi*f*tau_0)^2)^2     (double_pole)
 ```
 
 where `f = k * W`.
@@ -520,8 +520,9 @@ The profile is divided into overlapping windows of length `diss_length` samples 
 | `diss_length` | `1536` | Dissipation window length (3 * fft_length) [samples] |
 | `overlap` | `768` | Window overlap (diss_length // 2) [samples] |
 | `fp07_model` | `single_pole` | FP07 transfer function model |
-| `spectrum_model` | `batchelor` | Theoretical spectrum (batchelor or kraichnan) |
-| `fit_method` | `mle` | Method 2 fitting algorithm (mle or iterative) |
+| `spectrum_model` | `kraichnan` | Theoretical spectrum (batchelor or kraichnan) |
+| `fit_method` | `iterative` | Method 2 fitting algorithm (mle or iterative) |
+| `goodman` | `True` | Goodman coherent noise removal using accelerometers |
 
 
 ## 11. References

@@ -21,6 +21,8 @@ import pytest
 
 h5py = pytest.importorskip("h5py")
 
+pytestmark = pytest.mark.matlab
+
 VMP_DIR = Path(__file__).parents[1] / "VMP"
 
 # Discover validation files
@@ -278,6 +280,112 @@ class TestEpsilonVsMatlab:
                 f"py_prof {pi} / ml_prof {mi}: "
                 f"speed correlation {corr:.3f} < 0.75"
             )
+
+    def test_wavenumber_vectors(self, matched_results):
+        """K = F/W wavenumber vectors should match between Python and MATLAB."""
+        results, val, matched = matched_results
+
+        for pi, mi in matched:
+            py_K = results[pi]["K"].values  # (n_freq, n_est)
+            ml_K = val["K_all"][mi]  # (n_est, n_freq) from MATLAB
+
+            if ml_K.ndim == 1:
+                continue  # single-estimate profile, skip
+            ml_K = ml_K.T  # -> (n_freq, n_est)
+
+            n_est = min(py_K.shape[1], ml_K.shape[1])
+            n_freq = min(py_K.shape[0], ml_K.shape[0])
+            if n_est == 0 or n_freq < 3:
+                continue
+
+            for j in range(min(n_est, 5)):  # spot-check first 5 estimates
+                py_k = py_K[:n_freq, j]
+                ml_k = ml_K[:n_freq, j]
+                valid = np.isfinite(py_k) & np.isfinite(ml_k) & (py_k > 0) & (ml_k > 0)
+                if np.sum(valid) < 3:
+                    continue
+                np.testing.assert_allclose(
+                    py_k[valid],
+                    ml_k[valid],
+                    rtol=0.05,
+                    err_msg=(
+                        f"py_prof {pi} / ml_prof {mi}, est {j}: "
+                        f"K vectors differ by > 5%"
+                    ),
+                )
+
+    def test_frequency_vectors(self, matched_results):
+        """F frequency vectors should match between Python and MATLAB."""
+        results, val, matched = matched_results
+
+        for pi, mi in matched:
+            py_F = results[pi]["F"].values  # (n_freq, n_est)
+            ml_F = val["F_all"][mi]  # (n_est, n_freq) from MATLAB
+
+            if ml_F.ndim == 1:
+                continue
+            ml_F = ml_F.T  # -> (n_freq, n_est)
+
+            n_freq = min(py_F.shape[0], ml_F.shape[0])
+            if n_freq < 3:
+                continue
+
+            # F vectors should be identical across estimates; check first
+            py_f = py_F[:n_freq, 0]
+            ml_f = ml_F[:n_freq, 0]
+            valid = np.isfinite(py_f) & np.isfinite(ml_f)
+            if np.sum(valid) < 3:
+                continue
+            np.testing.assert_allclose(
+                py_f[valid],
+                ml_f[valid],
+                rtol=1e-10,
+                err_msg=f"py_prof {pi} / ml_prof {mi}: F vectors differ",
+            )
+
+    def test_cleaned_shear_spectra(self, matched_results):
+        """Cleaned shear spectra should agree in log-space for matched windows.
+
+        Compares diagonal auto-spectra from the cleaned cross-spectral matrix.
+        MATLAB stores the full (n_shear, n_shear) matrix; Python stores
+        the diagonal.
+        """
+        results, val, matched = matched_results
+
+        for pi, mi in matched:
+            py_spec = results[pi]["spec_shear"].values  # (n_probe, n_freq, n_est)
+            ml_spec_full = val["spec_sh_all"][mi]  # (n_est, n_shear, n_shear, n_freq)
+
+            if ml_spec_full.ndim < 4:
+                continue
+
+            n_est = min(py_spec.shape[2], ml_spec_full.shape[0])
+            n_freq = min(py_spec.shape[1], ml_spec_full.shape[3])
+            n_probe = min(py_spec.shape[0], ml_spec_full.shape[1])
+
+            if n_est < 3:
+                continue
+
+            for ci in range(n_probe):
+                log_diffs = []
+                for j in range(n_est):
+                    py_s = py_spec[ci, 1:n_freq, j]  # skip DC
+                    ml_s = ml_spec_full[j, ci, ci, 1:n_freq]  # diagonal auto-spectrum
+                    valid = (
+                        np.isfinite(py_s) & np.isfinite(ml_s)
+                        & (py_s > 0) & (ml_s > 0)
+                    )
+                    if np.sum(valid) < 5:
+                        continue
+                    log_diff = np.abs(np.log10(py_s[valid]) - np.log10(ml_s[valid]))
+                    log_diffs.extend(log_diff.tolist())
+
+                if len(log_diffs) > 10:
+                    median_diff = np.median(log_diffs)
+                    assert median_diff < 0.3, (
+                        f"py_prof {pi} / ml_prof {mi}, probe {ci}: "
+                        f"median log10 spec diff {median_diff:.3f} > 0.3"
+                    )
 
     def test_pressure_depth_range(self, matched_results):
         """Pressure ranges should be similar for matched profiles."""

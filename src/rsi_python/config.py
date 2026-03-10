@@ -43,9 +43,9 @@ DEFAULTS: dict[str, dict] = {
         "speed": None,
         "direction": "down",
         "fp07_model": "single_pole",
-        "goodman": False,
+        "goodman": True,
         "f_AA": 98.0,
-        "fit_method": "mle",
+        "fit_method": "iterative",
         "spectrum_model": "kraichnan",
         "salinity": None,
     },
@@ -376,9 +376,9 @@ chi:
   speed: null           # profiling speed [m/s] (null = from dP/dt)
   direction: down       # profile direction: up or down
   fp07_model: single_pole  # FP07 transfer function: single_pole or double_pole
-  goodman: false        # Goodman coherent noise removal
+  goodman: true         # Goodman coherent noise removal
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
-  fit_method: mle       # Method 2 fitting: mle or iterative
+  fit_method: iterative # Method 2 fitting: iterative or mle
   spectrum_model: kraichnan  # theoretical spectrum: batchelor or kraichnan
   salinity: null        # salinity [PSU] (null = 35, fixed S)
 """

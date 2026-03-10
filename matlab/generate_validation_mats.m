@@ -25,15 +25,31 @@ despike_smooth = 0.5; % [Hz]
 
 vmp_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'VMP');
 p_files = dir(fullfile(vmp_dir, '*.p'));
+n_files = length(p_files);
 
-fprintf('Found %d .p files in %s\n', length(p_files), vmp_dir);
+fprintf('Found %d .p files in %s\n', n_files, vmp_dir);
 
-for fi = 1:length(p_files)
-    p_path = fullfile(p_files(fi).folder, p_files(fi).name);
-    [~, stem, ~] = fileparts(p_path);
-    out_path = fullfile(p_files(fi).folder, [stem '_validation.mat']);
+% Pre-build path arrays for parfor (struct indexing inside parfor is fragile)
+p_paths   = cell(n_files, 1);
+out_paths = cell(n_files, 1);
+for fi = 1:n_files
+    p_paths{fi}   = fullfile(p_files(fi).folder, p_files(fi).name);
+    [~, stem, ~]   = fileparts(p_paths{fi});
+    out_paths{fi}  = fullfile(p_files(fi).folder, [stem '_validation.mat']);
+end
 
-    fprintf('\n=== [%d/%d] %s ===\n', fi, length(p_files), p_files(fi).name);
+%% Start a process-based parallel pool (threads can't save/load)
+pool = gcp('nocreate');
+if isempty(pool) || ~strcmpi(pool.Cluster.Profile, 'Processes')
+    delete(gcp('nocreate'));
+    parpool('Processes');
+end
+
+parfor fi = 1:n_files
+    p_path  = p_paths{fi};
+    out_path = out_paths{fi};
+
+    fprintf('\n=== [%d/%d] %s ===\n', fi, n_files, p_path);
 
     try
         %% 1. Load and convert data using odas_p2mat
@@ -71,9 +87,8 @@ for fi = 1:length(p_files)
                                direction, min_duration, fs_slow);
 
         if isempty(profiles)
-            fprintf('  No profiles found, skipping.\n');
-            continue;
-        end
+            fprintf('  No profiles found, skipping %s\n', p_path);
+        else
 
         n_profiles = size(profiles, 2);
         fprintf('  Found %d profiles\n', n_profiles);
@@ -159,23 +174,46 @@ for fi = 1:length(p_files)
         end
 
         %% 4. Save validation .mat file
-        save(out_path, ...
-             'fs_fast', 'fs_slow', ...
-             'profiles', 'n_profiles', ...
-             'eps_all', 'K_max_all', 'FM_all', 'mad_all', 'method_all', ...
-             'nu_all', 'speed_all', 'P_mean_all', 'T_mean_all', 't_mean_all', ...
-             'K_all', 'F_all', 'spec_sh_all', 'dof_spec_all', ...
-             'prof_idx_all', ...
-             'fft_length', 'diss_length', 'overlap_val', 'f_AA', 'fit_order', ...
-             'P_min', 'W_min', 'min_duration', ...
-             '-v7.3');
+        parsave_validation(out_path, ...
+            fs_fast, fs_slow, profiles, n_profiles, ...
+            eps_all, K_max_all, FM_all, mad_all, method_all, ...
+            nu_all, speed_all, P_mean_all, T_mean_all, t_mean_all, ...
+            K_all, F_all, spec_sh_all, dof_spec_all, prof_idx_all, ...
+            fft_length, diss_length, overlap_val, f_AA, fit_order, ...
+            P_min, W_min, min_duration);
 
         fprintf('  Saved %s\n', out_path);
 
+        end % if ~isempty(profiles)
+
     catch ME
-        fprintf('  ERROR: %s\n', ME.message);
-        fprintf('  %s\n', ME.stack(1).name);
+        fprintf('  ERROR processing %s: %s\n', p_path, ME.message);
+        if ~isempty(ME.stack)
+            fprintf('  %s\n', ME.stack(1).name);
+        end
     end
 end
 
 fprintf('\nDone.\n');
+
+
+function parsave_validation(out_path, ...
+    fs_fast, fs_slow, profiles, n_profiles, ...
+    eps_all, K_max_all, FM_all, mad_all, method_all, ...
+    nu_all, speed_all, P_mean_all, T_mean_all, t_mean_all, ...
+    K_all, F_all, spec_sh_all, dof_spec_all, prof_idx_all, ...
+    fft_length, diss_length, overlap_val, f_AA, fit_order, ...
+    P_min, W_min, min_duration)
+% PARSAVE_VALIDATION  Save validation data inside a parfor loop.
+%   Wraps save() in a function so parfor's transparency analysis is satisfied.
+    save(out_path, ...
+         'fs_fast', 'fs_slow', ...
+         'profiles', 'n_profiles', ...
+         'eps_all', 'K_max_all', 'FM_all', 'mad_all', 'method_all', ...
+         'nu_all', 'speed_all', 'P_mean_all', 'T_mean_all', 't_mean_all', ...
+         'K_all', 'F_all', 'spec_sh_all', 'dof_spec_all', ...
+         'prof_idx_all', ...
+         'fft_length', 'diss_length', 'overlap_val', 'f_AA', 'fit_order', ...
+         'P_min', 'W_min', 'min_duration', ...
+         '-v7.3');
+end

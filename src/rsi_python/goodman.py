@@ -69,8 +69,6 @@ def clean_shear_spec(
             f"returning uncleaned spectra",
             stacklevel=2,
         )
-        from rsi_python.spectral import csd_matrix as _csd_mat
-
         # Fall back to auto-spectrum only (no cleaning)
         n_freq_fb = nfft // 2 + 1
         F = np.arange(n_freq_fb) * rate / nfft

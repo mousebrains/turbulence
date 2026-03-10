@@ -114,7 +114,8 @@ rsi-tpw chi VMP/*.p --spectrum-model kraichnan -o chi/
 | `--direction {up,down}` | Profile direction (default: down) |
 | `--fp07-model {single_pole,double_pole}` | FP07 transfer function (default: single_pole) |
 | `--epsilon-dir DIR` | Directory with epsilon `.nc` files for Method 1 |
-| `--fit-method {mle,iterative}` | Method 2 fitting algorithm (default: mle) |
+| `--no-goodman` | Disable Goodman coherent noise removal |
+| `--fit-method {mle,iterative}` | Method 2 fitting algorithm (default: iterative) |
 | `--spectrum-model {batchelor,kraichnan}` | Theoretical spectrum model (default: kraichnan) |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
 | `--salinity FLOAT` | Salinity [PSU] for viscosity (default: 35, fixed S) |
@@ -134,7 +135,7 @@ rsi-tpw pipeline VMP/*.p -o results/
 | `--speed FLOAT` | Fixed profiling speed [m/s] (default: from dP/dt) |
 | `--eps-fft-length N` | FFT length for epsilon (default: 256) |
 | `--chi-fft-length N` | FFT length for chi (default: 512) |
-| `--no-goodman` | Disable Goodman noise removal for epsilon |
+| `--no-goodman` | Disable Goodman noise removal for epsilon and chi |
 | `--fp07-model {single_pole,double_pole}` | FP07 transfer function (default: single_pole) |
 | `--spectrum-model {batchelor,kraichnan}` | Spectrum model for chi (default: kraichnan) |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
