@@ -734,6 +734,7 @@ def _cmd_ql(args):
             direction=args.direction or "down",
             spec_P_range=spec_P_range,
             chi_method=args.chi_method,
+            spectrum_model=args.spectrum_model,
         )
 
 
@@ -776,6 +777,12 @@ def _add_ql_parser(subparsers):
         default=1,
         choices=[1, 2],
         help="Chi method for profile estimates: 1 = from epsilon, 2 = MLE fit (default: 1)",
+    )
+    p.add_argument(
+        "--spectrum-model",
+        default="batchelor",
+        choices=["batchelor", "kraichnan"],
+        help="Theoretical spectrum model (default: batchelor)",
     )
     p.set_defaults(func=_cmd_ql)
 

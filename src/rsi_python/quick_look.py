@@ -8,7 +8,7 @@ Layout (2 rows x 4 columns):
   Row 0 (pressure y-axis, all linked):
     Overview | Shear probes | Temperature & fall rate | T1, T2, JAC_T
   Row 1 (spectra + profiles):
-    Shear spectra | Chi spectra | ε & χ vs pressure | (hidden)
+    Shear spectra | Chi spectra | ε vs pressure | χ vs pressure
 """
 
 import re
@@ -19,7 +19,7 @@ import numpy as np
 from matplotlib.widgets import Button
 from scipy.signal import butter, filtfilt
 
-from rsi_python.batchelor import batchelor_grad, batchelor_kB
+from rsi_python.batchelor import batchelor_kB
 from rsi_python.despike import despike
 from rsi_python.fp07 import fp07_tau, fp07_transfer, gradT_noise
 from rsi_python.nasmyth import X_95, nasmyth
@@ -107,6 +107,7 @@ def _compute_chi_spectra(
     fft_length,
     f_AA,
     epsilons,
+    spectrum_model="batchelor",
 ):
     """Compute temperature gradient spectra and all three chi methods for one profile segment.
 
@@ -116,7 +117,7 @@ def _compute_chi_spectra(
     each mapping to a list of per-probe (batch_spec, chi_val, kB_val) tuples.
     """
     from rsi_python.batchelor import KAPPA_T
-    from rsi_python.chi import _iterative_fit, _mle_fit_kB
+    from rsi_python.chi import _iterative_fit, _mle_fit_kB, _spectrum_func
 
     mean_T = float(np.mean(T_slow))
     mean_speed = float(np.mean(np.abs(speed_fast[sel])))
@@ -162,6 +163,7 @@ def _compute_chi_spectra(
         dg_i = diff_gains[ci] if ci < len(diff_gains) else 0.94
 
         # --- Method 1: chi from known epsilon ---
+        grad_func, _ = _spectrum_func(spectrum_model)
         kB = batchelor_kB(eps_mean, nu)
         if kB > 1:
             tau0 = fp07_tau(mean_speed)
@@ -171,7 +173,7 @@ def _compute_chi_spectra(
             if np.sum(valid) >= 3:
                 obs_var = np.trapezoid(spec_obs[valid], K[valid])
                 chi_trial = max(6 * KAPPA_T * obs_var, 1e-12)
-                batch_spec = batchelor_grad(K, kB, chi_trial) * H2
+                batch_spec = grad_func(K, kB, chi_trial) * H2
                 model_var = np.trapezoid(batch_spec[valid], K[valid])
                 if model_var > 0:
                     scale = obs_var / model_var
@@ -201,7 +203,7 @@ def _compute_chi_spectra(
             mean_speed,
             f_AA,
             "single_pole",
-            "batchelor",
+            spectrum_model,
             fs_fast,
             dg_i,
             fft_length,
@@ -217,7 +219,7 @@ def _compute_chi_spectra(
             mean_speed,
             f_AA,
             "single_pole",
-            "batchelor",
+            spectrum_model,
             fs_fast,
             dg_i,
             fft_length,
@@ -241,6 +243,7 @@ def _compute_windowed_eps_chi(
     f_AA,
     do_goodman,
     chi_method=1,
+    spectrum_model="batchelor",
 ):
     """Compute windowed epsilon and chi estimates for a profile segment.
 
@@ -252,6 +255,8 @@ def _compute_windowed_eps_chi(
     ----------
     chi_method : int
         1 = chi from known epsilon (Method 1), 2 = MLE Batchelor fit (Method 2).
+    spectrum_model : str
+        Theoretical spectrum: 'batchelor' or 'kraichnan'.
     """
     from rsi_python.batchelor import KAPPA_T
     from rsi_python.chi import _mle_fit_kB
@@ -364,7 +369,7 @@ def _compute_windowed_eps_chi(
                         W,
                         f_AA,
                         "single_pole",
-                        "batchelor",
+                        spectrum_model,
                         fs_fast,
                         dg_i,
                         fft_length,
@@ -406,6 +411,7 @@ class QuickLookViewer:
         min_duration=7.0,
         spec_P_range=None,
         chi_method=1,
+        spectrum_model="batchelor",
     ):
         self.pf = pf
         self.fft_length = fft_length
@@ -413,6 +419,7 @@ class QuickLookViewer:
         self.goodman = goodman
         self.spec_P_range = spec_P_range
         self.chi_method = chi_method
+        self.spectrum_model = spectrum_model
 
         # Extract channel data
         sh_re = re.compile(r"^sh\d+$")
@@ -554,6 +561,12 @@ class QuickLookViewer:
         self._draw_spectra(sel_spec)
         self._draw_chi_spectra(sel_spec)
         self._draw_eps_chi_profile(sel_fast)
+
+        # Green band showing spectral depth range on all pressure-axis panels
+        if self.spec_P_range is not None:
+            sp_lo, sp_hi = self.spec_P_range
+            for ax in [self.axes[0, c] for c in range(4)] + [self.axes[1, 2], self.axes[1, 3]]:
+                ax.axhspan(sp_lo, sp_hi, color="green", alpha=0.15, zorder=0)
 
         P_lo, P_hi = self.P[s_slow], self.P[e_slow]
         title = (
@@ -703,9 +716,9 @@ class QuickLookViewer:
                     K,
                     nasmyth_specs[i],
                     c,
-                    linewidth=0.5,
+                    linewidth=0.75,
                     linestyle="--",
-                    alpha=0.7,
+                    alpha=0.9,
                     label=f"Nasmyth (ε={epsilons[i]:.1e})",
                 )
                 if np.isfinite(K_maxes[i]):
@@ -796,14 +809,16 @@ class QuickLookViewer:
             self.fft_length,
             self.f_AA,
             eps_for_chi,
+            spectrum_model=self.spectrum_model,
         )
         K, F, obs_spectra, methods_results, noise_K, mean_speed, nu = self._cached_chi
 
-        # Line styles for each method
+        # Line styles for each method; selected method drawn thicker
+        selected_method = {1: "M1", 2: "M2-MLE"}.get(self.chi_method, "M1")
         method_styles = [
-            ("M1", "--", 0.7),
-            ("M2-MLE", "-.", 0.7),
-            ("M2-Iter", ":", 0.7),
+            ("M1", "--", 0.9),
+            ("M2-MLE", "-.", 0.9),
+            ("M2-Iter", ":", 0.9),
         ]
         colors = ["C3", "C1", "C4", "C5"]
         n_probes = len(self.therm_fast)
@@ -823,17 +838,21 @@ class QuickLookViewer:
             for method_name, ls, alpha in method_styles:
                 batch_spec, chi_val, kB_val = methods_results[method_name][i]
                 valid_b = np.isfinite(batch_spec) & (batch_spec > 0)
+                lw = 1.5 if method_name == selected_method else 0.75
                 if np.any(valid_b):
                     chi_str = f"{chi_val:.1e}" if np.isfinite(chi_val) else "N/A"
+                    label = f"{method_name} χ={chi_str}"
+                    if method_name == selected_method:
+                        label = f"*{label}"
                     (line,) = ax.loglog(
                         K[valid_b],
                         batch_spec[valid_b],
                         c,
-                        linewidth=0.5,
+                        linewidth=lw,
                         linestyle=ls,
                         alpha=alpha,
                     )
-                    method_lines[method_name].append((line, f"{method_name} χ={chi_str}"))
+                    method_lines[method_name].append((line, label))
                 else:
                     method_lines[method_name].append(None)
 
@@ -882,23 +901,29 @@ class QuickLookViewer:
         ax.set_ylabel("Φ_T(k) [(K/m)² cpm⁻¹]")
         ax.set_xlim(0.5, 300)
         ax.legend(handles, labels, fontsize=5, loc="best", ncol=n_probes)
-        ax.set_title(f"Temperature gradient spectra (speed={mean_speed:.2f} m/s)", fontsize=9)
+        ax.set_title(
+            f"Temperature gradient spectra  speed={mean_speed:.2f} m/s"
+            f"  fit={selected_method}  model={self.spectrum_model}",
+            fontsize=9,
+        )
         ax.grid(True, alpha=0.3, which="both")
 
     def _draw_eps_chi_profile(self, sel_spec):
-        """Panel (1,2): Epsilon and chi vs pressure (windowed estimates)."""
-        ax = self.axes[1, 2]
+        """Panels (1,2) and (1,3): Epsilon and chi vs pressure (windowed estimates)."""
+        ax_eps = self.axes[1, 2]
+        ax_chi = self.axes[1, 3]
 
         n_spec = sel_spec.stop - sel_spec.start
         if n_spec < 2 * self.fft_length:
-            ax.text(
-                0.5,
-                0.5,
-                "Insufficient data",
-                transform=ax.transAxes,
-                ha="center",
-                va="center",
-            )
+            for ax in (ax_eps, ax_chi):
+                ax.text(
+                    0.5,
+                    0.5,
+                    "Insufficient data",
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                )
             return
 
         P_win, eps_arr, chi_arr = _compute_windowed_eps_chi(
@@ -915,64 +940,84 @@ class QuickLookViewer:
             self.f_AA,
             self.goodman,
             chi_method=self.chi_method,
+            spectrum_model=self.spectrum_model,
         )
 
         if len(P_win) == 0:
-            ax.text(
-                0.5,
-                0.5,
-                "No valid estimates",
-                transform=ax.transAxes,
-                ha="center",
-                va="center",
-            )
+            for ax in (ax_eps, ax_chi):
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No valid estimates",
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                )
             return
 
+        # Epsilon panel (1,2)
         colors_eps = ["C0", "C1"]
-        colors_chi = ["C3", "C4"]
-
-        has_data = False
+        has_eps = False
         for i, (name, _) in enumerate(self.shear):
             c = colors_eps[i % len(colors_eps)]
             valid = np.isfinite(eps_arr[i]) & (eps_arr[i] > 0)
             if np.any(valid):
-                ax.plot(
+                ax_eps.plot(
                     eps_arr[i, valid],
                     P_win[valid],
                     f"{c}o-",
                     markersize=3,
                     linewidth=0.8,
-                    label=f"ε ({name})",
+                    label=name,
                 )
-                has_data = True
+                has_eps = True
+        if has_eps:
+            ax_eps.set_xscale("log")
+            ax_eps.set_xlabel("ε [W/kg]")
+            ax_eps.set_ylabel("Pressure [dbar]")
+            ax_eps.legend(fontsize=6, loc="lower left")
+            ax_eps.set_title("ε profile", fontsize=9)
+            ax_eps.grid(True, alpha=0.3, which="both")
+        else:
+            ax_eps.text(
+                0.5,
+                0.5,
+                "No valid ε estimates",
+                transform=ax_eps.transAxes,
+                ha="center",
+                va="center",
+            )
 
+        # Chi panel (1,3)
+        colors_chi = ["C3", "C4"]
+        has_chi = False
         for i, (name, _) in enumerate(self.therm_fast):
             c = colors_chi[i % len(colors_chi)]
             valid = np.isfinite(chi_arr[i]) & (chi_arr[i] > 0)
             if np.any(valid):
-                ax.plot(
+                ax_chi.plot(
                     chi_arr[i, valid],
                     P_win[valid],
                     f"{c}s-",
                     markersize=3,
                     linewidth=0.8,
-                    label=f"χ ({name})",
+                    label=name,
                 )
-                has_data = True
-
-        if has_data:
-            ax.set_xscale("log")
-            ax.set_xlabel("ε [W/kg] / χ [K²/s]")
-            ax.set_ylabel("Pressure [dbar]")
-            ax.legend(fontsize=6, loc="lower left")
-            ax.set_title("ε & χ profiles", fontsize=9)
-            ax.grid(True, alpha=0.3, which="both")
+                has_chi = True
+        if has_chi:
+            ax_chi.set_xscale("log")
+            ax_chi.set_xlabel("χ [K²/s]")
+            ax_chi.set_ylabel("Pressure [dbar]")
+            ax_chi.legend(fontsize=6, loc="lower left")
+            selected = {1: "M1", 2: "M2-MLE"}.get(self.chi_method, "M1")
+            ax_chi.set_title(f"χ profile  fit={selected}  model={self.spectrum_model}", fontsize=9)
+            ax_chi.grid(True, alpha=0.3, which="both")
         else:
-            ax.text(
+            ax_chi.text(
                 0.5,
                 0.5,
-                "No valid ε or χ estimates",
-                transform=ax.transAxes,
+                "No valid χ estimates",
+                transform=ax_chi.transAxes,
                 ha="center",
                 va="center",
             )
@@ -991,19 +1036,17 @@ class QuickLookViewer:
         )
         self.fig.subplots_adjust(bottom=0.08, top=0.92, left=0.04, right=0.98)
 
-        # Link all pressure y-axes: row 0 + eps/chi profile panel (1,2)
+        # Link all pressure y-axes: row 0 + eps/chi profile panels (1,2) and (1,3)
         p_ref = self.axes[0, 0]
         for col in range(1, 4):
             self.axes[0, col].sharey(p_ref)
         self.axes[1, 2].sharey(p_ref)
+        self.axes[1, 3].sharey(p_ref)
         # Invert once on the reference (shared propagates)
         p_ref.invert_yaxis()
 
         # Link wavenumber x-axes: shear spectra (1,0) and chi spectra (1,1)
         self.axes[1, 1].sharex(self.axes[1, 0])
-
-        # Hide unused panel (1,3)
-        self.axes[1, 3].set_visible(False)
 
         # Navigation buttons
         ax_prev = self.fig.add_axes([0.35, 0.01, 0.07, 0.035])
@@ -1081,6 +1124,7 @@ def quick_look(
     min_duration=7.0,
     spec_P_range=None,
     chi_method=1,
+    spectrum_model="batchelor",
 ):
     """Open an interactive quick-look viewer for a .p file.
 
@@ -1109,6 +1153,8 @@ def quick_look(
         Chi method for windowed profile estimates: 1 = from known epsilon,
         2 = MLE Batchelor fit.  All three methods are always shown on the
         chi spectra panel.
+    spectrum_model : str
+        Theoretical spectrum model: 'batchelor' or 'kraichnan'.
 
     Returns
     -------
@@ -1127,6 +1173,7 @@ def quick_look(
         min_duration=min_duration,
         spec_P_range=spec_P_range,
         chi_method=chi_method,
+        spectrum_model=spectrum_model,
     )
     viewer.show()
     return viewer
