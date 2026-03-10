@@ -24,7 +24,7 @@ function result = chi_method2(spec_obs, K, nu, speed, options)
 %       f_AA           - Anti-aliasing frequency [Hz] (default: 98)
 %       fs             - Sampling rate [Hz] (default: 512)
 %       diff_gain      - Pre-emphasis differentiator gain [s] (default: 0.94)
-%       spectrum_model - "batchelor" (default) or "kraichnan"
+%       spectrum_model - "kraichnan" (default) or "batchelor"
 %       fp07_model     - "single_pole" (default) or "double_pole"
 %       kappa_T        - Thermal diffusivity [m^2/s] (default: 1.4e-7)
 %       noise_K        - Pre-computed noise spectrum [(K/m)^2/cpm]
@@ -54,7 +54,7 @@ function result = chi_method2(spec_obs, K, nu, speed, options)
         options.fs             (1,1) double {mustBePositive} = 512
         options.diff_gain      (1,1) double {mustBePositive} = 0.94
         options.spectrum_model (1,1) string {mustBeMember(options.spectrum_model, ...
-            ["batchelor", "kraichnan"])} = "batchelor"
+            ["batchelor", "kraichnan"])} = "kraichnan"
         options.fp07_model     (1,1) string {mustBeMember(options.fp07_model, ...
             ["single_pole", "double_pole"])} = "single_pole"
         options.kappa_T        (1,1) double {mustBePositive} = 1.4e-7

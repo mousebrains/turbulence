@@ -630,7 +630,7 @@ def _add_chi_parser(subparsers):
         "--spectrum-model",
         default=None,
         choices=["batchelor", "kraichnan"],
-        help="Theoretical spectrum model (default: batchelor)",
+        help="Theoretical spectrum model (default: kraichnan)",
     )
     p.add_argument(
         "--f-AA", type=float, default=None, help="Anti-aliasing filter cutoff [Hz] (default: 98)"
@@ -702,7 +702,7 @@ def _add_pipeline_parser(subparsers):
         "--spectrum-model",
         default=None,
         choices=["batchelor", "kraichnan"],
-        help="Theoretical spectrum model for chi (default: batchelor)",
+        help="Theoretical spectrum model for chi (default: kraichnan)",
     )
     p.add_argument(
         "--f-AA", type=float, default=None, help="Anti-aliasing filter cutoff [Hz] (default: 98)"
@@ -780,9 +780,9 @@ def _add_ql_parser(subparsers):
     )
     p.add_argument(
         "--spectrum-model",
-        default="batchelor",
+        default="kraichnan",
         choices=["batchelor", "kraichnan"],
-        help="Theoretical spectrum model (default: batchelor)",
+        help="Theoretical spectrum model (default: kraichnan)",
     )
     p.set_defaults(func=_cmd_ql)
 

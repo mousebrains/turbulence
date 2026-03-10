@@ -107,7 +107,7 @@ def _compute_chi_spectra(
     fft_length,
     f_AA,
     epsilons,
-    spectrum_model="batchelor",
+    spectrum_model="kraichnan",
 ):
     """Compute temperature gradient spectra and all three chi methods for one profile segment.
 
@@ -243,7 +243,7 @@ def _compute_windowed_eps_chi(
     f_AA,
     do_goodman,
     chi_method=1,
-    spectrum_model="batchelor",
+    spectrum_model="kraichnan",
 ):
     """Compute windowed epsilon and chi estimates for a profile segment.
 
@@ -411,7 +411,7 @@ class QuickLookViewer:
         min_duration=7.0,
         spec_P_range=None,
         chi_method=1,
-        spectrum_model="batchelor",
+        spectrum_model="kraichnan",
     ):
         self.pf = pf
         self.fft_length = fft_length
@@ -1124,7 +1124,7 @@ def quick_look(
     min_duration=7.0,
     spec_P_range=None,
     chi_method=1,
-    spectrum_model="batchelor",
+    spectrum_model="kraichnan",
 ):
     """Open an interactive quick-look viewer for a .p file.
 

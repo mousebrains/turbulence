@@ -115,7 +115,7 @@ rsi-tpw chi VMP/*.p --spectrum-model kraichnan -o chi/
 | `--fp07-model {single_pole,double_pole}` | FP07 transfer function (default: single_pole) |
 | `--epsilon-dir DIR` | Directory with epsilon `.nc` files for Method 1 |
 | `--fit-method {mle,iterative}` | Method 2 fitting algorithm (default: mle) |
-| `--spectrum-model {batchelor,kraichnan}` | Theoretical spectrum model (default: batchelor) |
+| `--spectrum-model {batchelor,kraichnan}` | Theoretical spectrum model (default: kraichnan) |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
 | `--salinity FLOAT` | Salinity [PSU] for viscosity (default: 35, fixed S) |
 
@@ -136,7 +136,7 @@ rsi-tpw pipeline VMP/*.p -o results/
 | `--chi-fft-length N` | FFT length for chi (default: 512) |
 | `--no-goodman` | Disable Goodman noise removal for epsilon |
 | `--fp07-model {single_pole,double_pole}` | FP07 transfer function (default: single_pole) |
-| `--spectrum-model {batchelor,kraichnan}` | Spectrum model for chi (default: batchelor) |
+| `--spectrum-model {batchelor,kraichnan}` | Spectrum model for chi (default: kraichnan) |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
 | `--salinity FLOAT` | Salinity [PSU] for viscosity (default: 35, fixed S) |
 

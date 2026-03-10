@@ -98,7 +98,7 @@ results = get_chi(gradT, P_fast, T_slow, speed, fs_fast, Name=Value)
 | `overlap` | diss_length/2 | Window overlap [samples] |
 | `f_AA` | 98 | Anti-aliasing frequency [Hz] |
 | `diff_gain` | 0.94 | Differentiator gain [s] |
-| `spectrum_model` | "batchelor" | "batchelor" or "kraichnan" |
+| `spectrum_model` | "kraichnan" | "batchelor" or "kraichnan" |
 | `fp07_model` | "single_pole" | "single_pole" or "double_pole" |
 | `salinity` | 35 | Salinity [PSU] |
 

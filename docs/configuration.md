@@ -80,7 +80,7 @@ Controls computation of the thermal variance dissipation rate (chi) from FP07 th
 | `goodman` | bool | `false` | Enable Goodman coherent noise removal for temperature spectra. Typically disabled for chi because FP07 signals are less affected by vibration than shear probes. |
 | `f_AA` | float | `98.0` | Anti-aliasing filter cutoff frequency [Hz]. |
 | `fit_method` | string | `"mle"` | Method 2 spectral fitting algorithm. `"mle"`: Maximum Likelihood Estimation (Ruddick et al. 2000). `"iterative"`: Iterative integration (Peterson & Fer 2014). Only used when epsilon is not provided. |
-| `spectrum_model` | string | `"batchelor"` | Theoretical temperature gradient spectrum model. `"batchelor"`: Gaussian rolloff (Batchelor 1959). `"kraichnan"`: Exponential rolloff (Bogucki et al. 1997). |
+| `spectrum_model` | string | `"kraichnan"` | Theoretical temperature gradient spectrum model. `"batchelor"`: Gaussian rolloff (Batchelor 1959). `"kraichnan"`: Exponential rolloff (Bogucki et al. 1997). |
 | `salinity` | float | `null` | Fixed salinity [PSU] for computing kinematic viscosity. If `null`, uses simplified S = 35 formula. |
 
 ---
@@ -122,7 +122,7 @@ chi:
   goodman: false        # Goodman coherent noise removal
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
   fit_method: mle       # Method 2 fitting: mle or iterative
-  spectrum_model: batchelor  # theoretical spectrum: batchelor or kraichnan
+  spectrum_model: kraichnan  # theoretical spectrum: batchelor or kraichnan
   salinity: null        # salinity [PSU] (null = 35, fixed S)
 ```
 

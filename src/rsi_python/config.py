@@ -46,7 +46,7 @@ DEFAULTS: dict[str, dict] = {
         "goodman": False,
         "f_AA": 98.0,
         "fit_method": "mle",
-        "spectrum_model": "batchelor",
+        "spectrum_model": "kraichnan",
         "salinity": None,
     },
 }
@@ -379,7 +379,7 @@ chi:
   goodman: false        # Goodman coherent noise removal
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
   fit_method: mle       # Method 2 fitting: mle or iterative
-  spectrum_model: batchelor  # theoretical spectrum: batchelor or kraichnan
+  spectrum_model: kraichnan  # theoretical spectrum: batchelor or kraichnan
   salinity: null        # salinity [PSU] (null = 35, fixed S)
 """
 

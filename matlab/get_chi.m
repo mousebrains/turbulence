@@ -27,7 +27,7 @@ function results = get_chi(gradT, P_fast, T_slow, speed, fs_fast, options)
 %       overlap        - Window overlap [samples] (default: diss_length/2)
 %       f_AA           - Anti-aliasing frequency [Hz] (default: 98)
 %       diff_gain      - Differentiator gain [s] (default: 0.94)
-%       spectrum_model - "batchelor" or "kraichnan" (default: "batchelor")
+%       spectrum_model - "batchelor" or "kraichnan" (default: "kraichnan")
 %       fp07_model     - "single_pole" or "double_pole" (default: "single_pole")
 %       salinity       - Salinity [PSU] for viscosity (default: 35)
 %
@@ -65,7 +65,7 @@ function results = get_chi(gradT, P_fast, T_slow, speed, fs_fast, options)
         options.f_AA           (1,1) double {mustBePositive} = 98
         options.diff_gain      (1,1) double {mustBePositive} = 0.94
         options.spectrum_model (1,1) string {mustBeMember(options.spectrum_model, ...
-            ["batchelor", "kraichnan"])} = "batchelor"
+            ["batchelor", "kraichnan"])} = "kraichnan"
         options.fp07_model     (1,1) string {mustBeMember(options.fp07_model, ...
             ["single_pole", "double_pole"])} = "single_pole"
         options.salinity       (1,1) double {mustBeNonnegative} = 35

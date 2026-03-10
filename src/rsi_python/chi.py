@@ -395,7 +395,7 @@ def get_chi(
     goodman: bool = False,
     f_AA: float = 98.0,
     fit_method: str = "mle",
-    spectrum_model: str = "batchelor",
+    spectrum_model: str = "kraichnan",
     salinity: npt.ArrayLike | None = None,
 ) -> list[xr.Dataset]:
     """Compute chi from temperature gradient spectra.
