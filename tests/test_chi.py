@@ -238,8 +238,9 @@ class TestShearNoiseModel:
 
     def test_default_parameters_match_odas(self):
         """Verify default parameter values match ODAS noise_shearchannel.m."""
-        from rsi_python.shear_noise import noise_shearchannel
         import inspect
+
+        from rsi_python.shear_noise import noise_shearchannel
 
         sig = inspect.signature(noise_shearchannel)
         defaults = {k: v.default for k, v in sig.parameters.items()
