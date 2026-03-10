@@ -117,6 +117,9 @@ def noise_thermchannel(
     gamma_RSI: float = 3,
     T_K: float = 295,
     K_B: float = 1.382e-23,
+    e_b: float = 0.68,
+    b: float = 1.0,
+    beta_1: float = 3000.0,
 ) -> np.ndarray:
     """Electronics noise spectrum for FP07 thermistor [(K/m)^2 / Hz].
 
@@ -164,6 +167,12 @@ def noise_thermchannel(
         Operating temperature [K].
     K_B : float
         Boltzmann constant [J/K].
+    e_b : float
+        Bridge excitation voltage [V].
+    b : float
+        Steinhart-Hart 'b' coefficient.
+    beta_1 : float
+        Steinhart-Hart beta_1 coefficient [K].
 
     Returns
     -------
@@ -227,12 +236,13 @@ def noise_thermchannel(
     #
     # The scale factor approach from gradT_noise_odas.m:
     # For a typical FP07 with e_b=0.68, b=1, g=6, beta_1=3000:
-    e_b = 0.68  # typical bridge excitation
-    b = 1.0  # typical b coefficient
-    beta_1 = 3000.0  # typical beta_1
     eta = (b / 2) * 2**adc_bits * gain * e_b / adc_fs
-    # R ~ 1 for temperatures near the nominal calibration point
-    R_ratio = 1.0
+    # Compute resistance ratio from Steinhart-Hart: T = 1/(1/T_0 + ln(R)/beta_1)
+    # Solving: R = exp(beta_1 * (1/T_K - 1/T_0)) where T_0 is reference temp.
+    # T_0 defaults to 289.3 K (~16°C) for typical FP07 calibration.
+    T_0 = 289.3  # typical reference temperature [K]
+    R_ratio = np.exp(beta_1 * (1.0 / T_kelvin - 1.0 / T_0))
+    R_ratio = max(R_ratio, 0.1)  # guard against broken thermistor
     scale_factor = T_kelvin**2 * (1 + R_ratio) ** 2 / (2 * eta * beta_1 * R_ratio)
     # Note: speed is NOT included here — caller divides by speed when converting
     # frequency spectrum to wavenumber spectrum.

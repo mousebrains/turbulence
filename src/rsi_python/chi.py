@@ -174,10 +174,11 @@ def _mle_fit_kB(
     """
     grad_func, q = _spectrum_func(spectrum_model)
 
-    # FP07 transfer function
+    # FP07 transfer function — respect fp07_model parameter
+    _h2 = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
     tau0 = fp07_tau(speed)
     F = K * speed
-    H2 = fp07_transfer(F, tau0)
+    H2 = _h2(F, tau0)
 
     # Noise spectrum
     noise_K, _ = gradT_noise(F, T_mean, speed, fs=fs, diff_gain=diff_gain)
@@ -237,10 +238,21 @@ def _mle_fit_kB(
     # Recover epsilon from kB
     epsilon = (2 * np.pi * kB_best) ** 4 * nu * KAPPA_T**2
 
-    # Compute chi by integrating fitted Batchelor spectrum
-    K_fine = np.linspace(K[1] * 0.01, kB_best * 5, 10000)
+    # Re-estimate chi with unresolved-variance correction (like Method 1)
+    K_fine = np.linspace(K[1] * 0.01, max(K_max_fit * 5, kB_best * 5), 10000)
     spec_fine = grad_func(K_fine, kB_best, chi_obs)
-    chi = 6 * KAPPA_T * np.trapezoid(spec_fine, K_fine)
+    V_total = np.trapezoid(spec_fine, K_fine)
+    F_fine = K_fine * speed
+    H2_fine = _h2(F_fine, tau0)
+    mask_resolved = K_fine <= K_max_fit
+    V_resolved = np.trapezoid(
+        spec_fine[mask_resolved] * H2_fine[mask_resolved], K_fine[mask_resolved]
+    )
+    if V_resolved > 0 and V_total > 0:
+        obs_var = np.trapezoid(spec_obs[fit_mask], K[fit_mask])
+        chi = 6 * KAPPA_T * obs_var * V_total / V_resolved
+    else:
+        chi = 6 * KAPPA_T * np.trapezoid(spec_fine, K_fine)
 
     # Fitted spectrum for output
     spec_batch = grad_func(K, kB_best, chi)
@@ -420,7 +432,7 @@ def get_chi(
     fp07_model : str
         'single_pole' or 'double_pole' for FP07 transfer function.
     goodman : bool
-        Apply Goodman noise removal (not yet implemented for scalars).
+        Apply Goodman coherent noise removal using accelerometers.
     f_AA : float
         Anti-aliasing filter cutoff [Hz].
     fit_method : str
@@ -462,6 +474,12 @@ def get_chi(
     therm_arrays = [t[1] for t in data["therm"]]
     n_therm = len(therm_arrays)
     diff_gains = data.get("diff_gains", [0.94] * n_therm)
+    therm_cal = data.get("therm_cal", [{}] * n_therm)
+
+    # Accelerometer arrays for scalar Goodman cleaning
+    accel_arrays = [a[1] for a in data.get("accel", [])]
+    if not goodman:
+        accel_arrays = []
 
     if n_therm == 0:
         raise ValueError("No thermistor gradient channels found")
@@ -487,6 +505,7 @@ def get_chi(
         e_fast = min((e_slow + 1) * ratio, len(t_fast))
 
         therm_prof = [arr[s_fast:e_fast] for arr in therm_arrays]
+        accel_prof = [arr[s_fast:e_fast] for arr in accel_arrays] if accel_arrays else None
         p_prof = P_fast[s_fast:e_fast]
         t_prof = T_fast[s_fast:e_fast]
         spd_prof = speed_fast[s_fast:e_fast]
@@ -515,6 +534,8 @@ def get_chi(
             fit_method,
             epsilon_ds,
             salinity=sal_prof,
+            therm_cal=therm_cal,
+            accel_arrays=accel_prof,
         )
         ds.attrs.update(data["metadata"])
         ds.attrs["history"] = (
@@ -535,6 +556,49 @@ def get_chi(
         results.append(ds)
 
     return results
+
+
+def _extract_therm_cal(ch_cfg: dict) -> dict:
+    """Extract thermistor calibration parameters from PFile channel config."""
+    cal = {}
+    for key in ("e_b", "b", "g", "beta_1", "adc_fs", "adc_bits"):
+        val = ch_cfg.get(key)
+        if val is not None:
+            cal[key] = float(val)
+    # Map 'g' to 'gain' for noise_thermchannel
+    if "g" in cal:
+        cal["gain"] = cal.pop("g")
+    return cal
+
+
+def _bilinear_correction(F, diff_gain, fs):
+    """Bilinear transform correction for deconvolution filter.
+
+    Matches ODAS get_scalar_spectra_odas.m lines 264-270:
+    corrects for the difference between the ideal analog LP filter
+    H = 1/(1+(2*pi*f*diff_gain)^2) and the actual digital Butterworth
+    used in deconvolution.
+    """
+    from scipy.signal import butter, freqz
+
+    # Digital Butterworth used in deconvolution
+    b, a = butter(1, 1 / (2 * np.pi * diff_gain * fs / 2))
+    # Evaluate at the frequency points
+    n = len(F)
+    bl = np.ones(n)
+    # Compute for non-zero frequencies (avoid DC)
+    idx = np.arange(1, n)
+    F_eval = F[idx]
+    # freqz expects normalized frequency (0 to pi)
+    w_norm = 2 * np.pi * F_eval / fs
+    _, h = freqz(b, a, worN=w_norm)
+    H_digital = np.abs(h) ** 2
+    # Ideal analog response
+    H_analog = 1.0 / (1 + (2 * np.pi * F_eval * diff_gain) ** 2)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        bl[idx] = H_analog / H_digital
+    bl = np.where(np.isfinite(bl), bl, bl[np.isfinite(bl)][-1] if np.any(np.isfinite(bl)) else 1.0)
+    return bl
 
 
 def _load_therm_channels(source):
@@ -563,6 +627,8 @@ def _load_therm_channels(source):
     else:
         pf = None
 
+    therm_cal = []  # per-probe calibration dicts for noise model
+
     if pf is not None:
         # Look for pre-emphasized channels (T1_dT1, T2_dT2)
         dT_re = re.compile(r"^T\d+_dT\d+$")
@@ -578,6 +644,13 @@ def _load_therm_channels(source):
                 )
                 dg = ch_cfg.get("diff_gain", "0.94")
                 diff_gains.append(float(dg))
+                # Extract calibration from base channel (T1 for T1_dT1)
+                base_name = re.match(r"^(\w+)_d\1$", name).group(1)
+                base_cfg = next(
+                    (ch for ch in pf.config["channels"] if ch.get("name") == base_name),
+                    {},
+                )
+                therm_cal.append(_extract_therm_cal(base_cfg))
 
         # If no pre-emphasized channels, use T channels with first-difference
         if not therm:
@@ -587,6 +660,11 @@ def _load_therm_channels(source):
                     T_data = pf.channels[name]
                     therm.append((name, T_data))
                     diff_gains.append(0.94)
+                    ch_cfg = next(
+                        (ch for ch in pf.config["channels"] if ch.get("name") == name),
+                        {},
+                    )
+                    therm_cal.append(_extract_therm_cal(ch_cfg))
     else:
         # NetCDF source — look for gradient channels or T channels
         import netCDF4 as nc
@@ -614,6 +692,7 @@ def _load_therm_channels(source):
 
     data["therm"] = therm
     data["diff_gains"] = diff_gains
+    data["therm_cal"] = therm_cal if therm_cal else [{}] * len(therm)
     return data
 
 
@@ -635,6 +714,8 @@ def _compute_profile_chi(
     fit_method,
     epsilon_ds,
     salinity=None,
+    therm_cal=None,
+    accel_arrays=None,
 ):
     """Compute chi for a single profile."""
     N = len(P)
@@ -707,9 +788,27 @@ def _compute_profile_chi(
         T_out[idx] = mean_T
         t_out[idx] = mean_t
 
-        # Noise spectrum for this window
-        noise_K, _ = gradT_noise(F, mean_T, W, fs=fs_fast, diff_gain=diff_gains[0])
+        # Noise spectrum for this window (use first probe's calibration)
+        cal_0 = (therm_cal[0] if therm_cal else {}) if therm_cal else {}
+        noise_kwargs = {k: v for k, v in cal_0.items() if k in (
+            "e_b", "gain", "beta_1", "adc_fs", "adc_bits",
+        )}
+        noise_K, _ = gradT_noise(
+            F, mean_T, W, fs=fs_fast, diff_gain=diff_gains[0], **noise_kwargs
+        )
         spec_noise_out[:, idx] = noise_K
+
+        # Scalar Goodman cleaning: remove accelerometer-coherent noise
+        do_goodman = accel_arrays is not None and len(accel_arrays) > 0
+        clean_spectra = {}
+        if do_goodman:
+            from rsi_python.goodman import clean_shear_spec
+
+            accel_seg = np.column_stack([a[sel] for a in accel_arrays])
+            therm_seg = np.column_stack([therm_arrays[ci][sel] for ci in range(n_therm)])
+            clean_TT, _, _, _, _ = clean_shear_spec(accel_seg, therm_seg, fft_length, fs_fast)
+            for ci in range(n_therm):
+                clean_spectra[ci] = np.real(clean_TT[:, ci, ci])
 
         # Get epsilon for Method 1
         epsilon_val = None
@@ -722,16 +821,21 @@ def _compute_profile_chi(
                 epsilon_val = None
 
         for ci in range(n_therm):
-            # Compute auto-spectrum of gradient signal
-            seg = therm_arrays[ci][sel]
-            Pxx, F_spec = csd_odas(
-                seg,
-                None,
-                fft_length,
-                fs_fast,
-                overlap=fft_length // 2,
-                detrend="linear",
-            )[:2]
+            if do_goodman and ci in clean_spectra:
+                # Use Goodman-cleaned spectrum
+                Pxx = clean_spectra[ci]
+                F_spec = np.arange(n_freq) * fs_fast / fft_length
+            else:
+                # Compute auto-spectrum of gradient signal
+                seg = therm_arrays[ci][sel]
+                Pxx, F_spec = csd_odas(
+                    seg,
+                    None,
+                    fft_length,
+                    fs_fast,
+                    overlap=fft_length // 2,
+                    detrend="linear",
+                )[:2]
 
             # Convert to wavenumber spectrum
             spec_obs = Pxx * W
@@ -743,7 +847,10 @@ def _compute_profile_chi(
                     np.pi * F_spec[1:] / (fs_fast * np.sin(np.pi * F_spec[1:] / fs_fast))
                 ) ** 2
             correction = np.where(np.isfinite(correction), correction, 1.0)
-            spec_obs = spec_obs * correction
+
+            # Bilinear correction (ODAS get_scalar_spectra_odas.m l.264-270)
+            bl_corr = _bilinear_correction(F_spec, diff_gains[ci], fs_fast)
+            spec_obs = spec_obs * correction * bl_corr
 
             spec_gradT[ci, :, idx] = spec_obs
 
