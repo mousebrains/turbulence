@@ -874,9 +874,10 @@ def _estimate_epsilon(K, shear_spectrum, nu, K_AA, fit_order, e_isr_threshold, n
 
         # Correct for missing variance at bottom end (odas l.635-638)
         if len(K) > 2:
+            e_4_vc = e_4  # variance-corrected value for ratio test
             phi_low = nasmyth(e_4, nu, K[1:3])
             e_4 = e_4 + 0.25 * 7.5 * nu * K[1] * phi_low[0]
-            if e_4 / e_3 > 1.1:
+            if e_4 / e_4_vc > 1.1:
                 e_4 = _variance_correction(e_4, K[Range[-1]], nu)
 
         k_max = K[Range[-1]]

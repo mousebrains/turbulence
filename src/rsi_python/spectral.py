@@ -74,6 +74,10 @@ def csd_odas(
         Auto-spectrum of y (only if cross-spectrum computed).
     """
     x = np.asarray(x, dtype=np.float64).ravel()
+    if len(x) < 2 * nfft:
+        raise ValueError(
+            f"Input length ({len(x)}) must be at least 2*nfft ({2 * nfft})"
+        )
     auto = y is None
     if not auto:
         y = np.asarray(y, dtype=np.float64).ravel()
@@ -172,6 +176,10 @@ def csd_matrix(
     x = np.atleast_2d(np.asarray(x, dtype=np.float64))
     if x.ndim == 2 and x.shape[0] < x.shape[1]:
         x = x.T
+    if x.shape[0] < 2 * nfft:
+        raise ValueError(
+            f"Input length ({x.shape[0]}) must be at least 2*nfft ({2 * nfft})"
+        )
     n_x = x.shape[1]
 
     auto = y is None

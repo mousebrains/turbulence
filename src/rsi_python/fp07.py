@@ -120,6 +120,8 @@ def noise_thermchannel(
     e_b: float = 0.68,
     b: float = 1.0,
     beta_1: float = 3000.0,
+    T_0: float = 289.3,
+    beta_2: float | None = None,
 ) -> np.ndarray:
     """Electronics noise spectrum for FP07 thermistor [(K/m)^2 / Hz].
 
@@ -173,6 +175,11 @@ def noise_thermchannel(
         Steinhart-Hart 'b' coefficient.
     beta_1 : float
         Steinhart-Hart beta_1 coefficient [K].
+    T_0 : float
+        Steinhart-Hart reference temperature [K]. Default 289.3 (~16 deg C).
+    beta_2 : float or None
+        Steinhart-Hart beta_2 coefficient [K]. When finite, applies
+        scale factor correction (MATLAB gradT_noise_odas.m l.335-338).
 
     Returns
     -------
@@ -184,11 +191,17 @@ def noise_thermchannel(
     delta_s = adc_fs / 2**adc_bits  # ADC step size
     fN = fs / 2  # Nyquist frequency
 
+    # Compute operating resistance for Johnson noise (MATLAB gradT_noise_odas.m)
+    T_kelvin = T_mean + 273.15
+    R_ratio = np.exp(beta_1 * (1.0 / T_kelvin - 1.0 / T_0))
+    R_ratio = 1.0 if R_ratio < 0.1 else R_ratio  # guard: broken thermistor
+    R_actual = R_ratio * R_0
+
     # --- Stage 1: First amplifier + Johnson noise ---
     with np.errstate(divide="ignore", invalid="ignore"):
         V1 = 2 * E_n**2 * np.sqrt(1 + (F / fc) ** 2) / (F / fc)
     V1 = np.where(np.isfinite(V1), V1, V1[np.isfinite(V1)].max() if np.any(np.isfinite(V1)) else 0)
-    phi_R = 4 * K_B * R_0 * T_K  # Johnson noise
+    phi_R = 4 * K_B * R_actual * T_K  # Johnson noise (actual operating resistance)
     Noise_1 = gain**2 * (V1 + phi_R)
 
     # --- Stage 2: Pre-emphasis + second amplifier ---
@@ -214,36 +227,13 @@ def noise_thermchannel(
     Noise_counts = Noise_counts * G_HP
 
     # --- Convert to physical units ---
-    # Approximate scale factor from Steinhart-Hart (simplified for noise model)
-    # For a typical FP07 at T_mean: scale_factor ≈ dT/d(counts) / speed
-    # We use the simplified form: the noise in gradient units is
-    # noise_counts * scale_factor^2, where scale_factor converts counts/s to K/m
-    #
-    # From gradT_noise_odas.m: scale_factor = T^2*(1+R)^2 / (2*eta*beta_1*R) / speed
-    # For the noise model we use a simplified thermistor sensitivity.
-    # With typical FP07 parameters at T_mean:
-    T_kelvin = T_mean + 273.15
-    # Simplified: dT/dR ~ T^2/beta_1, and typical beta_1 ~ 3000
-    # scale_counts_to_T = T_kelvin^2 / (3000 * eta) where eta = b/2 * 2^bits * g * e_b / adc_fs
-    # For default parameters: eta ≈ 1 * 2^16 * 6 * 0.68 / 4.096 ≈ 1 * 65536 * 6 * 0.68 / 4.096
-    # Using simplified formula:
-    # noise_physical = noise_counts * (adc_fs / 2^adc_bits)^2
-    #                * (T_kelvin^2 / (beta_1 * e_b * gain))^2
-    # This is approximate — the exact factor depends on individual thermistor calibration.
-    #
-    # More precisely: from noise_thermchannel.m output (counts^2/Hz) we need
-    # to multiply by (physical_units_per_count)^2 to get (K/m)^2/Hz.
-    #
-    # The scale factor approach from gradT_noise_odas.m:
-    # For a typical FP07 with e_b=0.68, b=1, g=6, beta_1=3000:
+    # Scale factor: convert counts to physical gradient units (gradT_noise_odas.m)
+    # R_ratio and T_kelvin already computed above
     eta = (b / 2) * 2**adc_bits * gain * e_b / adc_fs
-    # Compute resistance ratio from Steinhart-Hart: T = 1/(1/T_0 + ln(R)/beta_1)
-    # Solving: R = exp(beta_1 * (1/T_K - 1/T_0)) where T_0 is reference temp.
-    # T_0 defaults to 289.3 K (~16°C) for typical FP07 calibration.
-    T_0 = 289.3  # typical reference temperature [K]
-    R_ratio = np.exp(beta_1 * (1.0 / T_kelvin - 1.0 / T_0))
-    R_ratio = max(R_ratio, 0.1)  # guard against broken thermistor
     scale_factor = T_kelvin**2 * (1 + R_ratio) ** 2 / (2 * eta * beta_1 * R_ratio)
+    # beta_2 correction (MATLAB gradT_noise_odas.m l.335-338)
+    if beta_2 is not None and np.isfinite(beta_2):
+        scale_factor *= 1 + 2 * (beta_1 / beta_2) * np.log(R_ratio)
     # Note: speed is NOT included here — caller divides by speed when converting
     # frequency spectrum to wavenumber spectrum.
 

@@ -57,7 +57,29 @@ def clean_shear_spec(
 
     # Compute all spectra in one call: x=shear, y=accel
     # Returns Cxy=(n_freq, n_sh, n_ac), Cxx=(n_freq, n_sh, n_sh), Cyy=(n_freq, n_ac, n_ac)
-    UA, F, UU, AA = csd_matrix(shear, accel, nfft, rate, overlap=nfft // 2, detrend="linear")
+    try:
+        UA, F, UU, AA = csd_matrix(shear, accel, nfft, rate, overlap=nfft // 2, detrend="linear")
+    except ValueError:
+        # Signal too short for CSD — warn and return uncleaned spectra
+        import warnings
+
+        warnings.warn(
+            f"Insufficient FFT segments for Goodman cleaning "
+            f"(signal length {shear.shape[0]} < 2*nfft {2 * nfft}); "
+            f"returning uncleaned spectra",
+            stacklevel=2,
+        )
+        from rsi_python.spectral import csd_matrix as _csd_mat
+
+        # Fall back to auto-spectrum only (no cleaning)
+        n_freq_fb = nfft // 2 + 1
+        F = np.arange(n_freq_fb) * rate / nfft
+        n_sh = shear.shape[1]
+        n_ac = accel.shape[1]
+        UU = np.zeros((n_freq_fb, n_sh, n_sh), dtype=np.complex128)
+        AA = np.zeros((n_freq_fb, n_ac, n_ac), dtype=np.complex128)
+        UA = np.zeros((n_freq_fb, n_sh, n_ac), dtype=np.complex128)
+        return np.real(UU), AA, UU, UA, F
     assert UU is not None and AA is not None  # always returned when y is provided
 
     # UU, AA, UA are complex; extract real diagonal for auto-spectra

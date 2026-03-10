@@ -313,7 +313,7 @@ def _iterative_fit(
     )
 
     if chi_obs <= 0:
-        chi_obs = 1e-11
+        chi_obs = 1e-14
 
     # Iterative refinement (3 iterations)
     kB_best = np.nan
@@ -367,7 +367,7 @@ def _iterative_fit(
         chi_obs = max(chi_obs_new, 0) + chi_low + chi_high
 
         if chi_obs <= 0:
-            chi_obs = 1e-11
+            chi_obs = 1e-14
 
     # Final values
     chi = chi_obs
@@ -406,7 +406,7 @@ def get_chi(
     fp07_model: str = "single_pole",
     goodman: bool = False,
     f_AA: float = 98.0,
-    fit_method: str = "mle",
+    fit_method: str = "iterative",
     spectrum_model: str = "kraichnan",
     salinity: npt.ArrayLike | None = None,
 ) -> list[xr.Dataset]:
@@ -561,7 +561,7 @@ def get_chi(
 def _extract_therm_cal(ch_cfg: dict) -> dict:
     """Extract thermistor calibration parameters from PFile channel config."""
     cal = {}
-    for key in ("e_b", "b", "g", "beta_1", "adc_fs", "adc_bits"):
+    for key in ("e_b", "b", "g", "beta_1", "beta_2", "adc_fs", "adc_bits", "T_0"):
         val = ch_cfg.get(key)
         if val is not None:
             cal[key] = float(val)
@@ -586,8 +586,10 @@ def _bilinear_correction(F, diff_gain, fs):
     # Evaluate at the frequency points
     n = len(F)
     bl = np.ones(n)
-    # Compute for non-zero frequencies (avoid DC)
-    idx = np.arange(1, n)
+    if n < 3:
+        return bl
+    # Compute for indices 1..N-2 (exclude DC and Nyquist), matching ODAS
+    idx = np.arange(1, n - 1)
     F_eval = F[idx]
     # freqz expects normalized frequency (0 to pi)
     w_norm = 2 * np.pi * F_eval / fs
@@ -597,7 +599,9 @@ def _bilinear_correction(F, diff_gain, fs):
     H_analog = 1.0 / (1 + (2 * np.pi * F_eval * diff_gain) ** 2)
     with np.errstate(divide="ignore", invalid="ignore"):
         bl[idx] = H_analog / H_digital
-    bl = np.where(np.isfinite(bl), bl, bl[np.isfinite(bl)][-1] if np.any(np.isfinite(bl)) else 1.0)
+    bl = np.where(np.isfinite(bl), bl, 1.0)
+    # Copy second-to-last value to Nyquist bin (ODAS convention)
+    bl[-1] = bl[-2]
     return bl
 
 
@@ -888,7 +892,7 @@ def _compute_profile_chi(
                     continue
                 chi_obs = 6 * KAPPA_T * np.trapezoid(obs_above_noise[mask], K[mask])
                 if chi_obs <= 0:
-                    chi_obs = 1e-11
+                    chi_obs = 1e-14
 
                 if fit_method == "iterative":
                     kB_val, chi_val, eps_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = (
