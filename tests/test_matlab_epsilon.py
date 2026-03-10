@@ -16,14 +16,15 @@ Key differences accounted for:
 
 from pathlib import Path
 
-import h5py
 import numpy as np
 import pytest
+
+h5py = pytest.importorskip("h5py")
 
 VMP_DIR = Path(__file__).parents[1] / "VMP"
 
 # Discover validation files
-_val_files = sorted(VMP_DIR.glob("*_validation.mat"))
+_val_files = sorted(VMP_DIR.glob("*_validation.mat")) if VMP_DIR.exists() else []
 
 
 def _file_id(path):

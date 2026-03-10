@@ -9,19 +9,21 @@ Handles both MATLAB v5 (.mat via scipy.io) and v7.3 (.mat via h5py) formats.
 
 from pathlib import Path
 
-import h5py
 import numpy as np
 import pytest
 import scipy.io
+
+h5py = pytest.importorskip("h5py")
 
 VMP_DIR = Path(__file__).parents[1] / "VMP"
 
 # Discover all matched .mat/.p pairs
 _pairs = []
-for mat_path in sorted(VMP_DIR.glob("*.mat")):
-    p_path = mat_path.with_suffix(".p")
-    if p_path.exists():
-        _pairs.append((p_path, mat_path))
+if VMP_DIR.exists():
+    for mat_path in sorted(VMP_DIR.glob("*.mat")):
+        p_path = mat_path.with_suffix(".p")
+        if p_path.exists():
+            _pairs.append((p_path, mat_path))
 
 
 def _file_id(pair):
