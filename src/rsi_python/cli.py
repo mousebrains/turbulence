@@ -787,6 +787,63 @@ def _add_ql_parser(subparsers):
     p.set_defaults(func=_cmd_ql)
 
 
+def _cmd_dl(args):
+    """Interactive dissipation quality viewer."""
+    from rsi_python.diss_look import diss_look
+
+    spec_P_range = None
+    if args.spec_P_range is not None:
+        spec_P_range = tuple(args.spec_P_range)
+
+    p_files = _resolve_p_files(args.files)
+    for pf_path in p_files:
+        diss_look(
+            pf_path,
+            fft_length=args.fft_length or 256,
+            f_AA=args.f_AA or 98.0,
+            goodman=not args.no_goodman,
+            direction=args.direction or "down",
+            spec_P_range=spec_P_range,
+        )
+
+
+def _add_dl_parser(subparsers):
+    p = subparsers.add_parser(
+        "dl",
+        help="Interactive dissipation quality viewer",
+        description="Open an interactive viewer comparing epsilon, chi (Batchelor vs "
+        "Kraichnan), and Lueck (2022) figure of merit (FM) with profile navigation.",
+    )
+    p.add_argument("files", nargs="+", metavar="FILE", help=".p file(s) or glob pattern(s)")
+    p.add_argument(
+        "--fft-length", type=int, default=None, help="FFT segment length [samples] (default: 256)"
+    )
+    p.add_argument(
+        "--f-AA", type=float, default=None, help="Anti-aliasing filter cutoff [Hz] (default: 98)"
+    )
+    p.add_argument(
+        "--no-goodman",
+        action="store_true",
+        default=False,
+        help="Disable Goodman coherent noise removal",
+    )
+    p.add_argument(
+        "--direction",
+        default=None,
+        choices=["up", "down"],
+        help="Profile direction (default: down)",
+    )
+    p.add_argument(
+        "--spec-P-range",
+        type=float,
+        nargs=2,
+        metavar=("P_MIN", "P_MAX"),
+        default=None,
+        help="Pressure range [dbar] for spectral calculations (default: full profile)",
+    )
+    p.set_defaults(func=_cmd_dl)
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -818,6 +875,7 @@ def main() -> None:
     _add_chi_parser(subparsers)
     _add_pipeline_parser(subparsers)
     _add_ql_parser(subparsers)
+    _add_dl_parser(subparsers)
 
     args = parser.parse_args()
     args.func(args)

@@ -8,6 +8,7 @@ __version__ = version("rsi-python")
 from rsi_python.batchelor import batchelor_grad, batchelor_kB
 from rsi_python.chi import get_chi
 from rsi_python.convert import convert_all, p_to_netcdf
+from rsi_python.diss_look import diss_look
 from rsi_python.dissipation import get_diss, load_channels
 from rsi_python.nasmyth import nasmyth
 from rsi_python.ocean import buoyancy_freq, density, visc, visc35
@@ -33,4 +34,5 @@ __all__ = [
     "batchelor_grad",
     "batchelor_kB",
     "quick_look",
+    "diss_look",
 ]
