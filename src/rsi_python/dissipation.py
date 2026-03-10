@@ -118,6 +118,7 @@ def _channels_from_pfile(pf, sh_pat, ac_pat, p_name, t_name):
         "fs_fast": pf.fs_fast,
         "fs_slow": pf.fs_slow,
         "is_profile": False,
+        "vehicle": pf.config["instrument_info"].get("vehicle", "").lower(),
         "metadata": {
             "source": str(pf.filepath),
             "instrument": pf.config["instrument_info"].get("model", ""),
@@ -159,6 +160,14 @@ def _channels_from_nc(nc_path, sh_pat, ac_pat, p_name, t_name):
         if hasattr(ds, attr):
             metadata[attr] = getattr(ds, attr)
 
+    vehicle = ""
+    if hasattr(ds, "instrument_model"):
+        model = ds.instrument_model.lower()
+        if "vmp" in model:
+            vehicle = "vmp"
+        elif "xmp" in model:
+            vehicle = "xmp"
+
     ds.close()
 
     return {
@@ -171,6 +180,7 @@ def _channels_from_nc(nc_path, sh_pat, ac_pat, p_name, t_name):
         "fs_fast": fs_fast,
         "fs_slow": fs_slow,
         "is_profile": is_profile,
+        "vehicle": vehicle,
         "metadata": metadata,
     }
 
@@ -185,15 +195,22 @@ def _prepare_profiles(
     speed: float | None,
     direction: str,
     salinity: npt.ArrayLike | None,
+    tau: float = 1.5,
+    speed_cutout: float = 0.05,
 ) -> tuple | None:
     """Profile detection, speed computation, and salinity interpolation.
 
-    Encapsulates the duplicated profile-setup code used by both
-    get_diss() and get_chi().
+    Matches the ODAS odas_p2mat.m speed pipeline:
+      1. W = gradient(P) filtered with Butterworth at 0.68/tau
+      2. speed = abs(W)
+      3. speed filtered again with Butterworth at 0.68/tau
+      4. speed clamped to speed_cutout minimum
 
     Returns (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast,
     fs_slow, ratio).
     """
+    from scipy.signal import butter, filtfilt
+
     fs_fast = data["fs_fast"]
     fs_slow = data["fs_slow"]
     ratio = round(fs_fast / fs_slow)
@@ -208,7 +225,7 @@ def _prepare_profiles(
     else:
         from rsi_python.profile import _smooth_fall_rate, get_profiles
 
-        W_slow = _smooth_fall_rate(P_slow, fs_slow)
+        W_slow = _smooth_fall_rate(P_slow, fs_slow, tau=tau)
         profiles_slow = get_profiles(P_slow, W_slow, fs_slow, direction=direction)
         if not profiles_slow:
             return None
@@ -218,8 +235,24 @@ def _prepare_profiles(
     else:
         from rsi_python.profile import _smooth_fall_rate
 
-        W_slow = _smooth_fall_rate(P_slow, fs_slow)
-        speed_fast = np.abs(np.interp(t_fast, t_slow, W_slow))
+        W_slow = _smooth_fall_rate(P_slow, fs_slow, tau=tau)
+
+        # VMP pressure-based: speed = abs(W), matching odas_p2mat.m l.757
+        speed_slow = np.abs(W_slow)
+
+        # Interpolate to fast rate before second smoothing pass
+        speed_fast = np.interp(t_fast, t_slow, speed_slow)
+
+        # Second Butterworth smoothing pass on speed, odas_p2mat.m l.898-901
+        f_c = 0.68 / tau
+        b_slow, a_slow = butter(1, f_c / (fs_slow / 2.0))
+        speed_slow = filtfilt(b_slow, a_slow, speed_slow)
+        b_fast, a_fast = butter(1, f_c / (fs_fast / 2.0))
+        speed_fast = filtfilt(b_fast, a_fast, speed_fast)
+
+        # Clamp to minimum, odas_p2mat.m l.905-906
+        speed_slow[speed_slow < speed_cutout] = speed_cutout
+        speed_fast[speed_fast < speed_cutout] = speed_cutout
 
     P_fast = np.interp(t_fast, t_slow, P_slow)
     T_fast = np.interp(t_fast, t_slow, T_slow)
@@ -356,13 +389,24 @@ def get_diss(
             smooth=despike_smooth,
         )
 
+    # Look up vehicle-specific tau for speed smoothing
+    from rsi_python.profile import _VEHICLE_TAU
+
+    vehicle = data.get("vehicle", "")
+    tau = _VEHICLE_TAU.get(vehicle, 1.5)
+
     # Profile detection, speed, P/T interpolation, salinity
-    prepared = _prepare_profiles(data, speed, direction, salinity)
+    prepared = _prepare_profiles(data, speed, direction, salinity, tau=tau)
     if prepared is None:
         return []
     (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, fs_slow, ratio, t_fast) = (
         prepared
     )
+
+    # Convert shear from piezo output to du/dz by dividing by speed^2,
+    # matching ODAS odas_p2mat.m line 922.
+    for i in range(n_shear):
+        shear_arrays[i] = shear_arrays[i] / speed_fast**2
 
     # Effective AA cutoff
     f_AA_eff = 0.9 * f_AA

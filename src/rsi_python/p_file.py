@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 
 from rsi_python.channels import CONVERTERS
+from rsi_python.deconvolve import deconvolve
 
 # ---------------------------------------------------------------------------
 # Header parsing
@@ -296,6 +297,13 @@ class PFile:
                 else:
                     self._slow_channels.add(ch_name)
 
+            # --- Deconvolution (Mudge & Lueck 1994) ---
+            # Channels with diff_gain (except shear probes) are deconvolved
+            # by combining the slow-rate channel X with its pre-emphasized
+            # fast-rate counterpart X_dX to produce a high-resolution signal.
+            # This matches ODAS odas_p2mat.m lines 516-570.
+            self._apply_deconvolution(ch_config, matrix)
+
             for ch_name in list(self.channels_raw.keys()):
                 info = ch_config.get(ch_name, {})
                 ch_type = info.get("type", "raw").strip().lower()
@@ -311,6 +319,78 @@ class PFile:
                 phys, units = converter(self.channels_raw[ch_name], convert_info)
                 self.channels[ch_name] = phys
                 self.channel_info[ch_name] = {"units": units, "type": ch_type}
+
+    def _apply_deconvolution(self, ch_config: dict, matrix: np.ndarray) -> None:
+        """Deconvolve pre-emphasized channels to produce high-resolution data.
+
+        For each channel with ``diff_gain`` that is not a shear probe,
+        look for a matching X / X_dX pair (e.g. T1 / T1_dT1, P / P_dP).
+        The deconvolved high-resolution signal replaces the original
+        slow-rate channel and is also stored at the fast rate.
+
+        Mirrors the deconvolution block in odas_p2mat.m (lines 516-610).
+        """
+        shear_types = {"shear", "xmp_shear"}
+        n_slow = len(self.t_slow)
+        n_fast = len(self.t_fast)
+
+        for ch_name, info in list(ch_config.items()):
+            ch_type = info.get("type", "").strip().lower()
+            if ch_type in shear_types:
+                continue
+            if "diff_gain" not in info:
+                continue
+
+            # This channel has diff_gain and is not shear → candidate.
+            # Check if it matches the X_dX naming pattern.
+            m = re.match(r"^(\w+)_d\1$", ch_name)
+            if not m:
+                continue
+
+            base_name = m.group(1)
+            dX_name = ch_name  # e.g. T1_dT1
+
+            if dX_name not in self.channels_raw:
+                continue
+
+            diff_gain_val = float(info["diff_gain"])
+            X_dX_raw = self.channels_raw[dX_name]
+
+            # Determine sampling rate of the pre-emphasized channel from
+            # its occurrence count in the address matrix (odas_p2mat.m l.564).
+            dX_id = int(info["ids"][0])
+            occurrences = np.sum(matrix == dX_id)
+            fs_dX = self.fs_fast * occurrences / self.n_rows
+            is_dX_fast = occurrences == self.n_rows
+
+            # Get the non-pre-emphasized channel if available
+            X_raw = self.channels_raw.get(base_name)
+
+            # Deconvolve on raw data (before physical-unit conversion)
+            hres = deconvolve(X_raw, X_dX_raw, fs_dX, diff_gain_val)
+
+            if is_dX_fast:
+                # T1_dT1 case: X_dX is fast-rate → hres is fast-rate.
+                # Replace slow-rate base with hres subsampled to slow rate.
+                self.channels_raw[base_name] = hres[:: self.n_rows][:n_slow]
+                # Replace _dX raw data with full fast-rate hres.
+                self.channels_raw[dX_name] = hres[:n_fast]
+            else:
+                # P_dP case: both X and X_dX are slow-rate → hres is
+                # slow-rate.  Replace the base channel with hres.
+                self.channels_raw[base_name] = hres[:n_slow]
+                # The _dX raw data also becomes hres (same slow rate).
+                self.channels_raw[dX_name] = hres[:n_slow]
+
+            # The _dX channel should now be converted using the base
+            # channel's calibration parameters (not its own sparse ones).
+            if base_name in ch_config:
+                base_info = dict(ch_config[base_name])
+                base_info.pop("diff_gain", None)
+                ch_config[dX_name] = {**base_info, "name": dX_name}
+                if is_dX_fast:
+                    self._fast_channels.add(dX_name)
+                    self._slow_channels.discard(dX_name)
 
     def is_fast(self, ch_name: str) -> bool:
         return ch_name in self._fast_channels

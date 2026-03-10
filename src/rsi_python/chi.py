@@ -468,8 +468,11 @@ def get_chi(
 
     # Profile detection, speed, P/T interpolation, salinity
     from rsi_python.dissipation import _prepare_profiles
+    from rsi_python.profile import _VEHICLE_TAU
 
-    prepared = _prepare_profiles(data, speed, direction, salinity)
+    vehicle = data.get("vehicle", "")
+    tau = _VEHICLE_TAU.get(vehicle, 1.5)
+    prepared = _prepare_profiles(data, speed, direction, salinity, tau=tau)
     if prepared is None:
         return []
     (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, fs_slow, ratio, t_fast) = (

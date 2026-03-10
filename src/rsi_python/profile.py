@@ -11,17 +11,34 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
-from scipy.ndimage import uniform_filter1d
+from scipy.signal import butter, filtfilt
 
 if TYPE_CHECKING:
     from rsi_python.p_file import PFile
 
+# Default vehicle tau values matching ODAS default_vehicle_attributes.ini
+_VEHICLE_TAU = {
+    "vmp": 1.5,
+    "rvmp": 1.5,
+    "xmp": 1.5,
+    "micro_squid": 1.5,
+    "stand": 1.5,
+    "sea_glider": 5.0,
+    "slocum_glider": 3.0,
+    "sea_explorer": 3.0,
+    "auv": 10.0,
+    "auv_emc": 10.0,
+    "nemo": 60.0,
+    "argo_float": 60.0,
+}
 
-def _smooth_fall_rate(P, fs, smooth_window=2.0):
+
+def _smooth_fall_rate(P, fs, tau=1.5):
     """Compute smoothed fall rate from pressure.
 
-    Smooths pressure with a uniform filter before computing dP/dt
-    to handle quantized pressure measurements.
+    Matches ODAS odas_p2mat.m lines 699-701: central-difference gradient
+    followed by a zero-phase first-order Butterworth low-pass filter at
+    cutoff frequency ``0.68 / tau``.
 
     Parameters
     ----------
@@ -29,17 +46,18 @@ def _smooth_fall_rate(P, fs, smooth_window=2.0):
         Pressure [dbar].
     fs : float
         Sampling rate [Hz].
-    smooth_window : float
-        Smoothing window duration [s]. Default: 2.0.
+    tau : float
+        Smoothing time constant [s]. Default: 1.5 (VMP).
 
     Returns
     -------
     W : ndarray
         Smoothed fall rate [dbar/s].
     """
-    n_smooth = max(1, int(smooth_window * fs))
-    P_smooth = uniform_filter1d(P.astype(np.float64), size=n_smooth)
-    return np.gradient(P_smooth, 1.0 / fs)
+    W = np.gradient(P.astype(np.float64), 1.0 / fs)
+    f_c = 0.68 / tau
+    b, a = butter(1, f_c / (fs / 2.0))
+    return filtfilt(b, a, W)
 
 
 def get_profiles(
