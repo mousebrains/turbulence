@@ -18,7 +18,7 @@ Mudge, T.D. and R.G. Lueck, 1994: Digital signal processing to enhance
 
 import numpy as np
 from scipy.interpolate import PchipInterpolator
-from scipy.signal import butter, lfilter, lfilter_zi
+from scipy.signal import butter, lfilter
 
 
 def deconvolve(
