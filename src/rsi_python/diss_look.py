@@ -2,12 +2,12 @@
 """Dissipation quality viewer for Rockland Scientific profiler data.
 
 Interactive multi-panel viewer focused on comparing epsilon, chi from
-Batchelor vs Kraichnan models, and the Lueck (2022) figure of merit (FM).
+Method 1 (from ε) vs Method 2 (iterative fit), and the Lueck (2022) figure of merit (FM).
 
 Layout (2 rows x 4 columns):
   Row 0 (profile panels, pressure y-axis linked):
     Overview | ε profile | χ profile | FM profile
-  Row 1 (spectra and comparison):
+  Row 1 (spectra and comparison, Temperature y-axis linked):
     ε spectra at depth | χ spectra at depth | χ Batch. vs Kraich. | Temperature
 """
 
@@ -268,7 +268,7 @@ def _compute_depth_spectra(
     Returns dict with shear spectra, Nasmyth fits, chi gradient spectra,
     and both Batchelor/Kraichnan model fits.
     """
-    from rsi_python.chi import _chi_from_epsilon
+    from rsi_python.chi import _chi_from_epsilon, _iterative_fit
     from rsi_python.goodman import clean_shear_spec
 
     n_fast = sel.stop - sel.start
@@ -291,7 +291,7 @@ def _compute_depth_spectra(
     K = F / W
     K_AA = f_AA_eff / W
 
-    result = {
+    result: dict = {
         "K": K,
         "F": F,
         "W": W,
@@ -302,10 +302,10 @@ def _compute_depth_spectra(
         "methods": [],
         "K_maxes": [],
         "chi_obs_specs": [],
-        "chi_batch_specs": [],
-        "chi_kraich_specs": [],
-        "chi_batch_vals": [],
-        "chi_kraich_vals": [],
+        "chi_m1_specs": [],
+        "chi_m2_specs": [],
+        "chi_m1_vals": [],
+        "chi_m2_vals": [],
         "noise_K": None,
     }
 
@@ -409,10 +409,10 @@ def _compute_depth_spectra(
             seg = therm_data[ci][1][sel]
             if len(seg) < 2 * fft_length:
                 result["chi_obs_specs"].append(np.full(n_freq, np.nan))
-                result["chi_batch_specs"].append(np.full(n_freq, np.nan))
-                result["chi_kraich_specs"].append(np.full(n_freq, np.nan))
-                result["chi_batch_vals"].append(np.nan)
-                result["chi_kraich_vals"].append(np.nan)
+                result["chi_m1_specs"].append(np.full(n_freq, np.nan))
+                result["chi_m2_specs"].append(np.full(n_freq, np.nan))
+                result["chi_m1_vals"].append(np.nan)
+                result["chi_m2_vals"].append(np.nan)
                 continue
 
             Pxx_t, _ = csd_odas(seg, None, fft_length, fs_fast, overlap=fft_length // 2)[:2]
@@ -422,8 +422,9 @@ def _compute_depth_spectra(
 
             dg = diff_gains[ci] if ci < len(diff_gains) else 0.94
 
+            # Method 1: chi from epsilon (kB fixed by shear-derived epsilon)
             if np.isfinite(eps_mean) and eps_mean > 0:
-                chi_b, kB_b, _, batch_spec_raw, _, _ = _chi_from_epsilon(
+                chi_m1, _, _, m1_spec_raw, _, _ = _chi_from_epsilon(
                     spec_obs,
                     K_chi,
                     eps_mean,
@@ -437,31 +438,32 @@ def _compute_depth_spectra(
                     dg,
                     fft_length,
                 )
-                chi_k, kB_k, _, kraich_spec_raw, _, _ = _chi_from_epsilon(
-                    spec_obs,
-                    K_chi,
-                    eps_mean,
-                    nu,
-                    mean_T,
-                    W,
-                    f_AA_eff,
-                    "single_pole",
-                    "kraichnan",
-                    fs_fast,
-                    dg,
-                    fft_length,
-                )
-                # Apply FP07 rolloff to model spectra so they match observed
-                batch_spec = batch_spec_raw * H2
-                kraich_spec = kraich_spec_raw * H2
+                m1_spec = m1_spec_raw * H2
             else:
-                chi_b = chi_k = np.nan
-                batch_spec = kraich_spec = np.zeros(n_freq)
+                chi_m1 = np.nan
+                m1_spec = np.zeros(n_freq)
 
-            result["chi_batch_specs"].append(batch_spec)
-            result["chi_kraich_specs"].append(kraich_spec)
-            result["chi_batch_vals"].append(chi_b)
-            result["chi_kraich_vals"].append(chi_k)
+            result["chi_m1_specs"].append(m1_spec)
+            result["chi_m1_vals"].append(chi_m1)
+
+            # Method 2: iterative fit (kB fitted to observed spectrum)
+            _, chi_m2, _, _, m2_spec_raw, _, _ = _iterative_fit(
+                spec_obs,
+                K_chi,
+                nu,
+                mean_T,
+                W,
+                f_AA_eff,
+                "single_pole",
+                "batchelor",
+                fs_fast,
+                dg,
+                fft_length,
+            )
+            m2_spec = m2_spec_raw * H2 if np.isfinite(chi_m2) else np.zeros(n_freq)
+
+            result["chi_m2_specs"].append(m2_spec)
+            result["chi_m2_vals"].append(chi_m2)
 
     return result
 
@@ -645,7 +647,7 @@ class DissLookViewer:
         # Green band for spectral depth range
         if self.spec_P_range is not None:
             sp_lo, sp_hi = self.spec_P_range
-            for ax in [self.axes[0, c] for c in range(4)] + [self.axes[1, 2]]:
+            for ax in [self.axes[0, c] for c in range(4)] + [self.axes[1, 2], self.axes[1, 3]]:
                 ax.axhspan(sp_lo, sp_hi, color="green", alpha=0.15, zorder=0)
 
         P_lo, P_hi = self.P[s_slow], self.P[e_slow]
@@ -686,7 +688,7 @@ class DissLookViewer:
                 ax.axvspan(self.t_slow[s], self.t_slow[e], alpha=0.05, color="C0")
 
     def _draw_chi_spectra(self, sel_spec):
-        """Panel (1,1): Chi spectra at the stepper depth, both models."""
+        """Panel (1,1): Chi spectra — Method 1 (from ε) vs Method 2 (MLE)."""
         ax = self.axes[1, 1]
 
         n_fast = sel_spec.stop - sel_spec.start
@@ -712,34 +714,34 @@ class DissLookViewer:
             if np.any(valid):
                 ax.loglog(K_chi[valid], obs[valid], c, linewidth=0.8, alpha=0.6, label=name)
 
-            # Batchelor M1 fit — dashed
-            b_spec = r["chi_batch_specs"][i]
-            chi_b = r["chi_batch_vals"][i]
-            valid_b = np.isfinite(b_spec) & (b_spec > 0) & (K_chi > 0)
-            if np.any(valid_b) and np.isfinite(chi_b):
+            # Method 1 fit (kB from epsilon) — dashed
+            m1_spec = r["chi_m1_specs"][i]
+            chi_m1 = r["chi_m1_vals"][i]
+            valid_m1 = np.isfinite(m1_spec) & (m1_spec > 0) & (K_chi > 0)
+            if np.any(valid_m1) and np.isfinite(chi_m1):
                 ax.loglog(
-                    K_chi[valid_b],
-                    b_spec[valid_b],
+                    K_chi[valid_m1],
+                    m1_spec[valid_m1],
                     c,
                     linewidth=1.2,
                     linestyle="--",
                     alpha=0.9,
-                    label=f"M1 Batch χ={chi_b:.1e}",
+                    label=f"M1 χ={chi_m1:.1e}",
                 )
 
-            # Kraichnan M1 fit — dash-dot
-            k_spec = r["chi_kraich_specs"][i]
-            chi_k = r["chi_kraich_vals"][i]
-            valid_k = np.isfinite(k_spec) & (k_spec > 0) & (K_chi > 0)
-            if np.any(valid_k) and np.isfinite(chi_k):
+            # Method 2 iterative fit (kB from spectral fit) — dash-dot
+            m2_spec = r["chi_m2_specs"][i]
+            chi_m2 = r["chi_m2_vals"][i]
+            valid_m2 = np.isfinite(m2_spec) & (m2_spec > 0) & (K_chi > 0)
+            if np.any(valid_m2) and np.isfinite(chi_m2):
                 ax.loglog(
-                    K_chi[valid_k],
-                    k_spec[valid_k],
+                    K_chi[valid_m2],
+                    m2_spec[valid_m2],
                     c,
                     linewidth=1.2,
                     linestyle="-.",
                     alpha=0.9,
-                    label=f"M1 Kraich χ={chi_k:.1e}",
+                    label=f"M2 χ={chi_m2:.1e}",
                 )
 
         # Noise floor
@@ -758,13 +760,31 @@ class DissLookViewer:
 
         P_lo = float(self.P_fast[sel_spec.start])
         P_hi = float(self.P_fast[min(sel_spec.stop - 1, len(self.P_fast) - 1)])
+        # Dynamic y-axis: 1 order above max, down to floor
+        all_vals = []
+        for spec_list in [r["chi_obs_specs"], r["chi_m1_specs"], r["chi_m2_specs"]]:
+            for s in spec_list:
+                pos = s[(s > 0) & np.isfinite(s)]
+                if len(pos):
+                    all_vals.append(pos)
+        if noise is not None:
+            pos = noise[(noise > 0) & np.isfinite(noise)]
+            if len(pos):
+                all_vals.append(pos)
+        if all_vals:
+            combined = np.concatenate(all_vals)
+            y_hi = 10 ** (np.ceil(np.log10(np.max(combined))) + 1)
+            y_lo = 10 ** np.floor(np.log10(np.min(combined)))
+        else:
+            y_hi, y_lo = 1e-2, 1e-11
+
         ax.set_xlabel("Wavenumber [cpm]")
         ax.set_ylabel("Φ_T [(K/m)² cpm⁻¹]")
         ax.set_xlim(0.5, 300)
-        ax.set_ylim(1e-11, None)
+        ax.set_ylim(y_lo, y_hi)
         ax.legend(fontsize=5, loc="lower left")
         ax.set_title(
-            f"χ spectra  P={P_lo:.1f}–{P_hi:.1f}\n(-- M1 Batch, -· M1 Kraich)",
+            f"χ spectra  P={P_lo:.1f}–{P_hi:.1f}\n(-- M1 from ε, -· M2 iter)",
             fontsize=9,
         )
         ax.grid(True, alpha=0.3, which="both")
@@ -1013,12 +1033,29 @@ class DissLookViewer:
         K_AA = self.f_AA / r["W"]
         ax.axvline(K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5)
 
+        # Dynamic y-axis: 1 order above max, down to floor
+        all_vals = []
+        for spec in r["shear_specs"]:
+            pos = spec[spec > 0]
+            if len(pos):
+                all_vals.append(pos)
+        for nas in r["nasmyth_specs"]:
+            pos = nas[nas > 0]
+            if len(pos):
+                all_vals.append(pos)
+        if all_vals:
+            combined = np.concatenate(all_vals)
+            y_hi = 10 ** (np.ceil(np.log10(np.max(combined))) + 1)
+            y_lo = 10 ** np.floor(np.log10(np.min(combined)))
+        else:
+            y_hi, y_lo = 1e0, 1e-9
+
         P_lo = float(self.P_fast[sel_spec.start])
         P_hi = float(self.P_fast[min(sel_spec.stop - 1, len(self.P_fast) - 1)])
         ax.set_xlabel("Wavenumber [cpm]")
         ax.set_ylabel("Φ_sh [s⁻² cpm⁻¹]")
         ax.set_xlim(0.5, 300)
-        ax.set_ylim(1e-9, 1e0)
+        ax.set_ylim(y_lo, y_hi)
         ax.legend(fontsize=5, loc="lower left")
         ax.set_title(f"ε spectra  P={P_lo:.1f}–{P_hi:.1f}", fontsize=9)
         ax.grid(True, alpha=0.3, which="both")
@@ -1051,7 +1088,6 @@ class DissLookViewer:
         if has_data:
             ax.set_xlabel("Temperature gradient / T [°C]")
             ax.set_ylabel("Pressure [dbar]")
-            ax.invert_yaxis()
             ax.legend(fontsize=6, loc="lower left")
             ax.set_title("Temperature", fontsize=9)
             ax.grid(True, alpha=0.3)
@@ -1079,6 +1115,7 @@ class DissLookViewer:
         for col in range(1, 4):
             self.axes[0, col].sharey(p_ref)
         self.axes[1, 2].sharey(p_ref)
+        self.axes[1, 3].sharey(p_ref)
         p_ref.invert_yaxis()
 
         # Navigation buttons
