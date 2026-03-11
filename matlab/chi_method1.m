@@ -135,10 +135,15 @@ function result = chi_method1(spec_obs, K, epsilon, nu, speed, options)
     % Fitted Batchelor spectrum for output
     spec_batch = grad_func(K, kB, chi);
 
-    % Figure of merit
-    mod_v = trapz(K(valid), spec_batch(valid));
-    if mod_v > 0 && isfinite(chi)
-        fom = obs_var / mod_v;
+    % Figure of merit: observed vs attenuated model (Batchelor * H2 + noise)
+    if sum(valid) >= 3 && isfinite(chi)
+        mod_v = trapz(K(valid), ...
+            spec_batch(valid) .* H2(valid) + noise_K(valid));
+        if mod_v > 0
+            fom = obs_var / mod_v;
+        else
+            fom = NaN;
+        end
     else
         fom = NaN;
     end

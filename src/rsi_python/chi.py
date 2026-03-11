@@ -27,6 +27,8 @@ import xarray as xr
 if TYPE_CHECKING:
     from rsi_python.p_file import PFile
 
+from scipy.signal import butter, freqz
+
 from rsi_python.batchelor import (
     KAPPA_T,
     Q_BATCHELOR,
@@ -37,7 +39,6 @@ from rsi_python.batchelor import (
 )
 from rsi_python.fp07 import fp07_double_pole, fp07_tau, fp07_transfer, gradT_noise
 from rsi_python.spectral import csd_odas
-from scipy.signal import butter, freqz
 
 # ---------------------------------------------------------------------------
 # Spectrum model dispatcher

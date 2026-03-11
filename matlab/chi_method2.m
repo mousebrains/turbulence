@@ -107,8 +107,9 @@ function result = chi_method2(spec_obs, K, nu, speed, options)
     chi_obs = 6 * kappa_T * trapz(K(valid_init), spec_above(valid_init));
     chi_obs = max(chi_obs, 1e-14);
 
-    % Iterative fitting (Peterson & Fer 2014)
+    % Iterative fitting (Peterson & Fer 2014), with early stopping
     kB_best = NaN;
+    kB_prev = NaN;
     for iter = 1:options.n_iterations
         % MLE grid search for kB
         [kB_best, nll_best] = mle_grid_search( ...
@@ -118,6 +119,12 @@ function result = chi_method2(spec_obs, K, nu, speed, options)
             result = nan_result;
             return
         end
+
+        % Check convergence
+        if iter > 1 && abs(kB_best - kB_prev) / kB_prev < 0.01
+            break
+        end
+        kB_prev = kB_best;
 
         % Refine integration limits
         k_star = 0.04 * kB_best * sqrt(kappa_T / nu);
@@ -153,19 +160,23 @@ function result = chi_method2(spec_obs, K, nu, speed, options)
     % Recover epsilon from best-fit kB
     epsilon = (2*pi * kB_best)^4 * nu * kappa_T^2;
 
-    % Final chi by integrating full Batchelor spectrum
-    K_fine = linspace(K(2) * 0.01, kB_best * 5, 10000)';
-    spec_fine = grad_func(K_fine, kB_best, chi_obs);
-    chi = 6 * kappa_T * trapz(K_fine, spec_fine);
+    % Final chi = chi_obs (matches Python _iterative_fit)
+    chi = chi_obs;
 
     % Fitted spectrum for output
     spec_batch = grad_func(K, kB_best, chi);
 
-    % Figure of merit
-    mod_v = trapz(K_fit, spec_batch(fit_idx));
-    obs_v = trapz(K_fit, spec_fit);
-    if mod_v > 0 && isfinite(chi)
-        fom = obs_v / mod_v;
+    % Figure of merit: observed vs attenuated model (Batchelor * H2 + noise)
+    valid_fom = (K > 0) & (K <= K_max_fit);
+    if sum(valid_fom) >= 3 && isfinite(chi)
+        obs_v = trapz(K(valid_fom), spec_obs(valid_fom));
+        mod_v = trapz(K(valid_fom), ...
+            spec_batch(valid_fom) .* H2(valid_fom) + noise_K(valid_fom));
+        if mod_v > 0
+            fom = obs_v / mod_v;
+        else
+            fom = NaN;
+        end
     else
         fom = NaN;
     end
