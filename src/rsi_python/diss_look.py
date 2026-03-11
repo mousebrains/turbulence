@@ -26,8 +26,6 @@ from rsi_python.p_file import PFile
 from rsi_python.profile import _smooth_fall_rate, get_profiles
 from rsi_python.spectral import csd_odas
 
-
-
 # ---------------------------------------------------------------------------
 # Windowed computation: epsilon + FM + chi (both models)
 # ---------------------------------------------------------------------------
