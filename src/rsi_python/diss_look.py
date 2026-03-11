@@ -712,7 +712,7 @@ class DissLookViewer:
             if np.any(valid):
                 ax.loglog(K_chi[valid], obs[valid], c, linewidth=0.8, alpha=0.6, label=name)
 
-            # Batchelor fit — dashed
+            # Batchelor M1 fit — dashed
             b_spec = r["chi_batch_specs"][i]
             chi_b = r["chi_batch_vals"][i]
             valid_b = np.isfinite(b_spec) & (b_spec > 0) & (K_chi > 0)
@@ -721,13 +721,13 @@ class DissLookViewer:
                     K_chi[valid_b],
                     b_spec[valid_b],
                     c,
-                    linewidth=0.8,
+                    linewidth=1.2,
                     linestyle="--",
                     alpha=0.9,
-                    label=f"Batch χ={chi_b:.1e}",
+                    label=f"M1 Batch χ={chi_b:.1e}",
                 )
 
-            # Kraichnan fit — solid
+            # Kraichnan M1 fit — dash-dot
             k_spec = r["chi_kraich_specs"][i]
             chi_k = r["chi_kraich_vals"][i]
             valid_k = np.isfinite(k_spec) & (k_spec > 0) & (K_chi > 0)
@@ -736,10 +736,10 @@ class DissLookViewer:
                     K_chi[valid_k],
                     k_spec[valid_k],
                     c,
-                    linewidth=0.8,
-                    linestyle="-",
+                    linewidth=1.2,
+                    linestyle="-.",
                     alpha=0.9,
-                    label=f"Kraich χ={chi_k:.1e}",
+                    label=f"M1 Kraich χ={chi_k:.1e}",
                 )
 
         # Noise floor
@@ -763,7 +763,10 @@ class DissLookViewer:
         ax.set_xlim(0.5, 300)
         ax.set_ylim(1e-11, None)
         ax.legend(fontsize=5, loc="lower left")
-        ax.set_title(f"χ spectra  P={P_lo:.1f}–{P_hi:.1f}  (-- Batch, — Kraich)", fontsize=9)
+        ax.set_title(
+            f"χ spectra  P={P_lo:.1f}–{P_hi:.1f}\n(-- M1 Batch, -· M1 Kraich)",
+            fontsize=9,
+        )
         ax.grid(True, alpha=0.3, which="both")
 
     # ------------------------------------------------------------------
