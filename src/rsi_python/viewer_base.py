@@ -8,7 +8,6 @@ drawing methods.  Subclasses define their panel layout by overriding
 """
 
 import re
-import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,7 +18,6 @@ from rsi_python.nasmyth import nasmyth
 from rsi_python.ocean import visc35
 from rsi_python.profile import _smooth_fall_rate, get_profiles
 from rsi_python.window import compute_chi_window, compute_eps_window
-
 
 # ---------------------------------------------------------------------------
 # Shared free functions
@@ -70,8 +68,6 @@ def compute_depth_spectra(
     Returns dict with shear spectra, Nasmyth fits, chi gradient spectra,
     and both Method 1/Method 2 model fits.
     """
-    n_fast = sel.stop - sel.start
-    diss_length = 2 * fft_length
     n_shear = len(shear_data)
     n_therm = len(therm_data)
     n_freq = fft_length // 2 + 1

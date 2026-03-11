@@ -25,7 +25,6 @@ from rsi_python.viewer_base import (
 )
 from rsi_python.window import compute_chi_window, compute_eps_window
 
-
 # ---------------------------------------------------------------------------
 # ql-specific free functions
 # ---------------------------------------------------------------------------

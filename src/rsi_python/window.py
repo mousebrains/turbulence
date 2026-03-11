@@ -20,7 +20,6 @@ from rsi_python.goodman import clean_shear_spec
 from rsi_python.ocean import visc35
 from rsi_python.spectral import csd_odas
 
-
 # ---------------------------------------------------------------------------
 # Epsilon for one dissipation window
 # ---------------------------------------------------------------------------
