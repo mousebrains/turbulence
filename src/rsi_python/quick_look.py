@@ -764,7 +764,8 @@ class QuickLookViewer:
         ax.set_ylim(1e-9, 1e0)
         ax.legend(fontsize=5, loc="best", ncol=2)
         ax.set_title(
-            f"Shear spectra  P={P_lo:.1f}–{P_hi:.1f}  speed={mean_speed:.2f} m/s",
+            f"Shear spectra  P={P_lo:.1f}–{P_hi:.1f}\n"
+            f"speed={mean_speed:.2f} m/s",
             fontsize=9,
         )
         ax.grid(True, alpha=0.3, which="both")
@@ -904,10 +905,11 @@ class QuickLookViewer:
         ax.set_xlabel("Wavenumber [cpm]")
         ax.set_ylabel("Φ_T(k) [(K/m)² cpm⁻¹]")
         ax.set_xlim(0.5, 300)
+        ax.set_ylim(1e-11, None)
         ax.legend(handles, labels, fontsize=5, loc="best", ncol=n_probes)
         ax.set_title(
-            f"Temperature gradient spectra  speed={mean_speed:.2f} m/s"
-            f"  fit={selected_method}  model={self.spectrum_model}",
+            f"Temperature gradient spectra\n"
+            f"speed={mean_speed:.2f} m/s  fit={selected_method}  model={self.spectrum_model}",
             fontsize=9,
         )
         ax.grid(True, alpha=0.3, which="both")
