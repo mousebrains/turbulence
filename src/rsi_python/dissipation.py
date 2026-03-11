@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 from rsi_python.despike import despike
 from rsi_python.goodman import clean_shear_spec
 from rsi_python.nasmyth import LUECK_A, X_95, nasmyth
-from rsi_python.ocean import visc35
+from rsi_python.ocean import visc, visc35
 from rsi_python.spectral import csd_matrix
 
 # ---------------------------------------------------------------------------
@@ -291,8 +291,6 @@ def _compute_nu(
         Used to index salinity when it's an array.
     """
     if salinity is not None:
-        from rsi_python.ocean import visc
-
         mean_S = float(np.mean(salinity[sel]) if np.ndim(salinity) > 0 else salinity)
         return float(visc(mean_T, mean_S, mean_P))
     return float(visc35(mean_T))

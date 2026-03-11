@@ -37,6 +37,7 @@ from rsi_python.batchelor import (
 )
 from rsi_python.fp07 import fp07_double_pole, fp07_tau, fp07_transfer, gradT_noise
 from rsi_python.spectral import csd_odas
+from scipy.signal import butter, freqz
 
 # ---------------------------------------------------------------------------
 # Spectrum model dispatcher
@@ -209,35 +210,28 @@ def _mle_fit_kB(
 
     K_max_fit = K_fit[-1]
 
-    # --- Coarse grid search ---
+    # --- Coarse grid search (vectorized) ---
     kB_coarse = np.logspace(0, 4.5, 100)  # 1 to ~31623 cpm
-    nll_coarse = np.full(len(kB_coarse), np.inf)
-
-    for i, kB_try in enumerate(kB_coarse):
-        spec_model = grad_func(K_fit, kB_try, chi_obs) * H2_fit + noise_fit
-        spec_model = np.maximum(spec_model, 1e-30)
-        # Negative log-likelihood for chi-squared distributed spectral estimates
-        nll = np.sum(np.log(spec_model) + spec_fit / spec_model)
-        if np.isfinite(nll):
-            nll_coarse[i] = nll
+    kB_2d = kB_coarse[:, np.newaxis]  # (100, 1) for broadcasting
+    spec_models = grad_func(K_fit, kB_2d, chi_obs) * H2_fit + noise_fit  # (100, n_fit)
+    spec_models = np.maximum(spec_models, 1e-30)
+    nll_coarse = np.sum(np.log(spec_models) + spec_fit / spec_models, axis=1)
+    nll_coarse = np.where(np.isfinite(nll_coarse), nll_coarse, np.inf)
 
     if np.all(np.isinf(nll_coarse)):
         return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
 
     best_coarse = kB_coarse[np.argmin(nll_coarse)]
 
-    # --- Fine grid search ---
+    # --- Fine grid search (vectorized) ---
     kB_lo = max(best_coarse * 0.5, 1.0)
     kB_hi = best_coarse * 2.0
     kB_fine = np.linspace(kB_lo, kB_hi, 100)
-    nll_fine = np.full(len(kB_fine), np.inf)
-
-    for i, kB_try in enumerate(kB_fine):
-        spec_model = grad_func(K_fit, kB_try, chi_obs) * H2_fit + noise_fit
-        spec_model = np.maximum(spec_model, 1e-30)
-        nll = np.sum(np.log(spec_model) + spec_fit / spec_model)
-        if np.isfinite(nll):
-            nll_fine[i] = nll
+    kB_fine_2d = kB_fine[:, np.newaxis]  # (100, 1) for broadcasting
+    spec_models = grad_func(K_fit, kB_fine_2d, chi_obs) * H2_fit + noise_fit
+    spec_models = np.maximum(spec_models, 1e-30)
+    nll_fine = np.sum(np.log(spec_models) + spec_fit / spec_models, axis=1)
+    nll_fine = np.where(np.isfinite(nll_fine), nll_fine, np.inf)
 
     if np.all(np.isinf(nll_fine)):
         kB_best = best_coarse
@@ -327,8 +321,9 @@ def _iterative_fit(
     if chi_obs <= 0:
         chi_obs = 1e-14
 
-    # Iterative refinement (3 iterations)
+    # Iterative refinement (up to 3 iterations, with convergence check)
     kB_best = np.nan
+    kB_prev = np.nan
     epsilon = np.nan
 
     for iteration in range(3):
@@ -350,6 +345,11 @@ def _iterative_fit(
 
         if not np.isfinite(kB_best) or kB_best < 1:
             break
+
+        # Check convergence
+        if iteration > 0 and abs(kB_best - kB_prev) / kB_prev < 0.01:
+            break
+        kB_prev = kB_best
 
         # Refine integration limits
         k_star = 0.04 * kB_best * np.sqrt(KAPPA_T / nu)
@@ -594,8 +594,6 @@ def _bilinear_correction(F, diff_gain, fs):
     H = 1/(1+(2*pi*f*diff_gain)^2) and the actual digital Butterworth
     used in deconvolution.
     """
-    from scipy.signal import butter, freqz
-
     # Digital Butterworth used in deconvolution
     b, a = butter(1, 1 / (2 * np.pi * diff_gain * fs / 2))
     # Evaluate at the frequency points
@@ -769,6 +767,24 @@ def _compute_profile_chi(
     num_ffts = 2 * (diss_length // fft_length) - 1
     dof_spec = 1.9 * num_ffts
 
+    # Hoisted imports (avoid per-window import overhead)
+    from rsi_python.dissipation import _compute_nu
+    from rsi_python.goodman import clean_shear_spec
+
+    # Pre-compute constant frequency vector
+    F_const = np.arange(n_freq) * fs_fast / fft_length
+
+    # Pre-compute first-difference correction (constant across windows/probes)
+    fd_correction = np.ones(n_freq)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        fd_correction[1:] = (
+            np.pi * F_const[1:] / (fs_fast * np.sin(np.pi * F_const[1:] / fs_fast))
+        ) ** 2
+    fd_correction = np.where(np.isfinite(fd_correction), fd_correction, 1.0)
+
+    # Pre-compute bilinear corrections per probe (constant across windows)
+    bl_corrections = [_bilinear_correction(F_const, dg, fs_fast) for dg in diff_gains]
+
     # Get epsilon values if provided (Method 1)
     eps_interp = None
     if epsilon_ds is not None:
@@ -792,12 +808,10 @@ def _compute_profile_chi(
         mean_T = np.mean(T[sel])
         mean_P = np.mean(P[sel])
         mean_t = np.mean(t_fast[sel])
-        from rsi_python.dissipation import _compute_nu
-
         nu = _compute_nu(mean_T, mean_P, salinity, sel)
 
-        K = np.arange(n_freq) * fs_fast / fft_length / W
-        F = np.arange(n_freq) * fs_fast / fft_length
+        K = F_const / W
+        F = F_const
 
         K_out[:, idx] = K
         F_out[:, idx] = F
@@ -811,8 +825,6 @@ def _compute_profile_chi(
         do_goodman = accel_arrays is not None and len(accel_arrays) > 0
         clean_spectra = {}
         if do_goodman:
-            from rsi_python.goodman import clean_shear_spec
-
             accel_seg = np.column_stack([a[sel] for a in accel_arrays])
             therm_seg = np.column_stack([therm_arrays[ci][sel] for ci in range(n_therm)])
             clean_TT, _, _, _, _ = clean_shear_spec(accel_seg, therm_seg, fft_length, fs_fast)
@@ -848,33 +860,20 @@ def _compute_profile_chi(
             if do_goodman and ci in clean_spectra:
                 # Use Goodman-cleaned spectrum
                 Pxx = clean_spectra[ci]
-                F_spec = np.arange(n_freq) * fs_fast / fft_length
             else:
                 # Compute auto-spectrum of gradient signal
                 seg = therm_arrays[ci][sel]
-                Pxx, F_spec = csd_odas(
+                Pxx = csd_odas(
                     seg,
                     None,
                     fft_length,
                     fs_fast,
                     overlap=fft_length // 2,
                     detrend="linear",
-                )[:2]
+                )[0]
 
-            # Convert to wavenumber spectrum
-            spec_obs = Pxx * W
-
-            # First-difference correction
-            correction = np.ones(n_freq)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                correction[1:] = (
-                    np.pi * F_spec[1:] / (fs_fast * np.sin(np.pi * F_spec[1:] / fs_fast))
-                ) ** 2
-            correction = np.where(np.isfinite(correction), correction, 1.0)
-
-            # Bilinear correction (ODAS get_scalar_spectra_odas.m l.264-270)
-            bl_corr = _bilinear_correction(F_spec, diff_gains[ci], fs_fast)
-            spec_obs = spec_obs * correction * bl_corr
+            # Convert to wavenumber spectrum with pre-computed corrections
+            spec_obs = Pxx * W * fd_correction * bl_corrections[ci]
 
             spec_gradT[ci, :, idx] = spec_obs
 

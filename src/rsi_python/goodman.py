@@ -82,18 +82,21 @@ def clean_shear_spec(
 
     # UU, AA, UA are complex; extract real diagonal for auto-spectra
     n_freq = len(F)
-    clean_UU = np.zeros_like(UU)
 
-    for f in range(n_freq):
-        uu = UU[f]  # (n_sh, n_sh)
-        ua = UA[f]  # (n_sh, n_ac)
-        aa = AA[f]  # (n_ac, n_ac)
-        # clean = UU - UA @ inv(AA) @ conj(UA).T
-        # MATLAB: UU - (UA/AA) * conj(UA).'
-        try:
-            clean_UU[f] = uu - ua @ np.linalg.solve(aa, np.conj(ua).T)
-        except np.linalg.LinAlgError:
-            clean_UU[f] = uu
+    # Batched linear solve: np.linalg.solve supports batch dimensions
+    # clean = UU - UA @ inv(AA) @ conj(UA).T
+    try:
+        ua_H = np.conj(np.swapaxes(UA, -2, -1))  # (n_freq, n_ac, n_sh)
+        solved = np.linalg.solve(AA, ua_H)  # (n_freq, n_ac, n_sh)
+        clean_UU = UU - np.matmul(UA, solved)  # (n_freq, n_sh, n_sh)
+    except np.linalg.LinAlgError:
+        # Fallback: per-frequency with singular handling
+        clean_UU = np.copy(UU)
+        for f in range(n_freq):
+            try:
+                clean_UU[f] = UU[f] - UA[f] @ np.linalg.solve(AA[f], np.conj(UA[f]).T)
+            except np.linalg.LinAlgError:
+                pass
 
     clean_UU = np.real(clean_UU)
 

@@ -81,7 +81,7 @@ def batchelor_nondim(alpha: npt.ArrayLike) -> np.ndarray:
 
 def batchelor_grad(
     k: npt.ArrayLike,
-    kB: float,
+    kB: float | np.ndarray,
     chi: float,
     kappa_T: float = KAPPA_T,
     q: float = Q_BATCHELOR,
@@ -125,7 +125,7 @@ def batchelor_grad(
 
 def kraichnan_grad(
     k: npt.ArrayLike,
-    kB: float,
+    kB: float | np.ndarray,
     chi: float,
     kappa_T: float = KAPPA_T,
     q: float = Q_KRAICHNAN,

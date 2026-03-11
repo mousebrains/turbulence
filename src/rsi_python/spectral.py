@@ -20,6 +20,16 @@ def _cosine_window(n):
     return w
 
 
+_window_cache: dict[int, np.ndarray] = {}
+
+
+def _get_window(nfft: int) -> np.ndarray:
+    """Cached cosine window — avoids recomputing for repeated nfft values."""
+    if nfft not in _window_cache:
+        _window_cache[nfft] = _cosine_window(nfft)
+    return _window_cache[nfft]
+
+
 def _detrend_segment(seg, method, ramp):
     """Detrend a single FFT segment."""
     if method == "none":
@@ -89,7 +99,7 @@ def csd_odas(
     if overlap is None:
         overlap = nfft // 2
     if window is None:
-        window = _cosine_window(nfft)
+        window = _get_window(nfft)
     else:
         window = np.asarray(window, dtype=np.float64)
 
@@ -194,7 +204,7 @@ def csd_matrix(
     if overlap is None:
         overlap = nfft // 2
     if window is None:
-        window = _cosine_window(nfft)
+        window = _get_window(nfft)
     else:
         window = np.asarray(window, dtype=np.float64)
 
