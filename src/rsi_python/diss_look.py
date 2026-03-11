@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.widgets import Button
 
+from rsi_python.chi import _bilinear_correction
 from rsi_python.dissipation import _estimate_epsilon
 from rsi_python.fp07 import fp07_tau, fp07_transfer, gradT_noise
 from rsi_python.nasmyth import nasmyth
@@ -393,6 +394,13 @@ def _compute_depth_spectra(
             sinc_corr[1:] = (np.pi * F[1:] / (fs_fast * np.sin(np.pi * F[1:] / fs_fast))) ** 2
         sinc_corr = np.where(np.isfinite(sinc_corr), sinc_corr, 1.0)
 
+        # Bilinear correction: compensate analog-vs-digital deconvolution
+        # filter mismatch (matches chi.py _compute_profile_chi)
+        bl_corrections = [
+            _bilinear_correction(F, dg, fs_fast)
+            for dg in diff_gains
+        ]
+
         # FP07 transfer function for model spectra
         tau0 = fp07_tau(W)
         H2 = fp07_transfer(F, tau0)
@@ -408,7 +416,8 @@ def _compute_depth_spectra(
                 continue
 
             Pxx_t, _ = csd_odas(seg, None, fft_length, fs_fast, overlap=fft_length // 2)[:2]
-            spec_obs = Pxx_t * W * sinc_corr
+            bl_ci = bl_corrections[ci] if ci < len(bl_corrections) else np.ones(n_freq)
+            spec_obs = Pxx_t * W * sinc_corr * bl_ci
             result["chi_obs_specs"].append(spec_obs)
 
             dg = diff_gains[ci] if ci < len(diff_gains) else 0.94
@@ -738,7 +747,10 @@ class DissLookViewer:
         if noise is not None:
             valid_n = np.isfinite(noise) & (noise > 0) & (K_chi > 0)
             if np.any(valid_n):
-                ax.loglog(K_chi[valid_n], noise[valid_n], "0.5", linewidth=0.6, linestyle=":")
+                ax.loglog(
+                    K_chi[valid_n], noise[valid_n], "0.5",
+                    linewidth=0.6, linestyle=":", label="Noise",
+                )
 
         # AA line
         K_AA = self.f_AA / r["W"]
@@ -750,7 +762,7 @@ class DissLookViewer:
         ax.set_ylabel("Φ_T [(K/m)² cpm⁻¹]")
         ax.set_xlim(0.5, 300)
         ax.set_ylim(1e-11, None)
-        ax.legend(fontsize=5, loc="upper right")
+        ax.legend(fontsize=5, loc="lower left")
         ax.set_title(f"χ spectra  P={P_lo:.1f}–{P_hi:.1f}  (-- Batch, — Kraich)", fontsize=9)
         ax.grid(True, alpha=0.3, which="both")
 
@@ -1004,7 +1016,7 @@ class DissLookViewer:
         ax.set_ylabel("Φ_sh [s⁻² cpm⁻¹]")
         ax.set_xlim(0.5, 300)
         ax.set_ylim(1e-9, 1e0)
-        ax.legend(fontsize=5, loc="upper right")
+        ax.legend(fontsize=5, loc="lower left")
         ax.set_title(f"ε spectra  P={P_lo:.1f}–{P_hi:.1f}", fontsize=9)
         ax.grid(True, alpha=0.3, which="both")
 
