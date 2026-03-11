@@ -433,7 +433,7 @@ def _compute_depth_spectra(
                     W,
                     f_AA_eff,
                     "single_pole",
-                    "batchelor",
+                    "kraichnan",
                     fs_fast,
                     dg,
                     fft_length,
@@ -455,7 +455,7 @@ def _compute_depth_spectra(
                 W,
                 f_AA_eff,
                 "single_pole",
-                "batchelor",
+                "kraichnan",
                 fs_fast,
                 dg,
                 fft_length,
@@ -760,27 +760,29 @@ class DissLookViewer:
 
         P_lo = float(self.P_fast[sel_spec.start])
         P_hi = float(self.P_fast[min(sel_spec.stop - 1, len(self.P_fast) - 1)])
-        # Dynamic y-axis: 1 order above max, down to floor
+        # Dynamic y-axis: 1 order above max, down to noise floor
+        x_lo, x_hi = 0.5, 300
+        in_range = (K_chi >= x_lo) & (K_chi <= x_hi)
         all_vals = []
         for spec_list in [r["chi_obs_specs"], r["chi_m1_specs"], r["chi_m2_specs"]]:
             for s in spec_list:
-                pos = s[(s > 0) & np.isfinite(s)]
+                pos = s[in_range & (s > 0) & np.isfinite(s)]
                 if len(pos):
                     all_vals.append(pos)
         if noise is not None:
-            pos = noise[(noise > 0) & np.isfinite(noise)]
+            pos = noise[in_range & (noise > 0) & np.isfinite(noise)]
             if len(pos):
                 all_vals.append(pos)
         if all_vals:
             combined = np.concatenate(all_vals)
             y_hi = 10 ** (np.ceil(np.log10(np.max(combined))) + 1)
-            y_lo = 10 ** np.floor(np.log10(np.min(combined)))
+            y_lo = 10 ** np.floor(np.log10(np.min(combined[combined > 1e-20])))
         else:
             y_hi, y_lo = 1e-2, 1e-11
 
         ax.set_xlabel("Wavenumber [cpm]")
         ax.set_ylabel("Φ_T [(K/m)² cpm⁻¹]")
-        ax.set_xlim(0.5, 300)
+        ax.set_xlim(x_lo, x_hi)
         ax.set_ylim(y_lo, y_hi)
         ax.legend(fontsize=5, loc="lower left")
         ax.set_title(
@@ -1034,13 +1036,15 @@ class DissLookViewer:
         ax.axvline(K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5)
 
         # Dynamic y-axis: 1 order above max, down to floor
+        x_lo, x_hi = 0.5, 300
+        in_range = (K >= x_lo) & (K <= x_hi)
         all_vals = []
         for spec in r["shear_specs"]:
-            pos = spec[spec > 0]
+            pos = spec[in_range & (spec > 0)]
             if len(pos):
                 all_vals.append(pos)
         for nas in r["nasmyth_specs"]:
-            pos = nas[nas > 0]
+            pos = nas[in_range & (nas > 0)]
             if len(pos):
                 all_vals.append(pos)
         if all_vals:
@@ -1054,7 +1058,7 @@ class DissLookViewer:
         P_hi = float(self.P_fast[min(sel_spec.stop - 1, len(self.P_fast) - 1)])
         ax.set_xlabel("Wavenumber [cpm]")
         ax.set_ylabel("Φ_sh [s⁻² cpm⁻¹]")
-        ax.set_xlim(0.5, 300)
+        ax.set_xlim(x_lo, x_hi)
         ax.set_ylim(y_lo, y_hi)
         ax.legend(fontsize=5, loc="lower left")
         ax.set_title(f"ε spectra  P={P_lo:.1f}–{P_hi:.1f}", fontsize=9)
