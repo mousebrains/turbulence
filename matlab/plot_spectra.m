@@ -164,8 +164,12 @@ function plot_spectra(fname, options)
     K_AA_eps = (0.9 * options.f_AA) / diss.speed(w_eps);
 
     %% Create figure
+    [~, base_name, ~] = fileparts(fname);
     fig = figure('Name', sprintf('Spectra — Profile %d', options.profile), ...
         'Units', 'normalized', 'Position', [0.1 0.15 0.85 0.45]);
+    sgtitle(sprintf('%s — Profile %d — P = %.1f–%.1f dbar', ...
+        strrep(base_name, '_', '\_'), options.profile, ...
+        P_prof(i_start), P_prof(i_end)), 'FontSize', 12);
 
     %% Left panel — Epsilon (shear) spectra
     ax1 = subplot(1, 2, 1);
@@ -198,8 +202,7 @@ function plot_spectra(fname, options)
     ylabel('\Phi_{shear} [s^{-2} cpm^{-1}]');
     legend('Location', 'southwest', 'FontSize', 7);
     grid on; grid minor;
-    title(sprintf('ε spectra  P=%.1f–%.1f dbar\nW=%.2f m/s', ...
-        P_prof(i_start), P_prof(i_end), diss.speed(w_eps)), ...
+    title(sprintf('ε spectra — W = %.2f m/s', diss.speed(w_eps)), ...
         'FontSize', 10);
 
     %% Right panel — Chi (temperature gradient) spectra
@@ -258,9 +261,7 @@ function plot_spectra(fname, options)
     ylabel('\Phi_T [(K/m)^2 cpm^{-1}]');
     legend('Location', 'southwest', 'FontSize', 7);
     grid on; grid minor;
-    title(sprintf('χ spectra  P=%.1f–%.1f dbar\n(-- M1 from ε,  -· M2 MLE)', ...
-        P_prof(i_start), P_prof(i_end)), ...
-        'FontSize', 10);
+    title('χ spectra  (-- M1 from ε,  -· M2 MLE)', 'FontSize', 10);
 
     fprintf('Done. Window at P ≈ %.1f dbar\n', results_m2.P_mean(w_chi));
 end

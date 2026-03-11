@@ -274,12 +274,25 @@ def _compute_depth_spectra(
     from rsi_python.goodman import clean_shear_spec
 
     n_fast = sel.stop - sel.start
+    diss_length = 2 * fft_length
     n_shear = len(shear_data)
     n_therm = len(therm_data)
     n_freq = fft_length // 2 + 1
     f_AA_eff = 0.9 * f_AA
 
-    W = float(np.mean(np.abs(speed_fast[sel])))
+    # Use a single diss_length window centered on the midpoint pressure,
+    # matching MATLAB's approach (get_diss_odas picks closest window to P_mid).
+    mid_idx = (sel.start + sel.stop) // 2
+    w_start = mid_idx - diss_length // 2
+    w_start = max(w_start, sel.start)
+    w_end = w_start + diss_length
+    if w_end > sel.stop:
+        w_end = sel.stop
+        w_start = max(sel.start, w_end - diss_length)
+    w_sel = slice(w_start, w_end)
+    n_win = w_end - w_start
+
+    W = float(np.mean(np.abs(speed_fast[w_sel])))
     if W < 0.01:
         warnings.warn(
             f"Speed {W:.4f} m/s below minimum; clamped to 0.01 m/s",
@@ -311,18 +324,18 @@ def _compute_depth_spectra(
         "noise_K": None,
     }
 
-    if n_fast < 2 * fft_length:
+    if n_win < 2 * fft_length:
         return result
 
-    # Shear spectra
-    num_ffts = 2 * (n_fast // fft_length) - 1
+    # Shear spectra — single diss_length window (num_ffts=3 for 2×fft_length)
+    num_ffts = 2 * (diss_length // fft_length) - 1
     n_accel = len(accel_data)
     n_v = n_accel if do_goodman else 0
 
     epsilons = []
     if n_shear > 0:
-        sh_seg = np.column_stack([d[sel] for _, d in shear_data])
-        ac_seg = np.column_stack([d[sel] for _, d in accel_data]) if accel_data else None
+        sh_seg = np.column_stack([d[w_sel] for _, d in shear_data])
+        ac_seg = np.column_stack([d[w_sel] for _, d in accel_data]) if accel_data else None
 
         if do_goodman and ac_seg is not None:
             clean_UU, _, _, _, F_g = clean_shear_spec(ac_seg, sh_seg, fft_length, fs_fast)
@@ -379,9 +392,7 @@ def _compute_depth_spectra(
                 epsilons.append(e4)
             result["K"] = K_s if n_shear > 0 else K
 
-    # Chi spectra — match quick_look approach:
-    #   observed gets sinc² correction,
-    #   model spectra include FP07 transfer function H2
+    # Chi spectra — single diss_length window, matching MATLAB approach
     eps_valid = [e for e in epsilons if np.isfinite(e) and e > 0]
     eps_mean = np.nanmean(eps_valid) if eps_valid else np.nan
 
@@ -402,7 +413,7 @@ def _compute_depth_spectra(
         H2 = fp07_transfer(F, tau0)
 
         for ci in range(n_therm):
-            seg = therm_data[ci][1][sel]
+            seg = therm_data[ci][1][w_sel]
             if len(seg) < 2 * fft_length:
                 result["chi_obs_specs"].append(np.full(n_freq, np.nan))
                 result["chi_m1_specs"].append(np.full(n_freq, np.nan))
@@ -543,6 +554,11 @@ class DissLookViewer:
         self.P_fast = np.interp(self.t_fast, self.t_slow, self.P)
         self.speed_fast = np.abs(np.interp(self.t_fast, self.t_slow, W))
         self.ratio = round(self.fs_fast / self.fs_slow)
+
+        # Convert shear from piezo output to du/dz by dividing by speed²,
+        # matching ODAS odas_p2mat.m line 922 and dissipation.py line 412.
+        for i, (name, data) in enumerate(self.shear):
+            self.shear[i] = (name, data / self.speed_fast**2)
 
         self.profile_idx = 0
         self.fig = None
