@@ -7,6 +7,9 @@ odas/
 # Reference papers (large PDFs)
 papers/
 
+# macOS
+.DS_Store
+
 # Python
 __pycache__/
 *.py[cod]
