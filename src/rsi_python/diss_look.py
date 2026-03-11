@@ -100,7 +100,7 @@ def _compute_windowed_diss(
     num_ffts = 2 * (diss_length // fft_length) - 1
     n_v = n_accel if do_goodman else 0
 
-    f_AA_eff = 0.9 * f_AA
+    f_AA_chi = 0.9 * f_AA  # 10% margin for chi, matching MATLAB get_chi
 
     for idx in range(n_windows):
         s = seg_start + idx * step
@@ -129,7 +129,7 @@ def _compute_windowed_diss(
             if do_goodman and ac_seg is not None and sh_seg.shape[0] > 2 * fft_length:
                 clean_UU, _, _, _, F_g = clean_shear_spec(ac_seg, sh_seg, fft_length, fs_fast)
                 K_g = F_g / W
-                K_AA_g = f_AA_eff / W
+                K_AA_g = f_AA / W
 
                 # Macoun-Lueck wavenumber correction
                 correction = np.ones_like(K_g)
@@ -163,7 +163,7 @@ def _compute_windowed_diss(
                     mask_c = K_s <= 150
                     correction[mask_c] = 1 + (K_s[mask_c] / 48) ** 2
                     spec_k = Pxx * W * correction
-                    K_AA_s = f_AA_eff / W
+                    K_AA_s = f_AA / W
 
                     e4, k_max, mad, meth, nas, fom, Kmr, FM = _estimate_epsilon(
                         K_s,
@@ -208,7 +208,7 @@ def _compute_windowed_diss(
                     nu,
                     mean_T,
                     W,
-                    f_AA_eff,
+                    f_AA_chi,
                     "single_pole",
                     "batchelor",
                     fs_fast,
@@ -225,7 +225,7 @@ def _compute_windowed_diss(
                     nu,
                     mean_T,
                     W,
-                    f_AA_eff,
+                    f_AA_chi,
                     "single_pole",
                     "kraichnan",
                     fs_fast,
@@ -278,17 +278,30 @@ def _compute_depth_spectra(
     n_shear = len(shear_data)
     n_therm = len(therm_data)
     n_freq = fft_length // 2 + 1
-    f_AA_eff = 0.9 * f_AA
 
-    # Use a single diss_length window centered on the midpoint pressure,
-    # matching MATLAB's approach (get_diss_odas picks closest window to P_mid).
-    mid_idx = (sel.start + sel.stop) // 2
-    w_start = mid_idx - diss_length // 2
-    w_start = max(w_start, sel.start)
-    w_end = w_start + diss_length
-    if w_end > sel.stop:
-        w_end = sel.stop
-        w_start = max(sel.start, w_end - diss_length)
+    # Select a single diss_length window closest to the midpoint pressure,
+    # matching MATLAB get_diss_odas which computes all windows then picks
+    # the one nearest P_mid.
+    overlap_w = diss_length // 2
+    step_w = diss_length - overlap_w
+    n_windows = max(0, 1 + (n_fast - diss_length) // step_w)
+    if n_windows > 0:
+        P_mid = float(np.mean(P_fast[sel]))
+        best_idx = 0
+        best_dist = float("inf")
+        for widx in range(n_windows):
+            s = sel.start + widx * step_w
+            e = s + diss_length
+            if e > sel.stop:
+                break
+            dist = abs(float(np.mean(P_fast[s:e])) - P_mid)
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = widx
+        w_start = sel.start + best_idx * step_w
+    else:
+        w_start = sel.start
+    w_end = min(w_start + diss_length, sel.stop)
     w_sel = slice(w_start, w_end)
     n_win = w_end - w_start
 
@@ -304,7 +317,7 @@ def _compute_depth_spectra(
 
     F = np.arange(n_freq) * fs_fast / fft_length
     K = F / W
-    K_AA = f_AA_eff / W
+    K_AA = f_AA / W  # no 0.9 factor, matching MATLAB get_diss_odas line 505
 
     result: dict = {
         "K": K,
@@ -378,7 +391,7 @@ def _compute_depth_spectra(
                     K_s,
                     spec_k,
                     nu,
-                    f_AA_eff / W,
+                    f_AA / W,
                     3,
                     1.5e-5,
                     num_ffts=num_ffts,
@@ -429,6 +442,7 @@ def _compute_depth_spectra(
             dg = diff_gains[ci] if ci < len(diff_gains) else 0.94
 
             # Method 1: chi from epsilon (kB fixed by shear-derived epsilon)
+            f_AA_chi = 0.9 * f_AA  # 10% margin, matching MATLAB get_chi
             if np.isfinite(eps_mean) and eps_mean > 0:
                 chi_m1, _, _, m1_spec_raw, _, _ = _chi_from_epsilon(
                     spec_obs,
@@ -437,7 +451,7 @@ def _compute_depth_spectra(
                     nu,
                     mean_T,
                     W,
-                    f_AA_eff,
+                    f_AA_chi,
                     "single_pole",
                     "kraichnan",
                     fs_fast,
@@ -459,7 +473,7 @@ def _compute_depth_spectra(
                 nu,
                 mean_T,
                 W,
-                f_AA_eff,
+                f_AA_chi,
                 "single_pole",
                 "kraichnan",
                 fs_fast,
