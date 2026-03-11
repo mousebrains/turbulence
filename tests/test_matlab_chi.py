@@ -111,7 +111,7 @@ def matched_scalar(scalar_pair):
     p_path, val = scalar_pair
     from rsi_python.chi import get_chi
 
-    results = get_chi(p_path, fft_length=256, goodman=True)
+    results = get_chi(p_path, fft_length=256, diss_length=512, overlap=256, goodman=True)
     matched = _match_scalar_profiles(results, val)
     return results, val, matched
 

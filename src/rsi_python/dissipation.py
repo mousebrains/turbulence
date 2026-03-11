@@ -1036,11 +1036,11 @@ def _estimate_epsilon(
         spec_ratio = shear_spectrum[Range[1:]] / (nas_spec[Range[1:]] + 1e-30)
         spec_ratio = spec_ratio[spec_ratio > 0]
         if len(spec_ratio) > 0:
-            mad = np.mean(np.abs(np.log10(spec_ratio)))
+            mad = float(np.mean(np.abs(np.log10(spec_ratio))))
         else:
-            mad = np.nan
+            mad = float("nan")
     else:
-        mad = np.nan
+        mad = float("nan")
 
     # Figure of merit: observed/Nasmyth variance ratio in fit range
     if len(Range) > 1:
@@ -1141,7 +1141,7 @@ def _inertial_subrange(
         ratio = ratio[ratio > 0]
         if len(ratio) == 0:
             break
-        fit_error = np.mean(np.log10(ratio))
+        fit_error = float(np.mean(np.log10(ratio)))
         e = e * 10 ** (3 * fit_error / 2)
 
     # Remove flyers
@@ -1172,7 +1172,7 @@ def _inertial_subrange(
         ratio = ratio[ratio > 0]
         if len(ratio) == 0:
             break
-        fit_error = np.mean(np.log10(ratio))
+        fit_error = float(np.mean(np.log10(ratio)))
         e = e * 10 ** (3 * fit_error / 2)
 
     return e, k_max
