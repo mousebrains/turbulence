@@ -5,10 +5,10 @@ Interactive multi-panel viewer focused on comparing epsilon, chi from
 Batchelor vs Kraichnan models, and the Lueck (2022) figure of merit (FM).
 
 Layout (2 rows x 4 columns):
-  Row 0 (pressure y-axis, cols 0-2 linked):
-    Overview | Shear probes | Temperature & fall rate | χ spectra at depth
-  Row 1 (dissipation quality):
-    ε profile | χ comparison (Batch. vs Kraich.) | FM profile | ε spectra at depth
+  Row 0 (profile panels, pressure y-axis linked):
+    Overview | ε profile | χ profile | FM profile
+  Row 1 (spectra and comparison):
+    ε spectra at depth | χ spectra at depth | χ Batch. vs Kraich. | Temperature
 """
 
 import re
@@ -17,9 +17,7 @@ import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.widgets import Button
-from scipy.signal import butter, filtfilt
 
-from rsi_python.despike import despike
 from rsi_python.dissipation import _estimate_epsilon
 from rsi_python.fp07 import fp07_tau, fp07_transfer, gradT_noise
 from rsi_python.nasmyth import nasmyth
@@ -28,11 +26,6 @@ from rsi_python.p_file import PFile
 from rsi_python.profile import _smooth_fall_rate, get_profiles
 from rsi_python.spectral import csd_odas
 
-
-def _hp_filter(x, fs, cutoff=1.0):
-    """High-pass filter for shear display."""
-    b, a = butter(1, cutoff / (fs / 2), btype="high")
-    return filtfilt(b, a, x)
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +514,7 @@ class DissLookViewer:
 
         self.P = pf.channels["P"]
         self.T = pf.channels.get("T1", pf.channels.get("T", np.zeros_like(self.P)))
+        self.JAC_T = pf.channels.get("JAC_T", None)
         self.t_fast = pf.t_fast
         self.t_slow = pf.t_slow
         self.fs_fast = pf.fs_fast
@@ -629,26 +623,22 @@ class DissLookViewer:
             self.goodman,
         )
 
-        # Row 0
+        # Row 0: profile panels
         self._draw_overview(s_slow, e_slow)
-        self._draw_shear(sel_fast)
-        self._draw_temperature(s_slow, e_slow)
-        self._draw_chi_spectra(sel_spec)
-
-        # Row 1
         self._draw_eps_profile()
-        self._draw_chi_comparison()
+        self._draw_chi_profile()
         self._draw_fm_profile()
+
+        # Row 1: spectra and comparison panels
         self._draw_eps_spectra(sel_spec)
+        self._draw_chi_spectra(sel_spec)
+        self._draw_chi_comparison()
+        self._draw_temperature(s_slow, e_slow)
 
         # Green band for spectral depth range
         if self.spec_P_range is not None:
             sp_lo, sp_hi = self.spec_P_range
-            for ax in [self.axes[0, c] for c in range(3)] + [
-                self.axes[1, 0],
-                self.axes[1, 1],
-                self.axes[1, 2],
-            ]:
+            for ax in [self.axes[0, c] for c in range(4)] + [self.axes[1, 2]]:
                 ax.axhspan(sp_lo, sp_hi, color="green", alpha=0.15, zorder=0)
 
         P_lo, P_hi = self.P[s_slow], self.P[e_slow]
@@ -665,6 +655,10 @@ class DissLookViewer:
 
     # ------------------------------------------------------------------
     # Row 0: Pressure y-axis panels (same as quick_look)
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Row 0: Profile panels (pressure y-axis, all linked)
     # ------------------------------------------------------------------
 
     def _draw_overview(self, s_slow, e_slow):
@@ -684,46 +678,9 @@ class DissLookViewer:
             if i != self.profile_idx:
                 ax.axvspan(self.t_slow[s], self.t_slow[e], alpha=0.05, color="C0")
 
-    def _draw_shear(self, sel_fast):
-        ax = self.axes[0, 1]
-        P_prof = self.P_fast[sel_fast]
-        if not self.shear:
-            ax.text(0.5, 0.5, "No shear channels", transform=ax.transAxes, ha="center", va="center")
-            return
-        for i, (name, data) in enumerate(self.shear):
-            seg = data[sel_fast]
-            if len(seg) > 2 * int(self.fs_fast):
-                seg_hp = _hp_filter(seg, self.fs_fast, cutoff=1.0)
-            else:
-                seg_hp = seg - np.mean(seg)
-            seg_hp, _, _, _ = despike(seg_hp, self.fs_fast, thresh=8, smooth=0.5)
-            offset = i * 0.5
-            ax.plot(seg_hp + offset, P_prof, linewidth=0.3, label=name)
-        ax.set_xlabel("Shear [s⁻¹] (HP, offset)")
-        ax.legend(fontsize=7, loc="lower right")
-        ax.set_title("Shear probes", fontsize=9)
-        ax.grid(True, alpha=0.3)
-
-    def _draw_temperature(self, s_slow, e_slow):
-        ax = self.axes[0, 2]
-        P_prof = self.P[s_slow : e_slow + 1]
-        colors = ["C3", "C1", "C4", "C5"]
-        for i, (name, data) in enumerate(self.therm_slow):
-            c = colors[i % len(colors)]
-            ax.plot(data[s_slow : e_slow + 1], P_prof, c, linewidth=1.0, label=name)
-        self._twin_ax = ax.twiny()
-        W_prof = self.W[s_slow : e_slow + 1]
-        self._twin_ax.plot(W_prof, P_prof, "C2--", linewidth=0.8, alpha=0.6, label="dP/dt")
-        self._twin_ax.set_xlabel("Fall rate [dbar/s]", fontsize=8, color="C2")
-        self._twin_ax.tick_params(axis="x", labelsize=7, colors="C2")
-        ax.set_xlabel("Temperature [°C]")
-        ax.legend(fontsize=7, loc="lower left")
-        ax.set_title("Temperature & fall rate", fontsize=9)
-        ax.grid(True, alpha=0.3)
-
     def _draw_chi_spectra(self, sel_spec):
-        """Panel (0,3): Chi spectra at the stepper depth, both models."""
-        ax = self.axes[0, 3]
+        """Panel (1,1): Chi spectra at the stepper depth, both models."""
+        ax = self.axes[1, 1]
 
         n_fast = sel_spec.stop - sel_spec.start
         if n_fast < 2 * self.fft_length:
@@ -794,17 +751,18 @@ class DissLookViewer:
         ax.set_xlabel("Wavenumber [cpm]")
         ax.set_ylabel("Φ_T [(K/m)² cpm⁻¹]")
         ax.set_xlim(0.5, 300)
+        ax.set_ylim(1e-11, None)
         ax.legend(fontsize=5, loc="upper right")
         ax.set_title(f"χ spectra  P={P_lo:.1f}–{P_hi:.1f}  (-- Batch, — Kraich)", fontsize=9)
         ax.grid(True, alpha=0.3, which="both")
 
     # ------------------------------------------------------------------
-    # Row 1: Dissipation quality panels
+    # Row 0 continued: Profile panels
     # ------------------------------------------------------------------
 
     def _draw_eps_profile(self):
-        """Panel (1,0): Epsilon from each shear probe vs pressure."""
-        ax = self.axes[1, 0]
+        """Panel (0,1): Epsilon from each shear probe vs pressure."""
+        ax = self.axes[0, 1]
         d = self._cached_diss
         P = d["P_windows"]
 
@@ -832,9 +790,52 @@ class DissLookViewer:
         else:
             ax.text(0.5, 0.5, "No valid ε", transform=ax.transAxes, ha="center", va="center")
 
+    def _draw_chi_profile(self):
+        """Panel (0,2): Chi profile vs pressure (mean of Batchelor & Kraichnan)."""
+        ax = self.axes[0, 2]
+        d = self._cached_diss
+        P = d["P_windows"]
+
+        if len(P) == 0:
+            ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
+            return
+
+        colors = ["C3", "C1", "C4", "C5"]
+        has_data = False
+        for i, (name, _) in enumerate(self.therm_fast):
+            c = colors[i % len(colors)]
+            chi_b = d["chi_batchelor"][i]
+            chi_k = d["chi_kraichnan"][i]
+            chi_mean = np.where(
+                np.isfinite(chi_b) & np.isfinite(chi_k),
+                (chi_b + chi_k) / 2,
+                np.where(np.isfinite(chi_b), chi_b, chi_k),
+            )
+            valid = np.isfinite(chi_mean) & (chi_mean > 0)
+            if np.any(valid):
+                ax.plot(
+                    chi_mean[valid],
+                    P[valid],
+                    f"{c}o-",
+                    markersize=3,
+                    linewidth=0.8,
+                    label=name,
+                )
+                has_data = True
+
+        if has_data:
+            ax.set_xscale("log")
+            ax.set_xlabel("χ [K²/s]")
+            ax.set_ylabel("Pressure [dbar]")
+            ax.legend(fontsize=6, loc="lower left")
+            ax.set_title("χ profile (M1)", fontsize=9)
+            ax.grid(True, alpha=0.3, which="both")
+        else:
+            ax.text(0.5, 0.5, "No valid χ", transform=ax.transAxes, ha="center", va="center")
+
     def _draw_chi_comparison(self):
-        """Panel (1,1): Chi from Batchelor vs Kraichnan models vs pressure."""
-        ax = self.axes[1, 1]
+        """Panel (1,2): Chi from Batchelor vs Kraichnan models vs pressure."""
+        ax = self.axes[1, 2]
         d = self._cached_diss
         P = d["P_windows"]
 
@@ -890,8 +891,8 @@ class DissLookViewer:
             ax.text(0.5, 0.5, "No valid χ", transform=ax.transAxes, ha="center", va="center")
 
     def _draw_fm_profile(self):
-        """Panel (1,2): Lueck FM figure of merit vs pressure."""
-        ax = self.axes[1, 2]
+        """Panel (0,3): Lueck FM figure of merit vs pressure."""
+        ax = self.axes[0, 3]
         d = self._cached_diss
         P = d["P_windows"]
 
@@ -948,8 +949,8 @@ class DissLookViewer:
             ax.text(0.5, 0.5, "No valid FM", transform=ax.transAxes, ha="center", va="center")
 
     def _draw_eps_spectra(self, sel_spec):
-        """Panel (1,3): Shear (epsilon) spectra at the stepper depth."""
-        ax = self.axes[1, 3]
+        """Panel (1,0): Shear (epsilon) spectra at the stepper depth."""
+        ax = self.axes[1, 0]
 
         n_fast = sel_spec.stop - sel_spec.start
         if n_fast < 2 * self.fft_length:
@@ -1009,6 +1010,44 @@ class DissLookViewer:
         ax.set_title(f"ε spectra  P={P_lo:.1f}–{P_hi:.1f}", fontsize=9)
         ax.grid(True, alpha=0.3, which="both")
 
+    def _draw_temperature(self, s_slow, e_slow):
+        """Panel (1,3): Temperature channels (T1_dT1, T2_dT2, JAC_T) vs pressure."""
+        ax = self.axes[1, 3]
+        sel_fast = self._slow_to_fast_slice(s_slow, e_slow)
+        P_prof_fast = self.P_fast[sel_fast]
+        P_prof_slow = self.P[s_slow : e_slow + 1]
+
+        colors = ["C3", "C1", "C4", "C5"]
+        has_data = False
+
+        for i, (name, data) in enumerate(self.therm_fast):
+            c = colors[i % len(colors)]
+            ax.plot(data[sel_fast], P_prof_fast, c, linewidth=0.5, alpha=0.7, label=name)
+            has_data = True
+
+        if self.JAC_T is not None:
+            ax.plot(
+                self.JAC_T[s_slow : e_slow + 1],
+                P_prof_slow,
+                "C2",
+                linewidth=1.0,
+                label="JAC_T",
+            )
+            has_data = True
+
+        if has_data:
+            ax.set_xlabel("Temperature gradient / T [°C]")
+            ax.set_ylabel("Pressure [dbar]")
+            ax.invert_yaxis()
+            ax.legend(fontsize=6, loc="lower left")
+            ax.set_title("Temperature", fontsize=9)
+            ax.grid(True, alpha=0.3)
+        else:
+            ax.text(
+                0.5, 0.5, "No temperature channels",
+                transform=ax.transAxes, ha="center", va="center",
+            )
+
     # ------------------------------------------------------------------
     # Figure setup and navigation
     # ------------------------------------------------------------------
@@ -1022,12 +1061,10 @@ class DissLookViewer:
         )
         self.fig.subplots_adjust(bottom=0.08, top=0.92, left=0.04, right=0.98)
 
-        # Link pressure y-axes: row 0 cols 0-2 + profile panels (1,0), (1,1), (1,2)
+        # Link pressure y-axes: row 0 all cols (profile panels) + row 1 col 2 (chi comparison)
         p_ref = self.axes[0, 0]
-        for col in range(1, 3):
+        for col in range(1, 4):
             self.axes[0, col].sharey(p_ref)
-        self.axes[1, 0].sharey(p_ref)
-        self.axes[1, 1].sharey(p_ref)
         self.axes[1, 2].sharey(p_ref)
         p_ref.invert_yaxis()
 
