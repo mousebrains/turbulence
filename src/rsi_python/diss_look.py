@@ -18,7 +18,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.widgets import Button
 
-from rsi_python.chi import _bilinear_correction
 from rsi_python.dissipation import _estimate_epsilon
 from rsi_python.fp07 import fp07_tau, fp07_transfer, gradT_noise
 from rsi_python.nasmyth import nasmyth
@@ -193,8 +192,11 @@ def _compute_windowed_diss(
                 if len(seg) < 2 * fft_length:
                     continue
                 Pxx_t, F_t = csd_odas(seg, None, fft_length, fs_fast, overlap=fft_length // 2)[:2]
-                spec_obs = Pxx_t * W
                 K_t = F_t / W
+                # Convert temperature PSD to gradient PSD: (2πK)²
+                grad_factor_w = np.zeros_like(K_t)
+                grad_factor_w[1:] = (2 * np.pi * K_t[1:]) ** 2
+                spec_obs = Pxx_t * W * grad_factor_w
 
                 dg = diff_gains[ci] if ci < len(diff_gains) else 0.94
 
@@ -388,18 +390,12 @@ def _compute_depth_spectra(
         noise_K, _ = gradT_noise(F, mean_T, W, fs=fs_fast, diff_gain=diff_gains[0])
         result["noise_K"] = noise_K
 
-        # Sinc² correction for spectral leakage
-        sinc_corr = np.ones(n_freq)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            sinc_corr[1:] = (np.pi * F[1:] / (fs_fast * np.sin(np.pi * F[1:] / fs_fast))) ** 2
-        sinc_corr = np.where(np.isfinite(sinc_corr), sinc_corr, 1.0)
-
-        # Bilinear correction: compensate analog-vs-digital deconvolution
-        # filter mismatch (matches chi.py _compute_profile_chi)
-        bl_corrections = [
-            _bilinear_correction(F, dg, fs_fast)
-            for dg in diff_gains
-        ]
+        # Temperature-to-gradient conversion: (2πK)² converts Φ_T(K) to Φ_{dT/dz}(K)
+        # T1_dT1/T2_dT2 are deconvolved fast-rate temperature (°C), not gradient.
+        # Multiplying the temperature wavenumber spectrum by (2πK)² gives the
+        # gradient spectrum in (K/m)²/cpm, matching ODAS make_gradT_odas output.
+        grad_factor = np.zeros(n_freq)
+        grad_factor[1:] = (2 * np.pi * K_chi[1:]) ** 2
 
         # FP07 transfer function for model spectra
         tau0 = fp07_tau(W)
@@ -416,8 +412,7 @@ def _compute_depth_spectra(
                 continue
 
             Pxx_t, _ = csd_odas(seg, None, fft_length, fs_fast, overlap=fft_length // 2)[:2]
-            bl_ci = bl_corrections[ci] if ci < len(bl_corrections) else np.ones(n_freq)
-            spec_obs = Pxx_t * W * sinc_corr * bl_ci
+            spec_obs = Pxx_t * W * grad_factor
             result["chi_obs_specs"].append(spec_obs)
 
             dg = diff_gains[ci] if ci < len(diff_gains) else 0.94
@@ -760,7 +755,7 @@ class DissLookViewer:
 
         P_lo = float(self.P_fast[sel_spec.start])
         P_hi = float(self.P_fast[min(sel_spec.stop - 1, len(self.P_fast) - 1)])
-        # Dynamic y-axis: 1 order above max, down to noise floor
+        # Dynamic y-axis: 1 order above max, 1 order below noise floor
         x_lo, x_hi = 0.5, 300
         in_range = (K_chi >= x_lo) & (K_chi <= x_hi)
         all_vals = []
@@ -769,16 +764,20 @@ class DissLookViewer:
                 pos = s[in_range & (s > 0) & np.isfinite(s)]
                 if len(pos):
                     all_vals.append(pos)
-        if noise is not None:
-            pos = noise[in_range & (noise > 0) & np.isfinite(noise)]
-            if len(pos):
-                all_vals.append(pos)
         if all_vals:
             combined = np.concatenate(all_vals)
             y_hi = 10 ** (np.ceil(np.log10(np.max(combined))) + 1)
-            y_lo = 10 ** np.floor(np.log10(np.min(combined[combined > 1e-20])))
         else:
-            y_hi, y_lo = 1e-2, 1e-11
+            y_hi = 1e-2
+        # Lower limit: 1 order below noise floor minimum
+        if noise is not None:
+            noise_in = noise[in_range & (noise > 0) & np.isfinite(noise)]
+            if len(noise_in):
+                y_lo = 10 ** (np.floor(np.log10(np.min(noise_in))) - 1)
+            else:
+                y_lo = 1e-11
+        else:
+            y_lo = 1e-11
 
         ax.set_xlabel("Wavenumber [cpm]")
         ax.set_ylabel("Φ_T [(K/m)² cpm⁻¹]")
