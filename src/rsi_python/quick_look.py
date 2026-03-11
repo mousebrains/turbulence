@@ -5,95 +5,30 @@ Port of quick_look.m from the ODAS MATLAB library.
 Provides a multi-panel figure with Prev/Next buttons to step through profiles.
 
 Layout (2 rows x 4 columns):
-  Row 0 (pressure y-axis, all linked):
-    Overview | Shear probes | Temperature & fall rate | T1, T2, JAC_T
-  Row 1 (spectra + profiles):
-    Shear spectra | Chi spectra | ε vs pressure | χ vs pressure
+  Row 0 (profile panels, pressure y-axis linked):
+    Overview | epsilon profile | chi profile | Shear probes
+  Row 1 (spectra + detail):
+    T1, T2, JAC_T | epsilon spectra | chi spectra | Fall rate
 """
 
-import re
 import warnings
 
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.widgets import Button
-from scipy.signal import butter, filtfilt
 
-from rsi_python.batchelor import batchelor_kB
-from rsi_python.despike import despike
-from rsi_python.fp07 import fp07_tau, fp07_transfer, gradT_noise
-from rsi_python.nasmyth import X_95, nasmyth
+from rsi_python.nasmyth import nasmyth
 from rsi_python.ocean import visc35
 from rsi_python.p_file import PFile
-from rsi_python.profile import _smooth_fall_rate, get_profiles
-from rsi_python.spectral import csd_odas
+from rsi_python.viewer_base import (
+    ProfileViewer,
+    compute_depth_spectra,
+    select_mid_window,
+)
+from rsi_python.window import compute_chi_window, compute_eps_window
 
 
-def _hp_filter(x, fs, cutoff=1.0):
-    """High-pass filter for shear display."""
-    b, a = butter(1, cutoff / (fs / 2), btype="high")
-    return filtfilt(b, a, x)
-
-
-def _compute_profile_spectra(
-    shear_data, accel_data, P_fast, T_slow, speed_fast, fs_fast, sel, fft_length, f_AA, do_goodman
-):
-    """Compute shear spectra and Nasmyth references for one profile segment.
-
-    Returns (K, F, spectra_k, nasmyth_specs, epsilons, K_maxes, mean_speed, nu).
-    """
-    from rsi_python.goodman import clean_shear_spec
-
-    sh_seg = np.column_stack([s[sel] for _, s in shear_data])
-    ac_seg = np.column_stack([a[sel] for _, a in accel_data]) if accel_data else None
-
-    mean_T = float(np.mean(T_slow))
-    mean_speed = float(np.mean(np.abs(speed_fast[sel])))
-    if mean_speed < 0.01:
-        mean_speed = 0.01
-    nu = float(visc35(mean_T))
-
-    if do_goodman and ac_seg is not None and sh_seg.shape[0] > 2 * fft_length:
-        clean_UU, AA, UU, UA, F = clean_shear_spec(ac_seg, sh_seg, fft_length, fs_fast)
-        n_sh = sh_seg.shape[1]
-        spectra = []
-        for i in range(n_sh):
-            spectra.append(np.real(clean_UU[:, i, i]))
-    else:
-        F = None
-        spectra = []
-        for i in range(sh_seg.shape[1]):
-            Pxx, F, _, _ = csd_odas(sh_seg[:, i], None, fft_length, fs_fast)
-            spectra.append(Pxx)
-
-    K = F / mean_speed
-    spectra_k = [s * mean_speed for s in spectra]
-    K_AA = f_AA / mean_speed
-
-    nasmyth_specs = []
-    epsilons = []
-    K_maxes = []
-    for spec_k in spectra_k:
-        valid = (K > 0) & (K <= K_AA)
-        if np.sum(valid) < 3:
-            epsilons.append(np.nan)
-            nasmyth_specs.append(np.full_like(K, np.nan))
-            K_maxes.append(np.nan)
-            continue
-        dk = np.gradient(K)
-        variance = np.sum(spec_k[valid] * dk[valid])
-        eps_est = 7.5 * nu * variance
-        for _ in range(5):
-            nas = nasmyth(eps_est, nu, K[valid])
-            nas_var = np.sum(nas * dk[valid])
-            if nas_var > 0:
-                eps_est *= variance / nas_var
-        epsilons.append(eps_est)
-        nasmyth_specs.append(nasmyth(eps_est, nu, K))
-        K_95 = X_95 * (max(eps_est, 1e-15) / nu**3) ** 0.25
-        K_maxes.append(min(K_AA, K_95))
-
-    return K, F, spectra_k, nasmyth_specs, epsilons, K_maxes, mean_speed, nu
+# ---------------------------------------------------------------------------
+# ql-specific free functions
+# ---------------------------------------------------------------------------
 
 
 def _compute_chi_spectra(
@@ -111,120 +46,93 @@ def _compute_chi_spectra(
 ):
     """Compute temperature gradient spectra and all three chi methods for one profile segment.
 
+    Uses shared ``compute_chi_window`` from ``window.py`` for Method 1 (chi
+    from epsilon) and Method 2 Iterative (Peterson & Fer 2014).  Method 2 MLE
+    uses ``_mle_fit_kB`` directly with the correct gradient spectrum from the
+    shared function.
+
+    Selects a single diss_length window closest to the midpoint pressure,
+    matching diss_look and MATLAB plot_spectra.
+
     Returns (K, F, obs_spectra, methods_results, noise_K, mean_speed, nu).
 
     methods_results is a dict keyed by method name ("M1", "M2-MLE", "M2-Iter"),
     each mapping to a list of per-probe (batch_spec, chi_val, kB_val) tuples.
     """
     from rsi_python.batchelor import KAPPA_T
-    from rsi_python.chi import _iterative_fit, _mle_fit_kB, _spectrum_func
+    from rsi_python.chi import _mle_fit_kB
+
+    w_sel = select_mid_window(P_fast, sel, fft_length)
 
     mean_T = float(np.mean(T_slow))
-    mean_speed = float(np.mean(np.abs(speed_fast[sel])))
+    mean_speed = float(np.mean(np.abs(speed_fast[w_sel])))
     if mean_speed < 0.01:
         mean_speed = 0.01
     nu = float(visc35(mean_T))
 
-    eps_vals = [e for e in epsilons if np.isfinite(e) and e > 0]
-    eps_mean = np.nanmean(eps_vals) if eps_vals else 1e-8
-
+    n_therm = len(therm_data)
     n_freq = fft_length // 2 + 1
-    F = np.arange(n_freq) * fs_fast / fft_length
-    K = F / mean_speed
+    f_AA_chi = 0.9 * f_AA  # 10% margin, matching MATLAB get_chi
 
-    obs_spectra = []
-    methods_results = {"M1": [], "M2-MLE": [], "M2-Iter": []}
+    therm_segs = [therm_data[ci][1][w_sel] for ci in range(n_therm)]
+    eps_arr = np.array(epsilons) if epsilons else None
 
-    dg = diff_gains[0] if diff_gains else 0.94
-    noise_K, _ = gradT_noise(F, mean_T, mean_speed, fs=fs_fast, diff_gain=dg)
+    # Method 1: chi from epsilon (also produces observed gradient spectra + noise)
+    cr_m1 = compute_chi_window(
+        therm_segs, diff_gains, mean_speed, mean_T, nu,
+        fs_fast, fft_length, f_AA_chi,
+        spectrum_model=spectrum_model, epsilon=eps_arr, method=1,
+    )
+
+    # Method 2 Iterative
+    cr_m2_iter = compute_chi_window(
+        therm_segs, diff_gains, mean_speed, mean_T, nu,
+        fs_fast, fft_length, f_AA_chi,
+        spectrum_model=spectrum_model, method=2,
+    )
+
+    K = cr_m1.K
+    F = cr_m1.F
+    H2 = cr_m1.H2
+    obs_spectra = cr_m1.grad_specs
+    noise_K = cr_m1.noise_K
+    K_AA_chi = f_AA_chi / mean_speed
 
     nan_result = (np.full(n_freq, np.nan), np.nan, np.nan)
+    methods_results = {"M1": [], "M2-MLE": [], "M2-Iter": []}
 
-    for ci, (name, data) in enumerate(therm_data):
-        seg = data[sel]
-        if len(seg) < 2 * fft_length:
-            obs_spectra.append(np.full(n_freq, np.nan))
-            for m in methods_results:
-                methods_results[m].append(nan_result)
-            continue
-
-        Pxx, F_spec = csd_odas(seg, None, fft_length, fs_fast, overlap=fft_length // 2)[:2]
-        spec_obs = Pxx * mean_speed
-
-        correction = np.ones(n_freq)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            correction[1:] = (
-                np.pi * F_spec[1:] / (fs_fast * np.sin(np.pi * F_spec[1:] / fs_fast))
-            ) ** 2
-        correction = np.where(np.isfinite(correction), correction, 1.0)
-        spec_obs = spec_obs * correction
-        obs_spectra.append(spec_obs)
-
-        dg_i = diff_gains[ci] if ci < len(diff_gains) else 0.94
-
-        # --- Method 1: chi from known epsilon ---
-        grad_func, _ = _spectrum_func(spectrum_model)
-        kB = batchelor_kB(eps_mean, nu)
-        if kB > 1:
-            tau0 = fp07_tau(mean_speed)
-            H2 = fp07_transfer(F, tau0)
-            K_AA = f_AA / mean_speed
-            valid = (K > 0) & (K <= K_AA)
-            if np.sum(valid) >= 3:
-                obs_var = np.trapezoid(spec_obs[valid], K[valid])
-                chi_trial = max(6 * KAPPA_T * obs_var, 1e-12)
-                batch_spec = grad_func(K, kB, chi_trial) * H2
-                model_var = np.trapezoid(batch_spec[valid], K[valid])
-                if model_var > 0:
-                    scale = obs_var / model_var
-                    batch_spec = batch_spec * scale
-                    chi_val = chi_trial * scale
-                else:
-                    chi_val = chi_trial
-                methods_results["M1"].append((batch_spec, chi_val, kB))
-            else:
-                methods_results["M1"].append(nan_result)
+    for ci in range(n_therm):
+        # M1
+        if np.isfinite(cr_m1.chi[ci]) and cr_m1.chi[ci] > 0:
+            methods_results["M1"].append(
+                (cr_m1.model_specs[ci], float(cr_m1.chi[ci]), float(cr_m1.kB[ci]))
+            )
         else:
             methods_results["M1"].append(nan_result)
 
-        # --- Method 2 MLE ---
-        K_AA = f_AA / mean_speed
-        valid_m2 = (K > 0) & (K <= K_AA)
-        if np.sum(valid_m2) >= 3:
-            chi_obs = max(6 * KAPPA_T * np.trapezoid(spec_obs[valid_m2], K[valid_m2]), 1e-10)
+        # M2-Iter
+        if np.isfinite(cr_m2_iter.chi[ci]) and cr_m2_iter.chi[ci] > 0:
+            methods_results["M2-Iter"].append(
+                (cr_m2_iter.model_specs[ci], float(cr_m2_iter.chi[ci]),
+                 float(cr_m2_iter.kB[ci]))
+            )
         else:
-            chi_obs = 1e-10
-        kB_best, chi_val, _, _, spec_batch, _, _ = _mle_fit_kB(
-            spec_obs,
-            K,
-            chi_obs,
-            nu,
-            mean_T,
-            mean_speed,
-            f_AA,
-            "single_pole",
-            spectrum_model,
-            fs_fast,
-            dg_i,
-            fft_length,
-        )
-        methods_results["M2-MLE"].append((spec_batch, chi_val, kB_best))
+            methods_results["M2-Iter"].append(nan_result)
 
-        # --- Method 2 Iterative ---
-        kB_it, chi_it, _, _, spec_it, _, _ = _iterative_fit(
-            spec_obs,
-            K,
-            nu,
-            mean_T,
-            mean_speed,
-            f_AA,
-            "single_pole",
-            spectrum_model,
-            fs_fast,
-            dg_i,
-            fft_length,
-        )
-        methods_results["M2-Iter"].append((spec_it, chi_it, kB_it))
+        # M2-MLE: call _mle_fit_kB directly with gradient spectrum from shared code
+        grad = obs_spectra[ci] if ci < len(obs_spectra) else np.full(n_freq, np.nan)
+        dg_i = diff_gains[ci] if ci < len(diff_gains) else 0.94
+        valid = np.isfinite(grad) & (grad > 0) & (K > 0) & (K <= K_AA_chi)
+        if np.sum(valid) >= 3:
+            chi_obs = max(6 * KAPPA_T * np.trapezoid(grad[valid], K[valid]), 1e-10)
+            kB_best, chi_val, _, _, spec_raw, _, _ = _mle_fit_kB(
+                grad, K, chi_obs, nu, mean_T, mean_speed, f_AA_chi,
+                "single_pole", spectrum_model, fs_fast, dg_i, fft_length,
+            )
+            spec_mle = spec_raw * H2 if np.isfinite(chi_val) else np.full(n_freq, np.nan)
+            methods_results["M2-MLE"].append((spec_mle, chi_val, kB_best))
+        else:
+            methods_results["M2-MLE"].append(nan_result)
 
     return K, F, obs_spectra, methods_results, noise_K, mean_speed, nu
 
@@ -247,21 +155,17 @@ def _compute_windowed_eps_chi(
 ):
     """Compute windowed epsilon and chi estimates for a profile segment.
 
-    Returns (P_windows, eps_array, chi_array, shear_names, therm_names).
+    Returns (P_windows, eps_array, chi_array).
     eps_array shape: (n_shear, n_windows)
     chi_array shape: (n_therm, n_windows)
 
     Parameters
     ----------
     chi_method : int
-        1 = chi from known epsilon (Method 1), 2 = MLE Batchelor fit (Method 2).
+        1 = chi from known epsilon (Method 1), 2 = iterative fit (Method 2).
     spectrum_model : str
         Theoretical spectrum: 'batchelor' or 'kraichnan'.
     """
-    from rsi_python.batchelor import KAPPA_T
-    from rsi_python.chi import _mle_fit_kB
-    from rsi_python.goodman import clean_shear_spec
-
     diss_length = 2 * fft_length
     overlap = diss_length // 2
     step = diss_length - overlap
@@ -280,528 +184,260 @@ def _compute_windowed_eps_chi(
     eps_arr = np.full((n_shear, n_windows), np.nan)
     chi_arr = np.full((n_therm, n_windows), np.nan)
 
+    mean_T = float(np.mean(T_slow))
+    f_AA_chi = 0.9 * f_AA  # 10% margin, matching MATLAB get_chi
+
     for idx in range(n_windows):
         s = seg_start + idx * step
         e = s + diss_length
         if e > seg_end:
             break
         w_sel = slice(s, e)
-
-        W = float(np.mean(np.abs(speed_fast[w_sel])))
-        if W < 0.01:
-            warnings.warn(
-                f"Speed {W:.4f} m/s below minimum; clamped to 0.01 m/s",
-                stacklevel=2,
-            )
-            W = 0.01  # minimum speed to avoid wavenumber singularity
-        mean_T = float(np.mean(T_slow))
-        nu = float(visc35(mean_T))
         P_windows[idx] = float(np.mean(P_fast[w_sel]))
 
-        K_AA = f_AA / W
-
-        # Epsilon from shear probes
-        eps_window = []
+        # --- Epsilon ---
+        er = None
         if n_shear > 0:
             sh_seg = np.column_stack([d[w_sel] for _, d in shear_data])
             ac_seg = np.column_stack([d[w_sel] for _, d in accel_data]) if accel_data else None
+            er = compute_eps_window(
+                sh_seg, ac_seg, speed_fast[w_sel], P_fast[w_sel],
+                mean_T, fs_fast, fft_length, f_AA, do_goodman,
+            )
+            eps_arr[:, idx] = er.epsilon
 
-            if do_goodman and ac_seg is not None and sh_seg.shape[0] > 2 * fft_length:
-                clean_UU, _, _, _, F = clean_shear_spec(ac_seg, sh_seg, fft_length, fs_fast)
-                for ci in range(n_shear):
-                    spec_f = np.real(clean_UU[:, ci, ci])
-                    K = F / W
-                    spec_k = spec_f * W
-                    valid = (K > 0) & (K <= K_AA)
-                    if np.sum(valid) >= 3:
-                        dk = np.gradient(K)
-                        var = np.sum(spec_k[valid] * dk[valid])
-                        eps_est = 7.5 * nu * var
-                        for _ in range(3):
-                            nas = nasmyth(eps_est, nu, K[valid])
-                            nas_var = np.sum(nas * dk[valid])
-                            if nas_var > 0:
-                                eps_est *= var / nas_var
-                        eps_arr[ci, idx] = eps_est
-                        eps_window.append(eps_est)
-            else:
-                for ci in range(n_shear):
-                    Pxx, F, _, _ = csd_odas(sh_seg[:, ci], None, fft_length, fs_fast)
-                    K = F / W
-                    spec_k = Pxx * W
-                    valid = (K > 0) & (K <= K_AA)
-                    if np.sum(valid) >= 3:
-                        dk = np.gradient(K)
-                        var = np.sum(spec_k[valid] * dk[valid])
-                        eps_est = 7.5 * nu * var
-                        for _ in range(3):
-                            nas = nasmyth(eps_est, nu, K[valid])
-                            nas_var = np.sum(nas * dk[valid])
-                            if nas_var > 0:
-                                eps_est *= var / nas_var
-                        eps_arr[ci, idx] = eps_est
-                        eps_window.append(eps_est)
-
-        # Chi from thermistor gradient channels
-        if n_therm > 0:
-            n_freq = fft_length // 2 + 1
-            F_chi = np.arange(n_freq) * fs_fast / fft_length
-            K_chi = F_chi / W
-
-            if chi_method == 2:
-                # Method 2: MLE Batchelor fit per window
-                for ci in range(n_therm):
-                    seg = therm_data[ci][1][w_sel]
-                    if len(seg) < 2 * fft_length:
-                        continue
-                    Pxx, _ = csd_odas(seg, None, fft_length, fs_fast, overlap=fft_length // 2)[:2]
-                    spec_obs = Pxx * W
-                    valid = (K_chi > 0) & (K_chi <= K_AA)
-                    if np.sum(valid) < 3:
-                        continue
-                    chi_obs = max(
-                        6 * KAPPA_T * np.trapezoid(spec_obs[valid], K_chi[valid]),
-                        1e-10,
-                    )
-                    dg_i = diff_gains[ci] if ci < len(diff_gains) else 0.94
-                    _, chi_val, _, _, _, _, _ = _mle_fit_kB(
-                        spec_obs,
-                        K_chi,
-                        chi_obs,
-                        nu,
-                        mean_T,
-                        W,
-                        f_AA,
-                        "single_pole",
-                        spectrum_model,
-                        fs_fast,
-                        dg_i,
-                        fft_length,
-                    )
-                    if np.isfinite(chi_val) and chi_val > 0:
-                        chi_arr[ci, idx] = chi_val
-            else:
-                # Method 1: chi from known epsilon
-                eps_for_chi = [e for e in eps_window if np.isfinite(e) and e > 0]
-                eps_mean = np.nanmean(eps_for_chi) if eps_for_chi else 1e-8
-                kB = batchelor_kB(eps_mean, nu)
-
-                for ci in range(n_therm):
-                    seg = therm_data[ci][1][w_sel]
-                    if len(seg) < 2 * fft_length:
-                        continue
-                    Pxx, _ = csd_odas(seg, None, fft_length, fs_fast, overlap=fft_length // 2)[:2]
-                    spec_obs = Pxx * W
-                    valid = (K_chi > 0) & (K_chi <= K_AA)
-                    if np.sum(valid) >= 3 and kB > 1:
-                        obs_var = np.trapezoid(spec_obs[valid], K_chi[valid])
-                        chi_arr[ci, idx] = max(6 * KAPPA_T * obs_var, 1e-15)
+        # --- Chi ---
+        if n_therm > 0 and er is not None:
+            therm_segs = [therm_data[ci][1][w_sel] for ci in range(n_therm)]
+            method = 1 if chi_method == 1 else 2
+            eps_for_chi = er.epsilon if chi_method == 1 else None
+            cr = compute_chi_window(
+                therm_segs, diff_gains, er.W, mean_T, er.nu,
+                fs_fast, fft_length, f_AA_chi,
+                spectrum_model=spectrum_model, epsilon=eps_for_chi, method=method,
+            )
+            chi_arr[:, idx] = cr.chi
 
     return P_windows, eps_arr, chi_arr
 
 
-class QuickLookViewer:
+# ---------------------------------------------------------------------------
+# QuickLookViewer
+# ---------------------------------------------------------------------------
+
+
+class QuickLookViewer(ProfileViewer):
     """Interactive multi-panel profile viewer with Prev/Next navigation."""
 
-    def __init__(
-        self,
-        pf,
-        fft_length=256,
-        f_AA=98.0,
-        goodman=True,
-        direction="down",
-        P_min=0.5,
-        W_min=0.3,
-        min_duration=7.0,
-        spec_P_range=None,
-        chi_method=1,
-        spectrum_model="kraichnan",
-    ):
-        self.pf = pf
-        self.fft_length = fft_length
-        self.f_AA = f_AA
-        self.goodman = goodman
-        self.spec_P_range = spec_P_range
+    def __init__(self, pf, chi_method=1, spectrum_model="kraichnan", **kwargs):
+        super().__init__(pf, **kwargs)
         self.chi_method = chi_method
         self.spectrum_model = spectrum_model
 
-        # Extract channel data
-        sh_re = re.compile(r"^sh\d+$")
-        ac_re = re.compile(r"^A[xyz]$")
-        T_re = re.compile(r"^T\d+$")
-        dT_re = re.compile(r"^T\d+_dT\d+$")
+    def _setup_axes(self):
+        # Link pressure y-axes: row 0 all cols + row 1 cols 0, 3
+        p_ref = self.axes[0, 0]
+        for col in range(1, 4):
+            self.axes[0, col].sharey(p_ref)
+        self.axes[1, 0].sharey(p_ref)
+        self.axes[1, 3].sharey(p_ref)
+        p_ref.invert_yaxis()
 
-        self.shear = sorted(
-            [(n, pf.channels[n]) for n in pf._fast_channels if sh_re.match(n)],
-            key=lambda x: x[0],
-        )
-        self.accel = sorted(
-            [(n, pf.channels[n]) for n in pf._fast_channels if ac_re.match(n)],
-            key=lambda x: x[0],
-        )
-        self.therm_slow = sorted(
-            [(n, pf.channels[n]) for n in pf._slow_channels if T_re.match(n)],
-            key=lambda x: x[0],
-        )
-        self.therm_fast = sorted(
-            [(n, pf.channels[n]) for n in pf._fast_channels if dT_re.match(n)],
-            key=lambda x: x[0],
-        )
-        self.diff_gains = []
-        for name, _ in self.therm_fast:
-            ch_cfg = next((ch for ch in pf.config["channels"] if ch.get("name") == name), {})
-            self.diff_gains.append(float(ch_cfg.get("diff_gain", "0.94")))
-
-        # All temperature channels for the temperature comparison panel
-        # T1, T2 (slow FP07) + JAC_T (slow Sea-Bird)
-        self.temp_channels = []
-        for name in ["T1", "T2", "JAC_T"]:
-            if name in pf.channels:
-                self.temp_channels.append((name, pf.channels[name]))
-
-        self.P = pf.channels["P"]
-        self.T = pf.channels.get("T1", pf.channels.get("T", np.zeros_like(self.P)))
-        self.t_fast = pf.t_fast
-        self.t_slow = pf.t_slow
-        self.fs_fast = pf.fs_fast
-        self.fs_slow = pf.fs_slow
-
-        # Detect profiles
-        W = _smooth_fall_rate(self.P, self.fs_slow)
-        self.W = W
-        self.profiles = get_profiles(
-            self.P,
-            W,
-            self.fs_slow,
-            P_min=P_min,
-            W_min=W_min,
-            direction=direction,
-            min_duration=min_duration,
-        )
-        if not self.profiles:
-            raise ValueError("No profiles detected in this file")
-
-        # Interpolate slow → fast
-        self.P_fast = np.interp(self.t_fast, self.t_slow, self.P)
-        self.speed_fast = np.abs(np.interp(self.t_fast, self.t_slow, W))
-        self.ratio = round(self.fs_fast / self.fs_slow)
-
-        self.profile_idx = 0
-        self.fig = None
-        self._twin_ax = None
-        self._spec_bin_width = None  # computed per profile in _draw()
-
-    def _slow_to_fast_slice(self, s_slow, e_slow):
-        """Convert slow-channel indices to fast-channel slice."""
-        s_fast = s_slow * self.ratio
-        e_fast = min((e_slow + 1) * self.ratio, len(self.t_fast))
-        return slice(s_fast, e_fast)
-
-    def _spec_fast_slice(self, sel_fast):
-        """Restrict a fast slice to the spectral pressure range, if set."""
-        if self.spec_P_range is None:
-            return sel_fast
-        P_min, P_max = self.spec_P_range
-        P_seg = self.P_fast[sel_fast]
-        mask = (P_seg >= P_min) & (P_seg <= P_max)
-        if not np.any(mask):
-            return sel_fast
-        indices = np.where(mask)[0]
-        return slice(sel_fast.start + indices[0], sel_fast.start + indices[-1] + 1)
-
-    def _spec_bin_dbar(self, s_slow, e_slow):
-        """Compute the spectral bin width in dbar for the current profile."""
-        sel = self._slow_to_fast_slice(s_slow, e_slow)
-        mean_speed = float(np.mean(np.abs(self.speed_fast[sel])))
-        if mean_speed < 0.01:
-            mean_speed = 0.01
-        diss_length = 2 * self.fft_length
-        return diss_length / self.fs_fast * mean_speed
+        # Link wavenumber x-axes: epsilon spectra (1,1) and chi spectra (1,2)
+        self.axes[1, 2].sharex(self.axes[1, 1])
 
     def _draw(self):
         """Draw all panels for the current profile."""
         s_slow, e_slow = self.profiles[self.profile_idx]
         sel_fast = self._slow_to_fast_slice(s_slow, e_slow)
-
-        # Compute bin width for stepping
         self._spec_bin_width = self._spec_bin_dbar(s_slow, e_slow)
-
         sel_spec = self._spec_fast_slice(sel_fast)
-
-        # Remove twin axis from previous draw before clearing
-        if self._twin_ax is not None:
-            self._twin_ax.remove()
-            self._twin_ax = None
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             for ax in self.axes.flat:
                 ax.clear()
-
         # Re-invert pressure y-axes (clear resets inversion)
         self.axes[0, 0].invert_yaxis()
 
-        # Pre-compute shear spectra (used by panels 4, 5, 6, 7)
+        # Pre-compute depth spectra (dict format from viewer_base)
         n_spec = sel_spec.stop - sel_spec.start
-        self._cached_shear = None
+        self._cached_spec = None
         if self.shear and n_spec >= 2 * self.fft_length:
-            self._cached_shear = _compute_profile_spectra(
-                self.shear,
-                self.accel,
-                self.P_fast,
-                self.T,
-                self.speed_fast,
-                self.fs_fast,
-                sel_spec,
-                self.fft_length,
-                self.f_AA,
-                self.goodman,
+            self._cached_spec = compute_depth_spectra(
+                self.shear, self.accel, self.therm_fast, self.diff_gains,
+                self.P_fast, self.T, self.speed_fast, self.fs_fast,
+                sel_spec, self.fft_length, self.f_AA, self.goodman,
             )
 
-        self._draw_overview(s_slow, e_slow)
-        self._draw_shear(sel_fast)
-        self._draw_temperature(s_slow, e_slow)
-        self._draw_all_temps(s_slow, e_slow)
+        # Pre-compute windowed eps/chi for profile panels
+        n_fast = sel_fast.stop - sel_fast.start
+        self._cached_windowed = None
+        if n_fast >= 2 * self.fft_length:
+            P_win, eps_arr, chi_arr = _compute_windowed_eps_chi(
+                self.shear, self.accel, self.therm_fast, self.diff_gains,
+                self.P_fast, self.T, self.speed_fast, self.fs_fast,
+                sel_fast, self.fft_length, self.f_AA, self.goodman,
+                chi_method=self.chi_method, spectrum_model=self.spectrum_model,
+            )
+            if len(P_win) > 0:
+                self._cached_windowed = (P_win, eps_arr, chi_arr)
+
+        # Row 0: profile panels
+        self._draw_overview(self.axes[0, 0], s_slow, e_slow)
+        P_win = self._cached_windowed[0] if self._cached_windowed else np.array([])
+        eps_arr = (
+            self._cached_windowed[1]
+            if self._cached_windowed
+            else np.empty((len(self.shear), 0))
+        )
+        self._draw_eps_profile(self.axes[0, 1], P_win, eps_arr)
+        self._draw_chi_profile()
+        self._draw_shear(self.axes[0, 3], sel_fast)
+
+        # Row 1: spectra and detail panels
+        self._draw_temps(self.axes[1, 0], s_slow, e_slow)
         self._draw_spectra(sel_spec)
         self._draw_chi_spectra(sel_spec)
-        self._draw_eps_chi_profile(sel_fast)
+        self._draw_fall_rate(self.axes[1, 3], s_slow, e_slow)
 
-        # Green band showing spectral depth range on all pressure-axis panels
-        if self.spec_P_range is not None:
-            sp_lo, sp_hi = self.spec_P_range
-            for ax in [self.axes[0, c] for c in range(4)] + [self.axes[1, 2], self.axes[1, 3]]:
-                ax.axhspan(sp_lo, sp_hi, color="green", alpha=0.15, zorder=0)
-
-        P_lo, P_hi = self.P[s_slow], self.P[e_slow]
-        title = (
-            f"{self.pf.filepath.name}  —  "
-            f"Profile {self.profile_idx + 1}/{len(self.profiles)}  —  "
-            f"P: {P_lo:.1f}–{P_hi:.1f} dbar"
+        # Finish (green band + title)
+        pressure_axes = (
+            [self.axes[0, c] for c in range(4)]
+            + [self.axes[1, 0], self.axes[1, 3]]
         )
-        if self.spec_P_range is not None:
-            sp_lo, sp_hi = self.spec_P_range
-            title += f"  [spectra: {sp_lo:.1f}–{sp_hi:.1f} dbar]"
-        self.fig.suptitle(title, fontsize=11, fontweight="bold")
-        self.fig.canvas.draw_idle()
+        self._finish_draw(s_slow, e_slow, pressure_axes)
 
     # ------------------------------------------------------------------
-    # Row 0: Pressure y-axis panels
+    # ql-specific panels
     # ------------------------------------------------------------------
 
-    def _draw_overview(self, s_slow, e_slow):
-        """Panel (0,0): Pressure vs time, current profile highlighted."""
-        ax = self.axes[0, 0]
-        ax.plot(self.t_slow, self.P, "0.6", linewidth=0.5)
-        ax.plot(
-            self.t_slow[s_slow : e_slow + 1],
-            self.P[s_slow : e_slow + 1],
-            "C0",
-            linewidth=1.5,
-        )
-        ax.set_ylabel("Pressure [dbar]")
-        ax.set_xlabel("Time [s]")
-        ax.set_title("Profile overview", fontsize=9)
-        ax.grid(True, alpha=0.3)
-
-        for i, (s, e) in enumerate(self.profiles):
-            if i != self.profile_idx:
-                ax.axvspan(self.t_slow[s], self.t_slow[e], alpha=0.05, color="C0")
-
-    def _draw_shear(self, sel_fast):
-        """Panel (0,1): HP-filtered shear signals vs pressure."""
-        ax = self.axes[0, 1]
-        P_prof = self.P_fast[sel_fast]
-
-        if not self.shear:
-            ax.text(0.5, 0.5, "No shear channels", transform=ax.transAxes, ha="center", va="center")
-            return
-
-        for i, (name, data) in enumerate(self.shear):
-            seg = data[sel_fast]
-            if len(seg) > 2 * int(self.fs_fast):
-                seg_hp = _hp_filter(seg, self.fs_fast, cutoff=1.0)
-            else:
-                seg_hp = seg - np.mean(seg)
-            seg_hp, _, _, _ = despike(seg_hp, self.fs_fast, thresh=8, smooth=0.5)
-            offset = i * 0.5
-            ax.plot(seg_hp + offset, P_prof, linewidth=0.3, label=name)
-
-        if self.spec_P_range is not None:
-            ax.axhspan(*self.spec_P_range, alpha=0.08, color="C2", zorder=0)
-
-        ax.set_xlabel("Shear [s⁻¹] (HP, offset)")
-        ax.legend(fontsize=7, loc="lower right")
-        ax.set_title("Shear probes", fontsize=9)
-        ax.grid(True, alpha=0.3)
-
-    def _draw_temperature(self, s_slow, e_slow):
-        """Panel (0,2): Slow temperature + fall rate vs pressure."""
+    def _draw_chi_profile(self):
+        """Panel (0,2): Chi from each thermistor vs pressure."""
         ax = self.axes[0, 2]
-        P_prof = self.P[s_slow : e_slow + 1]
 
-        colors = ["C3", "C1", "C4", "C5"]
-        for i, (name, data) in enumerate(self.therm_slow):
-            c = colors[i % len(colors)]
-            ax.plot(data[s_slow : e_slow + 1], P_prof, c, linewidth=1.0, label=name)
-
-        # Fall rate on twin axis
-        self._twin_ax = ax.twiny()
-        W_prof = self.W[s_slow : e_slow + 1]
-        self._twin_ax.plot(W_prof, P_prof, "C2--", linewidth=0.8, alpha=0.6, label="dP/dt")
-        self._twin_ax.set_xlabel("Fall rate [dbar/s]", fontsize=8, color="C2")
-        self._twin_ax.tick_params(axis="x", labelsize=7, colors="C2")
-
-        if self.spec_P_range is not None:
-            ax.axhspan(*self.spec_P_range, alpha=0.08, color="C2", zorder=0)
-
-        ax.set_xlabel("Temperature [°C]")
-        ax.legend(fontsize=7, loc="lower left")
-        ax.set_title("Temperature & fall rate", fontsize=9)
-        ax.grid(True, alpha=0.3)
-
-    def _draw_all_temps(self, s_slow, e_slow):
-        """Panel (0,3): T1, T2, JAC_T vs pressure."""
-        ax = self.axes[0, 3]
-        P_prof = self.P[s_slow : e_slow + 1]
-
-        if not self.temp_channels:
-            ax.text(
-                0.5,
-                0.5,
-                "No temperature channels",
-                transform=ax.transAxes,
-                ha="center",
-                va="center",
-            )
+        if self._cached_windowed is None:
+            ax.text(0.5, 0.5, "No data", transform=ax.transAxes,
+                    ha="center", va="center")
             return
 
-        colors = {"T1": "C3", "T2": "C1", "JAC_T": "C9"}
-        styles = {"T1": "-", "T2": "-", "JAC_T": "--"}
-        for name, data in self.temp_channels:
-            c = colors.get(name, "C4")
-            ls = styles.get(name, "-")
-            ax.plot(data[s_slow : e_slow + 1], P_prof, c, linewidth=0.8, linestyle=ls, label=name)
-
-        if self.spec_P_range is not None:
-            ax.axhspan(*self.spec_P_range, alpha=0.08, color="C2", zorder=0)
-
-        ax.set_xlabel("Temperature [°C]")
-        ax.legend(fontsize=7, loc="lower left")
-        ax.set_title("T1, T2, JAC_T", fontsize=9)
-        ax.grid(True, alpha=0.3)
-
-    # ------------------------------------------------------------------
-    # Row 1: Spectral panels + eps/chi profile
-    # ------------------------------------------------------------------
+        P_win, _, chi_arr = self._cached_windowed
+        colors_chi = ["C3", "C4"]
+        has_data = False
+        for i, (name, _) in enumerate(self.therm_fast):
+            c = colors_chi[i % len(colors_chi)]
+            valid = np.isfinite(chi_arr[i]) & (chi_arr[i] > 0)
+            if np.any(valid):
+                ax.plot(
+                    chi_arr[i, valid], P_win[valid],
+                    f"{c}s-", markersize=3, linewidth=0.8, label=name,
+                )
+                has_data = True
+        if has_data:
+            ax.set_xscale("log")
+            ax.set_xlabel("\u03c7 [K\u00b2/s]")
+            ax.set_ylabel("Pressure [dbar]")
+            ax.legend(fontsize=6, loc="lower left")
+            selected = {1: "M1", 2: "M2-MLE"}.get(self.chi_method, "M1")
+            ax.set_title(f"\u03c7 profile ({selected}, {self.spectrum_model})",
+                         fontsize=9)
+            ax.grid(True, alpha=0.3, which="both")
+        else:
+            ax.text(0.5, 0.5, "No valid \u03c7", transform=ax.transAxes,
+                    ha="center", va="center")
 
     def _draw_spectra(self, sel_spec):
-        """Panel (1,0): Shear wavenumber spectra with Nasmyth + K_max."""
-        ax = self.axes[1, 0]
+        """Panel (1,1): Epsilon spectra with Nasmyth + K_max."""
+        ax = self.axes[1, 1]
 
-        if self._cached_shear is None:
+        if self._cached_spec is None:
             ax.text(
-                0.5,
-                0.5,
-                "Insufficient data for spectra",
-                transform=ax.transAxes,
-                ha="center",
-                va="center",
+                0.5, 0.5, "Insufficient data for spectra",
+                transform=ax.transAxes, ha="center", va="center",
             )
             return
 
-        K, F, spectra_k, nasmyth_specs, epsilons, K_maxes, mean_speed, nu = self._cached_shear
+        r = self._cached_spec
+        K = r["K"]
+        if len(K) == 0:
+            ax.text(0.5, 0.5, "No spectra", transform=ax.transAxes,
+                    ha="center", va="center")
+            return
 
         colors = ["C0", "C1", "C4", "C5"]
         for i, (name, _) in enumerate(self.shear):
+            if i >= len(r["shear_specs"]):
+                break
             c = colors[i % len(colors)]
-            ax.loglog(K, spectra_k[i], c, linewidth=0.8, label=name)
-            if np.isfinite(epsilons[i]):
+            ax.loglog(K, r["shear_specs"][i], c, linewidth=0.8, label=name)
+            eps_i = r["epsilons"][i]
+            if np.isfinite(eps_i):
                 ax.loglog(
-                    K,
-                    nasmyth_specs[i],
-                    c,
-                    linewidth=0.75,
-                    linestyle="--",
-                    alpha=0.9,
-                    label=f"Nasmyth (ε={epsilons[i]:.1e})",
+                    K, r["nasmyth_specs"][i], c, linewidth=0.75,
+                    linestyle="--", alpha=0.9,
+                    label=f"Nasmyth (\u03b5={eps_i:.1e})",
                 )
-                if np.isfinite(K_maxes[i]):
+                k_max_i = r["K_maxes"][i]
+                if np.isfinite(k_max_i):
                     ax.axvline(
-                        K_maxes[i],
-                        color=c,
-                        linestyle="-.",
-                        linewidth=0.8,
-                        alpha=0.6,
-                        label=f"K_max={K_maxes[i]:.0f} cpm",
+                        k_max_i, color=c, linestyle="-.", linewidth=0.8,
+                        alpha=0.6, label=f"K_max={k_max_i:.0f} cpm",
                     )
                     # Filled inverted triangle at K_max on the observed spectrum
-                    k_idx = np.argmin(np.abs(K - K_maxes[i]))
+                    k_idx = np.argmin(np.abs(K - k_max_i))
                     ax.plot(
-                        K_maxes[i],
-                        spectra_k[i][k_idx],
-                        marker="v",
-                        color=c,
-                        markersize=8,
-                        zorder=5,
+                        k_max_i, r["shear_specs"][i][k_idx],
+                        marker="v", color=c, markersize=8, zorder=5,
                     )
 
+        nu = r["nu"]
         for exp in [-9, -8, -7, -6, -5]:
             eps_ref = 10.0**exp
             nas_ref = nasmyth(eps_ref, nu, K)
             ax.loglog(K, nas_ref, "0.8", linewidth=0.3)
             y_val = nas_ref[len(K) // 2]
             if np.isfinite(y_val) and y_val > 0:
-                ax.text(K[len(K) // 2], y_val, f"{exp}", fontsize=6, color="0.5", va="bottom")
+                ax.text(K[len(K) // 2], y_val, f"{exp}",
+                        fontsize=6, color="0.5", va="bottom")
 
-        K_AA = self.f_AA / mean_speed
+        K_AA = self.f_AA / r["W"]
         ax.axvline(K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5)
 
         P_lo = float(self.P_fast[sel_spec.start])
         P_hi = float(self.P_fast[min(sel_spec.stop - 1, len(self.P_fast) - 1)])
         ax.set_xlabel("Wavenumber [cpm]")
-        ax.set_ylabel("Φ(k) [s⁻² cpm⁻¹]")
+        ax.set_ylabel("\u03a6(k) [s\u207b\u00b2 cpm\u207b\u00b9]")
         ax.set_xlim(0.5, 300)
         ax.set_ylim(1e-9, 1e0)
         ax.legend(fontsize=5, loc="best", ncol=2)
         ax.set_title(
-            f"Shear spectra  P={P_lo:.1f}–{P_hi:.1f}\n"
-            f"speed={mean_speed:.2f} m/s",
+            f"\u03b5 spectra  speed={r['W']:.2f} m/s\n"
+            f"P={P_lo:.1f}\u2013{P_hi:.1f} dbar",
             fontsize=9,
         )
         ax.grid(True, alpha=0.3, which="both")
 
     def _draw_chi_spectra(self, sel_spec):
-        """Panel (1,1): Temperature gradient spectra + all three chi methods."""
-        ax = self.axes[1, 1]
+        """Panel (1,2): Chi spectra + all three chi methods."""
+        ax = self.axes[1, 2]
         self._cached_chi = None
 
         if not self.therm_fast:
             ax.text(
-                0.5,
-                0.5,
-                "No thermistor gradient channels",
-                transform=ax.transAxes,
-                ha="center",
-                va="center",
+                0.5, 0.5, "No thermistor gradient channels",
+                transform=ax.transAxes, ha="center", va="center",
             )
             return
 
         n_fast = sel_spec.stop - sel_spec.start
         if n_fast < 2 * self.fft_length:
             ax.text(
-                0.5,
-                0.5,
-                "Insufficient data for chi spectra",
-                transform=ax.transAxes,
-                ha="center",
-                va="center",
+                0.5, 0.5, "Insufficient data for chi spectra",
+                transform=ax.transAxes, ha="center", va="center",
             )
             return
 
-        eps_for_chi = []
-        if self._cached_shear is not None:
-            _, _, _, _, epsilons, _, _, _ = self._cached_shear
-            eps_for_chi = epsilons
+        eps_for_chi = self._cached_spec["epsilons"] if self._cached_spec else []
 
         self._cached_chi = _compute_chi_spectra(
             self.therm_fast,
@@ -828,14 +464,15 @@ class QuickLookViewer:
         colors = ["C3", "C1", "C4", "C5"]
         n_probes = len(self.therm_fast)
 
-        # Plot all lines (no labels yet — legend order controlled manually)
+        # Plot all lines (no labels yet -- legend order controlled manually)
         obs_lines = []
         method_lines = {m: [] for m, _, _ in method_styles}
         for i, (name, _) in enumerate(self.therm_fast):
             c = colors[i % len(colors)]
             valid = np.isfinite(obs_spectra[i]) & (obs_spectra[i] > 0)
             if np.any(valid):
-                (line,) = ax.loglog(K[valid], obs_spectra[i][valid], c, linewidth=0.8)
+                (line,) = ax.loglog(K[valid], obs_spectra[i][valid], c,
+                                    linewidth=0.8)
                 obs_lines.append((line, name))
             else:
                 obs_lines.append(None)
@@ -846,16 +483,12 @@ class QuickLookViewer:
                 lw = 1.5 if method_name == selected_method else 0.75
                 if np.any(valid_b):
                     chi_str = f"{chi_val:.1e}" if np.isfinite(chi_val) else "N/A"
-                    label = f"{method_name} χ={chi_str}"
+                    label = f"{method_name} \u03c7={chi_str}"
                     if method_name == selected_method:
                         label = f"*{label}"
                     (line,) = ax.loglog(
-                        K[valid_b],
-                        batch_spec[valid_b],
-                        c,
-                        linewidth=lw,
-                        linestyle=ls,
-                        alpha=alpha,
+                        K[valid_b], batch_spec[valid_b], c,
+                        linewidth=lw, linestyle=ls, alpha=alpha,
                     )
                     method_lines[method_name].append((line, label))
                 else:
@@ -864,7 +497,8 @@ class QuickLookViewer:
         valid_n = np.isfinite(noise_K) & (noise_K > 0) & (K > 0)
         noise_line = None
         if np.any(valid_n):
-            (nl,) = ax.loglog(K[valid_n], noise_K[valid_n], "0.5", linewidth=0.8, linestyle=":")
+            (nl,) = ax.loglog(K[valid_n], noise_K[valid_n], "0.5",
+                              linewidth=0.8, linestyle=":")
             noise_line = (nl, "Noise")
 
         K_AA = self.f_AA / mean_speed
@@ -903,220 +537,21 @@ class QuickLookViewer:
                 labels.append(lbl)
 
         ax.set_xlabel("Wavenumber [cpm]")
-        ax.set_ylabel("Φ_T(k) [(K/m)² cpm⁻¹]")
+        ax.set_ylabel("\u03a6_T(k) [(K/m)\u00b2 cpm\u207b\u00b9]")
         ax.set_xlim(0.5, 300)
         ax.set_ylim(1e-11, None)
         ax.legend(handles, labels, fontsize=5, loc="best", ncol=n_probes)
         ax.set_title(
-            f"Temperature gradient spectra\n"
-            f"speed={mean_speed:.2f} m/s  fit={selected_method}  model={self.spectrum_model}",
+            f"\u03c7 spectra  fit={selected_method}  model={self.spectrum_model}\n"
+            f"speed={mean_speed:.2f} m/s",
             fontsize=9,
         )
         ax.grid(True, alpha=0.3, which="both")
 
-    def _draw_eps_chi_profile(self, sel_spec):
-        """Panels (1,2) and (1,3): Epsilon and chi vs pressure (windowed estimates)."""
-        ax_eps = self.axes[1, 2]
-        ax_chi = self.axes[1, 3]
 
-        n_spec = sel_spec.stop - sel_spec.start
-        if n_spec < 2 * self.fft_length:
-            for ax in (ax_eps, ax_chi):
-                ax.text(
-                    0.5,
-                    0.5,
-                    "Insufficient data",
-                    transform=ax.transAxes,
-                    ha="center",
-                    va="center",
-                )
-            return
-
-        P_win, eps_arr, chi_arr = _compute_windowed_eps_chi(
-            self.shear,
-            self.accel,
-            self.therm_fast,
-            self.diff_gains,
-            self.P_fast,
-            self.T,
-            self.speed_fast,
-            self.fs_fast,
-            sel_spec,
-            self.fft_length,
-            self.f_AA,
-            self.goodman,
-            chi_method=self.chi_method,
-            spectrum_model=self.spectrum_model,
-        )
-
-        if len(P_win) == 0:
-            for ax in (ax_eps, ax_chi):
-                ax.text(
-                    0.5,
-                    0.5,
-                    "No valid estimates",
-                    transform=ax.transAxes,
-                    ha="center",
-                    va="center",
-                )
-            return
-
-        # Epsilon panel (1,2)
-        colors_eps = ["C0", "C1"]
-        has_eps = False
-        for i, (name, _) in enumerate(self.shear):
-            c = colors_eps[i % len(colors_eps)]
-            valid = np.isfinite(eps_arr[i]) & (eps_arr[i] > 0)
-            if np.any(valid):
-                ax_eps.plot(
-                    eps_arr[i, valid],
-                    P_win[valid],
-                    f"{c}o-",
-                    markersize=3,
-                    linewidth=0.8,
-                    label=name,
-                )
-                has_eps = True
-        if has_eps:
-            ax_eps.set_xscale("log")
-            ax_eps.set_xlabel("ε [W/kg]")
-            ax_eps.set_ylabel("Pressure [dbar]")
-            ax_eps.legend(fontsize=6, loc="lower left")
-            ax_eps.set_title("ε profile", fontsize=9)
-            ax_eps.grid(True, alpha=0.3, which="both")
-        else:
-            ax_eps.text(
-                0.5,
-                0.5,
-                "No valid ε estimates",
-                transform=ax_eps.transAxes,
-                ha="center",
-                va="center",
-            )
-
-        # Chi panel (1,3)
-        colors_chi = ["C3", "C4"]
-        has_chi = False
-        for i, (name, _) in enumerate(self.therm_fast):
-            c = colors_chi[i % len(colors_chi)]
-            valid = np.isfinite(chi_arr[i]) & (chi_arr[i] > 0)
-            if np.any(valid):
-                ax_chi.plot(
-                    chi_arr[i, valid],
-                    P_win[valid],
-                    f"{c}s-",
-                    markersize=3,
-                    linewidth=0.8,
-                    label=name,
-                )
-                has_chi = True
-        if has_chi:
-            ax_chi.set_xscale("log")
-            ax_chi.set_xlabel("χ [K²/s]")
-            ax_chi.set_ylabel("Pressure [dbar]")
-            ax_chi.legend(fontsize=6, loc="lower left")
-            selected = {1: "M1", 2: "M2-MLE"}.get(self.chi_method, "M1")
-            ax_chi.set_title(f"χ profile  fit={selected}  model={self.spectrum_model}", fontsize=9)
-            ax_chi.grid(True, alpha=0.3, which="both")
-        else:
-            ax_chi.text(
-                0.5,
-                0.5,
-                "No valid χ estimates",
-                transform=ax_chi.transAxes,
-                ha="center",
-                va="center",
-            )
-
-    # ------------------------------------------------------------------
-    # Figure setup and navigation
-    # ------------------------------------------------------------------
-
-    def show(self):
-        """Create the figure and display it."""
-        self.fig, self.axes = plt.subplots(
-            2,
-            4,
-            figsize=(24, 9),
-            gridspec_kw={"hspace": 0.35, "wspace": 0.32},
-        )
-        self.fig.subplots_adjust(bottom=0.08, top=0.92, left=0.04, right=0.98)
-
-        # Link all pressure y-axes: row 0 + eps/chi profile panels (1,2) and (1,3)
-        p_ref = self.axes[0, 0]
-        for col in range(1, 4):
-            self.axes[0, col].sharey(p_ref)
-        self.axes[1, 2].sharey(p_ref)
-        self.axes[1, 3].sharey(p_ref)
-        # Invert once on the reference (shared propagates)
-        p_ref.invert_yaxis()
-
-        # Link wavenumber x-axes: shear spectra (1,0) and chi spectra (1,1)
-        self.axes[1, 1].sharex(self.axes[1, 0])
-
-        # Navigation buttons
-        ax_prev = self.fig.add_axes([0.35, 0.01, 0.07, 0.035])
-        ax_next = self.fig.add_axes([0.43, 0.01, 0.07, 0.035])
-        self.btn_prev = Button(ax_prev, "◀ Prev")
-        self.btn_next = Button(ax_next, "Next ▶")
-        self.btn_prev.on_clicked(self._on_prev)
-        self.btn_next.on_clicked(self._on_next)
-
-        # Spectral depth range buttons
-        ax_up = self.fig.add_axes([0.55, 0.01, 0.07, 0.035])
-        ax_dn = self.fig.add_axes([0.63, 0.01, 0.07, 0.035])
-        self.btn_spec_up = Button(ax_up, "▲ Spec")
-        self.btn_spec_dn = Button(ax_dn, "▼ Spec")
-        self.btn_spec_up.on_clicked(self._on_spec_up)
-        self.btn_spec_dn.on_clicked(self._on_spec_dn)
-
-        self._draw()
-        plt.show()
-
-    def _on_prev(self, event):
-        if self.profile_idx > 0:
-            self.profile_idx -= 1
-            self._draw()
-
-    def _on_next(self, event):
-        if self.profile_idx < len(self.profiles) - 1:
-            self.profile_idx += 1
-            self._draw()
-
-    def _on_spec_up(self, event):
-        """Shift spectral pressure range upward (shallower) by the window width."""
-        s_slow, e_slow = self.profiles[self.profile_idx]
-        P_top = float(min(self.P[s_slow], self.P[e_slow]))
-        bw = self._spec_bin_width or 1.0
-        if self.spec_P_range is None:
-            self.spec_P_range = (P_top, P_top + bw)
-        else:
-            step = self.spec_P_range[1] - self.spec_P_range[0]
-            new_lo = self.spec_P_range[0] - step
-            new_hi = self.spec_P_range[1] - step
-            if new_lo < P_top:
-                new_lo = P_top
-                new_hi = P_top + step
-            self.spec_P_range = (new_lo, new_hi)
-        self._draw()
-
-    def _on_spec_dn(self, event):
-        """Shift spectral pressure range downward (deeper) by the window width."""
-        s_slow, e_slow = self.profiles[self.profile_idx]
-        P_bot = float(max(self.P[s_slow], self.P[e_slow]))
-        P_top = float(min(self.P[s_slow], self.P[e_slow]))
-        bw = self._spec_bin_width or 1.0
-        if self.spec_P_range is None:
-            self.spec_P_range = (P_top, P_top + bw)
-        else:
-            step = self.spec_P_range[1] - self.spec_P_range[0]
-            new_lo = self.spec_P_range[0] + step
-            new_hi = self.spec_P_range[1] + step
-            if new_hi > P_bot:
-                new_hi = P_bot
-                new_lo = P_bot - step
-            self.spec_P_range = (new_lo, new_hi)
-        self._draw()
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 
 def quick_look(
