@@ -53,7 +53,7 @@ def nasmyth_nondim(x: npt.ArrayLike) -> np.ndarray:
     return _nasmyth_g2(np.asarray(x, dtype=np.float64))
 
 
-def _nasmyth_g2(x):
+def _nasmyth_g2(x: np.ndarray) -> np.ndarray:
     """Lueck's improved fit to the Nasmyth spectrum.
 
     G2 = 8.05 * x^(1/3) / (1 + (20.6*x)^3.715)

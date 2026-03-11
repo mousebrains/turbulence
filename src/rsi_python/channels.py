@@ -11,14 +11,34 @@ import numpy as np
 
 
 def _safe_float(s: Any, default: float = 0.0) -> float:
+    """Convert *s* to float, returning *default* on failure."""
     try:
         return float(s)
     except (ValueError, TypeError):
         return default
 
 
+def _twos_complement_14bit(data: np.ndarray) -> np.ndarray:
+    """Convert 16-bit raw counts to 14-bit signed (right-shift 2, two's complement)."""
+    raw = data.astype(np.int32)
+    val = (raw >> 2).astype(np.float64)
+    val[val >= 2**13] -= 2**14
+    return val
+
+
+def _unsigned_16bit(data: np.ndarray) -> np.ndarray:
+    """Convert signed int16 to unsigned by wrapping negative values."""
+    d = data.copy()
+    d[d < 0] = d[d < 0] + 2**16
+    return d
+
+
 def convert_therm(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
-    """FP07 thermistor: Steinhart-Hart via half-bridge."""
+    """FP07 thermistor via Steinhart-Hart equation and half-bridge circuit.
+
+    Uses coefficients T_0, beta_1 (and optional beta_2, beta_3) from the
+    channel config.  Matches ODAS ``convert_odas.m`` therm path.
+    """
     a = _safe_float(params.get("a", "0"))
     b = _safe_float(params.get("b", "1"))
     adc_fs = _safe_float(params.get("adc_fs", "4.096"))
@@ -44,7 +64,10 @@ def convert_therm(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
 
 
 def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
-    """Shear probe."""
+    """Shear probe: raw counts to velocity shear [s⁻¹].
+
+    Formula: ``(adc_fs / 2^adc_bits * data + offset) / (2*sqrt(2)*diff_gain*sens)``.
+    """
     adc_fs = _safe_float(params.get("adc_fs", "4.096"))
     adc_bits = _safe_float(params.get("adc_bits", "16"))
     diff_gain = _safe_float(params.get("diff_gain", "1"))
@@ -57,7 +80,7 @@ def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
 
 
 def convert_poly(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
-    """Polynomial conversion (pressure, etc.)."""
+    """Polynomial conversion (pressure, etc.): coef0 + coef1*x + coef2*x² + …"""
     coeffs = []
     for i in range(10):
         key = f"coef{i}"
@@ -73,6 +96,7 @@ def convert_poly(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, 
 
 
 def convert_voltage(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
+    """Generic voltage channel: ``(adc_zero + data * adc_fs / 2^adc_bits) / gain`` → Volts."""
     adc_fs = _safe_float(params.get("adc_fs", "1"))
     adc_bits = _safe_float(params.get("adc_bits", "0"))
     gain = _safe_float(params.get("g", "1"))
@@ -82,32 +106,29 @@ def convert_voltage(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarra
 
 
 def convert_piezo(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
+    """Piezo accelerometer: subtract zero-offset ``a_0``."""
     a_0 = _safe_float(params.get("a_0", "0"))
     return data - a_0, "counts"
 
 
 def convert_inclxy(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
-    """ADIS inclinometer X or Y."""
-    raw = data.astype(np.int32)
-    val = (raw >> 2).astype(np.float64)
-    val[val >= 2**13] -= 2**14
+    """ADIS inclinometer X or Y: 14-bit two's complement → degrees."""
+    val = _twos_complement_14bit(data)
     coef0 = _safe_float(params.get("coef0", "0"))
     coef1 = _safe_float(params.get("coef1", "0.025"))
     return coef1 * val + coef0, "deg"
 
 
 def convert_inclt(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
-    """ADIS inclinometer temperature."""
-    raw = data.astype(np.int32)
-    val = (raw >> 2).astype(np.float64)
-    val[val >= 2**13] -= 2**14
+    """ADIS inclinometer temperature: 14-bit two's complement → °C."""
+    val = _twos_complement_14bit(data)
     coef0 = _safe_float(params.get("coef0", "624"))
     coef1 = _safe_float(params.get("coef1", "-0.47"))
     return coef1 * val + coef0, "deg_C"
 
 
 def convert_jac_c(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
-    """JAC conductivity (32-bit combined channel)."""
+    """JAC conductivity: ratio of I/V parts from 32-bit combined word → mS/cm."""
     i_part = np.floor(data / 2**16)
     v_part = np.mod(data, 2**16)
     v_part[v_part == 0] = 1
@@ -119,9 +140,8 @@ def convert_jac_c(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
 
 
 def convert_jac_t(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
-    """JAC temperature."""
-    d = data.copy()
-    d[d < 0] = d[d < 0] + 2**16
+    """JAC temperature: unsigned 16-bit wrapping + 5th-order polynomial → °C."""
+    d = _unsigned_16bit(data)
     a = _safe_float(params.get("a"))
     b = _safe_float(params.get("b"))
     c = _safe_float(params.get("c"))
@@ -132,20 +152,19 @@ def convert_jac_t(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
 
 
 def convert_raw(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
+    """Passthrough: return raw counts unchanged."""
     return data, "counts"
 
 
 def convert_aroft_o2(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
-    """RINKO FT dissolved oxygen."""
-    d = data.copy()
-    d[d < 0] = d[d < 0] + 2**16
+    """RINKO FT dissolved oxygen: unsigned 16-bit wrapping / 100 → µmol/L."""
+    d = _unsigned_16bit(data)
     return d / 100.0, "umol_L-1"
 
 
 def convert_aroft_t(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
-    """RINKO FT temperature."""
-    d = data.copy()
-    d[d < 0] = d[d < 0] + 2**16
+    """RINKO FT temperature: unsigned 16-bit wrapping / 1000 − 5 → °C."""
+    d = _unsigned_16bit(data)
     return d / 1000.0 - 5.0, "deg_C"
 
 

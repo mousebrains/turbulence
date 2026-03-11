@@ -33,7 +33,7 @@ _VEHICLE_TAU = {
 }
 
 
-def _smooth_fall_rate(P, fs, tau=1.5):
+def _smooth_fall_rate(P: np.ndarray, fs: float, tau: float = 1.5) -> np.ndarray:
     """Compute smoothed fall rate from pressure.
 
     Matches ODAS odas_p2mat.m lines 699-701: central-difference gradient
@@ -237,7 +237,7 @@ def extract_profiles(
     return output_paths
 
 
-def _load_source(source):
+def _load_source(source: "PFile | str | Path") -> dict[str, Any]:
     """Load data from PFile, .p path, or .nc path into a common dict."""
     from rsi_python.p_file import PFile
 
@@ -253,7 +253,7 @@ def _load_source(source):
         raise ValueError(f"Unsupported file type: {source.suffix}")
 
 
-def _load_from_pfile(pf):
+def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
     """Extract data dict from a PFile."""
     channels = []
     for ch_name, ch_data in pf.channels.items():
@@ -291,7 +291,7 @@ def _load_from_pfile(pf):
     }
 
 
-def _load_from_nc(nc_path):
+def _load_from_nc(nc_path: Path) -> dict[str, Any]:
     """Extract data dict from a full-record NetCDF file."""
     import netCDF4 as nc
 
@@ -351,7 +351,7 @@ def _load_from_nc(nc_path):
     }
 
 
-def _extract_one(args):
+def _extract_one(args: tuple) -> tuple[str, int]:
     """Worker function for parallel profile extraction."""
     source_path, output_dir, kwargs = args
     paths = extract_profiles(source_path, output_dir, **kwargs)

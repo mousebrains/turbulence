@@ -9,7 +9,7 @@ import numpy.typing as npt
 from scipy import signal
 
 
-def _cosine_window(n):
+def _cosine_window(n: int) -> np.ndarray:
     """ODAS cosine window, normalized to RMS = 1.
 
     Window = 1 + cos(pi * (-1 + 2*i/n)) for i = 0..n-1.
@@ -30,7 +30,7 @@ def _get_window(nfft: int) -> np.ndarray:
     return _window_cache[nfft]
 
 
-def _detrend_segment(seg, method, ramp):
+def _detrend_segment(seg: np.ndarray, method: str, ramp: np.ndarray) -> np.ndarray:
     """Detrend a single FFT segment."""
     if method == "none":
         return seg
@@ -85,9 +85,7 @@ def csd_odas(
     """
     x = np.asarray(x, dtype=np.float64).ravel()
     if len(x) < 2 * nfft:
-        raise ValueError(
-            f"Input length ({len(x)}) must be at least 2*nfft ({2 * nfft})"
-        )
+        raise ValueError(f"Input length ({len(x)}) must be at least 2*nfft ({2 * nfft})")
     auto = y is None
     if not auto:
         y = np.asarray(y, dtype=np.float64).ravel()
@@ -187,9 +185,7 @@ def csd_matrix(
     if x.ndim == 2 and x.shape[0] < x.shape[1]:
         x = x.T
     if x.shape[0] < 2 * nfft:
-        raise ValueError(
-            f"Input length ({x.shape[0]}) must be at least 2*nfft ({2 * nfft})"
-        )
+        raise ValueError(f"Input length ({x.shape[0]}) must be at least 2*nfft ({2 * nfft})")
     n_x = x.shape[1]
 
     auto = y is None

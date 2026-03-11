@@ -136,7 +136,7 @@ def convert_all(p_files: list[Path], output_dir: Path | None = None, jobs: int =
             try:
                 name, _, size_mb = _convert_one((p_path, nc_path))
                 print(f"{size_mb:.1f} MB")
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError) as e:
                 print(f"ERROR: {e}")
     else:
         print(f"Converting {len(work)} files with {jobs} workers")
@@ -147,5 +147,5 @@ def convert_all(p_files: list[Path], output_dir: Path | None = None, jobs: int =
                 try:
                     _, _, size_mb = future.result()
                     print(f"  {p_path.name} -> {nc_path.name}  {size_mb:.1f} MB")
-                except Exception as e:
+                except (OSError, ValueError, RuntimeError) as e:
                     print(f"  {p_path.name}  ERROR: {e}")

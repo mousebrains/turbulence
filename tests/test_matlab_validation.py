@@ -152,9 +152,7 @@ class TestFastChannels:
         # Use subset where speed is reasonable (> 0.1 m/s) to avoid
         # division-by-zero artifacts
         mask = ml_speed > 0.1
-        np.testing.assert_allclose(
-            py_sh1[mask], reconstructed[mask], rtol=1e-6, atol=1e-6
-        )
+        np.testing.assert_allclose(py_sh1[mask], reconstructed[mask], rtol=1e-6, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +174,7 @@ class TestFallRate:
         rms_diff = np.sqrt(np.mean((py_W - ml_W) ** 2))
         rms_signal = np.sqrt(np.mean(ml_W**2))
         relative_error = rms_diff / rms_signal
-        assert relative_error < 0.15, (
-            f"Fall rate relative RMS error {relative_error:.3f} > 0.15"
-        )
+        assert relative_error < 0.15, f"Fall rate relative RMS error {relative_error:.3f} > 0.15"
 
     def test_speed_positive(self, pf, mat):
         """Speed should be non-negative and correlate well with MATLAB.
@@ -277,12 +273,8 @@ class TestEpsilon:
             eps = ds["epsilon"].values
             valid = eps[np.isfinite(eps) & (eps > 0)]
             assert len(valid) > 0, f"Profile {i}: no valid epsilon values"
-            assert np.min(valid) > 1e-14, (
-                f"Profile {i}: min epsilon {np.min(valid):.2e} too small"
-            )
-            assert np.max(valid) < 1.0, (
-                f"Profile {i}: max epsilon {np.max(valid):.2e} too large"
-            )
+            assert np.min(valid) > 1e-14, f"Profile {i}: min epsilon {np.min(valid):.2e} too small"
+            assert np.max(valid) < 1.0, f"Profile {i}: max epsilon {np.max(valid):.2e} too large"
 
     def test_epsilon_depth_coverage(self, eps_results):
         """Most epsilon profiles should span a significant depth range."""
@@ -292,9 +284,7 @@ class TestEpsilon:
             valid_P = P[np.isfinite(P)]
             if len(valid_P) > 0 and (valid_P.max() - valid_P.min()) > 10:
                 deep_profiles += 1
-        assert deep_profiles >= 3, (
-            f"Only {deep_profiles} profiles span >10 dbar"
-        )
+        assert deep_profiles >= 3, f"Only {deep_profiles} profiles span >10 dbar"
 
     def test_epsilon_speed_reasonable(self, eps_results):
         """Profiling speed should be in [0.05, 3.0] m/s."""
@@ -323,9 +313,7 @@ class TestEpsilon:
         all_fom = np.array(all_fom)
         # Median FOM should be between 0.3 and 3.0
         median_fom = np.median(all_fom)
-        assert 0.3 < median_fom < 3.0, (
-            f"Median FOM {median_fom:.2f} outside [0.3, 3.0]"
-        )
+        assert 0.3 < median_fom < 3.0, f"Median FOM {median_fom:.2f} outside [0.3, 3.0]"
 
     def test_qc_K_max_ratio(self, eps_results):
         """K_max_ratio > 0 indicates spectral resolution."""
@@ -344,15 +332,12 @@ class TestEpsilon:
             if eps.shape[0] >= 2:
                 e1 = eps[0]
                 e2 = eps[1]
-                valid = (
-                    np.isfinite(e1) & np.isfinite(e2) & (e1 > 0) & (e2 > 0)
-                )
+                valid = np.isfinite(e1) & np.isfinite(e2) & (e1 > 0) & (e2 > 0)
                 if np.sum(valid) > 5:
                     ratio = np.abs(np.log10(e1[valid]) - np.log10(e2[valid]))
                     median_ratio = np.median(ratio)
                     assert median_ratio < 1.0, (
-                        f"Profile {i}: sh1/sh2 median log10 diff "
-                        f"{median_ratio:.2f} > 1 decade"
+                        f"Profile {i}: sh1/sh2 median log10 diff {median_ratio:.2f} > 1 decade"
                     )
 
     def test_nasmyth_spectrum_shape(self, eps_results):

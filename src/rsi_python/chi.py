@@ -16,6 +16,7 @@ Peterson, A.K. and I. Fer, 2014: Dissipation measurements using temperature
     microstructure from an underwater glider. Methods in Oceanography, 10, 44-69.
 """
 
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -45,7 +46,8 @@ from rsi_python.spectral import csd_odas
 # ---------------------------------------------------------------------------
 
 
-def _spectrum_func(model):
+def _spectrum_func(model: str) -> tuple:
+    """Return (grad_func, q_constant) for the named spectrum model."""
     if model == "batchelor":
         return batchelor_grad, Q_BATCHELOR
     elif model == "kraichnan":
@@ -68,27 +70,68 @@ def _default_tau_model(fp07_model: str) -> str:
 
 
 def _chi_from_epsilon(
-    spec_obs,
-    K,
-    epsilon,
-    nu,
-    T_mean,
-    speed,
-    f_AA,
-    fp07_model,
-    spectrum_model,
-    fs,
-    diff_gain,
-    fft_length,
-):
-    """Compute chi for one probe in one window, given epsilon.
+    spec_obs: np.ndarray,
+    K: np.ndarray,
+    epsilon: float,
+    nu: float,
+    T_mean: float,
+    speed: float,
+    f_AA: float,
+    fp07_model: str,
+    spectrum_model: str,
+    fs: float,
+    diff_gain: float,
+    fft_length: int,
+) -> tuple:
+    """Compute chi for one probe in one window, given epsilon (Method 1).
 
-    Returns (chi, kB, K_max, spec_batch).
+    Parameters
+    ----------
+    spec_obs : ndarray
+        Observed temperature gradient spectrum [(K/m)²/cpm].
+    K : ndarray
+        Wavenumber vector [cpm].
+    epsilon : float
+        TKE dissipation rate [W/kg] from shear probes.
+    nu : float
+        Kinematic viscosity [m²/s].
+    T_mean : float
+        Mean temperature [°C] for noise model.
+    speed : float
+        Profiling speed [m/s].
+    f_AA : float
+        Anti-aliasing cutoff [Hz].
+    fp07_model : str
+        FP07 transfer function model ('single_pole' or 'double_pole').
+    spectrum_model : str
+        Theoretical spectrum model ('batchelor' or 'kraichnan').
+    fs : float
+        Sampling rate [Hz].
+    diff_gain : float
+        Differentiator gain [s].
+    fft_length : int
+        FFT segment length [samples].
+
+    Returns
+    -------
+    chi : float
+        Thermal variance dissipation rate [K²/s].
+    kB : float
+        Batchelor wavenumber [cpm].
+    K_max : float
+        Upper integration limit [cpm].
+    spec_batch : ndarray
+        Fitted Batchelor spectrum.
+    fom : float
+        Figure of merit (observed/model variance ratio).
+    K_max_ratio : float
+        K_max / kB spectral resolution ratio.
     """
     grad_func, q = _spectrum_func(spectrum_model)
 
     kB = batchelor_kB(epsilon, nu)
     if kB < 1:
+        warnings.warn(f"kB={kB:.1f} < 1 cpm; epsilon too low for chi estimation", stacklevel=2)
         return np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan
 
     # FP07 transfer function
@@ -110,6 +153,7 @@ def _chi_from_epsilon(
         # Fall back to AA limit
         valid = (K > 0) & (K <= K_AA)
     if np.sum(valid) < 3:
+        warnings.warn("Too few valid wavenumber points for chi integration", stacklevel=2)
         return np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan
 
     valid_idx = np.where(valid)[0]
@@ -122,6 +166,7 @@ def _chi_from_epsilon(
     # Use trial chi = 6*kappa_T*obs_var as initial
     chi_trial = 6 * KAPPA_T * obs_var
     if chi_trial <= 0:
+        warnings.warn("Trial chi <= 0; observed variance too low", stacklevel=2)
         return np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan
 
     # Theoretical Batchelor spectrum
@@ -140,6 +185,7 @@ def _chi_from_epsilon(
     )
 
     if V_resolved <= 0 or V_total <= 0:
+        warnings.warn("Batchelor variance non-positive; cannot compute correction", stacklevel=2)
         return np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan
 
     correction = V_total / V_resolved
@@ -166,22 +212,53 @@ def _chi_from_epsilon(
 
 
 def _mle_fit_kB(
-    spec_obs,
-    K,
-    chi_obs,
-    nu,
-    T_mean,
-    speed,
-    f_AA,
-    fp07_model,
-    spectrum_model,
-    fs,
-    diff_gain,
-    fft_length,
-):
-    """Maximum likelihood fit for kB, one probe, one window.
+    spec_obs: np.ndarray,
+    K: np.ndarray,
+    chi_obs: float,
+    nu: float,
+    T_mean: float,
+    speed: float,
+    f_AA: float,
+    fp07_model: str,
+    spectrum_model: str,
+    fs: float,
+    diff_gain: float,
+    fft_length: int,
+) -> tuple[float, float, float, float, np.ndarray, float, float]:
+    """Maximum-likelihood fit for Batchelor wavenumber kB (Ruddick et al. 2000).
 
-    Returns (kB_best, chi, epsilon, K_max, spec_batch).
+    Performs a coarse+fine grid search over kB to minimise the MLE
+    negative log-likelihood for chi-squared spectral estimates.
+
+    Parameters
+    ----------
+    spec_obs : ndarray
+        Observed temperature gradient spectrum [(K/m)²/cpm].
+    K : ndarray
+        Wavenumber vector [cpm].
+    chi_obs : float
+        Initial chi estimate [K²/s] from integration.
+    nu : float
+        Kinematic viscosity [m²/s].
+    T_mean, speed, f_AA, fp07_model, spectrum_model, fs, diff_gain, fft_length
+        Same as :func:`_chi_from_epsilon`.
+
+    Returns
+    -------
+    kB_best : float
+        Best-fit Batchelor wavenumber [cpm].
+    chi : float
+        Chi corrected for unresolved variance [K²/s].
+    epsilon : float
+        Epsilon recovered from kB [W/kg].
+    K_max : float
+        Upper fit limit [cpm].
+    spec_batch : ndarray
+        Fitted Batchelor spectrum.
+    fom : float
+        Figure of merit.
+    K_max_ratio : float
+        K_max / kB ratio.
     """
     grad_func, q = _spectrum_func(spectrum_model)
 
@@ -201,6 +278,7 @@ def _mle_fit_kB(
     if np.sum(fit_mask) < 6:
         fit_mask = (K > 0) & (K <= K_AA)
     if np.sum(fit_mask) < 6:
+        warnings.warn("Too few valid points for MLE fit", stacklevel=2)
         return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
 
     fit_idx = np.where(fit_mask)[0]
@@ -220,6 +298,7 @@ def _mle_fit_kB(
     nll_coarse = np.where(np.isfinite(nll_coarse), nll_coarse, np.inf)
 
     if np.all(np.isinf(nll_coarse)):
+        warnings.warn("All NLL values infinite; MLE fit failed", stacklevel=2)
         return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
 
     best_coarse = kB_coarse[np.argmin(nll_coarse)]
@@ -263,9 +342,7 @@ def _mle_fit_kB(
 
     # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise)
     if np.isfinite(chi) and np.sum(fit_mask) >= 3:
-        mod_v = np.trapezoid(
-            spec_batch[fit_idx] * H2[fit_idx] + noise_K[fit_idx], K_fit
-        )
+        mod_v = np.trapezoid(spec_batch[fit_idx] * H2[fit_idx] + noise_K[fit_idx], K_fit)
         obs_v = np.trapezoid(spec_fit, K_fit)
         fom = obs_v / mod_v if mod_v > 0 else np.nan
     else:
@@ -277,13 +354,38 @@ def _mle_fit_kB(
 
 
 def _iterative_fit(
-    spec_obs, K, nu, T_mean, speed, f_AA, fp07_model, spectrum_model, fs, diff_gain, fft_length
-):
-    """Iterative MLE fitting (Peterson & Fer 2014).
+    spec_obs: np.ndarray,
+    K: np.ndarray,
+    nu: float,
+    T_mean: float,
+    speed: float,
+    f_AA: float,
+    fp07_model: str,
+    spectrum_model: str,
+    fs: float,
+    diff_gain: float,
+    fft_length: int,
+) -> tuple[float, float, float, float, np.ndarray, float, float]:
+    """Iterative MLE fitting (Peterson & Fer 2014, Method 2).
 
-    Three iterations refining the integration limits and unresolved variance.
+    Three iterations refining integration limits and correcting for
+    unresolved variance below ``k_l`` and above ``k_u``.
 
-    Returns (kB, chi, epsilon, K_max, spec_batch).
+    Parameters
+    ----------
+    spec_obs : ndarray
+        Observed temperature gradient spectrum [(K/m)²/cpm].
+    K : ndarray
+        Wavenumber vector [cpm].
+    nu : float
+        Kinematic viscosity [m²/s].
+    T_mean, speed, f_AA, fp07_model, spectrum_model, fs, diff_gain, fft_length
+        Same as :func:`_chi_from_epsilon`.
+
+    Returns
+    -------
+    kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio
+        Same as :func:`_mle_fit_kB`.
     """
     grad_func, q = _spectrum_func(spectrum_model)
 
@@ -305,6 +407,7 @@ def _iterative_fit(
 
     valid_idx = np.where(valid)[0]
     if len(valid_idx) < 6:
+        warnings.warn("Too few valid points for iterative fit", stacklevel=2)
         return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
 
     k_u = K[valid_idx[-1]]
@@ -574,7 +677,7 @@ def get_chi(
     return results
 
 
-def _extract_therm_cal(ch_cfg: dict) -> dict:
+def _extract_therm_cal(ch_cfg: dict[str, Any]) -> dict[str, float]:
     """Extract thermistor calibration parameters from PFile channel config."""
     cal = {}
     for key in ("e_b", "b", "g", "beta_1", "beta_2", "adc_fs", "adc_bits", "T_0"):
@@ -587,7 +690,7 @@ def _extract_therm_cal(ch_cfg: dict) -> dict:
     return cal
 
 
-def _bilinear_correction(F, diff_gain, fs):
+def _bilinear_correction(F: np.ndarray, diff_gain: float, fs: float) -> np.ndarray:
     """Bilinear transform correction for deconvolution filter.
 
     Matches ODAS get_scalar_spectra_odas.m lines 264-270:
@@ -619,7 +722,7 @@ def _bilinear_correction(F, diff_gain, fs):
     return bl
 
 
-def _load_therm_channels(source):
+def _load_therm_channels(source: "PFile | str | Path") -> dict[str, Any]:
     """Load thermistor gradient channels from any source.
 
     Looks for channels matching T*_dT* pattern (pre-emphasized temperature),
@@ -656,15 +759,16 @@ def _load_therm_channels(source):
             if dT_re.match(name):
                 therm.append((name, pf.channels[name]))
                 # Get diff_gain from config
-                ch_cfg = next(
+                ch_cfg: dict = next(
                     (ch for ch in pf.config["channels"] if ch.get("name") == name),
                     {},
                 )
                 dg = ch_cfg.get("diff_gain", "0.94")
                 diff_gains.append(float(dg))
                 # Extract calibration from base channel (T1 for T1_dT1)
-                base_name = re.match(r"^(\w+)_d\1$", name).group(1)
-                base_cfg = next(
+                m = re.match(r"^(\w+)_d\1$", name)
+                base_name = m.group(1) if m else name
+                base_cfg: dict = next(
                     (ch for ch in pf.config["channels"] if ch.get("name") == base_name),
                     {},
                 )
@@ -735,7 +839,14 @@ def _compute_profile_chi(
     therm_cal=None,
     accel_arrays=None,
 ):
-    """Compute chi for a single profile."""
+    """Compute chi for all windows in a single profile.
+
+    Iterates over dissipation windows, computes temperature gradient spectra
+    (with optional Goodman cleaning), and fits Batchelor/Kraichnan models
+    using Method 1 (from epsilon) or Method 2 (MLE/iterative).
+
+    Returns an xarray.Dataset with chi, kB, spectra, and QC variables.
+    """
     N = len(P)
     n_therm = len(therm_arrays)
     n_freq = fft_length // 2 + 1
@@ -792,6 +903,12 @@ def _compute_profile_chi(
         # Interpolate epsilon to our time grid
         eps_times = epsilon_ds.coords["t"].values if "t" in epsilon_ds.coords else None
         if eps_times is not None:
+            # xarray decodes CF time attrs to datetime64; convert back to float
+            # seconds so we can subtract float mean_t values later.
+            if np.issubdtype(eps_times.dtype, np.datetime64):
+                eps_times = (eps_times - eps_times[0]).astype("timedelta64[ns]").astype(
+                    np.float64
+                ) / 1e9 + t_fast[0]
             # Average across probes for Method 1
             eps_vals = np.nanmean(epsilon_ds["epsilon"].values, axis=0)
             eps_interp = (eps_times, eps_vals)
@@ -805,7 +922,11 @@ def _compute_profile_chi(
         sel = slice(s, e)
         W = np.mean(np.abs(speed[sel]))
         if W < 0.01:
-            W = 0.01
+            warnings.warn(
+                f"Speed {W:.4f} m/s below minimum; clamped to 0.01 m/s",
+                stacklevel=2,
+            )
+            W = 0.01  # minimum speed to avoid wavenumber singularity
         mean_T = np.mean(T[sel])
         mean_P = np.mean(P[sel])
         mean_t = np.mean(t_fast[sel])
@@ -850,9 +971,18 @@ def _compute_profile_chi(
         for ci in range(n_therm):
             # Per-probe noise spectrum
             cal_ci = (therm_cal[ci] if therm_cal else {}) if therm_cal else {}
-            noise_kwargs = {k: v for k, v in cal_ci.items() if k in (
-                "e_b", "gain", "beta_1", "adc_fs", "adc_bits",
-            )}
+            noise_kwargs = {
+                k: v
+                for k, v in cal_ci.items()
+                if k
+                in (
+                    "e_b",
+                    "gain",
+                    "beta_1",
+                    "adc_fs",
+                    "adc_bits",
+                )
+            }
             noise_K, _ = gradT_noise(
                 F, mean_T, W, fs=fs_fast, diff_gain=diff_gains[ci], **noise_kwargs
             )
@@ -956,7 +1086,66 @@ def _compute_profile_chi(
                 K_max_ratio_out[ci, idx] = K_max_ratio_val
                 spec_batch[ci, :, idx] = batch_spec
 
-    # Build xarray Dataset
+    return _build_chi_dataset(
+        chi_out=chi_out,
+        eps_out=eps_out,
+        kB_out=kB_out,
+        K_max_out=K_max_out,
+        fom_out=fom_out,
+        K_max_ratio_out=K_max_ratio_out,
+        speed_out=speed_out,
+        nu_out=nu_out,
+        P_out=P_out,
+        T_out=T_out,
+        t_out=t_out,
+        spec_gradT=spec_gradT,
+        spec_batch=spec_batch,
+        spec_noise_out=spec_noise_out,
+        K_out=K_out,
+        F_out=F_out,
+        therm_names=therm_names,
+        fft_length=fft_length,
+        diss_length=diss_length,
+        overlap=overlap,
+        fs_fast=fs_fast,
+        dof_spec=dof_spec,
+        fp07_model=fp07_model,
+        spectrum_model=spectrum_model,
+        fit_method=fit_method,
+        f_AA=f_AA,
+    )
+
+
+def _build_chi_dataset(
+    *,
+    chi_out: np.ndarray,
+    eps_out: np.ndarray,
+    kB_out: np.ndarray,
+    K_max_out: np.ndarray,
+    fom_out: np.ndarray,
+    K_max_ratio_out: np.ndarray,
+    speed_out: np.ndarray,
+    nu_out: np.ndarray,
+    P_out: np.ndarray,
+    T_out: np.ndarray,
+    t_out: np.ndarray,
+    spec_gradT: np.ndarray,
+    spec_batch: np.ndarray,
+    spec_noise_out: np.ndarray,
+    K_out: np.ndarray,
+    F_out: np.ndarray,
+    therm_names: list[str],
+    fft_length: int,
+    diss_length: int,
+    overlap: int,
+    fs_fast: float,
+    dof_spec: float,
+    fp07_model: str,
+    spectrum_model: str,
+    fit_method: str,
+    f_AA: float,
+) -> xr.Dataset:
+    """Build an xarray Dataset from chi estimation output arrays."""
     ds = xr.Dataset(
         {
             "chi": (
@@ -1153,7 +1342,7 @@ def compute_chi_file(
     return output_paths
 
 
-def _compute_chi_one(args):
+def _compute_chi_one(args: tuple) -> tuple[str, int]:
     """Worker for parallel chi computation."""
     source_path, output_dir, kwargs = args
     paths = compute_chi_file(source_path, output_dir, **kwargs)

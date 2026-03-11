@@ -60,7 +60,7 @@ def clean_shear_spec(
     try:
         UA, F, UU, AA = csd_matrix(shear, accel, nfft, rate, overlap=nfft // 2, detrend="linear")
     except ValueError:
-        # Signal too short for CSD — warn and return uncleaned spectra
+        # Signal too short for cross-spectrum — fall back to shear auto-spectrum
         import warnings
 
         warnings.warn(
@@ -69,12 +69,17 @@ def clean_shear_spec(
             f"returning uncleaned spectra",
             stacklevel=2,
         )
-        # Fall back to auto-spectrum only (no cleaning)
-        n_freq_fb = nfft // 2 + 1
-        F = np.arange(n_freq_fb) * rate / nfft
         n_sh = shear.shape[1]
         n_ac = accel.shape[1]
-        UU = np.zeros((n_freq_fb, n_sh, n_sh), dtype=np.complex128)
+        try:
+            # Compute shear auto-spectrum (may work with shorter overlap)
+            UU, F, _, _ = csd_matrix(shear, None, nfft, rate, overlap=nfft // 2, detrend="linear")
+        except ValueError:
+            # Even auto-spectrum fails — return zeros
+            n_freq_fb = nfft // 2 + 1
+            F = np.arange(n_freq_fb) * rate / nfft
+            UU = np.zeros((n_freq_fb, n_sh, n_sh), dtype=np.complex128)
+        n_freq_fb = len(F)
         AA = np.zeros((n_freq_fb, n_ac, n_ac), dtype=np.complex128)
         UA = np.zeros((n_freq_fb, n_sh, n_ac), dtype=np.complex128)
         return np.real(UU), AA, UU, UA, F
@@ -100,7 +105,9 @@ def clean_shear_spec(
 
     clean_UU = np.real(clean_UU)
 
-    # Bias correction (ODAS Technical Note 61)
+    # Bias correction (ODAS Technical Note 61, Eq. 3)
+    # Factor 1.02 accounts for the effective degrees-of-freedom reduction
+    # from overlapping FFT segments (Goodman 2006, ODAS TN-061).
     fft_segments = 2 * shear.shape[0] // nfft - 1
     if fft_segments <= 1.02 * n_accel:
         import warnings

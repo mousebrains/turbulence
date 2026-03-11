@@ -120,7 +120,11 @@ def _compute_windowed_diss(
 
         W = float(np.mean(np.abs(speed_fast[w_sel])))
         if W < 0.01:
-            W = 0.01
+            warnings.warn(
+                f"Speed {W:.4f} m/s below minimum; clamped to 0.01 m/s",
+                stacklevel=2,
+            )
+            W = 0.01  # minimum speed to avoid wavenumber singularity
         mean_T = float(np.mean(T_slow))
         nu = float(visc35(mean_T))
         P_windows[idx] = float(np.mean(P_fast[w_sel]))
@@ -283,7 +287,11 @@ def _compute_depth_spectra(
 
     W = float(np.mean(np.abs(speed_fast[sel])))
     if W < 0.01:
-        W = 0.01
+        warnings.warn(
+            f"Speed {W:.4f} m/s below minimum; clamped to 0.01 m/s",
+            stacklevel=2,
+        )
+        W = 0.01  # minimum speed to avoid wavenumber singularity
     mean_T = float(np.mean(T_slow))
     nu = float(visc35(mean_T))
 

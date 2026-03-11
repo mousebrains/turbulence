@@ -109,11 +109,7 @@ def noise_shearchannel(
     Noise_1 = G_1 * (V_V1 + V_I1) + V_R1
 
     # --- Stage 2: Differentiator ---
-    G_2 = (
-        (omega * R3 * C2) ** 2
-        / (1 + (omega * R2 * C2) ** 2)
-        / (1 + (omega * R3 * C3) ** 2)
-    )
+    G_2 = (omega * R3 * C2) ** 2 / (1 + (omega * R2 * C2) ** 2) / (1 + (omega * R3 * C3) ** 2)
 
     # Note: MATLAB uses (Noise_1 + V_V1) not (Noise_1 + V_V2) —
     # same first-stage voltage noise applied as second-stage input noise

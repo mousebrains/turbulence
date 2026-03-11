@@ -20,9 +20,10 @@ import os
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 
-def _resolve_p_files(patterns):
+def _resolve_p_files(patterns: list[str]) -> list[Path]:
     """Expand glob patterns and return list of .p file Paths."""
     import glob as globmod
 
@@ -41,7 +42,7 @@ def _resolve_p_files(patterns):
     return files
 
 
-def _resolve_files(patterns, extensions=None):
+def _resolve_files(patterns: list[str], extensions: set[str] | None = None) -> list[Path]:
     """Expand glob patterns and return list of matching file Paths.
 
     Parameters
@@ -75,7 +76,7 @@ def _resolve_files(patterns, extensions=None):
 # ---------------------------------------------------------------------------
 
 
-def _load_file_config(args):
+def _load_file_config(args: argparse.Namespace) -> dict[str, Any]:
     """Load config from the -c/--config flag, or return empty dict."""
     if getattr(args, "config", None) is not None:
         from rsi_python.config import load_config
@@ -84,7 +85,7 @@ def _load_file_config(args):
     return {}
 
 
-def _extract_cli_overrides(args, section):
+def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, Any]:
     """Extract CLI-provided overrides for a config section.
 
     Only includes values that were explicitly specified on the command line
@@ -160,7 +161,7 @@ def _extract_cli_overrides(args, section):
     return overrides
 
 
-def _merge_for_section(args, section):
+def _merge_for_section(args: argparse.Namespace, section: str) -> dict[str, Any]:
     """Load config file + CLI overrides and merge for the given section.
 
     Returns the merged kwargs dict (None values stripped).
@@ -175,7 +176,13 @@ def _merge_for_section(args, section):
     return merge_config(real_section, file_values, cli_overrides)
 
 
-def _setup_output_dir(args, prefix, section, params, upstream=None):
+def _setup_output_dir(
+    args: argparse.Namespace,
+    prefix: str,
+    section: str,
+    params: dict[str, Any],
+    upstream: list[tuple[str, dict[str, Any]]] | None = None,
+) -> Path:
     """Resolve the sequential output directory, write signature file and config.yaml.
 
     Parameters
@@ -196,7 +203,7 @@ def _setup_output_dir(args, prefix, section, params, upstream=None):
 # ---------------------------------------------------------------------------
 
 
-def _cmd_nc(args):
+def _cmd_nc(args: argparse.Namespace) -> None:
     """Convert Rockland .p files to NetCDF4."""
     from rsi_python.convert import convert_all, p_to_netcdf
 
@@ -210,7 +217,7 @@ def _cmd_nc(args):
         convert_all(p_files, output_dir, jobs=args.jobs)
 
 
-def _cmd_info(args):
+def _cmd_info(args: argparse.Namespace) -> None:
     """Print summary information about .p file(s)."""
     from rsi_python.p_file import PFile
 
@@ -222,7 +229,7 @@ def _cmd_info(args):
         pf.summary()
 
 
-def _cmd_init(args):
+def _cmd_init(args: argparse.Namespace) -> None:
     """Generate a template configuration file."""
     from rsi_python.config import generate_template
 
@@ -234,7 +241,7 @@ def _cmd_init(args):
     print(f"Wrote template config to {path}")
 
 
-def _cmd_prof(args):
+def _cmd_prof(args: argparse.Namespace) -> None:
     """Extract profiles from .p or full-record .nc files."""
     from rsi_python.profile import extract_profiles
 
@@ -249,7 +256,7 @@ def _cmd_prof(args):
         extract_profiles(f, output_dir, **merged)
 
 
-def _cmd_eps(args):
+def _cmd_eps(args: argparse.Namespace) -> None:
     """Compute epsilon (TKE dissipation rate) from any pipeline stage."""
     from rsi_python.dissipation import _compute_diss_one, compute_diss_file
 
@@ -268,7 +275,7 @@ def _cmd_eps(args):
             print(f"{f.name}:")
             try:
                 compute_diss_file(f, output_dir, **merged)
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError) as e:
                 print(f"  ERROR: {e}")
     else:
         work = []
@@ -282,11 +289,11 @@ def _cmd_eps(args):
                 try:
                     name, n_profiles = future.result()
                     print(f"  {Path(name).name}: {n_profiles} profile(s)")
-                except Exception as e:
+                except (OSError, ValueError, RuntimeError) as e:
                     print(f"  {src.name}: ERROR: {e}")
 
 
-def _cmd_chi(args):
+def _cmd_chi(args: argparse.Namespace) -> None:
     """Compute chi (thermal variance dissipation rate) from any pipeline stage."""
     from rsi_python.chi import _compute_chi_one, compute_chi_file
 
@@ -319,7 +326,7 @@ def _cmd_chi(args):
 
             try:
                 compute_chi_file(f, output_dir, **kw)
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError) as e:
                 print(f"  ERROR: {e}")
     else:
         work = []
@@ -333,11 +340,11 @@ def _cmd_chi(args):
                 try:
                     name, n_profiles = future.result()
                     print(f"  {Path(name).name}: {n_profiles} profile(s)")
-                except Exception as e:
+                except (OSError, ValueError, RuntimeError) as e:
                     print(f"  {src.name}: ERROR: {e}")
 
 
-def _cmd_pipeline(args):
+def _cmd_pipeline(args: argparse.Namespace) -> None:
     """Run full processing pipeline: .p → profiles → epsilon → chi."""
     from rsi_python.chi import compute_chi_file
     from rsi_python.dissipation import compute_diss_file
@@ -362,7 +369,7 @@ def _cmd_pipeline(args):
         print("\n--- Epsilon ---")
         try:
             eps_paths = compute_diss_file(f, eps_dir, **eps_merged)
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
             print(f"  ERROR computing epsilon: {e}")
             continue
 
@@ -376,7 +383,7 @@ def _cmd_pipeline(args):
             kw["epsilon_ds"] = eps_ds
             try:
                 compute_chi_file(f, chi_dir, **kw)
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError) as e:
                 print(f"  ERROR computing chi: {e}")
             finally:
                 eps_ds.close()
@@ -391,7 +398,7 @@ def _cmd_pipeline(args):
 # ---------------------------------------------------------------------------
 
 
-def _add_nc_parser(subparsers):
+def _add_nc_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "nc",
         help="Convert .p files to NetCDF",
@@ -416,7 +423,7 @@ def _add_nc_parser(subparsers):
     p.set_defaults(func=_cmd_nc)
 
 
-def _add_info_parser(subparsers):
+def _add_info_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "info",
         help="Print .p file summary",
@@ -426,7 +433,7 @@ def _add_info_parser(subparsers):
     p.set_defaults(func=_cmd_info)
 
 
-def _add_init_parser(subparsers):
+def _add_init_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "init",
         help="Generate a template configuration file",
@@ -446,7 +453,7 @@ def _add_init_parser(subparsers):
     p.set_defaults(func=_cmd_init)
 
 
-def _add_prof_parser(subparsers):
+def _add_prof_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "prof",
         help="Extract profiles",
@@ -486,7 +493,7 @@ def _add_prof_parser(subparsers):
     p.set_defaults(func=_cmd_prof)
 
 
-def _add_eps_parser(subparsers):
+def _add_eps_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "eps",
         help="Compute epsilon (TKE dissipation)",
@@ -556,7 +563,7 @@ def _add_eps_parser(subparsers):
     p.set_defaults(func=_cmd_eps)
 
 
-def _add_chi_parser(subparsers):
+def _add_chi_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "chi",
         help="Compute chi (thermal dissipation)",
@@ -651,7 +658,7 @@ def _add_chi_parser(subparsers):
     p.set_defaults(func=_cmd_chi)
 
 
-def _add_pipeline_parser(subparsers):
+def _add_pipeline_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "pipeline",
         help="Run full pipeline (.p -> epsilon -> chi)",
@@ -723,7 +730,7 @@ def _add_pipeline_parser(subparsers):
     p.set_defaults(func=_cmd_pipeline)
 
 
-def _cmd_ql(args):
+def _cmd_ql(args: argparse.Namespace) -> None:
     """Interactive quick-look viewer."""
     from rsi_python.quick_look import quick_look
 
@@ -745,7 +752,7 @@ def _cmd_ql(args):
         )
 
 
-def _add_ql_parser(subparsers):
+def _add_ql_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "ql",
         help="Interactive quick-look viewer",
@@ -794,7 +801,7 @@ def _add_ql_parser(subparsers):
     p.set_defaults(func=_cmd_ql)
 
 
-def _cmd_dl(args):
+def _cmd_dl(args: argparse.Namespace) -> None:
     """Interactive dissipation quality viewer."""
     from rsi_python.diss_look import diss_look
 
@@ -814,7 +821,7 @@ def _cmd_dl(args):
         )
 
 
-def _add_dl_parser(subparsers):
+def _add_dl_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "dl",
         help="Interactive dissipation quality viewer",

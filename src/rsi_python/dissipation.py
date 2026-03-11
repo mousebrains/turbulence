@@ -17,6 +17,7 @@ Lueck, R.G., and 27 coauthors, 2024: Best practices recommendations for
 """
 
 import re
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -97,7 +98,9 @@ def load_channels(
         raise ValueError(f"Unsupported file type: {source.suffix}")
 
 
-def _channels_from_pfile(pf, sh_pat, ac_pat, p_name, t_name):
+def _channels_from_pfile(
+    pf: "PFile", sh_pat: str, ac_pat: str, p_name: str, t_name: str
+) -> dict[str, Any]:
     sh_re = re.compile(sh_pat)
     ac_re = re.compile(ac_pat)
     shear = sorted(
@@ -128,7 +131,9 @@ def _channels_from_pfile(pf, sh_pat, ac_pat, p_name, t_name):
     }
 
 
-def _channels_from_nc(nc_path, sh_pat, ac_pat, p_name, t_name):
+def _channels_from_nc(
+    nc_path: Path, sh_pat: str, ac_pat: str, p_name: str, t_name: str
+) -> dict[str, Any]:
     import netCDF4 as nc
 
     ds = nc.Dataset(str(nc_path), "r")
@@ -484,24 +489,48 @@ def _compute_profile_diss(
     fit_order,
     salinity=None,
 ):
-    """Compute dissipation for a single profile.
+    """Compute dissipation for all windows in a single profile.
+
+    Iterates over dissipation windows, computes Goodman-cleaned shear
+    wavenumber spectra, and estimates epsilon via the variance or ISR method.
 
     Parameters
     ----------
     shear : ndarray, shape (N, n_shear)
+        Shear probe data [s⁻¹], already despiked and divided by speed².
     accel : ndarray, shape (N, n_accel)
-    P, T, speed, t_fast : ndarray, shape (N,)
+        Accelerometer data for Goodman cleaning.
+    P : ndarray, shape (N,)
+        Pressure [dbar].
+    T : ndarray, shape (N,)
+        Temperature [°C].
+    speed : ndarray, shape (N,)
+        Profiling speed [m/s].
+    t_fast : ndarray, shape (N,)
+        Time vector [s].
     shear_names : list of str
+        Probe names for coordinate labelling.
     fs_fast : float
-    fft_length, diss_length, overlap : int
+        Sampling rate [Hz].
+    fft_length : int
+        FFT segment length [samples].
+    diss_length : int
+        Dissipation window length [samples].
+    overlap : int
+        Window overlap [samples].
     do_goodman : bool
+        Whether to apply Goodman coherent noise removal.
     f_AA : float
+        Effective anti-aliasing cutoff [Hz].
     fit_order : int
+        Polynomial order for spectral minimum detection.
     salinity : float, ndarray, or None
+        Practical salinity for viscosity calculation.
 
     Returns
     -------
     xarray.Dataset
+        Contains epsilon, K_max, mad, fom, FM, K_max_ratio, spectra, etc.
     """
     N = shear.shape[0]
     n_shear = shear.shape[1]
@@ -574,7 +603,11 @@ def _compute_profile_diss(
         # Mean values for this window
         W = np.mean(np.abs(speed[sel]))
         if W < 0.01:
-            W = 0.01  # minimum speed to avoid division by zero
+            warnings.warn(
+                f"Speed {W:.4f} m/s below minimum; clamped to 0.01 m/s",
+                stacklevel=2,
+            )
+            W = 0.01  # minimum speed to avoid wavenumber singularity
         mean_T = np.mean(T[sel])
         mean_P = np.mean(P[sel])
         mean_t = np.mean(t_fast[sel])
@@ -637,7 +670,64 @@ def _compute_profile_diss(
             spec_shear[ci, :, idx] = shear_spec
             spec_nasmyth[ci, :, idx] = nas_spec
 
-    # Build xarray Dataset
+    return _build_diss_dataset(
+        epsilon=epsilon,
+        K_max_out=K_max_out,
+        mad_out=mad_out,
+        fom_out=fom_out,
+        FM_out=FM_out,
+        K_max_ratio_out=K_max_ratio_out,
+        method_out=method_out,
+        speed_out=speed_out,
+        nu_out=nu_out,
+        P_out=P_out,
+        T_out=T_out,
+        t_out=t_out,
+        spec_shear=spec_shear,
+        spec_nasmyth=spec_nasmyth,
+        K_out=K_out,
+        F_out=F_out,
+        shear_names=shear_names,
+        fft_length=fft_length,
+        diss_length=diss_length,
+        overlap=overlap,
+        fs_fast=fs_fast,
+        dof_spec=dof_spec,
+        do_goodman=do_goodman,
+        f_AA=f_AA,
+        fit_order=fit_order,
+    )
+
+
+def _build_diss_dataset(
+    *,
+    epsilon: np.ndarray,
+    K_max_out: np.ndarray,
+    mad_out: np.ndarray,
+    fom_out: np.ndarray,
+    FM_out: np.ndarray,
+    K_max_ratio_out: np.ndarray,
+    method_out: np.ndarray,
+    speed_out: np.ndarray,
+    nu_out: np.ndarray,
+    P_out: np.ndarray,
+    T_out: np.ndarray,
+    t_out: np.ndarray,
+    spec_shear: np.ndarray,
+    spec_nasmyth: np.ndarray,
+    K_out: np.ndarray,
+    F_out: np.ndarray,
+    shear_names: list[str],
+    fft_length: int,
+    diss_length: int,
+    overlap: int,
+    fs_fast: float,
+    dof_spec: float,
+    do_goodman: bool,
+    f_AA: float,
+    fit_order: int,
+) -> xr.Dataset:
+    """Build an xarray Dataset from epsilon estimation output arrays."""
     ds = xr.Dataset(
         {
             "epsilon": (
@@ -786,11 +876,59 @@ def _compute_profile_diss(
     return ds
 
 
-def _estimate_epsilon(K, shear_spectrum, nu, K_AA, fit_order, e_isr_threshold, num_ffts=3, n_v=0):
+def _estimate_epsilon(
+    K: np.ndarray,
+    shear_spectrum: np.ndarray,
+    nu: float,
+    K_AA: float,
+    fit_order: int,
+    e_isr_threshold: float,
+    num_ffts: int = 3,
+    n_v: int = 0,
+) -> tuple[float, float, float, int, np.ndarray, float, float, float]:
     """Estimate epsilon from a single shear wavenumber spectrum.
 
-    Returns (epsilon, K_max, mad, method, nasmyth_spectrum, fom, K_max_ratio, FM).
-    method: 0 = variance, 1 = inertial subrange.
+    Implements the ODAS variance method (with polynomial spectral-minimum
+    detection and iterative variance correction) for low dissipation, and
+    the inertial-subrange (ISR) method for high dissipation.
+
+    Parameters
+    ----------
+    K : ndarray
+        Wavenumber vector [cpm].
+    shear_spectrum : ndarray
+        Observed shear spectrum [s⁻² cpm⁻¹].
+    nu : float
+        Kinematic viscosity [m²/s].
+    K_AA : float
+        Anti-aliasing wavenumber limit [cpm].
+    fit_order : int
+        Polynomial order for spectral minimum detection.
+    e_isr_threshold : float
+        Epsilon threshold for switching to ISR method [W/kg].
+    num_ffts : int
+        Number of FFT segments (for Lueck FM statistic).
+    n_v : int
+        Number of vibration signals removed (for Lueck FM statistic).
+
+    Returns
+    -------
+    epsilon : float
+        Dissipation rate [W/kg].
+    K_max : float
+        Upper integration limit [cpm].
+    mad : float
+        Mean absolute deviation of spectral fit (log10).
+    method : int
+        0 = variance, 1 = inertial subrange.
+    nasmyth_spectrum : ndarray
+        Nasmyth spectrum at final epsilon.
+    fom : float
+        Figure of merit (observed/Nasmyth variance ratio).
+    K_max_ratio : float
+        K_max / K_95 spectral resolution ratio.
+    FM : float
+        Lueck (2022a,b) figure of merit.
     """
     n_freq = len(K)
     method = 0
@@ -807,7 +945,8 @@ def _estimate_epsilon(K, shear_spectrum, nu, K_AA, fit_order, e_isr_threshold, n
     if e_1 < e_isr_threshold:
         # Variance method
         # Check if enough points for ISR refinement
-        x_isr = 0.02  # 2 * 0.01 (matches MATLAB code)
+        # ISR wavenumber limit factor (2 × 0.01, matches ODAS)
+        x_isr = 0.02
         isr_limit = x_isr * (e_1 / nu**3) ** 0.25
         if len(np.where(K <= isr_limit)[0]) >= 20:
             e_2, _ = _inertial_subrange(K, shear_spectrum, e_1, nu, min(150, K_AA))
@@ -933,8 +1072,29 @@ def _estimate_epsilon(K, shear_spectrum, nu, K_AA, fit_order, e_isr_threshold, n
     return e_4, k_max, mad, method, nas_spec, fom, K_max_ratio_val, FM
 
 
-def _variance_correction(e_3, K_upper, nu, max_iter=50):
-    """Iterative variance correction using Lueck's resolved-variance model."""
+def _variance_correction(e_3: float, K_upper: float, nu: float, max_iter: int = 50) -> float:
+    """Iterative variance correction using Lueck's resolved-variance model.
+
+    Matches ODAS ``get_diss_odas.m`` lines 623–634.  The fraction of total
+    Nasmyth variance resolved up to ``K_upper`` is approximated by
+    ``tanh(48x) − 2.9x·exp(−22.3x)`` where ``x = (K_upper / ks)^(4/3)``.
+
+    Parameters
+    ----------
+    e_3 : float
+        Uncorrected epsilon [W/kg] from integration up to ``K_upper``.
+    K_upper : float
+        Upper integration wavenumber [cpm].
+    nu : float
+        Kinematic viscosity [m²/s].
+    max_iter : int
+        Maximum iterations (default 50).
+
+    Returns
+    -------
+    float
+        Variance-corrected epsilon [W/kg].
+    """
     e_new = e_3
     for _ in range(max_iter):
         x_limit = K_upper * (nu**3 / e_new) ** 0.25
@@ -944,17 +1104,28 @@ def _variance_correction(e_3, K_upper, nu, max_iter=50):
             break
         e_old = e_new
         e_new = e_3 / variance_resolved
+        # Convergence threshold: < 2% change (matches ODAS)
         if e_new / e_old < 1.02:
             break
     return e_new
 
 
-def _inertial_subrange(K, shear_spectrum, e, nu, K_limit):
+def _inertial_subrange(
+    K: np.ndarray, shear_spectrum: np.ndarray, e: float, nu: float, K_limit: float
+) -> tuple[float, float]:
     """Fit to the inertial subrange to estimate epsilon.
 
-    Returns (epsilon, K_max).
+    Three-pass Nasmyth fit with flyer removal, then two-pass refit.
+
+    Returns
+    -------
+    epsilon : float
+        Dissipation rate [W/kg].
+    K_max : float
+        Upper fit limit [cpm].
     """
-    x_isr = 0.02  # 2 * 0.01 (matches MATLAB)
+    # ISR wavenumber limit factor (2 × 0.01, matches ODAS)
+    x_isr = 0.02
 
     isr_limit = min(x_isr * (e / nu**3) ** 0.25, K_limit)
     fit_range = np.where(K <= isr_limit)[0]
@@ -1056,7 +1227,7 @@ def compute_diss_file(
     return output_paths
 
 
-def _compute_diss_one(args):
+def _compute_diss_one(args: tuple) -> tuple[str, int]:
     """Worker for parallel dissipation computation."""
     source_path, output_dir, kwargs = args
     paths = compute_diss_file(source_path, output_dir, **kwargs)

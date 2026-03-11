@@ -55,7 +55,7 @@ def despike(
 
     y = np.asarray(signal_in, dtype=np.float64).copy().ravel()
     original = y.copy()
-    all_spikes = set()
+    all_spikes: set[int] = set()
     n_passes = 0
 
     for _ in range(max_passes):
@@ -71,7 +71,9 @@ def despike(
     return y, spike_indices, n_passes, fraction
 
 
-def _single_despike(dv, thresh, smooth, fs, N):
+def _single_despike(
+    dv: np.ndarray, thresh: float, smooth: float, fs: float, N: int
+) -> tuple[np.ndarray, np.ndarray]:
     """Single pass of spike detection and removal."""
     N_half = N // 2
     dv = dv.copy()

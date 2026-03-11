@@ -124,9 +124,7 @@ class TestScalarSpectraVsMatlab:
         results, val, matched = matched_scalar
         ml_n = int(val["n_profiles"])
         py_n = len(results)
-        assert abs(py_n - ml_n) <= 3, (
-            f"Profile count: Python {py_n} vs MATLAB {ml_n}"
-        )
+        assert abs(py_n - ml_n) <= 3, f"Profile count: Python {py_n} vs MATLAB {ml_n}"
 
     def test_most_profiles_matched(self, matched_scalar):
         """Most profiles should match."""
@@ -161,7 +159,9 @@ class TestScalarSpectraVsMatlab:
                 if np.sum(valid) < 3:
                     continue
                 np.testing.assert_allclose(
-                    py_k[valid], ml_k[valid], rtol=0.05,
+                    py_k[valid],
+                    ml_k[valid],
+                    rtol=0.05,
                     err_msg=f"py_prof {pi} / ml_prof {mi}, est {j}: K mismatch",
                 )
 
@@ -197,10 +197,7 @@ class TestScalarSpectraVsMatlab:
                 for j in range(n_est):
                     py_s = py_spec[ci, 1:n_freq, j]  # skip DC
                     ml_s = ml_spec[ci, 1:n_freq, j]
-                    valid = (
-                        np.isfinite(py_s) & np.isfinite(ml_s)
-                        & (py_s > 0) & (ml_s > 0)
-                    )
+                    valid = np.isfinite(py_s) & np.isfinite(ml_s) & (py_s > 0) & (ml_s > 0)
                     if np.sum(valid) < 5:
                         continue
                     log_diff = np.abs(np.log10(py_s[valid]) - np.log10(ml_s[valid]))
@@ -226,14 +223,12 @@ class TestScalarSpectraVsMatlab:
             if n_est < 5:
                 continue
             valid = (
-                np.isfinite(py_speed[:n_est]) & np.isfinite(ml_speed[:n_est])
-                & (py_speed[:n_est] > 0.1) & (ml_speed[:n_est] > 0.1)
+                np.isfinite(py_speed[:n_est])
+                & np.isfinite(ml_speed[:n_est])
+                & (py_speed[:n_est] > 0.1)
+                & (ml_speed[:n_est] > 0.1)
             )
             if np.sum(valid) < 5:
                 continue
-            corr = np.corrcoef(
-                py_speed[:n_est][valid], ml_speed[:n_est][valid]
-            )[0, 1]
-            assert corr > 0.75, (
-                f"py_prof {pi} / ml_prof {mi}: speed corr {corr:.3f} < 0.75"
-            )
+            corr = np.corrcoef(py_speed[:n_est][valid], ml_speed[:n_est][valid])[0, 1]
+            assert corr > 0.75, f"py_prof {pi} / ml_prof {mi}: speed corr {corr:.3f} < 0.75"

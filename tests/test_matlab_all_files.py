@@ -86,33 +86,23 @@ class TestAllFilesExactMatch:
 
     def test_pressure_slow(self, file_pair):
         pf, mat = file_pair
-        np.testing.assert_allclose(
-            pf.channels["P"], mat["P_slow"], rtol=1e-10, atol=1e-10
-        )
+        np.testing.assert_allclose(pf.channels["P"], mat["P_slow"], rtol=1e-10, atol=1e-10)
 
     def test_temperature_T1_slow(self, file_pair):
         pf, mat = file_pair
-        np.testing.assert_allclose(
-            pf.channels["T1"], mat["T1_slow"], rtol=1e-10, atol=1e-10
-        )
+        np.testing.assert_allclose(pf.channels["T1"], mat["T1_slow"], rtol=1e-10, atol=1e-10)
 
     def test_temperature_T2_slow(self, file_pair):
         pf, mat = file_pair
-        np.testing.assert_allclose(
-            pf.channels["T2"], mat["T2_slow"], rtol=1e-10, atol=1e-10
-        )
+        np.testing.assert_allclose(pf.channels["T2"], mat["T2_slow"], rtol=1e-10, atol=1e-10)
 
     def test_temperature_T1_fast(self, file_pair):
         pf, mat = file_pair
-        np.testing.assert_allclose(
-            pf.channels["T1_dT1"], mat["T1_fast"], rtol=1e-10, atol=1e-10
-        )
+        np.testing.assert_allclose(pf.channels["T1_dT1"], mat["T1_fast"], rtol=1e-10, atol=1e-10)
 
     def test_temperature_T2_fast(self, file_pair):
         pf, mat = file_pair
-        np.testing.assert_allclose(
-            pf.channels["T2_dT2"], mat["T2_fast"], rtol=1e-10, atol=1e-10
-        )
+        np.testing.assert_allclose(pf.channels["T2_dT2"], mat["T2_fast"], rtol=1e-10, atol=1e-10)
 
     def test_shear_speed_consistency(self, file_pair):
         """Python shear * speed^-2 should equal MATLAB shear (du/dz)."""
@@ -124,6 +114,4 @@ class TestAllFilesExactMatch:
         reconstructed = ml_sh1 * ml_speed**2
         mask = ml_speed > 0.1
         if np.any(mask):
-            np.testing.assert_allclose(
-                py_sh1[mask], reconstructed[mask], rtol=1e-6, atol=1e-6
-            )
+            np.testing.assert_allclose(py_sh1[mask], reconstructed[mask], rtol=1e-6, atol=1e-6)

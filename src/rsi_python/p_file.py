@@ -92,7 +92,14 @@ def _parse_header(raw: bytes, endian: str) -> dict:
 def parse_config(config_str: str) -> dict[str, Any]:
     """Parse the INI-style configuration string embedded in the P file.
 
-    Returns dict with keys:
+    Parameters
+    ----------
+    config_str : str
+        The raw INI-style configuration text from record 0 of the P file.
+
+    Returns
+    -------
+    dict with keys:
       'matrix': list of lists (the address matrix rows)
       'channels': list of dicts, one per [channel] section
       'instrument_info': dict
@@ -153,7 +160,36 @@ def parse_config(config_str: str) -> dict[str, Any]:
 
 
 class PFile:
-    """Represents a parsed Rockland .p data file."""
+    """Represents a parsed Rockland Scientific .p binary data file.
+
+    Attributes
+    ----------
+    filepath : Path
+        Path to the source .p file.
+    channels : dict[str, ndarray]
+        Channel data arrays keyed by name (e.g. 'P', 'T1', 'sh1', 'Ax').
+        Values are in physical units after conversion.
+    channel_info : dict[str, dict]
+        Per-channel metadata: 'type', 'units', and config parameters.
+    config : dict
+        Parsed INI configuration (see :func:`parse_config`).
+    config_str : str
+        Raw configuration string from the file header.
+    t_fast : ndarray
+        Time vector for fast-sampled channels [s since start].
+    t_slow : ndarray
+        Time vector for slow-sampled channels [s since start].
+    fs_fast : float
+        Fast sampling rate [Hz] (typically ~512 Hz).
+    fs_slow : float
+        Slow sampling rate [Hz] (typically ~64 Hz).
+    start_time : datetime
+        Recording start time (UTC).
+    header : dict
+        Parsed 128-byte binary header fields.
+    endian : str
+        Byte order ('little' or 'big').
+    """
 
     def __init__(self, filepath: str | Path) -> None:
         self.filepath = Path(filepath)

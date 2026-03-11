@@ -243,8 +243,11 @@ class TestShearNoiseModel:
         from rsi_python.shear_noise import noise_shearchannel
 
         sig = inspect.signature(noise_shearchannel)
-        defaults = {k: v.default for k, v in sig.parameters.items()
-                    if v.default is not inspect.Parameter.empty}
+        defaults = {
+            k: v.default
+            for k, v in sig.parameters.items()
+            if v.default is not inspect.Parameter.empty
+        }
         assert defaults["R1"] == 1e9
         assert defaults["C1"] == 1.5e-9
         assert defaults["R2"] == 499
@@ -271,7 +274,11 @@ class TestShearNoiseModel:
         # only ADC quantization remains
         F = np.array([1.0, 10.0, 100.0])
         noise = noise_shearchannel(
-            F, E_1=0, I_1=0, R1=0, CP=0,
+            F,
+            E_1=0,
+            I_1=0,
+            R1=0,
+            CP=0,
         )
         # ADC quantization floor: gamma_RSI * delta_s^2 / (12 * fN) / delta_s^2
         # = gamma_RSI / (12 * fN)

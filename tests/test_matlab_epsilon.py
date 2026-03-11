@@ -138,9 +138,7 @@ class TestEpsilonVsMatlab:
         results, val, matched = matched_results
         ml_n = int(val["n_profiles"])
         py_n = len(results)
-        assert abs(py_n - ml_n) <= 3, (
-            f"Profile count: Python {py_n} vs MATLAB {ml_n}"
-        )
+        assert abs(py_n - ml_n) <= 3, f"Profile count: Python {py_n} vs MATLAB {ml_n}"
 
     def test_most_profiles_matched(self, matched_results):
         """Most profiles should match between Python and MATLAB."""
@@ -150,9 +148,7 @@ class TestEpsilonVsMatlab:
         n_matched = len(matched)
         min_total = min(ml_n, py_n)
         if min_total >= 3:
-            assert n_matched >= min_total * 0.7, (
-                f"Only {n_matched}/{min_total} profiles matched"
-            )
+            assert n_matched >= min_total * 0.7, f"Only {n_matched}/{min_total} profiles matched"
 
     def test_epsilon_order_of_magnitude(self, matched_results):
         """Epsilon values should agree within ~1 decade for matched profiles."""
@@ -160,7 +156,7 @@ class TestEpsilonVsMatlab:
 
         for pi, mi in matched:
             py_eps = results[pi]["epsilon"].values  # (n_probe, n_est)
-            ml_eps = val["eps_all"][mi]              # (n_est, n_probe) from MATLAB
+            ml_eps = val["eps_all"][mi]  # (n_est, n_probe) from MATLAB
 
             if ml_eps.ndim == 1:
                 ml_eps = ml_eps.reshape(-1, 1)
@@ -173,15 +169,10 @@ class TestEpsilonVsMatlab:
             for ci in range(min(py_eps.shape[0], ml_eps.shape[0])):
                 py_e = py_eps[ci, :n_est]
                 ml_e = ml_eps[ci, :n_est]
-                valid = (
-                    np.isfinite(py_e) & np.isfinite(ml_e)
-                    & (py_e > 0) & (ml_e > 0)
-                )
+                valid = np.isfinite(py_e) & np.isfinite(ml_e) & (py_e > 0) & (ml_e > 0)
                 if np.sum(valid) < 3:
                     continue
-                log_diff = np.abs(
-                    np.log10(py_e[valid]) - np.log10(ml_e[valid])
-                )
+                log_diff = np.abs(np.log10(py_e[valid]) - np.log10(ml_e[valid]))
                 median_diff = np.median(log_diff)
                 assert median_diff < 1.0, (
                     f"py_prof {pi} / ml_prof {mi}, probe {ci}: "
@@ -213,15 +204,10 @@ class TestEpsilonVsMatlab:
             for ci in range(min(py_eps.shape[0], ml_eps.shape[0])):
                 py_e = py_eps[ci, :n_est]
                 ml_e = ml_eps[ci, :n_est]
-                valid = (
-                    np.isfinite(py_e) & np.isfinite(ml_e)
-                    & (py_e > 0) & (ml_e > 0)
-                )
+                valid = np.isfinite(py_e) & np.isfinite(ml_e) & (py_e > 0) & (ml_e > 0)
                 if np.sum(valid) < 20:
                     continue
-                corr = np.corrcoef(
-                    np.log10(py_e[valid]), np.log10(ml_e[valid])
-                )[0, 1]
+                corr = np.corrcoef(np.log10(py_e[valid]), np.log10(ml_e[valid]))[0, 1]
                 all_corrs.append(corr)
                 assert corr > 0.0, (
                     f"py_prof {pi} / ml_prof {mi}, probe {ci}: "
@@ -231,9 +217,7 @@ class TestEpsilonVsMatlab:
         # Most profile-probe pairs should have decent correlation
         if len(all_corrs) >= 5:
             frac_good = np.mean([c > 0.5 for c in all_corrs])
-            assert frac_good > 0.6, (
-                f"Only {frac_good:.0%} of profiles have r > 0.5"
-            )
+            assert frac_good > 0.6, f"Only {frac_good:.0%} of profiles have r > 0.5"
 
     def test_viscosity_match(self, matched_results):
         """Kinematic viscosity should match closely (both use visc35)."""
@@ -253,8 +237,7 @@ class TestEpsilonVsMatlab:
             ml_med = np.median(ml_nu[:n_est][valid])
             rel_diff = abs(py_med - ml_med) / ml_med
             assert rel_diff < 0.05, (
-                f"py_prof {pi} / ml_prof {mi}: "
-                f"median viscosity relative diff {rel_diff:.4f} > 0.05"
+                f"py_prof {pi} / ml_prof {mi}: median viscosity relative diff {rel_diff:.4f} > 0.05"
             )
 
     def test_speed_match(self, matched_results):
@@ -268,18 +251,15 @@ class TestEpsilonVsMatlab:
             if n_est < 20:
                 continue
             valid = (
-                np.isfinite(py_speed[:n_est]) & np.isfinite(ml_speed[:n_est])
-                & (py_speed[:n_est] > 0.1) & (ml_speed[:n_est] > 0.1)
+                np.isfinite(py_speed[:n_est])
+                & np.isfinite(ml_speed[:n_est])
+                & (py_speed[:n_est] > 0.1)
+                & (ml_speed[:n_est] > 0.1)
             )
             if np.sum(valid) < 20:
                 continue
-            corr = np.corrcoef(
-                py_speed[:n_est][valid], ml_speed[:n_est][valid]
-            )[0, 1]
-            assert corr > 0.75, (
-                f"py_prof {pi} / ml_prof {mi}: "
-                f"speed correlation {corr:.3f} < 0.75"
-            )
+            corr = np.corrcoef(py_speed[:n_est][valid], ml_speed[:n_est][valid])[0, 1]
+            assert corr > 0.75, f"py_prof {pi} / ml_prof {mi}: speed correlation {corr:.3f} < 0.75"
 
     def test_wavenumber_vectors(self, matched_results):
         """K = F/W wavenumber vectors should match between Python and MATLAB."""
@@ -308,10 +288,7 @@ class TestEpsilonVsMatlab:
                     py_k[valid],
                     ml_k[valid],
                     rtol=0.05,
-                    err_msg=(
-                        f"py_prof {pi} / ml_prof {mi}, est {j}: "
-                        f"K vectors differ by > 5%"
-                    ),
+                    err_msg=(f"py_prof {pi} / ml_prof {mi}, est {j}: K vectors differ by > 5%"),
                 )
 
     def test_frequency_vectors(self, matched_results):
@@ -371,10 +348,7 @@ class TestEpsilonVsMatlab:
                 for j in range(n_est):
                     py_s = py_spec[ci, 1:n_freq, j]  # skip DC
                     ml_s = ml_spec_full[j, ci, ci, 1:n_freq]  # diagonal auto-spectrum
-                    valid = (
-                        np.isfinite(py_s) & np.isfinite(ml_s)
-                        & (py_s > 0) & (ml_s > 0)
-                    )
+                    valid = np.isfinite(py_s) & np.isfinite(ml_s) & (py_s > 0) & (ml_s > 0)
                     if np.sum(valid) < 5:
                         continue
                     log_diff = np.abs(np.log10(py_s[valid]) - np.log10(ml_s[valid]))
