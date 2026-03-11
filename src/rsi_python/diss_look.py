@@ -184,10 +184,13 @@ def _compute_windowed_diss(
                         eps_window.append(e4)
 
         # --- Chi from thermistors (both Batchelor and Kraichnan) ---
+        # Use per-probe epsilon, matching MATLAB get_chi which uses
+        # epsilon(p, j) — sh1 epsilon for T1, sh2 epsilon for T2.
         if n_therm > 0 and eps_window:
-            eps_mean = np.nanmean(eps_window)
-
             for ci in range(n_therm):
+                eps_ci = eps_arr[ci, idx] if ci < n_shear else np.nanmean(eps_window)
+                if not (np.isfinite(eps_ci) and eps_ci > 0):
+                    continue
                 seg = therm_data[ci][1][w_sel]
                 if len(seg) < 2 * fft_length:
                     continue
@@ -204,7 +207,7 @@ def _compute_windowed_diss(
                 chi_b, _, _, _, _, _ = _chi_from_epsilon(
                     spec_obs,
                     K_t,
-                    eps_mean,
+                    eps_ci,
                     nu,
                     mean_T,
                     W,
@@ -221,7 +224,7 @@ def _compute_windowed_diss(
                 chi_k, _, _, _, _, _ = _chi_from_epsilon(
                     spec_obs,
                     K_t,
-                    eps_mean,
+                    eps_ci,
                     nu,
                     mean_T,
                     W,
@@ -406,9 +409,6 @@ def _compute_depth_spectra(
             result["K"] = K_s if n_shear > 0 else K
 
     # Chi spectra — single diss_length window, matching MATLAB approach
-    eps_valid = [e for e in epsilons if np.isfinite(e) and e > 0]
-    eps_mean = np.nanmean(eps_valid) if eps_valid else np.nan
-
     K_chi = F / W
     if n_therm > 0:
         noise_K, _ = gradT_noise(F, mean_T, W, fs=fs_fast, diff_gain=diff_gains[0])
@@ -442,12 +442,15 @@ def _compute_depth_spectra(
             dg = diff_gains[ci] if ci < len(diff_gains) else 0.94
 
             # Method 1: chi from epsilon (kB fixed by shear-derived epsilon)
+            # Use per-probe epsilon, matching MATLAB get_chi which uses
+            # epsilon(p, j) — sh1 epsilon for T1, sh2 epsilon for T2.
             f_AA_chi = 0.9 * f_AA  # 10% margin, matching MATLAB get_chi
-            if np.isfinite(eps_mean) and eps_mean > 0:
+            eps_ci = epsilons[ci] if ci < len(epsilons) else np.nan
+            if np.isfinite(eps_ci) and eps_ci > 0:
                 chi_m1, _, _, m1_spec_raw, _, _ = _chi_from_epsilon(
                     spec_obs,
                     K_chi,
-                    eps_mean,
+                    eps_ci,
                     nu,
                     mean_T,
                     W,
