@@ -849,6 +849,17 @@ def _compute_profile_chi(
     """
     N = len(P)
     n_therm = len(therm_arrays)
+
+    # Convert temperature to spatial gradient (first-difference method).
+    # Matches MATLAB make_gradT_odas: gradT = fs * diff(T) / speed.
+    # therm_arrays contains temperature from convert_therm on pre-emphasized
+    # channels; the first-difference approximates dT/dt, dividing by speed
+    # gives dT/dz in K/m.
+    spd_safe = np.maximum(np.abs(speed), 0.01)
+    for ci in range(n_therm):
+        dTdt = np.diff(therm_arrays[ci]) * fs_fast  # dT/dt [K/s]
+        dTdt = np.append(dTdt, dTdt[-1])  # pad to original length
+        therm_arrays[ci] = dTdt / spd_safe  # dT/dz [K/m]
     n_freq = fft_length // 2 + 1
 
     if overlap >= diss_length:
