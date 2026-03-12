@@ -117,27 +117,6 @@ the Prandtl number $Pr = \nu/\kappa_T$ and the turbulence intensity
 
 ## References
 
-- Osborn, T. R. (1980). Estimates of the local rate of vertical
-  diffusion from dissipation measurements. *J. Phys. Oceanogr.*,
-  10(1), 83--89.
-  [doi:10.1175/1520-0485(1980)010<0083:EOTLRO>2.0.CO;2](https://doi.org/10.1175/1520-0485(1980)010%3C0083:EOTLRO%3E2.0.CO;2)
-
-- Osborn, T. R., & Cox, C. S. (1972). Oceanic fine structure.
-  *Geophys. Fluid Dyn.*, 3(1), 321--345.
-  [doi:10.1080/03091927208236085](https://doi.org/10.1080/03091927208236085)
-
-- Gregg, M. C., D'Asaro, E. A., Riley, J. J., & Kunze, E. (2018).
-  Mixing efficiency in the ocean. *Annu. Rev. Mar. Sci.*, 10,
-  443--473.
-  [doi:10.1146/annurev-marine-121916-063643](https://doi.org/10.1146/annurev-marine-121916-063643)
-
-- Lueck, R. G. (2022). The statistics of oceanic turbulence
-  measurements. Part 1: Shear variance and dissipation rates.
-  *J. Atmos. Ocean. Technol.*, 39(10), 1489--1506.
-  [doi:10.1175/JTECH-D-21-0051.1](https://doi.org/10.1175/JTECH-D-21-0051.1)
-
-- Mater, B. D., & Venayagamoorthy, S. K. (2014). The quest for an
-  unambiguous parameterization of mixing efficiency in stably
-  stratified geophysical flows. *Geophys. Res. Lett.*, 41(13),
-  4646--4653.
-  [doi:10.1002/2014GL060571](https://doi.org/10.1002/2014GL060571)
+Key references: Osborn (1980), Osborn & Cox (1972), Gregg et al. (2018),
+Mater & Venayagamoorthy (2014).
+See [Bibliography](bibliography.md) for full citations.
