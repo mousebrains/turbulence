@@ -136,6 +136,37 @@ class TestExtractProfiles:
         assert ds.profile_duration_s > 0
         ds.close()
 
+    def test_extract_profiles_from_nc(self, tmp_path):
+        """Exercise _load_from_nc by extracting profiles from a .nc file."""
+        from rsi_python.convert import p_to_netcdf
+        from rsi_python.profile import extract_profiles
+
+        # Convert .p to .nc first
+        nc_dir = tmp_path / "nc"
+        nc_dir.mkdir()
+        _pf, nc_path = p_to_netcdf(P_FILES[0], nc_dir / "full.nc")
+
+        # Extract profiles from the .nc file
+        prof_dir = tmp_path / "profiles"
+        paths_nc = extract_profiles(nc_path, prof_dir)
+
+        # Compare with direct .p extraction
+        prof_dir_p = tmp_path / "profiles_p"
+        paths_p = extract_profiles(P_FILES[0], prof_dir_p)
+
+        assert len(paths_nc) == len(paths_p)
+        assert len(paths_nc) > 0
+
+    def test_extract_one_worker(self, tmp_path):
+        """Exercise _extract_one parallel worker wrapper."""
+        from rsi_python.profile import _extract_one
+
+        source_str, count = _extract_one((P_FILES[0], tmp_path, {}))
+        assert source_str == str(P_FILES[0])
+        assert count > 0
+        nc_files = list(tmp_path.glob("*.nc"))
+        assert len(nc_files) == count
+
 
 # ---------------------------------------------------------------------------
 # fp07.py — FP07NoiseConfig override path and beta_2 correction
