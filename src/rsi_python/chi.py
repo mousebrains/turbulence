@@ -38,8 +38,12 @@ from rsi_python.batchelor import (
     batchelor_kB,
     kraichnan_grad,
 )
-from rsi_python.fp07 import fp07_double_pole, fp07_tau, fp07_transfer, gradT_noise
-from rsi_python.spectral import csd_odas
+from rsi_python.fp07 import (
+    fp07_double_pole,
+    fp07_tau,
+    fp07_transfer,
+    gradT_noise_batch,
+)
 
 # ---------------------------------------------------------------------------
 # Spectrum model dispatcher
@@ -116,14 +120,13 @@ def _chi_from_epsilon(
     K: np.ndarray,
     epsilon: float,
     nu: float,
-    T_mean: float,
-    speed: float,
+    noise_K: np.ndarray,
+    H2: np.ndarray,
+    tau0: float,
+    _h2,
     f_AA: float,
-    fp07_model: str,
+    speed: float,
     spectrum_model: str,
-    fs: float,
-    diff_gain: float,
-    fft_length: int,
 ) -> tuple:
     """Compute chi for one probe in one window, given epsilon (Method 1).
 
@@ -137,22 +140,20 @@ def _chi_from_epsilon(
         TKE dissipation rate [W/kg] from shear probes.
     nu : float
         Kinematic viscosity [m²/s].
-    T_mean : float
-        Mean temperature [°C] for noise model.
-    speed : float
-        Profiling speed [m/s].
+    noise_K : ndarray
+        Pre-computed noise spectrum [(K/m)²/cpm].
+    H2 : ndarray
+        Pre-computed FP07 transfer function |H(f)|².
+    tau0 : float
+        Pre-computed FP07 time constant [s].
+    _h2 : callable
+        FP07 transfer function (fp07_transfer or fp07_double_pole).
     f_AA : float
         Anti-aliasing cutoff [Hz].
-    fp07_model : str
-        FP07 transfer function model ('single_pole' or 'double_pole').
+    speed : float
+        Profiling speed [m/s].
     spectrum_model : str
         Theoretical spectrum model ('batchelor' or 'kraichnan').
-    fs : float
-        Sampling rate [Hz].
-    diff_gain : float
-        Differentiator gain [s].
-    fft_length : int
-        FFT segment length [samples].
 
     Returns
     -------
@@ -176,20 +177,9 @@ def _chi_from_epsilon(
         warnings.warn(f"kB={kB:.1f} < 1 cpm; epsilon too low for chi estimation", stacklevel=2)
         return np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan
 
-    # FP07 transfer function
-    tau0 = fp07_tau(speed, model=_default_tau_model(fp07_model))
-    F = K * speed
-    # FP07 transfer function selector
-    _h2 = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
-    H2 = _h2(F, tau0)
-
-    # Noise spectrum
-    noise_f = gradT_noise(F, T_mean, speed, fs=fs, diff_gain=diff_gain)[0]
-    # Noise is already in cpm units from gradT_noise wrapper
-
     # Find integration limit: where observed meets noise
     K_AA = f_AA / speed
-    valid = _valid_wavenumber_mask(spec_obs, noise_f, K, K_AA, min_points=3)
+    valid = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=3)
     if np.sum(valid) < 3:
         warnings.warn("Too few valid wavenumber points for chi integration", stacklevel=2)
         return np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan
@@ -234,7 +224,7 @@ def _chi_from_epsilon(
 
     # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise)
     if np.sum(valid) >= 3 and np.isfinite(chi):
-        mod_v = np.trapezoid(spec_batch[valid] * H2[valid] + noise_f[valid], K[valid])
+        mod_v = np.trapezoid(spec_batch[valid] * H2[valid] + noise_K[valid], K[valid])
         fom = obs_var / mod_v if mod_v > 0 else np.nan
     else:
         fom = np.nan
@@ -254,14 +244,13 @@ def _mle_fit_kB(
     K: np.ndarray,
     chi_obs: float,
     nu: float,
-    T_mean: float,
-    speed: float,
+    noise_K: np.ndarray,
+    H2: np.ndarray,
+    tau0: float,
+    _h2,
     f_AA: float,
-    fp07_model: str,
+    speed: float,
     spectrum_model: str,
-    fs: float,
-    diff_gain: float,
-    fft_length: int,
 ) -> tuple[float, float, float, float, np.ndarray, float, float]:
     """Maximum-likelihood fit for Batchelor wavenumber kB (Ruddick et al. 2000).
 
@@ -278,7 +267,7 @@ def _mle_fit_kB(
         Initial chi estimate [K²/s] from integration.
     nu : float
         Kinematic viscosity [m²/s].
-    T_mean, speed, f_AA, fp07_model, spectrum_model, fs, diff_gain, fft_length
+    noise_K, H2, tau0, _h2, f_AA, speed, spectrum_model
         Same as :func:`_chi_from_epsilon`.
 
     Returns
@@ -299,15 +288,6 @@ def _mle_fit_kB(
         K_max / kB ratio.
     """
     grad_func, _q = _spectrum_func(spectrum_model)
-
-    # FP07 transfer function — respect fp07_model parameter
-    _h2 = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
-    tau0 = fp07_tau(speed, model=_default_tau_model(fp07_model))
-    F = K * speed
-    H2 = _h2(F, tau0)
-
-    # Noise spectrum
-    noise_K, _ = gradT_noise(F, T_mean, speed, fs=fs, diff_gain=diff_gain)
 
     # Fitting range
     K_AA = f_AA / speed
@@ -389,14 +369,13 @@ def _iterative_fit(
     spec_obs: np.ndarray,
     K: np.ndarray,
     nu: float,
-    T_mean: float,
-    speed: float,
+    noise_K: np.ndarray,
+    H2: np.ndarray,
+    tau0: float,
+    _h2,
     f_AA: float,
-    fp07_model: str,
+    speed: float,
     spectrum_model: str,
-    fs: float,
-    diff_gain: float,
-    fft_length: int,
 ) -> tuple[float, float, float, float, np.ndarray, float, float]:
     """Iterative MLE fitting (Peterson & Fer 2014, Method 2).
 
@@ -411,7 +390,7 @@ def _iterative_fit(
         Wavenumber vector [cpm].
     nu : float
         Kinematic viscosity [m²/s].
-    T_mean, speed, f_AA, fp07_model, spectrum_model, fs, diff_gain, fft_length
+    noise_K, H2, tau0, _h2, f_AA, speed, spectrum_model
         Same as :func:`_chi_from_epsilon`.
 
     Returns
@@ -420,15 +399,6 @@ def _iterative_fit(
         Same as :func:`_mle_fit_kB`.
     """
     grad_func, _q = _spectrum_func(spectrum_model)
-
-    # FP07 transfer function
-    tau0 = fp07_tau(speed, model=_default_tau_model(fp07_model))
-    F = K * speed
-    _h2 = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
-    H2 = _h2(F, tau0)
-
-    # Noise spectrum
-    noise_K, _ = gradT_noise(F, T_mean, speed, fs=fs, diff_gain=diff_gain)
 
     # Initial integration limits
     K_AA = f_AA / speed
@@ -466,14 +436,13 @@ def _iterative_fit(
             K,
             chi_obs,
             nu,
-            T_mean,
-            speed,
+            noise_K,
+            H2,
+            tau0,
+            _h2,
             f_AA,
-            fp07_model,
+            speed,
             spectrum_model,
-            fs,
-            diff_gain,
-            fft_length,
         )
 
         if not np.isfinite(kB_best) or kB_best < 1:
@@ -916,9 +885,10 @@ def _compute_profile_chi(
     num_ffts = 2 * (diss_length // fft_length) - 1
     dof_spec = 1.9 * num_ffts
 
-    # Hoisted imports (avoid per-window import overhead)
-    from rsi_python.dissipation import _compute_nu
-    from rsi_python.goodman import clean_shear_spec
+    # Hoisted imports
+    from rsi_python.goodman import clean_shear_spec_batch
+    from rsi_python.ocean import visc, visc35
+    from rsi_python.spectral import csd_matrix_batch
 
     # Pre-compute constant frequency vector
     F_const = np.arange(n_freq) * fs_fast / fft_length
@@ -934,194 +904,183 @@ def _compute_profile_chi(
     # Pre-compute bilinear corrections per probe (constant across windows)
     bl_corrections = [_bilinear_correction(F_const, dg, fs_fast) for dg in diff_gains]
 
-    # Get epsilon values if provided (Method 1)
-    eps_interp = None
-    if epsilon_ds is not None:
-        # Interpolate epsilon to our time grid
-        eps_times = epsilon_ds.coords["t"].values if "t" in epsilon_ds.coords else None
-        if eps_times is not None:
-            # xarray decodes CF time attrs to datetime64; convert back to float
-            # seconds so we can subtract float mean_t values later.
-            if np.issubdtype(eps_times.dtype, np.datetime64):
-                eps_times = (eps_times - eps_times[0]).astype("timedelta64[ns]").astype(
-                    np.float64
-                ) / 1e9 + t_fast[0]
-            # Average across probes for Method 1
-            eps_vals = np.nanmean(epsilon_ds["epsilon"].values, axis=0)
-            eps_interp = (eps_times, eps_vals)
+    # ---- Vectorized window extraction ----
+    win_starts = np.arange(n_est) * step
+    n_valid = int(np.sum(win_starts + diss_length <= N))
 
-    for idx in range(n_est):
-        s = idx * step
-        e = s + diss_length
-        if e > N:
-            break
+    if n_valid > 0:
+        indices = win_starts[:n_valid, np.newaxis] + np.arange(diss_length)[np.newaxis, :]
 
-        sel = slice(s, e)
-        W = np.mean(np.abs(speed[sel]))
-        if W < 0.01:
-            warnings.warn(
-                f"Speed {W:.4f} m/s below minimum; clamped to 0.01 m/s",
-                stacklevel=2,
-            )
-            W = 0.01  # minimum speed to avoid wavenumber singularity
-        mean_T = np.mean(T[sel])
-        mean_P = np.mean(P[sel])
-        mean_t = np.mean(t_fast[sel])
-        nu = _compute_nu(mean_T, mean_P, salinity, sel)
-
-        K = F_const / W
-        F = F_const
-
-        K_out[:, idx] = K
-        F_out[:, idx] = F
-        nu_out[idx] = nu
-        speed_out[idx] = W
-        P_out[idx] = mean_P
-        T_out[idx] = mean_T
-        t_out[idx] = mean_t
-
-        # Scalar Goodman cleaning: remove accelerometer-coherent noise
+        # ---- Batch Goodman cleaning ----
+        therm_windows = np.stack([arr[indices] for arr in therm_arrays], axis=-1)
         do_goodman = accel_arrays is not None and len(accel_arrays) > 0
-        clean_spectra = {}
+
         if do_goodman:
-            accel_seg = np.column_stack([a[sel] for a in accel_arrays])
-            therm_seg = np.column_stack([therm_arrays[ci][sel] for ci in range(n_therm)])
-            clean_TT, _, _, _, _ = clean_shear_spec(accel_seg, therm_seg, fft_length, fs_fast)
-            for ci in range(n_therm):
-                clean_spectra[ci] = np.real(clean_TT[:, ci, ci])
+            accel_windows = np.stack([a[indices] for a in accel_arrays], axis=-1)
+            clean_TT_all, _ = clean_shear_spec_batch(
+                accel_windows, therm_windows, fft_length, fs_fast,
+            )
+            del accel_windows
+            clean_spectra_all = np.real(np.diagonal(clean_TT_all, axis1=2, axis2=3))
+            del clean_TT_all
+        else:
+            TT_all, _, _, _ = csd_matrix_batch(
+                therm_windows, None, fft_length, fs_fast,
+                overlap=fft_length // 2, detrend="linear",
+            )
+            clean_spectra_all = np.real(np.diagonal(TT_all, axis1=2, axis2=3))
+            del TT_all
+        del therm_windows
 
-        # Get epsilon for Method 1
-        epsilon_val = None
-        if eps_interp is not None:
-            eps_times, eps_vals = eps_interp
-            # Find nearest epsilon estimate
-            idx_eps = np.argmin(np.abs(eps_times - mean_t))
-            epsilon_val = eps_vals[idx_eps]
-            if not np.isfinite(epsilon_val) or epsilon_val <= 0:
-                epsilon_val = None
+        # ---- Vectorized window means ----
+        speed_means = np.maximum(np.mean(np.abs(speed[indices]), axis=1), 0.01)
+        T_means = np.mean(T[indices], axis=1)
+        P_means = np.mean(P[indices], axis=1)
+        t_means = np.mean(t_fast[indices], axis=1)
 
-        # NOTE: gradient method is 'first_difference' (Python default).
-        # ODAS uses 'high_pass' for VMP data, which applies a scale factor
-        # involving beta_2/beta_3 from Steinhart-Hart. This is a known
-        # difference; see TODO for high_pass gradient implementation.
+        # Vectorized viscosity
+        if salinity is not None:
+            if np.ndim(salinity) > 0:
+                sal_means = np.mean(salinity[indices], axis=1)
+            else:
+                sal_means = np.full(n_valid, float(salinity))
+            nu_all = np.array(
+                [float(visc(T_means[i], sal_means[i], P_means[i])) for i in range(n_valid)]
+            )
+        else:
+            nu_all = np.array([float(visc35(T_means[i])) for i in range(n_valid)])
 
+        # Store into output arrays
+        speed_out[:n_valid] = speed_means
+        T_out[:n_valid] = T_means
+        P_out[:n_valid] = P_means
+        t_out[:n_valid] = t_means
+        nu_out[:n_valid] = nu_all
+
+        # ---- Vectorized wavenumber ----
+        K_all = F_const[:, np.newaxis] / speed_means[np.newaxis, :]  # (n_freq, n_valid)
+        K_out[:, :n_valid] = K_all
+        F_out[:, :n_valid] = F_const[:, np.newaxis]
+
+        # ---- Vectorized spectrum correction ----
+        spec_obs_all = np.empty((n_therm, n_valid, n_freq))
         for ci in range(n_therm):
-            # Per-probe noise spectrum
+            spec_obs_all[ci] = (
+                clean_spectra_all[:, :, ci]
+                * speed_means[:, np.newaxis]
+                * fd_correction[np.newaxis, :]
+                * bl_corrections[ci][np.newaxis, :]
+            )
+        del clean_spectra_all
+
+        # Store observed spectra
+        spec_gradT[:, :, :n_valid] = spec_obs_all.transpose(0, 2, 1)
+
+        # ---- Batch noise computation ----
+        noise_K_all = np.empty((n_therm, n_valid, n_freq))
+        for ci in range(n_therm):
             cal_ci = (therm_cal[ci] if therm_cal else {}) if therm_cal else {}
             noise_kwargs = {
                 k: v
                 for k, v in cal_ci.items()
-                if k
-                in (
-                    "e_b",
-                    "gain",
-                    "beta_1",
-                    "adc_fs",
-                    "adc_bits",
-                )
+                if k in ("e_b", "gain", "beta_1", "adc_fs", "adc_bits")
             }
-            noise_K, _ = gradT_noise(
-                F, mean_T, W, fs=fs_fast, diff_gain=diff_gains[ci], **noise_kwargs
+            noise_K_all[ci] = gradT_noise_batch(
+                F_const, T_means, speed_means,
+                fs=fs_fast, diff_gain=diff_gains[ci], **noise_kwargs,
             )
-            spec_noise_out[ci, :, idx] = noise_K
+        spec_noise_out[:, :, :n_valid] = noise_K_all.transpose(0, 2, 1)
 
-            if do_goodman and ci in clean_spectra:
-                # Use Goodman-cleaned spectrum
-                Pxx = clean_spectra[ci]
-            else:
-                # Compute auto-spectrum of gradient signal
-                seg = therm_arrays[ci][sel]
-                Pxx = csd_odas(
-                    seg,
-                    None,
-                    fft_length,
-                    fs_fast,
-                    overlap=fft_length // 2,
-                    detrend="linear",
-                )[0]
+        # ---- Vectorized H2 (FP07 transfer) ----
+        tau_model = _default_tau_model(fp07_model)
+        _h2 = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
+        tau0_all = np.array([fp07_tau(W, model=tau_model) for W in speed_means])
+        H2_all = np.array([_h2(F_const, tau0_all[i]) for i in range(n_valid)])
 
-            # Convert to wavenumber spectrum with pre-computed corrections
-            spec_obs = Pxx * W * fd_correction * bl_corrections[ci]
+        # ---- Epsilon interpolation setup ----
+        eps_interp = None
+        if epsilon_ds is not None:
+            eps_times = epsilon_ds.coords["t"].values if "t" in epsilon_ds.coords else None
+            if eps_times is not None:
+                if np.issubdtype(eps_times.dtype, np.datetime64):
+                    eps_times = (eps_times - eps_times[0]).astype("timedelta64[ns]").astype(
+                        np.float64
+                    ) / 1e9 + t_fast[0]
+                eps_vals = np.nanmean(epsilon_ds["epsilon"].values, axis=0)
+                eps_interp = (eps_times, eps_vals)
 
-            spec_gradT[ci, :, idx] = spec_obs
+        # ---- Per-window fitting loop ----
+        for idx in range(n_valid):
+            K = K_all[:, idx]
+            W = speed_means[idx]
+            nu = nu_all[idx]
+            tau0 = tau0_all[idx]
+            H2 = H2_all[idx]
 
-            if epsilon_val is not None:
-                # Method 1: chi from known epsilon
-                chi_val, kB_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = (
-                    _chi_from_epsilon(
-                        spec_obs,
-                        K,
-                        epsilon_val,
-                        nu,
-                        mean_T,
-                        W,
-                        f_AA,
-                        fp07_model,
-                        spectrum_model,
-                        fs_fast,
-                        diff_gains[ci],
-                        fft_length,
-                    )
-                )
-                chi_out[ci, idx] = chi_val
-                eps_out[ci, idx] = epsilon_val
-                kB_out[ci, idx] = kB_val
-                K_max_out[ci, idx] = K_max_val
-                fom_out[ci, idx] = fom_val
-                K_max_ratio_out[ci, idx] = K_max_ratio_val
-                spec_batch[ci, :, idx] = batch_spec
-            else:
-                # Method 2: fit kB
-                # Initial chi estimate from observed spectrum (per-probe noise)
-                obs_above_noise = np.maximum(spec_obs - noise_K, 0)
-                mask = (K > 0) & (f_AA / W >= K)
-                if np.sum(mask) < 3:
-                    continue
-                chi_obs = 6 * KAPPA_T * np.trapezoid(obs_above_noise[mask], K[mask])
-                if chi_obs <= 0:
-                    chi_obs = 1e-14
+            # Epsilon for Method 1
+            epsilon_val = None
+            if eps_interp is not None:
+                eps_times_arr, eps_vals_arr = eps_interp
+                idx_eps = np.argmin(np.abs(eps_times_arr - t_means[idx]))
+                epsilon_val = eps_vals_arr[idx_eps]
+                if not np.isfinite(epsilon_val) or epsilon_val <= 0:
+                    epsilon_val = None
 
-                if fit_method == "iterative":
-                    kB_val, chi_val, eps_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = (
-                        _iterative_fit(
-                            spec_obs,
-                            K,
-                            nu,
-                            mean_T,
-                            W,
-                            f_AA,
-                            fp07_model,
-                            spectrum_model,
-                            fs_fast,
-                            diff_gains[ci],
-                            fft_length,
+            for ci in range(n_therm):
+                spec_obs = spec_obs_all[ci, idx]
+                noise_K = noise_K_all[ci, idx]
+
+                if epsilon_val is not None:
+                    # Method 1: chi from known epsilon
+                    chi_val, kB_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = (
+                        _chi_from_epsilon(
+                            spec_obs, K, epsilon_val, nu,
+                            noise_K, H2, tau0, _h2, f_AA, W, spectrum_model,
                         )
                     )
+                    chi_out[ci, idx] = chi_val
+                    eps_out[ci, idx] = epsilon_val
+                    kB_out[ci, idx] = kB_val
+                    K_max_out[ci, idx] = K_max_val
+                    fom_out[ci, idx] = fom_val
+                    K_max_ratio_out[ci, idx] = K_max_ratio_val
+                    spec_batch[ci, :, idx] = batch_spec
                 else:
-                    kB_val, chi_val, eps_val, K_max_val, batch_spec, fom_val, K_max_ratio_val = (
-                        _mle_fit_kB(
-                            spec_obs,
-                            K,
-                            chi_obs,
-                            nu,
-                            mean_T,
-                            W,
-                            f_AA,
-                            fp07_model,
-                            spectrum_model,
-                            fs_fast,
-                            diff_gains[ci],
-                            fft_length,
-                        )
-                    )
+                    # Method 2: fit kB
+                    obs_above_noise = np.maximum(spec_obs - noise_K, 0)
+                    mask = (K > 0) & (f_AA / W >= K)
+                    if np.sum(mask) < 3:
+                        continue
+                    chi_obs = 6 * KAPPA_T * np.trapezoid(obs_above_noise[mask], K[mask])
+                    if chi_obs <= 0:
+                        chi_obs = 1e-14
 
-                chi_out[ci, idx] = chi_val
-                eps_out[ci, idx] = eps_val
-                kB_out[ci, idx] = kB_val
-                K_max_out[ci, idx] = K_max_val
-                fom_out[ci, idx] = fom_val
-                K_max_ratio_out[ci, idx] = K_max_ratio_val
-                spec_batch[ci, :, idx] = batch_spec
+                    if fit_method == "iterative":
+                        (kB_val, chi_val, eps_val, K_max_val,
+                         batch_spec, fom_val, K_max_ratio_val) = (
+                            _iterative_fit(
+                                spec_obs, K, nu,
+                                noise_K, H2, tau0, _h2,
+                                f_AA, W, spectrum_model,
+                            )
+                        )
+                    else:
+                        (kB_val, chi_val, eps_val, K_max_val,
+                         batch_spec, fom_val, K_max_ratio_val) = (
+                            _mle_fit_kB(
+                                spec_obs, K, chi_obs, nu,
+                                noise_K, H2, tau0, _h2,
+                                f_AA, W, spectrum_model,
+                            )
+                        )
+
+                    chi_out[ci, idx] = chi_val
+                    eps_out[ci, idx] = eps_val
+                    kB_out[ci, idx] = kB_val
+                    K_max_out[ci, idx] = K_max_val
+                    fom_out[ci, idx] = fom_val
+                    K_max_ratio_out[ci, idx] = K_max_ratio_val
+                    spec_batch[ci, :, idx] = batch_spec
 
     return _build_chi_dataset(
         chi_out=chi_out,

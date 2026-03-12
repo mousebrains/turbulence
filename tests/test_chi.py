@@ -298,7 +298,7 @@ class TestChiFromEpsilon:
         """Method 1: recover chi from a synthetic Batchelor spectrum with FP07 rolloff."""
         from rsi_python.batchelor import batchelor_grad, batchelor_kB
         from rsi_python.chi import _chi_from_epsilon
-        from rsi_python.fp07 import fp07_tau, fp07_transfer
+        from rsi_python.fp07 import fp07_tau, fp07_transfer, gradT_noise
 
         chi_true = 1e-7
         eps_true = 1e-7
@@ -319,19 +319,21 @@ class TestChiFromEpsilon:
         spec_obs = spec_true * H2
         spec_obs = np.maximum(spec_obs, 1e-20)
 
+        # Pre-compute noise for new signature
+        noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
+
         chi_est, _kB_est, _K_max, _, _fom, _K_max_ratio = _chi_from_epsilon(
             spec_obs,
             K,
             eps_true,
             nu,
-            10.0,
-            speed,
+            noise_K,
+            H2,
+            tau0,
+            fp07_transfer,
             98.0,
-            "single_pole",
+            speed,
             "batchelor",
-            fs,
-            0.94,
-            fft_length,
         )
 
         assert np.isfinite(chi_est)
@@ -345,6 +347,7 @@ class TestMLEFit:
         """Method 2 MLE: fit kB from synthetic Batchelor spectrum."""
         from rsi_python.batchelor import batchelor_grad, batchelor_kB
         from rsi_python.chi import _mle_fit_kB
+        from rsi_python.fp07 import fp07_tau, fp07_transfer, gradT_noise
 
         chi_true = 1e-7
         eps_true = 1e-7
@@ -361,19 +364,23 @@ class TestMLEFit:
         spec_obs = batchelor_grad(K, kB_true, chi_true)
         spec_obs = np.maximum(spec_obs, 1e-20)
 
+        # Pre-compute noise/H2 for new signature
+        tau0 = fp07_tau(speed)
+        H2 = fp07_transfer(F, tau0)
+        noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
+
         kB_fit, _chi_fit, _eps_fit, _K_max, _, _fom, _K_max_ratio = _mle_fit_kB(
             spec_obs,
             K,
             chi_true,
             nu,
-            10.0,
-            speed,
+            noise_K,
+            H2,
+            tau0,
+            fp07_transfer,
             98.0,
-            "single_pole",
+            speed,
             "batchelor",
-            fs,
-            0.94,
-            fft_length,
         )
 
         assert np.isfinite(kB_fit)

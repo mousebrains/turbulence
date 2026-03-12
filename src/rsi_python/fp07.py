@@ -342,3 +342,151 @@ def gradT_noise(
     K = F_arr / speed
     noise_K = noise_f * speed  # convert from per-Hz to per-cpm
     return noise_K, K
+
+
+def noise_thermchannel_batch(
+    F: npt.ArrayLike,
+    T_means: npt.ArrayLike,
+    fs: float = 512,
+    diff_gain: float = 0.94,
+    R_0: float = 3000,
+    gain: float = 6,
+    f_AA: float = 110,
+    adc_fs: float = 4.096,
+    adc_bits: int = 16,
+    E_n: float = 4e-9,
+    fc: float = 18.7,
+    E_n2: float = 8e-9,
+    fc_2: float = 42,
+    gamma_RSI: float = 3,
+    T_K: float = 295,
+    K_B: float = 1.382e-23,
+    e_b: float = 0.68,
+    b: float = 1.0,
+    beta_1: float = 3000.0,
+    T_0: float = 289.3,
+    beta_2: float | None = None,
+    config: FP07NoiseConfig | None = None,
+) -> np.ndarray:
+    """Vectorized electronics noise for multiple T_mean values.
+
+    Same physics as :func:`noise_thermchannel` but computes F-dependent
+    intermediates once and broadcasts T_means through T-dependent terms
+    (Johnson noise and scale factor).
+
+    Parameters
+    ----------
+    F : array_like
+        Frequency vector [Hz], shape ``(n_freq,)``.
+    T_means : array_like
+        Mean temperatures [deg C], shape ``(n_est,)``.
+    Other parameters same as :func:`noise_thermchannel`.
+
+    Returns
+    -------
+    gradT_noise : ndarray
+        Shape ``(n_est, n_freq)``.
+    """
+    if config is not None:
+        R_0 = config.R_0
+        gain = config.gain
+        f_AA = config.f_AA
+        adc_fs = config.adc_fs
+        adc_bits = config.adc_bits
+        E_n = config.E_n
+        fc = config.fc
+        E_n2 = config.E_n2
+        fc_2 = config.fc_2
+        gamma_RSI = config.gamma_RSI
+        T_K = config.T_K
+        K_B = config.K_B
+        e_b = config.e_b
+        b = config.b
+        beta_1 = config.beta_1
+        T_0 = config.T_0
+        beta_2 = config.beta_2
+
+    F = np.asarray(F, dtype=np.float64)
+    T_means = np.asarray(T_means, dtype=np.float64)
+
+    delta_s = adc_fs / 2**adc_bits
+    fN = fs / 2
+
+    # --- F-dependent intermediates (computed once) ---
+    with np.errstate(divide="ignore", invalid="ignore"):
+        V1 = 2 * E_n**2 * np.sqrt(1 + (F / fc) ** 2) / (F / fc)
+    V1 = np.where(
+        np.isfinite(V1),
+        V1,
+        V1[np.isfinite(V1)].max() if np.any(np.isfinite(V1)) else 0,
+    )
+
+    G_2 = 1 + (2 * np.pi * diff_gain * F) ** 2
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        V2 = 2 * E_n2**2 * np.sqrt(1 + (F / fc_2) ** 2) / (F / fc_2)
+    V2 = np.where(
+        np.isfinite(V2),
+        V2,
+        V2[np.isfinite(V2)].max() if np.any(np.isfinite(V2)) else 0,
+    )
+
+    G_AA = 1.0 / (1 + (F / f_AA) ** 8) ** 2
+    adc_floor = gamma_RSI * delta_s**2 / (12 * fN)
+
+    w = 2 * np.pi * diff_gain * F
+    G_HP = (1 / diff_gain) ** 2 * w**2 / (1 + w**2)
+
+    # Factor the noise chain into F-only and T-only parts:
+    #   Noise_4 = base_f + johnson_gain_f * phi_R
+    # where phi_R depends only on T_mean.
+    base_f = G_AA * G_2 * (gain**2 * V1 + V2) + adc_floor  # (n_freq,)
+    johnson_gain_f = G_AA * G_2 * gain**2  # (n_freq,)
+    counts_factor = G_HP / delta_s**2  # (n_freq,)
+
+    # --- T-dependent terms ---
+    T_kelvin = T_means + 273.15  # (n_est,)
+    R_ratio = np.exp(beta_1 * (1.0 / T_kelvin - 1.0 / T_0))  # (n_est,)
+    R_ratio = np.where(R_ratio < 0.1, 1.0, R_ratio)
+    R_actual = R_ratio * R_0
+    phi_R = 4 * K_B * R_actual * T_K  # (n_est,)
+
+    # Scale factor
+    eta = (b / 2) * 2**adc_bits * gain * e_b / adc_fs
+    scale_factor = T_kelvin**2 * (1 + R_ratio) ** 2 / (2 * eta * beta_1 * R_ratio)
+    if beta_2 is not None and np.isfinite(beta_2):
+        scale_factor = scale_factor * (1 + 2 * (beta_1 / beta_2) * np.log(R_ratio))
+
+    # Combine: noise[i, f] = (base_f[f] + johnson_gain_f[f] * phi_R[i])
+    #                         * counts_factor[f] * scale_factor[i]^2
+    Noise_counts = (
+        base_f[np.newaxis, :] + johnson_gain_f[np.newaxis, :] * phi_R[:, np.newaxis]
+    ) * counts_factor[np.newaxis, :]
+
+    return Noise_counts * (scale_factor**2)[:, np.newaxis]
+
+
+def gradT_noise_batch(
+    F: npt.ArrayLike,
+    T_means: npt.ArrayLike,
+    speeds: npt.ArrayLike,
+    fs: float = 512,
+    diff_gain: float = 0.94,
+    **kwargs: Any,
+) -> np.ndarray:
+    """Batch temperature gradient noise in wavenumber units.
+
+    Parameters
+    ----------
+    F : shape ``(n_freq,)``
+    T_means : shape ``(n_est,)``
+    speeds : shape ``(n_est,)``
+
+    Returns
+    -------
+    noise_K : ndarray, shape ``(n_est, n_freq)``
+        Noise spectrum [(K/m)^2 / cpm].
+    """
+    noise_f = noise_thermchannel_batch(F, T_means, fs=fs, diff_gain=diff_gain, **kwargs)
+    speeds = np.asarray(speeds, dtype=np.float64)
+    return noise_f * speeds[:, np.newaxis]
