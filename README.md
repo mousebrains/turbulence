@@ -12,15 +12,21 @@ Python tools for reading Rockland Scientific microprofiler data and computing tu
 
 ## Overview
 
-**rsi-python** provides a complete processing pipeline for ocean turbulence measurements from Rockland Scientific instruments equipped with shear probes and fast thermistors (FP07). The package reads proprietary `.p` binary data files, converts channels to physical units, detects profiles, and computes both the rate of dissipation of turbulent kinetic energy (epsilon) and the rate of dissipation of thermal variance (chi), following the methods described in the Rockland Scientific ODAS MATLAB Library and associated Technical Notes.
+This repository contains two packages:
 
-### What it computes
+### rsi-python (science library)
+
+**rsi-python** provides a complete processing pipeline for ocean turbulence measurements from Rockland Scientific instruments equipped with shear probes and fast thermistors (FP07). The package reads proprietary `.p` binary data files, converts channels to physical units, detects profiles, and computes both the rate of dissipation of turbulent kinetic energy (epsilon) and the rate of dissipation of thermal variance (chi), following the methods described in the Rockland Scientific ODAS MATLAB Library and associated Technical Notes.
 
 - **Epsilon (TKE dissipation rate)** from shear probe spectra ([detailed mathematics](docs/epsilon_mathematics.md)), including Goodman coherent noise removal, Nasmyth spectrum fitting, and Macoun & Lueck wavenumber correction.
 
 - **Chi (thermal variance dissipation rate)** from FP07 thermistor spectra ([detailed mathematics](docs/chi_mathematics.md)), including Batchelor/Kraichnan spectrum models, FP07 transfer function correction, and MLE spectral fitting.
 
 A **MATLAB implementation** of the chi calculation is also available — see [matlab/MATLAB.md](matlab/MATLAB.md).
+
+### perturb (batch pipeline)
+
+**perturb** is a batch-processing pipeline built on top of rsi-python. It takes a collection of raw `.p` files through a multi-stage chain — trimming, merging, profile extraction, FP07 calibration, CT alignment, dissipation, and chi — producing depth-binned and time-binned NetCDF outputs with CF-1.8/ACDD-1.3 compliant metadata. It supports parallel file processing via the `-j` flag for multi-core scaling.
 
 ## Installation
 
@@ -51,18 +57,37 @@ chi_results = get_chi("VMP/file.p", epsilon_ds=eps_results[0])
 
 ## Documentation
 
+### rsi-tpw (science library)
+
 | Document | Description |
 |----------|-------------|
-| [CLI Reference](docs/cli.md) | All `rsi-tpw` subcommands and flags |
-| [Configuration](docs/configuration.md) | YAML config file format and all parameter defaults |
-| [Pipeline](docs/pipeline.md) | Processing stages and data flow |
-| [Python API](docs/python_api.md) | Using rsi-python from Python code |
+| [CLI Reference](docs/rsi-tpw/cli.md) | All `rsi-tpw` subcommands and flags |
+| [Configuration](docs/rsi-tpw/configuration.md) | YAML config file format and all parameter defaults |
+| [Pipeline](docs/rsi-tpw/pipeline.md) | Processing stages and data flow |
+| [Python API](docs/rsi-tpw/python_api.md) | Using rsi-python from Python code |
+| [Output Directories](docs/rsi-tpw/output_directories.md) | Sequential hash-tracked output scheme |
+| [Vectorization](docs/rsi-tpw/vectorization.md) | Vectorized compute internals |
+
+### perturb (batch pipeline)
+
+| Document | Description |
+|----------|-------------|
+| [Pipeline](docs/perturb/pipeline.md) | Batch processing stages and data flow |
+| [CLI Reference](docs/perturb/cli.md) | All `perturb` subcommands and flags |
+| [Configuration](docs/perturb/configuration.md) | YAML config file format for perturb |
+| [Parallel Scaling](docs/perturb/parallel.md) | Benchmark results for multi-core scaling |
+| [Modules](docs/perturb/modules.md) | Module-level reference |
+
+### Shared
+
+| Document | Description |
+|----------|-------------|
 | [Epsilon Mathematics](docs/epsilon_mathematics.md) | TKE dissipation algorithm details |
 | [Chi Mathematics](docs/chi_mathematics.md) | Thermal dissipation algorithm details |
 | [Mixing Efficiency](docs/mixing_efficiency.md) | Mathematics of the dissipation ratio |
 | [Best Practices](docs/best_practices.md) | Guidance for comparing turbulence measurements |
 | [Bibliography](docs/bibliography.md) | Consolidated references |
-| [Output Directories](docs/output_directories.md) | Sequential hash-tracked output scheme |
+| [Installation](docs/installation.md) | Installation options |
 | [MATLAB](matlab/MATLAB.md) | MATLAB chi implementation |
 | [Changelog](CHANGELOG.md) | Version history |
 
