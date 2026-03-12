@@ -5,7 +5,7 @@ Port of get_profile.m from the ODAS MATLAB library, plus NetCDF I/O
 for per-profile files.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -101,7 +101,7 @@ def get_profiles(
         W = -W
 
     # Find valid samples
-    mask = (P > P_min) & (W >= W_min)
+    mask = (P_min < P) & (W_min <= W)
     n = np.where(mask)[0]
 
     if len(n) < min_samples:
@@ -189,7 +189,7 @@ def extract_profiles(
         ds.profile_P_end = float(P_slow[e_slow])
         ds.profile_duration_s = float((e_slow - s_slow) / fs_slow)
         ds.profile_mean_speed = float(np.mean(np.abs(W[s_slow:s_slow_end])))
-        ds.history = f"Profile {pi} extracted on {datetime.now(timezone.utc).isoformat()}"
+        ds.history = f"Profile {pi} extracted on {datetime.now(UTC).isoformat()}"
 
         n_fast = e_fast - s_fast
         n_slow = s_slow_end - s_slow
@@ -215,10 +215,7 @@ def extract_profiles(
 
         # Channel data
         for ch_name, ch_data, dim, attrs in data["channels"]:
-            if dim == "time_fast":
-                trimmed = ch_data[s_fast:e_fast]
-            else:
-                trimmed = ch_data[s_slow:s_slow_end]
+            trimmed = ch_data[s_fast:e_fast] if dim == "time_fast" else ch_data[s_slow:s_slow_end]
             var_name = ch_name.replace(" ", "_")
             var = ds.createVariable(var_name, "f4", (dim,), zlib=True)
             var[:] = trimmed.astype(np.float32)
@@ -230,8 +227,8 @@ def extract_profiles(
         ds.close()
         output_paths.append(prof_path)
         print(
-            f"  Profile {pi}: P={P_slow[s_slow]:.1f}–{P_slow[e_slow]:.1f} dbar, "
-            f"{(e_slow - s_slow) / fs_slow:.1f} s → {prof_path.name}"
+            f"  Profile {pi}: P={P_slow[s_slow]:.1f}–{P_slow[e_slow]:.1f} dbar, "  # noqa: RUF001
+            f"{(e_slow - s_slow) / fs_slow:.1f} s -> {prof_path.name}"
         )
 
     return output_paths

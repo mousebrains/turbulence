@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64", "setuptools-scm"]
+requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,14 +8,19 @@ version = "0.1.0"
 description = "Tools for reading Rockland Scientific microprofiler data and computing turbulent dissipation rates"
 requires-python = ">=3.12"
 license = "GPL-3.0-or-later"
+readme = "README.md"
+authors = [
+    { name = "Pat Welch", email = "pat@mousebrains.com" },
+]
+keywords = ["oceanography", "turbulence", "microprofiler", "rockland", "dissipation", "chi"]
 dependencies = [
-    "numpy",
-    "netCDF4",
-    "scipy",
-    "xarray",
-    "gsw",
+    "numpy>=1.26,<3",
+    "netCDF4>=1.6,<2",
+    "scipy>=1.12,<2",
+    "xarray>=2024.1",
+    "gsw>=3.6,<4",
     "ruamel.yaml>=0.18",
-    "matplotlib",
+    "matplotlib>=3.8,<4",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +31,9 @@ dev = [
     "ruff",
     "mypy",
 ]
+
+[project.urls]
+Repository = "https://github.com/mousebrains/rsi-python"
 
 [project.scripts]
 rsi-tpw = "rsi_python.cli:main"
@@ -38,12 +46,12 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = ["E", "F", "W", "I", "UP", "SIM", "RUF"]
 
 [tool.mypy]
 python_version = "3.12"
-warn_return_any = false
-check_untyped_defs = false
+warn_return_any = true
+check_untyped_defs = true
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -53,9 +61,23 @@ module = [
     "rsi_python.spectral",
     "rsi_python.dissipation",
     "rsi_python.ocean",
+    "rsi_python.nasmyth",
+    "rsi_python.deconvolve",
+    "rsi_python.shear_noise",
+    "rsi_python.profile",
 ]
-# npt.ArrayLike causes many false positives with arithmetic/indexing
-disable_error_code = ["operator", "index", "arg-type", "return-value"]
+# npt.ArrayLike causes many false positives with arithmetic/indexing;
+# no-any-return from numpy arithmetic expressions returning Any
+disable_error_code = ["operator", "index", "arg-type", "return-value", "no-any-return"]
+
+[[tool.mypy.overrides]]
+module = [
+    "rsi_python.viewer_base",
+    "rsi_python.quick_look",
+    "rsi_python.diss_look",
+]
+# UI-only modules; matplotlib typing is incomplete
+disable_error_code = ["index", "arg-type", "union-attr", "call-overload", "var-annotated", "attr-defined", "assignment", "no-any-return"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

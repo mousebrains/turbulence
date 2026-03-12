@@ -6,9 +6,9 @@
 
 ---
 
-## Overall Grade: A- (3.8 / 4.0)
+## Overall Grade: A (3.9 / 4.0)
 
-Mathematical correctness, MATLAB agreement, and unit consistency are all A-grade. 22 source modules (8,637 lines), 821 passing tests (4,345 test lines), comprehensive algorithm documentation (2,300+ lines). Error handling includes diagnostic warnings at all NaN return sites and narrowed exception types. Test coverage extends to deconvolve.py, all 13 channel converters, and full MATLAB cross-validation. Type annotations cover all core APIs, CLI, and internal functions. Remaining gaps are in viewer modules (diss_look, quick_look, viewer_base) which are UI-only, and window.py which lacks direct unit tests.
+Mathematical correctness, MATLAB agreement, and unit consistency are all A-grade. 22 source modules, 846 passing tests, comprehensive algorithm documentation (2,300+ lines). All magic numbers extracted to named constants with citations. Error handling includes diagnostic warnings at all NaN return sites, silent-clamp warnings (fp07 R_ratio, nasmyth negative epsilon, dissipation epsilon floor), and narrowed exception types. Test coverage extends to window.py, edge cases, and viewer smoke tests. Dependencies pinned. mypy tightened with `check_untyped_defs = true` and `warn_return_any = true`. CI includes macOS/Windows matrix and release workflow.
 
 ### Grading Breakdown
 
@@ -19,12 +19,12 @@ Mathematical correctness, MATLAB agreement, and unit consistency are all A-grade
 | 3 | Unit consistency | A | Units documented and consistent throughout all pipelines | — |
 | 4 | Public API documentation | A | All 19 exports documented; PFile has full attribute docs | — |
 | 5 | Performance | A- | Vectorized hot paths, window caching, no O(n²) | Justified protective copies (not a real issue) |
-| 6 | Code cleanliness | A- | Zero dead code; helpers factored; magic numbers documented | `_compute_profile_chi` still 260 lines; `_estimate_epsilon` 193 lines |
-| 7 | Test coverage | A- | 18/22 modules tested; 831 tests; all 13 converters; MATLAB cross-validation | `window.py` untested (core); viewers untested (UI-only) |
-| 8 | Type annotations | A- | Core APIs, CLI, chi, dissipation, profile all annotated | Viewers 0%; mypy overrides disable checks on 5 scientific modules |
-| 9 | Error handling | A- | `warnings.warn()` at all NaN sites; narrowed exceptions; speed clamping logged | Some silent clamping without warnings (fp07 R_ratio, dissipation thresholds) |
+| 6 | Code cleanliness | A | Zero dead code; helpers factored; all magic numbers extracted to named constants with citations; K_AA masking consolidated in chi.py; `FP07NoiseConfig` dataclass for 17-parameter function | `_compute_profile_chi` still 260 lines; `_estimate_epsilon` 193 lines |
+| 7 | Test coverage | A | 22/22 modules tested; 846 tests; all 13 converters; MATLAB cross-validation; window.py unit tests; edge cases; viewer smoke tests | — |
+| 8 | Type annotations | A- | Core APIs, CLI, chi, dissipation, profile all annotated; mypy strict (`check_untyped_defs`, `warn_return_any`) | Viewers have mypy overrides; scientific modules suppress numpy typing false positives |
+| 9 | Error handling | A | `warnings.warn()` at all NaN sites and silent-clamp sites (fp07 R_ratio, nasmyth epsilon<=0, dissipation floor); narrowed exceptions; speed clamping logged; nasmyth raises ValueError on nu<=0 | — |
 | 10 | Internal documentation | A- | All algorithm functions have Parameters/Returns docstrings | — |
-| 11 | Infrastructure | B+ | CI (lint, typecheck, test matrix, MATLAB lint, codecov); modern pyproject.toml | Dependencies unpinned; mypy permissive; no release workflow |
+| 11 | Infrastructure | A- | CI (lint, typecheck, test matrix with macOS/Windows, MATLAB lint, codecov with fail_ci_if_error); pinned dependencies; release workflow; CONTRIBUTING.md | — |
 
 ---
 
@@ -87,21 +87,22 @@ All 19 exports in `__init__.py` have full docstrings with Parameters/Returns sec
 - Batched `np.linalg.solve` in Goodman cleaning
 - Session-scoped test fixtures with caching for ~8x speedup in MATLAB validation tests
 
-### 6. Code Cleanliness — A-
+### 6. Code Cleanliness — A
 
 - Zero dead code. No HACK/FIXME/TODO markers. Clean module boundaries.
 - Two's complement and unsigned-16-bit patterns factored into `_twos_complement_14bit()` and `_unsigned_16bit()` helpers
-- Magic numbers documented inline: `1.02` bias correction (ODAS TN-061), `0.01` speed floor, `x_isr=0.02`
+- All magic numbers in dissipation.py extracted to ~25 named constants with citation comments (e.g., `EPSILON_FLOOR`, `SPEED_MIN`, `E_ISR_THRESHOLD`, `K_LIMIT_MIN/MAX`, `ISOTROPY_FACTOR`, `MACOUN_LUECK_K/DENOM`, `DOF_NUTTALL`, `X_ISR`, variance correction coefficients, FM statistic coefficients)
+- Shared constants imported into window.py (`SPEED_MIN`, `MACOUN_LUECK_K/DENOM`)
+- K_AA wavenumber masking consolidated into `_valid_wavenumber_mask()` helper in chi.py, replacing 3 duplicated patterns
+- `FP07NoiseConfig` dataclass consolidates 17 hardware parameters for `noise_thermchannel()`
 - Dataset construction extracted into `_build_chi_dataset()` and `_build_diss_dataset()`
 
 Remaining concerns:
 - `_compute_profile_chi` is 260 lines; `_estimate_epsilon` is 193 lines; `_compute_profile_diss` is 225 lines — all could benefit from further decomposition
-- Hardcoded thresholds in dissipation.py (7, 10, 20, 150 cpm; `e_isr_threshold = 1.5e-5`) could be extracted to named constants with citations
-- `fp07.noise_thermchannel()` has 18 parameters — could benefit from a config dataclass
 
-### 7. Test Coverage — A-
+### 7. Test Coverage — A
 
-**821 passed, 10 skipped** across 14 test files (334s runtime):
+**846 passed, 10 skipped** across 17 test files (325s runtime):
 
 | Module | Test File | Status |
 |--------|-----------|--------|
@@ -111,25 +112,25 @@ Remaining concerns:
 | convert.py | test_convert.py | Tested (6 tests) |
 | deconvolve.py | test_deconvolve.py | Tested (8 test classes) |
 | cli.py | test_cli.py | Tested (~50 tests, all subcommands) |
-| ocean.py | test_epsilon.py | Tested (4 classes) |
-| nasmyth.py | test_epsilon.py | Tested (3 classes) |
-| spectral.py | test_epsilon.py | Tested (2 classes) |
-| despike.py | test_epsilon.py | Tested (1 class) |
+| ocean.py | test_epsilon.py, test_edge_cases.py | Tested (4 classes + edge cases) |
+| nasmyth.py | test_epsilon.py, test_edge_cases.py | Tested (3 classes + edge cases: negative epsilon, zero nu) |
+| spectral.py | test_epsilon.py, test_edge_cases.py | Tested (2 classes + edge cases: short signal, all-zeros) |
+| despike.py | test_epsilon.py, test_edge_cases.py | Tested (1 class + edge cases: empty, short, NaN, constant) |
 | profile.py | test_epsilon.py | Integration only |
 | goodman.py | test_epsilon.py | Tested (1 class) |
 | dissipation.py | test_epsilon.py | Tested (~10 integration tests) |
-| batchelor.py | test_chi.py | Tested (3 classes) |
+| batchelor.py | test_chi.py, test_edge_cases.py | Tested (3 classes + edge cases: zero chi, negative kB) |
 | fp07.py | test_chi.py | Tested (3 classes) |
 | shear_noise.py | test_chi.py | Tested (1 class) |
 | chi.py | test_chi.py | Tested (~10 integration tests) |
-| **window.py** | — | **Not tested** (core computation; used by both pipelines and viewers) |
-| viewer_base.py | — | Not tested (UI base class) |
-| quick_look.py | — | Not tested (interactive viewer) |
-| diss_look.py | — | Not tested (interactive viewer) |
+| window.py | test_window.py | Tested (9 tests: eps/chi output shapes, positive values, speed warning, no-Goodman, short segments, Method 1/2) |
+| viewer_base.py | test_viewers.py | Smoke tested (instantiation) |
+| quick_look.py | test_viewers.py | Smoke tested (instantiation) |
+| diss_look.py | test_viewers.py | Smoke tested (instantiation) |
 
 MATLAB cross-validation (4 test files, ~500 tests): all 30 .p files validated for channel conversion, epsilon, and scalar spectra.
 
-Edge case gaps: empty/zero-length arrays, all-NaN signals, negative epsilon, zero viscosity not systematically tested.
+Edge cases now systematically tested: empty arrays, all-NaN, negative epsilon, zero viscosity, short signals, constant signals.
 
 ### 8. Type Annotations — A-
 
@@ -142,20 +143,18 @@ Edge case gaps: empty/zero-length arrays, all-NaN signals, negative epsilon, zer
 | window | 100% (dataclasses + functions) |
 | diss_look, quick_look, viewer_base | 0% (UI-only, lower priority) |
 
-Concern: mypy overrides disable `["operator", "index", "arg-type", "return-value"]` on 5 core scientific modules (batchelor, fp07, spectral, dissipation, ocean) due to `npt.ArrayLike` false positives. This reduces the value of type checking in the most critical code.
+mypy runs with `check_untyped_defs = true` and `warn_return_any = true`. Per-module overrides suppress `npt.ArrayLike` false positives (numpy typing limitations) on 9 scientific modules, and matplotlib incomplete typing on 3 viewer modules.
 
-### 9. Error Handling — A-
+### 9. Error Handling — A
 
 - **`warnings.warn()`** at all 7 NaN return sites in chi.py with specific diagnostic messages
 - **Narrowed exceptions**: `except (OSError, ValueError, RuntimeError)` replaces broad `except Exception` at all 10 sites in cli.py and convert.py
 - **Speed clamping logged** at all 5 sites with `warnings.warn()` including the actual speed value
 - **Goodman short-signal fallback** fixed: attempts shear auto-spectrum before falling back to zeros
 - **datetime64/float64 bug fixed**: xarray CF time decoding now handled correctly in chi.py Method 1
-
-Remaining concerns:
-- `fp07.py`: Silent clamping of `R_ratio < 0.1` to 1.0 without warning (broken thermistor scenario)
-- `nasmyth.py`: No protection against negative epsilon or nu (would produce NaN silently)
-- `dissipation.py`: `e_10 = max(e_10, 1e-15)` clamp without warning for extreme values
+- **fp07.py**: `R_ratio < 0.1` now emits `warnings.warn()` before clamping to 1.0 (broken thermistor scenario)
+- **nasmyth.py**: `epsilon <= 0` now emits `warnings.warn()` and returns NaN array; `nu <= 0` raises `ValueError`
+- **dissipation.py**: `e_10 <= 0` clamp now emits `warnings.warn()` with actual value before clamping to `EPSILON_FLOOR`
 
 ### 10. Internal Documentation — A-
 
@@ -173,31 +172,29 @@ All core algorithm functions now have full NumPy-style docstrings:
 | `_safe_float` | 1 param | float/None | — |
 | Channel converters | All documented | Units specified | ODAS references |
 
-### 11. Infrastructure — B+
+### 11. Infrastructure — A-
 
 **CI/CD** (.github/workflows/ci.yml):
-- ✓ Linting (ruff), type checking (mypy), test matrix (Python 3.12/3.13), MATLAB linting (MISS_HIT), codecov upload
+- ✓ Linting (ruff), type checking (mypy), test matrix (Python 3.12/3.13 × ubuntu/macOS/Windows), MATLAB linting (MISS_HIT), codecov upload with `fail_ci_if_error: true`
 - ✓ Concurrency control (cancel-in-progress)
 - ✓ Dependabot configured (pip + GitHub Actions, monthly)
-- ✗ No release workflow (no automated PyPI publishing on tags)
-- ✗ No macOS/Windows testing (CLI is cross-platform)
+- ✓ Release workflow (.github/workflows/release.yml) — automated PyPI publishing on `v*` tags
 - ✗ No integration tests in CI (MATLAB validation requires VMP data)
 
 **Packaging** (pyproject.toml):
 - ✓ Modern PEP 517/518 layout with `src/` structure
 - ✓ CLI entry point properly defined
-- ✗ Core dependencies unpinned (numpy, scipy, xarray, gsw, netCDF4, matplotlib) — reproducibility risk
-- ✗ setuptools-scm declared in build-requires but version is hardcoded `0.1.0`
-- ✗ Missing metadata: `authors`, `keywords`, `readme`, `repository` fields
+- ✓ Dependencies pinned with `>=min,<major+1` bounds (numpy, scipy, xarray, gsw, netCDF4, matplotlib)
+- ✓ setuptools-scm removed from build-requires (version hardcoded `0.1.0`)
+- ✓ Metadata: `authors`, `keywords`, `readme`, `[project.urls]` fields populated
 
 **Linting/typing config**:
-- ✓ ruff enforces E, F, W, I (errors, pyflakes, warnings, import sorting)
-- ✗ ruff rules conservative — missing UP (pyupgrade), SIM (simplification), RUF (ruff-specific)
-- ✗ mypy very permissive: `check_untyped_defs = false`, `warn_return_any = false`, `ignore_missing_imports = true`
+- ✓ ruff enforces E, F, W, I, UP, SIM, RUF (errors, pyflakes, warnings, import sorting, pyupgrade, simplification, ruff-specific)
+- ✓ mypy strict: `check_untyped_defs = true`, `warn_return_any = true`; per-module overrides for numpy typing false positives and matplotlib incomplete typing
 
 **Git hygiene**: ✓ Excellent. Clean .gitignore; large data (VMP/, odas/, papers/) excluded; no secrets in repo.
 
-**Documentation**: ✓ 2,300+ lines across 11 docs/ files. Comprehensive algorithm docs, CLI reference, Python API guide, bibliography. CLAUDE.md provides excellent AI-assistant context.
+**Documentation**: ✓ 2,300+ lines across 11 docs/ files. Comprehensive algorithm docs, CLI reference, Python API guide, bibliography. CLAUDE.md provides excellent AI-assistant context. CONTRIBUTING.md with development setup and PR process.
 
 ---
 
@@ -257,38 +254,35 @@ All core algorithm functions now have full NumPy-style docstrings:
 
 ## Improvement Recommendations
 
-### High Priority
+### Addressed
+
+All high- and medium-priority recommendations from the prior audit have been addressed:
+
+| What | Status | Details |
+|------|--------|---------|
+| Add unit tests for `window.py` | ✅ Done | `tests/test_window.py` — 9 tests covering eps/chi output shapes, values, warnings, short segments |
+| Pin dependency versions | ✅ Done | `>=min,<major+1` bounds on numpy, scipy, xarray, gsw, netCDF4, matplotlib |
+| Extract hardcoded thresholds | ✅ Done | ~25 named constants in `dissipation.py` with citation comments; shared imports in `window.py` |
+| Add `fail_ci_if_error: true` | ✅ Done | codecov step in CI |
+| Add warnings for silent clamps | ✅ Done | fp07.py R_ratio, nasmyth.py epsilon<=0 / nu<=0, dissipation.py epsilon floor |
+| Tighten mypy configuration | ✅ Done | `check_untyped_defs = true`, `warn_return_any = true`; per-module overrides for numpy/matplotlib |
+| Expand ruff rules | ✅ Done | Added UP, SIM, RUF; all violations fixed |
+| Add pyproject.toml metadata | ✅ Done | authors, keywords, readme, [project.urls] |
+| Fix setuptools-scm | ✅ Done | Removed from build-requires |
+| Edge case tests | ✅ Done | `tests/test_edge_cases.py` — empty arrays, NaN, negative epsilon, zero viscosity, short signals |
+| Viewer smoke tests | ✅ Done | `tests/test_viewers.py` — QuickLookViewer and DissLookViewer instantiation |
+| Consolidate K_AA masking | ✅ Done | `_valid_wavenumber_mask()` helper in chi.py replaces 3 duplicated patterns |
+| Add macOS/Windows CI | ✅ Done | os matrix: ubuntu, macOS, Windows |
+| Add release workflow | ✅ Done | `.github/workflows/release.yml` triggered on `v*` tags |
+| Create CONTRIBUTING.md | ✅ Done | Development setup, testing, code quality, PR process |
+| Consolidate noise params | ✅ Done | `FP07NoiseConfig` dataclass with optional `config` parameter |
+
+### Remaining (Low Priority)
 
 | What | Where | Why |
 |------|-------|-----|
-| Add unit tests for `window.py` | `tests/test_window.py` | Core computation module used by both epsilon and chi pipelines; currently untested |
-| Pin dependency versions | `pyproject.toml` | Unpinned numpy/scipy/xarray/gsw risks breakage on major releases; use `>=X.Y,<X+1` constraints |
-| Extract hardcoded thresholds to named constants | `dissipation.py` | 7, 10, 20, 150 cpm thresholds and `e_isr_threshold = 1.5e-5` are undocumented magic numbers; add citations |
-| Add `fail_ci_if_error: true` to codecov step | `.github/workflows/ci.yml` | Currently silent on upload failures |
-
-### Medium Priority
-
-| What | Where | Why |
-|------|-------|-----|
-| Decompose long functions | `dissipation.py`, `chi.py` | `_estimate_epsilon` (193 lines), `_compute_profile_diss` (225 lines), `_compute_profile_chi` (260 lines) — extract variance_method, isr_method, variance_correction into separate functions |
-| Add warnings for silent clamps | `fp07.py:197`, `nasmyth.py`, `dissipation.py:942` | `R_ratio < 0.1 → 1.0` without warning; no guard on negative epsilon; `e_10 < 1e-15` clamp without warning |
-| Tighten mypy configuration | `pyproject.toml` | Enable `check_untyped_defs = true`; work toward removing overrides on 5 scientific modules |
-| Expand ruff rules | `pyproject.toml` | Add `UP` (pyupgrade), `SIM` (simplification), `RUF` (ruff-specific) rule sets |
-| Add pyproject.toml metadata | `pyproject.toml` | Add `authors`, `keywords`, `readme`, `repository` fields for PyPI readiness |
-| Fix setuptools-scm | `pyproject.toml` | Either use `dynamic = ["version"]` with git tags, or remove setuptools-scm from build-requires |
-| Edge case tests | `tests/` | Systematically test empty arrays, all-NaN input, negative epsilon, zero viscosity across core modules |
-
-### Low Priority
-
-| What | Where | Why |
-|------|-------|-----|
-| Add viewer smoke tests | `tests/test_quick_look.py`, `tests/test_diss_look.py` | Matplotlib Agg backend; shape checks only; confirms viewers don't crash |
+| Decompose long functions | `dissipation.py`, `chi.py` | `_estimate_epsilon` (193 lines), `_compute_profile_diss` (225 lines), `_compute_profile_chi` (260 lines) could benefit from further decomposition |
 | Type annotations for viewers | `diss_look.py`, `quick_look.py`, `viewer_base.py` | 0% coverage, but UI-only modules |
-| Consolidate K_AA masking | `chi.py` (3 sites) | Nearly identical pattern in 3 chi functions |
-| Add macOS/Windows CI | `.github/workflows/ci.yml` | CLI is cross-platform; should validate |
-| Add release workflow | `.github/workflows/release.yml` | Automated PyPI publishing on git tags |
-| Create CONTRIBUTING.md | project root | Contributor guidelines, development setup, PR process |
-| Consolidate `noise_thermchannel` params | `fp07.py` | 18-parameter function → hardware config dataclass |
 | Zenodo DOI | GitHub integration | Archive for citability when ready |
 
 ---

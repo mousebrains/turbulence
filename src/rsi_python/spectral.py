@@ -96,10 +96,7 @@ def csd_odas(
 
     if overlap is None:
         overlap = nfft // 2
-    if window is None:
-        window = _get_window(nfft)
-    else:
-        window = np.asarray(window, dtype=np.float64)
+    window = _get_window(nfft) if window is None else np.asarray(window, dtype=np.float64)
 
     n_freq = nfft // 2 + 1
     step = nfft - overlap
@@ -199,10 +196,7 @@ def csd_matrix(
 
     if overlap is None:
         overlap = nfft // 2
-    if window is None:
-        window = _get_window(nfft)
-    else:
-        window = np.asarray(window, dtype=np.float64)
+    window = _get_window(nfft) if window is None else np.asarray(window, dtype=np.float64)
 
     n_freq = nfft // 2 + 1
     step = nfft - overlap

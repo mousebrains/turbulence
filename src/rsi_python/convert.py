@@ -5,7 +5,7 @@ NetCDF conversion for Rockland .p files.
 
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -55,7 +55,7 @@ def p_to_netcdf(
     ds.fs_fast = pf.fs_fast
     ds.fs_slow = pf.fs_slow
     ds.source_file = pf.filepath.name
-    ds.history = f"Converted from .p file on {datetime.now(timezone.utc).isoformat()}"
+    ds.history = f"Converted from .p file on {datetime.now(UTC).isoformat()}"
 
     ds.createDimension("time_fast", len(pf.t_fast))
     ds.createDimension("time_slow", len(pf.t_slow))
@@ -134,7 +134,7 @@ def convert_all(p_files: list[Path], output_dir: Path | None = None, jobs: int =
         for p_path, nc_path in work:
             print(f"{p_path.name} -> {nc_path.name} ... ", end="", flush=True)
             try:
-                name, _, size_mb = _convert_one((p_path, nc_path))
+                _name, _, size_mb = _convert_one((p_path, nc_path))
                 print(f"{size_mb:.1f} MB")
             except (OSError, ValueError, RuntimeError) as e:
                 print(f"ERROR: {e}")

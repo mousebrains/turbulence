@@ -144,7 +144,7 @@ class TestScalarSpectraVsMatlab:
 
     def test_profile_count(self, matched_scalar):
         """Should detect similar number of profiles."""
-        results, val, matched = matched_scalar
+        results, val, _matched = matched_scalar
         ml_n = int(val["n_profiles"])
         py_n = len(results)
         assert abs(py_n - ml_n) <= 3, f"Profile count: Python {py_n} vs MATLAB {ml_n}"

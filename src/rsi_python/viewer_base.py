@@ -504,7 +504,7 @@ class ProfileViewer:
 
         # Dynamic y-axis
         x_lo, x_hi = 0.5, 300
-        in_range = (K >= x_lo) & (K <= x_hi)
+        in_range = (x_lo <= K) & (x_hi >= K)
         all_vals = []
         for spec in r["shear_specs"]:
             pos = spec[in_range & (spec > 0)]
@@ -529,7 +529,7 @@ class ProfileViewer:
         ax.set_ylim(y_lo, y_hi)
         ax.legend(fontsize=5, loc="lower left")
         ax.set_title(
-            f"ε spectra  speed={r['W']:.2f} m/s\nP={P_lo:.1f}–{P_hi:.1f} dbar",
+            f"ε spectra  speed={r['W']:.2f} m/s\nP={P_lo:.1f}–{P_hi:.1f} dbar",  # noqa: RUF001
             fontsize=9,
         )
         ax.grid(True, alpha=0.3, which="both")
@@ -589,11 +589,11 @@ class ProfileViewer:
         title = (
             f"{self.pf.filepath.name}  —  "
             f"Profile {self.profile_idx + 1}/{len(self.profiles)}  —  "
-            f"P: {P_lo:.1f}–{P_hi:.1f} dbar"
+            f"P: {P_lo:.1f}–{P_hi:.1f} dbar"  # noqa: RUF001
         )
         if self.spec_P_range is not None:
             sp_lo, sp_hi = self.spec_P_range
-            title += f"  [spectra: {sp_lo:.1f}–{sp_hi:.1f} dbar]"
+            title += f"  [spectra: {sp_lo:.1f}–{sp_hi:.1f} dbar]"  # noqa: RUF001
         self.fig.suptitle(title, fontsize=11, fontweight="bold")
         self.fig.canvas.draw_idle()
 

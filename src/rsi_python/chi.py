@@ -17,7 +17,7 @@ Peterson, A.K. and I. Fer, 2014: Dissipation measurements using temperature
 """
 
 import warnings
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -62,6 +62,48 @@ def _default_tau_model(fp07_model: str) -> str:
     double_pole pairs with Goto (tau=0.003); single_pole with Lueck.
     """
     return "goto" if fp07_model == "double_pole" else "lueck"
+
+
+# ---------------------------------------------------------------------------
+# Shared wavenumber masking helper
+# ---------------------------------------------------------------------------
+
+
+def _valid_wavenumber_mask(
+    spec_obs: np.ndarray,
+    noise: np.ndarray,
+    K: np.ndarray,
+    K_AA: float,
+    min_points: int = 3,
+) -> np.ndarray:
+    """Build a boolean mask for valid wavenumber points.
+
+    Selects points where the observed spectrum exceeds 2x noise, K > 0,
+    and K <= K_AA.  Falls back to K > 0 & K <= K_AA if too few points
+    pass the noise criterion.
+
+    Parameters
+    ----------
+    spec_obs : ndarray
+        Observed spectrum.
+    noise : ndarray
+        Noise floor spectrum (same units as spec_obs).
+    K : ndarray
+        Wavenumber vector [cpm].
+    K_AA : float
+        Anti-aliasing wavenumber limit [cpm].
+    min_points : int
+        Minimum valid points required.
+
+    Returns
+    -------
+    mask : ndarray of bool
+    """
+    above_noise = spec_obs > 2 * noise
+    mask = above_noise & (K > 0) & (K <= K_AA)
+    if np.sum(mask) < min_points:
+        mask = (K > 0) & (K <= K_AA)
+    return mask
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +169,7 @@ def _chi_from_epsilon(
     K_max_ratio : float
         K_max / kB spectral resolution ratio.
     """
-    grad_func, q = _spectrum_func(spectrum_model)
+    grad_func, _q = _spectrum_func(spectrum_model)
 
     kB = batchelor_kB(epsilon, nu)
     if kB < 1:
@@ -147,11 +189,7 @@ def _chi_from_epsilon(
 
     # Find integration limit: where observed meets noise
     K_AA = f_AA / speed
-    above_noise = spec_obs > 2 * noise_f
-    valid = above_noise & (K > 0) & (K <= K_AA)
-    if np.sum(valid) < 3:
-        # Fall back to AA limit
-        valid = (K > 0) & (K <= K_AA)
+    valid = _valid_wavenumber_mask(spec_obs, noise_f, K, K_AA, min_points=3)
     if np.sum(valid) < 3:
         warnings.warn("Too few valid wavenumber points for chi integration", stacklevel=2)
         return np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan
@@ -260,7 +298,7 @@ def _mle_fit_kB(
     K_max_ratio : float
         K_max / kB ratio.
     """
-    grad_func, q = _spectrum_func(spectrum_model)
+    grad_func, _q = _spectrum_func(spectrum_model)
 
     # FP07 transfer function — respect fp07_model parameter
     _h2 = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
@@ -273,10 +311,7 @@ def _mle_fit_kB(
 
     # Fitting range
     K_AA = f_AA / speed
-    above_noise = spec_obs > 2 * noise_K
-    fit_mask = above_noise & (K > 0) & (K <= K_AA)
-    if np.sum(fit_mask) < 6:
-        fit_mask = (K > 0) & (K <= K_AA)
+    fit_mask = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=6)
     if np.sum(fit_mask) < 6:
         warnings.warn("Too few valid points for MLE fit", stacklevel=2)
         return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
@@ -313,10 +348,7 @@ def _mle_fit_kB(
     nll_fine = np.sum(np.log(spec_models) + spec_fit / spec_models, axis=1)
     nll_fine = np.where(np.isfinite(nll_fine), nll_fine, np.inf)
 
-    if np.all(np.isinf(nll_fine)):
-        kB_best = best_coarse
-    else:
-        kB_best = kB_fine[np.argmin(nll_fine)]
+    kB_best = best_coarse if np.all(np.isinf(nll_fine)) else kB_fine[np.argmin(nll_fine)]
 
     # Recover epsilon from kB
     epsilon = (2 * np.pi * kB_best) ** 4 * nu * KAPPA_T**2
@@ -387,7 +419,7 @@ def _iterative_fit(
     kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio
         Same as :func:`_mle_fit_kB`.
     """
-    grad_func, q = _spectrum_func(spectrum_model)
+    grad_func, _q = _spectrum_func(spectrum_model)
 
     # FP07 transfer function
     tau0 = fp07_tau(speed, model=_default_tau_model(fp07_model))
@@ -400,10 +432,7 @@ def _iterative_fit(
 
     # Initial integration limits
     K_AA = f_AA / speed
-    above_noise = spec_obs > 2 * noise_K
-    valid = above_noise & (K > 0) & (K <= K_AA)
-    if np.sum(valid) < 6:
-        valid = (K > 0) & (K <= K_AA)
+    valid = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=6)
 
     valid_idx = np.where(valid)[0]
     if len(valid_idx) < 6:
@@ -432,7 +461,7 @@ def _iterative_fit(
 
     for iteration in range(3):
         # MLE fit for kB
-        kB_best, chi_fit, epsilon, K_max, _, _, _ = _mle_fit_kB(
+        kB_best, _chi_fit, epsilon, _K_max, _, _, _ = _mle_fit_kB(
             spec_obs,
             K,
             chi_obs,
@@ -461,7 +490,7 @@ def _iterative_fit(
         k_u_new = k_u
 
         # Recompute chi_obs with refined limits
-        mask_refined = (K >= k_l_new) & (K <= k_u_new)
+        mask_refined = (k_l_new <= K) & (k_u_new >= K)
         if np.sum(mask_refined) < 3:
             break
 
@@ -491,7 +520,7 @@ def _iterative_fit(
 
     # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise)
     if np.isfinite(kB_best) and np.isfinite(chi):
-        valid_fom = (K > 0) & (K <= k_u)
+        valid_fom = (K > 0) & (k_u >= K)
         if np.sum(valid_fom) >= 3:
             obs_v = np.trapezoid(spec_obs[valid_fom], K[valid_fom])
             mod_v = np.trapezoid(
@@ -612,7 +641,7 @@ def get_chi(
     prepared = _prepare_profiles(data, speed, direction, salinity, tau=tau)
     if prepared is None:
         return []
-    (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, fs_slow, ratio, t_fast) = (
+    (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, _fs_slow, ratio, t_fast) = (
         prepared
     )
 
@@ -630,10 +659,7 @@ def get_chi(
         spd_prof = speed_fast[s_fast:e_fast]
         time_prof = t_fast[s_fast:e_fast]
 
-        if isinstance(sal_fast, np.ndarray):
-            sal_prof = sal_fast[s_fast:e_fast]
-        else:
-            sal_prof = sal_fast  # None or scalar
+        sal_prof = sal_fast[s_fast:e_fast] if isinstance(sal_fast, np.ndarray) else sal_fast
 
         ds = _compute_profile_chi(
             therm_prof,
@@ -658,7 +684,7 @@ def get_chi(
         )
         ds.attrs.update(data["metadata"])
         ds.attrs["history"] = (
-            f"Computed with rsi-python on {datetime.now(timezone.utc).isoformat()}"
+            f"Computed with rsi-python on {datetime.now(UTC).isoformat()}"
         )
         # CF time coordinate attributes
         start_time = data["metadata"].get("start_time", "")
@@ -1048,7 +1074,7 @@ def _compute_profile_chi(
                 # Method 2: fit kB
                 # Initial chi estimate from observed spectrum (per-probe noise)
                 obs_above_noise = np.maximum(spec_obs - noise_K, 0)
-                mask = (K > 0) & (K <= f_AA / W)
+                mask = (K > 0) & (f_AA / W >= K)
                 if np.sum(mask) < 3:
                     continue
                 chi_obs = 6 * KAPPA_T * np.trapezoid(obs_above_noise[mask], K[mask])

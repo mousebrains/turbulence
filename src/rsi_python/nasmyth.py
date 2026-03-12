@@ -2,13 +2,15 @@
 """Nasmyth universal shear spectrum.
 
 Uses Lueck's improved fit from ODAS v4.5.1, documented in
-McMillan et al. (2016), J. Atmos. Oceanic Techno., 33, 817–837.
+McMillan et al. (2016), J. Atmos. Oceanic Techno., 33, 817-837.
 """
+
+import warnings
 
 import numpy as np
 import numpy.typing as npt
 
-# Lueck (2022), J. Atmos. Oceanic Technol., 39, 1803–1816,
+# Lueck (2022), J. Atmos. Oceanic Technol., 39, 1803-1816,
 # https://doi.org/10.1175/JTECH-D-21-0051.1
 LUECK_A = 1.0774e9  # e/e_10 model constant
 X_95 = 0.1205  # non-dimensional wavenumber for 95% variance
@@ -31,7 +33,15 @@ def nasmyth(epsilon: float, nu: float, k: npt.ArrayLike) -> np.ndarray:
     phi : ndarray
         Shear spectrum [s⁻² cpm⁻¹].
     """
+    if nu <= 0:
+        raise ValueError(f"Kinematic viscosity must be positive, got nu={nu}")
     k = np.asarray(k, dtype=np.float64)
+    if epsilon <= 0:
+        warnings.warn(
+            f"epsilon={epsilon:.2e} <= 0; Nasmyth spectrum will contain NaN",
+            stacklevel=2,
+        )
+        return np.full_like(k, np.nan)
     ks = (epsilon / nu**3) ** 0.25  # Kolmogorov wavenumber
     x = k / ks
     G2 = _nasmyth_g2(x)

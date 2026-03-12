@@ -18,7 +18,7 @@ Lueck, R.G., and 27 coauthors, 2024: Best practices recommendations for
 
 import re
 import warnings
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +34,71 @@ from rsi_python.goodman import clean_shear_spec
 from rsi_python.nasmyth import LUECK_A, X_95, nasmyth
 from rsi_python.ocean import visc, visc35
 from rsi_python.spectral import csd_matrix
+
+# ---------------------------------------------------------------------------
+# Named constants — citations inline
+# ---------------------------------------------------------------------------
+
+# Minimum epsilon floor to avoid zero/negative values [W/kg]
+EPSILON_FLOOR = 1e-15
+
+# Minimum profiling speed to avoid wavenumber singularity [m/s]
+SPEED_MIN = 0.01
+
+# Epsilon threshold for switching from variance to ISR method [W/kg]
+E_ISR_THRESHOLD = 1.5e-5
+
+# Wavenumber limits for spectral integration [cpm]
+K_LIMIT_MIN = 7  # minimum upper integration limit
+K_LIMIT_MAX = 150  # maximum upper integration limit
+K_INITIAL_CUTOFF = 10  # initial integration cutoff for e_10 estimate
+
+# Isotropy factor: epsilon = ISOTROPY_FACTOR * nu * integral(phi_shear)
+# Tennekes & Lumley (1972)
+ISOTROPY_FACTOR = 7.5
+
+# Nuttall (1971) DOF correction for cosine-windowed overlapped FFTs
+DOF_NUTTALL = 1.9
+
+# ISR wavenumber limit factor (2 * 0.01, matches ODAS)
+X_ISR = 0.02
+
+# Macoun & Lueck (1998) wavenumber correction: 1 + (K/MACOUN_LUECK_DENOM)^2
+# Applied for K <= MACOUN_LUECK_K
+MACOUN_LUECK_K = 150  # [cpm]
+MACOUN_LUECK_DENOM = 48  # [cpm]
+
+# Variance correction convergence threshold (< 2% change, matches ODAS)
+VARIANCE_CONVERGENCE = 1.02
+
+# Variance correction model coefficients (Lueck, ODAS lines 623-634)
+VARIANCE_TANH_COEFF = 48
+VARIANCE_EXP_COEFF = 2.9
+VARIANCE_EXP_DECAY = 22.3
+
+# Low-wavenumber correction ratio threshold (ODAS lines 636-638)
+LOW_K_CORRECTION_THRESHOLD = 1.1
+LOW_K_CORRECTION_FACTOR = 0.25
+
+# ISR flyer detection threshold [decades]
+ISR_FLYER_THRESHOLD = 0.5
+# Maximum fraction of points to remove as flyers
+ISR_FLYER_FRAC = 0.2
+
+# Lueck (2022a,b) FM statistic coefficients
+FM_SIGMA_COEFF = 1.25  # 5/4
+FM_SIGMA_EXPONENT = -7 / 9
+FM_TM_OFFSET = 0.8
+FM_TM_COEFF = 1.56
+
+# Goodman bias correction factor (ODAS TN-061)
+GOODMAN_BIAS = 1.02
+
+# Anti-aliasing safety margin (ODAS convention)
+F_AA_MARGIN = 0.9
+
+# Effective speed cutout for profile detection [m/s]
+SPEED_CUTOUT = 0.05
 
 # ---------------------------------------------------------------------------
 # Channel loading
@@ -402,7 +467,7 @@ def get_diss(
     prepared = _prepare_profiles(data, speed, direction, salinity, tau=tau)
     if prepared is None:
         return []
-    (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, fs_slow, ratio, t_fast) = (
+    (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, _fs_slow, ratio, t_fast) = (
         prepared
     )
 
@@ -412,7 +477,7 @@ def get_diss(
         shear_arrays[i] = shear_arrays[i] / speed_fast**2
 
     # Effective AA cutoff
-    f_AA_eff = 0.9 * f_AA
+    f_AA_eff = F_AA_MARGIN * f_AA
     if f_limit < f_AA_eff:
         f_AA_eff = f_limit
 
@@ -429,10 +494,7 @@ def get_diss(
         spd_prof = speed_fast[s_fast:e_fast]
         time_prof = t_fast[s_fast:e_fast]
 
-        if isinstance(sal_fast, np.ndarray):
-            sal_prof = sal_fast[s_fast:e_fast]
-        else:
-            sal_prof = sal_fast  # None or scalar
+        sal_prof = sal_fast[s_fast:e_fast] if isinstance(sal_fast, np.ndarray) else sal_fast
 
         ds = _compute_profile_diss(
             sh_mat,
@@ -453,7 +515,7 @@ def get_diss(
         )
         ds.attrs.update(data["metadata"])
         ds.attrs["history"] = (
-            f"Computed with rsi-python on {datetime.now(timezone.utc).isoformat()}"
+            f"Computed with rsi-python on {datetime.now(UTC).isoformat()}"
         )
         # CF time coordinate attributes
         start_time = data["metadata"].get("start_time", "")
@@ -566,9 +628,7 @@ def _compute_profile_diss(
     # removed by Goodman cleaning.
     num_ffts = 2 * (diss_length // fft_length) - 1
     n_v = accel.shape[1] if do_goodman else 0
-    dof_spec = 1.9 * max(num_ffts - n_v, 1)  # Nuttall (1971), Lueck (2022a)
-
-    e_isr_threshold = 1.5e-5  # Switch to ISR method above this [W/kg]
+    dof_spec = DOF_NUTTALL * max(num_ffts - n_v, 1)  # Nuttall (1971), Lueck (2022a)
 
     for idx in range(n_est):
         s = idx * step
@@ -582,7 +642,7 @@ def _compute_profile_diss(
 
         # Compute spectra
         if do_goodman:
-            P_sh_clean, AA, P_sh, UA, F = clean_shear_spec(
+            P_sh_clean, _AA, P_sh, _UA, F = clean_shear_spec(
                 ac_seg,
                 sh_seg,
                 fft_length,
@@ -602,12 +662,12 @@ def _compute_profile_diss(
 
         # Mean values for this window
         W = np.mean(np.abs(speed[sel]))
-        if W < 0.01:
+        if W < SPEED_MIN:
             warnings.warn(
-                f"Speed {W:.4f} m/s below minimum; clamped to 0.01 m/s",
+                f"Speed {W:.4f} m/s below minimum; clamped to {SPEED_MIN} m/s",
                 stacklevel=2,
             )
-            W = 0.01  # minimum speed to avoid wavenumber singularity
+            W = SPEED_MIN
         mean_T = np.mean(T[sel])
         mean_P = np.mean(P[sel])
         mean_t = np.mean(t_fast[sel])
@@ -619,18 +679,15 @@ def _compute_profile_diss(
 
         # Macoun-Lueck wavenumber correction
         correction = np.ones_like(K)
-        mask = K <= 150
-        correction[mask] = 1 + (K[mask] / 48) ** 2
+        mask = K <= MACOUN_LUECK_K
+        correction[mask] = 1 + (K[mask] / MACOUN_LUECK_DENOM) ** 2
 
         # Convert to wavenumber spectra
         P_sh_clean = P_sh_clean * W
         P_sh = P_sh * W
 
         # Apply correction — broadcast over probe dimensions
-        if P_sh_clean.ndim == 3:
-            corr_3d = correction[:, np.newaxis, np.newaxis]
-        else:
-            corr_3d = correction
+        corr_3d = correction[:, np.newaxis, np.newaxis] if P_sh_clean.ndim == 3 else correction
         P_sh_clean = P_sh_clean * corr_3d
         P_sh = P_sh * corr_3d
 
@@ -656,7 +713,7 @@ def _compute_profile_diss(
                 nu,
                 K_AA,
                 fit_order,
-                e_isr_threshold,
+                E_ISR_THRESHOLD,
                 num_ffts=num_ffts,
                 n_v=n_v,
             )
@@ -933,30 +990,33 @@ def _estimate_epsilon(
     n_freq = len(K)
     method = 0
 
-    # Initial estimate: integrate to 10 cpm, use e/e_10 model
-    K_range = np.where(K <= 10)[0]
+    # Initial estimate: integrate to K_INITIAL_CUTOFF cpm, use e/e_10 model
+    K_range = np.where(K <= K_INITIAL_CUTOFF)[0]
     if len(K_range) < 3:
         K_range = np.arange(min(3, n_freq))
 
-    e_10 = 7.5 * nu * np.trapezoid(shear_spectrum[K_range], K[K_range])
-    e_10 = max(e_10, 1e-15)  # avoid zero/negative
+    e_10 = ISOTROPY_FACTOR * nu * np.trapezoid(shear_spectrum[K_range], K[K_range])
+    if e_10 <= 0:
+        warnings.warn(
+            f"Initial epsilon estimate e_10={e_10:.2e} <= 0; clamped to {EPSILON_FLOOR:.0e}",
+            stacklevel=2,
+        )
+        e_10 = EPSILON_FLOOR
     e_1 = e_10 * np.sqrt(1 + LUECK_A * e_10)
 
     if e_1 < e_isr_threshold:
         # Variance method
         # Check if enough points for ISR refinement
-        # ISR wavenumber limit factor (2 × 0.01, matches ODAS)
-        x_isr = 0.02
-        isr_limit = x_isr * (e_1 / nu**3) ** 0.25
-        if len(np.where(K <= isr_limit)[0]) >= 20:
-            e_2, _ = _inertial_subrange(K, shear_spectrum, e_1, nu, min(150, K_AA))
+        isr_limit = X_ISR * (e_1 / nu**3) ** 0.25
+        if len(np.where(isr_limit >= K)[0]) >= 20:
+            e_2, _ = _inertial_subrange(K, shear_spectrum, e_1, nu, min(K_LIMIT_MAX, K_AA))
         else:
             e_2 = e_1
 
         K_95 = X_95 * (e_2 / nu**3) ** 0.25
         valid_K_limit = min(K_AA, K_95)
-        valid_K_limit = np.clip(valid_K_limit, 7, 150)
-        valid_idx = np.where(K <= valid_K_limit)[0]
+        valid_K_limit = np.clip(valid_K_limit, K_LIMIT_MIN, K_LIMIT_MAX)
+        valid_idx = np.where(valid_K_limit >= K)[0]
         index_limit = len(valid_idx)
 
         if index_limit <= 1:
@@ -981,12 +1041,9 @@ def _estimate_epsilon(
                 # Keep minima (second derivative > 0)
                 pd2 = np.polyder(pd1)
                 roots = roots[np.polyval(pd2, roots) > 0]
-                # Keep roots above 10 cpm
-                roots = roots[roots >= np.log10(10)]
-                if len(roots) > 0:
-                    K_limit_log = roots[0]  # first minimum
-                else:
-                    K_limit_log = np.log10(K_95)
+                # Keep roots above K_INITIAL_CUTOFF cpm
+                roots = roots[roots >= np.log10(K_INITIAL_CUTOFF)]
+                K_limit_log = roots[0] if len(roots) > 0 else np.log10(K_95)
             else:
                 K_limit_log = np.log10(K_95)
         else:
@@ -994,17 +1051,17 @@ def _estimate_epsilon(
 
         # Final integration limit
         K_limit_log = min(K_limit_log, np.log10(K_95), np.log10(K_AA))
-        K_limit_log = np.clip(K_limit_log, np.log10(7), np.log10(150))
+        K_limit_log = np.clip(K_limit_log, np.log10(K_LIMIT_MIN), np.log10(K_LIMIT_MAX))
 
-        Range = np.where(K <= 10**K_limit_log)[0]
-        if len(Range) > 0 and K[Range[-1]] < 7:
+        Range = np.where(10**K_limit_log >= K)[0]
+        if len(Range) > 0 and K[Range[-1]] < K_LIMIT_MIN:
             # Extend to include at least 7 cpm
             Range = np.append(Range, Range[-1] + 1)
         if len(Range) < 3:
             Range = np.arange(min(3, n_freq))
 
-        e_3 = 7.5 * nu * np.trapezoid(shear_spectrum[Range], K[Range])
-        e_3 = max(e_3, 1e-15)
+        e_3 = ISOTROPY_FACTOR * nu * np.trapezoid(shear_spectrum[Range], K[Range])
+        e_3 = max(e_3, EPSILON_FLOOR)
 
         # Iterative variance correction
         e_4 = _variance_correction(e_3, K[Range[-1]], nu)
@@ -1013,8 +1070,8 @@ def _estimate_epsilon(
         if len(K) > 2:
             e_4_vc = e_4  # variance-corrected value for ratio test
             phi_low = nasmyth(e_4, nu, K[1:3])
-            e_4 = e_4 + 0.25 * 7.5 * nu * K[1] * phi_low[0]
-            if e_4 / e_4_vc > 1.1:
+            e_4 = e_4 + LOW_K_CORRECTION_FACTOR * ISOTROPY_FACTOR * nu * K[1] * phi_low[0]
+            if e_4 / e_4_vc > LOW_K_CORRECTION_THRESHOLD:
                 e_4 = _variance_correction(e_4, K[Range[-1]], nu)
 
         k_max = K[Range[-1]]
@@ -1022,23 +1079,20 @@ def _estimate_epsilon(
     else:
         # Inertial subrange method
         method = 1
-        K_limit = min(K_AA, 150)
+        K_limit = min(K_AA, K_LIMIT_MAX)
         e_4, k_max = _inertial_subrange(K, shear_spectrum, e_1, nu, K_limit)
-        Range = np.where(K <= k_max)[0]
+        Range = np.where(k_max >= K)[0]
         if len(Range) < 3:
             Range = np.arange(min(3, n_freq))
 
     # Compute Nasmyth spectrum at final epsilon
-    nas_spec = nasmyth(max(e_4, 1e-15), nu, K + 1e-30)
+    nas_spec = nasmyth(max(e_4, EPSILON_FLOOR), nu, K + 1e-30)
 
     # Mean absolute deviation (log10, matching ODAS convention)
     if len(Range) > 1:
         spec_ratio = shear_spectrum[Range[1:]] / (nas_spec[Range[1:]] + 1e-30)
         spec_ratio = spec_ratio[spec_ratio > 0]
-        if len(spec_ratio) > 0:
-            mad = float(np.mean(np.abs(np.log10(spec_ratio))))
-        else:
-            mad = float("nan")
+        mad = float(np.mean(np.abs(np.log10(spec_ratio)))) if len(spec_ratio) > 0 else float("nan")
     else:
         mad = float("nan")
 
@@ -1051,22 +1105,22 @@ def _estimate_epsilon(
         fom = np.nan
 
     # Lueck (2022a,b) figure of merit — FM < 1 for 97.5% of good spectra.
-    #   σ²_ln_Ψ = (5/4)(N_f - N_v)^(-7/9)     spectral log-variance
-    #   T_M      = 0.8 + sqrt(1.56 / N_s)       97.5th percentile of MAD
-    #   FM       = MAD_ln / (T_M · σ_ln_Ψ)
+    #   sigma^2_ln_Psi = (5/4)(N_f - N_v)^(-7/9)  spectral log-variance
+    #   T_M      = 0.8 + sqrt(1.56 / N_s)        97.5th percentile of MAD
+    #   FM       = MAD_ln / (T_M * sigma_ln_Psi)
     # Uses natural log (not log10).
     if len(Range) > 1 and len(spec_ratio) > 0:
         N_s = len(spec_ratio)
         mad_ln = np.mean(np.abs(np.log(spec_ratio)))  # natural log
         N_eff = max(num_ffts - n_v, 1)
-        sigma_ln = np.sqrt(1.25 * N_eff ** (-7 / 9))
-        T_M = 0.8 + np.sqrt(1.56 / N_s)
+        sigma_ln = np.sqrt(FM_SIGMA_COEFF * N_eff**FM_SIGMA_EXPONENT)
+        T_M = FM_TM_OFFSET + np.sqrt(FM_TM_COEFF / N_s)
         FM = mad_ln / (T_M * sigma_ln)
     else:
         FM = np.nan
 
     # K_max / K_95: fraction of theoretical spectrum resolved
-    K_95 = X_95 * (max(e_4, 1e-15) / nu**3) ** 0.25
+    K_95 = X_95 * (max(e_4, EPSILON_FLOOR) / nu**3) ** 0.25
     K_max_ratio_val = k_max / K_95 if K_95 > 0 else np.nan
 
     return e_4, k_max, mad, method, nas_spec, fom, K_max_ratio_val, FM
@@ -1075,9 +1129,9 @@ def _estimate_epsilon(
 def _variance_correction(e_3: float, K_upper: float, nu: float, max_iter: int = 50) -> float:
     """Iterative variance correction using Lueck's resolved-variance model.
 
-    Matches ODAS ``get_diss_odas.m`` lines 623–634.  The fraction of total
+    Matches ODAS ``get_diss_odas.m`` lines 623-634.  The fraction of total
     Nasmyth variance resolved up to ``K_upper`` is approximated by
-    ``tanh(48x) − 2.9x·exp(−22.3x)`` where ``x = (K_upper / ks)^(4/3)``.
+    ``tanh(48x) - 2.9x*exp(-22.3x)`` where ``x = (K_upper / ks)^(4/3)``.
 
     Parameters
     ----------
@@ -1099,13 +1153,15 @@ def _variance_correction(e_3: float, K_upper: float, nu: float, max_iter: int = 
     for _ in range(max_iter):
         x_limit = K_upper * (nu**3 / e_new) ** 0.25
         x_limit = x_limit ** (4 / 3)
-        variance_resolved = np.tanh(48 * x_limit) - 2.9 * x_limit * np.exp(-22.3 * x_limit)
+        variance_resolved = (
+            np.tanh(VARIANCE_TANH_COEFF * x_limit)
+            - VARIANCE_EXP_COEFF * x_limit * np.exp(-VARIANCE_EXP_DECAY * x_limit)
+        )
         if variance_resolved <= 0:
             break
         e_old = e_new
         e_new = e_3 / variance_resolved
-        # Convergence threshold: < 2% change (matches ODAS)
-        if e_new / e_old < 1.02:
+        if e_new / e_old < VARIANCE_CONVERGENCE:
             break
     return e_new
 
@@ -1124,11 +1180,8 @@ def _inertial_subrange(
     K_max : float
         Upper fit limit [cpm].
     """
-    # ISR wavenumber limit factor (2 × 0.01, matches ODAS)
-    x_isr = 0.02
-
-    isr_limit = min(x_isr * (e / nu**3) ** 0.25, K_limit)
-    fit_range = np.where(K <= isr_limit)[0]
+    isr_limit = min(X_ISR * (e / nu**3) ** 0.25, K_limit)
+    fit_range = np.where(isr_limit >= K)[0]
     if len(fit_range) < 3:
         fit_range = np.arange(min(3, len(K)))
 
@@ -1136,7 +1189,7 @@ def _inertial_subrange(
 
     # Iterative fitting (3 passes)
     for _ in range(3):
-        nas = nasmyth(max(e, 1e-15), nu, K[fit_range] + 1e-30)
+        nas = nasmyth(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
         ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
         ratio = ratio[ratio > 0]
         if len(ratio) == 0:
@@ -1145,15 +1198,15 @@ def _inertial_subrange(
         e = e * 10 ** (3 * fit_error / 2)
 
     # Remove flyers
-    nas = nasmyth(max(e, 1e-15), nu, K[fit_range] + 1e-30)
+    nas = nasmyth(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
     if len(fit_range) > 2:
         ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
         ratio = ratio[ratio > 0]
         if len(ratio) > 0:
             fit_error_vec = np.log10(ratio)
-            bad = np.where(np.abs(fit_error_vec) > 0.5)[0]
+            bad = np.where(np.abs(fit_error_vec) > ISR_FLYER_THRESHOLD)[0]
             if len(bad) > 0:
-                bad_limit = max(1, int(np.ceil(0.2 * len(fit_range))))
+                bad_limit = max(1, int(np.ceil(ISR_FLYER_FRAC * len(fit_range))))
                 if len(bad) > bad_limit:
                     order = np.argsort(fit_error_vec[bad])[::-1]
                     bad = bad[order[:bad_limit]]
@@ -1167,7 +1220,7 @@ def _inertial_subrange(
 
     # Re-fit (2 more passes)
     for _ in range(2):
-        nas = nasmyth(max(e, 1e-15), nu, K[fit_range] + 1e-30)
+        nas = nasmyth(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
         ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
         ratio = ratio[ratio > 0]
         if len(ratio) == 0:
@@ -1221,7 +1274,7 @@ def compute_diss_file(
         output_paths.append(out_path)
         print(
             f"  {out_path.name}: {ds.sizes['time']} estimates, "
-            f"P={float(ds.P_mean.min()):.0f}–{float(ds.P_mean.max()):.0f} dbar"
+            f"P={float(ds.P_mean.min()):.0f}–{float(ds.P_mean.max()):.0f} dbar"  # noqa: RUF001
         )
 
     return output_paths

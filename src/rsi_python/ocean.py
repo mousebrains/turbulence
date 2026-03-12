@@ -11,7 +11,7 @@ def visc35(T: npt.ArrayLike) -> np.ndarray:
     Parameters
     ----------
     T : float or array_like
-        Temperature in °C. Valid for 0–20 °C.
+        Temperature in °C. Valid for 0-20 °C.
 
     Returns
     -------

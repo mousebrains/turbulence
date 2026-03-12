@@ -148,7 +148,7 @@ class TestCSD:
         x = rng.standard_normal(10000)
         nfft = 256
         rate = 512.0
-        Pxx, F, _, _ = csd_odas(x, None, nfft, rate, detrend="none")
+        Pxx, _F, _, _ = csd_odas(x, None, nfft, rate, detrend="none")
         # Variance of white noise = 1, so PSD ≈ 1/rate at all frequencies
         # (for properly normalized one-sided spectrum)
         assert Pxx.shape == (nfft // 2 + 1,)
@@ -174,7 +174,7 @@ class TestCSD:
         rng = np.random.default_rng(42)
         x = rng.standard_normal(2048)
         y = rng.standard_normal(2048)
-        Cxy, F, Cxx, Cyy = csd_odas(x, y, 256, 512.0)
+        Cxy, _F, Cxx, Cyy = csd_odas(x, y, 256, 512.0)
         assert Cxy is not None
         assert Cxx is not None
         assert Cyy is not None
@@ -185,7 +185,7 @@ class TestCSD:
 
         rng = np.random.default_rng(42)
         x = rng.standard_normal(4096) + np.linspace(0, 1, 4096) ** 2
-        Pxx, F, _, _ = csd_odas(x, None, 256, 512.0, detrend="parabolic")
+        Pxx, _F, _, _ = csd_odas(x, None, 256, 512.0, detrend="parabolic")
         assert Pxx.shape == (129,)
         assert np.all(Pxx > 0)
         assert np.all(np.isfinite(Pxx))
@@ -196,7 +196,7 @@ class TestCSD:
 
         rng = np.random.default_rng(42)
         x = rng.standard_normal(4096) + np.linspace(0, 1, 4096) ** 3
-        Pxx, F, _, _ = csd_odas(x, None, 256, 512.0, detrend="cubic")
+        Pxx, _F, _, _ = csd_odas(x, None, 256, 512.0, detrend="cubic")
         assert Pxx.shape == (129,)
         assert np.all(Pxx > 0)
         assert np.all(np.isfinite(Pxx))
@@ -206,7 +206,7 @@ class TestCSD:
 
         rng = np.random.default_rng(42)
         x = rng.standard_normal((4096, 2))
-        Cxy, F, _, _ = csd_matrix(x, None, 256, 512.0)
+        Cxy, _F, _, _ = csd_matrix(x, None, 256, 512.0)
         # Should be (n_freq, 2, 2)
         assert Cxy.shape == (129, 2, 2)
         # Auto-spectra on diagonal should be real and positive
@@ -219,7 +219,7 @@ class TestCSD:
         rng = np.random.default_rng(42)
         x = rng.standard_normal((4096, 2))
         y = rng.standard_normal((4096, 3))
-        Cxy, F, Cxx, Cyy = csd_matrix(x, y, 256, 512.0)
+        Cxy, _F, Cxx, Cyy = csd_matrix(x, y, 256, 512.0)
         assert Cxy.shape == (129, 2, 3)
         assert Cxx.shape == (129, 2, 2)
         assert Cyy.shape == (129, 3, 3)
@@ -237,7 +237,7 @@ class TestDespike:
 
         t = np.arange(0, 10, 1 / 512)
         x = np.sin(2 * np.pi * 5 * t)
-        y, spikes, n_passes, frac = despike(x, 512.0, thresh=8, smooth=0.5)
+        y, spikes, _n_passes, frac = despike(x, 512.0, thresh=8, smooth=0.5)
         assert len(spikes) == 0
         assert frac == 0.0
         np.testing.assert_array_equal(y, x)
@@ -250,7 +250,7 @@ class TestDespike:
         x = np.sin(2 * np.pi * 5 * t) * 0.1
         # Add a large spike
         x[2560] = 50.0
-        y, spikes, n_passes, frac = despike(x, 512.0, thresh=8, smooth=0.5)
+        y, spikes, _n_passes, frac = despike(x, 512.0, thresh=8, smooth=0.5)
         assert len(spikes) > 0
         assert abs(y[2560]) < 1.0  # spike removed
         assert frac > 0
@@ -262,7 +262,7 @@ class TestDespike:
         t = np.arange(0, 10, 1 / 512)
         x = np.sin(2 * np.pi * 5 * t) * 0.1
         x[0] = 50.0
-        y, spikes, n_passes, frac = despike(x, 512.0, thresh=8, smooth=0.5)
+        y, _spikes, _n_passes, _frac = despike(x, 512.0, thresh=8, smooth=0.5)
         assert np.all(np.isfinite(y))
 
     def test_spike_at_end(self):
@@ -272,7 +272,7 @@ class TestDespike:
         t = np.arange(0, 10, 1 / 512)
         x = np.sin(2 * np.pi * 5 * t) * 0.1
         x[-1] = 50.0
-        y, spikes, n_passes, frac = despike(x, 512.0, thresh=8, smooth=0.5)
+        y, _spikes, _n_passes, _frac = despike(x, 512.0, thresh=8, smooth=0.5)
         assert np.all(np.isfinite(y))
 
     def test_all_spike_signal(self):
@@ -281,7 +281,7 @@ class TestDespike:
 
         # Signal where most values are huge → they all look like spikes
         x = np.full(5120, 100.0)
-        y, spikes, n_passes, frac = despike(x, 512.0, thresh=2, smooth=0.5)
+        y, _spikes, _n_passes, _frac = despike(x, 512.0, thresh=2, smooth=0.5)
         assert np.all(np.isfinite(y))
 
 
@@ -347,7 +347,7 @@ class TestGoodman:
         shear = rng.standard_normal((N, 1))
         accel = rng.standard_normal((N, 2))
         with pytest.warns(UserWarning, match="Insufficient FFT segments"):
-            clean_UU, AA, UU, UA, F = clean_shear_spec(accel, shear, 64, 512.0)
+            clean_UU, _AA, _UU, _UA, _F = clean_shear_spec(accel, shear, 64, 512.0)
         # Should still return valid arrays
         assert clean_UU.shape[0] == 64 // 2 + 1
         assert np.all(np.isfinite(np.real(clean_UU)))
@@ -361,7 +361,7 @@ class TestGoodman:
         # Pass transposed shapes: (n_chan, N) instead of (N, n_chan)
         shear = rng.standard_normal((1, N))  # 1 channel, N samples
         accel = rng.standard_normal((2, N))  # 2 channels, N samples
-        clean_UU, AA, UU, UA, F = clean_shear_spec(accel, shear, 256, 512.0)
+        clean_UU, _AA, _UU, _UA, _F = clean_shear_spec(accel, shear, 256, 512.0)
         assert clean_UU.shape[0] == 256 // 2 + 1
         assert np.all(np.isfinite(np.real(clean_UU)))
 
@@ -377,7 +377,7 @@ class TestGoodman:
         shear = rng.standard_normal((N, 1))
         accel = rng.standard_normal((N, 2))
         with pytest.warns(UserWarning, match="Insufficient FFT segments"):
-            clean_UU, AA, UU, UA, F = clean_shear_spec(accel, shear, 64, 512.0)
+            clean_UU, _AA, _UU, _UA, _F = clean_shear_spec(accel, shear, 64, 512.0)
         assert np.all(np.isfinite(np.real(clean_UU)))
 
     def test_clean_shear_reduces_noise(self):
@@ -394,7 +394,7 @@ class TestGoodman:
         accel = vib[:, np.newaxis] + rng.standard_normal((N, 1)) * 0.01
         shear = shear[:, np.newaxis]
 
-        clean_UU, AA, UU, UA, F = clean_shear_spec(accel, shear, 256, 512.0)
+        clean_UU, _AA, UU, _UA, F = clean_shear_spec(accel, shear, 256, 512.0)
 
         # Find the frequency bin nearest 50 Hz (vibration frequency)
         vib_bin = np.argmin(np.abs(F - 50))

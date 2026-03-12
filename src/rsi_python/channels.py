@@ -163,7 +163,7 @@ def convert_aroft_o2(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarr
 
 
 def convert_aroft_t(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
-    """RINKO FT temperature: unsigned 16-bit wrapping / 1000 − 5 → °C."""
+    """RINKO FT temperature: unsigned 16-bit wrapping / 1000 - 5 -> deg C."""
     d = _unsigned_16bit(data)
     return d / 1000.0 - 5.0, "deg_C"
 

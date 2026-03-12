@@ -205,7 +205,7 @@ class TestFallRate:
 class TestProfiles:
     def test_profiles_found(self, file_pair):
         """Should detect at least one profile (skip short/transit files)."""
-        pf, mat, _ = file_pair
+        pf, _mat, _ = file_pair
         from rsi_python.profile import _smooth_fall_rate, get_profiles
 
         P = pf.channels["P"]
@@ -219,7 +219,7 @@ class TestProfiles:
 
     def test_most_profiles_reach_depth(self, file_pair):
         """Most profiles should reach at least 20 dbar."""
-        pf, mat, _ = file_pair
+        pf, _mat, _ = file_pair
         from rsi_python.profile import _smooth_fall_rate, get_profiles
 
         P = pf.channels["P"]
@@ -233,7 +233,7 @@ class TestProfiles:
 
     def test_profiles_non_overlapping(self, file_pair):
         """Profiles should not overlap."""
-        pf, mat, _ = file_pair
+        pf, _mat, _ = file_pair
         from rsi_python.profile import _smooth_fall_rate, get_profiles
 
         P = pf.channels["P"]

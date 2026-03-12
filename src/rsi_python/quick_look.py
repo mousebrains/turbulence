@@ -121,7 +121,7 @@ def _compute_chi_spectra(
         # M2-MLE: call _mle_fit_kB directly with gradient spectrum from shared code
         grad = obs_spectra[ci] if ci < len(obs_spectra) else np.full(n_freq, np.nan)
         dg_i = diff_gains[ci] if ci < len(diff_gains) else 0.94
-        valid = np.isfinite(grad) & (grad > 0) & (K > 0) & (K <= K_AA_chi)
+        valid = np.isfinite(grad) & (grad > 0) & (K > 0) & (K_AA_chi >= K)
         if np.sum(valid) >= 3:
             chi_obs = max(6 * KAPPA_T * np.trapezoid(grad[valid], K[valid]), 1e-10)
             kB_best, chi_val, _, _, spec_raw, _, _ = _mle_fit_kB(
@@ -451,7 +451,7 @@ class QuickLookViewer(ProfileViewer):
             eps_for_chi,
             spectrum_model=self.spectrum_model,
         )
-        K, F, obs_spectra, methods_results, noise_K, mean_speed, nu = self._cached_chi
+        K, _F, obs_spectra, methods_results, noise_K, mean_speed, _nu = self._cached_chi
 
         # Line styles for each method; selected method drawn thicker
         selected_method = {1: "M1", 2: "M2-MLE"}.get(self.chi_method, "M1")
@@ -477,7 +477,7 @@ class QuickLookViewer(ProfileViewer):
                 obs_lines.append(None)
 
             for method_name, ls, alpha in method_styles:
-                batch_spec, chi_val, kB_val = methods_results[method_name][i]
+                batch_spec, chi_val, _kB_val = methods_results[method_name][i]
                 valid_b = np.isfinite(batch_spec) & (batch_spec > 0)
                 lw = 1.5 if method_name == selected_method else 0.75
                 if np.any(valid_b):

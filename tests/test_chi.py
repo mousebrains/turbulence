@@ -319,7 +319,7 @@ class TestChiFromEpsilon:
         spec_obs = spec_true * H2
         spec_obs = np.maximum(spec_obs, 1e-20)
 
-        chi_est, kB_est, K_max, _, fom, K_max_ratio = _chi_from_epsilon(
+        chi_est, _kB_est, _K_max, _, _fom, _K_max_ratio = _chi_from_epsilon(
             spec_obs,
             K,
             eps_true,
@@ -361,7 +361,7 @@ class TestMLEFit:
         spec_obs = batchelor_grad(K, kB_true, chi_true)
         spec_obs = np.maximum(spec_obs, 1e-20)
 
-        kB_fit, chi_fit, eps_fit, K_max, _, fom, K_max_ratio = _mle_fit_kB(
+        kB_fit, _chi_fit, _eps_fit, _K_max, _, _fom, _K_max_ratio = _mle_fit_kB(
             spec_obs,
             K,
             chi_true,

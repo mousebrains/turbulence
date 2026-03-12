@@ -362,10 +362,7 @@ class DissLookViewer(ProfileViewer):
         # Lower limit: 1 order below noise floor minimum
         if noise is not None:
             noise_in = noise[in_range & (noise > 0) & np.isfinite(noise)]
-            if len(noise_in):
-                y_lo = 10 ** (np.floor(np.log10(np.min(noise_in))) - 1)
-            else:
-                y_lo = 1e-11
+            y_lo = 10 ** (np.floor(np.log10(np.min(noise_in))) - 1) if len(noise_in) else 1e-11
         else:
             y_lo = 1e-11
 

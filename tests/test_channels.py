@@ -22,7 +22,7 @@ from rsi_python.channels import (
 
 class TestConvertTherm:
     def test_synthetic_counts_to_temperature(self):
-        """Synthetic raw counts with known Steinhart-Hart params → temperature in 0–30 °C."""
+        """Synthetic raw counts with known Steinhart-Hart params -> temperature in 0-30 deg C."""
         params = {
             "a": "0",
             "b": "1",

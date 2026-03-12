@@ -14,7 +14,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from rsi_python.dissipation import _estimate_epsilon
+from rsi_python.dissipation import (
+    MACOUN_LUECK_DENOM,
+    MACOUN_LUECK_K,
+    SPEED_MIN,
+    _estimate_epsilon,
+)
 from rsi_python.fp07 import fp07_tau, fp07_transfer, gradT_noise
 from rsi_python.goodman import clean_shear_spec
 from rsi_python.ocean import visc35
@@ -90,9 +95,11 @@ def compute_eps_window(
     diss_length = shear.shape[0]
 
     W = float(np.mean(np.abs(speed)))
-    if W < 0.01:
-        warnings.warn(f"Speed {W:.4f} m/s below minimum; clamped to 0.01 m/s", stacklevel=2)
-        W = 0.01
+    if W < SPEED_MIN:
+        warnings.warn(
+            f"Speed {W:.4f} m/s below minimum; clamped to {SPEED_MIN} m/s", stacklevel=2
+        )
+        W = SPEED_MIN
     nu = float(visc35(T_mean))
     mean_P = float(np.mean(P))
 
@@ -126,8 +133,8 @@ def compute_eps_window(
 
         # Macoun-Lueck wavenumber correction
         correction = np.ones_like(K_g)
-        mask = K_g <= 150
-        correction[mask] = 1 + (K_g[mask] / 48) ** 2
+        mask = K_g <= MACOUN_LUECK_K
+        correction[mask] = 1 + (K_g[mask] / MACOUN_LUECK_DENOM) ** 2
 
         for ci in range(n_shear):
             spec_k = np.real(clean_UU[:, ci, ci]) * W * correction
@@ -150,8 +157,8 @@ def compute_eps_window(
             Pxx, F_s, _, _ = csd_odas(shear[:, ci], None, fft_length, fs_fast)
             K_s = F_s / W
             correction = np.ones_like(K_s)
-            mask_c = K_s <= 150
-            correction[mask_c] = 1 + (K_s[mask_c] / 48) ** 2
+            mask_c = K_s <= MACOUN_LUECK_K
+            correction[mask_c] = 1 + (K_s[mask_c] / MACOUN_LUECK_DENOM) ** 2
             spec_k = Pxx * W * correction
 
             e4, k_max, mad, meth, nas, fom, Kmr, FM = _estimate_epsilon(

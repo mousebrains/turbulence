@@ -168,7 +168,7 @@ class TestEpsilonVsMatlab:
 
     def test_profile_count(self, matched_results):
         """Python and MATLAB should detect similar number of profiles."""
-        results, val, matched = matched_results
+        results, val, _matched = matched_results
         ml_n = int(val["n_profiles"])
         py_n = len(results)
         assert abs(py_n - ml_n) <= 3, f"Profile count: Python {py_n} vs MATLAB {ml_n}"

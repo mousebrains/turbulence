@@ -59,7 +59,7 @@ def test_p_to_netcdf_default_path(skip_no_data, tmp_path, monkeypatch):
 
     from rsi_python.convert import p_to_netcdf
 
-    pf, nc_path = p_to_netcdf(local_p)
+    _pf, nc_path = p_to_netcdf(local_p)
     assert nc_path.exists()
     assert nc_path.suffix == ".nc"
     assert nc_path.parent == tmp_path
@@ -92,7 +92,7 @@ def test_cf_compliance(skip_no_data, tmp_path):
     from rsi_python.convert import p_to_netcdf
 
     out_path = tmp_path / "test_cf.nc"
-    pf, nc_path = p_to_netcdf(SAMPLE_FILE, out_path)
+    _pf, nc_path = p_to_netcdf(SAMPLE_FILE, out_path)
     ds = nc.Dataset(str(nc_path), "r")
 
     # Required global attributes

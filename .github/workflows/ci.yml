@@ -33,10 +33,11 @@ jobs:
 
   test:
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v6
@@ -47,10 +48,11 @@ jobs:
       - run: pip install -e ".[dev]" pytest-cov
       - run: python -m pytest --tb=short -q --cov=rsi_python --cov-report=xml
       - uses: codecov/codecov-action@v5
-        if: matrix.python-version == '3.13'
+        if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
+          fail_ci_if_error: true
 
   matlab-lint:
     runs-on: ubuntu-latest

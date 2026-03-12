@@ -61,9 +61,8 @@ def _resolve_files(patterns: list[str], extensions: set[str] | None = None) -> l
             print(f"Warning: no files match '{pattern}'", file=sys.stderr)
         for f in expanded:
             p = Path(f)
-            if p.is_file():
-                if extensions is None or p.suffix.lower() in extensions:
-                    files.append(p)
+            if p.is_file() and (extensions is None or p.suffix.lower() in extensions):
+                files.append(p)
     if not files:
         ext_str = ", ".join(extensions) if extensions else "any"
         print(f"Error: no matching files found ({ext_str})", file=sys.stderr)
