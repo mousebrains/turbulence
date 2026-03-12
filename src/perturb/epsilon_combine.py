@@ -49,8 +49,16 @@ def mk_epsilon_mean(
     """
     ds = ds.copy()
 
-    # Find epsilon probe variables
+    # Find epsilon probe variables — either separate e_1/e_2/... or 2D epsilon(probe, time)
     probe_names = sorted(k for k in ds.data_vars if k.startswith("e_"))
+
+    if not probe_names and "epsilon" in ds and "probe" in ds.dims:
+        # Split 2D epsilon(probe, time) into per-probe variables
+        for i in range(ds.sizes["probe"]):
+            name = f"e_{i + 1}"
+            ds[name] = ds["epsilon"].isel(probe=i)
+            probe_names.append(name)
+
     if not probe_names:
         warnings.warn("No per-probe epsilon variables (e_1, e_2, ...) found")
         return ds

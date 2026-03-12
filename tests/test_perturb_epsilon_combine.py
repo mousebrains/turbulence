@@ -193,3 +193,24 @@ class TestMkEpsilonMean:
         assert "epsilonMean" in result
         # After removing e_2 as outlier, mean should be close to e_1
         np.testing.assert_allclose(result["epsilonMean"].values, 1e-8, rtol=0.1)
+
+    def test_2d_epsilon_probe_time(self):
+        """2D epsilon(probe, time) is split into per-probe variables."""
+        n = 20
+        e = np.full(n, 1e-8)
+        ds = xr.Dataset(
+            {
+                "epsilon": (["probe", "time"], np.stack([e, e * 2])),
+                "speed": (["time"], np.full(n, 0.5)),
+                "nu": (["time"], np.full(n, 1e-6)),
+            },
+            coords={
+                "probe": ["sh1", "sh2"],
+                "time": np.arange(n, dtype=float),
+            },
+            attrs={"diss_length": 512, "fs_fast": 512.0},
+        )
+        result = mk_epsilon_mean(ds)
+        assert "epsilonMean" in result
+        expected = np.sqrt(1e-8 * 2e-8)
+        np.testing.assert_allclose(result["epsilonMean"].values, expected, rtol=0.1)

@@ -88,6 +88,9 @@ def bin_by_depth(
         elif "P" in ds:
             d = ds["P"].values
             all_depths.extend(d[np.isfinite(d)])
+        elif "P_mean" in ds:
+            d = ds["P_mean"].values
+            all_depths.extend(d[np.isfinite(d)])
     if not all_depths:
         return xr.Dataset()
 
@@ -105,6 +108,8 @@ def bin_by_depth(
             depth_var = "depth"
         elif "P" in ds:
             depth_var = "P"
+        elif "P_mean" in ds:
+            depth_var = "P_mean"
         else:
             continue
 
@@ -114,6 +119,8 @@ def bin_by_depth(
             arr = ds[vname].values
             depth = ds[depth_var].values
             if arr.ndim != 1 or len(arr) != len(depth):
+                continue
+            if arr.dtype.kind == "M":  # skip datetime64 variables
                 continue
 
             if vname not in result_vars:
@@ -187,6 +194,8 @@ def bin_by_time(
         for vname in ds.data_vars:
             arr = ds[vname].values
             if arr.ndim != 1 or len(arr) != len(t):
+                continue
+            if arr.dtype.kind == "M":  # skip datetime64 variables
                 continue
             b, _ = _bin_array(arr, t, bin_edges, agg)
             binned_data[vname] = b

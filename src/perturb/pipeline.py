@@ -187,18 +187,19 @@ def process_file(p_path: Path, config: dict, gps, output_dirs: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def run_trim(config: dict) -> list[Path]:
+def run_trim(config: dict, p_files: list[Path] | None = None) -> list[Path]:
     """Trim corrupt final records from .p files."""
     from perturb.discover import find_p_files
     from perturb.trim import trim_p_file
 
     files_cfg = config.get("files", {})
-    root = files_cfg.get("p_file_root", "VMP/")
-    pattern = files_cfg.get("p_file_pattern", "**/*.p")
     output_root = Path(files_cfg.get("output_root", "results/"))
     trim_dir = output_root / "trimmed"
 
-    p_files = find_p_files(root, pattern)
+    if p_files is None:
+        root = files_cfg.get("p_file_root", "VMP/")
+        pattern = files_cfg.get("p_file_pattern", "**/*.p")
+        p_files = find_p_files(root, pattern)
     results = []
     for p in p_files:
         try:
@@ -304,7 +305,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     # Trim
     if files_cfg.get("trim", True):
         print("Trimming...")
-        trimmed = run_trim(config)
+        trimmed = run_trim(config, p_files)
         if trimmed:
             p_files = trimmed
 
