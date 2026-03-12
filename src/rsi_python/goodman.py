@@ -6,6 +6,8 @@ Removes vibration-coherent noise from shear spectra using
 accelerometer cross-spectra.
 """
 
+import contextlib
+
 import numpy as np
 
 from rsi_python.spectral import csd_matrix
@@ -98,10 +100,8 @@ def clean_shear_spec(
         # Fallback: per-frequency with singular handling
         clean_UU = np.copy(UU)
         for f in range(n_freq):
-            try:
+            with contextlib.suppress(np.linalg.LinAlgError):
                 clean_UU[f] = UU[f] - UA[f] @ np.linalg.solve(AA[f], np.conj(UA[f]).T)
-            except np.linalg.LinAlgError:
-                pass
 
     clean_UU = np.real(clean_UU)
 
