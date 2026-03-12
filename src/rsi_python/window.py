@@ -20,7 +20,7 @@ from rsi_python.dissipation import (
     SPEED_MIN,
     _estimate_epsilon,
 )
-from rsi_python.fp07 import fp07_tau, fp07_transfer, gradT_noise
+from rsi_python.fp07 import fp07_double_pole, fp07_tau, fp07_transfer, gradT_noise
 from rsi_python.goodman import clean_shear_spec
 from rsi_python.ocean import visc35
 from rsi_python.spectral import csd_odas
@@ -252,7 +252,7 @@ def compute_chi_window(
     method : int
         1 = chi from epsilon (requires epsilon), 2 = iterative fit.
     """
-    from rsi_python.chi import _chi_from_epsilon, _iterative_fit
+    from rsi_python.chi import _chi_from_epsilon, _default_tau_model, _iterative_fit
 
     n_therm = len(therm_segs)
     n_freq = fft_length // 2 + 1
@@ -264,8 +264,9 @@ def compute_chi_window(
     grad_factor[1:] = (2 * np.pi * K[1:]) ** 2
 
     # FP07 transfer function
-    tau0 = fp07_tau(W)
-    H2 = fp07_transfer(F, tau0)
+    _h2_func = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
+    tau0 = fp07_tau(W, model=_default_tau_model(fp07_model))
+    H2 = _h2_func(F, tau0)
 
     # Noise spectrum (use first probe's diff_gain)
     dg0 = diff_gains[0] if diff_gains else 0.94
@@ -293,13 +294,15 @@ def compute_chi_window(
         grad_specs.append(spec_obs)
 
         dg = diff_gains[ci] if ci < len(diff_gains) else 0.94
+        # Per-probe noise (may differ from shared noise_K if diff_gain differs)
+        noise_K_ci, _ = gradT_noise(F, T_mean, W, fs=fs_fast, diff_gain=dg)
 
         if method == 1 and epsilon is not None:
             eps_ci = epsilon[ci] if ci < len(epsilon) else np.nan
             if np.isfinite(eps_ci) and eps_ci > 0:
                 chi_val, kB, K_max, spec_raw, fom_val, Kmr = _chi_from_epsilon(
-                    spec_obs, K, eps_ci, nu, T_mean, W, f_AA,
-                    fp07_model, spectrum_model, fs_fast, dg, fft_length,
+                    spec_obs, K, eps_ci, nu,
+                    noise_K_ci, H2, tau0, _h2_func, f_AA, W, spectrum_model,
                 )
                 chi_arr[ci] = chi_val
                 kB_arr[ci] = kB
@@ -314,8 +317,8 @@ def compute_chi_window(
         else:
             # Method 2: iterative fit
             _, chi_val, kB, K_max, spec_raw, fom_val, Kmr = _iterative_fit(
-                spec_obs, K, nu, T_mean, W, f_AA,
-                fp07_model, spectrum_model, fs_fast, dg, fft_length,
+                spec_obs, K, nu,
+                noise_K_ci, H2, tau0, _h2_func, f_AA, W, spectrum_model,
             )
             chi_arr[ci] = chi_val
             kB_arr[ci] = kB

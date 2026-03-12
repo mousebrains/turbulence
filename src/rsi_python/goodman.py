@@ -10,7 +10,7 @@ import contextlib
 
 import numpy as np
 
-from rsi_python.spectral import csd_matrix
+from rsi_python.spectral import csd_matrix, csd_matrix_batch
 
 
 def clean_shear_spec(
@@ -123,3 +123,66 @@ def clean_shear_spec(
     clean_UU *= R
 
     return clean_UU, AA, UU, UA, F
+
+
+def clean_shear_spec_batch(
+    accel_windows: np.ndarray,
+    shear_windows: np.ndarray,
+    nfft: int,
+    rate: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Batched Goodman noise removal for all dissipation windows at once.
+
+    Parameters
+    ----------
+    accel_windows : ndarray, shape (n_windows, diss_length, n_accel)
+    shear_windows : ndarray, shape (n_windows, diss_length, n_shear)
+    nfft : int
+    rate : float
+
+    Returns
+    -------
+    clean_UU : ndarray, shape (n_windows, n_freq, n_shear, n_shear)
+        Cleaned shear spectral matrices (real).
+    F : ndarray, shape (n_freq,)
+        Frequency vector [Hz].
+    """
+    n_accel = accel_windows.shape[2]
+
+    # Batched CSD: x=shear, y=accel
+    # UA: (n_win, n_freq, n_sh, n_ac)
+    # UU: (n_win, n_freq, n_sh, n_sh)
+    # AA: (n_win, n_freq, n_ac, n_ac)
+    UA, F, UU, AA = csd_matrix_batch(
+        shear_windows, accel_windows, nfft, rate,
+        overlap=nfft // 2, detrend="linear",
+    )
+    assert UU is not None and AA is not None  # guaranteed when y is not None
+
+    # Goodman cleaning: clean = UU - UA @ inv(AA) @ conj(UA).T
+    # np.linalg.solve broadcasts over leading dims (n_win, n_freq)
+    ua_H = np.conj(np.swapaxes(UA, -2, -1))  # (n_win, n_freq, n_ac, n_sh)
+    try:
+        solved = np.linalg.solve(AA, ua_H)  # (n_win, n_freq, n_ac, n_sh)
+        clean_UU = UU - np.matmul(UA, solved)
+    except np.linalg.LinAlgError:
+        clean_UU = UU.copy()
+        n_win, n_freq = UU.shape[:2]
+        for w in range(n_win):
+            for fi in range(n_freq):
+                with contextlib.suppress(np.linalg.LinAlgError):
+                    clean_UU[w, fi] = (
+                        UU[w, fi]
+                        - UA[w, fi] @ np.linalg.solve(AA[w, fi], np.conj(UA[w, fi]).T)
+                    )
+
+    clean_UU = np.real(clean_UU)
+
+    # Bias correction
+    diss_length = shear_windows.shape[1]
+    fft_segments = 2 * diss_length // nfft - 1
+    if fft_segments > 1.02 * n_accel:
+        R = 1.0 / (1.0 - 1.02 * n_accel / fft_segments)
+        clean_UU *= R
+
+    return clean_UU, F

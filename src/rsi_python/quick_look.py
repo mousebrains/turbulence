@@ -60,6 +60,8 @@ def _compute_chi_spectra(
     """
     from rsi_python.batchelor import KAPPA_T
     from rsi_python.chi import _mle_fit_kB
+    from rsi_python.fp07 import fp07_tau, fp07_transfer
+    from rsi_python.fp07 import gradT_noise as _gradT_noise
 
     w_sel = select_mid_window(P_fast, sel, fft_length)
 
@@ -124,9 +126,12 @@ def _compute_chi_spectra(
         valid = np.isfinite(grad) & (grad > 0) & (K > 0) & (K_AA_chi >= K)
         if np.sum(valid) >= 3:
             chi_obs = max(6 * KAPPA_T * np.trapezoid(grad[valid], K[valid]), 1e-10)
+            # Pre-compute noise/H2 for _mle_fit_kB
+            _tau0 = fp07_tau(mean_speed)
+            _noise_K_i, _ = _gradT_noise(F, mean_T, mean_speed, fs=fs_fast, diff_gain=dg_i)
             kB_best, chi_val, _, _, spec_raw, _, _ = _mle_fit_kB(
-                grad, K, chi_obs, nu, mean_T, mean_speed, f_AA_chi,
-                "single_pole", spectrum_model, fs_fast, dg_i, fft_length,
+                grad, K, chi_obs, nu,
+                _noise_K_i, H2, _tau0, fp07_transfer, f_AA_chi, mean_speed, spectrum_model,
             )
             spec_mle = spec_raw * H2 if np.isfinite(chi_val) else np.full(n_freq, np.nan)
             methods_results["M2-MLE"].append((spec_mle, chi_val, kB_best))
