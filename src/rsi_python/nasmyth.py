@@ -8,7 +8,8 @@ McMillan et al. (2016), J. Atmos. Oceanic Techno., 33, 817–837.
 import numpy as np
 import numpy.typing as npt
 
-# Constants from ODAS get_diss_odas.m
+# Lueck (2022), J. Atmos. Oceanic Technol., 39, 1803–1816,
+# https://doi.org/10.1175/JTECH-D-21-0051.1
 LUECK_A = 1.0774e9  # e/e_10 model constant
 X_95 = 0.1205  # non-dimensional wavenumber for 95% variance
 

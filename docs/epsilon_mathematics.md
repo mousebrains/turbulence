@@ -80,7 +80,7 @@ Phi_nasmyth(k) = epsilon^(3/4) * nu^(-1/4) * G2(k / k_s)
 - At high wavenumbers (viscous subrange, `x >> 1`): exponential rolloff as `x^(1/3) / x^3.715`
 - The spectrum contains 95% of total variance below `x = X_95 = 0.1205`, i.e., at wavenumber `K_95 = 0.1205 * k_s`
 
-### LUECK_A constant
+### LUECK_A constant ([Lueck 2022](bibliography.md#epsilon-shear-probe))
 
 The relationship between dissipation integrated to 10 cpm (`e_10`) and total dissipation is:
 
@@ -88,7 +88,7 @@ The relationship between dissipation integrated to 10 cpm (`e_10`) and total dis
 e_total = e_10 * sqrt(1 + LUECK_A * e_10)
 ```
 
-where `LUECK_A = 1.0774e9` is derived from the non-dimensional integral of the Nasmyth spectrum ([Lueck 2022](https://doi.org/10.1175/JTECH-D-21-0051.1)).
+where `LUECK_A = 1.0774e9` is derived from the non-dimensional integral of the Nasmyth spectrum.
 
 ([`nasmyth.py`](../src/rsi_python/nasmyth.py), [`dissipation.py: _estimate_epsilon`](../src/rsi_python/dissipation.py))
 
