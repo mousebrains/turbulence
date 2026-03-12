@@ -23,6 +23,7 @@ from scipy.special import erfc
 KAPPA_T = 1.4e-7  # Thermal diffusivity of seawater [m^2/s]
 Q_BATCHELOR = 3.7  # Batchelor universal constant (Oakey 1982)
 Q_KRAICHNAN = 5.26  # Kraichnan universal constant (Bogucki et al. 1997)
+_SQ6Q_KRAICHNAN = np.sqrt(6 * Q_KRAICHNAN)  # Precomputed for kraichnan_grad
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +162,9 @@ def kraichnan_grad(
     """
     k = np.asarray(k, dtype=np.float64)
     y = k / kB
-    sq6q = np.sqrt(6 * q)
+    sq6q = _SQ6Q_KRAICHNAN if q == Q_KRAICHNAN else np.sqrt(6 * q)
+    sq6q_y = sq6q * y
     with np.errstate(divide="ignore", invalid="ignore"):
-        S = chi * q / (3 * kappa_T * kB**2) * k * (1 + sq6q * y) * np.exp(-sq6q * y)
+        S = chi * q / (3 * kappa_T * kB**2) * k * (1 + sq6q_y) * np.exp(-sq6q_y)
     S = np.where(np.isfinite(S), S, 0.0)
     return S

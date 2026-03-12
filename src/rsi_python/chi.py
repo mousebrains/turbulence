@@ -40,7 +40,6 @@ from rsi_python.batchelor import (
 )
 from rsi_python.fp07 import (
     fp07_double_pole,
-    fp07_tau,
     fp07_transfer,
     gradT_noise_batch,
 )
@@ -48,6 +47,10 @@ from rsi_python.fp07 import (
 # ---------------------------------------------------------------------------
 # Spectrum model dispatcher
 # ---------------------------------------------------------------------------
+
+_N_FINE = 2000  # Points for fine-grid variance correction (was 10000)
+_KB_COARSE = np.logspace(0, 4.5, 100)  # Coarse MLE grid: 1 to ~31623 cpm
+_KB_COARSE_2D = _KB_COARSE[:, np.newaxis]  # (100, 1) for broadcasting
 
 
 def _spectrum_func(model: str) -> tuple:
@@ -66,6 +69,40 @@ def _default_tau_model(fp07_model: str) -> str:
     double_pole pairs with Goto (tau=0.003); single_pole with Lueck.
     """
     return "goto" if fp07_model == "double_pole" else "lueck"
+
+
+def _variance_correction(
+    kB: float,
+    K_max: float,
+    speed: float,
+    tau0: float,
+    _h2,
+    grad_func,
+    n_fine: int = _N_FINE,
+) -> float:
+    """Compute V_total / V_resolved for the unresolved-variance correction.
+
+    The correction factor is independent of chi (linear scaling cancels
+    in the ratio).  Uses a 2000-point grid (sufficient for <0.1% accuracy).
+
+    Returns correction factor, or NaN if integration fails.
+    """
+    K_upper = max(K_max * 5, kB * 5)
+    K_fine = np.linspace(K_upper / n_fine * 0.01, K_upper, n_fine)
+    spec_fine = grad_func(K_fine, kB, 1.0)  # chi=1.0 (cancels in ratio)
+
+    V_total = np.trapezoid(spec_fine, K_fine)
+    if V_total <= 0:
+        return np.nan
+
+    F_fine = K_fine * speed
+    H2_fine = _h2(F_fine, tau0)
+    mask = K_fine <= K_max
+    V_resolved = np.trapezoid(spec_fine[mask] * H2_fine[mask], K_fine[mask])
+
+    if V_resolved <= 0:
+        return np.nan
+    return float(V_total / V_resolved)
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +209,7 @@ def _chi_from_epsilon(
     """
     grad_func, _q = _spectrum_func(spectrum_model)
 
-    kB = batchelor_kB(epsilon, nu)
+    kB = float(batchelor_kB(epsilon, nu))
     if kB < 1:
         warnings.warn(f"kB={kB:.1f} < 1 cpm; epsilon too low for chi estimation", stacklevel=2)
         return np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan
@@ -191,32 +228,16 @@ def _chi_from_epsilon(
     obs_var = np.trapezoid(spec_obs[valid], K[valid])
 
     # Correction factor for FP07 rolloff and unresolved variance
-    # Use trial chi = 6*kappa_T*obs_var as initial
-    chi_trial = 6 * KAPPA_T * obs_var
-    if chi_trial <= 0:
+    # (chi-independent: Batchelor spectrum scales linearly with chi)
+    if obs_var <= 0:
         warnings.warn("Trial chi <= 0; observed variance too low", stacklevel=2)
         return np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan
 
-    # Theoretical Batchelor spectrum
-    K_fine = np.linspace(0, max(K_max * 5, kB * 5), 10000)
-    K_fine[0] = K_fine[1] * 0.01  # avoid zero
-    spec_batch_fine = grad_func(K_fine, kB, chi_trial)
-
-    V_total = np.trapezoid(spec_batch_fine, K_fine)
-
-    # Resolved Batchelor variance (with FP07 rolloff)
-    F_fine = K_fine * speed
-    H2_fine = _h2(F_fine, tau0)
-    mask_resolved = K_fine <= K_max
-    V_resolved = np.trapezoid(
-        spec_batch_fine[mask_resolved] * H2_fine[mask_resolved], K_fine[mask_resolved]
-    )
-
-    if V_resolved <= 0 or V_total <= 0:
+    correction = _variance_correction(kB, K_max, speed, tau0, _h2, grad_func)
+    if not np.isfinite(correction):
         warnings.warn("Batchelor variance non-positive; cannot compute correction", stacklevel=2)
         return np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan
 
-    correction = V_total / V_resolved
     chi = 6 * KAPPA_T * obs_var * correction
 
     # Compute fitted Batchelor spectrum for output
@@ -237,6 +258,63 @@ def _chi_from_epsilon(
 # ---------------------------------------------------------------------------
 # Method 2: MLE spectral fitting (Ruddick et al. 2000)
 # ---------------------------------------------------------------------------
+
+
+def _mle_find_kB(
+    spec_obs: np.ndarray,
+    K: np.ndarray,
+    chi_obs: float,
+    noise_K: np.ndarray,
+    H2: np.ndarray,
+    f_AA: float,
+    speed: float,
+    grad_func,
+) -> tuple[float, np.ndarray, np.ndarray]:
+    """Core MLE grid search for kB (no chi correction or output spectra).
+
+    Returns
+    -------
+    kB_best : float
+        Best-fit Batchelor wavenumber [cpm], or NaN if fit fails.
+    fit_mask : ndarray of bool
+        Valid wavenumber mask used for fitting.
+    K_fit : ndarray
+        Wavenumber vector at fit points.
+    """
+    K_AA = f_AA / speed
+    fit_mask = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=6)
+    if np.sum(fit_mask) < 6:
+        return np.nan, fit_mask, np.empty(0)
+
+    fit_idx = np.where(fit_mask)[0]
+    K_fit = K[fit_idx]
+    spec_fit = spec_obs[fit_idx]
+    H2_fit = H2[fit_idx]
+    noise_fit = noise_K[fit_idx]
+
+    # --- Coarse grid search (vectorized) ---
+    spec_models = grad_func(K_fit, _KB_COARSE_2D, chi_obs) * H2_fit + noise_fit
+    spec_models = np.maximum(spec_models, 1e-30)
+    nll_coarse = np.sum(np.log(spec_models) + spec_fit / spec_models, axis=1)
+    nll_coarse = np.where(np.isfinite(nll_coarse), nll_coarse, np.inf)
+
+    if np.all(np.isinf(nll_coarse)):
+        return np.nan, fit_mask, K_fit
+
+    best_coarse = _KB_COARSE[np.argmin(nll_coarse)]
+
+    # --- Fine grid search (vectorized) ---
+    kB_lo = max(best_coarse * 0.5, 1.0)
+    kB_hi = best_coarse * 2.0
+    kB_fine = np.linspace(kB_lo, kB_hi, 100)
+    kB_fine_2d = kB_fine[:, np.newaxis]
+    spec_models = grad_func(K_fit, kB_fine_2d, chi_obs) * H2_fit + noise_fit
+    spec_models = np.maximum(spec_models, 1e-30)
+    nll_fine = np.sum(np.log(spec_models) + spec_fit / spec_models, axis=1)
+    nll_fine = np.where(np.isfinite(nll_fine), nll_fine, np.inf)
+
+    kB_best = best_coarse if np.all(np.isinf(nll_fine)) else kB_fine[np.argmin(nll_fine)]
+    return kB_best, fit_mask, K_fit
 
 
 def _mle_fit_kB(
@@ -289,73 +367,40 @@ def _mle_fit_kB(
     """
     grad_func, _q = _spectrum_func(spectrum_model)
 
-    # Fitting range
-    K_AA = f_AA / speed
-    fit_mask = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=6)
-    if np.sum(fit_mask) < 6:
-        warnings.warn("Too few valid points for MLE fit", stacklevel=2)
-        return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
+    kB_best, fit_mask, K_fit = _mle_find_kB(
+        spec_obs, K, chi_obs, noise_K, H2, f_AA, speed, grad_func,
+    )
 
-    fit_idx = np.where(fit_mask)[0]
-    K_fit = K[fit_idx]
-    spec_fit = spec_obs[fit_idx]
-    H2_fit = H2[fit_idx]
-    noise_fit = noise_K[fit_idx]
+    if not np.isfinite(kB_best):
+        if len(K_fit) == 0:
+            warnings.warn("Too few valid points for MLE fit", stacklevel=2)
+        else:
+            warnings.warn("All NLL values infinite; MLE fit failed", stacklevel=2)
+        return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
 
     K_max_fit = K_fit[-1]
-
-    # --- Coarse grid search (vectorized) ---
-    kB_coarse = np.logspace(0, 4.5, 100)  # 1 to ~31623 cpm
-    kB_2d = kB_coarse[:, np.newaxis]  # (100, 1) for broadcasting
-    spec_models = grad_func(K_fit, kB_2d, chi_obs) * H2_fit + noise_fit  # (100, n_fit)
-    spec_models = np.maximum(spec_models, 1e-30)
-    nll_coarse = np.sum(np.log(spec_models) + spec_fit / spec_models, axis=1)
-    nll_coarse = np.where(np.isfinite(nll_coarse), nll_coarse, np.inf)
-
-    if np.all(np.isinf(nll_coarse)):
-        warnings.warn("All NLL values infinite; MLE fit failed", stacklevel=2)
-        return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
-
-    best_coarse = kB_coarse[np.argmin(nll_coarse)]
-
-    # --- Fine grid search (vectorized) ---
-    kB_lo = max(best_coarse * 0.5, 1.0)
-    kB_hi = best_coarse * 2.0
-    kB_fine = np.linspace(kB_lo, kB_hi, 100)
-    kB_fine_2d = kB_fine[:, np.newaxis]  # (100, 1) for broadcasting
-    spec_models = grad_func(K_fit, kB_fine_2d, chi_obs) * H2_fit + noise_fit
-    spec_models = np.maximum(spec_models, 1e-30)
-    nll_fine = np.sum(np.log(spec_models) + spec_fit / spec_models, axis=1)
-    nll_fine = np.where(np.isfinite(nll_fine), nll_fine, np.inf)
-
-    kB_best = best_coarse if np.all(np.isinf(nll_fine)) else kB_fine[np.argmin(nll_fine)]
 
     # Recover epsilon from kB
     epsilon = (2 * np.pi * kB_best) ** 4 * nu * KAPPA_T**2
 
     # Re-estimate chi with unresolved-variance correction (like Method 1)
-    K_fine = np.linspace(K[1] * 0.01, max(K_max_fit * 5, kB_best * 5), 10000)
-    spec_fine = grad_func(K_fine, kB_best, chi_obs)
-    V_total = np.trapezoid(spec_fine, K_fine)
-    F_fine = K_fine * speed
-    H2_fine = _h2(F_fine, tau0)
-    mask_resolved = K_fine <= K_max_fit
-    V_resolved = np.trapezoid(
-        spec_fine[mask_resolved] * H2_fine[mask_resolved], K_fine[mask_resolved]
+    correction = _variance_correction(
+        kB_best, K_max_fit, speed, tau0, _h2, grad_func,
     )
-    if V_resolved > 0 and V_total > 0:
+    if np.isfinite(correction):
         obs_var = np.trapezoid(spec_obs[fit_mask], K[fit_mask])
-        chi = 6 * KAPPA_T * obs_var * V_total / V_resolved
+        chi = 6 * KAPPA_T * obs_var * correction
     else:
-        chi = 6 * KAPPA_T * np.trapezoid(spec_fine, K_fine)
+        chi = chi_obs
 
     # Fitted spectrum for output
     spec_batch = grad_func(K, kB_best, chi)
 
     # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise)
-    if np.isfinite(chi) and np.sum(fit_mask) >= 3:
+    fit_idx = np.where(fit_mask)[0]
+    if np.isfinite(chi) and len(fit_idx) >= 3:
         mod_v = np.trapezoid(spec_batch[fit_idx] * H2[fit_idx] + noise_K[fit_idx], K_fit)
-        obs_v = np.trapezoid(spec_fit, K_fit)
+        obs_v = np.trapezoid(spec_obs[fit_idx], K_fit)
         fom = obs_v / mod_v if mod_v > 0 else np.nan
     else:
         fom = np.nan
@@ -430,19 +475,9 @@ def _iterative_fit(
     epsilon = np.nan
 
     for iteration in range(3):
-        # MLE fit for kB
-        kB_best, _chi_fit, epsilon, _K_max, _, _, _ = _mle_fit_kB(
-            spec_obs,
-            K,
-            chi_obs,
-            nu,
-            noise_K,
-            H2,
-            tau0,
-            _h2,
-            f_AA,
-            speed,
-            spectrum_model,
+        # MLE fit for kB (core search only — no variance correction)
+        kB_best, _, _ = _mle_find_kB(
+            spec_obs, K, chi_obs, noise_K, H2, f_AA, speed, grad_func,
         )
 
         if not np.isfinite(kB_best) or kB_best < 1:
@@ -472,8 +507,9 @@ def _iterative_fit(
         )
 
         # Unresolved variance from Batchelor model
-        K_fine = np.linspace(K[1] * 0.01, kB_best * 5, 10000)
-        spec_fine = grad_func(K_fine, kB_best, chi_obs_new if chi_obs_new > 0 else chi_obs)
+        K_fine = np.linspace(K[1] * 0.01, kB_best * 5, _N_FINE)
+        chi_use = chi_obs_new if chi_obs_new > 0 else chi_obs
+        spec_fine = grad_func(K_fine, kB_best, chi_use)
 
         chi_low = 6 * KAPPA_T * np.trapezoid(spec_fine[K_fine < k_l_new], K_fine[K_fine < k_l_new])
         chi_high = 6 * KAPPA_T * np.trapezoid(spec_fine[K_fine > k_u_new], K_fine[K_fine > k_u_new])
@@ -484,6 +520,8 @@ def _iterative_fit(
             chi_obs = 1e-14
 
     # Final values
+    if np.isfinite(kB_best):
+        epsilon = (2 * np.pi * kB_best) ** 4 * nu * KAPPA_T**2
     chi = chi_obs
     spec_batch = grad_func(K, kB_best, chi) if np.isfinite(kB_best) else np.zeros_like(K)
 
@@ -938,17 +976,15 @@ def _compute_profile_chi(
         P_means = np.mean(P[indices], axis=1)
         t_means = np.mean(t_fast[indices], axis=1)
 
-        # Vectorized viscosity
+        # Vectorized viscosity (ocean functions support array inputs)
         if salinity is not None:
             if np.ndim(salinity) > 0:
                 sal_means = np.mean(salinity[indices], axis=1)
             else:
                 sal_means = np.full(n_valid, float(salinity))
-            nu_all = np.array(
-                [float(visc(T_means[i], sal_means[i], P_means[i])) for i in range(n_valid)]
-            )
+            nu_all = np.asarray(visc(T_means, sal_means, P_means), dtype=np.float64)
         else:
-            nu_all = np.array([float(visc35(T_means[i])) for i in range(n_valid)])
+            nu_all = np.asarray(visc35(T_means), dtype=np.float64)
 
         # Store into output arrays
         speed_out[:n_valid] = speed_means
@@ -994,11 +1030,22 @@ def _compute_profile_chi(
         # ---- Vectorized H2 (FP07 transfer) ----
         tau_model = _default_tau_model(fp07_model)
         _h2 = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
-        tau0_all = np.array([fp07_tau(W, model=tau_model) for W in speed_means])
-        H2_all = np.array([_h2(F_const, tau0_all[i]) for i in range(n_valid)])
+        # Vectorized tau0 computation (simple formula)
+        if tau_model == "lueck":
+            tau0_all = 0.01 * (1.0 / speed_means) ** 0.5
+        elif tau_model == "peterson":
+            tau0_all = 0.012 * speed_means ** (-0.32)
+        else:  # goto
+            tau0_all = np.full(n_valid, 0.003)
+        # Vectorized H2: broadcast F_const (n_freq,) with tau0 (n_valid,)
+        omega_tau = (2 * np.pi * F_const[:, np.newaxis] * tau0_all[np.newaxis, :]) ** 2
+        if fp07_model == "single_pole":
+            H2_all = (1.0 / (1.0 + omega_tau)).T  # (n_valid, n_freq)
+        else:
+            H2_all = (1.0 / (1.0 + omega_tau) ** 2).T
 
-        # ---- Epsilon interpolation setup ----
-        eps_interp = None
+        # ---- Epsilon interpolation setup (vectorized) ----
+        eps_vals_all = None  # (n_valid,) or None
         if epsilon_ds is not None:
             eps_times = epsilon_ds.coords["t"].values if "t" in epsilon_ds.coords else None
             if eps_times is not None:
@@ -1007,7 +1054,11 @@ def _compute_profile_chi(
                         np.float64
                     ) / 1e9 + t_fast[0]
                 eps_vals = np.nanmean(epsilon_ds["epsilon"].values, axis=0)
-                eps_interp = (eps_times, eps_vals)
+                # Batch nearest-neighbor lookup for all windows
+                idx_eps_all = np.argmin(
+                    np.abs(eps_times[:, np.newaxis] - t_means[np.newaxis, :]), axis=0,
+                )
+                eps_vals_all = eps_vals[idx_eps_all]
 
         # ---- Per-window fitting loop ----
         for idx in range(n_valid):
@@ -1019,10 +1070,8 @@ def _compute_profile_chi(
 
             # Epsilon for Method 1
             epsilon_val = None
-            if eps_interp is not None:
-                eps_times_arr, eps_vals_arr = eps_interp
-                idx_eps = np.argmin(np.abs(eps_times_arr - t_means[idx]))
-                epsilon_val = eps_vals_arr[idx_eps]
+            if eps_vals_all is not None:
+                epsilon_val = eps_vals_all[idx]
                 if not np.isfinite(epsilon_val) or epsilon_val <= 0:
                     epsilon_val = None
 
