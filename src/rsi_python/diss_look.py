@@ -8,7 +8,7 @@ Layout (2 rows x 4 columns):
   Row 0 (profile panels, pressure y-axis linked):
     Overview | epsilon profile | chi profile | Mixing efficiency
   Row 1 (spectra at depth):
-    FM profile | epsilon spectra | chi spectra | chi Batch. vs Kraich.
+    FM profile | epsilon spectra | chi spectra | chi FOM
 """
 
 import warnings
@@ -83,7 +83,7 @@ class DissLookViewer(ProfileViewer):
         self._draw_fm_profile()
         self._draw_eps_spectra(self.axes[1, 1], sel_spec, self._cached_spec)
         self._draw_chi_spectra(sel_spec)
-        self._draw_chi_comparison()
+        self._draw_chi_fom_profile()
 
         # Finish (green band + title)
         pressure_axes = (
@@ -174,8 +174,8 @@ class DissLookViewer(ProfileViewer):
             ax.text(0.5, 0.5, "No valid \u03c7", transform=ax.transAxes,
                     ha="center", va="center")
 
-    def _draw_chi_comparison(self):
-        """Panel (1,3): Chi from Batchelor vs Kraichnan models vs pressure."""
+    def _draw_chi_fom_profile(self):
+        """Panel (1,3): Chi figure of merit vs pressure (Batchelor & Kraichnan)."""
         ax = self.axes[1, 3]
         d = self._cached_diss
         P = d["P_windows"]
@@ -190,37 +190,38 @@ class DissLookViewer(ProfileViewer):
         for i, (name, _) in enumerate(self.therm_fast):
             c = colors[i % len(colors)]
 
-            # Batchelor -- dashed
-            chi_b = d["chi_batchelor"][i]
-            valid_b = np.isfinite(chi_b) & (chi_b > 0)
+            # Batchelor fom -- dashed
+            fom_b = d["chi_fom_batchelor"][i]
+            valid_b = np.isfinite(fom_b)
             if np.any(valid_b):
                 ax.plot(
-                    chi_b[valid_b], P[valid_b], color=c, linestyle="--",
+                    fom_b[valid_b], P[valid_b], color=c, linestyle="--",
                     marker="^", markersize=2.5, linewidth=0.8,
                     label=f"{name} Batch.",
                 )
                 has_data = True
 
-            # Kraichnan -- solid
-            chi_k = d["chi_kraichnan"][i]
-            valid_k = np.isfinite(chi_k) & (chi_k > 0)
+            # Kraichnan fom -- solid
+            fom_k = d["chi_fom_kraichnan"][i]
+            valid_k = np.isfinite(fom_k)
             if np.any(valid_k):
                 ax.plot(
-                    chi_k[valid_k], P[valid_k], color=c, linestyle="-",
+                    fom_k[valid_k], P[valid_k], color=c, linestyle="-",
                     marker="o", markersize=2.5, linewidth=0.8,
                     label=f"{name} Kraich.",
                 )
                 has_data = True
 
         if has_data:
-            ax.set_xscale("log")
-            ax.set_xlabel("\u03c7 [K\u00b2/s]")
+            ax.axvline(1.0, color="k", linestyle="-", linewidth=1.0,
+                       alpha=0.7, label="FOM = 1")
+            ax.set_xlabel("\u03c7 FOM (obs/model)")
             ax.set_ylabel("Pressure [dbar]")
-            ax.legend(fontsize=5, loc="lower left")
-            ax.set_title("\u03c7: Batchelor vs Kraichnan (M1)", fontsize=9)
-            ax.grid(True, alpha=0.3, which="both")
+            ax.legend(fontsize=5, loc="lower right")
+            ax.set_title("\u03c7 FOM (Batch. & Kraich.)", fontsize=9)
+            ax.grid(True, alpha=0.3)
         else:
-            ax.text(0.5, 0.5, "No valid \u03c7", transform=ax.transAxes,
+            ax.text(0.5, 0.5, "No valid \u03c7 FOM", transform=ax.transAxes,
                     ha="center", va="center")
 
     def _draw_fm_profile(self):

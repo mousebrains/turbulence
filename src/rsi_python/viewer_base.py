@@ -190,6 +190,8 @@ def compute_windowed_diss(
         "K_max_ratio": np.empty((n_shear, 0)),
         "chi_batchelor": np.empty((n_therm, 0)),
         "chi_kraichnan": np.empty((n_therm, 0)),
+        "chi_fom_batchelor": np.empty((n_therm, 0)),
+        "chi_fom_kraichnan": np.empty((n_therm, 0)),
     }
     if n_windows == 0:
         return empty
@@ -202,6 +204,8 @@ def compute_windowed_diss(
     Kmr_arr = np.full((n_shear, n_windows), np.nan)
     chi_batch_arr = np.full((n_therm, n_windows), np.nan)
     chi_kraich_arr = np.full((n_therm, n_windows), np.nan)
+    chi_fom_batch_arr = np.full((n_therm, n_windows), np.nan)
+    chi_fom_kraich_arr = np.full((n_therm, n_windows), np.nan)
 
     mean_T = float(np.mean(T_slow))
     f_AA_chi = 0.9 * f_AA
@@ -232,13 +236,17 @@ def compute_windowed_diss(
         has_eps = n_shear > 0 and np.any(np.isfinite(er.epsilon) & (er.epsilon > 0))
         if n_therm > 0 and has_eps:
             therm_segs = [therm_data[ci][1][w_sel] for ci in range(n_therm)]
-            for model, arr in [("batchelor", chi_batch_arr), ("kraichnan", chi_kraich_arr)]:
+            for model, arr, fom_a in [
+                ("batchelor", chi_batch_arr, chi_fom_batch_arr),
+                ("kraichnan", chi_kraich_arr, chi_fom_kraich_arr),
+            ]:
                 cr = compute_chi_window(
                     therm_segs, diff_gains, er.W, mean_T, er.nu,
                     fs_fast, fft_length, f_AA_chi,
                     spectrum_model=model, epsilon=er.epsilon, method=1,
                 )
                 arr[:, idx] = cr.chi
+                fom_a[:, idx] = cr.fom
 
     return {
         "P_windows": P_windows,
@@ -249,6 +257,8 @@ def compute_windowed_diss(
         "K_max_ratio": Kmr_arr,
         "chi_batchelor": chi_batch_arr,
         "chi_kraichnan": chi_kraich_arr,
+        "chi_fom_batchelor": chi_fom_batch_arr,
+        "chi_fom_kraichnan": chi_fom_kraich_arr,
     }
 
 
