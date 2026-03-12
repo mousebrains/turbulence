@@ -29,7 +29,7 @@ VMP_DIR = Path(__file__).parents[1] / "VMP"
 # Discover validation files.
 # MAX_MATLAB_FILES controls how many files to test (default 5, 0 = all).
 _val_files = sorted(VMP_DIR.glob("*_validation.nc")) if VMP_DIR.exists() else []
-_max = int(os.environ.get("MAX_MATLAB_FILES", "5"))
+_max = int(os.environ.get("MAX_MATLAB_FILES", "12"))
 if _max and len(_val_files) > _max:
     _step = len(_val_files) / _max
     _val_files = [_val_files[int(i * _step)] for i in range(_max)]
@@ -142,7 +142,7 @@ def _match_profiles(py_results, val):
     return matched
 
 
-@pytest.fixture(params=_val_files, ids=[_file_id(p) for p in _val_files])
+@pytest.fixture(scope="module", params=_val_files, ids=[_file_id(p) for p in _val_files])
 def validation_pair(request):
     """Yield (p_path, validation_dict) for each file with validation data."""
     val_path = request.param
@@ -154,13 +154,11 @@ def validation_pair(request):
     return p_path, val
 
 
-@pytest.fixture
-def matched_results(validation_pair):
+@pytest.fixture(scope="module")
+def matched_results(validation_pair, cached_get_diss):
     """Run get_diss and match profiles against MATLAB. Cache per file."""
     p_path, val = validation_pair
-    from rsi_python.dissipation import get_diss
-
-    results = get_diss(p_path, fft_length=256, goodman=True)
+    results = cached_get_diss(p_path, fft_length=256, goodman=True)
     matched = _match_profiles(results, val)
     return results, val, matched
 

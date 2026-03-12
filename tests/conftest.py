@@ -7,6 +7,41 @@ import pytest
 
 TEST_DATA_DIR = Path(__file__).parent / "data"
 
+# ---------------------------------------------------------------------------
+# Session-scoped caches for expensive computations
+# ---------------------------------------------------------------------------
+
+_diss_cache = {}
+_chi_cache = {}
+
+
+def _cached_get_diss(p_path, **kwargs):
+    key = (Path(p_path).resolve(), frozenset(kwargs.items()))
+    if key not in _diss_cache:
+        from rsi_python.dissipation import get_diss
+
+        _diss_cache[key] = get_diss(p_path, **kwargs)
+    return _diss_cache[key]
+
+
+def _cached_get_chi(p_path, **kwargs):
+    key = (Path(p_path).resolve(), frozenset(kwargs.items()))
+    if key not in _chi_cache:
+        from rsi_python.chi import get_chi
+
+        _chi_cache[key] = get_chi(p_path, **kwargs)
+    return _chi_cache[key]
+
+
+@pytest.fixture(scope="session")
+def cached_get_diss():
+    return _cached_get_diss
+
+
+@pytest.fixture(scope="session")
+def cached_get_chi():
+    return _cached_get_chi
+
 
 @pytest.fixture
 def sample_p_file():

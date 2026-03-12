@@ -28,7 +28,7 @@ if VMP_DIR.exists():
         if p_path.exists():
             _pairs.append((p_path, nc_path))
 
-_max = int(os.environ.get("MAX_MATLAB_FILES", "5"))
+_max = int(os.environ.get("MAX_MATLAB_FILES", "12"))
 if _max and len(_pairs) > _max:
     _step = len(_pairs) / _max
     _pairs = [_pairs[int(i * _step)] for i in range(_max)]
@@ -49,7 +49,7 @@ def _load_p2mat(nc_path: Path) -> dict:
     return out
 
 
-@pytest.fixture(params=_pairs, ids=[_file_id(p) for p in _pairs])
+@pytest.fixture(scope="module", params=_pairs, ids=[_file_id(p) for p in _pairs])
 def file_pair(request):
     """Yield (PFile, nc_dict, p_path) for each matched file pair."""
     p_path, nc_path = request.param
@@ -252,17 +252,16 @@ class TestProfiles:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="module")
+def eps_results(file_pair, cached_get_diss):
+    _, _, p_path = file_pair
+    results = cached_get_diss(p_path, fft_length=256, goodman=True)
+    if len(results) == 0:
+        pytest.skip("No profiles detected in this file")
+    return results
+
+
 class TestEpsilon:
-    @pytest.fixture
-    def eps_results(self, file_pair):
-        from rsi_python.dissipation import get_diss
-
-        _, _, p_path = file_pair
-        results = get_diss(p_path, fft_length=256, goodman=True)
-        if len(results) == 0:
-            pytest.skip("No profiles detected in this file")
-        return results
-
     def test_epsilon_all_profiles(self, eps_results):
         """Should produce epsilon for detected profiles."""
         assert len(eps_results) >= 1, f"Expected >=1 profiles, got {len(eps_results)}"
@@ -344,15 +343,9 @@ class TestEpsilon:
 
 
 class TestCrossConsistency:
-    def test_epsilon_from_matlab_channels(self, file_pair):
+    def test_epsilon_from_matlab_channels(self, eps_results):
         """Epsilon from Python pipeline should produce valid results."""
-        _, mat, p_path = file_pair
-        from rsi_python.dissipation import get_diss
-
-        results = get_diss(p_path, fft_length=256, goodman=True)
-        if len(results) == 0:
-            pytest.skip("No profiles detected in this file")
-        ds = results[0]
+        ds = eps_results[0]
         eps_py = ds["epsilon"].values
         P_py = ds["P_mean"].values
         valid = np.isfinite(eps_py[0]) & (eps_py[0] > 0) & np.isfinite(P_py)

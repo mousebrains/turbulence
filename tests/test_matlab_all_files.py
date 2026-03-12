@@ -30,7 +30,7 @@ if VMP_DIR.exists():
         if p_path.exists():
             _pairs.append((p_path, nc_path))
 
-_max = int(os.environ.get("MAX_MATLAB_FILES", "5"))
+_max = int(os.environ.get("MAX_MATLAB_FILES", "12"))
 if _max and len(_pairs) > _max:
     _step = len(_pairs) / _max
     _pairs = [_pairs[int(i * _step)] for i in range(_max)]
@@ -55,7 +55,7 @@ def _load_p2mat(nc_path: Path) -> dict:
     return out
 
 
-@pytest.fixture(params=_pairs, ids=[_file_id(p) for p in _pairs])
+@pytest.fixture(scope="module", params=_pairs, ids=[_file_id(p) for p in _pairs])
 def file_pair(request):
     """Yield (PFile, nc_dict) for each matched file pair."""
     p_path, nc_path = request.param

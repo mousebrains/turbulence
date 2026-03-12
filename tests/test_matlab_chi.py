@@ -28,7 +28,7 @@ VMP_DIR = Path(__file__).parents[1] / "VMP"
 # Discover scalar spectra validation files.
 # MAX_MATLAB_FILES controls how many files to test (default 5, 0 = all).
 _scalar_files = sorted(VMP_DIR.glob("*_scalar_spectra.nc")) if VMP_DIR.exists() else []
-_max = int(os.environ.get("MAX_MATLAB_FILES", "5"))
+_max = int(os.environ.get("MAX_MATLAB_FILES", "12"))
 if _max and len(_scalar_files) > _max:
     _step = len(_scalar_files) / _max
     _scalar_files = [_scalar_files[int(i * _step)] for i in range(_max)]
@@ -116,7 +116,7 @@ def _match_scalar_profiles(py_results, val):
     return matched
 
 
-@pytest.fixture(params=_scalar_files, ids=[_file_id(p) for p in _scalar_files])
+@pytest.fixture(scope="module", params=_scalar_files, ids=[_file_id(p) for p in _scalar_files])
 def scalar_pair(request):
     """Yield (p_path, scalar_validation_dict) for each file."""
     val_path = request.param
@@ -128,13 +128,13 @@ def scalar_pair(request):
     return p_path, val
 
 
-@pytest.fixture
-def matched_scalar(scalar_pair):
+@pytest.fixture(scope="module")
+def matched_scalar(scalar_pair, cached_get_chi):
     """Run get_chi (Method 2) and match profiles against MATLAB."""
     p_path, val = scalar_pair
-    from rsi_python.chi import get_chi
-
-    results = get_chi(p_path, fft_length=256, diss_length=512, overlap=256, goodman=True)
+    results = cached_get_chi(
+        p_path, fft_length=256, diss_length=512, overlap=256, goodman=True
+    )
     matched = _match_scalar_profiles(results, val)
     return results, val, matched
 
