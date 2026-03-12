@@ -37,6 +37,7 @@ Repository = "https://github.com/mousebrains/rsi-python"
 
 [project.scripts]
 rsi-tpw = "rsi_python.cli:main"
+perturb = "perturb.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
