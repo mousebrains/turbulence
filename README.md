@@ -5,6 +5,8 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![codecov](https://codecov.io/gh/mousebrains/turbulence/graph/badge.svg?token=RwbKxeE7rA)](https://codecov.io/gh/mousebrains/turbulence)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+[![type checked: mypy](https://img.shields.io/badge/type%20checked-mypy-blue.svg)](https://mypy-lang.org/)
+[![MATLAB: MISS_HIT](https://img.shields.io/badge/MATLAB-MISS__HIT-blue.svg)](https://misshit.org/)
 
 Python tools for reading Rockland Scientific microprofiler data and computing turbulent dissipation rates from VMP (Vertical Microstructure Profiler) and MicroRider instruments.
 
