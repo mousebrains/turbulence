@@ -6,9 +6,9 @@ Method 1 (from epsilon) vs Method 2 (iterative fit), and the Lueck (2022) figure
 
 Layout (2 rows x 4 columns):
   Row 0 (profile panels, pressure y-axis linked):
-    Overview | epsilon profile | chi profile | FM profile
+    Overview | epsilon profile | chi profile | Mixing efficiency
   Row 1 (spectra at depth):
-    Temperature | epsilon spectra | chi spectra | chi Batch. vs Kraich.
+    FM profile | epsilon spectra | chi spectra | chi Batch. vs Kraich.
 """
 
 import warnings
@@ -75,11 +75,12 @@ class DissLookViewer(ProfileViewer):
         # Row 0: profile panels
         self._draw_overview(self.axes[0, 0], s_slow, e_slow)
         self._draw_eps_profile(self.axes[0, 1], d["P_windows"], d["epsilon"])
+        self._add_fm_filtered_eps(self.axes[0, 1], d)
         self._draw_chi_profile()
-        self._draw_fm_profile()
+        self._draw_mixing_efficiency()
 
         # Row 1: spectra and comparison panels
-        self._draw_temperature(s_slow, e_slow)
+        self._draw_fm_profile()
         self._draw_eps_spectra(self.axes[1, 1], sel_spec, self._cached_spec)
         self._draw_chi_spectra(sel_spec)
         self._draw_chi_comparison()
@@ -90,6 +91,45 @@ class DissLookViewer(ProfileViewer):
             + [self.axes[1, 0], self.axes[1, 3]]
         )
         self._finish_draw(s_slow, e_slow, pressure_axes)
+
+    # ------------------------------------------------------------------
+    # FM-filtered epsilon helper
+    # ------------------------------------------------------------------
+
+    def _fm_best_epsilon(self):
+        """Select best epsilon per window using Lueck FM < 1.15 criterion.
+
+        If both probes pass, average.  If one passes, use it.
+        If neither passes, NaN.
+        """
+        d = self._cached_diss
+        eps = d["epsilon"]   # (n_shear, n_windows)
+        FM = d["FM"]         # (n_shear, n_windows)
+        n_shear, n_win = eps.shape
+        if n_shear == 0 or n_win == 0:
+            return np.array([])
+        best = np.full(n_win, np.nan)
+        for j in range(n_win):
+            good = []
+            for i in range(n_shear):
+                if (np.isfinite(FM[i, j]) and FM[i, j] < 1.15
+                        and np.isfinite(eps[i, j]) and eps[i, j] > 0):
+                    good.append(eps[i, j])
+            if good:
+                best[j] = np.mean(good)
+        return best
+
+    def _add_fm_filtered_eps(self, ax, d):
+        """Overlay FM-filtered best epsilon as dashed black line."""
+        P = d["P_windows"]
+        eps_best = self._fm_best_epsilon()
+        if len(eps_best) == 0:
+            return
+        valid = np.isfinite(eps_best) & (eps_best > 0)
+        if np.any(valid):
+            ax.plot(eps_best[valid], P[valid], "k--",
+                    linewidth=1.2, label="\u03b5 FM<1.15")
+            ax.legend(fontsize=6, loc="lower left")
 
     # ------------------------------------------------------------------
     # Unique panels
@@ -184,8 +224,8 @@ class DissLookViewer(ProfileViewer):
                     ha="center", va="center")
 
     def _draw_fm_profile(self):
-        """Panel (0,3): Lueck FM figure of merit vs pressure."""
-        ax = self.axes[0, 3]
+        """Panel (1,0): Lueck FM figure of merit vs pressure."""
+        ax = self.axes[1, 0]
         d = self._cached_diss
         P = d["P_windows"]
 
@@ -340,40 +380,79 @@ class DissLookViewer(ProfileViewer):
         )
         ax.grid(True, alpha=0.3, which="both")
 
-    def _draw_temperature(self, s_slow, e_slow):
-        """Panel (1,0): Temperature channels (T1_dT1, T2_dT2, JAC_T) vs pressure."""
-        ax = self.axes[1, 0]
-        sel_fast = self._slow_to_fast_slice(s_slow, e_slow)
-        P_prof_fast = self.P_fast[sel_fast]
-        P_prof_slow = self.P[s_slow : e_slow + 1]
+    def _draw_mixing_efficiency(self):
+        """Panel (0,3): Mixing efficiency Lambda = chi / epsilon vs pressure."""
+        ax = self.axes[0, 3]
+        d = self._cached_diss
+        P = d["P_windows"]
 
+        if len(P) == 0:
+            ax.text(0.5, 0.5, "No data", transform=ax.transAxes,
+                    ha="center", va="center")
+            return
+
+        # Mean epsilon across shear probes
+        eps_all = d["epsilon"]  # (n_shear, n_windows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            eps_mean = np.nanmean(eps_all, axis=0)
+
+        # FM-filtered best epsilon
+        eps_fm = self._fm_best_epsilon()
+
+        # Helper to compute mean chi per thermistor
+        def _mean_chi(i):
+            chi_b = d["chi_batchelor"][i]
+            chi_k = d["chi_kraichnan"][i]
+            return np.where(
+                np.isfinite(chi_b) & np.isfinite(chi_k),
+                (chi_b + chi_k) / 2,
+                np.where(np.isfinite(chi_b), chi_b, chi_k),
+            )
+
+        # Per-thermistor lines (using mean epsilon)
         colors = ["C3", "C1", "C4", "C5"]
         has_data = False
-
-        for i, (name, data) in enumerate(self.therm_fast):
+        for i, (name, _) in enumerate(self.therm_fast):
             c = colors[i % len(colors)]
-            ax.plot(data[sel_fast], P_prof_fast, c,
-                    linewidth=0.5, alpha=0.7, label=name)
-            has_data = True
+            chi_mean = _mean_chi(i)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                lam = chi_mean / eps_mean
+            valid = np.isfinite(lam) & (lam > 0)
+            if np.any(valid):
+                ax.plot(lam[valid], P[valid], f"{c}o-",
+                        markersize=3, linewidth=0.8, label=name)
+                has_data = True
 
-        if self.JAC_T is not None:
-            ax.plot(
-                self.JAC_T[s_slow : e_slow + 1], P_prof_slow,
-                "C2", linewidth=1.0, label="JAC_T",
-            )
-            has_data = True
+        # FM-filtered line (mean chi across thermistors / FM-filtered epsilon)
+        if len(eps_fm) > 0 and len(self.therm_fast) > 0:
+            chi_all = np.array([_mean_chi(i) for i in range(len(self.therm_fast))])
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                chi_avg = np.nanmean(chi_all, axis=0)
+                lam_fm = chi_avg / eps_fm
+            valid_fm = np.isfinite(lam_fm) & (lam_fm > 0)
+            if np.any(valid_fm):
+                ax.plot(lam_fm[valid_fm], P[valid_fm], "k--",
+                        linewidth=1.2, label="\u039b FM<1.15")
+                has_data = True
 
         if has_data:
-            ax.set_xlabel("Temperature gradient / T [\u00b0C]")
+            ax.set_xscale("log")
+            ax.axvline(0.2, color="k", linestyle=":", linewidth=1.0,
+                       alpha=0.7, label="\u039b = 0.2")
+            xlim = ax.get_xlim()
+            ax.axvspan(xlim[0], 0.2, color="blue", alpha=0.04, zorder=0)
+            ax.axvspan(0.2, xlim[1], color="red", alpha=0.04, zorder=0)
+            ax.set_xlabel("\u039b = \u03c7 / \u03b5  [K\u00b2 s\u00b2 m\u207b\u00b2]")
             ax.set_ylabel("Pressure [dbar]")
             ax.legend(fontsize=6, loc="lower left")
-            ax.set_title("Temperature", fontsize=9)
-            ax.grid(True, alpha=0.3)
+            ax.set_title("Mixing efficiency \u039b", fontsize=9)
+            ax.grid(True, alpha=0.3, which="both")
         else:
-            ax.text(
-                0.5, 0.5, "No temperature channels",
-                transform=ax.transAxes, ha="center", va="center",
-            )
+            ax.text(0.5, 0.5, "No valid \u039b", transform=ax.transAxes,
+                    ha="center", va="center")
 
 
 # ---------------------------------------------------------------------------
