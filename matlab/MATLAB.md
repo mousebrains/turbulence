@@ -1,170 +1,95 @@
-# MATLAB Chi Calculation
+# MATLAB Directory
 
-MATLAB functions for computing chi (thermal variance dissipation rate) from Rockland Scientific microprofiler data. Implements both Method 1 (chi from known epsilon) and Method 2 (MLE Batchelor spectrum fitting without epsilon).
+This directory contains MATLAB scripts that support the `rsi_python` package. The files fall into three categories:
 
-These are standalone implementations that mirror the algorithms in the Python `rsi_python.chi` module.
+1. **Python-mirrored implementations** — MATLAB functions that implement the same algorithms as modules in `src/rsi_python/`. These must stay self-consistent: if the Python implementation changes, the corresponding MATLAB function should be updated (or vice versa) so that both produce equivalent results.
+
+2. **Test data generators** — Scripts that call the ODAS library to produce NetCDF validation files consumed by `tests/test_matlab_*.py`. Re-run these in MATLAB whenever the test expectations change.
+
+3. **Examples and utilities** — Demonstration and visualization scripts not tied to the test suite or Python code.
+
+---
+
+## 1. Python-Mirrored Implementations
+
+These files are standalone MATLAB reimplementations of algorithms in `src/rsi_python/`. They share the same formulas, constants, and default parameters. When editing the Python side, check the corresponding MATLAB file for consistency (and vice versa).
+
+| MATLAB file | Python counterpart | Purpose |
+|---|---|---|
+| `get_chi.m` | `chi.py → get_chi()` | Main entry point: windowed chi computation over a profile. Supports Method 1 and Method 2. |
+| `chi_method1.m` | `chi.py → chi_method1()` | Single-window chi from known epsilon (Dillon & Caldwell 1980). Integrates observed gradient spectrum, corrects for FP07 rolloff and unresolved variance. |
+| `chi_method2.m` | `chi.py → chi_method2()` | Single-window chi via MLE Batchelor spectrum fit (Ruddick et al. 2000, Peterson & Fer 2014). Grid search over kB, iterative refinement. |
+| `batchelor_gradT.m` | `batchelor.py → batchelor_gradT()` | Batchelor temperature gradient spectrum model. |
+| `kraichnan_gradT.m` | `batchelor.py → kraichnan_gradT()` | Kraichnan temperature gradient spectrum model. |
+| `batchelor_wavenumber.m` | `batchelor.py → batchelor_wavenumber()` | Batchelor wavenumber from epsilon and viscosity. |
+| `fp07_transfer.m` | `fp07.py → fp07_transfer()` | FP07 thermistor squared transfer function `|H(f)|²` (single-pole and double-pole models). |
+| `fp07_time_constant.m` | `fp07.py → fp07_time_constant()` | Speed-dependent FP07 time constant `τ(v)`. |
+
+### Key shared parameters (defaults must match between MATLAB and Python)
+
+| Parameter | Default | Used in |
+|---|---|---|
+| `fft_length` | 512 | `get_chi` |
+| `diss_length` | 3 × fft_length | `get_chi` |
+| `overlap` | diss_length / 2 | `get_chi` |
+| `f_AA` | 98 Hz | `get_chi` |
+| `diff_gain` | 0.94 s | `get_chi` |
+| `spectrum_model` | `"kraichnan"` | `get_chi`, `chi_method1`, `chi_method2` |
+| `fp07_model` | `"single_pole"` | `get_chi`, `chi_method1`, `chi_method2` |
+| `salinity` | 35 PSU | `get_chi` |
+| `q` (Batchelor) | 3.7 | `batchelor_gradT` |
+| `q` (Kraichnan) | 5.26 | `kraichnan_gradT` |
+| `kappa_T` | 1.4e-7 m²/s | `chi_method1`, `chi_method2`, `batchelor_wavenumber` |
+
+---
+
+## 2. Test Data Generators
+
+These scripts use the ODAS library (`../odas/`) to process the raw `.p` files in `../VMP/` and write NetCDF validation files. The Python test suite loads these NetCDF files and compares Python results against them.
+
+| MATLAB file | Output files | Consumed by test |
+|---|---|---|
+| `generate_for_tests.m` | *(orchestrator — runs the three scripts below in sequence)* | — |
+| `generate_odas_p2mat_nc.m` | `VMP/*_p2mat.nc` | `test_matlab_all_files.py`, `test_matlab_validation.py` |
+| `generate_validation_nc.m` | `VMP/*_validation.nc` | `test_matlab_epsilon.py` |
+| `generate_scalar_spectra_nc.m` | `VMP/*_scalar_spectra.nc` | `test_matlab_chi.py` |
+
+### What each generator produces
+
+- **`generate_odas_p2mat_nc.m`** — Converts each `.p` file via `odas_p2mat()` and writes channel data (P, T1, T2, sh1, sh2, Ax, Ay, speed, fall rate) at both fast and slow sample rates. Used to validate `PFile` channel conversion in Python.
+
+- **`generate_validation_nc.m`** — Runs `get_diss_odas()` on each profile to compute epsilon, then writes per-profile groups containing epsilon, K_max, figure of merit, MAD, viscosity, speed, pressure/temperature means, wavenumber/frequency vectors, and shear spectra. Config: `fft_length=256, diss_length=512, overlap=256, f_AA=98`. Used to validate `dissipation.py`.
+
+- **`generate_scalar_spectra_nc.m`** — Runs `get_scalar_spectra_odas()` to compute temperature gradient spectra per profile. Writes per-profile groups containing scalar spectra, wavenumber/frequency vectors, speed, and pressure means. Used to validate the spectral pipeline feeding into `chi.py`.
+
+### When to re-run
+
+Re-run `generate_for_tests.m` in MATLAB (with `../odas/` on the path) if you change:
+- Processing parameters (fft_length, overlap, f_AA, etc.)
+- Profile detection logic that affects which windows are compared
+- The set of `.p` files in `VMP/`
+
+---
+
+## 3. Examples and Utilities
+
+These files are not tied to the Python code or test suite. They are for interactive analysis, visualization, and demonstration.
+
+| MATLAB file | Purpose |
+|---|---|
+| `example00.m` | End-to-end workflow demo: loads a `.p` file, detects profiles, computes epsilon and chi (both methods), extracts salinity from JAC conductivity, and creates a publication-quality figure. Good starting point for new users. |
+| `plot_spectra.m` | Interactive spectrum visualization. Plots shear (epsilon) and temperature (chi) spectra with theoretical model fits (Nasmyth, Batchelor/Kraichnan). Supports profile selection and pressure range filtering. |
+| `miss_hit.cfg` | Configuration for MISS_HIT MATLAB linter/formatter (not a script). |
+
+Additionally, `../VMP/p2mat.m` is a small batch-conversion utility that runs `odas_p2mat()` on all `.p` files in the VMP directory.
+
+---
 
 ## Requirements
 
 - MATLAB R2021a or newer (uses `arguments` blocks and `name=value` syntax)
-- Signal Processing Toolbox (for `pwelch`, `hanning`)
-- ODAS MATLAB Library on the path (for `odas_p2mat`, `make_gradT_odas`, `get_diss_odas`)
-
-## Quick Start — Full Workflow from a .p File
-
-```matlab
-%% 1. Convert .p file to MATLAB workspace
-addpath('/path/to/odas');    % ODAS library
-addpath('/path/to/matlab');  % this directory
-
-fname = 'VMP/ARCTERX_Thompson_2025_SN479_0006.p';
-d = odas_p2mat(fname);
-
-%% 2. Detect profiles
-W = gradient(d.P_slow, 1/d.fs_slow);   % dP/dt from slow pressure
-profiles = get_profile(d.P_slow, W, 0.5, 0.3, 'down', 7, d.fs_slow);
-fprintf('Found %d profiles\n', size(profiles, 2));
-
-%% 3. Extract first profile
-ratio = round(d.fs_fast / d.fs_slow);
-s_slow = profiles(1,1);
-e_slow = profiles(2,1);
-s_fast = (s_slow - 1) * ratio + 1;
-e_fast = e_slow * ratio;
-
-%% 4. Compute temperature gradient using ODAS
-obj = setupstr(d.setupfilestr);
-gradT1 = make_gradT_odas(d.T1_dT1(s_fast:e_fast), ...
-    'obj', obj, 'fs', d.fs_fast, 'speed', d.speed_fast(s_fast:e_fast), ...
-    'name_with_pre_emphasis', 'T1_dT1', ...
-    'name_without_pre_emphasis', 'T1');
-
-%% 5. Compute chi — Method 2 (no epsilon needed)
-results = get_chi(gradT1, d.P(s_fast:e_fast), ...
-    d.T1(s_slow:e_slow), d.speed_fast(s_fast:e_fast), d.fs_fast);
-
-%% 6. Plot results
-figure;
-semilogy(results.P_mean, results.chi, 'b-', LineWidth=1.5);
-xlabel('Pressure [dbar]');
-ylabel('\chi [K^2/s]');
-title('Thermal Dissipation Rate — Method 2');
-grid on;
-set(gca, YDir="reverse");
-```
-
-### Method 1 (with epsilon from shear probes)
-
-```matlab
-%% Compute epsilon first using ODAS
-diss = get_diss_odas(d.sh1(s_fast:e_fast), ...
-    [d.Ax(s_fast:e_fast), d.Ay(s_fast:e_fast)], ...
-    struct('fft_length', 256, 'diss_length', 768, ...
-           'overlap', 384, 'fs_fast', d.fs_fast, ...
-           'fs_slow', d.fs_slow, 'speed', d.speed_fast(s_fast:e_fast), ...
-           'T', d.T1(s_fast:e_fast), 'P', d.P(s_fast:e_fast), ...
-           'goodman', true));
-
-%% Compute chi using epsilon — Method 1
-results_m1 = get_chi(gradT1, d.P(s_fast:e_fast), ...
-    d.T1(s_slow:e_slow), d.speed_fast(s_fast:e_fast), d.fs_fast, ...
-    method=1, epsilon=diss.e);
-```
-
-## Function Reference
-
-### `get_chi` — Main chi computation
-
-```matlab
-results = get_chi(gradT, P_fast, T_slow, speed, fs_fast, Name=Value)
-```
-
-**Inputs:**
-| Argument | Type | Description |
-|----------|------|-------------|
-| `gradT` | matrix | Temperature gradient [K/m], one column per probe |
-| `P_fast` | vector | Pressure at fast rate [dbar] |
-| `T_slow` | vector | Temperature at slow rate [deg C] |
-| `speed` | scalar/vector | Profiling speed [m/s] |
-| `fs_fast` | scalar | Fast sampling rate [Hz] |
-
-**Name-Value Options:**
-| Name | Default | Description |
-|------|---------|-------------|
-| `method` | 2 | 1 = from epsilon, 2 = MLE fit |
-| `epsilon` | [] | Epsilon per window [W/kg], required for method 1 |
-| `fft_length` | 512 | FFT segment length [samples] |
-| `diss_length` | 3×fft_length | Analysis window [samples] |
-| `overlap` | diss_length/2 | Window overlap [samples] |
-| `f_AA` | 98 | Anti-aliasing frequency [Hz] |
-| `diff_gain` | 0.94 | Differentiator gain [s] |
-| `spectrum_model` | "kraichnan" | "batchelor" or "kraichnan" |
-| `fp07_model` | "single_pole" | "single_pole" or "double_pole" |
-| `salinity` | 35 | Salinity [PSU] |
-
-**Output struct fields:**
-| Field | Size | Description |
-|-------|------|-------------|
-| `chi` | n_probes × n_est | Thermal dissipation rate [K²/s] |
-| `epsilon_T` | n_probes × n_est | Epsilon from temperature [W/kg] |
-| `kB` | n_probes × n_est | Batchelor wavenumber [cpm] |
-| `K_max` | n_probes × n_est | Max integration wavenumber [cpm] |
-| `fom` | n_probes × n_est | Figure of merit |
-| `K_max_ratio` | n_probes × n_est | K_max / kB |
-| `P_mean` | 1 × n_est | Mean pressure [dbar] |
-| `T_mean` | 1 × n_est | Mean temperature [°C] |
-| `spec_gradT` | n_freq × n_probes × n_est | Observed spectra |
-| `spec_batch` | n_freq × n_probes × n_est | Fitted Batchelor spectra |
-
----
-
-### `chi_method1` — Chi from known epsilon
-
-```matlab
-result = chi_method1(spec_obs, K, epsilon, nu, speed, Name=Value)
-```
-
-Computes chi for a single window given the observed spectrum and epsilon from shear probes. Uses the Batchelor spectrum to correct for FP07 rolloff and unresolved variance.
-
----
-
-### `chi_method2` — Chi via MLE spectral fitting
-
-```matlab
-result = chi_method2(spec_obs, K, nu, speed, Name=Value)
-```
-
-Estimates kB by maximum likelihood grid search, then recovers chi and epsilon. Uses the iterative refinement approach of Peterson & Fer (2014).
-
----
-
-### Supporting Functions
-
-| Function | Description |
-|----------|-------------|
-| `batchelor_gradT(k, kB, chi)` | Batchelor temperature gradient spectrum |
-| `kraichnan_gradT(k, kB, chi)` | Kraichnan temperature gradient spectrum |
-| `batchelor_wavenumber(epsilon, nu)` | Batchelor wavenumber from epsilon |
-| `fp07_time_constant(speed)` | Speed-dependent FP07 time constant |
-| `fp07_transfer(f, tau0)` | FP07 squared transfer function \|H(f)\|² |
-
-## Methods
-
-### Method 1: Chi from Epsilon (Dillon & Caldwell 1980)
-
-Given epsilon from shear probes:
-1. Compute kB from epsilon: `kB = (1/2π)(ε/(ν·κ_T²))^{1/4}`
-2. Integrate observed gradient spectrum up to noise floor
-3. Correct for FP07 rolloff and unresolved high-wavenumber variance
-4. `χ = 6·κ_T · ∫S_obs(k)dk · V_total/V_resolved`
-
-### Method 2: MLE Batchelor Fitting (Ruddick et al. 2000)
-
-Without epsilon:
-1. Estimate initial chi from spectrum minus noise
-2. Grid search over kB, minimizing `NLL = Σ[log(S_model) + S_obs/S_model]`
-3. Iteratively refine integration limits (Peterson & Fer 2014)
-4. Recover epsilon from fitted kB: `ε = (2π·kB)⁴·ν·κ_T²`
+- Signal Processing Toolbox (`pwelch`, `hanning`)
+- ODAS MATLAB Library v4.5.1 on the path (in `../odas/`)
 
 ## References
 
