@@ -345,8 +345,9 @@ def _cmd_chi(args: argparse.Namespace) -> None:
 
 def _cmd_pipeline(args: argparse.Namespace) -> None:
     """Run full processing pipeline: .p → profiles → epsilon → chi."""
-    from rsi_python.chi import compute_chi_file
-    from rsi_python.dissipation import compute_diss_file
+    from rsi_python.chi import get_chi
+    from rsi_python.dissipation import get_diss
+    from rsi_python.p_file import PFile
 
     p_files = _resolve_p_files(args.files)
 
@@ -364,28 +365,52 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
         print(f"{f.name}")
         print(f"{'=' * 60}")
 
+        # Load PFile once for both epsilon and chi
+        pf = PFile(f)
+
         # Step 1: Compute epsilon
         print("\n--- Epsilon ---")
         try:
-            eps_paths = compute_diss_file(f, eps_dir, **eps_merged)
+            eps_results = get_diss(pf, **eps_merged)
         except (OSError, ValueError, RuntimeError) as e:
             print(f"  ERROR computing epsilon: {e}")
             continue
 
+        eps_paths = []
+        for i, ds in enumerate(eps_results):
+            if len(eps_results) == 1:
+                out_name = f"{pf.filepath.stem}_eps.nc"
+            else:
+                out_name = f"{pf.filepath.stem}_prof{i + 1:03d}_eps.nc"
+            out_path = eps_dir / out_name
+            ds.to_netcdf(out_path)
+            eps_paths.append(out_path)
+            print(
+                f"  {out_path.name}: {ds.sizes['time']} estimates, "
+                f"P={float(ds.P_mean.min()):.0f}\u2013{float(ds.P_mean.max()):.0f} dbar"
+            )
+
         # Step 2: Compute chi with epsilon (Method 1)
         print("\n--- Chi (Method 1: from epsilon) ---")
-        for eps_path in eps_paths:
-            import xarray as xr
-
-            eps_ds = xr.open_dataset(eps_path)
+        for eps_ds in eps_results:
             kw = dict(chi_merged)
             kw["epsilon_ds"] = eps_ds
             try:
-                compute_chi_file(f, chi_dir, **kw)
+                chi_results = get_chi(pf, **kw)
             except (OSError, ValueError, RuntimeError) as e:
                 print(f"  ERROR computing chi: {e}")
-            finally:
-                eps_ds.close()
+                continue
+            for j, ds in enumerate(chi_results):
+                if len(chi_results) == 1:
+                    out_name = f"{pf.filepath.stem}_chi.nc"
+                else:
+                    out_name = f"{pf.filepath.stem}_prof{j + 1:03d}_chi.nc"
+                out_path = chi_dir / out_name
+                ds.to_netcdf(out_path)
+                print(
+                    f"  {out_path.name}: {ds.sizes['time']} estimates, "
+                    f"P={float(ds.P_mean.min()):.0f}-{float(ds.P_mean.max()):.0f} dbar"
+                )
 
     print("\nPipeline complete.")
     print(f"  Epsilon: {eps_dir}/")

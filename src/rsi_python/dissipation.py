@@ -30,10 +30,9 @@ if TYPE_CHECKING:
     from rsi_python.p_file import PFile
 
 from rsi_python.despike import despike
-from rsi_python.goodman import clean_shear_spec
-from rsi_python.nasmyth import LUECK_A, X_95, nasmyth
+from rsi_python.goodman import clean_shear_spec_batch
+from rsi_python.nasmyth import LUECK_A, X_95, nasmyth_grid
 from rsi_python.ocean import visc, visc35
-from rsi_python.spectral import csd_matrix
 
 # ---------------------------------------------------------------------------
 # Named constants — citations inline
@@ -604,7 +603,81 @@ def _compute_profile_diss(
     step = diss_length - overlap
     n_est = max(1, 1 + (N - diss_length) // step)
 
-    # Pre-allocate output arrays
+    # Trim n_est if the last window would exceed the data
+    while n_est > 0 and (n_est - 1) * step + diss_length > N:
+        n_est -= 1
+
+    # Degrees of freedom — Lueck (2022a,b)
+    num_ffts = 2 * (diss_length // fft_length) - 1
+    n_v = accel.shape[1] if do_goodman else 0
+    dof_spec = DOF_NUTTALL * max(num_ffts - n_v, 1)
+
+    # ---- Vectorized: extract all windows at once ----
+    win_starts = np.arange(n_est) * step
+    indices = win_starts[:, np.newaxis] + np.arange(diss_length)[np.newaxis, :]
+    # shape: (n_est, diss_length, n_channels)
+    sh_windows = shear[indices]
+    ac_windows = accel[indices]
+
+    # ---- Vectorized: batched CSD + Goodman ----
+    if do_goodman:
+        # clean_UU: (n_est, n_freq, n_shear, n_shear)
+        P_sh_clean_all, F = clean_shear_spec_batch(
+            ac_windows, sh_windows, fft_length, fs_fast,
+        )
+    else:
+        from rsi_python.spectral import csd_matrix_batch
+
+        P_sh_all, F, _, _ = csd_matrix_batch(
+            sh_windows, None, fft_length, fs_fast,
+            overlap=fft_length // 2, detrend="linear",
+        )
+        P_sh_clean_all = np.real(P_sh_all)
+
+    del sh_windows, ac_windows
+
+    # ---- Vectorized: window means ----
+    # Reshape for fast window-mean computation
+    speed_windows = np.abs(speed[indices])  # (n_est, diss_length)
+    speed_out = np.mean(speed_windows, axis=1)
+    speed_out = np.maximum(speed_out, SPEED_MIN)
+
+    T_out = np.mean(T[indices], axis=1)
+    P_out = np.mean(P[indices], axis=1)
+    t_out = np.mean(t_fast[indices], axis=1)
+
+    # Viscosity per window
+    if salinity is not None:
+        if np.ndim(salinity) > 0:
+            sal_windows = salinity[indices]
+            sal_means = np.mean(sal_windows, axis=1)
+        else:
+            sal_means = np.full(n_est, float(salinity))
+        nu_out = np.array([float(visc(T_out[i], sal_means[i], P_out[i])) for i in range(n_est)])
+    else:
+        nu_out = np.array([float(visc35(T_out[i])) for i in range(n_est)])
+
+    # ---- Vectorized: frequency → wavenumber conversion + correction ----
+    # K varies per window because speed varies: K[f, w] = F[f] / W[w]
+    K_all = F[:, np.newaxis] / speed_out[np.newaxis, :]  # (n_freq, n_est)
+    K_AA_all = f_AA / speed_out  # (n_est,)
+
+    # Macoun-Lueck correction: (n_freq, n_est)
+    correction = np.ones_like(K_all)
+    mask = K_all <= MACOUN_LUECK_K
+    correction[mask] = 1 + (K_all[mask] / MACOUN_LUECK_DENOM) ** 2
+
+    # Convert CSD from frequency to wavenumber spectra and apply correction
+    # P_sh_clean_all: (n_est, n_freq, n_sh, n_sh)
+    # Multiply by W (per window) and correction (per freq, per window)
+    wk_scale = speed_out[np.newaxis, :] * correction  # (n_freq, n_est)
+    P_sh_clean_all = P_sh_clean_all * wk_scale.T[:, :, np.newaxis, np.newaxis]
+
+    # Store F (same for all windows)
+    F_out = np.broadcast_to(F[:, np.newaxis], (n_freq, n_est)).copy()
+    K_out = K_all
+
+    # ---- Per-window epsilon estimation (not vectorizable) ----
     epsilon = np.full((n_shear, n_est), np.nan)
     K_max_out = np.full((n_shear, n_est), np.nan)
     mad_out = np.full((n_shear, n_est), np.nan)
@@ -612,100 +685,16 @@ def _compute_profile_diss(
     FM_out = np.full((n_shear, n_est), np.nan)
     K_max_ratio_out = np.full((n_shear, n_est), np.nan)
     method_out = np.zeros((n_shear, n_est), dtype=np.int8)
-    nu_out = np.full(n_est, np.nan)
-    speed_out = np.full(n_est, np.nan)
-    P_out = np.full(n_est, np.nan)
-    T_out = np.full(n_est, np.nan)
-    t_out = np.full(n_est, np.nan)
-
     spec_shear = np.full((n_shear, n_freq, n_est), np.nan)
     spec_nasmyth = np.full((n_shear, n_freq, n_est), np.nan)
-    K_out = np.full((n_freq, n_est), np.nan)
-    F_out = np.full((n_freq, n_est), np.nan)
-
-    # Degrees of freedom — Lueck (2022a,b)
-    # N_f = number of FFT segments, N_v = number of vibration signals
-    # removed by Goodman cleaning.
-    num_ffts = 2 * (diss_length // fft_length) - 1
-    n_v = accel.shape[1] if do_goodman else 0
-    dof_spec = DOF_NUTTALL * max(num_ffts - n_v, 1)  # Nuttall (1971), Lueck (2022a)
 
     for idx in range(n_est):
-        s = idx * step
-        e = s + diss_length
-        if e > N:
-            break
+        K = K_all[:, idx]
+        K_AA = K_AA_all[idx]
+        nu = nu_out[idx]
 
-        sel = slice(s, e)
-        sh_seg = shear[sel]
-        ac_seg = accel[sel]
-
-        # Compute spectra
-        if do_goodman:
-            P_sh_clean, _AA, P_sh, _UA, F = clean_shear_spec(
-                ac_seg,
-                sh_seg,
-                fft_length,
-                fs_fast,
-            )
-        else:
-            P_sh, F, _, _ = csd_matrix(
-                sh_seg,
-                None,
-                fft_length,
-                fs_fast,
-                overlap=fft_length // 2,
-                detrend="linear",
-            )
-            P_sh = np.real(P_sh)
-            P_sh_clean = P_sh.copy()
-
-        # Mean values for this window
-        W = np.mean(np.abs(speed[sel]))
-        if W < SPEED_MIN:
-            warnings.warn(
-                f"Speed {W:.4f} m/s below minimum; clamped to {SPEED_MIN} m/s",
-                stacklevel=2,
-            )
-            W = SPEED_MIN
-        mean_T = np.mean(T[sel])
-        mean_P = np.mean(P[sel])
-        mean_t = np.mean(t_fast[sel])
-        nu = _compute_nu(mean_T, mean_P, salinity, sel)
-
-        # Convert frequency to wavenumber
-        K = F / W
-        K_AA = f_AA / W
-
-        # Macoun-Lueck wavenumber correction
-        correction = np.ones_like(K)
-        mask = K <= MACOUN_LUECK_K
-        correction[mask] = 1 + (K[mask] / MACOUN_LUECK_DENOM) ** 2
-
-        # Convert to wavenumber spectra
-        P_sh_clean = P_sh_clean * W
-        P_sh = P_sh * W
-
-        # Apply correction — broadcast over probe dimensions
-        corr_3d = correction[:, np.newaxis, np.newaxis] if P_sh_clean.ndim == 3 else correction
-        P_sh_clean = P_sh_clean * corr_3d
-        P_sh = P_sh * corr_3d
-
-        # Store common results
-        K_out[:, idx] = K
-        F_out[:, idx] = F
-        nu_out[idx] = nu
-        speed_out[idx] = W
-        P_out[idx] = mean_P
-        T_out[idx] = mean_T
-        t_out[idx] = mean_t
-
-        # Compute epsilon for each shear probe
         for ci in range(n_shear):
-            if n_shear == 1 and P_sh_clean.ndim == 1:
-                shear_spec = P_sh_clean
-            else:
-                shear_spec = np.real(P_sh_clean[:, ci, ci])
+            shear_spec = np.real(P_sh_clean_all[idx, :, ci, ci])
 
             e_4, k_max, mad, meth, nas_spec, fom_val, K_max_ratio_val, FM_val = _estimate_epsilon(
                 K,
@@ -1069,7 +1058,7 @@ def _estimate_epsilon(
         # Correct for missing variance at bottom end (odas l.635-638)
         if len(K) > 2:
             e_4_vc = e_4  # variance-corrected value for ratio test
-            phi_low = nasmyth(e_4, nu, K[1:3])
+            phi_low = nasmyth_grid(e_4, nu, K[1:3])
             e_4 = e_4 + LOW_K_CORRECTION_FACTOR * ISOTROPY_FACTOR * nu * K[1] * phi_low[0]
             if e_4 / e_4_vc > LOW_K_CORRECTION_THRESHOLD:
                 e_4 = _variance_correction(e_4, K[Range[-1]], nu)
@@ -1086,7 +1075,7 @@ def _estimate_epsilon(
             Range = np.arange(min(3, n_freq))
 
     # Compute Nasmyth spectrum at final epsilon
-    nas_spec = nasmyth(max(e_4, EPSILON_FLOOR), nu, K + 1e-30)
+    nas_spec = nasmyth_grid(max(e_4, EPSILON_FLOOR), nu, K + 1e-30)
 
     # Mean absolute deviation (log10, matching ODAS convention)
     if len(Range) > 1:
@@ -1189,7 +1178,7 @@ def _inertial_subrange(
 
     # Iterative fitting (3 passes)
     for _ in range(3):
-        nas = nasmyth(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
+        nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
         ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
         ratio = ratio[ratio > 0]
         if len(ratio) == 0:
@@ -1198,7 +1187,7 @@ def _inertial_subrange(
         e = e * 10 ** (3 * fit_error / 2)
 
     # Remove flyers
-    nas = nasmyth(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
+    nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
     if len(fit_range) > 2:
         ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
         ratio = ratio[ratio > 0]
@@ -1220,7 +1209,7 @@ def _inertial_subrange(
 
     # Re-fit (2 more passes)
     for _ in range(2):
-        nas = nasmyth(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
+        nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
         ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
         ratio = ratio[ratio > 0]
         if len(ratio) == 0:

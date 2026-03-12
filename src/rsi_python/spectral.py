@@ -248,3 +248,183 @@ def csd_matrix(
         arr[-1] /= 2
     F = np.arange(n_freq) * rate / nfft
     return Cxy, F, Cxx, Cyy
+
+
+def _detrend_batch(segments: np.ndarray, method: str, axis: int) -> np.ndarray:
+    """Detrend an array of FFT segments along *axis* (the sample axis).
+
+    Parameters
+    ----------
+    segments : ndarray
+        Array whose *axis* dimension has length nfft.
+    method : str
+        One of 'none', 'constant', 'linear', 'parabolic', 'cubic'.
+    axis : int
+        Axis corresponding to the nfft (sample) dimension.
+
+    Returns
+    -------
+    ndarray — detrended copy (or the original, for 'none').
+    """
+    if method == "none":
+        return segments
+    if method == "constant":
+        return segments - np.mean(segments, axis=axis, keepdims=True)
+    if method == "linear":
+        return signal.detrend(segments, axis=axis, type="linear")
+    # parabolic / cubic — vectorised polynomial fit along *axis*
+    nfft = segments.shape[axis]
+    order = {"parabolic": 2, "cubic": 3}[method]
+    ramp = np.arange(nfft, dtype=np.float64)
+    # Move the sample axis to the last position for easier broadcasting
+    moved = np.moveaxis(segments, axis, -1)          # (..., nfft)
+    flat = moved.reshape(-1, nfft)                    # (M, nfft)
+    coeffs = np.polynomial.polynomial.polyfit(ramp, flat.T, order)  # (order+1, M)
+    trend = np.polynomial.polynomial.polyval(ramp, coeffs)          # (M, nfft)
+    detrended = flat - trend                                         # (M, nfft)
+    return np.moveaxis(detrended.reshape(moved.shape), -1, axis)
+
+
+def csd_matrix_batch(
+    x_windows: np.ndarray,
+    y_windows: np.ndarray | None,
+    nfft: int,
+    rate: float,
+    overlap: int | None = None,
+    detrend: str = "linear",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+    """Batched cross-spectral density for multiple dissipation windows.
+
+    Computes the same result as calling :func:`csd_matrix` independently on
+    each window, but extracts all FFT segments, detrends, windows, and
+    transforms them in one vectorised pass — eliminating per-window Python
+    loops.
+
+    Parameters
+    ----------
+    x_windows : ndarray, shape (n_windows, diss_length, n_x)
+        Stacked dissipation windows for the *x* channels.
+    y_windows : ndarray or None, shape (n_windows, diss_length, n_y)
+        Stacked dissipation windows for the *y* channels.
+        If None, only auto-spectral matrices of *x* are computed.
+    nfft : int
+        FFT segment length (e.g. 256).
+    rate : float
+        Sampling rate [Hz].
+    overlap : int or None
+        Overlap in samples.  Default: ``nfft // 2``.
+    detrend : str
+        Detrending method: 'none', 'constant', 'linear', 'parabolic',
+        'cubic'.
+
+    Returns
+    -------
+    Cxy : ndarray, shape (n_windows, n_freq, n_x, n_y)
+        Cross-spectral matrix between *x* and *y* channels.
+        If *y_windows* is None, this is the auto-spectral matrix of *x*
+        with shape (n_windows, n_freq, n_x, n_x).
+    F : ndarray, shape (n_freq,)
+        Frequency vector [Hz], from 0 to Nyquist.
+    Cxx : ndarray or None
+        Auto-spectral matrix of *x*, shape (n_windows, n_freq, n_x, n_x).
+        Returned only when *y_windows* is not None.
+    Cyy : ndarray or None
+        Auto-spectral matrix of *y*, shape (n_windows, n_freq, n_y, n_y).
+        Returned only when *y_windows* is not None.
+    """
+    x_windows = np.asarray(x_windows, dtype=np.float64)
+    if x_windows.ndim != 3:
+        raise ValueError(
+            f"x_windows must be 3-D (n_windows, diss_length, n_x), "
+            f"got shape {x_windows.shape}"
+        )
+    n_windows, diss_length, _n_x = x_windows.shape
+
+    if overlap is None:
+        overlap = nfft // 2
+    step = nfft - overlap
+    n_freq = nfft // 2 + 1
+
+    # --- Segment extraction ------------------------------------------------
+    # Segment start indices within each window
+    n_seg = (diss_length - overlap) // step
+    if n_seg < 1:
+        raise ValueError(
+            f"diss_length ({diss_length}) too short for nfft={nfft}, "
+            f"overlap={overlap}"
+        )
+    seg_starts = np.arange(n_seg) * step  # (n_seg,)
+
+    # Build a (nfft,) index offset and broadcast to extract all segments.
+    # indices shape: (n_seg, nfft)
+    indices = seg_starts[:, np.newaxis] + np.arange(nfft)[np.newaxis, :]
+
+    # x_windows[:, indices, :] → (n_windows, n_seg, nfft, n_x)
+    x_segs = x_windows[:, indices, :]
+
+    # --- Detrend along the nfft axis (axis=2) ------------------------------
+    x_segs = _detrend_batch(x_segs, detrend, axis=2)
+
+    # --- Apply cosine window (broadcast over windows, segments, channels) --
+    win = _get_window(nfft)  # (nfft,)
+    x_segs *= win[np.newaxis, np.newaxis, :, np.newaxis]
+
+    # --- FFT along the nfft axis -------------------------------------------
+    # fft_x shape: (n_windows, n_seg, n_freq, n_x)
+    fft_x = np.fft.rfft(x_segs, n=nfft, axis=2)
+
+    # Free memory — segments no longer needed
+    del x_segs
+
+    # --- Normalization constant --------------------------------------------
+    norm = nfft * rate / 2.0
+
+    auto = y_windows is None
+
+    if auto:
+        # Auto-spectral matrix: Cxy[w, f, i, j] = <conj(X_i) * X_j>
+        # Average over segments, then normalise.
+        # einsum: for each (w, f), outer product over channel dimension
+        # fft_x: (n_windows, n_seg, n_freq, n_x)
+        Cxy = np.einsum(
+            "wsfi,wsfj->wfij", np.conj(fft_x), fft_x
+        )  # (n_windows, n_freq, n_x, n_x)
+        Cxy /= n_seg
+        Cxy /= norm
+        Cxy[:, 0, :, :] /= 2
+        Cxy[:, -1, :, :] /= 2
+        F = np.arange(n_freq) * rate / nfft
+        return Cxy, F, None, None
+
+    # --- Cross-spectral case -----------------------------------------------
+    y_windows = np.asarray(y_windows, dtype=np.float64)
+    if y_windows.ndim != 3:
+        raise ValueError(
+            f"y_windows must be 3-D (n_windows, diss_length, n_y), "
+            f"got shape {y_windows.shape}"
+        )
+    if y_windows.shape[0] != n_windows or y_windows.shape[1] != diss_length:
+        raise ValueError(
+            f"y_windows shape {y_windows.shape} incompatible with "
+            f"x_windows shape {x_windows.shape}"
+        )
+    y_segs = y_windows[:, indices, :]  # (n_windows, n_seg, nfft, n_y)
+    y_segs = _detrend_batch(y_segs, detrend, axis=2)
+    y_segs *= win[np.newaxis, np.newaxis, :, np.newaxis]
+    fft_y = np.fft.rfft(y_segs, n=nfft, axis=2)
+    del y_segs
+
+    # Cxx[w,f,i,j] = <conj(Xi) * Xj>
+    Cxx = np.einsum("wsfi,wsfj->wfij", np.conj(fft_x), fft_x)
+    # Cyy[w,f,i,j] = <conj(Yi) * Yj>
+    Cyy = np.einsum("wsfi,wsfj->wfij", np.conj(fft_y), fft_y)
+    # Cxy[w,f,i,j] = <conj(Xi) * Yj>
+    Cxy = np.einsum("wsfi,wsfj->wfij", np.conj(fft_x), fft_y)
+
+    for arr in (Cxx, Cyy, Cxy):
+        arr /= n_seg * norm
+        arr[:, 0, :, :] /= 2
+        arr[:, -1, :, :] /= 2
+
+    F = np.arange(n_freq) * rate / nfft
+    return Cxy, F, Cxx, Cyy
