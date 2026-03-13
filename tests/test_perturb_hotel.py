@@ -1,13 +1,12 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Tests for perturb.hotel — hotel file loading and interpolation."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import pytest
 
 from perturb.hotel import HotelData, interpolate_hotel, load_hotel
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -63,7 +62,7 @@ class _MockPFile:
         self.fs_slow = 64
         self.t_fast = np.linspace(0, 4, n_fast)
         self.t_slow = np.linspace(0, 4, n_slow)
-        self.start_time = datetime.fromtimestamp(start_epoch, tz=timezone.utc)
+        self.start_time = datetime.fromtimestamp(start_epoch, tz=UTC)
         self.channels = {}
 
 

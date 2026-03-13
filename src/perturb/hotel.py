@@ -172,17 +172,21 @@ def _load_mat(
         if key.startswith("_"):
             continue
         # Check for structured array with .time and .data subfields
-        if hasattr(val, "dtype") and val.dtype.names:
-            if "time" in val.dtype.names and "data" in val.dtype.names:
-                struct = val.flat[0] if val.ndim > 0 else val
-                if key == time_column:
-                    raw_time = np.asarray(struct["time"]).flatten().astype(np.float64)
-                else:
-                    name = channels.get(key, key) if channels else key
-                    if not channels or key in channels:
-                        ch[name] = np.asarray(struct["data"]).flatten().astype(np.float64)
-                        if raw_time is None:
-                            raw_time = np.asarray(struct["time"]).flatten().astype(np.float64)
+        if (
+            hasattr(val, "dtype")
+            and val.dtype.names
+            and "time" in val.dtype.names
+            and "data" in val.dtype.names
+        ):
+            struct = val.flat[0] if val.ndim > 0 else val
+            if key == time_column:
+                raw_time = np.asarray(struct["time"]).flatten().astype(np.float64)
+            else:
+                name = channels.get(key, key) if channels else key
+                if not channels or key in channels:
+                    ch[name] = np.asarray(struct["data"]).flatten().astype(np.float64)
+                    if raw_time is None:
+                        raw_time = np.asarray(struct["time"]).flatten().astype(np.float64)
                 continue
         # Flat array
         arr = np.asarray(val).flatten()
