@@ -138,13 +138,13 @@ class TestExtractProfiles:
 
     def test_extract_profiles_from_nc(self, tmp_path):
         """Exercise _load_from_nc by extracting profiles from a .nc file."""
-        from rsi_python.convert import p_to_netcdf
+        from rsi_python.convert import p_to_L1
         from rsi_python.profile import extract_profiles
 
         # Convert .p to .nc first
         nc_dir = tmp_path / "nc"
         nc_dir.mkdir()
-        _pf, nc_path = p_to_netcdf(P_FILES[0], nc_dir / "full.nc")
+        _pf, nc_path = p_to_L1(P_FILES[0], nc_dir / "full.nc")
 
         # Extract profiles from the .nc file
         prof_dir = tmp_path / "profiles"

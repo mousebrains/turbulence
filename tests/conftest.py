@@ -55,8 +55,8 @@ def sample_p_file():
 @pytest.fixture
 def sample_nc_file(tmp_path, sample_p_file):
     """Convert the sample .p file to NetCDF and return the path."""
-    from rsi_python.convert import p_to_netcdf
+    from rsi_python.convert import p_to_L1
 
     nc_path = tmp_path / "SN479_0006.nc"
-    p_to_netcdf(sample_p_file, nc_path)
+    p_to_L1(sample_p_file, nc_path)
     return nc_path

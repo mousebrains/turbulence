@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 from scipy.signal import butter, freqz
 
-from rsi_python.batchelor import (
+from chi_tpw.batchelor import (
     KAPPA_T,
     Q_BATCHELOR,
     Q_KRAICHNAN,
@@ -38,7 +38,7 @@ from rsi_python.batchelor import (
     batchelor_kB,
     kraichnan_grad,
 )
-from rsi_python.fp07 import (
+from chi_tpw.fp07 import (
     fp07_double_pole,
     fp07_transfer,
     gradT_noise_batch,
@@ -640,12 +640,12 @@ def get_chi(
         raise ValueError("No thermistor gradient channels found")
 
     # Profile detection, speed, P/T interpolation, salinity
-    from rsi_python.dissipation import _prepare_profiles
+    from rsi_python.helpers import prepare_profiles
     from rsi_python.profile import _VEHICLE_TAU
 
     vehicle = data.get("vehicle", "")
     tau = _VEHICLE_TAU.get(vehicle, 1.5)
-    prepared = _prepare_profiles(data, speed, direction, salinity, tau=tau)
+    prepared = prepare_profiles(data, speed, direction, salinity, tau=tau)
     if prepared is None:
         return []
     (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, _fs_slow, ratio, t_fast) = (
@@ -763,7 +763,7 @@ def _load_therm_channels(source: "PFile | str | Path") -> dict[str, Any]:
     """
     import re
 
-    from rsi_python.dissipation import load_channels
+    from rsi_python.helpers import load_channels
 
     # First load standard channels
     data = load_channels(source)
