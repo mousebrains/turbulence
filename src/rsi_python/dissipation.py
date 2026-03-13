@@ -60,7 +60,7 @@ ISOTROPY_FACTOR = 7.5
 DOF_NUTTALL = 1.9
 
 # ISR wavenumber limit factor (2 * 0.01, matches ODAS)
-X_ISR = 0.02
+X_ISR = 0.01
 
 # Macoun & Lueck (1998) wavenumber correction: 1 + (K/MACOUN_LUECK_DENOM)^2
 # Applied for K <= MACOUN_LUECK_K
