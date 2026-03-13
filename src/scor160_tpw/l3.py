@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from rsi_python.goodman import clean_shear_spec_batch
-from rsi_python.spectral import csd_matrix_batch
+from scor160_tpw.goodman import clean_shear_spec_batch
 from scor160_tpw.io import L1Data, L2Data, L3Data, L3Params
+from scor160_tpw.spectral import csd_matrix_batch
 
 # ---------------------------------------------------------------------------
 # Public API

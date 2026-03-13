@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from rsi_python.nasmyth import LUECK_A, X_95, nasmyth_grid
-from rsi_python.ocean import visc35
 from scor160_tpw.io import L3Data, L4Data
+from scor160_tpw.nasmyth import LUECK_A, X_95, nasmyth_grid
+from scor160_tpw.ocean import visc35
 
 # ---------------------------------------------------------------------------
 # Constants (matching rsi_python.dissipation)

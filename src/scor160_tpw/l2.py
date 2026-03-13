@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.signal import butter, filtfilt
 
-from rsi_python.despike import despike
+from scor160_tpw.despike import despike
 from scor160_tpw.io import L1Data, L2Data, L2Params
 
 # ---------------------------------------------------------------------------

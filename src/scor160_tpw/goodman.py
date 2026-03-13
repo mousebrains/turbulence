@@ -10,7 +10,7 @@ import contextlib
 
 import numpy as np
 
-from rsi_python.spectral import csd_matrix, csd_matrix_batch
+from scor160_tpw.spectral import csd_matrix, csd_matrix_batch
 
 
 def clean_shear_spec(

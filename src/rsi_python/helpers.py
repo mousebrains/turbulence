@@ -18,7 +18,7 @@ import numpy.typing as npt
 if TYPE_CHECKING:
     from rsi_python.p_file import PFile
 
-from rsi_python.ocean import visc, visc35
+from scor160_tpw.ocean import visc, visc35
 
 # ---------------------------------------------------------------------------
 # Channel loading

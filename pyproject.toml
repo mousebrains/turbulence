@@ -70,6 +70,9 @@ module = [
     "chi_tpw.chi",
     "scor160_tpw.io",
     "scor160_tpw.l2",
+    "scor160_tpw.spectral",
+    "scor160_tpw.ocean",
+    "scor160_tpw.nasmyth",
 ]
 # npt.ArrayLike causes many false positives with arithmetic/indexing;
 # no-any-return from numpy arithmetic expressions returning Any
