@@ -213,7 +213,7 @@ def load_config(path: str | Path) -> dict[str, dict]:
         If the file contains unknown sections or keys.
     """
     yaml = YAML()
-    with open(path) as fh:
+    with open(path, encoding="utf-8") as fh:
         raw = yaml.load(fh)
     if raw is None:
         return {}
@@ -426,7 +426,7 @@ def write_resolved_config(
     data[section] = resolved
 
     out = directory / "config.yaml"
-    with open(out, "w") as fh:
+    with open(out, "w", encoding="utf-8") as fh:
         yaml.dump(data, fh)
     return out
 
@@ -605,5 +605,5 @@ parallel:
 def generate_template(path: str | Path) -> Path:
     """Write a fully-commented template configuration file."""
     path = Path(path)
-    path.write_text(_TEMPLATE)
+    path.write_text(_TEMPLATE, encoding="utf-8")
     return path
