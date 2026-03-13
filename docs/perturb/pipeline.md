@@ -34,17 +34,19 @@ Merges split `.p` files that were recorded as sequential segments of the same de
 
 Each `.p` file is processed through several sub-stages:
 
-1. **CTD time-binning** — Bins slow channels (T, C, P) by time, interpolates GPS, computes seawater properties (SP, SA, CT, sigma0, rho, depth via TEOS-10).
+1. **Hotel data** (optional) — If a hotel file is configured, external telemetry channels (speed, pitch, roll, heading, CTD from gliders/AUVs) are loaded and interpolated onto the instrument's fast or slow time axes. Channels listed in `fast_channels` are interpolated onto `t_fast`; all others go to `t_slow`. The interpolated data is injected into `pf.channels` before any downstream processing, so hotel-provided channels (e.g., `speed`, `P`) are available to profile detection, dissipation, and chi stages.
 
-2. **Profile extraction** — Detects down-cast (or up-cast) segments from pressure and fall rate, writes per-profile NetCDF files.
+2. **CTD time-binning** — Bins slow channels (T, C, P) by time, interpolates GPS, computes seawater properties (SP, SA, CT, sigma0, rho, depth via TEOS-10).
 
-3. **FP07 calibration** — In-situ calibration of FP07 thermistors against a reference sensor (JAC_T) using Steinhart-Hart coefficients and cross-correlation lag estimation.
+3. **Profile extraction** — Detects down-cast (or up-cast) segments from pressure and fall rate, writes per-profile NetCDF files.
 
-4. **CT alignment** — Cross-correlation alignment of conductivity and temperature sensors to correct for spatial separation.
+4. **FP07 calibration** — In-situ calibration of FP07 thermistors against a reference sensor (JAC_T) using Steinhart-Hart coefficients and cross-correlation lag estimation.
 
-5. **Dissipation (epsilon)** — Computes TKE dissipation rate per profile using `rsi_python.dissipation.get_diss`. Combines multi-probe estimates via `mk_epsilon_mean` (geometric mean with 95% CI filtering).
+5. **CT alignment** — Cross-correlation alignment of conductivity and temperature sensors to correct for spatial separation.
 
-6. **Chi** (optional) — Computes thermal variance dissipation rate per profile using `rsi_python.chi.get_chi` with the epsilon dataset (Method 1).
+6. **Dissipation (epsilon)** — Computes TKE dissipation rate per profile using `rsi_python.dissipation.get_diss`. Combines multi-probe estimates via `mk_epsilon_mean` (geometric mean with 95% CI filtering).
+
+7. **Chi** (optional) — Computes thermal variance dissipation rate per profile using `rsi_python.chi.get_chi` with the epsilon dataset (Method 1).
 
 ### Stage 4: Bin
 

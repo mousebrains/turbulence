@@ -79,6 +79,11 @@ def _cmd_run(args: argparse.Namespace) -> None:
             print("Error: no .p files found", file=sys.stderr)
             sys.exit(1)
 
+    # Hotel file override
+    if hasattr(args, "hotel_file") and args.hotel_file:
+        config.setdefault("hotel", {})["enable"] = True
+        config.setdefault("hotel", {})["file"] = args.hotel_file
+
     from perturb.pipeline import run_pipeline
 
     run_pipeline(config, p_files=p_files)
@@ -418,6 +423,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_args(p_run)
     _add_parallel_args(p_run)
     _add_file_args(p_run)
+    p_run.add_argument(
+        "--hotel-file", metavar="FILE",
+        help="hotel file (CSV, NetCDF, or .mat) with external telemetry",
+    )
 
     # trim
     p_trim = sub.add_parser("trim", help="trim corrupt records from .p files")

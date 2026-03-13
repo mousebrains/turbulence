@@ -11,7 +11,10 @@ from pathlib import Path
 from perturb.config import merge_config, resolve_output_dir
 
 
-def process_file(p_path: Path, config: dict, gps, output_dirs: dict) -> dict:
+def process_file(
+    p_path: Path, config: dict, gps, output_dirs: dict,
+    hotel_data=None, hotel_cfg=None,
+) -> dict:
     """Process a single .p file through the full enhancement chain.
 
     Parameters
@@ -43,6 +46,14 @@ def process_file(p_path: Path, config: dict, gps, output_dirs: dict) -> dict:
     except Exception as exc:
         print(f"  ERROR loading {p_path.name}: {exc}")
         return result
+
+    # ---- Hotel data injection ----
+    if hotel_data is not None:
+        from perturb.hotel import interpolate_hotel
+
+        hotel_channels = interpolate_hotel(hotel_data, pf, hotel_cfg or {})
+        for name, data in hotel_channels.items():
+            pf.channels[name] = data
 
     # ---- CTD fork (full file, both up and down) ----
     ctd_cfg = config.get("ctd", {})
@@ -321,6 +332,20 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     gps_cfg = merge_config("gps", config.get("gps"))
     gps = create_gps(gps_cfg)
 
+    # Hotel data
+    hotel_cfg = merge_config("hotel", config.get("hotel"))
+    hotel_data = None
+    if hotel_cfg.get("enable", False) and hotel_cfg.get("file"):
+        from perturb.hotel import load_hotel
+
+        hotel_data = load_hotel(
+            hotel_cfg["file"],
+            hotel_cfg.get("time_column", "time"),
+            hotel_cfg.get("time_format", "auto"),
+            hotel_cfg.get("channels", {}),
+        )
+        print(f"Loaded hotel file: {len(hotel_data.channels)} channels")
+
     # Parallel processing
     parallel_cfg = config.get("parallel", {})
     jobs = parallel_cfg.get("jobs", 1)
@@ -332,11 +357,13 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     if jobs == 1:
         for p_path in p_files:
             print(f"  Processing {p_path.name}...")
-            process_file(p_path, config, gps, output_dirs)
+            process_file(p_path, config, gps, output_dirs,
+                         hotel_data=hotel_data, hotel_cfg=hotel_cfg)
     else:
         with ProcessPoolExecutor(max_workers=jobs) as executor:
             futures = {
-                executor.submit(process_file, p, config, gps, output_dirs): p
+                executor.submit(process_file, p, config, gps, output_dirs,
+                                hotel_data=hotel_data, hotel_cfg=hotel_cfg): p
                 for p in p_files
             }
             for future in as_completed(futures):

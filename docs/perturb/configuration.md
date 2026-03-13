@@ -16,7 +16,7 @@ perturb run -c config.yaml -o results/ VMP/*.p
 
 ## Configuration Sections
 
-The perturb configuration has 13 sections. Each parameter is optional — unset values fall back to defaults.
+The perturb configuration has 14 sections. Each parameter is optional — unset values fall back to defaults.
 
 ---
 
@@ -48,6 +48,22 @@ Controls how GPS positions are assigned to measurements.
 | `lat_col` | string | `"lat"` | Latitude column/variable name |
 | `lon_col` | string | `"lon"` | Longitude column/variable name |
 | `max_time_diff` | float | `60` | Max time difference [s] for interpolation |
+
+---
+
+### `hotel` — Hotel File (External Telemetry)
+
+Injects external vehicle telemetry (speed, pitch, roll, heading, CTD) from gliders, AUVs, or Remus into the instrument channels. Data is interpolated onto the instrument's fast or slow time axes.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enable` | bool | `false` | Enable hotel file loading |
+| `file` | string | `null` | Path to hotel file (CSV, NetCDF, or .mat) |
+| `time_column` | string | `"time"` | Time column/variable name in hotel file |
+| `time_format` | string | `"auto"` | Time format: `"auto"`, `"seconds"`, `"epoch"`, `"iso"` |
+| `channels` | dict | `{}` | Column name mapping (hotel → output). Empty = load all |
+| `fast_channels` | list | `["speed", "P"]` | Channels interpolated onto the fast time axis |
+| `interpolation` | string | `"pchip"` | Interpolation method: `"pchip"` or `"linear"` |
 
 ---
 

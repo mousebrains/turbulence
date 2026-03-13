@@ -39,6 +39,15 @@ DEFAULTS: dict[str, dict] = {
         "lon_col": "lon",
         "max_time_diff": 60,
     },
+    "hotel": {
+        "enable": False,
+        "file": None,
+        "time_column": "time",
+        "time_format": "auto",
+        "channels": {},
+        "fast_channels": ["speed", "P"],
+        "interpolation": "pchip",
+    },
     "profiles": {
         "P_min": 0.5,
         "W_min": 0.3,
@@ -447,6 +456,17 @@ gps:
   lat_col: "lat"
   lon_col: "lon"
   max_time_diff: 60       # warning threshold [s]
+
+hotel:
+  enable: false
+  file: null              # path to hotel file (CSV, NetCDF, or .mat)
+  time_column: "time"     # time column/variable name
+  time_format: "auto"     # auto | seconds | epoch | iso
+  channels: {}            # hotel_col → output_name (empty = all)
+  fast_channels:          # channels interpolated onto fast time axis
+    - speed
+    - P
+  interpolation: "pchip"  # pchip | linear
 
 profiles:
   P_min: 0.5              # minimum pressure [dbar]

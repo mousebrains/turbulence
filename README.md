@@ -77,6 +77,7 @@ chi_results = get_chi("VMP/file.p", epsilon_ds=eps_results[0])
 | [Configuration](docs/perturb/configuration.md) | YAML config file format for perturb |
 | [Parallel Scaling](docs/perturb/parallel.md) | Benchmark results for multi-core scaling |
 | [Modules](docs/perturb/modules.md) | Module-level reference |
+| [pyturb Comparison](docs/perturb/pyturb_comparison.md) | Comparison with oceancascades/pyturb |
 
 ### Shared
 

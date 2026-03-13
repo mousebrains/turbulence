@@ -24,13 +24,14 @@ from perturb.config import (
 
 
 class TestDefaults:
-    def test_has_13_sections(self):
-        assert len(DEFAULTS) == 13
+    def test_has_14_sections(self):
+        assert len(DEFAULTS) == 14
 
     def test_expected_sections(self):
         expected = {
-            "files", "gps", "profiles", "fp07", "ct", "bottom", "top_trim",
-            "epsilon", "chi", "ctd", "binning", "netcdf", "parallel",
+            "files", "gps", "hotel", "profiles", "fp07", "ct", "bottom",
+            "top_trim", "epsilon", "chi", "ctd", "binning", "netcdf",
+            "parallel",
         }
         assert set(DEFAULTS.keys()) == expected
 
@@ -276,7 +277,7 @@ class TestGenerateTemplate:
             data = yaml.load(fh)
         assert isinstance(data, dict)
 
-    def test_all_13_sections_present(self, tmp_path):
+    def test_all_14_sections_present(self, tmp_path):
         p = generate_template(tmp_path / "config.yaml")
         from ruamel.yaml import YAML
         yaml = YAML()
