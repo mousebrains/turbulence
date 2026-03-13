@@ -157,11 +157,55 @@ See also [Best Practices](best_practices.md) and
 
 ## Best practices and measurement comparison
 
+- **Lueck, R. G., and 27 coauthors (2024).** Best practices recommendations
+  for estimating dissipation rates from shear probes. *Front. Mar. Sci.*,
+  11, 1334327.
+  [doi:10.3389/fmars.2024.1334327](https://doi.org/10.3389/fmars.2024.1334327)
+
 - **Whalen, C. B. (2021).** Best practices for comparing ocean turbulence
   measurements across spatiotemporal scales. *J. Atmos. Ocean. Technol.*,
   38(4), 837--841.
   [doi:10.1175/JTECH-D-20-0175.1](https://doi.org/10.1175/JTECH-D-20-0175.1)
   -- [papers/Whalen_2021...pdf](../papers/Whalen_2021_Best_Practices_Comparing_Ocean_Turbulence.pdf)
+
+## Benchmark datasets
+
+- **Fer, I., Dengler, M., Holtermann, P., Le Boyer, A. & Lueck, R. (2024).**
+  ATOMIX benchmark datasets for dissipation rate measurements using shear
+  probes. *Scientific Data*, 11, 518.
+  [doi:10.1038/s41597-024-03323-y](https://doi.org/10.1038/s41597-024-03323-y)
+  -- [papers/ATOMIX-benchmark-datasets.pdf](../papers/ATOMIX-benchmark-datasets.pdf)
+
+- **Fer, I., Dengler, M., Holtermann, P., Le Boyer, A. & Lueck, R. (2024).**
+  ATOMIX Shear Probes benchmark dataset descriptor figures (v1.0).
+  *Zenodo*.
+  [doi:10.5281/zenodo.10610150](https://doi.org/10.5281/zenodo.10610150)
+  -- [GitHub: SCOR-ATOMIX/ShearProbes_BenchmarkDescriptor](https://github.com/SCOR-ATOMIX/ShearProbes_BenchmarkDescriptor)
+
+- **Fer, I. (2023).** ATOMIX shear probes benchmark data: Faroe Bank Channel
+  overflow (VMP2000, June 2012). *NERC EDS British Oceanographic Data
+  Centre NOC*.
+  [doi:10.5285/05f21d1d-bf9c-5549-e063-6c86abc0b846](https://doi.org/10.5285/05f21d1d-bf9c-5549-e063-6c86abc0b846)
+
+- **Lueck, R. (2024).** ATOMIX shear probes benchmark data: Haro Strait
+  tidal channel (VMP250, October 2016). *NERC EDS British Oceanographic
+  Data Centre NOC*.
+  [doi:10.5285/0ec16a65-abdf-2822-e063-6c86abc06533](https://doi.org/10.5285/0ec16a65-abdf-2822-e063-6c86abc06533)
+
+- **Le Boyer, A., Alford, M. H. & Couto, N. (2024).** ATOMIX shear probes
+  benchmark data: Rockall Trough (Epsilometer, July 2021). *NERC EDS
+  British Oceanographic Data Centre NOC*.
+  [doi:10.5285/0ebffc86-ed32-5dde-e063-6c86abc08b3a](https://doi.org/10.5285/0ebffc86-ed32-5dde-e063-6c86abc08b3a)
+
+- **Holtermann, P. (2024).** ATOMIX shear probes benchmark data: Baltic Sea,
+  Bornholm Basin (MSS90-L). *NERC EDS British Oceanographic Data Centre
+  NOC*.
+  [doi:10.5285/0e35f96f-57e3-540b-e063-6c86abc06660](https://doi.org/10.5285/0e35f96f-57e3-540b-e063-6c86abc06660)
+
+- **Lueck, R. & Hay, A. (2024).** ATOMIX shear probes benchmark data: Minas
+  Passage (MicroRider-1000, September 2016). *NERC EDS British
+  Oceanographic Data Centre NOC*.
+  [doi:10.5285/0ec17274-7a64-2b28-e063-6c86abc0ee02](https://doi.org/10.5285/0ec17274-7a64-2b28-e063-6c86abc0ee02)
 
 ## Software and data resources
 
