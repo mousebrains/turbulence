@@ -7,7 +7,6 @@ from pathlib import Path
 
 import netCDF4
 import numpy as np
-import numpy.typing as npt
 
 
 @dataclass

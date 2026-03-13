@@ -16,8 +16,7 @@ import numpy as np
 
 from rsi_python.goodman import clean_shear_spec_batch
 from rsi_python.spectral import csd_matrix_batch
-from scor160.io import L1Data, L2Data, L3Data, L3Params
-
+from scor160_tpw.io import L1Data, L2Data, L3Data, L3Params
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -161,8 +160,6 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
             sh_spec=np.zeros((n_shear, n_freq, 0)),
             sh_spec_clean=np.zeros((n_shear, n_freq, 0)),
         )
-
-    n_spec = len(all_times)
 
     # Assemble arrays in ATOMIX format: (N_WAVENUMBER, N_SPECTRA) etc.
     time_out = np.array(all_times)

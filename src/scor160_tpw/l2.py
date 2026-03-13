@@ -9,8 +9,7 @@ import numpy as np
 from scipy.signal import butter, filtfilt
 
 from rsi_python.despike import despike
-from scor160.io import L1Data, L2Data, L2Params
-
+from scor160_tpw.io import L1Data, L2Data, L2Params
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -132,11 +131,7 @@ def _compute_speed(
     dpdt_smooth = filtfilt(b, a, dpdt)
 
     # Sign convention: downward profiler → positive dP/dt is positive speed
-    if direction == "down":
-        speed = dpdt_smooth.copy()
-    else:
-        speed = -dpdt_smooth.copy()
-
+    speed = dpdt_smooth.copy() if direction == "down" else -dpdt_smooth.copy()
     return speed
 
 

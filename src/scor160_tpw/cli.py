@@ -1,18 +1,17 @@
 """CLI for SCOR/ATOMIX benchmark processing.
 
 Usage:
-    scor160 l1-l2 data/*.nc       # L1->L2: section selection, despike, HP filter
-    scor160 l2-l3 data/*.nc       # L2->L3: wavenumber spectra (uses reference L2)
-    scor160 l1-l3 data/*.nc       # L1->L3: full pipeline through spectra
-    scor160 l3-l4 data/*.nc       # L3->L4: dissipation from spectra
-    scor160 l2-l4 data/*.nc       # L2->L4: spectra + dissipation
-    scor160 l1-l4 data/*.nc       # L1->L4: full pipeline
+    scor160-tpw l1-l2 data/*.nc       # L1->L2: section selection, despike, HP filter
+    scor160-tpw l2-l3 data/*.nc       # L2->L3: wavenumber spectra (uses reference L2)
+    scor160-tpw l1-l3 data/*.nc       # L1->L3: full pipeline through spectra
+    scor160-tpw l3-l4 data/*.nc       # L3->L4: dissipation from spectra
+    scor160-tpw l2-l4 data/*.nc       # L2->L4: spectra + dissipation
+    scor160-tpw l1-l4 data/*.nc       # L1->L4: full pipeline
 """
 
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -20,7 +19,7 @@ import numpy as np
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        prog="scor160",
+        prog="scor160-tpw",
         description="SCOR/ATOMIX benchmark dataset processing",
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -68,9 +67,9 @@ def main(argv: list[str] | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 def _cmd_l1_l2(args: argparse.Namespace) -> None:
-    from scor160.compare import compare_l2, format_l2_report
-    from scor160.io import read_atomix
-    from scor160.l2 import process_l2
+    from scor160_tpw.compare import compare_l2, format_l2_report
+    from scor160_tpw.io import read_atomix
+    from scor160_tpw.l2 import process_l2
 
     for path in args.files:
         print(f"\nProcessing {path.name} ...")
@@ -92,9 +91,9 @@ def _cmd_l1_l2(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 def _cmd_l2_l3(args: argparse.Namespace) -> None:
-    from scor160.compare import compare_l3, format_l3_report
-    from scor160.io import read_atomix
-    from scor160.l3 import process_l3
+    from scor160_tpw.compare import compare_l3, format_l3_report
+    from scor160_tpw.io import read_atomix
+    from scor160_tpw.l3 import process_l3
 
     for path in args.files:
         print(f"\nProcessing {path.name} ...")
@@ -115,10 +114,10 @@ def _cmd_l2_l3(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 def _cmd_l1_l3(args: argparse.Namespace) -> None:
-    from scor160.compare import compare_l2, compare_l3, format_l2_report, format_l3_report
-    from scor160.io import read_atomix
-    from scor160.l2 import process_l2
-    from scor160.l3 import process_l3
+    from scor160_tpw.compare import compare_l2, compare_l3, format_l2_report, format_l3_report
+    from scor160_tpw.io import read_atomix
+    from scor160_tpw.l2 import process_l2
+    from scor160_tpw.l3 import process_l3
 
     for path in args.files:
         print(f"\nProcessing {path.name} ...")
@@ -140,13 +139,13 @@ def _cmd_l1_l3(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 def _cmd_l3_l4(args: argparse.Namespace) -> None:
-    from scor160.compare import compare_l4, format_l4_report
-    from scor160.io import read_atomix
-    from scor160.l4 import process_l4
+    from scor160_tpw.compare import compare_l4, format_l4_report
+    from scor160_tpw.io import read_atomix
+    from scor160_tpw.l4 import process_l4
 
     for path in args.files:
         print(f"\nProcessing {path.name} ...")
-        l1, _l2_params, _l2_ref, l3_params, l3_ref, l4_ref = read_atomix(path)
+        l1, _l2_params, _l2_ref, _l3_params, l3_ref, l4_ref = read_atomix(path)
         print(f"  L3 ref: {l3_ref.n_spectra} spectra, "
               f"{l3_ref.n_shear} shear, {l3_ref.n_wavenumber} wavenumbers")
 
@@ -161,10 +160,10 @@ def _cmd_l3_l4(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 def _cmd_l2_l4(args: argparse.Namespace) -> None:
-    from scor160.compare import compare_l3, compare_l4, format_l3_report, format_l4_report
-    from scor160.io import read_atomix
-    from scor160.l3 import process_l3
-    from scor160.l4 import process_l4
+    from scor160_tpw.compare import compare_l3, compare_l4, format_l3_report, format_l4_report
+    from scor160_tpw.io import read_atomix
+    from scor160_tpw.l3 import process_l3
+    from scor160_tpw.l4 import process_l4
 
     for path in args.files:
         print(f"\nProcessing {path.name} ...")
@@ -186,14 +185,18 @@ def _cmd_l2_l4(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 def _cmd_l1_l4(args: argparse.Namespace) -> None:
-    from scor160.compare import (
-        compare_l2, compare_l3, compare_l4,
-        format_l2_report, format_l3_report, format_l4_report,
+    from scor160_tpw.compare import (
+        compare_l2,
+        compare_l3,
+        compare_l4,
+        format_l2_report,
+        format_l3_report,
+        format_l4_report,
     )
-    from scor160.io import read_atomix
-    from scor160.l2 import process_l2
-    from scor160.l3 import process_l3
-    from scor160.l4 import process_l4
+    from scor160_tpw.io import read_atomix
+    from scor160_tpw.l2 import process_l2
+    from scor160_tpw.l3 import process_l3
+    from scor160_tpw.l4 import process_l4
 
     for path in args.files:
         print(f"\nProcessing {path.name} ...")
@@ -240,7 +243,7 @@ def _plot_l2(l1, l2_comp, l2_ref, title: str) -> None:
     n_vib = min(l1.n_vib, 2)
     n_rows = 1 + n_sh + n_vib
 
-    fig, axes = plt.subplots(n_rows, 1, figsize=(14, 3 * n_rows), sharex=True)
+    _fig, axes = plt.subplots(n_rows, 1, figsize=(14, 3 * n_rows), sharex=True)
     if n_rows == 1:
         axes = [axes]
 

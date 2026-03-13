@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from scor160.io import L2Data, L3Data, L4Data
+from scor160_tpw.io import L2Data, L3Data, L4Data
 
 
 def compare_l2(computed: L2Data, reference: L2Data) -> dict:
@@ -209,7 +209,9 @@ def compare_l3(computed: L3Data, reference: L3Data) -> dict:
             log_diff = log_c - log_r
             abs_log_diff = np.abs(log_diff)
 
-            q0, q50, q100 = float(np.min(abs_log_diff)), float(np.median(abs_log_diff)), float(np.max(abs_log_diff))
+            q0 = float(np.min(abs_log_diff))
+            q50 = float(np.median(abs_log_diff))
+            q100 = float(np.max(abs_log_diff))
 
             spec_stats.append({
                 "type": label,
@@ -253,8 +255,11 @@ def format_l3_report(metrics: dict, filename: str = "") -> str:
         lines.append(f"    Mean log10 diff:    {ss['mean_log_diff']:+.4f}")
         lines.append(f"    RMS log10 diff:     {ss['rms_log_diff']:.4f}")
         lines.append(f"    Median ratio:       {ss['median_ratio']:.4f}")
-        lines.append(f"    |log10 diff| Q0/Q50/Q100: "
-                      f"{ss['q0_abs_log']:.4f} / {ss['q50_abs_log']:.4f} / {ss['q100_abs_log']:.4f}")
+        lines.append(
+            f"    |log10 diff| Q0/Q50/Q100: "
+            f"{ss['q0_abs_log']:.4f} / {ss['q50_abs_log']:.4f} / "
+            f"{ss['q100_abs_log']:.4f}"
+        )
         lines.append(f"    N values compared:  {ss['n_values']}")
 
     return "\n".join(lines)
@@ -393,7 +398,7 @@ def format_l4_report(metrics: dict, filename: str = "") -> str:
 
     ef = metrics.get("epsi_final")
     if ef:
-        lines.append(f"\n  EPSI_FINAL (combined):")
+        lines.append("\n  EPSI_FINAL (combined):")
         lines.append(f"    N valid:            {ef['n_valid']}")
         lines.append(f"    Mean log10 diff:    {ef['mean_log_diff']:+.4f}")
         lines.append(f"    RMS log10 diff:     {ef['rms_log_diff']:.4f}")

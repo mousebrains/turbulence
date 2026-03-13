@@ -22,8 +22,8 @@ profiler, and instruments from three manufacturers.
 
 ## Comparison Method
 
-The `scor160` package reads each benchmark NetCDF file and re-processes
-L3 cleaned shear spectra through `scor160.l4.process_l4`, which
+The `scor160_tpw` package reads each benchmark NetCDF file and re-processes
+L3 cleaned shear spectra through `scor160_tpw.l4.process_l4`, which
 implements the Lueck variance method (low dissipation) and inertial
 subrange fitting (high dissipation) following Lueck et al. (2024).
 
@@ -41,8 +41,8 @@ in log10 space. Key metrics:
 ## Running the Comparison
 
 ```bash
-scor160 l3-l4 /path/to/benchmark/*.nc      # reference L3 -> computed L4
-scor160 l1-l4 /path/to/benchmark/*.nc      # full pipeline L1 -> L4
+scor160-tpw l3-l4 /path/to/benchmark/*.nc      # reference L3 -> computed L4
+scor160-tpw l1-l4 /path/to/benchmark/*.nc      # full pipeline L1 -> L4
 ```
 
 ## Results (per-probe epsilon)
@@ -156,7 +156,7 @@ All six ATOMIX benchmark datasets were processed with X_ISR = 0.01
 confirmed by the consistent 2x kmax ratio observed across VMP250 ISR
 spectra and Nemo data when using X_ISR = 0.02.
 
-Both `scor160.l4` and `rsi_python.dissipation` use X_ISR = 0.01 to
+Both `scor160_tpw.l4` and `rsi_python.dissipation` use X_ISR = 0.01 to
 match the benchmark processing.
 
 ### FOM discrepancy

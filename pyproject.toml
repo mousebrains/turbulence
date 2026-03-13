@@ -38,7 +38,7 @@ Repository = "https://github.com/mousebrains/rsi-python"
 [project.scripts]
 rsi-tpw = "rsi_python.cli:main"
 perturb = "perturb.cli:main"
-scor160 = "scor160.cli:main"
+scor160-tpw = "scor160_tpw.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -68,6 +68,8 @@ module = [
     "chi_tpw.batchelor",
     "chi_tpw.fp07",
     "chi_tpw.chi",
+    "scor160_tpw.io",
+    "scor160_tpw.l2",
 ]
 # npt.ArrayLike causes many false positives with arithmetic/indexing;
 # no-any-return from numpy arithmetic expressions returning Any

@@ -16,7 +16,7 @@ import numpy as np
 
 from rsi_python.nasmyth import LUECK_A, X_95, nasmyth_grid
 from rsi_python.ocean import visc35
-from scor160.io import L3Data, L4Data
+from scor160_tpw.io import L3Data, L4Data
 
 # ---------------------------------------------------------------------------
 # Constants (matching rsi_python.dissipation)
