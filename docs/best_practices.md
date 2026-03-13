@@ -8,7 +8,6 @@
   measurements across spatiotemporal scales. *J. Atmos. Ocean. Technol.*,
   38(4), 837--841.
   [doi:10.1175/JTECH-D-20-0175.1](https://doi.org/10.1175/JTECH-D-20-0175.1)
-  -- [papers/Whalen_2021...pdf](../papers/Whalen_2021_Best_Practices_Comparing_Ocean_Turbulence.pdf)
 
   Demonstrates that comparing averages of dissipation rate on different
   spatiotemporal scales can generate spurious discrepancies of up to an

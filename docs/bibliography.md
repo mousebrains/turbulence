@@ -166,7 +166,6 @@ See also [Best Practices](best_practices.md) and
   measurements across spatiotemporal scales. *J. Atmos. Ocean. Technol.*,
   38(4), 837--841.
   [doi:10.1175/JTECH-D-20-0175.1](https://doi.org/10.1175/JTECH-D-20-0175.1)
-  -- [papers/Whalen_2021...pdf](../papers/Whalen_2021_Best_Practices_Comparing_Ocean_Turbulence.pdf)
 
 ## Benchmark datasets
 
@@ -174,7 +173,6 @@ See also [Best Practices](best_practices.md) and
   ATOMIX benchmark datasets for dissipation rate measurements using shear
   probes. *Scientific Data*, 11, 518.
   [doi:10.1038/s41597-024-03323-y](https://doi.org/10.1038/s41597-024-03323-y)
-  -- [papers/ATOMIX-benchmark-datasets.pdf](../papers/ATOMIX-benchmark-datasets.pdf)
 
 - **Fer, I., Dengler, M., Holtermann, P., Le Boyer, A. & Lueck, R. (2024).**
   ATOMIX Shear Probes benchmark dataset descriptor figures (v1.0).
