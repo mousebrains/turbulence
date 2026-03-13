@@ -51,7 +51,7 @@ rsi-tpw eps profiles/*_prof*.nc -o epsilon/
 rsi-tpw eps VMP/*.p -o epsilon/ -j 0
 ```
 
-The epsilon calculation includes iterative despiking, Goodman coherent noise removal, Nasmyth spectrum fitting, and Macoun & Lueck wavenumber correction. See [epsilon_mathematics.md](epsilon_mathematics.md) for the mathematical details.
+The epsilon calculation includes iterative despiking, Goodman coherent noise removal, Nasmyth spectrum fitting, and Macoun & Lueck wavenumber correction. See [epsilon_mathematics.md](../epsilon_mathematics.md) for the mathematical details.
 
 ## Stage 4: Compute Chi
 
@@ -68,7 +68,7 @@ rsi-tpw chi VMP/*.p -o chi/
 rsi-tpw chi VMP/*.p --spectrum-model kraichnan -o chi/
 ```
 
-See [chi_mathematics.md](chi_mathematics.md) for the mathematical details.
+See [chi_mathematics.md](../chi_mathematics.md) for the mathematical details.
 
 ## Output Directory Management
 
