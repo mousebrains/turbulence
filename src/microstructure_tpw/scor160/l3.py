@@ -145,6 +145,18 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
             sh_k = sh_freq_spec[w] * W  # (n_freq, n_shear)
             sh_k_clean = sh_freq_spec_clean[w] * W
 
+            # Macoun & Lueck (2004) spatial response correction for
+            # finite shear-probe tip size.  The probe averages the
+            # velocity field over its tip length, attenuating variance
+            # at high wavenumbers.  The correction 1 + (k/48)^2 is
+            # applied up to 150 cpm; beyond that the signal is below
+            # the noise floor and the correction is not applied.
+            ml_corr = np.ones(len(kcyc_w))
+            ml_mask = kcyc_w <= 150
+            ml_corr[ml_mask] = 1 + (kcyc_w[ml_mask] / 48) ** 2
+            sh_k *= ml_corr[:, np.newaxis]
+            sh_k_clean *= ml_corr[:, np.newaxis]
+
             all_sh_spec.append(sh_k)
             all_sh_spec_clean.append(sh_k_clean)
 

@@ -395,20 +395,91 @@ def _read_l2(ds: netCDF4.Dataset) -> L2Data:
 # ---------------------------------------------------------------------------
 
 def _read_l3_params(ds: netCDF4.Dataset) -> L3Params:
-    """Read L3 processing parameters from L3_spectra group attributes."""
+    """Read L3 processing parameters from L3_spectra group attributes.
+
+    Handles three cases:
+    1. ODAS-style attributes (fft_length, diss_length, overlap in samples).
+    2. Epsifish-style attributes (spectral_fft_length, spectral_disslength,
+       overlap as percentage).
+    3. No attributes — infer fft_length from the KCYC/SH_SPEC shape.
+    """
     g = ds.groups["L3_spectra"]
     attrs = {a: g.getncattr(a) for a in g.ncattrs()}
 
     fs_fast = float(attrs.get("fs_fast", _resolve_attr(ds, "fs_fast", 512.0)))
 
+    # --- FFT length ---
+    if "fft_length" in attrs:
+        fft_length = int(attrs["fft_length"])
+    elif "spectral_fft_length" in attrs:
+        fft_length = int(attrs["spectral_fft_length"])
+    elif "KCYC" in g.variables:
+        # Infer from wavenumber dimension: n_freq = nfft/2 + 1
+        n_freq = g.variables["KCYC"].shape[0]
+        fft_length = (n_freq - 1) * 2
+    else:
+        fft_length = 512
+
+    # --- Dissipation window length ---
+    if "diss_length" in attrs:
+        diss_length = int(attrs["diss_length"])
+    elif "spectral_disslength" in attrs:
+        diss_length = int(attrs["spectral_disslength"])
+    else:
+        # Infer from reference time spacing if possible
+        diss_length = _infer_diss_length(g, fft_length, fs_fast)
+
+    # --- Overlap ---
+    if "overlap" in attrs:
+        overlap = int(attrs["overlap"])
+    elif "spectral_disslength_overlap" in attrs:
+        # Overlap given as percentage
+        overlap = int(diss_length * float(attrs["spectral_disslength_overlap"]) / 100)
+    else:
+        overlap = diss_length // 2
+
     return L3Params(
-        fft_length=int(attrs.get("fft_length", 512)),
-        diss_length=int(attrs.get("diss_length", 2048)),
-        overlap=int(attrs.get("overlap", 1024)),
+        fft_length=fft_length,
+        diss_length=diss_length,
+        overlap=overlap,
         HP_cut=float(attrs.get("HP_cut", 0.25)),
         fs_fast=fs_fast,
         goodman=bool(attrs.get("goodman", True)),
     )
+
+
+def _infer_diss_length(g: "netCDF4.Group", fft_length: int, fs_fast: float) -> int:
+    """Infer dissipation window length from reference L3 time spacing."""
+    if "TIME" not in g.variables or "SECTION_NUMBER" not in g.variables:
+        return fft_length * 4  # fallback
+
+    time = np.asarray(g.variables["TIME"][:], dtype=np.float64)
+    sec = np.asarray(g.variables["SECTION_NUMBER"][:], dtype=np.float64)
+
+    if len(time) < 2:
+        return fft_length * 4
+
+    # Use within-section time spacing to infer diss_step
+    dt_all = []
+    for sid in np.unique(sec[sec > 0]):
+        t_sec = time[sec == sid]
+        if len(t_sec) >= 2:
+            dt_all.extend(np.diff(t_sec).tolist())
+    if not dt_all:
+        return fft_length * 4
+
+    dt_s = np.median(dt_all) * 86400  # days → seconds
+    diss_step = round(dt_s * fs_fast)
+
+    # Also need total section to infer diss_length.
+    # Use the L2_cleaned section to find total samples, then:
+    # n_spectra = (sec_len - diss_length) // diss_step + 1
+    # → diss_length = sec_len - (n_spectra - 1) * diss_step
+    # But we don't have the L2 here. Use a heuristic: diss_length = 2 * diss_step
+    # (50% overlap), rounded to a multiple of fft_length.
+    # Assume 50% overlap: diss_length = 2 * diss_step.
+    diss_length = 2 * diss_step
+    return max(2 * fft_length, diss_length)
 
 
 # ---------------------------------------------------------------------------
