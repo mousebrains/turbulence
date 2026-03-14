@@ -18,7 +18,14 @@ import numpy.typing as npt
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
 
-from odas_tpw.scor160.ocean import visc, visc35
+# ---------------------------------------------------------------------------
+# Channel name patterns for RSI instruments
+# ---------------------------------------------------------------------------
+
+SH_PATTERN = re.compile(r"^sh\d+$")
+AC_PATTERN = re.compile(r"^A[xyz]$")
+T_PATTERN = re.compile(r"^T\d+$")
+DT_PATTERN = re.compile(r"^T\d+_dT\d+$")
 
 # ---------------------------------------------------------------------------
 # Channel loading
@@ -86,8 +93,8 @@ def load_channels(
 def _channels_from_pfile(
     pf: PFile, sh_pat: str, ac_pat: str, p_name: str, t_name: str
 ) -> dict[str, Any]:
-    sh_re = re.compile(sh_pat)
-    ac_re = re.compile(ac_pat)
+    sh_re = re.compile(sh_pat) if sh_pat != SH_PATTERN.pattern else SH_PATTERN
+    ac_re = re.compile(ac_pat) if ac_pat != AC_PATTERN.pattern else AC_PATTERN
     shear = sorted(
         [(n, pf.channels[n]) for n in pf._fast_channels if sh_re.match(n)],
         key=lambda x: x[0],
@@ -122,8 +129,8 @@ def _channels_from_nc(
     import netCDF4 as nc
 
     ds = nc.Dataset(str(nc_path), "r")
-    sh_re = re.compile(sh_pat)
-    ac_re = re.compile(ac_pat)
+    sh_re = re.compile(sh_pat) if sh_pat != SH_PATTERN.pattern else SH_PATTERN
+    ac_re = re.compile(ac_pat) if ac_pat != AC_PATTERN.pattern else AC_PATTERN
 
     fs_fast = float(ds.fs_fast)
     fs_slow = float(ds.fs_slow)
@@ -262,11 +269,133 @@ def prepare_profiles(
     return (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, fs_slow, ratio, t_fast)
 
 
-def compute_nu(
-    mean_T: float, mean_P: float, salinity: float | np.ndarray | None, sel: slice
-) -> float:
-    """Compute kinematic viscosity, dispatching to visc35 or visc."""
-    if salinity is not None:
-        mean_S = float(np.mean(salinity[sel]) if np.ndim(salinity) > 0 else salinity)
-        return float(visc(mean_T, mean_S, mean_P))
-    return float(visc35(mean_T))
+# ---------------------------------------------------------------------------
+# L1Data construction from load_channels output
+# ---------------------------------------------------------------------------
+
+
+def _build_l1data_from_channels(
+    data: dict[str, Any],
+    s_fast: int,
+    e_fast: int,
+    speed_fast: np.ndarray,
+    P_fast: np.ndarray,
+    T_fast: np.ndarray,
+    direction: str = "down",
+    *,
+    therm_list: list[tuple[str, np.ndarray]] | None = None,
+    diff_gains: list[float] | None = None,
+) -> Any:
+    """Build L1Data from load_channels output and interpolated profile arrays.
+
+    Parameters
+    ----------
+    data : dict
+        Output of load_channels().
+    s_fast, e_fast : int
+        Fast-rate slice indices for this profile.
+    speed_fast : ndarray
+        Full-length speed array (fast rate).
+    P_fast, T_fast : ndarray
+        Full-length pressure and temperature (interpolated to fast rate).
+    direction : str
+        Profile direction.
+    therm_list : list of (name, array), optional
+        Thermistor data for chi computation.
+    diff_gains : list of float, optional
+        Per-thermistor differentiator gains.
+    """
+    from odas_tpw.scor160.io import L1Data
+
+    shear_arrays = [s[1] for s in data["shear"]]
+    accel_arrays = [a[1] for a in data["accel"]]
+    fs_fast = data["fs_fast"]
+    n = e_fast - s_fast
+
+    speed_prof = speed_fast[s_fast:e_fast]
+
+    # Shear: normalize by speed^2
+    if shear_arrays:
+        shear = np.stack(
+            [arr[s_fast:e_fast] / speed_prof**2 for arr in shear_arrays],
+            axis=0,
+        )
+    else:
+        shear = np.zeros((0, n), dtype=np.float64)
+
+    # Vibration/accelerometer
+    if accel_arrays:
+        vib = np.stack([arr[s_fast:e_fast] for arr in accel_arrays], axis=0)
+        vib_type = "ACC"
+    else:
+        vib = np.zeros((0, n), dtype=np.float64)
+        vib_type = "NONE"
+
+    # Optional fast temperature
+    if therm_list:
+        tf = np.stack([arr[s_fast:e_fast] for _, arr in therm_list], axis=0)
+    else:
+        tf = np.zeros((0, 0), dtype=np.float64)
+
+    return L1Data(
+        time=data["t_fast"][s_fast:e_fast],
+        pres=P_fast[s_fast:e_fast],
+        shear=shear,
+        vib=vib,
+        vib_type=vib_type,
+        fs_fast=fs_fast,
+        f_AA=98.0,
+        vehicle=data.get("vehicle", ""),
+        profile_dir=direction,
+        time_reference_year=2000,
+        pspd_rel=speed_prof,
+        temp=T_fast[s_fast:e_fast],
+        temp_fast=tf,
+        diff_gains=diff_gains or [],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared file-level output
+# ---------------------------------------------------------------------------
+
+
+def write_profile_results(
+    results: list,
+    source_path: Path,
+    output_dir: Path,
+    suffix: str,
+) -> list[Path]:
+    """Write per-profile xarray Datasets to NetCDF files.
+
+    Parameters
+    ----------
+    results : list of xr.Dataset
+        Per-profile results.
+    source_path : Path
+        Original source file (stem used for naming).
+    output_dir : Path
+        Output directory (created if needed).
+    suffix : str
+        File suffix, e.g. 'eps' or 'chi'.
+
+    Returns
+    -------
+    list of Path
+        Paths to output files written.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_paths: list[Path] = []
+    for i, ds in enumerate(results):
+        if len(results) == 1:
+            out_name = f"{source_path.stem}_{suffix}.nc"
+        else:
+            out_name = f"{source_path.stem}_prof{i + 1:03d}_{suffix}.nc"
+        out_path = output_dir / out_name
+        ds.to_netcdf(out_path)
+        output_paths.append(out_path)
+        print(
+            f"  {out_path.name}: {ds.sizes['time']} estimates, "
+            f"P={float(ds.P_mean.min()):.0f}-{float(ds.P_mean.max()):.0f} dbar"
+        )
+    return output_paths

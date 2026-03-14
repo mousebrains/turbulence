@@ -5,12 +5,12 @@ Bridges instrument-specific I/O with the generic scor160 processing pipeline.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
+from odas_tpw.rsi.helpers import AC_PATTERN, DT_PATTERN, SH_PATTERN, T_PATTERN
 from odas_tpw.scor160.io import L1Data
 
 if TYPE_CHECKING:
@@ -86,8 +86,7 @@ def pfile_to_l1data(
         pspd_rel = np.maximum(pspd_rel, 0.05)
 
     # Shear channels — normalize by speed^2 to get du/dz [s^-1]
-    sh_re = re.compile(r"^sh\d+$")
-    shear_names = sorted(n for n in pf._fast_channels if sh_re.match(n))
+    shear_names = sorted(n for n in pf._fast_channels if SH_PATTERN.match(n))
     if shear_names:
         shear = np.stack(
             [pf.channels[n][s_fast:e_fast] / pspd_rel**2 for n in shear_names],
@@ -97,8 +96,7 @@ def pfile_to_l1data(
         shear = np.zeros((0, len(t_fast)), dtype=np.float64)
 
     # Vibration / accelerometer channels
-    ac_re = re.compile(r"^A[xyz]$")
-    acc_names = sorted(n for n in pf._fast_channels if ac_re.match(n))
+    acc_names = sorted(n for n in pf._fast_channels if AC_PATTERN.match(n))
     vib_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "piezo")
     if acc_names:
         vib = np.stack(
@@ -117,15 +115,12 @@ def pfile_to_l1data(
         vib_type = "NONE"
 
     # Fast thermistor temperature (for chi)
-    dT_re = re.compile(r"^T\d+_dT\d+$")
-    T_re = re.compile(r"^T\d+$")
-
     temp_fast_list: list[np.ndarray] = []
     diff_gains: list[float] = []
 
     # Prefer deconvolved pre-emphasized channels (T1_dT1, T2_dT2)
     for name in sorted(pf._fast_channels):
-        if dT_re.match(name):
+        if DT_PATTERN.match(name):
             temp_fast_list.append(pf.channels[name][s_fast:e_fast])
             ch_cfg = next(
                 (ch for ch in pf.config["channels"] if ch.get("name") == name),
@@ -136,7 +131,7 @@ def pfile_to_l1data(
     # Fallback to T channels
     if not temp_fast_list:
         for name in sorted(pf._fast_channels):
-            if T_re.match(name):
+            if T_PATTERN.match(name):
                 temp_fast_list.append(pf.channels[name][s_fast:e_fast])
                 diff_gains.append(0.94)
 

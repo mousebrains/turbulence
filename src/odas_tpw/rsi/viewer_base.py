@@ -7,12 +7,11 @@ drawing methods.  Subclasses define their panel layout by overriding
 ``_setup_axes`` and ``_draw``.
 """
 
-import re
-
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.widgets import Button
 
+from odas_tpw.rsi.helpers import AC_PATTERN, DT_PATTERN, SH_PATTERN, T_PATTERN
 from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
 from odas_tpw.rsi.window import compute_chi_window, compute_eps_window
 from odas_tpw.scor160.despike import despike
@@ -302,25 +301,20 @@ class ProfileViewer:
         self.spec_P_range = spec_P_range
 
         # Extract channel data
-        sh_re = re.compile(r"^sh\d+$")
-        ac_re = re.compile(r"^A[xyz]$")
-        T_re = re.compile(r"^T\d+$")
-        dT_re = re.compile(r"^T\d+_dT\d+$")
-
         self.shear = sorted(
-            [(n, pf.channels[n]) for n in pf._fast_channels if sh_re.match(n)],
+            [(n, pf.channels[n]) for n in pf._fast_channels if SH_PATTERN.match(n)],
             key=lambda x: x[0],
         )
         self.accel = sorted(
-            [(n, pf.channels[n]) for n in pf._fast_channels if ac_re.match(n)],
+            [(n, pf.channels[n]) for n in pf._fast_channels if AC_PATTERN.match(n)],
             key=lambda x: x[0],
         )
         self.therm_slow = sorted(
-            [(n, pf.channels[n]) for n in pf._slow_channels if T_re.match(n)],
+            [(n, pf.channels[n]) for n in pf._slow_channels if T_PATTERN.match(n)],
             key=lambda x: x[0],
         )
         self.therm_fast = sorted(
-            [(n, pf.channels[n]) for n in pf._fast_channels if dT_re.match(n)],
+            [(n, pf.channels[n]) for n in pf._fast_channels if DT_PATTERN.match(n)],
             key=lambda x: x[0],
         )
         self.diff_gains = []

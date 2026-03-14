@@ -83,3 +83,7 @@ testpaths = ["tests"]
 markers = [
     "matlab: MATLAB/ODAS comparison tests (use -n auto to parallelize)",
 ]
+filterwarnings = [
+    "ignore:get_diss\\(\\) is deprecated:DeprecationWarning",
+    "ignore:get_chi\\(\\) is deprecated:DeprecationWarning",
+]

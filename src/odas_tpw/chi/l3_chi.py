@@ -13,8 +13,13 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from odas_tpw.chi.chi import _bilinear_correction, _default_tau_model
-from odas_tpw.chi.fp07 import gradT_noise_batch
+from odas_tpw.chi.chi import _bilinear_correction
+from odas_tpw.chi.fp07 import (
+    default_tau_model,
+    fp07_tau_batch,
+    fp07_transfer_batch,
+    gradT_noise_batch,
+)
 from odas_tpw.chi.l2_chi import L2ChiData
 from odas_tpw.scor160.goodman import clean_shear_spec_batch
 from odas_tpw.scor160.io import L3Params
@@ -211,19 +216,9 @@ def process_l3_chi(
             )
 
         # FP07 transfer function
-        tau_model = _default_tau_model(fp07_model)
-        if tau_model == "lueck":
-            tau0_all = 0.01 * (1.0 / speed_means) ** 0.5
-        elif tau_model == "peterson":
-            tau0_all = 0.012 * speed_means ** (-0.32)
-        else:
-            tau0_all = np.full(n_windows, 0.003)
-
-        omega_tau = (2 * np.pi * F_const[:, np.newaxis] * tau0_all[np.newaxis, :]) ** 2
-        if fp07_model == "single_pole":
-            H2_all = (1.0 / (1.0 + omega_tau)).T
-        else:
-            H2_all = (1.0 / (1.0 + omega_tau) ** 2).T
+        tau_model = default_tau_model(fp07_model)
+        tau0_all = fp07_tau_batch(speed_means, model=tau_model)
+        H2_all = fp07_transfer_batch(F_const, tau0_all, model=fp07_model)
 
         # Noise spectra
         noise_all = np.empty((n_temp, n_windows, n_freq))

@@ -3,6 +3,12 @@
 
 Port of get_diss_odas.m from the ODAS MATLAB library.
 
+.. deprecated::
+    ``get_diss`` and ``_compute_profile_diss`` are deprecated.
+    Use :func:`odas_tpw.rsi.pipeline.run_pipeline` or the modular
+    ``process_l2`` → ``process_l3`` → ``process_l4`` chain from
+    :mod:`odas_tpw.scor160` instead.
+
 References
 ----------
 Lueck, R.G., 2022a: The statistics of oceanic turbulence measurements.
@@ -16,6 +22,7 @@ Lueck, R.G., and 27 coauthors, 2024: Best practices recommendations for
     11, 1334327.
 """
 
+import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -27,9 +34,7 @@ import xarray as xr
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
 
-from odas_tpw.rsi.helpers import load_channels, prepare_profiles
-from odas_tpw.scor160.despike import despike
-from odas_tpw.scor160.goodman import clean_shear_spec_batch
+from odas_tpw.rsi.helpers import _build_l1data_from_channels, load_channels, prepare_profiles
 from odas_tpw.scor160.l4 import (
     E_ISR_THRESHOLD,
     _estimate_epsilon,
@@ -115,6 +120,18 @@ def get_diss(
         epsilon, K_max, speed, nu, T_mean, P_mean, spec_shear,
         spec_nasmyth, K, mad, fom, K_max_ratio.
     """
+    warnings.warn(
+        "get_diss() is deprecated. Use run_pipeline() or the modular "
+        "process_l2 → process_l3 → process_l4 chain from odas_tpw.scor160 "
+        "instead. See odas_tpw.rsi.pipeline.run_pipeline().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    from odas_tpw.scor160.io import L2Params, L3Params
+    from odas_tpw.scor160.l2 import process_l2
+    from odas_tpw.scor160.l3 import process_l3
+
     if diss_length is None:
         diss_length = 2 * fft_length
     if overlap is None:
@@ -124,35 +141,22 @@ def get_diss(
 
     data = load_channels(source)
 
-    # Get shear and accel arrays
     shear_names = [s[0] for s in data["shear"]]
-    shear_arrays = [s[1] for s in data["shear"]]
-    accel_arrays = [a[1] for a in data["accel"]]
-    n_shear = len(shear_arrays)
-    n_accel = len(accel_arrays)
+    n_shear = len(shear_names)
+    n_accel = len(data["accel"])
 
     if n_shear == 0:
         raise ValueError("No shear channels found")
     if goodman and n_accel == 0:
         raise ValueError("No accelerometer channels found (required for Goodman)")
 
-    # Despike shear data
     fs_fast = data["fs_fast"]
-    for i in range(n_shear):
-        shear_arrays[i], _, _, _ = despike(
-            shear_arrays[i],
-            fs_fast,
-            thresh=despike_thresh,
-            smooth=despike_smooth,
-        )
 
-    # Look up vehicle-specific tau for speed smoothing
     from odas_tpw.rsi.profile import _VEHICLE_TAU
 
     vehicle = data.get("vehicle", "")
     tau = _VEHICLE_TAU.get(vehicle, 1.5)
 
-    # Profile detection, speed, P/T interpolation, salinity
     prepared = prepare_profiles(data, speed, direction, salinity, tau=tau)
     if prepared is None:
         return []
@@ -160,51 +164,141 @@ def get_diss(
         prepared
     )
 
-    # Convert shear from piezo output to du/dz by dividing by speed^2,
-    # matching ODAS odas_p2mat.m line 922.
-    for i in range(n_shear):
-        shear_arrays[i] = shear_arrays[i] / speed_fast**2
-
-    # Effective AA cutoff
     f_AA_eff = F_AA_MARGIN * f_AA
     if f_limit < f_AA_eff:
         f_AA_eff = f_limit
+
+    # Pipeline parameters — lenient section selection since profiles
+    # are already detected by prepare_profiles
+    l2_params = L2Params(
+        HP_cut=0.25,
+        despike_sh=np.array([despike_thresh, despike_smooth, 0.04]),
+        despike_A=np.array([np.inf, 0.5, 0.04]),
+        profile_min_W=0.05,
+        profile_min_P=0.0,
+        profile_min_duration=0.0,
+        speed_tau=0.0,
+    )
+    l3_params = L3Params(
+        fft_length=fft_length,
+        diss_length=diss_length,
+        overlap=overlap,
+        HP_cut=0.25,
+        fs_fast=fs_fast,
+        goodman=goodman,
+    )
 
     results = []
     for s_slow, e_slow in profiles_slow:
         s_fast = s_slow * ratio
         e_fast = min((e_slow + 1) * ratio, len(t_fast))
 
-        # Build shear and accel matrices for this profile
-        sh_mat = np.column_stack([s[s_fast:e_fast] for s in shear_arrays])
-        ac_mat = np.column_stack([a[s_fast:e_fast] for a in accel_arrays])
-        p_prof = P_fast[s_fast:e_fast]
-        t_prof = T_fast[s_fast:e_fast]
-        spd_prof = speed_fast[s_fast:e_fast]
-        time_prof = t_fast[s_fast:e_fast]
-
         sal_prof = sal_fast[s_fast:e_fast] if isinstance(sal_fast, np.ndarray) else sal_fast
 
-        ds = _compute_profile_diss(
-            sh_mat,
-            ac_mat,
-            p_prof,
-            t_prof,
-            spd_prof,
-            time_prof,
-            shear_names,
-            fs_fast,
-            fft_length,
-            diss_length,
-            overlap,
-            goodman,
-            f_AA_eff,
-            fit_order,
-            salinity=sal_prof,
+        # Build L1Data (shear normalized by speed^2)
+        l1 = _build_l1data_from_channels(
+            data, s_fast, e_fast, speed_fast, P_fast, T_fast, direction,
+        )
+
+        # L2: HP filter + despike + section selection
+        l2 = process_l2(l1, l2_params)
+
+        # L3: wavenumber spectra (Goodman-cleaned, Macoun-Lueck corrected)
+        l3 = process_l3(l2, l1, l3_params)
+
+        if l3.n_spectra == 0:
+            continue
+
+        # L4: custom epsilon loop with salinity support and full output
+        n_spec = l3.n_spectra
+        n_freq = l3.n_wavenumber
+        n_sh = l3.n_shear
+
+        num_ffts = 2 * (diss_length // fft_length) - 1
+        n_v = n_accel if goodman else 0
+        dof_spec = DOF_NUTTALL * max(num_ffts - n_v, 1)
+
+        epsilon = np.full((n_sh, n_spec), np.nan)
+        K_max_out = np.full((n_sh, n_spec), np.nan)
+        mad_out = np.full((n_sh, n_spec), np.nan)
+        fom_out = np.full((n_sh, n_spec), np.nan)
+        FM_out = np.full((n_sh, n_spec), np.nan)
+        K_max_ratio_out = np.full((n_sh, n_spec), np.nan)
+        method_out = np.zeros((n_sh, n_spec), dtype=np.int8)
+        spec_shear = np.full((n_sh, n_freq, n_spec), np.nan)
+        spec_nasmyth = np.full((n_sh, n_freq, n_spec), np.nan)
+
+        # Viscosity per window (with salinity support)
+        if salinity is not None:
+            if np.ndim(sal_prof) > 0:
+                sal_window = np.interp(l3.time, l1.time, sal_prof)
+            else:
+                sal_window = np.full(n_spec, float(sal_prof))
+            nu_out = np.array([
+                float(visc(l3.temp[j], sal_window[j], l3.pres[j]))
+                for j in range(n_spec)
+            ])
+        else:
+            nu_out = np.array([float(visc35(l3.temp[j])) for j in range(n_spec)])
+
+        for j in range(n_spec):
+            K = l3.kcyc[:, j]
+            K_AA = f_AA_eff / max(l3.pspd_rel[j], SPEED_MIN)
+            nu = nu_out[j]
+
+            for ci in range(n_sh):
+                shear_spec = l3.sh_spec_clean[ci, :, j]
+
+                e_4, k_max, mad, meth, fom_val, _var_res, nas_spec, K_max_ratio_val, FM_val = (
+                    _estimate_epsilon(
+                        K, shear_spec, nu, K_AA, fit_order,
+                        e_isr_threshold=E_ISR_THRESHOLD,
+                        num_ffts=num_ffts, n_v=n_v,
+                    )
+                )
+                epsilon[ci, j] = e_4
+                K_max_out[ci, j] = k_max
+                mad_out[ci, j] = mad
+                fom_out[ci, j] = fom_val
+                FM_out[ci, j] = FM_val
+                K_max_ratio_out[ci, j] = K_max_ratio_val
+                method_out[ci, j] = meth
+                spec_shear[ci, :, j] = shear_spec
+                spec_nasmyth[ci, :, j] = nas_spec
+
+        # F vector (constant across windows)
+        F = np.arange(n_freq) * fs_fast / fft_length
+        F_out = np.broadcast_to(F[:, np.newaxis], (n_freq, n_spec)).copy()
+
+        ds = _build_diss_dataset(
+            epsilon=epsilon,
+            K_max_out=K_max_out,
+            mad_out=mad_out,
+            fom_out=fom_out,
+            FM_out=FM_out,
+            K_max_ratio_out=K_max_ratio_out,
+            method_out=method_out,
+            speed_out=l3.pspd_rel,
+            nu_out=nu_out,
+            P_out=l3.pres,
+            T_out=l3.temp,
+            t_out=l3.time,
+            spec_shear=spec_shear,
+            spec_nasmyth=spec_nasmyth,
+            K_out=l3.kcyc,
+            F_out=F_out,
+            shear_names=shear_names,
+            fft_length=fft_length,
+            diss_length=diss_length,
+            overlap=overlap,
+            fs_fast=fs_fast,
+            dof_spec=dof_spec,
+            do_goodman=goodman,
+            f_AA=f_AA_eff,
+            fit_order=fit_order,
         )
         ds.attrs.update(data["metadata"])
         ds.attrs["history"] = f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
-        # CF time coordinate attributes
         start_time = data["metadata"].get("start_time", "")
         t_units = f"seconds since {start_time}" if start_time else "seconds"
         ds.coords["t"].attrs.update(
@@ -219,227 +313,6 @@ def get_diss(
         results.append(ds)
 
     return results
-
-
-def _compute_profile_diss(
-    shear,
-    accel,
-    P,
-    T,
-    speed,
-    t_fast,
-    shear_names,
-    fs_fast,
-    fft_length,
-    diss_length,
-    overlap,
-    do_goodman,
-    f_AA,
-    fit_order,
-    salinity=None,
-):
-    """Compute dissipation for all windows in a single profile.
-
-    Iterates over dissipation windows, computes Goodman-cleaned shear
-    wavenumber spectra, and estimates epsilon via the variance or ISR method.
-
-    Parameters
-    ----------
-    shear : ndarray, shape (N, n_shear)
-        Shear probe data [s⁻¹], already despiked and divided by speed².
-    accel : ndarray, shape (N, n_accel)
-        Accelerometer data for Goodman cleaning.
-    P : ndarray, shape (N,)
-        Pressure [dbar].
-    T : ndarray, shape (N,)
-        Temperature [°C].
-    speed : ndarray, shape (N,)
-        Profiling speed [m/s].
-    t_fast : ndarray, shape (N,)
-        Time vector [s].
-    shear_names : list of str
-        Probe names for coordinate labelling.
-    fs_fast : float
-        Sampling rate [Hz].
-    fft_length : int
-        FFT segment length [samples].
-    diss_length : int
-        Dissipation window length [samples].
-    overlap : int
-        Window overlap [samples].
-    do_goodman : bool
-        Whether to apply Goodman coherent noise removal.
-    f_AA : float
-        Effective anti-aliasing cutoff [Hz].
-    fit_order : int
-        Polynomial order for spectral minimum detection.
-    salinity : float, ndarray, or None
-        Practical salinity for viscosity calculation.
-
-    Returns
-    -------
-    xarray.Dataset
-        Contains epsilon, K_max, mad, fom, FM, K_max_ratio, spectra, etc.
-    """
-    N = shear.shape[0]
-    n_shear = shear.shape[1]
-    n_freq = fft_length // 2 + 1
-
-    # Number of dissipation estimates
-    if overlap >= diss_length:
-        overlap = diss_length // 2
-    step = diss_length - overlap
-    n_est = max(1, 1 + (N - diss_length) // step)
-
-    # Trim n_est if the last window would exceed the data
-    while n_est > 0 and (n_est - 1) * step + diss_length > N:
-        n_est -= 1
-
-    # Degrees of freedom — Lueck (2022a,b)
-    num_ffts = 2 * (diss_length // fft_length) - 1
-    n_v = accel.shape[1] if do_goodman else 0
-    dof_spec = DOF_NUTTALL * max(num_ffts - n_v, 1)
-
-    # ---- Vectorized: extract all windows at once ----
-    win_starts = np.arange(n_est) * step
-    indices = win_starts[:, np.newaxis] + np.arange(diss_length)[np.newaxis, :]
-    # shape: (n_est, diss_length, n_channels)
-    sh_windows = shear[indices]
-    ac_windows = accel[indices]
-
-    # ---- Vectorized: batched CSD + Goodman ----
-    if do_goodman:
-        # clean_UU: (n_est, n_freq, n_shear, n_shear)
-        P_sh_clean_all, F = clean_shear_spec_batch(
-            ac_windows,
-            sh_windows,
-            fft_length,
-            fs_fast,
-        )
-    else:
-        from odas_tpw.scor160.spectral import csd_matrix_batch
-
-        P_sh_all, F, _, _ = csd_matrix_batch(
-            sh_windows,
-            None,
-            fft_length,
-            fs_fast,
-            overlap=fft_length // 2,
-            detrend="linear",
-        )
-        P_sh_clean_all = np.real(P_sh_all)
-
-    del sh_windows, ac_windows
-
-    # ---- Vectorized: window means ----
-    # Reshape for fast window-mean computation
-    speed_windows = np.abs(speed[indices])  # (n_est, diss_length)
-    speed_out = np.mean(speed_windows, axis=1)
-    speed_out = np.maximum(speed_out, SPEED_MIN)
-
-    T_out = np.mean(T[indices], axis=1)
-    P_out = np.mean(P[indices], axis=1)
-    t_out = np.mean(t_fast[indices], axis=1)
-
-    # Viscosity per window
-    if salinity is not None:
-        if np.ndim(salinity) > 0:
-            sal_windows = salinity[indices]
-            sal_means = np.mean(sal_windows, axis=1)
-        else:
-            sal_means = np.full(n_est, float(salinity))
-        nu_out = np.array([float(visc(T_out[i], sal_means[i], P_out[i])) for i in range(n_est)])
-    else:
-        nu_out = np.array([float(visc35(T_out[i])) for i in range(n_est)])
-
-    # ---- Vectorized: frequency → wavenumber conversion + correction ----
-    # K varies per window because speed varies: K[f, w] = F[f] / W[w]
-    K_all = F[:, np.newaxis] / speed_out[np.newaxis, :]  # (n_freq, n_est)
-    K_AA_all = f_AA / speed_out  # (n_est,)
-
-    # Macoun-Lueck correction: (n_freq, n_est)
-    correction = np.ones_like(K_all)
-    mask = K_all <= MACOUN_LUECK_K
-    correction[mask] = 1 + (K_all[mask] / MACOUN_LUECK_DENOM) ** 2
-
-    # Convert CSD from frequency to wavenumber spectra and apply correction
-    # P_sh_clean_all: (n_est, n_freq, n_sh, n_sh)
-    # Multiply by W (per window) and correction (per freq, per window)
-    wk_scale = speed_out[np.newaxis, :] * correction  # (n_freq, n_est)
-    P_sh_clean_all = P_sh_clean_all * wk_scale.T[:, :, np.newaxis, np.newaxis]
-
-    # Store F (same for all windows)
-    F_out = np.broadcast_to(F[:, np.newaxis], (n_freq, n_est)).copy()
-    K_out = K_all
-
-    # ---- Per-window epsilon estimation (not vectorizable) ----
-    epsilon = np.full((n_shear, n_est), np.nan)
-    K_max_out = np.full((n_shear, n_est), np.nan)
-    mad_out = np.full((n_shear, n_est), np.nan)
-    fom_out = np.full((n_shear, n_est), np.nan)
-    FM_out = np.full((n_shear, n_est), np.nan)
-    K_max_ratio_out = np.full((n_shear, n_est), np.nan)
-    method_out = np.zeros((n_shear, n_est), dtype=np.int8)
-    spec_shear = np.full((n_shear, n_freq, n_est), np.nan)
-    spec_nasmyth = np.full((n_shear, n_freq, n_est), np.nan)
-
-    for idx in range(n_est):
-        K = K_all[:, idx]
-        K_AA = K_AA_all[idx]
-        nu = nu_out[idx]
-
-        for ci in range(n_shear):
-            shear_spec = np.real(P_sh_clean_all[idx, :, ci, ci])
-
-            e_4, k_max, mad, meth, fom_val, _var_res, nas_spec, K_max_ratio_val, FM_val = (
-                _estimate_epsilon(
-                    K,
-                    shear_spec,
-                    nu,
-                    K_AA,
-                    fit_order,
-                    e_isr_threshold=E_ISR_THRESHOLD,
-                    num_ffts=num_ffts,
-                    n_v=n_v,
-                )
-            )
-            epsilon[ci, idx] = e_4
-            K_max_out[ci, idx] = k_max
-            mad_out[ci, idx] = mad
-            fom_out[ci, idx] = fom_val
-            FM_out[ci, idx] = FM_val
-            K_max_ratio_out[ci, idx] = K_max_ratio_val
-            method_out[ci, idx] = meth
-            spec_shear[ci, :, idx] = shear_spec
-            spec_nasmyth[ci, :, idx] = nas_spec
-
-    return _build_diss_dataset(
-        epsilon=epsilon,
-        K_max_out=K_max_out,
-        mad_out=mad_out,
-        fom_out=fom_out,
-        FM_out=FM_out,
-        K_max_ratio_out=K_max_ratio_out,
-        method_out=method_out,
-        speed_out=speed_out,
-        nu_out=nu_out,
-        P_out=P_out,
-        T_out=T_out,
-        t_out=t_out,
-        spec_shear=spec_shear,
-        spec_nasmyth=spec_nasmyth,
-        K_out=K_out,
-        F_out=F_out,
-        shear_names=shear_names,
-        fft_length=fft_length,
-        diss_length=diss_length,
-        overlap=overlap,
-        fs_fast=fs_fast,
-        dof_spec=dof_spec,
-        do_goodman=do_goodman,
-        f_AA=f_AA,
-        fit_order=fit_order,
-    )
 
 
 def _build_diss_dataset(
@@ -618,9 +491,6 @@ def _build_diss_dataset(
     ds.coords["probe"].attrs["long_name"] = "shear probe name"
     return ds
 
-    # _estimate_epsilon, _variance_correction, and _inertial_subrange
-    # are now imported from odas_tpw.scor160.l4 at the top of this module.
-
 
 # ---------------------------------------------------------------------------
 # File-level processing
@@ -648,27 +518,12 @@ def compute_diss_file(
     list of Path
         Paths to output files written.
     """
+    from odas_tpw.rsi.helpers import write_profile_results
+
     source_path = Path(source_path)
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     results = get_diss(source_path, **diss_kwargs)
-
-    output_paths = []
-    for i, ds in enumerate(results):
-        if len(results) == 1:
-            out_name = f"{source_path.stem}_eps.nc"
-        else:
-            out_name = f"{source_path.stem}_prof{i + 1:03d}_eps.nc"
-        out_path = output_dir / out_name
-        ds.to_netcdf(out_path)
-        output_paths.append(out_path)
-        print(
-            f"  {out_path.name}: {ds.sizes['time']} estimates, "
-            f"P={float(ds.P_mean.min()):.0f}–{float(ds.P_mean.max()):.0f} dbar"  # noqa: RUF001
-        )
-
-    return output_paths
+    return write_profile_results(results, source_path, output_dir, "eps")
 
 
 def _compute_diss_one(args: tuple) -> tuple[str, int]:

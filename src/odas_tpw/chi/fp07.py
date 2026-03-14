@@ -70,6 +70,14 @@ def fp07_double_pole(f: npt.ArrayLike, tau0: float) -> np.ndarray:
     return 1.0 / (1.0 + (2 * np.pi * f * tau0) ** 2) ** 2
 
 
+def default_tau_model(fp07_model: str) -> str:
+    """Auto-select FP07 tau model based on transfer function model.
+
+    double_pole pairs with Goto (tau=0.003); single_pole with Lueck.
+    """
+    return "goto" if fp07_model == "double_pole" else "lueck"
+
+
 def fp07_tau(speed: float, model: str = "lueck") -> float:
     """Speed-dependent FP07 time constant [s].
 
@@ -95,6 +103,60 @@ def fp07_tau(speed: float, model: str = "lueck") -> float:
         return 0.003
     else:
         raise ValueError(f"Unknown FP07 tau model: {model!r}")
+
+
+def fp07_tau_batch(speeds: npt.ArrayLike, model: str = "lueck") -> np.ndarray:
+    """Vectorized FP07 time constants for multiple speeds.
+
+    Parameters
+    ----------
+    speeds : array_like
+        Profiling speeds [m/s], shape ``(n,)``.
+    model : str
+        Same as :func:`fp07_tau`.
+
+    Returns
+    -------
+    tau0 : ndarray, shape ``(n,)``
+    """
+    speeds = np.asarray(speeds, dtype=np.float64)
+    if model == "lueck":
+        return 0.01 * (1.0 / speeds) ** 0.5
+    elif model == "peterson":
+        return 0.012 * speeds ** (-0.32)
+    elif model == "goto":
+        return np.full_like(speeds, 0.003)
+    else:
+        raise ValueError(f"Unknown FP07 tau model: {model!r}")
+
+
+def fp07_transfer_batch(
+    F: npt.ArrayLike,
+    tau0: npt.ArrayLike,
+    model: str = "single_pole",
+) -> np.ndarray:
+    """Vectorized FP07 |H(f)|^2 for multiple time constants.
+
+    Parameters
+    ----------
+    F : array_like, shape ``(n_freq,)``
+        Frequency vector [Hz].
+    tau0 : array_like, shape ``(n_est,)``
+        Per-window time constants [s].
+    model : str
+        'single_pole' or 'double_pole'.
+
+    Returns
+    -------
+    H2 : ndarray, shape ``(n_est, n_freq)``
+    """
+    F = np.asarray(F, dtype=np.float64)
+    tau0 = np.asarray(tau0, dtype=np.float64)
+    omega_tau_sq = (2 * np.pi * F[:, np.newaxis] * tau0[np.newaxis, :]) ** 2
+    if model == "single_pole":
+        return (1.0 / (1.0 + omega_tau_sq)).T
+    else:
+        return (1.0 / (1.0 + omega_tau_sq) ** 2).T
 
 
 # ---------------------------------------------------------------------------

@@ -4,11 +4,17 @@
 These functions bridge rsi instrument I/O with the pure chi
 computation in chi.chi.  They handle data loading, profile
 detection, and file-level orchestration.
+
+.. deprecated::
+    ``get_chi`` is deprecated.  Use :func:`odas_tpw.rsi.pipeline.run_pipeline`
+    or the modular ``process_l2_chi`` → ``process_l3_chi`` → ``process_l4_chi_*``
+    chain instead.
 """
 
 from __future__ import annotations
 
 import re
+import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -88,7 +94,22 @@ def get_chi(
         spec_noise  (probe, freq, time) — noise spectra (per-probe)
         K           (freq, time) — wavenumber vectors
     """
-    from odas_tpw.chi.chi import _compute_profile_chi
+    warnings.warn(
+        "get_chi() is deprecated. Use run_pipeline() or the modular "
+        "process_l2_chi → process_l3_chi → process_l4_chi_* chain "
+        "instead. See odas_tpw.rsi.pipeline.run_pipeline().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    from odas_tpw.chi.chi import _spectrum_func
+    from odas_tpw.chi.l2_chi import process_l2_chi
+    from odas_tpw.chi.l3_chi import process_l3_chi
+    from odas_tpw.chi.l4_chi import process_l4_chi_epsilon, process_l4_chi_fit
+    from odas_tpw.rsi.helpers import _build_l1data_from_channels, prepare_profiles
+    from odas_tpw.rsi.profile import _VEHICLE_TAU
+    from odas_tpw.scor160.io import L2Params, L3Params, L4Data
+    from odas_tpw.scor160.l2 import process_l2
 
     if diss_length is None:
         diss_length = 3 * fft_length
@@ -99,25 +120,17 @@ def get_chi(
     data = _load_therm_channels(source)
 
     therm_names = [t[0] for t in data["therm"]]
-    therm_arrays = [t[1] for t in data["therm"]]
-    n_therm = len(therm_arrays)
+    n_therm = len(therm_names)
     diff_gains = data.get("diff_gains", [0.94] * n_therm)
     therm_cal = data.get("therm_cal", [{}] * n_therm)
-
-    # Accelerometer arrays for scalar Goodman cleaning
-    accel_arrays = [a[1] for a in data.get("accel", [])]
-    if not goodman:
-        accel_arrays = []
 
     if n_therm == 0:
         raise ValueError("No thermistor gradient channels found")
 
-    # Profile detection, speed, P/T interpolation, salinity
-    from odas_tpw.rsi.helpers import prepare_profiles
-    from odas_tpw.rsi.profile import _VEHICLE_TAU
-
+    fs_fast = data["fs_fast"]
     vehicle = data.get("vehicle", "")
     tau = _VEHICLE_TAU.get(vehicle, 1.5)
+
     prepared = prepare_profiles(data, speed, direction, salinity, tau=tau)
     if prepared is None:
         return []
@@ -127,46 +140,86 @@ def get_chi(
 
     f_AA_eff = 0.9 * f_AA
 
+    # Pipeline parameters
+    l2_params = L2Params(
+        HP_cut=0.25,
+        despike_sh=np.array([np.inf, 0.5, 0.04]),  # don't despike shear for chi
+        despike_A=np.array([np.inf, 0.5, 0.04]),
+        profile_min_W=0.05,
+        profile_min_P=0.0,
+        profile_min_duration=0.0,
+        speed_tau=0.0,
+    )
+    l3_params = L3Params(
+        fft_length=fft_length,
+        diss_length=diss_length,
+        overlap=overlap,
+        HP_cut=0.25,
+        fs_fast=fs_fast,
+        goodman=goodman,
+    )
+
+    grad_func, _ = _spectrum_func(spectrum_model)
+
     results = []
     for s_slow, e_slow in profiles_slow:
         s_fast = s_slow * ratio
         e_fast = min((e_slow + 1) * ratio, len(t_fast))
 
-        therm_prof = [arr[s_fast:e_fast] for arr in therm_arrays]
-        accel_prof = [arr[s_fast:e_fast] for arr in accel_arrays] if accel_arrays else None
-        p_prof = P_fast[s_fast:e_fast]
-        t_prof = T_fast[s_fast:e_fast]
-        spd_prof = speed_fast[s_fast:e_fast]
-        time_prof = t_fast[s_fast:e_fast]
-
         sal_prof = sal_fast[s_fast:e_fast] if isinstance(sal_fast, np.ndarray) else sal_fast
 
-        ds = _compute_profile_chi(
-            therm_prof,
-            therm_names,
-            diff_gains,
-            p_prof,
-            t_prof,
-            spd_prof,
-            time_prof,
-            fs_fast,
-            fft_length,
-            diss_length,
-            overlap,
-            f_AA_eff,
-            fp07_model,
-            spectrum_model,
-            fit_method,
-            epsilon_ds,
+        # Build L1Data with temp_fast
+        l1 = _build_l1data_from_channels(
+            data, s_fast, e_fast, speed_fast, P_fast, T_fast, direction,
+            therm_list=data["therm"],
+            diff_gains=diff_gains,
+        )
+
+        # L2: section selection and speed
+        l2 = process_l2(l1, l2_params)
+
+        # L2_chi: despike temperature, HP-filter vib, compute gradient
+        l2_chi = process_l2_chi(l1, l2)
+
+        # L3_chi: temperature gradient spectra
+        l3_chi = process_l3_chi(
+            l2_chi, l3_params,
+            fp07_model=fp07_model,
             salinity=sal_prof,
             therm_cal=therm_cal,
-            accel_arrays=accel_prof,
+        )
+
+        if l3_chi.n_spectra == 0:
+            continue
+
+        # L4_chi: chi estimation
+        if epsilon_ds is not None:
+            l4_diss = _epsilon_ds_to_l4data(epsilon_ds)
+            l4_chi = process_l4_chi_epsilon(
+                l3_chi, l4_diss, spectrum_model=spectrum_model, f_AA=f_AA,
+            )
+        else:
+            l4_chi = process_l4_chi_fit(
+                l3_chi, spectrum_model=spectrum_model, fit_method=fit_method, f_AA=f_AA,
+            )
+
+        # Build output dataset
+        ds = _build_chi_ds_from_pipeline(
+            l3_chi, l4_chi, therm_names,
+            fft_length=fft_length,
+            diss_length=diss_length,
+            overlap=overlap,
+            fs_fast=fs_fast,
+            fp07_model=fp07_model,
+            spectrum_model=spectrum_model,
+            fit_method=fit_method,
+            f_AA=f_AA,
+            grad_func=grad_func,
         )
         ds.attrs.update(data["metadata"])
         ds.attrs["history"] = (
             f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
         )
-        # CF time coordinate attributes
         start_time = data["metadata"].get("start_time", "")
         t_units = f"seconds since {start_time}" if start_time else "seconds"
         ds.coords["t"].attrs.update(
@@ -181,6 +234,292 @@ def get_chi(
         results.append(ds)
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Pipeline-to-Dataset helpers
+# ---------------------------------------------------------------------------
+
+
+def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
+    """Convert old-format epsilon xr.Dataset to L4Data for chi computation."""
+    from odas_tpw.scor160.io import L4Data
+
+    eps_vals = epsilon_ds["epsilon"].values
+    if eps_vals.ndim == 2:
+        epsi_final = np.nanmean(eps_vals, axis=0)
+        n_sh = eps_vals.shape[0]
+    else:
+        epsi_final = eps_vals
+        n_sh = 1
+        eps_vals = eps_vals[np.newaxis]
+
+    times = epsilon_ds.coords["t"].values
+    n = len(times)
+
+    return L4Data(
+        time=times,
+        pres=epsilon_ds["P_mean"].values if "P_mean" in epsilon_ds else np.zeros(n),
+        pspd_rel=epsilon_ds["speed"].values if "speed" in epsilon_ds else np.zeros(n),
+        section_number=np.ones(n),
+        epsi=eps_vals,
+        epsi_final=epsi_final,
+        epsi_flags=np.zeros((n_sh, n)),
+        fom=np.zeros((n_sh, n)),
+        mad=np.zeros((n_sh, n)),
+        kmax=np.zeros((n_sh, n)),
+        method=np.zeros((n_sh, n)),
+        var_resolved=np.zeros((n_sh, n)),
+    )
+
+
+def _build_chi_ds_from_pipeline(
+    l3_chi,
+    l4_chi,
+    therm_names: list[str],
+    *,
+    fft_length: int,
+    diss_length: int,
+    overlap: int,
+    fs_fast: float,
+    fp07_model: str,
+    spectrum_model: str,
+    fit_method: str,
+    f_AA: float,
+    grad_func,
+) -> xr.Dataset:
+    """Build old-format xr.Dataset from L3ChiData + L4ChiData."""
+    n_spec = l3_chi.n_spectra
+    n_gradt = l3_chi.n_gradt
+    n_freq = l3_chi.n_wavenumber
+
+    # DOF
+    num_ffts = 2 * (diss_length // fft_length) - 1
+    dof_spec = 1.9 * num_ffts
+
+    # Reconstruct fitted Batchelor spectra
+    spec_batch = np.full((n_gradt, n_freq, n_spec), np.nan)
+    for j in range(n_spec):
+        for ci in range(n_gradt):
+            kB = l4_chi.kB[ci, j]
+            chi_val = l4_chi.chi[ci, j]
+            if np.isfinite(kB) and np.isfinite(chi_val):
+                spec_batch[ci, :, j] = grad_func(l3_chi.kcyc[:, j], kB, chi_val)
+
+    # F vector (constant across windows)
+    F_const = l3_chi.freq
+    F_out = np.broadcast_to(F_const[:, np.newaxis], (n_freq, n_spec)).copy()
+
+    return _build_chi_dataset(
+        chi_out=l4_chi.chi,
+        eps_out=l4_chi.epsilon_T,
+        kB_out=l4_chi.kB,
+        K_max_out=l4_chi.K_max,
+        fom_out=l4_chi.fom,
+        K_max_ratio_out=l4_chi.K_max_ratio,
+        speed_out=l3_chi.pspd_rel,
+        nu_out=l3_chi.nu,
+        P_out=l3_chi.pres,
+        T_out=l3_chi.temp,
+        t_out=l3_chi.time,
+        spec_gradT=l3_chi.gradt_spec,
+        spec_batch=spec_batch,
+        spec_noise_out=l3_chi.noise_spec,
+        K_out=l3_chi.kcyc,
+        F_out=F_out,
+        therm_names=therm_names,
+        fft_length=fft_length,
+        diss_length=diss_length,
+        overlap=overlap,
+        fs_fast=fs_fast,
+        dof_spec=dof_spec,
+        fp07_model=fp07_model,
+        spectrum_model=spectrum_model,
+        fit_method=fit_method,
+        f_AA=f_AA,
+    )
+
+
+def _build_chi_dataset(
+    *,
+    chi_out: np.ndarray,
+    eps_out: np.ndarray,
+    kB_out: np.ndarray,
+    K_max_out: np.ndarray,
+    fom_out: np.ndarray,
+    K_max_ratio_out: np.ndarray,
+    speed_out: np.ndarray,
+    nu_out: np.ndarray,
+    P_out: np.ndarray,
+    T_out: np.ndarray,
+    t_out: np.ndarray,
+    spec_gradT: np.ndarray,
+    spec_batch: np.ndarray,
+    spec_noise_out: np.ndarray,
+    K_out: np.ndarray,
+    F_out: np.ndarray,
+    therm_names: list[str],
+    fft_length: int,
+    diss_length: int,
+    overlap: int,
+    fs_fast: float,
+    dof_spec: float,
+    fp07_model: str,
+    spectrum_model: str,
+    fit_method: str,
+    f_AA: float,
+) -> xr.Dataset:
+    """Build an xarray Dataset from chi estimation output arrays."""
+    ds = xr.Dataset(
+        {
+            "chi": (
+                ["probe", "time"],
+                chi_out,
+                {
+                    "units": "K2 s-1",
+                    "long_name": "thermal variance dissipation rate",
+                },
+            ),
+            "epsilon_T": (
+                ["probe", "time"],
+                eps_out,
+                {
+                    "units": "W kg-1",
+                    "long_name": "TKE dissipation rate from temperature",
+                },
+            ),
+            "kB": (
+                ["probe", "time"],
+                kB_out,
+                {
+                    "units": "cpm",
+                    "long_name": "Batchelor wavenumber",
+                },
+            ),
+            "K_max_T": (
+                ["probe", "time"],
+                K_max_out,
+                {
+                    "units": "cpm",
+                    "long_name": "upper wavenumber integration limit for chi",
+                },
+            ),
+            "fom": (
+                ["probe", "time"],
+                fom_out,
+                {
+                    "units": "1",
+                    "long_name": "figure of merit (observed/model variance ratio)",
+                },
+            ),
+            "K_max_ratio": (
+                ["probe", "time"],
+                K_max_ratio_out,
+                {
+                    "units": "1",
+                    "long_name": "K_max / kB spectral resolution ratio",
+                },
+            ),
+            "speed": (
+                ["time"],
+                speed_out,
+                {
+                    "units": "m s-1",
+                    "long_name": "profiling speed",
+                },
+            ),
+            "nu": (
+                ["time"],
+                nu_out,
+                {
+                    "units": "m2 s-1",
+                    "long_name": "kinematic viscosity of sea water",
+                },
+            ),
+            "P_mean": (
+                ["time"],
+                P_out,
+                {
+                    "units": "dbar",
+                    "long_name": "mean sea water pressure",
+                    "standard_name": "sea_water_pressure",
+                    "positive": "down",
+                },
+            ),
+            "T_mean": (
+                ["time"],
+                T_out,
+                {
+                    "units": "degree_Celsius",
+                    "long_name": "mean sea water temperature",
+                    "standard_name": "sea_water_temperature",
+                },
+            ),
+            "spec_gradT": (
+                ["probe", "freq", "time"],
+                spec_gradT,
+                {
+                    "units": "K2 m-1",
+                    "long_name": "temperature gradient wavenumber spectrum (observed)",
+                },
+            ),
+            "spec_batch": (
+                ["probe", "freq", "time"],
+                spec_batch,
+                {
+                    "units": "K2 m-1",
+                    "long_name": "fitted Batchelor temperature gradient spectrum",
+                },
+            ),
+            "spec_noise": (
+                ["probe", "freq", "time"],
+                spec_noise_out,
+                {
+                    "units": "K2 m-1",
+                    "long_name": "FP07 electronics noise spectrum",
+                },
+            ),
+            "K": (
+                ["freq", "time"],
+                K_out,
+                {
+                    "units": "cpm",
+                    "long_name": "wavenumber (cycles per metre)",
+                },
+            ),
+            "F": (
+                ["freq", "time"],
+                F_out,
+                {
+                    "units": "Hz",
+                    "long_name": "frequency",
+                },
+            ),
+        },
+        coords={
+            "probe": therm_names,
+            "t": (["time"], t_out),
+        },
+        attrs={
+            "Conventions": "CF-1.13",
+            "fft_length": fft_length,
+            "diss_length": diss_length,
+            "overlap": overlap,
+            "fs_fast": fs_fast,
+            "dof_spec": dof_spec,
+            "fp07_model": fp07_model,
+            "spectrum_model": spectrum_model,
+            "fit_method": fit_method,
+            "f_AA": f_AA,
+        },
+    )
+    ds.coords["probe"].attrs["long_name"] = "thermistor probe name"
+    return ds
+
+
+# ---------------------------------------------------------------------------
+# Channel loading helpers
+# ---------------------------------------------------------------------------
 
 
 def _extract_therm_cal(ch_cfg: dict[str, Any]) -> dict[str, float]:
@@ -221,12 +560,10 @@ def _load_therm_channels(source: PFile | str | Path) -> dict[str, Any]:
     therm_cal: list[dict[str, float]] = []
 
     if pf is not None:
-        # Look for pre-emphasized channels (T1_dT1, T2_dT2)
-        dT_re = re.compile(r"^T\d+_dT\d+$")
-        T_re = re.compile(r"^T\d+$")
+        from odas_tpw.rsi.helpers import DT_PATTERN, T_PATTERN
 
         for name in sorted(pf._fast_channels):
-            if dT_re.match(name):
+            if DT_PATTERN.match(name):
                 therm.append((name, pf.channels[name]))
                 # Get diff_gain from config
                 ch_cfg: dict = next(
@@ -247,7 +584,7 @@ def _load_therm_channels(source: PFile | str | Path) -> dict[str, Any]:
         # If no pre-emphasized channels, use T channels with first-difference
         if not therm:
             for name in sorted(pf._fast_channels):
-                if T_re.match(name):
+                if T_PATTERN.match(name):
                     # Compute gradient via first-difference
                     T_data = pf.channels[name]
                     therm.append((name, T_data))
@@ -261,22 +598,22 @@ def _load_therm_channels(source: PFile | str | Path) -> dict[str, Any]:
         # NetCDF source — look for gradient channels or T channels
         import netCDF4 as nc
 
+        from odas_tpw.rsi.helpers import DT_PATTERN, T_PATTERN
+
         ds = nc.Dataset(str(source), "r")
-        dT_re = re.compile(r"^T\d+_dT\d+$")
-        T_re = re.compile(r"^T\d+$")
 
         for vname in sorted(ds.variables.keys()):
             var = ds.variables[vname]
             if var.dimensions == ("time_fast",):
                 arr = var[:].data.astype(np.float64)
-                if dT_re.match(vname):
+                if DT_PATTERN.match(vname):
                     therm.append((vname, arr))
                     diff_gains.append(0.94)
 
         if not therm:
             for vname in sorted(ds.variables.keys()):
                 var = ds.variables[vname]
-                if var.dimensions == ("time_fast",) and T_re.match(vname):
+                if var.dimensions == ("time_fast",) and T_PATTERN.match(vname):
                     therm.append((vname, var[:].data.astype(np.float64)))
                     diff_gains.append(0.94)
 
@@ -314,27 +651,12 @@ def compute_chi_file(
     list of Path
         Paths to output files written.
     """
+    from odas_tpw.rsi.helpers import write_profile_results
+
     source_path = Path(source_path)
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     results = get_chi(source_path, **chi_kwargs)
-
-    output_paths = []
-    for i, ds in enumerate(results):
-        if len(results) == 1:
-            out_name = f"{source_path.stem}_chi.nc"
-        else:
-            out_name = f"{source_path.stem}_prof{i + 1:03d}_chi.nc"
-        out_path = output_dir / out_name
-        ds.to_netcdf(out_path)
-        output_paths.append(out_path)
-        print(
-            f"  {out_path.name}: {ds.sizes['time']} estimates, "
-            f"P={float(ds.P_mean.min()):.0f}-{float(ds.P_mean.max()):.0f} dbar"
-        )
-
-    return output_paths
+    return write_profile_results(results, source_path, output_dir, "chi")
 
 
 def _compute_chi_one(args: tuple) -> tuple[str, int]:

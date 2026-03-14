@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from odas_tpw.chi.batchelor import KAPPA_T
 from odas_tpw.chi.chi import (
     _chi_from_epsilon,
     _iterative_fit,
@@ -22,7 +23,13 @@ from odas_tpw.chi.fp07 import fp07_double_pole, fp07_transfer
 from odas_tpw.chi.l3_chi import L3ChiData
 from odas_tpw.scor160.io import L4Data
 
-KAPPA_T = 1.4e-7  # thermal diffusivity [m^2/s]
+
+def _to_float64_seconds(arr: np.ndarray) -> np.ndarray:
+    """Convert time array to float64, handling datetime64 from xarray."""
+    if np.issubdtype(arr.dtype, np.datetime64):
+        # Convert datetime64 → float64 seconds since epoch
+        return arr.astype("datetime64[ns]").astype("int64") / 1e9
+    return np.asarray(arr, dtype=np.float64)
 
 
 @dataclass
@@ -81,9 +88,12 @@ def process_l4_chi_epsilon(
 
     _h2 = fp07_transfer if l3_chi.fp07_model == "single_pole" else fp07_double_pole
 
-    # Match L4 epsilon to L3 chi windows by nearest time
+    # Match L4 epsilon to L3 chi windows by nearest time.
+    # Normalize both time arrays to float64 relative seconds — epsilon times
+    # may be datetime64 if loaded from xarray-decoded NetCDF.
     epsi_final = l4_diss.epsi_final
-    epsi_times = l4_diss.time
+    epsi_times = _to_float64_seconds(l4_diss.time)
+    chi_times = _to_float64_seconds(l3_chi.time)
 
     chi_out = np.full((n_gradt, n_spec), np.nan)
     eps_out = np.full((n_gradt, n_spec), np.nan)
@@ -101,7 +111,7 @@ def process_l4_chi_epsilon(
 
         # Find nearest epsilon
         if len(epsi_times) > 0:
-            idx_eps = int(np.argmin(np.abs(epsi_times - l3_chi.time[j])))
+            idx_eps = int(np.argmin(np.abs(epsi_times - chi_times[j])))
             epsilon_val = float(epsi_final[idx_eps])
         else:
             epsilon_val = np.nan

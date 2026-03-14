@@ -283,7 +283,8 @@ def compute_chi_window(
     method : int
         1 = chi from epsilon (requires epsilon), 2 = iterative fit.
     """
-    from odas_tpw.chi.chi import _chi_from_epsilon, _default_tau_model, _iterative_fit
+    from odas_tpw.chi.chi import _chi_from_epsilon, _iterative_fit
+    from odas_tpw.chi.fp07 import default_tau_model
 
     n_therm = len(therm_segs)
     n_freq = fft_length // 2 + 1
@@ -296,7 +297,7 @@ def compute_chi_window(
 
     # FP07 transfer function
     _h2_func = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
-    tau0 = fp07_tau(W, model=_default_tau_model(fp07_model))
+    tau0 = fp07_tau(W, model=default_tau_model(fp07_model))
     H2 = _h2_func(F, tau0)
 
     # Noise spectrum (use first probe's diff_gain)
