@@ -74,7 +74,7 @@ ds["epsilon_T"]       # epsilon estimated from temperature
 ## Seawater Properties
 
 ```python
-from odas_tpw.rsi import visc, density, buoyancy_freq
+from odas_tpw.scor160.ocean import visc, density, buoyancy_freq
 
 # Kinematic viscosity [m²/s]
 nu = visc(10.0, 35.0, 100.0)  # T=10°C, S=35, P=100 dbar
@@ -98,7 +98,7 @@ The pipeline can also be driven from Python:
 from odas_tpw.rsi.convert import p_to_netcdf
 from odas_tpw.rsi.profile import extract_profiles
 from odas_tpw.rsi.dissipation import compute_diss_file
-from odas_tpw.rsi.chi import compute_chi_file
+from odas_tpw.rsi.chi_io import compute_chi_file
 
 # Stage 1: Convert to NetCDF
 pf, nc_path = p_to_netcdf("VMP/file.p", "output/file.nc")
@@ -118,19 +118,47 @@ eps_ds.close()
 
 ## Modules
 
+### rsi (Instrument I/O, Layer 2)
+
 | Module | Description |
 |--------|-------------|
 | `p_file.py` | `PFile` class: reads `.p` binary files, parses headers, demultiplexes address matrix, converts to physical units |
 | `channels.py` | Sensor conversion functions (raw counts to physical units) |
-| `convert.py` | Full-record NetCDF export |
-| `profile.py` | Profile detection and per-profile NetCDF extraction |
-| `dissipation.py` | Core epsilon calculation with multi-source input |
-| `chi.py` | Chi calculation, Methods 1 and 2 |
+| `deconvolve.py` | Sensor deconvolution filters |
+| `convert.py` | `p_to_L1()` / `p_to_netcdf()` — full-record NetCDF export |
+| `profile.py` | Profile detection (re-exports from scor160) and per-profile NetCDF extraction |
+| `dissipation.py` | Core epsilon calculation (`get_diss`, `compute_diss_file`) |
+| `chi_io.py` | Chi orchestration: load instrument data and call chi computation |
+| `helpers.py` | `load_channels()`, `prepare_profiles()` — bridge PFile/NetCDF to spectral processing |
+| `adapter.py` | `pfile_to_l1data()` — bridge PFile to scor160 L1Data |
+| `pipeline.py` | `run_pipeline()` — full L0-L6 processing pipeline |
+| `binning.py` | `bin_by_depth()` — depth-bin averaging |
+| `combine.py` | `combine_profiles()` — merge profiles across deployments |
+| `window.py` | Per-window epsilon and chi computation (shared by pipeline and viewers) |
+| `config.py` | YAML configuration file support |
+
+### chi (Thermal Dissipation, Layer 1)
+
+| Module | Description |
+|--------|-------------|
+| `chi.py` | Chi calculation, Methods 1 and 2, QC metrics |
 | `batchelor.py` | Batchelor and Kraichnan temperature gradient spectra |
 | `fp07.py` | FP07 thermistor transfer function and electronics noise model |
+| `l2_chi.py` | `process_l2_chi()` — temperature cleaning for chi |
+| `l3_chi.py` | `process_l3_chi()` — temperature gradient spectra |
+| `l4_chi.py` | `process_l4_chi_epsilon()`, `process_l4_chi_fit()` — chi estimation |
+
+### scor160 (Foundation, Layer 0)
+
+| Module | Description |
+|--------|-------------|
 | `spectral.py` | Cross-spectral density estimation (Welch method, cosine window) |
 | `goodman.py` | Goodman coherent noise removal using accelerometer spectra |
 | `despike.py` | Iterative spike removal for shear probe signals |
 | `nasmyth.py` | Nasmyth universal shear spectrum (Lueck improved fit) |
 | `ocean.py` | Seawater properties: viscosity, density, buoyancy frequency (gsw/TEOS-10) |
-| `config.py` | YAML configuration file support |
+| `profile.py` | Profile detection (`get_profiles`, `smooth_fall_rate`) |
+| `io.py` | ATOMIX-format NetCDF I/O and data classes (`L1Data` ... `L4Data`) |
+| `l2.py` | L1-L2: section selection, despiking, HP filtering |
+| `l3.py` | L2-L3: wavenumber spectra (Welch + Goodman) |
+| `l4.py` | L3-L4: epsilon estimation (variance + ISR methods) |

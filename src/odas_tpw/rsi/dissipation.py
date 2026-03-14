@@ -31,6 +31,7 @@ from odas_tpw.rsi.helpers import load_channels, prepare_profiles
 from odas_tpw.scor160.despike import despike
 from odas_tpw.scor160.goodman import clean_shear_spec_batch
 from odas_tpw.scor160.l4 import (
+    E_ISR_THRESHOLD,
     _estimate_epsilon,
 )
 from odas_tpw.scor160.ocean import visc, visc35
@@ -39,66 +40,19 @@ from odas_tpw.scor160.ocean import visc, visc35
 # Named constants — citations inline
 # ---------------------------------------------------------------------------
 
-# Minimum epsilon floor to avoid zero/negative values [W/kg]
-EPSILON_FLOOR = 1e-15
-
 # Minimum profiling speed to avoid wavenumber singularity [m/s]
 SPEED_MIN = 0.01
 
-# Epsilon threshold for switching from variance to ISR method [W/kg]
-E_ISR_THRESHOLD = 1.5e-5
-
-# Wavenumber limits for spectral integration [cpm]
-K_LIMIT_MIN = 7  # minimum upper integration limit
-K_LIMIT_MAX = 150  # maximum upper integration limit
-K_INITIAL_CUTOFF = 10  # initial integration cutoff for e_10 estimate
-
-# Isotropy factor: epsilon = ISOTROPY_FACTOR * nu * integral(phi_shear)
-# Tennekes & Lumley (1972)
-ISOTROPY_FACTOR = 7.5
-
 # Nuttall (1971) DOF correction for cosine-windowed overlapped FFTs
 DOF_NUTTALL = 1.9
-
-# ISR wavenumber limit factor (2 * 0.01, matches ODAS)
-X_ISR = 0.01
 
 # Macoun & Lueck (1998) wavenumber correction: 1 + (K/MACOUN_LUECK_DENOM)^2
 # Applied for K <= MACOUN_LUECK_K
 MACOUN_LUECK_K = 150  # [cpm]
 MACOUN_LUECK_DENOM = 48  # [cpm]
 
-# Variance correction convergence threshold (< 2% change, matches ODAS)
-VARIANCE_CONVERGENCE = 1.02
-
-# Variance correction model coefficients (Lueck, ODAS lines 623-634)
-VARIANCE_TANH_COEFF = 48
-VARIANCE_EXP_COEFF = 2.9
-VARIANCE_EXP_DECAY = 22.3
-
-# Low-wavenumber correction ratio threshold (ODAS lines 636-638)
-LOW_K_CORRECTION_THRESHOLD = 1.1
-LOW_K_CORRECTION_FACTOR = 0.25
-
-# ISR flyer detection threshold [decades]
-ISR_FLYER_THRESHOLD = 0.5
-# Maximum fraction of points to remove as flyers
-ISR_FLYER_FRAC = 0.2
-
-# Lueck (2022a,b) FM statistic coefficients
-FM_SIGMA_COEFF = 1.25  # 5/4
-FM_SIGMA_EXPONENT = -7 / 9
-FM_TM_OFFSET = 0.8
-FM_TM_COEFF = 1.56
-
-# Goodman bias correction factor (ODAS TN-061)
-GOODMAN_BIAS = 1.02
-
 # Anti-aliasing safety margin (ODAS convention)
 F_AA_MARGIN = 0.9
-
-# Effective speed cutout for profile detection [m/s]
-SPEED_CUTOUT = 0.05
 
 
 # ---------------------------------------------------------------------------

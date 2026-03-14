@@ -43,9 +43,8 @@ import numpy as np
 import xarray as xr
 
 # rsi-tpw imports
-from odas_tpw.rsi.dissipation import E_ISR_THRESHOLD
-from odas_tpw.scor160.l4 import _estimate_epsilon
-from odas_tpw.rsi.ocean import visc35
+from odas_tpw.scor160.l4 import E_ISR_THRESHOLD, _estimate_epsilon
+from odas_tpw.scor160.ocean import visc35
 
 # ---------------------------------------------------------------------------
 # ATOMIX benchmark dataset catalog
@@ -362,9 +361,9 @@ def compare_dataset(nc_path: Path, key: str) -> DatasetResult:
     pres_l4 = l4["PRES"].values if "PRES" in l4 else np.full(n_spectra, np.nan)
 
     print(f"  N_spectra={n_spectra}, N_probes={n_probes}, N_wavenumber={n_wavenum}")
-    print(f"  Wavenumber range: {np.nanmin(kcyc):.1f} – {np.nanmax(kcyc):.1f} cpm")
-    print(f"  Speed range: {speed_l3.min():.3f} – {speed_l3.max():.3f} m/s")
-    print(f"  ATOMIX epsilon range: {np.nanmin(epsi):.2e} – {np.nanmax(epsi):.2e} W/kg")
+    print(f"  Wavenumber range: {np.nanmin(kcyc):.1f} - {np.nanmax(kcyc):.1f} cpm")
+    print(f"  Speed range: {speed_l3.min():.3f} - {speed_l3.max():.3f} m/s")
+    print(f"  ATOMIX epsilon range: {np.nanmin(epsi):.2e} - {np.nanmax(epsi):.2e} W/kg")
 
     result = DatasetResult(
         name=info["name"],
@@ -379,10 +378,7 @@ def compare_dataset(nc_path: Path, key: str) -> DatasetResult:
     n_skip = 0
     for i in range(n_spectra):
         # Wavenumber vector (may vary per spectrum or be constant)
-        if kcyc.ndim == 2:
-            K = kcyc[i, :]
-        else:
-            K = kcyc
+        K = kcyc[i, :] if kcyc.ndim == 2 else kcyc
 
         # Skip if wavenumber is invalid
         if np.all(np.isnan(K)) or len(K) < 3:
@@ -434,7 +430,7 @@ def compare_dataset(nc_path: Path, key: str) -> DatasetResult:
                         fom_rsi,
                         _var_res,
                         _nas_spec,
-                        kmr,
+                        _kmr,
                         _fm,
                     ) = _estimate_epsilon(
                         K_clean,
@@ -906,7 +902,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Write report
     print(f"\n{'─' * 60}")
-    report = write_report(results, output_dir, plots)
+    write_report(results, output_dir, plots)
 
     # Print final summary
     print(f"\n{'=' * 60}")

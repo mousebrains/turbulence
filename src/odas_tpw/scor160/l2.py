@@ -24,9 +24,11 @@ def _matlab_padlen(b: np.ndarray, a: np.ndarray) -> int:
     """
     return 3 * (max(len(a), len(b)) - 1)
 
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def process_l2(l1: L1Data, params: L2Params) -> L2Data:
     """Process L1 data into L2 following ATOMIX best practices.
@@ -79,7 +81,7 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
     # contains exactly-constant replacement values within spike regions,
     # which is what our despike produces when operating on the HP-filtered
     # signal.  Reversing the order (despike→HP) would spread the constant
-    # replacement through the filter, giving ~1–5 % extra error.
+    # replacement through the filter, giving ~1-5 % extra error.
     shear_out = _hp_filter(l1.shear, fs, params.HP_cut)
     vib_out = _hp_filter(l1.vib, fs, params.HP_cut)
 
@@ -132,6 +134,7 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
 # Speed from pressure
 # ---------------------------------------------------------------------------
 
+
 def _compute_speed(
     pres: np.ndarray,
     fs: float,
@@ -159,6 +162,7 @@ def _compute_speed(
 # ---------------------------------------------------------------------------
 # Section selection
 # ---------------------------------------------------------------------------
+
 
 def _select_sections(
     speed: np.ndarray,
@@ -207,6 +211,7 @@ def _select_sections(
 # ---------------------------------------------------------------------------
 # NaN-safe filtering
 # ---------------------------------------------------------------------------
+
 
 def _filtfilt_nan(
     b: np.ndarray,
