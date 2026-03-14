@@ -62,23 +62,50 @@ Scientific's ODAS MATLAB Library (v4.5.1) or compatible code. Our
 implementation closely mirrors the ODAS algorithm, enabling validation
 at every processing level.
 
-### L1 to L2: Section Selection, Despiking, HP Filtering
+### L1 to L2: Section Selection, HP Filtering, Despiking
 
 | Dataset | Probes | Sections | Speed rel RMS | Shear rel RMS | Shear corr | Vib rel RMS |
 |---------|--------|----------|---------------|---------------|------------|-------------|
-| VMP2000 Faroe Bank | 2 sh, 3 acc | 1/1 | 0.1% | 1.2% | 0.9999 | 0.0% |
-| VMP250 Haro Strait | 2 sh, 2 vib | 1/1 | 0.3% | 1.0--1.2% | 0.9999 | 0.0% |
-| VMP250 Haro Strait (cs) | 2 sh, 2 vib | 1/1 | 0.0% | 1.1--1.2% | 0.9999 | 0.0% |
-| Nemo Minas Passage | 4 sh, 2 vib | 1/1 | 1.6% | 2.9--6.1% | 0.998--0.999 | 0.8--1.1% |
+| VMP2000 Faroe Bank | 2 sh, 3 acc | 1/1 | 0.1% | 0.1--0.3% | 1.0000 | 0.0% |
+| VMP250 Haro Strait | 2 sh, 2 vib | 1/1 | 0.3% | 0.03--0.2% | 1.0000 | 0.0% |
+| VMP250 Haro Strait (cs) | 2 sh, 2 vib | 1/1 | 0.0% | 0.03--0.2% | 1.0000 | 0.0% |
+| Nemo Minas Passage | 4 sh, 2 vib | 1/1 | 1.6% | 0.2--0.4% | 1.0000 | 0.0% |
 
-Section detection, speed, and vibration are near-exact for all ODAS
-datasets. Shear differences of 1--6% arise from minor despike algorithm
-differences (threshold rounding, iteration count).
+Section detection, speed, shear, and vibration are near-exact for all
+ODAS datasets. Vibration has exactly zero difference (no despiking
+applied, identical HP filter on identical input).
 
 The VMP250 constant-speed variant uses a declared speed, so speed
-difference is exactly zero. Nemo has slightly larger shear differences
-(3--6%) due to its high-energy tidal environment where despike
-replacements have larger absolute impact.
+difference is exactly zero.
+
+Two implementation details were critical for matching the ODAS reference:
+
+1. **`filtfilt` edge padding**: MATLAB uses `padlen = 3*(nfilt-1)`
+   while scipy defaults to `padlen = 3*nfilt`. For a 1st-order
+   Butterworth (nfilt=2) this is padlen=3 vs 6. When the section spans
+   the entire record (as with Nemo), the mismatch produces ~1% vibration
+   error concentrated at the edges. Using the MATLAB padlen eliminates
+   this entirely.
+
+2. **HP filter before despike**: The ODAS reference HP-filters before
+   despiking, not after. This is evident from the reference L2 data
+   containing exactly-constant replacement values within spike regions
+   — the signature of despiking an already-HP-filtered signal. Reversing
+   the order (despike→HP) causes the filter to spread the constant
+   replacement, adding 1--5% shear error.
+
+**Nemo speed (1.6% RMS)**: The Nemo MR1000 is a moored horizontal
+profiler with `speed_tau = 60 s`, giving an ODAS-style LP filter cutoff
+of `0.68/60 = 0.011 Hz` — 40x lower than the VMP cutoff (0.45 Hz at
+tau = 1.5 s). The difference is uniform across the record (not
+edge-concentrated), indicating a filter parameter or implementation
+difference in how the reference processed horizontal speed rather than
+an edge padding issue. The VMP datasets, with their shorter tau, have
+negligible filter sensitivity (0.0--0.3% speed RMS).
+
+Residual shear differences (0.03--0.4%) come from minor despike
+algorithm differences (spike detection threshold sensitivity, number
+of replacement samples).
 
 ### L3 to L4: Epsilon Estimation (Reference L3)
 
@@ -289,14 +316,16 @@ The `scor160.l2.process_l2` function implements:
    seconds. Parameters are read from L2 group attributes, falling back
    to global `speed_cutout` then defaults.
 
-3. **Despiking**: Within each section, shear and vibration are despiked
-   using the iterative threshold method with parameters from the
-   benchmark metadata (`despike_sh`, `despike_A`).
+3. **HP filtering**: 1st-order Butterworth HP at `HP_cut` Hz, applied
+   forwards and backwards (zero phase) on the entire record. NaN values
+   are linearly interpolated before filtering and restored afterward,
+   preventing propagation to the entire record. Uses MATLAB-compatible
+   `padlen = 3*(nfilt-1)` to match ODAS edge behaviour.
 
-4. **HP filtering**: 1st-order Butterworth HP at `HP_cut` Hz, applied
-   forwards and backwards (zero phase). NaN values are linearly
-   interpolated before filtering and restored afterward, preventing
-   propagation to the entire record.
+4. **Despiking**: Within each section, the HP-filtered shear and
+   vibration are despiked using the iterative threshold method with
+   parameters from the benchmark metadata (`despike_sh`, `despike_A`).
+   HP filtering before despiking matches the ODAS order of operations.
 
 
 ## References

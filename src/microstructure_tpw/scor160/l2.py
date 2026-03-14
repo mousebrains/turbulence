@@ -11,6 +11,19 @@ from scipy.signal import butter, filtfilt
 from microstructure_tpw.scor160.despike import despike
 from microstructure_tpw.scor160.io import L1Data, L2Data, L2Params
 
+
+def _matlab_padlen(b: np.ndarray, a: np.ndarray) -> int:
+    """Return the ``filtfilt`` *padlen* that matches MATLAB's convention.
+
+    MATLAB pads with ``3*(nfilt-1)`` reflected samples where
+    ``nfilt = max(len(a), len(b))``.  scipy defaults to ``3*nfilt``,
+    which produces different edge transients.  For a 1st-order
+    Butterworth (nfilt=2) this is padlen=3 vs scipy's 6 — enough to
+    cause ~1 % vibration RMS error on records where the section spans
+    the entire file (e.g. Nemo MR1000).
+    """
+    return 3 * (max(len(a), len(b)) - 1)
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -21,8 +34,8 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
     Steps (per Sec. 3.2):
       1. Compute profiling speed W from dP/dt (or use pre-computed if available).
       2. Select sections satisfying min speed, depth, duration criteria.
-      3. De-spike shear (and vibration) within selected sections.
-      4. High-pass filter shear and vibration.
+      3. High-pass filter shear and vibration.
+      4. De-spike shear (and vibration) within selected sections.
 
     Parameters
     ----------
@@ -60,9 +73,15 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
         direction=l1.profile_dir,
     )
 
-    # 3 & 4. De-spike and high-pass filter shear and vibration
-    shear_out = np.copy(l1.shear)
-    vib_out = np.copy(l1.vib)
+    # 3 & 4. High-pass filter, then de-spike shear and vibration.
+    #
+    # ODAS applies the HP filter before despiking: the reference L2 data
+    # contains exactly-constant replacement values within spike regions,
+    # which is what our despike produces when operating on the HP-filtered
+    # signal.  Reversing the order (despike→HP) would spread the constant
+    # replacement through the filter, giving ~1–5 % extra error.
+    shear_out = _hp_filter(l1.shear, fs, params.HP_cut)
+    vib_out = _hp_filter(l1.vib, fs, params.HP_cut)
 
     # Despike parameters: [threshold, smooth_freq, half_width_fraction]
     sh_thresh, sh_smooth, sh_hw = params.despike_sh
@@ -80,7 +99,7 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
             for i in range(l1.n_shear):
                 N_sh = round(sh_hw * fs) if sh_hw < 1 else int(sh_hw)
                 shear_out[i, mask], _, _, _ = despike(
-                    l1.shear[i, mask],
+                    shear_out[i, mask],
                     fs,
                     thresh=sh_thresh,
                     smooth=sh_smooth,
@@ -92,16 +111,12 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
             for i in range(l1.n_vib):
                 N_a = round(a_hw * fs) if a_hw < 1 else int(a_hw)
                 vib_out[i, mask], _, _, _ = despike(
-                    l1.vib[i, mask],
+                    vib_out[i, mask],
                     fs,
                     thresh=a_thresh,
                     smooth=a_smooth,
                     N=N_a,
                 )
-
-    # HP-filter entire record, interpolating over NaN to avoid propagation
-    shear_out = _hp_filter(shear_out, fs, params.HP_cut)
-    vib_out = _hp_filter(vib_out, fs, params.HP_cut)
 
     return L2Data(
         time=l1.time.copy(),
@@ -134,7 +149,7 @@ def _compute_speed(
 
     # Low-pass smooth to remove noise
     b, a = butter(1, lp_cut / (fs / 2))
-    dpdt_smooth = filtfilt(b, a, dpdt)
+    dpdt_smooth = filtfilt(b, a, dpdt, padlen=_matlab_padlen(b, a))
 
     # Sign convention: downward profiler → positive dP/dt is positive speed
     speed = dpdt_smooth.copy() if direction == "down" else -dpdt_smooth.copy()
@@ -202,16 +217,19 @@ def _filtfilt_nan(
 
     NaN positions are linearly interpolated before filtering, then
     restored to NaN afterward.  If all values are NaN a copy is returned.
+
+    Uses MATLAB-compatible ``padlen`` (see :func:`_matlab_padlen`).
     """
+    padlen = _matlab_padlen(b, a)
     nans = np.isnan(x)
     if not nans.any():
-        return filtfilt(b, a, x)
+        return filtfilt(b, a, x, padlen=padlen)
     if nans.all():
         return x.copy()
     filled = x.copy()
     good = np.where(~nans)[0]
     filled[nans] = np.interp(np.where(nans)[0], good, x[good])
-    result = filtfilt(b, a, filled)
+    result = filtfilt(b, a, filled, padlen=padlen)
     result[nans] = np.nan
     return result
 
