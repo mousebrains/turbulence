@@ -664,7 +664,7 @@ def test_cmd_chi_missing_epsilon_warns(monkeypatch, sample_p_file, tmp_path, cap
 
 
 def test_cmd_pipeline(monkeypatch, sample_p_file, tmp_path):
-    """rsi-tpw pipeline should produce both eps and chi output."""
+    """rsi-tpw pipeline should produce per-profile output with epsilon and chi."""
     monkeypatch.setattr(
         sys,
         "argv",
@@ -679,7 +679,19 @@ def test_cmd_pipeline(monkeypatch, sample_p_file, tmp_path):
     from odas_tpw.rsi.cli import main
 
     main()
-    eps_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("eps_")]
-    chi_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("chi_")]
-    assert len(eps_dirs) >= 1
-    assert len(chi_dirs) >= 1
+
+    # New pipeline creates {pfile_stem}/profile_NNN/ structure
+    pfile_dir = tmp_path / sample_p_file.stem
+    assert pfile_dir.is_dir(), f"Expected {pfile_dir} to exist"
+    profile_dirs = sorted(
+        d for d in pfile_dir.iterdir() if d.is_dir() and d.name.startswith("profile_")
+    )
+    assert len(profile_dirs) >= 1, "Expected at least one profile directory"
+
+    # Check that L4_epsilon.nc exists in the first profile
+    eps_files = list(profile_dirs[0].glob("L4_epsilon.nc"))
+    assert len(eps_files) >= 1, "Expected L4_epsilon.nc in profile directory"
+
+    # Check combined output
+    combined = pfile_dir / "L6_combined.nc"
+    assert combined.exists(), "Expected L6_combined.nc"

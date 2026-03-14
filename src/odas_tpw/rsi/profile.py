@@ -302,35 +302,104 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
     if "configuration_string" in ds.ncattrs():
         global_attrs["configuration_string"] = ds.configuration_string
 
-    fs_fast = float(ds.fs_fast)
-    fs_slow = float(ds.fs_slow)
+    # Attributes may be on root or in L1_converted group
+    def _get_nc_attr(name: str, default=None):
+        for src in [ds]:
+            if name in {a for a in src.ncattrs()}:
+                return src.getncattr(name)
+        if "L1_converted" in ds.groups:
+            g = ds.groups["L1_converted"]
+            if name in {a for a in g.ncattrs()}:
+                return g.getncattr(name)
+        if default is not None:
+            return default
+        raise AttributeError(f"Attribute {name!r} not found in NetCDF file")
 
-    t_fast = ds.variables["t_fast"][:].data
-    t_slow = ds.variables["t_slow"][:].data
-    t_fast_units = (
-        ds.variables["t_fast"].units if hasattr(ds.variables["t_fast"], "units") else "seconds"
-    )
-    t_slow_units = (
-        ds.variables["t_slow"].units if hasattr(ds.variables["t_slow"], "units") else "seconds"
-    )
+    fs_fast = float(_get_nc_attr("fs_fast"))
+    fs_slow = float(_get_nc_attr("fs_slow"))
 
-    P = ds.variables["P"][:].data
+    # Time vectors may be at root or inside L1_converted group
+    if "t_fast" in ds.variables:
+        t_fast = ds.variables["t_fast"][:].data
+        t_slow = ds.variables["t_slow"][:].data
+    elif "L1_converted" in ds.groups:
+        g = ds.groups["L1_converted"]
+        # L1_converted uses TIME/TIME_SLOW dimension names
+        t_fast = g.variables["TIME"][:].data
+        t_slow = g.variables["TIME_SLOW"][:].data
+    else:
+        raise ValueError("No time variables found in NetCDF file")
+    # Determine time units
+    if "t_fast" in ds.variables:
+        t_fast_units = (
+            ds.variables["t_fast"].units if hasattr(ds.variables["t_fast"], "units") else "seconds"
+        )
+        t_slow_units = (
+            ds.variables["t_slow"].units if hasattr(ds.variables["t_slow"], "units") else "seconds"
+        )
+    elif "L1_converted" in ds.groups:
+        g = ds.groups["L1_converted"]
+        t_fast_units = (
+            g.variables["TIME"].units if hasattr(g.variables["TIME"], "units") else "days"
+        )
+        t_slow_units = (
+            g.variables["TIME_SLOW"].units if hasattr(g.variables["TIME_SLOW"], "units") else "days"
+        )
+    else:
+        t_fast_units = "seconds"
+        t_slow_units = "seconds"
 
+    # Pressure — need slow-rate pressure for profile detection
+    if "P" in ds.variables:
+        P = ds.variables["P"][:].data
+    elif "L1_converted" in ds.groups:
+        g = ds.groups["L1_converted"]
+        if "PRES_SLOW" in g.variables:
+            P = g.variables["PRES_SLOW"][:].data
+        elif "PRES" in g.variables:
+            P = g.variables["PRES"][:].data
+        else:
+            raise ValueError("No pressure variable found in NetCDF file")
+    else:
+        raise ValueError("No pressure variable found in NetCDF file")
+
+    # Channels — scan both root and L1_converted group
     channels = []
-    for vname in ds.variables:
-        if vname in ("t_fast", "t_slow"):
-            continue
-        var = ds.variables[vname]
-        dims = var.dimensions
-        if len(dims) != 1:
-            continue
-        dim = dims[0]
-        if dim not in ("time_fast", "time_slow"):
-            continue
-        attrs = {}
-        for a in var.ncattrs():
-            attrs[a] = getattr(var, a)
-        channels.append((vname, var[:].data.astype(np.float64), dim, attrs))
+    _seen = set()
+
+    def _scan_vars(source, time_dim_fast, time_dim_slow):
+        for vname in source.variables:
+            if vname in _seen or vname in ("t_fast", "t_slow", "TIME", "TIME_SLOW"):
+                continue
+            var = source.variables[vname]
+            dims = var.dimensions
+            if len(dims) != 1:
+                continue
+            dim = dims[0]
+            if dim == time_dim_fast:
+                mapped_dim = "time_fast"
+            elif dim == time_dim_slow:
+                mapped_dim = "time_slow"
+            else:
+                continue
+            attrs = {}
+            for a in var.ncattrs():
+                attrs[a] = getattr(var, a)
+            channels.append((vname, var[:].data.astype(np.float64), mapped_dim, attrs))
+            _seen.add(vname)
+
+    # Scan root-level variables (old format)
+    _scan_vars(ds, "time_fast", "time_slow")
+    # Scan L1_converted group (new ATOMIX format)
+    if "L1_converted" in ds.groups:
+        _scan_vars(ds.groups["L1_converted"], "TIME", "TIME_SLOW")
+
+    # If time is in days, convert to seconds for consistency
+    if "day" in t_fast_units.lower():
+        t_fast = (t_fast - t_fast[0]) * 86400.0
+        t_slow = (t_slow - t_slow[0]) * 86400.0
+        t_fast_units = "seconds"
+        t_slow_units = "seconds"
 
     ds.close()
 

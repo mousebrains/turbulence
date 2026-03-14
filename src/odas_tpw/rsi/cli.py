@@ -343,77 +343,31 @@ def _cmd_chi(args: argparse.Namespace) -> None:
 
 
 def _cmd_pipeline(args: argparse.Namespace) -> None:
-    """Run full processing pipeline: .p -> profiles -> epsilon -> chi."""
-    from odas_tpw.rsi.chi_io import get_chi
-    from odas_tpw.rsi.dissipation import get_diss
-    from odas_tpw.rsi.p_file import PFile
+    """Run full processing pipeline: .p -> L2 -> L3 -> L4 -> chi -> binning."""
+    from odas_tpw.rsi.pipeline import run_pipeline
 
     p_files = _resolve_p_files(args.files)
+    output_dir = Path(args.output)
 
+    # Gather parameters from CLI/config
     eps_merged = _merge_for_section(args, "epsilon_pipeline")
     chi_merged = _merge_for_section(args, "chi_pipeline")
 
-    eps_dir = _setup_output_dir(args, "eps", "epsilon_pipeline", eps_merged)
-    chi_upstream = [("epsilon", eps_merged)]
-    chi_dir = _setup_output_dir(args, "chi", "chi_pipeline", chi_merged, upstream=chi_upstream)
-    print(f"Epsilon output: {eps_dir}")
-    print(f"Chi output:     {chi_dir}")
+    kwargs = {
+        "direction": eps_merged.get("direction", "down"),
+        "speed": eps_merged.get("speed"),
+        "fft_length": eps_merged.get("fft_length", 256),
+        "f_AA": eps_merged.get("f_AA", 98.0),
+        "salinity": eps_merged.get("salinity"),
+        "goodman": eps_merged.get("goodman", True),
+        "chi_fft_length": chi_merged.get("fft_length", 512),
+        "fp07_model": chi_merged.get("fp07_model", "single_pole"),
+        "spectrum_model": chi_merged.get("spectrum_model", "kraichnan"),
+    }
+    # Remove None values
+    kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
-    for f in p_files:
-        print(f"\n{'=' * 60}")
-        print(f"{f.name}")
-        print(f"{'=' * 60}")
-
-        # Load PFile once for both epsilon and chi
-        pf = PFile(f)
-
-        # Step 1: Compute epsilon
-        print("\n--- Epsilon ---")
-        try:
-            eps_results = get_diss(pf, **eps_merged)
-        except (OSError, ValueError, RuntimeError) as e:
-            print(f"  ERROR computing epsilon: {e}")
-            continue
-
-        eps_paths = []
-        for i, ds in enumerate(eps_results):
-            if len(eps_results) == 1:
-                out_name = f"{pf.filepath.stem}_eps.nc"
-            else:
-                out_name = f"{pf.filepath.stem}_prof{i + 1:03d}_eps.nc"
-            out_path = eps_dir / out_name
-            ds.to_netcdf(out_path)
-            eps_paths.append(out_path)
-            print(
-                f"  {out_path.name}: {ds.sizes['time']} estimates, "
-                f"P={float(ds.P_mean.min()):.0f}-{float(ds.P_mean.max()):.0f} dbar"
-            )
-
-        # Step 2: Compute chi with epsilon (Method 1)
-        print("\n--- Chi (Method 1: from epsilon) ---")
-        for eps_ds in eps_results:
-            kw = dict(chi_merged)
-            kw["epsilon_ds"] = eps_ds
-            try:
-                chi_results = get_chi(pf, **kw)
-            except (OSError, ValueError, RuntimeError) as e:
-                print(f"  ERROR computing chi: {e}")
-                continue
-            for j, ds in enumerate(chi_results):
-                if len(chi_results) == 1:
-                    out_name = f"{pf.filepath.stem}_chi.nc"
-                else:
-                    out_name = f"{pf.filepath.stem}_prof{j + 1:03d}_chi.nc"
-                out_path = chi_dir / out_name
-                ds.to_netcdf(out_path)
-                print(
-                    f"  {out_path.name}: {ds.sizes['time']} estimates, "
-                    f"P={float(ds.P_mean.min()):.0f}-{float(ds.P_mean.max()):.0f} dbar"
-                )
-
-    print("\nPipeline complete.")
-    print(f"  Epsilon: {eps_dir}/")
-    print(f"  Chi:     {chi_dir}/")
+    run_pipeline(p_files, output_dir, **kwargs)
 
 
 def _cmd_ql(args: argparse.Namespace) -> None:

@@ -37,6 +37,10 @@ class L1Data:
     temp: np.ndarray = field(default_factory=lambda: np.array([]))
     fs_slow: float = 0.0
 
+    # Optional fast-rate FP07 temperature (for chi computation)
+    temp_fast: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
+    diff_gains: list[float] = field(default_factory=list)
+
     @property
     def n_shear(self) -> int:
         return self.shear.shape[0]
@@ -52,6 +56,14 @@ class L1Data:
     @property
     def has_speed(self) -> bool:
         return self.pspd_rel.size > 0
+
+    @property
+    def n_temp(self) -> int:
+        return self.temp_fast.shape[0] if self.temp_fast.ndim == 2 else 0
+
+    @property
+    def has_temp_fast(self) -> bool:
+        return self.temp_fast.size > 0 and self.temp_fast.ndim == 2
 
 
 @dataclass
@@ -186,6 +198,7 @@ def read_atomix(path: str | Path) -> tuple[L1Data, L2Params, L2Data, L3Params, L
 # Helpers for resolving attributes across groups
 # ---------------------------------------------------------------------------
 
+
 def _resolve_attr(ds: netCDF4.Dataset, name: str, default=None):
     """Look for an attribute in L1_converted, then L2_cleaned, then root."""
     for source in [ds.groups["L1_converted"], ds.groups["L2_cleaned"], ds]:
@@ -197,6 +210,7 @@ def _resolve_attr(ds: netCDF4.Dataset, name: str, default=None):
 # ---------------------------------------------------------------------------
 # L1 reader
 # ---------------------------------------------------------------------------
+
 
 def _read_l1(ds: netCDF4.Dataset) -> L1Data:
     g = ds.groups["L1_converted"]
@@ -301,6 +315,7 @@ def _read_l1(ds: netCDF4.Dataset) -> L1Data:
 # L2 params reader
 # ---------------------------------------------------------------------------
 
+
 def _read_l2_params(ds: netCDF4.Dataset, l1: L1Data) -> L2Params:
     """Read L2 processing parameters, falling back to sensible defaults.
 
@@ -316,20 +331,12 @@ def _read_l2_params(ds: netCDF4.Dataset, l1: L1Data) -> L2Params:
     # already-differentiated shear on epsifish) so only fall back to it
     # for speed_cutout, not HP_cut.
     HP_cut = float(attrs.get("HP_cut", 0.25))
-    despike_sh = np.asarray(
-        attrs.get("despike_sh", [8.0, 0.5, 0.04]), dtype=np.float64
-    )
-    despike_A = np.asarray(
-        attrs.get("despike_A", [np.inf, 0.5, 0.04]), dtype=np.float64
-    )
-    profile_min_W = float(
-        attrs.get("profile_min_W", gattrs.get("speed_cutout", 0.1))
-    )
+    despike_sh = np.asarray(attrs.get("despike_sh", [8.0, 0.5, 0.04]), dtype=np.float64)
+    despike_A = np.asarray(attrs.get("despike_A", [np.inf, 0.5, 0.04]), dtype=np.float64)
+    profile_min_W = float(attrs.get("profile_min_W", gattrs.get("speed_cutout", 0.1)))
     profile_min_P = float(attrs.get("profile_min_P", 1.0))
     profile_min_duration = float(attrs.get("profile_min_duration", 10.0))
-    speed_tau = float(
-        attrs.get("speed_tau", gattrs.get("speed_tau", 1.5))
-    )
+    speed_tau = float(attrs.get("speed_tau", gattrs.get("speed_tau", 1.5)))
 
     return L2Params(
         HP_cut=HP_cut,
@@ -345,6 +352,7 @@ def _read_l2_params(ds: netCDF4.Dataset, l1: L1Data) -> L2Params:
 # ---------------------------------------------------------------------------
 # L2 reference reader
 # ---------------------------------------------------------------------------
+
 
 def _read_l2(ds: netCDF4.Dataset) -> L2Data:
     g = ds.groups["L2_cleaned"]
@@ -393,6 +401,7 @@ def _read_l2(ds: netCDF4.Dataset) -> L2Data:
 # ---------------------------------------------------------------------------
 # L3 params reader
 # ---------------------------------------------------------------------------
+
 
 def _read_l3_params(ds: netCDF4.Dataset) -> L3Params:
     """Read L3 processing parameters from L3_spectra group attributes.
@@ -448,7 +457,7 @@ def _read_l3_params(ds: netCDF4.Dataset) -> L3Params:
     )
 
 
-def _infer_diss_length(g: "netCDF4.Group", fft_length: int, fs_fast: float) -> int:
+def _infer_diss_length(g: netCDF4.Group, fft_length: int, fs_fast: float) -> int:
     """Infer dissipation window length from reference L3 time spacing."""
     if "TIME" not in g.variables or "SECTION_NUMBER" not in g.variables:
         return fft_length * 4  # fallback
@@ -486,6 +495,7 @@ def _infer_diss_length(g: "netCDF4.Group", fft_length: int, fs_fast: float) -> i
 # L3 reference reader
 # ---------------------------------------------------------------------------
 
+
 def _read_l3(ds: netCDF4.Dataset) -> L3Data:
     g = ds.groups["L3_spectra"]
 
@@ -520,6 +530,7 @@ def _read_l3(ds: netCDF4.Dataset) -> L3Data:
 # ---------------------------------------------------------------------------
 # L4 reference reader
 # ---------------------------------------------------------------------------
+
 
 def _read_l4(ds: netCDF4.Dataset) -> L4Data:
     g = ds.groups["L4_dissipation"]
