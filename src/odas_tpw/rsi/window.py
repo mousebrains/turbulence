@@ -19,9 +19,9 @@ from odas_tpw.rsi.dissipation import (
     MACOUN_LUECK_DENOM,
     MACOUN_LUECK_K,
     SPEED_MIN,
-    _estimate_epsilon,
 )
 from odas_tpw.scor160.goodman import clean_shear_spec
+from odas_tpw.scor160.l4 import _estimate_epsilon
 from odas_tpw.scor160.ocean import visc35
 from odas_tpw.scor160.spectral import csd_odas
 
@@ -96,9 +96,7 @@ def compute_eps_window(
 
     W = float(np.mean(np.abs(speed)))
     if W < SPEED_MIN:
-        warnings.warn(
-            f"Speed {W:.4f} m/s below minimum; clamped to {SPEED_MIN} m/s", stacklevel=2
-        )
+        warnings.warn(f"Speed {W:.4f} m/s below minimum; clamped to {SPEED_MIN} m/s", stacklevel=2)
         W = SPEED_MIN
     nu = float(visc35(T_mean))
     mean_P = float(np.mean(P))
@@ -122,9 +120,19 @@ def compute_eps_window(
 
     if diss_length < 2 * fft_length:
         return EpsWindowResult(
-            epsilon=eps, K_max=k_maxes, mad=mads, fom=foms, FM=FMs,
-            K_max_ratio=Kmrs, method=methods, K=K_out, F=F, W=W, nu=nu,
-            mean_P=mean_P, mean_T=T_mean,
+            epsilon=eps,
+            K_max=k_maxes,
+            mad=mads,
+            fom=foms,
+            FM=FMs,
+            K_max_ratio=Kmrs,
+            method=methods,
+            K=K_out,
+            F=F,
+            W=W,
+            nu=nu,
+            mean_P=mean_P,
+            mean_T=T_mean,
         )
 
     if do_goodman and accel is not None and shear.shape[0] > 2 * fft_length:
@@ -138,9 +146,15 @@ def compute_eps_window(
 
         for ci in range(n_shear):
             spec_k = np.real(clean_UU[:, ci, ci]) * W * correction
-            e4, k_max, mad, meth, nas, fom, Kmr, FM = _estimate_epsilon(
-                K_g, spec_k, nu, K_AA, fit_order, e_isr_threshold,
-                num_ffts=num_ffts, n_v=n_v,
+            e4, k_max, mad, meth, fom, _vr, nas, Kmr, FM = _estimate_epsilon(
+                K_g,
+                spec_k,
+                nu,
+                K_AA,
+                fit_order,
+                e_isr_threshold,
+                num_ffts=num_ffts,
+                n_v=n_v,
             )
             eps[ci] = e4
             k_maxes[ci] = k_max
@@ -161,9 +175,15 @@ def compute_eps_window(
             correction[mask_c] = 1 + (K_s[mask_c] / MACOUN_LUECK_DENOM) ** 2
             spec_k = Pxx * W * correction
 
-            e4, k_max, mad, meth, nas, fom, Kmr, FM = _estimate_epsilon(
-                K_s, spec_k, nu, f_AA / W, fit_order, e_isr_threshold,
-                num_ffts=num_ffts, n_v=0,
+            e4, k_max, mad, meth, fom, _vr, nas, Kmr, FM = _estimate_epsilon(
+                K_s,
+                spec_k,
+                nu,
+                f_AA / W,
+                fit_order,
+                e_isr_threshold,
+                num_ffts=num_ffts,
+                n_v=0,
             )
             eps[ci] = e4
             k_maxes[ci] = k_max
@@ -178,10 +198,21 @@ def compute_eps_window(
             K_out = K_s
 
     return EpsWindowResult(
-        epsilon=eps, K_max=k_maxes, mad=mads, fom=foms, FM=FMs,
-        K_max_ratio=Kmrs, method=methods, shear_specs=shear_specs,
-        nasmyth_specs=nasmyth_specs, K=K_out, F=F, W=W, nu=nu,
-        mean_P=mean_P, mean_T=T_mean,
+        epsilon=eps,
+        K_max=k_maxes,
+        mad=mads,
+        fom=foms,
+        FM=FMs,
+        K_max_ratio=Kmrs,
+        method=methods,
+        shear_specs=shear_specs,
+        nasmyth_specs=nasmyth_specs,
+        K=K_out,
+        F=F,
+        W=W,
+        nu=nu,
+        mean_P=mean_P,
+        mean_T=T_mean,
     )
 
 
@@ -301,8 +332,17 @@ def compute_chi_window(
             eps_ci = epsilon[ci] if ci < len(epsilon) else np.nan
             if np.isfinite(eps_ci) and eps_ci > 0:
                 chi_val, kB, K_max, spec_raw, fom_val, Kmr = _chi_from_epsilon(
-                    spec_obs, K, eps_ci, nu,
-                    noise_K_ci, H2, tau0, _h2_func, f_AA, W, spectrum_model,
+                    spec_obs,
+                    K,
+                    eps_ci,
+                    nu,
+                    noise_K_ci,
+                    H2,
+                    tau0,
+                    _h2_func,
+                    f_AA,
+                    W,
+                    spectrum_model,
                 )
                 chi_arr[ci] = chi_val
                 kB_arr[ci] = kB
@@ -317,8 +357,16 @@ def compute_chi_window(
         else:
             # Method 2: iterative fit
             _, chi_val, kB, K_max, spec_raw, fom_val, Kmr = _iterative_fit(
-                spec_obs, K, nu,
-                noise_K_ci, H2, tau0, _h2_func, f_AA, W, spectrum_model,
+                spec_obs,
+                K,
+                nu,
+                noise_K_ci,
+                H2,
+                tau0,
+                _h2_func,
+                f_AA,
+                W,
+                spectrum_model,
             )
             chi_arr[ci] = chi_val
             kB_arr[ci] = kB
@@ -333,7 +381,16 @@ def compute_chi_window(
                 model_specs_raw.append(np.zeros(n_freq))
 
     return ChiWindowResult(
-        chi=chi_arr, kB=kB_arr, K_max_T=Kmax_arr, fom=fom_arr,
-        K_max_ratio=Kmr_arr, grad_specs=grad_specs, model_specs=model_specs,
-        model_specs_raw=model_specs_raw, noise_K=noise_K, K=K, F=F, H2=H2,
+        chi=chi_arr,
+        kB=kB_arr,
+        K_max_T=Kmax_arr,
+        fom=fom_arr,
+        K_max_ratio=Kmr_arr,
+        grad_specs=grad_specs,
+        model_specs=model_specs,
+        model_specs_raw=model_specs_raw,
+        noise_K=noise_K,
+        K=K,
+        F=F,
+        H2=H2,
     )

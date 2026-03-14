@@ -54,6 +54,7 @@ DEFAULT_VAR_RESOLVED_LIMIT = 0.5
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def process_l4(
     l3: L3Data,
     *,
@@ -114,8 +115,12 @@ def process_l4(
             if not np.any(np.isfinite(spec) & (spec > 0)):
                 continue
 
-            e, km, md, meth, fom_val, var_res = _estimate_epsilon(
-                K, spec, nu, K_AA, fit_order,
+            e, km, md, meth, fom_val, var_res, _nas, _kmr, _fm = _estimate_epsilon(
+                K,
+                spec,
+                nu,
+                K_AA,
+                fit_order,
             )
 
             epsi[i, j] = e
@@ -166,16 +171,61 @@ def _empty_l4(n_shear: int) -> L4Data:
 # Core epsilon estimation (per-spectrum)
 # ---------------------------------------------------------------------------
 
+
 def _estimate_epsilon(
     K: np.ndarray,
     shear_spectrum: np.ndarray,
     nu: float,
     K_AA: float,
     fit_order: int,
-) -> tuple[float, float, float, int, float, float]:
+    e_isr_threshold: float = E_ISR_THRESHOLD,
+    num_ffts: int = 0,
+    n_v: int = 0,
+) -> tuple[float, float, float, int, float, float, np.ndarray, float, float]:
     """Estimate epsilon from a single shear wavenumber spectrum.
 
-    Returns (epsilon, K_max, mad, method, fom, var_resolved).
+    This is the canonical implementation used by both the scor160 pipeline
+    and the RSI ``get_diss()`` function.
+
+    Parameters
+    ----------
+    K : ndarray
+        Wavenumber vector [cpm].
+    shear_spectrum : ndarray
+        Observed shear spectrum [s^-2 cpm^-1].
+    nu : float
+        Kinematic viscosity [m^2/s].
+    K_AA : float
+        Anti-aliasing wavenumber limit [cpm].
+    fit_order : int
+        Polynomial order for spectral minimum detection.
+    e_isr_threshold : float
+        Epsilon threshold for switching to ISR method [W/kg].
+    num_ffts : int
+        Number of FFT segments (for Lueck FM statistic). 0 to skip FM.
+    n_v : int
+        Number of vibration signals removed (for Lueck FM statistic).
+
+    Returns
+    -------
+    epsilon : float
+        Dissipation rate [W/kg].
+    K_max : float
+        Upper integration limit [cpm].
+    mad : float
+        Mean absolute deviation of spectral fit (log10).
+    method : int
+        0 = variance, 1 = inertial subrange.
+    fom : float
+        Figure of merit (observed/Nasmyth variance ratio).
+    var_resolved : float
+        Fraction of Nasmyth variance resolved.
+    nasmyth_spectrum : ndarray
+        Nasmyth spectrum at final epsilon.
+    K_max_ratio : float
+        K_max / K_95 spectral resolution ratio.
+    FM : float
+        Lueck (2022a,b) figure of merit (NaN if num_ffts == 0).
     """
     n_freq = len(K)
 
@@ -183,7 +233,7 @@ def _estimate_epsilon(
     spec_safe = np.where(np.isfinite(shear_spectrum), shear_spectrum, 0.0)
 
     # Initial estimate: integrate to K_INITIAL_CUTOFF cpm
-    # Include K[0]=0 — trapezoid handles it correctly with spec_safe
+    # Include K[0]=0 -- trapezoid handles it correctly with spec_safe
     K_range = np.where(K <= K_INITIAL_CUTOFF)[0]
     if len(K_range) < 3:
         K_range = np.arange(min(3, n_freq))
@@ -194,12 +244,12 @@ def _estimate_epsilon(
     e_1 = e_10 * np.sqrt(1 + LUECK_A * e_10)
 
     # The ATOMIX benchmark reference was produced with a slightly
-    # different spectral computation that yields ~2–4 % lower e_1
-    # values than our pipeline.  A margin of 1.6× on the threshold
+    # different spectral computation that yields ~2-4 % lower e_1
+    # values than our pipeline.  A margin of 1.6x on the threshold
     # compensates for this, maximising method agreement (99.8 % across
     # all six benchmark datasets).
     ISR_MARGIN = 1.6
-    use_isr = e_1 >= E_ISR_THRESHOLD * ISR_MARGIN
+    use_isr = e_1 >= e_isr_threshold * ISR_MARGIN
 
     if use_isr:
         method = 1
@@ -212,13 +262,19 @@ def _estimate_epsilon(
     else:
         method = 0
         e_4, k_max, Range = _variance_method(
-            K, spec_safe, e_1, nu, K_AA, fit_order, n_freq,
+            K,
+            spec_safe,
+            e_1,
+            nu,
+            K_AA,
+            fit_order,
+            n_freq,
         )
 
     # Nasmyth spectrum at final epsilon
     nas_spec = nasmyth_grid(max(e_4, EPSILON_FLOOR), nu, K + 1e-30)
 
-    # Mean absolute deviation (log10) — skip DC bin for ratio comparison
+    # Mean absolute deviation (log10) -- skip DC bin for ratio comparison
     Range_noDC = Range[K[Range] > 0]
     if len(Range_noDC) > 0:
         spec_ratio = spec_safe[Range_noDC] / (nas_spec[Range_noDC] + 1e-30)
@@ -226,6 +282,7 @@ def _estimate_epsilon(
         mad_val = float(np.mean(np.abs(np.log10(spec_ratio)))) if len(spec_ratio) > 0 else np.nan
     else:
         mad_val = np.nan
+        spec_ratio = np.array([])
 
     # Figure of merit: observed/Nasmyth variance ratio (skip DC bin)
     if len(Range_noDC) > 0:
@@ -238,12 +295,31 @@ def _estimate_epsilon(
     # Variance resolved fraction
     var_res = _variance_resolved_fraction(k_max, e_4, nu)
 
-    return e_4, k_max, mad_val, method, fom_val, var_res
+    # K_max / K_95 spectral resolution ratio
+    K_95 = X_95 * (max(e_4, EPSILON_FLOOR) / nu**3) ** 0.25
+    K_max_ratio_val = k_max / K_95 if K_95 > 0 else np.nan
+
+    # Lueck (2022a,b) figure of merit
+    FM_val = np.nan
+    if num_ffts > 0 and len(Range_noDC) > 0 and len(spec_ratio) > 0:
+        N_s = len(spec_ratio)
+        mad_ln = np.mean(np.abs(np.log(spec_ratio)))  # natural log
+        N_eff = max(num_ffts - n_v, 1)
+        sigma_ln = np.sqrt(FM_SIGMA_COEFF * N_eff**FM_SIGMA_EXPONENT)
+        T_M = FM_TM_OFFSET + np.sqrt(FM_TM_COEFF / N_s)
+        FM_val = mad_ln / (T_M * sigma_ln)
+
+    return e_4, k_max, mad_val, method, fom_val, var_res, nas_spec, K_max_ratio_val, FM_val
 
 
 def _variance_method(
-    K: np.ndarray, spec_safe: np.ndarray, e_1: float,
-    nu: float, K_AA: float, fit_order: int, n_freq: int,
+    K: np.ndarray,
+    spec_safe: np.ndarray,
+    e_1: float,
+    nu: float,
+    K_AA: float,
+    fit_order: int,
+    n_freq: int,
 ) -> tuple[float, float, np.ndarray]:
     """Variance integration method for epsilon estimation.
 
@@ -312,8 +388,11 @@ def _variance_method(
 
 
 def _compute_mad(
-    K: np.ndarray, spec_safe: np.ndarray, epsilon: float,
-    nu: float, Range: np.ndarray,
+    K: np.ndarray,
+    spec_safe: np.ndarray,
+    epsilon: float,
+    nu: float,
+    Range: np.ndarray,
 ) -> float:
     """Compute MAD (log10) for a given epsilon estimate over a spectral range."""
     nas = nasmyth_grid(max(epsilon, EPSILON_FLOOR), nu, K + 1e-30)
@@ -333,10 +412,9 @@ def _variance_correction(e_3: float, K_upper: float, nu: float, max_iter: int = 
     for _ in range(max_iter):
         x_limit = K_upper * (nu**3 / e_new) ** 0.25
         x_limit = x_limit ** (4 / 3)
-        variance_resolved = (
-            np.tanh(VARIANCE_TANH_COEFF * x_limit)
-            - VARIANCE_EXP_COEFF * x_limit * np.exp(-VARIANCE_EXP_DECAY * x_limit)
-        )
+        variance_resolved = np.tanh(
+            VARIANCE_TANH_COEFF * x_limit
+        ) - VARIANCE_EXP_COEFF * x_limit * np.exp(-VARIANCE_EXP_DECAY * x_limit)
         if variance_resolved <= 0:
             break
         e_old = e_new
@@ -351,9 +429,8 @@ def _variance_resolved_fraction(K_upper: float, epsilon: float, nu: float) -> fl
     epsilon = max(epsilon, EPSILON_FLOOR)
     x_limit = K_upper * (nu**3 / epsilon) ** 0.25
     x_limit = x_limit ** (4 / 3)
-    vr = (
-        np.tanh(VARIANCE_TANH_COEFF * x_limit)
-        - VARIANCE_EXP_COEFF * x_limit * np.exp(-VARIANCE_EXP_DECAY * x_limit)
+    vr = np.tanh(VARIANCE_TANH_COEFF * x_limit) - VARIANCE_EXP_COEFF * x_limit * np.exp(
+        -VARIANCE_EXP_DECAY * x_limit
     )
     return float(np.clip(vr, 0, 1))
 
@@ -415,6 +492,7 @@ def _inertial_subrange(
 # ---------------------------------------------------------------------------
 # QC flags and EPSI_FINAL
 # ---------------------------------------------------------------------------
+
 
 def _compute_flags(
     epsi: np.ndarray,

@@ -16,6 +16,7 @@ from odas_tpw.scor160.io import (
 from odas_tpw.scor160.l2 import process_l2
 from odas_tpw.scor160.l3 import process_l3
 from odas_tpw.scor160.l4 import process_l4
+from odas_tpw.scor160.profile import get_profiles, smooth_fall_rate
 
 __all__ = [
     "L1Data",
@@ -24,8 +25,10 @@ __all__ = [
     "L3Data",
     "L3Params",
     "L4Data",
+    "get_profiles",
     "process_l2",
     "process_l3",
     "process_l4",
     "read_atomix",
+    "smooth_fall_rate",
 ]

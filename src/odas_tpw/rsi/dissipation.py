@@ -16,7 +16,6 @@ Lueck, R.G., and 27 coauthors, 2024: Best practices recommendations for
     11, 1334327.
 """
 
-import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -31,7 +30,9 @@ if TYPE_CHECKING:
 from odas_tpw.rsi.helpers import load_channels, prepare_profiles
 from odas_tpw.scor160.despike import despike
 from odas_tpw.scor160.goodman import clean_shear_spec_batch
-from odas_tpw.scor160.nasmyth import LUECK_A, X_95, nasmyth_grid
+from odas_tpw.scor160.l4 import (
+    _estimate_epsilon,
+)
 from odas_tpw.scor160.ocean import visc, visc35
 
 # ---------------------------------------------------------------------------
@@ -248,9 +249,7 @@ def get_diss(
             salinity=sal_prof,
         )
         ds.attrs.update(data["metadata"])
-        ds.attrs["history"] = (
-            f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
-        )
+        ds.attrs["history"] = f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
         # CF time coordinate attributes
         start_time = data["metadata"].get("start_time", "")
         t_units = f"seconds since {start_time}" if start_time else "seconds"
@@ -358,14 +357,21 @@ def _compute_profile_diss(
     if do_goodman:
         # clean_UU: (n_est, n_freq, n_shear, n_shear)
         P_sh_clean_all, F = clean_shear_spec_batch(
-            ac_windows, sh_windows, fft_length, fs_fast,
+            ac_windows,
+            sh_windows,
+            fft_length,
+            fs_fast,
         )
     else:
         from odas_tpw.scor160.spectral import csd_matrix_batch
 
         P_sh_all, F, _, _ = csd_matrix_batch(
-            sh_windows, None, fft_length, fs_fast,
-            overlap=fft_length // 2, detrend="linear",
+            sh_windows,
+            None,
+            fft_length,
+            fs_fast,
+            overlap=fft_length // 2,
+            detrend="linear",
         )
         P_sh_clean_all = np.real(P_sh_all)
 
@@ -431,15 +437,17 @@ def _compute_profile_diss(
         for ci in range(n_shear):
             shear_spec = np.real(P_sh_clean_all[idx, :, ci, ci])
 
-            e_4, k_max, mad, meth, nas_spec, fom_val, K_max_ratio_val, FM_val = _estimate_epsilon(
-                K,
-                shear_spec,
-                nu,
-                K_AA,
-                fit_order,
-                E_ISR_THRESHOLD,
-                num_ffts=num_ffts,
-                n_v=n_v,
+            e_4, k_max, mad, meth, fom_val, _var_res, nas_spec, K_max_ratio_val, FM_val = (
+                _estimate_epsilon(
+                    K,
+                    shear_spec,
+                    nu,
+                    K_AA,
+                    fit_order,
+                    e_isr_threshold=E_ISR_THRESHOLD,
+                    num_ffts=num_ffts,
+                    n_v=n_v,
+                )
             )
             epsilon[ci, idx] = e_4
             K_max_out[ci, idx] = k_max
@@ -656,303 +664,8 @@ def _build_diss_dataset(
     ds.coords["probe"].attrs["long_name"] = "shear probe name"
     return ds
 
-
-def _estimate_epsilon(
-    K: np.ndarray,
-    shear_spectrum: np.ndarray,
-    nu: float,
-    K_AA: float,
-    fit_order: int,
-    e_isr_threshold: float,
-    num_ffts: int = 3,
-    n_v: int = 0,
-) -> tuple[float, float, float, int, np.ndarray, float, float, float]:
-    """Estimate epsilon from a single shear wavenumber spectrum.
-
-    Implements the ODAS variance method (with polynomial spectral-minimum
-    detection and iterative variance correction) for low dissipation, and
-    the inertial-subrange (ISR) method for high dissipation.
-
-    Parameters
-    ----------
-    K : ndarray
-        Wavenumber vector [cpm].
-    shear_spectrum : ndarray
-        Observed shear spectrum [s⁻² cpm⁻¹].
-    nu : float
-        Kinematic viscosity [m²/s].
-    K_AA : float
-        Anti-aliasing wavenumber limit [cpm].
-    fit_order : int
-        Polynomial order for spectral minimum detection.
-    e_isr_threshold : float
-        Epsilon threshold for switching to ISR method [W/kg].
-    num_ffts : int
-        Number of FFT segments (for Lueck FM statistic).
-    n_v : int
-        Number of vibration signals removed (for Lueck FM statistic).
-
-    Returns
-    -------
-    epsilon : float
-        Dissipation rate [W/kg].
-    K_max : float
-        Upper integration limit [cpm].
-    mad : float
-        Mean absolute deviation of spectral fit (log10).
-    method : int
-        0 = variance, 1 = inertial subrange.
-    nasmyth_spectrum : ndarray
-        Nasmyth spectrum at final epsilon.
-    fom : float
-        Figure of merit (observed/Nasmyth variance ratio).
-    K_max_ratio : float
-        K_max / K_95 spectral resolution ratio.
-    FM : float
-        Lueck (2022a,b) figure of merit.
-    """
-    n_freq = len(K)
-    method = 0
-
-    # Initial estimate: integrate to K_INITIAL_CUTOFF cpm, use e/e_10 model
-    K_range = np.where(K <= K_INITIAL_CUTOFF)[0]
-    if len(K_range) < 3:
-        K_range = np.arange(min(3, n_freq))
-
-    e_10 = ISOTROPY_FACTOR * nu * np.trapezoid(shear_spectrum[K_range], K[K_range])
-    if e_10 <= 0:
-        warnings.warn(
-            f"Initial epsilon estimate e_10={e_10:.2e} <= 0; clamped to {EPSILON_FLOOR:.0e}",
-            stacklevel=2,
-        )
-        e_10 = EPSILON_FLOOR
-    e_1 = e_10 * np.sqrt(1 + LUECK_A * e_10)
-
-    if e_1 < e_isr_threshold:
-        # Variance method
-        # Check if enough points for ISR refinement
-        isr_limit = X_ISR * (e_1 / nu**3) ** 0.25
-        if len(np.where(isr_limit >= K)[0]) >= 20:
-            e_2, _ = _inertial_subrange(K, shear_spectrum, e_1, nu, min(K_LIMIT_MAX, K_AA))
-        else:
-            e_2 = e_1
-
-        K_95 = X_95 * (e_2 / nu**3) ** 0.25
-        valid_K_limit = min(K_AA, K_95)
-        valid_K_limit = np.clip(valid_K_limit, K_LIMIT_MIN, K_LIMIT_MAX)
-        valid_idx = np.where(valid_K_limit >= K)[0]
-        index_limit = len(valid_idx)
-
-        if index_limit <= 1:
-            index_limit = min(3, n_freq)
-
-        # Polynomial fit to find spectral minimum
-        y = np.log10(shear_spectrum[1:index_limit] + 1e-30)
-        x = np.log10(K[1:index_limit] + 1e-30)
-
-        fit_order_eff = np.clip(fit_order, 3, 8)
-        K_limit_log = np.log10(K_95)
-
-        if index_limit > fit_order_eff + 2:
-            # Remove NaNs
-            valid = np.isfinite(y) & np.isfinite(x)
-            if np.sum(valid) > fit_order_eff + 2:
-                p = np.polyfit(x[valid], y[valid], fit_order_eff)
-                pd1 = np.polyder(p)
-                roots = np.roots(pd1)
-                # Keep only real roots
-                roots = roots[np.isreal(roots)].real
-                # Keep minima (second derivative > 0)
-                pd2 = np.polyder(pd1)
-                roots = roots[np.polyval(pd2, roots) > 0]
-                # Keep roots above K_INITIAL_CUTOFF cpm
-                roots = roots[roots >= np.log10(K_INITIAL_CUTOFF)]
-                K_limit_log = roots[0] if len(roots) > 0 else np.log10(K_95)
-            else:
-                K_limit_log = np.log10(K_95)
-        else:
-            K_limit_log = np.log10(K_95)
-
-        # Final integration limit
-        K_limit_log = min(K_limit_log, np.log10(K_95), np.log10(K_AA))
-        K_limit_log = np.clip(K_limit_log, np.log10(K_LIMIT_MIN), np.log10(K_LIMIT_MAX))
-
-        Range = np.where(10**K_limit_log >= K)[0]
-        if len(Range) > 0 and K[Range[-1]] < K_LIMIT_MIN:
-            # Extend to include at least 7 cpm
-            Range = np.append(Range, Range[-1] + 1)
-        if len(Range) < 3:
-            Range = np.arange(min(3, n_freq))
-
-        e_3 = ISOTROPY_FACTOR * nu * np.trapezoid(shear_spectrum[Range], K[Range])
-        e_3 = max(e_3, EPSILON_FLOOR)
-
-        # Iterative variance correction
-        e_4 = _variance_correction(e_3, K[Range[-1]], nu)
-
-        # Correct for missing variance at bottom end (odas l.635-638)
-        if len(K) > 2:
-            e_4_vc = e_4  # variance-corrected value for ratio test
-            phi_low = nasmyth_grid(e_4, nu, K[1:3])
-            e_4 = e_4 + LOW_K_CORRECTION_FACTOR * ISOTROPY_FACTOR * nu * K[1] * phi_low[0]
-            if e_4 / e_4_vc > LOW_K_CORRECTION_THRESHOLD:
-                e_4 = _variance_correction(e_4, K[Range[-1]], nu)
-
-        k_max = K[Range[-1]]
-
-    else:
-        # Inertial subrange method
-        method = 1
-        K_limit = min(K_AA, K_LIMIT_MAX)
-        e_4, k_max = _inertial_subrange(K, shear_spectrum, e_1, nu, K_limit)
-        Range = np.where(k_max >= K)[0]
-        if len(Range) < 3:
-            Range = np.arange(min(3, n_freq))
-
-    # Compute Nasmyth spectrum at final epsilon
-    nas_spec = nasmyth_grid(max(e_4, EPSILON_FLOOR), nu, K + 1e-30)
-
-    # Mean absolute deviation (log10, matching ODAS convention)
-    if len(Range) > 1:
-        spec_ratio = shear_spectrum[Range[1:]] / (nas_spec[Range[1:]] + 1e-30)
-        spec_ratio = spec_ratio[spec_ratio > 0]
-        mad = float(np.mean(np.abs(np.log10(spec_ratio)))) if len(spec_ratio) > 0 else float("nan")
-    else:
-        mad = float("nan")
-
-    # Figure of merit: observed/Nasmyth variance ratio in fit range
-    if len(Range) > 1:
-        obs_var = np.trapezoid(shear_spectrum[Range[1:]], K[Range[1:]])
-        nas_var = np.trapezoid(nas_spec[Range[1:]], K[Range[1:]])
-        fom = obs_var / nas_var if nas_var > 0 else np.nan
-    else:
-        fom = np.nan
-
-    # Lueck (2022a,b) figure of merit — FM < 1 for 97.5% of good spectra.
-    #   sigma^2_ln_Psi = (5/4)(N_f - N_v)^(-7/9)  spectral log-variance
-    #   T_M      = 0.8 + sqrt(1.56 / N_s)        97.5th percentile of MAD
-    #   FM       = MAD_ln / (T_M * sigma_ln_Psi)
-    # Uses natural log (not log10).
-    if len(Range) > 1 and len(spec_ratio) > 0:
-        N_s = len(spec_ratio)
-        mad_ln = np.mean(np.abs(np.log(spec_ratio)))  # natural log
-        N_eff = max(num_ffts - n_v, 1)
-        sigma_ln = np.sqrt(FM_SIGMA_COEFF * N_eff**FM_SIGMA_EXPONENT)
-        T_M = FM_TM_OFFSET + np.sqrt(FM_TM_COEFF / N_s)
-        FM = mad_ln / (T_M * sigma_ln)
-    else:
-        FM = np.nan
-
-    # K_max / K_95: fraction of theoretical spectrum resolved
-    K_95 = X_95 * (max(e_4, EPSILON_FLOOR) / nu**3) ** 0.25
-    K_max_ratio_val = k_max / K_95 if K_95 > 0 else np.nan
-
-    return e_4, k_max, mad, method, nas_spec, fom, K_max_ratio_val, FM
-
-
-def _variance_correction(e_3: float, K_upper: float, nu: float, max_iter: int = 50) -> float:
-    """Iterative variance correction using Lueck's resolved-variance model.
-
-    Matches ODAS ``get_diss_odas.m`` lines 623-634.  The fraction of total
-    Nasmyth variance resolved up to ``K_upper`` is approximated by
-    ``tanh(48x) - 2.9x*exp(-22.3x)`` where ``x = (K_upper / ks)^(4/3)``.
-
-    Parameters
-    ----------
-    e_3 : float
-        Uncorrected epsilon [W/kg] from integration up to ``K_upper``.
-    K_upper : float
-        Upper integration wavenumber [cpm].
-    nu : float
-        Kinematic viscosity [m²/s].
-    max_iter : int
-        Maximum iterations (default 50).
-
-    Returns
-    -------
-    float
-        Variance-corrected epsilon [W/kg].
-    """
-    e_new = e_3
-    for _ in range(max_iter):
-        x_limit = K_upper * (nu**3 / e_new) ** 0.25
-        x_limit = x_limit ** (4 / 3)
-        variance_resolved = (
-            np.tanh(VARIANCE_TANH_COEFF * x_limit)
-            - VARIANCE_EXP_COEFF * x_limit * np.exp(-VARIANCE_EXP_DECAY * x_limit)
-        )
-        if variance_resolved <= 0:
-            break
-        e_old = e_new
-        e_new = e_3 / variance_resolved
-        if e_new / e_old < VARIANCE_CONVERGENCE:
-            break
-    return e_new
-
-
-def _inertial_subrange(
-    K: np.ndarray, shear_spectrum: np.ndarray, e: float, nu: float, K_limit: float
-) -> tuple[float, float]:
-    """Fit to the inertial subrange to estimate epsilon.
-
-    Three-pass Nasmyth fit with flyer removal, then two-pass refit.
-
-    Returns
-    -------
-    epsilon : float
-        Dissipation rate [W/kg].
-    K_max : float
-        Upper fit limit [cpm].
-    """
-    isr_limit = min(X_ISR * (e / nu**3) ** 0.25, K_limit)
-    fit_range = np.where(isr_limit >= K)[0]
-    if len(fit_range) < 3:
-        fit_range = np.arange(min(3, len(K)))
-
-    k_max = K[fit_range[-1]]
-
-    # Iterative fitting (3 passes)
-    for _ in range(3):
-        nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
-        ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
-        ratio = ratio[ratio > 0]
-        if len(ratio) == 0:
-            break
-        fit_error = float(np.mean(np.log10(ratio)))
-        e = e * 10 ** (3 * fit_error / 2)
-
-    # Remove flyers
-    nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
-    if len(fit_range) > 2:
-        ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
-        ratio = ratio[ratio > 0]
-        if len(ratio) > 0:
-            fit_error_vec = np.log10(ratio)
-            bad = np.where(np.abs(fit_error_vec) > ISR_FLYER_THRESHOLD)[0]
-            if len(bad) > 0:
-                bad_limit = max(1, int(np.ceil(ISR_FLYER_FRAC * len(fit_range))))
-                if len(bad) > bad_limit:
-                    order = np.argsort(fit_error_vec[bad])[::-1]
-                    bad = bad[order[:bad_limit]]
-                # Remove bad indices from fit_range (offset by 1 for skipped DC)
-                keep = np.ones(len(fit_range), dtype=bool)
-                for b in bad:
-                    if b + 1 < len(keep):
-                        keep[b + 1] = False
-                fit_range = fit_range[keep]
-                k_max = K[fit_range[-1]]
-
-    # Re-fit (2 more passes)
-    for _ in range(2):
-        nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
-        ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
-        ratio = ratio[ratio > 0]
-        if len(ratio) == 0:
-            break
-        fit_error = float(np.mean(np.log10(ratio)))
-        e = e * 10 ** (3 * fit_error / 2)
-
-    return e, k_max
+    # _estimate_epsilon, _variance_correction, and _inertial_subrange
+    # are now imported from odas_tpw.scor160.l4 at the top of this module.
 
 
 # ---------------------------------------------------------------------------
