@@ -13,7 +13,7 @@ Estimated scope: ~150 lines changed across 4 files. No algorithm changes.
 
 ### 1a. Add warnings to chi.py silent NaN returns
 
-**File**: `src/microstructure_tpw/rsi/chi.py`
+**File**: `src/odas_tpw/rsi/chi.py`
 
 Add `import warnings` at top. At each of the 7 early-return NaN sites, add a `warnings.warn()` with the specific reason:
 
@@ -29,7 +29,7 @@ Add `import warnings` at top. At each of the 7 early-return NaN sites, add a `wa
 
 ### 1b. Narrow exception handling in cli.py and convert.py
 
-**Files**: `src/microstructure_tpw/rsi/cli.py`, `src/microstructure_tpw/rsi/convert.py`
+**Files**: `src/odas_tpw/rsi/cli.py`, `src/odas_tpw/rsi/convert.py`
 
 Replace `except Exception as e:` with specific exceptions:
 
@@ -62,7 +62,7 @@ if W < 0.01:
 
 ### 1d. Fix Goodman short-signal fallback
 
-**File**: `src/microstructure_tpw/rsi/goodman.py:62–80`
+**File**: `src/odas_tpw/rsi/goodman.py:62–80`
 
 Currently returns all-zero matrices despite comment saying "uncleaned spectra". Fix by computing actual auto-spectrum of shear when CSD fails:
 
@@ -209,7 +209,7 @@ Estimated scope: ~200 lines refactored across 3 files.
 
 ### 5b. Factor out two's complement helpers
 
-**File**: `src/microstructure_tpw/rsi/channels.py`
+**File**: `src/odas_tpw/rsi/channels.py`
 
 ```python
 def _twos_complement_14bit(data: np.ndarray) -> np.ndarray:

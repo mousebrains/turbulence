@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from microstructure_tpw.perturb.fp07_cal import (
+from odas_tpw.perturb.fp07_cal import (
     _calc_lag,
     _compute_RT_R0,
     _find_fp07_channels,

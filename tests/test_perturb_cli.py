@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from microstructure_tpw.perturb.cli import _load_and_merge, build_parser, main
+from odas_tpw.perturb.cli import _load_and_merge, build_parser, main
 
 
 class TestBuildParser:
@@ -114,7 +114,7 @@ class TestCmdRun:
         """CLI --output and --p-file-root override config values."""
         cfg = tmp_path / "test.yaml"
         cfg.write_text("files:\n  p_file_root: original/\n")
-        with patch("microstructure_tpw.perturb.pipeline.run_pipeline") as mock_rp:
+        with patch("odas_tpw.perturb.pipeline.run_pipeline") as mock_rp:
             main(["run", "-c", str(cfg), "-o", "myout/", "--p-file-root", "myroot/"])
         called_config = mock_rp.call_args[0][0]
         assert called_config["files"]["output_root"] == "myout/"
@@ -126,7 +126,7 @@ class TestCmdTrim:
         """Verify trim subcommand dispatches to run_trim."""
         cfg = tmp_path / "cfg.yaml"
         cfg.write_text("files:\n  p_file_root: VMP/\n")
-        with patch("microstructure_tpw.perturb.pipeline.run_trim", return_value=[]) as mock_rt:
+        with patch("odas_tpw.perturb.pipeline.run_trim", return_value=[]) as mock_rt:
             main(["trim", "-c", str(cfg)])
         mock_rt.assert_called_once()
 
@@ -136,7 +136,7 @@ class TestCmdMerge:
         """Verify merge subcommand dispatches to run_merge."""
         cfg = tmp_path / "cfg.yaml"
         cfg.write_text("files:\n  p_file_root: VMP/\n")
-        with patch("microstructure_tpw.perturb.pipeline.run_merge", return_value=[]) as mock_rm:
+        with patch("odas_tpw.perturb.pipeline.run_merge", return_value=[]) as mock_rm:
             main(["merge", "-c", str(cfg)])
         mock_rm.assert_called_once()
 

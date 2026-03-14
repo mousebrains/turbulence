@@ -3,7 +3,7 @@
 
 import numpy as np
 
-from microstructure_tpw.perturb.top_trim import compute_trim_depth, compute_trim_depths
+from odas_tpw.perturb.top_trim import compute_trim_depth, compute_trim_depths
 
 
 class TestComputeTrimDepth:

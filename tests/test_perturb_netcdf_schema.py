@@ -3,7 +3,7 @@
 
 import xarray as xr
 
-from microstructure_tpw.perturb.netcdf_schema import (
+from odas_tpw.perturb.netcdf_schema import (
     CHI_SCHEMA,
     COMBO_SCHEMA,
     CTD_SCHEMA,

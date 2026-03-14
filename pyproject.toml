@@ -36,9 +36,9 @@ dev = [
 Repository = "https://github.com/mousebrains/turbulence"
 
 [project.scripts]
-rsi-tpw = "microstructure_tpw.rsi.cli:main"
-perturb = "microstructure_tpw.perturb.cli:main"
-scor160-tpw = "microstructure_tpw.scor160.cli:main"
+rsi-tpw = "odas_tpw.rsi.cli:main"
+perturb = "odas_tpw.perturb.cli:main"
+scor160-tpw = "odas_tpw.scor160.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -58,21 +58,21 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
-    "microstructure_tpw.rsi.spectral",
-    "microstructure_tpw.rsi.ocean",
-    "microstructure_tpw.rsi.nasmyth",
-    "microstructure_tpw.rsi.deconvolve",
-    "microstructure_tpw.rsi.profile",
-    "microstructure_tpw.rsi.helpers",
-    "microstructure_tpw.rsi.convert",
-    "microstructure_tpw.chi.batchelor",
-    "microstructure_tpw.chi.fp07",
-    "microstructure_tpw.chi.chi",
-    "microstructure_tpw.scor160.io",
-    "microstructure_tpw.scor160.l2",
-    "microstructure_tpw.scor160.spectral",
-    "microstructure_tpw.scor160.ocean",
-    "microstructure_tpw.scor160.nasmyth",
+    "odas_tpw.rsi.spectral",
+    "odas_tpw.rsi.ocean",
+    "odas_tpw.rsi.nasmyth",
+    "odas_tpw.rsi.deconvolve",
+    "odas_tpw.rsi.profile",
+    "odas_tpw.rsi.helpers",
+    "odas_tpw.rsi.convert",
+    "odas_tpw.chi.batchelor",
+    "odas_tpw.chi.fp07",
+    "odas_tpw.chi.chi",
+    "odas_tpw.scor160.io",
+    "odas_tpw.scor160.l2",
+    "odas_tpw.scor160.spectral",
+    "odas_tpw.scor160.ocean",
+    "odas_tpw.scor160.nasmyth",
 ]
 # npt.ArrayLike causes many false positives with arithmetic/indexing;
 # no-any-return from numpy arithmetic expressions returning Any

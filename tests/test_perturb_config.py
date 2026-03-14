@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from microstructure_tpw.perturb.config import (
+from odas_tpw.perturb.config import (
     DEFAULTS,
     canonicalize,
     compute_hash,

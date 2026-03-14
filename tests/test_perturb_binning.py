@@ -4,7 +4,7 @@
 import numpy as np
 import xarray as xr
 
-from microstructure_tpw.perturb.binning import (
+from odas_tpw.perturb.binning import (
     _bin_array,
     bin_by_depth,
     bin_by_time,

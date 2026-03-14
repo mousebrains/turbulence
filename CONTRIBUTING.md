@@ -20,7 +20,7 @@ python -m pytest -n auto            # parallel (requires VMP data for MATLAB tes
 
 ```bash
 ruff check src/ tests/              # linting
-mypy src/microstructure_tpw/  # type checking
+mypy src/odas_tpw/  # type checking
 ```
 
 ## Pull Request Process

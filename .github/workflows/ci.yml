@@ -29,7 +29,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
-      - run: mypy src/microstructure_tpw/
+      - run: mypy src/odas_tpw/
 
   test:
     needs: lint
@@ -46,7 +46,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: pip install -e ".[dev]" pytest-cov
-      - run: python -m pytest --tb=short -q --cov=microstructure_tpw --cov-report=xml
+      - run: python -m pytest --tb=short -q --cov=odas_tpw --cov-report=xml
       - uses: codecov/codecov-action@v5
         if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
         with:

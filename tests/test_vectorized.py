@@ -27,7 +27,7 @@ class TestDetrendBatch:
         return rng.standard_normal(shape)
 
     def test_none(self):
-        from microstructure_tpw.scor160.spectral import _detrend_batch
+        from odas_tpw.scor160.spectral import _detrend_batch
 
         rng = np.random.default_rng(42)
         segs = self._make_segments(rng)
@@ -35,7 +35,7 @@ class TestDetrendBatch:
         np.testing.assert_array_equal(result, segs)
 
     def test_constant(self):
-        from microstructure_tpw.scor160.spectral import _detrend_batch
+        from odas_tpw.scor160.spectral import _detrend_batch
 
         rng = np.random.default_rng(42)
         segs = self._make_segments(rng)
@@ -46,7 +46,7 @@ class TestDetrendBatch:
         np.testing.assert_allclose(means, 0, atol=1e-12)
 
     def test_linear_matches_per_segment(self):
-        from microstructure_tpw.scor160.spectral import _detrend_batch, _detrend_segment
+        from odas_tpw.scor160.spectral import _detrend_batch, _detrend_segment
 
         rng = np.random.default_rng(42)
         segs = self._make_segments(rng, shape=(3, 2, 256, 2))
@@ -60,7 +60,7 @@ class TestDetrendBatch:
                     np.testing.assert_allclose(result[w, s, :, c], ref, atol=1e-10)
 
     def test_parabolic_matches_per_segment(self):
-        from microstructure_tpw.scor160.spectral import _detrend_batch, _detrend_segment
+        from odas_tpw.scor160.spectral import _detrend_batch, _detrend_segment
 
         rng = np.random.default_rng(42)
         segs = self._make_segments(rng, shape=(2, 2, 128, 1))
@@ -73,7 +73,7 @@ class TestDetrendBatch:
                 np.testing.assert_allclose(result[w, s, :, 0], ref, atol=1e-8)
 
     def test_cubic_matches_per_segment(self):
-        from microstructure_tpw.scor160.spectral import _detrend_batch, _detrend_segment
+        from odas_tpw.scor160.spectral import _detrend_batch, _detrend_segment
 
         rng = np.random.default_rng(42)
         segs = self._make_segments(rng, shape=(2, 2, 128, 1))
@@ -108,7 +108,7 @@ class TestCsdMatrixBatch:
         }
 
     def test_auto_matches_per_window(self, random_windows):
-        from microstructure_tpw.scor160.spectral import csd_matrix, csd_matrix_batch
+        from odas_tpw.scor160.spectral import csd_matrix, csd_matrix_batch
 
         d = random_windows
         Cxy_b, F_b, _, _ = csd_matrix_batch(
@@ -124,7 +124,7 @@ class TestCsdMatrixBatch:
         np.testing.assert_array_equal(F_b, F_ref)
 
     def test_cross_matches_per_window(self, random_windows):
-        from microstructure_tpw.scor160.spectral import csd_matrix, csd_matrix_batch
+        from odas_tpw.scor160.spectral import csd_matrix, csd_matrix_batch
 
         d = random_windows
         Cxy_b, _F_b, Cxx_b, Cyy_b = csd_matrix_batch(
@@ -144,7 +144,7 @@ class TestCsdMatrixBatch:
 
     def test_single_window(self):
         """Batch of 1 should match scalar csd_matrix."""
-        from microstructure_tpw.scor160.spectral import csd_matrix, csd_matrix_batch
+        from odas_tpw.scor160.spectral import csd_matrix, csd_matrix_batch
 
         rng = np.random.default_rng(99)
         x = rng.standard_normal((1, 512, 2))
@@ -154,7 +154,7 @@ class TestCsdMatrixBatch:
 
     def test_auto_diagonal_positive_real(self, random_windows):
         """Auto-spectral diagonal should be real and positive."""
-        from microstructure_tpw.scor160.spectral import csd_matrix_batch
+        from odas_tpw.scor160.spectral import csd_matrix_batch
 
         d = random_windows
         Cxy, _, _, _ = csd_matrix_batch(
@@ -166,19 +166,19 @@ class TestCsdMatrixBatch:
             assert np.all(np.real(diag) > 0)
 
     def test_invalid_ndim_raises(self):
-        from microstructure_tpw.scor160.spectral import csd_matrix_batch
+        from odas_tpw.scor160.spectral import csd_matrix_batch
 
         with pytest.raises(ValueError, match="3-D"):
             csd_matrix_batch(np.zeros((512, 2)), None, 256, 512.0)
 
     def test_diss_length_too_short_raises(self):
-        from microstructure_tpw.scor160.spectral import csd_matrix_batch
+        from odas_tpw.scor160.spectral import csd_matrix_batch
 
         with pytest.raises(ValueError, match="too short"):
             csd_matrix_batch(np.zeros((5, 100, 2)), None, 256, 512.0)
 
     def test_shape_mismatch_raises(self):
-        from microstructure_tpw.scor160.spectral import csd_matrix_batch
+        from odas_tpw.scor160.spectral import csd_matrix_batch
 
         x = np.zeros((5, 512, 2))
         y = np.zeros((3, 512, 2))  # different n_windows
@@ -187,7 +187,7 @@ class TestCsdMatrixBatch:
 
     def test_constant_detrend(self):
         """Constant detrend should still match per-window."""
-        from microstructure_tpw.scor160.spectral import csd_matrix, csd_matrix_batch
+        from odas_tpw.scor160.spectral import csd_matrix, csd_matrix_batch
 
         rng = np.random.default_rng(77)
         x = rng.standard_normal((3, 512, 2))
@@ -206,7 +206,7 @@ class TestNasmythGrid:
     """Validate nasmyth_grid matches nasmyth within interpolation tolerance."""
 
     def test_matches_nasmyth(self):
-        from microstructure_tpw.scor160.nasmyth import nasmyth, nasmyth_grid
+        from odas_tpw.scor160.nasmyth import nasmyth, nasmyth_grid
 
         k = np.logspace(-1, 2, 200)
         nu = 1.2e-6
@@ -216,41 +216,41 @@ class TestNasmythGrid:
             np.testing.assert_allclose(grid, ref, rtol=1e-4)
 
     def test_shape_preserved(self):
-        from microstructure_tpw.scor160.nasmyth import nasmyth_grid
+        from odas_tpw.scor160.nasmyth import nasmyth_grid
 
         k = np.logspace(-1, 2, 50)
         phi = nasmyth_grid(1e-7, 1.2e-6, k)
         assert phi.shape == (50,)
 
     def test_positive(self):
-        from microstructure_tpw.scor160.nasmyth import nasmyth_grid
+        from odas_tpw.scor160.nasmyth import nasmyth_grid
 
         k = np.logspace(-1, 2, 50)
         phi = nasmyth_grid(1e-7, 1.2e-6, k)
         assert np.all(phi > 0)
 
     def test_negative_epsilon_warns(self):
-        from microstructure_tpw.scor160.nasmyth import nasmyth_grid
+        from odas_tpw.scor160.nasmyth import nasmyth_grid
 
         with pytest.warns(UserWarning):
             result = nasmyth_grid(-1e-8, 1e-6, np.array([1, 10]))
         assert np.all(np.isnan(result))
 
     def test_zero_epsilon_warns(self):
-        from microstructure_tpw.scor160.nasmyth import nasmyth_grid
+        from odas_tpw.scor160.nasmyth import nasmyth_grid
 
         with pytest.warns(UserWarning):
             result = nasmyth_grid(0.0, 1e-6, np.array([1, 10]))
         assert np.all(np.isnan(result))
 
     def test_zero_nu_raises(self):
-        from microstructure_tpw.scor160.nasmyth import nasmyth_grid
+        from odas_tpw.scor160.nasmyth import nasmyth_grid
 
         with pytest.raises(ValueError):
             nasmyth_grid(1e-8, 0.0, np.array([1, 10]))
 
     def test_higher_epsilon_higher_spectrum(self):
-        from microstructure_tpw.scor160.nasmyth import nasmyth_grid
+        from odas_tpw.scor160.nasmyth import nasmyth_grid
 
         k = np.logspace(0, 2, 50)
         nu = 1e-6
@@ -259,14 +259,14 @@ class TestNasmythGrid:
         assert np.mean(phi_high) > np.mean(phi_low)
 
     def test_singleton_reused(self):
-        from microstructure_tpw.scor160.nasmyth import _get_grid
+        from odas_tpw.scor160.nasmyth import _get_grid
 
         g1 = _get_grid()
         g2 = _get_grid()
         assert g1 is g2
 
     def test_interp_g2_scalar(self):
-        from microstructure_tpw.scor160.nasmyth import NasmythGrid, _nasmyth_g2
+        from odas_tpw.scor160.nasmyth import NasmythGrid, _nasmyth_g2
 
         grid = NasmythGrid(n=2000)
         x = 0.05
@@ -277,7 +277,7 @@ class TestNasmythGrid:
 
     def test_interp_g2_out_of_range_fallback(self):
         """Values outside grid range should fall back to direct computation."""
-        from microstructure_tpw.scor160.nasmyth import NasmythGrid, _nasmyth_g2
+        from odas_tpw.scor160.nasmyth import NasmythGrid, _nasmyth_g2
 
         grid = NasmythGrid(n=100, x_min=1e-4, x_max=0.5)
         x = np.array([1e-7, 0.8])  # both outside range
@@ -301,7 +301,7 @@ class TestCleanShearSpecBatch:
         }
 
     def test_matches_per_window(self):
-        from microstructure_tpw.scor160.goodman import clean_shear_spec, clean_shear_spec_batch
+        from odas_tpw.scor160.goodman import clean_shear_spec, clean_shear_spec_batch
 
         rng = np.random.default_rng(42)
         d = self._make_windows(rng, n_windows=5)
@@ -321,7 +321,7 @@ class TestCleanShearSpecBatch:
         np.testing.assert_array_equal(F_batch, F_ref)
 
     def test_single_window(self):
-        from microstructure_tpw.scor160.goodman import clean_shear_spec, clean_shear_spec_batch
+        from odas_tpw.scor160.goodman import clean_shear_spec, clean_shear_spec_batch
 
         rng = np.random.default_rng(99)
         d = self._make_windows(rng, n_windows=1)
@@ -335,7 +335,7 @@ class TestCleanShearSpecBatch:
         np.testing.assert_allclose(clean_batch[0], clean_ref, atol=1e-10)
 
     def test_cleaned_spectra_real(self):
-        from microstructure_tpw.scor160.goodman import clean_shear_spec_batch
+        from odas_tpw.scor160.goodman import clean_shear_spec_batch
 
         rng = np.random.default_rng(42)
         d = self._make_windows(rng)
@@ -344,7 +344,7 @@ class TestCleanShearSpecBatch:
 
     def test_diagonal_positive(self):
         """Cleaned auto-spectra (diagonal) should be positive for well-conditioned data."""
-        from microstructure_tpw.scor160.goodman import clean_shear_spec_batch
+        from odas_tpw.scor160.goodman import clean_shear_spec_batch
 
         rng = np.random.default_rng(42)
         d = self._make_windows(rng, n_windows=3)
@@ -357,7 +357,7 @@ class TestCleanShearSpecBatch:
 
     def test_noise_reduction(self):
         """Cleaning should reduce vibration-coherent energy."""
-        from microstructure_tpw.scor160.goodman import clean_shear_spec, clean_shear_spec_batch
+        from odas_tpw.scor160.goodman import clean_shear_spec, clean_shear_spec_batch
 
         rng = np.random.default_rng(42)
         n_win = 3
@@ -423,7 +423,7 @@ class TestVectorizedProfileDiss:
         }
 
     def test_output_shape(self, synthetic_profile):
-        from microstructure_tpw.rsi.dissipation import _compute_profile_diss
+        from odas_tpw.rsi.dissipation import _compute_profile_diss
 
         d = synthetic_profile
         ds = _compute_profile_diss(
@@ -437,7 +437,7 @@ class TestVectorizedProfileDiss:
         assert ds.sizes["time"] > 0
 
     def test_epsilon_finite_and_positive(self, synthetic_profile):
-        from microstructure_tpw.rsi.dissipation import _compute_profile_diss
+        from odas_tpw.rsi.dissipation import _compute_profile_diss
 
         d = synthetic_profile
         ds = _compute_profile_diss(
@@ -449,7 +449,7 @@ class TestVectorizedProfileDiss:
         assert np.all(eps > 0)
 
     def test_spectra_stored(self, synthetic_profile):
-        from microstructure_tpw.rsi.dissipation import _compute_profile_diss
+        from odas_tpw.rsi.dissipation import _compute_profile_diss
 
         d = synthetic_profile
         ds = _compute_profile_diss(
@@ -464,7 +464,7 @@ class TestVectorizedProfileDiss:
         assert np.all(np.isfinite(ds["spec_nasmyth"].values))
 
     def test_no_goodman_path(self, synthetic_profile):
-        from microstructure_tpw.rsi.dissipation import _compute_profile_diss
+        from odas_tpw.rsi.dissipation import _compute_profile_diss
 
         d = synthetic_profile
         ds = _compute_profile_diss(
@@ -475,7 +475,7 @@ class TestVectorizedProfileDiss:
         assert np.all(np.isfinite(ds["epsilon"].values))
 
     def test_speed_stored(self, synthetic_profile):
-        from microstructure_tpw.rsi.dissipation import _compute_profile_diss
+        from odas_tpw.rsi.dissipation import _compute_profile_diss
 
         d = synthetic_profile
         ds = _compute_profile_diss(
@@ -485,7 +485,7 @@ class TestVectorizedProfileDiss:
         np.testing.assert_allclose(ds["speed"].values, 0.6, atol=0.01)
 
     def test_pressure_mean_range(self, synthetic_profile):
-        from microstructure_tpw.rsi.dissipation import _compute_profile_diss
+        from odas_tpw.rsi.dissipation import _compute_profile_diss
 
         d = synthetic_profile
         ds = _compute_profile_diss(
@@ -497,7 +497,7 @@ class TestVectorizedProfileDiss:
         assert np.all(P_means <= 50)
 
     def test_with_salinity(self, synthetic_profile):
-        from microstructure_tpw.rsi.dissipation import _compute_profile_diss
+        from odas_tpw.rsi.dissipation import _compute_profile_diss
 
         d = synthetic_profile
         N = d["shear"].shape[0]
@@ -521,9 +521,9 @@ class TestVectorizedIntegration:
     """Integration test: vectorized get_diss on a real .p file."""
 
     def test_get_diss_produces_valid_results(self):
-        from microstructure_tpw.rsi.dissipation import get_diss
+        from odas_tpw.rsi.dissipation import get_diss
 
-        from microstructure_tpw.rsi.p_file import PFile
+        from odas_tpw.rsi.p_file import PFile
 
         pf = PFile(P_FILES[5])  # file 0006
         results = get_diss(pf)
@@ -536,9 +536,9 @@ class TestVectorizedIntegration:
             assert np.all(eps < 1.0)
 
     def test_qc_variables_present(self):
-        from microstructure_tpw.rsi.dissipation import get_diss
+        from odas_tpw.rsi.dissipation import get_diss
 
-        from microstructure_tpw.rsi.p_file import PFile
+        from odas_tpw.rsi.p_file import PFile
 
         pf = PFile(P_FILES[5])
         results = get_diss(pf)
@@ -548,9 +548,9 @@ class TestVectorizedIntegration:
             assert np.any(np.isfinite(ds["fom"].values))
 
     def test_cf_attributes(self):
-        from microstructure_tpw.rsi.dissipation import get_diss
+        from odas_tpw.rsi.dissipation import get_diss
 
-        from microstructure_tpw.rsi.p_file import PFile
+        from odas_tpw.rsi.p_file import PFile
 
         pf = PFile(P_FILES[5])
         results = get_diss(pf)

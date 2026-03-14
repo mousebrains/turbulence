@@ -8,7 +8,7 @@ Processing and analysis code for calculating turbulent kinetic energy (TKE) and 
 
 ## Package: microstructure-tpw
 
-Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/microstructure_tpw/`.
+Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas_tpw/`.
 
 ### Subpackages
 
@@ -58,8 +58,8 @@ rsi-tpw eps VMP/*.p --salinity 34.5 -o epsilon/  # custom salinity
 ### Python API
 
 ```python
-from microstructure_tpw.rsi import PFile, get_diss, get_chi
-from microstructure_tpw.scor160.ocean import visc, density, buoyancy_freq
+from odas_tpw.rsi import PFile, get_diss, get_chi
+from odas_tpw.scor160.ocean import visc, density, buoyancy_freq
 
 pf = PFile("VMP/ARCTERX_Thompson_2025_SN479_0001.p")
 pf.channels["T1"]    # numpy array, physical units (°C)

@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from microstructure_tpw.perturb.ctd import _time_bin, ctd_bin_file
-from microstructure_tpw.perturb.gps import GPSFixed
+from odas_tpw.perturb.ctd import _time_bin, ctd_bin_file
+from odas_tpw.perturb.gps import GPSFixed
 
 
 class _PFileStub:

@@ -18,7 +18,7 @@ _chi_cache = {}
 def _cached_get_diss(p_path, **kwargs):
     key = (Path(p_path).resolve(), frozenset(kwargs.items()))
     if key not in _diss_cache:
-        from microstructure_tpw.rsi.dissipation import get_diss
+        from odas_tpw.rsi.dissipation import get_diss
 
         _diss_cache[key] = get_diss(p_path, **kwargs)
     return _diss_cache[key]
@@ -27,7 +27,7 @@ def _cached_get_diss(p_path, **kwargs):
 def _cached_get_chi(p_path, **kwargs):
     key = (Path(p_path).resolve(), frozenset(kwargs.items()))
     if key not in _chi_cache:
-        from microstructure_tpw.rsi.chi_io import get_chi
+        from odas_tpw.rsi.chi_io import get_chi
 
         _chi_cache[key] = get_chi(p_path, **kwargs)
     return _chi_cache[key]
@@ -55,7 +55,7 @@ def sample_p_file():
 @pytest.fixture
 def sample_nc_file(tmp_path, sample_p_file):
     """Convert the sample .p file to NetCDF and return the path."""
-    from microstructure_tpw.rsi.convert import p_to_L1
+    from odas_tpw.rsi.convert import p_to_L1
 
     nc_path = tmp_path / "SN479_0006.nc"
     p_to_L1(sample_p_file, nc_path)

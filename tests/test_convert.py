@@ -20,7 +20,7 @@ def test_p_to_L1_roundtrip(skip_no_data, tmp_path):
     """Convert .p -> L1 .nc, read back, verify ATOMIX group structure."""
     import netCDF4 as nc
 
-    from microstructure_tpw.rsi.convert import p_to_L1
+    from odas_tpw.rsi.convert import p_to_L1
 
     out_path = tmp_path / "test_output.nc"
     pf, nc_path = p_to_L1(SAMPLE_FILE, out_path)
@@ -68,7 +68,7 @@ def test_p_to_L1_default_path(skip_no_data, tmp_path, monkeypatch):
     local_p = tmp_path / SAMPLE_FILE.name
     shutil.copy2(SAMPLE_FILE, local_p)
 
-    from microstructure_tpw.rsi.convert import p_to_L1
+    from odas_tpw.rsi.convert import p_to_L1
 
     _pf, nc_path = p_to_L1(local_p)
     assert nc_path.exists()
@@ -80,7 +80,7 @@ def test_p_to_L1_shear_sensors(skip_no_data, tmp_path):
     """SHEAR variable should have sensor-indexed dimension."""
     import netCDF4 as nc
 
-    from microstructure_tpw.rsi.convert import p_to_L1
+    from odas_tpw.rsi.convert import p_to_L1
 
     out_path = tmp_path / "test_shear.nc"
     pf, nc_path = p_to_L1(SAMPLE_FILE, out_path)
@@ -108,7 +108,7 @@ def test_p_to_L1_gradt(skip_no_data, tmp_path):
     """GRADT should contain temperature gradient in K/m."""
     import netCDF4 as nc
 
-    from microstructure_tpw.rsi.convert import p_to_L1
+    from odas_tpw.rsi.convert import p_to_L1
 
     out_path = tmp_path / "test_gradt.nc"
     pf, nc_path = p_to_L1(SAMPLE_FILE, out_path)
@@ -133,7 +133,7 @@ def test_p_to_L1_gradt(skip_no_data, tmp_path):
 
 def test_convert_all_serial(skip_no_data, tmp_path):
     """convert_all with jobs=1 (serial) should convert files."""
-    from microstructure_tpw.rsi.convert import convert_all
+    from odas_tpw.rsi.convert import convert_all
 
     convert_all([SAMPLE_FILE], tmp_path, jobs=1)
     nc_files = list(tmp_path.glob("*.nc"))
@@ -143,7 +143,7 @@ def test_convert_all_serial(skip_no_data, tmp_path):
 
 def test_convert_all_parallel(skip_no_data, tmp_path):
     """convert_all with jobs=2 (parallel) should convert files."""
-    from microstructure_tpw.rsi.convert import convert_all
+    from odas_tpw.rsi.convert import convert_all
 
     convert_all([SAMPLE_FILE], tmp_path, jobs=2)
     nc_files = list(tmp_path.glob("*.nc"))
@@ -155,7 +155,7 @@ def test_cf_compliance(skip_no_data, tmp_path):
     """Output NetCDF should be CF-1.13 compliant with ATOMIX structure."""
     import netCDF4 as nc
 
-    from microstructure_tpw.rsi.convert import p_to_L1
+    from odas_tpw.rsi.convert import p_to_L1
 
     out_path = tmp_path / "test_cf.nc"
     _pf, nc_path = p_to_L1(SAMPLE_FILE, out_path)
@@ -184,7 +184,7 @@ def test_cf_compliance(skip_no_data, tmp_path):
 
 def test_backward_compat_alias(skip_no_data, tmp_path):
     """p_to_netcdf should still work as an alias for p_to_L1."""
-    from microstructure_tpw.rsi.convert import p_to_L1, p_to_netcdf
+    from odas_tpw.rsi.convert import p_to_L1, p_to_netcdf
 
     assert p_to_netcdf is p_to_L1
 

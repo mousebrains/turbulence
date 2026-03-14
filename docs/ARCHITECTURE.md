@@ -1,16 +1,16 @@
 # Software Architecture
 
-One top-level package (`microstructure_tpw`) with four subpackages in a
+One top-level package (`odas_tpw`) with four subpackages in a
 layered dependency hierarchy.  Each layer can only import from layers below it.
 
 ```
-microstructure_tpw.perturb     Campaign pipeline (VMP data → science-ready NetCDF)
+odas_tpw.perturb     Campaign pipeline (VMP data → science-ready NetCDF)
     ↓
-microstructure_tpw.rsi         Rockland .P file I/O, NetCDF conversion, profiles
+odas_tpw.rsi         Rockland .P file I/O, NetCDF conversion, profiles
     ↓
-microstructure_tpw.chi         Thermal variance dissipation (χ) from FP07 thermistors
+odas_tpw.chi         Thermal variance dissipation (χ) from FP07 thermistors
     ↓
-microstructure_tpw.scor160     SCOR-160 / ATOMIX spectral processing + shared physics
+odas_tpw.scor160     SCOR-160 / ATOMIX spectral processing + shared physics
 ```
 
 ---

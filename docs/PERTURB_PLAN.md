@@ -452,13 +452,13 @@ Built bottom-up by dependency:
 
 | File | Why |
 |------|-----|
-| `src/microstructure_tpw/rsi/p_file.py` | PFile class, header parsing, channel reading — reused by trim, merge, fp07_cal |
-| `src/microstructure_tpw/rsi/dissipation.py` | `get_diss()` output structure — epsilon_combine must extend it |
-| `src/microstructure_tpw/rsi/chi.py` | `get_chi()` with `epsilon_ds` param — Method 1 integration |
-| `src/microstructure_tpw/rsi/config.py` | Config patterns to extend: `merge_config`, `compute_hash`, `resolve_output_dir` |
-| `src/microstructure_tpw/rsi/cli.py` | CLI patterns: arg parsing, config loading, parallel processing, output dir setup |
-| `src/microstructure_tpw/rsi/profile.py` | `get_profiles()`, `extract_profiles()` — profile detection reuse |
-| `src/microstructure_tpw/rsi/ocean.py` | `visc()`, `density()` — seawater property base |
+| `src/odas_tpw/rsi/p_file.py` | PFile class, header parsing, channel reading — reused by trim, merge, fp07_cal |
+| `src/odas_tpw/rsi/dissipation.py` | `get_diss()` output structure — epsilon_combine must extend it |
+| `src/odas_tpw/rsi/chi.py` | `get_chi()` with `epsilon_ds` param — Method 1 integration |
+| `src/odas_tpw/rsi/config.py` | Config patterns to extend: `merge_config`, `compute_hash`, `resolve_output_dir` |
+| `src/odas_tpw/rsi/cli.py` | CLI patterns: arg parsing, config loading, parallel processing, output dir setup |
+| `src/odas_tpw/rsi/profile.py` | `get_profiles()`, `extract_profiles()` — profile detection reuse |
+| `src/odas_tpw/rsi/ocean.py` | `visc()`, `density()` — seawater property base |
 | `pyproject.toml` | Add `perturb` CLI entry point |
 
 ### Key Matlab source files (https://github.com/jessecusack/perturb)

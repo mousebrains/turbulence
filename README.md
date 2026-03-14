@@ -20,7 +20,7 @@ Python tools for reading Rockland Scientific microprofiler data and computing tu
 
 A **MATLAB implementation** of the chi calculation is also available — see [matlab/MATLAB.md](matlab/MATLAB.md).
 
-The package is organized into four subpackages under `microstructure_tpw`:
+The package is organized into four subpackages under `odas_tpw`:
 
 - **rsi** — Rockland Scientific instrument I/O, NetCDF conversion, profiles, epsilon/chi orchestration
 - **chi** — Chi (thermal variance dissipation) calculation
@@ -48,7 +48,7 @@ rsi-tpw chi VMP/*.p --epsilon-dir epsilon/ -o chi/
 ```
 
 ```python
-from microstructure_tpw.rsi import PFile, get_diss, get_chi
+from odas_tpw.rsi import PFile, get_diss, get_chi
 
 eps_results = get_diss("VMP/file.p")
 chi_results = get_chi("VMP/file.p", epsilon_ds=eps_results[0])

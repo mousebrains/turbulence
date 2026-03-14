@@ -43,11 +43,11 @@ import numpy as np
 import xarray as xr
 
 # rsi-tpw imports
-from microstructure_tpw.rsi.dissipation import (
+from odas_tpw.rsi.dissipation import (
     E_ISR_THRESHOLD,
     _estimate_epsilon,
 )
-from microstructure_tpw.rsi.ocean import visc35
+from odas_tpw.rsi.ocean import visc35
 
 # ---------------------------------------------------------------------------
 # ATOMIX benchmark dataset catalog

@@ -13,19 +13,19 @@ import pytest
 
 class TestVisc35:
     def test_zero_celsius(self):
-        from microstructure_tpw.scor160.ocean import visc35
+        from odas_tpw.scor160.ocean import visc35
 
         nu = visc35(0.0)
         assert 1.7e-6 < nu < 1.9e-6, f"visc35(0) = {nu}"
 
     def test_twenty_celsius(self):
-        from microstructure_tpw.scor160.ocean import visc35
+        from odas_tpw.scor160.ocean import visc35
 
         nu = visc35(20.0)
         assert 1.0e-6 < nu < 1.1e-6, f"visc35(20) = {nu}"
 
     def test_array(self):
-        from microstructure_tpw.scor160.ocean import visc35
+        from odas_tpw.scor160.ocean import visc35
 
         T = np.array([0.0, 10.0, 20.0])
         nu = visc35(T)
@@ -36,21 +36,21 @@ class TestVisc35:
 class TestVisc:
     def test_s35_p0_matches_visc35(self):
         """visc(T, S=35, P=0) should match visc35(T)."""
-        from microstructure_tpw.scor160.ocean import visc, visc35
+        from odas_tpw.scor160.ocean import visc, visc35
 
         T = np.array([0.0, 10.0, 20.0])
         np.testing.assert_array_equal(visc(T, 35, 0), visc35(T))
 
     def test_different_salinity(self):
         """Non-default salinity should give different viscosity."""
-        from microstructure_tpw.scor160.ocean import visc
+        from odas_tpw.scor160.ocean import visc
 
         nu_35 = visc(10.0, 35, 0)
         nu_30 = visc(10.0, 30, 0)
         assert nu_35 != nu_30
 
     def test_scalar(self):
-        from microstructure_tpw.scor160.ocean import visc
+        from odas_tpw.scor160.ocean import visc
 
         nu = visc(10.0, 34.5, 100.0)
         assert 1e-7 < nu < 1e-5
@@ -58,13 +58,13 @@ class TestVisc:
 
 class TestDensity:
     def test_reasonable_range(self):
-        from microstructure_tpw.scor160.ocean import density
+        from odas_tpw.scor160.ocean import density
 
         rho = density(10.0, 35.0, 0.0)
         assert 1020 < rho < 1030
 
     def test_salinity_increases_density(self):
-        from microstructure_tpw.scor160.ocean import density
+        from odas_tpw.scor160.ocean import density
 
         rho_low = density(10.0, 30.0, 0.0)
         rho_high = density(10.0, 38.0, 0.0)
@@ -73,7 +73,7 @@ class TestDensity:
 
 class TestBuoyancyFreq:
     def test_stable_stratification(self):
-        from microstructure_tpw.scor160.ocean import buoyancy_freq
+        from odas_tpw.scor160.ocean import buoyancy_freq
 
         T = np.array([20.0, 15.0, 10.0, 5.0])
         S = np.full(4, 35.0)
@@ -92,21 +92,21 @@ class TestBuoyancyFreq:
 
 class TestNasmyth:
     def test_shape(self):
-        from microstructure_tpw.scor160.nasmyth import nasmyth
+        from odas_tpw.scor160.nasmyth import nasmyth
 
         k = np.logspace(-1, 3, 100)
         phi = nasmyth(1e-7, 1.2e-6, k)
         assert phi.shape == (100,)
 
     def test_positive(self):
-        from microstructure_tpw.scor160.nasmyth import nasmyth
+        from odas_tpw.scor160.nasmyth import nasmyth
 
         k = np.logspace(-1, 3, 100)
         phi = nasmyth(1e-7, 1.2e-6, k)
         assert np.all(phi > 0)
 
     def test_higher_epsilon_higher_spectrum(self):
-        from microstructure_tpw.scor160.nasmyth import nasmyth
+        from odas_tpw.scor160.nasmyth import nasmyth
 
         k = np.logspace(0, 2, 50)
         nu = 1e-6
@@ -116,7 +116,7 @@ class TestNasmyth:
         assert np.mean(phi_high) > np.mean(phi_low)
 
     def test_nondim(self):
-        from microstructure_tpw.scor160.nasmyth import nasmyth_nondim
+        from odas_tpw.scor160.nasmyth import nasmyth_nondim
 
         x = np.logspace(-4, 0, 100)
         G2 = nasmyth_nondim(x)
@@ -125,7 +125,7 @@ class TestNasmyth:
 
     def test_lueck_coefficients(self):
         """Verify we use the Lueck coefficients, not older Oakey ones."""
-        from microstructure_tpw.scor160.nasmyth import _nasmyth_g2
+        from odas_tpw.scor160.nasmyth import _nasmyth_g2
 
         x = np.array([0.01])
         G2 = _nasmyth_g2(x)
@@ -142,7 +142,7 @@ class TestNasmyth:
 class TestCSD:
     def test_white_noise_flat(self):
         """White noise should produce an approximately flat spectrum."""
-        from microstructure_tpw.scor160.spectral import csd_odas
+        from odas_tpw.scor160.spectral import csd_odas
 
         rng = np.random.default_rng(42)
         x = rng.standard_normal(10000)
@@ -158,7 +158,7 @@ class TestCSD:
 
     def test_variance_preservation(self):
         """Integral of auto-spectrum should approximate signal variance."""
-        from microstructure_tpw.scor160.spectral import csd_odas
+        from odas_tpw.scor160.spectral import csd_odas
 
         rng = np.random.default_rng(123)
         x = rng.standard_normal(8192)
@@ -169,7 +169,7 @@ class TestCSD:
         assert abs(integral - np.var(x)) / np.var(x) < 0.15
 
     def test_cross_spectrum_returns_all(self):
-        from microstructure_tpw.scor160.spectral import csd_odas
+        from odas_tpw.scor160.spectral import csd_odas
 
         rng = np.random.default_rng(42)
         x = rng.standard_normal(2048)
@@ -181,7 +181,7 @@ class TestCSD:
 
     def test_parabolic_detrend(self):
         """Parabolic detrend should produce valid spectrum."""
-        from microstructure_tpw.scor160.spectral import csd_odas
+        from odas_tpw.scor160.spectral import csd_odas
 
         rng = np.random.default_rng(42)
         x = rng.standard_normal(4096) + np.linspace(0, 1, 4096) ** 2
@@ -192,7 +192,7 @@ class TestCSD:
 
     def test_cubic_detrend(self):
         """Cubic detrend should produce valid spectrum."""
-        from microstructure_tpw.scor160.spectral import csd_odas
+        from odas_tpw.scor160.spectral import csd_odas
 
         rng = np.random.default_rng(42)
         x = rng.standard_normal(4096) + np.linspace(0, 1, 4096) ** 3
@@ -202,7 +202,7 @@ class TestCSD:
         assert np.all(np.isfinite(Pxx))
 
     def test_matrix_auto(self):
-        from microstructure_tpw.scor160.spectral import csd_matrix
+        from odas_tpw.scor160.spectral import csd_matrix
 
         rng = np.random.default_rng(42)
         x = rng.standard_normal((4096, 2))
@@ -214,7 +214,7 @@ class TestCSD:
         assert np.all(np.real(Cxy[:, 1, 1]) > 0)
 
     def test_matrix_cross(self):
-        from microstructure_tpw.scor160.spectral import csd_matrix
+        from odas_tpw.scor160.spectral import csd_matrix
 
         rng = np.random.default_rng(42)
         x = rng.standard_normal((4096, 2))
@@ -233,7 +233,7 @@ class TestCSD:
 class TestDespike:
     def test_clean_signal_unchanged(self):
         """A clean sinusoidal signal should not be modified."""
-        from microstructure_tpw.scor160.despike import despike
+        from odas_tpw.scor160.despike import despike
 
         t = np.arange(0, 10, 1 / 512)
         x = np.sin(2 * np.pi * 5 * t)
@@ -244,7 +244,7 @@ class TestDespike:
 
     def test_spike_detected(self):
         """An obvious spike should be detected and removed."""
-        from microstructure_tpw.scor160.despike import despike
+        from odas_tpw.scor160.despike import despike
 
         t = np.arange(0, 10, 1 / 512)
         x = np.sin(2 * np.pi * 5 * t) * 0.1
@@ -257,7 +257,7 @@ class TestDespike:
 
     def test_spike_at_start(self):
         """Spike at index 0 should be handled without error."""
-        from microstructure_tpw.scor160.despike import despike
+        from odas_tpw.scor160.despike import despike
 
         t = np.arange(0, 10, 1 / 512)
         x = np.sin(2 * np.pi * 5 * t) * 0.1
@@ -267,7 +267,7 @@ class TestDespike:
 
     def test_spike_at_end(self):
         """Spike at last index should be handled without error."""
-        from microstructure_tpw.scor160.despike import despike
+        from odas_tpw.scor160.despike import despike
 
         t = np.arange(0, 10, 1 / 512)
         x = np.sin(2 * np.pi * 5 * t) * 0.1
@@ -277,7 +277,7 @@ class TestDespike:
 
     def test_all_spike_signal(self):
         """All-constant signal with a huge spike everywhere → replacement=0 path."""
-        from microstructure_tpw.scor160.despike import despike
+        from odas_tpw.scor160.despike import despike
 
         # Signal where most values are huge → they all look like spikes
         x = np.full(5120, 100.0)
@@ -292,7 +292,7 @@ class TestDespike:
 
 class TestGetProfiles:
     def test_single_profile(self):
-        from microstructure_tpw.rsi.profile import get_profiles
+        from odas_tpw.rsi.profile import get_profiles
 
         fs = 64.0
         t = np.arange(0, 60, 1 / fs)
@@ -306,7 +306,7 @@ class TestGetProfiles:
         assert (e - s) / fs >= 7.0
 
     def test_no_profile(self):
-        from microstructure_tpw.rsi.profile import get_profiles
+        from odas_tpw.rsi.profile import get_profiles
 
         fs = 64.0
         P = np.zeros(1000)  # no depth
@@ -315,7 +315,7 @@ class TestGetProfiles:
         assert profiles == []
 
     def test_two_profiles(self):
-        from microstructure_tpw.rsi.profile import get_profiles
+        from odas_tpw.rsi.profile import get_profiles
 
         fs = 64.0
         # Two ramp-down profiles separated by a surface interval
@@ -340,7 +340,7 @@ class TestGetProfiles:
 class TestGoodman:
     def test_short_signal_warns(self):
         """Short signal with small nfft should warn and return without error."""
-        from microstructure_tpw.scor160.goodman import clean_shear_spec
+        from odas_tpw.scor160.goodman import clean_shear_spec
 
         rng = np.random.default_rng(99)
         N = 100
@@ -354,7 +354,7 @@ class TestGoodman:
 
     def test_transposed_input(self):
         """Passing (n_chan, n_samples) shape should be auto-transposed."""
-        from microstructure_tpw.scor160.goodman import clean_shear_spec
+        from odas_tpw.scor160.goodman import clean_shear_spec
 
         rng = np.random.default_rng(42)
         N = 4096
@@ -367,7 +367,7 @@ class TestGoodman:
 
     def test_bias_warning_with_few_segments(self):
         """Signal with barely enough segments should trigger bias warning."""
-        from microstructure_tpw.scor160.goodman import clean_shear_spec
+        from odas_tpw.scor160.goodman import clean_shear_spec
 
         rng = np.random.default_rng(99)
         # 2 accel channels, nfft=64: need > 1.02*2 ~ 2.04 segments
@@ -382,7 +382,7 @@ class TestGoodman:
 
     def test_clean_shear_reduces_noise(self):
         """Goodman cleaning should reduce coherent noise."""
-        from microstructure_tpw.scor160.goodman import clean_shear_spec
+        from odas_tpw.scor160.goodman import clean_shear_spec
 
         rng = np.random.default_rng(42)
         N = 4096
@@ -418,8 +418,8 @@ class TestIntegration:
 
     def test_profile_detection(self, skip_no_data):
         """File 0005 should have at least one profile."""
-        from microstructure_tpw.rsi.p_file import PFile
-        from microstructure_tpw.rsi.profile import _smooth_fall_rate, get_profiles
+        from odas_tpw.rsi.p_file import PFile
+        from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
 
         pf = PFile(PROFILE_FILE)
         P = pf.channels["P"]
@@ -431,7 +431,7 @@ class TestIntegration:
 
     def test_load_channels(self, skip_no_data):
         """load_channels should find shear and accel channels."""
-        from microstructure_tpw.rsi.dissipation import load_channels
+        from odas_tpw.rsi.dissipation import load_channels
 
         data = load_channels(PROFILE_FILE)
         assert len(data["shear"]) >= 1
@@ -440,7 +440,7 @@ class TestIntegration:
 
     def test_load_channels_has_start_time(self, skip_no_data):
         """load_channels metadata should include start_time for CF time units."""
-        from microstructure_tpw.rsi.dissipation import load_channels
+        from odas_tpw.rsi.dissipation import load_channels
 
         data = load_channels(PROFILE_FILE)
         assert "start_time" in data["metadata"]
@@ -448,7 +448,7 @@ class TestIntegration:
 
     def test_get_diss_produces_valid_epsilon(self, skip_no_data):
         """Epsilon values should be in a reasonable range."""
-        from microstructure_tpw.rsi.dissipation import get_diss
+        from odas_tpw.rsi.dissipation import get_diss
 
         results = get_diss(PROFILE_FILE, fft_length=256, goodman=True)
         assert len(results) >= 1
@@ -462,7 +462,7 @@ class TestIntegration:
 
     def test_qc_variables_in_output(self, skip_no_data):
         """Output should contain fom and K_max_ratio QC variables."""
-        from microstructure_tpw.rsi.dissipation import get_diss
+        from odas_tpw.rsi.dissipation import get_diss
 
         results = get_diss(PROFILE_FILE, fft_length=256, goodman=True)
         ds = results[0]
@@ -479,7 +479,7 @@ class TestIntegration:
 
     def test_epsilon_cf_compliance(self, skip_no_data):
         """Epsilon dataset should have CF-1.13 attributes on all variables."""
-        from microstructure_tpw.rsi.dissipation import get_diss
+        from odas_tpw.rsi.dissipation import get_diss
 
         results = get_diss(PROFILE_FILE, fft_length=256, goodman=True)
         ds = results[0]
@@ -525,7 +525,7 @@ class TestIntegration:
     def test_epsilon_file_cf_compliance(self, skip_no_data, tmp_path):
         """Epsilon NetCDF file should roundtrip with CF attributes intact."""
         import xarray as xr
-        from microstructure_tpw.rsi.dissipation import compute_diss_file
+        from odas_tpw.rsi.dissipation import compute_diss_file
 
         eps_paths = compute_diss_file(PROFILE_FILE, tmp_path, fft_length=256, goodman=True)
         ds = xr.open_dataset(eps_paths[0])
@@ -538,7 +538,7 @@ class TestIntegration:
         """Profile NetCDF should have CF-1.13 attributes."""
         import netCDF4 as nc
 
-        from microstructure_tpw.rsi.profile import extract_profiles
+        from odas_tpw.rsi.profile import extract_profiles
 
         prof_dir = tmp_path / "prof_cf"
         prof_paths = extract_profiles(PROFILE_FILE, prof_dir)
@@ -558,7 +558,7 @@ class TestIntegration:
 
     def test_salinity_passthrough(self, skip_no_data):
         """get_diss with salinity should use gsw-based viscosity."""
-        from microstructure_tpw.rsi.dissipation import get_diss
+        from odas_tpw.rsi.dissipation import get_diss
 
         results_default = get_diss(PROFILE_FILE, fft_length=256, goodman=True)
         results_sal = get_diss(PROFILE_FILE, fft_length=256, goodman=True, salinity=34.5)
@@ -572,9 +572,9 @@ class TestIntegration:
 
     def test_pipeline_p2prof_p2eps(self, skip_no_data, tmp_path):
         """Full pipeline: .p → p2prof → p2eps."""
-        from microstructure_tpw.rsi.dissipation import compute_diss_file
+        from odas_tpw.rsi.dissipation import compute_diss_file
 
-        from microstructure_tpw.rsi.profile import extract_profiles
+        from odas_tpw.rsi.profile import extract_profiles
 
         prof_dir = tmp_path / "profiles"
         prof_paths = extract_profiles(PROFILE_FILE, prof_dir)
@@ -593,9 +593,9 @@ class TestIntegration:
 
     def test_direct_vs_chained(self, skip_no_data, tmp_path):
         """Direct .p→epsilon should produce same as chained pipeline."""
-        from microstructure_tpw.rsi.dissipation import get_diss
+        from odas_tpw.rsi.dissipation import get_diss
 
-        from microstructure_tpw.rsi.profile import extract_profiles
+        from odas_tpw.rsi.profile import extract_profiles
 
         # Direct
         results_direct = get_diss(PROFILE_FILE, fft_length=256, goodman=True)
@@ -624,7 +624,7 @@ class TestIntegration:
 
     def test_get_diss_no_goodman(self, skip_no_data):
         """get_diss with goodman=False should produce valid epsilon."""
-        from microstructure_tpw.rsi.dissipation import get_diss
+        from odas_tpw.rsi.dissipation import get_diss
 
         results = get_diss(PROFILE_FILE, fft_length=256, goodman=False)
         assert len(results) >= 1
@@ -635,7 +635,7 @@ class TestIntegration:
 
     def test_get_diss_fixed_speed(self, skip_no_data):
         """get_diss with speed=0.5 should use fixed speed."""
-        from microstructure_tpw.rsi.dissipation import get_diss
+        from odas_tpw.rsi.dissipation import get_diss
 
         results = get_diss(PROFILE_FILE, fft_length=256, goodman=True, speed=0.5)
         assert len(results) >= 1

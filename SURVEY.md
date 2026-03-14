@@ -52,7 +52,7 @@ rsi-tpw chi profiles/*.nc --epsilon-dir eps/ # Stage 4: compute chi (Method 1)
 
 #### Workflow 3: Python API
 ```python
-from microstructure_tpw.rsi import PFile, get_diss, get_chi
+from odas_tpw.rsi import PFile, get_diss, get_chi
 
 pf = PFile("data.p")
 eps_ds = get_diss("data.p")[0]                  # epsilon
@@ -225,7 +225,7 @@ cd odas/
 result_matlab = get_diss_odas(p_file_path);
 
 # Python
-python3 -c "from microstructure_tpw.rsi import get_diss; get_diss('tests/data/SN479_0006.p')"
+python3 -c "from odas_tpw.rsi import get_diss; get_diss('tests/data/SN479_0006.p')"
 ```
 
 ### Priority 2: Large-File Handling & Memory
@@ -251,7 +251,7 @@ python3 -c "from microstructure_tpw.rsi import get_diss; get_diss('tests/data/SN
 4. Test upstream tracking: run chi after epsilon → check cumulative hash in chi dir
 
 **Files:**
-- `src/microstructure_tpw/rsi/config.py::resolve_output_dir()` (line ~)
+- `src/odas_tpw/rsi/config.py::resolve_output_dir()` (line ~)
 - `tests/test_config.py::TestSetupOutputDir` (test reference)
 
 ### Priority 4: FP07 Noise Floor
@@ -263,7 +263,7 @@ python3 -c "from microstructure_tpw.rsi import get_diss; get_diss('tests/data/SN
 3. Ensure noise floor doesn't cause spurious chi estimates when signal ≈ noise
 
 **Files:**
-- `src/microstructure_tpw/rsi/fp07.py::gradT_noise()` (line 227)
+- `src/odas_tpw/rsi/fp07.py::gradT_noise()` (line 227)
 - Check against Peterson & Fer (2014) Table 1
 
 ### Priority 5: QC Metrics Thresholds
@@ -280,8 +280,8 @@ python3 -c "from microstructure_tpw.rsi import get_diss; get_diss('tests/data/SN
 3. Add suggested flags to output metadata
 
 **Files:**
-- `src/microstructure_tpw/rsi/dissipation.py` (epsilon QC, line ~)
-- `src/microstructure_tpw/rsi/chi.py` (chi QC, line ~)
+- `src/odas_tpw/rsi/dissipation.py` (epsilon QC, line ~)
+- `src/odas_tpw/rsi/chi.py` (chi QC, line ~)
 
 ### Priority 6: Visualization Features
 **Objective:** Test interactive viewers for usability with real campaigns
@@ -297,8 +297,8 @@ python3 -c "from microstructure_tpw.rsi import get_diss; get_diss('tests/data/SN
 4. Verify performance with 30+ profiles open
 
 **Files:**
-- `src/microstructure_tpw/rsi/quick_look.py` (1179 LOC)
-- `src/microstructure_tpw/rsi/diss_look.py` (1149 LOC)
+- `src/odas_tpw/rsi/quick_look.py` (1179 LOC)
+- `src/odas_tpw/rsi/diss_look.py` (1149 LOC)
 
 ### Priority 7: CI/CD & Code Quality
 **Objective:** Ensure reproducibility across Python versions
@@ -329,7 +329,7 @@ python3 -c "from microstructure_tpw.rsi import get_diss; get_diss('tests/data/SN
 3. Flag profiles for user review in metadata
 
 **Files:**
-- `src/microstructure_tpw/rsi/p_file.py::PFile.channels` (all channels, line ~)
+- `src/odas_tpw/rsi/p_file.py::PFile.channels` (all channels, line ~)
 - Check sample file: `tests/data/SN479_0006.p` has these channels but all zeros
 
 ---

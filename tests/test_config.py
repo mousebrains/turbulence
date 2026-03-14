@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from microstructure_tpw.rsi.config import (
+from odas_tpw.rsi.config import (
     DEFAULTS,
     _normalize_value,
     canonicalize,
