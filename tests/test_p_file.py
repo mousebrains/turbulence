@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from rsi_python.p_file import PFile
+from microstructure_tpw.rsi.p_file import PFile
 
 TEST_DATA_DIR = Path(__file__).parent / "data"
 SAMPLE_FILE = TEST_DATA_DIR / "SN479_0006.p"

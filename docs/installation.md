@@ -39,5 +39,5 @@ python -m pytest
 ruff check src/ tests/
 
 # Type check
-mypy src/rsi_python/
+mypy src/microstructure_tpw/
 ```

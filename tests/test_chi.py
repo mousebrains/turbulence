@@ -13,7 +13,7 @@ import pytest
 
 class TestBatchelorKB:
     def test_higher_eps_higher_kB(self):
-        from rsi_python.batchelor import batchelor_kB
+        from microstructure_tpw.chi.batchelor import batchelor_kB
 
         nu = 1.2e-6
         kB_low = batchelor_kB(1e-9, nu)
@@ -22,7 +22,7 @@ class TestBatchelorKB:
 
     def test_known_value(self):
         """Check kB against hand calculation."""
-        from rsi_python.batchelor import KAPPA_T, batchelor_kB
+        from microstructure_tpw.chi.batchelor import KAPPA_T, batchelor_kB
 
         nu = 1.2e-6
         eps = 1e-7
@@ -32,7 +32,7 @@ class TestBatchelorKB:
 
 class TestBatchelorNondim:
     def test_shape_and_positive(self):
-        from rsi_python.batchelor import batchelor_nondim
+        from microstructure_tpw.chi.batchelor import batchelor_nondim
 
         alpha = np.linspace(0.01, 10, 200)
         f = batchelor_nondim(alpha)
@@ -40,7 +40,7 @@ class TestBatchelorNondim:
         assert np.all(f >= 0)
 
     def test_peak_near_alpha_1(self):
-        from rsi_python.batchelor import batchelor_nondim
+        from microstructure_tpw.chi.batchelor import batchelor_nondim
 
         alpha = np.linspace(0.01, 5, 1000)
         f = batchelor_nondim(alpha)
@@ -52,7 +52,7 @@ class TestBatchelorNondim:
 class TestBatchelorGrad:
     def test_integral_equals_chi_over_6kT(self):
         """Batchelor gradient spectrum should integrate to chi/(6*kappa_T)."""
-        from rsi_python.batchelor import KAPPA_T, batchelor_grad, batchelor_kB
+        from microstructure_tpw.chi.batchelor import KAPPA_T, batchelor_grad, batchelor_kB
 
         chi = 1e-7
         nu = 1.2e-6
@@ -66,7 +66,7 @@ class TestBatchelorGrad:
         np.testing.assert_allclose(integral, expected, rtol=0.01)
 
     def test_higher_eps_broader(self):
-        from rsi_python.batchelor import batchelor_grad, batchelor_kB
+        from microstructure_tpw.chi.batchelor import batchelor_grad, batchelor_kB
 
         chi = 1e-7
         nu = 1.2e-6
@@ -84,7 +84,7 @@ class TestBatchelorGrad:
 class TestKraichnanGrad:
     def test_integral_equals_chi_over_6kT(self):
         """Kraichnan gradient spectrum should integrate to chi/(6*kappa_T)."""
-        from rsi_python.batchelor import KAPPA_T, batchelor_kB, kraichnan_grad
+        from microstructure_tpw.chi.batchelor import KAPPA_T, batchelor_kB, kraichnan_grad
 
         chi = 1e-7
         nu = 1.2e-6
@@ -99,7 +99,7 @@ class TestKraichnanGrad:
 
     def test_exponential_vs_gaussian_rolloff(self):
         """Kraichnan should have more power at high wavenumbers than Batchelor."""
-        from rsi_python.batchelor import batchelor_grad, batchelor_kB, kraichnan_grad
+        from microstructure_tpw.chi.batchelor import batchelor_grad, batchelor_kB, kraichnan_grad
 
         chi = 1e-7
         nu = 1.2e-6
@@ -119,13 +119,13 @@ class TestKraichnanGrad:
 
 class TestFP07Transfer:
     def test_unity_at_dc(self):
-        from rsi_python.fp07 import fp07_transfer
+        from microstructure_tpw.chi.fp07 import fp07_transfer
 
         H2 = fp07_transfer(np.array([0.0]), 0.01)
         np.testing.assert_allclose(H2, 1.0)
 
     def test_rolloff(self):
-        from rsi_python.fp07 import fp07_transfer
+        from microstructure_tpw.chi.fp07 import fp07_transfer
 
         f = np.logspace(-1, 3, 100)
         H2 = fp07_transfer(f, 0.01)
@@ -134,7 +134,7 @@ class TestFP07Transfer:
         assert np.all(np.diff(H2) <= 0)
 
     def test_double_pole_faster_rolloff(self):
-        from rsi_python.fp07 import fp07_double_pole, fp07_transfer
+        from microstructure_tpw.chi.fp07 import fp07_double_pole, fp07_transfer
 
         f = np.array([50.0])
         H2_single = fp07_transfer(f, 0.01)
@@ -144,27 +144,27 @@ class TestFP07Transfer:
 
 class TestFP07Tau:
     def test_lueck(self):
-        from rsi_python.fp07 import fp07_tau
+        from microstructure_tpw.chi.fp07 import fp07_tau
 
         tau = fp07_tau(1.0, model="lueck")
         assert 0.005 < tau < 0.02
 
     def test_speed_dependence(self):
-        from rsi_python.fp07 import fp07_tau
+        from microstructure_tpw.chi.fp07 import fp07_tau
 
         tau_slow = fp07_tau(0.5)
         tau_fast = fp07_tau(1.5)
         assert tau_slow > tau_fast  # slower speed = larger time constant
 
     def test_peterson(self):
-        from rsi_python.fp07 import fp07_tau
+        from microstructure_tpw.chi.fp07 import fp07_tau
 
         tau = fp07_tau(1.0, model="peterson")
         # tau = 0.012 * 1.0^(-0.32) = 0.012
         np.testing.assert_allclose(tau, 0.012, rtol=1e-10)
 
     def test_goto(self):
-        from rsi_python.fp07 import fp07_tau
+        from microstructure_tpw.chi.fp07 import fp07_tau
 
         tau = fp07_tau(1.0, model="goto")
         assert tau == 0.003
@@ -173,7 +173,7 @@ class TestFP07Tau:
         assert tau2 == 0.003
 
     def test_unknown_raises(self):
-        from rsi_python.fp07 import fp07_tau
+        from microstructure_tpw.chi.fp07 import fp07_tau
 
         with pytest.raises(ValueError, match="Unknown FP07 tau model"):
             fp07_tau(1.0, model="invalid_model")
@@ -181,14 +181,14 @@ class TestFP07Tau:
 
 class TestNoiseModel:
     def test_noise_positive(self):
-        from rsi_python.fp07 import noise_thermchannel
+        from microstructure_tpw.chi.fp07 import noise_thermchannel
 
         F = np.logspace(-1, 2, 50)
         noise = noise_thermchannel(F, 10.0)
         assert np.all(noise > 0)
 
     def test_noise_shape(self):
-        from rsi_python.fp07 import noise_thermchannel
+        from microstructure_tpw.chi.fp07 import noise_thermchannel
 
         F = np.logspace(-1, 2, 50)
         noise = noise_thermchannel(F, 10.0)
@@ -202,14 +202,14 @@ class TestNoiseModel:
 
 class TestShearNoiseModel:
     def test_noise_positive(self):
-        from rsi_python.shear_noise import noise_shearchannel
+        from microstructure_tpw.rsi.shear_noise import noise_shearchannel
 
         F = np.logspace(-1, 2, 100)
         noise = noise_shearchannel(F)
         assert np.all(noise > 0)
 
     def test_noise_shape(self):
-        from rsi_python.shear_noise import noise_shearchannel
+        from microstructure_tpw.rsi.shear_noise import noise_shearchannel
 
         F = np.logspace(-1, 2, 50)
         noise = noise_shearchannel(F)
@@ -218,7 +218,7 @@ class TestShearNoiseModel:
     def test_noise_increases_with_frequency(self):
         """Shear noise should generally increase at high frequencies
         due to the differentiator gain."""
-        from rsi_python.shear_noise import noise_shearchannel
+        from microstructure_tpw.rsi.shear_noise import noise_shearchannel
 
         F = np.array([1.0, 10.0, 100.0])
         noise = noise_shearchannel(F)
@@ -227,7 +227,7 @@ class TestShearNoiseModel:
 
     def test_probe_capacitance_effect(self):
         """Adding probe capacitance should increase noise at high frequencies."""
-        from rsi_python.shear_noise import noise_shearchannel
+        from microstructure_tpw.rsi.shear_noise import noise_shearchannel
 
         F = np.logspace(0, 2, 50)
         noise_no_probe = noise_shearchannel(F, CP=0)
@@ -240,7 +240,7 @@ class TestShearNoiseModel:
         """Verify default parameter values match ODAS noise_shearchannel.m."""
         import inspect
 
-        from rsi_python.shear_noise import noise_shearchannel
+        from microstructure_tpw.rsi.shear_noise import noise_shearchannel
 
         sig = inspect.signature(noise_shearchannel)
         defaults = {
@@ -268,7 +268,7 @@ class TestShearNoiseModel:
 
     def test_adc_quantization_floor(self):
         """At very low frequencies, ADC quantization noise should dominate."""
-        from rsi_python.shear_noise import noise_shearchannel
+        from microstructure_tpw.rsi.shear_noise import noise_shearchannel
 
         # With very small E_1, I_1, R1, the circuit noise vanishes;
         # only ADC quantization remains
@@ -296,9 +296,9 @@ class TestShearNoiseModel:
 class TestChiFromEpsilon:
     def test_synthetic_batchelor_recovery(self):
         """Method 1: recover chi from a synthetic Batchelor spectrum with FP07 rolloff."""
-        from rsi_python.batchelor import batchelor_grad, batchelor_kB
-        from rsi_python.chi import _chi_from_epsilon
-        from rsi_python.fp07 import fp07_tau, fp07_transfer, gradT_noise
+        from microstructure_tpw.chi.batchelor import batchelor_grad, batchelor_kB
+        from microstructure_tpw.chi.chi import _chi_from_epsilon
+        from microstructure_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
 
         chi_true = 1e-7
         eps_true = 1e-7
@@ -345,9 +345,9 @@ class TestChiFromEpsilon:
 class TestMLEFit:
     def test_synthetic_recovery(self):
         """Method 2 MLE: fit kB from synthetic Batchelor spectrum."""
-        from rsi_python.batchelor import batchelor_grad, batchelor_kB
-        from rsi_python.chi import _mle_fit_kB
-        from rsi_python.fp07 import fp07_tau, fp07_transfer, gradT_noise
+        from microstructure_tpw.chi.batchelor import batchelor_grad, batchelor_kB
+        from microstructure_tpw.chi.chi import _mle_fit_kB
+        from microstructure_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
 
         chi_true = 1e-7
         eps_true = 1e-7
@@ -405,7 +405,7 @@ class TestChiIntegration:
 
     def test_get_chi_method2(self, skip_no_data):
         """Method 2 (no epsilon) should produce chi in reasonable range."""
-        from rsi_python.chi import get_chi
+        from microstructure_tpw.rsi.chi_io import get_chi
 
         results = get_chi(PROFILE_FILE, fft_length=512)
         assert len(results) >= 1
@@ -420,8 +420,9 @@ class TestChiIntegration:
 
     def test_get_chi_method1(self, skip_no_data):
         """Method 1 (with epsilon) should produce chi in reasonable range."""
-        from rsi_python.chi import get_chi
-        from rsi_python.dissipation import get_diss
+        from microstructure_tpw.rsi.dissipation import get_diss
+
+        from microstructure_tpw.rsi.chi_io import get_chi
 
         # First compute epsilon
         eps_results = get_diss(PROFILE_FILE, fft_length=256, goodman=True)
@@ -440,7 +441,7 @@ class TestChiIntegration:
 
     def test_output_dataset_structure(self, skip_no_data):
         """Output dataset should have expected variables and dimensions."""
-        from rsi_python.chi import get_chi
+        from microstructure_tpw.rsi.chi_io import get_chi
 
         results = get_chi(PROFILE_FILE, fft_length=512)
         ds = results[0]
@@ -472,7 +473,7 @@ class TestChiIntegration:
 
     def test_qc_variables_in_output(self, skip_no_data):
         """Output should contain fom and K_max_ratio QC variables."""
-        from rsi_python.chi import get_chi
+        from microstructure_tpw.rsi.chi_io import get_chi
 
         results = get_chi(PROFILE_FILE, fft_length=512)
         ds = results[0]
@@ -484,7 +485,7 @@ class TestChiIntegration:
 
     def test_chi_cf_compliance(self, skip_no_data):
         """Chi dataset should have CF-1.13 attributes on all variables."""
-        from rsi_python.chi import get_chi
+        from microstructure_tpw.rsi.chi_io import get_chi
 
         results = get_chi(PROFILE_FILE, fft_length=512)
         ds = results[0]
@@ -532,7 +533,7 @@ class TestChiIntegration:
         """Chi NetCDF file should roundtrip with CF attributes intact."""
         import xarray as xr
 
-        from rsi_python.chi import compute_chi_file
+        from microstructure_tpw.rsi.chi_io import compute_chi_file
 
         out_paths = compute_chi_file(PROFILE_FILE, tmp_path, fft_length=512)
         ds = xr.open_dataset(out_paths[0])
@@ -543,7 +544,7 @@ class TestChiIntegration:
 
     def test_chi_file_output(self, skip_no_data, tmp_path):
         """compute_chi_file should write valid NetCDF."""
-        from rsi_python.chi import compute_chi_file
+        from microstructure_tpw.rsi.chi_io import compute_chi_file
 
         out_paths = compute_chi_file(PROFILE_FILE, tmp_path, fft_length=512)
         assert len(out_paths) >= 1
@@ -557,7 +558,7 @@ class TestChiIntegration:
 
     def test_python_api(self, skip_no_data):
         """Top-level import should work."""
-        from rsi_python import get_chi
+        from microstructure_tpw.rsi import get_chi
 
         results = get_chi(PROFILE_FILE, fft_length=512)
         assert len(results) >= 1

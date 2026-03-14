@@ -21,7 +21,7 @@ Phase breakdown before vectorization (per-file averages, 3 files):
 
 ### 1. Batched cross-spectral density (`csd_matrix_batch`)
 
-**File:** `src/rsi_python/spectral.py`
+**File:** `src/microstructure_tpw/rsi/spectral.py`
 
 Replaced per-window calls to `csd_matrix` with a single batched function that processes all dissipation windows at once:
 
@@ -33,13 +33,13 @@ Replaced per-window calls to `csd_matrix` with a single batched function that pr
 
 ### 2. Batched Goodman noise removal (`clean_shear_spec_batch`)
 
-**File:** `src/rsi_python/goodman.py`
+**File:** `src/microstructure_tpw/rsi/goodman.py`
 
 Calls `csd_matrix_batch` for the combined shear+accelerometer CSD, then solves the Goodman equation `clean = UU - UA @ inv(AA) @ conj(UA)^H` using `np.linalg.solve` broadcasting over `(n_windows, n_freq)` leading dimensions. Falls back to per-window solve on `LinAlgError`.
 
 ### 3. Nasmyth spectrum grid interpolation (`NasmythGrid`, `nasmyth_grid`)
 
-**File:** `src/rsi_python/nasmyth.py`
+**File:** `src/microstructure_tpw/rsi/nasmyth.py`
 
 Pre-tabulates `log10(G2)` vs `log10(x)` on a 2000-point grid (x = 1e-6 to 1.0) at module import. Subsequent calls use `np.interp` in log-space instead of evaluating the Lueck (2016) rational polynomial. A lazy singleton (`_get_grid()`) ensures the table is built once.
 
@@ -47,7 +47,7 @@ Maximum relative error vs direct evaluation: ~2e-5 (0.002%), verified across 41,
 
 ### 4. Vectorized `_compute_profile_diss`
 
-**File:** `src/rsi_python/dissipation.py`
+**File:** `src/microstructure_tpw/rsi/dissipation.py`
 
 Rewrote the main dissipation function to:
 
@@ -58,7 +58,7 @@ Rewrote the main dissipation function to:
 
 ### 5. Pipeline PFile deduplication
 
-**File:** `src/rsi_python/cli.py`
+**File:** `src/microstructure_tpw/rsi/cli.py`
 
 `_cmd_pipeline` previously called `compute_diss_file` and `compute_chi_file`, each of which independently loaded the `.p` file via `PFile`. Now loads `PFile` once and calls `get_diss`/`get_chi` directly, passing the epsilon Dataset to chi for Method 1. Saves ~0.8 s and ~1.4 GB per file.
 

@@ -4,7 +4,7 @@
 import numpy as np
 import pytest
 
-from perturb.gps import (
+from microstructure_tpw.perturb.gps import (
     GPSFixed,
     GPSFromCSV,
     GPSFromNetCDF,

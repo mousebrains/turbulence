@@ -43,15 +43,11 @@ import numpy as np
 import xarray as xr
 
 # rsi-tpw imports
-from rsi_python.dissipation import (
-    EPSILON_FLOOR,
+from microstructure_tpw.rsi.dissipation import (
     E_ISR_THRESHOLD,
-    ISOTROPY_FACTOR,
     _estimate_epsilon,
-    _variance_correction,
 )
-from rsi_python.nasmyth import nasmyth_grid
-from rsi_python.ocean import visc35
+from microstructure_tpw.rsi.ocean import visc35
 
 # ---------------------------------------------------------------------------
 # ATOMIX benchmark dataset catalog
@@ -730,7 +726,7 @@ def write_report(
             "(variable `SH_SPEC_CLEAN`) and corresponding wavenumber vectors "
             "(`KCYC`) are read from the benchmark NetCDF files. Each spectrum "
             "is then processed through the `rsi-tpw` epsilon estimation "
-            "algorithm (`_estimate_epsilon` from `rsi_python.dissipation`), "
+            "algorithm (`_estimate_epsilon` from `rsi.dissipation`), "
             "which implements the Lueck variance method for low dissipation "
             "rates and the inertial subrange method for high dissipation "
             "rates. The resulting epsilon estimates are compared against the "

@@ -4,7 +4,7 @@
 import numpy as np
 from scipy.signal import butter, lfilter
 
-from rsi_python.deconvolve import _interp_if_required, deconvolve
+from microstructure_tpw.rsi.deconvolve import _interp_if_required, deconvolve
 
 
 class TestDeconvolveKnownSignal:

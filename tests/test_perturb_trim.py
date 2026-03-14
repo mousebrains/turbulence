@@ -5,8 +5,8 @@ import struct
 
 import pytest
 
-from perturb.trim import trim_p_file
-from rsi_python.p_file import _H, HEADER_BYTES, HEADER_WORDS
+from microstructure_tpw.perturb.trim import trim_p_file
+from microstructure_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS
 
 
 def _make_p_file(path, *, record_size=1024, config_size=256, n_records=3, extra_bytes=0):

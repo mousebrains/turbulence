@@ -1,14 +1,14 @@
 # pyturb Comparison
 
-Comparison of [oceancascades/pyturb](https://github.com/oceancascades/pyturb) (Jesse Cusack, Oregon State) with our rsi-python/perturb packages. Both derive from the Rockland ODAS MATLAB library.
+Comparison of [oceancascades/pyturb](https://github.com/oceancascades/pyturb) (Jesse Cusack, Oregon State) with our microstructure-tpw/perturb packages. Both derive from the Rockland ODAS MATLAB library.
 
 ## Core Epsilon: Identical
 
 Both packages use the same Nasmyth spectrum (Lueck improved fit), ISR integration, fitting iterations, and variance correction. Same constants throughout (`a = 1.0774e9`, `x_isr = 0.02`, `x_95 = 0.1205`, K_max clamp [7, 150] cpm). Same 3-iteration log-space fitting with flyer removal.
 
-## Where rsi-python Is More Complete
+## Where microstructure-tpw Is More Complete
 
-| Feature | rsi-python | pyturb |
+| Feature | microstructure-tpw | pyturb |
 |---------|------------|--------|
 | Goodman coherent noise removal | Full cross-spectral matrix | Not implemented |
 | Chi pipeline | Method 1 (known epsilon) + Method 2 (MLE) | Bare `kraichnan_spectrum()` only |
@@ -47,7 +47,7 @@ Same algorithm: iterative HP/LP envelope threshold detection. Minor differences:
 
 ## Bottom Line
 
-The core mathematics are the same since both derive from ODAS. rsi-python is more complete (Goodman, chi, FP07, QC, detrending). pyturb has better glider/MicroRider workflow support. The main harvestable ideas are glider-related features (speed from pressure, multi-profile, aux data merge) which would extend our instrument coverage beyond VMP.
+The core mathematics are the same since both derive from ODAS. microstructure-tpw is more complete (Goodman, chi, FP07, QC, detrending). pyturb has better glider/MicroRider workflow support. The main harvestable ideas are glider-related features (speed from pressure, multi-profile, aux data merge) which would extend our instrument coverage beyond VMP.
 
 ## References
 

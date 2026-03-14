@@ -3,7 +3,7 @@
 
 import numpy as np
 
-from perturb.bottom import detect_bottom_crash
+from microstructure_tpw.perturb.bottom import detect_bottom_crash
 
 
 class TestDetectBottomCrash:

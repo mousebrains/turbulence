@@ -1,6 +1,6 @@
 % generate_scalar_spectra_nc.m
 % Generate CF-compliant NetCDF files containing scalar (temperature gradient)
-% spectra from the ODAS MATLAB Library for validation against rsi-python chi.
+% spectra from the ODAS MATLAB Library for validation against microstructure-tpw chi.
 %
 % Uses get_scalar_spectra_odas.m as the independent reference for the
 % scalar spectrum pipeline (first-difference correction, bilinear

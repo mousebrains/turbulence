@@ -4,7 +4,7 @@
 
 The Matlab [perturb](https://github.com/jessecusack/perturb) package is a batch-processing pipeline for Rockland VMP/MicroRider data. It takes raw `.p` files through discovery → trimming → merging → profile extraction → FP07 calibration → CT alignment → GPS → seawater properties → dissipation → chi → binning → combo assembly → NetCDF.
 
-This project ports perturb to Python, dropping `.mat` output only. Chi is integrated into the dissipation step. Depth/time binning, combined (combo) NetCDF files, and CTD time-binning with GPS are all retained. The package lives in the same repo as `rsi_python` and reuses its science modules.
+This project ports perturb to Python, dropping `.mat` output only. Chi is integrated into the dissipation step. Depth/time binning, combined (combo) NetCDF files, and CTD time-binning with GPS are all retained. The package lives in the same repo as `rsi` and reuses its science modules.
 
 ## Architecture
 
@@ -43,7 +43,7 @@ Add to `[project.scripts]`:
 perturb = "perturb.cli:main"
 ```
 
-## Reuse from rsi_python
+## Reuse from rsi
 
 | Import | Used By |
 |--------|---------|
@@ -212,7 +212,7 @@ output_root/
     combo.nc
 ```
 
-Directory versioning follows `rsi_python.config` pattern: `prefix_NN/` with `.params_sha256_{hash}` signature files. Changing parameters creates a new versioned directory.
+Directory versioning follows `rsi.config` pattern: `prefix_NN/` with `.params_sha256_{hash}` signature files. Changing parameters creates a new versioned directory.
 
 ### Profile NetCDF contents (`profiles_00/`)
 - Dims: `time_fast`, `time_slow`
@@ -250,7 +250,7 @@ Directory versioning follows `rsi_python.config` pattern: `prefix_NN/` with `.pa
 ## Module Details
 
 ### `config.py` — YAML Config
-Extends `rsi_python.config` patterns: three-way merge (defaults ← file ← CLI), SHA-256 hashing, sequential versioned output dirs.
+Extends `rsi.config` patterns: three-way merge (defaults ← file ← CLI), SHA-256 hashing, sequential versioned output dirs.
 - `DEFAULTS` dict with all sections and their default values
 - `load_config(path) -> dict` — load YAML, validate sections/keys
 - `merge_config(section, file_values, cli_overrides) -> dict`
@@ -267,7 +267,7 @@ Extends `rsi_python.config` patterns: three-way merge (defaults ← file ← CLI
 - Reads header via `PFile._parse_header()` to get `record_size`
 - If file size has fractional last record: copies only complete records
 - Returns path to trimmed file (or original if no trimming needed)
-- **Reuses:** `rsi_python.p_file._detect_endian`, `_parse_header`, header constants
+- **Reuses:** `rsi.p_file._detect_endian`, `_parse_header`, header constants
 
 ### `merge.py` — Split File Merging
 - `find_mergeable_files(p_files: list[Path]) -> list[list[Path]]`
@@ -275,7 +275,7 @@ Extends `rsi_python.config` patterns: three-way merge (defaults ← file ← CLI
 - `merge_p_files(chain: list[Path], output_dir: Path) -> Path`
   - Concatenates data records from chain into single output file
   - First file's header/config preserved; subsequent files contribute only data records
-- **Reuses:** `rsi_python.p_file._detect_endian`, `_parse_header`
+- **Reuses:** `rsi.p_file._detect_endian`, `_parse_header`
 
 ### `fp07_cal.py` — FP07 In-Situ Calibration
 - `fp07_calibrate(pf: PFile, profiles: list[tuple[int,int]], reference: str, order: int, max_lag_seconds: float) -> dict`
@@ -287,7 +287,7 @@ Extends `rsi_python.config` patterns: three-way merge (defaults ← file ← CLI
   5. Steinhart-Hart fit: `1/(T+273.15) = a0 + a1*ln(R) + a2*ln(R)^order`
   6. Apply calibration to both fast and slow FP07 data
 - Returns: calibration coefficients, lags, modified channel arrays
-- **Reuses:** `rsi_python.p_file.PFile`, `parse_config`
+- **Reuses:** `rsi.p_file.PFile`, `parse_config`
 
 ### `ct_align.py` — CT Sensor Alignment
 - `ct_align(T: ndarray, C: ndarray, fs: float, profiles: list[tuple[int,int]]) -> ndarray`
@@ -330,7 +330,7 @@ Extends `rsi_python.config` patterns: three-way merge (defaults ← file ← CLI
   5. Iteratively remove probes outside CI
   6. Geometric mean of surviving probes
 - Adds `epsilonMean`, `epsilonLnSigma` to dataset
-- **Reuses:** `rsi_python.dissipation.get_diss` output structure
+- **Reuses:** `rsi.dissipation.get_diss` output structure
 
 ### `ctd.py` — CTD Time-Binning
 - `ctd_bin_file(pf: PFile, gps: GPSProvider, output_dir: Path, **params) -> Path`
@@ -452,13 +452,13 @@ Built bottom-up by dependency:
 
 | File | Why |
 |------|-----|
-| `src/rsi_python/p_file.py` | PFile class, header parsing, channel reading — reused by trim, merge, fp07_cal |
-| `src/rsi_python/dissipation.py` | `get_diss()` output structure — epsilon_combine must extend it |
-| `src/rsi_python/chi.py` | `get_chi()` with `epsilon_ds` param — Method 1 integration |
-| `src/rsi_python/config.py` | Config patterns to extend: `merge_config`, `compute_hash`, `resolve_output_dir` |
-| `src/rsi_python/cli.py` | CLI patterns: arg parsing, config loading, parallel processing, output dir setup |
-| `src/rsi_python/profile.py` | `get_profiles()`, `extract_profiles()` — profile detection reuse |
-| `src/rsi_python/ocean.py` | `visc()`, `density()` — seawater property base |
+| `src/microstructure_tpw/rsi/p_file.py` | PFile class, header parsing, channel reading — reused by trim, merge, fp07_cal |
+| `src/microstructure_tpw/rsi/dissipation.py` | `get_diss()` output structure — epsilon_combine must extend it |
+| `src/microstructure_tpw/rsi/chi.py` | `get_chi()` with `epsilon_ds` param — Method 1 integration |
+| `src/microstructure_tpw/rsi/config.py` | Config patterns to extend: `merge_config`, `compute_hash`, `resolve_output_dir` |
+| `src/microstructure_tpw/rsi/cli.py` | CLI patterns: arg parsing, config loading, parallel processing, output dir setup |
+| `src/microstructure_tpw/rsi/profile.py` | `get_profiles()`, `extract_profiles()` — profile detection reuse |
+| `src/microstructure_tpw/rsi/ocean.py` | `visc()`, `density()` — seawater property base |
 | `pyproject.toml` | Add `perturb` CLI entry point |
 
 ### Key Matlab source files (https://github.com/jessecusack/perturb)
@@ -487,7 +487,7 @@ Built bottom-up by dependency:
 
 ## Verification
 
-1. `pip install -e ".[dev]"` — both `rsi_python` and `perturb` install
+1. `pip install -e ".[dev]"` — both `rsi` and `perturb` install
 2. `perturb init test_config.yaml` — generates valid template
 3. `perturb run test_config.yaml` — processes VMP/*.p end-to-end
 4. Profile NetCDFs contain calibrated FP07, aligned CT, seawater properties, GPS

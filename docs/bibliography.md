@@ -1,6 +1,6 @@
 # Bibliography
 
-Consolidated references for the rsi-python ocean turbulence package.
+Consolidated references for the microstructure-tpw ocean turbulence package.
 See also [Best Practices](best_practices.md) and
 [Mixing Efficiency](mixing_efficiency.md) for topical discussion.
 

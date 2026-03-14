@@ -1,11 +1,11 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
-"""Tests for rsi_python.config — YAML config loading, merging, hashing, and directory management."""
+"""Tests for rsi.config — YAML config loading, merging, hashing, and directory management."""
 
 import json
 
 import pytest
 
-from rsi_python.config import (
+from microstructure_tpw.rsi.config import (
     DEFAULTS,
     _normalize_value,
     canonicalize,

@@ -1,6 +1,6 @@
 % generate_validation_nc.m
 % Generate CF-compliant NetCDF files containing epsilon, profile, and speed
-% data from the ODAS MATLAB Library for validation against rsi-python.
+% data from the ODAS MATLAB Library for validation against microstructure-tpw.
 %
 % Usage: Run from the turbulence/ directory with ODAS on the path:
 %   addpath('odas');

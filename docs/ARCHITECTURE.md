@@ -1,16 +1,16 @@
 # Software Architecture
 
-Four Python packages with a layered dependency hierarchy.  Each layer
-can only import from layers below it.
+One top-level package (`microstructure_tpw`) with four subpackages in a
+layered dependency hierarchy.  Each layer can only import from layers below it.
 
 ```
-perturb            Campaign pipeline (VMP data → science-ready NetCDF)
+microstructure_tpw.perturb     Campaign pipeline (VMP data → science-ready NetCDF)
     ↓
-rsi_python         Rockland .P file I/O, NetCDF conversion, profiles
+microstructure_tpw.rsi         Rockland .P file I/O, NetCDF conversion, profiles
     ↓
-chi_tpw            Thermal variance dissipation (χ) from FP07 thermistors
+microstructure_tpw.chi         Thermal variance dissipation (χ) from FP07 thermistors
     ↓
-scor160_tpw        SCOR-160 / ATOMIX spectral processing + shared physics
+microstructure_tpw.scor160     SCOR-160 / ATOMIX spectral processing + shared physics
 ```
 
 ---
@@ -20,15 +20,15 @@ scor160_tpw        SCOR-160 / ATOMIX spectral processing + shared physics
 ```mermaid
 graph TD
     subgraph "Layer 0 — Foundation"
-        S[scor160_tpw]
+        S[scor160]
     end
 
     subgraph "Layer 1 — Chi"
-        C[chi_tpw]
+        C[chi]
     end
 
     subgraph "Layer 2 — Instrument I/O"
-        R[rsi_python]
+        R[rsi]
     end
 
     subgraph "Layer 3 — Campaign"
@@ -45,7 +45,7 @@ graph TD
 
 ## Package contents
 
-### scor160_tpw — Foundation (Layer 0)
+### scor160 — Foundation (Layer 0)
 
 Base-level processing library.  No dependencies on other in-repo
 packages.  Contains the ATOMIX benchmark pipeline **and** the shared
@@ -69,7 +69,7 @@ physics / signal-processing modules used by all higher layers.
 
 ```mermaid
 graph LR
-    subgraph scor160_tpw
+    subgraph scor160
         ocean
         nasmyth
         spectral
@@ -90,10 +90,10 @@ graph LR
 
 ---
 
-### chi_tpw — Thermal Dissipation (Layer 1)
+### chi — Thermal Dissipation (Layer 1)
 
 Chi (thermal variance dissipation rate) calculation.  Depends on
-`scor160_tpw` for ocean properties, spectral processing, and Goodman
+`scor160` for ocean properties, spectral processing, and Goodman
 cleaning.
 
 | Module | Role |
@@ -102,26 +102,26 @@ cleaning.
 | `batchelor.py` | Batchelor and Kraichnan temperature gradient spectra |
 | `fp07.py` | FP07 thermistor transfer function and electronics noise model |
 
-**Imports from scor160_tpw:** `ocean`, `spectral`, `goodman`
+**Imports from scor160:** `ocean`, `spectral`, `goodman`
 
 ```mermaid
 graph LR
-    subgraph chi_tpw
+    subgraph chi
         chi --> batchelor
         chi --> fp07
     end
-    chi --> scor160_tpw.ocean
-    chi --> scor160_tpw.spectral
-    chi --> scor160_tpw.goodman
+    chi --> scor160.ocean
+    chi --> scor160.spectral
+    chi --> scor160.goodman
 ```
 
 ---
 
-### rsi_python — Instrument I/O (Layer 2)
+### rsi — Instrument I/O (Layer 2)
 
 Reads Rockland Scientific `.P` binary files, converts to NetCDF, and
-extracts profiles.  Depends on `scor160_tpw` for ocean physics and on
-`chi_tpw` for thermal dissipation.
+extracts profiles.  Depends on `scor160` for ocean physics and on
+`chi` for thermal dissipation.
 
 | Module | Role |
 |--------|------|
@@ -131,23 +131,23 @@ extracts profiles.  Depends on `scor160_tpw` for ocean physics and on
 | `convert.py` | `p_to_netcdf()`, `p_to_L1()`, `convert_all()` — NetCDF output |
 | `profile.py` | Profile detection and per-profile NetCDF extraction |
 | `helpers.py` | `load_channels()`, `prepare_profiles()`, `compute_nu()` — bridge PFile/NetCDF to spectral processing |
-| `chi_io.py` | `get_chi()`, `compute_chi_file()` — load instrument data and call chi_tpw computation |
+| `chi_io.py` | `get_chi()`, `compute_chi_file()` — load instrument data and call chi computation |
 | `config.py` | YAML configuration loading, merging, template generation |
 | `cli.py` | `rsi-tpw` CLI entry point |
 
-**Imports from scor160_tpw:** `ocean` (via helpers.py)
-**Imports from chi_tpw:** `_compute_profile_chi` (via chi_io.py)
+**Imports from scor160:** `ocean` (via helpers.py)
+**Imports from chi:** `_compute_profile_chi` (via chi_io.py)
 
 ```mermaid
 graph LR
-    subgraph rsi_python
+    subgraph rsi
         p_file --> channels
         p_file --> deconvolve
         convert --> p_file
         convert --> profile
-        helpers --> scor160_tpw.ocean
+        helpers --> scor160.ocean
         chi_io --> helpers
-        chi_io --> chi_tpw.chi
+        chi_io --> chi.chi
         profile
         config
         cli
@@ -178,7 +178,7 @@ and combines across profiles and casts.
 | `config.py` | Campaign-level configuration |
 | `cli.py` | `perturb` CLI entry point |
 
-**Imports from rsi_python:** `PFile`, `extract_profiles`, `get_profiles`
+**Imports from rsi:** `PFile`, `extract_profiles`, `get_profiles`
 
 ```mermaid
 graph LR
@@ -194,11 +194,11 @@ graph LR
         config
         cli
     end
-    pipeline --> rsi_python.p_file
-    pipeline --> rsi_python.profile
-    fp07_cal --> rsi_python.p_file
-    merge --> rsi_python.p_file
-    config --> rsi_python.config
+    pipeline --> rsi.p_file
+    pipeline --> rsi.profile
+    fp07_cal --> rsi.p_file
+    merge --> rsi.p_file
+    config --> rsi.config
 ```
 
 ---
@@ -221,7 +221,7 @@ graph TB
         P_conf[config]
     end
 
-    subgraph "Layer 2: rsi_python"
+    subgraph "Layer 2: rsi"
         R_pfile[p_file]
         R_chan[channels]
         R_deconv[deconvolve]
@@ -232,13 +232,13 @@ graph TB
         R_conf[config]
     end
 
-    subgraph "Layer 1: chi_tpw"
+    subgraph "Layer 1: chi"
         C_chi[chi]
         C_bat[batchelor]
         C_fp07[fp07]
     end
 
-    subgraph "Layer 0: scor160_tpw"
+    subgraph "Layer 0: scor160"
         S_ocean[ocean]
         S_nas[nasmyth]
         S_spec[spectral]
@@ -298,7 +298,7 @@ graph TB
 
 | Command | Package | Description |
 |---------|---------|-------------|
-| `scor160-tpw` | scor160_tpw | ATOMIX benchmark processing (L1–L4) |
-| `rsi-tpw` | rsi_python | .P file info, NetCDF conversion, profile extraction |
+| `scor160-tpw` | scor160 | ATOMIX benchmark processing (L1–L4) |
+| `rsi-tpw` | rsi | .P file info, NetCDF conversion, profile extraction |
 | `perturb` | perturb | Full campaign pipeline |
 

@@ -7,14 +7,20 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from perturb.pipeline import _setup_output_dirs, process_file, run_merge, run_pipeline, run_trim
+from microstructure_tpw.perturb.pipeline import (
+    _setup_output_dirs,
+    process_file,
+    run_merge,
+    run_pipeline,
+    run_trim,
+)
 
 
 def _make_p_file(path: Path, *, endian: str = "<", n_data_records: int = 5,
                  record_size: int = 256, file_number: int = 1,
                  config_content: str = "default_config"):
     """Create a synthetic .p file with valid header structure."""
-    from rsi_python.p_file import _H, HEADER_BYTES, HEADER_WORDS
+    from microstructure_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS
 
     endian_flag = 1 if endian == "<" else 2
     config_bytes = config_content.encode("ascii")
@@ -153,7 +159,7 @@ class TestProcessFile:
             "chi": {"enable": False},
         }
 
-    @patch("rsi_python.p_file.PFile", side_effect=Exception("corrupt file"))
+    @patch("microstructure_tpw.rsi.p_file.PFile", side_effect=Exception("corrupt file"))
     def test_load_error(self, mock_pfile, tmp_path):
         """PFile load failure returns result with empty lists."""
         config = self._base_config(tmp_path)
@@ -163,7 +169,7 @@ class TestProcessFile:
         assert result["diss"] == []
         assert result["chi"] == []
 
-    @patch("rsi_python.p_file.PFile")
+    @patch("microstructure_tpw.rsi.p_file.PFile")
     def test_no_pressure(self, mock_pfile_cls, tmp_path):
         """No 'P' channel in pf.channels returns early with empty profiles."""
         mock_pf = MagicMock()
@@ -176,9 +182,9 @@ class TestProcessFile:
         assert result["profiles"] == []
         assert result["diss"] == []
 
-    @patch("rsi_python.profile.get_profiles", return_value=[])
-    @patch("rsi_python.profile._smooth_fall_rate", return_value=np.zeros(100))
-    @patch("rsi_python.p_file.PFile")
+    @patch("microstructure_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("microstructure_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("microstructure_tpw.rsi.p_file.PFile")
     def test_no_profiles(self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path):
         """No profiles detected returns early with empty result."""
         mock_pf = MagicMock()
@@ -191,11 +197,11 @@ class TestProcessFile:
         result = process_file(tmp_path / "test.p", config, None, output_dirs)
         assert result["profiles"] == []
 
-    @patch("rsi_python.profile.extract_profiles", return_value=[Path("/fake/prof.nc")])
-    @patch("perturb.fp07_cal.fp07_calibrate")
-    @patch("rsi_python.profile.get_profiles")
-    @patch("rsi_python.profile._smooth_fall_rate", return_value=np.zeros(100))
-    @patch("rsi_python.p_file.PFile")
+    @patch("microstructure_tpw.rsi.profile.extract_profiles", return_value=[Path("/fake/prof.nc")])
+    @patch("microstructure_tpw.perturb.fp07_cal.fp07_calibrate")
+    @patch("microstructure_tpw.rsi.profile.get_profiles")
+    @patch("microstructure_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("microstructure_tpw.rsi.p_file.PFile")
     def test_fp07_cal_disabled(self, mock_pfile_cls, mock_smooth, mock_get_prof,
                                mock_fp07_cal, mock_extract, tmp_path):
         """fp07.calibrate=False skips FP07 calibration."""
@@ -214,12 +220,12 @@ class TestProcessFile:
         process_file(tmp_path / "test.p", config, None, output_dirs)
         mock_fp07_cal.assert_not_called()
 
-    @patch("rsi_python.profile.extract_profiles", return_value=[Path("/fake/prof.nc")])
-    @patch("perturb.ct_align.ct_align")
-    @patch("perturb.fp07_cal.fp07_calibrate", return_value={"channels": {}})
-    @patch("rsi_python.profile.get_profiles")
-    @patch("rsi_python.profile._smooth_fall_rate", return_value=np.zeros(100))
-    @patch("rsi_python.p_file.PFile")
+    @patch("microstructure_tpw.rsi.profile.extract_profiles", return_value=[Path("/fake/prof.nc")])
+    @patch("microstructure_tpw.perturb.ct_align.ct_align")
+    @patch("microstructure_tpw.perturb.fp07_cal.fp07_calibrate", return_value={"channels": {}})
+    @patch("microstructure_tpw.rsi.profile.get_profiles")
+    @patch("microstructure_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("microstructure_tpw.rsi.p_file.PFile")
     def test_ct_align_disabled(self, mock_pfile_cls, mock_smooth, mock_get_prof,
                                mock_fp07_cal, mock_ct_align, mock_extract, tmp_path):
         """ct.align=False skips CT alignment."""
@@ -243,9 +249,9 @@ class TestProcessFile:
         process_file(tmp_path / "test.p", config, None, output_dirs)
         mock_ct_align.assert_not_called()
 
-    @patch("rsi_python.profile.get_profiles")
-    @patch("rsi_python.profile._smooth_fall_rate", return_value=np.zeros(100))
-    @patch("rsi_python.p_file.PFile")
+    @patch("microstructure_tpw.rsi.profile.get_profiles")
+    @patch("microstructure_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("microstructure_tpw.rsi.p_file.PFile")
     def test_ctd_disabled(self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path):
         """ctd.enable=False skips CTD binning (ctd_bin_file not called)."""
         mock_pf = MagicMock()
@@ -259,7 +265,7 @@ class TestProcessFile:
         output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss",
                        "ctd": tmp_path / "ctd"}
 
-        with patch("perturb.ctd.ctd_bin_file") as mock_ctd_bin:
+        with patch("microstructure_tpw.perturb.ctd.ctd_bin_file") as mock_ctd_bin:
             process_file(tmp_path / "test.p", config, None, output_dirs)
             mock_ctd_bin.assert_not_called()
 
@@ -295,12 +301,12 @@ class TestRunPipeline:
         captured = capsys.readouterr()
         assert "No .p files found" in captured.out
 
-    @patch("perturb.pipeline.process_file", return_value={
+    @patch("microstructure_tpw.perturb.pipeline.process_file", return_value={
         "source": "test.p", "profiles": [], "diss": [], "chi": [],
     })
-    @patch("perturb.pipeline._setup_output_dirs", return_value={})
-    @patch("perturb.gps.create_gps", return_value=None)
-    @patch("perturb.pipeline.run_trim")
+    @patch("microstructure_tpw.perturb.pipeline._setup_output_dirs", return_value={})
+    @patch("microstructure_tpw.perturb.gps.create_gps", return_value=None)
+    @patch("microstructure_tpw.perturb.pipeline.run_trim")
     def test_trim_disabled(self, mock_run_trim, mock_gps, mock_dirs,
                            mock_proc, tmp_path):
         """files.trim=False skips run_trim call."""

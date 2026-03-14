@@ -1,7 +1,7 @@
 # Mathematical & Implementation Consistency Audit
 
 **Date**: 2026-03-11
-**Scope**: Full rsi-python codebase — mathematics, units, MATLAB consistency, code quality, testing, infrastructure, documentation
+**Scope**: Full microstructure-tpw codebase — mathematics, units, MATLAB consistency, code quality, testing, infrastructure, documentation
 **Verdict**: PASS — No correctness issues found.
 
 ---

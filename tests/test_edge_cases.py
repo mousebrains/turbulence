@@ -1,17 +1,17 @@
-"""Edge-case tests for various rsi_python modules."""
+"""Edge-case tests for various rsi modules."""
 
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from rsi_python.batchelor import batchelor_grad
-from rsi_python.despike import despike
-from rsi_python.fp07 import FP07NoiseConfig, noise_thermchannel
-from rsi_python.goodman import clean_shear_spec
-from rsi_python.nasmyth import nasmyth
-from rsi_python.ocean import visc35
-from rsi_python.spectral import csd_odas
+from microstructure_tpw.chi.batchelor import batchelor_grad
+from microstructure_tpw.chi.fp07 import FP07NoiseConfig, noise_thermchannel
+from microstructure_tpw.scor160.despike import despike
+from microstructure_tpw.scor160.goodman import clean_shear_spec
+from microstructure_tpw.scor160.nasmyth import nasmyth
+from microstructure_tpw.scor160.ocean import visc35
+from microstructure_tpw.scor160.spectral import csd_odas
 
 VMP_DIR = Path(__file__).resolve().parent.parent / "VMP"
 P_FILES = sorted(VMP_DIR.glob("*.p"))
@@ -100,7 +100,7 @@ class TestCsdOdasEdgeCases:
 @pytest.mark.skipif(not P_FILES, reason="No VMP .p files available")
 class TestExtractProfiles:
     def test_extract_profiles_writes_nc(self, tmp_path):
-        from rsi_python.profile import extract_profiles
+        from microstructure_tpw.rsi.profile import extract_profiles
 
         paths = extract_profiles(P_FILES[0], tmp_path)
         assert len(paths) > 0
@@ -124,7 +124,7 @@ class TestExtractProfiles:
     def test_extract_profiles_roundtrip(self, tmp_path):
         import netCDF4 as nc
 
-        from rsi_python.profile import extract_profiles
+        from microstructure_tpw.rsi.profile import extract_profiles
 
         paths = extract_profiles(P_FILES[0], tmp_path)
         assert len(paths) > 0
@@ -138,8 +138,8 @@ class TestExtractProfiles:
 
     def test_extract_profiles_from_nc(self, tmp_path):
         """Exercise _load_from_nc by extracting profiles from a .nc file."""
-        from rsi_python.convert import p_to_L1
-        from rsi_python.profile import extract_profiles
+        from microstructure_tpw.rsi.convert import p_to_L1
+        from microstructure_tpw.rsi.profile import extract_profiles
 
         # Convert .p to .nc first
         nc_dir = tmp_path / "nc"
@@ -159,7 +159,7 @@ class TestExtractProfiles:
 
     def test_extract_one_worker(self, tmp_path):
         """Exercise _extract_one parallel worker wrapper."""
-        from rsi_python.profile import _extract_one
+        from microstructure_tpw.rsi.profile import _extract_one
 
         source_str, count = _extract_one((P_FILES[0], tmp_path, {}))
         assert source_str == str(P_FILES[0])

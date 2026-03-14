@@ -44,9 +44,9 @@ Each `.p` file is processed through several sub-stages:
 
 5. **CT alignment** — Cross-correlation alignment of conductivity and temperature sensors to correct for spatial separation.
 
-6. **Dissipation (epsilon)** — Computes TKE dissipation rate per profile using `rsi_python.dissipation.get_diss`. Combines multi-probe estimates via `mk_epsilon_mean` (geometric mean with 95% CI filtering).
+6. **Dissipation (epsilon)** — Computes TKE dissipation rate per profile using `rsi.dissipation.get_diss`. Combines multi-probe estimates via `mk_epsilon_mean` (geometric mean with 95% CI filtering).
 
-7. **Chi** (optional) — Computes thermal variance dissipation rate per profile using `rsi_python.chi.get_chi` with the epsilon dataset (Method 1).
+7. **Chi** (optional) — Computes thermal variance dissipation rate per profile using `rsi.chi.get_chi` with the epsilon dataset (Method 1).
 
 ### Stage 4: Bin
 

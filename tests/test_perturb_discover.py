@@ -1,7 +1,7 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Tests for perturb.discover — .p file discovery."""
 
-from perturb.discover import find_p_files
+from microstructure_tpw.perturb.discover import find_p_files
 
 
 class TestFindPFiles:

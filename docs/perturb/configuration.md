@@ -139,7 +139,7 @@ Controls removal of initial surface instabilities from profiles.
 
 ### `epsilon` — TKE Dissipation Rate
 
-Controls computation of epsilon from shear probe spectra. Parameters are passed through to `rsi_python.dissipation.get_diss`.
+Controls computation of epsilon from shear probe spectra. Parameters are passed through to `rsi.dissipation.get_diss`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

@@ -22,18 +22,27 @@ profiler, and instruments from three manufacturers.
 
 ## Comparison Method
 
-The `scor160_tpw` package reads each benchmark NetCDF file and re-processes
-L3 cleaned shear spectra through `scor160_tpw.l4.process_l4`, which
-implements the Lueck variance method (low dissipation) and inertial
-subrange fitting (high dissipation) following Lueck et al. (2024).
+The `scor160` package reads each benchmark NetCDF file and re-processes
+through the full L1--L4 pipeline (`scor160.l2.process_l2`,
+`scor160.l3.process_l3`, `scor160.l4.process_l4`), which implements
+section selection, despiking, HP filtering, spectral estimation,
+Goodman coherent noise removal, and epsilon estimation via the Lueck
+variance method (low dissipation) and inertial subrange fitting (high
+dissipation) following Lueck et al. (2024).
 
-Results are compared per-probe against the benchmark L4 epsilon values
-in log10 space. Key metrics:
+Results are compared at each level against the benchmark reference data.
 
-- **Median ratio**: 10^median(log10(comp/ref)) -- systematic over/under
-  estimation
+**L2 metrics** (time-domain, within overlapping sections):
+
+- **Speed relative RMS**: RMS(comp - ref) / mean(|ref|)
+- **Shear relative RMS**: RMS(comp - ref) / RMS(ref)
+- **Correlation**: Pearson r between computed and reference time series
+
+**L4 metrics** (log10-space epsilon):
+
+- **Median ratio**: 10^median(log10(comp/ref)) -- systematic bias
 - **RMS log10 diff**: Root-mean-square of log10(comp/ref) -- overall
-  agreement including scatter
+  agreement
 - **Within factor N**: Fraction where |log10(comp/ref)| < log10(N)
 - **Method agreement**: Fraction where computed and reference use the
   same method (0 = variance, 1 = ISR)
@@ -41,34 +50,117 @@ in log10 space. Key metrics:
 ## Running the Comparison
 
 ```bash
+scor160-tpw l1-l2 /path/to/benchmark/*.nc      # L1 -> computed L2
 scor160-tpw l3-l4 /path/to/benchmark/*.nc      # reference L3 -> computed L4
 scor160-tpw l1-l4 /path/to/benchmark/*.nc      # full pipeline L1 -> L4
 ```
 
-## Results (per-probe epsilon)
+## ODAS-Processed Datasets
+
+The VMP2000, VMP250, and Nemo datasets were processed with Rockland
+Scientific's ODAS MATLAB Library (v4.5.1) or compatible code. Our
+implementation closely mirrors the ODAS algorithm, enabling validation
+at every processing level.
+
+### L1 to L2: Section Selection, Despiking, HP Filtering
+
+| Dataset | Probes | Sections | Speed rel RMS | Shear rel RMS | Shear corr | Vib rel RMS |
+|---------|--------|----------|---------------|---------------|------------|-------------|
+| VMP2000 Faroe Bank | 2 sh, 3 acc | 1/1 | 0.1% | 1.2% | 0.9999 | 0.0% |
+| VMP250 Haro Strait | 2 sh, 2 vib | 1/1 | 0.3% | 1.0--1.2% | 0.9999 | 0.0% |
+| VMP250 Haro Strait (cs) | 2 sh, 2 vib | 1/1 | 0.0% | 1.1--1.2% | 0.9999 | 0.0% |
+| Nemo Minas Passage | 4 sh, 2 vib | 1/1 | 1.6% | 2.9--6.1% | 0.998--0.999 | 0.8--1.1% |
+
+Section detection, speed, and vibration are near-exact for all ODAS
+datasets. Shear differences of 1--6% arise from minor despike algorithm
+differences (threshold rounding, iteration count).
+
+The VMP250 constant-speed variant uses a declared speed, so speed
+difference is exactly zero. Nemo has slightly larger shear differences
+(3--6%) due to its high-energy tidal environment where despike
+replacements have larger absolute impact.
+
+### L3 to L4: Epsilon Estimation (Reference L3)
+
+Using reference L3 spectra isolates the epsilon estimation algorithm:
 
 | Dataset | Probes | Median ratio | RMS log10 | Factor 2 | Method agree |
 |---------|--------|-------------|-----------|----------|-------------|
 | VMP2000 Faroe Bank | 2 | 1.016--1.018 | 0.011--0.012 | 100% | 100% |
-| MSS Baltic Sea | 2 | 1.008--1.014 | 0.007--0.009 | 100% | 100% |
 | VMP250 Haro Strait | 2 | 1.000 | 0.015--0.031 | 100% | 100% |
 | VMP250 Haro Strait (cs) | 2 | 0.997--1.000 | 0.016--0.067 | 96.9--100% | 96.9% |
-| Epsifish Rockall Trough | 2 | 1.203--1.226 | 0.092--0.100 | 100% | 99--100% |
 | Nemo Minas Passage | 4 | 1.072--1.075 | 0.030--0.032 | 100% | 100% |
 
-All 1,416 spectra across 6 benchmark files fall within factor 2 of
-the reference (>96.9%).
+VMP2000 and VMP250 show excellent agreement with median ratios within
+2% and RMS below 0.031 log10 decades. Nemo has a systematic +7% bias
+(see Discrepancy Analysis below).
 
-The ODAS-processed datasets (VMP2000, MSS, VMP250) show excellent
-agreement with median ratios within 2% and RMS below 0.031 log10 decades.
-The Epsifish and Nemo datasets, processed by different teams with
-instrument-specific software, show larger but understood discrepancies
-(see below).
+### L1 to L4: Full Pipeline Epsilon
+
+The full pipeline propagates L2 differences through L3 spectral
+estimation into L4 epsilon:
+
+| Dataset | Probes | Median ratio | RMS log10 | Factor 2 | Method agree |
+|---------|--------|-------------|-----------|----------|-------------|
+| VMP250 Haro Strait | 2 | 0.646--0.672 | 0.177--0.181 | 96.9--100% | 96.9--100% |
+| VMP250 Haro Strait (cs) | 2 | 0.591--0.632 | 0.203--0.211 | 87.5--100% | 93.8--96.9% |
+| Nemo Minas Passage | 4 | 0.726--0.795 | 0.100--0.144 | 100% | 100% |
+
+The VMP2000 L1→L4 run did not produce per-probe epsilon statistics in
+the comparison (343 vs 342 spectra from a minor section boundary
+difference); the L3→L4 result above confirms algorithm correctness.
+
+The VMP250 full-pipeline results show ~35% underestimate (median ratio
+0.59--0.67) compared to the near-exact L3→L4 result. This is driven by
+small L2 shear differences (1% RMS) that compound through spectral
+estimation, particularly at the lowest epsilon values where a 1%
+time-domain difference can shift the spectral minimum and change the
+integration range. All spectra remain within factor 3 of the reference.
+
+Nemo full-pipeline shows ~20--27% underestimate with low scatter (RMS
+0.10--0.14), all within factor 2.
+
+
+## Non-ODAS Datasets
+
+The MSS (Sea & Sun Technology, processed by IOW) and Epsifish
+(Epsilometer, processed by Scripps/MOD) datasets use instrument-specific
+processing software for L2 that differs significantly from ODAS. Our
+L1→L2 comparison reveals large discrepancies (35--70% shear relative
+RMS) driven by proprietary despike algorithms and different HP filter
+parameters.
+
+However, the L3→L4 comparison using reference L3 spectra shows these
+instruments work well through our epsilon estimation:
+
+| Dataset | Probes | Median ratio | RMS log10 | Factor 2 | Method agree |
+|---------|--------|-------------|-----------|----------|-------------|
+| MSS Baltic Sea | 2 | 1.008--1.014 | 0.007--0.009 | 100% | 100% |
+| Epsifish Rockall Trough | 2 | 1.203--1.226 | 0.092--0.100 | 100% | 99--100% |
+
+The MSS achieves the best L3→L4 agreement of any dataset (RMS 0.007).
+The Epsifish +20% bias has identified causes (see Discrepancy Analysis).
+
+These datasets are excluded from L1→L2 validation because their
+reference L2 was produced with non-ODAS software whose despike and
+filtering algorithms we cannot replicate from the available metadata.
+
+### Epsifish Speed Note
+
+The epsifish L1 speed contains brief dips (1--7 samples at 320 Hz)
+below the `speed_cutout = 0.2 m/s` threshold, caused by oscillations
+from the drag screen deployment. Applying the ODAS-style speed
+smoothing filter (1st-order Butterworth LP at 0.68/tau Hz, tau = 1.5 s)
+eliminates this fragmentation and recovers the correct 3 sections. The
+epsifish team used a 1 s moving-mean filter on pressure (per their
+metadata comment), which gives a marginally better speed match (RMS diff
+0.007 vs 0.012 m/s) but both approaches produce identical section
+detection.
 
 
 ## Discrepancy Analysis
 
-### VMP2000, MSS, VMP250 (ODAS-processed)
+### VMP2000, VMP250 (ODAS-processed)
 
 These datasets were processed with Rockland Scientific's ODAS MATLAB
 Library (v4.5.1) or compatible code. Our implementation closely mirrors
@@ -77,8 +169,6 @@ the ODAS algorithm, giving near-exact agreement:
 - **VMP2000 Faroe Bank**: RMS 0.011. All variance method. Residual
   ~1.6% bias from minor differences in polynomial spectral-minimum
   detection.
-- **MSS Baltic Sea**: RMS 0.007--0.009. All variance method. Viscosity
-  uses `visc35(T)` matching the reference exactly.
 - **VMP250 Haro Strait**: RMS 0.015--0.031. Mixed variance/ISR.
   Method agreement 100%. The constant-speed variant has one borderline
   spectrum per probe where our ISR margin threshold selects variance
@@ -156,7 +246,7 @@ All six ATOMIX benchmark datasets were processed with X_ISR = 0.01
 confirmed by the consistent 2x kmax ratio observed across VMP250 ISR
 spectra and Nemo data when using X_ISR = 0.02.
 
-Both `scor160_tpw.l4` and `rsi_python.dissipation` use X_ISR = 0.01 to
+Both `scor160.l4` and `rsi.dissipation` use X_ISR = 0.01 to
 match the benchmark processing.
 
 ### FOM discrepancy
@@ -183,6 +273,30 @@ near the threshold, since variance integrates over a wider spectral
 range and is more robust. This was tuned against VMP250 data where
 borderline spectra (e_1 = 1.5--2.5 x 10^-5) showed up to 0.35 decade
 error with incorrect method selection.
+
+
+## L2 Processing Details
+
+The `scor160.l2.process_l2` function implements:
+
+1. **Speed smoothing**: ODAS-style 1st-order Butterworth LP filter at
+   0.68/tau Hz (tau from metadata `speed_tau`, default 1.5 s). NaN
+   values in the speed record are linearly interpolated before filtering
+   and restored afterward.
+
+2. **Section selection**: Contiguous runs where speed >= `profile_min_W`
+   and pressure >= `profile_min_P` for at least `profile_min_duration`
+   seconds. Parameters are read from L2 group attributes, falling back
+   to global `speed_cutout` then defaults.
+
+3. **Despiking**: Within each section, shear and vibration are despiked
+   using the iterative threshold method with parameters from the
+   benchmark metadata (`despike_sh`, `despike_A`).
+
+4. **HP filtering**: 1st-order Butterworth HP at `HP_cut` Hz, applied
+   forwards and backwards (zero phase). NaN values are linearly
+   interpolated before filtering and restored afterward, preventing
+   propagation to the entire record.
 
 
 ## References

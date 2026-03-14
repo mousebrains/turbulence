@@ -3,7 +3,7 @@
 ## Reading `.p` Files
 
 ```python
-from rsi_python import PFile
+from microstructure_tpw.rsi import PFile
 
 pf = PFile("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
 
@@ -29,7 +29,7 @@ pf.channel_info       # dict of channel metadata (type, units, etc.)
 ## Computing Epsilon
 
 ```python
-from rsi_python import get_diss
+from microstructure_tpw.rsi import get_diss
 
 # Compute epsilon (returns list of xarray.Datasets, one per profile)
 eps_results = get_diss("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
@@ -54,7 +54,7 @@ eps_results = get_diss("VMP/file.p",
 ## Computing Chi
 
 ```python
-from rsi_python import get_chi
+from microstructure_tpw.rsi import get_chi
 
 # Method 1: chi from known epsilon (preferred)
 chi_results = get_chi("VMP/ARCTERX_Thompson_2025_SN479_0005.p",
@@ -74,7 +74,7 @@ ds["epsilon_T"]       # epsilon estimated from temperature
 ## Seawater Properties
 
 ```python
-from rsi_python import visc, density, buoyancy_freq
+from microstructure_tpw.rsi import visc, density, buoyancy_freq
 
 # Kinematic viscosity [m²/s]
 nu = visc(10.0, 35.0, 100.0)  # T=10°C, S=35, P=100 dbar
@@ -95,10 +95,10 @@ N2, p_mid = buoyancy_freq(T, S, P)
 The pipeline can also be driven from Python:
 
 ```python
-from rsi_python.convert import p_to_netcdf
-from rsi_python.profile import extract_profiles
-from rsi_python.dissipation import compute_diss_file
-from rsi_python.chi import compute_chi_file
+from microstructure_tpw.rsi.convert import p_to_netcdf
+from microstructure_tpw.rsi.profile import extract_profiles
+from microstructure_tpw.rsi.dissipation import compute_diss_file
+from microstructure_tpw.rsi.chi import compute_chi_file
 
 # Stage 1: Convert to NetCDF
 pf, nc_path = p_to_netcdf("VMP/file.p", "output/file.nc")

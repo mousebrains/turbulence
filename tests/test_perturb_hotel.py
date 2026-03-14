@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import numpy as np
 import pytest
 
-from perturb.hotel import HotelData, interpolate_hotel, load_hotel
+from microstructure_tpw.perturb.hotel import HotelData, interpolate_hotel, load_hotel
 
 # ---------------------------------------------------------------------------
 # Helpers

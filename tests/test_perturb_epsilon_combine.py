@@ -4,7 +4,7 @@
 import numpy as np
 import xarray as xr
 
-from perturb.epsilon_combine import mk_epsilon_mean
+from microstructure_tpw.perturb.epsilon_combine import mk_epsilon_mean
 
 
 def _make_diss_ds(e1, e2, speed=None, nu=None, diss_length=512, fs_fast=512.0):

@@ -1,7 +1,7 @@
-# DEEP-DIVE CODEBASE SURVEY: rsi-python / turbulence
+# DEEP-DIVE CODEBASE SURVEY: microstructure-tpw / turbulence
 
 **Survey Date:** March 2025  
-**Project:** rsi-python — Python tools for Rockland Scientific turbulence measurement data  
+**Project:** microstructure-tpw — Python tools for Rockland Scientific turbulence measurement data  
 **Repository:** `/Users/pat/tpw/turbulence`  
 **Total LOC:** ~7,819 (src/), 194 passing tests, 100% CLI coverage
 
@@ -10,7 +10,7 @@
 ## 1. HIGH-LEVEL ARCHITECTURE & MAIN WORKFLOWS
 
 ### Overview
-**rsi-python** is a complete processing pipeline for ocean turbulence measurements from Rockland Scientific instruments (VMP, MicroRider). It reads proprietary `.p` binary files, converts channels to physical units, detects vertical profiles, and computes:
+**microstructure-tpw** is a complete processing pipeline for ocean turbulence measurements from Rockland Scientific instruments (VMP, MicroRider). It reads proprietary `.p` binary files, converts channels to physical units, detects vertical profiles, and computes:
 - **Epsilon (ε)**: TKE dissipation rate from shear probe spectra [W/kg]
 - **Chi (χ)**: Thermal variance dissipation rate from FP07 thermistor spectra [K²/s]
 
@@ -52,7 +52,7 @@ rsi-tpw chi profiles/*.nc --epsilon-dir eps/ # Stage 4: compute chi (Method 1)
 
 #### Workflow 3: Python API
 ```python
-from rsi_python import PFile, get_diss, get_chi
+from microstructure_tpw.rsi import PFile, get_diss, get_chi
 
 pf = PFile("data.p")
 eps_ds = get_diss("data.p")[0]                  # epsilon
@@ -215,7 +215,7 @@ However, here are **minor areas of attention**:
 
 **Files:**
 - `/Users/pat/tpw/turbulence/odas/get_diss_odas.m` (MATLAB reference)
-- `/Users/pat/tpw/turbulence/src/rsi_python/dissipation.py` (Python port)
+- `/Users/pat/tpw/turbulence/src/rsi/dissipation.py` (Python port)
 - Test file: `/Users/pat/tpw/turbulence/tests/data/SN479_0006.p` (5.2 MB sample)
 
 **Commands:**
@@ -225,7 +225,7 @@ cd odas/
 result_matlab = get_diss_odas(p_file_path);
 
 # Python
-python3 -c "from rsi_python import get_diss; get_diss('tests/data/SN479_0006.p')"
+python3 -c "from microstructure_tpw.rsi import get_diss; get_diss('tests/data/SN479_0006.p')"
 ```
 
 ### Priority 2: Large-File Handling & Memory
@@ -251,7 +251,7 @@ python3 -c "from rsi_python import get_diss; get_diss('tests/data/SN479_0006.p')
 4. Test upstream tracking: run chi after epsilon → check cumulative hash in chi dir
 
 **Files:**
-- `src/rsi_python/config.py::resolve_output_dir()` (line ~)
+- `src/microstructure_tpw/rsi/config.py::resolve_output_dir()` (line ~)
 - `tests/test_config.py::TestSetupOutputDir` (test reference)
 
 ### Priority 4: FP07 Noise Floor
@@ -263,7 +263,7 @@ python3 -c "from rsi_python import get_diss; get_diss('tests/data/SN479_0006.p')
 3. Ensure noise floor doesn't cause spurious chi estimates when signal ≈ noise
 
 **Files:**
-- `src/rsi_python/fp07.py::gradT_noise()` (line 227)
+- `src/microstructure_tpw/rsi/fp07.py::gradT_noise()` (line 227)
 - Check against Peterson & Fer (2014) Table 1
 
 ### Priority 5: QC Metrics Thresholds
@@ -280,8 +280,8 @@ python3 -c "from rsi_python import get_diss; get_diss('tests/data/SN479_0006.p')
 3. Add suggested flags to output metadata
 
 **Files:**
-- `src/rsi_python/dissipation.py` (epsilon QC, line ~)
-- `src/rsi_python/chi.py` (chi QC, line ~)
+- `src/microstructure_tpw/rsi/dissipation.py` (epsilon QC, line ~)
+- `src/microstructure_tpw/rsi/chi.py` (chi QC, line ~)
 
 ### Priority 6: Visualization Features
 **Objective:** Test interactive viewers for usability with real campaigns
@@ -297,8 +297,8 @@ python3 -c "from rsi_python import get_diss; get_diss('tests/data/SN479_0006.p')
 4. Verify performance with 30+ profiles open
 
 **Files:**
-- `src/rsi_python/quick_look.py` (1179 LOC)
-- `src/rsi_python/diss_look.py` (1149 LOC)
+- `src/microstructure_tpw/rsi/quick_look.py` (1179 LOC)
+- `src/microstructure_tpw/rsi/diss_look.py` (1149 LOC)
 
 ### Priority 7: CI/CD & Code Quality
 **Objective:** Ensure reproducibility across Python versions
@@ -329,7 +329,7 @@ python3 -c "from rsi_python import get_diss; get_diss('tests/data/SN479_0006.p')
 3. Flag profiles for user review in metadata
 
 **Files:**
-- `src/rsi_python/p_file.py::PFile.channels` (all channels, line ~)
+- `src/microstructure_tpw/rsi/p_file.py::PFile.channels` (all channels, line ~)
 - Check sample file: `tests/data/SN479_0006.p` has these channels but all zeros
 
 ---
@@ -353,7 +353,7 @@ python3 -c "from rsi_python import get_diss; get_diss('tests/data/SN479_0006.p')
 
 ## SUMMARY
 
-**rsi-python** is a well-engineered, thoroughly tested Python port of the Rockland Scientific ODAS MATLAB library. All documented features are implemented, tested, and aligned with source. The codebase shows:
+**microstructure-tpw** is a well-engineered, thoroughly tested Python port of the Rockland Scientific ODAS MATLAB library. All documented features are implemented, tested, and aligned with source. The codebase shows:
 
 ✅ **Strengths:**
 - Complete end-to-end pipeline (binary I/O → processing → NetCDF output)

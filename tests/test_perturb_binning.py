@@ -4,7 +4,13 @@
 import numpy as np
 import xarray as xr
 
-from perturb.binning import _bin_array, bin_by_depth, bin_by_time, bin_chi, bin_diss
+from microstructure_tpw.perturb.binning import (
+    _bin_array,
+    bin_by_depth,
+    bin_by_time,
+    bin_chi,
+    bin_diss,
+)
 
 
 class TestBinArray:

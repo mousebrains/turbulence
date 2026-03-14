@@ -6,26 +6,41 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Processing and analysis code for calculating turbulent kinetic energy (TKE) and chi (thermal dissipation rate) from Rockland Scientific vertical microprofilers and microriders. Instruments use fast temperature sensors (e.g., FP07 thermistors).
 
-## Package: rsi-python
+## Package: microstructure-tpw
 
-Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/rsi_python/`.
+Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/microstructure_tpw/`.
 
-### Modules
+### Subpackages
+
+- `rsi/` — Rockland Scientific instrument I/O, NetCDF conversion, profiles, epsilon, chi orchestration
+- `chi/` — Chi (thermal variance dissipation) calculation, Batchelor/Kraichnan spectra, FP07 transfer function
+- `scor160/` — ATOMIX shear-probe benchmark processing (L1–L4), shared physics/spectral modules
+- `perturb/` — Full campaign processing pipeline (trim, merge, calibrate, compute, bin)
+
+### Key Modules (rsi)
 
 - `p_file.py` — `PFile` class: reads Rockland `.p` binary files, parses headers, demultiplexes address matrix, converts to physical units. `parse_config()` parses the embedded INI config string.
 - `channels.py` — Conversion functions (raw counts → physical units) for each sensor type. `CONVERTERS` dict maps type names to functions.
 - `convert.py` — `p_to_netcdf()` and `convert_all()` for writing NetCDF4 output.
 - `profile.py` — Profile detection and per-profile NetCDF extraction.
 - `dissipation.py` — Core epsilon calculation with multi-source input, QC metrics (fom, K_max_ratio).
+- `chi_io.py` — Chi orchestration: load instrument data and call chi computation.
+- `config.py` — YAML configuration loading, merging, template generation.
+- `cli.py` — Unified `rsi-tpw` CLI with subcommands.
+
+### Key Modules (chi)
+
 - `chi.py` — Chi (thermal variance dissipation) calculation, Methods 1 and 2, QC metrics.
 - `batchelor.py` — Batchelor and Kraichnan temperature gradient spectra.
 - `fp07.py` — FP07 thermistor transfer function and electronics noise model.
+
+### Key Modules (scor160)
+
 - `spectral.py` — Cross-spectral density estimation (Welch method, cosine window).
 - `goodman.py` — Goodman coherent noise removal using accelerometer spectra.
 - `despike.py` — Iterative spike removal for shear probe signals.
 - `nasmyth.py` — Nasmyth universal shear spectrum (Lueck improved fit).
 - `ocean.py` — Seawater properties: `visc35`, `visc(T,S,P)`, `density(T,S,P)`, `buoyancy_freq(T,S,P)` via gsw (TEOS-10).
-- `cli.py` — Unified `rsi-tpw` CLI with subcommands.
 
 ### CLI Commands
 
@@ -43,8 +58,8 @@ rsi-tpw eps VMP/*.p --salinity 34.5 -o epsilon/  # custom salinity
 ### Python API
 
 ```python
-from rsi_python import PFile, get_diss, get_chi
-from rsi_python import visc, density, buoyancy_freq
+from microstructure_tpw.rsi import PFile, get_diss, get_chi
+from microstructure_tpw.scor160.ocean import visc, density, buoyancy_freq
 
 pf = PFile("VMP/ARCTERX_Thompson_2025_SN479_0001.p")
 pf.channels["T1"]    # numpy array, physical units (°C)
