@@ -88,7 +88,7 @@ def _add_bin(sub: argparse._SubParsersAction) -> None:
     p.add_argument("-b", "--bin-width", type=float, default=2.0, help="Bin width [m]")
     p.add_argument("--dmin", type=float, default=0.0, help="Min depth [m]")
     p.add_argument("--dmax", type=float, default=1000.0, help="Max depth [m]")
-    p.add_argument("--lat", type=float, default=45.0, help="Latitude for P→depth")
+    p.add_argument("--lat", type=float, default=45.0, help="Latitude for P-to-depth")
     p.add_argument("-p", "--pressure", action="store_true", help="Bin by pressure instead of depth")
     p.add_argument(
         "-v",

@@ -134,7 +134,7 @@ def _create_l1_variables(group, specs, complevel=4):
     for var_name, dtype, dims, data, attrs in specs:
         if data is None:
             continue
-        v = group.createVariable(var_name, dtype, dims, zlib=use_zlib, complevel=complevel)
+        v = group.createVariable(var_name, dtype, dims, zlib=use_zlib, complevel=complevel)  # type: ignore[call-overload]
         v[:] = data
         for key, val in attrs.items():
             setattr(v, key, val)
@@ -536,7 +536,7 @@ def p_to_L1(
         info = pf.channel_info[name]
         dim = ("TIME",) if pf.is_fast(name) else ("TIME_SLOW",)
         var_name = name.replace(" ", "_")
-        v = L1.createVariable(var_name, "f4", dim, zlib=use_zlib, complevel=complevel)
+        v = L1.createVariable(var_name, "f4", dim, zlib=use_zlib, complevel=complevel)  # type: ignore[call-overload]
         v[:] = pf.channels[name].astype(np.float32)
         v.units = info["units"]
         v.sensor_type = info["type"]
