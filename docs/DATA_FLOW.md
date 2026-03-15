@@ -10,403 +10,380 @@ Chi levels and binning are extensions to the SCOR-160 framework.
 
 ---
 
-## File organisation
+## CLI commands
 
-| Stage | Files | Scope |
-|-------|-------|-------|
-| .P files | `VMP/*.p` | Raw Rockland binary, one per deployment cast |
-| Ancillary | various | GPS, hotel, and other auxiliary data |
-| L0 | `nc/<name>.nc` | One NetCDF per .P file, all records |
-| Per-profile | `profiles/<name>_NNN.nc` | One NetCDF per detected profile |
-| Combined | `results/<name>_combined.nc` | One per chain per deployment, merging all profiles across all .P files |
-
----
-
-## Processing overview
-
-From L2_cleaned, the pipeline splits into two branches:
-
-1. **Epsilon chain (SCOR-160):** L3_spectra → L4_dissipation → L5_dissipation_binned → L6_dissipation_combined
-2. **Chi spectra (shared):** L3_chi_spectra (temperature gradient spectra, common to both chi methods)
-
-From L3_chi_spectra, the chi pipeline splits into two parallel chains:
-
-1. **Chi with epsilon chain:** L3_chi_spectra + L4_dissipation → L4_chi_epsilon → L5_chi_epsilon_binned → L6_chi_epsilon_combined
-2. **Chi fit chain (optional):** L3_chi_spectra → L4_chi_fit → L5_chi_fit_binned → L6_chi_fit_combined
+| Command | Input | Output | Purpose |
+|---------|-------|--------|---------|
+| `rsi-tpw info` | `.p` files | stdout | Print .p file metadata |
+| `rsi-tpw nc` | `.p` files | Full-record `.nc` | Convert .p to NetCDF (L1) |
+| `rsi-tpw prof` | `.p` or `.nc` | Per-profile `.nc` | Extract profiles |
+| `rsi-tpw eps` | `.p`, `.nc`, or per-profile `.nc` | `*_eps.nc` per profile | Compute epsilon |
+| `rsi-tpw chi` | `.p`, `.nc`, or per-profile `.nc` | `*_chi.nc` per profile | Compute chi |
+| `rsi-tpw pipeline` | `.p` files | Multi-level directory tree | Full L1→L6 pipeline |
+| `rsi-tpw ql` | `.p` files | Interactive viewer | Quick-look exploration |
+| `rsi-tpw dl` | `.p` files | Interactive viewer | Dissipation quality inspection |
+| `rsi-tpw init` | — | `config.yaml` | Generate template config |
 
 ---
 
-## Common levels
+## Full pipeline
 
-### L0 — Raw NetCDF
+`rsi-tpw pipeline VMP/*.p -o results/`
 
-**Source:** .P binary files + ancillary data (GPS, hotel, etc.)
-**Output:** One NetCDF file per .P file
-**NetCDF group:** root (no group)
+For each .P file, profiles are detected automatically, then each profile is
+processed through L1→L6.  Levels L1 through L3 are in-memory processing steps;
+only L4, L5, and L6 are written to disk.
 
-Equivalent to the ODAS `odas_p2mat` output.  Reads the .P binary, parses
-the header and configuration string, demultiplexes the address matrix, and
-converts all channels to physical units.  Ancillary data (GPS positions,
-hotel/ship systems, etc.) are also ingested at this stage and merged into
-the NetCDF output.  No profile splitting, no filtering.
+### L1 — Converted (in-memory)
 
-**Contents:**
-- Fast-rate channels at native sampling (≈512 Hz): shear probes, fast
-  thermistors (FP07), piezo accelerometers, chlorophyll, turbidity
-- Slow-rate channels (≈64 Hz): pressure, JAC CT temperature and
-  conductivity, inclinometer, dissolved oxygen, battery voltage
-- Time vectors (`t_fast`, `t_slow`) in seconds since start
-- Profiling speed derived from pressure
-- Global attributes: `fs_fast`, `fs_slow`, instrument metadata,
-  configuration string
+**Source:** .P binary file, one profile slice
+**Module:** `rsi/adapter.py` → `pfile_to_l1data()`
 
----
+Reads the .P binary, parses the header and configuration string,
+demultiplexes the address matrix, converts all channels to physical units,
+and slices to the detected profile window.  Pressure is interpolated from
+slow to fast rate.  Profiling speed is computed from dP/dt with Butterworth
+smoothing.
 
-### L1_converted
-
-**Source:** L0, split into individual profiles
-**NetCDF group:** `L1_converted`
-**Scope:** per profile
-
-The SCOR-160 starting point for each profile.  Contains time series in
-physical units following the ATOMIX variable naming convention.  Speed
-normalisation is applied to shear (du/dz) and temperature gradient (dT/dz)
-as required by the benchmark specification.
-
-**Variables:**
-
-| Variable | Dimensions | Units | Description |
-|----------|-----------|-------|-------------|
-| TIME | (TIME,) | days since YYYY-01-01 | Fast-rate decimal day |
-| TIME_SLOW | (TIME_SLOW,) | days since YYYY-01-01 | Slow-rate decimal day |
-| PRES | (TIME,) | decibar | Pressure interpolated to fast rate |
-| PRES_SLOW | (TIME_SLOW,) | decibar | Pressure at native slow rate |
-| SHEAR | (N_SHEAR_SENSORS, TIME) | s-1 | Velocity shear du/dz |
-| VIB | (N_VIB_SENSORS, TIME) | 1 | Piezo accelerometer vibration |
-| ACC | (N_ACC_SENSORS, TIME) | m s-2 | Linear accelerometer (if present) |
-| GRADT | (N_GRADT_SENSORS, TIME) | degrees_Celsius m-1 | Temperature gradient dT/dz |
-| TEMP | (N_TEMP_SENSORS, TIME) | degree_Celsius | Fast FP07 thermistor temperature |
-| TEMP_CTD | (TIME_SLOW,) | degree_Celsius | Slow CTD temperature (JAC_T) |
-| COND_CTD | (TIME_SLOW,) | mS cm-1 | Slow CTD conductivity (JAC_C) |
-| PITCH | (TIME_SLOW,) | degrees | Platform pitch angle |
-| ROLL | (TIME_SLOW,) | degrees | Platform roll angle |
-| MAG | (N_MAG_SENSORS, TIME_SLOW) | micro_Tesla | Magnetometer (if present) |
-| CHLA | (TIME,) | ug L-1 | Chlorophyll-a fluorescence |
-| TURB | (TIME,) | FTU | Turbidity |
-| DOXY | (TIME_SLOW,) | umol L-1 | Dissolved oxygen |
-| DOXY_TEMP | (TIME_SLOW,) | degree_Celsius | Oxygen optode temperature |
-
-**Group attributes:** `fs_fast`, `fs_slow`, `f_AA`, `vehicle`,
-`time_reference_year`
+**Contents (L1Data):**
+- Shear probes (sh1, sh2) normalised by speed: du/dz in s⁻¹
+- Piezo accelerometers / vibration channels
+- Fast thermistor temperature (T1, T2)
+- Pressure interpolated to fast rate
+- Profiling speed (from dP/dt)
+- Time vectors, sampling rates
 
 ---
 
-### L2_cleaned
+### L2 — Cleaned (in-memory)
 
-**Source:** L1_converted
-**NetCDF group:** `L2_cleaned`
-**Scope:** per profile
-
-Cleaned time series ready for spectral analysis.
+**Source:** L1Data
+**Module:** `scor160/l2.py` → `process_l2()`
 
 **Processing:**
-- Despike shear and accelerometer channels (iterative median filter)
-- Apply speed filter (discard segments below minimum profiling speed)
-- Segment into dissipation-length windows with overlap
+- High-pass filter shear and vibration (default HP_cut = 0.25 Hz)
+- Despike shear channels (iterative median filter, default threshold = 8 MAD)
+- Section selection (minimum speed, depth, duration)
+
+---
+
+### L3 — Shear spectra (in-memory)
+
+**Source:** L2Data + L1Data
+**Module:** `scor160/l3.py` → `process_l3()`
+
+**Processing:**
+- Divide sections into overlapping dissipation windows
+- FFT + Welch method (cosine window, 50% overlap within each window)
+- Goodman coherent noise removal using accelerometer spectra
+- Macoun–Lueck spatial response correction
+- Convert frequency → wavenumber using mean segment speed
+
+**Output (L3Data):**
+- Shear wavenumber spectra per probe per window (raw and cleaned)
+- Vibration/accelerometer spectra
+- Wavenumber vector, mid-window pressure/temperature/speed
+
+---
+
+### L4 — Epsilon (written to disk)
+
+**Source:** L3Data
+**Module:** `scor160/l4.py` → `process_l4()`
+**Output file:** `profile_NNN/L4_epsilon.nc`
+
+TKE dissipation rate ε estimated by fitting the Nasmyth spectrum.
+
+**Processing:**
+- Per probe, per window: initial ε estimate via spectral integration
+- Variance method (low ε) or inertial subrange (ISR) method (high ε),
+  selected by the e_ISR_threshold criterion
+- QC metrics: figure of merit (FOM), mean absolute deviation (MAD),
+  Lueck figure of merit (FM), K_max_ratio, fraction of variance resolved
+- Final ε: geometric mean across passing probes
 
 **Variables:**
 
 | Variable | Dimensions | Description |
 |----------|-----------|-------------|
-| TIME | (TIME,) | Time coordinate |
-| SHEAR | (N_SHEAR_SENSORS, TIME) | Despiked shear |
-| VIB or ACC | (N_VIB_SENSORS, TIME) | Despiked vibration/acceleration |
-| PSPD_REL | (TIME,) or (TIME_SLOW,) | Profiling speed |
-| SECTION_NUMBER | (TIME,) | Dissipation window index |
+| epsilon | (probe, time) | ε per shear probe |
+| epsilon_final | (time,) | Selected best ε |
+| fom | (probe, time) | Figure of merit |
+| mad | (probe, time) | Mean absolute deviation |
+| kmax | (probe, time) | Upper integration wavenumber |
+| var_resolved | (probe, time) | Fraction of variance resolved |
+| sea_water_pressure | (time,) | Mean pressure per window |
+| pspd_rel | (time,) | Profiling speed |
 
 ---
 
-## Epsilon chain (SCOR-160)
+### Chi processing chain
 
-`L2_cleaned → L3_spectra → L4_dissipation → L5_dissipation_binned → L6_dissipation_combined`
+From L2, the chi chain runs its own L2_chi and L3_chi cleaning and spectral
+computation, then branches into two methods at L4.
 
-### L3_spectra
+#### L2_chi — Temperature cleaning (in-memory)
 
-**Source:** L2_cleaned
-**NetCDF group:** `L3_spectra`
-**Scope:** per profile
-
-Power spectral densities computed via Welch's method with a cosine
-(half-overlapped) window for each dissipation window.
+**Source:** L1Data + L2Data
+**Module:** `chi/l2_chi.py` → `process_l2_chi()`
 
 **Processing:**
-- Compute shear spectra and vibration/accelerometer spectra per segment
-- Apply Goodman coherent noise removal → clean shear spectra
-- Compute temperature gradient spectra
+- Despike fast thermistor temperature (default threshold = 10 MAD)
+- Compute temperature gradient: dT/dz = fs·diff(T) / speed
+- HP-filter vibration for Goodman
 
-**Variables:**
+#### L3_chi — Temperature gradient spectra (in-memory)
+
+**Source:** L2ChiData
+**Module:** `chi/l3_chi.py` → `process_l3_chi()`
+
+**Processing:**
+- Same windowing as epsilon L3
+- FFT + Welch on temperature gradient
+- Goodman coherent noise removal (if accelerometers present)
+- FP07 transfer function correction (single-pole or double-pole)
+- First-difference and bilinear corrections
+
+#### L4_chi_epsilon — Chi from epsilon (Method 1)
+
+**Source:** L3ChiData + L4Data
+**Module:** `chi/l4_chi.py` → `process_l4_chi_epsilon()`
+**Output file:** `profile_NNN/L4_chi_epsilon.nc`
+
+Thermal variance dissipation rate χ computed using ε from L4.
+The Batchelor wavenumber is fixed by the shear-derived ε, and the
+Batchelor/Kraichnan spectrum is fit to the observed temperature gradient
+spectrum.
+
+#### L4_chi_fit — Chi from spectral fit (Method 2, optional)
+
+**Source:** L3ChiData
+**Module:** `chi/l4_chi.py` → `process_l4_chi_fit()`
+**Output file:** `profile_NNN/L4_chi_fit.nc`
+
+Thermal variance dissipation rate χ computed without ε.  A Kraichnan
+model is fit directly to the temperature gradient spectrum by jointly
+estimating χ and the Batchelor wavenumber (MLE or iterative method).
+
+**L4_chi variables (both methods):**
 
 | Variable | Dimensions | Description |
 |----------|-----------|-------------|
-| TIME | (N_SEGMENT,) | Mid-segment time |
-| PRES | (N_SEGMENT,) | Mid-segment pressure |
-| TEMP | (N_SEGMENT,) | Mid-segment temperature |
-| PSPD_REL | (N_SEGMENT,) | Segment-mean profiling speed |
-| KCYC | (N_KCYC,) | Wavenumber vector (cpm) |
-| SH_SPEC | (N_SHEAR_SENSORS, N_SEGMENT, N_KCYC) | Raw shear spectra |
-| SH_SPEC_CLEAN | (N_SHEAR_SENSORS, N_SEGMENT, N_KCYC) | Cleaned shear spectra |
-| VIB_SPEC or ACC_SPEC | (..., N_SEGMENT, N_KCYC) | Vibration/accelerometer spectra |
-| DOF | scalar or (N_SEGMENT,) | Degrees of freedom |
-| N_FFT_SEGMENTS | scalar | FFT sub-segments per window |
-| SECTION_NUMBER | (N_SEGMENT,) | Window index |
+| chi | (probe, time) | χ per thermistor |
+| chi_final | (time,) | Selected best χ |
+| epsilon_T | (probe, time) | ε implied by chi |
+| kB | (probe, time) | Batchelor wavenumber |
+| K_max | (probe, time) | Upper integration wavenumber |
+| fom | (probe, time) | Figure of merit |
+| K_max_ratio | (probe, time) | K_max / kB ratio |
+| sea_water_pressure | (time,) | Mean pressure per window |
+| pspd_rel | (time,) | Profiling speed |
 
 ---
 
-### L4_dissipation
+### L5 — Depth-binned (written to disk)
 
-**Source:** L3_spectra
-**NetCDF group:** `L4_dissipation`
-**Scope:** per profile
+**Source:** L4 epsilon + L4 chi
+**Module:** `rsi/binning.py` → `bin_by_depth()`
+**Output file:** `profile_NNN/L5_binned.nc`
 
-TKE dissipation rate ε estimated by fitting the Nasmyth spectrum to the
-observed shear spectra.
+Epsilon and chi estimates from L4 are depth-binned together into a single
+dataset.  Log-normal variables (epsilon, chi) use geometric mean; others
+use arithmetic mean.
 
-**Processing:**
-- Iterative Nasmyth spectral fit over the integration wavenumber range
-- Compute figure of merit (FOM), K_max ratio, and other QC metrics
-- Select final ε from best-quality shear probe
-
-**Variables:**
-
-| Variable | Dimensions | Description |
-|----------|-----------|-------------|
-| TIME | (N_SEGMENT,) | Mid-segment time |
-| PRES | (N_SEGMENT,) | Mid-segment pressure |
-| TEMP | (N_SEGMENT,) | Mid-segment temperature |
-| EPSI | (N_SHEAR_SENSORS, N_SEGMENT) | ε per shear probe |
-| EPSI_FINAL | (N_SEGMENT,) | Selected best ε |
-| FOM | (N_SHEAR_SENSORS, N_SEGMENT) | Figure of merit |
-| MAD | (N_SHEAR_SENSORS, N_SEGMENT) | Mean absolute deviation |
-| KMAX | (N_SHEAR_SENSORS, N_SEGMENT) | Upper integration wavenumber |
-| N_S | (N_SHEAR_SENSORS, N_SEGMENT) | Nasmyth fit iteration count |
-| KVISC | (N_SEGMENT,) | Kinematic viscosity |
-| PSPD_REL | (N_SEGMENT,) | Profiling speed |
-| METHOD | scalar | Integration method identifier |
-| EPSI_FLAGS | (N_SHEAR_SENSORS, N_SEGMENT) | Bitwise QC flags |
-| VAR_RESOLVED | (N_SHEAR_SENSORS, N_SEGMENT) | Fraction of variance resolved |
+**Dimensions:** `(depth_bin,)` — bin centers in dbar (default 1 dbar bins)
 
 ---
 
-### L5_dissipation_binned
+### L6 — Combined (written to disk)
 
-**Source:** L4_dissipation
-**NetCDF group:** `L5_dissipation_binned`
-**Scope:** per profile
+**Source:** L5 datasets from all profiles across all .P files
+**Module:** `rsi/combine.py` → `combine_profiles()`
+**Output file:** `<p_file_stem>/L6_combined.nc`
 
-Depth-binned averages of ε within each profile.
+Aligns all profiles to a common depth grid (union of bin centers) and
+stacks into a multi-profile dataset.
 
-**Processing:**
-- Bin L4_dissipation results by pressure
-- Compute bin-averaged ε (geometric mean) and aggregated QC metrics
-
----
-
-### L6_dissipation_combined
-
-**Source:** L5_dissipation_binned from all profiles across all .P files
-**Output:** Single NetCDF file per deployment
-**Scope:** entire deployment
-
-Final epsilon data product.  Merges L5_dissipation_binned across all
-profiles from all .P files in a deployment.
-
-**Dimensions:** `(N_PROFILE, N_DEPTH_BIN)`
+**Dimensions:** `(profile, depth_bin)`
 
 ---
 
-## Chi spectra (shared)
+## Modular commands
 
-`L2_cleaned → L3_chi_spectra`
+The modular commands (`nc`, `prof`, `eps`, `chi`) can be run independently
+and accept input at any pipeline stage (.p files, full-record .nc, or
+per-profile .nc).
 
-Temperature gradient spectra shared by both chi methods.  The spectral
-computation is identical whether or not epsilon is available — only the
-downstream fitting step differs.
-
-### L3_chi_spectra
-
-**Source:** L2_cleaned
-**NetCDF group:** `L3_chi_spectra`
-**Scope:** per profile
-
-Temperature gradient power spectral densities computed via Welch's method
-with optional Goodman coherent noise removal using accelerometers.
-
-**Processing:**
-- Convert fast thermistor temperature to spatial gradient dT/dz (first-difference, speed-normalised)
-- Compute temperature gradient spectra per dissipation window (Welch method)
-- Apply Goodman coherent noise removal (if accelerometers present)
-- Apply first-difference and bilinear corrections
-
-**Variables:**
-
-| Variable | Dimensions | Description |
-|----------|-----------|-------------|
-| TIME | (N_SEGMENT,) | Mid-segment time |
-| PRES | (N_SEGMENT,) | Mid-segment pressure |
-| TEMP | (N_SEGMENT,) | Mid-segment temperature |
-| PSPD_REL | (N_SEGMENT,) | Segment-mean profiling speed |
-| KCYC | (N_KCYC,) | Wavenumber vector (cpm) |
-| GRADT_SPEC | (N_GRADT_SENSORS, N_SEGMENT, N_KCYC) | Temperature gradient spectra |
-| NOISE_SPEC | (N_GRADT_SENSORS, N_SEGMENT, N_KCYC) | Electronics noise floor |
-| DOF | scalar or (N_SEGMENT,) | Degrees of freedom |
-| SECTION_NUMBER | (N_SEGMENT,) | Window index |
-
----
-
-## Chi fit chain (optional)
-
-`L3_chi_spectra → L4_chi_fit → L5_chi_fit_binned → L6_chi_fit_combined`
-
-Independent of the epsilon chain.  Computes χ without requiring ε.
-
-### L4_chi_fit
-
-**Source:** L3_chi_spectra
-**NetCDF group:** `L4_chi_fit`
-**Scope:** per profile
-**Status:** optional
-
-Thermal variance dissipation rate χ computed without ε (Method 2).
-A Kraichnan model is fit directly to the temperature gradient spectrum
-by jointly estimating χ and the Batchelor wavenumber.
-
-This method is independent of the shear-probe ε estimate but may be less
-constrained at high wavenumbers where the FP07 transfer function
-correction is large.
-
----
-
-### L5_chi_fit_binned
-
-**Source:** L4_chi_fit
-**NetCDF group:** `L5_chi_fit_binned`
-**Scope:** per profile
-
-Depth-binned averages of χ (Method 2) within each profile.
-
----
-
-### L6_chi_fit_combined
-
-**Source:** L5_chi_fit_binned from all profiles across all .P files
-**Output:** Single NetCDF file per deployment
-**Scope:** entire deployment
-
-Final chi-fit data product.  Merges L5_chi_fit_binned across all profiles
-from all .P files in a deployment.
-
-**Dimensions:** `(N_PROFILE, N_DEPTH_BIN)`
-
----
-
-## Chi with epsilon chain
-
-`L3_chi_spectra + L4_dissipation → L4_chi_epsilon → L5_chi_epsilon_binned → L6_chi_epsilon_combined`
-
-Requires ε from the epsilon chain (cross-chain dependency).
-
-### L4_chi_epsilon
-
-**Source:** L3_chi_spectra + L4_dissipation
-**NetCDF group:** `L4_chi_epsilon`
-**Scope:** per profile
-
-Thermal variance dissipation rate χ computed using ε from L4_dissipation
-(Method 1).  The Batchelor spectrum, parameterised by ε, is fit to the
-observed temperature gradient spectrum.
-
-**Processing:**
-- Use ε and kinematic viscosity to compute the Batchelor wavenumber
-- Fit the Batchelor/Kraichnan temperature gradient spectrum convolved with
-  the FP07 transfer function
-- Compute χ, FOM, and K_max ratio QC metrics
-
-**Inputs:**
-- Temperature gradient spectra from L3_chi_spectra
-- ε from L4_dissipation
-- Temperature and pressure for thermal diffusivity
-
----
-
-### L5_chi_epsilon_binned
-
-**Source:** L4_chi_epsilon
-**NetCDF group:** `L5_chi_epsilon_binned`
-**Scope:** per profile
-
-Depth-binned averages of χ (Method 1) within each profile.
-
----
-
-### L6_chi_epsilon_combined
-
-**Source:** L5_chi_epsilon_binned from all profiles across all .P files
-**Output:** Single NetCDF file per deployment
-**Scope:** entire deployment
-
-Final chi-with-epsilon data product.  Merges L5_chi_epsilon_binned across
-all profiles from all .P files in a deployment.
-
-**Dimensions:** `(N_PROFILE, N_DEPTH_BIN)`
-
----
-
-## NetCDF structure summary
+### `rsi-tpw nc` — Convert to NetCDF
 
 ```
-L0 file (one per .P):
-  root/
-    t_fast, t_slow, P_slow, T1_fast, T2_fast, sh1, sh2, ...
-    attrs: fs_fast, fs_slow, ...
-
-Per-profile file (one per profile):
-  L1_converted/
-    TIME, TIME_SLOW, PRES, SHEAR, TEMP, GRADT, VIB, ...
-  L2_cleaned/
-    TIME, SHEAR, VIB, PSPD_REL, SECTION_NUMBER, ...
-
-  # Epsilon chain
-  L3_spectra/
-    TIME, PRES, KCYC, SH_SPEC, SH_SPEC_CLEAN, ...
-  L4_dissipation/
-    TIME, PRES, EPSI, EPSI_FINAL, FOM, KMAX, ...
-  L5_dissipation_binned/
-    PRES, EPSI, TEMP, ...
-
-  # Chi spectra (shared by both chi chains)
-  L3_chi_spectra/
-    TIME, PRES, KCYC, GRADT_SPEC, NOISE_SPEC, ...
-
-  # Chi fit chain (optional)
-  L4_chi_fit/
-    TIME, PRES, CHI, ...
-  L5_chi_fit_binned/
-    PRES, CHI, TEMP, ...
-
-  # Chi with epsilon chain
-  L4_chi_epsilon/
-    TIME, PRES, CHI, CHI_FINAL, FOM, ...
-  L5_chi_epsilon_binned/
-    PRES, CHI, TEMP, ...
-
-Combined files (one per chain per deployment):
-  L6_dissipation_combined.nc
-    PRES(N_PROFILE, N_DEPTH_BIN), EPSI(...), ...
-  L6_chi_fit_combined.nc          (optional)
-    PRES(N_PROFILE, N_DEPTH_BIN), CHI(...), ...
-  L6_chi_epsilon_combined.nc
-    PRES(N_PROFILE, N_DEPTH_BIN), CHI(...), ...
+.P file → p_to_L1() → full-record .nc
 ```
+
+Produces one NetCDF file per .P file containing all channels in physical
+units.  This is the starting point for downstream modular commands.
+
+### `rsi-tpw prof` — Extract profiles
+
+```
+.P or .nc → get_profiles() → per-profile .nc files
+```
+
+Detects profiles by pressure/fall-rate criteria and writes one NetCDF per
+profile.
+
+### `rsi-tpw eps` — Compute epsilon
+
+```
+.P, .nc, or per-profile .nc → L1→L2→L3→L4 → *_eps.nc per profile
+```
+
+Runs the SCOR-160 shear spectral processing chain and writes per-profile
+epsilon files.  Supports parallel processing (`-j N`).
+
+### `rsi-tpw chi` — Compute chi
+
+```
+.P, .nc, or per-profile .nc → L2_chi→L3_chi→L4_chi → *_chi.nc per profile
+```
+
+Optionally reads epsilon files from `--epsilon-dir` for Method 1.
+Without epsilon, uses Method 2 (spectral fitting).
+
+---
+
+## Interactive viewers
+
+### `rsi-tpw ql` — Quick Look
+
+Loads a .P file and opens a 2×4 panel interactive matplotlib viewer.
+For each profile, computes spectra at a single dissipation window near
+the midpoint pressure.  Panels: profile overview, shear spectra with
+Nasmyth fits, chi spectra with Method 1 and Method 2 fits, shear
+channels, temperature, and fall rate.
+
+### `rsi-tpw dl` — Dissipation Look
+
+Loads a .P file and opens a 2×4 panel interactive matplotlib viewer.
+Pre-computes windowed dissipation for all windows in the profile.
+Panels: epsilon vs depth, chi (Batchelor and Kraichnan) vs depth,
+Lueck figure of merit (FM), shear/chi spectra at midpoint.
+
+Both viewers support Prev/Next profile navigation via buttons.
+
+---
+
+## Output directory structure
+
+### Pipeline output
+
+```
+results/
+└── <p_file_stem>/
+    ├── L6_combined.nc ............. All profiles combined (profile × depth_bin)
+    └── profile_001/
+    │   ├── L4_epsilon.nc .......... Per-window epsilon estimates
+    │   ├── L4_chi_epsilon.nc ...... Chi Method 1 (if temp channels present)
+    │   ├── L4_chi_fit.nc .......... Chi Method 2 (if enabled)
+    │   └── L5_binned.nc ........... Depth-binned epsilon + chi
+    └── profile_002/
+        ├── ...
+```
+
+### Modular command output
+
+```
+# rsi-tpw nc
+nc/<p_file_stem>.nc                     Full-record NetCDF
+
+# rsi-tpw prof
+profiles/<p_file_stem>_prof001.nc       Per-profile NetCDF
+profiles/<p_file_stem>_prof002.nc
+
+# rsi-tpw eps
+epsilon/<p_file_stem>_prof001_eps.nc    Per-profile epsilon
+epsilon/<p_file_stem>_prof002_eps.nc
+
+# rsi-tpw chi
+chi/<p_file_stem>_prof001_chi.nc        Per-profile chi
+chi/<p_file_stem>_prof002_chi.nc
+```
+
+---
+
+## Configuration
+
+The `rsi-tpw` CLI supports YAML configuration files with three sections:
+`profiles`, `epsilon`, and `chi`.  Generate a template with `rsi-tpw init`.
+
+**Merge priority:** defaults ← config file ← CLI flags
+
+```yaml
+profiles:
+  P_min: 0.5            # Minimum pressure [dbar]
+  W_min: 0.3            # Minimum fall rate [dbar/s]
+  direction: down        # Profile direction
+  min_duration: 7.0      # Minimum duration [s]
+
+epsilon:
+  fft_length: 1024       # FFT segment length [samples]
+  diss_length: null      # Dissipation window (default: 4×fft_length)
+  goodman: true          # Goodman coherent noise removal
+  f_AA: 98.0             # Anti-aliasing filter cutoff [Hz]
+  fit_order: 3           # Polynomial fit order
+  salinity: null         # Fixed salinity (null → S=35)
+
+chi:
+  fft_length: 1024
+  fp07_model: single_pole  # FP07 transfer function model
+  spectrum_model: kraichnan
+  fit_method: iterative    # Method 2: mle or iterative
+  goodman: true
+  f_AA: 98.0
+  salinity: null
+```
+
+---
+
+## Library architecture
+
+### Package structure
+
+```
+src/odas_tpw/
+├── rsi/          RSI instrument I/O, pipeline orchestration, CLI, viewers
+├── chi/          Chi computation library (instrument-agnostic)
+├── scor160/      SCOR-160 shear spectral processing (instrument-agnostic)
+└── perturb/      Campaign-level processing pipeline (separate entry point)
+```
+
+### Module roles
+
+The `scor160/` and `chi/` subpackages provide pure spectral processing
+functions with no instrument dependencies.  The `rsi/` subpackage bridges
+RSI-specific I/O (PFile, address matrix, channel conversion) to the
+generic processing chain:
+
+| Layer | Modules | Role |
+|-------|---------|------|
+| I/O | `rsi/p_file.py`, `rsi/channels.py` | Read .P binary, convert to physical units |
+| Adapter | `rsi/adapter.py` | PFile → L1Data bridge |
+| Processing | `scor160/l2.py`, `scor160/l3.py`, `scor160/l4.py` | SCOR-160 shear chain (L2→L3→L4) |
+| Processing | `chi/l2_chi.py`, `chi/l3_chi.py`, `chi/l4_chi.py` | Chi chain (L2_chi→L3_chi→L4_chi) |
+| Spectral | `scor160/spectral.py`, `scor160/goodman.py` | CSD estimation, coherent noise removal |
+| Models | `scor160/nasmyth.py`, `chi/batchelor.py`, `chi/fp07.py` | Theoretical spectra, transfer functions |
+| Physics | `scor160/ocean.py` | Seawater viscosity, density, buoyancy frequency |
+| Orchestration | `rsi/pipeline.py`, `rsi/dissipation.py`, `rsi/chi_io.py` | Pipeline, modular file-level entry points |
+| Post-processing | `rsi/binning.py`, `rsi/combine.py` | L5 depth binning, L6 profile combining |
+| Viewers | `rsi/quick_look.py`, `rsi/diss_look.py`, `rsi/viewer_base.py` | Interactive matplotlib viewers |
+| CLI | `rsi/cli.py`, `rsi/config.py` | Argument parsing, config merge |
+
+### Perturb subpackage
+
+`src/odas_tpw/perturb/` provides a separate campaign-level pipeline with
+additional steps (GPS injection, hotel data, FP07 calibration, CT alignment)
+not present in the standard `rsi-tpw pipeline`.  It has its own CLI and
+configuration system.
 
 ---
 
