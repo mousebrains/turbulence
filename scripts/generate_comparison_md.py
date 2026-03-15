@@ -113,6 +113,9 @@ def make_histogram(
             linewidth=1.2,
             label=f"Q50 = {med:+.3f}",
         )
+        log2 = np.log10(2)
+        ax.axvline(-log2, color="orange", linestyle=":", linewidth=1.0, label="2x")
+        ax.axvline(log2, color="orange", linestyle=":", linewidth=1.0)
         ax.set_xlabel("log10(pyturb-cli / pyturb)")
         ax.set_title(label)
         ax.legend(fontsize=9)
