@@ -7,10 +7,21 @@ accelerometer cross-spectra.
 """
 
 import contextlib
+from typing import NamedTuple
 
 import numpy as np
 
 from odas_tpw.scor160.spectral import csd_matrix, csd_matrix_batch
+
+
+class CleanShearResult(NamedTuple):
+    """Result of Goodman coherent noise removal."""
+
+    clean_UU: np.ndarray
+    AA: np.ndarray
+    UU: np.ndarray
+    UA: np.ndarray
+    F: np.ndarray
 
 
 def _bias_correction(n_samples: int, nfft: int, n_accel: int) -> float:
@@ -37,7 +48,7 @@ def clean_shear_spec(
     shear: np.ndarray,
     nfft: int,
     rate: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> CleanShearResult:
     """Remove acceleration-coherent noise from shear spectra.
 
     Parameters
@@ -103,7 +114,7 @@ def clean_shear_spec(
         n_freq_fb = len(F)
         AA = np.zeros((n_freq_fb, n_ac, n_ac), dtype=np.complex128)
         UA = np.zeros((n_freq_fb, n_sh, n_ac), dtype=np.complex128)
-        return np.real(UU), AA, UU, UA, F
+        return CleanShearResult(np.real(UU), AA, UU, UA, F)
     assert UU is not None and AA is not None  # always returned when y is provided
 
     # UU, AA, UA are complex; extract real diagonal for auto-spectra
@@ -127,7 +138,7 @@ def clean_shear_spec(
     # Bias correction (ODAS Technical Note 61, Eq. 3)
     clean_UU *= _bias_correction(shear.shape[0], nfft, n_accel)
 
-    return clean_UU, AA, UU, UA, F
+    return CleanShearResult(clean_UU, AA, UU, UA, F)
 
 
 def clean_shear_spec_batch(

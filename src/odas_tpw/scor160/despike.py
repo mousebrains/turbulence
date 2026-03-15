@@ -4,9 +4,20 @@
 Port of despike.m from the ODAS MATLAB library.
 """
 
+from typing import NamedTuple
+
 import numpy as np
 import numpy.typing as npt
 from scipy.signal import butter, filtfilt
+
+
+class DespikeResult(NamedTuple):
+    """Result of iterative spike removal."""
+
+    y: np.ndarray
+    spike_indices: np.ndarray
+    n_passes: int
+    fraction: float
 
 
 def despike(
@@ -16,7 +27,7 @@ def despike(
     smooth: float = 0.5,
     N: int | None = None,
     max_passes: int = 10,
-) -> tuple[np.ndarray, np.ndarray, int, float]:
+) -> DespikeResult:
     """Iterative spike removal.
 
     Identifies spikes by comparing the instantaneous rectified HP-filtered
@@ -68,7 +79,7 @@ def despike(
 
     spike_indices = np.sort(np.array(list(all_spikes), dtype=np.intp))
     fraction = np.sum(y != original) / len(y)
-    return y, spike_indices, n_passes, fraction
+    return DespikeResult(y, spike_indices, n_passes, fraction)
 
 
 def _single_despike(

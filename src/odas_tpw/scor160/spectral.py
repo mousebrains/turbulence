@@ -4,9 +4,20 @@
 Port of csd_odas.m and csd_matrix_odas.m from the ODAS MATLAB library.
 """
 
+from typing import NamedTuple
+
 import numpy as np
 import numpy.typing as npt
 from scipy import signal
+
+
+class CSDResult(NamedTuple):
+    """Cross-spectral density result."""
+
+    Cxy: np.ndarray
+    F: np.ndarray
+    Cxx: np.ndarray | None
+    Cyy: np.ndarray | None
 
 
 def _cosine_window(n: int) -> np.ndarray:
@@ -52,7 +63,7 @@ def csd_odas(
     window: npt.ArrayLike | None = None,
     overlap: int | None = None,
     detrend: str = "linear",
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+) -> CSDResult:
     """Cross-spectral density using Welch's method with cosine window.
 
     Thin wrapper around :func:`csd_matrix` for 1-D signals.
@@ -104,10 +115,10 @@ def csd_odas(
 
     if Cxx_m is None:
         # Auto-spectrum: Cxy_m is (n_freq, 1, 1) complex → squeeze to real 1-D
-        return np.real(Cxy_m[:, 0, 0]), F, None, None
+        return CSDResult(np.real(Cxy_m[:, 0, 0]), F, None, None)
 
     # Cross-spectrum: squeeze matrix dims
-    return Cxy_m[:, 0, 0], F, np.real(Cxx_m[:, 0, 0]), np.real(Cyy_m[:, 0, 0])
+    return CSDResult(Cxy_m[:, 0, 0], F, np.real(Cxx_m[:, 0, 0]), np.real(Cyy_m[:, 0, 0]))
 
 
 def csd_matrix(
@@ -118,7 +129,7 @@ def csd_matrix(
     window: npt.ArrayLike | None = None,
     overlap: int | None = None,
     detrend: str = "linear",
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+) -> CSDResult:
     """Multi-channel cross-spectral density matrix.
 
     Parameters
@@ -184,7 +195,7 @@ def csd_matrix(
         Cxy[0] /= 2
         Cxy[-1] /= 2
         F = np.arange(n_freq) * rate / nfft
-        return Cxy, F, None, None
+        return CSDResult(Cxy, F, None, None)
 
     # Cross case
     Cxx = np.zeros((n_freq, n_x, n_x), dtype=np.complex128)
@@ -213,7 +224,7 @@ def csd_matrix(
         arr[0] /= 2
         arr[-1] /= 2
     F = np.arange(n_freq) * rate / nfft
-    return Cxy, F, Cxx, Cyy
+    return CSDResult(Cxy, F, Cxx, Cyy)
 
 
 def _detrend_batch(segments: np.ndarray, method: str, axis: int) -> np.ndarray:
@@ -275,7 +286,7 @@ def csd_matrix_batch(
     rate: float,
     overlap: int | None = None,
     detrend: str = "linear",
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+) -> CSDResult:
     """Batched cross-spectral density for multiple dissipation windows.
 
     Computes the same result as calling :func:`csd_matrix` independently on
@@ -377,7 +388,7 @@ def csd_matrix_batch(
         Cxy[:, 0, :, :] /= 2
         Cxy[:, -1, :, :] /= 2
         F = np.arange(n_freq) * rate / nfft
-        return Cxy, F, None, None
+        return CSDResult(Cxy, F, None, None)
 
     # --- Cross-spectral case -----------------------------------------------
     y_windows = np.asarray(y_windows, dtype=np.float64)
@@ -410,4 +421,4 @@ def csd_matrix_batch(
         arr[:, -1, :, :] /= 2
 
     F = np.arange(n_freq) * rate / nfft
-    return Cxy, F, Cxx, Cyy
+    return CSDResult(Cxy, F, Cxx, Cyy)

@@ -18,6 +18,7 @@ import numpy as np
 
 
 def main(argv: list[str] | None = None) -> None:
+    """CLI entry point for scor160-tpw."""
     parser = argparse.ArgumentParser(
         prog="scor160-tpw",
         description="SCOR/ATOMIX benchmark dataset processing",

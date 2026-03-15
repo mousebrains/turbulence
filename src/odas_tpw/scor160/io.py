@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 import netCDF4
 import numpy as np
@@ -43,26 +44,32 @@ class L1Data:
 
     @property
     def n_shear(self) -> int:
+        """Number of shear probe channels."""
         return self.shear.shape[0]
 
     @property
     def n_vib(self) -> int:
+        """Number of vibration/accelerometer channels."""
         return self.vib.shape[0]
 
     @property
     def n_time(self) -> int:
+        """Number of fast-rate time samples."""
         return self.time.shape[0]
 
     @property
     def has_speed(self) -> bool:
+        """Whether pre-computed profiling speed is available."""
         return self.pspd_rel.size > 0
 
     @property
     def n_temp(self) -> int:
+        """Number of fast thermistor channels."""
         return self.temp_fast.shape[0] if self.temp_fast.ndim == 2 else 0
 
     @property
     def has_temp_fast(self) -> bool:
+        """Whether fast-rate temperature data is available."""
         return self.temp_fast.size > 0 and self.temp_fast.ndim == 2
 
 
@@ -118,14 +125,17 @@ class L3Data:
 
     @property
     def n_spectra(self) -> int:
+        """Number of spectral windows."""
         return self.time.shape[0]
 
     @property
     def n_wavenumber(self) -> int:
+        """Number of wavenumber bins."""
         return self.kcyc.shape[0]
 
     @property
     def n_shear(self) -> int:
+        """Number of shear probe channels."""
         return self.sh_spec.shape[0]
 
 
@@ -162,14 +172,27 @@ class L4Data:
 
     @property
     def n_spectra(self) -> int:
+        """Number of spectral windows."""
         return self.time.shape[0]
 
     @property
     def n_shear(self) -> int:
+        """Number of shear probe channels."""
         return self.epsi.shape[0]
 
 
-def read_atomix(path: str | Path) -> tuple[L1Data, L2Params, L2Data, L3Params, L3Data, L4Data]:
+class AtomixData(NamedTuple):
+    """All data from an ATOMIX benchmark NetCDF file."""
+
+    l1: L1Data
+    l2_params: L2Params
+    l2_ref: L2Data
+    l3_params: L3Params
+    l3_ref: L3Data
+    l4_ref: L4Data
+
+
+def read_atomix(path: str | Path) -> AtomixData:
     """Read an ATOMIX benchmark NetCDF file.
 
     Returns L1 data, L2 processing parameters, reference L2 result,
@@ -191,7 +214,7 @@ def read_atomix(path: str | Path) -> tuple[L1Data, L2Params, L2Data, L3Params, L
             l1.pspd_rel = l2_ref.pspd_rel.copy()
     finally:
         ds.close()
-    return l1, l2_params, l2_ref, l3_params, l3_ref, l4_ref
+    return AtomixData(l1, l2_params, l2_ref, l3_params, l3_ref, l4_ref)
 
 
 # ---------------------------------------------------------------------------

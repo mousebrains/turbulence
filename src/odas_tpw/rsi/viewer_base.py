@@ -23,7 +23,7 @@ from odas_tpw.scor160.ocean import visc35
 # ---------------------------------------------------------------------------
 
 
-def select_mid_window(P_fast, sel, fft_length):
+def select_mid_window(P_fast, sel, fft_length) -> slice:
     """Select the single diss_length window closest to the midpoint pressure.
 
     Returns a slice for the selected window, or *sel* unchanged if the
@@ -58,7 +58,7 @@ def compute_depth_spectra(
     shear_data, accel_data, therm_data, diff_gains,
     P_fast, T_slow, speed_fast, fs_fast, sel,
     fft_length, f_AA, do_goodman,
-):
+) -> dict:
     """Compute shear + chi spectra at one depth for spectral panels.
 
     Selects a single diss_length window closest to the midpoint pressure,
@@ -162,7 +162,7 @@ def compute_windowed_diss(
     shear_data, accel_data, therm_data, diff_gains,
     P_fast, T_slow, speed_fast, fs_fast, sel,
     fft_length, f_AA, do_goodman,
-):
+) -> dict:
     """Compute windowed epsilon and chi (both Batchelor and Kraichnan) estimates.
 
     Returns dict with P_windows, epsilon, FM, fom, mad, K_max_ratio,
@@ -591,7 +591,7 @@ class ProfileViewer:
         self.fig.suptitle(title, fontsize=11, fontweight="bold")
         self.fig.canvas.draw_idle()
 
-    def show(self):
+    def show(self) -> None:
         self.fig, self.axes = plt.subplots(
             2, 4, figsize=(24, 9),
             gridspec_kw={"hspace": 0.35, "wspace": 0.32},

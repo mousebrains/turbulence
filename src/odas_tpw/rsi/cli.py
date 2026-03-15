@@ -842,6 +842,10 @@ def _add_dl_parser(subparsers: argparse._SubParsersAction) -> None:
 
 def main() -> None:
     """Main CLI entry point for rsi-tpw."""
+    import logging
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     from odas_tpw.rsi import __version__
 
     parser = argparse.ArgumentParser(

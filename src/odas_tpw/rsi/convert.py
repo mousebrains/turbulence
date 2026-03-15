@@ -8,6 +8,7 @@ time series converted to physical units, including speed-normalized shear
 and temperature gradient.
 """
 
+import logging
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # Minimum profiling speed to avoid singularity [m/s]
 _SPEED_MIN = 0.05
@@ -474,20 +477,19 @@ def convert_all(p_files: list[Path], output_dir: Path | None = None, jobs: int =
 
     if jobs == 1:
         for p_path, nc_path in work:
-            print(f"{p_path.name} -> {nc_path.name} ... ", end="", flush=True)
             try:
                 _name, _, size_mb = _convert_one((p_path, nc_path))
-                print(f"{size_mb:.1f} MB")
+                logger.info(f"{p_path.name} -> {nc_path.name}  {size_mb:.1f} MB")
             except (OSError, ValueError, RuntimeError) as e:
-                print(f"ERROR: {e}")
+                logger.error(f"{p_path.name}: {e}")
     else:
-        print(f"Converting {len(work)} files with {jobs} workers")
+        logger.info(f"Converting {len(work)} files with {jobs} workers")
         with ProcessPoolExecutor(max_workers=jobs) as pool:
             futures = {pool.submit(_convert_one, w): w for w in work}
             for future in as_completed(futures):
                 p_path, nc_path = futures[future]
                 try:
                     _, _, size_mb = future.result()
-                    print(f"  {p_path.name} -> {nc_path.name}  {size_mb:.1f} MB")
+                    logger.info(f"{p_path.name} -> {nc_path.name}  {size_mb:.1f} MB")
                 except (OSError, ValueError, RuntimeError) as e:
-                    print(f"  {p_path.name}  ERROR: {e}")
+                    logger.error(f"{p_path.name}: {e}")

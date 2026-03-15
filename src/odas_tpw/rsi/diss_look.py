@@ -468,7 +468,7 @@ def diss_look(
     W_min=0.3,
     min_duration=7.0,
     spec_P_range=None,
-):
+) -> DissLookViewer:
     """Open an interactive dissipation quality viewer for a .p file.
 
     Displays epsilon, chi (Batchelor vs Kraichnan), and the Lueck (2022)

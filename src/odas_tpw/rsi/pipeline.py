@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 import warnings
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,6 +25,8 @@ from odas_tpw.scor160.io import L2Params, L3Data, L3Params, L4Data
 from odas_tpw.scor160.l2 import process_l2
 from odas_tpw.scor160.l3 import process_l3
 from odas_tpw.scor160.l4 import process_l4
+
+logger = logging.getLogger(__name__)
 
 
 def run_pipeline(
@@ -113,9 +116,9 @@ def run_pipeline(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for p_path in p_files:
-        print(f"\n{'=' * 60}")
-        print(f"{p_path.name}")
-        print(f"{'=' * 60}")
+        logger.info("=" * 60)
+        logger.info(p_path.name)
+        logger.info("=" * 60)
 
         pf = PFile(p_path)
         pfile_dir = output_dir / p_path.stem
@@ -135,10 +138,10 @@ def run_pipeline(
         )
 
         if not profiles:
-            print("  No profiles detected")
+            logger.warning("No profiles detected")
             continue
 
-        print(f"  {len(profiles)} profile(s) detected")
+        logger.info(f"{len(profiles)} profile(s) detected")
 
         all_binned = []
         profile_metadata = []
@@ -148,153 +151,51 @@ def run_pipeline(
             prof_dir = pfile_dir / f"profile_{prof_num:03d}"
             prof_dir.mkdir(parents=True, exist_ok=True)
 
-            print(f"\n  Profile {prof_num}: slow samples {s_slow}-{e_slow}")
+            logger.info(f"Profile {prof_num}: slow samples {s_slow}-{e_slow}")
 
-            # Step 1: L1Data
-            l1 = pfile_to_l1data(
+            binned = _process_profile(
                 pf,
-                profile_slice=(s_slow, e_slow),
+                prof_slice=(s_slow, e_slow),
+                prof_num=prof_num,
+                prof_dir=prof_dir,
+                p_path=p_path,
                 speed=speed,
                 direction=direction,
                 speed_tau=speed_tau,
-            )
-
-            # Step 2: L2
-            l2_params = L2Params(
-                HP_cut=HP_cut,
-                despike_sh=np.array([despike_thresh, 0.5, 0.04]),
-                despike_A=np.array([np.inf, 0.5, 0.04]),
-                profile_min_W=W_min,
-                profile_min_P=P_min,
-                profile_min_duration=min_duration,
-                speed_tau=speed_tau,
-            )
-            l2 = process_l2(l1, l2_params)
-
-            # Step 3: L3 shear spectra
-            l3_params = L3Params(
-                fft_length=fft_length,
-                diss_length=diss_length,
-                overlap=overlap,
-                HP_cut=HP_cut,
-                fs_fast=l1.fs_fast,
-                goodman=goodman,
-            )
-            l3 = process_l3(l2, l1, l3_params)
-
-            if l3.n_spectra == 0:
-                print("    No valid spectral windows")
-                continue
-
-            # Step 4: L4 epsilon
-            l4 = process_l4(
-                l3,
-                temp=l3.temp,
+                l2_params=L2Params(
+                    HP_cut=HP_cut,
+                    despike_sh=np.array([despike_thresh, 0.5, 0.04]),
+                    despike_A=np.array([np.inf, 0.5, 0.04]),
+                    profile_min_W=W_min,
+                    profile_min_P=P_min,
+                    profile_min_duration=min_duration,
+                    speed_tau=speed_tau,
+                ),
+                l3_params=L3Params(
+                    fft_length=fft_length,
+                    diss_length=diss_length,
+                    overlap=overlap,
+                    HP_cut=HP_cut,
+                    fs_fast=0,  # placeholder, overridden in _process_profile
+                    goodman=goodman,
+                ),
                 f_AA=f_AA,
                 fit_order=fit_order,
+                salinity=salinity,
+                despike_T_thresh=despike_T_thresh,
+                chi_fft_length=chi_fft_length,
+                chi_diss_length=chi_diss_length,
+                chi_overlap=chi_overlap,
+                fp07_model=fp07_model,
+                spectrum_model=spectrum_model,
+                fit_method=fit_method,
+                compute_chi_epsilon=compute_chi_epsilon,
+                compute_chi_fit=compute_chi_fit,
+                bin_size=bin_size,
             )
-            print(f"    Epsilon: {l4.n_spectra} estimates")
 
-            # Step 5: L2_chi cleaning + chi spectra (if temperature data available)
-            l3_chi = None
-            l4_chi_eps = None
-            l4_chi_fit_result = None
-
-            if l1.has_temp_fast:
-                l2_chi_params = L2ChiParams(
-                    HP_cut=HP_cut,
-                    despike_T=np.array([despike_T_thresh, 0.5, 0.04]),
-                )
-                l2_chi = process_l2_chi(l1, l2, l2_chi_params)
-
-                l3_chi_params = L3Params(
-                    fft_length=chi_fft_length,
-                    diss_length=chi_diss_length,
-                    overlap=chi_overlap,
-                    HP_cut=HP_cut,
-                    fs_fast=l1.fs_fast,
-                    goodman=goodman,
-                )
-
-                try:
-                    l3_chi = process_l3_chi(
-                        l2_chi,
-                        l3_chi_params,
-                        fp07_model=fp07_model,
-                        salinity=salinity,
-                    )
-                except (ValueError, RuntimeError) as e:
-                    print(f"    Chi spectra error: {e}")
-
-                if l3_chi is not None and l3_chi.n_spectra > 0:
-                    # Step 6a: Chi from epsilon (Method 1)
-                    if compute_chi_epsilon and l4.n_spectra > 0:
-                        try:
-                            l4_chi_eps = process_l4_chi_epsilon(
-                                l3_chi,
-                                l4,
-                                spectrum_model=spectrum_model,
-                                f_AA=f_AA,
-                            )
-                            n_valid = np.sum(np.isfinite(l4_chi_eps.chi_final))
-                            print(f"    Chi (Method 1): {n_valid} valid estimates")
-                        except (ValueError, RuntimeError) as e:
-                            print(f"    Chi epsilon error: {e}")
-
-                    # Step 6b: Chi from fit (Method 2)
-                    if compute_chi_fit:
-                        try:
-                            l4_chi_fit_result = process_l4_chi_fit(
-                                l3_chi,
-                                spectrum_model=spectrum_model,
-                                fit_method=fit_method,
-                                f_AA=f_AA,
-                            )
-                            n_valid = np.sum(np.isfinite(l4_chi_fit_result.chi_final))
-                            print(f"    Chi (Method 2): {n_valid} valid estimates")
-                        except (ValueError, RuntimeError) as e:
-                            print(f"    Chi fit error: {e}")
-
-            # Step 7: Depth binning
-            # Epsilon and chi have different window sizes/counts, so bin separately
-            # and merge into one dataset.
-            binned_parts = []
-
-            if l4.n_spectra > 0:
-                eps_bin = bin_by_depth(
-                    l4.pres,
-                    {"epsilon": l4.epsi_final, "P_mean": l4.pres, "speed": l4.pspd_rel},
-                    bin_size=bin_size,
-                )
-                binned_parts.append(eps_bin)
-
-            if l4_chi_eps is not None and l4_chi_eps.n_spectra > 0:
-                chi_bin = bin_by_depth(
-                    l4_chi_eps.pres,
-                    {"chi": l4_chi_eps.chi_final},
-                    bin_size=bin_size,
-                )
-                binned_parts.append(chi_bin)
-
-            if binned_parts:
-                binned = binned_parts[0]
-                for extra in binned_parts[1:]:
-                    binned = binned.merge(extra, join="outer")
-                binned.attrs["profile_number"] = prof_num
-                binned.attrs["source_file"] = p_path.name
-                binned.attrs["bin_size"] = bin_size
+            if binned is not None:
                 all_binned.append(binned)
-
-                binned.to_netcdf(prof_dir / "L5_binned.nc")
-
-            # Write per-level NetCDF
-            time_ref = pf.start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
-            _write_l4_epsilon(l4, l3, prof_dir / "L4_epsilon.nc", pf)
-
-            if l4_chi_eps is not None:
-                _write_l4_chi(l4_chi_eps, prof_dir / "L4_chi_epsilon.nc", time_ref)
-            if l4_chi_fit_result is not None:
-                _write_l4_chi(l4_chi_fit_result, prof_dir / "L4_chi_fit.nc", time_ref)
 
             profile_metadata.append(
                 {
@@ -310,10 +211,177 @@ def run_pipeline(
             combined = combine_profiles(all_binned, profile_metadata)
             combined_path = pfile_dir / "L6_combined.nc"
             combined.to_netcdf(combined_path)
-            print(f"\n  Combined: {combined_path}")
+            logger.info(f"Combined: {combined_path}")
 
-    print(f"\nPipeline complete. Output: {output_dir}")
+    logger.info(f"Pipeline complete. Output: {output_dir}")
     return output_dir
+
+
+def _process_profile(
+    pf,
+    prof_slice: tuple[int, int],
+    prof_num: int,
+    prof_dir: Path,
+    p_path: Path,
+    *,
+    speed: float | None,
+    direction: str,
+    speed_tau: float,
+    l2_params: L2Params,
+    l3_params: L3Params,
+    f_AA: float,
+    fit_order: int,
+    salinity: float | None,
+    despike_T_thresh: float,
+    chi_fft_length: int,
+    chi_diss_length: int,
+    chi_overlap: int,
+    fp07_model: str,
+    spectrum_model: str,
+    fit_method: str,
+    compute_chi_epsilon: bool,
+    compute_chi_fit: bool,
+    bin_size: float,
+) -> xr.Dataset | None:
+    """Process a single profile: L1→L2→L3→L4→chi→binning→NetCDF."""
+    s_slow, e_slow = prof_slice
+
+    # Step 1: L1Data
+    l1 = pfile_to_l1data(
+        pf,
+        profile_slice=(s_slow, e_slow),
+        speed=speed,
+        direction=direction,
+        speed_tau=speed_tau,
+    )
+
+    # Step 2: L2
+    l2 = process_l2(l1, l2_params)
+
+    # Step 3: L3 shear spectra (update fs_fast from actual L1)
+    l3_params = L3Params(
+        fft_length=l3_params.fft_length,
+        diss_length=l3_params.diss_length,
+        overlap=l3_params.overlap,
+        HP_cut=l3_params.HP_cut,
+        fs_fast=l1.fs_fast,
+        goodman=l3_params.goodman,
+    )
+    l3 = process_l3(l2, l1, l3_params)
+
+    if l3.n_spectra == 0:
+        logger.warning("No valid spectral windows")
+        return None
+
+    # Step 4: L4 epsilon
+    l4 = process_l4(
+        l3,
+        temp=l3.temp,
+        f_AA=f_AA,
+        fit_order=fit_order,
+    )
+    logger.info(f"Epsilon: {l4.n_spectra} estimates")
+
+    # Step 5: L2_chi cleaning + chi spectra (if temperature data available)
+    l3_chi = None
+    l4_chi_eps = None
+    l4_chi_fit_result = None
+
+    if l1.has_temp_fast:
+        l2_chi_params = L2ChiParams(
+            HP_cut=l2_params.HP_cut,
+            despike_T=np.array([despike_T_thresh, 0.5, 0.04]),
+        )
+        l2_chi = process_l2_chi(l1, l2, l2_chi_params)
+
+        l3_chi_params = L3Params(
+            fft_length=chi_fft_length,
+            diss_length=chi_diss_length,
+            overlap=chi_overlap,
+            HP_cut=l2_params.HP_cut,
+            fs_fast=l1.fs_fast,
+            goodman=l3_params.goodman,
+        )
+
+        try:
+            l3_chi = process_l3_chi(
+                l2_chi,
+                l3_chi_params,
+                fp07_model=fp07_model,
+                salinity=salinity,
+            )
+        except (ValueError, RuntimeError) as e:
+            logger.error(f"Chi spectra error: {e}")
+
+        if l3_chi is not None and l3_chi.n_spectra > 0:
+            # Step 6a: Chi from epsilon (Method 1)
+            if compute_chi_epsilon and l4.n_spectra > 0:
+                try:
+                    l4_chi_eps = process_l4_chi_epsilon(
+                        l3_chi,
+                        l4,
+                        spectrum_model=spectrum_model,
+                        f_AA=f_AA,
+                    )
+                    n_valid = np.sum(np.isfinite(l4_chi_eps.chi_final))
+                    logger.info(f"Chi (Method 1): {n_valid} valid estimates")
+                except (ValueError, RuntimeError) as e:
+                    logger.error(f"Chi epsilon error: {e}")
+
+            # Step 6b: Chi from fit (Method 2)
+            if compute_chi_fit:
+                try:
+                    l4_chi_fit_result = process_l4_chi_fit(
+                        l3_chi,
+                        spectrum_model=spectrum_model,
+                        fit_method=fit_method,
+                        f_AA=f_AA,
+                    )
+                    n_valid = np.sum(np.isfinite(l4_chi_fit_result.chi_final))
+                    logger.info(f"Chi (Method 2): {n_valid} valid estimates")
+                except (ValueError, RuntimeError) as e:
+                    logger.error(f"Chi fit error: {e}")
+
+    # Step 7: Depth binning
+    binned_parts = []
+
+    if l4.n_spectra > 0:
+        eps_bin = bin_by_depth(
+            l4.pres,
+            {"epsilon": l4.epsi_final, "P_mean": l4.pres, "speed": l4.pspd_rel},
+            bin_size=bin_size,
+        )
+        binned_parts.append(eps_bin)
+
+    if l4_chi_eps is not None and l4_chi_eps.n_spectra > 0:
+        chi_bin = bin_by_depth(
+            l4_chi_eps.pres,
+            {"chi": l4_chi_eps.chi_final},
+            bin_size=bin_size,
+        )
+        binned_parts.append(chi_bin)
+
+    binned = None
+    if binned_parts:
+        binned = binned_parts[0]
+        for extra in binned_parts[1:]:
+            binned = binned.merge(extra, join="outer")
+        binned.attrs["profile_number"] = prof_num
+        binned.attrs["source_file"] = p_path.name
+        binned.attrs["bin_size"] = bin_size
+
+        binned.to_netcdf(prof_dir / "L5_binned.nc")
+
+    # Write per-level NetCDF
+    time_ref = pf.start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_l4_epsilon(l4, l3, prof_dir / "L4_epsilon.nc", pf)
+
+    if l4_chi_eps is not None:
+        _write_l4_chi(l4_chi_eps, prof_dir / "L4_chi_epsilon.nc", time_ref)
+    if l4_chi_fit_result is not None:
+        _write_l4_chi(l4_chi_fit_result, prof_dir / "L4_chi_fit.nc", time_ref)
+
+    return binned
 
 
 def _write_l4_epsilon(l4: L4Data, l3: L3Data, path: Path, pf) -> None:

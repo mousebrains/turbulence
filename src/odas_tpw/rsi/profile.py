@@ -7,6 +7,7 @@ re-exports them for backward compatibility and adds RSI-specific I/O
 (NetCDF extraction from PFile).
 """
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
 
 # Re-export from scor160 — canonical implementations live there
 from odas_tpw.scor160.profile import get_profiles, smooth_fall_rate
+
+logger = logging.getLogger(__name__)
 
 # Backward-compatible alias (previously underscore-prefixed)
 _smooth_fall_rate = smooth_fall_rate
@@ -76,7 +79,7 @@ def extract_profiles(
 
     profiles = get_profiles(P_slow, W, fs_slow, **profile_kwargs)
     if not profiles:
-        print(f"  No profiles found in {data['stem']}")
+        logger.warning(f"No profiles found in {data['stem']}")
         return []
 
     output_paths = []
@@ -140,8 +143,8 @@ def extract_profiles(
         ds.fs_slow = float(fs_slow)
         ds.close()
         output_paths.append(prof_path)
-        print(
-            f"  Profile {pi}: P={P_slow[s_slow]:.1f}–{P_slow[e_slow]:.1f} dbar, "  # noqa: RUF001
+        logger.info(
+            f"Profile {pi}: P={P_slow[s_slow]:.1f}–{P_slow[e_slow]:.1f} dbar, "  # noqa: RUF001
             f"{(e_slow - s_slow) / fs_slow:.1f} s -> {prof_path.name}"
         )
 

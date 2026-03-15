@@ -8,6 +8,7 @@ chi packages can use them without circular dependencies.
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -17,6 +18,8 @@ import numpy.typing as npt
 
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
+
+logger = logging.getLogger(__name__)
 
 
 class ChannelsDict(TypedDict, total=False):
@@ -399,8 +402,8 @@ def write_profile_results(
         out_path = output_dir / out_name
         ds.to_netcdf(out_path)
         output_paths.append(out_path)
-        print(
-            f"  {out_path.name}: {ds.sizes['time']} estimates, "
+        logger.info(
+            f"{out_path.name}: {ds.sizes['time']} estimates, "
             f"P={float(ds.P_mean.min()):.0f}-{float(ds.P_mean.max()):.0f} dbar"
         )
     return output_paths

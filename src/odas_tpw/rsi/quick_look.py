@@ -570,7 +570,7 @@ def quick_look(
     spec_P_range=None,
     chi_method=1,
     spectrum_model="kraichnan",
-):
+) -> QuickLookViewer:
     """Open an interactive quick-look viewer for a .p file.
 
     Parameters

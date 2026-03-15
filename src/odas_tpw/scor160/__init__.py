@@ -5,6 +5,7 @@
 # in Lueck et al. (2024), doi:10.3389/fmars.2024.1334327.
 
 from odas_tpw.scor160.io import (
+    AtomixData,
     L1Data,
     L2Data,
     L2Params,
@@ -19,6 +20,7 @@ from odas_tpw.scor160.l4 import process_l4
 from odas_tpw.scor160.profile import get_profiles, smooth_fall_rate
 
 __all__ = [
+    "AtomixData",
     "L1Data",
     "L2Data",
     "L2Params",
