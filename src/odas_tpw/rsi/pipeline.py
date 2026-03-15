@@ -126,6 +126,7 @@ def run_pipeline(
 
         # Detect profiles on slow-rate pressure
         P_slow = pf.channels.get("P_dP", pf.channels.get("P"))
+        assert P_slow is not None, "No pressure channel (P or P_dP) found"
         W_slow = _smooth_fall_rate(P_slow, pf.fs_slow, tau=speed_tau)
         profiles = get_profiles(
             P_slow,

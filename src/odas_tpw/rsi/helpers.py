@@ -17,6 +17,8 @@ import numpy as np
 import numpy.typing as npt
 
 if TYPE_CHECKING:
+    import xarray as xr
+
     from odas_tpw.rsi.p_file import PFile
 
 logger = logging.getLogger(__name__)
@@ -207,7 +209,7 @@ def _channels_from_nc(
 
 
 def prepare_profiles(
-    data: dict[str, Any],
+    data: ChannelsDict | dict[str, Any],
     speed: float | None,
     direction: str,
     salinity: npt.ArrayLike | None,
@@ -283,7 +285,7 @@ def prepare_profiles(
 
 
 def _build_l1data_from_channels(
-    data: dict[str, Any],
+    data: ChannelsDict | dict[str, Any],
     s_fast: int,
     e_fast: int,
     speed_fast: np.ndarray,
@@ -420,7 +422,7 @@ def _build_result_dataset(
     t_out: np.ndarray,
     probe_long_name: str,
     global_attrs: dict,
-) -> "xr.Dataset":
+) -> xr.Dataset:
     """Build an xarray Dataset from a list of variable specs.
 
     Parameters

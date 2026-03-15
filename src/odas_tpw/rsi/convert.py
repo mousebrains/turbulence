@@ -344,14 +344,6 @@ def p_to_L1(
     acc_names = ch["acc"]
     mag_names = ch["mag"]
     gradt_names = ch["gradt"]
-    cond_ctd_names = ch["cond_ctd"]
-    temp_ctd_name = ch["temp_ctd"]
-    pitch_name = ch["pitch"]
-    roll_name = ch["roll"]
-    chla_name = ch["chla"]
-    turb_name = ch["turb"]
-    doxy_name = ch["doxy"]
-    doxy_temp_name = ch["doxy_temp"]
     supplementary = ch["supplementary"]
 
     # Pressure (prefer deconvolved P_dP, else P)

@@ -100,7 +100,7 @@ def _compute_chi_spectra(
     K_AA_chi = f_AA_chi / mean_speed
 
     nan_result = (np.full(n_freq, np.nan), np.nan, np.nan)
-    methods_results = {"M1": [], "M2-MLE": [], "M2-Iter": []}
+    methods_results: dict[str, list] = {"M1": [], "M2-MLE": [], "M2-Iter": []}
 
     for ci in range(n_therm):
         # M1
@@ -127,7 +127,7 @@ def _compute_chi_spectra(
         if np.sum(valid) >= 3:
             chi_obs = max(6 * KAPPA_T * np.trapezoid(grad[valid], K[valid]), 1e-10)
             # Pre-compute noise/H2 for _mle_fit_kB
-            _tau0 = fp07_tau(mean_speed)
+            _tau0 = float(fp07_tau(mean_speed))
             _noise_K_i, _ = _gradT_noise(F, mean_T, mean_speed, fs=fs_fast, diff_gain=dg_i)
             kB_best, chi_val, _, _, spec_raw, _, _ = _mle_fit_kB(
                 grad, K, chi_obs, nu,
@@ -469,8 +469,8 @@ class QuickLookViewer(ProfileViewer):
         n_probes = len(self.therm_fast)
 
         # Plot all lines (no labels yet -- legend order controlled manually)
-        obs_lines = []
-        method_lines = {m: [] for m, _, _ in method_styles}
+        obs_lines: list[tuple | None] = []
+        method_lines: dict[str, list[tuple | None]] = {m: [] for m, _, _ in method_styles}
         for i, (name, _) in enumerate(self.therm_fast):
             c = colors[i % len(colors)]
             valid = np.isfinite(obs_spectra[i]) & (obs_spectra[i] > 0)
@@ -512,31 +512,31 @@ class QuickLookViewer(ProfileViewer):
         # matplotlib ncol fills column-major: entries 0..N/2-1 go in left col,
         # N/2..N-1 in right col.  So we build per-column lists then concatenate.
         rows = [obs_lines] + [method_lines[m] for m, _, _ in method_styles]
-        columns = [[] for _ in range(n_probes)]
-        for col in range(n_probes):
+        columns: list[list] = [[] for _ in range(n_probes)]
+        for ci in range(n_probes):
             for row in rows:
-                if col < len(row) and row[col] is not None:
-                    columns[col].append(row[col])
+                if ci < len(row) and row[ci] is not None:
+                    columns[ci].append(row[ci])
                 else:
                     (ph,) = ax.plot([], [], alpha=0)
-                    columns[col].append((ph, ""))
+                    columns[ci].append((ph, ""))
             # Noise in the last row of each column
-            if col == 0 and noise_line is not None:
-                columns[col].append(noise_line)
+            if ci == 0 and noise_line is not None:
+                columns[ci].append(noise_line)
             else:
                 (ph,) = ax.plot([], [], alpha=0)
-                columns[col].append((ph, ""))
+                columns[ci].append((ph, ""))
 
         # Pad columns to equal length
         max_len = max(len(c) for c in columns)
-        for col in columns:
-            while len(col) < max_len:
+        for col_list in columns:
+            while len(col_list) < max_len:
                 (ph,) = ax.plot([], [], alpha=0)
-                col.append((ph, ""))
+                col_list.append((ph, ""))
 
         handles, labels = [], []
-        for col in columns:
-            for h, lbl in col:
+        for col_list in columns:
+            for h, lbl in col_list:
                 handles.append(h)
                 labels.append(lbl)
 

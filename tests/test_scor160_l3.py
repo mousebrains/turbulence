@@ -2,7 +2,6 @@
 """Unit tests for L2→L3 spectral processing."""
 
 import numpy as np
-import pytest
 
 from odas_tpw.scor160.io import L1Data, L2Data, L3Data, L3Params
 from odas_tpw.scor160.l3 import process_l3

@@ -8,8 +8,8 @@ from odas_tpw.scor160.io import L3Data, L4Data
 from odas_tpw.scor160.l4 import (
     DEFAULT_FOM_LIMIT,
     DEFAULT_VAR_RESOLVED_LIMIT,
-    EPSILON_FLOOR,
     E_ISR_THRESHOLD,
+    EPSILON_FLOOR,
     ISOTROPY_FACTOR,
     K_LIMIT_MAX,
     _compute_epsi_final,

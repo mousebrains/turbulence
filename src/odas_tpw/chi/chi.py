@@ -22,6 +22,15 @@ from typing import NamedTuple
 import numpy as np
 from scipy.signal import butter, freqz
 
+from odas_tpw.chi.batchelor import (
+    KAPPA_T,
+    Q_BATCHELOR,
+    Q_KRAICHNAN,
+    batchelor_grad,
+    batchelor_kB,
+    kraichnan_grad,
+)
+
 
 class ChiEpsilonResult(NamedTuple):
     """Result from Method 1: chi from known epsilon."""
@@ -44,15 +53,6 @@ class ChiFitResult(NamedTuple):
     spec_batch: np.ndarray
     fom: float
     K_max_ratio: float
-
-from odas_tpw.chi.batchelor import (
-    KAPPA_T,
-    Q_BATCHELOR,
-    Q_KRAICHNAN,
-    batchelor_grad,
-    batchelor_kB,
-    kraichnan_grad,
-)
 
 # ---------------------------------------------------------------------------
 # Spectrum model dispatcher

@@ -101,10 +101,7 @@ def csd_odas(
         y_arr = np.asarray(y, dtype=np.float64).ravel()
         if len(x) != len(y_arr):
             raise ValueError("x and y must have same length")
-        if np.array_equal(x, y_arr):
-            y_arr = None
-        else:
-            y_arr = y_arr[:, np.newaxis]
+        y_arr = None if np.array_equal(x, y_arr) else y_arr[:, np.newaxis]
     else:
         y_arr = None
 

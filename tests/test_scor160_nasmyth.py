@@ -82,7 +82,7 @@ class TestNasmyth:
         assert np.all(phi_hi > phi_lo)
 
     def test_integral_variance(self):
-        """Integral of Nasmyth over all k gives isotropic variance ≈ ε/(7.5ν)."""
+        """Integral of Nasmyth over all k gives isotropic variance ~ eps/(7.5*nu)."""
         eps = 1e-7
         nu = 1.3e-6
         ks = (eps / nu**3) ** 0.25
@@ -146,7 +146,7 @@ class TestConstants:
     """Verify critical constants."""
 
     def test_lueck_a(self):
-        assert LUECK_A == pytest.approx(1.0774e9)
+        assert pytest.approx(1.0774e9) == LUECK_A
 
     def test_x_95(self):
-        assert X_95 == pytest.approx(0.1205)
+        assert pytest.approx(0.1205) == X_95

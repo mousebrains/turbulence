@@ -16,9 +16,8 @@ P_FILES = sorted(VMP_DIR.glob("*.p"))
 class TestQuickLook:
     def test_smoke(self):
         """quick_look() creates a viewer without crashing."""
-        from odas_tpw.rsi.quick_look import QuickLookViewer
-
         from odas_tpw.rsi.p_file import PFile
+        from odas_tpw.rsi.quick_look import QuickLookViewer
 
         pf = PFile(P_FILES[0])
         viewer = QuickLookViewer(pf, fft_length=256, f_AA=98.0)
@@ -31,7 +30,6 @@ class TestDissLook:
     def test_smoke(self):
         """DissLookViewer creates a viewer without crashing."""
         from odas_tpw.rsi.diss_look import DissLookViewer
-
         from odas_tpw.rsi.p_file import PFile
 
         pf = PFile(P_FILES[0])

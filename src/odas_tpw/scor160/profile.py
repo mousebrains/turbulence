@@ -39,7 +39,7 @@ def smooth_fall_rate(P: np.ndarray, fs: float, tau: float = 1.5) -> np.ndarray:
     W = np.gradient(P.astype(np.float64), 1.0 / fs)
     f_c = 0.68 / tau
     b, a = butter(1, f_c / (fs / 2.0))
-    return filtfilt(b, a, W)
+    return np.asarray(filtfilt(b, a, W))
 
 
 def compute_speed_fast(
@@ -128,8 +128,8 @@ def smooth_speed_interp(
     pspd_rel = np.interp(t_fast, t_slow, speed_slow)
     f_c = 0.68 / tau
     b_f, a_f = butter(1, f_c / (fs_fast / 2.0))
-    pspd_rel = filtfilt(b_f, a_f, pspd_rel)
-    return np.maximum(pspd_rel, speed_min)
+    pspd_rel = np.asarray(filtfilt(b_f, a_f, pspd_rel))
+    return np.asarray(np.maximum(pspd_rel, speed_min))
 
 
 def get_profiles(

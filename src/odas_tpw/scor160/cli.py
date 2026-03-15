@@ -81,8 +81,12 @@ _LEVEL_SPECS = {
 def _run_benchmark(args: argparse.Namespace, levels: list[str]) -> None:
     """Run benchmark processing for the specified levels."""
     from odas_tpw.scor160.compare import (
-        compare_l2, compare_l3, compare_l4,
-        format_l2_report, format_l3_report, format_l4_report,
+        compare_l2,
+        compare_l3,
+        compare_l4,
+        format_l2_report,
+        format_l3_report,
+        format_l4_report,
     )
     from odas_tpw.scor160.io import read_atomix
     from odas_tpw.scor160.l2 import process_l2

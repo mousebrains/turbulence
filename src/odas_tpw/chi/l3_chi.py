@@ -67,15 +67,18 @@ class L3ChiData:
 
     @property
     def n_spectra(self) -> int:
-        return self.time.shape[0]
+        """Number of spectral windows."""
+        return int(self.time.shape[0])
 
     @property
     def n_wavenumber(self) -> int:
-        return self.kcyc.shape[0]
+        """Number of wavenumber bins."""
+        return int(self.kcyc.shape[0])
 
     @property
     def n_gradt(self) -> int:
-        return self.gradt_spec.shape[0]
+        """Number of temperature gradient channels."""
+        return int(self.gradt_spec.shape[0])
 
 
 def _process_section_chi(

@@ -125,4 +125,4 @@ def noise_shearchannel(
     # Convert to counts²/Hz
     noise_counts = Noise_4 / delta_s**2
 
-    return noise_counts
+    return np.asarray(noise_counts)

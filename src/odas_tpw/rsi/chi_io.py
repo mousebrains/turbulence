@@ -49,7 +49,7 @@ def _compute_chi(
     from odas_tpw.chi.l4_chi import process_l4_chi_epsilon, process_l4_chi_fit
     from odas_tpw.rsi.helpers import _build_l1data_from_channels, prepare_profiles
     from odas_tpw.rsi.profile import _VEHICLE_TAU
-    from odas_tpw.scor160.io import L2Params, L3Params, L4Data
+    from odas_tpw.scor160.io import L2Params, L3Params
     from odas_tpw.scor160.l2 import process_l2
 
     if diss_length is None:
@@ -78,8 +78,6 @@ def _compute_chi(
     (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, _fs_slow, ratio, t_fast) = (
         prepared
     )
-
-    f_AA_eff = 0.9 * f_AA
 
     # Pipeline parameters
     l2_params = L2Params(
@@ -402,21 +400,66 @@ def _build_chi_dataset(
     from odas_tpw.rsi.helpers import _build_result_dataset
 
     variables = [
-        ("chi", ["probe", "time"], chi_out, {"units": "K2 s-1", "long_name": "thermal variance dissipation rate"}),
-        ("epsilon_T", ["probe", "time"], eps_out, {"units": "W kg-1", "long_name": "TKE dissipation rate from temperature"}),
-        ("kB", ["probe", "time"], kB_out, {"units": "cpm", "long_name": "Batchelor wavenumber"}),
-        ("K_max_T", ["probe", "time"], K_max_out, {"units": "cpm", "long_name": "upper wavenumber integration limit for chi"}),
-        ("fom", ["probe", "time"], fom_out, {"units": "1", "long_name": "figure of merit (observed/model variance ratio)"}),
-        ("K_max_ratio", ["probe", "time"], K_max_ratio_out, {"units": "1", "long_name": "K_max / kB spectral resolution ratio"}),
-        ("speed", ["time"], speed_out, {"units": "m s-1", "long_name": "profiling speed"}),
-        ("nu", ["time"], nu_out, {"units": "m2 s-1", "long_name": "kinematic viscosity of sea water"}),
-        ("P_mean", ["time"], P_out, {"units": "dbar", "long_name": "mean sea water pressure", "standard_name": "sea_water_pressure", "positive": "down"}),
-        ("T_mean", ["time"], T_out, {"units": "degree_Celsius", "long_name": "mean sea water temperature", "standard_name": "sea_water_temperature"}),
-        ("spec_gradT", ["probe", "freq", "time"], spec_gradT, {"units": "K2 m-1", "long_name": "temperature gradient wavenumber spectrum (observed)"}),
-        ("spec_batch", ["probe", "freq", "time"], spec_batch, {"units": "K2 m-1", "long_name": "fitted Batchelor temperature gradient spectrum"}),
-        ("spec_noise", ["probe", "freq", "time"], spec_noise_out, {"units": "K2 m-1", "long_name": "FP07 electronics noise spectrum"}),
-        ("K", ["freq", "time"], K_out, {"units": "cpm", "long_name": "wavenumber (cycles per metre)"}),
-        ("F", ["freq", "time"], F_out, {"units": "Hz", "long_name": "frequency"}),
+        ("chi", ["probe", "time"], chi_out, {
+            "units": "K2 s-1",
+            "long_name": "thermal variance dissipation rate",
+        }),
+        ("epsilon_T", ["probe", "time"], eps_out, {
+            "units": "W kg-1",
+            "long_name": "TKE dissipation rate from temperature",
+        }),
+        ("kB", ["probe", "time"], kB_out, {
+            "units": "cpm", "long_name": "Batchelor wavenumber",
+        }),
+        ("K_max_T", ["probe", "time"], K_max_out, {
+            "units": "cpm",
+            "long_name": "upper wavenumber integration limit for chi",
+        }),
+        ("fom", ["probe", "time"], fom_out, {
+            "units": "1",
+            "long_name": "figure of merit (observed/model variance ratio)",
+        }),
+        ("K_max_ratio", ["probe", "time"], K_max_ratio_out, {
+            "units": "1",
+            "long_name": "K_max / kB spectral resolution ratio",
+        }),
+        ("speed", ["time"], speed_out, {
+            "units": "m s-1", "long_name": "profiling speed",
+        }),
+        ("nu", ["time"], nu_out, {
+            "units": "m2 s-1",
+            "long_name": "kinematic viscosity of sea water",
+        }),
+        ("P_mean", ["time"], P_out, {
+            "units": "dbar",
+            "long_name": "mean sea water pressure",
+            "standard_name": "sea_water_pressure",
+            "positive": "down",
+        }),
+        ("T_mean", ["time"], T_out, {
+            "units": "degree_Celsius",
+            "long_name": "mean sea water temperature",
+            "standard_name": "sea_water_temperature",
+        }),
+        ("spec_gradT", ["probe", "freq", "time"], spec_gradT, {
+            "units": "K2 m-1",
+            "long_name": "temperature gradient wavenumber spectrum (observed)",
+        }),
+        ("spec_batch", ["probe", "freq", "time"], spec_batch, {
+            "units": "K2 m-1",
+            "long_name": "fitted Batchelor temperature gradient spectrum",
+        }),
+        ("spec_noise", ["probe", "freq", "time"], spec_noise_out, {
+            "units": "K2 m-1",
+            "long_name": "FP07 electronics noise spectrum",
+        }),
+        ("K", ["freq", "time"], K_out, {
+            "units": "cpm",
+            "long_name": "wavenumber (cycles per metre)",
+        }),
+        ("F", ["freq", "time"], F_out, {
+            "units": "Hz", "long_name": "frequency",
+        }),
     ]
     return _build_result_dataset(
         variables, therm_names, t_out, "thermistor probe name",
@@ -462,8 +505,8 @@ def _load_therm_channels(source: PFile | str | Path) -> dict[str, Any]:
     from odas_tpw.rsi.helpers import load_channels
     from odas_tpw.rsi.p_file import PFile
 
-    # First load standard channels
-    data = load_channels(source)
+    # First load standard channels (convert TypedDict → plain dict for extra keys)
+    data: dict[str, Any] = dict(load_channels(source))
 
     therm: list[tuple[str, np.ndarray]] = []
     diff_gains: list[float] = []

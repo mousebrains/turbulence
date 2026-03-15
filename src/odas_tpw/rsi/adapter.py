@@ -118,7 +118,7 @@ def pfile_to_l1data(
     for name in sorted(pf._fast_channels):
         if DT_PATTERN.match(name):
             temp_fast_list.append(pf.channels[name][s_fast:e_fast])
-            ch_cfg = next(
+            ch_cfg: dict = next(
                 (ch for ch in pf.config["channels"] if ch.get("name") == name),
                 {},
             )

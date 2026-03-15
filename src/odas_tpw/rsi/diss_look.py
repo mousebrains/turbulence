@@ -29,8 +29,8 @@ class DissLookViewer(ProfileViewer):
     def __init__(self, pf, **kwargs):
         super().__init__(pf, **kwargs)
         self._twin_ax = None
-        self._cached_diss = None
-        self._cached_spec = None
+        self._cached_diss: dict | None = None
+        self._cached_spec: dict | None = None
 
     def _setup_axes(self):
         p_ref = self.axes[0, 0]
@@ -71,6 +71,7 @@ class DissLookViewer(ProfileViewer):
         )
 
         d = self._cached_diss
+        assert d is not None
 
         # Row 0: profile panels
         self._draw_overview(self.axes[0, 0], s_slow, e_slow)
@@ -103,6 +104,7 @@ class DissLookViewer(ProfileViewer):
         If neither passes, NaN.
         """
         d = self._cached_diss
+        assert d is not None
         eps = d["epsilon"]   # (n_shear, n_windows)
         FM = d["FM"]         # (n_shear, n_windows)
         n_shear, n_win = eps.shape
@@ -139,6 +141,7 @@ class DissLookViewer(ProfileViewer):
         """Panel (0,2): Chi profile vs pressure (mean of Batchelor & Kraichnan)."""
         ax = self.axes[0, 2]
         d = self._cached_diss
+        assert d is not None
         P = d["P_windows"]
 
         if len(P) == 0:
@@ -178,6 +181,7 @@ class DissLookViewer(ProfileViewer):
         """Panel (1,3): Chi figure of merit vs pressure (Batchelor & Kraichnan)."""
         ax = self.axes[1, 3]
         d = self._cached_diss
+        assert d is not None
         P = d["P_windows"]
 
         if len(P) == 0:
@@ -228,6 +232,7 @@ class DissLookViewer(ProfileViewer):
         """Panel (1,0): Lueck FM figure of merit vs pressure."""
         ax = self.axes[1, 0]
         d = self._cached_diss
+        assert d is not None
         P = d["P_windows"]
 
         if len(P) == 0:
@@ -288,6 +293,7 @@ class DissLookViewer(ProfileViewer):
             return
 
         r = self._cached_spec
+        assert r is not None
         K_chi = r["F"] / r["W"]
 
         if not r["chi_obs_specs"]:
@@ -382,6 +388,7 @@ class DissLookViewer(ProfileViewer):
         """Panel (0,3): Mixing efficiency Lambda = chi / epsilon vs pressure."""
         ax = self.axes[0, 3]
         d = self._cached_diss
+        assert d is not None
         P = d["P_windows"]
 
         if len(P) == 0:

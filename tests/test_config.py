@@ -6,7 +6,6 @@ import json
 import pytest
 
 from odas_tpw.rsi.config import (
-    DEFAULTS,
     _normalize_value,
     canonicalize,
     compute_hash,

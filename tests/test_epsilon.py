@@ -525,6 +525,7 @@ class TestIntegration:
     def test_epsilon_file_cf_compliance(self, skip_no_data, tmp_path):
         """Epsilon NetCDF file should roundtrip with CF attributes intact."""
         import xarray as xr
+
         from odas_tpw.rsi.dissipation import compute_diss_file
 
         eps_paths = compute_diss_file(PROFILE_FILE, tmp_path, fft_length=256, goodman=True)
@@ -573,7 +574,6 @@ class TestIntegration:
     def test_pipeline_p2prof_p2eps(self, skip_no_data, tmp_path):
         """Full pipeline: .p → p2prof → p2eps."""
         from odas_tpw.rsi.dissipation import compute_diss_file
-
         from odas_tpw.rsi.profile import extract_profiles
 
         prof_dir = tmp_path / "profiles"
@@ -594,7 +594,6 @@ class TestIntegration:
     def test_direct_vs_chained(self, skip_no_data, tmp_path):
         """Direct .p→epsilon should produce same as chained pipeline."""
         from odas_tpw.rsi.dissipation import get_diss
-
         from odas_tpw.rsi.profile import extract_profiles
 
         # Direct

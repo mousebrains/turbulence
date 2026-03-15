@@ -2,7 +2,6 @@
 """Unit tests for dataclasses and I/O utilities."""
 
 import numpy as np
-import pytest
 
 from odas_tpw.scor160.io import (
     L1Data,

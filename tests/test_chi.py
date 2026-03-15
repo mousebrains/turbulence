@@ -420,9 +420,8 @@ class TestChiIntegration:
 
     def test_get_chi_method1(self, skip_no_data):
         """Method 1 (with epsilon) should produce chi in reasonable range."""
-        from odas_tpw.rsi.dissipation import get_diss
-
         from odas_tpw.rsi.chi_io import get_chi
+        from odas_tpw.rsi.dissipation import get_diss
 
         # First compute epsilon
         eps_results = get_diss(PROFILE_FILE, fft_length=256, goodman=True)

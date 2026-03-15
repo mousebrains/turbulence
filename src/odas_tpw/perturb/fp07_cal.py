@@ -35,7 +35,7 @@ def _get_channel_config(pf: PFile, ch_name: str) -> dict:
     """Extract calibration parameters for a channel from PFile config."""
     for ch in pf.config["channels"]:
         if ch.get("name", "").strip() == ch_name:
-            return ch
+            return dict(ch)
     return {}
 
 
@@ -70,7 +70,7 @@ def _compute_RT_R0(
     # Clip to avoid log domain errors
     ratio = (1.0 - Z) / (1.0 + Z)
     ratio = np.clip(ratio, 1e-20, None)
-    return np.log(ratio)
+    return np.asarray(np.log(ratio))
 
 
 def _lowpass_filter(
@@ -100,7 +100,7 @@ def _lowpass_filter(
     # Ensure fc is below Nyquist
     fc = min(fc, fs / 2.0 * 0.99)
     b, a = butter(1, fc / (fs / 2.0))
-    return lfilter(b, a, fp07)
+    return np.asarray(lfilter(b, a, fp07))
 
 
 def _calc_lag(
@@ -200,7 +200,7 @@ def fp07_calibrate(
     P = pf.channels.get("P")
     W = _smooth_fall_rate(P, pf.fs_slow) if P is not None else np.full(len(T_ref), 0.5)
 
-    result = {
+    result: dict[str, dict] = {
         "channels": {},
         "fast_channels": {},
         "lags": {},

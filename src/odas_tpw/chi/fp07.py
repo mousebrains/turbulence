@@ -369,7 +369,7 @@ def noise_thermchannel(
     )
 
     F = np.asarray(F, dtype=np.float64)
-    base_f, johnson_gain_f, counts_factor, delta_s = _noise_f_intermediates(F, fs, diff_gain, p)
+    base_f, johnson_gain_f, counts_factor, _delta_s = _noise_f_intermediates(F, fs, diff_gain, p)
 
     # T-dependent terms
     T_kelvin = T_mean + 273.15

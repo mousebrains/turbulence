@@ -102,7 +102,6 @@ class TestCompareL3:
 
     def test_different_spectra(self):
         ref = _make_l3()
-        rng = np.random.default_rng(99)
         comp = _make_l3()
         comp.sh_spec = comp.sh_spec * 1.5  # scale up
         metrics = compare_l3(comp, ref)

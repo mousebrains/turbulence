@@ -297,7 +297,7 @@ def compute_chi_window(
 
     # FP07 transfer function
     _h2_func = fp07_transfer if fp07_model == "single_pole" else fp07_double_pole
-    tau0 = fp07_tau(W, model=default_tau_model(fp07_model))
+    tau0 = float(fp07_tau(W, model=default_tau_model(fp07_model)))
     H2 = _h2_func(F, tau0)
 
     # Noise spectrum (use first probe's diff_gain)

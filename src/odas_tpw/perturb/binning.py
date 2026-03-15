@@ -199,7 +199,7 @@ def bin_by_time(
             if arr.dtype.kind == "M":  # skip datetime64 variables
                 continue
             b, _ = _bin_array(arr, t, bin_edges, agg)
-            binned_data[vname] = b
+            binned_data[str(vname)] = b
 
         ds.close()
         if len(binned_data) > 1:

@@ -113,7 +113,7 @@ def _load_csv(
     import pandas as pd
 
     df = pd.read_csv(path)
-    raw_time = df[time_column].values
+    raw_time = np.asarray(df[time_column].values)
     time, is_relative = _parse_time(raw_time, time_format)
 
     data_cols = [c for c in df.columns if c != time_column]

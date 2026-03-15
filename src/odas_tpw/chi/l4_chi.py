@@ -51,11 +51,13 @@ class L4ChiData:
 
     @property
     def n_spectra(self) -> int:
-        return self.time.shape[0]
+        """Number of spectral windows."""
+        return int(self.time.shape[0])
 
     @property
     def n_gradt(self) -> int:
-        return self.chi.shape[0]
+        """Number of temperature gradient channels."""
+        return int(self.chi.shape[0])
 
 
 def _process_l4_chi(

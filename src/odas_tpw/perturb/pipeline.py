@@ -8,6 +8,7 @@ import logging
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 from odas_tpw.perturb.config import merge_config, resolve_output_dir
 
@@ -42,7 +43,9 @@ def process_file(
     from odas_tpw.rsi.p_file import PFile
     from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
 
-    result = {"source": str(p_path), "profiles": [], "diss": [], "chi": []}
+    result: dict[str, Any] = {
+        "source": str(p_path), "profiles": [], "diss": [], "chi": [],
+    }
 
     try:
         pf = PFile(p_path)

@@ -79,8 +79,8 @@ class TestCsdOdasCrossSpectrum:
         """csd_odas(x, x) should detect identity and return auto-spectrum."""
         rng = np.random.default_rng(33)
         x = rng.standard_normal(4096)
-        Cauto, F_auto, _, _ = csd_odas(x, None, 256, 100.0)
-        Ccross, F_cross, Cxx, Cyy = csd_odas(x, x, 256, 100.0)
+        Cauto, _F_auto, _, _ = csd_odas(x, None, 256, 100.0)
+        Ccross, _F_cross, Cxx, Cyy = csd_odas(x, x, 256, 100.0)
         # When x==y, the code detects this and computes auto-spectrum
         np.testing.assert_allclose(Ccross, Cauto, rtol=1e-10)
         assert Cxx is None  # treated as auto
@@ -106,7 +106,7 @@ class TestCsdOdasCrossSpectrum:
         x = np.sin(2 * np.pi * f0 * t)
         y = 0.5 * np.sin(2 * np.pi * f0 * t + 0.3)
 
-        Cxy, F, Cxx, Cyy = csd_odas(x, y, nfft, fs)
+        Cxy, _F, Cxx, Cyy = csd_odas(x, y, nfft, fs)
         # Coherence at f0 should be near 1
         peak_idx = np.argmax(Cxx)
         coherence = np.abs(Cxy[peak_idx]) ** 2 / (Cxx[peak_idx] * Cyy[peak_idx])
@@ -129,7 +129,7 @@ class TestCsdOdasEdgeCases:
         rng = np.random.default_rng(55)
         x = rng.standard_normal(4096)
         for method in ("none", "constant", "linear"):
-            Cxy, F, _, _ = csd_odas(x, None, 256, 100.0, detrend=method)
+            Cxy, _F, _, _ = csd_odas(x, None, 256, 100.0, detrend=method)
             assert len(Cxy) == 129  # 256/2+1
 
 
@@ -142,7 +142,7 @@ class TestCsdMatrix:
         n = 4096
         nfft = 256
         x = rng.standard_normal((n, n_ch))
-        Cxy, F, _, _ = csd_matrix(x, None, nfft, 100.0)
+        Cxy, _F, _, _ = csd_matrix(x, None, nfft, 100.0)
         assert Cxy.shape == (nfft // 2 + 1, n_ch, n_ch)
 
     def test_auto_diagonal_matches_single(self):
@@ -169,7 +169,7 @@ class TestCsdMatrix:
         n_x, n_y = 2, 3
         x = rng.standard_normal((n, n_x))
         y = rng.standard_normal((n, n_y))
-        Cxy, F, Cxx, Cyy = csd_matrix(x, y, nfft, 100.0)
+        Cxy, _F, Cxx, Cyy = csd_matrix(x, y, nfft, 100.0)
         assert Cxy.shape == (nfft // 2 + 1, n_x, n_y)
         assert Cxx.shape == (nfft // 2 + 1, n_x, n_x)
         assert Cyy.shape == (nfft // 2 + 1, n_y, n_y)
@@ -209,7 +209,7 @@ class TestCsdMatrixBatch:
         Cbatch, F_batch, _, _ = csd_matrix_batch(x_win, None, nfft, fs)
         Csingle, F_single, _, _ = csd_matrix(data, None, nfft, fs)
 
-        assert Cbatch.shape == (1,) + Csingle.shape
+        assert Cbatch.shape == (1, *Csingle.shape)
         np.testing.assert_allclose(Cbatch[0], Csingle, rtol=1e-10)
         np.testing.assert_allclose(F_batch, F_single)
 
@@ -224,7 +224,7 @@ class TestCsdMatrixBatch:
         x_win = rng.standard_normal((n_win, diss_len, n_x))
         y_win = rng.standard_normal((n_win, diss_len, n_y))
 
-        Cxy, F, Cxx, Cyy = csd_matrix_batch(x_win, y_win, nfft, fs)
+        Cxy, _F, Cxx, Cyy = csd_matrix_batch(x_win, y_win, nfft, fs)
         n_freq = nfft // 2 + 1
         assert Cxy.shape == (n_win, n_freq, n_x, n_y)
         assert Cxx.shape == (n_win, n_freq, n_x, n_x)
@@ -239,7 +239,7 @@ class TestCsdMatrixBatch:
         fs = 100.0
 
         x_win = rng.standard_normal((n_win, diss_len, n_x))
-        Cxy, F, Cxx, Cyy = csd_matrix_batch(x_win, None, nfft, fs)
+        Cxy, _F, Cxx, Cyy = csd_matrix_batch(x_win, None, nfft, fs)
         n_freq = nfft // 2 + 1
         assert Cxy.shape == (n_win, n_freq, n_x, n_x)
         assert Cxx is None

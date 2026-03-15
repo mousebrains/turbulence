@@ -32,15 +32,18 @@ class L2ChiData:
 
     @property
     def n_temp(self) -> int:
+        """Number of fast thermistor channels."""
         return self.temp_fast.shape[0] if self.temp_fast.ndim == 2 else 0
 
     @property
     def n_vib(self) -> int:
-        return self.vib.shape[0]
+        """Number of vibration/accelerometer channels."""
+        return int(self.vib.shape[0])
 
     @property
     def n_time(self) -> int:
-        return self.time.shape[0]
+        """Number of fast-rate time samples."""
+        return int(self.time.shape[0])
 
 
 @dataclass

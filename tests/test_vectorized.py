@@ -403,7 +403,6 @@ class TestVectorizedIntegration:
 
     def test_get_diss_produces_valid_results(self):
         from odas_tpw.rsi.dissipation import get_diss
-
         from odas_tpw.rsi.p_file import PFile
 
         pf = PFile(P_FILES[5])  # file 0006
@@ -418,7 +417,6 @@ class TestVectorizedIntegration:
 
     def test_qc_variables_present(self):
         from odas_tpw.rsi.dissipation import get_diss
-
         from odas_tpw.rsi.p_file import PFile
 
         pf = PFile(P_FILES[5])
@@ -430,7 +428,6 @@ class TestVectorizedIntegration:
 
     def test_cf_attributes(self):
         from odas_tpw.rsi.dissipation import get_diss
-
         from odas_tpw.rsi.p_file import PFile
 
         pf = PFile(P_FILES[5])

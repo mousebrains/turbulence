@@ -2,7 +2,6 @@
 """Unit tests for iterative spike removal."""
 
 import numpy as np
-import pytest
 
 from odas_tpw.scor160.despike import despike
 
@@ -24,7 +23,7 @@ class TestDespikeCleanSignal:
     def test_constant_signal(self):
         fs = 512.0
         signal = np.ones(5000)
-        y, spikes, n_passes, frac = despike(signal, fs)
+        y, spikes, _n_passes, _frac = despike(signal, fs)
         assert len(spikes) == 0
         np.testing.assert_array_equal(y, signal)
 
@@ -56,7 +55,7 @@ class TestDespikeSyntheticSpikes:
         for loc in spike_locs:
             signal[loc] = 40.0
 
-        y, spikes, n_passes, frac = despike(signal, fs)
+        _y, spikes, _n_passes, frac = despike(signal, fs)
         # All spike locations should be detected
         for loc in spike_locs:
             assert loc in spikes
@@ -78,7 +77,7 @@ class TestDespikeSyntheticSpikes:
         fs = 512.0
         n = 8000
         signal = rng.standard_normal(n)
-        y, spikes, n_passes, frac = despike(signal, fs)
+        y, _spikes, _n_passes, _frac = despike(signal, fs)
         assert y.shape == signal.shape
 
     def test_fraction_bounds(self):
@@ -125,7 +124,7 @@ class TestDespikeParameters:
         signal = 0.01 * rng.standard_normal(n)
         signal[5000] = 50.0
 
-        y, spikes, _, _ = despike(signal, fs, N=10)
+        _y, spikes, _, _ = despike(signal, fs, N=10)
         assert len(spikes) > 0
 
 

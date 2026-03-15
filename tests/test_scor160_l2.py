@@ -109,7 +109,6 @@ class TestProcessL2:
 
     def test_hp_filter_removes_dc(self):
         """HP filter should remove DC offset from shear."""
-        rng = np.random.default_rng(99)
         l1 = _make_l1()
         # Add a large DC offset to shear
         l1.shear += 10.0

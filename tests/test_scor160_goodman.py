@@ -58,7 +58,7 @@ class TestCleanShearSpec:
         when vibration contamination is present."""
         n, fs, nfft = 8192, 512.0, 256
         accel, shear = _make_signals(n, fs, vib_amp=2.0)
-        clean_UU, _, UU, _, F = clean_shear_spec(accel, shear, nfft, fs)
+        clean_UU, _, UU, _, _F = clean_shear_spec(accel, shear, nfft, fs)
 
         # Compare auto-spectral diagonals
         for i in range(shear.shape[1]):
@@ -95,7 +95,7 @@ class TestCleanShearSpec:
         shear = np.ones((100, 2))
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            clean_UU, AA, UU, UA, F = clean_shear_spec(accel, shear, 256, 100.0)
+            clean_UU, _AA, _UU, _UA, _F = clean_shear_spec(accel, shear, 256, 100.0)
             assert len(w) >= 1
         assert clean_UU.shape[0] > 0  # should return something
 
@@ -143,7 +143,6 @@ class TestCleanShearSpecBatch:
 
     def test_cleaning_reduces_power(self):
         """Batched cleaning should also reduce coherent noise."""
-        rng = np.random.default_rng(333)
         n_win = 3
         diss_len = 2048
         n_sh, n_ac = 2, 2

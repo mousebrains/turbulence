@@ -44,7 +44,7 @@ def combine_profiles(
     n_depths = len(common_depths)
 
     # Collect all variable names
-    var_names = set()
+    var_names: set[str] = set()
     for ds in binned_datasets:
         var_names.update(ds.data_vars)
 

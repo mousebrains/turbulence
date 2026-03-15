@@ -23,7 +23,7 @@ from odas_tpw.scor160.ocean import visc35
 # ---------------------------------------------------------------------------
 
 
-def select_mid_window(P_fast, sel, fft_length) -> slice:
+def select_mid_window(P_fast: np.ndarray, sel: slice, fft_length: int) -> slice:
     """Select the single diss_length window closest to the midpoint pressure.
 
     Returns a slice for the selected window, or *sel* unchanged if the
@@ -128,8 +128,8 @@ def compute_depth_spectra(
 
     # --- Chi via shared compute_chi_window (M1 + M2) ---
     f_AA_chi = 0.9 * f_AA
-    W = result["W"]
-    nu = result["nu"]
+    W = result["W"]  # type: ignore[assignment]  # dict has mixed value types
+    nu = result["nu"]  # type: ignore[assignment]
 
     if n_therm > 0:
         therm_segs = [therm_data[ci][1][w_sel] for ci in range(n_therm)]
@@ -319,7 +319,7 @@ class ProfileViewer:
         )
         self.diff_gains = []
         for name, _ in self.therm_fast:
-            ch_cfg = next((ch for ch in pf.config["channels"] if ch.get("name") == name), {})
+            ch_cfg: dict = next((ch for ch in pf.config["channels"] if ch.get("name") == name), {})
             self.diff_gains.append(float(ch_cfg.get("diff_gain", "0.94")))
 
         # All temperature channels for temperature panel (T1, T2, JAC_T)
@@ -588,6 +588,7 @@ class ProfileViewer:
         if self.spec_P_range is not None:
             sp_lo, sp_hi = self.spec_P_range
             title += f"  [spectra: {sp_lo:.1f}–{sp_hi:.1f} dbar]"  # noqa: RUF001
+        assert self.fig is not None
         self.fig.suptitle(title, fontsize=11, fontweight="bold")
         self.fig.canvas.draw_idle()
 
@@ -601,16 +602,16 @@ class ProfileViewer:
         self._setup_axes()
 
         # Navigation buttons
-        ax_prev = self.fig.add_axes([0.35, 0.01, 0.07, 0.035])
-        ax_next = self.fig.add_axes([0.43, 0.01, 0.07, 0.035])
+        ax_prev = self.fig.add_axes((0.35, 0.01, 0.07, 0.035))
+        ax_next = self.fig.add_axes((0.43, 0.01, 0.07, 0.035))
         self.btn_prev = Button(ax_prev, "◀ Prev")
         self.btn_next = Button(ax_next, "Next ▶")
         self.btn_prev.on_clicked(self._on_prev)
         self.btn_next.on_clicked(self._on_next)
 
         # Spectral depth range buttons
-        ax_up = self.fig.add_axes([0.55, 0.01, 0.07, 0.035])
-        ax_dn = self.fig.add_axes([0.63, 0.01, 0.07, 0.035])
+        ax_up = self.fig.add_axes((0.55, 0.01, 0.07, 0.035))
+        ax_dn = self.fig.add_axes((0.63, 0.01, 0.07, 0.035))
         self.btn_spec_up = Button(ax_up, "▲ Spec")
         self.btn_spec_dn = Button(ax_dn, "▼ Spec")
         self.btn_spec_up.on_clicked(self._on_spec_up)

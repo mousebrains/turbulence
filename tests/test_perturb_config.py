@@ -3,8 +3,6 @@
 
 import json
 
-import pytest
-
 from odas_tpw.perturb.config import (
     DEFAULTS,
     canonicalize,

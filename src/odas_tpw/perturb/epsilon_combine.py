@@ -50,7 +50,7 @@ def mk_epsilon_mean(
     ds = ds.copy()
 
     # Find epsilon probe variables — either separate e_1/e_2/... or 2D epsilon(probe, time)
-    probe_names = sorted(k for k in ds.data_vars if k.startswith("e_"))
+    probe_names = sorted(str(k) for k in ds.data_vars if str(k).startswith("e_"))
 
     if not probe_names and "epsilon" in ds and "probe" in ds.dims:
         # Split 2D epsilon(probe, time) into per-probe variables
