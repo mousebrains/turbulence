@@ -156,9 +156,9 @@ def _compare_profiles(
 
             # Status based on agreement (using median absolute log ratio)
             med_abs = float(np.median(np.abs(log_ratio)))
-            if med_abs < 0.15:  # median within ~40%
+            if med_abs < 0.15:  # within a factor of 1.41
                 row[f"{var}_status"] = "good"
-            elif med_abs < 0.5:  # median within ~3x
+            elif med_abs < np.log10(2):  # within a factor of 2
                 row[f"{var}_status"] = "fair"
             else:
                 row[f"{var}_status"] = "poor"
@@ -314,7 +314,7 @@ def main() -> None:
             n_good = statuses.count("good")
             n_fair = statuses.count("fair")
             n_poor = statuses.count("poor")
-            print(f"  good (<25%): {n_good}  fair (<3x): {n_fair}  poor: {n_poor}")
+            print(f"  good (<1.4x): {n_good}  fair (<2x): {n_fair}  poor (>2x): {n_poor}")
 
     # Per-file detail
     hdr = f"{'Prof':>4} {'n_j':>5} {'n_t':>5} {'eps1':>6} {'e1_med':>7} {'eps2':>6} {'e2_med':>7}"
