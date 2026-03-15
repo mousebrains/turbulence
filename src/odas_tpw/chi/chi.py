@@ -235,14 +235,20 @@ def _chi_from_epsilon(
         return ChiEpsilonResult(np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan)
 
     correction = _variance_correction(kB, K_max, speed, tau0, _h2, grad_func)
-    chi_vc = 6 * KAPPA_T * obs_var * correction if np.isfinite(correction) else obs_var * 6 * KAPPA_T
+    if np.isfinite(correction):
+        chi_vc = 6 * KAPPA_T * obs_var * correction
+    else:
+        chi_vc = 6 * KAPPA_T * obs_var
 
     # Vectorized grid search: 200 chi values spanning 4 decades around chi_vc
     chi_lo = max(chi_vc * 0.01, 1e-15)
     chi_hi = chi_vc * 100
     chi_grid = np.logspace(np.log10(chi_lo), np.log10(chi_hi), 200)
     # model shape: (200, n_valid)
-    models = chi_grid[:, np.newaxis] * B_unit[np.newaxis, :] * h2v[np.newaxis, :] + nv[np.newaxis, :]
+    models = (
+        chi_grid[:, np.newaxis] * B_unit[np.newaxis, :] * h2v[np.newaxis, :]
+        + nv[np.newaxis, :]
+    )
     models = np.maximum(models, 1e-30)
     log_s = np.log(np.maximum(s, 1e-30))
     cost = np.sum((np.log(models) - log_s[np.newaxis, :]) ** 2, axis=1)
