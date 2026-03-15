@@ -46,7 +46,7 @@ def combine_profiles(
     # Collect all variable names
     var_names: set[str] = set()
     for ds in binned_datasets:
-        var_names.update(ds.data_vars)
+        var_names.update(str(v) for v in ds.data_vars)
 
     data_vars = {}
     for var in sorted(var_names):

@@ -285,7 +285,7 @@ def apply_schema(ds: xr.Dataset, schema: dict[str, dict]) -> xr.Dataset:
     xr.Dataset with updated attributes.
     """
     ds = ds.copy()
-    for vname in list(ds.data_vars) + list(ds.coords):
+    for vname in [str(v) for v in ds.data_vars] + [str(c) for c in ds.coords]:
         if vname in schema:
             attrs = schema[vname]
             for key, val in attrs.items():
