@@ -8,12 +8,12 @@ This project ports perturb to Python, dropping `.mat` output only. Chi is a sepa
 
 ## Architecture
 
-**Same repo, second package** under `src/perturb/`. Both packages are discovered by `setuptools.packages.find` from `src/`. One `pip install -e ".[dev]"` installs everything. Separate CLI entry point: `perturb`.
+**Same repo, second package** under `src/odas_tpw/perturb/`. Both packages are discovered by `setuptools.packages.find` from `src/`. One `pip install -e ".[dev]"` installs everything. Separate CLI entry point: `perturb`.
 
 ## File Layout
 
 ```
-src/perturb/
+src/odas_tpw/perturb/
     __init__.py
     cli.py               # `perturb` entry point with subcommands
     config.py             # YAML config schema, defaults, merge, hashing
@@ -630,7 +630,7 @@ Built bottom-up by dependency:
 8. Binned NetCDFs contain depth/time-aggregated data with profile dimension (profiles, diss, and chi separately)
 9. Combo NetCDFs merge all files with CF/ACDD compliance (profiles, diss, chi, CTD)
 10. `python -m pytest tests/test_perturb_*.py` — all tests pass
-11. `ruff check src/perturb/` and `mypy src/perturb/` — clean
+11. `ruff check src/odas_tpw/perturb/` and `mypy src/odas_tpw/perturb/` — clean
 12. Compare epsilon values against `rsi-tpw eps` output for consistency
 13. Pipeline order: diss before chi, CTD fork independent of profile fork
 14. `perturb chi config.yaml` works as standalone subcommand (reads diss results)

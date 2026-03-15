@@ -8,12 +8,12 @@ This project ports perturb to Python, dropping `.mat` output only. Chi is integr
 
 ## Architecture
 
-**Same repo, second package** under `src/perturb/`. Both packages are discovered by `setuptools.packages.find` from `src/`. One `pip install -e ".[dev]"` installs everything. Separate CLI entry point: `perturb`.
+**Same repo, second package** under `src/odas_tpw/perturb/`. Both packages are discovered by `setuptools.packages.find` from `src/`. One `pip install -e ".[dev]"` installs everything. Separate CLI entry point: `perturb`.
 
 ## File Layout
 
 ```
-src/perturb/
+src/odas_tpw/perturb/
     __init__.py
     cli.py               # `perturb` entry point with subcommands
     config.py             # YAML config schema, defaults, merge, hashing
@@ -496,6 +496,6 @@ Built bottom-up by dependency:
 7. Binned NetCDFs contain depth/time-aggregated data with profile dimension
 8. Combo NetCDFs merge all files with CF/ACDD compliance
 9. `python -m pytest tests/test_perturb_*.py` — all tests pass
-10. `ruff check src/perturb/` and `mypy src/perturb/` — clean
+10. `ruff check src/odas_tpw/perturb/` and `mypy src/odas_tpw/perturb/` — clean
 11. Compare epsilon values against `rsi-tpw eps` output for consistency
 12. Run individual subcommands (`perturb profiles`, `perturb diss`, `perturb bin`, `perturb combo`) independently — stages work in isolation
