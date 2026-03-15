@@ -1,12 +1,12 @@
 # Tests for odas_tpw.rsi.adapter
-"""Unit tests for pfile_to_l1data adapter (PFile -> scor160 L1Data)."""
+"""Unit tests for pfile_to_l1data and nc_to_l1data adapters."""
 
 from datetime import datetime
 
 import numpy as np
 import pytest
 
-from odas_tpw.rsi.adapter import pfile_to_l1data
+from odas_tpw.rsi.adapter import nc_to_l1data, pfile_to_l1data
 
 # ---------------------------------------------------------------------------
 # Mock PFile
@@ -332,3 +332,32 @@ class TestL1DataAttributes:
         ratio = round(pf.fs_fast / pf.fs_slow)
         l1 = pfile_to_l1data(pf, speed=0.5)
         assert l1.n_time == 300 * ratio
+
+
+# ---------------------------------------------------------------------------
+# nc_to_l1data tests (ATOMIX-format NetCDF → L1Data)
+# ---------------------------------------------------------------------------
+
+
+class TestNcToL1Data:
+    """Tests for nc_to_l1data() using the atomix_nc_file fixture."""
+
+    def test_nc_to_l1data_basic(self, atomix_nc_file):
+        l1 = nc_to_l1data(atomix_nc_file)
+        assert l1.n_shear >= 1
+        assert l1.fs_fast > 0
+        assert l1.n_time > 0
+
+    def test_nc_to_l1data_attributes(self, atomix_nc_file):
+        l1 = nc_to_l1data(atomix_nc_file)
+        assert l1.fs_fast == 512.0
+        assert l1.vehicle == "vmp"
+        assert l1.f_AA == 98.0
+
+    def test_nc_to_l1data_vib_type(self, atomix_nc_file):
+        l1 = nc_to_l1data(atomix_nc_file)
+        assert l1.vib_type == "ACC"
+
+    def test_nc_to_l1data_pres_shape(self, atomix_nc_file):
+        l1 = nc_to_l1data(atomix_nc_file)
+        assert l1.pres.shape == l1.time.shape

@@ -269,6 +269,92 @@ class TestProcessFile:
             process_file(tmp_path / "test.p", config, None, output_dirs)
             mock_ctd_bin.assert_not_called()
 
+    @patch("odas_tpw.perturb.hotel.interpolate_hotel", return_value={"hotel_T": np.zeros(100)})
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_hotel_data_injection(self, mock_pfile_cls, mock_smooth,
+                                  mock_get_prof, mock_hotel, tmp_path):
+        """Hotel data should be injected into pf.channels when provided."""
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pfile_cls.return_value = mock_pf
+
+        config = self._base_config(tmp_path)
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        hotel_data = MagicMock()
+
+        process_file(tmp_path / "test.p", config, None, output_dirs,
+                     hotel_data=hotel_data)
+        mock_hotel.assert_called_once()
+
+    @patch("odas_tpw.perturb.ctd.ctd_bin_file")
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_ctd_enabled(self, mock_pfile_cls, mock_smooth,
+                         mock_get_prof, mock_ctd_bin, tmp_path):
+        """ctd.enable=True and 'ctd' in output_dirs calls ctd_bin_file."""
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pfile_cls.return_value = mock_pf
+
+        config = self._base_config(tmp_path)
+        config["ctd"]["enable"] = True
+        ctd_dir = tmp_path / "ctd"
+        ctd_dir.mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss",
+                       "ctd": ctd_dir}
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+        mock_ctd_bin.assert_called_once()
+
+    @patch("odas_tpw.rsi.chi_io._compute_chi", return_value=[MagicMock()])
+    @patch("odas_tpw.rsi.dissipation._compute_epsilon")
+    @patch("odas_tpw.rsi.profile.extract_profiles")
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate", return_value={"channels": {}})
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_chi_enabled(self, mock_pfile_cls, mock_smooth, mock_get_prof,
+                         mock_fp07_cal, mock_extract, mock_eps,
+                         mock_chi, tmp_path):
+        """chi.enable=True with profiles and diss results calls _compute_chi."""
+        import xarray as xr
+
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = [{"start": 0, "end": 50}]
+
+        # Set up profile + diss output paths
+        prof_dir = tmp_path / "profiles"
+        prof_dir.mkdir(parents=True, exist_ok=True)
+        diss_dir = tmp_path / "diss"
+        diss_dir.mkdir(parents=True, exist_ok=True)
+        chi_dir = tmp_path / "chi"
+        chi_dir.mkdir(parents=True, exist_ok=True)
+
+        prof_nc = prof_dir / "prof.nc"
+        prof_nc.touch()
+        mock_extract.return_value = [prof_nc]
+
+        # Create a minimal diss netcdf
+        diss_nc = diss_dir / "prof.nc"
+        ds = xr.Dataset({"epsilon": (("time",), [1e-8])})
+        ds.to_netcdf(diss_nc)
+        mock_eps.return_value = [ds]
+
+        config = self._base_config(tmp_path)
+        config["chi"]["enable"] = True
+        output_dirs = {"profiles": prof_dir, "diss": diss_dir, "chi": chi_dir}
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+        mock_chi.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # run_pipeline tests

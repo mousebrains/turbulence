@@ -561,3 +561,163 @@ class TestChiIntegration:
 
         results = get_chi(PROFILE_FILE, fft_length=512)
         assert len(results) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Chi from NetCDF path tests
+# ---------------------------------------------------------------------------
+
+
+class TestChiFromNetCDF:
+    """Exercise the NetCDF input path for chi computation."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_no_data(self):
+        if not PROFILE_FILE.exists():
+            pytest.skip("Test data not available")
+
+    def test_load_therm_channels_from_nc(self, tmp_path):
+        """_load_therm_channels should work with a per-profile NC file."""
+        from odas_tpw.rsi.chi_io import _load_therm_channels
+        from odas_tpw.rsi.profile import extract_profiles
+
+        prof_paths = extract_profiles(PROFILE_FILE, tmp_path)
+        assert len(prof_paths) > 0
+
+        data = _load_therm_channels(prof_paths[0])
+        assert "therm" in data
+        # Should find at least one thermistor channel
+        assert len(data["therm"]) > 0
+
+    def test_compute_chi_from_nc(self, tmp_path):
+        """compute_chi_file should work with a per-profile NC file."""
+        from odas_tpw.rsi.chi_io import compute_chi_file
+        from odas_tpw.rsi.profile import extract_profiles
+
+        prof_dir = tmp_path / "profiles"
+        prof_paths = extract_profiles(PROFILE_FILE, prof_dir)
+        assert len(prof_paths) > 0
+
+        chi_dir = tmp_path / "chi"
+        chi_dir.mkdir()
+        out_paths = compute_chi_file(prof_paths[0], chi_dir, fft_length=512)
+        assert len(out_paths) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Chi edge-case unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestChiEdgeCases:
+    """Edge-case unit tests for chi.py functions."""
+
+    def test_chi_from_epsilon_zero_spectrum(self):
+        """All-zero spectrum should produce chi=NaN."""
+        from odas_tpw.chi.chi import _chi_from_epsilon
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
+
+        speed = 0.7
+        fs = 512
+        n_freq = 257
+        F = np.arange(n_freq) * fs / (2 * (n_freq - 1))
+        K = F / speed
+
+        tau0 = fp07_tau(speed)
+        H2 = fp07_transfer(F, tau0)
+        noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
+
+        result = _chi_from_epsilon(
+            np.zeros(n_freq), K, 1e-7, 1.2e-6, noise_K, H2,
+            tau0, fp07_transfer, 98.0, speed, "batchelor",
+        )
+        assert np.isnan(result.chi)
+
+    def test_chi_from_epsilon_low_kB(self):
+        """Very low epsilon should produce kB < 1 and chi=NaN."""
+        from odas_tpw.chi.chi import _chi_from_epsilon
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
+
+        speed = 0.7
+        fs = 512
+        n_freq = 257
+        F = np.arange(n_freq) * fs / (2 * (n_freq - 1))
+        K = F / speed
+
+        tau0 = fp07_tau(speed)
+        H2 = fp07_transfer(F, tau0)
+        noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
+
+        with pytest.warns(UserWarning, match="kB="):
+            result = _chi_from_epsilon(
+                np.ones(n_freq) * 1e-6, K, 1e-20, 1.2e-6, noise_K, H2,
+                tau0, fp07_transfer, 98.0, speed, "batchelor",
+            )
+        assert np.isnan(result.chi)
+
+    def test_mle_too_few_points(self):
+        """Too few valid wavenumber points should produce NaN from MLE fit."""
+        from odas_tpw.chi.chi import _mle_fit_kB
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
+
+        speed = 0.7
+        fs = 512
+        # Only 5 frequency points — fewer than the min_points=6 requirement
+        n_freq = 5
+        F = np.arange(n_freq) * fs / (2 * (n_freq - 1))
+        K = F / speed
+
+        tau0 = fp07_tau(speed)
+        H2 = fp07_transfer(F, tau0)
+        noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
+
+        with pytest.warns(UserWarning, match="Too few"):
+            result = _mle_fit_kB(
+                np.ones(n_freq) * 1e-6, K, 1e-7, 1.2e-6, noise_K, H2,
+                tau0, fp07_transfer, 98.0, speed, "batchelor",
+            )
+        assert np.isnan(result.kB)
+
+    def test_iterative_fit_zero_chi(self):
+        """Spectrum where initial chi <= 0 should floor at 1e-14."""
+        from odas_tpw.chi.chi import _iterative_fit
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
+
+        speed = 0.7
+        fs = 512
+        n_freq = 257
+        F = np.arange(n_freq) * fs / (2 * (n_freq - 1))
+        K = F / speed
+
+        tau0 = fp07_tau(speed)
+        H2 = fp07_transfer(F, tau0)
+        noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
+
+        # Spectrum at noise floor — initial chi should floor at 1e-14
+        result = _iterative_fit(
+            noise_K * 0.5, K, 1.2e-6, noise_K, H2,
+            tau0, fp07_transfer, 98.0, speed, "batchelor",
+        )
+        # Should produce some result (possibly NaN) without crashing
+        assert isinstance(result.chi, float)
+
+    def test_bilinear_correction_short(self):
+        """F with length < 3 should return ones."""
+        from odas_tpw.chi.chi import _bilinear_correction
+
+        F = np.array([0.0, 1.0])
+        bl = _bilinear_correction(F, 0.94, 512.0)
+        np.testing.assert_array_equal(bl, np.ones(2))
+
+    def test_valid_mask_all_below_noise(self):
+        """Spectrum below 2x noise everywhere should use fallback mask."""
+        from odas_tpw.chi.chi import _valid_wavenumber_mask
+
+        n = 50
+        K = np.linspace(0.5, 200, n)
+        noise = np.ones(n) * 10.0
+        spec = np.ones(n) * 1.0  # well below 2 * noise
+        mask = _valid_wavenumber_mask(spec, noise, K, K_AA=200.0)
+        # Fallback: K > 0 and K <= K_AA
+        assert np.sum(mask) > 0
+        assert mask[0]  # K[0] = 0.5 > 0

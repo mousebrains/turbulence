@@ -169,6 +169,65 @@ class TestExtractProfiles:
 
 
 # ---------------------------------------------------------------------------
+# profile.py — NC-path tests using sample_nc_file fixture
+# ---------------------------------------------------------------------------
+
+
+class TestExtractProfilesFromNC:
+    """Tests for extract_profiles() and _load_from_nc() with NC input."""
+
+    def test_extract_profiles_from_nc_sample(self, sample_nc_file, tmp_path):
+        """extract_profiles should work with NC input and produce profile NCs."""
+        from odas_tpw.rsi.profile import extract_profiles
+
+        prof_dir = tmp_path / "profiles"
+        paths = extract_profiles(sample_nc_file, prof_dir)
+        assert len(paths) > 0
+        for p in paths:
+            assert p.suffix == ".nc"
+            assert p.exists()
+
+    def test_load_from_nc_fields(self, sample_nc_file):
+        """_load_source should return dict with expected keys for NC input."""
+        from odas_tpw.rsi.profile import _load_source
+
+        data = _load_source(sample_nc_file)
+        assert "P" in data
+        assert "fs_fast" in data
+        assert "fs_slow" in data
+        assert "channels" in data
+        assert "stem" in data
+        assert data["fs_fast"] > 0
+
+    def test_extract_profiles_flat_pressure(self, tmp_path):
+        """Flat pressure (no profiling) should produce no profiles."""
+        import netCDF4
+
+        from odas_tpw.rsi.profile import extract_profiles
+
+        # Create a synthetic NC with flat pressure
+        nc_path = tmp_path / "flat.nc"
+        ds = netCDF4.Dataset(str(nc_path), "w", format="NETCDF4")
+        n_fast = 4096
+        n_slow = 512
+        ds.fs_fast = 512.0
+        ds.fs_slow = 64.0
+        ds.createDimension("n_fast", n_fast)
+        ds.createDimension("n_slow", n_slow)
+        t_f = ds.createVariable("t_fast", "f8", ("n_fast",))
+        t_f[:] = np.arange(n_fast) / 512.0
+        t_s = ds.createVariable("t_slow", "f8", ("n_slow",))
+        t_s[:] = np.arange(n_slow) / 64.0
+        P = ds.createVariable("P", "f8", ("n_slow",))
+        P[:] = np.full(n_slow, 5.0)  # flat pressure
+        ds.close()
+
+        prof_dir = tmp_path / "profiles"
+        paths = extract_profiles(nc_path, prof_dir)
+        assert len(paths) == 0
+
+
+# ---------------------------------------------------------------------------
 # fp07.py — FP07NoiseConfig override path and beta_2 correction
 # ---------------------------------------------------------------------------
 

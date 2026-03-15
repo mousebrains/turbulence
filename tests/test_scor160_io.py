@@ -4,6 +4,7 @@
 import numpy as np
 
 from odas_tpw.scor160.io import (
+    AtomixData,
     L1Data,
     L2Data,
     L2Params,
@@ -11,6 +12,7 @@ from odas_tpw.scor160.io import (
     L3Params,
     L4Data,
     L4Params,
+    read_atomix,
 )
 
 
@@ -151,3 +153,93 @@ class TestL4Data:
         )
         assert l4.n_spectra == n_spec
         assert l4.n_shear == n_sh
+
+
+# ---------------------------------------------------------------------------
+# read_atomix() tests using synthetic ATOMIX NetCDF fixture
+# ---------------------------------------------------------------------------
+
+
+class TestReadAtomix:
+    """Tests for read_atomix() using the atomix_nc_file session fixture."""
+
+    def test_read_atomix_returns_all_levels(self, atomix_nc_file):
+        result = read_atomix(atomix_nc_file)
+        assert isinstance(result, AtomixData)
+        assert result.l1.n_shear == 2
+        assert result.l1.n_time == 2048
+
+    def test_l1_fields(self, atomix_nc_file):
+        l1 = read_atomix(atomix_nc_file).l1
+        assert l1.time.shape == (2048,)
+        assert l1.pres.shape == (2048,)
+        assert l1.shear.shape == (2, 2048)
+        assert l1.vib.shape == (2, 2048)
+        assert l1.vib_type == "ACC"
+        assert l1.fs_fast == 512.0
+        assert l1.f_AA == 98.0
+        assert l1.vehicle == "vmp"
+
+    def test_l2_params(self, atomix_nc_file):
+        l2p = read_atomix(atomix_nc_file).l2_params
+        assert l2p.HP_cut == 0.25
+        np.testing.assert_array_equal(l2p.despike_sh, [8.0, 0.5, 0.04])
+        assert l2p.speed_tau == 1.5
+
+    def test_l2_ref_fields(self, atomix_nc_file):
+        l2 = read_atomix(atomix_nc_file).l2_ref
+        assert l2.shear.shape == (2, 2048)
+        assert l2.vib.shape == (2, 2048)
+        assert l2.pspd_rel.shape == (2048,)
+        assert l2.section_number.shape == (2048,)
+
+    def test_l3_params(self, atomix_nc_file):
+        l3p = read_atomix(atomix_nc_file).l3_params
+        assert l3p.fft_length == 256
+        assert l3p.diss_length == 512
+        assert l3p.overlap == 256
+        assert l3p.goodman is True
+
+    def test_l3_ref_fields(self, atomix_nc_file):
+        l3 = read_atomix(atomix_nc_file).l3_ref
+        assert l3.n_spectra == 5
+        assert l3.n_wavenumber == 129
+        assert l3.n_shear == 2
+        assert l3.sh_spec_clean is not None
+        assert l3.sh_spec_clean.shape == (2, 129, 5)
+
+    def test_l4_ref_fields(self, atomix_nc_file):
+        l4 = read_atomix(atomix_nc_file).l4_ref
+        assert l4.epsi.shape == (2, 5)
+        assert l4.epsi_final.shape == (5,)
+        assert l4.fom.shape == (2, 5)
+
+    def test_l1_no_speed_uses_l2(self, tmp_path):
+        """When L1 has no PSPD_REL, speed should be copied from L2."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "no_speed.nc"
+        _create_atomix_nc(path, no_l1_speed=True)
+        result = read_atomix(path)
+        assert result.l1.has_speed
+        np.testing.assert_allclose(result.l1.pspd_rel, 0.7)
+
+    def test_l1_vib_fallback(self, tmp_path):
+        """VIB variable used when ACC is absent."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "vib.nc"
+        _create_atomix_nc(path, vib_var_name="VIB")
+        result = read_atomix(path)
+        assert result.l1.vib_type == "VIB"
+        assert result.l1.n_vib == 2
+
+    def test_infer_diss_length(self, tmp_path):
+        """When diss_length attr is missing from L3, it is inferred."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "no_diss_len.nc"
+        _create_atomix_nc(path, no_diss_length=True)
+        result = read_atomix(path)
+        # diss_length should be inferred (>= 2 * fft_length = 512)
+        assert result.l3_params.diss_length >= 512

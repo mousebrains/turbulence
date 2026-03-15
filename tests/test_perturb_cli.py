@@ -155,3 +155,39 @@ class TestCmdCombo:
         main(["combo", "-o", str(tmp_path)])
         captured = capsys.readouterr()
         assert "Combo assembly complete." in captured.out
+
+
+class TestCmdProfiles:
+    def test_dispatches(self):
+        """profiles subcommand dispatches to run_pipeline with trim/merge disabled."""
+        with patch("odas_tpw.perturb.pipeline.run_pipeline") as mock_rp:
+            main(["profiles", "/nonexistent_xyz/*.p"])
+        called_config = mock_rp.call_args[0][0]
+        assert called_config["files"]["trim"] is False
+        assert called_config["files"]["merge"] is False
+
+
+class TestCmdDiss:
+    def test_dispatches(self):
+        """diss subcommand dispatches to run_pipeline."""
+        with patch("odas_tpw.perturb.pipeline.run_pipeline") as mock_rp:
+            main(["diss", "/nonexistent_xyz/*.p"])
+        mock_rp.assert_called_once()
+
+
+class TestCmdChi:
+    def test_dispatches(self):
+        """chi subcommand enables chi.enable=True in config."""
+        with patch("odas_tpw.perturb.pipeline.run_pipeline") as mock_rp:
+            main(["chi", "/nonexistent_xyz/*.p"])
+        called_config = mock_rp.call_args[0][0]
+        assert called_config["chi"]["enable"] is True
+
+
+class TestCmdCtd:
+    def test_dispatches(self):
+        """ctd subcommand enables ctd.enable=True in config."""
+        with patch("odas_tpw.perturb.pipeline.run_pipeline") as mock_rp:
+            main(["ctd", "/nonexistent_xyz/*.p"])
+        called_config = mock_rp.call_args[0][0]
+        assert called_config["ctd"]["enable"] is True
