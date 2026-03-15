@@ -2,13 +2,13 @@
 
 ## Overview
 
-The mixing efficiency parameter $\Lambda$ quantifies how effectively
+The mixing efficiency parameter $\Gamma$ quantifies how effectively
 turbulent kinetic energy is converted into irreversible mixing of the
 temperature (or density) field.  In this package it is defined as the
 ratio of the thermal variance dissipation rate to the TKE dissipation
 rate:
 
-$$\Lambda = \frac{\chi}{\varepsilon}$$
+$$\Gamma = \frac{\chi}{\varepsilon}$$
 
 where
 
@@ -16,14 +16,14 @@ where
 |--------|----------|-------|
 | $\chi$ | Thermal variance dissipation rate | K$^2$ s$^{-1}$ |
 | $\varepsilon$ | TKE dissipation rate | W kg$^{-1}$ = m$^2$ s$^{-3}$ |
-| $\Lambda$ | Dissipation ratio | K$^2$ s$^2$ m$^{-2}$ |
+| $\Gamma$ | Dissipation ratio | K$^2$ s$^2$ m$^{-2}$ |
 
-A threshold of $\Lambda = 0.2$ separates two regimes:
+A threshold of $\Gamma = 0.2$ separates two regimes:
 
-- $\Lambda > 0.2$: **highly efficient mixing** -- a large fraction of
+- $\Gamma > 0.2$: **highly efficient mixing** -- a large fraction of
   turbulent energy goes into irreversible stirring of the temperature
   field.
-- $\Lambda < 0.2$: **less efficient mixing** -- turbulent kinetic
+- $\Gamma < 0.2$: **less efficient mixing** -- turbulent kinetic
   energy is dissipated viscously with relatively little thermal mixing.
 
 ## Connection to Turbulent Diffusivity
@@ -68,35 +68,6 @@ is widely used as a default, but observational and numerical studies
 show that $\Gamma$ varies with turbulence intensity, stratification,
 and the nature of the forcing.
 
-### Linking $\Lambda$ to $\Gamma$
-
-Equating the two diffusivity estimates ($K_T \approx K_\rho$) yields
-
-$$\frac{\chi}{2\,(\partial T/\partial z)^2}
-  = \Gamma\,\frac{\varepsilon}{N^2}$$
-
-which gives
-
-$$\Gamma = \frac{N^2\,\chi}
-               {2\,\varepsilon\,(\partial T/\partial z)^2}$$
-
-The dissipation ratio $\Lambda = \chi/\varepsilon$ is therefore
-related to $\Gamma$ by
-
-$$\Lambda = \frac{2\,\Gamma\,(\partial T/\partial z)^2}{N^2}$$
-
-In a temperature-dominated water column where salinity effects on
-density are small, $N^2 \approx g\,\alpha\,(\partial T/\partial z)$
-(with thermal expansion coefficient $\alpha$), so
-
-$$\Lambda \approx \frac{2\,\Gamma}{g\,\alpha}\,
-  \frac{\partial T}{\partial z}$$
-
-Thus $\Lambda$ encodes both the dynamical mixing efficiency $\Gamma$
-and the local stratification.  Profiles of $\Lambda$ vs depth provide
-a direct, model-independent diagnostic of where turbulence is
-efficiently mixing the temperature field.
-
 ## Ratio of Kinetic to Thermal Energy Dissipation
 
 The ratio can also be viewed from an energy-budget perspective.
@@ -110,7 +81,7 @@ $$\varepsilon = 2\,\nu\,\langle s_{ij}\,s_{ij}\rangle,
   \chi = 2\,\kappa_T\,\langle |\nabla T'|^2 \rangle$$
 
 where $\nu$ is kinematic viscosity and $\kappa_T$ is molecular thermal
-diffusivity.  Their ratio $\Lambda = \chi/\varepsilon$ reflects the
+diffusivity.  Their ratio $\Gamma = \chi/\varepsilon$ reflects the
 relative importance of thermal vs mechanical dissipation and depends on
 the Prandtl number $Pr = \nu/\kappa_T$ and the turbulence intensity
 (buoyancy Reynolds number $Re_b = \varepsilon/(\nu N^2)$).
