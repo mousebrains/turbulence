@@ -219,6 +219,10 @@ def csd_matrix(
 def _detrend_batch(segments: np.ndarray, method: str, axis: int) -> np.ndarray:
     """Detrend an array of FFT segments along *axis* (the sample axis).
 
+    NaN/inf values are replaced with zero before detrending (so that
+    scipy.signal.detrend does not raise) and restored afterward, so that
+    downstream FFT produces NaN for corrupted windows.
+
     Parameters
     ----------
     segments : ndarray
@@ -234,21 +238,34 @@ def _detrend_batch(segments: np.ndarray, method: str, axis: int) -> np.ndarray:
     """
     if method == "none":
         return segments
+
+    # Guard against NaN/inf — scipy.signal.detrend raises on non-finite
+    bad = ~np.isfinite(segments)
+    has_bad = np.any(bad)
+    if has_bad:
+        segments = segments.copy()
+        segments[bad] = 0.0
+
     if method == "constant":
-        return segments - np.mean(segments, axis=axis, keepdims=True)
-    if method == "linear":
-        return signal.detrend(segments, axis=axis, type="linear")
-    # parabolic / cubic — vectorised polynomial fit along *axis*
-    nfft = segments.shape[axis]
-    order = {"parabolic": 2, "cubic": 3}[method]
-    ramp = np.arange(nfft, dtype=np.float64)
-    # Move the sample axis to the last position for easier broadcasting
-    moved = np.moveaxis(segments, axis, -1)          # (..., nfft)
-    flat = moved.reshape(-1, nfft)                    # (M, nfft)
-    coeffs = np.polynomial.polynomial.polyfit(ramp, flat.T, order)  # (order+1, M)
-    trend = np.polynomial.polynomial.polyval(ramp, coeffs)          # (M, nfft)
-    detrended = flat - trend                                         # (M, nfft)
-    return np.moveaxis(detrended.reshape(moved.shape), -1, axis)
+        result = segments - np.mean(segments, axis=axis, keepdims=True)
+    elif method == "linear":
+        result = signal.detrend(segments, axis=axis, type="linear")
+    else:
+        # parabolic / cubic — vectorised polynomial fit along *axis*
+        nfft = segments.shape[axis]
+        order = {"parabolic": 2, "cubic": 3}[method]
+        ramp = np.arange(nfft, dtype=np.float64)
+        moved = np.moveaxis(segments, axis, -1)          # (..., nfft)
+        flat = moved.reshape(-1, nfft)                    # (M, nfft)
+        coeffs = np.polynomial.polynomial.polyfit(ramp, flat.T, order)
+        trend = np.polynomial.polynomial.polyval(ramp, coeffs)
+        detrended = flat - trend
+        result = np.moveaxis(detrended.reshape(moved.shape), -1, axis)
+
+    if has_bad:
+        result[bad] = np.nan
+
+    return result
 
 
 def csd_matrix_batch(
