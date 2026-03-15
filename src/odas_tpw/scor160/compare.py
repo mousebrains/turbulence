@@ -19,7 +19,7 @@ def _log_spectral_metrics(comp: np.ndarray, ref: np.ndarray) -> dict:
     return {
         "n_valid": int(valid.sum()),
         "mean_log_diff": float(np.mean(log_diff)),
-        "rms_log_diff": float(np.sqrt(np.mean(log_diff ** 2))),
+        "rms_log_diff": float(np.sqrt(np.mean(log_diff**2))),
         "median_ratio": float(10 ** np.median(log_diff)),
         "q0_abs_log": float(np.min(abs_log_diff)),
         "q50_abs_log": float(np.median(abs_log_diff)),
@@ -67,9 +67,7 @@ def compare_l2(computed: L2Data, reference: L2Data) -> dict:
                 "rms_diff": float(np.sqrt(np.mean(diff**2))),
                 "max_abs_diff": float(np.max(np.abs(diff))),
                 "ref_mean": float(np.mean(w_ref[finite])),
-                "relative_rms": float(
-                    np.sqrt(np.mean(diff**2)) / np.mean(np.abs(w_ref[finite]))
-                ),
+                "relative_rms": float(np.sqrt(np.mean(diff**2)) / np.mean(np.abs(w_ref[finite]))),
             }
 
     # Shear comparison (within reference sections)
@@ -171,6 +169,7 @@ def format_l2_report(metrics: dict, filename: str = "") -> str:
 # L3 comparison
 # ---------------------------------------------------------------------------
 
+
 def compare_l3(computed: L3Data, reference: L3Data) -> dict:
     """Compare computed L3 spectra against reference L3.
 
@@ -222,17 +221,19 @@ def compare_l3(computed: L3Data, reference: L3Data) -> dict:
             if m["n_valid"] == 0:
                 continue
 
-            spec_stats.append({
-                "type": label,
-                "probe": i + 1,
-                "mean_log_diff": m["mean_log_diff"],
-                "rms_log_diff": m["rms_log_diff"],
-                "median_ratio": m["median_ratio"],
-                "q0_abs_log": m["q0_abs_log"],
-                "q50_abs_log": m["q50_abs_log"],
-                "q100_abs_log": m["q100_abs_log"],
-                "n_values": m["n_valid"],
-            })
+            spec_stats.append(
+                {
+                    "type": label,
+                    "probe": i + 1,
+                    "mean_log_diff": m["mean_log_diff"],
+                    "rms_log_diff": m["rms_log_diff"],
+                    "median_ratio": m["median_ratio"],
+                    "q0_abs_log": m["q0_abs_log"],
+                    "q50_abs_log": m["q50_abs_log"],
+                    "q100_abs_log": m["q100_abs_log"],
+                    "n_values": m["n_valid"],
+                }
+            )
     results["spectra"] = spec_stats
 
     return results
@@ -248,13 +249,15 @@ def format_l3_report(metrics: dict, filename: str = "") -> str:
 
     spd = metrics.get("speed")
     if spd:
-        lines.append(f"\n  Speed RMS diff:     {spd['rms_diff']:.6f} m/s "
-                      f"(ref mean {spd['ref_mean']:.4f})")
+        lines.append(
+            f"\n  Speed RMS diff:     {spd['rms_diff']:.6f} m/s (ref mean {spd['ref_mean']:.4f})"
+        )
 
     prs = metrics.get("pressure")
     if prs:
-        lines.append(f"  Pressure RMS diff:  {prs['rms_diff']:.4f} dbar "
-                      f"(ref mean {prs['ref_mean']:.1f})")
+        lines.append(
+            f"  Pressure RMS diff:  {prs['rms_diff']:.4f} dbar (ref mean {prs['ref_mean']:.1f})"
+        )
 
     for ss in metrics.get("spectra", []):
         lines.append(f"\n  Shear probe {ss['probe']} ({ss['type']}):")
@@ -274,6 +277,7 @@ def format_l3_report(metrics: dict, filename: str = "") -> str:
 # ---------------------------------------------------------------------------
 # L4 comparison
 # ---------------------------------------------------------------------------
+
 
 def compare_l4(computed: L4Data, reference: L4Data) -> dict:
     """Compare computed L4 against reference L4.
@@ -307,20 +311,22 @@ def compare_l4(computed: L4Data, reference: L4Data) -> dict:
         valid = np.isfinite(ref_e) & np.isfinite(comp_e) & (ref_e > 0) & (comp_e > 0)
         abs_log_diff = np.abs(np.log10(comp_e[valid]) - np.log10(ref_e[valid]))
 
-        probe_stats.append({
-            "probe": i + 1,
-            "n_valid": m["n_valid"],
-            "mean_log_diff": m["mean_log_diff"],
-            "rms_log_diff": m["rms_log_diff"],
-            "median_ratio": m["median_ratio"],
-            "q0_abs_log": m["q0_abs_log"],
-            "q25_abs_log": float(np.percentile(abs_log_diff, 25)),
-            "q50_abs_log": m["q50_abs_log"],
-            "q75_abs_log": float(np.percentile(abs_log_diff, 75)),
-            "q100_abs_log": m["q100_abs_log"],
-            "within_factor2": float(np.mean(abs_log_diff < np.log10(2))),
-            "within_factor3": float(np.mean(abs_log_diff < np.log10(3))),
-        })
+        probe_stats.append(
+            {
+                "probe": i + 1,
+                "n_valid": m["n_valid"],
+                "mean_log_diff": m["mean_log_diff"],
+                "rms_log_diff": m["rms_log_diff"],
+                "median_ratio": m["median_ratio"],
+                "q0_abs_log": m["q0_abs_log"],
+                "q25_abs_log": float(np.percentile(abs_log_diff, 25)),
+                "q50_abs_log": m["q50_abs_log"],
+                "q75_abs_log": float(np.percentile(abs_log_diff, 75)),
+                "q100_abs_log": m["q100_abs_log"],
+                "within_factor2": float(np.mean(abs_log_diff < np.log10(2))),
+                "within_factor3": float(np.mean(abs_log_diff < np.log10(3))),
+            }
+        )
     results["probes"] = probe_stats
 
     # EPSI_FINAL comparison
@@ -349,14 +355,17 @@ def compare_l4(computed: L4Data, reference: L4Data) -> dict:
         valid = np.isfinite(ref_f) & np.isfinite(comp_f)
         if valid.any():
             diff = comp_f[valid] - ref_f[valid]
-            fom_stats.append({
-                "probe": i + 1,
-                "ref_mean": float(np.mean(ref_f[valid])),
-                "comp_mean": float(np.mean(comp_f[valid])),
-                "rms_diff": float(np.sqrt(np.mean(diff ** 2))),
-                "corr": float(np.corrcoef(ref_f[valid], comp_f[valid])[0, 1])
-                    if len(ref_f[valid]) > 1 else np.nan,
-            })
+            fom_stats.append(
+                {
+                    "probe": i + 1,
+                    "ref_mean": float(np.mean(ref_f[valid])),
+                    "comp_mean": float(np.mean(comp_f[valid])),
+                    "rms_diff": float(np.sqrt(np.mean(diff**2))),
+                    "corr": float(np.corrcoef(ref_f[valid], comp_f[valid])[0, 1])
+                    if len(ref_f[valid]) > 1
+                    else np.nan,
+                }
+            )
     results["fom"] = fom_stats
 
     # Method agreement
@@ -367,12 +376,14 @@ def compare_l4(computed: L4Data, reference: L4Data) -> dict:
         valid = np.isfinite(ref_m) & np.isfinite(comp_m)
         if valid.any():
             agree = (ref_m[valid] == comp_m[valid]).sum()
-            method_stats.append({
-                "probe": i + 1,
-                "agreement": float(agree / valid.sum()),
-                "ref_isr_frac": float((ref_m[valid] == 1).mean()),
-                "comp_isr_frac": float((comp_m[valid] == 1).mean()),
-            })
+            method_stats.append(
+                {
+                    "probe": i + 1,
+                    "agreement": float(agree / valid.sum()),
+                    "ref_isr_frac": float((ref_m[valid] == 1).mean()),
+                    "comp_isr_frac": float((comp_m[valid] == 1).mean()),
+                }
+            )
     results["method"] = method_stats
 
     return results
@@ -392,10 +403,12 @@ def format_l4_report(metrics: dict, filename: str = "") -> str:
         lines.append(f"    Mean log10 diff:    {ps['mean_log_diff']:+.4f}")
         lines.append(f"    RMS log10 diff:     {ps['rms_log_diff']:.4f}")
         lines.append(f"    Median ratio:       {ps['median_ratio']:.4f}")
-        lines.append(f"    |log10 diff| Q0/Q25/Q50/Q75/Q100: "
-                      f"{ps['q0_abs_log']:.4f} / {ps['q25_abs_log']:.4f} / "
-                      f"{ps['q50_abs_log']:.4f} / {ps['q75_abs_log']:.4f} / "
-                      f"{ps['q100_abs_log']:.4f}")
+        lines.append(
+            f"    |log10 diff| Q0/Q25/Q50/Q75/Q100: "
+            f"{ps['q0_abs_log']:.4f} / {ps['q25_abs_log']:.4f} / "
+            f"{ps['q50_abs_log']:.4f} / {ps['q75_abs_log']:.4f} / "
+            f"{ps['q100_abs_log']:.4f}"
+        )
         lines.append(f"    Within factor 2:    {ps['within_factor2']:.1%}")
         lines.append(f"    Within factor 3:    {ps['within_factor3']:.1%}")
 
@@ -406,20 +419,26 @@ def format_l4_report(metrics: dict, filename: str = "") -> str:
         lines.append(f"    Mean log10 diff:    {ef['mean_log_diff']:+.4f}")
         lines.append(f"    RMS log10 diff:     {ef['rms_log_diff']:.4f}")
         lines.append(f"    Median ratio:       {ef['median_ratio']:.4f}")
-        lines.append(f"    |log10 diff| Q0/Q50/Q100: "
-                      f"{ef['q0_abs_log']:.4f} / {ef['q50_abs_log']:.4f} / "
-                      f"{ef['q100_abs_log']:.4f}")
+        lines.append(
+            f"    |log10 diff| Q0/Q50/Q100: "
+            f"{ef['q0_abs_log']:.4f} / {ef['q50_abs_log']:.4f} / "
+            f"{ef['q100_abs_log']:.4f}"
+        )
         lines.append(f"    Within factor 2:    {ef['within_factor2']:.1%}")
 
     for fs in metrics.get("fom", []):
         lines.append(f"\n  FOM probe {fs['probe']}:")
-        lines.append(f"    Ref mean: {fs['ref_mean']:.4f}  Comp mean: {fs['comp_mean']:.4f}"
-                      f"  RMS diff: {fs['rms_diff']:.4f}  Corr: {fs['corr']:.4f}")
+        lines.append(
+            f"    Ref mean: {fs['ref_mean']:.4f}  Comp mean: {fs['comp_mean']:.4f}"
+            f"  RMS diff: {fs['rms_diff']:.4f}  Corr: {fs['corr']:.4f}"
+        )
 
     for ms in metrics.get("method", []):
         lines.append(f"\n  Method probe {ms['probe']}:")
-        lines.append(f"    Agreement: {ms['agreement']:.1%}"
-                      f"  Ref ISR: {ms['ref_isr_frac']:.1%}"
-                      f"  Comp ISR: {ms['comp_isr_frac']:.1%}")
+        lines.append(
+            f"    Agreement: {ms['agreement']:.1%}"
+            f"  Ref ISR: {ms['ref_isr_frac']:.1%}"
+            f"  Comp ISR: {ms['comp_isr_frac']:.1%}"
+        )
 
     return "\n".join(lines)

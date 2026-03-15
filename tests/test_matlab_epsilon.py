@@ -60,9 +60,19 @@ def _load_validation(nc_path: Path) -> dict:
         # Per-profile groups → lists matching old cell-array layout
         n_profiles = int(out["n_profiles"])
         list_keys = [
-            "eps_all", "K_max_all", "FM_all", "mad_all", "method_all",
-            "nu_all", "speed_all", "P_mean_all", "T_mean_all", "t_mean_all",
-            "K_all", "F_all", "spec_sh_all",
+            "eps_all",
+            "K_max_all",
+            "FM_all",
+            "mad_all",
+            "method_all",
+            "nu_all",
+            "speed_all",
+            "P_mean_all",
+            "T_mean_all",
+            "t_mean_all",
+            "K_all",
+            "F_all",
+            "spec_sh_all",
         ]
         for k in list_keys:
             out[k] = [None] * n_profiles
@@ -86,9 +96,7 @@ def _load_validation(nc_path: Path) -> dict:
             out["K_all"][pi] = np.squeeze(grp.variables["K"][:])
             out["F_all"][pi] = np.squeeze(grp.variables["F"][:])
             if "spec_shear_clean" in grp.variables:
-                out["spec_sh_all"][pi] = np.squeeze(
-                    grp.variables["spec_shear_clean"][:]
-                )
+                out["spec_sh_all"][pi] = np.squeeze(grp.variables["spec_shear_clean"][:])
             else:
                 out["spec_sh_all"][pi] = np.array([])
 
@@ -158,7 +166,7 @@ def validation_pair(request):
 def matched_results(validation_pair, cached_get_diss):
     """Run get_diss and match profiles against MATLAB. Cache per file."""
     p_path, val = validation_pair
-    results = cached_get_diss(p_path, fft_length=256, goodman=True)
+    results = cached_get_diss(p_path, fft_length=256, diss_length=512, goodman=True)
     matched = _match_profiles(results, val)
     return results, val, matched
 

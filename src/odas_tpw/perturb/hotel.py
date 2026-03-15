@@ -98,10 +98,7 @@ def load_hotel(
     elif ext == ".mat":
         return _load_mat(path, time_column, time_format, channels)
     else:
-        raise ValueError(
-            f"Unsupported hotel file format: {ext!r}. "
-            f"Supported: .csv, .nc, .mat"
-        )
+        raise ValueError(f"Unsupported hotel file format: {ext!r}. Supported: .csv, .nc, .mat")
 
 
 def _load_csv(
@@ -119,8 +116,7 @@ def _load_csv(
     data_cols = [c for c in df.columns if c != time_column]
     if channels:
         ch = {
-            channels.get(c, c): df[c].values.astype(np.float64)
-            for c in data_cols if c in channels
+            channels.get(c, c): df[c].values.astype(np.float64) for c in data_cols if c in channels
         }
     else:
         ch = {c: df[c].values.astype(np.float64) for c in data_cols}
@@ -144,7 +140,8 @@ def _load_netcdf(
     if channels:
         ch = {
             channels.get(v, v): ds.variables[v][:].data.astype(np.float64)
-            for v in data_vars if v in channels
+            for v in data_vars
+            if v in channels
         }
     else:
         ch = {v: ds.variables[v][:].data.astype(np.float64) for v in data_vars}
@@ -250,8 +247,11 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
                 interpolated[mask & above] = last_valid
         else:
             interp = interp1d(
-                hotel_t, data, kind="linear",
-                bounds_error=False, fill_value=(data[0], data[-1]),
+                hotel_t,
+                data,
+                kind="linear",
+                bounds_error=False,
+                fill_value=(data[0], data[-1]),
             )
             interpolated = interp(target_t)
 

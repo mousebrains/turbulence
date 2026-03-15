@@ -133,7 +133,12 @@ def _process_section_chi(
         clean_spectra = np.real(np.diagonal(clean_TT, axis1=2, axis2=3)).copy()
     else:
         TT, _, _, _ = csd_matrix_batch(
-            gradt_windows, None, nfft, fs, overlap=nfft // 2, detrend="linear",
+            gradt_windows,
+            None,
+            nfft,
+            fs,
+            overlap=nfft // 2,
+            detrend="linear",
         )
         clean_spectra = np.real(np.diagonal(TT, axis1=2, axis2=3)).copy()
 
@@ -179,12 +184,15 @@ def _process_section_chi(
     for ci in range(n_temp):
         cal_ci = therm_cal[ci] if therm_cal and ci < len(therm_cal) else {}
         noise_kwargs = {
-            k: v for k, v in cal_ci.items()
-            if k in ("e_b", "gain", "beta_1", "adc_fs", "adc_bits")
+            k: v for k, v in cal_ci.items() if k in ("e_b", "gain", "beta_1", "adc_fs", "adc_bits")
         }
         noise_all[ci] = gradT_noise_batch(
-            F_const, T_means, speed_means, fs=fs,
-            diff_gain=diff_gains[ci], **noise_kwargs,
+            F_const,
+            T_means,
+            speed_means,
+            fs=fs,
+            diff_gain=diff_gains[ci],
+            **noise_kwargs,
         )
 
     # Append results
@@ -259,9 +267,23 @@ def process_l3_chi(
 
     for sec_id in sections:
         _process_section_chi(
-            l2_chi, sec_id, diss_length, diss_step, nfft, fs,
-            n_temp, n_freq, do_goodman, fd_correction, bl_corrections,
-            F_const, fp07_model, salinity, diff_gains, therm_cal, acc,
+            l2_chi,
+            sec_id,
+            diss_length,
+            diss_step,
+            nfft,
+            fs,
+            n_temp,
+            n_freq,
+            do_goodman,
+            fd_correction,
+            bl_corrections,
+            F_const,
+            fp07_model,
+            salinity,
+            diff_gains,
+            therm_cal,
+            acc,
         )
 
     if not acc.times:

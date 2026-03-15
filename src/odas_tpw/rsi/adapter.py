@@ -78,7 +78,11 @@ def pfile_to_l1data(
         W_slow_full = smooth_fall_rate(P_slow, pf.fs_slow, tau=speed_tau)
         speed_slow = np.abs(W_slow_full[s_slow : e_slow + 1])
         pspd_rel = smooth_speed_interp(
-            speed_slow, t_fast, t_slow, pf.fs_fast, speed_tau,
+            speed_slow,
+            t_fast,
+            t_slow,
+            pf.fs_fast,
+            speed_tau,
         )
 
     # Shear channels — normalize by speed^2 to get du/dz [s^-1]

@@ -99,9 +99,11 @@ def _run_benchmark(args: argparse.Namespace, levels: list[str]) -> None:
 
         if "l2" in levels:
             print(f"  L1: {l1.n_time} samples, {l1.n_shear} shear, {l1.n_vib} {l1.vib_type}")
-            print(f"  Params: HP_cut={l2_params.HP_cut} Hz, despike_sh={l2_params.despike_sh}"
-                  f", speed_tau={l2_params.speed_tau} s"
-                  f", min_W={l2_params.profile_min_W} m/s")
+            print(
+                f"  Params: HP_cut={l2_params.HP_cut} Hz, despike_sh={l2_params.despike_sh}"
+                f", speed_tau={l2_params.speed_tau} s"
+                f", min_W={l2_params.profile_min_W} m/s"
+            )
             l2_comp = process_l2(l1, l2_params)
             print()
             print(format_l2_report(compare_l2(l2_comp, l2_ref), filename=path.name))
@@ -113,10 +115,14 @@ def _run_benchmark(args: argparse.Namespace, levels: list[str]) -> None:
         if "l3" in levels:
             l2_input = l2_comp if l2_comp is not None else l2_ref
             if l2_comp is None:
-                print(f"  L2 ref: {l2_ref.shear.shape[1]} samples, "
-                      f"{l2_ref.shear.shape[0]} shear, {l2_ref.vib.shape[0]} {l2_ref.vib_type}")
-                print(f"  L3 params: fft={l3_params.fft_length}, diss={l3_params.diss_length}, "
-                      f"overlap={l3_params.overlap}, goodman={l3_params.goodman}")
+                print(
+                    f"  L2 ref: {l2_ref.shear.shape[1]} samples, "
+                    f"{l2_ref.shear.shape[0]} shear, {l2_ref.vib.shape[0]} {l2_ref.vib_type}"
+                )
+                print(
+                    f"  L3 params: fft={l3_params.fft_length}, diss={l3_params.diss_length}, "
+                    f"overlap={l3_params.overlap}, goodman={l3_params.goodman}"
+                )
             l3_comp = process_l3(l2_input, l1, l3_params)
             print()
             print(format_l3_report(compare_l3(l3_comp, l3_ref), filename=path.name))
@@ -126,8 +132,10 @@ def _run_benchmark(args: argparse.Namespace, levels: list[str]) -> None:
         if "l4" in levels:
             l3_input = l3_comp if l3_comp is not None else l3_ref
             if l3_comp is None:
-                print(f"  L3 ref: {l3_ref.n_spectra} spectra, "
-                      f"{l3_ref.n_shear} shear, {l3_ref.n_wavenumber} wavenumbers")
+                print(
+                    f"  L3 ref: {l3_ref.n_spectra} spectra, "
+                    f"{l3_ref.n_shear} shear, {l3_ref.n_wavenumber} wavenumbers"
+                )
             l4_comp = process_l4(l3_input, f_AA=l1.f_AA)
             print()
             print(format_l4_report(compare_l4(l4_comp, l4_ref), filename=path.name))
@@ -160,6 +168,7 @@ def _cmd_l1_l4(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 # Plotting helpers
 # ---------------------------------------------------------------------------
+
 
 def _plot_l2(l1, l2_comp, l2_ref, title: str) -> None:
     """Plot L1 vs computed-L2 vs reference-L2 for visual inspection."""

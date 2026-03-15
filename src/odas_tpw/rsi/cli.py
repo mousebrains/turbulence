@@ -363,11 +363,11 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
     kwargs = {
         "direction": eps_merged.get("direction", "down"),
         "speed": eps_merged.get("speed"),
-        "fft_length": eps_merged.get("fft_length", 256),
+        "fft_length": eps_merged.get("fft_length", 1024),
         "f_AA": eps_merged.get("f_AA", 98.0),
         "salinity": eps_merged.get("salinity"),
         "goodman": eps_merged.get("goodman", True),
-        "chi_fft_length": chi_merged.get("fft_length", 512),
+        "chi_fft_length": chi_merged.get("fft_length", 1024),
         "fp07_model": chi_merged.get("fp07_model", "single_pole"),
         "spectrum_model": chi_merged.get("spectrum_model", "kraichnan"),
     }
@@ -385,13 +385,21 @@ def _cmd_ql(args: argparse.Namespace) -> None:
     if args.spec_P_range is not None:
         spec_P_range = tuple(args.spec_P_range)
 
+    # Merge config file + CLI overrides for epsilon section
+    merged = _merge_for_section(args, "epsilon")
+    fft_length = args.fft_length or merged.get("fft_length", 1024)
+    diss_length = args.diss_length or merged.get("diss_length")
+    f_AA = args.f_AA or merged.get("f_AA", 98.0)
+    goodman = merged.get("goodman", True) if not args.no_goodman else False
+
     p_files = _resolve_p_files(args.files)
     for pf_path in p_files:
         quick_look(
             pf_path,
-            fft_length=args.fft_length or 256,
-            f_AA=args.f_AA or 98.0,
-            goodman=not args.no_goodman,
+            fft_length=fft_length,
+            diss_length=diss_length,
+            f_AA=f_AA,
+            goodman=goodman,
             direction=args.direction or "down",
             spec_P_range=spec_P_range,
             chi_method=args.chi_method,
@@ -407,13 +415,21 @@ def _cmd_dl(args: argparse.Namespace) -> None:
     if args.spec_P_range is not None:
         spec_P_range = tuple(args.spec_P_range)
 
+    # Merge config file + CLI overrides for epsilon section
+    merged = _merge_for_section(args, "epsilon")
+    fft_length = args.fft_length or merged.get("fft_length", 1024)
+    diss_length = args.diss_length or merged.get("diss_length")
+    f_AA = args.f_AA or merged.get("f_AA", 98.0)
+    goodman = merged.get("goodman", True) if not args.no_goodman else False
+
     p_files = _resolve_p_files(args.files)
     for pf_path in p_files:
         diss_look(
             pf_path,
-            fft_length=args.fft_length or 256,
-            f_AA=args.f_AA or 98.0,
-            goodman=not args.no_goodman,
+            fft_length=fft_length,
+            diss_length=diss_length,
+            f_AA=f_AA,
+            goodman=goodman,
             direction=args.direction or "down",
             spec_P_range=spec_P_range,
         )
@@ -544,13 +560,13 @@ def _add_eps_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Parallel workers (0 = all cores, default: 1)",
     )
     p.add_argument(
-        "--fft-length", type=int, default=None, help="FFT segment length [samples] (default: 256)"
+        "--fft-length", type=int, default=None, help="FFT segment length [samples] (default: 1024)"
     )
     p.add_argument(
         "--diss-length",
         type=int,
         default=None,
-        help="Dissipation window [samples] (default: 2*fft-length)",
+        help="Dissipation window [samples] (default: 4*fft-length)",
     )
     p.add_argument(
         "--overlap",
@@ -614,13 +630,13 @@ def _add_chi_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Parallel workers (0 = all cores, default: 1)",
     )
     p.add_argument(
-        "--fft-length", type=int, default=None, help="FFT segment length [samples] (default: 512)"
+        "--fft-length", type=int, default=None, help="FFT segment length [samples] (default: 1024)"
     )
     p.add_argument(
         "--diss-length",
         type=int,
         default=None,
-        help="Dissipation window [samples] (default: 3*fft-length)",
+        help="Dissipation window [samples] (default: 4*fft-length)",
     )
     p.add_argument(
         "--overlap",
@@ -717,13 +733,13 @@ def _add_pipeline_parser(subparsers: argparse._SubParsersAction) -> None:
         "--eps-fft-length",
         type=int,
         default=None,
-        help="FFT length for epsilon [samples] (default: 256)",
+        help="FFT length for epsilon [samples] (default: 1024)",
     )
     p.add_argument(
         "--chi-fft-length",
         type=int,
         default=None,
-        help="FFT length for chi [samples] (default: 512)",
+        help="FFT length for chi [samples] (default: 1024)",
     )
     p.add_argument(
         "--no-goodman",
@@ -764,7 +780,13 @@ def _add_ql_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument("files", nargs="+", metavar="FILE", help=".p file(s) or glob pattern(s)")
     p.add_argument(
-        "--fft-length", type=int, default=None, help="FFT segment length [samples] (default: 256)"
+        "--fft-length", type=int, default=None, help="FFT segment length [samples] (default: 1024)"
+    )
+    p.add_argument(
+        "--diss-length",
+        type=int,
+        default=None,
+        help="Dissipation window [samples] (default: 4*fft-length)",
     )
     p.add_argument(
         "--f-AA", type=float, default=None, help="Anti-aliasing filter cutoff [Hz] (default: 98)"
@@ -814,7 +836,13 @@ def _add_dl_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument("files", nargs="+", metavar="FILE", help=".p file(s) or glob pattern(s)")
     p.add_argument(
-        "--fft-length", type=int, default=None, help="FFT segment length [samples] (default: 256)"
+        "--fft-length", type=int, default=None, help="FFT segment length [samples] (default: 1024)"
+    )
+    p.add_argument(
+        "--diss-length",
+        type=int,
+        default=None,
+        help="Dissipation window [samples] (default: 4*fft-length)",
     )
     p.add_argument(
         "--f-AA", type=float, default=None, help="Anti-aliasing filter cutoff [Hz] (default: 98)"

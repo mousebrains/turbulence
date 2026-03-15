@@ -25,8 +25,19 @@ class TestDefaults:
 
     def test_expected_sections(self):
         expected = {
-            "files", "gps", "hotel", "profiles", "fp07", "ct", "bottom",
-            "top_trim", "epsilon", "chi", "ctd", "binning", "netcdf",
+            "files",
+            "gps",
+            "hotel",
+            "profiles",
+            "fp07",
+            "ct",
+            "bottom",
+            "top_trim",
+            "epsilon",
+            "chi",
+            "ctd",
+            "binning",
+            "netcdf",
             "parallel",
         }
         assert set(DEFAULTS.keys()) == expected
@@ -70,14 +81,16 @@ class TestValidateConfigPerturb:
         validate_config(config)
 
     def test_perturb_specific_sections(self):
-        validate_config({
-            "files": {"p_file_root": "VMP/"},
-            "gps": {"source": "fixed"},
-            "fp07": {"calibrate": False},
-            "ct": {"align": True},
-            "bottom": {"enable": True},
-            "top_trim": {"dz": 1.0},
-        })
+        validate_config(
+            {
+                "files": {"p_file_root": "VMP/"},
+                "gps": {"source": "fixed"},
+                "fp07": {"calibrate": False},
+                "ct": {"align": True},
+                "bottom": {"enable": True},
+                "top_trim": {"dz": 1.0},
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +144,7 @@ class TestGenerateTemplatePerturb:
     def test_all_14_sections_present(self, tmp_path):
         p = generate_template(tmp_path / "config.yaml")
         from ruamel.yaml import YAML
+
         yaml = YAML()
         with open(p) as fh:
             data = yaml.load(fh)

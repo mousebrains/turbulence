@@ -51,7 +51,7 @@ def _compute_chi_spectra(
     shared function.
 
     Selects a single diss_length window closest to the midpoint pressure,
-    matching diss_look and MATLAB plot_spectra.
+    matching diss_look and MATLAB tpw_plot_spectra.
 
     Returns (K, F, obs_spectra, methods_results, noise_K, mean_speed, nu).
 
@@ -63,7 +63,7 @@ def _compute_chi_spectra(
     from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer
     from odas_tpw.chi.fp07 import gradT_noise as _gradT_noise
 
-    w_sel = select_mid_window(P_fast, sel, fft_length)
+    w_sel = select_mid_window(P_fast, sel, fft_length, diss_length=None)
 
     mean_T = float(np.mean(T_slow))
     mean_speed = float(np.mean(np.abs(speed_fast[w_sel])))
@@ -80,16 +80,31 @@ def _compute_chi_spectra(
 
     # Method 1: chi from epsilon (also produces observed gradient spectra + noise)
     cr_m1 = compute_chi_window(
-        therm_segs, diff_gains, mean_speed, mean_T, nu,
-        fs_fast, fft_length, f_AA_chi,
-        spectrum_model=spectrum_model, epsilon=eps_arr, method=1,
+        therm_segs,
+        diff_gains,
+        mean_speed,
+        mean_T,
+        nu,
+        fs_fast,
+        fft_length,
+        f_AA_chi,
+        spectrum_model=spectrum_model,
+        epsilon=eps_arr,
+        method=1,
     )
 
     # Method 2 Iterative
     cr_m2_iter = compute_chi_window(
-        therm_segs, diff_gains, mean_speed, mean_T, nu,
-        fs_fast, fft_length, f_AA_chi,
-        spectrum_model=spectrum_model, method=2,
+        therm_segs,
+        diff_gains,
+        mean_speed,
+        mean_T,
+        nu,
+        fs_fast,
+        fft_length,
+        f_AA_chi,
+        spectrum_model=spectrum_model,
+        method=2,
     )
 
     K = cr_m1.K
@@ -114,8 +129,7 @@ def _compute_chi_spectra(
         # M2-Iter
         if np.isfinite(cr_m2_iter.chi[ci]) and cr_m2_iter.chi[ci] > 0:
             methods_results["M2-Iter"].append(
-                (cr_m2_iter.model_specs[ci], float(cr_m2_iter.chi[ci]),
-                 float(cr_m2_iter.kB[ci]))
+                (cr_m2_iter.model_specs[ci], float(cr_m2_iter.chi[ci]), float(cr_m2_iter.kB[ci]))
             )
         else:
             methods_results["M2-Iter"].append(nan_result)
@@ -130,8 +144,17 @@ def _compute_chi_spectra(
             _tau0 = float(fp07_tau(mean_speed))
             _noise_K_i, _ = _gradT_noise(F, mean_T, mean_speed, fs=fs_fast, diff_gain=dg_i)
             kB_best, chi_val, _, _, spec_raw, _, _ = _mle_fit_kB(
-                grad, K, chi_obs, nu,
-                _noise_K_i, H2, _tau0, fp07_transfer, f_AA_chi, mean_speed, spectrum_model,
+                grad,
+                K,
+                chi_obs,
+                nu,
+                _noise_K_i,
+                H2,
+                _tau0,
+                fp07_transfer,
+                f_AA_chi,
+                mean_speed,
+                spectrum_model,
             )
             spec_mle = spec_raw * H2 if np.isfinite(chi_val) else np.full(n_freq, np.nan)
             methods_results["M2-MLE"].append((spec_mle, chi_val, kB_best))
@@ -156,6 +179,7 @@ def _compute_windowed_eps_chi(
     do_goodman,
     chi_method=1,
     spectrum_model="kraichnan",
+    diss_length=None,
 ):
     """Compute windowed epsilon and chi estimates for a profile segment.
 
@@ -169,8 +193,11 @@ def _compute_windowed_eps_chi(
         1 = chi from known epsilon (Method 1), 2 = iterative fit (Method 2).
     spectrum_model : str
         Theoretical spectrum: 'batchelor' or 'kraichnan'.
+    diss_length : int or None
+        Dissipation window length. Default: 4 * fft_length.
     """
-    diss_length = 2 * fft_length
+    if diss_length is None:
+        diss_length = 4 * fft_length
     overlap = diss_length // 2
     step = diss_length - overlap
 
@@ -205,8 +232,15 @@ def _compute_windowed_eps_chi(
             sh_seg = np.column_stack([d[w_sel] for _, d in shear_data])
             ac_seg = np.column_stack([d[w_sel] for _, d in accel_data]) if accel_data else None
             er = compute_eps_window(
-                sh_seg, ac_seg, speed_fast[w_sel], P_fast[w_sel],
-                mean_T, fs_fast, fft_length, f_AA, do_goodman,
+                sh_seg,
+                ac_seg,
+                speed_fast[w_sel],
+                P_fast[w_sel],
+                mean_T,
+                fs_fast,
+                fft_length,
+                f_AA,
+                do_goodman,
             )
             eps_arr[:, idx] = er.epsilon
 
@@ -216,9 +250,17 @@ def _compute_windowed_eps_chi(
             method = 1 if chi_method == 1 else 2
             eps_for_chi = er.epsilon if chi_method == 1 else None
             cr = compute_chi_window(
-                therm_segs, diff_gains, er.W, mean_T, er.nu,
-                fs_fast, fft_length, f_AA_chi,
-                spectrum_model=spectrum_model, epsilon=eps_for_chi, method=method,
+                therm_segs,
+                diff_gains,
+                er.W,
+                mean_T,
+                er.nu,
+                fs_fast,
+                fft_length,
+                f_AA_chi,
+                spectrum_model=spectrum_model,
+                epsilon=eps_for_chi,
+                method=method,
             )
             chi_arr[:, idx] = cr.chi
 
@@ -267,22 +309,43 @@ class QuickLookViewer(ProfileViewer):
         # Pre-compute depth spectra (dict format from viewer_base)
         n_spec = sel_spec.stop - sel_spec.start
         self._cached_spec = None
-        if self.shear and n_spec >= 2 * self.fft_length:
+        if self.shear and n_spec >= self.diss_length:
             self._cached_spec = compute_depth_spectra(
-                self.shear, self.accel, self.therm_fast, self.diff_gains,
-                self.P_fast, self.T, self.speed_fast, self.fs_fast,
-                sel_spec, self.fft_length, self.f_AA, self.goodman,
+                self.shear,
+                self.accel,
+                self.therm_fast,
+                self.diff_gains,
+                self.P_fast,
+                self.T,
+                self.speed_fast,
+                self.fs_fast,
+                sel_spec,
+                self.fft_length,
+                self.f_AA,
+                self.goodman,
+                diss_length=self.diss_length,
             )
 
         # Pre-compute windowed eps/chi for profile panels
         n_fast = sel_fast.stop - sel_fast.start
         self._cached_windowed = None
-        if n_fast >= 2 * self.fft_length:
+        if n_fast >= self.diss_length:
             P_win, eps_arr, chi_arr = _compute_windowed_eps_chi(
-                self.shear, self.accel, self.therm_fast, self.diff_gains,
-                self.P_fast, self.T, self.speed_fast, self.fs_fast,
-                sel_fast, self.fft_length, self.f_AA, self.goodman,
-                chi_method=self.chi_method, spectrum_model=self.spectrum_model,
+                self.shear,
+                self.accel,
+                self.therm_fast,
+                self.diff_gains,
+                self.P_fast,
+                self.T,
+                self.speed_fast,
+                self.fs_fast,
+                sel_fast,
+                self.fft_length,
+                self.f_AA,
+                self.goodman,
+                chi_method=self.chi_method,
+                spectrum_model=self.spectrum_model,
+                diss_length=self.diss_length,
             )
             if len(P_win) > 0:
                 self._cached_windowed = (P_win, eps_arr, chi_arr)
@@ -291,9 +354,7 @@ class QuickLookViewer(ProfileViewer):
         self._draw_overview(self.axes[0, 0], s_slow, e_slow)
         P_win = self._cached_windowed[0] if self._cached_windowed else np.array([])
         eps_arr = (
-            self._cached_windowed[1]
-            if self._cached_windowed
-            else np.empty((len(self.shear), 0))
+            self._cached_windowed[1] if self._cached_windowed else np.empty((len(self.shear), 0))
         )
         self._draw_eps_profile(self.axes[0, 1], P_win, eps_arr)
         self._draw_chi_profile()
@@ -306,10 +367,7 @@ class QuickLookViewer(ProfileViewer):
         self._draw_fall_rate(self.axes[1, 3], s_slow, e_slow)
 
         # Finish (green band + title)
-        pressure_axes = (
-            [self.axes[0, c] for c in range(4)]
-            + [self.axes[1, 0], self.axes[1, 3]]
-        )
+        pressure_axes = [self.axes[0, c] for c in range(4)] + [self.axes[1, 0], self.axes[1, 3]]
         self._finish_draw(s_slow, e_slow, pressure_axes)
 
     # ------------------------------------------------------------------
@@ -321,8 +379,7 @@ class QuickLookViewer(ProfileViewer):
         ax = self.axes[0, 2]
 
         if self._cached_windowed is None:
-            ax.text(0.5, 0.5, "No data", transform=ax.transAxes,
-                    ha="center", va="center")
+            ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
             return
 
         P_win, _, chi_arr = self._cached_windowed
@@ -333,8 +390,12 @@ class QuickLookViewer(ProfileViewer):
             valid = np.isfinite(chi_arr[i]) & (chi_arr[i] > 0)
             if np.any(valid):
                 ax.plot(
-                    chi_arr[i, valid], P_win[valid],
-                    f"{c}s-", markersize=3, linewidth=0.8, label=name,
+                    chi_arr[i, valid],
+                    P_win[valid],
+                    f"{c}s-",
+                    markersize=3,
+                    linewidth=0.8,
+                    label=name,
                 )
                 has_data = True
         if has_data:
@@ -343,12 +404,10 @@ class QuickLookViewer(ProfileViewer):
             ax.set_ylabel("Pressure [dbar]")
             ax.legend(fontsize=6, loc="lower left")
             selected = {1: "M1", 2: "M2-MLE"}.get(self.chi_method, "M1")
-            ax.set_title(f"\u03c7 profile ({selected}, {self.spectrum_model})",
-                         fontsize=9)
+            ax.set_title(f"\u03c7 profile ({selected}, {self.spectrum_model})", fontsize=9)
             ax.grid(True, alpha=0.3, which="both")
         else:
-            ax.text(0.5, 0.5, "No valid \u03c7", transform=ax.transAxes,
-                    ha="center", va="center")
+            ax.text(0.5, 0.5, "No valid \u03c7", transform=ax.transAxes, ha="center", va="center")
 
     def _draw_spectra(self, sel_spec):
         """Panel (1,1): Epsilon spectra with Nasmyth + K_max."""
@@ -356,16 +415,19 @@ class QuickLookViewer(ProfileViewer):
 
         if self._cached_spec is None:
             ax.text(
-                0.5, 0.5, "Insufficient data for spectra",
-                transform=ax.transAxes, ha="center", va="center",
+                0.5,
+                0.5,
+                "Insufficient data for spectra",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
             )
             return
 
         r = self._cached_spec
         K = r["K"]
         if len(K) == 0:
-            ax.text(0.5, 0.5, "No spectra", transform=ax.transAxes,
-                    ha="center", va="center")
+            ax.text(0.5, 0.5, "No spectra", transform=ax.transAxes, ha="center", va="center")
             return
 
         colors = ["C0", "C1", "C4", "C5"]
@@ -375,23 +437,46 @@ class QuickLookViewer(ProfileViewer):
             c = colors[i % len(colors)]
             ax.loglog(K, r["shear_specs"][i], c, linewidth=0.8, label=name)
             eps_i = r["epsilons"][i]
+            meth_i = r["methods"][i] if i < len(r["methods"]) else 0
+            chosen = "ISR" if meth_i == 1 else "var"
+            e_isr = r["epsilons_isr"][i] if i < len(r.get("epsilons_isr", [])) else np.nan
+            e_var = r["epsilons_var"][i] if i < len(r.get("epsilons_var", [])) else np.nan
             if np.isfinite(eps_i):
+                isr_mark = "*" if chosen == "ISR" else ""
+                var_mark = "*" if chosen == "var" else ""
+                label_parts = []
+                if np.isfinite(e_isr):
+                    label_parts.append(f"ISR={e_isr:.1e}{isr_mark}")
+                if np.isfinite(e_var):
+                    label_parts.append(f"var={e_var:.1e}{var_mark}")
                 ax.loglog(
-                    K, r["nasmyth_specs"][i], c, linewidth=0.75,
-                    linestyle="--", alpha=0.9,
-                    label=f"Nasmyth (\u03b5={eps_i:.1e})",
+                    K,
+                    r["nasmyth_specs"][i],
+                    c,
+                    linewidth=0.75,
+                    linestyle="--",
+                    alpha=0.9,
+                    label=f"Nas {', '.join(label_parts)}",
                 )
                 k_max_i = r["K_maxes"][i]
                 if np.isfinite(k_max_i):
                     ax.axvline(
-                        k_max_i, color=c, linestyle="-.", linewidth=0.8,
-                        alpha=0.6, label=f"K_max={k_max_i:.0f} cpm",
+                        k_max_i,
+                        color=c,
+                        linestyle="-.",
+                        linewidth=0.8,
+                        alpha=0.6,
+                        label=f"K_max={k_max_i:.0f} cpm",
                     )
                     # Filled inverted triangle at K_max on the observed spectrum
                     k_idx = np.argmin(np.abs(K - k_max_i))
                     ax.plot(
-                        k_max_i, r["shear_specs"][i][k_idx],
-                        marker="v", color=c, markersize=8, zorder=5,
+                        k_max_i,
+                        r["shear_specs"][i][k_idx],
+                        marker="v",
+                        color=c,
+                        markersize=8,
+                        zorder=5,
                     )
 
         nu = r["nu"]
@@ -401,8 +486,7 @@ class QuickLookViewer(ProfileViewer):
             ax.loglog(K, nas_ref, "0.8", linewidth=0.3)
             y_val = nas_ref[len(K) // 2]
             if np.isfinite(y_val) and y_val > 0:
-                ax.text(K[len(K) // 2], y_val, f"{exp}",
-                        fontsize=6, color="0.5", va="bottom")
+                ax.text(K[len(K) // 2], y_val, f"{exp}", fontsize=6, color="0.5", va="bottom")
 
         K_AA = self.f_AA / r["W"]
         ax.axvline(K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5)
@@ -415,8 +499,7 @@ class QuickLookViewer(ProfileViewer):
         ax.set_ylim(1e-9, 1e0)
         ax.legend(fontsize=5, loc="best", ncol=2)
         ax.set_title(
-            f"\u03b5 spectra  speed={r['W']:.2f} m/s\n"
-            f"P={P_lo:.1f}\u2013{P_hi:.1f} dbar",
+            f"\u03b5 spectra  speed={r['W']:.2f} m/s\nP={P_lo:.1f}\u2013{P_hi:.1f} dbar",
             fontsize=9,
         )
         ax.grid(True, alpha=0.3, which="both")
@@ -428,16 +511,24 @@ class QuickLookViewer(ProfileViewer):
 
         if not self.therm_fast:
             ax.text(
-                0.5, 0.5, "No thermistor gradient channels",
-                transform=ax.transAxes, ha="center", va="center",
+                0.5,
+                0.5,
+                "No thermistor gradient channels",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
             )
             return
 
         n_fast = sel_spec.stop - sel_spec.start
-        if n_fast < 2 * self.fft_length:
+        if n_fast < self.diss_length:
             ax.text(
-                0.5, 0.5, "Insufficient data for chi spectra",
-                transform=ax.transAxes, ha="center", va="center",
+                0.5,
+                0.5,
+                "Insufficient data for chi spectra",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
             )
             return
 
@@ -475,8 +566,7 @@ class QuickLookViewer(ProfileViewer):
             c = colors[i % len(colors)]
             valid = np.isfinite(obs_spectra[i]) & (obs_spectra[i] > 0)
             if np.any(valid):
-                (line,) = ax.loglog(K[valid], obs_spectra[i][valid], c,
-                                    linewidth=0.8)
+                (line,) = ax.loglog(K[valid], obs_spectra[i][valid], c, linewidth=0.8)
                 obs_lines.append((line, name))
             else:
                 obs_lines.append(None)
@@ -491,8 +581,12 @@ class QuickLookViewer(ProfileViewer):
                     if method_name == selected_method:
                         label = f"*{label}"
                     (line,) = ax.loglog(
-                        K[valid_b], batch_spec[valid_b], c,
-                        linewidth=lw, linestyle=ls, alpha=alpha,
+                        K[valid_b],
+                        batch_spec[valid_b],
+                        c,
+                        linewidth=lw,
+                        linestyle=ls,
+                        alpha=alpha,
                     )
                     method_lines[method_name].append((line, label))
                 else:
@@ -501,8 +595,7 @@ class QuickLookViewer(ProfileViewer):
         valid_n = np.isfinite(noise_K) & (noise_K > 0) & (K > 0)
         noise_line = None
         if np.any(valid_n):
-            (nl,) = ax.loglog(K[valid_n], noise_K[valid_n], "0.5",
-                              linewidth=0.8, linestyle=":")
+            (nl,) = ax.loglog(K[valid_n], noise_K[valid_n], "0.5", linewidth=0.8, linestyle=":")
             noise_line = (nl, "Noise")
 
         K_AA = self.f_AA / mean_speed
@@ -560,7 +653,7 @@ class QuickLookViewer(ProfileViewer):
 
 def quick_look(
     source,
-    fft_length=256,
+    fft_length=1024,
     f_AA=98.0,
     goodman=True,
     direction="down",
@@ -570,6 +663,7 @@ def quick_look(
     spec_P_range=None,
     chi_method=1,
     spectrum_model="kraichnan",
+    diss_length=None,
 ) -> QuickLookViewer:
     """Open an interactive quick-look viewer for a .p file.
 
@@ -578,7 +672,7 @@ def quick_look(
     source : str or Path
         Path to a Rockland .p file.
     fft_length : int
-        FFT segment length for spectral estimation.
+        FFT segment length for spectral estimation (default: 1024).
     f_AA : float
         Anti-aliasing filter cutoff [Hz].
     goodman : bool
@@ -600,6 +694,8 @@ def quick_look(
         chi spectra panel.
     spectrum_model : str
         Theoretical spectrum model: 'batchelor' or 'kraichnan'.
+    diss_length : int or None
+        Dissipation window length [samples]. Default: 4 * fft_length.
 
     Returns
     -------
@@ -619,6 +715,7 @@ def quick_look(
         spec_P_range=spec_P_range,
         chi_method=chi_method,
         spectrum_model=spectrum_model,
+        diss_length=diss_length,
     )
     viewer.show()
     return viewer

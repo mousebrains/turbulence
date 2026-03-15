@@ -50,8 +50,8 @@ def ct_align(
 
     per_profile = []
     for s, e in profiles:
-        seg_T = T[s:e + 1]
-        seg_C = C[s:e + 1]
+        seg_T = T[s : e + 1]
+        seg_C = C[s : e + 1]
         if len(seg_T) < 10:
             continue
 
@@ -75,11 +75,13 @@ def ct_align(
         max_corr = np.abs(corr[idx])
         n_samples = e - s + 1
 
-        per_profile.append({
-            "lag": lag / fs,
-            "max_corr": max_corr,
-            "n_samples": n_samples,
-        })
+        per_profile.append(
+            {
+                "lag": lag / fs,
+                "max_corr": max_corr,
+                "n_samples": n_samples,
+            }
+        )
 
     if not per_profile:
         return C.copy(), 0.0

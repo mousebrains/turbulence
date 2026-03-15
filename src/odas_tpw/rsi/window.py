@@ -41,6 +41,8 @@ class EpsWindowResult:
     FM: np.ndarray  # (n_shear,)
     K_max_ratio: np.ndarray  # (n_shear,)
     method: np.ndarray  # (n_shear,)
+    epsilon_isr: np.ndarray = field(default_factory=lambda: np.array([]))  # (n_shear,)
+    epsilon_var: np.ndarray = field(default_factory=lambda: np.array([]))  # (n_shear,)
     shear_specs: list[np.ndarray] = field(default_factory=list)  # per-probe
     nasmyth_specs: list[np.ndarray] = field(default_factory=list)
     K: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -114,6 +116,8 @@ def compute_eps_window(
     FMs = np.full(n_shear, np.nan)
     Kmrs = np.full(n_shear, np.nan)
     methods = np.full(n_shear, np.nan)
+    eps_isr = np.full(n_shear, np.nan)
+    eps_var = np.full(n_shear, np.nan)
     shear_specs: list[np.ndarray] = []
     nasmyth_specs: list[np.ndarray] = []
     K_out = F / W
@@ -146,7 +150,7 @@ def compute_eps_window(
 
         for ci in range(n_shear):
             spec_k = np.real(clean_UU[:, ci, ci]) * W * correction
-            e4, k_max, mad, meth, fom, _vr, nas, Kmr, FM = _estimate_epsilon(
+            e4, k_max, mad, meth, fom, _vr, nas, Kmr, FM, e_i, e_v = _estimate_epsilon(
                 K_g,
                 spec_k,
                 nu,
@@ -163,6 +167,8 @@ def compute_eps_window(
             FMs[ci] = FM
             Kmrs[ci] = Kmr
             methods[ci] = meth
+            eps_isr[ci] = e_i
+            eps_var[ci] = e_v
             shear_specs.append(spec_k)
             nasmyth_specs.append(nas)
         K_out = K_g
@@ -175,7 +181,7 @@ def compute_eps_window(
             correction[mask_c] = 1 + (K_s[mask_c] / MACOUN_LUECK_DENOM) ** 2
             spec_k = Pxx * W * correction
 
-            e4, k_max, mad, meth, fom, _vr, nas, Kmr, FM = _estimate_epsilon(
+            e4, k_max, mad, meth, fom, _vr, nas, Kmr, FM, e_i, e_v = _estimate_epsilon(
                 K_s,
                 spec_k,
                 nu,
@@ -192,6 +198,8 @@ def compute_eps_window(
             FMs[ci] = FM
             Kmrs[ci] = Kmr
             methods[ci] = meth
+            eps_isr[ci] = e_i
+            eps_var[ci] = e_v
             shear_specs.append(spec_k)
             nasmyth_specs.append(nas)
         if n_shear > 0:
@@ -205,6 +213,8 @@ def compute_eps_window(
         FM=FMs,
         K_max_ratio=Kmrs,
         method=methods,
+        epsilon_isr=eps_isr,
+        epsilon_var=eps_var,
         shear_specs=shear_specs,
         nasmyth_specs=nasmyth_specs,
         K=K_out,

@@ -215,21 +215,41 @@ def _unpack_noise_config(
     """Resolve hardware parameters from config dataclass or kwargs."""
     if config is not None:
         return {
-            "R_0": config.R_0, "gain": config.gain, "f_AA": config.f_AA,
-            "adc_fs": config.adc_fs, "adc_bits": config.adc_bits,
-            "E_n": config.E_n, "fc": config.fc, "E_n2": config.E_n2,
-            "fc_2": config.fc_2, "gamma_RSI": config.gamma_RSI,
-            "T_K": config.T_K, "K_B": config.K_B, "e_b": config.e_b,
-            "b": config.b, "beta_1": config.beta_1, "T_0": config.T_0,
+            "R_0": config.R_0,
+            "gain": config.gain,
+            "f_AA": config.f_AA,
+            "adc_fs": config.adc_fs,
+            "adc_bits": config.adc_bits,
+            "E_n": config.E_n,
+            "fc": config.fc,
+            "E_n2": config.E_n2,
+            "fc_2": config.fc_2,
+            "gamma_RSI": config.gamma_RSI,
+            "T_K": config.T_K,
+            "K_B": config.K_B,
+            "e_b": config.e_b,
+            "b": config.b,
+            "beta_1": config.beta_1,
+            "T_0": config.T_0,
             "beta_2": config.beta_2,
         }
     return {
-        "R_0": R_0, "gain": gain, "f_AA": f_AA,
-        "adc_fs": adc_fs, "adc_bits": adc_bits,
-        "E_n": E_n, "fc": fc, "E_n2": E_n2,
-        "fc_2": fc_2, "gamma_RSI": gamma_RSI,
-        "T_K": T_K, "K_B": K_B, "e_b": e_b,
-        "b": b, "beta_1": beta_1, "T_0": T_0,
+        "R_0": R_0,
+        "gain": gain,
+        "f_AA": f_AA,
+        "adc_fs": adc_fs,
+        "adc_bits": adc_bits,
+        "E_n": E_n,
+        "fc": fc,
+        "E_n2": E_n2,
+        "fc_2": fc_2,
+        "gamma_RSI": gamma_RSI,
+        "T_K": T_K,
+        "K_B": K_B,
+        "e_b": e_b,
+        "b": b,
+        "beta_1": beta_1,
+        "T_0": T_0,
         "beta_2": beta_2,
     }
 
@@ -258,14 +278,14 @@ def _noise_f_intermediates(
     V2 = np.where(np.isfinite(V2), V2, V2[np.isfinite(V2)].max() if np.any(np.isfinite(V2)) else 0)
 
     G_AA = 1.0 / (1 + (F / p["f_AA"]) ** 8) ** 2
-    adc_floor = p["gamma_RSI"] * delta_s ** 2 / (12 * fN)
+    adc_floor = p["gamma_RSI"] * delta_s**2 / (12 * fN)
 
     w = 2 * np.pi * diff_gain * F
-    G_HP = (1 / diff_gain) ** 2 * w ** 2 / (1 + w ** 2)
+    G_HP = (1 / diff_gain) ** 2 * w**2 / (1 + w**2)
 
     base_f = G_AA * G_2 * (p["gain"] ** 2 * V1 + V2) + adc_floor
     johnson_gain_f = G_AA * G_2 * p["gain"] ** 2
-    counts_factor = G_HP / delta_s ** 2
+    counts_factor = G_HP / delta_s**2
 
     return base_f, johnson_gain_f, counts_factor, delta_s
 
@@ -362,10 +382,24 @@ def noise_thermchannel(
         Temperature gradient noise spectrum [(K/m)^2 / Hz].
     """
     p = _unpack_noise_config(
-        config, R_0=R_0, gain=gain, f_AA=f_AA, adc_fs=adc_fs,
-        adc_bits=adc_bits, E_n=E_n, fc=fc, E_n2=E_n2, fc_2=fc_2,
-        gamma_RSI=gamma_RSI, T_K=T_K, K_B=K_B, e_b=e_b, b=b,
-        beta_1=beta_1, T_0=T_0, beta_2=beta_2,
+        config,
+        R_0=R_0,
+        gain=gain,
+        f_AA=f_AA,
+        adc_fs=adc_fs,
+        adc_bits=adc_bits,
+        E_n=E_n,
+        fc=fc,
+        E_n2=E_n2,
+        fc_2=fc_2,
+        gamma_RSI=gamma_RSI,
+        T_K=T_K,
+        K_B=K_B,
+        e_b=e_b,
+        b=b,
+        beta_1=beta_1,
+        T_0=T_0,
+        beta_2=beta_2,
     )
 
     F = np.asarray(F, dtype=np.float64)
@@ -386,12 +420,12 @@ def noise_thermchannel(
 
     # Scale factor
     eta = (p["b"] / 2) * 2 ** p["adc_bits"] * p["gain"] * p["e_b"] / p["adc_fs"]
-    scale_factor = T_kelvin ** 2 * (1 + R_ratio) ** 2 / (2 * eta * p["beta_1"] * R_ratio)
+    scale_factor = T_kelvin**2 * (1 + R_ratio) ** 2 / (2 * eta * p["beta_1"] * R_ratio)
     if p["beta_2"] is not None and np.isfinite(p["beta_2"]):
         scale_factor *= 1 + 2 * (p["beta_1"] / p["beta_2"]) * np.log(R_ratio)
 
     Noise_counts = (base_f + johnson_gain_f * phi_R) * counts_factor
-    return Noise_counts * scale_factor ** 2
+    return Noise_counts * scale_factor**2
 
 
 def gradT_noise(
@@ -480,10 +514,24 @@ def noise_thermchannel_batch(
         Shape ``(n_est, n_freq)``.
     """
     p = _unpack_noise_config(
-        config, R_0=R_0, gain=gain, f_AA=f_AA, adc_fs=adc_fs,
-        adc_bits=adc_bits, E_n=E_n, fc=fc, E_n2=E_n2, fc_2=fc_2,
-        gamma_RSI=gamma_RSI, T_K=T_K, K_B=K_B, e_b=e_b, b=b,
-        beta_1=beta_1, T_0=T_0, beta_2=beta_2,
+        config,
+        R_0=R_0,
+        gain=gain,
+        f_AA=f_AA,
+        adc_fs=adc_fs,
+        adc_bits=adc_bits,
+        E_n=E_n,
+        fc=fc,
+        E_n2=E_n2,
+        fc_2=fc_2,
+        gamma_RSI=gamma_RSI,
+        T_K=T_K,
+        K_B=K_B,
+        e_b=e_b,
+        b=b,
+        beta_1=beta_1,
+        T_0=T_0,
+        beta_2=beta_2,
     )
 
     F = np.asarray(F, dtype=np.float64)
@@ -500,7 +548,7 @@ def noise_thermchannel_batch(
 
     # Scale factor
     eta = (p["b"] / 2) * 2 ** p["adc_bits"] * p["gain"] * p["e_b"] / p["adc_fs"]
-    scale_factor = T_kelvin ** 2 * (1 + R_ratio) ** 2 / (2 * eta * p["beta_1"] * R_ratio)
+    scale_factor = T_kelvin**2 * (1 + R_ratio) ** 2 / (2 * eta * p["beta_1"] * R_ratio)
     if p["beta_2"] is not None and np.isfinite(p["beta_2"]):
         scale_factor = scale_factor * (1 + 2 * (p["beta_1"] / p["beta_2"]) * np.log(R_ratio))
 
@@ -508,7 +556,7 @@ def noise_thermchannel_batch(
         base_f[np.newaxis, :] + johnson_gain_f[np.newaxis, :] * phi_R[:, np.newaxis]
     ) * counts_factor[np.newaxis, :]
 
-    return Noise_counts * (scale_factor ** 2)[:, np.newaxis]
+    return Noise_counts * (scale_factor**2)[:, np.newaxis]
 
 
 def gradT_noise_batch(

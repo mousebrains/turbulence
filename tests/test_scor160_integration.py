@@ -125,8 +125,7 @@ class TestFullPipeline:
             valid = np.isfinite(l4.epsi[i]) & (l4.epsi[i] > 0)
             # Most spectra should produce finite positive epsilon
             assert valid.sum() > l4.n_spectra * 0.5, (
-                f"probe {i}: only {valid.sum()}/{l4.n_spectra} "
-                f"finite positive epsilon values"
+                f"probe {i}: only {valid.sum()}/{l4.n_spectra} finite positive epsilon values"
             )
 
     def test_all_outputs_finite(self, l1_data, l2_params, l3_params):

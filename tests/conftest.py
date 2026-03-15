@@ -183,6 +183,7 @@ def atomix_nc_file(tmp_path_factory):
     path = tmp_path_factory.mktemp("atomix") / "benchmark.nc"
     return _create_atomix_nc(path)
 
+
 # ---------------------------------------------------------------------------
 # Session-scoped caches for expensive computations
 # ---------------------------------------------------------------------------

@@ -78,7 +78,7 @@ These files are not tied to the Python code or test suite. They are for interact
 | MATLAB file | Purpose |
 |---|---|
 | `example00.m` | End-to-end workflow demo: loads a `.p` file, detects profiles, computes epsilon and chi (both methods), extracts salinity from JAC conductivity, and creates a publication-quality figure. Good starting point for new users. |
-| `plot_spectra.m` | Interactive spectrum visualization. Plots shear (epsilon) and temperature (chi) spectra with theoretical model fits (Nasmyth, Batchelor/Kraichnan). Supports profile selection and pressure range filtering. |
+| `tpw_plot_spectra.m` | Interactive spectrum visualization. Plots shear (epsilon) and temperature (chi) spectra with theoretical model fits (Nasmyth, Batchelor/Kraichnan). Supports profile selection and pressure range filtering. |
 | `miss_hit.cfg` | Configuration for MISS_HIT MATLAB linter/formatter (not a script). |
 
 Additionally, `../VMP/p2mat.m` is a small batch-conversion utility that runs `odas_p2mat()` on all `.p` files in the VMP directory.

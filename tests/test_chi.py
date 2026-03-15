@@ -628,8 +628,17 @@ class TestChiEdgeCases:
         noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
 
         result = _chi_from_epsilon(
-            np.zeros(n_freq), K, 1e-7, 1.2e-6, noise_K, H2,
-            tau0, fp07_transfer, 98.0, speed, "batchelor",
+            np.zeros(n_freq),
+            K,
+            1e-7,
+            1.2e-6,
+            noise_K,
+            H2,
+            tau0,
+            fp07_transfer,
+            98.0,
+            speed,
+            "batchelor",
         )
         assert np.isnan(result.chi)
 
@@ -650,8 +659,17 @@ class TestChiEdgeCases:
 
         with pytest.warns(UserWarning, match="kB="):
             result = _chi_from_epsilon(
-                np.ones(n_freq) * 1e-6, K, 1e-20, 1.2e-6, noise_K, H2,
-                tau0, fp07_transfer, 98.0, speed, "batchelor",
+                np.ones(n_freq) * 1e-6,
+                K,
+                1e-20,
+                1.2e-6,
+                noise_K,
+                H2,
+                tau0,
+                fp07_transfer,
+                98.0,
+                speed,
+                "batchelor",
             )
         assert np.isnan(result.chi)
 
@@ -673,8 +691,17 @@ class TestChiEdgeCases:
 
         with pytest.warns(UserWarning, match="Too few"):
             result = _mle_fit_kB(
-                np.ones(n_freq) * 1e-6, K, 1e-7, 1.2e-6, noise_K, H2,
-                tau0, fp07_transfer, 98.0, speed, "batchelor",
+                np.ones(n_freq) * 1e-6,
+                K,
+                1e-7,
+                1.2e-6,
+                noise_K,
+                H2,
+                tau0,
+                fp07_transfer,
+                98.0,
+                speed,
+                "batchelor",
             )
         assert np.isnan(result.kB)
 
@@ -695,8 +722,16 @@ class TestChiEdgeCases:
 
         # Spectrum at noise floor — initial chi should floor at 1e-14
         result = _iterative_fit(
-            noise_K * 0.5, K, 1.2e-6, noise_K, H2,
-            tau0, fp07_transfer, 98.0, speed, "batchelor",
+            noise_K * 0.5,
+            K,
+            1.2e-6,
+            noise_K,
+            H2,
+            tau0,
+            fp07_transfer,
+            98.0,
+            speed,
+            "batchelor",
         )
         # Should produce some result (possibly NaN) without crashing
         assert isinstance(result.chi, float)

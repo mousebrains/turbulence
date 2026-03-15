@@ -181,9 +181,7 @@ def ctd_bin_file(
 
     # Seawater properties (if T, C, P available)
     if T_name in binned and C_name in binned and "P" in binned:
-        sw = add_seawater_properties(
-            binned[T_name], binned[C_name], binned["P"], lat, lon
-        )
+        sw = add_seawater_properties(binned[T_name], binned[C_name], binned["P"], lat, lon)
         binned.update(sw)
 
     # Build xarray Dataset

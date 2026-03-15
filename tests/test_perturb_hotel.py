@@ -46,11 +46,14 @@ def _make_mat(path):
     """Write a simple .mat hotel file with flat arrays."""
     from scipy.io import savemat
 
-    savemat(str(path), {
-        "time": np.array([0, 1, 2, 3, 4], dtype=np.float64),
-        "speed": np.array([0.5, 0.6, 0.7, 0.8, 0.9]),
-        "pitch": np.array([1.0, 2.0, 3.0, 4.0, 5.0]),
-    })
+    savemat(
+        str(path),
+        {
+            "time": np.array([0, 1, 2, 3, 4], dtype=np.float64),
+            "speed": np.array([0.5, 0.6, 0.7, 0.8, 0.9]),
+            "pitch": np.array([1.0, 2.0, 3.0, 4.0, 5.0]),
+        },
+    )
     return path
 
 
@@ -130,10 +133,12 @@ class TestTimeConversion:
 
         csv_file = tmp_path / "hotel.csv"
         epoch = 1700000000.0
-        pd.DataFrame({
-            "time": [epoch, epoch + 1, epoch + 2],
-            "speed": [0.5, 0.6, 0.7],
-        }).to_csv(csv_file, index=False)
+        pd.DataFrame(
+            {
+                "time": [epoch, epoch + 1, epoch + 2],
+                "speed": [0.5, 0.6, 0.7],
+            }
+        ).to_csv(csv_file, index=False)
         hd = load_hotel(csv_file, time_format="auto")
         assert hd.time_is_relative is False
         np.testing.assert_allclose(hd.time[0], epoch)
@@ -152,10 +157,12 @@ class TestTimeConversion:
         import pandas as pd
 
         csv_file = tmp_path / "hotel.csv"
-        pd.DataFrame({
-            "time": ["2025-01-01T00:00:00", "2025-01-01T00:00:01", "2025-01-01T00:00:02"],
-            "speed": [0.5, 0.6, 0.7],
-        }).to_csv(csv_file, index=False)
+        pd.DataFrame(
+            {
+                "time": ["2025-01-01T00:00:00", "2025-01-01T00:00:01", "2025-01-01T00:00:02"],
+                "speed": [0.5, 0.6, 0.7],
+            }
+        ).to_csv(csv_file, index=False)
         hd = load_hotel(csv_file, time_format="iso")
         assert hd.time_is_relative is False
         assert hd.time[1] > hd.time[0]
@@ -175,11 +182,18 @@ class TestTimeConversion:
 
         start_epoch = 1000.0
         csv_file = tmp_path / "hotel.csv"
-        pd.DataFrame({
-            "time": [start_epoch, start_epoch + 1, start_epoch + 2,
-                     start_epoch + 3, start_epoch + 4],
-            "speed": [0.5, 0.6, 0.7, 0.8, 0.9],
-        }).to_csv(csv_file, index=False)
+        pd.DataFrame(
+            {
+                "time": [
+                    start_epoch,
+                    start_epoch + 1,
+                    start_epoch + 2,
+                    start_epoch + 3,
+                    start_epoch + 4,
+                ],
+                "speed": [0.5, 0.6, 0.7, 0.8, 0.9],
+            }
+        ).to_csv(csv_file, index=False)
 
         hd = load_hotel(csv_file, time_format="epoch")
         pf = _MockPFile(start_epoch=start_epoch)
@@ -202,17 +216,21 @@ class TestInterpolateHotel:
 
         result = interpolate_hotel(hd, pf, {"fast_channels": ["speed"]})
         assert result["speed"].shape == (50,)  # fast axis
-        assert result["pitch"].shape == (5,)   # slow axis
+        assert result["pitch"].shape == (5,)  # slow axis
 
     def test_pchip_interpolation(self, tmp_path):
         csv_file = _make_csv(tmp_path / "hotel.csv")
         hd = load_hotel(csv_file, time_format="seconds")
         pf = _MockPFile(n_fast=50, n_slow=5)
 
-        result = interpolate_hotel(hd, pf, {
-            "fast_channels": ["speed"],
-            "interpolation": "pchip",
-        })
+        result = interpolate_hotel(
+            hd,
+            pf,
+            {
+                "fast_channels": ["speed"],
+                "interpolation": "pchip",
+            },
+        )
         # Pchip should produce smooth values within the data range
         assert np.all(np.isfinite(result["speed"]))
         assert result["speed"].min() >= 0.49  # near boundary
@@ -222,10 +240,14 @@ class TestInterpolateHotel:
         hd = load_hotel(csv_file, time_format="seconds")
         pf = _MockPFile(n_fast=50, n_slow=5)
 
-        result = interpolate_hotel(hd, pf, {
-            "fast_channels": ["speed"],
-            "interpolation": "linear",
-        })
+        result = interpolate_hotel(
+            hd,
+            pf,
+            {
+                "fast_channels": ["speed"],
+                "interpolation": "linear",
+            },
+        )
         assert np.all(np.isfinite(result["speed"]))
         # Linear at t=0.5 should be ~0.55
         idx = np.argmin(np.abs(pf.t_fast - 0.5))
@@ -236,18 +258,24 @@ class TestInterpolateHotel:
         import pandas as pd
 
         csv_file = tmp_path / "hotel.csv"
-        pd.DataFrame({
-            "time": [1, 2, 3],
-            "speed": [0.6, 0.7, 0.8],
-        }).to_csv(csv_file, index=False)
+        pd.DataFrame(
+            {
+                "time": [1, 2, 3],
+                "speed": [0.6, 0.7, 0.8],
+            }
+        ).to_csv(csv_file, index=False)
 
         hd = load_hotel(csv_file, time_format="seconds")
         pf = _MockPFile(n_fast=50)  # t_fast spans 0..4
 
-        result = interpolate_hotel(hd, pf, {
-            "fast_channels": ["speed"],
-            "interpolation": "pchip",
-        })
+        result = interpolate_hotel(
+            hd,
+            pf,
+            {
+                "fast_channels": ["speed"],
+                "interpolation": "pchip",
+            },
+        )
         # Values outside [1, 3] should be filled with boundary values
         before = pf.t_fast < 1.0
         after = pf.t_fast > 3.0
@@ -259,18 +287,24 @@ class TestInterpolateHotel:
         import pandas as pd
 
         csv_file = tmp_path / "hotel.csv"
-        pd.DataFrame({
-            "time": [1, 2, 3],
-            "speed": [0.6, 0.7, 0.8],
-        }).to_csv(csv_file, index=False)
+        pd.DataFrame(
+            {
+                "time": [1, 2, 3],
+                "speed": [0.6, 0.7, 0.8],
+            }
+        ).to_csv(csv_file, index=False)
 
         hd = load_hotel(csv_file, time_format="seconds")
         pf = _MockPFile(n_fast=50)
 
-        result = interpolate_hotel(hd, pf, {
-            "fast_channels": ["speed"],
-            "interpolation": "linear",
-        })
+        result = interpolate_hotel(
+            hd,
+            pf,
+            {
+                "fast_channels": ["speed"],
+                "interpolation": "linear",
+            },
+        )
         before = pf.t_fast < 1.0
         after = pf.t_fast > 3.0
         np.testing.assert_allclose(result["speed"][before], 0.6)

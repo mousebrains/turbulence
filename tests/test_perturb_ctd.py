@@ -11,8 +11,16 @@ from odas_tpw.perturb.gps import GPSFixed
 
 
 class _PFileStub:
-    def __init__(self, channels, t_slow, t_fast=None, fs_slow=64.0, fs_fast=512.0,
-                 filepath=None, fast_channels=None):
+    def __init__(
+        self,
+        channels,
+        t_slow,
+        t_fast=None,
+        fs_slow=64.0,
+        fs_fast=512.0,
+        filepath=None,
+        fast_channels=None,
+    ):
         self.channels = channels
         self.t_slow = t_slow
         self.t_fast = t_fast if t_fast is not None else t_slow

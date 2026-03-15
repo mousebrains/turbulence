@@ -189,7 +189,10 @@ def _cmd_bin(args: argparse.Namespace) -> None:
             binning_params = merge_config("binning", binning_cfg)
             profiles_params = merge_config("profiles", config.get("profiles"))
             prof_binned_dir = resolve_output_dir(
-                output_root, "profiles_binned", "binning", binning_params,
+                output_root,
+                "profiles_binned",
+                "binning",
+                binning_params,
                 upstream=[("profiles", profiles_params)],
             )
             if bin_method == "depth":
@@ -211,7 +214,9 @@ def _cmd_bin(args: argparse.Namespace) -> None:
             if ds.data_vars:
                 eps_params = merge_config("epsilon", config.get("epsilon"))
                 diss_binned_dir = resolve_output_dir(
-                    output_root, "diss_binned", "binning",
+                    output_root,
+                    "diss_binned",
+                    "binning",
                     merge_config("binning", binning_cfg),
                     upstream=[("epsilon", eps_params)],
                 )
@@ -233,7 +238,9 @@ def _cmd_bin(args: argparse.Namespace) -> None:
             if ds.data_vars:
                 chi_params = merge_config("chi", config.get("chi"))
                 chi_binned_dir = resolve_output_dir(
-                    output_root, "chi_binned", "binning",
+                    output_root,
+                    "chi_binned",
+                    "binning",
                     merge_config("binning", binning_cfg),
                     upstream=[("chi", chi_params)],
                 )
@@ -297,11 +304,15 @@ def _cmd_combo(args: argparse.Namespace) -> None:
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
     """Add common arguments shared by most subcommands."""
     parser.add_argument(
-        "-c", "--config", metavar="YAML",
+        "-c",
+        "--config",
+        metavar="YAML",
         help="configuration file (default: none)",
     )
     parser.add_argument(
-        "-o", "--output", metavar="DIR",
+        "-o",
+        "--output",
+        metavar="DIR",
         help="output root directory",
     )
 
@@ -309,7 +320,11 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 def _add_parallel_args(parser: argparse.ArgumentParser) -> None:
     """Add --jobs flag."""
     parser.add_argument(
-        "-j", "--jobs", type=int, default=None, metavar="N",
+        "-j",
+        "--jobs",
+        type=int,
+        default=None,
+        metavar="N",
         help="parallel workers (0=auto, 1=serial, default=config or 1)",
     )
 
@@ -317,11 +332,15 @@ def _add_parallel_args(parser: argparse.ArgumentParser) -> None:
 def _add_file_args(parser: argparse.ArgumentParser) -> None:
     """Add positional file patterns and --p-file-root."""
     parser.add_argument(
-        "files", nargs="*", metavar="FILE",
+        "files",
+        nargs="*",
+        metavar="FILE",
         help=".p file paths or glob patterns",
     )
     parser.add_argument(
-        "--p-file-root", metavar="DIR", default=None,
+        "--p-file-root",
+        metavar="DIR",
+        default=None,
         help="root directory for .p file discovery",
     )
 
@@ -345,7 +364,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_parallel_args(p_run)
     _add_file_args(p_run)
     p_run.add_argument(
-        "--hotel-file", metavar="FILE",
+        "--hotel-file",
+        metavar="FILE",
         help="hotel file (CSV, NetCDF, or .mat) with external telemetry",
     )
 

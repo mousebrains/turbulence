@@ -54,8 +54,12 @@ def _load_scalar_validation(nc_path: Path) -> dict:
         # Per-profile groups → lists
         n_profiles = int(out["n_profiles"])
         list_keys = [
-            "scalar_spec_all", "K_scalar_all", "F_scalar_all",
-            "speed_scalar_all", "P_scalar_all", "t_scalar_all",
+            "scalar_spec_all",
+            "K_scalar_all",
+            "F_scalar_all",
+            "speed_scalar_all",
+            "P_scalar_all",
+            "t_scalar_all",
         ]
         for k in list_keys:
             out[k] = [None] * n_profiles
@@ -66,9 +70,7 @@ def _load_scalar_validation(nc_path: Path) -> dict:
                 continue
             grp = ds.groups[grp_name]
 
-            out["scalar_spec_all"][pi] = np.squeeze(
-                grp.variables["scalar_spec"][:]
-            )
+            out["scalar_spec_all"][pi] = np.squeeze(grp.variables["scalar_spec"][:])
             out["K_scalar_all"][pi] = np.squeeze(grp.variables["K"][:])
             out["F_scalar_all"][pi] = np.squeeze(grp.variables["F"][:])
             out["speed_scalar_all"][pi] = np.squeeze(grp.variables["speed"][:])
@@ -132,9 +134,7 @@ def scalar_pair(request):
 def matched_scalar(scalar_pair, cached_get_chi):
     """Run get_chi (Method 2) and match profiles against MATLAB."""
     p_path, val = scalar_pair
-    results = cached_get_chi(
-        p_path, fft_length=256, diss_length=512, overlap=256, goodman=True
-    )
+    results = cached_get_chi(p_path, fft_length=256, diss_length=512, overlap=256, goodman=True)
     matched = _match_scalar_profiles(results, val)
     return results, val, matched
 

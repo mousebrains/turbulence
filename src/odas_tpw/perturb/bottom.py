@@ -7,7 +7,6 @@ and returns the bottom depth for trimming.
 Reference: Code/bottom_crash_profiles.m (currently a stub in Matlab)
 """
 
-
 import numpy as np
 import numpy.typing as npt
 

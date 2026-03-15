@@ -138,11 +138,16 @@ class TestComputeChiWindow:
 
     def test_output_shapes(self):
         """Verify output array shapes for method=2."""
-        therm_segs, diff_gains, W, T_mean, nu, fs_fast, fft_length, f_AA = (
-            self._make_chi_inputs()
-        )
+        therm_segs, diff_gains, W, T_mean, nu, fs_fast, fft_length, f_AA = self._make_chi_inputs()
         result = compute_chi_window(
-            therm_segs, diff_gains, W, T_mean, nu, fs_fast, fft_length, f_AA,
+            therm_segs,
+            diff_gains,
+            W,
+            T_mean,
+            nu,
+            fs_fast,
+            fft_length,
+            f_AA,
             method=2,
         )
 
@@ -173,14 +178,20 @@ class TestComputeChiWindow:
 
     def test_method1_with_epsilon(self):
         """Method 1 with provided epsilon should produce finite chi."""
-        therm_segs, diff_gains, W, T_mean, nu, fs_fast, fft_length, f_AA = (
-            self._make_chi_inputs()
-        )
+        therm_segs, diff_gains, W, T_mean, nu, fs_fast, fft_length, f_AA = self._make_chi_inputs()
         epsilon = np.array([1e-7])  # realistic epsilon for method 1
 
         result = compute_chi_window(
-            therm_segs, diff_gains, W, T_mean, nu, fs_fast, fft_length, f_AA,
-            epsilon=epsilon, method=1,
+            therm_segs,
+            diff_gains,
+            W,
+            T_mean,
+            nu,
+            fs_fast,
+            fft_length,
+            f_AA,
+            epsilon=epsilon,
+            method=1,
         )
 
         assert isinstance(result, ChiWindowResult)
@@ -189,12 +200,17 @@ class TestComputeChiWindow:
 
     def test_method2_iterative(self):
         """Method 2 (iterative fit) should produce finite chi."""
-        therm_segs, diff_gains, W, T_mean, nu, fs_fast, fft_length, f_AA = (
-            self._make_chi_inputs()
-        )
+        therm_segs, diff_gains, W, T_mean, nu, fs_fast, fft_length, f_AA = self._make_chi_inputs()
 
         result = compute_chi_window(
-            therm_segs, diff_gains, W, T_mean, nu, fs_fast, fft_length, f_AA,
+            therm_segs,
+            diff_gains,
+            W,
+            T_mean,
+            nu,
+            fs_fast,
+            fft_length,
+            f_AA,
             method=2,
         )
 
@@ -211,7 +227,14 @@ class TestComputeChiWindow:
         )
 
         result = compute_chi_window(
-            therm_segs, diff_gains, W, T_mean, nu, fs_fast, fft_length, f_AA,
+            therm_segs,
+            diff_gains,
+            W,
+            T_mean,
+            nu,
+            fs_fast,
+            fft_length,
+            f_AA,
             method=2,
         )
 

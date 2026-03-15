@@ -54,6 +54,7 @@ class ChiFitResult(NamedTuple):
     fom: float
     K_max_ratio: float
 
+
 # ---------------------------------------------------------------------------
 # Spectrum model dispatcher
 # ---------------------------------------------------------------------------
@@ -348,7 +349,14 @@ def _mle_fit_kB(
     grad_func, _q = _spectrum_func(spectrum_model)
 
     kB_best, fit_mask, K_fit = _mle_find_kB(
-        spec_obs, K, chi_obs, noise_K, H2, f_AA, speed, grad_func,
+        spec_obs,
+        K,
+        chi_obs,
+        noise_K,
+        H2,
+        f_AA,
+        speed,
+        grad_func,
     )
 
     if not np.isfinite(kB_best):
@@ -365,7 +373,12 @@ def _mle_fit_kB(
 
     # Re-estimate chi with unresolved-variance correction (like Method 1)
     correction = _variance_correction(
-        kB_best, K_max_fit, speed, tau0, _h2, grad_func,
+        kB_best,
+        K_max_fit,
+        speed,
+        tau0,
+        _h2,
+        grad_func,
     )
     if np.isfinite(correction):
         obs_var = np.trapezoid(spec_obs[fit_mask], K[fit_mask])
@@ -457,7 +470,14 @@ def _iterative_fit(
     for iteration in range(3):
         # MLE fit for kB (core search only — no variance correction)
         kB_best, _, _ = _mle_find_kB(
-            spec_obs, K, chi_obs, noise_K, H2, f_AA, speed, grad_func,
+            spec_obs,
+            K,
+            chi_obs,
+            noise_K,
+            H2,
+            f_AA,
+            speed,
+            grad_func,
         )
 
         if not np.isfinite(kB_best) or kB_best < 1:
@@ -555,5 +575,3 @@ def _bilinear_correction(F: np.ndarray, diff_gain: float, fs: float) -> np.ndarr
     # Copy second-to-last value to Nyquist bin (ODAS convention)
     bl[-1] = bl[-2]
     return bl
-
-

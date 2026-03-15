@@ -326,7 +326,7 @@ class TestMergeForSection:
             setattr(args, key, None)
 
         merged = _merge_for_section(args, "chi")
-        assert merged["fft_length"] == 512
+        assert merged["fft_length"] == 1024
         assert merged["fp07_model"] == "single_pole"
 
     def test_profiles_section(self, tmp_path):

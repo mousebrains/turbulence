@@ -41,9 +41,7 @@ class _PFileStub:
         n = len(next(iter(channels.values()))) if channels else 100
         self.t_slow = t_slow if t_slow is not None else np.arange(n) / fs_slow
         self.t_fast = (
-            t_fast
-            if t_fast is not None
-            else np.arange(n * round(fs_fast / fs_slow)) / fs_fast
+            t_fast if t_fast is not None else np.arange(n * round(fs_fast / fs_slow)) / fs_fast
         )
         self.filepath = filepath or Path("test_001.p")
         self._fast = fast_channels or set()
@@ -268,9 +266,7 @@ class TestFP07Calibrate:
         raw_counts_slow = Z / factor
 
         # Fast-rate raw counts: upsample
-        raw_counts_fast = np.repeat(raw_counts_slow, ratio) + rng.normal(
-            0, 0.5, n_fast
-        )
+        raw_counts_fast = np.repeat(raw_counts_slow, ratio) + rng.normal(0, 0.5, n_fast)
 
         pf = _PFileStub(
             channels={

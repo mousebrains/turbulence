@@ -41,8 +41,13 @@ def _compute_speed(pf: "PFile") -> tuple[np.ndarray, np.ndarray]:
         raise ValueError("No pressure channel (P or P_dP) found")
 
     speed_fast, _W_slow = compute_speed_fast(
-        P_slow, pf.t_fast, pf.t_slow, pf.fs_fast, pf.fs_slow,
-        tau=_SPEED_TAU, speed_min=_SPEED_MIN,
+        P_slow,
+        pf.t_fast,
+        pf.t_slow,
+        pf.fs_fast,
+        pf.fs_slow,
+        tau=_SPEED_TAU,
+        speed_min=_SPEED_MIN,
     )
     return speed_fast, np.maximum(np.abs(_W_slow), _SPEED_MIN)
 
@@ -53,29 +58,16 @@ def _classify_channels(pf: "PFile") -> dict:
     Returns a dict with keys: shear, vib, acc, mag, gradt, cond_ctd,
     temp_ctd, pitch, roll, chla, turb, doxy, doxy_temp, supplementary.
     """
-    shear_names = sorted(
-        n for n in pf.channels if pf.channel_info[n]["type"] == "shear"
-    )
-    vib_names = sorted(
-        n for n in pf.channels if pf.channel_info[n]["type"] == "piezo"
-    )
-    acc_names = sorted(
-        n for n in pf.channels if pf.channel_info[n]["type"] == "accel"
-    )
-    mag_names = sorted(
-        n for n in pf.channels if pf.channel_info[n]["type"] == "mag"
-    )
+    shear_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "shear")
+    vib_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "piezo")
+    acc_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "accel")
+    mag_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "mag")
     gradt_names = sorted(
-        n for n in pf.channels
-        if pf.channel_info[n]["type"] == "therm" and pf.is_fast(n)
+        n for n in pf.channels if pf.channel_info[n]["type"] == "therm" and pf.is_fast(n)
     )
-    cond_ctd_names = sorted(
-        n for n in pf.channels if pf.channel_info[n]["type"] == "jac_c"
-    )
+    cond_ctd_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "jac_c")
 
-    temp_ctd_name = next(
-        (n for n in pf.channels if pf.channel_info[n]["type"] == "jac_t"), None
-    )
+    temp_ctd_name = next((n for n in pf.channels if pf.channel_info[n]["type"] == "jac_t"), None)
     pitch_name = roll_name = None
     for n in pf.channels:
         if pf.channel_info[n]["type"] == "inclxy":
@@ -84,23 +76,24 @@ def _classify_channels(pf: "PFile") -> dict:
             elif "Y" in n:
                 roll_name = n
 
-    chla_name = next(
-        (n for n in pf.channels if n.lower().startswith("chloro")), None
-    )
-    turb_name = next(
-        (n for n in pf.channels if n.lower().startswith("turb")), None
-    )
-    doxy_name = next(
-        (n for n in pf.channels if pf.channel_info[n]["type"] == "aroft_o2"), None
-    )
-    doxy_temp_name = next(
-        (n for n in pf.channels if pf.channel_info[n]["type"] == "aroft_t"), None
-    )
+    chla_name = next((n for n in pf.channels if n.lower().startswith("chloro")), None)
+    turb_name = next((n for n in pf.channels if n.lower().startswith("turb")), None)
+    doxy_name = next((n for n in pf.channels if pf.channel_info[n]["type"] == "aroft_o2"), None)
+    doxy_temp_name = next((n for n in pf.channels if pf.channel_info[n]["type"] == "aroft_t"), None)
 
     # Identify supplementary channels (not mapped to named variables)
     mapped = set(shear_names + vib_names + gradt_names + acc_names + mag_names + cond_ctd_names)
-    for n in (temp_ctd_name, pitch_name, roll_name, "P", "P_dP",
-              chla_name, turb_name, doxy_name, doxy_temp_name):
+    for n in (
+        temp_ctd_name,
+        pitch_name,
+        roll_name,
+        "P",
+        "P_dP",
+        chla_name,
+        turb_name,
+        doxy_name,
+        doxy_temp_name,
+    ):
         if n is not None:
             mapped.add(n)
     for n in list(pf.channels):
@@ -109,11 +102,20 @@ def _classify_channels(pf: "PFile") -> dict:
     supplementary = sorted(n for n in pf.channels if n not in mapped)
 
     return {
-        "shear": shear_names, "vib": vib_names, "acc": acc_names,
-        "mag": mag_names, "gradt": gradt_names, "cond_ctd": cond_ctd_names,
-        "temp_ctd": temp_ctd_name, "pitch": pitch_name, "roll": roll_name,
-        "chla": chla_name, "turb": turb_name, "doxy": doxy_name,
-        "doxy_temp": doxy_temp_name, "supplementary": supplementary,
+        "shear": shear_names,
+        "vib": vib_names,
+        "acc": acc_names,
+        "mag": mag_names,
+        "gradt": gradt_names,
+        "cond_ctd": cond_ctd_names,
+        "temp_ctd": temp_ctd_name,
+        "pitch": pitch_name,
+        "roll": roll_name,
+        "chla": chla_name,
+        "turb": turb_name,
+        "doxy": doxy_name,
+        "doxy_temp": doxy_temp_name,
+        "supplementary": supplementary,
     }
 
 
@@ -132,8 +134,9 @@ def _create_l1_variables(group, specs):
             setattr(v, key, val)
 
 
-def _l1_variable_specs(pf, ch, time_fast, time_slow, time_units,
-                        P_fast, P_slow, speed_fast, gradt_data):
+def _l1_variable_specs(
+    pf, ch, time_fast, time_slow, time_units, P_fast, P_slow, speed_fast, gradt_data
+):
     """Build the list of (name, dtype, dims, data, attrs) for L1 variables.
 
     Parameters
@@ -175,7 +178,8 @@ def _l1_variable_specs(pf, ch, time_fast, time_slow, time_units,
     shear_data = None
     if shear_names:
         shear_data = np.stack(
-            [pf.channels[n] / speed_fast**2 for n in shear_names], axis=0,
+            [pf.channels[n] / speed_fast**2 for n in shear_names],
+            axis=0,
         )
 
     # TEMP (fast FP07)
@@ -183,108 +187,215 @@ def _l1_variable_specs(pf, ch, time_fast, time_slow, time_units,
 
     specs = [
         # TIME vectors
-        ("TIME", "f8", ("TIME",), time_fast,
-         {"standard_name": "time", "long_name": "Decimal day",
-          "units": time_units, "axis": "T"}),
-        ("TIME_SLOW", "f8", ("TIME_SLOW",), time_slow,
-         {"standard_name": "time", "long_name": "Decimal day",
-          "units": time_units, "axis": "T"}),
+        (
+            "TIME",
+            "f8",
+            ("TIME",),
+            time_fast,
+            {"standard_name": "time", "long_name": "Decimal day", "units": time_units, "axis": "T"},
+        ),
+        (
+            "TIME_SLOW",
+            "f8",
+            ("TIME_SLOW",),
+            time_slow,
+            {"standard_name": "time", "long_name": "Decimal day", "units": time_units, "axis": "T"},
+        ),
         # Pressure
-        ("PRES", "f8", ("TIME",), P_fast,
-         {"standard_name": "sea_water_pressure", "units": "decibar",
-          "long_name": "Sea water pressure, equals 0 at sea-level"}),
-        ("PRES_SLOW", "f8", ("TIME_SLOW",), P_slow,
-         {"standard_name": "sea_water_pressure", "units": "decibar",
-          "long_name": "Sea water pressure, equals 0 at sea-level"}),
+        (
+            "PRES",
+            "f8",
+            ("TIME",),
+            P_fast,
+            {
+                "standard_name": "sea_water_pressure",
+                "units": "decibar",
+                "long_name": "Sea water pressure, equals 0 at sea-level",
+            },
+        ),
+        (
+            "PRES_SLOW",
+            "f8",
+            ("TIME_SLOW",),
+            P_slow,
+            {
+                "standard_name": "sea_water_pressure",
+                "units": "decibar",
+                "long_name": "Sea water pressure, equals 0 at sea-level",
+            },
+        ),
         # SHEAR
-        ("SHEAR", "f8", ("N_SHEAR_SENSORS", "TIME"), shear_data,
-         {"standard_name": "sea_water_velocity_shear", "units": "s-1",
-          "long_name": "rate of change of cross axis sea water velocity "
-                       "along transect measured by shear probes",
-          "sensor_names": ", ".join(shear_names)}),
+        (
+            "SHEAR",
+            "f8",
+            ("N_SHEAR_SENSORS", "TIME"),
+            shear_data,
+            {
+                "standard_name": "sea_water_velocity_shear",
+                "units": "s-1",
+                "long_name": "rate of change of cross axis sea water velocity "
+                "along transect measured by shear probes",
+                "sensor_names": ", ".join(shear_names),
+            },
+        ),
         # VIB
-        ("VIB", "f8", ("N_VIB_SENSORS", "TIME"),
-         _stack(vib_names) if vib_names else None,
-         {"standard_name": "platform_vibration", "units": "1",
-          "long_name": "platform vibration detected by piezo-accelerometers",
-          "sensor_names": ", ".join(vib_names)}),
+        (
+            "VIB",
+            "f8",
+            ("N_VIB_SENSORS", "TIME"),
+            _stack(vib_names) if vib_names else None,
+            {
+                "standard_name": "platform_vibration",
+                "units": "1",
+                "long_name": "platform vibration detected by piezo-accelerometers",
+                "sensor_names": ", ".join(vib_names),
+            },
+        ),
         # ACC
-        ("ACC", "f8", ("N_ACC_SENSORS", "TIME"),
-         _stack(acc_names) if acc_names else None,
-         {"standard_name": "platform_acceleration", "units": "m s-2",
-          "long_name": "platform acceleration detected by accelerometers",
-          "sensor_names": ", ".join(acc_names)}),
+        (
+            "ACC",
+            "f8",
+            ("N_ACC_SENSORS", "TIME"),
+            _stack(acc_names) if acc_names else None,
+            {
+                "standard_name": "platform_acceleration",
+                "units": "m s-2",
+                "long_name": "platform acceleration detected by accelerometers",
+                "sensor_names": ", ".join(acc_names),
+            },
+        ),
         # GRADT
-        ("GRADT", "f8", ("N_GRADT_SENSORS", "TIME"), gradt_data,
-         {"standard_name": "along_profile_gradient_of_seawater_temperature",
-          "units": "degrees_Celsius m-1",
-          "long_name": "the gradient of seawater temperature along the path "
-                       "of the profiler measured by an FP07 thermistor",
-          "sensor_names": ", ".join(gradt_names)}),
+        (
+            "GRADT",
+            "f8",
+            ("N_GRADT_SENSORS", "TIME"),
+            gradt_data,
+            {
+                "standard_name": "along_profile_gradient_of_seawater_temperature",
+                "units": "degrees_Celsius m-1",
+                "long_name": "the gradient of seawater temperature along the path "
+                "of the profiler measured by an FP07 thermistor",
+                "sensor_names": ", ".join(gradt_names),
+            },
+        ),
         # TEMP (fast FP07)
-        ("TEMP", "f8", ("N_TEMP_SENSORS", "TIME"), temp_data,
-         {"standard_name": "sea_water_temperature",
-          "units": "degree_Celsius",
-          "long_name": "sea water temperature in-situ ITS-90 scale",
-          "sensor_names": ", ".join(gradt_names)}),
+        (
+            "TEMP",
+            "f8",
+            ("N_TEMP_SENSORS", "TIME"),
+            temp_data,
+            {
+                "standard_name": "sea_water_temperature",
+                "units": "degree_Celsius",
+                "long_name": "sea water temperature in-situ ITS-90 scale",
+                "sensor_names": ", ".join(gradt_names),
+            },
+        ),
         # TEMP_CTD (slow)
-        ("TEMP_CTD", "f8", ("TIME_SLOW",),
-         pf.channels[temp_ctd_name] if temp_ctd_name else None,
-         {"standard_name": "sea_water_temperature",
-          "units": "degree_Celsius",
-          "long_name": "sea water temperature in-situ ITS-90 scale"}),
+        (
+            "TEMP_CTD",
+            "f8",
+            ("TIME_SLOW",),
+            pf.channels[temp_ctd_name] if temp_ctd_name else None,
+            {
+                "standard_name": "sea_water_temperature",
+                "units": "degree_Celsius",
+                "long_name": "sea water temperature in-situ ITS-90 scale",
+            },
+        ),
         # COND_CTD (slow)
-        ("COND_CTD", "f8", ("TIME_SLOW",),
-         pf.channels[cond_ctd_names[0]] if cond_ctd_names else None,
-         {"standard_name": "sea_water_electrical_conductivity",
-          "units": "mS cm-1",
-          "long_name": "sea water electrical conductivity"}),
+        (
+            "COND_CTD",
+            "f8",
+            ("TIME_SLOW",),
+            pf.channels[cond_ctd_names[0]] if cond_ctd_names else None,
+            {
+                "standard_name": "sea_water_electrical_conductivity",
+                "units": "mS cm-1",
+                "long_name": "sea water electrical conductivity",
+            },
+        ),
         # PITCH
-        ("PITCH", "f8", ("TIME_SLOW",),
-         pf.channels[pitch_name] if pitch_name else None,
-         {"standard_name": "platform_pitch_angle_fore_down",
-          "units": "degrees",
-          "long_name": "Positive pitch represents the front of the platform "
-                       "lowering as viewed by an observer on top of the "
-                       "platform facing forward"}),
+        (
+            "PITCH",
+            "f8",
+            ("TIME_SLOW",),
+            pf.channels[pitch_name] if pitch_name else None,
+            {
+                "standard_name": "platform_pitch_angle_fore_down",
+                "units": "degrees",
+                "long_name": "Positive pitch represents the front of the platform "
+                "lowering as viewed by an observer on top of the "
+                "platform facing forward",
+            },
+        ),
         # ROLL
-        ("ROLL", "f8", ("TIME_SLOW",),
-         pf.channels[roll_name] if roll_name else None,
-         {"standard_name": "platform_roll_angle_starboard_down",
-          "units": "degrees",
-          "long_name": "Positive roll represents the right side of the "
-                       "platform falling as viewed by an observer on top of "
-                       "the platform facing forward"}),
+        (
+            "ROLL",
+            "f8",
+            ("TIME_SLOW",),
+            pf.channels[roll_name] if roll_name else None,
+            {
+                "standard_name": "platform_roll_angle_starboard_down",
+                "units": "degrees",
+                "long_name": "Positive roll represents the right side of the "
+                "platform falling as viewed by an observer on top of "
+                "the platform facing forward",
+            },
+        ),
         # MAG
-        ("MAG", "f8", ("N_MAG_SENSORS", "TIME_SLOW"),
-         _stack(mag_names) if mag_names else None,
-         {"standard_name": "magnetic_field", "units": "micro_Tesla",
-          "long_name": "magnetic field from magnetometer",
-          "sensor_names": ", ".join(mag_names)}),
+        (
+            "MAG",
+            "f8",
+            ("N_MAG_SENSORS", "TIME_SLOW"),
+            _stack(mag_names) if mag_names else None,
+            {
+                "standard_name": "magnetic_field",
+                "units": "micro_Tesla",
+                "long_name": "magnetic field from magnetometer",
+                "sensor_names": ", ".join(mag_names),
+            },
+        ),
     ]
 
     # Biogeochemical sensors — dimension depends on sample rate
     for var_name, ch_name, attrs in [
-        ("CHLA", chla_name,
-         {"standard_name": "mass_concentration_of_chlorophyll_a_in_sea_water",
-          "units": "ug L-1", "long_name": "chlorophyll-a fluorescence"}),
-        ("TURB", turb_name,
-         {"standard_name": "sea_water_turbidity",
-          "units": "FTU", "long_name": "sea water turbidity"}),
-        ("DOXY", doxy_name,
-         {"standard_name": "mole_concentration_of_dissolved_molecular_"
-                           "oxygen_in_sea_water",
-          "units": "umol L-1",
-          "long_name": "dissolved oxygen concentration"}),
-        ("DOXY_TEMP", doxy_temp_name,
-         {"units": "degree_Celsius",
-          "long_name": "oxygen optode sensor temperature"}),
+        (
+            "CHLA",
+            chla_name,
+            {
+                "standard_name": "mass_concentration_of_chlorophyll_a_in_sea_water",
+                "units": "ug L-1",
+                "long_name": "chlorophyll-a fluorescence",
+            },
+        ),
+        (
+            "TURB",
+            turb_name,
+            {
+                "standard_name": "sea_water_turbidity",
+                "units": "FTU",
+                "long_name": "sea water turbidity",
+            },
+        ),
+        (
+            "DOXY",
+            doxy_name,
+            {
+                "standard_name": "mole_concentration_of_dissolved_molecular_oxygen_in_sea_water",
+                "units": "umol L-1",
+                "long_name": "dissolved oxygen concentration",
+            },
+        ),
+        (
+            "DOXY_TEMP",
+            doxy_temp_name,
+            {"units": "degree_Celsius", "long_name": "oxygen optode sensor temperature"},
+        ),
     ]:
         if ch_name is not None:
             dim = ("TIME",) if pf.is_fast(ch_name) else ("TIME_SLOW",)
-            specs.append(
-                (var_name, "f8", dim, pf.channels[ch_name], attrs)
-            )
+            specs.append((var_name, "f8", dim, pf.channels[ch_name], attrs))
 
     return specs
 
@@ -363,10 +474,7 @@ def p_to_L1(
     ds.project = pf.config["cruise_info"].get("project", "")
     ds.start_time = pf.start_time.isoformat()
     ds.source_file = pf.filepath.name
-    ds.history = (
-        f"L1 converted from {pf.filepath.name} on "
-        f"{datetime.now(UTC).isoformat()}"
-    )
+    ds.history = f"L1 converted from {pf.filepath.name} on {datetime.now(UTC).isoformat()}"
     ds.configuration_string = pf.config_str
 
     # Root dimensions (shared across groups, following ATOMIX convention)
@@ -400,8 +508,15 @@ def p_to_L1(
 
     # Build variable specs and write them
     specs = _l1_variable_specs(
-        pf, ch, time_fast, time_slow, time_units, P_fast, P_slow,
-        speed_fast, gradt_data,
+        pf,
+        ch,
+        time_fast,
+        time_slow,
+        time_units,
+        P_fast,
+        P_slow,
+        speed_fast,
+        gradt_data,
     )
     _create_l1_variables(L1, specs)
 

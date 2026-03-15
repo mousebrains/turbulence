@@ -19,8 +19,8 @@ from odas_tpw.scor160.io import L1Data, L2Data, L3Data, L3Params
 from odas_tpw.scor160.spectral import csd_matrix_batch
 
 # Macoun & Lueck (2004) spatial response correction constants
-MACOUN_LUECK_K_MAX = 150   # cpm — correction not applied above this wavenumber
-MACOUN_LUECK_DENOM = 48    # cpm — denominator in correction formula
+MACOUN_LUECK_K_MAX = 150  # cpm — correction not applied above this wavenumber
+MACOUN_LUECK_DENOM = 48  # cpm — denominator in correction formula
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -63,6 +63,7 @@ def _apply_macoun_lueck(kcyc: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     """Compute L3 wavenumber spectra from L2 cleaned time series.
@@ -122,25 +123,35 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
 
         # Build windowed arrays: (n_windows, diss_length, n_channels)
         shear_windows, vib_windows = _build_window_arrays(
-            l2, starts, diss_length, n_shear, n_vib, params.goodman,
+            l2,
+            starts,
+            diss_length,
+            n_shear,
+            n_vib,
+            params.goodman,
         )
 
         # Compute raw frequency spectra (Welch method)
         # Returns: (n_windows, n_freq, n_shear, n_shear) — diagonal is auto-spectrum
         Cxy, F, _, _ = csd_matrix_batch(
-            shear_windows, None, nfft, fs,
-            overlap=nfft // 2, detrend="linear",
+            shear_windows,
+            None,
+            nfft,
+            fs,
+            overlap=nfft // 2,
+            detrend="linear",
         )
         # Extract auto-spectra: diagonal elements
         # Cxy shape: (n_windows, n_freq, n_shear, n_shear)
-        sh_freq_spec = np.real(
-            np.diagonal(Cxy, axis1=2, axis2=3)
-        )  # (n_windows, n_freq, n_shear)
+        sh_freq_spec = np.real(np.diagonal(Cxy, axis1=2, axis2=3))  # (n_windows, n_freq, n_shear)
 
         # Goodman cleaning
         if vib_windows is not None and n_vib > 0:
             clean_UU, _ = clean_shear_spec_batch(
-                vib_windows, shear_windows, nfft, fs,
+                vib_windows,
+                shear_windows,
+                nfft,
+                fs,
             )
             # clean_UU: (n_windows, n_freq, n_shear, n_shear)
             sh_freq_spec_clean = np.real(

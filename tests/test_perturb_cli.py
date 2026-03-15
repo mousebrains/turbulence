@@ -14,8 +14,16 @@ class TestBuildParser:
         # Parser should have all expected subcommands
         # Parse each one to verify it's registered
         expected = [
-            "init", "run", "trim", "merge", "profiles",
-            "diss", "chi", "ctd", "bin", "combo",
+            "init",
+            "run",
+            "trim",
+            "merge",
+            "profiles",
+            "diss",
+            "chi",
+            "ctd",
+            "bin",
+            "combo",
         ]
         for cmd in expected:
             args = parser.parse_args([cmd])
@@ -74,9 +82,21 @@ class TestCmdInit:
         assert out.exists()
         content = out.read_text()
         # Should contain all 13 sections
-        for section in ["files:", "gps:", "profiles:", "fp07:", "ct:", "bottom:",
-                        "top_trim:", "epsilon:", "chi:", "ctd:", "binning:",
-                        "netcdf:", "parallel:"]:
+        for section in [
+            "files:",
+            "gps:",
+            "profiles:",
+            "fp07:",
+            "ct:",
+            "bottom:",
+            "top_trim:",
+            "epsilon:",
+            "chi:",
+            "ctd:",
+            "binning:",
+            "netcdf:",
+            "parallel:",
+        ]:
             assert section in content
 
     def test_refuses_overwrite(self, tmp_path):

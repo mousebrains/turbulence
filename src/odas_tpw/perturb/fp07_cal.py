@@ -25,7 +25,8 @@ def _find_fp07_channels(pf: PFile) -> list[str]:
     """Find FP07 thermistor channel names (T1, T2, ...)."""
     pattern = re.compile(r"^T\d+$")
     return sorted(
-        name for name in pf.channels
+        name
+        for name in pf.channels
         if pattern.match(name)
         and pf.channel_info.get(name, {}).get("type") in ("therm", "thermistor")
     )
@@ -58,7 +59,7 @@ def _compute_RT_R0(
     adc_zero = float(ch_config.get("adc_zero", 0))
     ch_type = ch_config.get("type", "therm").strip().lower()
 
-    factor = adc_fs / (2 ** adc_bits)
+    factor = adc_fs / (2**adc_bits)
 
     if ch_type in ("therm", "thermistor"):
         factor = factor * 2.0 / (G * E_B) if (G * E_B) != 0 else factor
@@ -91,7 +92,7 @@ def _lowpass_filter(
         W_sum = 0.0
         for s, e in profiles:
             count += e - s + 1
-            W_sum += np.sum(np.abs(W[s:e + 1]))
+            W_sum += np.sum(np.abs(W[s : e + 1]))
         W_mean = W_sum / count if count > 0 else 0.3
         fc = 0.73 * np.sqrt(W_mean / 0.62)
     else:
@@ -197,6 +198,7 @@ def fp07_calibrate(
 
     # Get fall rate for low-pass filter cutoff
     from odas_tpw.rsi.profile import _smooth_fall_rate
+
     P = pf.channels.get("P")
     W = _smooth_fall_rate(P, pf.fs_slow) if P is not None else np.full(len(T_ref), 0.5)
 
@@ -221,7 +223,7 @@ def fp07_calibrate(
         # If fast rate, subsample for slow
         if pf.is_fast(ch_name):
             ratio = round(pf.fs_fast / pf.fs_slow)
-            raw_slow = raw_slow[::ratio][:len(T_ref)]
+            raw_slow = raw_slow[::ratio][: len(T_ref)]
 
         # Compute RT_R0
         RT_R0_slow = _compute_RT_R0(raw_slow, ch_config)
@@ -236,8 +238,8 @@ def fp07_calibrate(
             if e - s < 10:
                 continue
             lag, corr = _calc_lag(
-                T_ref[s:e + 1],
-                fp07_lp[s:e + 1],
+                T_ref[s : e + 1],
+                fp07_lp[s : e + 1],
                 pf.fs_slow,
                 max_lag_seconds=max_lag_seconds,
                 must_be_negative=must_be_negative,
@@ -259,8 +261,8 @@ def fp07_calibrate(
         all_RT_R0 = []
         all_T_ref = []
         for s, e in profiles:
-            all_RT_R0.append(RT_R0_slow[s:e + 1])
-            all_T_ref.append(T_ref_shifted[s:e + 1])
+            all_RT_R0.append(RT_R0_slow[s : e + 1])
+            all_T_ref.append(T_ref_shifted[s : e + 1])
 
         RT_R0_fit = np.concatenate(all_RT_R0)
         T_ref_fit = np.concatenate(all_T_ref)
@@ -287,7 +289,7 @@ def fp07_calibrate(
         # Apply calibration to fast data
         if ch_name in pf.channels_raw and pf.is_fast(ch_name):
             raw_fast = pf.channels_raw[ch_name]
-            RT_R0_fast = _compute_RT_R0(raw_fast[:len(pf.t_fast)], ch_config)
+            RT_R0_fast = _compute_RT_R0(raw_fast[: len(pf.t_fast)], ch_config)
             X_fast = np.column_stack([RT_R0_fast**i for i in range(order + 1)])
             T_cal_fast = 1.0 / (X_fast @ coeffs) - 273.15
             result["fast_channels"][ch_name] = T_cal_fast

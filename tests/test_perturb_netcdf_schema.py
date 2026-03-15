@@ -45,6 +45,7 @@ class TestSchemas:
 class TestApplySchema:
     def test_applies_attributes(self):
         import numpy as np
+
         ds = xr.Dataset({"depth": (["time"], np.array([1.0, 2.0, 3.0]))})
         ds = apply_schema(ds, COMBO_SCHEMA)
         assert ds["depth"].attrs["units"] == "m"
@@ -52,12 +53,14 @@ class TestApplySchema:
 
     def test_ignores_unknown_vars(self):
         import numpy as np
+
         ds = xr.Dataset({"unknown_var": (["time"], np.array([1.0]))})
         ds = apply_schema(ds, COMBO_SCHEMA)
         assert "units" not in ds["unknown_var"].attrs
 
     def test_does_not_modify_original(self):
         import numpy as np
+
         ds = xr.Dataset({"depth": (["time"], np.array([1.0]))})
         apply_schema(ds, COMBO_SCHEMA)
         # Original should not be modified (we copy internally)

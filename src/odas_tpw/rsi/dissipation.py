@@ -67,7 +67,7 @@ F_AA_MARGIN = 0.9
 
 def _compute_epsilon(
     source: "PFile | str | Path",
-    fft_length: int = 256,
+    fft_length: int = 1024,
     diss_length: int | None = None,
     overlap: int | None = None,
     speed: float | None = None,
@@ -86,7 +86,7 @@ def _compute_epsilon(
     from odas_tpw.scor160.l3 import process_l3
 
     if diss_length is None:
-        diss_length = 2 * fft_length
+        diss_length = 4 * fft_length
     if overlap is None:
         overlap = diss_length // 2
     if f_limit is None:
@@ -150,7 +150,13 @@ def _compute_epsilon(
 
         # Build L1Data (shear normalized by speed^2)
         l1 = _build_l1data_from_channels(
-            data, s_fast, e_fast, speed_fast, P_fast, T_fast, direction,
+            data,
+            s_fast,
+            e_fast,
+            speed_fast,
+            P_fast,
+            T_fast,
+            direction,
         )
 
         # L2: HP filter + despike + section selection
@@ -187,10 +193,9 @@ def _compute_epsilon(
                 sal_window = np.interp(l3.time, l1.time, sal_prof)
             else:
                 sal_window = np.full(n_spec, float(sal_prof))
-            nu_out = np.array([
-                float(visc(l3.temp[j], sal_window[j], l3.pres[j]))
-                for j in range(n_spec)
-            ])
+            nu_out = np.array(
+                [float(visc(l3.temp[j], sal_window[j], l3.pres[j])) for j in range(n_spec)]
+            )
         else:
             nu_out = np.array([float(visc35(l3.temp[j])) for j in range(n_spec)])
 
@@ -202,12 +207,27 @@ def _compute_epsilon(
             for ci in range(n_sh):
                 shear_spec = l3.sh_spec_clean[ci, :, j]
 
-                e_4, k_max, mad, meth, fom_val, _var_res, nas_spec, K_max_ratio_val, FM_val = (
-                    _estimate_epsilon(
-                        K, shear_spec, nu, K_AA, fit_order,
-                        e_isr_threshold=E_ISR_THRESHOLD,
-                        num_ffts=num_ffts, n_v=n_v,
-                    )
+                (
+                    e_4,
+                    k_max,
+                    mad,
+                    meth,
+                    fom_val,
+                    _var_res,
+                    nas_spec,
+                    K_max_ratio_val,
+                    FM_val,
+                    _eisr,
+                    _evar,
+                ) = _estimate_epsilon(
+                    K,
+                    shear_spec,
+                    nu,
+                    K_AA,
+                    fit_order,
+                    e_isr_threshold=E_ISR_THRESHOLD,
+                    num_ffts=num_ffts,
+                    n_v=n_v,
                 )
                 epsilon[ci, j] = e_4
                 K_max_out[ci, j] = k_max
@@ -270,7 +290,7 @@ def _compute_epsilon(
 
 def get_diss(
     source: "PFile | str | Path",
-    fft_length: int = 256,
+    fft_length: int = 1024,
     diss_length: int | None = None,
     overlap: int | None = None,
     speed: float | None = None,
@@ -295,9 +315,9 @@ def get_diss(
         A PFile object, .p file path, full-record .nc,
         or per-profile .nc.
     fft_length : int
-        FFT segment length in samples. Default: 256 (0.5 s at 512 Hz).
+        FFT segment length in samples. Default: 1024 (2 s at 512 Hz).
     diss_length : int or None
-        Dissipation window in samples. Default: 2 * fft_length.
+        Dissipation window in samples. Default: 4 * fft_length.
     overlap : int or None
         Window overlap in samples. Default: diss_length // 2.
     speed : float or None
@@ -335,11 +355,19 @@ def get_diss(
         stacklevel=2,
     )
     return _compute_epsilon(
-        source, fft_length=fft_length, diss_length=diss_length,
-        overlap=overlap, speed=speed, direction=direction,
-        goodman=goodman, f_AA=f_AA, f_limit=f_limit,
-        fit_order=fit_order, despike_thresh=despike_thresh,
-        despike_smooth=despike_smooth, salinity=salinity,
+        source,
+        fft_length=fft_length,
+        diss_length=diss_length,
+        overlap=overlap,
+        speed=speed,
+        direction=direction,
+        goodman=goodman,
+        f_AA=f_AA,
+        f_limit=f_limit,
+        fit_order=fit_order,
+        despike_thresh=despike_thresh,
+        despike_smooth=despike_smooth,
+        salinity=salinity,
     )
 
 
@@ -375,71 +403,152 @@ def _build_diss_dataset(
     from odas_tpw.rsi.helpers import _build_result_dataset
 
     variables: list[tuple[str, list[str], np.ndarray, dict]] = [
-        ("epsilon", ["probe", "time"], epsilon, {
-            "units": "W kg-1", "long_name": "TKE dissipation rate",
-        }),
-        ("K_max", ["probe", "time"], K_max_out, {
-            "units": "cpm",
-            "long_name": "upper wavenumber integration limit",
-        }),
-        ("mad", ["probe", "time"], mad_out, {
-            "units": "1",
-            "long_name": "mean absolute deviation of spectral fit in log10 space",
-        }),
-        ("fom", ["probe", "time"], fom_out, {
-            "units": "1",
-            "long_name": "figure of merit (observed/Nasmyth variance ratio)",
-        }),
-        ("FM", ["probe", "time"], FM_out, {
-            "units": "1",
-            "long_name": "Lueck figure of merit (MAD * sqrt(dof))",
-            "comment": "FM < 1 for 97.5% of good spectra (Lueck, 2022a,b)",
-        }),
-        ("K_max_ratio", ["probe", "time"], K_max_ratio_out, {
-            "units": "1",
-            "long_name": "K_max / K_95 spectral resolution ratio",
-        }),
-        ("method", ["probe", "time"], method_out, {
-            "long_name": "spectral fitting method",
-            "flag_values": np.array([0, 1], dtype=np.int8),
-            "flag_meanings": "variance inertial_subrange",
-        }),
-        ("speed", ["time"], speed_out, {
-            "units": "m s-1", "long_name": "profiling speed",
-        }),
-        ("nu", ["time"], nu_out, {
-            "units": "m2 s-1",
-            "long_name": "kinematic viscosity of sea water",
-        }),
-        ("P_mean", ["time"], P_out, {
-            "units": "dbar",
-            "long_name": "mean sea water pressure",
-            "standard_name": "sea_water_pressure",
-            "positive": "down",
-        }),
-        ("T_mean", ["time"], T_out, {
-            "units": "degree_Celsius",
-            "long_name": "mean sea water temperature",
-            "standard_name": "sea_water_temperature",
-        }),
-        ("spec_shear", ["probe", "freq", "time"], spec_shear, {
-            "units": "s-2 cpm-1",
-            "long_name": "shear wavenumber spectrum (observed, cleaned)",
-        }),
-        ("spec_nasmyth", ["probe", "freq", "time"], spec_nasmyth, {
-            "units": "s-2 cpm-1",
-            "long_name": "Nasmyth theoretical shear spectrum",
-        }),
-        ("K", ["freq", "time"], K_out, {
-            "units": "cpm",
-            "long_name": "wavenumber (cycles per metre)",
-        }),
-        ("F", ["freq", "time"], F_out, {
-            "units": "Hz", "long_name": "frequency",
-        }),
+        (
+            "epsilon",
+            ["probe", "time"],
+            epsilon,
+            {
+                "units": "W kg-1",
+                "long_name": "TKE dissipation rate",
+            },
+        ),
+        (
+            "K_max",
+            ["probe", "time"],
+            K_max_out,
+            {
+                "units": "cpm",
+                "long_name": "upper wavenumber integration limit",
+            },
+        ),
+        (
+            "mad",
+            ["probe", "time"],
+            mad_out,
+            {
+                "units": "1",
+                "long_name": "mean absolute deviation of spectral fit in log10 space",
+            },
+        ),
+        (
+            "fom",
+            ["probe", "time"],
+            fom_out,
+            {
+                "units": "1",
+                "long_name": "figure of merit (observed/Nasmyth variance ratio)",
+            },
+        ),
+        (
+            "FM",
+            ["probe", "time"],
+            FM_out,
+            {
+                "units": "1",
+                "long_name": "Lueck figure of merit (MAD * sqrt(dof))",
+                "comment": "FM < 1 for 97.5% of good spectra (Lueck, 2022a,b)",
+            },
+        ),
+        (
+            "K_max_ratio",
+            ["probe", "time"],
+            K_max_ratio_out,
+            {
+                "units": "1",
+                "long_name": "K_max / K_95 spectral resolution ratio",
+            },
+        ),
+        (
+            "method",
+            ["probe", "time"],
+            method_out,
+            {
+                "long_name": "spectral fitting method",
+                "flag_values": np.array([0, 1], dtype=np.int8),
+                "flag_meanings": "variance inertial_subrange",
+            },
+        ),
+        (
+            "speed",
+            ["time"],
+            speed_out,
+            {
+                "units": "m s-1",
+                "long_name": "profiling speed",
+            },
+        ),
+        (
+            "nu",
+            ["time"],
+            nu_out,
+            {
+                "units": "m2 s-1",
+                "long_name": "kinematic viscosity of sea water",
+            },
+        ),
+        (
+            "P_mean",
+            ["time"],
+            P_out,
+            {
+                "units": "dbar",
+                "long_name": "mean sea water pressure",
+                "standard_name": "sea_water_pressure",
+                "positive": "down",
+            },
+        ),
+        (
+            "T_mean",
+            ["time"],
+            T_out,
+            {
+                "units": "degree_Celsius",
+                "long_name": "mean sea water temperature",
+                "standard_name": "sea_water_temperature",
+            },
+        ),
+        (
+            "spec_shear",
+            ["probe", "freq", "time"],
+            spec_shear,
+            {
+                "units": "s-2 cpm-1",
+                "long_name": "shear wavenumber spectrum (observed, cleaned)",
+            },
+        ),
+        (
+            "spec_nasmyth",
+            ["probe", "freq", "time"],
+            spec_nasmyth,
+            {
+                "units": "s-2 cpm-1",
+                "long_name": "Nasmyth theoretical shear spectrum",
+            },
+        ),
+        (
+            "K",
+            ["freq", "time"],
+            K_out,
+            {
+                "units": "cpm",
+                "long_name": "wavenumber (cycles per metre)",
+            },
+        ),
+        (
+            "F",
+            ["freq", "time"],
+            F_out,
+            {
+                "units": "Hz",
+                "long_name": "frequency",
+            },
+        ),
     ]
     return _build_result_dataset(
-        variables, shear_names, t_out, "shear probe name",
+        variables,
+        shear_names,
+        t_out,
+        "shear probe name",
         {
             "Conventions": "CF-1.13",
             "fft_length": fft_length,

@@ -159,7 +159,9 @@ class TestCsdMatrix:
         Csingle, _, _, _ = csd_odas(ch0, None, nfft, fs)
 
         np.testing.assert_allclose(
-            np.real(Cmatrix[:, 0, 0]), Csingle, rtol=1e-10,
+            np.real(Cmatrix[:, 0, 0]),
+            Csingle,
+            rtol=1e-10,
         )
 
     def test_cross_spectral_matrix_shape(self):
@@ -183,7 +185,9 @@ class TestCsdMatrix:
         Cxy, _, _, _ = csd_matrix(x, None, nfft, 100.0)
         for f in range(Cxy.shape[0]):
             np.testing.assert_allclose(
-                Cxy[f], np.conj(Cxy[f].T), atol=1e-12,
+                Cxy[f],
+                np.conj(Cxy[f].T),
+                atol=1e-12,
             )
 
     def test_too_short_raises(self):
@@ -258,5 +262,6 @@ class TestCsdMatrixBatch:
             csd_matrix_batch(
                 np.ones((3, 512, 2)),
                 np.ones((4, 512, 2)),
-                128, 100.0,
+                128,
+                100.0,
             )

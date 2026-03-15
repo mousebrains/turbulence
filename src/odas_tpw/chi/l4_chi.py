@@ -173,8 +173,17 @@ def process_l4_chi_epsilon(
         if not np.isfinite(epsilon_val) or epsilon_val <= 0:
             return None
         chi_val, kB_val, K_max_val, _, fom_val, K_max_ratio_val = _chi_from_epsilon(
-            spec_obs, K, epsilon_val, nu, noise_K, H2, tau0, _h2,
-            f_AA_eff, W, spectrum_model,
+            spec_obs,
+            K,
+            epsilon_val,
+            nu,
+            noise_K,
+            H2,
+            tau0,
+            _h2,
+            f_AA_eff,
+            W,
+            spectrum_model,
         )
         return chi_val, epsilon_val, kB_val, K_max_val, fom_val, K_max_ratio_val
 
@@ -205,26 +214,47 @@ def process_l4_chi_fit(
     -------
     L4ChiData
     """
+
     def _chi_fit_func(_j, _ci, spec_obs, noise_K, K, W, nu, tau0, H2, _h2, f_AA_eff):
         if fit_method == "iterative":
             kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val = _iterative_fit(
-                spec_obs, K, nu, noise_K, H2, tau0, _h2, f_AA_eff, W, spectrum_model,
+                spec_obs,
+                K,
+                nu,
+                noise_K,
+                H2,
+                tau0,
+                _h2,
+                f_AA_eff,
+                W,
+                spectrum_model,
             )
         else:
             mask = (K > 0) & (f_AA_eff / W >= K)
             if np.sum(mask) < 3:
                 return None
             chi_obs = (
-                6 * KAPPA_T
+                6
+                * KAPPA_T
                 * np.trapezoid(
-                    np.maximum(spec_obs[mask] - noise_K[mask], 0), K[mask],
+                    np.maximum(spec_obs[mask] - noise_K[mask], 0),
+                    K[mask],
                 )
             )
             if chi_obs <= 0:
                 chi_obs = 1e-14
             kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val = _mle_fit_kB(
-                spec_obs, K, chi_obs, nu, noise_K, H2, tau0, _h2,
-                f_AA_eff, W, spectrum_model,
+                spec_obs,
+                K,
+                chi_obs,
+                nu,
+                noise_K,
+                H2,
+                tau0,
+                _h2,
+                f_AA_eff,
+                W,
+                spectrum_model,
             )
         return chi_val, eps_val, kB_val, K_max_val, fom_val, K_max_ratio_val
 

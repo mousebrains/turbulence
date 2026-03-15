@@ -22,7 +22,13 @@ from odas_tpw.scor160.nasmyth import nasmyth
 
 
 def _make_nasmyth_spectrum(
-    epsilon, nu, speed=0.6, nfft=256, fs=512.0, noise=0.0, rng=None,
+    epsilon,
+    nu,
+    speed=0.6,
+    nfft=256,
+    fs=512.0,
+    noise=0.0,
+    rng=None,
 ):
     """Create a synthetic Nasmyth-shaped shear wavenumber spectrum.
 
@@ -39,8 +45,14 @@ def _make_nasmyth_spectrum(
 
 
 def _make_l3_from_nasmyth(
-    n_spec=10, n_shear=2, epsilon=1e-8, nu=1.3e-6,
-    speed=0.6, nfft=256, fs=512.0, noise=0.0,
+    n_spec=10,
+    n_shear=2,
+    epsilon=1e-8,
+    nu=1.3e-6,
+    speed=0.6,
+    nfft=256,
+    fs=512.0,
+    noise=0.0,
 ):
     """Create a synthetic L3Data with Nasmyth-shaped spectra."""
     rng = np.random.default_rng(42)

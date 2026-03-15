@@ -55,12 +55,8 @@ class TestFindMergeableFiles:
         assert len(chains) == 0
 
     def test_different_config_not_merged(self, tmp_path):
-        f1 = _make_p_file(
-            tmp_path / "SN479_0001.p", file_number=1, config_content=b"config_A"
-        )
-        f2 = _make_p_file(
-            tmp_path / "SN479_0002.p", file_number=2, config_content=b"config_B"
-        )
+        f1 = _make_p_file(tmp_path / "SN479_0001.p", file_number=1, config_content=b"config_A")
+        f2 = _make_p_file(tmp_path / "SN479_0002.p", file_number=2, config_content=b"config_B")
         chains = find_mergeable_files([f1, f2])
         assert len(chains) == 0
 
@@ -84,18 +80,10 @@ class TestFindMergeableFiles:
         assert len(chains[0]) == 3
 
     def test_two_separate_chains(self, tmp_path):
-        f1 = _make_p_file(
-            tmp_path / "A_0001.p", file_number=1, config_content=b"cfg_A"
-        )
-        f2 = _make_p_file(
-            tmp_path / "A_0002.p", file_number=2, config_content=b"cfg_A"
-        )
-        f3 = _make_p_file(
-            tmp_path / "B_0001.p", file_number=1, config_content=b"cfg_B"
-        )
-        f4 = _make_p_file(
-            tmp_path / "B_0002.p", file_number=2, config_content=b"cfg_B"
-        )
+        f1 = _make_p_file(tmp_path / "A_0001.p", file_number=1, config_content=b"cfg_A")
+        f2 = _make_p_file(tmp_path / "A_0002.p", file_number=2, config_content=b"cfg_A")
+        f3 = _make_p_file(tmp_path / "B_0001.p", file_number=1, config_content=b"cfg_B")
+        f4 = _make_p_file(tmp_path / "B_0002.p", file_number=2, config_content=b"cfg_B")
         chains = find_mergeable_files([f1, f2, f3, f4])
         assert len(chains) == 2
 

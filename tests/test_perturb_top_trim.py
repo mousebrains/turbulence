@@ -18,8 +18,12 @@ class TestComputeTrimDepth:
         sh1[top_mask] = np.random.randn(np.sum(top_mask)) * 10.0
 
         trim = compute_trim_depth(
-            depth, {"sh1": sh1},
-            dz=1.0, min_depth=1.0, max_depth=50.0, quantile=0.6,
+            depth,
+            {"sh1": sh1},
+            dz=1.0,
+            min_depth=1.0,
+            max_depth=50.0,
+            quantile=0.6,
         )
         assert trim is not None
         # Trim depth should be somewhere around 10m (where variance drops)
@@ -32,8 +36,12 @@ class TestComputeTrimDepth:
         sh1 = np.random.randn(n) * 0.01
 
         trim = compute_trim_depth(
-            depth, {"sh1": sh1},
-            dz=1.0, min_depth=1.0, max_depth=50.0, quantile=0.6,
+            depth,
+            {"sh1": sh1},
+            dz=1.0,
+            min_depth=1.0,
+            max_depth=50.0,
+            quantile=0.6,
         )
         # Should find a trim point near the beginning
         assert trim is not None

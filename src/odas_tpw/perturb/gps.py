@@ -63,10 +63,16 @@ class GPSFromCSV:
         df = pd.read_csv(file)
         t = df[time_col].values.astype(np.float64)
         self._lat_interp = interp1d(
-            t, df[lat_col].values, bounds_error=False, fill_value="extrapolate",
+            t,
+            df[lat_col].values,
+            bounds_error=False,
+            fill_value="extrapolate",
         )
         self._lon_interp = interp1d(
-            t, df[lon_col].values, bounds_error=False, fill_value="extrapolate",
+            t,
+            df[lon_col].values,
+            bounds_error=False,
+            fill_value="extrapolate",
         )
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:

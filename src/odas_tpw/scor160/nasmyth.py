@@ -76,6 +76,7 @@ def _nasmyth_g2(x: np.ndarray) -> np.ndarray:
 # Grid-based fast lookup for G2(x)
 # ---------------------------------------------------------------------------
 
+
 class NasmythGrid:
     """Pre-tabulated Nasmyth G2(x) on a log-spaced grid for fast interpolation.
 
@@ -93,11 +94,9 @@ class NasmythGrid:
         Maximum x value (default 1.0).
     """
 
-    def __init__(
-        self, n: int = 2000, x_min: float = 1e-6, x_max: float = 1.0
-    ) -> None:
+    def __init__(self, n: int = 2000, x_min: float = 1e-6, x_max: float = 1.0) -> None:
         self._log10_x = np.linspace(np.log10(x_min), np.log10(x_max), n)
-        x_grid = 10.0 ** self._log10_x
+        x_grid = 10.0**self._log10_x
         g2_grid = _nasmyth_g2(x_grid)
         self._log10_g2 = np.log10(g2_grid)
         # Cache boundary values for extrapolation fallback
@@ -132,7 +131,7 @@ class NasmythGrid:
         if np.any(in_range):
             log10_x_query = np.log10(x[in_range])
             log10_g2 = np.interp(log10_x_query, self._log10_x, self._log10_g2)
-            result[in_range] = 10.0 ** log10_g2
+            result[in_range] = 10.0**log10_g2
 
         if np.any(out_range):
             result[out_range] = _nasmyth_g2(x[out_range])

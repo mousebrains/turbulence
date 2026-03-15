@@ -23,13 +23,16 @@ from odas_tpw.scor160.ocean import visc35
 # ---------------------------------------------------------------------------
 
 
-def select_mid_window(P_fast: np.ndarray, sel: slice, fft_length: int) -> slice:
+def select_mid_window(
+    P_fast: np.ndarray, sel: slice, fft_length: int, diss_length: int | None = None
+) -> slice:
     """Select the single diss_length window closest to the midpoint pressure.
 
     Returns a slice for the selected window, or *sel* unchanged if the
     segment is too short for even one window.
     """
-    diss_length = 2 * fft_length
+    if diss_length is None:
+        diss_length = 4 * fft_length
     n_fast = sel.stop - sel.start
     overlap = diss_length // 2
     step = diss_length - overlap
@@ -55,24 +58,36 @@ def select_mid_window(P_fast: np.ndarray, sel: slice, fft_length: int) -> slice:
 
 
 def compute_depth_spectra(
-    shear_data, accel_data, therm_data, diff_gains,
-    P_fast, T_slow, speed_fast, fs_fast, sel,
-    fft_length, f_AA, do_goodman,
+    shear_data,
+    accel_data,
+    therm_data,
+    diff_gains,
+    P_fast,
+    T_slow,
+    speed_fast,
+    fs_fast,
+    sel,
+    fft_length,
+    f_AA,
+    do_goodman,
+    diss_length=None,
 ) -> dict:
     """Compute shear + chi spectra at one depth for spectral panels.
 
     Selects a single diss_length window closest to the midpoint pressure,
-    matching MATLAB plot_spectra.
+    matching MATLAB tpw_plot_spectra.
 
     Returns dict with shear spectra, Nasmyth fits, chi gradient spectra,
     and both Method 1/Method 2 model fits.
     """
+    if diss_length is None:
+        diss_length = 4 * fft_length
     n_shear = len(shear_data)
     n_therm = len(therm_data)
     n_freq = fft_length // 2 + 1
 
     # Select a single diss_length window closest to the midpoint pressure
-    w_sel = select_mid_window(P_fast, sel, fft_length)
+    w_sel = select_mid_window(P_fast, sel, fft_length, diss_length)
     n_win = w_sel.stop - w_sel.start
 
     mean_T = float(np.mean(T_slow))
@@ -95,7 +110,7 @@ def compute_depth_spectra(
         "noise_K": None,
     }
 
-    if n_win < 2 * fft_length:
+    if n_win < diss_length:
         return result
 
     # --- Epsilon via shared compute_eps_window ---
@@ -103,8 +118,15 @@ def compute_depth_spectra(
         sh_seg = np.column_stack([d[w_sel] for _, d in shear_data])
         ac_seg = np.column_stack([d[w_sel] for _, d in accel_data]) if accel_data else None
         er = compute_eps_window(
-            sh_seg, ac_seg, speed_fast[w_sel], P_fast[w_sel],
-            mean_T, fs_fast, fft_length, f_AA, do_goodman,
+            sh_seg,
+            ac_seg,
+            speed_fast[w_sel],
+            P_fast[w_sel],
+            mean_T,
+            fs_fast,
+            fft_length,
+            f_AA,
+            do_goodman,
         )
         result["K"] = er.K
         result["F"] = er.F
@@ -115,6 +137,8 @@ def compute_depth_spectra(
         result["epsilons"] = list(er.epsilon)
         result["methods"] = list(er.method)
         result["K_maxes"] = list(er.K_max)
+        result["epsilons_isr"] = list(er.epsilon_isr)
+        result["epsilons_var"] = list(er.epsilon_var)
     else:
         W = float(np.mean(np.abs(speed_fast[w_sel])))
         if W < 0.01:
@@ -137,9 +161,17 @@ def compute_depth_spectra(
 
         # Method 1: chi from epsilon (kB fixed by shear-derived epsilon)
         cr_m1 = compute_chi_window(
-            therm_segs, diff_gains, W, mean_T, nu,
-            fs_fast, fft_length, f_AA_chi,
-            spectrum_model="kraichnan", epsilon=eps_arr, method=1,
+            therm_segs,
+            diff_gains,
+            W,
+            mean_T,
+            nu,
+            fs_fast,
+            fft_length,
+            f_AA_chi,
+            spectrum_model="kraichnan",
+            epsilon=eps_arr,
+            method=1,
         )
         result["chi_obs_specs"] = cr_m1.grad_specs
         result["chi_m1_specs"] = cr_m1.model_specs
@@ -148,9 +180,16 @@ def compute_depth_spectra(
 
         # Method 2: iterative fit (kB fitted to observed spectrum)
         cr_m2 = compute_chi_window(
-            therm_segs, diff_gains, W, mean_T, nu,
-            fs_fast, fft_length, f_AA_chi,
-            spectrum_model="kraichnan", method=2,
+            therm_segs,
+            diff_gains,
+            W,
+            mean_T,
+            nu,
+            fs_fast,
+            fft_length,
+            f_AA_chi,
+            spectrum_model="kraichnan",
+            method=2,
         )
         result["chi_m2_specs"] = cr_m2.model_specs
         result["chi_m2_vals"] = list(cr_m2.chi)
@@ -159,16 +198,27 @@ def compute_depth_spectra(
 
 
 def compute_windowed_diss(
-    shear_data, accel_data, therm_data, diff_gains,
-    P_fast, T_slow, speed_fast, fs_fast, sel,
-    fft_length, f_AA, do_goodman,
+    shear_data,
+    accel_data,
+    therm_data,
+    diff_gains,
+    P_fast,
+    T_slow,
+    speed_fast,
+    fs_fast,
+    sel,
+    fft_length,
+    f_AA,
+    do_goodman,
+    diss_length=None,
 ) -> dict:
     """Compute windowed epsilon and chi (both Batchelor and Kraichnan) estimates.
 
     Returns dict with P_windows, epsilon, FM, fom, mad, K_max_ratio,
     chi_batchelor, chi_kraichnan arrays.
     """
-    diss_length = 2 * fft_length
+    if diss_length is None:
+        diss_length = 4 * fft_length
     overlap = diss_length // 2
     step = diss_length - overlap
 
@@ -222,8 +272,15 @@ def compute_windowed_diss(
             sh_seg = np.column_stack([d[w_sel] for _, d in shear_data])
             ac_seg = np.column_stack([d[w_sel] for _, d in accel_data]) if accel_data else None
             er = compute_eps_window(
-                sh_seg, ac_seg, speed_fast[w_sel], P_fast[w_sel],
-                mean_T, fs_fast, fft_length, f_AA, do_goodman,
+                sh_seg,
+                ac_seg,
+                speed_fast[w_sel],
+                P_fast[w_sel],
+                mean_T,
+                fs_fast,
+                fft_length,
+                f_AA,
+                do_goodman,
             )
             eps_arr[:, idx] = er.epsilon
             FM_arr[:, idx] = er.FM
@@ -240,9 +297,17 @@ def compute_windowed_diss(
                 ("kraichnan", chi_kraich_arr, chi_fom_kraich_arr),
             ]:
                 cr = compute_chi_window(
-                    therm_segs, diff_gains, er.W, mean_T, er.nu,
-                    fs_fast, fft_length, f_AA_chi,
-                    spectrum_model=model, epsilon=er.epsilon, method=1,
+                    therm_segs,
+                    diff_gains,
+                    er.W,
+                    mean_T,
+                    er.nu,
+                    fs_fast,
+                    fft_length,
+                    f_AA_chi,
+                    spectrum_model=model,
+                    epsilon=er.epsilon,
+                    method=1,
                 )
                 arr[:, idx] = cr.chi
                 fom_a[:, idx] = cr.fom
@@ -285,7 +350,7 @@ class ProfileViewer:
     def __init__(
         self,
         pf,
-        fft_length=256,
+        fft_length=1024,
         f_AA=98.0,
         goodman=True,
         direction="down",
@@ -293,9 +358,11 @@ class ProfileViewer:
         W_min=0.3,
         min_duration=7.0,
         spec_P_range=None,
+        diss_length=None,
     ):
         self.pf = pf
         self.fft_length = fft_length
+        self.diss_length = diss_length or 4 * fft_length
         self.f_AA = f_AA
         self.goodman = goodman
         self.spec_P_range = spec_P_range
@@ -340,9 +407,13 @@ class ProfileViewer:
         W = _smooth_fall_rate(self.P, self.fs_slow)
         self.W = W
         self.profiles = get_profiles(
-            self.P, W, self.fs_slow,
-            P_min=P_min, W_min=W_min,
-            direction=direction, min_duration=min_duration,
+            self.P,
+            W,
+            self.fs_slow,
+            P_min=P_min,
+            W_min=W_min,
+            direction=direction,
+            min_duration=min_duration,
         )
         if not self.profiles:
             raise ValueError("No profiles detected in this file")
@@ -385,8 +456,7 @@ class ProfileViewer:
         mean_speed = float(np.mean(np.abs(self.speed_fast[sel])))
         if mean_speed < 0.01:
             mean_speed = 0.01
-        diss_length = 2 * self.fft_length
-        return diss_length / self.fs_fast * mean_speed
+        return self.diss_length / self.fs_fast * mean_speed
 
     # ------------------------------------------------------------------
     # Shared drawing methods — take ax as first parameter
@@ -398,7 +468,8 @@ class ProfileViewer:
         ax.plot(
             self.t_slow[s_slow : e_slow + 1],
             self.P[s_slow : e_slow + 1],
-            "C0", linewidth=1.5,
+            "C0",
+            linewidth=1.5,
         )
         ax.set_ylabel("Pressure [dbar]")
         ax.set_xlabel("Time [s]")
@@ -442,6 +513,13 @@ class ProfileViewer:
             ax.text(0.5, 0.5, "No shear channels", transform=ax.transAxes, ha="center", va="center")
             return
 
+        # Identify settled region: where fall rate is within 20% of median
+        # (near terminal velocity, excluding initial acceleration transient)
+        W_prof = self.speed_fast[sel_fast]
+        median_W = np.median(W_prof)
+        settled = W_prof >= 0.8 * median_W
+
+        all_settled_vals = []
         for i, (name, data) in enumerate(self.shear):
             seg = data[sel_fast]
             if len(seg) > 2 * int(self.fs_fast):
@@ -451,6 +529,18 @@ class ProfileViewer:
             seg_hp, _, _, _ = despike(seg_hp, self.fs_fast, thresh=8, smooth=0.5)
             offset = i * 0.5
             ax.plot(seg_hp + offset, P_prof, linewidth=0.3, label=name)
+            if np.any(settled):
+                all_settled_vals.append(seg_hp[settled] + offset)
+
+        # Zoom x-axis to 5x the settled-region shear range
+        if all_settled_vals:
+            combined = np.concatenate(all_settled_vals)
+            x_lo = np.percentile(combined, 1)
+            x_hi = np.percentile(combined, 99)
+            half_range = (x_hi - x_lo) / 2
+            center = (x_lo + x_hi) / 2
+            half_range = max(half_range * 5, 0.05)
+            ax.set_xlim(center - half_range, center + half_range)
 
         ax.set_xlabel("Shear [s⁻¹] (HP, offset)")
         ax.legend(fontsize=7, loc="lower right")
@@ -475,11 +565,25 @@ class ProfileViewer:
             nas = r["nasmyth_specs"][i]
             eps_i = r["epsilons"][i]
             meth_i = r["methods"][i] if i < len(r["methods"]) else 0
-            meth_tag = "ISR" if meth_i == 1 else "var"
+            chosen = "ISR" if meth_i == 1 else "var"
+            e_isr = r["epsilons_isr"][i] if i < len(r.get("epsilons_isr", [])) else np.nan
+            e_var = r["epsilons_var"][i] if i < len(r.get("epsilons_var", [])) else np.nan
             if np.isfinite(eps_i):
+                isr_mark = "*" if chosen == "ISR" else ""
+                var_mark = "*" if chosen == "var" else ""
+                label_parts = []
+                if np.isfinite(e_isr):
+                    label_parts.append(f"ISR={e_isr:.1e}{isr_mark}")
+                if np.isfinite(e_var):
+                    label_parts.append(f"var={e_var:.1e}{var_mark}")
                 ax.loglog(
-                    K, nas, c, linewidth=0.7, linestyle="--", alpha=0.8,
-                    label=f"Nas ε={eps_i:.1e} ({meth_tag})",
+                    K,
+                    nas,
+                    c,
+                    linewidth=0.7,
+                    linestyle="--",
+                    alpha=0.8,
+                    label=f"Nas {', '.join(label_parts)}",
                 )
             k_max_i = r["K_maxes"][i]
             if np.isfinite(k_max_i):
@@ -533,8 +637,14 @@ class ProfileViewer:
         P_prof = self.P[s_slow : e_slow + 1]
 
         if not self.temp_channels:
-            ax.text(0.5, 0.5, "No temperature channels",
-                    transform=ax.transAxes, ha="center", va="center")
+            ax.text(
+                0.5,
+                0.5,
+                "No temperature channels",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+            )
             return
 
         colors = {"T1": "C3", "T2": "C1", "JAC_T": "C9"}
@@ -542,8 +652,7 @@ class ProfileViewer:
         for name, data in self.temp_channels:
             c = colors.get(name, "C4")
             ls = styles.get(name, "-")
-            ax.plot(data[s_slow : e_slow + 1], P_prof, c,
-                    linewidth=0.8, linestyle=ls, label=name)
+            ax.plot(data[s_slow : e_slow + 1], P_prof, c, linewidth=0.8, linestyle=ls, label=name)
 
         ax.set_xlabel("Temperature [°C]")
         ax.legend(fontsize=7, loc="lower left")
@@ -594,7 +703,9 @@ class ProfileViewer:
 
     def show(self) -> None:
         self.fig, self.axes = plt.subplots(
-            2, 4, figsize=(24, 9),
+            2,
+            4,
+            figsize=(24, 9),
             gridspec_kw={"hspace": 0.35, "wspace": 0.32},
         )
         self.fig.subplots_adjust(bottom=0.08, top=0.92, left=0.04, right=0.98)

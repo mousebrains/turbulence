@@ -99,7 +99,9 @@ class TestMakeCombo:
         ds.to_netcdf(binned_dir / "file.nc")
 
         out = make_combo(
-            binned_dir, tmp_path / "combo", COMBO_SCHEMA,
+            binned_dir,
+            tmp_path / "combo",
+            COMBO_SCHEMA,
             netcdf_attrs={"institution": "Test University"},
         )
         assert out is not None

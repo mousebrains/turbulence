@@ -54,7 +54,10 @@ class TestTrimPFile:
     def test_trims_fractional_record(self, tmp_path):
         record_size = 1024
         src = _make_p_file(
-            tmp_path / "frac.p", record_size=record_size, n_records=3, extra_bytes=50,
+            tmp_path / "frac.p",
+            record_size=record_size,
+            n_records=3,
+            extra_bytes=50,
         )
         original_size = src.stat().st_size
         out_dir = tmp_path / "trimmed"

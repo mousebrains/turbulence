@@ -29,9 +29,7 @@ class TestCanonicalizeAndHash:
 
     def test_explicit_defaults_match_implicit(self, config_mod):
         h_implicit = config_mod.compute_hash("epsilon", {})
-        h_explicit = config_mod.compute_hash(
-            "epsilon", dict(config_mod.DEFAULTS["epsilon"])
-        )
+        h_explicit = config_mod.compute_hash("epsilon", dict(config_mod.DEFAULTS["epsilon"]))
         assert h_implicit == h_explicit
 
     def test_different_params_different_hash(self, config_mod):
@@ -93,7 +91,7 @@ class TestValidateConfig:
 class TestMergeConfig:
     def test_empty_inputs(self, config_mod):
         m = config_mod.merge_config("epsilon")
-        assert m["fft_length"] == 256
+        assert m["fft_length"] == config_mod.DEFAULTS["epsilon"]["fft_length"]
         assert "diss_length" not in m
 
     def test_config_overrides_default(self, config_mod):
@@ -152,35 +150,23 @@ class TestLoadConfig:
 
 class TestDirectoryManagement:
     def test_creates_prefix_00(self, config_mod, tmp_path):
-        d = config_mod.resolve_output_dir(
-            tmp_path, "eps", "epsilon", {"fft_length": 256}
-        )
+        d = config_mod.resolve_output_dir(tmp_path, "eps", "epsilon", {"fft_length": 256})
         assert d.name == "eps_00"
         assert d.exists()
 
     def test_sequential_numbering(self, config_mod, tmp_path):
-        d0 = config_mod.resolve_output_dir(
-            tmp_path, "eps", "epsilon", {"fft_length": 256}
-        )
-        d1 = config_mod.resolve_output_dir(
-            tmp_path, "eps", "epsilon", {"fft_length": 512}
-        )
+        d0 = config_mod.resolve_output_dir(tmp_path, "eps", "epsilon", {"fft_length": 256})
+        d1 = config_mod.resolve_output_dir(tmp_path, "eps", "epsilon", {"fft_length": 512})
         assert d0.name == "eps_00"
         assert d1.name == "eps_01"
 
     def test_reuse_on_hash_match(self, config_mod, tmp_path):
-        d0 = config_mod.resolve_output_dir(
-            tmp_path, "eps", "epsilon", {"fft_length": 256}
-        )
-        d_again = config_mod.resolve_output_dir(
-            tmp_path, "eps", "epsilon", {"fft_length": 256}
-        )
+        d0 = config_mod.resolve_output_dir(tmp_path, "eps", "epsilon", {"fft_length": 256})
+        d_again = config_mod.resolve_output_dir(tmp_path, "eps", "epsilon", {"fft_length": 256})
         assert d0 == d_again
 
     def test_signature_file_contains_valid_json(self, config_mod, tmp_path):
-        d = config_mod.resolve_output_dir(
-            tmp_path, "eps", "epsilon", {"fft_length": 256}
-        )
+        d = config_mod.resolve_output_dir(tmp_path, "eps", "epsilon", {"fft_length": 256})
         sig_files = list(d.glob(".params_sha256_*"))
         assert len(sig_files) == 1
         content = json.loads(sig_files[0].read_text())
@@ -229,16 +215,12 @@ class TestGenerateTemplate:
 
 class TestWriteResolvedConfig:
     def test_file_written(self, config_mod, tmp_path):
-        p = config_mod.write_resolved_config(
-            tmp_path, "epsilon", {"fft_length": 512}
-        )
+        p = config_mod.write_resolved_config(tmp_path, "epsilon", {"fft_length": 512})
         assert p.exists()
         assert p.name == "config.yaml"
 
     def test_round_trips(self, config_mod, tmp_path):
-        config_mod.write_resolved_config(
-            tmp_path, "epsilon", {"fft_length": 512}
-        )
+        config_mod.write_resolved_config(tmp_path, "epsilon", {"fft_length": 512})
         config = config_mod.load_config(tmp_path / "config.yaml")
         assert config["epsilon"]["fft_length"] == 512
 

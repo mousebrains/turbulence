@@ -15,8 +15,8 @@ class TestDetectBottomCrash:
         Ay = np.random.randn(n) * 0.01
         # Add a big spike near the bottom
         crash_idx = int(0.95 * n)
-        Ax[crash_idx - 50:crash_idx + 50] = 10.0
-        Ay[crash_idx - 50:crash_idx + 50] = 10.0
+        Ax[crash_idx - 50 : crash_idx + 50] = 10.0
+        Ay[crash_idx - 50 : crash_idx + 50] = 10.0
 
         bottom = detect_bottom_crash(depth, Ax, Ay, fs=512.0, vibration_factor=3.0)
         assert bottom is not None

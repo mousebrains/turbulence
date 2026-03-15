@@ -170,8 +170,12 @@ def clean_shear_spec_batch(
     # UU: (n_win, n_freq, n_sh, n_sh)
     # AA: (n_win, n_freq, n_ac, n_ac)
     UA, F, UU, AA = csd_matrix_batch(
-        shear_windows, accel_windows, nfft, rate,
-        overlap=nfft // 2, detrend="linear",
+        shear_windows,
+        accel_windows,
+        nfft,
+        rate,
+        overlap=nfft // 2,
+        detrend="linear",
     )
     assert UU is not None and AA is not None  # guaranteed when y is not None
 
@@ -187,9 +191,8 @@ def clean_shear_spec_batch(
         for w in range(n_win):
             for fi in range(n_freq):
                 with contextlib.suppress(np.linalg.LinAlgError):
-                    clean_UU[w, fi] = (
-                        UU[w, fi]
-                        - UA[w, fi] @ np.linalg.solve(AA[w, fi], np.conj(UA[w, fi]).T)
+                    clean_UU[w, fi] = UU[w, fi] - UA[w, fi] @ np.linalg.solve(
+                        AA[w, fi], np.conj(UA[w, fi]).T
                     )
 
     clean_UU = np.real(clean_UU)

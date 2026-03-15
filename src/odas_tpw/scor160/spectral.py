@@ -107,7 +107,13 @@ def csd_odas(
 
     x_2d = x[:, np.newaxis]  # (N, 1)
     Cxy_m, F, Cxx_m, Cyy_m = csd_matrix(
-        x_2d, y_arr, nfft, rate, window=window, overlap=overlap, detrend=detrend,
+        x_2d,
+        y_arr,
+        nfft,
+        rate,
+        window=window,
+        overlap=overlap,
+        detrend=detrend,
     )
 
     if Cxx_m is None:
@@ -263,8 +269,8 @@ def _detrend_batch(segments: np.ndarray, method: str, axis: int) -> np.ndarray:
         nfft = segments.shape[axis]
         order = {"parabolic": 2, "cubic": 3}[method]
         ramp = np.arange(nfft, dtype=np.float64)
-        moved = np.moveaxis(segments, axis, -1)          # (..., nfft)
-        flat = moved.reshape(-1, nfft)                    # (M, nfft)
+        moved = np.moveaxis(segments, axis, -1)  # (..., nfft)
+        flat = moved.reshape(-1, nfft)  # (M, nfft)
         coeffs = np.polynomial.polynomial.polyfit(ramp, flat.T, order)
         trend = np.polynomial.polynomial.polyval(ramp, coeffs)
         detrended = flat - trend
@@ -326,8 +332,7 @@ def csd_matrix_batch(
     x_windows = np.asarray(x_windows, dtype=np.float64)
     if x_windows.ndim != 3:
         raise ValueError(
-            f"x_windows must be 3-D (n_windows, diss_length, n_x), "
-            f"got shape {x_windows.shape}"
+            f"x_windows must be 3-D (n_windows, diss_length, n_x), got shape {x_windows.shape}"
         )
     n_windows, diss_length, _n_x = x_windows.shape
 
@@ -341,8 +346,7 @@ def csd_matrix_batch(
     n_seg = (diss_length - overlap) // step
     if n_seg < 1:
         raise ValueError(
-            f"diss_length ({diss_length}) too short for nfft={nfft}, "
-            f"overlap={overlap}"
+            f"diss_length ({diss_length}) too short for nfft={nfft}, overlap={overlap}"
         )
     seg_starts = np.arange(n_seg) * step  # (n_seg,)
 
@@ -377,9 +381,7 @@ def csd_matrix_batch(
         # Average over segments, then normalise.
         # einsum: for each (w, f), outer product over channel dimension
         # fft_x: (n_windows, n_seg, n_freq, n_x)
-        Cxy = np.einsum(
-            "wsfi,wsfj->wfij", np.conj(fft_x), fft_x
-        )  # (n_windows, n_freq, n_x, n_x)
+        Cxy = np.einsum("wsfi,wsfj->wfij", np.conj(fft_x), fft_x)  # (n_windows, n_freq, n_x, n_x)
         Cxy /= n_seg
         Cxy /= norm
         Cxy[:, 0, :, :] /= 2
@@ -391,13 +393,11 @@ def csd_matrix_batch(
     y_windows = np.asarray(y_windows, dtype=np.float64)
     if y_windows.ndim != 3:
         raise ValueError(
-            f"y_windows must be 3-D (n_windows, diss_length, n_y), "
-            f"got shape {y_windows.shape}"
+            f"y_windows must be 3-D (n_windows, diss_length, n_y), got shape {y_windows.shape}"
         )
     if y_windows.shape[0] != n_windows or y_windows.shape[1] != diss_length:
         raise ValueError(
-            f"y_windows shape {y_windows.shape} incompatible with "
-            f"x_windows shape {x_windows.shape}"
+            f"y_windows shape {y_windows.shape} incompatible with x_windows shape {x_windows.shape}"
         )
     y_segs = y_windows[:, indices, :]  # (n_windows, n_seg, nfft, n_y)
     y_segs = _detrend_batch(y_segs, detrend, axis=2)

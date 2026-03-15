@@ -112,13 +112,21 @@ class TestCsdMatrixBatch:
 
         d = random_windows
         Cxy_b, F_b, _, _ = csd_matrix_batch(
-            d["x"], None, d["nfft"], d["rate"], d["overlap"],
+            d["x"],
+            None,
+            d["nfft"],
+            d["rate"],
+            d["overlap"],
         )
         assert Cxy_b.shape == (7, 129, 2, 2)
 
         for w in range(7):
             Cxy_ref, F_ref, _, _ = csd_matrix(
-                d["x"][w], None, d["nfft"], d["rate"], overlap=d["overlap"],
+                d["x"][w],
+                None,
+                d["nfft"],
+                d["rate"],
+                overlap=d["overlap"],
             )
             np.testing.assert_allclose(Cxy_b[w], Cxy_ref, atol=1e-12)
         np.testing.assert_array_equal(F_b, F_ref)
@@ -128,7 +136,11 @@ class TestCsdMatrixBatch:
 
         d = random_windows
         Cxy_b, _F_b, Cxx_b, Cyy_b = csd_matrix_batch(
-            d["x"], d["y"], d["nfft"], d["rate"], d["overlap"],
+            d["x"],
+            d["y"],
+            d["nfft"],
+            d["rate"],
+            d["overlap"],
         )
         assert Cxy_b.shape == (7, 129, 2, 3)
         assert Cxx_b.shape == (7, 129, 2, 2)
@@ -136,7 +148,11 @@ class TestCsdMatrixBatch:
 
         for w in range(7):
             Cxy_ref, _, Cxx_ref, Cyy_ref = csd_matrix(
-                d["x"][w], d["y"][w], d["nfft"], d["rate"], overlap=d["overlap"],
+                d["x"][w],
+                d["y"][w],
+                d["nfft"],
+                d["rate"],
+                overlap=d["overlap"],
             )
             np.testing.assert_allclose(Cxy_b[w], Cxy_ref, atol=1e-12)
             np.testing.assert_allclose(Cxx_b[w], Cxx_ref, atol=1e-12)
@@ -158,7 +174,11 @@ class TestCsdMatrixBatch:
 
         d = random_windows
         Cxy, _, _, _ = csd_matrix_batch(
-            d["x"], None, d["nfft"], d["rate"], d["overlap"],
+            d["x"],
+            None,
+            d["nfft"],
+            d["rate"],
+            d["overlap"],
         )
         for ch in range(2):
             diag = Cxy[:, :, ch, ch]
@@ -309,13 +329,19 @@ class TestCleanShearSpecBatch:
         rate = 512.0
 
         clean_batch, F_batch = clean_shear_spec_batch(
-            d["accel"], d["shear"], nfft, rate,
+            d["accel"],
+            d["shear"],
+            nfft,
+            rate,
         )
         assert clean_batch.shape == (5, 129, 2, 2)
 
         for w in range(5):
             clean_ref, _, _, _, F_ref = clean_shear_spec(
-                d["accel"][w], d["shear"][w], nfft, rate,
+                d["accel"][w],
+                d["shear"][w],
+                nfft,
+                rate,
             )
             np.testing.assert_allclose(clean_batch[w], clean_ref, atol=1e-10)
         np.testing.assert_array_equal(F_batch, F_ref)
@@ -330,7 +356,10 @@ class TestCleanShearSpecBatch:
 
         clean_batch, _ = clean_shear_spec_batch(d["accel"], d["shear"], nfft, rate)
         clean_ref, _, _, _, _ = clean_shear_spec(
-            d["accel"][0], d["shear"][0], nfft, rate,
+            d["accel"][0],
+            d["shear"][0],
+            nfft,
+            rate,
         )
         np.testing.assert_allclose(clean_batch[0], clean_ref, atol=1e-10)
 
@@ -374,14 +403,17 @@ class TestCleanShearSpecBatch:
         accel = rng.standard_normal((n_win, diss_length, 2)) * 0.1
         for w in range(n_win):
             shear[w, :, 0] += vib * 2  # add vibration to shear
-            accel[w, :, 0] += vib       # same vibration in accel
+            accel[w, :, 0] += vib  # same vibration in accel
 
         clean_batch, _F = clean_shear_spec_batch(accel, shear, nfft, rate)
 
         # Verify per-window equivalence
         for w in range(n_win):
             clean_ref, _, UU_ref, _, _ = clean_shear_spec(
-                accel[w], shear[w], nfft, rate,
+                accel[w],
+                shear[w],
+                nfft,
+                rate,
             )
             np.testing.assert_allclose(clean_batch[w], clean_ref, atol=1e-10)
 

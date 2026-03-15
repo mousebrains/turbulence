@@ -115,7 +115,7 @@ def process_l4(
             if not np.any(np.isfinite(spec) & (spec > 0)):
                 continue
 
-            e, km, md, meth, fom_val, var_res, _nas, _kmr, _fm = _estimate_epsilon(
+            e, km, md, meth, fom_val, var_res, _nas, _kmr, _fm, _eisr, _evar = _estimate_epsilon(
                 K,
                 spec,
                 nu,
@@ -181,7 +181,7 @@ def _estimate_epsilon(
     e_isr_threshold: float = E_ISR_THRESHOLD,
     num_ffts: int = 0,
     n_v: int = 0,
-) -> tuple[float, float, float, int, float, float, np.ndarray, float, float]:
+) -> tuple[float, float, float, int, float, float, np.ndarray, float, float, float, float]:
     """Estimate epsilon from a single shear wavenumber spectrum.
 
     This is the canonical implementation used by both the scor160 pipeline
@@ -226,6 +226,10 @@ def _estimate_epsilon(
         K_max / K_95 spectral resolution ratio.
     FM : float
         Lueck (2022a,b) figure of merit (NaN if num_ffts == 0).
+    epsilon_isr : float
+        Inertial subrange epsilon estimate [W/kg].
+    epsilon_var : float
+        Variance method epsilon estimate [W/kg].
     """
     n_freq = len(K)
 
@@ -251,25 +255,28 @@ def _estimate_epsilon(
     ISR_MARGIN = 1.6
     use_isr = e_1 >= e_isr_threshold * ISR_MARGIN
 
+    # Always compute both estimates so viewers can show the alternative
+    K_limit = min(K_AA, K_LIMIT_MAX)
+    isr_e, isr_km = _inertial_subrange(K, spec_safe, e_1, nu, K_limit)
+    var_e, var_km, var_Range = _variance_method(
+        K,
+        spec_safe,
+        e_1,
+        nu,
+        K_AA,
+        fit_order,
+        n_freq,
+    )
+
     if use_isr:
         method = 1
-        K_limit = min(K_AA, K_LIMIT_MAX)
-        isr_e, isr_km = _inertial_subrange(K, spec_safe, e_1, nu, K_limit)
         isr_Range = np.where(isr_km >= K)[0]
         if len(isr_Range) < 3:
             isr_Range = np.arange(min(3, n_freq))
         e_4, k_max, Range = isr_e, isr_km, isr_Range
     else:
         method = 0
-        e_4, k_max, Range = _variance_method(
-            K,
-            spec_safe,
-            e_1,
-            nu,
-            K_AA,
-            fit_order,
-            n_freq,
-        )
+        e_4, k_max, Range = var_e, var_km, var_Range
 
     # Nasmyth spectrum at final epsilon
     nas_spec = nasmyth_grid(max(e_4, EPSILON_FLOOR), nu, K + 1e-30)
@@ -309,7 +316,19 @@ def _estimate_epsilon(
         T_M = FM_TM_OFFSET + np.sqrt(FM_TM_COEFF / N_s)
         FM_val = mad_ln / (T_M * sigma_ln)
 
-    return e_4, k_max, mad_val, method, fom_val, var_res, nas_spec, K_max_ratio_val, FM_val
+    return (
+        e_4,
+        k_max,
+        mad_val,
+        method,
+        fom_val,
+        var_res,
+        nas_spec,
+        K_max_ratio_val,
+        FM_val,
+        isr_e,
+        var_e,
+    )
 
 
 def _variance_method(

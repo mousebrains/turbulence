@@ -1,9 +1,9 @@
 % Mar-2026, Claude and Pat Welch, pat@mousebrains.com
-function plot_spectra(fname, options)
+function tpw_plot_spectra(fname, options)
 %PLOT_SPECTRA  Plot epsilon and chi spectra for one depth window.
 %
-%   plot_spectra(fname)
-%   plot_spectra(fname, profile=2, P_range=[80 120])
+%   tpw_plot_spectra(fname)
+%   tpw_plot_spectra(fname, profile=2, P_range=[80 120])
 %
 %   Creates a two-panel figure showing the shear (epsilon) and temperature
 %   gradient (chi) spectra for a single depth window, together with the
@@ -47,10 +47,10 @@ function plot_spectra(fname, options)
     fprintf('Found %d profiles\n', n_prof);
 
     if n_prof == 0
-        error('plot_spectra:noProfiles', 'No profiles detected');
+        error('tpw_plot_spectra:noProfiles', 'No profiles detected');
     end
     if options.profile > n_prof
-        error('plot_spectra:badProfile', ...
+        error('tpw_plot_spectra:badProfile', ...
             'Requested profile %d but only %d found', options.profile, n_prof);
     end
 
@@ -73,7 +73,7 @@ function plot_spectra(fname, options)
     end
 
     if sum(sel) < 2 * options.fft_length
-        error('plot_spectra:tooShort', ...
+        error('tpw_plot_spectra:tooShort', ...
             'Only %d samples in P_range — need at least %d', ...
             sum(sel), 2 * options.fft_length);
     end

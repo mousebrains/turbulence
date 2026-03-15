@@ -113,7 +113,4 @@ def compute_trim_depths(
     list of (float or None)
         Per-profile trim depths.
     """
-    return [
-        compute_trim_depth(pd["depth_fast"], pd["channels"], **params)
-        for pd in profiles_data
-    ]
+    return [compute_trim_depth(pd["depth_fast"], pd["channels"], **params) for pd in profiles_data]

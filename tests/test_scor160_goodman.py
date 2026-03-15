@@ -91,6 +91,7 @@ class TestCleanShearSpec:
     def test_short_signal_fallback(self):
         """Signal too short for cross-spectrum should warn and return."""
         import warnings
+
         accel = np.ones((100, 2))
         shear = np.ones((100, 2))
         with warnings.catch_warnings(record=True) as w:
@@ -135,7 +136,10 @@ class TestCleanShearSpecBatch:
 
         # Batch of 1
         clean_batch, F_batch = clean_shear_spec_batch(
-            accel[np.newaxis], shear[np.newaxis], nfft, fs,
+            accel[np.newaxis],
+            shear[np.newaxis],
+            nfft,
+            fs,
         )
 
         np.testing.assert_allclose(F_batch, F_single)
@@ -154,7 +158,11 @@ class TestCleanShearSpecBatch:
 
         for w in range(n_win):
             accel_win[w], shear_win[w] = _make_signals(
-                diss_len, fs, n_sh, n_ac, vib_amp=2.0,
+                diss_len,
+                fs,
+                n_sh,
+                n_ac,
+                vib_amp=2.0,
                 rng=np.random.default_rng(333 + w),
             )
 
@@ -162,6 +170,7 @@ class TestCleanShearSpecBatch:
 
         # Compare with uncleaned (compute raw auto-spectra)
         from odas_tpw.scor160.spectral import csd_matrix_batch
+
         raw_Cxy, _, _, _ = csd_matrix_batch(shear_win, None, nfft, fs)
         for w in range(n_win):
             for i in range(n_sh):

@@ -39,6 +39,7 @@ class ChannelsDict(TypedDict, total=False):
     metadata: dict[str, str]
     vehicle: str
 
+
 # ---------------------------------------------------------------------------
 # Channel name patterns for RSI instruments
 # ---------------------------------------------------------------------------
@@ -252,8 +253,13 @@ def prepare_profiles(
         from odas_tpw.scor160.profile import compute_speed_fast
 
         speed_fast, _W_slow = compute_speed_fast(
-            P_slow, t_fast, t_slow, fs_fast, fs_slow,
-            tau=tau, speed_min=speed_cutout,
+            P_slow,
+            t_fast,
+            t_slow,
+            fs_fast,
+            fs_slow,
+            tau=tau,
+            speed_min=speed_cutout,
         )
 
     P_fast = np.interp(t_fast, t_slow, P_slow)
@@ -440,10 +446,7 @@ def _build_result_dataset(
     """
     import xarray as xr
 
-    data_vars = {
-        name: (dims, data, attrs)
-        for name, dims, data, attrs in variables
-    }
+    data_vars = {name: (dims, data, attrs) for name, dims, data, attrs in variables}
     ds = xr.Dataset(
         data_vars,
         coords={

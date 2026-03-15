@@ -16,8 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 def process_file(
-    p_path: Path, config: dict, gps, output_dirs: dict,
-    hotel_data=None, hotel_cfg=None,
+    p_path: Path,
+    config: dict,
+    gps,
+    output_dirs: dict,
+    hotel_data=None,
+    hotel_cfg=None,
 ) -> dict:
     """Process a single .p file through the full enhancement chain.
 
@@ -44,7 +48,10 @@ def process_file(
     from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
 
     result: dict[str, Any] = {
-        "source": str(p_path), "profiles": [], "diss": [], "chi": [],
+        "source": str(p_path),
+        "profiles": [],
+        "diss": [],
+        "chi": [],
     }
 
     try:
@@ -68,7 +75,9 @@ def process_file(
             from odas_tpw.perturb.ctd import ctd_bin_file
 
             ctd_bin_file(
-                pf, gps, output_dirs["ctd"],
+                pf,
+                gps,
+                output_dirs["ctd"],
                 bin_width=ctd_cfg.get("bin_width", 0.5),
                 T_name=ctd_cfg.get("T_name", "JAC_T"),
                 C_name=ctd_cfg.get("C_name", "JAC_C"),
@@ -91,7 +100,9 @@ def process_file(
 
     W = _smooth_fall_rate(P_slow, pf.fs_slow)
     profiles = get_profiles(
-        P_slow, W, pf.fs_slow,
+        P_slow,
+        W,
+        pf.fs_slow,
         P_min=profiles_cfg.get("P_min", 0.5),
         W_min=profiles_cfg.get("W_min", 0.3),
         direction=profiles_cfg.get("direction", "down"),
@@ -106,7 +117,8 @@ def process_file(
     if fp07_cfg.get("calibrate", True):
         try:
             cal_result = fp07_calibrate(
-                pf, profiles,
+                pf,
+                profiles,
                 reference=fp07_cfg.get("reference", "JAC_T"),
                 order=fp07_cfg.get("order", 2),
                 max_lag_seconds=fp07_cfg.get("max_lag_seconds", 10.0),
@@ -125,8 +137,10 @@ def process_file(
         if T_name in pf.channels and C_name in pf.channels:
             try:
                 C_aligned, _lag = ct_align(
-                    pf.channels[T_name], pf.channels[C_name],
-                    pf.fs_slow, profiles,
+                    pf.channels[T_name],
+                    pf.channels[C_name],
+                    pf.fs_slow,
+                    profiles,
                 )
                 pf.channels[C_name] = C_aligned
             except Exception as exc:
@@ -137,10 +151,15 @@ def process_file(
 
     if "profiles" in output_dirs:
         try:
-            prof_paths = extract_profiles(pf, output_dirs["profiles"], **{
-                k: v for k, v in profiles_cfg.items()
-                if k in ("P_min", "W_min", "direction", "min_duration")
-            })
+            prof_paths = extract_profiles(
+                pf,
+                output_dirs["profiles"],
+                **{
+                    k: v
+                    for k, v in profiles_cfg.items()
+                    if k in ("P_min", "W_min", "direction", "min_duration")
+                },
+            )
             result["profiles"] = [str(p) for p in prof_paths]
         except Exception as exc:
             logger.error("extracting profiles %s: %s", p_path.name, exc)
@@ -153,11 +172,18 @@ def process_file(
             try:
                 diss_results = _compute_epsilon(
                     prof_path,
-                    **{k: v for k, v in eps_cfg.items()
-                       if k not in (
-                           "epsilon_minimum", "T_source", "T1_norm",
-                           "T2_norm", "diagnostics",
-                       )},
+                    **{
+                        k: v
+                        for k, v in eps_cfg.items()
+                        if k
+                        not in (
+                            "epsilon_minimum",
+                            "T_source",
+                            "T1_norm",
+                            "T2_norm",
+                            "diagnostics",
+                        )
+                    },
                 )
                 for ds in diss_results:
                     ds = mk_epsilon_mean(ds, eps_cfg.get("epsilon_minimum", 1e-13))
@@ -184,8 +210,7 @@ def process_file(
                     chi_results = _compute_chi(
                         prof_path,
                         epsilon_ds=diss_ds,
-                        **{k: v for k, v in chi_cfg.items()
-                           if k not in ("enable", "diagnostics")},
+                        **{k: v for k, v in chi_cfg.items() if k not in ("enable", "diagnostics")},
                     )
                     diss_ds.close()
                     for chi_ds in chi_results:
@@ -262,13 +287,19 @@ def _setup_output_dirs(config: dict) -> dict[str, Path]:
     # Profiles directory — hash includes profiles + fp07 + ct + gps + bottom + top_trim
     profiles_params = merge_config("profiles", config.get("profiles"))
     dirs["profiles"] = resolve_output_dir(
-        output_root, "profiles", "profiles", profiles_params,
+        output_root,
+        "profiles",
+        "profiles",
+        profiles_params,
     )
 
     # Diss directory — hash includes epsilon params + profiles upstream
     eps_params = merge_config("epsilon", config.get("epsilon"))
     dirs["diss"] = resolve_output_dir(
-        output_root, "diss", "epsilon", eps_params,
+        output_root,
+        "diss",
+        "epsilon",
+        eps_params,
         upstream=[("profiles", profiles_params)],
     )
 
@@ -277,7 +308,10 @@ def _setup_output_dirs(config: dict) -> dict[str, Path]:
     if chi_cfg.get("enable", False):
         chi_params = merge_config("chi", chi_cfg)
         dirs["chi"] = resolve_output_dir(
-            output_root, "chi", "chi", chi_params,
+            output_root,
+            "chi",
+            "chi",
+            chi_params,
             upstream=[("epsilon", eps_params)],
         )
 
@@ -286,7 +320,10 @@ def _setup_output_dirs(config: dict) -> dict[str, Path]:
     if ctd_cfg.get("enable", True):
         ctd_params = merge_config("ctd", ctd_cfg)
         dirs["ctd"] = resolve_output_dir(
-            output_root, "ctd", "ctd", ctd_params,
+            output_root,
+            "ctd",
+            "ctd",
+            ctd_params,
         )
 
     return dirs
@@ -365,13 +402,21 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     if jobs == 1:
         for p_path in p_files:
             logger.info("Processing %s...", p_path.name)
-            process_file(p_path, config, gps, output_dirs,
-                         hotel_data=hotel_data, hotel_cfg=hotel_cfg)
+            process_file(
+                p_path, config, gps, output_dirs, hotel_data=hotel_data, hotel_cfg=hotel_cfg
+            )
     else:
         with ProcessPoolExecutor(max_workers=jobs) as executor:
             futures = {
-                executor.submit(process_file, p, config, gps, output_dirs,
-                                hotel_data=hotel_data, hotel_cfg=hotel_cfg): p
+                executor.submit(
+                    process_file,
+                    p,
+                    config,
+                    gps,
+                    output_dirs,
+                    hotel_data=hotel_data,
+                    hotel_cfg=hotel_cfg,
+                ): p
                 for p in p_files
             }
             for future in as_completed(futures):
@@ -399,7 +444,10 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         logger.info("Binning profiles...")
         binning_params = merge_config("binning", binning_cfg)
         prof_binned_dir = resolve_output_dir(
-            output_root, "profiles_binned", "binning", binning_params,
+            output_root,
+            "profiles_binned",
+            "binning",
+            binning_params,
             upstream=[("profiles", merge_config("profiles", config.get("profiles")))],
         )
         if bin_method == "depth":
@@ -418,7 +466,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         ds = bin_diss(diss_ncs, diss_width, diss_agg, bin_method, diagnostics)
         if ds.data_vars:
             diss_binned_dir = resolve_output_dir(
-                output_root, "diss_binned", "binning",
+                output_root,
+                "diss_binned",
+                "binning",
                 merge_config("binning", binning_cfg),
                 upstream=[("epsilon", merge_config("epsilon", config.get("epsilon")))],
             )
@@ -438,7 +488,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             ds = bin_chi(chi_ncs, chi_width, chi_agg, bin_method, diagnostics)
             if ds.data_vars:
                 chi_binned_dir = resolve_output_dir(
-                    output_root, "chi_binned", "binning",
+                    output_root,
+                    "chi_binned",
+                    "binning",
                     merge_config("binning", binning_cfg),
                     upstream=[("chi", merge_config("chi", config.get("chi")))],
                 )

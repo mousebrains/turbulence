@@ -44,7 +44,7 @@ def run_pipeline(
     HP_cut: float = 0.25,
     despike_thresh: float = 8.0,
     # Epsilon spectral params
-    fft_length: int = 256,
+    fft_length: int = 1024,
     diss_length: int | None = None,
     overlap: int | None = None,
     f_AA: float = 98.0,
@@ -53,7 +53,7 @@ def run_pipeline(
     # Chi cleaning params
     despike_T_thresh: float = 10.0,
     # Chi spectral params
-    chi_fft_length: int = 512,
+    chi_fft_length: int = 1024,
     chi_diss_length: int | None = None,
     chi_overlap: int | None = None,
     fp07_model: str = "single_pole",
@@ -96,11 +96,11 @@ def run_pipeline(
     from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
 
     if diss_length is None:
-        diss_length = 2 * fft_length
+        diss_length = 4 * fft_length
     if overlap is None:
         overlap = diss_length // 2
     if chi_diss_length is None:
-        chi_diss_length = 3 * chi_fft_length
+        chi_diss_length = 4 * chi_fft_length
     if chi_overlap is None:
         chi_overlap = chi_diss_length // 2
 

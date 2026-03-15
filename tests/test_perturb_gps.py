@@ -67,7 +67,8 @@ class TestCreateGPS:
 
         csv_file = tmp_path / "gps.csv"
         pd.DataFrame({"t": [0, 1, 2], "lat": [10, 20, 30], "lon": [100, 110, 120]}).to_csv(
-            csv_file, index=False,
+            csv_file,
+            index=False,
         )
         gps = create_gps({"source": "csv", "file": str(csv_file)})
         assert isinstance(gps, GPSFromCSV)
@@ -127,9 +128,9 @@ class TestGPSFromCSV:
         assert not np.any(np.isnan(lat))
         assert not np.any(np.isnan(lon))
         # Linear extrapolation: slope is 10/1 for lat, 10/1 for lon
-        np.testing.assert_allclose(lat[0], 0.0)   # 10 + (-1)*10 = 0
-        np.testing.assert_allclose(lat[1], 60.0)   # 10 + 5*10 = 60
-        np.testing.assert_allclose(lon[0], 90.0)   # 100 + (-1)*10 = 90
+        np.testing.assert_allclose(lat[0], 0.0)  # 10 + (-1)*10 = 0
+        np.testing.assert_allclose(lat[1], 60.0)  # 10 + 5*10 = 60
+        np.testing.assert_allclose(lon[0], 90.0)  # 100 + (-1)*10 = 90
         np.testing.assert_allclose(lon[1], 150.0)  # 100 + 5*10 = 150
 
     def test_custom_columns(self, tmp_path):

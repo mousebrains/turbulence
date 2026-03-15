@@ -89,9 +89,7 @@ def test_p_to_L1_shear_sensors(skip_no_data, tmp_path):
     L1 = ds.groups["L1_converted"]
 
     # Count shear channels in source
-    n_shear = sum(
-        1 for n in pf.channels if pf.channel_info[n]["type"] == "shear"
-    )
+    n_shear = sum(1 for n in pf.channels if pf.channel_info[n]["type"] == "shear")
     if n_shear > 0:
         assert "N_SHEAR_SENSORS" in ds.dimensions
         assert len(ds.dimensions["N_SHEAR_SENSORS"]) == n_shear
@@ -116,10 +114,7 @@ def test_p_to_L1_gradt(skip_no_data, tmp_path):
     ds = nc.Dataset(str(nc_path), "r")
     L1 = ds.groups["L1_converted"]
 
-    n_gradt = sum(
-        1 for n in pf.channels
-        if pf.channel_info[n]["type"] == "therm" and pf.is_fast(n)
-    )
+    n_gradt = sum(1 for n in pf.channels if pf.channel_info[n]["type"] == "therm" and pf.is_fast(n))
     if n_gradt > 0:
         assert "GRADT" in L1.variables
         gradt = L1.variables["GRADT"]

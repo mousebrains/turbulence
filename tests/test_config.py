@@ -101,7 +101,7 @@ class TestValidateConfigRsi:
 class TestMergeConfigRsi:
     def test_null_in_config_treated_as_absent(self):
         m = merge_config("epsilon", file_values={"fft_length": None})
-        assert m["fft_length"] == 256
+        assert m["fft_length"] == 1024
 
     def test_profiles_merge(self):
         m = merge_config("profiles", file_values={"P_min": 1.0})

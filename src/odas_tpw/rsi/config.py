@@ -25,7 +25,7 @@ DEFAULTS: dict[str, dict] = {
         "min_duration": 7.0,
     },
     "epsilon": {
-        "fft_length": 256,
+        "fft_length": 1024,
         "diss_length": None,
         "overlap": None,
         "speed": None,
@@ -39,7 +39,7 @@ DEFAULTS: dict[str, dict] = {
         "salinity": None,
     },
     "chi": {
-        "fft_length": 512,
+        "fft_length": 1024,
         "diss_length": None,
         "overlap": None,
         "speed": None,
@@ -85,8 +85,8 @@ profiles:
   min_duration: 7.0     # minimum profile duration [s]
 
 epsilon:
-  fft_length: 256       # FFT segment length [samples]
-  diss_length: null     # dissipation window [samples] (null = 2 * fft_length)
+  fft_length: 1024      # FFT segment length [samples]
+  diss_length: null     # dissipation window [samples] (null = 4 * fft_length)
   overlap: null         # window overlap [samples] (null = diss_length // 2)
   speed: null           # profiling speed [m/s] (null = from dP/dt)
   direction: down       # profile direction: up or down
@@ -99,8 +99,8 @@ epsilon:
   salinity: null        # salinity [PSU] (null = 35, fixed S)
 
 chi:
-  fft_length: 512       # FFT segment length [samples]
-  diss_length: null     # dissipation window [samples] (null = 3 * fft_length)
+  fft_length: 1024      # FFT segment length [samples]
+  diss_length: null     # dissipation window [samples] (null = 4 * fft_length)
   overlap: null         # window overlap [samples] (null = diss_length // 2)
   speed: null           # profiling speed [m/s] (null = from dP/dt)
   direction: down       # profile direction: up or down

@@ -72,7 +72,7 @@ class TestEpsilonRecovery:
         K, spec = _make_nasmyth_spectrum(eps_in, self.NU, speed=speed)
         K_AA = F_AA_MARGIN * 98.0 / speed  # typical AA wavenumber limit
 
-        e_out, _k_max, _mad, _method, _fom, _var_res, _nas_spec, _K_max_ratio, _FM = (
+        e_out, _k_max, _mad, _method, _fom, _var_res, _nas_spec, _K_max_ratio, _FM, _eisr, _evar = (
             _estimate_epsilon(K, spec, self.NU, K_AA, fit_order=3)
         )
 
@@ -86,7 +86,7 @@ class TestEpsilonRecovery:
         K, spec = _make_nasmyth_spectrum(eps_in, self.NU, speed=speed)
         K_AA = F_AA_MARGIN * 98.0 / speed
 
-        _, _, _, _, fom, _, _, _, _ = _estimate_epsilon(K, spec, self.NU, K_AA, fit_order=3)
+        _, _, _, _, fom, _, _, _, _, _, _ = _estimate_epsilon(K, spec, self.NU, K_AA, fit_order=3)
 
         if np.isfinite(fom):
             assert 0.5 < fom < 2.0, f"eps_in={eps_in:.1e}, fom={fom:.3f}"
@@ -98,7 +98,8 @@ class TestEpsilonRecovery:
         K, spec = _make_nasmyth_spectrum(eps_in, self.NU, speed=speed)
         K_AA = F_AA_MARGIN * 98.0 / speed
 
-        _, _, _, method, _, _, _, _, _ = _estimate_epsilon(K, spec, self.NU, K_AA, fit_order=3)
+        result = _estimate_epsilon(K, spec, self.NU, K_AA, fit_order=3)
+        method = result[3]
 
         assert method == 0
 
@@ -109,7 +110,8 @@ class TestEpsilonRecovery:
         K, spec = _make_nasmyth_spectrum(eps_in, self.NU, speed=speed)
         K_AA = F_AA_MARGIN * 98.0 / speed
 
-        _, _, _, method, _, _, _, _, _ = _estimate_epsilon(K, spec, self.NU, K_AA, fit_order=3)
+        result = _estimate_epsilon(K, spec, self.NU, K_AA, fit_order=3)
+        method = result[3]
 
         assert method == 1
 
@@ -120,7 +122,8 @@ class TestEpsilonRecovery:
         K, spec = _make_nasmyth_spectrum(eps_in, self.NU, speed=speed)
         K_AA = F_AA_MARGIN * 98.0 / speed
 
-        _, _, _, _, _, _, nas_spec, _, _ = _estimate_epsilon(K, spec, self.NU, K_AA, fit_order=3)
+        result = _estimate_epsilon(K, spec, self.NU, K_AA, fit_order=3)
+        nas_spec = result[6]
 
         # Skip DC bin (K=0)
         assert np.all(np.isfinite(nas_spec[1:]))
@@ -133,7 +136,8 @@ class TestEpsilonRecovery:
         K, spec = _make_nasmyth_spectrum(eps_in, self.NU, speed=speed)
         K_AA = F_AA_MARGIN * 98.0 / speed
 
-        _, _, _, _, _, _, _, K_max_ratio, _ = _estimate_epsilon(K, spec, self.NU, K_AA, fit_order=3)
+        result = _estimate_epsilon(K, spec, self.NU, K_AA, fit_order=3)
+        K_max_ratio = result[7]
 
         assert np.isfinite(K_max_ratio)
         assert K_max_ratio > 0

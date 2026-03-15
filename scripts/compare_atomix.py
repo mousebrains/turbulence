@@ -432,6 +432,8 @@ def compare_dataset(nc_path: Path, key: str) -> DatasetResult:
                         _nas_spec,
                         _kmr,
                         _fm,
+                        _eisr,
+                        _evar,
                     ) = _estimate_epsilon(
                         K_clean,
                         spec_clean,

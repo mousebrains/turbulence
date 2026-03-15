@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 def _compute_chi(
     source: PFile | str | Path,
     epsilon_ds: xr.Dataset | None = None,
-    fft_length: int = 512,
+    fft_length: int = 1024,
     diss_length: int | None = None,
     overlap: int | None = None,
     speed: float | None = None,
@@ -53,7 +53,7 @@ def _compute_chi(
     from odas_tpw.scor160.l2 import process_l2
 
     if diss_length is None:
-        diss_length = 3 * fft_length
+        diss_length = 4 * fft_length
     if overlap is None:
         overlap = diss_length // 2
 
@@ -109,7 +109,13 @@ def _compute_chi(
 
         # Build L1Data with temp_fast
         l1 = _build_l1data_from_channels(
-            data, s_fast, e_fast, speed_fast, P_fast, T_fast, direction,
+            data,
+            s_fast,
+            e_fast,
+            speed_fast,
+            P_fast,
+            T_fast,
+            direction,
             therm_list=data["therm"],
             diff_gains=diff_gains,
         )
@@ -122,7 +128,8 @@ def _compute_chi(
 
         # L3_chi: temperature gradient spectra
         l3_chi = process_l3_chi(
-            l2_chi, l3_params,
+            l2_chi,
+            l3_params,
             fp07_model=fp07_model,
             salinity=sal_prof,
             therm_cal=therm_cal,
@@ -135,16 +142,24 @@ def _compute_chi(
         if epsilon_ds is not None:
             l4_diss = _epsilon_ds_to_l4data(epsilon_ds)
             l4_chi = process_l4_chi_epsilon(
-                l3_chi, l4_diss, spectrum_model=spectrum_model, f_AA=f_AA,
+                l3_chi,
+                l4_diss,
+                spectrum_model=spectrum_model,
+                f_AA=f_AA,
             )
         else:
             l4_chi = process_l4_chi_fit(
-                l3_chi, spectrum_model=spectrum_model, fit_method=fit_method, f_AA=f_AA,
+                l3_chi,
+                spectrum_model=spectrum_model,
+                fit_method=fit_method,
+                f_AA=f_AA,
             )
 
         # Build output dataset
         ds = _build_chi_ds_from_pipeline(
-            l3_chi, l4_chi, therm_names,
+            l3_chi,
+            l4_chi,
+            therm_names,
             fft_length=fft_length,
             diss_length=diss_length,
             overlap=overlap,
@@ -156,9 +171,7 @@ def _compute_chi(
             grad_func=grad_func,
         )
         ds.attrs.update(data["metadata"])
-        ds.attrs["history"] = (
-            f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
-        )
+        ds.attrs["history"] = f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
         start_time = data["metadata"].get("start_time", "")
         t_units = f"seconds since {start_time}" if start_time else "seconds"
         ds.coords["t"].attrs.update(
@@ -178,7 +191,7 @@ def _compute_chi(
 def get_chi(
     source: PFile | str | Path,
     epsilon_ds: xr.Dataset | None = None,
-    fft_length: int = 512,
+    fft_length: int = 1024,
     diss_length: int | None = None,
     overlap: int | None = None,
     speed: float | None = None,
@@ -205,9 +218,9 @@ def get_chi(
         If provided: Method 1 — use known epsilon from shear probes.
         If None: Method 2 — fit Batchelor spectrum for kB.
     fft_length : int
-        FFT segment length [samples], default 512.
+        FFT segment length [samples], default 1024.
     diss_length : int or None
-        Dissipation window length [samples], default 3 * fft_length.
+        Dissipation window length [samples], default 4 * fft_length.
     overlap : int or None
         Window overlap [samples], default diss_length // 2.
     speed : float or None
@@ -255,10 +268,18 @@ def get_chi(
         stacklevel=2,
     )
     return _compute_chi(
-        source, epsilon_ds=epsilon_ds, fft_length=fft_length,
-        diss_length=diss_length, overlap=overlap, speed=speed,
-        direction=direction, fp07_model=fp07_model, goodman=goodman,
-        f_AA=f_AA, fit_method=fit_method, spectrum_model=spectrum_model,
+        source,
+        epsilon_ds=epsilon_ds,
+        fft_length=fft_length,
+        diss_length=diss_length,
+        overlap=overlap,
+        speed=speed,
+        direction=direction,
+        fp07_model=fp07_model,
+        goodman=goodman,
+        f_AA=f_AA,
+        fit_method=fit_method,
+        spectrum_model=spectrum_model,
         salinity=salinity,
     )
 
@@ -400,69 +421,150 @@ def _build_chi_dataset(
     from odas_tpw.rsi.helpers import _build_result_dataset
 
     variables = [
-        ("chi", ["probe", "time"], chi_out, {
-            "units": "K2 s-1",
-            "long_name": "thermal variance dissipation rate",
-        }),
-        ("epsilon_T", ["probe", "time"], eps_out, {
-            "units": "W kg-1",
-            "long_name": "TKE dissipation rate from temperature",
-        }),
-        ("kB", ["probe", "time"], kB_out, {
-            "units": "cpm", "long_name": "Batchelor wavenumber",
-        }),
-        ("K_max_T", ["probe", "time"], K_max_out, {
-            "units": "cpm",
-            "long_name": "upper wavenumber integration limit for chi",
-        }),
-        ("fom", ["probe", "time"], fom_out, {
-            "units": "1",
-            "long_name": "figure of merit (observed/model variance ratio)",
-        }),
-        ("K_max_ratio", ["probe", "time"], K_max_ratio_out, {
-            "units": "1",
-            "long_name": "K_max / kB spectral resolution ratio",
-        }),
-        ("speed", ["time"], speed_out, {
-            "units": "m s-1", "long_name": "profiling speed",
-        }),
-        ("nu", ["time"], nu_out, {
-            "units": "m2 s-1",
-            "long_name": "kinematic viscosity of sea water",
-        }),
-        ("P_mean", ["time"], P_out, {
-            "units": "dbar",
-            "long_name": "mean sea water pressure",
-            "standard_name": "sea_water_pressure",
-            "positive": "down",
-        }),
-        ("T_mean", ["time"], T_out, {
-            "units": "degree_Celsius",
-            "long_name": "mean sea water temperature",
-            "standard_name": "sea_water_temperature",
-        }),
-        ("spec_gradT", ["probe", "freq", "time"], spec_gradT, {
-            "units": "K2 m-1",
-            "long_name": "temperature gradient wavenumber spectrum (observed)",
-        }),
-        ("spec_batch", ["probe", "freq", "time"], spec_batch, {
-            "units": "K2 m-1",
-            "long_name": "fitted Batchelor temperature gradient spectrum",
-        }),
-        ("spec_noise", ["probe", "freq", "time"], spec_noise_out, {
-            "units": "K2 m-1",
-            "long_name": "FP07 electronics noise spectrum",
-        }),
-        ("K", ["freq", "time"], K_out, {
-            "units": "cpm",
-            "long_name": "wavenumber (cycles per metre)",
-        }),
-        ("F", ["freq", "time"], F_out, {
-            "units": "Hz", "long_name": "frequency",
-        }),
+        (
+            "chi",
+            ["probe", "time"],
+            chi_out,
+            {
+                "units": "K2 s-1",
+                "long_name": "thermal variance dissipation rate",
+            },
+        ),
+        (
+            "epsilon_T",
+            ["probe", "time"],
+            eps_out,
+            {
+                "units": "W kg-1",
+                "long_name": "TKE dissipation rate from temperature",
+            },
+        ),
+        (
+            "kB",
+            ["probe", "time"],
+            kB_out,
+            {
+                "units": "cpm",
+                "long_name": "Batchelor wavenumber",
+            },
+        ),
+        (
+            "K_max_T",
+            ["probe", "time"],
+            K_max_out,
+            {
+                "units": "cpm",
+                "long_name": "upper wavenumber integration limit for chi",
+            },
+        ),
+        (
+            "fom",
+            ["probe", "time"],
+            fom_out,
+            {
+                "units": "1",
+                "long_name": "figure of merit (observed/model variance ratio)",
+            },
+        ),
+        (
+            "K_max_ratio",
+            ["probe", "time"],
+            K_max_ratio_out,
+            {
+                "units": "1",
+                "long_name": "K_max / kB spectral resolution ratio",
+            },
+        ),
+        (
+            "speed",
+            ["time"],
+            speed_out,
+            {
+                "units": "m s-1",
+                "long_name": "profiling speed",
+            },
+        ),
+        (
+            "nu",
+            ["time"],
+            nu_out,
+            {
+                "units": "m2 s-1",
+                "long_name": "kinematic viscosity of sea water",
+            },
+        ),
+        (
+            "P_mean",
+            ["time"],
+            P_out,
+            {
+                "units": "dbar",
+                "long_name": "mean sea water pressure",
+                "standard_name": "sea_water_pressure",
+                "positive": "down",
+            },
+        ),
+        (
+            "T_mean",
+            ["time"],
+            T_out,
+            {
+                "units": "degree_Celsius",
+                "long_name": "mean sea water temperature",
+                "standard_name": "sea_water_temperature",
+            },
+        ),
+        (
+            "spec_gradT",
+            ["probe", "freq", "time"],
+            spec_gradT,
+            {
+                "units": "K2 m-1",
+                "long_name": "temperature gradient wavenumber spectrum (observed)",
+            },
+        ),
+        (
+            "spec_batch",
+            ["probe", "freq", "time"],
+            spec_batch,
+            {
+                "units": "K2 m-1",
+                "long_name": "fitted Batchelor temperature gradient spectrum",
+            },
+        ),
+        (
+            "spec_noise",
+            ["probe", "freq", "time"],
+            spec_noise_out,
+            {
+                "units": "K2 m-1",
+                "long_name": "FP07 electronics noise spectrum",
+            },
+        ),
+        (
+            "K",
+            ["freq", "time"],
+            K_out,
+            {
+                "units": "cpm",
+                "long_name": "wavenumber (cycles per metre)",
+            },
+        ),
+        (
+            "F",
+            ["freq", "time"],
+            F_out,
+            {
+                "units": "Hz",
+                "long_name": "frequency",
+            },
+        ),
     ]
     return _build_result_dataset(
-        variables, therm_names, t_out, "thermistor probe name",
+        variables,
+        therm_names,
+        t_out,
+        "thermistor probe name",
         {
             "Conventions": "CF-1.13",
             "fft_length": fft_length,
