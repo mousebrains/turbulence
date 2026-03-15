@@ -119,16 +119,22 @@ def _classify_channels(pf: "PFile") -> dict:
     }
 
 
-def _create_l1_variables(group, specs):
+def _create_l1_variables(group, specs, complevel=4):
     """Write a list of variable specs to a NetCDF group.
 
     Each spec is (var_name, dtype, dims, data, attrs).  Specs with
     data=None are skipped (conditional variables).
+
+    Parameters
+    ----------
+    complevel : int
+        zlib compression level (0 = no compression, 1-9 = increasing).
     """
+    use_zlib = complevel > 0
     for var_name, dtype, dims, data, attrs in specs:
         if data is None:
             continue
-        v = group.createVariable(var_name, dtype, dims, zlib=True)
+        v = group.createVariable(var_name, dtype, dims, zlib=use_zlib, complevel=complevel)
         v[:] = data
         for key, val in attrs.items():
             setattr(v, key, val)
@@ -403,6 +409,7 @@ def _l1_variable_specs(
 def p_to_L1(
     p_filepath: str | Path,
     nc_filepath: str | Path | None = None,
+    complevel: int = 4,
 ) -> "tuple[PFile, Path]":
     """Convert a .p file to ATOMIX L1_converted NetCDF format.
 
@@ -419,6 +426,9 @@ def p_to_L1(
         Path to the .p file.
     nc_filepath : str or Path, optional
         Output path. Defaults to same name with .nc extension.
+    complevel : int
+        zlib compression level (0 = no compression, 1-9 = increasing).
+        Default: 4.
 
     Returns
     -------
@@ -518,14 +528,15 @@ def p_to_L1(
         speed_fast,
         gradt_data,
     )
-    _create_l1_variables(L1, specs)
+    _create_l1_variables(L1, specs, complevel=complevel)
 
     # Supplementary channels (V_Bat, Gnd, etc.) — dynamic names/types
+    use_zlib = complevel > 0
     for name in supplementary:
         info = pf.channel_info[name]
         dim = ("TIME",) if pf.is_fast(name) else ("TIME_SLOW",)
         var_name = name.replace(" ", "_")
-        v = L1.createVariable(var_name, "f4", dim, zlib=True)
+        v = L1.createVariable(var_name, "f4", dim, zlib=use_zlib, complevel=complevel)
         v[:] = pf.channels[name].astype(np.float32)
         v.units = info["units"]
         v.sensor_type = info["type"]
@@ -548,8 +559,12 @@ p_to_netcdf = p_to_L1
 
 def _convert_one(args):
     """Worker function for parallel conversion. Must be top-level for pickling."""
-    p_path, nc_path = args
-    p_to_L1(p_path, nc_path)
+    if len(args) == 3:
+        p_path, nc_path, complevel = args
+    else:
+        p_path, nc_path = args
+        complevel = 4
+    p_to_L1(p_path, nc_path, complevel=complevel)
     size_mb = nc_path.stat().st_size / 1e6
     return p_path.name, nc_path.name, size_mb
 

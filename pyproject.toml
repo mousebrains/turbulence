@@ -39,6 +39,7 @@ Repository = "https://github.com/mousebrains/turbulence"
 rsi-tpw = "odas_tpw.rsi.cli:main"
 perturb = "odas_tpw.perturb.cli:main"
 scor160-tpw = "odas_tpw.scor160.cli:main"
+pyturb-cli = "odas_tpw.pyturb.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
