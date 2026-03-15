@@ -621,7 +621,33 @@ def compute_chi_file(
 
 
 def _compute_chi_one(args: tuple) -> tuple[str, int]:
-    """Worker for parallel chi computation."""
-    source_path, output_dir, kwargs = args
-    paths = compute_chi_file(source_path, output_dir, **kwargs)
+    """Worker for parallel chi computation.
+
+    args is (source_path, output_dir, kwargs) or
+           (source_path, output_dir, kwargs, epsilon_dir).
+    When epsilon_dir is provided, the worker opens the matching epsilon
+    file itself (xr.Datasets cannot be pickled across process boundaries).
+    """
+    if len(args) == 4:
+        source_path, output_dir, kwargs, epsilon_dir = args
+    else:
+        source_path, output_dir, kwargs = args
+        epsilon_dir = None
+
+    if epsilon_dir is not None:
+        eps_file = Path(epsilon_dir) / f"{Path(source_path).stem}_eps.nc"
+        if eps_file.exists():
+            import xarray as xr
+
+            eps_ds = xr.open_dataset(eps_file)
+            try:
+                kwargs = dict(kwargs)
+                kwargs["epsilon_ds"] = eps_ds
+                paths = compute_chi_file(source_path, output_dir, **kwargs)
+            finally:
+                eps_ds.close()
+        else:
+            paths = compute_chi_file(source_path, output_dir, **kwargs)
+    else:
+        paths = compute_chi_file(source_path, output_dir, **kwargs)
     return str(source_path), len(paths)

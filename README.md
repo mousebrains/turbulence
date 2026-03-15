@@ -48,11 +48,23 @@ rsi-tpw chi VMP/*.p --epsilon-dir epsilon/ -o chi/
 ```
 
 ```python
-from odas_tpw.rsi import PFile, get_diss, get_chi
+from odas_tpw.rsi.pipeline import run_pipeline
+from pathlib import Path
 
-eps_results = get_diss("VMP/file.p")
-chi_results = get_chi("VMP/file.p", epsilon_ds=eps_results[0])
+# Full pipeline: .p → profiles → epsilon → chi → binning → combine
+run_pipeline([Path("VMP/file.p")], Path("results/"))
+
+# Or use the modular API
+from odas_tpw.rsi.dissipation import compute_diss_file
+from odas_tpw.rsi.chi_io import compute_chi_file
+
+compute_diss_file("VMP/file.p", "epsilon/")
+compute_chi_file("VMP/file.p", "chi/")
 ```
+
+> **Note:** `get_diss()` and `get_chi()` still work for backward compatibility
+> but are deprecated in favor of `run_pipeline()` or the modular
+> `compute_diss_file()` / `compute_chi_file()` functions.
 
 ## Documentation
 
@@ -77,6 +89,12 @@ chi_results = get_chi("VMP/file.p", epsilon_ds=eps_results[0])
 | [Parallel Scaling](docs/perturb/parallel.md) | Benchmark results for multi-core scaling |
 | [Modules](docs/perturb/modules.md) | Module-level reference |
 | [pyturb Comparison](docs/perturb/pyturb_comparison.md) | Comparison with oceancascades/pyturb |
+
+### scor160 (ATOMIX benchmark)
+
+| Document | Description |
+|----------|-------------|
+| [CLI Reference](docs/scor160/cli.md) | All `scor160-tpw` subcommands and flags |
 
 ### Shared
 

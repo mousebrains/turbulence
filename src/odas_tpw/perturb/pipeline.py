@@ -329,7 +329,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     # Merge
     if files_cfg.get("merge", False):
         logger.info("Merging...")
-        run_merge(config)
+        merged_files = run_merge(config)
+        if merged_files:
+            p_files = merged_files
 
     # Setup output directories
     output_dirs = _setup_output_dirs(config)

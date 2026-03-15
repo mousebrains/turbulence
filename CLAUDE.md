@@ -58,8 +58,12 @@ rsi-tpw eps VMP/*.p --salinity 34.5 -o epsilon/  # custom salinity
 ### Python API
 
 ```python
-from odas_tpw.rsi import PFile, get_diss, get_chi
+from odas_tpw.rsi import PFile
+from odas_tpw.rsi.pipeline import run_pipeline
+from odas_tpw.rsi.dissipation import compute_diss_file
+from odas_tpw.rsi.chi_io import compute_chi_file
 from odas_tpw.scor160.ocean import visc, density, buoyancy_freq
+from pathlib import Path
 
 pf = PFile("VMP/ARCTERX_Thompson_2025_SN479_0001.p")
 pf.channels["T1"]    # numpy array, physical units (°C)
@@ -67,15 +71,14 @@ pf.channels["sh1"]   # shear in s⁻¹
 pf.t_fast             # time vector for fast channels
 pf.fs_fast            # fast sampling rate (~512 Hz)
 
-# Compute epsilon
-eps_results = get_diss("VMP/file.p")
-ds = eps_results[0]
-ds["epsilon"]       # dissipation rate [W/kg]
-ds["fom"]           # figure of merit (obs/Nasmyth variance ratio)
-ds["K_max_ratio"]   # K_max/K_95 (spectral resolution)
+# Full pipeline: .p → profiles → epsilon → chi → binning → combine
+run_pipeline([Path("VMP/file.p")], Path("results/"))
 
-# Compute with custom salinity
-eps_results = get_diss("VMP/file.p", salinity=34.5)
+# Or use modular file-level functions
+eps_paths = compute_diss_file("VMP/file.p", "epsilon/")
+chi_paths = compute_chi_file("VMP/file.p", "chi/")
+
+# Note: get_diss() and get_chi() still work but are deprecated
 ```
 
 ## Commands

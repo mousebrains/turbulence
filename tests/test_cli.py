@@ -636,6 +636,38 @@ def test_cmd_chi_method1(monkeypatch, sample_p_file, tmp_path):
     assert len(chi_dirs) >= 1
 
 
+def test_cmd_chi_method1_parallel(monkeypatch, sample_p_file, tmp_path):
+    """rsi-tpw chi with --epsilon-dir and -j 2 should use Method 1 in parallel."""
+    from odas_tpw.rsi.dissipation import compute_diss_file
+
+    eps_dir = tmp_path / "eps_input"
+    eps_dir.mkdir()
+    compute_diss_file(sample_p_file, eps_dir, fft_length=256, goodman=True)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rsi-tpw",
+            "chi",
+            str(sample_p_file),
+            "--epsilon-dir",
+            str(eps_dir),
+            "-o",
+            str(tmp_path),
+            "-j",
+            "2",
+        ],
+    )
+    from odas_tpw.rsi.cli import main
+
+    main()
+    chi_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("chi_")]
+    assert len(chi_dirs) >= 1
+    nc_files = list(chi_dirs[0].glob("*_chi.nc"))
+    assert len(nc_files) >= 1
+
+
 def test_cmd_chi_missing_epsilon_warns(monkeypatch, sample_p_file, tmp_path, capsys):
     """--epsilon-dir pointing to empty dir should warn and use Method 2."""
     empty_eps_dir = tmp_path / "empty_eps"

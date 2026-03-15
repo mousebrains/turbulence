@@ -318,28 +318,35 @@ def _cmd_chi(args: argparse.Namespace) -> None:
 
                 eps_file = Path(epsilon_dir) / f"{f.stem}_eps.nc"
                 if eps_file.exists():
-                    kw["epsilon_ds"] = xr.open_dataset(eps_file)
+                    eps_ds = xr.open_dataset(eps_file)
+                    kw["epsilon_ds"] = eps_ds
                 else:
+                    eps_ds = None
                     print(f"  Warning: no epsilon file {eps_file.name}, using Method 2")
+            else:
+                eps_ds = None
 
             try:
                 compute_chi_file(f, output_dir, **kw)
             except (OSError, ValueError, RuntimeError) as e:
                 print(f"  ERROR: {e}")
+            finally:
+                if eps_ds is not None:
+                    eps_ds.close()
     else:
         work = []
         for f in files:
-            work.append((f, output_dir, merged))
+            work.append((f, output_dir, merged, epsilon_dir))
         print(f"Processing {len(work)} files with {jobs} workers")
         with ProcessPoolExecutor(max_workers=jobs) as pool:
             futures = {pool.submit(_compute_chi_one, w): w for w in work}
             for future in as_completed(futures):
-                src, _, _ = futures[future]
+                src = futures[future][0]
                 try:
                     name, n_profiles = future.result()
                     print(f"  {Path(name).name}: {n_profiles} profile(s)")
                 except (OSError, ValueError, RuntimeError) as e:
-                    print(f"  {src.name}: ERROR: {e}")
+                    print(f"  {Path(src).name}: ERROR: {e}")
 
 
 def _cmd_pipeline(args: argparse.Namespace) -> None:

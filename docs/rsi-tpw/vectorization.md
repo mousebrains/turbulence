@@ -21,7 +21,7 @@ Phase breakdown before vectorization (per-file averages, 3 files):
 
 ### 1. Batched cross-spectral density (`csd_matrix_batch`)
 
-**File:** `src/odas_tpw/rsi/spectral.py`
+**File:** `src/odas_tpw/scor160/spectral.py`
 
 Replaced per-window calls to `csd_matrix` with a single batched function that processes all dissipation windows at once:
 
@@ -33,13 +33,13 @@ Replaced per-window calls to `csd_matrix` with a single batched function that pr
 
 ### 2. Batched Goodman noise removal (`clean_shear_spec_batch`)
 
-**File:** `src/odas_tpw/rsi/goodman.py`
+**File:** `src/odas_tpw/scor160/goodman.py`
 
 Calls `csd_matrix_batch` for the combined shear+accelerometer CSD, then solves the Goodman equation `clean = UU - UA @ inv(AA) @ conj(UA)^H` using `np.linalg.solve` broadcasting over `(n_windows, n_freq)` leading dimensions. Falls back to per-window solve on `LinAlgError`.
 
 ### 3. Nasmyth spectrum grid interpolation (`NasmythGrid`, `nasmyth_grid`)
 
-**File:** `src/odas_tpw/rsi/nasmyth.py`
+**File:** `src/odas_tpw/scor160/nasmyth.py`
 
 Pre-tabulates `log10(G2)` vs `log10(x)` on a 2000-point grid (x = 1e-6 to 1.0) at module import. Subsequent calls use `np.interp` in log-space instead of evaluating the Lueck (2016) rational polynomial. A lazy singleton (`_get_grid()`) ensures the table is built once.
 

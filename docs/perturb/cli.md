@@ -68,6 +68,7 @@ perturb run -o results/ --p-file-root /data/VMP/
 | `-o`, `--output DIR` | Output root directory |
 | `-j`, `--jobs N` | Parallel workers (0=auto, 1=serial) |
 | `--p-file-root DIR` | Root directory for .p file discovery |
+| `--hotel-file FILE` | Hotel data file (external telemetry: speed, pitch, roll, heading, CTD) |
 | `FILE ...` | Explicit .p file paths or globs |
 
 ## `perturb trim`
@@ -79,13 +80,22 @@ perturb trim -o results/
 perturb trim -o results/ --p-file-root /data/VMP/
 ```
 
+| Flag | Description |
+|------|-------------|
+| `--p-file-root DIR` | Root directory for .p file discovery |
+
 ## `perturb merge`
 
 Merge split `.p` files into single files. Detects mergeable sequences automatically by matching config strings and record sizes.
 
 ```bash
 perturb merge -o results/
+perturb merge -o results/ --p-file-root /data/VMP/
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--p-file-root DIR` | Root directory for .p file discovery |
 
 ## `perturb profiles`
 

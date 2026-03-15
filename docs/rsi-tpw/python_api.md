@@ -29,11 +29,14 @@ pf.channel_info       # dict of channel metadata (type, units, etc.)
 ## Computing Epsilon
 
 ```python
-from odas_tpw.rsi import get_diss
+from odas_tpw.rsi.dissipation import compute_diss_file
 
-# Compute epsilon (returns list of xarray.Datasets, one per profile)
-eps_results = get_diss("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
-ds = eps_results[0]
+# Compute epsilon and write to output directory
+eps_paths = compute_diss_file("VMP/ARCTERX_Thompson_2025_SN479_0005.p", "epsilon/")
+
+# Read back the results
+import xarray as xr
+ds = xr.open_dataset(eps_paths[0])
 
 # Output variables
 ds["epsilon"]         # dissipation rate [W/kg]
@@ -43,7 +46,7 @@ ds["fom"]             # figure of merit (obs/Nasmyth variance ratio)
 ds["K_max_ratio"]     # K_max/K_95 (spectral resolution)
 
 # With options
-eps_results = get_diss("VMP/file.p",
+eps_paths = compute_diss_file("VMP/file.p", "epsilon/",
     fft_length=512,
     goodman=True,
     salinity=34.5,
@@ -54,22 +57,30 @@ eps_results = get_diss("VMP/file.p",
 ## Computing Chi
 
 ```python
-from odas_tpw.rsi import get_chi
+from odas_tpw.rsi.chi_io import compute_chi_file
+import xarray as xr
 
 # Method 1: chi from known epsilon (preferred)
-chi_results = get_chi("VMP/ARCTERX_Thompson_2025_SN479_0005.p",
-                      epsilon_ds=eps_results[0])
-ds = chi_results[0]
+eps_ds = xr.open_dataset("epsilon/SN479_0005_eps.nc")
+chi_paths = compute_chi_file("VMP/ARCTERX_Thompson_2025_SN479_0005.p",
+                             "chi/", epsilon_ds=eps_ds)
+eps_ds.close()
+
+ds = xr.open_dataset(chi_paths[0])
 ds["chi"]             # thermal dissipation rate [K²/s]
 ds["spec_gradT"]      # temperature gradient spectra
 ds["spec_batch"]      # fitted Batchelor spectra
 
 # Method 2: chi without epsilon (MLE fitting)
-chi_results = get_chi("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
-ds = chi_results[0]
+chi_paths = compute_chi_file("VMP/ARCTERX_Thompson_2025_SN479_0005.p", "chi/")
+ds = xr.open_dataset(chi_paths[0])
 ds["chi"]             # thermal dissipation rate [K²/s]
 ds["epsilon_T"]       # epsilon estimated from temperature
 ```
+
+> **Note:** `get_diss()` and `get_chi()` still work for backward compatibility
+> but are deprecated in favor of `run_pipeline()` or the modular
+> `compute_diss_file()` / `compute_chi_file()` functions.
 
 ## Seawater Properties
 

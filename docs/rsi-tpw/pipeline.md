@@ -15,7 +15,10 @@ Run all stages at once from raw `.p` files through epsilon and chi:
 # Process all .p files, output to results/
 rsi-tpw pipeline VMP/*.p -o results/
 
-# Writes results/eps_00/ and results/chi_00/
+# Writes results/{pfile_stem}/profile_NNN/ structure with:
+#   L4_epsilon.nc, L4_chi_epsilon.nc, L4_chi_fit.nc
+#   L5_binned.nc (per-profile depth bins)
+#   L6_combined.nc (all profiles combined)
 ```
 
 ## Stage 1: Convert `.p` files to NetCDF
