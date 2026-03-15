@@ -94,6 +94,44 @@ def compute_speed_fast(
     return speed_fast, W_slow
 
 
+def smooth_speed_interp(
+    speed_slow: np.ndarray,
+    t_fast: np.ndarray,
+    t_slow: np.ndarray,
+    fs_fast: float,
+    tau: float,
+    speed_min: float = 0.05,
+) -> np.ndarray:
+    """Interpolate and smooth profiling speed from slow to fast rate.
+
+    Applies a first-order Butterworth low-pass filter at cutoff
+    ``0.68 / tau`` to the interpolated speed, then clamps to speed_min.
+
+    Parameters
+    ----------
+    speed_slow : ndarray
+        Absolute profiling speed at slow rate [m/s].
+    t_fast, t_slow : ndarray
+        Time vectors for fast and slow rates.
+    fs_fast : float
+        Fast sampling rate [Hz].
+    tau : float
+        Smoothing time constant [s].
+    speed_min : float
+        Minimum profiling speed [m/s].
+
+    Returns
+    -------
+    speed_fast : ndarray
+        Smoothed profiling speed at fast rate [m/s].
+    """
+    pspd_rel = np.interp(t_fast, t_slow, speed_slow)
+    f_c = 0.68 / tau
+    b_f, a_f = butter(1, f_c / (fs_fast / 2.0))
+    pspd_rel = filtfilt(b_f, a_f, pspd_rel)
+    return np.maximum(pspd_rel, speed_min)
+
+
 def get_profiles(
     P: npt.ArrayLike,
     W: npt.ArrayLike,

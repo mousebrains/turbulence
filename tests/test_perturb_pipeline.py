@@ -294,12 +294,12 @@ class TestRunPipeline:
             "binning": {},
         }
 
-    def test_no_files(self, tmp_path, capsys):
-        """run_pipeline with empty file list prints 'No .p files found'."""
+    def test_no_files(self, tmp_path, caplog):
+        """run_pipeline with empty file list logs 'No .p files found'."""
         config = self._base_config(tmp_path)
-        run_pipeline(config, p_files=[])
-        captured = capsys.readouterr()
-        assert "No .p files found" in captured.out
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.pipeline"):
+            run_pipeline(config, p_files=[])
+        assert "No .p files found" in caplog.text
 
     @patch("odas_tpw.perturb.pipeline.process_file", return_value={
         "source": "test.p", "profiles": [], "diss": [], "chi": [],

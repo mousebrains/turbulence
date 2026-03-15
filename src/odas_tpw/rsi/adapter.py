@@ -72,19 +72,14 @@ def pfile_to_l1data(
     if speed is not None:
         pspd_rel = np.full(len(t_fast), abs(speed))
     else:
-        from odas_tpw.scor160.profile import compute_speed_fast, smooth_fall_rate
+        from odas_tpw.scor160.profile import smooth_fall_rate, smooth_speed_interp
 
         # Must filter full P_slow before slicing to avoid Butterworth edge effects
         W_slow_full = smooth_fall_rate(P_slow, pf.fs_slow, tau=speed_tau)
         speed_slow = np.abs(W_slow_full[s_slow : e_slow + 1])
-        pspd_rel = np.interp(t_fast, t_slow, speed_slow)
-
-        from scipy.signal import butter, filtfilt
-
-        f_c = 0.68 / speed_tau
-        b_f, a_f = butter(1, f_c / (pf.fs_fast / 2.0))
-        pspd_rel = filtfilt(b_f, a_f, pspd_rel)
-        pspd_rel = np.maximum(pspd_rel, 0.05)
+        pspd_rel = smooth_speed_interp(
+            speed_slow, t_fast, t_slow, pf.fs_fast, speed_tau,
+        )
 
     # Shear channels — normalize by speed^2 to get du/dz [s^-1]
     shear_names = sorted(n for n in pf._fast_channels if SH_PATTERN.match(n))

@@ -10,13 +10,29 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import numpy as np
 import numpy.typing as npt
 
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
+
+
+class ChannelsDict(TypedDict, total=False):
+    """Type for the dict returned by :func:`load_channels`."""
+
+    shear: list[tuple[str, np.ndarray]]
+    accel: list[tuple[str, np.ndarray]]
+    P: np.ndarray
+    T: np.ndarray
+    t_fast: np.ndarray
+    t_slow: np.ndarray
+    fs_fast: float
+    fs_slow: float
+    is_profile: bool
+    metadata: dict[str, str]
+    vehicle: str
 
 # ---------------------------------------------------------------------------
 # Channel name patterns for RSI instruments
@@ -38,7 +54,7 @@ def load_channels(
     accel_pattern: str = r"^A[xyz]$",
     pressure_name: str = "P",
     temperature_name: str = "T1",
-) -> dict[str, Any]:
+) -> ChannelsDict:
     """Load channel data from any supported source.
 
     Parameters
@@ -92,7 +108,7 @@ def load_channels(
 
 def _channels_from_pfile(
     pf: PFile, sh_pat: str, ac_pat: str, p_name: str, t_name: str
-) -> dict[str, Any]:
+) -> ChannelsDict:
     sh_re = re.compile(sh_pat) if sh_pat != SH_PATTERN.pattern else SH_PATTERN
     ac_re = re.compile(ac_pat) if ac_pat != AC_PATTERN.pattern else AC_PATTERN
     shear = sorted(
@@ -125,7 +141,7 @@ def _channels_from_pfile(
 
 def _channels_from_nc(
     nc_path: Path, sh_pat: str, ac_pat: str, p_name: str, t_name: str
-) -> dict[str, Any]:
+) -> ChannelsDict:
     import netCDF4 as nc
 
     ds = nc.Dataset(str(nc_path), "r")

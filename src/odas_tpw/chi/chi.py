@@ -17,9 +17,33 @@ Peterson, A.K. and I. Fer, 2014: Dissipation measurements using temperature
 """
 
 import warnings
+from typing import NamedTuple
 
 import numpy as np
 from scipy.signal import butter, freqz
+
+
+class ChiEpsilonResult(NamedTuple):
+    """Result from Method 1: chi from known epsilon."""
+
+    chi: float
+    kB: float
+    K_max: float
+    spec_batch: np.ndarray
+    fom: float
+    K_max_ratio: float
+
+
+class ChiFitResult(NamedTuple):
+    """Result from Methods 2 & 3: Batchelor spectrum fitting."""
+
+    kB: float
+    chi: float
+    epsilon: float
+    K_max: float
+    spec_batch: np.ndarray
+    fom: float
+    K_max_ratio: float
 
 from odas_tpw.chi.batchelor import (
     KAPPA_T,
@@ -142,7 +166,7 @@ def _chi_from_epsilon(
     f_AA: float,
     speed: float,
     spectrum_model: str,
-) -> tuple:
+) -> ChiEpsilonResult:
     """Compute chi for one probe in one window, given epsilon (Method 1).
 
     Parameters
@@ -172,32 +196,22 @@ def _chi_from_epsilon(
 
     Returns
     -------
-    chi : float
-        Thermal variance dissipation rate [K²/s].
-    kB : float
-        Batchelor wavenumber [cpm].
-    K_max : float
-        Upper integration limit [cpm].
-    spec_batch : ndarray
-        Fitted Batchelor spectrum.
-    fom : float
-        Figure of merit (observed/model variance ratio).
-    K_max_ratio : float
-        K_max / kB spectral resolution ratio.
+    ChiEpsilonResult
+        Named tuple: (chi, kB, K_max, spec_batch, fom, K_max_ratio).
     """
     grad_func, _q = _spectrum_func(spectrum_model)
 
     kB = float(batchelor_kB(epsilon, nu))
     if kB < 1:
         warnings.warn(f"kB={kB:.1f} < 1 cpm; epsilon too low for chi estimation", stacklevel=2)
-        return np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan
+        return ChiEpsilonResult(np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan)
 
     # Find integration limit: where observed meets noise
     K_AA = f_AA / speed
     valid = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=3)
     if np.sum(valid) < 3:
         warnings.warn("Too few valid wavenumber points for chi integration", stacklevel=2)
-        return np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan
+        return ChiEpsilonResult(np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan)
 
     valid_idx = np.where(valid)[0]
     K_max = K[valid_idx[-1]]
@@ -209,12 +223,12 @@ def _chi_from_epsilon(
     # (chi-independent: Batchelor spectrum scales linearly with chi)
     if obs_var <= 0:
         warnings.warn("Trial chi <= 0; observed variance too low", stacklevel=2)
-        return np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan
+        return ChiEpsilonResult(np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan)
 
     correction = _variance_correction(kB, K_max, speed, tau0, _h2, grad_func)
     if not np.isfinite(correction):
         warnings.warn("Batchelor variance non-positive; cannot compute correction", stacklevel=2)
-        return np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan
+        return ChiEpsilonResult(np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan)
 
     chi = 6 * KAPPA_T * obs_var * correction
 
@@ -230,7 +244,7 @@ def _chi_from_epsilon(
 
     K_max_ratio_val = K_max / kB if kB > 0 else np.nan
 
-    return chi, kB, K_max, spec_batch, fom, K_max_ratio_val
+    return ChiEpsilonResult(chi, kB, K_max, spec_batch, fom, K_max_ratio_val)
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +321,7 @@ def _mle_fit_kB(
     f_AA: float,
     speed: float,
     spectrum_model: str,
-) -> tuple[float, float, float, float, np.ndarray, float, float]:
+) -> ChiFitResult:
     """Maximum-likelihood fit for Batchelor wavenumber kB (Ruddick et al. 2000).
 
     Performs a coarse+fine grid search over kB to minimise the MLE
@@ -328,20 +342,8 @@ def _mle_fit_kB(
 
     Returns
     -------
-    kB_best : float
-        Best-fit Batchelor wavenumber [cpm].
-    chi : float
-        Chi corrected for unresolved variance [K²/s].
-    epsilon : float
-        Epsilon recovered from kB [W/kg].
-    K_max : float
-        Upper fit limit [cpm].
-    spec_batch : ndarray
-        Fitted Batchelor spectrum.
-    fom : float
-        Figure of merit.
-    K_max_ratio : float
-        K_max / kB ratio.
+    ChiFitResult
+        Named tuple: (kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio).
     """
     grad_func, _q = _spectrum_func(spectrum_model)
 
@@ -354,7 +356,7 @@ def _mle_fit_kB(
             warnings.warn("Too few valid points for MLE fit", stacklevel=2)
         else:
             warnings.warn("All NLL values infinite; MLE fit failed", stacklevel=2)
-        return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
+        return ChiFitResult(np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan)
 
     K_max_fit = K_fit[-1]
 
@@ -385,7 +387,7 @@ def _mle_fit_kB(
 
     K_max_ratio_val = K_max_fit / kB_best if kB_best > 0 else np.nan
 
-    return kB_best, chi, epsilon, K_max_fit, spec_batch, fom, K_max_ratio_val
+    return ChiFitResult(kB_best, chi, epsilon, K_max_fit, spec_batch, fom, K_max_ratio_val)
 
 
 def _iterative_fit(
@@ -399,7 +401,7 @@ def _iterative_fit(
     f_AA: float,
     speed: float,
     spectrum_model: str,
-) -> tuple[float, float, float, float, np.ndarray, float, float]:
+) -> ChiFitResult:
     """Iterative MLE fitting (Peterson & Fer 2014, Method 2).
 
     Three iterations refining integration limits and correcting for
@@ -418,8 +420,8 @@ def _iterative_fit(
 
     Returns
     -------
-    kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio
-        Same as :func:`_mle_fit_kB`.
+    ChiFitResult
+        Named tuple: (kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio).
     """
     grad_func, _q = _spectrum_func(spectrum_model)
 
@@ -430,7 +432,7 @@ def _iterative_fit(
     valid_idx = np.where(valid)[0]
     if len(valid_idx) < 6:
         warnings.warn("Too few valid points for iterative fit", stacklevel=2)
-        return np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan
+        return ChiFitResult(np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan)
 
     k_u = K[valid_idx[-1]]
 
@@ -520,7 +522,7 @@ def _iterative_fit(
 
     K_max_ratio_val = k_u / kB_best if np.isfinite(kB_best) and kB_best > 0 else np.nan
 
-    return kB_best, chi, epsilon, k_u, spec_batch, fom, K_max_ratio_val
+    return ChiFitResult(kB_best, chi, epsilon, k_u, spec_batch, fom, K_max_ratio_val)
 
 
 def _bilinear_correction(F: np.ndarray, diff_gain: float, fs: float) -> np.ndarray:

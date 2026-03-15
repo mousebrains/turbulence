@@ -23,9 +23,11 @@ class GPSNaN:
     """Returns NaN for all GPS queries."""
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:
+        """Return NaN latitude for all times."""
         return np.full_like(np.asarray(t, dtype=np.float64), np.nan)
 
     def lon(self, t: npt.ArrayLike) -> np.ndarray:
+        """Return NaN longitude for all times."""
         return np.full_like(np.asarray(t, dtype=np.float64), np.nan)
 
 
@@ -37,9 +39,11 @@ class GPSFixed:
         self._lon = float(lon)
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:
+        """Return fixed latitude for all times."""
         return np.full_like(np.asarray(t, dtype=np.float64), self._lat)
 
     def lon(self, t: npt.ArrayLike) -> np.ndarray:
+        """Return fixed longitude for all times."""
         return np.full_like(np.asarray(t, dtype=np.float64), self._lon)
 
 
@@ -66,9 +70,11 @@ class GPSFromCSV:
         )
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:
+        """Interpolate latitude from CSV at the given times."""
         return np.asarray(self._lat_interp(np.asarray(t, dtype=np.float64)))
 
     def lon(self, t: npt.ArrayLike) -> np.ndarray:
+        """Interpolate longitude from CSV at the given times."""
         return np.asarray(self._lon_interp(np.asarray(t, dtype=np.float64)))
 
 
@@ -95,9 +101,11 @@ class GPSFromNetCDF:
         self._lon_interp = interp1d(t, lon, bounds_error=False, fill_value="extrapolate")
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:
+        """Interpolate latitude from NetCDF at the given times."""
         return np.asarray(self._lat_interp(np.asarray(t, dtype=np.float64)))
 
     def lon(self, t: npt.ArrayLike) -> np.ndarray:
+        """Interpolate longitude from NetCDF at the given times."""
         return np.asarray(self._lon_interp(np.asarray(t, dtype=np.float64)))
 
 

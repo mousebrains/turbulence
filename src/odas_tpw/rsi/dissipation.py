@@ -65,7 +65,7 @@ F_AA_MARGIN = 0.9
 # ---------------------------------------------------------------------------
 
 
-def get_diss(
+def _compute_epsilon(
     source: "PFile | str | Path",
     fft_length: int = 256,
     diss_length: int | None = None,
@@ -80,54 +80,7 @@ def get_diss(
     despike_smooth: float = 0.5,
     salinity: npt.ArrayLike | None = None,
 ) -> list[xr.Dataset]:
-    """Compute epsilon from any source.
-
-    Parameters
-    ----------
-    source : PFile, str, or Path
-        A PFile object, .p file path, full-record .nc,
-        or per-profile .nc.
-    fft_length : int
-        FFT segment length in samples. Default: 256 (0.5 s at 512 Hz).
-    diss_length : int or None
-        Dissipation window in samples. Default: 2 * fft_length.
-    overlap : int or None
-        Window overlap in samples. Default: diss_length // 2.
-    speed : float or None
-        Profiling speed [m/s]. If None, computed from dP/dt.
-    direction : str
-        'up' or 'down' for speed sign convention.
-    goodman : bool
-        Apply Goodman coherent noise removal. Default: True.
-    f_AA : float
-        Anti-aliasing filter cutoff [Hz]. Default: 98.
-    f_limit : float or None
-        Maximum frequency for integration. Default: None (use f_AA).
-    fit_order : int
-        Polynomial order for spectral minimum fit. Default: 3.
-    despike_thresh : float
-        Despike threshold. Default: 8.
-    despike_smooth : float
-        Despike smoothing frequency [Hz]. Default: 0.5.
-    salinity : float or array_like or None
-        Practical salinity [PSU]. If provided, uses gsw-based viscosity
-        instead of visc35. Scalar or array matching slow time series.
-
-    Returns
-    -------
-    list of xarray.Dataset
-        One Dataset per profile. Each contains:
-        epsilon, K_max, speed, nu, T_mean, P_mean, spec_shear,
-        spec_nasmyth, K, mad, fom, K_max_ratio.
-    """
-    warnings.warn(
-        "get_diss() is deprecated. Use run_pipeline() or the modular "
-        "process_l2 → process_l3 → process_l4 chain from odas_tpw.scor160 "
-        "instead. See odas_tpw.rsi.pipeline.run_pipeline().",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
+    """Compute epsilon from any source (internal, no deprecation warning)."""
     from odas_tpw.scor160.io import L2Params, L3Params
     from odas_tpw.scor160.l2 import process_l2
     from odas_tpw.scor160.l3 import process_l3
@@ -315,6 +268,81 @@ def get_diss(
     return results
 
 
+def get_diss(
+    source: "PFile | str | Path",
+    fft_length: int = 256,
+    diss_length: int | None = None,
+    overlap: int | None = None,
+    speed: float | None = None,
+    direction: str = "down",
+    goodman: bool = True,
+    f_AA: float = 98.0,
+    f_limit: float | None = None,
+    fit_order: int = 3,
+    despike_thresh: float = 8,
+    despike_smooth: float = 0.5,
+    salinity: npt.ArrayLike | None = None,
+) -> list[xr.Dataset]:
+    """Compute epsilon from any source.
+
+    .. deprecated::
+        Use :func:`odas_tpw.rsi.pipeline.run_pipeline` or the modular
+        ``process_l2`` → ``process_l3`` → ``process_l4`` chain instead.
+
+    Parameters
+    ----------
+    source : PFile, str, or Path
+        A PFile object, .p file path, full-record .nc,
+        or per-profile .nc.
+    fft_length : int
+        FFT segment length in samples. Default: 256 (0.5 s at 512 Hz).
+    diss_length : int or None
+        Dissipation window in samples. Default: 2 * fft_length.
+    overlap : int or None
+        Window overlap in samples. Default: diss_length // 2.
+    speed : float or None
+        Profiling speed [m/s]. If None, computed from dP/dt.
+    direction : str
+        'up' or 'down' for speed sign convention.
+    goodman : bool
+        Apply Goodman coherent noise removal. Default: True.
+    f_AA : float
+        Anti-aliasing filter cutoff [Hz]. Default: 98.
+    f_limit : float or None
+        Maximum frequency for integration. Default: None (use f_AA).
+    fit_order : int
+        Polynomial order for spectral minimum fit. Default: 3.
+    despike_thresh : float
+        Despike threshold. Default: 8.
+    despike_smooth : float
+        Despike smoothing frequency [Hz]. Default: 0.5.
+    salinity : float or array_like or None
+        Practical salinity [PSU]. If provided, uses gsw-based viscosity
+        instead of visc35. Scalar or array matching slow time series.
+
+    Returns
+    -------
+    list of xarray.Dataset
+        One Dataset per profile. Each contains:
+        epsilon, K_max, speed, nu, T_mean, P_mean, spec_shear,
+        spec_nasmyth, K, mad, fom, K_max_ratio.
+    """
+    warnings.warn(
+        "get_diss() is deprecated. Use run_pipeline() or the modular "
+        "process_l2 → process_l3 → process_l4 chain from odas_tpw.scor160 "
+        "instead. See odas_tpw.rsi.pipeline.run_pipeline().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _compute_epsilon(
+        source, fft_length=fft_length, diss_length=diss_length,
+        overlap=overlap, speed=speed, direction=direction,
+        goodman=goodman, f_AA=f_AA, f_limit=f_limit,
+        fit_order=fit_order, despike_thresh=despike_thresh,
+        despike_smooth=despike_smooth, salinity=salinity,
+    )
+
+
 def _build_diss_dataset(
     *,
     epsilon: np.ndarray,
@@ -409,7 +437,7 @@ def compute_diss_file(
 
     source_path = Path(source_path)
     output_dir = Path(output_dir)
-    results = get_diss(source_path, **diss_kwargs)
+    results = _compute_epsilon(source_path, **diss_kwargs)
     return write_profile_results(results, source_path, output_dir, "eps")
 
 

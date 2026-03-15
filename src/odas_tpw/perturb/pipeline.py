@@ -4,11 +4,14 @@
 Reference: Code/process_P_files.m (233 lines), Code/mat2profile.m (170 lines)
 """
 
+import logging
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from odas_tpw.perturb.config import merge_config, resolve_output_dir
+
+logger = logging.getLogger(__name__)
 
 
 def process_file(
@@ -35,7 +38,7 @@ def process_file(
     from odas_tpw.perturb.ct_align import ct_align
     from odas_tpw.perturb.epsilon_combine import mk_epsilon_mean
     from odas_tpw.perturb.fp07_cal import fp07_calibrate
-    from odas_tpw.rsi.dissipation import get_diss
+    from odas_tpw.rsi.dissipation import _compute_epsilon
     from odas_tpw.rsi.p_file import PFile
     from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
 
@@ -44,7 +47,7 @@ def process_file(
     try:
         pf = PFile(p_path)
     except Exception as exc:
-        print(f"  ERROR loading {p_path.name}: {exc}")
+        logger.error("loading %s: %s", p_path.name, exc)
         return result
 
     # ---- Hotel data injection ----
@@ -71,7 +74,7 @@ def process_file(
                 diagnostics=ctd_cfg.get("diagnostics", False),
             )
         except Exception as exc:
-            print(f"  ERROR CTD binning {p_path.name}: {exc}")
+            logger.error("CTD binning %s: %s", p_path.name, exc)
 
     # ---- Profile fork ----
     profiles_cfg = config.get("profiles", {})
@@ -80,7 +83,7 @@ def process_file(
 
     P_slow = pf.channels.get("P")
     if P_slow is None:
-        print(f"  No pressure channel in {p_path.name}")
+        logger.warning("No pressure channel in %s", p_path.name)
         return result
 
     W = _smooth_fall_rate(P_slow, pf.fs_slow)
@@ -93,7 +96,7 @@ def process_file(
     )
 
     if not profiles:
-        print(f"  No profiles in {p_path.name}")
+        logger.warning("No profiles in %s", p_path.name)
         return result
 
     # FP07 calibration
@@ -110,7 +113,7 @@ def process_file(
             for ch_name, cal_data in cal_result.get("channels", {}).items():
                 pf.channels[ch_name] = cal_data
         except Exception as exc:
-            print(f"  WARNING FP07 cal failed for {p_path.name}: {exc}")
+            logger.warning("FP07 cal failed for %s: %s", p_path.name, exc)
 
     # CT alignment
     if ct_cfg.get("align", True):
@@ -124,7 +127,7 @@ def process_file(
                 )
                 pf.channels[C_name] = C_aligned
             except Exception as exc:
-                print(f"  WARNING CT align failed for {p_path.name}: {exc}")
+                logger.warning("CT align failed for %s: %s", p_path.name, exc)
 
     # Write per-profile NetCDFs
     from odas_tpw.rsi.profile import extract_profiles
@@ -137,7 +140,7 @@ def process_file(
             })
             result["profiles"] = [str(p) for p in prof_paths]
         except Exception as exc:
-            print(f"  ERROR extracting profiles {p_path.name}: {exc}")
+            logger.error("extracting profiles %s: %s", p_path.name, exc)
             return result
 
     # Per-profile dissipation
@@ -145,7 +148,7 @@ def process_file(
     if "diss" in output_dirs and result["profiles"]:
         for prof_path in result["profiles"]:
             try:
-                diss_results = get_diss(
+                diss_results = _compute_epsilon(
                     prof_path,
                     **{k: v for k, v in eps_cfg.items()
                        if k not in (
@@ -160,13 +163,13 @@ def process_file(
                     ds.to_netcdf(out_path)
                     result["diss"].append(str(out_path))
             except Exception as exc:
-                print(f"  ERROR diss for {Path(prof_path).name}: {exc}")
+                logger.error("diss for %s: %s", Path(prof_path).name, exc)
 
     # Per-profile chi (if enabled)
     chi_cfg = config.get("chi", {})
     if chi_cfg.get("enable", False) and "chi" in output_dirs and result["diss"]:
         try:
-            from odas_tpw.rsi.chi_io import get_chi
+            from odas_tpw.rsi.chi_io import _compute_chi
         except ImportError:
             pass
         else:
@@ -175,7 +178,7 @@ def process_file(
                     import xarray as xr
 
                     diss_ds = xr.open_dataset(diss_path)
-                    chi_results = get_chi(
+                    chi_results = _compute_chi(
                         prof_path,
                         epsilon_ds=diss_ds,
                         **{k: v for k, v in chi_cfg.items()
@@ -188,7 +191,7 @@ def process_file(
                         chi_ds.to_netcdf(out_path)
                         result["chi"].append(str(out_path))
                 except Exception as exc:
-                    print(f"  ERROR chi for {Path(prof_path).name}: {exc}")
+                    logger.error("chi for %s: %s", Path(prof_path).name, exc)
 
     return result
 
@@ -216,9 +219,9 @@ def run_trim(config: dict, p_files: list[Path] | None = None) -> list[Path]:
         try:
             trimmed = trim_p_file(p, trim_dir)
             results.append(trimmed)
-            print(f"  Trimmed: {trimmed.name}")
+            logger.info("Trimmed: %s", trimmed.name)
         except Exception as exc:
-            print(f"  ERROR trimming {p.name}: {exc}")
+            logger.error("trimming %s: %s", p.name, exc)
     return results
 
 
@@ -240,9 +243,9 @@ def run_merge(config: dict) -> list[Path]:
         try:
             merged = merge_p_files(chain, merge_dir)
             results.append(merged)
-            print(f"  Merged {len(chain)} files -> {merged.name}")
+            logger.info("Merged %d files -> %s", len(chain), merged.name)
         except Exception as exc:
-            print(f"  ERROR merging: {exc}")
+            logger.error("merging: %s", exc)
     return results
 
 
@@ -308,21 +311,21 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         p_files = find_p_files(root, pattern)
 
     if not p_files:
-        print("No .p files found")
+        logger.warning("No .p files found")
         return
 
-    print(f"Found {len(p_files)} .p files")
+    logger.info("Found %d .p files", len(p_files))
 
     # Trim
     if files_cfg.get("trim", True):
-        print("Trimming...")
+        logger.info("Trimming...")
         trimmed = run_trim(config, p_files)
         if trimmed:
             p_files = trimmed
 
     # Merge
     if files_cfg.get("merge", False):
-        print("Merging...")
+        logger.info("Merging...")
         run_merge(config)
 
     # Setup output directories
@@ -344,7 +347,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             hotel_cfg.get("time_format", "auto"),
             hotel_cfg.get("channels", {}),
         )
-        print(f"Loaded hotel file: {len(hotel_data.channels)} channels")
+        logger.info("Loaded hotel file: %d channels", len(hotel_data.channels))
 
     # Parallel processing
     parallel_cfg = config.get("parallel", {})
@@ -352,11 +355,11 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     if jobs == 0:
         jobs = os.cpu_count() or 1
 
-    print(f"Processing {len(p_files)} files (jobs={jobs})...")
+    logger.info("Processing %d files (jobs=%d)...", len(p_files), jobs)
 
     if jobs == 1:
         for p_path in p_files:
-            print(f"  Processing {p_path.name}...")
+            logger.info("Processing %s...", p_path.name)
             process_file(p_path, config, gps, output_dirs,
                          hotel_data=hotel_data, hotel_cfg=hotel_cfg)
     else:
@@ -370,9 +373,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 p = futures[future]
                 try:
                     future.result()
-                    print(f"  Done: {p.name}")
+                    logger.info("Done: %s", p.name)
                 except Exception as exc:
-                    print(f"  ERROR {p.name}: {exc}")
+                    logger.error("%s: %s", p.name, exc)
 
     # Binning
     binning_cfg = config.get("binning", {})
@@ -388,7 +391,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     # Bin profiles
     prof_ncs = sorted(output_dirs["profiles"].glob("*.nc")) if "profiles" in output_dirs else []
     if prof_ncs:
-        print("Binning profiles...")
+        logger.info("Binning profiles...")
         binning_params = merge_config("binning", binning_cfg)
         prof_binned_dir = resolve_output_dir(
             output_root, "profiles_binned", "binning", binning_params,
@@ -404,7 +407,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     # Bin diss
     diss_ncs = sorted(output_dirs["diss"].glob("*.nc")) if "diss" in output_dirs else []
     if diss_ncs:
-        print("Binning dissipation...")
+        logger.info("Binning dissipation...")
         diss_width = binning_cfg.get("diss_width") or bin_width
         diss_agg = binning_cfg.get("diss_aggregation") or aggregation
         ds = bin_diss(diss_ncs, diss_width, diss_agg, bin_method, diagnostics)
@@ -420,7 +423,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     if "chi" in output_dirs:
         chi_ncs = sorted(output_dirs["chi"].glob("*.nc"))
         if chi_ncs:
-            print("Binning chi...")
+            logger.info("Binning chi...")
             chi_width = binning_cfg.get("chi_width") or binning_cfg.get("diss_width") or bin_width
             chi_agg = (
                 binning_cfg.get("chi_aggregation")
@@ -437,7 +440,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 ds.to_netcdf(chi_binned_dir / "binned.nc")
 
     # Combo assembly
-    print("Assembling combo files...")
+    logger.info("Assembling combo files...")
     # TODO: combo from binned directories once binned outputs are per-file
 
-    print("Pipeline complete.")
+    logger.info("Pipeline complete.")

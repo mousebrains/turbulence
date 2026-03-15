@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
 
 
-def get_chi(
+def _compute_chi(
     source: PFile | str | Path,
     epsilon_ds: xr.Dataset | None = None,
     fft_length: int = 512,
@@ -42,66 +42,7 @@ def get_chi(
     spectrum_model: str = "kraichnan",
     salinity: npt.ArrayLike | None = None,
 ) -> list[xr.Dataset]:
-    """Compute chi from temperature gradient spectra.
-
-    Parameters
-    ----------
-    source : PFile, str, or Path
-        Input data (same multi-source support as get_diss).
-    epsilon_ds : xarray.Dataset or None
-        If provided: Method 1 — use known epsilon from shear probes.
-        If None: Method 2 — fit Batchelor spectrum for kB.
-    fft_length : int
-        FFT segment length [samples], default 512.
-    diss_length : int or None
-        Dissipation window length [samples], default 3 * fft_length.
-    overlap : int or None
-        Window overlap [samples], default diss_length // 2.
-    speed : float or None
-        Fixed profiling speed [m/s]. If None, from dP/dt.
-    direction : str
-        'up' or 'down' for speed sign convention.
-    fp07_model : str
-        'single_pole' or 'double_pole' for FP07 transfer function.
-    goodman : bool
-        Apply Goodman coherent noise removal using accelerometers (default True).
-    f_AA : float
-        Anti-aliasing filter cutoff [Hz].
-    fit_method : str
-        Method 2 only: 'mle' (Ruddick et al. 2000) or 'iterative'
-        (Peterson & Fer 2014).
-    spectrum_model : str
-        'batchelor' or 'kraichnan'.
-    salinity : float or array_like or None
-        Practical salinity [PSU]. If provided, uses gsw-based viscosity
-        instead of visc35. Scalar or array matching slow time series.
-
-    Returns
-    -------
-    list of xarray.Dataset, one per profile, with variables:
-        chi         (probe, time) — thermal dissipation rate [K^2/s]
-        epsilon_T   (probe, time) — epsilon from T (Method 2) or input epsilon
-        kB          (probe, time) — Batchelor wavenumber [cpm]
-        K_max_T     (probe, time) — integration limit [cpm]
-        fom         (probe, time) — figure of merit (obs/model variance)
-        K_max_ratio (probe, time) — K_max / kB (spectral resolution)
-        speed       (time) — profiling speed [m/s]
-        nu          (time) — kinematic viscosity [m^2/s]
-        T_mean      (time) — mean temperature [deg C]
-        P_mean      (time) — mean pressure [dbar]
-        spec_gradT  (probe, freq, time) — temperature gradient spectra
-        spec_batch  (probe, freq, time) — fitted Batchelor spectra
-        spec_noise  (probe, freq, time) — noise spectra (per-probe)
-        K           (freq, time) — wavenumber vectors
-    """
-    warnings.warn(
-        "get_chi() is deprecated. Use run_pipeline() or the modular "
-        "process_l2_chi → process_l3_chi → process_l4_chi_* chain "
-        "instead. See odas_tpw.rsi.pipeline.run_pipeline().",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
+    """Compute chi from temperature gradient spectra (internal, no deprecation warning)."""
     from odas_tpw.chi.chi import _spectrum_func
     from odas_tpw.chi.l2_chi import process_l2_chi
     from odas_tpw.chi.l3_chi import process_l3_chi
@@ -234,6 +175,94 @@ def get_chi(
         results.append(ds)
 
     return results
+
+
+def get_chi(
+    source: PFile | str | Path,
+    epsilon_ds: xr.Dataset | None = None,
+    fft_length: int = 512,
+    diss_length: int | None = None,
+    overlap: int | None = None,
+    speed: float | None = None,
+    direction: str = "down",
+    fp07_model: str = "single_pole",
+    goodman: bool = True,
+    f_AA: float = 98.0,
+    fit_method: str = "iterative",
+    spectrum_model: str = "kraichnan",
+    salinity: npt.ArrayLike | None = None,
+) -> list[xr.Dataset]:
+    """Compute chi from temperature gradient spectra.
+
+    .. deprecated::
+        Use :func:`odas_tpw.rsi.pipeline.run_pipeline` or the modular
+        ``process_l2_chi`` → ``process_l3_chi`` → ``process_l4_chi_*``
+        chain instead.
+
+    Parameters
+    ----------
+    source : PFile, str, or Path
+        Input data (same multi-source support as get_diss).
+    epsilon_ds : xarray.Dataset or None
+        If provided: Method 1 — use known epsilon from shear probes.
+        If None: Method 2 — fit Batchelor spectrum for kB.
+    fft_length : int
+        FFT segment length [samples], default 512.
+    diss_length : int or None
+        Dissipation window length [samples], default 3 * fft_length.
+    overlap : int or None
+        Window overlap [samples], default diss_length // 2.
+    speed : float or None
+        Fixed profiling speed [m/s]. If None, from dP/dt.
+    direction : str
+        'up' or 'down' for speed sign convention.
+    fp07_model : str
+        'single_pole' or 'double_pole' for FP07 transfer function.
+    goodman : bool
+        Apply Goodman coherent noise removal using accelerometers (default True).
+    f_AA : float
+        Anti-aliasing filter cutoff [Hz].
+    fit_method : str
+        Method 2 only: 'mle' (Ruddick et al. 2000) or 'iterative'
+        (Peterson & Fer 2014).
+    spectrum_model : str
+        'batchelor' or 'kraichnan'.
+    salinity : float or array_like or None
+        Practical salinity [PSU]. If provided, uses gsw-based viscosity
+        instead of visc35. Scalar or array matching slow time series.
+
+    Returns
+    -------
+    list of xarray.Dataset, one per profile, with variables:
+        chi         (probe, time) — thermal dissipation rate [K^2/s]
+        epsilon_T   (probe, time) — epsilon from T (Method 2) or input epsilon
+        kB          (probe, time) — Batchelor wavenumber [cpm]
+        K_max_T     (probe, time) — integration limit [cpm]
+        fom         (probe, time) — figure of merit (obs/model variance)
+        K_max_ratio (probe, time) — K_max / kB (spectral resolution)
+        speed       (time) — profiling speed [m/s]
+        nu          (time) — kinematic viscosity [m^2/s]
+        T_mean      (time) — mean temperature [deg C]
+        P_mean      (time) — mean pressure [dbar]
+        spec_gradT  (probe, freq, time) — temperature gradient spectra
+        spec_batch  (probe, freq, time) — fitted Batchelor spectra
+        spec_noise  (probe, freq, time) — noise spectra (per-probe)
+        K           (freq, time) — wavenumber vectors
+    """
+    warnings.warn(
+        "get_chi() is deprecated. Use run_pipeline() or the modular "
+        "process_l2_chi → process_l3_chi → process_l4_chi_* chain "
+        "instead. See odas_tpw.rsi.pipeline.run_pipeline().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _compute_chi(
+        source, epsilon_ds=epsilon_ds, fft_length=fft_length,
+        diss_length=diss_length, overlap=overlap, speed=speed,
+        direction=direction, fp07_model=fp07_model, goodman=goodman,
+        f_AA=f_AA, fit_method=fit_method, spectrum_model=spectrum_model,
+        salinity=salinity,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +573,7 @@ def compute_chi_file(
 
     source_path = Path(source_path)
     output_dir = Path(output_dir)
-    results = get_chi(source_path, **chi_kwargs)
+    results = _compute_chi(source_path, **chi_kwargs)
     return write_profile_results(results, source_path, output_dir, "chi")
 
 
