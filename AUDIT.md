@@ -1,14 +1,14 @@
 # Code Quality Audit
 
-**Date**: 2026-03-14 (post-refactoring)
+**Date**: 2026-03-14 (post-improvement)
 **Scope**: Full odas_tpw codebase — architecture, duplication, large functions, testing, infrastructure
-**Prior work**: 14-item refactoring plan executed across 5 phases. ~530 net source lines eliminated, 26 duplicate test functions consolidated. All 1599 tests pass. ATOMIX L1→L4 and L2→L4 benchmarks verified unchanged.
+**Prior work**: 14-item refactoring (5 phases, `4d8436d`), NaN guard fix (`28b3a08`), and 4-phase audit improvement (`db93190`). All 1599 tests pass. ATOMIX L1→L4 and L2→L4 benchmarks verified. MATLAB cross-validation (307 tests) passing.
 
 ---
 
-## Overall Grade: B+ (3.3 / 4.0)
+## Overall Grade: A- (3.7 / 4.0)
 
-The refactoring addressed the worst duplication (dataset builders, CSD, FP07 noise, CLI handlers, config tests) and improved clarity (l3_chi, l3, goodman, compare). Mathematics and MATLAB agreement remain excellent. The codebase is cleaner but carries real structural debt: 10 functions still exceed 150 lines, `p_to_L1` is still 319 lines, the deprecated `get_diss()`/`get_chi()` remain in the hot path, and L1→L4 crashes on 2 of 6 ATOMIX datasets due to missing NaN guards.
+Up from B+ (3.3). The 4-phase improvement addressed the major structural issues: deprecated functions removed from the hot path, `p_to_L1` split into a spec-list pattern, TypedDict/NamedTuple for key return types, structured logging in perturb, and pytest-xdist enabled. The NaN guard in `csd_matrix_batch` (the only P0 issue) was fixed in the prior commit. Mathematics and MATLAB agreement remain excellent. The remaining issues are moderate: `print()`-based status output in rsi/pipeline.py and convert.py, visualization code duplication between quick_look and diss_look, and 9 functions still over 150 lines (all scientifically complex or orchestrators).
 
 ### Grading Breakdown
 
@@ -17,103 +17,101 @@ The refactoring addressed the worst duplication (dataset builders, CSD, FP07 noi
 | 1 | Mathematical correctness | A | Every formula verified against publications | — |
 | 2 | MATLAB/ODAS agreement | A | 307/307 cross-validation passing | Known speed difference in scalar spectra |
 | 3 | Unit consistency | A | Consistent throughout | — |
-| 4 | Architecture & duplication | B | Single pipeline; duplication cut ~50%; shared builders; consolidated CSD/FP07/CLI | Speed computation still scattered (6 sites); fp07 scalar/batch still share ~20 lines of T-dependent code; `get_diss`/`get_chi` deprecated but still in CLI hot path |
-| 5 | Large functions | C+ | 55→49 over 80 lines; 14→10 over 150 lines; l3_chi cut from 246→110; dataset builders from 175→62 | `p_to_L1` still 319 lines; `run_pipeline` still 288; `get_diss`/`get_chi` still 248/207 |
-| 6 | Dead code | A- | 1 TODO marker; no unused functions | Deprecated `get_diss`/`get_chi` still the only path from CLI |
-| 7 | Test coverage | A- | 871 test functions, 54 files; 0 duplicate config tests; MATLAB + ATOMIX cross-validation | 11 silent skip calls; viewers smoke-tested only; no corrupt `.p` file tests |
-| 8 | Public API | B | 50 exports; clean package layering | Deprecation cycle incomplete: CLI → `compute_diss_file` → `get_diss()` → warns |
-| 9 | Type annotations | B- | scor160 and chi well-typed; mypy in CI | 17 modules suppressing 6 error codes; `load_channels()` returns `dict[str, Any]`; viewers untyped |
-| 10 | Docstrings | B- | Algorithm functions excellent; all perturb private helpers now documented | 10 GPS protocol methods lack docstrings; `p_to_L1` internal logic underdocumented |
-| 11 | Error handling | B- | warnings.warn at NaN/clamp sites; narrowed exceptions | **L1→L4 crashes on 2/6 ATOMIX datasets** (NaN in L2 shear hits `scipy.signal.detrend`); print-based logging in perturb |
-| 12 | Infrastructure | A- | CI matrix (3 OS × 2 Python); ruff + mypy; 70% coverage; release workflow | pytest-xdist installed but unused; MATLAB tests skip silently |
+| 4 | Architecture & duplication | A- | Single pipeline; shared builders; speed computation centralized via `smooth_speed_interp`; deprecation cycle complete; clean DAG (scor160→chi→rsi→perturb, no cycles) | Visualization code duplicated between quick_look.py and diss_look.py (~100 lines); FP07 noise scalar/batch share ~15 lines of T-dependent code |
+| 5 | Large functions | B | 9 over 150 lines (down from 14); `p_to_L1` split (319→144 lines); `get_diss`/`get_chi` are now 5-line wrappers | 9 >150-line functions are scientifically complex (L3, L4, binary parsing, spectral) or orchestrators — further splitting would hurt readability |
+| 6 | Dead code | A | 1 TODO marker; no unused functions; deprecated wrappers are thin (5 lines) | — |
+| 7 | Test coverage | A- | 871 test functions, 54 files; 1599 passing; MATLAB + ATOMIX cross-validation | 11 silent skip calls; viewers smoke-tested only; no corrupt `.p` file tests |
+| 8 | Public API | A- | 50 exports; clean package layering; deprecation cycle complete (CLI paths avoid warning) | Deprecated `get_diss`/`get_chi` still exported for backward compat |
+| 9 | Type annotations | B+ | scor160 and chi well-typed; `ChannelsDict` TypedDict; `ChiEpsilonResult`/`ChiFitResult` NamedTuples; ~97% return type coverage | 17 modules suppressing 6 mypy error codes (NumPy false positives); 6 tuple returns in scor160 (despike, goodman, spectral) still untyped; viewers untyped |
+| 10 | Docstrings | B+ | Algorithm functions excellent; GPS protocol methods documented; perturb private helpers documented | 4 primary APIs missing docstrings (`diss_look`, `quick_look`, `show`, `main`); ~15 `@property` accessors in io.py lack docstrings |
+| 11 | Error handling | B+ | NaN guard in `csd_matrix_batch` fixed (all 6 ATOMIX datasets pass L1→L4); `warnings.warn` at NaN/clamp sites; structured logging in perturb pipeline | `print()`-based status in rsi/pipeline.py, convert.py, profile.py |
+| 12 | Infrastructure | A | CI matrix (3 OS × 2 Python); ruff + mypy; pytest-xdist enabled (`-n auto`); 70% coverage threshold; codecov integration | MATLAB tests skip silently |
 
 ---
 
 ## Codebase Metrics
 
-| Metric | Before | After | Delta |
-|--------|--------|-------|-------|
+| Metric | Prior Audit | Current | Delta |
+|--------|-------------|---------|-------|
 | Source files | 61 | 61 | — |
-| Source lines | 17,077 | 16,713 | -364 |
-| Test files | 53 | 54 | +1 |
-| Test lines | 12,648 | 12,518 | -130 |
-| Test functions | 901 | 871 | -30 (deduped, parametrized 2×) |
+| Source lines | 16,713 | 16,849 | +136 (new helpers + type defs) |
+| Test files | 54 | 54 | — |
+| Test lines | 12,518 | 12,518 | — |
+| Test functions | 871 | 871 | — |
 | Tests passing | 1,599 | 1,599 | — |
-| Functions >80 lines | 55 | 49 | -6 |
-| Functions >150 lines | 14 | 10 | -4 |
+| Functions >80 lines | 49 | 50 | +1 (`_l1_variable_specs` replaced inline code) |
+| Functions >150 lines | 10 | 9 | -1 |
 | TODO/FIXME markers | 1 | 1 | — |
-| Duplicate config tests | 26 | 0 | -26 |
+| Circular dependencies | 0 | 0 | — |
 
 ### Lines by Subpackage
 
 | Subpackage | Source Lines | Files | Role |
 |------------|-------------|-------|------|
-| rsi | 7,333 | 20 | I/O, pipeline wrappers, CLI, viewers |
-| perturb | 3,634 | 19 | Campaign processing |
-| scor160 | 3,484 | 13 | ATOMIX benchmark, core pipeline |
-| chi | 2,008 | 7 | Thermal dissipation |
+| rsi | 7,398 | 20 | I/O, pipeline wrappers, CLI, viewers |
+| perturb | 3,648 | 19 | Campaign processing |
+| scor160 | 3,539 | 13 | ATOMIX benchmark, core pipeline |
+| chi | 2,010 | 7 | Thermal dissipation |
 | top-level | 254 | 2 | config_base |
 
 ---
 
-## What the Refactoring Fixed
+## What This Improvement Fixed
 
 | Phase | Items | Impact |
 |-------|-------|--------|
-| 1 (scor160) | Goodman bias helper, CSD delegation, l3 split, compare helpers, CLI parameterization | scor160/cli.py: 290→190 lines; spectral.py: `csd_odas` is now a 15-line wrapper; compare.py: 3 report formatters share helpers |
-| 2 (chi) | FP07 noise helpers, L4 chi unification, l3_chi split | fp07.py: eliminated 18-line verbatim duplicate; l3_chi: 246→110 lines with `_SectionResult` dataclass; l4_chi: 2 functions → 1 parameterized + closures |
-| 3 (rsi) | Shared dataset builder, `compute_speed_fast`, channel classification | `_build_diss_dataset`: 175→62 lines; `_build_chi_dataset`: 175→64 lines; both delegate to 38-line shared builder |
-| 4 (perturb) | CLI `_glob_p_files` + `_run_analysis`, missing docstring | perturb/cli.py: 4 copy-pasted handlers → 4 one-liners calling shared helper |
-| 5 (tests) | Config test deduplication | 26 duplicate tests → 27 parametrized tests in `test_config_shared.py` covering both modules; 0 overlap remaining |
+| 1 (deprecation) | Extract `_compute_epsilon()`, `_compute_chi()`; thin wrappers for `get_diss`/`get_chi`; update `compute_diss_file`, `compute_chi_file`, and `perturb/pipeline.py` to call internal functions | CLI no longer emits `DeprecationWarning`; `get_diss`/`get_chi` shrunk to 5-line wrappers |
+| 2 (p_to_L1 split) | `_create_l1_variables()` + `_l1_variable_specs()` extracted; 18 variable blocks → declarative spec list | `p_to_L1()`: 319→144 lines; spec list is self-documenting |
+| 3 (type safety) | `ChannelsDict` TypedDict for `load_channels()`; `ChiEpsilonResult`/`ChiFitResult` NamedTuples in chi.py; GPS `lat()`/`lon()` docstrings | 97% return type coverage; chi fitting returns are named |
+| 4A (logging) | `logging.getLogger(__name__)` in perturb/pipeline.py; 27 `print()` → `logger.info/warning/error`; `logging.basicConfig()` in cli.py | Structured logging; message format preserved |
+| 4B (CI) | `-n auto` added to pytest command | Parallel test execution in CI |
+| 4C (speed helper) | `smooth_speed_interp()` extracted to scor160/profile.py; adapter.py uses it | 6 inline lines → 1 function call; Butterworth filter centralized |
 
 ---
 
 ## Detailed Findings
 
-### 4. Architecture & Duplication — B
+### 4. Architecture & Duplication — A-
 
-**Improved from B-**. The worst duplication is gone: dataset builders, CSD functions, FP07 noise config, CLI handlers, and config tests. What remains is more defensible.
+**Improved from B**. Deprecation cycle complete. Speed computation centralized. No circular dependencies. Module hierarchy is clean: `scor160` (leaf) → `chi` → `rsi` → `perturb`.
 
 #### Remaining issues
 
-**4a. Speed computation still scattered (6 call sites)**
+**4a. Visualization code duplication (~100 lines)**
 
-`smooth_fall_rate()` + interpolate + clamp appears in: `rsi/adapter.py` (manual, due to edge-effect constraint), `rsi/convert.py` (via `compute_speed_fast`), `rsi/helpers.py` (both patterns), `rsi/pipeline.py`, `perturb/pipeline.py`, `perturb/fp07_cal.py`. Three sites use `compute_speed_fast()` as intended; three still call `_smooth_fall_rate` directly because they need only the fall rate, not the full speed pipeline. This is defensible but fragile — the inline Butterworth filter in `adapter.py:75–86` is a maintenance hazard.
+`_draw_chi_spectra()` appears in both `rsi/quick_look.py` (137 lines) and `rsi/diss_look.py` (101 lines) with near-identical matplotlib rendering logic. Could be extracted to a shared viewer helper.
 
-**4b. Deprecated functions still in CLI hot path**
+**4b. FP07 noise: residual T-dependent duplication (~15 lines)**
 
-`rsi-tpw eps` → `compute_diss_file()` → `get_diss()` (deprecated, warns). Same for `rsi-tpw chi` → `compute_chi_file()` → `get_chi()`. Users see deprecation warnings from the tool's own CLI. Either complete the migration (make the CLI call `run_pipeline` or the scor160 chain directly) or remove the deprecation warnings.
+`noise_thermchannel()` and `noise_thermchannel_batch()` in fp07.py still duplicate the R_ratio → scale factor computation. Minor — the scalar version has NaN-guarded warnings; the batch version clips silently.
 
-**4c. FP07 noise: residual T-dependent duplication (~15 lines)**
+**4c. Butter filter pattern (5+ files)**
 
-`noise_thermchannel()` (L374–391) and `noise_thermchannel_batch()` (L495–505) still duplicate the R_ratio → scale factor computation. The scalar version has NaN-guarded warnings; the batch version silently clips. Minor, but the scalar version's warning logic should be shared.
+`butter(1, f_c / (fs / 2.0))` + `filtfilt()` appears in scor160/l2.py, scor160/profile.py, chi/l2_chi.py. Not true duplication — each site has different parameters and types (HP vs LP, shear vs speed vs temperature) — but a centralized `_butter_filter(data, f_c, fs, btype)` helper could reduce boilerplate.
 
-### 5. Large Functions — C+
+### 5. Large Functions — B
 
-**Improved from C**. 6 fewer functions over 80 lines; 4 fewer over 150.
+**Improved from C+**. `p_to_L1` cut from 319→144 lines. `get_diss`/`get_chi` are now 5-line wrappers (down from 248/207). 9 functions remain over 150 lines, all in defensible categories:
 
-| Function | File | Lines | Status |
-|----------|------|-------|--------|
-| `p_to_L1()` | rsi/convert.py | 319 | Channel classification extracted (68 lines out). Still 319 lines — NetCDF variable creation repeated 12× with near-identical patterns. Needs a variable-spec-list approach like the dataset builders. |
-| `run_pipeline()` | rsi/pipeline.py | 288 | Orchestrates 8 steps. Could extract per-step functions but risk is low — each step is self-contained. |
-| `get_diss()` | rsi/dissipation.py | 248 | Deprecated wrapper. Will shrink when deprecation cycle completes. |
-| `get_chi()` | rsi/chi_io.py | 207 | Same. |
-| `process_file()` | perturb/pipeline.py | 180 | 8-stage handler. Acceptable for an orchestrator. |
-| `compute_eps_window()` | rsi/window.py | 163 | Multi-step epsilon estimation. Scientifically complex; splitting would hurt readability. |
-| `process_l3()` | scor160/l3.py | 161 | Down from 178; constants and helpers extracted. Further splitting would fragment the spectral pipeline. |
-| `_read()` | rsi/p_file.py | 160 | Binary parsing. Complex but well-structured. |
-| `compute_chi_window()` | rsi/window.py | 156 | Same as `compute_eps_window` — scientifically dense. |
-| `run_pipeline()` | perturb/pipeline.py | 155 | Orchestrator. Acceptable. |
+| Function | File | Lines | Category |
+|----------|------|-------|----------|
+| `run_pipeline()` | rsi/pipeline.py | 288 | Orchestrator (8 steps) |
+| `_compute_epsilon()` | rsi/dissipation.py | 201 | Scientific pipeline |
+| `process_file()` | perturb/pipeline.py | 180 | Orchestrator (8 stages) |
+| `compute_eps_window()` | rsi/window.py | 163 | Scientifically dense |
+| `process_l3()` | scor160/l3.py | 161 | Spectral pipeline |
+| `_read()` | rsi/p_file.py | 160 | Binary parsing |
+| `compute_chi_window()` | rsi/window.py | 156 | Scientifically dense |
+| `_l1_variable_specs()` | rsi/convert.py | 155 | Declarative spec list |
+| `run_pipeline()` | perturb/pipeline.py | 155 | Orchestrator |
 
-The scientific core functions (spectral estimation, epsilon/chi window computation, binary parsing) are legitimately complex. The remaining targets for splitting are `p_to_L1()` (mechanical NetCDF construction) and completing the `get_diss`/`get_chi` deprecation.
+The scientific core (L3, epsilon/chi window, binary parsing) and orchestrators are legitimately complex. `_l1_variable_specs()` is long because it's a flat list of 18 variable specs — mechanical but clear.
 
-### 6. Dead Code — A-
+### 6. Dead Code — A
 
-1 TODO marker (`perturb/pipeline.py:441`). No unused functions. `get_diss()` and `get_chi()` emit `DeprecationWarning` but are still called by the CLI — they're not dead, but the deprecation cycle is incomplete.
+1 TODO marker (`perturb/pipeline.py:444`). No unused functions. `get_diss()` and `get_chi()` are thin deprecated wrappers — still exported for backward compatibility but not used internally.
 
 ### 7. Test Coverage — A-
-
-**Improved from B+**. Config test duplication eliminated. 27 shared tests now cover both config modules via parametrized fixture.
 
 **871 test functions across 54 files. 1599 passing, 10 skipped.**
 
@@ -124,99 +122,71 @@ The scientific core functions (spectral estimation, epsilon/chi window computati
 | chi | ~5 | ~150 | Good — unit + integration + MATLAB |
 | perturb | ~12 | ~150 | Good — unit + integration |
 | cross-validation | 4 | ~60 | Excellent — 30 .p files validated |
-| config (shared) | 1 | ~54 | New — parametrized over rsi + perturb |
+| config (shared) | 1 | ~54 | Parametrized over rsi + perturb |
+
+**Strengths:**
+- Comprehensive edge case testing (empty arrays, NaN, zero epsilon, short signals)
+- Seeded RNG for reproducibility throughout
+- `pytest.raises()` / `pytest.warns()` for error paths
+- No flaky patterns (no time.sleep, no random seeds)
 
 **Gaps:**
-- **11 `pytest.skip()` calls** — tests skip silently if VMP data missing (down from 76 — fixture-based skips now handled centrally)
-- Viewers smoke-tested only
+- 11 `pytest.skip()` calls for missing VMP data (graceful)
+- Viewers smoke-tested only (no dedicated quick_look/diss_look tests)
 - No tests for corrupt or truncated `.p` files
-- pytest-xdist installed but unused in CI
+- 14 modules lack dedicated test files (most covered indirectly via integration tests)
 
-### 8. Public API — B
+### 8. Public API — A-
 
-50 exports across 4 `__init__.py` files. The deprecation cycle is the main issue: `get_diss` and `get_chi` are exported, deprecated, yet called by the CLI's own `compute_diss_file` and `compute_chi_file`. Users running `rsi-tpw eps` see a `DeprecationWarning` from the tool itself.
+50 exports across 4 `__init__.py` files. Deprecation cycle complete: `compute_diss_file()` and `compute_chi_file()` now call `_compute_epsilon()` and `_compute_chi()` directly. `get_diss()`/`get_chi()` remain exported for backward compat but are thin wrappers that warn + delegate.
 
-### 9. Type Annotations — B-
+### 9. Type Annotations — B+
+
+**Improved from B-**. `ChannelsDict` TypedDict replaces `dict[str, Any]` for `load_channels()` and related functions. `ChiEpsilonResult` and `ChiFitResult` NamedTuples replace 6/7-element bare tuples in chi.py. ~97% return type coverage (6 of ~200+ public functions missing annotations — all in viewers).
 
 | Module Group | Coverage | Notes |
 |-------------|----------|-------|
-| scor160 | ~95% | Solid; dataclasses fully typed |
-| chi core | ~90% | Good |
-| chi/chi.py | ~80% | 7-element return tuples should use NamedTuple |
-| rsi core | ~90% | Good |
-| rsi pipeline | ~80% | `dict[str, Any]` returns from `load_channels()`, `_channels_from_pfile()` |
-| rsi viewers | ~0% | No type hints at all |
-| perturb | ~90% | Good |
+| scor160 | ~95% | Dataclasses fully typed |
+| chi core | ~95% | Good; NamedTuples for fitting results |
+| rsi core | ~95% | Good; TypedDict for channel loading |
+| rsi pipeline | ~90% | Good |
+| rsi viewers | ~0% | No type hints (6 functions) |
+| perturb | ~95% | Good |
 
-17 modules have a blanket mypy override suppressing 6 error codes (`operator`, `index`, `arg-type`, `return-value`, `no-any-return`, `assignment`). This is driven by NumPy array arithmetic false positives — defensible but masks real errors.
+**Remaining opportunities:**
+- 6 tuple returns in scor160 (despike, goodman, spectral) could be NamedTuples
+- 10 dict-returning functions (compare, fp07_cal, etc.) could be TypedDicts
+- 17 modules still suppress mypy error codes (driven by NumPy array arithmetic false positives — defensible)
 
-### 10. Docstrings — B-
+### 10. Docstrings — B+
 
-**Improved from C+**. Perturb private functions now documented (Phase 4B). The `_get_agg_func` docstring was the only one missing and is now added.
+**Improved from B-**. GPS protocol methods now have 1-line docstrings on all 8 `lat()`/`lon()` implementations.
 
-**Remaining gaps:**
-- 10 GPS protocol methods (`lat()`/`lon()` on 5 provider classes) lack docstrings — these are 1-line implementations of a protocol, low severity
-- `p_to_L1()` internal logic (319 lines of NetCDF construction) has minimal inline documentation
-- `rsi/window.py` functions have sparse docstrings for their complexity
+**Remaining gaps (minor):**
+- 4 primary APIs missing docstrings: `diss_look`, `quick_look`, `show`, `scor160/cli.py:main`
+- ~15 `@property` accessors in scor160/io.py (n_shear, n_time, etc.) lack docstrings — these are self-evident from naming
 
-### 11. Error Handling — B-
+### 11. Error Handling — B+
 
-**Downgraded from B** due to the ATOMIX L1→L4 crash.
+**Improved from B-**. The P0 NaN guard in `csd_matrix_batch` is fixed — all 6 ATOMIX benchmark datasets now pass L1→L4. Structured logging in perturb/pipeline.py replaces `print()` calls.
 
-**Critical: L1→L4 crashes on 2 of 6 ATOMIX benchmark datasets.**
+**Remaining:**
+- `print()` status output in rsi/pipeline.py (20 calls), rsi/convert.py (6 calls), rsi/profile.py (2 calls), rsi/helpers.py (1 call) — these are user-facing CLI output, not error handling, but could benefit from logging for consistency
+- `ProcessPoolExecutor` errors in perturb/pipeline.py are logged via `logger.error()`
 
-- **Epsilometer**: L2 processing introduces 28 NaN values (HP filter edge effects on data with NaN at boundaries). 1 of 131 spectral windows contains NaN → `scipy.signal.detrend` raises `ValueError: array must not contain infs or NaNs`.
-- **MSS Baltic**: L1 data contains 19,246 NaN values (instrument gaps). L2 propagates 19,790 NaN. 3 of 33 windows affected → same crash.
-- **Root cause**: `csd_matrix_batch()` calls `_detrend_batch()` → `scipy.signal.detrend()` with no NaN guard. The L2→L4 path works because reference L2 data (from MATLAB) handles NaN differently.
-- **Impact**: The `scor160-tpw l1-l4` command crashes on these datasets. The VMP and Nemo datasets (the ones with clean L1 data) work fine. The rsi pipeline (`rsi-tpw eps`) is not affected because it uses a different spectral path.
-- **Fix**: Replace NaN values before detrending (interpolate or zero-fill within windows), or skip windows containing NaN and warn.
+### 12. Infrastructure — A
 
-**Other error handling gaps:**
-- perturb uses `print()` for logging — no `logging` module anywhere
-- `ProcessPoolExecutor` errors printed to stderr with no summary
+**Improved from A-**. pytest-xdist enabled with `-n auto` in CI.
 
-### 12. Infrastructure — A-
-
-Unchanged. Strong CI, good linting, appropriate coverage threshold.
-
----
-
-## Remaining Refactoring Recommendations
-
-### Previously Completed (this session)
-
-| Item | What Changed |
-|------|-------------|
-| Goodman bias helper | Extracted `_bias_correction()` shared by scalar and batch |
-| CSD consolidation | `csd_odas()` now delegates to `csd_matrix()` |
-| l3 clarity | Module constants `MACOUN_LUECK_K_MAX/DENOM`, extracted `_build_window_arrays` and `_apply_macoun_lueck` |
-| Compare helpers | Extracted `_log_spectral_metrics()` and `_format_report_header()` |
-| scor160 CLI parameterization | 6 handlers → `_run_benchmark(args, levels)` |
-| FP07 noise consolidation | `_unpack_noise_config()` and `_noise_f_intermediates()` shared; `fp07_tau_batch` is thin wrapper |
-| L4 chi unification | `_process_l4_chi()` with strategy closures |
-| l3_chi split | `_SectionResult` dataclass + `_process_section_chi()` helper |
-| Dataset builder merge | `_build_result_dataset()` in helpers.py, used by both diss and chi |
-| `compute_speed_fast` helper | Added to scor160/profile.py, used by convert.py and helpers.py |
-| `p_to_L1` channel classification | Extracted `_classify_channels()` (68 lines) |
-| perturb CLI parameterization | `_glob_p_files()` + `_run_analysis()` shared handler |
-| perturb docstrings | Added missing `_get_agg_func` docstring |
-| Config test deduplication | 27 parametrized tests in `test_config_shared.py`; 0 duplicate tests remaining |
-
-### Remaining
-
-| Priority | Item | Est. Effort | Notes |
-|----------|------|-------------|-------|
-| **P0** | **NaN guard in `csd_matrix_batch`** | Small | Skip or interpolate NaN windows before `detrend`. Crashes L1→L4 on Epsilometer and MSS. |
-| P1 | Complete deprecation cycle | Medium | Make `compute_diss_file`/`compute_chi_file` call scor160 chain directly instead of `get_diss`/`get_chi`. Then remove the deprecated functions. |
-| P1 | Split `p_to_L1()` NetCDF creation | Medium | 319 lines. Variable creation repeated 12× — use a spec list like the dataset builders. |
-| P2 | TypedDict for `load_channels()` return | Small | Replace `dict[str, Any]` with typed structure. 4 call sites. |
-| P2 | GPS protocol method docstrings | Trivial | 10 one-line methods on 5 classes. |
-| P3 | Structured logging in perturb | Medium | Replace `print()` with `logging` module. |
-| P3 | Enable pytest-xdist in CI | Trivial | Add `-n auto` to pytest command. |
+- CI: 3 OS × 2 Python versions, ruff lint, mypy typecheck, pytest-xdist, coverage ≥70%, codecov upload
+- MATLAB linting with miss_hit
+- Concurrency control (cancel-in-progress)
+- All runtime + dev dependencies declared in pyproject.toml
+- Entry points configured for 3 CLIs
 
 ---
 
-## ATOMIX Benchmark Results (post-refactoring)
+## ATOMIX Benchmark Results (post-NaN fix)
 
 ### L2→L4 (all 6 datasets pass)
 
@@ -229,7 +199,7 @@ Unchanged. Strong CI, good linting, appropriate coverage threshold.
 | VMP250 Tidal (cs) | 32 | 96.9–100% | 93.8–96.9% |
 | VMP250 Tidal | 32 | 100% | 96.9–100% |
 
-### L1→L4 (4 of 6 datasets pass)
+### L1→L4 (all 6 datasets pass)
 
 | Dataset | L2 Overlap | L4 ε within factor 2 | Status |
 |---------|-----------|---------------------|--------|
@@ -237,8 +207,21 @@ Unchanged. Strong CI, good linting, appropriate coverage threshold.
 | VMP2000 Faroe Bank | 100% | N/A (ISR, 100% agreement) | **PASS** |
 | VMP250 Tidal (cs) | 100% | 96.9–100% | **PASS** |
 | VMP250 Tidal | 99.8% | 100% | **PASS** |
-| Epsilometer | 100% (L2 ok) | — | **CRASH** — 28 NaN from HP filter edge; 1/131 windows bad |
-| MSS Baltic | 100% (L2 ok) | — | **CRASH** — 19,246 NaN in L1; 3/33 windows bad |
+| Epsilometer | 100% | N/A (ISR, 100% agreement) | **PASS** (NaN guard skips 1/131 bad windows) |
+| MSS Baltic | 100% | N/A (ISR, 100% agreement) | **PASS** (NaN guard skips 3/33 bad windows) |
+
+---
+
+## Remaining Improvements (optional)
+
+| Priority | Item | Est. Effort | Notes |
+|----------|------|-------------|-------|
+| P2 | Extract shared viewer helper for `_draw_chi_spectra` | Medium | ~100 lines duplicated between quick_look.py and diss_look.py |
+| P2 | NamedTuples for scor160 tuple returns | Medium | 6 functions (despike, goodman, spectral) return 4–6-element tuples |
+| P3 | Structured logging in rsi/pipeline.py, convert.py | Medium | ~30 print() calls → logging module |
+| P3 | Centralized butter filter helper | Small | 5+ files duplicate `butter(1, f_c / (fs/2))` pattern |
+| P3 | Viewer type annotations | Medium | 6 public functions in viewers have no type hints |
+| P4 | Corrupt `.p` file test | Small | No tests for truncated/corrupt binary input |
 
 ---
 
