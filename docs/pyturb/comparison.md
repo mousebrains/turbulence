@@ -12,8 +12,8 @@ Both tools were run with matching parameters:
 - Overlap: n_fft // 2 = 256 samples
 
 Epsilon values are compared by interpolating `log10(epsilon)` from
-pyturb-cli onto pyturb's pressure grid. The median ratio
-`pyturb-cli / pyturb` is reported per profile.
+pyturb-cli onto pyturb's pressure grid.  Statistics are computed
+over all pressure-matched bins across all profiles.
 
 *Generated 2026-03-15 from 29 VMP .p files.*
 
@@ -26,22 +26,21 @@ pyturb-cli onto pyturb's pressure grid. The median ratio
 | Profiles compared | 448 |
 | pyturb-cli only | 0 |
 | pyturb only | 11 |
+| Pressure-matched bins (eps_1) | 24932 |
+| Pressure-matched bins (eps_2) | 24932 |
 
-## Epsilon Agreement
+## log10(pyturb-cli / pyturb) Quantiles
 
-Agreement categories based on median |log10(ratio)| per profile:
-- **good**: < 0.15 (within a factor of 1.41)
-- **fair**: 0.15 -- 0.301 (within a factor of 2.0)
-- **poor**: > 0.301 (outside a factor of 2.0)
+Quantiles of `log10(eps_cli / eps_pyturb)` over all pressure-matched bins.  A value of 0 means perfect agreement; +0.04 means pyturb-cli is ~10% higher.
 
-| Variable | median ratio | 5th--95th pctl | range | good | fair | poor |
-|----------|--------------|----------------|-------|------|------|------|
-| `eps_1` | 1.047 | 0.97 -- 1.10 | 0.89 -- 1.16 | 437 | 11 | 0 |
-| `eps_2` | 1.046 | 0.98 -- 1.10 | 0.94 -- 1.21 | 437 | 11 | 0 |
+| Variable | N | Q0 (min) | Q5 | Q50 (median) | Q95 | Q100 (max) |
+|----------|---|----------|----|--------------|-----|------------|
+| `eps_1` | 24932 | -1.455 | -0.204 | +0.020 | +0.324 | +3.141 |
+| `eps_2` | 24932 | -1.537 | -0.210 | +0.021 | +0.335 | +2.607 |
 
-Overall, pyturb-cli epsilon is ~9% higher than pyturb for eps_1 and ~9% higher for eps_2. This small systematic offset is attributable to differences in the spectral estimation method (SCOR-160 vs custom) and Macoun & Lueck spatial response correction (applied in pyturb-cli, not in pyturb).
+At the median, pyturb-cli epsilon is +5% relative to pyturb for eps_1 and +5% for eps_2. The worst-case bin differs by a factor of 1383.7x. The systematic offset is attributable to differences in the spectral estimation method (SCOR-160 vs custom) and Macoun & Lueck spatial response correction (applied in pyturb-cli, not in pyturb).
 
-## Distribution of Per-Profile Epsilon Ratios
+## Distribution of Per-Bin log10(epsilon ratio)
 
 ![Epsilon ratio histograms](epsilon_ratio_histograms.png)
 
