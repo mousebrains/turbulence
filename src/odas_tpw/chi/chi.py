@@ -217,21 +217,38 @@ def _chi_from_epsilon(
     valid_idx = np.where(valid)[0]
     K_max = K[valid_idx[-1]]
 
-    # Integrate observed spectrum
-    obs_var = np.trapezoid(spec_obs[valid], K[valid])
+    # Log-space least-squares fit for chi with kB fixed from epsilon.
+    # Model: chi * Batchelor_unit(K) * H2(K) + noise(K).
+    # Minimises Σ [log(model) - log(obs)]² over valid K, which penalises
+    # over- and under-estimation symmetrically on the log-log plot.
+    # This is more robust than the variance-correction approach when the
+    # epsilon-derived kB doesn't perfectly match the temperature spectrum.
+    B_unit = grad_func(K[valid], kB, 1.0)  # unit-chi Batchelor at valid K
+    s = spec_obs[valid]
+    h2v = H2[valid]
+    nv = noise_K[valid]
 
-    # Correction factor for FP07 rolloff and unresolved variance
-    # (chi-independent: Batchelor spectrum scales linearly with chi)
+    # Initial chi estimate from variance correction (used as grid centre)
+    obs_var = np.trapezoid(s, K[valid])
     if obs_var <= 0:
         warnings.warn("Trial chi <= 0; observed variance too low", stacklevel=2)
         return ChiEpsilonResult(np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan)
 
     correction = _variance_correction(kB, K_max, speed, tau0, _h2, grad_func)
-    if not np.isfinite(correction):
-        warnings.warn("Batchelor variance non-positive; cannot compute correction", stacklevel=2)
-        return ChiEpsilonResult(np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan)
+    chi_vc = 6 * KAPPA_T * obs_var * correction if np.isfinite(correction) else obs_var * 6 * KAPPA_T
 
-    chi = 6 * KAPPA_T * obs_var * correction
+    # Vectorized grid search: 200 chi values spanning 4 decades around chi_vc
+    chi_lo = max(chi_vc * 0.01, 1e-15)
+    chi_hi = chi_vc * 100
+    chi_grid = np.logspace(np.log10(chi_lo), np.log10(chi_hi), 200)
+    # model shape: (200, n_valid)
+    models = chi_grid[:, np.newaxis] * B_unit[np.newaxis, :] * h2v[np.newaxis, :] + nv[np.newaxis, :]
+    models = np.maximum(models, 1e-30)
+    log_s = np.log(np.maximum(s, 1e-30))
+    cost = np.sum((np.log(models) - log_s[np.newaxis, :]) ** 2, axis=1)
+    cost = np.where(np.isfinite(cost), cost, np.inf)
+
+    chi = float(chi_grid[np.argmin(cost)]) if not np.all(np.isinf(cost)) else chi_vc
 
     # Compute fitted Batchelor spectrum for output
     spec_batch = grad_func(K, kB, chi)
