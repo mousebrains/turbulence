@@ -1,0 +1,188 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 900" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#444"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#ea580c"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#059669"/>
+    </marker>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="1" dy="1" stdDeviation="2" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1100" height="900" fill="#fafbfc" rx="8"/>
+
+  <!-- Title -->
+  <text x="550" y="36" text-anchor="middle" font-size="18" font-weight="bold" fill="#1a1a2e">VMP Data Processing Pipeline</text>
+  <text x="550" y="56" text-anchor="middle" font-size="11" fill="#666">ATOMIX / SCOR-160 processing levels with chi extensions</text>
+
+  <!-- ════════ ROW 0: .P + Ancillary -> L0 -> Per-profile ════════ -->
+  <rect x="40" y="72" width="120" height="44" rx="6" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="100" y="92" text-anchor="middle" font-size="12" font-weight="bold" fill="#334155">.P files</text>
+  <text x="100" y="106" text-anchor="middle" font-size="8" fill="#64748b">Rockland binary</text>
+
+  <rect x="40" y="124" width="120" height="44" rx="6" fill="#fef3c7" stroke="#d97706" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="100" y="141" text-anchor="middle" font-size="11" font-weight="bold" fill="#92400e">Ancillary</text>
+  <text x="100" y="158" text-anchor="middle" font-size="8" fill="#b45309">GPS, hotel, ...</text>
+
+  <line x1="160" y1="94" x2="218" y2="102" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="160" y1="146" x2="218" y2="110" stroke="#d97706" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="189" y="87" text-anchor="middle" font-size="8" fill="#666">convert</text>
+
+  <rect x="222" y="80" width="180" height="44" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="312" y="98" text-anchor="middle" font-size="12" font-weight="bold" fill="#1e40af">L0 — Raw NetCDF</text>
+  <text x="312" y="112" text-anchor="middle" font-size="8" fill="#3b82f6">1 file per .P · odas_p2mat</text>
+
+  <line x1="402" y1="102" x2="458" y2="102" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="430" y="95" text-anchor="middle" font-size="8" fill="#666">split profiles</text>
+
+  <!-- ════════ L1_converted ════════ -->
+  <rect x="462" y="80" width="220" height="44" rx="6" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="572" y="98" text-anchor="middle" font-size="12" font-weight="bold" fill="#166534">L1_converted</text>
+  <text x="572" y="112" text-anchor="middle" font-size="8" fill="#15803d">Physical units · per profile</text>
+
+  <line x1="572" y1="124" x2="572" y2="156" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ════════ L2_cleaned ════════ -->
+  <rect x="462" y="160" width="220" height="44" rx="6" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="572" y="178" text-anchor="middle" font-size="12" font-weight="bold" fill="#854d0e">L2_cleaned</text>
+  <text x="572" y="192" text-anchor="middle" font-size="8" fill="#a16207">Despiked, speed-filtered</text>
+
+  <!-- ════════ BRANCHES FROM L2 ════════ -->
+
+  <!-- Left branch: L2 → epsilon chain -->
+  <path d="M 462,182 L 180,182 L 180,260" fill="none" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+  <!-- Right branch: L2 → shared chi spectra -->
+  <path d="M 682,182 L 740,182 L 740,260" fill="none" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ════════════════════════════════════════════════ -->
+  <!-- COLUMN 1: Epsilon chain (left, purple) -->
+  <!-- ════════════════════════════════════════════════ -->
+
+  <text x="180" y="248" text-anchor="middle" font-size="10" font-weight="bold" fill="#5b21b6">ε chain (SCOR-160)</text>
+
+  <!-- L3_spectra -->
+  <rect x="60" y="264" width="240" height="48" rx="6" fill="#fce7f3" stroke="#db2777" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="180" y="284" text-anchor="middle" font-size="12" font-weight="bold" fill="#9d174d">L3_spectra</text>
+  <text x="180" y="298" text-anchor="middle" font-size="8" fill="#be185d">Shear &amp; vibration spectra (Welch)</text>
+
+  <line x1="180" y1="312" x2="180" y2="340" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+  <!-- L4_dissipation -->
+  <rect x="60" y="344" width="240" height="48" rx="6" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="180" y="364" text-anchor="middle" font-size="12" font-weight="bold" fill="#5b21b6">L4_dissipation</text>
+  <text x="180" y="378" text-anchor="middle" font-size="8" fill="#6d28d9">ε · FOM, K_max, QC flags</text>
+
+  <line x1="180" y1="392" x2="180" y2="420" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+  <!-- L5_dissipation_binned -->
+  <rect x="60" y="424" width="240" height="48" rx="6" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="180" y="444" text-anchor="middle" font-size="12" font-weight="bold" fill="#5b21b6">L5_dissipation_binned</text>
+  <text x="180" y="458" text-anchor="middle" font-size="8" fill="#6d28d9">Depth-binned ε per profile</text>
+
+  <line x1="180" y1="472" x2="180" y2="500" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+  <!-- L6_dissipation_combined -->
+  <rect x="40" y="504" width="280" height="36" rx="6" fill="#1e1b4b" stroke="#312e81" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="180" y="527" text-anchor="middle" font-size="12" font-weight="bold" fill="#e0e7ff">L6_dissipation_combined</text>
+
+  <!-- ════════════════════════════════════════════════ -->
+  <!-- SHARED: L3_chi_spectra -->
+  <!-- ════════════════════════════════════════════════ -->
+
+  <text x="740" y="248" text-anchor="middle" font-size="10" font-weight="bold" fill="#334155">χ spectra (shared)</text>
+
+  <rect x="590" y="264" width="300" height="48" rx="6" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="740" y="284" text-anchor="middle" font-size="12" font-weight="bold" fill="#075985">L3_chi_spectra</text>
+  <text x="740" y="298" text-anchor="middle" font-size="8" fill="#0369a1">Temp gradient spectra (Welch + Goodman)</text>
+
+  <!-- Branch from L3_chi_spectra to two chi chains -->
+  <path d="M 665,312 L 560,340" fill="none" stroke="#ea580c" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+  <path d="M 815,312 L 920,340" fill="none" stroke="#059669" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+  <!-- ════════════════════════════════════════════════ -->
+  <!-- COLUMN 2: Chi-epsilon chain (center, orange) -->
+  <!-- ════════════════════════════════════════════════ -->
+
+  <text x="560" y="335" text-anchor="middle" font-size="10" font-weight="bold" fill="#9a3412">χ with ε chain</text>
+
+  <!-- Cross-chain arrow from L4_dissipation to L5_chi_epsilon -->
+  <path d="M 300,368 L 428,368" fill="none" stroke="#ea580c" stroke-width="1.3" stroke-dasharray="5,3" marker-end="url(#arrow-orange)"/>
+  <text x="364" y="360" text-anchor="middle" font-size="8" fill="#ea580c">+ ε from L4</text>
+
+  <!-- L4_chi_epsilon -->
+  <rect x="432" y="344" width="256" height="48" rx="6" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="560" y="364" text-anchor="middle" font-size="12" font-weight="bold" fill="#9a3412">L4_chi_epsilon</text>
+  <text x="560" y="378" text-anchor="middle" font-size="8" fill="#c2410c">χ using ε · Batchelor fit</text>
+
+  <line x1="560" y1="392" x2="560" y2="420" stroke="#ea580c" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+
+  <!-- L5_chi_epsilon_binned -->
+  <rect x="432" y="424" width="256" height="48" rx="6" fill="#fef3c7" stroke="#ea580c" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="560" y="444" text-anchor="middle" font-size="12" font-weight="bold" fill="#9a3412">L5_chi_epsilon_binned</text>
+  <text x="560" y="458" text-anchor="middle" font-size="8" fill="#c2410c">Depth-binned χ per profile</text>
+
+  <line x1="560" y1="472" x2="560" y2="500" stroke="#ea580c" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+
+  <!-- L6_chi_epsilon_combined -->
+  <rect x="410" y="504" width="300" height="36" rx="6" fill="#7c2d12" stroke="#9a3412" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="560" y="527" text-anchor="middle" font-size="12" font-weight="bold" fill="#ffedd5">L6_chi_epsilon_combined</text>
+
+  <!-- ════════════════════════════════════════════════ -->
+  <!-- COLUMN 3: Chi-fit chain (right, green) -->
+  <!-- ════════════════════════════════════════════════ -->
+
+  <text x="920" y="335" text-anchor="middle" font-size="10" font-weight="bold" fill="#065f46">χ fit chain (optional)</text>
+
+  <!-- L4_chi_fit -->
+  <rect x="790" y="344" width="260" height="48" rx="6" fill="#ecfdf5" stroke="#059669" stroke-width="1.5" stroke-dasharray="6,3" filter="url(#shadow)"/>
+  <text x="920" y="364" text-anchor="middle" font-size="12" font-weight="bold" fill="#065f46">L4_chi_fit</text>
+  <text x="920" y="378" text-anchor="middle" font-size="8" fill="#047857">χ without ε · Kraichnan fit</text>
+
+  <line x1="920" y1="392" x2="920" y2="420" stroke="#059669" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+  <!-- L5_chi_fit_binned -->
+  <rect x="790" y="424" width="260" height="48" rx="6" fill="#f0fdf4" stroke="#059669" stroke-width="1.5" stroke-dasharray="6,3" filter="url(#shadow)"/>
+  <text x="920" y="444" text-anchor="middle" font-size="12" font-weight="bold" fill="#065f46">L5_chi_fit_binned</text>
+  <text x="920" y="458" text-anchor="middle" font-size="8" fill="#047857">Depth-binned χ per profile</text>
+
+  <line x1="920" y1="472" x2="920" y2="500" stroke="#059669" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+  <!-- L6_chi_fit_combined -->
+  <rect x="770" y="504" width="300" height="36" rx="6" fill="#064e3b" stroke="#065f46" stroke-width="1.5" stroke-dasharray="6,3" filter="url(#shadow)"/>
+  <text x="920" y="527" text-anchor="middle" font-size="12" font-weight="bold" fill="#d1fae5">L6_chi_fit_combined</text>
+
+  <!-- ════════ LEGEND ════════ -->
+  <rect x="40" y="580" width="1020" height="56" rx="6" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="60" y="600" font-size="10" font-weight="bold" fill="#334155">Legend:</text>
+
+  <rect x="120" y="592" width="14" height="10" rx="2" fill="#ede9fe" stroke="#7c3aed" stroke-width="1"/>
+  <text x="140" y="601" font-size="9" fill="#444">ε chain (SCOR-160)</text>
+
+  <rect x="280" y="592" width="14" height="10" rx="2" fill="#e0f2fe" stroke="#0284c7" stroke-width="1"/>
+  <text x="300" y="601" font-size="9" fill="#444">χ spectra (shared)</text>
+
+  <rect x="440" y="592" width="14" height="10" rx="2" fill="#fff7ed" stroke="#ea580c" stroke-width="1"/>
+  <text x="460" y="601" font-size="9" fill="#444">χ with ε chain</text>
+
+  <rect x="590" y="592" width="14" height="10" rx="2" fill="#ecfdf5" stroke="#059669" stroke-width="1" stroke-dasharray="3,2"/>
+  <text x="610" y="601" font-size="9" fill="#444">χ fit (optional)</text>
+
+  <line x1="720" y1="597" x2="740" y2="597" stroke="#444" stroke-width="1.3" stroke-dasharray="5,3"/>
+  <text x="748" y="601" font-size="9" fill="#444">Cross-chain dep.</text>
+
+  <rect x="860" y="592" width="14" height="10" rx="2" fill="#1e1b4b" stroke="#312e81" stroke-width="1"/>
+  <text x="880" y="601" font-size="9" fill="#444">Combined final products</text>
+
+  <!-- Per-profile container label -->
+  <rect x="40" y="640" width="1020" height="36" rx="4" fill="#e0f2fe" stroke="#0284c7" stroke-width="1"/>
+  <text x="550" y="660" text-anchor="middle" font-size="10" fill="#0369a1">L1 through L5 (and binned levels) are groups within per-profile NetCDF files. Combined files merge all profiles across all .P files in a deployment.</text>
+</svg>

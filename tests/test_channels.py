@@ -3,7 +3,7 @@
 
 import numpy as np
 
-from rsi_python.channels import (
+from odas_tpw.rsi.channels import (
     CONVERTERS,
     convert_aroft_o2,
     convert_aroft_t,
@@ -91,27 +91,27 @@ class TestConvertPoly:
 
 class TestSafeFloat:
     def test_invalid_string(self):
-        from rsi_python.channels import _safe_float
+        from odas_tpw.rsi.channels import _safe_float
 
         assert _safe_float("invalid") == 0.0
 
     def test_invalid_string_custom_default(self):
-        from rsi_python.channels import _safe_float
+        from odas_tpw.rsi.channels import _safe_float
 
         assert _safe_float("invalid", default=42.0) == 42.0
 
     def test_none(self):
-        from rsi_python.channels import _safe_float
+        from odas_tpw.rsi.channels import _safe_float
 
         assert _safe_float(None) == 0.0
 
     def test_none_custom_default(self):
-        from rsi_python.channels import _safe_float
+        from odas_tpw.rsi.channels import _safe_float
 
         assert _safe_float(None, default=-1.0) == -1.0
 
     def test_valid_string(self):
-        from rsi_python.channels import _safe_float
+        from odas_tpw.rsi.channels import _safe_float
 
         assert _safe_float("3.14") == 3.14
 

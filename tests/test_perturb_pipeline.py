@@ -7,14 +7,20 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from perturb.pipeline import _setup_output_dirs, process_file, run_merge, run_pipeline, run_trim
+from odas_tpw.perturb.pipeline import (
+    _setup_output_dirs,
+    process_file,
+    run_merge,
+    run_pipeline,
+    run_trim,
+)
 
 
 def _make_p_file(path: Path, *, endian: str = "<", n_data_records: int = 5,
                  record_size: int = 256, file_number: int = 1,
                  config_content: str = "default_config"):
     """Create a synthetic .p file with valid header structure."""
-    from rsi_python.p_file import _H, HEADER_BYTES, HEADER_WORDS
+    from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS
 
     endian_flag = 1 if endian == "<" else 2
     config_bytes = config_content.encode("ascii")
@@ -153,7 +159,7 @@ class TestProcessFile:
             "chi": {"enable": False},
         }
 
-    @patch("rsi_python.p_file.PFile", side_effect=Exception("corrupt file"))
+    @patch("odas_tpw.rsi.p_file.PFile", side_effect=Exception("corrupt file"))
     def test_load_error(self, mock_pfile, tmp_path):
         """PFile load failure returns result with empty lists."""
         config = self._base_config(tmp_path)
@@ -163,7 +169,7 @@ class TestProcessFile:
         assert result["diss"] == []
         assert result["chi"] == []
 
-    @patch("rsi_python.p_file.PFile")
+    @patch("odas_tpw.rsi.p_file.PFile")
     def test_no_pressure(self, mock_pfile_cls, tmp_path):
         """No 'P' channel in pf.channels returns early with empty profiles."""
         mock_pf = MagicMock()
@@ -176,9 +182,9 @@ class TestProcessFile:
         assert result["profiles"] == []
         assert result["diss"] == []
 
-    @patch("rsi_python.profile.get_profiles", return_value=[])
-    @patch("rsi_python.profile._smooth_fall_rate", return_value=np.zeros(100))
-    @patch("rsi_python.p_file.PFile")
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
     def test_no_profiles(self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path):
         """No profiles detected returns early with empty result."""
         mock_pf = MagicMock()
@@ -191,11 +197,11 @@ class TestProcessFile:
         result = process_file(tmp_path / "test.p", config, None, output_dirs)
         assert result["profiles"] == []
 
-    @patch("rsi_python.profile.extract_profiles", return_value=[Path("/fake/prof.nc")])
-    @patch("perturb.fp07_cal.fp07_calibrate")
-    @patch("rsi_python.profile.get_profiles")
-    @patch("rsi_python.profile._smooth_fall_rate", return_value=np.zeros(100))
-    @patch("rsi_python.p_file.PFile")
+    @patch("odas_tpw.rsi.profile.extract_profiles", return_value=[Path("/fake/prof.nc")])
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
     def test_fp07_cal_disabled(self, mock_pfile_cls, mock_smooth, mock_get_prof,
                                mock_fp07_cal, mock_extract, tmp_path):
         """fp07.calibrate=False skips FP07 calibration."""
@@ -214,12 +220,12 @@ class TestProcessFile:
         process_file(tmp_path / "test.p", config, None, output_dirs)
         mock_fp07_cal.assert_not_called()
 
-    @patch("rsi_python.profile.extract_profiles", return_value=[Path("/fake/prof.nc")])
-    @patch("perturb.ct_align.ct_align")
-    @patch("perturb.fp07_cal.fp07_calibrate", return_value={"channels": {}})
-    @patch("rsi_python.profile.get_profiles")
-    @patch("rsi_python.profile._smooth_fall_rate", return_value=np.zeros(100))
-    @patch("rsi_python.p_file.PFile")
+    @patch("odas_tpw.rsi.profile.extract_profiles", return_value=[Path("/fake/prof.nc")])
+    @patch("odas_tpw.perturb.ct_align.ct_align")
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate", return_value={"channels": {}})
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
     def test_ct_align_disabled(self, mock_pfile_cls, mock_smooth, mock_get_prof,
                                mock_fp07_cal, mock_ct_align, mock_extract, tmp_path):
         """ct.align=False skips CT alignment."""
@@ -243,9 +249,9 @@ class TestProcessFile:
         process_file(tmp_path / "test.p", config, None, output_dirs)
         mock_ct_align.assert_not_called()
 
-    @patch("rsi_python.profile.get_profiles")
-    @patch("rsi_python.profile._smooth_fall_rate", return_value=np.zeros(100))
-    @patch("rsi_python.p_file.PFile")
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
     def test_ctd_disabled(self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path):
         """ctd.enable=False skips CTD binning (ctd_bin_file not called)."""
         mock_pf = MagicMock()
@@ -259,9 +265,95 @@ class TestProcessFile:
         output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss",
                        "ctd": tmp_path / "ctd"}
 
-        with patch("perturb.ctd.ctd_bin_file") as mock_ctd_bin:
+        with patch("odas_tpw.perturb.ctd.ctd_bin_file") as mock_ctd_bin:
             process_file(tmp_path / "test.p", config, None, output_dirs)
             mock_ctd_bin.assert_not_called()
+
+    @patch("odas_tpw.perturb.hotel.interpolate_hotel", return_value={"hotel_T": np.zeros(100)})
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_hotel_data_injection(self, mock_pfile_cls, mock_smooth,
+                                  mock_get_prof, mock_hotel, tmp_path):
+        """Hotel data should be injected into pf.channels when provided."""
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pfile_cls.return_value = mock_pf
+
+        config = self._base_config(tmp_path)
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        hotel_data = MagicMock()
+
+        process_file(tmp_path / "test.p", config, None, output_dirs,
+                     hotel_data=hotel_data)
+        mock_hotel.assert_called_once()
+
+    @patch("odas_tpw.perturb.ctd.ctd_bin_file")
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_ctd_enabled(self, mock_pfile_cls, mock_smooth,
+                         mock_get_prof, mock_ctd_bin, tmp_path):
+        """ctd.enable=True and 'ctd' in output_dirs calls ctd_bin_file."""
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pfile_cls.return_value = mock_pf
+
+        config = self._base_config(tmp_path)
+        config["ctd"]["enable"] = True
+        ctd_dir = tmp_path / "ctd"
+        ctd_dir.mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss",
+                       "ctd": ctd_dir}
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+        mock_ctd_bin.assert_called_once()
+
+    @patch("odas_tpw.rsi.chi_io._compute_chi", return_value=[MagicMock()])
+    @patch("odas_tpw.rsi.dissipation._compute_epsilon")
+    @patch("odas_tpw.rsi.profile.extract_profiles")
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate", return_value={"channels": {}})
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_chi_enabled(self, mock_pfile_cls, mock_smooth, mock_get_prof,
+                         mock_fp07_cal, mock_extract, mock_eps,
+                         mock_chi, tmp_path):
+        """chi.enable=True with profiles and diss results calls _compute_chi."""
+        import xarray as xr
+
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = [{"start": 0, "end": 50}]
+
+        # Set up profile + diss output paths
+        prof_dir = tmp_path / "profiles"
+        prof_dir.mkdir(parents=True, exist_ok=True)
+        diss_dir = tmp_path / "diss"
+        diss_dir.mkdir(parents=True, exist_ok=True)
+        chi_dir = tmp_path / "chi"
+        chi_dir.mkdir(parents=True, exist_ok=True)
+
+        prof_nc = prof_dir / "prof.nc"
+        prof_nc.touch()
+        mock_extract.return_value = [prof_nc]
+
+        # Create a minimal diss netcdf
+        diss_nc = diss_dir / "prof.nc"
+        ds = xr.Dataset({"epsilon": (("time",), [1e-8])})
+        ds.to_netcdf(diss_nc)
+        mock_eps.return_value = [ds]
+
+        config = self._base_config(tmp_path)
+        config["chi"]["enable"] = True
+        output_dirs = {"profiles": prof_dir, "diss": diss_dir, "chi": chi_dir}
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+        mock_chi.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -288,19 +380,19 @@ class TestRunPipeline:
             "binning": {},
         }
 
-    def test_no_files(self, tmp_path, capsys):
-        """run_pipeline with empty file list prints 'No .p files found'."""
+    def test_no_files(self, tmp_path, caplog):
+        """run_pipeline with empty file list logs 'No .p files found'."""
         config = self._base_config(tmp_path)
-        run_pipeline(config, p_files=[])
-        captured = capsys.readouterr()
-        assert "No .p files found" in captured.out
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.pipeline"):
+            run_pipeline(config, p_files=[])
+        assert "No .p files found" in caplog.text
 
-    @patch("perturb.pipeline.process_file", return_value={
+    @patch("odas_tpw.perturb.pipeline.process_file", return_value={
         "source": "test.p", "profiles": [], "diss": [], "chi": [],
     })
-    @patch("perturb.pipeline._setup_output_dirs", return_value={})
-    @patch("perturb.gps.create_gps", return_value=None)
-    @patch("perturb.pipeline.run_trim")
+    @patch("odas_tpw.perturb.pipeline._setup_output_dirs", return_value={})
+    @patch("odas_tpw.perturb.gps.create_gps", return_value=None)
+    @patch("odas_tpw.perturb.pipeline.run_trim")
     def test_trim_disabled(self, mock_run_trim, mock_gps, mock_dirs,
                            mock_proc, tmp_path):
         """files.trim=False skips run_trim call."""

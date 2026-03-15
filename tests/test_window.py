@@ -4,13 +4,13 @@
 import numpy as np
 import pytest
 
-from rsi_python.ocean import visc35
-from rsi_python.window import (
+from odas_tpw.rsi.window import (
     ChiWindowResult,
     EpsWindowResult,
     compute_chi_window,
     compute_eps_window,
 )
+from odas_tpw.scor160.ocean import visc35
 
 # ---------------------------------------------------------------------------
 # compute_eps_window

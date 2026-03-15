@@ -1,17 +1,17 @@
-"""Edge-case tests for various rsi_python modules."""
+"""Edge-case tests for various rsi modules."""
 
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from rsi_python.batchelor import batchelor_grad
-from rsi_python.despike import despike
-from rsi_python.fp07 import FP07NoiseConfig, noise_thermchannel
-from rsi_python.goodman import clean_shear_spec
-from rsi_python.nasmyth import nasmyth
-from rsi_python.ocean import visc35
-from rsi_python.spectral import csd_odas
+from odas_tpw.chi.batchelor import batchelor_grad
+from odas_tpw.chi.fp07 import FP07NoiseConfig, noise_thermchannel
+from odas_tpw.scor160.despike import despike
+from odas_tpw.scor160.goodman import clean_shear_spec
+from odas_tpw.scor160.nasmyth import nasmyth
+from odas_tpw.scor160.ocean import visc35
+from odas_tpw.scor160.spectral import csd_odas
 
 VMP_DIR = Path(__file__).resolve().parent.parent / "VMP"
 P_FILES = sorted(VMP_DIR.glob("*.p"))
@@ -100,7 +100,7 @@ class TestCsdOdasEdgeCases:
 @pytest.mark.skipif(not P_FILES, reason="No VMP .p files available")
 class TestExtractProfiles:
     def test_extract_profiles_writes_nc(self, tmp_path):
-        from rsi_python.profile import extract_profiles
+        from odas_tpw.rsi.profile import extract_profiles
 
         paths = extract_profiles(P_FILES[0], tmp_path)
         assert len(paths) > 0
@@ -124,7 +124,7 @@ class TestExtractProfiles:
     def test_extract_profiles_roundtrip(self, tmp_path):
         import netCDF4 as nc
 
-        from rsi_python.profile import extract_profiles
+        from odas_tpw.rsi.profile import extract_profiles
 
         paths = extract_profiles(P_FILES[0], tmp_path)
         assert len(paths) > 0
@@ -138,13 +138,13 @@ class TestExtractProfiles:
 
     def test_extract_profiles_from_nc(self, tmp_path):
         """Exercise _load_from_nc by extracting profiles from a .nc file."""
-        from rsi_python.convert import p_to_netcdf
-        from rsi_python.profile import extract_profiles
+        from odas_tpw.rsi.convert import p_to_L1
+        from odas_tpw.rsi.profile import extract_profiles
 
         # Convert .p to .nc first
         nc_dir = tmp_path / "nc"
         nc_dir.mkdir()
-        _pf, nc_path = p_to_netcdf(P_FILES[0], nc_dir / "full.nc")
+        _pf, nc_path = p_to_L1(P_FILES[0], nc_dir / "full.nc")
 
         # Extract profiles from the .nc file
         prof_dir = tmp_path / "profiles"
@@ -159,13 +159,72 @@ class TestExtractProfiles:
 
     def test_extract_one_worker(self, tmp_path):
         """Exercise _extract_one parallel worker wrapper."""
-        from rsi_python.profile import _extract_one
+        from odas_tpw.rsi.profile import _extract_one
 
         source_str, count = _extract_one((P_FILES[0], tmp_path, {}))
         assert source_str == str(P_FILES[0])
         assert count > 0
         nc_files = list(tmp_path.glob("*.nc"))
         assert len(nc_files) == count
+
+
+# ---------------------------------------------------------------------------
+# profile.py — NC-path tests using sample_nc_file fixture
+# ---------------------------------------------------------------------------
+
+
+class TestExtractProfilesFromNC:
+    """Tests for extract_profiles() and _load_from_nc() with NC input."""
+
+    def test_extract_profiles_from_nc_sample(self, sample_nc_file, tmp_path):
+        """extract_profiles should work with NC input and produce profile NCs."""
+        from odas_tpw.rsi.profile import extract_profiles
+
+        prof_dir = tmp_path / "profiles"
+        paths = extract_profiles(sample_nc_file, prof_dir)
+        assert len(paths) > 0
+        for p in paths:
+            assert p.suffix == ".nc"
+            assert p.exists()
+
+    def test_load_from_nc_fields(self, sample_nc_file):
+        """_load_source should return dict with expected keys for NC input."""
+        from odas_tpw.rsi.profile import _load_source
+
+        data = _load_source(sample_nc_file)
+        assert "P" in data
+        assert "fs_fast" in data
+        assert "fs_slow" in data
+        assert "channels" in data
+        assert "stem" in data
+        assert data["fs_fast"] > 0
+
+    def test_extract_profiles_flat_pressure(self, tmp_path):
+        """Flat pressure (no profiling) should produce no profiles."""
+        import netCDF4
+
+        from odas_tpw.rsi.profile import extract_profiles
+
+        # Create a synthetic NC with flat pressure
+        nc_path = tmp_path / "flat.nc"
+        ds = netCDF4.Dataset(str(nc_path), "w", format="NETCDF4")
+        n_fast = 4096
+        n_slow = 512
+        ds.fs_fast = 512.0
+        ds.fs_slow = 64.0
+        ds.createDimension("n_fast", n_fast)
+        ds.createDimension("n_slow", n_slow)
+        t_f = ds.createVariable("t_fast", "f8", ("n_fast",))
+        t_f[:] = np.arange(n_fast) / 512.0
+        t_s = ds.createVariable("t_slow", "f8", ("n_slow",))
+        t_s[:] = np.arange(n_slow) / 64.0
+        P = ds.createVariable("P", "f8", ("n_slow",))
+        P[:] = np.full(n_slow, 5.0)  # flat pressure
+        ds.close()
+
+        prof_dir = tmp_path / "profiles"
+        paths = extract_profiles(nc_path, prof_dir)
+        assert len(paths) == 0
 
 
 # ---------------------------------------------------------------------------

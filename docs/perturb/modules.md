@@ -1,6 +1,6 @@
 # Perturb Modules
 
-The `perturb` package (`src/perturb/`) provides batch processing on top of the `rsi_python` science library.
+The `perturb` package (`src/odas_tpw/perturb/`) provides batch processing on top of the `rsi` science library.
 
 | Module | Description |
 |--------|-------------|

@@ -4,8 +4,13 @@
 import numpy as np
 import xarray as xr
 
-from perturb.combo import _glue_lengthwise, _glue_widthwise, make_combo, make_ctd_combo
-from perturb.netcdf_schema import COMBO_SCHEMA, CTD_SCHEMA
+from odas_tpw.perturb.combo import (
+    _glue_lengthwise,
+    _glue_widthwise,
+    make_combo,
+    make_ctd_combo,
+)
+from odas_tpw.perturb.netcdf_schema import COMBO_SCHEMA, CTD_SCHEMA
 
 
 class TestGlueWidthwise:

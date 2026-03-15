@@ -1,6 +1,6 @@
 % generate_odas_p2mat_nc.m
 % Generate CF-compliant NetCDF files containing odas_p2mat channel data
-% for validation of rsi-python PFile conversion against ODAS MATLAB Library.
+% for validation of microstructure-tpw PFile conversion against ODAS MATLAB Library.
 %
 % Usage: Run from the turbulence/ directory with ODAS on the path:
 %   addpath('odas');

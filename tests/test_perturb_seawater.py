@@ -3,7 +3,7 @@
 
 import numpy as np
 
-from perturb.seawater import add_seawater_properties
+from odas_tpw.perturb.seawater import add_seawater_properties
 
 
 class TestAddSeawaterProperties:

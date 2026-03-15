@@ -1,8 +1,8 @@
 # MATLAB Directory
 
-This directory contains MATLAB scripts that support the `rsi_python` package. The files fall into three categories:
+This directory contains MATLAB scripts that support the `odas_tpw.rsi` package. The files fall into three categories:
 
-1. **Python-mirrored implementations** — MATLAB functions that implement the same algorithms as modules in `src/rsi_python/`. These must stay self-consistent: if the Python implementation changes, the corresponding MATLAB function should be updated (or vice versa) so that both produce equivalent results.
+1. **Python-mirrored implementations** — MATLAB functions that implement the same algorithms as modules in `src/odas_tpw/rsi/`. These must stay self-consistent: if the Python implementation changes, the corresponding MATLAB function should be updated (or vice versa) so that both produce equivalent results.
 
 2. **Test data generators** — Scripts that call the ODAS library to produce NetCDF validation files consumed by `tests/test_matlab_*.py`. Re-run these in MATLAB whenever the test expectations change.
 
@@ -12,7 +12,7 @@ This directory contains MATLAB scripts that support the `rsi_python` package. Th
 
 ## 1. Python-Mirrored Implementations
 
-These files are standalone MATLAB reimplementations of algorithms in `src/rsi_python/`. They share the same formulas, constants, and default parameters. When editing the Python side, check the corresponding MATLAB file for consistency (and vice versa).
+These files are standalone MATLAB reimplementations of algorithms in `src/odas_tpw/rsi/`. They share the same formulas, constants, and default parameters. When editing the Python side, check the corresponding MATLAB file for consistency (and vice versa).
 
 | MATLAB file | Python counterpart | Purpose |
 |---|---|---|

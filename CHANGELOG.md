@@ -13,11 +13,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Configuration validation with clear error messages for unknown sections/keys
 - Resolved `config.yaml` written to each output directory for reproducibility
 - Comprehensive documentation in `docs/`: configuration reference, CLI reference, Python API, pipeline guide
+- `scor160-tpw` CLI reference documentation (`docs/scor160/cli.md`)
+- Regression test for parallel Method 1 chi (`test_cmd_chi_method1_parallel`)
 - CHANGELOG
+
+### Fixed
+- `rsi-tpw chi --epsilon-dir` now works in parallel mode (`-j > 1`); previously `epsilon_dir` was ignored and all workers used Method 2
+- Serial chi path now properly closes epsilon datasets via try/finally (prevents resource leak)
+- `perturb run` merge stage now feeds merged files to downstream processing (return value was previously discarded)
 
 ### Changed
 - Output directories now use sequential naming with parameter hash deduplication
 - Each output directory includes a `config.yaml` recording the exact parameters used
+- `README.md`, `CLAUDE.md`, and `docs/rsi-tpw/python_api.md` now use `run_pipeline()` / `compute_diss_file()` / `compute_chi_file()` instead of deprecated `get_diss()` / `get_chi()`
+- `docs/rsi-tpw/pipeline.md` and `docs/rsi-tpw/output_directories.md` updated to reflect actual `{stem}/profile_NNN/` pipeline output layout
+- `docs/perturb/pipeline.md` clarifies that `perturb run` covers trim→merge→process→bin; combo remains a separate `perturb combo` step
+- `docs/perturb/cli.md` now documents `--hotel-file` and `--p-file-root` flags
+- Fixed ~30 stale source paths in `docs/chi_mathematics.md`, `docs/epsilon_mathematics.md`, and `docs/rsi-tpw/vectorization.md` (`rsi/` → `chi/` or `scor160/` as appropriate)
 
 ## [0.1.0] - 2025-03-08
 

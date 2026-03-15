@@ -53,7 +53,7 @@ def _load_p2mat(nc_path: Path) -> dict:
 def file_pair(request):
     """Yield (PFile, nc_dict, p_path) for each matched file pair."""
     p_path, nc_path = request.param
-    from rsi_python.p_file import PFile
+    from odas_tpw.rsi.p_file import PFile
 
     pf = PFile(p_path)
     ref = _load_p2mat(nc_path)
@@ -170,7 +170,7 @@ class TestFallRate:
     def test_fall_rate_sign_and_magnitude(self, file_pair):
         """Python fall rate should match MATLAB W_slow in sign and magnitude."""
         pf, mat, _ = file_pair
-        from rsi_python.profile import _smooth_fall_rate
+        from odas_tpw.rsi.profile import _smooth_fall_rate
 
         py_W = _smooth_fall_rate(pf.channels["P"], pf.fs_slow)
         ml_W = mat["W_slow"]
@@ -182,7 +182,7 @@ class TestFallRate:
     def test_speed_positive(self, file_pair):
         """Speed should be non-negative and correlate well with MATLAB."""
         pf, mat, _ = file_pair
-        from rsi_python.profile import _smooth_fall_rate
+        from odas_tpw.rsi.profile import _smooth_fall_rate
 
         py_W = _smooth_fall_rate(pf.channels["P"], pf.fs_slow)
         py_speed = np.abs(py_W)
@@ -206,7 +206,7 @@ class TestProfiles:
     def test_profiles_found(self, file_pair):
         """Should detect at least one profile (skip short/transit files)."""
         pf, _mat, _ = file_pair
-        from rsi_python.profile import _smooth_fall_rate, get_profiles
+        from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
 
         P = pf.channels["P"]
         if P.max() < 1.0:
@@ -220,7 +220,7 @@ class TestProfiles:
     def test_most_profiles_reach_depth(self, file_pair):
         """Most profiles should reach at least 20 dbar."""
         pf, _mat, _ = file_pair
-        from rsi_python.profile import _smooth_fall_rate, get_profiles
+        from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
 
         P = pf.channels["P"]
         W = _smooth_fall_rate(P, pf.fs_slow)
@@ -234,7 +234,7 @@ class TestProfiles:
     def test_profiles_non_overlapping(self, file_pair):
         """Profiles should not overlap."""
         pf, _mat, _ = file_pair
-        from rsi_python.profile import _smooth_fall_rate, get_profiles
+        from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
 
         P = pf.channels["P"]
         W = _smooth_fall_rate(P, pf.fs_slow)

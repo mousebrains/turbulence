@@ -1,10 +1,10 @@
-# Contributing to rsi-python
+# Contributing to microstructure-tpw
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/mousebrains/rsi-python.git
-cd rsi-python
+git clone https://github.com/mousebrains/turbulence.git
+cd turbulence
 pip install -e ".[dev]"
 ```
 
@@ -20,7 +20,7 @@ python -m pytest -n auto            # parallel (requires VMP data for MATLAB tes
 
 ```bash
 ruff check src/ tests/              # linting
-mypy src/rsi_python/                # type checking
+mypy src/odas_tpw/  # type checking
 ```
 
 ## Pull Request Process

@@ -4,16 +4,16 @@
 
 The Matlab [perturb](https://github.com/jessecusack/perturb) package is a batch-processing pipeline for Rockland VMP/MicroRider data. It takes raw `.p` files through discovery → trimming → merging → profile extraction → FP07 calibration → CT alignment → GPS → seawater properties → dissipation → chi → binning → combo assembly → NetCDF.
 
-This project ports perturb to Python, dropping `.mat` output only. Chi is a separate, optional pipeline stage that runs after dissipation: `get_diss` writes epsilon-only results; `get_chi(epsilon_ds=...)` reads diss output and computes chi via Method 1 (spectral fitting). The Matlab perturb's chi (Osborn-Cox) was experimental — we ignore it and use `rsi_python.chi.get_chi` with the `epsilon_ds` parameter instead. Depth/time binning, combined (combo) NetCDF files, and CTD time-binning with GPS are all retained. The package lives in the same repo as `rsi_python` and reuses its science modules.
+This project ports perturb to Python, dropping `.mat` output only. Chi is a separate, optional pipeline stage that runs after dissipation: `get_diss` writes epsilon-only results; `get_chi(epsilon_ds=...)` reads diss output and computes chi via Method 1 (spectral fitting). The Matlab perturb's chi (Osborn-Cox) was experimental — we ignore it and use `rsi.chi.get_chi` with the `epsilon_ds` parameter instead. Depth/time binning, combined (combo) NetCDF files, and CTD time-binning with GPS are all retained. The package lives in the same repo as `rsi` and reuses its science modules.
 
 ## Architecture
 
-**Same repo, second package** under `src/perturb/`. Both packages are discovered by `setuptools.packages.find` from `src/`. One `pip install -e ".[dev]"` installs everything. Separate CLI entry point: `perturb`.
+**Same repo, second package** under `src/odas_tpw/perturb/`. Both packages are discovered by `setuptools.packages.find` from `src/`. One `pip install -e ".[dev]"` installs everything. Separate CLI entry point: `perturb`.
 
 ## File Layout
 
 ```
-src/perturb/
+src/odas_tpw/perturb/
     __init__.py
     cli.py               # `perturb` entry point with subcommands
     config.py             # YAML config schema, defaults, merge, hashing
@@ -43,45 +43,45 @@ Add to `[project.scripts]`:
 perturb = "perturb.cli:main"
 ```
 
-## Reuse from rsi_python
+## Reuse from rsi
 
 ### Directly called by perturb modules
 
 | Function | Location | Used by |
 |----------|----------|---------|
-| `PFile`, `parse_config` | `rsi_python/p_file.py` | trim, merge, fp07_cal, pipeline |
-| `get_profiles()` | `rsi_python/profile.py` | profile detection |
-| `_smooth_fall_rate()` | `rsi_python/profile.py:36` | fall rate from pressure |
-| `extract_profiles()` | `rsi_python/profile.py` | per-profile NetCDF writing pattern |
-| `get_diss()` | `rsi_python/dissipation.py` | per-probe epsilon computation |
-| `load_channels()` | `rsi_python/dissipation.py` | unified channel loading from .p/.nc |
-| `get_chi(epsilon_ds=...)` | `rsi_python/chi.py` | Method 1 chi (spectral fitting using pre-computed epsilon) |
-| `merge_config()` | `rsi_python/config.py` | three-way config merge |
-| `compute_hash()` | `rsi_python/config.py` | parameter hashing |
-| `resolve_output_dir()` | `rsi_python/config.py` | versioned output directories |
-| `generate_template()` | `rsi_python/config.py` | config template generation |
-| `DEFAULTS` | `rsi_python/config.py` | canonical default values |
-| `p_to_netcdf()` | `rsi_python/convert.py` | NetCDF writing pattern reference |
+| `PFile`, `parse_config` | `rsi/p_file.py` | trim, merge, fp07_cal, pipeline |
+| `get_profiles()` | `rsi/profile.py` | profile detection |
+| `_smooth_fall_rate()` | `rsi/profile.py:36` | fall rate from pressure |
+| `extract_profiles()` | `rsi/profile.py` | per-profile NetCDF writing pattern |
+| `get_diss()` | `rsi/dissipation.py` | per-probe epsilon computation |
+| `load_channels()` | `rsi/dissipation.py` | unified channel loading from .p/.nc |
+| `get_chi(epsilon_ds=...)` | `rsi/chi.py` | Method 1 chi (spectral fitting using pre-computed epsilon) |
+| `merge_config()` | `rsi/config.py` | three-way config merge |
+| `compute_hash()` | `rsi/config.py` | parameter hashing |
+| `resolve_output_dir()` | `rsi/config.py` | versioned output directories |
+| `generate_template()` | `rsi/config.py` | config template generation |
+| `DEFAULTS` | `rsi/config.py` | canonical default values |
+| `p_to_netcdf()` | `rsi/convert.py` | NetCDF writing pattern reference |
 
 ### Used internally by get_diss (not called directly)
 
 | Function | Location | Role |
 |----------|----------|------|
-| `despike()` | `rsi_python/despike.py` | iterative spike removal for shear probes |
-| `clean_shear_spec()` | `rsi_python/goodman.py` | Goodman coherent noise removal via accelerometers |
-| `csd_matrix()` | `rsi_python/spectral.py` | multi-channel cross-spectral density (Welch) |
-| `nasmyth()` | `rsi_python/nasmyth.py` | Nasmyth universal shear spectrum |
-| `visc()`, `visc35()` | `rsi_python/ocean.py` | kinematic viscosity |
+| `despike()` | `rsi/despike.py` | iterative spike removal for shear probes |
+| `clean_shear_spec()` | `rsi/goodman.py` | Goodman coherent noise removal via accelerometers |
+| `csd_matrix()` | `rsi/spectral.py` | multi-channel cross-spectral density (Welch) |
+| `nasmyth()` | `rsi/nasmyth.py` | Nasmyth universal shear spectrum |
+| `visc()`, `visc35()` | `rsi/ocean.py` | kinematic viscosity |
 
 ### Used internally by get_chi (not called directly)
 
 | Function | Location | Role |
 |----------|----------|------|
-| `batchelor_grad()`, `kraichnan_grad()` | `rsi_python/batchelor.py` | temperature gradient spectra |
-| `fp07_transfer()`, `fp07_tau()` | `rsi_python/fp07.py` | FP07 transfer function |
-| `gradT_noise()` | `rsi_python/fp07.py` | electronics noise model |
-| `csd_odas()` | `rsi_python/spectral.py` | spectral density estimation |
-| gradT computation (`chi.py:880`) | `rsi_python/chi.py` | `gradT = fs * diff(T) / speed` (matches ODAS) |
+| `batchelor_grad()`, `kraichnan_grad()` | `rsi/batchelor.py` | temperature gradient spectra |
+| `fp07_transfer()`, `fp07_tau()` | `rsi/fp07.py` | FP07 transfer function |
+| `gradT_noise()` | `rsi/fp07.py` | electronics noise model |
+| `csd_odas()` | `rsi/spectral.py` | spectral density estimation |
+| gradT computation (`chi.py:880`) | `rsi/chi.py` | `gradT = fs * diff(T) / speed` (matches ODAS) |
 
 ### gsw (TEOS-10) — used directly for seawater properties
 
@@ -314,7 +314,7 @@ output_root/
     combo.nc
 ```
 
-Directory versioning follows `rsi_python.config` pattern: `prefix_NN/` with `.params_sha256_{hash}` signature files. Changing parameters creates a new versioned directory.
+Directory versioning follows `rsi.config` pattern: `prefix_NN/` with `.params_sha256_{hash}` signature files. Changing parameters creates a new versioned directory.
 
 ### Profile NetCDF contents (`profiles_00/`)
 - Dims: `time_fast`, `time_slow`
@@ -359,7 +359,7 @@ Directory versioning follows `rsi_python.config` pattern: `prefix_NN/` with `.pa
 ## Module Details
 
 ### `config.py` — YAML Config
-Extends `rsi_python.config` patterns: three-way merge (defaults <- file <- CLI), SHA-256 hashing, sequential versioned output dirs.
+Extends `rsi.config` patterns: three-way merge (defaults <- file <- CLI), SHA-256 hashing, sequential versioned output dirs.
 - `DEFAULTS` dict with all sections and their default values
 - `load_config(path) -> dict` — load YAML, validate sections/keys
 - `merge_config(section, file_values, cli_overrides) -> dict`
@@ -376,7 +376,7 @@ Extends `rsi_python.config` patterns: three-way merge (defaults <- file <- CLI),
 - Reads header via `PFile._parse_header()` to get `record_size`
 - If file size has fractional last record: copies only complete records
 - Returns path to trimmed file (or original if no trimming needed)
-- **Reuses:** `rsi_python.p_file._detect_endian`, `_parse_header`, header constants
+- **Reuses:** `rsi.p_file._detect_endian`, `_parse_header`, header constants
 
 ### `merge.py` — Split File Merging
 - `find_mergeable_files(p_files: list[Path]) -> list[list[Path]]`
@@ -384,7 +384,7 @@ Extends `rsi_python.config` patterns: three-way merge (defaults <- file <- CLI),
 - `merge_p_files(chain: list[Path], output_dir: Path) -> Path`
   - Concatenates data records from chain into single output file
   - First file's header/config preserved; subsequent files contribute only data records
-- **Reuses:** `rsi_python.p_file._detect_endian`, `_parse_header`
+- **Reuses:** `rsi.p_file._detect_endian`, `_parse_header`
 
 ### `fp07_cal.py` — FP07 In-Situ Calibration
 - `fp07_calibrate(pf: PFile, profiles: list[tuple[int,int]], reference: str, order: int, max_lag_seconds: float, must_be_negative: bool) -> dict`
@@ -397,7 +397,7 @@ Extends `rsi_python.config` patterns: three-way merge (defaults <- file <- CLI),
   6. Steinhart-Hart fit: `1/(T+273.15) = a0 + a1*ln(R) + a2*ln(R)^order`
   7. Apply calibration to both fast and slow FP07 data
 - Returns: calibration coefficients, lags, modified channel arrays
-- **Reuses:** `rsi_python.p_file.PFile`, `parse_config`
+- **Reuses:** `rsi.p_file.PFile`, `parse_config`
 
 ### `ct_align.py` — CT Sensor Alignment
 - `ct_align(T: ndarray, C: ndarray, fs: float, profiles: list[tuple[int,int]]) -> ndarray`
@@ -441,7 +441,7 @@ Extends `rsi_python.config` patterns: three-way merge (defaults <- file <- CLI),
   5. Iteratively remove probes outside CI
   6. Geometric mean of surviving probes
 - Adds `epsilonMean`, `epsilonLnSigma` to dataset
-- **Reuses:** `rsi_python.dissipation.get_diss` output structure
+- **Reuses:** `rsi.dissipation.get_diss` output structure
 
 ### `ctd.py` — CTD Time-Binning
 - `ctd_bin_file(pf: PFile, gps: GPSProvider, output_dir: Path, **params) -> Path`
@@ -585,13 +585,13 @@ Built bottom-up by dependency:
 
 | File | Why |
 |------|-----|
-| `src/rsi_python/p_file.py` | PFile class, header parsing, channel reading — reused by trim, merge, fp07_cal |
-| `src/rsi_python/dissipation.py` | `get_diss()` output structure — epsilon_combine must extend it |
-| `src/rsi_python/chi.py` | `get_chi()` with `epsilon_ds` param — Method 1 integration |
-| `src/rsi_python/config.py` | Config patterns to extend: `merge_config`, `compute_hash`, `resolve_output_dir` |
-| `src/rsi_python/cli.py` | CLI patterns: arg parsing, config loading, parallel processing, output dir setup |
-| `src/rsi_python/profile.py` | `get_profiles()`, `extract_profiles()` — profile detection reuse |
-| `src/rsi_python/ocean.py` | `visc()`, `density()` — seawater property base |
+| `src/odas_tpw/rsi/p_file.py` | PFile class, header parsing, channel reading — reused by trim, merge, fp07_cal |
+| `src/odas_tpw/rsi/dissipation.py` | `get_diss()` output structure — epsilon_combine must extend it |
+| `src/odas_tpw/rsi/chi.py` | `get_chi()` with `epsilon_ds` param — Method 1 integration |
+| `src/odas_tpw/rsi/config.py` | Config patterns to extend: `merge_config`, `compute_hash`, `resolve_output_dir` |
+| `src/odas_tpw/rsi/cli.py` | CLI patterns: arg parsing, config loading, parallel processing, output dir setup |
+| `src/odas_tpw/rsi/profile.py` | `get_profiles()`, `extract_profiles()` — profile detection reuse |
+| `src/odas_tpw/rsi/ocean.py` | `visc()`, `density()` — seawater property base |
 | `pyproject.toml` | Add `perturb` CLI entry point |
 
 ### Key Matlab source files (https://github.com/jessecusack/perturb)
@@ -620,7 +620,7 @@ Built bottom-up by dependency:
 
 ## Verification
 
-1. `pip install -e ".[dev]"` — both `rsi_python` and `perturb` install
+1. `pip install -e ".[dev]"` — both `rsi` and `perturb` install
 2. `perturb init test_config.yaml` — generates valid template
 3. `perturb run test_config.yaml` — processes VMP/*.p end-to-end
 4. Profile NetCDFs contain calibrated FP07, aligned CT, seawater properties, GPS
@@ -630,7 +630,7 @@ Built bottom-up by dependency:
 8. Binned NetCDFs contain depth/time-aggregated data with profile dimension (profiles, diss, and chi separately)
 9. Combo NetCDFs merge all files with CF/ACDD compliance (profiles, diss, chi, CTD)
 10. `python -m pytest tests/test_perturb_*.py` — all tests pass
-11. `ruff check src/perturb/` and `mypy src/perturb/` — clean
+11. `ruff check src/odas_tpw/perturb/` and `mypy src/odas_tpw/perturb/` — clean
 12. Compare epsilon values against `rsi-tpw eps` output for consistency
 13. Pipeline order: diss before chi, CTD fork independent of profile fork
 14. `perturb chi config.yaml` works as standalone subcommand (reads diss results)

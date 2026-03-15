@@ -17,6 +17,8 @@ rsi-tpw <subcommand> [options]
 | `rsi-tpw chi`      | Compute chi (thermal variance dissipation) |
 | `rsi-tpw pipeline` | Run full pipeline (`.p` → epsilon → chi) |
 | `rsi-tpw init`     | Generate a template YAML configuration file |
+| `rsi-tpw ql`       | Interactive quick-look viewer |
+| `rsi-tpw dl`       | Interactive dissipation quality viewer |
 
 ## Global Options
 
@@ -154,3 +156,40 @@ rsi-tpw init --force config.yaml  # overwrite existing
 | Flag | Description |
 |------|-------------|
 | `--force` | Overwrite existing file |
+
+## `rsi-tpw ql`
+
+Interactive quick-look viewer with profile navigation. Opens a multi-panel
+display showing pressure, shear spectra, epsilon, and chi for each profile.
+
+```bash
+rsi-tpw ql VMP/*.p
+rsi-tpw ql VMP/*.p --fft-length 512
+```
+
+| Flag | Description |
+|------|-------------|
+| `--fft-length N` | FFT segment length [samples] (default: 256) |
+| `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
+| `--no-goodman` | Disable Goodman coherent noise removal |
+| `--direction {up,down}` | Profile direction (default: down) |
+| `--spec-P-range P_MIN P_MAX` | Pressure range [dbar] for spectral calculations |
+| `--chi-method {1,2}` | Chi method: 1 = from epsilon, 2 = MLE fit (default: 1) |
+| `--spectrum-model {batchelor,kraichnan}` | Theoretical spectrum model (default: kraichnan) |
+
+## `rsi-tpw dl`
+
+Interactive dissipation quality viewer. Compares epsilon, chi (Batchelor vs
+Kraichnan), and Lueck (2022) figure of merit (FM) with profile navigation.
+
+```bash
+rsi-tpw dl VMP/*.p
+```
+
+| Flag | Description |
+|------|-------------|
+| `--fft-length N` | FFT segment length [samples] (default: 256) |
+| `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
+| `--no-goodman` | Disable Goodman coherent noise removal |
+| `--direction {up,down}` | Profile direction (default: down) |
+| `--spec-P-range P_MIN P_MAX` | Pressure range [dbar] for spectral calculations |

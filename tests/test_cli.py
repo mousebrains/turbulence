@@ -10,7 +10,7 @@ import pytest
 def test_help_exits_cleanly(monkeypatch):
     """rsi-tpw --help should exit with code 0."""
     monkeypatch.setattr(sys, "argv", ["rsi-tpw", "--help"])
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     with pytest.raises(SystemExit) as exc_info:
         main()
@@ -21,7 +21,7 @@ def test_init_creates_template(monkeypatch, tmp_path):
     """rsi-tpw init should produce a valid YAML file."""
     out_file = tmp_path / "config.yaml"
     monkeypatch.setattr(sys, "argv", ["rsi-tpw", "init", str(out_file)])
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     main()
     assert out_file.exists()
@@ -41,7 +41,7 @@ def test_init_refuses_overwrite(monkeypatch, tmp_path):
     out_file = tmp_path / "config.yaml"
     out_file.write_text("existing")
     monkeypatch.setattr(sys, "argv", ["rsi-tpw", "init", str(out_file)])
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     with pytest.raises(SystemExit):
         main()
@@ -53,7 +53,7 @@ def test_init_force_overwrites(monkeypatch, tmp_path):
     out_file = tmp_path / "config.yaml"
     out_file.write_text("existing")
     monkeypatch.setattr(sys, "argv", ["rsi-tpw", "init", "--force", str(out_file)])
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     main()
     assert "rsi-tpw configuration" in out_file.read_text()
@@ -68,7 +68,7 @@ def test_config_flag_accepted(monkeypatch, tmp_path):
     monkeypatch.setattr(
         sys, "argv", ["rsi-tpw", "-c", str(cfg), "eps", "-o", str(tmp_path), "nonexistent.p"]
     )
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     with pytest.raises(SystemExit):
         # Will exit because nonexistent.p doesn't exist
@@ -78,7 +78,7 @@ def test_config_flag_accepted(monkeypatch, tmp_path):
 def test_output_required_eps(monkeypatch):
     """rsi-tpw eps without -o should error."""
     monkeypatch.setattr(sys, "argv", ["rsi-tpw", "eps", "VMP/*.p"])
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     with pytest.raises(SystemExit) as exc_info:
         main()
@@ -88,7 +88,7 @@ def test_output_required_eps(monkeypatch):
 def test_output_required_chi(monkeypatch):
     """rsi-tpw chi without -o should error."""
     monkeypatch.setattr(sys, "argv", ["rsi-tpw", "chi", "VMP/*.p"])
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     with pytest.raises(SystemExit) as exc_info:
         main()
@@ -98,7 +98,7 @@ def test_output_required_chi(monkeypatch):
 def test_output_required_prof(monkeypatch):
     """rsi-tpw prof without -o should error."""
     monkeypatch.setattr(sys, "argv", ["rsi-tpw", "prof", "VMP/*.p"])
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     with pytest.raises(SystemExit) as exc_info:
         main()
@@ -108,7 +108,7 @@ def test_output_required_prof(monkeypatch):
 def test_output_required_pipeline(monkeypatch):
     """rsi-tpw pipeline without -o should error."""
     monkeypatch.setattr(sys, "argv", ["rsi-tpw", "pipeline", "VMP/*.p"])
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     with pytest.raises(SystemExit) as exc_info:
         main()
@@ -117,8 +117,8 @@ def test_output_required_pipeline(monkeypatch):
 
 def test_no_config_same_behavior(monkeypatch, tmp_path):
     """Omitting -c should give the same merged params as defaults."""
-    from rsi_python.cli import _merge_for_section
-    from rsi_python.config import DEFAULTS
+    from odas_tpw.rsi.cli import _merge_for_section
+    from odas_tpw.rsi.config import DEFAULTS
 
     # Create a minimal args namespace with all None (no CLI overrides, no config)
     args = type("Args", (), {"config": None})()
@@ -139,14 +139,14 @@ def test_no_config_same_behavior(monkeypatch, tmp_path):
 
 class TestExtractCliOverrides:
     def test_profiles_section(self):
-        from rsi_python.cli import _extract_cli_overrides
+        from odas_tpw.rsi.cli import _extract_cli_overrides
 
         args = SimpleNamespace(P_min=1.0, W_min=None, direction="up", min_duration=None)
         overrides = _extract_cli_overrides(args, "profiles")
         assert overrides == {"P_min": 1.0, "direction": "up"}
 
     def test_epsilon_section(self):
-        from rsi_python.cli import _extract_cli_overrides
+        from odas_tpw.rsi.cli import _extract_cli_overrides
 
         args = SimpleNamespace(
             fft_length=512,
@@ -163,7 +163,7 @@ class TestExtractCliOverrides:
         assert "goodman" not in overrides  # no_goodman is None
 
     def test_epsilon_no_goodman_inverts(self):
-        from rsi_python.cli import _extract_cli_overrides
+        from odas_tpw.rsi.cli import _extract_cli_overrides
 
         args = SimpleNamespace(
             fft_length=None,
@@ -179,7 +179,7 @@ class TestExtractCliOverrides:
         assert overrides["goodman"] is False
 
     def test_chi_section(self):
-        from rsi_python.cli import _extract_cli_overrides
+        from odas_tpw.rsi.cli import _extract_cli_overrides
 
         args = SimpleNamespace(
             fft_length=1024,
@@ -201,7 +201,7 @@ class TestExtractCliOverrides:
         }
 
     def test_epsilon_pipeline_section(self):
-        from rsi_python.cli import _extract_cli_overrides
+        from odas_tpw.rsi.cli import _extract_cli_overrides
 
         args = SimpleNamespace(
             eps_fft_length=512,
@@ -215,7 +215,7 @@ class TestExtractCliOverrides:
         assert overrides == {"fft_length": 512, "f_AA": 50.0, "goodman": False}
 
     def test_chi_pipeline_section(self):
-        from rsi_python.cli import _extract_cli_overrides
+        from odas_tpw.rsi.cli import _extract_cli_overrides
 
         args = SimpleNamespace(
             chi_fft_length=256,
@@ -234,13 +234,13 @@ class TestExtractCliOverrides:
         }
 
     def test_unknown_section_returns_empty(self):
-        from rsi_python.cli import _extract_cli_overrides
+        from odas_tpw.rsi.cli import _extract_cli_overrides
 
         args = SimpleNamespace()
         assert _extract_cli_overrides(args, "nonexistent") == {}
 
     def test_all_none_returns_empty(self):
-        from rsi_python.cli import _extract_cli_overrides
+        from odas_tpw.rsi.cli import _extract_cli_overrides
 
         args = SimpleNamespace(
             fft_length=None,
@@ -263,7 +263,7 @@ class TestExtractCliOverrides:
 
 class TestMergeForSection:
     def test_merge_with_config_file(self, tmp_path):
-        from rsi_python.cli import _merge_for_section
+        from odas_tpw.rsi.cli import _merge_for_section
 
         cfg = tmp_path / "config.yaml"
         cfg.write_text("epsilon:\n  fft_length: 512\n  salinity: 34.5\n")
@@ -286,7 +286,7 @@ class TestMergeForSection:
         assert merged["salinity"] == 34.5
 
     def test_cli_overrides_config_file(self, tmp_path):
-        from rsi_python.cli import _merge_for_section
+        from odas_tpw.rsi.cli import _merge_for_section
 
         cfg = tmp_path / "config.yaml"
         cfg.write_text("epsilon:\n  fft_length: 512\n")
@@ -301,7 +301,7 @@ class TestMergeForSection:
         assert merged["fft_length"] == 1024
 
     def test_pipeline_pseudo_section(self, tmp_path):
-        from rsi_python.cli import _merge_for_section
+        from odas_tpw.rsi.cli import _merge_for_section
 
         cfg = tmp_path / "config.yaml"
         cfg.write_text("epsilon:\n  fft_length: 512\n")
@@ -318,8 +318,8 @@ class TestMergeForSection:
         assert merged["fft_length"] == 512  # from config file epsilon section
 
     def test_no_config_uses_defaults(self):
-        from rsi_python.cli import _merge_for_section
-        from rsi_python.config import DEFAULTS
+        from odas_tpw.rsi.cli import _merge_for_section
+        from odas_tpw.rsi.config import DEFAULTS
 
         args = SimpleNamespace(config=None)
         for key in DEFAULTS["chi"]:
@@ -330,7 +330,7 @@ class TestMergeForSection:
         assert merged["fp07_model"] == "single_pole"
 
     def test_profiles_section(self, tmp_path):
-        from rsi_python.cli import _merge_for_section
+        from odas_tpw.rsi.cli import _merge_for_section
 
         cfg = tmp_path / "config.yaml"
         cfg.write_text("profiles:\n  P_min: 1.0\n  min_duration: 10.0\n")
@@ -354,7 +354,7 @@ class TestMergeForSection:
 
 class TestSetupOutputDir:
     def test_creates_dir_with_signature_file_and_config(self, tmp_path):
-        from rsi_python.cli import _setup_output_dir
+        from odas_tpw.rsi.cli import _setup_output_dir
 
         args = SimpleNamespace(output=str(tmp_path))
         d = _setup_output_dir(args, "eps", "epsilon", {"fft_length": 256})
@@ -364,7 +364,7 @@ class TestSetupOutputDir:
         assert list(d.glob(".params_sha256_*"))
 
     def test_with_upstream(self, tmp_path):
-        from rsi_python.cli import _setup_output_dir
+        from odas_tpw.rsi.cli import _setup_output_dir
 
         args = SimpleNamespace(output=str(tmp_path))
         upstream = [("epsilon", {"fft_length": 256})]
@@ -379,7 +379,7 @@ class TestSetupOutputDir:
         assert "chi" in content
 
     def test_pipeline_section_stripped(self, tmp_path):
-        from rsi_python.cli import _setup_output_dir
+        from odas_tpw.rsi.cli import _setup_output_dir
 
         args = SimpleNamespace(output=str(tmp_path))
         d = _setup_output_dir(args, "eps", "epsilon_pipeline", {"fft_length": 256})
@@ -401,19 +401,19 @@ class TestSetupOutputDir:
 
 class TestLoadFileConfig:
     def test_no_config_returns_empty(self):
-        from rsi_python.cli import _load_file_config
+        from odas_tpw.rsi.cli import _load_file_config
 
         args = SimpleNamespace(config=None)
         assert _load_file_config(args) == {}
 
     def test_missing_attr_returns_empty(self):
-        from rsi_python.cli import _load_file_config
+        from odas_tpw.rsi.cli import _load_file_config
 
         args = SimpleNamespace()
         assert _load_file_config(args) == {}
 
     def test_loads_config(self, tmp_path):
-        from rsi_python.cli import _load_file_config
+        from odas_tpw.rsi.cli import _load_file_config
 
         cfg = tmp_path / "config.yaml"
         cfg.write_text("epsilon:\n  fft_length: 512\n")
@@ -431,7 +431,7 @@ def test_init_default_path(monkeypatch, tmp_path):
     """rsi-tpw init with no args should default to config.yaml."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["rsi-tpw", "init"])
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     main()
     assert (tmp_path / "config.yaml").exists()
@@ -444,7 +444,7 @@ def test_init_default_path(monkeypatch, tmp_path):
 
 def test_resolve_p_files_single(sample_p_file):
     """_resolve_p_files with a real .p file path should return it."""
-    from rsi_python.cli import _resolve_p_files
+    from odas_tpw.rsi.cli import _resolve_p_files
 
     result = _resolve_p_files([str(sample_p_file)])
     assert len(result) == 1
@@ -453,7 +453,7 @@ def test_resolve_p_files_single(sample_p_file):
 
 def test_resolve_p_files_no_match():
     """_resolve_p_files with no matching glob should exit(1)."""
-    from rsi_python.cli import _resolve_p_files
+    from odas_tpw.rsi.cli import _resolve_p_files
 
     with pytest.raises(SystemExit) as exc_info:
         _resolve_p_files(["nonexistent_dir_xyz/*.p"])
@@ -462,7 +462,7 @@ def test_resolve_p_files_no_match():
 
 def test_resolve_files_with_extensions(sample_p_file):
     """_resolve_files should filter by extension set."""
-    from rsi_python.cli import _resolve_files
+    from odas_tpw.rsi.cli import _resolve_files
 
     result = _resolve_files([str(sample_p_file)], extensions={".p"})
     assert len(result) == 1
@@ -471,7 +471,7 @@ def test_resolve_files_with_extensions(sample_p_file):
 
 def test_resolve_files_no_match():
     """_resolve_files with no matching files should exit(1)."""
-    from rsi_python.cli import _resolve_files
+    from odas_tpw.rsi.cli import _resolve_files
 
     with pytest.raises(SystemExit) as exc_info:
         _resolve_files(["nonexistent_dir_xyz/*"], extensions={".p", ".nc"})
@@ -486,7 +486,7 @@ def test_resolve_files_no_match():
 def test_cmd_info(monkeypatch, sample_p_file, capsys):
     """rsi-tpw info should print file summary."""
     monkeypatch.setattr(sys, "argv", ["rsi-tpw", "info", str(sample_p_file)])
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     main()
     captured = capsys.readouterr()
@@ -498,7 +498,7 @@ def test_cmd_nc_to_dir(monkeypatch, sample_p_file, tmp_path):
     out_dir = tmp_path / "nc_out"
     out_dir.mkdir()
     monkeypatch.setattr(sys, "argv", ["rsi-tpw", "nc", str(sample_p_file), "-o", str(out_dir)])
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     main()
     nc_files = list(out_dir.glob("*.nc"))
@@ -509,7 +509,7 @@ def test_cmd_nc_to_file(monkeypatch, sample_p_file, tmp_path):
     """rsi-tpw nc with single file and explicit output path."""
     out_file = tmp_path / "output.nc"
     monkeypatch.setattr(sys, "argv", ["rsi-tpw", "nc", str(sample_p_file), "-o", str(out_file)])
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     main()
     assert out_file.exists()
@@ -523,7 +523,7 @@ def test_cmd_prof(monkeypatch, sample_p_file, tmp_path):
         "argv",
         ["rsi-tpw", "prof", str(sample_p_file), "-o", str(tmp_path)],
     )
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     main()
     # Should create a sequential directory like prof_00/
@@ -549,7 +549,7 @@ def test_cmd_eps_serial(monkeypatch, sample_p_file, tmp_path):
             "1",
         ],
     )
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     main()
     eps_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("eps_")]
@@ -573,7 +573,7 @@ def test_cmd_eps_parallel(monkeypatch, sample_p_file, tmp_path):
             "2",
         ],
     )
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     main()
     eps_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("eps_")]
@@ -597,7 +597,7 @@ def test_cmd_chi_method2(monkeypatch, sample_p_file, tmp_path):
             "1",
         ],
     )
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     main()
     chi_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("chi_")]
@@ -608,7 +608,7 @@ def test_cmd_chi_method2(monkeypatch, sample_p_file, tmp_path):
 
 def test_cmd_chi_method1(monkeypatch, sample_p_file, tmp_path):
     """rsi-tpw chi with --epsilon-dir should use Method 1."""
-    from rsi_python.dissipation import compute_diss_file
+    from odas_tpw.rsi.dissipation import compute_diss_file
 
     eps_dir = tmp_path / "eps_input"
     eps_dir.mkdir()
@@ -629,11 +629,43 @@ def test_cmd_chi_method1(monkeypatch, sample_p_file, tmp_path):
             "1",
         ],
     )
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     main()
     chi_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("chi_")]
     assert len(chi_dirs) >= 1
+
+
+def test_cmd_chi_method1_parallel(monkeypatch, sample_p_file, tmp_path):
+    """rsi-tpw chi with --epsilon-dir and -j 2 should use Method 1 in parallel."""
+    from odas_tpw.rsi.dissipation import compute_diss_file
+
+    eps_dir = tmp_path / "eps_input"
+    eps_dir.mkdir()
+    compute_diss_file(sample_p_file, eps_dir, fft_length=256, goodman=True)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rsi-tpw",
+            "chi",
+            str(sample_p_file),
+            "--epsilon-dir",
+            str(eps_dir),
+            "-o",
+            str(tmp_path),
+            "-j",
+            "2",
+        ],
+    )
+    from odas_tpw.rsi.cli import main
+
+    main()
+    chi_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("chi_")]
+    assert len(chi_dirs) >= 1
+    nc_files = list(chi_dirs[0].glob("*_chi.nc"))
+    assert len(nc_files) >= 1
 
 
 def test_cmd_chi_missing_epsilon_warns(monkeypatch, sample_p_file, tmp_path, capsys):
@@ -656,7 +688,7 @@ def test_cmd_chi_missing_epsilon_warns(monkeypatch, sample_p_file, tmp_path, cap
             "1",
         ],
     )
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     main()
     captured = capsys.readouterr()
@@ -664,7 +696,7 @@ def test_cmd_chi_missing_epsilon_warns(monkeypatch, sample_p_file, tmp_path, cap
 
 
 def test_cmd_pipeline(monkeypatch, sample_p_file, tmp_path):
-    """rsi-tpw pipeline should produce both eps and chi output."""
+    """rsi-tpw pipeline should produce per-profile output with epsilon and chi."""
     monkeypatch.setattr(
         sys,
         "argv",
@@ -676,10 +708,22 @@ def test_cmd_pipeline(monkeypatch, sample_p_file, tmp_path):
             str(tmp_path),
         ],
     )
-    from rsi_python.cli import main
+    from odas_tpw.rsi.cli import main
 
     main()
-    eps_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("eps_")]
-    chi_dirs = [d for d in tmp_path.iterdir() if d.is_dir() and d.name.startswith("chi_")]
-    assert len(eps_dirs) >= 1
-    assert len(chi_dirs) >= 1
+
+    # New pipeline creates {pfile_stem}/profile_NNN/ structure
+    pfile_dir = tmp_path / sample_p_file.stem
+    assert pfile_dir.is_dir(), f"Expected {pfile_dir} to exist"
+    profile_dirs = sorted(
+        d for d in pfile_dir.iterdir() if d.is_dir() and d.name.startswith("profile_")
+    )
+    assert len(profile_dirs) >= 1, "Expected at least one profile directory"
+
+    # Check that L4_epsilon.nc exists in the first profile
+    eps_files = list(profile_dirs[0].glob("L4_epsilon.nc"))
+    assert len(eps_files) >= 1, "Expected L4_epsilon.nc in profile directory"
+
+    # Check combined output
+    combined = pfile_dir / "L6_combined.nc"
+    assert combined.exists(), "Expected L6_combined.nc"

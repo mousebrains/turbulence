@@ -1,6 +1,6 @@
 % generate_validation_nc.m
 % Generate CF-compliant NetCDF files containing epsilon, profile, and speed
-% data from the ODAS MATLAB Library for validation against rsi-python.
+% data from the ODAS MATLAB Library for validation against microstructure-tpw.
 %
 % Usage: Run from the turbulence/ directory with ODAS on the path:
 %   addpath('odas');
@@ -25,6 +25,7 @@ direction   = 'down';
 min_duration = 7.0;  % minimum profile duration [s]
 despike_thresh = 8;
 despike_smooth = 0.5; % [Hz]
+HP_cut         = 0.25; % high-pass cutoff [Hz]
 
 vmp_dir = fullfile(fileparts(mfilename('fullpath')), '..', 'VMP');
 p_files = dir(fullfile(vmp_dir, '*.p'));
@@ -183,7 +184,7 @@ parfor fi = 1:n_files
             nu_all, speed_all, P_mean_all, T_mean_all, t_mean_all, ...
             K_all, F_all, spec_sh_all, dof_spec_all, prof_idx_all, ...
             fft_length, diss_length, overlap_val, f_AA, fit_order, ...
-            P_min, W_min, min_duration);
+            P_min, W_min, min_duration, HP_cut);
 
         fprintf('  Saved %s\n', out_path);
 
@@ -206,7 +207,7 @@ function parsave_validation_nc(out_path, ...
     nu_all, speed_all, P_mean_all, T_mean_all, t_mean_all, ...
     K_all, F_all, spec_sh_all, dof_spec_all, prof_idx_all, ...
     fft_length, diss_length, overlap_val, f_AA, fit_order, ...
-    P_min, W_min, min_duration)
+    P_min, W_min, min_duration, HP_cut)
 % PARSAVE_VALIDATION_NC  Write validation data to CF-compliant NetCDF4.
 %   Each profile is stored in its own group: /profile_001, /profile_002, ...
 %   Root group contains global attributes and configuration parameters.
@@ -255,6 +256,8 @@ function parsave_validation_nc(out_path, ...
         'W_min', W_min);
     netcdf.putAtt(ncid, netcdf.getConstant('NC_GLOBAL'), ...
         'min_duration', min_duration);
+    netcdf.putAtt(ncid, netcdf.getConstant('NC_GLOBAL'), ...
+        'HP_cut', HP_cut);
 
     % Profile slow-sample indices (2 x n_profiles) in root group
     dim_two = netcdf.defDim(ncid, 'bounds', 2);

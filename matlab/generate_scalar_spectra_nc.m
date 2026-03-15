@@ -1,6 +1,6 @@
 % generate_scalar_spectra_nc.m
 % Generate CF-compliant NetCDF files containing scalar (temperature gradient)
-% spectra from the ODAS MATLAB Library for validation against rsi-python chi.
+% spectra from the ODAS MATLAB Library for validation against microstructure-tpw chi.
 %
 % Uses get_scalar_spectra_odas.m as the independent reference for the
 % scalar spectrum pipeline (first-difference correction, bilinear
@@ -22,6 +22,7 @@ fft_length  = 256;
 spec_length = 2 * fft_length;   % = 512 (diss_length)
 overlap_val = spec_length / 2;  % = 256
 f_AA        = 98;
+HP_cut      = 0.25; % high-pass cutoff [Hz]
 P_min       = 0.5;
 W_min       = 0.3;
 direction   = 'down';
@@ -150,7 +151,7 @@ parfor fi = 1:n_files
             fs_fast, fs_slow, profiles, n_profiles, ...
             scalar_spec_all, K_scalar_all, F_scalar_all, ...
             speed_scalar_all, P_scalar_all, t_scalar_all, ...
-            diff_gains, fft_length, spec_length, overlap_val, f_AA);
+            diff_gains, fft_length, spec_length, overlap_val, f_AA, HP_cut);
 
         fprintf('  Saved %s\n', out_path);
 
@@ -171,7 +172,7 @@ function parsave_scalar_nc(out_path, ...
     fs_fast, fs_slow, profiles, n_profiles, ...
     scalar_spec_all, K_scalar_all, F_scalar_all, ...
     speed_scalar_all, P_scalar_all, t_scalar_all, ...
-    diff_gains, fft_length, spec_length, overlap_val, f_AA)
+    diff_gains, fft_length, spec_length, overlap_val, f_AA, HP_cut)
 % PARSAVE_SCALAR_NC  Write scalar spectra data to CF-compliant NetCDF4.
 %   Each profile is stored in its own group: /profile_001, /profile_002, ...
 
@@ -211,6 +212,8 @@ function parsave_scalar_nc(out_path, ...
         'f_AA', f_AA);
     netcdf.putAtt(ncid, netcdf.getConstant('NC_GLOBAL'), ...
         'diff_gains', diff_gains);
+    netcdf.putAtt(ncid, netcdf.getConstant('NC_GLOBAL'), ...
+        'HP_cut', HP_cut);
 
     % Profile slow-sample indices in root group
     dim_two  = netcdf.defDim(ncid, 'bounds', 2);

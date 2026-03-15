@@ -104,14 +104,23 @@ For standalone commands (`rsi-tpw eps`, `rsi-tpw chi` without `--epsilon-dir`), 
 
 ## Pipeline subcommand
 
-The `pipeline` subcommand creates both `eps_NN/` and `chi_NN/` subdirectories under the base output directory, each with their own signature file and resolved config:
+The `pipeline` subcommand creates a per-file, per-profile directory structure:
 
 ```bash
 rsi-tpw pipeline VMP/*.p -o results/
 # Creates:
-#   results/eps_00/  (with epsilon params hash)
-#   results/chi_00/  (with chi params hash)
+#   results/{pfile_stem}/
+#     profile_001/
+#       L4_epsilon.nc       # epsilon estimates
+#       L4_chi_epsilon.nc   # chi from known epsilon (Method 1)
+#       L4_chi_fit.nc       # chi from spectral fit (Method 2)
+#     profile_002/
+#       ...
+#     L5_binned.nc          # depth-binned profiles
+#     L6_combined.nc        # all profiles combined
 ```
+
+The standalone `eps` and `chi` subcommands use the sequential hash-tracked scheme (`eps_00/`, `chi_00/` etc.) described above.
 
 ## Generating a template config
 

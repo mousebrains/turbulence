@@ -3,7 +3,7 @@
 ## Reading `.p` Files
 
 ```python
-from rsi_python import PFile
+from odas_tpw.rsi import PFile
 
 pf = PFile("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
 
@@ -29,11 +29,14 @@ pf.channel_info       # dict of channel metadata (type, units, etc.)
 ## Computing Epsilon
 
 ```python
-from rsi_python import get_diss
+from odas_tpw.rsi.dissipation import compute_diss_file
 
-# Compute epsilon (returns list of xarray.Datasets, one per profile)
-eps_results = get_diss("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
-ds = eps_results[0]
+# Compute epsilon and write to output directory
+eps_paths = compute_diss_file("VMP/ARCTERX_Thompson_2025_SN479_0005.p", "epsilon/")
+
+# Read back the results
+import xarray as xr
+ds = xr.open_dataset(eps_paths[0])
 
 # Output variables
 ds["epsilon"]         # dissipation rate [W/kg]
@@ -43,7 +46,7 @@ ds["fom"]             # figure of merit (obs/Nasmyth variance ratio)
 ds["K_max_ratio"]     # K_max/K_95 (spectral resolution)
 
 # With options
-eps_results = get_diss("VMP/file.p",
+eps_paths = compute_diss_file("VMP/file.p", "epsilon/",
     fft_length=512,
     goodman=True,
     salinity=34.5,
@@ -54,27 +57,35 @@ eps_results = get_diss("VMP/file.p",
 ## Computing Chi
 
 ```python
-from rsi_python import get_chi
+from odas_tpw.rsi.chi_io import compute_chi_file
+import xarray as xr
 
 # Method 1: chi from known epsilon (preferred)
-chi_results = get_chi("VMP/ARCTERX_Thompson_2025_SN479_0005.p",
-                      epsilon_ds=eps_results[0])
-ds = chi_results[0]
+eps_ds = xr.open_dataset("epsilon/SN479_0005_eps.nc")
+chi_paths = compute_chi_file("VMP/ARCTERX_Thompson_2025_SN479_0005.p",
+                             "chi/", epsilon_ds=eps_ds)
+eps_ds.close()
+
+ds = xr.open_dataset(chi_paths[0])
 ds["chi"]             # thermal dissipation rate [K²/s]
 ds["spec_gradT"]      # temperature gradient spectra
 ds["spec_batch"]      # fitted Batchelor spectra
 
 # Method 2: chi without epsilon (MLE fitting)
-chi_results = get_chi("VMP/ARCTERX_Thompson_2025_SN479_0005.p")
-ds = chi_results[0]
+chi_paths = compute_chi_file("VMP/ARCTERX_Thompson_2025_SN479_0005.p", "chi/")
+ds = xr.open_dataset(chi_paths[0])
 ds["chi"]             # thermal dissipation rate [K²/s]
 ds["epsilon_T"]       # epsilon estimated from temperature
 ```
 
+> **Note:** `get_diss()` and `get_chi()` still work for backward compatibility
+> but are deprecated in favor of `run_pipeline()` or the modular
+> `compute_diss_file()` / `compute_chi_file()` functions.
+
 ## Seawater Properties
 
 ```python
-from rsi_python import visc, density, buoyancy_freq
+from odas_tpw.scor160.ocean import visc, density, buoyancy_freq
 
 # Kinematic viscosity [m²/s]
 nu = visc(10.0, 35.0, 100.0)  # T=10°C, S=35, P=100 dbar
@@ -95,10 +106,10 @@ N2, p_mid = buoyancy_freq(T, S, P)
 The pipeline can also be driven from Python:
 
 ```python
-from rsi_python.convert import p_to_netcdf
-from rsi_python.profile import extract_profiles
-from rsi_python.dissipation import compute_diss_file
-from rsi_python.chi import compute_chi_file
+from odas_tpw.rsi.convert import p_to_netcdf
+from odas_tpw.rsi.profile import extract_profiles
+from odas_tpw.rsi.dissipation import compute_diss_file
+from odas_tpw.rsi.chi_io import compute_chi_file
 
 # Stage 1: Convert to NetCDF
 pf, nc_path = p_to_netcdf("VMP/file.p", "output/file.nc")
@@ -118,19 +129,47 @@ eps_ds.close()
 
 ## Modules
 
+### rsi (Instrument I/O, Layer 2)
+
 | Module | Description |
 |--------|-------------|
 | `p_file.py` | `PFile` class: reads `.p` binary files, parses headers, demultiplexes address matrix, converts to physical units |
 | `channels.py` | Sensor conversion functions (raw counts to physical units) |
-| `convert.py` | Full-record NetCDF export |
-| `profile.py` | Profile detection and per-profile NetCDF extraction |
-| `dissipation.py` | Core epsilon calculation with multi-source input |
-| `chi.py` | Chi calculation, Methods 1 and 2 |
+| `deconvolve.py` | Sensor deconvolution filters |
+| `convert.py` | `p_to_L1()` / `p_to_netcdf()` — full-record NetCDF export |
+| `profile.py` | Profile detection (re-exports from scor160) and per-profile NetCDF extraction |
+| `dissipation.py` | Core epsilon calculation (`get_diss`, `compute_diss_file`) |
+| `chi_io.py` | Chi orchestration: load instrument data and call chi computation |
+| `helpers.py` | `load_channels()`, `prepare_profiles()` — bridge PFile/NetCDF to spectral processing |
+| `adapter.py` | `pfile_to_l1data()` — bridge PFile to scor160 L1Data |
+| `pipeline.py` | `run_pipeline()` — full L0-L6 processing pipeline |
+| `binning.py` | `bin_by_depth()` — depth-bin averaging |
+| `combine.py` | `combine_profiles()` — merge profiles across deployments |
+| `window.py` | Per-window epsilon and chi computation (shared by pipeline and viewers) |
+| `config.py` | YAML configuration file support |
+
+### chi (Thermal Dissipation, Layer 1)
+
+| Module | Description |
+|--------|-------------|
+| `chi.py` | Chi calculation, Methods 1 and 2, QC metrics |
 | `batchelor.py` | Batchelor and Kraichnan temperature gradient spectra |
 | `fp07.py` | FP07 thermistor transfer function and electronics noise model |
+| `l2_chi.py` | `process_l2_chi()` — temperature cleaning for chi |
+| `l3_chi.py` | `process_l3_chi()` — temperature gradient spectra |
+| `l4_chi.py` | `process_l4_chi_epsilon()`, `process_l4_chi_fit()` — chi estimation |
+
+### scor160 (Foundation, Layer 0)
+
+| Module | Description |
+|--------|-------------|
 | `spectral.py` | Cross-spectral density estimation (Welch method, cosine window) |
 | `goodman.py` | Goodman coherent noise removal using accelerometer spectra |
 | `despike.py` | Iterative spike removal for shear probe signals |
 | `nasmyth.py` | Nasmyth universal shear spectrum (Lueck improved fit) |
 | `ocean.py` | Seawater properties: viscosity, density, buoyancy frequency (gsw/TEOS-10) |
-| `config.py` | YAML configuration file support |
+| `profile.py` | Profile detection (`get_profiles`, `smooth_fall_rate`) |
+| `io.py` | ATOMIX-format NetCDF I/O and data classes (`L1Data` ... `L4Data`) |
+| `l2.py` | L1-L2: section selection, despiking, HP filtering |
+| `l3.py` | L2-L3: wavenumber spectra (Welch + Goodman) |
+| `l4.py` | L3-L4: epsilon estimation (variance + ISR methods) |

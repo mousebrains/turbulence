@@ -6,26 +6,41 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Processing and analysis code for calculating turbulent kinetic energy (TKE) and chi (thermal dissipation rate) from Rockland Scientific vertical microprofilers and microriders. Instruments use fast temperature sensors (e.g., FP07 thermistors).
 
-## Package: rsi-python
+## Package: microstructure-tpw
 
-Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/rsi_python/`.
+Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas_tpw/`.
 
-### Modules
+### Subpackages
+
+- `rsi/` — Rockland Scientific instrument I/O, NetCDF conversion, profiles, epsilon, chi orchestration
+- `chi/` — Chi (thermal variance dissipation) calculation, Batchelor/Kraichnan spectra, FP07 transfer function
+- `scor160/` — ATOMIX shear-probe benchmark processing (L1–L4), shared physics/spectral modules
+- `perturb/` — Full campaign processing pipeline (trim, merge, calibrate, compute, bin)
+
+### Key Modules (rsi)
 
 - `p_file.py` — `PFile` class: reads Rockland `.p` binary files, parses headers, demultiplexes address matrix, converts to physical units. `parse_config()` parses the embedded INI config string.
 - `channels.py` — Conversion functions (raw counts → physical units) for each sensor type. `CONVERTERS` dict maps type names to functions.
 - `convert.py` — `p_to_netcdf()` and `convert_all()` for writing NetCDF4 output.
 - `profile.py` — Profile detection and per-profile NetCDF extraction.
 - `dissipation.py` — Core epsilon calculation with multi-source input, QC metrics (fom, K_max_ratio).
+- `chi_io.py` — Chi orchestration: load instrument data and call chi computation.
+- `config.py` — YAML configuration loading, merging, template generation.
+- `cli.py` — Unified `rsi-tpw` CLI with subcommands.
+
+### Key Modules (chi)
+
 - `chi.py` — Chi (thermal variance dissipation) calculation, Methods 1 and 2, QC metrics.
 - `batchelor.py` — Batchelor and Kraichnan temperature gradient spectra.
 - `fp07.py` — FP07 thermistor transfer function and electronics noise model.
+
+### Key Modules (scor160)
+
 - `spectral.py` — Cross-spectral density estimation (Welch method, cosine window).
 - `goodman.py` — Goodman coherent noise removal using accelerometer spectra.
 - `despike.py` — Iterative spike removal for shear probe signals.
 - `nasmyth.py` — Nasmyth universal shear spectrum (Lueck improved fit).
 - `ocean.py` — Seawater properties: `visc35`, `visc(T,S,P)`, `density(T,S,P)`, `buoyancy_freq(T,S,P)` via gsw (TEOS-10).
-- `cli.py` — Unified `rsi-tpw` CLI with subcommands.
 
 ### CLI Commands
 
@@ -43,8 +58,12 @@ rsi-tpw eps VMP/*.p --salinity 34.5 -o epsilon/  # custom salinity
 ### Python API
 
 ```python
-from rsi_python import PFile, get_diss, get_chi
-from rsi_python import visc, density, buoyancy_freq
+from odas_tpw.rsi import PFile
+from odas_tpw.rsi.pipeline import run_pipeline
+from odas_tpw.rsi.dissipation import compute_diss_file
+from odas_tpw.rsi.chi_io import compute_chi_file
+from odas_tpw.scor160.ocean import visc, density, buoyancy_freq
+from pathlib import Path
 
 pf = PFile("VMP/ARCTERX_Thompson_2025_SN479_0001.p")
 pf.channels["T1"]    # numpy array, physical units (°C)
@@ -52,15 +71,14 @@ pf.channels["sh1"]   # shear in s⁻¹
 pf.t_fast             # time vector for fast channels
 pf.fs_fast            # fast sampling rate (~512 Hz)
 
-# Compute epsilon
-eps_results = get_diss("VMP/file.p")
-ds = eps_results[0]
-ds["epsilon"]       # dissipation rate [W/kg]
-ds["fom"]           # figure of merit (obs/Nasmyth variance ratio)
-ds["K_max_ratio"]   # K_max/K_95 (spectral resolution)
+# Full pipeline: .p → profiles → epsilon → chi → binning → combine
+run_pipeline([Path("VMP/file.p")], Path("results/"))
 
-# Compute with custom salinity
-eps_results = get_diss("VMP/file.p", salinity=34.5)
+# Or use modular file-level functions
+eps_paths = compute_diss_file("VMP/file.p", "epsilon/")
+chi_paths = compute_chi_file("VMP/file.p", "chi/")
+
+# Note: get_diss() and get_chi() still work but are deprecated
 ```
 
 ## Commands

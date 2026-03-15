@@ -3,8 +3,8 @@
 
 import struct
 
-from perturb.merge import find_mergeable_files, merge_p_files
-from rsi_python.p_file import _H, HEADER_BYTES, HEADER_WORDS
+from odas_tpw.perturb.merge import find_mergeable_files, merge_p_files
+from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS
 
 
 def _make_p_file(

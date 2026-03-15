@@ -3,16 +3,16 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rsi-python"
-version = "0.1.0"
-description = "Tools for reading Rockland Scientific microprofiler data and computing turbulent dissipation rates"
+name = "microstructure-tpw"
+version = "0.3.0"
+description = "Ocean microstructure turbulence processing: TKE dissipation and chi from Rockland Scientific instruments"
 requires-python = ">=3.12"
 license = "GPL-3.0-or-later"
 readme = "README.md"
 authors = [
     { name = "Pat Welch", email = "pat@mousebrains.com" },
 ]
-keywords = ["oceanography", "turbulence", "microprofiler", "rockland", "dissipation", "chi"]
+keywords = ["oceanography", "turbulence", "microprofiler", "rockland"]
 dependencies = [
     "numpy>=1.26,<3",
     "netCDF4>=1.6,<2",
@@ -33,11 +33,12 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/mousebrains/rsi-python"
+Repository = "https://github.com/mousebrains/turbulence"
 
 [project.scripts]
-rsi-tpw = "rsi_python.cli:main"
-perturb = "perturb.cli:main"
+rsi-tpw = "odas_tpw.rsi.cli:main"
+perturb = "odas_tpw.perturb.cli:main"
+scor160-tpw = "odas_tpw.scor160.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -57,31 +58,32 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
-    "rsi_python.batchelor",
-    "rsi_python.fp07",
-    "rsi_python.spectral",
-    "rsi_python.dissipation",
-    "rsi_python.ocean",
-    "rsi_python.nasmyth",
-    "rsi_python.deconvolve",
-    "rsi_python.shear_noise",
-    "rsi_python.profile",
+    "odas_tpw.rsi.spectral",
+    "odas_tpw.rsi.ocean",
+    "odas_tpw.rsi.nasmyth",
+    "odas_tpw.rsi.deconvolve",
+    "odas_tpw.rsi.profile",
+    "odas_tpw.rsi.helpers",
+    "odas_tpw.rsi.convert",
+    "odas_tpw.chi.batchelor",
+    "odas_tpw.chi.fp07",
+    "odas_tpw.chi.chi",
+    "odas_tpw.scor160.io",
+    "odas_tpw.scor160.l2",
+    "odas_tpw.scor160.spectral",
+    "odas_tpw.scor160.ocean",
+    "odas_tpw.scor160.nasmyth",
 ]
 # npt.ArrayLike causes many false positives with arithmetic/indexing;
 # no-any-return from numpy arithmetic expressions returning Any
-disable_error_code = ["operator", "index", "arg-type", "return-value", "no-any-return"]
-
-[[tool.mypy.overrides]]
-module = [
-    "rsi_python.viewer_base",
-    "rsi_python.quick_look",
-    "rsi_python.diss_look",
-]
-# UI-only modules; matplotlib typing is incomplete
-disable_error_code = ["index", "arg-type", "union-attr", "call-overload", "var-annotated", "attr-defined", "assignment", "no-any-return"]
+disable_error_code = ["operator", "index", "arg-type", "return-value", "no-any-return", "assignment"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
     "matlab: MATLAB/ODAS comparison tests (use -n auto to parallelize)",
+]
+filterwarnings = [
+    "ignore:get_diss\\(\\) is deprecated:DeprecationWarning",
+    "ignore:get_chi\\(\\) is deprecated:DeprecationWarning",
 ]

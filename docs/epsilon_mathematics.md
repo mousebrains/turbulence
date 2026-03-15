@@ -1,6 +1,6 @@
 # Mathematics of Epsilon Estimation
 
-This document describes the mathematical foundations for computing epsilon, the rate of dissipation of turbulent kinetic energy, as implemented in `rsi-python`. All equation numbers, constants, and algorithmic details correspond to the actual code in [`dissipation.py`](../src/rsi_python/dissipation.py), [`spectral.py`](../src/rsi_python/spectral.py), [`goodman.py`](../src/rsi_python/goodman.py), [`despike.py`](../src/rsi_python/despike.py), [`nasmyth.py`](../src/rsi_python/nasmyth.py), and [`ocean.py`](../src/rsi_python/ocean.py).
+This document describes the mathematical foundations for computing epsilon, the rate of dissipation of turbulent kinetic energy, as implemented in `microstructure-tpw`. All equation numbers, constants, and algorithmic details correspond to the actual code in [`dissipation.py`](../src/odas_tpw/rsi/dissipation.py), [`spectral.py`](../src/odas_tpw/scor160/spectral.py), [`goodman.py`](../src/odas_tpw/scor160/goodman.py), [`despike.py`](../src/odas_tpw/scor160/despike.py), [`nasmyth.py`](../src/odas_tpw/scor160/nasmyth.py), and [`ocean.py`](../src/odas_tpw/scor160/ocean.py).
 
 ## Contents
 
@@ -41,7 +41,7 @@ The shear spectrum is measured by airfoil shear probes sampling at ~512 Hz on a 
 k = f / W       [cpm]
 ```
 
-([`dissipation.py: _compute_profile_diss`](../src/rsi_python/dissipation.py))
+([`dissipation.py: _compute_profile_diss`](../src/odas_tpw/rsi/dissipation.py))
 
 In practice, the integral is truncated at a finite upper wavenumber `K_max` determined by instrument noise, spectral shape, or the anti-aliasing filter. A correction factor accounts for the unresolved variance beyond `K_max`.
 
@@ -56,7 +56,7 @@ The Nasmyth (1970) spectrum describes the universal shape of the one-dimensional
 G2(x) = 8.05 * x^(1/3) / (1 + (20.6 * x)^3.715)
 ```
 
-([`nasmyth.py: _nasmyth_g2`](../src/rsi_python/nasmyth.py))
+([`nasmyth.py: _nasmyth_g2`](../src/odas_tpw/scor160/nasmyth.py))
 
 where `x = k / k_s` is the non-dimensional wavenumber and `k_s` is the Kolmogorov wavenumber:
 
@@ -72,7 +72,7 @@ The dimensional shear spectrum in `[s^-2 / cpm]` is:
 Phi_nasmyth(k) = epsilon^(3/4) * nu^(-1/4) * G2(k / k_s)
 ```
 
-([`nasmyth.py: nasmyth`](../src/rsi_python/nasmyth.py))
+([`nasmyth.py: nasmyth`](../src/odas_tpw/scor160/nasmyth.py))
 
 ### Key properties
 
@@ -90,7 +90,7 @@ e_total = e_10 * sqrt(1 + LUECK_A * e_10)
 
 where `LUECK_A = 1.0774e9` is derived from the non-dimensional integral of the Nasmyth spectrum.
 
-([`nasmyth.py`](../src/rsi_python/nasmyth.py), [`dissipation.py: _estimate_epsilon`](../src/rsi_python/dissipation.py))
+([`nasmyth.py`](../src/odas_tpw/scor160/nasmyth.py), [`dissipation.py: _estimate_epsilon`](../src/odas_tpw/rsi/dissipation.py))
 
 
 ## 3. Spectral Estimation
@@ -104,7 +104,7 @@ w[i] = 1 + cos(pi * (-1 + 2*i/N))     for i = 0, 1, ..., N-1
 w = w / sqrt(mean(w^2))
 ```
 
-([`spectral.py: _cosine_window`](../src/rsi_python/spectral.py))
+([`spectral.py: _cosine_window`](../src/odas_tpw/scor160/spectral.py))
 
 The RMS normalization ensures that the window preserves spectral power.
 
@@ -143,7 +143,7 @@ Given a signal of length `L`, FFT length `N_fft`, and overlap `N_ov` (default `N
    F[j] = j * f_s / N_fft      for j = 0, 1, ..., N_fft/2
    ```
 
-([`spectral.py: csd_odas`](../src/rsi_python/spectral.py))
+([`spectral.py: csd_odas`](../src/odas_tpw/scor160/spectral.py))
 
 ### Degrees of freedom
 
@@ -165,7 +165,7 @@ C_xy[f, i, j] = <Y_j(f) * conj(X_i(f))>
 
 where `< >` denotes the average over FFT segments.
 
-([`spectral.py: csd_matrix`](../src/rsi_python/spectral.py))
+([`spectral.py: csd_matrix`](../src/odas_tpw/scor160/spectral.py))
 
 
 ## 4. Shear Probe Despiking
@@ -210,7 +210,7 @@ For each iteration (up to `max_passes = 10`):
 
 6. **Iterate** until no new spikes are detected or `max_passes` reached.
 
-([`despike.py: despike, _single_despike`](../src/rsi_python/despike.py))
+([`despike.py: despike, _single_despike`](../src/odas_tpw/scor160/despike.py))
 
 
 ## 5. Goodman Coherent Noise Removal
@@ -256,7 +256,7 @@ where `H(f) = C_ua(f) / C_aa(f)` is the frequency-dependent transfer function fr
    ```
    This corrects for the degrees-of-freedom lost in estimating the transfer function.
 
-([`goodman.py: clean_shear_spec`](../src/rsi_python/goodman.py))
+([`goodman.py: clean_shear_spec`](../src/odas_tpw/scor160/goodman.py))
 
 
 ## 6. Macoun-Lueck Wavenumber Correction
@@ -274,7 +274,7 @@ The correction is applied multiplicatively to the wavenumber spectrum:
 Phi_corrected(k) = Phi_observed(k) * correction(k)
 ```
 
-([`dissipation.py: _compute_profile_diss`](../src/rsi_python/dissipation.py))
+([`dissipation.py: _compute_profile_diss`](../src/odas_tpw/rsi/dissipation.py))
 
 The denominator wavenumber 48 cpm corresponds to the probe's half-power point. At `k = 48` cpm, the correction is a factor of 2. The correction is only applied below 150 cpm because the empirical fit is not validated at higher wavenumbers.
 
@@ -368,7 +368,7 @@ To find the wavenumber where the observed spectrum departs from the turbulence s
 
 If no suitable minimum is found (polynomial fit order is decreased until one is found, down to order 3), `K_max = K_limit`.
 
-([`dissipation.py: _estimate_epsilon`](../src/rsi_python/dissipation.py))
+([`dissipation.py: _estimate_epsilon`](../src/odas_tpw/rsi/dissipation.py))
 
 ### Step 5: Final integration
 
@@ -442,7 +442,7 @@ The method returns:
 - `epsilon`: fitted dissipation rate
 - `K_max`: highest wavenumber in the fit range
 
-([`dissipation.py: _inertial_subrange`](../src/rsi_python/dissipation.py))
+([`dissipation.py: _inertial_subrange`](../src/odas_tpw/rsi/dissipation.py))
 
 
 ## 9. Iterative Variance Correction
@@ -483,7 +483,7 @@ For iteration = 1, 2, ..., max_iter (default 50):
 
 The iteration typically converges in 3-5 steps. The correction is larger when `K_max` is low relative to the Kolmogorov wavenumber.
 
-([`dissipation.py: _variance_correction`](../src/rsi_python/dissipation.py))
+([`dissipation.py: _variance_correction`](../src/odas_tpw/rsi/dissipation.py))
 
 
 ## 10. Quality Control Metrics
@@ -551,7 +551,7 @@ K_max_ratio = K_max / K_95
 
 where `K_95 = X_95 * (epsilon / nu^3)^(1/4)` is the wavenumber containing 95% of the Nasmyth variance. Values near 1.0 mean most variance is resolved; values below 0.5 mean most variance is extrapolated via the variance correction.
 
-([`dissipation.py: _estimate_epsilon`](../src/rsi_python/dissipation.py))
+([`dissipation.py: _estimate_epsilon`](../src/odas_tpw/rsi/dissipation.py))
 
 
 ## 11. Seawater Viscosity
@@ -571,7 +571,7 @@ p_2 =  1.199552027472192e-09
 p_3 = -1.131311019739306e-11
 ```
 
-([`ocean.py: visc35`](../src/rsi_python/ocean.py))
+([`ocean.py: visc35`](../src/odas_tpw/scor160/ocean.py))
 
 Valid for 0 <= T <= 20 degrees C. Typical values: ~1.3e-6 m^2/s at 10 degrees C, ~1.0e-6 m^2/s at 20 degrees C.
 

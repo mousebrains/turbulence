@@ -44,9 +44,9 @@ Each `.p` file is processed through several sub-stages:
 
 5. **CT alignment** — Cross-correlation alignment of conductivity and temperature sensors to correct for spatial separation.
 
-6. **Dissipation (epsilon)** — Computes TKE dissipation rate per profile using `rsi_python.dissipation.get_diss`. Combines multi-probe estimates via `mk_epsilon_mean` (geometric mean with 95% CI filtering).
+6. **Dissipation (epsilon)** — Computes TKE dissipation rate per profile using `rsi.dissipation.get_diss`. Combines multi-probe estimates via `mk_epsilon_mean` (geometric mean with 95% CI filtering).
 
-7. **Chi** (optional) — Computes thermal variance dissipation rate per profile using `rsi_python.chi.get_chi` with the epsilon dataset (Method 1).
+7. **Chi** (optional) — Computes thermal variance dissipation rate per profile using `rsi.chi.get_chi` with the epsilon dataset (Method 1).
 
 ### Stage 4: Bin
 
@@ -56,10 +56,12 @@ Depth-bins (or time-bins) the per-profile and per-diss NetCDF files into 2D arra
 
 Assembles binned NetCDF files into combined datasets with CF-1.8/ACDD-1.3 compliant global attributes, geospatial extent, and standardized variable metadata.
 
+> **Note:** `perturb run` currently covers trim → merge → process → bin. Combo assembly remains a separate step via `perturb combo`, pending integration of per-file binned outputs into `run_pipeline()`.
+
 ## Full Pipeline
 
 ```bash
-# Process all .p files in VMP/
+# Process all .p files in VMP/ (trim → merge → process → bin)
 perturb run -o results/ VMP/*.p
 
 # Explicit file list with 4 parallel workers
@@ -67,6 +69,9 @@ perturb run -o results/ -j 4 VMP/*002*.p
 
 # With a configuration file
 perturb run -c config.yaml -o results/
+
+# Combo assembly (separate step)
+perturb combo -c config.yaml -o results/
 ```
 
 ## Individual Stages

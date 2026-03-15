@@ -1,5 +1,6 @@
 # Data files (large)
 VMP/
+AtomixData/
 benchmarks/
 
 # Rockland ODAS MATLAB reference (third-party)

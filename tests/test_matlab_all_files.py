@@ -59,7 +59,7 @@ def _load_p2mat(nc_path: Path) -> dict:
 def file_pair(request):
     """Yield (PFile, nc_dict) for each matched file pair."""
     p_path, nc_path = request.param
-    from rsi_python.p_file import PFile
+    from odas_tpw.rsi.p_file import PFile
 
     pf = PFile(p_path)
     ref = _load_p2mat(nc_path)

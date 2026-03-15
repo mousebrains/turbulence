@@ -43,15 +43,8 @@ import numpy as np
 import xarray as xr
 
 # rsi-tpw imports
-from rsi_python.dissipation import (
-    EPSILON_FLOOR,
-    E_ISR_THRESHOLD,
-    ISOTROPY_FACTOR,
-    _estimate_epsilon,
-    _variance_correction,
-)
-from rsi_python.nasmyth import nasmyth_grid
-from rsi_python.ocean import visc35
+from odas_tpw.scor160.l4 import E_ISR_THRESHOLD, _estimate_epsilon
+from odas_tpw.scor160.ocean import visc35
 
 # ---------------------------------------------------------------------------
 # ATOMIX benchmark dataset catalog
@@ -65,8 +58,7 @@ ATOMIX_DATASETS = {
         "doi": "10.5285/05f21d1d-bf9c-5549-e063-6c86abc0b846",
         "file_pattern": "faroebank",
         "notes": (
-            "Deep overflow, VMP2000 SN 9, fs=512 Hz. "
-            "diss_length=8 s, fft_length=2 s, 50% overlap."
+            "Deep overflow, VMP2000 SN 9, fs=512 Hz. diss_length=8 s, fft_length=2 s, 50% overlap."
         ),
     },
     "TidalChannel": {
@@ -77,8 +69,7 @@ ATOMIX_DATASETS = {
         "file_pattern": "tidalchannel",
         "exclude_pattern": "_cs",  # exclude constant-speed variant
         "notes": (
-            "VMP-250-IR SN 215, fs=512 Hz, f_AA=98 Hz. "
-            "HP filter 0.4 Hz, despike threshold=8."
+            "VMP-250-IR SN 215, fs=512 Hz, f_AA=98 Hz. HP filter 0.4 Hz, despike threshold=8."
         ),
     },
     "TidalChannel_cs": {
@@ -87,10 +78,7 @@ ATOMIX_DATASETS = {
         "citation": "Lueck (2024)",
         "doi": "10.5285/0ec16a65-abdf-2822-e063-6c86abc06533",
         "file_pattern": "tidalchannel_024_cs",
-        "notes": (
-            "VMP-250-IR SN 215, constant W=0.75 m/s. "
-            "Same raw data as TidalChannel."
-        ),
+        "notes": ("VMP-250-IR SN 215, constant W=0.75 m/s. Same raw data as TidalChannel."),
     },
     "RockallTrough": {
         "name": "Rockall Trough",
@@ -99,8 +87,7 @@ ATOMIX_DATASETS = {
         "doi": "10.5285/0ebffc86-ed32-5dde-e063-6c86abc08b3a",
         "file_pattern": "epsifish",
         "notes": (
-            "Epsilometer, fs=320 Hz. Airfoil shear probes. "
-            "diss_length=10.4 s, fft_length=2.08 s."
+            "Epsilometer, fs=320 Hz. Airfoil shear probes. diss_length=10.4 s, fft_length=2.08 s."
         ),
     },
     "BalticSea": {
@@ -120,10 +107,7 @@ ATOMIX_DATASETS = {
         "citation": "Lueck & Hay (2024)",
         "doi": "10.5285/0ec17274-7a64-2b28-e063-6c86abc0ee02",
         "file_pattern": "minas",
-        "notes": (
-            "Moored horizontal MicroRider-1000, fs=2048 Hz, "
-            "f_AA=392 Hz. 4 shear probes."
-        ),
+        "notes": ("Moored horizontal MicroRider-1000, fs=2048 Hz, f_AA=392 Hz. 4 shear probes."),
     },
 }
 
@@ -377,9 +361,9 @@ def compare_dataset(nc_path: Path, key: str) -> DatasetResult:
     pres_l4 = l4["PRES"].values if "PRES" in l4 else np.full(n_spectra, np.nan)
 
     print(f"  N_spectra={n_spectra}, N_probes={n_probes}, N_wavenumber={n_wavenum}")
-    print(f"  Wavenumber range: {np.nanmin(kcyc):.1f} – {np.nanmax(kcyc):.1f} cpm")
-    print(f"  Speed range: {speed_l3.min():.3f} – {speed_l3.max():.3f} m/s")
-    print(f"  ATOMIX epsilon range: {np.nanmin(epsi):.2e} – {np.nanmax(epsi):.2e} W/kg")
+    print(f"  Wavenumber range: {np.nanmin(kcyc):.1f} - {np.nanmax(kcyc):.1f} cpm")
+    print(f"  Speed range: {speed_l3.min():.3f} - {speed_l3.max():.3f} m/s")
+    print(f"  ATOMIX epsilon range: {np.nanmin(epsi):.2e} - {np.nanmax(epsi):.2e} W/kg")
 
     result = DatasetResult(
         name=info["name"],
@@ -394,10 +378,7 @@ def compare_dataset(nc_path: Path, key: str) -> DatasetResult:
     n_skip = 0
     for i in range(n_spectra):
         # Wavenumber vector (may vary per spectrum or be constant)
-        if kcyc.ndim == 2:
-            K = kcyc[i, :]
-        else:
-            K = kcyc
+        K = kcyc[i, :] if kcyc.ndim == 2 else kcyc
 
         # Skip if wavenumber is invalid
         if np.all(np.isnan(K)) or len(K) < 3:
@@ -446,9 +427,10 @@ def compare_dataset(nc_path: Path, key: str) -> DatasetResult:
                         kmax_rsi,
                         mad_rsi,
                         method_rsi,
-                        _nas_spec,
                         fom_rsi,
-                        kmr,
+                        _var_res,
+                        _nas_spec,
+                        _kmr,
                         _fm,
                     ) = _estimate_epsilon(
                         K_clean,
@@ -456,7 +438,7 @@ def compare_dataset(nc_path: Path, key: str) -> DatasetResult:
                         nu,
                         K_AA,
                         fit_order,
-                        E_ISR_THRESHOLD,
+                        e_isr_threshold=E_ISR_THRESHOLD,
                     )
             except Exception as exc:
                 print(f"    WARNING: spectrum [{i},{p}] failed: {exc}")
@@ -667,9 +649,9 @@ def plot_fom_comparison(results: list[DatasetResult], output_dir: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 PASS_THRESHOLDS = {
-    "log10_rmsd": 0.5,          # Within 0.5 decade RMSD
-    "correlation": 0.8,          # log10 correlation > 0.8
-    "frac_within_1_decade": 0.9, # 90% within 1 decade
+    "log10_rmsd": 0.5,  # Within 0.5 decade RMSD
+    "correlation": 0.8,  # log10 correlation > 0.8
+    "frac_within_1_decade": 0.9,  # 90% within 1 decade
 }
 
 
@@ -730,7 +712,7 @@ def write_report(
             "(variable `SH_SPEC_CLEAN`) and corresponding wavenumber vectors "
             "(`KCYC`) are read from the benchmark NetCDF files. Each spectrum "
             "is then processed through the `rsi-tpw` epsilon estimation "
-            "algorithm (`_estimate_epsilon` from `rsi_python.dissipation`), "
+            "algorithm (`_estimate_epsilon` from `rsi.dissipation`), "
             "which implements the Lueck variance method for low dissipation "
             "rates and the inertial subrange method for high dissipation "
             "rates. The resulting epsilon estimates are compared against the "
@@ -747,8 +729,7 @@ def write_report(
             "Root-mean-square deviation in log10(epsilon) |\n"
         )
         f.write(
-            f"| Correlation | > {PASS_THRESHOLDS['correlation']} | "
-            "Pearson r of log10(epsilon) |\n"
+            f"| Correlation | > {PASS_THRESHOLDS['correlation']} | Pearson r of log10(epsilon) |\n"
         )
         f.write(
             f"| Within 1 decade | > {PASS_THRESHOLDS['frac_within_1_decade']:.0%} | "
@@ -780,9 +761,7 @@ def write_report(
 
             f.write("| Metric | Value | Threshold | Pass |\n")
             f.write("|--------|-------|-----------|------|\n")
-            f.write(
-                f"| log10 bias | {r.log10_bias:+.3f} | — | — |\n"
-            )
+            f.write(f"| log10 bias | {r.log10_bias:+.3f} | — | — |\n")
             f.write(
                 f"| log10 RMSD | {r.log10_rmsd:.3f} | "
                 f"< {PASS_THRESHOLDS['log10_rmsd']} | "
@@ -793,9 +772,7 @@ def write_report(
                 f"> {PASS_THRESHOLDS['correlation']} | "
                 f"{'PASS' if corr_pass else 'FAIL'} |\n"
             )
-            f.write(
-                f"| Within 0.5 decade | {r.frac_within_half_decade:.1%} | — | — |\n"
-            )
+            f.write(f"| Within 0.5 decade | {r.frac_within_half_decade:.1%} | — | — |\n")
             f.write(
                 f"| Within 1 decade | {r.frac_within_1_decade:.1%} | "
                 f"> {PASS_THRESHOLDS['frac_within_1_decade']:.0%} | "
@@ -807,9 +784,7 @@ def write_report(
             f.write("## Overall Result\n\n")
             f.write(f"**{'PASS' if overall_pass else 'FAIL'}**\n\n")
         else:
-            f.write(
-                "*No benchmark files found. Download datasets and re-run.*\n\n"
-            )
+            f.write("*No benchmark files found. Download datasets and re-run.*\n\n")
 
         if plots:
             f.write("## Plots\n\n")
@@ -927,7 +902,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Write report
     print(f"\n{'─' * 60}")
-    report = write_report(results, output_dir, plots)
+    write_report(results, output_dir, plots)
 
     # Print final summary
     print(f"\n{'=' * 60}")
@@ -939,10 +914,7 @@ def main(argv: list[str] | None = None) -> int:
             corr_ok = r.correlation > PASS_THRESHOLDS["correlation"]
             frac_ok = r.frac_within_1_decade > PASS_THRESHOLDS["frac_within_1_decade"]
             status = "PASS" if (rmsd_ok and corr_ok and frac_ok) else "FAIL"
-            print(
-                f"  {r.name:30s}  RMSD={r.log10_rmsd:.3f}  "
-                f"r={r.correlation:.3f}  [{status}]"
-            )
+            print(f"  {r.name:30s}  RMSD={r.log10_rmsd:.3f}  r={r.correlation:.3f}  [{status}]")
         else:
             print(f"  {r.name:30s}  (no spectra)")
 

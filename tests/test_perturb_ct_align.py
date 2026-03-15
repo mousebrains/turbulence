@@ -3,7 +3,7 @@
 
 import numpy as np
 
-from perturb.ct_align import ct_align
+from odas_tpw.perturb.ct_align import ct_align
 
 
 class TestCTAlign:

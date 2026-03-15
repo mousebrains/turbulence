@@ -1,6 +1,6 @@
 # Mathematics of Chi Estimation
 
-This document describes the mathematical foundations for computing chi, the rate of dissipation of thermal variance, as implemented in `rsi-python`. All equation numbers, constants, and algorithmic details correspond to the actual code in [`batchelor.py`](../src/rsi_python/batchelor.py), [`fp07.py`](../src/rsi_python/fp07.py), and [`chi.py`](../src/rsi_python/chi.py).
+This document describes the mathematical foundations for computing chi, the rate of dissipation of thermal variance, as implemented in `microstructure-tpw`. All equation numbers, constants, and algorithmic details correspond to the actual code in [`batchelor.py`](../src/odas_tpw/chi/batchelor.py), [`fp07.py`](../src/odas_tpw/chi/fp07.py), and [`chi.py`](../src/odas_tpw/chi/chi.py).
 
 ## Contents
 
@@ -54,7 +54,7 @@ The Batchelor wavenumber sets the rolloff scale where molecular diffusion begins
 kB = (1 / (2*pi)) * (epsilon / (nu * kappa_T^2))^(1/4)     [cpm]
 ```
 
-([`batchelor.py: batchelor_kB`](../src/rsi_python/batchelor.py))
+([`batchelor.py: batchelor_kB`](../src/odas_tpw/chi/batchelor.py))
 
 where `epsilon` is the TKE dissipation rate [W/kg] and `nu` is the kinematic viscosity [m^2/s]. The `1/(2*pi)` converts from rad/m to cpm.
 
@@ -64,7 +64,7 @@ where `epsilon` is the TKE dissipation rate [W/kg] and `nu` is the kinematic vis
 f(alpha) = alpha * [ exp(-alpha^2 / 2)  -  alpha * sqrt(pi/2) * erfc(alpha / sqrt(2)) ]
 ```
 
-([`batchelor.py: batchelor_nondim`](../src/rsi_python/batchelor.py))
+([`batchelor.py: batchelor_nondim`](../src/odas_tpw/chi/batchelor.py))
 
 where `alpha = sqrt(2*q) * k / kB` is the non-dimensional wavenumber and `erfc` is the complementary error function. This function:
 
@@ -78,7 +78,7 @@ where `alpha = sqrt(2*q) * k / kB` is the non-dimensional wavenumber and `erfc` 
 S(k) = sqrt(q/2) * chi / (kB * kappa_T) * f(alpha)     [(K/m)^2 / cpm]
 ```
 
-([`batchelor.py: batchelor_grad`](../src/rsi_python/batchelor.py))
+([`batchelor.py: batchelor_grad`](../src/odas_tpw/chi/batchelor.py))
 
 **Normalization check.** Substituting `u = alpha`, `dk = kB / sqrt(2*q) * du`:
 
@@ -110,7 +110,7 @@ The 1D temperature gradient spectrum in cpm, derived from [Bogucki et al. (1997)
 S(k) = chi * q / (3 * kappa_T * kB^2) * k * (1 + sqrt(6*q) * y) * exp(-sqrt(6*q) * y)
 ```
 
-([`batchelor.py: kraichnan_grad`](../src/rsi_python/batchelor.py))
+([`batchelor.py: kraichnan_grad`](../src/odas_tpw/chi/batchelor.py))
 
 where `y = k / kB` is the non-dimensional wavenumber.
 
@@ -161,7 +161,7 @@ The FP07 glass-bead thermistor has a finite thermal response time that attenuate
 |H(f)|^2 = 1 / (1 + (2*pi*f*tau_0)^2)
 ```
 
-([`fp07.py: fp07_transfer`](../src/rsi_python/fp07.py))
+([`fp07.py: fp07_transfer`](../src/odas_tpw/chi/fp07.py))
 
 ### Double-pole model ([Gregg & Meagher 1980](https://doi.org/10.1029/JC085iC05p02779))
 
@@ -171,7 +171,7 @@ Accounts for both the glass bead thermal mass and the thermal boundary layer:
 |H(f)|^2 = 1 / (1 + (2*pi*f*tau_0)^2)^2
 ```
 
-([`fp07.py: fp07_double_pole`](../src/rsi_python/fp07.py))
+([`fp07.py: fp07_double_pole`](../src/odas_tpw/chi/fp07.py))
 
 ### Speed-dependent time constant
 
@@ -183,7 +183,7 @@ The FP07 time constant depends on the flow speed past the sensor, which controls
 | Peterson | `tau_0 = 0.012 * W^(-0.32)` | [Peterson & Fer 2014](https://doi.org/10.1016/j.mio.2014.05.002) |
 | Goto | `tau_0 = 0.003` (fixed) | [Goto et al. 2016](https://doi.org/10.1175/JTECH-D-15-0220.1) |
 
-([`fp07.py: fp07_tau`](../src/rsi_python/fp07.py))
+([`fp07.py: fp07_tau`](../src/odas_tpw/chi/fp07.py))
 
 At a typical profiling speed of `W = 0.7 m/s`, the Lueck model gives `tau_0 ~ 0.012 s`, corresponding to a half-power frequency of `f_{3dB} = 1/(2*pi*tau_0) ~ 13 Hz` or roughly `k_{3dB} ~ 19 cpm`. This means the FP07 attenuates the observed spectrum significantly in the viscous-diffusive subrange where the Batchelor spectrum rolls off — the correction for this attenuation is a central part of chi estimation.
 
@@ -192,7 +192,7 @@ At a typical profiling speed of `W = 0.7 m/s`, the Lueck model gives `tau_0 ~ 0.
 
 The noise model determines the frequency-dependent noise floor of the temperature gradient measurement, which sets the upper integration limit for chi. It is ported from the ODAS MATLAB functions `noise_thermchannel.m` and `gradT_noise_odas.m` ([RSI Technical Note 040](https://rocklandscientific.com/support/technical-notes/)).
 
-([`fp07.py: noise_thermchannel`](../src/rsi_python/fp07.py))
+([`fp07.py: noise_thermchannel`](../src/odas_tpw/chi/fp07.py))
 
 The noise propagates through four stages of the signal chain:
 
@@ -258,9 +258,9 @@ The conversion from frequency spectrum to wavenumber spectrum is: `Phi_noise(k) 
 
 ## 6. Method 1: Chi from Known Epsilon
 
-When shear probes provide an independent estimate of epsilon (from [`get_diss`](../src/rsi_python/dissipation.py)), the Batchelor wavenumber is fully determined and chi can be computed by integrating the observed temperature gradient spectrum with corrections for sensor rolloff and unresolved variance.
+When shear probes provide an independent estimate of epsilon (from [`get_diss`](../src/odas_tpw/rsi/dissipation.py)), the Batchelor wavenumber is fully determined and chi can be computed by integrating the observed temperature gradient spectrum with corrections for sensor rolloff and unresolved variance.
 
-([`chi.py: _chi_from_epsilon`](../src/rsi_python/chi.py))
+([`chi.py: _chi_from_epsilon`](../src/odas_tpw/chi/chi.py))
 
 ### Algorithm
 
@@ -318,7 +318,7 @@ Note that `chi_trial` cancels in the ratio `C = V_total / V_resolved` because bo
 
 When no independent epsilon is available (e.g., MicroRider deployments without shear probes), the Batchelor wavenumber `kB` is treated as a free parameter and estimated by fitting the theoretical spectrum to the observed spectrum. This simultaneously yields both chi and epsilon from temperature data alone.
 
-([`chi.py: _mle_fit_kB`](../src/rsi_python/chi.py))
+([`chi.py: _mle_fit_kB`](../src/odas_tpw/chi/chi.py))
 
 ### Theory ([Ruddick et al. 2000](https://doi.org/10.1175/1520-0426(2000)017%3C1541:MLSFTB%3E2.0.CO;2))
 
@@ -378,7 +378,7 @@ chi = 6 * kappa_T * integral_0^{5*kB}  Phi_Batchelor(k; kB_fit, chi_obs)  dk
 
 [Peterson & Fer (2014)](https://doi.org/10.1016/j.mio.2014.05.002) extended the MLE approach with iterative refinement of the integration limits and correction for unresolved variance at both low and high wavenumbers.
 
-([`chi.py: _iterative_fit`](../src/rsi_python/chi.py))
+([`chi.py: _iterative_fit`](../src/odas_tpw/chi/chi.py))
 
 ### Algorithm (3 iterations)
 
@@ -443,7 +443,7 @@ The following checks (not yet enforced as hard filters in the code, but availabl
 
 ### Welch's method
 
-Temperature gradient spectra are computed using [`csd_odas`](../src/rsi_python/spectral.py) (ported from ODAS `csd_odas.m`):
+Temperature gradient spectra are computed using [`csd_odas`](../src/odas_tpw/scor160/spectral.py) (ported from ODAS `csd_odas.m`):
 
 - Window: Hann (cosine) window normalized to RMS = 1
 - Overlap: 50% (default `fft_length // 2`)
@@ -467,7 +467,7 @@ When the temperature gradient is obtained by first-differencing the deconvolved 
 C_FD(f) = ( pi*f / (f_s * sin(pi*f/f_s)) )^2       for f > 0
 ```
 
-([`chi.py: _compute_profile_chi`](../src/rsi_python/chi.py))
+([`chi.py: _compute_profile_chi`](../src/odas_tpw/chi/chi.py))
 
 This correction approaches 1 at low frequencies and diverges at the Nyquist frequency. The corrected spectrum is:
 
@@ -480,7 +480,7 @@ Phi_corrected(k) = Phi_raw(k) * C_FD(f)
 The profile is divided into overlapping windows of length `diss_length` samples (default `3 * fft_length = 1536` samples at 512 Hz = 3 seconds of data). Adjacent windows overlap by `overlap` samples (default `diss_length // 2`). Within each window:
 
 - Mean pressure, temperature, speed, and time are computed
-- Kinematic viscosity `nu` is computed from [`visc35(T_mean)`](../src/rsi_python/ocean.py)
+- Kinematic viscosity `nu` is computed from [`visc35(T_mean)`](../src/odas_tpw/scor160/ocean.py)
 - The spectral estimate uses `2 * (diss_length // fft_length) - 1` overlapping FFT segments
 - Degrees of freedom: `d = 1.9 * num_ffts` (Nuttall 1971)
 
