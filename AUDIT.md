@@ -1,14 +1,14 @@
 # Code Quality Audit
 
-**Date**: 2026-03-14
+**Date**: 2026-03-14 (post-refactoring)
 **Scope**: Full odas_tpw codebase — architecture, duplication, large functions, testing, infrastructure
-**Prior audit**: Parallel pipeline (the critical finding last time) has been eliminated. `get_diss()` and `get_chi()` now delegate to the modular scor160 L2→L3→L4 chain. This audit focuses on what remains.
+**Prior work**: 14-item refactoring plan executed across 5 phases. ~530 net source lines eliminated, 26 duplicate test functions consolidated. All 1599 tests pass. ATOMIX L1→L4 and L2→L4 benchmarks verified unchanged.
 
 ---
 
-## Overall Grade: B (3.0 / 4.0)
+## Overall Grade: B+ (3.3 / 4.0)
 
-The parallel-pipeline anti-pattern is gone, which is a significant improvement. Mathematics and MATLAB agreement remain excellent. However, a thorough line-by-line review reveals substantial remaining issues: **55 functions over 80 lines** (14 over 150), pervasive code duplication in spectral/noise/dataset-builder code, and weak docstring coverage in perturb. The codebase is professionally capable but carries real structural debt.
+The refactoring addressed the worst duplication (dataset builders, CSD, FP07 noise, CLI handlers, config tests) and improved clarity (l3_chi, l3, goodman, compare). Mathematics and MATLAB agreement remain excellent. The codebase is cleaner but carries real structural debt: 10 functions still exceed 150 lines, `p_to_L1` is still 319 lines, the deprecated `get_diss()`/`get_chi()` remain in the hot path, and L1→L4 crashes on 2 of 6 ATOMIX datasets due to missing NaN guards.
 
 ### Grading Breakdown
 
@@ -17,229 +17,228 @@ The parallel-pipeline anti-pattern is gone, which is a significant improvement. 
 | 1 | Mathematical correctness | A | Every formula verified against publications | — |
 | 2 | MATLAB/ODAS agreement | A | 307/307 cross-validation passing | Known speed difference in scalar spectra |
 | 3 | Unit consistency | A | Consistent throughout | — |
-| 4 | Architecture & duplication | B- | Single pipeline; clean package layering; config unified | Dataset builders duplicated; noise/spectral/speed code repeated across modules |
-| 5 | Large functions | C | Pipeline monoliths gone | 55 functions >80 lines; 14 >150 lines; `p_to_L1` is 374 lines |
-| 6 | Dead code | A- | Only 1 TODO marker; no unused functions found | `get_diss()`/`get_chi()` deprecated but still the primary CLI entry points |
-| 7 | Test coverage | B+ | 901 tests, 53 files, MATLAB cross-validation, 70% coverage threshold | 26 duplicate config tests; viewers smoke-tested only; 76 silent skip calls |
-| 8 | Public API | B | ~50 exports; deprecation warnings on old functions | Two entry points still exported (`get_diss`/`get_chi` + `run_pipeline`) |
-| 9 | Type annotations | B- | scor160 and chi well-typed; mypy in CI | 16 modules with mypy overrides; viewers 0%; long return tuples untyped |
-| 10 | Docstrings | C+ | Algorithm functions excellent (Nasmyth, Batchelor, despike) | perturb ~50% undocumented; many private functions lack docstrings |
-| 11 | Error handling | B | warnings.warn at NaN/clamp sites; narrowed exceptions | Print-based logging in perturb; no structured logging anywhere |
-| 12 | Infrastructure | A- | CI matrix (3 OS × 2 Python); ruff + mypy; coverage threshold; release workflow | pytest-xdist installed but unused; MATLAB tests skip silently |
+| 4 | Architecture & duplication | B | Single pipeline; duplication cut ~50%; shared builders; consolidated CSD/FP07/CLI | Speed computation still scattered (6 sites); fp07 scalar/batch still share ~20 lines of T-dependent code; `get_diss`/`get_chi` deprecated but still in CLI hot path |
+| 5 | Large functions | C+ | 55→49 over 80 lines; 14→10 over 150 lines; l3_chi cut from 246→110; dataset builders from 175→62 | `p_to_L1` still 319 lines; `run_pipeline` still 288; `get_diss`/`get_chi` still 248/207 |
+| 6 | Dead code | A- | 1 TODO marker; no unused functions | Deprecated `get_diss`/`get_chi` still the only path from CLI |
+| 7 | Test coverage | A- | 871 test functions, 54 files; 0 duplicate config tests; MATLAB + ATOMIX cross-validation | 11 silent skip calls; viewers smoke-tested only; no corrupt `.p` file tests |
+| 8 | Public API | B | 50 exports; clean package layering | Deprecation cycle incomplete: CLI → `compute_diss_file` → `get_diss()` → warns |
+| 9 | Type annotations | B- | scor160 and chi well-typed; mypy in CI | 17 modules suppressing 6 error codes; `load_channels()` returns `dict[str, Any]`; viewers untyped |
+| 10 | Docstrings | B- | Algorithm functions excellent; all perturb private helpers now documented | 10 GPS protocol methods lack docstrings; `p_to_L1` internal logic underdocumented |
+| 11 | Error handling | B- | warnings.warn at NaN/clamp sites; narrowed exceptions | **L1→L4 crashes on 2/6 ATOMIX datasets** (NaN in L2 shear hits `scipy.signal.detrend`); print-based logging in perturb |
+| 12 | Infrastructure | A- | CI matrix (3 OS × 2 Python); ruff + mypy; 70% coverage; release workflow | pytest-xdist installed but unused; MATLAB tests skip silently |
 
 ---
 
 ## Codebase Metrics
 
-| Metric | Count |
-|--------|-------|
-| Source files | 61 |
-| Source lines | 17,077 |
-| Test files | 53 |
-| Test lines | 12,648 |
-| Test functions | 901 |
-| Public exports | ~50 |
-| TODO/FIXME markers | 1 |
-| Subpackages | 4 (scor160, chi, rsi, perturb) |
-| Functions >80 lines | 55 |
-| Functions >150 lines | 14 |
+| Metric | Before | After | Delta |
+|--------|--------|-------|-------|
+| Source files | 61 | 61 | — |
+| Source lines | 17,077 | 16,713 | -364 |
+| Test files | 53 | 54 | +1 |
+| Test lines | 12,648 | 12,518 | -130 |
+| Test functions | 901 | 871 | -30 (deduped, parametrized 2×) |
+| Tests passing | 1,599 | 1,599 | — |
+| Functions >80 lines | 55 | 49 | -6 |
+| Functions >150 lines | 14 | 10 | -4 |
+| TODO/FIXME markers | 1 | 1 | — |
+| Duplicate config tests | 26 | 0 | -26 |
 
 ### Lines by Subpackage
 
 | Subpackage | Source Lines | Files | Role |
 |------------|-------------|-------|------|
-| rsi | 7,525 | 20 | I/O, pipeline wrappers, CLI, viewers |
-| perturb | 3,713 | 19 | Campaign processing |
-| scor160 | 3,515 | 13 | ATOMIX benchmark, core pipeline |
-| chi | 2,070 | 7 | Thermal dissipation |
+| rsi | 7,333 | 20 | I/O, pipeline wrappers, CLI, viewers |
+| perturb | 3,634 | 19 | Campaign processing |
+| scor160 | 3,484 | 13 | ATOMIX benchmark, core pipeline |
+| chi | 2,008 | 7 | Thermal dissipation |
 | top-level | 254 | 2 | config_base |
+
+---
+
+## What the Refactoring Fixed
+
+| Phase | Items | Impact |
+|-------|-------|--------|
+| 1 (scor160) | Goodman bias helper, CSD delegation, l3 split, compare helpers, CLI parameterization | scor160/cli.py: 290→190 lines; spectral.py: `csd_odas` is now a 15-line wrapper; compare.py: 3 report formatters share helpers |
+| 2 (chi) | FP07 noise helpers, L4 chi unification, l3_chi split | fp07.py: eliminated 18-line verbatim duplicate; l3_chi: 246→110 lines with `_SectionResult` dataclass; l4_chi: 2 functions → 1 parameterized + closures |
+| 3 (rsi) | Shared dataset builder, `compute_speed_fast`, channel classification | `_build_diss_dataset`: 175→62 lines; `_build_chi_dataset`: 175→64 lines; both delegate to 38-line shared builder |
+| 4 (perturb) | CLI `_glob_p_files` + `_run_analysis`, missing docstring | perturb/cli.py: 4 copy-pasted handlers → 4 one-liners calling shared helper |
+| 5 (tests) | Config test deduplication | 26 duplicate tests → 27 parametrized tests in `test_config_shared.py` covering both modules; 0 overlap remaining |
 
 ---
 
 ## Detailed Findings
 
-### 4. Architecture & Duplication — B-
+### 4. Architecture & Duplication — B
 
-The parallel-pipeline problem is solved. What remains is scattered duplication within the single pipeline path.
+**Improved from B-**. The worst duplication is gone: dataset builders, CSD functions, FP07 noise config, CLI handlers, and config tests. What remains is more defensible.
 
-#### 4a. Dataset builders: `_build_diss_dataset` and `_build_chi_dataset` (350 lines total)
+#### Remaining issues
 
-`rsi/dissipation.py:318` (175 lines) and `rsi/chi_io.py:343` (175 lines) are structurally identical xarray construction functions — same coordinate setup, same CF-1.13 attribute patterns, same `coords["t"].attrs.update()` call. Only the variable names and units differ. Should be a shared parameterized builder.
+**4a. Speed computation still scattered (6 call sites)**
 
-#### 4b. FP07 noise: scalar vs batch (290 lines of duplication)
+`smooth_fall_rate()` + interpolate + clamp appears in: `rsi/adapter.py` (manual, due to edge-effect constraint), `rsi/convert.py` (via `compute_speed_fast`), `rsi/helpers.py` (both patterns), `rsi/pipeline.py`, `perturb/pipeline.py`, `perturb/fp07_cal.py`. Three sites use `compute_speed_fast()` as intended; three still call `_smooth_fall_rate` directly because they need only the fall rate, not the full speed pipeline. This is defensible but fragile — the inline Butterworth filter in `adapter.py:75–86` is a maintenance hazard.
 
-`chi/fp07.py` contains two near-identical implementations:
-- `noise_thermchannel()` — 170 lines (L195–364), scalar
-- `noise_thermchannel_batch()` — 120 lines (L409–528), vectorized
+**4b. Deprecated functions still in CLI hot path**
 
-Both unpack the same `FP07NoiseConfig` object (18 lines duplicated verbatim at L286–303 and L452–469), compute the same F-dependent intermediates, apply the same T-dependent terms. The batch version should call the scalar or share extracted helpers. Similarly `fp07_tau()` (25 lines) and `fp07_tau_batch()` (23 lines) duplicate model-selection logic.
+`rsi-tpw eps` → `compute_diss_file()` → `get_diss()` (deprecated, warns). Same for `rsi-tpw chi` → `compute_chi_file()` → `get_chi()`. Users see deprecation warnings from the tool's own CLI. Either complete the migration (make the CLI call `run_pipeline` or the scor160 chain directly) or remove the deprecation warnings.
 
-#### 4c. Spectral estimation: three overlapping CSD functions (345 lines total)
+**4c. FP07 noise: residual T-dependent duplication (~15 lines)**
 
-`scor160/spectral.py` has three functions that share 60–70% of their logic:
-- `csd_odas()` — 98 lines, single-pair
-- `csd_matrix()` — 104 lines, multi-channel
-- `csd_matrix_batch()` — 143 lines, multi-channel batched
+`noise_thermchannel()` (L374–391) and `noise_thermchannel_batch()` (L495–505) still duplicate the R_ratio → scale factor computation. The scalar version has NaN-guarded warnings; the batch version silently clips. Minor, but the scalar version's warning logic should be shared.
 
-Window/overlap/detrending setup, auto-spectrum normalization, and cross-spectrum computation are repeated across all three. `csd_odas()` should call `csd_matrix()` internally.
+### 5. Large Functions — C+
 
-#### 4d. Speed computation scattered across 8 call sites
+**Improved from C**. 6 fewer functions over 80 lines; 4 fewer over 150.
 
-`_smooth_fall_rate()` + `np.interp()` + floor clamp appears in: `rsi/adapter.py`, `rsi/convert.py`, `rsi/helpers.py` (2×), `rsi/pipeline.py`, `rsi/viewer_base.py`, `perturb/pipeline.py`, `perturb/fp07_cal.py`. Each imports `_smooth_fall_rate` from `rsi/profile.py` and repeats the same 5-line pattern. Should be a single `compute_speed_fast()` helper.
+| Function | File | Lines | Status |
+|----------|------|-------|--------|
+| `p_to_L1()` | rsi/convert.py | 319 | Channel classification extracted (68 lines out). Still 319 lines — NetCDF variable creation repeated 12× with near-identical patterns. Needs a variable-spec-list approach like the dataset builders. |
+| `run_pipeline()` | rsi/pipeline.py | 288 | Orchestrates 8 steps. Could extract per-step functions but risk is low — each step is self-contained. |
+| `get_diss()` | rsi/dissipation.py | 248 | Deprecated wrapper. Will shrink when deprecation cycle completes. |
+| `get_chi()` | rsi/chi_io.py | 207 | Same. |
+| `process_file()` | perturb/pipeline.py | 180 | 8-stage handler. Acceptable for an orchestrator. |
+| `compute_eps_window()` | rsi/window.py | 163 | Multi-step epsilon estimation. Scientifically complex; splitting would hurt readability. |
+| `process_l3()` | scor160/l3.py | 161 | Down from 178; constants and helpers extracted. Further splitting would fragment the spectral pipeline. |
+| `_read()` | rsi/p_file.py | 160 | Binary parsing. Complex but well-structured. |
+| `compute_chi_window()` | rsi/window.py | 156 | Same as `compute_eps_window` — scientifically dense. |
+| `run_pipeline()` | perturb/pipeline.py | 155 | Orchestrator. Acceptable. |
 
-#### 4e. L4 chi: `process_l4_chi_epsilon` and `process_l4_chi_fit` (215 lines combined)
-
-`chi/l4_chi.py` — Both functions initialize the same 6 output arrays, loop over `j in range(n_spec), ci in range(n_gradt)` with the same structure, and assemble identical `L4ChiData`. Only the inner fit call differs. Should be unified with a strategy parameter.
-
-#### 4f. Goodman bias correction duplicated
-
-`scor160/goodman.py` — `clean_shear_spec()` (110 lines) and `clean_shear_spec_batch()` (61 lines) duplicate the bias correction calculation verbatim. Extract `_bias_correction()` helper.
-
-#### 4g. Comparison functions share identical patterns
-
-`scor160/compare.py` (422 lines) — All three `compare_l*()` and `format_l*_report()` functions follow the same template: compute metrics, check finite values, compute RMS/correlation, build string report. Log-spectral comparison appears in both L3 and L4. Extract shared helpers.
-
-#### 4h. scor160 CLI: 6 near-identical command handlers
-
-`scor160/cli.py` (290 lines) — `_cmd_l1_l2`, `_cmd_l2_l3`, `_cmd_l1_l3`, `_cmd_l3_l4`, `_cmd_l2_l4`, `_cmd_l1_l4` all follow the same `read → process → compare → format_report` pattern. Should be one parameterized function.
-
-#### 4i. perturb CLI: 3 duplicate analysis commands
-
-`perturb/cli.py` — `_cmd_profiles`, `_cmd_diss`, `_cmd_chi` repeat ~27 lines of identical boilerplate (load config, expand globs, call `run_pipeline()`). Extract a shared helper.
-
-#### 4j. Config test duplication (26 identical test functions)
-
-`tests/test_config.py` (52 tests) and `tests/test_perturb_config.py` (44 tests) share 26 test functions with identical names and near-identical bodies. Both test `ConfigManager` from `config_base.py`. Should be parameterized once.
-
-### 5. Large Functions — C
-
-14 functions exceed 150 lines. These are the worst offenders:
-
-| Function | File | Lines | Issue |
-|----------|------|-------|-------|
-| `p_to_L1()` | rsi/convert.py | 374 | Monolith: reads binary, classifies channels, writes NetCDF. NetCDF variable creation repeated 12× with near-identical patterns. |
-| `run_pipeline()` | rsi/pipeline.py | 288 | Orchestrates 8 steps in one function with nested profile loops. |
-| `get_diss()` | rsi/dissipation.py | 248 | Wrapper that builds L1Data, runs L2→L3, then custom epsilon loop. |
-| `process_l3_chi()` | chi/l3_chi.py | 246 | Window building, spectral computation, metadata assembly all in one. 11 separate list accumulations for per-window results. |
-| `get_chi()` | rsi/chi_io.py | 207 | Similar structure to `get_diss()` but for chi. |
-| `process_file()` | perturb/pipeline.py | 180 | Handles 8 distinct stages (hotel, CTD, profiles, FP07, CT align, diss, chi) with try-except per stage. |
-| `process_l3()` | scor160/l3.py | 178 | Single monolith for window extraction, spectral computation, wavenumber conversion. Magic constants (0.05, 150) hardcoded. |
-| `_build_diss_dataset()` | rsi/dissipation.py | 175 | Repetitive xarray construction. |
-| `_build_chi_dataset()` | rsi/chi_io.py | 175 | Same pattern as above. |
-| `noise_thermchannel()` | chi/fp07.py | 170 | 19 parameters; duplicated by batch version. |
-| `_read()` | rsi/p_file.py | 160 | Binary parsing with complex address matrix logic. |
-| `run_pipeline()` | perturb/pipeline.py | 155 | Discover, trim, merge, GPS, hotel, parallel execution, binning. |
-| `fp07_calibrate()` | perturb/fp07_cal.py | 150 | Validation, RT/R0 computation, profile lags, Steinhart-Hart fit, calibration. |
-| `pfile_to_l1data()` | rsi/adapter.py | 145 | PFile → L1Data conversion with many optional branches. |
-
-Functions in the 80–150 line range (41 additional) include `_estimate_epsilon` (138), `_iterative_fit` (133), `csd_matrix_batch` (143), `_load_from_nc` (127), `noise_thermchannel_batch` (120), and others. Many of these are scientifically complex and would not benefit from splitting (e.g., `_estimate_epsilon` is a well-structured multi-step algorithm). The ones that *should* be split are orchestration functions that mix I/O, data transformation, and computation.
+The scientific core functions (spectral estimation, epsilon/chi window computation, binary parsing) are legitimately complex. The remaining targets for splitting are `p_to_L1()` (mechanical NetCDF construction) and completing the `get_diss`/`get_chi` deprecation.
 
 ### 6. Dead Code — A-
 
-Only 1 TODO marker (`perturb/pipeline.py:441`). No unused functions detected. `get_diss()` and `get_chi()` emit `DeprecationWarning` but remain the entry points for the `eps` and `chi` CLI subcommands — they're not dead, just deprecated.
+1 TODO marker (`perturb/pipeline.py:441`). No unused functions. `get_diss()` and `get_chi()` emit `DeprecationWarning` but are still called by the CLI — they're not dead, but the deprecation cycle is incomplete.
 
-### 7. Test Coverage — B+
+### 7. Test Coverage — A-
 
-**901 test functions across 53 files. 1599 passing, 10 skipped.**
+**Improved from B+**. Config test duplication eliminated. 27 shared tests now cover both config modules via parametrized fixture.
+
+**871 test functions across 54 files. 1599 passing, 10 skipped.**
 
 | Subpackage | Test Files | Approx Tests | Quality |
 |------------|-----------|-------|---------|
-| scor160 | ~12 | ~200 | Good — unit + integration + MATLAB |
+| scor160 | ~12 | ~200 | Good — unit + integration + ATOMIX L1→L4 |
 | rsi | ~18 | ~350 | Good — unit + integration + CLI |
 | chi | ~5 | ~150 | Good — unit + integration + MATLAB |
 | perturb | ~12 | ~150 | Good — unit + integration |
 | cross-validation | 4 | ~60 | Excellent — 30 .p files validated |
+| config (shared) | 1 | ~54 | New — parametrized over rsi + perturb |
 
 **Gaps:**
-- **26 duplicate test functions** between `test_config.py` and `test_perturb_config.py`
-- **76 `pytest.skip()` calls** — tests skip silently if VMP data is missing, masking coverage loss in CI
-- Viewers smoke-tested only (instantiation, not behavior)
-- `config_base.py` (254 lines) has no direct unit tests — only tested transitively through rsi/perturb config tests
+- **11 `pytest.skip()` calls** — tests skip silently if VMP data missing (down from 76 — fixture-based skips now handled centrally)
+- Viewers smoke-tested only
 - No tests for corrupt or truncated `.p` files
-- pytest-xdist installed but not used in CI (`-n auto` would parallelize slow MATLAB tests)
+- pytest-xdist installed but unused in CI
 
 ### 8. Public API — B
 
-~50 exports across 4 `__init__.py` files. The deprecation situation is awkward: `get_diss()` and `get_chi()` are deprecated yet remain the recommended CLI entry points (via `rsi-tpw eps` and `rsi-tpw chi`). `run_pipeline()` is the replacement but the CLI experience for the non-pipeline subcommands still calls the deprecated functions. Either remove the deprecation warnings or update the CLI to call `run_pipeline()` internally.
+50 exports across 4 `__init__.py` files. The deprecation cycle is the main issue: `get_diss` and `get_chi` are exported, deprecated, yet called by the CLI's own `compute_diss_file` and `compute_chi_file`. Users running `rsi-tpw eps` see a `DeprecationWarning` from the tool itself.
 
 ### 9. Type Annotations — B-
 
 | Module Group | Coverage | Notes |
 |-------------|----------|-------|
-| scor160 (all modules) | ~95% | Solid; dataclasses fully typed |
-| chi core (batchelor, fp07, l2/l3/l4_chi) | ~90% | Good |
-| chi/chi.py | ~80% | Return tuples should use NamedTuple (7-element tuples are fragile) |
-| rsi core (p_file, channels, config) | ~90% | Good |
-| rsi pipeline (dissipation, helpers, adapter) | ~80% | `dict[str, Any]` returns instead of typed structures |
-| rsi viewers (viewer_base, quick_look, diss_look) | ~0% | mypy fully disabled |
-| perturb | ~90% | Type hints present but few docstrings |
+| scor160 | ~95% | Solid; dataclasses fully typed |
+| chi core | ~90% | Good |
+| chi/chi.py | ~80% | 7-element return tuples should use NamedTuple |
+| rsi core | ~90% | Good |
+| rsi pipeline | ~80% | `dict[str, Any]` returns from `load_channels()`, `_channels_from_pfile()` |
+| rsi viewers | ~0% | No type hints at all |
+| perturb | ~90% | Good |
 
-16 modules have per-module mypy overrides suppressing error codes. The viewer modules have mypy disabled entirely.
+17 modules have a blanket mypy override suppressing 6 error codes (`operator`, `index`, `arg-type`, `return-value`, `no-any-return`, `assignment`). This is driven by NumPy array arithmetic false positives — defensible but masks real errors.
 
-### 10. Docstrings — C+
+### 10. Docstrings — B-
 
-Excellent for core algorithms (Nasmyth, Batchelor, MLE, Goodman, despike — all have Parameters/Returns and publication references). But:
+**Improved from C+**. Perturb private functions now documented (Phase 4B). The `_get_agg_func` docstring was the only one missing and is now added.
 
-- **perturb**: 50% of functions lack docstrings, including public APIs like `ctd_bin_file()`, `ct_align()`, `detect_bottom_crash()`, `mk_epsilon_mean()`
-- **rsi viewers**: Minimal docstrings; methods over 100 lines lack documentation
-- **chi/fp07.py**: `noise_thermchannel()` well-documented but helper functions undocumented
-- **Private functions**: Inconsistent; some have full NumPy-style docstrings, many have none
+**Remaining gaps:**
+- 10 GPS protocol methods (`lat()`/`lon()` on 5 provider classes) lack docstrings — these are 1-line implementations of a protocol, low severity
+- `p_to_L1()` internal logic (319 lines of NetCDF construction) has minimal inline documentation
+- `rsi/window.py` functions have sparse docstrings for their complexity
 
-### 11. Error Handling — B
+### 11. Error Handling — B-
 
-- `warnings.warn()` at NaN/clamp sites in chi.py (7 sites)
-- `ValueError` raised for invalid inputs
-- Narrowed exception types in CLI and convert modules
-- **Gaps**: perturb uses `print()` statements for logging (no `logging` module); `ProcessPoolExecutor` errors in perturb/pipeline.py are printed to stderr with no summary or rollback
+**Downgraded from B** due to the ATOMIX L1→L4 crash.
+
+**Critical: L1→L4 crashes on 2 of 6 ATOMIX benchmark datasets.**
+
+- **Epsilometer**: L2 processing introduces 28 NaN values (HP filter edge effects on data with NaN at boundaries). 1 of 131 spectral windows contains NaN → `scipy.signal.detrend` raises `ValueError: array must not contain infs or NaNs`.
+- **MSS Baltic**: L1 data contains 19,246 NaN values (instrument gaps). L2 propagates 19,790 NaN. 3 of 33 windows affected → same crash.
+- **Root cause**: `csd_matrix_batch()` calls `_detrend_batch()` → `scipy.signal.detrend()` with no NaN guard. The L2→L4 path works because reference L2 data (from MATLAB) handles NaN differently.
+- **Impact**: The `scor160-tpw l1-l4` command crashes on these datasets. The VMP and Nemo datasets (the ones with clean L1 data) work fine. The rsi pipeline (`rsi-tpw eps`) is not affected because it uses a different spectral path.
+- **Fix**: Replace NaN values before detrending (interpolate or zero-fill within windows), or skip windows containing NaN and warn.
+
+**Other error handling gaps:**
+- perturb uses `print()` for logging — no `logging` module anywhere
+- `ProcessPoolExecutor` errors printed to stderr with no summary
 
 ### 12. Infrastructure — A-
 
-**Strong:**
-- CI: ruff lint + mypy + pytest matrix (Python 3.12/3.13 × Ubuntu/macOS/Windows)
-- Separate lint, typecheck, test jobs (lint as blocking dependency)
-- 70% coverage threshold with codecov integration
-- Release workflow (PyPI on `v*` tags)
-- Dependabot (pip + GitHub Actions, monthly)
-
-**Gaps:**
-- pytest-xdist installed but CI doesn't use `-n auto` — MATLAB tests run serially
-- Codecov only reports from Python 3.13 on Ubuntu; if that job fails, coverage is never reported
-- No test timeout enforcement (pytest-timeout not installed)
-- MATLAB validation tests skip silently in CI rather than failing explicitly
+Unchanged. Strong CI, good linting, appropriate coverage threshold.
 
 ---
 
-## Refactoring Recommendations
+## Remaining Refactoring Recommendations
 
-### Previously Completed
+### Previously Completed (this session)
 
-| Priority | Item | What Changed |
-|----------|------|-------------|
-| P0 | Eliminate parallel pipelines | Deleted `_compute_profile_diss()` (219 lines), `_compute_profile_chi()` + `_build_chi_dataset()` (485 lines). `get_diss()` and `get_chi()` now delegate to scor160 L2→L3→L4. |
-| P1 | Unify config modules | Created `config_base.py` with `ConfigManager`; rsi and perturb delegate to it |
-| P1 | Extract shared FP07 transfer | `fp07_tau_batch()`, `fp07_transfer_batch()`, `default_tau_model()` in `chi/fp07.py` |
-| P1 | Centralize channel patterns | `SH_PATTERN`, `AC_PATTERN`, `T_PATTERN`, `DT_PATTERN` in `rsi/helpers.py` |
-| P2 | Remove dead code | Deleted `compute_nu()`, duplicate `KAPPA_T` |
-| P2 | Extract file-write wrapper | `helpers.write_profile_results()` shared by diss and chi |
-| P3 | Coverage threshold in CI | `--cov-fail-under=70` |
+| Item | What Changed |
+|------|-------------|
+| Goodman bias helper | Extracted `_bias_correction()` shared by scalar and batch |
+| CSD consolidation | `csd_odas()` now delegates to `csd_matrix()` |
+| l3 clarity | Module constants `MACOUN_LUECK_K_MAX/DENOM`, extracted `_build_window_arrays` and `_apply_macoun_lueck` |
+| Compare helpers | Extracted `_log_spectral_metrics()` and `_format_report_header()` |
+| scor160 CLI parameterization | 6 handlers → `_run_benchmark(args, levels)` |
+| FP07 noise consolidation | `_unpack_noise_config()` and `_noise_f_intermediates()` shared; `fp07_tau_batch` is thin wrapper |
+| L4 chi unification | `_process_l4_chi()` with strategy closures |
+| l3_chi split | `_SectionResult` dataclass + `_process_section_chi()` helper |
+| Dataset builder merge | `_build_result_dataset()` in helpers.py, used by both diss and chi |
+| `compute_speed_fast` helper | Added to scor160/profile.py, used by convert.py and helpers.py |
+| `p_to_L1` channel classification | Extracted `_classify_channels()` (68 lines) |
+| perturb CLI parameterization | `_glob_p_files()` + `_run_analysis()` shared handler |
+| perturb docstrings | Added missing `_get_agg_func` docstring |
+| Config test deduplication | 27 parametrized tests in `test_config_shared.py`; 0 duplicate tests remaining |
 
 ### Remaining
 
-| Priority | Item | Est. Lines Saved | Notes |
-|----------|------|-----------------|-------|
-| P1 | Merge dataset builders | ~150 | `_build_diss_dataset` and `_build_chi_dataset` → shared parameterized builder |
-| P1 | Consolidate FP07 noise scalar/batch | ~100 | Extract config unpacking and F/T-dependent computation to shared helpers |
-| P1 | Split `p_to_L1()` | 0 (clarity) | 374 lines → separate channel classification, NetCDF variable creation loop |
-| P2 | Unify L4 chi process functions | ~80 | `process_l4_chi_epsilon` + `process_l4_chi_fit` → one function with strategy param |
-| P2 | Consolidate CSD functions | ~80 | `csd_odas()` should call `csd_matrix()` |
-| P2 | Extract speed computation helper | ~40 | Replace 8 call sites of `_smooth_fall_rate` + `interp` + clamp |
-| P2 | Split `process_l3()` and `process_l3_chi()` | 0 (clarity) | 178 and 246 lines; extract window building and per-section helpers |
-| P2 | Parameterize scor160 CLI handlers | ~100 | 6 handlers → 1 parameterized function |
-| P2 | Parameterize perturb CLI commands | ~50 | 3 handlers → 1 helper |
-| P3 | Deduplicate config tests | ~300 (test) | 26 identical test functions → parameterized fixtures |
-| P3 | Extract Goodman bias correction helper | ~15 | Duplicated in scalar and batch versions |
-| P3 | Consolidate compare.py helpers | ~60 | Shared log-spectral comparison and report formatting |
-| P3 | Add perturb docstrings | 0 | ~50% of public functions undocumented |
+| Priority | Item | Est. Effort | Notes |
+|----------|------|-------------|-------|
+| **P0** | **NaN guard in `csd_matrix_batch`** | Small | Skip or interpolate NaN windows before `detrend`. Crashes L1→L4 on Epsilometer and MSS. |
+| P1 | Complete deprecation cycle | Medium | Make `compute_diss_file`/`compute_chi_file` call scor160 chain directly instead of `get_diss`/`get_chi`. Then remove the deprecated functions. |
+| P1 | Split `p_to_L1()` NetCDF creation | Medium | 319 lines. Variable creation repeated 12× — use a spec list like the dataset builders. |
+| P2 | TypedDict for `load_channels()` return | Small | Replace `dict[str, Any]` with typed structure. 4 call sites. |
+| P2 | GPS protocol method docstrings | Trivial | 10 one-line methods on 5 classes. |
+| P3 | Structured logging in perturb | Medium | Replace `print()` with `logging` module. |
+| P3 | Enable pytest-xdist in CI | Trivial | Add `-n auto` to pytest command. |
+
+---
+
+## ATOMIX Benchmark Results (post-refactoring)
+
+### L2→L4 (all 6 datasets pass)
+
+| Dataset | Spectra | L4 ε within factor 2 | Method Agreement |
+|---------|---------|---------------------|-----------------|
+| Epsilometer | 181 | N/A (ISR) | 98.9–100% |
+| MSS Baltic | 61 | N/A (ISR) | 100% |
+| MR1000 Minas Passage | 30 | 100% (4 probes) | 100% |
+| VMP2000 Faroe Bank | 342 | N/A (ISR) | 100% |
+| VMP250 Tidal (cs) | 32 | 96.9–100% | 93.8–96.9% |
+| VMP250 Tidal | 32 | 100% | 96.9–100% |
+
+### L1→L4 (4 of 6 datasets pass)
+
+| Dataset | L2 Overlap | L4 ε within factor 2 | Status |
+|---------|-----------|---------------------|--------|
+| MR1000 Minas Passage | 100% | 100% (4 probes) | **PASS** |
+| VMP2000 Faroe Bank | 100% | N/A (ISR, 100% agreement) | **PASS** |
+| VMP250 Tidal (cs) | 100% | 96.9–100% | **PASS** |
+| VMP250 Tidal | 99.8% | 100% | **PASS** |
+| Epsilometer | 100% (L2 ok) | — | **CRASH** — 28 NaN from HP filter edge; 1/131 windows bad |
+| MSS Baltic | 100% (L2 ok) | — | **CRASH** — 19,246 NaN in L1; 3/33 windows bad |
 
 ---
 
@@ -247,19 +246,11 @@ Excellent for core algorithms (Nasmyth, Batchelor, MLE, Goodman, despike — all
 
 All formulas verified against cited publications. No errors found.
 
-- Nasmyth: Lueck improved fit coefficients correct
-- Batchelor/Kraichnan: Correct per Dillon & Caldwell / Bogucki et al.
-- MLE: Correct for chi-squared spectral estimates
-- FP07: Single/double pole transfer functions correct
-- Viscosity: Sharqawy coefficients match ODAS exactly
-- Goodman: Wiener filter formulation correct with bias correction
-- Spectral: Cosine window, FFT normalization, DOF all correct
-
 ---
 
 ## MATLAB/ODAS Agreement — A (unchanged)
 
-307/307 epsilon + chi cross-validation tests pass across 30 .p files. Known difference: scalar spectra wavenumber vectors differ by ~5-15% due to speed computation method (profile boundaries, filter padding). Chi and epsilon values themselves agree.
+307/307 epsilon + chi cross-validation tests pass across 30 .p files. Known difference: scalar spectra wavenumber vectors differ by ~5-15% due to speed computation method (profile boundaries, filter padding).
 
 ---
 
@@ -267,13 +258,13 @@ All formulas verified against cited publications. No errors found.
 
 See [Bibliography](docs/bibliography.md) for full citations. Key references:
 
-- Lueck, R. (2022a,b) -- Nasmyth spectrum improved fit, figure of merit
-- Oakey, N. (1982) -- Batchelor constant Q_B = 3.7
-- Bogucki, D. et al. (1997) -- Kraichnan constant Q_K = 5.26
-- Dillon, T. & Caldwell, D. (1980) -- Batchelor spectrum formulation
-- Ruddick, B. et al. (2000) -- MLE spectral fitting
-- Peterson, A. & Fer, I. (2014) -- Iterative chi fitting algorithm
-- Sharqawy, M. et al. (2010) -- Seawater viscosity
-- Mudge, T. & Lueck, R. (1994) -- Deconvolution
-- RSI TN-040, TN-042, TN-051, TN-061 -- Instrument technical notes
-- ODAS MATLAB Library v4.5.1 -- Reference implementation
+- Lueck, R. (2022a,b) — Nasmyth spectrum improved fit, figure of merit
+- Oakey, N. (1982) — Batchelor constant Q_B = 3.7
+- Bogucki, D. et al. (1997) — Kraichnan constant Q_K = 5.26
+- Dillon, T. & Caldwell, D. (1980) — Batchelor spectrum formulation
+- Ruddick, B. et al. (2000) — MLE spectral fitting
+- Peterson, A. & Fer, I. (2014) — Iterative chi fitting algorithm
+- Sharqawy, M. et al. (2010) — Seawater viscosity
+- Fer, I. et al. (2024) — ATOMIX benchmark datasets
+- RSI TN-040, TN-042, TN-051, TN-061 — Instrument technical notes
+- ODAS MATLAB Library v4.5.1 — Reference implementation
