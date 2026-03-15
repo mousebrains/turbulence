@@ -63,147 +63,25 @@ def main(argv: list[str] | None = None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# l1-l2
+# Shared benchmark runner
 # ---------------------------------------------------------------------------
 
-def _cmd_l1_l2(args: argparse.Namespace) -> None:
-    from odas_tpw.scor160.compare import compare_l2, format_l2_report
-    from odas_tpw.scor160.io import read_atomix
-    from odas_tpw.scor160.l2 import process_l2
-
-    for path in args.files:
-        print(f"\nProcessing {path.name} ...")
-        l1, l2_params, l2_ref, _l3_params, _l3_ref, _l4_ref = read_atomix(path)
-        print(f"  L1: {l1.n_time} samples, {l1.n_shear} shear, {l1.n_vib} {l1.vib_type}")
-        print(f"  Params: HP_cut={l2_params.HP_cut} Hz, despike_sh={l2_params.despike_sh}"
-              f", speed_tau={l2_params.speed_tau} s"
-              f", min_W={l2_params.profile_min_W} m/s")
-
-        l2_comp = process_l2(l1, l2_params)
-        metrics = compare_l2(l2_comp, l2_ref)
-        print()
-        print(format_l2_report(metrics, filename=path.name))
-
-        if args.plot:
-            _plot_l2(l1, l2_comp, l2_ref, path.stem)
+# Level processing specs: (start, end, needs_plot)
+_LEVEL_SPECS = {
+    "l1-l2": {"levels": ["l2"]},
+    "l2-l3": {"levels": ["l3"]},
+    "l1-l3": {"levels": ["l2", "l3"]},
+    "l3-l4": {"levels": ["l4"]},
+    "l2-l4": {"levels": ["l3", "l4"]},
+    "l1-l4": {"levels": ["l2", "l3", "l4"]},
+}
 
 
-# ---------------------------------------------------------------------------
-# l2-l3 (reference L2 -> computed L3)
-# ---------------------------------------------------------------------------
-
-def _cmd_l2_l3(args: argparse.Namespace) -> None:
-    from odas_tpw.scor160.compare import compare_l3, format_l3_report
-    from odas_tpw.scor160.io import read_atomix
-    from odas_tpw.scor160.l3 import process_l3
-
-    for path in args.files:
-        print(f"\nProcessing {path.name} ...")
-        l1, _l2_params, l2_ref, l3_params, l3_ref, _l4_ref = read_atomix(path)
-        print(f"  L2 ref: {l2_ref.shear.shape[1]} samples, "
-              f"{l2_ref.shear.shape[0]} shear, {l2_ref.vib.shape[0]} {l2_ref.vib_type}")
-        print(f"  L3 params: fft={l3_params.fft_length}, diss={l3_params.diss_length}, "
-              f"overlap={l3_params.overlap}, goodman={l3_params.goodman}")
-
-        l3_comp = process_l3(l2_ref, l1, l3_params)
-        metrics = compare_l3(l3_comp, l3_ref)
-        print()
-        print(format_l3_report(metrics, filename=path.name))
-
-
-# ---------------------------------------------------------------------------
-# l1-l3 (L1 -> computed L2 -> computed L3)
-# ---------------------------------------------------------------------------
-
-def _cmd_l1_l3(args: argparse.Namespace) -> None:
+def _run_benchmark(args: argparse.Namespace, levels: list[str]) -> None:
+    """Run benchmark processing for the specified levels."""
     from odas_tpw.scor160.compare import (
-        compare_l2,
-        compare_l3,
-        format_l2_report,
-        format_l3_report,
-    )
-    from odas_tpw.scor160.io import read_atomix
-    from odas_tpw.scor160.l2 import process_l2
-    from odas_tpw.scor160.l3 import process_l3
-
-    for path in args.files:
-        print(f"\nProcessing {path.name} ...")
-        l1, l2_params, l2_ref, l3_params, l3_ref, _l4_ref = read_atomix(path)
-
-        l2_comp = process_l2(l1, l2_params)
-        l2_metrics = compare_l2(l2_comp, l2_ref)
-        print()
-        print(format_l2_report(l2_metrics, filename=path.name))
-
-        l3_comp = process_l3(l2_comp, l1, l3_params)
-        l3_metrics = compare_l3(l3_comp, l3_ref)
-        print()
-        print(format_l3_report(l3_metrics, filename=path.name))
-
-
-# ---------------------------------------------------------------------------
-# l3-l4 (reference L3 -> computed L4)
-# ---------------------------------------------------------------------------
-
-def _cmd_l3_l4(args: argparse.Namespace) -> None:
-    from odas_tpw.scor160.compare import compare_l4, format_l4_report
-    from odas_tpw.scor160.io import read_atomix
-    from odas_tpw.scor160.l4 import process_l4
-
-    for path in args.files:
-        print(f"\nProcessing {path.name} ...")
-        l1, _l2_params, _l2_ref, _l3_params, l3_ref, l4_ref = read_atomix(path)
-        print(f"  L3 ref: {l3_ref.n_spectra} spectra, "
-              f"{l3_ref.n_shear} shear, {l3_ref.n_wavenumber} wavenumbers")
-
-        l4_comp = process_l4(l3_ref, f_AA=l1.f_AA)
-        metrics = compare_l4(l4_comp, l4_ref)
-        print()
-        print(format_l4_report(metrics, filename=path.name))
-
-
-# ---------------------------------------------------------------------------
-# l2-l4 (reference L2 -> computed L3 -> computed L4)
-# ---------------------------------------------------------------------------
-
-def _cmd_l2_l4(args: argparse.Namespace) -> None:
-    from odas_tpw.scor160.compare import (
-        compare_l3,
-        compare_l4,
-        format_l3_report,
-        format_l4_report,
-    )
-    from odas_tpw.scor160.io import read_atomix
-    from odas_tpw.scor160.l3 import process_l3
-    from odas_tpw.scor160.l4 import process_l4
-
-    for path in args.files:
-        print(f"\nProcessing {path.name} ...")
-        l1, _l2_params, l2_ref, l3_params, l3_ref, l4_ref = read_atomix(path)
-
-        l3_comp = process_l3(l2_ref, l1, l3_params)
-        l3_metrics = compare_l3(l3_comp, l3_ref)
-        print()
-        print(format_l3_report(l3_metrics, filename=path.name))
-
-        l4_comp = process_l4(l3_comp, f_AA=l1.f_AA)
-        l4_metrics = compare_l4(l4_comp, l4_ref)
-        print()
-        print(format_l4_report(l4_metrics, filename=path.name))
-
-
-# ---------------------------------------------------------------------------
-# l1-l4 (L1 -> L2 -> L3 -> L4)
-# ---------------------------------------------------------------------------
-
-def _cmd_l1_l4(args: argparse.Namespace) -> None:
-    from odas_tpw.scor160.compare import (
-        compare_l2,
-        compare_l3,
-        compare_l4,
-        format_l2_report,
-        format_l3_report,
-        format_l4_report,
+        compare_l2, compare_l3, compare_l4,
+        format_l2_report, format_l3_report, format_l4_report,
     )
     from odas_tpw.scor160.io import read_atomix
     from odas_tpw.scor160.l2 import process_l2
@@ -214,20 +92,64 @@ def _cmd_l1_l4(args: argparse.Namespace) -> None:
         print(f"\nProcessing {path.name} ...")
         l1, l2_params, l2_ref, l3_params, l3_ref, l4_ref = read_atomix(path)
 
-        l2_comp = process_l2(l1, l2_params)
-        l2_metrics = compare_l2(l2_comp, l2_ref)
-        print()
-        print(format_l2_report(l2_metrics, filename=path.name))
+        if "l2" in levels:
+            print(f"  L1: {l1.n_time} samples, {l1.n_shear} shear, {l1.n_vib} {l1.vib_type}")
+            print(f"  Params: HP_cut={l2_params.HP_cut} Hz, despike_sh={l2_params.despike_sh}"
+                  f", speed_tau={l2_params.speed_tau} s"
+                  f", min_W={l2_params.profile_min_W} m/s")
+            l2_comp = process_l2(l1, l2_params)
+            print()
+            print(format_l2_report(compare_l2(l2_comp, l2_ref), filename=path.name))
+            if getattr(args, "plot", False):
+                _plot_l2(l1, l2_comp, l2_ref, path.stem)
+        else:
+            l2_comp = None
 
-        l3_comp = process_l3(l2_comp, l1, l3_params)
-        l3_metrics = compare_l3(l3_comp, l3_ref)
-        print()
-        print(format_l3_report(l3_metrics, filename=path.name))
+        if "l3" in levels:
+            l2_input = l2_comp if l2_comp is not None else l2_ref
+            if l2_comp is None:
+                print(f"  L2 ref: {l2_ref.shear.shape[1]} samples, "
+                      f"{l2_ref.shear.shape[0]} shear, {l2_ref.vib.shape[0]} {l2_ref.vib_type}")
+                print(f"  L3 params: fft={l3_params.fft_length}, diss={l3_params.diss_length}, "
+                      f"overlap={l3_params.overlap}, goodman={l3_params.goodman}")
+            l3_comp = process_l3(l2_input, l1, l3_params)
+            print()
+            print(format_l3_report(compare_l3(l3_comp, l3_ref), filename=path.name))
+        else:
+            l3_comp = None
 
-        l4_comp = process_l4(l3_comp, f_AA=l1.f_AA)
-        l4_metrics = compare_l4(l4_comp, l4_ref)
-        print()
-        print(format_l4_report(l4_metrics, filename=path.name))
+        if "l4" in levels:
+            l3_input = l3_comp if l3_comp is not None else l3_ref
+            if l3_comp is None:
+                print(f"  L3 ref: {l3_ref.n_spectra} spectra, "
+                      f"{l3_ref.n_shear} shear, {l3_ref.n_wavenumber} wavenumbers")
+            l4_comp = process_l4(l3_input, f_AA=l1.f_AA)
+            print()
+            print(format_l4_report(compare_l4(l4_comp, l4_ref), filename=path.name))
+
+
+def _cmd_l1_l2(args: argparse.Namespace) -> None:
+    _run_benchmark(args, ["l2"])
+
+
+def _cmd_l2_l3(args: argparse.Namespace) -> None:
+    _run_benchmark(args, ["l3"])
+
+
+def _cmd_l1_l3(args: argparse.Namespace) -> None:
+    _run_benchmark(args, ["l2", "l3"])
+
+
+def _cmd_l3_l4(args: argparse.Namespace) -> None:
+    _run_benchmark(args, ["l4"])
+
+
+def _cmd_l2_l4(args: argparse.Namespace) -> None:
+    _run_benchmark(args, ["l3", "l4"])
+
+
+def _cmd_l1_l4(args: argparse.Namespace) -> None:
+    _run_benchmark(args, ["l2", "l3", "l4"])
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,45 @@ def _load_and_merge(config_path: str | None) -> dict[str, Any]:
     return {}
 
 
+def _glob_p_files(patterns: list[str] | None) -> list[Path] | None:
+    """Expand glob patterns to a list of .p file paths."""
+    if not patterns:
+        return None
+    import glob as globmod
+
+    p_files: list[Path] = []
+    for pattern in patterns:
+        for f in sorted(globmod.glob(pattern)):
+            p = Path(f)
+            if p.is_file() and p.suffix.lower() == ".p":
+                p_files.append(p)
+    return p_files or None
+
+
+def _run_analysis(
+    args: argparse.Namespace,
+    extra_config: dict[str, Any] | None = None,
+) -> None:
+    """Shared handler for profiles/diss/chi/ctd subcommands."""
+    config = _load_and_merge(args.config)
+
+    if args.output:
+        config.setdefault("files", {})["output_root"] = args.output
+    if args.jobs is not None:
+        config.setdefault("parallel", {})["jobs"] = args.jobs
+
+    config.setdefault("files", {})["trim"] = False
+    config.setdefault("files", {})["merge"] = False
+
+    if extra_config:
+        for section, values in extra_config.items():
+            config.setdefault(section, {}).update(values)
+
+    from odas_tpw.perturb.pipeline import run_pipeline
+
+    run_pipeline(config, p_files=_glob_p_files(args.files))
+
+
 # ---------------------------------------------------------------------------
 # Subcommand implementations
 # ---------------------------------------------------------------------------
@@ -53,33 +92,18 @@ def _cmd_run(args: argparse.Namespace) -> None:
     """Run the full pipeline."""
     config = _load_and_merge(args.config)
 
-    # CLI overrides for files section
     if args.p_file_root:
         config.setdefault("files", {})["p_file_root"] = args.p_file_root
     if args.output:
         config.setdefault("files", {})["output_root"] = args.output
-
-    # Parallel override
     if args.jobs is not None:
         config.setdefault("parallel", {})["jobs"] = args.jobs
 
-    # Explicit file list
-    p_files = None
-    if args.files:
-        import glob as globmod
+    p_files = _glob_p_files(args.files)
+    if args.files and not p_files:
+        print("Error: no .p files found", file=sys.stderr)
+        sys.exit(1)
 
-        p_files = []
-        for pattern in args.files:
-            expanded = sorted(globmod.glob(pattern))
-            for f in expanded:
-                p = Path(f)
-                if p.is_file() and p.suffix.lower() == ".p":
-                    p_files.append(p)
-        if not p_files:
-            print("Error: no .p files found", file=sys.stderr)
-            sys.exit(1)
-
-    # Hotel file override
     if hasattr(args, "hotel_file") and args.hotel_file:
         config.setdefault("hotel", {})["enable"] = True
         config.setdefault("hotel", {})["file"] = args.hotel_file
@@ -92,7 +116,6 @@ def _cmd_run(args: argparse.Namespace) -> None:
 def _cmd_trim(args: argparse.Namespace) -> None:
     """Trim corrupt final records from .p files."""
     config = _load_and_merge(args.config)
-
     if args.p_file_root:
         config.setdefault("files", {})["p_file_root"] = args.p_file_root
     if args.output:
@@ -107,7 +130,6 @@ def _cmd_trim(args: argparse.Namespace) -> None:
 def _cmd_merge(args: argparse.Namespace) -> None:
     """Merge split .p files."""
     config = _load_and_merge(args.config)
-
     if args.p_file_root:
         config.setdefault("files", {})["p_file_root"] = args.p_file_root
     if args.output:
@@ -120,121 +142,19 @@ def _cmd_merge(args: argparse.Namespace) -> None:
 
 
 def _cmd_profiles(args: argparse.Namespace) -> None:
-    """Extract per-profile NetCDFs."""
-    config = _load_and_merge(args.config)
-
-    if args.output:
-        config.setdefault("files", {})["output_root"] = args.output
-    if args.jobs is not None:
-        config.setdefault("parallel", {})["jobs"] = args.jobs
-
-    # Explicit file list
-    p_files = None
-    if args.files:
-        import glob as globmod
-
-        p_files = []
-        for pattern in args.files:
-            expanded = sorted(globmod.glob(pattern))
-            for f in expanded:
-                p = Path(f)
-                if p.is_file() and p.suffix.lower() == ".p":
-                    p_files.append(p)
-
-    from odas_tpw.perturb.pipeline import run_pipeline
-
-    # Disable stages we don't need
-    config.setdefault("files", {})["trim"] = False
-    config.setdefault("files", {})["merge"] = False
-    run_pipeline(config, p_files=p_files)
+    _run_analysis(args)
 
 
 def _cmd_diss(args: argparse.Namespace) -> None:
-    """Compute epsilon per profile."""
-    config = _load_and_merge(args.config)
-
-    if args.output:
-        config.setdefault("files", {})["output_root"] = args.output
-    if args.jobs is not None:
-        config.setdefault("parallel", {})["jobs"] = args.jobs
-
-    p_files = None
-    if args.files:
-        import glob as globmod
-
-        p_files = []
-        for pattern in args.files:
-            expanded = sorted(globmod.glob(pattern))
-            for f in expanded:
-                p = Path(f)
-                if p.is_file() and p.suffix.lower() == ".p":
-                    p_files.append(p)
-
-    from odas_tpw.perturb.pipeline import run_pipeline
-
-    config.setdefault("files", {})["trim"] = False
-    config.setdefault("files", {})["merge"] = False
-    run_pipeline(config, p_files=p_files)
+    _run_analysis(args)
 
 
 def _cmd_chi(args: argparse.Namespace) -> None:
-    """Compute chi per profile."""
-    config = _load_and_merge(args.config)
-
-    if args.output:
-        config.setdefault("files", {})["output_root"] = args.output
-    if args.jobs is not None:
-        config.setdefault("parallel", {})["jobs"] = args.jobs
-
-    # Enable chi
-    config.setdefault("chi", {})["enable"] = True
-
-    p_files = None
-    if args.files:
-        import glob as globmod
-
-        p_files = []
-        for pattern in args.files:
-            expanded = sorted(globmod.glob(pattern))
-            for f in expanded:
-                p = Path(f)
-                if p.is_file() and p.suffix.lower() == ".p":
-                    p_files.append(p)
-
-    from odas_tpw.perturb.pipeline import run_pipeline
-
-    config.setdefault("files", {})["trim"] = False
-    config.setdefault("files", {})["merge"] = False
-    run_pipeline(config, p_files=p_files)
+    _run_analysis(args, extra_config={"chi": {"enable": True}})
 
 
 def _cmd_ctd(args: argparse.Namespace) -> None:
-    """Time-bin CTD channels per file."""
-    config = _load_and_merge(args.config)
-
-    if args.output:
-        config.setdefault("files", {})["output_root"] = args.output
-    if args.jobs is not None:
-        config.setdefault("parallel", {})["jobs"] = args.jobs
-
-    p_files = None
-    if args.files:
-        import glob as globmod
-
-        p_files = []
-        for pattern in args.files:
-            expanded = sorted(globmod.glob(pattern))
-            for f in expanded:
-                p = Path(f)
-                if p.is_file() and p.suffix.lower() == ".p":
-                    p_files.append(p)
-
-    from odas_tpw.perturb.pipeline import run_pipeline
-
-    config.setdefault("files", {})["trim"] = False
-    config.setdefault("files", {})["merge"] = False
-    config.setdefault("ctd", {})["enable"] = True
-    run_pipeline(config, p_files=p_files)
+    _run_analysis(args, extra_config={"ctd": {"enable": True}})
 
 
 def _cmd_bin(args: argparse.Namespace) -> None:

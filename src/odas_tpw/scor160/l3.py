@@ -18,6 +18,48 @@ from odas_tpw.scor160.goodman import clean_shear_spec_batch
 from odas_tpw.scor160.io import L1Data, L2Data, L3Data, L3Params
 from odas_tpw.scor160.spectral import csd_matrix_batch
 
+# Macoun & Lueck (2004) spatial response correction constants
+MACOUN_LUECK_K_MAX = 150   # cpm — correction not applied above this wavenumber
+MACOUN_LUECK_DENOM = 48    # cpm — denominator in correction formula
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_window_arrays(
+    l2: L2Data,
+    starts: np.ndarray,
+    diss_length: int,
+    n_shear: int,
+    n_vib: int,
+    do_goodman: bool,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Build (n_windows, diss_length, n_channels) arrays for shear and vib."""
+    n_windows = len(starts)
+    shear_windows = np.zeros((n_windows, diss_length, n_shear), dtype=np.float64)
+    for w in range(n_windows):
+        s = starts[w]
+        shear_windows[w] = l2.shear[:, s : s + diss_length].T
+
+    vib_windows = None
+    if n_vib > 0 and do_goodman:
+        vib_windows = np.zeros((n_windows, diss_length, n_vib), dtype=np.float64)
+        for w in range(n_windows):
+            s = starts[w]
+            vib_windows[w] = l2.vib[:, s : s + diss_length].T
+
+    return shear_windows, vib_windows
+
+
+def _apply_macoun_lueck(kcyc: np.ndarray) -> np.ndarray:
+    """Macoun & Lueck (2004) spatial response correction for probe tip size."""
+    ml_corr = np.ones(len(kcyc))
+    ml_mask = kcyc <= MACOUN_LUECK_K_MAX
+    ml_corr[ml_mask] = 1 + (kcyc[ml_mask] / MACOUN_LUECK_DENOM) ** 2
+    return ml_corr
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -79,19 +121,9 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
         starts = sec_start + np.arange(n_windows) * diss_step
 
         # Build windowed arrays: (n_windows, diss_length, n_channels)
-        # Shear: L2 data is (N_SHEAR, N_TIME) → need (n_windows, diss_length, n_shear)
-        shear_windows = np.zeros((n_windows, diss_length, n_shear), dtype=np.float64)
-        for w in range(n_windows):
-            s = starts[w]
-            shear_windows[w] = l2.shear[:, s : s + diss_length].T
-
-        # Vibration/acceleration windows
-        vib_windows = None
-        if n_vib > 0 and params.goodman:
-            vib_windows = np.zeros((n_windows, diss_length, n_vib), dtype=np.float64)
-            for w in range(n_windows):
-                s = starts[w]
-                vib_windows[w] = l2.vib[:, s : s + diss_length].T
+        shear_windows, vib_windows = _build_window_arrays(
+            l2, starts, diss_length, n_shear, n_vib, params.goodman,
+        )
 
         # Compute raw frequency spectra (Welch method)
         # Returns: (n_windows, n_freq, n_shear, n_shear) — diagonal is auto-spectrum
@@ -145,15 +177,8 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
             sh_k = sh_freq_spec[w] * W  # (n_freq, n_shear)
             sh_k_clean = sh_freq_spec_clean[w] * W
 
-            # Macoun & Lueck (2004) spatial response correction for
-            # finite shear-probe tip size.  The probe averages the
-            # velocity field over its tip length, attenuating variance
-            # at high wavenumbers.  The correction 1 + (k/48)^2 is
-            # applied up to 150 cpm; beyond that the signal is below
-            # the noise floor and the correction is not applied.
-            ml_corr = np.ones(len(kcyc_w))
-            ml_mask = kcyc_w <= 150
-            ml_corr[ml_mask] = 1 + (kcyc_w[ml_mask] / 48) ** 2
+            # Macoun & Lueck (2004) spatial response correction
+            ml_corr = _apply_macoun_lueck(kcyc_w)
             sh_k *= ml_corr[:, np.newaxis]
             sh_k_clean *= ml_corr[:, np.newaxis]
 

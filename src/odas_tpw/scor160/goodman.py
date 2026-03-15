@@ -13,6 +13,25 @@ import numpy as np
 from odas_tpw.scor160.spectral import csd_matrix, csd_matrix_batch
 
 
+def _bias_correction(n_samples: int, nfft: int, n_accel: int) -> float:
+    """Goodman bias correction factor (ODAS TN-061, Eq. 3).
+
+    Factor 1.02 accounts for effective degrees-of-freedom reduction
+    from overlapping FFT segments (Goodman 2006, ODAS TN-061).
+    """
+    fft_segments = 2 * n_samples // nfft - 1
+    if fft_segments <= 1.02 * n_accel:
+        import warnings
+
+        warnings.warn(
+            f"Insufficient FFT segments ({fft_segments}) for Goodman bias "
+            f"correction with {n_accel} accelerometers; skipping correction",
+            stacklevel=3,
+        )
+        return 1.0
+    return 1.0 / (1.0 - 1.02 * n_accel / fft_segments)
+
+
 def clean_shear_spec(
     accel: np.ndarray,
     shear: np.ndarray,
@@ -106,21 +125,7 @@ def clean_shear_spec(
     clean_UU = np.real(clean_UU)
 
     # Bias correction (ODAS Technical Note 61, Eq. 3)
-    # Factor 1.02 accounts for the effective degrees-of-freedom reduction
-    # from overlapping FFT segments (Goodman 2006, ODAS TN-061).
-    fft_segments = 2 * shear.shape[0] // nfft - 1
-    if fft_segments <= 1.02 * n_accel:
-        import warnings
-
-        warnings.warn(
-            f"Insufficient FFT segments ({fft_segments}) for Goodman bias "
-            f"correction with {n_accel} accelerometers; skipping correction",
-            stacklevel=2,
-        )
-        R = 1.0
-    else:
-        R = 1.0 / (1.0 - 1.02 * n_accel / fft_segments)
-    clean_UU *= R
+    clean_UU *= _bias_correction(shear.shape[0], nfft, n_accel)
 
     return clean_UU, AA, UU, UA, F
 
@@ -179,10 +184,6 @@ def clean_shear_spec_batch(
     clean_UU = np.real(clean_UU)
 
     # Bias correction
-    diss_length = shear_windows.shape[1]
-    fft_segments = 2 * diss_length // nfft - 1
-    if fft_segments > 1.02 * n_accel:
-        R = 1.0 / (1.0 - 1.02 * n_accel / fft_segments)
-        clean_UU *= R
+    clean_UU *= _bias_correction(shear_windows.shape[1], nfft, n_accel)
 
     return clean_UU, F

@@ -7,6 +7,32 @@ import numpy as np
 from odas_tpw.scor160.io import L2Data, L3Data, L4Data
 
 
+def _log_spectral_metrics(comp: np.ndarray, ref: np.ndarray) -> dict:
+    """Compute log10 comparison metrics between two positive arrays."""
+    valid = np.isfinite(comp) & np.isfinite(ref) & (comp > 0) & (ref > 0)
+    if not valid.any():
+        return {"n_valid": 0}
+
+    log_diff = np.log10(comp[valid]) - np.log10(ref[valid])
+    abs_log_diff = np.abs(log_diff)
+
+    return {
+        "n_valid": int(valid.sum()),
+        "mean_log_diff": float(np.mean(log_diff)),
+        "rms_log_diff": float(np.sqrt(np.mean(log_diff ** 2))),
+        "median_ratio": float(10 ** np.median(log_diff)),
+        "q0_abs_log": float(np.min(abs_log_diff)),
+        "q50_abs_log": float(np.median(abs_log_diff)),
+        "q100_abs_log": float(np.max(abs_log_diff)),
+    }
+
+
+def _format_report_header(level: str, filename: str) -> list[str]:
+    """Build report header lines for comparison output."""
+    header = f"{level} comparison: {filename}" if filename else f"{level} comparison"
+    return [header, "=" * len(header)]
+
+
 def compare_l2(computed: L2Data, reference: L2Data) -> dict:
     """Compare computed L2 against reference L2.
 
@@ -97,13 +123,7 @@ def compare_l2(computed: L2Data, reference: L2Data) -> dict:
 
 def format_l2_report(metrics: dict, filename: str = "") -> str:
     """Format L2 comparison metrics as a human-readable report."""
-    lines = []
-    if filename:
-        lines.append(f"L2 comparison: {filename}")
-        lines.append("=" * (len(lines[0])))
-    else:
-        lines.append("L2 comparison")
-        lines.append("=============")
+    lines = _format_report_header("L2", filename)
 
     # Section selection
     sec = metrics.get("section", {})
@@ -195,34 +215,23 @@ def compare_l3(computed: L3Data, reference: L3Data) -> dict:
         ("clean", computed.sh_spec_clean, reference.sh_spec_clean),
     ]:
         for i in range(n_sh):
-            # Shape: (n_wavenumber, n_spectra) — compare in log space
             c = comp_spec[i, :n_wn, :n_common]
             r = ref_spec[i, :n_wn, :n_common]
 
-            # Skip DC bin and use only positive values
-            valid = (c > 0) & (r > 0)
-            if not valid.any():
+            m = _log_spectral_metrics(c, r)
+            if m["n_valid"] == 0:
                 continue
-
-            log_c = np.log10(c[valid])
-            log_r = np.log10(r[valid])
-            log_diff = log_c - log_r
-            abs_log_diff = np.abs(log_diff)
-
-            q0 = float(np.min(abs_log_diff))
-            q50 = float(np.median(abs_log_diff))
-            q100 = float(np.max(abs_log_diff))
 
             spec_stats.append({
                 "type": label,
                 "probe": i + 1,
-                "mean_log_diff": float(np.mean(log_diff)),
-                "rms_log_diff": float(np.sqrt(np.mean(log_diff ** 2))),
-                "median_ratio": float(10 ** np.median(log_diff)),
-                "q0_abs_log": q0,
-                "q50_abs_log": q50,
-                "q100_abs_log": q100,
-                "n_values": int(valid.sum()),
+                "mean_log_diff": m["mean_log_diff"],
+                "rms_log_diff": m["rms_log_diff"],
+                "median_ratio": m["median_ratio"],
+                "q0_abs_log": m["q0_abs_log"],
+                "q50_abs_log": m["q50_abs_log"],
+                "q100_abs_log": m["q100_abs_log"],
+                "n_values": m["n_valid"],
             })
     results["spectra"] = spec_stats
 
@@ -231,10 +240,7 @@ def compare_l3(computed: L3Data, reference: L3Data) -> dict:
 
 def format_l3_report(metrics: dict, filename: str = "") -> str:
     """Format L3 comparison metrics as a human-readable report."""
-    lines = []
-    header = f"L3 comparison: {filename}" if filename else "L3 comparison"
-    lines.append(header)
-    lines.append("=" * len(header))
+    lines = _format_report_header("L3", filename)
 
     ns = metrics.get("n_spectra", {})
     lines.append(f"\n  Reference spectra:  {ns.get('ref', '?')}")
@@ -292,26 +298,26 @@ def compare_l4(computed: L4Data, reference: L4Data) -> dict:
     for i in range(n_sh):
         ref_e = reference.epsi[i, :n_common]
         comp_e = computed.epsi[i, :n_common]
-        valid = np.isfinite(ref_e) & np.isfinite(comp_e) & (ref_e > 0) & (comp_e > 0)
-        if not valid.any():
+
+        m = _log_spectral_metrics(comp_e, ref_e)
+        if m["n_valid"] == 0:
             continue
 
-        log_ref = np.log10(ref_e[valid])
-        log_comp = np.log10(comp_e[valid])
-        log_diff = log_comp - log_ref
-        abs_log_diff = np.abs(log_diff)
+        # Additional quantile metrics beyond the base helper
+        valid = np.isfinite(ref_e) & np.isfinite(comp_e) & (ref_e > 0) & (comp_e > 0)
+        abs_log_diff = np.abs(np.log10(comp_e[valid]) - np.log10(ref_e[valid]))
 
         probe_stats.append({
             "probe": i + 1,
-            "n_valid": int(valid.sum()),
-            "mean_log_diff": float(np.mean(log_diff)),
-            "rms_log_diff": float(np.sqrt(np.mean(log_diff ** 2))),
-            "median_ratio": float(10 ** np.median(log_diff)),
-            "q0_abs_log": float(np.min(abs_log_diff)),
+            "n_valid": m["n_valid"],
+            "mean_log_diff": m["mean_log_diff"],
+            "rms_log_diff": m["rms_log_diff"],
+            "median_ratio": m["median_ratio"],
+            "q0_abs_log": m["q0_abs_log"],
             "q25_abs_log": float(np.percentile(abs_log_diff, 25)),
-            "q50_abs_log": float(np.median(abs_log_diff)),
+            "q50_abs_log": m["q50_abs_log"],
             "q75_abs_log": float(np.percentile(abs_log_diff, 75)),
-            "q100_abs_log": float(np.max(abs_log_diff)),
+            "q100_abs_log": m["q100_abs_log"],
             "within_factor2": float(np.mean(abs_log_diff < np.log10(2))),
             "within_factor3": float(np.mean(abs_log_diff < np.log10(3))),
         })
@@ -320,18 +326,18 @@ def compare_l4(computed: L4Data, reference: L4Data) -> dict:
     # EPSI_FINAL comparison
     ref_ef = reference.epsi_final[:n_common]
     comp_ef = computed.epsi_final[:n_common]
-    valid = np.isfinite(ref_ef) & np.isfinite(comp_ef) & (ref_ef > 0) & (comp_ef > 0)
-    if valid.any():
-        log_diff = np.log10(comp_ef[valid]) - np.log10(ref_ef[valid])
-        abs_log_diff = np.abs(log_diff)
+    m = _log_spectral_metrics(comp_ef, ref_ef)
+    if m["n_valid"] > 0:
+        valid = np.isfinite(ref_ef) & np.isfinite(comp_ef) & (ref_ef > 0) & (comp_ef > 0)
+        abs_log_diff = np.abs(np.log10(comp_ef[valid]) - np.log10(ref_ef[valid]))
         results["epsi_final"] = {
-            "n_valid": int(valid.sum()),
-            "mean_log_diff": float(np.mean(log_diff)),
-            "rms_log_diff": float(np.sqrt(np.mean(log_diff ** 2))),
-            "median_ratio": float(10 ** np.median(log_diff)),
-            "q0_abs_log": float(np.min(abs_log_diff)),
-            "q50_abs_log": float(np.median(abs_log_diff)),
-            "q100_abs_log": float(np.max(abs_log_diff)),
+            "n_valid": m["n_valid"],
+            "mean_log_diff": m["mean_log_diff"],
+            "rms_log_diff": m["rms_log_diff"],
+            "median_ratio": m["median_ratio"],
+            "q0_abs_log": m["q0_abs_log"],
+            "q50_abs_log": m["q50_abs_log"],
+            "q100_abs_log": m["q100_abs_log"],
             "within_factor2": float(np.mean(abs_log_diff < np.log10(2))),
         }
 
@@ -374,10 +380,7 @@ def compare_l4(computed: L4Data, reference: L4Data) -> dict:
 
 def format_l4_report(metrics: dict, filename: str = "") -> str:
     """Format L4 comparison metrics as a human-readable report."""
-    lines = []
-    header = f"L4 comparison: {filename}" if filename else "L4 comparison"
-    lines.append(header)
-    lines.append("=" * len(header))
+    lines = _format_report_header("L4", filename)
 
     ns = metrics.get("n_spectra", {})
     lines.append(f"\n  Reference spectra:  {ns.get('ref', '?')}")

@@ -43,10 +43,6 @@ def pfile_to_l1data(
     -------
     L1Data
     """
-    from scipy.signal import butter, filtfilt
-
-    from odas_tpw.rsi.profile import _smooth_fall_rate
-
     ratio = round(pf.fs_fast / pf.fs_slow)
 
     if profile_slice is not None:
@@ -76,10 +72,15 @@ def pfile_to_l1data(
     if speed is not None:
         pspd_rel = np.full(len(t_fast), abs(speed))
     else:
-        W_slow = _smooth_fall_rate(P_slow, pf.fs_slow, tau=speed_tau)
-        W_slow_slice = W_slow[s_slow : e_slow + 1]
-        speed_slow = np.abs(W_slow_slice)
+        from odas_tpw.scor160.profile import compute_speed_fast, smooth_fall_rate
+
+        # Must filter full P_slow before slicing to avoid Butterworth edge effects
+        W_slow_full = smooth_fall_rate(P_slow, pf.fs_slow, tau=speed_tau)
+        speed_slow = np.abs(W_slow_full[s_slow : e_slow + 1])
         pspd_rel = np.interp(t_fast, t_slow, speed_slow)
+
+        from scipy.signal import butter, filtfilt
+
         f_c = 0.68 / speed_tau
         b_f, a_f = butter(1, f_c / (pf.fs_fast / 2.0))
         pspd_rel = filtfilt(b_f, a_f, pspd_rel)

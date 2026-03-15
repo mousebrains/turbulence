@@ -344,139 +344,28 @@ def _build_diss_dataset(
     fit_order: int,
 ) -> xr.Dataset:
     """Build an xarray Dataset from epsilon estimation output arrays."""
-    ds = xr.Dataset(
+    from odas_tpw.rsi.helpers import _build_result_dataset
+
+    variables = [
+        ("epsilon", ["probe", "time"], epsilon, {"units": "W kg-1", "long_name": "TKE dissipation rate"}),
+        ("K_max", ["probe", "time"], K_max_out, {"units": "cpm", "long_name": "upper wavenumber integration limit"}),
+        ("mad", ["probe", "time"], mad_out, {"units": "1", "long_name": "mean absolute deviation of spectral fit in log10 space"}),
+        ("fom", ["probe", "time"], fom_out, {"units": "1", "long_name": "figure of merit (observed/Nasmyth variance ratio)"}),
+        ("FM", ["probe", "time"], FM_out, {"units": "1", "long_name": "Lueck figure of merit (MAD * sqrt(dof))", "comment": "FM < 1 for 97.5% of good spectra (Lueck, 2022a,b)"}),
+        ("K_max_ratio", ["probe", "time"], K_max_ratio_out, {"units": "1", "long_name": "K_max / K_95 spectral resolution ratio"}),
+        ("method", ["probe", "time"], method_out, {"long_name": "spectral fitting method", "flag_values": np.array([0, 1], dtype=np.int8), "flag_meanings": "variance inertial_subrange"}),
+        ("speed", ["time"], speed_out, {"units": "m s-1", "long_name": "profiling speed"}),
+        ("nu", ["time"], nu_out, {"units": "m2 s-1", "long_name": "kinematic viscosity of sea water"}),
+        ("P_mean", ["time"], P_out, {"units": "dbar", "long_name": "mean sea water pressure", "standard_name": "sea_water_pressure", "positive": "down"}),
+        ("T_mean", ["time"], T_out, {"units": "degree_Celsius", "long_name": "mean sea water temperature", "standard_name": "sea_water_temperature"}),
+        ("spec_shear", ["probe", "freq", "time"], spec_shear, {"units": "s-2 cpm-1", "long_name": "shear wavenumber spectrum (observed, cleaned)"}),
+        ("spec_nasmyth", ["probe", "freq", "time"], spec_nasmyth, {"units": "s-2 cpm-1", "long_name": "Nasmyth theoretical shear spectrum"}),
+        ("K", ["freq", "time"], K_out, {"units": "cpm", "long_name": "wavenumber (cycles per metre)"}),
+        ("F", ["freq", "time"], F_out, {"units": "Hz", "long_name": "frequency"}),
+    ]
+    return _build_result_dataset(
+        variables, shear_names, t_out, "shear probe name",
         {
-            "epsilon": (
-                ["probe", "time"],
-                epsilon,
-                {
-                    "units": "W kg-1",
-                    "long_name": "TKE dissipation rate",
-                },
-            ),
-            "K_max": (
-                ["probe", "time"],
-                K_max_out,
-                {
-                    "units": "cpm",
-                    "long_name": "upper wavenumber integration limit",
-                },
-            ),
-            "mad": (
-                ["probe", "time"],
-                mad_out,
-                {
-                    "units": "1",
-                    "long_name": "mean absolute deviation of spectral fit in log10 space",
-                },
-            ),
-            "fom": (
-                ["probe", "time"],
-                fom_out,
-                {
-                    "units": "1",
-                    "long_name": "figure of merit (observed/Nasmyth variance ratio)",
-                },
-            ),
-            "FM": (
-                ["probe", "time"],
-                FM_out,
-                {
-                    "units": "1",
-                    "long_name": "Lueck figure of merit (MAD * sqrt(dof))",
-                    "comment": "FM < 1 for 97.5% of good spectra (Lueck, 2022a,b)",
-                },
-            ),
-            "K_max_ratio": (
-                ["probe", "time"],
-                K_max_ratio_out,
-                {
-                    "units": "1",
-                    "long_name": "K_max / K_95 spectral resolution ratio",
-                },
-            ),
-            "method": (
-                ["probe", "time"],
-                method_out,
-                {
-                    "long_name": "spectral fitting method",
-                    "flag_values": np.array([0, 1], dtype=np.int8),
-                    "flag_meanings": "variance inertial_subrange",
-                },
-            ),
-            "speed": (
-                ["time"],
-                speed_out,
-                {
-                    "units": "m s-1",
-                    "long_name": "profiling speed",
-                },
-            ),
-            "nu": (
-                ["time"],
-                nu_out,
-                {
-                    "units": "m2 s-1",
-                    "long_name": "kinematic viscosity of sea water",
-                },
-            ),
-            "P_mean": (
-                ["time"],
-                P_out,
-                {
-                    "units": "dbar",
-                    "long_name": "mean sea water pressure",
-                    "standard_name": "sea_water_pressure",
-                    "positive": "down",
-                },
-            ),
-            "T_mean": (
-                ["time"],
-                T_out,
-                {
-                    "units": "degree_Celsius",
-                    "long_name": "mean sea water temperature",
-                    "standard_name": "sea_water_temperature",
-                },
-            ),
-            "spec_shear": (
-                ["probe", "freq", "time"],
-                spec_shear,
-                {
-                    "units": "s-2 cpm-1",
-                    "long_name": "shear wavenumber spectrum (observed, cleaned)",
-                },
-            ),
-            "spec_nasmyth": (
-                ["probe", "freq", "time"],
-                spec_nasmyth,
-                {
-                    "units": "s-2 cpm-1",
-                    "long_name": "Nasmyth theoretical shear spectrum",
-                },
-            ),
-            "K": (
-                ["freq", "time"],
-                K_out,
-                {
-                    "units": "cpm",
-                    "long_name": "wavenumber (cycles per metre)",
-                },
-            ),
-            "F": (
-                ["freq", "time"],
-                F_out,
-                {
-                    "units": "Hz",
-                    "long_name": "frequency",
-                },
-            ),
-        },
-        coords={
-            "probe": shear_names,
-            "t": (["time"], t_out),
-        },
-        attrs={
             "Conventions": "CF-1.13",
             "fft_length": fft_length,
             "diss_length": diss_length,
@@ -488,8 +377,6 @@ def _build_diss_dataset(
             "fit_order": fit_order,
         },
     )
-    ds.coords["probe"].attrs["long_name"] = "shear probe name"
-    return ds
 
 
 # ---------------------------------------------------------------------------

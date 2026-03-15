@@ -42,6 +42,58 @@ def smooth_fall_rate(P: np.ndarray, fs: float, tau: float = 1.5) -> np.ndarray:
     return filtfilt(b, a, W)
 
 
+def compute_speed_fast(
+    P_slow: np.ndarray,
+    t_fast: np.ndarray,
+    t_slow: np.ndarray,
+    fs_fast: float,
+    fs_slow: float,
+    tau: float = 1.5,
+    speed_min: float = 0.05,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute profiling speed from pressure, interpolated to fast rate.
+
+    Matches ODAS odas_p2mat.m speed pipeline:
+      1. W = gradient(P) filtered with Butterworth at 0.68/tau
+      2. speed = abs(W), interpolated to fast rate
+      3. Second Butterworth smoothing pass
+      4. Clamped to speed_min
+
+    Parameters
+    ----------
+    P_slow : ndarray
+        Pressure [dbar] at slow rate.
+    t_fast, t_slow : ndarray
+        Time vectors for fast and slow rates.
+    fs_fast, fs_slow : float
+        Sampling rates [Hz].
+    tau : float
+        Smoothing time constant [s].
+    speed_min : float
+        Minimum profiling speed [m/s].
+
+    Returns
+    -------
+    speed_fast : ndarray
+        Profiling speed at fast rate [m/s].
+    W_slow : ndarray
+        Smoothed fall rate at slow rate [dbar/s].
+    """
+    W_slow = smooth_fall_rate(P_slow, fs_slow, tau=tau)
+    speed_slow = np.abs(W_slow)
+    speed_fast = np.interp(t_fast, t_slow, speed_slow)
+
+    f_c = 0.68 / tau
+    b_s, a_s = butter(1, f_c / (fs_slow / 2.0))
+    speed_slow = filtfilt(b_s, a_s, speed_slow)
+    b_f, a_f = butter(1, f_c / (fs_fast / 2.0))
+    speed_fast = filtfilt(b_f, a_f, speed_fast)
+
+    speed_fast = np.maximum(speed_fast, speed_min)
+
+    return speed_fast, W_slow
+
+
 def get_profiles(
     P: npt.ArrayLike,
     W: npt.ArrayLike,

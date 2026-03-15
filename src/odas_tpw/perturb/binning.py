@@ -48,6 +48,7 @@ def _bin_array(
 
 
 def _get_agg_func(aggregation: str):
+    """Return the aggregation function for the given method name."""
     if aggregation == "median":
         return np.nanmedian
     return np.nanmean

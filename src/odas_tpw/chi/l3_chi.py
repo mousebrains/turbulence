@@ -28,6 +28,23 @@ from odas_tpw.scor160.spectral import csd_matrix_batch
 
 
 @dataclass
+class _SectionResult:
+    """Accumulator for per-window results within a section."""
+
+    times: list = field(default_factory=list)
+    pres: list = field(default_factory=list)
+    temp: list = field(default_factory=list)
+    speed: list = field(default_factory=list)
+    section: list = field(default_factory=list)
+    gradt_spec: list = field(default_factory=list)
+    noise_spec: list = field(default_factory=list)
+    kcyc: list = field(default_factory=list)
+    H2: list = field(default_factory=list)
+    tau0: list = field(default_factory=list)
+    nu: list = field(default_factory=list)
+
+
+@dataclass
 class L3ChiData:
     """Level-3 temperature gradient spectra for chi estimation."""
 
@@ -59,6 +76,127 @@ class L3ChiData:
     @property
     def n_gradt(self) -> int:
         return self.gradt_spec.shape[0]
+
+
+def _process_section_chi(
+    l2_chi: L2ChiData,
+    sec_id: int,
+    diss_length: int,
+    diss_step: int,
+    nfft: int,
+    fs: float,
+    n_temp: int,
+    n_freq: int,
+    do_goodman: bool,
+    fd_correction: np.ndarray,
+    bl_corrections: list[np.ndarray],
+    F_const: np.ndarray,
+    fp07_model: str,
+    salinity: float | np.ndarray | None,
+    diff_gains: list[float],
+    therm_cal: list[dict] | None,
+    acc: _SectionResult,
+) -> None:
+    """Process a single section, appending results to *acc*."""
+    mask = l2_chi.section_number == sec_id
+    idx = np.where(mask)[0]
+    if len(idx) < diss_length:
+        return
+
+    sec_start = idx[0]
+    sec_end = idx[-1] + 1
+    sec_len = sec_end - sec_start
+
+    n_windows = (sec_len - diss_length) // diss_step + 1
+    if n_windows < 1:
+        return
+
+    starts = sec_start + np.arange(n_windows) * diss_step
+    indices = starts[:, np.newaxis] + np.arange(diss_length)[np.newaxis, :]
+
+    gradt_windows = np.stack(
+        [l2_chi.gradt[ci][indices] for ci in range(n_temp)],
+        axis=-1,
+    )
+
+    # Goodman cleaning
+    n_vib = l2_chi.n_vib
+    if do_goodman:
+        vib_windows = np.stack(
+            [l2_chi.vib[vi][indices] for vi in range(n_vib)],
+            axis=-1,
+        )
+        clean_TT, _ = clean_shear_spec_batch(vib_windows, gradt_windows, nfft, fs)
+        clean_spectra = np.real(np.diagonal(clean_TT, axis1=2, axis2=3)).copy()
+    else:
+        TT, _, _, _ = csd_matrix_batch(
+            gradt_windows, None, nfft, fs, overlap=nfft // 2, detrend="linear",
+        )
+        clean_spectra = np.real(np.diagonal(TT, axis1=2, axis2=3)).copy()
+
+    # Per-window means
+    speed_means = np.maximum(np.mean(np.abs(l2_chi.pspd_rel[indices]), axis=1), 0.01)
+    P_means = np.mean(l2_chi.pres[indices], axis=1)
+    t_means = np.mean(l2_chi.time[indices], axis=1)
+    T_means = np.mean(l2_chi.temp[indices], axis=1)
+
+    # Viscosity
+    if salinity is not None:
+        if np.ndim(salinity) > 0:
+            sal_means = np.mean(np.asarray(salinity)[indices], axis=1)
+        else:
+            sal_means = np.full(n_windows, float(salinity))
+        nu_all = np.asarray(
+            [visc(T_means[i], sal_means[i], P_means[i]) for i in range(n_windows)],
+            dtype=np.float64,
+        )
+    else:
+        nu_all = np.asarray(
+            [visc35(T_means[i]) for i in range(n_windows)],
+            dtype=np.float64,
+        )
+
+    K_all = F_const[:, np.newaxis] / speed_means[np.newaxis, :]
+
+    # Apply corrections
+    for ci in range(n_temp):
+        clean_spectra[:, :, ci] *= (
+            speed_means[:, np.newaxis]
+            * fd_correction[np.newaxis, :]
+            * bl_corrections[ci][np.newaxis, :]
+        )
+
+    # FP07 transfer function
+    tau_model = default_tau_model(fp07_model)
+    tau0_all = fp07_tau_batch(speed_means, model=tau_model)
+    H2_all = fp07_transfer_batch(F_const, tau0_all, model=fp07_model)
+
+    # Noise spectra
+    noise_all = np.empty((n_temp, n_windows, n_freq))
+    for ci in range(n_temp):
+        cal_ci = therm_cal[ci] if therm_cal and ci < len(therm_cal) else {}
+        noise_kwargs = {
+            k: v for k, v in cal_ci.items()
+            if k in ("e_b", "gain", "beta_1", "adc_fs", "adc_bits")
+        }
+        noise_all[ci] = gradT_noise_batch(
+            F_const, T_means, speed_means, fs=fs,
+            diff_gain=diff_gains[ci], **noise_kwargs,
+        )
+
+    # Append results
+    for w in range(n_windows):
+        acc.times.append(t_means[w])
+        acc.pres.append(P_means[w])
+        acc.temp.append(T_means[w])
+        acc.speed.append(speed_means[w])
+        acc.section.append(sec_id)
+        acc.nu.append(nu_all[w])
+        acc.kcyc.append(K_all[:, w])
+        acc.H2.append(H2_all[w])
+        acc.tau0.append(tau0_all[w])
+        acc.gradt_spec.append(clean_spectra[w].T)
+        acc.noise_spec.append(noise_all[:, w, :])
 
 
 def process_l3_chi(
@@ -98,9 +236,6 @@ def process_l3_chi(
     n_temp = l2_chi.n_temp
     diff_gains = l2_chi.diff_gains
 
-    # Use pre-computed gradient from L2ChiData
-    gradt_arrays = l2_chi.gradt
-
     # Frequency vector (constant)
     F_const = np.arange(n_freq) * fs / nfft
 
@@ -113,152 +248,20 @@ def process_l3_chi(
     # Bilinear corrections per probe
     bl_corrections = [_bilinear_correction(F_const, dg, fs) for dg in diff_gains]
 
-    # Collect windows from all sections
+    do_goodman = params.goodman and l2_chi.n_vib > 0
     sections = np.unique(l2_chi.section_number)
     sections = sections[sections > 0]
 
-    all_times = []
-    all_pres = []
-    all_temp = []
-    all_speed = []
-    all_section = []
-    all_gradt_spec = []
-    all_noise_spec = []
-    all_kcyc = []
-    all_H2 = []
-    all_tau0 = []
-    all_nu = []
-
-    # HP-filtered vib from L2ChiData for Goodman cleaning
-    vib = l2_chi.vib
-    n_vib = l2_chi.n_vib
-    do_goodman = params.goodman and n_vib > 0
+    acc = _SectionResult()
 
     for sec_id in sections:
-        mask = l2_chi.section_number == sec_id
-        idx = np.where(mask)[0]
-        if len(idx) < diss_length:
-            continue
-
-        sec_start = idx[0]
-        sec_end = idx[-1] + 1
-        sec_len = sec_end - sec_start
-
-        n_windows = (sec_len - diss_length) // diss_step + 1
-        if n_windows < 1:
-            continue
-
-        starts = sec_start + np.arange(n_windows) * diss_step
-
-        # Build gradient windows: (n_windows, diss_length, n_temp)
-        indices = starts[:, np.newaxis] + np.arange(diss_length)[np.newaxis, :]
-        gradt_windows = np.stack(
-            [gradt_arrays[ci][indices] for ci in range(n_temp)],
-            axis=-1,
+        _process_section_chi(
+            l2_chi, sec_id, diss_length, diss_step, nfft, fs,
+            n_temp, n_freq, do_goodman, fd_correction, bl_corrections,
+            F_const, fp07_model, salinity, diff_gains, therm_cal, acc,
         )
 
-        # Goodman cleaning with HP-filtered vibration from L2ChiData
-        if do_goodman:
-            vib_windows = np.stack(
-                [vib[vi][indices] for vi in range(n_vib)],
-                axis=-1,
-            )
-            clean_TT, _ = clean_shear_spec_batch(
-                vib_windows,
-                gradt_windows,
-                nfft,
-                fs,
-            )
-            clean_spectra = np.real(np.diagonal(clean_TT, axis1=2, axis2=3)).copy()
-        else:
-            TT, _, _, _ = csd_matrix_batch(
-                gradt_windows,
-                None,
-                nfft,
-                fs,
-                overlap=nfft // 2,
-                detrend="linear",
-            )
-            clean_spectra = np.real(np.diagonal(TT, axis1=2, axis2=3)).copy()
-
-        # Per-window means
-        speed_means = np.maximum(np.mean(np.abs(l2_chi.pspd_rel[indices]), axis=1), 0.01)
-        P_means = np.mean(l2_chi.pres[indices], axis=1)
-        t_means = np.mean(l2_chi.time[indices], axis=1)
-        T_means = np.mean(l2_chi.temp[indices], axis=1)
-
-        # Viscosity
-        if salinity is not None:
-            if np.ndim(salinity) > 0:
-                sal_means = np.mean(np.asarray(salinity)[indices], axis=1)
-            else:
-                sal_means = np.full(n_windows, float(salinity))
-            nu_all = np.asarray(
-                [visc(T_means[i], sal_means[i], P_means[i]) for i in range(n_windows)],
-                dtype=np.float64,
-            )
-        else:
-            nu_all = np.asarray(
-                [visc35(T_means[i]) for i in range(n_windows)],
-                dtype=np.float64,
-            )
-
-        # Wavenumber: K = F / W
-        K_all = F_const[:, np.newaxis] / speed_means[np.newaxis, :]
-
-        # Apply corrections to spectra
-        for ci in range(n_temp):
-            # clean_spectra: (n_windows, n_freq, n_temp)
-            clean_spectra[:, :, ci] *= (
-                speed_means[:, np.newaxis]
-                * fd_correction[np.newaxis, :]
-                * bl_corrections[ci][np.newaxis, :]
-            )
-
-        # FP07 transfer function
-        tau_model = default_tau_model(fp07_model)
-        tau0_all = fp07_tau_batch(speed_means, model=tau_model)
-        H2_all = fp07_transfer_batch(F_const, tau0_all, model=fp07_model)
-
-        # Noise spectra
-        noise_all = np.empty((n_temp, n_windows, n_freq))
-        for ci in range(n_temp):
-            cal_ci = therm_cal[ci] if therm_cal and ci < len(therm_cal) else {}
-            noise_kwargs = {
-                k: v
-                for k, v in cal_ci.items()
-                if k in ("e_b", "gain", "beta_1", "adc_fs", "adc_bits")
-            }
-            noise_all[ci] = gradT_noise_batch(
-                F_const,
-                T_means,
-                speed_means,
-                fs=fs,
-                diff_gain=diff_gains[ci],
-                **noise_kwargs,
-            )
-
-        # Store results
-        for w in range(n_windows):
-            all_times.append(t_means[w])
-            all_pres.append(P_means[w])
-            all_temp.append(T_means[w])
-            all_speed.append(speed_means[w])
-            all_section.append(sec_id)
-            all_nu.append(nu_all[w])
-
-            all_kcyc.append(K_all[:, w])
-            all_H2.append(H2_all[w])
-            all_tau0.append(tau0_all[w])
-
-            # gradt_spec: (n_temp, n_freq)
-            spec_w = clean_spectra[w].T  # (n_temp, n_freq)
-            all_gradt_spec.append(spec_w)
-
-            noise_w = noise_all[:, w, :]  # (n_temp, n_freq)
-            all_noise_spec.append(noise_w)
-
-    if not all_times:
+    if not acc.times:
         return L3ChiData(
             time=np.array([]),
             pres=np.array([]),
@@ -277,19 +280,19 @@ def process_l3_chi(
         )
 
     # Assemble output arrays
-    time_out = np.array(all_times)
-    pres_out = np.array(all_pres)
-    temp_out = np.array(all_temp)
-    speed_out = np.array(all_speed)
-    section_out = np.array(all_section)
-    nu_out = np.array(all_nu)
-    tau0_out = np.array(all_tau0)
+    time_out = np.array(acc.times)
+    pres_out = np.array(acc.pres)
+    temp_out = np.array(acc.temp)
+    speed_out = np.array(acc.speed)
+    section_out = np.array(acc.section)
+    nu_out = np.array(acc.nu)
+    tau0_out = np.array(acc.tau0)
 
-    kcyc_out = np.column_stack(all_kcyc)  # (n_freq, n_spec)
-    H2_out = np.stack(all_H2, axis=0)  # (n_spec, n_freq)
+    kcyc_out = np.column_stack(acc.kcyc)  # (n_freq, n_spec)
+    H2_out = np.stack(acc.H2, axis=0)  # (n_spec, n_freq)
 
-    gradt_spec_out = np.stack(all_gradt_spec, axis=-1)  # (n_temp, n_freq, n_spec)
-    noise_spec_out = np.stack(all_noise_spec, axis=-1)  # (n_temp, n_freq, n_spec)
+    gradt_spec_out = np.stack(acc.gradt_spec, axis=-1)  # (n_temp, n_freq, n_spec)
+    noise_spec_out = np.stack(acc.noise_spec, axis=-1)  # (n_temp, n_freq, n_spec)
 
     return L3ChiData(
         time=time_out,

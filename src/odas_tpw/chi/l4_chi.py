@@ -58,6 +58,81 @@ class L4ChiData:
         return self.chi.shape[0]
 
 
+def _process_l4_chi(
+    l3_chi: L3ChiData,
+    chi_func,
+    method_name: str,
+    f_AA: float,
+) -> L4ChiData:
+    """Shared L4 chi processing loop.
+
+    Parameters
+    ----------
+    l3_chi : L3ChiData
+        Level-3 temperature gradient spectra.
+    chi_func : callable
+        ``chi_func(j, ci, spec_obs, noise_K, K, W, nu, tau0, H2, _h2, f_AA_eff)``
+        returns ``(chi_val, eps_val, kB_val, K_max_val, fom_val, K_max_ratio_val)``
+        or None to skip.
+    method_name : str
+        "epsilon" or "fit".
+    f_AA : float
+        Anti-aliasing filter cutoff [Hz].
+    """
+    n_spec = l3_chi.n_spectra
+    n_gradt = l3_chi.n_gradt
+    f_AA_eff = 0.9 * f_AA
+
+    _h2 = fp07_transfer if l3_chi.fp07_model == "single_pole" else fp07_double_pole
+
+    chi_out = np.full((n_gradt, n_spec), np.nan)
+    eps_out = np.full((n_gradt, n_spec), np.nan)
+    kB_out = np.full((n_gradt, n_spec), np.nan)
+    K_max_out = np.full((n_gradt, n_spec), np.nan)
+    fom_out = np.full((n_gradt, n_spec), np.nan)
+    K_max_ratio_out = np.full((n_gradt, n_spec), np.nan)
+
+    for j in range(n_spec):
+        K = l3_chi.kcyc[:, j]
+        W = l3_chi.pspd_rel[j]
+        nu = l3_chi.nu[j]
+        tau0 = l3_chi.tau0[j]
+        H2 = l3_chi.H2[j]
+
+        for ci in range(n_gradt):
+            spec_obs = l3_chi.gradt_spec[ci, :, j]
+            noise_K = l3_chi.noise_spec[ci, :, j]
+
+            result = chi_func(j, ci, spec_obs, noise_K, K, W, nu, tau0, H2, _h2, f_AA_eff)
+            if result is None:
+                continue
+
+            chi_val, eps_val, kB_val, K_max_val, fom_val, K_max_ratio_val = result
+            chi_out[ci, j] = chi_val
+            eps_out[ci, j] = eps_val
+            kB_out[ci, j] = kB_val
+            K_max_out[ci, j] = K_max_val
+            fom_out[ci, j] = fom_val
+            K_max_ratio_out[ci, j] = K_max_ratio_val
+
+    chi_final = _compute_chi_final(chi_out)
+
+    return L4ChiData(
+        time=l3_chi.time.copy(),
+        pres=l3_chi.pres.copy(),
+        pspd_rel=l3_chi.pspd_rel.copy(),
+        section_number=l3_chi.section_number.copy(),
+        chi=chi_out,
+        chi_final=chi_final,
+        epsilon_T=eps_out,
+        kB=kB_out,
+        K_max=K_max_out,
+        fom=fom_out,
+        K_max_ratio=K_max_ratio_out,
+        method=method_name,
+    )
+
+
 def process_l4_chi_epsilon(
     l3_chi: L3ChiData,
     l4_diss: L4Data,
@@ -82,83 +157,26 @@ def process_l4_chi_epsilon(
     -------
     L4ChiData
     """
-    n_spec = l3_chi.n_spectra
-    n_gradt = l3_chi.n_gradt
-    f_AA_eff = 0.9 * f_AA
-
-    _h2 = fp07_transfer if l3_chi.fp07_model == "single_pole" else fp07_double_pole
-
-    # Match L4 epsilon to L3 chi windows by nearest time.
-    # Normalize both time arrays to float64 relative seconds — epsilon times
-    # may be datetime64 if loaded from xarray-decoded NetCDF.
+    # Pre-compute time matching
     epsi_final = l4_diss.epsi_final
     epsi_times = _to_float64_seconds(l4_diss.time)
     chi_times = _to_float64_seconds(l3_chi.time)
 
-    chi_out = np.full((n_gradt, n_spec), np.nan)
-    eps_out = np.full((n_gradt, n_spec), np.nan)
-    kB_out = np.full((n_gradt, n_spec), np.nan)
-    K_max_out = np.full((n_gradt, n_spec), np.nan)
-    fom_out = np.full((n_gradt, n_spec), np.nan)
-    K_max_ratio_out = np.full((n_gradt, n_spec), np.nan)
-
-    for j in range(n_spec):
-        K = l3_chi.kcyc[:, j]
-        W = l3_chi.pspd_rel[j]
-        nu = l3_chi.nu[j]
-        tau0 = l3_chi.tau0[j]
-        H2 = l3_chi.H2[j]
-
-        # Find nearest epsilon
+    def _chi_eps_func(j, _ci, spec_obs, noise_K, K, W, nu, tau0, H2, _h2, f_AA_eff):
         if len(epsi_times) > 0:
             idx_eps = int(np.argmin(np.abs(epsi_times - chi_times[j])))
             epsilon_val = float(epsi_final[idx_eps])
         else:
             epsilon_val = np.nan
-
         if not np.isfinite(epsilon_val) or epsilon_val <= 0:
-            continue
+            return None
+        chi_val, kB_val, K_max_val, _, fom_val, K_max_ratio_val = _chi_from_epsilon(
+            spec_obs, K, epsilon_val, nu, noise_K, H2, tau0, _h2,
+            f_AA_eff, W, spectrum_model,
+        )
+        return chi_val, epsilon_val, kB_val, K_max_val, fom_val, K_max_ratio_val
 
-        for ci in range(n_gradt):
-            spec_obs = l3_chi.gradt_spec[ci, :, j]
-            noise_K = l3_chi.noise_spec[ci, :, j]
-
-            chi_val, kB_val, K_max_val, _, fom_val, K_max_ratio_val = _chi_from_epsilon(
-                spec_obs,
-                K,
-                epsilon_val,
-                nu,
-                noise_K,
-                H2,
-                tau0,
-                _h2,
-                f_AA_eff,
-                W,
-                spectrum_model,
-            )
-            chi_out[ci, j] = chi_val
-            eps_out[ci, j] = epsilon_val
-            kB_out[ci, j] = kB_val
-            K_max_out[ci, j] = K_max_val
-            fom_out[ci, j] = fom_val
-            K_max_ratio_out[ci, j] = K_max_ratio_val
-
-    chi_final = _compute_chi_final(chi_out)
-
-    return L4ChiData(
-        time=l3_chi.time.copy(),
-        pres=l3_chi.pres.copy(),
-        pspd_rel=l3_chi.pspd_rel.copy(),
-        section_number=l3_chi.section_number.copy(),
-        chi=chi_out,
-        chi_final=chi_final,
-        epsilon_T=eps_out,
-        kB=kB_out,
-        K_max=K_max_out,
-        fom=fom_out,
-        K_max_ratio=K_max_ratio_out,
-        method="epsilon",
-    )
+    return _process_l4_chi(l3_chi, _chi_eps_func, "epsilon", f_AA)
 
 
 def process_l4_chi_fit(
@@ -185,96 +203,30 @@ def process_l4_chi_fit(
     -------
     L4ChiData
     """
-    n_spec = l3_chi.n_spectra
-    n_gradt = l3_chi.n_gradt
-    f_AA_eff = 0.9 * f_AA
-
-    _h2 = fp07_transfer if l3_chi.fp07_model == "single_pole" else fp07_double_pole
-
-    chi_out = np.full((n_gradt, n_spec), np.nan)
-    eps_out = np.full((n_gradt, n_spec), np.nan)
-    kB_out = np.full((n_gradt, n_spec), np.nan)
-    K_max_out = np.full((n_gradt, n_spec), np.nan)
-    fom_out = np.full((n_gradt, n_spec), np.nan)
-    K_max_ratio_out = np.full((n_gradt, n_spec), np.nan)
-
-    for j in range(n_spec):
-        K = l3_chi.kcyc[:, j]
-        W = l3_chi.pspd_rel[j]
-        nu = l3_chi.nu[j]
-        tau0 = l3_chi.tau0[j]
-        H2 = l3_chi.H2[j]
-
-        for ci in range(n_gradt):
-            spec_obs = l3_chi.gradt_spec[ci, :, j]
-            noise_K = l3_chi.noise_spec[ci, :, j]
-
-            if fit_method == "iterative":
-                kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val = _iterative_fit(
-                    spec_obs,
-                    K,
-                    nu,
-                    noise_K,
-                    H2,
-                    tau0,
-                    _h2,
-                    f_AA_eff,
-                    W,
-                    spectrum_model,
+    def _chi_fit_func(_j, _ci, spec_obs, noise_K, K, W, nu, tau0, H2, _h2, f_AA_eff):
+        if fit_method == "iterative":
+            kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val = _iterative_fit(
+                spec_obs, K, nu, noise_K, H2, tau0, _h2, f_AA_eff, W, spectrum_model,
+            )
+        else:
+            mask = (K > 0) & (f_AA_eff / W >= K)
+            if np.sum(mask) < 3:
+                return None
+            chi_obs = (
+                6 * KAPPA_T
+                * np.trapezoid(
+                    np.maximum(spec_obs[mask] - noise_K[mask], 0), K[mask],
                 )
-            else:
-                # Initial chi estimate
-                mask = (K > 0) & (f_AA_eff / W >= K)
-                if np.sum(mask) < 3:
-                    continue
-                chi_obs = (
-                    6
-                    * KAPPA_T
-                    * np.trapezoid(
-                        np.maximum(spec_obs[mask] - noise_K[mask], 0),
-                        K[mask],
-                    )
-                )
-                if chi_obs <= 0:
-                    chi_obs = 1e-14
+            )
+            if chi_obs <= 0:
+                chi_obs = 1e-14
+            kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val = _mle_fit_kB(
+                spec_obs, K, chi_obs, nu, noise_K, H2, tau0, _h2,
+                f_AA_eff, W, spectrum_model,
+            )
+        return chi_val, eps_val, kB_val, K_max_val, fom_val, K_max_ratio_val
 
-                kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val = _mle_fit_kB(
-                    spec_obs,
-                    K,
-                    chi_obs,
-                    nu,
-                    noise_K,
-                    H2,
-                    tau0,
-                    _h2,
-                    f_AA_eff,
-                    W,
-                    spectrum_model,
-                )
-
-            chi_out[ci, j] = chi_val
-            eps_out[ci, j] = eps_val
-            kB_out[ci, j] = kB_val
-            K_max_out[ci, j] = K_max_val
-            fom_out[ci, j] = fom_val
-            K_max_ratio_out[ci, j] = K_max_ratio_val
-
-    chi_final = _compute_chi_final(chi_out)
-
-    return L4ChiData(
-        time=l3_chi.time.copy(),
-        pres=l3_chi.pres.copy(),
-        pspd_rel=l3_chi.pspd_rel.copy(),
-        section_number=l3_chi.section_number.copy(),
-        chi=chi_out,
-        chi_final=chi_final,
-        epsilon_T=eps_out,
-        kB=kB_out,
-        K_max=K_max_out,
-        fom=fom_out,
-        K_max_ratio=K_max_ratio_out,
-        method="fit",
-    )
+    return _process_l4_chi(l3_chi, _chi_fit_func, "fit", f_AA)
 
 
 def _compute_chi_final(chi: np.ndarray) -> np.ndarray:

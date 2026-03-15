@@ -55,6 +55,8 @@ def csd_odas(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
     """Cross-spectral density using Welch's method with cosine window.
 
+    Thin wrapper around :func:`csd_matrix` for 1-D signals.
+
     Parameters
     ----------
     x : array_like
@@ -84,64 +86,28 @@ def csd_odas(
         Auto-spectrum of y (only if cross-spectrum computed).
     """
     x = np.asarray(x, dtype=np.float64).ravel()
-    if len(x) < 2 * nfft:
-        raise ValueError(f"Input length ({len(x)}) must be at least 2*nfft ({2 * nfft})")
-    auto = y is None
-    if not auto:
-        y = np.asarray(y, dtype=np.float64).ravel()
-        if len(x) != len(y):
+    if y is not None:
+        y_arr = np.asarray(y, dtype=np.float64).ravel()
+        if len(x) != len(y_arr):
             raise ValueError("x and y must have same length")
-        if np.array_equal(x, y):
-            auto = True
+        if np.array_equal(x, y_arr):
+            y_arr = None
+        else:
+            y_arr = y_arr[:, np.newaxis]
+    else:
+        y_arr = None
 
-    if overlap is None:
-        overlap = nfft // 2
-    window = _get_window(nfft) if window is None else np.asarray(window, dtype=np.float64)
+    x_2d = x[:, np.newaxis]  # (N, 1)
+    Cxy_m, F, Cxx_m, Cyy_m = csd_matrix(
+        x_2d, y_arr, nfft, rate, window=window, overlap=overlap, detrend=detrend,
+    )
 
-    n_freq = nfft // 2 + 1
-    step = nfft - overlap
-    n_seg = (len(x) - overlap) // step
-    ramp = np.arange(nfft, dtype=np.float64)
+    if Cxx_m is None:
+        # Auto-spectrum: Cxy_m is (n_freq, 1, 1) complex → squeeze to real 1-D
+        return np.real(Cxy_m[:, 0, 0]), F, None, None
 
-    if auto:
-        Cxy = np.zeros(n_freq)
-        for i in range(n_seg):
-            s = i * step
-            seg = _detrend_segment(x[s : s + nfft], detrend, ramp) * window
-            X = np.fft.rfft(seg, n=nfft)
-            Cxy += np.abs(X) ** 2
-        Cxy /= n_seg
-        Cxy /= nfft * rate / 2
-        Cxy[0] /= 2
-        Cxy[-1] /= 2
-        F = np.arange(n_freq) * rate / nfft
-        return Cxy, F, None, None
-
-    # Cross-spectrum
-    Cxy = np.zeros(n_freq, dtype=np.complex128)
-    Cxx = np.zeros(n_freq)
-    Cyy = np.zeros(n_freq)
-    for i in range(n_seg):
-        s = i * step
-        sx = _detrend_segment(x[s : s + nfft], detrend, ramp) * window
-        sy = _detrend_segment(y[s : s + nfft], detrend, ramp) * window
-        X = np.fft.rfft(sx, n=nfft)
-        Y = np.fft.rfft(sy, n=nfft)
-        Cxy += Y * np.conj(X)
-        Cxx += np.abs(X) ** 2
-        Cyy += np.abs(Y) ** 2
-    Cxy /= n_seg
-    Cxx /= n_seg
-    Cyy /= n_seg
-    norm = nfft * rate / 2
-    Cxy /= norm
-    Cxx /= norm
-    Cyy /= norm
-    for arr in (Cxy, Cxx, Cyy):
-        arr[0] /= 2
-        arr[-1] /= 2
-    F = np.arange(n_freq) * rate / nfft
-    return Cxy, F, Cxx, Cyy
+    # Cross-spectrum: squeeze matrix dims
+    return Cxy_m[:, 0, 0], F, np.real(Cxx_m[:, 0, 0]), np.real(Cyy_m[:, 0, 0])
 
 
 def csd_matrix(

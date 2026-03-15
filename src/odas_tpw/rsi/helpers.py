@@ -206,8 +206,6 @@ def prepare_profiles(
     Returns (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast,
     fs_slow, ratio, t_fast).
     """
-    from scipy.signal import butter, filtfilt
-
     fs_fast = data["fs_fast"]
     fs_slow = data["fs_slow"]
     ratio = round(fs_fast / fs_slow)
@@ -230,21 +228,12 @@ def prepare_profiles(
     if speed is not None:
         speed_fast = np.full(len(t_fast), abs(speed))
     else:
-        from odas_tpw.rsi.profile import _smooth_fall_rate
+        from odas_tpw.scor160.profile import compute_speed_fast
 
-        W_slow = _smooth_fall_rate(P_slow, fs_slow, tau=tau)
-
-        speed_slow = np.abs(W_slow)
-        speed_fast = np.interp(t_fast, t_slow, speed_slow)
-
-        f_c = 0.68 / tau
-        b_slow, a_slow = butter(1, f_c / (fs_slow / 2.0))
-        speed_slow = filtfilt(b_slow, a_slow, speed_slow)
-        b_fast, a_fast = butter(1, f_c / (fs_fast / 2.0))
-        speed_fast = filtfilt(b_fast, a_fast, speed_fast)
-
-        speed_slow[speed_slow < speed_cutout] = speed_cutout
-        speed_fast[speed_fast < speed_cutout] = speed_cutout
+        speed_fast, _W_slow = compute_speed_fast(
+            P_slow, t_fast, t_slow, fs_fast, fs_slow,
+            tau=tau, speed_min=speed_cutout,
+        )
 
     P_fast = np.interp(t_fast, t_slow, P_slow)
     T_fast = np.interp(t_fast, t_slow, T_slow)
@@ -399,3 +388,48 @@ def write_profile_results(
             f"P={float(ds.P_mean.min()):.0f}-{float(ds.P_mean.max()):.0f} dbar"
         )
     return output_paths
+
+
+# ---------------------------------------------------------------------------
+# Shared dataset builder
+# ---------------------------------------------------------------------------
+
+
+def _build_result_dataset(
+    variables: list[tuple[str, list[str], np.ndarray, dict]],
+    probe_names: list[str],
+    t_out: np.ndarray,
+    probe_long_name: str,
+    global_attrs: dict,
+) -> "xr.Dataset":
+    """Build an xarray Dataset from a list of variable specs.
+
+    Parameters
+    ----------
+    variables : list of (name, dims, data, attrs)
+        Variable definitions.
+    probe_names : list of str
+        Probe/sensor coordinate labels.
+    t_out : ndarray
+        Time coordinate values.
+    probe_long_name : str
+        Long name for the probe coordinate.
+    global_attrs : dict
+        Dataset-level attributes.
+    """
+    import xarray as xr
+
+    data_vars = {
+        name: (dims, data, attrs)
+        for name, dims, data, attrs in variables
+    }
+    ds = xr.Dataset(
+        data_vars,
+        coords={
+            "probe": probe_names,
+            "t": (["time"], t_out),
+        },
+        attrs=global_attrs,
+    )
+    ds.coords["probe"].attrs["long_name"] = probe_long_name
+    return ds

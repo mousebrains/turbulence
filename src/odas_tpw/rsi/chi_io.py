@@ -370,137 +370,28 @@ def _build_chi_dataset(
     f_AA: float,
 ) -> xr.Dataset:
     """Build an xarray Dataset from chi estimation output arrays."""
-    ds = xr.Dataset(
+    from odas_tpw.rsi.helpers import _build_result_dataset
+
+    variables = [
+        ("chi", ["probe", "time"], chi_out, {"units": "K2 s-1", "long_name": "thermal variance dissipation rate"}),
+        ("epsilon_T", ["probe", "time"], eps_out, {"units": "W kg-1", "long_name": "TKE dissipation rate from temperature"}),
+        ("kB", ["probe", "time"], kB_out, {"units": "cpm", "long_name": "Batchelor wavenumber"}),
+        ("K_max_T", ["probe", "time"], K_max_out, {"units": "cpm", "long_name": "upper wavenumber integration limit for chi"}),
+        ("fom", ["probe", "time"], fom_out, {"units": "1", "long_name": "figure of merit (observed/model variance ratio)"}),
+        ("K_max_ratio", ["probe", "time"], K_max_ratio_out, {"units": "1", "long_name": "K_max / kB spectral resolution ratio"}),
+        ("speed", ["time"], speed_out, {"units": "m s-1", "long_name": "profiling speed"}),
+        ("nu", ["time"], nu_out, {"units": "m2 s-1", "long_name": "kinematic viscosity of sea water"}),
+        ("P_mean", ["time"], P_out, {"units": "dbar", "long_name": "mean sea water pressure", "standard_name": "sea_water_pressure", "positive": "down"}),
+        ("T_mean", ["time"], T_out, {"units": "degree_Celsius", "long_name": "mean sea water temperature", "standard_name": "sea_water_temperature"}),
+        ("spec_gradT", ["probe", "freq", "time"], spec_gradT, {"units": "K2 m-1", "long_name": "temperature gradient wavenumber spectrum (observed)"}),
+        ("spec_batch", ["probe", "freq", "time"], spec_batch, {"units": "K2 m-1", "long_name": "fitted Batchelor temperature gradient spectrum"}),
+        ("spec_noise", ["probe", "freq", "time"], spec_noise_out, {"units": "K2 m-1", "long_name": "FP07 electronics noise spectrum"}),
+        ("K", ["freq", "time"], K_out, {"units": "cpm", "long_name": "wavenumber (cycles per metre)"}),
+        ("F", ["freq", "time"], F_out, {"units": "Hz", "long_name": "frequency"}),
+    ]
+    return _build_result_dataset(
+        variables, therm_names, t_out, "thermistor probe name",
         {
-            "chi": (
-                ["probe", "time"],
-                chi_out,
-                {
-                    "units": "K2 s-1",
-                    "long_name": "thermal variance dissipation rate",
-                },
-            ),
-            "epsilon_T": (
-                ["probe", "time"],
-                eps_out,
-                {
-                    "units": "W kg-1",
-                    "long_name": "TKE dissipation rate from temperature",
-                },
-            ),
-            "kB": (
-                ["probe", "time"],
-                kB_out,
-                {
-                    "units": "cpm",
-                    "long_name": "Batchelor wavenumber",
-                },
-            ),
-            "K_max_T": (
-                ["probe", "time"],
-                K_max_out,
-                {
-                    "units": "cpm",
-                    "long_name": "upper wavenumber integration limit for chi",
-                },
-            ),
-            "fom": (
-                ["probe", "time"],
-                fom_out,
-                {
-                    "units": "1",
-                    "long_name": "figure of merit (observed/model variance ratio)",
-                },
-            ),
-            "K_max_ratio": (
-                ["probe", "time"],
-                K_max_ratio_out,
-                {
-                    "units": "1",
-                    "long_name": "K_max / kB spectral resolution ratio",
-                },
-            ),
-            "speed": (
-                ["time"],
-                speed_out,
-                {
-                    "units": "m s-1",
-                    "long_name": "profiling speed",
-                },
-            ),
-            "nu": (
-                ["time"],
-                nu_out,
-                {
-                    "units": "m2 s-1",
-                    "long_name": "kinematic viscosity of sea water",
-                },
-            ),
-            "P_mean": (
-                ["time"],
-                P_out,
-                {
-                    "units": "dbar",
-                    "long_name": "mean sea water pressure",
-                    "standard_name": "sea_water_pressure",
-                    "positive": "down",
-                },
-            ),
-            "T_mean": (
-                ["time"],
-                T_out,
-                {
-                    "units": "degree_Celsius",
-                    "long_name": "mean sea water temperature",
-                    "standard_name": "sea_water_temperature",
-                },
-            ),
-            "spec_gradT": (
-                ["probe", "freq", "time"],
-                spec_gradT,
-                {
-                    "units": "K2 m-1",
-                    "long_name": "temperature gradient wavenumber spectrum (observed)",
-                },
-            ),
-            "spec_batch": (
-                ["probe", "freq", "time"],
-                spec_batch,
-                {
-                    "units": "K2 m-1",
-                    "long_name": "fitted Batchelor temperature gradient spectrum",
-                },
-            ),
-            "spec_noise": (
-                ["probe", "freq", "time"],
-                spec_noise_out,
-                {
-                    "units": "K2 m-1",
-                    "long_name": "FP07 electronics noise spectrum",
-                },
-            ),
-            "K": (
-                ["freq", "time"],
-                K_out,
-                {
-                    "units": "cpm",
-                    "long_name": "wavenumber (cycles per metre)",
-                },
-            ),
-            "F": (
-                ["freq", "time"],
-                F_out,
-                {
-                    "units": "Hz",
-                    "long_name": "frequency",
-                },
-            ),
-        },
-        coords={
-            "probe": therm_names,
-            "t": (["time"], t_out),
-        },
-        attrs={
             "Conventions": "CF-1.13",
             "fft_length": fft_length,
             "diss_length": diss_length,
@@ -513,8 +404,6 @@ def _build_chi_dataset(
             "f_AA": f_AA,
         },
     )
-    ds.coords["probe"].attrs["long_name"] = "thermistor probe name"
-    return ds
 
 
 # ---------------------------------------------------------------------------

@@ -78,12 +78,14 @@ def default_tau_model(fp07_model: str) -> str:
     return "goto" if fp07_model == "double_pole" else "lueck"
 
 
-def fp07_tau(speed: float, model: str = "lueck") -> float:
+def fp07_tau(speed: npt.ArrayLike, model: str = "lueck") -> np.ndarray | float:
     """Speed-dependent FP07 time constant [s].
+
+    Handles both scalar and array inputs via broadcasting.
 
     Parameters
     ----------
-    speed : float
+    speed : float or array_like
         Profiling speed [m/s].
     model : str
         'lueck'    : tau = 0.01 * (1.0/speed)^0.5 (Lueck et al. 1977)
@@ -92,21 +94,26 @@ def fp07_tau(speed: float, model: str = "lueck") -> float:
 
     Returns
     -------
-    tau0 : float
+    tau0 : float or ndarray
         Time constant [s].
     """
+    is_scalar = np.ndim(speed) == 0
+    speed = np.asarray(speed, dtype=np.float64)
     if model == "lueck":
-        return 0.01 * (1.0 / speed) ** 0.5
+        result = 0.01 * (1.0 / speed) ** 0.5
     elif model == "peterson":
-        return 0.012 * speed ** (-0.32)
+        result = 0.012 * speed ** (-0.32)
     elif model == "goto":
-        return 0.003
+        result = np.full_like(speed, 0.003) if speed.ndim > 0 else 0.003
     else:
         raise ValueError(f"Unknown FP07 tau model: {model!r}")
+    return float(result) if is_scalar else result
 
 
 def fp07_tau_batch(speeds: npt.ArrayLike, model: str = "lueck") -> np.ndarray:
     """Vectorized FP07 time constants for multiple speeds.
+
+    Thin wrapper around :func:`fp07_tau` ensuring array output.
 
     Parameters
     ----------
@@ -119,15 +126,7 @@ def fp07_tau_batch(speeds: npt.ArrayLike, model: str = "lueck") -> np.ndarray:
     -------
     tau0 : ndarray, shape ``(n,)``
     """
-    speeds = np.asarray(speeds, dtype=np.float64)
-    if model == "lueck":
-        return 0.01 * (1.0 / speeds) ** 0.5
-    elif model == "peterson":
-        return 0.012 * speeds ** (-0.32)
-    elif model == "goto":
-        return np.full_like(speeds, 0.003)
-    else:
-        raise ValueError(f"Unknown FP07 tau model: {model!r}")
+    return np.atleast_1d(fp07_tau(speeds, model))
 
 
 def fp07_transfer_batch(
@@ -190,6 +189,85 @@ class FP07NoiseConfig:
     beta_1: float = 3000.0  # Steinhart-Hart beta_1 [K]
     T_0: float = 289.3  # Steinhart-Hart reference temperature [K]
     beta_2: float | None = None  # Steinhart-Hart beta_2 [K]
+
+
+def _unpack_noise_config(
+    config: FP07NoiseConfig | None,
+    *,
+    R_0: float = 3000,
+    gain: float = 6,
+    f_AA: float = 110,
+    adc_fs: float = 4.096,
+    adc_bits: int = 16,
+    E_n: float = 4e-9,
+    fc: float = 18.7,
+    E_n2: float = 8e-9,
+    fc_2: float = 42,
+    gamma_RSI: float = 3,
+    T_K: float = 295,
+    K_B: float = 1.382e-23,
+    e_b: float = 0.68,
+    b: float = 1.0,
+    beta_1: float = 3000.0,
+    T_0: float = 289.3,
+    beta_2: float | None = None,
+) -> dict:
+    """Resolve hardware parameters from config dataclass or kwargs."""
+    if config is not None:
+        return {
+            "R_0": config.R_0, "gain": config.gain, "f_AA": config.f_AA,
+            "adc_fs": config.adc_fs, "adc_bits": config.adc_bits,
+            "E_n": config.E_n, "fc": config.fc, "E_n2": config.E_n2,
+            "fc_2": config.fc_2, "gamma_RSI": config.gamma_RSI,
+            "T_K": config.T_K, "K_B": config.K_B, "e_b": config.e_b,
+            "b": config.b, "beta_1": config.beta_1, "T_0": config.T_0,
+            "beta_2": config.beta_2,
+        }
+    return {
+        "R_0": R_0, "gain": gain, "f_AA": f_AA,
+        "adc_fs": adc_fs, "adc_bits": adc_bits,
+        "E_n": E_n, "fc": fc, "E_n2": E_n2,
+        "fc_2": fc_2, "gamma_RSI": gamma_RSI,
+        "T_K": T_K, "K_B": K_B, "e_b": e_b,
+        "b": b, "beta_1": beta_1, "T_0": T_0,
+        "beta_2": beta_2,
+    }
+
+
+def _noise_f_intermediates(
+    F: np.ndarray,
+    fs: float,
+    diff_gain: float,
+    p: dict,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """Compute F-dependent noise intermediates shared between scalar and batch.
+
+    Returns (base_f, johnson_gain_f, counts_factor, delta_s).
+    """
+    delta_s = p["adc_fs"] / 2 ** p["adc_bits"]
+    fN = fs / 2
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        V1 = 2 * p["E_n"] ** 2 * np.sqrt(1 + (F / p["fc"]) ** 2) / (F / p["fc"])
+    V1 = np.where(np.isfinite(V1), V1, V1[np.isfinite(V1)].max() if np.any(np.isfinite(V1)) else 0)
+
+    G_2 = 1 + (2 * np.pi * diff_gain * F) ** 2
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        V2 = 2 * p["E_n2"] ** 2 * np.sqrt(1 + (F / p["fc_2"]) ** 2) / (F / p["fc_2"])
+    V2 = np.where(np.isfinite(V2), V2, V2[np.isfinite(V2)].max() if np.any(np.isfinite(V2)) else 0)
+
+    G_AA = 1.0 / (1 + (F / p["f_AA"]) ** 8) ** 2
+    adc_floor = p["gamma_RSI"] * delta_s ** 2 / (12 * fN)
+
+    w = 2 * np.pi * diff_gain * F
+    G_HP = (1 / diff_gain) ** 2 * w ** 2 / (1 + w ** 2)
+
+    base_f = G_AA * G_2 * (p["gain"] ** 2 * V1 + V2) + adc_floor
+    johnson_gain_f = G_AA * G_2 * p["gain"] ** 2
+    counts_factor = G_HP / delta_s ** 2
+
+    return base_f, johnson_gain_f, counts_factor, delta_s
 
 
 def noise_thermchannel(
@@ -283,33 +361,19 @@ def noise_thermchannel(
     gradT_noise : ndarray
         Temperature gradient noise spectrum [(K/m)^2 / Hz].
     """
-    if config is not None:
-        R_0 = config.R_0
-        gain = config.gain
-        f_AA = config.f_AA
-        adc_fs = config.adc_fs
-        adc_bits = config.adc_bits
-        E_n = config.E_n
-        fc = config.fc
-        E_n2 = config.E_n2
-        fc_2 = config.fc_2
-        gamma_RSI = config.gamma_RSI
-        T_K = config.T_K
-        K_B = config.K_B
-        e_b = config.e_b
-        b = config.b
-        beta_1 = config.beta_1
-        T_0 = config.T_0
-        beta_2 = config.beta_2
+    p = _unpack_noise_config(
+        config, R_0=R_0, gain=gain, f_AA=f_AA, adc_fs=adc_fs,
+        adc_bits=adc_bits, E_n=E_n, fc=fc, E_n2=E_n2, fc_2=fc_2,
+        gamma_RSI=gamma_RSI, T_K=T_K, K_B=K_B, e_b=e_b, b=b,
+        beta_1=beta_1, T_0=T_0, beta_2=beta_2,
+    )
 
     F = np.asarray(F, dtype=np.float64)
+    base_f, johnson_gain_f, counts_factor, delta_s = _noise_f_intermediates(F, fs, diff_gain, p)
 
-    delta_s = adc_fs / 2**adc_bits  # ADC step size
-    fN = fs / 2  # Nyquist frequency
-
-    # Compute operating resistance for Johnson noise (MATLAB gradT_noise_odas.m)
+    # T-dependent terms
     T_kelvin = T_mean + 273.15
-    R_ratio = np.exp(beta_1 * (1.0 / T_kelvin - 1.0 / T_0))
+    R_ratio = np.exp(p["beta_1"] * (1.0 / T_kelvin - 1.0 / p["T_0"]))
     if R_ratio < 0.1:
         warnings.warn(
             f"R_ratio={R_ratio:.4g} < 0.1 (possible broken thermistor at T={T_mean:.1f}°C); "
@@ -317,51 +381,17 @@ def noise_thermchannel(
             stacklevel=2,
         )
         R_ratio = 1.0
-    R_actual = R_ratio * R_0
+    R_actual = R_ratio * p["R_0"]
+    phi_R = 4 * p["K_B"] * R_actual * p["T_K"]
 
-    # --- Stage 1: First amplifier + Johnson noise ---
-    with np.errstate(divide="ignore", invalid="ignore"):
-        V1 = 2 * E_n**2 * np.sqrt(1 + (F / fc) ** 2) / (F / fc)
-    V1 = np.where(np.isfinite(V1), V1, V1[np.isfinite(V1)].max() if np.any(np.isfinite(V1)) else 0)
-    phi_R = 4 * K_B * R_actual * T_K  # Johnson noise (actual operating resistance)
-    Noise_1 = gain**2 * (V1 + phi_R)
+    # Scale factor
+    eta = (p["b"] / 2) * 2 ** p["adc_bits"] * p["gain"] * p["e_b"] / p["adc_fs"]
+    scale_factor = T_kelvin ** 2 * (1 + R_ratio) ** 2 / (2 * eta * p["beta_1"] * R_ratio)
+    if p["beta_2"] is not None and np.isfinite(p["beta_2"]):
+        scale_factor *= 1 + 2 * (p["beta_1"] / p["beta_2"]) * np.log(R_ratio)
 
-    # --- Stage 2: Pre-emphasis + second amplifier ---
-    G_2 = 1 + (2 * np.pi * diff_gain * F) ** 2  # Pre-emphasis gain
-    with np.errstate(divide="ignore", invalid="ignore"):
-        V2 = 2 * E_n2**2 * np.sqrt(1 + (F / fc_2) ** 2) / (F / fc_2)
-    V2 = np.where(np.isfinite(V2), V2, V2[np.isfinite(V2)].max() if np.any(np.isfinite(V2)) else 0)
-    Noise_2 = G_2 * (Noise_1 + V2)
-
-    # --- Anti-aliasing: two-stage 4th-order Butterworth ---
-    G_AA = 1.0 / (1 + (F / f_AA) ** 8) ** 2
-    Noise_3 = Noise_2 * G_AA
-
-    # --- Sampling: ADC quantization noise ---
-    Noise_4 = Noise_3 + gamma_RSI * delta_s**2 / (12 * fN)
-
-    # --- Convert to counts^2/Hz ---
-    Noise_counts = Noise_4 / delta_s**2
-
-    # --- High-pass transfer function from pre-emphasis deconvolution ---
-    w = 2 * np.pi * diff_gain * F
-    G_HP = (1 / diff_gain) ** 2 * w**2 / (1 + w**2)
-    Noise_counts = Noise_counts * G_HP
-
-    # --- Convert to physical units ---
-    # Scale factor: convert counts to physical gradient units (gradT_noise_odas.m)
-    # R_ratio and T_kelvin already computed above
-    eta = (b / 2) * 2**adc_bits * gain * e_b / adc_fs
-    scale_factor = T_kelvin**2 * (1 + R_ratio) ** 2 / (2 * eta * beta_1 * R_ratio)
-    # beta_2 correction (MATLAB gradT_noise_odas.m l.335-338)
-    if beta_2 is not None and np.isfinite(beta_2):
-        scale_factor *= 1 + 2 * (beta_1 / beta_2) * np.log(R_ratio)
-    # Note: speed is NOT included here — caller divides by speed when converting
-    # frequency spectrum to wavenumber spectrum.
-
-    gradT_noise = Noise_counts * scale_factor**2
-
-    return gradT_noise
+    Noise_counts = (base_f + johnson_gain_f * phi_R) * counts_factor
+    return Noise_counts * scale_factor ** 2
 
 
 def gradT_noise(
@@ -449,83 +479,36 @@ def noise_thermchannel_batch(
     gradT_noise : ndarray
         Shape ``(n_est, n_freq)``.
     """
-    if config is not None:
-        R_0 = config.R_0
-        gain = config.gain
-        f_AA = config.f_AA
-        adc_fs = config.adc_fs
-        adc_bits = config.adc_bits
-        E_n = config.E_n
-        fc = config.fc
-        E_n2 = config.E_n2
-        fc_2 = config.fc_2
-        gamma_RSI = config.gamma_RSI
-        T_K = config.T_K
-        K_B = config.K_B
-        e_b = config.e_b
-        b = config.b
-        beta_1 = config.beta_1
-        T_0 = config.T_0
-        beta_2 = config.beta_2
+    p = _unpack_noise_config(
+        config, R_0=R_0, gain=gain, f_AA=f_AA, adc_fs=adc_fs,
+        adc_bits=adc_bits, E_n=E_n, fc=fc, E_n2=E_n2, fc_2=fc_2,
+        gamma_RSI=gamma_RSI, T_K=T_K, K_B=K_B, e_b=e_b, b=b,
+        beta_1=beta_1, T_0=T_0, beta_2=beta_2,
+    )
 
     F = np.asarray(F, dtype=np.float64)
     T_means = np.asarray(T_means, dtype=np.float64)
 
-    delta_s = adc_fs / 2**adc_bits
-    fN = fs / 2
-
-    # --- F-dependent intermediates (computed once) ---
-    with np.errstate(divide="ignore", invalid="ignore"):
-        V1 = 2 * E_n**2 * np.sqrt(1 + (F / fc) ** 2) / (F / fc)
-    V1 = np.where(
-        np.isfinite(V1),
-        V1,
-        V1[np.isfinite(V1)].max() if np.any(np.isfinite(V1)) else 0,
-    )
-
-    G_2 = 1 + (2 * np.pi * diff_gain * F) ** 2
-
-    with np.errstate(divide="ignore", invalid="ignore"):
-        V2 = 2 * E_n2**2 * np.sqrt(1 + (F / fc_2) ** 2) / (F / fc_2)
-    V2 = np.where(
-        np.isfinite(V2),
-        V2,
-        V2[np.isfinite(V2)].max() if np.any(np.isfinite(V2)) else 0,
-    )
-
-    G_AA = 1.0 / (1 + (F / f_AA) ** 8) ** 2
-    adc_floor = gamma_RSI * delta_s**2 / (12 * fN)
-
-    w = 2 * np.pi * diff_gain * F
-    G_HP = (1 / diff_gain) ** 2 * w**2 / (1 + w**2)
-
-    # Factor the noise chain into F-only and T-only parts:
-    #   Noise_4 = base_f + johnson_gain_f * phi_R
-    # where phi_R depends only on T_mean.
-    base_f = G_AA * G_2 * (gain**2 * V1 + V2) + adc_floor  # (n_freq,)
-    johnson_gain_f = G_AA * G_2 * gain**2  # (n_freq,)
-    counts_factor = G_HP / delta_s**2  # (n_freq,)
+    base_f, johnson_gain_f, counts_factor, _delta_s = _noise_f_intermediates(F, fs, diff_gain, p)
 
     # --- T-dependent terms ---
     T_kelvin = T_means + 273.15  # (n_est,)
-    R_ratio = np.exp(beta_1 * (1.0 / T_kelvin - 1.0 / T_0))  # (n_est,)
+    R_ratio = np.exp(p["beta_1"] * (1.0 / T_kelvin - 1.0 / p["T_0"]))  # (n_est,)
     R_ratio = np.where(R_ratio < 0.1, 1.0, R_ratio)
-    R_actual = R_ratio * R_0
-    phi_R = 4 * K_B * R_actual * T_K  # (n_est,)
+    R_actual = R_ratio * p["R_0"]
+    phi_R = 4 * p["K_B"] * R_actual * p["T_K"]  # (n_est,)
 
     # Scale factor
-    eta = (b / 2) * 2**adc_bits * gain * e_b / adc_fs
-    scale_factor = T_kelvin**2 * (1 + R_ratio) ** 2 / (2 * eta * beta_1 * R_ratio)
-    if beta_2 is not None and np.isfinite(beta_2):
-        scale_factor = scale_factor * (1 + 2 * (beta_1 / beta_2) * np.log(R_ratio))
+    eta = (p["b"] / 2) * 2 ** p["adc_bits"] * p["gain"] * p["e_b"] / p["adc_fs"]
+    scale_factor = T_kelvin ** 2 * (1 + R_ratio) ** 2 / (2 * eta * p["beta_1"] * R_ratio)
+    if p["beta_2"] is not None and np.isfinite(p["beta_2"]):
+        scale_factor = scale_factor * (1 + 2 * (p["beta_1"] / p["beta_2"]) * np.log(R_ratio))
 
-    # Combine: noise[i, f] = (base_f[f] + johnson_gain_f[f] * phi_R[i])
-    #                         * counts_factor[f] * scale_factor[i]^2
     Noise_counts = (
         base_f[np.newaxis, :] + johnson_gain_f[np.newaxis, :] * phi_R[:, np.newaxis]
     ) * counts_factor[np.newaxis, :]
 
-    return Noise_counts * (scale_factor**2)[:, np.newaxis]
+    return Noise_counts * (scale_factor ** 2)[:, np.newaxis]
 
 
 def gradT_noise_batch(

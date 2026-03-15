@@ -29,37 +29,89 @@ _SPEED_TAU = 1.5
 def _compute_speed(pf: "PFile") -> tuple[np.ndarray, np.ndarray]:
     """Compute profiling speed from pressure.
 
-    Matches the ODAS odas_p2mat.m speed pipeline:
-      1. W = gradient(P) filtered with Butterworth at 0.68/tau
-      2. speed = abs(W), interpolated to fast rate
-      3. Second Butterworth smoothing pass
-      4. Clamped to _SPEED_MIN
-
     Returns (speed_fast, speed_slow) in m/s.
     """
-    from scipy.signal import butter, filtfilt
-
-    from odas_tpw.rsi.profile import _smooth_fall_rate
+    from odas_tpw.scor160.profile import compute_speed_fast
 
     P_slow = pf.channels.get("P_dP", pf.channels.get("P"))
     if P_slow is None:
         raise ValueError("No pressure channel (P or P_dP) found")
 
-    W_slow = _smooth_fall_rate(P_slow, pf.fs_slow, tau=_SPEED_TAU)
-    speed_slow = np.abs(W_slow)
+    speed_fast, _W_slow = compute_speed_fast(
+        P_slow, pf.t_fast, pf.t_slow, pf.fs_fast, pf.fs_slow,
+        tau=_SPEED_TAU, speed_min=_SPEED_MIN,
+    )
+    return speed_fast, np.maximum(np.abs(_W_slow), _SPEED_MIN)
 
-    speed_fast = np.interp(pf.t_fast, pf.t_slow, speed_slow)
 
-    f_c = 0.68 / _SPEED_TAU
-    b_s, a_s = butter(1, f_c / (pf.fs_slow / 2.0))
-    speed_slow = filtfilt(b_s, a_s, speed_slow)
-    b_f, a_f = butter(1, f_c / (pf.fs_fast / 2.0))
-    speed_fast = filtfilt(b_f, a_f, speed_fast)
+def _classify_channels(pf: "PFile") -> dict:
+    """Classify PFile channels into ATOMIX roles.
 
-    speed_slow = np.maximum(speed_slow, _SPEED_MIN)
-    speed_fast = np.maximum(speed_fast, _SPEED_MIN)
+    Returns a dict with keys: shear, vib, acc, mag, gradt, cond_ctd,
+    temp_ctd, pitch, roll, chla, turb, doxy, doxy_temp, supplementary.
+    """
+    shear_names = sorted(
+        n for n in pf.channels if pf.channel_info[n]["type"] == "shear"
+    )
+    vib_names = sorted(
+        n for n in pf.channels if pf.channel_info[n]["type"] == "piezo"
+    )
+    acc_names = sorted(
+        n for n in pf.channels if pf.channel_info[n]["type"] == "accel"
+    )
+    mag_names = sorted(
+        n for n in pf.channels if pf.channel_info[n]["type"] == "mag"
+    )
+    gradt_names = sorted(
+        n for n in pf.channels
+        if pf.channel_info[n]["type"] == "therm" and pf.is_fast(n)
+    )
+    cond_ctd_names = sorted(
+        n for n in pf.channels if pf.channel_info[n]["type"] == "jac_c"
+    )
 
-    return speed_fast, speed_slow
+    temp_ctd_name = next(
+        (n for n in pf.channels if pf.channel_info[n]["type"] == "jac_t"), None
+    )
+    pitch_name = roll_name = None
+    for n in pf.channels:
+        if pf.channel_info[n]["type"] == "inclxy":
+            if "X" in n:
+                pitch_name = n
+            elif "Y" in n:
+                roll_name = n
+
+    chla_name = next(
+        (n for n in pf.channels if n.lower().startswith("chloro")), None
+    )
+    turb_name = next(
+        (n for n in pf.channels if n.lower().startswith("turb")), None
+    )
+    doxy_name = next(
+        (n for n in pf.channels if pf.channel_info[n]["type"] == "aroft_o2"), None
+    )
+    doxy_temp_name = next(
+        (n for n in pf.channels if pf.channel_info[n]["type"] == "aroft_t"), None
+    )
+
+    # Identify supplementary channels (not mapped to named variables)
+    mapped = set(shear_names + vib_names + gradt_names + acc_names + mag_names + cond_ctd_names)
+    for n in (temp_ctd_name, pitch_name, roll_name, "P", "P_dP",
+              chla_name, turb_name, doxy_name, doxy_temp_name):
+        if n is not None:
+            mapped.add(n)
+    for n in list(pf.channels):
+        if pf.channel_info[n]["type"] == "therm" and not pf.is_fast(n):
+            mapped.add(n)
+    supplementary = sorted(n for n in pf.channels if n not in mapped)
+
+    return {
+        "shear": shear_names, "vib": vib_names, "acc": acc_names,
+        "mag": mag_names, "gradt": gradt_names, "cond_ctd": cond_ctd_names,
+        "temp_ctd": temp_ctd_name, "pitch": pitch_name, "roll": roll_name,
+        "chla": chla_name, "turb": turb_name, "doxy": doxy_name,
+        "doxy_temp": doxy_temp_name, "supplementary": supplementary,
+    }
 
 
 def p_to_L1(
@@ -111,80 +163,25 @@ def p_to_L1(
     time_units = f"Days since {ref_year}-01-01T00:00:00Z"
 
     # ---- Classify channels by ATOMIX role ----
-    shear_names = sorted(
-        n for n in pf.channels if pf.channel_info[n]["type"] == "shear"
-    )
-    vib_names = sorted(
-        n for n in pf.channels if pf.channel_info[n]["type"] == "piezo"
-    )
-    acc_names = sorted(
-        n for n in pf.channels if pf.channel_info[n]["type"] == "accel"
-    )
-    mag_names = sorted(
-        n for n in pf.channels if pf.channel_info[n]["type"] == "mag"
-    )
-    # Fast thermistors -> TEMP (fast-rate) and GRADT
-    gradt_names = sorted(
-        n for n in pf.channels
-        if pf.channel_info[n]["type"] == "therm" and pf.is_fast(n)
-    )
-    # CTD conductivity (slow JAC_C) -> COND_CTD
-    cond_ctd_names = sorted(
-        n for n in pf.channels if pf.channel_info[n]["type"] == "jac_c"
-    )
+    ch = _classify_channels(pf)
+    shear_names = ch["shear"]
+    vib_names = ch["vib"]
+    acc_names = ch["acc"]
+    mag_names = ch["mag"]
+    gradt_names = ch["gradt"]
+    cond_ctd_names = ch["cond_ctd"]
+    temp_ctd_name = ch["temp_ctd"]
+    pitch_name = ch["pitch"]
+    roll_name = ch["roll"]
+    chla_name = ch["chla"]
+    turb_name = ch["turb"]
+    doxy_name = ch["doxy"]
+    doxy_temp_name = ch["doxy_temp"]
+    supplementary = ch["supplementary"]
 
     # Pressure (prefer deconvolved P_dP, else P)
     P_slow = pf.channels.get("P_dP", pf.channels.get("P"))
     P_fast = np.interp(pf.t_fast, pf.t_slow, P_slow)
-
-    # CTD temperature (slow JAC_T) -> TEMP_CTD
-    temp_ctd_name = None
-    for n in pf.channels:
-        if pf.channel_info[n]["type"] == "jac_t":
-            temp_ctd_name = n
-            break
-
-    # Pitch/Roll from inclinometer
-    pitch_name = roll_name = None
-    for n in pf.channels:
-        if pf.channel_info[n]["type"] == "inclxy":
-            if "X" in n:
-                pitch_name = n
-            elif "Y" in n:
-                roll_name = n
-
-    # Named biogeochemical/auxiliary sensors
-    chla_name = next(
-        (n for n in pf.channels if n.lower().startswith("chloro")), None
-    )
-    turb_name = next(
-        (n for n in pf.channels if n.lower().startswith("turb")), None
-    )
-    doxy_name = next(
-        (n for n in pf.channels if pf.channel_info[n]["type"] == "aroft_o2"),
-        None,
-    )
-    doxy_temp_name = next(
-        (n for n in pf.channels if pf.channel_info[n]["type"] == "aroft_t"),
-        None,
-    )
-
-    # Identify supplementary channels (not mapped to named variables)
-    mapped = set(
-        shear_names + vib_names + gradt_names + acc_names + mag_names
-        + cond_ctd_names
-    )
-    for n in (
-        temp_ctd_name, pitch_name, roll_name, "P", "P_dP",
-        chla_name, turb_name, doxy_name, doxy_temp_name,
-    ):
-        if n is not None:
-            mapped.add(n)
-    # Exclude slow thermistors (base channels for deconvolved fast ones)
-    for n in list(pf.channels):
-        if pf.channel_info[n]["type"] == "therm" and not pf.is_fast(n):
-            mapped.add(n)
-    supplementary = sorted(n for n in pf.channels if n not in mapped)
 
     # ---- Create NetCDF file ----
     ds = nc.Dataset(str(nc_filepath), "w", format="NETCDF4")
