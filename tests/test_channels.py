@@ -240,27 +240,45 @@ class TestConvertPiezo:
 
 
 class TestConvertInclXY:
-    def test_positive_14bit(self):
-        """Positive 14-bit two's complement value with known coefficients."""
-        # Raw value where right-shift 2 gives a small positive number.
-        # raw=100 -> val = 100 >> 2 = 25 (positive, < 2^13=8192)
-        # With default coef1=0.025, coef0=0: result = 0.025 * 25 + 0 = 0.625
+    def test_positive_value(self):
+        """Positive value below 2^13 passes through adis unchanged."""
+        # raw=100, adis leaves it as 100 (no status bits set, < 2^13)
+        # result = 0.025 * 100 + 0 = 2.5
         params = {"coef0": "0", "coef1": "0.025"}
         data = np.array([100.0])
         result, units = convert_inclxy(data, params)
         assert units == "deg"
-        np.testing.assert_allclose(result[0], 0.025 * 25, rtol=1e-10)
+        np.testing.assert_allclose(result[0], 0.025 * 100, rtol=1e-10)
 
     def test_negative_twos_complement(self):
-        """Negative value via two's complement wrapping (val >= 2^13)."""
-        # We need val = raw >> 2 >= 8192, so raw >= 8192 * 4 = 32768
-        # raw=32768 -> val = 32768 >> 2 = 8192 -> wraps: 8192 - 16384 = -8192
+        """Value >= 2^13 wraps via 14-bit two's complement."""
+        # raw=8192 → adis: 8192 >= 2^13 → 8192 - 2^14 = -8192
         # result = 0.025 * (-8192) + 0 = -204.8
         params = {"coef0": "0", "coef1": "0.025"}
-        data = np.array([32768.0])
+        data = np.array([8192.0])
         result, units = convert_inclxy(data, params)
         assert units == "deg"
         np.testing.assert_allclose(result[0], 0.025 * (-8192), rtol=1e-10)
+
+    def test_negative_raw_passthrough(self):
+        """Negative raw values in normal range pass through adis unchanged."""
+        # raw=-3064 → none of the adis conditions fire → stays -3064
+        # result = 0.025 * (-3064) = -76.6
+        params = {"coef0": "0", "coef1": "0.025"}
+        data = np.array([-3064.0])
+        result, units = convert_inclxy(data, params)
+        assert units == "deg"
+        np.testing.assert_allclose(result[0], 0.025 * (-3064), rtol=1e-10)
+
+    def test_bit15_new_data_cleared(self):
+        """Bit 15 (new-data flag) is cleared by adis."""
+        # raw < -2^14: e.g. -20000 → add 2^15 = -20000+32768 = 12768
+        # 12768 >= 2^13 → wraps: 12768 - 16384 = -3616
+        params = {"coef0": "0", "coef1": "0.025"}
+        data = np.array([-20000.0])
+        result, units = convert_inclxy(data, params)
+        assert units == "deg"
+        np.testing.assert_allclose(result[0], 0.025 * (-3616), rtol=1e-10)
 
     def test_zero_input(self):
         """Zero raw → zero degrees."""
@@ -273,34 +291,34 @@ class TestConvertInclXY:
     def test_custom_coefficients(self):
         """Custom coef0 and coef1."""
         params = {"coef0": "10.0", "coef1": "0.05"}
-        data = np.array([40.0])  # val = 40 >> 2 = 10
+        data = np.array([40.0])  # adis: 40 < 2^13, passthrough
         result, units = convert_inclxy(data, params)
         assert units == "deg"
-        np.testing.assert_allclose(result[0], 0.05 * 10 + 10.0, rtol=1e-10)
+        np.testing.assert_allclose(result[0], 0.05 * 40 + 10.0, rtol=1e-10)
 
     def test_defaults(self):
         """Default coefficients: coef0=0, coef1=0.025."""
-        data = np.array([8.0])  # val = 8 >> 2 = 2
+        data = np.array([8.0])  # adis: passthrough
         result, units = convert_inclxy(data, {})
         assert units == "deg"
-        np.testing.assert_allclose(result[0], 0.025 * 2, rtol=1e-10)
+        np.testing.assert_allclose(result[0], 0.025 * 8, rtol=1e-10)
 
 
 class TestConvertInclT:
     def test_positive_value(self):
-        """Positive 14-bit value with default coefficients (coef0=624, coef1=-0.47)."""
-        # raw=100 -> val = 100 >> 2 = 25
-        # result = -0.47 * 25 + 624 = -11.75 + 624 = 612.25
+        """Positive value with default coefficients (coef0=624, coef1=-0.47)."""
+        # raw=100 → adis passthrough (100 < 2^13)
+        # result = -0.47 * 100 + 624 = -47 + 624 = 577.0
         data = np.array([100.0])
         result, units = convert_inclt(data, {})
         assert units == "deg_C"
-        np.testing.assert_allclose(result[0], -0.47 * 25 + 624, rtol=1e-10)
+        np.testing.assert_allclose(result[0], -0.47 * 100 + 624, rtol=1e-10)
 
     def test_negative_twos_complement(self):
-        """Negative two's complement wrapping."""
-        # raw=32768 -> val = 8192 -> wraps to -8192
+        """Value >= 2^13 wraps via 14-bit two's complement."""
+        # raw=8192 → adis: 8192 - 16384 = -8192
         # result = -0.47 * (-8192) + 624 = 3850.24 + 624 = 4474.24
-        data = np.array([32768.0])
+        data = np.array([8192.0])
         result, units = convert_inclt(data, {})
         assert units == "deg_C"
         np.testing.assert_allclose(result[0], -0.47 * (-8192) + 624, rtol=1e-10)
@@ -315,10 +333,10 @@ class TestConvertInclT:
     def test_custom_coefficients(self):
         """Custom coef0 and coef1 override defaults."""
         params = {"coef0": "500", "coef1": "-0.5"}
-        data = np.array([40.0])  # val = 40 >> 2 = 10
+        data = np.array([40.0])  # adis: passthrough
         result, units = convert_inclt(data, params)
         assert units == "deg_C"
-        np.testing.assert_allclose(result[0], -0.5 * 10 + 500, rtol=1e-10)
+        np.testing.assert_allclose(result[0], -0.5 * 40 + 500, rtol=1e-10)
 
 
 class TestConvertJacC:

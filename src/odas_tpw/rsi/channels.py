@@ -18,11 +18,25 @@ def _safe_float(s: Any, default: float = 0.0) -> float:
         return default
 
 
-def _twos_complement_14bit(data: np.ndarray) -> np.ndarray:
-    """Convert 16-bit raw counts to 14-bit signed (right-shift 2, two's complement)."""
-    raw = data.astype(np.int32)
-    val = (raw >> 2).astype(np.float64)
-    val[val >= 2**13] -= 2**14
+def _adis_14bit(data: np.ndarray) -> np.ndarray:
+    """Extract 14-bit data from ADIS16209 inclinometer words.
+
+    Matches ODAS ``adis.m``: clears status bits (15 = new-data,
+    14 = error), then applies 14-bit two's complement.  The
+    inclination X/Y channels use 14-bit signed data; the
+    temperature channel uses 12-bit unsigned, which passes through
+    the two's complement step unchanged.
+    """
+    val = data.copy().astype(np.float64)
+    # Bit 15 set → new-data flag.  Clear it.
+    mask = val < -(2**14)
+    val[mask] += 2**15
+    # Bit 14 set → error flag.  Clear it.
+    mask = val >= 2**14
+    val[mask] -= 2**14
+    # Two's complement for the upper half of the 14-bit range.
+    mask = val >= 2**13
+    val[mask] -= 2**14
     return val
 
 
@@ -113,7 +127,7 @@ def convert_piezo(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
 
 def convert_inclxy(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """ADIS inclinometer X or Y: 14-bit two's complement → degrees."""
-    val = _twos_complement_14bit(data)
+    val = _adis_14bit(data)
     coef0 = _safe_float(params.get("coef0", "0"))
     coef1 = _safe_float(params.get("coef1", "0.025"))
     return coef1 * val + coef0, "deg"
@@ -121,7 +135,7 @@ def convert_inclxy(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray
 
 def convert_inclt(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """ADIS inclinometer temperature: 14-bit two's complement → °C."""
-    val = _twos_complement_14bit(data)
+    val = _adis_14bit(data)
     coef0 = _safe_float(params.get("coef0", "624"))
     coef1 = _safe_float(params.get("coef1", "-0.47"))
     return coef1 * val + coef0, "deg_C"

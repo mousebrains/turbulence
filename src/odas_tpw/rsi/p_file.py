@@ -340,6 +340,18 @@ class PFile:
             # This matches ODAS odas_p2mat.m lines 516-570.
             self._apply_deconvolution(ch_config, matrix)
 
+            # Unsigned wrapping: channels with sign=unsigned (or jac_t type)
+            # need negative int16 values converted to unsigned before conversion.
+            # Matches ODAS read_odas.m lines 370-398.
+            _ALWAYS_UNSIGNED = {"jac_t"}
+            for ch_name in list(self.channels_raw.keys()):
+                info = ch_config.get(ch_name, {})
+                ch_type = info.get("type", "raw").strip().lower()
+                sign = info.get("sign", "").strip().lower()
+                if sign == "unsigned" or ch_type in _ALWAYS_UNSIGNED:
+                    raw = self.channels_raw[ch_name]
+                    raw[raw < 0] += 2**16
+
             for ch_name in list(self.channels_raw.keys()):
                 info = ch_config.get(ch_name, {})
                 ch_type = info.get("type", "raw").strip().lower()
