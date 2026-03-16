@@ -135,6 +135,7 @@ def compute_depth_spectra(
         result["shear_specs"] = er.shear_specs
         result["nasmyth_specs"] = er.nasmyth_specs
         result["epsilons"] = list(er.epsilon)
+        result["foms"] = list(er.fom)
         result["methods"] = list(er.method)
         result["K_maxes"] = list(er.K_max)
         result["epsilons_isr"] = list(er.epsilon_isr)
@@ -158,8 +159,9 @@ def compute_depth_spectra(
     if n_therm > 0:
         therm_segs = [therm_data[ci][1][w_sel] for ci in range(n_therm)]
         eps_arr = np.array(result["epsilons"]) if result["epsilons"] else None
+        fom_arr = np.array(result.get("foms", [])) if result.get("foms") else None
 
-        # Method 1: chi from epsilon (kB fixed by shear-derived epsilon)
+        # Method 1: chi from epsilon (kB fixed by FOM-filtered mean epsilon)
         cr_m1 = compute_chi_window(
             therm_segs,
             diff_gains,
@@ -171,6 +173,7 @@ def compute_depth_spectra(
             f_AA_chi,
             spectrum_model="kraichnan",
             epsilon=eps_arr,
+            fom=fom_arr,
             method=1,
         )
         result["chi_obs_specs"] = cr_m1.grad_specs
@@ -307,6 +310,7 @@ def compute_windowed_diss(
                     f_AA_chi,
                     spectrum_model=model,
                     epsilon=er.epsilon,
+                    fom=er.fom,
                     method=1,
                 )
                 arr[:, idx] = cr.chi
@@ -353,19 +357,28 @@ class ProfileViewer:
         fft_length=1024,
         f_AA=98.0,
         goodman=True,
-        direction="down",
+        direction="auto",
         P_min=0.5,
         W_min=0.3,
         min_duration=7.0,
         spec_P_range=None,
         diss_length=None,
+        vehicle=None,
     ):
+        from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
+
         self.pf = pf
         self.fft_length = fft_length
         self.diss_length = diss_length or 4 * fft_length
         self.f_AA = f_AA
         self.goodman = goodman
         self.spec_P_range = spec_P_range
+
+        # Resolve vehicle, direction, and tau
+        if vehicle is None:
+            vehicle = pf.config["instrument_info"].get("vehicle", "").lower()
+        direction = resolve_direction(direction, vehicle)
+        tau = resolve_tau(vehicle)
 
         # Extract channel data
         self.shear = sorted(
@@ -404,7 +417,7 @@ class ProfileViewer:
         self.fs_slow = pf.fs_slow
 
         # Detect profiles
-        W = _smooth_fall_rate(self.P, self.fs_slow)
+        W = _smooth_fall_rate(self.P, self.fs_slow, tau=tau)
         self.W = W
         self.profiles = get_profiles(
             self.P,

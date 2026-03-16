@@ -25,21 +25,10 @@ logger = logging.getLogger(__name__)
 # Backward-compatible alias (previously underscore-prefixed)
 _smooth_fall_rate = smooth_fall_rate
 
-# Default vehicle tau values matching ODAS default_vehicle_attributes.ini
-_VEHICLE_TAU = {
-    "vmp": 1.5,
-    "rvmp": 1.5,
-    "xmp": 1.5,
-    "micro_squid": 1.5,
-    "stand": 1.5,
-    "sea_glider": 5.0,
-    "slocum_glider": 3.0,
-    "sea_explorer": 3.0,
-    "auv": 10.0,
-    "auv_emc": 10.0,
-    "nemo": 60.0,
-    "argo_float": 60.0,
-}
+from odas_tpw.rsi.vehicle import VEHICLE_ATTRIBUTES, resolve_tau
+
+# Backward-compatible alias — computed from VEHICLE_ATTRIBUTES
+_VEHICLE_TAU = {k: v[1] for k, v in VEHICLE_ATTRIBUTES.items()}
 
 
 def extract_profiles(

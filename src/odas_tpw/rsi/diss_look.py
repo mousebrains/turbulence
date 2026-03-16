@@ -509,12 +509,13 @@ def diss_look(
     fft_length=1024,
     f_AA=98.0,
     goodman=True,
-    direction="down",
+    direction="auto",
     P_min=0.5,
     W_min=0.3,
     min_duration=7.0,
     spec_P_range=None,
     diss_length=None,
+    vehicle=None,
 ) -> DissLookViewer:
     """Open an interactive dissipation quality viewer for a .p file.
 
@@ -532,7 +533,7 @@ def diss_look(
     goodman : bool
         Apply Goodman coherent noise removal to shear spectra.
     direction : str
-        Profile direction: 'up' or 'down'.
+        Profile direction: 'auto', 'up', 'down', 'glide', or 'horizontal'.
     P_min : float
         Minimum pressure for profile detection [dbar].
     W_min : float
@@ -543,6 +544,9 @@ def diss_look(
         Pressure range (P_min, P_max) in dbar for spectral panel.
     diss_length : int or None
         Dissipation window length [samples]. Default: 4 * fft_length.
+    vehicle : str or None
+        Vehicle type override (e.g. 'slocum_glider'). If None, read from
+        instrument config.
 
     Returns
     -------
@@ -561,6 +565,7 @@ def diss_look(
         min_duration=min_duration,
         spec_P_range=spec_P_range,
         diss_length=diss_length,
+        vehicle=vehicle,
     )
     viewer.show()
     return viewer

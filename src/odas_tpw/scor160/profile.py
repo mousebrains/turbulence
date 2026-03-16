@@ -156,7 +156,8 @@ def get_profiles(
     W_min : float
         Minimum fall/rise rate magnitude [dbar/s].
     direction : str
-        'down' or 'up'.
+        ``'down'``, ``'up'``, ``'glide'`` (both up and down), or
+        ``'horizontal'`` (either sign, for towed/AUV instruments).
     min_duration : float
         Minimum profile duration [s].
 
@@ -165,12 +166,23 @@ def get_profiles(
     list of (int, int)
         Start and end indices (inclusive) of each detected profile.
     """
+    d = direction.lower()
+
+    if d == "glide":
+        # Detect both up and down segments, merge and sort by start index
+        down = get_profiles(P, W, fs, P_min, W_min, "down", min_duration)
+        up = get_profiles(P, W, fs, P_min, W_min, "up", min_duration)
+        merged = sorted(down + up, key=lambda t: t[0])
+        return merged
+
     P = np.asarray(P, dtype=np.float64).ravel()
     W = np.asarray(W, dtype=np.float64).ravel()
     min_samples = int(min_duration * fs)
 
-    if direction.lower() == "up":
+    if d == "up":
         W = -W
+    elif d == "horizontal":
+        W = np.abs(W)
 
     # Find valid samples
     mask = (P_min < P) & (W_min <= W)

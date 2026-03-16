@@ -71,7 +71,7 @@ def _compute_epsilon(
     diss_length: int | None = None,
     overlap: int | None = None,
     speed: float | None = None,
-    direction: str = "down",
+    direction: str = "auto",
     goodman: bool = True,
     f_AA: float = 98.0,
     f_limit: float | None = None,
@@ -79,6 +79,7 @@ def _compute_epsilon(
     despike_thresh: float = 8,
     despike_smooth: float = 0.5,
     salinity: npt.ArrayLike | None = None,
+    vehicle: str | None = None,
 ) -> list[xr.Dataset]:
     """Compute epsilon from any source (internal, no deprecation warning)."""
     from odas_tpw.scor160.io import L2Params, L3Params
@@ -105,12 +106,10 @@ def _compute_epsilon(
 
     fs_fast = data["fs_fast"]
 
-    from odas_tpw.rsi.profile import _VEHICLE_TAU
+    if vehicle is None:
+        vehicle = data.get("vehicle", "")
 
-    vehicle = data.get("vehicle", "")
-    tau = _VEHICLE_TAU.get(vehicle, 1.5)
-
-    prepared = prepare_profiles(data, speed, direction, salinity, tau=tau)
+    prepared = prepare_profiles(data, speed, direction, salinity, vehicle=vehicle)
     if prepared is None:
         return []
     (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, _fs_slow, ratio, t_fast) = (

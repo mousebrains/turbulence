@@ -21,7 +21,8 @@ DEFAULTS: dict[str, dict] = {
     "profiles": {
         "P_min": 0.5,
         "W_min": 0.3,
-        "direction": "down",
+        "direction": "auto",
+        "vehicle": None,
         "min_duration": 7.0,
     },
     "epsilon": {
@@ -29,7 +30,8 @@ DEFAULTS: dict[str, dict] = {
         "diss_length": None,
         "overlap": None,
         "speed": None,
-        "direction": "down",
+        "direction": "auto",
+        "vehicle": None,
         "goodman": True,
         "f_AA": 98.0,
         "f_limit": None,
@@ -43,7 +45,8 @@ DEFAULTS: dict[str, dict] = {
         "diss_length": None,
         "overlap": None,
         "speed": None,
-        "direction": "down",
+        "direction": "auto",
+        "vehicle": None,
         "fp07_model": "single_pole",
         "goodman": True,
         "f_AA": 98.0,
@@ -81,7 +84,8 @@ _TEMPLATE = """\
 profiles:
   P_min: 0.5            # minimum pressure [dbar]
   W_min: 0.3            # minimum fall rate [dbar/s]
-  direction: down       # profile direction: up or down
+  direction: auto       # profile direction: auto, up, down, glide, horizontal
+  vehicle: null         # vehicle override (null = from .p file)
   min_duration: 7.0     # minimum profile duration [s]
 
 epsilon:
@@ -89,7 +93,8 @@ epsilon:
   diss_length: null     # dissipation window [samples] (null = 4 * fft_length)
   overlap: null         # window overlap [samples] (null = diss_length // 2)
   speed: null           # profiling speed [m/s] (null = from dP/dt)
-  direction: down       # profile direction: up or down
+  direction: auto       # profile direction: auto, up, down, glide, horizontal
+  vehicle: null         # vehicle override (null = from .p file)
   goodman: true         # Goodman coherent noise removal
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
   f_limit: null         # upper frequency limit [Hz] (null = f_AA)
@@ -103,7 +108,8 @@ chi:
   diss_length: null     # dissipation window [samples] (null = 4 * fft_length)
   overlap: null         # window overlap [samples] (null = diss_length // 2)
   speed: null           # profiling speed [m/s] (null = from dP/dt)
-  direction: down       # profile direction: up or down
+  direction: auto       # profile direction: auto, up, down, glide, horizontal
+  vehicle: null         # vehicle override (null = from .p file)
   fp07_model: single_pole  # FP07 transfer function: single_pole or double_pole
   goodman: true         # Goodman coherent noise removal
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]

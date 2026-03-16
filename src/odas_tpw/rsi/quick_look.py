@@ -41,6 +41,7 @@ def _compute_chi_spectra(
     fft_length,
     f_AA,
     epsilons,
+    foms=None,
     spectrum_model="kraichnan",
 ):
     """Compute temperature gradient spectra and all three chi methods for one profile segment.
@@ -77,8 +78,9 @@ def _compute_chi_spectra(
 
     therm_segs = [therm_data[ci][1][w_sel] for ci in range(n_therm)]
     eps_arr = np.array(epsilons) if epsilons else None
+    fom_arr = np.array(foms) if foms else None
 
-    # Method 1: chi from epsilon (also produces observed gradient spectra + noise)
+    # Method 1: chi from epsilon (FOM-filtered mean of shear probes)
     cr_m1 = compute_chi_window(
         therm_segs,
         diff_gains,
@@ -90,6 +92,7 @@ def _compute_chi_spectra(
         f_AA_chi,
         spectrum_model=spectrum_model,
         epsilon=eps_arr,
+        fom=fom_arr,
         method=1,
     )
 
@@ -533,6 +536,7 @@ class QuickLookViewer(ProfileViewer):
             return
 
         eps_for_chi = self._cached_spec["epsilons"] if self._cached_spec else []
+        fom_for_chi = self._cached_spec.get("foms", []) if self._cached_spec else []
 
         self._cached_chi = _compute_chi_spectra(
             self.therm_fast,
@@ -545,6 +549,7 @@ class QuickLookViewer(ProfileViewer):
             self.fft_length,
             self.f_AA,
             eps_for_chi,
+            foms=fom_for_chi,
             spectrum_model=self.spectrum_model,
         )
         K, _F, obs_spectra, methods_results, noise_K, mean_speed, _nu = self._cached_chi
@@ -656,7 +661,7 @@ def quick_look(
     fft_length=1024,
     f_AA=98.0,
     goodman=True,
-    direction="down",
+    direction="auto",
     P_min=0.5,
     W_min=0.3,
     min_duration=7.0,
@@ -664,6 +669,7 @@ def quick_look(
     chi_method=1,
     spectrum_model="kraichnan",
     diss_length=None,
+    vehicle=None,
 ) -> QuickLookViewer:
     """Open an interactive quick-look viewer for a .p file.
 
@@ -716,6 +722,7 @@ def quick_look(
         chi_method=chi_method,
         spectrum_model=spectrum_model,
         diss_length=diss_length,
+        vehicle=vehicle,
     )
     viewer.show()
     return viewer

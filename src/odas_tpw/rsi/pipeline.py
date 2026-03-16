@@ -36,10 +36,11 @@ def run_pipeline(
     # Profile detection
     P_min: float = 0.5,
     W_min: float = 0.3,
-    direction: str = "down",
+    direction: str = "auto",
     min_duration: float = 7.0,
     speed: float | None = None,
     speed_tau: float = 1.5,
+    vehicle: str | None = None,
     # L2 params
     HP_cut: float = 0.25,
     despike_thresh: float = 8.0,
@@ -124,17 +125,25 @@ def run_pipeline(
         pfile_dir = output_dir / p_path.stem
         pfile_dir.mkdir(parents=True, exist_ok=True)
 
+        # Resolve vehicle, direction, and tau per file
+        from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
+
+        file_vehicle = vehicle or pf.config["instrument_info"].get("vehicle", "").lower()
+        file_direction = resolve_direction(direction, file_vehicle)
+        file_tau = resolve_tau(file_vehicle)
+        file_speed_tau = file_tau if speed_tau == 1.5 else speed_tau
+
         # Detect profiles on slow-rate pressure
         P_slow = pf.channels.get("P_dP", pf.channels.get("P"))
         assert P_slow is not None, "No pressure channel (P or P_dP) found"
-        W_slow = _smooth_fall_rate(P_slow, pf.fs_slow, tau=speed_tau)
+        W_slow = _smooth_fall_rate(P_slow, pf.fs_slow, tau=file_speed_tau)
         profiles = get_profiles(
             P_slow,
             W_slow,
             pf.fs_slow,
             P_min=P_min,
             W_min=W_min,
-            direction=direction,
+            direction=file_direction,
             min_duration=min_duration,
         )
 
@@ -161,8 +170,8 @@ def run_pipeline(
                 prof_dir=prof_dir,
                 p_path=p_path,
                 speed=speed,
-                direction=direction,
-                speed_tau=speed_tau,
+                direction=file_direction,
+                speed_tau=file_speed_tau,
                 l2_params=L2Params(
                     HP_cut=HP_cut,
                     despike_sh=np.array([despike_thresh, 0.5, 0.04]),

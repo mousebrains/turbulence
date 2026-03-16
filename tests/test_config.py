@@ -106,7 +106,7 @@ class TestMergeConfigRsi:
     def test_profiles_merge(self):
         m = merge_config("profiles", file_values={"P_min": 1.0})
         assert m["P_min"] == 1.0
-        assert m["direction"] == "down"
+        assert m["direction"] == "auto"
 
 
 # ---------------------------------------------------------------------------

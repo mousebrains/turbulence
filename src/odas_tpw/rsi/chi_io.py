@@ -34,13 +34,14 @@ def _compute_chi(
     diss_length: int | None = None,
     overlap: int | None = None,
     speed: float | None = None,
-    direction: str = "down",
+    direction: str = "auto",
     fp07_model: str = "single_pole",
     goodman: bool = True,
     f_AA: float = 98.0,
     fit_method: str = "iterative",
     spectrum_model: str = "kraichnan",
     salinity: npt.ArrayLike | None = None,
+    vehicle: str | None = None,
 ) -> list[xr.Dataset]:
     """Compute chi from temperature gradient spectra (internal, no deprecation warning)."""
     from odas_tpw.chi.chi import _spectrum_func
@@ -48,7 +49,6 @@ def _compute_chi(
     from odas_tpw.chi.l3_chi import process_l3_chi
     from odas_tpw.chi.l4_chi import process_l4_chi_epsilon, process_l4_chi_fit
     from odas_tpw.rsi.helpers import _build_l1data_from_channels, prepare_profiles
-    from odas_tpw.rsi.profile import _VEHICLE_TAU
     from odas_tpw.scor160.io import L2Params, L3Params
     from odas_tpw.scor160.l2 import process_l2
 
@@ -69,10 +69,10 @@ def _compute_chi(
         raise ValueError("No thermistor gradient channels found")
 
     fs_fast = data["fs_fast"]
-    vehicle = data.get("vehicle", "")
-    tau = _VEHICLE_TAU.get(vehicle, 1.5)
+    if vehicle is None:
+        vehicle = data.get("vehicle", "")
 
-    prepared = prepare_profiles(data, speed, direction, salinity, tau=tau)
+    prepared = prepare_profiles(data, speed, direction, salinity, vehicle=vehicle)
     if prepared is None:
         return []
     (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, _fs_slow, ratio, t_fast) = (

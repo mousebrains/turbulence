@@ -98,6 +98,7 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
             "P_min": "P_min",
             "W_min": "W_min",
             "direction": "direction",
+            "vehicle": "vehicle",
             "min_duration": "min_duration",
         }
     elif section == "epsilon":
@@ -107,6 +108,7 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
             "overlap": "overlap",
             "speed": "speed",
             "direction": "direction",
+            "vehicle": "vehicle",
             "f_AA": "f_AA",
             "salinity": "salinity",
         }
@@ -117,6 +119,7 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
             "overlap": "overlap",
             "speed": "speed",
             "direction": "direction",
+            "vehicle": "vehicle",
             "fp07_model": "fp07_model",
             "f_AA": "f_AA",
             "fit_method": "fit_method",
@@ -127,6 +130,7 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
         mapping = {
             "eps_fft_length": "fft_length",
             "direction": "direction",
+            "vehicle": "vehicle",
             "f_AA": "f_AA",
             "speed": "speed",
             "salinity": "salinity",
@@ -135,6 +139,7 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
         mapping = {
             "chi_fft_length": "fft_length",
             "direction": "direction",
+            "vehicle": "vehicle",
             "f_AA": "f_AA",
             "fp07_model": "fp07_model",
             "spectrum_model": "spectrum_model",
@@ -361,7 +366,8 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
     chi_merged = _merge_for_section(args, "chi_pipeline")
 
     kwargs = {
-        "direction": eps_merged.get("direction", "down"),
+        "direction": eps_merged.get("direction", "auto"),
+        "vehicle": eps_merged.get("vehicle"),
         "speed": eps_merged.get("speed"),
         "fft_length": eps_merged.get("fft_length", 1024),
         "f_AA": eps_merged.get("f_AA", 98.0),
@@ -400,7 +406,8 @@ def _cmd_ql(args: argparse.Namespace) -> None:
             diss_length=diss_length,
             f_AA=f_AA,
             goodman=goodman,
-            direction=args.direction or "down",
+            direction=args.direction or "auto",
+            vehicle=getattr(args, "vehicle", None),
             spec_P_range=spec_P_range,
             chi_method=args.chi_method,
             spectrum_model=args.spectrum_model,
@@ -430,7 +437,8 @@ def _cmd_dl(args: argparse.Namespace) -> None:
             diss_length=diss_length,
             f_AA=f_AA,
             goodman=goodman,
-            direction=args.direction or "down",
+            direction=args.direction or "auto",
+            vehicle=getattr(args, "vehicle", None),
             spec_P_range=spec_P_range,
         )
 
@@ -526,8 +534,13 @@ def _add_prof_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--direction",
         default=None,
-        choices=["up", "down"],
-        help="Profile direction (default: down)",
+        choices=["auto", "up", "down", "glide", "horizontal"],
+        help="Profile direction (default: auto, from vehicle)",
+    )
+    p.add_argument(
+        "--vehicle",
+        default=None,
+        help="Vehicle type override (e.g. slocum_glider, vmp)",
     )
     p.add_argument(
         "--min-duration", type=float, default=None, help="Minimum profile duration [s] (default: 7)"
@@ -583,8 +596,13 @@ def _add_eps_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--direction",
         default=None,
-        choices=["up", "down"],
-        help="Profile direction (default: down)",
+        choices=["auto", "up", "down", "glide", "horizontal"],
+        help="Profile direction (default: auto, from vehicle)",
+    )
+    p.add_argument(
+        "--vehicle",
+        default=None,
+        help="Vehicle type override (e.g. slocum_glider, vmp)",
     )
     p.add_argument(
         "--no-goodman",
@@ -653,8 +671,13 @@ def _add_chi_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--direction",
         default=None,
-        choices=["up", "down"],
-        help="Profile direction (default: down)",
+        choices=["auto", "up", "down", "glide", "horizontal"],
+        help="Profile direction (default: auto, from vehicle)",
+    )
+    p.add_argument(
+        "--vehicle",
+        default=None,
+        help="Vehicle type override (e.g. slocum_glider, vmp)",
     )
     p.add_argument(
         "--no-goodman",
@@ -720,8 +743,13 @@ def _add_pipeline_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--direction",
         default=None,
-        choices=["up", "down"],
-        help="Profile direction (default: down)",
+        choices=["auto", "up", "down", "glide", "horizontal"],
+        help="Profile direction (default: auto, from vehicle)",
+    )
+    p.add_argument(
+        "--vehicle",
+        default=None,
+        help="Vehicle type override (e.g. slocum_glider, vmp)",
     )
     p.add_argument(
         "--speed",
@@ -800,8 +828,13 @@ def _add_ql_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--direction",
         default=None,
-        choices=["up", "down"],
-        help="Profile direction (default: down)",
+        choices=["auto", "up", "down", "glide", "horizontal"],
+        help="Profile direction (default: auto, from vehicle)",
+    )
+    p.add_argument(
+        "--vehicle",
+        default=None,
+        help="Vehicle type override (e.g. slocum_glider, vmp)",
     )
     p.add_argument(
         "--spec-P-range",
@@ -856,8 +889,13 @@ def _add_dl_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--direction",
         default=None,
-        choices=["up", "down"],
-        help="Profile direction (default: down)",
+        choices=["auto", "up", "down", "glide", "horizontal"],
+        help="Profile direction (default: auto, from vehicle)",
+    )
+    p.add_argument(
+        "--vehicle",
+        default=None,
+        help="Vehicle type override (e.g. slocum_glider, vmp)",
     )
     p.add_argument(
         "--spec-P-range",

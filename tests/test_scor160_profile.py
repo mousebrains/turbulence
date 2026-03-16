@@ -264,3 +264,67 @@ class TestGetProfilesReturnTypes:
         for s, e in profiles:
             assert 0 <= s < len(P)
             assert 0 <= e < len(P)
+
+
+# ---------------------------------------------------------------------------
+# Glide and horizontal directions
+# ---------------------------------------------------------------------------
+
+
+class TestGlideDirection:
+    """direction='glide' detects both up and down segments."""
+
+    def test_glide_finds_both_up_and_down(self):
+        """Synthetic yo-yo data: down then up → both segments found."""
+        fs = 64.0
+        # Down segment: 0 → 50 dbar
+        P_down, W_down = _make_dive(fs, 0.0, 50.0, 0.7, pause_before=3, pause_after=3)
+        # Up segment: 50 → 0 dbar (reversed)
+        P_up = P_down[::-1]
+        W_up = -W_down[::-1]
+        # Concatenate: down then up with a gap
+        gap = int(3 * fs)
+        P = np.concatenate([P_down, np.full(gap, 50.0), P_up])
+        W = np.concatenate([W_down, np.zeros(gap), W_up])
+
+        profiles = get_profiles(P, W, fs, P_min=0.5, W_min=0.3, direction="glide", min_duration=5)
+        assert len(profiles) == 2
+        # First segment should be down (earlier indices), second up
+        assert profiles[0][0] < profiles[1][0]
+
+    def test_glide_sorted_by_start_index(self):
+        """Glide results should be sorted by start index."""
+        fs = 64.0
+        P_down, W_down = _make_dive(fs, 0.0, 30.0, 0.8, pause_before=2, pause_after=2)
+        P_up = P_down[::-1]
+        W_up = -W_down[::-1]
+        P = np.concatenate([P_down, P_up])
+        W = np.concatenate([W_down, W_up])
+
+        profiles = get_profiles(P, W, fs, P_min=0.5, W_min=0.3, direction="glide", min_duration=3)
+        starts = [s for s, _ in profiles]
+        assert starts == sorted(starts)
+
+
+class TestHorizontalDirection:
+    """direction='horizontal' detects segments regardless of W sign."""
+
+    def test_horizontal_finds_segments(self):
+        """Horizontal mode uses abs(W) ≥ W_min."""
+        fs = 64.0
+        # Simulate instrument moving through water: positive W (moving forward)
+        P, W = _make_dive(fs, 0.0, 50.0, 0.7, pause_before=3, pause_after=3)
+        profiles = get_profiles(
+            P, W, fs, P_min=0.5, W_min=0.3, direction="horizontal", min_duration=5
+        )
+        assert len(profiles) >= 1
+
+    def test_horizontal_finds_negative_w(self):
+        """Horizontal should also detect segments with negative W."""
+        fs = 64.0
+        P, W = _make_dive(fs, 0.0, 50.0, 0.7, pause_before=3, pause_after=3)
+        # Flip W sign — horizontal should still detect
+        profiles = get_profiles(
+            P, -W, fs, P_min=0.5, W_min=0.3, direction="horizontal", min_duration=5
+        )
+        assert len(profiles) >= 1

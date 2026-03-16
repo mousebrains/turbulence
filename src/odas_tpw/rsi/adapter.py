@@ -21,7 +21,7 @@ def pfile_to_l1data(
     pf: PFile,
     profile_slice: tuple[int, int] | None = None,
     speed: float | None = None,
-    direction: str = "down",
+    direction: str = "auto",
     speed_tau: float = 1.5,
 ) -> L1Data:
     """Convert a PFile (or profile slice) to scor160 L1Data.
@@ -43,6 +43,11 @@ def pfile_to_l1data(
     -------
     L1Data
     """
+    from odas_tpw.rsi.vehicle import resolve_direction
+
+    vehicle = pf.config["instrument_info"].get("vehicle", "").lower()
+    direction = resolve_direction(direction, vehicle)
+
     ratio = round(pf.fs_fast / pf.fs_slow)
 
     if profile_slice is not None:

@@ -180,12 +180,16 @@ def _channels_from_nc(
             metadata[attr] = getattr(ds, attr)
 
     vehicle = ""
-    if hasattr(ds, "instrument_model"):
+    if hasattr(ds, "vehicle"):
+        vehicle = ds.vehicle.lower()
+    elif hasattr(ds, "instrument_model"):
         model = ds.instrument_model.lower()
         if "vmp" in model:
             vehicle = "vmp"
         elif "xmp" in model:
             vehicle = "xmp"
+        elif "mr" in model or "microrider" in model:
+            vehicle = "slocum_glider"
 
     ds.close()
 
@@ -216,6 +220,7 @@ def prepare_profiles(
     salinity: npt.ArrayLike | None,
     tau: float = 1.5,
     speed_cutout: float = 0.05,
+    vehicle: str | None = None,
 ) -> tuple | None:
     """Profile detection, speed computation, and salinity interpolation.
 
@@ -228,6 +233,8 @@ def prepare_profiles(
     Returns (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast,
     fs_slow, ratio, t_fast).
     """
+    from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
+
     fs_fast = data["fs_fast"]
     fs_slow = data["fs_slow"]
     ratio = round(fs_fast / fs_slow)
@@ -236,6 +243,12 @@ def prepare_profiles(
     T_slow = data["T"]
     t_fast = data["t_fast"]
     t_slow = data["t_slow"]
+
+    # Resolve vehicle, direction, and tau
+    if vehicle is None:
+        vehicle = data.get("vehicle", "")
+    direction = resolve_direction(direction, vehicle)
+    tau = resolve_tau(vehicle)
 
     if data["is_profile"]:
         profiles_slow = [(0, len(P_slow) - 1)]

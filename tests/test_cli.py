@@ -339,12 +339,13 @@ class TestMergeForSection:
         args.P_min = None
         args.W_min = None
         args.direction = None
+        args.vehicle = None
         args.min_duration = None
 
         merged = _merge_for_section(args, "profiles")
         assert merged["P_min"] == 1.0
         assert merged["min_duration"] == 10.0
-        assert merged["direction"] == "down"  # default
+        assert merged["direction"] == "auto"  # default
 
 
 # ---------------------------------------------------------------------------
