@@ -261,6 +261,8 @@ def compute_chi_window(
     spectrum_model: str = "kraichnan",
     fp07_model: str = "single_pole",
     epsilon: np.ndarray | None = None,
+    fom: np.ndarray | None = None,
+    fom_limit: float = 1.15,
     method: int = 1,
 ) -> ChiWindowResult:
     """Compute chi for one dissipation window.
@@ -288,8 +290,14 @@ def compute_chi_window(
         'batchelor' or 'kraichnan'.
     fp07_model : str
         'single_pole' or 'double_pole'.
-    epsilon : ndarray or None, shape (n_therm,)
+    epsilon : ndarray or None, shape (n_shear,)
         Per-probe epsilon for Method 1.  None → Method 2 (iterative fit).
+    fom : ndarray or None, shape (n_shear,)
+        Per-probe figure of merit for epsilon estimates.  When provided
+        with method=1, epsilon is filtered to probes with fom <= fom_limit
+        and averaged.  The same mean epsilon is used for all thermistors.
+    fom_limit : float
+        Maximum acceptable FOM for including an epsilon in the mean.
     method : int
         1 = chi from epsilon (requires epsilon), 2 = iterative fit.
     """
@@ -323,6 +331,21 @@ def compute_chi_window(
     model_specs: list[np.ndarray] = []
     model_specs_raw: list[np.ndarray] = []
 
+    # FOM-filtered mean epsilon for Method 1
+    eps_for_m1 = np.nan
+    if method == 1 and epsilon is not None:
+        eps = np.asarray(epsilon, dtype=float)
+        valid = np.isfinite(eps) & (eps > 0)
+        if fom is not None:
+            eps_fom = np.asarray(fom, dtype=float)
+            good = valid & np.isfinite(eps_fom) & (eps_fom <= fom_limit)
+            if np.any(good):
+                eps_for_m1 = float(np.mean(eps[good]))
+            elif np.any(valid):
+                eps_for_m1 = float(np.mean(eps[valid]))
+        elif np.any(valid):
+            eps_for_m1 = float(np.mean(eps[valid]))
+
     for ci in range(n_therm):
         seg = therm_segs[ci]
         if len(seg) < 2 * fft_length:
@@ -340,7 +363,7 @@ def compute_chi_window(
         noise_K_ci, _ = gradT_noise(F, T_mean, W, fs=fs_fast, diff_gain=dg)
 
         if method == 1 and epsilon is not None:
-            eps_ci = epsilon[ci] if ci < len(epsilon) else np.nan
+            eps_ci = eps_for_m1
             if np.isfinite(eps_ci) and eps_ci > 0:
                 chi_val, kB, K_max, spec_raw, fom_val, Kmr = _chi_from_epsilon(
                     spec_obs,

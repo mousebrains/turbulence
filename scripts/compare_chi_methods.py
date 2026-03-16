@@ -133,7 +133,8 @@ def process_file(
                 cr_m1 = compute_chi_window(
                     therm_segs, diff_gains, er.W, mean_T, er.nu,
                     pf.fs_fast, fft_length, f_AA_chi,
-                    spectrum_model=spectrum_model, epsilon=er.epsilon, method=1,
+                    spectrum_model=spectrum_model, epsilon=er.epsilon,
+                    fom=er.fom, method=1,
                 )
                 cr_m2 = compute_chi_window(
                     therm_segs, diff_gains, er.W, mean_T, er.nu,
