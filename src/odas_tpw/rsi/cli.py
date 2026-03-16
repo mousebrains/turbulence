@@ -398,6 +398,8 @@ def _cmd_ql(args: argparse.Namespace) -> None:
     f_AA = args.f_AA or merged.get("f_AA", 98.0)
     goodman = merged.get("goodman", True) if not args.no_goodman else False
 
+    W_min = getattr(args, "W_min", None) or 0.3
+
     p_files = _resolve_p_files(args.files)
     for pf_path in p_files:
         quick_look(
@@ -408,6 +410,7 @@ def _cmd_ql(args: argparse.Namespace) -> None:
             goodman=goodman,
             direction=args.direction or "auto",
             vehicle=getattr(args, "vehicle", None),
+            W_min=W_min,
             spec_P_range=spec_P_range,
             chi_method=args.chi_method,
             spectrum_model=args.spectrum_model,
@@ -429,6 +432,8 @@ def _cmd_dl(args: argparse.Namespace) -> None:
     f_AA = args.f_AA or merged.get("f_AA", 98.0)
     goodman = merged.get("goodman", True) if not args.no_goodman else False
 
+    W_min = getattr(args, "W_min", None) or 0.3
+
     p_files = _resolve_p_files(args.files)
     for pf_path in p_files:
         diss_look(
@@ -439,6 +444,7 @@ def _cmd_dl(args: argparse.Namespace) -> None:
             goodman=goodman,
             direction=args.direction or "auto",
             vehicle=getattr(args, "vehicle", None),
+            W_min=W_min,
             spec_P_range=spec_P_range,
         )
 
@@ -837,6 +843,9 @@ def _add_ql_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Vehicle type override (e.g. slocum_glider, vmp)",
     )
     p.add_argument(
+        "--W-min", type=float, default=None, help="Minimum fall rate [dbar/s] (default: 0.3)"
+    )
+    p.add_argument(
         "--spec-P-range",
         type=float,
         nargs=2,
@@ -896,6 +905,9 @@ def _add_dl_parser(subparsers: argparse._SubParsersAction) -> None:
         "--vehicle",
         default=None,
         help="Vehicle type override (e.g. slocum_glider, vmp)",
+    )
+    p.add_argument(
+        "--W-min", type=float, default=None, help="Minimum fall rate [dbar/s] (default: 0.3)"
     )
     p.add_argument(
         "--spec-P-range",
