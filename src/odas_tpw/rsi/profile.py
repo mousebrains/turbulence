@@ -25,10 +25,12 @@ logger = logging.getLogger(__name__)
 # Backward-compatible alias (previously underscore-prefixed)
 _smooth_fall_rate = smooth_fall_rate
 
-from odas_tpw.rsi.vehicle import VEHICLE_ATTRIBUTES, resolve_tau
-
 # Backward-compatible alias — computed from VEHICLE_ATTRIBUTES
-_VEHICLE_TAU = {k: v[1] for k, v in VEHICLE_ATTRIBUTES.items()}
+def _build_vehicle_tau() -> dict[str, float]:
+    from odas_tpw.rsi.vehicle import VEHICLE_ATTRIBUTES
+    return {k: v[1] for k, v in VEHICLE_ATTRIBUTES.items()}
+
+_VEHICLE_TAU = _build_vehicle_tau()
 
 
 def extract_profiles(
