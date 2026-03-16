@@ -168,6 +168,49 @@ def convert_aroft_t(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarra
     return d / 1000.0 - 5.0, "deg_C"
 
 
+def convert_aem1g_a(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
+    """AEM1-G electromagnetic current meter, analog output → m/s.
+
+    Matches ODAS ``convert_odas.m`` ``odas_aem1g_a_internal``:
+      1. Convert raw counts to voltage: ``V = adc_zero + data * (adc_fs / 2^adc_bits)``
+      2. Apply calibration: ``V = a/100 + b/100 * V``  (cm/s → m/s)
+      3. Subtract bias: ``physical = V - bias``
+    """
+    adc_fs = _safe_float(params.get("adc_fs", "4.096"))
+    adc_bits = _safe_float(params.get("adc_bits", "16"))
+    adc_zero = _safe_float(params.get("adc_zero", str(adc_fs / 2)))
+    a = _safe_float(params.get("a", "0")) / 100.0
+    b = _safe_float(params.get("b", "1")) / 100.0
+    bias = _safe_float(params.get("bias", "0"))
+    V = adc_zero + data * (adc_fs / 2**adc_bits)
+    V = a + b * V
+    return V - bias, "m_s-1"
+
+
+def convert_aem1g_d(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
+    """AEM1-G electromagnetic current meter, digital/RS232 output → m/s.
+
+    Matches ODAS ``convert_odas.m`` ``odas_aem1g_d_internal``:
+      1. Convert signed int16 to unsigned (wrap negatives)
+      2. Apply calibration: ``physical = a/100 + b/100 * data``  (cm/s → m/s)
+    """
+    d = _unsigned_16bit(data)
+    a = _safe_float(params.get("a", "0")) / 100.0
+    b = _safe_float(params.get("b", "1")) / 100.0
+    return a + b * d, "m_s-1"
+
+
+def convert_alec_emc(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
+    """Alec Electronics electromagnetic current meter → m/s.
+
+    Matches ODAS ``convert_odas.m`` ``odas_Alec_EMC_internal``:
+      ``physical = coef1 * data + coef0``
+    """
+    coef0 = _safe_float(params.get("coef0", "0"))
+    coef1 = _safe_float(params.get("coef1", "1"))
+    return np.polyval([coef1, coef0], data), "m_s-1"
+
+
 CONVERTERS = {
     "therm": convert_therm,
     "shear": convert_shear,
@@ -182,4 +225,8 @@ CONVERTERS = {
     "aroft_o2": convert_aroft_o2,
     "aroft_t": convert_aroft_t,
     "gnd": convert_raw,
+    "aem1g_a": convert_aem1g_a,
+    "aem1g_d": convert_aem1g_d,
+    "alec_emc": convert_alec_emc,
+    "jac_emc": convert_aem1g_a,  # deprecated alias
 }

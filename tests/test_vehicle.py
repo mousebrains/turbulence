@@ -1,8 +1,6 @@
 # Tests for odas_tpw.rsi.vehicle
 """Unit tests for vehicle attribute resolution."""
 
-import pytest
-
 from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
 
 

@@ -5,6 +5,9 @@ import numpy as np
 
 from odas_tpw.rsi.channels import (
     CONVERTERS,
+    convert_aem1g_a,
+    convert_aem1g_d,
+    convert_alec_emc,
     convert_aroft_o2,
     convert_aroft_t,
     convert_inclt,
@@ -520,5 +523,172 @@ class TestConvertGnd:
             "aroft_o2",
             "aroft_t",
             "gnd",
+            "aem1g_a",
+            "aem1g_d",
+            "alec_emc",
+            "jac_emc",
         }
         assert expected.issubset(set(CONVERTERS.keys()))
+
+
+class TestConvertAem1gA:
+    def test_known_values(self):
+        """Hand-calculated analog EM current meter conversion."""
+        params = {
+            "adc_fs": "4.096",
+            "adc_bits": "16",
+            "adc_zero": "2.048",
+            "a": "0",       # cm/s offset → /100 → 0 m/s
+            "b": "100",     # cm/s per V → /100 → 1 m/s per V
+            "bias": "0",
+        }
+        # V = adc_zero + data * (adc_fs / 2^adc_bits)
+        #   = 2.048 + 0 * (4.096/65536) = 2.048
+        # V = a/100 + b/100 * V = 0 + 1.0 * 2.048 = 2.048
+        # result = V - bias = 2.048
+        data = np.array([0.0])
+        result, units = convert_aem1g_a(data, params)
+        assert units == "m_s-1"
+        np.testing.assert_allclose(result[0], 2.048, rtol=1e-10)
+
+    def test_with_bias(self):
+        """Bias is subtracted from the final result."""
+        params = {
+            "adc_fs": "4.096",
+            "adc_bits": "16",
+            "adc_zero": "2.048",
+            "a": "0",
+            "b": "100",
+            "bias": "2.048",
+        }
+        data = np.array([0.0])
+        result, units = convert_aem1g_a(data, params)
+        assert units == "m_s-1"
+        np.testing.assert_allclose(result[0], 0.0, atol=1e-12)
+
+    def test_nonzero_data(self):
+        """Non-zero data counts produce correct voltage-to-velocity."""
+        params = {
+            "adc_fs": "4.096",
+            "adc_bits": "16",
+            "adc_zero": "0",
+            "a": "0",
+            "b": "100",
+            "bias": "0",
+        }
+        # V = 0 + 32768 * (4.096/65536) = 32768 * 6.25e-5 = 2.048
+        # V = 0 + 1.0 * 2.048 = 2.048
+        data = np.array([32768.0])
+        result, units = convert_aem1g_a(data, params)
+        assert units == "m_s-1"
+        np.testing.assert_allclose(result[0], 2.048, rtol=1e-10)
+
+    def test_defaults(self):
+        """Default parameters produce finite output."""
+        data = np.array([0.0, 1000.0, -1000.0])
+        result, units = convert_aem1g_a(data, {})
+        assert units == "m_s-1"
+        assert np.all(np.isfinite(result))
+
+    def test_cm_to_m_conversion(self):
+        """Coefficients a and b are divided by 100 (cm/s → m/s)."""
+        params = {
+            "adc_fs": "4.096",
+            "adc_bits": "16",
+            "adc_zero": "0",
+            "a": "50",      # 50 cm/s → 0.5 m/s
+            "b": "200",     # 200 cm/s per V → 2.0 m/s per V
+            "bias": "0",
+        }
+        data = np.array([0.0])
+        # V = 0 + 0 = 0
+        # V = 0.5 + 2.0 * 0 = 0.5
+        result, units = convert_aem1g_a(data, params)
+        assert units == "m_s-1"
+        np.testing.assert_allclose(result[0], 0.5, rtol=1e-10)
+
+
+class TestConvertAem1gD:
+    def test_known_values(self):
+        """Digital EM current meter with known coefficients."""
+        params = {"a": "0", "b": "100"}  # b/100 = 1.0
+        data = np.array([500.0])
+        # d = 500 (positive, no wrapping)
+        # result = 0 + 1.0 * 500 = 500.0
+        result, units = convert_aem1g_d(data, params)
+        assert units == "m_s-1"
+        np.testing.assert_allclose(result[0], 500.0, rtol=1e-10)
+
+    def test_unsigned_wrapping(self):
+        """Negative values wrap to unsigned before conversion."""
+        params = {"a": "0", "b": "100"}  # b/100 = 1.0
+        data = np.array([-1.0])
+        # d = -1 -> 65535
+        # result = 0 + 1.0 * 65535 = 65535.0
+        result, units = convert_aem1g_d(data, params)
+        assert units == "m_s-1"
+        np.testing.assert_allclose(result[0], 65535.0, rtol=1e-10)
+
+    def test_cm_to_m_conversion(self):
+        """Coefficients a and b are divided by 100 (cm/s → m/s)."""
+        params = {"a": "10", "b": "1"}
+        # a/100 = 0.1, b/100 = 0.01
+        data = np.array([100.0])
+        # result = 0.1 + 0.01 * 100 = 0.1 + 1.0 = 1.1
+        result, units = convert_aem1g_d(data, params)
+        assert units == "m_s-1"
+        np.testing.assert_allclose(result[0], 1.1, rtol=1e-10)
+
+    def test_does_not_mutate_input(self):
+        """Ensure the input array is not modified."""
+        data = np.array([-5.0, 10.0])
+        original = data.copy()
+        convert_aem1g_d(data, {"a": "0", "b": "100"})
+        np.testing.assert_array_equal(data, original)
+
+    def test_defaults(self):
+        """Default parameters produce finite output."""
+        data = np.array([0.0, 1000.0, -1000.0])
+        result, units = convert_aem1g_d(data, {})
+        assert units == "m_s-1"
+        assert np.all(np.isfinite(result))
+
+
+class TestConvertAlecEmc:
+    def test_known_values(self):
+        """Alec EMC: coef1 * data + coef0."""
+        params = {"coef0": "0.5", "coef1": "0.01"}
+        data = np.array([100.0])
+        # result = 0.01 * 100 + 0.5 = 1.5
+        result, units = convert_alec_emc(data, params)
+        assert units == "m_s-1"
+        np.testing.assert_allclose(result[0], 1.5, rtol=1e-10)
+
+    def test_zero_data(self):
+        """Zero data → just the offset."""
+        params = {"coef0": "2.0", "coef1": "0.5"}
+        data = np.array([0.0])
+        result, units = convert_alec_emc(data, params)
+        assert units == "m_s-1"
+        np.testing.assert_allclose(result[0], 2.0, rtol=1e-10)
+
+    def test_negative_data(self):
+        """Negative data values are handled correctly."""
+        params = {"coef0": "0", "coef1": "1"}
+        data = np.array([-50.0, 0.0, 50.0])
+        result, units = convert_alec_emc(data, params)
+        assert units == "m_s-1"
+        np.testing.assert_allclose(result, [-50.0, 0.0, 50.0], rtol=1e-10)
+
+    def test_defaults(self):
+        """Default coef0=0, coef1=1: passthrough."""
+        data = np.array([42.0])
+        result, units = convert_alec_emc(data, {})
+        assert units == "m_s-1"
+        np.testing.assert_allclose(result[0], 42.0, rtol=1e-10)
+
+
+class TestJacEmcAlias:
+    def test_jac_emc_is_aem1g_a(self):
+        """jac_emc is a deprecated alias for aem1g_a."""
+        assert CONVERTERS["jac_emc"] is convert_aem1g_a
