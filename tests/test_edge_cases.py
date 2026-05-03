@@ -167,6 +167,31 @@ class TestExtractProfiles:
         nc_files = list(tmp_path.glob("*.nc"))
         assert len(nc_files) == count
 
+    def test_extract_profiles_uses_passed_bounds(self, tmp_path):
+        """Pre-computed profile bounds bypass internal get_profiles."""
+        import netCDF4 as nc
+
+        from odas_tpw.rsi.p_file import PFile
+        from odas_tpw.rsi.profile import _smooth_fall_rate, extract_profiles, get_profiles
+
+        pf = PFile(P_FILES[0])
+        W = _smooth_fall_rate(pf.channels["P"], pf.fs_slow)
+        full = get_profiles(pf.channels["P"], W, pf.fs_slow)
+        if not full:
+            return  # nothing to assert on; this file has no profiles
+        # Push the first profile's start forward by 100 slow samples.
+        s, e = full[0]
+        bumped = [(s + 100, e)]
+
+        paths = extract_profiles(pf, tmp_path, profiles=bumped)
+        assert len(paths) == 1
+        ds = nc.Dataset(str(paths[0]), "r")
+        try:
+            assert ds.profile_start_index_slow == s + 100
+            assert ds.profile_end_index_slow == e
+        finally:
+            ds.close()
+
 
 # ---------------------------------------------------------------------------
 # profile.py — NC-path tests using sample_nc_file fixture

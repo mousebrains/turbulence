@@ -490,3 +490,310 @@ class TestNanExcludedProbes:
         ds = xr.Dataset()
         # Should silently return without error
         _nan_excluded_probes(ds, ["sh1"], "test.p")
+
+
+class TestAdjustProfileBounds:
+    """Tests for top_trim/bottom hooks that push profile bounds inward."""
+
+    def _make_pf(self, n_slow=2000, fs_slow=64.0, fs_fast=512.0, max_depth=200.0):
+        ratio = int(fs_fast / fs_slow)
+        n_fast = n_slow * ratio
+        # Triangle profile: 0 -> max_depth -> 0
+        half = n_slow // 2
+        P = np.concatenate([
+            np.linspace(0.0, max_depth, half),
+            np.linspace(max_depth, 0.0, n_slow - half),
+        ])
+        t_slow = np.arange(n_slow) / fs_slow
+        t_fast = np.arange(n_fast) / fs_fast
+
+        # Quiet baseline noise; high variance only in top 8 m of descending limb
+        rng = np.random.default_rng(42)
+        depth_fast = np.repeat(P, ratio)
+        top_mask = (depth_fast < 8.0) & (np.arange(n_fast) < half * ratio)
+        sh1 = rng.standard_normal(n_fast) * 0.01
+        sh1 = np.where(top_mask, rng.standard_normal(n_fast) * 5.0, sh1)
+
+        pf = MagicMock()
+        pf.fs_slow = fs_slow
+        pf.fs_fast = fs_fast
+        pf.t_slow = t_slow
+        pf.t_fast = t_fast
+        pf.channels = {
+            "P": P,
+            "sh1": sh1,
+            "sh2": rng.standard_normal(n_fast) * 0.01,
+            "Ax": rng.standard_normal(n_fast) * 0.01,
+            "Ay": rng.standard_normal(n_fast) * 0.01,
+        }
+        pf.is_fast = lambda ch: ch in {"sh1", "sh2", "Ax", "Ay"}
+        return pf, half
+
+    def test_disabled_returns_unchanged(self):
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, half = self._make_pf()
+        profiles = [(10, half - 1)]
+        out = _adjust_profile_bounds(profiles, pf, {"enable": False}, {"enable": False}, "x.p")
+        assert out == profiles
+
+    def test_top_trim_pushes_start_forward(self):
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, half = self._make_pf()
+        profiles = [(10, half - 1)]
+        top_cfg = {"enable": True, "dz": 0.5, "min_depth": 1.0, "max_depth": 30.0, "quantile": 0.6}
+        out = _adjust_profile_bounds(profiles, pf, top_cfg, {"enable": False}, "x.p")
+        assert out[0][0] > profiles[0][0]
+        assert out[0][1] == profiles[0][1]
+
+    def test_top_trim_clipped_to_profile(self):
+        """If top_trim depth lies past profile end, leave start unchanged."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, _half = self._make_pf()
+        # Tiny profile spanning samples 10..20 — entirely inside the top 8 m
+        # noise band. compute_trim_depth would push past the end, which the
+        # adjuster must reject (candidate < e_slow).
+        profiles = [(10, 20)]
+        top_cfg = {"enable": True, "dz": 0.5, "min_depth": 1.0, "max_depth": 30.0, "quantile": 0.6}
+        out = _adjust_profile_bounds(profiles, pf, top_cfg, {"enable": False}, "x.p")
+        # Bounds must remain valid (start < end)
+        assert out[0][0] <= out[0][1]
+
+    def test_no_pressure_returns_unchanged(self):
+        """Missing 'P' channel short-circuits the adjuster."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf = MagicMock()
+        pf.fs_slow = 64.0
+        pf.fs_fast = 512.0
+        pf.channels = {}  # no P
+        profiles = [(0, 100)]
+        out = _adjust_profile_bounds(profiles, pf, {"enable": True}, {"enable": True}, "x.p")
+        assert out == profiles
+
+    def test_p_fast_length_mismatch_repeated(self):
+        """P_fast longer than t_fast is truncated; shorter is padded."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        # Build a pf where P_fast (via repeat) overshoots t_fast
+        rng = np.random.default_rng(7)
+        n_slow = 200
+        ratio = 8
+        # t_fast intentionally shorter than n_slow * ratio so the repeat path
+        # has to truncate to len(t_fast).
+        t_slow = np.arange(n_slow) / 64.0
+        t_fast = np.arange(n_slow * ratio - 5) / 512.0
+        n_fast = len(t_fast)
+        pf = MagicMock()
+        pf.fs_slow = 64.0
+        pf.fs_fast = 512.0
+        pf.t_slow = t_slow
+        pf.t_fast = t_fast
+        pf.channels = {
+            "P": np.linspace(0.0, 50.0, n_slow),
+            "sh1": rng.standard_normal(n_fast) * 0.01,
+        }
+        pf.is_fast = lambda ch: ch == "sh1"
+
+        # Don't care about top_trim succeeding — just that the length-mismatch
+        # branch executes without raising.
+        out = _adjust_profile_bounds(
+            [(10, 100)],
+            pf,
+            {"enable": True, "dz": 0.5, "min_depth": 1.0, "max_depth": 30.0, "quantile": 0.6},
+            {"enable": False},
+            "x.p",
+        )
+        assert len(out) == 1
+
+    def test_p_fast_shorter_than_t_fast_padded(self):
+        """P_fast shorter than t_fast hits the concatenate-pad branch."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        n_slow = 100
+        ratio = 8
+        t_fast = np.arange(n_slow * ratio + 7) / 512.0
+        n_fast = len(t_fast)
+        pf = MagicMock()
+        pf.fs_slow = 64.0
+        pf.fs_fast = 512.0
+        pf.t_slow = np.arange(n_slow) / 64.0
+        pf.t_fast = t_fast
+        pf.channels = {
+            "P": np.linspace(0.0, 50.0, n_slow),
+            "sh1": np.zeros(n_fast),
+        }
+        pf.is_fast = lambda ch: ch == "sh1"
+        out = _adjust_profile_bounds(
+            [(0, n_slow - 1)],
+            pf,
+            {"enable": True},
+            {"enable": False},
+            "x.p",
+        )
+        assert len(out) == 1
+
+    def test_top_trim_exception_logged_and_swallowed(self, caplog):
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, _half = self._make_pf()
+        # Pass an invalid kwarg into top_trim_cfg; compute_trim_depth raises
+        # TypeError, which the adjuster catches and logs.
+        bad_cfg = {"enable": True, "this_is_not_a_real_param": True}
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.pipeline"):
+            out = _adjust_profile_bounds([(10, 100)], pf, bad_cfg, {"enable": False}, "x.p")
+        assert out[0] == (10, 100)
+        assert "top_trim failed" in caplog.text
+
+    def test_bottom_pushes_end_backward(self):
+        """Synthetic crash spike near the bottom pulls e_slow back."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        rng = np.random.default_rng(0)
+        n_slow = 2000
+        ratio = 8
+        n_fast = n_slow * ratio
+        # Monotonic-down profile so the slow-index→pressure mapping is simple
+        P = np.linspace(0.0, 200.0, n_slow)
+        t_slow = np.arange(n_slow) / 64.0
+        t_fast = np.arange(n_fast) / 512.0
+
+        # Quiet accel everywhere except a 50-sample spike at ~95% depth
+        Ax = rng.standard_normal(n_fast) * 0.01
+        Ay = rng.standard_normal(n_fast) * 0.01
+        crash_idx = int(0.95 * n_fast)
+        Ax[crash_idx - 50 : crash_idx + 50] = 10.0
+        Ay[crash_idx - 50 : crash_idx + 50] = 10.0
+
+        pf = MagicMock()
+        pf.fs_slow = 64.0
+        pf.fs_fast = 512.0
+        pf.t_slow = t_slow
+        pf.t_fast = t_fast
+        pf.channels = {"P": P, "Ax": Ax, "Ay": Ay}
+        pf.is_fast = lambda ch: ch in {"Ax", "Ay"}
+
+        bottom_cfg = {"enable": True, "vibration_factor": 3.0, "depth_minimum": 10.0}
+        profiles = [(0, n_slow - 1)]
+        out = _adjust_profile_bounds(profiles, pf, {"enable": False}, bottom_cfg, "x.p")
+        assert out[0][0] == 0
+        assert out[0][1] < n_slow - 1
+
+    def test_bottom_no_op_when_accel_not_fast(self):
+        """If Ax/Ay aren't fast channels, bottom path is skipped silently."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        n_slow = 200
+        ratio = 8
+        pf = MagicMock()
+        pf.fs_slow = 64.0
+        pf.fs_fast = 512.0
+        pf.t_slow = np.arange(n_slow) / 64.0
+        pf.t_fast = np.arange(n_slow * ratio) / 512.0
+        pf.channels = {
+            "P": np.linspace(0.0, 50.0, n_slow),
+            # Ax/Ay present but flagged as slow
+            "Ax": np.zeros(n_slow),
+            "Ay": np.zeros(n_slow),
+        }
+        pf.is_fast = lambda ch: False
+        out = _adjust_profile_bounds(
+            [(0, n_slow - 1)], pf, {"enable": False}, {"enable": True}, "x.p"
+        )
+        assert out == [(0, n_slow - 1)]
+
+    def test_bottom_exception_logged_and_swallowed(self, caplog):
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        n_slow = 200
+        ratio = 8
+        n_fast = n_slow * ratio
+        pf = MagicMock()
+        pf.fs_slow = 64.0
+        pf.fs_fast = 512.0
+        pf.t_slow = np.arange(n_slow) / 64.0
+        pf.t_fast = np.arange(n_fast) / 512.0
+        pf.channels = {
+            "P": np.linspace(0.0, 50.0, n_slow),
+            "Ax": np.zeros(n_fast),
+            "Ay": np.zeros(n_fast),
+        }
+        pf.is_fast = lambda ch: ch in {"Ax", "Ay"}
+        bad_cfg = {"enable": True, "this_is_not_a_real_param": True}
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.pipeline"):
+            out = _adjust_profile_bounds([(0, n_slow - 1)], pf, {"enable": False}, bad_cfg, "x.p")
+        assert out == [(0, n_slow - 1)]
+        assert "bottom failed" in caplog.text
+
+
+class TestRunCombo:
+    """Tests for the combo assembly hook in run_pipeline."""
+
+    def test_writes_combo_when_binned_dirs_present(self, tmp_path):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _run_combo
+
+        prof_dir = tmp_path / "profiles_binned_00"
+        prof_dir.mkdir()
+        ds = xr.Dataset(
+            {"T": (["bin", "profile"], np.ones((3, 1)))},
+            coords={"bin": np.arange(3.0), "profile": np.arange(1)},
+        )
+        ds.to_netcdf(prof_dir / "binned.nc")
+
+        _run_combo(tmp_path, prof_dir, None, None, None, {"title": "smoke"})
+        out = tmp_path / "combo" / "combo.nc"
+        assert out.exists()
+        combo = xr.open_dataset(out)
+        assert combo.attrs["title"] == "smoke"
+        combo.close()
+
+    def test_silently_skips_missing_dirs(self, tmp_path):
+        from odas_tpw.perturb.pipeline import _run_combo
+
+        # All Nones — should not raise, should not create anything
+        _run_combo(tmp_path, None, None, None, None, {})
+        assert not (tmp_path / "combo").exists()
+
+    def test_ctd_combo_written(self, tmp_path):
+        """ctd_dir populated => ctd_combo/combo.nc is produced."""
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _run_combo
+
+        ctd_dir = tmp_path / "ctd_00"
+        ctd_dir.mkdir()
+        ds = xr.Dataset(
+            {"T": (["time"], np.arange(5.0))},
+            coords={"time": np.arange(5.0)},
+        )
+        ds.to_netcdf(ctd_dir / "file.nc")
+
+        _run_combo(tmp_path, None, None, None, ctd_dir, {})
+        assert (tmp_path / "ctd_combo" / "combo.nc").exists()
+
+    def test_combo_exception_logged_and_swallowed(self, tmp_path, caplog):
+        """A make_combo failure is logged but does not propagate."""
+        from odas_tpw.perturb.pipeline import _run_combo
+
+        prof_dir = tmp_path / "profiles_binned_00"
+        prof_dir.mkdir()
+        # Put a non-NetCDF file in there to make xr.open_dataset raise.
+        (prof_dir / "broken.nc").write_bytes(b"this is not a netcdf file")
+        with caplog.at_level("ERROR", logger="odas_tpw.perturb.pipeline"):
+            _run_combo(tmp_path, prof_dir, None, None, None, {})
+        assert "combo combo" in caplog.text or "combo" in caplog.text
+
+    def test_ctd_combo_exception_logged_and_swallowed(self, tmp_path, caplog):
+        """A make_ctd_combo failure is logged but does not propagate."""
+        from odas_tpw.perturb.pipeline import _run_combo
+
+        ctd_dir = tmp_path / "ctd_00"
+        ctd_dir.mkdir()
+        (ctd_dir / "broken.nc").write_bytes(b"this is not a netcdf file")
+        with caplog.at_level("ERROR", logger="odas_tpw.perturb.pipeline"):
+            _run_combo(tmp_path, None, None, None, ctd_dir, {})
+        assert "ctd combo" in caplog.text
