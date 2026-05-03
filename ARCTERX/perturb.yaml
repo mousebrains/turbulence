@@ -1,0 +1,146 @@
+# Perturb configuration — ARCTERX 2023 Wake cruise (R/V Thompson)
+#
+# Run from the repository root:
+#   perturb run -c ARCTERX/perturb.yaml
+#
+# Output directories are versioned under ARCTERX/Processed/<stage>_NN/, where
+# NN increments whenever the config hash changes. Repeating the same run
+# returns the existing directory (idempotent re-entry).
+#
+# Data layout assumed:
+#   ARCTERX/VMP/SN132/*.p
+#   ARCTERX/VMP/SN409/*.p
+#   ARCTERX/VMP/SN428/*.p
+#   ARCTERX/VMP/SN465/*.p
+#   ARCTERX/gps.nc            (vars: t, lat, lon)
+
+files:
+  p_file_root: "ARCTERX/VMP"
+  # SN*/*.p restricts discovery to top-level .p files in each serial-number
+  # directory; this excludes ARCTERX/VMP/SN132/BenchTest/ and any other
+  # nested subdirectories that contain non-cruise data.
+  p_file_pattern: "SN*/*.p"
+  output_root: "ARCTERX/Processed"
+  trim: true                   # strip corrupt final records
+  merge: false                 # ARCTERX files are not split
+
+gps:
+  source: "netcdf"
+  file: "ARCTERX/gps.nc"
+  time_col: "t"
+  lat_col: "lat"
+  lon_col: "lon"
+  max_time_diff: 60            # warn if any profile is >60 s from a fix
+
+# No external telemetry — VMP is autonomous and self-records.
+hotel:
+  enable: false
+
+profiles:
+  P_min: 0.5                   # dbar
+  W_min: 0.3                   # dbar/s
+  direction: "down"            # VMP-250 falls down
+  min_duration: 7.0            # seconds
+
+fp07:
+  calibrate: true
+  order: 2
+  max_lag_seconds: 10
+  reference: "JAC_T"
+  must_be_negative: true       # FP07 leads JAC_T on a falling profile
+
+ct:
+  align: true
+  T_name: "JAC_T"
+  C_name: "JAC_C"
+
+# Bathymetry-based bottom-crash detection disabled by default. Enable if any
+# profile is suspected of striking bottom; tune depth_window/median_factor
+# to taste afterwards.
+bottom:
+  enable: false
+
+# Surface-instability trim. Shallow (<3 m) data show epsilon ~10^-1 W/kg
+# consistent with R/V Thompson prop-wash, but the top_trim pipeline hook
+# is not yet wired (the module exists, the pipeline does not call it).
+# Until that lands, prop-wash is best handled by post-hoc filtering on
+# depth (e.g. drop bins shallower than 5 m when analyzing).
+top_trim:
+  enable: false
+
+epsilon:
+  fft_length: 256              # 0.5 s at 512 Hz
+  diss_length: null            # = 2 * fft_length (default)
+  overlap: null                # = diss_length // 2 (default)
+  goodman: true                # coherent-noise removal using Ax/Ay
+  f_AA: 98.0                   # anti-alias filter cutoff
+  f_limit: null                # use f_AA
+  fit_order: 3
+  despike_thresh: 8
+  despike_smooth: 0.5
+  salinity: null               # use CTD-derived salinity (preferred)
+  epsilon_minimum: 1.0e-13
+  T_source: null               # blends T1 and T2 for viscosity
+  T1_norm: 1.0
+  T2_norm: 1.0
+
+chi:
+  enable: true
+  fft_length: 512              # 1 s at 512 Hz
+  diss_length: null            # = 3 * fft_length (default)
+  overlap: null                # = diss_length // 2 (default)
+  fp07_model: "single_pole"
+  goodman: true
+  f_AA: 98.0
+  fit_method: "iterative"
+  spectrum_model: "kraichnan"
+  salinity: null
+
+ctd:
+  enable: true
+  bin_width: 0.5               # seconds
+  T_name: "JAC_T"
+  C_name: "JAC_C"
+  variables: null              # auto-detect (P, JAC_T, JAC_C, Chla, Turb, DO, ...)
+  method: "mean"
+
+binning:
+  method: "depth"
+  width: 1.0                   # 1 m depth bins
+  aggregation: "mean"
+
+netcdf:
+  title: "ARCTERX 2023 Wake — VMP turbulence profiles"
+  summary: >
+    Turbulent kinetic energy dissipation (epsilon) and thermal variance
+    dissipation (chi) profiles from four Rockland Scientific VMP-250
+    vertical microprofilers (SN132, SN409, SN428, SN465) deployed during
+    the May 2023 ARCTERX Wake cruise on R/V Thomas G. Thompson, in the
+    Palau region (~7°N, 134°E).
+  project: "ARCTERX"
+  platform: "R/V Thomas G. Thompson"
+  instrument: "Rockland Scientific VMP-250"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"
+  geospatial_vertical_positive: "down"
+  Conventions: "CF-1.8, ACDD-1.3"
+  # Leaving these unset — perturb auto-fills from the data:
+  #   date_created, date_modified
+  #   geospatial_lat_min/max, geospatial_lon_min/max
+  #   geospatial_vertical_min/max
+  #   time_coverage_start/end/duration
+
+parallel:
+  jobs: 0                      # auto-detect cores
+
+# Per-instrument overrides. Keys match the parent directory of each .p file
+# (e.g. ARCTERX/VMP/SN465 -> SN465). The named shear probe is NaN'd out
+# before mk_epsilon_mean, so it is excluded from the multi-probe epsilonMean
+# and from chi Method 1 (which now reads epsilonMean).
+instruments:
+  SN465:
+    # Field notes recorded a bad amplifier on one shear channel of SN465 —
+    # tentatively channel 2. Verify against the per-probe FOM/MAD in the
+    # diss output before committing to the full run; flip to ["sh1"] if the
+    # diagnostics disagree.
+    exclude_shear_probes: ["sh2"]

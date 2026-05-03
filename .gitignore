@@ -4,6 +4,10 @@ VMP/
 AtomixData/
 benchmarks/
 
+# Per-cruise data directories — only the YAML config is tracked.
+ARCTERX/*
+!ARCTERX/perturb.yaml
+
 # Rockland ODAS MATLAB reference (third-party)
 odas/
 
