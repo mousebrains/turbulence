@@ -61,12 +61,15 @@ bottom:
   enable: false
 
 # Surface-instability trim. Shallow (<3 m) data show epsilon ~10^-1 W/kg
-# consistent with R/V Thompson prop-wash, but the top_trim pipeline hook
-# is not yet wired (the module exists, the pipeline does not call it).
-# Until that lands, prop-wash is best handled by post-hoc filtering on
-# depth (e.g. drop bins shallower than 5 m when analyzing).
+# consistent with R/V Thompson prop-wash, so each profile's start is pushed
+# forward to where shear/acceleration variance settles (per top_trim.py).
+# max_depth caps the search well past the deepest expected prop-wash band.
 top_trim:
-  enable: false
+  enable: true
+  dz: 0.5
+  min_depth: 1.0
+  max_depth: 25.0
+  quantile: 0.6
 
 epsilon:
   fft_length: 256              # 0.5 s at 512 Hz

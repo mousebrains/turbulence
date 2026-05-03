@@ -15,6 +15,127 @@ from odas_tpw.perturb.config import merge_config, resolve_output_dir
 logger = logging.getLogger(__name__)
 
 
+def _adjust_profile_bounds(
+    profiles: list[tuple[int, int]],
+    pf,
+    top_trim_cfg: dict,
+    bottom_cfg: dict,
+    file_label: str,
+) -> list[tuple[int, int]]:
+    """Push each profile's start forward (top_trim) and/or end backward (bottom).
+
+    Both stages are skipped when their ``enable`` flag is False, so this
+    returns the input list unchanged in that case.
+
+    Top-trim removes propeller-wash / surface-instability samples by
+    measuring shear/acceleration variance binned by depth and finding the
+    depth where variance settles below a quantile threshold. Bottom-crash
+    detection scans accelerometer variance from the deepest bin upward
+    and flags a vibration spike near the seafloor.
+
+    Both adjustments are clipped so the returned bounds always lie inside
+    the original profile (no shrinking past the original end / before the
+    original start). Any per-profile failure is logged and that profile
+    is left unchanged — the rest of the file still processes.
+    """
+    import numpy as np
+
+    do_top = top_trim_cfg.get("enable", False)
+    do_bottom = bottom_cfg.get("enable", False)
+    if not (do_top or do_bottom):
+        return profiles
+
+    P_slow = pf.channels.get("P")
+    if P_slow is None:
+        return profiles
+
+    ratio = round(pf.fs_fast / pf.fs_slow)
+    P_fast = pf.channels.get("P_fast")
+    # Many .p files only carry P on the slow channel — interpolate to fast
+    # rate when needed by repeating each slow sample ``ratio`` times.
+    if P_fast is None or len(P_fast) != len(pf.t_fast):
+        P_fast = np.repeat(P_slow, ratio)
+        if len(P_fast) > len(pf.t_fast):
+            P_fast = P_fast[: len(pf.t_fast)]
+        elif len(P_fast) < len(pf.t_fast):
+            P_fast = np.concatenate([P_fast, np.full(len(pf.t_fast) - len(P_fast), P_fast[-1])])
+
+    top_kwargs = {k: v for k, v in top_trim_cfg.items() if k != "enable"}
+    bottom_kwargs = {k: v for k, v in bottom_cfg.items() if k != "enable"}
+
+    if do_top:
+        from odas_tpw.perturb.top_trim import compute_trim_depth
+    if do_bottom:
+        from odas_tpw.perturb.bottom import detect_bottom_crash
+
+    adjusted: list[tuple[int, int]] = []
+    for pi, (s_slow, e_slow) in enumerate(profiles, 1):
+        new_s = s_slow
+        new_e = e_slow
+        s_fast = s_slow * ratio
+        e_fast = (e_slow + 1) * ratio
+        depth_seg = P_fast[s_fast:e_fast]
+
+        if do_top:
+            try:
+                fast_channels: dict = {}
+                for name in ("sh1", "sh2", "Ax", "Ay"):
+                    if name in pf.channels and pf.is_fast(name):
+                        fast_channels[name] = pf.channels[name][s_fast:e_fast]
+                trim_depth = compute_trim_depth(depth_seg, fast_channels, **top_kwargs)
+                if trim_depth is not None and len(depth_seg) > 0:
+                    # Find first slow index where pressure exceeds trim_depth.
+                    P_seg = P_slow[s_slow : e_slow + 1]
+                    above = np.where(P_seg >= trim_depth)[0]
+                    if len(above) > 0:
+                        push = int(above[0])
+                        candidate = s_slow + push
+                        if candidate < e_slow:
+                            new_s = candidate
+                            logger.info(
+                                "%s prof%d: top_trim pushed start %.2f -> %.2f dbar",
+                                file_label,
+                                pi,
+                                float(P_slow[s_slow]),
+                                float(P_slow[new_s]),
+                            )
+            except Exception as exc:
+                logger.warning("%s prof%d top_trim failed: %s", file_label, pi, exc)
+
+        if do_bottom:
+            try:
+                Ax = pf.channels.get("Ax")
+                Ay = pf.channels.get("Ay")
+                if Ax is not None and Ay is not None and pf.is_fast("Ax") and pf.is_fast("Ay"):
+                    bottom_depth = detect_bottom_crash(
+                        depth_seg,
+                        Ax[s_fast:e_fast],
+                        Ay[s_fast:e_fast],
+                        pf.fs_fast,
+                        **bottom_kwargs,
+                    )
+                    if bottom_depth is not None:
+                        P_seg = P_slow[new_s : e_slow + 1]
+                        below = np.where(P_seg >= bottom_depth)[0]
+                        if len(below) > 0:
+                            candidate = new_s + int(below[0]) - 1
+                            if candidate > new_s:
+                                new_e = candidate
+                                logger.info(
+                                    "%s prof%d: bottom pushed end %.2f -> %.2f dbar",
+                                    file_label,
+                                    pi,
+                                    float(P_slow[e_slow]),
+                                    float(P_slow[new_e]),
+                                )
+            except Exception as exc:
+                logger.warning("%s prof%d bottom failed: %s", file_label, pi, exc)
+
+        adjusted.append((new_s, new_e))
+
+    return adjusted
+
+
 def _nan_excluded_probes(ds, excluded_probes: list[str], file_label: str) -> None:
     """Set per-probe epsilon to NaN for shear probes named in *excluded_probes*.
 
@@ -153,6 +274,15 @@ def process_file(
         logger.warning("No profiles in %s", p_path.name)
         return result
 
+    # Adjust profile bounds (top-trim removes prop-wash, bottom detects seafloor crash)
+    profiles = _adjust_profile_bounds(
+        profiles,
+        pf,
+        config.get("top_trim", {}),
+        config.get("bottom", {}),
+        p_path.name,
+    )
+
     # FP07 calibration
     if fp07_cfg.get("calibrate", True):
         try:
@@ -194,11 +324,7 @@ def process_file(
             prof_paths = extract_profiles(
                 pf,
                 output_dirs["profiles"],
-                **{
-                    k: v
-                    for k, v in profiles_cfg.items()
-                    if k in ("P_min", "W_min", "direction", "min_duration")
-                },
+                profiles=profiles,
             )
             result["profiles"] = [str(p) for p in prof_paths]
         except Exception as exc:
@@ -502,6 +628,10 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
 
     from odas_tpw.perturb.binning import bin_by_depth, bin_by_time, bin_chi, bin_diss
 
+    prof_binned_dir: Path | None = None
+    diss_binned_dir: Path | None = None
+    chi_binned_dir: Path | None = None
+
     # Bin profiles
     prof_ncs = sorted(output_dirs["profiles"].glob("*.nc")) if "profiles" in output_dirs else []
     if prof_ncs:
@@ -561,7 +691,59 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 ds.to_netcdf(chi_binned_dir / "binned.nc")
 
     # Combo assembly
-    logger.info("Assembling combo files...")
-    # TODO: combo from binned directories once binned outputs are per-file
+    _run_combo(
+        output_root,
+        prof_binned_dir,
+        diss_binned_dir,
+        chi_binned_dir,
+        output_dirs.get("ctd"),
+        config.get("netcdf", {}),
+    )
 
     logger.info("Pipeline complete.")
+
+
+def _run_combo(
+    output_root: Path,
+    prof_binned_dir: Path | None,
+    diss_binned_dir: Path | None,
+    chi_binned_dir: Path | None,
+    ctd_dir: Path | None,
+    netcdf_attrs: dict,
+) -> None:
+    """Assemble combo NetCDFs from each populated binned directory.
+
+    Each combo writes ``output_root/<name>_combo/combo.nc`` with CF/ACDD
+    metadata applied via :mod:`odas_tpw.perturb.netcdf_schema`. Missing
+    or empty input dirs are silently skipped — this is a best-effort
+    publish step run after binning completes.
+    """
+    from odas_tpw.perturb.combo import make_combo, make_ctd_combo
+    from odas_tpw.perturb.netcdf_schema import CHI_SCHEMA, COMBO_SCHEMA, CTD_SCHEMA
+
+    logger.info("Assembling combo files...")
+
+    targets = [
+        (prof_binned_dir, output_root / "combo", COMBO_SCHEMA, "depth", make_combo),
+        (diss_binned_dir, output_root / "diss_combo", COMBO_SCHEMA, "depth", make_combo),
+        (chi_binned_dir, output_root / "chi_combo", CHI_SCHEMA, "depth", make_combo),
+    ]
+    for src, dst, schema, method, func in targets:
+        if src is None or not src.exists():
+            continue
+        try:
+            out = func(src, dst, schema, netcdf_attrs=netcdf_attrs, method=method)
+            if out is not None:
+                logger.info("Wrote %s", out)
+        except Exception as exc:
+            logger.error("combo %s: %s", dst.name, exc)
+
+    if ctd_dir is not None and ctd_dir.exists():
+        try:
+            out = make_ctd_combo(
+                ctd_dir, output_root / "ctd_combo", CTD_SCHEMA, netcdf_attrs=netcdf_attrs
+            )
+            if out is not None:
+                logger.info("Wrote %s", out)
+        except Exception as exc:
+            logger.error("ctd combo: %s", exc)

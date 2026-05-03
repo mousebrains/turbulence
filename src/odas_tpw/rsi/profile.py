@@ -36,6 +36,7 @@ _VEHICLE_TAU = _build_vehicle_tau()
 def extract_profiles(
     source: "PFile | str | Path",
     output_dir: str | Path,
+    profiles: list[tuple[int, int]] | None = None,
     **profile_kwargs: Any,
 ) -> list[Path]:
     """Extract profiles from a PFile or full-record NetCDF.
@@ -46,6 +47,11 @@ def extract_profiles(
         A PFile object, path to .p file, or path to full-record .nc file.
     output_dir : Path
         Directory for per-profile NetCDF files.
+    profiles : list of (start, end) tuples, optional
+        Pre-computed profile bounds (slow-rate indices). If supplied, the
+        internal call to :func:`get_profiles` is skipped — use this when
+        the caller has already adjusted the bounds (e.g. via top-trim or
+        bottom-crash detection).
     **profile_kwargs
         Keyword arguments passed to get_profiles (P_min, W_min, etc.).
 
@@ -68,7 +74,8 @@ def extract_profiles(
     # Compute smoothed fall rate from slow pressure
     W = _smooth_fall_rate(P_slow, fs_slow)
 
-    profiles = get_profiles(P_slow, W, fs_slow, **profile_kwargs)
+    if profiles is None:
+        profiles = get_profiles(P_slow, W, fs_slow, **profile_kwargs)
     if not profiles:
         logger.warning(f"No profiles found in {data['stem']}")
         return []
