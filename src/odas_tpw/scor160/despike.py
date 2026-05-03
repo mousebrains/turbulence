@@ -64,7 +64,7 @@ def despike(
     if N is None:
         N = round(0.04 * fs)
 
-    y = np.asarray(signal_in, dtype=np.float64).copy().ravel()
+    y = np.array(signal_in, dtype=np.float64).ravel()
     original = y.copy()
     all_spikes: set[int] = set()
     n_passes = 0

@@ -354,9 +354,10 @@ def _build_chi_ds_from_pipeline(
             if np.isfinite(kB) and np.isfinite(chi_val):
                 spec_batch[ci, :, j] = grad_func(l3_chi.kcyc[:, j], kB, chi_val)
 
-    # F vector (constant across windows)
+    # F vector (constant across windows) — broadcast view is read-only
+    # but suffices for xarray storage and NetCDF serialization.
     F_const = l3_chi.freq
-    F_out = np.broadcast_to(F_const[:, np.newaxis], (n_freq, n_spec)).copy()
+    F_out = np.broadcast_to(F_const[:, np.newaxis], (n_freq, n_spec))
 
     return _build_chi_dataset(
         chi_out=l4_chi.chi,

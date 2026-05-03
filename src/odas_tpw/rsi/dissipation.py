@@ -186,17 +186,15 @@ def _compute_epsilon(
         spec_shear = np.full((n_sh, n_freq, n_spec), np.nan)
         spec_nasmyth = np.full((n_sh, n_freq, n_spec), np.nan)
 
-        # Viscosity per window (with salinity support)
+        # Viscosity per window (with salinity support) — visc/visc35 broadcast.
         if salinity is not None:
             if np.ndim(sal_prof) > 0:
                 sal_window = np.interp(l3.time, l1.time, sal_prof)
             else:
                 sal_window = np.full(n_spec, float(sal_prof))
-            nu_out = np.array(
-                [float(visc(l3.temp[j], sal_window[j], l3.pres[j])) for j in range(n_spec)]
-            )
+            nu_out = np.asarray(visc(l3.temp, sal_window, l3.pres), dtype=np.float64)
         else:
-            nu_out = np.array([float(visc35(l3.temp[j])) for j in range(n_spec)])
+            nu_out = np.asarray(visc35(l3.temp), dtype=np.float64)
 
         for j in range(n_spec):
             K = l3.kcyc[:, j]
@@ -238,9 +236,10 @@ def _compute_epsilon(
                 spec_shear[ci, :, j] = shear_spec
                 spec_nasmyth[ci, :, j] = nas_spec
 
-        # F vector (constant across windows)
+        # F vector (constant across windows) — broadcast view is read-only
+        # but suffices for xarray storage and NetCDF serialization.
         F = np.arange(n_freq) * fs_fast / fft_length
-        F_out = np.broadcast_to(F[:, np.newaxis], (n_freq, n_spec)).copy()
+        F_out = np.broadcast_to(F[:, np.newaxis], (n_freq, n_spec))
 
         ds = _build_diss_dataset(
             epsilon=epsilon,
