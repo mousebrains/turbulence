@@ -187,6 +187,21 @@ graph LR
 
 ---
 
+### processing -- Instrument-agnostic profile processing (Layer 2.5)
+
+Algorithms that operate on raw arrays (and a thin layer of xarray for
+mk_epsilon_mean) — no PFile, no NetCDF, no perturb config.  Suitable for any
+vertical profiler whose pipeline can hand over the right arrays.
+
+| Module | Role |
+|--------|------|
+| `top_trim.py` | Depth where shear/accel variance settles below quantile (prop-wash exit) |
+| `bottom.py` | Depth where vibration spikes near deepest bin (seafloor crash) |
+| `ct_align.py` | Cross-correlate diff(T) vs diff(C); shift C by median lag |
+| `epsilon_combine.py` | Lueck (2022) iterative 95% CI geometric mean of multi-probe ε |
+
+---
+
 ### perturb -- Campaign Pipeline (Layer 3)
 
 End-to-end processing pipeline for VMP deployment campaigns.  Discovers
@@ -199,17 +214,13 @@ and combines across profiles and casts.
 | `discover.py` | Finds and orders `.P` files from a directory tree |
 | `merge.py` | Merges split `.P` files into contiguous records |
 | `trim.py` | Trims `.P` file headers/records |
-| `top_trim.py` | Top-of-profile trimming logic |
-| `bottom.py` | Bottom crash detection via accelerometers |
 | `fp07_cal.py` | FP07 thermistor calibration |
 | `ctd.py` | CTD processing (salinity, density) |
-| `ct_align.py` | Conductivity-temperature alignment |
 | `seawater.py` | Seawater properties (TEOS-10 via gsw) |
 | `hotel.py` | Ship hotel data ingestion |
 | `gps.py` | GPS position processing |
 | `binning.py` | Depth-bin averaging |
 | `combo.py` | Cross-profile combination |
-| `epsilon_combine.py` | Per-probe epsilon combination logic |
 | `netcdf_schema.py` | NetCDF output schema definitions |
 | `config.py` | Campaign-level configuration |
 | `cli.py` | `perturb` CLI entry point |
@@ -226,15 +237,14 @@ graph LR
         pipeline --> hotel
         pipeline --> gps
         pipeline --> binning
-        pipeline --> bottom
-        pipeline --> top_trim
-        pipeline --> epsilon_combine
         combo
         config
         cli
     end
     pipeline --> rsi.p_file
     pipeline --> rsi.profile
+    pipeline --> processing.top_trim
+    pipeline --> processing.bottom
     fp07_cal --> rsi.p_file
     merge --> rsi.p_file
     config --> rsi.config
@@ -251,17 +261,21 @@ graph TB
         P_disc[discover]
         P_merge[merge]
         P_trim[trim]
-        P_top[top_trim]
-        P_bot[bottom]
         P_fp07[fp07_cal]
         P_ctd[ctd]
         P_hotel[hotel]
         P_gps[gps]
         P_bin[binning]
         P_combo[combo]
-        P_eps[epsilon_combine]
         P_nc[netcdf_schema]
         P_conf[config]
+    end
+
+    subgraph "Layer 2.5: processing"
+        Q_top[top_trim]
+        Q_bot[bottom]
+        Q_ct[ct_align]
+        Q_eps[epsilon_combine]
     end
 
     subgraph "Layer 2: rsi"
@@ -353,6 +367,12 @@ graph TB
     P_merge --> R_pfile
     P_trim --> R_pfile
     P_conf --> R_conf
+
+    %% Layer 3 -> Layer 2.5
+    P_pipe --> Q_top
+    P_pipe --> Q_bot
+    P_pipe --> Q_ct
+    P_pipe --> Q_eps
 ```
 
 ---

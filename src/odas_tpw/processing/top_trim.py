@@ -1,10 +1,11 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
-"""Top trimming — remove initial instabilities from profiles.
+"""Top trimming — drop initial instabilities from a profile.
 
-Bins shear, acceleration, and speed by depth, computes std per bin,
-and finds the depth where variance drops below a quantile threshold.
-This identifies where the VMP exits propeller wash and enters stable
-profiling.
+Caller supplies any number of fast-rate channels (shear, acceleration,
+heading-rate, …) as a dict. The algorithm bins each by depth, computes
+per-bin std, and reports the deepest depth at which all channels have
+settled below their own quantile threshold. The instrument-specific
+question of which channels to feed in lives in the caller.
 
 Reference: Code/trim_top_profiles.m (85 lines)
 """
@@ -41,7 +42,9 @@ def compute_trim_depth(
     depth_fast : array_like
         Depth (positive downward, fast rate) [m].
     channels : dict
-        Fast-rate channel data. Should include some of: sh1, sh2, Ax, Ay, W_fast.
+        Fast-rate channel data, name -> 1-D array. Each channel must
+        match ``depth_fast`` in length. Any vibration / motion proxy
+        works (shear, acceleration, gyro rate, …).
     dz : float
         Depth bin size [m].
     min_depth : float
