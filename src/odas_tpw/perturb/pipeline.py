@@ -21,7 +21,7 @@ def _nan_excluded_probes(ds, excluded_probes: list[str], file_label: str) -> Non
     Mutates *ds* in place, so the subsequent mk_epsilon_mean call sees NaN for
     those probes and excludes them from the geometric mean (and, via the
     fallback path in chi, from chi Method 1). Both the 2-D ``epsilon``
-    (probe × time) and any pre-existing 1-D ``e_N`` companion variables are
+    (probe x time) and any pre-existing 1-D ``e_N`` companion variables are
     masked. Unknown probe names are warned and ignored — typos in the
     config should be visible but not fatal.
     """

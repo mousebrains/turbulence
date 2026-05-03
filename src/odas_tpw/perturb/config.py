@@ -220,14 +220,14 @@ def _validate_instruments(instruments: dict) -> None:
             )
 
 
-def _load_config_with_instruments_check(path):
+def _load_config_with_instruments_check(path: str | Path) -> dict[str, dict]:
     """Load and validate a perturb config, including the instruments section."""
     config = _mgr.load_config(path)
     _validate_instruments(config.get("instruments", {}))
     return config
 
 
-def _validate_config_with_instruments_check(config):
+def _validate_config_with_instruments_check(config: dict[str, dict]) -> None:
     """Validate a perturb config including the instruments section."""
     _mgr.validate_config(config)
     _validate_instruments(config.get("instruments", {}))

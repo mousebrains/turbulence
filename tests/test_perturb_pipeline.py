@@ -439,7 +439,7 @@ class TestNanExcludedProbes:
     def _make_diss_ds(self):
         import xarray as xr
 
-        # 2 probes × 5 windows of plausible epsilon values
+        # 2 probes x 5 windows of plausible epsilon values
         epsilon = np.array(
             [[1e-7, 2e-7, 3e-7, 4e-7, 5e-7], [1e-9, 2e-9, 3e-9, 4e-9, 5e-9]],
             dtype=np.float64,
