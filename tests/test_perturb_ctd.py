@@ -138,6 +138,52 @@ class TestCtdBinFile:
         result = ctd_bin_file(pf, gps, tmp_path)
         assert result is None
 
+    def test_slow_and_fast_channels_share_time_dim(self, tmp_path):
+        """Regression: when slow and fast channels are both binned, their
+        last samples differ by ``1/fs_slow - 1/fs_fast`` and an independent
+        ``arange(t_min, t_max + dt, dt)`` per call can flip one extra bin
+        into existence. Both calls must share a single bin_edges so the
+        resulting xarray Dataset has one consistent ``time`` dimension.
+
+        Mirrors the SN465 OH3465_0030 case where Turbidity (fast) ended up
+        with 281 bins vs JAC_C (slow) with 280, breaking dataset assembly.
+        """
+        fs_slow, fs_fast = 64.0, 512.0
+        n_slow = 8960
+        n_fast = n_slow * int(fs_fast / fs_slow)
+        t_slow = np.arange(n_slow) / fs_slow
+        t_fast = np.arange(n_fast) / fs_fast
+        # t_fast ends 1/fs_slow - 1/fs_fast = ~13.7 ms past t_slow — the
+        # fencepost that triggered the bug at 0.5 s bin width.
+        assert t_fast[-1] > t_slow[-1]
+
+        channels = {
+            "JAC_T": np.linspace(20.0, 25.0, n_slow),
+            "JAC_C": np.linspace(33.0, 35.0, n_slow),
+            "P": np.linspace(0.0, 130.0, n_slow),
+            "Turbidity": np.linspace(0.1, 0.5, n_fast),
+        }
+        pf = _PFileStub(
+            channels=channels,
+            t_slow=t_slow,
+            t_fast=t_fast,
+            fs_slow=fs_slow,
+            fs_fast=fs_fast,
+            fast_channels={"Turbidity"},
+        )
+        gps = GPSFixed(7.0, 134.0)
+
+        out = ctd_bin_file(pf, gps, tmp_path, bin_width=0.5)
+        assert out is not None
+
+        ds = xr.open_dataset(out)
+        # All channels must share the same time dim length.
+        for var in ("JAC_T", "JAC_C", "P", "Turbidity"):
+            assert ds[var].shape == ds["JAC_T"].shape, (
+                f"{var} shape {ds[var].shape} != JAC_T {ds['JAC_T'].shape}"
+            )
+        ds.close()
+
     def test_diagnostics(self, tmp_path):
         n = 640
         t_slow = np.linspace(0, 10, n)
