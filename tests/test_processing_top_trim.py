@@ -1,9 +1,9 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
-"""Tests for perturb.top_trim — top trimming."""
+"""Tests for processing.top_trim — top trimming."""
 
 import numpy as np
 
-from odas_tpw.perturb.top_trim import compute_trim_depth, compute_trim_depths
+from odas_tpw.processing.top_trim import compute_trim_depth, compute_trim_depths
 
 
 class TestComputeTrimDepth:

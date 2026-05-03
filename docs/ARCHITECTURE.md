@@ -187,6 +187,23 @@ graph LR
 
 ---
 
+### processing -- Profile-bound cleanup (Layer 2.5)
+
+Instrument-agnostic algorithms that adjust the slow-rate profile bounds
+returned by `get_profiles`.  Caller passes ``(depth_fast, channels_dict, fs)``;
+which sensors map into ``channels_dict`` is the caller's job.
+
+| Module | Role |
+|--------|------|
+| `top_trim.py` | Find depth where shear/accel variance settles below quantile (drop prop-wash) |
+| `bottom.py` | Find vibration spike near deepest bin (seafloor crash) |
+
+Both modules are pure functions over numpy arrays — no PFile, no NetCDF, no
+config.  They are imported by `perturb/pipeline.py:_adjust_profile_bounds`
+and could equally be called from any other vertical-profiler pipeline.
+
+---
+
 ### perturb -- Campaign Pipeline (Layer 3)
 
 End-to-end processing pipeline for VMP deployment campaigns.  Discovers
@@ -199,8 +216,6 @@ and combines across profiles and casts.
 | `discover.py` | Finds and orders `.P` files from a directory tree |
 | `merge.py` | Merges split `.P` files into contiguous records |
 | `trim.py` | Trims `.P` file headers/records |
-| `top_trim.py` | Top-of-profile trimming logic |
-| `bottom.py` | Bottom crash detection via accelerometers |
 | `fp07_cal.py` | FP07 thermistor calibration |
 | `ctd.py` | CTD processing (salinity, density) |
 | `ct_align.py` | Conductivity-temperature alignment |
@@ -226,8 +241,6 @@ graph LR
         pipeline --> hotel
         pipeline --> gps
         pipeline --> binning
-        pipeline --> bottom
-        pipeline --> top_trim
         pipeline --> epsilon_combine
         combo
         config
@@ -235,6 +248,8 @@ graph LR
     end
     pipeline --> rsi.p_file
     pipeline --> rsi.profile
+    pipeline --> processing.top_trim
+    pipeline --> processing.bottom
     fp07_cal --> rsi.p_file
     merge --> rsi.p_file
     config --> rsi.config
@@ -251,8 +266,6 @@ graph TB
         P_disc[discover]
         P_merge[merge]
         P_trim[trim]
-        P_top[top_trim]
-        P_bot[bottom]
         P_fp07[fp07_cal]
         P_ctd[ctd]
         P_hotel[hotel]
@@ -262,6 +275,11 @@ graph TB
         P_eps[epsilon_combine]
         P_nc[netcdf_schema]
         P_conf[config]
+    end
+
+    subgraph "Layer 2.5: processing"
+        Q_top[top_trim]
+        Q_bot[bottom]
     end
 
     subgraph "Layer 2: rsi"
@@ -353,6 +371,10 @@ graph TB
     P_merge --> R_pfile
     P_trim --> R_pfile
     P_conf --> R_conf
+
+    %% Layer 3 -> Layer 2.5
+    P_pipe --> Q_top
+    P_pipe --> Q_bot
 ```
 
 ---

@@ -64,9 +64,9 @@ def _adjust_profile_bounds(
     bottom_kwargs = {k: v for k, v in bottom_cfg.items() if k != "enable"}
 
     if do_top:
-        from odas_tpw.perturb.top_trim import compute_trim_depth
+        from odas_tpw.processing.top_trim import compute_trim_depth
     if do_bottom:
-        from odas_tpw.perturb.bottom import detect_bottom_crash
+        from odas_tpw.processing.bottom import detect_bottom_crash
 
     adjusted: list[tuple[int, int]] = []
     for pi, (s_slow, e_slow) in enumerate(profiles, 1):
@@ -104,13 +104,19 @@ def _adjust_profile_bounds(
 
         if do_bottom:
             try:
-                Ax = pf.channels.get("Ax")
-                Ay = pf.channels.get("Ay")
-                if Ax is not None and Ay is not None and pf.is_fast("Ax") and pf.is_fast("Ay"):
+                # Build the vibration-channels dict from whatever fast accel/gyro
+                # axes this instrument has. VMP-250 has Ax+Ay; a 3-axis IMU
+                # would also contribute Az; a different platform might supply a
+                # pre-aggregated ``vibration_rms`` channel.
+                vibration: dict = {}
+                for name in ("Ax", "Ay", "Az"):
+                    ch = pf.channels.get(name)
+                    if ch is not None and pf.is_fast(name):
+                        vibration[name] = ch[s_fast:e_fast]
+                if vibration:
                     bottom_depth = detect_bottom_crash(
                         depth_seg,
-                        Ax[s_fast:e_fast],
-                        Ay[s_fast:e_fast],
+                        vibration,
                         pf.fs_fast,
                         **bottom_kwargs,
                     )
