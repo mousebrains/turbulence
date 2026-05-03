@@ -15,6 +15,39 @@ from odas_tpw.perturb.config import merge_config, resolve_output_dir
 logger = logging.getLogger(__name__)
 
 
+def _nan_excluded_probes(ds, excluded_probes: list[str], file_label: str) -> None:
+    """Set per-probe epsilon to NaN for shear probes named in *excluded_probes*.
+
+    Mutates *ds* in place, so the subsequent mk_epsilon_mean call sees NaN for
+    those probes and excludes them from the geometric mean (and, via the
+    fallback path in chi, from chi Method 1). Both the 2-D ``epsilon``
+    (probe x time) and any pre-existing 1-D ``e_N`` companion variables are
+    masked. Unknown probe names are warned and ignored — typos in the
+    config should be visible but not fatal.
+    """
+    import numpy as np
+
+    if "epsilon" not in ds or "probe" not in ds.dims:
+        return
+    probe_names = [str(p) for p in ds["probe"].values]
+    for probe in excluded_probes:
+        if probe not in probe_names:
+            logger.warning(
+                "instruments override for %s: probe %r not present (have %s)",
+                file_label,
+                probe,
+                probe_names,
+            )
+            continue
+        idx = probe_names.index(probe)
+        ds["epsilon"].values[idx, :] = np.nan
+        # mk_epsilon_mean prefers e_N variables when present; mask them too
+        # so any caller that round-trips through e_N sees the same result.
+        e_name = f"e_{idx + 1}"
+        if e_name in ds.data_vars:
+            ds[e_name].values[:] = np.nan
+
+
 def process_file(
     p_path: Path,
     config: dict,
@@ -22,6 +55,7 @@ def process_file(
     output_dirs: dict,
     hotel_data=None,
     hotel_cfg=None,
+    instrument_key: str | None = None,
 ) -> dict:
     """Process a single .p file through the full enhancement chain.
 
@@ -35,6 +69,12 @@ def process_file(
         GPS provider.
     output_dirs : dict
         Maps stage names to output directory Paths.
+    instrument_key : str, optional
+        Key into ``config["instruments"]`` for per-instrument overrides
+        (e.g. ``"SN465"``). Falls back to ``p_path.parent.name`` if not
+        supplied — but the caller normally passes this explicitly because
+        the trim stage flattens the original ``<root>/<SN>/<file>.p``
+        layout into a single ``trimmed/`` directory.
 
     Returns
     -------
@@ -167,6 +207,9 @@ def process_file(
 
     # Per-profile dissipation
     eps_cfg = config.get("epsilon", {})
+    inst_lookup = instrument_key if instrument_key is not None else p_path.parent.name
+    instrument_cfg = config.get("instruments", {}).get(inst_lookup, {})
+    excluded_probes = list(instrument_cfg.get("exclude_shear_probes", []))
     if "diss" in output_dirs and result["profiles"]:
         for prof_path in result["profiles"]:
             try:
@@ -186,6 +229,8 @@ def process_file(
                     },
                 )
                 for ds in diss_results:
+                    if excluded_probes:
+                        _nan_excluded_probes(ds, excluded_probes, p_path.name)
                     ds = mk_epsilon_mean(ds, eps_cfg.get("epsilon_minimum", 1e-13))
                     out_name = Path(prof_path).name
                     out_path = output_dirs["diss"] / out_name
@@ -356,6 +401,12 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
 
     logger.info("Found %d .p files", len(p_files))
 
+    # Capture the original parent directory of each .p file before trim
+    # flattens the layout (e.g. <root>/SN465/foo.p -> trimmed/foo.p). The
+    # basename is preserved across trim/merge, so we can look the SN back
+    # up by file name in the per-file processing loop below.
+    original_parent_by_name = {p.name: p.parent.name for p in p_files}
+
     # Trim
     if files_cfg.get("trim", True):
         logger.info("Trimming...")
@@ -399,11 +450,23 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
 
     logger.info("Processing %d files (jobs=%d)...", len(p_files), jobs)
 
+    def _instrument_key(p):
+        # Trim flattens <root>/<SN>/<file>.p into trimmed/<file>.p, losing the
+        # SN parent. Recover it from the original-paths map; fall back to
+        # parent.name (works for un-trimmed runs).
+        return original_parent_by_name.get(p.name, p.parent.name)
+
     if jobs == 1:
         for p_path in p_files:
             logger.info("Processing %s...", p_path.name)
             process_file(
-                p_path, config, gps, output_dirs, hotel_data=hotel_data, hotel_cfg=hotel_cfg
+                p_path,
+                config,
+                gps,
+                output_dirs,
+                hotel_data=hotel_data,
+                hotel_cfg=hotel_cfg,
+                instrument_key=_instrument_key(p_path),
             )
     else:
         with ProcessPoolExecutor(max_workers=jobs) as executor:
@@ -416,6 +479,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                     output_dirs,
                     hotel_data=hotel_data,
                     hotel_cfg=hotel_cfg,
+                    instrument_key=_instrument_key(p),
                 ): p
                 for p in p_files
             }

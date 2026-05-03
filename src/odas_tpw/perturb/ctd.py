@@ -25,6 +25,7 @@ def _time_bin(
     bin_width: float,
     method: str = "mean",
     diagnostics: bool = False,
+    bin_edges: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """Bin data arrays by time.
 
@@ -40,15 +41,23 @@ def _time_bin(
         "mean" or "median".
     diagnostics : bool
         If True, include n_samples and *_std per bin.
+    bin_edges : ndarray, optional
+        Pre-computed bin edges. If provided, *bin_width* is ignored and the
+        same edges are used regardless of *t*'s exact range — required when
+        binning slow and fast channels in a single output (their last
+        samples differ by up to ``1/fs_slow - 1/fs_fast`` seconds, which
+        can flip one extra bin into existence and produce mismatched
+        time dimensions downstream).
 
     Returns
     -------
     dict with 'bin_centers' and binned data arrays (+ diagnostics if requested).
     """
-    t_min, t_max = np.nanmin(t), np.nanmax(t)
-    bin_edges = np.arange(t_min, t_max + bin_width, bin_width)
-    if len(bin_edges) < 2:
-        bin_edges = np.array([t_min, t_min + bin_width])
+    if bin_edges is None:
+        t_min, t_max = np.nanmin(t), np.nanmax(t)
+        bin_edges = np.arange(t_min, t_max + bin_width, bin_width)
+        if len(bin_edges) < 2:
+            bin_edges = np.array([t_min, t_min + bin_width])
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
     n_bins = len(bin_centers)
     bin_idx = np.digitize(t, bin_edges) - 1  # 0-based
@@ -154,16 +163,30 @@ def ctd_bin_file(
         else:
             slow_data[ch] = pf.channels[ch]
 
-    # Bin slow channels by time
-    binned = {}
-    bin_centers = None
+    # Compute a single set of bin edges spanning both time vectors so slow
+    # and fast channels share one time dimension in the output dataset.
+    t_lo = np.nanmin(pf.t_slow if slow_data else pf.t_fast)
+    t_hi = max(
+        np.nanmax(pf.t_slow) if slow_data else -np.inf,
+        np.nanmax(pf.t_fast) if fast_data else -np.inf,
+    )
+    bin_edges = np.arange(t_lo, t_hi + bin_width, bin_width)
+    if len(bin_edges) < 2:
+        bin_edges = np.array([t_lo, t_lo + bin_width])
+
+    binned: dict[str, np.ndarray] = {}
+    bin_centers: np.ndarray | None = None
     if slow_data:
-        result = _time_bin(pf.t_slow, slow_data, bin_width, method, diagnostics)
+        result = _time_bin(
+            pf.t_slow, slow_data, bin_width, method, diagnostics, bin_edges=bin_edges
+        )
         bin_centers = result.pop("bin_centers")
         binned.update(result)
 
     if fast_data:
-        result = _time_bin(pf.t_fast, fast_data, bin_width, method, diagnostics)
+        result = _time_bin(
+            pf.t_fast, fast_data, bin_width, method, diagnostics, bin_edges=bin_edges
+        )
         if bin_centers is None:
             bin_centers = result.pop("bin_centers")
         else:

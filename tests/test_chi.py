@@ -756,3 +756,49 @@ class TestChiEdgeCases:
         # Fallback: K > 0 and K <= K_AA
         assert np.sum(mask) > 0
         assert mask[0]  # K[0] = 0.5 > 0
+
+
+class TestEpsilonDsToL4Data:
+    """``_epsilon_ds_to_l4data`` should prefer ``epsilonMean`` over a raw nanmean."""
+
+    def _make_diss_ds(self, with_mean: bool):
+        import xarray as xr
+
+        n = 4
+        # sh1 reasonable, sh2 spuriously low (simulates the SN465 bad-amp case)
+        eps = np.array(
+            [[1e-7, 1e-7, 1e-7, 1e-7], [1e-14, 1e-14, 1e-14, 1e-14]],
+            dtype=np.float64,
+        )
+        ds = xr.Dataset(
+            {
+                "epsilon": (["probe", "time"], eps),
+                "P_mean": (["time"], np.linspace(10, 100, n)),
+                "speed": (["time"], np.full(n, 0.7)),
+            },
+            coords={
+                "probe": ["sh1", "sh2"],
+                "t": ("time", np.arange(n, dtype=float)),
+            },
+        )
+        if with_mean:
+            # Simulate mk_epsilon_mean having floored sh2 (1e-14 < epsilon_minimum)
+            # and produced a per-window combined value from sh1 only.
+            ds["epsilonMean"] = xr.DataArray(np.full(n, 1e-7), dims=["time"])
+        return ds
+
+    def test_uses_epsilon_mean_when_present(self):
+        from odas_tpw.rsi.chi_io import _epsilon_ds_to_l4data
+
+        ds = self._make_diss_ds(with_mean=True)
+        l4 = _epsilon_ds_to_l4data(ds)
+        # Must use epsilonMean (1e-7), not nanmean of [1e-7, 1e-14] (~5e-8)
+        np.testing.assert_allclose(l4.epsi_final, 1e-7)
+
+    def test_falls_back_to_nanmean_when_mean_absent(self):
+        from odas_tpw.rsi.chi_io import _epsilon_ds_to_l4data
+
+        ds = self._make_diss_ds(with_mean=False)
+        l4 = _epsilon_ds_to_l4data(ds)
+        # Without epsilonMean we expect the historical arithmetic mean.
+        np.testing.assert_allclose(l4.epsi_final, np.nanmean(ds["epsilon"].values, axis=0))

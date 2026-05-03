@@ -431,3 +431,62 @@ class TestRunPipeline:
         config["files"]["trim"] = False
         run_pipeline(config, p_files=[Path("dummy.p")])
         mock_run_trim.assert_not_called()
+
+
+class TestNanExcludedProbes:
+    """Tests for the per-instrument shear-probe exclusion helper."""
+
+    def _make_diss_ds(self):
+        import xarray as xr
+
+        # 2 probes x 5 windows of plausible epsilon values
+        epsilon = np.array(
+            [[1e-7, 2e-7, 3e-7, 4e-7, 5e-7], [1e-9, 2e-9, 3e-9, 4e-9, 5e-9]],
+            dtype=np.float64,
+        )
+        return xr.Dataset(
+            {"epsilon": (["probe", "time"], epsilon)},
+            coords={"probe": ["sh1", "sh2"], "time": np.arange(5, dtype=float)},
+        )
+
+    def test_excludes_named_probe(self):
+        from odas_tpw.perturb.pipeline import _nan_excluded_probes
+
+        ds = self._make_diss_ds()
+        _nan_excluded_probes(ds, ["sh2"], "test.p")
+        eps = ds["epsilon"].values
+        assert np.all(np.isfinite(eps[0]))
+        assert np.all(np.isnan(eps[1]))
+
+    def test_unknown_probe_warns_but_does_not_raise(self, caplog):
+        from odas_tpw.perturb.pipeline import _nan_excluded_probes
+
+        ds = self._make_diss_ds()
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.pipeline"):
+            _nan_excluded_probes(ds, ["sh3"], "test.p")
+        assert "not present" in caplog.text
+        # Original data preserved
+        assert np.all(np.isfinite(ds["epsilon"].values))
+
+    def test_also_masks_e_n_companion_variables(self):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _nan_excluded_probes
+
+        ds = self._make_diss_ds()
+        # Add e_1/e_2 companions like mk_epsilon_mean would create
+        ds["e_1"] = xr.DataArray(ds["epsilon"].isel(probe=0).values, dims=["time"])
+        ds["e_2"] = xr.DataArray(ds["epsilon"].isel(probe=1).values, dims=["time"])
+
+        _nan_excluded_probes(ds, ["sh1"], "test.p")
+        assert np.all(np.isnan(ds["e_1"].values))
+        assert np.all(np.isfinite(ds["e_2"].values))
+
+    def test_no_op_when_no_epsilon_in_dataset(self):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _nan_excluded_probes
+
+        ds = xr.Dataset()
+        # Should silently return without error
+        _nan_excluded_probes(ds, ["sh1"], "test.p")
