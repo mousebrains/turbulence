@@ -290,17 +290,30 @@ def get_chi(
 
 
 def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
-    """Convert old-format epsilon xr.Dataset to L4Data for chi computation."""
+    """Convert old-format epsilon xr.Dataset to L4Data for chi computation.
+
+    If the dataset already carries ``epsilonMean`` (written by
+    ``perturb.epsilon_combine.mk_epsilon_mean``), that QC-filtered geometric
+    mean is used as ``epsi_final``.  Otherwise we fall back to a plain
+    ``nanmean`` across the per-probe ``epsilon`` array — the historical
+    behaviour, retained for inputs produced by the lower-level rsi pipeline
+    that does not run the multi-probe combine step.
+    """
     from odas_tpw.scor160.io import L4Data
 
     eps_vals = epsilon_ds["epsilon"].values
     if eps_vals.ndim == 2:
-        epsi_final = np.nanmean(eps_vals, axis=0)
         n_sh = eps_vals.shape[0]
     else:
-        epsi_final = eps_vals
         n_sh = 1
         eps_vals = eps_vals[np.newaxis]
+
+    if "epsilonMean" in epsilon_ds:
+        epsi_final = np.asarray(epsilon_ds["epsilonMean"].values, dtype=np.float64)
+    elif n_sh > 1:
+        epsi_final = np.nanmean(eps_vals, axis=0)
+    else:
+        epsi_final = eps_vals[0]
 
     times = epsilon_ds.coords["t"].values
     n = len(times)

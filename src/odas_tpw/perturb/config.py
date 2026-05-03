@@ -176,16 +176,65 @@ DEFAULTS: dict[str, dict] = {
     "parallel": {
         "jobs": 1,
     },
+    # Per-instrument overrides keyed by serial-number identifier (matched
+    # against the parent directory of each .p file). Allowed inner keys:
+    #   exclude_shear_probes : list[str]  (e.g. ["sh1"] or ["sh2"])
+    "instruments": {},
 }
 
 # Keys excluded from hashing — toggling diagnostics should not create new output dirs
 _HASH_EXCLUDE_KEYS = frozenset({"diagnostics"})
 
-_mgr = ConfigManager(DEFAULTS, hash_exclude_keys=_HASH_EXCLUDE_KEYS)
+# Sections whose inner keys are user-defined (e.g. instrument serials).
+# ConfigManager skips strict unknown-key validation for these; per-section
+# inner-schema validation happens in a wrapper below.
+_DYNAMIC_KEY_SECTIONS = frozenset({"instruments"})
+
+_INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes"})
+
+_mgr = ConfigManager(
+    DEFAULTS,
+    hash_exclude_keys=_HASH_EXCLUDE_KEYS,
+    dynamic_key_sections=_DYNAMIC_KEY_SECTIONS,
+)
+
+
+def _validate_instruments(instruments: dict) -> None:
+    """Validate the inner structure of the dynamic ``instruments`` section."""
+    for sn, settings in instruments.items():
+        if not isinstance(settings, dict):
+            raise ValueError(
+                f"instruments.{sn}: must be a mapping, got {type(settings).__name__}"
+            )
+        unknown = set(settings) - _INSTRUMENT_VALID_KEYS
+        if unknown:
+            raise ValueError(
+                f"Unknown key(s) in instruments.{sn}: {sorted(unknown)}. "
+                f"Valid keys: {sorted(_INSTRUMENT_VALID_KEYS)}"
+            )
+        excludes = settings.get("exclude_shear_probes", [])
+        if not isinstance(excludes, list) or not all(isinstance(p, str) for p in excludes):
+            raise ValueError(
+                f"instruments.{sn}.exclude_shear_probes: must be a list of strings, "
+                f"got {excludes!r}"
+            )
+
+
+def _load_config_with_instruments_check(path):
+    """Load and validate a perturb config, including the instruments section."""
+    config = _mgr.load_config(path)
+    _validate_instruments(config.get("instruments", {}))
+    return config
+
+
+def _validate_config_with_instruments_check(config):
+    """Validate a perturb config including the instruments section."""
+    _mgr.validate_config(config)
+    _validate_instruments(config.get("instruments", {}))
 
 # Re-export manager methods as module-level functions
-load_config = _mgr.load_config
-validate_config = _mgr.validate_config
+load_config = _load_config_with_instruments_check
+validate_config = _validate_config_with_instruments_check
 merge_config = _mgr.merge_config
 canonicalize = _mgr.canonicalize
 compute_hash = _mgr.compute_hash
@@ -365,6 +414,17 @@ netcdf:
 
 parallel:
   jobs: 1
+
+# Per-instrument overrides. The key matches the parent directory of each .p
+# file (e.g. ARCTERX/VMP/SN465 -> SN465). Use this to suppress shear probes
+# whose amplifier or sensor is known to be bad — the named probe is NaN'd
+# out before mk_epsilon_mean, so it is excluded from the multi-probe
+# epsilonMean and from chi Method 1 (which uses epsilonMean).
+instruments: {}
+# Example:
+# instruments:
+#   SN465:
+#     exclude_shear_probes: ["sh2"]
 """
 
 

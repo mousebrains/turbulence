@@ -43,6 +43,11 @@ class ConfigManager:
         Canonical defaults — one dict per processing section.
     hash_exclude_keys : frozenset[str]
         Keys omitted from canonicalization/hashing (e.g. ``{"diagnostics"}``).
+    dynamic_key_sections : frozenset[str]
+        Sections whose keys are user-defined at runtime (e.g. instrument
+        serial numbers). Strict unknown-key validation is skipped for these
+        sections; the caller is responsible for validating the inner
+        structure where it is consumed.
     """
 
     def __init__(
@@ -50,10 +55,12 @@ class ConfigManager:
         defaults: dict[str, dict],
         *,
         hash_exclude_keys: frozenset[str] = frozenset(),
+        dynamic_key_sections: frozenset[str] = frozenset(),
     ) -> None:
         self.defaults = defaults
         self.valid_sections = frozenset(defaults)
         self.hash_exclude_keys = hash_exclude_keys
+        self.dynamic_key_sections = dynamic_key_sections
 
     # -- Load / validate ---------------------------------------------------
 
@@ -80,6 +87,8 @@ class ConfigManager:
                     f"Unknown config section: {section!r}. "
                     f"Valid sections: {sorted(self.valid_sections)}"
                 )
+            if section in self.dynamic_key_sections:
+                continue
             valid_keys = set(self.defaults[section])
             unknown = set(params) - valid_keys
             if unknown:

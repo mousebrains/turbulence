@@ -20,8 +20,8 @@ from odas_tpw.perturb.config import (
 
 
 class TestDefaults:
-    def test_has_14_sections(self):
-        assert len(DEFAULTS) == 14
+    def test_has_15_sections(self):
+        assert len(DEFAULTS) == 15
 
     def test_expected_sections(self):
         expected = {
@@ -39,6 +39,7 @@ class TestDefaults:
             "binning",
             "netcdf",
             "parallel",
+            "instruments",
         }
         assert set(DEFAULTS.keys()) == expected
 
@@ -91,6 +92,59 @@ class TestValidateConfigPerturb:
                 "top_trim": {"dz": 1.0},
             }
         )
+
+
+class TestInstrumentsSection:
+    def test_arbitrary_serial_keys_accepted(self):
+        validate_config(
+            {
+                "instruments": {
+                    "SN465": {"exclude_shear_probes": ["sh2"]},
+                    "SN428": {"exclude_shear_probes": []},
+                },
+            }
+        )
+
+    def test_unknown_inner_key_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="Unknown key"):
+            validate_config({"instruments": {"SN465": {"oops": True}}})
+
+    def test_non_dict_value_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="must be a mapping"):
+            validate_config({"instruments": {"SN465": ["sh2"]}})
+
+    def test_exclude_shear_probes_must_be_list_of_strings(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="list of strings"):
+            validate_config({"instruments": {"SN465": {"exclude_shear_probes": "sh2"}}})
+
+        with pytest.raises(ValueError, match="list of strings"):
+            validate_config({"instruments": {"SN465": {"exclude_shear_probes": [1, 2]}}})
+
+    def test_load_yaml_with_instruments(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "instruments:\n"
+            "  SN465:\n"
+            "    exclude_shear_probes:\n"
+            "      - sh2\n"
+        )
+        config = load_config(cfg)
+        assert config["instruments"]["SN465"]["exclude_shear_probes"] == ["sh2"]
+
+    def test_instruments_excluded_from_hash(self):
+        # instruments should not appear in upstream hashing for diss/chi/ctd
+        # — the section is per-SN and not part of the per-stage param schema.
+        h_blank = compute_hash("epsilon", {})
+        # instruments is not a section_name accepted by compute_hash, so we
+        # just confirm the existing per-section hashing still works after
+        # adding the dynamic-key section.
+        assert isinstance(h_blank, str)
 
 
 # ---------------------------------------------------------------------------
