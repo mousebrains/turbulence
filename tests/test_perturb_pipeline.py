@@ -229,7 +229,7 @@ class TestProcessFile:
         mock_fp07_cal.assert_not_called()
 
     @patch("odas_tpw.rsi.profile.extract_profiles", return_value=[Path("/fake/prof.nc")])
-    @patch("odas_tpw.perturb.ct_align.ct_align")
+    @patch("odas_tpw.processing.ct_align.ct_align")
     @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate", return_value={"channels": {}})
     @patch("odas_tpw.rsi.profile.get_profiles")
     @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))

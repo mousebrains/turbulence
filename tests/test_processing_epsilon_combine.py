@@ -1,10 +1,10 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
-"""Tests for perturb.epsilon_combine — mk_epsilon_mean."""
+"""Tests for processing.epsilon_combine — mk_epsilon_mean."""
 
 import numpy as np
 import xarray as xr
 
-from odas_tpw.perturb.epsilon_combine import mk_epsilon_mean
+from odas_tpw.processing.epsilon_combine import mk_epsilon_mean
 
 
 def _make_diss_ds(e1, e2, speed=None, nu=None, diss_length=512, fs_fast=512.0):

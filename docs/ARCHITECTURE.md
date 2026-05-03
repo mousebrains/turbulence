@@ -187,20 +187,18 @@ graph LR
 
 ---
 
-### processing -- Profile-bound cleanup (Layer 2.5)
+### processing -- Instrument-agnostic profile processing (Layer 2.5)
 
-Instrument-agnostic algorithms that adjust the slow-rate profile bounds
-returned by `get_profiles`.  Caller passes ``(depth_fast, channels_dict, fs)``;
-which sensors map into ``channels_dict`` is the caller's job.
+Algorithms that operate on raw arrays (and a thin layer of xarray for
+mk_epsilon_mean) — no PFile, no NetCDF, no perturb config.  Suitable for any
+vertical profiler whose pipeline can hand over the right arrays.
 
 | Module | Role |
 |--------|------|
-| `top_trim.py` | Find depth where shear/accel variance settles below quantile (drop prop-wash) |
-| `bottom.py` | Find vibration spike near deepest bin (seafloor crash) |
-
-Both modules are pure functions over numpy arrays — no PFile, no NetCDF, no
-config.  They are imported by `perturb/pipeline.py:_adjust_profile_bounds`
-and could equally be called from any other vertical-profiler pipeline.
+| `top_trim.py` | Depth where shear/accel variance settles below quantile (prop-wash exit) |
+| `bottom.py` | Depth where vibration spikes near deepest bin (seafloor crash) |
+| `ct_align.py` | Cross-correlate diff(T) vs diff(C); shift C by median lag |
+| `epsilon_combine.py` | Lueck (2022) iterative 95% CI geometric mean of multi-probe ε |
 
 ---
 
@@ -218,13 +216,11 @@ and combines across profiles and casts.
 | `trim.py` | Trims `.P` file headers/records |
 | `fp07_cal.py` | FP07 thermistor calibration |
 | `ctd.py` | CTD processing (salinity, density) |
-| `ct_align.py` | Conductivity-temperature alignment |
 | `seawater.py` | Seawater properties (TEOS-10 via gsw) |
 | `hotel.py` | Ship hotel data ingestion |
 | `gps.py` | GPS position processing |
 | `binning.py` | Depth-bin averaging |
 | `combo.py` | Cross-profile combination |
-| `epsilon_combine.py` | Per-probe epsilon combination logic |
 | `netcdf_schema.py` | NetCDF output schema definitions |
 | `config.py` | Campaign-level configuration |
 | `cli.py` | `perturb` CLI entry point |
@@ -241,7 +237,6 @@ graph LR
         pipeline --> hotel
         pipeline --> gps
         pipeline --> binning
-        pipeline --> epsilon_combine
         combo
         config
         cli
@@ -272,7 +267,6 @@ graph TB
         P_gps[gps]
         P_bin[binning]
         P_combo[combo]
-        P_eps[epsilon_combine]
         P_nc[netcdf_schema]
         P_conf[config]
     end
@@ -280,6 +274,8 @@ graph TB
     subgraph "Layer 2.5: processing"
         Q_top[top_trim]
         Q_bot[bottom]
+        Q_ct[ct_align]
+        Q_eps[epsilon_combine]
     end
 
     subgraph "Layer 2: rsi"
@@ -375,6 +371,8 @@ graph TB
     %% Layer 3 -> Layer 2.5
     P_pipe --> Q_top
     P_pipe --> Q_bot
+    P_pipe --> Q_ct
+    P_pipe --> Q_eps
 ```
 
 ---

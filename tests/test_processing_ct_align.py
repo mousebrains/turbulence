@@ -1,9 +1,9 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
-"""Tests for perturb.ct_align — CT sensor alignment."""
+"""Tests for processing.ct_align — CT sensor alignment."""
 
 import numpy as np
 
-from odas_tpw.perturb.ct_align import ct_align
+from odas_tpw.processing.ct_align import ct_align
 
 
 class TestCTAlign:

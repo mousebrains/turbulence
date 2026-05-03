@@ -207,9 +207,9 @@ def process_file(
     -------
     dict with output paths per stage.
     """
-    from odas_tpw.perturb.ct_align import ct_align
-    from odas_tpw.perturb.epsilon_combine import mk_epsilon_mean
     from odas_tpw.perturb.fp07_cal import fp07_calibrate
+    from odas_tpw.processing.ct_align import ct_align
+    from odas_tpw.processing.epsilon_combine import mk_epsilon_mean
     from odas_tpw.rsi.dissipation import _compute_epsilon
     from odas_tpw.rsi.p_file import PFile
     from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles

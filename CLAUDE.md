@@ -15,7 +15,7 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas
 - `rsi/` — Rockland Scientific instrument I/O, NetCDF conversion, profiles, epsilon, chi orchestration
 - `chi/` — Chi (thermal variance dissipation) calculation, Batchelor/Kraichnan spectra, FP07 transfer function
 - `scor160/` — ATOMIX shear-probe benchmark processing (L1–L4), shared physics/spectral modules
-- `processing/` — Instrument-agnostic profile-bound cleanup (top_trim prop-wash, bottom-crash detection)
+- `processing/` — Instrument-agnostic profile processing (top_trim, bottom-crash, ct_align, mk_epsilon_mean)
 - `perturb/` — Full campaign processing pipeline (trim, merge, calibrate, compute, bin)
 
 ### Key Modules (rsi)
