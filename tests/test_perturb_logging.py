@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from pathlib import Path
 
 import pytest
 
@@ -26,10 +26,8 @@ def _reset_root_logger():
     for h in list(root.handlers):
         if h not in saved_handlers:
             root.removeHandler(h)
-            try:
+            with contextlib.suppress(Exception):
                 h.close()
-            except Exception:
-                pass
     root.setLevel(saved_level)
 
 
@@ -136,9 +134,8 @@ class TestStageLog:
     def test_handler_removed_on_exception(self, tmp_path):
         setup_root_logging(tmp_path / "run.log")
         before = len(logging.getLogger().handlers)
-        with pytest.raises(RuntimeError):
-            with stage_log(tmp_path / "stage", "d"):
-                raise RuntimeError("boom")
+        with pytest.raises(RuntimeError), stage_log(tmp_path / "stage", "d"):
+            raise RuntimeError("boom")
         after = len(logging.getLogger().handlers)
         assert after == before
 

@@ -24,13 +24,14 @@ attached at emission time.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator
 
 _FILE_FORMAT = "%(asctime)s %(levelname)-7s %(name)s [%(processName)s]: %(message)s"
 _STREAM_FORMAT = "%(message)s"
@@ -48,7 +49,7 @@ _OWNED_ATTR = "_perturb_logging_owned"
 def run_timestamp() -> str:
     """Return a UTC timestamp suitable for log file names (no separators that
     confuse shells)."""
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 _CURRENT_RUN_STAMP: str | None = None
@@ -82,10 +83,8 @@ def _drop_owned_handlers(logger: logging.Logger) -> None:
     for h in list(logger.handlers):
         if getattr(h, _OWNED_ATTR, False):
             logger.removeHandler(h)
-            try:
+            with contextlib.suppress(Exception):
                 h.close()
-            except Exception:
-                pass
 
 
 def setup_root_logging(
@@ -178,7 +177,5 @@ def stage_log(stage_dir: Path | None, basename: str) -> Iterator[Path | None]:
         yield log_file
     finally:
         root.removeHandler(handler)
-        try:
+        with contextlib.suppress(Exception):
             handler.close()
-        except Exception:
-            pass
