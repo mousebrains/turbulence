@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from odas_tpw.perturb.config import merge_config, resolve_output_dir, write_signature
+from odas_tpw.perturb.logging_setup import (
+    current_run_stamp,
+    init_worker_logging,
+    stage_log,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -300,108 +305,118 @@ def process_file(
         for name, data in hotel_channels.items():
             pf.channels[name] = data
 
+    # Per-stage log files: each ``with stage_log(...)`` adds a FileHandler
+    # for that stage's output dir so e.g. all CTD-binning records for ``a.p``
+    # land in ``ctd_NN/a.log`` *and* the worker/run logs.  basename = stem so
+    # ``a.p`` produces ``a.log``.
+    log_basename = p_path.stem
+
     # ---- CTD fork (full file, both up and down) ----
     ctd_cfg = config.get("ctd", {})
     if ctd_cfg.get("enable", True) and "ctd" in output_dirs:
-        try:
-            from odas_tpw.perturb.ctd import ctd_bin_file
+        with stage_log(output_dirs.get("ctd"), log_basename):
+            try:
+                from odas_tpw.perturb.ctd import ctd_bin_file
 
-            ctd_bin_file(
-                pf,
-                gps,
-                output_dirs["ctd"],
-                bin_width=ctd_cfg.get("bin_width", 0.5),
-                T_name=ctd_cfg.get("T_name", "JAC_T"),
-                C_name=ctd_cfg.get("C_name", "JAC_C"),
-                variables=ctd_cfg.get("variables"),
-                method=ctd_cfg.get("method", "mean"),
-                diagnostics=ctd_cfg.get("diagnostics", False),
-            )
-        except Exception as exc:
-            logger.error("CTD binning %s: %s", p_path.name, exc)
+                ctd_bin_file(
+                    pf,
+                    gps,
+                    output_dirs["ctd"],
+                    bin_width=ctd_cfg.get("bin_width", 0.5),
+                    T_name=ctd_cfg.get("T_name", "JAC_T"),
+                    C_name=ctd_cfg.get("C_name", "JAC_C"),
+                    variables=ctd_cfg.get("variables"),
+                    method=ctd_cfg.get("method", "mean"),
+                    diagnostics=ctd_cfg.get("diagnostics", False),
+                )
+            except Exception as exc:
+                logger.error("CTD binning %s: %s", p_path.name, exc)
 
     # ---- Profile fork ----
+    # Wraps profile detection, FP07 calibration, CT alignment, and the
+    # extract_profiles write.  These all conceptually feed profiles_NN/.
     profiles_cfg = config.get("profiles", {})
     fp07_cfg = config.get("fp07", {})
     ct_cfg = config.get("ct", {})
 
-    P_slow = pf.channels.get("P")
-    if P_slow is None:
-        logger.warning("No pressure channel in %s", p_path.name)
-        return result
-
-    W = _smooth_fall_rate(P_slow, pf.fs_slow)
-    profiles = get_profiles(
-        P_slow,
-        W,
-        pf.fs_slow,
-        P_min=profiles_cfg.get("P_min", 0.5),
-        W_min=profiles_cfg.get("W_min", 0.3),
-        direction=profiles_cfg.get("direction", "down"),
-        min_duration=profiles_cfg.get("min_duration", 7.0),
-    )
-
-    if not profiles:
-        logger.warning("No profiles in %s", p_path.name)
-        return result
-
-    # Adjust profile bounds (top-trim removes prop-wash, bottom detects seafloor crash)
-    profiles = _adjust_profile_bounds(
-        profiles,
-        pf,
-        config.get("top_trim", {}),
-        config.get("bottom", {}),
-        p_path.name,
-    )
-
-    # FP07 calibration
-    if fp07_cfg.get("calibrate", True):
-        try:
-            cal_result = fp07_calibrate(
-                pf,
-                profiles,
-                reference=fp07_cfg.get("reference", "JAC_T"),
-                order=fp07_cfg.get("order", 2),
-                max_lag_seconds=fp07_cfg.get("max_lag_seconds", 10.0),
-                must_be_negative=fp07_cfg.get("must_be_negative", True),
-            )
-            # Apply calibrated temperatures back to pf.channels
-            for ch_name, cal_data in cal_result.get("channels", {}).items():
-                pf.channels[ch_name] = cal_data
-        except Exception as exc:
-            logger.warning("FP07 cal failed for %s: %s", p_path.name, exc)
-
-    # CT alignment
-    if ct_cfg.get("align", True):
-        T_name = ct_cfg.get("T_name", "JAC_T")
-        C_name = ct_cfg.get("C_name", "JAC_C")
-        if T_name in pf.channels and C_name in pf.channels:
-            try:
-                C_aligned, _lag = ct_align(
-                    pf.channels[T_name],
-                    pf.channels[C_name],
-                    pf.fs_slow,
-                    profiles,
-                )
-                pf.channels[C_name] = C_aligned
-            except Exception as exc:
-                logger.warning("CT align failed for %s: %s", p_path.name, exc)
-
-    # Write per-profile NetCDFs
-    from odas_tpw.rsi.profile import extract_profiles
-
-    if "profiles" in output_dirs:
-        try:
-            prof_paths = extract_profiles(
-                pf,
-                output_dirs["profiles"],
-                profiles=profiles,
-                gps=gps,
-            )
-            result["profiles"] = [str(p) for p in prof_paths]
-        except Exception as exc:
-            logger.error("extracting profiles %s: %s", p_path.name, exc)
+    with stage_log(output_dirs.get("profiles"), log_basename):
+        P_slow = pf.channels.get("P")
+        if P_slow is None:
+            logger.warning("No pressure channel in %s", p_path.name)
             return result
+
+        W = _smooth_fall_rate(P_slow, pf.fs_slow)
+        profiles = get_profiles(
+            P_slow,
+            W,
+            pf.fs_slow,
+            P_min=profiles_cfg.get("P_min", 0.5),
+            W_min=profiles_cfg.get("W_min", 0.3),
+            direction=profiles_cfg.get("direction", "down"),
+            min_duration=profiles_cfg.get("min_duration", 7.0),
+        )
+
+        if not profiles:
+            logger.warning("No profiles in %s", p_path.name)
+            return result
+
+        # Adjust profile bounds (top-trim removes prop-wash, bottom detects seafloor crash)
+        profiles = _adjust_profile_bounds(
+            profiles,
+            pf,
+            config.get("top_trim", {}),
+            config.get("bottom", {}),
+            p_path.name,
+        )
+
+        # FP07 calibration
+        if fp07_cfg.get("calibrate", True):
+            try:
+                cal_result = fp07_calibrate(
+                    pf,
+                    profiles,
+                    reference=fp07_cfg.get("reference", "JAC_T"),
+                    order=fp07_cfg.get("order", 2),
+                    max_lag_seconds=fp07_cfg.get("max_lag_seconds", 10.0),
+                    must_be_negative=fp07_cfg.get("must_be_negative", True),
+                )
+                # Apply calibrated temperatures back to pf.channels
+                for ch_name, cal_data in cal_result.get("channels", {}).items():
+                    pf.channels[ch_name] = cal_data
+            except Exception as exc:
+                logger.warning("FP07 cal failed for %s: %s", p_path.name, exc)
+
+        # CT alignment
+        if ct_cfg.get("align", True):
+            T_name = ct_cfg.get("T_name", "JAC_T")
+            C_name = ct_cfg.get("C_name", "JAC_C")
+            if T_name in pf.channels and C_name in pf.channels:
+                try:
+                    C_aligned, _lag = ct_align(
+                        pf.channels[T_name],
+                        pf.channels[C_name],
+                        pf.fs_slow,
+                        profiles,
+                    )
+                    pf.channels[C_name] = C_aligned
+                except Exception as exc:
+                    logger.warning("CT align failed for %s: %s", p_path.name, exc)
+
+        # Write per-profile NetCDFs
+        from odas_tpw.rsi.profile import extract_profiles
+
+        if "profiles" in output_dirs:
+            try:
+                prof_paths = extract_profiles(
+                    pf,
+                    output_dirs["profiles"],
+                    profiles=profiles,
+                    gps=gps,
+                )
+                result["profiles"] = [str(p) for p in prof_paths]
+            except Exception as exc:
+                logger.error("extracting profiles %s: %s", p_path.name, exc)
+                return result
 
     # Per-profile dissipation
     eps_cfg = config.get("epsilon", {})
@@ -409,34 +424,35 @@ def process_file(
     instrument_cfg = config.get("instruments", {}).get(inst_lookup, {})
     excluded_probes = list(instrument_cfg.get("exclude_shear_probes", []))
     if "diss" in output_dirs and result["profiles"]:
-        for prof_path in result["profiles"]:
-            try:
-                diss_results = _compute_epsilon(
-                    prof_path,
-                    **{
-                        k: v
-                        for k, v in eps_cfg.items()
-                        if k
-                        not in (
-                            "epsilon_minimum",
-                            "T_source",
-                            "T1_norm",
-                            "T2_norm",
-                            "diagnostics",
-                        )
-                    },
-                )
-                for ds in diss_results:
-                    if excluded_probes:
-                        _nan_excluded_probes(ds, excluded_probes, p_path.name)
-                    ds = mk_epsilon_mean(ds, eps_cfg.get("epsilon_minimum", 1e-13))
-                    _copy_profile_scalars(prof_path, ds)
-                    out_name = Path(prof_path).name
-                    out_path = output_dirs["diss"] / out_name
-                    ds.to_netcdf(out_path)
-                    result["diss"].append(str(out_path))
-            except Exception as exc:
-                logger.error("diss for %s: %s", Path(prof_path).name, exc)
+        with stage_log(output_dirs.get("diss"), log_basename):
+            for prof_path in result["profiles"]:
+                try:
+                    diss_results = _compute_epsilon(
+                        prof_path,
+                        **{
+                            k: v
+                            for k, v in eps_cfg.items()
+                            if k
+                            not in (
+                                "epsilon_minimum",
+                                "T_source",
+                                "T1_norm",
+                                "T2_norm",
+                                "diagnostics",
+                            )
+                        },
+                    )
+                    for ds in diss_results:
+                        if excluded_probes:
+                            _nan_excluded_probes(ds, excluded_probes, p_path.name)
+                        ds = mk_epsilon_mean(ds, eps_cfg.get("epsilon_minimum", 1e-13))
+                        _copy_profile_scalars(prof_path, ds)
+                        out_name = Path(prof_path).name
+                        out_path = output_dirs["diss"] / out_name
+                        ds.to_netcdf(out_path)
+                        result["diss"].append(str(out_path))
+                except Exception as exc:
+                    logger.error("diss for %s: %s", Path(prof_path).name, exc)
 
     # Per-profile chi (if enabled)
     chi_cfg = config.get("chi", {})
@@ -446,25 +462,30 @@ def process_file(
         except ImportError:
             pass
         else:
-            for prof_path, diss_path in zip(result["profiles"], result["diss"]):
-                try:
-                    import xarray as xr
+            with stage_log(output_dirs.get("chi"), log_basename):
+                for prof_path, diss_path in zip(result["profiles"], result["diss"]):
+                    try:
+                        import xarray as xr
 
-                    diss_ds = xr.open_dataset(diss_path)
-                    chi_results = _compute_chi(
-                        prof_path,
-                        epsilon_ds=diss_ds,
-                        **{k: v for k, v in chi_cfg.items() if k not in ("enable", "diagnostics")},
-                    )
-                    diss_ds.close()
-                    for chi_ds in chi_results:
-                        _copy_profile_scalars(prof_path, chi_ds)
-                        out_name = Path(prof_path).name
-                        out_path = output_dirs["chi"] / out_name
-                        chi_ds.to_netcdf(out_path)
-                        result["chi"].append(str(out_path))
-                except Exception as exc:
-                    logger.error("chi for %s: %s", Path(prof_path).name, exc)
+                        diss_ds = xr.open_dataset(diss_path)
+                        chi_results = _compute_chi(
+                            prof_path,
+                            epsilon_ds=diss_ds,
+                            **{
+                                k: v
+                                for k, v in chi_cfg.items()
+                                if k not in ("enable", "diagnostics")
+                            },
+                        )
+                        diss_ds.close()
+                        for chi_ds in chi_results:
+                            _copy_profile_scalars(prof_path, chi_ds)
+                            out_name = Path(prof_path).name
+                            out_path = output_dirs["chi"] / out_name
+                            chi_ds.to_netcdf(out_path)
+                            result["chi"].append(str(out_path))
+                    except Exception as exc:
+                        logger.error("chi for %s: %s", Path(prof_path).name, exc)
 
     return result
 
@@ -671,7 +692,17 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 instrument_key=_instrument_key(p_path),
             )
     else:
-        with ProcessPoolExecutor(max_workers=jobs) as executor:
+        # Spawn workers each get a per-pid log file inside <output_root>/logs/
+        # so multi-process runs are diagnosable.  ``run_stamp`` is the parent
+        # CLI's invocation timestamp so all workers share a prefix.
+        output_root_path = Path(files_cfg.get("output_root", "results/"))
+        worker_log_dir = output_root_path / "logs"
+        run_stamp = current_run_stamp()
+        with ProcessPoolExecutor(
+            max_workers=jobs,
+            initializer=init_worker_logging,
+            initargs=(worker_log_dir, run_stamp),
+        ) as executor:
             futures = {
                 executor.submit(
                     process_file,
@@ -709,6 +740,11 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     chi_binned_dir: Path | None = None
 
     # Bin profiles
+    # Resolve binned-output dirs *before* the bin call so we can pass them
+    # as ``log_dir`` and each input .p file's records land in
+    # ``<binned_dir>/<stem>.log``.  This also means the binned dir is
+    # created (with its signature) even if the bin call ends up emitting
+    # no data — a small price for symmetric per-file logs.
     prof_ncs = sorted(output_dirs["profiles"].glob("*.nc")) if "profiles" in output_dirs else []
     if prof_ncs:
         logger.info("Binning profiles...")
@@ -721,9 +757,13 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             upstream=_upstream_for("profiles_binned", config),
         )
         if bin_method == "depth":
-            ds = bin_by_depth(prof_ncs, bin_width, aggregation, diagnostics)
+            ds = bin_by_depth(
+                prof_ncs, bin_width, aggregation, diagnostics, log_dir=prof_binned_dir
+            )
         else:
-            ds = bin_by_time(prof_ncs, bin_width, aggregation, diagnostics)
+            ds = bin_by_time(
+                prof_ncs, bin_width, aggregation, diagnostics, log_dir=prof_binned_dir
+            )
         if ds.data_vars:
             ds.to_netcdf(prof_binned_dir / "binned.nc")
 
@@ -733,15 +773,17 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         logger.info("Binning dissipation...")
         diss_width = binning_cfg.get("diss_width") or bin_width
         diss_agg = binning_cfg.get("diss_aggregation") or aggregation
-        ds = bin_diss(diss_ncs, diss_width, diss_agg, bin_method, diagnostics)
+        diss_binned_dir = resolve_output_dir(
+            output_root,
+            "diss_binned",
+            "binning",
+            merge_config("binning", binning_cfg),
+            upstream=_upstream_for("diss_binned", config),
+        )
+        ds = bin_diss(
+            diss_ncs, diss_width, diss_agg, bin_method, diagnostics, log_dir=diss_binned_dir
+        )
         if ds.data_vars:
-            diss_binned_dir = resolve_output_dir(
-                output_root,
-                "diss_binned",
-                "binning",
-                merge_config("binning", binning_cfg),
-                upstream=_upstream_for("diss_binned", config),
-            )
             ds.to_netcdf(diss_binned_dir / "binned.nc")
 
     # Bin chi
@@ -755,15 +797,17 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 or binning_cfg.get("diss_aggregation")
                 or aggregation
             )
-            ds = bin_chi(chi_ncs, chi_width, chi_agg, bin_method, diagnostics)
+            chi_binned_dir = resolve_output_dir(
+                output_root,
+                "chi_binned",
+                "binning",
+                merge_config("binning", binning_cfg),
+                upstream=_upstream_for("chi_binned", config),
+            )
+            ds = bin_chi(
+                chi_ncs, chi_width, chi_agg, bin_method, diagnostics, log_dir=chi_binned_dir
+            )
             if ds.data_vars:
-                chi_binned_dir = resolve_output_dir(
-                    output_root,
-                    "chi_binned",
-                    "binning",
-                    merge_config("binning", binning_cfg),
-                    upstream=_upstream_for("chi_binned", config),
-                )
                 ds.to_netcdf(chi_binned_dir / "binned.nc")
 
     # Combo assembly
@@ -849,29 +893,37 @@ def _run_combo(
     for src, dst, schema, method, func, stage in targets:
         if src is None or not src.exists():
             continue
-        try:
-            out = func(src, dst, schema, netcdf_attrs=netcdf_attrs, method=method)
-            if out is not None:
-                logger.info("Wrote %s", out)
-                if config is not None and binning_p is not None:
-                    write_signature(
-                        dst, "binning", binning_p, upstream=_upstream_for(stage, config)
-                    )
-        except Exception as exc:
-            logger.error("combo %s: %s", dst.name, exc)
+        # Ensure dst exists before the stage_log so its FileHandler can open
+        # ``combo.log`` even when ``func`` returns None (e.g. empty inputs).
+        dst.mkdir(parents=True, exist_ok=True)
+        with stage_log(dst, "combo"):
+            try:
+                out = func(src, dst, schema, netcdf_attrs=netcdf_attrs, method=method)
+                if out is not None:
+                    logger.info("Wrote %s", out)
+                    if config is not None and binning_p is not None:
+                        write_signature(
+                            dst, "binning", binning_p, upstream=_upstream_for(stage, config)
+                        )
+            except Exception as exc:
+                logger.error("combo %s: %s", dst.name, exc)
 
     if ctd_dir is not None and ctd_dir.exists():
-        try:
-            ctd_combo_dir = output_root / "ctd_combo"
-            out = make_ctd_combo(ctd_dir, ctd_combo_dir, CTD_SCHEMA, netcdf_attrs=netcdf_attrs)
-            if out is not None:
-                logger.info("Wrote %s", out)
-                if config is not None:
-                    write_signature(
-                        ctd_combo_dir,
-                        "ctd",
-                        merge_config("ctd", config.get("ctd")),
-                        upstream=_upstream_for("ctd_combo", config),
-                    )
-        except Exception as exc:
-            logger.error("ctd combo: %s", exc)
+        ctd_combo_dir = output_root / "ctd_combo"
+        ctd_combo_dir.mkdir(parents=True, exist_ok=True)
+        with stage_log(ctd_combo_dir, "combo"):
+            try:
+                out = make_ctd_combo(
+                    ctd_dir, ctd_combo_dir, CTD_SCHEMA, netcdf_attrs=netcdf_attrs
+                )
+                if out is not None:
+                    logger.info("Wrote %s", out)
+                    if config is not None:
+                        write_signature(
+                            ctd_combo_dir,
+                            "ctd",
+                            merge_config("ctd", config.get("ctd")),
+                            upstream=_upstream_for("ctd_combo", config),
+                        )
+            except Exception as exc:
+                logger.error("ctd combo: %s", exc)
