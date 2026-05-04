@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Per-CLI / per-worker / per-stage / per-combo log fan-out for `perturb`. Every
+  invocation now writes `<output_root>/logs/run_<stamp>.log`, plus
+  `worker_<stamp>_<pid>.log` per parallel worker, `<stem>.log` inside each
+  versioned `profiles_NN/`, `diss_NN/`, `chi_NN/`, `ctd_NN/`,
+  `*_binned_NN/` dir, and `combo.log` in each combo dir. See
+  `docs/perturb/logging.md`.
+- `--stdout` and `--log-level` flags on every pipeline-running subcommand.
 - YAML configuration file system with `rsi-tpw init` template generation
 - Three-way parameter merge: defaults <- config file <- CLI flags
 - Cumulative hash-tracked sequential output directories (`eps_00/`, `chi_00/`, ...)
@@ -23,6 +30,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `perturb run` merge stage now feeds merged files to downstream processing (return value was previously discarded)
 
 ### Changed
+- `perturb` console output is now silent by default — every record goes to the
+  per-invocation log file.  Pass `--stdout` to also stream to stderr.  Previously
+  `logging.basicConfig` printed everything to stderr unconditionally.
+- `*_binned_NN/` and `*_combo*/` output dirs are now created up-front (before
+  the bin/combo work runs) so per-input log files can be opened inside them.
+  An empty bin/combo step now leaves a dir with just `.params_sha256_*` and the
+  log files, instead of no dir at all.
 - Output directories now use sequential naming with parameter hash deduplication
 - Each output directory includes a `config.yaml` recording the exact parameters used
 - `README.md`, `CLAUDE.md`, and `docs/rsi-tpw/python_api.md` now use `run_pipeline()` / `compute_diss_file()` / `compute_chi_file()` instead of deprecated `get_diss()` / `get_chi()`

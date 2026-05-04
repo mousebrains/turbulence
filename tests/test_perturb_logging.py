@@ -245,6 +245,59 @@ class TestBinningPerInputLogs:
         assert (binned_dir / "A.log").exists()
         assert (binned_dir / "B.log").exists()
 
+    def test_bin_by_depth_groups_profiles_by_source_pfile(self, tmp_path):
+        """Per-profile NetCDFs share one log per source .p file.
+
+        The binning step receives ``<pfile>_prof###.nc`` files; producing
+        one log per profile would mean 20+ logs per .p file, which
+        contradicts the requirement that each .p file produce exactly
+        one log per stage.  The ``_prof###`` suffix is stripped so all
+        profiles from ``X.p`` write into a single ``X.log``.
+        """
+        import numpy as np
+        import xarray as xr
+
+        from odas_tpw.perturb.binning import bin_by_depth
+
+        files = []
+        for n in range(1, 4):  # X_prof001, X_prof002, X_prof003
+            f = tmp_path / f"X_prof{n:03d}.nc"
+            xr.Dataset(
+                {"epsilon": (("depth",), np.linspace(1e-8, 1e-9, 6))},
+                coords={"depth": np.linspace(0, 5, 6)},
+            ).to_netcdf(f)
+            files.append(f)
+        # And one from a different .p file
+        for n in range(1, 3):
+            f = tmp_path / f"Y_prof{n:03d}.nc"
+            xr.Dataset(
+                {"epsilon": (("depth",), np.linspace(1e-8, 1e-9, 6))},
+                coords={"depth": np.linspace(0, 5, 6)},
+            ).to_netcdf(f)
+            files.append(f)
+
+        binned_dir = tmp_path / "profiles_binned_00"
+        binned_dir.mkdir()
+
+        setup_root_logging(tmp_path / "run.log")
+        bin_by_depth(files, bin_width=1.0, log_dir=binned_dir)
+        logging.shutdown()
+
+        # Two source .p files -> exactly two log files, named X.log / Y.log.
+        log_files = sorted(p.name for p in binned_dir.glob("*.log"))
+        assert log_files == ["X.log", "Y.log"]
+
+    def test_source_stem_helper(self):
+        from odas_tpw.perturb.binning import _source_stem
+
+        assert _source_stem("X_prof001.nc") == "X"
+        assert _source_stem("X_prof999.nc") == "X"
+        # Non-matching paths keep the full stem.
+        assert _source_stem("X.nc") == "X"
+        assert _source_stem("X_proflarge.nc") == "X_proflarge"
+        # Multiple-segment stems with a numeric tail other than _prof### preserved.
+        assert _source_stem("Some.Dotted.Name_prof007.nc") == "Some.Dotted.Name"
+
 
 class TestProcessFilePerStageLogs:
     """Each stage block in process_file should drop ``<stem>.log`` into its
@@ -356,6 +409,238 @@ class TestComboStageLog:
         log_file = combo_dir / "combo.log"
         assert log_file.exists()
         assert "assembled X profiles" in log_file.read_text()
+
+
+# ---------------------------------------------------------------------------
+# Cover the defensive ``except`` branches in process_file's stage blocks.
+# ``process_file`` swallows per-stage failures so a bad CTD stream / FP07
+# cal / CT-align / extract_profiles call doesn't take down the whole run;
+# these tests verify that path runs cleanly and the error reaches the
+# per-stage log file.
+# ---------------------------------------------------------------------------
+
+
+class TestProcessFileExceptionBranches:
+    def _common_pf(self):
+        """Mock PFile with the channels needed to reach each stage."""
+        from unittest.mock import MagicMock
+
+        import numpy as np
+
+        mock_pf = MagicMock()
+        mock_pf.channels = {
+            "P": np.linspace(0, 50, 100),
+            "T1": np.zeros(100),
+            "JAC_T": np.zeros(100),
+            "JAC_C": np.zeros(100),
+        }
+        mock_pf.fs_slow = 64.0
+        return mock_pf
+
+    def _config(self, tmp_path, **overrides):
+        cfg = {
+            "files": {"output_root": str(tmp_path)},
+            "profiles": {"P_min": 0.5},
+            "epsilon": {},
+            "fp07": {"calibrate": False},
+            "ct": {"align": False},
+            "ctd": {"enable": False},
+            "chi": {"enable": False},
+        }
+        for k, v in overrides.items():
+            cfg.setdefault(k, {}).update(v) if isinstance(v, dict) else cfg.update({k: v})
+        return cfg
+
+    def test_ctd_failure_logs_to_ctd_dir(self, tmp_path):
+        """``ctd_bin_file`` raising must be caught and logged into
+        ``ctd_NN/<stem>.log``."""
+        from unittest.mock import patch
+
+        from odas_tpw.perturb.pipeline import process_file
+
+        ctd_dir = tmp_path / "ctd_00"
+        ctd_dir.mkdir()
+        prof_dir = tmp_path / "profiles_00"
+        prof_dir.mkdir()
+
+        with (
+            patch("odas_tpw.rsi.p_file.PFile", return_value=self._common_pf()),
+            patch(
+                "odas_tpw.perturb.ctd.ctd_bin_file",
+                side_effect=RuntimeError("ctd boom"),
+            ),
+            # Stop after CTD by sabotaging profile detection.
+            patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=None),
+            patch("odas_tpw.rsi.profile.get_profiles", return_value=[]),
+        ):
+            config = self._config(tmp_path, ctd={"enable": True})
+            output_dirs = {"ctd": ctd_dir, "profiles": prof_dir}
+
+            setup_root_logging(tmp_path / "run.log")
+            process_file(tmp_path / "demo.p", config, gps=None, output_dirs=output_dirs)
+            logging.shutdown()
+
+        log_text = (ctd_dir / "demo.log").read_text()
+        assert "CTD binning" in log_text
+        assert "ctd boom" in log_text
+
+    def test_fp07_failure_logs_to_profiles_dir(self, tmp_path):
+        """``fp07_calibrate`` raising must be caught and logged into
+        ``profiles_NN/<stem>.log``."""
+        from unittest.mock import patch
+
+        from odas_tpw.perturb.pipeline import process_file
+
+        prof_dir = tmp_path / "profiles_00"
+        prof_dir.mkdir()
+
+        with (
+            patch("odas_tpw.rsi.p_file.PFile", return_value=self._common_pf()),
+            patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=[0.5] * 100),
+            patch(
+                "odas_tpw.rsi.profile.get_profiles",
+                return_value=[{"start": 0, "end": 50}],
+            ),
+            patch(
+                "odas_tpw.perturb.fp07_cal.fp07_calibrate",
+                side_effect=RuntimeError("fp07 boom"),
+            ),
+            patch(
+                "odas_tpw.rsi.profile.extract_profiles", return_value=[]
+            ),  # short-circuit downstream
+        ):
+            config = self._config(tmp_path, fp07={"calibrate": True})
+            output_dirs = {"profiles": prof_dir}
+
+            setup_root_logging(tmp_path / "run.log")
+            process_file(tmp_path / "demo.p", config, gps=None, output_dirs=output_dirs)
+            logging.shutdown()
+
+        log_text = (prof_dir / "demo.log").read_text()
+        assert "FP07 cal failed" in log_text
+        assert "fp07 boom" in log_text
+
+    def test_ct_align_failure_logs_to_profiles_dir(self, tmp_path):
+        """``ct_align`` raising is logged into ``profiles_NN/<stem>.log``."""
+        from unittest.mock import patch
+
+        from odas_tpw.perturb.pipeline import process_file
+
+        prof_dir = tmp_path / "profiles_00"
+        prof_dir.mkdir()
+
+        with (
+            patch("odas_tpw.rsi.p_file.PFile", return_value=self._common_pf()),
+            patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=[0.5] * 100),
+            patch(
+                "odas_tpw.rsi.profile.get_profiles",
+                return_value=[{"start": 0, "end": 50}],
+            ),
+            patch(
+                "odas_tpw.processing.ct_align.ct_align",
+                side_effect=RuntimeError("ct boom"),
+            ),
+            patch("odas_tpw.rsi.profile.extract_profiles", return_value=[]),
+        ):
+            config = self._config(tmp_path, ct={"align": True})
+            output_dirs = {"profiles": prof_dir}
+
+            setup_root_logging(tmp_path / "run.log")
+            process_file(tmp_path / "demo.p", config, gps=None, output_dirs=output_dirs)
+            logging.shutdown()
+
+        log_text = (prof_dir / "demo.log").read_text()
+        assert "CT align failed" in log_text
+        assert "ct boom" in log_text
+
+    def test_extract_profiles_failure_logs_to_profiles_dir(self, tmp_path):
+        """``extract_profiles`` raising is logged into ``profiles_NN/<stem>.log``."""
+        from unittest.mock import patch
+
+        from odas_tpw.perturb.pipeline import process_file
+
+        prof_dir = tmp_path / "profiles_00"
+        prof_dir.mkdir()
+
+        with (
+            patch("odas_tpw.rsi.p_file.PFile", return_value=self._common_pf()),
+            patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=[0.5] * 100),
+            patch(
+                "odas_tpw.rsi.profile.get_profiles",
+                return_value=[{"start": 0, "end": 50}],
+            ),
+            patch(
+                "odas_tpw.rsi.profile.extract_profiles",
+                side_effect=RuntimeError("extract boom"),
+            ),
+        ):
+            config = self._config(tmp_path)
+            output_dirs = {"profiles": prof_dir}
+
+            setup_root_logging(tmp_path / "run.log")
+            result = process_file(
+                tmp_path / "demo.p", config, gps=None, output_dirs=output_dirs
+            )
+            logging.shutdown()
+
+        log_text = (prof_dir / "demo.log").read_text()
+        assert "extracting profiles" in log_text
+        assert "extract boom" in log_text
+        # Also: process_file returned early so no diss/chi were attempted.
+        assert result["profiles"] == []
+        assert result["diss"] == []
+
+    def test_chi_inner_exception_logs_to_chi_dir(self, tmp_path):
+        """A per-profile chi failure is caught inside the chi stage_log
+        block and logged into ``chi_NN/<stem>.log``."""
+        from unittest.mock import patch
+
+        import numpy as np
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import process_file
+
+        prof_dir = tmp_path / "profiles_00"
+        prof_dir.mkdir()
+        diss_dir = tmp_path / "diss_00"
+        diss_dir.mkdir()
+        chi_dir = tmp_path / "chi_00"
+        chi_dir.mkdir()
+
+        prof_nc = prof_dir / "demo.nc"
+        prof_nc.touch()
+        diss_nc = diss_dir / "demo.nc"
+        xr.Dataset({"epsilon": (("time",), [1e-8])}).to_netcdf(diss_nc)
+
+        with (
+            patch("odas_tpw.rsi.p_file.PFile", return_value=self._common_pf()),
+            patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=[0.5] * 100),
+            patch(
+                "odas_tpw.rsi.profile.get_profiles",
+                return_value=[{"start": 0, "end": 50}],
+            ),
+            patch("odas_tpw.rsi.profile.extract_profiles", return_value=[prof_nc]),
+            patch(
+                "odas_tpw.rsi.dissipation._compute_epsilon",
+                return_value=[xr.Dataset({"epsilon": (("time",), [1e-8])})],
+            ),
+            patch(
+                "odas_tpw.rsi.chi_io._compute_chi",
+                side_effect=RuntimeError("chi boom"),
+            ),
+        ):
+            mock_pf = self._common_pf()
+            mock_pf.channels["P"] = np.linspace(0, 50, 100)
+            config = self._config(tmp_path, chi={"enable": True})
+            output_dirs = {"profiles": prof_dir, "diss": diss_dir, "chi": chi_dir}
+
+            setup_root_logging(tmp_path / "run.log")
+            process_file(tmp_path / "demo.p", config, gps=None, output_dirs=output_dirs)
+            logging.shutdown()
+
+        log_text = (chi_dir / "demo.log").read_text()
+        assert "chi for" in log_text
+        assert "chi boom" in log_text
 
 
 # ---------------------------------------------------------------------------
