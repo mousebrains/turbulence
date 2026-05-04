@@ -280,6 +280,35 @@ class TestCmdCombo:
             sigs = list((tmp_path / combo_name).glob(".params_sha256_*"))
             assert len(sigs) == 1, f"{combo_name} should have exactly one signature file"
 
+    def test_combo_follows_binning_method_time(self, tmp_path):
+        """When ``binning.method=time`` is set in the config, ``perturb
+        combo`` must glue the diss/chi/profile combos lengthwise (CF
+        ``featureType=trajectory``) — the layout for moored/AUV runs.
+
+        Sanity-check against the depth default which produces ``profile``."""
+        import numpy as np
+        import xarray as xr
+        import yaml
+
+        prof_dir = tmp_path / "profiles_binned_00"
+        prof_dir.mkdir()
+        for i, t0 in enumerate([0.0, 10.0]):
+            ds = xr.Dataset(
+                {"T": (["time"], np.arange(5.0))},
+                coords={"time": t0 + np.arange(5.0)},
+            )
+            ds.to_netcdf(prof_dir / f"f{i}.nc")
+
+        cfg = tmp_path / "cfg.yaml"
+        cfg.write_text(yaml.safe_dump({"binning": {"method": "time"}}))
+
+        main(["combo", "-c", str(cfg), "-o", str(tmp_path)])
+
+        combo = xr.open_dataset(tmp_path / "combo" / "combo.nc")
+        assert combo.attrs["featureType"] == "trajectory"
+        assert combo.sizes["time"] == 10
+        combo.close()
+
 
 class TestCmdProfiles:
     def test_dispatches(self):

@@ -775,6 +775,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         output_dirs.get("ctd"),
         config.get("netcdf", {}),
         config=config,
+        bin_method=bin_method,
     )
 
     logger.info("Pipeline complete.")
@@ -788,6 +789,7 @@ def _run_combo(
     ctd_dir: Path | None,
     netcdf_attrs: dict,
     config: dict | None = None,
+    bin_method: str = "depth",
 ) -> None:
     """Assemble combo NetCDFs from each populated binned directory.
 
@@ -796,6 +798,20 @@ def _run_combo(
     or empty input dirs are silently skipped — this is a best-effort
     publish step run after binning completes.
 
+    *bin_method* selects the gluing strategy for profiles/diss/chi combos:
+
+    * ``"depth"`` — vertical profilers (cast VMP, glider-mounted MR).
+      Each per-file binned NetCDF has dims ``(bin, profile)``; the combo
+      stacks them widthwise so the result is a profile-set indexed by
+      time.  Produces CF ``featureType=profile``.
+    * ``"time"`` — non-profiling instruments (mooring-mounted MR, AUV).
+      Each per-file binned NetCDF has a ``time`` dimension; the combo
+      concatenates them lengthwise and sorts by time, like the CTD/scalar
+      combo.  Produces CF ``featureType=trajectory``.
+
+    The ctd_combo path always uses ``time`` regardless — scalar sensor
+    streams are inherently per-time, never per-depth.
+
     When *config* is provided, each combo dir also receives a
     ``.params_sha256_<hash>`` signature capturing the full upstream chain
     so the hash matches the corresponding binned/source dir.
@@ -803,7 +819,7 @@ def _run_combo(
     from odas_tpw.perturb.combo import make_combo, make_ctd_combo
     from odas_tpw.perturb.netcdf_schema import CHI_SCHEMA, COMBO_SCHEMA, CTD_SCHEMA
 
-    logger.info("Assembling combo files...")
+    logger.info("Assembling combo files (method=%s)...", bin_method)
 
     binning_p = (
         merge_config("binning", config.get("binning") if config else None)
@@ -812,12 +828,12 @@ def _run_combo(
     )
 
     targets = [
-        (prof_binned_dir, output_root / "combo", COMBO_SCHEMA, "depth", make_combo, "combo"),
+        (prof_binned_dir, output_root / "combo", COMBO_SCHEMA, bin_method, make_combo, "combo"),
         (
             diss_binned_dir,
             output_root / "diss_combo",
             COMBO_SCHEMA,
-            "depth",
+            bin_method,
             make_combo,
             "diss_combo",
         ),
@@ -825,7 +841,7 @@ def _run_combo(
             chi_binned_dir,
             output_root / "chi_combo",
             CHI_SCHEMA,
-            "depth",
+            bin_method,
             make_combo,
             "chi_combo",
         ),

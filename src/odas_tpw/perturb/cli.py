@@ -255,13 +255,19 @@ def _cmd_combo(args: argparse.Namespace) -> None:
         config.setdefault("files", {})["output_root"] = args.output
 
     from odas_tpw.perturb.combo import make_combo, make_ctd_combo
-    from odas_tpw.perturb.config import merge_config, write_signature
+    from odas_tpw.perturb.config import DEFAULTS, merge_config, write_signature
     from odas_tpw.perturb.netcdf_schema import CHI_SCHEMA, COMBO_SCHEMA, CTD_SCHEMA
     from odas_tpw.perturb.pipeline import _upstream_for
 
     files_cfg = config.get("files", {})
     output_root = Path(files_cfg.get("output_root", "results/"))
     netcdf_attrs = config.get("netcdf", {})
+
+    # Combo glue method follows the binning method: ``depth`` for vertical
+    # profilers (widthwise stack of profiles), ``time`` for moored / AUV
+    # deployments (lengthwise concat sorted by time).  ctd_combo always
+    # uses time regardless — see _run_combo docstring.
+    bin_method = config.get("binning", {}).get("method", DEFAULTS["binning"]["method"])
 
     import glob as globmod
 
@@ -270,7 +276,7 @@ def _cmd_combo(args: argparse.Namespace) -> None:
     # Combo from profile binned
     for d in sorted(globmod.glob(str(output_root / "profiles_binned_[0-9][0-9]"))):
         out_dir = output_root / "combo"
-        out = make_combo(d, out_dir, COMBO_SCHEMA, netcdf_attrs=netcdf_attrs)
+        out = make_combo(d, out_dir, COMBO_SCHEMA, netcdf_attrs=netcdf_attrs, method=bin_method)
         if out:
             write_signature(out_dir, "binning", binning_p, upstream=_upstream_for("combo", config))
             print(f"  Wrote {out}")
@@ -278,7 +284,7 @@ def _cmd_combo(args: argparse.Namespace) -> None:
     # Combo from diss binned
     for d in sorted(globmod.glob(str(output_root / "diss_binned_[0-9][0-9]"))):
         out_dir = output_root / "diss_combo"
-        out = make_combo(d, out_dir, COMBO_SCHEMA, netcdf_attrs=netcdf_attrs)
+        out = make_combo(d, out_dir, COMBO_SCHEMA, netcdf_attrs=netcdf_attrs, method=bin_method)
         if out:
             write_signature(
                 out_dir, "binning", binning_p, upstream=_upstream_for("diss_combo", config)
@@ -288,7 +294,7 @@ def _cmd_combo(args: argparse.Namespace) -> None:
     # Combo from chi binned
     for d in sorted(globmod.glob(str(output_root / "chi_binned_[0-9][0-9]"))):
         out_dir = output_root / "chi_combo"
-        out = make_combo(d, out_dir, CHI_SCHEMA, netcdf_attrs=netcdf_attrs)
+        out = make_combo(d, out_dir, CHI_SCHEMA, netcdf_attrs=netcdf_attrs, method=bin_method)
         if out:
             write_signature(
                 out_dir, "binning", binning_p, upstream=_upstream_for("chi_combo", config)
