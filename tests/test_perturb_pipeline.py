@@ -956,3 +956,22 @@ class TestRunCombo:
         hash_a = next((a / "combo").glob(".params_sha256_*")).name
         hash_b = next((b / "combo").glob(".params_sha256_*")).name
         assert hash_a != hash_b
+
+    def test_ctd_combo_writes_signature_when_config_passed(self, tmp_path):
+        """The ctd_combo branch of _run_combo writes a signature when
+        *config* is supplied — covers the second write_signature call."""
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _run_combo
+
+        ctd_dir = tmp_path / "ctd_00"
+        ctd_dir.mkdir()
+        ds = xr.Dataset(
+            {"T": (["time"], np.arange(5.0))},
+            coords={"time": np.arange(5.0)},
+        )
+        ds.to_netcdf(ctd_dir / "file.nc")
+
+        _run_combo(tmp_path, None, None, None, ctd_dir, {}, config={"ctd": {"bin_width": 0.5}})
+        sigs = list((tmp_path / "ctd_combo").glob(".params_sha256_*"))
+        assert len(sigs) == 1, "ctd_combo dir should carry one signature file"

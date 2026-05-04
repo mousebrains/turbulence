@@ -168,6 +168,77 @@ class TestCmdBin:
         captured = capsys.readouterr()
         assert "Binning complete." in captured.out
 
+    def test_bin_writes_signatures_with_full_upstream_chain(self, tmp_path):
+        """`perturb bin` with populated upstream dirs writes binned dirs whose
+        ``.params_sha256_*`` includes the full upstream chain — covers the
+        three ``_upstream_for(...)`` call sites in ``_cmd_bin`` (profiles,
+        diss, chi)."""
+        import json
+
+        import numpy as np
+        import xarray as xr
+
+        # Build a minimal profile NetCDF the binner will accept.
+        prof = tmp_path / "profiles_00"
+        prof.mkdir()
+        depth = np.linspace(1.0, 5.0, 5)
+        prof_ds = xr.Dataset(
+            {
+                "depth": (["time"], depth),
+                "T1": (["time"], np.ones(5)),
+                "lat": ((), 10.0),
+                "lon": ((), 100.0),
+                "stime": ((), 0.0),
+                "etime": ((), 5.0),
+            },
+        )
+        prof_ds.to_netcdf(prof / "p001.nc")
+
+        # Diss profile: bin_diss expects 1-D epsilonMean(depth) per profile NC.
+        diss = tmp_path / "diss_00"
+        diss.mkdir()
+        diss_ds = xr.Dataset(
+            {
+                "depth": (["time"], depth),
+                "epsilonMean": (["time"], np.full(5, 1e-9)),
+                "lat": ((), 10.0),
+                "lon": ((), 100.0),
+                "stime": ((), 0.0),
+                "etime": ((), 5.0),
+            },
+        )
+        diss_ds.to_netcdf(diss / "p001.nc")
+
+        # Chi profile: bin_chi expects 1-D chi/kB per depth.
+        chi = tmp_path / "chi_00"
+        chi.mkdir()
+        chi_ds = xr.Dataset(
+            {
+                "depth": (["time"], depth),
+                "chi_1": (["time"], np.full(5, 1e-9)),
+                "kB_1": (["time"], np.full(5, 100.0)),
+                "lat": ((), 10.0),
+                "lon": ((), 100.0),
+                "stime": ((), 0.0),
+                "etime": ((), 5.0),
+            },
+        )
+        chi_ds.to_netcdf(chi / "p001.nc")
+
+        main(["bin", "-o", str(tmp_path)])
+
+        for sub, must_contain in (
+            ("profiles_binned_00", {"binning", "profiles"}),
+            ("diss_binned_00", {"binning", "epsilon", "profiles"}),
+            ("chi_binned_00", {"binning", "chi", "epsilon", "profiles"}),
+        ):
+            sigs = list((tmp_path / sub).glob(".params_sha256_*"))
+            assert len(sigs) == 1, f"{sub} should have a signature"
+            body = json.loads(sigs[0].read_text())
+            assert must_contain.issubset(body.keys()), (
+                f"{sub} missing sections: {must_contain - body.keys()}"
+            )
+
 
 class TestCmdCombo:
     def test_empty_dirs(self, tmp_path, capsys):
@@ -175,6 +246,39 @@ class TestCmdCombo:
         main(["combo", "-o", str(tmp_path)])
         captured = capsys.readouterr()
         assert "Combo assembly complete." in captured.out
+
+    def test_combo_writes_signature_for_each_combo_dir(self, tmp_path):
+        """`perturb combo` writes a `.params_sha256_*` file in each combo dir
+        it produces — covers all four write_signature branches in
+        ``_cmd_combo`` (combo / diss_combo / chi_combo / ctd_combo)."""
+        import numpy as np
+        import xarray as xr
+
+        # Create one populated upstream binned dir for each of the four
+        # combo flavours; the schema is loose enough that combo will accept
+        # any 2-D var with bin/profile dims.
+        for sub in ("profiles_binned_00", "diss_binned_00", "chi_binned_00"):
+            d = tmp_path / sub
+            d.mkdir()
+            ds = xr.Dataset(
+                {"depth": (["bin", "profile"], np.ones((3, 1)))},
+                coords={"bin": np.arange(3.0), "profile": np.arange(1)},
+            )
+            ds.to_netcdf(d / "binned.nc")
+
+        ctd = tmp_path / "ctd_00"
+        ctd.mkdir()
+        ds = xr.Dataset(
+            {"JAC_T": (["time"], np.arange(5.0))},
+            coords={"time": np.arange(5.0)},
+        )
+        ds.to_netcdf(ctd / "file.nc")
+
+        main(["combo", "-o", str(tmp_path)])
+
+        for combo_name in ("combo", "diss_combo", "chi_combo", "ctd_combo"):
+            sigs = list((tmp_path / combo_name).glob(".params_sha256_*"))
+            assert len(sigs) == 1, f"{combo_name} should have exactly one signature file"
 
 
 class TestCmdProfiles:
