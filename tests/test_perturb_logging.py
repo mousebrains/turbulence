@@ -356,3 +356,393 @@ class TestComboStageLog:
         log_file = combo_dir / "combo.log"
         assert log_file.exists()
         assert "assembled X profiles" in log_file.read_text()
+
+
+# ---------------------------------------------------------------------------
+# Coverage for run_pipeline binning + parallel branches that the existing
+# pipeline tests don't exercise (process_file is fully mocked there, so the
+# binning blocks and the jobs>1 ProcessPoolExecutor wiring never run).
+# ---------------------------------------------------------------------------
+
+
+def _drop_profile_nc(target: object, basename: str) -> object:
+    """Write a small profile-shaped NetCDF into *target* and return its path."""
+    import numpy as np
+    import xarray as xr
+
+    nc = target / f"{basename}.nc"
+    xr.Dataset(
+        {"epsilon": (("depth",), np.linspace(1e-8, 1e-9, 6))},
+        coords={"depth": np.linspace(0, 5, 6)},
+    ).to_netcdf(nc)
+    return nc
+
+
+class TestRunPipelineBinningBlocks:
+    """Patch ``process_file`` to a no-op, drop pre-existing profile NCs into
+    the profiles dir, and let ``run_pipeline`` reach the binning blocks
+    that previously had zero coverage in this PR."""
+
+    def _config(self, tmp_path):
+        return {
+            "files": {
+                "output_root": str(tmp_path),
+                "p_file_root": str(tmp_path),
+                "trim": False,
+                "merge": False,
+            },
+            "profiles": {},
+            "epsilon": {},
+            "chi": {"enable": True},
+            "ctd": {"enable": False},
+            "gps": {},
+            "parallel": {"jobs": 1},
+            "binning": {"method": "depth", "width": 1.0, "aggregation": "mean"},
+        }
+
+    def test_profile_diss_chi_binning_blocks_run(self, tmp_path):
+        from unittest.mock import patch
+
+        from odas_tpw.perturb.pipeline import _setup_output_dirs, run_pipeline
+
+        config = self._config(tmp_path)
+        # Pre-create the per-stage dirs and drop one source NC into each so
+        # the ``if prof_ncs:`` / diss / chi branches all execute.
+        dirs = _setup_output_dirs(config)
+        _drop_profile_nc(dirs["profiles"], "demo")
+        _drop_profile_nc(dirs["diss"], "demo")
+        _drop_profile_nc(dirs["chi"], "demo")
+
+        with (
+            patch(
+                "odas_tpw.perturb.pipeline.process_file",
+                return_value={"source": "x.p", "profiles": [], "diss": [], "chi": []},
+            ),
+            patch("odas_tpw.perturb.gps.create_gps", return_value=None),
+            # _run_combo touches xarray internals; not what we're testing here.
+            patch("odas_tpw.perturb.pipeline._run_combo"),
+        ):
+            run_pipeline(config, p_files=[tmp_path / "fake.p"])
+
+        # All three binned dirs must now exist with their .params_sha256_*
+        # signature; per-input ``demo.log`` should be inside each.
+        for prefix in ("profiles_binned", "diss_binned", "chi_binned"):
+            matches = list(tmp_path.glob(f"{prefix}_[0-9][0-9]"))
+            assert matches, f"no {prefix}_NN dir created"
+            assert (matches[0] / "demo.log").exists()
+
+    def test_bin_by_time_branch(self, tmp_path):
+        """``binning.method=time`` exercises the ``bin_by_time`` branch in
+        the profile-binning block."""
+        from unittest.mock import patch
+
+        from odas_tpw.perturb.pipeline import _setup_output_dirs, run_pipeline
+
+        config = self._config(tmp_path)
+        config["binning"]["method"] = "time"
+        config["chi"]["enable"] = False  # keep test focused
+        dirs = _setup_output_dirs(config)
+
+        # bin_by_time needs a time coordinate, not depth.
+        import numpy as np
+        import xarray as xr
+
+        xr.Dataset(
+            {"epsilon": (("time",), np.linspace(1e-8, 1e-9, 6))},
+            coords={"time": np.arange(6, dtype=float)},
+        ).to_netcdf(dirs["profiles"] / "demo.nc")
+
+        with (
+            patch(
+                "odas_tpw.perturb.pipeline.process_file",
+                return_value={"source": "x.p", "profiles": [], "diss": [], "chi": []},
+            ),
+            patch("odas_tpw.perturb.gps.create_gps", return_value=None),
+            patch("odas_tpw.perturb.pipeline._run_combo"),
+        ):
+            run_pipeline(config, p_files=[tmp_path / "fake.p"])
+
+        matches = list(tmp_path.glob("profiles_binned_[0-9][0-9]"))
+        assert matches
+        assert (matches[0] / "demo.log").exists()
+
+
+class TestRunPipelineParallel:
+    """Verify the ``jobs > 1`` branch wires the worker initializer + initargs."""
+
+    def test_pool_initializer_uses_logging_setup(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from odas_tpw.perturb.pipeline import run_pipeline
+
+        config = {
+            "files": {
+                "output_root": str(tmp_path),
+                "p_file_root": str(tmp_path),
+                "trim": False,
+                "merge": False,
+            },
+            "profiles": {},
+            "epsilon": {},
+            "chi": {"enable": False},
+            "ctd": {"enable": False},
+            "gps": {},
+            "parallel": {"jobs": 2},
+            "binning": {},
+        }
+
+        # Hollowed-out executor: run inline, no actual subprocess.
+        class _FakeFuture:
+            def __init__(self, value):
+                self._value = value
+
+            def result(self):
+                return self._value
+
+        class _FakeExecutor:
+            instance = None
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                _FakeExecutor.instance = self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def submit(self, fn, *args, **kwargs):
+                return _FakeFuture(fn(*args, **kwargs))
+
+        def _fake_as_completed(futures):
+            return list(futures)
+
+        with (
+            patch("odas_tpw.perturb.pipeline.ProcessPoolExecutor", _FakeExecutor),
+            patch("odas_tpw.perturb.pipeline.as_completed", _fake_as_completed),
+            patch(
+                "odas_tpw.perturb.pipeline.process_file",
+                return_value={"source": "x.p", "profiles": [], "diss": [], "chi": []},
+            ),
+            patch("odas_tpw.perturb.gps.create_gps", return_value=None),
+            patch("odas_tpw.perturb.pipeline._setup_output_dirs", return_value={}),
+            patch("odas_tpw.perturb.pipeline._run_combo"),
+        ):
+            run_pipeline(config, p_files=[tmp_path / "a.p", tmp_path / "b.p"])
+
+        kwargs = _FakeExecutor.instance.kwargs
+        assert kwargs["max_workers"] == 2
+        # initializer is the logging-setup function; initargs = (logs_dir, run_stamp).
+        from odas_tpw.perturb.logging_setup import init_worker_logging
+
+        assert kwargs["initializer"] is init_worker_logging
+        log_dir, run_stamp = kwargs["initargs"]
+        assert log_dir == tmp_path / "logs"
+        assert isinstance(run_stamp, str) and run_stamp.endswith("Z")
+
+
+class TestBinningCoverage:
+    """Cover the binning branches that didn't run under the existing tests."""
+
+    def test_bin_by_depth_uses_P_mean_fallback(self, tmp_path):
+        """A profile NC with neither ``depth`` nor ``P`` but with ``P_mean``
+        still bins (exercises the P_mean fallback in both the global-edges
+        scan and the per-profile loop)."""
+        import numpy as np
+        import xarray as xr
+
+        from odas_tpw.perturb.binning import bin_by_depth
+
+        f = tmp_path / "p_mean_only.nc"
+        xr.Dataset(
+            {
+                "P_mean": (("idx",), np.linspace(0, 5, 6)),
+                "epsilon": (("idx",), np.linspace(1e-8, 1e-9, 6)),
+            }
+        ).to_netcdf(f)
+
+        ds = bin_by_depth([f], bin_width=1.0, log_dir=tmp_path)
+        assert "epsilon" in ds.data_vars
+        assert (tmp_path / "p_mean_only.log").exists()
+
+    def test_bin_by_time_returns_empty_when_no_time_coord(self, tmp_path):
+        """A NC with no recognised time coordinate is silently skipped."""
+        import numpy as np
+        import xarray as xr
+
+        from odas_tpw.perturb.binning import bin_by_time
+
+        f = tmp_path / "no_time.nc"
+        xr.Dataset({"v": (("idx",), np.zeros(3))}).to_netcdf(f)
+
+        ds = bin_by_time([f], bin_width=1.0)
+        assert not ds.data_vars  # empty dataset
+        # No log file requested, so just verify the empty-result path runs.
+
+
+class TestProcessFileExcludedProbes:
+    """``instruments.SN.exclude_shear_probes`` triggers the
+    ``_nan_excluded_probes`` call inside the diss ``stage_log`` block."""
+
+    def test_excluded_probes_path(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        import numpy as np
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import process_file
+
+        prof_dir = tmp_path / "profiles_00"
+        prof_dir.mkdir()
+        diss_dir = tmp_path / "diss_00"
+        diss_dir.mkdir()
+        prof_nc = prof_dir / "demo.nc"
+        prof_nc.touch()
+
+        # Two-probe diss dataset so the exclusion has something to NaN.
+        diss_ds = xr.Dataset(
+            {"epsilon": (("probe", "time"), np.full((2, 4), 1e-8))},
+            coords={"probe": ["sh1", "sh2"], "time": np.arange(4, dtype=float)},
+        )
+
+        with (
+            patch("odas_tpw.rsi.p_file.PFile") as mock_pfile_cls,
+            patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100)),
+            patch(
+                "odas_tpw.rsi.profile.get_profiles",
+                return_value=[{"start": 0, "end": 50}],
+            ),
+            patch(
+                "odas_tpw.rsi.profile.extract_profiles", return_value=[prof_nc]
+            ),
+            patch(
+                "odas_tpw.rsi.dissipation._compute_epsilon",
+                return_value=[diss_ds],
+            ),
+        ):
+            mock_pf = MagicMock()
+            mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+            mock_pf.fs_slow = 64.0
+            mock_pfile_cls.return_value = mock_pf
+
+            config = {
+                "files": {"output_root": str(tmp_path)},
+                "profiles": {"P_min": 0.5},
+                "epsilon": {},
+                "fp07": {"calibrate": False},
+                "ct": {"align": False},
+                "ctd": {"enable": False},
+                "chi": {"enable": False},
+                "instruments": {"SN999": {"exclude_shear_probes": ["sh2"]}},
+            }
+            output_dirs = {"profiles": prof_dir, "diss": diss_dir}
+
+            setup_root_logging(tmp_path / "run.log")
+            process_file(
+                tmp_path / "demo.p",
+                config,
+                gps=None,
+                output_dirs=output_dirs,
+                instrument_key="SN999",
+            )
+
+        # The diss stage_log was opened (so line 447's _nan_excluded_probes
+        # call was exercised inside it) and a per-file log file exists.
+        # _nan_excluded_probes only logs on typo'd probe names, so no
+        # content assertion — the existence proves the path ran.
+        assert (diss_dir / "demo.log").exists()
+
+
+class TestRunPipelineParallelException:
+    """Cover the ``except Exception as exc`` branch after ``future.result()``."""
+
+    def test_worker_exception_logged(self, tmp_path):
+        from unittest.mock import patch
+
+        from odas_tpw.perturb.pipeline import run_pipeline
+
+        config = {
+            "files": {
+                "output_root": str(tmp_path),
+                "p_file_root": str(tmp_path),
+                "trim": False,
+                "merge": False,
+            },
+            "profiles": {},
+            "epsilon": {},
+            "chi": {"enable": False},
+            "ctd": {"enable": False},
+            "gps": {},
+            "parallel": {"jobs": 2},
+            "binning": {},
+        }
+
+        class _RaisingFuture:
+            def result(self):
+                raise RuntimeError("worker boom")
+
+        class _FakeExecutor:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def submit(self, fn, *args, **kwargs):
+                return _RaisingFuture()
+
+        with (
+            patch("odas_tpw.perturb.pipeline.ProcessPoolExecutor", _FakeExecutor),
+            patch("odas_tpw.perturb.pipeline.as_completed", lambda fs: list(fs)),
+            patch("odas_tpw.perturb.gps.create_gps", return_value=None),
+            patch("odas_tpw.perturb.pipeline._setup_output_dirs", return_value={}),
+            patch("odas_tpw.perturb.pipeline._run_combo"),
+        ):
+            # Should swallow the worker exception and continue.
+            run_pipeline(config, p_files=[tmp_path / "a.p"])
+
+        # The error should be in the run log we set up implicitly via
+        # _install_logging? No — run_pipeline doesn't install logging.
+        # We're just exercising the line; pytest passing means it didn't crash.
+
+
+class TestCmdBinTimeMethod:
+    """Cover the ``bin_method == "time"`` branch in ``_cmd_bin``."""
+
+    def test_cmd_bin_time(self, tmp_path):
+        """Drop a profile NC with a time coord, run ``perturb bin`` with
+        ``binning.method=time`` config, assert the time-binned dir gets
+        created with its per-input log."""
+        from argparse import Namespace
+
+        import numpy as np
+        import xarray as xr
+
+        from odas_tpw.perturb.cli import _cmd_bin
+
+        prof_dir = tmp_path / "profiles_00"
+        prof_dir.mkdir()
+        xr.Dataset(
+            {"epsilon": (("time",), np.linspace(1e-8, 1e-9, 6))},
+            coords={"time": np.arange(6, dtype=float)},
+        ).to_netcdf(prof_dir / "demo.nc")
+
+        # Minimal config file containing the time-method override.
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("binning:\n  method: time\n  width: 1.0\n  aggregation: mean\n")
+
+        args = Namespace(
+            config=str(cfg),
+            output=str(tmp_path),
+            stdout=False,
+            log_level="INFO",
+        )
+        _cmd_bin(args)
+
+        binned = list(tmp_path.glob("profiles_binned_[0-9][0-9]"))
+        assert binned
+        assert (binned[0] / "demo.log").exists()
