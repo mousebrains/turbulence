@@ -167,6 +167,7 @@ def _cmd_bin(args: argparse.Namespace) -> None:
 
     from odas_tpw.perturb.binning import bin_by_depth, bin_by_time, bin_chi, bin_diss
     from odas_tpw.perturb.config import DEFAULTS, merge_config, resolve_output_dir
+    from odas_tpw.perturb.pipeline import _upstream_for
 
     files_cfg = config.get("files", {})
     output_root = Path(files_cfg.get("output_root", "results/"))
@@ -187,13 +188,12 @@ def _cmd_bin(args: argparse.Namespace) -> None:
         if prof_ncs:
             print(f"Binning profiles from {prof_dir}...")
             binning_params = merge_config("binning", binning_cfg)
-            profiles_params = merge_config("profiles", config.get("profiles"))
             prof_binned_dir = resolve_output_dir(
                 output_root,
                 "profiles_binned",
                 "binning",
                 binning_params,
-                upstream=[("profiles", profiles_params)],
+                upstream=_upstream_for("profiles_binned", config),
             )
             if bin_method == "depth":
                 ds = bin_by_depth(prof_ncs, bin_width, aggregation, diagnostics)
@@ -212,13 +212,12 @@ def _cmd_bin(args: argparse.Namespace) -> None:
             diss_agg = binning_cfg.get("diss_aggregation") or aggregation
             ds = bin_diss(diss_ncs, diss_width, diss_agg, bin_method, diagnostics)
             if ds.data_vars:
-                eps_params = merge_config("epsilon", config.get("epsilon"))
                 diss_binned_dir = resolve_output_dir(
                     output_root,
                     "diss_binned",
                     "binning",
                     merge_config("binning", binning_cfg),
-                    upstream=[("epsilon", eps_params)],
+                    upstream=_upstream_for("diss_binned", config),
                 )
                 ds.to_netcdf(diss_binned_dir / "binned.nc")
 
@@ -236,13 +235,12 @@ def _cmd_bin(args: argparse.Namespace) -> None:
             )
             ds = bin_chi(chi_ncs, chi_width, chi_agg, bin_method, diagnostics)
             if ds.data_vars:
-                chi_params = merge_config("chi", config.get("chi"))
                 chi_binned_dir = resolve_output_dir(
                     output_root,
                     "chi_binned",
                     "binning",
                     merge_config("binning", binning_cfg),
-                    upstream=[("chi", chi_params)],
+                    upstream=_upstream_for("chi_binned", config),
                 )
                 ds.to_netcdf(chi_binned_dir / "binned.nc")
 
@@ -257,7 +255,9 @@ def _cmd_combo(args: argparse.Namespace) -> None:
         config.setdefault("files", {})["output_root"] = args.output
 
     from odas_tpw.perturb.combo import make_combo, make_ctd_combo
+    from odas_tpw.perturb.config import merge_config, write_signature
     from odas_tpw.perturb.netcdf_schema import CHI_SCHEMA, COMBO_SCHEMA, CTD_SCHEMA
+    from odas_tpw.perturb.pipeline import _upstream_for
 
     files_cfg = config.get("files", {})
     output_root = Path(files_cfg.get("output_root", "results/"))
@@ -265,11 +265,14 @@ def _cmd_combo(args: argparse.Namespace) -> None:
 
     import glob as globmod
 
+    binning_p = merge_config("binning", config.get("binning"))
+
     # Combo from profile binned
     for d in sorted(globmod.glob(str(output_root / "profiles_binned_[0-9][0-9]"))):
         out_dir = output_root / "combo"
         out = make_combo(d, out_dir, COMBO_SCHEMA, netcdf_attrs=netcdf_attrs)
         if out:
+            write_signature(out_dir, "binning", binning_p, upstream=_upstream_for("combo", config))
             print(f"  Wrote {out}")
 
     # Combo from diss binned
@@ -277,6 +280,9 @@ def _cmd_combo(args: argparse.Namespace) -> None:
         out_dir = output_root / "diss_combo"
         out = make_combo(d, out_dir, COMBO_SCHEMA, netcdf_attrs=netcdf_attrs)
         if out:
+            write_signature(
+                out_dir, "binning", binning_p, upstream=_upstream_for("diss_combo", config)
+            )
             print(f"  Wrote {out}")
 
     # Combo from chi binned
@@ -284,6 +290,9 @@ def _cmd_combo(args: argparse.Namespace) -> None:
         out_dir = output_root / "chi_combo"
         out = make_combo(d, out_dir, CHI_SCHEMA, netcdf_attrs=netcdf_attrs)
         if out:
+            write_signature(
+                out_dir, "binning", binning_p, upstream=_upstream_for("chi_combo", config)
+            )
             print(f"  Wrote {out}")
 
     # CTD combo
@@ -291,6 +300,12 @@ def _cmd_combo(args: argparse.Namespace) -> None:
         out_dir = output_root / "ctd_combo"
         out = make_ctd_combo(d, out_dir, CTD_SCHEMA, netcdf_attrs=netcdf_attrs)
         if out:
+            write_signature(
+                out_dir,
+                "ctd",
+                merge_config("ctd", config.get("ctd")),
+                upstream=_upstream_for("ctd_combo", config),
+            )
             print(f"  Wrote {out}")
 
     print("Combo assembly complete.")

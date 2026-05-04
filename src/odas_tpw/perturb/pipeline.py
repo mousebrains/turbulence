@@ -10,9 +10,53 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from odas_tpw.perturb.config import merge_config, resolve_output_dir
+from odas_tpw.perturb.config import merge_config, resolve_output_dir, write_signature
 
 logger = logging.getLogger(__name__)
+
+
+def _upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
+    """Return the full upstream parameter chain for *stage*.
+
+    Each downstream stage's ``.params_sha256_*`` signature is the hash of
+    the stage's own params plus every ancestor's params, so two runs that
+    differ only in a deep upstream knob still resolve to different output
+    directories.  Ancestors are listed deepest-first only by convention
+    (the canonicaliser sorts on the section name anyway).
+
+    Stages:
+
+    * ``profiles``           — no upstream
+    * ``diss``               — profiles
+    * ``chi``                — epsilon, profiles  (chi → diss → profiles)
+    * ``ctd``                — no upstream (full-file, doesn't use profiles)
+    * ``profiles_binned``    — profiles
+    * ``diss_binned``        — epsilon, profiles
+    * ``chi_binned``         — chi, epsilon, profiles
+    """
+    profiles_p = merge_config("profiles", config.get("profiles"))
+    eps_p = merge_config("epsilon", config.get("epsilon"))
+    chi_p = merge_config("chi", config.get("chi"))
+    ctd_p = merge_config("ctd", config.get("ctd"))
+
+    chains: dict[str, list[tuple[str, dict]]] = {
+        "profiles": [],
+        "diss": [("profiles", profiles_p)],
+        "chi": [("epsilon", eps_p), ("profiles", profiles_p)],
+        "ctd": [],
+        "profiles_binned": [("profiles", profiles_p)],
+        "diss_binned": [("epsilon", eps_p), ("profiles", profiles_p)],
+        "chi_binned": [("chi", chi_p), ("epsilon", eps_p), ("profiles", profiles_p)],
+        # Combo stages have no own params — their hash is the binning step
+        # plus everything upstream of that step.  Including ``binning``
+        # itself in the chain matches the logical dependency, even though
+        # it duplicates the same dict that gets passed as ``params``.
+        "combo": [("profiles", profiles_p)],
+        "diss_combo": [("epsilon", eps_p), ("profiles", profiles_p)],
+        "chi_combo": [("chi", chi_p), ("epsilon", eps_p), ("profiles", profiles_p)],
+        "ctd_combo": [("ctd", ctd_p)],
+    }
+    return chains[stage]
 
 
 def _copy_profile_scalars(prof_path: str | Path, target_ds) -> None:
@@ -492,6 +536,7 @@ def _setup_output_dirs(config: dict) -> dict[str, Path]:
         "profiles",
         "profiles",
         profiles_params,
+        upstream=_upstream_for("profiles", config),
     )
 
     # Diss directory — hash includes epsilon params + profiles upstream
@@ -501,7 +546,7 @@ def _setup_output_dirs(config: dict) -> dict[str, Path]:
         "diss",
         "epsilon",
         eps_params,
-        upstream=[("profiles", profiles_params)],
+        upstream=_upstream_for("diss", config),
     )
 
     # Chi directory (if enabled)
@@ -513,7 +558,7 @@ def _setup_output_dirs(config: dict) -> dict[str, Path]:
             "chi",
             "chi",
             chi_params,
-            upstream=[("epsilon", eps_params)],
+            upstream=_upstream_for("chi", config),
         )
 
     # CTD directory
@@ -525,6 +570,7 @@ def _setup_output_dirs(config: dict) -> dict[str, Path]:
             "ctd",
             "ctd",
             ctd_params,
+            upstream=_upstream_for("ctd", config),
         )
 
     return dirs
@@ -672,7 +718,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             "profiles_binned",
             "binning",
             binning_params,
-            upstream=[("profiles", merge_config("profiles", config.get("profiles")))],
+            upstream=_upstream_for("profiles_binned", config),
         )
         if bin_method == "depth":
             ds = bin_by_depth(prof_ncs, bin_width, aggregation, diagnostics)
@@ -694,7 +740,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 "diss_binned",
                 "binning",
                 merge_config("binning", binning_cfg),
-                upstream=[("epsilon", merge_config("epsilon", config.get("epsilon")))],
+                upstream=_upstream_for("diss_binned", config),
             )
             ds.to_netcdf(diss_binned_dir / "binned.nc")
 
@@ -716,7 +762,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                     "chi_binned",
                     "binning",
                     merge_config("binning", binning_cfg),
-                    upstream=[("chi", merge_config("chi", config.get("chi")))],
+                    upstream=_upstream_for("chi_binned", config),
                 )
                 ds.to_netcdf(chi_binned_dir / "binned.nc")
 
@@ -728,6 +774,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         chi_binned_dir,
         output_dirs.get("ctd"),
         config.get("netcdf", {}),
+        config=config,
     )
 
     logger.info("Pipeline complete.")
@@ -740,6 +787,7 @@ def _run_combo(
     chi_binned_dir: Path | None,
     ctd_dir: Path | None,
     netcdf_attrs: dict,
+    config: dict | None = None,
 ) -> None:
     """Assemble combo NetCDFs from each populated binned directory.
 
@@ -747,33 +795,67 @@ def _run_combo(
     metadata applied via :mod:`odas_tpw.perturb.netcdf_schema`. Missing
     or empty input dirs are silently skipped — this is a best-effort
     publish step run after binning completes.
+
+    When *config* is provided, each combo dir also receives a
+    ``.params_sha256_<hash>`` signature capturing the full upstream chain
+    so the hash matches the corresponding binned/source dir.
     """
     from odas_tpw.perturb.combo import make_combo, make_ctd_combo
     from odas_tpw.perturb.netcdf_schema import CHI_SCHEMA, COMBO_SCHEMA, CTD_SCHEMA
 
     logger.info("Assembling combo files...")
 
+    binning_p = (
+        merge_config("binning", config.get("binning") if config else None)
+        if config is not None
+        else None
+    )
+
     targets = [
-        (prof_binned_dir, output_root / "combo", COMBO_SCHEMA, "depth", make_combo),
-        (diss_binned_dir, output_root / "diss_combo", COMBO_SCHEMA, "depth", make_combo),
-        (chi_binned_dir, output_root / "chi_combo", CHI_SCHEMA, "depth", make_combo),
+        (prof_binned_dir, output_root / "combo", COMBO_SCHEMA, "depth", make_combo, "combo"),
+        (
+            diss_binned_dir,
+            output_root / "diss_combo",
+            COMBO_SCHEMA,
+            "depth",
+            make_combo,
+            "diss_combo",
+        ),
+        (
+            chi_binned_dir,
+            output_root / "chi_combo",
+            CHI_SCHEMA,
+            "depth",
+            make_combo,
+            "chi_combo",
+        ),
     ]
-    for src, dst, schema, method, func in targets:
+    for src, dst, schema, method, func, stage in targets:
         if src is None or not src.exists():
             continue
         try:
             out = func(src, dst, schema, netcdf_attrs=netcdf_attrs, method=method)
             if out is not None:
                 logger.info("Wrote %s", out)
+                if config is not None and binning_p is not None:
+                    write_signature(
+                        dst, "binning", binning_p, upstream=_upstream_for(stage, config)
+                    )
         except Exception as exc:
             logger.error("combo %s: %s", dst.name, exc)
 
     if ctd_dir is not None and ctd_dir.exists():
         try:
-            out = make_ctd_combo(
-                ctd_dir, output_root / "ctd_combo", CTD_SCHEMA, netcdf_attrs=netcdf_attrs
-            )
+            ctd_combo_dir = output_root / "ctd_combo"
+            out = make_ctd_combo(ctd_dir, ctd_combo_dir, CTD_SCHEMA, netcdf_attrs=netcdf_attrs)
             if out is not None:
                 logger.info("Wrote %s", out)
+                if config is not None:
+                    write_signature(
+                        ctd_combo_dir,
+                        "ctd",
+                        merge_config("ctd", config.get("ctd")),
+                        upstream=_upstream_for("ctd_combo", config),
+                    )
         except Exception as exc:
             logger.error("ctd combo: %s", exc)
