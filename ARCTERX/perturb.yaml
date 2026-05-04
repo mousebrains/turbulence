@@ -126,7 +126,7 @@ netcdf:
   creator_name: "Pat Welch"
   creator_email: "pat@mousebrains.com"
   geospatial_vertical_positive: "down"
-  Conventions: "CF-1.8, ACDD-1.3"
+  Conventions: "CF-1.13, ACDD-1.3"
   # Leaving these unset — perturb auto-fills from the data:
   #   date_created, date_modified
   #   geospatial_lat_min/max, geospatial_lon_min/max

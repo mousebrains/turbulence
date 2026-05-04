@@ -37,6 +37,7 @@ def extract_profiles(
     source: "PFile | str | Path",
     output_dir: str | Path,
     profiles: list[tuple[int, int]] | None = None,
+    gps: Any = None,
     **profile_kwargs: Any,
 ) -> list[Path]:
     """Extract profiles from a PFile or full-record NetCDF.
@@ -52,6 +53,12 @@ def extract_profiles(
         internal call to :func:`get_profiles` is skipped — use this when
         the caller has already adjusted the bounds (e.g. via top-trim or
         bottom-crash detection).
+    gps : GPSProvider, optional
+        If supplied, lat/lon/stime/etime are written as scalar coordinate
+        variables on each per-profile NetCDF for CF §9 profile featureType
+        compliance.  ``gps`` must expose ``lat(t)`` and ``lon(t)`` taking a
+        time array in *seconds since pf.start_time* (the same domain as
+        ``pf.t_slow``).
     **profile_kwargs
         Keyword arguments passed to get_profiles (P_min, W_min, etc.).
 
@@ -70,6 +77,7 @@ def extract_profiles(
     fs_slow = data["fs_slow"]
     fs_fast = data["fs_fast"]
     ratio = round(fs_fast / fs_slow)
+    start_epoch_s = data.get("start_epoch_s")
 
     # Compute smoothed fall rate from slow pressure
     W = _smooth_fall_rate(P_slow, fs_slow)
@@ -94,7 +102,9 @@ def extract_profiles(
         for attr in data["global_attrs"]:
             setattr(ds, attr, data["global_attrs"][attr])
 
-        ds.Conventions = "CF-1.13"
+        ds.Conventions = "CF-1.13, ACDD-1.3"
+        ds.title = f"{data['stem']} profile {pi}"
+        ds.featureType = "profile"
 
         # Profile metadata
         ds.profile_number = pi
@@ -105,6 +115,46 @@ def extract_profiles(
         ds.profile_duration_s = float((e_slow - s_slow) / fs_slow)
         ds.profile_mean_speed = float(np.mean(np.abs(W[s_slow:s_slow_end])))
         ds.history = f"Profile {pi} extracted on {datetime.now(UTC).isoformat()}"
+
+        # Per-profile scalar coordinate variables (CF §9 profile featureType).
+        # Keep these on the slow-rate timeline; gps must be in seconds since
+        # the file's start_time, matching ``data["t_slow"]`` semantics.
+        t_prof_s = float(data["t_slow"][s_slow])
+        t_end_s = float(data["t_slow"][e_slow])
+        if start_epoch_s is not None:
+            stime_var = ds.createVariable("stime", "f8", ())
+            stime_var[...] = start_epoch_s + t_prof_s
+            stime_var.units = "seconds since 1970-01-01"
+            stime_var.standard_name = "time"
+            stime_var.long_name = "profile start time"
+            stime_var.calendar = "standard"
+            stime_var.units_metadata = "leap_seconds: utc"
+            stime_var.axis = "T"
+
+            etime_var = ds.createVariable("etime", "f8", ())
+            etime_var[...] = start_epoch_s + t_end_s
+            etime_var.units = "seconds since 1970-01-01"
+            etime_var.standard_name = "time"
+            etime_var.long_name = "profile end time"
+            etime_var.calendar = "standard"
+            etime_var.units_metadata = "leap_seconds: utc"
+        if gps is not None:
+            # GPSProvider expects epoch seconds — t_prof_s is file-relative.
+            t_query = np.array([t_prof_s + (start_epoch_s or 0.0)])
+            lat_val = float(np.asarray(gps.lat(t_query))[0])
+            lon_val = float(np.asarray(gps.lon(t_query))[0])
+            lat_var = ds.createVariable("lat", "f8", ())
+            lat_var[...] = lat_val
+            lat_var.units = "degrees_north"
+            lat_var.standard_name = "latitude"
+            lat_var.long_name = "profile latitude"
+            lat_var.axis = "Y"
+            lon_var = ds.createVariable("lon", "f8", ())
+            lon_var[...] = lon_val
+            lon_var.units = "degrees_east"
+            lon_var.standard_name = "longitude"
+            lon_var.long_name = "profile longitude"
+            lon_var.axis = "X"
 
         n_fast = e_fast - s_fast
         n_slow = s_slow_end - s_slow
@@ -118,6 +168,7 @@ def extract_profiles(
         t_fast_var.long_name = "time (fast channels)"
         t_fast_var.standard_name = "time"
         t_fast_var.calendar = "standard"
+        t_fast_var.units_metadata = "leap_seconds: utc"
         t_fast_var.axis = "T"
 
         t_slow_var = ds.createVariable("t_slow", "f8", ("time_slow",), zlib=True)
@@ -126,16 +177,28 @@ def extract_profiles(
         t_slow_var.long_name = "time (slow channels)"
         t_slow_var.standard_name = "time"
         t_slow_var.calendar = "standard"
+        t_slow_var.units_metadata = "leap_seconds: utc"
         t_slow_var.axis = "T"
 
-        # Channel data
+        # Channel data — RSI's INI emits unit strings like ``umol_L-1`` and
+        # ``deg`` that UDUNITS won't parse; canonicalise via the schema.
+        from odas_tpw.perturb.netcdf_schema import COMBO_SCHEMA, canonicalize_units
+
         for ch_name, ch_data, dim, attrs in data["channels"]:
             trimmed = ch_data[s_fast:e_fast] if dim == "time_fast" else ch_data[s_slow:s_slow_end]
             var_name = ch_name.replace(" ", "_")
             var = ds.createVariable(var_name, "f4", (dim,), zlib=True)
             var[:] = trimmed.astype(np.float32)
+            schema_entry = COMBO_SCHEMA.get(var_name, {})
             for k, v in attrs.items():
+                if k == "units":
+                    v = canonicalize_units(str(v))
                 setattr(var, k, v)
+            # Layer the canonical schema attrs (long_name, standard_name,
+            # units_metadata, …) on top — schema wins where it has an opinion.
+            for k, v in schema_entry.items():
+                if k != "nc_name":
+                    setattr(var, k, v)
 
         ds.fs_fast = float(fs_fast)
         ds.fs_slow = float(fs_slow)
@@ -178,7 +241,7 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         channels.append((ch_name, ch_data, dim, attrs))
 
     global_attrs = {
-        "Conventions": "CF-1.13",
+        "Conventions": "CF-1.13, ACDD-1.3",
         "instrument_model": pf.config["instrument_info"].get("model", ""),
         "instrument_sn": pf.config["instrument_info"].get("sn", ""),
         "operator": pf.config["cruise_info"].get("operator", ""),
@@ -197,6 +260,7 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         "t_slow": pf.t_slow,
         "t_fast_units": f"seconds since {pf.start_time.isoformat()}",
         "t_slow_units": f"seconds since {pf.start_time.isoformat()}",
+        "start_epoch_s": pf.start_time.timestamp(),
         "channels": channels,
         "global_attrs": global_attrs,
         "stem": pf.filepath.stem,

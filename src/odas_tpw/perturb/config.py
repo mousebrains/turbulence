@@ -139,6 +139,11 @@ DEFAULTS: dict[str, dict] = {
         "creator_institution": None,
         "contributor_name": None,
         "contributor_role": None,
+        "publisher_name": None,
+        "publisher_email": None,
+        "publisher_url": None,
+        "publisher_type": None,
+        "publisher_institution": None,
         "project": None,
         "program": None,
         "id": None,
@@ -169,8 +174,8 @@ DEFAULTS: dict[str, dict] = {
         "time_coverage_resolution": None,
         "keywords": None,
         "keywords_vocabulary": None,
-        "standard_name_vocabulary": "CF Standard Name Table v83",
-        "Conventions": "CF-1.8, ACDD-1.3",
+        "standard_name_vocabulary": "CF Standard Name Table v89",
+        "Conventions": "CF-1.13, ACDD-1.3",
         "history": None,
     },
     "parallel": {
@@ -378,6 +383,11 @@ netcdf:
   creator_institution: null
   contributor_name: null
   contributor_role: null
+  publisher_name: null
+  publisher_email: null
+  publisher_url: null
+  publisher_type: null
+  publisher_institution: null
   project: null
   program: null
   id: null
@@ -408,8 +418,8 @@ netcdf:
   time_coverage_resolution: null
   keywords: null
   keywords_vocabulary: null
-  standard_name_vocabulary: "CF Standard Name Table v83"
-  Conventions: "CF-1.8, ACDD-1.3"
+  standard_name_vocabulary: "CF Standard Name Table v89"
+  Conventions: "CF-1.13, ACDD-1.3"
   history: null            # auto-filled with processing log
 
 parallel:

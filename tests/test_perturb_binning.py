@@ -73,6 +73,78 @@ class TestBinByDepth:
         assert result.sizes["profile"] == 2
         assert result.sizes["bin"] > 0
 
+    def test_per_profile_scalars_propagate(self, tmp_path):
+        """Scalar lat/lon/stime/etime on each per-profile NetCDF should
+        appear as 1-D ``(profile,)`` vars on the binned output."""
+        # 2026-01-01 00:00:00 UTC in epoch seconds
+        t0 = 1767225600.0
+        lats = [10.0, 20.0]
+        lons = [-150.0, -140.0]
+        stimes = [t0, t0 + 100.0]
+        etimes = [t0 + 60.0, t0 + 200.0]
+        for i in range(2):
+            n = 50
+            depth = np.linspace(0, 50, n)
+            T = 20.0 - 0.1 * depth
+            ds = xr.Dataset(
+                {
+                    "T": (["time_slow"], T),
+                    "depth": (["time_slow"], depth),
+                    "lat": ((), lats[i]),
+                    "lon": ((), lons[i]),
+                    "stime": ((), stimes[i]),
+                    "etime": ((), etimes[i]),
+                },
+                coords={"time_slow": np.arange(n, dtype=float)},
+            )
+            ds.to_netcdf(tmp_path / f"prof{i:02d}.nc")
+
+        files = sorted(tmp_path.glob("*.nc"))
+        result = bin_by_depth(files, bin_width=5.0)
+        for v in ("lat", "lon", "stime", "etime"):
+            assert v in result.data_vars, f"{v} missing from binned output"
+            assert result[v].dims == ("profile",)
+        np.testing.assert_allclose(result["lat"].values, lats)
+        np.testing.assert_allclose(result["lon"].values, lons)
+        np.testing.assert_allclose(result["stime"].values, stimes)
+        np.testing.assert_allclose(result["etime"].values, etimes)
+
+    def test_datetime64_stime_etime_decoded_to_epoch_seconds(self, tmp_path):
+        """When stime/etime are written with CF units, xarray decodes them
+        to datetime64 on read.  bin_by_depth must reduce back to epoch
+        seconds — combo's auto-fill expects numeric timestamps."""
+        import netCDF4 as nc
+
+        for i in range(2):
+            n = 30
+            path = tmp_path / f"prof{i:02d}.nc"
+            ds = nc.Dataset(str(path), "w")
+            ds.createDimension("z", n)
+            d = ds.createVariable("depth", "f8", ("z",))
+            t = ds.createVariable("T", "f8", ("z",))
+            d[:] = np.linspace(0, 50, n)
+            t[:] = np.linspace(15, 5, n)
+            for sname, val in (("stime", 1767225600.0 + i * 100.0),
+                               ("etime", 1767225700.0 + i * 100.0)):
+                v = ds.createVariable(sname, "f8", ())
+                v[...] = val
+                v.units = "seconds since 1970-01-01"
+                v.calendar = "standard"
+                v.standard_name = "time"
+            ds.close()
+
+        files = sorted(tmp_path.glob("*.nc"))
+        result = bin_by_depth(files, bin_width=5.0)
+        # After decode-then-reduce, values are float epoch seconds again.
+        assert result["stime"].dtype.kind == "f"
+        np.testing.assert_allclose(
+            result["stime"].values, [1767225600.0, 1767225700.0], rtol=0, atol=1e-3
+        )
+        # ``units`` and ``calendar`` were stripped to avoid CF-encoder
+        # conflicts when writing the combo.
+        assert "units" not in result["stime"].attrs
+        assert "calendar" not in result["stime"].attrs
+
     def test_mean_vs_median(self, tmp_path):
         n = 200
         depth = np.linspace(0, 20, n)

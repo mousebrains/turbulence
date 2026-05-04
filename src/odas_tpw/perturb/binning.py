@@ -103,6 +103,16 @@ def bin_by_depth(
     n_profiles = len(datasets)
 
     result_vars = {}
+    # Per-profile scalar variables (lat/lon/stime/etime) become 1-D
+    # ``(profile,)`` arrays in the output so downstream combo can auto-fill
+    # ACDD geospatial_* and time_coverage_* attributes.
+    profile_scalars = {
+        "lat": np.full(n_profiles, np.nan),
+        "lon": np.full(n_profiles, np.nan),
+        "stime": np.full(n_profiles, np.nan),
+        "etime": np.full(n_profiles, np.nan),
+    }
+    profile_scalar_attrs: dict[str, dict] = {}
     # Determine depth coordinate for each profile
     for pi, ds in enumerate(datasets):
         if "depth" in ds:
@@ -114,8 +124,30 @@ def bin_by_depth(
         else:
             continue
 
+        # Pick up per-profile scalars (CF §9 profile featureType convention).
+        # xarray auto-decodes ``stime``/``etime`` (units="seconds since
+        # 1970-01-01") to datetime64[ns]; reduce to epoch seconds so the
+        # combo's auto-fill code (which expects numeric timestamps) works.
+        for sname in profile_scalars:
+            if sname in ds.data_vars and ds[sname].ndim == 0:
+                val = ds[sname].values
+                if val.dtype.kind == "M":
+                    val = val.astype("datetime64[ns]").astype(np.int64) / 1e9
+                profile_scalars[sname][pi] = float(val)
+                if sname not in profile_scalar_attrs:
+                    # Strip units/calendar — xarray's CF encoder will
+                    # re-emit them when writing the combo; carrying them
+                    # alongside numeric values triggers a "Key 'units'
+                    # already exists in attrs" conflict.
+                    attrs = {
+                        k: v
+                        for k, v in ds[sname].attrs.items()
+                        if k not in ("units", "calendar")
+                    }
+                    profile_scalar_attrs[sname] = attrs
+
         for vname in ds.data_vars:
-            if vname == depth_var:
+            if vname == depth_var or vname in profile_scalars:
                 continue
             arr = ds[vname].values
             depth = ds[depth_var].values
@@ -148,9 +180,16 @@ def bin_by_depth(
     if diagnostics:
         result_vars["n_samples"] = np.zeros((n_bins, n_profiles), dtype=float)
 
-    data_vars = {}
+    data_vars: dict = {}
     for vname, arr in result_vars.items():
-        data_vars[vname] = (["bin", "profile"], arr)
+        data_vars[str(vname)] = (["bin", "profile"], arr)
+
+    # Emit per-profile scalars as 1-D vars on the profile dim, only when at
+    # least one profile actually carried them (preserves backward
+    # compatibility with older per-profile NCs that lack lat/lon/stime/etime).
+    for sname, sarr in profile_scalars.items():
+        if np.any(np.isfinite(sarr)):
+            data_vars[sname] = (["profile"], sarr, profile_scalar_attrs.get(sname, {}))
 
     return xr.Dataset(
         data_vars,

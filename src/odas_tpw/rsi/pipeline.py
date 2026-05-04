@@ -481,7 +481,7 @@ def _write_l4_epsilon(l4: L4Data, l3: L3Data, path: Path, pf) -> None:
             ),
         },
         attrs={
-            "Conventions": "CF-1.13",
+            "Conventions": "CF-1.13, ACDD-1.3",
             "source_file": str(pf.filepath.name),
             "history": f"Pipeline on {datetime.now(UTC).isoformat()}",
         },
@@ -583,7 +583,7 @@ def _write_l4_chi(l4_chi: L4ChiData, path: Path, time_ref: str) -> None:
             ),
         },
         attrs={
-            "Conventions": "CF-1.13",
+            "Conventions": "CF-1.13, ACDD-1.3",
             "method": l4_chi.method,
             "history": f"Pipeline on {datetime.now(UTC).isoformat()}",
         },

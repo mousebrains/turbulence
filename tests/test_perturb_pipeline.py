@@ -492,6 +492,59 @@ class TestNanExcludedProbes:
         _nan_excluded_probes(ds, ["sh1"], "test.p")
 
 
+class TestCopyProfileScalars:
+    """Tests for the per-profile scalar copy helper."""
+
+    def test_copies_present_scalars(self, tmp_path):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _copy_profile_scalars
+
+        prof_path = tmp_path / "src.nc"
+        src = xr.Dataset(
+            {
+                "lat": ((), 7.0),
+                "lon": ((), 134.0),
+                "stime": ((), 1767225600.0),
+                "etime": ((), 1767225700.0),
+                "ignored_array": (["t"], np.zeros(3)),
+            }
+        )
+        src.to_netcdf(prof_path)
+
+        target = xr.Dataset({"epsilon": (["t"], np.zeros(3))})
+        _copy_profile_scalars(prof_path, target)
+        for sname in ("lat", "lon", "stime", "etime"):
+            assert sname in target.data_vars
+            assert target[sname].ndim == 0
+        # 1-D arrays must not be picked up as scalars.
+        assert "ignored_array" not in target.data_vars
+
+    def test_silently_swallows_missing_file(self, tmp_path):
+        """Older runs / external NCs without scalars must not raise."""
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _copy_profile_scalars
+
+        target = xr.Dataset()
+        _copy_profile_scalars(tmp_path / "does_not_exist.nc", target)
+        assert len(target.data_vars) == 0
+
+    def test_skips_non_scalar_named_vars(self, tmp_path):
+        """A 1-D ``lat`` (e.g. fast-rate channel snapshot) must not be
+        treated as the per-profile scalar."""
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _copy_profile_scalars
+
+        prof_path = tmp_path / "src.nc"
+        xr.Dataset({"lat": (["t"], np.array([1.0, 2.0, 3.0]))}).to_netcdf(prof_path)
+
+        target = xr.Dataset()
+        _copy_profile_scalars(prof_path, target)
+        assert "lat" not in target.data_vars
+
+
 class TestAdjustProfileBounds:
     """Tests for top_trim/bottom hooks that push profile bounds inward."""
 

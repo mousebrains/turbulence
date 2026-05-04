@@ -196,9 +196,12 @@ def ctd_bin_file(
     if bin_centers is None or len(bin_centers) == 0:
         return None
 
-    # GPS interpolation
-    lat = gps.lat(bin_centers)
-    lon = gps.lon(bin_centers)
+    # GPS interpolation — query in epoch seconds so the GPS provider's
+    # absolute time axis lines up with bin_centers (which live on the
+    # file-relative pf.t_slow timeline).
+    epoch_offset = pf.start_time.timestamp() if hasattr(pf, "start_time") else 0.0
+    lat = gps.lat(np.asarray(bin_centers, dtype=np.float64) + epoch_offset)
+    lon = gps.lon(np.asarray(bin_centers, dtype=np.float64) + epoch_offset)
     binned["lat"] = lat
     binned["lon"] = lon
 
@@ -207,15 +210,26 @@ def ctd_bin_file(
         sw = add_seawater_properties(binned[T_name], binned[C_name], binned["P"], lat, lon)
         binned.update(sw)
 
+    # Promote bin_centers from file-relative seconds to epoch seconds so
+    # concatenated CTD combos can be correctly ordered across files.  Add
+    # CF time attrs so xarray's encoder serialises them as datetimes.
+    time_epoch = np.asarray(bin_centers, dtype=np.float64) + epoch_offset
+
     # Build xarray Dataset
     ds = xr.Dataset(
         {name: (["time"], arr) for name, arr in binned.items()},
-        coords={"time": bin_centers},
+        coords={"time": time_epoch},
     )
+    ds["time"].attrs["units"] = "seconds since 1970-01-01"
+    ds["time"].attrs["calendar"] = "standard"
+    ds["time"].attrs["standard_name"] = "time"
+    ds["time"].attrs["long_name"] = "time bin centre"
+    ds["time"].attrs["axis"] = "T"
+    ds["time"].attrs["units_metadata"] = "leap_seconds: utc"
     ds.attrs["bin_width"] = bin_width
     ds.attrs["method"] = method
     ds.attrs["source_file"] = pf.filepath.name
-    ds.attrs["Conventions"] = "CF-1.8"
+    ds.attrs["Conventions"] = "CF-1.13, ACDD-1.3"
 
     out_path = output_dir / f"{pf.filepath.stem}.nc"
     ds.to_netcdf(out_path)
