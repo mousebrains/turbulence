@@ -288,7 +288,6 @@ class TestCmdCombo:
         Sanity-check against the depth default which produces ``profile``."""
         import numpy as np
         import xarray as xr
-        import yaml
 
         prof_dir = tmp_path / "profiles_binned_00"
         prof_dir.mkdir()
@@ -299,8 +298,11 @@ class TestCmdCombo:
             )
             ds.to_netcdf(prof_dir / f"f{i}.nc")
 
+        # The CI environment doesn't carry PyYAML — and ``perturb`` parses
+        # configs with ruamel.yaml — so write the config as a plain text
+        # YAML literal instead of pulling in a serializer.
         cfg = tmp_path / "cfg.yaml"
-        cfg.write_text(yaml.safe_dump({"binning": {"method": "time"}}))
+        cfg.write_text("binning:\n  method: time\n")
 
         main(["combo", "-c", str(cfg), "-o", str(tmp_path)])
 
