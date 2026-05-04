@@ -33,6 +33,34 @@ def _load_and_merge(config_path: str | None) -> dict[str, Any]:
     return {}
 
 
+def _resolve_output_root(args: argparse.Namespace, config: dict[str, Any]) -> Path:
+    """Determine the output_root used for ``logs/`` placement.
+
+    Precedence matches every subcommand's later override logic: ``args.output``
+    > config ``files.output_root`` > the default ``"results/"``.
+    """
+    if getattr(args, "output", None):
+        return Path(args.output)
+    return Path(config.get("files", {}).get("output_root", "results/"))
+
+
+def _install_logging(args: argparse.Namespace, config: dict[str, Any]) -> Path:
+    """Install root logging for this CLI invocation.
+
+    Always writes to ``<output_root>/logs/run_<timestamp>.log``.  ``--stdout``
+    additionally streams INFO records to stderr so the user can watch
+    progress.  Returns the run log path so callers can mention it.
+    """
+    from odas_tpw.perturb.logging_setup import current_run_stamp, setup_root_logging
+
+    output_root = _resolve_output_root(args, config)
+    log_dir = output_root / "logs"
+    log_path = log_dir / f"run_{current_run_stamp()}.log"
+    level = getattr(logging, args.log_level.upper(), logging.INFO)
+    setup_root_logging(log_path, level=level, stdout=args.stdout)
+    return log_path
+
+
 def _glob_p_files(patterns: list[str] | None) -> list[Path] | None:
     """Expand glob patterns to a list of .p file paths."""
     if not patterns:
@@ -67,6 +95,9 @@ def _run_analysis(
         for section, values in extra_config.items():
             config.setdefault(section, {}).update(values)
 
+    log_path = _install_logging(args, config)
+    logging.getLogger(__name__).info("CLI %s, log: %s", args.command, log_path)
+
     from odas_tpw.perturb.pipeline import run_pipeline
 
     run_pipeline(config, p_files=_glob_p_files(args.files))
@@ -78,7 +109,11 @@ def _run_analysis(
 
 
 def _cmd_init(args: argparse.Namespace) -> None:
-    """Generate a template configuration file."""
+    """Generate a template configuration file.
+
+    No logging setup — ``init`` doesn't run the pipeline and doesn't have
+    an ``output_root`` to host a ``logs/`` dir.
+    """
     from odas_tpw.perturb.config import generate_template
 
     path = Path(args.path)
@@ -109,6 +144,9 @@ def _cmd_run(args: argparse.Namespace) -> None:
         config.setdefault("hotel", {})["enable"] = True
         config.setdefault("hotel", {})["file"] = args.hotel_file
 
+    log_path = _install_logging(args, config)
+    logging.getLogger(__name__).info("CLI run, log: %s", log_path)
+
     from odas_tpw.perturb.pipeline import run_pipeline
 
     run_pipeline(config, p_files=p_files)
@@ -121,6 +159,9 @@ def _cmd_trim(args: argparse.Namespace) -> None:
         config.setdefault("files", {})["p_file_root"] = args.p_file_root
     if args.output:
         config.setdefault("files", {})["output_root"] = args.output
+
+    log_path = _install_logging(args, config)
+    logging.getLogger(__name__).info("CLI trim, log: %s", log_path)
 
     from odas_tpw.perturb.pipeline import run_trim
 
@@ -135,6 +176,9 @@ def _cmd_merge(args: argparse.Namespace) -> None:
         config.setdefault("files", {})["p_file_root"] = args.p_file_root
     if args.output:
         config.setdefault("files", {})["output_root"] = args.output
+
+    log_path = _install_logging(args, config)
+    logging.getLogger(__name__).info("CLI merge, log: %s", log_path)
 
     from odas_tpw.perturb.pipeline import run_merge
 
@@ -165,6 +209,9 @@ def _cmd_bin(args: argparse.Namespace) -> None:
     if args.output:
         config.setdefault("files", {})["output_root"] = args.output
 
+    log_path = _install_logging(args, config)
+    logging.getLogger(__name__).info("CLI bin, log: %s", log_path)
+
     from odas_tpw.perturb.binning import bin_by_depth, bin_by_time, bin_chi, bin_diss
     from odas_tpw.perturb.config import DEFAULTS, merge_config, resolve_output_dir
     from odas_tpw.perturb.pipeline import _upstream_for
@@ -181,7 +228,8 @@ def _cmd_bin(args: argparse.Namespace) -> None:
     # Find profile output directories
     import glob as globmod
 
-    # Bin profiles
+    # Bin profiles — binned dir resolved up front so per-input-file logs
+    # (a.log, b.log, …) can be written into it via stage_log.
     prof_dirs = sorted(globmod.glob(str(output_root / "profiles_[0-9][0-9]")))
     for prof_dir in prof_dirs:
         prof_ncs = sorted(Path(prof_dir).glob("*.nc"))
@@ -196,9 +244,13 @@ def _cmd_bin(args: argparse.Namespace) -> None:
                 upstream=_upstream_for("profiles_binned", config),
             )
             if bin_method == "depth":
-                ds = bin_by_depth(prof_ncs, bin_width, aggregation, diagnostics)
+                ds = bin_by_depth(
+                    prof_ncs, bin_width, aggregation, diagnostics, log_dir=prof_binned_dir
+                )
             else:
-                ds = bin_by_time(prof_ncs, bin_width, aggregation, diagnostics)
+                ds = bin_by_time(
+                    prof_ncs, bin_width, aggregation, diagnostics, log_dir=prof_binned_dir
+                )
             if ds.data_vars:
                 ds.to_netcdf(prof_binned_dir / "binned.nc")
 
@@ -210,15 +262,17 @@ def _cmd_bin(args: argparse.Namespace) -> None:
             print(f"Binning diss from {diss_dir}...")
             diss_width = binning_cfg.get("diss_width") or bin_width
             diss_agg = binning_cfg.get("diss_aggregation") or aggregation
-            ds = bin_diss(diss_ncs, diss_width, diss_agg, bin_method, diagnostics)
+            diss_binned_dir = resolve_output_dir(
+                output_root,
+                "diss_binned",
+                "binning",
+                merge_config("binning", binning_cfg),
+                upstream=_upstream_for("diss_binned", config),
+            )
+            ds = bin_diss(
+                diss_ncs, diss_width, diss_agg, bin_method, diagnostics, log_dir=diss_binned_dir
+            )
             if ds.data_vars:
-                diss_binned_dir = resolve_output_dir(
-                    output_root,
-                    "diss_binned",
-                    "binning",
-                    merge_config("binning", binning_cfg),
-                    upstream=_upstream_for("diss_binned", config),
-                )
                 ds.to_netcdf(diss_binned_dir / "binned.nc")
 
     # Bin chi
@@ -233,15 +287,17 @@ def _cmd_bin(args: argparse.Namespace) -> None:
                 or binning_cfg.get("diss_aggregation")
                 or aggregation
             )
-            ds = bin_chi(chi_ncs, chi_width, chi_agg, bin_method, diagnostics)
+            chi_binned_dir = resolve_output_dir(
+                output_root,
+                "chi_binned",
+                "binning",
+                merge_config("binning", binning_cfg),
+                upstream=_upstream_for("chi_binned", config),
+            )
+            ds = bin_chi(
+                chi_ncs, chi_width, chi_agg, bin_method, diagnostics, log_dir=chi_binned_dir
+            )
             if ds.data_vars:
-                chi_binned_dir = resolve_output_dir(
-                    output_root,
-                    "chi_binned",
-                    "binning",
-                    merge_config("binning", binning_cfg),
-                    upstream=_upstream_for("chi_binned", config),
-                )
                 ds.to_netcdf(chi_binned_dir / "binned.nc")
 
     print("Binning complete.")
@@ -254,8 +310,12 @@ def _cmd_combo(args: argparse.Namespace) -> None:
     if args.output:
         config.setdefault("files", {})["output_root"] = args.output
 
+    log_path = _install_logging(args, config)
+    logging.getLogger(__name__).info("CLI combo, log: %s", log_path)
+
     from odas_tpw.perturb.combo import make_combo, make_ctd_combo
     from odas_tpw.perturb.config import DEFAULTS, merge_config, write_signature
+    from odas_tpw.perturb.logging_setup import stage_log
     from odas_tpw.perturb.netcdf_schema import CHI_SCHEMA, COMBO_SCHEMA, CTD_SCHEMA
     from odas_tpw.perturb.pipeline import _upstream_for
 
@@ -276,43 +336,57 @@ def _cmd_combo(args: argparse.Namespace) -> None:
     # Combo from profile binned
     for d in sorted(globmod.glob(str(output_root / "profiles_binned_[0-9][0-9]"))):
         out_dir = output_root / "combo"
-        out = make_combo(d, out_dir, COMBO_SCHEMA, netcdf_attrs=netcdf_attrs, method=bin_method)
-        if out:
-            write_signature(out_dir, "binning", binning_p, upstream=_upstream_for("combo", config))
-            print(f"  Wrote {out}")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with stage_log(out_dir, "combo"):
+            out = make_combo(
+                d, out_dir, COMBO_SCHEMA, netcdf_attrs=netcdf_attrs, method=bin_method
+            )
+            if out:
+                write_signature(
+                    out_dir, "binning", binning_p, upstream=_upstream_for("combo", config)
+                )
+                print(f"  Wrote {out}")
 
     # Combo from diss binned
     for d in sorted(globmod.glob(str(output_root / "diss_binned_[0-9][0-9]"))):
         out_dir = output_root / "diss_combo"
-        out = make_combo(d, out_dir, COMBO_SCHEMA, netcdf_attrs=netcdf_attrs, method=bin_method)
-        if out:
-            write_signature(
-                out_dir, "binning", binning_p, upstream=_upstream_for("diss_combo", config)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with stage_log(out_dir, "combo"):
+            out = make_combo(
+                d, out_dir, COMBO_SCHEMA, netcdf_attrs=netcdf_attrs, method=bin_method
             )
-            print(f"  Wrote {out}")
+            if out:
+                write_signature(
+                    out_dir, "binning", binning_p, upstream=_upstream_for("diss_combo", config)
+                )
+                print(f"  Wrote {out}")
 
     # Combo from chi binned
     for d in sorted(globmod.glob(str(output_root / "chi_binned_[0-9][0-9]"))):
         out_dir = output_root / "chi_combo"
-        out = make_combo(d, out_dir, CHI_SCHEMA, netcdf_attrs=netcdf_attrs, method=bin_method)
-        if out:
-            write_signature(
-                out_dir, "binning", binning_p, upstream=_upstream_for("chi_combo", config)
-            )
-            print(f"  Wrote {out}")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with stage_log(out_dir, "combo"):
+            out = make_combo(d, out_dir, CHI_SCHEMA, netcdf_attrs=netcdf_attrs, method=bin_method)
+            if out:
+                write_signature(
+                    out_dir, "binning", binning_p, upstream=_upstream_for("chi_combo", config)
+                )
+                print(f"  Wrote {out}")
 
     # CTD combo
     for d in sorted(globmod.glob(str(output_root / "ctd_[0-9][0-9]"))):
         out_dir = output_root / "ctd_combo"
-        out = make_ctd_combo(d, out_dir, CTD_SCHEMA, netcdf_attrs=netcdf_attrs)
-        if out:
-            write_signature(
-                out_dir,
-                "ctd",
-                merge_config("ctd", config.get("ctd")),
-                upstream=_upstream_for("ctd_combo", config),
-            )
-            print(f"  Wrote {out}")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with stage_log(out_dir, "combo"):
+            out = make_ctd_combo(d, out_dir, CTD_SCHEMA, netcdf_attrs=netcdf_attrs)
+            if out:
+                write_signature(
+                    out_dir,
+                    "ctd",
+                    merge_config("ctd", config.get("ctd")),
+                    upstream=_upstream_for("ctd_combo", config),
+                )
+                print(f"  Wrote {out}")
 
     print("Combo assembly complete.")
 
@@ -335,6 +409,22 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         "--output",
         metavar="DIR",
         help="output root directory",
+    )
+    _add_logging_args(parser)
+
+
+def _add_logging_args(parser: argparse.ArgumentParser) -> None:
+    """Add logging-control flags shared by every pipeline-running subcommand."""
+    parser.add_argument(
+        "--stdout",
+        action="store_true",
+        help="also stream log records to stderr (default: log to file only)",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        metavar="LEVEL",
+        help="log level: DEBUG, INFO, WARNING, ERROR (default: INFO)",
     )
 
 
@@ -436,9 +526,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Entry point for the perturb CLI."""
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    """Entry point for the perturb CLI.
 
+    Logging is configured per-subcommand inside each handler, after the
+    config is merged enough to know ``output_root`` (where the
+    ``logs/run_<timestamp>.log`` file lives).
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
 

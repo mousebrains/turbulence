@@ -10,6 +10,8 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from odas_tpw.perturb.logging_setup import stage_log
+
 
 def _bin_array(
     values: np.ndarray,
@@ -59,6 +61,7 @@ def bin_by_depth(
     bin_width: float = 1.0,
     aggregation: str = "mean",
     diagnostics: bool = False,
+    log_dir: Path | None = None,
 ) -> xr.Dataset:
     """Bin per-profile NetCDFs by depth into 2D (bin x profile).
 
@@ -72,6 +75,11 @@ def bin_by_depth(
         "mean" or "median".
     diagnostics : bool
         Include n_samples and *_std per bin.
+    log_dir : Path, optional
+        When supplied, the per-input-file binning loop is wrapped in
+        :func:`~odas_tpw.perturb.logging_setup.stage_log` so each source
+        file's records land in ``<log_dir>/<source_stem>.log`` (in
+        addition to the worker/run logs).
 
     Returns
     -------
@@ -115,64 +123,65 @@ def bin_by_depth(
     profile_scalar_attrs: dict[str, dict] = {}
     # Determine depth coordinate for each profile
     for pi, ds in enumerate(datasets):
-        if "depth" in ds:
-            depth_var = "depth"
-        elif "P" in ds:
-            depth_var = "P"
-        elif "P_mean" in ds:
-            depth_var = "P_mean"
-        else:
-            continue
-
-        # Pick up per-profile scalars (CF §9 profile featureType convention).
-        # xarray auto-decodes ``stime``/``etime`` (units="seconds since
-        # 1970-01-01") to datetime64[ns]; reduce to epoch seconds so the
-        # combo's auto-fill code (which expects numeric timestamps) works.
-        for sname in profile_scalars:
-            if sname in ds.data_vars and ds[sname].ndim == 0:
-                val = ds[sname].values
-                if val.dtype.kind == "M":
-                    val = val.astype("datetime64[ns]").astype(np.int64) / 1e9
-                profile_scalars[sname][pi] = float(val)
-                if sname not in profile_scalar_attrs:
-                    # Strip units/calendar — xarray's CF encoder will
-                    # re-emit them when writing the combo; carrying them
-                    # alongside numeric values triggers a "Key 'units'
-                    # already exists in attrs" conflict.
-                    attrs = {
-                        k: v
-                        for k, v in ds[sname].attrs.items()
-                        if k not in ("units", "calendar")
-                    }
-                    profile_scalar_attrs[sname] = attrs
-
-        for vname in ds.data_vars:
-            if vname == depth_var or vname in profile_scalars:
-                continue
-            arr = ds[vname].values
-            depth = ds[depth_var].values
-            if arr.ndim != 1 or len(arr) != len(depth):
-                continue
-            if arr.dtype.kind == "M":  # skip datetime64 variables
+        with stage_log(log_dir, Path(profile_files[pi]).stem):
+            if "depth" in ds:
+                depth_var = "depth"
+            elif "P" in ds:
+                depth_var = "P"
+            elif "P_mean" in ds:
+                depth_var = "P_mean"
+            else:
                 continue
 
-            if vname not in result_vars:
-                result_vars[vname] = np.full((n_bins, n_profiles), np.nan)
+            # Pick up per-profile scalars (CF §9 profile featureType convention).
+            # xarray auto-decodes ``stime``/``etime`` (units="seconds since
+            # 1970-01-01") to datetime64[ns]; reduce to epoch seconds so the
+            # combo's auto-fill code (which expects numeric timestamps) works.
+            for sname in profile_scalars:
+                if sname in ds.data_vars and ds[sname].ndim == 0:
+                    val = ds[sname].values
+                    if val.dtype.kind == "M":
+                        val = val.astype("datetime64[ns]").astype(np.int64) / 1e9
+                    profile_scalars[sname][pi] = float(val)
+                    if sname not in profile_scalar_attrs:
+                        # Strip units/calendar — xarray's CF encoder will
+                        # re-emit them when writing the combo; carrying them
+                        # alongside numeric values triggers a "Key 'units'
+                        # already exists in attrs" conflict.
+                        attrs = {
+                            k: v
+                            for k, v in ds[sname].attrs.items()
+                            if k not in ("units", "calendar")
+                        }
+                        profile_scalar_attrs[sname] = attrs
+
+            for vname in ds.data_vars:
+                if vname == depth_var or vname in profile_scalars:
+                    continue
+                arr = ds[vname].values
+                depth = ds[depth_var].values
+                if arr.ndim != 1 or len(arr) != len(depth):
+                    continue
+                if arr.dtype.kind == "M":  # skip datetime64 variables
+                    continue
+
+                if vname not in result_vars:
+                    result_vars[vname] = np.full((n_bins, n_profiles), np.nan)
+                    if diagnostics:
+                        result_vars[f"{vname}_std"] = np.full((n_bins, n_profiles), np.nan)
+
+                binned, _counts = _bin_array(arr, depth, bin_edges, agg)
+                result_vars[vname][:, pi] = binned
+
                 if diagnostics:
-                    result_vars[f"{vname}_std"] = np.full((n_bins, n_profiles), np.nan)
-
-            binned, _counts = _bin_array(arr, depth, bin_edges, agg)
-            result_vars[vname][:, pi] = binned
-
-            if diagnostics:
-                # Compute std per bin
-                std_arr = np.full(n_bins, np.nan)
-                idx = np.clip(np.digitize(depth, bin_edges) - 1, 0, n_bins - 1)
-                for bi in range(n_bins):
-                    mask = idx == bi
-                    if np.sum(mask) > 1:
-                        std_arr[bi] = np.nanstd(arr[mask])
-                result_vars[f"{vname}_std"][:, pi] = std_arr
+                    # Compute std per bin
+                    std_arr = np.full(n_bins, np.nan)
+                    idx = np.clip(np.digitize(depth, bin_edges) - 1, 0, n_bins - 1)
+                    for bi in range(n_bins):
+                        mask = idx == bi
+                        if np.sum(mask) > 1:
+                            std_arr[bi] = np.nanstd(arr[mask])
+                    result_vars[f"{vname}_std"][:, pi] = std_arr
 
     for ds in datasets:
         ds.close()
@@ -205,48 +214,52 @@ def bin_by_time(
     bin_width: float = 1.0,
     aggregation: str = "mean",
     diagnostics: bool = False,
+    log_dir: Path | None = None,
 ) -> xr.Dataset:
     """Bin per-profile NetCDFs by time.
 
     Returns a concatenated dataset along a time dimension.
+
+    See :func:`bin_by_depth` for the meaning of *log_dir*.
     """
     agg = _get_agg_func(aggregation)
     all_binned = []
 
     for f in profile_files:
-        ds = xr.open_dataset(f)
-        # Use the time coordinate
-        for time_name in ("t_slow", "t_fast", "time"):
-            if time_name in ds:
-                t = ds[time_name].values
-                break
-        else:
+        with stage_log(log_dir, Path(f).stem):
+            ds = xr.open_dataset(f)
+            # Use the time coordinate
+            for time_name in ("t_slow", "t_fast", "time"):
+                if time_name in ds:
+                    t = ds[time_name].values
+                    break
+            else:
+                ds.close()
+                continue
+
+            t_min, t_max = np.nanmin(t), np.nanmax(t)
+            bin_edges = np.arange(t_min, t_max + bin_width, bin_width)
+            if len(bin_edges) < 2:
+                bin_edges = np.array([t_min, t_min + bin_width])
+            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+
+            binned_data = {"time": bin_centers}
+            for vname in ds.data_vars:
+                arr = ds[vname].values
+                if arr.ndim != 1 or len(arr) != len(t):
+                    continue
+                if arr.dtype.kind == "M":  # skip datetime64 variables
+                    continue
+                b, _ = _bin_array(arr, t, bin_edges, agg)
+                binned_data[str(vname)] = b
+
             ds.close()
-            continue
-
-        t_min, t_max = np.nanmin(t), np.nanmax(t)
-        bin_edges = np.arange(t_min, t_max + bin_width, bin_width)
-        if len(bin_edges) < 2:
-            bin_edges = np.array([t_min, t_min + bin_width])
-        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-
-        binned_data = {"time": bin_centers}
-        for vname in ds.data_vars:
-            arr = ds[vname].values
-            if arr.ndim != 1 or len(arr) != len(t):
-                continue
-            if arr.dtype.kind == "M":  # skip datetime64 variables
-                continue
-            b, _ = _bin_array(arr, t, bin_edges, agg)
-            binned_data[str(vname)] = b
-
-        ds.close()
-        if len(binned_data) > 1:
-            bds = xr.Dataset(
-                {k: (["time"], v) for k, v in binned_data.items() if k != "time"},
-                coords={"time": binned_data["time"]},
-            )
-            all_binned.append(bds)
+            if len(binned_data) > 1:
+                bds = xr.Dataset(
+                    {k: (["time"], v) for k, v in binned_data.items() if k != "time"},
+                    coords={"time": binned_data["time"]},
+                )
+                all_binned.append(bds)
 
     if not all_binned:
         return xr.Dataset()
@@ -259,14 +272,15 @@ def bin_diss(
     aggregation: str = "mean",
     method: str = "depth",
     diagnostics: bool = False,
+    log_dir: Path | None = None,
 ) -> xr.Dataset:
     """Bin dissipation estimates by depth or time.
 
     Handles per-probe (e_1, e_2) and combined (epsilonMean) variables.
     """
     if method == "time":
-        return bin_by_time(diss_files, bin_width, aggregation, diagnostics)
-    return bin_by_depth(diss_files, bin_width, aggregation, diagnostics)
+        return bin_by_time(diss_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
+    return bin_by_depth(diss_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
 
 
 def bin_chi(
@@ -275,8 +289,9 @@ def bin_chi(
     aggregation: str = "mean",
     method: str = "depth",
     diagnostics: bool = False,
+    log_dir: Path | None = None,
 ) -> xr.Dataset:
     """Bin chi estimates by depth or time."""
     if method == "time":
-        return bin_by_time(chi_files, bin_width, aggregation, diagnostics)
-    return bin_by_depth(chi_files, bin_width, aggregation, diagnostics)
+        return bin_by_time(chi_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
+    return bin_by_depth(chi_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
