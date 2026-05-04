@@ -137,6 +137,35 @@ class TestMakeCombo:
         assert combo.attrs["geospatial_lat_max"] == 30.0
         assert combo.attrs["geospatial_lon_min"] == -150.0
         assert combo.attrs["geospatial_lon_max"] == -130.0
+        # bbox + CRS are derivable when both lat and lon are present
+        assert combo.attrs["geospatial_bounds_crs"] == "EPSG:4326"
+        assert "POLYGON" in combo.attrs["geospatial_bounds"]
+        combo.close()
+
+    def test_time_coverage_from_stime_etime(self, tmp_path):
+        """stime/etime per-profile vars drive ACDD time_coverage_*."""
+        binned_dir = tmp_path / "binned"
+        binned_dir.mkdir()
+        output_dir = tmp_path / "combo"
+
+        # 2026-01-01 00:00:00 UTC and +2 hours, in epoch seconds
+        t0, t1 = 1767225600.0, 1767225600.0 + 7200
+        ds = xr.Dataset(
+            {
+                "T": (["bin", "profile"], np.random.randn(5, 2)),
+                "stime": (["profile"], [t0, t0 + 60.0]),
+                "etime": (["profile"], [t1, t1 + 60.0]),
+            },
+            coords={"bin": np.arange(5, dtype=float), "profile": np.arange(2)},
+        )
+        ds.to_netcdf(binned_dir / "file00.nc")
+
+        out = make_combo(binned_dir, output_dir, COMBO_SCHEMA, method="depth")
+        combo = xr.open_dataset(out)
+        assert combo.attrs["time_coverage_start"].startswith("2026-01-01T00:00:00")
+        assert combo.attrs["time_coverage_end"].startswith("2026-01-01T02:01:00")
+        # ISO 8601 duration: 2 hours 1 minute (trailing zero seconds omitted)
+        assert combo.attrs["time_coverage_duration"] == "PT2H1M"
         combo.close()
 
 

@@ -104,7 +104,7 @@ class TestCtdBinFile:
         assert ds.attrs["bin_width"] == 0.5
         assert ds.attrs["method"] == "mean"
         assert ds.attrs["source_file"] == "test_001.p"
-        assert ds.attrs["Conventions"] == "CF-1.8"
+        assert ds.attrs["Conventions"] == "CF-1.13, ACDD-1.3"
         # Seawater properties should be present (T, C, P all available)
         for var in ("SP", "SA", "CT", "sigma0", "rho", "depth"):
             assert var in ds, f"seawater property {var} missing"

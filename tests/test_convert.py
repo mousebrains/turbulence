@@ -157,7 +157,7 @@ def test_cf_compliance(skip_no_data, tmp_path):
     ds = nc.Dataset(str(nc_path), "r")
 
     # Required global attributes
-    assert ds.Conventions == "CF-1.13"
+    assert ds.Conventions == "CF-1.13, ACDD-1.3"
     assert hasattr(ds, "title")
     assert hasattr(ds, "history")
 

@@ -485,7 +485,7 @@ class TestIntegration:
         ds = results[0]
 
         # Global attributes
-        assert ds.attrs["Conventions"] == "CF-1.13"
+        assert ds.attrs["Conventions"] == "CF-1.13, ACDD-1.3"
         assert "history" in ds.attrs
 
         # Time coordinate
@@ -530,7 +530,7 @@ class TestIntegration:
 
         eps_paths = compute_diss_file(PROFILE_FILE, tmp_path, fft_length=256, goodman=True)
         ds = xr.open_dataset(eps_paths[0])
-        assert ds.attrs["Conventions"] == "CF-1.13"
+        assert ds.attrs["Conventions"] == "CF-1.13, ACDD-1.3"
         assert ds["epsilon"].attrs["units"] == "W kg-1"
         assert "history" in ds.attrs
         ds.close()
@@ -546,7 +546,7 @@ class TestIntegration:
         assert len(prof_paths) >= 1
 
         ds = nc.Dataset(str(prof_paths[0]), "r")
-        assert ds.Conventions == "CF-1.13"
+        assert ds.Conventions == "CF-1.13, ACDD-1.3"
 
         for tvar_name in ("t_fast", "t_slow"):
             tvar = ds.variables[tvar_name]

@@ -475,7 +475,7 @@ def p_to_L1(
     ds = nc.Dataset(str(nc_filepath), "w", format="NETCDF4")
 
     # Global attributes
-    ds.Conventions = "CF-1.13"
+    ds.Conventions = "CF-1.13, ACDD-1.3"
     ds.title = f"VMP data from {pf.filepath.name}"
     ds.source = pf.config["instrument_info"].get("model", "")
     ds.platform_type = pf.config["instrument_info"].get("vehicle", "")

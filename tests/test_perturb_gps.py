@@ -198,3 +198,32 @@ class TestGPSFromNetCDF:
     def test_is_provider(self, tmp_path):
         nc_file = self._make_nc(tmp_path / "gps.nc")
         assert isinstance(GPSFromNetCDF(nc_file), GPSProvider)
+
+    def test_cf_time_units_decoded_to_epoch_seconds(self, tmp_path):
+        """A NetCDF time var with CF units (e.g. 'milliseconds since ...')
+        is decoded to epoch seconds, so callers query with epoch-second
+        offsets. Mirrors the ARCTERX gps.nc layout.
+        """
+        import netCDF4 as nc
+
+        path = tmp_path / "gps_cf.nc"
+        ds = nc.Dataset(str(path), "w")
+        ds.createDimension("t", 3)
+        tvar = ds.createVariable("t", "i8", ("t",))
+        tvar.units = "milliseconds since 2023-05-03 06:51:31"
+        tvar.calendar = "proleptic_gregorian"
+        tvar[:] = [0, 1000, 2000]  # 0/1/2 seconds after the reference
+        lat = ds.createVariable("lat", "f8", ("t",))
+        lon = ds.createVariable("lon", "f8", ("t",))
+        lat[:] = [7.0, 8.0, 9.0]
+        lon[:] = [134.0, 135.0, 136.0]
+        ds.close()
+
+        gps = GPSFromNetCDF(str(path), time_var="t")
+        # Reference epoch seconds for 2023-05-03 06:51:31 UTC.
+        from datetime import UTC, datetime
+
+        t0 = datetime(2023, 5, 3, 6, 51, 31, tzinfo=UTC).timestamp()
+        np.testing.assert_allclose(gps.lat(np.array([t0])), [7.0])
+        np.testing.assert_allclose(gps.lat(np.array([t0 + 1.0])), [8.0])
+        np.testing.assert_allclose(gps.lon(np.array([t0 + 2.0])), [136.0])

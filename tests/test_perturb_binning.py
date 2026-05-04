@@ -73,6 +73,42 @@ class TestBinByDepth:
         assert result.sizes["profile"] == 2
         assert result.sizes["bin"] > 0
 
+    def test_per_profile_scalars_propagate(self, tmp_path):
+        """Scalar lat/lon/stime/etime on each per-profile NetCDF should
+        appear as 1-D ``(profile,)`` vars on the binned output."""
+        # 2026-01-01 00:00:00 UTC in epoch seconds
+        t0 = 1767225600.0
+        lats = [10.0, 20.0]
+        lons = [-150.0, -140.0]
+        stimes = [t0, t0 + 100.0]
+        etimes = [t0 + 60.0, t0 + 200.0]
+        for i in range(2):
+            n = 50
+            depth = np.linspace(0, 50, n)
+            T = 20.0 - 0.1 * depth
+            ds = xr.Dataset(
+                {
+                    "T": (["time_slow"], T),
+                    "depth": (["time_slow"], depth),
+                    "lat": ((), lats[i]),
+                    "lon": ((), lons[i]),
+                    "stime": ((), stimes[i]),
+                    "etime": ((), etimes[i]),
+                },
+                coords={"time_slow": np.arange(n, dtype=float)},
+            )
+            ds.to_netcdf(tmp_path / f"prof{i:02d}.nc")
+
+        files = sorted(tmp_path.glob("*.nc"))
+        result = bin_by_depth(files, bin_width=5.0)
+        for v in ("lat", "lon", "stime", "etime"):
+            assert v in result.data_vars, f"{v} missing from binned output"
+            assert result[v].dims == ("profile",)
+        np.testing.assert_allclose(result["lat"].values, lats)
+        np.testing.assert_allclose(result["lon"].values, lons)
+        np.testing.assert_allclose(result["stime"].values, stimes)
+        np.testing.assert_allclose(result["etime"].values, etimes)
+
     def test_mean_vs_median(self, tmp_path):
         n = 200
         depth = np.linspace(0, 20, n)

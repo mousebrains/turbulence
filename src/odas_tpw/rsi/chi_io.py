@@ -580,7 +580,7 @@ def _build_chi_dataset(
         t_out,
         "thermistor probe name",
         {
-            "Conventions": "CF-1.13",
+            "Conventions": "CF-1.13, ACDD-1.3",
             "fft_length": fft_length,
             "diss_length": diss_length,
             "overlap": overlap,

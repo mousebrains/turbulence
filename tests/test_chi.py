@@ -490,7 +490,7 @@ class TestChiIntegration:
         ds = results[0]
 
         # Global attributes
-        assert ds.attrs["Conventions"] == "CF-1.13"
+        assert ds.attrs["Conventions"] == "CF-1.13, ACDD-1.3"
         assert "history" in ds.attrs
 
         # Time coordinate
@@ -536,7 +536,7 @@ class TestChiIntegration:
 
         out_paths = compute_chi_file(PROFILE_FILE, tmp_path, fft_length=512)
         ds = xr.open_dataset(out_paths[0])
-        assert ds.attrs["Conventions"] == "CF-1.13"
+        assert ds.attrs["Conventions"] == "CF-1.13, ACDD-1.3"
         assert ds["chi"].attrs["units"] == "K2 s-1"
         assert "history" in ds.attrs
         ds.close()

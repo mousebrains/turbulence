@@ -15,6 +15,27 @@ from odas_tpw.perturb.config import merge_config, resolve_output_dir
 logger = logging.getLogger(__name__)
 
 
+def _copy_profile_scalars(prof_path: str | Path, target_ds) -> None:
+    """Copy CF §9 profile scalars (lat, lon, stime, etime) onto *target_ds*.
+
+    The diss/chi per-profile NetCDFs share the same profile bounds as the
+    source profile NetCDF, so they can carry the same lat/lon/time scalars.
+    Downstream :func:`bin_by_depth` picks them up to populate per-profile
+    1-D variables in the binned/combo output, which in turn unlocks ACDD
+    ``geospatial_lat/lon_min/max`` and ``time_coverage_start/end``.
+    """
+    import xarray as xr
+
+    try:
+        with xr.open_dataset(prof_path) as src:
+            for sname in ("lat", "lon", "stime", "etime"):
+                if sname in src.data_vars and src[sname].ndim == 0:
+                    target_ds[sname] = src[sname]
+    except Exception:
+        # Profile file missing scalars — older runs / external NCs, fine.
+        pass
+
+
 def _adjust_profile_bounds(
     profiles: list[tuple[int, int]],
     pf,
@@ -331,6 +352,7 @@ def process_file(
                 pf,
                 output_dirs["profiles"],
                 profiles=profiles,
+                gps=gps,
             )
             result["profiles"] = [str(p) for p in prof_paths]
         except Exception as exc:
@@ -364,6 +386,7 @@ def process_file(
                     if excluded_probes:
                         _nan_excluded_probes(ds, excluded_probes, p_path.name)
                     ds = mk_epsilon_mean(ds, eps_cfg.get("epsilon_minimum", 1e-13))
+                    _copy_profile_scalars(prof_path, ds)
                     out_name = Path(prof_path).name
                     out_path = output_dirs["diss"] / out_name
                     ds.to_netcdf(out_path)
@@ -391,6 +414,7 @@ def process_file(
                     )
                     diss_ds.close()
                     for chi_ds in chi_results:
+                        _copy_profile_scalars(prof_path, chi_ds)
                         out_name = Path(prof_path).name
                         out_path = output_dirs["chi"] / out_name
                         chi_ds.to_netcdf(out_path)

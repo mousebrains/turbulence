@@ -26,9 +26,14 @@ class TestSchemas:
             assert key in CTD_SCHEMA
 
     def test_all_entries_have_units(self):
+        # ``profile`` is a CF profile-id index (cf_role) — has no physical
+        # units and CF-1.13 §9.5 specifies it deliberately omits ``units``.
+        skip_unitless = {"profile"}
         schemas = [("COMBO", COMBO_SCHEMA), ("CHI", CHI_SCHEMA), ("CTD", CTD_SCHEMA)]
         for schema_name, schema in schemas:
             for var, attrs in schema.items():
+                if var in skip_unitless:
+                    continue
                 assert "units" in attrs, f"{schema_name}.{var} missing units"
 
     def test_all_entries_have_long_name(self):
@@ -39,7 +44,8 @@ class TestSchemas:
 
     def test_global_attrs_cf_convention(self):
         assert "Conventions" in GLOBAL_ATTRS
-        assert "CF-1.8" in GLOBAL_ATTRS["Conventions"]
+        assert "CF-1.13" in GLOBAL_ATTRS["Conventions"]
+        assert "ACDD-1.3" in GLOBAL_ATTRS["Conventions"]
 
 
 class TestApplySchema:

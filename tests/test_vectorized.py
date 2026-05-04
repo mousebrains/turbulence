@@ -465,6 +465,6 @@ class TestVectorizedIntegration:
         pf = PFile(P_FILES[5])
         results = get_diss(pf)
         ds = results[0]
-        assert ds.attrs.get("Conventions") == "CF-1.13"
+        assert ds.attrs.get("Conventions") == "CF-1.13, ACDD-1.3"
         assert "history" in ds.attrs
         assert ds.coords["t"].attrs.get("standard_name") == "time"
