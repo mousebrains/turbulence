@@ -975,3 +975,64 @@ class TestRunCombo:
         _run_combo(tmp_path, None, None, None, ctd_dir, {}, config={"ctd": {"bin_width": 0.5}})
         sigs = list((tmp_path / "ctd_combo").glob(".params_sha256_*"))
         assert len(sigs) == 1, "ctd_combo dir should carry one signature file"
+
+    def test_time_binned_combo_uses_lengthwise_glue(self, tmp_path):
+        """When *bin_method* is ``time``, the diss/chi/profile combos must
+        concatenate lengthwise (along the time dimension) — the layout used
+        for moored or horizontally-flying instruments where every per-file
+        binned NC is a time-series, not a (bin x profile) grid.
+        """
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _run_combo
+
+        prof_dir = tmp_path / "profiles_binned_00"
+        prof_dir.mkdir()
+        # Two per-file time-binned NetCDFs whose time vectors must concat.
+        for i, t0 in enumerate([0.0, 10.0]):
+            ds = xr.Dataset(
+                {"T": (["time"], np.arange(5.0) + i)},
+                coords={"time": t0 + np.arange(5.0)},
+            )
+            ds.to_netcdf(prof_dir / f"f{i}.nc")
+
+        _run_combo(tmp_path, prof_dir, None, None, None, {}, bin_method="time")
+        out = tmp_path / "combo" / "combo.nc"
+        assert out.exists()
+        combo = xr.open_dataset(out)
+        # 10 time bins (5 per file, two files), monotonic, with the
+        # CF trajectory featureType selected by make_combo.
+        assert combo.sizes["time"] == 10
+        assert combo.attrs["featureType"] == "trajectory"
+        combo.close()
+
+    def test_time_binned_combo_unions_sensor_sets(self, tmp_path):
+        """For the moored / scalar case, two files with different sensor
+        sets must merge into a wider combo — DO from file 1, Chl from
+        file 2, both NaN-filled where they didn't exist."""
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _run_combo
+
+        prof_dir = tmp_path / "profiles_binned_00"
+        prof_dir.mkdir()
+        ds1 = xr.Dataset(
+            {"T": (["time"], np.array([1.0, 2.0])), "DO": (["time"], np.array([5.0, 6.0]))},
+            coords={"time": np.array([0.0, 1.0])},
+        )
+        ds2 = xr.Dataset(
+            {"T": (["time"], np.array([3.0, 4.0])), "Chl": (["time"], np.array([7.0, 8.0]))},
+            coords={"time": np.array([2.0, 3.0])},
+        )
+        ds1.to_netcdf(prof_dir / "a.nc")
+        ds2.to_netcdf(prof_dir / "b.nc")
+
+        _run_combo(tmp_path, prof_dir, None, None, None, {}, bin_method="time")
+        combo = xr.open_dataset(tmp_path / "combo" / "combo.nc")
+        # Outer join: union of T, DO, Chl across files; missing-by-file
+        # samples come back NaN.
+        for v in ("T", "DO", "Chl"):
+            assert v in combo.data_vars
+        assert np.isnan(combo["DO"].values[2:]).all()
+        assert np.isnan(combo["Chl"].values[:2]).all()
+        combo.close()
