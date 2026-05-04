@@ -471,7 +471,7 @@ class TestRunPipelineParallel:
     """Verify the ``jobs > 1`` branch wires the worker initializer + initargs."""
 
     def test_pool_initializer_uses_logging_setup(self, tmp_path):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from odas_tpw.perturb.pipeline import run_pipeline
 
