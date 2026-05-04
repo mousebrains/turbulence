@@ -555,6 +555,49 @@ class TestIntegration:
             assert tvar.axis == "T"
             assert "seconds since" in tvar.units
 
+        # stime/etime are derived from the PFile's start_time and so are
+        # always present.  lat/lon require a gps provider — without one,
+        # the per-profile NetCDF should not carry them.
+        assert "stime" in ds.variables
+        assert "etime" in ds.variables
+        assert "lat" not in ds.variables
+        assert "lon" not in ds.variables
+        ds.close()
+
+    def test_profile_with_gps_writes_cf9_scalars(self, skip_no_data, tmp_path):
+        """extract_profiles + gps writes CF §9 scalar lat/lon/stime/etime."""
+        import netCDF4 as nc
+
+        from odas_tpw.perturb.gps import GPSFixed
+        from odas_tpw.rsi.profile import extract_profiles
+
+        prof_dir = tmp_path / "prof_gps"
+        gps = GPSFixed(7.0, 134.0)
+        prof_paths = extract_profiles(PROFILE_FILE, prof_dir, gps=gps)
+        assert len(prof_paths) >= 1
+
+        ds = nc.Dataset(str(prof_paths[0]), "r")
+        # Scalar coords with full CF time / coordinate attrs.
+        for sname, std in (
+            ("stime", "time"),
+            ("etime", "time"),
+            ("lat", "latitude"),
+            ("lon", "longitude"),
+        ):
+            assert sname in ds.variables, f"{sname} missing"
+            v = ds.variables[sname]
+            assert v.shape == (), f"{sname} should be scalar"
+            assert v.standard_name == std
+        # Time scalars are in seconds-since-epoch; the source PFile is from
+        # 2023+ so the value must be > 1.6e9 (Sun, 13 Jul 2020 onward).
+        assert ds.variables["stime"][...] > 1.6e9
+        assert ds.variables["etime"][...] >= ds.variables["stime"][...]
+        # GPSFixed returns the constants regardless of query time.
+        assert float(ds.variables["lat"][...]) == 7.0
+        assert float(ds.variables["lon"][...]) == 134.0
+        # Vertical / horizontal axis attrs follow CF.
+        assert ds.variables["lat"].axis == "Y"
+        assert ds.variables["lon"].axis == "X"
         ds.close()
 
     def test_salinity_passthrough(self, skip_no_data):

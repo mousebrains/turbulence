@@ -149,6 +149,35 @@ class TestGPSFromCSV:
         csv_file = self._make_csv(tmp_path / "gps.csv")
         assert isinstance(GPSFromCSV(csv_file), GPSProvider)
 
+    def test_datetime64_column_normalises_via_helper(self):
+        """``_to_epoch_seconds`` collapses datetime64 columns to float
+        epoch seconds.  This is the path that `GPSFromCSV` takes when the
+        caller hands it a pandas-parsed datetime column."""
+        from odas_tpw.perturb.gps import _to_epoch_seconds
+
+        # 2023-01-01T00:00:00 UTC, +1 s, +2 s — datetime64[ns] like
+        # pd.read_csv(parse_dates=...) would yield.
+        arr = np.array(
+            [
+                np.datetime64("2023-01-01T00:00:00", "ns"),
+                np.datetime64("2023-01-01T00:00:01", "ns"),
+                np.datetime64("2023-01-01T00:00:02", "ns"),
+            ]
+        )
+        out = _to_epoch_seconds(arr)
+        assert out.dtype == np.float64
+        # 2023-01-01T00:00:00Z is 1672531200 epoch seconds.
+        np.testing.assert_allclose(out, [1672531200.0, 1672531201.0, 1672531202.0])
+
+    def test_helper_passthrough_for_numeric(self):
+        """Numeric columns are passed through (callers are responsible for
+        ensuring epoch seconds)."""
+        from odas_tpw.perturb.gps import _to_epoch_seconds
+
+        out = _to_epoch_seconds(np.array([1.0, 2.0, 3.0]))
+        assert out.dtype == np.float64
+        np.testing.assert_allclose(out, [1.0, 2.0, 3.0])
+
 
 class TestGPSFromNetCDF:
     def _make_nc(self, path, time_var="time", lat_var="lat", lon_var="lon"):

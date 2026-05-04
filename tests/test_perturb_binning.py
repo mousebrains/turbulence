@@ -109,6 +109,42 @@ class TestBinByDepth:
         np.testing.assert_allclose(result["stime"].values, stimes)
         np.testing.assert_allclose(result["etime"].values, etimes)
 
+    def test_datetime64_stime_etime_decoded_to_epoch_seconds(self, tmp_path):
+        """When stime/etime are written with CF units, xarray decodes them
+        to datetime64 on read.  bin_by_depth must reduce back to epoch
+        seconds — combo's auto-fill expects numeric timestamps."""
+        import netCDF4 as nc
+
+        for i in range(2):
+            n = 30
+            path = tmp_path / f"prof{i:02d}.nc"
+            ds = nc.Dataset(str(path), "w")
+            ds.createDimension("z", n)
+            d = ds.createVariable("depth", "f8", ("z",))
+            t = ds.createVariable("T", "f8", ("z",))
+            d[:] = np.linspace(0, 50, n)
+            t[:] = np.linspace(15, 5, n)
+            for sname, val in (("stime", 1767225600.0 + i * 100.0),
+                               ("etime", 1767225700.0 + i * 100.0)):
+                v = ds.createVariable(sname, "f8", ())
+                v[...] = val
+                v.units = "seconds since 1970-01-01"
+                v.calendar = "standard"
+                v.standard_name = "time"
+            ds.close()
+
+        files = sorted(tmp_path.glob("*.nc"))
+        result = bin_by_depth(files, bin_width=5.0)
+        # After decode-then-reduce, values are float epoch seconds again.
+        assert result["stime"].dtype.kind == "f"
+        np.testing.assert_allclose(
+            result["stime"].values, [1767225600.0, 1767225700.0], rtol=0, atol=1e-3
+        )
+        # ``units`` and ``calendar`` were stripped to avoid CF-encoder
+        # conflicts when writing the combo.
+        assert "units" not in result["stime"].attrs
+        assert "calendar" not in result["stime"].attrs
+
     def test_mean_vs_median(self, tmp_path):
         n = 200
         depth = np.linspace(0, 20, n)

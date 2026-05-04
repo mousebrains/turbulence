@@ -166,6 +166,88 @@ class TestMakeCombo:
         assert combo.attrs["time_coverage_end"].startswith("2026-01-01T02:01:00")
         # ISO 8601 duration: 2 hours 1 minute (trailing zero seconds omitted)
         assert combo.attrs["time_coverage_duration"] == "PT2H1M"
+        # Resolution is the median delta between successive stimes (60 s).
+        assert combo.attrs["time_coverage_resolution"] == "PT1M"
+        combo.close()
+
+    def test_seconds_only_resolution(self, tmp_path):
+        """Cover the seconds-only ISO duration branch (PT<n>S)."""
+        binned_dir = tmp_path / "binned"
+        binned_dir.mkdir()
+        t0 = 1767225600.0
+        # 30 seconds between profile starts → resolution PT30S
+        stimes = np.array([t0 + 30.0 * i for i in range(3)])
+        ds = xr.Dataset(
+            {
+                "T": (["bin", "profile"], np.zeros((3, 3))),
+                "stime": (["profile"], stimes),
+                "etime": (["profile"], stimes + 1.0),
+            },
+            coords={"bin": np.arange(3, dtype=float), "profile": np.arange(3)},
+        )
+        ds.to_netcdf(binned_dir / "file00.nc")
+        out = make_combo(binned_dir, tmp_path / "combo", COMBO_SCHEMA, method="depth")
+        combo = xr.open_dataset(out)
+        assert combo.attrs["time_coverage_resolution"] == "PT30S"
+        combo.close()
+
+    def test_multi_day_duration_and_hourly_resolution(self, tmp_path):
+        """Cover the >1 day branch in iso_dur and the hourly branch in
+        time_coverage_resolution (lines combo.py:204, 228)."""
+        binned_dir = tmp_path / "binned"
+        binned_dir.mkdir()
+        output_dir = tmp_path / "combo"
+        # Three profiles 1 hour apart, spanning 3 days
+        t0 = 1767225600.0  # 2026-01-01T00:00:00
+        n_prof = 4
+        stimes = np.array([t0 + 3600.0 * 24 * i for i in range(n_prof)])
+        etimes = stimes + 60.0
+        ds = xr.Dataset(
+            {
+                "T": (["bin", "profile"], np.zeros((3, n_prof))),
+                "stime": (["profile"], stimes),
+                "etime": (["profile"], etimes),
+            },
+            coords={"bin": np.arange(3, dtype=float), "profile": np.arange(n_prof)},
+        )
+        ds.to_netcdf(binned_dir / "file00.nc")
+        out = make_combo(binned_dir, output_dir, COMBO_SCHEMA, method="depth")
+        combo = xr.open_dataset(out)
+        # Duration carries a D component plus a T component that contains S
+        # only because total seconds is a whole multiple of one day.
+        assert combo.attrs["time_coverage_duration"].startswith("P3D")
+        # Resolution = median(diff(stimes)) = 86400 s = 24 h.
+        assert combo.attrs["time_coverage_resolution"] == "PT24H"
+        combo.close()
+
+    def test_time_combo_trajectory_id_and_sort(self, tmp_path):
+        """Time-mode combos: featureType=trajectory, trajectory_id scalar
+        is stamped, and concatenated time vars are sorted strictly
+        monotonic."""
+        binned_dir = tmp_path / "binned"
+        binned_dir.mkdir()
+        # Files written out of chronological order: file01 has earlier
+        # times than file00, so concatenation is non-monotonic until we
+        # sort.
+        for i, t_offset in enumerate([3600.0, 0.0]):
+            n = 5
+            t = 1767225600.0 + t_offset + np.arange(n, dtype=float)
+            ds = xr.Dataset(
+                {"T": (["time"], np.zeros(n))},
+                coords={"time": t},
+            )
+            ds["time"].attrs["units"] = "seconds since 1970-01-01"
+            ds["time"].attrs["calendar"] = "standard"
+            ds.to_netcdf(binned_dir / f"file{i:02d}.nc")
+
+        out = make_combo(binned_dir, tmp_path / "combo", COMBO_SCHEMA, method="time")
+        combo = xr.open_dataset(out, decode_times=False)
+        assert combo.attrs["featureType"] == "trajectory"
+        assert "trajectory_id" in combo
+        assert combo["trajectory_id"].attrs["cf_role"] == "trajectory_id"
+        # Time is now strictly increasing across the concatenated files.
+        t = combo["time"].values
+        assert np.all(np.diff(t) > 0)
         combo.close()
 
 

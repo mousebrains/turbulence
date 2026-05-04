@@ -180,12 +180,10 @@ def make_combo(
             )
             t_end = np.datetime64("1970-01-01") + np.timedelta64(int(np.nanmax(etime)), "s")
     elif "time" in combo:
+        # ``decode_times=False`` keeps numeric time on read, so values are
+        # epoch seconds — convert via timedelta64 for ISO formatting.
         t = combo["time"].values
-        if t.size and t.dtype.kind == "M":
-            t_start = np.nanmin(t)
-            t_end = np.nanmax(t)
-        elif t.size and np.any(np.isfinite(t.astype("float64"))):
-            # Numeric time — assume seconds since epoch (perturb's CTD output).
+        if t.size and np.any(np.isfinite(t.astype("float64"))):
             t_start = np.datetime64("1970-01-01") + np.timedelta64(
                 int(np.nanmin(t)), "s"
             )
