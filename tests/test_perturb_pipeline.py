@@ -9,6 +9,7 @@ import numpy as np
 
 from odas_tpw.perturb.pipeline import (
     _setup_output_dirs,
+    _upstream_for,
     process_file,
     run_merge,
     run_pipeline,
@@ -100,6 +101,61 @@ class TestSetupOutputDirs:
         }
         dirs = _setup_output_dirs(config)
         assert "ctd" not in dirs
+
+
+class TestUpstreamFor:
+    """The .params_sha256_<hash> signature on each output dir must hash
+    the stage's own params plus every ancestor's params, so a change to a
+    deep upstream knob (e.g. profiles.P_min) propagates to a new chi/binned
+    hash and a fresh output dir.  This locks in the chains."""
+
+    def _config(self):
+        return {
+            "profiles": {"P_min": 0.5},
+            "epsilon": {"fft_length_sec": 0.5},
+            "chi": {"enable": True},
+            "ctd": {"enable": True},
+            "binning": {"width": 1.0},
+        }
+
+    def _sections(self, stage):
+        return [name for name, _ in _upstream_for(stage, self._config())]
+
+    def test_profiles_has_no_upstream(self):
+        assert self._sections("profiles") == []
+
+    def test_diss_includes_profiles(self):
+        assert self._sections("diss") == ["profiles"]
+
+    def test_chi_includes_epsilon_and_profiles(self):
+        # chi -> diss -> profiles
+        assert set(self._sections("chi")) == {"epsilon", "profiles"}
+
+    def test_ctd_has_no_upstream(self):
+        assert self._sections("ctd") == []
+
+    def test_profiles_binned_includes_profiles(self):
+        assert self._sections("profiles_binned") == ["profiles"]
+
+    def test_diss_binned_includes_epsilon_and_profiles(self):
+        # was missing profiles before _upstream_for refactor
+        assert set(self._sections("diss_binned")) == {"epsilon", "profiles"}
+
+    def test_chi_binned_includes_full_chain(self):
+        # was missing epsilon and profiles before _upstream_for refactor
+        assert set(self._sections("chi_binned")) == {"chi", "epsilon", "profiles"}
+
+    def test_combo_includes_profiles(self):
+        assert self._sections("combo") == ["profiles"]
+
+    def test_diss_combo_includes_epsilon_and_profiles(self):
+        assert set(self._sections("diss_combo")) == {"epsilon", "profiles"}
+
+    def test_chi_combo_includes_full_chain(self):
+        assert set(self._sections("chi_combo")) == {"chi", "epsilon", "profiles"}
+
+    def test_ctd_combo_includes_ctd(self):
+        assert self._sections("ctd_combo") == ["ctd"]
 
 
 class TestRunTrim:
@@ -850,3 +906,53 @@ class TestRunCombo:
         with caplog.at_level("ERROR", logger="odas_tpw.perturb.pipeline"):
             _run_combo(tmp_path, None, None, None, ctd_dir, {})
         assert "ctd combo" in caplog.text
+
+    def test_combo_writes_signature_when_config_passed(self, tmp_path):
+        """When _run_combo is given *config*, each produced combo dir gets a
+        ``.params_sha256_<hash>`` file capturing its full upstream chain."""
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _run_combo
+
+        prof_dir = tmp_path / "profiles_binned_00"
+        prof_dir.mkdir()
+        ds = xr.Dataset(
+            {"T": (["bin", "profile"], np.ones((3, 1)))},
+            coords={"bin": np.arange(3.0), "profile": np.arange(1)},
+        )
+        ds.to_netcdf(prof_dir / "binned.nc")
+
+        _run_combo(tmp_path, prof_dir, None, None, None, {}, config={"profiles": {"P_min": 0.5}})
+        sigs = list((tmp_path / "combo").glob(".params_sha256_*"))
+        assert len(sigs) == 1, "combo dir should carry one signature file"
+
+    def test_combo_signature_changes_with_upstream(self, tmp_path):
+        """Two configs that differ only in *profiles* must produce different
+        signatures on the combo dir — proves the upstream chain is hashed."""
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _run_combo
+
+        def _build(out_root):
+            prof_dir = out_root / "profiles_binned_00"
+            prof_dir.mkdir()
+            ds = xr.Dataset(
+                {"T": (["bin", "profile"], np.ones((3, 1)))},
+                coords={"bin": np.arange(3.0), "profile": np.arange(1)},
+            )
+            ds.to_netcdf(prof_dir / "binned.nc")
+            return prof_dir
+
+        a = tmp_path / "a"
+        b = tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        prof_a = _build(a)
+        prof_b = _build(b)
+
+        _run_combo(a, prof_a, None, None, None, {}, config={"profiles": {"P_min": 0.5}})
+        _run_combo(b, prof_b, None, None, None, {}, config={"profiles": {"P_min": 1.5}})
+
+        hash_a = next((a / "combo").glob(".params_sha256_*")).name
+        hash_b = next((b / "combo").glob(".params_sha256_*")).name
+        assert hash_a != hash_b
