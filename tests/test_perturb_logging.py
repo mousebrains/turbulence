@@ -363,7 +363,7 @@ class TestProcessFilePerStageLogs:
                 return_value=[{"start": 0, "end": 50}],
             ),
             patch(
-                "odas_tpw.rsi.profile.extract_profiles", return_value=[prof_nc]
+                "odas_tpw.rsi.profile.extract_profiles", return_value=([prof_nc], [{}])
             ),
             patch(
                 "odas_tpw.rsi.dissipation._compute_epsilon",
@@ -506,7 +506,7 @@ class TestProcessFileExceptionBranches:
                 side_effect=RuntimeError("fp07 boom"),
             ),
             patch(
-                "odas_tpw.rsi.profile.extract_profiles", return_value=[]
+                "odas_tpw.rsi.profile.extract_profiles", return_value=([], [])
             ),  # short-circuit downstream
         ):
             config = self._config(tmp_path, fp07={"calibrate": True})
@@ -540,7 +540,7 @@ class TestProcessFileExceptionBranches:
                 "odas_tpw.processing.ct_align.ct_align",
                 side_effect=RuntimeError("ct boom"),
             ),
-            patch("odas_tpw.rsi.profile.extract_profiles", return_value=[]),
+            patch("odas_tpw.rsi.profile.extract_profiles", return_value=([], [])),
         ):
             config = self._config(tmp_path, ct={"align": True})
             output_dirs = {"profiles": prof_dir}
@@ -619,7 +619,7 @@ class TestProcessFileExceptionBranches:
                 "odas_tpw.rsi.profile.get_profiles",
                 return_value=[{"start": 0, "end": 50}],
             ),
-            patch("odas_tpw.rsi.profile.extract_profiles", return_value=[prof_nc]),
+            patch("odas_tpw.rsi.profile.extract_profiles", return_value=([prof_nc], [{}])),
             patch(
                 "odas_tpw.rsi.dissipation._compute_epsilon",
                 return_value=[xr.Dataset({"epsilon": (("time",), [1e-8])})],
@@ -899,7 +899,7 @@ class TestProcessFileExcludedProbes:
                 return_value=[{"start": 0, "end": 50}],
             ),
             patch(
-                "odas_tpw.rsi.profile.extract_profiles", return_value=[prof_nc]
+                "odas_tpw.rsi.profile.extract_profiles", return_value=([prof_nc], [{}])
             ),
             patch(
                 "odas_tpw.rsi.dissipation._compute_epsilon",

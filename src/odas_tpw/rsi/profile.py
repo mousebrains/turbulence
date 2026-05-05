@@ -38,8 +38,9 @@ def extract_profiles(
     output_dir: str | Path,
     profiles: list[tuple[int, int]] | None = None,
     gps: Any = None,
+    return_scalars: bool = False,
     **profile_kwargs: Any,
-) -> list[Path]:
+) -> list[Path] | tuple[list[Path], list[dict[str, float]]]:
     """Extract profiles from a PFile or full-record NetCDF.
 
     Parameters
@@ -59,6 +60,11 @@ def extract_profiles(
         compliance.  ``gps`` must expose ``lat(t)`` and ``lon(t)`` taking a
         time array in *seconds since pf.start_time* (the same domain as
         ``pf.t_slow``).
+    return_scalars : bool, default False
+        When True, also return a list of dicts (parallel to paths) holding
+        the per-profile scalar values written: ``{"lat", "lon", "stime",
+        "etime"}`` (each missing if not written). The pipeline uses this
+        to skip re-opening every profile NetCDF in the diss/chi steps.
     **profile_kwargs
         Keyword arguments passed to get_profiles (P_min, W_min, etc.).
 
@@ -66,6 +72,9 @@ def extract_profiles(
     -------
     list of Path
         Paths to per-profile NetCDF files written.
+    list of dict
+        Only when ``return_scalars=True``: per-profile raw scalar values
+        (lat/lon as float64, stime/etime as epoch seconds float64).
     """
     import netCDF4 as nc
 
@@ -86,9 +95,10 @@ def extract_profiles(
         profiles = get_profiles(P_slow, W, fs_slow, **profile_kwargs)
     if not profiles:
         logger.warning(f"No profiles found in {data['stem']}")
-        return []
+        return ([], []) if return_scalars else []
 
     output_paths = []
+    output_scalars: list[dict[str, float]] = []
     for pi, (s_slow, e_slow) in enumerate(profiles, 1):
         s_fast = s_slow * ratio
         e_fast = (e_slow + 1) * ratio
@@ -121,9 +131,12 @@ def extract_profiles(
         # the file's start_time, matching ``data["t_slow"]`` semantics.
         t_prof_s = float(data["t_slow"][s_slow])
         t_end_s = float(data["t_slow"][e_slow])
+        scalars: dict[str, float] = {}
         if start_epoch_s is not None:
+            stime_epoch = start_epoch_s + t_prof_s
+            etime_epoch = start_epoch_s + t_end_s
             stime_var = ds.createVariable("stime", "f8", ())
-            stime_var[...] = start_epoch_s + t_prof_s
+            stime_var[...] = stime_epoch
             stime_var.units = "seconds since 1970-01-01"
             stime_var.standard_name = "time"
             stime_var.long_name = "profile start time"
@@ -132,12 +145,14 @@ def extract_profiles(
             stime_var.axis = "T"
 
             etime_var = ds.createVariable("etime", "f8", ())
-            etime_var[...] = start_epoch_s + t_end_s
+            etime_var[...] = etime_epoch
             etime_var.units = "seconds since 1970-01-01"
             etime_var.standard_name = "time"
             etime_var.long_name = "profile end time"
             etime_var.calendar = "standard"
             etime_var.units_metadata = "leap_seconds: utc"
+            scalars["stime"] = stime_epoch
+            scalars["etime"] = etime_epoch
         if gps is not None:
             # GPSProvider expects epoch seconds — t_prof_s is file-relative.
             t_query = np.array([t_prof_s + (start_epoch_s or 0.0)])
@@ -155,6 +170,8 @@ def extract_profiles(
             lon_var.standard_name = "longitude"
             lon_var.long_name = "profile longitude"
             lon_var.axis = "X"
+            scalars["lat"] = lat_val
+            scalars["lon"] = lon_val
 
         n_fast = e_fast - s_fast
         n_slow = s_slow_end - s_slow
@@ -204,11 +221,14 @@ def extract_profiles(
         ds.fs_slow = float(fs_slow)
         ds.close()
         output_paths.append(prof_path)
+        output_scalars.append(scalars)
         logger.info(
             f"Profile {pi}: P={P_slow[s_slow]:.1f}–{P_slow[e_slow]:.1f} dbar, "  # noqa: RUF001
             f"{(e_slow - s_slow) / fs_slow:.1f} s -> {prof_path.name}"
         )
 
+    if return_scalars:
+        return output_paths, output_scalars
     return output_paths
 
 

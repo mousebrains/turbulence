@@ -64,7 +64,71 @@ def _upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
     return chains[stage]
 
 
-def _copy_profile_scalars(prof_path: str | Path, target_ds) -> None:
+_TIME_SCALAR_ATTRS: dict[str, dict[str, str]] = {
+    "stime": {
+        "standard_name": "time",
+        "long_name": "profile start time",
+        "units_metadata": "leap_seconds: utc",
+        "axis": "T",
+    },
+    "etime": {
+        "standard_name": "time",
+        "long_name": "profile end time",
+        "units_metadata": "leap_seconds: utc",
+    },
+}
+_LATLON_SCALAR_ATTRS: dict[str, dict[str, str]] = {
+    "lat": {
+        "units": "degrees_north",
+        "standard_name": "latitude",
+        "long_name": "profile latitude",
+        "axis": "Y",
+    },
+    "lon": {
+        "units": "degrees_east",
+        "standard_name": "longitude",
+        "long_name": "profile longitude",
+        "axis": "X",
+    },
+}
+
+
+def _scalars_to_dataarrays(scalars: dict[str, float]) -> dict:
+    """Build xr.DataArray scalars matching what xr.open_dataset would yield.
+
+    Returns ``{name: xr.DataArray}`` for whichever of ``lat/lon/stime/etime``
+    are present in *scalars*. Time scalars are decoded to ``datetime64[ns]``
+    with the encoding hints needed for round-trip consistency, exactly
+    matching the open_dataset path that previously fed _copy_profile_scalars.
+    """
+    import numpy as np
+    import xarray as xr
+
+    out: dict = {}
+    for name in ("stime", "etime"):
+        if name in scalars:
+            secs = float(scalars[name])
+            # np.datetime64 rejects np.int64 — must be a Python int.
+            ns = int(round(secs * 1e9))
+            arr = xr.DataArray(np.datetime64(ns, "ns"), attrs=_TIME_SCALAR_ATTRS[name])
+            arr.encoding = {
+                "units": "seconds since 1970-01-01",
+                "calendar": "standard",
+                "dtype": "float64",
+            }
+            out[name] = arr
+    for name in ("lat", "lon"):
+        if name in scalars:
+            arr = xr.DataArray(np.float64(scalars[name]), attrs=_LATLON_SCALAR_ATTRS[name])
+            out[name] = arr
+    return out
+
+
+def _copy_profile_scalars(
+    prof_path: str | Path,
+    target_ds,
+    scalars_cache: dict[str, dict[str, float]] | None = None,
+) -> None:
     """Copy CF §9 profile scalars (lat, lon, stime, etime) onto *target_ds*.
 
     The diss/chi per-profile NetCDFs share the same profile bounds as the
@@ -72,7 +136,19 @@ def _copy_profile_scalars(prof_path: str | Path, target_ds) -> None:
     Downstream :func:`bin_by_depth` picks them up to populate per-profile
     1-D variables in the binned/combo output, which in turn unlocks ACDD
     ``geospatial_lat/lon_min/max`` and ``time_coverage_start/end``.
+
+    *scalars_cache* maps profile path → raw scalar dict (as produced by
+    :func:`extract_profiles` with ``return_scalars=True``). When supplied
+    and the path is present, the scalars are reconstructed in memory and
+    no NetCDF re-open is needed — saves ~10 ms × 166 profiles per file.
     """
+    if scalars_cache is not None:
+        scalars = scalars_cache.get(str(prof_path))
+        if scalars is not None:
+            for name, da in _scalars_to_dataarrays(scalars).items():
+                target_ds[name] = da
+            return
+
     import xarray as xr
 
     try:
@@ -405,15 +481,20 @@ def process_file(
         # Write per-profile NetCDFs
         from odas_tpw.rsi.profile import extract_profiles
 
+        prof_scalars_cache: dict[str, dict[str, float]] = {}
         if "profiles" in output_dirs:
             try:
-                prof_paths = extract_profiles(
+                prof_paths, prof_scalars = extract_profiles(
                     pf,
                     output_dirs["profiles"],
                     profiles=profiles,
                     gps=gps,
+                    return_scalars=True,
                 )
                 result["profiles"] = [str(p) for p in prof_paths]
+                prof_scalars_cache = {
+                    str(p): s for p, s in zip(prof_paths, prof_scalars)
+                }
             except Exception as exc:
                 logger.error("extracting profiles %s: %s", p_path.name, exc)
                 return result
@@ -446,7 +527,7 @@ def process_file(
                         if excluded_probes:
                             _nan_excluded_probes(ds, excluded_probes, p_path.name)
                         ds = mk_epsilon_mean(ds, eps_cfg.get("epsilon_minimum", 1e-13))
-                        _copy_profile_scalars(prof_path, ds)
+                        _copy_profile_scalars(prof_path, ds, prof_scalars_cache)
                         out_name = Path(prof_path).name
                         out_path = output_dirs["diss"] / out_name
                         ds.to_netcdf(out_path)
@@ -479,7 +560,7 @@ def process_file(
                         )
                         diss_ds.close()
                         for chi_ds in chi_results:
-                            _copy_profile_scalars(prof_path, chi_ds)
+                            _copy_profile_scalars(prof_path, chi_ds, prof_scalars_cache)
                             out_name = Path(prof_path).name
                             out_path = output_dirs["chi"] / out_name
                             chi_ds.to_netcdf(out_path)
