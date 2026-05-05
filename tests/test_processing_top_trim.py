@@ -52,6 +52,40 @@ class TestComputeTrimDepth:
         trim = compute_trim_depth(depth, {})
         assert trim is None
 
+    def test_bin_edges_too_few_returns_none(self):
+        """min_depth==max_depth produces fewer than 2 bin edges."""
+        depth = np.linspace(0, 10, 100)
+        sh1 = np.random.randn(100) * 0.01
+        # min_depth == max_depth → bin_edges has 1 entry → return None (line 67)
+        trim = compute_trim_depth(
+            depth, {"sh1": sh1}, dz=1.0, min_depth=10.0, max_depth=10.0
+        )
+        assert trim is None
+
+    def test_mismatched_channel_length_skipped(self):
+        """A channel whose length differs from depth is skipped (line 74)."""
+        depth = np.linspace(0, 60, 200)
+        # short_ch has length 50, mismatches depth (200) → skipped
+        # Only short_ch is provided → all_stds stays empty → return None
+        trim = compute_trim_depth(
+            depth, {"short_ch": np.random.randn(50)},
+            dz=1.0, min_depth=1.0, max_depth=50.0,
+        )
+        assert trim is None
+
+    def test_too_few_valid_stds_skipped(self):
+        """Channels with <3 valid bins are skipped (line 86)."""
+        # Use a depth that yields only 2 bins, with 1-sample bins (no std)
+        # min/max chosen so few bins; data so finite-std count < 3
+        depth = np.array([5.0, 5.5, 6.0, 6.5])  # tiny range
+        sh1 = np.array([0.0, 1.0, 0.0, 1.0])
+        # Most bins will be empty or have <2 samples → finite stds < 3
+        # All channels skipped → trim_depths empty → return None (line 95)
+        trim = compute_trim_depth(
+            depth, {"sh1": sh1}, dz=1.0, min_depth=1.0, max_depth=50.0,
+        )
+        assert trim is None
+
 
 class TestComputeTrimDepths:
     def test_multiple_profiles(self):

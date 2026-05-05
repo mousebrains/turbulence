@@ -53,3 +53,22 @@ class TestFindPFiles:
         (tmp_path / "file3.txt").write_bytes(b"\x00")
         result = find_p_files(tmp_path)
         assert len(result) == 1
+
+    def test_directory_matching_glob_skipped(self, tmp_path):
+        """A directory that matches the glob pattern is filtered out."""
+        # Create a directory whose name ends in .p — broad pattern matches it
+        (tmp_path / "fake.p").mkdir()
+        (tmp_path / "real.p").write_bytes(b"\x00")
+        result = find_p_files(tmp_path, pattern="*.p")
+        # Only the real file is returned; the directory is rejected at is_file()
+        assert len(result) == 1
+        assert result[0].name == "real.p"
+
+    def test_broad_glob_filters_non_p_files(self, tmp_path):
+        """Broad glob ('*') reaches the suffix check (line 34)."""
+        (tmp_path / "file1.p").write_bytes(b"\x00")
+        (tmp_path / "file2.nc").write_bytes(b"\x00")
+        (tmp_path / "file3.txt").write_bytes(b"\x00")
+        result = find_p_files(tmp_path, pattern="*")
+        assert len(result) == 1
+        assert result[0].name == "file1.p"

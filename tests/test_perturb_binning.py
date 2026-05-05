@@ -310,3 +310,109 @@ class TestBinChi:
         result = bin_chi([tmp_path / "chi.nc"], bin_width=5.0, method="time")
         assert "chi" in result
         assert "time" in result.dims
+
+
+# ---------------------------------------------------------------------------
+# Edge cases for bin_by_depth and bin_by_time
+# ---------------------------------------------------------------------------
+
+
+class TestBinByDepthEdges:
+    def test_skip_profile_with_no_depth_var(self, tmp_path):
+        """A profile NC with no depth/P/P_mean is silently skipped (line 148)."""
+        # Profile with depth/P/P_mean
+        good = xr.Dataset(
+            {
+                "P": (["t"], np.linspace(5, 50, 30)),
+                "epsilon": (["t"], np.random.lognormal(-20, 1, 30)),
+            }
+        )
+        good.to_netcdf(tmp_path / "good.nc")
+        # Profile without any pressure/depth variable → skipped
+        bad = xr.Dataset({"epsilon": (["t"], np.full(10, 1e-8))})
+        bad.to_netcdf(tmp_path / "bad.nc")
+
+        result = bin_by_depth(
+            [tmp_path / "good.nc", tmp_path / "bad.nc"], bin_width=5.0
+        )
+        # The skipped profile leaves NaNs in its column; the good one populates
+        assert "epsilon" in result
+        assert result.sizes["profile"] == 2
+
+    def test_skip_datetime_variable(self, tmp_path):
+        """Datetime64 data variables are skipped in bin_by_depth (line 180)."""
+        from datetime import datetime, timedelta
+
+        n = 30
+        dts = np.array(
+            [datetime(2025, 1, 1) + timedelta(seconds=i) for i in range(n)],
+            dtype="datetime64[ns]",
+        )
+        ds = xr.Dataset(
+            {
+                "P": (["t"], np.linspace(5, 50, n)),
+                "epsilon": (["t"], np.random.lognormal(-20, 1, n)),
+                "ts": (["t"], dts),  # datetime64 → skipped
+            }
+        )
+        ds.to_netcdf(tmp_path / "p.nc")
+        result = bin_by_depth([tmp_path / "p.nc"], bin_width=5.0)
+        # The datetime variable should not appear as a binned data variable
+        assert "ts" not in result.data_vars
+        assert "epsilon" in result
+
+
+class TestBinByTimeEdges:
+    def test_short_time_range_pads_bin_edges(self, tmp_path):
+        """When (t_max - t_min) < bin_width, bin_edges has only 1 entry → pad."""
+        n = 5
+        ds = xr.Dataset(
+            {
+                "epsilon": (["t"], np.full(n, 1e-8)),
+                "t_slow": (["t"], np.linspace(0.0, 0.1, n)),
+            },
+            coords={"t": np.arange(n, dtype=float)},
+        )
+        ds.to_netcdf(tmp_path / "tiny.nc")
+        # bin_width=10.0 >> t-range (0..0.1), triggering the padding fallback
+        result = bin_by_time([tmp_path / "tiny.nc"], bin_width=10.0)
+        # Should not crash; should produce a single-time-bin dataset
+        assert "epsilon" in result
+        assert result.sizes["time"] >= 1
+
+    def test_skip_mismatched_length_var(self, tmp_path):
+        """A variable whose length doesn't match the time coord is skipped."""
+        n = 30
+        ds = xr.Dataset(
+            {
+                "epsilon": (["t"], np.full(n, 1e-8)),
+                "t_slow": (["t"], np.linspace(0, 1, n)),
+                # mismatched_var on a different dim — skipped at line 264
+                "mismatched_var": (["other"], np.zeros(5)),
+            }
+        )
+        ds.to_netcdf(tmp_path / "p.nc")
+        result = bin_by_time([tmp_path / "p.nc"], bin_width=0.1)
+        assert "epsilon" in result
+        assert "mismatched_var" not in result.data_vars
+
+    def test_skip_datetime_variable_in_bin_by_time(self, tmp_path):
+        """Datetime64 vars are skipped in bin_by_time (line 266)."""
+        from datetime import datetime, timedelta
+
+        n = 30
+        dts = np.array(
+            [datetime(2025, 1, 1) + timedelta(seconds=i) for i in range(n)],
+            dtype="datetime64[ns]",
+        )
+        ds = xr.Dataset(
+            {
+                "epsilon": (["t"], np.full(n, 1e-8)),
+                "t_slow": (["t"], np.linspace(0, 1, n)),
+                "stime": (["t"], dts),
+            }
+        )
+        ds.to_netcdf(tmp_path / "p.nc")
+        result = bin_by_time([tmp_path / "p.nc"], bin_width=0.1)
+        assert "epsilon" in result
+        assert "stime" not in result.data_vars

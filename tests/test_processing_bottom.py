@@ -99,3 +99,25 @@ class TestDetectBottomCrash:
         depth = np.linspace(0, 100, 1000)
         Ax = np.zeros(500)
         assert detect_bottom_crash(depth, {"Ax": Ax}, fs=512.0) is None
+
+    def test_too_few_bins_returns_none(self):
+        """When max_depth - depth_minimum < bin_size, len(bins) < 2."""
+        depth = np.linspace(0, 12, 200)  # max_depth=12 is just barely above min
+        Ax = np.random.randn(200) * 0.01
+        # depth_window=10, depth_minimum=10 → bins = arange(10, 22, 10) = [10, 20]
+        # len < 2 only when window>max-min. Use window=20 with max=12 → bins = [10] only
+        result = detect_bottom_crash(
+            depth, {"Ax": Ax}, fs=64.0, depth_window=20.0, depth_minimum=10.0
+        )
+        assert result is None
+
+    def test_too_few_valid_bins_returns_none(self):
+        """If only 1-2 bins have enough samples for a finite std, return None."""
+        # Tiny profile with just 3 points, all near the surface
+        depth = np.array([10.5, 11.0, 11.5, 12.0])
+        Ax = np.array([0.1, 0.2, 0.3, 0.4])
+        # Most bins empty → < 3 valid stds → return None (line 100)
+        result = detect_bottom_crash(
+            depth, {"Ax": Ax}, fs=64.0, depth_window=4.0, depth_minimum=10.0
+        )
+        assert result is None

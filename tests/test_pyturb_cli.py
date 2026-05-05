@@ -910,3 +910,572 @@ class TestMainEntryPaths:
         captured = capsys.readouterr()
         # argparse prints help to stdout
         assert "usage:" in captured.out.lower() or "pyturb-cli" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# pyturb/p2nc.py — additional branch coverage
+# ---------------------------------------------------------------------------
+
+
+class TestP2ncBranches:
+    """Cover the conversion worker, glob expansion, no-work, and parallel paths."""
+
+    def test_convert_one_writes_nc(self, tmp_path, sample_p_file):
+        """_convert_one converts a real .p file and returns (name, size_mb)."""
+        from odas_tpw.pyturb.p2nc import _convert_one
+
+        nc_path = tmp_path / "out.nc"
+        name, size_mb = _convert_one(sample_p_file, nc_path, complevel=4)
+        assert name == "out.nc"
+        assert size_mb > 0
+        assert nc_path.exists()
+
+    def test_serial_real_conversion(self, tmp_path, sample_p_file):
+        """Serial path (n_workers=1) converts and prints output."""
+        from odas_tpw.pyturb.p2nc import run_p2nc
+
+        out_dir = tmp_path / "out"
+        args = MagicMock()
+        args.files = [str(sample_p_file)]
+        args.output = str(out_dir)
+        args.compress = True
+        args.compression_level = 4
+        args.n_workers = 1
+        args.min_file_size = 1
+        args.overwrite = True
+
+        run_p2nc(args)
+        nc_files = list(out_dir.glob("*.nc"))
+        assert len(nc_files) == 1
+
+    def test_parallel_path_runs(self, tmp_path, sample_p_file):
+        """Parallel path with stubbed pool exercises the as_completed loop."""
+        # Stub the pool to run synchronously and return a fake (name, size) tuple
+        from concurrent.futures import Future
+
+        from odas_tpw.pyturb import p2nc as p2nc_mod
+        from odas_tpw.pyturb.p2nc import run_p2nc
+
+        class _StubPool:
+            def __init__(self, max_workers=None):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def submit(self, fn, *args):
+                f = Future()
+                f.set_result(("fake.nc", 1.5))
+                return f
+
+        out_dir = tmp_path / "out_parallel"
+        args = MagicMock()
+        args.files = [str(sample_p_file)]
+        args.output = str(out_dir)
+        args.compress = False  # complevel=0 path
+        args.compression_level = 4
+        args.n_workers = 4
+        args.min_file_size = 1
+        args.overwrite = True
+
+        with patch.object(p2nc_mod, "ProcessPoolExecutor", _StubPool):
+            run_p2nc(args)
+        # Pool stub returned the fake result; nothing real to assert on disk
+
+    def test_parallel_exception_path(self, tmp_path, sample_p_file, caplog):
+        """Parallel future.result() exception is logged, not raised."""
+        import logging
+        from concurrent.futures import Future
+
+        from odas_tpw.pyturb import p2nc as p2nc_mod
+        from odas_tpw.pyturb.p2nc import run_p2nc
+
+        class _StubPool:
+            def __init__(self, max_workers=None):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def submit(self, fn, *args):
+                f = Future()
+                f.set_exception(RuntimeError("boom"))
+                return f
+
+        out_dir = tmp_path / "out_exc"
+        args = MagicMock()
+        args.files = [str(sample_p_file)]
+        args.output = str(out_dir)
+        args.compress = True
+        args.compression_level = 4
+        args.n_workers = 2
+        args.min_file_size = 1
+        args.overwrite = True
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.pyturb.p2nc"), \
+             patch.object(p2nc_mod, "ProcessPoolExecutor", _StubPool):
+            run_p2nc(args)
+        assert any("boom" in r.message for r in caplog.records)
+
+    def test_serial_exception_path(self, tmp_path, sample_p_file, caplog):
+        """Serial path catches and logs OSError/ValueError/RuntimeError."""
+        import logging
+
+        from odas_tpw.pyturb import p2nc as p2nc_mod
+        from odas_tpw.pyturb.p2nc import run_p2nc
+
+        out_dir = tmp_path / "out_serial_err"
+        args = MagicMock()
+        args.files = [str(sample_p_file)]
+        args.output = str(out_dir)
+        args.compress = True
+        args.compression_level = 4
+        args.n_workers = 1
+        args.min_file_size = 1
+        args.overwrite = True
+
+        def boom(*a, **k):
+            raise RuntimeError("serial boom")
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.pyturb.p2nc"), \
+             patch.object(p2nc_mod, "_convert_one", boom):
+            run_p2nc(args)
+        assert any("serial boom" in r.message for r in caplog.records)
+
+    def test_no_work_logs_warning(self, tmp_path, caplog):
+        """If every input is filtered out, a warning is logged."""
+        import logging
+
+        from odas_tpw.pyturb.p2nc import run_p2nc
+
+        # All inputs below min_file_size → nothing to convert
+        small = tmp_path / "tiny.p"
+        small.write_bytes(b"\x00" * 10)
+        args = MagicMock()
+        args.files = [str(small)]
+        args.output = str(tmp_path / "out_empty")
+        args.compress = True
+        args.compression_level = 4
+        args.n_workers = 1
+        args.min_file_size = 1_000_000
+        args.overwrite = True
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.pyturb.p2nc"):
+            run_p2nc(args)
+        assert any("No files to convert" in r.message for r in caplog.records)
+
+    def test_glob_pattern_expansion(self, tmp_path, monkeypatch):
+        """Non-literal pattern hits the glob branch (line 38)."""
+        from odas_tpw.pyturb.p2nc import run_p2nc
+
+        # Create two tiny files in tmp_path (still below min_file_size to skip)
+        for i in range(2):
+            (tmp_path / f"file{i}.p").write_bytes(b"\x00" * 10)
+
+        # Run from tmp_path so the relative glob "*.p" finds them
+        monkeypatch.chdir(tmp_path)
+        args = MagicMock()
+        args.files = ["*.p"]  # not a literal file → triggers glob
+        args.output = str(tmp_path / "out_glob")
+        args.compress = True
+        args.compression_level = 4
+        args.n_workers = 1
+        args.min_file_size = 1_000_000  # filters them out
+        args.overwrite = True
+
+        # Should not raise; the glob path is exercised even if all files
+        # are filtered out by size.
+        run_p2nc(args)
+
+
+# ---------------------------------------------------------------------------
+# pyturb/bin.py — additional branch coverage
+# ---------------------------------------------------------------------------
+
+
+class TestBinBranches:
+    """Cover glob expansion, no-files, missing pressure, missing variables."""
+
+    def test_no_input_files_logs_error(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        from odas_tpw.pyturb.bin import run_bin
+
+        monkeypatch.chdir(tmp_path)
+        args = MagicMock()
+        args.files = ["nonexistent_*.nc"]  # relative glob, no matches
+        args.output = str(tmp_path / "out.nc")
+        args.bin_width = 5.0
+        args.dmin = 0.0
+        args.dmax = 100.0
+        args.lat = 45.0
+        args.pressure = True
+        args.vars = "eps_1"
+        args.n_workers = 1
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.pyturb.bin"):
+            run_bin(args)
+        assert any("No input files" in r.message for r in caplog.records)
+
+    def test_p_mean_pressure_fallback(self, tmp_path):
+        """A profile with P_mean (no 'pressure') still bins."""
+        from odas_tpw.pyturb.bin import run_bin
+
+        ds = xr.Dataset({
+            "P_mean": (["time"], np.linspace(5, 100, 50)),
+            "eps_1": (["time"], np.full(50, 1e-8)),
+        })
+        ds.to_netcdf(tmp_path / "p_mean.nc")
+        args = MagicMock()
+        args.files = [str(tmp_path / "p_mean.nc")]
+        args.output = str(tmp_path / "binned.nc")
+        args.bin_width = 10.0
+        args.dmin = 0.0
+        args.dmax = 200.0
+        args.lat = 45.0
+        args.pressure = True
+        args.vars = "eps_1"
+        args.n_workers = 1
+
+        run_bin(args)
+        result = xr.open_dataset(tmp_path / "binned.nc")
+        assert "eps_1" in result
+        result.close()
+
+    def test_no_pressure_variable_skips(self, tmp_path, caplog):
+        import logging
+
+        from odas_tpw.pyturb.bin import run_bin
+
+        ds = xr.Dataset({"eps_1": (["time"], np.full(10, 1e-8))})
+        ds.to_netcdf(tmp_path / "no_pres.nc")
+        args = MagicMock()
+        args.files = [str(tmp_path / "no_pres.nc")]
+        args.output = str(tmp_path / "out.nc")
+        args.bin_width = 10.0
+        args.dmin = 0.0
+        args.dmax = 200.0
+        args.lat = 45.0
+        args.pressure = True
+        args.vars = "eps_1"
+        args.n_workers = 1
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.pyturb.bin"):
+            run_bin(args)
+        assert any("no pressure" in r.message for r in caplog.records)
+
+    def test_no_matching_variables_skips(self, tmp_path, caplog):
+        import logging
+
+        from odas_tpw.pyturb.bin import run_bin
+
+        ds = xr.Dataset({
+            "pressure": (["time"], np.linspace(5, 100, 50)),
+            "irrelevant": (["time"], np.zeros(50)),
+        })
+        ds.to_netcdf(tmp_path / "no_match.nc")
+        args = MagicMock()
+        args.files = [str(tmp_path / "no_match.nc")]
+        args.output = str(tmp_path / "out.nc")
+        args.bin_width = 10.0
+        args.dmin = 0.0
+        args.dmax = 200.0
+        args.lat = 45.0
+        args.pressure = True
+        args.vars = "eps_1,eps_2"
+        args.n_workers = 1
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.pyturb.bin"):
+            run_bin(args)
+        assert any("no matching variables" in r.message for r in caplog.records)
+
+    def test_open_exception_logs_error(self, tmp_path, caplog):
+        import logging
+
+        from odas_tpw.pyturb.bin import run_bin
+
+        # A bogus .nc file that xarray cannot open
+        bad = tmp_path / "broken.nc"
+        bad.write_bytes(b"not a netcdf file")
+        args = MagicMock()
+        args.files = [str(bad)]
+        args.output = str(tmp_path / "out.nc")
+        args.bin_width = 10.0
+        args.dmin = 0.0
+        args.dmax = 200.0
+        args.lat = 45.0
+        args.pressure = True
+        args.vars = "eps_1"
+        args.n_workers = 1
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.pyturb.bin"):
+            run_bin(args)
+        assert any("broken.nc" in r.message for r in caplog.records)
+
+    def test_no_binned_after_skipping_all(self, tmp_path, caplog):
+        """If every input is skipped for missing pressure, nothing is binned."""
+        import logging
+
+        from odas_tpw.pyturb.bin import run_bin
+
+        ds = xr.Dataset({"eps_1": (["time"], np.full(10, 1e-8))})
+        ds.to_netcdf(tmp_path / "no_pres.nc")
+        args = MagicMock()
+        args.files = [str(tmp_path / "no_pres.nc")]
+        args.output = str(tmp_path / "out.nc")
+        args.bin_width = 10.0
+        args.dmin = 0.0
+        args.dmax = 200.0
+        args.lat = 45.0
+        args.pressure = True
+        args.vars = "eps_1"
+        args.n_workers = 1
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.pyturb.bin"):
+            run_bin(args)
+        assert any("No profiles binned" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# pyturb/merge.py — additional branch coverage
+# ---------------------------------------------------------------------------
+
+
+class TestMergeBranches:
+    """Cover overwrite-block, no-files, open exception, and L1_converted group."""
+
+    def test_existing_output_no_overwrite(self, tmp_path, caplog):
+        import logging
+
+        from odas_tpw.pyturb.merge import run_merge
+
+        out = tmp_path / "exists.nc"
+        out.touch()
+        args = MagicMock()
+        args.files = []
+        args.output = str(out)
+        args.dry_run = False
+        args.overwrite = False
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.pyturb.merge"):
+            run_merge(args)
+        assert any("exists" in r.message for r in caplog.records)
+
+    def test_no_input_files(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        from odas_tpw.pyturb.merge import run_merge
+
+        monkeypatch.chdir(tmp_path)
+        args = MagicMock()
+        args.files = ["nope_*.nc"]  # relative glob, no matches
+        args.output = str(tmp_path / "out.nc")
+        args.dry_run = False
+        args.overwrite = True
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.pyturb.merge"):
+            run_merge(args)
+        assert any("No input files" in r.message for r in caplog.records)
+
+    def test_open_exception_skips_file(self, tmp_path, caplog):
+        import logging
+
+        from odas_tpw.pyturb.merge import run_merge
+
+        # Build one good and one bad NC file
+        good = tmp_path / "good.nc"
+        ds = xr.Dataset({"x": (["TIME"], np.arange(5, dtype=float))})
+        ds.to_netcdf(good)
+        bad = tmp_path / "bad.nc"
+        bad.write_bytes(b"not a netcdf file")
+
+        args = MagicMock()
+        args.files = [str(good), str(bad)]
+        args.output = str(tmp_path / "merged.nc")
+        args.dry_run = False
+        args.overwrite = True
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.pyturb.merge"):
+            run_merge(args)
+        # The bad file is logged but the merge of the one good file proceeds
+        assert any("bad.nc" in r.message for r in caplog.records)
+        assert (tmp_path / "merged.nc").exists()
+
+    def test_no_valid_datasets(self, tmp_path, caplog):
+        """When all inputs fail to open, a final 'No valid datasets' error fires."""
+        import logging
+
+        from odas_tpw.pyturb.merge import run_merge
+
+        for i in range(2):
+            (tmp_path / f"bad{i}.nc").write_bytes(b"not a netcdf file")
+
+        args = MagicMock()
+        args.files = [str(tmp_path / f"bad{i}.nc") for i in range(2)]
+        args.output = str(tmp_path / "out.nc")
+        args.dry_run = False
+        args.overwrite = True
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.pyturb.merge"):
+            run_merge(args)
+        assert any("No valid datasets" in r.message for r in caplog.records)
+
+    def test_open_nc_with_l1_group(self, tmp_path):
+        """_open_nc opens the L1_converted group when present (line 100)."""
+        import netCDF4
+
+        from odas_tpw.pyturb.merge import _open_nc
+
+        path = tmp_path / "with_l1.nc"
+        nc = netCDF4.Dataset(str(path), "w", format="NETCDF4")
+        try:
+            g = nc.createGroup("L1_converted")
+            g.createDimension("TIME", 4)
+            t = g.createVariable("TIME", "f8", ("TIME",))
+            t[:] = np.arange(4, dtype=float)
+            v = g.createVariable("X", "f8", ("TIME",))
+            v[:] = np.arange(4, dtype=float)
+        finally:
+            nc.close()
+
+        ds = _open_nc(path)
+        assert "X" in ds
+        ds.close()
+
+    def test_glob_pattern_expansion(self, tmp_path, monkeypatch):
+        """Non-literal pattern triggers Path('.').glob branch."""
+        from odas_tpw.pyturb.merge import run_merge
+
+        for i in range(2):
+            ds = xr.Dataset(
+                {"T": (["TIME"], np.arange(3, dtype=float) + i * 3)},
+                coords={"TIME": np.arange(3, dtype=float) + i * 3},
+            )
+            ds.to_netcdf(tmp_path / f"file{i}.nc")
+
+        monkeypatch.chdir(tmp_path)
+        args = MagicMock()
+        args.files = ["file*.nc"]
+        args.output = str(tmp_path / "merged.nc")
+        args.dry_run = False
+        args.overwrite = True
+
+        run_merge(args)
+        assert (tmp_path / "merged.nc").exists()
+
+
+# ---------------------------------------------------------------------------
+# pyturb/_profind.py — extra branches
+# ---------------------------------------------------------------------------
+
+
+class TestProfindBranches:
+    """Cover the high-frequency f_c clamp and upcast loop fall-throughs."""
+
+    def test_smoothing_tau_too_small_clamps_fc(self):
+        """Very small smoothing_tau makes f_c >= nyquist and clamps to 0.9*nyq."""
+        from odas_tpw.pyturb._profind import find_profiles_peaks
+
+        fs = 64.0
+        n = int(60 * fs)
+        t = np.arange(n) / fs
+        pressure = 50.0 * np.sin(np.pi * t / 60.0)
+        pressure = np.maximum(pressure, 0)
+
+        # smoothing_tau=0.001 → f_c=680 Hz which exceeds nyquist=32 Hz → clamped
+        profiles = find_profiles_peaks(
+            pressure, fs, direction="down",
+            peaks_height=10.0, peaks_distance=100, peaks_prominence=10.0,
+            smoothing_tau=0.001,
+        )
+        assert isinstance(profiles, list)
+
+
+# ---------------------------------------------------------------------------
+# pyturb/_compat.py — rename_eps_dataset with auxiliary data
+# ---------------------------------------------------------------------------
+
+
+class TestRenameEpsDatasetAux:
+    """Cover the aux_data merge branch in rename_eps_dataset (lines 194-196)."""
+
+    def test_aux_data_is_merged(self):
+        from odas_tpw.pyturb._compat import rename_eps_dataset
+        from odas_tpw.scor160.io import L3Data, L4Data
+
+        n_spec = 4
+        n_freq = 33
+        l4 = L4Data(
+            time=np.arange(n_spec, dtype=float),
+            pres=np.linspace(10, 50, n_spec),
+            pspd_rel=np.full(n_spec, 0.7),
+            section_number=np.ones(n_spec),
+            epsi=np.full((1, n_spec), 1e-8),
+            epsi_final=np.full(n_spec, 1e-8),
+            epsi_flags=np.zeros((1, n_spec)),
+            fom=np.ones((1, n_spec)),
+            mad=np.full((1, n_spec), 0.1),
+            kmax=np.full((1, n_spec), 50.0),
+            method=np.zeros((1, n_spec)),
+            var_resolved=np.ones((1, n_spec)),
+        )
+        l3 = L3Data(
+            time=np.arange(n_spec, dtype=float),
+            pres=np.linspace(10, 50, n_spec),
+            temp=np.full(n_spec, 15.0),
+            pspd_rel=np.full(n_spec, 0.7),
+            section_number=np.ones(n_spec),
+            kcyc=np.tile(np.arange(n_freq, dtype=float)[:, None], (1, n_spec)),
+            sh_spec=np.ones((1, n_freq, n_spec)) * 1e-6,
+            sh_spec_clean=np.ones((1, n_freq, n_spec)) * 1e-6,
+        )
+        aux = xr.Dataset(
+            {
+                "extra_var": (["time"], np.arange(n_spec, dtype=float)),
+            }
+        )
+        ds = rename_eps_dataset(l4, l3, None, aux_data=aux)
+        assert "extra_var" in ds
+
+    def test_aux_data_does_not_clobber_existing(self):
+        """Aux variables already present in ds are not overwritten."""
+        from odas_tpw.pyturb._compat import rename_eps_dataset
+        from odas_tpw.scor160.io import L3Data, L4Data
+
+        n_spec = 3
+        n_freq = 9
+        l4 = L4Data(
+            time=np.arange(n_spec, dtype=float),
+            pres=np.linspace(10, 50, n_spec),
+            pspd_rel=np.full(n_spec, 0.7),
+            section_number=np.ones(n_spec),
+            epsi=np.full((1, n_spec), 1e-8),
+            epsi_final=np.full(n_spec, 1e-8),
+            epsi_flags=np.zeros((1, n_spec)),
+            fom=np.ones((1, n_spec)),
+            mad=np.full((1, n_spec), 0.1),
+            kmax=np.full((1, n_spec), 50.0),
+            method=np.zeros((1, n_spec)),
+            var_resolved=np.ones((1, n_spec)),
+        )
+        l3 = L3Data(
+            time=np.arange(n_spec, dtype=float),
+            pres=np.linspace(10, 50, n_spec),
+            temp=np.full(n_spec, 15.0),
+            pspd_rel=np.full(n_spec, 0.7),
+            section_number=np.ones(n_spec),
+            kcyc=np.tile(np.arange(n_freq, dtype=float)[:, None], (1, n_spec)),
+            sh_spec=np.ones((1, n_freq, n_spec)) * 1e-6,
+            sh_spec_clean=np.ones((1, n_freq, n_spec)) * 1e-6,
+        )
+        # 'temperature' is already produced by rename_eps_dataset
+        aux = xr.Dataset({"temperature": (["time"], np.full(n_spec, 99.0))})
+        ds = rename_eps_dataset(l4, l3, None, aux_data=aux)
+        # The original temperature (≈15) should win, not 99 from aux
+        np.testing.assert_allclose(ds["temperature"].values, 15.0)

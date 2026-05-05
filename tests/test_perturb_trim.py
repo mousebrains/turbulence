@@ -102,3 +102,31 @@ class TestTrimPFile:
         src.write_bytes(b"\x00" * 10)
         with pytest.raises(ValueError, match="too small"):
             trim_p_file(src, tmp_path / "out")
+
+    def test_file_smaller_than_first_record_raises(self, tmp_path):
+        """File has a header that claims a large config_size, but is truncated."""
+        # Build a 128-byte header that says config_size = 10000, then EOF
+        words = [0] * HEADER_WORDS
+        words[_H["header_size"]] = HEADER_BYTES
+        words[_H["config_size"]] = 10000  # absurdly large
+        words[_H["record_size"]] = 1024
+        words[_H["endian"]] = 1
+
+        src = tmp_path / "truncated.p"
+        src.write_bytes(struct.pack(f"<{HEADER_WORDS}H", *words))  # only 128 bytes
+        with pytest.raises(ValueError, match="smaller than first record"):
+            trim_p_file(src, tmp_path / "out")
+
+    def test_invalid_record_size_raises(self, tmp_path):
+        """A record_size of 0 is rejected."""
+        words = [0] * HEADER_WORDS
+        words[_H["header_size"]] = HEADER_BYTES
+        words[_H["config_size"]] = 16
+        words[_H["record_size"]] = 0  # invalid
+        words[_H["endian"]] = 1
+
+        src = tmp_path / "bad_record.p"
+        # 128 byte header + 16 bytes config = 144 bytes total, file_size >= first_record_size
+        src.write_bytes(struct.pack(f"<{HEADER_WORDS}H", *words) + b"\x00" * 16)
+        with pytest.raises(ValueError, match="invalid record_size"):
+            trim_p_file(src, tmp_path / "out")
