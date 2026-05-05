@@ -107,6 +107,101 @@ def _get_agg_func(aggregation: str):
     return np.nanmean
 
 
+def _depth_var_for(ds: xr.Dataset) -> str | None:
+    """Return the canonical depth variable name in *ds*, or None."""
+    for name in ("depth", "P", "P_mean"):
+        if name in ds:
+            return name
+    return None
+
+
+def _scan_depth_range(profile_files: list[Path]) -> tuple[float, float] | None:
+    """First pass: open each NC briefly, read its depth coord min/max.
+
+    Returns the global ``(min, max)`` across all profiles, or None if no
+    profile carried a depth/P/P_mean variable.
+    """
+    g_min = np.inf
+    g_max = -np.inf
+    saw_any = False
+    for f in profile_files:
+        with xr.open_dataset(f) as ds:
+            depth_var = _depth_var_for(ds)
+            if depth_var is None:
+                continue
+            d = ds[depth_var].values
+            d = d[np.isfinite(d)]
+            if d.size == 0:
+                continue
+            saw_any = True
+            g_min = min(g_min, float(d.min()))
+            g_max = max(g_max, float(d.max()))
+    if not saw_any:
+        return None
+    return g_min, g_max
+
+
+def _bin_one_profile(
+    profile_file: Path,
+    bin_edges: np.ndarray,
+    agg,
+    diagnostics: bool,
+) -> dict:
+    """Bin a single profile NetCDF onto *bin_edges*.
+
+    Returns a dict with keys:
+
+    * ``vars`` — ``{var_name: 1-D ndarray (n_bins,)}``
+    * ``stds`` — ``{var_name: 1-D ndarray}`` when *diagnostics*, else empty
+    * ``scalars`` — ``{lat|lon|stime|etime: float}`` (epoch seconds for time)
+    * ``scalar_attrs`` — ``{name: attrs_dict}`` from the source NC
+
+    Designed to be called either inline (via :func:`bin_by_depth`) or in
+    a worker process — the return value is plain numpy / Python types, so
+    pickling round-trips cheaply.
+    """
+    out: dict = {"vars": {}, "stds": {}, "scalars": {}, "scalar_attrs": {}}
+    with xr.open_dataset(profile_file) as ds:
+        depth_var = _depth_var_for(ds)
+        if depth_var is None:
+            return out
+        depth = ds[depth_var].values
+
+        scalar_names = ("lat", "lon", "stime", "etime")
+        for sname in scalar_names:
+            if sname in ds.data_vars and ds[sname].ndim == 0:
+                val = ds[sname].values
+                if val.dtype.kind == "M":
+                    val = val.astype("datetime64[ns]").astype(np.int64) / 1e9
+                out["scalars"][sname] = float(val)
+                # Strip units/calendar — xarray's CF encoder will re-emit
+                # them when writing the combo; carrying them alongside
+                # numeric values triggers a "Key 'units' already exists in
+                # attrs" conflict.
+                attrs = {
+                    k: v
+                    for k, v in ds[sname].attrs.items()
+                    if k not in ("units", "calendar")
+                }
+                out["scalar_attrs"][sname] = attrs
+
+        for vname in ds.data_vars:
+            if vname == depth_var or vname in scalar_names:
+                continue
+            arr = ds[vname].values
+            if arr.ndim != 1 or len(arr) != len(depth):
+                continue
+            if arr.dtype.kind == "M":
+                continue
+
+            binned, _ = _bin_array(arr, depth, bin_edges, agg)
+            out["vars"][vname] = binned
+            if diagnostics:
+                out["stds"][vname] = _bin_std(arr, depth, bin_edges)
+
+    return out
+
+
 def bin_by_depth(
     profile_files: list[Path],
     bin_width: float = 1.0,
@@ -135,36 +230,29 @@ def bin_by_depth(
     Returns
     -------
     xr.Dataset with dims (bin, profile).
+
+    Notes
+    -----
+    Two passes over the inputs (only one ``xr.open_dataset`` open at a
+    time): pass 1 reads each file's depth coord to compute the global bin
+    grid; pass 2 streams each file through :func:`_bin_one_profile`. This
+    keeps peak memory bounded by a single profile's metadata regardless
+    of how many files are being binned.
     """
     agg = _get_agg_func(aggregation)
-    datasets = [xr.open_dataset(f) for f in profile_files]
 
-    # Determine global bin edges from all profiles
-    all_depths = []
-    for ds in datasets:
-        if "depth" in ds:
-            d = ds["depth"].values
-            all_depths.extend(d[np.isfinite(d)])
-        elif "P" in ds:
-            d = ds["P"].values
-            all_depths.extend(d[np.isfinite(d)])
-        elif "P_mean" in ds:
-            d = ds["P_mean"].values
-            all_depths.extend(d[np.isfinite(d)])
-    if not all_depths:
+    depth_range = _scan_depth_range(profile_files)
+    if depth_range is None:
         return xr.Dataset()
 
-    d_min = np.floor(np.min(all_depths) / bin_width) * bin_width
-    d_max = np.ceil(np.max(all_depths) / bin_width) * bin_width
+    d_min = np.floor(depth_range[0] / bin_width) * bin_width
+    d_max = np.ceil(depth_range[1] / bin_width) * bin_width
     bin_edges = np.arange(d_min, d_max + bin_width, bin_width)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
     n_bins = len(bin_centers)
-    n_profiles = len(datasets)
+    n_profiles = len(profile_files)
 
-    result_vars = {}
-    # Per-profile scalar variables (lat/lon/stime/etime) become 1-D
-    # ``(profile,)`` arrays in the output so downstream combo can auto-fill
-    # ACDD geospatial_* and time_coverage_* attributes.
+    result_vars: dict = {}
     profile_scalars = {
         "lat": np.full(n_profiles, np.nan),
         "lon": np.full(n_profiles, np.nan),
@@ -172,64 +260,25 @@ def bin_by_depth(
         "etime": np.full(n_profiles, np.nan),
     }
     profile_scalar_attrs: dict[str, dict] = {}
-    # Determine depth coordinate for each profile
-    for pi, ds in enumerate(datasets):
-        with stage_log(log_dir, _source_stem(profile_files[pi])):
-            if "depth" in ds:
-                depth_var = "depth"
-            elif "P" in ds:
-                depth_var = "P"
-            elif "P_mean" in ds:
-                depth_var = "P_mean"
-            else:
-                continue
 
-            # Pick up per-profile scalars (CF §9 profile featureType convention).
-            # xarray auto-decodes ``stime``/``etime`` (units="seconds since
-            # 1970-01-01") to datetime64[ns]; reduce to epoch seconds so the
-            # combo's auto-fill code (which expects numeric timestamps) works.
-            for sname in profile_scalars:
-                if sname in ds.data_vars and ds[sname].ndim == 0:
-                    val = ds[sname].values
-                    if val.dtype.kind == "M":
-                        val = val.astype("datetime64[ns]").astype(np.int64) / 1e9
-                    profile_scalars[sname][pi] = float(val)
-                    if sname not in profile_scalar_attrs:
-                        # Strip units/calendar — xarray's CF encoder will
-                        # re-emit them when writing the combo; carrying them
-                        # alongside numeric values triggers a "Key 'units'
-                        # already exists in attrs" conflict.
-                        attrs = {
-                            k: v
-                            for k, v in ds[sname].attrs.items()
-                            if k not in ("units", "calendar")
-                        }
-                        profile_scalar_attrs[sname] = attrs
-
-            for vname in ds.data_vars:
-                if vname == depth_var or vname in profile_scalars:
-                    continue
-                arr = ds[vname].values
-                depth = ds[depth_var].values
-                if arr.ndim != 1 or len(arr) != len(depth):
-                    continue
-                if arr.dtype.kind == "M":  # skip datetime64 variables
-                    continue
-
+    for pi, pfile in enumerate(profile_files):
+        with stage_log(log_dir, _source_stem(pfile)):
+            res = _bin_one_profile(pfile, bin_edges, agg, diagnostics)
+            for sname, val in res["scalars"].items():
+                profile_scalars[sname][pi] = val
+                if sname not in profile_scalar_attrs:
+                    profile_scalar_attrs[sname] = res["scalar_attrs"].get(sname, {})
+            for vname, binned in res["vars"].items():
                 if vname not in result_vars:
                     result_vars[vname] = np.full((n_bins, n_profiles), np.nan)
                     if diagnostics:
-                        result_vars[f"{vname}_std"] = np.full((n_bins, n_profiles), np.nan)
-
-                binned, _counts = _bin_array(arr, depth, bin_edges, agg)
+                        result_vars[f"{vname}_std"] = np.full(
+                            (n_bins, n_profiles), np.nan
+                        )
                 result_vars[vname][:, pi] = binned
-
-                if diagnostics:
-                    std_arr = _bin_std(arr, depth, bin_edges)
+            if diagnostics:
+                for vname, std_arr in res["stds"].items():
                     result_vars[f"{vname}_std"][:, pi] = std_arr
-
-    for ds in datasets:
-        ds.close()
 
     if diagnostics:
         result_vars["n_samples"] = np.zeros((n_bins, n_profiles), dtype=float)
