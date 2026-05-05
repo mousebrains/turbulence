@@ -728,3 +728,310 @@ def test_cmd_pipeline(monkeypatch, sample_p_file, tmp_path):
     # Check combined output
     combined = pfile_dir / "L6_combined.nc"
     assert combined.exists(), "Expected L6_combined.nc"
+
+
+# ---------------------------------------------------------------------------
+# Exception and worker-count branches in _cmd_eps / _cmd_chi
+# ---------------------------------------------------------------------------
+
+
+def _stub_pool_factory(exc=None, result=("dummy", 0)):
+    """Build a stub ProcessPoolExecutor whose futures raise/return on demand."""
+    from concurrent.futures import Future
+
+    class _StubPool:
+        def __init__(self, max_workers=None):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def submit(self, fn, arg):
+            f = Future()
+            if exc is not None:
+                f.set_exception(exc)
+            else:
+                f.set_result(result)
+            return f
+
+    return _StubPool
+
+
+def test_cmd_eps_serial_exception(monkeypatch, sample_p_file, tmp_path, capsys):
+    """Serial _cmd_eps catches OSError/ValueError/RuntimeError and prints ERROR."""
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("synthetic eps failure")
+
+    monkeypatch.setattr("odas_tpw.rsi.dissipation.compute_diss_file", boom)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["rsi-tpw", "eps", str(sample_p_file), "-o", str(tmp_path), "-j", "1"],
+    )
+    from odas_tpw.rsi.cli import main
+
+    main()
+    captured = capsys.readouterr()
+    assert "ERROR: synthetic eps failure" in captured.out
+
+
+def test_cmd_eps_parallel_exception(monkeypatch, sample_p_file, tmp_path, capsys):
+    """Parallel _cmd_eps catches future.result() exceptions."""
+    monkeypatch.setattr(
+        "odas_tpw.rsi.cli.ProcessPoolExecutor",
+        _stub_pool_factory(exc=RuntimeError("synthetic parallel eps failure")),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["rsi-tpw", "eps", str(sample_p_file), "-o", str(tmp_path), "-j", "2"],
+    )
+    from odas_tpw.rsi.cli import main
+
+    main()
+    captured = capsys.readouterr()
+    assert "ERROR: synthetic parallel eps failure" in captured.out
+
+
+def test_cmd_eps_jobs_zero_uses_cpu_count(monkeypatch, sample_p_file, tmp_path):
+    """_cmd_eps with -j 0 should use all CPUs (resolved via os.cpu_count)."""
+    captured_workers = []
+
+    def make_stub(max_workers=None):
+        from concurrent.futures import Future
+
+        captured_workers.append(max_workers)
+
+        class _StubPool:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def submit(self, fn, arg):
+                f = Future()
+                f.set_result((str(sample_p_file), 1))
+                return f
+
+        return _StubPool()
+
+    monkeypatch.setattr("odas_tpw.rsi.cli.ProcessPoolExecutor", make_stub)
+    monkeypatch.setattr("os.cpu_count", lambda: 4)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["rsi-tpw", "eps", str(sample_p_file), "-o", str(tmp_path), "-j", "0"],
+    )
+    from odas_tpw.rsi.cli import main
+
+    main()
+    assert captured_workers == [4]
+
+
+def test_cmd_chi_serial_exception(monkeypatch, sample_p_file, tmp_path, capsys):
+    """Serial _cmd_chi catches errors from compute_chi_file."""
+
+    def boom(*args, **kwargs):
+        raise ValueError("synthetic chi failure")
+
+    monkeypatch.setattr("odas_tpw.rsi.chi_io.compute_chi_file", boom)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["rsi-tpw", "chi", str(sample_p_file), "-o", str(tmp_path), "-j", "1"],
+    )
+    from odas_tpw.rsi.cli import main
+
+    main()
+    captured = capsys.readouterr()
+    assert "ERROR: synthetic chi failure" in captured.out
+
+
+def test_cmd_chi_parallel_exception(monkeypatch, sample_p_file, tmp_path, capsys):
+    """Parallel _cmd_chi catches future.result() exceptions."""
+    monkeypatch.setattr(
+        "odas_tpw.rsi.cli.ProcessPoolExecutor",
+        _stub_pool_factory(exc=OSError("synthetic parallel chi failure")),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["rsi-tpw", "chi", str(sample_p_file), "-o", str(tmp_path), "-j", "3"],
+    )
+    from odas_tpw.rsi.cli import main
+
+    main()
+    captured = capsys.readouterr()
+    assert "ERROR: synthetic parallel chi failure" in captured.out
+
+
+def test_cmd_chi_jobs_zero_uses_cpu_count(monkeypatch, sample_p_file, tmp_path):
+    """_cmd_chi with -j 0 should use all CPUs (resolved via os.cpu_count)."""
+    captured_workers = []
+
+    def make_stub(max_workers=None):
+        from concurrent.futures import Future
+
+        captured_workers.append(max_workers)
+
+        class _StubPool:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def submit(self, fn, arg):
+                f = Future()
+                f.set_result((str(sample_p_file), 1))
+                return f
+
+        return _StubPool()
+
+    monkeypatch.setattr("odas_tpw.rsi.cli.ProcessPoolExecutor", make_stub)
+    monkeypatch.setattr("os.cpu_count", lambda: 8)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["rsi-tpw", "chi", str(sample_p_file), "-o", str(tmp_path), "-j", "0"],
+    )
+    from odas_tpw.rsi.cli import main
+
+    main()
+    assert captured_workers == [8]
+
+
+# ---------------------------------------------------------------------------
+# _cmd_info with multiple files: covers the separator-print branch
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_info_multiple_files(monkeypatch, sample_p_file, capsys):
+    """Two files produce a separator line between summaries."""
+    monkeypatch.setattr(
+        sys, "argv", ["rsi-tpw", "info", str(sample_p_file), str(sample_p_file)]
+    )
+    from odas_tpw.rsi.cli import main
+
+    main()
+    captured = capsys.readouterr()
+    assert "=" * 60 in captured.out
+
+
+# ---------------------------------------------------------------------------
+# _cmd_ql / _cmd_dl entry shells (with quick_look/diss_look mocked)
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_ql_invokes_quick_look(monkeypatch, sample_p_file):
+    """_cmd_ql wires CLI args into quick_look()."""
+    from unittest.mock import MagicMock
+
+    mock_ql = MagicMock()
+    monkeypatch.setattr("odas_tpw.rsi.quick_look.quick_look", mock_ql)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rsi-tpw", "ql", str(sample_p_file),
+            "--fft-length", "512",
+            "--diss-length", "2048",
+            "--f-AA", "100",
+            "--no-goodman",
+            "--direction", "down",
+            "--vehicle", "vmp",
+            "--W-min", "0.4",
+            "--spec-P-range", "10", "50",
+            "--chi-method", "2",
+            "--spectrum-model", "batchelor",
+        ],
+    )
+    from odas_tpw.rsi.cli import main
+
+    main()
+    mock_ql.assert_called_once()
+    kwargs = mock_ql.call_args.kwargs
+    assert kwargs["fft_length"] == 512
+    assert kwargs["diss_length"] == 2048
+    assert kwargs["f_AA"] == 100
+    assert kwargs["goodman"] is False
+    assert kwargs["direction"] == "down"
+    assert kwargs["vehicle"] == "vmp"
+    assert kwargs["W_min"] == 0.4
+    assert kwargs["spec_P_range"] == (10.0, 50.0)
+    assert kwargs["chi_method"] == 2
+    assert kwargs["spectrum_model"] == "batchelor"
+
+
+def test_cmd_ql_defaults(monkeypatch, sample_p_file):
+    """_cmd_ql with no overrides uses sensible defaults."""
+    from unittest.mock import MagicMock
+
+    mock_ql = MagicMock()
+    monkeypatch.setattr("odas_tpw.rsi.quick_look.quick_look", mock_ql)
+    monkeypatch.setattr(sys, "argv", ["rsi-tpw", "ql", str(sample_p_file)])
+    from odas_tpw.rsi.cli import main
+
+    main()
+    mock_ql.assert_called_once()
+    kwargs = mock_ql.call_args.kwargs
+    # spec_P_range left at None, direction defaults to "auto"
+    assert kwargs["spec_P_range"] is None
+    assert kwargs["direction"] == "auto"
+    assert kwargs["W_min"] == 0.3
+    assert kwargs["goodman"] is True
+
+
+def test_cmd_dl_invokes_diss_look(monkeypatch, sample_p_file):
+    """_cmd_dl wires CLI args into diss_look()."""
+    from unittest.mock import MagicMock
+
+    mock_dl = MagicMock()
+    monkeypatch.setattr("odas_tpw.rsi.diss_look.diss_look", mock_dl)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rsi-tpw", "dl", str(sample_p_file),
+            "--fft-length", "512",
+            "--diss-length", "2048",
+            "--f-AA", "100",
+            "--no-goodman",
+            "--direction", "down",
+            "--vehicle", "vmp",
+            "--W-min", "0.4",
+            "--spec-P-range", "10", "50",
+        ],
+    )
+    from odas_tpw.rsi.cli import main
+
+    main()
+    mock_dl.assert_called_once()
+    kwargs = mock_dl.call_args.kwargs
+    assert kwargs["fft_length"] == 512
+    assert kwargs["diss_length"] == 2048
+    assert kwargs["goodman"] is False
+    assert kwargs["spec_P_range"] == (10.0, 50.0)
+
+
+def test_cmd_dl_defaults(monkeypatch, sample_p_file):
+    """_cmd_dl with no overrides covers default-value branches."""
+    from unittest.mock import MagicMock
+
+    mock_dl = MagicMock()
+    monkeypatch.setattr("odas_tpw.rsi.diss_look.diss_look", mock_dl)
+    monkeypatch.setattr(sys, "argv", ["rsi-tpw", "dl", str(sample_p_file)])
+    from odas_tpw.rsi.cli import main
+
+    main()
+    mock_dl.assert_called_once()
+    kwargs = mock_dl.call_args.kwargs
+    assert kwargs["spec_P_range"] is None
+    assert kwargs["direction"] == "auto"
+    assert kwargs["W_min"] == 0.3
+    assert kwargs["goodman"] is True

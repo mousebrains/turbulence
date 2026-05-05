@@ -800,3 +800,113 @@ class TestModuleStructure:
         from odas_tpw.pyturb.bin import run_bin
 
         assert callable(run_bin)
+
+
+# ---------------------------------------------------------------------------
+# Dispatch wrappers and main() entry paths
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchWrappers:
+    """Cover the thin wrapper functions that import + call the run_* helpers."""
+
+    def test_run_p2nc_calls_module(self):
+        from odas_tpw.pyturb.cli import _run_p2nc
+
+        sentinel = MagicMock()
+        with patch("odas_tpw.pyturb.p2nc.run_p2nc") as run:
+            _run_p2nc(sentinel)
+        run.assert_called_once_with(sentinel)
+
+    def test_run_merge_calls_module(self):
+        from odas_tpw.pyturb.cli import _run_merge
+
+        sentinel = MagicMock()
+        with patch("odas_tpw.pyturb.merge.run_merge") as run:
+            _run_merge(sentinel)
+        run.assert_called_once_with(sentinel)
+
+    def test_run_bin_calls_module(self):
+        from odas_tpw.pyturb.cli import _run_bin
+
+        sentinel = MagicMock()
+        with patch("odas_tpw.pyturb.bin.run_bin") as run:
+            _run_bin(sentinel)
+        run.assert_called_once_with(sentinel)
+
+    def test_run_eps_calls_module(self):
+        from odas_tpw.pyturb.cli import _run_eps
+
+        args = MagicMock()
+        args.aoa = None
+        args.pitch_correction = False
+        with patch("odas_tpw.pyturb.eps.run_eps") as run:
+            _run_eps(args)
+        run.assert_called_once_with(args)
+
+    def test_run_eps_warns_on_aoa(self, caplog):
+        import logging
+
+        from odas_tpw.pyturb.cli import _run_eps
+
+        args = MagicMock()
+        args.aoa = 5.0
+        args.pitch_correction = False
+        with caplog.at_level(logging.WARNING, logger="pyturb"), \
+             patch("odas_tpw.pyturb.eps.run_eps"):
+            _run_eps(args)
+        assert any("aoa" in r.message for r in caplog.records)
+
+    def test_run_eps_warns_on_pitch_correction(self, caplog):
+        import logging
+
+        from odas_tpw.pyturb.cli import _run_eps
+
+        args = MagicMock()
+        args.aoa = None
+        args.pitch_correction = True
+        with caplog.at_level(logging.WARNING, logger="pyturb"), \
+             patch("odas_tpw.pyturb.eps.run_eps"):
+            _run_eps(args)
+        assert any("pitch-correction" in r.message for r in caplog.records)
+
+
+class TestMainEntryPaths:
+    """Cover main() paths: verbose, no-command, dispatch."""
+
+    def test_verbose_single_sets_info(self):
+        """-v should set logging level to INFO via main()."""
+        import logging
+
+        from odas_tpw.pyturb.cli import main
+
+        with patch("odas_tpw.pyturb.cli._run_eps") as run, \
+             patch("logging.basicConfig") as basic:
+            main(["-v", "eps", "test.nc", "-o", "/tmp/out"])
+        run.assert_called_once()
+        # basicConfig is invoked with level=INFO
+        kwargs = basic.call_args.kwargs
+        assert kwargs.get("level") == logging.INFO
+
+    def test_verbose_double_sets_debug(self):
+        import logging
+
+        from odas_tpw.pyturb.cli import main
+
+        with patch("odas_tpw.pyturb.cli._run_eps") as run, \
+             patch("logging.basicConfig") as basic:
+            main(["-vv", "eps", "test.nc", "-o", "/tmp/out"])
+        run.assert_called_once()
+        kwargs = basic.call_args.kwargs
+        assert kwargs.get("level") == logging.DEBUG
+
+    def test_no_command_prints_help_and_exits(self, capsys):
+        """main() with no subcommand should print help and exit 1."""
+        from odas_tpw.pyturb.cli import main
+
+        with pytest.raises(SystemExit) as exc:
+            main([])
+        assert exc.value.code == 1
+        captured = capsys.readouterr()
+        # argparse prints help to stdout
+        assert "usage:" in captured.out.lower() or "pyturb-cli" in captured.out
