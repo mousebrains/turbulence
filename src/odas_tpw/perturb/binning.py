@@ -115,30 +115,79 @@ def _depth_var_for(ds: xr.Dataset) -> str | None:
     return None
 
 
-def _scan_depth_range(profile_files: list[Path]) -> tuple[float, float] | None:
-    """First pass: open each NC briefly, read its depth coord min/max.
+_SCALAR_NAMES = ("lat", "lon", "stime", "etime")
 
-    Returns the global ``(min, max)`` across all profiles, or None if no
-    profile carried a depth/P/P_mean variable.
+
+def _load_profile_snapshot(profile_file: Path) -> dict | None:
+    """Read a profile NC once and return a snapshot for binning.
+
+    Returned dict (or None when the file has no depth/P/P_mean variable):
+
+    * ``depth`` — 1-D ndarray of the depth/P/P_mean coordinate
+    * ``vars`` — ``{var_name: 1-D ndarray}`` for every numeric data var
+      that aligns with depth
+    * ``scalars`` — ``{lat|lon|stime|etime: float}`` (epoch seconds for time)
+    * ``scalar_attrs`` — ``{name: attrs_dict}`` (units/calendar stripped — the
+      combo's CF encoder re-emits them on write)
+
+    One ``xr.open_dataset`` per call: callers cache snapshots so the
+    second pass that needs ``bin_edges`` doesn't re-open. The dict is
+    plain numpy / Python types so it pickles cheaply for worker pools.
     """
-    g_min = np.inf
-    g_max = -np.inf
-    saw_any = False
-    for f in profile_files:
-        with xr.open_dataset(f) as ds:
-            depth_var = _depth_var_for(ds)
-            if depth_var is None:
+    with xr.open_dataset(profile_file) as ds:
+        depth_var = _depth_var_for(ds)
+        if depth_var is None:
+            return None
+        depth = ds[depth_var].values
+
+        scalars: dict[str, float] = {}
+        scalar_attrs: dict[str, dict] = {}
+        for sname in _SCALAR_NAMES:
+            if sname in ds.data_vars and ds[sname].ndim == 0:
+                val = ds[sname].values
+                if val.dtype.kind == "M":
+                    val = val.astype("datetime64[ns]").astype(np.int64) / 1e9
+                scalars[sname] = float(val)
+                scalar_attrs[sname] = {
+                    k: v
+                    for k, v in ds[sname].attrs.items()
+                    if k not in ("units", "calendar")
+                }
+
+        data: dict[str, np.ndarray] = {}
+        for vname in ds.data_vars:
+            if vname == depth_var or vname in _SCALAR_NAMES:
                 continue
-            d = ds[depth_var].values
-            d = d[np.isfinite(d)]
-            if d.size == 0:
+            arr = ds[vname].values
+            if arr.ndim != 1 or len(arr) != len(depth):
                 continue
-            saw_any = True
-            g_min = min(g_min, float(d.min()))
-            g_max = max(g_max, float(d.max()))
-    if not saw_any:
-        return None
-    return g_min, g_max
+            if arr.dtype.kind == "M":
+                continue
+            data[vname] = arr
+
+    return {
+        "depth": depth,
+        "vars": data,
+        "scalars": scalars,
+        "scalar_attrs": scalar_attrs,
+    }
+
+
+def _bin_snapshot(snapshot: dict, bin_edges: np.ndarray, agg, diagnostics: bool) -> dict:
+    """Bin a pre-loaded snapshot onto *bin_edges* — no file IO.
+
+    Returns the same shape of dict that the previous ``_bin_one_profile``
+    produced (``vars``, ``stds``, ``scalars``, ``scalar_attrs``).
+    """
+    out: dict = {"vars": {}, "stds": {}, "scalars": snapshot["scalars"],
+                 "scalar_attrs": snapshot["scalar_attrs"]}
+    depth = snapshot["depth"]
+    for vname, arr in snapshot["vars"].items():
+        binned, _ = _bin_array(arr, depth, bin_edges, agg)
+        out["vars"][vname] = binned
+        if diagnostics:
+            out["stds"][vname] = _bin_std(arr, depth, bin_edges)
+    return out
 
 
 def _bin_one_profile(
@@ -147,59 +196,16 @@ def _bin_one_profile(
     agg,
     diagnostics: bool,
 ) -> dict:
-    """Bin a single profile NetCDF onto *bin_edges*.
+    """Open + bin a single profile NetCDF onto *bin_edges*.
 
-    Returns a dict with keys:
-
-    * ``vars`` — ``{var_name: 1-D ndarray (n_bins,)}``
-    * ``stds`` — ``{var_name: 1-D ndarray}`` when *diagnostics*, else empty
-    * ``scalars`` — ``{lat|lon|stime|etime: float}`` (epoch seconds for time)
-    * ``scalar_attrs`` — ``{name: attrs_dict}`` from the source NC
-
-    Designed to be called either inline (via :func:`bin_by_depth`) or in
-    a worker process — the return value is plain numpy / Python types, so
-    pickling round-trips cheaply.
+    Compatibility shim around :func:`_load_profile_snapshot` +
+    :func:`_bin_snapshot` for callers that want the old "one open, one
+    bin" behavior in a single function call.
     """
-    out: dict = {"vars": {}, "stds": {}, "scalars": {}, "scalar_attrs": {}}
-    with xr.open_dataset(profile_file) as ds:
-        depth_var = _depth_var_for(ds)
-        if depth_var is None:
-            return out
-        depth = ds[depth_var].values
-
-        scalar_names = ("lat", "lon", "stime", "etime")
-        for sname in scalar_names:
-            if sname in ds.data_vars and ds[sname].ndim == 0:
-                val = ds[sname].values
-                if val.dtype.kind == "M":
-                    val = val.astype("datetime64[ns]").astype(np.int64) / 1e9
-                out["scalars"][sname] = float(val)
-                # Strip units/calendar — xarray's CF encoder will re-emit
-                # them when writing the combo; carrying them alongside
-                # numeric values triggers a "Key 'units' already exists in
-                # attrs" conflict.
-                attrs = {
-                    k: v
-                    for k, v in ds[sname].attrs.items()
-                    if k not in ("units", "calendar")
-                }
-                out["scalar_attrs"][sname] = attrs
-
-        for vname in ds.data_vars:
-            if vname == depth_var or vname in scalar_names:
-                continue
-            arr = ds[vname].values
-            if arr.ndim != 1 or len(arr) != len(depth):
-                continue
-            if arr.dtype.kind == "M":
-                continue
-
-            binned, _ = _bin_array(arr, depth, bin_edges, agg)
-            out["vars"][vname] = binned
-            if diagnostics:
-                out["stds"][vname] = _bin_std(arr, depth, bin_edges)
-
-    return out
+    snap = _load_profile_snapshot(profile_file)
+    if snap is None:
+        return {"vars": {}, "stds": {}, "scalars": {}, "scalar_attrs": {}}
+    return _bin_snapshot(snap, bin_edges, agg, diagnostics)
 
 
 def bin_by_depth(
@@ -233,20 +239,36 @@ def bin_by_depth(
 
     Notes
     -----
-    Two passes over the inputs (only one ``xr.open_dataset`` open at a
-    time): pass 1 reads each file's depth coord to compute the global bin
-    grid; pass 2 streams each file through :func:`_bin_one_profile`. This
-    keeps peak memory bounded by a single profile's metadata regardless
-    of how many files are being binned.
+    Single open per profile NC: each file is read once into an in-memory
+    snapshot (``_load_profile_snapshot``) holding its depth coord,
+    aligned data vars and CF §9 scalars. The global bin grid is computed
+    from the cached depths, then :func:`_bin_snapshot` bins each entry
+    without further IO. The previous design re-opened every file in a
+    second pass to bin it — that doubled the open count for what was
+    really one file's worth of work.
     """
     agg = _get_agg_func(aggregation)
 
-    depth_range = _scan_depth_range(profile_files)
-    if depth_range is None:
+    snapshots: list[dict | None] = [_load_profile_snapshot(f) for f in profile_files]
+
+    g_min = np.inf
+    g_max = -np.inf
+    saw_any = False
+    for snap in snapshots:
+        if snap is None:
+            continue
+        d = snap["depth"]
+        d = d[np.isfinite(d)]
+        if d.size == 0:
+            continue
+        saw_any = True
+        g_min = min(g_min, float(d.min()))
+        g_max = max(g_max, float(d.max()))
+    if not saw_any:
         return xr.Dataset()
 
-    d_min = np.floor(depth_range[0] / bin_width) * bin_width
-    d_max = np.ceil(depth_range[1] / bin_width) * bin_width
+    d_min = np.floor(g_min / bin_width) * bin_width
+    d_max = np.ceil(g_max / bin_width) * bin_width
     bin_edges = np.arange(d_min, d_max + bin_width, bin_width)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
     n_bins = len(bin_centers)
@@ -261,9 +283,16 @@ def bin_by_depth(
     }
     profile_scalar_attrs: dict[str, dict] = {}
 
-    for pi, pfile in enumerate(profile_files):
+    for pi, (pfile, snap) in enumerate(zip(profile_files, snapshots)):
         with stage_log(log_dir, _source_stem(pfile)):
-            res = _bin_one_profile(pfile, bin_edges, agg, diagnostics)
+            if snap is None:
+                continue
+            res = _bin_snapshot(snap, bin_edges, agg, diagnostics)
+            # Drop the cached input data once the bin pass has consumed
+            # it — keeps peak memory close to "one snapshot at a time"
+            # for the binning pass even though we held them all through
+            # the bin-edge computation.
+            snapshots[pi] = None
             for sname, val in res["scalars"].items():
                 profile_scalars[sname][pi] = val
                 if sname not in profile_scalar_attrs:
