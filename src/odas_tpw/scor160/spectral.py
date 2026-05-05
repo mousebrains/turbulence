@@ -9,6 +9,7 @@ from typing import NamedTuple
 import numpy as np
 import numpy.typing as npt
 from scipy import signal
+from scipy.fft import rfft as _rfft
 
 
 class CSDResult(NamedTuple):
@@ -190,7 +191,7 @@ def csd_matrix(
             seg = np.empty((nfft, n_x))
             for c in range(n_x):
                 seg[:, c] = _detrend_segment(x[s : s + nfft, c], detrend, ramp) * window
-            fft_x = np.fft.rfft(seg, n=nfft, axis=0)  # (n_freq, n_x)
+            fft_x = _rfft(seg, n=nfft, axis=0)  # (n_freq, n_x)
             # Cxy[f, i, j] = fft_x[f, j] * conj(fft_x[f, i])
             Cxy += np.conj(fft_x[:, :, np.newaxis]) * fft_x[:, np.newaxis, :]
         Cxy /= n_seg
@@ -213,8 +214,8 @@ def csd_matrix(
             seg_x[:, c] = _detrend_segment(x[s : s + nfft, c], detrend, ramp) * window
         for c in range(n_y):
             seg_y[:, c] = _detrend_segment(y[s : s + nfft, c], detrend, ramp) * window
-        fft_x = np.fft.rfft(seg_x, n=nfft, axis=0)
-        fft_y = np.fft.rfft(seg_y, n=nfft, axis=0)
+        fft_x = _rfft(seg_x, n=nfft, axis=0)
+        fft_y = _rfft(seg_y, n=nfft, axis=0)
         # Cxx[f,i,j] = fft_x[f,j] * conj(fft_x[f,i])
         Cxx += np.conj(fft_x[:, :, np.newaxis]) * fft_x[:, np.newaxis, :]
         Cyy += np.conj(fft_y[:, :, np.newaxis]) * fft_y[:, np.newaxis, :]
@@ -366,7 +367,7 @@ def csd_matrix_batch(
 
     # --- FFT along the nfft axis -------------------------------------------
     # fft_x shape: (n_windows, n_seg, n_freq, n_x)
-    fft_x = np.fft.rfft(x_segs, n=nfft, axis=2)
+    fft_x = _rfft(x_segs, n=nfft, axis=2)
 
     # Free memory — segments no longer needed
     del x_segs
@@ -402,7 +403,7 @@ def csd_matrix_batch(
     y_segs = y_windows[:, indices, :]  # (n_windows, n_seg, nfft, n_y)
     y_segs = _detrend_batch(y_segs, detrend, axis=2)
     y_segs *= win[np.newaxis, np.newaxis, :, np.newaxis]
-    fft_y = np.fft.rfft(y_segs, n=nfft, axis=2)
+    fft_y = _rfft(y_segs, n=nfft, axis=2)
     del y_segs
 
     # Cxx[w,f,i,j] = <conj(Xi) * Xj>
