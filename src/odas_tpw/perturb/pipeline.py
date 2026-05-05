@@ -6,7 +6,7 @@ Reference: Code/process_P_files.m (233 lines), Code/mat2profile.m (170 lines)
 
 import logging
 import os
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -914,13 +914,21 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 upstream=_upstream_for("chi_binned", config),
             )
 
-    def _bin_profiles_stage() -> None:
-        if not prof_ncs or prof_binned_dir is None:
-            return
+    # Stages run sequentially because each one now drives a per-profile
+    # ``ProcessPoolExecutor`` of size *jobs*.  Running the 3 stages
+    # concurrently on a thread pool would over-commit (3 × jobs workers
+    # competing for the same cores) and cost more than it saves.
+
+    if prof_ncs and prof_binned_dir is not None:
         logger.info("Binning profiles...")
         if bin_method == "depth":
             ds = bin_by_depth(
-                prof_ncs, bin_width, aggregation, diagnostics, log_dir=prof_binned_dir
+                prof_ncs,
+                bin_width,
+                aggregation,
+                diagnostics,
+                log_dir=prof_binned_dir,
+                jobs=jobs,
             )
         else:
             ds = bin_by_time(
@@ -929,37 +937,33 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         if ds.data_vars:
             ds.to_netcdf(prof_binned_dir / "binned.nc")
 
-    def _bin_diss_stage() -> None:
-        if not diss_ncs or diss_binned_dir is None:
-            return
+    if diss_ncs and diss_binned_dir is not None:
         logger.info("Binning dissipation...")
         ds = bin_diss(
-            diss_ncs, diss_width, diss_agg, bin_method, diagnostics, log_dir=diss_binned_dir
+            diss_ncs,
+            diss_width,
+            diss_agg,
+            bin_method,
+            diagnostics,
+            log_dir=diss_binned_dir,
+            jobs=jobs,
         )
         if ds.data_vars:
             ds.to_netcdf(diss_binned_dir / "binned.nc")
 
-    def _bin_chi_stage() -> None:
-        if not chi_ncs or chi_binned_dir is None:
-            return
+    if chi_ncs and chi_binned_dir is not None:
         logger.info("Binning chi...")
         ds = bin_chi(
-            chi_ncs, chi_width, chi_agg, bin_method, diagnostics, log_dir=chi_binned_dir
+            chi_ncs,
+            chi_width,
+            chi_agg,
+            bin_method,
+            diagnostics,
+            log_dir=chi_binned_dir,
+            jobs=jobs,
         )
         if ds.data_vars:
             ds.to_netcdf(chi_binned_dir / "binned.nc")
-
-    bin_stages = [_bin_profiles_stage, _bin_diss_stage, _bin_chi_stage]
-    if jobs <= 1:
-        for stage in bin_stages:
-            stage()
-    else:
-        # 3 workers max — that's all we have stages for.  Threads share the
-        # parent's logging state so per-profile ``stage_log`` blocks land in
-        # the right files without extra setup.
-        with ThreadPoolExecutor(max_workers=min(3, jobs)) as bin_pool:
-            for fut in as_completed([bin_pool.submit(stage) for stage in bin_stages]):
-                fut.result()  # surface exceptions
 
     # Combo assembly
     _run_combo(

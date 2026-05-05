@@ -6,6 +6,7 @@ Reference: Code/bin_by_real.m, Code/profile2binned.m, Code/diss2binned.m,
 """
 
 import re
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -208,12 +209,36 @@ def _bin_one_profile(
     return _bin_snapshot(snap, bin_edges, agg, diagnostics)
 
 
+# Top-level worker entrypoints — must be importable for spawn-style
+# multiprocessing (macOS default).  The thin tuple signatures keep the
+# Python pickle small: just file path + small numpy array + tiny config.
+
+
+def _bin_scan_worker(profile_file: Path) -> tuple[float, float] | None:
+    """Worker: read just enough of the file to report (min, max) depth."""
+    snap = _load_profile_snapshot(profile_file)
+    if snap is None:
+        return None
+    d = snap["depth"]
+    d = d[np.isfinite(d)]
+    if d.size == 0:
+        return None
+    return float(d.min()), float(d.max())
+
+
+def _bin_compute_worker(args: tuple) -> dict:
+    """Worker: load snapshot + bin onto pre-computed *bin_edges*."""
+    profile_file, bin_edges, aggregation, diagnostics = args
+    return _bin_one_profile(profile_file, bin_edges, _get_agg_func(aggregation), diagnostics)
+
+
 def bin_by_depth(
     profile_files: list[Path],
     bin_width: float = 1.0,
     aggregation: str = "mean",
     diagnostics: bool = False,
     log_dir: Path | None = None,
+    jobs: int = 1,
 ) -> xr.Dataset:
     """Bin per-profile NetCDFs by depth into 2D (bin x profile).
 
@@ -232,6 +257,11 @@ def bin_by_depth(
         :func:`~odas_tpw.perturb.logging_setup.stage_log` so each source
         file's records land in ``<log_dir>/<source_stem>.log`` (in
         addition to the worker/run logs).
+    jobs : int, default 1
+        When > 1, dispatch the per-profile depth scan and the per-profile
+        load+bin onto a process pool of *jobs* workers. The two phases
+        share one ``ProcessPoolExecutor`` so spawn-fork overhead is paid
+        once.
 
     Returns
     -------
@@ -239,31 +269,36 @@ def bin_by_depth(
 
     Notes
     -----
-    Single open per profile NC: each file is read once into an in-memory
-    snapshot (``_load_profile_snapshot``) holding its depth coord,
-    aligned data vars and CF §9 scalars. The global bin grid is computed
-    from the cached depths, then :func:`_bin_snapshot` bins each entry
-    without further IO. The previous design re-opened every file in a
-    second pass to bin it — that doubled the open count for what was
-    really one file's worth of work.
+    Serial path (jobs <= 1): each file is read once into an in-memory
+    snapshot, the global bin grid is computed from cached depths, then
+    each snapshot is binned without further IO — single open per file.
+
+    Parallel path (jobs > 1): workers each open their share of files
+    twice (once for the scan, once for the bin); we accept that second
+    open in exchange for shipping just (min,max) tuples through pickle
+    in phase 1 instead of the full snapshot dicts.  For SN465-class
+    workloads this is dominated by phase 2 (load + bin) which scales
+    cleanly with worker count.
     """
     agg = _get_agg_func(aggregation)
+    n_profiles = len(profile_files)
 
-    snapshots: list[dict | None] = [_load_profile_snapshot(f) for f in profile_files]
+    # ---- Phase 1: scan depth ranges -------------------------------------
+    if jobs > 1 and n_profiles > 1:
+        with ProcessPoolExecutor(max_workers=jobs) as exe:
+            ranges = list(exe.map(_bin_scan_worker, profile_files))
+    else:
+        ranges = [_bin_scan_worker(f) for f in profile_files]
 
     g_min = np.inf
     g_max = -np.inf
     saw_any = False
-    for snap in snapshots:
-        if snap is None:
-            continue
-        d = snap["depth"]
-        d = d[np.isfinite(d)]
-        if d.size == 0:
+    for r in ranges:
+        if r is None:
             continue
         saw_any = True
-        g_min = min(g_min, float(d.min()))
-        g_max = max(g_max, float(d.max()))
+        g_min = min(g_min, r[0])
+        g_max = max(g_max, r[1])
     if not saw_any:
         return xr.Dataset()
 
@@ -272,7 +307,14 @@ def bin_by_depth(
     bin_edges = np.arange(d_min, d_max + bin_width, bin_width)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
     n_bins = len(bin_centers)
-    n_profiles = len(profile_files)
+
+    # ---- Phase 2: load + bin --------------------------------------------
+    if jobs > 1 and n_profiles > 1:
+        args_iter = ((f, bin_edges, aggregation, diagnostics) for f in profile_files)
+        with ProcessPoolExecutor(max_workers=jobs) as exe:
+            results = list(exe.map(_bin_compute_worker, args_iter))
+    else:
+        results = [_bin_one_profile(f, bin_edges, agg, diagnostics) for f in profile_files]
 
     result_vars: dict = {}
     profile_scalars = {
@@ -283,16 +325,10 @@ def bin_by_depth(
     }
     profile_scalar_attrs: dict[str, dict] = {}
 
-    for pi, (pfile, snap) in enumerate(zip(profile_files, snapshots)):
+    for pi, (pfile, res) in enumerate(zip(profile_files, results)):
         with stage_log(log_dir, _source_stem(pfile)):
-            if snap is None:
+            if not res["vars"] and not res["scalars"]:
                 continue
-            res = _bin_snapshot(snap, bin_edges, agg, diagnostics)
-            # Drop the cached input data once the bin pass has consumed
-            # it — keeps peak memory close to "one snapshot at a time"
-            # for the binning pass even though we held them all through
-            # the bin-edge computation.
-            snapshots[pi] = None
             for sname, val in res["scalars"].items():
                 profile_scalars[sname][pi] = val
                 if sname not in profile_scalar_attrs:
@@ -396,6 +432,7 @@ def bin_diss(
     method: str = "depth",
     diagnostics: bool = False,
     log_dir: Path | None = None,
+    jobs: int = 1,
 ) -> xr.Dataset:
     """Bin dissipation estimates by depth or time.
 
@@ -403,7 +440,9 @@ def bin_diss(
     """
     if method == "time":
         return bin_by_time(diss_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
-    return bin_by_depth(diss_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
+    return bin_by_depth(
+        diss_files, bin_width, aggregation, diagnostics, log_dir=log_dir, jobs=jobs
+    )
 
 
 def bin_chi(
@@ -413,8 +452,11 @@ def bin_chi(
     method: str = "depth",
     diagnostics: bool = False,
     log_dir: Path | None = None,
+    jobs: int = 1,
 ) -> xr.Dataset:
     """Bin chi estimates by depth or time."""
     if method == "time":
         return bin_by_time(chi_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
-    return bin_by_depth(chi_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
+    return bin_by_depth(
+        chi_files, bin_width, aggregation, diagnostics, log_dir=log_dir, jobs=jobs
+    )
