@@ -802,3 +802,179 @@ class TestEpsilonDsToL4Data:
         l4 = _epsilon_ds_to_l4data(ds)
         # Without epsilonMean we expect the historical arithmetic mean.
         np.testing.assert_allclose(l4.epsi_final, np.nanmean(ds["epsilon"].values, axis=0))
+
+    def test_single_shear_1d_promoted_to_2d(self):
+        """1D epsilon array (single probe) is promoted via newaxis."""
+        import xarray as xr
+
+        from odas_tpw.rsi.chi_io import _epsilon_ds_to_l4data
+
+        n = 4
+        ds = xr.Dataset(
+            {
+                "epsilon": (["time"], np.full(n, 1.5e-7)),
+                "P_mean": (["time"], np.linspace(10, 100, n)),
+                "speed": (["time"], np.full(n, 0.7)),
+            },
+            coords={"t": ("time", np.arange(n, dtype=float))},
+        )
+        l4 = _epsilon_ds_to_l4data(ds)
+        assert l4.epsi.shape == (1, n)
+        np.testing.assert_allclose(l4.epsi_final, 1.5e-7)
+
+    def test_missing_pmean_and_speed_default_zero(self):
+        """When P_mean and speed are absent, the L4Data uses zeros."""
+        import xarray as xr
+
+        from odas_tpw.rsi.chi_io import _epsilon_ds_to_l4data
+
+        n = 3
+        ds = xr.Dataset(
+            {"epsilon": (["probe", "time"], np.full((2, n), 1e-7))},
+            coords={"probe": ["sh1", "sh2"], "t": ("time", np.arange(n, dtype=float))},
+        )
+        l4 = _epsilon_ds_to_l4data(ds)
+        np.testing.assert_array_equal(l4.pres, np.zeros(n))
+        np.testing.assert_array_equal(l4.pspd_rel, np.zeros(n))
+
+
+# ---------------------------------------------------------------------------
+# _extract_therm_cal helper
+# ---------------------------------------------------------------------------
+
+
+class TestExtractThermCal:
+    def test_g_is_renamed_to_gain(self):
+        from odas_tpw.rsi.chi_io import _extract_therm_cal
+
+        cal = _extract_therm_cal({"e_b": "0.1", "g": "1.5", "T_0": "20.0"})
+        assert "g" not in cal
+        assert cal["gain"] == 1.5
+        assert cal["e_b"] == 0.1
+        assert cal["T_0"] == 20.0
+
+    def test_no_g_key_leaves_dict_untouched(self):
+        from odas_tpw.rsi.chi_io import _extract_therm_cal
+
+        cal = _extract_therm_cal({"e_b": "0.2", "beta_1": "3.0"})
+        assert "g" not in cal
+        assert "gain" not in cal
+        assert cal == {"e_b": 0.2, "beta_1": 3.0}
+
+    def test_none_values_are_skipped(self):
+        from odas_tpw.rsi.chi_io import _extract_therm_cal
+
+        cal = _extract_therm_cal({"e_b": "0.1", "g": None, "beta_1": "2.0"})
+        assert "g" not in cal
+        assert "gain" not in cal
+        assert cal == {"e_b": 0.1, "beta_1": 2.0}
+
+
+# ---------------------------------------------------------------------------
+# _load_therm_channels — instance and fallback paths
+# ---------------------------------------------------------------------------
+
+
+class TestLoadThermChannelsBranches:
+    @pytest.fixture(autouse=True)
+    def _skip_no_data(self):
+        if not PROFILE_FILE.exists():
+            pytest.skip("Test data not available")
+
+    def test_pfile_instance_is_reused(self):
+        """Passing an already-built PFile instance should not re-open the file."""
+        from odas_tpw.rsi.chi_io import _load_therm_channels
+        from odas_tpw.rsi.p_file import PFile
+
+        pf = PFile(PROFILE_FILE)
+        data = _load_therm_channels(pf)
+        assert "therm" in data
+        assert len(data["therm"]) > 0
+
+    def test_nc_t_pattern_fallback(self, tmp_path):
+        """An NC source with only T-channels (no T_dT) hits the T-pattern fallback."""
+        import netCDF4 as nc
+
+        from odas_tpw.rsi.chi_io import _load_therm_channels
+
+        path = tmp_path / "minimal.nc"
+        ds = nc.Dataset(str(path), "w", format="NETCDF4")
+        try:
+            n_fast = 64
+            n_slow = 8
+            ds.createDimension("time_fast", n_fast)
+            ds.createDimension("time_slow", n_slow)
+            ds.fs_fast = 64.0
+            ds.fs_slow = 8.0
+            ds.vehicle = "vmp"
+
+            tf = ds.createVariable("t_fast", "f8", ("time_fast",))
+            tf[:] = np.arange(n_fast) / 64.0
+            ts = ds.createVariable("t_slow", "f8", ("time_slow",))
+            ts[:] = np.arange(n_slow) / 8.0
+            P = ds.createVariable("P", "f8", ("time_slow",))
+            P[:] = np.linspace(5, 50, n_slow)
+            T = ds.createVariable("T", "f8", ("time_slow",))
+            T[:] = np.full(n_slow, 10.0)
+
+            t1 = ds.createVariable("T1", "f8", ("time_fast",))
+            t1[:] = 10.0 + np.linspace(0, 1, n_fast)
+        finally:
+            ds.close()
+
+        data = _load_therm_channels(path)
+        # The T-pattern fallback should have located T1 since no T_dT exists.
+        assert any(name == "T1" for name, _ in data["therm"])
+
+
+# ---------------------------------------------------------------------------
+# _compute_chi_one parallel-worker helper
+# ---------------------------------------------------------------------------
+
+
+class TestComputeChiOneWorker:
+    @pytest.fixture(autouse=True)
+    def _skip_no_data(self):
+        if not PROFILE_FILE.exists():
+            pytest.skip("Test data not available")
+
+    def test_three_arg_form(self, tmp_path):
+        """3-arg form: (source, output_dir, kwargs) — no epsilon_dir."""
+        from odas_tpw.rsi.chi_io import _compute_chi_one
+
+        out = tmp_path / "out"
+        out.mkdir()
+        name, n = _compute_chi_one((PROFILE_FILE, out, {"fft_length": 512}))
+        assert str(name) == str(PROFILE_FILE)
+        assert n >= 1
+
+    def test_four_arg_with_existing_eps_file(self, tmp_path):
+        """4-arg form with a real eps file: epsilon_ds is loaded and passed through."""
+        from odas_tpw.rsi.chi_io import _compute_chi_one
+        from odas_tpw.rsi.dissipation import compute_diss_file
+
+        eps_dir = tmp_path / "eps"
+        eps_dir.mkdir()
+        compute_diss_file(PROFILE_FILE, eps_dir, fft_length=256)
+        eps_files = list(eps_dir.glob("*_eps.nc"))
+        assert eps_files, "compute_diss_file produced no eps file"
+
+        out = tmp_path / "chi_out"
+        out.mkdir()
+        _name, n = _compute_chi_one(
+            (PROFILE_FILE, out, {"fft_length": 512}, eps_dir)
+        )
+        assert n >= 1
+
+    def test_four_arg_missing_eps_falls_back(self, tmp_path):
+        """4-arg form with no matching eps file falls back to Method 2."""
+        from odas_tpw.rsi.chi_io import _compute_chi_one
+
+        empty_eps = tmp_path / "empty_eps"
+        empty_eps.mkdir()
+        out = tmp_path / "chi_out"
+        out.mkdir()
+        _name, n = _compute_chi_one(
+            (PROFILE_FILE, out, {"fft_length": 512}, empty_eps)
+        )
+        assert n >= 1

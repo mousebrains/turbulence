@@ -243,3 +243,241 @@ class TestReadAtomix:
         result = read_atomix(path)
         # diss_length should be inferred (>= 2 * fft_length = 512)
         assert result.l3_params.diss_length >= 512
+
+
+# ---------------------------------------------------------------------------
+# read_atomix() edge-case branches
+# ---------------------------------------------------------------------------
+
+
+class TestReadAtomixEdgeCases:
+    """Cover the alternate-grid, no-vib, and Epsifish-attr paths in io.py."""
+
+    def test_pres_on_slow_grid(self, tmp_path):
+        """PRES on a slower TIME_CTD grid is interpolated to the fast grid."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "pres_slow.nc"
+        _create_atomix_nc(path, pres_on_slow_grid=True)
+        result = read_atomix(path)
+        assert result.l1.pres.shape == (2048,)
+        # Interpolated values should span roughly the same physical range
+        assert 5.0 <= result.l1.pres.min() <= 6.0
+        assert 99.0 <= result.l1.pres.max() <= 101.0
+
+    def test_pres_on_slow_grid_no_time_var(self, tmp_path):
+        """Slow PRES with no matching time var falls back to uniform interp."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "pres_slow_no_time.nc"
+        _create_atomix_nc(path, pres_on_slow_grid=True, pres_dim_no_time_var=True)
+        result = read_atomix(path)
+        assert result.l1.pres.shape == (2048,)
+
+    def test_l1_no_vib_returns_none(self, tmp_path):
+        """When neither ACC nor VIB is present, vib_type='NONE'."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "no_vib.nc"
+        _create_atomix_nc(path, no_vib=True)
+        result = read_atomix(path)
+        assert result.l1.vib_type == "NONE"
+        assert result.l1.vib.shape == (0, result.l1.n_time)
+        assert result.l2_ref.vib_type == "NONE"
+        assert result.l2_ref.vib.shape == (0, 2048)
+
+    def test_pspd_on_slow_grid_with_time_var(self, tmp_path):
+        """L1 PSPD_REL on slow grid with matching time var → time-based interp."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "pspd_slow.nc"
+        _create_atomix_nc(path, pspd_on_slow_grid=True)
+        result = read_atomix(path)
+        assert result.l1.pspd_rel.shape == (2048,)
+
+    def test_pspd_on_slow_grid_no_time_var(self, tmp_path):
+        """L1 PSPD_REL on slow grid with no time var → uniform interp fallback."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "pspd_slow_no_time.nc"
+        _create_atomix_nc(path, pspd_on_slow_grid=True, pspd_dim_no_time_var=True)
+        result = read_atomix(path)
+        assert result.l1.pspd_rel.shape == (2048,)
+
+    def test_l2_pspd_on_slow_grid(self, tmp_path):
+        """L2 PSPD_REL on slow grid with matching time var → interp."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "l2_pspd_slow.nc"
+        _create_atomix_nc(path, l2_pspd_on_slow_grid=True)
+        result = read_atomix(path)
+        assert result.l2_ref.pspd_rel.shape == (2048,)
+
+    def test_l2_pspd_on_slow_grid_no_time_var(self, tmp_path):
+        """L2 PSPD_REL on slow grid with no time var → uniform interp fallback."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "l2_pspd_slow_no_time.nc"
+        _create_atomix_nc(
+            path, l2_pspd_on_slow_grid=True, l2_pspd_dim_no_time_var=True
+        )
+        result = read_atomix(path)
+        assert result.l2_ref.pspd_rel.shape == (2048,)
+
+    def test_slow_optional_vars_loaded(self, tmp_path):
+        """TIME_SLOW/PRES_SLOW/PITCH/ROLL/TEMP populate the L1 optional fields."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "slow_opt.nc"
+        _create_atomix_nc(path, slow_optional_vars=True)
+        result = read_atomix(path)
+        l1 = result.l1
+        assert l1.time_slow.size > 0
+        assert l1.pres_slow.size > 0
+        assert l1.pitch.size > 0
+        assert l1.roll.size > 0
+        assert l1.temp.size > 0
+
+    def test_l3_spectral_attrs(self, tmp_path):
+        """Epsifish-style spectral_fft_length / spectral_disslength attrs."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "l3_spectral.nc"
+        _create_atomix_nc(path, l3_spectral_attrs=True)
+        result = read_atomix(path)
+        assert result.l3_params.fft_length == 256
+        assert result.l3_params.diss_length == 512
+
+    def test_l3_overlap_percent(self, tmp_path):
+        """Epsifish overlap-as-percent attr produces an integer sample overlap."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "l3_overlap_pct.nc"
+        _create_atomix_nc(
+            path, l3_spectral_attrs=True, l3_overlap_percent=True
+        )
+        result = read_atomix(path)
+        # 50% of 512 == 256
+        assert result.l3_params.overlap == 256
+
+    def test_l3_no_attrs_uses_kcyc(self, tmp_path):
+        """With no fft_length/spectral_fft_length, fft is inferred from KCYC."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "l3_no_attrs.nc"
+        _create_atomix_nc(path, l3_no_attrs=True)
+        result = read_atomix(path)
+        # n_freq = 129 → fft_length = (129-1)*2 = 256
+        assert result.l3_params.fft_length == 256
+
+    def test_l3_no_kcyc_default_fft(self, tmp_path):
+        """With no KCYC and no fft attrs, fft_length defaults to 512.
+
+        Calls _read_l3_params directly because _read_l3 requires KCYC.
+        """
+        import netCDF4
+
+        from odas_tpw.scor160.io import _read_l3_params
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "l3_no_kcyc.nc"
+        _create_atomix_nc(path, l3_no_attrs=True, l3_no_fft_kcyc=True)
+        ds = netCDF4.Dataset(str(path), "r")
+        try:
+            l3p = _read_l3_params(ds)
+        finally:
+            ds.close()
+        assert l3p.fft_length == 512
+
+    def test_l3_temp_variable_loaded(self, tmp_path):
+        """If TEMP is present in L3_spectra, _read_l3 picks it up."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "l3_temp.nc"
+        _create_atomix_nc(path, l3_temp=True)
+        result = read_atomix(path)
+        np.testing.assert_allclose(result.l3_ref.temp, 10.0)
+
+    def test_l3_no_sh_spec_clean_falls_back_to_sh_spec(self, tmp_path):
+        """With no SH_SPEC_CLEAN, sh_spec_clean defaults to a copy of SH_SPEC."""
+        from tests.conftest import _create_atomix_nc
+
+        path = tmp_path / "no_clean.nc"
+        _create_atomix_nc(path, l3_no_sh_spec_clean=True)
+        result = read_atomix(path)
+        np.testing.assert_array_equal(
+            result.l3_ref.sh_spec_clean, result.l3_ref.sh_spec
+        )
+
+
+# ---------------------------------------------------------------------------
+# _infer_diss_length helper
+# ---------------------------------------------------------------------------
+
+
+class TestInferDissLength:
+    """Direct unit tests for the _infer_diss_length helper fallbacks."""
+
+    def _make_l3_only(self, path, time=None, sec=None):
+        """Build a tiny NC with just an L3_spectra group and the requested vars."""
+        import netCDF4
+
+        ds = netCDF4.Dataset(str(path), "w", format="NETCDF4")
+        try:
+            g = ds.createGroup("L3_spectra")
+            if time is not None:
+                g.createDimension("N_SPECTRA", len(time))
+                t = g.createVariable("TIME", "f8", ("N_SPECTRA",))
+                t[:] = time
+                if sec is not None:
+                    s = g.createVariable("SECTION_NUMBER", "f8", ("N_SPECTRA",))
+                    s[:] = sec
+        finally:
+            ds.close()
+
+    def test_no_time_or_section(self, tmp_path):
+        """Missing TIME or SECTION_NUMBER → fallback to fft_length * 4."""
+        import netCDF4
+
+        from odas_tpw.scor160.io import _infer_diss_length
+
+        path = tmp_path / "no_vars.nc"
+        self._make_l3_only(path)  # no variables at all
+        ds = netCDF4.Dataset(str(path), "r")
+        try:
+            result = _infer_diss_length(ds.groups["L3_spectra"], 256, 512.0)
+        finally:
+            ds.close()
+        assert result == 1024  # 256 * 4
+
+    def test_too_few_samples(self, tmp_path):
+        """len(time) < 2 → fallback to fft_length * 4."""
+        import netCDF4
+
+        from odas_tpw.scor160.io import _infer_diss_length
+
+        path = tmp_path / "tiny.nc"
+        self._make_l3_only(path, time=[0.0], sec=[1.0])
+        ds = netCDF4.Dataset(str(path), "r")
+        try:
+            result = _infer_diss_length(ds.groups["L3_spectra"], 128, 512.0)
+        finally:
+            ds.close()
+        assert result == 512  # 128 * 4
+
+    def test_no_positive_sections(self, tmp_path):
+        """All SECTION_NUMBER==0 → no positive sections, fallback to fft*4."""
+        import netCDF4
+
+        from odas_tpw.scor160.io import _infer_diss_length
+
+        path = tmp_path / "zero_sec.nc"
+        self._make_l3_only(
+            path, time=np.linspace(0, 1, 8), sec=np.zeros(8)
+        )
+        ds = netCDF4.Dataset(str(path), "r")
+        try:
+            result = _infer_diss_length(ds.groups["L3_spectra"], 64, 512.0)
+        finally:
+            ds.close()
+        assert result == 256  # 64 * 4
