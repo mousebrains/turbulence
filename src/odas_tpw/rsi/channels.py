@@ -41,9 +41,22 @@ def _adis_14bit(data: np.ndarray) -> np.ndarray:
 
 
 def _unsigned_16bit(data: np.ndarray) -> np.ndarray:
-    """Convert signed int16 to unsigned by wrapping negative values."""
-    d = data.copy()
-    d[d < 0] = d[d < 0] + 2**16
+    """Convert signed int16 to unsigned by wrapping negative values.
+
+    The caller may pass already-unsigned data (the PFile loader's
+    upstream wrap step views int16 channels as uint16 in place); in that
+    case the negative-mask is empty and the array is returned as-is
+    (with a copy to keep the existing contract that callers may safely
+    mutate the result).
+    """
+    if data.dtype.kind == "u":
+        return data.copy()
+    if data.dtype.kind == "i" and data.dtype.itemsize <= 2:
+        # Native +2**16 would overflow int16; promote first.
+        d = data.astype(np.int32)
+    else:
+        d = data.copy()
+    d[d < 0] += 2**16
     return d
 
 
