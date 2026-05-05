@@ -15,14 +15,22 @@ import numpy.typing as npt
 
 
 def _bin_std(values: np.ndarray, depth: np.ndarray, bin_edges: np.ndarray) -> np.ndarray:
-    """Compute standard deviation per depth bin."""
+    """Compute standard deviation per depth bin (NaN-aware, ddof=0)."""
     n_bins = len(bin_edges) - 1
-    result = np.full(n_bins, np.nan)
-    for i in range(n_bins):
-        mask = (depth >= bin_edges[i]) & (depth < bin_edges[i + 1])
-        v = values[mask]
-        if len(v) > 1:
-            result[i] = np.nanstd(v)
+    # Bin assignment via searchsorted gives the same [edges[i], edges[i+1])
+    # half-open bins as the original mask comparison.
+    idx = np.searchsorted(bin_edges, depth, side="right") - 1
+    in_range = (idx >= 0) & (idx < n_bins) & np.isfinite(values)
+    idx_v = idx[in_range]
+    vals_v = values[in_range]
+    counts = np.bincount(idx_v, minlength=n_bins)
+    sums = np.bincount(idx_v, weights=vals_v, minlength=n_bins)
+    sums_sq = np.bincount(idx_v, weights=vals_v * vals_v, minlength=n_bins)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        means = np.where(counts > 0, sums / np.maximum(counts, 1), 0.0)
+        var = sums_sq / np.maximum(counts, 1) - means * means
+        var = np.maximum(var, 0.0)
+        result = np.where(counts > 1, np.sqrt(var), np.nan)
     return result
 
 

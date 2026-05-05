@@ -88,12 +88,19 @@ def detect_bottom_crash(
     if len(bins) < 2:
         return None
 
-    bin_std = np.full(len(bins) - 1, np.nan)
-    for i in range(len(bins) - 1):
-        mask = (depth >= bins[i]) & (depth < bins[i + 1])
-        vals = accel_mag[mask]
-        if len(vals) > 1:
-            bin_std[i] = np.nanstd(vals)
+    n_bins = len(bins) - 1
+    idx = np.searchsorted(bins, depth, side="right") - 1
+    in_range = (idx >= 0) & (idx < n_bins) & np.isfinite(accel_mag)
+    idx_v = idx[in_range]
+    vals_v = accel_mag[in_range]
+    counts = np.bincount(idx_v, minlength=n_bins)
+    sums = np.bincount(idx_v, weights=vals_v, minlength=n_bins)
+    sums_sq = np.bincount(idx_v, weights=vals_v * vals_v, minlength=n_bins)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        means = np.where(counts > 0, sums / np.maximum(counts, 1), 0.0)
+        var = sums_sq / np.maximum(counts, 1) - means * means
+        var = np.maximum(var, 0.0)
+        bin_std = np.where(counts > 1, np.sqrt(var), np.nan)
 
     valid = np.isfinite(bin_std)
     if np.sum(valid) < 3:

@@ -69,22 +69,30 @@ def bin_by_depth(
             else:
                 arr = np.nanmean(arr, axis=0)
 
-        binned = np.full(n_bins, np.nan)
-        use_log = name in log_mean_vars
-
-        for b in range(n_bins):
-            mask = bin_idx == b
-            vals = arr[mask]
-            vals = vals[np.isfinite(vals)]
-            if len(vals) == 0:
-                continue
-            if use_log:
-                vals = vals[vals > 0]
-                if len(vals) == 0:
-                    continue
-                binned[b] = np.exp(np.mean(np.log(vals)))
-            else:
-                binned[b] = np.mean(vals)
+        # Vectorize per-bin reduction with bincount.  Log-mean uses
+        # log(x) accumulators with strictly-positive values; arithmetic
+        # mean uses values directly.  Both paths drop NaN (and ≤0 for
+        # log-mean) up front, then accumulate sums and counts in one
+        # linear pass.
+        if name in log_mean_vars:
+            valid = np.isfinite(arr) & (arr > 0)
+            log_vals = np.log(arr, where=valid, out=np.full_like(arr, np.nan))
+            idx_v = bin_idx[valid]
+            log_v = log_vals[valid]
+            counts_v = np.bincount(idx_v, minlength=n_bins)
+            sums_v = np.bincount(idx_v, weights=log_v, minlength=n_bins)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                binned = np.where(
+                    counts_v > 0, np.exp(sums_v / np.maximum(counts_v, 1)), np.nan
+                )
+        else:
+            valid = np.isfinite(arr)
+            idx_v = bin_idx[valid]
+            vals_v = arr[valid]
+            counts_v = np.bincount(idx_v, minlength=n_bins)
+            sums_v = np.bincount(idx_v, weights=vals_v, minlength=n_bins)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                binned = np.where(counts_v > 0, sums_v / np.maximum(counts_v, 1), np.nan)
 
         data_vars[name] = (["depth_bin"], binned)
 
