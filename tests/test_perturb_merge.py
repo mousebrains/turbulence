@@ -166,3 +166,66 @@ class TestMergePFiles:
         out_dir = tmp_path / "deep" / "nested"
         merged = merge_p_files([f1], out_dir)
         assert merged.exists()
+
+    def test_empty_chain_raises(self, tmp_path):
+        import pytest
+
+        with pytest.raises(ValueError, match="Empty chain"):
+            merge_p_files([], tmp_path / "out")
+
+
+# ---------------------------------------------------------------------------
+# Discovery edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestFindMergeableFilesEdges:
+    def test_too_small_for_header_skipped(self, tmp_path):
+        """A file too small for a header is skipped, not raised."""
+        good = _make_p_file(tmp_path / "good_0001.p", file_number=1)
+        good2 = _make_p_file(tmp_path / "good_0002.p", file_number=2)
+        # Bad file: too small for HEADER_BYTES → _read_merge_info raises → skipped
+        bad = tmp_path / "bad.p"
+        bad.write_bytes(b"\x00" * 10)
+        chains = find_mergeable_files([good, bad, good2])
+        # The good chain still forms even though bad raised
+        assert len(chains) == 1
+        assert len(chains[0]) == 2
+
+    def test_non_sequential_break_finalizes_chain(self, tmp_path):
+        """File numbers 1, 2, 5 → finalize [1,2] when 5 breaks the run."""
+        f1 = _make_p_file(tmp_path / "f_0001.p", file_number=1)
+        f2 = _make_p_file(tmp_path / "f_0002.p", file_number=2)
+        f5 = _make_p_file(tmp_path / "f_0005.p", file_number=5)
+        chains = find_mergeable_files([f1, f2, f5])
+        # Only one chain (1,2) because 5 breaks the sequence and is alone
+        assert len(chains) == 1
+        assert len(chains[0]) == 2
+
+    def test_two_chains_within_one_group(self, tmp_path):
+        """Same config but two non-overlapping sequences: 1,2 then 5,6."""
+        f1 = _make_p_file(tmp_path / "f_0001.p", file_number=1)
+        f2 = _make_p_file(tmp_path / "f_0002.p", file_number=2)
+        f5 = _make_p_file(tmp_path / "f_0005.p", file_number=5)
+        f6 = _make_p_file(tmp_path / "f_0006.p", file_number=6)
+        chains = find_mergeable_files([f1, f2, f5, f6])
+        assert len(chains) == 2
+        # Both chains have 2 files
+        assert all(len(c) == 2 for c in chains)
+
+
+# ---------------------------------------------------------------------------
+# _read_merge_info errors
+# ---------------------------------------------------------------------------
+
+
+class TestReadMergeInfoErrors:
+    def test_too_small_raises(self, tmp_path):
+        import pytest
+
+        from odas_tpw.perturb.merge import _read_merge_info
+
+        bad = tmp_path / "tiny.p"
+        bad.write_bytes(b"\x00" * 10)
+        with pytest.raises(ValueError, match="too small"):
+            _read_merge_info(bad)

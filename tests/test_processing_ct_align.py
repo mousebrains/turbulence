@@ -47,3 +47,25 @@ class TestCTAlign:
         profiles = [(100, 900)]
         C_aligned, _ = ct_align(T, C, fs, profiles)
         assert C_aligned.shape == C.shape
+
+    def test_short_profile_continues(self):
+        """A profile shorter than 10 samples is skipped, not crashed on."""
+        fs = 64.0
+        T = np.linspace(0, 1, 100)
+        C = T.copy()
+        # First profile too short (< 10 samples), second is fine
+        profiles = [(0, 5), (10, 90)]
+        C_aligned, lag = ct_align(T, C, fs, profiles)
+        assert C_aligned.shape == C.shape
+        assert np.isfinite(lag)
+
+    def test_all_profiles_too_short(self):
+        """When every profile is too short, return identity copy."""
+        fs = 64.0
+        T = np.linspace(0, 1, 50)
+        C = T.copy() * 0.5
+        # Every profile <10 samples → per_profile stays empty → fallback return
+        profiles = [(0, 4), (10, 14), (20, 24)]
+        C_aligned, lag = ct_align(T, C, fs, profiles)
+        np.testing.assert_array_equal(C_aligned, C)
+        assert lag == 0.0
