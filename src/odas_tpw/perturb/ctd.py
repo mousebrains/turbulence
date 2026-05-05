@@ -63,28 +63,54 @@ def _time_bin(
     bin_idx = np.digitize(t, bin_edges) - 1  # 0-based
     bin_idx = np.clip(bin_idx, 0, n_bins - 1)
 
-    agg_func = np.nanmean if method == "mean" else np.nanmedian
     result = {"bin_centers": bin_centers}
 
     if diagnostics:
-        n_samples = np.zeros(n_bins, dtype=int)
-        for i in range(n_bins):
-            n_samples[i] = np.sum(bin_idx == i)
-        result["n_samples"] = n_samples
+        result["n_samples"] = np.bincount(bin_idx, minlength=n_bins).astype(int)
 
+    if method == "median":
+        # Sort once by bin index; each bin is then a contiguous slice. Avoids
+        # the O(n_bins × n_samples) mask broadcasts of a naive ``bin_idx == i``
+        # loop while still allowing per-bin nanmedian.
+        order = np.argsort(bin_idx, kind="stable")
+        sorted_idx = bin_idx[order]
+        splits = np.searchsorted(sorted_idx, np.arange(n_bins + 1))
+        for name, arr in data.items():
+            sorted_arr = arr[order]
+            binned = np.full(n_bins, np.nan)
+            for i in range(n_bins):
+                sl = sorted_arr[splits[i] : splits[i + 1]]
+                if sl.size > 0:
+                    binned[i] = np.nanmedian(sl)
+            result[name] = binned
+            if diagnostics:
+                std_arr = np.full(n_bins, np.nan)
+                for i in range(n_bins):
+                    sl = sorted_arr[splits[i] : splits[i + 1]]
+                    if sl.size > 1:
+                        std_arr[i] = np.nanstd(sl)
+                result[f"{name}_std"] = std_arr
+        return result
+
+    # Mean path — one O(N) bincount per channel, no per-bin Python loop.
     for name, arr in data.items():
-        binned = np.full(n_bins, np.nan)
-        for i in range(n_bins):
-            mask = bin_idx == i
-            if np.any(mask):
-                binned[i] = agg_func(arr[mask])
+        finite = np.isfinite(arr)
+        idx_f = bin_idx[finite]
+        arr_f = arr[finite]
+        counts = np.bincount(idx_f, minlength=n_bins)
+        sums = np.bincount(idx_f, weights=arr_f, minlength=n_bins)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            binned = np.where(counts > 0, sums / counts, np.nan)
         result[name] = binned
         if diagnostics:
-            std_arr = np.full(n_bins, np.nan)
-            for i in range(n_bins):
-                mask = bin_idx == i
-                if np.sum(mask) > 1:
-                    std_arr[i] = np.nanstd(arr[mask])
+            sums_sq = np.bincount(idx_f, weights=arr_f * arr_f, minlength=n_bins)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                # Population std (ddof=0) to match np.nanstd default.
+                mean_per_bin = np.where(counts > 0, sums / counts, 0.0)
+                var = sums_sq / np.maximum(counts, 1) - mean_per_bin * mean_per_bin
+                # Numerical safety: clip tiny negatives from cancellation.
+                var = np.maximum(var, 0.0)
+                std_arr = np.where(counts > 1, np.sqrt(var), np.nan)
             result[f"{name}_std"] = std_arr
 
     return result
