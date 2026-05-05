@@ -27,6 +27,28 @@ def _source_stem(profile_file: Path | str) -> str:
     return _PROF_SUFFIX_RE.sub("", Path(profile_file).stem)
 
 
+def _bin_std(values: np.ndarray, coords: np.ndarray, bin_edges: np.ndarray) -> np.ndarray:
+    """NaN-aware std-per-bin via bincount (population std, ddof=0).
+
+    Equivalent to a per-bin ``np.nanstd`` loop, but avoids the
+    O(n_bins × n_samples) mask broadcast.
+    """
+    n_bins = len(bin_edges) - 1
+    idx = np.clip(np.digitize(coords, bin_edges) - 1, 0, n_bins - 1)
+    finite = np.isfinite(values)
+    idx_f = idx[finite]
+    vals_f = values[finite]
+    counts = np.bincount(idx_f, minlength=n_bins)
+    sums = np.bincount(idx_f, weights=vals_f, minlength=n_bins)
+    sums_sq = np.bincount(idx_f, weights=vals_f * vals_f, minlength=n_bins)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        means = np.where(counts > 0, sums / np.maximum(counts, 1), 0.0)
+        var = sums_sq / np.maximum(counts, 1) - means * means
+        var = np.maximum(var, 0.0)  # cancellation safety
+        std = np.where(counts > 1, np.sqrt(var), np.nan)
+    return std
+
+
 def _bin_array(
     values: np.ndarray,
     coords: np.ndarray,
@@ -48,18 +70,33 @@ def _bin_array(
     counts : ndarray, shape (n_bins,) — int
     """
     n_bins = len(bin_edges) - 1
-    binned = np.full(n_bins, np.nan)
-    counts = np.zeros(n_bins, dtype=int)
     idx = np.digitize(coords, bin_edges) - 1
     idx = np.clip(idx, 0, n_bins - 1)
 
-    for i in range(n_bins):
-        mask = idx == i
-        n = np.sum(mask)
-        counts[i] = n
-        if n > 0:
-            binned[i] = agg_func(values[mask])
+    counts = np.bincount(idx, minlength=n_bins).astype(int)
 
+    if agg_func is np.nanmean:
+        # Vectorize the dominant case: NaN-aware mean via two bincounts.
+        finite = np.isfinite(values)
+        idx_f = idx[finite]
+        vals_f = values[finite]
+        sums = np.bincount(idx_f, weights=vals_f, minlength=n_bins)
+        finite_counts = np.bincount(idx_f, minlength=n_bins)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            binned = np.where(finite_counts > 0, sums / finite_counts, np.nan)
+        return binned, counts
+
+    # General fallback (e.g. nanmedian): sort once, then each bin is a
+    # contiguous slice — avoids the per-bin O(n_samples) mask broadcast.
+    order = np.argsort(idx, kind="stable")
+    sorted_idx = idx[order]
+    sorted_vals = values[order]
+    splits = np.searchsorted(sorted_idx, np.arange(n_bins + 1))
+    binned = np.full(n_bins, np.nan)
+    for i in range(n_bins):
+        sl = sorted_vals[splits[i] : splits[i + 1]]
+        if sl.size > 0:
+            binned[i] = agg_func(sl)
     return binned, counts
 
 
@@ -188,13 +225,7 @@ def bin_by_depth(
                 result_vars[vname][:, pi] = binned
 
                 if diagnostics:
-                    # Compute std per bin
-                    std_arr = np.full(n_bins, np.nan)
-                    idx = np.clip(np.digitize(depth, bin_edges) - 1, 0, n_bins - 1)
-                    for bi in range(n_bins):
-                        mask = idx == bi
-                        if np.sum(mask) > 1:
-                            std_arr[bi] = np.nanstd(arr[mask])
+                    std_arr = _bin_std(arr, depth, bin_edges)
                     result_vars[f"{vname}_std"][:, pi] = std_arr
 
     for ds in datasets:
