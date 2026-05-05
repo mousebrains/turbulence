@@ -30,6 +30,14 @@ Most subcommands share these flags:
 | `-c`, `--config YAML` | Configuration file (default: none) |
 | `-o`, `--output DIR` | Output root directory |
 | `-j`, `--jobs N` | Parallel workers (0=auto, 1=serial, default=config or 1) |
+| `--stdout` | Also stream log records to stderr (default: log to file only) |
+| `--log-level LEVEL` | DEBUG, INFO, WARNING, ERROR (default: INFO) |
+
+> **Note** Every pipeline-running subcommand writes a log file to
+> `<output_root>/logs/run_<timestamp>.log`. Console output is silent by
+> default — pass `--stdout` to also see records on stderr while the run
+> progresses. See [logging.md](logging.md) for the full layout
+> (worker, per-stage, per-combo logs).
 
 File-accepting subcommands also take:
 

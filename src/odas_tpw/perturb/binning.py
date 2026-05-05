@@ -5,12 +5,26 @@ Reference: Code/bin_by_real.m, Code/profile2binned.m, Code/diss2binned.m,
            Code/chi2binned.m
 """
 
+import re
 from pathlib import Path
 
 import numpy as np
 import xarray as xr
 
 from odas_tpw.perturb.logging_setup import stage_log
+
+# Per-profile NetCDFs are named ``<pfile_stem>_prof###.nc`` by
+# :func:`odas_tpw.rsi.profile.extract_profiles`.  The binning step's
+# per-input-file log scope groups them back by source .p file rather than
+# splitting one log per profile, so we strip the suffix to recover the
+# .p stem.  Inputs that don't match the pattern (third-party NetCDFs,
+# already-binned outputs) keep their full stem.
+_PROF_SUFFIX_RE = re.compile(r"_prof\d+$")
+
+
+def _source_stem(profile_file: Path | str) -> str:
+    """Return the source ``.p``-file stem for a per-profile NetCDF path."""
+    return _PROF_SUFFIX_RE.sub("", Path(profile_file).stem)
 
 
 def _bin_array(
@@ -123,7 +137,7 @@ def bin_by_depth(
     profile_scalar_attrs: dict[str, dict] = {}
     # Determine depth coordinate for each profile
     for pi, ds in enumerate(datasets):
-        with stage_log(log_dir, Path(profile_files[pi]).stem):
+        with stage_log(log_dir, _source_stem(profile_files[pi])):
             if "depth" in ds:
                 depth_var = "depth"
             elif "P" in ds:
@@ -226,7 +240,7 @@ def bin_by_time(
     all_binned = []
 
     for f in profile_files:
-        with stage_log(log_dir, Path(f).stem):
+        with stage_log(log_dir, _source_stem(f)):
             ds = xr.open_dataset(f)
             # Use the time coordinate
             for time_name in ("t_slow", "t_fast", "time"):
