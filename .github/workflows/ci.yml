@@ -32,18 +32,23 @@ jobs:
       - run: mypy src/odas_tpw/
 
   test:
-    # Plain pytest run — no coverage overhead — across the {OS x Python}
-    # matrix, minus the (ubuntu, 3.14) combo handled by the dedicated
-    # ``coverage`` job below.
+    # Plain pytest run — no coverage overhead.  Cross-platform smoke is
+    # done on the latest Python only (3.14); older versions just run on
+    # ubuntu since platform-specific bugs rarely depend on Python minor.
+    # ubuntu-3.14 is handled by the dedicated ``coverage`` job below.
     needs: lint
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.12", "3.13", "3.14"]
-        exclude:
+        include:
           - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.14"
+          - os: windows-latest
             python-version: "3.14"
     steps:
       - uses: actions/checkout@v6
