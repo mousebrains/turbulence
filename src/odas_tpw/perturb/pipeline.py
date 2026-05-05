@@ -6,7 +6,7 @@ Reference: Code/process_P_files.m (233 lines), Code/mat2profile.m (170 lines)
 
 import logging
 import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -576,10 +576,35 @@ def process_file(
 # ---------------------------------------------------------------------------
 
 
-def run_trim(config: dict, p_files: list[Path] | None = None) -> list[Path]:
-    """Trim corrupt final records from .p files."""
+def _trim_one(args: tuple) -> tuple[Path | None, Path, str | None]:
+    """Worker: trim one .p file and return (trimmed_path, source_path, error).
+
+    Designed to be pickled and dispatched to a ProcessPoolExecutor — must
+    take a single argument and import its dependencies inside the call.
+    """
+    p, trim_dir = args
+    try:
+        from odas_tpw.perturb.trim import trim_p_file
+
+        return trim_p_file(p, trim_dir), p, None
+    except Exception as exc:
+        return None, p, str(exc)
+
+
+def run_trim(
+    config: dict,
+    p_files: list[Path] | None = None,
+    *,
+    jobs: int = 1,
+) -> list[Path]:
+    """Trim corrupt final records from .p files.
+
+    *jobs* > 1 dispatches :func:`trim_p_file` calls onto a process pool
+    so the per-file work overlaps. Each call is independent (different
+    output path, no shared state), so process-level parallelism gives
+    near-linear speedup until disk I/O saturates.
+    """
     from odas_tpw.perturb.discover import find_p_files
-    from odas_tpw.perturb.trim import trim_p_file
 
     files_cfg = config.get("files", {})
     output_root = Path(files_cfg.get("output_root", "results/"))
@@ -589,14 +614,32 @@ def run_trim(config: dict, p_files: list[Path] | None = None) -> list[Path]:
         root = files_cfg.get("p_file_root", "VMP/")
         pattern = files_cfg.get("p_file_pattern", "**/*.p")
         p_files = find_p_files(root, pattern)
-    results = []
-    for p in p_files:
-        try:
-            trimmed = trim_p_file(p, trim_dir)
+    if not p_files:
+        return []
+
+    results: list[Path] = []
+    if jobs <= 1 or len(p_files) <= 1:
+        from odas_tpw.perturb.trim import trim_p_file
+
+        for p in p_files:
+            try:
+                trimmed = trim_p_file(p, trim_dir)
+                results.append(trimmed)
+                logger.info("Trimmed: %s", trimmed.name)
+            except Exception as exc:
+                logger.error("trimming %s: %s", p.name, exc)
+        return results
+
+    with ProcessPoolExecutor(max_workers=jobs) as executor:
+        futures = {executor.submit(_trim_one, (p, trim_dir)): p for p in p_files}
+        for future in as_completed(futures):
+            trimmed, src, err = future.result()
+            if err is not None:
+                logger.error("trimming %s: %s", src.name, err)
+                continue
+            assert trimmed is not None  # narrow for the type checker
             results.append(trimmed)
             logger.info("Trimmed: %s", trimmed.name)
-        except Exception as exc:
-            logger.error("trimming %s: %s", p.name, exc)
     return results
 
 
@@ -711,10 +754,16 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     # up by file name in the per-file processing loop below.
     original_parent_by_name = {p.name: p.parent.name for p in p_files}
 
+    # Parallel processing
+    parallel_cfg = config.get("parallel", {})
+    jobs = parallel_cfg.get("jobs", 1)
+    if jobs == 0:
+        jobs = os.cpu_count() or 1
+
     # Trim
     if files_cfg.get("trim", True):
         logger.info("Trimming...")
-        trimmed = run_trim(config, p_files)
+        trimmed = run_trim(config, p_files, jobs=jobs)
         if trimmed:
             p_files = trimmed
 
@@ -745,12 +794,6 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             hotel_cfg.get("channels", {}),
         )
         logger.info("Loaded hotel file: %d channels", len(hotel_data.channels))
-
-    # Parallel processing
-    parallel_cfg = config.get("parallel", {})
-    jobs = parallel_cfg.get("jobs", 1)
-    if jobs == 0:
-        jobs = os.cpu_count() or 1
 
     logger.info("Processing %d files (jobs=%d)...", len(p_files), jobs)
 
@@ -805,7 +848,12 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 except Exception as exc:
                     logger.error("%s: %s", p.name, exc)
 
-    # Binning
+    # Binning — three independent stages (profiles / diss / chi) that
+    # share no data, so we run them concurrently on a thread pool.  Each
+    # stage's heavy lifting is numpy + bincount + xarray-IO, which release
+    # the GIL, so threads give us most of the wall-clock win without
+    # nesting process pools or paying the ProcessPoolExecutor IPC cost on
+    # whole xarray Datasets.
     binning_cfg = config.get("binning", {})
     bin_method = binning_cfg.get("method", "depth")
     bin_width = binning_cfg.get("width", 1.0)
@@ -820,7 +868,6 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     diss_binned_dir: Path | None = None
     chi_binned_dir: Path | None = None
 
-    # Bin profiles
     # Resolve binned-output dirs *before* the bin call so we can pass them
     # as ``log_dir`` and each input .p file's records land in
     # ``<binned_dir>/<stem>.log``.  This also means the binned dir is
@@ -828,7 +875,6 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     # no data — a small price for symmetric per-file logs.
     prof_ncs = sorted(output_dirs["profiles"].glob("*.nc")) if "profiles" in output_dirs else []
     if prof_ncs:
-        logger.info("Binning profiles...")
         binning_params = merge_config("binning", binning_cfg)
         prof_binned_dir = resolve_output_dir(
             output_root,
@@ -837,6 +883,41 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             binning_params,
             upstream=_upstream_for("profiles_binned", config),
         )
+
+    diss_ncs = sorted(output_dirs["diss"].glob("*.nc")) if "diss" in output_dirs else []
+    diss_width = binning_cfg.get("diss_width") or bin_width
+    diss_agg = binning_cfg.get("diss_aggregation") or aggregation
+    if diss_ncs:
+        diss_binned_dir = resolve_output_dir(
+            output_root,
+            "diss_binned",
+            "binning",
+            merge_config("binning", binning_cfg),
+            upstream=_upstream_for("diss_binned", config),
+        )
+
+    chi_ncs: list[Path] = []
+    chi_width = binning_cfg.get("chi_width") or binning_cfg.get("diss_width") or bin_width
+    chi_agg = (
+        binning_cfg.get("chi_aggregation")
+        or binning_cfg.get("diss_aggregation")
+        or aggregation
+    )
+    if "chi" in output_dirs:
+        chi_ncs = sorted(output_dirs["chi"].glob("*.nc"))
+        if chi_ncs:
+            chi_binned_dir = resolve_output_dir(
+                output_root,
+                "chi_binned",
+                "binning",
+                merge_config("binning", binning_cfg),
+                upstream=_upstream_for("chi_binned", config),
+            )
+
+    def _bin_profiles_stage() -> None:
+        if not prof_ncs or prof_binned_dir is None:
+            return
+        logger.info("Binning profiles...")
         if bin_method == "depth":
             ds = bin_by_depth(
                 prof_ncs, bin_width, aggregation, diagnostics, log_dir=prof_binned_dir
@@ -848,48 +929,37 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         if ds.data_vars:
             ds.to_netcdf(prof_binned_dir / "binned.nc")
 
-    # Bin diss
-    diss_ncs = sorted(output_dirs["diss"].glob("*.nc")) if "diss" in output_dirs else []
-    if diss_ncs:
+    def _bin_diss_stage() -> None:
+        if not diss_ncs or diss_binned_dir is None:
+            return
         logger.info("Binning dissipation...")
-        diss_width = binning_cfg.get("diss_width") or bin_width
-        diss_agg = binning_cfg.get("diss_aggregation") or aggregation
-        diss_binned_dir = resolve_output_dir(
-            output_root,
-            "diss_binned",
-            "binning",
-            merge_config("binning", binning_cfg),
-            upstream=_upstream_for("diss_binned", config),
-        )
         ds = bin_diss(
             diss_ncs, diss_width, diss_agg, bin_method, diagnostics, log_dir=diss_binned_dir
         )
         if ds.data_vars:
             ds.to_netcdf(diss_binned_dir / "binned.nc")
 
-    # Bin chi
-    if "chi" in output_dirs:
-        chi_ncs = sorted(output_dirs["chi"].glob("*.nc"))
-        if chi_ncs:
-            logger.info("Binning chi...")
-            chi_width = binning_cfg.get("chi_width") or binning_cfg.get("diss_width") or bin_width
-            chi_agg = (
-                binning_cfg.get("chi_aggregation")
-                or binning_cfg.get("diss_aggregation")
-                or aggregation
-            )
-            chi_binned_dir = resolve_output_dir(
-                output_root,
-                "chi_binned",
-                "binning",
-                merge_config("binning", binning_cfg),
-                upstream=_upstream_for("chi_binned", config),
-            )
-            ds = bin_chi(
-                chi_ncs, chi_width, chi_agg, bin_method, diagnostics, log_dir=chi_binned_dir
-            )
-            if ds.data_vars:
-                ds.to_netcdf(chi_binned_dir / "binned.nc")
+    def _bin_chi_stage() -> None:
+        if not chi_ncs or chi_binned_dir is None:
+            return
+        logger.info("Binning chi...")
+        ds = bin_chi(
+            chi_ncs, chi_width, chi_agg, bin_method, diagnostics, log_dir=chi_binned_dir
+        )
+        if ds.data_vars:
+            ds.to_netcdf(chi_binned_dir / "binned.nc")
+
+    bin_stages = [_bin_profiles_stage, _bin_diss_stage, _bin_chi_stage]
+    if jobs <= 1:
+        for stage in bin_stages:
+            stage()
+    else:
+        # 3 workers max — that's all we have stages for.  Threads share the
+        # parent's logging state so per-profile ``stage_log`` blocks land in
+        # the right files without extra setup.
+        with ThreadPoolExecutor(max_workers=min(3, jobs)) as bin_pool:
+            for fut in as_completed([bin_pool.submit(stage) for stage in bin_stages]):
+                fut.result()  # surface exceptions
 
     # Combo assembly
     _run_combo(
