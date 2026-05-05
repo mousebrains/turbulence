@@ -31,7 +31,7 @@ def _bin_std(values: np.ndarray, coords: np.ndarray, bin_edges: np.ndarray) -> n
     """NaN-aware std-per-bin via bincount (population std, ddof=0).
 
     Equivalent to a per-bin ``np.nanstd`` loop, but avoids the
-    O(n_bins × n_samples) mask broadcast.
+    O(n_bins * n_samples) mask broadcast.
     """
     n_bins = len(bin_edges) - 1
     idx = np.clip(np.digitize(coords, bin_edges) - 1, 0, n_bins - 1)

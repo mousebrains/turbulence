@@ -70,7 +70,7 @@ def _time_bin(
 
     if method == "median":
         # Sort once by bin index; each bin is then a contiguous slice. Avoids
-        # the O(n_bins × n_samples) mask broadcasts of a naive ``bin_idx == i``
+        # the O(n_bins * n_samples) mask broadcasts of a naive ``bin_idx == i``
         # loop while still allowing per-bin nanmedian.
         order = np.argsort(bin_idx, kind="stable")
         sorted_idx = bin_idx[order]
