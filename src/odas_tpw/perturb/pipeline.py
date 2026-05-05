@@ -109,7 +109,8 @@ def _scalars_to_dataarrays(scalars: dict[str, float]) -> dict:
         if name in scalars:
             secs = float(scalars[name])
             # np.datetime64 rejects np.int64 — must be a Python int.
-            ns = int(round(secs * 1e9))
+            # round(float) already returns a Python int, no extra cast needed.
+            ns = round(secs * 1e9)
             arr = xr.DataArray(np.datetime64(ns, "ns"), attrs=_TIME_SCALAR_ATTRS[name])
             arr.encoding = {
                 "units": "seconds since 1970-01-01",
@@ -140,7 +141,7 @@ def _copy_profile_scalars(
     *scalars_cache* maps profile path → raw scalar dict (as produced by
     :func:`extract_profiles` with ``return_scalars=True``). When supplied
     and the path is present, the scalars are reconstructed in memory and
-    no NetCDF re-open is needed — saves ~10 ms × 166 profiles per file.
+    no NetCDF re-open is needed — saves ~10 ms * 166 profiles per file.
     """
     if scalars_cache is not None:
         scalars = scalars_cache.get(str(prof_path))
@@ -633,13 +634,13 @@ def run_trim(
     with ProcessPoolExecutor(max_workers=jobs) as executor:
         futures = {executor.submit(_trim_one, (p, trim_dir)): p for p in p_files}
         for future in as_completed(futures):
-            trimmed, src, err = future.result()
+            trimmed_or_none, src, err = future.result()
             if err is not None:
                 logger.error("trimming %s: %s", src.name, err)
                 continue
-            assert trimmed is not None  # narrow for the type checker
-            results.append(trimmed)
-            logger.info("Trimmed: %s", trimmed.name)
+            assert trimmed_or_none is not None  # narrow for the type checker
+            results.append(trimmed_or_none)
+            logger.info("Trimmed: %s", trimmed_or_none.name)
     return results
 
 
@@ -916,7 +917,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
 
     # Stages run sequentially because each one now drives a per-profile
     # ``ProcessPoolExecutor`` of size *jobs*.  Running the 3 stages
-    # concurrently on a thread pool would over-commit (3 × jobs workers
+    # concurrently on a thread pool would over-commit (3 * jobs workers
     # competing for the same cores) and cost more than it saves.
 
     if prof_ncs and prof_binned_dir is not None:

@@ -164,7 +164,7 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
                 continue
             if arr.dtype.kind == "M":
                 continue
-            data[vname] = arr
+            data[str(vname)] = arr
 
     return {
         "depth": depth,

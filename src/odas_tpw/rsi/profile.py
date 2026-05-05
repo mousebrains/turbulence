@@ -10,7 +10,7 @@ re-exports them for backward compatibility and adds RSI-specific I/O
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
 
@@ -31,6 +31,29 @@ def _build_vehicle_tau() -> dict[str, float]:
     return {k: v[1] for k, v in VEHICLE_ATTRIBUTES.items()}
 
 _VEHICLE_TAU = _build_vehicle_tau()
+
+
+@overload
+def extract_profiles(
+    source: "PFile | str | Path",
+    output_dir: str | Path,
+    profiles: list[tuple[int, int]] | None = ...,
+    gps: Any = ...,
+    return_scalars: Literal[False] = ...,
+    **profile_kwargs: Any,
+) -> list[Path]: ...
+
+
+@overload
+def extract_profiles(
+    source: "PFile | str | Path",
+    output_dir: str | Path,
+    profiles: list[tuple[int, int]] | None = ...,
+    gps: Any = ...,
+    *,
+    return_scalars: Literal[True],
+    **profile_kwargs: Any,
+) -> tuple[list[Path], list[dict[str, float]]]: ...
 
 
 def extract_profiles(
