@@ -88,3 +88,41 @@ filterwarnings = [
     "ignore:get_diss\\(\\) is deprecated:DeprecationWarning",
     "ignore:get_chi\\(\\) is deprecated:DeprecationWarning",
 ]
+
+# ---------------------------------------------------------------------------
+# Coverage configuration
+# ---------------------------------------------------------------------------
+# Branch coverage catches half-tested if/else blocks that line coverage misses.
+# Interactive matplotlib viewers and module entry points are omitted — see
+# CONTRIBUTING.md "Coverage policy" for the rationale.
+
+[tool.coverage.run]
+branch = true
+source = ["src/odas_tpw"]
+omit = [
+    # Module entry points: re-dispatch to .cli:main, nothing testable.
+    "*/__main__.py",
+    # Interactive matplotlib viewers (button widgets, draw callbacks,
+    # event-driven UI).  Tested manually; covering them headlessly would
+    # require fragile event simulation for marginal value.
+    "src/odas_tpw/rsi/viewer_base.py",
+    "src/odas_tpw/rsi/quick_look.py",
+    "src/odas_tpw/rsi/diss_look.py",
+]
+
+[tool.coverage.report]
+# Lines matching any pattern are dropped from the report even when measured.
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+    "raise AssertionError",
+]
+# Floor for the CI gate.  Bumped up as the coverage plan progresses
+# (see docs/coverage_plan.md).  Initial value sits ~3 pts under the
+# post-omit branch-coverage baseline so a fresh CI run stays green.
+fail_under = 85
+show_missing = true
+skip_covered = false

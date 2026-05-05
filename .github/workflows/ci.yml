@@ -32,6 +32,9 @@ jobs:
       - run: mypy src/odas_tpw/
 
   test:
+    # Plain pytest run — no coverage overhead — across the {OS x Python}
+    # matrix, minus the (ubuntu, 3.14) combo handled by the dedicated
+    # ``coverage`` job below.
     needs: lint
     runs-on: ${{ matrix.os }}
     strategy:
@@ -39,16 +42,32 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.12", "3.13", "3.14"]
+        exclude:
+          - os: ubuntu-latest
+            python-version: "3.14"
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install -e ".[dev]" pytest-cov
-      - run: python -m pytest -n auto --tb=short -q --cov=odas_tpw --cov-report=xml --cov-fail-under=70
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest -n auto --tb=short -q
+
+  coverage:
+    # Single coverage run on ubuntu-3.14.  Branch coverage, viewer omits,
+    # and the fail-under floor are configured in pyproject.toml.
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest -n auto --tb=short -q --cov --cov-report=xml --cov-report=term-missing
       - uses: codecov/codecov-action@v6
-        if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
