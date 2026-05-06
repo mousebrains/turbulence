@@ -134,8 +134,17 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
     One ``xr.open_dataset`` per call: callers cache snapshots so the
     second pass that needs ``bin_edges`` doesn't re-open. The dict is
     plain numpy / Python types so it pickles cheaply for worker pools.
+
+    The xarray open is intentionally ``decode_cf=False``: the binning
+    pass only needs raw numeric values, not datetime64 coordinates,
+    and the ~25% of per-call time previously spent in
+    ``decode_cf_variables`` is pure waste here.  Time data vars are
+    instead filtered out via the CF ``units`` convention
+    ('* since *'), and the lat/lon/stime/etime scalars are written
+    as plain float64 seconds-since-epoch on disk so no conversion is
+    needed on read.
     """
-    with xr.open_dataset(profile_file) as ds:
+    with xr.open_dataset(profile_file, decode_cf=False) as ds:
         depth_var = _depth_var_for(ds)
         if depth_var is None:
             return None
@@ -146,8 +155,10 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
         for sname in _SCALAR_NAMES:
             if sname in ds.data_vars and ds[sname].ndim == 0:
                 val = ds[sname].values
-                if val.dtype.kind == "M":
-                    val = val.astype("datetime64[ns]").astype(np.int64) / 1e9
+                # With decode_cf=False, time scalars come back as
+                # float64 seconds-since-epoch directly (that's how
+                # the writer stored them); the previous datetime64
+                # conversion was a round-trip that's no longer needed.
                 scalars[sname] = float(val)
                 scalar_attrs[sname] = {
                     k: v
@@ -159,10 +170,16 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
         for vname in ds.data_vars:
             if vname == depth_var or vname in _SCALAR_NAMES:
                 continue
-            arr = ds[vname].values
-            if arr.ndim != 1 or len(arr) != len(depth):
+            var = ds[vname]
+            # Skip time coordinate vars (t, t_slow).  Without decode_cf
+            # they're plain float64 with units like "seconds since ...",
+            # so the previous ``dtype.kind == 'M'`` filter no longer
+            # catches them — use the CF units convention instead.
+            units = var.attrs.get("units", "")
+            if isinstance(units, str) and " since " in units:
                 continue
-            if arr.dtype.kind == "M":
+            arr = var.values
+            if arr.ndim != 1 or len(arr) != len(depth):
                 continue
             data[str(vname)] = arr
 
