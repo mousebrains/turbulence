@@ -277,7 +277,9 @@ class TestCmdCombo:
         main(["combo", "-o", str(tmp_path)])
 
         for combo_name in ("combo", "diss_combo", "chi_combo", "ctd_combo"):
-            sigs = list((tmp_path / combo_name).glob(".params_sha256_*"))
+            dirs = sorted(tmp_path.glob(f"{combo_name}_[0-9][0-9]"))
+            assert len(dirs) == 1, f"exactly one versioned {combo_name}_NN expected"
+            sigs = list(dirs[0].glob(".params_sha256_*"))
             assert len(sigs) == 1, f"{combo_name} should have exactly one signature file"
 
     def test_combo_follows_binning_method_time(self, tmp_path):
@@ -306,7 +308,8 @@ class TestCmdCombo:
 
         main(["combo", "-c", str(cfg), "-o", str(tmp_path)])
 
-        combo = xr.open_dataset(tmp_path / "combo" / "combo.nc")
+        combo_dir = sorted(tmp_path.glob("combo_[0-9][0-9]"))[-1]
+        combo = xr.open_dataset(combo_dir / "combo.nc")
         assert combo.attrs["featureType"] == "trajectory"
         assert combo.sizes["time"] == 10
         combo.close()
