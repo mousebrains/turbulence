@@ -236,13 +236,16 @@ def _estimate_epsilon(
     # Replace NaN/Inf in spectrum with 0 for integration
     spec_safe = np.where(np.isfinite(shear_spectrum), shear_spectrum, 0.0)
 
-    # Initial estimate: integrate to K_INITIAL_CUTOFF cpm
-    # Include K[0]=0 -- trapezoid handles it correctly with spec_safe
-    K_range = np.where(K <= K_INITIAL_CUTOFF)[0]
-    if len(K_range) < 3:
-        K_range = np.arange(min(3, n_freq))
+    # Initial estimate: integrate to K_INITIAL_CUTOFF cpm.  K is monotone
+    # nondecreasing (it's an FFT wavenumber grid divided by a positive
+    # speed), so ``np.where(K <= cutoff)[0]`` is equivalent to
+    # ``np.arange(searchsorted(K, cutoff, 'right'))`` — and slicing with
+    # the count avoids building both the boolean and the index array.
+    n_init = int(np.searchsorted(K, K_INITIAL_CUTOFF, side="right"))
+    if n_init < 3:
+        n_init = min(3, n_freq)
 
-    e_10 = ISOTROPY_FACTOR * nu * np.trapezoid(spec_safe[K_range], K[K_range])
+    e_10 = ISOTROPY_FACTOR * nu * np.trapezoid(spec_safe[:n_init], K[:n_init])
     if e_10 <= 0:
         e_10 = EPSILON_FLOOR
     e_1 = e_10 * np.sqrt(1 + LUECK_A * e_10)
@@ -270,10 +273,10 @@ def _estimate_epsilon(
 
     if use_isr:
         method = 1
-        isr_Range = np.where(isr_km >= K)[0]
-        if len(isr_Range) < 3:
-            isr_Range = np.arange(min(3, n_freq))
-        e_4, k_max, Range = isr_e, isr_km, isr_Range
+        n_isr = int(np.searchsorted(K, isr_km, side="right"))
+        if n_isr < 3:
+            n_isr = min(3, n_freq)
+        e_4, k_max, Range = isr_e, isr_km, np.arange(n_isr)
     else:
         method = 0
         e_4, k_max, Range = var_e, var_km, var_Range
@@ -345,7 +348,9 @@ def _variance_method(
     Returns (epsilon, K_max, Range).
     """
     isr_limit = X_ISR * (e_1 / nu**3) ** 0.25
-    if len(np.where(isr_limit >= K)[0]) >= 20:
+    # K is monotone nondecreasing — use searchsorted to count points
+    # below isr_limit instead of building a bool+index array.
+    if int(np.searchsorted(K, isr_limit, side="right")) >= 20:
         e_2, _ = _inertial_subrange(K, spec_safe, e_1, nu, min(K_LIMIT_MAX, K_AA))
     else:
         e_2 = e_1
@@ -356,8 +361,7 @@ def _variance_method(
     # ``np.clip`` here without the numpy dispatch overhead — and
     # ``np.clip`` was being called per spectrum in the cProfile hot-list.
     valid_K_limit = min(max(valid_K_limit, K_LIMIT_MIN), K_LIMIT_MAX)
-    valid_idx = np.where(valid_K_limit >= K)[0]
-    index_limit = len(valid_idx)
+    index_limit = int(np.searchsorted(K, valid_K_limit, side="right"))
 
     if index_limit <= 1:
         index_limit = min(3, n_freq)
@@ -385,11 +389,13 @@ def _variance_method(
     K_limit_log = min(K_limit_log, np.log10(K_95), np.log10(K_AA))
     K_limit_log = min(max(K_limit_log, np.log10(K_LIMIT_MIN)), np.log10(K_LIMIT_MAX))
 
-    Range = np.where(10**K_limit_log >= K)[0]
-    if len(Range) > 0 and K[Range[-1]] < K_LIMIT_MIN:
-        Range = np.append(Range, Range[-1] + 1)
-    if len(Range) < 3:
-        Range = np.arange(min(3, n_freq))
+    # K is monotone nondecreasing — searchsorted gives the count.
+    n_var = int(np.searchsorted(K, 10**K_limit_log, side="right"))
+    if n_var > 0 and K[n_var - 1] < K_LIMIT_MIN:
+        n_var += 1
+    if n_var < 3:
+        n_var = min(3, n_freq)
+    Range = np.arange(n_var)
 
     e_3 = ISOTROPY_FACTOR * nu * np.trapezoid(spec_safe[Range], K[Range])
     e_3 = max(e_3, EPSILON_FLOOR)
@@ -462,9 +468,12 @@ def _inertial_subrange(
 ) -> tuple[float, float]:
     """Fit to the inertial subrange to estimate epsilon."""
     isr_limit = min(X_ISR * (e / nu**3) ** 0.25, K_limit)
-    fit_range = np.where(isr_limit >= K)[0]
-    if len(fit_range) < 3:
-        fit_range = np.arange(min(3, len(K)))
+    # K is monotone nondecreasing — searchsorted is equivalent to
+    # ``np.where(isr_limit >= K)[0]`` while skipping the bool array.
+    n_fit = int(np.searchsorted(K, isr_limit, side="right"))
+    if n_fit < 3:
+        n_fit = min(3, len(K))
+    fit_range = np.arange(n_fit)
 
     k_max = K[fit_range[-1]]
 
