@@ -3,7 +3,7 @@
 ## Requirements
 
 - Python >= 3.12
-- Dependencies: `numpy`, `netCDF4`, `scipy`, `xarray`, `gsw`, `ruamel.yaml`
+- Dependencies: `numpy`, `netCDF4`, `scipy`, `xarray`, `gsw`, `matplotlib`, `ruamel.yaml`
 
 ## Install from Source
 

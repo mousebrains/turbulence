@@ -467,7 +467,7 @@ When the temperature gradient is obtained by first-differencing the deconvolved 
 C_FD(f) = ( pi*f / (f_s * sin(pi*f/f_s)) )^2       for f > 0
 ```
 
-([`chi.py: _compute_profile_chi`](../src/odas_tpw/chi/chi.py))
+([`l3_chi.py: process_l3_chi`](../src/odas_tpw/chi/l3_chi.py), see the `fd_correction` array built around L254)
 
 This correction approaches 1 at low frequencies and diverges at the Nyquist frequency. The corrected spectrum is:
 

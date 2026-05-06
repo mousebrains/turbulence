@@ -39,7 +39,7 @@ Controls how profiling segments are identified from pressure data.
 |-----------|------|---------|-------------|
 | `P_min` | float | `0.5` | Minimum pressure threshold [dbar]. Data below this pressure is excluded from profiles. |
 | `W_min` | float | `0.3` | Minimum fall rate [dbar/s]. Segments with fall rate below this are not considered part of a profile. |
-| `direction` | string | `"down"` | Profile direction: `"up"` or `"down"`. Determines whether ascending or descending segments are extracted. |
+| `direction` | string | `"auto"` | Profile direction: `"auto"`, `"up"`, `"down"`, `"glide"`, or `"horizontal"`. `"auto"` infers from the vehicle. |
 | `min_duration` | float | `7.0` | Minimum profile duration [seconds]. Profiles shorter than this are discarded. |
 
 ---
@@ -50,11 +50,11 @@ Controls computation of the turbulent kinetic energy dissipation rate (epsilon) 
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `fft_length` | int | `256` | FFT segment length in samples. At 512 Hz sampling, 256 samples = 0.5 s. Determines the spectral resolution (df = fs / fft_length). |
-| `diss_length` | int | `null` | Dissipation estimate window length in samples. Each epsilon estimate uses this many samples. Default: `2 * fft_length`. |
+| `fft_length` | int | `1024` | FFT segment length in samples. At 512 Hz sampling, 1024 samples = 2.0 s. Determines the spectral resolution (df = fs / fft_length). |
+| `diss_length` | int | `null` | Dissipation estimate window length in samples. Each epsilon estimate uses this many samples. Default: `4 * fft_length`. |
 | `overlap` | int | `null` | Overlap between successive dissipation windows in samples. Default: `diss_length // 2` (50% overlap). |
 | `speed` | float | `null` | Fixed profiling speed [m/s]. If `null`, speed is computed from dP/dt (pressure rate of change). Use a fixed value when pressure data is unreliable. |
-| `direction` | string | `"down"` | Profile direction: `"up"` or `"down"`. |
+| `direction` | string | `"auto"` | Profile direction: `"auto"`, `"up"`, `"down"`, `"glide"`, or `"horizontal"`. |
 | `goodman` | bool | `true` | Enable Goodman coherent noise removal using accelerometer cross-spectra. Removes vibration-coherent contamination from shear spectra. Disable with `--no-goodman` on the CLI. |
 | `f_AA` | float | `98.0` | Anti-aliasing filter cutoff frequency [Hz]. Spectral estimates above this frequency are excluded from variance integration. |
 | `f_limit` | float | `null` | Upper frequency limit [Hz] for spectral integration. If `null`, uses `f_AA`. Set lower to exclude high-frequency noise. |
@@ -71,11 +71,11 @@ Controls computation of the thermal variance dissipation rate (chi) from FP07 th
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `fft_length` | int | `512` | FFT segment length in samples. At 512 Hz, 512 samples = 1.0 s. Longer than epsilon because temperature spectra extend to lower wavenumbers. |
-| `diss_length` | int | `null` | Dissipation estimate window length in samples. Default: `3 * fft_length`. |
+| `fft_length` | int | `1024` | FFT segment length in samples. At 512 Hz, 1024 samples = 2.0 s. |
+| `diss_length` | int | `null` | Dissipation estimate window length in samples. Default: `4 * fft_length`. |
 | `overlap` | int | `null` | Overlap between successive dissipation windows in samples. Default: `diss_length // 2`. |
 | `speed` | float | `null` | Fixed profiling speed [m/s]. If `null`, computed from dP/dt. |
-| `direction` | string | `"down"` | Profile direction: `"up"` or `"down"`. |
+| `direction` | string | `"auto"` | Profile direction: `"auto"`, `"up"`, `"down"`, `"glide"`, or `"horizontal"`. |
 | `fp07_model` | string | `"single_pole"` | FP07 thermistor transfer function model. `"single_pole"`: Lueck et al. 1977. `"double_pole"`: Gregg & Meagher 1980 (accounts for thermal boundary layer). |
 | `goodman` | bool | `true` | Enable Goodman coherent noise removal for temperature spectra. Disable with `--no-goodman` on the CLI. |
 | `f_AA` | float | `98.0` | Anti-aliasing filter cutoff frequency [Hz]. |
@@ -95,15 +95,15 @@ Controls computation of the thermal variance dissipation rate (chi) from FP07 th
 profiles:
   P_min: 0.5            # minimum pressure [dbar]
   W_min: 0.3            # minimum fall rate [dbar/s]
-  direction: down       # profile direction: up or down
+  direction: auto       # profile direction: auto, up, down, glide, horizontal
   min_duration: 7.0     # minimum profile duration [s]
 
 epsilon:
-  fft_length: 256       # FFT segment length [samples]
-  diss_length: null     # dissipation window [samples] (null = 2 * fft_length)
+  fft_length: 1024      # FFT segment length [samples]
+  diss_length: null     # dissipation window [samples] (null = 4 * fft_length)
   overlap: null         # window overlap [samples] (null = diss_length // 2)
   speed: null           # profiling speed [m/s] (null = from dP/dt)
-  direction: down       # profile direction: up or down
+  direction: auto       # profile direction: auto, up, down, glide, horizontal
   goodman: true         # Goodman coherent noise removal
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
   f_limit: null         # upper frequency limit [Hz] (null = f_AA)
@@ -113,11 +113,11 @@ epsilon:
   salinity: null        # salinity [PSU] (null = 35, fixed S)
 
 chi:
-  fft_length: 512       # FFT segment length [samples]
-  diss_length: null     # dissipation window [samples] (null = 3 * fft_length)
+  fft_length: 1024      # FFT segment length [samples]
+  diss_length: null     # dissipation window [samples] (null = 4 * fft_length)
   overlap: null         # window overlap [samples] (null = diss_length // 2)
   speed: null           # profiling speed [m/s] (null = from dP/dt)
-  direction: down       # profile direction: up or down
+  direction: auto       # profile direction: auto, up, down, glide, horizontal
   fp07_model: single_pole  # FP07 transfer function: single_pole or double_pole
   goodman: true         # Goodman coherent noise removal
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
@@ -129,7 +129,7 @@ chi:
 ## `null` Values
 
 In YAML, `null` means "not set." When a parameter is `null`:
-- **`diss_length`**: Computed as a multiple of `fft_length` (2× for epsilon, 3× for chi).
+- **`diss_length`**: Computed as `4 * fft_length` for both epsilon and chi.
 - **`overlap`**: Computed as `diss_length // 2`.
 - **`speed`**: Derived from the pressure time series (dP/dt).
 - **`f_limit`**: Uses `f_AA` as the upper frequency limit.

@@ -1,5 +1,13 @@
 # Plan: Python `perturb` Package
 
+> **Historical plan document.**  This file captures the original design notes
+> from the port; the implementation is complete and the package layout has
+> since been refactored into `rsi`, `scor160`, `chi`, `processing`, and
+> `perturb`.  Any module path or function name below that does not match the
+> current source tree should be read as the *plan-time* layout.  For
+> up-to-date module references, see [modules.md](modules.md) and the
+> top-level [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Context
 
 The Matlab [perturb](https://github.com/jessecusack/perturb) package is a batch-processing pipeline for Rockland VMP/MicroRider data. It takes raw `.p` files through discovery → trimming → merging → profile extraction → FP07 calibration → CT alignment → GPS → seawater properties → dissipation → chi → binning → combo assembly → NetCDF.
@@ -263,7 +271,7 @@ netcdf:
   keywords: null
   keywords_vocabulary: null
   standard_name_vocabulary: "CF Standard Name Table v83"
-  Conventions: "CF-1.8, ACDD-1.3"
+  Conventions: "CF-1.13, ACDD-1.3"
   history: null            # auto-filled with processing log
 
 parallel:
@@ -353,7 +361,7 @@ Directory versioning follows `rsi.config` pattern: `prefix_NN/` with `.params_sh
 ### Combo NetCDF contents (`*_combo_00/combo.nc`)
 - Dims: `bin`, `profile` (all profiles across all files, sorted by time)
 - Same variables as binned, but merged across all source .p files
-- CF-1.8 / ACDD-1.3 compliant global attributes from config `netcdf` section
+- CF-1.13 / ACDD-1.3 compliant global attributes from config `netcdf` section
 - Profile-dimension variables from info table (stime, etime, lat, lon, sn, etc.)
 
 ## Module Details
@@ -476,7 +484,7 @@ Extends `rsi.config` patterns: three-way merge (defaults <- file <- CLI), SHA-25
   - Sorts profiles temporally by start time
   - For depth binning: `glue_widthwise` — 2D matrix (bins x all profiles across files)
   - For time binning: `glue_lengthwise` — concatenate all time bins
-  - Writes `combo.nc` with CF-1.8 / ACDD-1.3 global attributes
+  - Writes `combo.nc` with CF-1.13 / ACDD-1.3 global attributes
 - `make_ctd_combo(ctd_dir: Path, output_dir: Path, schema: dict) -> Path`
   - Concatenates all CTD time-binned files into single combo
 - **Schema:** `netcdf_schema.py` provides variable metadata (units, standard_name, long_name) — Python equivalent of Matlab's `Combo.json` and `CTD.json`
