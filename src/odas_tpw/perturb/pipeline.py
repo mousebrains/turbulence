@@ -543,6 +543,8 @@ def process_file(
                         },
                         _pre_loaded=pre_loaded,
                     )
+                    from odas_tpw.perturb._nc_writer import write_dataset
+
                     for ds in diss_results:
                         if excluded_probes:
                             _nan_excluded_probes(ds, excluded_probes, p_path.name)
@@ -550,7 +552,7 @@ def process_file(
                         _copy_profile_scalars(prof_path, ds, prof_scalars_cache)
                         out_name = Path(prof_path).name
                         out_path = output_dirs["diss"] / out_name
-                        ds.to_netcdf(out_path)
+                        write_dataset(ds, out_path)
                         result["diss"].append(str(out_path))
                 except Exception as exc:
                     logger.error("diss for %s: %s", Path(prof_path).name, exc)
@@ -581,11 +583,13 @@ def process_file(
                             _pre_loaded=pre_loaded,
                         )
                         diss_ds.close()
+                        from odas_tpw.perturb._nc_writer import write_dataset
+
                         for chi_ds in chi_results:
                             _copy_profile_scalars(prof_path, chi_ds, prof_scalars_cache)
                             out_name = Path(prof_path).name
                             out_path = output_dirs["chi"] / out_name
-                            chi_ds.to_netcdf(out_path)
+                            write_dataset(chi_ds, out_path)
                             result["chi"].append(str(out_path))
                     except Exception as exc:
                         logger.error("chi for %s: %s", Path(prof_path).name, exc)
@@ -957,7 +961,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 prof_ncs, bin_width, aggregation, diagnostics, log_dir=prof_binned_dir
             )
         if ds.data_vars:
-            ds.to_netcdf(prof_binned_dir / "binned.nc")
+            from odas_tpw.perturb._nc_writer import write_dataset
+
+            write_dataset(ds, prof_binned_dir / "binned.nc")
 
     if diss_ncs and diss_binned_dir is not None:
         logger.info("Binning dissipation...")
@@ -971,7 +977,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             jobs=jobs,
         )
         if ds.data_vars:
-            ds.to_netcdf(diss_binned_dir / "binned.nc")
+            from odas_tpw.perturb._nc_writer import write_dataset
+
+            write_dataset(ds, diss_binned_dir / "binned.nc")
 
     if chi_ncs and chi_binned_dir is not None:
         logger.info("Binning chi...")
@@ -985,7 +993,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             jobs=jobs,
         )
         if ds.data_vars:
-            ds.to_netcdf(chi_binned_dir / "binned.nc")
+            from odas_tpw.perturb._nc_writer import write_dataset
+
+            write_dataset(ds, chi_binned_dir / "binned.nc")
 
     # Combo assembly
     _run_combo(

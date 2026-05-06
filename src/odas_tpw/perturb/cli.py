@@ -252,7 +252,9 @@ def _cmd_bin(args: argparse.Namespace) -> None:
                     prof_ncs, bin_width, aggregation, diagnostics, log_dir=prof_binned_dir
                 )
             if ds.data_vars:
-                ds.to_netcdf(prof_binned_dir / "binned.nc")
+                from odas_tpw.perturb._nc_writer import write_dataset
+
+                write_dataset(ds, prof_binned_dir / "binned.nc")
 
     # Bin diss
     diss_dirs = sorted(globmod.glob(str(output_root / "diss_[0-9][0-9]")))
@@ -273,7 +275,9 @@ def _cmd_bin(args: argparse.Namespace) -> None:
                 diss_ncs, diss_width, diss_agg, bin_method, diagnostics, log_dir=diss_binned_dir
             )
             if ds.data_vars:
-                ds.to_netcdf(diss_binned_dir / "binned.nc")
+                from odas_tpw.perturb._nc_writer import write_dataset
+
+                write_dataset(ds, diss_binned_dir / "binned.nc")
 
     # Bin chi
     chi_dirs = sorted(globmod.glob(str(output_root / "chi_[0-9][0-9]")))
@@ -298,7 +302,9 @@ def _cmd_bin(args: argparse.Namespace) -> None:
                 chi_ncs, chi_width, chi_agg, bin_method, diagnostics, log_dir=chi_binned_dir
             )
             if ds.data_vars:
-                ds.to_netcdf(chi_binned_dir / "binned.nc")
+                from odas_tpw.perturb._nc_writer import write_dataset
+
+                write_dataset(ds, chi_binned_dir / "binned.nc")
 
     print("Binning complete.")
 
