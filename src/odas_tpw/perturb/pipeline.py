@@ -518,12 +518,13 @@ def process_file(
         with stage_log(output_dirs.get("diss"), log_basename):
             for prof_path in result["profiles"]:
                 try:
+                    pre_loaded: dict[str, Any] | None
                     if chi_enabled:
                         # Single NC pass that produces both channels and
                         # therm-gradient channels; reused below for chi.
                         from odas_tpw.rsi.chi_io import _load_therm_channels
 
-                        pre_loaded: dict[str, Any] | None = _load_therm_channels(prof_path)
+                        pre_loaded = _load_therm_channels(prof_path)
                         prof_data_cache[prof_path] = pre_loaded
                     else:
                         pre_loaded = None
