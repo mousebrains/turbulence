@@ -249,10 +249,8 @@ def make_combo(
     for cname in combo.coords:
         encoding[cname] = {"_FillValue": None}
 
-    from odas_tpw.perturb._nc_writer import write_dataset
-
     out_path = output_dir / "combo.nc"
-    write_dataset(combo, out_path, encoding=encoding)
+    combo.to_netcdf(out_path, encoding=encoding)
     return out_path
 
 

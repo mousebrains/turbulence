@@ -257,8 +257,6 @@ def ctd_bin_file(
     ds.attrs["source_file"] = pf.filepath.name
     ds.attrs["Conventions"] = "CF-1.13, ACDD-1.3"
 
-    from odas_tpw.perturb._nc_writer import write_dataset
-
     out_path = output_dir / f"{pf.filepath.stem}.nc"
-    write_dataset(ds, out_path)
+    ds.to_netcdf(out_path)
     return out_path
