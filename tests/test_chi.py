@@ -837,6 +837,60 @@ class TestEpsilonDsToL4Data:
         np.testing.assert_array_equal(l4.pres, np.zeros(n))
         np.testing.assert_array_equal(l4.pspd_rel, np.zeros(n))
 
+    def test_datetime64_t_converted_to_seconds_since_start_time(self):
+        """Datetime64 ``t`` decoded by xarray is rebased to seconds-since-
+        start_time so it matches L3ChiData.time's reference. Without this,
+        every chi window collapses onto epsilonMean[0]."""
+        import xarray as xr
+
+        from odas_tpw.rsi.chi_io import _epsilon_ds_to_l4data
+
+        n = 4
+        start = np.datetime64("2026-03-25T19:58:00.725")
+        offsets_s = np.array([10.0, 11.0, 12.0, 13.0])
+        t = start + (offsets_s * 1e9).astype("timedelta64[ns]")
+        ds = xr.Dataset(
+            {"epsilon": (["probe", "time"], np.full((2, n), 1e-7))},
+            coords={"probe": ["sh1", "sh2"], "t": ("time", t)},
+            attrs={"start_time": "2026-03-25T19:58:00.725000+00:00"},
+        )
+        l4 = _epsilon_ds_to_l4data(ds)
+        # Times should be small floats matching offsets_s, not 1.77e9 epoch seconds.
+        np.testing.assert_allclose(l4.time, offsets_s, atol=1e-6)
+
+    def test_datetime64_t_falls_back_to_first_sample_when_start_time_missing(self):
+        """No ``start_time`` attr → use first sample as t=0 (still a small
+        relative reference, so argmin matching still works)."""
+        import xarray as xr
+
+        from odas_tpw.rsi.chi_io import _epsilon_ds_to_l4data
+
+        n = 3
+        start = np.datetime64("2026-03-25T19:58:10.0")
+        offsets_s = np.array([0.0, 0.5, 1.0])
+        t = start + (offsets_s * 1e9).astype("timedelta64[ns]")
+        ds = xr.Dataset(
+            {"epsilon": (["probe", "time"], np.full((2, n), 1e-7))},
+            coords={"probe": ["sh1", "sh2"], "t": ("time", t)},
+        )
+        l4 = _epsilon_ds_to_l4data(ds)
+        np.testing.assert_allclose(l4.time, offsets_s, atol=1e-6)
+
+    def test_float_t_left_unchanged(self):
+        """Pre-converted (float) ``t`` is passed through unchanged."""
+        import xarray as xr
+
+        from odas_tpw.rsi.chi_io import _epsilon_ds_to_l4data
+
+        n = 4
+        offsets_s = np.array([10.0, 11.0, 12.0, 13.0])
+        ds = xr.Dataset(
+            {"epsilon": (["probe", "time"], np.full((2, n), 1e-7))},
+            coords={"probe": ["sh1", "sh2"], "t": ("time", offsets_s)},
+        )
+        l4 = _epsilon_ds_to_l4data(ds)
+        np.testing.assert_allclose(l4.time, offsets_s)
+
 
 # ---------------------------------------------------------------------------
 # _extract_therm_cal helper

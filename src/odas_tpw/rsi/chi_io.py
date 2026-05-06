@@ -305,6 +305,13 @@ def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
     ``nanmean`` across the per-probe ``epsilon`` array — the historical
     behaviour, retained for inputs produced by the lower-level rsi pipeline
     that does not run the multi-probe combine step.
+
+    Time reference: ``L3ChiData.time`` is in "seconds since start_time"
+    (small floats). When the diss dataset is read back from NetCDF, xarray
+    decodes its ``t`` coord to absolute ``datetime64``. We convert it back
+    to seconds-since-``start_time`` here so ``process_l4_chi_epsilon``'s
+    nearest-neighbour matching is over a common reference — otherwise every
+    chi window collapses onto ``epsilonMean[0]``.
     """
     from odas_tpw.scor160.io import L4Data
 
@@ -323,6 +330,14 @@ def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
         epsi_final = eps_vals[0]
 
     times = epsilon_ds.coords["t"].values
+    if np.issubdtype(times.dtype, np.datetime64):
+        start_str = epsilon_ds.attrs.get("start_time")
+        if start_str:
+            # numpy.datetime64 doesn't accept tz suffix; strip Z/±HH:MM.
+            start = np.datetime64(re.sub(r"(Z|[+-]\d{2}:?\d{2})$", "", start_str))
+        else:
+            start = times[0]
+        times = ((times - start) / np.timedelta64(1, "ns")).astype(np.float64) / 1e9
     n = len(times)
 
     return L4Data(
