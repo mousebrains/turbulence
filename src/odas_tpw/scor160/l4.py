@@ -236,13 +236,16 @@ def _estimate_epsilon(
     # Replace NaN/Inf in spectrum with 0 for integration
     spec_safe = np.where(np.isfinite(shear_spectrum), shear_spectrum, 0.0)
 
-    # Initial estimate: integrate to K_INITIAL_CUTOFF cpm
-    # Include K[0]=0 -- trapezoid handles it correctly with spec_safe
-    K_range = np.where(K <= K_INITIAL_CUTOFF)[0]
-    if len(K_range) < 3:
-        K_range = np.arange(min(3, n_freq))
+    # Initial estimate: integrate to K_INITIAL_CUTOFF cpm.  K is monotone
+    # nondecreasing (it's an FFT wavenumber grid divided by a positive
+    # speed), so ``np.where(K <= cutoff)[0]`` is equivalent to
+    # ``np.arange(searchsorted(K, cutoff, 'right'))`` — and slicing with
+    # the count avoids building both the boolean and the index array.
+    n_init = int(np.searchsorted(K, K_INITIAL_CUTOFF, side="right"))
+    if n_init < 3:
+        n_init = min(3, n_freq)
 
-    e_10 = ISOTROPY_FACTOR * nu * np.trapezoid(spec_safe[K_range], K[K_range])
+    e_10 = ISOTROPY_FACTOR * nu * np.trapezoid(spec_safe[:n_init], K[:n_init])
     if e_10 <= 0:
         e_10 = EPSILON_FLOOR
     e_1 = e_10 * np.sqrt(1 + LUECK_A * e_10)
@@ -258,7 +261,7 @@ def _estimate_epsilon(
     # Always compute both estimates so viewers can show the alternative
     K_limit = min(K_AA, K_LIMIT_MAX)
     isr_e, isr_km = _inertial_subrange(K, spec_safe, e_1, nu, K_limit)
-    var_e, var_km, var_Range = _variance_method(
+    var_e, var_km, n_var = _variance_method(
         K,
         spec_safe,
         e_1,
@@ -270,34 +273,36 @@ def _estimate_epsilon(
 
     if use_isr:
         method = 1
-        isr_Range = np.where(isr_km >= K)[0]
-        if len(isr_Range) < 3:
-            isr_Range = np.arange(min(3, n_freq))
-        e_4, k_max, Range = isr_e, isr_km, isr_Range
+        n_range = int(np.searchsorted(K, isr_km, side="right"))
+        if n_range < 3:
+            n_range = min(3, n_freq)
+        e_4, k_max = isr_e, isr_km
     else:
         method = 0
-        e_4, k_max, Range = var_e, var_km, var_Range
+        e_4, k_max, n_range = var_e, var_km, n_var
 
     # Nasmyth spectrum at final epsilon
     nas_spec = nasmyth_grid(max(e_4, EPSILON_FLOOR), nu, K + 1e-30)
 
-    # Mean absolute deviation (log10) -- skip DC bin for ratio comparison
-    Range_noDC = Range[K[Range] > 0]
-    if len(Range_noDC) > 0:
-        spec_ratio = spec_safe[Range_noDC] / (nas_spec[Range_noDC] + 1e-30)
+    # MAD/FOM block — skip the DC bin (K[0]=0 by construction; F starts
+    # at 0 in csd_matrix_batch and K=F/W with W>0).  ``Range_noDC`` in
+    # the original code was therefore equivalent to ``arange(1, n_range)``;
+    # contiguous slicing returns views and avoids three fancy-indexing
+    # allocations per spectrum.
+    if n_range > 1:
+        K_pos = K[1:n_range]
+        spec_safe_pos = spec_safe[1:n_range]
+        nas_spec_pos = nas_spec[1:n_range]
+        spec_ratio = spec_safe_pos / (nas_spec_pos + 1e-30)
         spec_ratio = spec_ratio[spec_ratio > 0]
         mad_val = float(np.mean(np.abs(np.log10(spec_ratio)))) if len(spec_ratio) > 0 else np.nan
-    else:
-        mad_val = np.nan
-        spec_ratio = np.array([])
-
-    # Figure of merit: observed/Nasmyth variance ratio (skip DC bin)
-    if len(Range_noDC) > 0:
-        obs_var = np.trapezoid(spec_safe[Range_noDC], K[Range_noDC])
-        nas_var = np.trapezoid(nas_spec[Range_noDC], K[Range_noDC])
+        obs_var = np.trapezoid(spec_safe_pos, K_pos)
+        nas_var = np.trapezoid(nas_spec_pos, K_pos)
         fom_val = obs_var / nas_var if nas_var > 0 else np.nan
     else:
+        mad_val = np.nan
         fom_val = np.nan
+        spec_ratio = np.array([])
 
     # Variance resolved fraction
     var_res = _variance_resolved_fraction(k_max, e_4, nu)
@@ -308,7 +313,7 @@ def _estimate_epsilon(
 
     # Lueck (2022a,b) figure of merit
     FM_val = np.nan
-    if num_ffts > 0 and len(Range_noDC) > 0 and len(spec_ratio) > 0:
+    if num_ffts > 0 and n_range > 1 and len(spec_ratio) > 0:
         N_s = len(spec_ratio)
         mad_ln = np.mean(np.abs(np.log(spec_ratio)))  # natural log
         N_eff = max(num_ffts - n_v, 1)
@@ -339,22 +344,28 @@ def _variance_method(
     K_AA: float,
     fit_order: int,
     n_freq: int,
-) -> tuple[float, float, np.ndarray]:
+) -> tuple[float, float, int]:
     """Variance integration method for epsilon estimation.
 
-    Returns (epsilon, K_max, Range).
+    Returns (epsilon, K_max, n_range), where ``n_range`` is the count
+    of leading wavenumber bins used for the integration; the caller
+    treats it as an implicit ``np.arange(n_range)``.
     """
     isr_limit = X_ISR * (e_1 / nu**3) ** 0.25
-    if len(np.where(isr_limit >= K)[0]) >= 20:
+    # K is monotone nondecreasing — use searchsorted to count points
+    # below isr_limit instead of building a bool+index array.
+    if int(np.searchsorted(K, isr_limit, side="right")) >= 20:
         e_2, _ = _inertial_subrange(K, spec_safe, e_1, nu, min(K_LIMIT_MAX, K_AA))
     else:
         e_2 = e_1
 
     K_95 = X_95 * (e_2 / nu**3) ** 0.25
     valid_K_limit = min(K_AA, K_95)
-    valid_K_limit = np.clip(valid_K_limit, K_LIMIT_MIN, K_LIMIT_MAX)
-    valid_idx = np.where(valid_K_limit >= K)[0]
-    index_limit = len(valid_idx)
+    # Plain min/max on scalars produces the same float64 result as
+    # ``np.clip`` here without the numpy dispatch overhead — and
+    # ``np.clip`` was being called per spectrum in the cProfile hot-list.
+    valid_K_limit = min(max(valid_K_limit, K_LIMIT_MIN), K_LIMIT_MAX)
+    index_limit = int(np.searchsorted(K, valid_K_limit, side="right"))
 
     if index_limit <= 1:
         index_limit = min(3, n_freq)
@@ -363,7 +374,7 @@ def _variance_method(
     y = np.log10(spec_safe[1:index_limit] + 1e-30)
     x = np.log10(K[1:index_limit] + 1e-30)
 
-    fit_order_eff = np.clip(fit_order, 3, 8)
+    fit_order_eff = min(max(fit_order, 3), 8)
     K_limit_log = np.log10(K_95)
 
     if index_limit > fit_order_eff + 2:
@@ -380,19 +391,24 @@ def _variance_method(
 
     # Final integration limit
     K_limit_log = min(K_limit_log, np.log10(K_95), np.log10(K_AA))
-    K_limit_log = np.clip(K_limit_log, np.log10(K_LIMIT_MIN), np.log10(K_LIMIT_MAX))
+    K_limit_log = min(max(K_limit_log, np.log10(K_LIMIT_MIN)), np.log10(K_LIMIT_MAX))
 
-    Range = np.where(10**K_limit_log >= K)[0]
-    if len(Range) > 0 and K[Range[-1]] < K_LIMIT_MIN:
-        Range = np.append(Range, Range[-1] + 1)
-    if len(Range) < 3:
-        Range = np.arange(min(3, n_freq))
+    # K is monotone nondecreasing — searchsorted gives the count.  The
+    # implicit Range is ``np.arange(n_var)``; we use ``[:n_var]`` slicing
+    # below to avoid building the index array (slicing returns a view).
+    n_var = int(np.searchsorted(K, 10**K_limit_log, side="right"))
+    if n_var > 0 and K[n_var - 1] < K_LIMIT_MIN:
+        n_var += 1
+    if n_var < 3:
+        n_var = min(3, n_freq)
 
-    e_3 = ISOTROPY_FACTOR * nu * np.trapezoid(spec_safe[Range], K[Range])
+    e_3 = ISOTROPY_FACTOR * nu * np.trapezoid(spec_safe[:n_var], K[:n_var])
     e_3 = max(e_3, EPSILON_FLOOR)
 
+    K_last = K[n_var - 1]
+
     # Iterative variance correction
-    e_4 = _variance_correction(e_3, K[Range[-1]], nu)
+    e_4 = _variance_correction(e_3, K_last, nu)
 
     # Low-wavenumber correction
     if len(K) > 2:
@@ -400,10 +416,9 @@ def _variance_method(
         phi_low = nasmyth_grid(e_4, nu, K[1:3])
         e_4 = e_4 + LOW_K_CORRECTION_FACTOR * ISOTROPY_FACTOR * nu * K[1] * phi_low[0]
         if e_4 / e_4_vc > LOW_K_CORRECTION_THRESHOLD:
-            e_4 = _variance_correction(e_4, K[Range[-1]], nu)
+            e_4 = _variance_correction(e_4, K_last, nu)
 
-    k_max = K[Range[-1]]
-    return e_4, k_max, Range
+    return e_4, K_last, n_var
 
 
 def _compute_mad(
@@ -459,16 +474,29 @@ def _inertial_subrange(
 ) -> tuple[float, float]:
     """Fit to the inertial subrange to estimate epsilon."""
     isr_limit = min(X_ISR * (e / nu**3) ** 0.25, K_limit)
-    fit_range = np.where(isr_limit >= K)[0]
-    if len(fit_range) < 3:
-        fit_range = np.arange(min(3, len(K)))
+    # K is monotone nondecreasing — searchsorted is equivalent to
+    # ``np.where(isr_limit >= K)[0]`` while skipping the bool array.
+    n_fit = int(np.searchsorted(K, isr_limit, side="right"))
+    if n_fit < 3:
+        n_fit = min(3, len(K))
+    fit_range = np.arange(n_fit)
 
-    k_max = K[fit_range[-1]]
+    k_max = K[n_fit - 1]
+
+    # Cache the post-DC slices that the iterative loops actually need.
+    # The previous code computed nas at K_safe[0] = K[0]+1e-30 ≈ 0 and
+    # threw it away via ``nas[1:]``; passing K_inner = K[1:n_fit]+1e-30
+    # to nasmyth_grid trims that wasted element from each interp call
+    # (8138 spectra * 6 calls each = ~49k calls).  fit_range[0] = 0
+    # always (the flyer loop never marks keep[0] = False), so
+    # fit_range[1:] is the contiguous K[1:n_fit] view here.
+    K_inner = K[1:n_fit] + 1e-30
+    shear_tail = shear_spectrum[1:n_fit]
 
     # Iterative fitting (3 passes)
     for _ in range(3):
-        nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
-        ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
+        nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K_inner)
+        ratio = shear_tail / (nas + 1e-30)
         ratio = ratio[ratio > 0]
         if len(ratio) == 0:
             break
@@ -476,9 +504,9 @@ def _inertial_subrange(
         e = e * 10 ** (3 * fit_error / 2)
 
     # Remove flyers
-    nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
+    nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K_inner)
     if len(fit_range) > 2:
-        ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
+        ratio = shear_tail / (nas + 1e-30)
         ratio = ratio[ratio > 0]
         if len(ratio) > 0:
             fit_error_vec = np.log10(ratio)
@@ -494,11 +522,14 @@ def _inertial_subrange(
                         keep[b + 1] = False
                 fit_range = fit_range[keep]
                 k_max = K[fit_range[-1]]
+                # fit_range may now be non-contiguous — fancy index.
+                K_inner = K[fit_range[1:]] + 1e-30
+                shear_tail = shear_spectrum[fit_range[1:]]
 
     # Re-fit (2 more passes)
     for _ in range(2):
-        nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
-        ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
+        nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K_inner)
+        ratio = shear_tail / (nas + 1e-30)
         ratio = ratio[ratio > 0]
         if len(ratio) == 0:
             break
