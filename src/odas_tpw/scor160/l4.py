@@ -465,10 +465,17 @@ def _inertial_subrange(
 
     k_max = K[fit_range[-1]]
 
+    # Cache the slices that are constant within a fit-range — the iterative
+    # loops below only update ``e``, so re-slicing K and the shear spectrum
+    # each pass was pure Python overhead (and dominated the per-spectrum
+    # cost on cProfile).  Same math, fewer operations.
+    K_safe = K[fit_range] + 1e-30
+    shear_tail = shear_spectrum[fit_range[1:]]
+
     # Iterative fitting (3 passes)
     for _ in range(3):
-        nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
-        ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
+        nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K_safe)
+        ratio = shear_tail / (nas[1:] + 1e-30)
         ratio = ratio[ratio > 0]
         if len(ratio) == 0:
             break
@@ -476,9 +483,9 @@ def _inertial_subrange(
         e = e * 10 ** (3 * fit_error / 2)
 
     # Remove flyers
-    nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
+    nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K_safe)
     if len(fit_range) > 2:
-        ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
+        ratio = shear_tail / (nas[1:] + 1e-30)
         ratio = ratio[ratio > 0]
         if len(ratio) > 0:
             fit_error_vec = np.log10(ratio)
@@ -494,11 +501,14 @@ def _inertial_subrange(
                         keep[b + 1] = False
                 fit_range = fit_range[keep]
                 k_max = K[fit_range[-1]]
+                # fit_range changed — rebuild the cached slices.
+                K_safe = K[fit_range] + 1e-30
+                shear_tail = shear_spectrum[fit_range[1:]]
 
     # Re-fit (2 more passes)
     for _ in range(2):
-        nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K[fit_range] + 1e-30)
-        ratio = shear_spectrum[fit_range[1:]] / (nas[1:] + 1e-30)
+        nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K_safe)
+        ratio = shear_tail / (nas[1:] + 1e-30)
         ratio = ratio[ratio > 0]
         if len(ratio) == 0:
             break

@@ -119,6 +119,23 @@ class NasmythGrid:
         G2 : ndarray
             Non-dimensional spectrum values.
         """
+        # Hot caller pattern (1-D float64 ndarray): skip ``np.asarray`` /
+        # ``np.atleast_1d`` / ``.item()``-on-scalar; and use ``np.where``
+        # to fold the two-mask split into one allocation.  Math identical.
+        if isinstance(x, np.ndarray) and x.ndim == 1 and x.dtype == np.float64:
+            in_range_mask = (x >= self._x_min) & (x <= self._x_max)
+            # Compute the in-range branch on the entire array (interp clips
+            # to the lookup table's edges for OOR x; the multiplication by
+            # 10**log10_g2 still produces a number).  Then overwrite OOR
+            # cells with the direct-formula result.  This avoids the cost
+            # of constructing a boolean-indexed sub-array for the in-range
+            # case (which dominates when nearly all values are in range).
+            log10_g2 = np.interp(np.log10(x), self._log10_x, self._log10_g2)
+            result = 10.0**log10_g2
+            if not in_range_mask.all():
+                result[~in_range_mask] = _nasmyth_g2(x[~in_range_mask])
+            return result
+
         x = np.asarray(x, dtype=np.float64)
         scalar = x.ndim == 0
         x = np.atleast_1d(x)
