@@ -30,6 +30,89 @@ def _to_epoch_seconds(values: np.ndarray) -> np.ndarray:
     return values.astype(np.float64)
 
 
+# CF time unit -> seconds factor.  Only common units; falls back to
+# ``num2date`` for the long tail (months, years, weird calendars, etc.)
+_CF_TIME_UNIT_FACTORS: dict[str, float] = {
+    "s": 1.0,
+    "sec": 1.0,
+    "secs": 1.0,
+    "second": 1.0,
+    "seconds": 1.0,
+    "ms": 1e-3,
+    "msec": 1e-3,
+    "msecs": 1e-3,
+    "millisecond": 1e-3,
+    "milliseconds": 1e-3,
+    "us": 1e-6,
+    "microsecond": 1e-6,
+    "microseconds": 1e-6,
+    "ns": 1e-9,
+    "nanosecond": 1e-9,
+    "nanoseconds": 1e-9,
+    "min": 60.0,
+    "minute": 60.0,
+    "minutes": 60.0,
+    "h": 3600.0,
+    "hr": 3600.0,
+    "hrs": 3600.0,
+    "hour": 3600.0,
+    "hours": 3600.0,
+    "d": 86400.0,
+    "day": 86400.0,
+    "days": 86400.0,
+}
+
+
+def _decode_cf_times_fast(
+    raw: np.ndarray, units: str | None, calendar: str | None
+) -> np.ndarray | None:
+    """Decode CF "<unit> since <iso-datetime>" times to epoch seconds.
+
+    Returns the decoded float64 array, or ``None`` if the units string
+    isn't a form we can decode without falling back to ``num2date``.
+
+    Used as a fast path inside :class:`GPSFromNetCDF` for plain numeric
+    time variables; on a million-row GPS file this replaces a
+    per-element ``datetime.timestamp()`` loop with a single vector
+    multiply-add.
+    """
+    if units is None:
+        return None
+    units_str = str(units).strip().lower()
+    if " since " not in units_str:
+        return None
+    unit_part, _, ref_part = units_str.partition(" since ")
+    factor = _CF_TIME_UNIT_FACTORS.get(unit_part.strip())
+    if factor is None:
+        return None
+    if calendar and str(calendar).lower() not in (
+        "standard",
+        "gregorian",
+        "proleptic_gregorian",
+    ):
+        return None
+    if not np.issubdtype(raw.dtype, np.number):
+        return None
+
+    from datetime import UTC, datetime
+
+    ref_str = ref_part.strip().rstrip("z").rstrip("Z")
+    # Tolerate a few common CF reference-time spellings: pure ISO, with
+    # space separator, with or without timezone.
+    try:
+        ref_dt = datetime.fromisoformat(ref_str)
+    except ValueError:
+        try:
+            ref_dt = datetime.fromisoformat(ref_str.replace(" ", "T"))
+        except ValueError:
+            return None
+    if ref_dt.tzinfo is None:
+        ref_dt = ref_dt.replace(tzinfo=UTC)
+    epoch_s = ref_dt.timestamp()
+
+    return raw.astype(np.float64) * factor + epoch_s
+
+
 @runtime_checkable
 class GPSProvider(Protocol):
     """Protocol for GPS position providers."""
@@ -118,37 +201,38 @@ class GPSFromNetCDF:
 
         ds = nc.Dataset(str(file), "r")
         t_var = ds.variables[time_var]
-        # Decode CF time units to epoch seconds when the variable carries
-        # ``units = "<unit> since <reference>"``.  netCDF4's ``num2date`` is
-        # the canonical decoder; otherwise we treat the column as raw values
-        # (epoch seconds, or datetime64 written as int64 ns).
         units = getattr(t_var, "units", None)
         calendar = getattr(t_var, "calendar", "standard")
         raw = t_var[:].data
-        if units and "since" in str(units):
-            from datetime import UTC
+        # Fast path: when the variable is plain numeric and its CF units
+        # are "<unit> since <iso-datetime>", we can compute epoch seconds
+        # by a single scalar+vector arithmetic step instead of going
+        # through ``num2date`` + a per-element ``datetime.timestamp()``
+        # list comprehension (which dominated startup on multi-million-
+        # row GPS files).
+        t = _decode_cf_times_fast(raw, units, calendar)
+        if t is None:
+            if units and "since" in str(units):
+                from datetime import UTC
 
-            decoded = nc.num2date(
-                raw,
-                units=str(units),
-                calendar=str(calendar),
-                only_use_cftime_datetimes=False,
-            )
-            # ``num2date`` returns naive datetimes (or a single one for a
-            # 0-D input); treat the reference epoch as UTC so
-            # ``timestamp()`` doesn't pick up the local-time offset.
-            dts_list = (
-                [decoded] if not hasattr(decoded, "__iter__") else list(decoded)  # type: ignore[redundant-expr]
-            )
-            t = np.array(
-                [
-                    (d.replace(tzinfo=UTC) if d.tzinfo is None else d).timestamp()
-                    for d in dts_list
-                ],
-                dtype=np.float64,
-            )
-        else:
-            t = _to_epoch_seconds(raw)
+                decoded = nc.num2date(
+                    raw,
+                    units=str(units),
+                    calendar=str(calendar),
+                    only_use_cftime_datetimes=False,
+                )
+                dts_list = (
+                    [decoded] if not hasattr(decoded, "__iter__") else list(decoded)  # type: ignore[redundant-expr]
+                )
+                t = np.array(
+                    [
+                        (d.replace(tzinfo=UTC) if d.tzinfo is None else d).timestamp()
+                        for d in dts_list
+                    ],
+                    dtype=np.float64,
+                )
+            else:
+                t = _to_epoch_seconds(raw)
         lat = ds.variables[lat_var][:].data.astype(np.float64)
         lon = ds.variables[lon_var][:].data.astype(np.float64)
         ds.close()
