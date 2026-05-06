@@ -925,7 +925,9 @@ class TestRunCombo:
         ds.to_netcdf(prof_dir / "binned.nc")
 
         _run_combo(tmp_path, prof_dir, None, None, None, {}, config={"profiles": {"P_min": 0.5}})
-        sigs = list((tmp_path / "combo").glob(".params_sha256_*"))
+        combo_dirs = sorted(tmp_path.glob("combo_[0-9][0-9]"))
+        assert len(combo_dirs) == 1, "exactly one versioned combo dir expected"
+        sigs = list(combo_dirs[0].glob(".params_sha256_*"))
         assert len(sigs) == 1, "combo dir should carry one signature file"
 
     def test_combo_signature_changes_with_upstream(self, tmp_path):
@@ -955,8 +957,8 @@ class TestRunCombo:
         _run_combo(a, prof_a, None, None, None, {}, config={"profiles": {"P_min": 0.5}})
         _run_combo(b, prof_b, None, None, None, {}, config={"profiles": {"P_min": 1.5}})
 
-        hash_a = next((a / "combo").glob(".params_sha256_*")).name
-        hash_b = next((b / "combo").glob(".params_sha256_*")).name
+        hash_a = next(next(a.glob("combo_[0-9][0-9]")).glob(".params_sha256_*")).name
+        hash_b = next(next(b.glob("combo_[0-9][0-9]")).glob(".params_sha256_*")).name
         assert hash_a != hash_b
 
     def test_ctd_combo_writes_signature_when_config_passed(self, tmp_path):
@@ -975,7 +977,9 @@ class TestRunCombo:
         ds.to_netcdf(ctd_dir / "file.nc")
 
         _run_combo(tmp_path, None, None, None, ctd_dir, {}, config={"ctd": {"bin_width": 0.5}})
-        sigs = list((tmp_path / "ctd_combo").glob(".params_sha256_*"))
+        ctd_combo_dirs = sorted(tmp_path.glob("ctd_combo_[0-9][0-9]"))
+        assert len(ctd_combo_dirs) == 1, "exactly one versioned ctd_combo dir expected"
+        sigs = list(ctd_combo_dirs[0].glob(".params_sha256_*"))
         assert len(sigs) == 1, "ctd_combo dir should carry one signature file"
 
     def test_time_binned_combo_uses_lengthwise_glue(self, tmp_path):

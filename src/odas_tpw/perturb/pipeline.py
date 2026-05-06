@@ -10,7 +10,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from odas_tpw.perturb.config import merge_config, resolve_output_dir, write_signature
+from odas_tpw.perturb.config import merge_config, resolve_output_dir
 from odas_tpw.perturb.logging_setup import (
     current_run_stamp,
     init_worker_logging,
@@ -1049,46 +1049,37 @@ def _run_combo(
         else None
     )
 
+    def _resolve_dst(stage: str, section: str, params: dict | None) -> Path:
+        """Versioned ``stage_NN/`` when config available; legacy fixed path otherwise."""
+        if config is None or params is None:
+            d = output_root / stage
+            d.mkdir(parents=True, exist_ok=True)
+            return d
+        return resolve_output_dir(
+            output_root, stage, section, params,
+            upstream=_upstream_for(stage, config),
+        )
+
     targets = [
-        (prof_binned_dir, output_root / "combo", COMBO_SCHEMA, bin_method, make_combo, "combo"),
-        (
-            diss_binned_dir,
-            output_root / "diss_combo",
-            COMBO_SCHEMA,
-            bin_method,
-            make_combo,
-            "diss_combo",
-        ),
-        (
-            chi_binned_dir,
-            output_root / "chi_combo",
-            CHI_SCHEMA,
-            bin_method,
-            make_combo,
-            "chi_combo",
-        ),
+        (prof_binned_dir, "combo", COMBO_SCHEMA, bin_method, make_combo),
+        (diss_binned_dir, "diss_combo", COMBO_SCHEMA, bin_method, make_combo),
+        (chi_binned_dir, "chi_combo", CHI_SCHEMA, bin_method, make_combo),
     ]
-    for src, dst, schema, method, func, stage in targets:
+    for src, stage, schema, method, func in targets:
         if src is None or not src.exists():
             continue
-        # Ensure dst exists before the stage_log so its FileHandler can open
-        # ``combo.log`` even when ``func`` returns None (e.g. empty inputs).
-        dst.mkdir(parents=True, exist_ok=True)
+        dst = _resolve_dst(stage, "binning", binning_p)
         with stage_log(dst, "combo"):
             try:
                 out = func(src, dst, schema, netcdf_attrs=netcdf_attrs, method=method)
                 if out is not None:
                     logger.info("Wrote %s", out)
-                    if config is not None and binning_p is not None:
-                        write_signature(
-                            dst, "binning", binning_p, upstream=_upstream_for(stage, config)
-                        )
             except Exception as exc:
                 logger.error("combo %s: %s", dst.name, exc)
 
     if ctd_dir is not None and ctd_dir.exists():
-        ctd_combo_dir = output_root / "ctd_combo"
-        ctd_combo_dir.mkdir(parents=True, exist_ok=True)
+        ctd_p = merge_config("ctd", config.get("ctd")) if config is not None else None
+        ctd_combo_dir = _resolve_dst("ctd_combo", "ctd", ctd_p)
         with stage_log(ctd_combo_dir, "combo"):
             try:
                 out = make_ctd_combo(
@@ -1096,12 +1087,5 @@ def _run_combo(
                 )
                 if out is not None:
                     logger.info("Wrote %s", out)
-                    if config is not None:
-                        write_signature(
-                            ctd_combo_dir,
-                            "ctd",
-                            merge_config("ctd", config.get("ctd")),
-                            upstream=_upstream_for("ctd_combo", config),
-                        )
             except Exception as exc:
                 logger.error("ctd combo: %s", exc)

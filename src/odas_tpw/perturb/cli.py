@@ -314,7 +314,7 @@ def _cmd_combo(args: argparse.Namespace) -> None:
     logging.getLogger(__name__).info("CLI combo, log: %s", log_path)
 
     from odas_tpw.perturb.combo import make_combo, make_ctd_combo
-    from odas_tpw.perturb.config import DEFAULTS, merge_config, write_signature
+    from odas_tpw.perturb.config import DEFAULTS, merge_config, resolve_output_dir
     from odas_tpw.perturb.logging_setup import stage_log
     from odas_tpw.perturb.netcdf_schema import CHI_SCHEMA, COMBO_SCHEMA, CTD_SCHEMA
     from odas_tpw.perturb.pipeline import _upstream_for
@@ -333,59 +333,31 @@ def _cmd_combo(args: argparse.Namespace) -> None:
 
     binning_p = merge_config("binning", config.get("binning"))
 
-    # Combo from profile binned
-    for d in sorted(globmod.glob(str(output_root / "profiles_binned_[0-9][0-9]"))):
-        out_dir = output_root / "combo"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        with stage_log(out_dir, "combo"):
-            out = make_combo(
-                d, out_dir, COMBO_SCHEMA, netcdf_attrs=netcdf_attrs, method=bin_method
-            )
-            if out:
-                write_signature(
-                    out_dir, "binning", binning_p, upstream=_upstream_for("combo", config)
-                )
-                print(f"  Wrote {out}")
+    def _combo_dst(stage: str, section: str, params: dict) -> Path:
+        return resolve_output_dir(
+            output_root, stage, section, params,
+            upstream=_upstream_for(stage, config),
+        )
 
-    # Combo from diss binned
-    for d in sorted(globmod.glob(str(output_root / "diss_binned_[0-9][0-9]"))):
-        out_dir = output_root / "diss_combo"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        with stage_log(out_dir, "combo"):
-            out = make_combo(
-                d, out_dir, COMBO_SCHEMA, netcdf_attrs=netcdf_attrs, method=bin_method
-            )
-            if out:
-                write_signature(
-                    out_dir, "binning", binning_p, upstream=_upstream_for("diss_combo", config)
-                )
-                print(f"  Wrote {out}")
+    targets = [
+        ("profiles_binned", "combo", COMBO_SCHEMA, make_combo),
+        ("diss_binned", "diss_combo", COMBO_SCHEMA, make_combo),
+        ("chi_binned", "chi_combo", CHI_SCHEMA, make_combo),
+    ]
+    for src_prefix, dst_stage, schema, func in targets:
+        for d in sorted(globmod.glob(str(output_root / f"{src_prefix}_[0-9][0-9]"))):
+            out_dir = _combo_dst(dst_stage, "binning", binning_p)
+            with stage_log(out_dir, "combo"):
+                out = func(d, out_dir, schema, netcdf_attrs=netcdf_attrs, method=bin_method)
+                if out:
+                    print(f"  Wrote {out}")
 
-    # Combo from chi binned
-    for d in sorted(globmod.glob(str(output_root / "chi_binned_[0-9][0-9]"))):
-        out_dir = output_root / "chi_combo"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        with stage_log(out_dir, "combo"):
-            out = make_combo(d, out_dir, CHI_SCHEMA, netcdf_attrs=netcdf_attrs, method=bin_method)
-            if out:
-                write_signature(
-                    out_dir, "binning", binning_p, upstream=_upstream_for("chi_combo", config)
-                )
-                print(f"  Wrote {out}")
-
-    # CTD combo
+    ctd_p = merge_config("ctd", config.get("ctd"))
     for d in sorted(globmod.glob(str(output_root / "ctd_[0-9][0-9]"))):
-        out_dir = output_root / "ctd_combo"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = _combo_dst("ctd_combo", "ctd", ctd_p)
         with stage_log(out_dir, "combo"):
             out = make_ctd_combo(d, out_dir, CTD_SCHEMA, netcdf_attrs=netcdf_attrs)
             if out:
-                write_signature(
-                    out_dir,
-                    "ctd",
-                    merge_config("ctd", config.get("ctd")),
-                    upstream=_upstream_for("ctd_combo", config),
-                )
                 print(f"  Wrote {out}")
 
     print("Combo assembly complete.")
