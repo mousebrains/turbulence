@@ -1,7 +1,7 @@
 # Data files (large)
 MR/
 VMP/
-AtomixData/
+AtomixData
 benchmarks/
 
 # Per-cruise data directories — only the YAML config is tracked.
