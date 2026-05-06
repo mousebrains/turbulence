@@ -624,6 +624,7 @@ class TestProcessFileExceptionBranches:
                 "odas_tpw.rsi.dissipation._compute_epsilon",
                 return_value=[xr.Dataset({"epsilon": (("time",), [1e-8])})],
             ),
+            patch("odas_tpw.rsi.chi_io._load_therm_channels", return_value={}),
             patch(
                 "odas_tpw.rsi.chi_io._compute_chi",
                 side_effect=RuntimeError("chi boom"),
