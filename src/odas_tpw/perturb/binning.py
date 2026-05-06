@@ -6,6 +6,7 @@ Reference: Code/bin_by_real.m, Code/profile2binned.m, Code/diss2binned.m,
 """
 
 import re
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -107,12 +108,137 @@ def _get_agg_func(aggregation: str):
     return np.nanmean
 
 
+def _depth_var_for(ds: xr.Dataset) -> str | None:
+    """Return the canonical depth variable name in *ds*, or None."""
+    for name in ("depth", "P", "P_mean"):
+        if name in ds:
+            return name
+    return None
+
+
+_SCALAR_NAMES = ("lat", "lon", "stime", "etime")
+
+
+def _load_profile_snapshot(profile_file: Path) -> dict | None:
+    """Read a profile NC once and return a snapshot for binning.
+
+    Returned dict (or None when the file has no depth/P/P_mean variable):
+
+    * ``depth`` — 1-D ndarray of the depth/P/P_mean coordinate
+    * ``vars`` — ``{var_name: 1-D ndarray}`` for every numeric data var
+      that aligns with depth
+    * ``scalars`` — ``{lat|lon|stime|etime: float}`` (epoch seconds for time)
+    * ``scalar_attrs`` — ``{name: attrs_dict}`` (units/calendar stripped — the
+      combo's CF encoder re-emits them on write)
+
+    One ``xr.open_dataset`` per call: callers cache snapshots so the
+    second pass that needs ``bin_edges`` doesn't re-open. The dict is
+    plain numpy / Python types so it pickles cheaply for worker pools.
+    """
+    with xr.open_dataset(profile_file) as ds:
+        depth_var = _depth_var_for(ds)
+        if depth_var is None:
+            return None
+        depth = ds[depth_var].values
+
+        scalars: dict[str, float] = {}
+        scalar_attrs: dict[str, dict] = {}
+        for sname in _SCALAR_NAMES:
+            if sname in ds.data_vars and ds[sname].ndim == 0:
+                val = ds[sname].values
+                if val.dtype.kind == "M":
+                    val = val.astype("datetime64[ns]").astype(np.int64) / 1e9
+                scalars[sname] = float(val)
+                scalar_attrs[sname] = {
+                    k: v
+                    for k, v in ds[sname].attrs.items()
+                    if k not in ("units", "calendar")
+                }
+
+        data: dict[str, np.ndarray] = {}
+        for vname in ds.data_vars:
+            if vname == depth_var or vname in _SCALAR_NAMES:
+                continue
+            arr = ds[vname].values
+            if arr.ndim != 1 or len(arr) != len(depth):
+                continue
+            if arr.dtype.kind == "M":
+                continue
+            data[str(vname)] = arr
+
+    return {
+        "depth": depth,
+        "vars": data,
+        "scalars": scalars,
+        "scalar_attrs": scalar_attrs,
+    }
+
+
+def _bin_snapshot(snapshot: dict, bin_edges: np.ndarray, agg, diagnostics: bool) -> dict:
+    """Bin a pre-loaded snapshot onto *bin_edges* — no file IO.
+
+    Returns the same shape of dict that the previous ``_bin_one_profile``
+    produced (``vars``, ``stds``, ``scalars``, ``scalar_attrs``).
+    """
+    out: dict = {"vars": {}, "stds": {}, "scalars": snapshot["scalars"],
+                 "scalar_attrs": snapshot["scalar_attrs"]}
+    depth = snapshot["depth"]
+    for vname, arr in snapshot["vars"].items():
+        binned, _ = _bin_array(arr, depth, bin_edges, agg)
+        out["vars"][vname] = binned
+        if diagnostics:
+            out["stds"][vname] = _bin_std(arr, depth, bin_edges)
+    return out
+
+
+def _bin_one_profile(
+    profile_file: Path,
+    bin_edges: np.ndarray,
+    agg,
+    diagnostics: bool,
+) -> dict:
+    """Open + bin a single profile NetCDF onto *bin_edges*.
+
+    Compatibility shim around :func:`_load_profile_snapshot` +
+    :func:`_bin_snapshot` for callers that want the old "one open, one
+    bin" behavior in a single function call.
+    """
+    snap = _load_profile_snapshot(profile_file)
+    if snap is None:
+        return {"vars": {}, "stds": {}, "scalars": {}, "scalar_attrs": {}}
+    return _bin_snapshot(snap, bin_edges, agg, diagnostics)
+
+
+# Top-level worker entrypoints — must be importable for spawn-style
+# multiprocessing (macOS default).  The thin tuple signatures keep the
+# Python pickle small: just file path + small numpy array + tiny config.
+
+
+def _bin_scan_worker(profile_file: Path) -> tuple[float, float] | None:
+    """Worker: read just enough of the file to report (min, max) depth."""
+    snap = _load_profile_snapshot(profile_file)
+    if snap is None:
+        return None
+    d = snap["depth"]
+    d = d[np.isfinite(d)]
+    if d.size == 0:
+        return None
+    return float(d.min()), float(d.max())
+
+
+def _bin_compute_worker(args: tuple) -> dict:
+    """Worker: load snapshot + bin onto pre-computed *bin_edges*."""
+    profile_file, bin_edges, aggregation, diagnostics = args
+    return _bin_one_profile(profile_file, bin_edges, _get_agg_func(aggregation), diagnostics)
+
+
 def bin_by_depth(
     profile_files: list[Path],
     bin_width: float = 1.0,
     aggregation: str = "mean",
     diagnostics: bool = False,
     log_dir: Path | None = None,
+    jobs: int = 1,
 ) -> xr.Dataset:
     """Bin per-profile NetCDFs by depth into 2D (bin x profile).
 
@@ -131,40 +257,66 @@ def bin_by_depth(
         :func:`~odas_tpw.perturb.logging_setup.stage_log` so each source
         file's records land in ``<log_dir>/<source_stem>.log`` (in
         addition to the worker/run logs).
+    jobs : int, default 1
+        When > 1, dispatch the per-profile depth scan and the per-profile
+        load+bin onto a process pool of *jobs* workers. The two phases
+        share one ``ProcessPoolExecutor`` so spawn-fork overhead is paid
+        once.
 
     Returns
     -------
     xr.Dataset with dims (bin, profile).
+
+    Notes
+    -----
+    Serial path (jobs <= 1): each file is read once into an in-memory
+    snapshot, the global bin grid is computed from cached depths, then
+    each snapshot is binned without further IO — single open per file.
+
+    Parallel path (jobs > 1): workers each open their share of files
+    twice (once for the scan, once for the bin); we accept that second
+    open in exchange for shipping just (min,max) tuples through pickle
+    in phase 1 instead of the full snapshot dicts.  For SN465-class
+    workloads this is dominated by phase 2 (load + bin) which scales
+    cleanly with worker count.
     """
     agg = _get_agg_func(aggregation)
-    datasets = [xr.open_dataset(f) for f in profile_files]
+    n_profiles = len(profile_files)
 
-    # Determine global bin edges from all profiles
-    all_depths = []
-    for ds in datasets:
-        if "depth" in ds:
-            d = ds["depth"].values
-            all_depths.extend(d[np.isfinite(d)])
-        elif "P" in ds:
-            d = ds["P"].values
-            all_depths.extend(d[np.isfinite(d)])
-        elif "P_mean" in ds:
-            d = ds["P_mean"].values
-            all_depths.extend(d[np.isfinite(d)])
-    if not all_depths:
+    # ---- Phase 1: scan depth ranges -------------------------------------
+    if jobs > 1 and n_profiles > 1:
+        with ProcessPoolExecutor(max_workers=jobs) as exe:
+            ranges = list(exe.map(_bin_scan_worker, profile_files))
+    else:
+        ranges = [_bin_scan_worker(f) for f in profile_files]
+
+    g_min = np.inf
+    g_max = -np.inf
+    saw_any = False
+    for r in ranges:
+        if r is None:
+            continue
+        saw_any = True
+        g_min = min(g_min, r[0])
+        g_max = max(g_max, r[1])
+    if not saw_any:
         return xr.Dataset()
 
-    d_min = np.floor(np.min(all_depths) / bin_width) * bin_width
-    d_max = np.ceil(np.max(all_depths) / bin_width) * bin_width
+    d_min = np.floor(g_min / bin_width) * bin_width
+    d_max = np.ceil(g_max / bin_width) * bin_width
     bin_edges = np.arange(d_min, d_max + bin_width, bin_width)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
     n_bins = len(bin_centers)
-    n_profiles = len(datasets)
 
-    result_vars = {}
-    # Per-profile scalar variables (lat/lon/stime/etime) become 1-D
-    # ``(profile,)`` arrays in the output so downstream combo can auto-fill
-    # ACDD geospatial_* and time_coverage_* attributes.
+    # ---- Phase 2: load + bin --------------------------------------------
+    if jobs > 1 and n_profiles > 1:
+        args_iter = ((f, bin_edges, aggregation, diagnostics) for f in profile_files)
+        with ProcessPoolExecutor(max_workers=jobs) as exe:
+            results = list(exe.map(_bin_compute_worker, args_iter))
+    else:
+        results = [_bin_one_profile(f, bin_edges, agg, diagnostics) for f in profile_files]
+
+    result_vars: dict = {}
     profile_scalars = {
         "lat": np.full(n_profiles, np.nan),
         "lon": np.full(n_profiles, np.nan),
@@ -172,64 +324,26 @@ def bin_by_depth(
         "etime": np.full(n_profiles, np.nan),
     }
     profile_scalar_attrs: dict[str, dict] = {}
-    # Determine depth coordinate for each profile
-    for pi, ds in enumerate(datasets):
-        with stage_log(log_dir, _source_stem(profile_files[pi])):
-            if "depth" in ds:
-                depth_var = "depth"
-            elif "P" in ds:
-                depth_var = "P"
-            elif "P_mean" in ds:
-                depth_var = "P_mean"
-            else:
+
+    for pi, (pfile, res) in enumerate(zip(profile_files, results)):
+        with stage_log(log_dir, _source_stem(pfile)):
+            if not res["vars"] and not res["scalars"]:
                 continue
-
-            # Pick up per-profile scalars (CF §9 profile featureType convention).
-            # xarray auto-decodes ``stime``/``etime`` (units="seconds since
-            # 1970-01-01") to datetime64[ns]; reduce to epoch seconds so the
-            # combo's auto-fill code (which expects numeric timestamps) works.
-            for sname in profile_scalars:
-                if sname in ds.data_vars and ds[sname].ndim == 0:
-                    val = ds[sname].values
-                    if val.dtype.kind == "M":
-                        val = val.astype("datetime64[ns]").astype(np.int64) / 1e9
-                    profile_scalars[sname][pi] = float(val)
-                    if sname not in profile_scalar_attrs:
-                        # Strip units/calendar — xarray's CF encoder will
-                        # re-emit them when writing the combo; carrying them
-                        # alongside numeric values triggers a "Key 'units'
-                        # already exists in attrs" conflict.
-                        attrs = {
-                            k: v
-                            for k, v in ds[sname].attrs.items()
-                            if k not in ("units", "calendar")
-                        }
-                        profile_scalar_attrs[sname] = attrs
-
-            for vname in ds.data_vars:
-                if vname == depth_var or vname in profile_scalars:
-                    continue
-                arr = ds[vname].values
-                depth = ds[depth_var].values
-                if arr.ndim != 1 or len(arr) != len(depth):
-                    continue
-                if arr.dtype.kind == "M":  # skip datetime64 variables
-                    continue
-
+            for sname, val in res["scalars"].items():
+                profile_scalars[sname][pi] = val
+                if sname not in profile_scalar_attrs:
+                    profile_scalar_attrs[sname] = res["scalar_attrs"].get(sname, {})
+            for vname, binned in res["vars"].items():
                 if vname not in result_vars:
                     result_vars[vname] = np.full((n_bins, n_profiles), np.nan)
                     if diagnostics:
-                        result_vars[f"{vname}_std"] = np.full((n_bins, n_profiles), np.nan)
-
-                binned, _counts = _bin_array(arr, depth, bin_edges, agg)
+                        result_vars[f"{vname}_std"] = np.full(
+                            (n_bins, n_profiles), np.nan
+                        )
                 result_vars[vname][:, pi] = binned
-
-                if diagnostics:
-                    std_arr = _bin_std(arr, depth, bin_edges)
+            if diagnostics:
+                for vname, std_arr in res["stds"].items():
                     result_vars[f"{vname}_std"][:, pi] = std_arr
-
-    for ds in datasets:
-        ds.close()
 
     if diagnostics:
         result_vars["n_samples"] = np.zeros((n_bins, n_profiles), dtype=float)
@@ -318,6 +432,7 @@ def bin_diss(
     method: str = "depth",
     diagnostics: bool = False,
     log_dir: Path | None = None,
+    jobs: int = 1,
 ) -> xr.Dataset:
     """Bin dissipation estimates by depth or time.
 
@@ -325,7 +440,9 @@ def bin_diss(
     """
     if method == "time":
         return bin_by_time(diss_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
-    return bin_by_depth(diss_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
+    return bin_by_depth(
+        diss_files, bin_width, aggregation, diagnostics, log_dir=log_dir, jobs=jobs
+    )
 
 
 def bin_chi(
@@ -335,8 +452,11 @@ def bin_chi(
     method: str = "depth",
     diagnostics: bool = False,
     log_dir: Path | None = None,
+    jobs: int = 1,
 ) -> xr.Dataset:
     """Bin chi estimates by depth or time."""
     if method == "time":
         return bin_by_time(chi_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
-    return bin_by_depth(chi_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
+    return bin_by_depth(
+        chi_files, bin_width, aggregation, diagnostics, log_dir=log_dir, jobs=jobs
+    )

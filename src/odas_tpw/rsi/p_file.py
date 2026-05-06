@@ -240,25 +240,28 @@ class PFile:
 
             data_words = (record_size - header_size) // 2
             dtype = ">i2" if self.endian == ">" else "<i2"
+            udtype = dtype.replace("i", "u")
 
+            # Single np.fromfile read with a structured dtype: avoids the
+            # per-record Python loop and the n_records-way list+vstack that
+            # used to dominate the loader for large files (15-record VMP →
+            # 5,000-record SN465 jumps from <1 s to ~7 s with the old loop).
+            record_dtype = np.dtype(
+                [
+                    ("hdr", udtype, (header_size // 2,)),
+                    ("data", dtype, (data_words,)),
+                ]
+            )
             f.seek(first_record_size)
-            all_data = []
-            record_headers = []
-            for _ in range(n_records):
-                rec_hdr = np.frombuffer(f.read(header_size), dtype=dtype.replace("i", "u"))
-                record_headers.append(rec_hdr)
-                rec_data = np.frombuffer(f.read(record_size - header_size), dtype=dtype)
-                all_data.append(rec_data)
-
-            raw_block = np.vstack(all_data)
+            records = np.fromfile(f, dtype=record_dtype, count=n_records)
             scans_per_record = data_words // self.n_cols
             total_scans = n_records * scans_per_record
-            raw_flat = raw_block.reshape(total_scans, self.n_cols)
+            raw_flat = records["data"].reshape(total_scans, self.n_cols)
 
             self.channels_raw = {}
             self.channels = {}
             self.channel_info = {}
-            self._record_headers = np.vstack(record_headers)
+            self._record_headers = records["hdr"]
 
             ch_config = {}
             for ch in self.config["channels"]:
@@ -283,15 +286,21 @@ class PFile:
                         continue
                     all_rows_same = np.all(matrix[:, col_positions[1][0]] == ch_id)
 
+                    # Keep raw int16 — converters auto-promote via numpy
+                    # broadcasting when they multiply by float scale factors.
+                    # Skipping the .astype(np.float64) here saves a permanent
+                    # 4x-per-channel buffer (~40-60 MB on SN465-class files).
+                    # .copy() so subsequent in-place ops (unsigned wrap,
+                    # deconvolution overwrites) don't alias raw_flat.
                     if all_rows_same:
                         col_idx = col_positions[1][0]
-                        raw_ch = raw_flat[: matrix_count * self.n_rows, col_idx].astype(np.float64)
+                        raw_ch = raw_flat[: matrix_count * self.n_rows, col_idx].copy()
                     else:
                         row_idx, col_idx = col_positions[0][0], col_positions[1][0]
                         raw_ch = raw_flat[
                             row_idx : matrix_count * self.n_rows : self.n_rows,
                             col_idx,
-                        ].astype(np.float64)
+                        ].copy()
 
                     self.channels_raw[ch_name] = raw_ch
 
@@ -350,7 +359,20 @@ class PFile:
                 sign = info.get("sign", "").strip().lower()
                 if sign == "unsigned" or ch_type in _ALWAYS_UNSIGNED:
                     raw = self.channels_raw[ch_name]
-                    raw[raw < 0] += 2**16
+                    # Zero-copy bit reinterpretation — int16 -1 → uint16 65535,
+                    # which is what ``raw[raw<0] += 2**16`` produced when raw
+                    # was already float64.  Falls through to the in-place add
+                    # for any non-int16 (deconvolved float64) channels, where
+                    # the wrap can't overflow.  ``raw.dtype == np.int16``
+                    # would fail on the endian-marked ``>i2`` / ``<i2`` dtypes
+                    # that frombuffer/fromfile actually return — compare on
+                    # kind+itemsize instead.
+                    if raw.dtype.kind == "i" and raw.dtype.itemsize == 2:
+                        self.channels_raw[ch_name] = raw.view(
+                            np.dtype(raw.dtype.str.replace("i", "u"))
+                        )
+                    else:
+                        raw[raw < 0] += 2**16
 
             for ch_name in list(self.channels_raw.keys()):
                 info = ch_config.get(ch_name, {})
