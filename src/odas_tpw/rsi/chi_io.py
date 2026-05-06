@@ -42,8 +42,15 @@ def _compute_chi(
     spectrum_model: str = "kraichnan",
     salinity: npt.ArrayLike | None = None,
     vehicle: str | None = None,
+    _pre_loaded: dict[str, Any] | None = None,
 ) -> list[xr.Dataset]:
-    """Compute chi from temperature gradient spectra (internal, no deprecation warning)."""
+    """Compute chi from temperature gradient spectra (internal, no deprecation warning).
+
+    ``_pre_loaded`` is a private hook accepting the dict produced by
+    :func:`_load_therm_channels` (i.e. channels + ``therm`` + ``diff_gains`` +
+    ``therm_cal``) so callers like ``perturb.pipeline`` can avoid the
+    redundant NC reads when diss and chi share the same source.
+    """
     from odas_tpw.chi.chi import _spectrum_func
     from odas_tpw.chi.l2_chi import process_l2_chi
     from odas_tpw.chi.l3_chi import process_l3_chi
@@ -58,7 +65,7 @@ def _compute_chi(
         overlap = diss_length // 2
 
     # Load channels including thermistor data
-    data = _load_therm_channels(source)
+    data = _pre_loaded if _pre_loaded is not None else _load_therm_channels(source)
 
     therm_names = [t[0] for t in data["therm"]]
     n_therm = len(therm_names)

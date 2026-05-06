@@ -108,15 +108,10 @@ def _get_agg_func(aggregation: str):
     return np.nanmean
 
 
-def _depth_var_for(ds: xr.Dataset) -> str | None:
-    """Return the canonical depth variable name in *ds*, or None."""
-    for name in ("depth", "P", "P_mean"):
-        if name in ds:
-            return name
-    return None
-
-
 _SCALAR_NAMES = ("lat", "lon", "stime", "etime")
+
+
+_DEPTH_CANDIDATES = ("depth", "P", "P_mean")
 
 
 def _load_profile_snapshot(profile_file: Path) -> dict | None:
@@ -131,40 +126,73 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
     * ``scalar_attrs`` — ``{name: attrs_dict}`` (units/calendar stripped — the
       combo's CF encoder re-emits them on write)
 
-    One ``xr.open_dataset`` per call: callers cache snapshots so the
-    second pass that needs ``bin_edges`` doesn't re-open. The dict is
-    plain numpy / Python types so it pickles cheaply for worker pools.
+    Implementation note: we open with raw ``netCDF4.Dataset`` rather
+    than ``xr.open_dataset`` here.  xarray's per-open overhead
+    (file-manager cache lookup, variable wrapping, dim/coord
+    establishment) dominated the per-call cost and we don't need any
+    of it — we read a fixed shape of float arrays plus four scalars.
+    Time variables are filtered out via the CF ``units`` convention
+    (' since ' substring); ``set_auto_mask(False)`` and
+    ``set_auto_scale(False)`` make the read return raw ndarrays
+    matching what xarray's ``decode_cf=False`` path produced
+    bit-for-bit.
     """
-    with xr.open_dataset(profile_file) as ds:
-        depth_var = _depth_var_for(ds)
+    import netCDF4 as nc
+
+    ds = nc.Dataset(str(profile_file), "r")
+    try:
+        ds.set_auto_mask(False)
+        ds.set_auto_scale(False)
+
+        depth_var = next(
+            (n for n in _DEPTH_CANDIDATES if n in ds.variables), None
+        )
         if depth_var is None:
             return None
-        depth = ds[depth_var].values
+        depth = np.asarray(ds.variables[depth_var][:])
 
         scalars: dict[str, float] = {}
         scalar_attrs: dict[str, dict] = {}
         for sname in _SCALAR_NAMES:
-            if sname in ds.data_vars and ds[sname].ndim == 0:
-                val = ds[sname].values
-                if val.dtype.kind == "M":
-                    val = val.astype("datetime64[ns]").astype(np.int64) / 1e9
-                scalars[sname] = float(val)
-                scalar_attrs[sname] = {
-                    k: v
-                    for k, v in ds[sname].attrs.items()
-                    if k not in ("units", "calendar")
-                }
+            if sname not in ds.variables:
+                continue
+            sv = ds.variables[sname]
+            if sv.shape != ():
+                continue
+            scalars[sname] = float(sv[()])
+            scalar_attrs[sname] = {
+                a: getattr(sv, a)
+                for a in sv.ncattrs()
+                if a not in ("units", "calendar")
+            }
 
+        n_depth = len(depth)
         data: dict[str, np.ndarray] = {}
-        for vname in ds.data_vars:
+        for vname, var in ds.variables.items():
             if vname == depth_var or vname in _SCALAR_NAMES:
                 continue
-            arr = ds[vname].values
-            if arr.ndim != 1 or len(arr) != len(depth):
+            shape = var.shape
+            if len(shape) != 1 or shape[0] != n_depth:
                 continue
-            if arr.dtype.kind == "M":
+            # Skip CF coordinate variables (e.g. ``probe`` on the ``probe``
+            # dim) — netCDF4 lists them alongside data vars, while xarray
+            # promotes them to coords.  The previous xarray-based path
+            # was filtering them implicitly via ``ds.data_vars``.
+            if len(var.dimensions) == 1 and var.dimensions[0] == vname:
                 continue
-            data[str(vname)] = arr
+            # Skip time coordinate vars (t, t_slow) by CF units.
+            try:
+                units = var.getncattr("units")
+            except (AttributeError, KeyError):
+                units = ""
+            if isinstance(units, str) and " since " in units:
+                continue
+            # Skip non-numeric variables (string-typed labels, etc.).
+            if var.dtype.kind not in ("f", "i", "u"):
+                continue
+            data[str(vname)] = np.asarray(var[:])
+    finally:
+        ds.close()
 
     return {
         "depth": depth,

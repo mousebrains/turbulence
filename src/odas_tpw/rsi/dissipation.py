@@ -80,8 +80,15 @@ def _compute_epsilon(
     despike_smooth: float = 0.5,
     salinity: npt.ArrayLike | None = None,
     vehicle: str | None = None,
+    _pre_loaded: dict[str, Any] | None = None,
 ) -> list[xr.Dataset]:
-    """Compute epsilon from any source (internal, no deprecation warning)."""
+    """Compute epsilon from any source (internal, no deprecation warning).
+
+    ``_pre_loaded`` is a private hook for ``perturb.pipeline`` to pass an
+    already-loaded channels dict (saving the redundant per-profile NC read
+    when both diss and chi are computed for the same source).  External
+    callers should not use it.
+    """
     from odas_tpw.scor160.io import L2Params, L3Params
     from odas_tpw.scor160.l2 import process_l2
     from odas_tpw.scor160.l3 import process_l3
@@ -93,7 +100,7 @@ def _compute_epsilon(
     if f_limit is None:
         f_limit = np.inf
 
-    data = load_channels(source)
+    data = _pre_loaded if _pre_loaded is not None else load_channels(source)
 
     shear_names = [s[0] for s in data["shear"]]
     n_shear = len(shear_names)

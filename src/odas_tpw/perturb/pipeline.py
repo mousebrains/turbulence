@@ -505,10 +505,29 @@ def process_file(
     inst_lookup = instrument_key if instrument_key is not None else p_path.parent.name
     instrument_cfg = config.get("instruments", {}).get(inst_lookup, {})
     excluded_probes = list(instrument_cfg.get("exclude_shear_probes", []))
+    chi_cfg = config.get("chi", {})
+    chi_enabled = bool(chi_cfg.get("enable", False)) and "chi" in output_dirs
+
+    # Per-profile channels cache: filled here, consumed by the chi loop
+    # below.  Holds ~1 MB / profile of fast-time numpy arrays — bounded by
+    # the per-file profile count (~80 for SN465), so worker-RSS impact is
+    # well under 100 MB.  Skipped entirely when chi is disabled.
+    prof_data_cache: dict[str, dict[str, Any]] = {}
+
     if "diss" in output_dirs and result["profiles"]:
         with stage_log(output_dirs.get("diss"), log_basename):
             for prof_path in result["profiles"]:
                 try:
+                    pre_loaded: dict[str, Any] | None
+                    if chi_enabled:
+                        # Single NC pass that produces both channels and
+                        # therm-gradient channels; reused below for chi.
+                        from odas_tpw.rsi.chi_io import _load_therm_channels
+
+                        pre_loaded = _load_therm_channels(prof_path)
+                        prof_data_cache[prof_path] = pre_loaded
+                    else:
+                        pre_loaded = None
                     diss_results = _compute_epsilon(
                         prof_path,
                         **{
@@ -523,6 +542,7 @@ def process_file(
                                 "diagnostics",
                             )
                         },
+                        _pre_loaded=pre_loaded,
                     )
                     for ds in diss_results:
                         if excluded_probes:
@@ -537,8 +557,7 @@ def process_file(
                     logger.error("diss for %s: %s", Path(prof_path).name, exc)
 
     # Per-profile chi (if enabled)
-    chi_cfg = config.get("chi", {})
-    if chi_cfg.get("enable", False) and "chi" in output_dirs and result["diss"]:
+    if chi_enabled and result["diss"]:
         try:
             from odas_tpw.rsi.chi_io import _compute_chi
         except ImportError:
@@ -550,6 +569,8 @@ def process_file(
                         import xarray as xr
 
                         diss_ds = xr.open_dataset(diss_path)
+                        # Pop so the cache is released as we consume it.
+                        pre_loaded = prof_data_cache.pop(prof_path, None)
                         chi_results = _compute_chi(
                             prof_path,
                             epsilon_ds=diss_ds,
@@ -558,6 +579,7 @@ def process_file(
                                 for k, v in chi_cfg.items()
                                 if k not in ("enable", "diagnostics")
                             },
+                            _pre_loaded=pre_loaded,
                         )
                         diss_ds.close()
                         for chi_ds in chi_results:

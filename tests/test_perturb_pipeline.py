@@ -384,6 +384,7 @@ class TestProcessFile:
         process_file(tmp_path / "test.p", config, None, output_dirs)
         mock_ctd_bin.assert_called_once()
 
+    @patch("odas_tpw.rsi.chi_io._load_therm_channels", return_value={})
     @patch("odas_tpw.rsi.chi_io._compute_chi", return_value=[MagicMock()])
     @patch("odas_tpw.rsi.dissipation._compute_epsilon")
     @patch("odas_tpw.rsi.profile.extract_profiles")
@@ -400,6 +401,7 @@ class TestProcessFile:
         mock_extract,
         mock_eps,
         mock_chi,
+        mock_load_therm,
         tmp_path,
     ):
         """chi.enable=True with profiles and diss results calls _compute_chi."""
