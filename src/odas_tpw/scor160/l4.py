@@ -352,7 +352,10 @@ def _variance_method(
 
     K_95 = X_95 * (e_2 / nu**3) ** 0.25
     valid_K_limit = min(K_AA, K_95)
-    valid_K_limit = np.clip(valid_K_limit, K_LIMIT_MIN, K_LIMIT_MAX)
+    # Plain min/max on scalars produces the same float64 result as
+    # ``np.clip`` here without the numpy dispatch overhead — and
+    # ``np.clip`` was being called per spectrum in the cProfile hot-list.
+    valid_K_limit = min(max(valid_K_limit, K_LIMIT_MIN), K_LIMIT_MAX)
     valid_idx = np.where(valid_K_limit >= K)[0]
     index_limit = len(valid_idx)
 
@@ -363,7 +366,7 @@ def _variance_method(
     y = np.log10(spec_safe[1:index_limit] + 1e-30)
     x = np.log10(K[1:index_limit] + 1e-30)
 
-    fit_order_eff = np.clip(fit_order, 3, 8)
+    fit_order_eff = min(max(fit_order, 3), 8)
     K_limit_log = np.log10(K_95)
 
     if index_limit > fit_order_eff + 2:
@@ -380,7 +383,7 @@ def _variance_method(
 
     # Final integration limit
     K_limit_log = min(K_limit_log, np.log10(K_95), np.log10(K_AA))
-    K_limit_log = np.clip(K_limit_log, np.log10(K_LIMIT_MIN), np.log10(K_LIMIT_MAX))
+    K_limit_log = min(max(K_limit_log, np.log10(K_LIMIT_MIN)), np.log10(K_LIMIT_MAX))
 
     Range = np.where(10**K_limit_log >= K)[0]
     if len(Range) > 0 and K[Range[-1]] < K_LIMIT_MIN:
