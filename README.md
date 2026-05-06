@@ -38,6 +38,15 @@ See [docs/installation.md](docs/installation.md) for more options.
 
 ## Quick Start
 
+Two CLIs ship with the package, for different workflows:
+
+- **`rsi-tpw`** — single-file or short batch processing on the command line.
+- **`perturb`** — full campaign pipeline driven by a YAML config file
+  (trim → merge → profiles → epsilon → chi → bin → combo), with parallel
+  workers and stage-aware logging. Use this for cruise-scale runs.
+
+### `rsi-tpw` (single files / short batches)
+
 ```bash
 # Full pipeline: .p files → epsilon → chi
 rsi-tpw pipeline VMP/*.p -o results/
@@ -65,6 +74,29 @@ compute_chi_file("VMP/file.p", "chi/")
 > **Note:** `get_diss()` and `get_chi()` still work for backward compatibility
 > but are deprecated in favor of `run_pipeline()` or the modular
 > `compute_diss_file()` / `compute_chi_file()` functions.
+
+### `perturb` (campaign-scale batch pipeline)
+
+```bash
+# Write a template config you can edit (cruise paths, GPS file,
+# instrument-specific overrides, parallelism, etc.).
+perturb init my-cruise.yaml
+
+# Run the full pipeline — outputs land in <output_root>/{profiles_NN,
+# diss_NN, chi_NN, ctd_NN, *_binned_NN, combo}, with a per-run log under
+# <output_root>/logs/.
+perturb run -c my-cruise.yaml
+
+# Or run individual stages against the same config:
+perturb trim -c my-cruise.yaml
+perturb profiles -c my-cruise.yaml
+perturb diss     -c my-cruise.yaml
+perturb chi      -c my-cruise.yaml
+perturb bin      -c my-cruise.yaml
+perturb combo    -c my-cruise.yaml
+```
+
+See [docs/perturb/pipeline.md](docs/perturb/pipeline.md) for the full stage list and [docs/perturb/configuration.md](docs/perturb/configuration.md) for the config schema.
 
 ## Documentation
 
@@ -128,7 +160,7 @@ python -m pytest tests/test_epsilon.py    # epsilon pipeline tests only
 
 ## Development
 
-This project was developed in collaboration with [Claude Code](https://claude.ai/code) (Anthropic's Opus 4.6).
+This project was developed in collaboration with [Claude Code](https://claude.ai/code) (Anthropic's Opus 4.7).
 
 ## License
 

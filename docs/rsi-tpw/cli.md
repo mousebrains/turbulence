@@ -63,7 +63,7 @@ rsi-tpw prof VMP/*.p -o profiles/
 | `-o`, `--output DIR` | Output directory (required) |
 | `--P-min FLOAT` | Minimum pressure [dbar] (default: 0.5) |
 | `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: 0.3) |
-| `--direction {up,down}` | Profile direction (default: down) |
+| `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
 | `--min-duration FLOAT` | Minimum profile duration [s] (default: 7) |
 
 ## `rsi-tpw eps`
@@ -81,11 +81,11 @@ rsi-tpw eps VMP/*.p -o epsilon/ --salinity 34.5
 |------|-------------|
 | `-o`, `--output DIR` | Output directory (required) |
 | `-j`, `--jobs N` | Parallel workers (0 = all cores, default: 1) |
-| `--fft-length N` | FFT segment length [samples] (default: 256) |
-| `--diss-length N` | Dissipation window [samples] (default: 2×fft-length) |
+| `--fft-length N` | FFT segment length [samples] (default: 1024) |
+| `--diss-length N` | Dissipation window [samples] (default: 4×fft-length) |
 | `--overlap N` | Window overlap [samples] (default: diss-length//2) |
 | `--speed FLOAT` | Fixed profiling speed [m/s] (default: from dP/dt) |
-| `--direction {up,down}` | Profile direction (default: down) |
+| `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
 | `--no-goodman` | Disable Goodman coherent noise removal |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
 | `--salinity FLOAT` | Salinity [PSU] for viscosity (default: 35, fixed S) |
@@ -109,11 +109,11 @@ rsi-tpw chi VMP/*.p --spectrum-model kraichnan -o chi/
 |------|-------------|
 | `-o`, `--output DIR` | Output directory (required) |
 | `-j`, `--jobs N` | Parallel workers (0 = all cores, default: 1) |
-| `--fft-length N` | FFT segment length [samples] (default: 512) |
-| `--diss-length N` | Dissipation window [samples] (default: 3×fft-length) |
+| `--fft-length N` | FFT segment length [samples] (default: 1024) |
+| `--diss-length N` | Dissipation window [samples] (default: 4×fft-length) |
 | `--overlap N` | Window overlap [samples] (default: diss-length//2) |
 | `--speed FLOAT` | Fixed profiling speed [m/s] (default: from dP/dt) |
-| `--direction {up,down}` | Profile direction (default: down) |
+| `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
 | `--fp07-model {single_pole,double_pole}` | FP07 transfer function (default: single_pole) |
 | `--epsilon-dir DIR` | Directory with epsilon `.nc` files for Method 1 |
 | `--no-goodman` | Disable Goodman coherent noise removal |
@@ -133,10 +133,10 @@ rsi-tpw pipeline VMP/*.p -o results/
 | Flag | Description |
 |------|-------------|
 | `-o`, `--output DIR` | Base output directory (required) |
-| `--direction {up,down}` | Profile direction (default: down) |
+| `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
 | `--speed FLOAT` | Fixed profiling speed [m/s] (default: from dP/dt) |
-| `--eps-fft-length N` | FFT length for epsilon (default: 256) |
-| `--chi-fft-length N` | FFT length for chi (default: 512) |
+| `--eps-fft-length N` | FFT length for epsilon (default: 1024) |
+| `--chi-fft-length N` | FFT length for chi (default: 1024) |
 | `--no-goodman` | Disable Goodman noise removal for epsilon and chi |
 | `--fp07-model {single_pole,double_pole}` | FP07 transfer function (default: single_pole) |
 | `--spectrum-model {batchelor,kraichnan}` | Spectrum model for chi (default: kraichnan) |
@@ -169,10 +169,10 @@ rsi-tpw ql VMP/*.p --fft-length 512
 
 | Flag | Description |
 |------|-------------|
-| `--fft-length N` | FFT segment length [samples] (default: 256) |
+| `--fft-length N` | FFT segment length [samples] (default: 1024) |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
 | `--no-goodman` | Disable Goodman coherent noise removal |
-| `--direction {up,down}` | Profile direction (default: down) |
+| `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
 | `--spec-P-range P_MIN P_MAX` | Pressure range [dbar] for spectral calculations |
 | `--chi-method {1,2}` | Chi method: 1 = from epsilon, 2 = MLE fit (default: 1) |
 | `--spectrum-model {batchelor,kraichnan}` | Theoretical spectrum model (default: kraichnan) |
@@ -188,8 +188,8 @@ rsi-tpw dl VMP/*.p
 
 | Flag | Description |
 |------|-------------|
-| `--fft-length N` | FFT segment length [samples] (default: 256) |
+| `--fft-length N` | FFT segment length [samples] (default: 1024) |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
 | `--no-goodman` | Disable Goodman coherent noise removal |
-| `--direction {up,down}` | Profile direction (default: down) |
+| `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
 | `--spec-P-range P_MIN P_MAX` | Pressure range [dbar] for spectral calculations |

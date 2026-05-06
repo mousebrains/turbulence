@@ -58,7 +58,7 @@ rsi-tpw eps VMP/*.p -o results/
 rsi-tpw eps VMP/*.p -o results/ --fft-length 512
 
 # Original params again: reuses results/eps_00/
-rsi-tpw eps VMP/*.p -o results/ --fft-length 256
+rsi-tpw eps VMP/*.p -o results/ --fft-length 1024
 ```
 
 ## Touchfile contents
@@ -67,7 +67,7 @@ The signature file is not just a marker — it contains the **canonical JSON** r
 
 ```bash
 cat results/eps_00/.params_sha256_*
-# {"despike_smooth":0.5,"despike_thresh":8,"direction":"down","diss_length":null,...}
+# {"despike_smooth":0.5,"despike_thresh":8,"direction":"auto","diss_length":null,...}
 ```
 
 ## Resolved config.yaml
@@ -82,7 +82,7 @@ Parameters are resolved in three layers, from lowest to highest priority:
 function defaults  ←  config.yaml values  ←  CLI flags
 ```
 
-- **Function defaults** are the built-in values (e.g., `fft_length: 256` for epsilon)
+- **Function defaults** are the built-in values (e.g., `fft_length: 1024` for epsilon)
 - **Config file values** (`-c config.yaml`) override defaults for any key that is set to a non-null value
 - **CLI flags** (e.g., `--fft-length 512`) override both defaults and config values
 

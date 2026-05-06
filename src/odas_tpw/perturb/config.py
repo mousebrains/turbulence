@@ -325,7 +325,7 @@ top_trim:
 
 epsilon:
   fft_length: 256         # FFT segment length [samples]
-  diss_length: null       # dissipation window [samples] (null = 2 * fft_length)
+  diss_length: null       # dissipation window [samples] (null = 4 * fft_length)
   overlap: null           # window overlap [samples] (null = diss_length // 2)
   goodman: true           # Goodman coherent noise removal
   f_AA: 98.0              # anti-aliasing filter cutoff [Hz]
@@ -343,7 +343,7 @@ epsilon:
 chi:
   enable: false           # chi is optional, separate stage after diss
   fft_length: 512         # FFT segment length [samples]
-  diss_length: null       # dissipation window [samples] (null = 3 * fft_length)
+  diss_length: null       # dissipation window [samples] (null = 4 * fft_length)
   overlap: null           # window overlap [samples] (null = diss_length // 2)
   fp07_model: "single_pole"  # FP07 transfer function model
   goodman: true           # Goodman coherent noise removal

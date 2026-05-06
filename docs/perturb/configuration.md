@@ -144,7 +144,7 @@ Controls computation of epsilon from shear probe spectra. Parameters are passed 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `fft_length` | int | `256` | FFT segment length [samples] |
-| `diss_length` | int | `null` | Dissipation window [samples] (null = 2 x fft_length) |
+| `diss_length` | int | `null` | Dissipation window [samples] (null = 4 x fft_length) |
 | `overlap` | int | `null` | Window overlap [samples] (null = diss_length // 2) |
 | `goodman` | bool | `true` | Enable Goodman coherent noise removal |
 | `f_AA` | float | `98.0` | Anti-aliasing filter cutoff [Hz] |
@@ -169,7 +169,7 @@ Controls computation of chi from FP07 thermistor spectra.
 |-----------|------|---------|-------------|
 | `enable` | bool | `false` | Enable chi computation |
 | `fft_length` | int | `512` | FFT segment length [samples] |
-| `diss_length` | int | `null` | Dissipation window [samples] (null = 3 x fft_length) |
+| `diss_length` | int | `null` | Dissipation window [samples] (null = 4 x fft_length) |
 | `overlap` | int | `null` | Window overlap [samples] (null = diss_length // 2) |
 | `fp07_model` | string | `"single_pole"` | FP07 transfer function: `single_pole` or `double_pole` |
 | `goodman` | bool | `true` | Enable Goodman coherent noise removal |
@@ -216,7 +216,7 @@ Controls binning of per-profile and per-diss NetCDFs.
 
 ### `netcdf` — NetCDF Global Attributes
 
-CF-1.8 / ACDD-1.3 global attributes applied to combo output files. All default to `null` (not set) unless specified.
+CF-1.13 / ACDD-1.3 global attributes applied to combo output files. All default to `null` (not set) unless specified.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -226,7 +226,7 @@ CF-1.8 / ACDD-1.3 global attributes applied to combo output files. All default t
 | `creator_name` | string | Creator name |
 | `creator_email` | string | Creator email |
 | `project` | string | Project name |
-| `Conventions` | string | Default: `"CF-1.8, ACDD-1.3"` |
+| `Conventions` | string | Default: `"CF-1.13, ACDD-1.3"` |
 
 See [CF Conventions](https://cfconventions.org/) and [ACDD](https://wiki.esipfed.org/Attribute_Convention_for_Data_Discovery_1-3) for the full attribute list.
 
