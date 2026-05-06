@@ -261,7 +261,7 @@ def _estimate_epsilon(
     # Always compute both estimates so viewers can show the alternative
     K_limit = min(K_AA, K_LIMIT_MAX)
     isr_e, isr_km = _inertial_subrange(K, spec_safe, e_1, nu, K_limit)
-    var_e, var_km, var_Range = _variance_method(
+    var_e, var_km, n_var = _variance_method(
         K,
         spec_safe,
         e_1,
@@ -273,34 +273,36 @@ def _estimate_epsilon(
 
     if use_isr:
         method = 1
-        n_isr = int(np.searchsorted(K, isr_km, side="right"))
-        if n_isr < 3:
-            n_isr = min(3, n_freq)
-        e_4, k_max, Range = isr_e, isr_km, np.arange(n_isr)
+        n_range = int(np.searchsorted(K, isr_km, side="right"))
+        if n_range < 3:
+            n_range = min(3, n_freq)
+        e_4, k_max = isr_e, isr_km
     else:
         method = 0
-        e_4, k_max, Range = var_e, var_km, var_Range
+        e_4, k_max, n_range = var_e, var_km, n_var
 
     # Nasmyth spectrum at final epsilon
     nas_spec = nasmyth_grid(max(e_4, EPSILON_FLOOR), nu, K + 1e-30)
 
-    # Mean absolute deviation (log10) -- skip DC bin for ratio comparison
-    Range_noDC = Range[K[Range] > 0]
-    if len(Range_noDC) > 0:
-        spec_ratio = spec_safe[Range_noDC] / (nas_spec[Range_noDC] + 1e-30)
+    # MAD/FOM block — skip the DC bin (K[0]=0 by construction; F starts
+    # at 0 in csd_matrix_batch and K=F/W with W>0).  ``Range_noDC`` in
+    # the original code was therefore equivalent to ``arange(1, n_range)``;
+    # contiguous slicing returns views and avoids three fancy-indexing
+    # allocations per spectrum.
+    if n_range > 1:
+        K_pos = K[1:n_range]
+        spec_safe_pos = spec_safe[1:n_range]
+        nas_spec_pos = nas_spec[1:n_range]
+        spec_ratio = spec_safe_pos / (nas_spec_pos + 1e-30)
         spec_ratio = spec_ratio[spec_ratio > 0]
         mad_val = float(np.mean(np.abs(np.log10(spec_ratio)))) if len(spec_ratio) > 0 else np.nan
-    else:
-        mad_val = np.nan
-        spec_ratio = np.array([])
-
-    # Figure of merit: observed/Nasmyth variance ratio (skip DC bin)
-    if len(Range_noDC) > 0:
-        obs_var = np.trapezoid(spec_safe[Range_noDC], K[Range_noDC])
-        nas_var = np.trapezoid(nas_spec[Range_noDC], K[Range_noDC])
+        obs_var = np.trapezoid(spec_safe_pos, K_pos)
+        nas_var = np.trapezoid(nas_spec_pos, K_pos)
         fom_val = obs_var / nas_var if nas_var > 0 else np.nan
     else:
+        mad_val = np.nan
         fom_val = np.nan
+        spec_ratio = np.array([])
 
     # Variance resolved fraction
     var_res = _variance_resolved_fraction(k_max, e_4, nu)
@@ -311,7 +313,7 @@ def _estimate_epsilon(
 
     # Lueck (2022a,b) figure of merit
     FM_val = np.nan
-    if num_ffts > 0 and len(Range_noDC) > 0 and len(spec_ratio) > 0:
+    if num_ffts > 0 and n_range > 1 and len(spec_ratio) > 0:
         N_s = len(spec_ratio)
         mad_ln = np.mean(np.abs(np.log(spec_ratio)))  # natural log
         N_eff = max(num_ffts - n_v, 1)
@@ -342,10 +344,12 @@ def _variance_method(
     K_AA: float,
     fit_order: int,
     n_freq: int,
-) -> tuple[float, float, np.ndarray]:
+) -> tuple[float, float, int]:
     """Variance integration method for epsilon estimation.
 
-    Returns (epsilon, K_max, Range).
+    Returns (epsilon, K_max, n_range), where ``n_range`` is the count
+    of leading wavenumber bins used for the integration; the caller
+    treats it as an implicit ``np.arange(n_range)``.
     """
     isr_limit = X_ISR * (e_1 / nu**3) ** 0.25
     # K is monotone nondecreasing — use searchsorted to count points
@@ -389,19 +393,22 @@ def _variance_method(
     K_limit_log = min(K_limit_log, np.log10(K_95), np.log10(K_AA))
     K_limit_log = min(max(K_limit_log, np.log10(K_LIMIT_MIN)), np.log10(K_LIMIT_MAX))
 
-    # K is monotone nondecreasing — searchsorted gives the count.
+    # K is monotone nondecreasing — searchsorted gives the count.  The
+    # implicit Range is ``np.arange(n_var)``; we use ``[:n_var]`` slicing
+    # below to avoid building the index array (slicing returns a view).
     n_var = int(np.searchsorted(K, 10**K_limit_log, side="right"))
     if n_var > 0 and K[n_var - 1] < K_LIMIT_MIN:
         n_var += 1
     if n_var < 3:
         n_var = min(3, n_freq)
-    Range = np.arange(n_var)
 
-    e_3 = ISOTROPY_FACTOR * nu * np.trapezoid(spec_safe[Range], K[Range])
+    e_3 = ISOTROPY_FACTOR * nu * np.trapezoid(spec_safe[:n_var], K[:n_var])
     e_3 = max(e_3, EPSILON_FLOOR)
 
+    K_last = K[n_var - 1]
+
     # Iterative variance correction
-    e_4 = _variance_correction(e_3, K[Range[-1]], nu)
+    e_4 = _variance_correction(e_3, K_last, nu)
 
     # Low-wavenumber correction
     if len(K) > 2:
@@ -409,10 +416,9 @@ def _variance_method(
         phi_low = nasmyth_grid(e_4, nu, K[1:3])
         e_4 = e_4 + LOW_K_CORRECTION_FACTOR * ISOTROPY_FACTOR * nu * K[1] * phi_low[0]
         if e_4 / e_4_vc > LOW_K_CORRECTION_THRESHOLD:
-            e_4 = _variance_correction(e_4, K[Range[-1]], nu)
+            e_4 = _variance_correction(e_4, K_last, nu)
 
-    k_max = K[Range[-1]]
-    return e_4, k_max, Range
+    return e_4, K_last, n_var
 
 
 def _compute_mad(
