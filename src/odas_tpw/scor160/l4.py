@@ -487,7 +487,7 @@ def _inertial_subrange(
     # The previous code computed nas at K_safe[0] = K[0]+1e-30 ≈ 0 and
     # threw it away via ``nas[1:]``; passing K_inner = K[1:n_fit]+1e-30
     # to nasmyth_grid trims that wasted element from each interp call
-    # (8138 spectra × 6 calls each = ~49k calls).  fit_range[0] = 0
+    # (8138 spectra * 6 calls each = ~49k calls).  fit_range[0] = 0
     # always (the flyer loop never marks keep[0] = False), so
     # fit_range[1:] is the contiguous K[1:n_fit] view here.
     K_inner = K[1:n_fit] + 1e-30
