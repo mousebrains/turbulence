@@ -355,6 +355,7 @@ def process_file(
     dict with output paths per stage.
     """
     from odas_tpw.perturb.fp07_cal import fp07_calibrate
+    from odas_tpw.processing.chi_combine import mk_chi_mean
     from odas_tpw.processing.ct_align import ct_align
     from odas_tpw.processing.epsilon_combine import mk_epsilon_mean
     from odas_tpw.rsi.dissipation import _compute_epsilon
@@ -605,12 +606,15 @@ def process_file(
                             **{
                                 k: v
                                 for k, v in chi_cfg.items()
-                                if k not in ("enable", "diagnostics")
+                                if k not in ("enable", "chi_minimum", "diagnostics")
                             },
                             _pre_loaded=pre_loaded,
                         )
                         diss_ds.close()
                         for chi_ds in chi_results:
+                            chi_ds = mk_chi_mean(
+                                chi_ds, chi_cfg.get("chi_minimum", 1e-13)
+                            )
                             _copy_profile_scalars(prof_path, chi_ds, prof_scalars_cache)
                             out_name = Path(prof_path).name
                             out_path = output_dirs["chi"] / out_name

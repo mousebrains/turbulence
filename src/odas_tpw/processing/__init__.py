@@ -14,9 +14,12 @@ right arrays.
   shift C by the median lag across profiles.
 - :func:`epsilon_combine.mk_epsilon_mean` — Lueck (2022) iterative 95% CI
   geometric mean of multi-probe dissipation estimates.
+- :func:`chi_combine.mk_chi_mean` — same iterative 95% CI machinery for
+  multi-probe thermal-variance dissipation chi.
 """
 
 from odas_tpw.processing.bottom import detect_bottom_crash
+from odas_tpw.processing.chi_combine import mk_chi_mean
 from odas_tpw.processing.ct_align import ct_align
 from odas_tpw.processing.epsilon_combine import mk_epsilon_mean
 from odas_tpw.processing.top_trim import compute_trim_depth, compute_trim_depths
@@ -26,5 +29,6 @@ __all__ = [
     "compute_trim_depths",
     "ct_align",
     "detect_bottom_crash",
+    "mk_chi_mean",
     "mk_epsilon_mean",
 ]
