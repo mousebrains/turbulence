@@ -290,11 +290,19 @@ hotel:
   file: null              # path to hotel file (CSV, NetCDF, or .mat)
   time_column: "time"     # time column/variable name
   time_format: "auto"     # auto | seconds | epoch | iso
-  channels: {}            # hotel_col -> output_name (empty = all)
-  fast_channels:          # channels interpolated onto fast time axis
+  channels: {}            # source-keyed selection. {} = take every source
+                          # variable. Each value can be:
+                          #   ~ (null) / {}     : include with defaults
+                          #   "new_name"        : rename only
+                          #   {name, interp,    : per-variable options
+                          #    scale, offset,   #   (any subset)
+                          #    units, fast}
+  fast_channels:          # default fast set when 'fast' is unset per-var
     - speed
     - P
-  interpolation: "pchip"  # pchip | linear
+  interpolation: "pchip"  # default kind: pchip | linear | nearest |
+                          # previous | next | zero | slinear | quadratic
+                          # | cubic. Per-variable interp wins.
 
 profiles:
   P_min: 0.5              # minimum pressure [dbar]
