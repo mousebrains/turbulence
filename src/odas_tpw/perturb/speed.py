@@ -21,12 +21,12 @@ Methods
     Construct an inviscid flight-model along-axis speed from the MR's
     own pressure and inclinometers:
 
-        U_along = |W| / (sin(|pitch| − α) · cos(|roll|))
+        U_along = |W| / (sin(|pitch| - aoa) * cos(|roll|))
 
-    where ``α`` is the angle of attack (``aoa_deg``, default 3° matching
-    ODAS Slocum trim). The pitch axis is auto-picked from the inclino-
-    meter axis with the larger swing — Slocum mountings sometimes have
-    ``Incl_X`` carrying pitch, sometimes ``Incl_Y``.
+    where ``aoa`` is the angle of attack (``aoa_deg``, default 3 deg
+    matching ODAS Slocum trim). The pitch axis is auto-picked from the
+    inclinometer axis with the larger swing -- Slocum mountings some-
+    times have ``Incl_X`` carrying pitch, sometimes ``Incl_Y``.
 
 ``"constant"``
     Use the scalar in ``speed.value`` for every fast-rate sample.
@@ -35,6 +35,7 @@ Methods
 from __future__ import annotations
 
 from typing import Any
+
 import numpy as np
 
 
@@ -58,9 +59,9 @@ def compute_speed_for_pfile(
 
     Returns
     -------
-    speed_fast : (n_fast,) float64, m/s, ≥ ``speed_cutout``.
+    speed_fast : (n_fast,) float64, m/s, >= ``speed_cutout``.
     W_slow     : (n_slow,) float64, dbar/s. Always the smoothed |dP/dt|
-                 — independent of method, useful for QC/binning.
+                 -- independent of method, useful for QC/binning.
     """
     from odas_tpw.rsi.vehicle import resolve_tau
     from odas_tpw.scor160.profile import compute_speed_fast as _ode_speed
@@ -143,7 +144,7 @@ def _slow_to_fast(
     f_c = 0.68 / tau
     b, a = butter(1, f_c / (fs_fast / 2.0))
     arr_fast = np.asarray(filtfilt(b, a, arr_fast))
-    return np.maximum(arr_fast, speed_min)
+    return np.asarray(np.maximum(arr_fast, speed_min), dtype=np.float64)
 
 
 def _flight_model_slow(
@@ -152,10 +153,10 @@ def _flight_model_slow(
     aoa_deg: float,
     min_pitch_deg: float,
 ) -> np.ndarray:
-    """U_along = |W| / (sin(|pitch|−α) · cos|roll|), at slow rate.
+    """U_along = |W| / (sin(|pitch|-aoa) * cos|roll|), at slow rate.
 
     Pitch axis auto-picked from whichever of ``Incl_X``/``Incl_Y`` has
-    the larger swing — Slocum mountings vary.
+    the larger swing -- Slocum mountings vary.
     """
     iX = np.asarray(pf.channels.get("Incl_X"), dtype=np.float64) \
         if "Incl_X" in pf.channels else None
@@ -178,4 +179,4 @@ def _flight_model_slow(
     sin_path = np.sin(eff) * np.cos(roll)
     sin_floor = np.sin(np.deg2rad(min_pitch_deg))
     sin_path = np.where(sin_path > sin_floor, sin_path, np.nan)
-    return np.abs(W_slow) / sin_path
+    return np.asarray(np.abs(W_slow) / sin_path, dtype=np.float64)

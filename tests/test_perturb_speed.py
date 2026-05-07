@@ -127,7 +127,7 @@ class TestFlightMethod:
         """Pitch on Incl_Y (larger amplitude) → recovered the same."""
         pf = vmp_descent
         n = pf.channels["P"].size
-        # Roll: tiny ±0.5° wobble. Pitch: −30° ± 1° gentle drift.
+        # Roll: tiny +/-0.5 deg wobble. Pitch: -30 deg +/- 1 deg gentle drift.
         pf.channels["Incl_X"] = 0.5 * np.sin(2 * np.pi * np.arange(n) / n)
         pf.channels["Incl_Y"] = -30.0 + np.sin(2 * np.pi * np.arange(n) / n)
         speed_fast, _ = compute_speed_for_pfile(
@@ -166,7 +166,7 @@ class TestConstantMethod:
         np.testing.assert_allclose(speed_fast, 0.42)
 
     def test_constant_value_required(self, vmp_descent):
-        with pytest.raises(ValueError, match="speed.value is null"):
+        with pytest.raises(ValueError, match=r"speed\.value is null"):
             compute_speed_for_pfile(
                 vmp_descent, {"method": "constant", "value": None}, vehicle="vmp",
             )
@@ -174,7 +174,7 @@ class TestConstantMethod:
 
 class TestUnknownMethod:
     def test_raises(self, vmp_descent):
-        with pytest.raises(ValueError, match="Unknown speed.method"):
+        with pytest.raises(ValueError, match=r"Unknown speed\.method"):
             compute_speed_for_pfile(
                 vmp_descent, {"method": "magic"}, vehicle="vmp",
             )

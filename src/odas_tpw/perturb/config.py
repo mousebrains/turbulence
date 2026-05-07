@@ -377,12 +377,12 @@ speed:
   # pressure : ODAS smoothed |dP/dt|. Correct for VMP. (default)
   # em       : use the U_EM channel from the .p file (MicroRider EM
   #            flowmeter). Errors out if U_EM is missing.
-  # flight   : |W| / (sin(|pitch|−aoa)·cos|roll|), pitch axis auto-
+  # flight   : |W| / (sin(|pitch|-aoa)*cos|roll|), pitch axis auto-
   #            picked from Incl_X/Incl_Y by amplitude.
   # constant : use the scalar in `value`.
   value: null             # m/s, only when method="constant"
   aoa_deg: 3.0            # angle of attack [deg], for method="flight"
-  min_pitch_deg: 5.0      # flight: drop samples with |pitch|−aoa < this
+  min_pitch_deg: 5.0      # flight: drop samples with |pitch|-aoa < this
   speed_cutout: 0.05      # m/s floor applied to fast-rate speed
   tau: null               # smoothing tau [s]; null = vehicle default
                           # (vmp/xmp 1.5, slocum_glider 3.0, ...)
