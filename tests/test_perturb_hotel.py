@@ -6,7 +6,12 @@ from datetime import UTC, datetime
 import numpy as np
 import pytest
 
-from odas_tpw.perturb.hotel import HotelData, interpolate_hotel, load_hotel
+from odas_tpw.perturb.hotel import (
+    HotelData,
+    interpolate_hotel,
+    load_hotel,
+    merge_hotel_into_pfile,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -348,4 +353,76 @@ class TestEdgeCases:
         hd = HotelData(time=np.array([0, 1, 2.0]))
         assert len(hd.time) == 3
         assert hd.channels == {}
+        assert hd.units == {}
         assert hd.time_is_relative is False
+
+
+# ---------------------------------------------------------------------------
+# TestMergeHotelIntoPFile
+# ---------------------------------------------------------------------------
+
+
+class _MockPFileWithInfo(_MockPFile):
+    """Adds the channel_info dict and _fast_channels set used by the
+    pipeline's hotel-merge helper."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.channel_info: dict = {}
+        self._fast_channels: set = set()
+
+
+class TestMergeHotelIntoPFile:
+    def test_registers_channel_info_for_every_injected_channel(self, tmp_path):
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(nc_file, time_format="seconds")
+        pf = _MockPFileWithInfo()
+        merge_hotel_into_pfile(hd, pf, {"fast_channels": ["speed"]})
+        # Both channels appear in pf.channels and pf.channel_info; without
+        # this, extract_profiles raises KeyError on the first hotel-only name.
+        for name in ("speed", "pitch"):
+            assert name in pf.channels
+            assert name in pf.channel_info
+            assert pf.channel_info[name]["type"] == "hotel"
+
+    def test_fast_channels_set_is_updated(self, tmp_path):
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(nc_file, time_format="seconds")
+        pf = _MockPFileWithInfo()
+        merge_hotel_into_pfile(hd, pf, {"fast_channels": ["speed"]})
+        assert "speed" in pf._fast_channels
+        assert "pitch" not in pf._fast_channels
+
+    def test_units_propagate_from_netcdf(self, tmp_path):
+        import netCDF4 as nc
+
+        nc_file = tmp_path / "hotel.nc"
+        ds = nc.Dataset(str(nc_file), "w")
+        ds.createDimension("obs", 3)
+        t = ds.createVariable("time", "f8", ("obs",))
+        s = ds.createVariable("speed", "f8", ("obs",))
+        s.units = "m s-1"
+        t[:] = [0, 1, 2]
+        s[:] = [0.1, 0.2, 0.3]
+        ds.close()
+        hd = load_hotel(nc_file, time_format="seconds")
+        assert hd.units["speed"] == "m s-1"
+        pf = _MockPFileWithInfo()
+        merge_hotel_into_pfile(hd, pf, {"fast_channels": []})
+        assert pf.channel_info["speed"]["units"] == "m s-1"
+
+    def test_fast_set_membership_overrides_existing(self, tmp_path):
+        """If an MR's slow-rate name collides with a hotel name set as
+        fast, the fast/slow dim must follow the hotel choice."""
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(nc_file, time_format="seconds")
+        pf = _MockPFileWithInfo()
+        # Pretend the .p file already has a slow-rate "speed" channel.
+        pf.channels["speed"] = np.zeros_like(pf.t_slow)
+        merge_hotel_into_pfile(hd, pf, {"fast_channels": ["speed"]})
+        assert "speed" in pf._fast_channels
+        # And demoted-to-slow case:
+        pf2 = _MockPFileWithInfo()
+        pf2._fast_channels.add("speed")
+        merge_hotel_into_pfile(hd, pf2, {"fast_channels": []})
+        assert "speed" not in pf2._fast_channels

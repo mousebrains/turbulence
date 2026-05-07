@@ -376,11 +376,9 @@ def process_file(
 
     # ---- Hotel data injection ----
     if hotel_data is not None:
-        from odas_tpw.perturb.hotel import interpolate_hotel
+        from odas_tpw.perturb.hotel import merge_hotel_into_pfile
 
-        hotel_channels = interpolate_hotel(hotel_data, pf, hotel_cfg or {})
-        for name, data in hotel_channels.items():
-            pf.channels[name] = data
+        merge_hotel_into_pfile(hotel_data, pf, hotel_cfg or {})
 
     # ---- Speed channel (downstream of .p load + hotel merge) ----
     # Inject ``speed_fast`` and ``W_slow`` so extract_profiles writes them

@@ -21,12 +21,15 @@ class HotelData:
         Time vector in epoch seconds (or relative seconds).
     channels : dict[str, np.ndarray]
         Channel name → data array.
+    units : dict[str, str]
+        Channel name → CF-compatible units string. Empty if not known.
     time_is_relative : bool
         True if time values are relative seconds (not epoch).
     """
 
     time: np.ndarray
     channels: dict[str, np.ndarray] = field(default_factory=dict)
+    units: dict[str, str] = field(default_factory=dict)
     time_is_relative: bool = False
 
 
@@ -121,7 +124,8 @@ def _load_csv(
     else:
         ch = {c: df[c].values.astype(np.float64) for c in data_cols}
 
-    return HotelData(time=time, channels=ch, time_is_relative=is_relative)
+    units = dict.fromkeys(ch, "")
+    return HotelData(time=time, channels=ch, units=units, time_is_relative=is_relative)
 
 
 def _load_netcdf(
@@ -137,17 +141,18 @@ def _load_netcdf(
     time, is_relative = _parse_time(raw_time, time_format)
 
     data_vars = [v for v in ds.variables if v != time_column]
-    if channels:
-        ch = {
-            channels.get(v, v): ds.variables[v][:].data.astype(np.float64)
-            for v in data_vars
-            if v in channels
-        }
-    else:
-        ch = {v: ds.variables[v][:].data.astype(np.float64) for v in data_vars}
+    ch: dict[str, np.ndarray] = {}
+    units: dict[str, str] = {}
+    for v in data_vars:
+        if channels and v not in channels:
+            continue
+        out_name = channels.get(v, v) if channels else v
+        var = ds.variables[v]
+        ch[out_name] = var[:].data.astype(np.float64)
+        units[out_name] = getattr(var, "units", "") or ""
     ds.close()
 
-    return HotelData(time=time, channels=ch, time_is_relative=is_relative)
+    return HotelData(time=time, channels=ch, units=units, time_is_relative=is_relative)
 
 
 def _load_mat(
@@ -198,7 +203,8 @@ def _load_mat(
         raise ValueError(f"Time column {time_column!r} not found in .mat file")
 
     time, is_relative = _parse_time(raw_time, time_format)
-    return HotelData(time=time, channels=ch, time_is_relative=is_relative)
+    units = dict.fromkeys(ch, "")
+    return HotelData(time=time, channels=ch, units=units, time_is_relative=is_relative)
 
 
 def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, np.ndarray]:
@@ -258,3 +264,30 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
         result[name] = interpolated
 
     return result
+
+
+def merge_hotel_into_pfile(hotel_data: HotelData, pf, hotel_cfg: dict) -> None:
+    """Interpolate hotel channels and register them on ``pf`` in-place.
+
+    Adds each interpolated channel to ``pf.channels``, registers a
+    ``pf.channel_info`` entry (so :func:`extract_profiles` can read units),
+    and updates ``pf._fast_channels`` so :meth:`PFile.is_fast` returns the
+    correct dim for each hotel-injected name.
+
+    Channels that already exist on ``pf`` are overwritten by the hotel
+    version, and their fast/slow membership is rewritten to match the
+    target rate the hotel chose for them.
+    """
+    fast_set = set(hotel_cfg.get("fast_channels", ["speed", "P"]))
+    interpolated = interpolate_hotel(hotel_data, pf, hotel_cfg)
+    for name, data in interpolated.items():
+        pf.channels[name] = data
+        pf.channel_info[name] = {
+            "units": hotel_data.units.get(name, ""),
+            "type": "hotel",
+            "name": name,
+        }
+        if name in fast_set:
+            pf._fast_channels.add(name)
+        else:
+            pf._fast_channels.discard(name)
