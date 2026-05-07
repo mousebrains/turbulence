@@ -20,10 +20,10 @@ from odas_tpw.perturb.plot import layout
 
 
 def _load_epsilon(diss_combo_path: str):
-    ds = xr.open_dataset(diss_combo_path)
-    eps = ds["epsilonMean"].transpose("bin", "profile").values
-    depth = ds["bin"].values
-    times = ds["stime"].values
+    with xr.open_dataset(diss_combo_path) as ds:
+        eps = ds["epsilonMean"].transpose("bin", "profile").values
+        depth = ds["bin"].values
+        times = ds["stime"].values
     return times, depth, eps
 
 
@@ -33,14 +33,15 @@ def _load_chi_from_combo(chi_combo_path: str, chi_attrs_dir: str):
     The combo file does not carry chi fft / spectrum metadata, so read
     those from any per-profile NetCDF in *chi_attrs_dir* for the title.
     """
-    ds = xr.open_dataset(chi_combo_path)
-    chi = ds["chiMean"].transpose("bin", "profile").values
-    depth = ds["bin"].values
-    times = ds["stime"].values
+    with xr.open_dataset(chi_combo_path) as ds:
+        chi = ds["chiMean"].transpose("bin", "profile").values
+        depth = ds["bin"].values
+        times = ds["stime"].values
     attrs: dict = {}
     sample = sorted(glob.glob(os.path.join(chi_attrs_dir, "*_prof*.nc")))
     if sample:
-        attrs = xr.open_dataset(sample[0]).attrs
+        with xr.open_dataset(sample[0]) as sds:
+            attrs = dict(sds.attrs)
     return times, depth, chi, attrs
 
 
@@ -55,16 +56,17 @@ def _load_chi_legacy_per_profile(chi_dir: str, depth: np.ndarray):
     if not files:
         raise SystemExit(f"No chi profiles in {chi_dir}")
 
-    sample_attrs = xr.open_dataset(files[0]).attrs
+    with xr.open_dataset(files[0]) as ds:
+        sample_attrs = dict(ds.attrs)
     edges = layout.depth_edges(depth)
     chi = np.full((depth.size, len(files)), np.nan)
     times = np.empty(len(files), dtype="datetime64[ns]")
 
     for j, fn in enumerate(files):
-        d = xr.open_dataset(fn)
-        c = np.nanmean(d["chi"].values, axis=0)
-        p = np.asarray(d["P_mean"].values)
-        times[j] = d["stime"].values
+        with xr.open_dataset(fn) as d:
+            c = np.nanmean(d["chi"].values, axis=0)
+            p = np.asarray(d["P_mean"].values)
+            times[j] = d["stime"].values
         idx = np.digitize(p, edges) - 1
         ok = (idx >= 0) & (idx < depth.size) & np.isfinite(c)
         for i, v in zip(idx[ok], c[ok]):
@@ -83,7 +85,8 @@ def _per_profile_attrs(root: str, sibling_prefix: str) -> dict:
     files = sorted(glob.glob(os.path.join(sib_dirs[-1], "*_prof*.nc")))
     if not files:
         return {}
-    return xr.open_dataset(files[0]).attrs
+    with xr.open_dataset(files[0]) as ds:
+        return dict(ds.attrs)
 
 
 def add_arguments(p: argparse.ArgumentParser) -> None:
@@ -129,8 +132,9 @@ def run(args: argparse.Namespace) -> str:
 
     if chi_combo_dir is not None:
         chi_combo_path = os.path.join(chi_combo_dir, "combo.nc")
-        peek = xr.open_dataset(chi_combo_path)
-        if "chiMean" in peek.data_vars and chi_dir is not None:
+        with xr.open_dataset(chi_combo_path) as peek:
+            has_chi_mean = "chiMean" in peek.data_vars
+        if has_chi_mean and chi_dir is not None:
             t_chi, _depth_chi, chi, chi_attrs = _load_chi_from_combo(
                 chi_combo_path, chi_dir
             )
