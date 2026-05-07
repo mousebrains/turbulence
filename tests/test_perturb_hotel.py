@@ -102,12 +102,14 @@ class TestLoadHotel:
         assert "pitch" in hd.channels
         assert len(hd.time) == 5
 
-    def test_channel_mapping(self, tmp_path):
+    def test_channel_filter_keeps_source_keys(self, tmp_path):
+        """Listing source names in ``channels`` filters; rename is applied
+        later by the merge helper, so HotelData keeps source-name keys."""
         csv_file = _make_csv(tmp_path / "hotel.csv")
         hd = load_hotel(csv_file, channels={"speed": "W"})
-        assert "W" in hd.channels
-        assert "speed" not in hd.channels
+        assert "speed" in hd.channels
         assert "pitch" not in hd.channels  # filtered out
+        assert "W" not in hd.channels      # rename happens at merge
 
     def test_unsupported_format_raises(self, tmp_path):
         bad_file = tmp_path / "hotel.xyz"
@@ -426,3 +428,130 @@ class TestMergeHotelIntoPFile:
         pf2._fast_channels.add("speed")
         merge_hotel_into_pfile(hd, pf2, {"fast_channels": []})
         assert "speed" not in pf2._fast_channels
+
+
+# ---------------------------------------------------------------------------
+# Per-variable hotel.channels schema
+# ---------------------------------------------------------------------------
+
+
+class TestPerVariableSchema:
+    def test_legacy_string_rename(self, tmp_path):
+        """``channels: {speed: U}`` renames at merge time."""
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(nc_file, time_format="seconds",
+                        channels={"speed": "U"})
+        pf = _MockPFileWithInfo()
+        merge_hotel_into_pfile(hd, pf,
+                               {"channels": {"speed": "U"},
+                                "fast_channels": []})
+        assert "U" in pf.channels
+        assert "speed" not in pf.channels
+
+    def test_dict_form_rename(self, tmp_path):
+        """``channels: {speed: {name: U}}`` renames at merge time."""
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(nc_file, time_format="seconds",
+                        channels={"speed": {"name": "U"}})
+        pf = _MockPFileWithInfo()
+        merge_hotel_into_pfile(hd, pf,
+                               {"channels": {"speed": {"name": "U"}},
+                                "fast_channels": []})
+        assert "U" in pf.channels
+
+    def test_scale_and_offset_applied(self, tmp_path):
+        """``scale``/``offset`` linear transform on the interpolated array."""
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        # Source ``pitch`` = 1, 2, 3, 4, 5
+        hd = load_hotel(nc_file, time_format="seconds",
+                        channels={"pitch": {"scale": 10.0, "offset": 100.0}})
+        pf = _MockPFileWithInfo()
+        merge_hotel_into_pfile(
+            hd, pf,
+            {"channels": {"pitch": {"scale": 10.0, "offset": 100.0}},
+             "fast_channels": [], "interpolation": "linear"},
+        )
+        # On the slow grid t=0..4 covering source t=0..4, linear interp
+        # gives pitch≈1..5 → after scale=10, offset=100 → ≈110..150.
+        np.testing.assert_allclose(pf.channels["pitch"][0], 110.0)
+        np.testing.assert_allclose(pf.channels["pitch"][-1], 150.0)
+
+    def test_units_override(self, tmp_path):
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(nc_file, time_format="seconds",
+                        channels={"pitch": {"units": "rad"}})
+        pf = _MockPFileWithInfo()
+        merge_hotel_into_pfile(
+            hd, pf,
+            {"channels": {"pitch": {"units": "rad"}}, "fast_channels": []},
+        )
+        assert pf.channel_info["pitch"]["units"] == "rad"
+
+    def test_fast_override(self, tmp_path):
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(nc_file, time_format="seconds",
+                        channels={"speed": {"fast": False},
+                                  "pitch": {"fast": True}})
+        pf = _MockPFileWithInfo()
+        merge_hotel_into_pfile(
+            hd, pf,
+            {"channels": {"speed": {"fast": False},
+                          "pitch": {"fast": True}},
+             "fast_channels": ["speed"]},
+        )
+        # Per-variable ``fast`` wins over the global ``fast_channels`` list.
+        assert "speed" not in pf._fast_channels
+        assert "pitch" in pf._fast_channels
+
+    def test_per_variable_interp_method(self, tmp_path):
+        """``interp: nearest`` is honored alongside the global default."""
+        import netCDF4 as nc
+
+        nc_file = tmp_path / "hotel.nc"
+        ds = nc.Dataset(str(nc_file), "w")
+        ds.createDimension("obs", 3)
+        t = ds.createVariable("time", "f8", ("obs",))
+        x = ds.createVariable("x", "f8", ("obs",))
+        t[:] = [0, 2, 4]
+        x[:] = [0.0, 10.0, 20.0]
+        ds.close()
+        hd = load_hotel(nc_file, time_format="seconds",
+                        channels={"x": {"interp": "nearest"}})
+        pf = _MockPFileWithInfo(n_slow=5)
+        # pf.t_slow = [0, 1, 2, 3, 4]; nearest-from-source-2 picks 0 at t=1
+        # and 10 at t=2.
+        merge_hotel_into_pfile(
+            hd, pf,
+            {"channels": {"x": {"interp": "nearest"}}, "fast_channels": []},
+        )
+        # Linear would give 5.0 at t=1; nearest gives 0.0 (closer to t=0).
+        np.testing.assert_allclose(pf.channels["x"][1], 0.0)
+
+    def test_unknown_option_raises(self, tmp_path):
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        with pytest.raises(ValueError, match="unknown options"):
+            load_hotel(nc_file, time_format="seconds",
+                       channels={"speed": {"bogus": 1}})
+
+    def test_unknown_interp_kind_raises(self, tmp_path):
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        with pytest.raises(ValueError, match=r"\.interp="):
+            load_hotel(nc_file, time_format="seconds",
+                       channels={"speed": {"interp": "magic"}})
+
+    def test_unknown_global_interp_raises(self, tmp_path):
+        from odas_tpw.perturb.hotel import interpolate_hotel
+
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(nc_file, time_format="seconds")
+        pf = _MockPFileWithInfo()
+        with pytest.raises(ValueError, match=r"hotel\.interpolation="):
+            interpolate_hotel(hd, pf, {"interpolation": "magic"})
+
+    def test_null_value_includes_with_defaults(self, tmp_path):
+        """``channels: {speed: ~}`` filters to speed only and uses defaults."""
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(nc_file, time_format="seconds",
+                        channels={"speed": None})
+        assert "speed" in hd.channels
+        assert "pitch" not in hd.channels

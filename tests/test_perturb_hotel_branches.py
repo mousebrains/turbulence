@@ -71,8 +71,8 @@ class TestParseTimeAuto:
 
 
 class TestLoadNetCDFMapping:
-    def test_netcdf_with_channels_mapping(self, tmp_path):
-        """NetCDF with channels rename mapping (line 141 branch)."""
+    def test_netcdf_with_channels_filter(self, tmp_path):
+        """NetCDF with channels filter — only listed sources are loaded."""
         import netCDF4 as nc
 
         path = tmp_path / "hotel.nc"
@@ -87,9 +87,9 @@ class TestLoadNetCDFMapping:
         ds.close()
 
         hd = load_hotel(path, channels={"speed": "W"})
-        assert "W" in hd.channels  # renamed
-        assert "speed" not in hd.channels
+        assert "speed" in hd.channels   # source key preserved
         assert "pitch" not in hd.channels  # filtered
+        assert "W" not in hd.channels   # rename happens at merge
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +134,7 @@ class TestLoadMatStructuredArray:
         np.testing.assert_allclose(hd.time, [0, 1, 2, 3])
 
     def test_mat_struct_with_channels_filter(self, tmp_path):
-        """ODAS struct with channels mapping → filters and renames."""
+        """ODAS struct with channels mapping filters by source name."""
         time_data = np.array([0.0, 1.0, 2.0, 3.0])
         path = _make_struct_mat(
             tmp_path / "hotel_filt.mat",
@@ -142,9 +142,9 @@ class TestLoadMatStructuredArray:
             pitch={"time": time_data, "data": np.array([1.0, 2.0, 3.0, 4.0])},
         )
         hd = load_hotel(path, time_format="seconds", channels={"speed": "W"})
-        assert "W" in hd.channels
-        assert "speed" not in hd.channels
+        assert "speed" in hd.channels   # source key preserved
         assert "pitch" not in hd.channels
+        assert "W" not in hd.channels   # rename happens at merge
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ class TestLoadMatStructuredArray:
 
 class TestLoadMatFlatChannels:
     def test_flat_array_with_channels_filter(self, tmp_path):
-        """Flat .mat arrays with channels mapping → filters and renames."""
+        """Flat .mat arrays with channels filter by source name."""
         from scipy.io import savemat
 
         path = tmp_path / "hotel_flat.mat"
@@ -167,8 +167,9 @@ class TestLoadMatFlatChannels:
             },
         )
         hd = load_hotel(path, time_format="seconds", channels={"speed": "W"})
-        assert "W" in hd.channels
+        assert "speed" in hd.channels   # source key preserved
         assert "pitch" not in hd.channels  # filtered
+        assert "W" not in hd.channels   # rename happens at merge
 
 
 # ---------------------------------------------------------------------------
