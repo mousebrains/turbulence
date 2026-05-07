@@ -125,7 +125,7 @@ def _channels_from_pfile(
         [(n, pf.channels[n]) for n in pf._fast_channels if ac_re.match(n)],
         key=lambda x: x[0],
     )
-    return {
+    out: dict[str, Any] = {
         "shear": shear,
         "accel": accel,
         "P": pf.channels[p_name],
@@ -143,6 +143,12 @@ def _channels_from_pfile(
             "start_time": pf.start_time.isoformat(),
         },
     }
+    # Carry through the perturb-injected speed channel(s) if present.
+    if "speed_fast" in pf.channels:
+        out["speed_fast"] = pf.channels["speed_fast"]
+    if "W_slow" in pf.channels:
+        out["W_slow"] = pf.channels["W_slow"]
+    return out
 
 
 def _channels_from_nc(
@@ -191,9 +197,16 @@ def _channels_from_nc(
         elif "mr" in model or "microrider" in model:
             vehicle = "slocum_glider"
 
+    speed_fast = None
+    W_slow = None
+    if "speed_fast" in ds.variables:
+        speed_fast = ds.variables["speed_fast"][:].data.astype(np.float64)
+    if "W_slow" in ds.variables:
+        W_slow = ds.variables["W_slow"][:].data.astype(np.float64)
+
     ds.close()
 
-    return {
+    out: dict[str, Any] = {
         "shear": shear,
         "accel": accel,
         "P": P,
@@ -206,6 +219,11 @@ def _channels_from_nc(
         "vehicle": vehicle,
         "metadata": metadata,
     }
+    if speed_fast is not None:
+        out["speed_fast"] = speed_fast
+    if W_slow is not None:
+        out["W_slow"] = W_slow
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -260,8 +278,14 @@ def prepare_profiles(
         if not profiles_slow:
             return None
 
+    # Prefer a precomputed ``speed_fast`` channel if the caller (perturb
+    # pipeline post-hotel-merge) has injected one; otherwise fall back to
+    # the historical ODAS pressure-rate path.
+    precomputed = data.get("speed_fast") if hasattr(data, "get") else None
     if speed is not None:
         speed_fast = np.full(len(t_fast), abs(speed))
+    elif precomputed is not None and len(precomputed) == len(t_fast):
+        speed_fast = np.asarray(precomputed, dtype=np.float64)
     else:
         from odas_tpw.scor160.profile import compute_speed_fast
 

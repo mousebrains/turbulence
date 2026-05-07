@@ -382,6 +382,36 @@ def process_file(
         for name, data in hotel_channels.items():
             pf.channels[name] = data
 
+    # ---- Speed channel (downstream of .p load + hotel merge) ----
+    # Inject ``speed_fast`` and ``W_slow`` so extract_profiles writes them
+    # to every per-profile NetCDF, and downstream prepare_profiles uses
+    # them instead of recomputing from P. Default method is "pressure",
+    # which reproduces the historical VMP behaviour exactly.
+    speed_cfg = merge_config("speed", config.get("speed"))
+    if "P" in pf.channels:
+        try:
+            from odas_tpw.perturb.speed import compute_speed_for_pfile
+
+            vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
+            speed_fast, W_slow = compute_speed_for_pfile(pf, speed_cfg, vehicle)
+
+            pf.channels["speed_fast"] = speed_fast
+            pf._fast_channels.add("speed_fast")
+            pf.channel_info["speed_fast"] = {
+                "units": "m s-1", "type": "computed",
+                "name": "speed_fast",
+            }
+            pf.channels["W_slow"] = W_slow
+            pf.channel_info["W_slow"] = {
+                "units": "dbar s-1", "type": "computed",
+                "name": "W_slow",
+            }
+        except Exception as exc:
+            logger.warning(
+                "speed channel computation failed for %s (method=%s): %s",
+                p_path.name, speed_cfg.get("method", "pressure"), exc,
+            )
+
     # Per-stage log files: each ``with stage_log(...)`` adds a FileHandler
     # for that stage's output dir so e.g. all CTD-binning records for ``a.p``
     # land in ``ctd_NN/a.log`` *and* the worker/run logs.  basename = stem so
