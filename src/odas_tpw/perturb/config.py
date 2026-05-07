@@ -118,6 +118,14 @@ DEFAULTS: dict[str, dict] = {
         "method": "mean",
         "diagnostics": False,
     },
+    "speed": {
+        "method": "pressure",   # pressure | em | flight | constant
+        "value": None,           # m/s, only for method="constant"
+        "aoa_deg": 3.0,          # angle of attack, only for method="flight"
+        "min_pitch_deg": 5.0,    # flight: skip |pitch+aoa| below this (deg)
+        "speed_cutout": 0.05,    # m/s floor applied to fast-rate speed
+        "tau": None,             # smoothing time constant; null = vehicle default
+    },
     "binning": {
         "method": "depth",
         "width": 1.0,
@@ -361,6 +369,23 @@ ctd:
   variables: null         # channels to bin (null = auto-detect)
   method: "mean"          # aggregation method
   diagnostics: false      # write n_samples, *_std per bin
+
+speed:
+  # Through-water speed source. Computed AFTER hotel merge so the
+  # method has access to both .p-file and hotel channels.
+  method: "pressure"      # pressure | em | flight | constant
+  # pressure : ODAS smoothed |dP/dt|. Correct for VMP. (default)
+  # em       : use the U_EM channel from the .p file (MicroRider EM
+  #            flowmeter). Errors out if U_EM is missing.
+  # flight   : |W| / (sin(|pitch|-aoa)*cos|roll|), pitch axis auto-
+  #            picked from Incl_X/Incl_Y by amplitude.
+  # constant : use the scalar in `value`.
+  value: null             # m/s, only when method="constant"
+  aoa_deg: 3.0            # angle of attack [deg], for method="flight"
+  min_pitch_deg: 5.0      # flight: drop samples with |pitch|-aoa < this
+  speed_cutout: 0.05      # m/s floor applied to fast-rate speed
+  tau: null               # smoothing tau [s]; null = vehicle default
+                          # (vmp/xmp 1.5, slocum_glider 3.0, ...)
 
 binning:
   method: "depth"         # depth | time
