@@ -107,6 +107,7 @@ DEFAULTS: dict[str, dict] = {
         "fit_method": "iterative",
         "spectrum_model": "kraichnan",
         "salinity": None,
+        "chi_minimum": 1.0e-13,
         "diagnostics": False,
     },
     "ctd": {
@@ -367,6 +368,7 @@ chi:
   fit_method: "iterative" # Method 2 fitting: iterative or mle
   spectrum_model: "kraichnan"  # theoretical spectrum: batchelor or kraichnan
   salinity: null          # salinity [PSU] (null = 35, fixed S)
+  chi_minimum: 1.0e-13    # floor for mk_chi_mean (values <= go to NaN)
   diagnostics: false      # write spec_noise, fp07_transfer, gradT_raw
 
 ctd:
