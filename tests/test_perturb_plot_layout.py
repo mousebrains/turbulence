@@ -127,15 +127,21 @@ class TestComputeLayout:
 
 class TestLatestStageDir:
     def test_picks_highest_versioned(self, tmp_path):
+        import os
+
         for n in (0, 1, 2, 5):
             (tmp_path / f"diss_{n:02d}").mkdir()
         got = layout.latest_stage_dir(str(tmp_path), "diss")
-        assert got is not None and got.endswith("/diss_05")
+        assert got is not None
+        assert os.path.basename(got) == "diss_05"
 
     def test_legacy_fallback(self, tmp_path):
+        import os
+
         (tmp_path / "diss").mkdir()
         got = layout.latest_stage_dir(str(tmp_path), "diss")
-        assert got is not None and got.endswith("/diss")
+        assert got is not None
+        assert os.path.basename(got) == "diss"
 
     def test_missing_returns_none(self, tmp_path):
         assert layout.latest_stage_dir(str(tmp_path), "diss") is None

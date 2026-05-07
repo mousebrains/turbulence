@@ -21,6 +21,7 @@ dependencies = [
     "gsw>=3.6,<4",
     "ruamel.yaml>=0.18",
     "matplotlib>=3.8,<4",
+    "cmocean>=3.0,<5",
 ]
 
 [project.optional-dependencies]
