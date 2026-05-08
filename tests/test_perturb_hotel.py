@@ -555,3 +555,158 @@ class TestPerVariableSchema:
                         channels={"speed": None})
         assert "speed" in hd.channels
         assert "pitch" not in hd.channels
+
+
+# ---------------------------------------------------------------------------
+# Per-channel time_column override
+# ---------------------------------------------------------------------------
+
+
+def _make_multi_time_nc(path):
+    """A hotel NetCDF with two distinct time dims and one channel on each."""
+    import netCDF4 as nc
+
+    ds = nc.Dataset(str(path), "w")
+    ds.createDimension("time_sci", 5)
+    ds.createDimension("time_flight", 3)
+    t_sci = ds.createVariable("time_sci", "f8", ("time_sci",))
+    t_flt = ds.createVariable("time_flight", "f8", ("time_flight",))
+    t_sci[:] = [0, 1, 2, 3, 4]
+    t_flt[:] = [0.5, 2.0, 3.5]
+    p = ds.createVariable("P", "f8", ("time_sci",))
+    q = ds.createVariable("q_drop", "u1", ("time_flight",))
+    p[:] = [10.0, 11.0, 12.0, 13.0, 14.0]
+    q[:] = [0, 1, 0]
+    ds.close()
+    return path
+
+
+class TestPerChannelTimeColumn:
+    def test_load_populates_channel_times(self, tmp_path):
+        nc_file = _make_multi_time_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(
+            nc_file,
+            time_column="time_sci",
+            time_format="seconds",
+            channels={
+                "P": {},
+                "q_drop": {"time_column": "time_flight"},
+            },
+        )
+        assert "P" in hd.channels and "q_drop" in hd.channels
+        # P uses default time, q_drop has its own.
+        np.testing.assert_array_equal(hd.time_for("P"), [0, 1, 2, 3, 4])
+        np.testing.assert_array_equal(hd.time_for("q_drop"), [0.5, 2.0, 3.5])
+
+    def test_default_time_column_for_channels_without_override(self, tmp_path):
+        nc_file = _make_multi_time_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(
+            nc_file, time_column="time_sci", time_format="seconds",
+            channels={"P": {}},
+        )
+        # No override → channel_times empty, time_for falls back to default.
+        assert hd.channel_times == {}
+        np.testing.assert_array_equal(hd.time_for("P"), [0, 1, 2, 3, 4])
+
+    def test_unknown_time_column_raises(self, tmp_path):
+        nc_file = _make_multi_time_nc(tmp_path / "hotel.nc")
+        with pytest.raises(ValueError, match="time_column 'time_bogus'"):
+            load_hotel(
+                nc_file, time_column="time_sci", time_format="seconds",
+                channels={"P": {"time_column": "time_bogus"}},
+            )
+
+    def test_interpolate_uses_per_channel_time(self, tmp_path):
+        """Each channel interpolates against its own time array."""
+        from odas_tpw.perturb.hotel import interpolate_hotel
+
+        nc_file = _make_multi_time_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(
+            nc_file, time_column="time_sci", time_format="seconds",
+            channels={
+                "P": {},
+                "q_drop": {"time_column": "time_flight", "interp": "nearest"},
+            },
+        )
+        pf = _MockPFileWithInfo(n_slow=5, n_fast=50)
+        # pf.t_slow = linspace(0, 4, 5) = [0, 1, 2, 3, 4]
+        result = interpolate_hotel(
+            hd, pf,
+            {
+                "channels": {
+                    "P": {},
+                    "q_drop": {"time_column": "time_flight", "interp": "nearest"},
+                },
+                "fast_channels": [],
+                "interpolation": "linear",
+            },
+        )
+        # P linear-interp on its own grid (identity since pf.t_slow == its grid).
+        np.testing.assert_allclose(result["P"], [10, 11, 12, 13, 14])
+        # q_drop is on time_flight = [0.5, 2.0, 3.5] with values [0, 1, 0].
+        # nearest-neighbour at pf.t_slow gives:
+        #   t=0   → nearest 0.5 → 0
+        #   t=1   → nearest 0.5 → 0
+        #   t=2   → nearest 2.0 → 1
+        #   t=3   → nearest 3.5 → 0
+        #   t=4   → nearest 3.5 → 0
+        np.testing.assert_array_equal(result["q_drop"], [0, 0, 1, 0, 0])
+
+    def test_csv_per_channel_time_column(self, tmp_path):
+        """CSV form supports the same per-channel time_column."""
+        import pandas as pd
+
+        path = tmp_path / "hotel.csv"
+        pd.DataFrame({
+            "time_sci": [0, 1, 2, 3, 4],
+            "P": [10.0, 11.0, 12.0, 13.0, 14.0],
+            "time_flight": [0.5, 1.5, 2.5, 3.5, 4.5],
+            "q_drop": [0, 1, 0, 0, 0],
+        }).to_csv(path, index=False)
+        hd = load_hotel(
+            path, time_column="time_sci", time_format="seconds",
+            channels={
+                "P": {},
+                "q_drop": {"time_column": "time_flight"},
+            },
+        )
+        np.testing.assert_array_equal(hd.time_for("q_drop"),
+                                      [0.5, 1.5, 2.5, 3.5, 4.5])
+
+    def test_singleton_time_grid_skipped(self, tmp_path):
+        """A channel with only one sample on its time grid can't be
+        interpolated — interpolate_hotel silently skips it."""
+        import netCDF4 as nc
+
+        from odas_tpw.perturb.hotel import interpolate_hotel
+
+        path = tmp_path / "hotel.nc"
+        ds = nc.Dataset(str(path), "w")
+        ds.createDimension("time_sci", 3)
+        ds.createDimension("time_event", 1)
+        t_sci = ds.createVariable("time_sci", "f8", ("time_sci",))
+        t_evt = ds.createVariable("time_event", "f8", ("time_event",))
+        t_sci[:] = [0, 1, 2]
+        t_evt[:] = [1.5]
+        p = ds.createVariable("P", "f8", ("time_sci",))
+        e = ds.createVariable("event", "u1", ("time_event",))
+        p[:] = [10.0, 11.0, 12.0]
+        e[:] = [1]
+        ds.close()
+
+        hd = load_hotel(
+            path, time_column="time_sci", time_format="seconds",
+            channels={
+                "P": {},
+                "event": {"time_column": "time_event", "interp": "nearest"},
+            },
+        )
+        pf = _MockPFileWithInfo(n_slow=3, n_fast=12)
+        out = interpolate_hotel(
+            hd, pf,
+            {"channels": {"P": {},
+                          "event": {"time_column": "time_event", "interp": "nearest"}},
+             "fast_channels": [], "interpolation": "linear"},
+        )
+        assert "P" in out
+        assert "event" not in out  # singleton skipped
