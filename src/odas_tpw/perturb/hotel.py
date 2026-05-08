@@ -19,6 +19,12 @@ The ``hotel.channels`` YAML block supports three forms per source name:
         offset: 0.0          # additive offset (default 0.0)
         units: "rad"         # CF units string (default: source file's units)
         fast: false          # interpolate to fast rate? (default: name in hotel.fast_channels)
+        time_column: "time_flight"   # NetCDF time variable for this channel
+                                     # (default: hotel.time_column). Lets a single
+                                     # hotel file carry channels on multiple native
+                                     # time grids, e.g. CTD on time_sci, flight
+                                     # vars on time_flight, sparse modem events
+                                     # on time_modem_event.
 
 If ``channels`` is empty or omitted, every source variable is loaded with
 default options. Otherwise only the source names listed are kept.
@@ -38,7 +44,7 @@ _INTERP_KINDS = frozenset({
 })
 
 _CHANNEL_OPTION_KEYS = frozenset({
-    "name", "interp", "scale", "offset", "units", "fast",
+    "name", "interp", "scale", "offset", "units", "fast", "time_column",
 })
 
 
@@ -49,21 +55,35 @@ class HotelData:
     Attributes
     ----------
     time : np.ndarray
-        Time vector in epoch seconds (or relative seconds).
+        Default time vector for channels that don't override
+        ``time_column``. Epoch seconds (or relative seconds — see
+        ``time_is_relative``).
     channels : dict[str, np.ndarray]
         Source channel name → data array. Renaming and per-variable
         transforms are applied later by :func:`merge_hotel_into_pfile`.
+    channel_times : dict[str, np.ndarray]
+        Per-channel time array override. Keys are source channel names;
+        values are time arrays in the same units as ``time``. Channels
+        not in this dict use the default ``time``. Lets a single hotel
+        file carry channels on multiple native time grids.
     units : dict[str, str]
         Source channel name → CF-compatible units string from the file.
         Empty if not known. The merge step may override these.
     time_is_relative : bool
-        True if time values are relative seconds (not epoch).
+        True if time values are relative seconds (not epoch). Applies to
+        every time array (default and per-channel) — mixing relative and
+        absolute time arrays in one hotel file is not supported.
     """
 
     time: np.ndarray
     channels: dict[str, np.ndarray] = field(default_factory=dict)
+    channel_times: dict[str, np.ndarray] = field(default_factory=dict)
     units: dict[str, str] = field(default_factory=dict)
     time_is_relative: bool = False
+
+    def time_for(self, channel: str) -> np.ndarray:
+        """Time array a channel lives on (override → default fallback)."""
+        return self.channel_times.get(channel, self.time)
 
 
 def _normalize_channels_cfg(
@@ -149,6 +169,23 @@ def _parse_time(raw_time: np.ndarray, time_format: str) -> tuple[np.ndarray, boo
         raise ValueError(f"Unknown time_format: {time_format!r}")
 
 
+def _per_channel_time_columns(
+    options: dict[str, dict], default_time_column: str,
+) -> dict[str, str]:
+    """Map source-name → time variable name for any channel overriding it.
+
+    Returns ``{channel: time_column}`` only for channels whose option dict
+    has a ``time_column`` different from *default_time_column*. Channels
+    that don't override are left out (they implicitly use the default).
+    """
+    out: dict[str, str] = {}
+    for src, opts in options.items():
+        tc = opts.get("time_column")
+        if tc and tc != default_time_column:
+            out[src] = tc
+    return out
+
+
 def load_hotel(
     path: str | Path,
     time_column: str = "time",
@@ -162,33 +199,38 @@ def load_hotel(
     path : str or Path
         Path to hotel file.
     time_column : str
-        Name of the time column/variable.
+        Name of the *default* time column / variable. Channels in the
+        ``channels`` mapping may override this with their own
+        ``time_column`` to ride a different time grid in the same file.
     time_format : str
         Time format: ``"auto"``, ``"seconds"``, ``"epoch"``, ``"iso"``.
     channels : dict, optional
         ``hotel.channels`` block (see module docstring). Only the source
-        names listed are loaded; any rename / scale / offset / units /
-        interp / fast options are applied later by
+        names listed are loaded; rename / scale / offset / units /
+        interp / fast / time_column options are applied later by
         :func:`merge_hotel_into_pfile`. ``None`` or ``{}`` loads every
-        source channel under its native name.
+        source channel under its native name on the default time grid.
 
     Returns
     -------
     HotelData
         Channels and units keyed by *source* name (no rename applied).
+        ``HotelData.channel_times`` is populated for any channel using
+        a non-default ``time_column``; the rest use ``HotelData.time``.
     """
     path = Path(path)
     ext = path.suffix.lower()
 
-    filter_active, _ = _normalize_channels_cfg(channels)
+    filter_active, options = _normalize_channels_cfg(channels)
     allowed = set(channels.keys()) if filter_active and channels else None
+    per_chan_time = _per_channel_time_columns(options, time_column)
 
     if ext == ".csv":
-        return _load_csv(path, time_column, time_format, allowed)
+        return _load_csv(path, time_column, time_format, allowed, per_chan_time)
     elif ext in (".nc", ".nc4"):
-        return _load_netcdf(path, time_column, time_format, allowed)
+        return _load_netcdf(path, time_column, time_format, allowed, per_chan_time)
     elif ext == ".mat":
-        return _load_mat(path, time_column, time_format, allowed)
+        return _load_mat(path, time_column, time_format, allowed, per_chan_time)
     else:
         raise ValueError(f"Unsupported hotel file format: {ext!r}. Supported: .csv, .nc, .mat")
 
@@ -198,6 +240,7 @@ def _load_csv(
     time_column: str,
     time_format: str,
     allowed: set[str] | None,
+    per_chan_time: dict[str, str],
 ) -> HotelData:
     import pandas as pd
 
@@ -205,12 +248,24 @@ def _load_csv(
     raw_time = np.asarray(df[time_column].values)
     time, is_relative = _parse_time(raw_time, time_format)
 
-    data_cols = [c for c in df.columns if c != time_column]
+    extra_time_cols = set(per_chan_time.values())
+    data_cols = [c for c in df.columns if c != time_column and c not in extra_time_cols]
     if allowed is not None:
         data_cols = [c for c in data_cols if c in allowed]
     ch = {c: df[c].values.astype(np.float64) for c in data_cols}
     units = dict.fromkeys(ch, "")
-    return HotelData(time=time, channels=ch, units=units, time_is_relative=is_relative)
+
+    channel_times: dict[str, np.ndarray] = {}
+    for src, tc in per_chan_time.items():
+        if allowed is not None and src not in allowed:
+            continue
+        if tc not in df.columns:
+            raise ValueError(f"hotel: time_column {tc!r} not found in {path}")
+        t_arr, _ = _parse_time(np.asarray(df[tc].values), time_format)
+        channel_times[src] = t_arr
+
+    return HotelData(time=time, channels=ch, channel_times=channel_times,
+                     units=units, time_is_relative=is_relative)
 
 
 def _load_netcdf(
@@ -218,6 +273,7 @@ def _load_netcdf(
     time_column: str,
     time_format: str,
     allowed: set[str] | None,
+    per_chan_time: dict[str, str],
 ) -> HotelData:
     import netCDF4 as nc
 
@@ -225,7 +281,9 @@ def _load_netcdf(
     raw_time = ds.variables[time_column][:].data
     time, is_relative = _parse_time(raw_time, time_format)
 
-    data_vars = [v for v in ds.variables if v != time_column]
+    extra_time_cols = set(per_chan_time.values())
+    skip = {time_column} | extra_time_cols
+    data_vars = [v for v in ds.variables if v not in skip]
     if allowed is not None:
         data_vars = [v for v in data_vars if v in allowed]
     ch: dict[str, np.ndarray] = {}
@@ -234,9 +292,21 @@ def _load_netcdf(
         var = ds.variables[v]
         ch[v] = var[:].data.astype(np.float64)
         units[v] = getattr(var, "units", "") or ""
+
+    channel_times: dict[str, np.ndarray] = {}
+    for src, tc in per_chan_time.items():
+        if allowed is not None and src not in allowed:
+            continue
+        if tc not in ds.variables:
+            ds.close()
+            raise ValueError(f"hotel: time_column {tc!r} not found in {path}")
+        raw = ds.variables[tc][:].data
+        t_arr, _ = _parse_time(raw, time_format)
+        channel_times[src] = t_arr
     ds.close()
 
-    return HotelData(time=time, channels=ch, units=units, time_is_relative=is_relative)
+    return HotelData(time=time, channels=ch, channel_times=channel_times,
+                     units=units, time_is_relative=is_relative)
 
 
 def _load_mat(
@@ -244,6 +314,7 @@ def _load_mat(
     time_column: str,
     time_format: str,
     allowed: set[str] | None,
+    per_chan_time: dict[str, str],
 ) -> HotelData:
     from scipy.io import loadmat
 
@@ -253,6 +324,8 @@ def _load_mat(
     # Also handle flat arrays
     ch: dict[str, np.ndarray] = {}
     raw_time: np.ndarray | None = None
+    extra_time_cols = set(per_chan_time.values())
+    extra_time_arrays: dict[str, np.ndarray] = {}
 
     for key, val in mat.items():
         if key.startswith("_"):
@@ -266,6 +339,10 @@ def _load_mat(
             struct = val.flat[0] if val.ndim > 0 else val
             if key == time_column:
                 raw_time = np.asarray(struct["time"]).flatten().astype(np.float64)
+            elif key in extra_time_cols:
+                extra_time_arrays[key] = (
+                    np.asarray(struct["time"]).flatten().astype(np.float64)
+                )
             else:
                 if allowed is None or key in allowed:
                     ch[key] = np.asarray(struct["data"]).flatten().astype(np.float64)
@@ -276,6 +353,8 @@ def _load_mat(
         arr = np.asarray(val).flatten()
         if key == time_column:
             raw_time = arr.astype(np.float64)
+        elif key in extra_time_cols:
+            extra_time_arrays[key] = arr.astype(np.float64)
         else:
             if allowed is None or key in allowed:
                 ch[key] = arr.astype(np.float64)
@@ -285,7 +364,18 @@ def _load_mat(
 
     time, is_relative = _parse_time(raw_time, time_format)
     units = dict.fromkeys(ch, "")
-    return HotelData(time=time, channels=ch, units=units, time_is_relative=is_relative)
+
+    channel_times: dict[str, np.ndarray] = {}
+    for src, tc in per_chan_time.items():
+        if allowed is not None and src not in allowed:
+            continue
+        if tc not in extra_time_arrays:
+            raise ValueError(f"hotel: time_column {tc!r} not found in {path}")
+        t_arr, _ = _parse_time(extra_time_arrays[tc], time_format)
+        channel_times[src] = t_arr
+
+    return HotelData(time=time, channels=ch, channel_times=channel_times,
+                     units=units, time_is_relative=is_relative)
 
 
 def _interp_one(
@@ -333,10 +423,7 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
         )
     _, channels_opts = _normalize_channels_cfg(hotel_cfg.get("channels"))
 
-    if hotel_data.time_is_relative:
-        hotel_t = hotel_data.time
-    else:
-        hotel_t = hotel_data.time - pf.start_time.timestamp()
+    pf_start_offset = 0.0 if hotel_data.time_is_relative else pf.start_time.timestamp()
 
     result: dict[str, np.ndarray] = {}
     for src, data in hotel_data.channels.items():
@@ -347,6 +434,12 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
             target_t = pf.t_fast if opts["fast"] else pf.t_slow
         else:
             target_t = pf.t_fast if out_name in fast_channels else pf.t_slow
+        hotel_t = hotel_data.time_for(src) - pf_start_offset
+        # Sparse time grids (e.g. one-row-per-event modem listings) can have
+        # a single sample, which interpolators won't accept. Skip — caller
+        # gets nothing for that channel, same as a missing channel.
+        if hotel_t.size < 2:
+            continue
         result[src] = _interp_one(hotel_t, data, target_t, kind)
 
     return result
