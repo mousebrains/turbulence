@@ -59,6 +59,22 @@ class TestMkChiMean:
         assert "chiMean" in ds
         assert np.isfinite(ds["chiMean"].values[0])
 
+    def test_all_nan_row_does_not_raise(self):
+        """Row where every probe is NaN (e.g. fom_max NaN'd both) should
+        produce NaN in chiMean rather than tripping nanargmax's
+        all-NaN-slice ValueError.
+        """
+        n = 10
+        c1 = np.full(n, 1e-7)
+        c2 = np.full(n, 5e-3)  # huge spread so iterative removal kicks in
+        c1[4] = np.nan
+        c2[4] = np.nan          # row 4 is all-NaN
+        ds = mk_chi_mean(_make_chi_ds(c1, c2))
+        chi_mean = ds["chiMean"].values
+        assert np.isnan(chi_mean[4])
+        # Other rows still computable.
+        assert np.all(np.isfinite(chi_mean[[0, 1, 2, 3, 5, 6, 7, 8, 9]]))
+
     def test_chiLnSigma_added(self):
         n = 10
         c = np.full(n, 1e-8)
