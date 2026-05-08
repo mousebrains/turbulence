@@ -139,6 +139,10 @@ DEFAULTS: dict[str, dict] = {
         "drop_action": "nan",     # nan | flag_only
         "epsilon_drop_from": [],  # e.g. ["q_drop_epsilon"]
         "chi_drop_from": [],      # e.g. ["q_drop_chi"]
+        # Internal range-check rules. Each entry produces a synthetic
+        # uint8 channel and can be referenced by *_drop_from.
+        # See odas_tpw.perturb.qc_rules for the per-entry schema.
+        "rules": {},
     },
     "binning": {
         "method": "depth",
