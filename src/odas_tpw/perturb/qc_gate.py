@@ -93,11 +93,15 @@ def compute_segment_drop(
         info = pf.channel_info.get(name, {}) if hasattr(pf, "channel_info") else {}
         meanings = info.get("flag_meanings")
         masks = info.get("flag_masks")
-        if meanings and masks:
+        if meanings and masks is not None:
             mlist = (
                 meanings.split() if isinstance(meanings, str) else list(meanings)
             )
-            mklist = list(masks) if not np.isscalar(masks) else [masks]
+            mklist: list[int] = (
+                np.asarray(masks).ravel().astype(np.int64).tolist()
+                if not np.isscalar(masks)
+                else [int(masks)]  # type: ignore[arg-type]
+            )
             for word, mask in zip(mlist, mklist):
                 if word not in seen_meanings:
                     seen_meanings.add(word)
