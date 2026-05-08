@@ -412,6 +412,22 @@ def process_file(
                 p_path.name, speed_cfg.get("method", "pressure"), exc,
             )
 
+    # ---- Internal QC rules (after hotel + speed so all channels exist) ----
+    qc_rules_cfg = (config.get("qc") or {}).get("rules") or {}
+    if qc_rules_cfg:
+        try:
+            from odas_tpw.perturb.qc_rules import (
+                evaluate_rules,
+                register_rule_channels,
+            )
+
+            evaluated = evaluate_rules(pf, qc_rules_cfg)
+            register_rule_channels(pf, evaluated, qc_rules_cfg)
+        except Exception as exc:
+            logger.warning(
+                "qc.rules evaluation failed for %s: %s", p_path.name, exc,
+            )
+
     # Per-stage log files: each ``with stage_log(...)`` adds a FileHandler
     # for that stage's output dir so e.g. all CTD-binning records for ``a.p``
     # land in ``ctd_NN/a.log`` *and* the worker/run logs.  basename = stem so
