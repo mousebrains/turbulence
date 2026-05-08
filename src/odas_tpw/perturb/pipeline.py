@@ -289,6 +289,63 @@ def _adjust_profile_bounds(
     return adjusted
 
 
+def _apply_fom_cut(ds, fom_max: float, file_label: str) -> int:
+    """NaN per-probe per-segment values where ``fom >= fom_max``.
+
+    Operates on the (probe, time) array set returned by the diss / chi
+    stages. Mutates *ds* in place; returns the count of (probe, segment)
+    pairs that were NaN'd.
+
+    The FOM cut runs *before* ``mk_epsilon_mean`` / ``mk_chi_mean`` so
+    the per-probe drops are reflected in the geometric-mean and
+    log-sigma aggregates (a probe with bad FOM at one time step contributes
+    nothing to the combined estimate at that step, while the other
+    probe still does).
+
+    Variables masked:
+    - ``epsilon`` / ``chi`` (probe, time) — set NaN at flagged cells.
+    - ``e_N`` / ``chi_N`` (time,) — set NaN at the time slots where
+      probe ``N`` was flagged. ``mk_*_mean`` prefers these companions
+      so they need to agree.
+
+    Other per-probe metadata vars (``fom``, ``K_max``, ``kB`` etc.) are
+    left untouched — they're useful even at flagged segments for QC
+    and post-hoc diagnostics.
+    """
+    import numpy as np
+
+    if "fom" not in ds or "probe" not in ds.dims:
+        return 0
+    fom = ds["fom"].values
+    bad = np.isfinite(fom) & (fom >= fom_max)
+    if not bad.any():
+        return 0
+    n_bad = int(bad.sum())
+    n_probe = bad.shape[0]
+
+    # 2-D (probe, time) value vars
+    for v in ("epsilon", "chi", "epsilon_T"):
+        if v in ds.data_vars and ds[v].shape == fom.shape:
+            arr = ds[v].values.copy()
+            arr[bad] = np.nan
+            ds[v].values[...] = arr
+
+    # 1-D companions used by mk_*_mean
+    for i in range(n_probe):
+        for prefix in ("e_", "chi_"):
+            name = f"{prefix}{i + 1}"
+            if name in ds.data_vars:
+                arr = ds[name].values.copy()
+                arr[bad[i, :]] = np.nan
+                ds[name].values[...] = arr
+
+    logger.info(
+        "%s: fom_max=%g cut %d (probe,segment) cells",
+        file_label, fom_max, n_bad,
+    )
+    return n_bad
+
+
 def _nan_excluded_probes(ds, excluded_probes: list[str], file_label: str) -> None:
     """Set per-probe epsilon to NaN for shear probes named in *excluded_probes*.
 
@@ -603,9 +660,12 @@ def process_file(
                         },
                         _pre_loaded=pre_loaded,
                     )
+                    eps_fom_max = eps_cfg.get("fom_max")
                     for ds in diss_results:
                         if excluded_probes:
                             _nan_excluded_probes(ds, excluded_probes, p_path.name)
+                        if eps_fom_max is not None:
+                            _apply_fom_cut(ds, float(eps_fom_max), p_path.name)
                         ds = mk_epsilon_mean(ds, eps_cfg.get("epsilon_minimum", 1e-13))
                         if qc_enabled:
                             apply_qc_to_dataset(
@@ -633,11 +693,13 @@ def process_file(
             pass
         else:
             chi_use_epsilon = bool(chi_cfg.get("use_epsilon", True))
+            chi_fom_max = chi_cfg.get("fom_max")
             chi_kwargs = {
                 k: v
                 for k, v in chi_cfg.items()
                 if k not in (
-                    "enable", "chi_minimum", "diagnostics", "use_epsilon",
+                    "enable", "chi_minimum", "diagnostics",
+                    "use_epsilon", "fom_max",
                 )
             }
             with stage_log(output_dirs.get("chi"), log_basename):
@@ -663,6 +725,10 @@ def process_file(
                         if diss_ds is not None:
                             diss_ds.close()
                         for chi_ds in chi_results:
+                            if chi_fom_max is not None:
+                                _apply_fom_cut(
+                                    chi_ds, float(chi_fom_max), p_path.name,
+                                )
                             chi_ds = mk_chi_mean(
                                 chi_ds, chi_cfg.get("chi_minimum", 1e-13)
                             )
