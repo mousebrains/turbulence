@@ -632,25 +632,36 @@ def process_file(
         except ImportError:
             pass
         else:
+            chi_use_epsilon = bool(chi_cfg.get("use_epsilon", True))
+            chi_kwargs = {
+                k: v
+                for k, v in chi_cfg.items()
+                if k not in (
+                    "enable", "chi_minimum", "diagnostics", "use_epsilon",
+                )
+            }
             with stage_log(output_dirs.get("chi"), log_basename):
                 for prof_path, diss_path in zip(result["profiles"], result["diss"]):
                     try:
                         import xarray as xr
 
-                        diss_ds = xr.open_dataset(diss_path)
+                        # Method 1 uses shear-probe epsilon to seed kB.
+                        # Method 2 (use_epsilon=False) does a pure spectral
+                        # fit and is appropriate when shear epsilon is
+                        # contaminated (e.g. MR on a vibrating glider).
+                        diss_ds = (
+                            xr.open_dataset(diss_path) if chi_use_epsilon else None
+                        )
                         # Pop so the cache is released as we consume it.
                         pre_loaded = prof_data_cache.pop(prof_path, None)
                         chi_results = _compute_chi(
                             prof_path,
                             epsilon_ds=diss_ds,
-                            **{
-                                k: v
-                                for k, v in chi_cfg.items()
-                                if k not in ("enable", "chi_minimum", "diagnostics")
-                            },
+                            **chi_kwargs,
                             _pre_loaded=pre_loaded,
                         )
-                        diss_ds.close()
+                        if diss_ds is not None:
+                            diss_ds.close()
                         for chi_ds in chi_results:
                             chi_ds = mk_chi_mean(
                                 chi_ds, chi_cfg.get("chi_minimum", 1e-13)
