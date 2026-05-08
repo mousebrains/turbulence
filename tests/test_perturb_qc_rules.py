@@ -154,6 +154,102 @@ class TestInclinometerAutoPick:
         assert "pitch" not in out
         assert any("requires Incl_X and Incl_Y" in r.message for r in caplog.records)
 
+    def test_outlier_does_not_dominate_axis_pick(self):
+        """Regression test: sl684-style spike in roll axis must not flip pitch.
+
+        Real-data shape from RIOT sl684/MR433 deployment: a brief sensor
+        saturation drove ``Incl_X`` (roll) to -90°, giving a min-max spread
+        of ~155°. ``Incl_Y`` (the true pitch axis) had a typical glide
+        cycle spread of ~99°. Naive ``nanmax - nanmin`` flipped the axis
+        choice and produced a 92% pitch_oor flag rate.
+        """
+        n = 200
+        # Pitch on Incl_Y: realistic ±25° glide cycle.
+        incl_y = 25.0 * np.sin(2 * np.pi * np.arange(n) / 50.0)
+        # Roll on Incl_X: ±5° normal flight + one -90° saturation spike.
+        incl_x = 5.0 * np.sin(2 * np.pi * np.arange(n) / 30.0)
+        incl_x[3] = -90.0  # the offender — only one sample
+        pf = _StubPF(
+            t_slow=np.arange(n),
+            channels={"Incl_X": incl_x, "Incl_Y": incl_y},
+        )
+        # With min/max axis picking, Incl_X spread (~95°) > Incl_Y (~50°),
+        # pitch would resolve to Incl_X and roll_oor (|x|>10°) would flag
+        # nearly everything because pitch swings hit ±25°. With the
+        # percentile-spread heuristic, the spike falls outside (1, 99) so
+        # Incl_Y wins as pitch and roll resolves to Incl_X correctly.
+        out = evaluate_rules(
+            pf,
+            {
+                "pitch_oor": {"channel": "pitch", "abs_max": 45, "bit": 16},
+                "roll_oor": {"channel": "roll", "abs_max": 10, "bit": 32},
+            },
+        )
+        # Pitch on Incl_Y, |y|<=25 < 45 → no pitch flags.
+        assert out["pitch_oor"].sum() == 0
+        # Roll on Incl_X: only the -90° spike trips |x|>10 (plus a few
+        # samples near the sinusoid extremes that legitimately exceed 10°
+        # in principle, but with amplitude 5° they don't). The -90° spike
+        # is the only flagged sample.
+        assert out["roll_oor"][3] == 32
+        assert int((out["roll_oor"] != 0).sum()) == 1
+
+    def test_amplitude_quantile_yaml_override(self):
+        """``amplitude_quantile`` per-rule controls the spread window.
+
+        Using (0, 100) (i.e. nanmin/nanmax) reproduces the broken behavior:
+        the outlier-dominated axis wins. This guards against a future
+        regression that hard-codes the percentiles.
+        """
+        n = 200
+        incl_y = 25.0 * np.sin(2 * np.pi * np.arange(n) / 50.0)
+        incl_x = 5.0 * np.sin(2 * np.pi * np.arange(n) / 30.0)
+        incl_x[3] = -90.0
+        pf = _StubPF(
+            t_slow=np.arange(n),
+            channels={"Incl_X": incl_x, "Incl_Y": incl_y},
+        )
+        # Force min/max picking: Incl_X spread ~95° > Incl_Y ~50°, so
+        # pitch incorrectly resolves to Incl_X. With aoa+pitch swings of
+        # ±25 on the wrong axis, plenty of |pitch|>20 samples will fire.
+        out = evaluate_rules(
+            pf,
+            {
+                "pitch_oor": {
+                    "channel": "pitch", "abs_max": 20, "bit": 16,
+                    "amplitude_quantile": [0.0, 100.0],
+                },
+            },
+        )
+        # With wrong axis (Incl_X, ±5° normal + spike), |x|>20 only fires
+        # at the spike → exactly one flagged sample.
+        assert out["pitch_oor"][3] == 16
+        assert int((out["pitch_oor"] != 0).sum()) == 1
+
+    def test_amplitude_quantile_invalid_range_raises(self):
+        pf = _StubPF(
+            t_slow=np.arange(5),
+            channels={"Incl_X": np.zeros(5), "Incl_Y": np.zeros(5)},
+        )
+        with pytest.raises(ValueError, match="amplitude_quantile"):
+            evaluate_rules(
+                pf,
+                {"pitch": {"channel": "pitch", "abs_max": 45, "bit": 16,
+                           "amplitude_quantile": [50.0, 50.0]}},
+            )
+        with pytest.raises(ValueError, match="amplitude_quantile"):
+            evaluate_rules(
+                pf,
+                {"pitch": {"channel": "pitch", "abs_max": 45, "bit": 16,
+                           "amplitude_quantile": [-1.0, 99.0]}},
+            )
+        with pytest.raises(ValueError, match="amplitude_quantile"):
+            evaluate_rules(
+                pf,
+                {"pitch": {"channel": "pitch", "abs_max": 45, "bit": 16,
+                           "amplitude_quantile": [1.0]}},
+            )
+
 
 # ---------------------------------------------------------------------------
 # Missing channels warn-and-skip

@@ -108,8 +108,10 @@ def compute_speed_for_pfile(
     if method == "flight":
         aoa_deg = float(cfg.get("aoa_deg", 3.0))
         min_pitch_deg = float(cfg.get("min_pitch_deg", 5.0))
+        aq = cfg.get("amplitude_quantile") or (1.0, 99.0)
         speed_slow = _flight_model_slow(
             W_slow, pf, aoa_deg=aoa_deg, min_pitch_deg=min_pitch_deg,
+            amplitude_quantile=(float(aq[0]), float(aq[1])),
         )
         return _slow_to_fast(speed_slow, t_fast, t_slow, fs_fast, fs_slow,
                              tau=tau, speed_min=speed_cutout), W_slow
@@ -152,11 +154,14 @@ def _flight_model_slow(
     pf: Any,
     aoa_deg: float,
     min_pitch_deg: float,
+    amplitude_quantile: tuple[float, float] = (1.0, 99.0),
 ) -> np.ndarray:
     """U_along = |W| / (sin(|pitch|-aoa) * cos|roll|), at slow rate.
 
     Pitch axis auto-picked from whichever of ``Incl_X``/``Incl_Y`` has
-    the larger swing -- Slocum mountings vary.
+    the larger percentile-spread amplitude (default 99-1) -- Slocum
+    mountings vary, and percentiles keep brief outlier spikes from
+    masquerading as the high-amplitude flight axis.
     """
     iX = np.asarray(pf.channels.get("Incl_X"), dtype=np.float64) \
         if "Incl_X" in pf.channels else None
@@ -167,8 +172,9 @@ def _flight_model_slow(
             "speed.method='flight' needs Incl_X and Incl_Y channels in the "
             ".p file. Use 'pressure' or 'em' instead."
         )
-    iX_rng = float(np.nanmax(iX) - np.nanmin(iX))
-    iY_rng = float(np.nanmax(iY) - np.nanmin(iY))
+    lo_q, hi_q = float(amplitude_quantile[0]), float(amplitude_quantile[1])
+    iX_rng = float(np.nanpercentile(iX, hi_q) - np.nanpercentile(iX, lo_q))
+    iY_rng = float(np.nanpercentile(iY, hi_q) - np.nanpercentile(iY, lo_q))
     pitch_deg = iX if iX_rng >= iY_rng else iY
     roll_deg = iY if iX_rng >= iY_rng else iX
 
