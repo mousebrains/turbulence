@@ -655,6 +655,7 @@ def process_file(
                                 "T_source",
                                 "T1_norm",
                                 "T2_norm",
+                                "fom_max",
                                 "diagnostics",
                             )
                         },
