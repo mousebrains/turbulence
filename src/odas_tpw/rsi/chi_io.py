@@ -176,6 +176,7 @@ def _compute_chi(
             fit_method=fit_method,
             f_AA=f_AA,
             grad_func=grad_func,
+            chi_method=l4_chi.method,
         )
         ds.attrs.update(data["metadata"])
         ds.attrs["history"] = f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
@@ -370,6 +371,7 @@ def _build_chi_ds_from_pipeline(
     fit_method: str,
     f_AA: float,
     grad_func,
+    chi_method: str = "epsilon",
 ) -> xr.Dataset:
     """Build old-format xr.Dataset from L3ChiData + L4ChiData."""
     n_spec = l3_chi.n_spectra
@@ -421,6 +423,7 @@ def _build_chi_ds_from_pipeline(
         spectrum_model=spectrum_model,
         fit_method=fit_method,
         f_AA=f_AA,
+        chi_method=chi_method,
     )
 
 
@@ -452,6 +455,7 @@ def _build_chi_dataset(
     spectrum_model: str,
     fit_method: str,
     f_AA: float,
+    chi_method: str = "epsilon",
 ) -> xr.Dataset:
     """Build an xarray Dataset from chi estimation output arrays."""
     from odas_tpw.rsi.helpers import _build_result_dataset
@@ -612,6 +616,7 @@ def _build_chi_dataset(
             "spectrum_model": spectrum_model,
             "fit_method": fit_method,
             "f_AA": f_AA,
+            "chi_method": chi_method,
         },
     )
 

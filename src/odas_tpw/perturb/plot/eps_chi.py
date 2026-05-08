@@ -24,7 +24,13 @@ def _load_epsilon(diss_combo_path: str):
         eps = ds["epsilonMean"].transpose("bin", "profile").values
         depth = ds["bin"].values
         times = ds["stime"].values
-    return times, depth, eps
+        # qc_drop_epsilon is float64 with NaN where no samples fell;
+        # non-zero values flag bins to drop when --apply-qc is on.
+        if "qc_drop_epsilon" in ds.data_vars:
+            qc = ds["qc_drop_epsilon"].transpose("bin", "profile").values
+        else:
+            qc = None
+    return times, depth, eps, qc
 
 
 def _load_chi_from_combo(chi_combo_path: str, chi_attrs_dir: str):
@@ -37,12 +43,16 @@ def _load_chi_from_combo(chi_combo_path: str, chi_attrs_dir: str):
         chi = ds["chiMean"].transpose("bin", "profile").values
         depth = ds["bin"].values
         times = ds["stime"].values
+        if "qc_drop_chi" in ds.data_vars:
+            qc = ds["qc_drop_chi"].transpose("bin", "profile").values
+        else:
+            qc = None
     attrs: dict = {}
     sample = sorted(glob.glob(os.path.join(chi_attrs_dir, "*_prof*.nc")))
     if sample:
         with xr.open_dataset(sample[0]) as sds:
             attrs = dict(sds.attrs)
-    return times, depth, chi, attrs
+    return times, depth, chi, attrs, qc
 
 
 def _load_chi_legacy_per_profile(chi_dir: str, depth: np.ndarray):
@@ -74,7 +84,8 @@ def _load_chi_legacy_per_profile(chi_dir: str, depth: np.ndarray):
             chi[i, j] = v if np.isnan(cur) else 0.5 * (cur + v)
 
     order = np.argsort(times)
-    return times[order], chi[:, order], sample_attrs
+    # Legacy fallback has no aggregated qc bitfield.
+    return times[order], chi[:, order], sample_attrs, None
 
 
 def _per_profile_attrs(root: str, sibling_prefix: str) -> dict:
@@ -112,6 +123,12 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--gap-seconds", type=float, default=600,
                    help="split casts when gap exceeds this (default 10 min; "
                         "gliders typically want a larger value, e.g. 14400)")
+    p.add_argument("--apply-qc", dest="apply_qc", action="store_true",
+                   default=True,
+                   help="NaN bins where qc_drop_* is non-zero (default)")
+    p.add_argument("--no-qc", dest="apply_qc", action="store_false",
+                   help="ignore qc_drop_* and plot raw values "
+                        "(only useful with drop_action: flag_only)")
 
 
 def run(args: argparse.Namespace) -> str:
@@ -128,22 +145,26 @@ def run(args: argparse.Namespace) -> str:
     chi_combo_dir = layout.latest_stage_dir(args.root, "chi_combo")
     chi_dir = layout.latest_stage_dir(args.root, "chi")
 
-    t_eps, depth, eps = _load_epsilon(diss_combo)
+    t_eps, depth, eps, eps_qc = _load_epsilon(diss_combo)
 
     if chi_combo_dir is not None:
         chi_combo_path = os.path.join(chi_combo_dir, "combo.nc")
         with xr.open_dataset(chi_combo_path) as peek:
             has_chi_mean = "chiMean" in peek.data_vars
         if has_chi_mean and chi_dir is not None:
-            t_chi, _depth_chi, chi, chi_attrs = _load_chi_from_combo(
+            t_chi, _depth_chi, chi, chi_attrs, chi_qc = _load_chi_from_combo(
                 chi_combo_path, chi_dir
             )
         elif chi_dir is not None:
-            t_chi, chi, chi_attrs = _load_chi_legacy_per_profile(chi_dir, depth)
+            t_chi, chi, chi_attrs, chi_qc = _load_chi_legacy_per_profile(
+                chi_dir, depth
+            )
         else:
             raise SystemExit(f"No chi_NN dir under {args.root}")
     elif chi_dir is not None:
-        t_chi, chi, chi_attrs = _load_chi_legacy_per_profile(chi_dir, depth)
+        t_chi, chi, chi_attrs, chi_qc = _load_chi_legacy_per_profile(
+            chi_dir, depth
+        )
     else:
         raise SystemExit(f"No chi data under {args.root}")
 
@@ -160,11 +181,16 @@ def run(args: argparse.Namespace) -> str:
         eps_secs = t_eps.astype("datetime64[s]").astype(np.int64)
         chi_secs = t_chi.astype("datetime64[s]").astype(np.int64)
         aligned = np.full((chi.shape[0], len(t_eps)), np.nan)
+        aligned_qc = (
+            np.full((chi.shape[0], len(t_eps)), np.nan) if chi_qc is not None else None
+        )
         # Map each chi column to its nearest eps column (within 5 s).
         for j, s in enumerate(chi_secs):
             k = int(np.argmin(np.abs(eps_secs - s)))
             if abs(eps_secs[k] - s) <= 5:
                 aligned[:, k] = chi[:, j]
+                if aligned_qc is not None and chi_qc is not None:
+                    aligned_qc[:, k] = chi_qc[:, j]
         n_unmatched = int(np.sum(~np.isfinite(aligned).any(axis=0)))
         print(
             f"chi/eps profile counts differ ({len(t_chi)} chi vs "
@@ -172,6 +198,27 @@ def run(args: argparse.Namespace) -> str:
             f"({n_unmatched} eps slots have no chi)"
         )
         chi = aligned
+        chi_qc = aligned_qc
+
+    if args.apply_qc:
+        n_eps_dropped = 0
+        n_chi_dropped = 0
+        if eps_qc is not None:
+            mask = np.isfinite(eps_qc) & (eps_qc > 0)
+            n_eps_dropped = int(mask.sum())
+            eps = np.where(mask, np.nan, eps)
+        if chi_qc is not None:
+            mask = np.isfinite(chi_qc) & (chi_qc > 0)
+            n_chi_dropped = int(mask.sum())
+            chi = np.where(mask, np.nan, chi)
+        if eps_qc is not None or chi_qc is not None:
+            print(
+                f"applied QC: NaN'd {n_eps_dropped} eps bins, "
+                f"{n_chi_dropped} chi bins"
+            )
+    elif eps_qc is None and chi_qc is None:
+        # User asked --no-qc but the dataset has no qc bitfield to skip.
+        pass
     t = t_eps
 
     cast_x, segments, centers, t_starts, _t_ends = layout.compute_layout(
@@ -232,10 +279,20 @@ def run(args: argparse.Namespace) -> str:
             rf"$\varepsilon$: fft {eps_fft} s, diss {eps_diss} s   |   "
             rf"$\chi$: fft {chi_fft} s, diss {chi_diss} s"
         )
+    # chi_method tells us Method 1 (epsilon-driven) vs Method 2 (spectral fit).
+    # Older chi NCs lack this attr -- treat as Method 1 for backwards compat.
+    chi_method = chi_attrs.get("chi_method", "epsilon")
+    if chi_method == "fit":
+        fit_method = chi_attrs.get("fit_method", "iterative")
+        method_phrase = rf"{fit_method}-fit $k_B+\chi$"
+    else:
+        method_phrase = r"$\varepsilon$-fixed $k_B$"
+    qc_phrase = "QC applied" if args.apply_qc else "raw, no QC"
     title = args.title or os.path.basename(os.path.normpath(args.root))
     fig.suptitle(
         f"{title}   —   {lengths}   —   "
-        rf"$\chi$: {spectrum} spectrum, $\varepsilon$-fixed $k_B$, FP07 {fp07}"
+        rf"$\chi$: {spectrum} spectrum, {method_phrase}, FP07 {fp07}"
+        f"   —   {qc_phrase}"
     )
 
     ax_e.invert_yaxis()
