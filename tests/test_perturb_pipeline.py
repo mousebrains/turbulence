@@ -437,6 +437,70 @@ class TestProcessFile:
 
         process_file(tmp_path / "test.p", config, None, output_dirs)
         mock_chi.assert_called_once()
+        # Default use_epsilon=True → diss_ds is passed in (Method 1).
+        kwargs = mock_chi.call_args.kwargs
+        assert kwargs["epsilon_ds"] is not None, (
+            "use_epsilon=True (default) should pass the diss dataset"
+        )
+
+    @patch("odas_tpw.rsi.chi_io._load_therm_channels", return_value={})
+    @patch("odas_tpw.rsi.chi_io._compute_chi", return_value=[MagicMock()])
+    @patch("odas_tpw.rsi.dissipation._compute_epsilon")
+    @patch("odas_tpw.rsi.profile.extract_profiles")
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate", return_value={"channels": {}})
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_chi_use_epsilon_false_passes_none(
+        self,
+        mock_pfile_cls,
+        mock_smooth,
+        mock_get_prof,
+        mock_fp07_cal,
+        mock_extract,
+        mock_eps,
+        mock_chi,
+        mock_load_therm,
+        tmp_path,
+    ):
+        """chi.use_epsilon=False routes to Method 2 (epsilon_ds=None)."""
+        import xarray as xr
+
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = [{"start": 0, "end": 50}]
+
+        prof_dir = tmp_path / "profiles"
+        prof_dir.mkdir(parents=True, exist_ok=True)
+        diss_dir = tmp_path / "diss"
+        diss_dir.mkdir(parents=True, exist_ok=True)
+        chi_dir = tmp_path / "chi"
+        chi_dir.mkdir(parents=True, exist_ok=True)
+
+        prof_nc = prof_dir / "prof.nc"
+        prof_nc.touch()
+        mock_extract.return_value = ([prof_nc], [{}])
+
+        diss_nc = diss_dir / "prof.nc"
+        xr.Dataset({"epsilon": (("time",), [1e-8])}).to_netcdf(diss_nc)
+        mock_eps.return_value = [xr.Dataset({"epsilon": (("time",), [1e-8])})]
+
+        config = self._base_config(tmp_path)
+        config["chi"]["enable"] = True
+        config["chi"]["use_epsilon"] = False
+        output_dirs = {"profiles": prof_dir, "diss": diss_dir, "chi": chi_dir}
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+        mock_chi.assert_called_once()
+        kwargs = mock_chi.call_args.kwargs
+        assert kwargs["epsilon_ds"] is None, (
+            "use_epsilon=False should call _compute_chi with epsilon_ds=None"
+        )
+        assert "use_epsilon" not in kwargs, (
+            "use_epsilon must be popped, not forwarded to _compute_chi"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -104,7 +104,11 @@ DEFAULTS: dict[str, dict] = {
         "fp07_model": "single_pole",
         "goodman": True,
         "f_AA": 98.0,
-        "fit_method": "iterative",
+        "use_epsilon": True,     # Method 1 (chi from shear epsilon).
+                                 # Set false for Method 2 spectral fit -- a
+                                 # MR on a vibrating glider has unreliable
+                                 # epsilon and should not seed chi from it.
+        "fit_method": "iterative",  # Only used when use_epsilon=False
         "spectrum_model": "kraichnan",
         "salinity": None,
         "chi_minimum": 1.0e-13,
@@ -383,7 +387,13 @@ chi:
   fp07_model: "single_pole"  # FP07 transfer function model
   goodman: true           # Goodman coherent noise removal
   f_AA: 98.0              # anti-aliasing filter cutoff [Hz]
-  fit_method: "iterative" # Method 2 fitting: iterative or mle
+  use_epsilon: true       # true  = Method 1: chi from shear-probe epsilon.
+                          # false = Method 2: spectral fit (uses fit_method).
+                          # Set false for instruments where shear epsilon is
+                          # unreliable (e.g. MR on a glider with thruster /
+                          # surface vibration contaminating shear probes).
+  fit_method: "iterative" # Method 2 fitting: iterative or mle (ignored if
+                          # use_epsilon=true)
   spectrum_model: "kraichnan"  # theoretical spectrum: batchelor or kraichnan
   salinity: null          # salinity [PSU] (null = 35, fixed S)
   chi_minimum: 1.0e-13    # floor for mk_chi_mean (values <= go to NaN)
