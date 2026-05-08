@@ -21,6 +21,7 @@ dependencies = [
     "gsw>=3.6,<4",
     "ruamel.yaml>=0.18",
     "matplotlib>=3.8,<4",
+    "cmocean>=3.0,<5",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,7 @@ Repository = "https://github.com/mousebrains/turbulence"
 [project.scripts]
 rsi-tpw = "odas_tpw.rsi.cli:main"
 perturb = "odas_tpw.perturb.cli:main"
+perturb-plot = "odas_tpw.perturb.plot.cli:main"
 scor160-tpw = "odas_tpw.scor160.cli:main"
 pyturb-cli = "odas_tpw.pyturb.cli:main"
 
