@@ -140,6 +140,71 @@ class TestFlightMethod:
             np.median(speed_fast[1000:-1000]), expected, rtol=0.05,
         )
 
+    def test_flight_outlier_does_not_flip_pitch_axis(self, vmp_descent):
+        """Single saturation spike on the roll axis must not flip pitch.
+
+        Real-data shape from RIOT sl684: ``Incl_X`` (true roll) had a brief
+        -90° saturation that gave it a larger min-max spread than the
+        steady ±25° pitch swing on ``Incl_Y``. With the percentile-spread
+        heuristic (default 1..99), the spike falls outside the window and
+        ``Incl_Y`` is correctly chosen as pitch.
+        """
+        pf = vmp_descent
+        n = pf.channels["P"].size
+        # Pitch on Incl_Y: realistic ±25° glide.
+        pf.channels["Incl_Y"] = 25.0 * np.sin(2 * np.pi * np.arange(n) / 1024)
+        # Roll on Incl_X: ±5° flight + one -90° saturation spike.
+        roll = 5.0 * np.sin(2 * np.pi * np.arange(n) / 600)
+        roll[10] = -90.0
+        pf.channels["Incl_X"] = roll
+        speed_fast, _ = compute_speed_for_pfile(
+            pf, {"method": "flight", "aoa_deg": 3.0}, vehicle="slocum_glider",
+        )
+        # If the picker was fooled, pitch≈±5° and U = |W|/sin(2°) is huge
+        # (>10 m/s), or hits the floor. With the right axis the median
+        # speed should be order |W|/sin(~22°) ~ 1.3 m/s.
+        median_speed = float(np.median(speed_fast[1000:-1000]))
+        assert 0.5 < median_speed < 5.0, (
+            f"axis pick likely fooled by outlier: median speed {median_speed}"
+        )
+
+    def test_flight_amplitude_quantile_yaml_override(self, vmp_descent):
+        """``amplitude_quantile`` from the speed cfg is threaded into the picker.
+
+        Same outlier scenario as above. With the default (1, 99), pitch is
+        correctly Incl_Y. With (0, 100) (i.e. nanmin/nanmax), the -90°
+        spike on Incl_X dominates and pitch flips to the wrong axis,
+        producing a markedly different speed estimate. This guards
+        against a future regression that forgets to thread the YAML
+        option through.
+        """
+        pf = vmp_descent
+        n = pf.channels["P"].size
+        pf.channels["Incl_Y"] = 25.0 * np.sin(2 * np.pi * np.arange(n) / 1024)
+        roll = 5.0 * np.sin(2 * np.pi * np.arange(n) / 600)
+        roll[10] = -90.0
+        pf.channels["Incl_X"] = roll
+
+        good, _ = compute_speed_for_pfile(
+            pf,
+            {"method": "flight", "aoa_deg": 3.0,
+             "amplitude_quantile": [1.0, 99.0]},
+            vehicle="slocum_glider",
+        )
+        bad, _ = compute_speed_for_pfile(
+            pf,
+            {"method": "flight", "aoa_deg": 3.0,
+             "amplitude_quantile": [0.0, 100.0]},
+            vehicle="slocum_glider",
+        )
+        # The two should disagree substantially: same data, different
+        # picker. If the option is silently ignored, the medians coincide.
+        assert not np.allclose(
+            np.median(good[1000:-1000]),
+            np.median(bad[1000:-1000]),
+            rtol=0.1,
+        ), "amplitude_quantile cfg appears to be ignored"
+
     def test_flight_default_aoa_is_3deg(self, glider_with_incl):
         """Omitting ``aoa_deg`` uses ODAS default 3°."""
         a, _ = compute_speed_for_pfile(

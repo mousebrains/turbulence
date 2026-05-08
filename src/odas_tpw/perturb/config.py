@@ -126,6 +126,7 @@ DEFAULTS: dict[str, dict] = {
         "min_pitch_deg": 5.0,    # flight: skip |pitch+aoa| below this (deg)
         "speed_cutout": 0.05,    # m/s floor applied to fast-rate speed
         "tau": None,             # smoothing time constant; null = vehicle default
+        "amplitude_quantile": [1.0, 99.0],  # for flight pitch-axis auto-pick
     },
     # Per-segment QC gate. Each "_drop_from" entry names a hotel-injected
     # channel (uint8 bitfield or boolean) sampled by time over the segment's
@@ -413,6 +414,11 @@ speed:
   speed_cutout: 0.05      # m/s floor applied to fast-rate speed
   tau: null               # smoothing tau [s]; null = vehicle default
                           # (vmp/xmp 1.5, slocum_glider 3.0, ...)
+  amplitude_quantile: [1.0, 99.0]  # flight: percentile spread used to
+                                   # auto-pick the pitch axis from
+                                   # Incl_X/Incl_Y. 1..99 strips outliers
+                                   # (surface tumbles, sensor saturation
+                                   # spikes) that can dominate min/max.
 
 qc:
   enable: true

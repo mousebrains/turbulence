@@ -49,24 +49,45 @@ logger = logging.getLogger(__name__)
 
 # Maximum bit value we accept (uint8 fits 8 distinct flags).
 _MAX_BIT = 1 << 7
-_RULE_OPTION_KEYS = frozenset({"channel", "min", "max", "abs_max", "bit"})
+_RULE_OPTION_KEYS = frozenset({
+    "channel", "min", "max", "abs_max", "bit", "amplitude_quantile",
+})
+
+# Default low / high percentiles for inclinometer-axis amplitude detection.
+# 1..99 strips the outlier tails (e.g. surface tumbles or brief sensor
+# saturation spikes that can dominate ``nanmax - nanmin``) while still
+# capturing the bulk of the in-flight swing.
+_DEFAULT_AMPLITUDE_Q: tuple[float, float] = (1.0, 99.0)
 
 
-def _resolve_inclinometer_axis(pf: Any, want: str) -> str | None:
+def _resolve_inclinometer_axis(
+    pf: Any,
+    want: str,
+    amplitude_q: tuple[float, float] = _DEFAULT_AMPLITUDE_Q,
+) -> str | None:
     """Return ``Incl_X`` or ``Incl_Y`` (whichever is pitch / roll on this
-    instrument) by ``np.nanmax - np.nanmin`` amplitude. ``None`` when
-    neither inclinometer is present.
+    instrument) by percentile-spread amplitude. ``None`` when neither
+    inclinometer is present.
 
-    Same heuristic as :mod:`odas_tpw.perturb.speed`'s flight model: the
-    axis with the larger swing is pitch (the glider rotates more around
-    its body axis than rolls during normal flight); the other is roll.
+    The spread is the high minus the low percentile of each axis
+    (default 99-1). Percentiles keep brief outliers — e.g. a surface
+    tumble or sensor saturation that briefly drives one axis to
+    -90 deg — from masquerading as the high-amplitude flight axis.
+    Pitch is then the axis with the larger spread (the glider rotates
+    around its body axis during dive / climb cycles); the other axis
+    is roll.
+
+    Same heuristic is shared with :mod:`odas_tpw.perturb.speed`'s
+    flight model so a single deployment's QC and speed estimate agree
+    on which axis is which.
     """
     iX = pf.channels.get("Incl_X")
     iY = pf.channels.get("Incl_Y")
     if iX is None or iY is None:
         return None
-    rx = float(np.nanmax(iX) - np.nanmin(iX))
-    ry = float(np.nanmax(iY) - np.nanmin(iY))
+    lo_q, hi_q = float(amplitude_q[0]), float(amplitude_q[1])
+    rx = float(np.nanpercentile(iX, hi_q) - np.nanpercentile(iX, lo_q))
+    ry = float(np.nanpercentile(iY, hi_q) - np.nanpercentile(iY, lo_q))
     pitch_name, roll_name = ("Incl_X", "Incl_Y") if rx >= ry else ("Incl_Y", "Incl_X")
     return pitch_name if want == "pitch" else roll_name
 
@@ -117,7 +138,16 @@ def evaluate_rules(pf: Any, rules: dict[str, dict] | None) -> dict[str, np.ndarr
 
         # Resolve channel name (pseudo-name auto-detect for pitch / roll).
         if ch_name in ("pitch", "roll"):
-            resolved = _resolve_inclinometer_axis(pf, ch_name)
+            aq = cfg.get("amplitude_quantile") or _DEFAULT_AMPLITUDE_Q
+            if (not hasattr(aq, "__len__") or len(aq) != 2
+                    or not (0.0 <= float(aq[0]) < float(aq[1]) <= 100.0)):
+                raise ValueError(
+                    f"qc.rules.{name}.amplitude_quantile: must be a pair "
+                    f"[lo, hi] with 0 <= lo < hi <= 100, got {aq!r}"
+                )
+            resolved = _resolve_inclinometer_axis(
+                pf, ch_name, (float(aq[0]), float(aq[1])),
+            )
             if resolved is None:
                 logger.warning(
                     "qc.rules.%s: %r requires Incl_X and Incl_Y; skipping",
