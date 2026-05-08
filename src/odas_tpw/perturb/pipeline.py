@@ -355,6 +355,7 @@ def process_file(
     dict with output paths per stage.
     """
     from odas_tpw.perturb.fp07_cal import fp07_calibrate
+    from odas_tpw.perturb.qc_gate import apply_qc_to_dataset
     from odas_tpw.processing.chi_combine import mk_chi_mean
     from odas_tpw.processing.ct_align import ct_align
     from odas_tpw.processing.epsilon_combine import mk_epsilon_mean
@@ -543,6 +544,19 @@ def process_file(
     # well under 100 MB.  Skipped entirely when chi is disabled.
     prof_data_cache: dict[str, dict[str, Any]] = {}
 
+    # QC gate config — resolved once for both diss and chi loops below.
+    qc_cfg = merge_config("qc", config.get("qc"))
+    qc_enabled = bool(qc_cfg.get("enable", True))
+    qc_drop_action = qc_cfg.get("drop_action", "nan")
+    qc_eps_drop_from = list(qc_cfg.get("epsilon_drop_from") or [])
+    qc_chi_drop_from = list(qc_cfg.get("chi_drop_from") or [])
+    diss_length_samples = float(eps_cfg.get("diss_length") or 4 * eps_cfg.get("fft_length", 256))
+    diss_length_seconds = diss_length_samples / float(pf.fs_fast)
+    chi_diss_length_samples = float(
+        chi_cfg.get("diss_length") or 4 * chi_cfg.get("fft_length", 512)
+    )
+    chi_diss_length_seconds = chi_diss_length_samples / float(pf.fs_fast)
+
     if "diss" in output_dirs and result["profiles"]:
         with stage_log(output_dirs.get("diss"), log_basename):
             for prof_path in result["profiles"]:
@@ -577,6 +591,16 @@ def process_file(
                         if excluded_probes:
                             _nan_excluded_probes(ds, excluded_probes, p_path.name)
                         ds = mk_epsilon_mean(ds, eps_cfg.get("epsilon_minimum", 1e-13))
+                        if qc_enabled:
+                            apply_qc_to_dataset(
+                                ds, pf, qc_eps_drop_from, diss_length_seconds,
+                                flag_var_name="qc_drop_epsilon",
+                                value_vars=[
+                                    "epsilonMean", "epsilonLnSigma",
+                                    "e_1", "e_2", "epsilon",
+                                ],
+                                drop_action=qc_drop_action,
+                            )
                         _copy_profile_scalars(prof_path, ds, prof_scalars_cache)
                         out_name = Path(prof_path).name
                         out_path = output_dirs["diss"] / out_name
@@ -615,6 +639,18 @@ def process_file(
                             chi_ds = mk_chi_mean(
                                 chi_ds, chi_cfg.get("chi_minimum", 1e-13)
                             )
+                            if qc_enabled:
+                                apply_qc_to_dataset(
+                                    chi_ds, pf, qc_chi_drop_from,
+                                    chi_diss_length_seconds,
+                                    flag_var_name="qc_drop_chi",
+                                    value_vars=[
+                                        "chiMean", "chiLnSigma",
+                                        "chi_1", "chi_2", "chi",
+                                        "epsilon_T",
+                                    ],
+                                    drop_action=qc_drop_action,
+                                )
                             _copy_profile_scalars(prof_path, chi_ds, prof_scalars_cache)
                             out_name = Path(prof_path).name
                             out_path = output_dirs["chi"] / out_name

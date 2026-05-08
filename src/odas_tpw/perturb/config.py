@@ -127,6 +127,19 @@ DEFAULTS: dict[str, dict] = {
         "speed_cutout": 0.05,    # m/s floor applied to fast-rate speed
         "tau": None,             # smoothing time constant; null = vehicle default
     },
+    # Per-segment QC gate. Each "_drop_from" entry names a hotel-injected
+    # channel (uint8 bitfield or boolean) sampled by time over the segment's
+    # window; if any sample is nonzero, the segment is flagged. The
+    # qc_drop_epsilon / qc_drop_chi variables on the diss / chi NetCDFs are
+    # always written (CF flag attrs preserved from the source channel); when
+    # drop_action is "nan" the corresponding epsilon / chi values are also
+    # NaN'd so default plots and combos exclude them.
+    "qc": {
+        "enable": True,
+        "drop_action": "nan",     # nan | flag_only
+        "epsilon_drop_from": [],  # e.g. ["q_drop_epsilon"]
+        "chi_drop_from": [],      # e.g. ["q_drop_chi"]
+    },
     "binning": {
         "method": "depth",
         "width": 1.0,
@@ -396,6 +409,19 @@ speed:
   speed_cutout: 0.05      # m/s floor applied to fast-rate speed
   tau: null               # smoothing tau [s]; null = vehicle default
                           # (vmp/xmp 1.5, slocum_glider 3.0, ...)
+
+qc:
+  enable: true
+  drop_action: "nan"      # nan | flag_only
+                          # 'nan' NaNs e_*/epsilonMean (and chi_*/chiMean)
+                          # for flagged segments; 'flag_only' leaves the
+                          # values untouched. The qc_drop_* bitfield is
+                          # always written so plots can audit / mask.
+  epsilon_drop_from: []   # hotel channel names OR'd over each diss
+                          # segment's time window. Each named channel
+                          # should be a uint8 CF bitfield (or 0/1).
+                          # e.g. ["q_drop_epsilon"]
+  chi_drop_from: []       # same, for chi segments
 
 binning:
   method: "depth"         # depth | time
