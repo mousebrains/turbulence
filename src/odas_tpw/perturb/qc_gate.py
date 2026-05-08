@@ -126,12 +126,17 @@ def apply_qc_to_dataset(
 ) -> Any:
     """Add ``flag_var_name`` to *ds* and (optionally) NaN the value vars.
 
-    Returns the (mutated) dataset. ``ds`` must have a ``time`` coord
-    holding segment center times in seconds since ``pf.start_time``.
+    Returns the (mutated) dataset. The dataset must expose segment
+    center times in seconds since ``pf.start_time`` either as a ``t``
+    variable along the ``time`` dim (the diss / chi schema), or, as a
+    fallback, as the ``time`` coord values themselves.
     """
     import xarray as xr
 
-    seg_times = np.asarray(ds["time"].values, dtype=np.float64)
+    if "t" in ds.variables:
+        seg_times = np.asarray(ds["t"].values, dtype=np.float64)
+    else:
+        seg_times = np.asarray(ds["time"].values, dtype=np.float64)
     qc, attrs = compute_segment_drop(
         seg_times, diss_length_seconds, pf, drop_from
     )

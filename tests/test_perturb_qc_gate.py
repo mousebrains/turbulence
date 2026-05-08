@@ -150,6 +150,33 @@ class TestApplyQCToDataset:
         assert np.all(ds["qc_drop_epsilon"].values > 0)
         np.testing.assert_array_equal(ds["epsilonMean"].values, [1e-8, 1e-8])
 
+    def test_uses_t_coord_when_present(self):
+        """Diss / chi NetCDFs index segment time via a ``t`` variable in
+        seconds-since-pf.start_time. The dim coord ``time`` is just integer
+        indices [0..N-1] and must not be used."""
+        n = 3
+        ds = xr.Dataset(
+            {
+                "epsilonMean": (["time"], np.full(n, 1e-8)),
+                "t": (["time"], np.array([100.0, 101.0, 102.0])),
+            },
+            coords={"time": np.arange(n)},  # integer indices — wrong source
+        )
+        # q_drop hits exactly t=101 → only the middle segment should drop.
+        t_slow = np.arange(0.0, 200.0, 0.5)
+        q = np.zeros_like(t_slow, dtype=np.uint8)
+        q[202] = 1  # t=101.0
+        pf = _StubPF(t_slow=t_slow, channels={"q": q})
+        apply_qc_to_dataset(
+            ds, pf, ["q"], 1.0,
+            flag_var_name="qc_drop_epsilon",
+            value_vars=["epsilonMean"],
+        )
+        np.testing.assert_array_equal(ds["qc_drop_epsilon"].values, [0, 1, 0])
+        assert np.isfinite(ds["epsilonMean"].values[0])
+        assert np.isnan(ds["epsilonMean"].values[1])
+        assert np.isfinite(ds["epsilonMean"].values[2])
+
     def test_no_drop_from_only_writes_flag(self):
         seg_times = np.array([1.0, 2.0])
         ds = _make_diss_ds(seg_times)
