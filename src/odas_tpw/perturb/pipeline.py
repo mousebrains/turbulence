@@ -526,13 +526,23 @@ def process_file(
             return result
 
         W = _smooth_fall_rate(P_slow, pf.fs_slow)
+        # Resolve "auto" → vehicle default (e.g. slocum_glider → "glide").
+        # ``scor160.profile.get_profiles`` doesn't know "auto" itself, so
+        # without this it silently falls through to the "down" branch and
+        # we lose every up-profile -- on a glider with MR-on-during-climb
+        # only, that drops *all* the real flight data.
+        from odas_tpw.rsi.vehicle import resolve_direction
+        vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
+        direction = resolve_direction(
+            profiles_cfg.get("direction", "auto"), vehicle,
+        )
         profiles = get_profiles(
             P_slow,
             W,
             pf.fs_slow,
             P_min=profiles_cfg.get("P_min", 0.5),
             W_min=profiles_cfg.get("W_min", 0.3),
-            direction=profiles_cfg.get("direction", "down"),
+            direction=direction,
             min_duration=profiles_cfg.get("min_duration", 7.0),
         )
 

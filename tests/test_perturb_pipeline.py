@@ -265,6 +265,67 @@ class TestProcessFile:
     @patch("odas_tpw.rsi.profile.get_profiles")
     @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
     @patch("odas_tpw.rsi.p_file.PFile")
+    def test_direction_auto_resolves_via_vehicle(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_fp07_cal, mock_extract, tmp_path
+    ):
+        """profiles.direction='auto' must hit resolve_direction so a Slocum
+        glider gets ``glide`` (up + down). Without the resolver, ``get_profiles``
+        falls through to its default ``down`` branch and silently drops every
+        ascending profile -- which on a MR-on-during-climb deployment is *all*
+        the real flight data.
+        """
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pf.config = {"instrument_info": {"vehicle": "slocum_glider"}}
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = []  # we just want the kwargs
+
+        config = self._base_config(tmp_path)
+        config["profiles"]["direction"] = "auto"
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+        mock_get_prof.assert_called()
+        kwargs = mock_get_prof.call_args.kwargs
+        assert kwargs["direction"] == "glide", (
+            f"slocum_glider 'auto' should resolve to 'glide', "
+            f"got {kwargs['direction']!r}"
+        )
+
+    @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_direction_explicit_passes_through(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_fp07_cal, mock_extract, tmp_path
+    ):
+        """Explicit direction values bypass the resolver."""
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pf.config = {"instrument_info": {"vehicle": "slocum_glider"}}
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = []
+
+        config = self._base_config(tmp_path)
+        config["profiles"]["direction"] = "down"
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+        kwargs = mock_get_prof.call_args.kwargs
+        assert kwargs["direction"] == "down"
+
+    @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
     def test_fp07_cal_disabled(
         self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_fp07_cal, mock_extract, tmp_path
     ):
