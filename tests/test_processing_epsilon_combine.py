@@ -65,6 +65,21 @@ class TestMkEpsilonMean:
         # Non-NaN positions should have values
         assert np.isfinite(ds["epsilonMean"].values[0])
 
+    def test_all_nan_row_does_not_raise(self):
+        """Row where every probe is NaN (e.g. fom_max NaN'd both) must
+        not trip nanargmax's all-NaN-slice ValueError -- the iterative
+        removal loop has nothing to do on an empty row.
+        """
+        n = 10
+        e1 = np.full(n, 1e-7)
+        e2 = np.full(n, 1e-3)  # huge spread so iterative removal triggers
+        e1[4] = np.nan
+        e2[4] = np.nan          # row 4 is all-NaN
+        ds = mk_epsilon_mean(_make_diss_ds(e1, e2))
+        eps_mean = ds["epsilonMean"].values
+        assert np.isnan(eps_mean[4])
+        assert np.all(np.isfinite(eps_mean[[0, 1, 2, 3, 5, 6, 7, 8, 9]]))
+
     def test_epsilonLnSigma_added(self):
         n = 10
         e = np.full(n, 1e-8)

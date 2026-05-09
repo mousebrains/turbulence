@@ -138,11 +138,15 @@ def mk_chi_mean(
             max_c = np.nanmax(chi, axis=1)
             ratio = np.abs(np.log(max_c) - np.log(min_c))
 
-        outside = ratio > CF95_range
+        # Skip rows that are already all-NaN -- ``nanargmax`` raises on them.
+        any_finite = np.any(np.isfinite(chi), axis=1)
+        outside = (ratio > CF95_range) & any_finite
         if not np.any(outside):
             break
 
-        max_idx = np.nanargmax(chi, axis=1)
+        max_idx = np.full(chi.shape[0], -1, dtype=np.int64)
+        if np.any(any_finite):
+            max_idx[any_finite] = np.nanargmax(chi[any_finite], axis=1)
         for i in np.where(outside)[0]:
             chi[i, max_idx[i]] = np.nan
 

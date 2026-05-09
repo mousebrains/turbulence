@@ -94,6 +94,12 @@ DEFAULTS: dict[str, dict] = {
         "T_source": None,
         "T1_norm": 1.0,
         "T2_norm": 1.0,
+        "fom_max": None,         # null = no FOM cut. e.g. 2.0 NaNs each
+                                 # per-probe (e_N, epsilon[probe,:]) cell
+                                 # whose figure-of-merit fom[probe,seg]
+                                 # >= fom_max BEFORE mk_epsilon_mean, so
+                                 # bad probes drop out of the geomean
+                                 # individually.
         "diagnostics": False,
     },
     "chi": {
@@ -112,6 +118,9 @@ DEFAULTS: dict[str, dict] = {
         "spectrum_model": "kraichnan",
         "salinity": None,
         "chi_minimum": 1.0e-13,
+        "fom_max": None,         # null = no FOM cut. Same per-probe
+                                 # mechanism as epsilon.fom_max but
+                                 # operates on chi NCs.
         "diagnostics": False,
     },
     "ctd": {
@@ -377,6 +386,11 @@ epsilon:
   T_source: null          # temperature source for viscosity (null = blend T1/T2)
   T1_norm: 1.0            # T1 blending weight
   T2_norm: 1.0            # T2 blending weight
+  fom_max: null           # null = no FOM cut. e.g. 2.0 NaNs each per-probe
+                          # cell (e_N, epsilon[probe,:]) where its FOM
+                          # >= fom_max -- applied BEFORE mk_epsilon_mean,
+                          # so bad probes drop out of the geomean
+                          # individually rather than spoiling the segment.
   diagnostics: false      # write spec_shear_raw, spike_count, probe_mask
 
 chi:
@@ -397,6 +411,9 @@ chi:
   spectrum_model: "kraichnan"  # theoretical spectrum: batchelor or kraichnan
   salinity: null          # salinity [PSU] (null = 35, fixed S)
   chi_minimum: 1.0e-13    # floor for mk_chi_mean (values <= go to NaN)
+  fom_max: null           # null = no FOM cut. Same per-probe mechanism as
+                          # epsilon.fom_max but on chi NCs (NaN's chi[probe,
+                          # seg] / chi_N where fom[probe, seg] >= fom_max).
   diagnostics: false      # write spec_noise, fp07_transfer, gradT_raw
 
 ctd:

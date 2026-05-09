@@ -120,12 +120,18 @@ def mk_epsilon_mean(
             max_e = np.nanmax(epsilon, axis=1)
             ratio = np.abs(np.log(max_e) - np.log(min_e))
 
-        outside = ratio > CF95_range
+        # Skip rows that are already all-NaN (e.g. fom_max NaN'd both probes
+        # at this segment) -- ``nanargmax`` raises ValueError on them, and
+        # there's nothing left to drop anyway.
+        any_finite = np.any(np.isfinite(epsilon), axis=1)
+        outside = (ratio > CF95_range) & any_finite
         if not np.any(outside):
             break
 
         # Set the maximum value to NaN for rows outside CI
-        max_idx = np.nanargmax(epsilon, axis=1)
+        max_idx = np.full(epsilon.shape[0], -1, dtype=np.int64)
+        if np.any(any_finite):
+            max_idx[any_finite] = np.nanargmax(epsilon[any_finite], axis=1)
         for i in np.where(outside)[0]:
             epsilon[i, max_idx[i]] = np.nan
 

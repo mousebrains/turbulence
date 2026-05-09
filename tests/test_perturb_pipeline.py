@@ -265,6 +265,67 @@ class TestProcessFile:
     @patch("odas_tpw.rsi.profile.get_profiles")
     @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
     @patch("odas_tpw.rsi.p_file.PFile")
+    def test_direction_auto_resolves_via_vehicle(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_fp07_cal, mock_extract, tmp_path
+    ):
+        """profiles.direction='auto' must hit resolve_direction so a Slocum
+        glider gets ``glide`` (up + down). Without the resolver, ``get_profiles``
+        falls through to its default ``down`` branch and silently drops every
+        ascending profile -- which on a MR-on-during-climb deployment is *all*
+        the real flight data.
+        """
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pf.config = {"instrument_info": {"vehicle": "slocum_glider"}}
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = []  # we just want the kwargs
+
+        config = self._base_config(tmp_path)
+        config["profiles"]["direction"] = "auto"
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+        mock_get_prof.assert_called()
+        kwargs = mock_get_prof.call_args.kwargs
+        assert kwargs["direction"] == "glide", (
+            f"slocum_glider 'auto' should resolve to 'glide', "
+            f"got {kwargs['direction']!r}"
+        )
+
+    @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_direction_explicit_passes_through(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_fp07_cal, mock_extract, tmp_path
+    ):
+        """Explicit direction values bypass the resolver."""
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pf.config = {"instrument_info": {"vehicle": "slocum_glider"}}
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = []
+
+        config = self._base_config(tmp_path)
+        config["profiles"]["direction"] = "down"
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+        kwargs = mock_get_prof.call_args.kwargs
+        assert kwargs["direction"] == "down"
+
+    @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
     def test_fp07_cal_disabled(
         self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_fp07_cal, mock_extract, tmp_path
     ):
@@ -612,6 +673,98 @@ class TestNanExcludedProbes:
         ds = xr.Dataset()
         # Should silently return without error
         _nan_excluded_probes(ds, ["sh1"], "test.p")
+
+
+class TestApplyFomCut:
+    """Tests for ``_apply_fom_cut`` per-probe per-segment FOM mask."""
+
+    def _make_diss_ds(self):
+        import xarray as xr
+
+        # 2 probes x 5 segments. probe 0 fom=[0.5, 1, 5, 10, 0.8],
+        # probe 1 fom=[0.5, 0.5, 0.5, 50, 0.5]. With fom_max=2.0:
+        #   probe 0 bad at segs 2, 3.
+        #   probe 1 bad at seg 3.
+        fom = np.array(
+            [[0.5, 1.0, 5.0, 10.0, 0.8],
+             [0.5, 0.5, 0.5, 50.0, 0.5]], dtype=np.float64,
+        )
+        epsilon = np.full_like(fom, 1e-9)
+        return xr.Dataset(
+            {
+                "epsilon": (["probe", "time"], epsilon),
+                "fom": (["probe", "time"], fom),
+                "e_1": (["time"], epsilon[0].copy()),
+                "e_2": (["time"], epsilon[1].copy()),
+            },
+            coords={"probe": ["sh1", "sh2"], "time": np.arange(5, dtype=float)},
+        )
+
+    def test_per_probe_per_segment_mask(self):
+        from odas_tpw.perturb.pipeline import _apply_fom_cut
+
+        ds = self._make_diss_ds()
+        n = _apply_fom_cut(ds, fom_max=2.0, file_label="test.p")
+        # 2 cells from probe 0 + 1 cell from probe 1 = 3
+        assert n == 3
+        eps = ds["epsilon"].values
+        assert np.isnan(eps[0, 2]) and np.isnan(eps[0, 3])
+        assert np.isfinite(eps[0, 0]) and np.isfinite(eps[0, 1]) and np.isfinite(eps[0, 4])
+        assert np.isnan(eps[1, 3])
+        assert np.isfinite(eps[1, [0, 1, 2, 4]]).all()
+
+    def test_companions_mirror_per_probe_mask(self):
+        from odas_tpw.perturb.pipeline import _apply_fom_cut
+
+        ds = self._make_diss_ds()
+        _apply_fom_cut(ds, fom_max=2.0, file_label="test.p")
+        e1 = ds["e_1"].values
+        e2 = ds["e_2"].values
+        # e_1 follows probe 0's mask (bad at 2, 3); e_2 follows probe 1's (bad at 3)
+        assert np.isnan(e1[2]) and np.isnan(e1[3])
+        assert np.isfinite(e1[[0, 1, 4]]).all()
+        assert np.isnan(e2[3]) and np.isfinite(e2[[0, 1, 2, 4]]).all()
+
+    def test_fom_var_left_untouched(self):
+        from odas_tpw.perturb.pipeline import _apply_fom_cut
+
+        ds = self._make_diss_ds()
+        original = ds["fom"].values.copy()
+        _apply_fom_cut(ds, fom_max=2.0, file_label="test.p")
+        # fom is left intact -- it's diagnostic, used by other tools
+        np.testing.assert_array_equal(ds["fom"].values, original)
+
+    def test_no_op_when_fom_absent(self):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _apply_fom_cut
+
+        ds = xr.Dataset({"epsilon": (("time",), np.ones(3))})
+        assert _apply_fom_cut(ds, fom_max=2.0, file_label="test.p") == 0
+
+    def test_chi_dataset_path(self):
+        """Same helper applies to chi datasets (chi + chi_N companions)."""
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _apply_fom_cut
+
+        fom = np.array(
+            [[0.5, 50.0], [0.5, 0.5]], dtype=np.float64,
+        )
+        chi = np.full_like(fom, 1e-9)
+        ds = xr.Dataset(
+            {
+                "chi": (["probe", "time"], chi),
+                "fom": (["probe", "time"], fom),
+                "chi_1": (["time"], chi[0].copy()),
+                "chi_2": (["time"], chi[1].copy()),
+            },
+            coords={"probe": ["t1", "t2"], "time": np.arange(2, dtype=float)},
+        )
+        assert _apply_fom_cut(ds, fom_max=2.0, file_label="test.p") == 1
+        assert np.isnan(ds["chi"].values[0, 1])
+        assert np.isnan(ds["chi_1"].values[1])
+        assert np.isfinite(ds["chi"].values[1, :]).all()
 
 
 class TestCopyProfileScalars:
