@@ -297,6 +297,133 @@ class TestFastRateCoarsening:
 # ---------------------------------------------------------------------------
 
 
+class TestPitchWConsistencyRule:
+    """Tests for the ``pitch_w_consistency`` rule type — flag samples
+    where pitch direction and dP/dt sign disagree."""
+
+    def _make_pf(self, *, pitch, P, fs_slow=1.0):
+        n = len(pitch)
+        # Add a tiny ramp to Incl_Y so the auto-picker has nonzero spread
+        # to compare against Incl_X (also zero); otherwise the tie-break
+        # picks Incl_X = roll, not Incl_Y = pitch.
+        pitch_arr = np.asarray(pitch, dtype=np.float64) + np.linspace(-0.1, 0.1, n)
+        return _StubPF(
+            t_slow=np.arange(n),
+            channels={
+                "Incl_X": np.zeros(n),  # roll axis ~ flat
+                "Incl_Y": pitch_arr,
+                "P":      np.asarray(P, dtype=np.float64),
+            },
+            fs_slow=fs_slow, fs_fast=fs_slow * 8,
+        )
+
+    def test_consistent_climb_not_flagged(self):
+        """Nose-up MR (Incl_Y < 0) while ascending (P decreasing) is fine."""
+        # P decreasing: 100, 90, 80, ... ascending. Pitch = -20 (MR nose-up).
+        n = 60
+        P = 100.0 - np.arange(n) * 0.1   # dP/dt = -0.1 dbar/s -> ascending
+        pitch = np.full(n, -20.0)
+        pf = self._make_pf(pitch=pitch, P=P)
+        out = evaluate_rules(pf, {
+            "fc": {"type": "pitch_w_consistency", "bit": 64,
+                   "pitch_min_deg": 5.0, "W_min_dbar_per_s": 0.02},
+        })
+        # Edge transients aside, interior should be unflagged.
+        assert (out["fc"][10:-10] == 0).all()
+
+    def test_consistent_dive_not_flagged(self):
+        """Nose-down (Incl_Y > 0) while descending (P increasing) is fine."""
+        n = 60
+        P = np.arange(n) * 0.1
+        pitch = np.full(n, +20.0)
+        pf = self._make_pf(pitch=pitch, P=P)
+        out = evaluate_rules(pf, {
+            "fc": {"type": "pitch_w_consistency", "bit": 64,
+                   "pitch_min_deg": 5.0, "W_min_dbar_per_s": 0.02},
+        })
+        assert (out["fc"][10:-10] == 0).all()
+
+    def test_stalled_glider_flagged(self):
+        """Nose-up but sinking — flag set."""
+        n = 60
+        P = np.arange(n) * 0.5         # rapid descent (W ~ +0.5 dbar/s)
+        pitch = np.full(n, -25.0)      # but pitched nose-up
+        pf = self._make_pf(pitch=pitch, P=P)
+        out = evaluate_rules(pf, {
+            "fc": {"type": "pitch_w_consistency", "bit": 64,
+                   "pitch_min_deg": 5.0, "W_min_dbar_per_s": 0.02},
+        })
+        # Interior samples (skip filter edge transients) should all be flagged.
+        assert (out["fc"][20:-20] != 0).all()
+
+    def test_below_pitch_threshold_skipped(self):
+        """|pitch| < pitch_min_deg → don't flag (noise zone around level)."""
+        n = 60
+        P = np.arange(n) * 0.5         # descending
+        pitch = np.full(n, -2.0)       # nose-up but only -2°, below threshold
+        pf = self._make_pf(pitch=pitch, P=P)
+        out = evaluate_rules(pf, {
+            "fc": {"type": "pitch_w_consistency", "bit": 64,
+                   "pitch_min_deg": 5.0, "W_min_dbar_per_s": 0.02},
+        })
+        assert (out["fc"] == 0).all()
+
+    def test_below_w_threshold_skipped(self):
+        """|W| < W_min_dbar_per_s → don't flag (stationary)."""
+        n = 60
+        P = np.full(n, 100.0)          # not moving
+        pitch = np.full(n, -25.0)      # nose-up
+        pf = self._make_pf(pitch=pitch, P=P)
+        out = evaluate_rules(pf, {
+            "fc": {"type": "pitch_w_consistency", "bit": 64,
+                   "pitch_min_deg": 5.0, "W_min_dbar_per_s": 0.02},
+        })
+        assert (out["fc"] == 0).all()
+
+    def test_missing_inclinometer_warns_and_skips(self, caplog):
+        pf = _StubPF(
+            t_slow=np.arange(10),
+            channels={"P": np.arange(10, dtype=np.float64)},
+        )
+        with caplog.at_level(logging.WARNING):
+            out = evaluate_rules(pf, {
+                "fc": {"type": "pitch_w_consistency", "bit": 64},
+            })
+        assert "fc" not in out
+        assert any("Incl_X and Incl_Y" in r.message for r in caplog.records)
+
+    def test_missing_P_channel_warns_and_skips(self, caplog):
+        pf = _StubPF(
+            t_slow=np.arange(10),
+            channels={
+                "Incl_X": np.zeros(10),
+                "Incl_Y": np.full(10, -25.0),
+            },
+        )
+        with caplog.at_level(logging.WARNING):
+            out = evaluate_rules(pf, {
+                "fc": {"type": "pitch_w_consistency", "bit": 64},
+            })
+        assert "fc" not in out
+        assert any("requires P" in r.message for r in caplog.records)
+
+    def test_unknown_type_raises(self):
+        pf = _StubPF(t_slow=np.arange(5))
+        with pytest.raises(ValueError, match="unknown type"):
+            evaluate_rules(pf, {"fc": {"type": "bogus", "bit": 1}})
+
+    def test_unknown_option_per_type(self):
+        """Range-only options on a consistency rule should raise."""
+        pf = _StubPF(t_slow=np.arange(5),
+                     channels={"Incl_X": np.zeros(5), "Incl_Y": np.full(5, -25.0),
+                               "P": np.arange(5.0)})
+        with pytest.raises(ValueError, match="unknown options"):
+            evaluate_rules(pf, {
+                "fc": {"type": "pitch_w_consistency", "bit": 64,
+                       "channel": "P"},   # 'channel' is range-only
+            })
+
+
 class TestRegisterRuleChannels:
     def test_registers_arrays_and_flag_attrs(self):
         pf = _StubPF(t_slow=np.arange(5))
