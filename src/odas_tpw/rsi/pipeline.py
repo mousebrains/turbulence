@@ -206,15 +206,14 @@ def run_pipeline(
 
             if binned is not None:
                 all_binned.append(binned)
-
-            profile_metadata.append(
-                {
-                    "source_file": p_path.name,
-                    "profile_number": prof_num,
-                    "s_slow": s_slow,
-                    "e_slow": e_slow,
-                }
-            )
+                profile_metadata.append(
+                    {
+                        "source_file": p_path.name,
+                        "profile_number": prof_num,
+                        "s_slow": s_slow,
+                        "e_slow": e_slow,
+                    }
+                )
 
         # Step 8: Combine profiles
         if all_binned:

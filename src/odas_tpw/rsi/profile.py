@@ -40,6 +40,7 @@ def extract_profiles(
     profiles: list[tuple[int, int]] | None = ...,
     gps: Any = ...,
     return_scalars: Literal[False] = ...,
+    output_stem: str | None = ...,
     **profile_kwargs: Any,
 ) -> list[Path]: ...
 
@@ -52,6 +53,7 @@ def extract_profiles(
     gps: Any = ...,
     *,
     return_scalars: Literal[True],
+    output_stem: str | None = ...,
     **profile_kwargs: Any,
 ) -> tuple[list[Path], list[dict[str, float]]]: ...
 
@@ -62,6 +64,7 @@ def extract_profiles(
     profiles: list[tuple[int, int]] | None = None,
     gps: Any = None,
     return_scalars: bool = False,
+    output_stem: str | None = None,
     **profile_kwargs: Any,
 ) -> list[Path] | tuple[list[Path], list[dict[str, float]]]:
     """Extract profiles from a PFile or full-record NetCDF.
@@ -88,6 +91,9 @@ def extract_profiles(
         the per-profile scalar values written: ``{"lat", "lon", "stime",
         "etime"}`` (each missing if not written). The pipeline uses this
         to skip re-opening every profile NetCDF in the diss/chi steps.
+    output_stem : str, optional
+        Override the filename/global-title stem used for per-profile NetCDFs.
+        When omitted, the source file stem is used.
     **profile_kwargs
         Keyword arguments passed to get_profiles (P_min, W_min, etc.).
 
@@ -105,6 +111,7 @@ def extract_profiles(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     data = _load_source(source)
+    stem = output_stem or data["stem"]
     P_slow = data["P"]
     fs_slow = data["fs_slow"]
     fs_fast = data["fs_fast"]
@@ -117,7 +124,7 @@ def extract_profiles(
     if profiles is None:
         profiles = get_profiles(P_slow, W, fs_slow, **profile_kwargs)
     if not profiles:
-        logger.warning(f"No profiles found in {data['stem']}")
+        logger.warning(f"No profiles found in {stem}")
         return ([], []) if return_scalars else []
 
     output_paths = []
@@ -127,7 +134,7 @@ def extract_profiles(
         e_fast = (e_slow + 1) * ratio
         s_slow_end = e_slow + 1
 
-        prof_path = output_dir / f"{data['stem']}_prof{pi:03d}.nc"
+        prof_path = output_dir / f"{stem}_prof{pi:03d}.nc"
 
         ds = nc.Dataset(str(prof_path), "w", format="NETCDF4")
 
@@ -136,7 +143,7 @@ def extract_profiles(
             setattr(ds, attr, data["global_attrs"][attr])
 
         ds.Conventions = "CF-1.13, ACDD-1.3"
-        ds.title = f"{data['stem']} profile {pi}"
+        ds.title = f"{stem} profile {pi}"
         ds.featureType = "profile"
 
         # Profile metadata

@@ -34,6 +34,17 @@ def _normalize_value(v):
     return v
 
 
+def _normalize_nested(v):
+    """Normalize nested JSON-like values for deterministic hashing."""
+    if isinstance(v, list):
+        return [_normalize_nested(item) for item in v]
+    if isinstance(v, tuple):
+        return [_normalize_nested(item) for item in v]
+    if isinstance(v, dict):
+        return {str(k): _normalize_nested(val) for k, val in sorted(v.items())}
+    return _normalize_value(v)
+
+
 class ConfigManager:
     """Config management parameterized by a DEFAULTS dict.
 
@@ -132,6 +143,13 @@ class ConfigManager:
 
     def _canonicalize_section(self, section: str, params: dict) -> dict:
         """Canonicalize a single section's parameters into a normalized dict."""
+        if section in self.dynamic_key_sections:
+            return {
+                str(k): _normalize_nested(v)
+                for k, v in sorted((params or {}).items())
+                if k not in self.hash_exclude_keys
+            }
+
         base = dict(self.defaults[section])
         for k, v in params.items():
             if k in base and v is not None:
@@ -238,16 +256,22 @@ class ConfigManager:
         data = {}
         if upstream:
             for up_section, up_params in upstream:
-                resolved = dict(self.defaults[up_section])
-                for k, v in up_params.items():
-                    if k in resolved and v is not None:
-                        resolved[k] = v
+                if up_section in self.dynamic_key_sections:
+                    resolved = dict(up_params or {})
+                else:
+                    resolved = dict(self.defaults[up_section])
+                    for k, v in up_params.items():
+                        if k in resolved and v is not None:
+                            resolved[k] = v
                 data[up_section] = resolved
 
-        resolved = dict(self.defaults[section])
-        for k, v in params.items():
-            if k in resolved and v is not None:
-                resolved[k] = v
+        if section in self.dynamic_key_sections:
+            resolved = dict(params or {})
+        else:
+            resolved = dict(self.defaults[section])
+            for k, v in params.items():
+                if k in resolved and v is not None:
+                    resolved[k] = v
         data[section] = resolved
 
         out = directory / "config.yaml"

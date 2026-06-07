@@ -4,8 +4,10 @@
 Reference: Code/process_P_files.m (233 lines), Code/mat2profile.m (170 lines)
 """
 
+import hashlib
 import logging
 import os
+import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,43 @@ from odas_tpw.perturb.logging_setup import (
 logger = logging.getLogger(__name__)
 
 
+_SAFE_STEM_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _safe_stem_part(part: str) -> str:
+    """Return a filesystem-friendly stem segment."""
+    safe = _SAFE_STEM_RE.sub("_", part).strip("._")
+    return safe or "unnamed"
+
+
+def _source_output_stem(path: Path, root: Path | str) -> str:
+    """Return a unique, stable output stem for *path* relative to *root*."""
+    path = Path(path)
+    root = Path(root)
+    try:
+        rel = path.resolve().relative_to(root.resolve()).with_suffix("")
+        parts = rel.parts
+    except ValueError:
+        digest = hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()[:8]
+        parts = (path.stem, digest)
+    return "__".join(_safe_stem_part(str(part)) for part in parts)
+
+
+def _canonical_instruments_for_hash(instruments: dict | None) -> dict[str, Any]:
+    """Normalize set-like instrument settings before hashing."""
+    normalized: dict[str, Any] = {}
+    for key, settings in sorted((instruments or {}).items()):
+        if not isinstance(settings, dict):
+            normalized[str(key)] = settings
+            continue
+        item = dict(settings)
+        excludes = item.get("exclude_shear_probes")
+        if isinstance(excludes, list):
+            item["exclude_shear_probes"] = sorted(str(probe) for probe in excludes)
+        normalized[str(key)] = item
+    return normalized
+
+
 def _upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
     """Return the full upstream parameter chain for *stage*.
 
@@ -31,35 +70,62 @@ def _upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
 
     Stages:
 
-    * ``profiles``           — no upstream
-    * ``diss``               — profiles
-    * ``chi``                — epsilon, profiles  (chi → diss → profiles)
-    * ``ctd``                — no upstream (full-file, doesn't use profiles)
-    * ``profiles_binned``    — profiles
-    * ``diss_binned``        — epsilon, profiles
-    * ``chi_binned``         — chi, epsilon, profiles
+    * ``profiles``           — file flow + profile-affecting preprocessing
+    * ``diss``               — profiles + per-instrument probe exclusions
+    * ``chi``                — epsilon, profiles, QC, and probe exclusions
+    * ``ctd``                — file flow + GPS
+    * binned/combo stages    — their source stage chain plus binning/netcdf
     """
+    files_p = merge_config("files", config.get("files"))
+    gps_p = merge_config("gps", config.get("gps"))
+    hotel_p = merge_config("hotel", config.get("hotel"))
+    speed_p = merge_config("speed", config.get("speed"))
+    qc_p = merge_config("qc", config.get("qc"))
+    fp07_p = merge_config("fp07", config.get("fp07"))
+    ct_p = merge_config("ct", config.get("ct"))
+    bottom_p = merge_config("bottom", config.get("bottom"))
+    top_trim_p = merge_config("top_trim", config.get("top_trim"))
     profiles_p = merge_config("profiles", config.get("profiles"))
     eps_p = merge_config("epsilon", config.get("epsilon"))
     chi_p = merge_config("chi", config.get("chi"))
     ctd_p = merge_config("ctd", config.get("ctd"))
+    netcdf_p = merge_config("netcdf", config.get("netcdf"))
+    instruments_p = _canonical_instruments_for_hash(config.get("instruments"))
+
+    profile_upstream = [
+        ("files", files_p),
+        ("gps", gps_p),
+        ("hotel", hotel_p),
+        ("speed", speed_p),
+        ("qc", qc_p),
+        ("fp07", fp07_p),
+        ("ct", ct_p),
+        ("bottom", bottom_p),
+        ("top_trim", top_trim_p),
+    ]
+    profile_chain = [*profile_upstream, ("profiles", profiles_p)]
+    diss_chain = [*profile_chain, ("instruments", instruments_p)]
+    chi_chain = [*diss_chain, ("epsilon", eps_p)]
+    ctd_chain = [
+        ("files", files_p),
+        ("gps", gps_p),
+        ("hotel", hotel_p),
+        ("speed", speed_p),
+        ("qc", qc_p),
+    ]
 
     chains: dict[str, list[tuple[str, dict]]] = {
-        "profiles": [],
-        "diss": [("profiles", profiles_p)],
-        "chi": [("epsilon", eps_p), ("profiles", profiles_p)],
-        "ctd": [],
-        "profiles_binned": [("profiles", profiles_p)],
-        "diss_binned": [("epsilon", eps_p), ("profiles", profiles_p)],
-        "chi_binned": [("chi", chi_p), ("epsilon", eps_p), ("profiles", profiles_p)],
-        # Combo stages have no own params — their hash is the binning step
-        # plus everything upstream of that step.  Including ``binning``
-        # itself in the chain matches the logical dependency, even though
-        # it duplicates the same dict that gets passed as ``params``.
-        "combo": [("profiles", profiles_p)],
-        "diss_combo": [("epsilon", eps_p), ("profiles", profiles_p)],
-        "chi_combo": [("chi", chi_p), ("epsilon", eps_p), ("profiles", profiles_p)],
-        "ctd_combo": [("ctd", ctd_p)],
+        "profiles": profile_upstream,
+        "diss": diss_chain,
+        "chi": chi_chain,
+        "ctd": ctd_chain,
+        "profiles_binned": profile_chain,
+        "diss_binned": [*diss_chain, ("epsilon", eps_p)],
+        "chi_binned": [*chi_chain, ("chi", chi_p)],
+        "combo": [*profile_chain, ("netcdf", netcdf_p)],
+        "diss_combo": [*diss_chain, ("epsilon", eps_p), ("netcdf", netcdf_p)],
+        "chi_combo": [*chi_chain, ("chi", chi_p), ("netcdf", netcdf_p)],
+        "ctd_combo": [*ctd_chain, ("ctd", ctd_p), ("netcdf", netcdf_p)],
     }
     return chains[stage]
 
@@ -387,6 +453,7 @@ def process_file(
     hotel_data=None,
     hotel_cfg=None,
     instrument_key: str | None = None,
+    output_stem: str | None = None,
 ) -> dict:
     """Process a single .p file through the full enhancement chain.
 
@@ -406,6 +473,8 @@ def process_file(
         supplied — but the caller normally passes this explicitly because
         the trim stage flattens the original ``<root>/<SN>/<file>.p``
         layout into a single ``trimmed/`` directory.
+    output_stem : str, optional
+        Unique stem for per-file outputs. Defaults to ``p_path.stem``.
 
     Returns
     -------
@@ -489,7 +558,8 @@ def process_file(
     # for that stage's output dir so e.g. all CTD-binning records for ``a.p``
     # land in ``ctd_NN/a.log`` *and* the worker/run logs.  basename = stem so
     # ``a.p`` produces ``a.log``.
-    log_basename = p_path.stem
+    output_stem = output_stem or p_path.stem
+    log_basename = output_stem
 
     # ---- CTD fork (full file, both up and down) ----
     ctd_cfg = config.get("ctd", {})
@@ -508,6 +578,7 @@ def process_file(
                     variables=ctd_cfg.get("variables"),
                     method=ctd_cfg.get("method", "mean"),
                     diagnostics=ctd_cfg.get("diagnostics", False),
+                    output_stem=output_stem,
                 )
             except Exception as exc:
                 logger.error("CTD binning %s: %s", p_path.name, exc)
@@ -604,6 +675,7 @@ def process_file(
                     profiles=profiles,
                     gps=gps,
                     return_scalars=True,
+                    output_stem=output_stem,
                 )
                 result["profiles"] = [str(p) for p in prof_paths]
                 prof_scalars_cache = {
@@ -626,6 +698,7 @@ def process_file(
     # the per-file profile count (~80 for SN465), so worker-RSS impact is
     # well under 100 MB.  Skipped entirely when chi is disabled.
     prof_data_cache: dict[str, dict[str, Any]] = {}
+    diss_by_profile: dict[str, str] = {}
 
     # QC gate config — resolved once for both diss and chi loops below.
     qc_cfg = merge_config("qc", config.get("qc"))
@@ -692,7 +765,9 @@ def process_file(
                         out_name = Path(prof_path).name
                         out_path = output_dirs["diss"] / out_name
                         ds.to_netcdf(out_path)
-                        result["diss"].append(str(out_path))
+                        out_path_str = str(out_path)
+                        result["diss"].append(out_path_str)
+                        diss_by_profile[prof_path] = out_path_str
                 except Exception as exc:
                     logger.error("diss for %s: %s", Path(prof_path).name, exc)
 
@@ -714,7 +789,16 @@ def process_file(
                 )
             }
             with stage_log(output_dirs.get("chi"), log_basename):
-                for prof_path, diss_path in zip(result["profiles"], result["diss"]):
+                for prof_path in result["profiles"]:
+                    diss_path = diss_by_profile.get(prof_path)
+                    if diss_path is None:
+                        logger.warning(
+                            "chi skipped for %s: no matching diss output",
+                            Path(prof_path).name,
+                        )
+                        prof_data_cache.pop(prof_path, None)
+                        continue
+                    diss_ds = None
                     try:
                         import xarray as xr
 
@@ -722,9 +806,7 @@ def process_file(
                         # Method 2 (use_epsilon=False) does a pure spectral
                         # fit and is appropriate when shear epsilon is
                         # contaminated (e.g. MR on a vibrating glider).
-                        diss_ds = (
-                            xr.open_dataset(diss_path) if chi_use_epsilon else None
-                        )
+                        diss_ds = xr.open_dataset(diss_path) if chi_use_epsilon else None
                         # Pop so the cache is released as we consume it.
                         pre_loaded = prof_data_cache.pop(prof_path, None)
                         chi_results = _compute_chi(
@@ -733,8 +815,6 @@ def process_file(
                             **chi_kwargs,
                             _pre_loaded=pre_loaded,
                         )
-                        if diss_ds is not None:
-                            diss_ds.close()
                         for chi_ds in chi_results:
                             if chi_fom_max is not None:
                                 _apply_fom_cut(
@@ -762,6 +842,9 @@ def process_file(
                             result["chi"].append(str(out_path))
                     except Exception as exc:
                         logger.error("chi for %s: %s", Path(prof_path).name, exc)
+                    finally:
+                        if diss_ds is not None:
+                            diss_ds.close()
 
     return result
 
@@ -771,17 +854,50 @@ def process_file(
 # ---------------------------------------------------------------------------
 
 
+def _configured_input_root(config: dict) -> Path:
+    """Return the configured input root for preserving relative paths."""
+    files_cfg = config.get("files", {})
+    return Path(files_cfg.get("p_file_root", "VMP/"))
+
+
+def _check_unique_outputs(destinations: list[Path]) -> None:
+    """Raise if multiple inputs would write the same output path."""
+    seen: dict[Path, int] = {}
+    for dest in destinations:
+        key = dest.resolve()
+        seen[key] = seen.get(key, 0) + 1
+    duplicates = [str(path) for path, count in seen.items() if count > 1]
+    if duplicates:
+        raise ValueError(
+            "multiple input files map to the same output path: "
+            + ", ".join(sorted(duplicates))
+        )
+
+
+def _check_unique_output_stems(stems: list[str]) -> None:
+    """Raise if multiple processed inputs would share one output stem."""
+    seen: dict[str, int] = {}
+    for stem in stems:
+        seen[stem] = seen.get(stem, 0) + 1
+    duplicates = [stem for stem, count in seen.items() if count > 1]
+    if duplicates:
+        raise ValueError(
+            "multiple input files map to the same output stem: "
+            + ", ".join(sorted(duplicates))
+        )
+
+
 def _trim_one(args: tuple) -> tuple[Path | None, Path, str | None]:
     """Worker: trim one .p file and return (trimmed_path, source_path, error).
 
     Designed to be pickled and dispatched to a ProcessPoolExecutor — must
     take a single argument and import its dependencies inside the call.
     """
-    p, trim_dir = args
+    p, trim_dir, root = args
     try:
         from odas_tpw.perturb.trim import trim_p_file
 
-        return trim_p_file(p, trim_dir), p, None
+        return trim_p_file(p, trim_dir, root=root), p, None
     except Exception as exc:
         return None, p, str(exc)
 
@@ -800,17 +916,22 @@ def run_trim(
     near-linear speedup until disk I/O saturates.
     """
     from odas_tpw.perturb.discover import find_p_files
+    from odas_tpw.perturb.trim import trim_destination
 
     files_cfg = config.get("files", {})
     output_root = Path(files_cfg.get("output_root", "results/"))
     trim_dir = output_root / "trimmed"
+    root = _configured_input_root(config)
 
     if p_files is None:
-        root = files_cfg.get("p_file_root", "VMP/")
+        root = _configured_input_root(config)
         pattern = files_cfg.get("p_file_pattern", "**/*.p")
         p_files = find_p_files(root, pattern)
     if not p_files:
         return []
+
+    destinations = [trim_destination(p, trim_dir, root=root) for p in p_files]
+    _check_unique_outputs(destinations)
 
     results: list[Path] = []
     if jobs <= 1 or len(p_files) <= 1:
@@ -818,7 +939,7 @@ def run_trim(
 
         for p in p_files:
             try:
-                trimmed = trim_p_file(p, trim_dir)
+                trimmed = trim_p_file(p, trim_dir, root=root)
                 results.append(trimmed)
                 logger.info("Trimmed: %s", trimmed.name)
             except Exception as exc:
@@ -826,7 +947,7 @@ def run_trim(
         return results
 
     with ProcessPoolExecutor(max_workers=jobs) as executor:
-        futures = {executor.submit(_trim_one, (p, trim_dir)): p for p in p_files}
+        futures = {executor.submit(_trim_one, (p, trim_dir, root)): p for p in p_files}
         for future in as_completed(futures):
             trimmed_or_none, src, err = future.result()
             if err is not None:
@@ -838,27 +959,57 @@ def run_trim(
     return results
 
 
-def run_merge(config: dict) -> list[Path]:
-    """Merge split .p files."""
+def run_merge(
+    config: dict,
+    p_files: list[Path] | None = None,
+    *,
+    include_singletons: bool = False,
+    input_root: Path | str | None = None,
+    merge_plan: list[tuple[Path, list[Path]]] | None = None,
+) -> list[Path]:
+    """Merge split .p files.
+
+    By default, returns only newly merged outputs for CLI compatibility.
+    When *include_singletons* is true, returns the complete post-merge file
+    list: merged outputs plus untouched non-mergeable inputs.
+    """
     from odas_tpw.perturb.discover import find_p_files
-    from odas_tpw.perturb.merge import find_mergeable_files, merge_p_files
+    from odas_tpw.perturb.merge import merge_p_files, plan_merge_outputs
 
     files_cfg = config.get("files", {})
-    root = files_cfg.get("p_file_root", "VMP/")
-    pattern = files_cfg.get("p_file_pattern", "**/*.p")
+    root = Path(input_root) if input_root is not None else _configured_input_root(config)
     output_root = Path(files_cfg.get("output_root", "results/"))
     merge_dir = output_root / "merged"
 
-    p_files = find_p_files(root, pattern)
-    chains = find_mergeable_files(p_files)
-    results = []
-    for chain in chains:
+    if p_files is None:
+        pattern = files_cfg.get("p_file_pattern", "**/*.p")
+        p_files = find_p_files(root, pattern)
+    if not p_files:
+        return []
+
+    plan = merge_plan if merge_plan is not None else plan_merge_outputs(
+        p_files, merge_dir, root=root
+    )
+    planned_outputs = [
+        output_path for output_path, chain in plan
+        if include_singletons or len(chain) > 1
+    ]
+    _check_unique_outputs(planned_outputs)
+
+    results: list[Path] = []
+    for output_path, chain in plan:
+        if len(chain) == 1:
+            if include_singletons:
+                results.append(chain[0])
+            continue
         try:
-            merged = merge_p_files(chain, merge_dir)
+            merged = merge_p_files(chain, merge_dir, root=root)
             results.append(merged)
             logger.info("Merged %d files -> %s", len(chain), merged.name)
         except Exception as exc:
             logger.error("merging: %s", exc)
+            if include_singletons:
+                results.extend(chain)
     return results
 
 
@@ -943,11 +1094,12 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
 
     logger.info("Found %d .p files", len(p_files))
 
-    # Capture the original parent directory of each .p file before trim
-    # flattens the layout (e.g. <root>/SN465/foo.p -> trimmed/foo.p). The
-    # basename is preserved across trim/merge, so we can look the SN back
-    # up by file name in the per-file processing loop below.
-    original_parent_by_name = {p.name: p.parent.name for p in p_files}
+    input_root = _configured_input_root(config)
+    current_root = input_root
+    instrument_key_by_path = {p.resolve(): p.parent.name for p in p_files}
+    output_stem_by_path = {
+        p.resolve(): _source_output_stem(p, current_root) for p in p_files
+    }
 
     # Parallel processing
     parallel_cfg = config.get("parallel", {})
@@ -960,14 +1112,74 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         logger.info("Trimming...")
         trimmed = run_trim(config, p_files, jobs=jobs)
         if trimmed:
+            from odas_tpw.perturb.trim import trim_destination
+
+            trim_dir = Path(files_cfg.get("output_root", "results/")) / "trimmed"
+            trimmed_keys = {p.resolve() for p in trimmed}
+            next_instruments: dict[Path, str] = {}
+            for source in p_files:
+                dest = trim_destination(source, trim_dir, root=current_root)
+                if dest.resolve() in trimmed_keys:
+                    next_instruments[dest.resolve()] = instrument_key_by_path.get(
+                        source.resolve(), source.parent.name
+                    )
             p_files = trimmed
+            instrument_key_by_path = next_instruments
+            current_root = trim_dir
+            output_stem_by_path = {
+                p.resolve(): _source_output_stem(p, current_root) for p in p_files
+            }
 
     # Merge
     if files_cfg.get("merge", False):
         logger.info("Merging...")
-        merged_files = run_merge(config)
+        from odas_tpw.perturb.merge import plan_merge_outputs
+
+        merge_dir = Path(files_cfg.get("output_root", "results/")) / "merged"
+        merge_plan = plan_merge_outputs(p_files, merge_dir, root=current_root)
+        merged_files = run_merge(
+            config,
+            p_files,
+            include_singletons=True,
+            input_root=current_root,
+            merge_plan=merge_plan,
+        )
         if merged_files:
+            merged_keys = {p.resolve() for p in merged_files}
+            next_instruments = {}
+            next_output_stems = {}
+            for output_path, chain in merge_plan:
+                output_key = output_path.resolve()
+                if output_key in merged_keys:
+                    source = chain[0]
+                    next_instruments[output_key] = instrument_key_by_path.get(
+                        source.resolve(), source.parent.name
+                    )
+                    root = merge_dir if len(chain) > 1 else current_root
+                    next_output_stems[output_key] = _source_output_stem(output_path, root)
+                    continue
+                for source in chain:
+                    source_key = source.resolve()
+                    if source_key in merged_keys:
+                        next_instruments[source_key] = instrument_key_by_path.get(
+                            source_key, source.parent.name
+                        )
+                        next_output_stems[source_key] = _source_output_stem(
+                            source, current_root
+                        )
             p_files = merged_files
+            instrument_key_by_path = next_instruments
+            output_stem_by_path = next_output_stems
+            current_root = merge_dir
+
+    _check_unique_output_stems(
+        [
+            output_stem_by_path.get(
+                p.resolve(), _source_output_stem(p, current_root)
+            )
+            for p in p_files
+        ]
+    )
 
     # Setup output directories
     output_dirs = _setup_output_dirs(config)
@@ -993,10 +1205,10 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     logger.info("Processing %d files (jobs=%d)...", len(p_files), jobs)
 
     def _instrument_key(p):
-        # Trim flattens <root>/<SN>/<file>.p into trimmed/<file>.p, losing the
-        # SN parent. Recover it from the original-paths map; fall back to
-        # parent.name (works for un-trimmed runs).
-        return original_parent_by_name.get(p.name, p.parent.name)
+        return instrument_key_by_path.get(p.resolve(), p.parent.name)
+
+    def _output_stem(p):
+        return output_stem_by_path.get(p.resolve(), _source_output_stem(p, current_root))
 
     if jobs == 1:
         for p_path in p_files:
@@ -1009,6 +1221,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 hotel_data=hotel_data,
                 hotel_cfg=hotel_cfg,
                 instrument_key=_instrument_key(p_path),
+                output_stem=_output_stem(p_path),
             )
     else:
         # Spawn workers each get a per-pid log file inside <output_root>/logs/
@@ -1032,6 +1245,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                     hotel_data=hotel_data,
                     hotel_cfg=hotel_cfg,
                     instrument_key=_instrument_key(p),
+                    output_stem=_output_stem(p),
                 ): p
                 for p in p_files
             }

@@ -14,7 +14,25 @@ from pathlib import Path
 from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS, _detect_endian
 
 
-def trim_p_file(source: Path, output_dir: Path) -> Path:
+def trim_destination(source: Path, output_dir: Path, root: Path | str | None = None) -> Path:
+    """Return the trim output path for *source*.
+
+    When *root* is supplied and *source* lives underneath it, the relative
+    directory structure is preserved under *output_dir*.  This prevents files
+    such as ``SN001/cast.p`` and ``SN002/cast.p`` from overwriting each other.
+    """
+    source = Path(source)
+    output_dir = Path(output_dir)
+    if root is not None:
+        try:
+            rel = source.resolve().relative_to(Path(root).resolve())
+        except ValueError:
+            rel = Path(source.name)
+        return output_dir / rel
+    return output_dir / source.name
+
+
+def trim_p_file(source: Path, output_dir: Path, root: Path | str | None = None) -> Path:
     """Trim an incomplete final record from a .p file.
 
     Parameters
@@ -23,6 +41,8 @@ def trim_p_file(source: Path, output_dir: Path) -> Path:
         Path to the original .p file.
     output_dir : Path
         Directory for the trimmed output file.
+    root : Path, optional
+        Source root used to preserve relative paths under *output_dir*.
 
     Returns
     -------
@@ -30,8 +50,8 @@ def trim_p_file(source: Path, output_dir: Path) -> Path:
         Path to the trimmed file.  If no trimming was needed, the file is
         still copied to *output_dir* for consistency.
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    dest = output_dir / source.name
+    dest = trim_destination(source, output_dir, root=root)
+    dest.parent.mkdir(parents=True, exist_ok=True)
 
     with open(source, "rb") as f:
         raw_hdr = f.read(HEADER_BYTES)

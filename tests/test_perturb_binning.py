@@ -206,6 +206,7 @@ class TestBinByDepth:
         assert "T" in result
         assert "T_std" in result
         assert "n_samples" in result
+        assert int(result["n_samples"].sum()) == n
         # T_std values should be finite where data exists
         assert np.any(np.isfinite(result["T_std"].values))
 
@@ -249,6 +250,29 @@ class TestBinByTime:
         assert "T" in result
         assert "time" in result.dims
         assert result.sizes["time"] > 0
+
+    def test_cf_time_units_use_common_epoch_seconds(self, tmp_path):
+        """Decoded CF time variables with different origins should bin without crashing."""
+        starts = [
+            "2026-01-01 00:00:00",
+            "2026-01-01 00:00:10",
+        ]
+        for i, units_start in enumerate(starts):
+            ds = xr.Dataset(
+                {
+                    "T": (["sample"], np.array([10.0 + i, 11.0 + i, 12.0 + i])),
+                    "t_slow": (["sample"], np.array([0.0, 1.0, 2.0])),
+                },
+                coords={"sample": np.arange(3)},
+            )
+            ds["t_slow"].attrs["units"] = f"seconds since {units_start}"
+            ds["t_slow"].attrs["calendar"] = "standard"
+            ds.to_netcdf(tmp_path / f"prof{i}.nc")
+
+        result = bin_by_time(sorted(tmp_path.glob("prof*.nc")), bin_width=1.0)
+        assert "T" in result
+        assert result["time"].dtype.kind == "f"
+        assert float(result["time"].min()) > 1_700_000_000.0
 
     def test_no_time_coord(self, tmp_path):
         """Profile NC without any recognised time coord returns empty Dataset."""

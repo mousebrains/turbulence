@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
+import xarray as xr
 
 TEST_DATA_DIR = Path(__file__).parent / "data"
 SAMPLE_FILE = TEST_DATA_DIR / "SN479_0006.p"
@@ -141,6 +144,43 @@ class TestRunPipelineNoProfiles:
         # The pipeline should log a warning about no profiles
         msgs = [r.message for r in caplog.records]
         assert any("No profiles detected" in m for m in msgs)
+
+
+class TestRunPipelineMetadata:
+    @patch("odas_tpw.rsi.pipeline.combine_profiles")
+    @patch("odas_tpw.rsi.pipeline._process_profile")
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.ones(40))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_skipped_profiles_do_not_shift_metadata(
+        self,
+        mock_pfile_cls,
+        mock_smooth,
+        mock_get_profiles,
+        mock_process_profile,
+        mock_combine,
+        tmp_path,
+    ):
+        from odas_tpw.rsi.pipeline import run_pipeline
+
+        pf = MagicMock()
+        pf.channels = {"P": np.linspace(0, 20, 40)}
+        pf.fs_slow = 2.0
+        pf.config = {"instrument_info": {}}
+        mock_pfile_cls.return_value = pf
+        mock_get_profiles.return_value = [(0, 9), (10, 19), (20, 29)]
+
+        binned = xr.Dataset({"T": (["depth_bin"], [10.0])}, coords={"depth_bin": [1.0]})
+        mock_process_profile.side_effect = [binned, None, binned]
+        mock_combine.return_value = xr.Dataset(
+            {"T": (["profile", "depth_bin"], [[10.0], [11.0]])},
+            coords={"profile": [0, 1], "depth_bin": [1.0]},
+        )
+
+        run_pipeline([tmp_path / "cast.p"], tmp_path)
+
+        metadata = mock_combine.call_args.args[1]
+        assert [m["profile_number"] for m in metadata] == [1, 3]
 
 
 # ---------------------------------------------------------------------------

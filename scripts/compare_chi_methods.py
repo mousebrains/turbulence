@@ -90,7 +90,10 @@ def process_file(
         return []
 
     W_slow = _smooth_fall_rate(P, pf.fs_slow)
-    profiles = get_profiles(P, W_slow, pf.fs_slow, P_min=0.5, W_min=0.3, direction="down", min_duration=7.0)
+    profiles = get_profiles(
+        P, W_slow, pf.fs_slow,
+        P_min=0.5, W_min=0.3, direction="down", min_duration=7.0,
+    )
     if not profiles:
         logger.warning(f"{p_path.name}: no profiles detected")
         return []
@@ -128,7 +131,7 @@ def process_file(
 
             therm_segs = [therm_fast[ci][1][w_sel] for ci in range(n_therm)]
 
-            # --- Chi: all methods × spectrum models ---
+            # --- Chi: all methods x spectrum models ---
             for spectrum_model in ("kraichnan", "batchelor"):
                 cr_m1 = compute_chi_window(
                     therm_segs, diff_gains, er.W, mean_T, er.nu,
@@ -202,7 +205,7 @@ def summary_table(ratios: dict) -> str:
     ]
     for label, arr in sorted(ratios.items()):
         if len(arr) == 0:
-            lines.append(f"| {label} | 0 | — | — | — | — | — |")
+            lines.append(f"| {label} | 0 | - | - | - | - | - |")
             continue
         log_r = np.log10(arr)
         lines.append(
@@ -226,11 +229,11 @@ def plot_histograms(ratios: dict, out_dir: Path):
         log_r = np.log10(arr)
         ax.hist(log_r, bins=60, edgecolor="black", linewidth=0.3, alpha=0.8)
         ax.axvline(0, color="red", linestyle="--", linewidth=1, label="ratio = 1")
-        ax.axvline(np.log10(2), color="orange", linestyle=":", linewidth=0.8, label="×2")
-        ax.axvline(-np.log10(2), color="orange", linestyle=":", linewidth=0.8, label="×0.5")
+        ax.axvline(np.log10(2), color="orange", linestyle=":", linewidth=0.8, label="x2")
+        ax.axvline(-np.log10(2), color="orange", linestyle=":", linewidth=0.8, label="x0.5")
         med = np.median(log_r)
         ax.axvline(med, color="blue", linestyle="-", linewidth=1, label=f"median={10**med:.2f}")
-        ax.set_xlabel("log₁₀(ratio)")
+        ax.set_xlabel("log10(ratio)")
         ax.set_ylabel("Count")
         ax.set_title(label.replace("_", " "))
         ax.legend(fontsize=8)
@@ -259,8 +262,8 @@ methods across {n_files} VMP .p files ({n_rows} window-probe observations).
 
 | Method | Description | kB source | Chi estimation |
 |:-------|:------------|:----------|:---------------|
-| **M1** | Dillon & Caldwell 1980 | Fixed from shear-probe epsilon | Log-space LS fit: min Σ[log(model)-log(obs)]² with kB fixed |
-| **M2-Iter** | Peterson & Fer 2014 | MLE grid search (iterative) | Noise-subtracted integration + unresolved variance from model |
+| **M1** | Dillon & Caldwell 1980 | Shear epsilon | Log-space LS with fixed kB |
+| **M2-Iter** | Peterson & Fer 2014 | MLE grid | Noise-subtracted integration + model tail |
 | **M2-MLE** | Ruddick et al. 2000 | MLE grid search | Variance correction with fitted kB |
 
 ## Spectrum Models
@@ -273,7 +276,7 @@ methods across {n_files} VMP .p files ({n_rows} window-probe observations).
 ## Ratio Statistics
 
 Ratios are computed per-window, per-probe where both values are finite and positive.
-"Std (log10)" is the standard deviation of log₁₀(ratio), measuring spread on
+"Std (log10)" is the standard deviation of log10(ratio), measuring spread on
 a multiplicative scale.
 
 {table}
@@ -292,7 +295,7 @@ a multiplicative scale.
 
 - **Kraichnan vs Batchelor**: The Kraichnan model has a slower (exponential)
   rolloff than Batchelor (Gaussian erfc), which better matches DNS results.
-  Both are normalised to integrate to χ/(6κ_T), so chi values should be
+  Both are normalised to integrate to chi/(6*kappa_T), so chi values should be
   similar; differences arise from the spectral shape affecting the fit and
   variance correction.
 
@@ -334,7 +337,7 @@ def main():
             warnings.simplefilter("ignore")
             rows = process_file(pf, fft_length=args.fft_length, f_AA=args.f_AA)
         all_rows.extend(rows)
-        logger.info(f"  → {len(rows)} observations")
+        logger.info(f"  -> {len(rows)} observations")
 
     logger.info(f"\nTotal: {len(all_rows)} observations from {len(p_files)} files")
 
