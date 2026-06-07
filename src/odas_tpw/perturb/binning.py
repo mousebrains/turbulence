@@ -108,6 +108,31 @@ def _get_agg_func(aggregation: str):
     return np.nanmean
 
 
+def _time_to_seconds(values: np.ndarray) -> np.ndarray:
+    """Convert numeric or decoded CF time values to float seconds.
+
+    Numeric arrays are already treated as seconds.  ``datetime64`` arrays are
+    converted to Unix epoch seconds, giving CF time variables with different
+    ``seconds since ...`` origins a common basis before bin-edge arithmetic.
+    """
+    arr = np.asarray(values)
+    if arr.dtype.kind == "M":
+        ns = arr.astype("datetime64[ns]").astype("int64")
+        seconds = ns.astype(float) / 1e9
+        seconds[ns == np.iinfo(np.int64).min] = np.nan
+        return seconds
+    if arr.dtype.kind in ("f", "i", "u"):
+        return arr.astype(float)
+    try:
+        dt = arr.astype("datetime64[ns]")
+    except (TypeError, ValueError):
+        return np.full(arr.shape, np.nan, dtype=float)
+    ns = dt.astype("int64")
+    seconds = ns.astype(float) / 1e9
+    seconds[ns == np.iinfo(np.int64).min] = np.nan
+    return seconds
+
+
 _SCALAR_NAMES = ("lat", "lon", "stime", "etime")
 
 
@@ -208,12 +233,19 @@ def _bin_snapshot(snapshot: dict, bin_edges: np.ndarray, agg, diagnostics: bool)
     Returns the same shape of dict that the previous ``_bin_one_profile``
     produced (``vars``, ``stds``, ``scalars``, ``scalar_attrs``).
     """
-    out: dict = {"vars": {}, "stds": {}, "scalars": snapshot["scalars"],
-                 "scalar_attrs": snapshot["scalar_attrs"]}
+    out: dict = {
+        "vars": {},
+        "stds": {},
+        "counts": None,
+        "scalars": snapshot["scalars"],
+        "scalar_attrs": snapshot["scalar_attrs"],
+    }
     depth = snapshot["depth"]
     for vname, arr in snapshot["vars"].items():
-        binned, _ = _bin_array(arr, depth, bin_edges, agg)
+        binned, counts = _bin_array(arr, depth, bin_edges, agg)
         out["vars"][vname] = binned
+        if out["counts"] is None:
+            out["counts"] = counts
         if diagnostics:
             out["stds"][vname] = _bin_std(arr, depth, bin_edges)
     return out
@@ -374,7 +406,11 @@ def bin_by_depth(
                     result_vars[f"{vname}_std"][:, pi] = std_arr
 
     if diagnostics:
-        result_vars["n_samples"] = np.zeros((n_bins, n_profiles), dtype=float)
+        counts = np.zeros((n_bins, n_profiles), dtype=float)
+        for pi, res in enumerate(results):
+            if res.get("counts") is not None:
+                counts[:, pi] = res["counts"]
+        result_vars["n_samples"] = counts
 
     data_vars: dict = {}
     for vname, arr in result_vars.items():
@@ -414,33 +450,38 @@ def bin_by_time(
 
     for f in profile_files:
         with stage_log(log_dir, _source_stem(f)):
-            ds = xr.open_dataset(f)
-            # Use the time coordinate
-            for time_name in ("t_slow", "t_fast", "time"):
-                if time_name in ds:
-                    t = ds[time_name].values
-                    break
-            else:
-                ds.close()
-                continue
-
-            t_min, t_max = np.nanmin(t), np.nanmax(t)
-            bin_edges = np.arange(t_min, t_max + bin_width, bin_width)
-            if len(bin_edges) < 2:
-                bin_edges = np.array([t_min, t_min + bin_width])
-            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-
-            binned_data = {"time": bin_centers}
-            for vname in ds.data_vars:
-                arr = ds[vname].values
-                if arr.ndim != 1 or len(arr) != len(t):
+            with xr.open_dataset(f) as ds:
+                # Use the time coordinate
+                for time_name in ("t_slow", "t_fast", "time"):
+                    if time_name in ds:
+                        t_raw = ds[time_name].values
+                        break
+                else:
                     continue
-                if arr.dtype.kind == "M":  # skip datetime64 variables
-                    continue
-                b, _ = _bin_array(arr, t, bin_edges, agg)
-                binned_data[str(vname)] = b
 
-            ds.close()
+                t = _time_to_seconds(t_raw)
+                finite_t = np.isfinite(t)
+                if not finite_t.any():
+                    continue
+                t_min = float(np.nanmin(t[finite_t]))
+                t_max = float(np.nanmax(t[finite_t]))
+                bin_edges = np.arange(t_min, t_max + bin_width, bin_width)
+                if len(bin_edges) < 2:
+                    bin_edges = np.array([t_min, t_min + bin_width])
+                bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+
+                binned_data = {"time": bin_centers}
+                for vname in ds.data_vars:
+                    arr = ds[vname].values
+                    if arr.ndim != 1 or len(arr) != len(t):
+                        continue
+                    if arr.dtype.kind == "M":  # skip datetime64 variables
+                        continue
+                    if arr.dtype.kind not in ("f", "i", "u"):
+                        continue
+                    b, _ = _bin_array(arr, t, bin_edges, agg)
+                    binned_data[str(vname)] = b
+
             if len(binned_data) > 1:
                 bds = xr.Dataset(
                     {k: (["time"], v) for k, v in binned_data.items() if k != "time"},

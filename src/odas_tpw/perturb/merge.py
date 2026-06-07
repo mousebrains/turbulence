@@ -114,7 +114,58 @@ def find_mergeable_files(p_files: list[Path]) -> list[list[Path]]:
     return chains
 
 
-def merge_p_files(chain: list[Path], output_dir: Path) -> Path:
+def merge_destination(
+    chain: list[Path],
+    output_dir: Path,
+    root: Path | str | None = None,
+) -> Path:
+    """Return the merged output path for *chain*.
+
+    The first file in the chain names the merged file.  When *root* is
+    supplied and that first file lives underneath it, the relative directory
+    structure is preserved under *output_dir*.
+    """
+    if not chain:
+        raise ValueError("Empty chain")
+    first = Path(chain[0])
+    output_dir = Path(output_dir)
+    if root is not None:
+        try:
+            rel = first.resolve().relative_to(Path(root).resolve())
+        except ValueError:
+            rel = Path(first.name)
+        return output_dir / rel
+    return output_dir / first.name
+
+
+def plan_merge_outputs(
+    p_files: list[Path],
+    output_dir: Path,
+    root: Path | str | None = None,
+) -> list[tuple[Path, list[Path]]]:
+    """Plan merge outputs for all inputs.
+
+    Returns ``(output_path, source_chain)`` pairs.  Mergeable chains map to a
+    new output path; non-mergeable singleton files map to themselves so the
+    caller can keep processing them unchanged.
+    """
+    chains = find_mergeable_files(p_files)
+    chain_members = {p.resolve() for chain in chains for p in chain}
+
+    plan: list[tuple[Path, list[Path]]] = []
+    for chain in chains:
+        plan.append((merge_destination(chain, output_dir, root=root), chain))
+    for p in p_files:
+        if p.resolve() not in chain_members:
+            plan.append((p, [p]))
+    return plan
+
+
+def merge_p_files(
+    chain: list[Path],
+    output_dir: Path,
+    root: Path | str | None = None,
+) -> Path:
     """Merge a chain of split .p files into a single file.
 
     The first file is copied in its entirety.  Subsequent files contribute
@@ -126,6 +177,8 @@ def merge_p_files(chain: list[Path], output_dir: Path) -> Path:
         Ordered list of .p files to merge (first file is the base).
     output_dir : Path
         Directory for the merged output file.
+    root : Path, optional
+        Source root used to preserve relative paths under *output_dir*.
 
     Returns
     -------
@@ -135,8 +188,8 @@ def merge_p_files(chain: list[Path], output_dir: Path) -> Path:
     if not chain:
         raise ValueError("Empty chain")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    dest = output_dir / chain[0].name
+    dest = merge_destination(chain, output_dir, root=root)
+    dest.parent.mkdir(parents=True, exist_ok=True)
 
     if len(chain) == 1:
         shutil.copy2(chain[0], dest)

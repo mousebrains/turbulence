@@ -100,6 +100,69 @@ def _per_profile_attrs(root: str, sibling_prefix: str) -> dict:
         return dict(ds.attrs)
 
 
+def _fmt_minute(dt: np.datetime64) -> str:
+    """Format a datetime64 as 'YYYY-MM-DD HH:MM'."""
+    return np.datetime_as_string(dt, unit="m").replace("T", " ")
+
+
+def _time_ticks(
+    t: np.ndarray,
+    cast_x: np.ndarray,
+    segments: list[tuple[int, int]],
+    t_starts: list,
+) -> tuple[np.ndarray, list[str]]:
+    """Major-tick positions/labels for the cast x-axis.
+
+    Inside each cluster, place labels at round-time intervals (1h, 2h,
+    3h, 6h, 12h, 24h, 48h) chosen so the cluster gets ~4-8 ticks.
+    Single-profile clusters get one label at the start time. The first
+    tick in each cluster is forced to fall on a round multiple of the
+    chosen interval so labels read as clean wall-clock times.
+    """
+    positions: list[float] = []
+    labels: list[str] = []
+    for k, (s, e) in enumerate(segments):
+        cluster_t = t[s:e]
+        cluster_x = cast_x[s:e]
+        n = e - s
+        if n == 1:
+            positions.append(float(cluster_x[0]))
+            labels.append(f"{s + 1}\n{_fmt_minute(cluster_t[0])}")
+            continue
+        span_sec = float(
+            (cluster_t[-1] - cluster_t[0]) / np.timedelta64(1, "s")
+        )
+        span_hr = span_sec / 3600.0
+        interval_hr = 48
+        for cand in (1, 2, 3, 6, 12, 24, 48):
+            if span_hr / cand <= 8:
+                interval_hr = cand
+                break
+        # Round cluster start up to next multiple of interval_hr.
+        t0_hr = (
+            cluster_t[0].astype("datetime64[s]").astype(np.int64) // 3600
+        )
+        t0_aligned_hr = (
+            (t0_hr + interval_hr - 1) // interval_hr
+        ) * interval_hr
+        t_aligned = np.datetime64(int(t0_aligned_hr * 3600), "s")
+        # Annotate the first tick of the cluster with the cast range so
+        # multi-cluster plots still convey what each block covers.
+        first = True
+        for j in range(64):
+            tick_t = t_aligned + np.timedelta64(j * interval_hr, "h")
+            if tick_t > cluster_t[-1]:
+                break
+            idx = int(np.argmin(np.abs(cluster_t - tick_t)))
+            positions.append(float(cluster_x[idx]))
+            label = _fmt_minute(tick_t)
+            if first:
+                label = f"{s + 1}-{e}\n{label}"
+                first = False
+            labels.append(label)
+    return np.asarray(positions), labels
+
+
 def add_arguments(p: argparse.ArgumentParser) -> None:
     """Register CLI flags for the eps-chi subcommand on *p*."""
     p.add_argument("--root", required=True,
@@ -221,7 +284,7 @@ def run(args: argparse.Namespace) -> str:
         pass
     t = t_eps
 
-    cast_x, segments, centers, t_starts, _t_ends = layout.compute_layout(
+    cast_x, segments, _centers, t_starts, _t_ends = layout.compute_layout(
         t, gap_seconds=args.gap_seconds
     )
 
@@ -297,15 +360,14 @@ def run(args: argparse.Namespace) -> str:
 
     ax_e.invert_yaxis()
 
-    def _fmt(dt: np.datetime64) -> str:
-        return np.datetime_as_string(dt, unit="m").replace("T", " ")
+    # Lock x-limits to the cast layout so raw and QC plots are
+    # directly comparable -- matplotlib otherwise auto-scales to the
+    # extent of finite data, which differs between the two views.
+    ax_e.set_xlim(cast_x[0] - 0.5, cast_x[-1] + 0.5)
 
-    cluster_labels = []
-    for k, (s, e) in enumerate(segments):
-        n_label = f"{s + 1}" if e - s == 1 else f"{s + 1}-{e}"
-        cluster_labels.append(f"{n_label}\n{_fmt(t_starts[k])}")
-    ax_g.set_xticks(centers)
-    ax_g.set_xticklabels(cluster_labels)
+    positions, labels = _time_ticks(t, cast_x, segments, t_starts)
+    ax_g.set_xticks(positions)
+    ax_g.set_xticklabels(labels)
     ax_g.set_xticks(cast_x, minor=True)
 
     for label in ax_g.get_xticklabels():

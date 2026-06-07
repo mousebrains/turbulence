@@ -90,7 +90,10 @@ def process_file(
         return []
 
     W_slow = _smooth_fall_rate(P, pf.fs_slow)
-    profiles = get_profiles(P, W_slow, pf.fs_slow, P_min=0.5, W_min=0.3, direction="down", min_duration=7.0)
+    profiles = get_profiles(
+        P, W_slow, pf.fs_slow,
+        P_min=0.5, W_min=0.3, direction="down", min_duration=7.0,
+    )
     if not profiles:
         logger.warning(f"{p_path.name}: no profiles detected")
         return []
@@ -128,7 +131,7 @@ def process_file(
 
             therm_segs = [therm_fast[ci][1][w_sel] for ci in range(n_therm)]
 
-            # --- Chi: all methods × spectrum models ---
+            # --- Chi: all methods x spectrum models ---
             for spectrum_model in ("kraichnan", "batchelor"):
                 cr_m1 = compute_chi_window(
                     therm_segs, diff_gains, er.W, mean_T, er.nu,
@@ -226,8 +229,8 @@ def plot_histograms(ratios: dict, out_dir: Path):
         log_r = np.log10(arr)
         ax.hist(log_r, bins=60, edgecolor="black", linewidth=0.3, alpha=0.8)
         ax.axvline(0, color="red", linestyle="--", linewidth=1, label="ratio = 1")
-        ax.axvline(np.log10(2), color="orange", linestyle=":", linewidth=0.8, label="×2")
-        ax.axvline(-np.log10(2), color="orange", linestyle=":", linewidth=0.8, label="×0.5")
+        ax.axvline(np.log10(2), color="orange", linestyle=":", linewidth=0.8, label="x2")
+        ax.axvline(-np.log10(2), color="orange", linestyle=":", linewidth=0.8, label="x0.5")
         med = np.median(log_r)
         ax.axvline(med, color="blue", linestyle="-", linewidth=1, label=f"median={10**med:.2f}")
         ax.set_xlabel("log₁₀(ratio)")
@@ -259,8 +262,8 @@ methods across {n_files} VMP .p files ({n_rows} window-probe observations).
 
 | Method | Description | kB source | Chi estimation |
 |:-------|:------------|:----------|:---------------|
-| **M1** | Dillon & Caldwell 1980 | Fixed from shear-probe epsilon | Log-space LS fit: min Σ[log(model)-log(obs)]² with kB fixed |
-| **M2-Iter** | Peterson & Fer 2014 | MLE grid search (iterative) | Noise-subtracted integration + unresolved variance from model |
+| **M1** | Dillon & Caldwell 1980 | Shear epsilon | Log-space LS with fixed kB |
+| **M2-Iter** | Peterson & Fer 2014 | MLE grid | Noise-subtracted integration + model tail |
 | **M2-MLE** | Ruddick et al. 2000 | MLE grid search | Variance correction with fitted kB |
 
 ## Spectrum Models

@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 
 from odas_tpw.perturb.pipeline import (
     _setup_output_dirs,
@@ -121,41 +122,77 @@ class TestUpstreamFor:
     def _sections(self, stage):
         return [name for name, _ in _upstream_for(stage, self._config())]
 
-    def test_profiles_has_no_upstream(self):
-        assert self._sections("profiles") == []
+    def test_profiles_includes_preprocessing_sections(self):
+        assert set(self._sections("profiles")) == {
+            "files",
+            "gps",
+            "hotel",
+            "speed",
+            "qc",
+            "fp07",
+            "ct",
+            "bottom",
+            "top_trim",
+        }
 
-    def test_diss_includes_profiles(self):
-        assert self._sections("diss") == ["profiles"]
+    def test_diss_includes_profiles_and_instruments(self):
+        assert {"profiles", "instruments"}.issubset(set(self._sections("diss")))
 
     def test_chi_includes_epsilon_and_profiles(self):
         # chi -> diss -> profiles
-        assert set(self._sections("chi")) == {"epsilon", "profiles"}
+        assert {"epsilon", "profiles", "instruments"}.issubset(set(self._sections("chi")))
 
-    def test_ctd_has_no_upstream(self):
-        assert self._sections("ctd") == []
+    def test_ctd_includes_file_flow_and_gps(self):
+        assert set(self._sections("ctd")) == {"files", "gps"}
 
     def test_profiles_binned_includes_profiles(self):
-        assert self._sections("profiles_binned") == ["profiles"]
+        assert "profiles" in self._sections("profiles_binned")
 
     def test_diss_binned_includes_epsilon_and_profiles(self):
         # was missing profiles before _upstream_for refactor
-        assert set(self._sections("diss_binned")) == {"epsilon", "profiles"}
+        assert {"epsilon", "profiles", "instruments"}.issubset(
+            set(self._sections("diss_binned"))
+        )
 
     def test_chi_binned_includes_full_chain(self):
         # was missing epsilon and profiles before _upstream_for refactor
-        assert set(self._sections("chi_binned")) == {"chi", "epsilon", "profiles"}
+        assert {"chi", "epsilon", "profiles", "instruments"}.issubset(
+            set(self._sections("chi_binned"))
+        )
 
     def test_combo_includes_profiles(self):
-        assert self._sections("combo") == ["profiles"]
+        assert {"profiles", "netcdf"}.issubset(set(self._sections("combo")))
 
     def test_diss_combo_includes_epsilon_and_profiles(self):
-        assert set(self._sections("diss_combo")) == {"epsilon", "profiles"}
+        assert {"epsilon", "profiles", "instruments", "netcdf"}.issubset(
+            set(self._sections("diss_combo"))
+        )
 
     def test_chi_combo_includes_full_chain(self):
-        assert set(self._sections("chi_combo")) == {"chi", "epsilon", "profiles"}
+        assert {"chi", "epsilon", "profiles", "instruments", "netcdf"}.issubset(
+            set(self._sections("chi_combo"))
+        )
 
     def test_ctd_combo_includes_ctd(self):
-        assert self._sections("ctd_combo") == ["ctd"]
+        assert {"ctd", "gps", "netcdf"}.issubset(set(self._sections("ctd_combo")))
+
+    def test_profiles_hash_changes_when_fp07_changes(self):
+        from odas_tpw.perturb.config import compute_hash, merge_config
+
+        cfg_a = self._config()
+        cfg_b = self._config()
+        cfg_b["fp07"] = {"order": 3}
+        h_a = compute_hash(
+            "profiles",
+            merge_config("profiles", cfg_a.get("profiles")),
+            upstream=_upstream_for("profiles", cfg_a),
+        )
+        h_b = compute_hash(
+            "profiles",
+            merge_config("profiles", cfg_b.get("profiles")),
+            upstream=_upstream_for("profiles", cfg_b),
+        )
+        assert h_a != h_b
 
 
 class TestRunTrim:
@@ -188,6 +225,45 @@ class TestRunTrim:
         assert len(results) == 1
         assert results[0].exists()
 
+    def test_trim_preserves_relative_paths_for_duplicate_basenames(self, tmp_path):
+        """Same basename in two instrument folders must not collide."""
+        root = tmp_path / "vmp"
+        (root / "SN001").mkdir(parents=True)
+        (root / "SN002").mkdir(parents=True)
+        _make_p_file(root / "SN001" / "cast.p")
+        _make_p_file(root / "SN002" / "cast.p")
+
+        config = {
+            "files": {
+                "p_file_root": str(root),
+                "p_file_pattern": "**/*.p",
+                "output_root": str(tmp_path / "out"),
+            },
+        }
+        results = sorted(run_trim(config))
+        assert results == [
+            tmp_path / "out" / "trimmed" / "SN001" / "cast.p",
+            tmp_path / "out" / "trimmed" / "SN002" / "cast.p",
+        ]
+
+    def test_trim_rejects_duplicate_outputs_without_root(self, tmp_path):
+        """Explicit files outside p_file_root fall back to basename and must collide loudly."""
+        a = tmp_path / "a" / "cast.p"
+        b = tmp_path / "b" / "cast.p"
+        a.parent.mkdir()
+        b.parent.mkdir()
+        _make_p_file(a)
+        _make_p_file(b)
+
+        config = {
+            "files": {
+                "p_file_root": str(tmp_path / "not-the-root"),
+                "output_root": str(tmp_path / "out"),
+            },
+        }
+        with pytest.raises(ValueError, match="same output path"):
+            run_trim(config, p_files=[a, b])
+
 
 class TestRunMerge:
     def test_merge_with_no_files(self, tmp_path):
@@ -201,6 +277,37 @@ class TestRunMerge:
         (tmp_path / "empty").mkdir()
         results = run_merge(config)
         assert results == []
+
+    def test_merge_uses_current_inputs_and_keeps_singletons(self, tmp_path):
+        """After trim, merge should use trimmed files and keep non-merged files."""
+        root = tmp_path / "vmp"
+        (root / "SN001").mkdir(parents=True)
+        (root / "SN002").mkdir(parents=True)
+        _make_p_file(root / "SN001" / "cast_0001.p", file_number=1)
+        _make_p_file(root / "SN001" / "cast_0002.p", file_number=2)
+        _make_p_file(root / "SN002" / "solo.p", file_number=10)
+
+        config = {
+            "files": {
+                "p_file_root": str(root),
+                "p_file_pattern": "**/*.p",
+                "output_root": str(tmp_path / "out"),
+            },
+        }
+        trimmed = run_trim(config)
+        trim_root = tmp_path / "out" / "trimmed"
+        merged = sorted(
+            run_merge(
+                config,
+                trimmed,
+                include_singletons=True,
+                input_root=trim_root,
+            )
+        )
+
+        assert tmp_path / "out" / "merged" / "SN001" / "cast_0001.p" in merged
+        assert tmp_path / "out" / "trimmed" / "SN002" / "solo.p" in merged
+        assert root / "SN002" / "solo.p" not in merged
 
 
 # ---------------------------------------------------------------------------
@@ -562,6 +669,69 @@ class TestProcessFile:
         assert "use_epsilon" not in kwargs, (
             "use_epsilon must be popped, not forwarded to _compute_chi"
         )
+
+    @patch("odas_tpw.rsi.chi_io._load_therm_channels", return_value={})
+    @patch("odas_tpw.rsi.chi_io._compute_chi")
+    @patch("odas_tpw.rsi.dissipation._compute_epsilon")
+    @patch("odas_tpw.rsi.profile.extract_profiles")
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate", return_value={"channels": {}})
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_chi_skips_profile_when_matching_diss_failed(
+        self,
+        mock_pfile_cls,
+        mock_smooth,
+        mock_get_prof,
+        mock_fp07_cal,
+        mock_extract,
+        mock_eps,
+        mock_chi,
+        mock_load_therm,
+        tmp_path,
+    ):
+        """A diss failure in the middle must not shift later epsilon files left."""
+        import xarray as xr
+
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = [{"start": 0, "end": 50}]
+
+        prof_dir = tmp_path / "profiles"
+        diss_dir = tmp_path / "diss"
+        chi_dir = tmp_path / "chi"
+        for d in (prof_dir, diss_dir, chi_dir):
+            d.mkdir(parents=True, exist_ok=True)
+        profs = [prof_dir / f"prof{i}.nc" for i in range(1, 4)]
+        for prof in profs:
+            prof.touch()
+        mock_extract.return_value = (profs, [{}, {}, {}])
+
+        def eps_side_effect(prof_path, **kwargs):
+            if Path(prof_path).name == "prof2.nc":
+                raise RuntimeError("middle profile failed")
+            value = 1e-8 if Path(prof_path).name == "prof1.nc" else 3e-8
+            return [xr.Dataset({"epsilon": (("time",), [value])})]
+
+        mock_eps.side_effect = eps_side_effect
+
+        def chi_side_effect(prof_path, **kwargs):
+            return [xr.Dataset({"chi": (("time",), [1e-9])})]
+
+        mock_chi.side_effect = chi_side_effect
+
+        config = self._base_config(tmp_path)
+        config["chi"]["enable"] = True
+        output_dirs = {"profiles": prof_dir, "diss": diss_dir, "chi": chi_dir}
+
+        result = process_file(tmp_path / "test.p", config, None, output_dirs)
+
+        called_profiles = [Path(call.args[0]).name for call in mock_chi.call_args_list]
+        assert called_profiles == ["prof1.nc", "prof3.nc"]
+        assert result["diss"] == [str(diss_dir / "prof1.nc"), str(diss_dir / "prof3.nc")]
+        assert result["chi"] == [str(chi_dir / "prof1.nc"), str(chi_dir / "prof3.nc")]
 
 
 # ---------------------------------------------------------------------------
