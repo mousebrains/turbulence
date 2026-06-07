@@ -12,6 +12,7 @@ from odas_tpw.perturb.config import (
     merge_config,
     resolve_output_dir,
     validate_config,
+    write_resolved_config,
 )
 
 # ---------------------------------------------------------------------------
@@ -139,14 +140,23 @@ class TestInstrumentsSection:
         config = load_config(cfg)
         assert config["instruments"]["SN465"]["exclude_shear_probes"] == ["sh2"]
 
-    def test_instruments_excluded_from_hash(self):
-        # instruments should not appear in upstream hashing for diss/chi/ctd
-        # — the section is per-SN and not part of the per-stage param schema.
+    def test_instruments_do_not_affect_direct_section_hash(self):
+        # instruments are only hashed when supplied as an explicit upstream
+        # dependency by the pipeline.
         h_blank = compute_hash("epsilon", {})
-        # instruments is not a section_name accepted by compute_hash, so we
-        # just confirm the existing per-section hashing still works after
-        # adding the dynamic-key section.
         assert isinstance(h_blank, str)
+
+    def test_write_resolved_config_preserves_instruments(self, tmp_path):
+        write_resolved_config(
+            tmp_path,
+            "epsilon",
+            {},
+            upstream=[
+                ("instruments", {"SN465": {"exclude_shear_probes": ["sh2"]}}),
+            ],
+        )
+        config = load_config(tmp_path / "config.yaml")
+        assert config["instruments"]["SN465"]["exclude_shear_probes"] == ["sh2"]
 
 
 # ---------------------------------------------------------------------------

@@ -4,8 +4,10 @@
 Reference: Code/process_P_files.m (233 lines), Code/mat2profile.m (170 lines)
 """
 
+import hashlib
 import logging
 import os
+import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,43 @@ from odas_tpw.perturb.logging_setup import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_SAFE_STEM_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _safe_stem_part(part: str) -> str:
+    """Return a filesystem-friendly stem segment."""
+    safe = _SAFE_STEM_RE.sub("_", part).strip("._")
+    return safe or "unnamed"
+
+
+def _source_output_stem(path: Path, root: Path | str) -> str:
+    """Return a unique, stable output stem for *path* relative to *root*."""
+    path = Path(path)
+    root = Path(root)
+    try:
+        rel = path.resolve().relative_to(root.resolve()).with_suffix("")
+        parts = rel.parts
+    except ValueError:
+        digest = hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()[:8]
+        parts = (path.stem, digest)
+    return "__".join(_safe_stem_part(str(part)) for part in parts)
+
+
+def _canonical_instruments_for_hash(instruments: dict | None) -> dict[str, Any]:
+    """Normalize set-like instrument settings before hashing."""
+    normalized: dict[str, Any] = {}
+    for key, settings in sorted((instruments or {}).items()):
+        if not isinstance(settings, dict):
+            normalized[str(key)] = settings
+            continue
+        item = dict(settings)
+        excludes = item.get("exclude_shear_probes")
+        if isinstance(excludes, list):
+            item["exclude_shear_probes"] = sorted(str(probe) for probe in excludes)
+        normalized[str(key)] = item
+    return normalized
 
 
 def _upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
@@ -51,7 +90,7 @@ def _upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
     chi_p = merge_config("chi", config.get("chi"))
     ctd_p = merge_config("ctd", config.get("ctd"))
     netcdf_p = merge_config("netcdf", config.get("netcdf"))
-    instruments_p = dict(config.get("instruments") or {})
+    instruments_p = _canonical_instruments_for_hash(config.get("instruments"))
 
     profile_upstream = [
         ("files", files_p),
@@ -67,7 +106,13 @@ def _upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
     profile_chain = [*profile_upstream, ("profiles", profiles_p)]
     diss_chain = [*profile_chain, ("instruments", instruments_p)]
     chi_chain = [*diss_chain, ("epsilon", eps_p)]
-    ctd_chain = [("files", files_p), ("gps", gps_p)]
+    ctd_chain = [
+        ("files", files_p),
+        ("gps", gps_p),
+        ("hotel", hotel_p),
+        ("speed", speed_p),
+        ("qc", qc_p),
+    ]
 
     chains: dict[str, list[tuple[str, dict]]] = {
         "profiles": profile_upstream,
@@ -408,6 +453,7 @@ def process_file(
     hotel_data=None,
     hotel_cfg=None,
     instrument_key: str | None = None,
+    output_stem: str | None = None,
 ) -> dict:
     """Process a single .p file through the full enhancement chain.
 
@@ -427,6 +473,8 @@ def process_file(
         supplied — but the caller normally passes this explicitly because
         the trim stage flattens the original ``<root>/<SN>/<file>.p``
         layout into a single ``trimmed/`` directory.
+    output_stem : str, optional
+        Unique stem for per-file outputs. Defaults to ``p_path.stem``.
 
     Returns
     -------
@@ -510,7 +558,8 @@ def process_file(
     # for that stage's output dir so e.g. all CTD-binning records for ``a.p``
     # land in ``ctd_NN/a.log`` *and* the worker/run logs.  basename = stem so
     # ``a.p`` produces ``a.log``.
-    log_basename = p_path.stem
+    output_stem = output_stem or p_path.stem
+    log_basename = output_stem
 
     # ---- CTD fork (full file, both up and down) ----
     ctd_cfg = config.get("ctd", {})
@@ -529,6 +578,7 @@ def process_file(
                     variables=ctd_cfg.get("variables"),
                     method=ctd_cfg.get("method", "mean"),
                     diagnostics=ctd_cfg.get("diagnostics", False),
+                    output_stem=output_stem,
                 )
             except Exception as exc:
                 logger.error("CTD binning %s: %s", p_path.name, exc)
@@ -625,6 +675,7 @@ def process_file(
                     profiles=profiles,
                     gps=gps,
                     return_scalars=True,
+                    output_stem=output_stem,
                 )
                 result["profiles"] = [str(p) for p in prof_paths]
                 prof_scalars_cache = {
@@ -823,6 +874,19 @@ def _check_unique_outputs(destinations: list[Path]) -> None:
         )
 
 
+def _check_unique_output_stems(stems: list[str]) -> None:
+    """Raise if multiple processed inputs would share one output stem."""
+    seen: dict[str, int] = {}
+    for stem in stems:
+        seen[stem] = seen.get(stem, 0) + 1
+    duplicates = [stem for stem, count in seen.items() if count > 1]
+    if duplicates:
+        raise ValueError(
+            "multiple input files map to the same output stem: "
+            + ", ".join(sorted(duplicates))
+        )
+
+
 def _trim_one(args: tuple) -> tuple[Path | None, Path, str | None]:
     """Worker: trim one .p file and return (trimmed_path, source_path, error).
 
@@ -901,6 +965,7 @@ def run_merge(
     *,
     include_singletons: bool = False,
     input_root: Path | str | None = None,
+    merge_plan: list[tuple[Path, list[Path]]] | None = None,
 ) -> list[Path]:
     """Merge split .p files.
 
@@ -922,7 +987,9 @@ def run_merge(
     if not p_files:
         return []
 
-    plan = plan_merge_outputs(p_files, merge_dir, root=root)
+    plan = merge_plan if merge_plan is not None else plan_merge_outputs(
+        p_files, merge_dir, root=root
+    )
     planned_outputs = [
         output_path for output_path, chain in plan
         if include_singletons or len(chain) > 1
@@ -1030,6 +1097,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     input_root = _configured_input_root(config)
     current_root = input_root
     instrument_key_by_path = {p.resolve(): p.parent.name for p in p_files}
+    output_stem_by_path = {
+        p.resolve(): _source_output_stem(p, current_root) for p in p_files
+    }
 
     # Parallel processing
     parallel_cfg = config.get("parallel", {})
@@ -1056,6 +1126,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             p_files = trimmed
             instrument_key_by_path = next_instruments
             current_root = trim_dir
+            output_stem_by_path = {
+                p.resolve(): _source_output_stem(p, current_root) for p in p_files
+            }
 
     # Merge
     if files_cfg.get("merge", False):
@@ -1069,10 +1142,12 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             p_files,
             include_singletons=True,
             input_root=current_root,
+            merge_plan=merge_plan,
         )
         if merged_files:
             merged_keys = {p.resolve() for p in merged_files}
             next_instruments = {}
+            next_output_stems = {}
             for output_path, chain in merge_plan:
                 output_key = output_path.resolve()
                 if output_key in merged_keys:
@@ -1080,6 +1155,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                     next_instruments[output_key] = instrument_key_by_path.get(
                         source.resolve(), source.parent.name
                     )
+                    root = merge_dir if len(chain) > 1 else current_root
+                    next_output_stems[output_key] = _source_output_stem(output_path, root)
                     continue
                 for source in chain:
                     source_key = source.resolve()
@@ -1087,9 +1164,22 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                         next_instruments[source_key] = instrument_key_by_path.get(
                             source_key, source.parent.name
                         )
+                        next_output_stems[source_key] = _source_output_stem(
+                            source, current_root
+                        )
             p_files = merged_files
             instrument_key_by_path = next_instruments
+            output_stem_by_path = next_output_stems
             current_root = merge_dir
+
+    _check_unique_output_stems(
+        [
+            output_stem_by_path.get(
+                p.resolve(), _source_output_stem(p, current_root)
+            )
+            for p in p_files
+        ]
+    )
 
     # Setup output directories
     output_dirs = _setup_output_dirs(config)
@@ -1117,6 +1207,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     def _instrument_key(p):
         return instrument_key_by_path.get(p.resolve(), p.parent.name)
 
+    def _output_stem(p):
+        return output_stem_by_path.get(p.resolve(), _source_output_stem(p, current_root))
+
     if jobs == 1:
         for p_path in p_files:
             logger.info("Processing %s...", p_path.name)
@@ -1128,6 +1221,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 hotel_data=hotel_data,
                 hotel_cfg=hotel_cfg,
                 instrument_key=_instrument_key(p_path),
+                output_stem=_output_stem(p_path),
             )
     else:
         # Spawn workers each get a per-pid log file inside <output_root>/logs/
@@ -1151,6 +1245,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                     hotel_data=hotel_data,
                     hotel_cfg=hotel_cfg,
                     instrument_key=_instrument_key(p),
+                    output_stem=_output_stem(p),
                 ): p
                 for p in p_files
             }

@@ -128,6 +128,22 @@ class TestCtdBinFile:
         np.testing.assert_allclose(ds["lon"].values, 145.0)
         ds.close()
 
+    def test_output_stem_override(self, tmp_path):
+        n = 64
+        t_slow = np.linspace(0, 1, n)
+        channels = {
+            "JAC_T": np.linspace(5.0, 15.0, n),
+            "JAC_C": np.linspace(30.0, 35.0, n),
+            "P": np.linspace(0.0, 100.0, n),
+        }
+        pf = self._make_pf(channels, t_slow=t_slow, filepath=Path("cast.p"))
+
+        out = ctd_bin_file(
+            pf, GPSFixed(15.0, 145.0), tmp_path, output_stem="SN001__cast"
+        )
+        assert out == tmp_path / "SN001__cast.nc"
+        assert out.exists()
+
     def test_no_channels_returns_none(self, tmp_path):
         n = 64
         t_slow = np.linspace(0, 1, n)

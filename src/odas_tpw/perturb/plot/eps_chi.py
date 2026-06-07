@@ -109,7 +109,6 @@ def _time_ticks(
     t: np.ndarray,
     cast_x: np.ndarray,
     segments: list[tuple[int, int]],
-    t_starts: list,
 ) -> tuple[np.ndarray, list[str]]:
     """Major-tick positions/labels for the cast x-axis.
 
@@ -284,7 +283,7 @@ def run(args: argparse.Namespace) -> str:
         pass
     t = t_eps
 
-    cast_x, segments, _centers, t_starts, _t_ends = layout.compute_layout(
+    cast_x, segments, _centers, _t_starts, _t_ends = layout.compute_layout(
         t, gap_seconds=args.gap_seconds
     )
 
@@ -365,7 +364,7 @@ def run(args: argparse.Namespace) -> str:
     # extent of finite data, which differs between the two views.
     ax_e.set_xlim(cast_x[0] - 0.5, cast_x[-1] + 0.5)
 
-    positions, labels = _time_ticks(t, cast_x, segments, t_starts)
+    positions, labels = _time_ticks(t, cast_x, segments)
     ax_g.set_xticks(positions)
     ax_g.set_xticklabels(labels)
     ax_g.set_xticks(cast_x, minor=True)

@@ -256,16 +256,22 @@ class ConfigManager:
         data = {}
         if upstream:
             for up_section, up_params in upstream:
-                resolved = dict(self.defaults[up_section])
-                for k, v in up_params.items():
-                    if k in resolved and v is not None:
-                        resolved[k] = v
+                if up_section in self.dynamic_key_sections:
+                    resolved = dict(up_params or {})
+                else:
+                    resolved = dict(self.defaults[up_section])
+                    for k, v in up_params.items():
+                        if k in resolved and v is not None:
+                            resolved[k] = v
                 data[up_section] = resolved
 
-        resolved = dict(self.defaults[section])
-        for k, v in params.items():
-            if k in resolved and v is not None:
-                resolved[k] = v
+        if section in self.dynamic_key_sections:
+            resolved = dict(params or {})
+        else:
+            resolved = dict(self.defaults[section])
+            for k, v in params.items():
+                if k in resolved and v is not None:
+                    resolved[k] = v
         data[section] = resolved
 
         out = directory / "config.yaml"

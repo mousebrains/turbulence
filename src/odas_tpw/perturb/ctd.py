@@ -127,6 +127,7 @@ def ctd_bin_file(
     variables: list[str] | None = None,
     method: str = "mean",
     diagnostics: bool = False,
+    output_stem: str | None = None,
 ) -> Path | None:
     """Time-bin CTD channels from a PFile and write to NetCDF.
 
@@ -148,6 +149,8 @@ def ctd_bin_file(
         Aggregation method ("mean" or "median").
     diagnostics : bool
         Write additional diagnostic variables.
+    output_stem : str, optional
+        Override the output filename stem. Defaults to ``pf.filepath.stem``.
 
     Returns
     -------
@@ -257,6 +260,7 @@ def ctd_bin_file(
     ds.attrs["source_file"] = pf.filepath.name
     ds.attrs["Conventions"] = "CF-1.13, ACDD-1.3"
 
-    out_path = output_dir / f"{pf.filepath.stem}.nc"
+    stem = output_stem or pf.filepath.stem
+    out_path = output_dir / f"{stem}.nc"
     ds.to_netcdf(out_path)
     return out_path

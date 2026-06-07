@@ -143,7 +143,7 @@ class TestUpstreamFor:
         assert {"epsilon", "profiles", "instruments"}.issubset(set(self._sections("chi")))
 
     def test_ctd_includes_file_flow_and_gps(self):
-        assert set(self._sections("ctd")) == {"files", "gps"}
+        assert set(self._sections("ctd")) == {"files", "gps", "hotel", "speed", "qc"}
 
     def test_profiles_binned_includes_profiles(self):
         assert "profiles" in self._sections("profiles_binned")
@@ -174,7 +174,9 @@ class TestUpstreamFor:
         )
 
     def test_ctd_combo_includes_ctd(self):
-        assert {"ctd", "gps", "netcdf"}.issubset(set(self._sections("ctd_combo")))
+        assert {"ctd", "gps", "hotel", "speed", "qc", "netcdf"}.issubset(
+            set(self._sections("ctd_combo"))
+        )
 
     def test_profiles_hash_changes_when_fp07_changes(self):
         from odas_tpw.perturb.config import compute_hash, merge_config
@@ -193,6 +195,25 @@ class TestUpstreamFor:
             upstream=_upstream_for("profiles", cfg_b),
         )
         assert h_a != h_b
+
+    def test_instrument_probe_exclusion_order_does_not_change_diss_hash(self):
+        from odas_tpw.perturb.config import compute_hash, merge_config
+
+        cfg_a = self._config()
+        cfg_b = self._config()
+        cfg_a["instruments"] = {"SN001": {"exclude_shear_probes": ["sh1", "sh2"]}}
+        cfg_b["instruments"] = {"SN001": {"exclude_shear_probes": ["sh2", "sh1"]}}
+        h_a = compute_hash(
+            "epsilon",
+            merge_config("epsilon", cfg_a.get("epsilon")),
+            upstream=_upstream_for("diss", cfg_a),
+        )
+        h_b = compute_hash(
+            "epsilon",
+            merge_config("epsilon", cfg_b.get("epsilon")),
+            upstream=_upstream_for("diss", cfg_b),
+        )
+        assert h_a == h_b
 
 
 class TestRunTrim:
@@ -552,6 +573,66 @@ class TestProcessFile:
         process_file(tmp_path / "test.p", config, None, output_dirs)
         mock_ctd_bin.assert_called_once()
 
+    @patch("odas_tpw.perturb.ctd.ctd_bin_file")
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_ctd_receives_output_stem(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_ctd_bin, tmp_path
+    ):
+        """CTD outputs use the pipeline's unique per-file stem."""
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pfile_cls.return_value = mock_pf
+
+        config = self._base_config(tmp_path)
+        config["ctd"]["enable"] = True
+        output_dirs = {
+            "profiles": tmp_path / "profiles",
+            "diss": tmp_path / "diss",
+            "ctd": tmp_path / "ctd",
+        }
+        output_dirs["ctd"].mkdir(parents=True, exist_ok=True)
+
+        process_file(
+            tmp_path / "test.p",
+            config,
+            None,
+            output_dirs,
+            output_stem="SN001__cast",
+        )
+        assert mock_ctd_bin.call_args.kwargs["output_stem"] == "SN001__cast"
+
+    @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate", return_value={"channels": {}})
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_profile_extract_receives_output_stem(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_fp07_cal, mock_extract, tmp_path
+    ):
+        """Profile outputs use the pipeline's unique per-file stem."""
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.fs_slow = 64.0
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = [{"start": 0, "end": 50}]
+
+        config = self._base_config(tmp_path)
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        for d in output_dirs.values():
+            d.mkdir(parents=True, exist_ok=True)
+
+        process_file(
+            tmp_path / "test.p",
+            config,
+            None,
+            output_dirs,
+            output_stem="SN001__cast",
+        )
+        assert mock_extract.call_args.kwargs["output_stem"] == "SN001__cast"
+
     @patch("odas_tpw.rsi.chi_io._load_therm_channels", return_value={})
     @patch("odas_tpw.rsi.chi_io._compute_chi", return_value=[MagicMock()])
     @patch("odas_tpw.rsi.dissipation._compute_epsilon")
@@ -784,6 +865,62 @@ class TestRunPipeline:
         config["files"]["trim"] = False
         run_pipeline(config, p_files=[Path("dummy.p")])
         mock_run_trim.assert_not_called()
+
+    @patch(
+        "odas_tpw.perturb.pipeline.process_file",
+        return_value={"source": "test.p", "profiles": [], "diss": [], "chi": []},
+    )
+    @patch("odas_tpw.perturb.pipeline._setup_output_dirs", return_value={})
+    @patch("odas_tpw.perturb.gps.create_gps", return_value=None)
+    def test_duplicate_basenames_get_distinct_output_stems(
+        self, mock_gps, mock_dirs, mock_proc, tmp_path
+    ):
+        """Same basename in different folders must not collide after trim/merge."""
+        root = tmp_path / "vmp"
+        p1 = root / "SN001" / "cast.p"
+        p2 = root / "SN002" / "cast.p"
+        p1.parent.mkdir(parents=True)
+        p2.parent.mkdir(parents=True)
+        p1.touch()
+        p2.touch()
+
+        config = self._base_config(tmp_path)
+        config["files"]["p_file_root"] = str(root)
+        config["files"]["trim"] = False
+
+        run_pipeline(config, p_files=[p1, p2])
+
+        stems = [call.kwargs["output_stem"] for call in mock_proc.call_args_list]
+        assert stems == ["SN001__cast", "SN002__cast"]
+
+    @patch(
+        "odas_tpw.perturb.pipeline.process_file",
+        return_value={"source": "test.p", "profiles": [], "diss": [], "chi": []},
+    )
+    @patch("odas_tpw.perturb.pipeline._setup_output_dirs", return_value={})
+    @patch("odas_tpw.perturb.gps.create_gps", return_value=None)
+    def test_trim_merge_preserves_distinct_output_stems_and_instruments(
+        self, mock_gps, mock_dirs, mock_proc, tmp_path
+    ):
+        """Merged chains and singleton files keep distinct stems and instrument keys."""
+        root = tmp_path / "vmp"
+        (root / "SN001").mkdir(parents=True)
+        (root / "SN002").mkdir(parents=True)
+        _make_p_file(root / "SN001" / "cast_0001.p", file_number=1)
+        _make_p_file(root / "SN001" / "cast_0002.p", file_number=2)
+        _make_p_file(root / "SN002" / "cast.p", file_number=10)
+
+        config = self._base_config(tmp_path)
+        config["files"]["p_file_root"] = str(root)
+        config["files"]["merge"] = True
+
+        run_pipeline(config, p_files=sorted(root.glob("**/*.p")))
+
+        calls = mock_proc.call_args_list
+        stems = [call.kwargs["output_stem"] for call in calls]
+        instrument_keys = [call.kwargs["instrument_key"] for call in calls]
+        assert stems == ["SN001__cast_0001", "SN002__cast"]
+        assert instrument_keys == ["SN001", "SN002"]
 
 
 class TestNanExcludedProbes:
