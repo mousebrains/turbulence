@@ -13,7 +13,7 @@ from odas_tpw.rsi.p_file import _H, HEADER_WORDS, PFile, extract_pfile_segment
 SAMPLE_FILE = Path(__file__).parent / "data" / "SN479_0006.p"
 
 
-def _write_synthetic_pfile(path, *, n_records: int = 6, record_size: int = 16):
+def _write_synthetic_pfile(path, *, n_records: int = 6, record_size: int = 160):
     """Write a minimal P-file-like byte stream for cutp tests."""
     header_size = 128
     config = b"[instrument_info]\nmodel=test\n"
@@ -50,7 +50,7 @@ def test_extract_pfile_segment_refuses_existing_output_without_overwrite(tmp_pat
         extract_pfile_segment(source, dest, start_record=0, n_records=1)
 
     extract_pfile_segment(source, dest, start_record=1, n_records=1, overwrite=True)
-    assert dest.read_bytes().endswith(bytes([1]) * 16)
+    assert dest.read_bytes().endswith(bytes([1]) * 160)
 
 
 @pytest.mark.parametrize(
@@ -59,7 +59,7 @@ def test_extract_pfile_segment_refuses_existing_output_without_overwrite(tmp_pat
         (-1, 1, "start_record must be >= 0"),
         (0, 0, "n_records must be >= 1"),
         (6, 1, "out of range"),
-        (5, 2, "only 1 complete records are available"),
+        (5, 2, "only 1 complete record is available"),
     ],
 )
 def test_extract_pfile_segment_validates_record_range(
@@ -74,6 +74,13 @@ def test_extract_pfile_segment_validates_record_range(
             start_record=start_record,
             n_records=n_records,
         )
+
+
+def test_extract_pfile_segment_rejects_records_smaller_than_record_header(tmp_path):
+    _write_synthetic_pfile(tmp_path / "source.p", record_size=64)
+
+    with pytest.raises(ValueError, match="invalid record_size=64"):
+        extract_pfile_segment(tmp_path / "source.p", tmp_path / "segment.p")
 
 
 def test_extract_pfile_segment_from_fixture_opens_as_pfile(tmp_path):
@@ -110,3 +117,31 @@ def test_rsi_cli_cutp_writes_segment(monkeypatch, tmp_path):
 
     main()
     assert dest.read_bytes() == first_record + b"".join(records[1:3])
+
+
+@pytest.mark.parametrize("force_flag", ["--force", "--overwrite"])
+def test_rsi_cli_cutp_overwrite_flags(monkeypatch, tmp_path, force_flag):
+    first_record, records = _write_synthetic_pfile(tmp_path / "source.p", n_records=4)
+    dest = tmp_path / "segment.p"
+    dest.write_bytes(b"existing")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rsi-tpw",
+            "cutp",
+            str(tmp_path / "source.p"),
+            "-o",
+            str(dest),
+            "--start",
+            "2",
+            "--n-records",
+            "1",
+            force_flag,
+        ],
+    )
+
+    from odas_tpw.rsi.cli import main
+
+    main()
+    assert dest.read_bytes() == first_record + records[2]

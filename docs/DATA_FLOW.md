@@ -224,7 +224,10 @@ per-profile .nc).
 Copies the original header/config block and a contiguous range of complete
 data records. This is useful for small debugging fixtures and reproductions,
 not for pressure- or profile-aware science processing. Header metadata is
-preserved unchanged, including the original timestamp and record count.
+preserved unchanged, so absolute time is correct only for `--start 0`; for
+`--start N>0`, data is shifted relative to the copied timestamp. The header
+record count is not authoritative because local readers derive the count from
+file size.
 
 ### `rsi-tpw nc` — Convert to NetCDF
 

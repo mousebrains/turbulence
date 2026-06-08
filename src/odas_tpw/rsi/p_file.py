@@ -98,8 +98,11 @@ def extract_pfile_segment(
     containing the binary header and configuration string unchanged, then
     appends ``n_records`` complete data records starting at the 0-based
     ``start_record`` index. The output is a parseable P-file segment with the
-    original calibration metadata preserved, but header fields such as the
-    timestamp and source record count remain unchanged.
+    original calibration metadata preserved, but header fields are copied
+    verbatim. Absolute time is correct only when ``start_record`` is 0; for
+    later starts, data is shifted relative to the copied timestamp. The header
+    record count is not authoritative because local readers derive the count
+    from file size.
     """
     source = Path(source)
     dest = Path(dest)
@@ -130,6 +133,11 @@ def extract_pfile_segment(
             raise ValueError(f"{source.name}: invalid config_size={config_size}")
         if record_size <= 0:
             raise ValueError(f"{source.name}: invalid record_size={record_size}")
+        if record_size < header_size:
+            raise ValueError(
+                f"{source.name}: invalid record_size={record_size}; "
+                f"expected >= header_size={header_size}"
+            )
 
         first_record_size = header_size + config_size
         src.seek(0, 2)
@@ -147,9 +155,11 @@ def extract_pfile_segment(
 
         available = total_records - start_record
         if n_records > available:
+            record_word = "record" if available == 1 else "records"
+            verb = "is" if available == 1 else "are"
             raise ValueError(
                 f"requested {n_records} records starting at {start_record}, "
-                f"but only {available} complete records are available"
+                f"but only {available} complete {record_word} {verb} available"
             )
 
         src.seek(0)

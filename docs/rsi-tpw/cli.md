@@ -41,7 +41,10 @@ rsi-tpw info VMP/*.p
 Copy a contiguous range of complete data records from a `.p` file into a new
 valid `.p` file. This is byte-level debugging support, not a pressure- or
 profile-aware scientific extraction. The header and configuration string are
-copied unchanged, including the original timestamp and record-count metadata.
+copied unchanged. Absolute time is correct only for `--start 0`; for `--start
+N>0`, the data is shifted relative to the copied timestamp. The header record
+count is not authoritative because local readers derive the count from file
+size.
 
 ```bash
 rsi-tpw cutp VMP/file.p -o debug_segment.p --start 300 --n-records 60
@@ -52,7 +55,7 @@ rsi-tpw cutp VMP/file.p -o debug_segment.p --start 300 --n-records 60
 | `-o`, `--output FILE` | Output `.p` file (required) |
 | `-s`, `--start N` | First data record to copy, 0-based after the config record (default: 0) |
 | `-n`, `--n-records N` | Number of complete data records to copy (default: 60) |
-| `-w`, `--overwrite` | Overwrite output file if it exists |
+| `-f`, `--force`, `--overwrite` | Overwrite output file if it exists |
 
 ## `rsi-tpw nc`
 

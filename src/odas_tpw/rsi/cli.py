@@ -245,7 +245,10 @@ def _cmd_cutp(args: argparse.Namespace) -> None:
             n_records=args.n_records,
             overwrite=args.overwrite,
         )
-    except (FileExistsError, FileNotFoundError, OSError, ValueError) as e:
+    except FileExistsError:
+        print(f"Error: {args.output} exists; pass --force to replace it", file=sys.stderr)
+        sys.exit(1)
+    except (FileNotFoundError, OSError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -516,7 +519,9 @@ def _add_cutp_parser(subparsers: argparse._SubParsersAction) -> None:
         description=(
             "Create a valid .p file containing a contiguous range of complete "
             "data records. This is a byte-level debugging utility, not a "
-            "pressure- or profile-aware scientific extraction."
+            "pressure- or profile-aware scientific extraction. Absolute time "
+            "is correct only when --start is 0 because the header is copied "
+            "unchanged."
         ),
     )
     p.add_argument("file", metavar="FILE", help="Input .p file")
@@ -544,8 +549,10 @@ def _add_cutp_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Number of complete data records to copy (default: 60)",
     )
     p.add_argument(
-        "-w",
+        "-f",
+        "--force",
         "--overwrite",
+        dest="overwrite",
         action="store_true",
         help="Overwrite output file if it exists",
     )
