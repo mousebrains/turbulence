@@ -15,6 +15,7 @@ Chi levels and binning are extensions to the SCOR-160 framework.
 | Command | Input | Output | Purpose |
 |---------|-------|--------|---------|
 | `rsi-tpw info` | `.p` files | stdout | Print .p file metadata |
+| `rsi-tpw cutp` | `.p` file | Short `.p` file | Copy record ranges for debugging |
 | `rsi-tpw nc` | `.p` files | Full-record `.nc` | Convert .p to NetCDF (L1) |
 | `rsi-tpw prof` | `.p` or `.nc` | Per-profile `.nc` | Extract profiles |
 | `rsi-tpw eps` | `.p`, `.nc`, or per-profile `.nc` | `*_eps.nc` per profile | Compute epsilon |
@@ -213,6 +214,20 @@ stacks into a multi-profile dataset.
 The modular commands (`nc`, `prof`, `eps`, `chi`) can be run independently
 and accept input at any pipeline stage (.p files, full-record .nc, or
 per-profile .nc).
+
+### `rsi-tpw cutp` — Copy debug records
+
+```
+.P file → byte-level record slice → shorter .P file
+```
+
+Copies the original header/config block and a contiguous range of complete
+data records. This is useful for small debugging fixtures and reproductions,
+not for pressure- or profile-aware science processing. Header metadata is
+preserved unchanged, so absolute time is correct only for `--start 0`; for
+`--start N>0`, data is shifted relative to the copied timestamp. The header
+record count is not authoritative because local readers derive the count from
+file size.
 
 ### `rsi-tpw nc` — Convert to NetCDF
 

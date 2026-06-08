@@ -7,6 +7,7 @@ Main command:
 
 Subcommands:
     info     — Print summary of .p file(s)
+    cutp     — Copy a short record range from a .p file for debugging
     nc       — Convert .p files to NetCDF
     prof     — Extract profiles from .p or full-record .nc files
     eps      — Compute epsilon (TKE dissipation) from any pipeline stage
@@ -230,6 +231,28 @@ def _cmd_info(args: argparse.Namespace) -> None:
             print("\n" + "=" * 60 + "\n")
         pf = PFile(pf_path)
         pf.summary()
+
+
+def _cmd_cutp(args: argparse.Namespace) -> None:
+    """Copy a contiguous data-record range from a .p file."""
+    from odas_tpw.rsi.p_file import extract_pfile_segment
+
+    try:
+        out = extract_pfile_segment(
+            args.file,
+            args.output,
+            start_record=args.start,
+            n_records=args.n_records,
+            overwrite=args.overwrite,
+        )
+    except FileExistsError:
+        print(f"Error: {args.output} exists; pass --force to replace it", file=sys.stderr)
+        sys.exit(1)
+    except (FileNotFoundError, OSError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Wrote {args.n_records} record(s) to {out}")
 
 
 def _cmd_init(args: argparse.Namespace) -> None:
@@ -487,6 +510,53 @@ def _add_info_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument("files", nargs="+", metavar="FILE", help=".p file(s) or glob pattern(s)")
     p.set_defaults(func=_cmd_info)
+
+
+def _add_cutp_parser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "cutp",
+        help="Copy .p records for debugging",
+        description=(
+            "Create a valid .p file containing a contiguous range of complete "
+            "data records. This is a byte-level debugging utility, not a "
+            "pressure- or profile-aware scientific extraction. Absolute time "
+            "is correct only when --start is 0 because the header is copied "
+            "unchanged."
+        ),
+    )
+    p.add_argument("file", metavar="FILE", help="Input .p file")
+    p.add_argument(
+        "-o",
+        "--output",
+        metavar="FILE",
+        required=True,
+        help="Output .p file",
+    )
+    p.add_argument(
+        "-s",
+        "--start",
+        type=int,
+        default=0,
+        metavar="N",
+        help="First data record to copy, 0-based after the config record (default: 0)",
+    )
+    p.add_argument(
+        "-n",
+        "--n-records",
+        type=int,
+        default=60,
+        metavar="N",
+        help="Number of complete data records to copy (default: 60)",
+    )
+    p.add_argument(
+        "-f",
+        "--force",
+        "--overwrite",
+        dest="overwrite",
+        action="store_true",
+        help="Overwrite output file if it exists",
+    )
+    p.set_defaults(func=_cmd_cutp)
 
 
 def _add_init_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -948,6 +1018,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     _add_info_parser(subparsers)
+    _add_cutp_parser(subparsers)
     _add_nc_parser(subparsers)
     _add_init_parser(subparsers)
     _add_prof_parser(subparsers)

@@ -84,6 +84,97 @@ def _parse_header(raw: bytes, endian: str) -> dict:
     return {name: words[idx] for name, idx in _H.items()}
 
 
+def extract_pfile_segment(
+    source: str | Path,
+    dest: str | Path,
+    *,
+    start_record: int = 0,
+    n_records: int = 60,
+    overwrite: bool = False,
+) -> Path:
+    """Copy a contiguous data-record range from a Rockland ``.p`` file.
+
+    This is a byte-level debugging utility. It copies the first record
+    containing the binary header and configuration string unchanged, then
+    appends ``n_records`` complete data records starting at the 0-based
+    ``start_record`` index. The output is a parseable P-file segment with the
+    original calibration metadata preserved, but header fields are copied
+    verbatim. Absolute time is correct only when ``start_record`` is 0; for
+    later starts, data is shifted relative to the copied timestamp. The header
+    record count is not authoritative because local readers derive the count
+    from file size.
+    """
+    source = Path(source)
+    dest = Path(dest)
+
+    if start_record < 0:
+        raise ValueError("start_record must be >= 0")
+    if n_records < 1:
+        raise ValueError("n_records must be >= 1")
+    if not source.exists():
+        raise FileNotFoundError(source)
+    if dest.exists() and not overwrite:
+        raise FileExistsError(f"{dest} exists; pass overwrite=True to replace it")
+
+    with open(source, "rb") as src:
+        raw_hdr = src.read(HEADER_BYTES)
+        if len(raw_hdr) < HEADER_BYTES:
+            raise ValueError(f"{source.name}: file too small for header")
+
+        endian = _detect_endian(raw_hdr)
+        header = _parse_header(raw_hdr, endian)
+        header_size = int(header["header_size"])
+        config_size = int(header["config_size"])
+        record_size = int(header["record_size"])
+
+        if header_size < HEADER_BYTES:
+            raise ValueError(f"{source.name}: invalid header_size={header_size}")
+        if config_size < 0:
+            raise ValueError(f"{source.name}: invalid config_size={config_size}")
+        if record_size <= 0:
+            raise ValueError(f"{source.name}: invalid record_size={record_size}")
+        if record_size < header_size:
+            raise ValueError(
+                f"{source.name}: invalid record_size={record_size}; "
+                f"expected >= header_size={header_size}"
+            )
+
+        first_record_size = header_size + config_size
+        src.seek(0, 2)
+        file_size = src.tell()
+        data_bytes = file_size - first_record_size
+        if data_bytes < 0:
+            raise ValueError(f"{source.name}: file smaller than first record")
+
+        total_records = data_bytes // record_size
+        if start_record >= total_records:
+            raise ValueError(
+                f"start_record={start_record} out of range "
+                f"(file has {total_records} complete data records)"
+            )
+
+        available = total_records - start_record
+        if n_records > available:
+            record_word = "record" if available == 1 else "records"
+            verb = "is" if available == 1 else "are"
+            raise ValueError(
+                f"requested {n_records} records starting at {start_record}, "
+                f"but only {available} complete {record_word} {verb} available"
+            )
+
+        src.seek(0)
+        first_record = src.read(first_record_size)
+        src.seek(first_record_size + start_record * record_size)
+        data_records = src.read(n_records * record_size)
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "wb") as out:
+        out.write(first_record)
+        out.write(data_records)
+
+    return dest
+
+
 # ---------------------------------------------------------------------------
 # Configuration string parsing
 # ---------------------------------------------------------------------------
