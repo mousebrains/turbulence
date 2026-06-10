@@ -2,6 +2,7 @@
 """Tests for channel conversion functions."""
 
 import numpy as np
+import pytest
 
 from odas_tpw.rsi.channels import (
     CONVERTERS,
@@ -710,3 +711,71 @@ class TestJacEmcAlias:
     def test_jac_emc_is_aem1g_a(self):
         """jac_emc is a deprecated alias for aem1g_a."""
         assert CONVERTERS["jac_emc"] is convert_aem1g_a
+
+
+class TestConvertAccel:
+    """Linear (DC-response) accelerometer, odas_accel_internal port."""
+
+    def test_known_values(self):
+        from odas_tpw.rsi.channels import convert_accel
+
+        # x = data*adc_fs/2^bits + adc_zero - sig_zero; phys = 9.81*(x-coef0)/coef1
+        params = {
+            "adc_fs": "4.096",
+            "adc_bits": "16",
+            "adc_zero": "0",
+            "sig_zero": "0",
+            "coef0": "0.5",
+            "coef1": "2.0",
+        }
+        data = np.array([16000.0])
+        x = 16000.0 * 4.096 / 2**16
+        expected = 9.81 * (x - 0.5) / 2.0
+        result, units = convert_accel(data, params)
+        assert units == "m_s-2"
+        np.testing.assert_allclose(result[0], expected, rtol=1e-12)
+
+    def test_zero_input_with_offsets(self):
+        from odas_tpw.rsi.channels import convert_accel
+
+        params = {
+            "adc_fs": "1",
+            "adc_bits": "0",
+            "adc_zero": "1.0",
+            "sig_zero": "0.25",
+            "coef0": "0",
+            "coef1": "1",
+        }
+        result, _ = convert_accel(np.array([0.0]), params)
+        # x = 0*1/1 + 1.0 - 0.25 = 0.75 -> 9.81*0.75
+        np.testing.assert_allclose(result[0], 9.81 * 0.75, rtol=1e-12)
+
+    def test_missing_coefficients_warn(self):
+        from odas_tpw.rsi.channels import convert_accel
+
+        with pytest.warns(UserWarning, match="coef1"):
+            convert_accel(np.array([1.0]), {"coef0": "0"})
+
+
+class TestConvertMagn:
+    """Magnetometer, odas_magn_internal port."""
+
+    def test_known_values(self):
+        from odas_tpw.rsi.channels import convert_magn
+
+        params = {"coef0": "100.0", "coef1": "4.0"}
+        result, units = convert_magn(np.array([500.0, 100.0]), params)
+        assert units == "uT"
+        np.testing.assert_allclose(result, [(500.0 - 100.0) / 4.0, 0.0], rtol=1e-12)
+
+    def test_missing_coefficients_warn(self):
+        from odas_tpw.rsi.channels import convert_magn
+
+        with pytest.warns(UserWarning, match="coef0"):
+            convert_magn(np.array([1.0]), {})
+
+    def test_registered_in_converters(self):
+        from odas_tpw.rsi.channels import convert_accel, convert_magn
+
+        assert CONVERTERS["accel"] is convert_accel
+        assert CONVERTERS["magn"] is convert_magn

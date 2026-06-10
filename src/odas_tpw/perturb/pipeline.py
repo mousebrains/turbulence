@@ -561,12 +561,63 @@ def process_file(
     output_stem = output_stem or p_path.stem
     log_basename = output_stem
 
+    profiles_cfg = config.get("profiles", {})
+    fp07_cfg = config.get("fp07", {})
+    ct_cfg = config.get("ct", {})
+
+    # ---- Profile detection + CT alignment ----
+    # Runs BEFORE the CTD fork so the CTD product's salinity/density are
+    # computed from time-aligned conductivity whenever profiles can be
+    # detected (alignment needs the per-profile lag estimates).  Files
+    # with no pressure or no detectable profiles still get a CTD product
+    # from the unaligned conductivity.
+    profiles: list[tuple[int, int]] = []
+    P_slow = pf.channels.get("P")
+    with stage_log(output_dirs.get("profiles"), log_basename):
+        if P_slow is None:
+            logger.warning("No pressure channel in %s", p_path.name)
+        else:
+            W = _smooth_fall_rate(P_slow, pf.fs_slow)
+            # Resolve "auto" → vehicle default (e.g. slocum_glider → "glide").
+            # ``scor160.profile.get_profiles`` doesn't know "auto" itself, so
+            # without this it silently falls through to the "down" branch and
+            # we lose every up-profile -- on a glider with MR-on-during-climb
+            # only, that drops *all* the real flight data.
+            from odas_tpw.rsi.vehicle import resolve_direction
+
+            vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
+            direction = resolve_direction(
+                profiles_cfg.get("direction", "auto"), vehicle,
+            )
+            profiles = get_profiles(
+                P_slow,
+                W,
+                pf.fs_slow,
+                P_min=profiles_cfg.get("P_min", 0.5),
+                W_min=profiles_cfg.get("W_min", 0.3),
+                direction=direction,
+                min_duration=profiles_cfg.get("min_duration", 7.0),
+            )
+            if not profiles:
+                logger.warning("No profiles in %s", p_path.name)
+
+        # CT alignment (before the CTD fork; needs detected profiles)
+        if profiles and ct_cfg.get("align", True):
+            T_name = ct_cfg.get("T_name", "JAC_T")
+            C_name = ct_cfg.get("C_name", "JAC_C")
+            if T_name in pf.channels and C_name in pf.channels:
+                try:
+                    C_aligned, _lag = ct_align(
+                        pf.channels[T_name],
+                        pf.channels[C_name],
+                        pf.fs_slow,
+                        profiles,
+                    )
+                    pf.channels[C_name] = C_aligned
+                except Exception as exc:
+                    logger.warning("CT align failed for %s: %s", p_path.name, exc)
+
     # ---- CTD fork (full file, both up and down) ----
-    # NOTE: this fork runs BEFORE CT alignment (which needs detected
-    # profiles), so the salinity/density in the CTD product is computed
-    # from unaligned conductivity — C-T mismatch spikes at sharp
-    # thermoclines are smeared by the depth bins but not removed.  Use
-    # the per-profile products for spike-free salinity.
     ctd_cfg = config.get("ctd", {})
     if ctd_cfg.get("enable", True) and "ctd" in output_dirs:
         with stage_log(output_dirs.get("ctd"), log_basename):
@@ -588,44 +639,13 @@ def process_file(
             except Exception as exc:
                 logger.error("CTD binning %s: %s", p_path.name, exc)
 
+    if P_slow is None or not profiles:
+        return result
+
     # ---- Profile fork ----
-    # Wraps profile detection, FP07 calibration, CT alignment, and the
+    # Wraps profile-bound adjustment, FP07 calibration, and the
     # extract_profiles write.  These all conceptually feed profiles_NN/.
-    profiles_cfg = config.get("profiles", {})
-    fp07_cfg = config.get("fp07", {})
-    ct_cfg = config.get("ct", {})
-
     with stage_log(output_dirs.get("profiles"), log_basename):
-        P_slow = pf.channels.get("P")
-        if P_slow is None:
-            logger.warning("No pressure channel in %s", p_path.name)
-            return result
-
-        W = _smooth_fall_rate(P_slow, pf.fs_slow)
-        # Resolve "auto" → vehicle default (e.g. slocum_glider → "glide").
-        # ``scor160.profile.get_profiles`` doesn't know "auto" itself, so
-        # without this it silently falls through to the "down" branch and
-        # we lose every up-profile -- on a glider with MR-on-during-climb
-        # only, that drops *all* the real flight data.
-        from odas_tpw.rsi.vehicle import resolve_direction
-        vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
-        direction = resolve_direction(
-            profiles_cfg.get("direction", "auto"), vehicle,
-        )
-        profiles = get_profiles(
-            P_slow,
-            W,
-            pf.fs_slow,
-            P_min=profiles_cfg.get("P_min", 0.5),
-            W_min=profiles_cfg.get("W_min", 0.3),
-            direction=direction,
-            min_duration=profiles_cfg.get("min_duration", 7.0),
-        )
-
-        if not profiles:
-            logger.warning("No profiles in %s", p_path.name)
-            return result
-
         # Adjust profile bounds (top-trim removes prop-wash, bottom detects seafloor crash)
         profiles = _adjust_profile_bounds(
             profiles,
@@ -658,22 +678,6 @@ def process_file(
                     pf.channels[ch_name] = cal_data
             except Exception as exc:
                 logger.warning("FP07 cal failed for %s: %s", p_path.name, exc)
-
-        # CT alignment
-        if ct_cfg.get("align", True):
-            T_name = ct_cfg.get("T_name", "JAC_T")
-            C_name = ct_cfg.get("C_name", "JAC_C")
-            if T_name in pf.channels and C_name in pf.channels:
-                try:
-                    C_aligned, _lag = ct_align(
-                        pf.channels[T_name],
-                        pf.channels[C_name],
-                        pf.fs_slow,
-                        profiles,
-                    )
-                    pf.channels[C_name] = C_aligned
-                except Exception as exc:
-                    logger.warning("CT align failed for %s: %s", p_path.name, exc)
 
         # Write per-profile NetCDFs
         from odas_tpw.rsi.profile import extract_profiles

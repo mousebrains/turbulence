@@ -353,6 +353,114 @@ def _process_profile(
                 except (ValueError, RuntimeError) as e:
                     logger.error(f"Chi fit error: {e}")
 
+    # Step 6c: Derived mixing quantities (K_T, Gamma, K_rho) on the chi
+    # window grid, where both epsilon and chi exist
+    mixing_vars: dict[str, tuple[np.ndarray, dict]] | None = None
+    if (
+        l4_chi_eps is not None
+        and l4_chi_eps.n_spectra > 0
+        and l4.n_spectra > 0
+        and l1.temp.size == l1.n_time
+    ):
+        try:
+            from odas_tpw.processing.mixing import (
+                mixing_coefficients,
+                pair_nearest,
+                window_stratification,
+            )
+
+            sal_for_strat = salinity
+            if isinstance(salinity, np.ndarray) and len(salinity) != l1.n_time:
+                sal_for_strat = float(np.nanmean(salinity))
+
+            half_w = 0.5 * chi_diss_length / l1.fs_fast
+            strat = window_stratification(
+                l4_chi_eps.time,
+                half_w,
+                l1.time,
+                l1.pres,
+                l1.temp,
+                S=sal_for_strat,
+            )
+            eps_on_chi = pair_nearest(l4.time, l4.epsi_final, l4_chi_eps.time)
+            mix = mixing_coefficients(
+                eps_on_chi, l4_chi_eps.chi_final, strat.N2, strat.dTdz
+            )
+            sal_note = (
+                "salinity assumed 35 PSU (none provided); N2 reflects "
+                "temperature stratification only"
+                if salinity is None
+                else "salinity from user-provided values"
+            )
+            mixing_vars = {
+                "N2": (
+                    strat.N2,
+                    {
+                        "units": "s-2",
+                        "long_name": "buoyancy frequency squared (window scale)",
+                        "comment": (
+                            "TEOS-10 (gsw.Nsquared) between the shallow- and "
+                            f"deep-half means of each chi window; {sal_note}."
+                        ),
+                    },
+                ),
+                "dTdz": (
+                    strat.dTdz,
+                    {
+                        "units": "K m-1",
+                        "long_name": "background temperature gradient (positive down)",
+                        "comment": (
+                            "Least-squares slope of in-situ temperature vs depth "
+                            "over each chi window."
+                        ),
+                    },
+                ),
+                "K_T": (
+                    mix.K_T,
+                    {
+                        "units": "m2 s-1",
+                        "long_name": "Osborn-Cox eddy diffusivity of heat",
+                        "comment": (
+                            "K_T = chi / (2*(dT/dz)^2), Osborn & Cox (1972), "
+                            "doi:10.1080/03091927208236085. NaN where "
+                            "|dT/dz| < 1e-4 K/m (well-mixed)."
+                        ),
+                    },
+                ),
+                "Gamma": (
+                    mix.Gamma,
+                    {
+                        "units": "1",
+                        "long_name": "mixing coefficient (measured)",
+                        "comment": (
+                            "Gamma = N2*chi / (2*epsilon*(dT/dz)^2), Oakey "
+                            "(1982), doi:10.1175/1520-0485(1982)012<0256:DOTROD>"
+                            "2.0.CO;2. epsilon paired from the nearest shear-"
+                            "probe window. NaN where N2 < 1e-9 s-2 or "
+                            "|dT/dz| < 1e-4 K/m. Canonical value ~0.2."
+                        ),
+                    },
+                ),
+                "K_rho": (
+                    mix.K_rho,
+                    {
+                        "units": "m2 s-1",
+                        "long_name": "Osborn diapycnal diffusivity (Gamma_0 = 0.2)",
+                        "comment": (
+                            "K_rho = 0.2*epsilon/N2, Osborn (1980), "
+                            "doi:10.1175/1520-0485(1980)010<0083:EOTLRO>2.0.CO;2. "
+                            "Compare with K_T: agreement implies the measured "
+                            "Gamma is near the canonical 0.2. NaN where "
+                            "N2 < 1e-9 s-2."
+                        ),
+                    },
+                ),
+            }
+            n_gamma = int(np.sum(np.isfinite(mix.Gamma)))
+            logger.info(f"Mixing quantities: {n_gamma} valid Gamma estimates")
+        except (ValueError, RuntimeError) as e:
+            logger.error(f"Mixing quantities error: {e}")
+
     # Step 7: Depth binning
     binned_parts = []
 
@@ -365,9 +473,12 @@ def _process_profile(
         binned_parts.append(eps_bin)
 
     if l4_chi_eps is not None and l4_chi_eps.n_spectra > 0:
+        chi_vals: dict[str, np.ndarray] = {"chi": l4_chi_eps.chi_final}
+        if mixing_vars is not None:
+            chi_vals.update({name: arr for name, (arr, _a) in mixing_vars.items()})
         chi_bin = bin_by_depth(
             l4_chi_eps.pres,
-            {"chi": l4_chi_eps.chi_final},
+            chi_vals,
             bin_size=bin_size,
         )
         binned_parts.append(chi_bin)
@@ -388,7 +499,9 @@ def _process_profile(
     _write_l4_epsilon(l4, l3, prof_dir / "L4_epsilon.nc", pf)
 
     if l4_chi_eps is not None:
-        _write_l4_chi(l4_chi_eps, prof_dir / "L4_chi_epsilon.nc", time_ref)
+        _write_l4_chi(
+            l4_chi_eps, prof_dir / "L4_chi_epsilon.nc", time_ref, extra_vars=mixing_vars
+        )
     if l4_chi_fit_result is not None:
         _write_l4_chi(l4_chi_fit_result, prof_dir / "L4_chi_fit.nc", time_ref)
 
@@ -508,8 +621,18 @@ def _write_l4_epsilon(l4: L4Data, l3: L3Data, path: Path, pf) -> None:
     ds.to_netcdf(path)
 
 
-def _write_l4_chi(l4_chi: L4ChiData, path: Path, time_ref: str) -> None:
-    """Write L4 chi to NetCDF."""
+def _write_l4_chi(
+    l4_chi: L4ChiData,
+    path: Path,
+    time_ref: str,
+    extra_vars: dict[str, tuple[np.ndarray, dict]] | None = None,
+) -> None:
+    """Write L4 chi to NetCDF.
+
+    ``extra_vars`` maps variable name -> (1-D array on the time dim,
+    attrs dict); used for the derived mixing quantities (N2, dTdz, K_T,
+    Gamma, K_rho).
+    """
     n_gradt = l4_chi.n_gradt
     probe_names = [f"T{i + 1}" for i in range(n_gradt)]
 
@@ -607,4 +730,7 @@ def _write_l4_chi(l4_chi: L4ChiData, path: Path, time_ref: str) -> None:
             "history": f"Pipeline on {datetime.now(UTC).isoformat()}",
         },
     )
+    if extra_vars:
+        for name, (arr, attrs) in extra_vars.items():
+            ds[name] = xr.DataArray(arr, dims=["time"], attrs=attrs)
     ds.to_netcdf(path)
