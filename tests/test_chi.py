@@ -1459,3 +1459,33 @@ class TestComputeChiFinal:
         np.testing.assert_allclose(result[0], np.sqrt(1e-7 * 4e-7))
         assert np.isnan(result[1])
         np.testing.assert_allclose(result[2], np.sqrt(2e-7 * 8e-7))
+
+
+class TestChiGridRefinement:
+    """Parabolic refinement removes the log-grid quantization in Method 1."""
+
+    def test_chi_recovery_beats_grid_resolution(self):
+        from odas_tpw.chi.batchelor import batchelor_kB, kraichnan_grad
+        from odas_tpw.chi.chi import _chi_from_epsilon
+        from odas_tpw.chi.fp07 import fp07_transfer
+
+        eps = 1e-8
+        nu = 1.2e-6
+        speed = 0.7
+        kB = float(batchelor_kB(eps, nu))
+        K = np.linspace(0.5, 100.0, 256)
+        H2 = fp07_transfer(K * speed, 0.01)
+        noise = np.full_like(K, 1e-12)
+
+        # The grid step is ~4.7%; with a noiseless synthetic spectrum the
+        # refined estimate should recover chi far better than that for
+        # chi values that do NOT land on a grid point.
+        for chi_true in (1.37e-8, 4.9e-9, 2.83e-7):
+            spec_obs = chi_true * kraichnan_grad(K, kB, 1.0) * H2 + noise
+            res = _chi_from_epsilon(
+                spec_obs, K, eps, nu, noise, H2, 0.01,
+                fp07_transfer, 98.0, speed, "kraichnan",
+            )
+            assert abs(res.chi / chi_true - 1) < 0.005, (
+                f"chi_true={chi_true:.3e} recovered {res.chi:.3e}"
+            )

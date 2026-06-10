@@ -97,13 +97,21 @@ class L2Data:
     pspd_rel: np.ndarray  # (N_TIME,), profiling speed [m/s]
     section_number: np.ndarray  # (N_TIME,), 0 = excluded
     # Despike bookkeeping for ATOMIX QC flags (empty when despiking was
-    # disabled or for benchmark reference reads):
-    # per-sample replaced-by-despike masks and per-channel maximum pass
-    # counts across sections.
+    # disabled or for benchmark reference reads): per-sample
+    # replaced-by-despike masks, and pass counts per (channel, section)
+    # — the benchmark's PASS_COUNT_SH layout, with the section ids in
+    # ``despike_section_ids``.
     despike_mask_sh: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=bool))
-    despike_passes_sh: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    despike_passes_sh: np.ndarray = field(
+        default_factory=lambda: np.zeros((0, 0), dtype=np.int64)
+    )
     despike_mask_A: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=bool))
-    despike_passes_A: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    despike_passes_A: np.ndarray = field(
+        default_factory=lambda: np.zeros((0, 0), dtype=np.int64)
+    )
+    despike_section_ids: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.int64)
+    )
 
 
 @dataclass
@@ -132,11 +140,13 @@ class L3Data:
     sh_spec_clean: np.ndarray  # (N_SHEAR, N_WAVENUMBER, N_SPECTRA), Goodman-cleaned
     # Despike bookkeeping for ATOMIX QC flags (empty for benchmark
     # reference reads): per-window fraction of shear samples replaced by
-    # despiking, and per-channel maximum pass count.
+    # despiking, and the pass count of each window's section.
     despike_fraction: np.ndarray = field(
         default_factory=lambda: np.zeros((0, 0))
     )  # (N_SHEAR, N_SPECTRA)
-    despike_passes: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    despike_passes: np.ndarray = field(
+        default_factory=lambda: np.zeros((0, 0), dtype=np.int64)
+    )  # (N_SHEAR, N_SPECTRA)
 
     @property
     def n_spectra(self) -> int:
@@ -369,12 +379,17 @@ def _read_l1(ds: netCDF4.Dataset) -> L1Data:
         roll = np.asarray(g.variables["ROLL"][:], dtype=np.float64)
     if "TEMP" in g.variables:
         temp = np.asarray(g.variables["TEMP"][:], dtype=np.float64)
-        # TEMP is often sampled on the slow grid; interpolate to the fast
+        # Some datasets (MSS Baltic, VMP2000 Faroe Bank) store TEMP as
+        # (N_TEMP_SENSORS, TIME); use the first sensor.
+        if temp.ndim == 2:
+            temp = temp[0] if temp.shape[0] <= temp.shape[1] else temp[:, 0]
+        # TEMP may be sampled on the slow grid; interpolate to the fast
         # time grid so per-window means (and hence viscosity) are defined.
         # Without this, L3 windows get temp=NaN -> visc35(NaN)=NaN -> all
         # epsilon estimates NaN, silently.
         if temp.shape[0] != len(time):
-            temp_dim = g.variables["TEMP"].dimensions[0]
+            temp_dims = g.variables["TEMP"].dimensions
+            temp_dim = temp_dims[-1] if len(temp_dims) > 1 else temp_dims[0]
             if temp_dim in g.variables:
                 time_temp = np.asarray(g.variables[temp_dim][:], dtype=np.float64)
             elif time_slow.size == temp.shape[0]:

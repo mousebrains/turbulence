@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- CT alignment (`ct_align`) and the despike pass-count flag: conductivity
+  is now shifted with edge-hold instead of `np.roll` (which wrapped one
+  end of the record into the other), and the too-many-passes QC flag
+  uses each window's own section pass count
+  (`PASS_COUNT_SH(probe, section)` semantics) instead of the per-channel
+  maximum.
+- Method-1 chi: parabolic refinement of the log-grid search removes the
+  ~4.7 % grid quantization on chi (synthetic recovery now better
+  than 0.5 %).
+- No-Goodman shear spectra are detrended parabolically, matching ODAS
+  `get_diss_odas.m` (`method='parabolic'` in the no-goodman branch);
+  Goodman-cleaned spectra remain linear, as in `clean_shear_spec.m`.
+- Fall-rate smoothing no longer reuses the shear high-pass cutoff
+  (`HP_cut`) as a pre-smoothing knob when `speed_tau > 0`: the speed is
+  smoothed exactly once, at 0.68/tau (the ODAS convention). Benchmark
+  speed and epsilon agreement unchanged.
+- Documented the FP07 tau/transfer-function pairings (`double_pole`
+  pairs with the fixed 3 ms Goto tau, NOT Peterson & Fer's
+  speed-dependent tau — and how to reproduce Peterson & Fer exactly)
+  and the iterative chi fit's actual limit-refinement behavior.
+
 ### Added
 - Complete ATOMIX QC flag set for epsilon (`EPSI_FLAGS`): in addition to
   the existing FM (bit 1) and variance-resolved (bit 16) criteria, the

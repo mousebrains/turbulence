@@ -516,3 +516,28 @@ class TestReadL4QcLimits:
         qc = read_l4_qc_limits(p)
         assert qc["FOM_limit"] == DEFAULT_FOM_LIMIT
         assert qc["diss_length_s"] == 0.0
+
+
+class TestReadL1MultiSensorTemp:
+    def test_2d_temp_first_sensor_selected(self):
+        """(N_TEMP_SENSORS, TIME) TEMP layout reads without error.
+
+        Regression test: MSS_Baltic and VMP2000_FaroeBankChannel store
+        TEMP with a leading sensor dimension already on the fast grid;
+        the slow-grid interpolation path must not try to np.interp a
+        2-D array.
+        """
+        from pathlib import Path
+
+        import pytest as _pytest
+
+        path = Path(__file__).parent.parent / "AtomixData" / "MSS_Baltic.nc"
+        if not path.exists():
+            _pytest.skip("ATOMIX benchmark data not present")
+        from odas_tpw.scor160.io import read_atomix
+
+        atomix = read_atomix(path)
+        l1 = atomix[0]
+        assert l1.temp.ndim == 1
+        assert l1.temp.shape[0] == l1.n_time
+        assert np.isfinite(l1.temp).all()

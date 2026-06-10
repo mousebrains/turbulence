@@ -18,6 +18,7 @@ import warnings
 import numpy as np
 from scipy.signal import butter, correlate, lfilter
 
+from odas_tpw.processing.ct_align import shift_edge_hold
 from odas_tpw.rsi.p_file import PFile
 
 
@@ -75,24 +76,6 @@ def _compute_RT_R0(
     Z = np.clip(Z, -0.6, 0.6)
     ratio = (1.0 - Z) / (1.0 + Z)
     return np.asarray(np.log(ratio))
-
-
-def _shift_edge_hold(x: np.ndarray, shift: int) -> np.ndarray:
-    """Shift *x* by *shift* samples, holding the edge value.
-
-    Unlike ``np.roll``, samples shifted past the array ends are filled
-    with the first/last value instead of wrapping around.
-    """
-    if shift == 0:
-        return x.copy()
-    out = np.empty_like(x)
-    if shift > 0:
-        out[:shift] = x[0]
-        out[shift:] = x[:-shift]
-    else:
-        out[shift:] = x[-1]
-        out[:shift] = x[-shift:]
-    return out
 
 
 def _lowpass_filter(
@@ -288,7 +271,7 @@ def fp07_calibrate(
         # Shift reference to align with FP07.  Edge-hold instead of
         # np.roll: wrapping would splice the start of the record into the
         # tail of the last profile (ODAS trims instead).
-        T_ref_shifted = _shift_edge_hold(T_ref, i_shift)
+        T_ref_shifted = shift_edge_hold(T_ref, i_shift)
 
         # Collect profile data for Steinhart-Hart fit
         all_RT_R0 = []

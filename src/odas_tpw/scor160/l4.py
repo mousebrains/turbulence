@@ -745,8 +745,15 @@ def _compute_flags(
             inconsistent = ln_ratio > diss_ratio_limit * mu_sigma[np.newaxis, :]
         flags[inconsistent] += 4
 
-    if despike_passes is not None and len(despike_passes) == epsi.shape[0]:
-        flags[despike_passes > despike_passes_limit, :] += 8
+    if despike_passes is not None:
+        passes = np.asarray(despike_passes)
+        if passes.ndim == 1 and len(passes) == epsi.shape[0]:
+            # Per-channel counts: broadcast across all windows
+            flags[passes > despike_passes_limit, :] += 8
+        elif passes.shape == epsi.shape:
+            # Per-window counts (each window's section pass count —
+            # the benchmark PASS_COUNT_SH(probe, section) semantics)
+            flags[passes > despike_passes_limit] += 8
 
     under_resolved = var_resolved < var_resolved_limit
     if method is not None:

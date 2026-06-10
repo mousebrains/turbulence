@@ -73,7 +73,11 @@ def fp07_double_pole(f: npt.ArrayLike, tau0: float) -> np.ndarray:
 def default_tau_model(fp07_model: str) -> str:
     """Auto-select FP07 tau model based on transfer function model.
 
-    double_pole pairs with Goto (tau=0.003); single_pole with Lueck.
+    ``double_pole`` pairs with 'goto' (fixed tau = 3 ms, Goto et al.
+    2016); ``single_pole`` pairs with 'lueck' (speed-dependent).  Note
+    this means ``double_pole`` does NOT reproduce Peterson & Fer (2014),
+    who combined a double-pole response with a speed-dependent tau —
+    see the :func:`fp07_tau` notes for how to do that explicitly.
     """
     return "goto" if fp07_model == "double_pole" else "lueck"
 
@@ -89,8 +93,24 @@ def fp07_tau(speed: npt.ArrayLike, model: str = "lueck") -> np.ndarray | float:
         Profiling speed [m/s].
     model : str
         'lueck'    : tau = 0.01 * (1.0/speed)^0.5 (Lueck et al. 1977)
-        'peterson' : tau = 0.012 * speed^(-0.32) (Peterson & Fer 2014)
-        'goto'     : tau = 0.003 (Goto et al. 2016, for double-pole)
+        'peterson' : tau = 0.012 * speed^(-0.32) — the speed-dependent
+            response adopted by Peterson & Fer (2014,
+            doi:10.1016/j.mio.2014.05.002), in the tradition of
+            Vachon & Lueck (1984) and Gregg & Meagher (1980)
+        'goto'     : tau = 0.003, speed-independent (Goto et al. 2016,
+            doi:10.1175/JTECH-D-15-0220.1, for their double-pole model)
+
+    Notes
+    -----
+    The pipeline pairs tau models with transfer-function models via
+    :func:`default_tau_model`: ``fp07_model='single_pole'`` uses 'lueck'
+    and ``'double_pole'`` uses 'goto'.  Be aware that Peterson & Fer
+    (2014) used a DOUBLE-pole response together with their
+    speed-dependent tau — selecting ``double_pole`` here reproduces the
+    Goto et al. (2016) correction (fixed 3 ms), NOT Peterson & Fer's.
+    To reproduce Peterson & Fer exactly, call the transfer function with
+    ``fp07_double_pole`` and ``fp07_tau(speed, model='peterson')``
+    explicitly.
 
     Returns
     -------
