@@ -562,6 +562,11 @@ def process_file(
     log_basename = output_stem
 
     # ---- CTD fork (full file, both up and down) ----
+    # NOTE: this fork runs BEFORE CT alignment (which needs detected
+    # profiles), so the salinity/density in the CTD product is computed
+    # from unaligned conductivity — C-T mismatch spikes at sharp
+    # thermoclines are smeared by the depth bins but not removed.  Use
+    # the per-profile products for spike-free salinity.
     ctd_cfg = config.get("ctd", {})
     if ctd_cfg.get("enable", True) and "ctd" in output_dirs:
         with stage_log(output_dirs.get("ctd"), log_basename):
@@ -641,8 +646,15 @@ def process_file(
                     max_lag_seconds=fp07_cfg.get("max_lag_seconds", 10.0),
                     must_be_negative=fp07_cfg.get("must_be_negative", True),
                 )
-                # Apply calibrated temperatures back to pf.channels
+                # Apply calibrated temperatures back to pf.channels —
+                # both the base channels (T1, T2) and the recalibrated
+                # deconvolved fast channels (T1_dT1, T2_dT2) that the
+                # chi pipeline consumes.  Without the latter, chi keeps
+                # the factory calibration and scales with the square of
+                # the calibration slope error.
                 for ch_name, cal_data in cal_result.get("channels", {}).items():
+                    pf.channels[ch_name] = cal_data
+                for ch_name, cal_data in cal_result.get("fast_channels", {}).items():
                     pf.channels[ch_name] = cal_data
             except Exception as exc:
                 logger.warning("FP07 cal failed for %s: %s", p_path.name, exc)

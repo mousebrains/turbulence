@@ -107,8 +107,12 @@ def mk_chi_mean(
 
     # Kolmogorov length: use epsilon_T(probe, time) when available; otherwise
     # fall back to chi itself so L_hat / sigma still vary smoothly with the
-    # data — same shape constraint either way.
-    if "epsilon_T" in ds and "probe" in ds["epsilon_T"].dims:
+    # data.  The fallback is dimensionally invalid (chi is K^2/s, not W/kg),
+    # so the resulting sigma magnitudes are only nominal — in that case the
+    # CI-based probe removal below is DISABLED rather than discarding probes
+    # on a meaningless threshold.
+    have_eps_T = "epsilon_T" in ds and "probe" in ds["epsilon_T"].dims
+    if have_eps_T:
         eps_T = np.column_stack(
             [ds["epsilon_T"].isel(probe=i).values for i in range(ds.sizes["probe"])]
         )
@@ -132,6 +136,14 @@ def mk_chi_mean(
     CF95_range = 1.96 * np.sqrt(2.0) * mu_sigma
 
     n_probes = chi.shape[1]
+    if not have_eps_T:
+        n_probes = 1  # skip the CI removal loop; sigma is only nominal
+        warnings.warn(
+            "epsilon_T not available: chiLnSigma is nominal (Kolmogorov "
+            "length fallback uses chi, which is dimensionally invalid); "
+            "CI-based probe removal disabled — all probes enter chiMean",
+            stacklevel=2,
+        )
     for _ in range(n_probes - 1):
         with np.errstate(invalid="ignore"):
             min_c = np.nanmin(chi, axis=1)
@@ -158,10 +170,17 @@ def mk_chi_mean(
         dims=["time"],
         attrs={"long_name": "combined chi (geometric mean)", "units": "K2 s-1"},
     )
+    sigma_attrs = {"long_name": "sigma of ln(chi)", "units": "1"}
+    if not have_eps_T:
+        sigma_attrs["comment"] = (
+            "NOMINAL: computed with chi substituted for epsilon_T in the "
+            "Kolmogorov length (dimensionally invalid); magnitudes are not "
+            "quantitative and were not used for probe selection"
+        )
     ds["chiLnSigma"] = xr.DataArray(
         mu_sigma,
         dims=["time"],
-        attrs={"long_name": "sigma of ln(chi)", "units": ""},
+        attrs=sigma_attrs,
     )
 
     return ds

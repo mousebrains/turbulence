@@ -11,6 +11,7 @@ construction time.
 Reference: Code/GPS_base_class.m, GPS_NaN.m, GPS_fixed.m
 """
 
+import warnings
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -150,7 +151,13 @@ class GPSFixed:
 
 
 class GPSFromCSV:
-    """Interpolate GPS from a CSV file (time column expected in epoch seconds)."""
+    """Interpolate GPS from a CSV file (time column expected in epoch seconds).
+
+    Positions requested more than ``max_time_diff`` seconds outside the
+    GPS record's time coverage are linearly extrapolated AND trigger a
+    warning — extrapolated positions feed the TEOS-10 absolute-salinity
+    conversion and the file geospatial attributes.
+    """
 
     def __init__(
         self,
@@ -158,12 +165,16 @@ class GPSFromCSV:
         time_col: str = "t",
         lat_col: str = "lat",
         lon_col: str = "lon",
+        max_time_diff: float = 60.0,
     ) -> None:
         import pandas as pd
         from scipy.interpolate import interp1d
 
         df = pd.read_csv(file)
         t = _to_epoch_seconds(np.asarray(df[time_col].values))
+        self._t_min = float(np.nanmin(t))
+        self._t_max = float(np.nanmax(t))
+        self._max_time_diff = float(max_time_diff)
         self._lat_interp = interp1d(
             t,
             df[lat_col].values,
@@ -179,15 +190,47 @@ class GPSFromCSV:
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:
         """Interpolate latitude from CSV at the given times."""
-        return np.asarray(self._lat_interp(np.asarray(t, dtype=np.float64)))
+        t_arr = np.asarray(t, dtype=np.float64)
+        _warn_outside_coverage(t_arr, self._t_min, self._t_max, self._max_time_diff)
+        return np.asarray(self._lat_interp(t_arr))
 
     def lon(self, t: npt.ArrayLike) -> np.ndarray:
         """Interpolate longitude from CSV at the given times."""
-        return np.asarray(self._lon_interp(np.asarray(t, dtype=np.float64)))
+        t_arr = np.asarray(t, dtype=np.float64)
+        _warn_outside_coverage(t_arr, self._t_min, self._t_max, self._max_time_diff)
+        return np.asarray(self._lon_interp(t_arr))
+
+
+def _warn_outside_coverage(
+    t: np.ndarray, t_min: float, t_max: float, max_time_diff: float
+) -> None:
+    """Warn when requested times fall outside the GPS record coverage.
+
+    Beyond the coverage, positions are linear extrapolations without
+    bound; ``max_time_diff`` (config key ``gps.max_time_diff``) sets the
+    tolerance before warning.
+    """
+    if t.size == 0 or not np.any(np.isfinite(t)):
+        return
+    lo = np.nanmin(t) - (t_min - max_time_diff)
+    hi = np.nanmax(t) - (t_max + max_time_diff)
+    if lo < 0 or hi > 0:
+        worst = max(-lo if lo < 0 else 0.0, hi if hi > 0 else 0.0)
+        warnings.warn(
+            f"GPS position requested {worst:.0f} s outside the GPS record "
+            f"coverage (tolerance {max_time_diff:.0f} s); positions are "
+            "linearly extrapolated and may be far from the instrument",
+            stacklevel=3,
+        )
 
 
 class GPSFromNetCDF:
-    """Interpolate GPS from a NetCDF file."""
+    """Interpolate GPS from a NetCDF file.
+
+    Positions requested more than ``max_time_diff`` seconds outside the
+    GPS record's time coverage are linearly extrapolated AND trigger a
+    warning (see :class:`GPSFromCSV`).
+    """
 
     def __init__(
         self,
@@ -195,6 +238,7 @@ class GPSFromNetCDF:
         time_var: str = "time",
         lat_var: str = "lat",
         lon_var: str = "lon",
+        max_time_diff: float = 60.0,
     ) -> None:
         import netCDF4 as nc
         from scipy.interpolate import interp1d
@@ -237,16 +281,23 @@ class GPSFromNetCDF:
         lon = ds.variables[lon_var][:].data.astype(np.float64)
         ds.close()
 
+        self._t_min = float(np.nanmin(t))
+        self._t_max = float(np.nanmax(t))
+        self._max_time_diff = float(max_time_diff)
         self._lat_interp = interp1d(t, lat, bounds_error=False, fill_value="extrapolate")
         self._lon_interp = interp1d(t, lon, bounds_error=False, fill_value="extrapolate")
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:
         """Interpolate latitude from NetCDF at the given times."""
-        return np.asarray(self._lat_interp(np.asarray(t, dtype=np.float64)))
+        t_arr = np.asarray(t, dtype=np.float64)
+        _warn_outside_coverage(t_arr, self._t_min, self._t_max, self._max_time_diff)
+        return np.asarray(self._lat_interp(t_arr))
 
     def lon(self, t: npt.ArrayLike) -> np.ndarray:
         """Interpolate longitude from NetCDF at the given times."""
-        return np.asarray(self._lon_interp(np.asarray(t, dtype=np.float64)))
+        t_arr = np.asarray(t, dtype=np.float64)
+        _warn_outside_coverage(t_arr, self._t_min, self._t_max, self._max_time_diff)
+        return np.asarray(self._lon_interp(t_arr))
 
 
 def create_gps(config: dict) -> GPSProvider:
@@ -273,6 +324,7 @@ def create_gps(config: dict) -> GPSProvider:
             time_col=config.get("time_col", "t"),
             lat_col=config.get("lat_col", "lat"),
             lon_col=config.get("lon_col", "lon"),
+            max_time_diff=float(config.get("max_time_diff", 60)),
         )
     elif source == "netcdf":
         return GPSFromNetCDF(
@@ -280,6 +332,7 @@ def create_gps(config: dict) -> GPSProvider:
             time_var=config.get("time_col", "time"),
             lat_var=config.get("lat_col", "lat"),
             lon_var=config.get("lon_col", "lon"),
+            max_time_diff=float(config.get("max_time_diff", 60)),
         )
     else:
         raise ValueError(f"Unknown GPS source: {source!r}")

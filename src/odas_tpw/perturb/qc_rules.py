@@ -58,7 +58,7 @@ _RANGE_OPTION_KEYS = frozenset({
 # pitch_w_consistency rule keys.
 _FLIGHT_CONSISTENCY_OPTION_KEYS = frozenset({
     "type", "bit", "amplitude_quantile",
-    "pitch_min_deg", "W_min_dbar_per_s",
+    "pitch_min_deg", "W_min_dbar_per_s", "pitch_positive",
 })
 
 # Default low / high percentiles for inclinometer-axis amplitude detection.
@@ -181,8 +181,9 @@ def _evaluate_pitch_w_consistency(pf: Any, name: str, cfg: dict,
 
     The check operates on:
 
-    - ``pitch``: auto-resolved Incl_Y / Incl_X (sign convention of the
-      raw channel — *no* normalisation, since we only test sign vs W).
+    - ``pitch``: auto-resolved Incl_Y / Incl_X.  The inclinometer sign
+      convention DOES matter here: the test assumes positive pitch =
+      nose-down unless ``pitch_positive`` says otherwise.
     - ``W``: signed dP/dt at slow rate (positive = depth increasing =
       sinking), computed from ``pf.channels["P"]`` with the same
       smoothing as :func:`smooth_fall_rate` in the speed module.
@@ -191,12 +192,24 @@ def _evaluate_pitch_w_consistency(pf: Any, name: str, cfg: dict,
     stationary, samples are *not* flagged — too close to a sign-zero
     crossing to call confidently.
 
+    ``pitch_positive`` resolves the mounting polarity:
+
+    - ``"auto"`` (default): infer from the deployment-wide majority sign
+      of pitch*W — steady flight dominates a healthy record, so the
+      majority sign identifies the consistent pairing.  The choice is
+      logged.
+    - ``"nose_down"``: positive pitch = nose-down (sign agreement with W
+      is healthy).
+    - ``"nose_up"``: positive pitch = nose-up (sign disagreement with W
+      is healthy) — e.g. an inclinometer mounted with opposite polarity.
+
     YAML schema::
 
         flight_consistency:
           type: pitch_w_consistency
           pitch_min_deg: 5.0
           W_min_dbar_per_s: 0.02
+          pitch_positive: auto
           bit: 64
     """
     from odas_tpw.scor160.profile import smooth_fall_rate
@@ -225,9 +238,35 @@ def _evaluate_pitch_w_consistency(pf: Any, name: str, cfg: dict,
     pitch_min = float(cfg.get("pitch_min_deg", 5.0))
     w_min = float(cfg.get("W_min_dbar_per_s", 0.02))
 
-    # Signs disagree (one positive, one negative) and both are clearly
+    moving = (
+        (np.abs(pitch) >= pitch_min)
+        & (np.abs(W) >= w_min)
+        & np.isfinite(pitch)
+        & np.isfinite(W)
+    )
+
+    # Resolve the inclinometer mounting polarity: +1 means positive
+    # pitch = nose-down (pitch and W share sign in healthy flight).
+    polarity = str(cfg.get("pitch_positive", "auto")).lower()
+    if polarity == "nose_up":
+        sign = -1.0
+    elif polarity == "nose_down":
+        sign = 1.0
+    else:  # auto: majority sign of pitch*W — steady flight dominates
+        if np.any(moving):
+            med = float(np.median(np.sign(pitch[moving] * W[moving])))
+            sign = 1.0 if med >= 0 else -1.0
+        else:
+            sign = 1.0
+        logger.info(
+            "qc.rules.%s: auto-detected inclinometer polarity: positive pitch = %s",
+            name,
+            "nose-down" if sign > 0 else "nose-up",
+        )
+
+    # Signs disagree (after polarity correction) and both are clearly
     # nonzero (outside the noise zone around level / stationary).
-    flag = (pitch * W < 0) & (np.abs(pitch) >= pitch_min) & (np.abs(W) >= w_min)
+    flag = (sign * pitch * W < 0) & moving
     flag |= ~np.isfinite(pitch) | ~np.isfinite(W)
     return np.asarray(flag, dtype=bool)
 

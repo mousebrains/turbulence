@@ -315,7 +315,7 @@ gps:
   time_col: "t"
   lat_col: "lat"
   lon_col: "lon"
-  max_time_diff: 60       # warning threshold [s]
+  max_time_diff: 60       # warn when positions are extrapolated more than this [s] outside GPS coverage
 
 hotel:
   enable: false
@@ -359,9 +359,9 @@ bottom:
   enable: false
   depth_window: 4.0       # depth window for crash detection [m]
   depth_minimum: 10.0     # minimum depth to search [m]
-  speed_factor: 0.3       # speed reduction factor
-  median_factor: 1.0      # acceleration std dev filter factor
-  vibration_frequency: 16 # vibration binning frequency [Hz]
+  speed_factor: 0.3       # UNUSED (reserved; tuning has no effect)
+  median_factor: 1.0      # UNUSED (reserved; tuning has no effect)
+  vibration_frequency: 16 # UNUSED (reserved; tuning has no effect)
   vibration_factor: 4.0   # vibration std dev acceptance factor
 
 top_trim:

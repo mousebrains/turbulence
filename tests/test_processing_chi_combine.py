@@ -6,6 +6,7 @@ analog so the two combiners stay in lockstep.
 """
 
 import numpy as np
+import pytest
 import xarray as xr
 
 from odas_tpw.processing.chi_combine import mk_chi_mean
@@ -175,6 +176,28 @@ class TestMkChiMean:
         np.testing.assert_allclose(result["chiMean"].values, 5e-8, rtol=1e-6)
 
     def test_outlier_probe_removed(self):
+        """With epsilon_T available, the CI filter removes the outlier probe."""
+        n = 20
+        c1 = np.full(n, 1e-8)
+        c2 = np.full(n, 1e-3)
+        eps = np.full((2, n), 1e-7)
+        ds = xr.Dataset(
+            {
+                "chi_1": (["time"], c1),
+                "chi_2": (["time"], c2),
+                "epsilon_T": (["probe", "time"], eps),
+                "speed": (["time"], np.full(n, 0.5)),
+                "nu": (["time"], np.full(n, 1e-6)),
+            },
+            coords={"probe": ["t1", "t2"], "time": np.arange(n, dtype=float)},
+            attrs={"diss_length": 512, "fs_fast": 512.0},
+        )
+        result = mk_chi_mean(ds)
+        assert "chiMean" in result
+        np.testing.assert_allclose(result["chiMean"].values, 1e-8, rtol=0.1)
+
+    def test_no_epsilon_keeps_all_probes(self):
+        """Without epsilon_T the CI is nominal: no probe removal occurs."""
         n = 20
         c1 = np.full(n, 1e-8)
         c2 = np.full(n, 1e-3)
@@ -188,9 +211,13 @@ class TestMkChiMean:
             coords={"time": np.arange(n, dtype=float)},
             attrs={"diss_length": 512, "fs_fast": 512.0},
         )
-        result = mk_chi_mean(ds)
-        assert "chiMean" in result
-        np.testing.assert_allclose(result["chiMean"].values, 1e-8, rtol=0.1)
+        with pytest.warns(UserWarning, match="nominal"):
+            result = mk_chi_mean(ds)
+        # Geometric mean of both probes — neither was discarded
+        np.testing.assert_allclose(
+            result["chiMean"].values, np.sqrt(1e-8 * 1e-3), rtol=0.01
+        )
+        assert "comment" in result["chiLnSigma"].attrs
 
     def test_2d_chi_probe_time_split(self):
         """2-D chi(probe, time) is split into per-probe chi_1, chi_2 vars."""

@@ -28,6 +28,23 @@ def _source_stem(profile_file: Path | str) -> str:
     return _PROF_SUFFIX_RE.sub("", Path(profile_file).stem)
 
 
+def _bin_indices(coords: np.ndarray, bin_edges: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Bin indices plus an in-range mask.
+
+    Samples with NaN coordinates (np.digitize returns len(edges)) or
+    coordinates outside the bin range are EXCLUDED via the mask — the
+    previous np.clip silently dumped them into the first/last bin.
+    Bins are half-open [lo, hi) except the last, which includes its
+    upper edge.
+    """
+    n_bins = len(bin_edges) - 1
+    with np.errstate(invalid="ignore"):
+        idx = np.digitize(coords, bin_edges) - 1
+        idx = np.where(coords == bin_edges[-1], n_bins - 1, idx)
+    in_range = np.isfinite(coords) & (idx >= 0) & (idx < n_bins)
+    return idx, in_range
+
+
 def _bin_std(values: np.ndarray, coords: np.ndarray, bin_edges: np.ndarray) -> np.ndarray:
     """NaN-aware std-per-bin via bincount (population std, ddof=0).
 
@@ -35,8 +52,8 @@ def _bin_std(values: np.ndarray, coords: np.ndarray, bin_edges: np.ndarray) -> n
     O(n_bins * n_samples) mask broadcast.
     """
     n_bins = len(bin_edges) - 1
-    idx = np.clip(np.digitize(coords, bin_edges) - 1, 0, n_bins - 1)
-    finite = np.isfinite(values)
+    idx, in_range = _bin_indices(coords, bin_edges)
+    finite = in_range & np.isfinite(values)
     idx_f = idx[finite]
     vals_f = values[finite]
     counts = np.bincount(idx_f, minlength=n_bins)
@@ -68,11 +85,13 @@ def _bin_array(
     Returns
     -------
     binned : ndarray, shape (n_bins,)
-    counts : ndarray, shape (n_bins,) — int
+    counts : ndarray, shape (n_bins,) — int, in-range samples per bin
+        (independent of value finiteness; see _bin_finite_counts).
     """
     n_bins = len(bin_edges) - 1
-    idx = np.digitize(coords, bin_edges) - 1
-    idx = np.clip(idx, 0, n_bins - 1)
+    idx, in_range = _bin_indices(coords, bin_edges)
+    idx = idx[in_range]
+    values = values[in_range]
 
     counts = np.bincount(idx, minlength=n_bins).astype(int)
 
@@ -99,6 +118,38 @@ def _bin_array(
         if sl.size > 0:
             binned[i] = agg_func(sl)
     return binned, counts
+
+
+def _bin_finite_counts(
+    values: np.ndarray, coords: np.ndarray, bin_edges: np.ndarray
+) -> np.ndarray:
+    """Per-bin count of finite values — the effective averaging N.
+
+    After QC NaN'ing, the in-range sample count overstates how many
+    values actually entered a bin mean; this is the honest N for
+    weighting bins or building confidence intervals.
+    """
+    n_bins = len(bin_edges) - 1
+    idx, in_range = _bin_indices(coords, bin_edges)
+    finite = in_range & np.isfinite(values)
+    return np.bincount(idx[finite], minlength=n_bins).astype(int)
+
+
+def _bin_or(values: np.ndarray, coords: np.ndarray, bin_edges: np.ndarray) -> np.ndarray:
+    """Bitwise-OR pooling per bin for QC flag bitfields.
+
+    Arithmetic averaging of flag bits produces meaningless fractional
+    values; the OR of all in-bin flags preserves "any sample in this bin
+    was flagged with bit X".  Empty bins are NaN.
+    """
+    n_bins = len(bin_edges) - 1
+    idx, in_range = _bin_indices(coords, bin_edges)
+    idx_v = idx[in_range]
+    vals_v = values[in_range].astype(np.int64)
+    pooled = np.zeros(n_bins, dtype=np.int64)
+    np.bitwise_or.at(pooled, idx_v, vals_v)
+    counts = np.bincount(idx_v, minlength=n_bins)
+    return np.where(counts > 0, pooled.astype(float), np.nan)
 
 
 def _get_agg_func(aggregation: str):
@@ -236,18 +287,33 @@ def _bin_snapshot(snapshot: dict, bin_edges: np.ndarray, agg, diagnostics: bool)
     out: dict = {
         "vars": {},
         "stds": {},
+        "finite_counts": {},
         "counts": None,
         "scalars": snapshot["scalars"],
         "scalar_attrs": snapshot["scalar_attrs"],
     }
     depth = snapshot["depth"]
     for vname, arr in snapshot["vars"].items():
-        binned, counts = _bin_array(arr, depth, bin_edges, agg)
-        out["vars"][vname] = binned
+        if arr.dtype.kind == "u":
+            # QC flag bitfields (uint dtype): OR-pool, never average.
+            out["vars"][vname] = _bin_or(arr, depth, bin_edges)
+            if out["counts"] is None:
+                _, counts = _bin_array(arr.astype(np.float64), depth, bin_edges, agg)
+                out["counts"] = counts
+            continue
+        if vname.endswith("LnSigma"):
+            # Standard deviations combine in quadrature: average the
+            # variances (RMS of sigma), not the sigmas.
+            binned_var, counts = _bin_array(arr.astype(np.float64) ** 2, depth, bin_edges, agg)
+            out["vars"][vname] = np.sqrt(binned_var)
+        else:
+            binned, counts = _bin_array(arr, depth, bin_edges, agg)
+            out["vars"][vname] = binned
         if out["counts"] is None:
             out["counts"] = counts
         if diagnostics:
             out["stds"][vname] = _bin_std(arr, depth, bin_edges)
+            out["finite_counts"][vname] = _bin_finite_counts(arr, depth, bin_edges)
     return out
 
 
@@ -400,10 +466,17 @@ def bin_by_depth(
                         result_vars[f"{vname}_std"] = np.full(
                             (n_bins, n_profiles), np.nan
                         )
+                        result_vars[f"{vname}_n"] = np.full(
+                            (n_bins, n_profiles), np.nan
+                        )
                 result_vars[vname][:, pi] = binned
             if diagnostics:
                 for vname, std_arr in res["stds"].items():
                     result_vars[f"{vname}_std"][:, pi] = std_arr
+                for vname, n_arr in res.get("finite_counts", {}).items():
+                    key = f"{vname}_n"
+                    if key in result_vars:
+                        result_vars[key][:, pi] = n_arr
 
     if diagnostics:
         counts = np.zeros((n_bins, n_profiles), dtype=float)
