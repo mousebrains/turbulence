@@ -136,6 +136,7 @@ def compute_depth_spectra(
         result["nasmyth_specs"] = er.nasmyth_specs
         result["epsilons"] = list(er.epsilon)
         result["foms"] = list(er.fom)
+        result["FMs"] = list(er.FM)
         result["methods"] = list(er.method)
         result["K_maxes"] = list(er.K_max)
         result["epsilons_isr"] = list(er.epsilon_isr)
@@ -159,7 +160,9 @@ def compute_depth_spectra(
     if n_therm > 0:
         therm_segs = [therm_data[ci][1][w_sel] for ci in range(n_therm)]
         eps_arr = np.array(result["epsilons"]) if result["epsilons"] else None
-        fom_arr = np.array(result.get("foms", [])) if result.get("foms") else None
+        # The 1.15 QC limit is defined for the MAD-based Lueck FM
+        # statistic, not the variance-ratio fom.
+        fom_arr = np.array(result.get("FMs", [])) if result.get("FMs") else None
 
         # Method 1: chi from epsilon (kB fixed by FOM-filtered mean epsilon)
         cr_m1 = compute_chi_window(
@@ -310,7 +313,7 @@ def compute_windowed_diss(
                     f_AA_chi,
                     spectrum_model=model,
                     epsilon=er.epsilon,
-                    fom=er.fom,
+                    fom=er.FM,
                     method=1,
                 )
                 arr[:, idx] = cr.chi

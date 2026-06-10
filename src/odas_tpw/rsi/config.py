@@ -99,8 +99,8 @@ epsilon:
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
   f_limit: null         # upper frequency limit [Hz] (null = f_AA)
   fit_order: 3          # polynomial fit order for Nasmyth integration
-  despike_thresh: 8     # despike threshold [MAD]
-  despike_smooth: 0.5   # despike smoothing window [s]
+  despike_thresh: 8     # despike threshold (rectified-HP / LP-envelope ratio, not MAD)
+  despike_smooth: 0.5   # despike envelope low-pass cutoff [Hz]
   salinity: null        # salinity [PSU] (null = 35, fixed S)
 
 chi:

@@ -8,13 +8,13 @@ See also [Best Practices](best_practices.md) and
 
 - **Lueck, R. G. (2022a).** The statistics of oceanic turbulence
   measurements. Part 1: Shear variance and dissipation rates.
-  *J. Atmos. Ocean. Technol.*, 39(10), 1489--1506.
+  *J. Atmos. Ocean. Technol.*, 39(9), 1259--1271.
   [doi:10.1175/JTECH-D-21-0051.1](https://doi.org/10.1175/JTECH-D-21-0051.1)
 
 - **Lueck, R. G. (2022b).** The statistics of oceanic turbulence
   measurements. Part 2: Shear spectra and a new spectral model.
-  *J. Atmos. Ocean. Technol.*, 39(10), 1507--1521.
-  [doi:10.1175/JTECH-D-21-0052.1](https://doi.org/10.1175/JTECH-D-21-0052.1)
+  *J. Atmos. Ocean. Technol.*, 39(9), 1273--1282.
+  [doi:10.1175/JTECH-D-21-0050.1](https://doi.org/10.1175/JTECH-D-21-0050.1)
 
 - **McMillan, J. M., Hay, A. E., Lueck, R. G., & Wolk, F. (2016).**
   Rates of dissipation of turbulent kinetic energy in a high Reynolds
@@ -91,10 +91,17 @@ See also [Best Practices](best_practices.md) and
   ocean. *J. Atmos. Ocean. Technol.*, 16, 1474--1482.
   [doi:10.1175/1520-0426(1999)016<1474:ATPFHS>2.0.CO;2](https://doi.org/10.1175/1520-0426(1999)016%3C1474:ATPFHS%3E2.0.CO;2)
 
-- **Goto, Y., Yasuda, I., & Nagasawa, M. (2016).** Comparison of
-  turbulence intensity from CTD-attached and free-fall microstructure
-  profilers. *J. Atmos. Ocean. Technol.*, 33, 1065--1081.
+- **Goto, Y., Yasuda, I., & Nagasawa, M. (2016).** Turbulence
+  estimation using fast-response thermistors attached to a free-fall
+  vertical microstructure profiler.
+  *J. Atmos. Ocean. Technol.*, 33(10), 2065--2078.
   [doi:10.1175/JTECH-D-15-0220.1](https://doi.org/10.1175/JTECH-D-15-0220.1)
+
+- **Vachon, P., & Lueck, R. G. (1984).** A small combined
+  temperature-conductivity probe. *Proceedings of the 1984 STD
+  Conference and Workshop*, San Diego, Marine Technology Society.
+  Establishes the speed dependence of the FP07 thermistor response
+  time used here and by Peterson & Fer (2014).
 
 ## Coherent noise removal
 

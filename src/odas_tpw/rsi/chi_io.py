@@ -504,6 +504,12 @@ def _build_chi_dataset(
             {
                 "units": "1",
                 "long_name": "figure of merit (observed/model variance ratio)",
+                "comment": (
+                    "Ratio of observed to attenuated-model variance over the fit "
+                    "range; values near 1.0 indicate a good fit. NOT the MAD-based "
+                    "ATOMIX/Rockland FM statistic (Lueck 2022), for which good fits "
+                    "approach 0 and the recommended QC limit is ~1.15."
+                ),
             },
         ),
         (
@@ -627,15 +633,22 @@ def _build_chi_dataset(
 
 
 def _extract_therm_cal(ch_cfg: dict[str, Any]) -> dict[str, float]:
-    """Extract thermistor calibration parameters from PFile channel config."""
+    """Extract thermistor calibration parameters from PFile channel config.
+
+    Config keys are lowercase (parse_config lowercases all keys); 'g' and
+    't_0' are renamed to the 'gain'/'T_0' parameter names expected by
+    noise_thermchannel.
+    """
     cal = {}
-    for key in ("e_b", "b", "g", "beta_1", "beta_2", "adc_fs", "adc_bits", "T_0"):
+    for key in ("e_b", "b", "g", "beta_1", "beta_2", "adc_fs", "adc_bits", "t_0"):
         val = ch_cfg.get(key)
         if val is not None:
             cal[key] = float(val)
-    # Map 'g' to 'gain' for noise_thermchannel
+    # Map config keys to noise_thermchannel parameter names
     if "g" in cal:
         cal["gain"] = cal.pop("g")
+    if "t_0" in cal:
+        cal["T_0"] = cal.pop("t_0")
     return cal
 
 
@@ -763,6 +776,50 @@ def compute_chi_file(
     return write_profile_results(results, source_path, output_dir, "chi")
 
 
+def load_epsilon_dataset(
+    source_path: str | Path, epsilon_dir: str | Path
+) -> xr.Dataset | None:
+    """Locate and open the epsilon dataset(s) for *source_path* (Method 1).
+
+    ``rsi-tpw eps`` writes into hash-tracked subdirectories
+    (``epsilon_dir/eps_00/``...) and names files per profile
+    (``{stem}_prof001_eps.nc``).  This helper searches *epsilon_dir*
+    itself first, then its ``eps_*`` subdirectories (most recently
+    modified first), and concatenates multiple per-profile files along
+    ``time`` so every chi window can pair with its own profile's epsilon
+    estimates.
+
+    Returns None when no matching epsilon files exist (the caller falls
+    back to Method 2).
+    """
+    stem = Path(source_path).stem
+    base = Path(epsilon_dir)
+    candidates = [
+        base,
+        *sorted(
+            (d for d in base.glob("eps_*") if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        ),
+    ]
+    for d in candidates:
+        files = sorted(d.glob(f"{stem}_prof*_eps.nc"))
+        single = d / f"{stem}_eps.nc"
+        if single.exists():
+            files.insert(0, single)
+        if not files:
+            continue
+        if len(files) == 1:
+            return xr.open_dataset(files[0])
+        datasets = [xr.open_dataset(p).load() for p in files]
+        try:
+            return xr.concat(datasets, dim="time", combine_attrs="override")
+        finally:
+            for ds in datasets:
+                ds.close()
+    return None
+
+
 def _compute_chi_one(args: tuple) -> tuple[str, int]:
     """Worker for parallel chi computation.
 
@@ -777,20 +834,20 @@ def _compute_chi_one(args: tuple) -> tuple[str, int]:
         source_path, output_dir, kwargs = args
         epsilon_dir = None
 
-    if epsilon_dir is not None:
-        eps_file = Path(epsilon_dir) / f"{Path(source_path).stem}_eps.nc"
-        if eps_file.exists():
-            import xarray as xr
-
-            eps_ds = xr.open_dataset(eps_file)
-            try:
-                kwargs = dict(kwargs)
-                kwargs["epsilon_ds"] = eps_ds
-                paths = compute_chi_file(source_path, output_dir, **kwargs)
-            finally:
-                eps_ds.close()
-        else:
+    eps_ds = load_epsilon_dataset(source_path, epsilon_dir) if epsilon_dir else None
+    if eps_ds is not None:
+        try:
+            kwargs = dict(kwargs)
+            kwargs["epsilon_ds"] = eps_ds
             paths = compute_chi_file(source_path, output_dir, **kwargs)
+        finally:
+            eps_ds.close()
     else:
+        if epsilon_dir is not None:
+            print(
+                f"  Warning: no epsilon files for {Path(source_path).stem} "
+                f"under {epsilon_dir} (searched eps_* subdirectories too); "
+                "using Method 2"
+            )
         paths = compute_chi_file(source_path, output_dir, **kwargs)
     return str(source_path), len(paths)

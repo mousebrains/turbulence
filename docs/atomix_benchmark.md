@@ -2,9 +2,11 @@
 
 The [ATOMIX](https://wiki.app.uib.no/atomix/) shear-probe benchmark datasets
 (Fer et al., 2024) provide a community-standard test suite for epsilon
-estimation algorithms. Five datasets from different instruments and
+estimation algorithms. Six benchmark datasets from different instruments and
 environments are published in a common ATOMIX NetCDF format with four
-processing levels (L1--L4).
+processing levels (L1--L4); the Haro Strait (VMP250) dataset is distributed
+in two variants — measured speed and constant (declared) speed — so the
+table below lists five entries.
 
 ## Benchmark Datasets
 

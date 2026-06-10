@@ -42,7 +42,10 @@ ds = xr.open_dataset(eps_paths[0])
 ds["epsilon"]         # dissipation rate [W/kg]
 ds["spec_shear"]      # shear wavenumber spectra
 ds["spec_nasmyth"]    # fitted Nasmyth spectra
-ds["fom"]             # figure of merit (obs/Nasmyth variance ratio)
+ds["fom"]             # observed/Nasmyth variance ratio; ~1.0 = good fit
+                      # (NOT the ATOMIX FM statistic)
+ds["FM"]              # Lueck (2022) MAD-based figure of merit; good fits
+                      # approach 0, ATOMIX QC limit ~1.15
 ds["K_max_ratio"]     # K_max/K_95 (spectral resolution)
 
 # With options
@@ -61,7 +64,15 @@ from odas_tpw.rsi.chi_io import compute_chi_file
 import xarray as xr
 
 # Method 1: chi from known epsilon (preferred)
-eps_ds = xr.open_dataset("epsilon/SN479_0005_eps.nc")
+# compute_diss_file names its outputs {stem}_eps.nc for single-profile
+# files and {stem}_prof001_eps.nc, {stem}_prof002_eps.nc, ... when the
+# .p file contains more than one profile. (When epsilon was produced by
+# the CLI, the files live in the hash-tracked subdirectory epsilon/eps_00/.)
+# load_epsilon_dataset handles all of that: it searches the directory and
+# its eps_* subdirectories and concatenates per-profile files along time.
+from odas_tpw.rsi.chi_io import load_epsilon_dataset
+
+eps_ds = load_epsilon_dataset("VMP/ARCTERX_Thompson_2025_SN479_0005.p", "epsilon/")
 chi_paths = compute_chi_file("VMP/ARCTERX_Thompson_2025_SN479_0005.p",
                              "chi/", epsilon_ds=eps_ds)
 eps_ds.close()
@@ -71,7 +82,9 @@ ds["chi"]             # thermal dissipation rate [K²/s]
 ds["spec_gradT"]      # temperature gradient spectra
 ds["spec_batch"]      # fitted Batchelor spectra
 
-# Method 2: chi without epsilon (MLE fitting)
+# Method 2: chi without epsilon (spectral fitting; defaults are
+# fit_method="iterative" (Peterson & Fer 2014) with
+# spectrum_model="kraichnan"; pass fit_method="mle" for MLE fitting)
 chi_paths = compute_chi_file("VMP/ARCTERX_Thompson_2025_SN479_0005.p", "chi/")
 ds = xr.open_dataset(chi_paths[0])
 ds["chi"]             # thermal dissipation rate [K²/s]

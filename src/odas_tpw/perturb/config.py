@@ -5,7 +5,7 @@ Provides loading, validation, three-way merge (defaults <- config <- CLI),
 deterministic hashing, and sequential output directory management.
 
 All config management logic lives in :mod:`odas_tpw.config_base.ConfigManager`;
-this module defines perturb-specific DEFAULTS (13 sections), instantiates the
+this module defines perturb-specific DEFAULTS (17 sections), instantiates the
 manager, and re-exports the methods as module-level functions.
 """
 
@@ -315,7 +315,7 @@ gps:
   time_col: "t"
   lat_col: "lat"
   lon_col: "lon"
-  max_time_diff: 60       # warning threshold [s]
+  max_time_diff: 60       # warn when extrapolating > this [s] outside GPS coverage
 
 hotel:
   enable: false
@@ -359,9 +359,9 @@ bottom:
   enable: false
   depth_window: 4.0       # depth window for crash detection [m]
   depth_minimum: 10.0     # minimum depth to search [m]
-  speed_factor: 0.3       # speed reduction factor
-  median_factor: 1.0      # acceleration std dev filter factor
-  vibration_frequency: 16 # vibration binning frequency [Hz]
+  speed_factor: 0.3       # UNUSED (reserved; tuning has no effect)
+  median_factor: 1.0      # UNUSED (reserved; tuning has no effect)
+  vibration_frequency: 16 # UNUSED (reserved; tuning has no effect)
   vibration_factor: 4.0   # vibration std dev acceptance factor
 
 top_trim:
@@ -379,8 +379,8 @@ epsilon:
   f_AA: 98.0              # anti-aliasing filter cutoff [Hz]
   f_limit: null           # upper frequency limit [Hz] (null = f_AA)
   fit_order: 3            # polynomial fit order for Nasmyth integration
-  despike_thresh: 8       # despike threshold [MAD]
-  despike_smooth: 0.5     # despike smoothing window [s]
+  despike_thresh: 8       # despike threshold (rectified-HP / LP-envelope ratio, not MAD)
+  despike_smooth: 0.5     # despike envelope low-pass cutoff [Hz]
   salinity: null          # salinity [PSU] (null = 35, fixed S)
   epsilon_minimum: 1.0e-13  # floor for small epsilon values
   T_source: null          # temperature source for viscosity (null = blend T1/T2)

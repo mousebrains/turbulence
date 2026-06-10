@@ -48,10 +48,15 @@ from odas_tpw.scor160.ocean import visc, visc35
 # Minimum profiling speed to avoid wavenumber singularity [m/s]
 SPEED_MIN = 0.01
 
-# Nuttall (1971) DOF correction for cosine-windowed overlapped FFTs
+# Nuttall (1971) DOF correction for cosine-windowed overlapped FFTs.
+# Note: dof_spec below subtracts the number of Goodman-removed vibration
+# signals (DOF loss per Lueck 2022b); ODAS get_diss_odas.m:445-447 uses
+# 1.9*num_of_ffts with no subtraction, so dof_spec here is slightly
+# lower than the ODAS attribute for the same data.
 DOF_NUTTALL = 1.9
 
-# Macoun & Lueck (1998) wavenumber correction: 1 + (K/MACOUN_LUECK_DENOM)^2
+# Macoun & Lueck (2004), J. Atmos. Oceanic Technol., 21, 284-297,
+# wavenumber correction: 1 + (K/MACOUN_LUECK_DENOM)^2
 # Applied for K <= MACOUN_LUECK_K
 MACOUN_LUECK_K = 150  # [cpm]
 MACOUN_LUECK_DENOM = 48  # [cpm]
@@ -127,10 +132,15 @@ def _compute_epsilon(
     if f_limit < f_AA_eff:
         f_AA_eff = f_limit
 
+    # Shear high-pass cutoff: half the inverse FFT-segment duration
+    # (ODAS get_diss_odas.m guidance, lines 25-27).  0.25 Hz for the
+    # default 1024-sample FFT at 512 Hz; scales with fft_length.
+    hp_cut = 0.5 * fs_fast / fft_length
+
     # Pipeline parameters — lenient section selection since profiles
     # are already detected by prepare_profiles
     l2_params = L2Params(
-        HP_cut=0.25,
+        HP_cut=hp_cut,
         despike_sh=np.array([despike_thresh, despike_smooth, 0.04]),
         despike_A=np.array([np.inf, 0.5, 0.04]),
         profile_min_W=0.05,
@@ -142,7 +152,7 @@ def _compute_epsilon(
         fft_length=fft_length,
         diss_length=diss_length,
         overlap=overlap,
-        HP_cut=0.25,
+        HP_cut=hp_cut,
         fs_fast=fs_fast,
         goodman=goodman,
     )
@@ -442,6 +452,10 @@ def _build_diss_dataset(
             {
                 "units": "1",
                 "long_name": "figure of merit (observed/Nasmyth variance ratio)",
+                "comment": (
+                    "Values near 1.0 indicate a good fit. NOT the MAD-based "
+                    "ATOMIX/Rockland FM statistic; see the FM variable for that."
+                ),
             },
         ),
         (
@@ -450,8 +464,13 @@ def _build_diss_dataset(
             FM_out,
             {
                 "units": "1",
-                "long_name": "Lueck figure of merit (MAD * sqrt(dof))",
-                "comment": "FM < 1 for 97.5% of good spectra (Lueck, 2022a,b)",
+                "long_name": "Lueck (2022) figure of merit",
+                "comment": (
+                    "FM = MAD_ln / (T_M * sigma_ln) with sigma_ln = "
+                    "sqrt(1.25 * N_eff**(-7/9)) and T_M = 0.8 + sqrt(1.56/N_s) "
+                    "(Lueck 2022, doi:10.1175/JTECH-D-21-0051.1). Good fits "
+                    "approach 0; ATOMIX recommends rejecting FM > ~1.15."
+                ),
             },
         ),
         (

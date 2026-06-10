@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -236,7 +237,7 @@ def prepare_profiles(
     speed: float | None,
     direction: str,
     salinity: npt.ArrayLike | None,
-    tau: float = 1.5,
+    tau: float | None = None,
     speed_cutout: float = 0.05,
     vehicle: str | None = None,
 ) -> tuple | None:
@@ -247,6 +248,9 @@ def prepare_profiles(
       2. speed = abs(W)
       3. speed filtered again with Butterworth at 0.68/tau
       4. speed clamped to speed_cutout minimum
+
+    ``tau=None`` (default) resolves the smoothing time constant from the
+    vehicle table; pass an explicit value to override it.
 
     Returns (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast,
     fs_slow, ratio, t_fast).
@@ -266,7 +270,8 @@ def prepare_profiles(
     if vehicle is None:
         vehicle = data.get("vehicle", "")
     direction = resolve_direction(direction, vehicle)
-    tau = resolve_tau(vehicle)
+    if tau is None:
+        tau = resolve_tau(vehicle)
 
     if data["is_profile"]:
         profiles_slow = [(0, len(P_slow) - 1)]
@@ -289,6 +294,19 @@ def prepare_profiles(
     else:
         from odas_tpw.scor160.profile import compute_speed_fast
 
+        if direction in ("glide", "horizontal"):
+            # ODAS uses a flight model (glide) or EM current meter /
+            # hotel speed (horizontal) for these vehicles; |dP/dt|
+            # underestimates the flow past the sensors, and epsilon has
+            # roughly U^4 leverage on the speed through the shear
+            # conversion and wavenumber transform.
+            warnings.warn(
+                f"Vehicle direction '{direction}' but speed is being computed "
+                "from |dP/dt|; provide an explicit speed or a precomputed "
+                "speed_fast channel for glider/horizontal platforms — "
+                "epsilon scales as ~U^4 and will be strongly biased",
+                stacklevel=2,
+            )
         speed_fast, _W_slow = compute_speed_fast(
             P_slow,
             t_fast,

@@ -60,6 +60,12 @@ def compute_speed_for_pfile(
     Returns
     -------
     speed_fast : (n_fast,) float64, m/s, >= ``speed_cutout``.
+                 For the pressure method this is numerically |dP/dt| in
+                 dbar/s treated as m/s (the ODAS convention; 1 dbar ~
+                 1.01-1.02 m depending on latitude/density).  The ~1-2 %
+                 systematic speed bias is amplified in epsilon, which has
+                 roughly U^4 leverage through the shear conversion and
+                 wavenumber transform.
     W_slow     : (n_slow,) float64, dbar/s. Always the smoothed |dP/dt|
                  -- independent of method, useful for QC/binning.
     """
@@ -156,7 +162,15 @@ def _flight_model_slow(
     min_pitch_deg: float,
     amplitude_quantile: tuple[float, float] = (1.0, 99.0),
 ) -> np.ndarray:
-    """U_along = |W| / (sin(|pitch|-aoa) * cos|roll|), at slow rate.
+    """U_along = |W| / sin(glide angle), at slow rate.
+
+    Steady-flight kinematics (Merckelbach et al. 2010,
+    doi:10.1175/2009JTECHO710.1): W = U * sin(gamma) with glide-path
+    angle gamma = |pitch| - angle of attack, so U = |W| / sin(gamma).
+    Roll does not enter the along-path relation (it rotates the body
+    about the flight axis without changing the vertical velocity
+    component); an earlier version multiplied by cos(roll), which
+    inflated U by 1/cos(roll).
 
     Pitch axis auto-picked from whichever of ``Incl_X``/``Incl_Y`` has
     the larger percentile-spread amplitude (default 99-1) -- Slocum
@@ -176,13 +190,11 @@ def _flight_model_slow(
     iX_rng = float(np.nanpercentile(iX, hi_q) - np.nanpercentile(iX, lo_q))
     iY_rng = float(np.nanpercentile(iY, hi_q) - np.nanpercentile(iY, lo_q))
     pitch_deg = iX if iX_rng >= iY_rng else iY
-    roll_deg = iY if iX_rng >= iY_rng else iX
 
     pitch = np.deg2rad(pitch_deg)
-    roll = np.deg2rad(roll_deg)
     aoa = np.deg2rad(aoa_deg)
     eff = np.maximum(np.abs(pitch) - aoa, 0.0)
-    sin_path = np.sin(eff) * np.cos(roll)
+    sin_path = np.sin(eff)
     sin_floor = np.sin(np.deg2rad(min_pitch_deg))
     sin_path = np.where(sin_path > sin_floor, sin_path, np.nan)
     return np.asarray(np.abs(W_slow) / sin_path, dtype=np.float64)

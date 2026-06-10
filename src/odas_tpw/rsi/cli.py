@@ -341,18 +341,19 @@ def _cmd_chi(args: argparse.Namespace) -> None:
             print(f"{f.name}:")
 
             kw = dict(merged)
+            eps_ds = None
             if epsilon_dir is not None:
-                import xarray as xr
+                from odas_tpw.rsi.chi_io import load_epsilon_dataset
 
-                eps_file = Path(epsilon_dir) / f"{f.stem}_eps.nc"
-                if eps_file.exists():
-                    eps_ds = xr.open_dataset(eps_file)
+                eps_ds = load_epsilon_dataset(f, epsilon_dir)
+                if eps_ds is not None:
                     kw["epsilon_ds"] = eps_ds
                 else:
-                    eps_ds = None
-                    print(f"  Warning: no epsilon file {eps_file.name}, using Method 2")
-            else:
-                eps_ds = None
+                    print(
+                        f"  Warning: no epsilon files for {f.stem} under "
+                        f"{epsilon_dir} (searched eps_* subdirectories too); "
+                        "using Method 2"
+                    )
 
             try:
                 compute_chi_file(f, output_dir, **kw)
@@ -928,7 +929,8 @@ def _add_ql_parser(subparsers: argparse._SubParsersAction) -> None:
         type=int,
         default=1,
         choices=[1, 2],
-        help="Chi method for profile estimates: 1 = from epsilon, 2 = MLE fit (default: 1)",
+        help="Chi method for profile estimates: 1 = from epsilon, "
+        "2 = iterative spectral fit (default: 1)",
     )
     p.add_argument(
         "--spectrum-model",

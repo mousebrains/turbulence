@@ -136,7 +136,12 @@ def _run_benchmark(args: argparse.Namespace, levels: list[str]) -> None:
                     f"  L3 ref: {l3_ref.n_spectra} spectra, "
                     f"{l3_ref.n_shear} shear, {l3_ref.n_wavenumber} wavenumbers"
                 )
-            l4_comp = process_l4(l3_input, f_AA=l1.f_AA)
+            l4_comp = process_l4(
+                l3_input,
+                f_AA=l1.f_AA,
+                num_ffts=2 * (l3_params.diss_length // l3_params.fft_length) - 1,
+                n_v=l1.n_vib if l3_params.goodman else 0,
+            )
             print()
             print(format_l4_report(compare_l4(l4_comp, l4_ref), filename=path.name))
 

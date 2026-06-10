@@ -5,6 +5,7 @@ Channel conversion functions: raw counts -> physical units.
 Ported from the ODAS MATLAB Library convert_odas.m.
 """
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -16,6 +17,25 @@ def _safe_float(s: Any, default: float = 0.0) -> float:
         return float(s)
     except (ValueError, TypeError):
         return default
+
+
+def _require_float(params: dict[str, Any], key: str, default: float, sensor: str) -> float:
+    """Like _safe_float, but warn loudly when a sensor-specific calibration
+    coefficient is missing from the channel config.
+
+    ODAS convert_odas.m errors outright in this situation; silently
+    substituting a generic default would produce plausible-looking but
+    wrong physical units (e.g. a missing shear ``sens`` scales epsilon by
+    the square of the sensitivity error).
+    """
+    if key not in params or params.get(key) in (None, ""):
+        warnings.warn(
+            f"{sensor}: calibration coefficient '{key}' missing from channel "
+            f"config; using default {default} — physical units are suspect",
+            stacklevel=3,
+        )
+        return default
+    return _safe_float(params[key], default)
 
 
 def _adis_14bit(data: np.ndarray) -> np.ndarray:
@@ -72,8 +92,15 @@ def convert_therm(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     adc_bits = _safe_float(params.get("adc_bits", "16"))
     G = _safe_float(params.get("g", "6.0"))
     E_B = _safe_float(params.get("e_b", "0.68"))
-    T_0 = _safe_float(params.get("t_0", "289.0"))
-    beta_1 = _safe_float(params.get("beta_1", "3000"))
+    T_0 = _require_float(params, "t_0", 289.0, "therm")
+    # Older configs use 'beta' instead of 'beta_1' (convert_odas.m
+    # accepts either, lines 501-507)
+    if "beta_1" in params:
+        beta_1 = _safe_float(params["beta_1"], 3000.0)
+    elif "beta" in params:
+        beta_1 = _safe_float(params["beta"], 3000.0)
+    else:
+        beta_1 = _require_float(params, "beta_1", 3000.0, "therm")
     beta_2 = params.get("beta_2")
 
     Z = ((data - a) / b) * (adc_fs / 2**adc_bits) * 2 / (G * E_B)
@@ -97,8 +124,8 @@ def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     """
     adc_fs = _safe_float(params.get("adc_fs", "4.096"))
     adc_bits = _safe_float(params.get("adc_bits", "16"))
-    diff_gain = _safe_float(params.get("diff_gain", "1"))
-    sens = _safe_float(params.get("sens", "1"))
+    diff_gain = _require_float(params, "diff_gain", 1.0, "shear")
+    sens = _require_float(params, "sens", 1.0, "shear")
     adc_zero = _safe_float(params.get("adc_zero", "0"))
     sig_zero = _safe_float(params.get("sig_zero", "0"))
     phys = (adc_fs / 2**adc_bits) * data + (adc_zero - sig_zero)
@@ -136,6 +163,37 @@ def convert_piezo(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     """Piezo accelerometer: subtract zero-offset ``a_0``."""
     a_0 = _safe_float(params.get("a_0", "0"))
     return data - a_0, "counts"
+
+
+def convert_accel(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
+    """Linear (DC-response) accelerometer → m/s².
+
+    Matches ODAS ``convert_odas.m`` ``odas_accel_internal``:
+      ``x = data*adc_fs/2^adc_bits + adc_zero - sig_zero``
+      ``physical = 9.81 * (x - coef0) / coef1``
+
+    Used by older VMPs with calibrated accelerometers (in place of the
+    piezo type, whose output stays in counts).
+    """
+    adc_zero = _safe_float(params.get("adc_zero", "0"))
+    adc_fs = _safe_float(params.get("adc_fs", "1"))
+    adc_bits = _safe_float(params.get("adc_bits", "0"))
+    sig_zero = _safe_float(params.get("sig_zero", "0"))
+    coef0 = _require_float(params, "coef0", 0.0, "accel")
+    coef1 = _require_float(params, "coef1", 1.0, "accel")
+    x = data * adc_fs / 2**adc_bits + adc_zero - sig_zero
+    return 9.81 * (x - coef0) / coef1, "m_s-2"
+
+
+def convert_magn(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
+    """Magnetometer → µT.
+
+    Matches ODAS ``convert_odas.m`` ``odas_magn_internal``:
+      ``physical = (data - coef0) / coef1``
+    """
+    coef0 = _require_float(params, "coef0", 0.0, "magn")
+    coef1 = _require_float(params, "coef1", 1.0, "magn")
+    return (data - coef0) / coef1, "uT"
 
 
 def convert_inclxy(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
@@ -244,6 +302,8 @@ CONVERTERS = {
     "poly": convert_poly,
     "voltage": convert_voltage,
     "piezo": convert_piezo,
+    "accel": convert_accel,
+    "magn": convert_magn,
     "inclxy": convert_inclxy,
     "inclt": convert_inclt,
     "jac_c": convert_jac_c,

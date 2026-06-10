@@ -58,9 +58,9 @@ Rewrote the main dissipation function to:
 
 ### 5. Pipeline PFile deduplication
 
-**File:** `src/odas_tpw/rsi/cli.py`
+**Files:** `src/odas_tpw/rsi/cli.py`, `src/odas_tpw/rsi/pipeline.py`
 
-`_cmd_pipeline` previously called `compute_diss_file` and `compute_chi_file`, each of which independently loaded the `.p` file via `PFile`. Now loads `PFile` once and calls `get_diss`/`get_chi` directly, passing the epsilon Dataset to chi for Method 1. Saves ~0.8 s and ~1.4 GB per file.
+`_cmd_pipeline` originally called `compute_diss_file` and `compute_chi_file`, each of which independently loaded the `.p` file via `PFile`. The deduplication (load each `PFile` once, feed the epsilon results to chi for Method 1) saved ~0.8 s and ~1.4 GB per file. Since then `_cmd_pipeline` has been reworked to call `run_pipeline()` in `pipeline.py`, which preserves this property: each `.p` file is loaded once and shared across the epsilon and chi stages.
 
 ## Performance Results
 

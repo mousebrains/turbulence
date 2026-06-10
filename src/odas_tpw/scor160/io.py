@@ -164,11 +164,12 @@ class L4Data:
     epsi: np.ndarray  # (N_SHEAR, N_SPECTRA), epsilon per probe
     epsi_final: np.ndarray  # (N_SPECTRA,), combined epsilon
     epsi_flags: np.ndarray  # (N_SHEAR, N_SPECTRA), QC flags
-    fom: np.ndarray  # (N_SHEAR, N_SPECTRA), figure of merit
+    fom: np.ndarray  # (N_SHEAR, N_SPECTRA), figure of merit (obs/Nasmyth variance ratio)
     mad: np.ndarray  # (N_SHEAR, N_SPECTRA), mean absolute deviation
     kmax: np.ndarray  # (N_SHEAR, N_SPECTRA), upper integration limit
     method: np.ndarray  # (N_SHEAR, N_SPECTRA), 0=variance, 1=ISR
     var_resolved: np.ndarray  # (N_SHEAR, N_SPECTRA), fraction of variance resolved
+    FM: np.ndarray | None = None  # (N_SHEAR, N_SPECTRA), Lueck (2022) MAD-based FM statistic
 
     @property
     def n_spectra(self) -> int:
@@ -309,6 +310,19 @@ def _read_l1(ds: netCDF4.Dataset) -> L1Data:
         roll = np.asarray(g.variables["ROLL"][:], dtype=np.float64)
     if "TEMP" in g.variables:
         temp = np.asarray(g.variables["TEMP"][:], dtype=np.float64)
+        # TEMP is often sampled on the slow grid; interpolate to the fast
+        # time grid so per-window means (and hence viscosity) are defined.
+        # Without this, L3 windows get temp=NaN -> visc35(NaN)=NaN -> all
+        # epsilon estimates NaN, silently.
+        if temp.shape[0] != len(time):
+            temp_dim = g.variables["TEMP"].dimensions[0]
+            if temp_dim in g.variables:
+                time_temp = np.asarray(g.variables[temp_dim][:], dtype=np.float64)
+            elif time_slow.size == temp.shape[0]:
+                time_temp = time_slow
+            else:
+                time_temp = np.linspace(time[0], time[-1], temp.shape[0])
+            temp = np.interp(time, time_temp, temp)
 
     fs_fast = float(_resolve_attr(ds, "fs_fast", 512.0))
     fs_slow = float(_resolve_attr(ds, "fs_slow", 0.0))
@@ -527,7 +541,10 @@ def _read_l3(ds: netCDF4.Dataset) -> L3Data:
     pspd_rel = np.asarray(g.variables["PSPD_REL"][:], dtype=np.float64)
     section_number = np.asarray(g.variables["SECTION_NUMBER"][:], dtype=np.float64)
 
-    temp = np.zeros_like(time)
+    # NaN marks missing temperature (process_l4 falls back to 10 degC with
+    # a warning).  A 0 degC default would silently bias viscosity +35 %
+    # relative to 10 degC, and epsilon with it.
+    temp = np.full_like(time, np.nan)
     if "TEMP" in g.variables:
         temp = np.asarray(g.variables["TEMP"][:], dtype=np.float64)
 

@@ -104,7 +104,10 @@ def clean_shear_spec(
         n_sh = shear.shape[1]
         n_ac = accel.shape[1]
         try:
-            # Compute shear auto-spectrum (may work with shorter overlap)
+            # Compute the uncleaned shear auto-spectrum so callers still
+            # get a usable spectrum.  Subject to the same 2*nfft length
+            # check as the cross-spectrum, so this succeeds only when the
+            # failure above was not a length error.
             UU, F, _, _ = csd_matrix(shear, None, nfft, rate, overlap=nfft // 2, detrend="linear")
         except ValueError:
             # Even auto-spectrum fails — return zeros

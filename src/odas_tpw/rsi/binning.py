@@ -53,9 +53,16 @@ def bin_by_depth(
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
     n_bins = len(bin_centers)
 
-    # Assign samples to bins
-    bin_idx = np.digitize(pres, bin_edges) - 1  # 0-indexed
-    bin_idx = np.clip(bin_idx, 0, n_bins - 1)
+    # Assign samples to bins.  Samples with NaN pressure (np.digitize
+    # returns len(edges)) or outside [p_min, p_max] are EXCLUDED — the
+    # previous np.clip silently dumped them into the shallowest/deepest
+    # bin, contaminating the edge bins.  Bins are half-open [lo, hi)
+    # except the last, which includes its upper edge.
+    with np.errstate(invalid="ignore"):
+        bin_idx = np.digitize(pres, bin_edges) - 1  # 0-indexed
+        bin_idx = np.where(pres == bin_edges[-1], n_bins - 1, bin_idx)
+    in_range = np.isfinite(pres) & (bin_idx >= 0) & (bin_idx < n_bins)
+    bin_idx = np.where(in_range, bin_idx, 0)  # placeholder; masked below
 
     data_vars = {}
     for name, arr in values.items():
@@ -75,7 +82,7 @@ def bin_by_depth(
         # log-mean) up front, then accumulate sums and counts in one
         # linear pass.
         if name in log_mean_vars:
-            valid = np.isfinite(arr) & (arr > 0)
+            valid = in_range & np.isfinite(arr) & (arr > 0)
             log_vals = np.log(arr, where=valid, out=np.full_like(arr, np.nan))
             idx_v = bin_idx[valid]
             log_v = log_vals[valid]
@@ -85,16 +92,26 @@ def bin_by_depth(
                 binned = np.where(
                     counts_v > 0, np.exp(sums_v / np.maximum(counts_v, 1)), np.nan
                 )
+            attrs = {
+                "cell_methods": "depth_bin: geometric mean",
+                "comment": (
+                    "Geometric (log-space) mean within each depth bin. For "
+                    "lognormally distributed dissipation this estimates the "
+                    "MEDIAN, not the arithmetic mean; use the arithmetic mean "
+                    "for budget (flux) calculations."
+                ),
+            }
         else:
-            valid = np.isfinite(arr)
+            valid = in_range & np.isfinite(arr)
             idx_v = bin_idx[valid]
             vals_v = arr[valid]
             counts_v = np.bincount(idx_v, minlength=n_bins)
             sums_v = np.bincount(idx_v, weights=vals_v, minlength=n_bins)
             with np.errstate(invalid="ignore", divide="ignore"):
                 binned = np.where(counts_v > 0, sums_v / np.maximum(counts_v, 1), np.nan)
+            attrs = {"cell_methods": "depth_bin: mean"}
 
-        data_vars[name] = (["depth_bin"], binned)
+        data_vars[name] = (["depth_bin"], binned, attrs)
 
     ds = xr.Dataset(
         data_vars,
