@@ -90,6 +90,15 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
     if l1.vib.shape[0] > 0:
         a_thresh, a_smooth, a_hw = params.despike_A
 
+    # Despike bookkeeping for ATOMIX QC flags: which samples were
+    # replaced (drives the per-window DESPIKE_FRACTION) and the maximum
+    # pass count per channel across sections (drives the
+    # too-many-passes flag).
+    despike_mask_sh = np.zeros_like(shear_out, dtype=bool)
+    despike_passes_sh = np.zeros(l1.n_shear, dtype=np.int64)
+    despike_mask_A = np.zeros_like(vib_out, dtype=bool)
+    despike_passes_A = np.zeros(l1.n_vib, dtype=np.int64)
+
     # Despike within each section
     for sec_id in np.unique(section_number):
         if sec_id == 0:
@@ -100,25 +109,33 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
         if np.isfinite(sh_thresh):
             for i in range(l1.n_shear):
                 N_sh = round(sh_hw * fs) if sh_hw < 1 else int(sh_hw)
-                shear_out[i, mask], _, _, _ = despike(
-                    shear_out[i, mask],
+                before = shear_out[i, mask]
+                cleaned, _, n_passes, _ = despike(
+                    before,
                     fs,
                     thresh=sh_thresh,
                     smooth=sh_smooth,
                     N=N_sh,
                 )
+                despike_mask_sh[i, mask] = cleaned != before
+                despike_passes_sh[i] = max(despike_passes_sh[i], n_passes)
+                shear_out[i, mask] = cleaned
 
         # Despike vibration/accelerometer
         if l1.vib.shape[0] > 0 and np.isfinite(a_thresh):
             for i in range(l1.n_vib):
                 N_a = round(a_hw * fs) if a_hw < 1 else int(a_hw)
-                vib_out[i, mask], _, _, _ = despike(
-                    vib_out[i, mask],
+                before = vib_out[i, mask]
+                cleaned, _, n_passes, _ = despike(
+                    before,
                     fs,
                     thresh=a_thresh,
                     smooth=a_smooth,
                     N=N_a,
                 )
+                despike_mask_A[i, mask] = cleaned != before
+                despike_passes_A[i] = max(despike_passes_A[i], n_passes)
+                vib_out[i, mask] = cleaned
 
     return L2Data(
         time=l1.time.copy(),
@@ -127,6 +144,10 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
         vib_type=l1.vib_type,
         pspd_rel=pspd,
         section_number=section_number,
+        despike_mask_sh=despike_mask_sh,
+        despike_passes_sh=despike_passes_sh,
+        despike_mask_A=despike_mask_A,
+        despike_passes_A=despike_passes_A,
     )
 
 

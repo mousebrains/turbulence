@@ -100,6 +100,7 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     all_sh_spec = []
     all_sh_spec_clean = []
     all_kcyc = []
+    all_despike_frac = []
 
     sections = np.unique(l2.section_number)
     sections = sections[sections > 0]
@@ -175,6 +176,13 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
             all_speed.append(np.mean(l2.pspd_rel[s:e]))
             all_section.append(sec_id)
 
+            # Fraction of shear samples replaced by despiking in this
+            # window (ATOMIX DESPIKE_FRACTION_SH; drives QC flag bit 2)
+            if l2.despike_mask_sh.size > 0:
+                all_despike_frac.append(l2.despike_mask_sh[:, s:e].mean(axis=1))
+            else:
+                all_despike_frac.append(np.full(n_shear, np.nan))
+
             # Convert frequency spectrum → wavenumber spectrum
             # k = f / W [cpm], Ψ(k) = Ψ(f) * W [variance/cpm]
             W = all_speed[-1]
@@ -226,6 +234,9 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     sh_spec_clean_arr = np.stack(all_sh_spec_clean, axis=-1)
     sh_spec_clean_out = np.transpose(sh_spec_clean_arr, (1, 0, 2))
 
+    # (N_SHEAR, N_SPECTRA) despike fraction per window
+    despike_frac_out = np.column_stack(all_despike_frac) if all_despike_frac else np.zeros((0, 0))
+
     return L3Data(
         time=time_out,
         pres=pres_out,
@@ -235,4 +246,6 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
         kcyc=kcyc_out,
         sh_spec=sh_spec_out,
         sh_spec_clean=sh_spec_clean_out,
+        despike_fraction=despike_frac_out,
+        despike_passes=l2.despike_passes_sh.copy(),
     )

@@ -481,3 +481,38 @@ class TestInferDissLength:
         finally:
             ds.close()
         assert result == 256  # 64 * 4
+
+
+class TestReadL4QcLimits:
+    def test_benchmark_limits(self):
+        """The VMP250 benchmark file's own QC thresholds are read."""
+        from pathlib import Path
+
+        import pytest as _pytest
+
+        path = Path(__file__).parent.parent / "AtomixData" / "VMP250_TidalChannel_024.nc"
+        if not path.exists():
+            _pytest.skip("ATOMIX benchmark data not present")
+        from odas_tpw.scor160.io import read_l4_qc_limits
+
+        qc = read_l4_qc_limits(path)
+        assert qc["FOM_limit"] == 1.15
+        assert qc["variance_resolved_limit"] == 0.6
+        assert qc["despike_shear_fraction_limit"] == 0.05
+        assert qc["despike_shear_iterations_limit"] == 8.0
+        np.testing.assert_allclose(qc["diss_ratio_limit"], 1.96 * np.sqrt(2.0))
+        np.testing.assert_allclose(qc["diss_length_s"], 2560.0 / 512.0327777777778)
+
+    def test_missing_attrs_fall_back(self, tmp_path):
+        """A file without L4 attrs gets the package defaults."""
+        import netCDF4
+
+        from odas_tpw.scor160.io import read_l4_qc_limits
+        from odas_tpw.scor160.l4 import DEFAULT_FOM_LIMIT
+
+        p = tmp_path / "empty.nc"
+        ds = netCDF4.Dataset(p, "w")
+        ds.close()
+        qc = read_l4_qc_limits(p)
+        assert qc["FOM_limit"] == DEFAULT_FOM_LIMIT
+        assert qc["diss_length_s"] == 0.0

@@ -555,6 +555,29 @@ where `K_95 = X_95 * (epsilon / nu^3)^(1/4)` is the wavenumber containing 95% of
 
 ([`l4.py: _estimate_epsilon`](../src/odas_tpw/scor160/l4.py))
 
+### QC flags (EPSI_FLAGS)
+
+The per-estimate flag variable follows the ATOMIX shear-probes
+convention (bit values, additive; verified against the benchmark files'
+`EPSI_FLAGS`):
+
+| Bit | Meaning | Default threshold |
+|-----|---------|-------------------|
+| 1 | FM (figure of merit) above limit | 1.15 |
+| 2 | despike fraction above limit (fraction of shear samples replaced by despiking in the window) | 0.05 |
+| 4 | inter-probe consistency: `ln(e_i/e_min) > 1.96*sqrt(2)*mean(sigma_ln)` with `sigma_ln` from the Lueck (2022a) variance model — only the larger (suspect) estimates are flagged, never the window minimum | 1.96·√2 |
+| 8 | too many despike passes | 8 |
+| 16 | variance resolved below limit — applied only to variance-method estimates (the ISR fit never integrates the dissipation range, so the criterion is not applicable there) | 0.5 |
+| 255 | invalid estimate | — |
+
+Flag agreement with the benchmark reference `EPSI_FLAGS` (computed with
+each dataset's own thresholds): 83–100% exact bitfield match across the
+VMP250 tidal and MR1000 Minas Passage datasets, with the residual
+disagreement confined to ratio-test windows where the computed epsilon
+sits near the threshold.
+
+([`l4.py: _compute_flags`](../src/odas_tpw/scor160/l4.py))
+
 
 ## 11. Seawater Viscosity
 

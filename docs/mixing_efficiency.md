@@ -36,10 +36,15 @@ $\partial \overline{T}/\partial z$ is the background (mean) vertical
 temperature gradient.  This quantity is dimensionless and is the one
 for which the canonical value $\Gamma \approx 0.2$ applies.
 
-**The package computes $\Gamma$ in the `rsi-tpw pipeline` Method-1 chi
-output** (`L4_chi_epsilon.nc`, propagated into the binned `L5_binned.nc`
-and combined `L6_combined.nc` products), along with the supporting
-quantities, all on the chi window grid:
+**The package computes $\Gamma$ in both processing pipelines** — the
+`rsi-tpw pipeline` Method-1 chi output (`L4_chi_epsilon.nc`, propagated
+into the binned `L5_binned.nc` and combined `L6_combined.nc` products)
+and the `perturb` chi stage (`chi.mixing: true`, the default; written
+into the per-profile chi NetCDFs).  In the perturb path, practical
+salinity comes from the profile's own conductivity/temperature/pressure
+via TEOS-10, so $N^2$ is fully constrained; the rsi path may assume
+35 PSU (caveat 1 below).  The supporting quantities, all on the chi
+window grid:
 
 | Variable | Definition | Units |
 |----------|------------|-------|

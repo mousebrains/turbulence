@@ -290,6 +290,7 @@ def _process_profile(
         fit_order=fit_order,
         num_ffts=2 * (l3_params.diss_length // l3_params.fft_length) - 1,
         n_v=l1.n_vib if l3_params.goodman else 0,
+        diss_length_s=l3_params.diss_length / l1.fs_fast,
     )
     logger.info(f"Epsilon: {l4.n_spectra} estimates")
 

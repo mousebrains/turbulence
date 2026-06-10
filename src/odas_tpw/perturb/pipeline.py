@@ -412,6 +412,180 @@ def _apply_fom_cut(ds, fom_max: float, file_label: str) -> int:
     return n_bad
 
 
+def _time_epoch_seconds(da) -> Any:
+    """Convert a time variable to float64 epoch seconds (ndarray).
+
+    Handles both decoded (datetime64) and undecoded (float + CF
+    "seconds since ..." units) representations, so arrays from different
+    open modes can be paired on one time base.
+    """
+    import numpy as np
+
+    vals = np.asarray(da.values)
+    if np.issubdtype(vals.dtype, np.datetime64):
+        return vals.astype("datetime64[ns]").astype("int64") / 1e9
+    units = str(da.attrs.get("units", ""))
+    if " since " in units:
+        # np.datetime64 rejects timezone-aware strings; these stamps are UTC.
+        origin = units.split(" since ", 1)[1].strip()
+        origin = origin.replace("Z", "").replace("+00:00", "")
+        origin_s = (
+            np.datetime64(origin).astype("datetime64[ns]").astype("int64") / 1e9
+        )
+        return vals.astype(np.float64) + origin_s
+    return vals.astype(np.float64)
+
+
+def _add_mixing_quantities(
+    chi_ds,
+    diss_ds,
+    prof_path,
+    T_name: str = "JAC_T",
+    C_name: str = "JAC_C",
+    file_label: str = "",
+):
+    """Append derived mixing quantities to a per-profile chi dataset.
+
+    Computes window-scale N2 and dT/dz from the profile's own slow CTD
+    channels — with practical salinity from C/T/P via TEOS-10 when the
+    conductivity channel exists, so N2 is fully constrained (unlike the
+    rsi path, which may assume 35 PSU) — then K_T (Osborn-Cox), Gamma
+    (Oakey 1982), and K_rho (Osborn 1980, Gamma_0 = 0.2), pairing
+    epsilonMean from the matching diss dataset onto the chi window grid.
+
+    Mutates and returns *chi_ds*.  No-op (with a log line) when the
+    required inputs are missing.
+    """
+    import gsw
+    import numpy as np
+    import xarray as xr
+
+    from odas_tpw.processing.mixing import (
+        mixing_coefficients,
+        pair_nearest,
+        window_stratification,
+    )
+
+    if diss_ds is None or "epsilonMean" not in diss_ds or "chiMean" not in chi_ds:
+        logger.info("mixing quantities skipped for %s: missing epsilon/chi", file_label)
+        return chi_ds
+
+    with xr.open_dataset(prof_path, decode_times=False) as prof:
+        if any(v not in prof for v in ("t_slow", "P", T_name)):
+            logger.info(
+                "mixing quantities skipped for %s: profile lacks t_slow/P/%s",
+                file_label,
+                T_name,
+            )
+            return chi_ds
+        t_slow = _time_epoch_seconds(prof["t_slow"])
+        P = prof["P"].values.astype(np.float64)
+        T = prof[T_name].values.astype(np.float64)
+        lat = float(prof["lat"].values) if "lat" in prof else np.nan
+        lon = float(prof["lon"].values) if "lon" in prof else np.nan
+        if not np.isfinite(lat):
+            lat = 0.0
+        if not np.isfinite(lon):
+            lon = 0.0
+
+        if C_name in prof:
+            C = prof[C_name].values.astype(np.float64)
+            S = gsw.SP_from_C(C, T, P)
+            sal_note = f"practical salinity from {C_name}/{T_name}/P (TEOS-10)"
+        else:
+            S = None
+            sal_note = (
+                "salinity assumed 35 PSU (no conductivity channel); N2 "
+                "reflects temperature stratification only"
+            )
+
+    chi_t = _time_epoch_seconds(chi_ds["t"])
+    try:
+        half_w = 0.5 * float(chi_ds.attrs["diss_length"]) / float(chi_ds.attrs["fs_fast"])
+    except (KeyError, TypeError, ValueError):
+        logger.info("mixing quantities skipped for %s: no window attrs", file_label)
+        return chi_ds
+
+    strat = window_stratification(chi_t, half_w, t_slow, P, T, S=S, lat=lat, lon=lon)
+    eps_on_chi = pair_nearest(
+        _time_epoch_seconds(diss_ds["t"]), diss_ds["epsilonMean"].values, chi_t
+    )
+    mix = mixing_coefficients(
+        eps_on_chi, chi_ds["chiMean"].values, strat.N2, strat.dTdz
+    )
+
+    var_specs = {
+        "N2": (
+            strat.N2,
+            {
+                "units": "s-2",
+                "long_name": "buoyancy frequency squared (window scale)",
+                "comment": (
+                    "TEOS-10 (gsw.Nsquared) between the shallow- and deep-half "
+                    f"means of each chi window; {sal_note}."
+                ),
+            },
+        ),
+        "dTdz": (
+            strat.dTdz,
+            {
+                "units": "K m-1",
+                "long_name": "background temperature gradient (positive down)",
+                "comment": (
+                    "Least-squares slope of in-situ temperature vs depth over "
+                    "each chi window."
+                ),
+            },
+        ),
+        "K_T": (
+            mix.K_T,
+            {
+                "units": "m2 s-1",
+                "long_name": "Osborn-Cox eddy diffusivity of heat",
+                "comment": (
+                    "K_T = chi / (2*(dT/dz)^2), Osborn & Cox (1972), "
+                    "doi:10.1080/03091927208236085. NaN where "
+                    "|dT/dz| < 1e-4 K/m (well-mixed)."
+                ),
+            },
+        ),
+        "Gamma": (
+            mix.Gamma,
+            {
+                "units": "1",
+                "long_name": "mixing coefficient (measured)",
+                "comment": (
+                    "Gamma = N2*chi / (2*epsilon*(dT/dz)^2), Oakey (1982), "
+                    "doi:10.1175/1520-0485(1982)012<0256:DOTROD>2.0.CO;2. "
+                    "epsilonMean paired from the nearest dissipation window. "
+                    "NaN where N2 < 1e-9 s-2 or |dT/dz| < 1e-4 K/m. "
+                    "Canonical value ~0.2."
+                ),
+            },
+        ),
+        "K_rho": (
+            mix.K_rho,
+            {
+                "units": "m2 s-1",
+                "long_name": "Osborn diapycnal diffusivity (Gamma_0 = 0.2)",
+                "comment": (
+                    "K_rho = 0.2*epsilon/N2, Osborn (1980), "
+                    "doi:10.1175/1520-0485(1980)010<0083:EOTLRO>2.0.CO;2. "
+                    "Compare with K_T: agreement implies the measured Gamma "
+                    "is near the canonical 0.2. NaN where N2 < 1e-9 s-2."
+                ),
+            },
+        ),
+    }
+    for name, (arr, attrs) in var_specs.items():
+        chi_ds[name] = xr.DataArray(arr, dims=["time"], attrs=attrs)
+    n_gamma = int(np.sum(np.isfinite(mix.Gamma)))
+    logger.info(
+        "mixing quantities for %s: %d valid Gamma estimates", file_label, n_gamma
+    )
+    return chi_ds
+
+
 def _nan_excluded_probes(ds, excluded_probes: list[str], file_label: str) -> None:
     """Set per-probe epsilon to NaN for shear probes named in *excluded_probes*.
 
@@ -801,7 +975,7 @@ def process_file(
                 for k, v in chi_cfg.items()
                 if k not in (
                     "enable", "chi_minimum", "diagnostics",
-                    "use_epsilon", "fom_max",
+                    "use_epsilon", "fom_max", "mixing",
                 )
             }
             with stage_log(output_dirs.get("chi"), log_basename):
@@ -839,6 +1013,26 @@ def process_file(
                             chi_ds = mk_chi_mean(
                                 chi_ds, chi_cfg.get("chi_minimum", 1e-13)
                             )
+                            # Derived mixing quantities (Gamma, K_T, K_rho)
+                            # with real salinity from the profile's own C/T/P
+                            if chi_cfg.get("mixing", True):
+                                mix_eps = (
+                                    diss_ds
+                                    if diss_ds is not None
+                                    else xr.open_dataset(diss_path)
+                                )
+                                try:
+                                    chi_ds = _add_mixing_quantities(
+                                        chi_ds,
+                                        mix_eps,
+                                        prof_path,
+                                        T_name=ct_cfg.get("T_name", "JAC_T"),
+                                        C_name=ct_cfg.get("C_name", "JAC_C"),
+                                        file_label=Path(prof_path).name,
+                                    )
+                                finally:
+                                    if mix_eps is not diss_ds:
+                                        mix_eps.close()
                             if qc_enabled:
                                 apply_qc_to_dataset(
                                     chi_ds, pf, qc_chi_drop_from,
