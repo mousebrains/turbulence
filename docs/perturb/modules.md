@@ -5,14 +5,14 @@ The `perturb` package (`src/odas_tpw/perturb/`) provides batch processing on top
 | Module | Description |
 |--------|-------------|
 | `cli.py` | `perturb` CLI entry point with subcommands |
-| `config.py` | YAML config schema (13 sections), defaults, three-way merge, deterministic hashing |
+| `config.py` | YAML config schema (17 sections), defaults, three-way merge, deterministic hashing |
 | `pipeline.py` | Pipeline orchestration: `process_file`, `run_trim`, `run_merge`, `run_pipeline` |
 | `discover.py` | Glob-based `.p` file discovery with filtering |
 | `trim.py` | Trim corrupt final records from `.p` files |
 | `merge.py` | Detect and merge split `.p` files by matching config/record size |
 | `fp07_cal.py` | FP07 in-situ calibration (Steinhart-Hart fit, cross-correlation lag) |
 | `gps.py` | GPS providers: `GPSNaN`, `GPSFixed`, `GPSFromCSV`, `GPSFromNetCDF`, `create_gps` factory |
-| `hotel.py` | Hotel-load (battery/thermistor) calibration overrides applied at load time |
+| `hotel.py` | Hotel file support — external vehicle telemetry (speed, pitch, roll, heading, CTD from gliders/AUVs/Remus) interpolated onto instrument time axes as new channels |
 | `seawater.py` | Full seawater property chain via gsw/TEOS-10 (SP, SA, CT, sigma0, rho, depth) |
 | `ctd.py` | CTD time-binning with GPS interpolation and seawater properties |
 | `binning.py` | Depth and time binning of per-profile NetCDFs |

@@ -16,7 +16,7 @@ perturb run -c config.yaml -o results/ VMP/*.p
 
 ## Configuration Sections
 
-The perturb configuration has 14 sections. Each parameter is optional — unset values fall back to defaults.
+The perturb configuration has 17 sections (`files`, `gps`, `hotel`, `profiles`, `fp07`, `ct`, `bottom`, `top_trim`, `epsilon`, `chi`, `ctd`, `speed`, `qc`, `binning`, `netcdf`, `parallel`, `instruments`). Each parameter is optional — unset values fall back to defaults.
 
 ---
 
@@ -47,7 +47,7 @@ Controls how GPS positions are assigned to measurements.
 | `time_col` | string | `"t"` | Time column/variable name |
 | `lat_col` | string | `"lat"` | Latitude column/variable name |
 | `lon_col` | string | `"lon"` | Longitude column/variable name |
-| `max_time_diff` | float | `60` | Max time difference [s] for interpolation |
+| `max_time_diff` | float | `60` | Warn when positions are extrapolated more than this [s] outside GPS coverage |
 
 ---
 
@@ -116,10 +116,10 @@ Controls detection and removal of bottom-crash contaminated data.
 | `enable` | bool | `false` | Enable bottom crash detection |
 | `depth_window` | float | `4.0` | Depth window for detection [m] |
 | `depth_minimum` | float | `10.0` | Minimum depth for detection [m] |
-| `speed_factor` | float | `0.3` | Speed threshold factor |
-| `median_factor` | float | `1.0` | Median deviation factor |
-| `vibration_frequency` | int | `16` | Vibration detection frequency [Hz] |
-| `vibration_factor` | float | `4.0` | Vibration amplitude factor |
+| `speed_factor` | float | `0.3` | Currently unused (reserved; tuning has no effect) |
+| `median_factor` | float | `1.0` | Currently unused (reserved; tuning has no effect) |
+| `vibration_frequency` | int | `16` | Currently unused (reserved; tuning has no effect) |
+| `vibration_factor` | float | `4.0` | Vibration standard-deviation acceptance factor |
 
 ---
 
@@ -139,7 +139,9 @@ Controls removal of initial surface instabilities from profiles.
 
 ### `epsilon` — TKE Dissipation Rate
 
-Controls computation of epsilon from shear probe spectra. Parameters are passed through to `rsi.dissipation.get_diss`.
+Controls computation of epsilon from shear probe spectra.
+
+Note that perturb and `rsi-tpw` use different spectral defaults (perturb: `fft_length` 256 for epsilon and 512 for chi; `rsi-tpw`: 1024 with a 4096-sample dissipation window), so their outputs differ in vertical resolution and noise behavior.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -150,13 +152,14 @@ Controls computation of epsilon from shear probe spectra. Parameters are passed 
 | `f_AA` | float | `98.0` | Anti-aliasing filter cutoff [Hz] |
 | `f_limit` | float | `null` | Upper frequency limit [Hz] (null = f_AA) |
 | `fit_order` | int | `3` | Polynomial fit order for Nasmyth integration |
-| `despike_thresh` | float | `8` | Despike threshold [MAD] |
-| `despike_smooth` | float | `0.5` | Despike smoothing window [s] |
+| `despike_thresh` | float | `8` | Despike threshold: ratio of the rectified high-passed signal to its low-passed envelope |
+| `despike_smooth` | float | `0.5` | Low-pass cutoff [Hz] for the despike envelope smoother |
 | `salinity` | float | `null` | Salinity [PSU] for viscosity (null = S=35 approx) |
 | `epsilon_minimum` | float | `1e-13` | Floor: values below this are set to NaN |
 | `T_source` | string | `null` | Temperature source for viscosity |
 | `T1_norm` | float | `1.0` | Shear probe 1 normalization factor |
 | `T2_norm` | float | `1.0` | Shear probe 2 normalization factor |
+| `fom_max` | float | `null` | Per-probe figure-of-merit cut (null = no cut). E.g. `2.0` NaNs each per-probe cell (`e_N`, `epsilon[probe,:]`) whose `fom[probe,seg]` >= `fom_max`, applied **before** `mk_epsilon_mean` so bad probes drop out of the geometric mean individually |
 | `diagnostics` | bool | `false` | Include diagnostic variables |
 
 ---
@@ -174,9 +177,12 @@ Controls computation of chi from FP07 thermistor spectra.
 | `fp07_model` | string | `"single_pole"` | FP07 transfer function: `single_pole` or `double_pole` |
 | `goodman` | bool | `true` | Enable Goodman coherent noise removal |
 | `f_AA` | float | `98.0` | Anti-aliasing filter cutoff [Hz] |
-| `fit_method` | string | `"iterative"` | Method 2 fitting: `iterative` or `mle` |
+| `use_epsilon` | bool | `true` | Method selector. `true` = Method 1 (chi from shear-probe epsilon); `false` = Method 2 spectral fit (uses `fit_method`). Set `false` for instruments where shear epsilon is unreliable, e.g. a MicroRider on a vibrating glider |
+| `fit_method` | string | `"iterative"` | Method 2 fitting: `iterative` or `mle` (ignored when `use_epsilon: true`) |
 | `spectrum_model` | string | `"kraichnan"` | Theoretical spectrum: `batchelor` or `kraichnan` |
 | `salinity` | float | `null` | Salinity [PSU] for viscosity |
+| `chi_minimum` | float | `1e-13` | Floor for `mk_chi_mean`: values <= this go to NaN |
+| `fom_max` | float | `null` | Per-probe figure-of-merit cut (null = no cut). Same mechanism as `epsilon.fom_max` but on the chi NetCDFs: NaNs `chi[probe,seg]` / `chi_N` where `fom[probe,seg]` >= `fom_max` |
 | `diagnostics` | bool | `false` | Include diagnostic variables |
 
 ---
@@ -194,6 +200,43 @@ Controls time-binning of CTD channels per file.
 | `variables` | list | `null` | Explicit list of channels to bin (null = auto-detect) |
 | `method` | string | `"mean"` | Aggregation method: `"mean"` or `"median"` |
 | `diagnostics` | bool | `false` | Include diagnostic variables (n_samples, *_std) |
+
+---
+
+### `speed` — Through-Water Speed Source
+
+Controls how the through-water (profiling) speed is computed. The speed is computed after the hotel merge, so all methods have access to both `.p`-file and hotel channels.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `method` | string | `"pressure"` | Speed source: `"pressure"` (ODAS smoothed \|dP/dt\|; correct for VMP), `"em"` (the `U_EM` channel from a MicroRider EM flowmeter; errors out if missing), `"flight"` (glider flight model: \|W\| / (sin(\|pitch\|−aoa)·cos\|roll\|), pitch axis auto-picked from `Incl_X`/`Incl_Y` by amplitude), or `"constant"` (the scalar in `value`) |
+| `value` | float | `null` | Fixed speed [m/s], only for `method: constant` |
+| `aoa_deg` | float | `3.0` | Angle of attack [deg], only for `method: flight` |
+| `min_pitch_deg` | float | `5.0` | Flight method: drop samples with \|pitch\|−aoa below this [deg] |
+| `speed_cutout` | float | `0.05` | Floor [m/s] applied to the fast-rate speed |
+| `tau` | float | `null` | Smoothing time constant [s]; null = vehicle default (vmp/xmp 1.5, slocum_glider 3.0, ...) |
+| `amplitude_quantile` | list | `[1.0, 99.0]` | Flight method: percentile spread used to auto-pick the pitch axis from `Incl_X`/`Incl_Y`; 1..99 strips outliers (surface tumbles, sensor saturation spikes) |
+
+---
+
+### `qc` — Per-Segment QC Gate
+
+Flags (and optionally NaNs) dissipation/chi segments based on QC channels. Each `*_drop_from` entry names a hotel-injected channel (uint8 bitfield or boolean) sampled by time over the segment's window; if any sample is nonzero, the segment is flagged. The `qc_drop_epsilon` / `qc_drop_chi` variables are always written to the diss / chi NetCDFs.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enable` | bool | `true` | Enable the QC gate |
+| `drop_action` | string | `"nan"` | `"nan"` NaNs `e_*`/`epsilonMean` (and `chi_*`/`chiMean`) for flagged segments; `"flag_only"` leaves the values untouched (the `qc_drop_*` bitfield is still written) |
+| `epsilon_drop_from` | list | `[]` | Channel names OR'd over each diss segment's time window, e.g. `["q_drop_epsilon"]` |
+| `chi_drop_from` | list | `[]` | Same, for chi segments |
+| `rules` | dict | `{}` | Internal QC rules. Each named entry produces a synthetic uint8 channel that can be referenced by `*_drop_from`. See below |
+
+Each `rules` entry has a `type` (default `range`) and a `bit` to set in the synthetic channel:
+
+- **`range`** — flags samples where a channel is out of range. Keys: `channel` (a `pf.channels` name, or pseudo-names `pitch`/`roll` auto-picked from `Incl_X`/`Incl_Y`), and any of `min`, `max`, `abs_max`.
+- **`pitch_w_consistency`** — flags samples where pitch direction and dP/dt sign disagree (e.g. a stalled glider pitched up while sinking). Keys: `pitch_min_deg`, `W_min_dbar_per_s` (dead bands around level/stationary), and `pitch_positive` resolving the inclinometer mounting polarity: `"auto"` (default; infer from the deployment-wide majority sign of pitch·W), `"nose_down"` (positive pitch = nose-down), or `"nose_up"` (positive pitch = nose-up).
+
+See `odas_tpw.perturb.qc_rules` for the full per-entry schema.
 
 ---
 
@@ -237,6 +280,22 @@ See [CF Conventions](https://cfconventions.org/) and [ACDD](https://wiki.esipfed
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `jobs` | int | `1` | Number of parallel workers (0 = auto-detect cores) |
+
+---
+
+### `instruments` — Per-Instrument Overrides
+
+Overrides keyed by serial-number identifier, matched against the parent directory of each `.p` file (e.g. `ARCTERX/VMP/SN465` → `SN465`). Default: `{}` (no overrides).
+
+| Inner key | Type | Description |
+|-----------|------|-------------|
+| `exclude_shear_probes` | list of strings | Probe names (e.g. `["sh2"]`) to suppress for this instrument. The named probe is NaN'd before `mk_epsilon_mean`, so it is excluded from the multi-probe `epsilonMean` and from chi Method 1 (which uses `epsilonMean`) |
+
+```yaml
+instruments:
+  SN465:
+    exclude_shear_probes: ["sh2"]
+```
 
 ---
 

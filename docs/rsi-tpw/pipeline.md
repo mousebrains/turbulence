@@ -15,10 +15,11 @@ Run all stages at once from raw `.p` files through epsilon and chi:
 # Process all .p files, output to results/
 rsi-tpw pipeline VMP/*.p -o results/
 
-# Writes results/{pfile_stem}/profile_NNN/ structure with:
-#   L4_epsilon.nc, L4_chi_epsilon.nc, L4_chi_fit.nc
+# Writes results/{pfile_stem}/profile_NNN/ directories, each containing:
+#   L4_epsilon.nc, L4_chi_epsilon.nc
+#   L4_chi_fit.nc (only with compute_chi_fit=True, not exposed via CLI)
 #   L5_binned.nc (per-profile depth bins)
-#   L6_combined.nc (all profiles combined)
+# plus results/{pfile_stem}/L6_combined.nc (all profiles combined)
 ```
 
 ## Stage 1: Convert `.p` files to NetCDF
@@ -61,21 +62,29 @@ The epsilon calculation includes iterative despiking, Goodman coherent noise rem
 Computes thermal variance dissipation rate from FP07 thermistor spectra:
 
 ```bash
-# Method 1: chi from known epsilon (uses shear probe results)
+# Method 1: chi from known epsilon (eps_NN/ subdirectories are searched automatically)
 rsi-tpw chi VMP/*.p --epsilon-dir epsilon/ -o chi/
 
-# Method 2: chi without epsilon (MLE Batchelor spectrum fitting)
+# Method 2: chi without epsilon (spectral fitting; defaults are the
+# iterative Peterson & Fer 2014 fit with the Kraichnan spectrum model)
 rsi-tpw chi VMP/*.p -o chi/
 
-# Method 2 with Kraichnan spectrum model
-rsi-tpw chi VMP/*.p --spectrum-model kraichnan -o chi/
+# Method 2 with the Batchelor spectrum model (Kraichnan is the default)
+rsi-tpw chi VMP/*.p --spectrum-model batchelor -o chi/
 ```
+
+> **Note:** `rsi-tpw eps -o epsilon/` writes into a hash-tracked subdirectory
+> (`epsilon/eps_00/`). `--epsilon-dir` searches the given directory and its
+> `eps_*` subdirectories (most recently modified first), matching both
+> `{stem}_eps.nc` and per-profile `{stem}_prof001_eps.nc` names
+> (concatenated along time). Only when no matching epsilon files exist does
+> chi fall back to Method 2 for that file, with a console warning.
 
 See [chi_mathematics.md](../chi_mathematics.md) for the mathematical details.
 
 ## Output Directory Management
 
-Output directories use a sequential, hash-tracked naming scheme (`eps_00/`, `eps_01/`, ...) that automatically deduplicates runs with identical parameters. Each output directory contains:
+The stage subcommands (`prof`, `eps`, `chi`) use a sequential, hash-tracked output naming scheme (`eps_00/`, `eps_01/`, ...) that automatically deduplicates runs with identical parameters. (The `pipeline` subcommand writes its `{pfile_stem}/profile_NNN/` tree directly into the given output directory instead.) Each hash-tracked output directory contains:
 - NetCDF data files
 - `config.yaml` with the resolved parameters used
 - `.params_sha256_<hash>` signature file for parameter tracking

@@ -19,7 +19,7 @@
 
 - **Lueck, R. G. (2022).** The statistics of oceanic turbulence
   measurements. Part 1: Shear variance and dissipation rates.
-  *J. Atmos. Ocean. Technol.*, 39(10), 1489--1506.
+  *J. Atmos. Ocean. Technol.*, 39(9), 1259--1271.
   [doi:10.1175/JTECH-D-21-0051.1](https://doi.org/10.1175/JTECH-D-21-0051.1)
 
   Introduces the figure of merit (FM) for assessing shear spectral

@@ -4,7 +4,7 @@ Comparison of [oceancascades/pyturb](https://github.com/oceancascades/pyturb) (J
 
 ## Core Epsilon: Identical
 
-Both packages use the same Nasmyth spectrum (Lueck improved fit), ISR integration, fitting iterations, and variance correction. Same constants throughout (`a = 1.0774e9`, `x_isr = 0.02`, `x_95 = 0.1205`, K_max clamp [7, 150] cpm). Same 3-iteration log-space fitting with flyer removal.
+Both packages use the same Nasmyth spectrum (Lueck improved fit), ISR integration, fitting iterations, and variance correction. Same Nasmyth fit constants (`a = 1.0774e9`, `x_95 = 0.1205`, K_max clamp [7, 150] cpm). Same 3-iteration log-space fitting with flyer removal. Note: microstructure-tpw uses an inertial-subrange validity threshold of `X_ISR = 0.01` (`src/odas_tpw/scor160/l4.py`).
 
 ## Where microstructure-tpw Is More Complete
 
@@ -28,7 +28,7 @@ Both packages use the same Nasmyth spectrum (Lueck improved fit), ISR integratio
 
 ### Could adopt
 1. **Speed from pressure** — Estimate fall speed from dP/dt with pitch correction. Useful for MicroRiders on gliders where no speed sensor exists.
-2. **Multi-profile detection** — `scipy.signal.find_peaks` on pressure for glider data with many dive cycles per file. Our profile detection works for VMP (single cast per file) but not continuous glider records.
+2. **Multi-profile detection via peak finding** — `scipy.signal.find_peaks` on pressure for glider data with many dive cycles per file. Our `get_profiles` (`scor160/profile.py`) already returns every contiguous segment meeting the pressure/fall-rate criteria, so it does handle many profiles per file; the find_peaks approach may still be more robust on noisy glider pressure records with slow yo cycles.
 3. **Auxiliary data merging** — Interpolate external time series (glider flight data) onto microstructure time axis.
 4. **High-pass filter option** — 1st-order Butterworth HP at 0.5/fft_len Hz before spectral analysis (ODAS recommendation). Our linear detrend may already handle this.
 

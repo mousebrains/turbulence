@@ -3,7 +3,8 @@
 Processing levels for turbulent kinetic energy (TKE) dissipation and thermal
 variance dissipation (chi) from Rockland Scientific vertical microprofilers.
 Levels L1 through L4_dissipation follow the ATOMIX / SCOR-160 shear-probe
-benchmark (Lueck et al., 2024, doi:10.3389/fmars.2024.1334327).
+processing levels (Lueck et al., 2024, doi:10.3389/fmars.2024.1334327;
+benchmark datasets: Fer et al., 2024, doi:10.1038/s41597-024-03323-y).
 Chi levels and binning are extensions to the SCOR-160 framework.
 
 ![Data flow diagram](data_flow.png)
@@ -62,8 +63,12 @@ smoothing.
 **Module:** `scor160/l2.py` → `process_l2()`
 
 **Processing:**
-- High-pass filter shear and vibration (default HP_cut = 0.25 Hz)
-- Despike shear channels (iterative median filter, default threshold = 8 MAD)
+- High-pass filter shear and vibration (HP_cut = 0.5·fs/fft_length,
+  i.e. 0.25 Hz for the default 1024-sample FFT at 512 Hz)
+- Despike shear channels (Rockland iterative method: flag points where the
+  rectified high-passed signal exceeds its low-passed envelope by a ratio
+  threshold, default 8; `despike_smooth` is the envelope low-pass cutoff
+  in Hz, default 0.5)
 - Section selection (minimum speed, depth, duration)
 
 ---
@@ -129,7 +134,8 @@ computation, then branches into two methods at L4.
 **Module:** `chi/l2_chi.py` → `process_l2_chi()`
 
 **Processing:**
-- Despike fast thermistor temperature (default threshold = 10 MAD)
+- Despike fast thermistor temperature (Rockland ratio-of-rectified-HP-signal-
+  to-LP-envelope method, default ratio threshold = 10)
 - Compute temperature gradient: dT/dz = fs·diff(T) / speed
 - HP-filter vibration for Goodman
 
@@ -404,9 +410,15 @@ configuration system.
 
 ## References
 
-- Lueck, R. G., et al. (2024). "Recommendations for shear-probe benchmark
-  datasets." *Frontiers in Marine Science*, 11, 1334327.
+- Lueck, R. G., et al. (2024). "Best practices recommendations for
+  estimating dissipation rates from shear probes." *Frontiers in Marine
+  Science*, 11, 1334327.
   doi:[10.3389/fmars.2024.1334327](https://doi.org/10.3389/fmars.2024.1334327)
+
+- Fer, I., Dengler, M., Holtermann, P., Le Boyer, A., & Lueck, R. (2024).
+  "ATOMIX benchmark datasets for dissipation rate measurements using shear
+  probes." *Scientific Data*, 11, 518.
+  doi:[10.1038/s41597-024-03323-y](https://doi.org/10.1038/s41597-024-03323-y)
 
 - Bluteau, C. E., Wain, D., Mullarney, J. C., & Stevens, C. L. (2025).
   "Best practices for estimating turbulent dissipation from oceanic

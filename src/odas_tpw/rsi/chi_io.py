@@ -840,5 +840,11 @@ def _compute_chi_one(args: tuple) -> tuple[str, int]:
         finally:
             eps_ds.close()
     else:
+        if epsilon_dir is not None:
+            print(
+                f"  Warning: no epsilon files for {Path(source_path).stem} "
+                f"under {epsilon_dir} (searched eps_* subdirectories too); "
+                "using Method 2"
+            )
         paths = compute_chi_file(source_path, output_dir, **kwargs)
     return str(source_path), len(paths)

@@ -5,7 +5,7 @@ Provides loading, validation, three-way merge (defaults <- config <- CLI),
 deterministic hashing, and sequential output directory management.
 
 All config management logic lives in :mod:`odas_tpw.config_base.ConfigManager`;
-this module defines perturb-specific DEFAULTS (13 sections), instantiates the
+this module defines perturb-specific DEFAULTS (17 sections), instantiates the
 manager, and re-exports the methods as module-level functions.
 """
 

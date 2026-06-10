@@ -929,7 +929,8 @@ def _add_ql_parser(subparsers: argparse._SubParsersAction) -> None:
         type=int,
         default=1,
         choices=[1, 2],
-        help="Chi method for profile estimates: 1 = from epsilon, 2 = MLE fit (default: 1)",
+        help="Chi method for profile estimates: 1 = from epsilon, "
+        "2 = iterative spectral fit (default: 1)",
     )
     p.add_argument(
         "--spectrum-model",
