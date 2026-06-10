@@ -101,6 +101,7 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     all_sh_spec_clean = []
     all_kcyc = []
     all_despike_frac = []
+    all_despike_passes = []
 
     sections = np.unique(l2.section_number)
     sections = sections[sections > 0]
@@ -134,13 +135,18 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
 
         # Compute raw frequency spectra (Welch method)
         # Returns: (n_windows, n_freq, n_shear, n_shear) — diagonal is auto-spectrum
+        # Detrend convention per ODAS: parabolic when Goodman cleaning is
+        # NOT applied (get_diss_odas.m:460 sets method='parabolic' in the
+        # no-goodman branch); linear when it is (the raw spectra then come
+        # from clean_shear_spec.m, which detrends linearly).
+        goodman_active = vib_windows is not None and n_vib > 0
         Cxy, F, _, _ = csd_matrix_batch(
             shear_windows,
             None,
             nfft,
             fs,
             overlap=nfft // 2,
-            detrend="linear",
+            detrend="linear" if goodman_active else "parabolic",
         )
         # Extract auto-spectra: diagonal elements
         # Cxy shape: (n_windows, n_freq, n_shear, n_shear)
@@ -177,11 +183,18 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
             all_section.append(sec_id)
 
             # Fraction of shear samples replaced by despiking in this
-            # window (ATOMIX DESPIKE_FRACTION_SH; drives QC flag bit 2)
+            # window (ATOMIX DESPIKE_FRACTION_SH; drives QC flag bit 2),
+            # and this window's section pass count (PASS_COUNT_SH;
+            # drives flag bit 8)
             if l2.despike_mask_sh.size > 0:
                 all_despike_frac.append(l2.despike_mask_sh[:, s:e].mean(axis=1))
             else:
                 all_despike_frac.append(np.full(n_shear, np.nan))
+            sec_pos = np.where(l2.despike_section_ids == sec_id)[0]
+            if l2.despike_passes_sh.size > 0 and len(sec_pos) == 1:
+                all_despike_passes.append(l2.despike_passes_sh[:, sec_pos[0]])
+            else:
+                all_despike_passes.append(np.zeros(n_shear, dtype=np.int64))
 
             # Convert frequency spectrum → wavenumber spectrum
             # k = f / W [cpm], Ψ(k) = Ψ(f) * W [variance/cpm]
@@ -234,8 +247,13 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     sh_spec_clean_arr = np.stack(all_sh_spec_clean, axis=-1)
     sh_spec_clean_out = np.transpose(sh_spec_clean_arr, (1, 0, 2))
 
-    # (N_SHEAR, N_SPECTRA) despike fraction per window
+    # (N_SHEAR, N_SPECTRA) despike fraction and pass count per window
     despike_frac_out = np.column_stack(all_despike_frac) if all_despike_frac else np.zeros((0, 0))
+    despike_passes_out = (
+        np.column_stack(all_despike_passes)
+        if all_despike_passes
+        else np.zeros((0, 0), dtype=np.int64)
+    )
 
     return L3Data(
         time=time_out,
@@ -247,5 +265,5 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
         sh_spec=sh_spec_out,
         sh_spec_clean=sh_spec_clean_out,
         despike_fraction=despike_frac_out,
-        despike_passes=l2.despike_passes_sh.copy(),
+        despike_passes=despike_passes_out,
     )
