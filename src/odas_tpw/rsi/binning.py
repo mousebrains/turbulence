@@ -29,14 +29,23 @@ def bin_by_depth(
         Pressure range for binning. Default: data range.
     log_mean_vars : set of str, optional
         Variables to average using geometric mean (log-normal).
-        Default: {"epsilon", "chi", "chi_final", "epsi_final"}.
+        Default: {"epsilon", "chi", "chi_final", "epsi_final",
+        "K_T", "K_rho", "Gamma"}.
 
     Returns
     -------
     xr.Dataset with dimension ``depth_bin``.
     """
     if log_mean_vars is None:
-        log_mean_vars = {"epsilon", "chi", "chi_final", "epsi_final"}
+        log_mean_vars = {
+            "epsilon",
+            "chi",
+            "chi_final",
+            "epsi_final",
+            "K_T",
+            "K_rho",
+            "Gamma",
+        }
 
     pres = np.asarray(pres, dtype=np.float64)
     valid = np.isfinite(pres)
