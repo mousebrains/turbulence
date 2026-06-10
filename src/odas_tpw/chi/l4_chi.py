@@ -167,10 +167,7 @@ def process_l4_chi_epsilon(
     # epsilon-window spacing.  Without this, a chi window with no nearby
     # epsilon (failed estimates, different window grids) silently pairs
     # with an estimate arbitrarily far away.
-    if len(epsi_times) > 1:
-        max_dt = float(np.median(np.diff(np.sort(epsi_times))))
-    else:
-        max_dt = 30.0
+    max_dt = float(np.median(np.diff(np.sort(epsi_times)))) if len(epsi_times) > 1 else 30.0
 
     def _chi_eps_func(j, _ci, spec_obs, noise_K, K, W, nu, tau0, H2, _h2, f_AA_eff):
         if len(epsi_times) > 0:

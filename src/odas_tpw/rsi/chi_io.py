@@ -794,11 +794,14 @@ def load_epsilon_dataset(
     """
     stem = Path(source_path).stem
     base = Path(epsilon_dir)
-    candidates = [base] + sorted(
-        (d for d in base.glob("eps_*") if d.is_dir()),
-        key=lambda d: d.stat().st_mtime,
-        reverse=True,
-    )
+    candidates = [
+        base,
+        *sorted(
+            (d for d in base.glob("eps_*") if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        ),
+    ]
     for d in candidates:
         files = sorted(d.glob(f"{stem}_prof*_eps.nc"))
         single = d / f"{stem}_eps.nc"

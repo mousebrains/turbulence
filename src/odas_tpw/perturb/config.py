@@ -315,7 +315,7 @@ gps:
   time_col: "t"
   lat_col: "lat"
   lon_col: "lon"
-  max_time_diff: 60       # warn when positions are extrapolated more than this [s] outside GPS coverage
+  max_time_diff: 60       # warn when extrapolating > this [s] outside GPS coverage
 
 hotel:
   enable: false
