@@ -504,6 +504,12 @@ def _build_chi_dataset(
             {
                 "units": "1",
                 "long_name": "figure of merit (observed/model variance ratio)",
+                "comment": (
+                    "Ratio of observed to attenuated-model variance over the fit "
+                    "range; values near 1.0 indicate a good fit. NOT the MAD-based "
+                    "ATOMIX/Rockland FM statistic (Lueck 2022), for which good fits "
+                    "approach 0 and the recommended QC limit is ~1.15."
+                ),
             },
         ),
         (
@@ -627,15 +633,22 @@ def _build_chi_dataset(
 
 
 def _extract_therm_cal(ch_cfg: dict[str, Any]) -> dict[str, float]:
-    """Extract thermistor calibration parameters from PFile channel config."""
+    """Extract thermistor calibration parameters from PFile channel config.
+
+    Config keys are lowercase (parse_config lowercases all keys); 'g' and
+    't_0' are renamed to the 'gain'/'T_0' parameter names expected by
+    noise_thermchannel.
+    """
     cal = {}
-    for key in ("e_b", "b", "g", "beta_1", "beta_2", "adc_fs", "adc_bits", "T_0"):
+    for key in ("e_b", "b", "g", "beta_1", "beta_2", "adc_fs", "adc_bits", "t_0"):
         val = ch_cfg.get(key)
         if val is not None:
             cal[key] = float(val)
-    # Map 'g' to 'gain' for noise_thermchannel
+    # Map config keys to noise_thermchannel parameter names
     if "g" in cal:
         cal["gain"] = cal.pop("g")
+    if "t_0" in cal:
+        cal["T_0"] = cal.pop("t_0")
     return cal
 
 

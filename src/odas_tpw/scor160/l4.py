@@ -12,6 +12,8 @@ Steps:
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from odas_tpw.scor160.io import L3Data, L4Data
@@ -28,7 +30,25 @@ K_LIMIT_MIN = 7
 K_LIMIT_MAX = 150
 K_INITIAL_CUTOFF = 10
 ISOTROPY_FACTOR = 7.5
+# Upper limit of the inertial-subrange fit, as a fraction of the
+# Kolmogorov wavenumber k_s = (epsilon/nu^3)^(1/4).  ODAS used 0.01 for
+# years; v4.5.1 experimentally doubles it ("test pushing this upward",
+# get_diss_odas.m:434-436).  The ATOMIX benchmark reference values match
+# 0.01 distinctly better (verified by rerunning the L2->L4 comparison
+# with 0.02: per-probe mean log10 errors on MR1000 Minas Passage grow
+# from ~+0.02 to +0.05..+0.08), so we keep 0.01.
 X_ISR = 0.01
+
+# Margin applied to the variance->ISR method-switch threshold:
+# use_isr = e_1 >= e_isr_threshold * isr_margin.  ODAS switches at
+# e_isr_threshold (1.5e-5 W/kg) with no margin.  Empirically, this
+# pipeline's preliminary estimate e_1 runs high enough near the
+# threshold that a 1.0 margin overshoots the benchmark ISR fraction
+# (e.g. VMP250 tidal: 37.5% ISR vs 21.9% in the reference, dropping
+# method agreement from 100% to 84%); 1.6 maximises method agreement
+# with the ATOMIX benchmark references.  Both epsilon estimates are
+# always computed, so the margin only affects which one is reported.
+DEFAULT_ISR_MARGIN = 1.6
 
 VARIANCE_TANH_COEFF = 48
 VARIANCE_EXP_COEFF = 2.9
@@ -63,6 +83,8 @@ def process_l4(
     fit_order: int = 3,
     fom_limit: float = DEFAULT_FOM_LIMIT,
     var_resolved_limit: float = DEFAULT_VAR_RESOLVED_LIMIT,
+    num_ffts: int = 0,
+    n_v: int = 0,
 ) -> L4Data:
     """Compute L4 dissipation estimates from L3 wavenumber spectra.
 
@@ -77,9 +99,20 @@ def process_l4(
     fit_order : int
         Polynomial order for spectral minimum detection.
     fom_limit : float
-        QC threshold for figure of merit.
+        QC threshold for the figure of merit.  Applied to the Lueck
+        (2022a,b) MAD-based FM statistic when ``num_ffts > 0`` (the
+        ATOMIX convention; recommended limit ~1.15), otherwise to the
+        observed/Nasmyth variance ratio ``fom``.
     var_resolved_limit : float
         QC threshold for fraction of variance resolved.
+    num_ffts : int
+        Number of FFT segments per dissipation window,
+        ``2 * (diss_length // fft_length) - 1`` for 50 % overlap.
+        Required for the Lueck FM statistic; 0 skips FM.
+    n_v : int
+        Number of coherent-noise (vibration) signals removed by Goodman
+        cleaning (reduces the effective degrees of freedom in FM).
+        Pass 0 when Goodman cleaning was not applied.
     """
     n_spec = l3.n_spectra
     n_shear = l3.n_shear
@@ -90,6 +123,14 @@ def process_l4(
     # Temperature for viscosity
     if temp is None:
         temp = l3.temp if l3.temp.size == n_spec else np.full(n_spec, 10.0)
+    temp = np.asarray(temp, dtype=np.float64)
+    if not np.all(np.isfinite(temp)):
+        warnings.warn(
+            "Non-finite window temperature(s); using 10 degC for viscosity "
+            "in those windows",
+            stacklevel=2,
+        )
+        temp = np.where(np.isfinite(temp), temp, 10.0)
 
     # Output arrays
     epsi = np.full((n_shear, n_spec), np.nan)
@@ -98,6 +139,7 @@ def process_l4(
     kmax = np.full((n_shear, n_spec), np.nan)
     method_arr = np.full((n_shear, n_spec), np.nan)
     var_resolved = np.full((n_shear, n_spec), np.nan)
+    FM = np.full((n_shear, n_spec), np.nan)
 
     for j in range(n_spec):
         # Per-window wavenumber grid: kcyc is (N_WAVENUMBER, N_SPECTRA)
@@ -115,12 +157,14 @@ def process_l4(
             if not np.any(np.isfinite(spec) & (spec > 0)):
                 continue
 
-            e, km, md, meth, fom_val, var_res, _nas, _kmr, _fm, _eisr, _evar = _estimate_epsilon(
+            e, km, md, meth, fom_val, var_res, _nas, _kmr, fm, _eisr, _evar = _estimate_epsilon(
                 K,
                 spec,
                 nu,
                 K_AA,
                 fit_order,
+                num_ffts=num_ffts,
+                n_v=n_v,
             )
 
             epsi[i, j] = e
@@ -129,9 +173,13 @@ def process_l4(
             kmax[i, j] = km
             method_arr[i, j] = meth
             var_resolved[i, j] = var_res
+            FM[i, j] = fm
 
-    # QC flags and EPSI_FINAL
-    epsi_flags = _compute_flags(epsi, fom, var_resolved, fom_limit, var_resolved_limit)
+    # QC flags and EPSI_FINAL.  Flag on the MAD-based FM statistic when
+    # available (the ATOMIX convention the fom_limit default of 1.15 was
+    # written for); fall back to the variance-ratio fom otherwise.
+    fom_for_flags = FM if num_ffts > 0 else fom
+    epsi_flags = _compute_flags(epsi, fom_for_flags, var_resolved, fom_limit, var_resolved_limit)
     epsi_final = _compute_epsi_final(epsi, epsi_flags)
 
     return L4Data(
@@ -147,6 +195,7 @@ def process_l4(
         kmax=kmax,
         method=method_arr,
         var_resolved=var_resolved,
+        FM=FM,
     )
 
 
@@ -164,6 +213,7 @@ def _empty_l4(n_shear: int) -> L4Data:
         kmax=np.zeros((n_shear, 0)),
         method=np.zeros((n_shear, 0)),
         var_resolved=np.zeros((n_shear, 0)),
+        FM=np.zeros((n_shear, 0)),
     )
 
 
@@ -181,6 +231,7 @@ def _estimate_epsilon(
     e_isr_threshold: float = E_ISR_THRESHOLD,
     num_ffts: int = 0,
     n_v: int = 0,
+    isr_margin: float = DEFAULT_ISR_MARGIN,
 ) -> tuple[float, float, float, int, float, float, np.ndarray, float, float, float, float]:
     """Estimate epsilon from a single shear wavenumber spectrum.
 
@@ -204,7 +255,11 @@ def _estimate_epsilon(
     num_ffts : int
         Number of FFT segments (for Lueck FM statistic). 0 to skip FM.
     n_v : int
-        Number of vibration signals removed (for Lueck FM statistic).
+        Number of vibration signals removed by Goodman cleaning (for the
+        Lueck FM statistic). Pass 0 when Goodman was not applied.
+    isr_margin : float
+        Multiplier on ``e_isr_threshold`` for the method switch (see
+        ``DEFAULT_ISR_MARGIN``).  1.0 reproduces the ODAS convention.
 
     Returns
     -------
@@ -233,8 +288,20 @@ def _estimate_epsilon(
     """
     n_freq = len(K)
 
-    # Replace NaN/Inf in spectrum with 0 for integration
-    spec_safe = np.where(np.isfinite(shear_spectrum), shear_spectrum, 0.0)
+    # Corrupted spectral bins (ODAS get_diss_odas.m:577-587 convention):
+    # a single interior NaN/Inf bin is interpolated from its neighbours;
+    # multiple bad bins invalidate the estimate.  Zeroing bad bins (the
+    # previous behaviour) silently removes variance, biasing epsilon low
+    # and corrupting the log-space polynomial minimum search.
+    bad = np.where(~np.isfinite(shear_spectrum))[0]
+    if len(bad) == 0:
+        spec_safe = shear_spectrum
+    elif len(bad) == 1 and 0 < bad[0] < n_freq - 1:
+        spec_safe = shear_spectrum.copy()
+        spec_safe[bad[0]] = 0.5 * (spec_safe[bad[0] - 1] + spec_safe[bad[0] + 1])
+    else:
+        nan_spec = np.full(n_freq, np.nan)
+        return (np.nan, np.nan, np.nan, 0, np.nan, np.nan, nan_spec, np.nan, np.nan, np.nan, np.nan)
 
     # Initial estimate: integrate to K_INITIAL_CUTOFF cpm.  K is monotone
     # nondecreasing (it's an FFT wavenumber grid divided by a positive
@@ -250,17 +317,11 @@ def _estimate_epsilon(
         e_10 = EPSILON_FLOOR
     e_1 = e_10 * np.sqrt(1 + LUECK_A * e_10)
 
-    # The ATOMIX benchmark reference was produced with a slightly
-    # different spectral computation that yields ~2-4 % lower e_1
-    # values than our pipeline.  A margin of 1.6x on the threshold
-    # compensates for this, maximising method agreement (99.8 % across
-    # all six benchmark datasets).
-    ISR_MARGIN = 1.6
-    use_isr = e_1 >= e_isr_threshold * ISR_MARGIN
+    use_isr = e_1 >= e_isr_threshold * isr_margin
 
     # Always compute both estimates so viewers can show the alternative
     K_limit = min(K_AA, K_LIMIT_MAX)
-    isr_e, isr_km = _inertial_subrange(K, spec_safe, e_1, nu, K_limit)
+    isr_e, isr_km, isr_range = _inertial_subrange(K, spec_safe, e_1, nu, K_limit)
     var_e, var_km, n_var = _variance_method(
         K,
         spec_safe,
@@ -271,28 +332,28 @@ def _estimate_epsilon(
         n_freq,
     )
 
+    # qc_idx is the wavenumber-bin index set the MAD/FOM/FM statistics
+    # are computed over, excluding the DC bin (K[0]=0 by construction;
+    # F starts at 0 in csd_matrix_batch and K=F/W with W>0).
     if use_isr:
         method = 1
-        n_range = int(np.searchsorted(K, isr_km, side="right"))
-        if n_range < 3:
-            n_range = min(3, n_freq)
+        # Use the flyer-pruned ISR fit range, as ODAS computes MAD over
+        # the flyer-reduced Range (get_diss_odas.m:660-671); a contiguous
+        # range would re-include the excluded flyer bins.
+        qc_idx = isr_range[K[isr_range] > 0]
         e_4, k_max = isr_e, isr_km
     else:
         method = 0
-        e_4, k_max, n_range = var_e, var_km, n_var
+        e_4, k_max = var_e, var_km
+        qc_idx = np.arange(1, max(n_var, 1))
 
     # Nasmyth spectrum at final epsilon
     nas_spec = nasmyth_grid(max(e_4, EPSILON_FLOOR), nu, K + 1e-30)
 
-    # MAD/FOM block — skip the DC bin (K[0]=0 by construction; F starts
-    # at 0 in csd_matrix_batch and K=F/W with W>0).  ``Range_noDC`` in
-    # the original code was therefore equivalent to ``arange(1, n_range)``;
-    # contiguous slicing returns views and avoids three fancy-indexing
-    # allocations per spectrum.
-    if n_range > 1:
-        K_pos = K[1:n_range]
-        spec_safe_pos = spec_safe[1:n_range]
-        nas_spec_pos = nas_spec[1:n_range]
+    if len(qc_idx) > 0:
+        K_pos = K[qc_idx]
+        spec_safe_pos = spec_safe[qc_idx]
+        nas_spec_pos = nas_spec[qc_idx]
         spec_ratio = spec_safe_pos / (nas_spec_pos + 1e-30)
         spec_ratio = spec_ratio[spec_ratio > 0]
         mad_val = float(np.mean(np.abs(np.log10(spec_ratio)))) if len(spec_ratio) > 0 else np.nan
@@ -313,7 +374,7 @@ def _estimate_epsilon(
 
     # Lueck (2022a,b) figure of merit
     FM_val = np.nan
-    if num_ffts > 0 and n_range > 1 and len(spec_ratio) > 0:
+    if num_ffts > 0 and len(spec_ratio) > 0:
         N_s = len(spec_ratio)
         mad_ln = np.mean(np.abs(np.log(spec_ratio)))  # natural log
         N_eff = max(num_ffts - n_v, 1)
@@ -355,7 +416,7 @@ def _variance_method(
     # K is monotone nondecreasing — use searchsorted to count points
     # below isr_limit instead of building a bool+index array.
     if int(np.searchsorted(K, isr_limit, side="right")) >= 20:
-        e_2, _ = _inertial_subrange(K, spec_safe, e_1, nu, min(K_LIMIT_MAX, K_AA))
+        e_2, _, _ = _inertial_subrange(K, spec_safe, e_1, nu, min(K_LIMIT_MAX, K_AA))
     else:
         e_2 = e_1
 
@@ -370,7 +431,9 @@ def _variance_method(
     if index_limit <= 1:
         index_limit = min(3, n_freq)
 
-    # Polynomial fit to find spectral minimum
+    # Polynomial fit to find spectral minimum.  Zero bins (possible after
+    # Goodman cleaning) are excluded: log10(0 + 1e-30) = -30 would enter
+    # the fit as an extreme outlier and drag the fitted minimum.
     y = np.log10(spec_safe[1:index_limit] + 1e-30)
     x = np.log10(K[1:index_limit] + 1e-30)
 
@@ -378,7 +441,7 @@ def _variance_method(
     K_limit_log = np.log10(K_95)
 
     if index_limit > fit_order_eff + 2:
-        valid = np.isfinite(y) & np.isfinite(x)
+        valid = np.isfinite(y) & np.isfinite(x) & (spec_safe[1:index_limit] > 0)
         if np.sum(valid) > fit_order_eff + 2:
             p = np.polyfit(x[valid], y[valid], fit_order_eff)
             pd1 = np.polyder(p)
@@ -387,7 +450,10 @@ def _variance_method(
             pd2 = np.polyder(pd1)
             roots = roots[np.polyval(pd2, roots) > 0]
             roots = roots[roots >= np.log10(K_INITIAL_CUTOFF)]
-            K_limit_log = roots[0] if len(roots) > 0 else np.log10(K_95)
+            # np.roots returns eigenvalues in no particular order; take
+            # the LOWEST qualifying minimum, as ODAS does via
+            # ``pr1 = sort(roots(pd1))`` (get_diss_odas.m:590,597).
+            K_limit_log = np.min(roots) if len(roots) > 0 else np.log10(K_95)
 
     # Final integration limit
     K_limit_log = min(K_limit_log, np.log10(K_95), np.log10(K_AA))
@@ -398,7 +464,7 @@ def _variance_method(
     # below to avoid building the index array (slicing returns a view).
     n_var = int(np.searchsorted(K, 10**K_limit_log, side="right"))
     if n_var > 0 and K[n_var - 1] < K_LIMIT_MIN:
-        n_var += 1
+        n_var = min(n_var + 1, n_freq)
     if n_var < 3:
         n_var = min(3, n_freq)
 
@@ -471,8 +537,13 @@ def _variance_resolved_fraction(K_upper: float, epsilon: float, nu: float) -> fl
 
 def _inertial_subrange(
     K: np.ndarray, shear_spectrum: np.ndarray, e: float, nu: float, K_limit: float
-) -> tuple[float, float]:
-    """Fit to the inertial subrange to estimate epsilon."""
+) -> tuple[float, float, np.ndarray]:
+    """Fit to the inertial subrange to estimate epsilon.
+
+    Returns (epsilon, K_max, fit_range) where ``fit_range`` is the index
+    array of wavenumber bins retained after flyer removal (used by the
+    caller for the MAD/FOM/FM statistics).
+    """
     isr_limit = min(X_ISR * (e / nu**3) ** 0.25, K_limit)
     # K is monotone nondecreasing — searchsorted is equivalent to
     # ``np.where(isr_limit >= K)[0]`` while skipping the bool array.
@@ -503,28 +574,35 @@ def _inertial_subrange(
         fit_error = float(np.mean(np.log10(ratio)))
         e = e * 10 ** (3 * fit_error / 2)
 
-    # Remove flyers
+    # Remove flyers.  The error vector keeps full length (non-positive
+    # ratio bins become NaN, which compares False below) so that index i
+    # in ``fit_error_vec`` always corresponds to ``fit_range[i+1]`` —
+    # compressing the array first (the previous behaviour) misaligned
+    # the flyer indices whenever a zero bin was present.  Note: ODAS
+    # itself has an off-by-one here (get_diss_odas.m:790-797 deletes
+    # ``fit_range(index)`` where ``index`` refers to ``fit_range(2:end)``);
+    # the ``keep[b + 1]`` mapping below is the corrected version.
     nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K_inner)
     if len(fit_range) > 2:
-        ratio = shear_tail / (nas + 1e-30)
-        ratio = ratio[ratio > 0]
-        if len(ratio) > 0:
-            fit_error_vec = np.log10(ratio)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio_full = shear_tail / (nas + 1e-30)
+            fit_error_vec = np.where(ratio_full > 0, np.log10(ratio_full), np.nan)
+        with np.errstate(invalid="ignore"):
             bad = np.where(np.abs(fit_error_vec) > ISR_FLYER_THRESHOLD)[0]
-            if len(bad) > 0:
-                bad_limit = max(1, int(np.ceil(ISR_FLYER_FRAC * len(fit_range))))
-                if len(bad) > bad_limit:
-                    order = np.argsort(fit_error_vec[bad])[::-1]
-                    bad = bad[order[:bad_limit]]
-                keep = np.ones(len(fit_range), dtype=bool)
-                for b in bad:
-                    if b + 1 < len(keep):
-                        keep[b + 1] = False
-                fit_range = fit_range[keep]
-                k_max = K[fit_range[-1]]
-                # fit_range may now be non-contiguous — fancy index.
-                K_inner = K[fit_range[1:]] + 1e-30
-                shear_tail = shear_spectrum[fit_range[1:]]
+        if len(bad) > 0:
+            bad_limit = max(1, int(np.ceil(ISR_FLYER_FRAC * len(fit_range))))
+            if len(bad) > bad_limit:
+                order = np.argsort(fit_error_vec[bad])[::-1]
+                bad = bad[order[:bad_limit]]
+            keep = np.ones(len(fit_range), dtype=bool)
+            for b in bad:
+                if b + 1 < len(keep):
+                    keep[b + 1] = False
+            fit_range = fit_range[keep]
+            k_max = K[fit_range[-1]]
+            # fit_range may now be non-contiguous — fancy index.
+            K_inner = K[fit_range[1:]] + 1e-30
+            shear_tail = shear_spectrum[fit_range[1:]]
 
     # Re-fit (2 more passes)
     for _ in range(2):
@@ -536,7 +614,7 @@ def _inertial_subrange(
         fit_error = float(np.mean(np.log10(ratio)))
         e = e * 10 ** (3 * fit_error / 2)
 
-    return e, k_max
+    return e, k_max, fit_range
 
 
 # ---------------------------------------------------------------------------

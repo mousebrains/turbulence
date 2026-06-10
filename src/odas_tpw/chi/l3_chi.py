@@ -184,7 +184,9 @@ def _process_section_chi(
     for ci in range(n_temp):
         cal_ci = therm_cal[ci] if therm_cal and ci < len(therm_cal) else {}
         noise_kwargs = {
-            k: v for k, v in cal_ci.items() if k in ("e_b", "gain", "beta_1", "adc_fs", "adc_bits")
+            k: v
+            for k, v in cal_ci.items()
+            if k in ("e_b", "gain", "b", "beta_1", "beta_2", "T_0", "adc_fs", "adc_bits")
         }
         noise_all[ci] = gradT_noise_batch(
             F_const,

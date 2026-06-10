@@ -10,7 +10,7 @@ import warnings
 import numpy as np
 import numpy.typing as npt
 
-# Lueck (2022), J. Atmos. Oceanic Technol., 39, 1803-1816,
+# Lueck (2022), J. Atmos. Oceanic Technol., 39(9), 1259-1271,
 # https://doi.org/10.1175/JTECH-D-21-0051.1
 LUECK_A = 1.0774e9  # e/e_10 model constant
 X_95 = 0.1205  # non-dimensional wavenumber for 95% variance

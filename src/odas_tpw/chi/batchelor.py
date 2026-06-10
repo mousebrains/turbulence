@@ -133,14 +133,19 @@ def kraichnan_grad(
 ) -> np.ndarray:
     """Kraichnan temperature gradient spectrum [(K/m)^2 / cpm].
 
-    S(k) = chi*q / (3*kappa_T*kB^2) * k * (1 + sqrt(6q)*y) * exp(-sqrt(6q)*y)
+    S(k) = chi*q / (kappa_T*kB^2) * k * exp(-sqrt(6q)*y)
     where y = k / kB.
 
-    Bogucki et al. 1997, eq. 11 (converted from 3D to 1D gradient spectrum
-    in cpm).  Integrates to chi / (6 * kappa_T).
+    This is the one-dimensional (along-path) gradient spectrum obtained by
+    applying the isotropic transform G1(k1) = k1^2 * int_{k1}^inf E(k)/k dk
+    to the three-dimensional Kraichnan scalar spectrum of Bogucki et al.
+    1997, eq. 11.  The transform evaluates in closed form to the simple
+    exponential above (the same form as Peterson & Fer 2014, eq. 8).
+    Integrates to chi / (6 * kappa_T); peaks at k = kB / sqrt(6q).
 
     Key difference from Batchelor: exponential rolloff instead of Gaussian,
-    fits DNS data better, reduces epsilon estimation error by ~25%.
+    which fits DNS and observed high-Prandtl-number spectra better
+    (Bogucki et al. 1997).
 
     Parameters
     ----------
@@ -165,6 +170,6 @@ def kraichnan_grad(
     sq6q = _SQ6Q_KRAICHNAN if q == Q_KRAICHNAN else np.sqrt(6 * q)
     sq6q_y = sq6q * y
     with np.errstate(divide="ignore", invalid="ignore"):
-        S = chi * q / (3 * kappa_T * kB**2) * k * (1 + sq6q_y) * np.exp(-sq6q_y)
+        S = chi * q / (kappa_T * kB**2) * k * np.exp(-sq6q_y)
     S = np.where(np.isfinite(S), S, 0.0)
     return S

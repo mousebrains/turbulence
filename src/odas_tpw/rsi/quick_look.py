@@ -536,7 +536,8 @@ class QuickLookViewer(ProfileViewer):
             return
 
         eps_for_chi = self._cached_spec["epsilons"] if self._cached_spec else []
-        fom_for_chi = self._cached_spec.get("foms", []) if self._cached_spec else []
+        # FM (MAD-based) is the statistic the 1.15 QC limit is defined for
+        fom_for_chi = self._cached_spec.get("FMs", []) if self._cached_spec else []
 
         self._cached_chi = _compute_chi_spectra(
             self.therm_fast,

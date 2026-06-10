@@ -347,11 +347,14 @@ def compare_l4(computed: L4Data, reference: L4Data) -> dict:
             "within_factor2": float(np.mean(abs_log_diff < np.log10(2))),
         }
 
-    # FOM comparison
+    # FOM comparison.  The benchmark reference FOM is the MAD-based Lueck
+    # (2022) FM statistic, so compare the computed FM against it when
+    # available; the variance-ratio ``fom`` is a different quantity.
     fom_stats = []
+    comp_fom_source = computed.FM if computed.FM is not None else computed.fom
     for i in range(n_sh):
         ref_f = reference.fom[i, :n_common]
-        comp_f = computed.fom[i, :n_common]
+        comp_f = comp_fom_source[i, :n_common]
         valid = np.isfinite(ref_f) & np.isfinite(comp_f)
         if valid.any():
             diff = comp_f[valid] - ref_f[valid]

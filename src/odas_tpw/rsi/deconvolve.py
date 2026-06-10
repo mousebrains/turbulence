@@ -13,7 +13,7 @@ offset introduced by the derivative circuit.
 Reference
 ---------
 Mudge, T.D. and R.G. Lueck, 1994: Digital signal processing to enhance
-    oceanographic observations.  J. Atmos. Oceanogr. Techn., 11, 825-836.
+    oceanographic observations.  J. Atmos. Oceanic Technol., 11, 825-836.
 """
 
 import numpy as np
@@ -64,7 +64,8 @@ def deconvolve(
         # Use polyfit to check for sign inversion in derivative circuit
         p = np.polyfit(X_interp, X_dX, 1)
         if p[0] < -0.5:
-            X_dX = -X_dX
+            # Promote before negating: -int16(-32768) wraps back to -32768
+            X_dX = -X_dX.astype(np.float64)
 
         # filtic(b, a, y0, x0):  zi = b[1]*x0 - a[1]*y0
         zi = np.array([b[1] * X_dX[0] - a[1] * X_interp[0]])
