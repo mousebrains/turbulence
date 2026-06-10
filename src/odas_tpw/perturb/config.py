@@ -117,6 +117,10 @@ DEFAULTS: dict[str, dict] = {
         "fit_method": "iterative",  # Only used when use_epsilon=False
         "spectrum_model": "kraichnan",
         "salinity": None,
+        "mixing": True,          # Derived mixing quantities (N2, dTdz,
+                                 # K_T, Gamma, K_rho) on the chi grid,
+                                 # with salinity from the profile's own
+                                 # C/T/P (TEOS-10).
         "chi_minimum": 1.0e-13,
         "fom_max": None,         # null = no FOM cut. Same per-probe
                                  # mechanism as epsilon.fom_max but
@@ -410,6 +414,9 @@ chi:
                           # use_epsilon=true)
   spectrum_model: "kraichnan"  # theoretical spectrum: batchelor or kraichnan
   salinity: null          # salinity [PSU] (null = 35, fixed S)
+  mixing: true            # derived mixing quantities (N2, dTdz, K_T, Gamma,
+                          # K_rho) on the chi grid, with salinity from the
+                          # profile's own C/T/P (TEOS-10)
   chi_minimum: 1.0e-13    # floor for mk_chi_mean (values <= go to NaN)
   fom_max: null           # null = no FOM cut. Same per-probe mechanism as
                           # epsilon.fom_max but on chi NCs (NaN's chi[probe,

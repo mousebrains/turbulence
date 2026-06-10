@@ -311,3 +311,74 @@ class TestConstants:
 
     def test_default_var_resolved_limit(self):
         assert DEFAULT_VAR_RESOLVED_LIMIT == 0.5
+
+
+class TestAtomixFlagBits:
+    """ATOMIX QC flag bits 2 (despike fraction), 4 (inter-probe ratio),
+    8 (despike passes), and the method gating of bit 16."""
+
+    def _flags(self, **kw):
+        from odas_tpw.scor160.l4 import _compute_flags
+
+        base = dict(
+            epsi=np.array([[1e-8, 1e-8], [1e-8, 1e-8]]),
+            fom=np.zeros((2, 2)),
+            var_resolved=np.ones((2, 2)),
+            fom_limit=1.15,
+            var_resolved_limit=0.5,
+        )
+        base.update(kw)
+        return _compute_flags(**base)
+
+    def test_despike_fraction_bit2(self):
+        flags = self._flags(
+            despike_fraction=np.array([[0.10, 0.01], [0.0, 0.0]]),
+            despike_fraction_limit=0.05,
+        )
+        assert flags[0, 0] == 2 and flags[0, 1] == 0
+        assert np.all(flags[1] == 0)
+
+    def test_despike_passes_bit8(self):
+        flags = self._flags(despike_passes=np.array([9, 2]), despike_passes_limit=8)
+        assert np.all(flags[0] == 8)
+        assert np.all(flags[1] == 0)
+
+    def test_ratio_bit4_flags_only_larger(self):
+        # Probe 0 epsilon 10x probe 1 in window 0; equal in window 1.
+        epsi = np.array([[1e-6, 1e-8], [1e-7, 1e-8]])
+        sigma = np.full((2, 2), 0.1)  # limit = 2.77*0.1 = 0.277 < ln(10)
+        flags = self._flags(epsi=epsi, sigma_ln=sigma)
+        assert flags[0, 0] == 4  # larger estimate flagged
+        assert flags[1, 0] == 0  # window minimum never flagged
+        assert flags[0, 1] == 0 and flags[1, 1] == 0  # consistent window
+
+    def test_ratio_bit4_within_spread_unflagged(self):
+        epsi = np.array([[1.2e-8, 1e-8], [1e-8, 1e-8]])  # ln ratio 0.18
+        sigma = np.full((2, 2), 0.5)  # limit = 1.39 >> 0.18
+        flags = self._flags(epsi=epsi, sigma_ln=sigma)
+        assert np.all(flags == 0)
+
+    def test_var_resolved_bit16_gated_by_method(self):
+        # Both probes under-resolved; window 0 is ISR (method 1) ->
+        # criterion not applicable; window 1 is variance method -> flagged.
+        flags = self._flags(
+            var_resolved=np.full((2, 2), 0.1),
+            method=np.array([[1.0, 0.0], [1.0, 0.0]]),
+        )
+        assert np.all(flags[:, 0] == 0)
+        assert np.all(flags[:, 1] == 16)
+
+    def test_var_resolved_bit16_ungated_without_method(self):
+        flags = self._flags(var_resolved=np.full((2, 2), 0.1))
+        assert np.all(flags == 16)
+
+    def test_bits_combine(self):
+        epsi = np.array([[1e-6, 1e-8], [1e-7, 1e-8]])
+        flags = self._flags(
+            epsi=epsi,
+            fom=np.array([[2.0, 0.0], [0.0, 0.0]]),
+            sigma_ln=np.full((2, 2), 0.1),
+            despike_fraction=np.array([[0.1, 0.0], [0.0, 0.0]]),
+        )
+        # probe 0 window 0: fom (1) + despike (2) + ratio (4) = 7
+        assert flags[0, 0] == 7

@@ -136,11 +136,22 @@ def _run_benchmark(args: argparse.Namespace, levels: list[str]) -> None:
                     f"  L3 ref: {l3_ref.n_spectra} spectra, "
                     f"{l3_ref.n_shear} shear, {l3_ref.n_wavenumber} wavenumbers"
                 )
+            # Use the dataset's own QC thresholds so the flag comparison
+            # against the reference EPSI_FLAGS is like-for-like.
+            from odas_tpw.scor160.io import read_l4_qc_limits
+
+            qc = read_l4_qc_limits(path)
             l4_comp = process_l4(
                 l3_input,
                 f_AA=l1.f_AA,
                 num_ffts=2 * (l3_params.diss_length // l3_params.fft_length) - 1,
                 n_v=l1.n_vib if l3_params.goodman else 0,
+                fom_limit=qc["FOM_limit"],
+                var_resolved_limit=qc["variance_resolved_limit"],
+                despike_fraction_limit=qc["despike_shear_fraction_limit"],
+                despike_passes_limit=int(qc["despike_shear_iterations_limit"]),
+                diss_ratio_limit=qc["diss_ratio_limit"],
+                diss_length_s=qc["diss_length_s"],
             )
             print()
             print(format_l4_report(compare_l4(l4_comp, l4_ref), filename=path.name))
