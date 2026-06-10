@@ -65,9 +65,17 @@ FM_SIGMA_EXPONENT = -7 / 9
 FM_TM_OFFSET = 0.8
 FM_TM_COEFF = 1.56
 
-# Default QC thresholds (from benchmark file attributes)
+# Default QC thresholds (from ATOMIX benchmark file attributes;
+# VMP250_TidalChannel_024.nc L4_dissipation group)
 DEFAULT_FOM_LIMIT = 1.15
 DEFAULT_VAR_RESOLVED_LIMIT = 0.5
+DEFAULT_DESPIKE_FRACTION_LIMIT = 0.05  # despike_shear_fraction_limit
+DEFAULT_DESPIKE_PASSES_LIMIT = 8  # despike_shear_iterations_limit
+# z-factor on the expected sigma_ln for the inter-probe consistency
+# test: ln(e_i/e_min) > diss_ratio_limit * mean(sigma_ln) flags probe i.
+# The benchmark stores exactly 1.96*sqrt(2) (95% CI for the difference
+# of two equal-variance lognormal estimates).
+DEFAULT_DISS_RATIO_LIMIT = 1.96 * np.sqrt(2.0)
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +93,10 @@ def process_l4(
     var_resolved_limit: float = DEFAULT_VAR_RESOLVED_LIMIT,
     num_ffts: int = 0,
     n_v: int = 0,
+    diss_length_s: float = 0.0,
+    despike_fraction_limit: float = DEFAULT_DESPIKE_FRACTION_LIMIT,
+    despike_passes_limit: int = DEFAULT_DESPIKE_PASSES_LIMIT,
+    diss_ratio_limit: float = DEFAULT_DISS_RATIO_LIMIT,
 ) -> L4Data:
     """Compute L4 dissipation estimates from L3 wavenumber spectra.
 
@@ -113,6 +125,21 @@ def process_l4(
         Number of coherent-noise (vibration) signals removed by Goodman
         cleaning (reduces the effective degrees of freedom in FM).
         Pass 0 when Goodman cleaning was not applied.
+    diss_length_s : float
+        Dissipation window duration [s] (``diss_length / fs_fast``).
+        Required for the inter-probe consistency flag (bit 4, via the
+        Lueck 2022 variance model); 0 skips that flag.
+    despike_fraction_limit : float
+        Flag bit 2 when the fraction of shear samples replaced by
+        despiking in a window exceeds this (ATOMIX
+        ``despike_shear_fraction_limit``).
+    despike_passes_limit : int
+        Flag bit 8 when despiking needed more than this many passes
+        (ATOMIX ``despike_shear_iterations_limit``).
+    diss_ratio_limit : float
+        z-factor for the inter-probe consistency test (bit 4):
+        ``ln(e_i/e_min) > diss_ratio_limit * mean(sigma_ln)`` flags
+        probe i.  The ATOMIX benchmark value is 1.96*sqrt(2).
     """
     n_spec = l3.n_spectra
     n_shear = l3.n_shear
@@ -140,12 +167,14 @@ def process_l4(
     method_arr = np.full((n_shear, n_spec), np.nan)
     var_resolved = np.full((n_shear, n_spec), np.nan)
     FM = np.full((n_shear, n_spec), np.nan)
+    nu_arr = np.full(n_spec, np.nan)
 
     for j in range(n_spec):
         # Per-window wavenumber grid: kcyc is (N_WAVENUMBER, N_SPECTRA)
         K = l3.kcyc[:, j]  # cpm
         W = l3.pspd_rel[j]
         nu = float(visc35(temp[j]))
+        nu_arr[j] = nu
 
         # Anti-alias wavenumber limit
         K_AA = 0.9 * f_AA / max(W, 0.05)
@@ -175,11 +204,30 @@ def process_l4(
             var_resolved[i, j] = var_res
             FM[i, j] = fm
 
+    # Expected sigma_ln per probe/window (Lueck 2022a variance model)
+    # for the inter-probe consistency flag.
+    sigma_ln = None
+    if diss_length_s > 0:
+        sigma_ln = _sigma_ln_epsilon(epsi, nu_arr, diss_length_s * l3.pspd_rel)
+
     # QC flags and EPSI_FINAL.  Flag on the MAD-based FM statistic when
     # available (the ATOMIX convention the fom_limit default of 1.15 was
     # written for); fall back to the variance-ratio fom otherwise.
     fom_for_flags = FM if num_ffts > 0 else fom
-    epsi_flags = _compute_flags(epsi, fom_for_flags, var_resolved, fom_limit, var_resolved_limit)
+    epsi_flags = _compute_flags(
+        epsi,
+        fom_for_flags,
+        var_resolved,
+        fom_limit,
+        var_resolved_limit,
+        despike_fraction=l3.despike_fraction if l3.despike_fraction.size > 0 else None,
+        despike_passes=l3.despike_passes if l3.despike_passes.size > 0 else None,
+        despike_fraction_limit=despike_fraction_limit,
+        despike_passes_limit=despike_passes_limit,
+        sigma_ln=sigma_ln,
+        diss_ratio_limit=diss_ratio_limit,
+        method=method_arr,
+    )
     epsi_final = _compute_epsi_final(epsi, epsi_flags)
 
     return L4Data(
@@ -196,6 +244,9 @@ def process_l4(
         method=method_arr,
         var_resolved=var_resolved,
         FM=FM,
+        despike_fraction=(
+            l3.despike_fraction.copy() if l3.despike_fraction.size > 0 else None
+        ),
     )
 
 
@@ -622,23 +673,85 @@ def _inertial_subrange(
 # ---------------------------------------------------------------------------
 
 
+def _sigma_ln_epsilon(
+    epsi: np.ndarray, nu: np.ndarray, L: np.ndarray
+) -> np.ndarray:
+    """Expected sigma of ln(epsilon) per probe/window (Lueck 2022a).
+
+    var(ln eps) = 5.5 / (1 + (L_hat/4)^(7/9)) with L_hat = L/L_K and
+    L_K = (nu^3/eps)^(1/4) — the same model used by mk_epsilon_mean.
+
+    Parameters
+    ----------
+    epsi : (n_shear, n_spec)
+    nu : (n_spec,)
+        Kinematic viscosity per window [m^2/s].
+    L : (n_spec,)
+        Physical dissipation-window length [m] (duration * speed).
+    """
+    with np.errstate(invalid="ignore", divide="ignore"):
+        L_K = (nu[np.newaxis, :] ** 3 / epsi) ** 0.25
+        L_hat = L[np.newaxis, :] / L_K
+        var_ln = 5.5 / (1.0 + (L_hat / 4.0) ** (7.0 / 9.0))
+    return np.asarray(np.sqrt(var_ln))
+
+
 def _compute_flags(
     epsi: np.ndarray,
     fom: np.ndarray,
     var_resolved: np.ndarray,
     fom_limit: float,
     var_resolved_limit: float,
+    despike_fraction: np.ndarray | None = None,
+    despike_passes: np.ndarray | None = None,
+    despike_fraction_limit: float = DEFAULT_DESPIKE_FRACTION_LIMIT,
+    despike_passes_limit: int = DEFAULT_DESPIKE_PASSES_LIMIT,
+    sigma_ln: np.ndarray | None = None,
+    diss_ratio_limit: float = DEFAULT_DISS_RATIO_LIMIT,
+    method: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Compute ATOMIX-style QC flags.
+    """Compute ATOMIX QC flags (conventions: shear probes group).
 
-    Bit flags:
+    Bit flags (matching the benchmark EPSI_FLAGS flag_meanings):
       0 = good
       1 = FOM > limit
-      16 = variance resolved < limit
+      2 = despike fraction > limit
+      4 = inter-probe consistency: ln(e_i/e_min) > limit * mean(sigma_ln)
+          — only the larger (suspect) estimates are flagged, never the
+          window minimum, matching the benchmark convention
+      8 = too many despike passes
+      16 = variance resolved < limit — applied only to variance-method
+          estimates (method 0): the ISR fit never integrates the
+          dissipation range, so the criterion is not applicable there
+          (matching the benchmark, which leaves ISR estimates with
+          var_resolved ~ 0.1 unflagged)
+      255 = invalid estimate
     """
     flags = np.zeros_like(epsi, dtype=np.float64)
     flags[fom > fom_limit] += 1
-    flags[var_resolved < var_resolved_limit] += 16
+
+    if despike_fraction is not None and despike_fraction.shape == epsi.shape:
+        with np.errstate(invalid="ignore"):
+            flags[despike_fraction > despike_fraction_limit] += 2
+
+    if sigma_ln is not None and epsi.shape[0] > 1:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            epsi_pos = np.where(np.isfinite(epsi) & (epsi > 0), epsi, np.nan)
+            e_min = np.nanmin(epsi_pos, axis=0)  # (n_spec,)
+            ln_ratio = np.log(epsi_pos / e_min[np.newaxis, :])
+            mu_sigma = np.nanmean(
+                np.where(np.isfinite(epsi_pos), sigma_ln, np.nan), axis=0
+            )
+            inconsistent = ln_ratio > diss_ratio_limit * mu_sigma[np.newaxis, :]
+        flags[inconsistent] += 4
+
+    if despike_passes is not None and len(despike_passes) == epsi.shape[0]:
+        flags[despike_passes > despike_passes_limit, :] += 8
+
+    under_resolved = var_resolved < var_resolved_limit
+    if method is not None:
+        under_resolved &= method == 0
+    flags[under_resolved] += 16
     flags[~np.isfinite(epsi)] = 255
     return flags
 

@@ -96,6 +96,14 @@ class L2Data:
     vib_type: str
     pspd_rel: np.ndarray  # (N_TIME,), profiling speed [m/s]
     section_number: np.ndarray  # (N_TIME,), 0 = excluded
+    # Despike bookkeeping for ATOMIX QC flags (empty when despiking was
+    # disabled or for benchmark reference reads):
+    # per-sample replaced-by-despike masks and per-channel maximum pass
+    # counts across sections.
+    despike_mask_sh: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=bool))
+    despike_passes_sh: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    despike_mask_A: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=bool))
+    despike_passes_A: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
 
 
 @dataclass
@@ -122,6 +130,13 @@ class L3Data:
     kcyc: np.ndarray  # (N_WAVENUMBER, N_SPECTRA), wavenumber [cpm]
     sh_spec: np.ndarray  # (N_SHEAR, N_WAVENUMBER, N_SPECTRA), raw spectrum
     sh_spec_clean: np.ndarray  # (N_SHEAR, N_WAVENUMBER, N_SPECTRA), Goodman-cleaned
+    # Despike bookkeeping for ATOMIX QC flags (empty for benchmark
+    # reference reads): per-window fraction of shear samples replaced by
+    # despiking, and per-channel maximum pass count.
+    despike_fraction: np.ndarray = field(
+        default_factory=lambda: np.zeros((0, 0))
+    )  # (N_SHEAR, N_SPECTRA)
+    despike_passes: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
 
     @property
     def n_spectra(self) -> int:
@@ -170,6 +185,7 @@ class L4Data:
     method: np.ndarray  # (N_SHEAR, N_SPECTRA), 0=variance, 1=ISR
     var_resolved: np.ndarray  # (N_SHEAR, N_SPECTRA), fraction of variance resolved
     FM: np.ndarray | None = None  # (N_SHEAR, N_SPECTRA), Lueck (2022) MAD-based FM statistic
+    despike_fraction: np.ndarray | None = None  # (N_SHEAR, N_SPECTRA), per-window
 
     @property
     def n_spectra(self) -> int:
@@ -191,6 +207,49 @@ class AtomixData(NamedTuple):
     l3_params: L3Params
     l3_ref: L3Data
     l4_ref: L4Data
+
+
+def read_l4_qc_limits(path: str | Path) -> dict[str, float]:
+    """Read the dataset's own QC thresholds from the L4 group attributes.
+
+    The ATOMIX benchmark files store per-dataset QC limits
+    (``FOM_limit``, ``variance_resolved_limit``,
+    ``despike_shear_fraction_limit``, ``despike_shear_iterations_limit``,
+    ``diss_ratio_limit``) plus ``diss_length``/``fs_fast``; comparing
+    computed flags against the reference is only meaningful with the
+    same limits.  Missing attributes fall back to the package defaults.
+    """
+    from odas_tpw.scor160.l4 import (
+        DEFAULT_DESPIKE_FRACTION_LIMIT,
+        DEFAULT_DESPIKE_PASSES_LIMIT,
+        DEFAULT_DISS_RATIO_LIMIT,
+        DEFAULT_FOM_LIMIT,
+        DEFAULT_VAR_RESOLVED_LIMIT,
+    )
+
+    defaults = {
+        "FOM_limit": DEFAULT_FOM_LIMIT,
+        "variance_resolved_limit": DEFAULT_VAR_RESOLVED_LIMIT,
+        "despike_shear_fraction_limit": DEFAULT_DESPIKE_FRACTION_LIMIT,
+        "despike_shear_iterations_limit": float(DEFAULT_DESPIKE_PASSES_LIMIT),
+        "diss_ratio_limit": DEFAULT_DISS_RATIO_LIMIT,
+    }
+    out: dict[str, float] = {}
+    ds = netCDF4.Dataset(str(path), "r")
+    try:
+        g = ds.groups.get("L4_dissipation")
+        for name, default in defaults.items():
+            val = getattr(g, name, None) if g is not None else None
+            out[name] = float(val) if val is not None else default
+        # diss window duration [s] for the sigma_ln model
+        diss_len = getattr(g, "diss_length", None) if g is not None else None
+        fs = getattr(g, "fs_fast", None) if g is not None else None
+        out["diss_length_s"] = (
+            float(diss_len) / float(fs) if diss_len is not None and fs else 0.0
+        )
+    finally:
+        ds.close()
+    return out
 
 
 def read_atomix(path: str | Path) -> AtomixData:

@@ -389,6 +389,27 @@ def compare_l4(computed: L4Data, reference: L4Data) -> dict:
             )
     results["method"] = method_stats
 
+    # QC flag agreement (exact match of the full bitfield, plus per-bit
+    # agreement for the ATOMIX bits)
+    flag_stats = []
+    for i in range(n_sh):
+        ref_f = reference.epsi_flags[i, :n_common]
+        comp_f = computed.epsi_flags[i, :n_common]
+        valid = np.isfinite(ref_f) & np.isfinite(comp_f) & (ref_f != 255) & (comp_f != 255)
+        if valid.any():
+            rf = ref_f[valid].astype(np.int64)
+            cf = comp_f[valid].astype(np.int64)
+            entry = {
+                "probe": i + 1,
+                "exact": float((rf == cf).mean()),
+                "n_ref_flagged": int((rf > 0).sum()),
+                "n_comp_flagged": int((cf > 0).sum()),
+            }
+            for bit, name in ((1, "fom"), (2, "despike"), (4, "ratio"), (8, "passes"), (16, "var")):
+                entry[f"bit_{name}"] = float(((rf & bit) == (cf & bit)).mean())
+            flag_stats.append(entry)
+    results["flags"] = flag_stats
+
     return results
 
 
@@ -442,6 +463,20 @@ def format_l4_report(metrics: dict, filename: str = "") -> str:
             f"    Agreement: {ms['agreement']:.1%}"
             f"  Ref ISR: {ms['ref_isr_frac']:.1%}"
             f"  Comp ISR: {ms['comp_isr_frac']:.1%}"
+        )
+
+    for fl in metrics.get("flags", []):
+        lines.append(f"\n  QC flags probe {fl['probe']}:")
+        lines.append(
+            f"    Exact match: {fl['exact']:.1%}"
+            f"  (ref flagged: {fl['n_ref_flagged']}, comp flagged: {fl['n_comp_flagged']})"
+        )
+        lines.append(
+            f"    Per-bit agreement: fom {fl['bit_fom']:.1%}"
+            f"  despike {fl['bit_despike']:.1%}"
+            f"  ratio {fl['bit_ratio']:.1%}"
+            f"  passes {fl['bit_passes']:.1%}"
+            f"  var {fl['bit_var']:.1%}"
         )
 
     return "\n".join(lines)

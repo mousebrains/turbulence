@@ -1566,3 +1566,112 @@ class TestRunCombo:
         assert np.isnan(combo["DO"].values[2:]).all()
         assert np.isnan(combo["Chl"].values[:2]).all()
         combo.close()
+
+
+class TestAddMixingQuantities:
+    """Mixing-quantity integration on per-profile chi datasets."""
+
+    def _make_inputs(self, tmp_path):
+        import gsw
+        import xarray as xr
+
+        fs_slow = 64.0
+        n = 4000
+        t = np.arange(n) / fs_slow  # file-relative seconds
+        P = 10.0 + 0.7 * t
+        depth = -gsw.z_from_p(P, 0.0)
+        T = 20.0 - 0.05 * depth
+        C = gsw.C_from_SP(np.full(n, 35.0), T, P)
+
+        units = "seconds since 2025-01-16T01:57:58"
+        prof = xr.Dataset(
+            {
+                "P": (["time_slow"], P),
+                "JAC_T": (["time_slow"], T),
+                "JAC_C": (["time_slow"], C),
+            },
+        )
+        prof["t_slow"] = xr.DataArray(t, dims=["time_slow"], attrs={"units": units})
+        prof_path = tmp_path / "prof.nc"
+        prof.to_netcdf(prof_path)
+
+        win_t = np.arange(8.0, 50.0, 8.0)
+        chi_ds = xr.Dataset(
+            {"chiMean": (["time"], np.full(len(win_t), 1e-8))},
+            coords={"t": ("time", win_t, {"units": units})},
+            attrs={"diss_length": 2048, "fs_fast": 512.0},
+        )
+        diss_ds = xr.Dataset(
+            {"epsilonMean": (["time"], np.full(len(win_t), 1e-8))},
+            coords={"t": ("time", win_t, {"units": units})},
+        )
+        return chi_ds, diss_ds, prof_path
+
+    def test_variables_added_with_real_salinity(self, tmp_path):
+        from odas_tpw.perturb.pipeline import _add_mixing_quantities
+
+        chi_ds, diss_ds, prof_path = self._make_inputs(tmp_path)
+        out = _add_mixing_quantities(chi_ds, diss_ds, prof_path, file_label="t")
+        for v in ("N2", "dTdz", "K_T", "Gamma", "K_rho"):
+            assert v in out
+            assert np.all(np.isfinite(out[v].values))
+        np.testing.assert_allclose(out["dTdz"].values, -0.05, rtol=1e-2)
+        assert "practical salinity from JAC_C" in out["N2"].attrs["comment"]
+        assert np.all(out["N2"].values > 0)
+
+    def test_no_conductivity_falls_back(self, tmp_path):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _add_mixing_quantities
+
+        chi_ds, diss_ds, prof_path = self._make_inputs(tmp_path)
+        prof = xr.open_dataset(prof_path, decode_times=False)
+        prof = prof.drop_vars("JAC_C")
+        prof_path2 = prof_path.parent / "prof_noc.nc"
+        prof.to_netcdf(prof_path2)
+        prof.close()
+        out = _add_mixing_quantities(chi_ds, diss_ds, prof_path2, file_label="t")
+        assert "assumed 35 PSU" in out["N2"].attrs["comment"]
+        assert np.all(np.isfinite(out["N2"].values))
+
+    def test_missing_epsilon_is_noop(self, tmp_path):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _add_mixing_quantities
+
+        chi_ds, _, prof_path = self._make_inputs(tmp_path)
+        empty = xr.Dataset()
+        out = _add_mixing_quantities(chi_ds, empty, prof_path, file_label="t")
+        assert "Gamma" not in out
+
+
+class TestTimeEpochSeconds:
+    def test_cf_units_converted(self):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _time_epoch_seconds
+
+        da = xr.DataArray(
+            np.array([0.0, 10.0]),
+            attrs={"units": "seconds since 1970-01-01T00:01:00"},
+        )
+        np.testing.assert_allclose(_time_epoch_seconds(da), [60.0, 70.0])
+
+    def test_datetime64_converted(self):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _time_epoch_seconds
+
+        da = xr.DataArray(np.array(["1970-01-01T00:02:00"], dtype="datetime64[ns]"))
+        np.testing.assert_allclose(_time_epoch_seconds(da), [120.0])
+
+    def test_tz_suffix_stripped(self):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _time_epoch_seconds
+
+        da = xr.DataArray(
+            np.array([5.0]),
+            attrs={"units": "seconds since 1970-01-01T00:00:00+00:00"},
+        )
+        np.testing.assert_allclose(_time_epoch_seconds(da), [5.0])
