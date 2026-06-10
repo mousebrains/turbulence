@@ -403,9 +403,16 @@ class PFile:
                     # (fast channel) or a single occurrence (slow channel).
                     # Intermediate rates (read_odas.m:328-333 gathers every
                     # occurrence in scan order) would be silently decimated
-                    # here — warn so the data loss is visible.
+                    # here — warn so the data loss is visible.  Ground
+                    # reference channels are exempt: sampling 'gnd' several
+                    # times per scan is normal instrument design and its
+                    # data content is a zero reference, not a measurement.
                     expected_occ = self.n_rows if all_rows_same else 1
-                    if n_occ != expected_occ:
+                    is_gnd = (
+                        info.get("type", "").strip().lower() == "gnd"
+                        or ch_name.strip().lower() == "gnd"
+                    )
+                    if n_occ != expected_occ and not is_gnd:
                         warnings.warn(
                             f"{self.filepath.name}: channel '{ch_name}' (id {ch_id}) "
                             f"appears {n_occ}x per scan matrix; only "
