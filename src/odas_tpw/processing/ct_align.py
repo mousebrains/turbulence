@@ -12,6 +12,25 @@ import numpy as np
 from scipy.signal import butter, correlate, lfilter
 
 
+def shift_edge_hold(x: np.ndarray, shift: int) -> np.ndarray:
+    """Shift *x* by *shift* samples, holding the edge value.
+
+    Unlike ``np.roll``, samples shifted past the array ends are filled
+    with the first/last value instead of wrapping around — wrapping
+    would splice one end of the record into the other.
+    """
+    if shift == 0:
+        return x.copy()
+    out = np.empty_like(x)
+    if shift > 0:
+        out[:shift] = x[0]
+        out[shift:] = x[:-shift]
+    else:
+        out[shift:] = x[-1]
+        out[:shift] = x[-shift:]
+    return out
+
+
 def ct_align(
     T: np.ndarray,
     C: np.ndarray,
@@ -94,6 +113,8 @@ def ct_align(
     median_lag = per_profile[mid_idx]["lag"]
 
     i_shift = round(median_lag * fs)
-    C_aligned = np.roll(C, i_shift)
+    # Edge-hold instead of np.roll: wrapping would splice the start of
+    # the record into the end (ODAS trims instead).
+    C_aligned = shift_edge_hold(C, i_shift)
 
     return C_aligned, median_lag

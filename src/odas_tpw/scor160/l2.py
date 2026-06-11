@@ -56,7 +56,15 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
     if l1.has_speed:
         pspd = l1.pspd_rel.copy()
     else:
-        pspd = _compute_speed(l1.pres, fs, params.HP_cut, l1.profile_dir)
+        # ODAS smooths the fall rate exactly once, at 0.68/tau
+        # (odas_p2mat.m:699-701).  When speed_tau > 0 that filter is
+        # applied below, so no pre-smoothing happens here; previously the
+        # SHEAR high-pass cutoff (params.HP_cut, an unrelated parameter)
+        # was used as a pre-smoothing cutoff before the 0.68/tau pass.
+        # The HP_cut fallback is kept only for speed_tau <= 0, where it
+        # is the sole smoothing applied.
+        pre_cut = None if params.speed_tau > 0 else params.HP_cut
+        pspd = _compute_speed(l1.pres, fs, pre_cut, l1.profile_dir)
 
     tau = params.speed_tau
     if tau > 0:
@@ -91,18 +99,20 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
         a_thresh, a_smooth, a_hw = params.despike_A
 
     # Despike bookkeeping for ATOMIX QC flags: which samples were
-    # replaced (drives the per-window DESPIKE_FRACTION) and the maximum
-    # pass count per channel across sections (drives the
-    # too-many-passes flag).
+    # replaced (drives the per-window DESPIKE_FRACTION) and the pass
+    # count per (channel, section) — the benchmark PASS_COUNT_SH layout
+    # (drives the too-many-passes flag).
+    section_ids = np.asarray(
+        [s for s in np.unique(section_number) if s != 0], dtype=np.int64
+    )
+    n_sections = len(section_ids)
     despike_mask_sh = np.zeros_like(shear_out, dtype=bool)
-    despike_passes_sh = np.zeros(l1.n_shear, dtype=np.int64)
+    despike_passes_sh = np.zeros((l1.n_shear, n_sections), dtype=np.int64)
     despike_mask_A = np.zeros_like(vib_out, dtype=bool)
-    despike_passes_A = np.zeros(l1.n_vib, dtype=np.int64)
+    despike_passes_A = np.zeros((l1.n_vib, n_sections), dtype=np.int64)
 
     # Despike within each section
-    for sec_id in np.unique(section_number):
-        if sec_id == 0:
-            continue
+    for si, sec_id in enumerate(section_ids):
         mask = section_number == sec_id
 
         # Despike shear probes
@@ -118,7 +128,7 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
                     N=N_sh,
                 )
                 despike_mask_sh[i, mask] = cleaned != before
-                despike_passes_sh[i] = max(despike_passes_sh[i], n_passes)
+                despike_passes_sh[i, si] = n_passes
                 shear_out[i, mask] = cleaned
 
         # Despike vibration/accelerometer
@@ -134,7 +144,7 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
                     N=N_a,
                 )
                 despike_mask_A[i, mask] = cleaned != before
-                despike_passes_A[i] = max(despike_passes_A[i], n_passes)
+                despike_passes_A[i, si] = n_passes
                 vib_out[i, mask] = cleaned
 
     return L2Data(
@@ -148,6 +158,7 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
         despike_passes_sh=despike_passes_sh,
         despike_mask_A=despike_mask_A,
         despike_passes_A=despike_passes_A,
+        despike_section_ids=section_ids,
     )
 
 
@@ -159,24 +170,27 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
 def _compute_speed(
     pres: np.ndarray,
     fs: float,
-    lp_cut: float,
+    lp_cut: float | None,
     direction: str,
 ) -> np.ndarray:
     """Compute profiling speed W from rate-of-change of pressure.
 
     Per Sec. 3.1 of the paper: W = |dP/dt| converted to m/s via the
-    hydrostatic approximation (1 dbar ≈ 1 m). The result is smoothed
-    with a low-pass Butterworth filter (forwards and backwards).
+    hydrostatic approximation (1 dbar ≈ 1 m). When *lp_cut* is given the
+    result is smoothed with a low-pass Butterworth filter (forwards and
+    backwards); ``None`` returns the raw gradient (the caller applies
+    the single ODAS 0.68/tau smoothing pass itself).
     """
     # First-difference estimate of dP/dt
     dpdt = np.gradient(pres, 1.0 / fs)
 
-    # Low-pass smooth to remove noise
-    b, a = butter(1, lp_cut / (fs / 2))
-    dpdt_smooth = filtfilt(b, a, dpdt, padlen=_matlab_padlen(b, a))
+    if lp_cut is not None:
+        # Low-pass smooth to remove noise
+        b, a = butter(1, lp_cut / (fs / 2))
+        dpdt = filtfilt(b, a, dpdt, padlen=_matlab_padlen(b, a))
 
     # Sign convention: downward profiler → positive dP/dt is positive speed
-    speed = dpdt_smooth.copy() if direction == "down" else -dpdt_smooth.copy()
+    speed = dpdt.copy() if direction == "down" else -dpdt.copy()
     return speed
 
 
