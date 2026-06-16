@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from odas_tpw.perturb.pipeline import (
+    _profile_practical_salinity,
     _setup_output_dirs,
     _upstream_for,
     process_file,
@@ -55,6 +56,42 @@ def _make_p_file(
             rec_header = struct.pack(fmt, *header)
             data = b"\x00" * (record_size - HEADER_BYTES)
             f.write(rec_header + data)
+
+
+class TestProfilePracticalSalinity:
+    """chi.salinity='measured' resolves to TEOS-10 salinity from C/T/P."""
+
+    def test_derives_salinity_from_ctp(self, tmp_path):
+        import gsw
+        import xarray as xr
+
+        P = np.array([1.0, 5.0, 10.0])
+        T = np.array([20.0, 19.5, 19.0])
+        C = np.array([45.0, 44.8, 44.5])
+        path = tmp_path / "prof.nc"
+        xr.Dataset(
+            {
+                "P": ("time_slow", P),
+                "JAC_T": ("time_slow", T),
+                "JAC_C": ("time_slow", C),
+            }
+        ).to_netcdf(path)
+
+        sal = _profile_practical_salinity(path, "JAC_T", "JAC_C")
+        np.testing.assert_allclose(sal, gsw.SP_from_C(C, T, P))
+
+    def test_returns_none_when_conductivity_missing(self, tmp_path):
+        import xarray as xr
+
+        path = tmp_path / "prof_noC.nc"
+        xr.Dataset(
+            {
+                "P": ("time_slow", np.array([1.0, 2.0])),
+                "JAC_T": ("time_slow", np.array([20.0, 19.0])),
+            }
+        ).to_netcdf(path)
+
+        assert _profile_practical_salinity(path, "JAC_T", "JAC_C") is None
 
 
 class TestSetupOutputDirs:

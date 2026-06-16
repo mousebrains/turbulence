@@ -415,7 +415,9 @@ chi:
   fit_method: "iterative" # Method 2 fitting: iterative or mle (ignored if
                           # use_epsilon=true)
   spectrum_model: "kraichnan"  # theoretical spectrum: batchelor or kraichnan
-  salinity: null          # salinity [PSU] (null = 35, fixed S)
+  salinity: null          # viscosity salinity [PSU]: null = fixed 35; a
+                          # number = that fixed S; "measured" = per-profile
+                          # from JAC_C/JAC_T/P (TEOS-10)
   mixing: true            # derived mixing quantities (N2, dTdz, K_T, Gamma,
                           # K_rho) on the chi grid, with salinity from the
                           # profile's own C/T/P (TEOS-10)

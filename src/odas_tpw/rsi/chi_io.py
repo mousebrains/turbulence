@@ -64,6 +64,16 @@ def _compute_chi(
     if overlap is None:
         overlap = diss_length // 2
 
+    if isinstance(salinity, str):
+        # The "measured" sentinel is resolved upstream (perturb.pipeline reads
+        # the profile's conductivity); _compute_chi only accepts a concrete
+        # value here, so fail clearly rather than crash in np.asarray(...).
+        raise ValueError(
+            f"salinity={salinity!r} is not resolved at this layer; pass a "
+            "number, an array, or None. The 'measured' option is resolved by "
+            "the perturb pipeline from the profile's C/T/P."
+        )
+
     # Load channels including thermistor data
     data = _pre_loaded if _pre_loaded is not None else _load_therm_channels(source)
 
