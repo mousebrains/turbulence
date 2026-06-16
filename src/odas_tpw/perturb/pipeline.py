@@ -1324,6 +1324,25 @@ def _setup_output_dirs(config: dict) -> dict[str, Path]:
     return dirs
 
 
+def _done_message(name: str, result: Any) -> str:
+    """Per-file completion line reporting how many products were written.
+
+    *result* is the dict returned by :func:`process_file` (``profiles`` /
+    ``diss`` / ``chi`` lists). Reports the profile count headline plus the
+    dissipation and chi counts; ``0`` chi simply means chi was disabled.
+    """
+    if isinstance(result, dict):
+        n_prof = len(result.get("profiles", []))
+        n_diss = len(result.get("diss", []))
+        n_chi = len(result.get("chi", []))
+    else:
+        n_prof = n_diss = n_chi = 0
+    return (
+        f"Done processing {name}: {n_prof} profiles "
+        f"({n_diss} dissipation, {n_chi} chi)"
+    )
+
+
 def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     """Run the full pipeline: discover -> trim -> merge -> process -> bin -> combo.
 
@@ -1496,7 +1515,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     if jobs == 1:
         for p_path in p_files:
             logger.info("Processing %s...", p_path.name)
-            process_file(
+            result = process_file(
                 p_path,
                 config,
                 gps,
@@ -1506,6 +1525,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 instrument_key=_instrument_key(p_path),
                 output_stem=_output_stem(p_path),
             )
+            logger.info("%s", _done_message(p_path.name, result))
     else:
         # Spawn workers each get a per-pid log file inside <output_root>/logs/
         # so multi-process runs are diagnosable.  ``run_stamp`` is the parent
@@ -1535,11 +1555,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             for future in as_completed(futures):
                 p = futures[future]
                 try:
-                    future.result()
-                    logger.info(
-                        "Done processing %s (profiles, dissipation, chi, CTD)",
-                        p.name,
-                    )
+                    result = future.result()
+                    logger.info("%s", _done_message(p.name, result))
                 except Exception as exc:
                     logger.error("processing %s: %s", p.name, exc)
 
