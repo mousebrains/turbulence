@@ -266,6 +266,20 @@ COMBO_SCHEMA: dict[str, dict] = {
         "long_name": "mean in-situ temperature within FFT window",
         "units_metadata": "temperature: on_scale",
     },
+    # Background stratification (Thorpe-sorted). The averaging scale differs by
+    # product (a pressure window for profile/CTD, the processing window for
+    # diss); each product NetCDF carries the precise scale in its variable
+    # comment, so the schema long_name stays scale-neutral.
+    "N2": {
+        "nc_name": "N2",
+        "units": "s-2",
+        "long_name": "buoyancy frequency squared (Thorpe-sorted)",
+    },
+    "dTdz": {
+        "nc_name": "dTdz",
+        "units": "K m-1",
+        "long_name": "background temperature gradient (positive down)",
+    },
 }
 
 CHI_SCHEMA: dict[str, dict] = {
@@ -321,6 +335,24 @@ CHI_SCHEMA: dict[str, dict] = {
     "P": COMBO_SCHEMA["P"],
     "bin": COMBO_SCHEMA["bin"],
     "profile": COMBO_SCHEMA["profile"],
+    # Stratification + derived mixing quantities on the chi grid.
+    "N2": COMBO_SCHEMA["N2"],
+    "dTdz": COMBO_SCHEMA["dTdz"],
+    "K_T": {
+        "nc_name": "K_T",
+        "units": "m2 s-1",
+        "long_name": "Osborn-Cox eddy diffusivity of heat",
+    },
+    "Gamma": {
+        "nc_name": "Gamma",
+        "units": "1",
+        "long_name": "mixing coefficient (measured)",
+    },
+    "K_rho": {
+        "nc_name": "K_rho",
+        "units": "m2 s-1",
+        "long_name": "Osborn diapycnal diffusivity (Gamma_0 = 0.2)",
+    },
 }
 
 CTD_SCHEMA: dict[str, dict] = {
@@ -344,6 +376,8 @@ CTD_SCHEMA: dict[str, dict] = {
     "DO": COMBO_SCHEMA["DO"],
     "Chlorophyll": COMBO_SCHEMA["Chlorophyll"],
     "Turbidity": COMBO_SCHEMA["Turbidity"],
+    "N2": COMBO_SCHEMA["N2"],
+    "dTdz": COMBO_SCHEMA["dTdz"],
 }
 
 # Fixed global attributes for CF-1.13 / ACDD-1.3 compliance

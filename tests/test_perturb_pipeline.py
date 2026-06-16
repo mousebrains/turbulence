@@ -260,6 +260,7 @@ class TestUpstreamFor:
             "ct",
             "bottom",
             "top_trim",
+            "stratification",
         }
 
     def test_diss_includes_profiles_and_instruments(self):
@@ -270,7 +271,10 @@ class TestUpstreamFor:
         assert {"epsilon", "profiles", "instruments"}.issubset(set(self._sections("chi")))
 
     def test_ctd_includes_file_flow_and_gps(self):
-        assert set(self._sections("ctd")) == {"files", "gps", "hotel", "speed", "qc"}
+        assert set(self._sections("ctd")) == {
+            "files", "gps", "hotel", "speed", "qc",
+            "ct", "profiles", "stratification",
+        }
 
     def test_profiles_binned_includes_profiles(self):
         assert "profiles" in self._sections("profiles_binned")

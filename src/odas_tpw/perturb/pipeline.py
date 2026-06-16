@@ -90,6 +90,7 @@ def _upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
     chi_p = merge_config("chi", config.get("chi"))
     ctd_p = merge_config("ctd", config.get("ctd"))
     netcdf_p = merge_config("netcdf", config.get("netcdf"))
+    strat_p = merge_config("stratification", config.get("stratification"))
     instruments_p = _canonical_instruments_for_hash(config.get("instruments"))
 
     profile_upstream = [
@@ -102,16 +103,25 @@ def _upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
         ("ct", ct_p),
         ("bottom", bottom_p),
         ("top_trim", top_trim_p),
+        # N2/dT/dz are injected onto the profile/diss products and gated by
+        # stratification.{enable,window}, so they must re-version those outputs.
+        ("stratification", strat_p),
     ]
     profile_chain = [*profile_upstream, ("profiles", profiles_p)]
     diss_chain = [*profile_chain, ("instruments", instruments_p)]
     chi_chain = [*diss_chain, ("epsilon", eps_p)]
+    # CTD salinity/density come from CT-aligned conductivity (depends on ct.* and
+    # the detected profiles), and the CTD product also carries the injected
+    # background N2/dT/dz — so ct, profiles, and stratification must be hashed.
     ctd_chain = [
         ("files", files_p),
         ("gps", gps_p),
         ("hotel", hotel_p),
         ("speed", speed_p),
         ("qc", qc_p),
+        ("ct", ct_p),
+        ("profiles", profiles_p),
+        ("stratification", strat_p),
     ]
 
     chains: dict[str, list[tuple[str, dict]]] = {
