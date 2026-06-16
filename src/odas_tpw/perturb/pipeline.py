@@ -444,17 +444,22 @@ def _add_mixing_quantities(
     C_name: str = "JAC_C",
     file_label: str = "",
 ):
-    """Append derived mixing quantities to a per-profile chi dataset.
+    """Append stratification and (when available) mixing quantities to chi.
 
-    Computes window-scale N2 and dT/dz from the profile's own slow CTD
-    channels — with practical salinity from C/T/P via TEOS-10 when the
-    conductivity channel exists, so N2 is fully constrained (unlike the
-    rsi path, which may assume 35 PSU) — then K_T (Osborn-Cox), Gamma
-    (Oakey 1982), and K_rho (Osborn 1980, Gamma_0 = 0.2), pairing
-    epsilonMean from the matching diss dataset onto the chi window grid.
+    Always computes window-scale N2 and dT/dz from the profile's own slow CTD
+    channels via the Thorpe-sorted (adiabatically leveled) method — with
+    practical salinity from C/T/P via TEOS-10 when the conductivity channel
+    exists, so N2 is fully constrained (unlike the rsi path, which may assume
+    35 PSU). N2 and dT/dz depend only on the CTD profile, so they are written
+    regardless of epsilon/chi.
 
-    Mutates and returns *chi_ds*.  No-op (with a log line) when the
-    required inputs are missing.
+    When epsilonMean (from the matching diss dataset) and chiMean are both
+    present, additionally computes K_T (Osborn-Cox), Gamma (Oakey 1982), and
+    K_rho (Osborn 1980, Gamma_0 = 0.2), pairing epsilonMean onto the chi grid.
+
+    Mutates and returns *chi_ds*.  Returns it unchanged (with a log line) only
+    when the profile lacks the t_slow/P/T channels or chi window attributes
+    needed to compute stratification at all.
     """
     import gsw
     import numpy as np
@@ -463,14 +468,28 @@ def _add_mixing_quantities(
     from odas_tpw.processing.mixing import (
         mixing_coefficients,
         pair_nearest,
-        window_stratification,
+        sorted_stratification,
     )
 
-    if diss_ds is None or "epsilonMean" not in diss_ds or "chiMean" not in chi_ds:
-        logger.info("mixing quantities skipped for %s: missing epsilon/chi", file_label)
-        return chi_ds
+    # N2/dTdz are stratification quantities — they need only the CTD profile,
+    # not epsilon or chi — so they are always computed and attached. Only the
+    # derived coefficients (K_T, Gamma, K_rho) require epsilon and/or chi.
+    have_mix = (
+        diss_ds is not None
+        and "epsilonMean" in diss_ds
+        and "chiMean" in chi_ds
+    )
 
-    with xr.open_dataset(prof_path, decode_times=False) as prof:
+    try:
+        prof = xr.open_dataset(prof_path, decode_times=False)
+    except Exception as exc:
+        # A stratification failure must never cost us the chi estimate.
+        logger.info(
+            "stratification skipped for %s: cannot read profile (%s)",
+            file_label, exc,
+        )
+        return chi_ds
+    with prof:
         if any(v not in prof for v in ("t_slow", "P", T_name)):
             logger.info(
                 "mixing quantities skipped for %s: profile lacks t_slow/P/%s",
@@ -506,13 +525,7 @@ def _add_mixing_quantities(
         logger.info("mixing quantities skipped for %s: no window attrs", file_label)
         return chi_ds
 
-    strat = window_stratification(chi_t, half_w, t_slow, P, T, S=S, lat=lat, lon=lon)
-    eps_on_chi = pair_nearest(
-        _time_epoch_seconds(diss_ds["t"]), diss_ds["epsilonMean"].values, chi_t
-    )
-    mix = mixing_coefficients(
-        eps_on_chi, chi_ds["chiMean"].values, strat.N2, strat.dTdz
-    )
+    strat = sorted_stratification(chi_t, half_w, t_slow, P, T, S=S, lat=lat, lon=lon)
 
     var_specs = {
         "N2": (
@@ -522,7 +535,8 @@ def _add_mixing_quantities(
                 "long_name": "buoyancy frequency squared (window scale)",
                 "comment": (
                     "TEOS-10 (gsw.Nsquared) between the shallow- and deep-half "
-                    f"means of each chi window; {sal_note}."
+                    "means of each chi window after Thorpe-sorting to a stable "
+                    f"profile (overturns removed); {sal_note}."
                 ),
             },
         ),
@@ -532,57 +546,78 @@ def _add_mixing_quantities(
                 "units": "K m-1",
                 "long_name": "background temperature gradient (positive down)",
                 "comment": (
-                    "Least-squares slope of in-situ temperature vs depth over "
-                    "each chi window."
-                ),
-            },
-        ),
-        "K_T": (
-            mix.K_T,
-            {
-                "units": "m2 s-1",
-                "long_name": "Osborn-Cox eddy diffusivity of heat",
-                "comment": (
-                    "K_T = chi / (2*(dT/dz)^2), Osborn & Cox (1972), "
-                    "doi:10.1080/03091927208236085. NaN where "
-                    "|dT/dz| < 1e-4 K/m (well-mixed)."
-                ),
-            },
-        ),
-        "Gamma": (
-            mix.Gamma,
-            {
-                "units": "1",
-                "long_name": "mixing coefficient (measured)",
-                "comment": (
-                    "Gamma = N2*chi / (2*epsilon*(dT/dz)^2), Oakey (1982), "
-                    "doi:10.1175/1520-0485(1982)012<0256:DOTROD>2.0.CO;2. "
-                    "epsilonMean paired from the nearest dissipation window. "
-                    "NaN where N2 < 1e-9 s-2 or |dT/dz| < 1e-4 K/m. "
-                    "Canonical value ~0.2."
-                ),
-            },
-        ),
-        "K_rho": (
-            mix.K_rho,
-            {
-                "units": "m2 s-1",
-                "long_name": "Osborn diapycnal diffusivity (Gamma_0 = 0.2)",
-                "comment": (
-                    "K_rho = 0.2*epsilon/N2, Osborn (1980), "
-                    "doi:10.1175/1520-0485(1980)010<0083:EOTLRO>2.0.CO;2. "
-                    "Compare with K_T: agreement implies the measured Gamma "
-                    "is near the canonical 0.2. NaN where N2 < 1e-9 s-2."
+                    "Least-squares slope of the Thorpe-sorted in-situ "
+                    "temperature vs depth over each chi window."
                 ),
             },
         ),
     }
+
+    # K_T / Gamma / K_rho need epsilon and/or chi; only add them when available.
+    if have_mix:
+        eps_on_chi = pair_nearest(
+            _time_epoch_seconds(diss_ds["t"]), diss_ds["epsilonMean"].values, chi_t
+        )
+        mix = mixing_coefficients(
+            eps_on_chi, chi_ds["chiMean"].values, strat.N2, strat.dTdz
+        )
+        var_specs.update(
+            {
+                "K_T": (
+                    mix.K_T,
+                    {
+                        "units": "m2 s-1",
+                        "long_name": "Osborn-Cox eddy diffusivity of heat",
+                        "comment": (
+                            "K_T = chi / (2*(dT/dz)^2), Osborn & Cox (1972), "
+                            "doi:10.1080/03091927208236085. NaN where "
+                            "|dT/dz| < 1e-4 K/m (well-mixed)."
+                        ),
+                    },
+                ),
+                "Gamma": (
+                    mix.Gamma,
+                    {
+                        "units": "1",
+                        "long_name": "mixing coefficient (measured)",
+                        "comment": (
+                            "Gamma = N2*chi / (2*epsilon*(dT/dz)^2), Oakey (1982), "
+                            "doi:10.1175/1520-0485(1982)012<0256:DOTROD>2.0.CO;2. "
+                            "epsilonMean paired from the nearest dissipation window. "
+                            "NaN where N2 < 1e-9 s-2 or |dT/dz| < 1e-4 K/m. "
+                            "Canonical value ~0.2."
+                        ),
+                    },
+                ),
+                "K_rho": (
+                    mix.K_rho,
+                    {
+                        "units": "m2 s-1",
+                        "long_name": "Osborn diapycnal diffusivity (Gamma_0 = 0.2)",
+                        "comment": (
+                            "K_rho = 0.2*epsilon/N2, Osborn (1980), "
+                            "doi:10.1175/1520-0485(1980)010<0083:EOTLRO>2.0.CO;2. "
+                            "Compare with K_T: agreement implies the measured Gamma "
+                            "is near the canonical 0.2. NaN where N2 < 1e-9 s-2."
+                        ),
+                    },
+                ),
+            }
+        )
+
     for name, (arr, attrs) in var_specs.items():
         chi_ds[name] = xr.DataArray(arr, dims=["time"], attrs=attrs)
-    n_gamma = int(np.sum(np.isfinite(mix.Gamma)))
-    logger.info(
-        "mixing quantities for %s: %d valid Gamma estimates", file_label, n_gamma
-    )
+    if have_mix:
+        n_gamma = int(np.sum(np.isfinite(var_specs["Gamma"][0])))
+        logger.info(
+            "mixing quantities for %s: %d valid Gamma estimates", file_label, n_gamma
+        )
+    else:
+        n_n2 = int(np.sum(np.isfinite(strat.N2)))
+        logger.info(
+            "stratification for %s: %d valid N2 windows (no epsilon/chi "
+            "coefficients)", file_label, n_n2,
+        )
     return chi_ds
 
 
