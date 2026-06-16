@@ -202,6 +202,108 @@ def window_stratification(
     return StratificationResult(N2=N2, dTdz=dTdz)
 
 
+def sorted_stratification(
+    win_times: npt.ArrayLike,
+    win_half_width: float,
+    t: npt.ArrayLike,
+    P: npt.ArrayLike,
+    T: npt.ArrayLike,
+    S: float | npt.ArrayLike | None = None,
+    lat: float = 0.0,
+    lon: float = 0.0,
+    min_samples: int = 4,
+    min_dp: float = DEFAULT_MIN_DP,
+) -> StratificationResult:
+    """Background N² and dT/dz per window from the adiabatically sorted profile.
+
+    Like :func:`window_stratification`, but within each window the parcels are
+    Thorpe-sorted to a statically stable ordering (densest deepest) before
+    differencing. Sorting removes density inversions / overturns so the
+    gradients reflect the *background* stratification rather than the
+    instantaneous (possibly unstable) profile — the adiabatic-leveling idea
+    applied window-by-window:
+
+    - The window's (SA, CT, p) are formed via TEOS-10 and ranked by potential
+      density (``gsw.sigma0``); the i-th densest parcel is assigned to the
+      i-th deepest pressure, giving the stable reference profile.
+    - ``N2`` is ``gsw.Nsquared`` between the shallow- and deep-half means of
+      that stable profile (always ≥ 0 to within numerical noise).
+    - ``dTdz`` is the least-squares slope of the stably-sorted in-situ
+      temperature against depth (positive down).
+
+    Parameters and return value match :func:`window_stratification`; NaN is
+    returned for windows with fewer than *min_samples* valid samples or a
+    pressure span below *min_dp*.
+    """
+    win_times = np.asarray(win_times, dtype=np.float64)
+    t = np.asarray(t, dtype=np.float64)
+    P = np.asarray(P, dtype=np.float64)
+    T = np.asarray(T, dtype=np.float64)
+    n_win = len(win_times)
+
+    if S is None or np.ndim(S) == 0:
+        S_const = 35.0 if S is None else float(S)  # type: ignore[arg-type]
+        S_arr = None
+    else:
+        S_const = np.nan
+        S_arr = np.asarray(S, dtype=np.float64)
+
+    N2 = np.full(n_win, np.nan)
+    dTdz = np.full(n_win, np.nan)
+
+    depth = -gsw.z_from_p(P, lat)
+
+    for j, tau in enumerate(win_times):
+        sel = np.abs(t - tau) <= win_half_width
+        if not np.any(sel):
+            continue
+        Pw = P[sel]
+        Tw = T[sel]
+        zw = depth[sel]
+        Sw = S_arr[sel] if S_arr is not None else None
+
+        good = np.isfinite(Pw) & np.isfinite(Tw) & np.isfinite(zw)
+        if Sw is not None:
+            good &= np.isfinite(Sw)
+        if np.sum(good) < min_samples:
+            continue
+        Pw, Tw, zw = Pw[good], Tw[good], zw[good]
+        Sw = Sw[good] if Sw is not None else None
+        if np.ptp(Pw) < min_dp:
+            continue
+
+        Sw_vals = Sw if Sw is not None else np.full(len(Pw), S_const)
+        SA = gsw.SA_from_SP(Sw_vals, Pw, lon, lat)
+        CT = gsw.CT_from_t(SA, Tw, Pw)
+        sigma = gsw.sigma0(SA, CT)
+
+        # Thorpe reconstruction: the k-th shallowest position holds the k-th
+        # least-dense parcel. Pair depth-ordered positions with density-ordered
+        # properties to build the statically stable reference profile.
+        pos_order = np.argsort(Pw, kind="stable")
+        den_order = np.argsort(sigma, kind="stable")
+        p_stable = Pw[pos_order]
+        z_stable = zw[pos_order]
+        SA_stable = SA[den_order]
+        CT_stable = CT[den_order]
+        T_stable = Tw[den_order]
+
+        # Background temperature gradient of the stable profile.
+        dTdz[j] = np.polyfit(z_stable, T_stable, 1)[0]
+
+        # N² between shallow- and deep-half means of the stable profile.
+        half = len(p_stable) // 2
+        p_pair = np.array([np.mean(p_stable[:half]), np.mean(p_stable[half:])])
+        if p_pair[1] - p_pair[0] < min_dp / 2:
+            continue
+        sa_pair = np.array([np.mean(SA_stable[:half]), np.mean(SA_stable[half:])])
+        ct_pair = np.array([np.mean(CT_stable[:half]), np.mean(CT_stable[half:])])
+        n2_val, _ = gsw.Nsquared(sa_pair, ct_pair, p_pair, lat)
+        N2[j] = float(n2_val[0])
+
+    return StratificationResult(N2=N2, dTdz=dTdz)
+
+
 def mixing_coefficients(
     epsilon: npt.ArrayLike,
     chi: npt.ArrayLike,
