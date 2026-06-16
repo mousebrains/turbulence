@@ -16,12 +16,20 @@ right arrays.
   geometric mean of multi-probe dissipation estimates.
 - :func:`chi_combine.mk_chi_mean` — same iterative 95% CI machinery for
   multi-probe thermal-variance dissipation chi.
+- :func:`mixing.window_stratification` / :func:`mixing.mixing_coefficients`
+  — background N² and dT/dz per dissipation window, and the derived
+  mixing quantities K_T (Osborn-Cox), Gamma (Oakey), K_rho (Osborn).
 """
 
 from odas_tpw.processing.bottom import detect_bottom_crash
 from odas_tpw.processing.chi_combine import mk_chi_mean
 from odas_tpw.processing.ct_align import ct_align
 from odas_tpw.processing.epsilon_combine import mk_epsilon_mean
+from odas_tpw.processing.mixing import (
+    mixing_coefficients,
+    pair_nearest,
+    window_stratification,
+)
 from odas_tpw.processing.top_trim import compute_trim_depth, compute_trim_depths
 
 __all__ = [
@@ -29,6 +37,9 @@ __all__ = [
     "compute_trim_depths",
     "ct_align",
     "detect_bottom_crash",
+    "mixing_coefficients",
     "mk_chi_mean",
     "mk_epsilon_mean",
+    "pair_nearest",
+    "window_stratification",
 ]

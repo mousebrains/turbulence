@@ -36,10 +36,37 @@ $\partial \overline{T}/\partial z$ is the background (mean) vertical
 temperature gradient.  This quantity is dimensionless and is the one
 for which the canonical value $\Gamma \approx 0.2$ applies.
 
-**This package does not currently compute $\Gamma$**: doing so requires
-the background stratification ($N^2$) and mean temperature gradient in
-addition to $\chi$ and $\varepsilon$.  Only the dimensional ratio
-$\chi/\varepsilon$ is produced.
+**The package computes $\Gamma$ in the `rsi-tpw pipeline` Method-1 chi
+output** (`L4_chi_epsilon.nc`, propagated into the binned `L5_binned.nc`
+and combined `L6_combined.nc` products), along with the supporting
+quantities, all on the chi window grid:
+
+| Variable | Definition | Units |
+|----------|------------|-------|
+| `N2` | TEOS-10 buoyancy frequency squared between the shallow- and deep-half means of each window | s$^{-2}$ |
+| `dTdz` | Least-squares background temperature gradient vs depth | K m$^{-1}$ |
+| `K_T` | Osborn–Cox heat diffusivity $\chi/(2(\partial\overline{T}/\partial z)^2)$ | m$^2$ s$^{-1}$ |
+| `Gamma` | Measured mixing coefficient (Oakey 1982) | 1 |
+| `K_rho` | Osborn diffusivity $0.2\,\varepsilon/N^2$ with the canonical constant | m$^2$ s$^{-1}$ |
+
+Implementation: [`odas_tpw.processing.mixing`](../src/odas_tpw/processing/mixing.py).
+Estimates are masked (NaN) where $N^2 < 10^{-9}$ s$^{-2}$
+(unstratified — the Osborn scaling does not apply) or
+$|\partial\overline{T}/\partial z| < 10^{-4}$ K/m (well-mixed — the
+temperature-variance budget no longer constrains a diffusivity).
+
+Two caveats for interpretation:
+
+1. When no salinity is supplied to the pipeline, $N^2$ assumes a uniform
+   35 PSU and reflects temperature stratification only — it can be badly
+   wrong where salinity stratification matters (the `N2` variable's
+   `comment` attribute records which case applies).
+2. Because $\Gamma$ is *derived from* the measured $\chi$ and
+   $\varepsilon$, the identity $\Gamma\,\varepsilon/N^2 \equiv K_T$
+   holds by construction.  `K_rho` therefore uses the canonical
+   $\Gamma_0 = 0.2$, so comparing `K_rho` with `K_T` (equivalently,
+   `Gamma` with 0.2) is a meaningful consistency check rather than a
+   tautology.
 
 ## Connection to Turbulent Diffusivity
 

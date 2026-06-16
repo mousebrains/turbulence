@@ -22,6 +22,13 @@ rsi-tpw pipeline VMP/*.p -o results/
 # plus results/{pfile_stem}/L6_combined.nc (all profiles combined)
 ```
 
+`L4_chi_epsilon.nc` (and the binned/combined products) additionally
+carry the derived mixing quantities computed on the chi window grid —
+`N2`, `dTdz`, `K_T` (Osborn–Cox heat diffusivity), `Gamma` (measured
+mixing coefficient, Oakey 1982), and `K_rho` (Osborn diffusivity with
+Γ₀ = 0.2).  See [mixing_efficiency.md](../mixing_efficiency.md) for
+definitions, masking rules, and the salinity caveat.
+
 ## Stage 1: Convert `.p` files to NetCDF
 
 ```bash

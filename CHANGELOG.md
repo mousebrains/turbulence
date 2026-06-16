@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Derived mixing quantities in the `rsi-tpw pipeline` Method-1 chi output
+  (`L4_chi_epsilon.nc`, propagated to `L5_binned.nc`/`L6_combined.nc`):
+  window-scale `N2` (TEOS-10) and background `dTdz`, Osborn-Cox heat
+  diffusivity `K_T`, measured mixing coefficient `Gamma` (Oakey 1982),
+  and Osborn diffusivity `K_rho` (Gamma_0 = 0.2), with
+  stratification/gradient validity masking. New module
+  `odas_tpw.processing.mixing`.
+- Robustness tests for corrupted/truncated `.p` files and for the
+  `accel`/`magn` channel converters.
+- `perturb` now runs profile detection and CT alignment *before* the CTD
+  fork, so the CTD product's salinity/density are computed from
+  time-aligned conductivity whenever profiles are detectable (previously
+  always unaligned).
 - Per-CLI / per-worker / per-stage / per-combo log fan-out for `perturb`. Every
   invocation now writes `<output_root>/logs/run_<stamp>.log`, plus
   `worker_<stamp>_<pid>.log` per parallel worker, `<stem>.log` inside each
