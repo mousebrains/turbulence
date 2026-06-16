@@ -23,6 +23,7 @@ DEFAULTS: dict[str, dict] = {
         "p_file_pattern": "**/*.p",
         "output_root": "results/",
         "trim": True,
+        "force_trim": False,
         "merge": False,
     },
     "gps": {
@@ -309,6 +310,7 @@ files:
   p_file_pattern: "**/*.p"
   output_root: "results/"
   trim: true
+  force_trim: false         # re-trim even when output is already up to date
   merge: false
 
 gps:

@@ -7,11 +7,43 @@ to a new file.
 Reference: Code/trim_P_files.m
 """
 
-import shutil
 import struct
 from pathlib import Path
+from typing import NamedTuple
 
 from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS, _detect_endian
+
+
+class TrimResult(NamedTuple):
+    """Outcome of a single :func:`trim_p_file` call.
+
+    Attributes
+    ----------
+    dest : Path
+        The path downstream stages should read. For ``"trimmed"`` /
+        ``"skipped"`` this is the rewritten file under the trim directory;
+        for ``"referenced"`` it is the *original* source path, left in place.
+    action : str
+        One of:
+
+        * ``"trimmed"``    — a fractional final record was dropped; a new
+          truncated file was written to the trim directory.
+        * ``"referenced"`` — the file was already complete, so it is used
+          in place from its original location (no copy, no link).
+        * ``"skipped"``    — an up-to-date trimmed output already existed;
+          no work done.
+    bytes_removed : int
+        Bytes dropped from the incomplete final record. 0 unless
+        *action* is ``"trimmed"``.
+    record_size : int
+        The .p record size in bytes, read from the header. 0 when the file
+        was skipped (the header is not read on the skip path).
+    """
+
+    dest: Path
+    action: str
+    bytes_removed: int
+    record_size: int
 
 
 def trim_destination(source: Path, output_dir: Path, root: Path | str | None = None) -> Path:
@@ -32,33 +64,68 @@ def trim_destination(source: Path, output_dir: Path, root: Path | str | None = N
     return output_dir / source.name
 
 
-def trim_p_file(source: Path, output_dir: Path, root: Path | str | None = None) -> Path:
-    """Trim an incomplete final record from a .p file.
+def trim_p_file(
+    source: Path,
+    output_dir: Path,
+    root: Path | str | None = None,
+    *,
+    force: bool = False,
+) -> TrimResult:
+    """Trim an incomplete final record from a .p file, or reference it in place.
+
+    Complete files are *not* copied: the original is used in place
+    (``action="referenced"``) so the trim directory only ever holds files
+    that were genuinely truncated. This avoids duplicating large raw files
+    and needs no filesystem-specific support (hard/soft links, reflinks),
+    so it works identically on local disks, SMB/network mounts, and Windows.
 
     Parameters
     ----------
     source : Path
         Path to the original .p file.
     output_dir : Path
-        Directory for the trimmed output file.
+        Directory for any trimmed output file. Untouched for complete files.
     root : Path, optional
         Source root used to preserve relative paths under *output_dir*.
+    force : bool, keyword-only, default False
+        Re-trim even when an up-to-date trimmed output already exists. By
+        default an existing trimmed file at least as new as *source* is
+        reused (``action="skipped"``).
 
     Returns
     -------
-    Path
-        Path to the trimmed file.  If no trimming was needed, the file is
-        still copied to *output_dir* for consistency.
+    TrimResult
+        See :class:`TrimResult`. ``dest`` is the original source for
+        ``"referenced"`` files and the trim-directory path otherwise.
+
+    Notes
+    -----
+    Skip guard (trimmed files only): the trim-write path stamps a "now"
+    mtime newer than the (older) source, so ``dest_mtime >= source_mtime``
+    holds on a subsequent run and the rewrite is skipped. A source modified
+    after its trimmed output (newer mtime) correctly re-trims. Complete
+    files write nothing, so there is no trimmed output to skip — they are
+    re-referenced each run at the cost of a single 128-byte header read.
     """
     dest = trim_destination(source, output_dir, root=root)
-    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    # Skip-if-up-to-date: a prior run already wrote this trimmed output and
+    # the source has not changed since. Use nanosecond mtime so timestamps
+    # compare exactly. Cheap — avoids opening the file at all. Only trimmed
+    # files have a dest on disk; complete (referenced) files never do.
+    if (
+        not force
+        and dest.exists()
+        and dest.stat().st_mtime_ns >= source.stat().st_mtime_ns
+    ):
+        return TrimResult(dest, "skipped", 0, 0)
 
     with open(source, "rb") as f:
         raw_hdr = f.read(HEADER_BYTES)
         if len(raw_hdr) < HEADER_BYTES:
             raise ValueError(f"{source.name}: file too small for header")
 
-        endian = _detect_endian(raw_hdr)
+        endian = _detect_endian(raw_hdr, source)
         fmt = f"{endian}{HEADER_WORDS}H"
         words = struct.unpack(fmt, raw_hdr)
         header = {name: words[idx] for name, idx in _H.items()}
@@ -81,15 +148,15 @@ def trim_p_file(source: Path, output_dir: Path, root: Path | str | None = None) 
 
     remainder = data_bytes % record_size
     if remainder == 0:
-        # No trimming needed — copy as-is
-        shutil.copy2(source, dest)
-        return dest
+        # Complete file — reference the original in place, no copy.
+        return TrimResult(source, "referenced", 0, record_size)
 
-    # Trim the fractional final record
+    # Trim the fractional final record into the trim directory.
     n_complete = data_bytes // record_size
     trimmed_size = first_record_size + n_complete * record_size
 
+    dest.parent.mkdir(parents=True, exist_ok=True)
     with open(source, "rb") as src_f, open(dest, "wb") as dst_f:
         dst_f.write(src_f.read(trimmed_size))
 
-    return dest
+    return TrimResult(dest, "trimmed", remainder, record_size)

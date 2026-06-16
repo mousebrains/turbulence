@@ -247,12 +247,19 @@ class TestRunTrim:
         assert results[0].exists()
 
     def test_trim_preserves_relative_paths_for_duplicate_basenames(self, tmp_path):
-        """Same basename in two instrument folders must not collide."""
+        """Same basename in two instrument folders must not collide.
+
+        Uses incomplete files so they are actually written to the trim tree
+        (complete files are referenced in place and never land in trimmed/).
+        """
         root = tmp_path / "vmp"
         (root / "SN001").mkdir(parents=True)
         (root / "SN002").mkdir(parents=True)
-        _make_p_file(root / "SN001" / "cast.p")
-        _make_p_file(root / "SN002" / "cast.p")
+        for sn in ("SN001", "SN002"):
+            p = root / sn / "cast.p"
+            _make_p_file(p)
+            # Append a partial final record so trimming materializes the file.
+            p.write_bytes(p.read_bytes() + b"\xff" * 10)
 
         config = {
             "files": {
@@ -266,6 +273,26 @@ class TestRunTrim:
             tmp_path / "out" / "trimmed" / "SN001" / "cast.p",
             tmp_path / "out" / "trimmed" / "SN002" / "cast.p",
         ]
+
+    def test_trim_references_complete_files_in_place(self, tmp_path):
+        """Complete files are returned as their originals; trimmed/ is untouched."""
+        p_dir = tmp_path / "vmp"
+        p_dir.mkdir()
+        src = p_dir / "complete.p"
+        _make_p_file(src, n_data_records=3)  # multiple of record_size → complete
+
+        config = {
+            "files": {
+                "p_file_root": str(p_dir),
+                "p_file_pattern": "*.p",
+                "output_root": str(tmp_path / "out"),
+            },
+        }
+        results = run_trim(config)
+        # The original path is returned, not a copy under trimmed/.
+        assert results == [src]
+        # Nothing was materialized in the trim directory.
+        assert not (tmp_path / "out" / "trimmed").exists()
 
     def test_trim_rejects_duplicate_outputs_without_root(self, tmp_path):
         """Explicit files outside p_file_root fall back to basename and must collide loudly."""
@@ -300,13 +327,21 @@ class TestRunMerge:
         assert results == []
 
     def test_merge_uses_current_inputs_and_keeps_singletons(self, tmp_path):
-        """After trim, merge should use trimmed files and keep non-merged files."""
+        """After trim, merge should use trimmed files and keep non-merged files.
+
+        Files are made incomplete so trimming materializes them under
+        out/trimmed/ (complete files would be referenced from their original
+        location instead).
+        """
         root = tmp_path / "vmp"
         (root / "SN001").mkdir(parents=True)
         (root / "SN002").mkdir(parents=True)
         _make_p_file(root / "SN001" / "cast_0001.p", file_number=1)
         _make_p_file(root / "SN001" / "cast_0002.p", file_number=2)
         _make_p_file(root / "SN002" / "solo.p", file_number=10)
+        for rel in ("SN001/cast_0001.p", "SN001/cast_0002.p", "SN002/solo.p"):
+            p = root / rel
+            p.write_bytes(p.read_bytes() + b"\xff" * 10)
 
         config = {
             "files": {

@@ -57,8 +57,16 @@ _H = {
 }
 
 
-def _detect_endian(raw_header: bytes) -> str:
-    """Return '>' (big) or '<' (little) endian prefix for struct."""
+def _detect_endian(raw_header: bytes, source: str | Path | None = None) -> str:
+    """Return '>' (big) or '<' (little) endian prefix for struct.
+
+    *source* is an optional file path/name folded into the warning text so an
+    ambiguous-endian file can be identified during batch processing. Because
+    the filename is part of the message, Python's default warning de-dup keys
+    on it — so each distinct offending file is reported once (not just the
+    very first across the whole run).
+    """
+    where = f" ({source})" if source is not None else ""
     be = struct.unpack_from(">H", raw_header, 63 * 2)[0]
     le = struct.unpack_from("<H", raw_header, 63 * 2)[0]
     if be == 2:
@@ -66,7 +74,7 @@ def _detect_endian(raw_header: bytes) -> str:
     if le == 1:
         return "<"
     if be == 0 or le == 0:
-        warnings.warn("Endian flag is 0; assuming little-endian")
+        warnings.warn(f"Endian flag is 0; assuming little-endian{where}")
         return "<"
     be_hs = struct.unpack_from(">H", raw_header, 17 * 2)[0]
     le_hs = struct.unpack_from("<H", raw_header, 17 * 2)[0]
@@ -74,7 +82,7 @@ def _detect_endian(raw_header: bytes) -> str:
         return ">"
     if le_hs == 128:
         return "<"
-    warnings.warn("Cannot determine endian; defaulting to big-endian")
+    warnings.warn(f"Cannot determine endian; defaulting to big-endian{where}")
     return ">"
 
 
@@ -121,7 +129,7 @@ def extract_pfile_segment(
         if len(raw_hdr) < HEADER_BYTES:
             raise ValueError(f"{source.name}: file too small for header")
 
-        endian = _detect_endian(raw_hdr)
+        endian = _detect_endian(raw_hdr, source)
         header = _parse_header(raw_hdr, endian)
         header_size = int(header["header_size"])
         config_size = int(header["config_size"])
@@ -293,7 +301,7 @@ class PFile:
     def _read(self):
         with open(self.filepath, "rb") as f:
             raw_hdr = f.read(HEADER_BYTES)
-            self.endian = _detect_endian(raw_hdr)
+            self.endian = _detect_endian(raw_hdr, self.filepath)
             self.header = _parse_header(raw_hdr, self.endian)
 
             header_size = self.header["header_size"]

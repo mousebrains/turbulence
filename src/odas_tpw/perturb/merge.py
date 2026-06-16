@@ -22,7 +22,7 @@ def _read_merge_info(path: Path) -> dict:
         if len(raw_hdr) < HEADER_BYTES:
             raise ValueError(f"{path.name}: file too small for header")
 
-        endian = _detect_endian(raw_hdr)
+        endian = _detect_endian(raw_hdr, path)
         fmt = f"{endian}{HEADER_WORDS}H"
         words = struct.unpack(fmt, raw_hdr)
         header = {name: words[idx] for name, idx in _H.items()}
