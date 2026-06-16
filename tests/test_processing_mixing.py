@@ -10,6 +10,7 @@ from odas_tpw.processing.mixing import (
     GAMMA_OSBORN,
     mixing_coefficients,
     pair_nearest,
+    profile_stratification,
     sorted_stratification,
     window_stratification,
 )
@@ -77,6 +78,39 @@ class TestSortedStratification:
         # ...and the stable temperature gradient is cooling-downward.
         assert res_w.dTdz[0] > 0
         assert res_s.dTdz[0] < 0
+
+
+class TestProfileStratification:
+    def test_recovers_linear_gradient(self):
+        _, P, T = _make_profile()
+        target_P, N2, dTdz = profile_stratification(P, T, S=S_CONST, window=2.0)
+        assert len(target_P) > 0
+        finite = np.isfinite(dTdz)
+        assert finite.any()
+        np.testing.assert_allclose(dTdz[finite], DTDZ_TRUE, rtol=2e-2)
+        assert np.all(N2[np.isfinite(N2)] > 0)  # cooling downward = stable
+
+    def test_targets_span_range_at_half_window_spacing(self):
+        _, P, T = _make_profile()
+        target_P, _, _ = profile_stratification(P, T, S=S_CONST, window=2.0)
+        assert target_P[0] >= P.min() - 1e-9
+        assert target_P[-1] <= P.max() + 2.0
+        if len(target_P) > 1:
+            np.testing.assert_allclose(np.diff(target_P), 1.0, atol=1e-6)
+
+    def test_sorting_restores_stability(self):
+        _, P, _ = _make_profile()
+        depth = -gsw.z_from_p(P, 0.0)
+        T = T0 + 0.05 * depth  # temperature increases downward -> unstable
+        _, N2, _ = profile_stratification(P, T, S=S_CONST, window=4.0)
+        assert np.isfinite(N2).any()
+        assert np.all(N2[np.isfinite(N2)] > 0)
+
+    def test_too_few_samples_returns_empty(self):
+        target_P, N2, dTdz = profile_stratification(
+            np.array([1.0, 2.0]), np.array([20.0, 19.0]), S=S_CONST, min_samples=4
+        )
+        assert target_P.size == 0 and N2.size == 0 and dTdz.size == 0
 
 
 class TestWindowStratification:

@@ -68,6 +68,9 @@ GAMMA_OSBORN = 0.2
 # below this (stalled instrument) vertical gradients are unconstrained.
 DEFAULT_MIN_DP = 0.2
 
+# Default background vertical window [dbar] for profile/CTD stratification.
+DEFAULT_STRAT_WINDOW = 2.0
+
 
 class StratificationResult(NamedTuple):
     """Per-window background stratification."""
@@ -227,7 +230,12 @@ def sorted_stratification(
       density (``gsw.sigma0``); the i-th densest parcel is assigned to the
       i-th deepest pressure, giving the stable reference profile.
     - ``N2`` is ``gsw.Nsquared`` between the shallow- and deep-half means of
-      that stable profile (always ≥ 0 to within numerical noise).
+      that stable profile. After sorting it is ≥ 0 for ordinary stratification,
+      but can be slightly negative in strongly density-compensated water:
+      ``gsw.Nsquared`` averages SA and CT separately and re-evaluates the
+      nonlinear equation of state, which (via cabbeling) is not guaranteed
+      monotone under the potential-density (sigma0) sort. Such windows are
+      treated as effectively unstratified by the downstream Osborn scaling.
     - ``dTdz`` is the least-squares slope of the stably-sorted in-situ
       temperature against depth (positive down).
 
@@ -276,32 +284,130 @@ def sorted_stratification(
         SA = gsw.SA_from_SP(Sw_vals, Pw, lon, lat)
         CT = gsw.CT_from_t(SA, Tw, Pw)
         sigma = gsw.sigma0(SA, CT)
-
-        # Thorpe reconstruction: the k-th shallowest position holds the k-th
-        # least-dense parcel. Pair depth-ordered positions with density-ordered
-        # properties to build the statically stable reference profile.
-        pos_order = np.argsort(Pw, kind="stable")
-        den_order = np.argsort(sigma, kind="stable")
-        p_stable = Pw[pos_order]
-        z_stable = zw[pos_order]
-        SA_stable = SA[den_order]
-        CT_stable = CT[den_order]
-        T_stable = Tw[den_order]
-
-        # Background temperature gradient of the stable profile.
-        dTdz[j] = np.polyfit(z_stable, T_stable, 1)[0]
-
-        # N² between shallow- and deep-half means of the stable profile.
-        half = len(p_stable) // 2
-        p_pair = np.array([np.mean(p_stable[:half]), np.mean(p_stable[half:])])
-        if p_pair[1] - p_pair[0] < min_dp / 2:
-            continue
-        sa_pair = np.array([np.mean(SA_stable[:half]), np.mean(SA_stable[half:])])
-        ct_pair = np.array([np.mean(CT_stable[:half]), np.mean(CT_stable[half:])])
-        n2_val, _ = gsw.Nsquared(sa_pair, ct_pair, p_pair, lat)
-        N2[j] = float(n2_val[0])
+        N2[j], dTdz[j] = _stable_window(Pw, zw, Tw, SA, CT, sigma, lat, min_dp)
 
     return StratificationResult(N2=N2, dTdz=dTdz)
+
+
+def _stable_window(Pw, zw, Tw, SAw, CTw, sigmaw, lat, min_dp):
+    """N² and dT/dz for one window's samples, Thorpe-sorted to stability.
+
+    Reconstructs the statically stable reference profile (the k-th shallowest
+    position holds the k-th least-dense parcel), then returns ``(N2, dTdz)``:
+    N² from ``gsw.Nsquared`` between the shallow/deep-half means of the stable
+    profile (NaN if the half-mean pressure separation is below ``min_dp/2``),
+    and dT/dz as the least-squares slope of the stably-sorted temperature vs
+    depth. Inputs must be finite with length ≥ 2.
+    """
+    pos_order = np.argsort(Pw, kind="stable")
+    den_order = np.argsort(sigmaw, kind="stable")
+    p_stable = Pw[pos_order]
+    z_stable = zw[pos_order]
+    SA_stable = SAw[den_order]
+    CT_stable = CTw[den_order]
+    T_stable = Tw[den_order]
+
+    dTdz = float(np.polyfit(z_stable, T_stable, 1)[0])
+
+    half = len(p_stable) // 2
+    p_pair = np.array([np.mean(p_stable[:half]), np.mean(p_stable[half:])])
+    if p_pair[1] - p_pair[0] < min_dp / 2:
+        return np.nan, dTdz
+    sa_pair = np.array([np.mean(SA_stable[:half]), np.mean(SA_stable[half:])])
+    ct_pair = np.array([np.mean(CT_stable[:half]), np.mean(CT_stable[half:])])
+    n2_val, _ = gsw.Nsquared(sa_pair, ct_pair, p_pair, lat)
+    return float(n2_val[0]), dTdz
+
+
+def profile_stratification(
+    P: npt.ArrayLike,
+    T: npt.ArrayLike,
+    S: float | npt.ArrayLike | None = None,
+    lat: float = 0.0,
+    lon: float = 0.0,
+    window: float = DEFAULT_STRAT_WINDOW,
+    min_samples: int = 4,
+    min_dp: float = DEFAULT_MIN_DP,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Sorted N²/dT/dz vs pressure for one cast, on a coarse depth grid.
+
+    The background (profile- and CTD-product) analogue of
+    :func:`sorted_stratification`: instead of dissipation-window *times*, it
+    evaluates at target pressures spaced by ``window/2`` over the cast's
+    pressure range. Within each ``±window/2`` pressure window the samples are
+    Thorpe-sorted and differenced by the same :func:`_stable_window` method, so
+    the two paths report consistent stratification.
+
+    Evaluating on the coarse target grid (rather than every slow sample) keeps
+    the cost to ~``range/window`` windows per cast; callers interpolate onto
+    their own grid (e.g. the slow grid for the profile product, depth bins for
+    CTD).
+
+    Parameters
+    ----------
+    P, T : array_like, shape (n,)
+        Pressure [dbar] and in-situ temperature [degC] for one cast.
+    S : float, array_like, or None
+        Practical salinity (scalar, per-sample, or None → 35 PSU).
+    lat, lon : float
+        Position for TEOS-10 conversions.
+    window : float
+        Background vertical window [dbar].
+    min_samples, min_dp : int, float
+        A window with fewer samples or a smaller pressure span yields NaN.
+
+    Returns
+    -------
+    (target_P, N2, dTdz) : tuple of ndarray
+        Target pressures [dbar] and the per-target N² [s^-2] and dT/dz
+        [K/m vs depth]. ``target_P`` is empty when the cast has too few
+        valid samples.
+    """
+    P = np.asarray(P, dtype=np.float64)
+    T = np.asarray(T, dtype=np.float64)
+
+    if S is None or np.ndim(S) == 0:
+        S_const = 35.0 if S is None else float(S)  # type: ignore[arg-type]
+        S_arr = None
+    else:
+        S_arr = np.asarray(S, dtype=np.float64)
+
+    good = np.isfinite(P) & np.isfinite(T)
+    if S_arr is not None:
+        good &= np.isfinite(S_arr)
+    P, T = P[good], T[good]
+    S_arr = S_arr[good] if S_arr is not None else None
+    empty = np.empty(0, dtype=np.float64)
+    if len(P) < min_samples or np.ptp(P) < min_dp:
+        return empty, empty, empty
+
+    S_vals = S_arr if S_arr is not None else np.full(len(P), S_const)
+    SA = gsw.SA_from_SP(S_vals, P, lon, lat)
+    CT = gsw.CT_from_t(SA, T, P)
+    sigma = gsw.sigma0(SA, CT)
+    depth = -gsw.z_from_p(P, lat)
+
+    half_w = window / 2.0
+    step = max(half_w, min_dp)
+    p_lo, p_hi = float(P.min()), float(P.max())
+    # p_lo < p_hi (ptp >= min_dp guard above) and step > 0, so arange always
+    # yields >= 1 target.
+    target_P = np.arange(p_lo, p_hi + step, step)
+
+    N2 = np.full(len(target_P), np.nan)
+    dTdz = np.full(len(target_P), np.nan)
+    for k, pt in enumerate(target_P):
+        sel = np.abs(P - pt) <= half_w
+        if np.sum(sel) < min_samples:
+            continue
+        Pw = P[sel]
+        if np.ptp(Pw) < min_dp:
+            continue
+        N2[k], dTdz[k] = _stable_window(
+            Pw, depth[sel], T[sel], SA[sel], CT[sel], sigma[sel], lat, min_dp
+        )
+
+    return target_P, N2, dTdz
 
 
 def mixing_coefficients(
