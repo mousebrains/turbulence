@@ -552,6 +552,19 @@ def bin_by_time(
                         continue
                     if arr.dtype.kind not in ("f", "i", "u"):
                         continue
+                    # Match the depth-binning dispatch (_bin_snapshot): QC flag
+                    # bitfields OR-pool, LnSigma combines in quadrature, the rest
+                    # aggregate normally. Plain nanmean here would average flags
+                    # into fractional garbage and underestimate the sigmas.
+                    if arr.dtype.kind == "u":
+                        binned_data[str(vname)] = _bin_or(arr, t, bin_edges)
+                        continue
+                    if str(vname).endswith("LnSigma"):
+                        bvar, _ = _bin_array(
+                            arr.astype(np.float64) ** 2, t, bin_edges, agg
+                        )
+                        binned_data[str(vname)] = np.sqrt(bvar)
+                        continue
                     b, _ = _bin_array(arr, t, bin_edges, agg)
                     binned_data[str(vname)] = b
 
