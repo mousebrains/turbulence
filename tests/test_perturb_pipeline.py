@@ -94,6 +94,39 @@ class TestProfilePracticalSalinity:
         assert _profile_practical_salinity(path, "JAC_T", "JAC_C") is None
 
 
+class TestComputeSlowStratification:
+    """Per-cast sorted N2/dTdz on the slow grid, fed to profile + CTD products."""
+
+    def test_aligns_with_slow_grid_and_stable(self):
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P  # stable
+        C = np.full(n, 45.0)
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T, "JAC_C": C}
+
+        N2, dTdz = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
+        assert N2.shape == (n,) and dTdz.shape == (n,)
+        assert np.isfinite(N2).any() and np.isfinite(dTdz).any()
+        assert np.all(N2[np.isfinite(N2)] > 0)  # stable column
+        # Outside the (single, full-span) cast nothing is masked here, but a
+        # short cast yields all-NaN for that cast rather than raising.
+        N2b, _ = _compute_slow_stratification(
+            pf, [(0, 2)], "JAC_T", "JAC_C", 2.0
+        )
+        assert np.all(np.isnan(N2b[0:3]))
+
+    def test_returns_none_without_pressure(self):
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        pf = MagicMock()
+        pf.channels = {"JAC_T": np.zeros(10)}
+        N2, dTdz = _compute_slow_stratification(pf, [(0, 9)], "JAC_T", "JAC_C", 2.0)
+        assert N2 is None and dTdz is None
+
+
 class TestAttachWindowStratification:
     """N2/dTdz attached to a window-grid (diss) dataset from a profile's CTD."""
 

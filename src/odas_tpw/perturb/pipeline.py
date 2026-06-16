@@ -436,6 +436,48 @@ def _time_epoch_seconds(da) -> Any:
     return vals.astype(np.float64)
 
 
+def _compute_slow_stratification(pf, profiles, T_name, C_name, window):
+    """Per-cast sorted N2/dT/dz on the full slow grid (NaN outside casts).
+
+    Computes background stratification once per detected cast with
+    :func:`profile_stratification` on a *window*-dbar scale, then interpolates
+    each cast's coarse result onto the slow pressure grid. Returns
+    ``(N2_full, dTdz_full)`` aligned with the slow channels, or ``(None, None)``
+    when pressure/temperature are unavailable. Practical salinity comes from
+    conductivity via TEOS-10 when present. Position defaults to 0/0 (a <0.3%
+    gravity and negligible salinity-anomaly effect on N2).
+    """
+    import gsw
+    import numpy as np
+
+    from odas_tpw.processing.mixing import profile_stratification
+
+    P = pf.channels.get("P")
+    T = pf.channels.get(T_name)
+    if P is None or T is None:
+        return None, None
+    P = np.asarray(P, dtype=np.float64)
+    T = np.asarray(T, dtype=np.float64)
+    C = pf.channels.get(C_name)
+    C = np.asarray(C, dtype=np.float64) if C is not None else None
+
+    n = len(P)
+    N2_full = np.full(n, np.nan)
+    dTdz_full = np.full(n, np.nan)
+    for s, e in profiles:
+        sl = slice(s, e + 1)
+        P_c, T_c = P[sl], T[sl]
+        S_c = gsw.SP_from_C(C[sl], T_c, P_c) if C is not None else None
+        target_P, N2, dTdz = profile_stratification(P_c, T_c, S=S_c, window=window)
+        good = np.isfinite(N2)
+        if good.sum() >= 2:
+            N2_full[sl] = np.interp(P_c, target_P[good], N2[good])
+        good_d = np.isfinite(dTdz)
+        if good_d.sum() >= 2:
+            dTdz_full[sl] = np.interp(P_c, target_P[good_d], dTdz[good_d])
+    return N2_full, dTdz_full
+
+
 def _window_stratification_for_profile(
     prof_path, win_t, half_w, T_name: str, C_name: str, file_label: str
 ):
@@ -910,6 +952,32 @@ def process_file(
                     pf.channels[C_name] = C_aligned
                 except Exception as exc:
                     logger.warning("CT align failed for %s: %s", p_path.name, exc)
+
+    # ---- Background stratification (N2, dT/dz) on the slow grid ----
+    # Injected as slow pf channels once, before the CTD and profile forks, so
+    # extract_profiles writes them into every per-profile NetCDF and
+    # ctd_bin_file bins them into the CTD product — all independent of eps/chi.
+    strat_cfg = merge_config("stratification", config.get("stratification"))
+    if profiles and bool(strat_cfg.get("enable", True)):
+        try:
+            N2_full, dTdz_full = _compute_slow_stratification(
+                pf,
+                profiles,
+                ct_cfg.get("T_name", "JAC_T"),
+                ct_cfg.get("C_name", "JAC_C"),
+                float(strat_cfg.get("window", 2.0)),
+            )
+            if N2_full is not None:
+                pf.channels["N2"] = N2_full
+                pf.channel_info["N2"] = {
+                    "units": "s-2", "type": "derived", "name": "N2",
+                }
+                pf.channels["dTdz"] = dTdz_full
+                pf.channel_info["dTdz"] = {
+                    "units": "K m-1", "type": "derived", "name": "dTdz",
+                }
+        except Exception as exc:
+            logger.warning("stratification failed for %s: %s", p_path.name, exc)
 
     # ---- CTD fork (full file, both up and down) ----
     ctd_cfg = config.get("ctd", {})

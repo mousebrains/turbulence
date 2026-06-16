@@ -168,6 +168,10 @@ def ctd_bin_file(
         channels_to_bin.add(C_name)
     if "P" in pf.channels:
         channels_to_bin.add("P")
+    # Background stratification injected by the pipeline (slow channels).
+    for name in ("N2", "dTdz"):
+        if name in pf.channels:
+            channels_to_bin.add(name)
 
     if variables:
         for v in variables:
