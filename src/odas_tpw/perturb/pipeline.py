@@ -1324,23 +1324,52 @@ def _setup_output_dirs(config: dict) -> dict[str, Path]:
     return dirs
 
 
+def _format_elapsed(seconds: float) -> str:
+    """Human-readable elapsed time: ``12.3s`` under a minute, else ``1m 23s``."""
+    if seconds >= 60:
+        return f"{int(seconds // 60)}m {seconds % 60:02.0f}s"
+    return f"{seconds:.1f}s"
+
+
 def _done_message(name: str, result: Any) -> str:
-    """Per-file completion line reporting how many products were written.
+    """Per-file completion line reporting products written and elapsed time.
 
     *result* is the dict returned by :func:`process_file` (``profiles`` /
-    ``diss`` / ``chi`` lists). Reports the profile count headline plus the
-    dissipation and chi counts; ``0`` chi simply means chi was disabled.
+    ``diss`` / ``chi`` lists, plus ``elapsed_s`` when run through
+    :func:`_process_file_timed`). Reports the profile count headline plus the
+    dissipation and chi counts (``0`` chi simply means chi was disabled) and
+    the per-file wall-clock when available.
     """
     if isinstance(result, dict):
         n_prof = len(result.get("profiles", []))
         n_diss = len(result.get("diss", []))
         n_chi = len(result.get("chi", []))
+        elapsed = result.get("elapsed_s")
     else:
         n_prof = n_diss = n_chi = 0
+        elapsed = None
+    elapsed_str = f" in {_format_elapsed(elapsed)}" if elapsed is not None else ""
     return (
         f"Done processing {name}: {n_prof} profiles "
-        f"({n_diss} dissipation, {n_chi} chi)"
+        f"({n_diss} dissipation, {n_chi} chi){elapsed_str}"
     )
+
+
+def _process_file_timed(*args, **kwargs) -> dict:
+    """Run :func:`process_file`, recording its wall-clock as ``elapsed_s``.
+
+    Wrapping rather than instrumenting process_file's several return points
+    keeps the timing in one place. The elapsed seconds are measured inside the
+    worker process, so they reflect true per-file processing time, not the
+    time a file spent queued waiting for a free worker.
+    """
+    import time
+
+    t0 = time.monotonic()
+    result = process_file(*args, **kwargs)
+    if isinstance(result, dict):
+        result["elapsed_s"] = time.monotonic() - t0
+    return result
 
 
 def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
@@ -1515,7 +1544,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     if jobs == 1:
         for p_path in p_files:
             logger.info("Processing %s...", p_path.name)
-            result = process_file(
+            result = _process_file_timed(
                 p_path,
                 config,
                 gps,
@@ -1540,7 +1569,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         ) as executor:
             futures = {
                 executor.submit(
-                    process_file,
+                    _process_file_timed,
                     p,
                     config,
                     gps,
