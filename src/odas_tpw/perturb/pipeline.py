@@ -436,6 +436,104 @@ def _time_epoch_seconds(da) -> Any:
     return vals.astype(np.float64)
 
 
+def _window_stratification_for_profile(
+    prof_path, win_t, half_w, T_name: str, C_name: str, file_label: str
+):
+    """Sorted N2/dTdz at window times *win_t* from a profile's CTD channels.
+
+    Returns ``(N2, dTdz, sal_note)`` evaluated on the *win_t* grid, or ``None``
+    when the profile cannot be read or lacks t_slow/P/T. Practical salinity
+    comes from the profile's own conductivity via TEOS-10 when present, else
+    35 PSU is assumed (recorded in *sal_note*). Shared by the diss and chi
+    products so they report identical, window-scale stratification.
+    """
+    import gsw
+    import numpy as np
+    import xarray as xr
+
+    from odas_tpw.processing.mixing import sorted_stratification
+
+    try:
+        prof = xr.open_dataset(prof_path, decode_times=False)
+    except Exception as exc:
+        logger.info(
+            "stratification skipped for %s: cannot read profile (%s)",
+            file_label, exc,
+        )
+        return None
+    with prof:
+        if any(v not in prof for v in ("t_slow", "P", T_name)):
+            logger.info(
+                "stratification skipped for %s: profile lacks t_slow/P/%s",
+                file_label, T_name,
+            )
+            return None
+        t_slow = _time_epoch_seconds(prof["t_slow"])
+        P = prof["P"].values.astype(np.float64)
+        T = prof[T_name].values.astype(np.float64)
+        lat = float(prof["lat"].values) if "lat" in prof else np.nan
+        lon = float(prof["lon"].values) if "lon" in prof else np.nan
+        lat = 0.0 if not np.isfinite(lat) else lat
+        lon = 0.0 if not np.isfinite(lon) else lon
+        if C_name in prof:
+            C = prof[C_name].values.astype(np.float64)
+            S = gsw.SP_from_C(C, T, P)
+            sal_note = f"practical salinity from {C_name}/{T_name}/P (TEOS-10)"
+        else:
+            S = None
+            sal_note = (
+                "salinity assumed 35 PSU (no conductivity channel); N2 "
+                "reflects temperature stratification only"
+            )
+    strat = sorted_stratification(win_t, half_w, t_slow, P, T, S=S, lat=lat, lon=lon)
+    return strat.N2, strat.dTdz, sal_note
+
+
+def _attach_window_stratification(
+    ds, prof_path, half_w, T_name, C_name, file_label, scale_name
+):
+    """Attach sorted N2/dTdz to a window-grid dataset (e.g. diss). No-op on failure.
+
+    *half_w* is the window half-width [s]; *scale_name* names the window in the
+    variable comments (e.g. "dissipation").
+    """
+    import xarray as xr
+
+    if "t" not in ds:
+        return
+    out = _window_stratification_for_profile(
+        prof_path, _time_epoch_seconds(ds["t"]), half_w, T_name, C_name, file_label
+    )
+    if out is None:
+        return
+    N2, dTdz, sal_note = out
+    ds["N2"] = xr.DataArray(
+        N2,
+        dims=["time"],
+        attrs={
+            "units": "s-2",
+            "long_name": "buoyancy frequency squared (window scale)",
+            "comment": (
+                "TEOS-10 (gsw.Nsquared) between the shallow- and deep-half means "
+                f"of each {scale_name} window after Thorpe-sorting to a stable "
+                f"profile (overturns removed); {sal_note}."
+            ),
+        },
+    )
+    ds["dTdz"] = xr.DataArray(
+        dTdz,
+        dims=["time"],
+        attrs={
+            "units": "K m-1",
+            "long_name": "background temperature gradient (positive down)",
+            "comment": (
+                "Least-squares slope of the Thorpe-sorted in-situ temperature vs "
+                f"depth over each {scale_name} window."
+            ),
+        },
+    )
+
+
 def _add_mixing_quantities(
     chi_ds,
     diss_ds,
@@ -461,15 +559,10 @@ def _add_mixing_quantities(
     when the profile lacks the t_slow/P/T channels or chi window attributes
     needed to compute stratification at all.
     """
-    import gsw
     import numpy as np
     import xarray as xr
 
-    from odas_tpw.processing.mixing import (
-        mixing_coefficients,
-        pair_nearest,
-        sorted_stratification,
-    )
+    from odas_tpw.processing.mixing import mixing_coefficients, pair_nearest
 
     # N2/dTdz are stratification quantities — they need only the CTD profile,
     # not epsilon or chi — so they are always computed and attached. Only the
@@ -481,55 +574,24 @@ def _add_mixing_quantities(
     )
 
     try:
-        prof = xr.open_dataset(prof_path, decode_times=False)
-    except Exception as exc:
-        # A stratification failure must never cost us the chi estimate.
-        logger.info(
-            "stratification skipped for %s: cannot read profile (%s)",
-            file_label, exc,
-        )
-        return chi_ds
-    with prof:
-        if any(v not in prof for v in ("t_slow", "P", T_name)):
-            logger.info(
-                "mixing quantities skipped for %s: profile lacks t_slow/P/%s",
-                file_label,
-                T_name,
-            )
-            return chi_ds
-        t_slow = _time_epoch_seconds(prof["t_slow"])
-        P = prof["P"].values.astype(np.float64)
-        T = prof[T_name].values.astype(np.float64)
-        lat = float(prof["lat"].values) if "lat" in prof else np.nan
-        lon = float(prof["lon"].values) if "lon" in prof else np.nan
-        if not np.isfinite(lat):
-            lat = 0.0
-        if not np.isfinite(lon):
-            lon = 0.0
-
-        if C_name in prof:
-            C = prof[C_name].values.astype(np.float64)
-            S = gsw.SP_from_C(C, T, P)
-            sal_note = f"practical salinity from {C_name}/{T_name}/P (TEOS-10)"
-        else:
-            S = None
-            sal_note = (
-                "salinity assumed 35 PSU (no conductivity channel); N2 "
-                "reflects temperature stratification only"
-            )
-
-    chi_t = _time_epoch_seconds(chi_ds["t"])
-    try:
+        chi_t = _time_epoch_seconds(chi_ds["t"])
         half_w = 0.5 * float(chi_ds.attrs["diss_length"]) / float(chi_ds.attrs["fs_fast"])
     except (KeyError, TypeError, ValueError):
-        logger.info("mixing quantities skipped for %s: no window attrs", file_label)
+        logger.info(
+            "mixing quantities skipped for %s: no chi time/window attrs", file_label
+        )
         return chi_ds
 
-    strat = sorted_stratification(chi_t, half_w, t_slow, P, T, S=S, lat=lat, lon=lon)
+    strat_out = _window_stratification_for_profile(
+        prof_path, chi_t, half_w, T_name, C_name, file_label
+    )
+    if strat_out is None:
+        return chi_ds
+    N2, dTdz, sal_note = strat_out
 
     var_specs = {
         "N2": (
-            strat.N2,
+            N2,
             {
                 "units": "s-2",
                 "long_name": "buoyancy frequency squared (window scale)",
@@ -541,7 +603,7 @@ def _add_mixing_quantities(
             },
         ),
         "dTdz": (
-            strat.dTdz,
+            dTdz,
             {
                 "units": "K m-1",
                 "long_name": "background temperature gradient (positive down)",
@@ -559,7 +621,7 @@ def _add_mixing_quantities(
             _time_epoch_seconds(diss_ds["t"]), diss_ds["epsilonMean"].values, chi_t
         )
         mix = mixing_coefficients(
-            eps_on_chi, chi_ds["chiMean"].values, strat.N2, strat.dTdz
+            eps_on_chi, chi_ds["chiMean"].values, N2, dTdz
         )
         var_specs.update(
             {
@@ -613,7 +675,7 @@ def _add_mixing_quantities(
             "mixing quantities for %s: %d valid Gamma estimates", file_label, n_gamma
         )
     else:
-        n_n2 = int(np.sum(np.isfinite(strat.N2)))
+        n_n2 = int(np.sum(np.isfinite(N2)))
         logger.info(
             "stratification for %s: %d valid N2 windows (no epsilon/chi "
             "coefficients)", file_label, n_n2,
@@ -954,6 +1016,10 @@ def process_file(
     qc_drop_action = qc_cfg.get("drop_action", "nan")
     qc_eps_drop_from = list(qc_cfg.get("epsilon_drop_from") or [])
     qc_chi_drop_from = list(qc_cfg.get("chi_drop_from") or [])
+    strat_cfg = merge_config("stratification", config.get("stratification"))
+    strat_enabled = bool(strat_cfg.get("enable", True))
+    ct_T_name = ct_cfg.get("T_name", "JAC_T")
+    ct_C_name = ct_cfg.get("C_name", "JAC_C")
     diss_length_samples = float(eps_cfg.get("diss_length") or 4 * eps_cfg.get("fft_length", 256))
     diss_length_seconds = diss_length_samples / float(pf.fs_fast)
     chi_diss_length_samples = float(
@@ -1010,6 +1076,11 @@ def process_file(
                                 drop_action=qc_drop_action,
                             )
                         _copy_profile_scalars(prof_path, ds, prof_scalars_cache)
+                        if strat_enabled:
+                            _attach_window_stratification(
+                                ds, prof_path, diss_length_seconds / 2,
+                                ct_T_name, ct_C_name, p_path.name, "dissipation",
+                            )
                         out_name = Path(prof_path).name
                         out_path = output_dirs["diss"] / out_name
                         ds.to_netcdf(out_path)

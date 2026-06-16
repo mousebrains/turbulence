@@ -94,6 +94,61 @@ class TestProfilePracticalSalinity:
         assert _profile_practical_salinity(path, "JAC_T", "JAC_C") is None
 
 
+class TestAttachWindowStratification:
+    """N2/dTdz attached to a window-grid (diss) dataset from a profile's CTD."""
+
+    def _make_profile_nc(self, path):
+        import xarray as xr
+
+        n = 200
+        t_slow = np.linspace(0.0, 100.0, n)
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P  # stable: cooling downward
+        C = np.full(n, 45.0)
+        xr.Dataset(
+            {
+                "t_slow": ("time_slow", t_slow),
+                "P": ("time_slow", P),
+                "JAC_T": ("time_slow", T),
+                "JAC_C": ("time_slow", C),
+                "lat": ((), 15.0),
+                "lon": ((), 145.0),
+            }
+        ).to_netcdf(path)
+
+    def test_attaches_n2_and_dtdz(self, tmp_path):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _attach_window_stratification
+
+        prof = tmp_path / "prof.nc"
+        self._make_profile_nc(prof)
+        ds = xr.Dataset(
+            {"epsilonMean": ("time", [1e-9, 1e-9, 1e-9])},
+            coords={"t": ("time", np.array([25.0, 50.0, 75.0]))},
+        )
+        _attach_window_stratification(
+            ds, prof, 5.0, "JAC_T", "JAC_C", "prof.nc", "dissipation"
+        )
+        assert "N2" in ds and "dTdz" in ds
+        assert ds["N2"].dims == ("time",)
+        assert np.isfinite(ds["N2"].values).all()
+        assert np.all(ds["N2"].values > 0)  # stable column
+
+    def test_no_op_when_profile_unreadable(self, tmp_path):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _attach_window_stratification
+
+        bad = tmp_path / "empty.nc"
+        bad.touch()
+        ds = xr.Dataset(coords={"t": ("time", np.array([1.0]))})
+        _attach_window_stratification(
+            ds, bad, 5.0, "JAC_T", "JAC_C", "empty.nc", "dissipation"
+        )
+        assert "N2" not in ds  # unreadable profile -> silently skipped
+
+
 class TestSetupOutputDirs:
     def test_creates_profiles_and_diss(self, tmp_path):
         config = {
