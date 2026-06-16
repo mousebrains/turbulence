@@ -606,7 +606,8 @@ def compute_diss_file(
     output_dir : str or Path
         Output directory for epsilon .nc files.
     **diss_kwargs
-        Keyword arguments passed to get_diss.
+        Keyword arguments forwarded to ``_compute_epsilon`` (the epsilon
+        parameter set; ``get_diss`` is the deprecated public wrapper).
 
     Returns
     -------

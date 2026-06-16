@@ -197,7 +197,7 @@ For each iteration (up to `max_passes = 10`):
 4. **Mark affected regions:**
    ```
    For each spike at index s:
-     bad_region = [s - N/2, s + 2*N]
+     bad_region = [s - N/2, s + N]
    ```
    where `N = round(0.04 * f_s)` (approximately 40 ms at 512 Hz, default ~20 samples). The asymmetric window (shorter before, longer after) accounts for the typical spike shape.
 
