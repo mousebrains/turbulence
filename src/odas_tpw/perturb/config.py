@@ -31,7 +31,7 @@ DEFAULTS: dict[str, dict] = {
         "lat": None,
         "lon": None,
         "file": None,
-        "time_col": "t",
+        "time_col": None,        # null = source default ("t" CSV, "time" NetCDF)
         "lat_col": "lat",
         "lon_col": "lon",
         "max_time_diff": 60,
@@ -327,7 +327,7 @@ gps:
   lat: null
   lon: null
   file: null
-  time_col: "t"
+  time_col: null          # null = source default ("t" for csv, "time" for netcdf)
   lat_col: "lat"
   lon_col: "lon"
   max_time_diff: 60       # warn when extrapolating > this [s] outside GPS coverage
@@ -479,6 +479,9 @@ qc:
                           # should be a uint8 CF bitfield (or 0/1).
                           # e.g. ["q_drop_epsilon"]
   chi_drop_from: []       # same, for chi segments
+  rules: {}               # internal range-check rules; each entry synthesizes a
+                          # uint8 channel referenceable by *_drop_from. See
+                          # odas_tpw.perturb.qc_rules for the per-entry schema.
 
 binning:
   method: "depth"         # depth | time
