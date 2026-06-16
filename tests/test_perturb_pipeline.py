@@ -106,6 +106,7 @@ class TestComputeSlowStratification:
         C = np.full(n, 45.0)
         pf = MagicMock()
         pf.channels = {"P": P, "JAC_T": T, "JAC_C": C}
+        pf.is_fast = lambda name: False  # JAC_C is a slow channel
 
         N2, dTdz = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
         assert N2.shape == (n,) and dTdz.shape == (n,)
@@ -123,6 +124,7 @@ class TestComputeSlowStratification:
 
         pf = MagicMock()
         pf.channels = {"JAC_T": np.zeros(10)}
+        pf.is_fast = lambda name: False
         N2, dTdz = _compute_slow_stratification(pf, [(0, 9)], "JAC_T", "JAC_C", 2.0)
         assert N2 is None and dTdz is None
 

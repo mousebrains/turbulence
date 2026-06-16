@@ -459,6 +459,10 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window):
     P = np.asarray(P, dtype=np.float64)
     T = np.asarray(T, dtype=np.float64)
     C = pf.channels.get(C_name)
+    # Only usable if conductivity is a slow channel aligned with P/T; a fast C
+    # would be silently misaligned by the slow-index slice below.
+    if C is not None and getattr(pf, "is_fast", lambda _n: False)(C_name):
+        C = None
     C = np.asarray(C, dtype=np.float64) if C is not None else None
 
     n = len(P)
@@ -968,13 +972,32 @@ def process_file(
                 float(strat_cfg.get("window", 2.0)),
             )
             if N2_full is not None:
+                win = float(strat_cfg.get("window", 2.0))
                 pf.channels["N2"] = N2_full
                 pf.channel_info["N2"] = {
                     "units": "s-2", "type": "derived", "name": "N2",
+                    "long_name": (
+                        f"buoyancy frequency squared (background, {win:g}-dbar "
+                        "Thorpe-sorted)"
+                    ),
+                    "comment": (
+                        "TEOS-10 N2 from the profile's own C/T/P over a "
+                        f"{win:g}-dbar pressure window, Thorpe-sorted to a stable "
+                        "profile. Background (profile/CTD) scale — distinct from "
+                        "the dissipation/chi-window N2 in the diss/chi products."
+                    ),
                 }
                 pf.channels["dTdz"] = dTdz_full
                 pf.channel_info["dTdz"] = {
                     "units": "K m-1", "type": "derived", "name": "dTdz",
+                    "long_name": (
+                        "background temperature gradient (positive down, "
+                        f"{win:g}-dbar Thorpe-sorted)"
+                    ),
+                    "comment": (
+                        "Least-squares slope of the Thorpe-sorted in-situ "
+                        f"temperature vs depth over a {win:g}-dbar pressure window."
+                    ),
                 }
         except Exception as exc:
             logger.warning("stratification failed for %s: %s", p_path.name, exc)

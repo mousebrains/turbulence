@@ -80,14 +80,17 @@ def _time_bin(
             binned = np.full(n_bins, np.nan)
             for i in range(n_bins):
                 sl = sorted_arr[splits[i] : splits[i + 1]]
-                if sl.size > 0:
+                # Guard on a finite value (not just size): channels like N2/dTdz
+                # are NaN outside casts, so an all-NaN slice would make nanmedian
+                # warn "All-NaN slice encountered" for every empty-of-data bin.
+                if np.any(np.isfinite(sl)):
                     binned[i] = np.nanmedian(sl)
             result[name] = binned
             if diagnostics:
                 std_arr = np.full(n_bins, np.nan)
                 for i in range(n_bins):
                     sl = sorted_arr[splits[i] : splits[i + 1]]
-                    if sl.size > 1:
+                    if np.sum(np.isfinite(sl)) > 1:
                         std_arr[i] = np.nanstd(sl)
                 result[f"{name}_std"] = std_arr
         return result
@@ -259,6 +262,33 @@ def ctd_bin_file(
     ds["time"].attrs["long_name"] = "time bin centre"
     ds["time"].attrs["axis"] = "T"
     ds["time"].attrs["units_metadata"] = "leap_seconds: utc"
+    # Self-describing metadata for the injected background stratification, so
+    # the CTD product's N2/dTdz is not confused with the dissipation/chi-window
+    # N2/dTdz of the diss/chi products (different scale and method).
+    strat_attrs = {
+        "N2": {
+            "units": "s-2",
+            "long_name": "buoyancy frequency squared (background, Thorpe-sorted)",
+            "comment": (
+                "TEOS-10 N2 from the profile's own C/T/P over a background "
+                "pressure window, Thorpe-sorted to a stable profile, then "
+                "time-binned. Background (profile/CTD) scale — distinct from the "
+                "dissipation/chi-window N2 in the diss/chi products."
+            ),
+        },
+        "dTdz": {
+            "units": "K m-1",
+            "long_name": "background temperature gradient (positive down)",
+            "comment": (
+                "Least-squares slope of the Thorpe-sorted in-situ temperature "
+                "vs depth over a background pressure window, then time-binned."
+            ),
+        },
+    }
+    for name, attrs in strat_attrs.items():
+        if name in ds:
+            ds[name].attrs.update(attrs)
+
     ds.attrs["bin_width"] = bin_width
     ds.attrs["method"] = method
     ds.attrs["source_file"] = pf.filepath.name
