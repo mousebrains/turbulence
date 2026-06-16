@@ -259,7 +259,11 @@ class PFile:
         Path to the source .p file.
     channels : dict[str, ndarray]
         Channel data arrays keyed by name (e.g. 'P', 'T1', 'sh1', 'Ax').
-        Values are in physical units after conversion.
+        Values are in physical units after conversion.  Note:
+        pre-emphasized channels keep their raw names after deconvolution —
+        'T1_dT1' holds the *deconvolved* fast temperature in deg C (not
+        the pre-emphasized signal), and 'P_dP' holds the deconvolved
+        slow pressure.  (ODAS renames these to 'T1_fast'/'P_slow'.)
     channel_info : dict[str, dict]
         Per-channel metadata: 'type', 'units', and config parameters.
     config : dict
@@ -319,7 +323,16 @@ class PFile:
                 h["minute"],
                 h["second"],
                 h["millisecond"] * 1000,
-                tzinfo=timezone(timedelta(minutes=h["timezone_min"])),
+                # Header words are unpacked unsigned; a negative timezone
+                # (west of UTC) is stored as two's complement and must be
+                # reinterpreted as int16 or timezone() raises ValueError.
+                tzinfo=timezone(
+                    timedelta(
+                        minutes=h["timezone_min"] - 2**16
+                        if h["timezone_min"] >= 2**15
+                        else h["timezone_min"]
+                    )
+                ),
             )
 
             first_record_size = header_size + config_size
@@ -328,6 +341,14 @@ class PFile:
             n_records = (file_size - first_record_size) // record_size
             if n_records < 1:
                 raise ValueError(f"{self.filepath.name} contains no data records")
+            if (file_size - first_record_size) % record_size != 0:
+                # read_odas.m:184-187 warns in this case; a partial record
+                # usually means a truncated download or interrupted DAQ.
+                warnings.warn(
+                    f"{self.filepath.name}: file size is not an integer number "
+                    f"of records; trailing partial record ignored",
+                    stacklevel=2,
+                )
 
             data_words = (record_size - header_size) // 2
             dtype = ">i2" if self.endian == ">" else "<i2"
@@ -376,6 +397,29 @@ class PFile:
                     if len(col_positions[1]) == 0:
                         continue
                     all_rows_same = np.all(matrix[:, col_positions[1][0]] == ch_id)
+                    n_occ = len(col_positions[0])
+
+                    # Only two layouts are supported: a full matrix column
+                    # (fast channel) or a single occurrence (slow channel).
+                    # Intermediate rates (read_odas.m:328-333 gathers every
+                    # occurrence in scan order) would be silently decimated
+                    # here — warn so the data loss is visible.  Ground
+                    # reference channels are exempt: sampling 'gnd' several
+                    # times per scan is normal instrument design and its
+                    # data content is a zero reference, not a measurement.
+                    expected_occ = self.n_rows if all_rows_same else 1
+                    is_gnd = (
+                        info.get("type", "").strip().lower() == "gnd"
+                        or ch_name.strip().lower() == "gnd"
+                    )
+                    if n_occ != expected_occ and not is_gnd:
+                        warnings.warn(
+                            f"{self.filepath.name}: channel '{ch_name}' (id {ch_id}) "
+                            f"appears {n_occ}x per scan matrix; only "
+                            f"{'one column' if all_rows_same else 'the first occurrence'} "
+                            f"is used, so its sample rate and data are incomplete",
+                            stacklevel=2,
+                        )
 
                     # Keep raw int16 — converters auto-promote via numpy
                     # broadcasting when they multiply by float scale factors.

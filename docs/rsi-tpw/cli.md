@@ -83,9 +83,11 @@ rsi-tpw prof VMP/*.p -o profiles/
 | Flag | Description |
 |------|-------------|
 | `-o`, `--output DIR` | Output directory (required) |
+| `-j`, `--jobs N` | Parallel workers (0 = all cores, default: 1) |
 | `--P-min FLOAT` | Minimum pressure [dbar] (default: 0.5) |
 | `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: 0.3) |
 | `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
+| `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
 | `--min-duration FLOAT` | Minimum profile duration [s] (default: 7) |
 
 ## `rsi-tpw eps`
@@ -108,9 +110,17 @@ rsi-tpw eps VMP/*.p -o epsilon/ --salinity 34.5
 | `--overlap N` | Window overlap [samples] (default: diss-length//2) |
 | `--speed FLOAT` | Fixed profiling speed [m/s] (default: from dP/dt) |
 | `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
+| `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
 | `--no-goodman` | Disable Goodman coherent noise removal |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
 | `--salinity FLOAT` | Salinity [PSU] for viscosity (default: 35, fixed S) |
+
+The output NetCDF contains two distinct spectral-fit quality metrics:
+
+- `fom` — ratio of observed to Nasmyth-model variance in the fit range;
+  values near 1.0 indicate a good fit. This is **not** the ATOMIX FM.
+- `FM` — the Lueck (2022) MAD-based figure of merit. Good fits approach 0;
+  ATOMIX recommends rejecting estimates with FM > ~1.15.
 
 ## `rsi-tpw chi`
 
@@ -120,12 +130,22 @@ Compute thermal variance dissipation rate (chi) from FP07 thermistor spectra.
 # Method 2: spectral fitting (no epsilon needed)
 rsi-tpw chi VMP/*.p -o chi/
 
-# Method 1: from known epsilon
+# Method 1: from known epsilon (eps_NN/ subdirectories are searched automatically)
 rsi-tpw chi VMP/*.p --epsilon-dir epsilon/ -o chi/
 
-# Kraichnan spectrum model
-rsi-tpw chi VMP/*.p --spectrum-model kraichnan -o chi/
+# Batchelor spectrum model (Kraichnan is the default)
+rsi-tpw chi VMP/*.p --spectrum-model batchelor -o chi/
 ```
+
+> **Note:** `rsi-tpw eps -o epsilon/` writes its output into a hash-tracked
+> subdirectory (`epsilon/eps_00/`, see
+> [output_directories.md](output_directories.md)). `--epsilon-dir` searches
+> the given directory and then its `eps_*` subdirectories (most recently
+> modified first), matching both `{stem}_eps.nc` and per-profile
+> `{stem}_prof001_eps.nc` names; multiple per-profile files are concatenated
+> along time so every chi window pairs with its own profile's epsilon. Only
+> when no matching epsilon files exist does chi fall back to Method 2 for
+> that file, with a console warning.
 
 | Flag | Description |
 |------|-------------|
@@ -136,8 +156,9 @@ rsi-tpw chi VMP/*.p --spectrum-model kraichnan -o chi/
 | `--overlap N` | Window overlap [samples] (default: diss-length//2) |
 | `--speed FLOAT` | Fixed profiling speed [m/s] (default: from dP/dt) |
 | `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
+| `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
 | `--fp07-model {single_pole,double_pole}` | FP07 transfer function (default: single_pole) |
-| `--epsilon-dir DIR` | Directory with epsilon `.nc` files for Method 1 |
+| `--epsilon-dir DIR` | Directory with epsilon `.nc` files for Method 1 (the `eps_NN/` subdirectory; see warning above). If omitted, or if no matching `{stem}_eps.nc` exists, Method 2 is used |
 | `--no-goodman` | Disable Goodman coherent noise removal |
 | `--fit-method {mle,iterative}` | Method 2 fitting algorithm (default: iterative) |
 | `--spectrum-model {batchelor,kraichnan}` | Theoretical spectrum model (default: kraichnan) |
@@ -156,6 +177,7 @@ rsi-tpw pipeline VMP/*.p -o results/
 |------|-------------|
 | `-o`, `--output DIR` | Base output directory (required) |
 | `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
+| `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
 | `--speed FLOAT` | Fixed profiling speed [m/s] (default: from dP/dt) |
 | `--eps-fft-length N` | FFT length for epsilon (default: 1024) |
 | `--chi-fft-length N` | FFT length for chi (default: 1024) |
@@ -192,11 +214,14 @@ rsi-tpw ql VMP/*.p --fft-length 512
 | Flag | Description |
 |------|-------------|
 | `--fft-length N` | FFT segment length [samples] (default: 1024) |
+| `--diss-length N` | Dissipation window [samples] (default: 4×fft-length) |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
 | `--no-goodman` | Disable Goodman coherent noise removal |
 | `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
+| `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
+| `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: 0.3) |
 | `--spec-P-range P_MIN P_MAX` | Pressure range [dbar] for spectral calculations |
-| `--chi-method {1,2}` | Chi method: 1 = from epsilon, 2 = MLE fit (default: 1) |
+| `--chi-method {1,2}` | Chi method: 1 = from epsilon, 2 = spectral fit (default: 1). The CLI help labels method 2 "MLE fit", but the viewer uses the iterative fit |
 | `--spectrum-model {batchelor,kraichnan}` | Theoretical spectrum model (default: kraichnan) |
 
 ## `rsi-tpw dl`
@@ -211,7 +236,10 @@ rsi-tpw dl VMP/*.p
 | Flag | Description |
 |------|-------------|
 | `--fft-length N` | FFT segment length [samples] (default: 1024) |
+| `--diss-length N` | Dissipation window [samples] (default: 4×fft-length) |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
 | `--no-goodman` | Disable Goodman coherent noise removal |
 | `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
+| `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
+| `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: 0.3) |
 | `--spec-P-range P_MIN P_MAX` | Pressure range [dbar] for spectral calculations |

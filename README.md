@@ -16,16 +16,18 @@ Python tools for reading Rockland Scientific microprofiler data and computing tu
 
 - **Epsilon (TKE dissipation rate)** from shear probe spectra ([detailed mathematics](docs/epsilon_mathematics.md)), including Goodman coherent noise removal, Nasmyth spectrum fitting, and Macoun & Lueck wavenumber correction.
 
-- **Chi (thermal variance dissipation rate)** from FP07 thermistor spectra ([detailed mathematics](docs/chi_mathematics.md)), including Batchelor/Kraichnan spectrum models, FP07 transfer function correction, and MLE spectral fitting.
+- **Chi (thermal variance dissipation rate)** from FP07 thermistor spectra ([detailed mathematics](docs/chi_mathematics.md)), including Batchelor/Kraichnan spectrum models, FP07 transfer function correction, and spectral fitting (iterative Peterson & Fer 2014, the default, or MLE).
 
 A **MATLAB implementation** of the chi calculation is also available — see [matlab/MATLAB.md](matlab/MATLAB.md).
 
-The package is organized into four subpackages under `odas_tpw`:
+The package is organized into six subpackages under `odas_tpw`:
 
 - **rsi** — Rockland Scientific instrument I/O, NetCDF conversion, profiles, epsilon/chi orchestration
 - **chi** — Chi (thermal variance dissipation) calculation
 - **scor160** — ATOMIX shear-probe benchmark processing and shared physics modules
 - **perturb** — Full campaign processing pipeline (trim, merge, calibrate, compute, bin)
+- **processing** — Instrument-agnostic profile processing (top trim, bottom-crash, CT alignment, multi-probe epsilon combining)
+- **pyturb** — Third-party code ([oceancascades/pyturb](https://github.com/oceancascades/pyturb)) hosted in-repo; maintained upstream, not refactored here
 
 ## Installation
 
@@ -45,6 +47,11 @@ Two CLIs ship with the package, for different workflows:
   (trim → merge → profiles → epsilon → chi → bin → combo), with parallel
   workers and stage-aware logging. Use this for cruise-scale runs.
 
+The two CLIs use different spectral defaults (`rsi-tpw`: `fft_length=1024`
+with a 4096-sample dissipation window; `perturb`: `fft_length=256` for
+epsilon and `512` for chi), so their outputs differ in vertical resolution
+and noise behavior.
+
 ### `rsi-tpw` (single files / short batches)
 
 ```bash
@@ -52,9 +59,18 @@ Two CLIs ship with the package, for different workflows:
 rsi-tpw pipeline VMP/*.p -o results/
 
 # Or run individual stages
-rsi-tpw eps VMP/*.p -o epsilon/
-rsi-tpw chi VMP/*.p --epsilon-dir epsilon/ -o chi/
+rsi-tpw eps VMP/*.p -o epsilon/                       # writes into epsilon/eps_00/
+rsi-tpw chi VMP/*.p --epsilon-dir epsilon/ -o chi/    # finds eps_00/ automatically
 ```
+
+> **Note:** `eps` writes into a hash-tracked subdirectory (`epsilon/eps_00/`,
+> see [output directories](docs/rsi-tpw/output_directories.md)). The chi
+> command searches the given `--epsilon-dir` and its `eps_*` subdirectories
+> (most recently modified first), and matches both single-profile
+> (`{stem}_eps.nc`) and per-profile (`{stem}_prof001_eps.nc`, ...) file
+> names, concatenating the latter along time. Only when no matching epsilon
+> files exist anywhere does chi fall back to Method 2 for that file, with a
+> console warning.
 
 ```python
 from odas_tpw.rsi.pipeline import run_pipeline

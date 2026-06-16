@@ -314,9 +314,13 @@ def noise_thermchannel(
     beta_2: float | None = None,
     config: FP07NoiseConfig | None = None,
 ) -> np.ndarray:
-    """Electronics noise spectrum for FP07 thermistor [(K/m)^2 / Hz].
+    """Electronics noise spectrum for FP07 thermistor [(K/s)^2 / Hz].
 
-    Computes the temperature gradient noise spectrum including:
+    Returns the noise of the temperature *time derivative* dT/dt.  Use
+    :func:`gradT_noise` to convert to a spatial-gradient spectrum
+    [(K/m)^2 / cpm] using the profiling speed.
+
+    Computes the noise spectrum including:
     - Johnson noise from thermistor resistance
     - Amplifier voltage noise (two stages with 1/f knee)
     - Pre-emphasis gain
@@ -378,8 +382,8 @@ def noise_thermchannel(
 
     Returns
     -------
-    gradT_noise : ndarray
-        Temperature gradient noise spectrum [(K/m)^2 / Hz].
+    noise_f : ndarray
+        Temperature time-derivative noise spectrum [(K/s)^2 / Hz].
     """
     p = _unpack_noise_config(
         config,
@@ -466,7 +470,11 @@ def gradT_noise(
     noise_f = noise_thermchannel(F, T_mean, fs=fs, diff_gain=diff_gain, **kwargs)
     F_arr = np.asarray(F, dtype=np.float64)
     K = F_arr / speed
-    noise_K = noise_f * speed  # convert from per-Hz to per-cpm
+    # noise_f is the time-derivative noise [(K/s)^2/Hz].  Converting to a
+    # gradient spectrum divides by speed^2 (dT/dz = (dT/dt)/W), and the
+    # per-Hz -> per-cpm change of variable multiplies by speed: net /speed.
+    # Matches ODAS gradT_noise_odas.m ("scale_factor ./ speed", squared).
+    noise_K = noise_f / speed
     return noise_K, K
 
 
@@ -510,8 +518,9 @@ def noise_thermchannel_batch(
 
     Returns
     -------
-    gradT_noise : ndarray
-        Shape ``(n_est, n_freq)``.
+    noise_f : ndarray
+        Temperature time-derivative noise [(K/s)^2 / Hz],
+        shape ``(n_est, n_freq)``.
     """
     p = _unpack_noise_config(
         config,
@@ -582,4 +591,6 @@ def gradT_noise_batch(
     """
     noise_f = noise_thermchannel_batch(F, T_means, fs=fs, diff_gain=diff_gain, **kwargs)
     speeds = np.asarray(speeds, dtype=np.float64)
-    return noise_f * speeds[:, np.newaxis]
+    # Time-derivative noise -> gradient noise per cpm: /speed^2 * speed
+    # (see gradT_noise).
+    return noise_f / speeds[:, np.newaxis]

@@ -163,10 +163,17 @@ def process_l4_chi_epsilon(
     epsi_final = l4_diss.epsi_final
     epsi_times = _to_float64_seconds(l4_diss.time)
     chi_times = _to_float64_seconds(l3_chi.time)
+    # Maximum |Δt| for pairing a chi window with an epsilon estimate: one
+    # epsilon-window spacing.  Without this, a chi window with no nearby
+    # epsilon (failed estimates, different window grids) silently pairs
+    # with an estimate arbitrarily far away.
+    max_dt = float(np.median(np.diff(np.sort(epsi_times)))) if len(epsi_times) > 1 else 30.0
 
     def _chi_eps_func(j, _ci, spec_obs, noise_K, K, W, nu, tau0, H2, _h2, f_AA_eff):
         if len(epsi_times) > 0:
             idx_eps = int(np.argmin(np.abs(epsi_times - chi_times[j])))
+            if abs(epsi_times[idx_eps] - chi_times[j]) > max_dt:
+                return None
             epsilon_val = float(epsi_final[idx_eps])
         else:
             epsilon_val = np.nan

@@ -42,19 +42,27 @@ def detect_bottom_crash(
         (e.g. ``{"vibration_rms": rms}``) is also fine. All arrays
         must match ``depth_fast`` in length.
     fs : float
-        Fast sampling rate [Hz].
+        Fast sampling rate [Hz].  Currently UNUSED — accepted for
+        backward compatibility; the algorithm operates on depth bins,
+        not time.
     depth_window : float
         Depth window for variance computation [m].
     depth_minimum : float
         Minimum depth to start searching [m].
     speed_factor : float
-        Speed reduction factor for crash identification.
+        Currently UNUSED — accepted for backward compatibility (the
+        speed-drop confirmation from the original MATLAB design is not
+        implemented).  Tuning it has no effect.
     median_factor : float
-        Acceleration std dev filter factor.
+        Currently UNUSED — accepted for backward compatibility.
+        Tuning it has no effect.
     vibration_frequency : int
-        Frequency for vibration binning [Hz].
+        Currently UNUSED — accepted for backward compatibility.
+        Tuning it has no effect.
     vibration_factor : float
-        Vibration std dev acceptance factor.
+        Vibration std dev acceptance factor: the deepest bin whose
+        magnitude std exceeds ``vibration_factor`` times the median
+        marks the crash.
 
     Returns
     -------

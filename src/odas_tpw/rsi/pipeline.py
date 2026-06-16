@@ -288,6 +288,8 @@ def _process_profile(
         temp=l3.temp,
         f_AA=f_AA,
         fit_order=fit_order,
+        num_ffts=2 * (l3_params.diss_length // l3_params.fft_length) - 1,
+        n_v=l1.n_vib if l3_params.goodman else 0,
     )
     logger.info(f"Epsilon: {l4.n_spectra} estimates")
 
@@ -422,7 +424,25 @@ def _write_l4_epsilon(l4: L4Data, l3: L3Data, path: Path, pf) -> None:
                 l4.fom,
                 {
                     "units": "1",
-                    "long_name": "figure of merit",
+                    "long_name": "figure of merit (observed/Nasmyth variance ratio)",
+                    "comment": (
+                        "Values near 1.0 indicate a good fit. NOT the MAD-based "
+                        "ATOMIX/Rockland FM statistic; see the FM variable for that."
+                    ),
+                },
+            ),
+            "FM": (
+                ["probe", "time"],
+                l4.FM if l4.FM is not None else np.full_like(l4.fom, np.nan),
+                {
+                    "units": "1",
+                    "long_name": "Lueck (2022) figure of merit",
+                    "comment": (
+                        "FM = MAD_ln / (T_M * sigma_ln) with sigma_ln = "
+                        "sqrt(1.25 * N_eff**(-7/9)) and T_M = 0.8 + sqrt(1.56/N_s) "
+                        "(Lueck 2022, doi:10.1175/JTECH-D-21-0051.1). Good fits "
+                        "approach 0; ATOMIX recommends rejecting FM > ~1.15."
+                    ),
                 },
             ),
             "mad": (

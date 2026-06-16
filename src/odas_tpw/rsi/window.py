@@ -85,8 +85,9 @@ def compute_eps_window(
     fft_length : int
         FFT segment length [samples].
     f_AA : float
-        Anti-aliasing frequency [Hz].  No 0.9 factor applied here
-        (matching MATLAB get_diss_odas).
+        Anti-aliasing frequency [Hz].  The 0.9 safety margin is applied
+        internally, matching get_diss_odas.m lines 372-373 — pass the
+        raw anti-aliasing cutoff.
     do_goodman : bool
         Whether to apply Goodman coherent noise removal.
     """
@@ -105,7 +106,8 @@ def compute_eps_window(
 
     n_freq = fft_length // 2 + 1
     F = np.arange(n_freq) * fs_fast / fft_length
-    K_AA = f_AA / W
+    # 0.9 anti-aliasing safety margin, as in get_diss_odas.m:372-373
+    K_AA = 0.9 * f_AA / W
     num_ffts = 2 * (diss_length // fft_length) - 1
     n_v = (accel.shape[1] if accel is not None else 0) if do_goodman else 0
 
@@ -185,7 +187,7 @@ def compute_eps_window(
                 K_s,
                 spec_k,
                 nu,
-                f_AA / W,
+                K_AA,
                 fit_order,
                 e_isr_threshold,
                 num_ffts=num_ffts,

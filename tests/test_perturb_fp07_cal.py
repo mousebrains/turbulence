@@ -78,9 +78,10 @@ class TestComputeRTR0:
             "adc_fs": "5",
             "adc_bits": "16",
         }
-        # Use values that produce different Z values in the valid range
-        low = _compute_RT_R0(np.array([10000.0]), ch_config)
-        high = _compute_RT_R0(np.array([15000.0]), ch_config)
+        # Use values that produce different Z values within the +/-0.6
+        # clip range (factor = 6.1e-5, so |counts| < ~9830)
+        low = _compute_RT_R0(np.array([2000.0]), ch_config)
+        high = _compute_RT_R0(np.array([8000.0]), ch_config)
         assert low[0] != high[0]
 
 
@@ -297,18 +298,16 @@ class TestFP07Calibrate:
             must_be_negative=False,
         )
 
-        # The calibration should have produced output for T1
-        assert "T1" in result["channels"], "Slow-rate calibrated channel missing"
-        assert "T1" in result["fast_channels"], "Fast-rate calibrated channel missing"
+        # The calibration should have produced output for T1 at its
+        # native (fast) rate; fast_channels holds only recalibrated
+        # pre-emphasized variants (T1_dT1), absent from this stub.
+        assert "T1" in result["channels"], "Calibrated channel missing"
         assert "T1" in result["coefficients"]
         assert "T1" in result["lags"]
         assert "T1" in result["info"]
 
-        # Calibrated slow data length matches reference
-        assert result["channels"]["T1"].shape == T_ref.shape
-
-        # Calibrated fast data length matches fast time vector
-        assert result["fast_channels"]["T1"].shape == (n_fast,)
+        # T1 is a fast channel: calibrated data is at the fast rate
+        assert result["channels"]["T1"].shape == (n_fast,)
 
         # Coefficients should have order+1 elements
         assert len(result["coefficients"]["T1"]) == 3  # order=2 -> 3 coeffs

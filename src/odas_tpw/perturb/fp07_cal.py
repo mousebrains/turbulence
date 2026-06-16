@@ -68,10 +68,31 @@ def _compute_RT_R0(
         Z = counts * factor + adc_zero
         Z = ((Z - a) / b) * 2.0 / (G * E_B) if (b * G * E_B) != 0 else np.zeros_like(counts)
 
-    # Clip to avoid log domain errors
+    # Clip Z to +/-0.6 as ODAS convert_odas.m does (and rsi/channels.py):
+    # |Z| near or beyond 1 indicates samples outside the bridge range, and
+    # clipping the *ratio* instead (previous behaviour) produced ln-ratio
+    # outliers of ~-46 that passed the finite check and skewed the fit.
+    Z = np.clip(Z, -0.6, 0.6)
     ratio = (1.0 - Z) / (1.0 + Z)
-    ratio = np.clip(ratio, 1e-20, None)
     return np.asarray(np.log(ratio))
+
+
+def _shift_edge_hold(x: np.ndarray, shift: int) -> np.ndarray:
+    """Shift *x* by *shift* samples, holding the edge value.
+
+    Unlike ``np.roll``, samples shifted past the array ends are filled
+    with the first/last value instead of wrapping around.
+    """
+    if shift == 0:
+        return x.copy()
+    out = np.empty_like(x)
+    if shift > 0:
+        out[:shift] = x[0]
+        out[shift:] = x[:-shift]
+    else:
+        out[shift:] = x[-1]
+        out[:shift] = x[-shift:]
+    return out
 
 
 def _lowpass_filter(
@@ -139,16 +160,19 @@ def _calc_lag(
     corr = corr[mask]
     lags = lags[mask]
 
+    # Use |correlation| as ODAS cal_FP07_in_situ.m does: raw counts
+    # correlate negatively with temperature when the bridge coefficient
+    # b < 0, and a signed search would latch onto a wrong sidelobe.
     if must_be_negative:
         neg_mask = lags <= 0
         corr_search = corr[neg_mask]
         lags_search = lags[neg_mask]
         if len(corr_search) == 0:
             return 0.0, 0.0
-        idx = np.argmax(corr_search)
+        idx = int(np.argmax(np.abs(corr_search)))
         return lags_search[idx] / fs, corr_search[idx]
     else:
-        idx = np.argmax(corr)
+        idx = int(np.argmax(np.abs(corr)))
         return lags[idx] / fs, corr[idx]
 
 
@@ -180,8 +204,13 @@ def fp07_calibrate(
     Returns
     -------
     dict with keys:
-        channels : dict mapping channel name -> calibrated slow-rate array
-        fast_channels : dict mapping channel name -> calibrated fast-rate array
+        channels : dict mapping channel name -> calibrated array at the
+            channel's native rate (e.g. T1)
+        fast_channels : dict mapping pre-emphasized channel name (e.g.
+            T1_dT1, holding the deconvolved fast temperature) -> array
+            recalibrated with the in-situ fit.  These feed the chi
+            (temperature-gradient) pipeline; without them chi would
+            silently keep the factory calibration.
         lags : dict mapping channel name -> lag in seconds
         coefficients : dict mapping channel name -> Steinhart-Hart coefficients
         info : dict of per-channel calibration stats
@@ -225,11 +254,13 @@ def fp07_calibrate(
             ratio = round(pf.fs_fast / pf.fs_slow)
             raw_slow = raw_slow[::ratio][: len(T_ref)]
 
-        # Compute RT_R0
-        RT_R0_slow = _compute_RT_R0(raw_slow, ch_config)
-
-        # Low-pass filter for lag finding
+        # Low-pass filter to the reference bandwidth.  Used both for lag
+        # finding and for the Steinhart-Hart regression: ODAS
+        # cal_FP07_in_situ.m fits on the filtered thermistor, since
+        # unfiltered high-frequency noise in the regressor
+        # (errors-in-variables) attenuates the fitted slope.
         fp07_lp = _lowpass_filter(raw_slow, reference, pf.fs_slow, W, profiles)
+        RT_R0_fit_src = _compute_RT_R0(fp07_lp, ch_config)
 
         # Per-profile lag computation
         lags_list = []
@@ -254,14 +285,16 @@ def fp07_calibrate(
         i_shift = round(median_lag * pf.fs_slow)
         result["lags"][ch_name] = median_lag
 
-        # Shift reference to align with FP07
-        T_ref_shifted = np.roll(T_ref, i_shift)
+        # Shift reference to align with FP07.  Edge-hold instead of
+        # np.roll: wrapping would splice the start of the record into the
+        # tail of the last profile (ODAS trims instead).
+        T_ref_shifted = _shift_edge_hold(T_ref, i_shift)
 
         # Collect profile data for Steinhart-Hart fit
         all_RT_R0 = []
         all_T_ref = []
         for s, e in profiles:
-            all_RT_R0.append(RT_R0_slow[s : e + 1])
+            all_RT_R0.append(RT_R0_fit_src[s : e + 1])
             all_T_ref.append(T_ref_shifted[s : e + 1])
 
         RT_R0_fit = np.concatenate(all_RT_R0)
@@ -275,24 +308,48 @@ def fp07_calibrate(
         if len(RT_R0_fit) < order + 1:
             continue
 
+        # ODAS warns when the in-situ temperature range is small: a
+        # higher-order polynomial fit over a narrow range is poorly
+        # constrained and extrapolates badly.
+        T_range = float(np.max(T_ref_fit) - np.min(T_ref_fit))
+        if order > 1 and T_range < 8.0:
+            warnings.warn(
+                f"{ch_name}: in-situ temperature range {T_range:.1f} degC < 8 degC; "
+                f"order-{order} fit may be poorly constrained (consider order=1)",
+                stacklevel=2,
+            )
+
         # Steinhart-Hart: 1/(T+273.15) = a0 + a1*RT_R0 + a2*RT_R0^2 + ...
         target = 1.0 / (T_ref_fit + 273.15)
         X = np.column_stack([RT_R0_fit**i for i in range(order + 1)])
         coeffs, _, _, _ = np.linalg.lstsq(X, target, rcond=None)
         result["coefficients"][ch_name] = coeffs
 
-        # Apply calibration to slow data
-        X_all = np.column_stack([RT_R0_slow**i for i in range(order + 1)])
-        T_cal_slow = 1.0 / (X_all @ coeffs) - 273.15
-        result["channels"][ch_name] = T_cal_slow
+        def _apply_cal(raw: np.ndarray) -> np.ndarray:
+            rt = _compute_RT_R0(raw, ch_config)
+            Xm = np.column_stack([rt**i for i in range(order + 1)])
+            return np.asarray(1.0 / (Xm @ coeffs) - 273.15)
 
-        # Apply calibration to fast data
-        if ch_name in pf.channels_raw and pf.is_fast(ch_name):
-            raw_fast = pf.channels_raw[ch_name]
-            RT_R0_fast = _compute_RT_R0(raw_fast[: len(pf.t_fast)], ch_config)
-            X_fast = np.column_stack([RT_R0_fast**i for i in range(order + 1)])
-            T_cal_fast = 1.0 / (X_fast @ coeffs) - 273.15
-            result["fast_channels"][ch_name] = T_cal_fast
+        # Apply calibration to the channel at its NATIVE rate (the
+        # previous code always stored the slow-subsampled array, which
+        # mis-sized fast channels when assigned back to pf.channels).
+        if pf.is_fast(ch_name):
+            result["channels"][ch_name] = _apply_cal(
+                pf.channels_raw[ch_name][: len(pf.t_fast)]
+            )
+        else:
+            result["channels"][ch_name] = _apply_cal(raw_slow)
+
+        # Recalibrate the deconvolved pre-emphasized variant (T1 ->
+        # T1_dT1).  After PFile._apply_deconvolution, channels_raw holds
+        # the DECONVOLVED counts for this channel, converted downstream
+        # with the base channel's calibration — so applying the in-situ
+        # polynomial here propagates the calibration into the fast
+        # temperature used by the chi pipeline.
+        dx_name = f"{ch_name}_d{ch_name}"
+        if dx_name in pf.channels_raw:
+            n_dx = len(pf.t_fast) if pf.is_fast(dx_name) else len(pf.t_slow)
+            result["fast_channels"][dx_name] = _apply_cal(pf.channels_raw[dx_name][:n_dx])
 
         result["info"][ch_name] = {
             "median_lag": median_lag,

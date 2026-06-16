@@ -1,7 +1,8 @@
 # Software Architecture
 
-One top-level package (`odas_tpw`) with four subpackages in a
-layered dependency hierarchy.  Each layer can only import from layers below it.
+One top-level package (`odas_tpw`) with six subpackages.  Four of them form a
+layered dependency hierarchy, where each layer can only import from layers
+below it:
 
 ```
 odas_tpw.perturb     Campaign pipeline (VMP data -> science-ready NetCDF)
@@ -12,6 +13,14 @@ odas_tpw.chi         Thermal variance dissipation (chi) from FP07 thermistors
     |
 odas_tpw.scor160     SCOR-160 / ATOMIX spectral processing + shared physics
 ```
+
+Two further subpackages sit alongside the hierarchy:
+
+- `odas_tpw.processing` — instrument-agnostic profile-processing helpers
+  (top trim, bottom-crash, CT alignment, multi-probe epsilon combining),
+  used by `perturb`.
+- `odas_tpw.pyturb` — third-party code (oceancascades/pyturb, maintained by
+  its upstream author) hosted in-repo; not refactored here.
 
 ---
 

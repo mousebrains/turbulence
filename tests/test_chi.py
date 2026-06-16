@@ -111,6 +111,37 @@ class TestKraichnanGrad:
         S_kraich = kraichnan_grad(k_high, kB, chi)
         assert S_kraich[0] > S_batch[0], "Kraichnan should exceed Batchelor at k = 2*kB"
 
+    def test_peak_location(self):
+        """1-D Kraichnan gradient spectrum k*exp(-sqrt(6q)k/kB) peaks at kB/sqrt(6q).
+
+        Pins the spectral *shape*: the integral test alone cannot
+        distinguish the correct 1-D form from a mis-transformed 3-D form
+        (both can be normalized to chi/(6*kappa_T)).
+        """
+        from odas_tpw.chi.batchelor import Q_KRAICHNAN, batchelor_kB, kraichnan_grad
+
+        chi = 1e-7
+        nu = 1.2e-6
+        eps = 1e-7
+        kB = float(batchelor_kB(eps, nu))
+
+        k = np.linspace(kB * 1e-4, kB, 200001)
+        S = kraichnan_grad(k, kB, chi)
+        k_peak = k[np.argmax(S)]
+        expected_peak = kB / np.sqrt(6 * Q_KRAICHNAN)
+        np.testing.assert_allclose(k_peak, expected_peak, rtol=1e-3)
+
+    def test_low_k_amplitude(self):
+        """In the viscous-convective range S(k) ~ q*chi*k/(kappa_T*kB^2)."""
+        from odas_tpw.chi.batchelor import KAPPA_T, Q_KRAICHNAN, kraichnan_grad
+
+        chi = 1e-7
+        kB = 500.0
+        k = np.array([kB * 1e-3])  # deep in the k^1 range, exp factor ~1
+        S = kraichnan_grad(k, kB, chi)
+        expected = Q_KRAICHNAN * chi * k / (KAPPA_T * kB**2)
+        np.testing.assert_allclose(S, expected, rtol=0.02)
+
 
 # ---------------------------------------------------------------------------
 # fp07.py
@@ -901,11 +932,14 @@ class TestExtractThermCal:
     def test_g_is_renamed_to_gain(self):
         from odas_tpw.rsi.chi_io import _extract_therm_cal
 
-        cal = _extract_therm_cal({"e_b": "0.1", "g": "1.5", "T_0": "20.0"})
+        # Config keys are lowercase (parse_config lowercases them);
+        # 'g' and 't_0' map to the 'gain'/'T_0' noise-model names.
+        cal = _extract_therm_cal({"e_b": "0.1", "g": "1.5", "t_0": "289.3"})
         assert "g" not in cal
+        assert "t_0" not in cal
         assert cal["gain"] == 1.5
         assert cal["e_b"] == 0.1
-        assert cal["T_0"] == 20.0
+        assert cal["T_0"] == 289.3
 
     def test_no_g_key_leaves_dict_untouched(self):
         from odas_tpw.rsi.chi_io import _extract_therm_cal

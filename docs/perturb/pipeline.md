@@ -44,9 +44,9 @@ Each `.p` file is processed through several sub-stages:
 
 5. **CT alignment** — Cross-correlation alignment of conductivity and temperature sensors to correct for spatial separation.
 
-6. **Dissipation (epsilon)** — Computes TKE dissipation rate per profile using `rsi.dissipation.get_diss`. Combines multi-probe estimates via `mk_epsilon_mean` (geometric mean with 95% CI filtering).
+6. **Dissipation (epsilon)** — Computes TKE dissipation rate per profile via `rsi.dissipation._compute_epsilon`, which drives the scor160 epsilon estimator (`scor160.l4._estimate_epsilon`). Combines multi-probe estimates via `mk_epsilon_mean` (geometric mean with 95% CI filtering).
 
-7. **Chi** (optional) — Computes thermal variance dissipation rate per profile using `rsi.chi_io.compute_chi_file` with the epsilon dataset (Method 1).
+7. **Chi** (optional) — Computes thermal variance dissipation rate per profile via `rsi.chi_io._compute_chi`. By default (`chi.use_epsilon: true`) the combined epsilon seeds the calculation (Method 1); set `chi.use_epsilon: false` for Method 2 spectral fitting.
 
 ### Stage 4: Bin
 
@@ -56,12 +56,12 @@ Depth-bins (or time-bins) the per-profile and per-diss NetCDF files into 2D arra
 
 Assembles binned NetCDF files into combined datasets with CF-1.13/ACDD-1.3 compliant global attributes, geospatial extent, and standardized variable metadata.
 
-> **Note:** `perturb run` currently covers trim → merge → process → bin. Combo assembly remains a separate step via `perturb combo`, pending integration of per-file binned outputs into `run_pipeline()`.
+`perturb run` covers the full chain trim → merge → process → bin → combo. Combo assembly can also be re-run on its own via `perturb combo`.
 
 ## Full Pipeline
 
 ```bash
-# Process all .p files in VMP/ (trim → merge → process → bin)
+# Process all .p files in VMP/ (trim → merge → process → bin → combo)
 perturb run -o results/ VMP/*.p
 
 # Explicit file list with 4 parallel workers
@@ -70,7 +70,7 @@ perturb run -o results/ -j 4 VMP/*002*.p
 # With a configuration file
 perturb run -c config.yaml -o results/
 
-# Combo assembly (separate step)
+# Re-run combo assembly on its own
 perturb combo -c config.yaml -o results/
 ```
 

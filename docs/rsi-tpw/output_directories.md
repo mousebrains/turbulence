@@ -1,6 +1,6 @@
 # Output Directory Structure
 
-The `rsi-tpw` CLI uses a sequential, hash-tracked output directory scheme for the `eps`, `chi`, `prof`, and `pipeline` subcommands. This ensures **reproducibility** — every output directory records the exact parameters used to produce it — and **deduplication** — re-running with the same parameters reuses the existing directory rather than creating a new one.
+The `rsi-tpw` CLI uses a sequential, hash-tracked output directory scheme for the `eps`, `chi`, and `prof` subcommands. This ensures **reproducibility** — every output directory records the exact parameters used to produce it — and **deduplication** — re-running with the same parameters reuses the existing directory rather than creating a new one. The `pipeline` subcommand does **not** use this scheme; it writes its `{pfile_stem}/profile_NNN/` tree directly into the directory given with `-o` (see [Pipeline subcommand](#pipeline-subcommand) below).
 
 ## Directory layout
 
@@ -98,9 +98,9 @@ SHA-256, using the full 64-character hex digest. The canonicalization process:
 4. Encode as compact sorted JSON: `json.dumps(d, sort_keys=True, separators=(',',':'))`
 5. Hash: `hashlib.sha256(json_string.encode()).hexdigest()`
 
-Hashes are **cumulative** — downstream steps include all upstream parameters. For example, in the `pipeline` subcommand, the chi hash includes both chi parameters and the epsilon parameters used to compute the upstream epsilon. This means if you change an epsilon parameter, both the `eps_NN/` and `chi_NN/` directories will change, correctly reflecting that the chi results depend on different upstream epsilon values.
+The hashing machinery supports **cumulative** hashes, where a downstream step's hash includes all upstream parameters (so changing an upstream parameter changes the downstream directory too). This mechanism is used by the `perturb` pipeline (e.g. the `diss_NN/` hash includes the upstream `profiles` parameters); no `rsi-tpw` subcommand currently exercises it.
 
-For standalone commands (`rsi-tpw eps`, `rsi-tpw chi` without `--epsilon-dir`), the hash includes only that section's parameters since there is no upstream dependency tracked by the tool.
+For the `rsi-tpw` stage commands (`prof`, `eps`, `chi`), each hash includes only that section's parameters — no upstream dependency is tracked by the tool, even when `chi` is given `--epsilon-dir`.
 
 ## Pipeline subcommand
 
@@ -113,14 +113,16 @@ rsi-tpw pipeline VMP/*.p -o results/
 #     profile_001/
 #       L4_epsilon.nc       # epsilon estimates
 #       L4_chi_epsilon.nc   # chi from known epsilon (Method 1)
-#       L4_chi_fit.nc       # chi from spectral fit (Method 2)
+#       L4_chi_fit.nc       # chi from spectral fit (Method 2) — only written
+#                           # with compute_chi_fit=True (Python API only;
+#                           # defaults to False, no CLI flag)
+#       L5_binned.nc        # depth-binned data for this profile
 #     profile_002/
 #       ...
-#     L5_binned.nc          # depth-binned profiles
 #     L6_combined.nc        # all profiles combined
 ```
 
-The standalone `eps` and `chi` subcommands use the sequential hash-tracked scheme (`eps_00/`, `chi_00/` etc.) described above.
+This tree is written directly into the `-o` directory — the `pipeline` subcommand does not create hash-tracked `{prefix}_NN/` subdirectories. The standalone `prof`, `eps`, and `chi` subcommands use the sequential hash-tracked scheme (`eps_00/`, `chi_00/` etc.) described above.
 
 ## Generating a template config
 

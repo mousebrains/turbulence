@@ -1,6 +1,6 @@
 # scor160-tpw CLI Reference
 
-The `scor160-tpw` CLI processes [ATOMIX benchmark datasets](https://doi.org/10.3389/fmars.2024.1334327) through the SCOR/ATOMIX shear-probe processing levels (L1-L4). Each subcommand runs the specified processing levels and compares computed results against the reference values embedded in the ATOMIX NetCDF files.
+The `scor160-tpw` CLI processes the [ATOMIX benchmark datasets](https://doi.org/10.1038/s41597-024-03323-y) (Fer et al., 2024) through the SCOR/ATOMIX shear-probe processing levels (L1-L4), following the best-practices methods of [Lueck et al. (2024)](https://doi.org/10.3389/fmars.2024.1334327). Each subcommand runs the specified processing levels and compares computed results against the reference values embedded in the ATOMIX NetCDF files.
 
 ```
 scor160-tpw <subcommand> <files...>
@@ -45,7 +45,7 @@ scor160-tpw l3-l4 AtomixData/*.nc
 
 ## Input Format
 
-Input files must be ATOMIX-format NetCDF files containing L1 data and reference values for each processing level. The 6 ATOMIX benchmark datasets are available from [Lueck et al. (2024)](https://doi.org/10.3389/fmars.2024.1334327).
+Input files must be ATOMIX-format NetCDF files containing L1 data and reference values for each processing level. The 6 ATOMIX benchmark datasets are described in [Fer et al. (2024)](https://doi.org/10.1038/s41597-024-03323-y), *Sci. Data*, 11, 518; see the [Bibliography](../bibliography.md#benchmark-datasets) for individual dataset DOIs.
 
 ## Output
 

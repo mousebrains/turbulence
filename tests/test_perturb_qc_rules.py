@@ -344,17 +344,44 @@ class TestPitchWConsistencyRule:
         assert (out["fc"][10:-10] == 0).all()
 
     def test_stalled_glider_flagged(self):
-        """Nose-up but sinking — flag set."""
+        """Nose-up but sinking — flag set (explicit polarity).
+
+        The polarity must be explicit here: a record that is stalled
+        throughout is indistinguishable from an inverted-mount
+        inclinometer, so auto-detection would (correctly, per its
+        documented majority-sign heuristic) infer the opposite polarity.
+        """
         n = 60
         P = np.arange(n) * 0.5         # rapid descent (W ~ +0.5 dbar/s)
         pitch = np.full(n, -25.0)      # but pitched nose-up
         pf = self._make_pf(pitch=pitch, P=P)
         out = evaluate_rules(pf, {
             "fc": {"type": "pitch_w_consistency", "bit": 64,
-                   "pitch_min_deg": 5.0, "W_min_dbar_per_s": 0.02},
+                   "pitch_min_deg": 5.0, "W_min_dbar_per_s": 0.02,
+                   "pitch_positive": "nose_down"},
         })
         # Interior samples (skip filter edge transients) should all be flagged.
         assert (out["fc"][20:-20] != 0).all()
+
+    def test_auto_polarity_inverted_mount(self):
+        """Auto polarity: mostly-healthy record with inverted inclinometer.
+
+        Positive pitch = nose-up on this mount, so a descending glider
+        shows pitch*W < 0 in steady flight.  Auto-detection must infer
+        the inverted polarity from the majority and flag only the
+        stalled segment (where signs agree).
+        """
+        n = 100
+        P = np.arange(n) * 0.5          # descending throughout (W > 0)
+        pitch = np.full(n, +25.0)       # inverted mount: + = nose-up
+        pitch[60:80] = -25.0            # stalled stretch: signs agree
+        pf = self._make_pf(pitch=pitch, P=P)
+        out = evaluate_rules(pf, {
+            "fc": {"type": "pitch_w_consistency", "bit": 64,
+                   "pitch_min_deg": 5.0, "W_min_dbar_per_s": 0.02},
+        })
+        assert (out["fc"][65:75] != 0).all()      # stalled segment flagged
+        assert (out["fc"][20:55] == 0).all()      # steady flight unflagged
 
     def test_below_pitch_threshold_skipped(self):
         """|pitch| < pitch_min_deg → don't flag (noise zone around level)."""

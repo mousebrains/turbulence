@@ -1,5 +1,19 @@
 # Code Quality Audit
 
+> **2026-06-10 addendum** — A subsequent scientific-accuracy review
+> (branch `review/scientific-accuracy`) found and fixed errors that this
+> audit's "Mathematical correctness: A (every formula verified)" grade
+> missed, including: the 1-D Kraichnan gradient spectrum shape (the
+> default chi model), a speed² error in the FP07 noise-to-wavenumber
+> conversion, missing in-band FP07 attenuation correction in the default
+> iterative chi fit, an unsorted-roots bug in the epsilon spectral-minimum
+> search, the QC flag thresholding the variance-ratio `fom` with the
+> limit defined for the MAD-based ATOMIX FM, in-situ FP07 calibration
+> never reaching the chi pipeline, and depth-bin contamination by
+> NaN-coordinate samples. See the commit messages on that branch for the
+> full list and evidence. Integral-only tests passed for the wrong
+> Kraichnan shape — shape-sensitive regression tests have been added.
+
 **Date**: 2026-03-15 (post-fix, round 4)
 **Scope**: Full odas_tpw codebase — architecture, duplication, large functions, testing, infrastructure
 **Prior work**: 14-item refactoring (`4d8436d`), NaN guard fix (`28b3a08`), 4-phase audit improvement (`db93190`), B+/lower grade improvement (`d37d54c`), mypy/ruff/docstring fix (`c7eb899`), doc path fix (`dbb3fa2`). All 1599 tests pass. ATOMIX L1→L4 and L2→L4 benchmarks verified. MATLAB cross-validation (307 tests) passing.

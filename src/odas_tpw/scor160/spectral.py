@@ -177,6 +177,10 @@ def csd_matrix(
 
     if overlap is None:
         overlap = nfft // 2
+    if overlap < 0 or overlap > 0.9 * nfft:
+        # csd_matrix_odas.m:134-135 clamps excessive overlap to nfft/2;
+        # overlap >= nfft would give step <= 0 (infinite loop / no segments)
+        overlap = nfft // 2
     window = _get_window(nfft) if window is None else np.asarray(window, dtype=np.float64)
 
     n_freq = nfft // 2 + 1

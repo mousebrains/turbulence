@@ -12,9 +12,10 @@ This document describes the mathematical foundations for computing chi, the rate
 6. [Method 1: Chi from Known Epsilon](#6-method-1-chi-from-known-epsilon)
 7. [Method 2a: Maximum Likelihood Estimation](#7-method-2a-maximum-likelihood-estimation)
 8. [Method 2b: Iterative Integration](#8-method-2b-iterative-integration)
-9. [Spectral Processing Details](#9-spectral-processing-details)
-10. [Constants and Parameters](#10-constants-and-parameters)
-11. [References](#11-references)
+9. [Quality Control Metrics](#9-quality-control-metrics)
+10. [Spectral Processing Details](#10-spectral-processing-details)
+11. [Constants and Parameters](#11-constants-and-parameters)
+12. [References](#12-references)
 
 ---
 
@@ -104,15 +105,23 @@ The [Kraichnan (1968)](https://doi.org/10.1063/1.1692063) model provides an alte
 
 ### Dimensional gradient spectrum
 
-The 1D temperature gradient spectrum in cpm, derived from [Bogucki et al. (1997)](https://doi.org/10.1017/S0022112097005727), eq. 11, and normalized to integrate to `chi / (6 * kappa_T)`:
+The one-dimensional (along-path) temperature gradient spectrum in cpm:
 
 ```
-S(k) = chi * q / (3 * kappa_T * kB^2) * k * (1 + sqrt(6*q) * y) * exp(-sqrt(6*q) * y)
+S(k) = q * chi / (kappa_T * kB^2) * k * exp(-sqrt(6*q) * y)
 ```
 
 ([`batchelor.py: kraichnan_grad`](../src/odas_tpw/chi/batchelor.py))
 
 where `y = k / kB` is the non-dimensional wavenumber.
+
+This form is obtained by applying the isotropic transform
+
+```
+G1(k1) = k1^2 * integral_{k1}^inf  E(k) / k  dk
+```
+
+to the three-dimensional Kraichnan scalar spectrum of [Bogucki et al. (1997)](https://doi.org/10.1017/S0022112097005727), eq. 11. For the Kraichnan form the transform evaluates in closed form to the simple exponential above — the same expression as [Peterson & Fer (2014)](https://doi.org/10.1016/j.mio.2014.05.002), eq. 8. The spectrum peaks at `k = kB / sqrt(6*q)`.
 
 ### Key difference from Batchelor
 
@@ -127,19 +136,19 @@ The rolloff is **exponential** `exp(-sqrt(6*q) * y)` rather than **Gaussian** `e
 Substituting `u = k/kB`, `dk = kB * du`, and `a = sqrt(6*q)`:
 
 ```
-integral_0^inf S(k) dk  =  chi * q / (3 * kappa_T) * integral_0^inf u * (1 + a*u) * exp(-a*u) du
+integral_0^inf S(k) dk  =  chi * q / kappa_T * integral_0^inf u * exp(-a*u) du
 ```
 
 The integral evaluates to:
 
 ```
-integral_0^inf u * (1 + a*u) * exp(-a*u) du  =  1/a^2 + 2/a^2  =  3/a^2  =  3/(6*q)  =  1/(2*q)
+integral_0^inf u * exp(-a*u) du  =  1/a^2  =  1/(6*q)
 ```
 
 So:
 
 ```
-integral S dk  =  chi * q / (3 * kappa_T) * 1/(2*q)  =  chi / (6 * kappa_T)
+integral S dk  =  chi * q / kappa_T * 1/(6*q)  =  chi / (6 * kappa_T)
 ```
 
 Verified numerically in [`tests/test_chi.py::TestKraichnanGrad::test_integral_equals_chi_over_6kT`](../tests/test_chi.py).
@@ -175,7 +184,7 @@ Accounts for both the glass bead thermal mass and the thermal boundary layer:
 
 ### Speed-dependent time constant
 
-The FP07 time constant depends on the flow speed past the sensor, which controls the thermal boundary layer thickness:
+The FP07 time constant depends on the flow speed past the sensor, which controls the thermal boundary layer thickness. The `W^(-1/2)` speed scaling was established by Vachon & Lueck (1984, *Proc. 1984 STD Conference and Workshop*, Marine Technology Society); [Peterson & Fer (2014)](https://doi.org/10.1016/j.mio.2014.05.002) fitted a slightly weaker exponent for their glider data:
 
 | Model | Formula | Reference |
 |-------|---------|-----------|
@@ -236,7 +245,7 @@ where `V_FS = 4.096 V`, `B = 16` bits, `gamma = 3` (RSI sampler excess noise fac
 
 ### Conversion to physical units
 
-The noise in ADC counts is converted to temperature gradient units `[(K/m)^2 / Hz]` via:
+The noise in ADC counts is converted to temperature *time-derivative* units `[(K/s)^2 / Hz]` via:
 
 1. Convert to counts: `Noise_counts = Noise_4 / delta^2`
 2. Apply the high-pass transfer function from pre-emphasis deconvolution:
@@ -253,7 +262,13 @@ scale = T_K^2 * (1 + R/R_0)^2 / (2 * eta * beta_1 * R/R_0)
 noise_physical = Noise_counts * G_HP * scale^2
 ```
 
-The conversion from frequency spectrum to wavenumber spectrum is: `Phi_noise(k) = Phi_noise(f) * W`, where `W` is the profiling speed.
+The conversion from frequency spectrum to wavenumber spectrum is:
+
+```
+Phi_noise(k) = Phi_noise(f) / W
+```
+
+where `W` is the profiling speed ([`fp07.py: gradT_noise`](../src/odas_tpw/chi/fp07.py), matching ODAS `gradT_noise_odas.m`). The electronics noise model produces a *time-derivative* noise spectrum in `(K/s)^2/Hz`; dividing by `W^2` converts it to a spatial-gradient spectrum in `(K/m)^2/Hz`, and multiplying by `W` converts per-Hz to per-cpm. The net factor is `1/W`.
 
 
 ## 6. Method 1: Chi from Known Epsilon
@@ -285,18 +300,18 @@ where `f = k * W`.
 
 **Step 4.** Determine the upper integration limit `k_max`: the highest wavenumber where `Phi_obs(k) > 2 * Phi_noise(k)` and `k <= f_AA / W`. Falls back to the anti-aliasing limit if fewer than 3 wavenumber bins are above the noise.
 
-**Step 5.** Integrate the observed spectrum:
+**Step 5.** Compute an initial (variance-corrected) chi estimate. First integrate the observed spectrum:
 
 ```
 V_obs = integral_0^{k_max}  Phi_obs(k)  dk
 ```
 
-**Step 6.** Compute the correction factor for FP07 rolloff and unresolved variance. Using a trial `chi_trial = 6 * kappa_T * V_obs`:
+Then compute the correction factor for FP07 rolloff and unresolved variance:
 
 ```
-V_total    = integral_0^{5*kB}  Phi_Batchelor(k; kB, chi_trial)  dk
+V_total    = integral over all k  of  Phi_model(k; kB, chi=1)
 
-V_resolved = integral_0^{k_max}  Phi_Batchelor(k; kB, chi_trial) * |H(k)|^2  dk
+V_resolved = integral_0^{k_max}   of  Phi_model(k; kB, chi=1) * |H(k)|^2
 
 C = V_total / V_resolved
 ```
@@ -305,13 +320,31 @@ The correction `C` accounts for two effects simultaneously:
 - The FP07 sensor attenuates the observed spectrum (`|H|^2 < 1` at high k)
 - The integration is truncated at `k_max < inf`, missing the tail of the spectrum
 
-**Step 7.** Compute chi:
+`C` is evaluated at unit chi because both the numerator and denominator scale linearly with chi, so the amplitude cancels; the correction depends only on the spectral *shape* (determined by `kB` and `q`). The variance-corrected estimate is:
 
 ```
-chi = 6 * kappa_T * V_obs * C       [K^2/s]
+chi_vc = 6 * kappa_T * V_obs * C       [K^2/s]
 ```
 
-Note that `chi_trial` cancels in the ratio `C = V_total / V_resolved` because both the numerator and denominator scale linearly with chi. The correction depends only on the spectral *shape* (determined by `kB` and `q`), not on the amplitude.
+**Step 6.** Refine chi by a log-space least-squares fit. `chi_vc` is used only to centre a grid search: 200 log-spaced chi values spanning 4 decades, `[0.01 * chi_vc, 100 * chi_vc]`. For each candidate chi the model spectrum is:
+
+```
+Phi_model(k; chi) = chi * S_unit(k; kB) * |H(k)|^2  +  Phi_noise(k)
+```
+
+where `S_unit` is the Batchelor/Kraichnan gradient spectrum at unit chi with `kB` fixed from epsilon. The cost function is the sum of squared log residuals over the valid wavenumber range:
+
+```
+cost(chi) = sum_i [ ln Phi_model(k_i; chi) - ln Phi_obs(k_i) ]^2
+```
+
+**Step 7.** Report the grid-minimising chi:
+
+```
+chi = argmin_chi  cost(chi)       [K^2/s]
+```
+
+Minimising in log space penalises over- and under-estimation symmetrically on the log-log plot, and is more robust than the pure variance-correction estimate when the epsilon-derived `kB` does not perfectly match the temperature spectrum. If the fit fails (all costs non-finite), `chi_vc` is used.
 
 
 ## 7. Method 2a: Maximum Likelihood Estimation
@@ -342,7 +375,7 @@ The MLE is solved by grid search rather than gradient optimization, following [R
 
 1. **Coarse search:** 100 log-spaced `kB` values over `[1, 10^4.5]` cpm. Evaluate `-ln L` at each and find the minimum.
 
-2. **Fine search:** 100 linearly-spaced `kB` values over `[0.5 * kB_coarse, 2 * kB_coarse]`. Find the refined minimum.
+2. **Fine search:** 100 linearly-spaced `kB` values over `[max(0.5 * kB_coarse, 1.0), 2 * kB_coarse]`. The lower bound is clamped to 1 cpm. Find the refined minimum.
 
 Total: 200 function evaluations.
 
@@ -362,11 +395,20 @@ epsilon = (2*pi * kB)^4 * nu * kappa_T^2       [W/kg]
 
 (This is the inverse of the `batchelor_kB` formula.)
 
-Chi is computed by integrating the fitted Batchelor spectrum over its full extent:
+Chi is re-estimated from the *observed* spectrum with an unresolved-variance correction (the same construction as Method 1, Step 5):
 
 ```
-chi = 6 * kappa_T * integral_0^{5*kB}  Phi_Batchelor(k; kB_fit, chi_obs)  dk
+chi = 6 * kappa_T * integral_{fit range}  max(Phi_obs(k) - Phi_noise(k), 0)  dk  *  (V_total / V_resolved)
 ```
+
+where the correction ratio is computed from the fitted model at unit chi:
+
+```
+V_total    = integral over all k    of  Phi_model(k; kB_fit, chi=1)
+V_resolved = integral_0^{K_max_fit} of  Phi_model(k; kB_fit, chi=1) * |H(k)|^2
+```
+
+`V_resolved` includes the FP07 attenuation `|H|^2`, so the ratio simultaneously corrects for the unresolved band edges and for in-band sensor response. If the correction is not finite, the initial integrated estimate `chi_obs` is reported.
 
 ### Properties
 
@@ -403,43 +445,72 @@ k* = 0.04 * kB * sqrt(kappa_T / nu)
 3. Refine the lower integration limit:
 
 ```
-k_l = max(k_1, 3 * k*)
+k_l = max(K[1], 3 * k*)
 ```
+
+where `K[1]` is the first nonzero wavenumber bin.
 
 This ensures the fit range lies within the viscous-convective and viscous-diffusive subranges where the Batchelor/Kraichnan model is valid, excluding the inertial-convective subrange where the spectrum follows a different power law.
 
-4. Recompute `chi_obs` with the refined limits:
+4. Recompute the band-limited chi with the refined limits:
 
 ```
-chi_obs = 6 * kappa_T * integral_{k_l}^{k_u}  max(Phi_obs - Phi_noise, 0)  dk
+chi_band = 6 * kappa_T * integral_{k_l}^{k_u}  max(Phi_obs - Phi_noise, 0)  dk
 ```
 
-5. Compute unresolved variance from the Batchelor model:
+5. Apply a model-based variance-ratio correction for the variance outside `[k_l, k_u]` *and* for in-band FP07 attenuation, computed from the fitted model at unit chi (amplitude cancels in the ratio):
 
 ```
-chi_low  = 6 * kappa_T * integral_0^{k_l}      Phi_Batchelor(k; kB, chi_obs)  dk
-chi_high = 6 * kappa_T * integral_{k_u}^{5*kB}  Phi_Batchelor(k; kB, chi_obs)  dk
+V_total    = integral over all k   of  Phi_model(k; kB, chi=1)
+V_resolved = integral_{k_l}^{k_u}  of  Phi_model(k; kB, chi=1) * |H(k)|^2
+
+chi_obs = chi_band * (V_total / V_resolved)
 ```
 
-6. Update total chi:
+The observed spectrum is never divided by `|H|^2`, so `V_resolved` carries the `|H|^2` factor instead. [Peterson & Fer (2014)](https://doi.org/10.1016/j.mio.2014.05.002) equivalently boost the measured spectrum by the response function before integrating.
 
-```
-chi = chi_low + chi_obs + chi_high
-```
-
-7. Re-fit `kB` by MLE with the updated chi.
+6. Re-fit `kB` by MLE with the updated `chi_obs`. The loop stops early when `kB` changes by less than 1% between iterations.
 
 ### Quality control ([Peterson & Fer 2014](https://doi.org/10.1016/j.mio.2014.05.002))
 
 The following checks (not yet enforced as hard filters in the code, but available for post-processing):
 
 - At least 6 wavenumber points in the fit range
-- `chi_low + chi_high <= chi_obs` (model corrections should not dominate the observed variance)
+- The model-based correction should not dominate the observed variance: the variance restored by the correction should not exceed the directly observed band-limited variance (correction factor `V_total / V_resolved <~ 2`; Peterson & Fer express this as `chi_low + chi_high <= chi_obs` for their additive out-of-band tail corrections)
 - Mean absolute deviation `MAD < 2 * sqrt(2/d)` where `d` is the spectral degrees of freedom (goodness of fit)
 - For FP07 thermistors: `epsilon <= ~2e-7 W/kg` for reliable estimates (at higher dissipation rates the Batchelor rolloff moves beyond the sensor's resolved bandwidth)
 
 
-## 9. Spectral Processing Details
+## 9. Quality Control Metrics
+
+All three chi methods report the same two QC metrics ([`chi.py`](../src/odas_tpw/chi/chi.py)):
+
+### Figure of merit (fom)
+
+The ratio of observed variance to *attenuated-model* variance over the fit range:
+
+```
+fom = integral Phi_obs(k) dk  /  integral [ Phi_model(k; kB, chi) * |H(k)|^2 + Phi_noise(k) ] dk
+```
+
+The denominator is the fitted Batchelor/Kraichnan spectrum convolved with the FP07 transfer function plus the electronics noise floor — i.e., what the sensor *should* observe given the fitted (chi, kB). Values near 1.0 indicate a good fit; values far from 1.0 indicate the model does not explain the observed variance.
+
+Note: this is a simple variance ratio, **not** the MAD-based FM statistic of Lueck (2022a,b) used for the ATOMIX shear-probe QC (see [epsilon_mathematics.md](epsilon_mathematics.md#10-quality-control-metrics)).
+
+### K_max ratio
+
+```
+K_max_ratio = K_max / kB
+```
+
+where `K_max` is the upper limit of the fit/integration range and `kB` is the Batchelor wavenumber. Values < 0.5 mean the resolved band ends well below the spectral rolloff, so most of the variance is extrapolated through the model-based variance correction and the chi estimate should be treated with caution.
+
+### FP07 validity caveat
+
+As noted in Section 8, [Peterson & Fer (2014)](https://doi.org/10.1016/j.mio.2014.05.002) recommend trusting FP07-derived estimates only for `epsilon <= ~2e-7 W/kg`; at higher dissipation rates the Batchelor rolloff moves beyond the sensor's resolved bandwidth (low `K_max_ratio`).
+
+
+## 10. Spectral Processing Details
 
 ### Welch's method
 
@@ -477,7 +548,7 @@ Phi_corrected(k) = Phi_raw(k) * C_FD(f)
 
 ### Dissipation windows
 
-The profile is divided into overlapping windows of length `diss_length` samples (default `3 * fft_length = 1536` samples at 512 Hz = 3 seconds of data). Adjacent windows overlap by `overlap` samples (default `diss_length // 2`). Within each window:
+The profile is divided into overlapping windows of length `diss_length` samples (default `4 * fft_length = 4096` samples at 512 Hz = 8 seconds of data). Adjacent windows overlap by `overlap` samples (default `diss_length // 2 = 2048`). Within each window:
 
 - Mean pressure, temperature, speed, and time are computed
 - Kinematic viscosity `nu` is computed from [`visc35(T_mean)`](../src/odas_tpw/scor160/ocean.py)
@@ -485,7 +556,7 @@ The profile is divided into overlapping windows of length `diss_length` samples 
 - Degrees of freedom: `d = 1.9 * num_ffts` (Nuttall 1971)
 
 
-## 10. Constants and Parameters
+## 11. Constants and Parameters
 
 ### Physical constants
 
@@ -516,16 +587,18 @@ The profile is divided into overlapping windows of length `diss_length` samples 
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `fft_length` | `512` | FFT segment length [samples] |
-| `diss_length` | `1536` | Dissipation window length (3 * fft_length) [samples] |
-| `overlap` | `768` | Window overlap (diss_length // 2) [samples] |
+| `fft_length` | `1024` | FFT segment length [samples] |
+| `diss_length` | `4096` | Dissipation window length (4 * fft_length) [samples] |
+| `overlap` | `2048` | Window overlap (diss_length // 2) [samples] |
 | `fp07_model` | `single_pole` | FP07 transfer function model |
 | `spectrum_model` | `kraichnan` | Theoretical spectrum (batchelor or kraichnan) |
 | `fit_method` | `iterative` | Method 2 fitting algorithm (mle or iterative) |
 | `goodman` | `True` | Goodman coherent noise removal using accelerometers |
 
+These are the `rsi-tpw` defaults ([`rsi/chi_io.py`](../src/odas_tpw/rsi/chi_io.py), [`rsi/config.py`](../src/odas_tpw/rsi/config.py)). The `perturb` campaign pipeline uses different defaults — `fft_length = 512` for chi (and 256 for epsilon), see [`perturb/config.py`](../src/odas_tpw/perturb/config.py).
 
-## 11. References
+
+## 12. References
 
 ### Batchelor spectrum and chi theory
 
@@ -544,7 +617,8 @@ The profile is divided into overlapping windows of length `diss_length` samples 
 
 - Lueck, R.G., O. Hertzman, and T.R. Osborn, 1977: [The spectral response of thermistors.](https://doi.org/10.1016/0146-6291(77)90565-3) *Deep-Sea Res.*, **24**, 951-970.
 - Gregg, M.C. and T.B. Meagher, 1980: [The dynamic response of glass rod thermistors.](https://doi.org/10.1029/JC085iC05p02779) *J. Geophys. Res.*, **85**, 2779-2786.
-- Goto, Y., I. Yasuda, and M. Nagasawa, 2016: [Comparison of turbulence intensity from CTD-attached and free-fall microstructure profilers.](https://doi.org/10.1175/JTECH-D-15-0220.1) *J. Atmos. Oceanic Technol.*, **33**, 1065-1081.
+- Goto, Y., I. Yasuda, and M. Nagasawa, 2016: [Turbulence estimation using fast-response thermistors attached to a free-fall vertical microstructure profiler.](https://doi.org/10.1175/JTECH-D-15-0220.1) *J. Atmos. Oceanic Technol.*, **33**(10), 2065-2078.
+- Vachon, P. and R.G. Lueck, 1984: A small combined temperature-conductivity probe. *Proceedings of the 1984 STD Conference and Workshop*, San Diego, Marine Technology Society.
 - Nash, J.D., T.B. Caldwell, M.J. Zelman, and J.N. Moum, 1999: [A thermocouple probe for high-speed temperature measurement in the ocean.](https://doi.org/10.1175/1520-0426(1999)016%3C1474:ATPFHS%3E2.0.CO;2) *J. Atmos. Oceanic Technol.*, **16**, 1474-1482.
 
 ### Noise model

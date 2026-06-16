@@ -147,7 +147,15 @@ def mk_epsilon_mean(
     ds["epsilonLnSigma"] = xr.DataArray(
         mu_sigma,
         dims=["time"],
-        attrs={"long_name": "sigma of ln(epsilon)", "units": ""},
+        attrs={
+            "long_name": "sigma of ln(epsilon)",
+            "units": "1",
+            "comment": (
+                "Expected single-probe sigma_ln(epsilon) (Lueck 2022 "
+                "variance model), averaged across probes — NOT the sigma "
+                "of the combined epsilonMean (no sqrt(n) reduction applied)."
+            ),
+        },
     )
 
     return ds

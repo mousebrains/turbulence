@@ -1,6 +1,6 @@
 # Mathematics of Epsilon Estimation
 
-This document describes the mathematical foundations for computing epsilon, the rate of dissipation of turbulent kinetic energy, as implemented in `microstructure-tpw`. All equation numbers, constants, and algorithmic details correspond to the actual code in [`dissipation.py`](../src/odas_tpw/rsi/dissipation.py), [`spectral.py`](../src/odas_tpw/scor160/spectral.py), [`goodman.py`](../src/odas_tpw/scor160/goodman.py), [`despike.py`](../src/odas_tpw/scor160/despike.py), [`nasmyth.py`](../src/odas_tpw/scor160/nasmyth.py), and [`ocean.py`](../src/odas_tpw/scor160/ocean.py).
+This document describes the mathematical foundations for computing epsilon, the rate of dissipation of turbulent kinetic energy, as implemented in `microstructure-tpw`. All equation numbers, constants, and algorithmic details correspond to the actual code in [`l3.py`](../src/odas_tpw/scor160/l3.py), [`l4.py`](../src/odas_tpw/scor160/l4.py), [`spectral.py`](../src/odas_tpw/scor160/spectral.py), [`goodman.py`](../src/odas_tpw/scor160/goodman.py), [`despike.py`](../src/odas_tpw/scor160/despike.py), [`nasmyth.py`](../src/odas_tpw/scor160/nasmyth.py), and [`ocean.py`](../src/odas_tpw/scor160/ocean.py), orchestrated by [`dissipation.py`](../src/odas_tpw/rsi/dissipation.py).
 
 ## Contents
 
@@ -41,7 +41,7 @@ The shear spectrum is measured by airfoil shear probes sampling at ~512 Hz on a 
 k = f / W       [cpm]
 ```
 
-([`dissipation.py: _compute_profile_diss`](../src/odas_tpw/rsi/dissipation.py))
+([`l3.py: process_l3`](../src/odas_tpw/scor160/l3.py))
 
 In practice, the integral is truncated at a finite upper wavenumber `K_max` determined by instrument noise, spectral shape, or the anti-aliasing filter. A correction factor accounts for the unresolved variance beyond `K_max`.
 
@@ -90,7 +90,7 @@ e_total = e_10 * sqrt(1 + LUECK_A * e_10)
 
 where `LUECK_A = 1.0774e9` is derived from the non-dimensional integral of the Nasmyth spectrum.
 
-([`nasmyth.py`](../src/odas_tpw/scor160/nasmyth.py), [`dissipation.py: _estimate_epsilon`](../src/odas_tpw/rsi/dissipation.py))
+([`nasmyth.py`](../src/odas_tpw/scor160/nasmyth.py), [`l4.py: _estimate_epsilon`](../src/odas_tpw/scor160/l4.py))
 
 
 ## 3. Spectral Estimation
@@ -274,7 +274,7 @@ The correction is applied multiplicatively to the wavenumber spectrum:
 Phi_corrected(k) = Phi_observed(k) * correction(k)
 ```
 
-([`dissipation.py: _compute_profile_diss`](../src/odas_tpw/rsi/dissipation.py))
+([`l3.py: _apply_macoun_lueck`](../src/odas_tpw/scor160/l3.py))
 
 The denominator wavenumber 48 cpm corresponds to the probe's half-power point. At `k = 48` cpm, the correction is a factor of 2. The correction is only applied below 150 cpm because the empirical fit is not validated at higher wavenumbers.
 
@@ -292,7 +292,7 @@ where `W` is the profiling speed [m/s]. The factor `W` accounts for the Jacobian
 
 ## 7. Epsilon Estimation: Variance Method
 
-The variance method integrates the shear spectrum directly. It is used when dissipation is moderate (`epsilon < 1.5e-5 W/kg`), where the spectrum is well-resolved.
+The variance method integrates the shear spectrum directly. It is used when dissipation is moderate — specifically, when the preliminary estimate `e_1 < e_isr_threshold * isr_margin = 1.5e-5 * 1.6 = 2.4e-5 W/kg` — where the spectrum is well-resolved. ODAS switches at `e_isr_threshold` with no margin; the margin `DEFAULT_ISR_MARGIN = 1.6` ([`l4.py`](../src/odas_tpw/scor160/l4.py)) is an empirical adjustment that maximises method agreement with the ATOMIX benchmark references (this pipeline's preliminary `e_1` runs high enough near the threshold that a margin of 1.0 overshoots the benchmark ISR fraction). Both estimates are always computed; the margin only affects which one is reported.
 
 ### Step 1: Initial estimate from low wavenumbers
 
@@ -312,10 +312,10 @@ where `LUECK_A = 1.0774e9` accounts for the variance beyond 10 cpm.
 
 ### Step 2: Inertial subrange refinement (optional)
 
-If enough spectral points are available in the inertial subrange (`k < 0.02 * k_s` and at least 20 points), refine the estimate by fitting to the Nasmyth spectrum shape:
+If enough spectral points are available in the inertial subrange (`k < 0.01 * k_s` and at least 20 points), refine the estimate by fitting to the Nasmyth spectrum shape:
 
 ```
-k_isr = 0.02 * (e_1 / nu^3)^(1/4)
+k_isr = X_ISR * (e_1 / nu^3)^(1/4)       X_ISR = 0.01
 ```
 
 If this yields at least 20 wavenumber bins, apply the inertial subrange fitting method (Section 8) to get a refined `e_2`. Otherwise, `e_2 = e_1`.
@@ -368,7 +368,7 @@ To find the wavenumber where the observed spectrum departs from the turbulence s
 
 If no suitable minimum is found (polynomial fit order is decreased until one is found, down to order 3), `K_max = K_limit`.
 
-([`dissipation.py: _estimate_epsilon`](../src/odas_tpw/rsi/dissipation.py))
+([`l4.py: _variance_method`](../src/odas_tpw/scor160/l4.py))
 
 ### Step 5: Final integration
 
@@ -398,18 +398,18 @@ If this correction exceeds 10% (`e_corrected / e_4 > 1.1`), apply the variance c
 
 ## 8. Epsilon Estimation: Inertial Subrange Method
 
-The inertial subrange (ISR) method fits the observed spectrum to the Nasmyth shape in the inertial subrange. It is used when dissipation is high (`epsilon >= 1.5e-5 W/kg`), where the spectral rolloff may not be resolved.
+The inertial subrange (ISR) method fits the observed spectrum to the Nasmyth shape in the inertial subrange. It is used when dissipation is high — when the preliminary estimate `e_1 >= e_isr_threshold * isr_margin = 1.5e-5 * 1.6 = 2.4e-5 W/kg` (see Section 7) — where the spectral rolloff may not be resolved.
 
 ### Fitting range
 
 The fit is restricted to the inertial subrange:
 
 ```
-k_isr = min(0.02 * (epsilon / nu^3)^(1/4), K_limit)
+k_isr = min(X_ISR * (epsilon / nu^3)^(1/4), K_limit)       X_ISR = 0.01
 fit_range = {k : k <= k_isr}
 ```
 
-The constant 0.02 ensures the fit stays well below the viscous rolloff (`x << 1`).
+The constant `X_ISR = 0.01` (a fraction of the Kolmogorov wavenumber `k_s = (epsilon/nu^3)^(1/4)`) ensures the fit stays well below the viscous rolloff (`x << 1`). ODAS used 0.01 for years; v4.5.1 experimentally doubles it to 0.02 ("test pushing this upward", `get_diss_odas.m`). The ATOMIX benchmark reference values match 0.01 distinctly better (per-probe mean log10 errors grow when rerun with 0.02), so the code keeps `X_ISR = 0.01` ([`l4.py`](../src/odas_tpw/scor160/l4.py)).
 
 ### Three-pass iterative fitting
 
@@ -423,7 +423,7 @@ For pass = 1, 2, 3:
   epsilon = epsilon * 10^(3/2 * fit_error)
 ```
 
-The correction factor `10^(3/2 * fit_error)` arises because the Nasmyth spectrum scales as `epsilon^(3/4)`, so a factor-of-10 error in the spectral ratio corresponds to `10^(1/(3/4)) = 10^(4/3)` in epsilon. The factor `3/2` is `1 / (2/3)` reflecting the log-space geometry of the fit.
+The correction factor `10^(3/2 * fit_error)` arises because in the inertial subrange the spectrum is proportional to `epsilon^(2/3)`: although the dimensional Nasmyth form is `epsilon^(3/4) * nu^(-1/4) * G2(k/k_s)`, the Kolmogorov wavenumber `k_s` itself depends on epsilon, and for `k << k_s` the expression reduces to `Phi = 8.05 * epsilon^(2/3) * k^(1/3)` (independent of `nu`). Inverting `Phi ∝ epsilon^(2/3)` gives `epsilon ∝ Phi^(3/2)`, so a mean log-spectral offset of `fit_error` corresponds to a factor `10^(3/2 * fit_error)` in epsilon.
 
 ### Flyer removal
 
@@ -442,7 +442,7 @@ The method returns:
 - `epsilon`: fitted dissipation rate
 - `K_max`: highest wavenumber in the fit range
 
-([`dissipation.py: _inertial_subrange`](../src/odas_tpw/rsi/dissipation.py))
+([`l4.py: _inertial_subrange`](../src/odas_tpw/scor160/l4.py))
 
 
 ## 9. Iterative Variance Correction
@@ -483,7 +483,7 @@ For iteration = 1, 2, ..., max_iter (default 50):
 
 The iteration typically converges in 3-5 steps. The correction is larger when `K_max` is low relative to the Kolmogorov wavenumber.
 
-([`dissipation.py: _variance_correction`](../src/odas_tpw/rsi/dissipation.py))
+([`l4.py: _variance_correction`](../src/odas_tpw/scor160/l4.py))
 
 
 ## 10. Quality Control Metrics
@@ -509,6 +509,8 @@ fom = integral Phi_obs(k) dk  /  integral Phi_nasmyth(k) dk       for k in Range
 ```
 
 Values near 1.0 indicate the estimated epsilon correctly predicts the observed variance.
+
+Note that `fom` and `FM` (below) are **different statistics**, despite the similar names: `fom` is a simple observed/Nasmyth variance ratio (good values are near 1.0, on either side), while `FM` is the [Lueck (2022a,b)](https://doi.org/10.1175/JTECH-D-21-0050.1) MAD-based statistic (good values are below ~1, with the ATOMIX QC limit at 1.15). The QC flag uses `FM` when the number of FFT segments is available, falling back to `fom` otherwise ([`l4.py: process_l4`](../src/odas_tpw/scor160/l4.py)).
 
 ### Figure of merit — Lueck (FM)
 
@@ -551,7 +553,7 @@ K_max_ratio = K_max / K_95
 
 where `K_95 = X_95 * (epsilon / nu^3)^(1/4)` is the wavenumber containing 95% of the Nasmyth variance. Values near 1.0 mean most variance is resolved; values below 0.5 mean most variance is extrapolated via the variance correction.
 
-([`dissipation.py: _estimate_epsilon`](../src/odas_tpw/rsi/dissipation.py))
+([`l4.py: _estimate_epsilon`](../src/odas_tpw/scor160/l4.py))
 
 
 ## 11. Seawater Viscosity
@@ -590,14 +592,19 @@ Valid for 0 <= T <= 20 degrees C. Typical values: ~1.3e-6 m^2/s at 10 degrees C,
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `fft_length` | 256 | FFT segment length [samples] |
-| `diss_length` | `2 * fft_length` | Dissipation window length [samples] |
+| `fft_length` | 1024 | FFT segment length [samples] |
+| `diss_length` | `4 * fft_length` | Dissipation window length [samples] |
 | `overlap` | `diss_length / 2` | Window overlap [samples] |
+| `HP_cut` | `0.5 * fs / fft_length` | Shear high-pass cutoff [Hz], derived (0.25 Hz at 1024 samples and 512 Hz) |
 | `f_AA` | 98.0 | Anti-aliasing filter cutoff [Hz] |
 | `fit_order` | 3 | Polynomial order for spectral minimum |
 | `despike_thresh` | 8 | Spike detection threshold (ratio) |
 | `despike_smooth` | 0.5 | Despike envelope smoothing frequency [Hz] |
 | `e_isr_threshold` | `1.5e-5` | Epsilon threshold for ISR method [W/kg] |
+| `isr_margin` | 1.6 | Empirical margin on the method-switch threshold (Section 7) |
+| `X_ISR` | 0.01 | ISR fit upper limit as fraction of `k_s` (Section 8) |
+
+These are the `rsi-tpw` defaults ([`rsi/dissipation.py`](../src/odas_tpw/rsi/dissipation.py), [`rsi/config.py`](../src/odas_tpw/rsi/config.py)). The `perturb` campaign pipeline uses different defaults — `fft_length = 256` for epsilon (and 512 for chi), see [`perturb/config.py`](../src/odas_tpw/perturb/config.py).
 
 ### Macoun-Lueck correction
 
@@ -617,8 +624,8 @@ Valid for 0 <= T <= 20 degrees C. Typical values: ~1.3e-6 m^2/s at 10 degrees C,
 
 ### Epsilon estimation
 
-- Lueck, R.G., 2022a: [The statistics of oceanic turbulence measurements. Part 1: Shear variance and dissipation rates.](https://doi.org/10.1175/JTECH-D-21-0051.1) *J. Atmos. Oceanic Technol.*, 39, 1259-1276.
-- Lueck, R.G., 2022b: [The statistics of oceanic turbulence measurements. Part 2: Shear spectra and a new spectral model.](https://doi.org/10.1175/JTECH-D-21-0050.1) *J. Atmos. Oceanic Technol.*, 39, 1273-1282.
+- Lueck, R.G., 2022a: [The statistics of oceanic turbulence measurements. Part 1: Shear variance and dissipation rates.](https://doi.org/10.1175/JTECH-D-21-0051.1) *J. Atmos. Oceanic Technol.*, 39(9), 1259-1271.
+- Lueck, R.G., 2022b: [The statistics of oceanic turbulence measurements. Part 2: Shear spectra and a new spectral model.](https://doi.org/10.1175/JTECH-D-21-0050.1) *J. Atmos. Oceanic Technol.*, 39(9), 1273-1282.
 - Lueck, R.G., and 27 coauthors, 2024: [Best practices recommendations for estimating dissipation rates from shear probes.](https://doi.org/10.3389/fmars.2024.1334327) *Front. Mar. Sci.*, 11, 1334327.
 - McMillan, J.M., A.E. Hay, R.G. Lueck, and F. Wolk, 2016: [Rates of dissipation of turbulent kinetic energy in a high Reynolds number tidal channel.](https://doi.org/10.1175/JTECH-D-15-0167.1) *J. Atmos. Oceanic Technol.*, 33, 817-837.
 - Oakey, N.S., 1982: [Determination of the rate of dissipation of turbulent energy from simultaneous temperature and velocity shear microstructure measurements.](https://doi.org/10.1175/1520-0485(1982)012%3C0256:DOTROD%3E2.0.CO;2) *J. Phys. Oceanogr.*, 12, 256-271.

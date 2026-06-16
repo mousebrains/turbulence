@@ -82,11 +82,16 @@ def _variance_correction(
     _h2,
     grad_func,
     n_fine: int = _N_FINE,
+    K_min: float = 0.0,
 ) -> float:
     """Compute V_total / V_resolved for the unresolved-variance correction.
 
-    The correction factor is independent of chi (linear scaling cancels
-    in the ratio).  Uses a 2000-point grid (sufficient for <0.1% accuracy).
+    V_total is the model variance over all wavenumbers; V_resolved is the
+    model variance within [K_min, K_max] *after* FP07 attenuation (|H|²),
+    so the ratio simultaneously corrects for the unresolved band edges and
+    for in-band sensor response.  The correction factor is independent of
+    chi (linear scaling cancels in the ratio).  Uses a 2000-point grid
+    (sufficient for <0.1% accuracy).
 
     Returns correction factor, or NaN if integration fails.
     """
@@ -100,7 +105,7 @@ def _variance_correction(
 
     F_fine = K_fine * speed
     H2_fine = _h2(F_fine, tau0)
-    mask = K_fine <= K_max
+    mask = (K_fine >= K_min) & (K_fine <= K_max)
     V_resolved = np.trapezoid(spec_fine[mask] * H2_fine[mask], K_fine[mask])
 
     if V_resolved <= 0:
@@ -404,7 +409,9 @@ def _mle_fit_kB(
         grad_func,
     )
     if np.isfinite(correction):
-        obs_var = np.trapezoid(spec_obs[fit_mask], K[fit_mask])
+        obs_var = np.trapezoid(
+            np.maximum(spec_obs[fit_mask] - noise_K[fit_mask], 0), K[fit_mask]
+        )
         chi = 6 * KAPPA_T * obs_var * correction
     else:
         chi = chi_obs
@@ -440,8 +447,9 @@ def _iterative_fit(
 ) -> ChiFitResult:
     """Iterative MLE fitting (Peterson & Fer 2014, Method 2).
 
-    Three iterations refining integration limits and correcting for
-    unresolved variance below ``k_l`` and above ``k_u``.
+    Three iterations refining integration limits and applying a model-based
+    correction for the variance outside [``k_l``, ``k_u``] and for in-band
+    FP07 attenuation (see :func:`_variance_correction`).
 
     Parameters
     ----------
@@ -521,7 +529,7 @@ def _iterative_fit(
         if np.sum(mask_refined) < 3:
             break
 
-        chi_obs_new = (
+        chi_band = (
             6
             * KAPPA_T
             * np.trapezoid(
@@ -529,17 +537,19 @@ def _iterative_fit(
             )
         )
 
-        # Unresolved variance from Batchelor model
-        K_fine = np.linspace(K[1] * 0.01, kB_best * 5, _N_FINE)
-        chi_use = chi_obs_new if chi_obs_new > 0 else chi_obs
-        spec_fine = grad_func(K_fine, kB_best, chi_use)
-
-        chi_low = 6 * KAPPA_T * np.trapezoid(spec_fine[K_fine < k_l_new], K_fine[K_fine < k_l_new])
-        chi_high = 6 * KAPPA_T * np.trapezoid(spec_fine[K_fine > k_u_new], K_fine[K_fine > k_u_new])
-
-        chi_obs = max(chi_obs_new, 0) + chi_low + chi_high
-
-        if chi_obs <= 0:
+        # Model-based correction for variance outside [k_l, k_u] AND for
+        # in-band FP07 attenuation (the observed spectrum is never divided
+        # by |H|², so V_resolved in the ratio includes |H|² instead).
+        # Peterson & Fer (2014) equivalently boost the measured spectrum
+        # by the response function before integrating.
+        correction = _variance_correction(
+            kB_best, k_u_new, speed, tau0, _h2, grad_func, K_min=k_l_new
+        )
+        if chi_band > 0 and np.isfinite(correction):
+            chi_obs = chi_band * correction
+        elif chi_band > 0:
+            chi_obs = chi_band
+        else:
             chi_obs = 1e-14
 
     # Final values
