@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Complete ATOMIX QC flag set for epsilon (`EPSI_FLAGS`): in addition to
+  the existing FM (bit 1) and variance-resolved (bit 16) criteria, the
+  flags now include despike fraction (bit 2), inter-probe consistency
+  (bit 4, `ln(e_i/e_min) > 1.96*sqrt(2)*sigma_ln` with the Lueck 2022a
+  variance model — only the larger estimates are flagged), and
+  too-many-despike-passes (bit 8). The variance-resolved criterion is
+  now applied only to variance-method estimates (not ISR), matching the
+  benchmark convention. Per-window `DESPIKE_FRACTION` is computed in
+  L2/L3 and carried in `L4Data`. The benchmark comparison
+  (`scor160-tpw l1-l4`/`l2-l4`) now reports QC flag agreement using each
+  dataset's own thresholds (`read_l4_qc_limits`): 83-100% exact match
+  on the VMP250 tidal and MR1000 datasets.
+- Derived mixing quantities in the `perturb` chi stage (`chi.mixing`,
+  default true): `N2`, `dTdz`, `K_T`, `Gamma`, `K_rho` on the chi window
+  grid, with practical salinity from the profile's own C/T/P (TEOS-10)
+  so `N2` is fully constrained.
 - Derived mixing quantities in the `rsi-tpw pipeline` Method-1 chi output
   (`L4_chi_epsilon.nc`, propagated to `L5_binned.nc`/`L6_combined.nc`):
   window-scale `N2` (TEOS-10) and background `dTdz`, Osborn-Cox heat
