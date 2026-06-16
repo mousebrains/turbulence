@@ -259,7 +259,25 @@ def _chi_from_epsilon(
     cost = np.sum((np.log(models) - log_s[np.newaxis, :]) ** 2, axis=1)
     cost = np.where(np.isfinite(cost), cost, np.inf)
 
-    chi = float(chi_grid[np.argmin(cost)]) if not np.all(np.isinf(cost)) else chi_vc
+    if not np.all(np.isinf(cost)):
+        i_min = int(np.argmin(cost))
+        chi = float(chi_grid[i_min])
+        # Parabolic refinement of the minimum in log10(chi): the grid is
+        # ~4.7% coarse (200 points over 4 decades), a visible quantization
+        # on the primary output.  The vertex of the parabola through the
+        # minimum and its neighbours (uniform log spacing h) is
+        # x1 + 0.5*h*(y0 - y2)/(y0 - 2*y1 + y2); curvature > 0 and
+        # |offset| <= h are guaranteed when y1 is the strict minimum.
+        if 0 < i_min < len(chi_grid) - 1:
+            y0, y1, y2 = cost[i_min - 1 : i_min + 2]
+            if np.all(np.isfinite([y0, y1, y2])):
+                denom = y0 - 2.0 * y1 + y2
+                if denom > 0:
+                    h = np.log10(chi_grid[1] / chi_grid[0])
+                    dx = 0.5 * h * (y0 - y2) / denom
+                    chi = float(10.0 ** (np.log10(chi_grid[i_min]) + dx))
+    else:
+        chi = chi_vc
 
     # Compute fitted Batchelor spectrum for output
     spec_batch = grad_func(K, kB, chi)
@@ -447,9 +465,15 @@ def _iterative_fit(
 ) -> ChiFitResult:
     """Iterative MLE fitting (Peterson & Fer 2014, Method 2).
 
-    Three iterations refining integration limits and applying a model-based
-    correction for the variance outside [``k_l``, ``k_u``] and for in-band
-    FP07 attenuation (see :func:`_variance_correction`).
+    Three iterations refining the LOWER integration limit
+    ``k_l = max(K[1], 3*k_star)`` (with ``k_star = 0.04*kB*sqrt(kappa/nu)``,
+    a viscous-convective onset scale; the 0.04 coefficient follows the
+    original implementation and has not been verified against Peterson &
+    Fer's text) and applying a model-based correction for the variance
+    outside [``k_l``, ``k_u``] and for in-band FP07 attenuation (see
+    :func:`_variance_correction`).  The UPPER limit ``k_u`` is fixed at
+    the last valid wavenumber (noise/anti-aliasing criterion) and is not
+    refined between iterations.
 
     Parameters
     ----------

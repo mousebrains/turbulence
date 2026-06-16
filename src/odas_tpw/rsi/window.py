@@ -176,7 +176,11 @@ def compute_eps_window(
         K_out = K_g
     else:
         for ci in range(n_shear):
-            Pxx, F_s, _, _ = csd_odas(shear[:, ci], None, fft_length, fs_fast)
+            # No Goodman cleaning: ODAS uses parabolic detrending here
+            # (get_diss_odas.m:460)
+            Pxx, F_s, _, _ = csd_odas(
+                shear[:, ci], None, fft_length, fs_fast, detrend="parabolic"
+            )
             K_s = F_s / W
             correction = np.ones_like(K_s)
             mask_c = K_s <= MACOUN_LUECK_K
