@@ -404,6 +404,12 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
     # Remove None values
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
+    # Speed model (pipeline-level; default pressure / |dP/dt|).
+    if getattr(args, "speed_method", None):
+        kwargs["speed_method"] = args.speed_method
+    if getattr(args, "aoa", None) is not None:
+        kwargs["aoa_deg"] = args.aoa
+
     run_pipeline(p_files, output_dir, **kwargs)
 
 
@@ -833,6 +839,22 @@ def _add_pipeline_parser(subparsers: argparse._SubParsersAction) -> None:
         type=float,
         default=None,
         help="Fixed profiling speed [m/s] (default: from dP/dt)",
+    )
+    p.add_argument(
+        "--speed-method",
+        choices=["pressure", "em", "flight"],
+        default=None,
+        help=(
+            "Through-water speed model (default: pressure = |dP/dt|). "
+            "'em' uses the U_EM flowmeter channel; 'flight' uses the inviscid "
+            "glider flight model |W|/sin(|pitch|-aoa) from the inclinometers."
+        ),
+    )
+    p.add_argument(
+        "--aoa",
+        type=float,
+        default=None,
+        help="Angle of attack [deg] for --speed-method flight (default: 3.0)",
     )
     p.add_argument(
         "--eps-fft-length",

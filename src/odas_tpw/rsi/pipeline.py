@@ -40,6 +40,8 @@ def run_pipeline(
     min_duration: float = 7.0,
     speed: float | None = None,
     speed_tau: float = 1.5,
+    speed_method: str = "pressure",
+    aoa_deg: float = 3.0,
     vehicle: str | None = None,
     # L2 params
     HP_cut: float = 0.25,
@@ -172,6 +174,8 @@ def run_pipeline(
                 speed=speed,
                 direction=file_direction,
                 speed_tau=file_speed_tau,
+                speed_method=speed_method,
+                aoa_deg=aoa_deg,
                 l2_params=L2Params(
                     HP_cut=HP_cut,
                     despike_sh=np.array([despike_thresh, 0.5, 0.04]),
@@ -236,6 +240,8 @@ def _process_profile(
     speed: float | None,
     direction: str,
     speed_tau: float,
+    speed_method: str = "pressure",
+    aoa_deg: float = 3.0,
     l2_params: L2Params,
     l3_params: L3Params,
     f_AA: float,
@@ -262,6 +268,8 @@ def _process_profile(
         speed=speed,
         direction=direction,
         speed_tau=speed_tau,
+        speed_method=speed_method,
+        aoa_deg=aoa_deg,
     )
 
     # Step 2: L2
