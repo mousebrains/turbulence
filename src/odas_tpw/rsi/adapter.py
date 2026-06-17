@@ -23,6 +23,8 @@ def pfile_to_l1data(
     speed: float | None = None,
     direction: str = "auto",
     speed_tau: float = 1.5,
+    speed_method: str = "pressure",
+    aoa_deg: float = 3.0,
 ) -> L1Data:
     """Convert a PFile (or profile slice) to scor160 L1Data.
 
@@ -90,6 +92,16 @@ def pfile_to_l1data(
     # Profiling speed
     if speed is not None:
         pspd_rel = np.full(len(t_fast), abs(speed))
+    elif speed_method in ("em", "flight"):
+        # EM flowmeter (U_EM) or inviscid flight model U=|W|/sin(|pitch|-aoa)
+        # from the inclinometers, for MicroRiders/gliders where |dP/dt| is the
+        # vertical speed, not the through-water flow. Shared with perturb.
+        from odas_tpw.rsi.speed import compute_speed_for_pfile
+
+        speed_fast_full, _ = compute_speed_for_pfile(
+            pf, {"method": speed_method, "aoa_deg": aoa_deg, "tau": speed_tau}, vehicle
+        )
+        pspd_rel = speed_fast_full[s_fast:e_fast]
     else:
         from odas_tpw.scor160.profile import smooth_fall_rate, smooth_speed_interp
 

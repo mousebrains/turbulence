@@ -243,3 +243,15 @@ class TestUnknownMethod:
             compute_speed_for_pfile(
                 vmp_descent, {"method": "magic"}, vehicle="vmp",
             )
+
+
+def test_speed_model_is_shared_not_duplicated():
+    """perturb.speed re-exports rsi.speed — one implementation, no divergent copy.
+
+    The rsi pipeline (adapter.pfile_to_l1data) reuses the same function, so this
+    guards against someone re-adding a separate copy under perturb later.
+    """
+    from odas_tpw.perturb.speed import compute_speed_for_pfile as perturb_fn
+    from odas_tpw.rsi.speed import compute_speed_for_pfile as rsi_fn
+
+    assert perturb_fn is rsi_fn
