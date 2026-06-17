@@ -1,0 +1,33 @@
+# Pre-commit / pre-push hooks mirroring the CI code gates (.github/workflows/ci.yml).
+#
+# Enable once after cloning (installs both the pre-commit and pre-push hooks):
+#   pre-commit install
+#
+# The fast lint runs at COMMIT time; the heavier mypy typecheck runs only at
+# PUSH time, so it gates what reaches CI without slowing every commit. Both use
+# the project's installed tools (the `dev` extra), so they run the exact same
+# ruff/mypy as CI and need no isolated hook environment.
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: local
+    hooks:
+      # Lint — mirrors the CI `lint` job (`ruff check src/ tests/`). Fast (<1s).
+      - id: ruff
+        name: ruff check (lint)
+        entry: ruff check src/ tests/
+        language: system
+        pass_filenames: false
+        types: [python]
+        require_serial: true
+
+      # Typecheck — mirrors the CI `typecheck` job (`mypy src/odas_tpw/`).
+      # Push-only so it doesn't slow every commit (this is the gate a recent
+      # push missed and let a type error reach CI).
+      - id: mypy
+        name: mypy (typecheck src/odas_tpw)
+        entry: mypy src/odas_tpw/
+        language: system
+        pass_filenames: false
+        types: [python]
+        stages: [pre-push]

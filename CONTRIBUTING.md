@@ -23,6 +23,19 @@ ruff check src/ tests/              # linting
 mypy src/odas_tpw/  # type checking
 ```
 
+### Git hooks (recommended)
+
+A `.pre-commit-config.yaml` mirrors the CI code gates so failures are caught
+before they reach CI: ruff lint runs at **commit** time, and the mypy typecheck
+runs at **push** time (heavier, so it doesn't slow every commit). Both use the
+installed `dev` tools, so they run the same ruff/mypy as CI. Enable once after
+cloning:
+
+```bash
+pre-commit install          # installs the pre-commit and pre-push hooks
+pre-commit run --all-files  # optional: run the lint hook over everything now
+```
+
 ## Coverage policy
 
 CI measures branch coverage on Python 3.14 / Ubuntu and gates merges with
