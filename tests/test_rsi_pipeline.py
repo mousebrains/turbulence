@@ -330,3 +330,43 @@ class TestResolveSalinity:
         val, measured = _resolve_salinity(_make_l1(10, []), user)
         assert measured is False
         np.testing.assert_array_equal(val, user)
+
+
+# ---------------------------------------------------------------------------
+# _epsilon_hp_cut — shear high-pass scales with the FFT length (match perturb)
+# ---------------------------------------------------------------------------
+
+
+class TestEpsilonHpCut:
+    def test_default_1024_is_quarter_hz(self):
+        """The default 1024-sample FFT at 512 Hz gives the historical 0.25 Hz."""
+        from odas_tpw.rsi.pipeline import _epsilon_hp_cut
+
+        assert _epsilon_hp_cut(512.0, 1024, None) == pytest.approx(0.25)
+
+    def test_scales_inversely_with_fft_length(self):
+        """A 256-sample FFT gives 1.0 Hz — 4x the 1024-sample cutoff."""
+        from odas_tpw.rsi.pipeline import _epsilon_hp_cut
+
+        assert _epsilon_hp_cut(512.0, 256, None) == pytest.approx(1.0)
+        assert _epsilon_hp_cut(512.0, 512, None) == pytest.approx(0.5)
+
+    def test_matches_modular_compute_epsilon_formula(self):
+        """Identical to dissipation.py `_compute_epsilon` (0.5*fs/fft_length)."""
+        from odas_tpw.rsi.pipeline import _epsilon_hp_cut
+
+        for fs in (256.0, 512.0, 1024.0):
+            for fft in (256, 512, 1024, 2048):
+                assert _epsilon_hp_cut(fs, fft, None) == pytest.approx(0.5 * fs / fft)
+
+    def test_explicit_override_wins(self):
+        """A pinned cutoff overrides the scaling default."""
+        from odas_tpw.rsi.pipeline import _epsilon_hp_cut
+
+        assert _epsilon_hp_cut(512.0, 256, 0.3) == pytest.approx(0.3)
+
+    def test_chi_hp_cut_constant_is_canonical(self):
+        """Chi vib high-pass stays pinned at the canonical 0.25 Hz."""
+        from odas_tpw.rsi.pipeline import _CHI_HP_CUT
+
+        assert abs(_CHI_HP_CUT - 0.25) < 1e-12
