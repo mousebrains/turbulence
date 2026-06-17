@@ -94,15 +94,41 @@ class TestMixingLook:
         assert len(t_win) == len(d["P_windows"])
 
     def test_draw_runs(self):
-        """Full _draw() exercises stratification + mixing without crashing."""
+        """Full _draw() exercises stratification + mixing + spectra without crashing."""
         import matplotlib.pyplot as plt
 
         viewer = self._viewer()
-        viewer.fig, viewer.axes = plt.subplots(2, 4)
+        viewer.fig, viewer.axes = plt.subplots(viewer._nrows, viewer._ncols, squeeze=False)
         try:
             viewer._setup_axes()
-            viewer._draw()  # computes N2/dTdz/K_T/Gamma/K_rho and draws all 8 panels
+            viewer._draw()  # N2/dTdz/K_T/Gamma/K_rho + eps/chi spectra + FM/FOM
             assert viewer._mix is not None
             assert len(viewer._mix.Gamma) == len(viewer._P_win)
+            assert viewer._cached_spec is not None  # row-2 spectra computed
+        finally:
+            plt.close(viewer.fig)
+
+    def test_grid_is_three_rows(self):
+        """ml requests the extra spectra row."""
+        assert self._viewer()._nrows == 3
+
+
+@pytest.mark.skipif(not TEST_P.exists(), reason="SN479_0006.p test data not available")
+class TestDissLookDraw:
+    """Covers the shared FM / chi-spectra / chi-FOM panels moved to the base."""
+
+    def test_draw_runs(self):
+        import matplotlib.pyplot as plt
+
+        from odas_tpw.rsi.diss_look import DissLookViewer
+        from odas_tpw.rsi.p_file import PFile
+
+        viewer = DissLookViewer(PFile(TEST_P), fft_length=256, f_AA=98.0)
+        viewer.fig, viewer.axes = plt.subplots(viewer._nrows, viewer._ncols, squeeze=False)
+        try:
+            viewer._setup_axes()
+            viewer._draw()
+            assert viewer._cached_diss is not None
+            assert viewer._cached_spec is not None
         finally:
             plt.close(viewer.fig)

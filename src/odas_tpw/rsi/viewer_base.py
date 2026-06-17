@@ -352,7 +352,12 @@ class ProfileViewer:
     Handles channel extraction, profile detection, interpolation, shear
     conversion, navigation buttons, and common drawing methods.
     Subclasses override ``_setup_axes`` and ``_draw`` for their specific layout.
+    Subclasses may set ``_nrows``/``_ncols`` to request a larger panel grid.
     """
+
+    # Panel grid; subclasses may override (e.g. mixing_look uses 3 rows).
+    _nrows = 2
+    _ncols = 4
 
     def __init__(
         self,
@@ -446,6 +451,10 @@ class ProfileViewer:
         self.profile_idx = 0
         self.fig = None
         self._spec_bin_width = None
+        # Per-draw caches populated by subclasses' _draw (used by the shared
+        # spectra / FM / FOM drawing methods below).
+        self._cached_diss: dict | None = None
+        self._cached_spec: dict | None = None
 
     # ------------------------------------------------------------------
     # Utility methods
@@ -688,6 +697,228 @@ class ProfileViewer:
         ax.grid(True, alpha=0.3)
 
     # ------------------------------------------------------------------
+    # Shared FM / chi-spectra / chi-FOM panels (need self._cached_diss /
+    # self._cached_spec, populated by the subclass _draw)
+    # ------------------------------------------------------------------
+
+    def _draw_fm_profile(self, ax):
+        """Lueck (2022) FM figure of merit vs pressure."""
+        d = self._cached_diss
+        assert d is not None
+        P = d["P_windows"]
+
+        if len(P) == 0:
+            ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
+            return
+
+        colors = ["C0", "C1", "C4", "C5"]
+        has_data = False
+        pct1_lines = []
+        pct115_lines = []
+        for i, (name, _) in enumerate(self.shear):
+            c = colors[i % len(colors)]
+            fm = d["FM"][i]
+            valid = np.isfinite(fm)
+            if np.any(valid):
+                fm_valid = fm[valid]
+                pct1 = 100.0 * np.sum(fm_valid > 1.0) / len(fm_valid)
+                pct115 = 100.0 * np.sum(fm_valid > 1.15) / len(fm_valid)
+                pct1_lines.append(f"{name}:{pct1:.0f}%")
+                pct115_lines.append(f"{name}:{pct115:.0f}%")
+                ax.plot(fm_valid, P[valid], f"{c}o-", markersize=3, linewidth=0.8, label=name)
+                has_data = True
+
+        if has_data:
+            ax.axvline(
+                1.0,
+                color="k",
+                linestyle="-",
+                linewidth=1.0,
+                alpha=0.7,
+                label=f"FM>1: {', '.join(pct1_lines)}",
+            )
+            ax.axvline(
+                1.15,
+                color="0.5",
+                linestyle="--",
+                linewidth=0.7,
+                alpha=0.5,
+                label=f"FM>1.15: {', '.join(pct115_lines)}",
+            )
+            xlim = ax.get_xlim()
+            ax.axvspan(0, 1.0, color="green", alpha=0.05, zorder=0)
+            ax.axvspan(1.0, max(xlim[1], 3), color="red", alpha=0.05, zorder=0)
+
+            ax.set_xlabel("FM")
+            ax.set_ylabel("Pressure [dbar]")
+            ax.legend(fontsize=6, loc="lower right")
+            ax.set_title("Lueck FM (2022)", fontsize=9)
+            ax.grid(True, alpha=0.3)
+            ax.set_xlim(0, max(xlim[1], 2))
+        else:
+            ax.text(0.5, 0.5, "No valid FM", transform=ax.transAxes, ha="center", va="center")
+
+    def _draw_chi_fom_profile(self, ax):
+        """Chi figure of merit vs pressure (Batchelor & Kraichnan)."""
+        d = self._cached_diss
+        assert d is not None
+        P = d["P_windows"]
+
+        if len(P) == 0:
+            ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
+            return
+
+        colors = ["C3", "C1", "C4", "C5"]
+        has_data = False
+        for i, (name, _) in enumerate(self.therm_fast):
+            c = colors[i % len(colors)]
+
+            fom_b = d["chi_fom_batchelor"][i]
+            valid_b = np.isfinite(fom_b)
+            if np.any(valid_b):
+                ax.plot(
+                    fom_b[valid_b],
+                    P[valid_b],
+                    color=c,
+                    linestyle="--",
+                    marker="^",
+                    markersize=2.5,
+                    linewidth=0.8,
+                    label=f"{name} Batch.",
+                )
+                has_data = True
+
+            fom_k = d["chi_fom_kraichnan"][i]
+            valid_k = np.isfinite(fom_k)
+            if np.any(valid_k):
+                ax.plot(
+                    fom_k[valid_k],
+                    P[valid_k],
+                    color=c,
+                    linestyle="-",
+                    marker="o",
+                    markersize=2.5,
+                    linewidth=0.8,
+                    label=f"{name} Kraich.",
+                )
+                has_data = True
+
+        if has_data:
+            ax.axvline(1.0, color="k", linestyle="-", linewidth=1.0, alpha=0.7, label="FOM = 1")
+            ax.set_xlabel("χ FOM (obs/model)")
+            ax.set_ylabel("Pressure [dbar]")
+            ax.legend(fontsize=5, loc="lower right")
+            ax.set_title("χ FOM (Batch. & Kraich.)", fontsize=9)
+            ax.grid(True, alpha=0.3)
+        else:
+            ax.text(
+                0.5, 0.5, "No valid χ FOM", transform=ax.transAxes, ha="center", va="center"
+            )
+
+    def _draw_chi_m1m2_spectra(self, ax, sel_spec):
+        """Chi spectra -- Method 1 (from epsilon) vs Method 2 (iterative fit)."""
+        n_fast = sel_spec.stop - sel_spec.start
+        if n_fast < self.diss_length:
+            ax.text(0.5, 0.5, "Insufficient data", transform=ax.transAxes, ha="center", va="center")
+            return
+
+        r = self._cached_spec
+        assert r is not None
+        K_chi = r["F"] / r["W"]
+
+        if not r["chi_obs_specs"]:
+            ax.text(0.5, 0.5, "No χ spectra", transform=ax.transAxes, ha="center", va="center")
+            return
+
+        colors_chi = ["C3", "C1"]
+        for i, (name, _) in enumerate(self.therm_fast):
+            if i >= len(r["chi_obs_specs"]):
+                break
+            c = colors_chi[i % len(colors_chi)]
+
+            obs = r["chi_obs_specs"][i]
+            valid = np.isfinite(obs) & (obs > 0) & (K_chi > 0)
+            if np.any(valid):
+                ax.loglog(K_chi[valid], obs[valid], c, linewidth=0.8, alpha=0.6, label=name)
+
+            m1_spec = r["chi_m1_specs"][i]
+            chi_m1 = r["chi_m1_vals"][i]
+            valid_m1 = np.isfinite(m1_spec) & (m1_spec > 0) & (K_chi > 0)
+            if np.any(valid_m1) and np.isfinite(chi_m1):
+                ax.loglog(
+                    K_chi[valid_m1],
+                    m1_spec[valid_m1],
+                    c,
+                    linewidth=1.2,
+                    linestyle="--",
+                    alpha=0.9,
+                    label=f"M1 χ={chi_m1:.1e}",
+                )
+
+            m2_spec = r["chi_m2_specs"][i]
+            chi_m2 = r["chi_m2_vals"][i]
+            valid_m2 = np.isfinite(m2_spec) & (m2_spec > 0) & (K_chi > 0)
+            if np.any(valid_m2) and np.isfinite(chi_m2):
+                ax.loglog(
+                    K_chi[valid_m2],
+                    m2_spec[valid_m2],
+                    c,
+                    linewidth=1.2,
+                    linestyle="-.",
+                    alpha=0.9,
+                    label=f"M2 χ={chi_m2:.1e}",
+                )
+
+        noise = r["noise_K"]
+        if noise is not None:
+            valid_n = np.isfinite(noise) & (noise > 0) & (K_chi > 0)
+            if np.any(valid_n):
+                ax.loglog(
+                    K_chi[valid_n],
+                    noise[valid_n],
+                    "0.5",
+                    linewidth=0.6,
+                    linestyle=":",
+                    label="Noise",
+                )
+
+        K_AA = self.f_AA / r["W"]
+        ax.axvline(K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5)
+
+        P_lo = float(self.P_fast[sel_spec.start])
+        P_hi = float(self.P_fast[min(sel_spec.stop - 1, len(self.P_fast) - 1)])
+        x_lo, x_hi = 0.5, 300
+        in_range = (K_chi >= x_lo) & (K_chi <= x_hi)
+        all_vals = []
+        for spec_list in [r["chi_obs_specs"], r["chi_m1_specs"], r["chi_m2_specs"]]:
+            for s in spec_list:
+                pos = s[in_range & (s > 0) & np.isfinite(s)]
+                if len(pos):
+                    all_vals.append(pos)
+        if all_vals:
+            combined = np.concatenate(all_vals)
+            y_hi = 10 ** (np.ceil(np.log10(np.max(combined))) + 1)
+        else:
+            y_hi = 1e-2
+        if noise is not None:
+            noise_in = noise[in_range & (noise > 0) & np.isfinite(noise)]
+            y_lo = 10 ** (np.floor(np.log10(np.min(noise_in))) - 1) if len(noise_in) else 1e-11
+        else:
+            y_lo = 1e-11
+
+        ax.set_xlabel("Wavenumber [cpm]")
+        ax.set_ylabel("Φ_T [(K/m)² cpm⁻¹]")
+        ax.set_xlim(x_lo, x_hi)
+        ax.set_ylim(y_lo, y_hi)
+        ax.legend(fontsize=5, loc="lower left")
+        ax.set_title(
+            f"χ spectra (Kraichnan)  P={P_lo:.1f}–{P_hi:.1f}\n"  # noqa: RUF001
+            f"(-- M1 from ε, -· M2 iter)",
+            fontsize=9,
+        )
+        ax.grid(True, alpha=0.3, which="both")
+
+    # ------------------------------------------------------------------
     # Figure setup and navigation
     # ------------------------------------------------------------------
 
@@ -719,10 +950,11 @@ class ProfileViewer:
 
     def show(self) -> None:
         self.fig, self.axes = plt.subplots(
-            2,
-            4,
-            figsize=(24, 9),
+            self._nrows,
+            self._ncols,
+            figsize=(6.0 * self._ncols, 4.5 * self._nrows),
             gridspec_kw={"hspace": 0.35, "wspace": 0.32},
+            squeeze=False,
         )
         self.fig.subplots_adjust(bottom=0.08, top=0.92, left=0.04, right=0.98)
 

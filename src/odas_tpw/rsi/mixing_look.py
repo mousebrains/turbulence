@@ -25,7 +25,11 @@ import numpy as np
 
 from odas_tpw.processing.mixing import mixing_coefficients, sorted_stratification
 from odas_tpw.rsi.p_file import PFile
-from odas_tpw.rsi.viewer_base import ProfileViewer, compute_windowed_diss
+from odas_tpw.rsi.viewer_base import (
+    ProfileViewer,
+    compute_depth_spectra,
+    compute_windowed_diss,
+)
 
 # Color cycle: shear-probe (epsilon) and thermistor (chi) families, matching
 # the conventions used by quick_look / diss_look.
@@ -36,9 +40,10 @@ _THERM_COLORS = ["C3", "C1", "C4", "C5"]
 class MixingLookViewer(ProfileViewer):
     """Interactive mixing viewer with Prev/Next navigation."""
 
+    _nrows = 3  # extra row for the epsilon/chi spectra and FM/FOM panels
+
     def __init__(self, pf, salinity=None, **kwargs):
         super().__init__(pf, **kwargs)
-        self._cached_diss: dict | None = None
         self._P_win = np.array([])
         self._strat = None
         self._mix = None
@@ -55,6 +60,10 @@ class MixingLookViewer(ProfileViewer):
             self.salinity = float(salinity)
         else:
             self.salinity = self._measured_salinity(pf)
+
+        # Colorbar for the pressure-colored K_T-vs-K_rho scatter; removed and
+        # rebuilt each draw so its stolen space never compounds.
+        self._scatter_cbar = None
 
     def _measured_salinity(self, pf) -> np.ndarray | None:
         """Slow-rate practical salinity from JAC C/T, or None when unavailable."""
@@ -83,12 +92,14 @@ class MixingLookViewer(ProfileViewer):
 
     def _setup_axes(self):
         p_ref = self.axes[0, 0]
-        # All profile panels share the pressure y-axis; the K_T-vs-K_rho
-        # scatter (1, 3) is independent.
+        # Pressure-profile panels share the y-axis. Independent panels: the
+        # K_T-vs-K_rho scatter (1, 3) and the two wavenumber spectra (2, 0/1).
         for col in range(1, 4):
             self.axes[0, col].sharey(p_ref)
-        for col in range(3):
+        for col in range(3):  # (1,0) dT/dz, (1,1) eps, (1,2) chi
             self.axes[1, col].sharey(p_ref)
+        self.axes[2, 2].sharey(p_ref)  # FM profile
+        self.axes[2, 3].sharey(p_ref)  # chi FOM profile
         p_ref.invert_yaxis()
 
     # ------------------------------------------------------------------
@@ -171,6 +182,11 @@ class MixingLookViewer(ProfileViewer):
         s_slow, e_slow = self.profiles[self.profile_idx]
         sel_fast = self._slow_to_fast_slice(s_slow, e_slow)
         self._spec_bin_width = self._spec_bin_dbar(s_slow, e_slow)
+        sel_spec = self._spec_fast_slice(sel_fast)
+
+        if self._scatter_cbar is not None:
+            self._scatter_cbar.remove()
+            self._scatter_cbar = None
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
@@ -196,6 +212,23 @@ class MixingLookViewer(ProfileViewer):
         self._cached_diss = d
         P = d["P_windows"]
         self._P_win = P
+
+        # Spectra at the selected depth for the row-2 spectral panels.
+        self._cached_spec = compute_depth_spectra(
+            self.shear,
+            self.accel,
+            self.therm_fast,
+            self.diff_gains,
+            self.P_fast,
+            self.T,
+            self.speed_fast,
+            self.fs_fast,
+            sel_spec,
+            self.fft_length,
+            self.f_AA,
+            self.goodman,
+            diss_length=self.diss_length,
+        )
 
         # Background stratification on the Thorpe-sorted slow profile, then the
         # mixing coefficients on the same window grid.
@@ -225,7 +258,17 @@ class MixingLookViewer(ProfileViewer):
         self._draw_chi_profile(self.axes[1, 2])
         self._draw_kt_krho_scatter(self.axes[1, 3])
 
-        pressure_axes = [self.axes[0, c] for c in range(4)] + [self.axes[1, c] for c in range(3)]
+        # Row 2: spectra at depth + Lueck FM / chi FOM (shared base panels)
+        self._draw_eps_spectra(self.axes[2, 0], sel_spec, self._cached_spec)
+        self._draw_chi_m1m2_spectra(self.axes[2, 1], sel_spec)
+        self._draw_fm_profile(self.axes[2, 2])
+        self._draw_chi_fom_profile(self.axes[2, 3])
+
+        pressure_axes = (
+            [self.axes[0, c] for c in range(4)]
+            + [self.axes[1, c] for c in range(3)]
+            + [self.axes[2, 2], self.axes[2, 3]]
+        )
         self._finish_draw(s_slow, e_slow, pressure_axes)
 
     # ------------------------------------------------------------------
@@ -342,26 +385,41 @@ class MixingLookViewer(ProfileViewer):
         ax.grid(True, alpha=0.3, which="both")
 
     def _draw_kt_krho_scatter(self, ax):
-        """Panel (1,3): K_T vs K_rho (log-log, 1:1 line) — agreement => Γ ≈ 0.2."""
+        """Panel (1,3): K_T vs K_rho (log-log, 1:1 line), colored by pressure.
+
+        Points on the 1:1 line have measured Γ ≈ 0.2 (K_T ≈ K_rho); the pressure
+        colour shows how the agreement varies with depth.
+        """
         if self._mix is None:
             self._no_data(ax, "No data")
             return
         K_T = self._mix.K_T
         K_rho = self._mix.K_rho
-        valid = np.isfinite(K_T) & (K_T > 0) & np.isfinite(K_rho) & (K_rho > 0)
+        valid = (
+            np.isfinite(K_T) & (K_T > 0) & np.isfinite(K_rho) & (K_rho > 0)
+            & np.isfinite(self._P_win)
+        )
         if not np.any(valid):
             self._no_data(ax, "No valid K_T/K_rho")
             return
         x = K_rho[valid]
         y = K_T[valid]
-        ax.loglog(x, y, "o", color="C4", markersize=4, alpha=0.7)
+        pcol = self._P_win[valid]
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        sc = ax.scatter(x, y, c=pcol, cmap="viridis", s=26, alpha=0.85, edgecolors="none")
+        assert self.fig is not None
+        cbar = self.fig.colorbar(sc, ax=ax, pad=0.02)
+        cbar.set_label("Pressure [dbar]", fontsize=7)
+        cbar.ax.tick_params(labelsize=6)
+        self._scatter_cbar = cbar
         lo = float(min(x.min(), y.min()))
         hi = float(max(x.max(), y.max()))
         ax.plot([lo, hi], [lo, hi], "k--", linewidth=0.9, alpha=0.7, label="1:1 (Γ = 0.2)")
         ax.set_xlabel("K_rho (Osborn) [m² s⁻¹]")
         ax.set_ylabel("K_T (Osborn-Cox) [m² s⁻¹]")
         ax.legend(fontsize=6, loc="upper left")
-        ax.set_title("K_T vs K_rho", fontsize=9)
+        ax.set_title("K_T vs K_rho (color = P)", fontsize=9)
         ax.grid(True, alpha=0.3, which="both")
 
 
