@@ -1489,3 +1489,14 @@ class TestChiGridRefinement:
             assert abs(res.chi / chi_true - 1) < 0.005, (
                 f"chi_true={chi_true:.3e} recovered {res.chi:.3e}"
             )
+
+
+class TestComputeChiSalinityGuard:
+    """_compute_chi only accepts a concrete salinity, not the sentinel string."""
+
+    def test_string_salinity_raises_clear_error(self):
+        from odas_tpw.rsi.chi_io import _compute_chi
+
+        # Guard fires before any file access, so the source need not exist.
+        with pytest.raises(ValueError, match="not resolved"):
+            _compute_chi("nonexistent.nc", salinity="measured")

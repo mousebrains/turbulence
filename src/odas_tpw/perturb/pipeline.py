@@ -619,6 +619,29 @@ def _nan_excluded_probes(ds, excluded_probes: list[str], file_label: str) -> Non
             ds[e_name].values[:] = np.nan
 
 
+def _profile_practical_salinity(prof_path, T_name: str, C_name: str):
+    """Slow-time practical salinity for a profile NetCDF, or None.
+
+    Derives per-slow-sample practical salinity [PSU] from the profile's own
+    conductivity, in-situ temperature, and pressure via TEOS-10
+    (``gsw.SP_from_C`` — the same conversion used for the derived mixing
+    quantities), returning ``None`` when any of the C/T/P channels are
+    absent. Used to resolve ``chi.salinity: measured`` to an array the chi
+    viscosity path consumes instead of the fixed 35-PSU default.
+    """
+    import gsw
+    import numpy as np
+    import xarray as xr
+
+    with xr.open_dataset(prof_path, decode_times=False) as ds:
+        if any(v not in ds for v in ("P", T_name, C_name)):
+            return None
+        P = ds["P"].values.astype(np.float64)
+        T = ds[T_name].values.astype(np.float64)
+        C = ds[C_name].values.astype(np.float64)
+    return gsw.SP_from_C(C, T, P)
+
+
 def process_file(
     p_path: Path,
     config: dict,
@@ -975,9 +998,17 @@ def process_file(
                 for k, v in chi_cfg.items()
                 if k not in (
                     "enable", "chi_minimum", "diagnostics",
-                    "use_epsilon", "fom_max", "mixing",
+                    "use_epsilon", "fom_max", "mixing", "salinity",
                 )
             }
+            # Resolve chi.salinity: "measured" -> per-profile practical salinity
+            # from the profile's own C/T/P (TEOS-10); a number or None is passed
+            # through (None -> fixed 35 PSU viscosity in process_l3_chi).
+            chi_sal_cfg = chi_cfg.get("salinity")
+            chi_use_measured_sal = (
+                isinstance(chi_sal_cfg, str)
+                and chi_sal_cfg.strip().lower() == "measured"
+            )
             with stage_log(output_dirs.get("chi"), log_basename):
                 for prof_path in result["profiles"]:
                     diss_path = diss_by_profile.get(prof_path)
@@ -999,9 +1030,24 @@ def process_file(
                         diss_ds = xr.open_dataset(diss_path) if chi_use_epsilon else None
                         # Pop so the cache is released as we consume it.
                         pre_loaded = prof_data_cache.pop(prof_path, None)
+                        if chi_use_measured_sal:
+                            chi_sal = _profile_practical_salinity(
+                                prof_path,
+                                ct_cfg.get("T_name", "JAC_T"),
+                                ct_cfg.get("C_name", "JAC_C"),
+                            )
+                            if chi_sal is None:
+                                logger.warning(
+                                    "chi salinity='measured' but %s lacks C/T/P; "
+                                    "using fixed 35 PSU",
+                                    Path(prof_path).name,
+                                )
+                        else:
+                            chi_sal = chi_sal_cfg
                         chi_results = _compute_chi(
                             prof_path,
                             epsilon_ds=diss_ds,
+                            salinity=chi_sal,
                             **chi_kwargs,
                             _pre_loaded=pre_loaded,
                         )
