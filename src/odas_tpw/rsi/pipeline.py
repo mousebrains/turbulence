@@ -28,6 +28,25 @@ from odas_tpw.scor160.l4 import process_l4
 
 logger = logging.getLogger(__name__)
 
+# Canonical chi (temperature-gradient) vibration high-pass cutoff [Hz]. Fixed
+# across the modular chi path (chi_io.py) and perturb, independent of the chi
+# FFT length, so the rsi pipeline pins it here too rather than reusing the
+# epsilon shear high-pass (which scales with the epsilon FFT length).
+_CHI_HP_CUT = 0.25
+
+
+def _epsilon_hp_cut(fs_fast: float, fft_length: int, override: float | None) -> float:
+    """Shear high-pass cutoff [Hz] for epsilon, matching ``_compute_epsilon``.
+
+    Half the inverse FFT-segment duration (ODAS ``get_diss_odas.m`` guidance):
+    ``0.5 * fs_fast / fft_length`` — 0.25 Hz for a 1024-sample FFT at 512 Hz,
+    and it scales with the FFT length so a 256-sample window gives 1.0 Hz. An
+    explicit ``override`` (if not None) wins, for callers that pin the cutoff.
+    """
+    if override is not None:
+        return override
+    return 0.5 * fs_fast / fft_length
+
 
 def _resolve_salinity(
     l1: L1Data, salinity: float | np.ndarray | None
@@ -69,7 +88,7 @@ def run_pipeline(
     aoa_deg: float = 3.0,
     vehicle: str | None = None,
     # L2 params
-    HP_cut: float = 0.25,
+    HP_cut: float | None = None,
     despike_thresh: float = 8.0,
     # Epsilon spectral params
     fft_length: int = 1024,
@@ -180,6 +199,12 @@ def run_pipeline(
 
         logger.info(f"{len(profiles)} profile(s) detected")
 
+        # Epsilon shear high-pass cutoff, scaled with the epsilon FFT length
+        # exactly as the modular _compute_epsilon / perturb path: 0.25 Hz at the
+        # default 1024-sample FFT (512 Hz), 1.0 Hz at 256 samples. Chi keeps the
+        # fixed canonical 0.25 Hz (see _CHI_HP_CUT) regardless of its FFT length.
+        eps_hp_cut = _epsilon_hp_cut(pf.fs_fast, fft_length, HP_cut)
+
         all_binned = []
         profile_metadata = []
 
@@ -202,7 +227,7 @@ def run_pipeline(
                 speed_method=speed_method,
                 aoa_deg=aoa_deg,
                 l2_params=L2Params(
-                    HP_cut=HP_cut,
+                    HP_cut=eps_hp_cut,
                     despike_sh=np.array([despike_thresh, 0.5, 0.04]),
                     despike_A=np.array([np.inf, 0.5, 0.04]),
                     profile_min_W=W_min,
@@ -214,7 +239,7 @@ def run_pipeline(
                     fft_length=fft_length,
                     diss_length=diss_length,
                     overlap=overlap,
-                    HP_cut=HP_cut,
+                    HP_cut=eps_hp_cut,
                     fs_fast=0,  # placeholder, overridden in _process_profile
                     goodman=goodman,
                 ),
@@ -339,7 +364,7 @@ def _process_profile(
 
     if l1.has_temp_fast:
         l2_chi_params = L2ChiParams(
-            HP_cut=l2_params.HP_cut,
+            HP_cut=_CHI_HP_CUT,
             despike_T=np.array([despike_T_thresh, 0.5, 0.04]),
         )
         l2_chi = process_l2_chi(l1, l2, l2_chi_params)
@@ -348,7 +373,7 @@ def _process_profile(
             fft_length=chi_fft_length,
             diss_length=chi_diss_length,
             overlap=chi_overlap,
-            HP_cut=l2_params.HP_cut,
+            HP_cut=_CHI_HP_CUT,
             fs_fast=l1.fs_fast,
             goodman=l3_params.goodman,
         )
