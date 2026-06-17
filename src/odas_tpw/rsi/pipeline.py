@@ -367,15 +367,23 @@ def _process_profile(
             from odas_tpw.processing.mixing import (
                 mixing_coefficients,
                 pair_nearest,
-                window_stratification,
+                sorted_stratification,
             )
 
-            sal_for_strat = salinity
-            if isinstance(salinity, np.ndarray) and len(salinity) != l1.n_time:
-                sal_for_strat = float(np.nanmean(salinity))
+            # Prefer the per-sample salinity measured from the profile's own
+            # conductivity (VMP JAC C/T, computed in pfile_to_l1data); else the
+            # user-supplied salinity; else 35 PSU.
+            measured = l1.salinity.size == l1.n_time and np.isfinite(l1.salinity).any()
+            sal_for_strat: float | np.ndarray | None
+            if measured:
+                sal_for_strat = l1.salinity
+            else:
+                sal_for_strat = salinity
+                if isinstance(salinity, np.ndarray) and len(salinity) != l1.n_time:
+                    sal_for_strat = float(np.nanmean(salinity))
 
             half_w = 0.5 * chi_diss_length / l1.fs_fast
-            strat = window_stratification(
+            strat = sorted_stratification(
                 l4_chi_eps.time,
                 half_w,
                 l1.time,
@@ -387,12 +395,15 @@ def _process_profile(
             mix = mixing_coefficients(
                 eps_on_chi, l4_chi_eps.chi_final, strat.N2, strat.dTdz
             )
-            sal_note = (
-                "salinity assumed 35 PSU (none provided); N2 reflects "
-                "temperature stratification only"
-                if salinity is None
-                else "salinity from user-provided values"
-            )
+            if measured:
+                sal_note = "practical salinity from JAC_C/JAC_T/P (TEOS-10)"
+            elif salinity is None:
+                sal_note = (
+                    "salinity assumed 35 PSU (none provided); N2 reflects "
+                    "temperature stratification only"
+                )
+            else:
+                sal_note = "salinity from user-provided values"
             mixing_vars = {
                 "N2": (
                     strat.N2,
@@ -401,7 +412,8 @@ def _process_profile(
                         "long_name": "buoyancy frequency squared (window scale)",
                         "comment": (
                             "TEOS-10 (gsw.Nsquared) between the shallow- and "
-                            f"deep-half means of each chi window; {sal_note}."
+                            "deep-half means of each chi window after Thorpe-"
+                            f"sorting to a stable profile (overturns removed); {sal_note}."
                         ),
                     },
                 ),
@@ -411,8 +423,8 @@ def _process_profile(
                         "units": "K m-1",
                         "long_name": "background temperature gradient (positive down)",
                         "comment": (
-                            "Least-squares slope of in-situ temperature vs depth "
-                            "over each chi window."
+                            "Least-squares slope of the Thorpe-sorted in-situ "
+                            "temperature vs depth over each chi window."
                         ),
                     },
                 ),
