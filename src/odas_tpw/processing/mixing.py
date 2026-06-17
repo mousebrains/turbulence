@@ -363,33 +363,37 @@ def profile_stratification(
         [K/m vs depth]. ``target_P`` is empty when the cast has too few
         valid samples.
     """
-    P = np.asarray(P, dtype=np.float64)
-    T = np.asarray(T, dtype=np.float64)
+    # Explicit ndarray locals (not reassignments of the ArrayLike params) so
+    # mypy keeps the concrete type through .min()/.max(), indexing, and the
+    # scalar subtraction below.
+    P_arr: np.ndarray = np.asarray(P, dtype=np.float64)
+    T_arr: np.ndarray = np.asarray(T, dtype=np.float64)
 
+    S_arr: np.ndarray | None
     if S is None or np.ndim(S) == 0:
         S_const = 35.0 if S is None else float(S)  # type: ignore[arg-type]
         S_arr = None
     else:
         S_arr = np.asarray(S, dtype=np.float64)
 
-    good = np.isfinite(P) & np.isfinite(T)
+    good = np.isfinite(P_arr) & np.isfinite(T_arr)
     if S_arr is not None:
         good &= np.isfinite(S_arr)
-    P, T = P[good], T[good]
+    P_arr, T_arr = P_arr[good], T_arr[good]
     S_arr = S_arr[good] if S_arr is not None else None
     empty = np.empty(0, dtype=np.float64)
-    if len(P) < min_samples or np.ptp(P) < min_dp:
+    if len(P_arr) < min_samples or np.ptp(P_arr) < min_dp:
         return empty, empty, empty
 
-    S_vals = S_arr if S_arr is not None else np.full(len(P), S_const)
-    SA = gsw.SA_from_SP(S_vals, P, lon, lat)
-    CT = gsw.CT_from_t(SA, T, P)
+    S_vals = S_arr if S_arr is not None else np.full(len(P_arr), S_const)
+    SA = gsw.SA_from_SP(S_vals, P_arr, lon, lat)
+    CT = gsw.CT_from_t(SA, T_arr, P_arr)
     sigma = gsw.sigma0(SA, CT)
-    depth = -gsw.z_from_p(P, lat)
+    depth = -gsw.z_from_p(P_arr, lat)
 
     half_w = window / 2.0
     step = max(half_w, min_dp)
-    p_lo, p_hi = float(P.min()), float(P.max())
+    p_lo, p_hi = float(P_arr.min()), float(P_arr.max())
     # p_lo < p_hi (ptp >= min_dp guard above) and step > 0, so arange always
     # yields >= 1 target.
     target_P = np.arange(p_lo, p_hi + step, step)
@@ -397,14 +401,14 @@ def profile_stratification(
     N2 = np.full(len(target_P), np.nan)
     dTdz = np.full(len(target_P), np.nan)
     for k, pt in enumerate(target_P):
-        sel = np.abs(P - pt) <= half_w
+        sel = np.abs(P_arr - pt) <= half_w
         if np.sum(sel) < min_samples:
             continue
-        Pw = P[sel]
+        Pw = P_arr[sel]
         if np.ptp(Pw) < min_dp:
             continue
         N2[k], dTdz[k] = _stable_window(
-            Pw, depth[sel], T[sel], SA[sel], CT[sel], sigma[sel], lat, min_dp
+            Pw, depth[sel], T_arr[sel], SA[sel], CT[sel], sigma[sel], lat, min_dp
         )
 
     return target_P, N2, dTdz
