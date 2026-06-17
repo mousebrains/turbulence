@@ -123,8 +123,8 @@ def window_stratification(
         Practical salinity: scalar, per-sample array, or None.
         None assumes 35 PSU — N² then reflects temperature
         stratification only, which can be badly wrong where salinity
-        stratification matters (note the ``salinity_assumed`` flag in
-        the returned dataset attributes when integrating).
+        stratification matters (the integrating callers record which case
+        applied in a free-text ``sal_note`` on the output variables).
     lat, lon : float
         Position for TEOS-10 conversions (defaults 0/0 introduce only
         small absolute-salinity-anomaly and gravity errors).
@@ -437,6 +437,9 @@ def mixing_coefficients(
     - ``Gamma`` and ``K_rho`` where ``N2 < N2_min`` (unstratified or
       statically unstable at the window scale: the Osborn scaling does
       not apply).
+    - Any output where the corresponding ``chi`` or ``epsilon`` is
+      non-finite or non-positive (a positive dissipation rate is required
+      for every quantity).
 
     Parameters
     ----------

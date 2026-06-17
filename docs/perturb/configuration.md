@@ -16,7 +16,7 @@ perturb run -c config.yaml -o results/ VMP/*.p
 
 ## Configuration Sections
 
-The perturb configuration has 17 sections (`files`, `gps`, `hotel`, `profiles`, `fp07`, `ct`, `bottom`, `top_trim`, `epsilon`, `chi`, `ctd`, `speed`, `qc`, `binning`, `netcdf`, `parallel`, `instruments`). Each parameter is optional — unset values fall back to defaults.
+The perturb configuration has 18 sections (`files`, `gps`, `hotel`, `profiles`, `fp07`, `ct`, `bottom`, `top_trim`, `epsilon`, `chi`, `ctd`, `speed`, `qc`, `binning`, `netcdf`, `stratification`, `parallel`, `instruments`). Each parameter is optional — unset values fall back to defaults.
 
 ---
 
@@ -274,6 +274,22 @@ CF-1.13 / ACDD-1.3 global attributes applied to combo output files. All default 
 | `Conventions` | string | Default: `"CF-1.13, ACDD-1.3"` |
 
 See [CF Conventions](https://cfconventions.org/) and [ACDD](https://wiki.esipfed.org/Attribute_Convention_for_Data_Discovery_1-3) for the full attribute list.
+
+---
+
+### `stratification` — Background N²/dT/dz
+
+Background buoyancy frequency (`N2`) and temperature gradient (`dTdz`), computed
+with the Thorpe-sorted (adiabatically leveled) method and written to the
+profile, CTD, and dissipation products independent of epsilon/chi (the chi
+product's `N2`/`dTdz` are governed by `chi.mixing`). The profile and CTD
+products use the configurable background `window`; the diss product uses its
+own dissipation window.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enable` | bool | `true` | Write `N2`/`dTdz` to the profile, CTD, and diss products |
+| `window` | float | `2.0` | Background vertical window [dbar] for the profile and CTD products |
 
 ---
 
