@@ -319,9 +319,11 @@ def create_gps(config: dict) -> GPSProvider:
     elif source == "fixed":
         return GPSFixed(config["lat"], config["lon"])
     elif source == "csv":
+        # time_col default is source-dependent ("t" for CSV, "time" for NetCDF);
+        # the shared gps.time_col default is null so each branch can pick its own.
         return GPSFromCSV(
             config["file"],
-            time_col=config.get("time_col", "t"),
+            time_col=config.get("time_col") or "t",
             lat_col=config.get("lat_col", "lat"),
             lon_col=config.get("lon_col", "lon"),
             max_time_diff=float(config.get("max_time_diff", 60)),
@@ -329,7 +331,7 @@ def create_gps(config: dict) -> GPSProvider:
     elif source == "netcdf":
         return GPSFromNetCDF(
             config["file"],
-            time_var=config.get("time_col", "time"),
+            time_var=config.get("time_col") or "time",
             lat_var=config.get("lat_col", "lat"),
             lon_var=config.get("lon_col", "lon"),
             max_time_diff=float(config.get("max_time_diff", 60)),

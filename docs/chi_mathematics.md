@@ -209,11 +209,11 @@ The noise propagates through four stages of the signal chain:
 
 ```
 V_1(f) = 2 * E_n^2 * sqrt(1 + (f/f_c)^2) / (f/f_c)       [V^2/Hz]
-phi_R  = 4 * K_B * R_0 * T_K                                [V^2/Hz]  (Johnson noise)
+phi_R  = 4 * K_B * R_actual * T_K                          [V^2/Hz]  (Johnson noise)
 Noise_1 = G_1^2 * (V_1 + phi_R)
 ```
 
-where `E_n = 4e-9 V/sqrt(Hz)` is the amplifier input voltage noise, `f_c = 18.7 Hz` is the flicker-noise knee frequency, `K_B` is Boltzmann's constant, `R_0` is the thermistor resistance, `T_K` is the operating temperature in Kelvin, and `G_1 = 6` is the first-stage gain.
+where `E_n = 4e-9 V/sqrt(Hz)` is the amplifier input voltage noise, `f_c = 18.7 Hz` is the flicker-noise knee frequency, `K_B` is Boltzmann's constant, `R_actual = R_ratio * R_0` is the temperature-corrected thermistor resistance (the code uses the in-situ value, not the nominal `R_0`), `T_K` is the operating temperature in Kelvin, and `G_1 = 6` is the first-stage gain.
 
 ### Stage 2: Pre-emphasis differentiator + second amplifier
 
@@ -258,9 +258,11 @@ G_HP(f) = (1/G_D)^2 * (2*pi*G_D*f)^2 / (1 + (2*pi*G_D*f)^2)
 
 ```
 eta = (b/2) * 2^B * G_1 * E_b / V_FS
-scale = T_K^2 * (1 + R/R_0)^2 / (2 * eta * beta_1 * R/R_0)
+scale = T_in_situ^2 * (1 + R/R_0)^2 / (2 * eta * beta_1 * R/R_0)
 noise_physical = Noise_counts * G_HP * scale^2
 ```
+
+where `T_in_situ` is the in-situ temperature in Kelvin (`T_mean + 273.15`), distinct from the fixed `T_K ≈ 295 K` operating temperature used in the Johnson-noise term above.
 
 The conversion from frequency spectrum to wavenumber spectrum is:
 
@@ -571,7 +573,7 @@ The profile is divided into overlapping windows of length `diss_length` samples 
 | Symbol | Value | Description |
 |--------|-------|-------------|
 | `f_s` | `512 Hz` | Fast sampling rate |
-| `f_AA` | `98 Hz` | Anti-aliasing filter effective cutoff (0.9 * 110 Hz) |
+| `f_AA` | `98 Hz` | Anti-aliasing filter cutoff (input). Chi integration uses the effective `0.9 * f_AA = 88.2 Hz`; the electronics-noise model uses a separate `110 Hz` Butterworth cutoff |
 | `G_D` | `0.94 s` | Pre-emphasis differentiator gain |
 | `G_1` | `6` | First-stage amplifier gain |
 | `R_0` | `3000 Ohm` | Nominal thermistor resistance |

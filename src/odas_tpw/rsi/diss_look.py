@@ -479,24 +479,27 @@ class DissLookViewer(ProfileViewer):
                 lam_fm = chi_avg / eps_fm
             valid_fm = np.isfinite(lam_fm) & (lam_fm > 0)
             if np.any(valid_fm):
-                ax.plot(lam_fm[valid_fm], P[valid_fm], "k--", linewidth=1.2, label="\u0393 FM<1.15")
+                ax.plot(
+                    lam_fm[valid_fm], P[valid_fm], "k--", linewidth=1.2,
+                    label="\u03c7/\u03b5 FM<1.15",
+                )
                 has_data = True
 
+        # NB: this is the dimensional ratio chi/eps [K^2 s^2 m^-2], NOT the
+        # dimensionless Osborn mixing coefficient Gamma (~0.2). The proper
+        # Gamma = N^2*chi/(2*eps*(dT/dz)^2) is in the chi product's mixing vars.
         if has_data:
             ax.set_xscale("log")
-            ax.axvline(
-                0.2, color="k", linestyle=":", linewidth=1.0, alpha=0.7, label="\u0393 = 0.2"
-            )
-            xlim = ax.get_xlim()
-            ax.axvspan(xlim[0], 0.2, color="blue", alpha=0.04, zorder=0)
-            ax.axvspan(0.2, xlim[1], color="red", alpha=0.04, zorder=0)
-            ax.set_xlabel("\u0393 = \u03c7 / \u03b5  [K\u00b2 s\u00b2 m\u207b\u00b2]")
+            ax.set_xlabel("\u03c7 / \u03b5  [K\u00b2 s\u00b2 m\u207b\u00b2]")
             ax.set_ylabel("Pressure [dbar]")
             ax.legend(fontsize=6, loc="lower left")
-            ax.set_title("Mixing efficiency \u0393", fontsize=9)
+            ax.set_title("\u03c7 / \u03b5 ratio (dimensional, not Osborn \u0393)", fontsize=9)
             ax.grid(True, alpha=0.3, which="both")
         else:
-            ax.text(0.5, 0.5, "No valid \u0393", transform=ax.transAxes, ha="center", va="center")
+            ax.text(
+                0.5, 0.5, "No valid \u03c7/\u03b5",
+                transform=ax.transAxes, ha="center", va="center",
+            )
 
 
 # ---------------------------------------------------------------------------

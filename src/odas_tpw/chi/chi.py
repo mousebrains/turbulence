@@ -582,9 +582,12 @@ def _iterative_fit(
     chi = chi_obs
     spec_batch = grad_func(K, kB_best, chi) if np.isfinite(kB_best) else np.zeros_like(K)
 
-    # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise)
+    # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise).
+    # Restrict to above-noise bins (spec_obs > 2*noise), matching Method 1 and
+    # the MLE path — otherwise noise-dominated bins below k_u dilute the ratio
+    # toward 1.0 and the iterative FOM is not comparable to the other methods.
     if np.isfinite(kB_best) and np.isfinite(chi):
-        valid_fom = (K > 0) & (k_u >= K)
+        valid_fom = (spec_obs > 2 * noise_K) & (K > 0) & (k_u >= K)
         if np.sum(valid_fom) >= 3:
             obs_v = np.trapezoid(spec_obs[valid_fom], K[valid_fom])
             mod_v = np.trapezoid(

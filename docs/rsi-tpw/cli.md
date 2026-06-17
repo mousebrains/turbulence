@@ -221,7 +221,7 @@ rsi-tpw ql VMP/*.p --fft-length 512
 | `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
 | `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: 0.3) |
 | `--spec-P-range P_MIN P_MAX` | Pressure range [dbar] for spectral calculations |
-| `--chi-method {1,2}` | Chi method: 1 = from epsilon, 2 = spectral fit (default: 1). The CLI help labels method 2 "MLE fit", but the viewer uses the iterative fit |
+| `--chi-method {1,2}` | Chi method: 1 = from epsilon, 2 = spectral fit (default: 1) |
 | `--spectrum-model {batchelor,kraichnan}` | Theoretical spectrum model (default: kraichnan) |
 
 ## `rsi-tpw dl`

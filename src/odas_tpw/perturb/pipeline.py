@@ -1167,12 +1167,14 @@ def process_file(
                             _apply_fom_cut(ds, float(eps_fom_max), p_path.name)
                         ds = mk_epsilon_mean(ds, eps_cfg.get("epsilon_minimum", 1e-13))
                         if qc_enabled:
+                            n_probe = int(ds["probe"].size) if "probe" in ds.dims else 2
                             apply_qc_to_dataset(
                                 ds, pf, qc_eps_drop_from, diss_length_seconds,
                                 flag_var_name="qc_drop_epsilon",
                                 value_vars=[
                                     "epsilonMean", "epsilonLnSigma",
-                                    "e_1", "e_2", "epsilon",
+                                    *[f"e_{i + 1}" for i in range(n_probe)],
+                                    "epsilon",
                                 ],
                                 drop_action=qc_drop_action,
                             )
@@ -1287,13 +1289,18 @@ def process_file(
                                     if mix_eps is not diss_ds:
                                         mix_eps.close()
                             if qc_enabled:
+                                n_cprobe = (
+                                    int(chi_ds["probe"].size)
+                                    if "probe" in chi_ds.dims else 2
+                                )
                                 apply_qc_to_dataset(
                                     chi_ds, pf, qc_chi_drop_from,
                                     chi_diss_length_seconds,
                                     flag_var_name="qc_drop_chi",
                                     value_vars=[
                                         "chiMean", "chiLnSigma",
-                                        "chi_1", "chi_2", "chi",
+                                        *[f"chi_{i + 1}" for i in range(n_cprobe)],
+                                        "chi",
                                         "epsilon_T",
                                     ],
                                     drop_action=qc_drop_action,

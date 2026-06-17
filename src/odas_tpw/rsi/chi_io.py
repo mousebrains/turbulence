@@ -771,7 +771,8 @@ def compute_chi_file(
     output_dir : str or Path
         Output directory.
     **chi_kwargs
-        Keyword arguments passed to get_chi.
+        Keyword arguments forwarded to ``_compute_chi`` (the chi parameter
+        set; ``get_chi`` is the deprecated public wrapper).
 
     Returns
     -------

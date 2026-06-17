@@ -90,8 +90,11 @@ def convert_therm(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     b = _safe_float(params.get("b", "1"))
     adc_fs = _safe_float(params.get("adc_fs", "4.096"))
     adc_bits = _safe_float(params.get("adc_bits", "16"))
-    G = _safe_float(params.get("g", "6.0"))
-    E_B = _safe_float(params.get("e_b", "0.68"))
+    # g (gain) and e_b (bridge excitation) scale the bridge resistance and thus
+    # temperature directly — warn if the config omits them rather than silently
+    # using a default that may not match the instrument (as t_0 already does).
+    G = _require_float(params, "g", 6.0, "therm")
+    E_B = _require_float(params, "e_b", 0.68, "therm")
     T_0 = _require_float(params, "t_0", 289.0, "therm")
     # Older configs use 'beta' instead of 'beta_1' (convert_odas.m
     # accepts either, lines 501-507)

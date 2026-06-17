@@ -40,7 +40,7 @@ See [docs/installation.md](docs/installation.md) for more options.
 
 ## Quick Start
 
-Two CLIs ship with the package, for different workflows:
+Several CLIs ship with the package (`rsi-tpw`, `perturb`, `perturb-plot`, `scor160-tpw`, `pyturb-cli`); the two primary ones, for different workflows:
 
 - **`rsi-tpw`** — single-file or short batch processing on the command line.
 - **`perturb`** — full campaign pipeline driven by a YAML config file
@@ -176,7 +176,7 @@ python -m pytest tests/test_epsilon.py    # epsilon pipeline tests only
 
 ## Development
 
-This project was developed in collaboration with [Claude Code](https://claude.ai/code) (Anthropic's Opus 4.7).
+This project was developed in collaboration with [Claude Code](https://claude.ai/code).
 
 ## License
 

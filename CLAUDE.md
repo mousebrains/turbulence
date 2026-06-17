@@ -15,8 +15,9 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas
 - `rsi/` — Rockland Scientific instrument I/O, NetCDF conversion, profiles, epsilon, chi orchestration
 - `chi/` — Chi (thermal variance dissipation) calculation, Batchelor/Kraichnan spectra, FP07 transfer function
 - `scor160/` — ATOMIX shear-probe benchmark processing (L1–L4), shared physics/spectral modules
-- `processing/` — Instrument-agnostic profile processing (top_trim, bottom-crash, ct_align, mk_epsilon_mean)
+- `processing/` — Instrument-agnostic profile processing (top_trim, bottom-crash, ct_align, mk_epsilon_mean, mk_chi_mean, mixing N²/dT/dz/Γ/K_T/K_ρ)
 - `perturb/` — Full campaign processing pipeline (trim, merge, calibrate, compute, bin)
+- `pyturb/` — Jesse's standalone analysis code (hosted here; `pyturb-cli` entry point)
 
 ### Key Modules (rsi)
 
@@ -96,7 +97,7 @@ python -m pytest tests/test_p_file.py::test_header  # single test
 - **TKE dissipation (ε)**: Turbulent kinetic energy dissipation rate, computed from shear probe spectra. Units: W/kg.
 - **FP07**: Fast-response glass-bead thermistor. Has a known frequency response rolloff that must be corrected.
 - **P file format** (RSI TN-051): binary records with 128-byte headers (64 uint16 words). Record 0 = header + ASCII config string. Records 1..N = header + multiplexed int16 data. Endian flag at header word 64 (1=little, 2=big).
-- **fom (figure of merit)**: Ratio of observed to attenuated-model variance in the spectral fit range. The model includes Batchelor/Kraichnan spectrum convolved with FP07 transfer function plus noise floor. Values near 1.0 indicate good fit.
+- **fom (figure of merit)**: Ratio of observed to model variance in the spectral fit range; values near 1.0 indicate a good fit. For **epsilon** the model is the **Nasmyth** spectrum (observed/Nasmyth variance ratio; see `scor160/l4.py`). For **chi** the model is the **Batchelor/Kraichnan** spectrum convolved with the FP07 transfer function plus the noise floor (`chi/chi.py`). (Distinct from the Lueck-2022 `FM` reject statistic on the epsilon side.)
 - **K_max_ratio**: K_max/K_95 (epsilon) or K_max/kB (chi). Values < 0.5 mean most variance is extrapolated.
 
 ## Data
