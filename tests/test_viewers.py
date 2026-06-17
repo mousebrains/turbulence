@@ -112,6 +112,21 @@ class TestMixingLook:
         """ml requests the extra spectra row."""
         assert self._viewer()._nrows == 3
 
+    def test_nav_diamond_buttons(self):
+        """The nav diamond builds four textless arrow buttons wired to handlers."""
+        import matplotlib.pyplot as plt
+
+        viewer = self._viewer()
+        viewer.fig = plt.figure()
+        try:
+            viewer._add_nav_diamond(0.04, 0.98, 0.08, 0.92)
+            assert viewer.btn_prev.label.get_text() == "◀"
+            assert viewer.btn_next.label.get_text() == "▶"
+            assert viewer.btn_spec_up.label.get_text() == "▲"
+            assert viewer.btn_spec_dn.label.get_text() == "▼"
+        finally:
+            plt.close(viewer.fig)
+
 
 @pytest.mark.skipif(not TEST_P.exists(), reason="SN479_0006.p test data not available")
 class TestDissLookDraw:

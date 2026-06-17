@@ -412,6 +412,7 @@ class MixingLookViewer(ProfileViewer):
         cbar = self.fig.colorbar(sc, ax=ax, pad=0.02)
         cbar.set_label("Pressure [dbar]", fontsize=7)
         cbar.ax.tick_params(labelsize=6)
+        cbar.ax.invert_yaxis()  # shallow at top, deep at bottom (matches profiles)
         self._scatter_cbar = cbar
         lo = float(min(x.min(), y.min()))
         hi = float(max(x.max(), y.max()))

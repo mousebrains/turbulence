@@ -956,28 +956,42 @@ class ProfileViewer:
             gridspec_kw={"hspace": 0.35, "wspace": 0.32},
             squeeze=False,
         )
-        self.fig.subplots_adjust(bottom=0.08, top=0.92, left=0.04, right=0.98)
+        left, right, bottom, top = 0.04, 0.98, 0.08, 0.92
+        self.fig.subplots_adjust(bottom=bottom, top=top, left=left, right=right)
 
         self._setup_axes()
-
-        # Navigation buttons
-        ax_prev = self.fig.add_axes((0.35, 0.01, 0.07, 0.035))
-        ax_next = self.fig.add_axes((0.43, 0.01, 0.07, 0.035))
-        self.btn_prev = Button(ax_prev, "◀ Prev")
-        self.btn_next = Button(ax_next, "Next ▶")
-        self.btn_prev.on_clicked(self._on_prev)
-        self.btn_next.on_clicked(self._on_next)
-
-        # Spectral depth range buttons
-        ax_up = self.fig.add_axes((0.55, 0.01, 0.07, 0.035))
-        ax_dn = self.fig.add_axes((0.63, 0.01, 0.07, 0.035))
-        self.btn_spec_up = Button(ax_up, "▲ Spec")
-        self.btn_spec_dn = Button(ax_dn, "▼ Spec")
-        self.btn_spec_up.on_clicked(self._on_spec_up)
-        self.btn_spec_dn.on_clicked(self._on_spec_dn)
+        self._add_nav_diamond(left, right, bottom, top)
 
         self._draw()
         plt.show()
+
+    def _add_nav_diamond(self, left, right, bottom, top) -> None:
+        """Place a textless 4-arrow navigation diamond at the figure centre.
+
+        Left/right (◀ ▶) step the profile; up/down (▲ ▼) move the spectral
+        depth window. The centre is the same self-relative figure location for
+        any grid: horizontally between the middle two columns, vertically at the
+        figure centre.
+        """
+        assert self.fig is not None
+        cx = (left + right) / 2.0
+        cy = (bottom + top) / 2.0
+        bw, bh = 0.024, 0.032  # button size [figure fraction]
+        s = 0.040  # diamond radius
+        ax_up = self.fig.add_axes((cx - bw / 2, cy + s - bh / 2, bw, bh))
+        ax_dn = self.fig.add_axes((cx - bw / 2, cy - s - bh / 2, bw, bh))
+        ax_left = self.fig.add_axes((cx - s - bw / 2, cy - bh / 2, bw, bh))
+        ax_right = self.fig.add_axes((cx + s - bw / 2, cy - bh / 2, bw, bh))
+        self.btn_spec_up = Button(ax_up, "▲")
+        self.btn_spec_dn = Button(ax_dn, "▼")
+        self.btn_prev = Button(ax_left, "◀")
+        self.btn_next = Button(ax_right, "▶")
+        for b in (self.btn_spec_up, self.btn_spec_dn, self.btn_prev, self.btn_next):
+            b.label.set_fontsize(13)
+        self.btn_spec_up.on_clicked(self._on_spec_up)
+        self.btn_spec_dn.on_clicked(self._on_spec_dn)
+        self.btn_prev.on_clicked(self._on_prev)
+        self.btn_next.on_clicked(self._on_next)
 
     def _on_prev(self, event):
         if self.profile_idx > 0:
