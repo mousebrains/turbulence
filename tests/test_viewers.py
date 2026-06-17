@@ -6,6 +6,7 @@ matplotlib.use("Agg")  # non-interactive backend, MUST be before pyplot import
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 VMP_DIR = Path(__file__).parent.parent / "VMP"
@@ -36,3 +37,72 @@ class TestDissLook:
         viewer = DissLookViewer(pf, fft_length=256, f_AA=98.0)
         assert viewer.profiles
         assert viewer.shear
+
+
+# ---------------------------------------------------------------------------
+# Mixing viewer (ml) — CI-safe, uses the committed test .p file
+# ---------------------------------------------------------------------------
+
+TEST_P = Path(__file__).parent / "data" / "SN479_0006.p"
+
+
+@pytest.mark.skipif(not TEST_P.exists(), reason="SN479_0006.p test data not available")
+class TestMixingLook:
+    def _viewer(self):
+        from odas_tpw.rsi.mixing_look import MixingLookViewer
+        from odas_tpw.rsi.p_file import PFile
+
+        pf = PFile(TEST_P)
+        return MixingLookViewer(pf, fft_length=256, f_AA=98.0)
+
+    def test_smoke(self):
+        """MixingLookViewer constructs without crashing."""
+        viewer = self._viewer()
+        assert viewer.profiles
+        assert viewer.shear
+
+    def test_measured_salinity_from_jac(self):
+        """VMP carries JAC C/T → measured salinity on the slow time base."""
+        viewer = self._viewer()
+        assert isinstance(viewer.salinity, np.ndarray)
+        assert len(viewer.salinity) == len(viewer.t_slow)
+        finite = viewer.salinity[np.isfinite(viewer.salinity)]
+        assert finite.size > 0
+        assert np.all((finite > 20.0) & (finite < 40.0))
+
+    def test_salinity_override(self):
+        """An explicit salinity overrides the measured JAC value."""
+        from odas_tpw.rsi.mixing_look import MixingLookViewer
+        from odas_tpw.rsi.p_file import PFile
+
+        viewer = MixingLookViewer(PFile(TEST_P), fft_length=256, salinity=34.5)
+        assert viewer.salinity == 34.5
+
+    def test_window_times_align_with_diss_windows(self):
+        """Window-center times line up 1:1 with compute_windowed_diss output."""
+        from odas_tpw.rsi.viewer_base import compute_windowed_diss
+
+        viewer = self._viewer()
+        s_slow, e_slow = viewer.profiles[0]
+        sel_fast = viewer._slow_to_fast_slice(s_slow, e_slow)
+        d = compute_windowed_diss(
+            viewer.shear, viewer.accel, viewer.therm_fast, viewer.diff_gains,
+            viewer.P_fast, viewer.T, viewer.speed_fast, viewer.fs_fast, sel_fast,
+            viewer.fft_length, viewer.f_AA, viewer.goodman, diss_length=viewer.diss_length,
+        )
+        t_win = viewer._window_center_times(sel_fast)
+        assert len(t_win) == len(d["P_windows"])
+
+    def test_draw_runs(self):
+        """Full _draw() exercises stratification + mixing without crashing."""
+        import matplotlib.pyplot as plt
+
+        viewer = self._viewer()
+        viewer.fig, viewer.axes = plt.subplots(2, 4)
+        try:
+            viewer._setup_axes()
+            viewer._draw()  # computes N2/dTdz/K_T/Gamma/K_rho and draws all 8 panels
+            assert viewer._mix is not None
+            assert len(viewer._mix.Gamma) == len(viewer._P_win)
+        finally:
+            plt.close(viewer.fig)

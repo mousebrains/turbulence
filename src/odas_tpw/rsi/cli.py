@@ -479,6 +479,39 @@ def _cmd_dl(args: argparse.Namespace) -> None:
         )
 
 
+def _cmd_ml(args: argparse.Namespace) -> None:
+    """Interactive mixing viewer."""
+    from odas_tpw.rsi.mixing_look import mixing_look
+
+    spec_P_range = None
+    if args.spec_P_range is not None:
+        spec_P_range = tuple(args.spec_P_range)
+
+    # Merge config file + CLI overrides for epsilon section
+    merged = _merge_for_section(args, "epsilon")
+    fft_length = args.fft_length or merged.get("fft_length", 1024)
+    diss_length = args.diss_length or merged.get("diss_length")
+    f_AA = args.f_AA or merged.get("f_AA", 98.0)
+    goodman = merged.get("goodman", True) if not args.no_goodman else False
+
+    W_min = getattr(args, "W_min", None) or 0.3
+
+    p_files = _resolve_p_files(args.files)
+    for pf_path in p_files:
+        mixing_look(
+            pf_path,
+            fft_length=fft_length,
+            diss_length=diss_length,
+            f_AA=f_AA,
+            goodman=goodman,
+            direction=args.direction or "auto",
+            vehicle=getattr(args, "vehicle", None),
+            W_min=W_min,
+            spec_P_range=spec_P_range,
+            salinity=args.salinity,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Subcommand parsers
 # ---------------------------------------------------------------------------
@@ -1014,6 +1047,65 @@ def _add_dl_parser(subparsers: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_cmd_dl)
 
 
+def _add_ml_parser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "ml",
+        help="Interactive mixing viewer",
+        description="Open an interactive viewer of the background stratification "
+        "(N², dT/dz) and derived diapycnal-mixing quantities (K_T, Γ, K_rho) with "
+        "profile navigation.",
+    )
+    p.add_argument("files", nargs="+", metavar="FILE", help=".p file(s) or glob pattern(s)")
+    p.add_argument(
+        "--fft-length", type=int, default=None, help="FFT segment length [samples] (default: 1024)"
+    )
+    p.add_argument(
+        "--diss-length",
+        type=int,
+        default=None,
+        help="Dissipation window [samples] (default: 4*fft-length)",
+    )
+    p.add_argument(
+        "--f-AA", type=float, default=None, help="Anti-aliasing filter cutoff [Hz] (default: 98)"
+    )
+    p.add_argument(
+        "--no-goodman",
+        action="store_true",
+        default=False,
+        help="Disable Goodman coherent noise removal",
+    )
+    p.add_argument(
+        "--direction",
+        default=None,
+        choices=["auto", "up", "down", "glide", "horizontal"],
+        help="Profile direction (default: auto, from vehicle)",
+    )
+    p.add_argument(
+        "--vehicle",
+        default=None,
+        help="Vehicle type override (e.g. slocum_glider, vmp)",
+    )
+    p.add_argument(
+        "--W-min", type=float, default=None, help="Minimum fall rate [dbar/s] (default: 0.3)"
+    )
+    p.add_argument(
+        "--spec-P-range",
+        type=float,
+        nargs=2,
+        metavar=("P_MIN", "P_MAX"),
+        default=None,
+        help="Pressure range [dbar] to highlight on the profiles (default: none)",
+    )
+    p.add_argument(
+        "--salinity",
+        type=float,
+        default=None,
+        help="Fixed practical salinity [PSU] for stratification "
+        "(default: measured from JAC C/T, else 35)",
+    )
+    p.set_defaults(func=_cmd_ml)
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -1051,6 +1143,7 @@ def main() -> None:
     _add_pipeline_parser(subparsers)
     _add_ql_parser(subparsers)
     _add_dl_parser(subparsers)
+    _add_ml_parser(subparsers)
 
     args = parser.parse_args()
     args.func(args)
