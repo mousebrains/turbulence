@@ -13,24 +13,39 @@ from odas_tpw.rsi.combine import combine_profiles
 # ---------------------------------------------------------------------------
 
 
-class TestBinByDepthLogMean:
-    """Log-mean (geometric mean) averaging for epsilon/chi variables."""
+class TestBinByDepthDefaultArithmetic:
+    """By default epsilon/chi are depth-binned arithmetically (match perturb)."""
 
-    def test_epsilon_uses_log_mean(self):
+    def test_epsilon_uses_arithmetic_mean_by_default(self):
         pres = np.array([0.5, 1.5, 0.7, 1.3])
         eps_vals = np.array([1e-8, 1e-6, 1e-9, 1e-7])
         ds = bin_by_depth(pres, {"epsilon": eps_vals}, bin_size=2.0)
-        # All four points land in a single 2-dbar bin.
-        # Geometric mean = exp(mean(log(vals)))
-        expected = np.exp(np.mean(np.log(eps_vals)))
-        np.testing.assert_allclose(ds["epsilon"].values[0], expected, rtol=1e-10)
+        # All four points land in a single 2-dbar bin; arithmetic mean is the
+        # flux-relevant estimator and matches perturb's np.nanmean depth-binning.
+        np.testing.assert_allclose(ds["epsilon"].values[0], np.mean(eps_vals), rtol=1e-10)
 
-    def test_chi_uses_log_mean(self):
+    def test_chi_uses_arithmetic_mean_by_default(self):
         pres = np.array([0.5, 1.5])
         chi_vals = np.array([1e-10, 1e-8])
         ds = bin_by_depth(pres, {"chi": chi_vals}, bin_size=2.0)
-        expected = np.exp(np.mean(np.log(chi_vals)))
-        np.testing.assert_allclose(ds["chi"].values[0], expected, rtol=1e-10)
+        np.testing.assert_allclose(ds["chi"].values[0], np.mean(chi_vals), rtol=1e-10)
+
+    def test_arithmetic_cell_methods_attr(self):
+        pres = np.array([0.5, 1.5])
+        eps_vals = np.array([1e-8, 1e-6])
+        ds = bin_by_depth(pres, {"epsilon": eps_vals}, bin_size=2.0)
+        assert ds["epsilon"].attrs["cell_methods"] == "depth_bin: mean"
+
+
+class TestBinByDepthGeometricOptIn:
+    """Geometric (log-space) mean remains available via explicit log_mean_vars."""
+
+    def test_epsilon_geometric_when_requested(self):
+        pres = np.array([0.5, 1.5, 0.7, 1.3])
+        eps_vals = np.array([1e-8, 1e-6, 1e-9, 1e-7])
+        ds = bin_by_depth(pres, {"epsilon": eps_vals}, bin_size=2.0, log_mean_vars={"epsilon"})
+        expected = np.exp(np.mean(np.log(eps_vals)))
+        np.testing.assert_allclose(ds["epsilon"].values[0], expected, rtol=1e-10)
 
     def test_custom_log_mean_vars(self):
         pres = np.array([0.5, 1.5])
@@ -93,9 +108,16 @@ class TestBinByDepthNaN:
     def test_nan_excluded_from_log_mean(self):
         pres = np.array([0.5, 1.0, 1.5])
         eps = np.array([1e-8, np.nan, 1e-6])
-        ds = bin_by_depth(pres, {"epsilon": eps}, bin_size=2.0)
+        # Geometric path is opt-in now; verify it still drops NaN.
+        ds = bin_by_depth(pres, {"epsilon": eps}, bin_size=2.0, log_mean_vars={"epsilon"})
         expected = np.exp(np.mean(np.log([1e-8, 1e-6])))
         np.testing.assert_allclose(ds["epsilon"].values[0], expected, rtol=1e-10)
+
+    def test_nan_excluded_from_default_arithmetic_epsilon(self):
+        pres = np.array([0.5, 1.0, 1.5])
+        eps = np.array([1e-8, np.nan, 1e-6])
+        ds = bin_by_depth(pres, {"epsilon": eps}, bin_size=2.0)
+        np.testing.assert_allclose(ds["epsilon"].values[0], np.mean([1e-8, 1e-6]), rtol=1e-10)
 
     def test_all_nan_yields_nan_bin(self):
         pres = np.array([0.5, 1.5])
@@ -129,11 +151,20 @@ class TestBinByDepthEdgeCases:
     def test_2d_array_probe_reduction_log(self):
         pres = np.array([0.5, 1.5])
         eps_2d = np.array([[1e-8, 1e-6], [1e-10, 1e-4]])
-        ds = bin_by_depth(pres, {"epsilon": eps_2d}, bin_size=2.0)
-        # Geometric mean across probes first, then across bin
+        # Geometric path is opt-in: geometric across probes, then across bin.
+        ds = bin_by_depth(pres, {"epsilon": eps_2d}, bin_size=2.0, log_mean_vars={"epsilon"})
         probe_geomean = np.exp(np.nanmean(np.log(eps_2d), axis=0))
         expected = np.exp(np.mean(np.log(probe_geomean)))
         np.testing.assert_allclose(ds["epsilon"].values[0], expected, rtol=1e-8)
+
+    def test_2d_array_probe_reduction_arithmetic_default(self):
+        pres = np.array([0.5, 1.5])
+        eps_2d = np.array([[1e-8, 1e-6], [1e-10, 1e-4]])
+        ds = bin_by_depth(pres, {"epsilon": eps_2d}, bin_size=2.0)
+        # Default: arithmetic across probes, then across bin.
+        probe_mean = np.nanmean(eps_2d, axis=0)
+        expected = np.mean(probe_mean)
+        np.testing.assert_allclose(ds["epsilon"].values[0], expected, rtol=1e-10)
 
 
 class TestBinByDepthOutputStructure:

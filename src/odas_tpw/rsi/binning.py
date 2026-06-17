@@ -28,24 +28,23 @@ def bin_by_depth(
     pres_range : tuple of (min, max), optional
         Pressure range for binning. Default: data range.
     log_mean_vars : set of str, optional
-        Variables to average using geometric mean (log-normal).
-        Default: {"epsilon", "chi", "chi_final", "epsi_final",
-        "K_T", "K_rho", "Gamma"}.
+        Variables to average using the geometric (log-space) mean. Default:
+        ``None`` → empty, i.e. EVERY variable is averaged arithmetically.
+
+        This matches the perturb pipeline, which depth-bins epsilon/chi with
+        ``np.nanmean`` (arithmetic). For lognormally distributed dissipation the
+        arithmetic mean is the unbiased estimator of the true mean — the
+        flux-relevant quantity, and what the diapycnal diffusivities (K_T, K_rho,
+        Gamma) computed from these estimates require. The geometric mean instead
+        estimates the MEDIAN and biases binned dissipation low. Pass an explicit
+        set here to opt specific variables back into geometric averaging.
 
     Returns
     -------
     xr.Dataset with dimension ``depth_bin``.
     """
     if log_mean_vars is None:
-        log_mean_vars = {
-            "epsilon",
-            "chi",
-            "chi_final",
-            "epsi_final",
-            "K_T",
-            "K_rho",
-            "Gamma",
-        }
+        log_mean_vars = set()
 
     pres = np.asarray(pres, dtype=np.float64)
     valid = np.isfinite(pres)
