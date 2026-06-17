@@ -82,13 +82,17 @@ class TestGoodmanBiasCorrectionInsufficient:
 
 class TestBinByDepthLogAllNonPositive:
     def test_log_var_all_non_positive_in_bin_yields_nan(self):
-        """A bin whose log-mean variable values are all <= 0 → NaN result."""
+        """A bin whose log-mean variable values are all <= 0 → NaN result.
+
+        Geometric averaging is opt-in now (the default is arithmetic), so this
+        exercises the explicit log_mean_vars path and its positivity filter.
+        """
         from odas_tpw.rsi.binning import bin_by_depth
 
         pres = np.array([10.0, 11.0, 12.0])
         # all epsilon values non-positive → log path filters them out
         eps = np.array([-1.0, 0.0, -0.5])
-        ds = bin_by_depth(pres, {"epsilon": eps}, bin_size=5.0)
+        ds = bin_by_depth(pres, {"epsilon": eps}, bin_size=5.0, log_mean_vars={"epsilon"})
         # All values filtered → bin is NaN
         assert np.all(np.isnan(ds["epsilon"].values))
 
