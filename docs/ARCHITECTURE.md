@@ -393,3 +393,56 @@ graph TB
 | `scor160-tpw` | scor160 | ATOMIX benchmark processing (L1-L4) |
 | `rsi-tpw` | rsi | .P file I/O, epsilon, chi, full pipeline, viewers |
 | `perturb` | perturb | Full campaign pipeline |
+
+---
+
+## `rsi-tpw` vs `perturb`: shared core, divergent multi-probe combine
+
+The `rsi-tpw pipeline` (`rsi.pipeline.run_pipeline`) and the `perturb`
+campaign pipeline (`perturb.pipeline`) both build on the **same** spectral
+core — `scor160` (`process_l2`/`process_l3`/`process_l4`) for epsilon and
+`chi` (`process_l2_chi`/`process_l3_chi`/`process_l4_chi_*`) for chi — so
+per-window epsilon and chi estimates agree between them. Several settings that
+once differed have been reconciled: the chi-viscosity salinity (measured
+JAC C/T), the epsilon shear high-pass cutoff (`0.5·fs/fft_length`), and the
+depth-bin averaging (arithmetic mean).
+
+**One difference is intentional and is *not* reconciled: the multi-probe
+combine.** The two pipelines fold several shear probes into one epsilon (and
+several thermistors into one chi) by different code:
+
+| | `rsi-tpw` pipeline | `perturb` |
+|---|---|---|
+| Function | `scor160.l4._compute_flags` + `_compute_epsi_final` (chi: `chi.l4_chi`) | `processing.epsilon_combine.mk_epsilon_mean` (chi: `chi_combine.mk_chi_mean`) |
+| Method | ATOMIX flag-then-geomean | Lueck (2022) iterative 95% CI |
+| Output names | `epsilon_final`, `chi_final` | `epsilonMean`, `chiMean`, `epsilonLnSigma` |
+
+What they **share**: the same `σ(ln ε)` variance model
+(`var = 5.5 / (1 + (L̂/4)^(7/9))`), the same inter-probe rejection threshold
+(`1.96·√2 ≈ 2.772`; `scor160.l4.DEFAULT_DISS_RATIO_LIMIT`), and the same final
+**geometric mean** of the surviving probes. For a **two-probe** instrument
+(e.g. the VMP-250 with `sh1`/`sh2`) the inter-probe rejection is mathematically
+identical between the two — iterative max-removal and single-pass flagging both
+either keep both probes or drop the larger one.
+
+What they **differ** in:
+
+- **Rejection form** — `perturb` removes the worst probe iteratively and
+  re-evaluates; `rsi` flags all inconsistent probes in a single pass. (Same
+  result for two probes; can differ for three or more.)
+- **QC placement** — `rsi` folds FOM / variance-resolved / despike rejection
+  *into* the combine via ATOMIX flags (`_compute_flags`); `perturb` applies
+  FOM rejection earlier (the per-probe `fom_max` cut in `perturb.pipeline`,
+  before `mk_epsilon_mean`) and has a separate `perturb.qc_gate`, so
+  `mk_epsilon_mean` itself only does the inter-probe CI step.
+- **Variable names** — the ATOMIX `*_final` convention vs the Matlab-port
+  `*Mean` (+ `epsilonLnSigma`) convention.
+
+**Why it stays divergent:** `scor160._compute_epsi_final` / `_compute_flags`
+are pinned by the ATOMIX shear-probe benchmark (`tests/test_scor160_*`,
+`AtomixData/*.nc`) — changing them would break benchmark agreement — so the
+`rsi` path must keep the ATOMIX combine. `perturb` deliberately follows the
+Matlab campaign convention with its own QC gate and the `epsilonLnSigma`
+uncertainty output. Because the two agree numerically for two-probe data, the
+remaining divergence is one of QC philosophy and output naming rather than
+science, and is kept intentionally distinct rather than forced to converge.
