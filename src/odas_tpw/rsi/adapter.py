@@ -73,6 +73,20 @@ def pfile_to_l1data(
     T_slow_slice = T_slow[s_slow : e_slow + 1]
     temp = np.interp(t_fast, t_slow, T_slow_slice)
 
+    # Practical salinity (fast) from CTD conductivity when the .p file carries a
+    # JAC C/T pair (VMP). MicroRiders have no conductivity at the .p level, so
+    # this stays empty and stratification falls back to a supplied/assumed S.
+    salinity_fast = np.array([])
+    JAC_C = pf.channels.get("JAC_C")
+    JAC_T = pf.channels.get("JAC_T")
+    if JAC_C is not None and JAC_T is not None:
+        import gsw
+
+        sp_slow = gsw.SP_from_C(
+            JAC_C[s_slow : e_slow + 1], JAC_T[s_slow : e_slow + 1], P_slow_slice
+        )
+        salinity_fast = np.interp(t_fast, t_slow, sp_slow)
+
     # Profiling speed
     if speed is not None:
         pspd_rel = np.full(len(t_fast), abs(speed))
@@ -166,6 +180,7 @@ def pfile_to_l1data(
         fs_slow=pf.fs_slow,
         temp_fast=temp_fast,
         diff_gains=diff_gains,
+        salinity=salinity_fast,
     )
 
 

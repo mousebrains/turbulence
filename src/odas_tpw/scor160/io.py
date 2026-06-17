@@ -42,6 +42,12 @@ class L1Data:
     temp_fast: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
     diff_gains: list[float] = field(default_factory=list)
 
+    # Optional fast-rate practical salinity, derived from CTD conductivity when
+    # the .p file carries a JAC C/T pair (VMP). Empty for instruments without
+    # conductivity at the .p level (e.g. MicroRiders), in which case the
+    # stratification falls back to a supplied/assumed salinity.
+    salinity: np.ndarray = field(default_factory=lambda: np.array([]))
+
     @property
     def n_shear(self) -> int:
         """Number of shear probe channels."""
