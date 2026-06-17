@@ -21,12 +21,37 @@ from odas_tpw.chi.l4_chi import L4ChiData, process_l4_chi_epsilon, process_l4_ch
 from odas_tpw.rsi.adapter import pfile_to_l1data
 from odas_tpw.rsi.binning import bin_by_depth
 from odas_tpw.rsi.combine import combine_profiles
-from odas_tpw.scor160.io import L2Params, L3Data, L3Params, L4Data
+from odas_tpw.scor160.io import L1Data, L2Params, L3Data, L3Params, L4Data
 from odas_tpw.scor160.l2 import process_l2
 from odas_tpw.scor160.l3 import process_l3
 from odas_tpw.scor160.l4 import process_l4
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_salinity(
+    l1: L1Data, salinity: float | np.ndarray | None
+) -> tuple[float | np.ndarray | None, bool]:
+    """Choose the salinity used for both chi viscosity and stratification.
+
+    Preference order, so the two consumers never disagree:
+
+    1. The per-sample practical salinity measured from the profile's own
+       conductivity (VMP JAC C/T, computed on the L1 fast time base in
+       ``pfile_to_l1data``). MicroRiders have no .p-level conductivity, so this
+       is empty for them.
+    2. A user-supplied ``salinity`` (scalar, or an array on the fast time base;
+       a mismatched-length array is collapsed to its nanmean).
+    3. ``None`` → 35 PSU assumed downstream (``visc35`` / temperature-only N2).
+
+    Returns ``(salinity_value, measured)`` where ``measured`` is True only when
+    the per-sample measured salinity is used.
+    """
+    if l1.salinity.size == l1.n_time and bool(np.isfinite(l1.salinity).any()):
+        return l1.salinity, True
+    if isinstance(salinity, np.ndarray) and len(salinity) != l1.n_time:
+        return float(np.nanmean(salinity)), False
+    return salinity, False
 
 
 def run_pipeline(
@@ -302,6 +327,11 @@ def _process_profile(
     )
     logger.info(f"Epsilon: {l4.n_spectra} estimates")
 
+    # Salinity for chi viscosity and stratification, resolved once so the two
+    # never disagree: measured (JAC C/T) > user-supplied > 35 PSU. This matches
+    # perturb's chi.salinity:"measured" feeding both process_l3_chi and N2.
+    chi_salinity, measured_sal = _resolve_salinity(l1, salinity)
+
     # Step 5: L2_chi cleaning + chi spectra (if temperature data available)
     l3_chi = None
     l4_chi_eps = None
@@ -328,7 +358,7 @@ def _process_profile(
                 l2_chi,
                 l3_chi_params,
                 fp07_model=fp07_model,
-                salinity=salinity,
+                salinity=chi_salinity,
             )
         except (ValueError, RuntimeError) as e:
             logger.error(f"Chi spectra error: {e}")
@@ -378,18 +408,8 @@ def _process_profile(
                 sorted_stratification,
             )
 
-            # Prefer the per-sample salinity measured from the profile's own
-            # conductivity (VMP JAC C/T, computed in pfile_to_l1data); else the
-            # user-supplied salinity; else 35 PSU.
-            measured = l1.salinity.size == l1.n_time and np.isfinite(l1.salinity).any()
-            sal_for_strat: float | np.ndarray | None
-            if measured:
-                sal_for_strat = l1.salinity
-            else:
-                sal_for_strat = salinity
-                if isinstance(salinity, np.ndarray) and len(salinity) != l1.n_time:
-                    sal_for_strat = float(np.nanmean(salinity))
-
+            # Same salinity as chi viscosity (resolved once, above): measured
+            # JAC C/T > user-supplied > 35 PSU.
             half_w = 0.5 * chi_diss_length / l1.fs_fast
             strat = sorted_stratification(
                 l4_chi_eps.time,
@@ -397,13 +417,13 @@ def _process_profile(
                 l1.time,
                 l1.pres,
                 l1.temp,
-                S=sal_for_strat,
+                S=chi_salinity,
             )
             eps_on_chi = pair_nearest(l4.time, l4.epsi_final, l4_chi_eps.time)
             mix = mixing_coefficients(
                 eps_on_chi, l4_chi_eps.chi_final, strat.N2, strat.dTdz
             )
-            if measured:
+            if measured_sal:
                 sal_note = "practical salinity from JAC_C/JAC_T/P (TEOS-10)"
             elif salinity is None:
                 sal_note = (

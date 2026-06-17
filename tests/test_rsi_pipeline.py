@@ -243,3 +243,90 @@ class TestRunPipelineOutputs:
         )
         combined_files = list((tmp_path / sample_p.stem).rglob("L6_combined.nc"))
         assert len(combined_files) >= 1
+
+
+# ---------------------------------------------------------------------------
+# _resolve_salinity — chi viscosity / stratification share one salinity source
+# ---------------------------------------------------------------------------
+
+
+def _make_l1(n_time, salinity):
+    """Minimal L1Data carrying only the fields _resolve_salinity reads."""
+    from odas_tpw.scor160.io import L1Data
+
+    return L1Data(
+        time=np.arange(n_time, dtype=np.float64),
+        pres=np.zeros(n_time),
+        shear=np.zeros((0, n_time)),
+        vib=np.zeros((0, n_time)),
+        vib_type="NONE",
+        fs_fast=512.0,
+        f_AA=98.0,
+        vehicle="vmp",
+        profile_dir="down",
+        time_reference_year=2025,
+        salinity=np.asarray(salinity, dtype=np.float64),
+    )
+
+
+class TestResolveSalinity:
+    def test_measured_preferred_over_user_value(self):
+        """A finite per-sample measured salinity wins over a scalar default."""
+        from odas_tpw.rsi.pipeline import _resolve_salinity
+
+        meas = np.full(10, 34.6)
+        val, measured = _resolve_salinity(_make_l1(10, meas), 35.0)
+        assert measured is True
+        np.testing.assert_array_equal(val, meas)
+
+    def test_partial_nan_measured_still_used(self):
+        """`any` finite is enough; the chi core nan-handles per window."""
+        from odas_tpw.rsi.pipeline import _resolve_salinity
+
+        meas = np.full(10, 34.6)
+        meas[:3] = np.nan
+        val, measured = _resolve_salinity(_make_l1(10, meas), None)
+        assert measured is True
+        assert isinstance(val, np.ndarray)
+
+    def test_all_nan_measured_falls_back(self):
+        """An all-NaN measured array is not 'measured'; user value is used."""
+        from odas_tpw.rsi.pipeline import _resolve_salinity
+
+        meas = np.full(10, np.nan)
+        val, measured = _resolve_salinity(_make_l1(10, meas), 34.0)
+        assert measured is False
+        assert val == 34.0
+
+    def test_empty_measured_scalar_user(self):
+        """No measured salinity → scalar user value passes through."""
+        from odas_tpw.rsi.pipeline import _resolve_salinity
+
+        val, measured = _resolve_salinity(_make_l1(10, []), 34.2)
+        assert measured is False
+        assert val == 34.2
+
+    def test_empty_measured_none(self):
+        """No measured, no user value → None (→ 35 PSU downstream)."""
+        from odas_tpw.rsi.pipeline import _resolve_salinity
+
+        val, measured = _resolve_salinity(_make_l1(10, []), None)
+        assert measured is False
+        assert val is None
+
+    def test_user_array_wrong_length_collapsed(self):
+        """A user array that doesn't match the fast base collapses to nanmean."""
+        from odas_tpw.rsi.pipeline import _resolve_salinity
+
+        val, measured = _resolve_salinity(_make_l1(10, []), np.array([34.0, 36.0, np.nan]))
+        assert measured is False
+        assert val == pytest.approx(35.0)
+
+    def test_user_array_matching_length_passthrough(self):
+        """A user array already on the fast base passes through unchanged."""
+        from odas_tpw.rsi.pipeline import _resolve_salinity
+
+        user = np.linspace(34.0, 35.0, 10)
+        val, measured = _resolve_salinity(_make_l1(10, []), user)
+        assert measured is False
+        np.testing.assert_array_equal(val, user)
