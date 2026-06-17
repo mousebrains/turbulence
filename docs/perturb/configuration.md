@@ -29,7 +29,8 @@ Controls where `.p` files are found and where output goes.
 | `p_file_root` | string | `"VMP/"` | Root directory for .p file discovery |
 | `p_file_pattern` | string | `"**/*.p"` | Glob pattern for .p files |
 | `output_root` | string | `"results/"` | Base output directory |
-| `trim` | bool | `true` | Enable trimming of corrupt final records |
+| `trim` | bool | `true` | Enable trimming of corrupt final records (complete files are referenced in place, not copied) |
+| `force_trim` | bool | `false` | Re-trim even when an up-to-date trimmed output already exists |
 | `merge` | bool | `false` | Enable merging of split .p files |
 
 ---

@@ -1337,8 +1337,9 @@ def _done_message(name: str, result: Any) -> str:
     *result* is the dict returned by :func:`process_file` (``profiles`` /
     ``diss`` / ``chi`` lists, plus ``elapsed_s`` when run through
     :func:`_process_file_timed`). Reports the profile count headline plus the
-    dissipation and chi counts (``0`` chi simply means chi was disabled) and
-    the per-file wall-clock when available.
+    dissipation and chi counts (``0`` chi usually means chi was disabled, but
+    also when no chi outputs were produced — e.g. every profile errored or had
+    no matching diss output) and the per-file wall-clock when available.
     """
     if isinstance(result, dict):
         n_prof = len(result.get("profiles", []))
