@@ -94,6 +94,96 @@ class TestProfilePracticalSalinity:
         assert _profile_practical_salinity(path, "JAC_T", "JAC_C") is None
 
 
+class TestComputeSlowStratification:
+    """Per-cast sorted N2/dTdz on the slow grid, fed to profile + CTD products."""
+
+    def test_aligns_with_slow_grid_and_stable(self):
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P  # stable
+        C = np.full(n, 45.0)
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T, "JAC_C": C}
+        pf.is_fast = lambda name: False  # JAC_C is a slow channel
+
+        N2, dTdz = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
+        assert N2.shape == (n,) and dTdz.shape == (n,)
+        assert np.isfinite(N2).any() and np.isfinite(dTdz).any()
+        assert np.all(N2[np.isfinite(N2)] > 0)  # stable column
+        # Outside the (single, full-span) cast nothing is masked here, but a
+        # short cast yields all-NaN for that cast rather than raising.
+        N2b, _ = _compute_slow_stratification(
+            pf, [(0, 2)], "JAC_T", "JAC_C", 2.0
+        )
+        assert np.all(np.isnan(N2b[0:3]))
+
+    def test_returns_none_without_pressure(self):
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        pf = MagicMock()
+        pf.channels = {"JAC_T": np.zeros(10)}
+        pf.is_fast = lambda name: False
+        N2, dTdz = _compute_slow_stratification(pf, [(0, 9)], "JAC_T", "JAC_C", 2.0)
+        assert N2 is None and dTdz is None
+
+
+class TestAttachWindowStratification:
+    """N2/dTdz attached to a window-grid (diss) dataset from a profile's CTD."""
+
+    def _make_profile_nc(self, path):
+        import xarray as xr
+
+        n = 200
+        t_slow = np.linspace(0.0, 100.0, n)
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P  # stable: cooling downward
+        C = np.full(n, 45.0)
+        xr.Dataset(
+            {
+                "t_slow": ("time_slow", t_slow),
+                "P": ("time_slow", P),
+                "JAC_T": ("time_slow", T),
+                "JAC_C": ("time_slow", C),
+                "lat": ((), 15.0),
+                "lon": ((), 145.0),
+            }
+        ).to_netcdf(path)
+
+    def test_attaches_n2_and_dtdz(self, tmp_path):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _attach_window_stratification
+
+        prof = tmp_path / "prof.nc"
+        self._make_profile_nc(prof)
+        ds = xr.Dataset(
+            {"epsilonMean": ("time", [1e-9, 1e-9, 1e-9])},
+            coords={"t": ("time", np.array([25.0, 50.0, 75.0]))},
+        )
+        _attach_window_stratification(
+            ds, prof, 5.0, "JAC_T", "JAC_C", "prof.nc", "dissipation"
+        )
+        assert "N2" in ds and "dTdz" in ds
+        assert ds["N2"].dims == ("time",)
+        assert np.isfinite(ds["N2"].values).all()
+        assert np.all(ds["N2"].values > 0)  # stable column
+
+    def test_no_op_when_profile_unreadable(self, tmp_path):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _attach_window_stratification
+
+        bad = tmp_path / "empty.nc"
+        bad.touch()
+        ds = xr.Dataset(coords={"t": ("time", np.array([1.0]))})
+        _attach_window_stratification(
+            ds, bad, 5.0, "JAC_T", "JAC_C", "empty.nc", "dissipation"
+        )
+        assert "N2" not in ds  # unreadable profile -> silently skipped
+
+
 class TestSetupOutputDirs:
     def test_creates_profiles_and_diss(self, tmp_path):
         config = {
@@ -170,6 +260,7 @@ class TestUpstreamFor:
             "ct",
             "bottom",
             "top_trim",
+            "stratification",
         }
 
     def test_diss_includes_profiles_and_instruments(self):
@@ -180,7 +271,10 @@ class TestUpstreamFor:
         assert {"epsilon", "profiles", "instruments"}.issubset(set(self._sections("chi")))
 
     def test_ctd_includes_file_flow_and_gps(self):
-        assert set(self._sections("ctd")) == {"files", "gps", "hotel", "speed", "qc"}
+        assert set(self._sections("ctd")) == {
+            "files", "gps", "hotel", "speed", "qc",
+            "ct", "profiles", "stratification",
+        }
 
     def test_profiles_binned_includes_profiles(self):
         assert "profiles" in self._sections("profiles_binned")

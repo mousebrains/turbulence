@@ -223,6 +223,15 @@ DEFAULTS: dict[str, dict] = {
         "Conventions": "CF-1.13, ACDD-1.3",
         "history": None,
     },
+    # Background stratification (N2, dT/dz) written to the diss, profile, and
+    # CTD products, independent of epsilon/chi. Computed with the Thorpe-sorted
+    # (adiabatically leveled) method. diss uses its dissipation window; the
+    # profile and CTD products use the configurable ``window`` below.
+    "stratification": {
+        "enable": True,
+        "window": 2.0,           # background vertical window [dbar] for the
+                                 # profile and CTD products
+    },
     "parallel": {
         "jobs": 1,
     },
@@ -530,6 +539,12 @@ netcdf:
   standard_name_vocabulary: "CF Standard Name Table v89"
   Conventions: "CF-1.13, ACDD-1.3"
   history: null            # auto-filled with processing log
+
+stratification:
+  enable: true            # write N2 and dT/dz (Thorpe-sorted) to the diss,
+                          # profile, and CTD products, independent of eps/chi
+  window: 2.0             # background vertical window [dbar] for the profile
+                          # and CTD products (diss uses its dissipation window)
 
 parallel:
   jobs: 1

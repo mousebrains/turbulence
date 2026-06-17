@@ -283,11 +283,18 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
     channels = []
     for ch_name, ch_data in pf.channels.items():
         dim = "time_fast" if pf.is_fast(ch_name) else "time_slow"
+        info = pf.channel_info[ch_name]
+        # Honor a richer long_name/comment when the producer supplied one
+        # (e.g. injected derived channels like N2/dTdz); otherwise fall back to
+        # the bare channel name. The canonical schema still wins where it has an
+        # opinion for known variables.
         attrs = {
-            "units": pf.channel_info[ch_name]["units"],
-            "sensor_type": pf.channel_info[ch_name]["type"],
-            "long_name": ch_name,
+            "units": info["units"],
+            "sensor_type": info["type"],
+            "long_name": info.get("long_name", ch_name),
         }
+        if info.get("comment"):
+            attrs["comment"] = info["comment"]
         channels.append((ch_name, ch_data, dim, attrs))
 
     global_attrs = {

@@ -21,8 +21,8 @@ from odas_tpw.perturb.config import (
 
 
 class TestDefaults:
-    def test_has_17_sections(self):
-        assert len(DEFAULTS) == 17
+    def test_has_18_sections(self):
+        assert len(DEFAULTS) == 18
 
     def test_expected_sections(self):
         expected = {
@@ -41,6 +41,7 @@ class TestDefaults:
             "qc",
             "binning",
             "netcdf",
+            "stratification",
             "parallel",
             "instruments",
         }
