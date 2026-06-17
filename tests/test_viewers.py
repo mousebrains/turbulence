@@ -119,7 +119,7 @@ class TestMixingLook:
         viewer = self._viewer()
         viewer.fig = plt.figure()
         try:
-            viewer._add_nav_diamond(0.04, 0.98, 0.08, 0.92)
+            viewer._add_nav_diamond(0.04, 0.98, 0.08, 0.92, 0.35)
             assert viewer.btn_prev.label.get_text() == "◀"
             assert viewer.btn_next.label.get_text() == "▶"
             assert viewer.btn_spec_up.label.get_text() == "▲"

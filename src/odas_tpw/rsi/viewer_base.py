@@ -949,33 +949,37 @@ class ProfileViewer:
         self.fig.canvas.draw_idle()
 
     def show(self) -> None:
+        hspace = 0.35
         self.fig, self.axes = plt.subplots(
             self._nrows,
             self._ncols,
             figsize=(6.0 * self._ncols, 4.5 * self._nrows),
-            gridspec_kw={"hspace": 0.35, "wspace": 0.32},
+            gridspec_kw={"hspace": hspace, "wspace": 0.32},
             squeeze=False,
         )
         left, right, bottom, top = 0.04, 0.98, 0.08, 0.92
         self.fig.subplots_adjust(bottom=bottom, top=top, left=left, right=right)
 
         self._setup_axes()
-        self._add_nav_diamond(left, right, bottom, top)
+        self._add_nav_diamond(left, right, bottom, top, hspace)
 
         self._draw()
         plt.show()
 
-    def _add_nav_diamond(self, left, right, bottom, top) -> None:
-        """Place a textless 4-arrow navigation diamond at the figure centre.
+    def _add_nav_diamond(self, left, right, bottom, top, hspace) -> None:
+        """Place a textless 4-arrow navigation diamond in a panel gap.
 
         Left/right (◀ ▶) step the profile; up/down (▲ ▼) move the spectral
-        depth window. The centre is the same self-relative figure location for
-        any grid: horizontally between the middle two columns, vertically at the
-        figure centre.
+        depth window. Horizontally it sits between the middle two columns;
+        vertically it is centred in the gap between the top two rows, so it
+        lands in a clean inter-row gap rather than across a panel row. For a
+        two-row grid (quick_look/diss_look) that gap is the figure centre.
         """
         assert self.fig is not None
         cx = (left + right) / 2.0
-        cy = (bottom + top) / 2.0
+        # Centre of the gap between row 1 and row 2 from the subplot geometry.
+        row_h = (top - bottom) / (self._nrows + (self._nrows - 1) * hspace)
+        cy = top - row_h - (hspace * row_h) / 2.0
         bw, bh = 0.024, 0.032  # button size [figure fraction]
         s = 0.040  # diamond radius
         ax_up = self.fig.add_axes((cx - bw / 2, cy + s - bh / 2, bw, bh))
