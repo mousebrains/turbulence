@@ -19,6 +19,7 @@ Subcommands:
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -159,14 +160,21 @@ def _cmd_trim(args: argparse.Namespace) -> None:
         config.setdefault("files", {})["p_file_root"] = args.p_file_root
     if args.output:
         config.setdefault("files", {})["output_root"] = args.output
+    if args.jobs is not None:
+        config.setdefault("parallel", {})["jobs"] = args.jobs
 
     log_path = _install_logging(args, config)
     logging.getLogger(__name__).info("CLI trim, log: %s", log_path)
 
     from odas_tpw.perturb.pipeline import run_trim
 
-    results = run_trim(config)
-    print(f"Trimmed {len(results)} files")
+    # Resolve worker count the same way run_pipeline does: 0 = all cores.
+    jobs = config.get("parallel", {}).get("jobs", 1)
+    if jobs == 0:
+        jobs = os.cpu_count() or 1
+
+    results = run_trim(config, jobs=jobs)
+    print(f"Trim complete: {len(results)} files ready (see log for breakdown)")
 
 
 def _cmd_merge(args: argparse.Namespace) -> None:
@@ -455,6 +463,7 @@ def build_parser() -> argparse.ArgumentParser:
     # trim
     p_trim = sub.add_parser("trim", help="trim corrupt records from .p files")
     _add_common_args(p_trim)
+    _add_parallel_args(p_trim)
     _add_file_args(p_trim)
 
     # merge

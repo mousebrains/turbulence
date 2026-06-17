@@ -1097,19 +1097,51 @@ def _check_unique_output_stems(stems: list[str]) -> None:
         )
 
 
-def _trim_one(args: tuple) -> tuple[Path | None, Path, str | None]:
-    """Worker: trim one .p file and return (trimmed_path, source_path, error).
+def _trim_one(args: tuple):
+    """Worker: trim one .p file and return (trim_result, source_path, error).
 
     Designed to be pickled and dispatched to a ProcessPoolExecutor — must
     take a single argument and import its dependencies inside the call.
+    The first element is a :class:`~odas_tpw.perturb.trim.TrimResult` on
+    success (or ``None`` with an error string on failure).
     """
-    p, trim_dir, root = args
+    p, trim_dir, root, force = args
     try:
         from odas_tpw.perturb.trim import trim_p_file
 
-        return trim_p_file(p, trim_dir, root=root), p, None
+        return trim_p_file(p, trim_dir, root=root, force=force), p, None
     except Exception as exc:
         return None, p, str(exc)
+
+
+def _trim_log_message(result) -> str:
+    """Render the per-file trim log line, reporting what happened to the file.
+
+    Distinguishes the three outcomes so a re-run is legible: a real trim
+    reports the bytes dropped, a complete file reports that it was referenced
+    in place (not copied), and an up-to-date trimmed output reports skipped.
+    """
+    name = result.dest.name
+    if result.action == "trimmed":
+        return (
+            f"Trimmed: {name} (removed {result.bytes_removed} B — "
+            f"incomplete final record of {result.record_size} B)"
+        )
+    if result.action == "skipped":
+        return f"Trim: {name} (skipped — trimmed output already up to date)"
+    return f"Trim: {name} (complete — referenced original in place, not copied)"
+
+
+def _log_trim_summary(results: list, n_failed: int) -> None:
+    """Emit one roll-up line with the per-action counts."""
+    counts = {"trimmed": 0, "referenced": 0, "skipped": 0}
+    for r in results:
+        counts[r.action] = counts.get(r.action, 0) + 1
+    logger.info(
+        "Trim summary: %d trimmed, %d referenced in place, %d skipped (up to date), "
+        "%d failed",
+        counts["trimmed"], counts["referenced"], counts["skipped"], n_failed,
+    )
 
 
 def run_trim(
@@ -1118,12 +1150,19 @@ def run_trim(
     *,
     jobs: int = 1,
 ) -> list[Path]:
-    """Trim corrupt final records from .p files.
+    """Trim corrupt final records from .p files; reference complete ones in place.
 
     *jobs* > 1 dispatches :func:`trim_p_file` calls onto a process pool
     so the per-file work overlaps. Each call is independent (different
     output path, no shared state), so process-level parallelism gives
     near-linear speedup until disk I/O saturates.
+
+    Complete files are not copied — their original path is returned so
+    downstream stages read them in place. Only genuinely-truncated files
+    are written under ``<output_root>/trimmed/``. A trimmed file is skipped
+    when an up-to-date output already exists (``files.force_trim: true``
+    re-trims unconditionally). The returned list is the per-file path to
+    use downstream (original for referenced files, trimmed path otherwise).
     """
     from odas_tpw.perturb.discover import find_p_files
     from odas_tpw.perturb.trim import trim_destination
@@ -1132,6 +1171,7 @@ def run_trim(
     output_root = Path(files_cfg.get("output_root", "results/"))
     trim_dir = output_root / "trimmed"
     root = _configured_input_root(config)
+    force = bool(files_cfg.get("force_trim", False))
 
     if p_files is None:
         root = _configured_input_root(config)
@@ -1143,30 +1183,37 @@ def run_trim(
     destinations = [trim_destination(p, trim_dir, root=root) for p in p_files]
     _check_unique_outputs(destinations)
 
-    results: list[Path] = []
+    trim_results: list = []
+    n_failed = 0
     if jobs <= 1 or len(p_files) <= 1:
         from odas_tpw.perturb.trim import trim_p_file
 
         for p in p_files:
             try:
-                trimmed = trim_p_file(p, trim_dir, root=root)
-                results.append(trimmed)
-                logger.info("Trimmed: %s", trimmed.name)
+                result = trim_p_file(p, trim_dir, root=root, force=force)
+                trim_results.append(result)
+                logger.info("%s", _trim_log_message(result))
             except Exception as exc:
+                n_failed += 1
                 logger.error("trimming %s: %s", p.name, exc)
-        return results
+    else:
+        with ProcessPoolExecutor(max_workers=jobs) as executor:
+            futures = {
+                executor.submit(_trim_one, (p, trim_dir, root, force)): p
+                for p in p_files
+            }
+            for future in as_completed(futures):
+                result, src, err = future.result()
+                if err is not None:
+                    n_failed += 1
+                    logger.error("trimming %s: %s", src.name, err)
+                    continue
+                assert result is not None  # narrow for the type checker
+                trim_results.append(result)
+                logger.info("%s", _trim_log_message(result))
 
-    with ProcessPoolExecutor(max_workers=jobs) as executor:
-        futures = {executor.submit(_trim_one, (p, trim_dir, root)): p for p in p_files}
-        for future in as_completed(futures):
-            trimmed_or_none, src, err = future.result()
-            if err is not None:
-                logger.error("trimming %s: %s", src.name, err)
-                continue
-            assert trimmed_or_none is not None  # narrow for the type checker
-            results.append(trimmed_or_none)
-            logger.info("Trimmed: %s", trimmed_or_none.name)
-    return results
+    _log_trim_summary(trim_results, n_failed)
+    return [r.dest for r in trim_results]
 
 
 def run_merge(
@@ -1277,6 +1324,55 @@ def _setup_output_dirs(config: dict) -> dict[str, Path]:
     return dirs
 
 
+def _format_elapsed(seconds: float) -> str:
+    """Human-readable elapsed time: ``12.3s`` under a minute, else ``1m 23s``."""
+    if seconds >= 60:
+        return f"{int(seconds // 60)}m {seconds % 60:02.0f}s"
+    return f"{seconds:.1f}s"
+
+
+def _done_message(name: str, result: Any) -> str:
+    """Per-file completion line reporting products written and elapsed time.
+
+    *result* is the dict returned by :func:`process_file` (``profiles`` /
+    ``diss`` / ``chi`` lists, plus ``elapsed_s`` when run through
+    :func:`_process_file_timed`). Reports the profile count headline plus the
+    dissipation and chi counts (``0`` chi usually means chi was disabled, but
+    also when no chi outputs were produced — e.g. every profile errored or had
+    no matching diss output) and the per-file wall-clock when available.
+    """
+    if isinstance(result, dict):
+        n_prof = len(result.get("profiles", []))
+        n_diss = len(result.get("diss", []))
+        n_chi = len(result.get("chi", []))
+        elapsed = result.get("elapsed_s")
+    else:
+        n_prof = n_diss = n_chi = 0
+        elapsed = None
+    elapsed_str = f" in {_format_elapsed(elapsed)}" if elapsed is not None else ""
+    return (
+        f"Done processing {name}: {n_prof} profiles "
+        f"({n_diss} dissipation, {n_chi} chi){elapsed_str}"
+    )
+
+
+def _process_file_timed(*args, **kwargs) -> dict:
+    """Run :func:`process_file`, recording its wall-clock as ``elapsed_s``.
+
+    Wrapping rather than instrumenting process_file's several return points
+    keeps the timing in one place. The elapsed seconds are measured inside the
+    worker process, so they reflect true per-file processing time, not the
+    time a file spent queued waiting for a free worker.
+    """
+    import time
+
+    t0 = time.monotonic()
+    result = process_file(*args, **kwargs)
+    if isinstance(result, dict):
+        result["elapsed_s"] = time.monotonic() - t0
+    return result
+
+
 def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     """Run the full pipeline: discover -> trim -> merge -> process -> bin -> combo.
 
@@ -1325,20 +1421,36 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             from odas_tpw.perturb.trim import trim_destination
 
             trim_dir = Path(files_cfg.get("output_root", "results/")) / "trimmed"
+            # run_trim returns the trim-dir path for trimmed/skipped files and
+            # the *original* path for complete (referenced) files. Recover the
+            # per-file physical path and keep stems/instrument keys canonical
+            # (derived from the original source under the input root) so a
+            # referenced file and a trimmed file share one stable identity.
             trimmed_keys = {p.resolve() for p in trimmed}
+            next_p_files: list[Path] = []
             next_instruments: dict[Path, str] = {}
+            next_stems: dict[Path, str] = {}
             for source in p_files:
+                src_key = source.resolve()
                 dest = trim_destination(source, trim_dir, root=current_root)
                 if dest.resolve() in trimmed_keys:
-                    next_instruments[dest.resolve()] = instrument_key_by_path.get(
-                        source.resolve(), source.parent.name
-                    )
-            p_files = trimmed
+                    physical = dest          # rewritten (trimmed) or reused (skipped)
+                elif src_key in trimmed_keys:
+                    physical = source        # complete — referenced in place
+                else:
+                    continue                 # trim failed for this file; drop it
+                key = physical.resolve()
+                next_p_files.append(physical)
+                next_instruments[key] = instrument_key_by_path.get(
+                    src_key, source.parent.name
+                )
+                next_stems[key] = _source_output_stem(source, current_root)
+            p_files = next_p_files
             instrument_key_by_path = next_instruments
-            current_root = trim_dir
-            output_stem_by_path = {
-                p.resolve(): _source_output_stem(p, current_root) for p in p_files
-            }
+            output_stem_by_path = next_stems
+            # current_root stays the input root: referenced files (the common
+            # case) live there, and trimmed files resolve via the stem map
+            # above rather than a relative-path computation.
 
     # Merge
     if files_cfg.get("merge", False):
@@ -1365,8 +1477,18 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                     next_instruments[output_key] = instrument_key_by_path.get(
                         source.resolve(), source.parent.name
                     )
-                    root = merge_dir if len(chain) > 1 else current_root
-                    next_output_stems[output_key] = _source_output_stem(output_path, root)
+                    if len(chain) > 1:
+                        # Genuinely merged → new file under merge_dir.
+                        next_output_stems[output_key] = _source_output_stem(
+                            output_path, merge_dir
+                        )
+                    else:
+                        # Passthrough singleton — keep the canonical stem the
+                        # trim stage assigned (the physical file may sit under
+                        # the input root or the trim dir).
+                        next_output_stems[output_key] = output_stem_by_path.get(
+                            output_key, _source_output_stem(output_path, current_root)
+                        )
                     continue
                 for source in chain:
                     source_key = source.resolve()
@@ -1374,8 +1496,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                         next_instruments[source_key] = instrument_key_by_path.get(
                             source_key, source.parent.name
                         )
-                        next_output_stems[source_key] = _source_output_stem(
-                            source, current_root
+                        next_output_stems[source_key] = output_stem_by_path.get(
+                            source_key, _source_output_stem(source, current_root)
                         )
             p_files = merged_files
             instrument_key_by_path = next_instruments
@@ -1423,7 +1545,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     if jobs == 1:
         for p_path in p_files:
             logger.info("Processing %s...", p_path.name)
-            process_file(
+            result = _process_file_timed(
                 p_path,
                 config,
                 gps,
@@ -1433,6 +1555,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 instrument_key=_instrument_key(p_path),
                 output_stem=_output_stem(p_path),
             )
+            logger.info("%s", _done_message(p_path.name, result))
     else:
         # Spawn workers each get a per-pid log file inside <output_root>/logs/
         # so multi-process runs are diagnosable.  ``run_stamp`` is the parent
@@ -1447,7 +1570,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         ) as executor:
             futures = {
                 executor.submit(
-                    process_file,
+                    _process_file_timed,
                     p,
                     config,
                     gps,
@@ -1462,10 +1585,10 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             for future in as_completed(futures):
                 p = futures[future]
                 try:
-                    future.result()
-                    logger.info("Done: %s", p.name)
+                    result = future.result()
+                    logger.info("%s", _done_message(p.name, result))
                 except Exception as exc:
-                    logger.error("%s: %s", p.name, exc)
+                    logger.error("processing %s: %s", p.name, exc)
 
     # Binning — three independent stages (profiles / diss / chi) that
     # share no data, so we run them concurrently on a thread pool.  Each

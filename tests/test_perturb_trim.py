@@ -44,12 +44,16 @@ def _make_p_file(path, *, record_size=1024, config_size=256, n_records=3, extra_
 
 
 class TestTrimPFile:
-    def test_no_trim_needed(self, tmp_path):
+    def test_complete_file_is_referenced_in_place(self, tmp_path):
         src = _make_p_file(tmp_path / "clean.p", n_records=3, extra_bytes=0)
         out_dir = tmp_path / "trimmed"
-        dest = trim_p_file(src, out_dir)
-        assert dest.exists()
-        assert dest.stat().st_size == src.stat().st_size
+        result = trim_p_file(src, out_dir)
+        # Complete file: the original is referenced, not copied.
+        assert result.action == "referenced"
+        assert result.dest == src
+        assert result.bytes_removed == 0
+        # No output written under the trim directory.
+        assert not out_dir.exists()
 
     def test_trims_fractional_record(self, tmp_path):
         record_size = 1024
@@ -61,22 +65,29 @@ class TestTrimPFile:
         )
         original_size = src.stat().st_size
         out_dir = tmp_path / "trimmed"
-        dest = trim_p_file(src, out_dir)
-        assert dest.exists()
-        assert dest.stat().st_size == original_size - 50
+        result = trim_p_file(src, out_dir)
+        assert result.dest.exists()
+        assert result.dest.stat().st_size == original_size - 50
+        assert result.action == "trimmed"
+        assert result.bytes_removed == 50
+        assert result.record_size == record_size
 
     def test_output_in_correct_directory(self, tmp_path):
-        src = _make_p_file(tmp_path / "test.p")
+        # Incomplete file so the trimmed output is written under out_dir.
+        src = _make_p_file(tmp_path / "test.p", extra_bytes=20)
         out_dir = tmp_path / "output"
-        dest = trim_p_file(src, out_dir)
-        assert dest.parent == out_dir
-        assert dest.name == "test.p"
+        result = trim_p_file(src, out_dir)
+        assert result.action == "trimmed"
+        assert result.dest.parent == out_dir
+        assert result.dest.name == "test.p"
 
     def test_creates_output_dir(self, tmp_path):
-        src = _make_p_file(tmp_path / "test.p")
+        # Incomplete file so trimming materializes the nested output directory.
+        src = _make_p_file(tmp_path / "test.p", extra_bytes=20)
         out_dir = tmp_path / "deep" / "nested" / "dir"
-        dest = trim_p_file(src, out_dir)
-        assert dest.exists()
+        result = trim_p_file(src, out_dir)
+        assert result.dest.exists()
+        assert result.dest.parent == out_dir
 
     def test_preserves_complete_records(self, tmp_path):
         record_size = 512
@@ -90,12 +101,12 @@ class TestTrimPFile:
             extra_bytes=100,
         )
         out_dir = tmp_path / "trimmed"
-        dest = trim_p_file(src, out_dir)
+        result = trim_p_file(src, out_dir)
 
         header_size = HEADER_BYTES
         first_record = header_size + config_size
         expected = first_record + n_records * record_size
-        assert dest.stat().st_size == expected
+        assert result.dest.stat().st_size == expected
 
     def test_file_too_small_raises(self, tmp_path):
         src = tmp_path / "tiny.p"
@@ -116,6 +127,48 @@ class TestTrimPFile:
         src.write_bytes(struct.pack(f"<{HEADER_WORDS}H", *words))  # only 128 bytes
         with pytest.raises(ValueError, match="smaller than first record"):
             trim_p_file(src, tmp_path / "out")
+
+    def test_skips_after_a_real_trim(self, tmp_path):
+        """A trimmed output is reused on the next run (only trimmed files skip)."""
+        src = _make_p_file(
+            tmp_path / "frac.p", record_size=1024, n_records=3, extra_bytes=50
+        )
+        out_dir = tmp_path / "trimmed"
+
+        first = trim_p_file(src, out_dir)
+        assert first.action == "trimmed"
+
+        second = trim_p_file(src, out_dir)
+        assert second.action == "skipped"
+        assert second.dest == first.dest
+
+    def test_force_re_trims_up_to_date_output(self, tmp_path):
+        """force=True redoes the trim even when the output is current."""
+        src = _make_p_file(
+            tmp_path / "frac.p", record_size=1024, n_records=3, extra_bytes=50
+        )
+        out_dir = tmp_path / "trimmed"
+
+        trim_p_file(src, out_dir)
+        forced = trim_p_file(src, out_dir, force=True)
+        assert forced.action == "trimmed"
+
+    def test_resaves_when_source_is_newer(self, tmp_path):
+        """A source modified after its trimmed output is re-trimmed, not skipped."""
+        import os
+
+        src = _make_p_file(
+            tmp_path / "frac.p", record_size=1024, n_records=3, extra_bytes=50
+        )
+        out_dir = tmp_path / "trimmed"
+
+        first = trim_p_file(src, out_dir)
+        # Bump the source mtime one second past the existing trimmed output.
+        newer = first.dest.stat().st_mtime_ns + 1_000_000_000
+        os.utime(src, ns=(newer, newer))
+
+        second = trim_p_file(src, out_dir)
+        assert second.action == "trimmed"
 
     def test_invalid_record_size_raises(self, tmp_path):
         """A record_size of 0 is rejected."""
