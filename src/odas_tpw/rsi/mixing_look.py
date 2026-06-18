@@ -317,8 +317,8 @@ class MixingLookViewer(ProfileViewer):
             return
         has = False
         for vals, color, label in (
-            (self._mix.K_T, "C0", "K_T (Osborn-Cox)"),
-            (self._mix.K_rho, "C3", "K_rho (Osborn)"),
+            (self._mix.K_T, "C0", r"$K_T$ (Osborn-Cox)"),
+            (self._mix.K_rho, "C3", r"$K_\rho$ (Osborn)"),
         ):
             valid = np.isfinite(vals) & (vals > 0) & np.isfinite(P)
             if np.any(valid):
@@ -332,7 +332,7 @@ class MixingLookViewer(ProfileViewer):
         ax.set_xlabel("K [m² s⁻¹]")
         ax.set_ylabel("Pressure [dbar]")
         ax.legend(fontsize=6, loc="lower left")
-        ax.set_title("Diffusivity: K_T vs K_rho", fontsize=9)
+        ax.set_title(r"Diffusivity: $K_T$ vs $K_\rho$", fontsize=9)
         ax.grid(True, alpha=0.3, which="both")
 
     def _draw_gamma(self, ax):
@@ -417,10 +417,10 @@ class MixingLookViewer(ProfileViewer):
         lo = float(min(x.min(), y.min()))
         hi = float(max(x.max(), y.max()))
         ax.plot([lo, hi], [lo, hi], "k--", linewidth=0.9, alpha=0.7, label="1:1 (Γ = 0.2)")
-        ax.set_xlabel("K_rho (Osborn) [m² s⁻¹]")
-        ax.set_ylabel("K_T (Osborn-Cox) [m² s⁻¹]")
+        ax.set_xlabel(r"$K_\rho$ (Osborn) [m² s⁻¹]")
+        ax.set_ylabel(r"$K_T$ (Osborn-Cox) [m² s⁻¹]")
         ax.legend(fontsize=6, loc="upper left")
-        ax.set_title("K_T vs K_rho (color = P)", fontsize=9)
+        ax.set_title(r"$K_T$ vs $K_\rho$ (color = P)", fontsize=9)
         ax.grid(True, alpha=0.3, which="both")
 
 
