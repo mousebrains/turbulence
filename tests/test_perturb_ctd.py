@@ -4,10 +4,21 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 import xarray as xr
 
-from odas_tpw.perturb.ctd import _time_bin, ctd_bin_file
+from odas_tpw.perturb.ctd import _assign_gps_with_casts, _time_bin, ctd_bin_file
 from odas_tpw.perturb.gps import GPSFixed
+
+
+class _MovingGPS:
+    """Straight-line ship track: lat = t, lon = 2t (degrees vs epoch seconds)."""
+
+    def lat(self, t):
+        return np.asarray(t, dtype=float) * 1.0
+
+    def lon(self, t):
+        return np.asarray(t, dtype=float) * 2.0
 
 
 class _PFileStub:
@@ -72,6 +83,49 @@ class TestTimeBin:
         assert np.isfinite(result["T"][0])
 
 
+class TestAssignGpsWithCasts:
+    """The VMP-aware position model (ports Matlab ctd2binned.addGPS)."""
+
+    def test_pinned_descent_and_linear_gap_decay(self):
+        gps = _MovingGPS()
+        bin_epoch = np.array([5.0, 15.0, 30.0, 45.0, 52.0, 60.0])
+        starts = np.array([10.0, 40.0])
+        ends = np.array([20.0, 50.0])
+        lat, lon = _assign_gps_with_casts(bin_epoch, starts, ends, gps)
+        # before first cast: ship fix at the bin time
+        assert (lon[0], lat[0]) == pytest.approx((10.0, 5.0))
+        # during cast 0: pinned to the ship fix at the cast START (t=10)
+        assert (lon[1], lat[1]) == pytest.approx((20.0, 10.0))
+        # gap 0 interior (t=30): linear decay from drop point onto ship track
+        assert (lon[2], lat[2]) == pytest.approx((50.0, 25.0))
+        # during cast 1: pinned to the ship fix at t=40
+        assert (lon[3], lat[3]) == pytest.approx((80.0, 40.0))
+        # gap 1 interior (t=52)
+        assert (lon[4], lat[4]) == pytest.approx((88.0, 44.0))
+        # final bin (end of the trailing gap) is NaN, matching the reference
+        assert np.isnan(lon[5]) and np.isnan(lat[5])
+
+    def test_gap_runs_from_drop_point_to_ship(self):
+        gps = _MovingGPS()
+        # cast [10, 20]; next cast starts at 40. Probe just inside each gap end.
+        bin_epoch = np.array([15.0, 20.0001, 39.9999, 45.0])
+        _lat, lon = _assign_gps_with_casts(
+            bin_epoch, np.array([10.0, 40.0]), np.array([20.0, 50.0]), gps
+        )
+        drop = lon[0]  # during cast 0 == gps.lon(10) == 20 (the drop point)
+        assert lon[1] == pytest.approx(drop, abs=1e-2)         # gap start ~ drop
+        assert lon[2] == pytest.approx(gps.lon(40.0), abs=1e-2)  # gap end ~ ship
+
+    def test_no_casts_is_plain_ship_track(self):
+        gps = _MovingGPS()
+        bin_epoch = np.array([1.0, 2.0, 3.0])
+        lat, lon = _assign_gps_with_casts(
+            bin_epoch, np.array([]), np.array([]), gps
+        )
+        assert np.allclose(lon, [2.0, 4.0, 6.0])
+        assert np.allclose(lat, [1.0, 2.0, 3.0])
+
+
 class TestCtdBinFile:
     def _make_pf(self, channels, t_slow=None, fast_channels=None, filepath=None):
         if t_slow is None:
@@ -109,6 +163,42 @@ class TestCtdBinFile:
         for var in ("SP", "SA", "CT", "sigma0", "rho", "depth"):
             assert var in ds, f"seawater property {var} missing"
         ds.close()
+
+    def test_vmp_aware_pins_descent_and_differs_from_flat(self, tmp_path):
+        n = 640
+        t_slow = np.linspace(0.0, 10.0, n)
+        half = n // 2
+        # Sawtooth pressure: descend in the first half, reel in over the second.
+        P = np.concatenate([np.linspace(0, 100, half), np.linspace(100, 0, n - half)])
+        channels = {
+            "JAC_T": np.linspace(5.0, 15.0, n),
+            "JAC_C": np.linspace(30.0, 35.0, n),
+            "P": P,
+        }
+        gps = _MovingGPS()
+
+        flat_path = ctd_bin_file(self._make_pf(dict(channels), t_slow=t_slow), gps,
+                                 tmp_path / "flat", bin_width=0.5)
+        vmp_path = ctd_bin_file(self._make_pf(dict(channels), t_slow=t_slow), gps,
+                                tmp_path / "vmp", bin_width=0.5,
+                                profiles=[(0, half - 1)], direction="down")
+        # decode_times=False keeps `time` numeric (epoch seconds) for the window test.
+        flat = xr.open_dataset(flat_path, decode_times=False)
+        vmp = xr.open_dataset(vmp_path, decode_times=False)
+
+        # The cast-aware path must change the positions vs the plain ship track.
+        assert not np.allclose(
+            flat["lat"].values, vmp["lat"].values, equal_nan=True
+        )
+        # During the down-cast window the VMP-aware latitude is pinned (constant),
+        # whereas the flat ship track ramps across it.
+        cast_end_t = t_slow[half - 1]
+        bt = np.asarray(vmp["time"].values, dtype=float)  # epoch s; offset 0 here
+        in_cast = (bt >= 0.0) & (bt <= cast_end_t)
+        assert np.nanstd(vmp["lat"].values[in_cast]) < 1e-9
+        assert np.nanstd(flat["lat"].values[in_cast]) > 1e-3
+        flat.close()
+        vmp.close()
 
     def test_gps_interpolation(self, tmp_path):
         n = 640
