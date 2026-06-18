@@ -1,0 +1,45 @@
+# Example sections file for `perturb-plot section`.
+#
+# A "section" only chops the CTD trajectory and chooses the x-axis: a name, an
+# optional UTC time window, and an `xaxis` method with its parameters. Which
+# variables, bin sizes, and colour limits to render are separate CLI flags
+# (e.g. --var, --z-bin, --depth-max) that apply to every section here.
+#
+# Usage:
+#   perturb-plot section --root <results_root> --sections examples/sections.yaml \
+#       --out-dir figs/ --var JAC_T --var SP --var sigma0
+#
+# x-axis methods: time | latitude | longitude | distance_from_point | along_line
+# Distance units: m | km | nm   (default km). Waypoints / points are [lat, lon].
+#
+# Honesty note: `time` is the only non-aliasing x-axis. The spatial axes assume
+# a single monotonic transect; a re-occupied location is averaged into one
+# column (intended only for a cast's own down/up legs meeting at the turn).
+
+sections:
+  # Whole deployment as a time series of the default scalars.
+  - name: full_timeseries
+    xaxis: {method: time}
+
+  # One transect, sectioned by latitude, over a chosen window.
+  - name: north_leg_by_latitude
+    start: "2025-01-20T00:00:00Z"
+    stop:  "2025-01-23T00:00:00Z"
+    xaxis: {method: latitude}
+
+  # Distance outward from a fixed reference point (e.g. a mooring), in km.
+  - name: distance_from_mooring
+    xaxis:
+      method: distance_from_point
+      units: km
+      point: [20.0, 132.0]      # [lat, lon]
+
+  # Project the casts onto a planned NE survey line, distance in km.
+  - name: along_NE_line
+    xaxis:
+      method: along_line
+      units: km
+      waypoints:                # [lat, lon] vertices, in order
+        - [18.5, 130.0]
+        - [20.0, 132.5]
+        - [22.0, 135.0]

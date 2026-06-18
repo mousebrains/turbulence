@@ -1,0 +1,126 @@
+# Jun-2026, Claude and Pat Welch, pat@mousebrains.com
+"""Unit tests for the section x-axis geometry kernel (plot/xaxis.py)."""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from odas_tpw.perturb.plot import xaxis
+
+# One degree of great-circle arc on the mean-radius sphere.
+_DEG_KM = 6_371_000.0 * np.pi / 180.0 / 1000.0  # ~111.19 km
+
+
+def test_haversine_one_degree_latitude():
+    d = xaxis.haversine_m(0.0, 0.0, np.array([1.0]), np.array([0.0]))
+    assert d[0] == pytest.approx(_DEG_KM * 1000.0, rel=1e-6)
+
+
+def test_haversine_longitude_shrinks_with_latitude():
+    """1 deg of longitude at 60N is ~half that at the equator (cos 60 = 0.5)."""
+    eq = xaxis.haversine_m(0.0, 0.0, np.array([0.0]), np.array([1.0]))[0]
+    hi = xaxis.haversine_m(60.0, 0.0, np.array([60.0]), np.array([1.0]))[0]
+    assert hi / eq == pytest.approx(0.5, rel=1e-3)
+
+
+def test_haversine_dateline_safe():
+    """Across +/-179.9 the distance is ~0.2 deg, not ~360 deg."""
+    d = xaxis.haversine_m(0.0, 179.9, np.array([0.0]), np.array([-179.9]))[0]
+    assert d == pytest.approx(_DEG_KM * 1000.0 * 0.2, rel=1e-3)
+
+
+def test_distance_from_point_is_radial_not_cumulative():
+    """N distances to one fixed point, not N-1 consecutive deltas."""
+    lat = np.array([0.0, 1.0, 2.0])
+    lon = np.zeros(3)
+    d = xaxis.distance_from_point(lat, lon, (0.0, 0.0), units="km")
+    assert d == pytest.approx(np.array([0.0, _DEG_KM, 2 * _DEG_KM]), rel=1e-5)
+
+
+def test_distance_units_scale():
+    lat = np.array([1.0])
+    lon = np.array([0.0])
+    km = xaxis.distance_from_point(lat, lon, (0.0, 0.0), units="km")[0]
+    m = xaxis.distance_from_point(lat, lon, (0.0, 0.0), units="m")[0]
+    nm = xaxis.distance_from_point(lat, lon, (0.0, 0.0), units="nm")[0]
+    assert m == pytest.approx(km * 1000.0, rel=1e-9)
+    # 1 deg of latitude is ~60 nautical miles by historical definition.
+    assert nm == pytest.approx(60.0, abs=0.1)
+
+
+def test_distance_propagates_nan_position():
+    lat = np.array([0.0, np.nan])
+    lon = np.array([0.0, 0.0])
+    d = xaxis.distance_from_point(lat, lon, (0.0, 0.0))
+    assert np.isfinite(d[0]) and np.isnan(d[1])
+
+
+def test_along_line_on_a_straight_meridian():
+    """Points on a N-S line: along ~ distance from start, cross ~ 0."""
+    waypoints = np.array([[0.0, 0.0], [1.0, 0.0]])
+    lat = np.array([0.0, 0.5, 1.0])
+    lon = np.zeros(3)
+    along, cross = xaxis.project_along_line(lat, lon, waypoints, units="km")
+    assert along == pytest.approx(np.array([0.0, 0.5 * _DEG_KM, _DEG_KM]), rel=1e-3)
+    assert np.allclose(cross, 0.0, atol=1e-6)
+
+
+def test_along_line_cross_track_for_off_line_point():
+    waypoints = np.array([[0.0, 0.0], [1.0, 0.0]])
+    # 0.1 deg east of the midpoint of the meridian.
+    along, cross = xaxis.project_along_line(
+        np.array([0.5]), np.array([0.1]), waypoints, units="km"
+    )
+    assert along[0] == pytest.approx(0.5 * _DEG_KM, rel=1e-2)
+    assert cross[0] == pytest.approx(0.1 * _DEG_KM * np.cos(np.radians(0.5)), rel=1e-2)
+
+
+def test_along_line_clamps_beyond_ends():
+    """A point south of the start clamps to along=0 (no negative overshoot)."""
+    waypoints = np.array([[0.0, 0.0], [1.0, 0.0]])
+    along, _cross = xaxis.project_along_line(
+        np.array([-0.5]), np.array([0.0]), waypoints, units="km"
+    )
+    assert along[0] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_along_line_requires_two_waypoints():
+    with pytest.raises(ValueError):
+        xaxis.project_along_line(np.array([0.0]), np.array([0.0]), np.array([[0.0, 0.0]]))
+
+
+def test_compute_time_returns_epoch_seconds():
+    t = np.array(["2025-01-01T00:00:00", "2025-01-01T00:00:10"], dtype="datetime64[ns]")
+    xa = xaxis.compute("time", np.zeros(2), np.zeros(2), t)
+    assert xa.kind == "time"
+    assert xa.x[1] - xa.x[0] == pytest.approx(10.0)
+
+
+def test_compute_latitude_longitude_passthrough():
+    lat = np.array([1.0, 2.0])
+    lon = np.array([3.0, 4.0])
+    t = np.zeros(2)
+    assert np.allclose(xaxis.compute("latitude", lat, lon, t).x, lat)
+    assert np.allclose(xaxis.compute("longitude", lat, lon, t).x, lon)
+
+
+def test_compute_rejects_unknown_method_and_missing_params():
+    t = np.zeros(1)
+    with pytest.raises(ValueError):
+        xaxis.compute("bogus", np.zeros(1), np.zeros(1), t)
+    with pytest.raises(ValueError):
+        xaxis.compute("distance_from_point", np.zeros(1), np.zeros(1), t, params={})
+    with pytest.raises(ValueError):
+        xaxis.compute("along_line", np.zeros(1), np.zeros(1), t, params={})
+
+
+def test_haversine_matches_gsw():
+    """Cross-check the haversine against TEOS-10 gsw.distance (<0.5%)."""
+    gsw = pytest.importorskip("gsw")
+    lat = np.array([20.0, 21.0])
+    lon = np.array([130.0, 132.0])
+    # gsw.distance takes lon FIRST and returns the single inter-point distance.
+    ref = gsw.distance(lon, lat, p=0)[0]
+    ours = xaxis.haversine_m(lat[0], lon[0], lat[1:2], lon[1:2])[0]
+    assert ours == pytest.approx(ref, rel=5e-3)
