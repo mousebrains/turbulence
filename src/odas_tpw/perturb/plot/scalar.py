@@ -189,6 +189,26 @@ def load_sections(path: str) -> list[Section]:
     return [_section_from_dict(dict(s), i) for i, s in enumerate(secs)]
 
 
+def _select_sections(sections: list[Section], select: list[str]) -> list[Section]:
+    """Keep only sections whose ``name`` was requested via ``--select``.
+
+    Each ``--select`` value may be a single name or a comma-separated list;
+    values are flattened. An unknown name is a hard error (rather than a silent
+    no-op) and lists the available names. Output preserves the file order.
+    """
+    wanted: list[str] = []
+    for item in select:
+        wanted.extend(part.strip() for part in item.split(",") if part.strip())
+    available = [s.name for s in sections]
+    unknown = [w for w in wanted if w not in available]
+    if unknown:
+        raise SystemExit(
+            f"--select: no section named {unknown}; available: {available}"
+        )
+    wanted_set = set(wanted)
+    return [s for s in sections if s.name in wanted_set]
+
+
 def _adhoc_section(args: argparse.Namespace) -> Section:
     """Build a single Section from ad-hoc CLI flags."""
     params: dict = {"units": args.units}
@@ -405,6 +425,10 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--sections", default=None,
                    help="sections YAML (data-chopping + x-axis). If omitted, "
                         "a single ad-hoc section is built from the flags below.")
+    p.add_argument("--select", action="append", default=None, metavar="NAME",
+                   help="plot only the named section(s) from --sections, by their "
+                        "'name:' in the YAML (repeatable, or comma-separated). "
+                        "Default: every section in the file.")
     p.add_argument("--out-dir", default=None,
                    help="write scalar_<name>.png here instead of showing on screen. "
                         "Default: display interactively; with no display available "
@@ -462,7 +486,14 @@ def run(args: argparse.Namespace) -> str:
     try:
         if "time" not in ds.dims:
             raise SystemExit(f"{path}: expected a CTD trajectory with a 'time' dimension")
-        sections = load_sections(args.sections) if args.sections else [_adhoc_section(args)]
+        if args.sections:
+            sections = load_sections(args.sections)
+            if args.select:
+                sections = _select_sections(sections, args.select)
+        else:
+            if args.select:
+                raise SystemExit("--select only applies together with --sections")
+            sections = [_adhoc_section(args)]
         variables = list(args.var) if args.var else _default_variables(ds)
         for sec in sections:
             fig = _build_section_figure(ds, sec, variables, args)

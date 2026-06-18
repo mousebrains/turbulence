@@ -96,6 +96,7 @@ pipeline configuration and is not validated against it.
 | `--root DIR` | perturb output root (contains `ctd_combo_NN/`). Required. |
 | `--ctd-combo PATH` | Explicit combo dir or `combo.nc` (default: latest under `--root`). |
 | `--sections YAML` | Sections file. If omitted, one ad-hoc section is built from the flags below. |
+| `--select NAME` | Plot only the named section(s) from `--sections`, by their `name:` in the YAML (repeatable, or comma-separated). Default: every section. An unknown name is an error. |
 | `--out-dir DIR` | Write `scalar_<name>.png` here instead of showing on screen. Omit to display interactively (figures fall back to `--root` when no display is available). |
 | `--var NAME` | Scalar variable to panel (repeatable). Default: `JAC_T`, `SP`, `sigma0`, plus `DO`/`Chlorophyll`/`Turbidity` when present. |
 | `--z-bin M` | Depth bin width in metres (default 1.0). |
@@ -125,4 +126,8 @@ perturb-plot scalar --root RESULTS --xaxis latitude --var JAC_T --depth-max 150
 
 # Multiple named sections from a file, written to PNGs
 perturb-plot scalar --root RESULTS --sections sections.yaml --out-dir figs/
+
+# Just two named sections from the file
+perturb-plot scalar --root RESULTS --sections sections.yaml \
+    --select north_transect --select along_NE_line
 ```

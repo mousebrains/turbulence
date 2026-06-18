@@ -144,7 +144,8 @@ def test_adhoc_time_section_writes_png(tmp_path: Path):
     out_dir = tmp_path / "figs"
     rc = scalar.run(
         argparse.Namespace(
-            root=str(tmp_path), ctd_combo=None, sections=None, out_dir=str(out_dir),
+            root=str(tmp_path), ctd_combo=None, sections=None, select=None,
+            out_dir=str(out_dir),
             var=None, z_bin=2.0, x_bin=None, depth_max=None, vmin=None, vmax=None,
             name="adhoc_time", xaxis="time", start=None, stop=None, point=None,
             waypoints=None, units="km",
@@ -183,6 +184,71 @@ def test_cli_sections_yaml_multipanel(tmp_path: Path):
     for name in ("by_lat", "dist", "line"):
         png = tmp_path / f"scalar_{name}.png"
         assert png.exists() and png.stat().st_size > 0
+
+
+def _three_section_yaml(tmp_path: Path) -> Path:
+    cfg = tmp_path / "sections.yaml"
+    cfg.write_text(
+        "sections:\n"
+        "  - name: by_lat\n"
+        "    xaxis: {method: latitude}\n"
+        "  - name: dist\n"
+        "    xaxis: {method: distance_from_point, units: km, point: [18.0, 130.0]}\n"
+        "  - name: line\n"
+        "    xaxis:\n"
+        "      method: along_line\n"
+        "      waypoints: [[18.0, 130.0], [20.0, 132.0]]\n"
+    )
+    return cfg
+
+
+def test_select_sections_filters_and_validates():
+    secs = [scalar.Section(name=n, method="time") for n in ("a", "b", "c")]
+    # single name
+    assert [s.name for s in scalar._select_sections(secs, ["b"])] == ["b"]
+    # comma-separated + repeated, file order preserved (not request order)
+    assert [s.name for s in scalar._select_sections(secs, ["c,a"])] == ["a", "c"]
+    assert [s.name for s in scalar._select_sections(secs, ["c", "a"])] == ["a", "c"]
+    # unknown name is a hard error
+    with pytest.raises(SystemExit):
+        scalar._select_sections(secs, ["nope"])
+
+
+def test_cli_select_one_section(tmp_path: Path):
+    _write_ctd_combo(tmp_path)
+    cfg = _three_section_yaml(tmp_path)
+    rc = _run_cli(["scalar", "--root", str(tmp_path), "--sections", str(cfg),
+                   "--out-dir", str(tmp_path), "--select", "dist"])
+    assert rc == 0
+    assert (tmp_path / "scalar_dist.png").exists()
+    assert not (tmp_path / "scalar_by_lat.png").exists()
+    assert not (tmp_path / "scalar_line.png").exists()
+
+
+def test_cli_select_multiple_sections(tmp_path: Path):
+    _write_ctd_combo(tmp_path)
+    cfg = _three_section_yaml(tmp_path)
+    rc = _run_cli(["scalar", "--root", str(tmp_path), "--sections", str(cfg),
+                   "--out-dir", str(tmp_path), "--select", "line,by_lat"])
+    assert rc == 0
+    assert (tmp_path / "scalar_by_lat.png").exists()
+    assert (tmp_path / "scalar_line.png").exists()
+    assert not (tmp_path / "scalar_dist.png").exists()
+
+
+def test_cli_select_unknown_name_errors(tmp_path: Path):
+    _write_ctd_combo(tmp_path)
+    cfg = _three_section_yaml(tmp_path)
+    with pytest.raises(SystemExit):
+        _run_cli(["scalar", "--root", str(tmp_path), "--sections", str(cfg),
+                  "--out-dir", str(tmp_path), "--select", "missing"])
+
+
+def test_cli_select_without_sections_errors(tmp_path: Path):
+    _write_ctd_combo(tmp_path)
+    with pytest.raises(SystemExit):
+        _run_cli(["scalar", "--root", str(tmp_path), "--out-dir", str(tmp_path),
+                  "--select", "anything"])
 
 
 def test_empty_time_window_skipped(tmp_path: Path):
