@@ -5,8 +5,8 @@
 # variables, bin sizes, and colour limits to render are separate CLI flags
 # (e.g. --var, --z-bin, --depth-max) that apply to every section here.
 #
-# Usage:
-#   perturb-plot section --root <results_root> --sections examples/sections.yaml \
+# Usage (omit --out-dir to show the figures on screen instead of writing PNGs):
+#   perturb-plot scalar --root <results_root> --sections examples/sections.yaml \
 #       --out-dir figs/ --var JAC_T --var SP --var sigma0
 #
 # x-axis methods: time | latitude | longitude | distance_from_point | along_line

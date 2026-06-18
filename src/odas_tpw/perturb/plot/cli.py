@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import argparse
 
-from odas_tpw.perturb.plot import eps_chi, section
+from odas_tpw.perturb.plot import eps_chi, scalar
 
 # Map subcommand name -> (description, add_arguments, run).
 _SUBCOMMANDS = {
@@ -28,11 +28,11 @@ _SUBCOMMANDS = {
         eps_chi.add_arguments,
         eps_chi.run,
     ),
-    "section": (
+    "scalar": (
         "Depth-vs-x scalar sections (T/S/density/...) from the CTD combo, "
         "with time/latitude/longitude/distance x-axis methods.",
-        section.add_arguments,
-        section.run,
+        scalar.add_arguments,
+        scalar.run,
     ),
 }
 

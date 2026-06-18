@@ -1,5 +1,5 @@
 # Jun-2026, Claude and Pat Welch, pat@mousebrains.com
-"""``perturb-plot section`` — depth-vs-x scalar sections from the CTD combo.
+"""``perturb-plot scalar`` — depth-vs-x scalar sections from the CTD combo.
 
 Reads the CTD trajectory product ``ctd_combo_NN/combo.nc`` (CF
 featureType=trajectory, a continuous down/up sawtooth on a ``time`` axis) and
@@ -13,6 +13,10 @@ from ad-hoc CLI flags.  *Rendering* choices (which variables, depth/x bin
 sizes, colour limits) are separate CLI options that apply to every section in
 the run.
 
+By default the figures are shown on screen.  They are written to PNG files
+instead when ``--out-dir`` is given, or when there is no interactive display
+available (no controlling tty, or a non-GUI matplotlib backend such as Agg).
+
 The trajectory is gridded by binning samples onto a regular ``(x, depth)``
 mesh and averaging each cell (:func:`grid.grid_mean`); empty cells stay NaN —
 no interpolation across gaps.
@@ -24,12 +28,17 @@ import argparse
 import contextlib
 import locale
 import os
+import sys
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
 
 from odas_tpw.perturb.plot import grid, layout, xaxis
+
+if TYPE_CHECKING:
+    from matplotlib.figure import Figure
 
 # Default scalar panels when the user names none, plus optional sensor channels
 # added automatically when the instrument carries them.
@@ -52,6 +61,22 @@ _CMAP: dict[str, str] = {
     "dTdz": "balance",
 }
 _DIVERGING: frozenset[str] = frozenset({"dTdz"})
+# Variables whose colormap is reversed (high values -> the colormap's dark end).
+_REVERSED: frozenset[str] = frozenset({"SP", "sigma0"})
+
+# matplotlib backends that cannot show a window — figures must be saved instead.
+_NON_INTERACTIVE_BACKENDS: frozenset[str] = frozenset(
+    {"agg", "pdf", "svg", "ps", "cairo", "template", "pgf"}
+)
+
+
+def _can_display() -> bool:
+    """True when figures can be shown interactively: a tty and a GUI backend."""
+    if not sys.stdout.isatty():
+        return False
+    import matplotlib
+
+    return matplotlib.get_backend().lower() not in _NON_INTERACTIVE_BACKENDS
 
 
 # ---------------------------------------------------------------------------
@@ -245,13 +270,18 @@ def _time_subset(ds: xr.Dataset, sec: Section) -> xr.Dataset:
     return ds.isel(time=np.flatnonzero(mask))
 
 
-def _render_section(
+def _build_section_figure(
     ds: xr.Dataset,
     sec: Section,
     variables: list[str],
     args: argparse.Namespace,
-    out_dir: str,
-) -> str | None:
+) -> Figure | None:
+    """Render one section to a matplotlib Figure (not saved or shown here).
+
+    Returns ``None`` when the section has no plottable data (empty window, no
+    requested variable present, no finite x positions). The caller decides
+    whether to display or save the returned figure.
+    """
     import cmocean
     import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
@@ -322,7 +352,8 @@ def _render_section(
             norm = Normalize(vmin=-m, vmax=m)
         else:
             norm = Normalize(vmin=vmin, vmax=vmax)
-        cmap = getattr(cmocean.cm, _CMAP.get(name, "thermal")).copy()
+        base = getattr(cmocean.cm, _CMAP.get(name, "thermal"))
+        cmap = base.reversed() if name in _REVERSED else base.copy()
         cmap.set_bad(color="0.85")  # empty cells: light grey, visibly unsampled
         pcm = ax.pcolormesh(x_edges, z_edges, np.ma.masked_invalid(g),
                             cmap=cmap, norm=norm, shading="flat")
@@ -352,13 +383,12 @@ def _render_section(
         f"{title_id}  —  section: {sec.name}  —  "
         f"x-axis: {sec.method}  —  {_grouped(npts)} samples"
     )
+    return fig
 
-    safe = "".join(c if (c.isalnum() or c in "-_.") else "_" for c in sec.name)
-    out = os.path.join(out_dir, f"section_{safe}.png")
-    fig.savefig(out, dpi=150)
-    plt.close(fig)
-    print(f"Wrote {out}")
-    return out
+
+def _safe_name(name: str) -> str:
+    """Filesystem-safe stem for a section name."""
+    return "".join(c if (c.isalnum() or c in "-_.") else "_" for c in name)
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +397,7 @@ def _render_section(
 
 
 def add_arguments(p: argparse.ArgumentParser) -> None:
-    """Register CLI flags for the section subcommand on *p*."""
+    """Register CLI flags for the scalar subcommand on *p*."""
     p.add_argument("--root", required=True,
                    help="perturb output root (contains ctd_combo_NN/)")
     p.add_argument("--ctd-combo", default=None,
@@ -376,7 +406,9 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
                    help="sections YAML (data-chopping + x-axis). If omitted, "
                         "a single ad-hoc section is built from the flags below.")
     p.add_argument("--out-dir", default=None,
-                   help="output directory for section_<name>.png (default: --root)")
+                   help="write scalar_<name>.png here instead of showing on screen. "
+                        "Default: display interactively; with no display available "
+                        "(no tty / non-GUI backend) figures are written into --root.")
     # Rendering (apply to every section).
     p.add_argument("--var", dest="var", action="append", default=None,
                    help="scalar variable to panel (repeatable; default: "
@@ -403,7 +435,7 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> str:
-    """Render every section; return the output directory."""
+    """Render every section; show on screen, or write PNGs and return their dir."""
     # Honour the user's locale for number formatting in titles. Scoped to
     # LC_NUMERIC so we don't disturb matplotlib's float parsing (LC_CTYPE) or
     # collation; falls back silently when the environment locale is unset.
@@ -417,17 +449,35 @@ def run(args: argparse.Namespace) -> str:
     if not os.path.exists(path):
         raise SystemExit(f"CTD combo not found: {path}")
 
+    # Show on screen unless the user asked for files or no display is available.
+    display = args.out_dir is None and _can_display()
     out_dir = args.out_dir or args.root
-    os.makedirs(out_dir, exist_ok=True)
+    if not display:
+        os.makedirs(out_dir, exist_ok=True)
+
+    import matplotlib.pyplot as plt
 
     ds = xr.open_dataset(path)  # default CF decoding -> datetime64 time
+    shown = 0
     try:
         if "time" not in ds.dims:
             raise SystemExit(f"{path}: expected a CTD trajectory with a 'time' dimension")
         sections = load_sections(args.sections) if args.sections else [_adhoc_section(args)]
         variables = list(args.var) if args.var else _default_variables(ds)
         for sec in sections:
-            _render_section(ds, sec, variables, args, out_dir)
+            fig = _build_section_figure(ds, sec, variables, args)
+            if fig is None:
+                continue
+            if display:
+                shown += 1
+            else:
+                out = os.path.join(out_dir, f"scalar_{_safe_name(sec.name)}.png")
+                fig.savefig(out, dpi=150)
+                plt.close(fig)
+                print(f"Wrote {out}")
+        if display and shown:
+            plt.show()  # blocks until the user closes the window(s)
+            plt.close("all")
     finally:
         ds.close()
-    return str(out_dir)
+    return f"displayed {shown} section(s)" if display else str(out_dir)

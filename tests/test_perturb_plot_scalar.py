@@ -1,5 +1,5 @@
 # Jun-2026, Claude and Pat Welch, pat@mousebrains.com
-"""Config-loader and end-to-end tests for ``perturb-plot section``.
+"""Config-loader and end-to-end tests for ``perturb-plot scalar``.
 
 The synthetic CTD combo deliberately moves lat/lon, sawtooths depth (so the
 grid's cell-averaging is exercised by revisited depth bins), and carries a
@@ -18,7 +18,7 @@ import pytest
 matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
 
-from odas_tpw.perturb.plot import section  # noqa: E402
+from odas_tpw.perturb.plot import scalar  # noqa: E402
 
 
 def _write_ctd_combo(root: Path, n_cast: int = 4, per: int = 60) -> None:
@@ -77,11 +77,11 @@ def _write_ctd_combo(root: Path, n_cast: int = 4, per: int = 60) -> None:
 
 
 def test_parse_time_utc_and_offset_rejection():
-    assert section._parse_time(None) is None
-    assert section._parse_time("2025-01-20T00:00:00Z") == np.datetime64("2025-01-20T00:00:00")
-    assert section._parse_time("2025-01-20T06:30:00") == np.datetime64("2025-01-20T06:30:00")
+    assert scalar._parse_time(None) is None
+    assert scalar._parse_time("2025-01-20T00:00:00Z") == np.datetime64("2025-01-20T00:00:00")
+    assert scalar._parse_time("2025-01-20T06:30:00") == np.datetime64("2025-01-20T06:30:00")
     with pytest.raises(ValueError):
-        section._parse_time("2025-01-20T00:00:00+09:00")
+        scalar._parse_time("2025-01-20T00:00:00+09:00")
 
 
 def test_load_sections_valid(tmp_path: Path):
@@ -97,7 +97,7 @@ def test_load_sections_valid(tmp_path: Path):
         "      units: nm\n"
         "      waypoints: [[18.0, 130.0], [20.0, 132.0]]\n"
     )
-    secs = section.load_sections(str(cfg))
+    secs = scalar.load_sections(str(cfg))
     assert [s.name for s in secs] == ["t", "line"]
     assert secs[0].method == "time"
     assert secs[1].method == "along_line"
@@ -110,28 +110,28 @@ def test_load_sections_rejects_bad_specs(tmp_path: Path):
     empty = tmp_path / "empty.yaml"
     empty.write_text("sections: []\n")
     with pytest.raises(ValueError):
-        section.load_sections(str(empty))
+        scalar.load_sections(str(empty))
 
     bad_method = tmp_path / "bad.yaml"
     bad_method.write_text("sections:\n  - {name: x, xaxis: {method: spiral}}\n")
     with pytest.raises(ValueError):
-        section.load_sections(str(bad_method))
+        scalar.load_sections(str(bad_method))
 
     no_wp = tmp_path / "nowp.yaml"
     no_wp.write_text("sections:\n  - {name: x, xaxis: {method: along_line}}\n")
     with pytest.raises(ValueError):
-        section.load_sections(str(no_wp))
+        scalar.load_sections(str(no_wp))
 
     no_pt = tmp_path / "nopt.yaml"
     no_pt.write_text("sections:\n  - {name: x, xaxis: {method: distance_from_point}}\n")
     with pytest.raises(ValueError):
-        section.load_sections(str(no_pt))
+        scalar.load_sections(str(no_pt))
 
 
 def test_parse_waypoints():
-    assert section._parse_waypoints("18.0,130.0; 20.0,132.5") == [[18.0, 130.0], [20.0, 132.5]]
+    assert scalar._parse_waypoints("18.0,130.0; 20.0,132.5") == [[18.0, 130.0], [20.0, 132.5]]
     with pytest.raises(SystemExit):
-        section._parse_waypoints("18.0,130.0")  # only one point
+        scalar._parse_waypoints("18.0,130.0")  # only one point
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +142,7 @@ def test_parse_waypoints():
 def test_adhoc_time_section_writes_png(tmp_path: Path):
     _write_ctd_combo(tmp_path)
     out_dir = tmp_path / "figs"
-    rc = section.run(
+    rc = scalar.run(
         argparse.Namespace(
             root=str(tmp_path), ctd_combo=None, sections=None, out_dir=str(out_dir),
             var=None, z_bin=2.0, x_bin=None, depth_max=None, vmin=None, vmax=None,
@@ -150,7 +150,7 @@ def test_adhoc_time_section_writes_png(tmp_path: Path):
             waypoints=None, units="km",
         )
     )
-    png = out_dir / "section_adhoc_time.png"
+    png = out_dir / "scalar_adhoc_time.png"
     assert png.exists() and png.stat().st_size > 0
     assert rc == str(out_dir)
 
@@ -176,12 +176,12 @@ def test_cli_sections_yaml_multipanel(tmp_path: Path):
         "      waypoints: [[18.0, 130.0], [20.0, 132.0]]\n"
     )
     rc = _run_cli([
-        "section", "--root", str(tmp_path), "--sections", str(cfg),
+        "scalar", "--root", str(tmp_path), "--sections", str(cfg),
         "--out-dir", str(tmp_path), "--var", "JAC_T", "--var", "sigma0",
     ])
     assert rc == 0
     for name in ("by_lat", "dist", "line"):
-        png = tmp_path / f"section_{name}.png"
+        png = tmp_path / f"scalar_{name}.png"
         assert png.exists() and png.stat().st_size > 0
 
 
@@ -194,10 +194,10 @@ def test_empty_time_window_skipped(tmp_path: Path):
         "    start: '2099-01-01T00:00:00Z'\n"
         "    xaxis: {method: time}\n"
     )
-    rc = _run_cli(["section", "--root", str(tmp_path), "--sections", str(cfg),
+    rc = _run_cli(["scalar", "--root", str(tmp_path), "--sections", str(cfg),
                    "--out-dir", str(tmp_path)])
     assert rc == 0
-    assert not (tmp_path / "section_future.png").exists()  # no data -> no figure
+    assert not (tmp_path / "scalar_future.png").exists()  # no data -> no figure
 
 
 def test_default_variables(tmp_path: Path):
@@ -206,14 +206,14 @@ def test_default_variables(tmp_path: Path):
     _write_ctd_combo(tmp_path)
     with xr.open_dataset(tmp_path / "ctd_combo_00" / "combo.nc") as ds:
         # dTdz is present but not a default panel.
-        assert section._default_variables(ds) == ["JAC_T", "SP", "sigma0"]
+        assert scalar._default_variables(ds) == ["JAC_T", "SP", "sigma0"]
 
 
 def test_diverging_variable_renders(tmp_path: Path):
     """A one-signed diverging field (dTdz) exercises the symmetric-norm path."""
     _write_ctd_combo(tmp_path)
-    rc = _run_cli(["section", "--root", str(tmp_path), "--out-dir", str(tmp_path),
+    rc = _run_cli(["scalar", "--root", str(tmp_path), "--out-dir", str(tmp_path),
                    "--name", "grad", "--xaxis", "time", "--var", "dTdz"])
     assert rc == 0
-    png = tmp_path / "section_grad.png"
+    png = tmp_path / "scalar_grad.png"
     assert png.exists() and png.stat().st_size > 0
