@@ -210,27 +210,65 @@ def _select_sections(sections: list[Section], select: list[str]) -> list[Section
     return [s for s in sections if s.name in wanted_set]
 
 
-def _adhoc_section(args: argparse.Namespace) -> Section:
-    """Build a single Section from ad-hoc CLI flags."""
+def _xaxis_params_from_args(method: str, args: argparse.Namespace, name: str) -> dict:
+    """Build (and validate) xaxis params for *method* from the CLI flags.
+
+    Used both for the ad-hoc single section and for the ``--xaxis`` override of
+    config sections, so spatial methods pull --point / --waypoints / --units
+    the same way in either path.
+    """
     params: dict = {"units": args.units}
-    if args.xaxis == "distance_from_point":
+    if method == "distance_from_point":
         if not args.point:
             raise SystemExit("--xaxis distance_from_point requires --point LAT LON")
         params["point"] = [float(args.point[0]), float(args.point[1])]
-    elif args.xaxis == "along_line":
+    elif method == "along_line":
         if not args.waypoints:
             raise SystemExit(
                 "--xaxis along_line requires --waypoints 'lat,lon;lat,lon;...'"
             )
         params["waypoints"] = _parse_waypoints(args.waypoints)
-    params = _validate_params(args.xaxis, params, args.name)
+    return _validate_params(method, params, name)
+
+
+def _adhoc_section(args: argparse.Namespace) -> Section:
+    """Build a single Section from ad-hoc CLI flags."""
+    method = args.xaxis or "time"
     return Section(
         name=args.name,
-        method=args.xaxis,
+        method=method,
         start=_parse_time(args.start),
         stop=_parse_time(args.stop),
-        params=params,
+        params=_xaxis_params_from_args(method, args, args.name),
     )
+
+
+def _override_xaxis(sec: Section, args: argparse.Namespace) -> Section:
+    """Return *sec* with its xaxis replaced by the CLI --xaxis (+ its params).
+
+    Keeps the section's name and time window; the method/params come from the
+    CLI. Lets ``--xaxis`` re-plot a whole sections file under a different axis.
+    """
+    return Section(
+        name=sec.name,
+        method=args.xaxis,
+        start=sec.start,
+        stop=sec.stop,
+        params=_xaxis_params_from_args(args.xaxis, args, sec.name),
+    )
+
+
+def _parse_clim(clim_args) -> dict[str, tuple[float, float]]:
+    """Parse repeated ``--clim VAR MIN MAX`` into ``{var: (min, max)}``."""
+    out: dict[str, tuple[float, float]] = {}
+    for var, lo, hi in clim_args or []:
+        try:
+            out[str(var)] = (float(lo), float(hi))
+        except ValueError:
+            raise SystemExit(
+                f"--clim {var}: MIN/MAX must be numbers, got {lo!r} {hi!r}"
+            ) from None
+    return out
 
 
 def _parse_waypoints(text: str) -> list[list[float]]:
@@ -296,6 +334,7 @@ def _build_section_figure(
     sec: Section,
     variables: list[str],
     args: argparse.Namespace,
+    clim: dict[str, tuple[float, float]],
 ) -> Figure | None:
     """Render one section to a matplotlib Figure (not saved or shown here).
 
@@ -357,12 +396,15 @@ def _build_section_figure(
                     ha="center", va="center")
             ax.set_ylabel("Depth (m)")
             continue
-        vmin, vmax = grid.linear_limits(g, args.vmin, args.vmax)
+        # Per-variable --clim wins; else the global --vmin/--vmax (only set for
+        # a single-variable plot, enforced in run()); else auto 1/99 percentile.
+        lo_ov, hi_ov = clim.get(name, (args.vmin, args.vmax))
+        explicit_limits = name in clim or args.vmin is not None or args.vmax is not None
+        vmin, vmax = grid.linear_limits(g, lo_ov, hi_ov)
         norm: Normalize
         if (
             name in _DIVERGING
-            and args.vmin is None
-            and args.vmax is None
+            and not explicit_limits
             and vmin is not None
             and vmax is not None
         ):
@@ -377,7 +419,12 @@ def _build_section_figure(
         cmap.set_bad(color="0.85")  # empty cells: light grey, visibly unsampled
         pcm = ax.pcolormesh(x_edges, z_edges, np.ma.masked_invalid(g),
                             cmap=cmap, norm=norm, shading="flat")
-        cbar = fig.colorbar(pcm, ax=ax, label=_var_label(ds, name))
+        cbar_fmt: str | None = None
+        if name == "SP" and vmin is not None and vmax is not None:
+            # Salinity sits in a narrow band; show 2 decimals, or 1 when the
+            # range is wide enough to read -- avoids false precision on ticks.
+            cbar_fmt = "%.1f" if (vmax - vmin) >= 1.0 else "%.2f"
+        cbar = fig.colorbar(pcm, ax=ax, label=_var_label(ds, name), format=cbar_fmt)
         if name in _CBAR_MIN_AT_TOP:
             cbar.ax.invert_yaxis()  # min at top, max at bottom (mirrors depth)
         ax.set_ylabel("Depth (m)")
@@ -444,12 +491,23 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
                    help="x bin width in x-axis units (default: ~300 columns)")
     p.add_argument("--depth-max", type=float, default=None,
                    help="clip the depth axis at this value [m]")
-    p.add_argument("--vmin", type=float, default=None, help="override colour-scale minimum")
-    p.add_argument("--vmax", type=float, default=None, help="override colour-scale maximum")
-    # Ad-hoc single-section flags (ignored when --sections is given).
+    p.add_argument("--vmin", type=float, default=None,
+                   help="colour-scale minimum. Applies only with a single --var; "
+                        "for multiple variables use --clim per variable.")
+    p.add_argument("--vmax", type=float, default=None,
+                   help="colour-scale maximum (single --var only; see --clim)")
+    p.add_argument("--clim", action="append", nargs=3, default=None,
+                   metavar=("VAR", "MIN", "MAX"),
+                   help="per-variable colour limits (repeatable), e.g. "
+                        "--clim JAC_T 18 28 --clim SP 34.5 34.9. Wins over "
+                        "--vmin/--vmax for that variable.")
+    # Ad-hoc single-section flags (ignored when --sections is given, EXCEPT
+    # --xaxis, which overrides every section's x-axis when set explicitly).
     p.add_argument("--name", default="section", help="ad-hoc section name")
-    p.add_argument("--xaxis", choices=xaxis.METHODS, default="time",
-                   help="ad-hoc x-axis method (default: time)")
+    p.add_argument("--xaxis", choices=xaxis.METHODS, default=None,
+                   help="x-axis method. Without --sections, builds one ad-hoc "
+                        "section (default: time). With --sections, overrides "
+                        "every section's x-axis when given.")
     p.add_argument("--start", default=None, help="ad-hoc window start (UTC ISO-8601)")
     p.add_argument("--stop", default=None, help="ad-hoc window stop (UTC ISO-8601)")
     p.add_argument("--point", nargs=2, type=float, default=None, metavar=("LAT", "LON"),
@@ -492,13 +550,21 @@ def run(args: argparse.Namespace) -> str:
             sections = load_sections(args.sections)
             if args.select:
                 sections = _select_sections(sections, args.select)
+            if args.xaxis is not None:  # explicit --xaxis overrides every section
+                sections = [_override_xaxis(s, args) for s in sections]
         else:
             if args.select:
                 raise SystemExit("--select only applies together with --sections")
             sections = [_adhoc_section(args)]
         variables = list(args.var) if args.var else _default_variables(ds)
+        clim = _parse_clim(args.clim)
+        if (args.vmin is not None or args.vmax is not None) and len(variables) > 1:
+            raise SystemExit(
+                "--vmin/--vmax apply only with a single --var; use "
+                "--clim VAR MIN MAX for per-variable limits"
+            )
         for sec in sections:
-            fig = _build_section_figure(ds, sec, variables, args)
+            fig = _build_section_figure(ds, sec, variables, args, clim)
             if fig is None:
                 continue
             if display:

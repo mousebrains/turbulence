@@ -53,7 +53,7 @@ section built from CLI flags.
 | `longitude` | longitude (degrees E) | — |
 | `distance_from_point` | great-circle distance from a fixed point | `point: [lat, lon]`, `units` |
 | `along_line` | distance projected onto a waypoint polyline | `waypoints: [[lat, lon], ...]` (>= 2), `units` |
-| `signed_distance` | signed distance from the track midpoint along the points' principal axis (earliest negative, latest positive) | `units` |
+| `signed_distance` | signed distance from the track midpoint along the points' principal axis (earliest negative, latest positive); the axis label reports the midpoint lat/lon and the section orientation ± circular std relative to true north | `units` |
 
 `units` is `m`, `km` (default), or `nm`. Distances use a TEOS-10-consistent
 great-circle (haversine) from the fixed point; `along_line` projects each
@@ -103,15 +103,17 @@ pipeline configuration and is not validated against it.
 | `--z-bin M` | Depth bin width in metres (default 1.0). |
 | `--x-bin U` | x bin width in x-axis units (default: ~300 columns). |
 | `--depth-max M` | Clip the depth axis at this value. |
-| `--vmin` / `--vmax` | Override colour-scale limits (default: inner 1/99 percentile). |
-| `--xaxis METHOD` | Ad-hoc x-axis method (default `time`). Ignored when `--sections` is given. |
+| `--vmin` / `--vmax` | Colour-scale limits. Apply **only with a single `--var`** (error otherwise); for multiple variables use `--clim`. Default: inner 1/99 percentile. |
+| `--clim VAR MIN MAX` | Per-variable colour limits (repeatable), e.g. `--clim JAC_T 18 28 --clim SP 34.5 34.9`. Wins over `--vmin`/`--vmax` for that variable. |
+| `--xaxis METHOD` | X-axis method. Without `--sections`, builds one ad-hoc section (default `time`). With `--sections`, an explicit `--xaxis` **overrides every section's x-axis** (keeping each section's name + window); spatial methods then take `--point`/`--waypoints`/`--units` from the CLI. |
 | `--start` / `--stop` | Ad-hoc UTC window. |
 | `--point LAT LON` | Reference point for ad-hoc `distance_from_point`. |
 | `--waypoints "lat,lon;lat,lon;..."` | Polyline for ad-hoc `along_line`. |
 | `--units {m,km,nm}` | Distance units for spatial x-axes (default `km`). |
 
-Default density panel is `sigma0` (potential density **anomaly**); `rho` is
-stored as in-situ density − 1000 and labelled as such. Colour limits are the
+Default density panel is `sigma0` (potential density **anomaly**); in-situ
+density is available with `--var rho` (stored and labelled as in-situ density
+− 1000 kg/m³). Colour limits are the
 inner 1/99 percentile (sign-aware, so a near-surface negative `sigma0` is not
 clipped). The salinity (`SP`) and density (`sigma0`) colorbars run min-at-top
 to max-at-bottom, mirroring the depth axis (both increase with depth).

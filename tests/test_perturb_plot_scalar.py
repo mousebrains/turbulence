@@ -147,8 +147,8 @@ def test_adhoc_time_section_writes_png(tmp_path: Path):
             root=str(tmp_path), ctd_combo=None, sections=None, select=None,
             out_dir=str(out_dir),
             var=None, z_bin=2.0, x_bin=None, depth_max=None, vmin=None, vmax=None,
-            name="adhoc_time", xaxis="time", start=None, stop=None, point=None,
-            waypoints=None, units="km",
+            clim=None, name="adhoc_time", xaxis="time", start=None, stop=None,
+            point=None, waypoints=None, units="km",
         )
     )
     png = out_dir / "scalar_adhoc_time.png"
@@ -249,6 +249,65 @@ def test_cli_select_without_sections_errors(tmp_path: Path):
     with pytest.raises(SystemExit):
         _run_cli(["scalar", "--root", str(tmp_path), "--out-dir", str(tmp_path),
                   "--select", "anything"])
+
+
+def test_parse_clim():
+    assert scalar._parse_clim([["JAC_T", "18", "28"], ["SP", "34.5", "34.9"]]) == {
+        "JAC_T": (18.0, 28.0), "SP": (34.5, 34.9),
+    }
+    assert scalar._parse_clim(None) == {}
+    with pytest.raises(SystemExit):
+        scalar._parse_clim([["JAC_T", "x", "28"]])
+
+
+def test_override_xaxis_replaces_method_keeps_window():
+    sec = scalar.Section(
+        name="leg", method="along_line",
+        start=np.datetime64("2025-01-20"), stop=np.datetime64("2025-01-21"),
+        params={"units": "km", "waypoints": [[0.0, 0.0], [1.0, 1.0]]},
+    )
+    args = argparse.Namespace(xaxis="latitude", units="km", point=None, waypoints=None)
+    new = scalar._override_xaxis(sec, args)
+    assert new.method == "latitude" and new.name == "leg"
+    assert new.start == sec.start and new.stop == sec.stop
+    assert new.params == {"units": "km"}  # original waypoints dropped
+
+
+def test_override_xaxis_spatial_method_needs_its_params():
+    sec = scalar.Section(name="x", method="time")
+    args = argparse.Namespace(
+        xaxis="distance_from_point", units="km", point=None, waypoints=None
+    )
+    with pytest.raises(SystemExit):
+        scalar._override_xaxis(sec, args)
+
+
+def test_cli_vmin_with_multiple_vars_errors(tmp_path: Path):
+    _write_ctd_combo(tmp_path)
+    with pytest.raises(SystemExit):
+        _run_cli(["scalar", "--root", str(tmp_path), "--out-dir", str(tmp_path),
+                  "--var", "JAC_T", "--var", "SP", "--vmin", "0"])
+
+
+def test_cli_clim_per_variable_runs(tmp_path: Path):
+    _write_ctd_combo(tmp_path)
+    rc = _run_cli(["scalar", "--root", str(tmp_path), "--out-dir", str(tmp_path),
+                   "--name", "cl", "--var", "JAC_T", "--var", "SP",
+                   "--clim", "JAC_T", "20", "30", "--clim", "SP", "34", "35"])
+    assert rc == 0
+    assert (tmp_path / "scalar_cl.png").exists()
+
+
+def test_cli_xaxis_overrides_sections(tmp_path: Path):
+    _write_ctd_combo(tmp_path)
+    cfg = _three_section_yaml(tmp_path)  # by_lat / dist / line (spatial methods)
+    # Override every section to a param-free axis; the dist/line sections that
+    # need point/waypoints in the YAML must still render under the override.
+    rc = _run_cli(["scalar", "--root", str(tmp_path), "--sections", str(cfg),
+                   "--out-dir", str(tmp_path), "--xaxis", "time", "--var", "JAC_T"])
+    assert rc == 0
+    for name in ("by_lat", "dist", "line"):
+        assert (tmp_path / f"scalar_{name}.png").exists()
 
 
 def test_empty_time_window_skipped(tmp_path: Path):

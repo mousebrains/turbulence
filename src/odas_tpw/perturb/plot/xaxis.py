@@ -184,57 +184,100 @@ def project_along_line(
     return best_along * scale, best_cross * scale
 
 
-def signed_distance_from_midpoint(
-    lat: np.ndarray,
-    lon: np.ndarray,
-    time: np.ndarray,
-    units: str = "km",
-) -> np.ndarray:
-    """Signed distance from the track midpoint along the points' principal axis.
+@dataclass
+class SignedAxis:
+    """Result of :func:`signed_distance_axis`.
 
-    Projects (lat, lon) to a local plane, finds the dominant orientation of the
-    point cloud (principal axis via PCA), and returns each sample's signed
-    projection onto that axis measured from the centroid (the midpoint), in
-    *units*.  The sign is oriented so the earliest sample is negative and the
-    latest positive.  For a roughly-linear transect with no planned waypoints
-    this gives a self-describing x-axis: distance along the transect, centred
-    at 0, increasing with time.
+    ``x`` is the signed along-axis distance from the midpoint.  ``mid_lat`` /
+    ``mid_lon`` are the centroid (the midpoint).  ``bearing_deg`` is the
+    orientation of *increasing distance* clockwise from true north;
+    ``bearing_std_deg`` is the circular standard deviation of the points'
+    orientation about the best-fit line.  Orientation fields are NaN when the
+    track has no spatial spread.
+    """
 
-    Non-finite positions propagate to NaN.  A track with no spatial spread (a
-    single station) returns all-zero distances.
+    x: np.ndarray
+    mid_lat: float
+    mid_lon: float
+    bearing_deg: float
+    bearing_std_deg: float
+
+
+def signed_distance_axis(
+    lat: np.ndarray, lon: np.ndarray, time: np.ndarray, units: str = "km"
+) -> SignedAxis:
+    """Project (lat, lon) onto the best-fit principal axis of the points.
+
+    Returns the signed along-axis distance from the centroid (earliest sample
+    negative, latest positive) plus the midpoint and the axis orientation
+    relative to true north with a circular standard deviation.
+
+    Orientation and spread come from the orientation tensor (a total-least-
+    squares line fit through the centroid).  With centroid-relative
+    displacements ``z = east + i*north``, ``S = sum(z**2)`` has argument
+    ``2*theta`` (theta = major-axis angle) and modulus-ratio
+    ``R = |S| / sum|z|**2`` is the doubled-angle resultant length; the circular
+    standard deviation of the (undirected) orientation is ``sqrt(-2 ln R) / 2``.
+
+    Non-finite positions propagate to NaN x.  A single station (no spatial
+    spread) yields all-zero distances and NaN orientation.
     """
     lat = np.asarray(lat, dtype=float)
     lon = np.asarray(lon, dtype=float)
     finite = np.isfinite(lat) & np.isfinite(lon)
+    nan = float("nan")
     if not np.any(finite):
-        return np.full(lat.shape, np.nan)
+        return SignedAxis(np.full(lat.shape, np.nan), nan, nan, nan, nan)
 
-    lat_ref = float(np.nanmean(lat))
-    lon_ref = float(np.nanmean(lon))
-    x, y = _to_local_xy(lat, lon, lat_ref, lon_ref)
+    mid_lat = float(np.nanmean(lat))
+    mid_lon = float(np.nanmean(lon))
+    east, north = _to_local_xy(lat, lon, mid_lat, mid_lon)
+    de = east - float(np.mean(east[finite]))   # east displacement from centroid
+    dn = north - float(np.mean(north[finite]))  # north displacement
+    ef, nf = de[finite], dn[finite]
 
-    # Principal axis: the largest-eigenvalue eigenvector of the finite points'
-    # covariance, about their centroid.
-    cx = float(np.mean(x[finite]))
-    cy = float(np.mean(y[finite]))
-    xf = x[finite] - cx
-    yf = y[finite] - cy
-    cov = np.array(
-        [[np.dot(xf, xf), np.dot(xf, yf)], [np.dot(xf, yf), np.dot(yf, yf)]]
-    )
-    eigvals, eigvecs = np.linalg.eigh(cov)
-    axis = eigvecs[:, int(np.argmax(eigvals))]
+    sumsq = float(np.sum(ef**2 + nf**2))
+    if sumsq <= 0.0:  # single station / no spatial spread
+        return SignedAxis(np.where(finite, 0.0, np.nan), mid_lat, mid_lon, nan, nan)
 
-    proj = (x - cx) * axis[0] + (y - cy) * axis[1]
+    # Orientation tensor via the doubled-angle complex sum.
+    s = complex(np.sum((ef + 1j * nf) ** 2))
+    phi = float(np.angle(s)) / 2.0               # major-axis angle from east
+    axis = np.array([np.cos(phi), np.sin(phi)])  # (east, north) unit vector
 
-    # Orient earliest -> negative, latest -> positive (flip if anti-correlated
-    # with time). NaN-position samples keep NaN projection.
+    proj = de * axis[0] + dn * axis[1]
+    # Orient earliest -> negative, latest -> positive.
     tf = to_epoch_seconds(time)[finite]
     pf = proj[finite]
     if np.std(pf) > 0 and np.std(tf) > 0 and float(np.cov(pf, tf)[0, 1]) < 0:
         proj = -proj
+        axis = -axis
 
-    return np.asarray(proj * _unit_scale(units), dtype=float)
+    bearing = float(np.degrees(np.arctan2(axis[0], axis[1])) % 360.0)  # CW from N
+    r = min(max(abs(s) / sumsq, 1e-12), 1.0)
+    std_deg = float(np.degrees(np.sqrt(-2.0 * np.log(r)) / 2.0))
+    return SignedAxis(
+        np.asarray(proj * _unit_scale(units), dtype=float),
+        mid_lat, mid_lon, bearing, std_deg,
+    )
+
+
+def signed_distance_from_midpoint(
+    lat: np.ndarray, lon: np.ndarray, time: np.ndarray, units: str = "km"
+) -> np.ndarray:
+    """Signed distance from the midpoint along the points' principal axis.
+
+    Thin wrapper over :func:`signed_distance_axis` returning only the
+    coordinate (earliest negative, latest positive; non-finite -> NaN).
+    """
+    return signed_distance_axis(lat, lon, time, units).x
+
+
+def _fmt_lat_lon(lat: float, lon: float) -> str:
+    """Latitude/longitude to 4 significant digits with hemisphere suffixes."""
+    ns = "N" if lat >= 0 else "S"
+    ew = "E" if lon >= 0 else "W"
+    return f"{abs(lat):.4g}°{ns}, {abs(lon):.4g}°{ew}"
 
 
 def compute(
@@ -275,8 +318,15 @@ def compute(
             x=along, label=f"Along-track distance [{units}]", kind="spatial", cross=cross
         )
     if method == "signed_distance":
-        x = signed_distance_from_midpoint(lat, lon, time, units)
-        return XAxis(
-            x=x, label=f"Signed distance from midpoint [{units}]", kind="spatial"
-        )
+        r = signed_distance_axis(lat, lon, time, units)
+        if np.isfinite(r.mid_lat) and np.isfinite(r.bearing_deg):
+            label = (
+                f"Signed distance from {_fmt_lat_lon(r.mid_lat, r.mid_lon)} [{units}], "
+                f"orientation {r.bearing_deg:.1f}°±{r.bearing_std_deg:.1f}° T"
+            )
+        elif np.isfinite(r.mid_lat):
+            label = f"Signed distance from {_fmt_lat_lon(r.mid_lat, r.mid_lon)} [{units}]"
+        else:
+            label = f"Signed distance from midpoint [{units}]"
+        return XAxis(x=r.x, label=label, kind="spatial")
     raise ValueError(f"unknown x-axis method {method!r}; choose from {METHODS}")

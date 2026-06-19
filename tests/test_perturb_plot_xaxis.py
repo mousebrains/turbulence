@@ -170,3 +170,43 @@ def test_signed_distance_nan_position_propagates():
     x = xaxis.compute("signed_distance", lat, lon, _hourly(4)).x
     assert np.isnan(x[2])
     assert np.all(np.isfinite(x[[0, 1, 3]]))
+
+
+def test_signed_distance_axis_bearings():
+    """Bearing of increasing distance is CW from true north; clean lines -> std 0."""
+    t = _hourly(9)
+    north = xaxis.signed_distance_axis(np.linspace(0, 4, 9), np.zeros(9), t)
+    east = xaxis.signed_distance_axis(np.zeros(9), np.linspace(0, 4, 9), t)
+    south = xaxis.signed_distance_axis(np.linspace(4, 0, 9), np.zeros(9), t)
+    assert north.bearing_deg == pytest.approx(0.0, abs=1.0)
+    assert east.bearing_deg == pytest.approx(90.0, abs=1.0)
+    assert south.bearing_deg == pytest.approx(180.0, abs=1.0)
+    for r in (north, east, south):
+        assert r.bearing_std_deg == pytest.approx(0.0, abs=0.5)
+    # midpoint = centroid
+    assert north.mid_lat == pytest.approx(2.0)
+    assert east.mid_lon == pytest.approx(2.0)
+
+
+def test_signed_distance_std_grows_with_scatter():
+    t = _hourly(50)
+    lat = np.linspace(0.0, 4.0, 50)
+    clean = xaxis.signed_distance_axis(lat, np.zeros(50), t)
+    wiggle = 0.3 * np.sin(np.linspace(0.0, 6.0, 50))  # perpendicular meander
+    noisy = xaxis.signed_distance_axis(lat, wiggle, t)
+    assert noisy.bearing_std_deg > clean.bearing_std_deg + 1.0
+
+
+def test_signed_distance_single_station_has_nan_orientation():
+    r = xaxis.signed_distance_axis(np.full(5, 20.0), np.full(5, 130.0), _hourly(5))
+    assert np.all(r.x == 0.0)
+    assert np.isnan(r.bearing_deg) and np.isnan(r.bearing_std_deg)
+
+
+def test_signed_distance_label_has_midpoint_and_orientation():
+    lat = np.linspace(0.0, 4.0, 9)
+    lon = np.linspace(0.0, 2.0, 9)
+    lbl = xaxis.compute("signed_distance", lat, lon, _hourly(9)).label
+    assert lbl.startswith("Signed distance from")
+    assert "2°N, 1°E" in lbl                 # midpoint, 4 sig figs, hemispheres
+    assert "orientation" in lbl and "±" in lbl and "° T" in lbl
