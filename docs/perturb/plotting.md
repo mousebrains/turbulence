@@ -11,6 +11,7 @@ perturb-plot <subcommand> [options]
 |------------|-------------|
 | `eps-chi`  | Pcolor of log10(epsilon), log10(chi), log10(chi/epsilon) vs depth and cast number (reads `diss_combo`/`chi_combo`). |
 | `scalar`   | Depth-vs-x scalar sections (T / S / density / ...) from the CTD combo, with selectable x-axis. |
+| `profiles` | Depth-vs-x sections from the binned `(bin, profile)` products (`--product profiles/diss/chi/mixing`), one column per cast. |
 
 Each subcommand discovers the latest versioned stage directory under `--root`
 (e.g. `ctd_combo_01/` in preference to `ctd_combo_00/`).
@@ -133,4 +134,55 @@ perturb-plot scalar --root RESULTS --sections sections.yaml --out-dir figs/
 # Just two named sections from the file
 perturb-plot scalar --root RESULTS --sections sections.yaml \
     --select north_transect --select along_NE_line
+```
+
+---
+
+## `perturb-plot profiles`
+
+Depth-vs-x sections from the binned **`(bin, profile)`** products — one column
+per cast. Unlike `scalar` (which grids a continuous trajectory), these products
+are already binned by depth with one `lat`/`lon`/`stime` per cast, so each
+profile is a single column placed at its x-position. Columns are sorted by x
+and drawn one mesh per x-cluster, leaving **blank gaps** where sampling is
+sparse (never stretched across unsampled water/time).
+
+`--product` selects the product (and its default variables):
+
+| `--product` | Reads | Default variables | Scale |
+|-------------|-------|-------------------|-------|
+| `profiles` (default) | `combo_NN` | `T1`, `T2`, `N2`, `dTdz` | T linear, N2 log, dTdz diverging |
+| `diss` | `diss_combo_NN` | `epsilonMean` | log |
+| `chi` | `chi_combo_NN` | `chiMean` | log |
+| `mixing` | `chi_combo_NN` | `K_T`, `Gamma`, `K_rho` | log |
+
+Any combo variable can be panelled with `--var` (e.g. `--var e_1 --var e_2`).
+The section / `--sections` / `--select` / `--xaxis`-override / `--clim` /
+display options are identical to `scalar`. Additional options:
+
+| Flag | Description |
+|------|-------------|
+| `--product NAME` | Which `(bin, profile)` product to plot (default `profiles`). |
+| `--p-max DBAR` | Clip the pressure axis at this value. |
+| `--gap-factor N` | Split casts into clusters when the x-gap exceeds N× the median cast spacing (default 4). |
+| `--apply-qc` / `--no-qc` | NaN cells flagged by the product's `qc_drop_*` field (default on). |
+
+The vertical axis is **pressure (dbar)** — the binned products' `bin` coordinate
+is built from the profile pressure `P`, so it is pressure, not depth (the
+product's `bin:units="m"` attribute is a known mislabel, independent of this
+plot). Dissipation/chi/diffusivity/`N2` panels use a log scale; `dTdz` and
+inclinometers are diverging; temperatures are linear.
+
+### Examples
+
+```bash
+# Epsilon vs cast/time, on screen
+perturb-plot profiles --root RESULTS --product diss
+
+# Mixing (K_T, Gamma, K_rho) along a latitude transect, written to PNGs
+perturb-plot profiles --root RESULTS --product mixing --xaxis latitude --out-dir figs/
+
+# Chi by signed distance, top 150 dbar, custom colour limits
+perturb-plot profiles --root RESULTS --product chi --xaxis signed_distance \
+    --p-max 150 --clim chiMean 1e-10 1e-6
 ```

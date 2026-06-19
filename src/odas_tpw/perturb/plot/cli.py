@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import argparse
 
-from odas_tpw.perturb.plot import eps_chi, scalar
+from odas_tpw.perturb.plot import eps_chi, profiles, scalar
 
 # Map subcommand name -> (description, add_arguments, run).
 _SUBCOMMANDS = {
@@ -33,6 +33,12 @@ _SUBCOMMANDS = {
         "with time/latitude/longitude/distance x-axis methods.",
         scalar.add_arguments,
         scalar.run,
+    ),
+    "profiles": (
+        "Depth-vs-x sections from binned (bin, profile) products "
+        "(--product profiles/diss/chi/mixing), one column per cast.",
+        profiles.add_arguments,
+        profiles.run,
     ),
 }
 
