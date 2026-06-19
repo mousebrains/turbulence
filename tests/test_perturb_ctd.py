@@ -82,6 +82,21 @@ class TestTimeBin:
         assert len(result["bin_centers"]) >= 1
         assert np.isfinite(result["T"][0])
 
+    def test_nan_and_out_of_range_times_excluded_not_folded(self):
+        """NaN and below/above-edge times must NOT pollute the first/last bin
+        (the np.clip fold this replaced did, audit #69/#70)."""
+        edges = np.array([0.0, 1.0, 2.0, 3.0])  # 3 bins centred 0.5/1.5/2.5
+        # One clean sample per bin, plus three pollutants:
+        #   t=-5 (below), t=99 (above), t=NaN — each carrying value 1000.
+        t = np.array([0.5, 1.5, 2.5, -5.0, 99.0, np.nan])
+        vals = np.array([10.0, 20.0, 30.0, 1000.0, 1000.0, 1000.0])
+        for method in ("mean", "median"):
+            r = _time_bin(t, {"T": vals}, bin_width=1.0, method=method,
+                          diagnostics=True, bin_edges=edges)
+            np.testing.assert_allclose(r["T"], [10.0, 20.0, 30.0])
+            # The pollutants never entered a bin: counts are exactly one each.
+            np.testing.assert_array_equal(r["n_samples"], [1, 1, 1])
+
 
 class TestAssignGpsWithCasts:
     """The VMP-aware position model (ports Matlab ctd2binned.addGPS)."""
