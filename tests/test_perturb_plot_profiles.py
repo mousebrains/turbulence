@@ -108,6 +108,28 @@ def test_make_norm_picks_scale():
     assert none is None                                    # log field, no positive data
 
 
+def test_make_norm_n2_uses_symlog_for_negatives():
+    """N2 can be negative (overturning); it must use SymLogNorm so negatives
+    are visible, not LogNorm which would mask them as no-data (#20)."""
+    from matplotlib.colors import LogNorm, SymLogNorm
+
+    args = argparse.Namespace(vmin=None, vmax=None)
+    n = profiles._make_norm("N2", np.array([[1e-5, -1e-6], [1e-4, 1e-3]]), args, {})
+    assert isinstance(n, SymLogNorm)
+    assert not isinstance(n, LogNorm)
+    assert n.vmin < 0  # the negative N2 is within range, not clipped away
+
+
+def test_make_norm_reversed_clim_errors_on_linear_var():
+    """A reversed --clim (MIN >= MAX) on a linear/diverging var must raise, not
+    silently invert the colorbar (#21)."""
+    args = argparse.Namespace(vmin=None, vmax=None)
+    with pytest.raises(SystemExit):
+        profiles._make_norm("T1", np.array([[5.0, 6.0]]), args, {"T1": (6.0, 2.0)})
+    with pytest.raises(SystemExit):
+        profiles._make_norm("dTdz", np.array([[-1.0, 1.0]]), args, {"dTdz": (1.0, -1.0)})
+
+
 # ---------------------------------------------------------------------------
 # End-to-end across products
 # ---------------------------------------------------------------------------

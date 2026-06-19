@@ -126,11 +126,25 @@ def _default_variables(ds: xr.Dataset) -> list[str]:
 def _time_subset(ds: xr.Dataset, sec: Section) -> xr.Dataset:
     """Index the trajectory to the section's [start, stop] UTC window."""
     t = ds["time"].values
+    # dtype-agnostic: sec.start/stop are datetime64. If the combo's time was
+    # decoded to datetime64, compare directly; if it is numeric (epoch seconds,
+    # no CF units), compare in epoch seconds so we don't raise a cryptic
+    # UFuncTypeError mixing float64 with datetime64.
+    numeric = not np.issubdtype(t.dtype, np.datetime64)
+    if numeric:
+        t = t.astype(np.float64)
+
+    def _bound(b):
+        if b is None:
+            return None
+        return float(xaxis.to_epoch_seconds(np.array([b]))[0]) if numeric else b
+
     mask = np.ones(t.shape, dtype=bool)
-    if sec.start is not None:
-        mask &= t >= sec.start
-    if sec.stop is not None:
-        mask &= t <= sec.stop
+    start, stop = _bound(sec.start), _bound(sec.stop)
+    if start is not None:
+        mask &= t >= start
+    if stop is not None:
+        mask &= t <= stop
     return ds.isel(time=np.flatnonzero(mask))
 
 
