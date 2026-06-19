@@ -124,3 +124,49 @@ def test_haversine_matches_gsw():
     ref = gsw.distance(lon, lat, p=0)[0]
     ours = xaxis.haversine_m(lat[0], lon[0], lat[1:2], lon[1:2])[0]
     assert ours == pytest.approx(ref, rel=5e-3)
+
+
+def _hourly(n):
+    return np.array(
+        [np.datetime64("2025-01-01T00:00:00") + np.timedelta64(i, "h") for i in range(n)]
+    )
+
+
+def test_signed_distance_centered_and_time_signed():
+    """N-S transect: centred at 0, earliest negative, increasing with time."""
+    lat = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    lon = np.zeros(5)
+    xa = xaxis.compute("signed_distance", lat, lon, _hourly(5))
+    x = xa.x
+    assert xa.kind == "spatial"
+    assert x.mean() == pytest.approx(0.0, abs=1e-6)          # midpoint origin
+    assert x[0] < 0 < x[-1]                                  # earliest -, latest +
+    assert np.all(np.diff(x) > 0)                            # monotone with time
+    assert np.diff(x).mean() == pytest.approx(_DEG_KM, rel=1e-2)  # ~1 deg/step
+
+
+def test_signed_distance_sign_follows_time_not_space():
+    """Latitude DEcreasing with time: the earliest (northern) sample is still
+    negative — the sign tracks time, not the coordinate."""
+    lat = np.array([4.0, 3.0, 2.0, 1.0, 0.0])
+    lon = np.zeros(5)
+    x = xaxis.compute("signed_distance", lat, lon, _hourly(5)).x
+    assert x[0] < 0 < x[-1]
+    assert np.all(np.diff(x) > 0)
+
+
+def test_signed_distance_uses_principal_axis():
+    """An E-W track (lon varies, lat ~constant): the axis is east-west."""
+    lon = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    lat = np.array([0.0, 0.001, 0.0, 0.001, 0.0])  # negligible N-S spread
+    x = xaxis.compute("signed_distance", lat, lon, _hourly(5), params={"units": "km"}).x
+    assert np.all(np.diff(x) > 0)
+    assert np.diff(x).mean() == pytest.approx(_DEG_KM, rel=2e-2)  # ~1 deg lon at eq.
+
+
+def test_signed_distance_nan_position_propagates():
+    lat = np.array([0.0, 1.0, np.nan, 3.0])
+    lon = np.zeros(4)
+    x = xaxis.compute("signed_distance", lat, lon, _hourly(4)).x
+    assert np.isnan(x[2])
+    assert np.all(np.isfinite(x[[0, 1, 3]]))

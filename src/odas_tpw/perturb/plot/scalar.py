@@ -61,8 +61,9 @@ _CMAP: dict[str, str] = {
     "dTdz": "balance",
 }
 _DIVERGING: frozenset[str] = frozenset({"dTdz"})
-# Variables whose colormap is reversed (high values -> the colormap's dark end).
-_REVERSED: frozenset[str] = frozenset({"SP", "sigma0"})
+# Variables whose colorbar runs min-at-top to max-at-bottom, mirroring the
+# (inverted) depth axis -- salinity and density both increase with depth.
+_CBAR_MIN_AT_TOP: frozenset[str] = frozenset({"SP", "sigma0"})
 
 # matplotlib backends that cannot show a window — figures must be saved instead.
 _NON_INTERACTIVE_BACKENDS: frozenset[str] = frozenset(
@@ -372,12 +373,13 @@ def _build_section_figure(
             norm = Normalize(vmin=-m, vmax=m)
         else:
             norm = Normalize(vmin=vmin, vmax=vmax)
-        base = getattr(cmocean.cm, _CMAP.get(name, "thermal"))
-        cmap = base.reversed() if name in _REVERSED else base.copy()
+        cmap = getattr(cmocean.cm, _CMAP.get(name, "thermal")).copy()
         cmap.set_bad(color="0.85")  # empty cells: light grey, visibly unsampled
         pcm = ax.pcolormesh(x_edges, z_edges, np.ma.masked_invalid(g),
                             cmap=cmap, norm=norm, shading="flat")
-        fig.colorbar(pcm, ax=ax, label=_var_label(ds, name))
+        cbar = fig.colorbar(pcm, ax=ax, label=_var_label(ds, name))
+        if name in _CBAR_MIN_AT_TOP:
+            cbar.ax.invert_yaxis()  # min at top, max at bottom (mirrors depth)
         ax.set_ylabel("Depth (m)")
 
     axes[0].invert_yaxis()

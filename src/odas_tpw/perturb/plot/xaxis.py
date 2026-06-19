@@ -36,6 +36,7 @@ METHODS: tuple[str, ...] = (
     "longitude",
     "distance_from_point",
     "along_line",
+    "signed_distance",
 )
 
 
@@ -183,6 +184,59 @@ def project_along_line(
     return best_along * scale, best_cross * scale
 
 
+def signed_distance_from_midpoint(
+    lat: np.ndarray,
+    lon: np.ndarray,
+    time: np.ndarray,
+    units: str = "km",
+) -> np.ndarray:
+    """Signed distance from the track midpoint along the points' principal axis.
+
+    Projects (lat, lon) to a local plane, finds the dominant orientation of the
+    point cloud (principal axis via PCA), and returns each sample's signed
+    projection onto that axis measured from the centroid (the midpoint), in
+    *units*.  The sign is oriented so the earliest sample is negative and the
+    latest positive.  For a roughly-linear transect with no planned waypoints
+    this gives a self-describing x-axis: distance along the transect, centred
+    at 0, increasing with time.
+
+    Non-finite positions propagate to NaN.  A track with no spatial spread (a
+    single station) returns all-zero distances.
+    """
+    lat = np.asarray(lat, dtype=float)
+    lon = np.asarray(lon, dtype=float)
+    finite = np.isfinite(lat) & np.isfinite(lon)
+    if not np.any(finite):
+        return np.full(lat.shape, np.nan)
+
+    lat_ref = float(np.nanmean(lat))
+    lon_ref = float(np.nanmean(lon))
+    x, y = _to_local_xy(lat, lon, lat_ref, lon_ref)
+
+    # Principal axis: the largest-eigenvalue eigenvector of the finite points'
+    # covariance, about their centroid.
+    cx = float(np.mean(x[finite]))
+    cy = float(np.mean(y[finite]))
+    xf = x[finite] - cx
+    yf = y[finite] - cy
+    cov = np.array(
+        [[np.dot(xf, xf), np.dot(xf, yf)], [np.dot(xf, yf), np.dot(yf, yf)]]
+    )
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    axis = eigvecs[:, int(np.argmax(eigvals))]
+
+    proj = (x - cx) * axis[0] + (y - cy) * axis[1]
+
+    # Orient earliest -> negative, latest -> positive (flip if anti-correlated
+    # with time). NaN-position samples keep NaN projection.
+    tf = to_epoch_seconds(time)[finite]
+    pf = proj[finite]
+    if np.std(pf) > 0 and np.std(tf) > 0 and float(np.cov(pf, tf)[0, 1]) < 0:
+        proj = -proj
+
+    return np.asarray(proj * _unit_scale(units), dtype=float)
+
+
 def compute(
     method: str,
     lat: np.ndarray,
@@ -219,5 +273,10 @@ def compute(
         along, cross = project_along_line(lat, lon, np.asarray(waypoints, float), units)
         return XAxis(
             x=along, label=f"Along-track distance [{units}]", kind="spatial", cross=cross
+        )
+    if method == "signed_distance":
+        x = signed_distance_from_midpoint(lat, lon, time, units)
+        return XAxis(
+            x=x, label=f"Signed distance from midpoint [{units}]", kind="spatial"
         )
     raise ValueError(f"unknown x-axis method {method!r}; choose from {METHODS}")

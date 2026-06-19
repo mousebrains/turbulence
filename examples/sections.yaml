@@ -1,4 +1,4 @@
-# Example sections file for `perturb-plot section`.
+# Example sections file for `perturb-plot scalar`.
 #
 # A "section" only chops the CTD trajectory and chooses the x-axis: a name, an
 # optional UTC time window, and an `xaxis` method with its parameters. Which
@@ -9,7 +9,8 @@
 #   perturb-plot scalar --root <results_root> --sections examples/sections.yaml \
 #       --out-dir figs/ --var JAC_T --var SP --var sigma0
 #
-# x-axis methods: time | latitude | longitude | distance_from_point | along_line
+# x-axis methods:
+#   time | latitude | longitude | distance_from_point | along_line | signed_distance
 # Distance units: m | km | nm   (default km). Waypoints / points are [lat, lon].
 #
 # Honesty note: `time` is the only non-aliasing x-axis. The spatial axes assume
@@ -43,3 +44,11 @@ sections:
         - [18.5, 130.0]
         - [20.0, 132.5]
         - [22.0, 135.0]
+
+  # Signed distance from the track midpoint along the principal axis of the
+  # lat/lon points (no waypoints needed): earliest cast negative, latest
+  # positive, centred at 0. Handy for a roughly-linear transect.
+  - name: signed_transect
+    xaxis:
+      method: signed_distance
+      units: km

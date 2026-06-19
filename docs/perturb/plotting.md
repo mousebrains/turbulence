@@ -53,6 +53,7 @@ section built from CLI flags.
 | `longitude` | longitude (degrees E) | — |
 | `distance_from_point` | great-circle distance from a fixed point | `point: [lat, lon]`, `units` |
 | `along_line` | distance projected onto a waypoint polyline | `waypoints: [[lat, lon], ...]` (>= 2), `units` |
+| `signed_distance` | signed distance from the track midpoint along the points' principal axis (earliest negative, latest positive) | `units` |
 
 `units` is `m`, `km` (default), or `nm`. Distances use a TEOS-10-consistent
 great-circle (haversine) from the fixed point; `along_line` projects each
@@ -112,8 +113,8 @@ pipeline configuration and is not validated against it.
 Default density panel is `sigma0` (potential density **anomaly**); `rho` is
 stored as in-situ density − 1000 and labelled as such. Colour limits are the
 inner 1/99 percentile (sign-aware, so a near-surface negative `sigma0` is not
-clipped). The salinity (`SP`) and density (`sigma0`) colormaps are reversed
-relative to the cmocean defaults.
+clipped). The salinity (`SP`) and density (`sigma0`) colorbars run min-at-top
+to max-at-bottom, mirroring the depth axis (both increase with depth).
 
 ### Examples
 
