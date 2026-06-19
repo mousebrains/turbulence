@@ -407,6 +407,25 @@ class TestPitchWConsistencyRule:
         })
         assert (out["fc"] == 0).all()
 
+    def test_single_nan_pressure_flags_locally_not_whole_record(self):
+        """A lone NaN in P must not smear through filtfilt and flag the whole
+        record (audit #85). The consistent flight away from the gap stays
+        unflagged; the bad sample itself is flagged."""
+        n = 60
+        P = np.arange(n) * 0.5          # steady descent
+        pitch = np.full(n, +20.0)       # nose-down, consistent with descent
+        P[30] = np.nan                  # one dropout mid-record
+        pf = self._make_pf(pitch=pitch, P=P)
+        out = evaluate_rules(pf, {
+            "fc": {"type": "pitch_w_consistency", "bit": 64,
+                   "pitch_min_deg": 5.0, "W_min_dbar_per_s": 0.02},
+        })
+        flags = out["fc"]
+        assert flags[30] != 0                      # the bad sample is flagged
+        # Consistent flight far from the gap stays clean (was all-flagged before)
+        assert (flags[10:25] == 0).all()
+        assert (flags[40:55] == 0).all()
+
     def test_missing_inclinometer_warns_and_skips(self, caplog):
         pf = _StubPF(
             t_slow=np.arange(10),

@@ -233,7 +233,19 @@ def _evaluate_pitch_w_consistency(pf: Any, name: str, cfg: dict,
     pitch = np.asarray(pf.channels[pitch_name], dtype=np.float64)
     P = np.asarray(pf.channels["P"], dtype=np.float64)
     fs_slow = float(pf.fs_slow)
-    W = smooth_fall_rate(P, fs_slow)  # signed, dbar/s
+    # smooth_fall_rate runs P through filtfilt, which has no NaN handling: a
+    # single non-finite pressure sample would smear NaN across the ENTIRE
+    # record's fall rate and flag the whole record (asymmetric with the
+    # per-sample range rule). Interpolate isolated gaps before filtering so W
+    # stays usable, and flag only the genuinely-bad samples locally below.
+    finite_P = np.isfinite(P)
+    if finite_P.any() and not finite_P.all():
+        idx = np.arange(P.size)
+        P_for_filter = P.copy()
+        P_for_filter[~finite_P] = np.interp(idx[~finite_P], idx[finite_P], P[finite_P])
+    else:
+        P_for_filter = P  # all-finite (no-op) or all-NaN (W stays NaN -> flagged)
+    W = smooth_fall_rate(P_for_filter, fs_slow)  # signed, dbar/s
 
     pitch_min = float(cfg.get("pitch_min_deg", 5.0))
     w_min = float(cfg.get("W_min_dbar_per_s", 0.02))
@@ -267,7 +279,10 @@ def _evaluate_pitch_w_consistency(pf: Any, name: str, cfg: dict,
     # Signs disagree (after polarity correction) and both are clearly
     # nonzero (outside the noise zone around level / stationary).
     flag = (sign * pitch * W < 0) & moving
-    flag |= ~np.isfinite(pitch) | ~np.isfinite(W)
+    # Local non-finite flagging: a bad pitch or a bad raw pressure flags only
+    # its own sample (~finite_P, not the filtfilt-smeared ~isfinite(W)). The
+    # ~isfinite(W) term still catches the all-NaN-P case (W never recovers).
+    flag |= ~np.isfinite(pitch) | ~finite_P | ~np.isfinite(W)
     return np.asarray(flag, dtype=bool)
 
 

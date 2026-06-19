@@ -91,7 +91,11 @@ def pfile_to_l1data(
 
     # Profiling speed
     if speed is not None:
-        pspd_rel = np.full(len(t_fast), abs(speed))
+        # Floor at the shared speed cutout (0.05 m/s, = speed.py's default
+        # speed_cutout and its 'constant' method). Without it, shear /=
+        # pspd_rel**2 below yields inf/nan for --speed 0 and huge
+        # over-amplification for a tiny speed, baked into L1.shear.
+        pspd_rel = np.full(len(t_fast), max(abs(speed), 0.05))
     elif speed_method in ("em", "flight"):
         # EM flowmeter (U_EM) or inviscid flight model U=|W|/sin(|pitch|-aoa)
         # from the inclinometers, for MicroRiders/gliders where |dP/dt| is the
