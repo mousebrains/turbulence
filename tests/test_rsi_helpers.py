@@ -241,6 +241,22 @@ class TestPrepareProfiles:
         # Speed should be positive everywhere (>= speed_cutout)
         assert np.all(speed_fast >= 0.05)
 
+    def test_precomputed_speed_floored_and_nan_scrubbed(self):
+        """A precomputed speed_fast with NaN/zero samples is floored and
+        NaN-scrubbed at the choke point so shear/chi never see them (#31, #53)."""
+        data = _make_channels_dict(is_profile=True)
+        spd = np.full(len(data["t_fast"]), 0.6)
+        spd[10] = np.nan
+        spd[20] = 0.0
+        spd[30] = 1e-6
+        data["speed_fast"] = spd
+        result = prepare_profiles(
+            data, speed=None, direction="down", salinity=None, vehicle="vmp"
+        )
+        speed_fast = result[1]
+        assert np.all(np.isfinite(speed_fast))
+        assert np.all(speed_fast >= 0.05)
+
 
 # ---------------------------------------------------------------------------
 # _build_l1data_from_channels — empty arrays edge cases
