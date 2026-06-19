@@ -266,10 +266,12 @@ def nc_to_l1data(nc_path: str | Path) -> L1Data:
             if temp_arr.ndim == 2 and temp_arr.shape[1] == len(time):
                 temp_fast = temp_arr
 
-        # Temperature gradient (for slow-rate temp)
+        # Temperature gradient (for slow-rate temp). nanmean over probes so an
+        # all-NaN thermistor doesn't poison temp at every sample (mirrors the
+        # nanmean tolerance elsewhere in the chi/epsilon paths).
         temp = np.zeros_like(time)
         if temp_fast.size > 0:
-            temp = np.mean(temp_fast, axis=0) if temp_fast.ndim == 2 else temp_fast
+            temp = np.nanmean(temp_fast, axis=0) if temp_fast.ndim == 2 else temp_fast
 
         # Slow-rate arrays
         time_slow = np.array([])

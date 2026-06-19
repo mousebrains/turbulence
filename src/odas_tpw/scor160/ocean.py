@@ -29,7 +29,12 @@ def visc35(T: npt.ArrayLike) -> np.ndarray:
             1.828297985908266e-006,
         ]
     )
-    return np.polyval(pol, T)
+    # The cubic fit (valid 0-20 C) crosses zero near 64.5 C and goes negative
+    # beyond it. A single spurious-hot temperature sample would then yield a
+    # negative viscosity and make nasmyth raise on sqrt(negative), crashing the
+    # whole file. Floor at a small positive value (well below any realistic
+    # seawater viscosity, so 0-~60 C is unaffected).
+    return np.maximum(np.polyval(pol, T), 1.0e-7)
 
 
 def visc(T: npt.ArrayLike, S: npt.ArrayLike = 35, P: npt.ArrayLike = 0) -> np.ndarray:
