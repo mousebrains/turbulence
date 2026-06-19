@@ -173,6 +173,34 @@ product's `bin:units="m"` attribute is a known mislabel, independent of this
 plot). Dissipation/chi/diffusivity/`N2` panels use a log scale; `dTdz` and
 inclinometers are diverging; temperatures are linear.
 
+### Diagnostic pseudo-variables
+
+Shear / vibration / temperature-gradient **variance** is not stored in any
+product — it lives in the raw fast channels of the per-profile files
+(`profiles_NN/*_prof*.nc`). Request it with `--var <channel>_var`:
+
+| Pseudo-variable | Raw channel | Quantity |
+|-----------------|-------------|----------|
+| `sh1_var`, `sh2_var` | `sh1`/`sh2` | shear variance [s⁻²] |
+| `Ax_var`, `Ay_var` | `Ax`/`Ay` | vibration variance [counts²] |
+| `T1_dT1_var`, `T2_dT2_var` | `T1_dT1`/`T2_dT2` | gradient-channel variance [K²] |
+
+These are computed **at plot time**: each cast is matched to its raw file by
+`stime`, the channel is high-pass filtered and despiked exactly as the epsilon
+path does (`--hp-cut`, `--despike-thresh`, `--despike-smooth`), and the
+time-variance is taken in each pressure bin (log-scaled). They are
+**contamination / activity diagnostics, not turbulence quantities** — `Ax`/`Ay`
+are raw piezo *counts* (instrument-relative), and shear variance is related to
+but not equal to ε. Reading the raw files makes these panels slower than the
+stored variables; restrict the section window to keep it quick.
+
+```bash
+# Epsilon beside shear/vibration/T-gradient variance, one cluster
+perturb-plot profiles --root RESULTS --product diss \
+    --start 2025-02-04T00:00:00Z --stop 2025-02-06T00:00:00Z \
+    --var epsilonMean --var sh1_var --var Ax_var --var T1_dT1_var
+```
+
 ### Examples
 
 ```bash

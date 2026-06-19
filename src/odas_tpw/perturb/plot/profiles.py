@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
-from odas_tpw.perturb.plot import grid, layout, xaxis
+from odas_tpw.perturb.plot import diagnostics, grid, layout, xaxis
 from odas_tpw.perturb.plot.sections import (
     Section,
     add_section_arguments,
@@ -117,7 +117,7 @@ def _make_norm(name: str, z: np.ndarray, args: argparse.Namespace, clim: dict):
             return Normalize(vmin=-m, vmax=m)
         return Normalize(vmin=vmin, vmax=vmax)
 
-    if name in _LOG_VARS:
+    if name in _LOG_VARS or diagnostics.is_pseudo_var(name):  # variances are log
         if lo is not None and lo <= 0:
             raise SystemExit(
                 f"colour-scale minimum for log variable {name!r} must be > 0 (got {lo})"
@@ -156,8 +156,11 @@ def _build_profiles_figure(
         print(f"section {sec.name!r}: no profiles in time window; skipped")
         return None
 
-    panel_vars = [v for v in variables if v in dss.data_vars]
-    missing = [v for v in variables if v not in dss.data_vars]
+    def _available(v: str) -> bool:
+        return v in dss.data_vars or diagnostics.is_pseudo_var(v)
+
+    panel_vars = [v for v in variables if _available(v)]
+    missing = [v for v in variables if not _available(v)]
     if not panel_vars:
         print(f"section {sec.name!r}: none of {variables} present on product; skipped")
         return None
@@ -176,6 +179,26 @@ def _build_profiles_figure(
     xs = x[col]
     depth = np.asarray(dss["bin"].values, dtype=float)  # pressure, dbar
 
+    # Diagnostic pseudo-variables (shear/vibration/T_dT variance) are computed
+    # at plot time from the raw per-profile files, matched by stime.
+    pseudo_grids: dict[str, np.ndarray] = {}
+    pseudo_in_panel = [v for v in panel_vars if diagnostics.is_pseudo_var(v)]
+    if pseudo_in_panel:
+        pdir = layout.latest_stage_dir(args.root, "profiles")
+        if pdir is None:
+            print(f"section {sec.name!r}: no profiles_NN dir; skipping diagnostics "
+                  f"{pseudo_in_panel}")
+            panel_vars = [v for v in panel_vars if v not in pseudo_in_panel]
+            if not panel_vars:
+                return None
+        else:
+            for pv in pseudo_in_panel:
+                pseudo_grids[pv] = diagnostics.compute_pseudo_grid(
+                    pv, dss["stime"].values, depth, pdir,
+                    hp_cut=args.hp_cut, despike_thresh=args.despike_thresh,
+                    despike_smooth=args.despike_smooth, tol=args.stime_tol,
+                )
+
     qc = None
     if args.apply_qc and product.qc_var and product.qc_var in dss.data_vars:
         qc = np.asarray(dss[product.qc_var].transpose("bin", "profile").values)[:, col]
@@ -191,19 +214,25 @@ def _build_profiles_figure(
     axes = axes[:, 0]
 
     for ax, name in zip(axes, panel_vars):
-        z = np.asarray(dss[name].transpose("bin", "profile").values, dtype=float)[:, col]
-        if qc is not None:
-            z = np.where(np.isfinite(qc) & (qc > 0), np.nan, z)
+        is_pseudo = diagnostics.is_pseudo_var(name)
+        if is_pseudo:
+            z = pseudo_grids[name][:, col]            # already (bin, profile)
+            cmap_name, label = diagnostics.pseudo_cmap(name), diagnostics.pseudo_label(name)
+        else:
+            z = np.asarray(dss[name].transpose("bin", "profile").values, dtype=float)[:, col]
+            if qc is not None:
+                z = np.where(np.isfinite(qc) & (qc > 0), np.nan, z)
+            cmap_name, label = _CMAP.get(name, "thermal"), var_label(ds, name)
         norm = _make_norm(name, z, args, clim)
         if norm is None or not np.any(np.isfinite(z)):
             ax.text(0.5, 0.5, f"no valid {name}", transform=ax.transAxes,
                     ha="center", va="center")
             ax.set_ylabel("Pressure (dbar)")
             continue
-        cmap = getattr(cmocean.cm, _CMAP.get(name, "thermal")).copy()
+        cmap = getattr(cmocean.cm, cmap_name).copy()
         cmap.set_bad(color="0.85")  # unsampled depths: light grey
-        layout.plot_columns(ax, fig, xs, depth, z, cmap, norm,
-                            var_label(ds, name), gap_factor=args.gap_factor)
+        layout.plot_columns(ax, fig, xs, depth, z, cmap, norm, label,
+                            gap_factor=args.gap_factor)
         ax.set_ylabel("Pressure (dbar)")
 
     axes[0].invert_yaxis()
@@ -251,6 +280,18 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
                    help="NaN cells flagged by the product's qc_drop_* field (default)")
     p.add_argument("--no-qc", dest="apply_qc", action="store_false",
                    help="ignore qc_drop_* and plot raw values")
+    # Diagnostic pseudo-variables (--var sh1_var / Ax_var / T1_dT1_var ...):
+    # binned variance of a raw fast channel, high-pass filtered + despiked (the
+    # epsilon path's two steps, applied over the whole cast), matched to combo
+    # casts by stime. Computed at plot time.
+    p.add_argument("--hp-cut", type=float, default=1.0,
+                   help="high-pass cutoff [Hz] for diagnostic variance channels (default 1)")
+    p.add_argument("--despike-thresh", type=float, default=8.0,
+                   help="despike threshold for diagnostic variance channels (default 8)")
+    p.add_argument("--despike-smooth", type=float, default=0.5,
+                   help="despike envelope cutoff [Hz] for diagnostics (default 0.5)")
+    p.add_argument("--stime-tol", type=float, default=1.0,
+                   help="max stime mismatch [s] when matching casts to raw files (default 1)")
 
 
 def run(args: argparse.Namespace) -> str:
