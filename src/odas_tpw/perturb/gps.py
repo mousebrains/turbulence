@@ -260,11 +260,17 @@ class GPSFromNetCDF:
         import netCDF4 as nc
         from scipy.interpolate import interp1d
 
-        ds = nc.Dataset(str(file), "r")
-        t_var = ds.variables[time_var]
-        units = getattr(t_var, "units", None)
-        calendar = getattr(t_var, "calendar", "standard")
-        raw = _nc_values(t_var)
+        # Read raw arrays inside the context manager so the Dataset is closed
+        # even if a read raises; decode times afterwards (raw/lat/lon are
+        # in-memory copies that outlive the file handle).
+        with nc.Dataset(str(file), "r") as ds:
+            t_var = ds.variables[time_var]
+            units = getattr(t_var, "units", None)
+            calendar = getattr(t_var, "calendar", "standard")
+            raw = _nc_values(t_var)
+            lat = _nc_values(ds.variables[lat_var]).astype(np.float64)
+            lon = _nc_values(ds.variables[lon_var]).astype(np.float64)
+
         # Fast path: when the variable is plain numeric and its CF units
         # are "<unit> since <iso-datetime>", we can compute epoch seconds
         # by a single scalar+vector arithmetic step instead of going
@@ -294,9 +300,6 @@ class GPSFromNetCDF:
                 )
             else:
                 t = _to_epoch_seconds(raw)
-        lat = _nc_values(ds.variables[lat_var]).astype(np.float64)
-        lon = _nc_values(ds.variables[lon_var]).astype(np.float64)
-        ds.close()
 
         self._t_min = float(np.nanmin(t))
         self._t_max = float(np.nanmax(t))

@@ -304,33 +304,33 @@ def _load_netcdf(
 ) -> HotelData:
     import netCDF4 as nc
 
-    ds = nc.Dataset(str(path), "r")
-    raw_time = _nc_array(ds.variables[time_column])
-    time, is_relative = _parse_time(raw_time, time_format)
+    # Context manager closes the Dataset even if _parse_time or a variable read
+    # raises partway through (e.g. an ambiguous-time ValueError).
+    with nc.Dataset(str(path), "r") as ds:
+        raw_time = _nc_array(ds.variables[time_column])
+        time, is_relative = _parse_time(raw_time, time_format)
 
-    extra_time_cols = set(per_chan_time.values())
-    skip = {time_column} | extra_time_cols
-    data_vars = [v for v in ds.variables if v not in skip]
-    if allowed is not None:
-        data_vars = [v for v in data_vars if v in allowed]
-    ch: dict[str, np.ndarray] = {}
-    units: dict[str, str] = {}
-    for v in data_vars:
-        var = ds.variables[v]
-        ch[v] = _nc_array(var).astype(np.float64)
-        units[v] = getattr(var, "units", "") or ""
+        extra_time_cols = set(per_chan_time.values())
+        skip = {time_column} | extra_time_cols
+        data_vars = [v for v in ds.variables if v not in skip]
+        if allowed is not None:
+            data_vars = [v for v in data_vars if v in allowed]
+        ch: dict[str, np.ndarray] = {}
+        units: dict[str, str] = {}
+        for v in data_vars:
+            var = ds.variables[v]
+            ch[v] = _nc_array(var).astype(np.float64)
+            units[v] = getattr(var, "units", "") or ""
 
-    channel_times: dict[str, np.ndarray] = {}
-    for src, tc in per_chan_time.items():
-        if allowed is not None and src not in allowed:
-            continue
-        if tc not in ds.variables:
-            ds.close()
-            raise ValueError(f"hotel: time_column {tc!r} not found in {path}")
-        raw = _nc_array(ds.variables[tc])
-        t_arr, _ = _parse_time(raw, time_format)
-        channel_times[src] = t_arr
-    ds.close()
+        channel_times: dict[str, np.ndarray] = {}
+        for src, tc in per_chan_time.items():
+            if allowed is not None and src not in allowed:
+                continue
+            if tc not in ds.variables:
+                raise ValueError(f"hotel: time_column {tc!r} not found in {path}")
+            raw = _nc_array(ds.variables[tc])
+            t_arr, _ = _parse_time(raw, time_format)
+            channel_times[src] = t_arr
 
     return HotelData(time=time, channels=ch, channel_times=channel_times,
                      units=units, time_is_relative=is_relative)

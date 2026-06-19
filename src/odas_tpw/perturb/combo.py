@@ -76,10 +76,13 @@ def make_combo(
     # cleaner to keep numeric times throughout.
     datasets = [xr.open_dataset(f, decode_times=False) for f in nc_files]
 
-    combo = _glue_widthwise(datasets) if method == "depth" else _glue_lengthwise(datasets)
-
-    for ds in datasets:
-        ds.close()
+    try:
+        combo = _glue_widthwise(datasets) if method == "depth" else _glue_lengthwise(datasets)
+    finally:
+        # Close every opened handle even if the concat raises (e.g. mismatched
+        # bin grids), so a failed combo doesn't leak file descriptors.
+        for ds in datasets:
+            ds.close()
 
     # Chronologically sort the depth-combo profiles so time_coverage_start /
     # end agree with stime[0] / stime[-1].  ACDD's checker compares these
