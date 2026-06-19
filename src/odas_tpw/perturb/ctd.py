@@ -7,7 +7,13 @@ CTD NetCDF.
 
 Uses BOTH up and down portions (full file, not profile-segmented).
 
-Reference: Code/ctd2binned.m (219 lines)
+Position is VMP-aware when down-casts are supplied: each descent is pinned to
+its drop point (the ship fix at the cast start) rather than the ship's moving
+position, and the reel-in gap walks the estimate from the drop point back onto
+the ship track. See :func:`_assign_gps_with_casts`. Without casts (tow-yo, up-
+only, or none detected) it falls back to the ship fix at each bin time.
+
+Reference: Code/ctd2binned.m (the ``addGPS`` subfunction)
 """
 
 from pathlib import Path
@@ -119,6 +125,84 @@ def _time_bin(
     return result
 
 
+def _assign_gps_with_casts(
+    bin_epoch: np.ndarray,
+    cast_starts: np.ndarray,
+    cast_ends: np.ndarray,
+    gps: GPSProvider,
+) -> tuple[np.ndarray, np.ndarray]:
+    """VMP-aware lat/lon for CTD time bins (ports Matlab ``ctd2binned.addGPS``).
+
+    A vertical profiler falls at essentially one position during a down-cast,
+    then is reeled in while the ship steams on — so the GPS fix at the bin time
+    (the ship's position) is *not* the instrument's position. This assigns,
+    per bin-centre time (epoch seconds):
+
+    - **Before the first cast**: the ship fix at the bin time.
+    - **During a down-cast** ``[start, end]``: the ship fix at the cast *start*,
+      held fixed for the whole descent (the drop point).
+    - **In the gap** ``(end_i, start_{i+1})`` (reel-in + steam to the next
+      station): the ship-relative offset present at cast end decays linearly to
+      zero by the next cast start, so the bin walks from the drop point onto the
+      ship track:  ``pos(t) = gps(t) - (offset / dt_gap) * (t_next - t)``.
+
+    *cast_starts* / *cast_ends* are the per-cast start/end times in epoch
+    seconds, ordered.  Matches the reference exactly, including its edge: the
+    final bin (at the end of the trailing gap) is left NaN.
+    """
+    bin_epoch = np.asarray(bin_epoch, dtype=np.float64)
+    starts = np.asarray(cast_starts, dtype=np.float64)
+    ends = np.asarray(cast_ends, dtype=np.float64)
+    n = bin_epoch.size
+    ncast = starts.size
+    lat = np.full(n, np.nan)
+    lon = np.full(n, np.nan)
+
+    def _g(fn, t):
+        return np.asarray(fn(np.atleast_1d(np.asarray(t, dtype=np.float64))), dtype=np.float64)
+
+    # Before the first cast: ship fix at the bin time.
+    pre = bin_epoch < starts[0] if ncast else np.ones(n, dtype=bool)
+    if np.any(pre):
+        lon[pre] = _g(gps.lon, bin_epoch[pre])
+        lat[pre] = _g(gps.lat, bin_epoch[pre])
+
+    # During each cast: ship fix at the cast start, held fixed for the descent.
+    for i in range(ncast):
+        during = (bin_epoch >= starts[i]) & (bin_epoch <= ends[i])
+        if np.any(during):
+            lon[during] = float(_g(gps.lon, starts[i])[0])
+            lat[during] = float(_g(gps.lat, starts[i])[0])
+
+    # Gaps (reel-in + steam): decay the cast-end ship-relative offset to zero.
+    for i in range(ncast):
+        t0 = ends[i]
+        t1 = bin_epoch[-1] if i == ncast - 1 else starts[i + 1]
+        gap = (bin_epoch > t0) & (bin_epoch < t1)
+        if not np.any(gap):
+            continue
+        first = int(np.flatnonzero(gap)[0])
+        # Drop-point fix = the bin just before the gap (the cast's last bin).
+        # The ``first == 0`` guard deliberately departs from the reference: the
+        # Matlab indexes ``ctd.lon(ii(1)-1)`` blindly and would error if a gap
+        # begins at the very first bin (a cast ending before the first bin
+        # centre); here we degrade to the ship fix at t0 (zero offset -> plain
+        # ship track) instead of crashing.
+        lon0 = lon[first - 1] if first > 0 else float(_g(gps.lon, t0)[0])
+        lat0 = lat[first - 1] if first > 0 else float(_g(gps.lat, t0)[0])
+        dt_total = t1 - t0
+        if dt_total <= 0:
+            continue
+        dlondt = (float(_g(gps.lon, t0)[0]) - lon0) / dt_total
+        dlatdt = (float(_g(gps.lat, t0)[0]) - lat0) / dt_total
+        t = bin_epoch[gap]
+        dt = t1 - t
+        lon[gap] = _g(gps.lon, t) - dlondt * dt
+        lat[gap] = _g(gps.lat, t) - dlatdt * dt
+
+    return lat, lon
+
+
 def ctd_bin_file(
     pf,
     gps: GPSProvider,
@@ -131,6 +215,8 @@ def ctd_bin_file(
     method: str = "mean",
     diagnostics: bool = False,
     output_stem: str | None = None,
+    profiles: list[tuple[int, int]] | None = None,
+    direction: str = "down",
 ) -> Path | None:
     """Time-bin CTD channels from a PFile and write to NetCDF.
 
@@ -154,6 +240,13 @@ def ctd_bin_file(
         Write additional diagnostic variables.
     output_stem : str, optional
         Override the output filename stem. Defaults to ``pf.filepath.stem``.
+    profiles : list of (int, int), optional
+        Down-cast start/end indices into the slow time base (from
+        ``get_profiles``). When given with ``direction="down"``, position is
+        VMP-aware (descent pinned to the drop point, reel-in walked back onto
+        the ship track). Otherwise the ship fix at each bin time is used.
+    direction : str
+        Profile direction. Cast-aware position applies only for ``"down"``.
 
     Returns
     -------
@@ -236,8 +329,20 @@ def ctd_bin_file(
     # absolute time axis lines up with bin_centers (which live on the
     # file-relative pf.t_slow timeline).
     epoch_offset = pf.start_time.timestamp() if hasattr(pf, "start_time") else 0.0
-    lat = gps.lat(np.asarray(bin_centers, dtype=np.float64) + epoch_offset)
-    lon = gps.lon(np.asarray(bin_centers, dtype=np.float64) + epoch_offset)
+    bin_epoch = np.asarray(bin_centers, dtype=np.float64) + epoch_offset
+    if direction == "down" and profiles:
+        # VMP-aware position: pin each descent to its drop point and walk the
+        # reel-in gap from there back onto the ship track (Matlab addGPS). Cast
+        # start/end times come from the slow time base, shifted to epoch.
+        t_slow = np.asarray(pf.t_slow, dtype=np.float64) + epoch_offset
+        cast_starts = np.array([t_slow[s] for s, _e in profiles], dtype=np.float64)
+        cast_ends = np.array([t_slow[e] for _s, e in profiles], dtype=np.float64)
+        lat, lon = _assign_gps_with_casts(bin_epoch, cast_starts, cast_ends, gps)
+    else:
+        # No down-casts (tow-yo, up-only, or none detected): the ship fix at the
+        # bin time is the best estimate.
+        lat = gps.lat(bin_epoch)
+        lon = gps.lon(bin_epoch)
     binned["lat"] = lat
     binned["lon"] = lon
 

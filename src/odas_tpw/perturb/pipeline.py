@@ -922,6 +922,7 @@ def process_file(
     # with no pressure or no detectable profiles still get a CTD product
     # from the unaligned conductivity.
     profiles: list[tuple[int, int]] = []
+    direction = "down"  # resolved below when a pressure channel is present
     P_slow = pf.channels.get("P")
     with stage_log(output_dirs.get("profiles"), log_basename):
         if P_slow is None:
@@ -1030,6 +1031,8 @@ def process_file(
                     method=ctd_cfg.get("method", "mean"),
                     diagnostics=ctd_cfg.get("diagnostics", False),
                     output_stem=output_stem,
+                    profiles=profiles,
+                    direction=direction,
                 )
             except Exception as exc:
                 logger.error("CTD binning %s: %s", p_path.name, exc)
