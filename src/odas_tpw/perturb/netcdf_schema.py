@@ -276,6 +276,7 @@ COMBO_SCHEMA: dict[str, dict] = {
     "N2": {
         "nc_name": "N2",
         "units": "s-2",
+        "standard_name": "square_of_brunt_vaisala_frequency_in_sea_water",
         "long_name": "buoyancy frequency squared (Thorpe-sorted)",
     },
     "dTdz": {

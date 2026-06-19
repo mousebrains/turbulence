@@ -154,8 +154,11 @@ def convert_poly(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, 
 
 def convert_voltage(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """Generic voltage channel: ``(adc_zero + data * adc_fs / 2^adc_bits) / gain`` → Volts."""
-    adc_fs = _safe_float(params.get("adc_fs", "1"))
-    adc_bits = _safe_float(params.get("adc_bits", "0"))
+    # adc_fs/adc_bits set the absolute voltage scale; a missing adc_bits used to
+    # default to 0 -> 2**0 = 1, silently mis-scaling the result by 2**16. Route
+    # through _require_float so omission warns loudly (default 16-bit ADC).
+    adc_fs = _require_float(params, "adc_fs", 1.0, "voltage")
+    adc_bits = _require_float(params, "adc_bits", 16.0, "voltage")
     gain = _safe_float(params.get("g", "1"))
     adc_zero = _safe_float(params.get("adc_zero", "0"))
     phys = (adc_zero + data * adc_fs / 2**adc_bits) / gain
@@ -179,8 +182,9 @@ def convert_accel(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     piezo type, whose output stays in counts).
     """
     adc_zero = _safe_float(params.get("adc_zero", "0"))
-    adc_fs = _safe_float(params.get("adc_fs", "1"))
-    adc_bits = _safe_float(params.get("adc_bits", "0"))
+    # See convert_voltage: a missing adc_bits would silently mis-scale by 2**16.
+    adc_fs = _require_float(params, "adc_fs", 1.0, "accel")
+    adc_bits = _require_float(params, "adc_bits", 16.0, "accel")
     sig_zero = _safe_float(params.get("sig_zero", "0"))
     coef0 = _require_float(params, "coef0", 0.0, "accel")
     coef1 = _require_float(params, "coef1", 1.0, "accel")
