@@ -534,7 +534,9 @@ def _window_stratification_for_profile(
     when the profile cannot be read or lacks t_slow/P/T. Practical salinity
     comes from the profile's own conductivity via TEOS-10 when present, else
     35 PSU is assumed (recorded in *sal_note*). Shared by the diss and chi
-    products so they report identical, window-scale stratification.
+    products, each evaluating stratification at its own window scale (the diss
+    path passes diss_length_seconds/2, the chi path 0.5*chi diss_length/fs), so
+    the two coincide only when their diss_length/fft_length settings match.
     """
     import gsw
     import numpy as np
