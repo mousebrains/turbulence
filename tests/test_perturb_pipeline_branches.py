@@ -5,7 +5,49 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from odas_tpw.perturb.pipeline import run_merge, run_pipeline, run_trim
+from odas_tpw.perturb.pipeline import (
+    _prune_orphan_profile_ncs,
+    run_merge,
+    run_pipeline,
+    run_trim,
+)
+
+
+class TestPruneOrphanProfileNCs:
+    def _touch(self, d, name):
+        p = d / name
+        p.write_bytes(b"")
+        return p
+
+    def test_prunes_only_orphans(self, tmp_path):
+        keep_a = self._touch(tmp_path, "fileA_prof000.nc")
+        keep_a2 = self._touch(tmp_path, "fileA_prof001.nc")
+        orphan = self._touch(tmp_path, "fileB_prof000.nc")
+        n = _prune_orphan_profile_ncs(tmp_path, {"fileA"})
+        assert n == 1
+        assert keep_a.exists() and keep_a2.exists()
+        assert not orphan.exists()
+
+    def test_never_deletes_current_stem_even_with_prefix_overlap(self, tmp_path):
+        # "a" is a string-prefix of "a_long" but the _prof anchor keeps them
+        # distinct: a current stem's files are never removed.
+        keep = self._touch(tmp_path, "a_long_prof000.nc")
+        orphan = self._touch(tmp_path, "a_prof000.nc")  # stem "a" not current
+        _prune_orphan_profile_ncs(tmp_path, {"a_long"})
+        assert keep.exists()
+        assert not orphan.exists()
+
+    def test_leaves_non_profile_and_combo_files(self, tmp_path):
+        combo = self._touch(tmp_path, "combo.nc")
+        binned = self._touch(tmp_path, "binned.nc")
+        orphan = self._touch(tmp_path, "gone_prof000.nc")
+        _prune_orphan_profile_ncs(tmp_path, set())
+        # Only the *_prof*.nc orphan is touched; combos/binned are left alone.
+        assert combo.exists() and binned.exists()
+        assert not orphan.exists()
+
+    def test_missing_dir_is_noop(self, tmp_path):
+        assert _prune_orphan_profile_ncs(tmp_path / "nope", {"x"}) == 0
 
 # ---------------------------------------------------------------------------
 # run_pipeline — file-discovery / no-files paths

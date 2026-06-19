@@ -44,6 +44,39 @@ def _source_output_stem(path: Path, root: Path | str) -> str:
     return "__".join(_safe_stem_part(str(part)) for part in parts)
 
 
+def _prune_orphan_profile_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
+    """Delete per-profile NetCDFs whose source .p file is no longer present.
+
+    The per-stage output dir is content-hashed on *config* and reused across
+    runs, so its ``{stem}_prof{NNN}.nc`` files accumulate. The signature does
+    not include the resolved input-file set, so re-running the same config with
+    a changed set of .p files (one dropped, or an explicit reduced list) would
+    leave orphaned NCs that the binning glob silently folds into the combos.
+
+    Remove only files that belong to NO current stem: a file is kept iff its
+    name starts with ``{stem}_prof`` for some stem in *valid_stems*. This
+    prefix test can never delete a file produced this run (those names start
+    with a current stem), so the only error direction is keeping a stray
+    orphan, never dropping live data. Returns the number pruned.
+    """
+    if not stage_dir.exists():
+        return 0
+    prefixes = tuple(f"{s}_prof" for s in valid_stems)
+    pruned = 0
+    for nc in stage_dir.glob("*_prof*.nc"):
+        if not nc.name.startswith(prefixes):
+            try:
+                nc.unlink()
+                pruned += 1
+                logger.info(
+                    "pruned orphaned %s (no source .p in current input set)",
+                    nc.name,
+                )
+            except OSError as exc:
+                logger.warning("could not prune %s: %s", nc.name, exc)
+    return pruned
+
+
 def _canonical_instruments_for_hash(instruments: dict | None) -> dict[str, Any]:
     """Normalize set-like instrument settings before hashing."""
     normalized: dict[str, Any] = {}
@@ -1872,6 +1905,15 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     prof_binned_dir: Path | None = None
     diss_binned_dir: Path | None = None
     chi_binned_dir: Path | None = None
+
+    # Drop per-profile NCs orphaned by a prior run on a different input set
+    # before globbing, so the combos reflect exactly the current .p files
+    # (new files are still picked up incrementally; only files no longer
+    # present are removed). See _prune_orphan_profile_ncs.
+    valid_stems = {_output_stem(p) for p in p_files}
+    for _stage in ("profiles", "diss", "chi"):
+        if _stage in output_dirs:
+            _prune_orphan_profile_ncs(output_dirs[_stage], valid_stems)
 
     # Resolve binned-output dirs *before* the bin call so we can pass them
     # as ``log_dir`` and each input .p file's records land in
