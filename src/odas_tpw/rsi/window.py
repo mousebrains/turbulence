@@ -371,7 +371,9 @@ def compute_chi_window(
         if method == 1 and epsilon is not None:
             eps_ci = eps_for_m1
             if np.isfinite(eps_ci) and eps_ci > 0:
-                chi_val, kB, K_max, spec_raw, fom_val, Kmr = _chi_from_epsilon(
+                # ChiEpsilonResult (chi, kB, K_max, spec_batch, fom,
+                # K_max_ratio). Bind by attribute to stay swap-proof.
+                er = _chi_from_epsilon(
                     spec_obs,
                     K,
                     eps_ci,
@@ -384,19 +386,24 @@ def compute_chi_window(
                     W,
                     spectrum_model,
                 )
-                chi_arr[ci] = chi_val
-                kB_arr[ci] = kB
-                Kmax_arr[ci] = K_max
-                fom_arr[ci] = fom_val
-                Kmr_arr[ci] = Kmr
-                model_specs.append(spec_raw * H2)
-                model_specs_raw.append(spec_raw)
+                chi_arr[ci] = er.chi
+                kB_arr[ci] = er.kB
+                Kmax_arr[ci] = er.K_max
+                fom_arr[ci] = er.fom
+                Kmr_arr[ci] = er.K_max_ratio
+                model_specs.append(er.spec_batch * H2)
+                model_specs_raw.append(er.spec_batch)
             else:
                 model_specs.append(np.zeros(n_freq))
                 model_specs_raw.append(np.zeros(n_freq))
         else:
-            # Method 2: iterative fit
-            _, chi_val, kB, K_max, spec_raw, fom_val, Kmr = _iterative_fit(
+            # Method 2: iterative fit. _iterative_fit returns a 7-field
+            # ChiFitResult (kB, chi, epsilon, K_max, spec_batch, fom,
+            # K_max_ratio) -- distinct from Method 1's 6-field
+            # ChiEpsilonResult. Bind by attribute, not positional unpacking:
+            # the old `_, chi_val, kB, ...` discarded the real kB and stored
+            # epsilon under the kB name (the swap audit #33 predicted).
+            fit = _iterative_fit(
                 spec_obs,
                 K,
                 nu,
@@ -408,11 +415,13 @@ def compute_chi_window(
                 W,
                 spectrum_model,
             )
-            chi_arr[ci] = chi_val
-            kB_arr[ci] = kB
-            Kmax_arr[ci] = K_max
-            fom_arr[ci] = fom_val
-            Kmr_arr[ci] = Kmr
+            chi_val = fit.chi
+            spec_raw = fit.spec_batch
+            chi_arr[ci] = fit.chi
+            kB_arr[ci] = fit.kB
+            Kmax_arr[ci] = fit.K_max
+            fom_arr[ci] = fit.fom
+            Kmr_arr[ci] = fit.K_max_ratio
             if np.isfinite(chi_val):
                 model_specs.append(spec_raw * H2)
                 model_specs_raw.append(spec_raw)

@@ -217,6 +217,13 @@ class TestComputeChiWindow:
         assert isinstance(result, ChiWindowResult)
         assert np.all(np.isfinite(result.chi))
         assert np.all(result.chi > 0)
+        # kB must be a physical Batchelor wavenumber (finite, > 1 cpm). The
+        # iterative fit rejects kB < 1, and epsilon is derived as
+        # (2*pi*kB)^4 * nu * kappa_T^2 -- so a kB/epsilon swap would push kB
+        # far below 1 (driving chi to NaN). Without this the Method-2 path
+        # could regress silently (audit #33).
+        assert np.all(np.isfinite(result.kB))
+        assert np.all(result.kB > 1.0)
 
     def test_short_segment(self):
         """Data shorter than 2*fft_length should return NaN chi, not crash."""

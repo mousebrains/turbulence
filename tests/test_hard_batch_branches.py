@@ -114,6 +114,47 @@ class TestIterativeFitMaskFallback:
 
 
 # ---------------------------------------------------------------------------
+# chi/chi.py — failed kB fit must yield chi=NaN, not the band-integral fallback
+# ---------------------------------------------------------------------------
+
+
+class TestIterativeFitFailedKB:
+    def test_failed_kb_fit_yields_nan_chi(self, monkeypatch):
+        """When the MLE kB search fails (non-finite kB) on iteration 0, chi must
+        be NaN rather than the finite chi_obs band integral. A finite chi here
+        carries fom=NaN/K_max_ratio=NaN that no downstream chi QC cut can
+        reach, so it would leak into chi_final/chiMean (audit #78)."""
+        from odas_tpw.chi import chi as chimod
+
+        # Force the kB search to fail immediately (returns the (kB, _, _) tuple).
+        monkeypatch.setattr(
+            chimod, "_mle_find_kB", lambda *a, **k: (np.nan, np.nan, np.nan)
+        )
+        n = 20
+        K = np.linspace(1.0, 100.0, n)
+        spec_obs = np.full(n, 1e-7)  # well above noise -> >= 6 valid points
+        noise_K = np.full(n, 1e-12)
+        H2 = np.ones(n)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = chimod._iterative_fit(
+                spec_obs=spec_obs,
+                K=K,
+                nu=1.2e-6,
+                noise_K=noise_K,
+                H2=H2,
+                tau0=0.01,
+                _h2=lambda F, t: np.ones_like(F),
+                f_AA=98.0,
+                speed=0.5,
+                spectrum_model="batchelor",
+            )
+        assert np.isnan(result.kB)
+        assert np.isnan(result.chi)  # was a finite chi_obs before the fix
+
+
+# ---------------------------------------------------------------------------
 # chi/l4_chi.py — process_l4_chi_epsilon empty epsi_times branch
 # ---------------------------------------------------------------------------
 
