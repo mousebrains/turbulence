@@ -22,7 +22,10 @@ def _glue_widthwise(datasets: list[xr.Dataset]) -> xr.Dataset:
     """
     if not datasets:
         return xr.Dataset()
-    return xr.concat(datasets, dim="profile")
+    # join="exact": the binned files share one global bin grid, so a mismatched
+    # 'bin' coordinate (a stale/extra file, or a re-run at a different depth
+    # range) should fail loudly rather than silently outer-join + NaN-pad.
+    return xr.concat(datasets, dim="profile", join="exact")
 
 
 def _glue_lengthwise(datasets: list[xr.Dataset]) -> xr.Dataset:
@@ -87,10 +90,14 @@ def make_combo(
     # Chronologically sort the depth-combo profiles so time_coverage_start /
     # end agree with stime[0] / stime[-1].  ACDD's checker compares these
     # explicitly and raises a "Date time mismatch" warning otherwise.
-    if method == "depth" and "stime" in combo and "profile" in combo.dims:
-        sk = combo["stime"].values
-        order = np.argsort(np.where(np.isfinite(sk), sk, np.inf))
-        combo = combo.isel(profile=order)
+    if method == "depth" and "profile" in combo.dims:
+        if "stime" in combo:
+            sk = combo["stime"].values
+            order = np.argsort(np.where(np.isfinite(sk), sk, np.inf))
+            combo = combo.isel(profile=order)
+        # Always reset to a contiguous unique profile index: concat stacks each
+        # file's own [0..n) coordinate, so the raw 'profile' coord has duplicate
+        # values (e.g. [0,1,0,1]) -- reassign even when 'stime' is absent.
         combo = combo.assign_coords(profile=np.arange(combo.sizes["profile"], dtype=np.int32))
     elif method == "time" and "time" in combo.coords and combo["time"].size:
         # CF requires the time coordinate to be strictly monotonic; per-file
@@ -99,6 +106,14 @@ def make_combo(
         tk = combo["time"].values
         order = np.argsort(tk)
         combo = combo.isel(time=order)
+        # argsort alone leaves NaN times and duplicate timestamps (overlapping
+        # per-file windows), which violate CF strict monotonicity. Drop NaN and
+        # coalesce exact duplicates (keep first) on the now-sorted axis.
+        tk = combo["time"].values
+        keep = np.isfinite(tk)
+        keep[1:] &= tk[1:] != tk[:-1]
+        if not keep.all():
+            combo = combo.isel(time=np.flatnonzero(keep))
 
     # Apply schema
     combo = apply_schema(combo, schema)

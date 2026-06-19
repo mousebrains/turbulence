@@ -2,6 +2,7 @@
 """Tests for perturb.combo — combined NetCDF assembly."""
 
 import numpy as np
+import pytest
 import xarray as xr
 
 from odas_tpw.perturb.combo import (
@@ -81,6 +82,53 @@ class TestMakeCombo:
         assert out is not None
         combo = xr.open_dataset(out)
         assert combo.sizes["time"] == 20
+        combo.close()
+
+    def test_depth_combo_resets_duplicate_profile_coord(self, tmp_path):
+        """Concat stacks each file's own [0..n) profile coord; the output must
+        get a contiguous unique index even without stime (#58)."""
+        binned_dir = tmp_path / "binned"
+        binned_dir.mkdir()
+        for i in range(2):
+            ds = xr.Dataset(
+                {"T": (["bin", "profile"], np.random.randn(5, 2))},
+                coords={"bin": np.arange(5, dtype=float), "profile": np.arange(2)},
+            )
+            ds.to_netcdf(binned_dir / f"file{i:02d}.nc")
+        out = make_combo(binned_dir, tmp_path / "combo", COMBO_SCHEMA, method="depth")
+        combo = xr.open_dataset(out)
+        np.testing.assert_array_equal(combo["profile"].values, [0, 1, 2, 3])
+        combo.close()
+
+    def test_depth_combo_mismatched_bin_grids_errors(self, tmp_path):
+        """Files with different 'bin' vectors must fail loudly (join='exact'),
+        not silently NaN-pad an outer-joined grid (#57)."""
+        binned_dir = tmp_path / "binned"
+        binned_dir.mkdir()
+        for i, n_bins in enumerate((10, 8)):  # different bin grids
+            ds = xr.Dataset(
+                {"T": (["bin", "profile"], np.random.randn(n_bins, 2))},
+                coords={"bin": np.arange(n_bins, dtype=float), "profile": np.arange(2)},
+            )
+            ds.to_netcdf(binned_dir / f"file{i:02d}.nc")
+        with pytest.raises(Exception):  # xarray raises on join='exact' mismatch
+            make_combo(binned_dir, tmp_path / "combo", COMBO_SCHEMA, method="depth")
+
+    def test_time_combo_overlapping_ranges_strictly_monotonic(self, tmp_path):
+        """Overlapping per-file time windows (and a NaN) must yield a strictly
+        increasing, duplicate-free time coordinate (#51)."""
+        binned_dir = tmp_path / "binned"
+        binned_dir.mkdir()
+        # File A: 0..4 ; File B: 3..7 (overlap at 3,4) plus a NaN center.
+        for i, t in enumerate((np.arange(0.0, 5.0),
+                               np.array([3.0, 4.0, 5.0, 6.0, np.nan]))):
+            ds = xr.Dataset({"T": (["time"], np.random.randn(t.size))},
+                            coords={"time": t})
+            ds.to_netcdf(binned_dir / f"file{i:02d}.nc")
+        out = make_combo(binned_dir, tmp_path / "combo", COMBO_SCHEMA, method="time")
+        combo = xr.open_dataset(out)
+        tk = combo["time"].values
+        assert np.all(np.diff(tk) > 0)  # strictly increasing, no dupes/NaN
         combo.close()
 
     def test_no_files(self, tmp_path):
