@@ -148,3 +148,98 @@ def plot_panel(
     if pcm is not None:
         fig.colorbar(pcm, ax=ax, label=cbar_label)
     return pcm
+
+
+def column_clusters(x: np.ndarray, gap_factor: float = 4.0) -> list[tuple[int, int]]:
+    """Group sorted-ascending column positions *x* into clusters by x-gaps.
+
+    A break is inserted wherever the gap between adjacent columns exceeds
+    ``gap_factor`` times the median column spacing.  Returns half-open
+    ``[start, end)`` index ranges.  Keeps sparse/irregular casts honest: each
+    cluster is drawn as one mesh and the gaps between clusters stay blank
+    rather than being stretched across unsampled water/time.
+    """
+    n = len(x)
+    if n <= 1:
+        return [(0, n)]
+    d = np.diff(x)
+    pos = d[d > 0]
+    med = float(np.median(pos)) if pos.size else 0.0
+    if med <= 0:
+        return [(0, n)]
+    breaks = np.where(d > gap_factor * med)[0]
+    starts = np.concatenate(([0], breaks + 1))
+    ends = np.concatenate((breaks + 1, [n]))
+    return list(zip(starts.tolist(), ends.tolist()))
+
+
+def strictly_increasing(x: np.ndarray) -> np.ndarray:
+    """Nudge tied/non-increasing sorted *x* up by a sub-spacing epsilon.
+
+    pcolormesh needs strictly monotonic edges; two casts at the same x (a
+    re-occupied station on a lat/longitude/distance axis, or two casts equally
+    far from a reference point) would otherwise collapse to zero-width cells.
+    The nudge (1e-3 of the median spacing) renders them as adjacent thin
+    columns instead of vanishing.
+    """
+    x = np.array(x, dtype=float)
+    if x.size < 2:
+        return x
+    d = np.diff(x)
+    pos = d[d > 0]
+    eps = (float(np.median(pos)) if pos.size else 1.0) * 1.0e-3
+    for i in range(1, x.size):
+        if x[i] <= x[i - 1]:
+            x[i] = x[i - 1] + eps
+    return x
+
+
+def column_edges(x: np.ndarray) -> np.ndarray:
+    """Pcolor x-edges for columns centred at sorted-ascending positions *x*.
+
+    Interior edges are midpoints; the outer edges extend by half the adjacent
+    spacing so the first/last column matches its neighbour's width.  A single
+    column gets a half-unit width on each side.
+    """
+    x = np.asarray(x, dtype=float)
+    if len(x) == 1:
+        return np.array([x[0] - 0.5, x[0] + 0.5])
+    mids = 0.5 * (x[:-1] + x[1:])
+    first = x[0] - (mids[0] - x[0])
+    last = x[-1] + (x[-1] - mids[-1])
+    return np.concatenate(([first], mids, [last]))
+
+
+def plot_columns(
+    ax,
+    fig,
+    x: np.ndarray,
+    depth: np.ndarray,
+    z: np.ndarray,
+    cmap,
+    norm,
+    cbar_label: str,
+    gap_factor: float = 4.0,
+):
+    """Pcolor a depth-by-column field at arbitrary x; one mesh per x-cluster.
+
+    *x* must be finite and ascending; *z* is ``(n_depth, n_col)`` with columns
+    in x-order.  Each cluster (see :func:`column_clusters`) is drawn with
+    midpoint edges; the gaps between clusters are left blank, never stretched.
+    Internal-NaN holes are forward-filled within each column and NaN cells are
+    masked (so the cmap's ``set_bad`` colour shows for unsampled depths).
+    Returns the last ``QuadMesh`` (or ``None`` if every cluster was empty).
+    """
+    x = strictly_increasing(np.asarray(x, dtype=float))  # tie-safe edges
+    z = ffill_down(z)
+    d_edges = depth_edges(depth)
+    pcm = None
+    for s, e in column_clusters(x, gap_factor):
+        edges = column_edges(x[s:e])
+        pcm = ax.pcolormesh(
+            edges, d_edges, np.ma.masked_invalid(z[:, s:e]),
+            cmap=cmap, norm=norm, shading="flat",
+        )
+    if pcm is not None:
+        fig.colorbar(pcm, ax=ax, label=cbar_label)
+    return pcm

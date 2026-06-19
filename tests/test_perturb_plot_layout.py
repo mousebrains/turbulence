@@ -8,6 +8,40 @@ import numpy as np
 from odas_tpw.perturb.plot import layout
 
 
+class TestColumnHelpers:
+    def test_clusters_uniform_is_one(self):
+        x = np.arange(6.0)  # uniform spacing 1 -> single cluster
+        assert layout.column_clusters(x) == [(0, 6)]
+
+    def test_clusters_split_on_big_gap(self):
+        x = np.array([0.0, 1.0, 2.0, 100.0, 101.0])  # gap 98 >> median 1
+        assert layout.column_clusters(x) == [(0, 3), (3, 5)]
+
+    def test_clusters_singleton(self):
+        assert layout.column_clusters(np.array([5.0])) == [(0, 1)]
+
+    def test_clusters_all_equal_x(self):
+        # No positive spacing -> one cluster (don't divide by zero).
+        assert layout.column_clusters(np.array([2.0, 2.0, 2.0])) == [(0, 3)]
+
+    def test_column_edges_midpoints(self):
+        e = layout.column_edges(np.array([0.0, 2.0, 4.0]))
+        np.testing.assert_allclose(e, [-1.0, 1.0, 3.0, 5.0])
+        assert e.size == 4
+
+    def test_column_edges_singleton(self):
+        np.testing.assert_allclose(layout.column_edges(np.array([3.0])), [2.5, 3.5])
+
+    def test_strictly_increasing_breaks_ties(self):
+        x = layout.strictly_increasing(np.array([0.0, 1.0, 1.0, 1.0, 5.0]))
+        assert np.all(np.diff(x) > 0)        # tied casts nudged apart
+        assert x[0] == 0.0 and x[-1] == 5.0  # endpoints untouched
+
+    def test_strictly_increasing_all_equal(self):
+        x = layout.strictly_increasing(np.array([2.0, 2.0, 2.0]))
+        assert np.all(np.diff(x) > 0)
+
+
 class TestDepthEdges:
     def test_uniform_grid(self):
         d = np.array([1.0, 2.0, 3.0, 4.0])
