@@ -341,7 +341,10 @@ def csd_matrix_batch(
         )
     n_windows, diss_length, _n_x = x_windows.shape
 
-    if overlap is None:
+    # Clamp overlap to a valid range (mirrors the non-batch csd_matrix): an
+    # overlap == nfft gives step == 0 and a ZeroDivisionError below; overlap >
+    # nfft makes step negative and the segmentation wrong.
+    if overlap is None or overlap < 0 or overlap > 0.9 * nfft:
         overlap = nfft // 2
     step = nfft - overlap
     n_freq = nfft // 2 + 1

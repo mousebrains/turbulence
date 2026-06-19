@@ -257,6 +257,16 @@ class TestCsdMatrixBatch:
         with pytest.raises(ValueError, match="too short"):
             csd_matrix_batch(np.ones((2, 10, 1)), None, 64, 100.0)
 
+    def test_overlap_equal_nfft_clamps_no_zerodivision(self):
+        """overlap == nfft gives step == 0; it must be clamped, not raise a
+        ZeroDivisionError (mirrors csd_matrix, #35)."""
+        rng = np.random.default_rng(7)
+        nfft = 64
+        x_win = rng.standard_normal((2, 512, 1))
+        # overlap == nfft (step 0) and overlap > 0.9*nfft both clamp to nfft//2.
+        C, _F, _Cxx, _Cyy = csd_matrix_batch(x_win, None, nfft, 100.0, overlap=nfft)
+        assert C.shape == (2, nfft // 2 + 1, 1, 1)
+
     def test_shape_mismatch_raises(self):
         with pytest.raises(ValueError, match="incompatible"):
             csd_matrix_batch(

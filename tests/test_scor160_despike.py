@@ -27,6 +27,17 @@ class TestDespikeCleanSignal:
         assert len(spikes) == 0
         np.testing.assert_array_equal(y, signal)
 
+    def test_nan_input_reports_zero_fraction(self):
+        """filtfilt disables detection on NaN input; the no-op must report
+        fraction 0, not count unchanged NaN positions as changed (#36)."""
+        fs = 512.0
+        rng = np.random.default_rng(1)
+        signal = 0.01 * rng.standard_normal(5000)
+        signal[1234] = np.nan  # one dropout
+        _y, _spikes, n_passes, frac = despike(signal, fs)
+        assert n_passes == 0       # no spikes detectable through the NaN
+        assert frac == 0.0         # NaN != NaN must not inflate the fraction
+
 
 class TestDespikeSyntheticSpikes:
     """Despike should detect and remove synthetic spikes."""

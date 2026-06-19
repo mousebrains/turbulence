@@ -78,7 +78,11 @@ def despike(
         n_passes += 1
 
     spike_indices = np.sort(np.array(list(all_spikes), dtype=np.intp))
-    fraction = np.sum(y != original) / len(y)
+    # NaN-safe change count: ``y != original`` reports True at unchanged NaN
+    # positions (NaN != NaN), so a no-op pass on NaN-containing input used to
+    # report a spurious nonzero fraction. Exclude the NaN==NaN positions.
+    changed = (y != original) & ~(np.isnan(y) & np.isnan(original))
+    fraction = float(np.sum(changed)) / len(y) if len(y) else 0.0
     return DespikeResult(y, spike_indices, n_passes, fraction)
 
 
