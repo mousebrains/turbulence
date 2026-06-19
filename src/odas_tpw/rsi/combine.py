@@ -5,6 +5,17 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
+# Sub-bin tolerance (dbar) for collapsing ULP-distinct-but-equal bin centers.
+# Far below any real bin spacing (>= ~0.1 dbar) yet far above float ULP noise
+# (~1e-11 dbar at 100 dbar), so genuine bins stay distinct while accumulation
+# error in per-profile np.arange grids is merged.
+_DEPTH_ATOL = 1.0e-6
+
+
+def _depth_key(d: float) -> int:
+    """Quantize a depth-bin center onto the shared canonical grid."""
+    return round(float(d) / _DEPTH_ATOL)
+
 
 def combine_profiles(
     binned_datasets: list[xr.Dataset],
@@ -30,16 +41,24 @@ def combine_profiles(
     if not binned_datasets:
         return xr.Dataset()
 
-    # Build common depth grid (union of all bin centers)
-    all_depths = set()
+    # Build common depth grid (union of all bin centers). Each profile builds
+    # its own np.arange center grid, so when bin_size is not binary-exact
+    # (e.g. 0.1, 0.2) two profiles produce mathematically-equal centers that
+    # differ by an ULP (0.35 vs 0.35000000000000003). Key the union on a
+    # quantized center (sub-bin tolerance) so those collapse to one column
+    # instead of splitting one physical depth into two half-NaN columns.
+    canon: dict[int, float] = {}
     for ds in binned_datasets:
         if "depth_bin" in ds.coords:
-            all_depths.update(ds.coords["depth_bin"].values.tolist())
+            for d in ds.coords["depth_bin"].values.tolist():
+                canon.setdefault(_depth_key(d), d)
 
-    if not all_depths:
+    if not canon:
         return xr.Dataset()
 
-    common_depths = np.sort(np.array(list(all_depths)))
+    items = sorted(canon.items(), key=lambda kv: kv[1])
+    common_depths = np.array([v for _, v in items])
+    key_to_idx = {k: i for i, (k, _) in enumerate(items)}
     n_profiles = len(binned_datasets)
     n_depths = len(common_depths)
 
@@ -57,8 +76,8 @@ def combine_profiles(
             ds_depths = ds.coords["depth_bin"].values
             ds_vals = ds[var].values
             for j, d in enumerate(ds_depths):
-                idx = np.searchsorted(common_depths, d)
-                if idx < n_depths and np.isclose(common_depths[idx], d):
+                idx = key_to_idx.get(_depth_key(d))
+                if idx is not None:
                     combined[i, idx] = ds_vals[j]
         data_vars[var] = (["profile", "depth_bin"], combined)
 

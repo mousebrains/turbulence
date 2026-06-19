@@ -16,10 +16,9 @@ def _make_p_file(
     config_content=b"[root]\nversion=1\n",
     n_records=2,
     data_byte=0x01,
+    header_size=HEADER_BYTES,
 ):
     """Create a synthetic .p file for merge testing."""
-    header_size = HEADER_BYTES
-
     words = [0] * HEADER_WORDS
     words[_H["header_size"]] = header_size
     words[_H["config_size"]] = config_size
@@ -28,11 +27,13 @@ def _make_p_file(
     words[_H["endian"]] = 1  # little-endian
 
     hdr_bytes = struct.pack(f"<{HEADER_WORDS}H", *words)
+    # Pad the header region out to header_size (config starts at header_size).
+    hdr_region = hdr_bytes.ljust(header_size, b"\x00")
 
     # Pad config content to config_size
     cfg = config_content[:config_size].ljust(config_size, b"\x00")
 
-    data = hdr_bytes + cfg
+    data = hdr_region + cfg
     for _ in range(n_records):
         data += bytes([data_byte]) * record_size
 
@@ -63,6 +64,15 @@ class TestFindMergeableFiles:
     def test_different_record_size_not_merged(self, tmp_path):
         f1 = _make_p_file(tmp_path / "SN479_0001.p", file_number=1, record_size=512)
         f2 = _make_p_file(tmp_path / "SN479_0002.p", file_number=2, record_size=1024)
+        chains = find_mergeable_files([f1, f2])
+        assert len(chains) == 0
+
+    def test_different_header_size_not_merged(self, tmp_path):
+        """Same config/record_size but different header_size must NOT chain:
+        the merged file is reparsed with the first file's header geometry, so a
+        mismatched continuation would be silently mis-sliced (audit #55)."""
+        f1 = _make_p_file(tmp_path / "SN479_0001.p", file_number=1, header_size=HEADER_BYTES)
+        f2 = _make_p_file(tmp_path / "SN479_0002.p", file_number=2, header_size=HEADER_BYTES + 32)
         chains = find_mergeable_files([f1, f2])
         assert len(chains) == 0
 

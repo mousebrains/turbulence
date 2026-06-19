@@ -236,6 +236,22 @@ class TestCombineProfiles:
         depths = result.coords["depth_bin"].values
         np.testing.assert_allclose(depths, [0.5, 1.5, 2.5, 3.5])
 
+    def test_ulp_distinct_centers_collapse_to_one_column(self):
+        """Two profiles whose bin centers are mathematically equal but differ
+        by a float ULP (e.g. non-binary-exact bin_size) must share one depth
+        column, not split into two half-NaN columns (audit #98)."""
+        # Emulate np.arange accumulation error: profile B's 0.35 is 1 ULP up.
+        d_a = 0.35
+        d_b = np.nextafter(0.35, 1.0)  # 0.35000000000000003, != d_a bitwise
+        assert d_a != d_b
+        ds1 = self._make_binned([0.25, d_a], {"T": [10.0, 11.0]})
+        ds2 = self._make_binned([0.25, d_b], {"T": [20.0, 21.0]})
+        result = combine_profiles([ds1, ds2])
+        # One physical depth at ~0.35 -> a single shared column, both finite.
+        assert result.sizes["depth_bin"] == 2
+        assert np.isfinite(result["T"].values[0, 1])
+        assert np.isfinite(result["T"].values[1, 1])
+
     def test_nan_fill_for_unmatched_depths(self):
         ds1 = self._make_binned([0.5, 1.5], {"T": [10.0, 11.0]})
         ds2 = self._make_binned([1.5, 2.5], {"T": [20.0, 21.0]})
