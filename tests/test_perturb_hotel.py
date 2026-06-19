@@ -209,6 +209,48 @@ class TestTimeConversion:
         np.testing.assert_allclose(result["speed"][0], 0.5, atol=0.01)
         np.testing.assert_allclose(result["speed"][-1], 0.9, atol=0.01)
 
+    def test_auto_nan_does_not_force_ambiguous(self, tmp_path):
+        """A single NaN timestamp must not blank the median test (nanmedian);
+        small relative-seconds times stay classified as relative."""
+        import pandas as pd
+
+        csv_file = tmp_path / "hotel.csv"
+        pd.DataFrame(
+            {"time": [0.0, np.nan, 2.0, 3.0, 4.0], "speed": [0.5, 0.6, 0.7, 0.8, 0.9]}
+        ).to_csv(csv_file, index=False)
+        hd = load_hotel(csv_file, time_format="auto")
+        assert hd.time_is_relative is True
+
+    def test_auto_ambiguous_numeric_band_raises(self, tmp_path):
+        """Numeric times with median in [1e6, 1e9) are ambiguous (relative vs
+        epoch); 'auto' must refuse to guess rather than misread as nanoseconds."""
+        import pandas as pd
+
+        csv_file = tmp_path / "hotel.csv"
+        v = 5.0e7  # 11.6 days relative, or 1971 epoch — genuinely ambiguous
+        pd.DataFrame(
+            {"time": [v, v + 1, v + 2], "speed": [0.5, 0.6, 0.7]}
+        ).to_csv(csv_file, index=False)
+        with pytest.raises(ValueError, match="cannot disambiguate"):
+            load_hotel(csv_file, time_format="auto")
+
+    def test_netcdf_masked_fill_becomes_nan(self, tmp_path):
+        """A masked _FillValue in a hotel NetCDF channel must surface as NaN,
+        not the raw fill (e.g. -999) that would corrupt interpolation."""
+        import netCDF4 as nc
+
+        path = tmp_path / "hotel.nc"
+        ds = nc.Dataset(str(path), "w")
+        ds.createDimension("obs", 5)
+        t = ds.createVariable("time", "f8", ("obs",))
+        s = ds.createVariable("speed", "f8", ("obs",), fill_value=-999.0)
+        t[:] = [0, 1, 2, 3, 4]
+        s[:] = np.ma.array([0.5, 0.6, 0.7, 0.8, 0.9], mask=[0, 0, 1, 0, 0])
+        ds.close()
+        hd = load_hotel(path, time_format="seconds")
+        assert np.isnan(hd.channels["speed"][2])
+        assert not np.any(hd.channels["speed"] == -999.0)
+
 
 # ---------------------------------------------------------------------------
 # TestInterpolateHotel

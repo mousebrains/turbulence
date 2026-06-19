@@ -192,7 +192,10 @@ COMBO_SCHEMA: dict[str, dict] = {
     "rho": {
         "nc_name": "rho",
         "units": "kg/m^3",
-        "standard_name": "sea_water_density",
+        # No CF standard_name: this is in-situ density MINUS 1000 (an offset
+        # storage convention, mirroring sigma0), not full in-situ density.
+        # CF's "sea_water_density" denotes the real ~1025 kg/m^3 value, so
+        # claiming it would mislead a standard_name-aware consumer by ~1000.
         "long_name": "in-situ density - 1000",
     },
     "lat": {
