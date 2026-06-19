@@ -302,9 +302,15 @@ def _bin_snapshot(snapshot: dict, bin_edges: np.ndarray, agg, diagnostics: bool)
                 out["counts"] = counts
             continue
         if vname.endswith("LnSigma"):
-            # Standard deviations combine in quadrature: average the
-            # variances (RMS of sigma), not the sigmas.
-            binned_var, counts = _bin_array(arr.astype(np.float64) ** 2, depth, bin_edges, agg)
+            # Standard deviations combine in quadrature: average the variances
+            # (RMS of sigma), not the sigmas. Use np.nanmean explicitly, NOT
+            # the dataset's `agg`: sqrt(mean(sigma^2)) is the RMS, but
+            # sqrt(median(sigma^2)) is not -- under median binning that
+            # square/root pair collapses to ~median(|sigma|) and silently
+            # mis-states the combined log-uncertainty.
+            binned_var, counts = _bin_array(
+                arr.astype(np.float64) ** 2, depth, bin_edges, np.nanmean
+            )
             out["vars"][vname] = np.sqrt(binned_var)
         else:
             binned, counts = _bin_array(arr, depth, bin_edges, agg)
@@ -560,8 +566,11 @@ def bin_by_time(
                         binned_data[str(vname)] = _bin_or(arr, t, bin_edges)
                         continue
                     if str(vname).endswith("LnSigma"):
+                        # Quadrature RMS requires the arithmetic mean of the
+                        # variances regardless of the dataset's `agg` (median
+                        # would break the sqrt(mean(sigma^2)) identity).
                         bvar, _ = _bin_array(
-                            arr.astype(np.float64) ** 2, t, bin_edges, agg
+                            arr.astype(np.float64) ** 2, t, bin_edges, np.nanmean
                         )
                         binned_data[str(vname)] = np.sqrt(bvar)
                         continue
