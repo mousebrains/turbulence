@@ -273,6 +273,23 @@ class TestClassifyChannelsMinimal:
         assert ch["vib"] == []
         assert ch["acc"] == []
         assert ch["mag"] == []
+
+    def test_classify_magnetometer_uses_magn_type(self):
+        """Magnetometer channels carry type 'magn' (the CONVERTERS/config key);
+        they must land in 'mag', not be dropped to 'supplementary'."""
+        from odas_tpw.rsi.convert import _classify_channels
+
+        class StubPF:
+            def __init__(self):
+                self.channels = {"Mx": object(), "My": object()}
+                self.channel_info = {"Mx": {"type": "magn"}, "My": {"type": "magn"}}
+
+            def is_fast(self, name):
+                return False
+
+        ch = _classify_channels(StubPF())
+        assert ch["mag"] == ["Mx", "My"]
+        assert "Mx" not in ch["supplementary"] and "My" not in ch["supplementary"]
         assert ch["gradt"] == []
         assert ch["cond_ctd"] == []
         assert ch["temp_ctd"] is None

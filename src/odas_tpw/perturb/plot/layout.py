@@ -230,12 +230,15 @@ def plot_columns(
     masked (so the cmap's ``set_bad`` colour shows for unsampled depths).
     Returns the last ``QuadMesh`` (or ``None`` if every cluster was empty).
     """
-    x = strictly_increasing(np.asarray(x, dtype=float))  # tie-safe edges
+    x = np.asarray(x, dtype=float)
     z = ffill_down(z)
     d_edges = depth_edges(depth)
     pcm = None
+    # Cluster on the ORIGINAL x (tie nudging would deflate the median spacing
+    # and spuriously split evenly-spaced casts); break ties only for the edges
+    # of each cluster.
     for s, e in column_clusters(x, gap_factor):
-        edges = column_edges(x[s:e])
+        edges = column_edges(strictly_increasing(x[s:e]))
         pcm = ax.pcolormesh(
             edges, d_edges, np.ma.masked_invalid(z[:, s:e]),
             cmap=cmap, norm=norm, shading="flat",

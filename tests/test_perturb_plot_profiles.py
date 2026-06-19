@@ -180,6 +180,27 @@ def test_plot_columns_tied_x_renders():
         plt.close(fig)
 
 
+def test_plot_columns_clusters_on_original_x():
+    """Many tied casts must not deflate the cluster median and spuriously split
+    the spaced casts (regression: strictly_increasing must run AFTER clustering)."""
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import QuadMesh
+    from matplotlib.colors import Normalize
+
+    from odas_tpw.perturb.plot import layout
+
+    fig, ax = plt.subplots()
+    try:
+        x = np.concatenate([np.zeros(8), [100.0, 200.0]])  # 8 tied + 2 evenly spaced
+        depth = np.arange(4.0)
+        z = np.ones((4, 10))
+        layout.plot_columns(ax, fig, x, depth, z, plt.cm.viridis, Normalize(0, 1), "v")
+        meshes = [c for c in ax.collections if isinstance(c, QuadMesh)]
+        assert len(meshes) == 1  # one cluster; the buggy nudge-first split it into 3
+    finally:
+        plt.close(fig)
+
+
 def test_clim_and_no_qc(tmp_path: Path):
     _build_all_products(tmp_path)
     rc = _run(["profiles", "--root", str(tmp_path), "--product", "diss", "--no-qc",

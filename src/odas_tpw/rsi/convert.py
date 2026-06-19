@@ -61,7 +61,7 @@ def _classify_channels(pf: "PFile") -> dict:
     shear_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "shear")
     vib_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "piezo")
     acc_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "accel")
-    mag_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "mag")
+    mag_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "magn")
     gradt_names = sorted(
         n for n in pf.channels if pf.channel_info[n]["type"] == "therm" and pf.is_fast(n)
     )

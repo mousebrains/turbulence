@@ -146,12 +146,15 @@ def _process_section_chi(
     speed_means = np.maximum(np.mean(np.abs(l2_chi.pspd_rel[indices]), axis=1), 0.01)
     P_means = np.mean(l2_chi.pres[indices], axis=1)
     t_means = np.mean(l2_chi.time[indices], axis=1)
-    T_means = np.mean(l2_chi.temp[indices], axis=1)
+    # nanmean: a single NaN temperature/salinity sample (routine near the
+    # surface) must not poison the whole window's viscosity -> chi. Mirrors the
+    # epsilon side's NaN tolerance (scor160/l4.py).
+    T_means = np.nanmean(l2_chi.temp[indices], axis=1)
 
     # Viscosity
     if salinity is not None:
         if np.ndim(salinity) > 0:
-            sal_means = np.mean(np.asarray(salinity)[indices], axis=1)
+            sal_means = np.nanmean(np.asarray(salinity)[indices], axis=1)
         else:
             sal_means = np.full(n_windows, float(salinity))
         nu_all = np.asarray(
