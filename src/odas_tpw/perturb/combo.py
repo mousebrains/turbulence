@@ -112,7 +112,10 @@ def make_combo(
         tk = combo["time"].values
         keep = np.isfinite(tk)
         keep[1:] &= tk[1:] != tk[:-1]
-        if not keep.all():
+        # Only filter when it leaves at least one sample: an all-NaN-time combo
+        # (no valid coordinate at all) is kept intact so it stays writable -- the
+        # downstream coverage-attr logic already skips coverage for all-NaN time.
+        if keep.any() and not keep.all():
             combo = combo.isel(time=np.flatnonzero(keep))
 
     # Apply schema
