@@ -189,11 +189,13 @@ class TestMkEpsilonMean:
         assert "epsilonMean" in result
         np.testing.assert_allclose(result["epsilonMean"].values, 5e-8, rtol=1e-6)
 
-    def test_outlier_probe_removed(self):
-        """Probes many orders apart — CI should remove outlier, mean ~ e_1."""
+    def test_two_probe_disagreement_keeps_both(self):
+        """With only 2 probes there is no identifiable outlier, so both are
+        kept (geometric mean). The old always-drop-max rule would have kept the
+        lower probe (systematic low bias); keep-both is unbiased (audit #52)."""
         n = 20
         e1 = np.full(n, 1e-8)
-        e2 = np.full(n, 1e-3)  # 5 orders of magnitude apart
+        e2 = np.full(n, 1e-3)  # 5 orders apart — but which is wrong is unknowable
         ds = xr.Dataset(
             {
                 "e_1": (["time"], e1),
@@ -205,9 +207,35 @@ class TestMkEpsilonMean:
             attrs={"diss_length": 512, "fs_fast": 512.0},
         )
         result = mk_epsilon_mean(ds)
-        assert "epsilonMean" in result
-        # After removing e_2 as outlier, mean should be close to e_1
+        # Geometric mean of both probes, not either probe alone.
+        np.testing.assert_allclose(
+            result["epsilonMean"].values, np.sqrt(1e-8 * 1e-3), rtol=0.1
+        )
+
+    def _make_three_probe_ds(self, e1, e2, e3, n=20):
+        return xr.Dataset(
+            {
+                "e_1": (["time"], np.full(n, e1)),
+                "e_2": (["time"], np.full(n, e2)),
+                "e_3": (["time"], np.full(n, e3)),
+                "speed": (["time"], np.full(n, 0.5)),
+                "nu": (["time"], np.full(n, 1e-6)),
+            },
+            coords={"time": np.arange(n, dtype=float)},
+            attrs={"diss_length": 512, "fs_fast": 512.0},
+        )
+
+    def test_three_probe_high_outlier_removed(self):
+        """Three probes, one high outlier → furthest-from-ln-mean (the high one)
+        is removed, mean tracks the consistent pair."""
+        result = mk_epsilon_mean(self._make_three_probe_ds(1e-8, 1e-8, 1e-3))
         np.testing.assert_allclose(result["epsilonMean"].values, 1e-8, rtol=0.1)
+
+    def test_three_probe_low_outlier_removed(self):
+        """The audit's failing case: a LOW junk probe must now be the one
+        removed (the old drop-max kept it and biased the mean low)."""
+        result = mk_epsilon_mean(self._make_three_probe_ds(1e-7, 1e-7, 1e-11))
+        np.testing.assert_allclose(result["epsilonMean"].values, 1e-7, rtol=0.1)
 
     def test_2d_epsilon_probe_time(self):
         """2D epsilon(probe, time) is split into per-probe variables."""
