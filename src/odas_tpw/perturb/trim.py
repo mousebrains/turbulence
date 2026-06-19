@@ -100,26 +100,22 @@ def trim_p_file(
 
     Notes
     -----
-    Skip guard (trimmed files only): the trim-write path stamps a "now"
-    mtime newer than the (older) source, so ``dest_mtime >= source_mtime``
-    holds on a subsequent run and the rewrite is skipped. A source modified
-    after its trimmed output (newer mtime) correctly re-trims. Complete
-    files write nothing, so there is no trimmed output to skip — they are
-    re-referenced each run at the cost of a single 128-byte header read.
+    Skip guard (trimmed files only): the header is read every run, and a
+    trimmed output is reused only when its size equals the freshly-computed
+    trimmed size AND ``dest_mtime >= source_mtime`` (the trim-write path
+    stamps a "now" mtime newer than the older source). A source modified
+    after its trimmed output (newer mtime), repaired to completeness, or
+    given a changed header geometry therefore re-trims/re-references rather
+    than reusing a stale truncated copy. Complete files write nothing — they
+    are re-referenced each run at the cost of a single 128-byte header read.
     """
     dest = trim_destination(source, output_dir, root=root)
 
-    # Skip-if-up-to-date: a prior run already wrote this trimmed output and
-    # the source has not changed since. Use nanosecond mtime so timestamps
-    # compare exactly. Cheap — avoids opening the file at all. Only trimmed
-    # files have a dest on disk; complete (referenced) files never do.
-    if (
-        not force
-        and dest.exists()
-        and dest.stat().st_mtime_ns >= source.stat().st_mtime_ns
-    ):
-        return TrimResult(dest, "skipped", 0, 0)
-
+    # Read the source header first (the same 128-byte read the 'referenced'
+    # path already pays) so the skip decision is content-aware rather than
+    # mtime-only. A previously-incomplete source that was later repaired (now
+    # complete, or with changed header geometry) but carries an equal/older
+    # mtime than the stale trimmed output must NOT be skipped.
     with open(source, "rb") as f:
         raw_hdr = f.read(HEADER_BYTES)
         if len(raw_hdr) < HEADER_BYTES:
@@ -148,12 +144,28 @@ def trim_p_file(
 
     remainder = data_bytes % record_size
     if remainder == 0:
-        # Complete file — reference the original in place, no copy.
+        # Complete file — reference the original in place, no copy. Reached
+        # also when a once-incomplete source has since been completed, so its
+        # stale trimmed output is deliberately not reused.
         return TrimResult(source, "referenced", 0, record_size)
 
     # Trim the fractional final record into the trim directory.
     n_complete = data_bytes // record_size
     trimmed_size = first_record_size + n_complete * record_size
+
+    # Skip-if-up-to-date: a prior run wrote this exact trimmed output and the
+    # source is unchanged. Require the dest SIZE to equal the freshly-computed
+    # trimmed size (so a repaired or geometry-changed source re-trims rather
+    # than reusing a stale truncated copy) on top of the nanosecond-mtime
+    # guard. The trim-write path stamps a "now" mtime, so dest_mtime >=
+    # source_mtime holds for an unchanged source.
+    if (
+        not force
+        and dest.exists()
+        and dest.stat().st_size == trimmed_size
+        and dest.stat().st_mtime_ns >= source.stat().st_mtime_ns
+    ):
+        return TrimResult(dest, "skipped", 0, 0)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(source, "rb") as src_f, open(dest, "wb") as dst_f:
