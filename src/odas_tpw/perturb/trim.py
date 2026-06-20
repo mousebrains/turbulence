@@ -7,7 +7,10 @@ to a new file.
 Reference: Code/trim_P_files.m
 """
 
+import contextlib
+import os
 import struct
+import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
@@ -168,7 +171,25 @@ def trim_p_file(
         return TrimResult(dest, "skipped", 0, 0)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with open(source, "rb") as src_f, open(dest, "wb") as dst_f:
-        dst_f.write(src_f.read(trimmed_size))
+    # Write to a temp file then atomically replace. If the dest resolves to the
+    # source (files already under <root>/trimmed/, or a basename collision),
+    # opening dest "wb" directly would truncate the source to 0 bytes BEFORE the
+    # read — destroying it. A separate temp fd + os.replace keeps the source
+    # intact until the atomic swap.
+    fd, tmp = tempfile.mkstemp(dir=str(dest.parent), prefix=".trim-", suffix=".tmp")
+    try:
+        with open(source, "rb") as src_f, os.fdopen(fd, "wb") as dst_f:
+            remaining = trimmed_size
+            while remaining > 0:
+                chunk = src_f.read(min(remaining, 1 << 20))
+                if not chunk:
+                    break
+                dst_f.write(chunk)
+                remaining -= len(chunk)
+        os.replace(tmp, dest)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
     return TrimResult(dest, "trimmed", remainder, record_size)
