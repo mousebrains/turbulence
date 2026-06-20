@@ -15,6 +15,21 @@ import numpy.typing as npt
 from scipy.signal import butter, filtfilt
 
 
+def _safe_filtfilt(b: np.ndarray, a: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """filtfilt that no-ops on inputs too short for its default padlen.
+
+    A 1st-order Butterworth gives padlen = 3*max(len(a), len(b)) = 6, so
+    filtfilt raises ``ValueError`` for len(x) <= 6. For such short series there
+    is nothing meaningful to zero-phase smooth, so return the input unchanged
+    rather than crashing the whole profile/file.
+    """
+    x = np.asarray(x)
+    padlen = 3 * max(len(a), len(b))
+    if x.shape[0] <= padlen:
+        return x
+    return np.asarray(filtfilt(b, a, x))
+
+
 def smooth_fall_rate(P: np.ndarray, fs: float, tau: float = 1.5) -> np.ndarray:
     """Compute smoothed fall rate from pressure.
 
@@ -36,10 +51,14 @@ def smooth_fall_rate(P: np.ndarray, fs: float, tau: float = 1.5) -> np.ndarray:
     W : ndarray
         Smoothed fall rate [dbar/s].
     """
-    W = np.gradient(P.astype(np.float64), 1.0 / fs)
+    P = P.astype(np.float64)
+    if P.shape[0] < 2:
+        # np.gradient needs >= 2 samples; a single pressure sample has no rate.
+        return np.zeros_like(P)
+    W = np.gradient(P, 1.0 / fs)
     f_c = 0.68 / tau
     b, a = butter(1, f_c / (fs / 2.0))
-    return np.asarray(filtfilt(b, a, W))
+    return _safe_filtfilt(b, a, W)
 
 
 def compute_speed_fast(
@@ -90,7 +109,7 @@ def compute_speed_fast(
 
     f_c = 0.68 / tau
     b_f, a_f = butter(1, f_c / (fs_fast / 2.0))
-    speed_fast = filtfilt(b_f, a_f, speed_fast)
+    speed_fast = _safe_filtfilt(b_f, a_f, speed_fast)
 
     speed_fast = np.maximum(speed_fast, speed_min)
 
@@ -131,7 +150,7 @@ def smooth_speed_interp(
     pspd_rel = np.interp(t_fast, t_slow, speed_slow)
     f_c = 0.68 / tau
     b_f, a_f = butter(1, f_c / (fs_fast / 2.0))
-    pspd_rel = np.asarray(filtfilt(b_f, a_f, pspd_rel))
+    pspd_rel = _safe_filtfilt(b_f, a_f, pspd_rel)
     return np.asarray(np.maximum(pspd_rel, speed_min))
 
 

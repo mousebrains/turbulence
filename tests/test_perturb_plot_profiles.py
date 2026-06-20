@@ -108,6 +108,28 @@ def test_make_norm_picks_scale():
     assert none is None                                    # log field, no positive data
 
 
+def test_make_norm_n2_uses_symlog_for_negatives():
+    """N2 can be negative (overturning); it must use SymLogNorm so negatives
+    are visible, not LogNorm which would mask them as no-data (#20)."""
+    from matplotlib.colors import LogNorm, SymLogNorm
+
+    args = argparse.Namespace(vmin=None, vmax=None)
+    n = profiles._make_norm("N2", np.array([[1e-5, -1e-6], [1e-4, 1e-3]]), args, {})
+    assert isinstance(n, SymLogNorm)
+    assert not isinstance(n, LogNorm)
+    assert n.vmin < 0  # the negative N2 is within range, not clipped away
+
+
+def test_make_norm_reversed_clim_errors_on_linear_var():
+    """A reversed --clim (MIN >= MAX) on a linear/diverging var must raise, not
+    silently invert the colorbar (#21)."""
+    args = argparse.Namespace(vmin=None, vmax=None)
+    with pytest.raises(SystemExit):
+        profiles._make_norm("T1", np.array([[5.0, 6.0]]), args, {"T1": (6.0, 2.0)})
+    with pytest.raises(SystemExit):
+        profiles._make_norm("dTdz", np.array([[-1.0, 1.0]]), args, {"dTdz": (1.0, -1.0)})
+
+
 # ---------------------------------------------------------------------------
 # End-to-end across products
 # ---------------------------------------------------------------------------
@@ -176,6 +198,27 @@ def test_plot_columns_tied_x_renders():
         z = np.linspace(0.0, 1.0, 15).reshape(5, 3)
         pcm = layout.plot_columns(ax, fig, x, depth, z, plt.cm.viridis, Normalize(0, 1), "v")
         assert pcm is not None
+    finally:
+        plt.close(fig)
+
+
+def test_plot_columns_clusters_on_original_x():
+    """Many tied casts must not deflate the cluster median and spuriously split
+    the spaced casts (regression: strictly_increasing must run AFTER clustering)."""
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import QuadMesh
+    from matplotlib.colors import Normalize
+
+    from odas_tpw.perturb.plot import layout
+
+    fig, ax = plt.subplots()
+    try:
+        x = np.concatenate([np.zeros(8), [100.0, 200.0]])  # 8 tied + 2 evenly spaced
+        depth = np.arange(4.0)
+        z = np.ones((4, 10))
+        layout.plot_columns(ax, fig, x, depth, z, plt.cm.viridis, Normalize(0, 1), "v")
+        meshes = [c for c in ax.collections if isinstance(c, QuadMesh)]
+        assert len(meshes) == 1  # one cluster; the buggy nudge-first split it into 3
     finally:
         plt.close(fig)
 

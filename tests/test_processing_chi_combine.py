@@ -175,8 +175,10 @@ class TestMkChiMean:
         assert "chiMean" in result
         np.testing.assert_allclose(result["chiMean"].values, 5e-8, rtol=1e-6)
 
-    def test_outlier_probe_removed(self):
-        """With epsilon_T available, the CI filter removes the outlier probe."""
+    def test_two_probe_disagreement_keeps_both(self):
+        """With only 2 probes no outlier is identifiable, so both are kept
+        (geometric mean) rather than dropping one. The old drop-max rule biased
+        chiMean low by always keeping the lower probe (audit #52)."""
         n = 20
         c1 = np.full(n, 1e-8)
         c2 = np.full(n, 1e-3)
@@ -193,8 +195,29 @@ class TestMkChiMean:
             attrs={"diss_length": 512, "fs_fast": 512.0},
         )
         result = mk_chi_mean(ds)
-        assert "chiMean" in result
-        np.testing.assert_allclose(result["chiMean"].values, 1e-8, rtol=0.1)
+        np.testing.assert_allclose(
+            result["chiMean"].values, np.sqrt(1e-8 * 1e-3), rtol=0.1
+        )
+
+    def test_three_probe_low_outlier_removed(self):
+        """Three probes with epsilon_T: the LOW junk probe (furthest from the
+        ln-mean) is removed, not unconditionally the max, so chiMean tracks the
+        consistent pair instead of being dragged down."""
+        n = 20
+        ds = xr.Dataset(
+            {
+                "chi_1": (["time"], np.full(n, 1e-7)),
+                "chi_2": (["time"], np.full(n, 1e-7)),
+                "chi_3": (["time"], np.full(n, 1e-11)),  # low junk
+                "epsilon_T": (["probe", "time"], np.full((3, n), 1e-7)),
+                "speed": (["time"], np.full(n, 0.5)),
+                "nu": (["time"], np.full(n, 1e-6)),
+            },
+            coords={"probe": ["t1", "t2", "t3"], "time": np.arange(n, dtype=float)},
+            attrs={"diss_length": 512, "fs_fast": 512.0},
+        )
+        result = mk_chi_mean(ds)
+        np.testing.assert_allclose(result["chiMean"].values, 1e-7, rtol=0.1)
 
     def test_no_epsilon_keeps_all_probes(self):
         """Without epsilon_T the CI is nominal: no probe removal occurs."""

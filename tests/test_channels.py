@@ -205,13 +205,19 @@ class TestConvertVoltage:
         # (0.5 + 0) / 1.0 = 0.5
         np.testing.assert_allclose(result[0], 0.5, atol=1e-12)
 
-    def test_defaults(self):
-        """Default params: adc_fs=1, adc_bits=0, g=1, adc_zero=0."""
+    def test_defaults_warn_and_use_16bit(self):
+        """A missing adc_bits warns (was a silent 2**0=1 mis-scale by 2**16) and
+        falls back to a 16-bit ADC default (#28)."""
+        import warnings
+
         data = np.array([3.0])
-        result, units = convert_voltage(data, {})
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result, units = convert_voltage(data, {})
         assert units == "V"
-        # (0 + 3 * 1 / 2^0) / 1 = 3.0
-        np.testing.assert_allclose(result[0], 3.0, atol=1e-12)
+        # (0 + 3 * 1 / 2^16) / 1 = 3 / 65536
+        np.testing.assert_allclose(result[0], 3.0 / 65536.0, rtol=1e-10)
+        assert any("adc_bits" in str(wi.message) for wi in w)
 
 
 class TestConvertPiezo:

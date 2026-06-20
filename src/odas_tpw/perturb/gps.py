@@ -31,6 +31,23 @@ def _to_epoch_seconds(values: np.ndarray) -> np.ndarray:
     return values.astype(np.float64)
 
 
+def _nc_values(var) -> np.ndarray:
+    """Read a netCDF4 variable, mapping any masked/_FillValue cells to NaN.
+
+    netCDF4 returns masked arrays by default (auto-masking is on in this
+    module).  Reaching for ``.data`` would expose the raw _FillValue (e.g.
+    -999, 1e20) as if it were a real measurement — a missing GPS fix would
+    become a -999 latitude and drive ``interp1d`` to wildly wrong positions.
+    ``.filled(np.nan)`` turns those gaps into NaN instead.
+    """
+    arr = var[:]
+    if np.ma.isMaskedArray(arr):
+        # Cast to float before filling: filling an integer-dtype masked array
+        # with NaN raises (NaN cannot be cast to int).
+        return np.asarray(np.ma.filled(arr.astype(np.float64), np.nan))
+    return np.asarray(arr)
+
+
 # CF time unit -> seconds factor.  Only common units; falls back to
 # ``num2date`` for the long tail (months, years, weird calendars, etc.)
 _CF_TIME_UNIT_FACTORS: dict[str, float] = {
@@ -243,11 +260,17 @@ class GPSFromNetCDF:
         import netCDF4 as nc
         from scipy.interpolate import interp1d
 
-        ds = nc.Dataset(str(file), "r")
-        t_var = ds.variables[time_var]
-        units = getattr(t_var, "units", None)
-        calendar = getattr(t_var, "calendar", "standard")
-        raw = t_var[:].data
+        # Read raw arrays inside the context manager so the Dataset is closed
+        # even if a read raises; decode times afterwards (raw/lat/lon are
+        # in-memory copies that outlive the file handle).
+        with nc.Dataset(str(file), "r") as ds:
+            t_var = ds.variables[time_var]
+            units = getattr(t_var, "units", None)
+            calendar = getattr(t_var, "calendar", "standard")
+            raw = _nc_values(t_var)
+            lat = _nc_values(ds.variables[lat_var]).astype(np.float64)
+            lon = _nc_values(ds.variables[lon_var]).astype(np.float64)
+
         # Fast path: when the variable is plain numeric and its CF units
         # are "<unit> since <iso-datetime>", we can compute epoch seconds
         # by a single scalar+vector arithmetic step instead of going
@@ -277,9 +300,6 @@ class GPSFromNetCDF:
                 )
             else:
                 t = _to_epoch_seconds(raw)
-        lat = ds.variables[lat_var][:].data.astype(np.float64)
-        lon = ds.variables[lon_var][:].data.astype(np.float64)
-        ds.close()
 
         self._t_min = float(np.nanmin(t))
         self._t_max = float(np.nanmax(t))

@@ -79,8 +79,13 @@ def ct_align(
 
         corr = correlate(dx, dy, mode="full")
         norm = np.sqrt(np.sum(dx**2) * np.sum(dy**2))
-        if norm > 0:
-            corr = corr / norm
+        if norm <= 0:
+            # A flatlined/constant T or C segment (norm == 0) carries no
+            # alignment information. Skip it: leaving it in would make
+            # argmax(|corr|) of an all-zero correlation pick index 0, i.e. the
+            # most-negative lag (-max_lag_seconds), a maximally-wrong estimate.
+            continue
+        corr = corr / norm
 
         n = len(dx)
         lags = np.arange(-(n - 1), n)
@@ -105,11 +110,19 @@ def ct_align(
     if not per_profile:
         return C.copy(), 0.0
 
-    # Weighted median: sort by lag, find where cumulative weight crosses midpoint
+    # Weighted median: smallest lag whose cumulative weight reaches half the
+    # total. searchsorted gives the true (lower) weighted median; the old
+    # argmin(|cum_w - total/2|) picked the entry *closest* to the midpoint,
+    # which is biased toward the pre-crossing entry for skewed weights.
     per_profile.sort(key=lambda x: x["lag"])
     weights = np.array([p["max_corr"] * p["n_samples"] for p in per_profile])
     cum_w = np.cumsum(weights)
-    mid_idx = np.argmin(np.abs(cum_w - cum_w[-1] / 2.0))
+    total = float(cum_w[-1])
+    if total <= 0:
+        # No usable correlation across any profile -> apply no shift.
+        return C.copy(), 0.0
+    mid_idx = int(np.searchsorted(cum_w, total / 2.0))
+    mid_idx = min(mid_idx, len(per_profile) - 1)
     median_lag = per_profile[mid_idx]["lag"]
 
     i_shift = round(median_lag * fs)

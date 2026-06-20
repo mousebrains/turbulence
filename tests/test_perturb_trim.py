@@ -170,6 +170,51 @@ class TestTrimPFile:
         second = trim_p_file(src, out_dir)
         assert second.action == "trimmed"
 
+    def test_repaired_complete_source_not_skipped_despite_older_mtime(self, tmp_path):
+        """An incomplete source that is later repaired to completeness must not
+        keep serving its stale truncated trim, even when the repaired source
+        carries an equal/older mtime (backup/cp -p/rsync scenario, audit #68)."""
+        import os
+
+        src = tmp_path / "frac.p"
+        _make_p_file(src, record_size=1024, n_records=3, extra_bytes=50)
+        out_dir = tmp_path / "trimmed"
+
+        first = trim_p_file(src, out_dir)
+        assert first.action == "trimmed"
+        dest_mtime = first.dest.stat().st_mtime_ns
+
+        # Repair the source to a complete file (no fractional record) but stamp
+        # it with an OLDER mtime than the trimmed output.
+        _make_p_file(src, record_size=1024, n_records=4, extra_bytes=0)
+        older = dest_mtime - 1_000_000_000
+        os.utime(src, ns=(older, older))
+
+        second = trim_p_file(src, out_dir)
+        # Now complete -> referenced to the repaired source, not the stale trim.
+        assert second.action == "referenced"
+        assert second.dest == src
+
+    def test_skip_requires_size_match_not_only_mtime(self, tmp_path):
+        """A geometry change that alters the trimmed size must re-trim even with
+        an older source mtime (size check, not mtime alone, audit #68)."""
+        import os
+
+        src = tmp_path / "frac.p"
+        _make_p_file(src, record_size=1024, n_records=3, extra_bytes=50)
+        out_dir = tmp_path / "trimmed"
+        first = trim_p_file(src, out_dir)
+        dest_mtime = first.dest.stat().st_mtime_ns
+
+        # Replace with a still-incomplete source but a different trimmed size
+        # (fewer complete records), older mtime.
+        _make_p_file(src, record_size=1024, n_records=2, extra_bytes=50)
+        older = dest_mtime - 1_000_000_000
+        os.utime(src, ns=(older, older))
+
+        second = trim_p_file(src, out_dir)
+        assert second.action == "trimmed"
+
     def test_invalid_record_size_raises(self, tmp_path):
         """A record_size of 0 is rejected."""
         words = [0] * HEADER_WORDS

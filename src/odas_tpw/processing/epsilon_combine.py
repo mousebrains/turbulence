@@ -112,28 +112,41 @@ def mk_epsilon_mean(
     mu_sigma = np.nanmean(sigma_ln_epsilon, axis=1)  # [time]
     CF95_range = 1.96 * np.sqrt(2.0) * mu_sigma  # [time]
 
-    # Iterative removal of probes outside 95% CI
+    # Iterative removal of probes outside the 95% CI. With >= 3 probes we can
+    # identify an outlier and drop the probe whose ln(epsilon) is FURTHEST from
+    # the cross-probe ln-mean (the Lueck/Rockland mk_diss_mean rule), rejecting
+    # low and high outliers symmetrically. The old code unconditionally NaN'd
+    # the MAXIMUM probe, so a low junk probe always survived and biased
+    # epsilonMean low. With only 2 disagreeing probes there is no identifiable
+    # outlier (both are equidistant from their mean), so we KEEP BOTH rather
+    # than coin-flip a drop -- the geometric mean of the pair is unbiased,
+    # whereas always-drop-max systematically kept the lower probe.
     n_probes = epsilon.shape[1]
-    for _ in range(n_probes - 1):
-        with np.errstate(invalid="ignore"):
-            min_e = np.nanmin(epsilon, axis=1)
-            max_e = np.nanmax(epsilon, axis=1)
-            ratio = np.abs(np.log(max_e) - np.log(min_e))
+    if n_probes >= 3:
+        for _ in range(n_probes - 1):
+            with np.errstate(invalid="ignore", divide="ignore"):
+                ln_e = np.log(epsilon)
+                min_e = np.nanmin(epsilon, axis=1)
+                max_e = np.nanmax(epsilon, axis=1)
+                ratio = np.abs(np.log(max_e) - np.log(min_e))
 
-        # Skip rows that are already all-NaN (e.g. fom_max NaN'd both probes
-        # at this segment) -- ``nanargmax`` raises ValueError on them, and
-        # there's nothing left to drop anyway.
-        any_finite = np.any(np.isfinite(epsilon), axis=1)
-        outside = (ratio > CF95_range) & any_finite
-        if not np.any(outside):
-            break
+            # Skip rows that are already all-NaN (e.g. fom_max NaN'd every probe
+            # at this segment) -- ``nanargmax`` raises ValueError on them, and
+            # there's nothing left to drop anyway.
+            any_finite = np.any(np.isfinite(epsilon), axis=1)
+            outside = (ratio > CF95_range) & any_finite
+            if not np.any(outside):
+                break
 
-        # Set the maximum value to NaN for rows outside CI
-        max_idx = np.full(epsilon.shape[0], -1, dtype=np.int64)
-        if np.any(any_finite):
-            max_idx[any_finite] = np.nanargmax(epsilon[any_finite], axis=1)
-        for i in np.where(outside)[0]:
-            epsilon[i, max_idx[i]] = np.nan
+            # Drop the probe furthest from the cross-probe ln-mean on each
+            # outside row (symmetric: a low outlier is as removable as a high).
+            with np.errstate(invalid="ignore"):
+                ln_mean = np.nanmean(ln_e, axis=1, keepdims=True)
+                dev = np.abs(ln_e - ln_mean)
+            worst_idx = np.full(epsilon.shape[0], -1, dtype=np.int64)
+            worst_idx[any_finite] = np.nanargmax(dev[any_finite], axis=1)
+            for i in np.where(outside)[0]:
+                epsilon[i, worst_idx[i]] = np.nan
 
     # Geometric mean of surviving probes
     with np.errstate(invalid="ignore"):

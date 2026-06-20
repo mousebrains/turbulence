@@ -67,6 +67,33 @@ class TestComputeSegmentDrop:
         qc, _ = compute_segment_drop(seg_times, 2.0, pf, ["q_drop"])
         np.testing.assert_array_equal(qc, [1, 0])
 
+    def test_length_mismatch_warns_and_skips(self):
+        """A drop_from channel of non-slow length must not be mis-sampled with
+        slow-grid indices; skip-and-warn instead (#14)."""
+        import warnings
+
+        t_slow = np.arange(0.0, 5.0, 0.5)  # 10 samples
+        wrong = np.ones(40, dtype=np.uint8)  # fast-length channel
+        pf = _StubPF(t_slow=t_slow, channels={"q_drop": wrong})
+        seg_times = np.array([2.5])
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            qc, _ = compute_segment_drop(seg_times, 2.0, pf, ["q_drop"])
+        np.testing.assert_array_equal(qc, [0])  # skipped, not mis-sampled
+        assert any("length" in str(wi.message) for wi in w)
+
+    def test_float_smeared_flag_uses_half_threshold(self):
+        """An interpolation-smeared float flag channel flags on |sample| >= 0.5
+        rather than truncating sub-1 values to 0 (#15)."""
+        t_slow = np.array([0.0, 1.0, 2.0])
+        # 0.6 would truncate to 0 under astype(uint8); >= 0.5 -> flagged.
+        smeared = np.array([0.0, 0.6, 0.3], dtype=np.float64)
+        pf = _StubPF(t_slow=t_slow, channels={"q_drop": smeared})
+        seg_times = np.array([1.0, 2.0])
+        qc, _ = compute_segment_drop(seg_times, 0.5, pf, ["q_drop"])
+        assert qc[0] == 1  # segment around t=1.0 sees 0.6 -> flagged
+        assert qc[1] == 0  # segment around t=2.0 sees 0.3 -> not flagged
+
     def test_bitwise_or_across_channels(self):
         t_slow = np.array([0.0, 1.0, 2.0])
         thr = np.array([0, 1, 0], dtype=np.uint8)   # bit 1

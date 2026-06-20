@@ -228,6 +228,26 @@ class TestGPSFromNetCDF:
         nc_file = self._make_nc(tmp_path / "gps.nc")
         assert isinstance(GPSFromNetCDF(nc_file), GPSProvider)
 
+    def test_masked_fix_becomes_nan_not_fill(self, tmp_path):
+        """A masked latitude (a missing GPS fix) must read back as NaN, not
+        the raw _FillValue (-999), which would wreck the interpolated track."""
+        import netCDF4 as nc
+
+        path = tmp_path / "gps.nc"
+        ds = nc.Dataset(str(path), "w")
+        ds.createDimension("obs", 4)
+        t = ds.createVariable("time", "f8", ("obs",))
+        lat = ds.createVariable("lat", "f8", ("obs",), fill_value=-999.0)
+        lon = ds.createVariable("lon", "f8", ("obs",))
+        t[:] = [0, 1, 2, 3]
+        lat[:] = np.ma.array([10.0, 20.0, 30.0, 40.0], mask=[0, 1, 0, 0])
+        lon[:] = [100, 110, 120, 130]
+        ds.close()
+        gps = GPSFromNetCDF(path)
+        # interp1d skips/propagates NaN endpoints, but the key guarantee is the
+        # raw -999 fill never enters the interpolator as a real latitude.
+        assert -999.0 not in gps._lat_interp.y
+
     def test_cf_time_units_decoded_to_epoch_seconds(self, tmp_path):
         """A NetCDF time var with CF units (e.g. 'milliseconds since ...')
         is decoded to epoch seconds, so callers query with epoch-second

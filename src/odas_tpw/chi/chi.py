@@ -579,7 +579,12 @@ def _iterative_fit(
     # Final values
     if np.isfinite(kB_best):
         epsilon = (2 * np.pi * kB_best) ** 4 * nu * KAPPA_T**2
-    chi = chi_obs
+    # A failed Batchelor/kB fit must not leak a finite chi: chi_obs is the
+    # initial (possibly noise-dominated) band integral, and with kB NaN the
+    # window has fom=NaN/K_max_ratio=NaN that no downstream QC cut can reach.
+    # Returning NaN excludes it from chi_final/chiMean (and thus K_T/Gamma),
+    # mirroring the epsilon side, where a failed shear fit yields NaN epsilon.
+    chi = chi_obs if np.isfinite(kB_best) else np.nan
     spec_batch = grad_func(K, kB_best, chi) if np.isfinite(kB_best) else np.zeros_like(K)
 
     # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise).

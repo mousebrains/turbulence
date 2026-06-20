@@ -77,8 +77,11 @@ _CMAP: dict[str, str] = {
 # Log-scaled fields (span orders of magnitude, strictly positive).
 _LOG_VARS: frozenset[str] = frozenset({
     "epsilonMean", "e_1", "e_2", "chiMean", "chi_1", "chi_2",
-    "K_T", "K_rho", "Gamma", "N2",
+    "K_T", "K_rho", "Gamma",
 })
+# Log-scaled but sign-bearing (SymLogNorm): N2 is usually positive but can go
+# negative in overturning/unstable patches, which LogNorm would hide as no-data.
+_SYMLOG_VARS: frozenset[str] = frozenset({"N2"})
 # Diverging fields centred on zero.
 _DIVERGING: frozenset[str] = frozenset({"dTdz", "Incl_X", "Incl_Y"})
 
@@ -105,10 +108,34 @@ def _make_norm(name: str, z: np.ndarray, args: argparse.Namespace, clim: dict):
     linear otherwise.  Per-variable ``--clim`` wins, then global --vmin/--vmax
     (single-var only).  Returns ``None`` when a log field has no positive data.
     """
-    from matplotlib.colors import LogNorm, Normalize
+    from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 
     lo, hi = clim.get(name, (args.vmin, args.vmax))
     explicit = name in clim or args.vmin is not None or args.vmax is not None
+
+    # Reversed --clim (MIN >= MAX) would silently invert the colorbar on the
+    # linear/diverging paths; validate centrally so every branch errors clearly.
+    if lo is not None and hi is not None and lo >= hi:
+        raise SystemExit(
+            f"colour-scale minimum must be < maximum for {name!r} (got {lo}, {hi})"
+        )
+
+    if name in _SYMLOG_VARS:
+        # N2 is log-scaled but can go slightly negative (overturning/unstable
+        # patches); SymLog keeps the dynamic range while showing negatives
+        # distinctly from no-data, where LogNorm would mask them.
+        finite = z[np.isfinite(z)]
+        if finite.size == 0:
+            return None
+        amax = float(np.nanmax(np.abs(finite)))
+        if amax <= 0:
+            return None
+        pos = finite[finite > 0]
+        linthresh = float(np.quantile(pos, 0.05)) if pos.size else amax * 1.0e-3
+        vmin = lo if lo is not None else float(np.nanmin(finite))
+        vmax = hi if hi is not None else amax
+        return SymLogNorm(linthresh=max(linthresh, amax * 1.0e-9),
+                          vmin=vmin, vmax=vmax)
 
     if name in _DIVERGING:
         vmin, vmax = grid.linear_limits(z, lo, hi)
@@ -121,10 +148,6 @@ def _make_norm(name: str, z: np.ndarray, args: argparse.Namespace, clim: dict):
         if lo is not None and lo <= 0:
             raise SystemExit(
                 f"colour-scale minimum for log variable {name!r} must be > 0 (got {lo})"
-            )
-        if lo is not None and hi is not None and lo >= hi:
-            raise SystemExit(
-                f"colour-scale minimum must be < maximum for {name!r} (got {lo}, {hi})"
             )
         vmin, vmax = layout.quantile_limits(z, lo, hi)  # filters to > 0
         if vmin is None or vmax is None or vmax <= 0:

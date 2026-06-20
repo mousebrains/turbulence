@@ -122,7 +122,13 @@ def process_l2_chi(
     gradt = np.empty_like(temp_fast)
     for ci in range(n_temp):
         dTdt = np.diff(temp_fast[ci]) * fs
-        dTdt = np.append(dTdt, dTdt[-1])
+        # A length-1 (or empty) temperature row has no finite-difference
+        # gradient; emit zeros so dTdt[-1] doesn't IndexError on the empty diff.
+        dTdt = (
+            np.append(dTdt, dTdt[-1])
+            if dTdt.size
+            else np.zeros(temp_fast[ci].shape[0])
+        )
         gradt[ci] = dTdt / spd_safe
 
     # Temperature for viscosity

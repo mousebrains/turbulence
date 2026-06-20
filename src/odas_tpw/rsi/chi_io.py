@@ -89,6 +89,12 @@ def _compute_chi(
     if vehicle is None:
         vehicle = data.get("vehicle", "")
 
+    # Resolve "auto" to a concrete up/down so it doesn't leak into
+    # L1Data.profile_dir (prepare_profiles resolves internally but doesn't
+    # return it). Mirrors adapter.py / _compute_epsilon.
+    from odas_tpw.rsi.vehicle import resolve_direction
+
+    direction = resolve_direction(direction, vehicle)
     prepared = prepare_profiles(data, speed, direction, salinity, vehicle=vehicle)
     if prepared is None:
         return []

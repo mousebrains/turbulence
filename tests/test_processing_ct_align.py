@@ -69,3 +69,32 @@ class TestCTAlign:
         C_aligned, lag = ct_align(T, C, fs, profiles)
         np.testing.assert_array_equal(C_aligned, C)
         assert lag == 0.0
+
+    def test_flatlined_channel_does_not_return_max_lag(self):
+        """A constant (flatlined) C channel carries no alignment info; it must
+        not yield the maximally-wrong -max_lag_seconds (audit #42)."""
+        fs = 64.0
+        n = 2000
+        t = np.arange(n) / fs
+        T = np.sin(2 * np.pi * 0.5 * t) + 10.0
+        C = np.full(n, 5.0)  # flatlined conductivity
+        profiles = [(100, 1900)]
+        max_lag_seconds = 0.5
+        C_aligned, lag = ct_align(T, C, fs, profiles, max_lag_seconds=max_lag_seconds)
+        # The buggy path returned lag == -max_lag_seconds; the fix skips the
+        # degenerate profile, so no usable correlation -> no shift.
+        assert lag == 0.0
+        np.testing.assert_array_equal(C_aligned, C)
+
+    def test_weighted_median_multi_profile_consensus(self):
+        """The rewritten weighted median (searchsorted to half-weight, #41)
+        returns the consensus lag when multiple profiles agree."""
+        fs = 64.0
+        n = 3000
+        t = np.arange(n) / fs
+        base = np.sin(2 * np.pi * 0.3 * t) + 0.5 * np.sin(2 * np.pi * 1.1 * t)
+        T = base
+        C = np.roll(base, 5)  # both profiles share a 5-sample shift
+        profiles = [(100, 1400), (1500, 2900)]
+        _C_aligned, lag = ct_align(T, C, fs, profiles)
+        assert abs(lag) == 5.0 / fs  # consensus magnitude, sign per convention

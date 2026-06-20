@@ -76,6 +76,25 @@ def _write_ctd_combo(root: Path, n_cast: int = 4, per: int = 60) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_time_subset_handles_numeric_time_axis():
+    """A combo whose time is numeric epoch seconds (no CF units decoded) must
+    subset cleanly, not raise a cryptic UFuncTypeError (#66)."""
+    import xarray as xr
+
+    # epoch seconds for 2025-01-20T00:00:00 .. +9 s
+    t0 = int(np.datetime64("2025-01-20T00:00:00", "s").astype("int64"))
+    t = np.arange(t0, t0 + 10, dtype=np.float64)
+    ds = xr.Dataset({"depth": (("time",), np.arange(10.0))},
+                    coords={"time": ("time", t)})
+    sec = scalar.Section(
+        name="w", method="time",
+        start=np.datetime64("2025-01-20T00:00:03"),
+        stop=np.datetime64("2025-01-20T00:00:06"),
+    )
+    sub = scalar._time_subset(ds, sec)
+    assert sub.sizes["time"] == 4  # seconds 3,4,5,6 inclusive
+
+
 def test_parse_time_utc_and_offset_rejection():
     assert scalar._parse_time(None) is None
     assert scalar._parse_time("2025-01-20T00:00:00Z") == np.datetime64("2025-01-20T00:00:00")

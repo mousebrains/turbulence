@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from odas_tpw.perturb.binning import _bin_indices
 from odas_tpw.perturb.gps import GPSProvider
 from odas_tpw.perturb.seawater import add_seawater_properties
 
@@ -66,23 +67,27 @@ def _time_bin(
             bin_edges = np.array([t_min, t_min + bin_width])
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
     n_bins = len(bin_centers)
-    bin_idx = np.digitize(t, bin_edges) - 1  # 0-based
-    bin_idx = np.clip(bin_idx, 0, n_bins - 1)
+    # Shared binner with an in-range mask: NaN / out-of-range times are EXCLUDED
+    # rather than folded into the first/last bin (the np.clip this replaced
+    # silently polluted the edge bins; mirrors the depth engine, binning.py).
+    bin_idx, in_range = _bin_indices(t, bin_edges)
 
     result = {"bin_centers": bin_centers}
 
     if diagnostics:
-        result["n_samples"] = np.bincount(bin_idx, minlength=n_bins).astype(int)
+        result["n_samples"] = np.bincount(bin_idx[in_range], minlength=n_bins).astype(int)
 
     if method == "median":
         # Sort once by bin index; each bin is then a contiguous slice. Avoids
         # the O(n_bins * n_samples) mask broadcasts of a naive ``bin_idx == i``
-        # loop while still allowing per-bin nanmedian.
-        order = np.argsort(bin_idx, kind="stable")
-        sorted_idx = bin_idx[order]
+        # loop while still allowing per-bin nanmedian. Restrict to in-range
+        # samples first so out-of-range times never enter a bin.
+        idx_ir = bin_idx[in_range]
+        order = np.argsort(idx_ir, kind="stable")
+        sorted_idx = idx_ir[order]
         splits = np.searchsorted(sorted_idx, np.arange(n_bins + 1))
         for name, arr in data.items():
-            sorted_arr = arr[order]
+            sorted_arr = arr[in_range][order]
             binned = np.full(n_bins, np.nan)
             for i in range(n_bins):
                 sl = sorted_arr[splits[i] : splits[i + 1]]
@@ -103,7 +108,7 @@ def _time_bin(
 
     # Mean path — one O(N) bincount per channel, no per-bin Python loop.
     for name, arr in data.items():
-        finite = np.isfinite(arr)
+        finite = np.isfinite(arr) & in_range
         idx_f = bin_idx[finite]
         arr_f = arr[finite]
         counts = np.bincount(idx_f, minlength=n_bins)

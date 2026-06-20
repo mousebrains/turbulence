@@ -2,7 +2,6 @@
 """Unit tests for profile detection from pressure time series."""
 
 import numpy as np
-import pytest
 
 from odas_tpw.scor160.profile import get_profiles, smooth_fall_rate
 
@@ -81,12 +80,19 @@ class TestSmoothFallRateTau:
 class TestSmoothFallRateEdge:
     """Edge cases."""
 
-    def test_very_short_array_raises(self):
-        """Array shorter than filtfilt padlen should raise ValueError."""
+    def test_very_short_array_returns_unfiltered(self):
+        """Array shorter than filtfilt's padlen (6) is no-op smoothed, not
+        crashed (#47): return the unfiltered gradient of the right length."""
         fs = 64.0
-        P = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
-        with pytest.raises(ValueError, match="padlen"):
-            smooth_fall_rate(P, fs)
+        P = np.array([0.0, 1.0, 2.0, 3.0, 4.0])  # len 5 <= padlen 6
+        W = smooth_fall_rate(P, fs)
+        assert W.shape == P.shape
+        assert np.all(np.isfinite(W))
+
+    def test_single_sample_returns_zero(self):
+        """A single pressure sample has no fall rate; return zeros, not crash."""
+        W = smooth_fall_rate(np.array([3.0]), 64.0)
+        np.testing.assert_array_equal(W, [0.0])
 
 
 # ---------------------------------------------------------------------------

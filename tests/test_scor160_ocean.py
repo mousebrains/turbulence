@@ -40,6 +40,14 @@ class TestVisc35:
         nu = visc35(T)
         assert nu.shape == (3,)
 
+    def test_high_temperature_stays_positive(self):
+        """The cubic fit goes negative above ~64.5 C; a spurious-hot sample
+        must not yield a negative viscosity (which crashes nasmyth) (#39)."""
+        assert float(visc35(70.0)) > 0.0
+        assert float(visc35(100.0)) > 0.0
+        # Valid-range values are untouched by the floor.
+        assert float(visc35(10.0)) == pytest.approx(1.35e-6, rel=0.05)
+
 
 class TestVisc:
     """Tests for visc(T, S, P) — general kinematic viscosity."""

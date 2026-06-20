@@ -121,6 +121,12 @@ def _compute_epsilon(
     if vehicle is None:
         vehicle = data.get("vehicle", "")
 
+    # Resolve "auto" to a concrete up/down here (matching adapter.py): otherwise
+    # the raw "auto" leaks into L1Data.profile_dir, since prepare_profiles
+    # resolves direction internally but does not return it.
+    from odas_tpw.rsi.vehicle import resolve_direction
+
+    direction = resolve_direction(direction, vehicle)
     prepared = prepare_profiles(data, speed, direction, salinity, vehicle=vehicle)
     if prepared is None:
         return []

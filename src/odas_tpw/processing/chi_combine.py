@@ -144,23 +144,32 @@ def mk_chi_mean(
             "CI-based probe removal disabled — all probes enter chiMean",
             stacklevel=2,
         )
-    for _ in range(n_probes - 1):
-        with np.errstate(invalid="ignore"):
-            min_c = np.nanmin(chi, axis=1)
-            max_c = np.nanmax(chi, axis=1)
-            ratio = np.abs(np.log(max_c) - np.log(min_c))
+    # Drop the probe FURTHEST from the cross-probe ln-mean on each outside row
+    # (symmetric outlier rejection), and only with >= 3 probes where an outlier
+    # is identifiable -- mirrors the epsilon side. The old code always dropped
+    # the maximum, so a low junk probe survived and biased chiMean low; with 2
+    # probes it now keeps both (unbiased) rather than coin-flipping a drop.
+    if n_probes >= 3:
+        for _ in range(n_probes - 1):
+            with np.errstate(invalid="ignore", divide="ignore"):
+                ln_c = np.log(chi)
+                min_c = np.nanmin(chi, axis=1)
+                max_c = np.nanmax(chi, axis=1)
+                ratio = np.abs(np.log(max_c) - np.log(min_c))
 
-        # Skip rows that are already all-NaN -- ``nanargmax`` raises on them.
-        any_finite = np.any(np.isfinite(chi), axis=1)
-        outside = (ratio > CF95_range) & any_finite
-        if not np.any(outside):
-            break
+            # Skip rows that are already all-NaN -- ``nanargmax`` raises on them.
+            any_finite = np.any(np.isfinite(chi), axis=1)
+            outside = (ratio > CF95_range) & any_finite
+            if not np.any(outside):
+                break
 
-        max_idx = np.full(chi.shape[0], -1, dtype=np.int64)
-        if np.any(any_finite):
-            max_idx[any_finite] = np.nanargmax(chi[any_finite], axis=1)
-        for i in np.where(outside)[0]:
-            chi[i, max_idx[i]] = np.nan
+            with np.errstate(invalid="ignore"):
+                ln_mean = np.nanmean(ln_c, axis=1, keepdims=True)
+                dev = np.abs(ln_c - ln_mean)
+            worst_idx = np.full(chi.shape[0], -1, dtype=np.int64)
+            worst_idx[any_finite] = np.nanargmax(dev[any_finite], axis=1)
+            for i in np.where(outside)[0]:
+                chi[i, worst_idx[i]] = np.nan
 
     with np.errstate(invalid="ignore"):
         chi_mean = np.exp(np.nanmean(np.log(chi), axis=1))

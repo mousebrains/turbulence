@@ -324,17 +324,20 @@ class TestGoodmanEdgeCases:
         np.testing.assert_array_equal(np.real(UU), np.zeros_like(np.real(UU)))
 
     def test_singular_matrix(self):
-        """Singular AA matrix (duplicate accel columns) doesn't crash."""
+        """Singular AA (duplicate accel columns) doesn't crash, and the
+        uncleanable bins are NaN'd rather than passed through as the raw
+        uncleaned spectrum (audit #83)."""
         nfft = 256
         rate = 512.0
         n = 2048
         rng = np.random.default_rng(42)
         shear = rng.standard_normal((n, 1))
         a1 = rng.standard_normal((n, 1))
-        # Make accel columns identical to create singular AA
+        # Make accel columns identical to create singular AA at every frequency.
         accel = np.hstack([a1, a1, a1])
 
         clean_UU, _AA, _UU, _UA, _F = clean_shear_spec(accel, shear, nfft, rate)
 
+        # No crash, right shape; every bin is uncleanable -> NaN (not raw UU).
         assert clean_UU.shape[0] == nfft // 2 + 1
-        assert np.all(np.isfinite(clean_UU))
+        assert np.all(np.isnan(clean_UU))

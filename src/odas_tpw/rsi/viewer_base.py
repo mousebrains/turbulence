@@ -439,9 +439,13 @@ class ProfileViewer:
         if not self.profiles:
             raise ValueError("No profiles detected in this file")
 
-        # Interpolate slow -> fast
+        # Interpolate slow -> fast. Clamp speed to the 0.05 m/s cutout (matching
+        # the pipeline's speed_min) before the shear/speed**2 division below, so
+        # a near-zero fall rate at a profile turnaround can't blow up the shear.
         self.P_fast = np.interp(self.t_fast, self.t_slow, self.P)
-        self.speed_fast = np.abs(np.interp(self.t_fast, self.t_slow, W))
+        self.speed_fast = np.maximum(
+            np.abs(np.interp(self.t_fast, self.t_slow, W)), 0.05
+        )
         self.ratio = round(self.fs_fast / self.fs_slow)
 
         # Convert shear from piezo output to du/dz by dividing by speed²

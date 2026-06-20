@@ -54,6 +54,29 @@ class TestBinArray:
 
 
 class TestBinByDepth:
+    def test_lnsigma_quadrature_holds_under_median(self, tmp_path):
+        """*LnSigma vars combine as RMS = sqrt(mean(sigma^2)) regardless of the
+        dataset aggregation. Under median binning the old code computed
+        sqrt(median(sigma^2)) and silently mis-stated the uncertainty (#81)."""
+        n = 3
+        # All three samples land in one wide depth bin.
+        depth = np.array([1.0, 2.0, 3.0])
+        sig = np.array([0.2, 0.4, 3.0])
+        ds = xr.Dataset(
+            {
+                "epsilonLnSigma": (["time_slow"], sig),
+                "depth": (["time_slow"], depth),
+            },
+            coords={"time_slow": np.arange(n, dtype=float)},
+        )
+        ds.to_netcdf(tmp_path / "prof00.nc")
+        files = sorted(tmp_path.glob("*.nc"))
+        result = bin_by_depth(files, bin_width=100.0, aggregation="median")
+        val = float(np.asarray(result["epsilonLnSigma"].values).ravel()[0])
+        rms = float(np.sqrt(np.mean(sig**2)))      # 1.751
+        assert abs(val - rms) < 1e-9
+        assert abs(val - float(np.median(sig))) > 1.0  # not the median (0.4)
+
     def test_two_profiles(self, tmp_path):
         # Create two synthetic profile NetCDFs
         for i in range(2):

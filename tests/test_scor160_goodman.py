@@ -4,7 +4,56 @@
 import numpy as np
 import pytest
 
-from odas_tpw.scor160.goodman import clean_shear_spec, clean_shear_spec_batch
+from odas_tpw.scor160.goodman import (
+    _sanitize_autospectra,
+    clean_shear_spec,
+    clean_shear_spec_batch,
+)
+
+
+class TestSanitizeAutospectra:
+    def test_floors_negative_and_nans_nonfinite(self):
+        """Diagonal: finite negatives floor to 0; non-finite (NaN from the
+        singular fallback, or inf from a solve that didn't raise) -> NaN;
+        positive diagonals and off-diagonal cross-spectra untouched (#84/#83)."""
+        # (n_freq=3, n_sh=2, n_sh=2)
+        m = np.array([
+            [[1.0, 5.0], [5.0, -2.0]],        # freq 0: [1,1]=-2 negative -> 0
+            [[np.nan, 7.0], [7.0, 4.0]],      # freq 1: [0,0]=NaN stays NaN
+            [[np.inf, 9.0], [9.0, 6.0]],      # freq 2: [0,0]=inf -> NaN (portable)
+        ])
+        out = _sanitize_autospectra(m.copy())
+        assert out[0, 1, 1] == 0.0
+        assert np.isnan(out[1, 0, 0])
+        assert np.isnan(out[2, 0, 0])         # inf -> NaN
+        assert out[0, 0, 0] == 1.0            # positive diagonal kept
+        assert out[2, 1, 1] == 6.0
+        assert out[0, 0, 1] == 5.0            # off-diagonal kept
+        assert out[2, 0, 1] == 9.0
+
+    def test_batched_shape_supported(self):
+        """Works on the batched (n_win, n_freq, n_sh, n_sh) shape too."""
+        m = np.ones((2, 3, 2, 2))
+        m[1, 2, 0, 0] = -1.0
+        out = _sanitize_autospectra(m.copy())
+        assert out[1, 2, 0, 0] == 0.0
+        assert (out[0] == 1.0).all()
+
+
+class TestNanSingularBins:
+    def test_singular_aa_bins_nan_regardless_of_solver(self):
+        """A bin whose AA is exactly singular (cond == inf) is NaN'd via the
+        condition number, independent of whether np.linalg.solve raised (the
+        portability fix for the macOS/py3.14 LAPACK build, #83)."""
+        from odas_tpw.scor160.goodman import _nan_singular_bins
+
+        clean = np.ones((3, 1, 1))                 # 3 freq bins, n_sh=1
+        AA = np.tile(np.eye(2)[None], (3, 1, 1))   # well-conditioned default
+        AA[1] = np.array([[1.0, 1.0], [1.0, 1.0]])  # rank-1 -> singular
+        out = _nan_singular_bins(clean.copy(), AA)
+        assert np.isnan(out[1, 0, 0])              # singular bin NaN'd
+        assert out[0, 0, 0] == 1.0                 # well-conditioned bins kept
+        assert out[2, 0, 0] == 1.0
 
 
 def _make_signals(n, fs, n_shear=2, n_accel=2, noise_amp=0.1, vib_amp=1.0, rng=None):
@@ -60,9 +109,11 @@ class TestCleanShearSpec:
         accel, shear = _make_signals(n, fs, vib_amp=2.0)
         clean_UU, _, UU, _, _F = clean_shear_spec(accel, shear, nfft, fs)
 
-        # Compare auto-spectral diagonals
+        # Compare auto-spectral diagonals. nansum: a singular-AA frequency bin
+        # is now NaN'd (uncleanable) rather than left as the raw uncleaned UU
+        # (#83), so exclude it from the power comparison.
         for i in range(shear.shape[1]):
-            clean_power = np.sum(clean_UU[:, i, i])
+            clean_power = np.nansum(clean_UU[:, i, i])
             uncleaned_power = np.sum(np.real(UU[:, i, i]))
             assert clean_power < uncleaned_power
 
@@ -174,6 +225,7 @@ class TestCleanShearSpecBatch:
         raw_Cxy, _, _, _ = csd_matrix_batch(shear_win, None, nfft, fs)
         for w in range(n_win):
             for i in range(n_sh):
-                clean_power = np.sum(clean_UU[w, :, i, i])
+                # nansum: singular-AA bins are NaN'd (uncleanable), not raw UU (#83).
+                clean_power = np.nansum(clean_UU[w, :, i, i])
                 raw_power = np.sum(np.real(raw_Cxy[w, :, i, i]))
                 assert clean_power < raw_power

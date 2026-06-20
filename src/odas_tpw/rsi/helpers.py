@@ -317,6 +317,16 @@ def prepare_profiles(
             speed_min=speed_cutout,
         )
 
+    # Floor (and NaN-scrub) speed once at this choke point so every consumer
+    # gets a clean, positive speed: shear normalization (shear /= speed**2) and
+    # the chi wavenumber / fp07 axis both blow up on a zero/NaN speed. The
+    # fixed-speed and precomputed branches are otherwise unfloored;
+    # compute_speed_fast already floors, so this is a no-op there.
+    speed_fast = np.maximum(
+        np.nan_to_num(np.asarray(speed_fast, dtype=np.float64), nan=speed_cutout),
+        speed_cutout,
+    )
+
     P_fast = np.interp(t_fast, t_slow, P_slow)
     T_fast = np.interp(t_fast, t_slow, T_slow)
 
@@ -383,7 +393,10 @@ def _build_l1data_from_channels(
     fs_fast = data["fs_fast"]
     n = e_fast - s_fast
 
-    speed_prof = speed_fast[s_fast:e_fast]
+    # Defensive floor (0.05 m/s cutout): callers normally pass a speed already
+    # floored by prepare_profiles, but a zero/tiny speed here would blow up the
+    # shear/speed**2 normalization. Matches adapter.pfile_to_l1data and speed.py.
+    speed_prof = np.maximum(speed_fast[s_fast:e_fast], 0.05)
 
     # Shear: normalize by speed^2
     if shear_arrays:

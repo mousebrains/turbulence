@@ -46,10 +46,13 @@ def _write_diss_combo(root: Path, n_bin: int = 5, n_prof: int = 3) -> None:
 
 
 def _write_chi_combo(root: Path, with_chi_mean: bool, n_bin: int = 5,
-                     n_prof: int = 3) -> None:
+                     n_prof: int = 3, bin_centers: np.ndarray | None = None) -> None:
     import xarray as xr
 
-    bin_centers = np.arange(n_bin, dtype=float) + 1.0
+    if bin_centers is None:
+        bin_centers = np.arange(n_bin, dtype=float) + 1.0
+    else:
+        n_bin = len(bin_centers)
     profile = np.arange(n_prof)
     stime = np.array(["2026-03-25T00:00:00",
                       "2026-03-25T00:10:00",
@@ -153,6 +156,39 @@ class TestEpsChiCLI:
         rc = cli.main(["eps-chi", "--root", str(tmp_path)])
         assert rc == 0
         assert (tmp_path / "eps_chi_pcolor.png").exists()
+
+    def test_chi_combo_different_bin_grid_reindexes(self, tmp_path):
+        """chi binned on a different depth grid than eps must be re-binned onto
+        the eps grid, not broadcast element-wise (was a ValueError crash when
+        the bin counts differed, silent depth-shift when they matched)."""
+        _write_diss_combo(tmp_path, n_bin=5)  # eps centers 1..5
+        _write_diss_per_profile(tmp_path)
+        # chi on a finer grid with offset centers AND a different bin count.
+        _write_chi_combo(tmp_path, with_chi_mean=True,
+                         bin_centers=np.array([1.5, 2.5, 3.5, 4.5, 5.5, 6.5]))
+        _write_chi_per_profile(tmp_path)
+
+        out_png = tmp_path / "fig.png"
+        rc = cli.main(["eps-chi", "--root", str(tmp_path), "--out", str(out_png)])
+        assert rc == 0
+        assert out_png.exists() and out_png.stat().st_size > 0
+
+    def test_reindex_rows_to_depth_aligns_grids(self):
+        from odas_tpw.perturb.plot import eps_chi
+
+        # src centers offset by +1 from dst; reindex should shift rows down one
+        # eps bin (value at src 1.5 lands in dst bin centered at 2.0).
+        src_depth = np.array([1.5, 2.5, 3.5])
+        dst_depth = np.array([1.0, 2.0, 3.0])
+        arr = np.array([[10.0], [20.0], [30.0]])
+        out = eps_chi._reindex_rows_to_depth(arr, src_depth, dst_depth)
+        # dst edges are [0.5,1.5,2.5,3.5] -> src 1.5->bin1, 2.5->bin2, 3.5->out
+        assert np.isnan(out[0, 0])
+        assert out[1, 0] == 10.0
+        assert out[2, 0] == 20.0
+        # identical grids are a no-op (common matched case)
+        same = eps_chi._reindex_rows_to_depth(arr, dst_depth, dst_depth)
+        assert same is arr
 
     def test_missing_diss_combo_errors(self, tmp_path):
         with pytest.raises(SystemExit):

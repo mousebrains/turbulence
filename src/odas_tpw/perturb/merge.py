@@ -53,8 +53,23 @@ def _read_merge_info(path: Path) -> dict:
 
 
 def _file_group_key(info: dict) -> tuple:
-    """Key for grouping files that could potentially be merged."""
-    return (info["config_hash"], info["endian"], info["record_size"])
+    """Key for grouping files that could potentially be merged.
+
+    header_size and config_size are part of the key, not just record_size:
+    the merged file is reparsed with the FIRST file's geometry (PFile._read
+    slices every record as header_size//2 header words + data words), but the
+    splice skips each continuation file's own header_size + config_size. If a
+    chained file's header_size differed, its records would be silently
+    mis-sliced. Keying on the full geometry keeps geometry-mismatched files in
+    separate groups so they never chain.
+    """
+    return (
+        info["config_hash"],
+        info["endian"],
+        info["record_size"],
+        info["header_size"],
+        info["config_size"],
+    )
 
 
 def find_mergeable_files(p_files: list[Path]) -> list[list[Path]]:

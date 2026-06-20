@@ -88,6 +88,52 @@ def _load_chi_legacy_per_profile(chi_dir: str, depth: np.ndarray):
     return times[order], chi[:, order], sample_attrs, None
 
 
+def _reindex_rows_to_depth(
+    arr: np.ndarray,
+    src_depth: np.ndarray,
+    dst_depth: np.ndarray,
+    *,
+    reduce: str = "mean",
+) -> np.ndarray:
+    """Re-bin a ``(bin, profile)`` array from *src_depth* rows onto *dst_depth*.
+
+    The chi-combo carries its own ``bin`` (pressure) grid, built independently
+    of the diss-combo grid: chi and diss profiles are top-trimmed / calibration-
+    rejected differently, so even at identical bin width their centers routinely
+    differ (and the widths are separately configurable). Plotting chi on eps's
+    y-axis without this step silently misregisters chi in depth (and divides
+    chi at one depth by eps at another in gamma). Mirrors the legacy per-profile
+    path's ``depth_edges`` + ``digitize`` re-binning.
+
+    ``reduce='mean'`` linearly averages source rows that fall in the same eps
+    bin (consistent with the legacy path); ``reduce='max'`` ORs a drop bitfield
+    so a flagged source bin flags its destination.
+    """
+    src_depth = np.asarray(src_depth, dtype=float)
+    dst_depth = np.asarray(dst_depth, dtype=float)
+    if src_depth.shape == dst_depth.shape and np.allclose(
+        src_depth, dst_depth, atol=1e-6
+    ):
+        return arr  # already bin-for-bin aligned (the common matched-grid case)
+    edges = layout.depth_edges(dst_depth)
+    idx = np.digitize(src_depth, edges) - 1
+    nprof = arr.shape[1]
+    acc = np.zeros((dst_depth.size, nprof))
+    cnt = np.zeros((dst_depth.size, nprof))
+    for src, dst in enumerate(idx.tolist()):
+        if 0 <= dst < dst_depth.size:
+            row = arr[src]
+            ok = np.isfinite(row)
+            if reduce == "max":
+                acc[dst, ok] = np.maximum(acc[dst, ok], row[ok])
+                cnt[dst, ok] += 1
+            else:
+                acc[dst, ok] += row[ok]
+                cnt[dst, ok] += 1
+    with np.errstate(invalid="ignore"):
+        return np.where(cnt > 0, acc if reduce == "max" else acc / cnt, np.nan)
+
+
 def _per_profile_attrs(root: str, sibling_prefix: str) -> dict:
     """Pick attrs from any per-profile NetCDF in ``<root>/<sibling_prefix>_NN/``."""
     sib_dirs = sorted(glob.glob(os.path.join(root, f"{sibling_prefix}_[0-9][0-9]")))
@@ -214,9 +260,18 @@ def run(args: argparse.Namespace) -> str:
         with xr.open_dataset(chi_combo_path) as peek:
             has_chi_mean = "chiMean" in peek.data_vars
         if has_chi_mean and chi_dir is not None:
-            t_chi, _depth_chi, chi, chi_attrs, chi_qc = _load_chi_from_combo(
+            t_chi, depth_chi, chi, chi_attrs, chi_qc = _load_chi_from_combo(
                 chi_combo_path, chi_dir
             )
+            # Re-bin chi onto eps's depth grid before any profile-axis work:
+            # the chi-combo's bin centers are built independently and need not
+            # match eps's, so plotting chi on `depth` without this would shift
+            # it in depth (silent) or crash gamma=chi/eps on unequal bin counts.
+            chi = _reindex_rows_to_depth(chi, depth_chi, depth)
+            if chi_qc is not None:
+                chi_qc = _reindex_rows_to_depth(
+                    chi_qc, depth_chi, depth, reduce="max"
+                )
         elif chi_dir is not None:
             t_chi, chi, chi_attrs, chi_qc = _load_chi_legacy_per_profile(
                 chi_dir, depth

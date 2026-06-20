@@ -11,6 +11,7 @@ from __future__ import annotations
 import glob as globmod
 import hashlib
 import json
+import math
 from pathlib import Path
 
 from ruamel.yaml import YAML
@@ -26,6 +27,11 @@ def _normalize_value(v):
     if isinstance(v, int):
         return v
     if isinstance(v, float):
+        # int(nan) raises ValueError and int(inf) raises OverflowError, which
+        # would crash canonicalize -> compute_hash -> resolve_output_dir with an
+        # opaque message. Hash non-finite values by their repr instead.
+        if not math.isfinite(v):
+            return repr(v)
         if v == int(v):
             return int(v)
         return round(v, 10)

@@ -6,12 +6,61 @@ Removes vibration-coherent noise from shear spectra using
 accelerometer cross-spectra.
 """
 
-import contextlib
 from typing import NamedTuple
 
 import numpy as np
 
 from odas_tpw.scor160.spectral import csd_matrix, csd_matrix_batch
+
+
+def _sanitize_autospectra(clean_UU: np.ndarray) -> np.ndarray:
+    """Sanitize cleaned auto-spectrum (diagonal) bins.
+
+    Two corrections, both on the diagonal auto-spectra:
+
+    * Non-finite -> NaN. A singular accelerometer matrix AA cannot be cleaned.
+      np.linalg.solve raises LinAlgError on some LAPACK builds (handled by the
+      per-frequency fallback, which NaNs the bin) but on others returns inf/NaN
+      WITHOUT raising -- so the cleaned bin is inf/NaN here instead. Map any
+      non-finite bin to NaN so l4's bad-bin handling excludes it *portably*,
+      rather than the result depending on whether solve happened to raise.
+    * Finite negative -> 0. An ill-conditioned (not exactly singular) AA can
+      over-subtract and drive a cleaned auto-spectrum slightly negative, which
+      is physically impossible (a PSD cannot be < 0). Floor to 0 (matching the
+      variance-method polyfit's zero-bin handling) so the epsilon integral / FOM
+      see consistent non-negative power.
+
+    Operates on the last two (n_sh, n_sh) axes, so it works for both the single
+    (n_freq, ...) and batched (n_win, n_freq, ...) shapes.
+    """
+    n_sh = clean_UU.shape[-1]
+    for i in range(n_sh):
+        diag_i = clean_UU[..., i, i]
+        clean_UU[..., i, i] = np.where(
+            ~np.isfinite(diag_i), np.nan, np.where(diag_i < 0, 0.0, diag_i)
+        )
+    return clean_UU
+
+
+def _nan_singular_bins(clean_UU: np.ndarray, AA: np.ndarray) -> np.ndarray:
+    """NaN whole frequency bins whose accelerometer matrix AA is singular.
+
+    ``np.linalg.solve``'s output for a singular AA is platform-dependent -- it
+    raises ``LinAlgError`` on some LAPACK builds (handled by the per-frequency
+    fallback) but returns inf/NaN or even finite garbage on others. Detect the
+    singular bins portably via the condition number (cond == inf or astronomical
+    for an exactly rank-deficient AA, e.g. duplicate/collinear accelerometer
+    channels) and NaN those bins so the result does not depend on the solver's
+    behavior. Merely ill-conditioned bins (cond <= 1e13) are left to
+    :func:`_sanitize_autospectra`'s floor. clean_UU: (..., n_sh, n_sh); AA:
+    (..., n_ac, n_ac) with matching leading dims.
+    """
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cond = np.linalg.cond(AA)
+    bad = ~np.isfinite(cond) | (cond > 1.0e13)
+    if np.any(bad):
+        clean_UU[bad] = np.nan
+    return clean_UU
 
 
 class CleanShearResult(NamedTuple):
@@ -130,13 +179,19 @@ def clean_shear_spec(
         solved = np.linalg.solve(AA, ua_H)  # (n_freq, n_ac, n_sh)
         clean_UU = UU - np.matmul(UA, solved)  # (n_freq, n_sh, n_sh)
     except np.linalg.LinAlgError:
-        # Fallback: per-frequency with singular handling
+        # Fallback: per-frequency with singular handling. A singular AA[f]
+        # cannot be cleaned; NaN that bin so downstream treats it as bad rather
+        # than passing the UNCLEANED raw UU through (and then bias-correcting it
+        # as if it had been cleaned).
         clean_UU = np.copy(UU)
         for f in range(n_freq):
-            with contextlib.suppress(np.linalg.LinAlgError):
+            try:
                 clean_UU[f] = UU[f] - UA[f] @ np.linalg.solve(AA[f], np.conj(UA[f]).T)
+            except np.linalg.LinAlgError:
+                clean_UU[f] = np.nan
 
-    clean_UU = np.real(clean_UU)
+    clean_UU = _sanitize_autospectra(np.real(clean_UU))
+    clean_UU = _nan_singular_bins(clean_UU, AA)
 
     # Bias correction (ODAS Technical Note 61, Eq. 3)
     clean_UU *= _bias_correction(shear.shape[0], nfft, n_accel)
@@ -193,12 +248,16 @@ def clean_shear_spec_batch(
         n_win, n_freq = UU.shape[:2]
         for w in range(n_win):
             for fi in range(n_freq):
-                with contextlib.suppress(np.linalg.LinAlgError):
+                try:
                     clean_UU[w, fi] = UU[w, fi] - UA[w, fi] @ np.linalg.solve(
                         AA[w, fi], np.conj(UA[w, fi]).T
                     )
+                except np.linalg.LinAlgError:
+                    # Singular AA: NaN the bin rather than keep the raw UU.
+                    clean_UU[w, fi] = np.nan
 
-    clean_UU = np.real(clean_UU)
+    clean_UU = _sanitize_autospectra(np.real(clean_UU))
+    clean_UU = _nan_singular_bins(clean_UU, AA)
 
     # Bias correction
     clean_UU *= _bias_correction(shear_windows.shape[1], nfft, n_accel)

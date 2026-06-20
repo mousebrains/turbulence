@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["oceanography", "turbulence", "microprofiler", "rockland"]
 dependencies = [
-    "numpy>=1.26,<3",
+    "numpy>=2.0,<3",  # np.trapezoid (used across chi/epsilon L4) is NumPy 2.0+
     "netCDF4>=1.6,<2",
     "scipy>=1.12,<2",
     "xarray>=2024.1",

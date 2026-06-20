@@ -135,6 +135,22 @@ def _normalize_channels_cfg(
     return True, out
 
 
+def _nc_array(var) -> np.ndarray:
+    """Read a netCDF4 variable, mapping masked/_FillValue cells to NaN.
+
+    netCDF4 auto-masks by default; reaching for ``.data`` would expose the raw
+    _FillValue (e.g. -999, 1e20) as a real measurement. Hotel telemetry stores
+    gaps as fill values, so a -999 speed/pitch/CTD would be interpolated onto
+    the instrument axis and corrupt the dissipation/chi estimates silently.
+    """
+    arr = var[:]
+    if np.ma.isMaskedArray(arr):
+        # Cast to float before filling: filling an integer-dtype masked array
+        # with NaN raises (NaN cannot be cast to int).
+        return np.asarray(np.ma.filled(arr.astype(np.float64), np.nan))
+    return np.asarray(arr)
+
+
 def _parse_time(raw_time: np.ndarray, time_format: str) -> tuple[np.ndarray, bool]:
     """Convert raw time values to epoch seconds.
 
@@ -150,21 +166,32 @@ def _parse_time(raw_time: np.ndarray, time_format: str) -> tuple[np.ndarray, boo
         t = pd.to_datetime(raw_time).values.astype("datetime64[ns]").astype(np.int64) / 1e9
         return t, False
     elif time_format == "auto":
+        if not np.issubdtype(raw_time.dtype, np.number):
+            # Non-numeric (ISO strings / datetime64 / object) -> parse as dates.
+            # Feeding these to ``.astype(float64)`` below would raise, so the
+            # old code never actually reached its ISO fallback for string input.
+            import pandas as pd
+
+            t = pd.to_datetime(raw_time).values.astype("datetime64[ns]").astype(np.int64) / 1e9
+            return t, False
         vals = raw_time.astype(np.float64)
-        median = np.median(vals)
+        # nanmedian: a single NaN timestamp must not blank the whole test and
+        # push every file through the ambiguous branch.
+        median = np.nanmedian(vals)
         if median < 1e6:
             return vals, True
         elif median > 1e9:
             return vals, False
         else:
-            # Try ISO parse
-            import pandas as pd
-
-            try:
-                t = pd.to_datetime(raw_time).values.astype("datetime64[ns]").astype(np.int64) / 1e9
-                return t, False
-            except Exception:
-                return vals, True
+            # Ambiguous numeric magnitude: epoch seconds here mean 1970..2001,
+            # while relative seconds mean an 11.6-day..31.7-year span -- both
+            # plausible. pd.to_datetime would silently read bare numbers as
+            # nanoseconds-since-epoch (garbage), so refuse to guess.
+            raise ValueError(
+                f"hotel time_format='auto' cannot disambiguate numeric times "
+                f"with median {median:g} s (in [1e6, 1e9)). Set time_format "
+                f"explicitly to 'seconds' (relative) or 'epoch' (POSIX)."
+            )
     else:
         raise ValueError(f"Unknown time_format: {time_format!r}")
 
@@ -277,33 +304,33 @@ def _load_netcdf(
 ) -> HotelData:
     import netCDF4 as nc
 
-    ds = nc.Dataset(str(path), "r")
-    raw_time = ds.variables[time_column][:].data
-    time, is_relative = _parse_time(raw_time, time_format)
+    # Context manager closes the Dataset even if _parse_time or a variable read
+    # raises partway through (e.g. an ambiguous-time ValueError).
+    with nc.Dataset(str(path), "r") as ds:
+        raw_time = _nc_array(ds.variables[time_column])
+        time, is_relative = _parse_time(raw_time, time_format)
 
-    extra_time_cols = set(per_chan_time.values())
-    skip = {time_column} | extra_time_cols
-    data_vars = [v for v in ds.variables if v not in skip]
-    if allowed is not None:
-        data_vars = [v for v in data_vars if v in allowed]
-    ch: dict[str, np.ndarray] = {}
-    units: dict[str, str] = {}
-    for v in data_vars:
-        var = ds.variables[v]
-        ch[v] = var[:].data.astype(np.float64)
-        units[v] = getattr(var, "units", "") or ""
+        extra_time_cols = set(per_chan_time.values())
+        skip = {time_column} | extra_time_cols
+        data_vars = [v for v in ds.variables if v not in skip]
+        if allowed is not None:
+            data_vars = [v for v in data_vars if v in allowed]
+        ch: dict[str, np.ndarray] = {}
+        units: dict[str, str] = {}
+        for v in data_vars:
+            var = ds.variables[v]
+            ch[v] = _nc_array(var).astype(np.float64)
+            units[v] = getattr(var, "units", "") or ""
 
-    channel_times: dict[str, np.ndarray] = {}
-    for src, tc in per_chan_time.items():
-        if allowed is not None and src not in allowed:
-            continue
-        if tc not in ds.variables:
-            ds.close()
-            raise ValueError(f"hotel: time_column {tc!r} not found in {path}")
-        raw = ds.variables[tc][:].data
-        t_arr, _ = _parse_time(raw, time_format)
-        channel_times[src] = t_arr
-    ds.close()
+        channel_times: dict[str, np.ndarray] = {}
+        for src, tc in per_chan_time.items():
+            if allowed is not None and src not in allowed:
+                continue
+            if tc not in ds.variables:
+                raise ValueError(f"hotel: time_column {tc!r} not found in {path}")
+            raw = _nc_array(ds.variables[tc])
+            t_arr, _ = _parse_time(raw, time_format)
+            channel_times[src] = t_arr
 
     return HotelData(time=time, channels=ch, channel_times=channel_times,
                      units=units, time_is_relative=is_relative)

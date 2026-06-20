@@ -42,6 +42,15 @@ class TestCanonicalizeAndHash:
         h_float = config_mod.compute_hash("epsilon", {"fft_length": 256.0})
         assert h_int == h_float
 
+    def test_non_finite_float_hashes_without_crashing(self):
+        """A NaN/inf config value (e.g. gps.lat: .nan) must hash gracefully, not
+        crash canonicalize via int(nan)/int(inf) (#13). perturb-only section."""
+        h_nan = perturb_config.compute_hash("gps", {"lat": float("nan")})
+        h_inf = perturb_config.compute_hash("gps", {"lat": float("inf")})
+        assert isinstance(h_nan, str) and h_nan
+        assert isinstance(h_inf, str) and h_inf
+        assert h_nan != h_inf
+
     def test_canonical_json_is_compact_sorted(self, config_mod):
         c = config_mod.canonicalize("epsilon", {})
         parsed = json.loads(c)

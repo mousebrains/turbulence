@@ -16,6 +16,7 @@ boolean), so a bitwise OR across all named channels gives one uint8
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from typing import Any
 
@@ -81,8 +82,25 @@ def compute_segment_drop(
         if name not in pf.channels:
             continue
         arr = np.asarray(pf.channels[name])
-        # Uint8 cast covers bool/int sources; anything truthy contributes.
-        arr_u = arr.astype(np.uint8, copy=False)
+        # The lo/hi segment indices are positions on the slow grid, so a
+        # drop_from channel of any other length would be mis-sampled
+        # (wrong/partial time region). Skip-and-warn rather than silently
+        # under/over-flag.
+        if arr.shape[0] != t_slow.size:
+            warnings.warn(
+                f"qc gate: drop_from channel {name!r} has length "
+                f"{arr.shape[0]} != slow length {t_slow.size}; skipping",
+                stacklevel=2,
+            )
+            continue
+        if np.issubdtype(arr.dtype, np.floating):
+            # Float flag channels (e.g. interpolation-smeared hotel flags) lose
+            # sub-1 flags under a raw uint8 truncation and over-flag on
+            # inf/large values; treat any |sample| >= 0.5 as set.
+            arr_u = (np.abs(arr) >= 0.5).astype(np.uint8)
+        else:
+            # Integer/bool bitfields: preserve the bits for the OR-reduce.
+            arr_u = arr.astype(np.uint8, copy=False)
         for i in range(n_seg):
             a, b = lo[i], hi[i]
             if a >= b:

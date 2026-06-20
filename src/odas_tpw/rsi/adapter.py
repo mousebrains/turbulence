@@ -91,7 +91,11 @@ def pfile_to_l1data(
 
     # Profiling speed
     if speed is not None:
-        pspd_rel = np.full(len(t_fast), abs(speed))
+        # Floor at the shared speed cutout (0.05 m/s, = speed.py's default
+        # speed_cutout and its 'constant' method). Without it, shear /=
+        # pspd_rel**2 below yields inf/nan for --speed 0 and huge
+        # over-amplification for a tiny speed, baked into L1.shear.
+        pspd_rel = np.full(len(t_fast), max(abs(speed), 0.05))
     elif speed_method in ("em", "flight"):
         # EM flowmeter (U_EM) or inviscid flight model U=|W|/sin(|pitch|-aoa)
         # from the inclinometers, for MicroRiders/gliders where |dP/dt| is the
@@ -262,10 +266,12 @@ def nc_to_l1data(nc_path: str | Path) -> L1Data:
             if temp_arr.ndim == 2 and temp_arr.shape[1] == len(time):
                 temp_fast = temp_arr
 
-        # Temperature gradient (for slow-rate temp)
+        # Temperature gradient (for slow-rate temp). nanmean over probes so an
+        # all-NaN thermistor doesn't poison temp at every sample (mirrors the
+        # nanmean tolerance elsewhere in the chi/epsilon paths).
         temp = np.zeros_like(time)
         if temp_fast.size > 0:
-            temp = np.mean(temp_fast, axis=0) if temp_fast.ndim == 2 else temp_fast
+            temp = np.nanmean(temp_fast, axis=0) if temp_fast.ndim == 2 else temp_fast
 
         # Slow-rate arrays
         time_slow = np.array([])

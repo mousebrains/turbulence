@@ -27,22 +27,18 @@ class TestParseTimeAuto:
         assert is_rel is False
         assert t[1] > t[0]
 
-    def test_auto_intermediate_value_iso_fallback(self, monkeypatch):
-        """auto with median in [1e6, 1e9] → ISO parse path."""
-        # 5e8 falls between 1e6 and 1e9 → triggers the elif that tries pandas
+    def test_auto_intermediate_numeric_raises(self):
+        """auto with a numeric median in [1e6, 1e9) is genuinely ambiguous
+        (relative seconds vs epoch); it must raise rather than silently misread
+        bare numbers as nanoseconds-since-epoch (audit #7)."""
+        # 5e8 falls between 1e6 and 1e9.
         raw = np.array([5e8, 5e8 + 1, 5e8 + 2], dtype=np.float64)
+        with pytest.raises(ValueError, match="cannot disambiguate"):
+            _parse_time(raw, "auto")
 
-        # The intermediate code calls pd.to_datetime on a numeric array,
-        # which interprets it as nanoseconds since epoch by default.
-        t, is_rel = _parse_time(raw, "auto")
-        # Either the pandas parse succeeded (is_rel=False) or fell back (is_rel=True)
-        assert isinstance(is_rel, bool)
-        assert len(t) == 3
-
-    def test_auto_intermediate_with_pandas_failure(self, monkeypatch):
-        """auto with median in [1e6, 1e9] and pandas raises → fallback to relative."""
-        # Force the auto path to hit the exception branch.
-        # Wrap pd.to_datetime to raise.
+    def test_auto_numeric_never_calls_pandas(self, monkeypatch):
+        """The ambiguous numeric band must NOT feed pd.to_datetime (which would
+        reinterpret bare numbers as nanoseconds); it raises before any call."""
         import pandas as pd
 
         import odas_tpw.perturb.hotel as hotel_mod
@@ -51,18 +47,14 @@ class TestParseTimeAuto:
 
         def fake_to_datetime(*args, **kwargs):
             call_count["n"] += 1
-            raise ValueError("simulated parse failure")
+            raise AssertionError("pd.to_datetime must not be called for numeric auto")
 
         monkeypatch.setattr(pd, "to_datetime", fake_to_datetime)
 
-        # Reload reference inside hotel module if it had been bound at import time
-        # — _parse_time imports pd locally inside the function, so monkeypatch on
-        # pd module-level works.
         raw = np.array([5e8, 5e8 + 1, 5e8 + 2], dtype=np.float64)
-        t, is_rel = hotel_mod._parse_time(raw, "auto")
-        assert is_rel is True  # Falls back to relative seconds
-        np.testing.assert_allclose(t, raw)
-        assert call_count["n"] >= 1
+        with pytest.raises(ValueError, match="cannot disambiguate"):
+            hotel_mod._parse_time(raw, "auto")
+        assert call_count["n"] == 0
 
 
 # ---------------------------------------------------------------------------
