@@ -13,25 +13,53 @@ import numpy as np
 from odas_tpw.scor160.spectral import csd_matrix, csd_matrix_batch
 
 
-def _floor_negative_autospectra(clean_UU: np.ndarray) -> np.ndarray:
-    """Floor cleaned auto-spectrum (diagonal) bins that came out negative to 0.
+def _sanitize_autospectra(clean_UU: np.ndarray) -> np.ndarray:
+    """Sanitize cleaned auto-spectrum (diagonal) bins.
 
-    An ill-conditioned accelerometer matrix AA can over-subtract in
-    ``UU - UA inv(AA) UA^H`` and drive a cleaned auto-spectrum diagonal
-    slightly negative, which is physically impossible (a power spectral density
-    cannot be < 0). Floor those bins to 0 so the epsilon integral / FOM see a
-    consistent non-negative power (matching the variance-method polyfit's
-    zero-bin handling) rather than a negative value that artificially deflates
-    the integrated variance. NaN bins (a singular AA that could not be cleaned
-    at all) are left as NaN for l4's bad-bin handling. Operates on the last two
-    (n_sh, n_sh) axes, so it works for both the single (n_freq, ...) and batched
-    (n_win, n_freq, ...) shapes.
+    Two corrections, both on the diagonal auto-spectra:
+
+    * Non-finite -> NaN. A singular accelerometer matrix AA cannot be cleaned.
+      np.linalg.solve raises LinAlgError on some LAPACK builds (handled by the
+      per-frequency fallback, which NaNs the bin) but on others returns inf/NaN
+      WITHOUT raising -- so the cleaned bin is inf/NaN here instead. Map any
+      non-finite bin to NaN so l4's bad-bin handling excludes it *portably*,
+      rather than the result depending on whether solve happened to raise.
+    * Finite negative -> 0. An ill-conditioned (not exactly singular) AA can
+      over-subtract and drive a cleaned auto-spectrum slightly negative, which
+      is physically impossible (a PSD cannot be < 0). Floor to 0 (matching the
+      variance-method polyfit's zero-bin handling) so the epsilon integral / FOM
+      see consistent non-negative power.
+
+    Operates on the last two (n_sh, n_sh) axes, so it works for both the single
+    (n_freq, ...) and batched (n_win, n_freq, ...) shapes.
     """
     n_sh = clean_UU.shape[-1]
     for i in range(n_sh):
         diag_i = clean_UU[..., i, i]
-        # NaN stays NaN (diag_i < 0 is False for NaN); only finite negatives -> 0.
-        clean_UU[..., i, i] = np.where(diag_i < 0, 0.0, diag_i)
+        clean_UU[..., i, i] = np.where(
+            ~np.isfinite(diag_i), np.nan, np.where(diag_i < 0, 0.0, diag_i)
+        )
+    return clean_UU
+
+
+def _nan_singular_bins(clean_UU: np.ndarray, AA: np.ndarray) -> np.ndarray:
+    """NaN whole frequency bins whose accelerometer matrix AA is singular.
+
+    ``np.linalg.solve``'s output for a singular AA is platform-dependent -- it
+    raises ``LinAlgError`` on some LAPACK builds (handled by the per-frequency
+    fallback) but returns inf/NaN or even finite garbage on others. Detect the
+    singular bins portably via the condition number (cond == inf or astronomical
+    for an exactly rank-deficient AA, e.g. duplicate/collinear accelerometer
+    channels) and NaN those bins so the result does not depend on the solver's
+    behavior. Merely ill-conditioned bins (cond <= 1e13) are left to
+    :func:`_sanitize_autospectra`'s floor. clean_UU: (..., n_sh, n_sh); AA:
+    (..., n_ac, n_ac) with matching leading dims.
+    """
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cond = np.linalg.cond(AA)
+    bad = ~np.isfinite(cond) | (cond > 1.0e13)
+    if np.any(bad):
+        clean_UU[bad] = np.nan
     return clean_UU
 
 
@@ -162,7 +190,8 @@ def clean_shear_spec(
             except np.linalg.LinAlgError:
                 clean_UU[f] = np.nan
 
-    clean_UU = _floor_negative_autospectra(np.real(clean_UU))
+    clean_UU = _sanitize_autospectra(np.real(clean_UU))
+    clean_UU = _nan_singular_bins(clean_UU, AA)
 
     # Bias correction (ODAS Technical Note 61, Eq. 3)
     clean_UU *= _bias_correction(shear.shape[0], nfft, n_accel)
@@ -227,7 +256,8 @@ def clean_shear_spec_batch(
                     # Singular AA: NaN the bin rather than keep the raw UU.
                     clean_UU[w, fi] = np.nan
 
-    clean_UU = _floor_negative_autospectra(np.real(clean_UU))
+    clean_UU = _sanitize_autospectra(np.real(clean_UU))
+    clean_UU = _nan_singular_bins(clean_UU, AA)
 
     # Bias correction
     clean_UU *= _bias_correction(shear_windows.shape[1], nfft, n_accel)
