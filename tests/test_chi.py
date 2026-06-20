@@ -1480,6 +1480,24 @@ class TestProcessL4ChiBranches:
         results = _compute_chi(PROFILE_FILE, fft_length=512, fit_method="mle")
         assert len(results) >= 1
 
+    def test_mle_epsilon_not_biased_high_vs_iterative(self):
+        """The iterated mle fit's epsilon must agree with the default iterative
+        fit, not run ~1.7-2.2x high from a too-low fixed chi_obs (M-6)."""
+        from odas_tpw.rsi.chi_io import _compute_chi
+
+        def _median_eps(results):
+            vals = np.concatenate(
+                [np.asarray(d["epsilon_T"].values).ravel() for d in results]
+            )
+            vals = vals[np.isfinite(vals) & (vals > 0)]
+            return float(np.median(vals)) if vals.size else np.nan
+
+        em = _median_eps(_compute_chi(PROFILE_FILE, fft_length=512, fit_method="mle"))
+        ei = _median_eps(_compute_chi(PROFILE_FILE, fft_length=512, fit_method="iterative"))
+        assert np.isfinite(em) and np.isfinite(ei)
+        # Before the fix the ratio was ~1.7-2.2; iterating brings it near 1.
+        assert 0.5 < em / ei < 1.6
+
 
 class TestComputeChiFinal:
     def test_no_good_chi_returns_nan(self):
