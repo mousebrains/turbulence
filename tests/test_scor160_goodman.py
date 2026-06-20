@@ -4,7 +4,38 @@
 import numpy as np
 import pytest
 
-from odas_tpw.scor160.goodman import clean_shear_spec, clean_shear_spec_batch
+from odas_tpw.scor160.goodman import (
+    _floor_negative_autospectra,
+    clean_shear_spec,
+    clean_shear_spec_batch,
+)
+
+
+class TestFloorNegativeAutospectra:
+    def test_floors_negative_diagonal_only(self):
+        """Negative cleaned auto-spectra (diagonal) floor to 0; positive
+        diagonals, NaN bins, and off-diagonal cross-spectra are untouched
+        (#84/#83)."""
+        # (n_freq=2, n_sh=2, n_sh=2)
+        m = np.array([
+            [[1.0, 5.0], [5.0, -2.0]],     # freq 0: [1,1]=-2 negative
+            [[np.nan, 7.0], [7.0, 4.0]],   # freq 1: [0,0]=NaN (uncleaned/singular)
+        ])
+        out = _floor_negative_autospectra(m.copy())
+        assert out[0, 1, 1] == 0.0         # negative diagonal -> 0
+        assert np.isnan(out[1, 0, 0])      # NaN (singular) stays NaN
+        assert out[0, 0, 0] == 1.0         # positive diagonal kept
+        assert out[1, 1, 1] == 4.0
+        assert out[0, 0, 1] == 5.0         # off-diagonal kept
+        assert out[1, 0, 1] == 7.0
+
+    def test_batched_shape_supported(self):
+        """Works on the batched (n_win, n_freq, n_sh, n_sh) shape too."""
+        m = np.ones((2, 3, 2, 2))
+        m[1, 2, 0, 0] = -1.0
+        out = _floor_negative_autospectra(m.copy())
+        assert out[1, 2, 0, 0] == 0.0
+        assert (out[0] == 1.0).all()
 
 
 def _make_signals(n, fs, n_shear=2, n_accel=2, noise_amp=0.1, vib_amp=1.0, rng=None):
@@ -60,9 +91,11 @@ class TestCleanShearSpec:
         accel, shear = _make_signals(n, fs, vib_amp=2.0)
         clean_UU, _, UU, _, _F = clean_shear_spec(accel, shear, nfft, fs)
 
-        # Compare auto-spectral diagonals
+        # Compare auto-spectral diagonals. nansum: a singular-AA frequency bin
+        # is now NaN'd (uncleanable) rather than left as the raw uncleaned UU
+        # (#83), so exclude it from the power comparison.
         for i in range(shear.shape[1]):
-            clean_power = np.sum(clean_UU[:, i, i])
+            clean_power = np.nansum(clean_UU[:, i, i])
             uncleaned_power = np.sum(np.real(UU[:, i, i]))
             assert clean_power < uncleaned_power
 
@@ -174,6 +207,7 @@ class TestCleanShearSpecBatch:
         raw_Cxy, _, _, _ = csd_matrix_batch(shear_win, None, nfft, fs)
         for w in range(n_win):
             for i in range(n_sh):
-                clean_power = np.sum(clean_UU[w, :, i, i])
+                # nansum: singular-AA bins are NaN'd (uncleanable), not raw UU (#83).
+                clean_power = np.nansum(clean_UU[w, :, i, i])
                 raw_power = np.sum(np.real(raw_Cxy[w, :, i, i]))
                 assert clean_power < raw_power

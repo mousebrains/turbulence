@@ -6,12 +6,33 @@ Removes vibration-coherent noise from shear spectra using
 accelerometer cross-spectra.
 """
 
-import contextlib
 from typing import NamedTuple
 
 import numpy as np
 
 from odas_tpw.scor160.spectral import csd_matrix, csd_matrix_batch
+
+
+def _floor_negative_autospectra(clean_UU: np.ndarray) -> np.ndarray:
+    """Floor cleaned auto-spectrum (diagonal) bins that came out negative to 0.
+
+    An ill-conditioned accelerometer matrix AA can over-subtract in
+    ``UU - UA inv(AA) UA^H`` and drive a cleaned auto-spectrum diagonal
+    slightly negative, which is physically impossible (a power spectral density
+    cannot be < 0). Floor those bins to 0 so the epsilon integral / FOM see a
+    consistent non-negative power (matching the variance-method polyfit's
+    zero-bin handling) rather than a negative value that artificially deflates
+    the integrated variance. NaN bins (a singular AA that could not be cleaned
+    at all) are left as NaN for l4's bad-bin handling. Operates on the last two
+    (n_sh, n_sh) axes, so it works for both the single (n_freq, ...) and batched
+    (n_win, n_freq, ...) shapes.
+    """
+    n_sh = clean_UU.shape[-1]
+    for i in range(n_sh):
+        diag_i = clean_UU[..., i, i]
+        # NaN stays NaN (diag_i < 0 is False for NaN); only finite negatives -> 0.
+        clean_UU[..., i, i] = np.where(diag_i < 0, 0.0, diag_i)
+    return clean_UU
 
 
 class CleanShearResult(NamedTuple):
@@ -130,13 +151,18 @@ def clean_shear_spec(
         solved = np.linalg.solve(AA, ua_H)  # (n_freq, n_ac, n_sh)
         clean_UU = UU - np.matmul(UA, solved)  # (n_freq, n_sh, n_sh)
     except np.linalg.LinAlgError:
-        # Fallback: per-frequency with singular handling
+        # Fallback: per-frequency with singular handling. A singular AA[f]
+        # cannot be cleaned; NaN that bin so downstream treats it as bad rather
+        # than passing the UNCLEANED raw UU through (and then bias-correcting it
+        # as if it had been cleaned).
         clean_UU = np.copy(UU)
         for f in range(n_freq):
-            with contextlib.suppress(np.linalg.LinAlgError):
+            try:
                 clean_UU[f] = UU[f] - UA[f] @ np.linalg.solve(AA[f], np.conj(UA[f]).T)
+            except np.linalg.LinAlgError:
+                clean_UU[f] = np.nan
 
-    clean_UU = np.real(clean_UU)
+    clean_UU = _floor_negative_autospectra(np.real(clean_UU))
 
     # Bias correction (ODAS Technical Note 61, Eq. 3)
     clean_UU *= _bias_correction(shear.shape[0], nfft, n_accel)
@@ -193,12 +219,15 @@ def clean_shear_spec_batch(
         n_win, n_freq = UU.shape[:2]
         for w in range(n_win):
             for fi in range(n_freq):
-                with contextlib.suppress(np.linalg.LinAlgError):
+                try:
                     clean_UU[w, fi] = UU[w, fi] - UA[w, fi] @ np.linalg.solve(
                         AA[w, fi], np.conj(UA[w, fi]).T
                     )
+                except np.linalg.LinAlgError:
+                    # Singular AA: NaN the bin rather than keep the raw UU.
+                    clean_UU[w, fi] = np.nan
 
-    clean_UU = np.real(clean_UU)
+    clean_UU = _floor_negative_autospectra(np.real(clean_UU))
 
     # Bias correction
     clean_UU *= _bias_correction(shear_windows.shape[1], nfft, n_accel)
