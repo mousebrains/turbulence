@@ -231,6 +231,20 @@ class TestEpsChiCLI:
         same = eps_chi._reindex_rows_to_depth(arr, dst_depth, dst_depth)
         assert same is arr
 
+    def test_reindex_rows_to_depth_max_ors_drop_bitfield(self):
+        """reduce='max' must bitwise-OR drop bitfields, not take the max: two
+        source bins with flags 1 and 2 collapsing into one dst bin -> 3, not 2
+        (np.maximum would lose the bit) (#52)."""
+        from odas_tpw.perturb.plot import eps_chi
+
+        # Both src centers fall in dst bin 0 (edges [0.5, 1.5, 2.5]).
+        src_depth = np.array([0.9, 1.1])
+        dst_depth = np.array([1.0, 2.0])
+        arr = np.array([[1.0], [2.0]])  # flag bitfields: bit0 and bit1
+        out = eps_chi._reindex_rows_to_depth(arr, src_depth, dst_depth, reduce="max")
+        assert out[0, 0] == 3.0  # 1 | 2, not max(1, 2) = 2
+        assert np.isnan(out[1, 0])
+
     def test_missing_diss_combo_errors(self, tmp_path):
         with pytest.raises(SystemExit):
             cli.main(["eps-chi", "--root", str(tmp_path)])

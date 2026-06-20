@@ -80,6 +80,20 @@ class TestBatchelorGrad:
         mean_k_high = np.average(k, weights=S_high + 1e-30)
         assert mean_k_high > mean_k_low
 
+    def test_degenerate_kB_returns_finite_zero_no_warning(self):
+        """A degenerate kB (0) must yield a finite (0.0) spectrum with no
+        divide/invalid warnings, mirroring kraichnan_grad (#16)."""
+        import warnings
+
+        from odas_tpw.chi.batchelor import batchelor_grad
+
+        k = np.logspace(0, 3, 100)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            S = batchelor_grad(k, 0.0, 1e-7)
+        assert np.all(np.isfinite(S))
+        assert np.all(S == 0.0)
+
 
 class TestKraichnanGrad:
     def test_integral_equals_chi_over_6kT(self):
@@ -1560,3 +1574,29 @@ class TestComputeChiSalinityGuard:
         # Guard fires before any file access, so the source need not exist.
         with pytest.raises(ValueError, match="not resolved"):
             _compute_chi("nonexistent.nc", salinity="measured")
+
+
+class TestEpsilonDsToL4DataAllNaN:
+    """_epsilon_ds_to_l4data must not emit a 'Mean of empty slice' warning storm
+    for legitimate all-NaN dropout windows (#9)."""
+
+    def test_all_nan_window_emits_no_warning(self):
+        import warnings
+
+        import xarray as xr
+
+        from odas_tpw.rsi.chi_io import _epsilon_ds_to_l4data
+
+        n = 5
+        eps = np.full((2, n), 1e-8)  # 2 probes -> triggers the nanmean branch
+        eps[:, 2] = np.nan  # an all-NaN window across both probes
+        ds = xr.Dataset(
+            {"epsilon": (["probe", "t"], eps)},
+            coords={"t": np.arange(n, dtype=float)},
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            l4 = _epsilon_ds_to_l4data(ds)
+        # The all-NaN window stays NaN (the fallback is all-NaN there too).
+        assert np.isnan(l4.epsi_final[2])
+        assert np.isfinite(l4.epsi_final[0])

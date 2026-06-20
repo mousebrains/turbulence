@@ -128,7 +128,13 @@ def _reindex_rows_to_depth(
             row = arr[src]
             ok = np.isfinite(row)
             if reduce == "max":
-                acc[dst, ok] = np.maximum(acc[dst, ok], row[ok])
+                # True bitwise OR for the drop bitfield: np.maximum loses bits
+                # (max(1,2)=2 but 1|2=3), contradicting the "ORs a drop
+                # bitfield" contract. Flags are integral values carried in a
+                # float array, so cast per-combine and store back (#52).
+                acc[dst, ok] = np.bitwise_or(
+                    acc[dst, ok].astype(np.int64), row[ok].astype(np.int64)
+                )
                 cnt[dst, ok] += 1
             else:
                 acc[dst, ok] += row[ok]
@@ -377,7 +383,7 @@ def run(args: argparse.Namespace) -> str:
         (ax_e, eps, (eps_vmin, eps_vmax), r"$\varepsilon$  (W kg$^{-1}$)", r"$\varepsilon$"),
         (ax_c, chi, (chi_vmin, chi_vmax), r"$\chi$  (K$^{2}$ s$^{-1}$)", r"$\chi$"),
         (ax_g, gamma, (gam_vmin, gam_vmax),
-         r"$\chi / \varepsilon$  (K$^{2}$ s kg J$^{-1}$)", r"$\chi/\varepsilon$"),
+         r"$\chi / \varepsilon$  (K$^{2}$ kg J$^{-1}$)", r"$\chi/\varepsilon$"),
     ]
     for ax, z, (vmn, vmx), cbar_label, short in panels:
         norm = _safe_lognorm(vmn, vmx)

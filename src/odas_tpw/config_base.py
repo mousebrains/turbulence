@@ -12,6 +12,7 @@ import glob as globmod
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from pathlib import Path
 
 from ruamel.yaml import YAML
@@ -92,7 +93,24 @@ class ConfigManager:
             raw = yaml.load(fh)
         if raw is None:
             return {}
-        config = {str(k): (dict(v) if v is not None else {}) for k, v in raw.items()}
+        if not isinstance(raw, Mapping):
+            raise ValueError(
+                f"Config file must be a mapping of sections, got "
+                f"{type(raw).__name__}"
+            )
+        # Each section must itself be a mapping (key: value). A list/scalar
+        # section otherwise hits dict(v) with an opaque TypeError (#29).
+        config: dict[str, dict] = {}
+        for k, v in raw.items():
+            if v is None:
+                config[str(k)] = {}
+            elif isinstance(v, Mapping):
+                config[str(k)] = dict(v)
+            else:
+                raise ValueError(
+                    f"Config section {str(k)!r} must be a mapping of "
+                    f"key: value pairs, got {type(v).__name__}"
+                )
         self.validate_config(config)
         return config
 

@@ -225,6 +225,9 @@ def _select_sections(
     """
     n = len(speed)
     section_number = np.zeros(n, dtype=np.float64)
+    if n == 0:
+        # Empty input: good[0]/good[-1] below would raise IndexError (#19).
+        return section_number
 
     # Basic criteria: speed above threshold and pressure above minimum
     speed_ok = np.abs(speed) >= min_speed if direction == "horizontal" else speed >= min_speed

@@ -68,6 +68,18 @@ class TestTimeBin:
         assert "n_samples" in result
         assert "T_std" in result
 
+    def test_diagnostics_n_excludes_nan_samples(self):
+        """{name}_n counts only the finite values actually averaged; n_samples
+        counts all in-range samples. A NaN data point makes them differ (#42)."""
+        t = np.array([0.0, 1.0, 2.0, 3.0])
+        T = np.array([1.0, np.nan, 3.0, 4.0])
+        for method in ("mean", "median"):
+            r = _time_bin(t, {"T": T}, bin_width=10.0, method=method, diagnostics=True)
+            assert "T_n" in r, method
+            # One bin holds all four times; only three T values are finite.
+            assert int(r["n_samples"][0]) == 4, method
+            assert int(r["T_n"][0]) == 3, method
+
     def test_empty_bins(self):
         t = np.array([0.0, 0.1, 10.0, 10.1])
         data = {"T": np.array([1.0, 2.0, 3.0, 4.0])}

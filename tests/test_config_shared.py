@@ -165,6 +165,14 @@ class TestLoadConfig:
         with pytest.raises(ValueError, match="Unknown config section"):
             config_mod.load_config(cfg)
 
+    def test_malformed_section_raises_clear_value_error(self, config_mod, tmp_path):
+        """A section that is a list/scalar (not a mapping) raises a clear
+        ValueError naming the section, not an opaque TypeError from dict(v) (#29)."""
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("epsilon:\n  - 1\n  - 2\n")
+        with pytest.raises(ValueError, match="must be a mapping"):
+            config_mod.load_config(cfg)
+
 
 # ---------------------------------------------------------------------------
 # Directory management

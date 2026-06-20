@@ -166,6 +166,22 @@ class TestSectionSelection:
         l2 = process_l2(l1, params)
         assert l2.section_number.max() == 0
 
+    def test_empty_input_returns_empty_no_indexerror(self):
+        """_select_sections must not IndexError on empty speed/pressure input;
+        it returns the already-allocated empty array (#19)."""
+        from odas_tpw.scor160.l2 import _select_sections
+
+        out = _select_sections(
+            np.array([]),
+            np.array([]),
+            fs=512.0,
+            min_speed=0.4,
+            min_pressure=1.0,
+            min_duration=7.0,
+            direction="vertical",
+        )
+        assert out.shape == (0,)
+
 
 class TestDespiking:
     """Test that despiking modifies spiked signals."""

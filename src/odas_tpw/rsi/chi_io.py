@@ -364,7 +364,12 @@ def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
         if fom_arr is not None and fom_arr.shape == eps_for_mean.shape:
             bad = ~np.isfinite(fom_arr) | (fom_arr > _EPS_FOM_LIMIT)
             eps_for_mean = np.where(bad, np.nan, eps_for_mean)
-        with np.errstate(invalid="ignore"):
+        # catch_warnings (not just errstate): an all-NaN window makes nanmean
+        # emit a "Mean of empty slice" RuntimeWarning via warnings.warn, which
+        # np.errstate does not suppress. Legitimate dropout windows must not
+        # produce a warning storm (#9).
+        with np.errstate(invalid="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
             epsi_final = np.nanmean(eps_for_mean, axis=0)
             allnan = ~np.isfinite(epsi_final)
             if np.any(allnan):

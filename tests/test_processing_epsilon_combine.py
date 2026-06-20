@@ -117,6 +117,14 @@ class TestMkEpsilonMean:
         result = mk_epsilon_mean(ds)
         assert "epsilonMean" not in result
 
+    def test_probe_sort_key_orders_by_trailing_int(self):
+        """e_2 must sort before e_10; plain lexicographic order puts e_10
+        first (#24)."""
+        from odas_tpw.processing.epsilon_combine import _probe_sort_key
+
+        names = ["e_10", "e_2", "e_1"]
+        assert sorted(names, key=_probe_sort_key) == ["e_1", "e_2", "e_10"]
+
     def test_defaults_no_speed_nu(self):
         """Dataset with e_1, e_2 but no speed or nu uses defaults."""
         n = 10
