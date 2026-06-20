@@ -420,13 +420,18 @@ def _process_profile(
                 except (ValueError, RuntimeError) as e:
                     logger.error(f"Chi fit error: {e}")
 
-    # Step 6c: Derived mixing quantities (K_T, Gamma, K_rho) on the chi
-    # window grid, where both epsilon and chi exist
+    # Step 6c: Stratification + derived mixing quantities on the chi window
+    # grid. N2/dTdz need only the CTD profile (no epsilon/chi) and K_T needs
+    # only chi, so they are written whenever a chi result and temperature
+    # exist; Gamma/K_rho additionally require shear epsilon. chi_primary is the
+    # Method-1 result when present (chi-from-epsilon, the primary product) else
+    # the Method-2 fit, so a Method-2-only run still gets these instead of
+    # silently dropping the whole block (bug_003).
+    chi_primary = l4_chi_eps if l4_chi_eps is not None else l4_chi_fit_result
     mixing_vars: dict[str, tuple[np.ndarray, dict]] | None = None
     if (
-        l4_chi_eps is not None
-        and l4_chi_eps.n_spectra > 0
-        and l4.n_spectra > 0
+        chi_primary is not None
+        and chi_primary.n_spectra > 0
         and l1.temp.size == l1.n_time
     ):
         try:
@@ -440,16 +445,22 @@ def _process_profile(
             # JAC C/T > user-supplied > 35 PSU.
             half_w = 0.5 * chi_diss_length / l1.fs_fast
             strat = sorted_stratification(
-                l4_chi_eps.time,
+                chi_primary.time,
                 half_w,
                 l1.time,
                 l1.pres,
                 l1.temp,
                 S=chi_salinity,
             )
-            eps_on_chi = pair_nearest(l4.time, l4.epsi_final, l4_chi_eps.time)
+            # Pair epsilon from the nearest shear window when available. With no
+            # shear epsilon (e.g. a Method-2-only chi run) K_T = chi/(2 dT/dz^2)
+            # stays valid while Gamma/K_rho fall to NaN (bug_003).
+            if l4.n_spectra > 0:
+                eps_on_chi = pair_nearest(l4.time, l4.epsi_final, chi_primary.time)
+            else:
+                eps_on_chi = np.full(chi_primary.n_spectra, np.nan)
             mix = mixing_coefficients(
-                eps_on_chi, l4_chi_eps.chi_final, strat.N2, strat.dTdz
+                eps_on_chi, chi_primary.chi_final, strat.N2, strat.dTdz
             )
             if measured_sal:
                 sal_note = "practical salinity from JAC_C/JAC_T/P (TEOS-10)"
@@ -533,7 +544,7 @@ def _process_profile(
     # Step 7: Depth binning
     binned_parts = []
     have_eps = l4.n_spectra > 0
-    have_chi = l4_chi_eps is not None and l4_chi_eps.n_spectra > 0
+    have_chi = chi_primary is not None and chi_primary.n_spectra > 0
 
     # Shared depth grid so eps and chi bin onto a bit-identical depth_bin coord:
     # independent per-array np.arange grids can differ by an ULP for a
@@ -541,9 +552,9 @@ def _process_profile(
     # split one physical depth into two NaN-padded columns (M-16). With both
     # present, snap a single range from the union of pressures.
     shared_range: tuple[float, float] | None = None
-    if have_eps and l4_chi_eps is not None and have_chi:
+    if have_eps and chi_primary is not None and have_chi:
         all_pres = np.concatenate(
-            [np.asarray(l4.pres, dtype=float), np.asarray(l4_chi_eps.pres, dtype=float)]
+            [np.asarray(l4.pres, dtype=float), np.asarray(chi_primary.pres, dtype=float)]
         )
         finite = all_pres[np.isfinite(all_pres)]
         if finite.size:
@@ -561,12 +572,12 @@ def _process_profile(
         )
         binned_parts.append(eps_bin)
 
-    if l4_chi_eps is not None and have_chi:
-        chi_vals: dict[str, np.ndarray] = {"chi": l4_chi_eps.chi_final}
+    if chi_primary is not None and have_chi:
+        chi_vals: dict[str, np.ndarray] = {"chi": chi_primary.chi_final}
         if mixing_vars is not None:
             chi_vals.update({name: arr for name, (arr, _a) in mixing_vars.items()})
         chi_bin = bin_by_depth(
-            l4_chi_eps.pres,
+            chi_primary.pres,
             chi_vals,
             bin_size=bin_size,
             pres_range=shared_range,
@@ -588,12 +599,22 @@ def _process_profile(
     time_ref = pf.start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
     _write_l4_epsilon(l4, l3, prof_dir / "L4_epsilon.nc", pf)
 
+    # Attach the mixing vars to whichever chi product they were computed on
+    # (chi_primary): Method-1 when present, else the Method-2 fit (bug_003).
     if l4_chi_eps is not None:
         _write_l4_chi(
-            l4_chi_eps, prof_dir / "L4_chi_epsilon.nc", time_ref, extra_vars=mixing_vars
+            l4_chi_eps,
+            prof_dir / "L4_chi_epsilon.nc",
+            time_ref,
+            extra_vars=mixing_vars if chi_primary is l4_chi_eps else None,
         )
     if l4_chi_fit_result is not None:
-        _write_l4_chi(l4_chi_fit_result, prof_dir / "L4_chi_fit.nc", time_ref)
+        _write_l4_chi(
+            l4_chi_fit_result,
+            prof_dir / "L4_chi_fit.nc",
+            time_ref,
+            extra_vars=mixing_vars if chi_primary is l4_chi_fit_result else None,
+        )
 
     return binned
 

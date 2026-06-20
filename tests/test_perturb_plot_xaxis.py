@@ -210,3 +210,41 @@ def test_signed_distance_label_has_midpoint_and_orientation():
     assert lbl.startswith("Signed distance from")
     assert "2°N, 1°E" in lbl                 # midpoint, 4 sig figs, hemispheres
     assert "orientation" in lbl and "±" in lbl and "° T" in lbl
+
+
+# ---------------------------------------------------------------------------
+# Dateline safety of the local-projection reference (bug_001)
+# ---------------------------------------------------------------------------
+
+
+def test_circmean_deg_is_dateline_safe():
+    """Circular mean of [179, -179] is 180, not the antipodal 0 a raw mean gives."""
+    assert xaxis._circmean_deg(np.array([179.0, 179.9, -179.9, -179.0])) == pytest.approx(
+        180.0, abs=1e-6
+    )
+    # Plain nanmean would land near 0 — confirm we are NOT doing that.
+    assert abs(float(np.nanmean(np.array([179.0, -179.0])))) < 1e-6
+
+
+def test_signed_distance_dateline_span_matches_haversine():
+    """A transect across +/-180 must not blow the x-axis span up ~180x; the span
+    must match the great-circle ground truth and the midpoint stay near 180 (bug_001)."""
+    lat = np.full(4, 20.0)
+    lon = np.array([179.0, 179.9, -179.9, -179.0])
+    ax = xaxis.signed_distance_axis(lat, lon, _hourly(4), units="km")
+    span = float(np.nanmax(ax.x) - np.nanmin(ax.x))
+    truth = xaxis.haversine_m(20.0, 179.0, 20.0, -179.0) / 1000.0
+    assert span == pytest.approx(truth, rel=0.05)  # ~209 km, not ~37,595 km
+    assert ax.mid_lon == pytest.approx(180.0, abs=0.1)
+
+
+def test_along_line_dateline_span_matches_haversine():
+    """project_along_line across ±180 keeps along-track within the true arc and
+    cross-track near zero, instead of an antipodal reference distortion (bug_001)."""
+    lat = np.full(4, 20.0)
+    lon = np.array([179.0, 179.9, -179.9, -179.0])
+    waypoints = np.array([[20.0, 179.0], [20.0, -179.0]])
+    along, cross = xaxis.project_along_line(lat, lon, waypoints, units="km")
+    truth = xaxis.haversine_m(20.0, 179.0, 20.0, -179.0) / 1000.0
+    assert np.nanmax(along) <= truth * 1.05
+    assert np.nanmax(np.abs(cross)) < 1.0
