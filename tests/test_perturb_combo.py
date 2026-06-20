@@ -131,6 +131,22 @@ class TestMakeCombo:
         assert np.all(np.diff(tk) > 0)  # strictly increasing, no dupes/NaN
         combo.close()
 
+    def test_time_combo_logs_dropped_duplicate_count(self, tmp_path, caplog):
+        """make_combo(time) logs how many duplicate / non-finite timestamps it
+        drops for CF monotonicity rather than dropping them silently (#21)."""
+        binned_dir = tmp_path / "binned"
+        binned_dir.mkdir()
+        # File A: 0..4 ; File B: 3,4,5,6,NaN. Sorted union has duplicate 3 and 4
+        # plus one NaN -> 2 duplicate + 1 non-finite of 10 dropped.
+        for i, t in enumerate((np.arange(0.0, 5.0),
+                               np.array([3.0, 4.0, 5.0, 6.0, np.nan]))):
+            ds = xr.Dataset({"T": (["time"], np.random.randn(t.size))},
+                            coords={"time": t})
+            ds.to_netcdf(binned_dir / f"file{i:02d}.nc")
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.combo"):
+            make_combo(binned_dir, tmp_path / "combo", COMBO_SCHEMA, method="time")
+        assert "dropped 2 duplicate and 1 non-finite" in caplog.text
+
     def test_no_files(self, tmp_path):
         binned_dir = tmp_path / "empty"
         binned_dir.mkdir()

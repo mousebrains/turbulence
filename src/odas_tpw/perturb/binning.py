@@ -5,6 +5,7 @@ Reference: Code/bin_by_real.m, Code/profile2binned.m, Code/diss2binned.m,
            Code/chi2binned.m
 """
 
+import logging
 import re
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -13,6 +14,8 @@ import numpy as np
 import xarray as xr
 
 from odas_tpw.perturb.logging_setup import stage_log
+
+logger = logging.getLogger(__name__)
 
 # Per-profile NetCDFs are named ``<pfile_stem>_prof###.nc`` by
 # :func:`odas_tpw.rsi.profile.extract_profiles`.  The binning step's
@@ -523,8 +526,22 @@ def bin_by_time(
     Returns a concatenated dataset along a time dimension.
 
     See :func:`bin_by_depth` for the meaning of *log_dir*.
+
+    .. note::
+       Unlike :func:`bin_by_depth`, the *diagnostics* outputs
+       (``*_std`` / ``*_n`` / ``n_samples``) are not implemented for time
+       binning; only the binned means are written.  A one-time warning is
+       emitted when *diagnostics* is requested so the absence is not silent.
     """
     agg = _get_agg_func(aggregation)
+    if diagnostics:
+        # Time binning does not (yet) emit the per-bin std / finite-count /
+        # n_samples diagnostics that the depth path does. Warn once rather than
+        # silently honoring the flag with mean-only output (#40/#53).
+        logger.warning(
+            "bin_by_time: diagnostics outputs (*_std, *_n, n_samples) are not "
+            "produced for time binning; only the binned means are written"
+        )
     all_binned = []
 
     for f in profile_files:
@@ -536,11 +553,23 @@ def bin_by_time(
                         t_raw = ds[time_name].values
                         break
                 else:
+                    if diagnostics:
+                        logger.warning(
+                            "bin_by_time: %s has no time coordinate "
+                            "(t_slow/t_fast/time); dropping it from the binned output",
+                            f.name,
+                        )
                     continue
 
                 t = _time_to_seconds(t_raw)
                 finite_t = np.isfinite(t)
                 if not finite_t.any():
+                    if diagnostics:
+                        logger.warning(
+                            "bin_by_time: %s has no finite times; dropping it from "
+                            "the binned output",
+                            f.name,
+                        )
                     continue
                 t_min = float(np.nanmin(t[finite_t]))
                 t_max = float(np.nanmax(t[finite_t]))

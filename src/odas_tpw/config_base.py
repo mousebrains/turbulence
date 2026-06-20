@@ -160,8 +160,14 @@ class ConfigManager:
         for k, v in params.items():
             if k in base and v is not None:
                 base[k] = v
+        # _normalize_nested (not _normalize_value) so list/dict-valued params
+        # (e.g. speed.amplitude_quantile = [1.0, 99.0]) have their nested
+        # scalars type-normalized too. _normalize_value passes containers
+        # through untouched, so [1.0, 99.0] and [1, 99] would hash differently
+        # -> different output dirs / spurious recompute. Matches the
+        # dynamic-key branch above. For scalars the two are identical.
         return {
-            k: _normalize_value(v)
+            k: _normalize_nested(v)
             for k, v in sorted(base.items())
             if k not in self.hash_exclude_keys
         }

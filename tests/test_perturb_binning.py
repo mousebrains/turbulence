@@ -463,3 +463,70 @@ class TestBinByTimeEdges:
         result = bin_by_time([tmp_path / "p.nc"], bin_width=0.1)
         assert "epsilon" in result
         assert "stime" not in result.data_vars
+
+    def test_diagnostics_unsupported_warns_once(self, tmp_path, caplog):
+        """diagnostics=True on time binning warns that *_std / *_n / n_samples
+        are not produced (the depth path emits them; the time path does not),
+        and the data is still binned to means (#40/#53)."""
+        n = 30
+        ds = xr.Dataset(
+            {
+                "epsilon": (["t"], np.full(n, 1e-8)),
+                "t_slow": (["t"], np.linspace(0.0, 5.0, n)),
+            }
+        )
+        ds.to_netcdf(tmp_path / "p.nc")
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.binning"):
+            result = bin_by_time([tmp_path / "p.nc"], bin_width=1.0, diagnostics=True)
+        assert "epsilon" in result  # means still produced
+        assert "epsilon_std" not in result.data_vars
+        assert "epsilon_n" not in result.data_vars
+        assert "n_samples" not in result.data_vars
+        assert "not produced for time binning" in caplog.text
+
+    def test_diagnostics_warns_on_dropped_file_no_time_coord(self, tmp_path, caplog):
+        """diagnostics=True surfaces the silent drop of a file lacking any time
+        coordinate; without diagnostics the drop stays quiet (#18/#24)."""
+        n = 30
+        ds = xr.Dataset(
+            {"T": (["samples"], np.ones(n))},
+            coords={"samples": np.arange(n, dtype=float)},
+        )
+        ds.to_netcdf(tmp_path / "prof.nc")
+
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.binning"):
+            result = bin_by_time(
+                [tmp_path / "prof.nc"], bin_width=1.0, diagnostics=True
+            )
+        assert len(result.data_vars) == 0
+        assert "no time coordinate" in caplog.text
+        assert "prof.nc" in caplog.text
+
+    def test_no_diagnostics_is_quiet_on_dropped_file(self, tmp_path, caplog):
+        """The same dropped file is NOT logged when diagnostics is off."""
+        n = 30
+        ds = xr.Dataset(
+            {"T": (["samples"], np.ones(n))},
+            coords={"samples": np.arange(n, dtype=float)},
+        )
+        ds.to_netcdf(tmp_path / "prof.nc")
+
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.binning"):
+            bin_by_time([tmp_path / "prof.nc"], bin_width=1.0, diagnostics=False)
+        assert "no time coordinate" not in caplog.text
+
+    def test_diagnostics_warns_on_no_finite_times(self, tmp_path, caplog):
+        """A file whose times are all NaN is dropped; diagnostics warns (#18/#24)."""
+        n = 10
+        ds = xr.Dataset(
+            {
+                "epsilon": (["t"], np.full(n, 1e-8)),
+                "t_slow": (["t"], np.full(n, np.nan)),
+            }
+        )
+        ds.to_netcdf(tmp_path / "allnan.nc")
+
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.binning"):
+            bin_by_time([tmp_path / "allnan.nc"], bin_width=1.0, diagnostics=True)
+        assert "no finite times" in caplog.text
+        assert "allnan.nc" in caplog.text
