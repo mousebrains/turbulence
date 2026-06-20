@@ -46,6 +46,12 @@ def _adis_14bit(data: np.ndarray) -> np.ndarray:
     inclination X/Y channels use 14-bit signed data; the
     temperature channel uses 12-bit unsigned, which passes through
     the two's complement step unchanged.
+
+    Note: the strict ``< -2**14`` test (kept to match ``adis.m:48``)
+    mis-decodes error-flagged words 0xC000-0xDFFF (bit14+bit13 set). This is a
+    faithful port of an ODAS quirk; it touches only the auxiliary inclinometer
+    channels, never shear/temperature, and no such words occur in the ARCTERX
+    data (verified across all 29 files). Left as-is for ODAS parity (#1).
     """
     val = data.copy().astype(np.float64)
     # Bit 15 set → new-data flag.  Clear it.

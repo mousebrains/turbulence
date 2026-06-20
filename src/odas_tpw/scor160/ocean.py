@@ -44,6 +44,13 @@ def visc(T: npt.ArrayLike, S: npt.ArrayLike = 35, P: npt.ArrayLike = 0) -> np.nd
     Otherwise uses Sharqawy et al. (2010) for dynamic viscosity
     and gsw (TEOS-10) for in-situ density.
 
+    Note: the two branches differ by up to ~1.4% at the S=35/P=0 seam (max at
+    0 °C; ~0.7% at 5-15 °C), so nu is mildly discontinuous there. This is
+    intentional — visc35 is the ODAS reference used by the ATOMIX shear
+    benchmark at exactly S=35/P=0, so the seam is not blended. The seam is
+    unreachable in normal processing (in-situ P>0 keeps a cast on the Sharqawy
+    branch), and a ~1.4% nu change propagates to <0.5% in epsilon (#20).
+
     Parameters
     ----------
     T : float or array_like
