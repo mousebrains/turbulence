@@ -868,6 +868,48 @@ class TestEpsilonDsToL4Data:
         np.testing.assert_array_equal(l4.pres, np.zeros(n))
         np.testing.assert_array_equal(l4.pspd_rel, np.zeros(n))
 
+    def test_high_fom_probe_excluded_from_method1_mean(self):
+        """When epsilonMean is absent, a high-fom (bad) probe is excluded before
+        averaging, and the real fom is propagated (not zeros) (M-1)."""
+        import xarray as xr
+
+        from odas_tpw.rsi.chi_io import _epsilon_ds_to_l4data
+
+        n = 4
+        eps = np.array([[1e-7] * n, [1e-9] * n], dtype=np.float64)  # probe 2 low
+        fom = np.array([[1.0] * n, [3.0] * n], dtype=np.float64)    # probe 2 fom>1.15
+        ds = xr.Dataset(
+            {
+                "epsilon": (["probe", "time"], eps),
+                "fom": (["probe", "time"], fom),
+                "P_mean": (["time"], np.linspace(10, 100, n)),
+                "speed": (["time"], np.full(n, 0.7)),
+            },
+            coords={"probe": ["sh1", "sh2"], "t": ("time", np.arange(n, dtype=float))},
+        )
+        l4 = _epsilon_ds_to_l4data(ds)
+        # Bad probe excluded -> epsi_final is the good probe, not the 2-probe
+        # mean (~5e-8); real fom propagated.
+        np.testing.assert_allclose(l4.epsi_final, 1e-7)
+        np.testing.assert_allclose(l4.fom, fom)
+
+    def test_all_probes_bad_fom_fall_back_to_all_mean(self):
+        """If every probe is bad-fom at a window, fall back to the all-probe
+        mean rather than emitting NaN (mirrors compute_chi_window)."""
+        import xarray as xr
+
+        from odas_tpw.rsi.chi_io import _epsilon_ds_to_l4data
+
+        n = 3
+        eps = np.array([[1e-7] * n, [1e-8] * n], dtype=np.float64)
+        fom = np.full((2, n), 5.0)  # both bad
+        ds = xr.Dataset(
+            {"epsilon": (["probe", "time"], eps), "fom": (["probe", "time"], fom)},
+            coords={"probe": ["a", "b"], "t": ("time", np.arange(n, dtype=float))},
+        )
+        l4 = _epsilon_ds_to_l4data(ds)
+        np.testing.assert_allclose(l4.epsi_final, np.nanmean(eps, axis=0))
+
     def test_datetime64_t_converted_to_seconds_since_start_time(self):
         """Datetime64 ``t`` decoded by xarray is rebased to seconds-since-
         start_time so it matches L3ChiData.time's reference. Without this,

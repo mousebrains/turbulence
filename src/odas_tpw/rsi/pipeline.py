@@ -233,7 +233,10 @@ def run_pipeline(
                     profile_min_W=W_min,
                     profile_min_P=P_min,
                     profile_min_duration=min_duration,
-                    speed_tau=speed_tau,
+                    # Vehicle-resolved tau (matches L1 speed + profile detection);
+                    # the raw user default 1.5 would re-smooth glider speed at the
+                    # wrong 0.68/1.5 cutoff for non-VMP vehicles.
+                    speed_tau=file_speed_tau,
                 ),
                 l3_params=L3Params(
                     fft_length=fft_length,
