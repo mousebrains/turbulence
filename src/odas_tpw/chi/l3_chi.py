@@ -9,6 +9,7 @@ Reads cleaned temperature gradient and HP-filtered vibration from L2ChiData.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -142,23 +143,47 @@ def _process_section_chi(
         )
         clean_spectra = np.real(np.diagonal(TT, axis1=2, axis2=3)).copy()
 
-    # Per-window means. nan_to_num before the floor so an all-NaN speed window
-    # falls back to the 0.01 m/s floor instead of propagating NaN into fp07_tau
-    # and the wavenumber axis (which would silently NaN the whole window's chi).
-    speed_means = np.maximum(
-        np.nan_to_num(np.mean(np.abs(l2_chi.pspd_rel[indices]), axis=1), nan=0.01), 0.01
-    )
+    # Per-window means. nanmean (not mean) so a window with a few NaN samples
+    # (routine near the surface) averages its finite samples instead of
+    # collapsing the whole window: np.mean returns NaN on a single NaN, which
+    # for speed then floored the window to 0.01 m/s (#58) and for temperature
+    # NaN'd its viscosity. An ALL-NaN window then needs a deliberate fallback
+    # rather than numpy's NaN + "Mean of empty slice" warning (#60), so the
+    # nanmeans run under suppressed RuntimeWarnings.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        # nan_to_num before the floor: an all-NaN speed window -> 0.01 m/s floor
+        # instead of propagating NaN into fp07_tau and the wavenumber axis.
+        speed_means = np.maximum(
+            np.nan_to_num(
+                np.nanmean(np.abs(l2_chi.pspd_rel[indices]), axis=1), nan=0.01
+            ),
+            0.01,
+        )
+        T_means = np.nanmean(l2_chi.temp[indices], axis=1)
     P_means = np.mean(l2_chi.pres[indices], axis=1)
     t_means = np.mean(l2_chi.time[indices], axis=1)
-    # nanmean: a single NaN temperature/salinity sample (routine near the
-    # surface) must not poison the whole window's viscosity -> chi. Mirrors the
-    # epsilon side's NaN tolerance (scor160/l4.py).
-    T_means = np.nanmean(l2_chi.temp[indices], axis=1)
+    # All-NaN-temperature windows: substitute 10 degC for viscosity (mirrors the
+    # epsilon side, scor160/l4.py) so chi is computed rather than silently
+    # dropped to NaN; warn once if any window needed it (#57).
+    if not np.all(np.isfinite(T_means)):
+        warnings.warn(
+            "Non-finite window temperature(s); using 10 degC for viscosity "
+            "in those chi windows",
+            stacklevel=2,
+        )
+        T_means = np.where(np.isfinite(T_means), T_means, 10.0)
 
     # Viscosity
     if salinity is not None:
         if np.ndim(salinity) > 0:
-            sal_means = np.nanmean(np.asarray(salinity)[indices], axis=1)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                sal_means = np.nanmean(np.asarray(salinity)[indices], axis=1)
+            # All-NaN-salinity windows: fall back to 35 PSU (the visc35 reference
+            # salinity) so viscosity -> chi is not silently NaN'd, mirroring the
+            # 10 degC temperature fallback above (#57, #60).
+            sal_means = np.where(np.isfinite(sal_means), sal_means, 35.0)
         else:
             sal_means = np.full(n_windows, float(salinity))
         nu_all = np.asarray(

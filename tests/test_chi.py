@@ -1391,6 +1391,87 @@ class TestProcessL3ChiBranches:
         assert l3_chi is not None
 
 
+class TestProcessL3ChiNaNHandling:
+    """L3 chi speed/temperature NaN handling (#57, #58, #60). Uses a minimal
+    hand-built L2ChiData, so no real profile data is required."""
+
+    @staticmethod
+    def _make_l2_chi(temp, pspd, n=1024, fs=512.0):
+        from odas_tpw.chi.l2_chi import L2ChiData
+
+        rng = np.random.RandomState(0)
+        return L2ChiData(
+            time=np.arange(n) / fs,
+            pres=np.linspace(1.0, 10.0, n),
+            temp=temp,
+            temp_fast=rng.randn(1, n) * 0.01 + 12.0,
+            gradt=rng.randn(1, n) * 1e-3,
+            vib=np.zeros((1, n)),
+            pspd_rel=pspd,
+            section_number=np.ones(n),
+            diff_gains=[0.94],
+            fs_fast=fs,
+        )
+
+    @staticmethod
+    def _params(fs=512.0):
+        from odas_tpw.scor160.io import L3Params
+
+        return L3Params(
+            fft_length=256, diss_length=512, overlap=256,
+            HP_cut=0.25, fs_fast=fs, goodman=False,
+        )
+
+    def test_partial_nan_speed_uses_finite_mean_not_floor(self):
+        """A window with a few NaN speed samples averages its finite samples
+        (~0.6 m/s); np.mean collapsed the whole window to the 0.01 floor (#58)."""
+        from odas_tpw.chi.l3_chi import process_l3_chi
+
+        n = 1024
+        pspd = np.full(n, 0.6)
+        pspd[0:10] = np.nan  # a few NaNs inside the first window
+        l3 = process_l3_chi(
+            self._make_l2_chi(np.full(n, 12.0), pspd), self._params(), salinity=34.5
+        )
+        assert l3.pspd_rel[0] > 0.5  # ~0.6, not the 0.01 floor
+
+    def test_all_nan_temperature_falls_back_to_10C(self):
+        """An all-NaN-temperature window uses 10 degC for viscosity (finite nu)
+        and warns, mirroring the epsilon side, instead of NaN-ing chi (#57)."""
+        import warnings
+
+        from odas_tpw.chi.l3_chi import process_l3_chi
+
+        n = 1024
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            l3 = process_l3_chi(
+                self._make_l2_chi(np.full(n, np.nan), np.full(n, 0.6)),
+                self._params(),
+                salinity=34.5,
+            )
+        assert np.allclose(l3.temp, 10.0)
+        assert np.all(np.isfinite(l3.nu))
+        assert any("10 degC" in str(x.message) for x in w)
+
+    def test_all_nan_temperature_no_empty_slice_warning(self):
+        """The all-NaN nanmeans must not leak a numpy 'Mean of empty slice'
+        RuntimeWarning (#60)."""
+        import warnings
+
+        from odas_tpw.chi.l3_chi import process_l3_chi
+
+        n = 1024
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            process_l3_chi(
+                self._make_l2_chi(np.full(n, np.nan), np.full(n, 0.6)),
+                self._params(),
+                salinity=34.5,
+            )
+        assert not any("Mean of empty slice" in str(x.message) for x in w)
+
+
 # ---------------------------------------------------------------------------
 # chi/l4_chi.py extra branches
 # ---------------------------------------------------------------------------
