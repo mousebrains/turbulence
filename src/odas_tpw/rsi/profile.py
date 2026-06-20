@@ -131,7 +131,10 @@ def extract_profiles(
     output_scalars: list[dict[str, float]] = []
     for pi, (s_slow, e_slow) in enumerate(profiles, 1):
         s_fast = s_slow * ratio
-        e_fast = (e_slow + 1) * ratio
+        # Clamp to the fast-axis length (matches _compute_epsilon): for a
+        # full-record final profile (e_slow+1)*ratio can exceed len(t_fast) and
+        # over-run the fast slices / size the time_fast dim too large.
+        e_fast = min((e_slow + 1) * ratio, len(data["t_fast"]))
         s_slow_end = e_slow + 1
 
         prof_path = output_dir / f"{stem}_prof{pi:03d}.nc"

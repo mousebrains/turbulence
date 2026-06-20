@@ -54,6 +54,27 @@ def _nc_values(var) -> np.ndarray:
     return np.asarray(arr)
 
 
+def _finite_interp1d(t: np.ndarray, vals: np.ndarray):
+    """Build a linear interpolator over the FINITE (t, vals) pairs.
+
+    ``interp1d`` propagates NaN to every interval touching a NaN node, so a
+    single fill-valued lat/lon (or time) would blank whole position spans.
+    Dropping the non-finite nodes interpolates across the gap instead.
+    """
+    from scipy.interpolate import interp1d
+
+    t = np.asarray(t, dtype=np.float64)
+    vals = np.asarray(vals, dtype=np.float64)
+    good = np.isfinite(t) & np.isfinite(vals)
+    if int(good.sum()) >= 2:
+        return interp1d(
+            t[good], vals[good], bounds_error=False, fill_value="extrapolate"
+        )
+    # < 2 finite nodes: constant (or all-NaN) -> a constant function.
+    fill = float(vals[good][0]) if good.any() else np.nan
+    return interp1d([0.0, 1.0], [fill, fill], bounds_error=False, fill_value=fill)
+
+
 # CF time unit -> seconds factor.  Only common units; falls back to
 # ``num2date`` for the long tail (months, years, weird calendars, etc.)
 _CF_TIME_UNIT_FACTORS: dict[str, float] = {
@@ -191,25 +212,14 @@ class GPSFromCSV:
         max_time_diff: float = 60.0,
     ) -> None:
         import pandas as pd
-        from scipy.interpolate import interp1d
 
         df = pd.read_csv(file)
         t = _to_epoch_seconds(np.asarray(df[time_col].values))
         self._t_min = float(np.nanmin(t))
         self._t_max = float(np.nanmax(t))
         self._max_time_diff = float(max_time_diff)
-        self._lat_interp = interp1d(
-            t,
-            df[lat_col].values,
-            bounds_error=False,
-            fill_value="extrapolate",
-        )
-        self._lon_interp = interp1d(
-            t,
-            df[lon_col].values,
-            bounds_error=False,
-            fill_value="extrapolate",
-        )
+        self._lat_interp = _finite_interp1d(t, np.asarray(df[lat_col].values))
+        self._lon_interp = _finite_interp1d(t, np.asarray(df[lon_col].values))
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:
         """Interpolate latitude from CSV at the given times."""
@@ -264,7 +274,6 @@ class GPSFromNetCDF:
         max_time_diff: float = 60.0,
     ) -> None:
         import netCDF4 as nc
-        from scipy.interpolate import interp1d
 
         # Read raw arrays inside the context manager so the Dataset is closed
         # even if a read raises; decode times afterwards (raw/lat/lon are
@@ -310,8 +319,8 @@ class GPSFromNetCDF:
         self._t_min = float(np.nanmin(t))
         self._t_max = float(np.nanmax(t))
         self._max_time_diff = float(max_time_diff)
-        self._lat_interp = interp1d(t, lat, bounds_error=False, fill_value="extrapolate")
-        self._lon_interp = interp1d(t, lon, bounds_error=False, fill_value="extrapolate")
+        self._lat_interp = _finite_interp1d(t, lat)
+        self._lon_interp = _finite_interp1d(t, lon)
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:
         """Interpolate latitude from NetCDF at the given times."""

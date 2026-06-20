@@ -41,6 +41,24 @@ class TestAddSeawaterProperties:
         props = add_seawater_properties(T, C, P, lat, lon)
         assert np.isfinite(props["depth"][0])
 
+    def test_masked_fill_becomes_nan_not_raw_value(self):
+        """A masked T/C/P cell (a _FillValue like -999) must read back as NaN,
+        not enter gsw as a real value. ``np.asarray`` on a masked array drops
+        the mask and exposes the raw fill; ``_filled`` fills it with NaN (#16)."""
+        T = np.ma.masked_array([10.0, -999.0], mask=[False, True])
+        C = np.ma.masked_array([37.0, -999.0], mask=[False, True])
+        P = np.ma.masked_array([100.0, -999.0], mask=[False, True])
+        lat = np.array([15.0, 15.0])
+        lon = np.array([145.0, 145.0])
+
+        props = add_seawater_properties(T, C, P, lat, lon)
+        # Good cell stays finite and reasonable; masked cell is NaN, not a
+        # salinity computed from a -999 fill.
+        assert np.isfinite(props["SP"][0])
+        assert 20.0 < props["SP"][0] < 40.0
+        assert np.isnan(props["SP"][1])
+        assert np.isnan(props["depth"][1])
+
     def test_output_shapes_match(self):
         n = 10
         T = np.linspace(5, 25, n)

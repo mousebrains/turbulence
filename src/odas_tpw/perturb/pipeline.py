@@ -44,6 +44,12 @@ def _source_output_stem(path: Path, root: Path | str) -> str:
     return "__".join(_safe_stem_part(str(part)) for part in parts)
 
 
+# {stem}_prof{NNN}.nc — greedy stem so a stem containing "_prof" (or a current
+# stem that is a prefix of an orphan's stem) still anchors on the final
+# ``_prof{digits}.nc`` suffix, recovering the exact source stem.
+_PROF_NC_RE = re.compile(r"^(?P<stem>.+)_prof\d+\.nc$")
+
+
 def _prune_orphan_profile_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
     """Delete per-profile NetCDFs whose source .p file is no longer present.
 
@@ -53,27 +59,28 @@ def _prune_orphan_profile_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
     a changed set of .p files (one dropped, or an explicit reduced list) would
     leave orphaned NCs that the binning glob silently folds into the combos.
 
-    Remove only files that belong to NO current stem: a file is kept iff its
-    name starts with ``{stem}_prof`` for some stem in *valid_stems*. This
-    prefix test can never delete a file produced this run (those names start
-    with a current stem), so the only error direction is keeping a stray
-    orphan, never dropping live data. Returns the number pruned.
+    Match the EXACT source stem (parse ``{stem}_prof{NNN}.nc`` and require
+    ``stem in valid_stems``) rather than a name-prefix: a prefix test wrongly
+    KEEPS an orphan whose stem has a current stem as a prefix (e.g. current
+    ``a`` would protect a ``a_extra``-derived file). Only recognized profile
+    NetCDFs are pruned, so files not matching the ``_prof{NNN}`` shape are left
+    untouched and a file produced this run is never deleted. Returns the count.
     """
     if not stage_dir.exists():
         return 0
-    prefixes = tuple(f"{s}_prof" for s in valid_stems)
     pruned = 0
     for nc in stage_dir.glob("*_prof*.nc"):
-        if not nc.name.startswith(prefixes):
-            try:
-                nc.unlink()
-                pruned += 1
-                logger.info(
-                    "pruned orphaned %s (no source .p in current input set)",
-                    nc.name,
-                )
-            except OSError as exc:
-                logger.warning("could not prune %s: %s", nc.name, exc)
+        m = _PROF_NC_RE.match(nc.name)
+        if m is None or m.group("stem") in valid_stems:
+            continue  # not a recognized profile NC, or a current stem -> keep
+        try:
+            nc.unlink()
+            pruned += 1
+            logger.info(
+                "pruned orphaned %s (no source .p in current input set)", nc.name
+            )
+        except OSError as exc:
+            logger.warning("could not prune %s: %s", nc.name, exc)
     return pruned
 
 
