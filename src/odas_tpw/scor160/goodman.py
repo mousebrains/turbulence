@@ -55,8 +55,16 @@ def _nan_singular_bins(clean_UU: np.ndarray, AA: np.ndarray) -> np.ndarray:
     :func:`_sanitize_autospectra`'s floor. clean_UU: (..., n_sh, n_sh); AA:
     (..., n_ac, n_ac) with matching leading dims.
     """
-    with np.errstate(invalid="ignore", divide="ignore"):
-        cond = np.linalg.cond(AA)
+    # A NaN/inf in AA (a vibration dropout flows into the accel auto-spectrum)
+    # makes np.linalg.cond's SVD raise LinAlgError ("SVD did not converge"),
+    # which the errstate does NOT catch -- it would abort the whole .p file.
+    # Exclude non-finite AA matrices from the cond/SVD and treat them as bad
+    # bins directly, preserving l4's graceful NaN-bin handling.
+    finite_AA = np.all(np.isfinite(AA), axis=(-2, -1))
+    cond = np.full(AA.shape[:-2], np.inf)
+    if np.any(finite_AA):
+        with np.errstate(invalid="ignore", divide="ignore"):
+            cond[finite_AA] = np.linalg.cond(AA[finite_AA])
     bad = ~np.isfinite(cond) | (cond > 1.0e13)
     if np.any(bad):
         clean_UU[bad] = np.nan

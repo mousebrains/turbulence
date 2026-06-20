@@ -275,3 +275,27 @@ class TestCsdMatrixBatch:
                 128,
                 100.0,
             )
+
+
+class TestDetrendSegmentNaN:
+    """_detrend_segment must tolerate NaN like _detrend_batch (#M-2)."""
+
+    def test_nan_does_not_raise_and_is_restored(self):
+        from odas_tpw.scor160.spectral import _detrend_segment
+
+        seg = np.arange(10.0)          # a clean linear ramp
+        seg[5] = np.nan               # one dropout
+        ramp = np.arange(10.0)
+        for method in ("constant", "linear", "parabolic", "cubic"):
+            out = _detrend_segment(seg.copy(), method, ramp)  # must not raise
+            assert np.isnan(out[5])                            # NaN restored
+            assert np.all(np.isfinite(np.delete(out, 5)))      # rest detrended, finite
+
+    def test_csd_matrix_nan_yields_nan_not_raise(self):
+        # The single-arg csd_matrix path (used by clean_shear_spec) must produce
+        # NaN spectra on a NaN sample, not a ValueError that masquerades as
+        # "insufficient FFT segments".
+        x = np.random.default_rng(3).standard_normal((1024, 1))
+        x[500, 0] = np.nan
+        C, _F, _Cxx, _Cyy = csd_matrix(x, None, 256, 512.0, overlap=128, detrend="linear")
+        assert np.isnan(C).any()

@@ -43,17 +43,34 @@ def _get_window(nfft: int) -> np.ndarray:
 
 
 def _detrend_segment(seg: np.ndarray, method: str, ramp: np.ndarray) -> np.ndarray:
-    """Detrend a single FFT segment."""
+    """Detrend a single FFT segment.
+
+    NaN/inf values are replaced with zero before detrending (so scipy's
+    detrend / polyfit do not raise) and restored afterward, so the FFT yields
+    NaN for corrupted windows -- mirroring :func:`_detrend_batch`. Without this
+    a single NaN sample made the caller (Goodman cleaning) mis-report an
+    "insufficient FFT segments" error and silently skip cleaning.
+    """
     if method == "none":
         return seg
+    bad = ~np.isfinite(seg)
+    has_bad = bool(np.any(bad))
+    if has_bad:
+        seg = seg.copy()
+        seg[bad] = 0.0
     if method == "constant":
-        return seg - np.mean(seg)
-    if method == "linear":
-        return signal.detrend(seg, type="linear")
-    # parabolic or cubic
-    order = {"parabolic": 2, "cubic": 3}[method]
-    p = np.polyfit(ramp, seg, order)
-    return seg - np.polyval(p, ramp)
+        result = seg - np.mean(seg)
+    elif method == "linear":
+        result = signal.detrend(seg, type="linear")
+    else:
+        # parabolic or cubic
+        order = {"parabolic": 2, "cubic": 3}[method]
+        p = np.polyfit(ramp, seg, order)
+        result = seg - np.polyval(p, ramp)
+    if has_bad:
+        result = np.array(result, dtype=np.float64)
+        result[bad] = np.nan
+    return result
 
 
 def csd_odas(

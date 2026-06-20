@@ -132,6 +132,20 @@ class TestProcessL2:
         l2 = process_l2(l1, params)
         assert l2.vib_type == "ACC"
 
+    def test_nan_shear_not_counted_as_despiked(self):
+        """A NaN shear gap must not be counted as 'despiked' in the change mask
+        (NaN != NaN is True), which would inflate the despike fraction and
+        wrongly trip QC bit 2 (audit round-2 M-4)."""
+        l1 = _make_l1()
+        # Insert NaN gaps mid-descent (well inside the detected section); despike
+        # leaves them unchanged (cleaned == before, both NaN).
+        nan_idx = np.arange(15000, 15050)
+        l1.shear[0, nan_idx] = np.nan
+        params = _make_params()
+        l2 = process_l2(l1, params)
+        # Those positions are NaN-in/NaN-out, so they are NOT changes.
+        assert not l2.despike_mask_sh[0, nan_idx].any()
+
 
 class TestSectionSelection:
     """Test section selection criteria."""
