@@ -25,9 +25,15 @@ def _to_epoch_seconds(values: np.ndarray) -> np.ndarray:
     datetime64[*] columns are converted via integer ns since epoch.  Numeric
     columns are passed through unchanged — callers are expected to hand in
     epoch seconds when no datetime metadata is available.
+
+    NaT decodes to NaN (not the int64-min sentinel, which would otherwise become
+    a bogus ~-9.2e9 s epoch and poison the interpolation node).
     """
     if np.issubdtype(values.dtype, np.datetime64):
-        return values.astype("datetime64[ns]").astype(np.int64) / 1e9
+        ns = values.astype("datetime64[ns]").astype(np.int64)
+        secs = ns.astype(np.float64) / 1e9
+        secs[ns == np.iinfo(np.int64).min] = np.nan
+        return secs
     return values.astype(np.float64)
 
 
@@ -46,6 +52,27 @@ def _nc_values(var) -> np.ndarray:
         # with NaN raises (NaN cannot be cast to int).
         return np.asarray(np.ma.filled(arr.astype(np.float64), np.nan))
     return np.asarray(arr)
+
+
+def _finite_interp1d(t: np.ndarray, vals: np.ndarray):
+    """Build a linear interpolator over the FINITE (t, vals) pairs.
+
+    ``interp1d`` propagates NaN to every interval touching a NaN node, so a
+    single fill-valued lat/lon (or time) would blank whole position spans.
+    Dropping the non-finite nodes interpolates across the gap instead.
+    """
+    from scipy.interpolate import interp1d
+
+    t = np.asarray(t, dtype=np.float64)
+    vals = np.asarray(vals, dtype=np.float64)
+    good = np.isfinite(t) & np.isfinite(vals)
+    if int(good.sum()) >= 2:
+        return interp1d(
+            t[good], vals[good], bounds_error=False, fill_value="extrapolate"
+        )
+    # < 2 finite nodes: constant (or all-NaN) -> a constant function.
+    fill = float(vals[good][0]) if good.any() else np.nan
+    return interp1d([0.0, 1.0], [fill, fill], bounds_error=False, fill_value=fill)
 
 
 # CF time unit -> seconds factor.  Only common units; falls back to
@@ -185,25 +212,14 @@ class GPSFromCSV:
         max_time_diff: float = 60.0,
     ) -> None:
         import pandas as pd
-        from scipy.interpolate import interp1d
 
         df = pd.read_csv(file)
         t = _to_epoch_seconds(np.asarray(df[time_col].values))
         self._t_min = float(np.nanmin(t))
         self._t_max = float(np.nanmax(t))
         self._max_time_diff = float(max_time_diff)
-        self._lat_interp = interp1d(
-            t,
-            df[lat_col].values,
-            bounds_error=False,
-            fill_value="extrapolate",
-        )
-        self._lon_interp = interp1d(
-            t,
-            df[lon_col].values,
-            bounds_error=False,
-            fill_value="extrapolate",
-        )
+        self._lat_interp = _finite_interp1d(t, np.asarray(df[lat_col].values))
+        self._lon_interp = _finite_interp1d(t, np.asarray(df[lon_col].values))
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:
         """Interpolate latitude from CSV at the given times."""
@@ -258,7 +274,6 @@ class GPSFromNetCDF:
         max_time_diff: float = 60.0,
     ) -> None:
         import netCDF4 as nc
-        from scipy.interpolate import interp1d
 
         # Read raw arrays inside the context manager so the Dataset is closed
         # even if a read raises; decode times afterwards (raw/lat/lon are
@@ -304,8 +319,8 @@ class GPSFromNetCDF:
         self._t_min = float(np.nanmin(t))
         self._t_max = float(np.nanmax(t))
         self._max_time_diff = float(max_time_diff)
-        self._lat_interp = interp1d(t, lat, bounds_error=False, fill_value="extrapolate")
-        self._lon_interp = interp1d(t, lon, bounds_error=False, fill_value="extrapolate")
+        self._lat_interp = _finite_interp1d(t, lat)
+        self._lon_interp = _finite_interp1d(t, lon)
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:
         """Interpolate latitude from NetCDF at the given times."""

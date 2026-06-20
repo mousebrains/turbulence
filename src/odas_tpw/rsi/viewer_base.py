@@ -23,6 +23,25 @@ from odas_tpw.scor160.ocean import visc35
 # ---------------------------------------------------------------------------
 
 
+def _interp_slow_to_fast(T_slow: np.ndarray, n_fast: int) -> np.ndarray:
+    """Linear-interpolate a slow-rate series onto an ``n_fast``-length grid.
+
+    Used so per-window viscosity / noise can average temperature over the
+    window slice (matching the pipeline's per-window ``l3.temp``) instead of the
+    whole-cast mean, which biases viscosity-derived epsilon/chi by ~14% with
+    depth.
+    """
+    T_slow = np.asarray(T_slow, dtype=np.float64)
+    if T_slow.size == n_fast:
+        return T_slow
+    if T_slow.size < 2:
+        return np.full(n_fast, float(T_slow[0]) if T_slow.size else np.nan)
+    return np.asarray(
+        np.interp(np.arange(n_fast), np.linspace(0, n_fast - 1, T_slow.size), T_slow),
+        dtype=np.float64,
+    )
+
+
 def select_mid_window(
     P_fast: np.ndarray, sel: slice, fft_length: int, diss_length: int | None = None
 ) -> slice:
@@ -90,7 +109,8 @@ def compute_depth_spectra(
     w_sel = select_mid_window(P_fast, sel, fft_length, diss_length)
     n_win = w_sel.stop - w_sel.start
 
-    mean_T = float(np.mean(T_slow))
+    # Per-window mean temperature (was the whole-cast mean -> ~14% visc bias).
+    mean_T = float(np.mean(_interp_slow_to_fast(T_slow, len(P_fast))[w_sel]))
 
     result = {
         "K": np.array([]),
@@ -262,7 +282,7 @@ def compute_windowed_diss(
     chi_fom_batch_arr = np.full((n_therm, n_windows), np.nan)
     chi_fom_kraich_arr = np.full((n_therm, n_windows), np.nan)
 
-    mean_T = float(np.mean(T_slow))
+    T_fast = _interp_slow_to_fast(T_slow, len(P_fast))
     f_AA_chi = 0.9 * f_AA
 
     for idx in range(n_windows):
@@ -272,6 +292,8 @@ def compute_windowed_diss(
             break
         w_sel = slice(s, e)
         P_windows[idx] = float(np.mean(P_fast[w_sel]))
+        # Per-window mean temperature (was the whole-cast mean -> ~14% bias).
+        mean_T = float(np.mean(T_fast[w_sel]))
 
         # --- Epsilon ---
         if n_shear > 0:

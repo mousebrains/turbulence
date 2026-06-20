@@ -86,8 +86,11 @@ def detect_bottom_crash(
     assert mag_sq is not None  # unreachable: guarded by `if not vibration_channels`
     accel_mag = np.sqrt(mag_sq)
 
-    max_depth = np.nanmax(depth)
-    if max_depth < depth_minimum:
+    with np.errstate(invalid="ignore"):
+        max_depth = np.nanmax(depth)
+    # An all-NaN depth segment makes nanmax NaN; np.arange(..., NaN, ...) below
+    # then raises. Bail out cleanly instead of crashing the profile.
+    if not np.isfinite(max_depth) or max_depth < depth_minimum:
         return None
 
     # Bin acceleration variance by depth
@@ -120,7 +123,10 @@ def detect_bottom_crash(
     # Search from deepest bin upward for spike
     for i in range(len(bin_std) - 1, -1, -1):
         if np.isfinite(bin_std[i]) and bin_std[i] > threshold:
-            bottom_depth = bins[i]
+            # Report the bin CENTER, not its shallow (left) edge: bins[i] alone
+            # under-reads the bottom depth by up to one bin width, and top_trim
+            # likewise uses bin centers (#22).
+            bottom_depth = 0.5 * (bins[i] + bins[i + 1])
             return float(bottom_depth)
 
     return None

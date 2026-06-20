@@ -40,11 +40,16 @@ def add_seawater_properties(
     """
     import gsw
 
-    T = np.asarray(T, dtype=np.float64)
-    C = np.asarray(C, dtype=np.float64)
-    P = np.asarray(P, dtype=np.float64)
-    lat = np.asarray(lat, dtype=np.float64)
-    lon = np.asarray(lon, dtype=np.float64)
+    # Fill masked cells with NaN (do NOT np.asarray a masked array — that drops
+    # the mask and exposes raw _FillValue, e.g. -999, as if it were real T/C/P).
+    def _filled(x):
+        return np.ma.filled(np.ma.asarray(x).astype(np.float64), np.nan)
+
+    T = _filled(T)
+    C = _filled(C)
+    P = _filled(P)
+    lat = _filled(lat)
+    lon = _filled(lon)
 
     # Replace NaN lat/lon with 0 for gsw (matches Matlab default)
     lat_safe = np.where(np.isnan(lat), 0.0, lat)

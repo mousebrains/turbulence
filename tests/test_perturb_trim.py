@@ -153,6 +153,20 @@ class TestTrimPFile:
         forced = trim_p_file(src, out_dir, force=True)
         assert forced.action == "trimmed"
 
+    def test_dest_equals_source_does_not_destroy_file(self, tmp_path):
+        """When the trim dest resolves to the source (root==output_dir==source
+        dir), the source must NOT be truncated to 0 bytes — it's produced via a
+        temp file + atomic replace (M-10)."""
+        src = _make_p_file(
+            tmp_path / "frac.p", record_size=1024, n_records=3, extra_bytes=50
+        )
+        original_size = src.stat().st_size
+        result = trim_p_file(src, tmp_path, root=tmp_path)  # dest resolves to src
+        assert result.action == "trimmed"
+        assert result.dest.resolve() == src.resolve()
+        # Source not wiped; it's the trimmed prefix (the 50 fractional bytes gone).
+        assert src.stat().st_size == original_size - 50
+
     def test_resaves_when_source_is_newer(self, tmp_path):
         """A source modified after its trimmed output is re-trimmed, not skipped."""
         import os

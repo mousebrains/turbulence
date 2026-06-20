@@ -287,3 +287,60 @@ class TestExtractOneWorker:
         path_str, count = result
         assert path_str == str(nc)
         assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# extract_profiles — e_fast must be clamped to the fast-axis length (#6)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractProfilesFastClamp:
+    def _write_short_fast_nc(self, path: Path, n_slow: int, n_fast: int,
+                             fs_fast: float, fs_slow: float) -> Path:
+        """NC whose fast axis is short of n_slow*ratio, forcing the final
+        profile's (e_slow+1)*ratio to over-run len(t_fast)."""
+        ds = netCDF4.Dataset(str(path), "w", format="NETCDF4")
+        try:
+            ds.fs_fast = fs_fast
+            ds.fs_slow = fs_slow
+            ds.createDimension("time_fast", n_fast)
+            ds.createDimension("time_slow", n_slow)
+            tf = ds.createVariable("t_fast", "f8", ("time_fast",))
+            tf[:] = np.arange(n_fast) / fs_fast
+            tf.units = "seconds"
+            ts = ds.createVariable("t_slow", "f8", ("time_slow",))
+            ts[:] = np.arange(n_slow) / fs_slow
+            ts.units = "seconds"
+            p = ds.createVariable("P", "f8", ("time_slow",))
+            p[:] = np.linspace(5.0, 50.0, n_slow)
+            p.units = "dbar"
+            sh1 = ds.createVariable("sh1", "f8", ("time_fast",))
+            sh1[:] = np.random.default_rng(0).standard_normal(n_fast) * 0.05
+            sh1.units = "s-1"
+        finally:
+            ds.close()
+        return path
+
+    def test_final_profile_clamps_to_fast_length(self, tmp_path):
+        """Passing an explicit full-record profile whose (e_slow+1)*ratio
+        exceeds len(t_fast): without the clamp the declared time_fast dim
+        (256) mismatches the clamped slice (250) and netCDF raises. The clamp
+        sizes the dim to the available fast samples."""
+        n_slow, fs_fast, fs_slow = 32, 512.0, 64.0  # ratio = 8
+        n_fast = 250  # 6 short of n_slow*ratio = 256
+        nc = self._write_short_fast_nc(
+            tmp_path / "short.nc", n_slow, n_fast, fs_fast, fs_slow
+        )
+        out_dir = tmp_path / "out"
+        # Explicit final profile reaching the last slow index (e_slow = 31):
+        # (31+1)*8 = 256 > 250.
+        paths = extract_profiles(nc, out_dir, profiles=[(0, n_slow - 1)])
+        assert len(paths) == 1
+        prof = netCDF4.Dataset(str(paths[0]))
+        try:
+            # Dim clamped to the fast samples actually available from s_fast=0.
+            assert prof.dimensions["time_fast"].size == n_fast
+            assert prof.variables["t_fast"].shape[0] == n_fast
+            assert prof.variables["sh1"].shape[0] == n_fast
+        finally:
+            prof.close()

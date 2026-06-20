@@ -223,8 +223,10 @@ def convert_jac_c(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     """JAC conductivity: ratio of I/V parts from 32-bit combined word → mS/cm."""
     i_part = np.floor(data / 2**16)
     v_part = np.mod(data, 2**16)
-    v_part[v_part == 0] = 1
-    ratio = i_part / v_part
+    # NaN (not 1) for a zero voltage part: a v_part==0 sample is corrupt, so
+    # flag it rather than fabricating a finite ratio that looks like real data.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where(v_part == 0, np.nan, i_part / v_part)
     a = _safe_float(params.get("a"))
     b = _safe_float(params.get("b"))
     c = _safe_float(params.get("c"))

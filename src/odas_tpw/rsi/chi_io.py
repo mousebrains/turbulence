@@ -26,6 +26,10 @@ import xarray as xr
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
 
+# Max acceptable epsilon FOM for including a probe in the Method-1 mean
+# (matches compute_chi_window's fom_limit default).
+_EPS_FOM_LIMIT = 1.15
+
 
 def _compute_chi(
     source: PFile | str | Path,
@@ -339,10 +343,39 @@ def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
         n_sh = 1
         eps_vals = eps_vals[np.newaxis]
 
+    def _probe_var(name: str) -> np.ndarray | None:
+        """Read a per-probe (n_sh, n) variable from the epsilon dataset."""
+        if name not in epsilon_ds:
+            return None
+        a = np.asarray(epsilon_ds[name].values, dtype=np.float64)
+        return a[np.newaxis] if a.ndim == 1 else a
+
+    fom_arr = _probe_var("fom")
+    mad_arr = _probe_var("mad")
+
     if "epsilonMean" in epsilon_ds:
         epsi_final = np.asarray(epsilon_ds["epsilonMean"].values, dtype=np.float64)
     elif n_sh > 1:
-        epsi_final = np.nanmean(eps_vals, axis=0)
+        # Exclude bad-probe estimates (fom > fom_limit) before averaging across
+        # probes, mirroring compute_chi_window's Method-1 filter: a high-fom
+        # shear probe must not bias the epsilon that drives every thermistor's
+        # chi. Where a window has no good probe, fall back to the all-probe mean.
+        eps_for_mean = eps_vals.astype(np.float64, copy=True)
+        if fom_arr is not None and fom_arr.shape == eps_for_mean.shape:
+            bad = ~np.isfinite(fom_arr) | (fom_arr > _EPS_FOM_LIMIT)
+            eps_for_mean = np.where(bad, np.nan, eps_for_mean)
+        # catch_warnings (not just errstate): an all-NaN window makes nanmean
+        # emit a "Mean of empty slice" RuntimeWarning via warnings.warn, which
+        # np.errstate does not suppress. Legitimate dropout windows must not
+        # produce a warning storm (#9).
+        with np.errstate(invalid="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            epsi_final = np.nanmean(eps_for_mean, axis=0)
+            allnan = ~np.isfinite(epsi_final)
+            if np.any(allnan):
+                fallback = np.nanmean(eps_vals, axis=0)
+                epsi_final = epsi_final.copy()
+                epsi_final[allnan] = fallback[allnan]
     else:
         epsi_final = eps_vals[0]
 
@@ -365,8 +398,10 @@ def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
         epsi=eps_vals,
         epsi_final=epsi_final,
         epsi_flags=np.zeros((n_sh, n)),
-        fom=np.zeros((n_sh, n)),
-        mad=np.zeros((n_sh, n)),
+        fom=fom_arr if fom_arr is not None and fom_arr.shape == (n_sh, n)
+        else np.zeros((n_sh, n)),
+        mad=mad_arr if mad_arr is not None and mad_arr.shape == (n_sh, n)
+        else np.zeros((n_sh, n)),
         kmax=np.zeros((n_sh, n)),
         method=np.zeros((n_sh, n)),
         var_resolved=np.zeros((n_sh, n)),

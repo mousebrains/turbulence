@@ -44,6 +44,12 @@ def _source_output_stem(path: Path, root: Path | str) -> str:
     return "__".join(_safe_stem_part(str(part)) for part in parts)
 
 
+# {stem}_prof{NNN}.nc — greedy stem so a stem containing "_prof" (or a current
+# stem that is a prefix of an orphan's stem) still anchors on the final
+# ``_prof{digits}.nc`` suffix, recovering the exact source stem.
+_PROF_NC_RE = re.compile(r"^(?P<stem>.+)_prof\d+\.nc$")
+
+
 def _prune_orphan_profile_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
     """Delete per-profile NetCDFs whose source .p file is no longer present.
 
@@ -53,23 +59,51 @@ def _prune_orphan_profile_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
     a changed set of .p files (one dropped, or an explicit reduced list) would
     leave orphaned NCs that the binning glob silently folds into the combos.
 
-    Remove only files that belong to NO current stem: a file is kept iff its
-    name starts with ``{stem}_prof`` for some stem in *valid_stems*. This
-    prefix test can never delete a file produced this run (those names start
-    with a current stem), so the only error direction is keeping a stray
-    orphan, never dropping live data. Returns the number pruned.
+    Match the EXACT source stem (parse ``{stem}_prof{NNN}.nc`` and require
+    ``stem in valid_stems``) rather than a name-prefix: a prefix test wrongly
+    KEEPS an orphan whose stem has a current stem as a prefix (e.g. current
+    ``a`` would protect a ``a_extra``-derived file). Only recognized profile
+    NetCDFs are pruned, so files not matching the ``_prof{NNN}`` shape are left
+    untouched and a file produced this run is never deleted. Returns the count.
     """
     if not stage_dir.exists():
         return 0
-    prefixes = tuple(f"{s}_prof" for s in valid_stems)
     pruned = 0
     for nc in stage_dir.glob("*_prof*.nc"):
-        if not nc.name.startswith(prefixes):
+        m = _PROF_NC_RE.match(nc.name)
+        if m is None or m.group("stem") in valid_stems:
+            continue  # not a recognized profile NC, or a current stem -> keep
+        try:
+            nc.unlink()
+            pruned += 1
+            logger.info(
+                "pruned orphaned %s (no source .p in current input set)", nc.name
+            )
+        except OSError as exc:
+            logger.warning("could not prune %s: %s", nc.name, exc)
+    return pruned
+
+
+def _prune_orphan_named_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
+    """Delete ``{stem}.nc`` per-file outputs whose source .p is no longer present.
+
+    Sibling of :func:`_prune_orphan_profile_ncs` for products named exactly
+    ``{stem}.nc`` (the CTD per-file outputs, ctd.py). Those carry no ``_prof``
+    suffix, so the prefix-based pruner skips them and orphaned casts from a
+    dropped .p file would leak into the CTD combo. Prune any ``*.nc`` whose stem
+    is not in *valid_stems* (exact membership); a file produced this run always
+    matches a current stem, so live data is never dropped. Returns the count.
+    """
+    if not stage_dir.exists():
+        return 0
+    pruned = 0
+    for nc in stage_dir.glob("*.nc"):
+        if nc.stem not in valid_stems:
             try:
                 nc.unlink()
                 pruned += 1
                 logger.info(
-                    "pruned orphaned %s (no source .p in current input set)",
+                    "pruned orphaned CTD %s (no source .p in current input set)",
                     nc.name,
                 )
             except OSError as exc:
@@ -1134,12 +1168,17 @@ def process_file(
                 logger.error("extracting profiles %s: %s", p_path.name, exc)
                 return result
 
-    # Per-profile dissipation
-    eps_cfg = config.get("epsilon", {})
+    # Per-profile dissipation. Resolve via merge_config so the DEFAULTS (e.g.
+    # epsilon.fft_length=256) — and any None values, which merge_config drops —
+    # are the values actually handed to _compute_epsilon/_compute_chi and the
+    # diss_length_seconds below. config.get() raw would let an omitted/null
+    # fft_length fall to _compute_epsilon's own 1024 default (mis-sizing windows
+    # and making the diss-dir provenance hash, which IS merge_config-based, lie).
+    eps_cfg = merge_config("epsilon", config.get("epsilon"))
     inst_lookup = instrument_key if instrument_key is not None else p_path.parent.name
     instrument_cfg = config.get("instruments", {}).get(inst_lookup, {})
     excluded_probes = list(instrument_cfg.get("exclude_shear_probes", []))
-    chi_cfg = config.get("chi", {})
+    chi_cfg = merge_config("chi", config.get("chi"))
     chi_enabled = bool(chi_cfg.get("enable", False)) and "chi" in output_dirs
 
     # Per-profile channels cache: filled here, consumed by the chi loop
@@ -1595,8 +1634,9 @@ def _setup_output_dirs(config: dict) -> dict[str, Path]:
         upstream=_upstream_for("diss", config),
     )
 
-    # Chi directory (if enabled)
-    chi_cfg = config.get("chi", {})
+    # Chi directory (if enabled). merge_config so the enable decision matches
+    # process_file's (which now resolves chi via merge_config).
+    chi_cfg = merge_config("chi", config.get("chi"))
     if chi_cfg.get("enable", False):
         chi_params = merge_config("chi", chi_cfg)
         dirs["chi"] = resolve_output_dir(
@@ -1916,6 +1956,10 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     for _stage in ("profiles", "diss", "chi"):
         if _stage in output_dirs:
             _prune_orphan_profile_ncs(output_dirs[_stage], valid_stems)
+    # CTD per-file outputs are named {stem}.nc (no _prof suffix), so prune them
+    # with exact-stem matching before the CTD combo globs the dir.
+    if "ctd" in output_dirs:
+        _prune_orphan_named_ncs(output_dirs["ctd"], valid_stems)
 
     # Resolve binned-output dirs *before* the bin call so we can pass them
     # as ``log_dir`` and each input .p file's records land in

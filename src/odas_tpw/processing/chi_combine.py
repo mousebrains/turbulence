@@ -24,6 +24,14 @@ import numpy as np
 import xarray as xr
 
 
+def _probe_sort_key(name: str) -> tuple[int, str]:
+    """Order probe variables by their trailing integer so chi_2 sorts before
+    chi_10 (plain lexicographic order puts chi_10 first). Names without a
+    numeric suffix sort last, by name (#24)."""
+    suffix = name.rsplit("_", 1)[-1]
+    return (int(suffix), "") if suffix.isdigit() else (2**31, name)
+
+
 def mk_chi_mean(
     ds: xr.Dataset,
     chi_minimum: float = 1e-13,
@@ -68,7 +76,10 @@ def mk_chi_mean(
     """
     ds = ds.copy()
 
-    probe_names = sorted(str(k) for k in ds.data_vars if str(k).startswith("chi_"))
+    probe_names = sorted(
+        (str(k) for k in ds.data_vars if str(k).startswith("chi_")),
+        key=_probe_sort_key,
+    )
 
     if not probe_names and "chi" in ds and "probe" in ds.dims:
         for i in range(ds.sizes["probe"]):

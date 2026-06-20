@@ -752,3 +752,33 @@ class TestPerChannelTimeColumn:
         )
         assert "P" in out
         assert "event" not in out  # singleton skipped
+
+
+def test_dt64_to_epoch_s_nat_is_nan():
+    """hotel datetime->epoch maps NaT to NaN, not a bogus epoch (M-13)."""
+    from odas_tpw.perturb.hotel import _dt64_to_epoch_s
+
+    t = np.array(["2025-01-01T00:00:00", "NaT"], dtype="datetime64[ns]")
+    out = _dt64_to_epoch_s(t)
+    assert np.isfinite(out[0])
+    assert np.isnan(out[1])
+
+
+def test_interp_one_handles_nan_data():
+    """pchip / interp1d must interpolate across NaN gaps, not crash (M-12)."""
+    from odas_tpw.perturb.hotel import _interp_one
+
+    hotel_t = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    data = np.array([0.0, np.nan, 2.0, np.nan, 4.0])  # fill-valued gaps
+    target = np.array([0.5, 1.5, 2.5, 3.5])
+    for kind in ("pchip", "linear"):
+        out = _interp_one(hotel_t, data, target, kind)   # must not raise
+        assert out.shape == target.shape
+        assert np.all(np.isfinite(out))                   # gaps interpolated
+
+def test_interp_one_too_few_points_returns_nan():
+    from odas_tpw.perturb.hotel import _interp_one
+
+    out = _interp_one(np.array([0.0, 1.0]), np.array([np.nan, np.nan]),
+                      np.array([0.5]), "pchip")
+    assert np.isnan(out).all()

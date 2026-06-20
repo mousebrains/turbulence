@@ -155,6 +155,16 @@ def test_default_vars_and_latitude_axis(tmp_path: Path):
     assert (tmp_path / "mixing_m.png").exists()
 
 
+def test_profiles_var_on_1d_var_is_graceful(tmp_path: Path):
+    """`--var lat` (a 1-D profile-only var) must be treated as missing with a
+    clear message, not crash on transpose('bin','profile') (M-15)."""
+    _build_all_products(tmp_path)
+    rc = _run(["profiles", "--root", str(tmp_path), "--product", "profiles",
+               "--out-dir", str(tmp_path), "--name", "x", "--var", "lat"])
+    assert rc == 0                                   # graceful skip, no traceback
+    assert not (tmp_path / "profiles_x.png").exists()  # no panel built
+
+
 def test_profile_window_skips_when_empty(tmp_path: Path):
     _build_all_products(tmp_path)
     cfg = tmp_path / "s.yaml"

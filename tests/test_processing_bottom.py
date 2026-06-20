@@ -24,6 +24,22 @@ class TestDetectBottomCrash:
         assert bottom is not None
         assert bottom > 80.0
 
+    def test_reports_bin_center_not_left_edge(self):
+        """The crash depth is the spike bin's CENTER, not its shallow edge, so
+        it is not under-read by up to one bin width (#22)."""
+        np.random.seed(42)
+        n = 5000
+        depth = np.linspace(10.0, 50.0, n)
+        accel = np.random.randn(n) * 0.01
+        # A noisy spike confined to the depth bin [38, 42) (center 40). With the
+        # defaults depth_minimum=10, depth_window=4 the edges are [10,14,...,50].
+        spike = (depth >= 38.0) & (depth < 42.0)
+        accel[spike] = np.random.randn(int(spike.sum())) * 5.0
+        bottom = detect_bottom_crash(
+            depth, {"vibration_rms": accel}, fs=512.0, vibration_factor=4.0
+        )
+        assert bottom == 40.0  # 0.5*(38+42), not the left edge 38.0
+
     def test_no_crash(self):
         """Smooth profile — no crash."""
         n = 5000
@@ -51,6 +67,15 @@ class TestDetectBottomCrash:
     def test_empty_channel_dict_returns_none(self):
         depth = np.linspace(0, 100, 1000)
         assert detect_bottom_crash(depth, {}, fs=512.0) is None
+
+    def test_all_nan_depth_returns_none(self):
+        """An all-NaN depth segment must return None, not crash on
+        np.arange(..., NaN, ...) (audit round-2)."""
+        n = 1000
+        depth = np.full(n, np.nan)
+        Ax = np.random.randn(n) * 10.0
+        Ay = np.random.randn(n) * 10.0
+        assert detect_bottom_crash(depth, {"Ax": Ax, "Ay": Ay}, fs=512.0) is None
 
     def test_single_channel_pre_aggregated(self):
         """One pre-computed magnitude channel works just like Ax/Ay."""

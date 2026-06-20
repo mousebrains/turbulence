@@ -5,6 +5,7 @@ Reference: Code/save2combo.m, Code/glue_widthwise.m, Code/glue_lengthwise.m,
            Code/save2NetCDF.m
 """
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,6 +13,8 @@ import numpy as np
 import xarray as xr
 
 from odas_tpw.perturb.netcdf_schema import GLOBAL_ATTRS, apply_schema
+
+logger = logging.getLogger(__name__)
 
 
 def _glue_widthwise(datasets: list[xr.Dataset]) -> xr.Dataset:
@@ -110,12 +113,26 @@ def make_combo(
         # per-file windows), which violate CF strict monotonicity. Drop NaN and
         # coalesce exact duplicates (keep first) on the now-sorted axis.
         tk = combo["time"].values
-        keep = np.isfinite(tk)
+        finite = np.isfinite(tk)
+        keep = finite.copy()
         keep[1:] &= tk[1:] != tk[:-1]
         # Only filter when it leaves at least one sample: an all-NaN-time combo
         # (no valid coordinate at all) is kept intact so it stays writable -- the
         # downstream coverage-attr logic already skips coverage for all-NaN time.
         if keep.any() and not keep.all():
+            # Non-finite and duplicate drops are disjoint (NaN != anything, so a
+            # duplicate cell is always finite), hence n_dup = total - n_nan.
+            n_nan = int((~finite).sum())
+            n_dropped = int(keep.size - int(keep.sum()))
+            n_dup = n_dropped - n_nan
+            if n_dropped:
+                logger.warning(
+                    "make_combo(time): dropped %d duplicate and %d non-finite "
+                    "timestamp(s) of %d for CF strict monotonicity",
+                    n_dup,
+                    n_nan,
+                    int(keep.size),
+                )
             combo = combo.isel(time=np.flatnonzero(keep))
 
     # Apply schema

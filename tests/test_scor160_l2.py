@@ -132,6 +132,20 @@ class TestProcessL2:
         l2 = process_l2(l1, params)
         assert l2.vib_type == "ACC"
 
+    def test_nan_shear_not_counted_as_despiked(self):
+        """A NaN shear gap must not be counted as 'despiked' in the change mask
+        (NaN != NaN is True), which would inflate the despike fraction and
+        wrongly trip QC bit 2 (audit round-2 M-4)."""
+        l1 = _make_l1()
+        # Insert NaN gaps mid-descent (well inside the detected section); despike
+        # leaves them unchanged (cleaned == before, both NaN).
+        nan_idx = np.arange(15000, 15050)
+        l1.shear[0, nan_idx] = np.nan
+        params = _make_params()
+        l2 = process_l2(l1, params)
+        # Those positions are NaN-in/NaN-out, so they are NOT changes.
+        assert not l2.despike_mask_sh[0, nan_idx].any()
+
 
 class TestSectionSelection:
     """Test section selection criteria."""
@@ -151,6 +165,22 @@ class TestSectionSelection:
         params.profile_min_duration = 10.0
         l2 = process_l2(l1, params)
         assert l2.section_number.max() == 0
+
+    def test_empty_input_returns_empty_no_indexerror(self):
+        """_select_sections must not IndexError on empty speed/pressure input;
+        it returns the already-allocated empty array (#19)."""
+        from odas_tpw.scor160.l2 import _select_sections
+
+        out = _select_sections(
+            np.array([]),
+            np.array([]),
+            fs=512.0,
+            min_speed=0.4,
+            min_pressure=1.0,
+            min_duration=7.0,
+            direction="vertical",
+        )
+        assert out.shape == (0,)
 
 
 class TestDespiking:

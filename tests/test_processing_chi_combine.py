@@ -110,6 +110,14 @@ class TestMkChiMean:
         result = mk_chi_mean(ds)
         assert "chiMean" not in result
 
+    def test_probe_sort_key_orders_by_trailing_int(self):
+        """chi_2 must sort before chi_10; plain lexicographic order puts chi_10
+        first (#24)."""
+        from odas_tpw.processing.chi_combine import _probe_sort_key
+
+        names = ["chi_10", "chi_2", "chi_1"]
+        assert sorted(names, key=_probe_sort_key) == ["chi_1", "chi_2", "chi_10"]
+
     def test_defaults_no_speed_nu(self):
         n = 10
         c = np.full(n, 1e-7)

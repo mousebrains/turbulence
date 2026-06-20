@@ -80,6 +80,20 @@ class TestBatchelorGrad:
         mean_k_high = np.average(k, weights=S_high + 1e-30)
         assert mean_k_high > mean_k_low
 
+    def test_degenerate_kB_returns_finite_zero_no_warning(self):
+        """A degenerate kB (0) must yield a finite (0.0) spectrum with no
+        divide/invalid warnings, mirroring kraichnan_grad (#16)."""
+        import warnings
+
+        from odas_tpw.chi.batchelor import batchelor_grad
+
+        k = np.logspace(0, 3, 100)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            S = batchelor_grad(k, 0.0, 1e-7)
+        assert np.all(np.isfinite(S))
+        assert np.all(S == 0.0)
+
 
 class TestKraichnanGrad:
     def test_integral_equals_chi_over_6kT(self):
@@ -868,6 +882,48 @@ class TestEpsilonDsToL4Data:
         np.testing.assert_array_equal(l4.pres, np.zeros(n))
         np.testing.assert_array_equal(l4.pspd_rel, np.zeros(n))
 
+    def test_high_fom_probe_excluded_from_method1_mean(self):
+        """When epsilonMean is absent, a high-fom (bad) probe is excluded before
+        averaging, and the real fom is propagated (not zeros) (M-1)."""
+        import xarray as xr
+
+        from odas_tpw.rsi.chi_io import _epsilon_ds_to_l4data
+
+        n = 4
+        eps = np.array([[1e-7] * n, [1e-9] * n], dtype=np.float64)  # probe 2 low
+        fom = np.array([[1.0] * n, [3.0] * n], dtype=np.float64)    # probe 2 fom>1.15
+        ds = xr.Dataset(
+            {
+                "epsilon": (["probe", "time"], eps),
+                "fom": (["probe", "time"], fom),
+                "P_mean": (["time"], np.linspace(10, 100, n)),
+                "speed": (["time"], np.full(n, 0.7)),
+            },
+            coords={"probe": ["sh1", "sh2"], "t": ("time", np.arange(n, dtype=float))},
+        )
+        l4 = _epsilon_ds_to_l4data(ds)
+        # Bad probe excluded -> epsi_final is the good probe, not the 2-probe
+        # mean (~5e-8); real fom propagated.
+        np.testing.assert_allclose(l4.epsi_final, 1e-7)
+        np.testing.assert_allclose(l4.fom, fom)
+
+    def test_all_probes_bad_fom_fall_back_to_all_mean(self):
+        """If every probe is bad-fom at a window, fall back to the all-probe
+        mean rather than emitting NaN (mirrors compute_chi_window)."""
+        import xarray as xr
+
+        from odas_tpw.rsi.chi_io import _epsilon_ds_to_l4data
+
+        n = 3
+        eps = np.array([[1e-7] * n, [1e-8] * n], dtype=np.float64)
+        fom = np.full((2, n), 5.0)  # both bad
+        ds = xr.Dataset(
+            {"epsilon": (["probe", "time"], eps), "fom": (["probe", "time"], fom)},
+            coords={"probe": ["a", "b"], "t": ("time", np.arange(n, dtype=float))},
+        )
+        l4 = _epsilon_ds_to_l4data(ds)
+        np.testing.assert_allclose(l4.epsi_final, np.nanmean(eps, axis=0))
+
     def test_datetime64_t_converted_to_seconds_since_start_time(self):
         """Datetime64 ``t`` decoded by xarray is rebased to seconds-since-
         start_time so it matches L3ChiData.time's reference. Without this,
@@ -1335,6 +1391,87 @@ class TestProcessL3ChiBranches:
         assert l3_chi is not None
 
 
+class TestProcessL3ChiNaNHandling:
+    """L3 chi speed/temperature NaN handling (#57, #58, #60). Uses a minimal
+    hand-built L2ChiData, so no real profile data is required."""
+
+    @staticmethod
+    def _make_l2_chi(temp, pspd, n=1024, fs=512.0):
+        from odas_tpw.chi.l2_chi import L2ChiData
+
+        rng = np.random.RandomState(0)
+        return L2ChiData(
+            time=np.arange(n) / fs,
+            pres=np.linspace(1.0, 10.0, n),
+            temp=temp,
+            temp_fast=rng.randn(1, n) * 0.01 + 12.0,
+            gradt=rng.randn(1, n) * 1e-3,
+            vib=np.zeros((1, n)),
+            pspd_rel=pspd,
+            section_number=np.ones(n),
+            diff_gains=[0.94],
+            fs_fast=fs,
+        )
+
+    @staticmethod
+    def _params(fs=512.0):
+        from odas_tpw.scor160.io import L3Params
+
+        return L3Params(
+            fft_length=256, diss_length=512, overlap=256,
+            HP_cut=0.25, fs_fast=fs, goodman=False,
+        )
+
+    def test_partial_nan_speed_uses_finite_mean_not_floor(self):
+        """A window with a few NaN speed samples averages its finite samples
+        (~0.6 m/s); np.mean collapsed the whole window to the 0.01 floor (#58)."""
+        from odas_tpw.chi.l3_chi import process_l3_chi
+
+        n = 1024
+        pspd = np.full(n, 0.6)
+        pspd[0:10] = np.nan  # a few NaNs inside the first window
+        l3 = process_l3_chi(
+            self._make_l2_chi(np.full(n, 12.0), pspd), self._params(), salinity=34.5
+        )
+        assert l3.pspd_rel[0] > 0.5  # ~0.6, not the 0.01 floor
+
+    def test_all_nan_temperature_falls_back_to_10C(self):
+        """An all-NaN-temperature window uses 10 degC for viscosity (finite nu)
+        and warns, mirroring the epsilon side, instead of NaN-ing chi (#57)."""
+        import warnings
+
+        from odas_tpw.chi.l3_chi import process_l3_chi
+
+        n = 1024
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            l3 = process_l3_chi(
+                self._make_l2_chi(np.full(n, np.nan), np.full(n, 0.6)),
+                self._params(),
+                salinity=34.5,
+            )
+        assert np.allclose(l3.temp, 10.0)
+        assert np.all(np.isfinite(l3.nu))
+        assert any("10 degC" in str(x.message) for x in w)
+
+    def test_all_nan_temperature_no_empty_slice_warning(self):
+        """The all-NaN nanmeans must not leak a numpy 'Mean of empty slice'
+        RuntimeWarning (#60)."""
+        import warnings
+
+        from odas_tpw.chi.l3_chi import process_l3_chi
+
+        n = 1024
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            process_l3_chi(
+                self._make_l2_chi(np.full(n, np.nan), np.full(n, 0.6)),
+                self._params(),
+                salinity=34.5,
+            )
+        assert not any("Mean of empty slice" in str(x.message) for x in w)
+
+
 # ---------------------------------------------------------------------------
 # chi/l4_chi.py extra branches
 # ---------------------------------------------------------------------------
@@ -1438,6 +1575,24 @@ class TestProcessL4ChiBranches:
         results = _compute_chi(PROFILE_FILE, fft_length=512, fit_method="mle")
         assert len(results) >= 1
 
+    def test_mle_epsilon_not_biased_high_vs_iterative(self):
+        """The iterated mle fit's epsilon must agree with the default iterative
+        fit, not run ~1.7-2.2x high from a too-low fixed chi_obs (M-6)."""
+        from odas_tpw.rsi.chi_io import _compute_chi
+
+        def _median_eps(results):
+            vals = np.concatenate(
+                [np.asarray(d["epsilon_T"].values).ravel() for d in results]
+            )
+            vals = vals[np.isfinite(vals) & (vals > 0)]
+            return float(np.median(vals)) if vals.size else np.nan
+
+        em = _median_eps(_compute_chi(PROFILE_FILE, fft_length=512, fit_method="mle"))
+        ei = _median_eps(_compute_chi(PROFILE_FILE, fft_length=512, fit_method="iterative"))
+        assert np.isfinite(em) and np.isfinite(ei)
+        # Before the fix the ratio was ~1.7-2.2; iterating brings it near 1.
+        assert 0.5 < em / ei < 1.6
+
 
 class TestComputeChiFinal:
     def test_no_good_chi_returns_nan(self):
@@ -1500,3 +1655,29 @@ class TestComputeChiSalinityGuard:
         # Guard fires before any file access, so the source need not exist.
         with pytest.raises(ValueError, match="not resolved"):
             _compute_chi("nonexistent.nc", salinity="measured")
+
+
+class TestEpsilonDsToL4DataAllNaN:
+    """_epsilon_ds_to_l4data must not emit a 'Mean of empty slice' warning storm
+    for legitimate all-NaN dropout windows (#9)."""
+
+    def test_all_nan_window_emits_no_warning(self):
+        import warnings
+
+        import xarray as xr
+
+        from odas_tpw.rsi.chi_io import _epsilon_ds_to_l4data
+
+        n = 5
+        eps = np.full((2, n), 1e-8)  # 2 probes -> triggers the nanmean branch
+        eps[:, 2] = np.nan  # an all-NaN window across both probes
+        ds = xr.Dataset(
+            {"epsilon": (["probe", "t"], eps)},
+            coords={"t": np.arange(n, dtype=float)},
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            l4 = _epsilon_ds_to_l4data(ds)
+        # The all-NaN window stays NaN (the fallback is all-NaN there too).
+        assert np.isnan(l4.epsi_final[2])
+        assert np.isfinite(l4.epsi_final[0])

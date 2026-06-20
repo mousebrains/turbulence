@@ -231,6 +231,30 @@ class TestSetupOutputDirs:
         assert "ctd" not in dirs
 
 
+class TestEpsilonConfigDefaultsResolved:
+    """process_file resolves epsilon/chi via merge_config, so an omitted or
+    null fft_length uses the documented default (256) -- not _compute_epsilon's
+    own 1024 -- and the diss-dir provenance hash (also merge_config-based)
+    therefore matches the data, and diss_length_seconds is sized correctly
+    (M-8/M-9, and the fft_length:null TypeError)."""
+
+    def test_omitted_and_null_fft_length_resolve_to_default(self):
+        from odas_tpw.perturb.config import merge_config
+
+        assert merge_config("epsilon", {}).get("fft_length") == 256
+        assert merge_config("epsilon", {"fft_length": None}).get("fft_length") == 256
+
+    def test_diss_length_seconds_derives_from_merged_fft_length(self):
+        from odas_tpw.perturb.config import merge_config
+
+        # Mirrors the pipeline: diss_length or 4*fft_length, on the MERGED cfg
+        # (so omitted -> 4*256, never 4*1024 and never 4*None -> TypeError).
+        for raw in ({}, {"fft_length": None}):
+            eps = merge_config("epsilon", raw)
+            diss_len = eps.get("diss_length") or 4 * eps.get("fft_length")
+            assert diss_len == 4 * 256
+
+
 class TestUpstreamFor:
     """The .params_sha256_<hash> signature on each output dir must hash
     the stage's own params plus every ancestor's params, so a change to a

@@ -179,7 +179,14 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
                 all_temp.append(np.mean(l1.temp[s:e]))
             else:
                 all_temp.append(np.nan)
-            all_speed.append(np.mean(l2.pspd_rel[s:e]))
+            # Average only the finite speed samples (a single NaN otherwise
+            # NaN's the whole window's mean); an all-NaN window records NaN and
+            # is floored at the wavenumber step below (#59).
+            _spd_seg = l2.pspd_rel[s:e]
+            _spd_finite = np.isfinite(_spd_seg)
+            all_speed.append(
+                float(np.mean(_spd_seg[_spd_finite])) if _spd_finite.any() else np.nan
+            )
             all_section.append(sec_id)
 
             # Fraction of shear samples replaced by despiking in this
@@ -199,7 +206,10 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
             # Convert frequency spectrum → wavenumber spectrum
             # k = f / W [cpm], Ψ(k) = Ψ(f) * W [variance/cpm]
             W = all_speed[-1]
-            W = max(W, 0.05)  # minimum speed to avoid infinities
+            # nan_to_num before the floor: max(NaN, 0.05) stays NaN (NaN
+            # comparisons are False), which would NaN the whole window's
+            # wavenumber axis and silently drop its epsilon (#59).
+            W = max(np.nan_to_num(W, nan=0.05), 0.05)  # min speed avoids infinities
             kcyc_w = F / W  # (n_freq,)
             all_kcyc.append(kcyc_w)
 

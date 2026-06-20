@@ -55,6 +55,33 @@ class TestNanSingularBins:
         assert out[0, 0, 0] == 1.0                 # well-conditioned bins kept
         assert out[2, 0, 0] == 1.0
 
+    def test_nonfinite_aa_does_not_crash_svd(self):
+        """A NaN/inf in AA must not feed np.linalg.cond's SVD (which raises
+        'SVD did not converge' on the whole batch); treat it as a bad bin
+        (audit round-2 M-3 regression)."""
+        from odas_tpw.scor160.goodman import _nan_singular_bins
+
+        clean = np.ones((3, 1, 1))
+        AA = np.tile(np.eye(2)[None], (3, 1, 1))
+        AA[1, 0, 0] = np.nan                       # one NaN in bin 1's AA
+        out = _nan_singular_bins(clean.copy(), AA)  # must not raise
+        assert np.isnan(out[1, 0, 0])              # NaN-AA bin flagged
+        assert out[0, 0, 0] == 1.0
+        assert out[2, 0, 0] == 1.0
+
+    def test_clean_shear_spec_batch_survives_nan_accel(self):
+        """End-to-end: a single NaN accelerometer sample must not crash the
+        batched Goodman path; the contaminated bins come back NaN, not an
+        exception (M-3)."""
+        rng = np.random.default_rng(7)
+        accel = rng.standard_normal((2, 1024, 2))
+        shear = rng.standard_normal((2, 1024, 2))
+        accel[0, 500, 0] = np.nan                  # one corrupted vibration sample
+        clean_UU, _F = clean_shear_spec_batch(accel, shear, 256, 512.0)  # no raise
+        assert clean_UU.shape == (2, 129, 2, 2)
+        assert np.isnan(clean_UU[0]).any()         # window 0 has NaN-flagged bins
+        assert np.isfinite(clean_UU[1]).any()      # clean window still usable
+
 
 def _make_signals(n, fs, n_shear=2, n_accel=2, noise_amp=0.1, vib_amp=1.0, rng=None):
     """Create synthetic shear and accel signals with coherent vibration noise.

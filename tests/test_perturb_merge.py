@@ -177,6 +177,28 @@ class TestMergePFiles:
         merged = merge_p_files([f1], out_dir)
         assert merged.exists()
 
+    def test_dest_equals_chain0_does_not_destroy_base(self, tmp_path):
+        """When the merge dest resolves to chain[0] (output_dir == the chain's
+        own dir), the base file must NOT be truncated to 0 bytes before it's
+        read — the merged file is built via a temp + atomic replace (M-11)."""
+        record_size, config_size, n = 512, 128, 2
+        f1 = _make_p_file(tmp_path / "SN_0001.p", file_number=1,
+                          record_size=record_size, config_size=config_size,
+                          n_records=n, data_byte=0xAA)
+        f2 = _make_p_file(tmp_path / "SN_0002.p", file_number=2,
+                          record_size=record_size, config_size=config_size,
+                          n_records=n, data_byte=0xBB)
+        f2_size = f2.stat().st_size
+        merged = merge_p_files([f1, f2], tmp_path, root=tmp_path)  # dest == f1
+        assert merged.resolve() == f1.resolve()
+        first_record = HEADER_BYTES + config_size
+        expected = (first_record + n * record_size) + (n * record_size)
+        assert merged.stat().st_size == expected   # base intact + f2 data appended
+        assert f2.stat().st_size == f2_size         # continuation untouched
+        # The base header/config survived (not a headerless 0xBB-only file).
+        head = merged.read_bytes()[first_record:first_record + record_size]
+        assert all(b == 0xAA for b in head)
+
     def test_empty_chain_raises(self, tmp_path):
         import pytest
 

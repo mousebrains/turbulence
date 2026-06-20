@@ -47,7 +47,10 @@ def _time_bin(
     method : str
         "mean" or "median".
     diagnostics : bool
-        If True, include n_samples and *_std per bin.
+        If True, include per bin: ``n_samples`` (total samples landing in the
+        bin, finite or not), per-channel ``{name}_std``, and per-channel
+        ``{name}_n`` (the finite count actually averaged — n_samples overstates
+        the effective N for channels with NaNs; mirrors the depth engine) (#42).
     bin_edges : ndarray, optional
         Pre-computed bin edges. If provided, *bin_width* is ignored and the
         same edges are used regardless of *t*'s exact range — required when
@@ -99,11 +102,15 @@ def _time_bin(
             result[name] = binned
             if diagnostics:
                 std_arr = np.full(n_bins, np.nan)
+                n_arr = np.zeros(n_bins, dtype=int)
                 for i in range(n_bins):
                     sl = sorted_arr[splits[i] : splits[i + 1]]
-                    if np.sum(np.isfinite(sl)) > 1:
+                    n_finite = int(np.sum(np.isfinite(sl)))
+                    n_arr[i] = n_finite
+                    if n_finite > 1:
                         std_arr[i] = np.nanstd(sl)
                 result[f"{name}_std"] = std_arr
+                result[f"{name}_n"] = n_arr
         return result
 
     # Mean path — one O(N) bincount per channel, no per-bin Python loop.
@@ -117,6 +124,9 @@ def _time_bin(
             binned = np.where(counts > 0, sums / counts, np.nan)
         result[name] = binned
         if diagnostics:
+            # Per-channel finite count actually averaged (counts excludes NaNs),
+            # distinct from the channel-agnostic n_samples (#42).
+            result[f"{name}_n"] = counts.astype(int)
             sums_sq = np.bincount(idx_f, weights=arr_f * arr_f, minlength=n_bins)
             with np.errstate(invalid="ignore", divide="ignore"):
                 # Population std (ddof=0) to match np.nanstd default.

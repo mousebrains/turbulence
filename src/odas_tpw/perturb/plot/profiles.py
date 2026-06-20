@@ -180,7 +180,14 @@ def _build_profiles_figure(
         return None
 
     def _available(v: str) -> bool:
-        return v in dss.data_vars or diagnostics.is_pseudo_var(v)
+        if diagnostics.is_pseudo_var(v):
+            return True
+        if v not in dss.data_vars:
+            return False
+        # A plottable panel var needs both depth (bin) and profile dims; a 1-D
+        # (profile-only) var would crash the transpose("bin","profile") below,
+        # so treat it as missing -> clear "not on product" message.
+        return {"bin", "profile"} <= set(dss[v].dims)
 
     panel_vars = [v for v in variables if _available(v)]
     missing = [v for v in variables if not _available(v)]

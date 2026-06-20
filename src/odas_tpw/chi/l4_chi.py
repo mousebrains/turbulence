@@ -250,19 +250,34 @@ def process_l4_chi_fit(
             )
             if chi_obs <= 0:
                 chi_obs = 1e-14
-            kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val = _mle_fit_kB(
-                spec_obs,
-                K,
-                chi_obs,
-                nu,
-                noise_K,
-                H2,
-                tau0,
-                _h2,
-                f_AA_eff,
-                W,
-                spectrum_model,
+            # Iterate the MLE: chi_obs starts as the attenuation-uncorrected,
+            # band-limited variance (several times too small). _mle_fit_kB
+            # recomputes a |H|^2- and unresolved-variance-corrected chi after
+            # each kB fit; feed that back as the NLL's fixed chi so kB isn't
+            # inflated to compensate (a ~22% high kB -> ~2.2x high epsilon).
+            # Mirrors _iterative_fit's convergence loop. (M-6)
+            result = _mle_fit_kB(
+                spec_obs, K, chi_obs, nu, noise_K, H2, tau0, _h2,
+                f_AA_eff, W, spectrum_model,
             )
+            kB_prev = result.kB
+            for _ in range(2):
+                if not (np.isfinite(result.kB) and np.isfinite(result.chi) and result.chi > 0):
+                    break
+                result = _mle_fit_kB(
+                    spec_obs, K, result.chi, nu, noise_K, H2, tau0, _h2,
+                    f_AA_eff, W, spectrum_model,
+                )
+                if (
+                    np.isfinite(result.kB) and np.isfinite(kB_prev) and kB_prev > 0
+                    and abs(result.kB - kB_prev) / kB_prev < 0.01
+                ):
+                    break
+                kB_prev = result.kB
+            kB_val, chi_val, eps_val, K_max_val = (
+                result.kB, result.chi, result.epsilon, result.K_max
+            )
+            fom_val, K_max_ratio_val = result.fom, result.K_max_ratio
         return chi_val, eps_val, kB_val, K_max_val, fom_val, K_max_ratio_val
 
     return _process_l4_chi(l3_chi, _chi_fit_func, "fit", f_AA)

@@ -131,6 +131,27 @@ class TestProcessL3:
         l3 = process_l3(l2, l1, params)
         np.testing.assert_allclose(l3.pspd_rel, 0.6, atol=0.01)
 
+    def test_all_nan_speed_window_floors_wavenumber_axis(self):
+        """An all-NaN-speed window records NaN speed but its wavenumber axis is
+        floored (W=0.05) so its epsilon is not silently NaN'd. max(NaN, 0.05)
+        previously left the whole window's kcyc NaN (#59)."""
+        l1, l2 = _make_l1_l2()
+        params = _make_params()  # diss_length=2048 -> window 0 is samples [0, 2048)
+        l2.pspd_rel[:2048] = np.nan
+        l3 = process_l3(l2, l1, params)
+        assert np.isnan(l3.pspd_rel[0])  # recorded window speed is NaN
+        assert np.all(np.isfinite(l3.kcyc[:, 0]))  # but W floored -> finite kcyc
+        assert l3.pspd_rel[1] > 0.5  # a later finite window is unaffected
+
+    def test_partial_nan_speed_window_uses_finite_mean(self):
+        """A window with some NaN speed samples averages the finite ones rather
+        than collapsing to NaN/floor (#59)."""
+        l1, l2 = _make_l1_l2()
+        params = _make_params()
+        l2.pspd_rel[:1000] = np.nan  # ~half of window 0's samples
+        l3 = process_l3(l2, l1, params)
+        assert l3.pspd_rel[0] > 0.5  # finite-sample mean ~0.6, not NaN/floor
+
     def test_properties(self):
         l1, l2 = _make_l1_l2()
         params = _make_params()

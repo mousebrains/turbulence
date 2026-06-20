@@ -7,9 +7,12 @@ hash), endianness, and record size, and have sequential file numbers.
 Reference: Code/merge_p_files.m
 """
 
+import contextlib
 import hashlib
+import os
 import shutil
 import struct
+import tempfile
 from pathlib import Path
 
 from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS, _detect_endian
@@ -207,20 +210,33 @@ def merge_p_files(
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     if len(chain) == 1:
-        shutil.copy2(chain[0], dest)
+        if dest.resolve() != chain[0].resolve():
+            shutil.copy2(chain[0], dest)
         return dest
 
-    with open(dest, "wb") as out_f:
-        # Copy entire first file
-        with open(chain[0], "rb") as in_f:
-            shutil.copyfileobj(in_f, out_f)
-
-        # Append data records from subsequent files
-        for p in chain[1:]:
-            info = _read_merge_info(p)
-            skip = info["header_size"] + info["config_size"]
-            with open(p, "rb") as in_f:
-                in_f.seek(skip)
+    # Build the merged file in a temp file then atomically replace. If dest
+    # resolves to chain[0] (output_dir == the chain's own directory), opening
+    # dest "wb" directly would truncate the base file to 0 bytes BEFORE it is
+    # read — yielding a headerless, unparseable file and destroying the source.
+    # Writing via a separate temp fd keeps every source intact until os.replace.
+    fd, tmp = tempfile.mkstemp(dir=str(dest.parent), prefix=".merge-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as out_f:
+            # Copy entire first file
+            with open(chain[0], "rb") as in_f:
                 shutil.copyfileobj(in_f, out_f)
+
+            # Append data records from subsequent files
+            for p in chain[1:]:
+                info = _read_merge_info(p)
+                skip = info["header_size"] + info["config_size"]
+                with open(p, "rb") as in_f:
+                    in_f.seek(skip)
+                    shutil.copyfileobj(in_f, out_f)
+        os.replace(tmp, dest)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
     return dest

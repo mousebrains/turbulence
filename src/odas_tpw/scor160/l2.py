@@ -127,7 +127,13 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
                     smooth=sh_smooth,
                     N=N_sh,
                 )
-                despike_mask_sh[i, mask] = cleaned != before
+                # NaN-safe change mask: NaN != NaN is True, so a raw `cleaned
+                # != before` counts every unchanged NaN gap as "despiked",
+                # inflating DESPIKE_FRACTION_SH and wrongly tripping QC bit 2 on
+                # gappy data. Mirrors the guard in despike.py.
+                despike_mask_sh[i, mask] = (cleaned != before) & ~(
+                    np.isnan(cleaned) & np.isnan(before)
+                )
                 despike_passes_sh[i, si] = n_passes
                 shear_out[i, mask] = cleaned
 
@@ -143,7 +149,9 @@ def process_l2(l1: L1Data, params: L2Params) -> L2Data:
                     smooth=a_smooth,
                     N=N_a,
                 )
-                despike_mask_A[i, mask] = cleaned != before
+                despike_mask_A[i, mask] = (cleaned != before) & ~(
+                    np.isnan(cleaned) & np.isnan(before)
+                )
                 despike_passes_A[i, si] = n_passes
                 vib_out[i, mask] = cleaned
 
@@ -217,6 +225,9 @@ def _select_sections(
     """
     n = len(speed)
     section_number = np.zeros(n, dtype=np.float64)
+    if n == 0:
+        # Empty input: good[0]/good[-1] below would raise IndexError (#19).
+        return section_number
 
     # Basic criteria: speed above threshold and pressure above minimum
     speed_ok = np.abs(speed) >= min_speed if direction == "horizontal" else speed >= min_speed

@@ -18,6 +18,7 @@ import numpy as np
 from odas_tpw.rsi.p_file import PFile
 from odas_tpw.rsi.viewer_base import (
     ProfileViewer,
+    _interp_slow_to_fast,
     compute_depth_spectra,
     select_mid_window,
 )
@@ -66,7 +67,8 @@ def _compute_chi_spectra(
 
     w_sel = select_mid_window(P_fast, sel, fft_length, diss_length=None)
 
-    mean_T = float(np.mean(T_slow))
+    # Per-window mean temperature (was the whole-cast mean -> ~14% visc bias).
+    mean_T = float(np.mean(_interp_slow_to_fast(T_slow, len(P_fast))[w_sel]))
     mean_speed = float(np.mean(np.abs(speed_fast[w_sel])))
     if mean_speed < 0.01:
         mean_speed = 0.01
@@ -218,7 +220,7 @@ def _compute_windowed_eps_chi(
     eps_arr = np.full((n_shear, n_windows), np.nan)
     chi_arr = np.full((n_therm, n_windows), np.nan)
 
-    mean_T = float(np.mean(T_slow))
+    T_fast = _interp_slow_to_fast(T_slow, N)
     f_AA_chi = 0.9 * f_AA  # 10% margin, matching MATLAB get_chi
 
     for idx in range(n_windows):
@@ -227,6 +229,8 @@ def _compute_windowed_eps_chi(
         if e > seg_end:
             break
         w_sel = slice(s, e)
+        # Per-window mean temperature (was the whole-cast mean -> ~14% bias).
+        mean_T = float(np.mean(T_fast[w_sel]))
         P_windows[idx] = float(np.mean(P_fast[w_sel]))
 
         # --- Epsilon ---

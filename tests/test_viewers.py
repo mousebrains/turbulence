@@ -147,3 +147,34 @@ class TestDissLookDraw:
             assert viewer._cached_spec is not None
         finally:
             plt.close(viewer.fig)
+
+
+class TestInterpSlowToFast:
+    """Per-window temperature for viewer viscosity/noise (M-7)."""
+
+    def test_linear_interp_to_fast_length(self):
+        from odas_tpw.rsi.viewer_base import _interp_slow_to_fast
+
+        T_slow = np.array([10.0, 20.0])      # warm surface -> cool deep
+        out = _interp_slow_to_fast(T_slow, 5)
+        assert out.shape == (5,)
+        np.testing.assert_allclose(out, [10.0, 12.5, 15.0, 17.5, 20.0])
+
+    def test_window_mean_differs_from_full_cast_mean(self):
+        from odas_tpw.rsi.viewer_base import _interp_slow_to_fast
+
+        # 26 C surface -> 6 C deep; a deep window must NOT see the ~16 C cast mean.
+        T_slow = np.linspace(26.0, 6.0, 50)
+        T_fast = _interp_slow_to_fast(T_slow, 1000)
+        deep = slice(900, 1000)
+        assert np.mean(T_fast[deep]) < 8.0          # near the deep value
+        assert abs(np.mean(T_fast[deep]) - np.mean(T_slow)) > 5.0  # not the cast mean
+
+    def test_edge_cases(self):
+        from odas_tpw.rsi.viewer_base import _interp_slow_to_fast
+
+        # Already fast-length -> unchanged; single sample -> constant fill.
+        np.testing.assert_array_equal(
+            _interp_slow_to_fast(np.array([1.0, 2.0, 3.0]), 3), [1.0, 2.0, 3.0])
+        np.testing.assert_array_equal(
+            _interp_slow_to_fast(np.array([7.0]), 4), np.full(4, 7.0))

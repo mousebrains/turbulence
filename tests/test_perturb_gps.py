@@ -133,6 +133,28 @@ class TestGPSFromCSV:
         np.testing.assert_allclose(lon[0], 90.0)  # 100 + (-1)*10 = 90
         np.testing.assert_allclose(lon[1], 150.0)  # 100 + 5*10 = 150
 
+    def test_nan_node_interpolates_across_gap(self, tmp_path):
+        """A single NaN lat/lon fix must not blank whole position spans:
+        ``interp1d`` would propagate NaN to every interval touching the bad
+        node, but ``_finite_interp1d`` drops it and interpolates across (#15)."""
+        import pandas as pd
+
+        path = tmp_path / "gps_gap.csv"
+        df = pd.DataFrame(
+            {"t": [0, 1, 2], "lat": [10.0, np.nan, 30.0], "lon": [100.0, np.nan, 120.0]},
+        )
+        df.to_csv(path, index=False)
+        gps = GPSFromCSV(path)
+        # t=1 straddles the dropped node; without the fix it would be NaN.
+        t = np.array([0.5, 1.0, 1.5])
+        lat = gps.lat(t)
+        lon = gps.lon(t)
+        assert not np.any(np.isnan(lat))
+        assert not np.any(np.isnan(lon))
+        # Interpolating across the gap (nodes at t=0 and t=2): straight line.
+        np.testing.assert_allclose(lat, [15.0, 20.0, 25.0])
+        np.testing.assert_allclose(lon, [105.0, 110.0, 115.0])
+
     def test_custom_columns(self, tmp_path):
         csv_file = self._make_csv(
             tmp_path / "gps.csv",
@@ -276,3 +298,14 @@ class TestGPSFromNetCDF:
         np.testing.assert_allclose(gps.lat(np.array([t0])), [7.0])
         np.testing.assert_allclose(gps.lat(np.array([t0 + 1.0])), [8.0])
         np.testing.assert_allclose(gps.lon(np.array([t0 + 2.0])), [136.0])
+
+
+def test_to_epoch_seconds_nat_becomes_nan():
+    """NaT must decode to NaN, not the int64-min bogus epoch (~-9.2e9 s) that
+    would poison the interpolation (audit round-2 M-13)."""
+    from odas_tpw.perturb.gps import _to_epoch_seconds
+
+    t = np.array(["2020-01-01T00:00:00", "NaT"], dtype="datetime64[ns]")
+    out = _to_epoch_seconds(t)
+    assert np.isfinite(out[0]) and out[0] > 0
+    assert np.isnan(out[1])              # NOT ~-9.2e9

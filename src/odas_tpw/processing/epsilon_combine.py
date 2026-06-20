@@ -14,6 +14,14 @@ import numpy as np
 import xarray as xr
 
 
+def _probe_sort_key(name: str) -> tuple[int, str]:
+    """Order probe variables by their trailing integer so e_2 sorts before e_10
+    (plain lexicographic order puts e_10 first). Names without a numeric suffix
+    sort last, by name (#24)."""
+    suffix = name.rsplit("_", 1)[-1]
+    return (int(suffix), "") if suffix.isdigit() else (2**31, name)
+
+
 def mk_epsilon_mean(
     ds: xr.Dataset,
     epsilon_minimum: float = 1e-13,
@@ -50,7 +58,10 @@ def mk_epsilon_mean(
     ds = ds.copy()
 
     # Find epsilon probe variables — either separate e_1/e_2/... or 2D epsilon(probe, time)
-    probe_names = sorted(str(k) for k in ds.data_vars if str(k).startswith("e_"))
+    probe_names = sorted(
+        (str(k) for k in ds.data_vars if str(k).startswith("e_")),
+        key=_probe_sort_key,
+    )
 
     if not probe_names and "epsilon" in ds and "probe" in ds.dims:
         # Split 2D epsilon(probe, time) into per-probe variables

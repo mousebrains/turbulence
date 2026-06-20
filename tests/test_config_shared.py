@@ -51,6 +51,20 @@ class TestCanonicalizeAndHash:
         assert isinstance(h_inf, str) and h_inf
         assert h_nan != h_inf
 
+    def test_nested_list_floats_are_type_normalized(self):
+        """List-valued params in a STATIC section must have their nested scalars
+        type-normalized: speed.amplitude_quantile = [1.0, 99.0] and [1, 99] are
+        numerically identical and must hash the same (#12). Without nested
+        normalization _normalize_value passes the list through untouched so the
+        two hash differently -> spurious recompute / new output dir. perturb-only
+        section (speed)."""
+        h_float = perturb_config.compute_hash("speed", {"amplitude_quantile": [1.0, 99.0]})
+        h_int = perturb_config.compute_hash("speed", {"amplitude_quantile": [1, 99]})
+        assert h_float == h_int
+        # Canonical JSON carries the normalized (int) form, not the raw floats.
+        c = perturb_config.canonicalize("speed", {"amplitude_quantile": [1.0, 99.0]})
+        assert '"amplitude_quantile":[1,99]' in c
+
     def test_canonical_json_is_compact_sorted(self, config_mod):
         c = config_mod.canonicalize("epsilon", {})
         parsed = json.loads(c)
@@ -149,6 +163,14 @@ class TestLoadConfig:
         cfg = tmp_path / "config.yaml"
         cfg.write_text("bogus:\n  key: 1\n")
         with pytest.raises(ValueError, match="Unknown config section"):
+            config_mod.load_config(cfg)
+
+    def test_malformed_section_raises_clear_value_error(self, config_mod, tmp_path):
+        """A section that is a list/scalar (not a mapping) raises a clear
+        ValueError naming the section, not an opaque TypeError from dict(v) (#29)."""
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("epsilon:\n  - 1\n  - 2\n")
+        with pytest.raises(ValueError, match="must be a mapping"):
             config_mod.load_config(cfg)
 
 

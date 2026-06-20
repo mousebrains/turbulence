@@ -6,6 +6,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from odas_tpw.perturb.pipeline import (
+    _prune_orphan_named_ncs,
     _prune_orphan_profile_ncs,
     run_merge,
     run_pipeline,
@@ -48,6 +49,32 @@ class TestPruneOrphanProfileNCs:
 
     def test_missing_dir_is_noop(self, tmp_path):
         assert _prune_orphan_profile_ncs(tmp_path / "nope", {"x"}) == 0
+
+
+class TestPruneOrphanNamedNCs:
+    def _touch(self, d, name):
+        p = d / name
+        p.write_bytes(b"")
+        return p
+
+    def test_prunes_ctd_orphans_by_exact_stem(self, tmp_path):
+        keep = self._touch(tmp_path, "fileA.nc")          # current
+        orphan = self._touch(tmp_path, "fileB.nc")        # dropped .p
+        n = _prune_orphan_named_ncs(tmp_path, {"fileA"})
+        assert n == 1
+        assert keep.exists()
+        assert not orphan.exists()
+
+    def test_exact_match_not_prefix(self, tmp_path):
+        # "fileA" must not protect "fileAB.nc" (exact membership, not prefix).
+        keep = self._touch(tmp_path, "fileA.nc")
+        orphan = self._touch(tmp_path, "fileAB.nc")
+        _prune_orphan_named_ncs(tmp_path, {"fileA"})
+        assert keep.exists()
+        assert not orphan.exists()
+
+    def test_missing_dir_is_noop(self, tmp_path):
+        assert _prune_orphan_named_ncs(tmp_path / "nope", {"x"}) == 0
 
 # ---------------------------------------------------------------------------
 # run_pipeline — file-discovery / no-files paths

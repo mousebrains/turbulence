@@ -12,6 +12,7 @@ import glob as globmod
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from pathlib import Path
 
 from ruamel.yaml import YAML
@@ -92,7 +93,24 @@ class ConfigManager:
             raw = yaml.load(fh)
         if raw is None:
             return {}
-        config = {str(k): (dict(v) if v is not None else {}) for k, v in raw.items()}
+        if not isinstance(raw, Mapping):
+            raise ValueError(
+                f"Config file must be a mapping of sections, got "
+                f"{type(raw).__name__}"
+            )
+        # Each section must itself be a mapping (key: value). A list/scalar
+        # section otherwise hits dict(v) with an opaque TypeError (#29).
+        config: dict[str, dict] = {}
+        for k, v in raw.items():
+            if v is None:
+                config[str(k)] = {}
+            elif isinstance(v, Mapping):
+                config[str(k)] = dict(v)
+            else:
+                raise ValueError(
+                    f"Config section {str(k)!r} must be a mapping of "
+                    f"key: value pairs, got {type(v).__name__}"
+                )
         self.validate_config(config)
         return config
 
@@ -160,8 +178,14 @@ class ConfigManager:
         for k, v in params.items():
             if k in base and v is not None:
                 base[k] = v
+        # _normalize_nested (not _normalize_value) so list/dict-valued params
+        # (e.g. speed.amplitude_quantile = [1.0, 99.0]) have their nested
+        # scalars type-normalized too. _normalize_value passes containers
+        # through untouched, so [1.0, 99.0] and [1, 99] would hash differently
+        # -> different output dirs / spurious recompute. Matches the
+        # dynamic-key branch above. For scalars the two are identical.
         return {
-            k: _normalize_value(v)
+            k: _normalize_nested(v)
             for k, v in sorted(base.items())
             if k not in self.hash_exclude_keys
         }

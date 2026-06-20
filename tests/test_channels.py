@@ -360,25 +360,21 @@ class TestConvertJacC:
         assert units == "mS_cm-1"
         np.testing.assert_allclose(result[0], 4.225, rtol=1e-10)
 
-    def test_zero_v_part_protection(self):
-        """When v_part is 0, it is replaced by 1 to avoid division by zero."""
-        # data = 5 * 2^16 + 0 = 327680: i_part=5, v_part=0 -> v_part=1, ratio=5
-        # poly: 0*25 + 0*5 + 0 = 0
+    def test_zero_v_part_is_nan(self):
+        """A zero voltage part is corrupt -> flagged NaN, not fabricated as
+        ratio=i/1 which looks like real conductivity (audit round-2)."""
         params = {"a": "0", "b": "0", "c": "0"}
-        data = np.array([5 * 2**16])
+        data = np.array([5 * 2**16])  # i_part=5, v_part=0
         result, units = convert_jac_c(data, params)
         assert units == "mS_cm-1"
-        assert np.all(np.isfinite(result))
+        assert np.isnan(result[0])
 
-    def test_zero_v_part_with_nonzero_coeffs(self):
-        """Zero v_part with non-trivial coefficients uses ratio = i_part/1."""
-        # data = 4 * 2^16: i_part=4, v_part=0 -> 1, ratio=4
-        # poly: 1*16 + 0*4 + 0 = 16
+    def test_zero_v_part_with_nonzero_coeffs_is_nan(self):
         params = {"a": "0", "b": "0", "c": "1.0"}
-        data = np.array([4.0 * 2**16])
+        data = np.array([4.0 * 2**16])  # v_part=0
         result, units = convert_jac_c(data, params)
         assert units == "mS_cm-1"
-        np.testing.assert_allclose(result[0], 16.0, rtol=1e-10)
+        assert np.isnan(result[0])
 
     def test_equal_parts(self):
         """When i_part equals v_part, ratio is 1."""

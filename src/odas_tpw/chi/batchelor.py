@@ -114,9 +114,13 @@ def batchelor_grad(
         Gradient spectrum [(K/m)^2 / cpm].
     """
     k = np.asarray(k, dtype=np.float64)
-    alpha = np.sqrt(2 * q) * k / kB
-    f = batchelor_nondim(alpha)
-    return np.sqrt(q / 2) * chi / (kB * kappa_T) * f
+    # Mirror kraichnan_grad: a degenerate kB (0 / NaN) otherwise yields
+    # NaN-with-warnings; sanitize to 0 so the spectrum stays finite (#16).
+    with np.errstate(divide="ignore", invalid="ignore"):
+        alpha = np.sqrt(2 * q) * k / kB
+        f = batchelor_nondim(alpha)
+        S = np.sqrt(q / 2) * chi / (kB * kappa_T) * f
+    return np.where(np.isfinite(S), S, 0.0)
 
 
 # ---------------------------------------------------------------------------

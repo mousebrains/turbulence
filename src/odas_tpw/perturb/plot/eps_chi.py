@@ -33,7 +33,7 @@ def _load_epsilon(diss_combo_path: str):
     return times, depth, eps, qc
 
 
-def _load_chi_from_combo(chi_combo_path: str, chi_attrs_dir: str):
+def _load_chi_from_combo(chi_combo_path: str, chi_attrs_dir: str | None):
     """Read chiMean(bin, profile) from a chi_combo NetCDF.
 
     The combo file does not carry chi fft / spectrum metadata, so read
@@ -48,10 +48,13 @@ def _load_chi_from_combo(chi_combo_path: str, chi_attrs_dir: str):
         else:
             qc = None
     attrs: dict = {}
-    sample = sorted(glob.glob(os.path.join(chi_attrs_dir, "*_prof*.nc")))
-    if sample:
-        with xr.open_dataset(sample[0]) as sds:
-            attrs = dict(sds.attrs)
+    # chi_attrs_dir only supplies the title attrs; it may be absent when the
+    # combo carries chiMean but no per-profile chi_NN dir was kept.
+    if chi_attrs_dir is not None:
+        sample = sorted(glob.glob(os.path.join(chi_attrs_dir, "*_prof*.nc")))
+        if sample:
+            with xr.open_dataset(sample[0]) as sds:
+                attrs = dict(sds.attrs)
     return times, depth, chi, attrs, qc
 
 
@@ -125,7 +128,13 @@ def _reindex_rows_to_depth(
             row = arr[src]
             ok = np.isfinite(row)
             if reduce == "max":
-                acc[dst, ok] = np.maximum(acc[dst, ok], row[ok])
+                # True bitwise OR for the drop bitfield: np.maximum loses bits
+                # (max(1,2)=2 but 1|2=3), contradicting the "ORs a drop
+                # bitfield" contract. Flags are integral values carried in a
+                # float array, so cast per-combine and store back (#52).
+                acc[dst, ok] = np.bitwise_or(
+                    acc[dst, ok].astype(np.int64), row[ok].astype(np.int64)
+                )
                 cnt[dst, ok] += 1
             else:
                 acc[dst, ok] += row[ok]
@@ -259,7 +268,10 @@ def run(args: argparse.Namespace) -> str:
         chi_combo_path = os.path.join(chi_combo_dir, "combo.nc")
         with xr.open_dataset(chi_combo_path) as peek:
             has_chi_mean = "chiMean" in peek.data_vars
-        if has_chi_mean and chi_dir is not None:
+        if has_chi_mean:
+            # chiMean is on the combo: use it even if no chi_NN per-profile dir
+            # exists (it only supplies the title attrs). Only fall back to the
+            # legacy per-profile loader when chiMean is absent.
             t_chi, depth_chi, chi, chi_attrs, chi_qc = _load_chi_from_combo(
                 chi_combo_path, chi_dir
             )
@@ -355,26 +367,32 @@ def run(args: argparse.Namespace) -> str:
     chi_vmin, chi_vmax = layout.quantile_limits(chi, args.chi_vmin, args.chi_vmax)
     gam_vmin, gam_vmax = layout.quantile_limits(gamma, args.gam_vmin, args.gam_vmax)
 
-    layout.plot_panel(
-        ax_e, fig, cast_x, segments, depth, eps, cmap,
-        LogNorm(vmin=eps_vmin, vmax=eps_vmax),
-        r"$\varepsilon$  (W kg$^{-1}$)",
-    )
-    ax_e.set_ylabel("Depth (m)")
+    def _safe_lognorm(vmn, vmx):
+        # quantile_limits returns (None, None) for all-NaN / no-positive data;
+        # LogNorm(None, None) then crashes on draw. Build a norm only for finite
+        # positive limits, else None (-> "no data" placeholder).
+        if vmn is None or vmx is None:
+            return None
+        if not (np.isfinite(vmn) and np.isfinite(vmx)) or vmn <= 0 or vmx <= 0:
+            return None
+        if vmn >= vmx:
+            vmn = vmx / 10.0
+        return LogNorm(vmin=vmn, vmax=vmx)
 
-    layout.plot_panel(
-        ax_c, fig, cast_x, segments, depth, chi, cmap,
-        LogNorm(vmin=chi_vmin, vmax=chi_vmax),
-        r"$\chi$  (K$^{2}$ s$^{-1}$)",
-    )
-    ax_c.set_ylabel("Depth (m)")
-
-    layout.plot_panel(
-        ax_g, fig, cast_x, segments, depth, gamma, cmap,
-        LogNorm(vmin=gam_vmin, vmax=gam_vmax),
-        r"$\chi / \varepsilon$  (K$^{2}$ s kg J$^{-1}$)",
-    )
-    ax_g.set_ylabel("Depth (m)")
+    panels = [
+        (ax_e, eps, (eps_vmin, eps_vmax), r"$\varepsilon$  (W kg$^{-1}$)", r"$\varepsilon$"),
+        (ax_c, chi, (chi_vmin, chi_vmax), r"$\chi$  (K$^{2}$ s$^{-1}$)", r"$\chi$"),
+        (ax_g, gamma, (gam_vmin, gam_vmax),
+         r"$\chi / \varepsilon$  (K$^{2}$ kg J$^{-1}$)", r"$\chi/\varepsilon$"),
+    ]
+    for ax, z, (vmn, vmx), cbar_label, short in panels:
+        norm = _safe_lognorm(vmn, vmx)
+        if norm is not None:
+            layout.plot_panel(ax, fig, cast_x, segments, depth, z, cmap, norm, cbar_label)
+        else:
+            ax.text(0.5, 0.5, f"no finite {short} data", ha="center", va="center",
+                    transform=ax.transAxes)
+        ax.set_ylabel("Depth (m)")
     ax_g.set_xlabel("Cast number  (cluster start time, UTC)")
 
     eps_attrs = _per_profile_attrs(args.root, "diss")
