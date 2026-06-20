@@ -141,11 +141,14 @@ def mk_epsilon_mean(
                 max_e = np.nanmax(epsilon, axis=1)
                 ratio = np.abs(np.log(max_e) - np.log(min_e))
 
-            # Skip rows that are already all-NaN (e.g. fom_max NaN'd every probe
-            # at this segment) -- ``nanargmax`` raises ValueError on them, and
-            # there's nothing left to drop anyway.
-            any_finite = np.any(np.isfinite(epsilon), axis=1)
-            outside = (ratio > CF95_range) & any_finite
+            # Skip rows already all-NaN (nanargmax raises on them). Also never
+            # prune below 2 surviving probes: with 2 left the pair is
+            # equidistant from its mean (no identifiable outlier) and the
+            # geometric mean is unbiased, so honor the documented "keep both"
+            # rule per-row, not just at the dataset level (#23/#49).
+            finite_count = np.sum(np.isfinite(epsilon), axis=1)
+            any_finite = finite_count > 0
+            outside = (ratio > CF95_range) & (finite_count > 2)
             if not np.any(outside):
                 break
 

@@ -48,6 +48,23 @@ class TestConvertTherm:
         assert np.all(T > -10)
         assert np.all(T < 50)
 
+    def test_beta_preferred_over_beta_1(self):
+        """When a config supplies BOTH beta and beta_1, ODAS
+        (convert_odas.m:501) uses `beta` first; our code must match that
+        precedence, not prefer beta_1 (#4)."""
+        base = {
+            "a": "0", "b": "1", "adc_fs": "4.096", "adc_bits": "16",
+            "g": "6.0", "e_b": "0.68", "t_0": "289.0",
+        }
+        data = np.array([1000.0, 5000.0, 10000.0])
+        # Distinct beta vs beta_1 so the choice is observable.
+        both = convert_therm(data, {**base, "beta": "3000", "beta_1": "3500"})[0]
+        beta_only = convert_therm(data, {**base, "beta": "3000"})[0]
+        beta1_only = convert_therm(data, {**base, "beta_1": "3500"})[0]
+        # Result with both present must equal the beta-only result (beta wins).
+        np.testing.assert_allclose(both, beta_only, rtol=1e-12)
+        assert not np.allclose(both, beta1_only)
+
 
 class TestConvertShear:
     def test_zero_mean_symmetric(self):

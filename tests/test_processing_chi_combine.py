@@ -118,6 +118,25 @@ class TestMkChiMean:
         names = ["chi_10", "chi_2", "chi_1"]
         assert sorted(names, key=_probe_sort_key) == ["chi_1", "chi_2", "chi_10"]
 
+    def test_combine_never_prunes_below_two_probes(self):
+        """Mirror of the epsilon-side floor: a 3-probe row must collapse to the
+        geometric mean of the two closest, never a single survivor (#23/#49).
+        epsilon_T(probe,time) enables the CI-removal loop; huge speed -> CF95~0."""
+        ds = xr.Dataset(
+            {
+                "chi_1": (["time"], [1e-12]),
+                "chi_2": (["time"], [1e-7]),
+                "chi_3": (["time"], [1e-6]),
+                "epsilon_T": (["probe", "time"], [[1e-7], [1e-7], [1e-7]]),
+                "speed": (["time"], [1.0e6]),
+                "nu": (["time"], [1.0e-6]),
+            },
+            coords={"time": [0.0], "probe": [0, 1, 2]},
+            attrs={"diss_length": 512, "fs_fast": 512.0},
+        )
+        out = mk_chi_mean(ds)
+        assert out["chiMean"].values[0] == pytest.approx(np.sqrt(1e-13), rel=1e-6)
+
     def test_defaults_no_speed_nu(self):
         n = 10
         c = np.full(n, 1e-7)

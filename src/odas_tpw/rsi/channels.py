@@ -96,12 +96,15 @@ def convert_therm(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     G = _require_float(params, "g", 6.0, "therm")
     E_B = _require_float(params, "e_b", 0.68, "therm")
     T_0 = _require_float(params, "t_0", 289.0, "therm")
-    # Older configs use 'beta' instead of 'beta_1' (convert_odas.m
-    # accepts either, lines 501-507)
-    if "beta_1" in params:
-        beta_1 = _safe_float(params["beta_1"], 3000.0)
-    elif "beta" in params:
+    # `beta` and `beta_1` are mutually exclusive alternatives for the linear
+    # Steinhart-Hart term (beta = legacy single-coeff form, beta_1 = newer
+    # multi-coeff form; beta_2/beta_3 are additive higher-order terms applied
+    # regardless). ODAS convert_odas.m:501-507 checks `beta` FIRST; match that
+    # precedence rather than preferring beta_1 (#4).
+    if "beta" in params:
         beta_1 = _safe_float(params["beta"], 3000.0)
+    elif "beta_1" in params:
+        beta_1 = _safe_float(params["beta_1"], 3000.0)
     else:
         beta_1 = _require_float(params, "beta_1", 3000.0, "therm")
     beta_2 = params.get("beta_2")
