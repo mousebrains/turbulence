@@ -452,9 +452,12 @@ def _process_profile(
                 l1.temp,
                 S=chi_salinity,
             )
-            # Pair epsilon from the nearest shear window when available. With no
-            # shear epsilon (e.g. a Method-2-only chi run) K_T = chi/(2 dT/dz^2)
-            # stays valid while Gamma/K_rho fall to NaN (bug_003).
+            # Pair epsilon from the nearest shear window when available; with no
+            # shear epsilon K_T = chi/(2 dT/dz^2) stays valid while Gamma/K_rho
+            # fall to NaN (bug_003). The else is defensive: run_pipeline returns
+            # early when the shear L3 is empty (l4.n_spectra == l3.n_spectra),
+            # so l4.n_spectra > 0 always holds here today — but mixing_coefficients
+            # is kept robust to an all-NaN epsilon for reuse/future entry points.
             if l4.n_spectra > 0:
                 eps_on_chi = pair_nearest(l4.time, l4.epsi_final, chi_primary.time)
             else:

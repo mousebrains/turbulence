@@ -59,11 +59,17 @@ def safe_name(name: str) -> str:
 
 
 def var_label(ds: xr.Dataset, name: str) -> str:
-    """Colorbar label from the variable's own CF attrs, falling back to name."""
+    """Colorbar label from the variable's own CF attrs, falling back to name.
+
+    A dimensionless unit (``"1"`` — the CF/UDUNITS form for ratios such as
+    practical salinity, the mixing coefficient, or turbidity) is NOT rendered:
+    ``[1]`` is noise on a plot, and the meaning lives in the long_name /
+    standard_name. Empty/absent units are likewise omitted (#38).
+    """
     attrs = ds[name].attrs if name in ds else {}
     long_name = attrs.get("long_name", name)
     units = attrs.get("units")
-    return f"{long_name} [{units}]" if units else str(long_name)
+    return f"{long_name} [{units}]" if units and units != "1" else str(long_name)
 
 
 # ---------------------------------------------------------------------------
