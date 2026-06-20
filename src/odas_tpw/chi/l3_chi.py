@@ -251,7 +251,9 @@ def process_l3_chi(
     nfft = params.fft_length
     diss_length = params.diss_length
     diss_overlap = params.overlap
-    diss_step = diss_length - diss_overlap
+    # Clamp to >= 1: overlap == diss_length would make diss_step 0 and the
+    # n_windows division below raise ZeroDivisionError.
+    diss_step = max(diss_length - diss_overlap, 1)
     n_freq = nfft // 2 + 1
     n_temp = l2_chi.n_temp
     diff_gains = l2_chi.diff_gains

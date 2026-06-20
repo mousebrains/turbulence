@@ -33,7 +33,7 @@ def _load_epsilon(diss_combo_path: str):
     return times, depth, eps, qc
 
 
-def _load_chi_from_combo(chi_combo_path: str, chi_attrs_dir: str):
+def _load_chi_from_combo(chi_combo_path: str, chi_attrs_dir: str | None):
     """Read chiMean(bin, profile) from a chi_combo NetCDF.
 
     The combo file does not carry chi fft / spectrum metadata, so read
@@ -48,10 +48,13 @@ def _load_chi_from_combo(chi_combo_path: str, chi_attrs_dir: str):
         else:
             qc = None
     attrs: dict = {}
-    sample = sorted(glob.glob(os.path.join(chi_attrs_dir, "*_prof*.nc")))
-    if sample:
-        with xr.open_dataset(sample[0]) as sds:
-            attrs = dict(sds.attrs)
+    # chi_attrs_dir only supplies the title attrs; it may be absent when the
+    # combo carries chiMean but no per-profile chi_NN dir was kept.
+    if chi_attrs_dir is not None:
+        sample = sorted(glob.glob(os.path.join(chi_attrs_dir, "*_prof*.nc")))
+        if sample:
+            with xr.open_dataset(sample[0]) as sds:
+                attrs = dict(sds.attrs)
     return times, depth, chi, attrs, qc
 
 
@@ -259,7 +262,10 @@ def run(args: argparse.Namespace) -> str:
         chi_combo_path = os.path.join(chi_combo_dir, "combo.nc")
         with xr.open_dataset(chi_combo_path) as peek:
             has_chi_mean = "chiMean" in peek.data_vars
-        if has_chi_mean and chi_dir is not None:
+        if has_chi_mean:
+            # chiMean is on the combo: use it even if no chi_NN per-profile dir
+            # exists (it only supplies the title attrs). Only fall back to the
+            # legacy per-profile loader when chiMean is absent.
             t_chi, depth_chi, chi, chi_attrs, chi_qc = _load_chi_from_combo(
                 chi_combo_path, chi_dir
             )

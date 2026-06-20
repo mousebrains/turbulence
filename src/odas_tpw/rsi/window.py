@@ -141,7 +141,9 @@ def compute_eps_window(
             mean_T=T_mean,
         )
 
-    if do_goodman and accel is not None and shear.shape[0] > 2 * fft_length:
+    # >= (not >): csd needs >= 2*fft_length samples; the strict > silently
+    # skipped Goodman cleaning at exactly diss_length == 2*fft_length.
+    if do_goodman and accel is not None and shear.shape[0] >= 2 * fft_length:
         clean_UU, _, _, _, F_g = clean_shear_spec(accel, shear, fft_length, fs_fast)
         K_g = F_g / W
 

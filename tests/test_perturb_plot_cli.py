@@ -153,6 +153,17 @@ class TestEpsChiCLI:
         assert rc == 0
         assert out_png.exists() and out_png.stat().st_size > 0
 
+    def test_chi_mean_without_chi_dir_does_not_crash(self, tmp_path):
+        """chiMean on the combo but NO chi_NN per-profile dir -> load from the
+        combo (attrs={} for title), not raise 'No chi_NN dir' (M-22)."""
+        _write_diss_combo(tmp_path)
+        _write_diss_per_profile(tmp_path)
+        _write_chi_combo(tmp_path, with_chi_mean=True)  # no _write_chi_per_profile
+        out_png = tmp_path / "fig.png"
+        rc = cli.main(["eps-chi", "--root", str(tmp_path), "--out", str(out_png)])
+        assert rc == 0
+        assert out_png.exists() and out_png.stat().st_size > 0
+
     def test_all_nan_eps_chi_does_not_crash(self, tmp_path):
         """All-NaN eps/chi -> quantile limits (None, None); panels must render a
         placeholder, not crash on LogNorm(None, None) (M-14)."""

@@ -52,6 +52,15 @@ class TestDetectBottomCrash:
         depth = np.linspace(0, 100, 1000)
         assert detect_bottom_crash(depth, {}, fs=512.0) is None
 
+    def test_all_nan_depth_returns_none(self):
+        """An all-NaN depth segment must return None, not crash on
+        np.arange(..., NaN, ...) (audit round-2)."""
+        n = 1000
+        depth = np.full(n, np.nan)
+        Ax = np.random.randn(n) * 10.0
+        Ay = np.random.randn(n) * 10.0
+        assert detect_bottom_crash(depth, {"Ax": Ax, "Ay": Ay}, fs=512.0) is None
+
     def test_single_channel_pre_aggregated(self):
         """One pre-computed magnitude channel works just like Ax/Ay."""
         n = 5000

@@ -86,8 +86,11 @@ def detect_bottom_crash(
     assert mag_sq is not None  # unreachable: guarded by `if not vibration_channels`
     accel_mag = np.sqrt(mag_sq)
 
-    max_depth = np.nanmax(depth)
-    if max_depth < depth_minimum:
+    with np.errstate(invalid="ignore"):
+        max_depth = np.nanmax(depth)
+    # An all-NaN depth segment makes nanmax NaN; np.arange(..., NaN, ...) below
+    # then raises. Bail out cleanly instead of crashing the profile.
+    if not np.isfinite(max_depth) or max_depth < depth_minimum:
         return None
 
     # Bin acceleration variance by depth
