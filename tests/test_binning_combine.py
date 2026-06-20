@@ -95,6 +95,25 @@ class TestBinByDepthBinSize:
         assert ds.coords["depth_bin"].values[0] == pytest.approx(1.0)
         assert ds.sizes["depth_bin"] == 5
 
+    def test_shared_pres_range_aligns_eps_chi_merge(self):
+        """eps and chi binned with a SHARED pres_range get bit-identical
+        depth_bin coords, so the outer merge aligns exactly instead of splitting
+        equal depths into NaN-padded columns at non-binary bin_size (M-16)."""
+        bin_size = 0.1  # not binary-exact -> per-array np.arange grids differ by ULP
+        eps_pres = np.arange(0.35, 5.0, 0.1)
+        chi_pres = np.arange(0.45, 5.1, 0.1)
+        # Shared snapped range (as the pipeline computes from the union).
+        lo = float(np.floor(min(eps_pres.min(), chi_pres.min()) / bin_size) * bin_size)
+        hi = float(np.ceil(max(eps_pres.max(), chi_pres.max()) / bin_size) * bin_size)
+        eb = bin_by_depth(eps_pres, {"epsilon": np.ones_like(eps_pres)},
+                          bin_size=bin_size, pres_range=(lo, hi))
+        cb = bin_by_depth(chi_pres, {"chi": np.ones_like(chi_pres)},
+                          bin_size=bin_size, pres_range=(lo, hi))
+        np.testing.assert_array_equal(eb["depth_bin"].values, cb["depth_bin"].values)
+        merged = eb.merge(cb, join="outer")
+        # No split: merged depth axis equals each input's (not ~doubled).
+        assert merged.sizes["depth_bin"] == eb.sizes["depth_bin"]
+
 
 class TestBinByDepthNaN:
     """NaN handling — NaN values should be excluded from means."""

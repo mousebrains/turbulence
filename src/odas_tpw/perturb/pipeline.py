@@ -77,6 +77,33 @@ def _prune_orphan_profile_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
     return pruned
 
 
+def _prune_orphan_named_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
+    """Delete ``{stem}.nc`` per-file outputs whose source .p is no longer present.
+
+    Sibling of :func:`_prune_orphan_profile_ncs` for products named exactly
+    ``{stem}.nc`` (the CTD per-file outputs, ctd.py). Those carry no ``_prof``
+    suffix, so the prefix-based pruner skips them and orphaned casts from a
+    dropped .p file would leak into the CTD combo. Prune any ``*.nc`` whose stem
+    is not in *valid_stems* (exact membership); a file produced this run always
+    matches a current stem, so live data is never dropped. Returns the count.
+    """
+    if not stage_dir.exists():
+        return 0
+    pruned = 0
+    for nc in stage_dir.glob("*.nc"):
+        if nc.stem not in valid_stems:
+            try:
+                nc.unlink()
+                pruned += 1
+                logger.info(
+                    "pruned orphaned CTD %s (no source .p in current input set)",
+                    nc.name,
+                )
+            except OSError as exc:
+                logger.warning("could not prune %s: %s", nc.name, exc)
+    return pruned
+
+
 def _canonical_instruments_for_hash(instruments: dict | None) -> dict[str, Any]:
     """Normalize set-like instrument settings before hashing."""
     normalized: dict[str, Any] = {}
@@ -1916,6 +1943,10 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     for _stage in ("profiles", "diss", "chi"):
         if _stage in output_dirs:
             _prune_orphan_profile_ncs(output_dirs[_stage], valid_stems)
+    # CTD per-file outputs are named {stem}.nc (no _prof suffix), so prune them
+    # with exact-stem matching before the CTD combo globs the dir.
+    if "ctd" in output_dirs:
+        _prune_orphan_named_ncs(output_dirs["ctd"], valid_stems)
 
     # Resolve binned-output dirs *before* the bin call so we can pass them
     # as ``log_dir`` and each input .p file's records land in

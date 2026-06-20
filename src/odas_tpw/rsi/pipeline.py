@@ -529,16 +529,36 @@ def _process_profile(
 
     # Step 7: Depth binning
     binned_parts = []
+    have_eps = l4.n_spectra > 0
+    have_chi = l4_chi_eps is not None and l4_chi_eps.n_spectra > 0
 
-    if l4.n_spectra > 0:
+    # Shared depth grid so eps and chi bin onto a bit-identical depth_bin coord:
+    # independent per-array np.arange grids can differ by an ULP for a
+    # non-binary-exact bin_size, and the join="outer" merge below would then
+    # split one physical depth into two NaN-padded columns (M-16). With both
+    # present, snap a single range from the union of pressures.
+    shared_range: tuple[float, float] | None = None
+    if have_eps and l4_chi_eps is not None and have_chi:
+        all_pres = np.concatenate(
+            [np.asarray(l4.pres, dtype=float), np.asarray(l4_chi_eps.pres, dtype=float)]
+        )
+        finite = all_pres[np.isfinite(all_pres)]
+        if finite.size:
+            shared_range = (
+                float(np.floor(np.min(finite) / bin_size) * bin_size),
+                float(np.ceil(np.max(finite) / bin_size) * bin_size),
+            )
+
+    if have_eps:
         eps_bin = bin_by_depth(
             l4.pres,
             {"epsilon": l4.epsi_final, "P_mean": l4.pres, "speed": l4.pspd_rel},
             bin_size=bin_size,
+            pres_range=shared_range,
         )
         binned_parts.append(eps_bin)
 
-    if l4_chi_eps is not None and l4_chi_eps.n_spectra > 0:
+    if l4_chi_eps is not None and have_chi:
         chi_vals: dict[str, np.ndarray] = {"chi": l4_chi_eps.chi_final}
         if mixing_vars is not None:
             chi_vals.update({name: arr for name, (arr, _a) in mixing_vars.items()})
@@ -546,6 +566,7 @@ def _process_profile(
             l4_chi_eps.pres,
             chi_vals,
             bin_size=bin_size,
+            pres_range=shared_range,
         )
         binned_parts.append(chi_bin)
 
