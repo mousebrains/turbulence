@@ -123,6 +123,24 @@ def _write_diss_per_profile(root: Path, n_bin: int = 5, n_prof: int = 1) -> None
     ds.to_netcdf(out / "prof_000.nc")
 
 
+def _write_nan_combo(root: Path, prefix: str, var: str) -> None:
+    """An all-NaN (bin, profile) combo to exercise the no-finite-data path."""
+    import xarray as xr
+
+    bin_c = np.arange(5, dtype=float) + 1.0
+    prof = np.arange(3)
+    stime = np.array(["2026-03-25T00:00:00", "2026-03-25T00:10:00",
+                      "2026-03-25T00:20:00"], dtype="datetime64[ns]")
+    ds = xr.Dataset(
+        {var: (("bin", "profile"), np.full((5, 3), np.nan)),
+         "stime": (("profile",), stime)},
+        coords={"bin": ("bin", bin_c), "profile": ("profile", prof)},
+    )
+    out = root / f"{prefix}_00"
+    out.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(out / "combo.nc")
+
+
 class TestEpsChiCLI:
     def test_chi_combo_path_writes_png(self, tmp_path):
         _write_diss_combo(tmp_path)
@@ -130,6 +148,18 @@ class TestEpsChiCLI:
         _write_chi_combo(tmp_path, with_chi_mean=True)
         _write_chi_per_profile(tmp_path)
 
+        out_png = tmp_path / "fig.png"
+        rc = cli.main(["eps-chi", "--root", str(tmp_path), "--out", str(out_png)])
+        assert rc == 0
+        assert out_png.exists() and out_png.stat().st_size > 0
+
+    def test_all_nan_eps_chi_does_not_crash(self, tmp_path):
+        """All-NaN eps/chi -> quantile limits (None, None); panels must render a
+        placeholder, not crash on LogNorm(None, None) (M-14)."""
+        _write_nan_combo(tmp_path, "diss_combo", "epsilonMean")
+        _write_nan_combo(tmp_path, "chi_combo", "chiMean")
+        _write_diss_per_profile(tmp_path)
+        _write_chi_per_profile(tmp_path)
         out_png = tmp_path / "fig.png"
         rc = cli.main(["eps-chi", "--root", str(tmp_path), "--out", str(out_png)])
         assert rc == 0

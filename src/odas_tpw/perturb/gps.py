@@ -25,9 +25,15 @@ def _to_epoch_seconds(values: np.ndarray) -> np.ndarray:
     datetime64[*] columns are converted via integer ns since epoch.  Numeric
     columns are passed through unchanged — callers are expected to hand in
     epoch seconds when no datetime metadata is available.
+
+    NaT decodes to NaN (not the int64-min sentinel, which would otherwise become
+    a bogus ~-9.2e9 s epoch and poison the interpolation node).
     """
     if np.issubdtype(values.dtype, np.datetime64):
-        return values.astype("datetime64[ns]").astype(np.int64) / 1e9
+        ns = values.astype("datetime64[ns]").astype(np.int64)
+        secs = ns.astype(np.float64) / 1e9
+        secs[ns == np.iinfo(np.int64).min] = np.nan
+        return secs
     return values.astype(np.float64)
 
 

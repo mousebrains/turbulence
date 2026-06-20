@@ -355,26 +355,32 @@ def run(args: argparse.Namespace) -> str:
     chi_vmin, chi_vmax = layout.quantile_limits(chi, args.chi_vmin, args.chi_vmax)
     gam_vmin, gam_vmax = layout.quantile_limits(gamma, args.gam_vmin, args.gam_vmax)
 
-    layout.plot_panel(
-        ax_e, fig, cast_x, segments, depth, eps, cmap,
-        LogNorm(vmin=eps_vmin, vmax=eps_vmax),
-        r"$\varepsilon$  (W kg$^{-1}$)",
-    )
-    ax_e.set_ylabel("Depth (m)")
+    def _safe_lognorm(vmn, vmx):
+        # quantile_limits returns (None, None) for all-NaN / no-positive data;
+        # LogNorm(None, None) then crashes on draw. Build a norm only for finite
+        # positive limits, else None (-> "no data" placeholder).
+        if vmn is None or vmx is None:
+            return None
+        if not (np.isfinite(vmn) and np.isfinite(vmx)) or vmn <= 0 or vmx <= 0:
+            return None
+        if vmn >= vmx:
+            vmn = vmx / 10.0
+        return LogNorm(vmin=vmn, vmax=vmx)
 
-    layout.plot_panel(
-        ax_c, fig, cast_x, segments, depth, chi, cmap,
-        LogNorm(vmin=chi_vmin, vmax=chi_vmax),
-        r"$\chi$  (K$^{2}$ s$^{-1}$)",
-    )
-    ax_c.set_ylabel("Depth (m)")
-
-    layout.plot_panel(
-        ax_g, fig, cast_x, segments, depth, gamma, cmap,
-        LogNorm(vmin=gam_vmin, vmax=gam_vmax),
-        r"$\chi / \varepsilon$  (K$^{2}$ s kg J$^{-1}$)",
-    )
-    ax_g.set_ylabel("Depth (m)")
+    panels = [
+        (ax_e, eps, (eps_vmin, eps_vmax), r"$\varepsilon$  (W kg$^{-1}$)", r"$\varepsilon$"),
+        (ax_c, chi, (chi_vmin, chi_vmax), r"$\chi$  (K$^{2}$ s$^{-1}$)", r"$\chi$"),
+        (ax_g, gamma, (gam_vmin, gam_vmax),
+         r"$\chi / \varepsilon$  (K$^{2}$ s kg J$^{-1}$)", r"$\chi/\varepsilon$"),
+    ]
+    for ax, z, (vmn, vmx), cbar_label, short in panels:
+        norm = _safe_lognorm(vmn, vmx)
+        if norm is not None:
+            layout.plot_panel(ax, fig, cast_x, segments, depth, z, cmap, norm, cbar_label)
+        else:
+            ax.text(0.5, 0.5, f"no finite {short} data", ha="center", va="center",
+                    transform=ax.transAxes)
+        ax.set_ylabel("Depth (m)")
     ax_g.set_xlabel("Cast number  (cluster start time, UTC)")
 
     eps_attrs = _per_profile_attrs(args.root, "diss")

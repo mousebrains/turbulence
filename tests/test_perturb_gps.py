@@ -276,3 +276,14 @@ class TestGPSFromNetCDF:
         np.testing.assert_allclose(gps.lat(np.array([t0])), [7.0])
         np.testing.assert_allclose(gps.lat(np.array([t0 + 1.0])), [8.0])
         np.testing.assert_allclose(gps.lon(np.array([t0 + 2.0])), [136.0])
+
+
+def test_to_epoch_seconds_nat_becomes_nan():
+    """NaT must decode to NaN, not the int64-min bogus epoch (~-9.2e9 s) that
+    would poison the interpolation (audit round-2 M-13)."""
+    from odas_tpw.perturb.gps import _to_epoch_seconds
+
+    t = np.array(["2020-01-01T00:00:00", "NaT"], dtype="datetime64[ns]")
+    out = _to_epoch_seconds(t)
+    assert np.isfinite(out[0]) and out[0] > 0
+    assert np.isnan(out[1])              # NOT ~-9.2e9

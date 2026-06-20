@@ -151,6 +151,19 @@ def _nc_array(var) -> np.ndarray:
     return np.asarray(arr)
 
 
+def _dt64_to_epoch_s(values: np.ndarray) -> np.ndarray:
+    """datetime64 -> epoch seconds (float64), mapping NaT to NaN.
+
+    NaT casts to the int64 minimum; converting straight to seconds would yield a
+    bogus ~-9.2e9 s epoch that then poisons interpolation. Detect the sentinel
+    and emit NaN instead.
+    """
+    ns = np.asarray(values).astype("datetime64[ns]").astype(np.int64)
+    secs = ns.astype(np.float64) / 1e9
+    secs[ns == np.iinfo(np.int64).min] = np.nan
+    return secs
+
+
 def _parse_time(raw_time: np.ndarray, time_format: str) -> tuple[np.ndarray, bool]:
     """Convert raw time values to epoch seconds.
 
@@ -163,7 +176,7 @@ def _parse_time(raw_time: np.ndarray, time_format: str) -> tuple[np.ndarray, boo
     elif time_format == "iso":
         import pandas as pd
 
-        t = pd.to_datetime(raw_time).values.astype("datetime64[ns]").astype(np.int64) / 1e9
+        t = _dt64_to_epoch_s(pd.to_datetime(raw_time).values)
         return t, False
     elif time_format == "auto":
         if not np.issubdtype(raw_time.dtype, np.number):
@@ -172,7 +185,7 @@ def _parse_time(raw_time: np.ndarray, time_format: str) -> tuple[np.ndarray, boo
             # old code never actually reached its ISO fallback for string input.
             import pandas as pd
 
-            t = pd.to_datetime(raw_time).values.astype("datetime64[ns]").astype(np.int64) / 1e9
+            t = _dt64_to_epoch_s(pd.to_datetime(raw_time).values)
             return t, False
         vals = raw_time.astype(np.float64)
         # nanmedian: a single NaN timestamp must not blank the whole test and
@@ -413,6 +426,16 @@ def _interp_one(
 ) -> np.ndarray:
     """Interpolate one channel onto ``target_t`` with the requested kind."""
     from scipy.interpolate import PchipInterpolator, interp1d
+
+    # Drop NaN samples (fill-valued gaps / NaT times): PchipInterpolator raises
+    # on a NaN in the data, and interp1d would propagate it. Interpolate across
+    # the gaps instead; with < 2 valid points there is nothing to interpolate.
+    finite = np.isfinite(hotel_t) & np.isfinite(data)
+    if int(finite.sum()) < 2:
+        return np.full(np.shape(target_t), np.nan, dtype=np.float64)
+    if not finite.all():
+        hotel_t = np.asarray(hotel_t)[finite]
+        data = np.asarray(data)[finite]
 
     if kind == "pchip":
         interp = PchipInterpolator(hotel_t, data, extrapolate=False)
