@@ -76,6 +76,24 @@ def _write_ctd_combo(root: Path, n_cast: int = 4, per: int = 60) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_var_label_omits_dimensionless_units():
+    """A dimensionless unit ("1", e.g. practical salinity after PSU->"1") must
+    not render as "[1]"; meaningful units still show (#38)."""
+    import xarray as xr
+
+    from odas_tpw.perturb.plot.sections import var_label
+
+    ds = xr.Dataset(
+        {
+            "SP": (("t",), np.zeros(2),
+                   {"long_name": "practical salinity (PSU)", "units": "1"}),
+            "depth": (("t",), np.zeros(2), {"long_name": "depth", "units": "m"}),
+        }
+    )
+    assert var_label(ds, "SP") == "practical salinity (PSU)"  # no "[1]"
+    assert var_label(ds, "depth") == "depth [m]"  # real unit still shown
+
+
 def test_time_subset_handles_numeric_time_axis():
     """A combo whose time is numeric epoch seconds (no CF units decoded) must
     subset cleanly, not raise a cryptic UFuncTypeError (#66)."""

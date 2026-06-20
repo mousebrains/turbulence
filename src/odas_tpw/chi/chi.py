@@ -588,9 +588,12 @@ def _iterative_fit(
     spec_batch = grad_func(K, kB_best, chi) if np.isfinite(kB_best) else np.zeros_like(K)
 
     # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise).
-    # Restrict to above-noise bins (spec_obs > 2*noise), matching Method 1 and
-    # the MLE path — otherwise noise-dominated bins below k_u dilute the ratio
-    # toward 1.0 and the iterative FOM is not comparable to the other methods.
+    # Restrict to above-noise bins (spec_obs > 2*noise) bounded by the
+    # integration limit k_u, so the FOM is computed over the same band the chi
+    # was integrated over; otherwise noise-dominated bins dilute the ratio
+    # toward 1.0. This band is intentionally NOT identical to Method 1 / the MLE
+    # path (which use _valid_wavenumber_mask with a K_AA bound and a min-points
+    # fallback): those affect only this diagnostic FOM, never chi/kB (#48).
     if np.isfinite(kB_best) and np.isfinite(chi):
         valid_fom = (spec_obs > 2 * noise_K) & (K > 0) & (k_u >= K)
         if np.sum(valid_fom) >= 3:

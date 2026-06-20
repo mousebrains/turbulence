@@ -649,7 +649,9 @@ class ProfileViewer:
 
         # AA line
         K_AA = self.f_AA / r["W"]
-        ax.axvline(K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5)
+        ax.axvline(
+            K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5, label="f_AA"
+        )
 
         # Dynamic y-axis
         x_lo, x_hi = 0.5, 300
@@ -909,7 +911,9 @@ class ProfileViewer:
                 )
 
         K_AA = self.f_AA / r["W"]
-        ax.axvline(K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5)
+        ax.axvline(
+            K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5, label="f_AA"
+        )
 
         P_lo = float(self.P_fast[sel_spec.start])
         P_hi = float(self.P_fast[min(sel_spec.stop - 1, len(self.P_fast) - 1)])

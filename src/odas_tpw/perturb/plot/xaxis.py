@@ -69,6 +69,25 @@ def _wrap_deg(d: np.ndarray | float) -> np.ndarray:
     return (np.asarray(d, dtype=float) + 180.0) % 360.0 - 180.0
 
 
+def _circmean_deg(lon: np.ndarray) -> float:
+    """Circular mean of longitudes [deg], dateline-safe.
+
+    A plain ``nanmean`` of raw degrees averages the *wrapped* values, so a
+    transect straddling +/-180 lands on the antipode (e.g. [179, -179] -> 0,
+    not 180), which then distorts the local projection by ~180x. Averaging the
+    unit vectors and taking the angle keeps the reference on the correct side.
+    """
+    rad = np.radians(np.asarray(lon, dtype=float))
+    finite = np.isfinite(rad)
+    if not np.any(finite):
+        return float("nan")
+    return float(
+        np.degrees(
+            np.arctan2(np.nanmean(np.sin(rad[finite])), np.nanmean(np.cos(rad[finite])))
+        )
+    )
+
+
 def to_epoch_seconds(time: np.ndarray) -> np.ndarray:
     """Return *time* as float epoch seconds.
 
@@ -151,7 +170,9 @@ def project_along_line(
         raise ValueError("along_line needs >= 2 waypoints as [[lat, lon], ...]")
 
     lat_ref = float(np.nanmean(lat)) if np.any(np.isfinite(lat)) else float(wp[0, 0])
-    lon_ref = float(np.nanmean(lon)) if np.any(np.isfinite(lon)) else float(wp[0, 1])
+    # Circular mean so a dateline-crossing transect's reference stays on the
+    # correct side of +/-180 (bug_001).
+    lon_ref = _circmean_deg(lon) if np.any(np.isfinite(lon)) else float(wp[0, 1])
 
     px, py = _to_local_xy(lat, lon, lat_ref, lon_ref)
     wx, wy = _to_local_xy(wp[:, 0], wp[:, 1], lat_ref, lon_ref)
@@ -230,7 +251,9 @@ def signed_distance_axis(
         return SignedAxis(np.full(lat.shape, np.nan), nan, nan, nan, nan)
 
     mid_lat = float(np.nanmean(lat))
-    mid_lon = float(np.nanmean(lon))
+    # Circular mean so a dateline-crossing transect's reference (and the
+    # midpoint label) stays on the correct side of +/-180 (bug_001).
+    mid_lon = _circmean_deg(lon)
     east, north = _to_local_xy(lat, lon, mid_lat, mid_lon)
     de = east - float(np.mean(east[finite]))   # east displacement from centroid
     dn = north - float(np.mean(north[finite]))  # north displacement

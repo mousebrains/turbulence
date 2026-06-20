@@ -166,9 +166,11 @@ COMBO_SCHEMA: dict[str, dict] = {
     },
     "SP": {
         "nc_name": "SP",
-        "units": "PSU",
+        # CF/TEOS-10: practical salinity is dimensionless ("1"), not "PSU"
+        # (not UDUNITS-parseable); the standard_name carries the meaning (#38).
+        "units": "1",
         "standard_name": "sea_water_practical_salinity",
-        "long_name": "practical salinity",
+        "long_name": "practical salinity (PSU)",
     },
     "SA": {
         "nc_name": "SA",
@@ -243,6 +245,11 @@ COMBO_SCHEMA: dict[str, dict] = {
         "units": "",
         "long_name": "figure of merit (probe 2)",
     },
+    # "cpm" (cycles per metre) is deliberately retained as the conventional
+    # oceanographic wavenumber unit here and on the K_max/kB vars below: it is
+    # not strict UDUNITS (the parseable equivalent is "m-1"), but it is
+    # unambiguous and matches the per-profile rsi/chi outputs. Left as-is by
+    # decision (#38); only the PSU -> "1" salinity fix was applied.
     "K_max_1": {
         "nc_name": "K_max_1",
         "units": "cpm",

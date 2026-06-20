@@ -448,7 +448,12 @@ class PFile:
                     self.channels_raw[ch_name] = raw_ch
 
                 elif len(ids) == 2:
-                    id_even, id_odd = sorted(ids)
+                    # Config-declared order, not sorted(): ODAS read_odas.m
+                    # tags the FIRST-listed id even/low word (`_E`) and the
+                    # SECOND odd/high word (`_O`), then joins chO*2^16 + chE.
+                    # sorted() only coincides when the low word is listed first
+                    # (#0).
+                    id_even, id_odd = ids[0], ids[1]
                     if id_even not in unique_ids or id_odd not in unique_ids:
                         continue
                     col_e = np.where(matrix == id_even)

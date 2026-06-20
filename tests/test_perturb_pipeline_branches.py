@@ -5,13 +5,32 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import xarray as xr
+
 from odas_tpw.perturb.pipeline import (
     _prune_orphan_named_ncs,
     _prune_orphan_profile_ncs,
+    _write_binned_or_clear,
     run_merge,
     run_pipeline,
     run_trim,
 )
+
+
+class TestWriteBinnedOrClear:
+    def test_empty_rerun_removes_stale_binned(self, tmp_path):
+        """A populated bin writes binned.nc; a later empty re-run must REMOVE the
+        stale file so the combo can't republish a prior input set's data (#56)."""
+        out = tmp_path / "binned.nc"
+        _write_binned_or_clear(xr.Dataset({"x": ("t", [1.0, 2.0])}), tmp_path)
+        assert out.exists()  # populated -> written
+        _write_binned_or_clear(xr.Dataset(), tmp_path)
+        assert not out.exists()  # empty re-run -> stale file cleared
+
+    def test_empty_with_no_prior_file_is_noop(self, tmp_path):
+        """Empty result with no pre-existing binned.nc simply writes nothing."""
+        _write_binned_or_clear(xr.Dataset(), tmp_path)
+        assert not (tmp_path / "binned.nc").exists()
 
 
 class TestPruneOrphanProfileNCs:

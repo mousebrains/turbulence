@@ -58,3 +58,15 @@ def test_temperature_reasonable(pf):
 def test_shear_centered(pf):
     sh = pf.channels["sh1"]
     assert abs(np.nanmean(sh)) < 1.0
+
+
+def test_two_id_channel_assembles_in_config_order(pf):
+    """JAC_C is the one 2-id (32-bit split) channel; it must assemble its high/
+    low words in config-declared order (ODAS read_odas.m) and decode to a
+    plausible ocean conductivity. Guards the sorted()->ids[0],ids[1] change
+    against regression on the real channel (#0)."""
+    c = np.asarray(pf.channels["JAC_C"], dtype=float)
+    assert np.all(np.isfinite(c))
+    # Ocean conductivity is ~30-65 mS/cm; a swapped high/low word would corrupt
+    # the 32-bit value into a wildly non-physical range.
+    assert np.nanmin(c) > 30.0 and np.nanmax(c) < 70.0

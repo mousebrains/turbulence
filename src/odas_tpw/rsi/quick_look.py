@@ -496,7 +496,12 @@ class QuickLookViewer(ProfileViewer):
                 ax.text(K[len(K) // 2], y_val, f"{exp}", fontsize=6, color="0.5", va="bottom")
 
         K_AA = self.f_AA / r["W"]
-        ax.axvline(K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5)
+        # Marks the physical anti-aliasing frequency f_AA; the spectral fits
+        # stop slightly lower at 0.9*f_AA, so label it to avoid reading the line
+        # as the fit cutoff (#13).
+        ax.axvline(
+            K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5, label="f_AA"
+        )
 
         P_lo = float(self.P_fast[sel_spec.start])
         P_hi = float(self.P_fast[min(sel_spec.stop - 1, len(self.P_fast) - 1)])
@@ -609,7 +614,12 @@ class QuickLookViewer(ProfileViewer):
             noise_line = (nl, "Noise")
 
         K_AA = self.f_AA / mean_speed
-        ax.axvline(K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5)
+        # Marks the physical anti-aliasing frequency f_AA; the spectral fits
+        # stop slightly lower at 0.9*f_AA, so label it to avoid reading the line
+        # as the fit cutoff (#13).
+        ax.axvline(
+            K_AA, color="0.5", linestyle=":", linewidth=0.5, alpha=0.5, label="f_AA"
+        )
 
         # Build legend: left column = probe 0, right column = probe 1.
         # matplotlib ncol fills column-major: entries 0..N/2-1 go in left col,

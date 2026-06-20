@@ -10,7 +10,10 @@ import os
 import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import xarray as xr
 
 from odas_tpw.perturb.config import merge_config, resolve_output_dir
 from odas_tpw.perturb.logging_setup import (
@@ -82,6 +85,22 @@ def _prune_orphan_profile_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
         except OSError as exc:
             logger.warning("could not prune %s: %s", nc.name, exc)
     return pruned
+
+
+def _write_binned_or_clear(ds: "xr.Dataset", out_dir: Path) -> None:
+    """Write *ds* to ``out_dir/binned.nc``, or remove a stale one if *ds* is empty.
+
+    An empty re-run (same config but a reduced/changed input set) must not leave
+    a prior run's ``binned.nc`` in place: ``resolve_output_dir`` hashes only the
+    config, not the input file set, so the same dir is reused across input sets,
+    and the combo glob would otherwise republish the stale file as current data
+    (#56).
+    """
+    out = out_dir / "binned.nc"
+    if ds.data_vars:
+        ds.to_netcdf(out)
+    elif out.exists():
+        out.unlink()
 
 
 def _prune_orphan_named_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
@@ -2027,8 +2046,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             ds = bin_by_time(
                 prof_ncs, bin_width, aggregation, diagnostics, log_dir=prof_binned_dir
             )
-        if ds.data_vars:
-            ds.to_netcdf(prof_binned_dir / "binned.nc")
+        _write_binned_or_clear(ds, prof_binned_dir)
 
     if diss_ncs and diss_binned_dir is not None:
         logger.info("Binning dissipation...")
@@ -2041,8 +2059,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             log_dir=diss_binned_dir,
             jobs=jobs,
         )
-        if ds.data_vars:
-            ds.to_netcdf(diss_binned_dir / "binned.nc")
+        _write_binned_or_clear(ds, diss_binned_dir)
 
     if chi_ncs and chi_binned_dir is not None:
         logger.info("Binning chi...")
@@ -2055,8 +2072,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             log_dir=chi_binned_dir,
             jobs=jobs,
         )
-        if ds.data_vars:
-            ds.to_netcdf(chi_binned_dir / "binned.nc")
+        _write_binned_or_clear(ds, chi_binned_dir)
 
     # Combo assembly
     _run_combo(

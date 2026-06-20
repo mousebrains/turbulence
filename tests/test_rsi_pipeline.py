@@ -96,6 +96,32 @@ class TestRunPipelineChiMethods:
         chi_fit_files = list((tmp_path / sample_p.stem).rglob("L4_chi_fit.nc"))
         assert len(chi_fit_files) >= 1
 
+    def test_chi_fit_method_writes_mixing_quantities(self, sample_p, tmp_path):
+        """A Method-2-only run (compute_chi_epsilon=False) must still write the
+        stratification/mixing block to L4_chi_fit.nc; previously the whole block
+        was gated on the Method-1 result and silently dropped (bug_003)."""
+        from odas_tpw.rsi.pipeline import run_pipeline
+
+        run_pipeline(
+            [sample_p],
+            tmp_path,
+            fft_length=256,
+            diss_length=1024,
+            overlap=512,
+            chi_fft_length=256,
+            chi_diss_length=1024,
+            chi_overlap=512,
+            compute_chi_epsilon=False,
+            compute_chi_fit=True,
+        )
+        chi_fit_files = list((tmp_path / sample_p.stem).rglob("L4_chi_fit.nc"))
+        assert len(chi_fit_files) >= 1
+        with xr.open_dataset(chi_fit_files[0]) as ds:
+            # N2/dTdz need only the CTD profile, so they must be present even
+            # without Method-1 chi-from-epsilon.
+            assert "N2" in ds
+            assert "dTdz" in ds
+
     def test_chi_epsilon_method(self, sample_p, tmp_path):
         """compute_chi_epsilon=True produces L4_chi_epsilon.nc per profile."""
         from odas_tpw.rsi.pipeline import run_pipeline

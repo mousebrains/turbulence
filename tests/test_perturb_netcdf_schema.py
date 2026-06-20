@@ -25,6 +25,14 @@ class TestSchemas:
         for key in ["JAC_T", "JAC_C", "P", "depth", "SP", "SA", "lat", "lon"]:
             assert key in CTD_SCHEMA
 
+    def test_practical_salinity_units_are_cf_dimensionless(self):
+        """Practical salinity must be CF/TEOS-10 dimensionless "1", not the
+        non-UDUNITS "PSU"; the standard_name carries the meaning (#38)."""
+        sp = CTD_SCHEMA["SP"]
+        assert sp["units"] == "1"
+        assert sp["standard_name"] == "sea_water_practical_salinity"
+        assert "PSU" in sp["long_name"]  # PSU retained in the human-readable name
+
     def test_all_entries_have_units(self):
         # ``profile`` is a CF profile-id index (cf_role) — has no physical
         # units and CF-1.13 §9.5 specifies it deliberately omits ``units``.

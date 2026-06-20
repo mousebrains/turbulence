@@ -2,6 +2,7 @@
 """Tests for processing.epsilon_combine — mk_epsilon_mean."""
 
 import numpy as np
+import pytest
 import xarray as xr
 
 from odas_tpw.processing.epsilon_combine import mk_epsilon_mean
@@ -124,6 +125,48 @@ class TestMkEpsilonMean:
 
         names = ["e_10", "e_2", "e_1"]
         assert sorted(names, key=_probe_sort_key) == ["e_1", "e_2", "e_10"]
+
+    def test_combine_never_prunes_below_two_probes(self):
+        """A 3-probe row whose estimates all mutually disagree must collapse to
+        the geometric mean of the two closest, never to a single survivor (the
+        documented 'keep both' rule applied per-row) (#23/#49). A huge speed
+        forces CF95~0 so the loop would otherwise drop to one probe."""
+        # Probes 1e-12, 1e-7, 1e-6: the unambiguous furthest-from-ln-mean is
+        # 1e-12, dropped first, leaving (1e-7, 1e-6) -> geometric mean
+        # sqrt(1e-13) ~ 3.16e-7. With the >=2 floor the loop stops there; without
+        # it the loop continues to a single survivor (1e-7 or 1e-6).
+        ds = xr.Dataset(
+            {
+                "e_1": (["time"], [1e-12]),
+                "e_2": (["time"], [1e-7]),
+                "e_3": (["time"], [1e-6]),
+                "speed": (["time"], [1.0e6]),  # drives L_hat huge -> CF95 ~ 0
+                "nu": (["time"], [1.0e-6]),
+            },
+            coords={"time": [0.0]},
+            attrs={"diss_length": 512, "fs_fast": 512.0},
+        )
+        out = mk_epsilon_mean(ds)
+        assert out["epsilonMean"].values[0] == pytest.approx(np.sqrt(1e-13), rel=1e-6)
+
+    def test_all_nan_row_with_three_probes_does_not_raise(self):
+        """An all-NaN row in a 3-probe dataset must not raise in the removal
+        loop (nanargmax over an empty slice): the loop runs only with >=3
+        probes, and the all-NaN row must be skipped, not indexed (#23/#49)."""
+        ds = xr.Dataset(
+            {
+                "e_1": (["time"], [np.nan, 1e-9]),
+                "e_2": (["time"], [np.nan, 1e-7]),
+                "e_3": (["time"], [np.nan, 1e-5]),
+                "speed": (["time"], [1.0e6, 1.0e6]),  # CF95 ~ 0 -> loop active
+                "nu": (["time"], [1.0e-6, 1.0e-6]),
+            },
+            coords={"time": [0.0, 1.0]},
+            attrs={"diss_length": 512, "fs_fast": 512.0},
+        )
+        out = mk_epsilon_mean(ds)  # must not raise
+        assert np.isnan(out["epsilonMean"].values[0])  # all-NaN row stays NaN
+        assert np.isfinite(out["epsilonMean"].values[1])  # other row combined
 
     def test_defaults_no_speed_nu(self):
         """Dataset with e_1, e_2 but no speed or nu uses defaults."""
