@@ -1161,12 +1161,17 @@ def process_file(
                 logger.error("extracting profiles %s: %s", p_path.name, exc)
                 return result
 
-    # Per-profile dissipation
-    eps_cfg = config.get("epsilon", {})
+    # Per-profile dissipation. Resolve via merge_config so the DEFAULTS (e.g.
+    # epsilon.fft_length=256) — and any None values, which merge_config drops —
+    # are the values actually handed to _compute_epsilon/_compute_chi and the
+    # diss_length_seconds below. config.get() raw would let an omitted/null
+    # fft_length fall to _compute_epsilon's own 1024 default (mis-sizing windows
+    # and making the diss-dir provenance hash, which IS merge_config-based, lie).
+    eps_cfg = merge_config("epsilon", config.get("epsilon"))
     inst_lookup = instrument_key if instrument_key is not None else p_path.parent.name
     instrument_cfg = config.get("instruments", {}).get(inst_lookup, {})
     excluded_probes = list(instrument_cfg.get("exclude_shear_probes", []))
-    chi_cfg = config.get("chi", {})
+    chi_cfg = merge_config("chi", config.get("chi"))
     chi_enabled = bool(chi_cfg.get("enable", False)) and "chi" in output_dirs
 
     # Per-profile channels cache: filled here, consumed by the chi loop
@@ -1622,8 +1627,9 @@ def _setup_output_dirs(config: dict) -> dict[str, Path]:
         upstream=_upstream_for("diss", config),
     )
 
-    # Chi directory (if enabled)
-    chi_cfg = config.get("chi", {})
+    # Chi directory (if enabled). merge_config so the enable decision matches
+    # process_file's (which now resolves chi via merge_config).
+    chi_cfg = merge_config("chi", config.get("chi"))
     if chi_cfg.get("enable", False):
         chi_params = merge_config("chi", chi_cfg)
         dirs["chi"] = resolve_output_dir(
