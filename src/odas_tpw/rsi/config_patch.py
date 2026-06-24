@@ -127,6 +127,14 @@ def _check_value(value: object, ctx: str) -> str:
         raise ValueError(
             f"{ctx}: value must not contain ';' (the config parser truncates at it); got {text!r}"
         )
+    # A newline (e.g. from a YAML block scalar or '\n' escape) would break out
+    # of the key=value assignment and inject arbitrary stanzas — bypassing the
+    # guarantee that [matrix]/[root] acquisition parameters are unaddressable.
+    if any(ord(c) < 0x20 for c in text):
+        raise ValueError(
+            f"{ctx}: value must be a single line of printable text "
+            f"(no newlines or control characters); got {text!r}"
+        )
     return text
 
 
@@ -174,13 +182,15 @@ def load_edit_spec(path: str | Path) -> EditSpec:
     note = data.get("note")
     if not isinstance(note, str) or not note.strip():
         raise ValueError(f"{path.name}: a non-empty 'note' describing the change is required")
-    if not note.isascii():
-        raise ValueError(f"{path.name}: 'note' must be ASCII")
+    if not note.isascii() or any(ord(c) < 0x20 for c in note.strip()):
+        raise ValueError(f"{path.name}: 'note' must be a single line of ASCII text")
     note = note.strip()
 
     author = data.get("author")
-    if author is not None and (not isinstance(author, str) or not author.isascii()):
-        raise ValueError(f"{path.name}: 'author' must be ASCII text")
+    if author is not None and (
+        not isinstance(author, str) or not author.isascii() or any(ord(c) < 0x20 for c in author)
+    ):
+        raise ValueError(f"{path.name}: 'author' must be a single line of ASCII text")
     author = str(author).strip() if author else (os.environ.get("USER") or "unknown")
 
     sections: dict[str, dict[str, str]] = {}
@@ -432,7 +442,17 @@ def edit_config_text(
     return new_config, changes
 
 
+def _one_line(text: str) -> str:
+    """Collapse any control characters to spaces so an interpolated field can
+    never break out of its leading ``; `` comment prefix in the banner."""
+    return "".join(" " if ord(c) < 0x20 else c for c in text)
+
+
 def _build_banner(when: str, author: str, note: str, source_label: str, eol: str) -> str:
+    # note/author are control-char-validated upstream; source_label is a
+    # machine-derived path. Collapse defensively so a stray newline in any of
+    # them cannot spill past the '; ' prefix and become active config.
+    author, note, source_label = (_one_line(author), _one_line(note), _one_line(source_label))
     bar = "; " + "=" * 70 + eol
     lines = [
         bar,
@@ -493,13 +513,25 @@ def write_patched_pfile(src: str | Path, dst: str | Path, new_config_text: str) 
                 f"{src.name}: patched config is {len(new_bytes)} bytes, exceeds the "
                 f"65535-byte limit of the config_size header field"
             )
+        # Guard against a truncated/corrupt source whose header advertises a
+        # first record larger than the file: seeking past EOF would otherwise
+        # copy zero data records and silently produce a data-less output.
+        file_size = src.stat().st_size
+        first_record_size = header_size + config_size
+        if first_record_size >= file_size:
+            raise ValueError(
+                f"{src.name}: header_size+config_size ({first_record_size}) is not smaller "
+                f"than the file ({file_size} bytes); the source is truncated or has no data records"
+            )
         f.seek(0)
         header_region = bytearray(f.read(header_size))
         struct.pack_into(f"{endian}H", header_region, _H["config_size"] * 2, len(new_bytes))
 
         dst.parent.mkdir(parents=True, exist_ok=True)
-        f.seek(header_size + config_size)  # start of the first data record
-        with open(dst, "wb") as out:
+        f.seek(first_record_size)  # start of the first data record
+        # "xb": exclusive create is atomic, closing the TOCTOU window between
+        # the caller's existence check and the write.
+        with open(dst, "xb") as out:
             out.write(header_region)
             out.write(new_bytes)
             while True:
@@ -625,9 +657,7 @@ def patch_files(
         write_patched_pfile(src, dst, new_text)
         print(f"{src.name}: {len(changes)} change(s) -> {dst}")
         for ch in changes:
-            arrow = (
-                f'(added) = "{ch.new}"' if ch.old is None else f'"{ch.old}" -> "{ch.new}"'
-            )
+            arrow = f'(added) = "{ch.new}"' if ch.old is None else f'"{ch.old}" -> "{ch.new}"'
             print(f"    {ch.where} {ch.key}: {arrow}")
         results.append((src, dst, changes))
     return results

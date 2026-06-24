@@ -13,6 +13,8 @@ rsi-tpw <subcommand> [options]
 | `rsi-tpw info`     | Print summary of `.p` file(s) |
 | `rsi-tpw cutp`     | Copy a short `.p` record range for debugging |
 | `rsi-tpw nc`       | Convert `.p` files to NetCDF |
+| `rsi-tpw patch-template` | Scaffold a config edit-spec YAML from a `.p` file |
+| `rsi-tpw patch-config`   | Edit config fields in `.p` file(s), writing new files |
 | `rsi-tpw prof`     | Extract profiles from `.p` or full-record `.nc` files |
 | `rsi-tpw eps`      | Compute epsilon (TKE dissipation) |
 | `rsi-tpw chi`      | Compute chi (thermal variance dissipation) |
@@ -71,6 +73,64 @@ rsi-tpw nc VMP/*.p -o nc/ -j 4      # parallel with 4 workers
 |------|-------------|
 | `-o`, `--output PATH` | Output file or directory |
 | `-j`, `--jobs N` | Parallel workers (0 = all cores, default: 1) |
+
+## `rsi-tpw patch-template`
+
+Scaffold a YAML edit spec from a `.p` file, pre-filled with the file's current
+editable values and channel names. Edit it, then apply it with
+`rsi-tpw patch-config`.
+
+```bash
+rsi-tpw patch-template VMP/file.p                  # print to stdout
+rsi-tpw patch-template VMP/file.p -o edits.yaml    # write to a file
+```
+
+| Flag | Description |
+|------|-------------|
+| `-o`, `--output YAML` | Output path (default: print to stdout) |
+| `--force` | Overwrite an existing output file |
+
+## `rsi-tpw patch-config`
+
+Edit selected configuration fields — `[instrument_info]`, `[cruise_info]`, and
+per-channel calibration — embedded in a `.p` file, driven by a YAML edit spec.
+**The original file is never modified**; a patched copy is written into `--out`
+with each change annotated inline and the full original configuration embedded
+(commented) for recovery. If a file's targeted values already match, that file
+is reported and left unwritten.
+
+Acquisition-defining parameters (the `[matrix]` stanza and `[root]`
+`rate`/`recsize`/`no-fast`/`no-slow`) cannot be addressed and so can never be
+corrupted. Every value in the YAML must be a quoted string, so the text written
+to the file is exactly what you typed (e.g. `0.1130` stays `0.1130`).
+
+```bash
+rsi-tpw patch-template VMP/file.p -o edits.yaml      # 1. scaffold
+#                                                      2. edit edits.yaml
+rsi-tpw patch-config VMP/file.p --edits edits.yaml --out patched/   # 3. apply
+rsi-tpw patch-config VMP/file.p --edits edits.yaml --out patched/ --dry-run
+```
+
+Example `edits.yaml`:
+
+```yaml
+note: "Corrected sh1 sensitivity from cal sheet; switched to upward profiling"
+author: "Jane Doe"
+instrument_info:
+  vehicle: "rvmp"
+channels:
+  sh1:                 # only sh1 is touched; sh2 is untouched
+    sens: "0.0812"
+    sn: "M2732"
+```
+
+| Flag | Description |
+|------|-------------|
+| `--edits YAML` | YAML edit spec, e.g. from `patch-template` (required) |
+| `-o`, `--out DIR` | Output directory for patched `.p` files (required) |
+| `--dry-run` | Show the configuration diff; write nothing |
+| `--add-keys` | Allow adding keys that do not already exist |
+| `--batch-cal` | Allow per-channel calibration edits across multiple files |
 
 ## `rsi-tpw prof`
 

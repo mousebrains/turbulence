@@ -412,7 +412,7 @@ class TestSpecValidation:
             cp.load_edit_spec(_spec(tmp_path, 'note: "x"\ninstrument_info:\n  vehicle: "café"\n'))
 
     def test_non_ascii_note_rejected(self, tmp_path):
-        with pytest.raises(ValueError, match="'note' must be ASCII"):
+        with pytest.raises(ValueError, match="'note' must be a single line of ASCII"):
             cp.load_edit_spec(
                 _spec(tmp_path, 'note: "café"\ninstrument_info:\n  vehicle: "rvmp"\n')
             )
@@ -429,6 +429,48 @@ class TestSpecValidation:
         assert spec.author == "Jane"
         assert spec.sections["instrument_info"]["vehicle"] == "rvmp"
         assert spec.channels["sh1"]["sens"] == "0.0812"
+
+    def test_block_scalar_value_injection_rejected(self, tmp_path):
+        # A YAML block scalar smuggling a [root] stanza must be rejected, not
+        # injected into the config (it would bypass the acquisition-param guard).
+        yaml = 'note: "n"\ninstrument_info:\n  vehicle: |\n    rvmp\n    [root]\n    rate = 1\n'
+        with pytest.raises(ValueError, match="single line"):
+            cp.load_edit_spec(_spec(tmp_path, yaml))
+
+    def test_escaped_newline_value_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="single line"):
+            cp.load_edit_spec(
+                _spec(
+                    tmp_path, 'note: "n"\ninstrument_info:\n  vehicle: "rvmp\\n[matrix]\\nrate=1"\n'
+                )
+            )
+
+    def test_multiline_note_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="'note' must be a single line"):
+            cp.load_edit_spec(
+                _spec(
+                    tmp_path,
+                    'note: |\n  hi\n  [root]\n  rate=1\ninstrument_info:\n  vehicle: "rvmp"\n',
+                )
+            )
+
+    def test_multiline_author_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="'author' must be a single line"):
+            cp.load_edit_spec(
+                _spec(tmp_path, 'note: "n"\nauthor: "a\\nb"\ninstrument_info:\n  vehicle: "rvmp"\n')
+            )
+
+    def test_banner_source_label_newline_sanitized(self, tiny):
+        # A newline in the (machine-derived) source path must be collapsed, not
+        # spilled past the '; ' comment prefix as active config.
+        new, _ch = cp.edit_config_text(
+            cp.read_config_text(tiny),
+            cp.EditSpec(note="n", author="a", sections={"instrument_info": {"vehicle": "rvmp"}}),
+            when="W",
+            source_label="/tmp/x\n[root]\nrate=9",
+        )
+        parsed = cp.parse_config(new.split(cp.CONFIG_MARKER, 1)[0])
+        assert parsed["root"].get("rate") is None
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +503,48 @@ class TestBinaryGuards:
     def test_config_size_overflow_refused(self, tiny, tmp_path):
         with pytest.raises(ValueError, match="65535"):
             cp.write_patched_pfile(tiny, tmp_path / "big.p", "x" * 70000)
+
+    def test_truncated_source_refused(self, tmp_path):
+        # Header advertises a first record larger than the file -> refuse rather
+        # than seek past EOF and silently write a data-less output.
+        cfg = b"[instrument_info]\r\nvehicle = VMP\r\n"
+        words = [0] * 64
+        words[10] = 0x0600
+        words[11] = 5000  # lies: real config is ~34 bytes
+        words[17] = 128
+        words[18] = 200
+        words[63] = 1
+        src = tmp_path / "trunc.p"
+        src.write_bytes(struct.pack("<64H", *words) + cfg + b"\x01\x02")
+        with pytest.raises(ValueError, match="truncated or has no data records"):
+            cp.write_patched_pfile(src, tmp_path / "o.p", "[x]\r\n")
+
+    def test_existing_output_is_exclusive(self, tiny, tmp_path):
+        # Atomic exclusive create: writing over an existing file raises.
+        dst = tmp_path / "exists.p"
+        dst.write_bytes(b"x")
+        with pytest.raises(FileExistsError):
+            cp.write_patched_pfile(tiny, dst, cp.read_config_text(tiny))
+
+    def test_odd_config_size_reads_back_identically(self, tiny, tmp_path):
+        # Rockland ships odd config_size (the fixture itself is odd); a patched
+        # file with odd config_size must still read byte-identical data, since
+        # np.fromfile / MATLAB fread read by byte offset, not word alignment.
+        text, _ = cp.edit_config_text(
+            cp.read_config_text(tiny),
+            cp.EditSpec(note="n", author="a", channels={"sh1": {"sens": "0.0812"}}),
+            when="W",
+        )
+        if len(text.encode("latin-1")) % 2 == 0:
+            text += " "  # force an odd length (harmless trailing whitespace)
+        dst = tmp_path / "odd.p"
+        cp.write_patched_pfile(tiny, dst, text)
+        assert _config_size_word(dst) % 2 == 1
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            a, b = PFile(tiny), PFile(dst)
+        for k in a.channels_raw:
+            assert np.array_equal(a.channels_raw[k], b.channels_raw[k]), k
 
 
 # ---------------------------------------------------------------------------
