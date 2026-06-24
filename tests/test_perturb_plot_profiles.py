@@ -240,3 +240,55 @@ def test_clim_and_no_qc(tmp_path: Path):
                "--clim", "epsilonMean", "1e-9", "1e-5"])
     assert rc == 0
     assert (tmp_path / "diss_c.png").exists()
+
+
+def test_long_colorbar_labels_fit_within_bars(tmp_path: Path):
+    """Regression: verbose ``long_name [units]`` colorbar labels on stacked
+    panels must be shrunk to fit their bars, not overflow into the neighbouring
+    panel's label.  The four default profile labels are tall enough to collide
+    on a 3-in-per-panel figure, so the builder must call
+    ``layout.fit_colorbar_labels`` (without it, the label box is taller than the
+    bar and this asserts).
+    """
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "T1": (28.0 - bins * col,
+               {"units": "degree_Celsius",
+                "long_name": "FP07 thermistor temperature (probe 1)"}),
+        "T2": (28.0 - bins * col,
+               {"units": "degree_Celsius",
+                "long_name": "FP07 thermistor temperature (probe 2)"}),
+        "N2": (1.0e-4 * np.ones((10, 6)),
+               {"units": "s-2",
+                "long_name": "buoyancy frequency squared (Thorpe-sorted)"}),
+        "dTdz": (-0.1 * np.ones((10, 6)),
+                 {"units": "K m-1",
+                  "long_name": "background temperature gradient (positive down)"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, list(profiles.PRODUCTS["profiles"].default_vars),
+            args, {}, profiles.PRODUCTS["profiles"],
+        )
+        assert fig is not None
+        fig.draw_without_rendering()
+        cbars = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is not None]
+        assert len(cbars) == 4  # one colorbar per default var
+        for ax in cbars:
+            bar_h = ax.get_window_extent().height
+            label_h = ax.yaxis.label.get_window_extent().height
+            assert label_h <= bar_h, (ax.yaxis.label.get_text(), label_h, bar_h)
+    finally:
+        ds.close()
+        plt.close("all")

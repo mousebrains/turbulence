@@ -4,8 +4,12 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
-from odas_tpw.perturb.plot import layout
+matplotlib = pytest.importorskip("matplotlib")
+matplotlib.use("Agg")
+
+from odas_tpw.perturb.plot import layout  # noqa: E402
 
 
 class TestColumnHelpers:
@@ -157,6 +161,110 @@ class TestComputeLayout:
         # First cluster {0, 1}, gap, second {2.5, 3.5}.
         np.testing.assert_allclose(cast_x, [0, 1, 2.5, 3.5])
         assert segs == [(0, 2), (2, 4)]
+
+
+class TestFitColorbarLabels:
+    """``fit_colorbar_labels`` keeps long colorbar labels inside their bars so
+    stacked-panel plots don't show colliding colorbar labels."""
+
+    LONG = (
+        "FP07 thermistor temperature (probe 1) [degree_Celsius]",
+        "FP07 thermistor temperature (probe 2) [degree_Celsius]",
+        "buoyancy frequency squared (Thorpe-sorted) [s-2]",
+        "background temperature gradient (positive down) [K m-1]",
+    )
+
+    @staticmethod
+    def _stacked(labels):
+        """A figure mirroring the real per-panel layout: N stacked axes, each
+        with a vertical colorbar carrying one of *labels*."""
+        import matplotlib.pyplot as plt
+
+        n = len(labels)
+        fig, axes = plt.subplots(
+            n, 1, figsize=(11, 3.0 * n + 1.0),
+            constrained_layout=True, squeeze=False,
+        )
+        for ax, lab in zip(axes[:, 0], labels):
+            pcm = ax.pcolormesh([[1.0, 2.0], [3.0, 4.0]])
+            fig.colorbar(pcm, ax=ax, label=lab)
+        return fig
+
+    @staticmethod
+    def _cbar_axes(fig):
+        return [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is not None]
+
+    def test_long_labels_overflow_their_bars_without_the_fix(self):
+        """Sanity: the failing scenario actually reproduces — at least one label
+        is taller than its bar before the helper runs (else the fix is untested)."""
+        import matplotlib.pyplot as plt
+
+        fig = self._stacked(self.LONG)
+        try:
+            fig.draw_without_rendering()
+            overflow = [
+                ax.yaxis.label.get_window_extent().height
+                > ax.get_window_extent().height
+                for ax in self._cbar_axes(fig)
+            ]
+            assert any(overflow)
+        finally:
+            plt.close(fig)
+
+    def test_fit_removes_overflow_and_collisions(self):
+        import matplotlib.pyplot as plt
+
+        fig = self._stacked(self.LONG)
+        try:
+            layout.fit_colorbar_labels(fig)
+            fig.draw_without_rendering()
+            cbars = self._cbar_axes(fig)
+            # No label taller than its own bar...
+            for ax in cbars:
+                bar_h = ax.get_window_extent().height
+                label_h = ax.yaxis.label.get_window_extent().height
+                assert label_h <= bar_h
+            # ...and no two colorbar labels overlap.
+            boxes = [ax.yaxis.label.get_window_extent() for ax in cbars]
+
+            def _overlap(a, b):
+                return not (a.x1 <= b.x0 or b.x1 <= a.x0
+                            or a.y1 <= b.y0 or b.y1 <= a.y0)
+
+            for i in range(len(boxes)):
+                for j in range(i + 1, len(boxes)):
+                    assert not _overlap(boxes[i], boxes[j])
+            # Floor is respected.
+            assert all(ax.yaxis.label.get_fontsize() >= 6.0 for ax in cbars)
+        finally:
+            plt.close(fig)
+
+    def test_short_labels_are_untouched(self):
+        """A label that already fits keeps its font size (the helper is a no-op,
+        not a blanket shrink)."""
+        import matplotlib.pyplot as plt
+
+        fig = self._stacked(("T", "S"))
+        try:
+            before = [ax.yaxis.label.get_fontsize() for ax in self._cbar_axes(fig)]
+            layout.fit_colorbar_labels(fig)
+            after = [ax.yaxis.label.get_fontsize() for ax in self._cbar_axes(fig)]
+            assert before == after
+        finally:
+            plt.close(fig)
+
+    def test_floor_clamps_pathological_labels(self):
+        """An absurdly tall label can't shrink below the readability floor."""
+        import matplotlib.pyplot as plt
+
+        huge = "x" * 400  # taller than any bar even at the floor font size
+        fig = self._stacked((huge, huge))
+        try:
+            layout.fit_colorbar_labels(fig, min_fontsize=6.0)
+            fonts = [ax.yaxis.label.get_fontsize() for ax in self._cbar_axes(fig)]
+            assert all(abs(f - 6.0) < 1e-9 for f in fonts)
+        finally:
+            plt.close(fig)
 
 
 class TestLatestStageDir:

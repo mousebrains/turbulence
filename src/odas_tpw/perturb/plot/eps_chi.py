@@ -446,6 +446,7 @@ def run(args: argparse.Namespace) -> str:
         label.set_rotation(30)
         label.set_ha("right")
 
+    layout.fit_colorbar_labels(fig)  # keep long colorbar labels inside their bars
     out = args.out or os.path.join(args.root, "eps_chi_pcolor.png")
     fig.savefig(out, dpi=150)
     print(f"Wrote {out}")

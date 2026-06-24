@@ -271,6 +271,7 @@ def _build_section_figure(
         f"{title_id}  —  section: {sec.name}  —  "
         f"x-axis: {sec.method}  —  {_grouped(npts)} samples"
     )
+    layout.fit_colorbar_labels(fig)  # long var labels overflow short per-panel bars
     return fig
 
 
