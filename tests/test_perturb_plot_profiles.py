@@ -239,3 +239,72 @@ def test_clim_and_no_qc(tmp_path: Path):
                "--clim", "epsilonMean", "1e-9", "1e-5"])
     assert rc == 0
     assert (tmp_path / "epsilon_c.png").exists()
+
+
+def test_long_colorbar_labels_fit_within_bars(tmp_path: Path):
+    """Regression: verbose ``long_name [units]`` colorbar labels on stacked
+    panels must be shrunk to fit their bars, not overflow into the neighboring
+    panel's label.  The four default profile labels are tall enough to collide
+    on a 3-in-per-panel figure, so the builder must call
+    ``layout.fit_colorbar_labels`` — which shrinks the font (never grows it) so
+    each label roughly fits its bar.
+
+    We assert the *behaviour* (font shrunk below the default; label brought to
+    within its bar), not an exact pixel fit: rendered text height for a given
+    font size varies ~5-8% across matplotlib backends/platforms, so a strict
+    ``label_h <= bar_h`` is environment-fragile (passed locally, failed CI).
+    The precise geometry of ``fit_colorbar_labels`` is pinned by its unit tests
+    in ``test_perturb_plot_layout.py``.
+    """
+    import matplotlib.pyplot as plt
+    import xarray as xr
+    from matplotlib.font_manager import FontProperties
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "T1": (28.0 - bins * col,
+               {"units": "degree_Celsius",
+                "long_name": "FP07 thermistor temperature (probe 1)"}),
+        "T2": (28.0 - bins * col,
+               {"units": "degree_Celsius",
+                "long_name": "FP07 thermistor temperature (probe 2)"}),
+        "N2": (1.0e-4 * np.ones((10, 6)),
+               {"units": "s-2",
+                "long_name": "buoyancy frequency squared (Thorpe-sorted)"}),
+        "dTdz": (-0.1 * np.ones((10, 6)),
+                 {"units": "K m-1",
+                  "long_name": "background temperature gradient (positive down)"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, list(profiles.PRODUCTS["profiles"].default_vars),
+            args, {}, profiles.PRODUCTS["profiles"],
+        )
+        assert fig is not None
+        fig.draw_without_rendering()
+        cbars = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is not None]
+        assert len(cbars) == 4  # one colorbar per default var
+        # Default colorbar-label size the fix starts from (it only ever shrinks).
+        default_fs = FontProperties(
+            size=plt.rcParams["axes.labelsize"]).get_size_in_points()
+        for ax in cbars:
+            bar_h = ax.get_window_extent().height
+            label = ax.yaxis.label
+            label_h = label.get_window_extent().height
+            # The fix ran and shrank this over-tall label below the default size.
+            assert label.get_fontsize() < default_fs, (
+                label.get_text(), label.get_fontsize(), default_fs)
+            # ...and brought it within its bar, allowing a font-metric tolerance
+            # (without the fix these labels are ~1.5x the bar; see docstring).
+            assert label_h <= bar_h * 1.10, (label.get_text(), label_h, bar_h)
+    finally:
+        ds.close()
+        plt.close("all")

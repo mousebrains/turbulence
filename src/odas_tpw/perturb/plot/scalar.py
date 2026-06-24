@@ -38,7 +38,7 @@ import numpy as np
 import xarray as xr
 
 from odas_tpw.perturb import resolve
-from odas_tpw.perturb.plot import grid, xaxis
+from odas_tpw.perturb.plot import grid, layout, xaxis
 from odas_tpw.perturb.plot.sections import (
     Section,
     add_section_arguments,
@@ -278,6 +278,7 @@ def _build_section_figure(
         f"{title_id}  —  section: {sec.name}  —  "
         f"x-axis: {sec.method}  —  {_grouped(npts)} samples"
     ))
+    layout.fit_colorbar_labels(fig)  # long var labels overflow short per-panel bars
     return fig
 
 
