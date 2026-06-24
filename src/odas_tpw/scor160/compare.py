@@ -52,7 +52,7 @@ def compare_l2(computed: L2Data, reference: L2Data) -> dict:
         "comp_n_sections": int(comp_sec.max()),
         "ref_n_selected": int(ref_in.sum()),
         "comp_n_selected": int(comp_in.sum()),
-        "overlap_frac": float(both_in.sum() / max(ref_in.sum(), 1)),
+        "overlap_frac": float(int(both_in.sum()) / max(int(ref_in.sum()), 1)),
     }
 
     # Speed comparison (within reference sections)
