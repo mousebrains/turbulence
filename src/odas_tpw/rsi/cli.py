@@ -9,6 +9,8 @@ Subcommands:
     info     — Print summary of .p file(s)
     cutp     — Copy a short record range from a .p file for debugging
     nc       — Convert .p files to NetCDF
+    patch-config   — Edit config fields in .p file(s), writing new files
+    patch-template — Scaffold a patch-config edit spec from a .p file
     prof     — Extract profiles from .p or full-record .nc files
     eps      — Compute epsilon (TKE dissipation) from any pipeline stage
     chi      — Compute chi (thermal variance dissipation) from any pipeline stage
@@ -265,6 +267,54 @@ def _cmd_init(args: argparse.Namespace) -> None:
         sys.exit(1)
     generate_template(path)
     print(f"Wrote template config to {path}")
+
+
+def _cmd_patch_config(args: argparse.Namespace) -> None:
+    """Patch config fields in .p file(s), writing new files."""
+    from datetime import datetime
+
+    from odas_tpw.rsi.config_patch import load_edit_spec, patch_files
+
+    files = _resolve_p_files(args.files)
+    when = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        spec = load_edit_spec(args.edits)
+        patch_files(
+            files,
+            args.out,
+            spec,
+            dry_run=args.dry_run,
+            add_keys=args.add_keys,
+            batch_cal=args.batch_cal,
+            when=when,
+        )
+    except (FileNotFoundError, FileExistsError, ValueError, OSError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _cmd_patch_template(args: argparse.Namespace) -> None:
+    """Scaffold a patch-config edit-spec template from a .p file."""
+    from odas_tpw.rsi.config_patch import scaffold_yaml
+
+    src = Path(args.file)
+    if not src.is_file():
+        print(f"Error: {src} not found", file=sys.stderr)
+        sys.exit(1)
+    try:
+        text = scaffold_yaml(src)
+    except (OSError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    if args.output:
+        out = Path(args.output)
+        if out.exists() and not args.force:
+            print(f"Error: {out} already exists (use --force to overwrite)", file=sys.stderr)
+            sys.exit(1)
+        out.write_text(text)
+        print(f"Wrote template to {out}")
+    else:
+        print(text, end="")
 
 
 def _cmd_prof(args: argparse.Namespace) -> None:
@@ -1106,6 +1156,56 @@ def _add_ml_parser(subparsers: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_cmd_ml)
 
 
+def _add_patchconfig_parser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "patch-config",
+        help="Patch config fields in .p file(s) (writes new files)",
+        description=(
+            "Edit selected configuration fields (instrument/cruise info, per-channel "
+            "calibration) in Rockland .p files, driven by a YAML edit spec. Originals "
+            "are never modified; patched copies are written to --out, with the change "
+            "annotated and the full original configuration embedded for recovery. If a "
+            "file's targeted values already match, that file is left unwritten. "
+            "Scaffold the YAML with 'rsi-tpw patch-template'."
+        ),
+    )
+    p.add_argument("files", nargs="+", metavar="FILE", help=".p file(s) or glob pattern(s)")
+    p.add_argument(
+        "--edits", required=True, metavar="YAML", help="YAML edit spec (see 'patch-template')"
+    )
+    p.add_argument(
+        "-o", "--out", required=True, metavar="DIR", help="Output directory for patched .p files"
+    )
+    p.add_argument(
+        "--dry-run", action="store_true", help="Show the configuration diff; write nothing"
+    )
+    p.add_argument(
+        "--add-keys", action="store_true", help="Allow adding keys that do not already exist"
+    )
+    p.add_argument(
+        "--batch-cal",
+        action="store_true",
+        help="Allow per-channel calibration edits across multiple files",
+    )
+    p.set_defaults(func=_cmd_patch_config)
+
+
+def _add_patchtemplate_parser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "patch-template",
+        help="Scaffold a patch-config edit spec from a .p file",
+        description=(
+            "Write a commented YAML edit-spec template pre-filled with the file's "
+            "current editable values and channel names. Edit it, then apply it with "
+            "'rsi-tpw patch-config'."
+        ),
+    )
+    p.add_argument("file", metavar="FILE", help="Input .p file")
+    p.add_argument("-o", "--output", metavar="YAML", help="Output path (default: print to stdout)")
+    p.add_argument("--force", action="store_true", help="Overwrite existing output file")
+    p.set_defaults(func=_cmd_patch_template)
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -1137,6 +1237,8 @@ def main() -> None:
     _add_cutp_parser(subparsers)
     _add_nc_parser(subparsers)
     _add_init_parser(subparsers)
+    _add_patchconfig_parser(subparsers)
+    _add_patchtemplate_parser(subparsers)
     _add_prof_parser(subparsers)
     _add_eps_parser(subparsers)
     _add_chi_parser(subparsers)

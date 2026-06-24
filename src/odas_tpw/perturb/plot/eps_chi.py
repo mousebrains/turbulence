@@ -157,7 +157,7 @@ def _per_profile_attrs(root: str, sibling_prefix: str) -> dict:
 
 def _fmt_minute(dt: np.datetime64) -> str:
     """Format a datetime64 as 'YYYY-MM-DD HH:MM'."""
-    return np.datetime_as_string(dt, unit="m").replace("T", " ")
+    return str(np.datetime_as_string(dt, unit="m").replace("T", " "))
 
 
 def _time_ticks(
