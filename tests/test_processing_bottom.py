@@ -24,9 +24,12 @@ class TestDetectBottomCrash:
         assert bottom is not None
         assert bottom > 80.0
 
-    def test_reports_bin_center_not_left_edge(self):
-        """The crash depth is the spike bin's CENTER, not its shallow edge, so
-        it is not under-read by up to one bin width (#22)."""
+    def test_reports_sample_mean_within_flagged_bin(self):
+        """The crash depth is the MEAN of the spike bin's real samples: close to
+        the bin center for an interior bin (so it is not under-read like the
+        shallow edge, #22), but — unlike the geometric center — guaranteed never
+        to fall below the deepest sample, so the caller can always trim it
+        (audit 2026-06-25 M4)."""
         np.random.seed(42)
         n = 5000
         depth = np.linspace(10.0, 50.0, n)
@@ -38,7 +41,10 @@ class TestDetectBottomCrash:
         bottom = detect_bottom_crash(
             depth, {"vibration_rms": accel}, fs=512.0, vibration_factor=4.0
         )
-        assert bottom == 40.0  # 0.5*(38+42), not the left edge 38.0
+        assert bottom is not None
+        assert 38.0 <= bottom < 42.0  # within the flagged bin's samples
+        assert abs(bottom - 40.0) < 0.05  # ~the center for a full interior bin
+        assert bottom <= float(np.nanmax(depth))  # never below the deepest sample
 
     def test_no_crash(self):
         """Smooth profile — no crash."""

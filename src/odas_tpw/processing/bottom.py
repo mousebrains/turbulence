@@ -123,10 +123,16 @@ def detect_bottom_crash(
     # Search from deepest bin upward for spike
     for i in range(len(bin_std) - 1, -1, -1):
         if np.isfinite(bin_std[i]) and bin_std[i] > threshold:
-            # Report the bin CENTER, not its shallow (left) edge: bins[i] alone
-            # under-reads the bottom depth by up to one bin width, and top_trim
-            # likewise uses bin centers (#22).
-            bottom_depth = 0.5 * (bins[i] + bins[i + 1])
-            return float(bottom_depth)
+            # Report the MEAN depth of the samples that actually fell in the
+            # flagged bin, not the bin's geometric center. The deepest bin's
+            # right edge overhangs nanmax(depth) by up to one bin width, so its
+            # center can lie BELOW the deepest real sample; the caller's
+            # `P >= bottom_depth` then matches nothing and the crash is silently
+            # left un-trimmed (~half of all detections). The sample mean is
+            # guaranteed to lie within the observed depths of the bin (and so is
+            # robust to the fast/slow rate mismatch between this depth series and
+            # the slow pressure the caller trims against).
+            sel_depth = depth[in_range & (idx == i)]
+            return float(np.nanmean(sel_depth))
 
     return None
