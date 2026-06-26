@@ -59,7 +59,15 @@ class ChiFitResult(NamedTuple):
 # Spectrum model dispatcher
 # ---------------------------------------------------------------------------
 
-_N_FINE = 2000  # Points for fine-grid variance correction (was 10000)
+_N_FINE = 2000  # Minimum points for fine-grid variance correction (floor)
+# The variance-correction grid resolves the model spectrum by its OWN scale kB,
+# not by K_max: a fixed point count spread over ~5*K_max leaves the steep
+# Batchelor/Kraichnan peak near kB unresolved when kB << K_max (low-epsilon
+# windows where K_max is pushed out near K_AA), biasing the correction by up to
+# ~15%. Span 40*kB (the spectrum is negligible beyond that, so V_total is fully
+# captured and the V_resolved mask can be clamped there) at ~2000 points per kB.
+_K_SPAN_KB = 40  # grid extends to _K_SPAN_KB * kB
+_PTS_PER_KB = 2000  # points per kB of span -> dK = kB / _PTS_PER_KB
 _KB_COARSE = np.logspace(0, 4.5, 100)  # Coarse MLE grid: 1 to ~31623 cpm
 _KB_COARSE_2D = _KB_COARSE[:, np.newaxis]  # (100, 1) for broadcasting
 
@@ -90,13 +98,20 @@ def _variance_correction(
     model variance within [K_min, K_max] *after* FP07 attenuation (|H|²),
     so the ratio simultaneously corrects for the unresolved band edges and
     for in-band sensor response.  The correction factor is independent of
-    chi (linear scaling cancels in the ratio).  Uses a 2000-point grid
-    (sufficient for <0.1% accuracy).
+    chi (linear scaling cancels in the ratio).  The grid resolution is set by
+    kB (dK ~ kB/2000 over [0, 40*kB]), giving <0.1% accuracy independent of how
+    far K_max is pushed out — verified against a high-n reference for kB in
+    [2, 30].
 
     Returns correction factor, or NaN if integration fails.
     """
-    K_upper = max(K_max * 5, kB * 5)
-    K_fine = np.linspace(K_upper / n_fine * 0.01, K_upper, n_fine)
+    if not (kB > 0):
+        return np.nan
+    # Fixed dK ~ kB/_PTS_PER_KB so the peak near kB is always resolved; span
+    # 40*kB so the model variance is fully captured. ``n_fine`` is a floor.
+    K_upper = _K_SPAN_KB * kB
+    n = max(int(n_fine), _K_SPAN_KB * _PTS_PER_KB)
+    K_fine = np.arange(1, n + 1, dtype=np.float64) * (K_upper / n)
     spec_fine = grad_func(K_fine, kB, 1.0)  # chi=1.0 (cancels in ratio)
 
     V_total = np.trapezoid(spec_fine, K_fine)
@@ -105,7 +120,11 @@ def _variance_correction(
 
     F_fine = K_fine * speed
     H2_fine = _h2(F_fine, tau0)
-    mask = (K_fine >= K_min) & (K_fine <= K_max)
+    # Clamp the mask to the grid: past 40*kB the model spectrum is ~0, so a
+    # larger K_max contributes nothing to V_resolved.
+    mask = (K_fine >= K_min) & (K_fine <= min(K_max, K_upper))
+    if not np.any(mask):
+        return np.nan
     V_resolved = np.trapezoid(spec_fine[mask] * H2_fine[mask], K_fine[mask])
 
     if V_resolved <= 0:

@@ -327,6 +327,21 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
     }
 
 
+def _nc_filled(var) -> np.ndarray:
+    """Read a NetCDF variable as float64 with masked/_FillValue entries -> NaN.
+
+    netCDF4 returns a *masked* array whenever a variable carries a ``_FillValue``
+    or has unwritten elements. The previous ``var[:].data`` exposed the raw fill
+    buffer (~9.97e36) instead of NaN, which silently poisoned pressure and
+    fall-rate (a single fill produced a ~4.5e35 dbar/s spike that truncated the
+    rest of the cast) and leaked into every channel. ``np.ma.filled`` converts
+    masked entries to NaN and is a no-op on an already-unmasked ndarray, so this
+    is correct for both the package's own fully-written files and external /
+    partial (CF/ATOMIX) files that declare a ``_FillValue``.
+    """
+    return np.asarray(np.ma.filled(var[:].astype(np.float64), np.nan))
+
+
 def _load_from_nc(nc_path: Path) -> dict[str, Any]:
     """Extract data dict from a full-record NetCDF file."""
     import netCDF4 as nc
@@ -359,13 +374,13 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
 
     # Time vectors may be at root or inside L1_converted group
     if "t_fast" in ds.variables:
-        t_fast = ds.variables["t_fast"][:].data
-        t_slow = ds.variables["t_slow"][:].data
+        t_fast = _nc_filled(ds.variables["t_fast"])
+        t_slow = _nc_filled(ds.variables["t_slow"])
     elif "L1_converted" in ds.groups:
         g = ds.groups["L1_converted"]
         # L1_converted uses TIME/TIME_SLOW dimension names
-        t_fast = g.variables["TIME"][:].data
-        t_slow = g.variables["TIME_SLOW"][:].data
+        t_fast = _nc_filled(g.variables["TIME"])
+        t_slow = _nc_filled(g.variables["TIME_SLOW"])
     else:
         raise ValueError("No time variables found in NetCDF file")
     # Determine time units
@@ -390,13 +405,13 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
 
     # Pressure — need slow-rate pressure for profile detection
     if "P" in ds.variables:
-        P = ds.variables["P"][:].data
+        P = _nc_filled(ds.variables["P"])
     elif "L1_converted" in ds.groups:
         g = ds.groups["L1_converted"]
         if "PRES_SLOW" in g.variables:
-            P = g.variables["PRES_SLOW"][:].data
+            P = _nc_filled(g.variables["PRES_SLOW"])
         elif "PRES" in g.variables:
-            P = g.variables["PRES"][:].data
+            P = _nc_filled(g.variables["PRES"])
         else:
             raise ValueError("No pressure variable found in NetCDF file")
     else:
@@ -424,7 +439,7 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
             attrs = {}
             for a in var.ncattrs():
                 attrs[a] = getattr(var, a)
-            channels.append((vname, var[:].data.astype(np.float64), mapped_dim, attrs))
+            channels.append((vname, _nc_filled(var), mapped_dim, attrs))
             _seen.add(vname)
 
     # Scan root-level variables (old format)

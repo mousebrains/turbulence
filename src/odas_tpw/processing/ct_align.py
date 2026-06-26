@@ -74,12 +74,21 @@ def ct_align(
         if len(seg_T) < 10:
             continue
 
+        # A single non-finite sample (e.g. convert_jac_c emits NaN for corrupt
+        # conductivity) is smeared across the whole segment by the IIR lfilter,
+        # making norm NaN. Since `norm <= 0` is False for NaN, such a profile
+        # would otherwise slip through and drive argmax(|all-NaN|)=0 -> the
+        # most-negative lag (-max_lag_seconds), a maximally-wrong estimate that
+        # corrupts the entire CT alignment. Skip it like a flatlined segment.
+        if not (np.all(np.isfinite(seg_T)) and np.all(np.isfinite(seg_C))):
+            continue
+
         dx = lfilter(bb, aa, np.diff(seg_T) - np.mean(np.diff(seg_T)))
         dy = lfilter(bb, aa, np.diff(seg_C) - np.mean(np.diff(seg_C)))
 
         corr = correlate(dx, dy, mode="full")
         norm = np.sqrt(np.sum(dx**2) * np.sum(dy**2))
-        if norm <= 0:
+        if not np.isfinite(norm) or norm <= 0:
             # A flatlined/constant T or C segment (norm == 0) carries no
             # alignment information. Skip it: leaving it in would make
             # argmax(|corr|) of an all-zero correlation pick index 0, i.e. the
@@ -118,7 +127,7 @@ def ct_align(
     weights = np.array([p["max_corr"] * p["n_samples"] for p in per_profile])
     cum_w = np.cumsum(weights)
     total = float(cum_w[-1])
-    if total <= 0:
+    if not np.isfinite(total) or total <= 0:
         # No usable correlation across any profile -> apply no shift.
         return C.copy(), 0.0
     mid_idx = int(np.searchsorted(cum_w, total / 2.0))
