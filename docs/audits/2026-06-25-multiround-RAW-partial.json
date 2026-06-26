@@ -1,0 +1,1908 @@
+{
+ "round1_2_raw": [
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "write_patched_pfile does not validate header_size >= 128, producing silent header corruption or a cryptic struct.error on a corrupt/hostile source",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/config_patch.py",
+   "line": "504-528",
+   "severity": "minor",
+   "category": "robustness / untrusted-input bounds validation",
+   "confidence": "high",
+   "evidence": "header_size is taken verbatim from header word 17 (line 504) and used unchecked to (a) slice the copied header region `bytearray(f.read(header_size))` (line 527) and (b) patch config_size via `struct.pack_into(..., _H['config_size']*2=22, ...)` (line 528). Unlike extract_pfile_segment in p_file.py:138 (`if header_size < HEADER_BYTES: raise ValueError`), the patch writer has NO `header_size >= 128` guard. Two confirmed failure modes on a corrupt source whose header_version>=6 and file_size>first_record_size: (1) header_size in [0,23] -> raw `struct.error: pack_into requires a buffer of at least 24 bytes ... (actual buffer size is 20)`. struct.error is neither OSError nor ValueError (mro confirmed: Exception->BaseException), so the CLI handler at cli.py:291 `except (FileNotFoundError, FileExistsError, ValueError, OSError)` does NOT catch it -- the user gets a full traceback and the wrong exit behavior instead of `Error: ...`/exit 1. (2) header_size in [24,127] -> the call SUCCEEDS and writes an output .p with a truncated (<128-byte) header region; reproduced with header_size=64: the written file has only 64 header bytes before the config string, silently producing a malformed/unreadable .p. record_size (word 18) is likewise unvalidated here though it is unused by the copy.",
+   "suggested_fix": "After unpacking the header in write_patched_pfile (and analogously in read_config_text), add the same bounds checks extract_pfile_segment already uses: `if header_size < HEADER_BYTES: raise ValueError(f'{src.name}: invalid header_size={header_size}')` and `if config_size < 0: raise ValueError(...)`. This converts both the cryptic struct.error and the silent-malformed-output cases into a clean, CLI-catchable ValueError, matching the existing reader's contract."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "edit_config_text mis-detects a pre-existing CONFIG_MARKER inside the ORIGINAL config, silently freezing everything below it as an 'original block' and refusing edits with a misleading 'section is not present' error",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/config_patch.py",
+   "line": "324-331",
+   "severity": "minor",
+   "category": "edge case / interoperability / silent data-loss-of-editability",
+   "confidence": "high",
+   "evidence": "edit_config_text splits the active region at the FIRST occurrence of CONFIG_MARKER (`marker_idx = config_str.find(CONFIG_MARKER)`, line 324) and treats `config_str[marker_idx:]` as a frozen, re-attached-verbatim original block that is never parsed or edited. The marker text `'; ### Original Configuration String Below ###'` is, per the module docstring, deliberately identical to RSI patch_setupstr.m's marker ('Matches RSI patch_setupstr.m so RSI -revert can still recover the original'). Therefore a .p ALREADY patched by RSI's MATLAB tool -- or any original config that merely contains this string in a descriptive comment -- will have all [channel]/[instrument_info]/[cruise_info] stanzas located BELOW the marker rendered invisible. Reproduced: a config with the marker line followed by `[cruise_info]\\nship = Thompson`, edited with cruise_info.ship -> 'Sally Ride', raises `ValueError: [cruise_info] section is not present in this file` even though the section is plainly present; the edit is silently impossible. No test covers a marker that is part of the original (only the self-produced idempotent-repatch case is tested).",
+   "suggested_fix": "Only treat text after the marker as a frozen original block when this tool produced it -- i.e. require the marker to be immediately preceded by this tool's banner bar (or a sentinel it writes), or scan that the marker line begins at column 0 and is followed by the expected `; ` commented-original pattern. At minimum, when the post-marker region does NOT look like a fully `; `-commented block, fall back to treating the whole string as active config. Alternatively, detect the RSI-vs-self origin and parse/edit the active region accordingly so RSI-pre-patched files remain editable."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Production epsilon viscosity ignores salinity and pressure (visc35/S=35 hardcoded), inconsistent with chi/N2 viscosity in the same pipeline run",
+   "file": "src/odas_tpw/scor160/l4.py",
+   "line": "176 (process_l4); contrast pipeline.py:347-361, dissipation.py:218",
+   "severity": "minor",
+   "category": "numerical/oceanographic correctness",
+   "confidence": "medium",
+   "evidence": "process_l4 computes per-window viscosity as `nu = float(visc35(temp[j]))` (l4.py:176) \u2014 temperature-only, salinity hardwired to 35 PSU, pressure-independent. L3Data carries `pres` (per-window mean) and the L1 path can carry measured `salinity` (io.py:18,49), but process_l4 has no salinity/pressure parameter and discards both. The production pipeline (pipeline.py:347) calls `process_l4(l3, temp=l3.temp, ...)` for EPSILON while resolving measured/user salinity (`chi_salinity, measured_sal = _resolve_salinity(l1, salinity)`, pipeline.py:361) and feeding it to chi viscosity AND N2 stratification. So a single run uses measured S (e.g. JAC conductivity) for chi+N2 but S=35 for epsilon. The deprecated dissipation.py path DOES support salinity-aware epsilon viscosity (`visc(l3.temp, sal_window, l3.pres)`, dissipation.py:218), so the production path is a regression in capability relative to the deprecated one. Quantified bias on nu (hence ~linearly on epsilon): ~0.05% at S=30,P=0 (Arctic surface), ~0.76% at S=37,P=500dbar (deep/Mediterranean) \u2014 verified via ocean.visc vs ocean.visc35 at T=10C. Note visc35 is the documented ATOMIX benchmark reference, so the S=35 choice is benchmark-pinned for validation; the defect is the SILENT inconsistency in field data, not the benchmark value.",
+   "suggested_fix": "Plumb salinity (and pres) into process_l4: add an optional `salinity` parameter (per-window, interpolated like temp), and compute `nu = visc(temp[j], sal[j], l3.pres[j])` when salinity is provided, falling back to visc35 otherwise (exactly as dissipation.py:213-220 already does). Have pipeline.py:347 pass the resolved `chi_salinity` so epsilon and chi/N2 share one viscosity basis. Keep visc35 as the default to preserve ATOMIX benchmark parity. At minimum, document in process_l4 that epsilon viscosity is S=35-only and diverges from the chi/N2 salinity in the same run."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Variance-method polyfit window forced to >=7 cpm where ODAS allows down to K_95 (lower bound 0), introducing noise-floor bins into the spectral-minimum fit for very-low-epsilon windows",
+   "file": "src/odas_tpw/scor160/l4.py",
+   "line": "479",
+   "severity": "minor",
+   "category": "numerical/oceanographic correctness (ODAS port divergence)",
+   "confidence": "medium",
+   "evidence": "In _variance_method the polyfit-window upper wavenumber is `valid_K_limit = min(max(min(K_AA,K_95), K_LIMIT_MIN=7), K_LIMIT_MAX=150)` (l4.py:475-479), then `index_limit = searchsorted(K, valid_K_limit)`. ODAS get_diss_odas.m:563 computes the SAME window as `valid_shear = find(K <= fit_in_range(min([K_AA,K_95]), [0 150]))` \u2014 fit_in_range's lower bound is 0, NOT 7 (the 7-cpm floor in ODAS, get_diss_odas.m:605, applies only to the FINAL integration limit K_limit, not to the polyfit window). For epsilon <~ 2e-11 W/kg, K_95 < 7 cpm (verified: e=1e-11 -> K_95=5.4, e=1e-12 -> K_95=3.0 at nu=1.35e-6), so the Python code extends the degree-3..8 polyfit window from ~3-5 cpm up to 7 cpm, dragging noise-floor bins into the polynomial fit. That can produce spurious interior minima (np.roots, l4.py:499-507) that change the detected K_limit_log vs the K_95 fallback. The FINAL integration range is clamped to >=7 cpm in both implementations (l4.py:511 vs ODAS:605), so the integrated variance range is identical \u2014 only the spectral-minimum DETECTION differs, bounding the impact to the lowest-epsilon windows.",
+   "suggested_fix": "Match ODAS's polyfit-window bound: clip `min(K_AA, K_95)` to [0, K_LIMIT_MAX] (lower bound 0, not K_LIMIT_MIN) when computing `index_limit`, keeping the K_LIMIT_MIN=7 floor only on the final `K_limit_log` (line 511, already correct). Add a low-epsilon regression test (K_95 < 7) asserting the polyfit window matches ODAS's `find(K <= K_95)` extent."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "process_l4 EPSI_FINAL fallback geometric-mean includes probes flagged for inter-probe inconsistency (bit 4) and FOM (bit 1), reporting a 'final' epsilon for windows where all probes failed QC",
+   "file": "src/odas_tpw/scor160/l4.py",
+   "line": "774-778",
+   "severity": "nit",
+   "category": "QC / error propagation",
+   "confidence": "low",
+   "evidence": "_compute_epsi_final first tries probes with `flags==0` (l4.py:771); if none pass it falls back to the geometric mean of ALL finite positive probes regardless of flag (l4.py:776-778), including probes flagged for FOM>limit (bit1) or inter-probe inconsistency (bit4, where the two probes disagree by > 1.96*sqrt(2)*sigma_ln). For a 2-probe window whose probes disagree by, say, an order of magnitude (both flagged bit4), EPSI_FINAL becomes exp(mean(log)) of two mutually-inconsistent estimates \u2014 a number with no QC backing, indistinguishable downstream from a clean estimate (no flag is propagated onto epsi_final itself). The comment frames this as intentional, but the inconsistency flag specifically marks the larger estimate as untrustworthy, so averaging it in defeats that flag.",
+   "suggested_fix": "When falling back, prefer the window minimum (e_min, which is never the bit-4-flagged suspect) over the geometric mean of all probes, or emit a companion epsi_final_flag/quality field so downstream binning can distinguish a clean EPSI_FINAL from an all-flagged fallback. At minimum, exclude bit-4 (and optionally bit-1) probes from the fallback mean."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Deprecated _compute_epsilon lacks the NaN-temperature viscosity guard that process_l4 has, silently producing NaN epsilon",
+   "file": "src/odas_tpw/rsi/dissipation.py",
+   "line": "218-220",
+   "severity": "minor",
+   "category": "correctness/NaN-handling",
+   "confidence": "high",
+   "evidence": "process_l4 (scor160/l4.py:154-160) explicitly guards window temperature: if not np.all(np.isfinite(temp)) it warns and substitutes 10 degC before computing viscosity. The deprecated RSI path _compute_epsilon does NOT: it calls nu_out = visc(l3.temp, sal_window, l3.pres) or visc35(l3.temp) directly. l3.temp can legitimately contain NaN (scor160/l3.py:181 appends np.nan when temp data is absent or l1.temp shape mismatches). I verified visc35(nan)->nan and visc(nan,...)->nan, and nasmyth_grid(epsilon, nu=nan, k) returns all-NaN WITHOUT raising (the `if nu <= 0` check at nasmyth.py:192 is False for NaN). Net effect: any window with NaN temperature yields nu=NaN -> epsilon=NaN and an all-NaN Nasmyth spectrum, with NO warning to the user, whereas the maintained pipeline path recovers gracefully with a warning. This is a behavioral inconsistency between the two epsilon entry points.",
+   "suggested_fix": "Mirror the process_l4 guard in _compute_epsilon: after computing l3.temp-derived viscosity inputs, replace non-finite temperatures with the 10 degC default and emit a warnings.warn(...), e.g. `temp = np.where(np.isfinite(l3.temp), l3.temp, 10.0)` before calling visc/visc35, matching scor160/l4.py:154-160."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "num_ffts can go negative when diss_length < fft_length, silently disabling FM/dof_spec QC with no validation",
+   "file": "src/odas_tpw/rsi/dissipation.py",
+   "line": "198-200",
+   "severity": "minor",
+   "category": "robustness",
+   "confidence": "high",
+   "evidence": "num_ffts = 2 * (diss_length // fft_length) - 1. There is no validation that diss_length >= fft_length (L3Params in scor160/io.py has no such check, and get_diss/compute_diss_file forward user-supplied values). For a user misconfiguration diss_length=512, fft_length=1024 I confirmed num_ffts = -1. Consequences: (a) dof_spec = DOF_NUTTALL * max(num_ffts - n_v, 1) silently collapses to 1.9 (a meaningless DOF), stored as a dataset attribute; (b) num_ffts=-1 is passed to _estimate_epsilon where `if num_ffts > 0` is False, so the Lueck FM statistic is silently skipped -- and in the production pipeline.py:352 the same expression feeds process_l4, where num_ffts<=0 disables FM-based QC flagging entirely. No error or warning is raised; the spectra still compute, so the user gets epsilon estimates with QC silently degraded.",
+   "suggested_fix": "Validate at the point num_ffts is computed (and/or in L3Params construction): raise ValueError if diss_length < fft_length, or at minimum guard with num_ffts = max(2 * (diss_length // fft_length) - 1, 1) and emit a warning when diss_length < fft_length so the degraded-QC condition is visible."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "fom variance-ratio QC flag (bit 1) does not catch negative observed variance after Goodman cleaning",
+   "file": "src/odas_tpw/scor160/l4.py",
+   "line": "411-413, 731",
+   "severity": "nit",
+   "category": "correctness/QC",
+   "confidence": "medium",
+   "evidence": "When the FM statistic is unavailable (num_ffts == 0), _compute_flags uses the variance-ratio fom as fom_for_flags and flags only `fom > fom_limit` (l4.py:731). fom_val = obs_var / nas_var (l4.py:413) where obs_var = np.trapezoid(spec_safe_pos, K_pos). After Goodman coherent-noise removal, sh_spec_clean bins can be negative, so obs_var (and hence fom_val) can be negative for a genuinely bad fit. A negative fom is < fom_limit, so the window is NOT flagged by bit 1 -- a clearly bad fit passes QC. This only affects the num_ffts==0 fallback (production pipeline.py always passes num_ffts>0 and thus flags on FM instead), which bounds the impact, but the variance-ratio fallback path is reachable via process_l4(..., num_ffts=0).",
+   "suggested_fix": "In _compute_flags, also flag non-physical fom: e.g. `flags[(fom > fom_limit) | (fom <= 0)] += 1` (when fom_for_flags is the variance-ratio fom), or clamp obs_var/fom_val to be flagged when obs_var <= 0 in _estimate_epsilon."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "rsi pipeline binned/combined products (L5/L6) have no units, long_name, or standard_name on any data variable",
+   "file": "src/odas_tpw/rsi/binning.py",
+   "line": "122 (bin_by_depth data_vars); src/odas_tpw/rsi/combine.py:82 (combine_profiles); src/odas_tpw/rsi/pipeline.py:599,279",
+   "severity": "major",
+   "category": "metadata/units correctness (CF-compliance)",
+   "confidence": "high",
+   "evidence": "bin_by_depth() attaches only cell_methods to each data variable (binning.py:103-122) \u2014 epsilon, chi, K_T, Gamma, K_rho, P_mean, speed get NO units/long_name/standard_name. combine_profiles() then builds data_vars as (['profile','depth_bin'], combined) with no attrs dict at all (combine.py:82), so it also drops the cell_methods. Verified at runtime: bin_by_depth['epsilon'].attrs == {'cell_methods':...}; combine_profiles['epsilon'].attrs == {}. These are the headline products of run_pipeline (CLAUDE.md-documented; rsi-tpw pipeline): L5_binned.nc (pipeline.py:599) and L6_combined.nc (pipeline.py:279). Every other writer in the package (convert.py, profile.py, perturb via netcdf_schema) sets per-variable units. The L4_epsilon.nc/L4_chi.nc per-level files DO carry units, but the depth-binned/combined products that users actually analyze do not. Existing tests assert the depth_bin coordinate has units (test_binning_combine.py:201,307) but no test checks the epsilon/chi data-var units, so the gap is uncaught.",
+   "suggested_fix": "Attach CF attrs to the binned data variables. In bin_by_depth(), merge a units/long_name/standard_name dict (e.g. epsilon->W kg-1 / specific_turbulent_kinetic_energy_dissipation_in_sea_water, chi->K2 s-1, K_T/K_rho->m2 s-1, Gamma->1, speed->m s-1) into each `attrs` alongside cell_methods, keyed by variable name (reuse COMBO_SCHEMA/CHI_SCHEMA). In combine_profiles(), carry each source variable's attrs through into the (['profile','depth_bin'], combined, attrs) tuple. Add a test asserting epsilon/chi carry units after combine."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "L6_combined.nc and L5_binned.nc lack the Conventions/CF global attribute set by every other writer",
+   "file": "src/odas_tpw/rsi/combine.py",
+   "line": "89-107 (combine_profiles returns Dataset with empty attrs); src/odas_tpw/rsi/pipeline.py:595-599,277-279",
+   "severity": "minor",
+   "category": "metadata/units correctness (CF-compliance)",
+   "confidence": "high",
+   "evidence": "combine_profiles() returns a Dataset whose .attrs is {} (verified at runtime), and pipeline.py only adds profile_number/source_file/bin_size before to_netcdf. bin_by_depth output carries only {'bin_size':...}. By contrast convert.py:478, profile.py:148, ctd.py:415, combo.py:144, and both _write_l4_* set Conventions='CF-1.13, ACDD-1.3'. The depth-binned headline products therefore advertise no CF conformance, so a CF/ACDD consumer cannot validate them and won't apply the convention's coordinate semantics.",
+   "suggested_fix": "Set combined.attrs['Conventions']='CF-1.13, ACDD-1.3' (and ideally featureType='profile') in combine_profiles or in pipeline.py before combined.to_netcdf; likewise add Conventions to the L5 binned dataset attrs in _process_profile."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "L1 supplementary channels written with raw RSI units (e.g. 'deg', 'deg_C', 'mS_cm-1') bypassing canonicalize_units",
+   "file": "src/odas_tpw/rsi/convert.py",
+   "line": "541",
+   "severity": "minor",
+   "category": "metadata/units correctness (CF-compliance)",
+   "confidence": "high",
+   "evidence": "The supplementary-channel loop writes v.units = info['units'] verbatim (convert.py:541). RSI's channel converters emit non-UDUNITS strings: convert_inclxy returns 'deg' (channels.py:220), convert_jac_c 'mS_cm-1' (:242), convert_aroft_o2 'umol_L-1' (:265), inclinometer/thermistor 'deg_C'. The per-profile writer fixes exactly this by calling canonicalize_units on the units attr (profile.py:244-246) using netcdf_schema.UNITS_FIXUP, but the L1 ATOMIX writer (the documented `rsi-tpw nc` primary product) does not. Verified UDUNITS rejects 'deg', 'mS_cm-1', 'umol_L-1' (cf_units raises UT_UNKNOWN); for SN479 the supplementary set is Gnd/Incl_T/PV/V_Bat (Incl_T='deg_C' is borderline), but configs with Incl_X/Incl_Y ('deg') or extra conductivity write hard-invalid units. test_cf_compliance (test_convert.py:149) does not run a UDUNITS check so it is uncaught.",
+   "suggested_fix": "Import canonicalize_units from odas_tpw.perturb.netcdf_schema and apply it at convert.py:541, i.e. v.units = canonicalize_units(info['units']), matching the per-profile path."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "L1 MAG variable declares units='micro_Tesla', not UDUNITS-parseable",
+   "file": "src/odas_tpw/rsi/convert.py",
+   "line": "361",
+   "severity": "minor",
+   "category": "metadata/units correctness (CF-compliance)",
+   "confidence": "high",
+   "evidence": "The MAG spec hardcodes units='micro_Tesla' (convert.py:361). cf_units.Unit('micro_Tesla') raises UT_UNKNOWN (verified) \u2014 UDUNITS has no 'micro_Tesla' alias; the parseable forms are 'uT' or 'microtesla'. This is in a core hardcoded L1 variable (not a passthrough), so it is wrong for any magnetometer-equipped instrument regardless of the canonicalize_units gap above. (No magnetometer in the SN479 config, so latent for this dataset.)",
+   "suggested_fix": "Change units to 'uT' (preferred) or 'microtesla'. Add the magnetic-field standard_name as a comment only \u2014 'magnetic_field' is also not a CF standard name."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "CTD per-file NetCDF writes _FillValue on the 'time' coordinate variable (CF-1.13 \u00a72.5.1 violation)",
+   "file": "src/odas_tpw/perturb/ctd.py",
+   "line": "375-419 (ds.to_netcdf with no _FillValue:None encoding on time coord)",
+   "severity": "minor",
+   "category": "metadata/units correctness (CF-compliance)",
+   "confidence": "high",
+   "evidence": "ctd_bin_file builds time as an xarray coordinate and calls ds.to_netcdf(out_path) with no encoding (ctd.py:419). xarray auto-emits a _FillValue on float coordinates; verified the written 'time' var carries _FillValue in its ncattrs. CF-1.13 \u00a72.5.1 forbids _FillValue on coordinate variables. combo.py:286-291 explicitly strips this via encoding={cname:{'_FillValue':None}} for exactly this reason, but the per-file CTD writer does not. Lower severity because make_combo later re-reads with decode_times=False and re-writes the combo (stripping coords), so the final CTD combo is clean \u2014 but the intermediate ctd/*.nc products are non-compliant.",
+   "suggested_fix": "Pass encoding={'time': {'_FillValue': None}} (and ideally None for any other coordinate) to ds.to_netcdf in ctd_bin_file, mirroring make_combo."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "PR #78 _nc_filled fix turns a truncated cast into a SILENTLY LOST cast: one mid-cast _FillValue NaNs the entire fall-rate via gradient+filtfilt, so zero profiles are detected for the whole file",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/profile.py",
+   "line": "330-342 (the fix), 122-128 (consumer); poison occurs in /Users/pat/tpw/turbulence/src/odas_tpw/scor160/profile.py:58-61",
+   "severity": "major",
+   "category": "numerical/error-propagation regression (PR #78 M2)",
+   "confidence": "high",
+   "evidence": "The M2 fix replaces masked _FillValue (~9.97e36) with NaN at all read sites. Its stated rationale was that the raw fill 'truncated the rest of the cast'. But a single NaN in slow pressure is now smeared across the ENTIRE array by smooth_fall_rate(): W = np.gradient(P) puts NaN in the two neighbors, then the zero-phase Butterworth filtfilt spreads NaN to every sample. I reproduced end-to-end: a 2000-sample synthetic down-cast with exactly ONE mid-cast P fill yields `No profiles found in cast` / `profiles found with 1 mid-cast fill: 0`, whereas the identical file with the fill written yields a normal profile. Standalone proof: P=linspace with P[100]=NaN -> filtfilt(W) has `finite count after filtfilt: 0 of 200`. So the fix converts 'rest of cast truncated' into 'whole cast silently lost' \u2014 arguably a worse failure. The M2 regression test (tests/test_audit_2026_06_25_fixes.py::TestM2FillValueLeak) only asserts P[5] becomes NaN; it never calls extract_profiles, so this downstream regression is uncovered.",
+   "suggested_fix": "After _nc_filled, before profile detection, repair NaNs in the slow pressure (and any time coordinate) used for fall-rate: e.g. linearly interpolate isolated NaNs in P over its index (np.interp on the finite subset) inside _load_from_nc, or have smooth_fall_rate operate on a NaN-interpolated copy. At minimum, count NaNs and warn/log when >0 so a poisoned cast is visible rather than silently dropped. Add an extract_profiles end-to-end regression with a mid-cast fill that asserts the profile is still found."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "extract_profiles crashes with AttributeError on external/partial CF NetCDF whose channel carries a _FillValue attribute \u2014 exactly the files PR #78's _nc_filled fix claims to support",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/profile.py",
+   "line": "243-246 (blind setattr of every attr), populated from var.ncattrs() at 440-442",
+   "severity": "major",
+   "category": "edge-case crash / silent-loss-becomes-crash on supported input",
+   "confidence": "high",
+   "evidence": "_scan_vars (line 440-442) copies ALL of var.ncattrs() into each channel's attrs dict, including '_FillValue'. The per-profile write loop creates the new variable WITHOUT fill_value (line 240) then does `setattr(var, k, v)` for every attr (line 246). netCDF4 forbids setting _FillValue after creation, so it raises `AttributeError: _FillValue attribute must be set when variable is created`. Reproduced: a fully-written full-record .nc with a channel `T1` created using `fill_value=-999.0` crashes extract_profiles with that exact AttributeError. This is precisely the 'external / partial (CF/ATOMIX) files that declare a _FillValue' class the _nc_filled docstring says it supports \u2014 the read side now tolerates fills but extract_profiles still aborts on those very files. The package's own L1/PFile path is unaffected (its attrs never include _FillValue), which is why tests miss it.",
+   "suggested_fix": "Skip reserved/unsettable attributes when copying: in the write loop, `for k, v in attrs.items(): if k in {\"_FillValue\", \"_Netcdf4Coordinates\", \"_Netcdf4Dimid\", \"_Unsigned\"}: continue`. Better: pass the source _FillValue through to createVariable(..., fill_value=...) so masked data round-trips. Add a test that extract_profiles handles a .nc whose channels declare _FillValue."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "_nc_filled makes the days->seconds time-axis NaN-fragile: a _FillValue in the TIME coordinate poisons the whole time vector via (t - t[0]) and breaks every np.interp against it",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/profile.py",
+   "line": "452-454",
+   "severity": "minor",
+   "category": "numerical/error-propagation (PR #78 M2 collateral)",
+   "confidence": "high",
+   "evidence": "After _nc_filled, t_fast/t_slow can contain NaN for any TIME element carrying a _FillValue. Line 453 `t_fast = (t_fast - t_fast[0]) * 86400.0`: if the first element is a fill, the entire vector becomes NaN (verified: `(t - t[0])` with t[0]=NaN -> all NaN). Even an interior NaN in the time axis breaks downstream np.interp (e.g. convert.py P_fast = np.interp(t_fast, t_slow, ...) and binning): `np.interp([...], t_with_nan, y)` returns all-NaN. The L1 group path uses 'Days since ...' units so it goes through this branch. Package-written L1 has no _FillValue on TIME (no-op), but the fix explicitly targets external/partial CF files where TIME may declare one.",
+   "suggested_fix": "Use a NaN-robust epoch reference: `t0 = np.nanmin(t_fast)` (or the first finite element) instead of t_fast[0], and interpolate/repair NaNs in the time coordinate before using it as an interpolation abscissa, or raise a clear error if the time axis is not finite-and-monotonic."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "PR #78 M1 _variance_correction grid is ~22x slower per call (always 80,000 points) \u2014 a performance regression in the per-window, per-iteration chi loop",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/chi/chi.py",
+   "line": "112-114",
+   "severity": "minor",
+   "category": "performance regression (PR #78 M1)",
+   "confidence": "high",
+   "evidence": "The fix sets n = max(int(n_fine), _K_SPAN_KB*_PTS_PER_KB) = max(2000, 80000) = 80000 unconditionally (n_fine is always dominated, hence also dead \u2014 see already-confirmed nit). _variance_correction is called once per iteration of the up-to-3-pass refinement loop (chi.py:588, also 261/440) for every chi window of every probe of every profile. Timed: new 80000-point grid = 0.91 ms/call vs old 2000-point = 0.04 ms/call (~22x). The numerical motivation is sound (the steep peak near kB must be resolved), but resolution should scale with kB, not be a flat 80000: the goal is dK ~ kB/_PTS_PER_KB over [0, 40*kB], which is achieved by the dK spacing regardless of total point count \u2014 the 80000 floor is pure overhead.",
+   "suggested_fix": "Drop the n_fine floor and size the grid by span/resolution directly: `n = int(round(_K_SPAN_KB * _PTS_PER_KB))` is what is used, but reduce _PTS_PER_KB (e.g. 200/kB already gives <0.05% per my V_total check) or cache the kB-grid across the 3 iterations when kB changes little. Verified V_total error of the 40*kB span is ~3e-4% and variance beyond 40*kB is ~0 for both Batchelor and Kraichnan, so a coarser per-kB grid keeps accuracy while cutting cost."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "convert_all flattens input paths to basename under output_dir, so same-named .p files in different directories silently collide on one .nc \u2014 corrupting output under parallel jobs, overwriting under serial",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/convert.py",
+   "line": "589-595, 607-617",
+   "severity": "minor",
+   "category": "concurrency / silent data loss",
+   "confidence": "medium",
+   "evidence": "When output_dir is set, nc_path = output_dir / pf_path.with_suffix('.nc').name uses only the basename. Two inputs VMP/a/SN479_0001.p and VMP/b/SN479_0001.p both map to output_dir/SN479_0001.nc (verified). With jobs>1 the ProcessPoolExecutor workers race writing the SAME file -> partial/corrupt NetCDF; with jobs=1 the second silently overwrites the first with no warning. The API accepts arbitrary path lists (cli passes globs), so this is reachable even though the current ARCTERX layout (one dir) doesn't trigger it.",
+   "suggested_fix": "Detect output-name collisions before dispatch: build the work list, and if two distinct sources map to the same nc_path, raise a clear ValueError (or disambiguate by including a path-derived prefix). At minimum log a warning and skip the duplicate."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "parse_config raises a bare ValueError on a corrupt matrix row or channel id token, with no file context",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/p_file.py",
+   "line": "249 (matrix row int parse), 390 (channel id parse)",
+   "severity": "nit",
+   "category": "untrusted-input / diagnostics",
+   "confidence": "high",
+   "evidence": "Line 249 `result['matrix'].append([int(x) for x in val.split()])` and line 390 `ids = [int(x) for x in ch['id'].replace(',', ' ').split()]` apply int() directly to tokens from the embedded ASCII config string (untrusted/possibly-corrupt). A non-numeric token raises `ValueError: invalid literal for int() with base 10: 'x'` (reproduced) with no filename or section context, crashing the whole PFile read. This is the config-string analogue of the already-flagged binary-header diagnostics gaps but on a separate parse path.",
+   "suggested_fix": "Wrap these int() conversions with a try/except that re-raises a ValueError naming the file, section (matrix/channel), and offending token, or skip/warn on malformed rows the way unknown converter types are handled."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "PFile uses np.fromfile(count=n_records) where n_records is derived from a prior file-size stat \u2014 a concurrent truncation yields a silent short read and then a cryptic reshape error",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/p_file.py",
+   "line": "347-349 (size stat) vs 376-379 (read+reshape)",
+   "severity": "nit",
+   "category": "IO / TOCTOU robustness",
+   "confidence": "low",
+   "evidence": "file_size is taken at line 348, n_records computed at 349, then at 376 `records = np.fromfile(f, dtype=record_dtype, count=n_records)`. np.fromfile silently returns fewer elements than requested if the file is shorter (verified: asked 100, got 10). If the file shrinks between the stat and the read (concurrent writer/truncation), records.shape[0] < n_records, so total_scans (from the stale n_records) is too large and `records['data'].reshape(total_scans, self.n_cols)` at 379 raises 'cannot reshape array of size N into shape (...)'. Narrow (requires concurrent truncation), hence low confidence.",
+   "suggested_fix": "After np.fromfile, assert len(records) == n_records (or recompute total_scans from records.shape[0]) and raise a clear 'file shrank during read / truncated' error if short."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Edit-spec keys are never validated, allowing config-stanza injection that defeats the unaddressable-acquisition-params guarantee",
+   "file": "src/odas_tpw/rsi/config_patch.py",
+   "line": "141-153 (_check_keymap), 386 (add-key write)",
+   "severity": "major",
+   "category": "security",
+   "confidence": "high",
+   "evidence": "_check_keymap() runs every spec VALUE through _check_value() (which forbids newlines, ';', non-ASCII), but the KEY is only checked against RESERVED_KEY ('name') and otherwise passed through verbatim (out[key] = _check_value(value, ...)). edit_config_text then writes an added key with f\"{key} = {new_value}{eol}\" (line 386). A key containing a newline is split across config lines on write, injecting arbitrary stanzas. Reproduced end-to-end through the documented CLI path (rsi-tpw patch-config --edits k.yaml --add-keys): a YAML edit spec\n    note: \"x\"\n    instrument_info:\n      \"a = 1\\n[root]\\nrate\": \"9\"\nloads cleanly (the double-quoted key with \\n escapes is valid YAML), is never validated, and parse_config of the resulting patched config returns root.rate == '9'. This injects an acquisition parameter ([root] rate) into a fresh stanza \u2014 exactly the corruption the module docstring (lines 17-20, 130-137) promises is impossible because '[matrix]/[root] ... cannot be addressed'. Keys containing '=' or ';' similarly corrupt or silently drop the written line.",
+   "suggested_fix": "Validate keys the same way values are validated. In _check_keymap, after stripping, reject any key containing a newline/control char, '=', ';', '[' or ']', or non-ASCII (reuse the _check_value control-char/ASCII checks plus an explicit ' =;[] ' blacklist) BEFORE storing it. This closes the injection on both the YAML path (load_edit_spec) and the public EditSpec/edit_config_text path."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Provenance comment generator and the 'when' field are not control-char-sanitized, unlike the banner (defense-in-depth gap / latent injection)",
+   "file": "src/odas_tpw/rsi/config_patch.py",
+   "line": "350-357 (provenance), 351 & 459 (when), 445-465 (_build_banner)",
+   "severity": "minor",
+   "category": "security",
+   "confidence": "high",
+   "evidence": "_build_banner deliberately runs author/note/source_label through _one_line() (lines 455, with an explicit comment at 451-454 that 'a stray newline ... cannot spill past the ; prefix and become active config'). The provenance() inner function (lines 350-357) interpolates spec.author, spec.note, ch.old, ch.new into a '; [PATCH ...]' comment with NO such sanitization, and the 'when' parameter is interpolated raw in BOTH provenance (line 351) and the banner (line 459) \u2014 _one_line is never applied to it. Reproduced: edit_config_text(cfg, EditSpec(note='ok\\r\\n[root]\\r\\nrate=7', author='a', ...), when='W') yields parse_config(...)['root']['rate'] == '7' (via the unsanitized provenance line), and edit_config_text(..., when='W\\r\\n[root]\\r\\nrate=9') yields root.rate == '9' (via both lines). The shipped CLI is NOT exploitable today (load_edit_spec validates note/author for control chars, and _cmd_patch_config passes a machine-generated 'when'=datetime.strftime), but edit_config_text/patch_files are documented public API and EditSpec is a public dataclass whose fields are unvalidated, so a directly-constructed spec or a future caller passing a non-trivial 'when' re-opens the exact hole the banner sanitizer was added to close.",
+   "suggested_fix": "Apply _one_line() to 'when' in both _build_banner (line 459) and provenance (line 351), and to spec.author/spec.note/ch.old/ch.new inside provenance() before interpolation. Equivalently, move all comment-line field sanitization into a single helper used by both the banner and provenance so the two paths can't diverge again."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "rsi-tpw patch-config crashes with an uncaught traceback on malformed YAML (YAMLError not caught)",
+   "file": "src/odas_tpw/rsi/cli.py",
+   "line": "280-293 (_cmd_patch_config try/except)",
+   "severity": "minor",
+   "category": "robustness",
+   "confidence": "high",
+   "evidence": "_cmd_patch_config wraps load_edit_spec+patch_files in try/except (FileNotFoundError, FileExistsError, ValueError, OSError) to print 'Error: ...' and sys.exit(1). But load_edit_spec parses the YAML with ruamel, which raises ruamel.yaml.YAMLError subclasses (ParserError/ScannerError) on malformed input \u2014 none of which subclass ValueError/OSError. Reproduced: running 'rsi-tpw patch-config <fixture>.p --edits badsyntax.yaml --out ...' with edits content 'note: \"x\"\\ninstrument_info: {bad yaml\\n' escapes the handler and surfaces 'UNCAUGHT ParserError' (a full traceback to the user) instead of the intended friendly error + exit(1). Malformed YAML is a very common user error, so the dedicated error handler is defeated exactly when it is most needed.",
+   "suggested_fix": "Either catch ruamel.yaml.YAMLError in _cmd_patch_config's except tuple (import it locally), or wrap the yaml.load() call inside load_edit_spec in try/except YAMLError and re-raise as ValueError(f\"{path.name}: invalid YAML: {e}\") so the existing ValueError handler reports it cleanly."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "ct_align NaN guard discards the ENTIRE profile on a single isolated bad sample, silently wiping out CT alignment for a whole file",
+   "file": "src/odas_tpw/processing/ct_align.py",
+   "line": "83-84",
+   "severity": "major",
+   "category": "NaN/edge mishandling / silent data degradation",
+   "confidence": "high",
+   "evidence": "The PR #78 (commit 1a78fca, M3) guard `if not (np.all(np.isfinite(seg_T)) and np.all(np.isfinite(seg_C))): continue` rejects the WHOLE profile segment if even one sample is non-finite. But the documented NaN source, convert_jac_c (channels.py:238 `ratio = np.where(v_part == 0, np.nan, ...)`), emits ISOLATED per-sample NaN for transient corrupt conductivity samples (v_part==0 bit errors), not whole-segment corruption. There is no NaN interpolation upstream of ct_align \u2014 pipeline.py:1049 passes the raw `pf.channels[C_name]` straight in. I reproduced the failure: a file whose 3 profiles each carry ONE isolated NaN conductivity sample now returns lag=0.0 (identity, no alignment at all) because per_profile ends up empty, whereas the true consensus lag recoverable from the finite samples is 0.0469 s (3 samples). Output: `lag with one isolated NaN per profile: 0.0 / C unchanged (identity): True / lag if isolated NaNs were interpolated: 0.046875`. The pre-fix `norm<=0` guard and the MATLAB reference would NOT have wiped the whole file. The M3 regression test (test_audit_2026_06_25_fixes.py:114) only exercises the case where a CLEAN profile co-exists and dominates, so this over-discard mode is untested. Net effect: silent loss of all C/T lag alignment -> degraded salinity/density/N2 for the entire cast whenever every profile has even one transient bad sample.",
+   "suggested_fix": "Exclude/repair only the bad samples, not the whole segment. Before computing dx/dy, drop or linearly interpolate the non-finite samples of seg_T/seg_C (e.g. mask = np.isfinite(seg_T) & np.isfinite(seg_C); require mask.sum() >= 10 and a sufficiently low NaN fraction, then interpolate the few bad points or operate on the finite-masked diff). Only `continue` when the finite fraction is too low to carry alignment information. Add a regression test where every profile has an isolated NaN and assert the consensus lag is still recovered (not 0.0)."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "detect_bottom_crash all-NaN-depth RuntimeWarning escapes the surrounding np.errstate, producing spurious log noise on legitimate all-NaN segments",
+   "file": "src/odas_tpw/processing/bottom.py",
+   "line": "89-90",
+   "severity": "nit",
+   "category": "error handling / warning hygiene",
+   "confidence": "high",
+   "evidence": "Line 89-90 wraps `max_depth = np.nanmax(depth)` in `with np.errstate(invalid=\"ignore\"):` evidently intending to silence the all-NaN-slice warning. But np.errstate only governs IEEE FP flags (invalid/divide/over/under), NOT numpy's Python-level `_methods` RuntimeWarning. I confirmed: `with np.errstate(invalid='ignore'): np.nanmax(np.full(5, np.nan))` still raises `RuntimeWarning: All-NaN slice encountered`. The existing test test_processing_bottom.py::test_all_nan_depth_returns_none passes but emits this warning (visible in the pytest run). The result is correctly handled (line 93 bails on non-finite max_depth), so this is only log noise \u2014 but it reveals a misconception about errstate scope that could mask a genuinely meaningful warning if copied elsewhere.",
+   "suggested_fix": "Suppress the actual warning category, e.g. guard with `if depth.size == 0 or not np.any(np.isfinite(depth)): return None` before calling nanmax, or wrap in `with warnings.catch_warnings(): warnings.simplefilter('ignore', RuntimeWarning)`. Update the comment to stop implying errstate suppresses it."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "despike crashes with cryptic scipy ValueError on length-2 input (padded array exactly 6 samples; MATLAB filtfilt succeeds)",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/scor160/despike.py",
+   "line": "98-110",
+   "severity": "minor",
+   "category": "edge-case / port-faithfulness",
+   "confidence": "high",
+   "evidence": "For a length-2 input, pad_len = min(2, 2*int(fs/smooth)) = 2, so dv_padded has 2*2+2 = 6 samples. scipy.signal.filtfilt with the default padlen for a 1st-order Butterworth (len(a)=len(b)=2) is 3*max(len(a),len(b)) = 6, and filtfilt requires len(x) > padlen (strictly). 6 is not > 6, so line 110 raises 'ValueError: The length of the input vector x must be greater than padlen, which is 6'. length-1 also fails (padded=3). Verified at runtime: despike(np.zeros(2), 512.0) raises ValueError. The MATLAB reference (odas/despike.m:183-184) uses MATLAB filtfilt whose default padlen for the same 1st-order filter is 3*(max(len(a),len(b))-1) = 3, so MATLAB succeeds on the length-2 (padded=6) case. This is a hard crash, not merely the numerical padlen divergence already noted in round 1. despike is a public API and is called per-section on temperature in chi/l2_chi.py:105 with temp_fast[ci, mask]; a degenerate short section would crash chi L2.",
+   "suggested_fix": "Pass an explicit padlen matching the MATLAB convention, e.g. filtfilt(b, a, dv_padded, padlen=3*(max(len(a_hp),len(b_hp))-1)) (=3 for the 1st-order filters), which simultaneously restores port-faithfulness AND avoids the crash for length-2 inputs. Alternatively guard with `if len(dv_padded) <= scipy_padlen: return dv, empty` and emit a warning."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "A single NaN sample silently disables ALL spike detection for the whole array (real spikes pass through into chi/epsilon)",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/scor160/despike.py",
+   "line": "110-119",
+   "severity": "major",
+   "category": "silent data corruption / numerical",
+   "confidence": "high",
+   "evidence": "filtfilt propagates a NaN globally: if any element of dv_padded is NaN, dv_hp (line 110) and dv_lp (line 114) become all-NaN, so ratio = dv_hp/dv_lp (line 118) is all-NaN and `ratio > thresh` (line 119) is all-False. No spikes are detected ANYWHERE, so despike silently no-ops and any genuine spikes survive. Verified at runtime: a 10000-sample signal with a real 50x spike at index 3000 and a single NaN at index 7000 returns spikes=[] / passes=0 / frac=0.0 and y[3000] is left at 50.0 (NOT removed). The round-1 NaN fix (lines 81-85) only corrected the *fraction* reporting (NaN!=NaN inflation); it masked this deeper integrity problem by making the no-op look clean (frac=0.0). chi/l2_chi.py:105 feeds despike raw L1 FP07 temperature per section; an FP07 dropout/saturation NaN therefore leaves un-despiked spikes that contaminate the temperature-gradient spectrum and bias chi, with no diagnostic. (MATLAB filtfilt also propagates NaN, but ODAS upstream removes/interpolates NaNs before despiking; the port does not.)",
+   "suggested_fix": "Detect non-finite input up front: if not np.all(np.isfinite(y)), either (a) interpolate/zero-fill the gaps before filtering and restore NaNs afterward, or (b) at minimum emit a warning and skip detection only over the contaminated contiguous span rather than the whole array. A NaN-guard at the top of despike() that warns is the minimum acceptable fix so the silent no-op is observable."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Replacement value falls back to physical 0.0 (not NaN) when a bad region has no valid neighbors, silently injecting a plausible-looking shear/temperature value",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/scor160/despike.py",
+   "line": "163-166",
+   "severity": "minor",
+   "category": "silent data corruption / port-faithfulness",
+   "confidence": "medium",
+   "evidence": "When both the before-region (line 148-151) and after-region (line 154-155) collect zero valid points, the port sets replacement = 0.0 (line 164) and writes it into dv_padded[s_bad:e_bad] (line 166). The MATLAB reference (odas/despike.m:236-245) computes start_value = sum(points)/length(points); with empty `points` this is 0/0 = NaN, so the replacement (start_value+stop_value)/2 is NaN \u2014 a value downstream QC can detect and reject. The port instead emits 0.0, a physically plausible zero shear/temperature-gradient value that silently passes through all NaN-based rejection. Verified reachable at runtime: with a large removal window N and densely packed spikes covering the whole padded array, _single_despike output is entirely 0.0 with no NaN. This is a genuine port divergence in edge handling that converts a detectable failure (NaN) into silent fabricated data (0.0).",
+   "suggested_fix": "Match ODAS: use replacement = np.nan when neither side has valid points (and ideally also when only one side is empty, since MATLAB's (NaN+value)/2 = NaN means MATLAB does NOT one-side-fall-back either \u2014 the one-sided branches on lines 159-162 are themselves a divergence). At minimum change line 164 to `replacement = np.nan` so the unfillable region is detectable rather than silently zeroed."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "ct_align silently applies zero CT alignment when sporadic NaN conductivity poisons every profile (PR #78 guard regression)",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/processing/ct_align.py",
+   "line": "83-84, 119-120, 130-132",
+   "severity": "minor",
+   "category": "silent data degradation / error propagation",
+   "confidence": "high",
+   "evidence": "PR #78 (commit 1a78fca) added the guard `if not (np.all(np.isfinite(seg_T)) and np.all(np.isfinite(seg_C))): continue` at line 83. The guard is correct in intent (one NaN is smeared across the segment by the IIR lfilter at line 86-87, making `norm` NaN). But it is all-or-nothing: a SINGLE non-finite sample drops the ENTIRE profile from the weighted median. JAC/FP07 conductivity commonly has isolated NaN spikes (the module's own comment at line 81 notes `convert_jac_c emits NaN for corrupt conductivity`). If every profile carries one such spike, `per_profile` ends empty -> line 119-120 returns `C.copy(), 0.0` (no alignment), or `total<=0` -> line 130-132 returns the same. The module imports no logger (only numpy + scipy), so the fallback to zero-lag is completely silent \u2014 the CTD product is shipped un-aligned with no diagnostic. This regresses discoverability versus the pre-guard behavior, which at least produced *some* lag estimate.",
+   "suggested_fix": "Two-part fix. (1) Before the all-finite reject, interpolate over isolated interior NaNs (e.g. np.interp on finite indices) so a single bad sample does not discard an otherwise-usable profile; only `continue` when too few finite samples remain. (2) Add module logging and emit a `logger.warning(...)` on the two silent fallback paths (lines 119-120 and 130-132) reporting how many profiles were skipped and that no CT shift was applied, so an all-skipped degradation is visible.",
+   "line_hint": "83"
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "pair_nearest aligns epsilon onto chi grid by time only, discarding Gamma/K_rho when the nearest epsilon window is a NaN-rejected estimate",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/processing/mixing.py",
+   "line": "522-529",
+   "severity": "minor",
+   "category": "silent data loss / oceanographic correctness",
+   "confidence": "high",
+   "evidence": "pair_nearest selects the temporally nearest source index (`pick`) and returns `sv[pick]` without checking whether that value is finite. Epsilon estimates (l4.epsi_final / epsilonMean) are NaN for QC-rejected shear windows (scor160/l4.py initializes epsi to np.nan and leaves rejected windows NaN). When a chi window coincides with a rejected epsilon window, pair_nearest returns NaN even when a perfectly good epsilon estimate exists at the adjacent window within max_dt. Demonstrated: src_t=[0,8,16], src_v=[1e-7, nan, 3e-7], dst=[8] -> returns [nan], although valid epsilon sits one median-spacing (8 s = max_dt) away. mixing_coefficients then masks Gamma and K_rho to NaN for that window (mixing.py:481-486, requires eps_ok). This needlessly thins Gamma/K_rho coverage in low-SNR data where epsilon rejections are common, while K_T (chi-only) survives \u2014 an asymmetric, silent loss of the very coefficients the module exists to produce.",
+   "suggested_fix": "Make pair_nearest prefer the nearest FINITE source value within max_dt. E.g. mask non-finite src_values out of the candidate set (set their effective distance to +inf before the left/right pick, or operate on the finite-only subset of (st, sv)) so a rejected epsilon window does not shadow a valid neighbor. Add a regression test mirroring the demonstrated case.",
+   "line_hint": "522"
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "K_rho N2_min floor (1e-9 s^-2) only prevents division-by-zero, not unphysical inflation; near-floor windows emit absurd Osborn diffusivities",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/processing/mixing.py",
+   "line": "475, 486",
+   "severity": "nit",
+   "category": "oceanographic correctness / weak-stratification division",
+   "confidence": "low",
+   "evidence": "K_rho = gamma_osborn * epsilon / N2 is emitted whenever `N2 >= N2_min` with N2_min=1e-9 s^-2 (DEFAULT_N2_MIN, line 57). At N2 just above the floor the Osborn scaling diverges: eps=1e-7 W/kg, N2=2e-9 -> K_rho = 0.2*1e-7/2e-9 = 10 m^2/s, ~4-5 orders above any realistic ocean diapycnal diffusivity (1e-5 to 1e-3 m^2/s). N (~0.026 cph at 2e-9) means the water is effectively unstratified, where Osborn does not physically apply, yet the value is reported as finite and would survive the `K_rho > 0` plot filter (mixing_look.py:323). The module docstring acknowledges divergence as N->0 and the floor is 'configurable', so this is partly by-design, but the chosen floor is low enough to leak physically meaningless diffusivities into the product rather than mask them.",
+   "suggested_fix": "Either raise DEFAULT_N2_MIN to a value where the Osborn estimate is still meaningful (e.g. ~1e-7 s^-2, N~0.26 cph) or add an explicit upper sanity clamp/mask on K_rho (and K_T) at the ~1e-1 m^2/s scale, documenting the choice. At minimum, surface the count of near-floor windows so consumers know the estimate is divergent there.",
+   "line_hint": "486"
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Iterative/MLE chi fit discards a valid earlier kB when a later refinement step destabilizes to NaN, silently dropping the whole window",
+   "file": "src/odas_tpw/chi/chi.py",
+   "line": "557-558, 599-607 (and src/odas_tpw/chi/l4_chi.py:263-281)",
+   "severity": "major",
+   "category": "error-propagation / silent data loss",
+   "confidence": "high",
+   "evidence": "In `_iterative_fit`, iteration 0 can produce a finite kB>=1 (sets kB_prev, computes a corrected chi_obs), but the loop reuses the *refined* chi_obs to re-run `_mle_find_kB` on the next pass. If that second call destabilizes and returns kB=NaN or kB<1, the guard `if not np.isfinite(kB_best) or kB_best < 1: break` (l.557) breaks with `kB_best` holding the *bad* iteration-1 value, overwriting the valid iteration-0 kB. Lines 599-607 then see `np.isfinite(kB_best)==False`, so `epsilon=NaN`, `chi=NaN`, `spec_batch=zeros`, and the window is discarded entirely \u2014 even though iteration 0 had a perfectly good fit and a finite chi_obs. The l4_chi.py MLE-iteration loop (added by the M-6 fix, commit 8de08e1) has the identical flaw and is worse: line 267 *overwrites* `result` with the new `_mle_fit_kB` output before the next loop's guard can reject it, so a destabilized NaN result is returned and `kB_val=result.kB=NaN` discards the valid prior estimate. Demonstrated by monkeypatching `_mle_find_kB`/`_mle_fit_kB` to return valid-then-NaN: both paths return kB=NaN, chi=NaN despite a valid iteration-0 kB=50. The feedback chi changes the coarse-grid NLL landscape, so destabilization is realistic on borderline/noisy windows \u2014 exactly the windows whose presence/absence skews QC statistics.",
+   "suggested_fix": "Keep the last valid estimate across iterations. In `_iterative_fit`, snapshot the last finite kB before re-running the MLE (e.g. only update `kB_best` if the new fit is finite and >=1, otherwise `break` retaining `kB_prev`); compute epsilon/chi from that retained kB. In l4_chi.py, save `last_good = result` before line 267's overwrite and restore it when the refined result is non-finite/<=0, mirroring the convergence guard's intent."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "rsi run_pipeline mixing quantities use the unfiltered chi_final geometric mean (no fom/K_max_ratio QC), unlike the epsilon path and perturb's mk_chi_mean",
+   "file": "src/odas_tpw/rsi/pipeline.py",
+   "line": "466 (chi_final from chi/l4_chi.py:_compute_chi_final l.286-294)",
+   "severity": "minor",
+   "category": "QC / oceanographic correctness",
+   "confidence": "medium",
+   "evidence": "`_compute_chi_final` (l4_chi.py l.286-294) computes `chi_final[j] = exp(mean(log(chi[good,j])))` over all probes with finite chi>0, with NO filtering on the per-probe `fom` (obs/model variance ratio) or `K_max_ratio` (spectral resolution). pipeline.py:466 then feeds `chi_primary.chi_final` straight into `mixing_coefficients(...)` -> K_T = chi/(2 dT/dz^2), Gamma = N2*chi/(2 eps dT/dz^2). The epsilon driving the same products is QC-filtered (mk_epsilon_mean / epsi_final), and the campaign (perturb) pipeline runs `mk_chi_mean` which does CI-based probe removal \u2014 so a thermistor window with a poor spectral fit (high fom, or K_max_ratio<0.5 meaning most variance is extrapolated) biases K_T/Gamma in the rsi path only. The chi output variables already carry per-window fom and K_max_ratio, so the QC information exists but is unused at the combine step.",
+   "suggested_fix": "Before the geometric mean in `_compute_chi_final` (or at the pipeline.py mixing call site), drop per-probe chi where fom exceeds the chi fom limit or K_max_ratio < ~0.5, falling back to the all-probe mean only if no probe survives \u2014 mirroring `_epsilon_ds_to_l4data`'s fom-based exclusion and processing.mk_chi_mean."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "_iterative_fit returns a chi computed against a one-iteration-stale kB on convergence break",
+   "file": "src/odas_tpw/chi/chi.py",
+   "line": "560-606",
+   "severity": "nit",
+   "category": "numerical consistency",
+   "confidence": "high",
+   "evidence": "When the convergence test `abs(kB_best - kB_prev)/kB_prev < 0.01` (l.561) fires, the loop breaks *before* recomputing chi_obs/correction for the newly-converged `kB_best`. The returned `kB_best` (and the epsilon derived from it at l.600) is from the final MLE pass, but the returned `chi` (= chi_obs, l.606) was last assigned using the *previous* iteration's kB (k_l_new and the variance correction both depend on kB). So the reported (kB, epsilon) and (chi) correspond to two kB values differing by <1%. The mismatch is bounded (<~1-2% on chi) but means spec_batch = grad_func(K, kB_best, chi) mixes a converged kB with a slightly-stale chi.",
+   "suggested_fix": "After the loop, recompute chi_obs once from the final kB_best (chi_band over [k_l,k_u] with k_l derived from kB_best, times _variance_correction(kB_best,...)), so the returned kB, epsilon, chi, and spec_batch are mutually consistent."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "_bilinear_correction raises ValueError for small config-derived diff_gain (cutoff >= 1)",
+   "file": "src/odas_tpw/chi/chi.py",
+   "line": "644",
+   "severity": "nit",
+   "category": "edge case / untrusted-input robustness",
+   "confidence": "medium",
+   "evidence": "`butter(1, 1/(2*np.pi*diff_gain*fs/2))` (l.644) requires the normalized cutoff to lie in (0,1). With fs=512 this needs diff_gain > 1/(pi*fs) \u2248 6.2e-4; a diff_gain at/below that (e.g. a corrupt or patched .p-file config value) makes the cutoff >= 1 and scipy raises `ValueError: Digital filter critical frequencies must be 0 < Wn < 1`, aborting L3 chi for the whole cast. Confirmed: diff_gain=1e-4, fs=512 -> cutoff 6.22 -> ValueError. diff_gain is read from the instrument config (default 0.94), so the trusted-RSI likelihood is low, but the config can now be patched via rsi-tpw patch-config.",
+   "suggested_fix": "Clamp/validate the normalized cutoff before calling butter (e.g. if `wn <= 0 or wn >= 1`, warn and return an all-ones correction), so an out-of-range diff_gain degrades to no bilinear correction rather than crashing the cast."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "longitude/latitude x-axis passthrough is not dateline-safe: a continuous track crossing +/-180 is split and reordered into two far-apart clusters",
+   "file": "src/odas_tpw/perturb/plot/xaxis.py",
+   "line": "324-327",
+   "severity": "minor",
+   "category": "correctness",
+   "confidence": "high",
+   "evidence": "compute() for method 'latitude'/'longitude' returns the raw degree values verbatim (x=np.asarray(lon, float)). The distance/along_line/signed_distance methods were all hardened for the dateline via _circmean_deg + _wrap_deg (tested in test_*_dateline_*), but the plain latitude/longitude passthrough was not. Verified empirically: a continuous monotone track lon=[179, 179.5, -179.5, -179] (physically ~1 deg wide) yields x=[179, 179.5, -179.5, -179]; profiles.py sorts columns by x -> [-179.5, -179, 179, 179.5] (physical cast order reversed) and layout.column_clusters() splits it into [(0,2),(2,4)] with a spurious ~358-deg blank gap. scalar.py's grid path would likewise spread the data to both ends of a 360-deg-wide x-axis with an empty middle. The result silently misregisters cast order and depth-by-x position on a dateline-crossing leg.",
+   "suggested_fix": "When method is 'longitude' (and for the longitude component of any spatial axis used for ordering), unwrap the longitudes about their circular mean before returning, e.g. lon_unwrapped = xaxis._circmean_deg(lon) + xaxis._wrap_deg(lon - _circmean_deg(lon)). This keeps a near-dateline track contiguous and monotone while leaving non-crossing tracks unchanged. Add a regression test mirroring test_signed_distance_dateline_span_matches_haversine for the longitude method. (Low urgency for the current ARCTERX/Saipan ~145E data which never crosses the dateline.)"
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "eps_chi profile realignment over-reports 'eps slots have no chi' by counting validly-matched but all-NaN chi columns as unmatched",
+   "file": "src/odas_tpw/perturb/plot/eps_chi.py",
+   "line": "323",
+   "severity": "nit",
+   "category": "correctness",
+   "confidence": "high",
+   "evidence": "After mapping each chi column onto its nearest eps slot, n_unmatched = int(np.sum(~np.isfinite(aligned).any(axis=0))). A chi profile that was successfully matched (within 5 s) but is entirely NaN over depth -- a legitimate outcome after QC dropping every bin, or an FP07 cast with no valid chi -- has no finite values, so this counts it as 'no chi match'. The printed diagnostic ('N eps slots have no chi') then overstates the number of genuinely unmatched-in-time profiles, which could mislead a user debugging an apparent chi shortfall.",
+   "suggested_fix": "Track matches explicitly rather than inferring them from finiteness: maintain a boolean matched = np.zeros(len(t_eps), bool), set matched[k]=True inside the 'if abs(...) <= 5' branch, and report n_unmatched = int((~matched).sum()). This counts time-unmatched eps slots correctly regardless of whether the matched chi column happens to be all-NaN."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "L4 NaN-speed window yields wrong-but-finite epsilon: K_AA derived from un-floored speed (max(NaN,0.05)=NaN)",
+   "file": "src/odas_tpw/scor160/l4.py",
+   "line": "175-180",
+   "severity": "minor",
+   "category": "correctness/NaN-handling",
+   "confidence": "high",
+   "evidence": "process_l4 reads W = l3.pspd_rel[j] (the un-floored per-window speed) and computes K_AA = 0.9 * f_AA / max(W, 0.05). In Python, max(np.nan, 0.05) returns nan (the comparison 0.05 > nan is False, so the first arg is kept) \u2014 verified at runtime. l3.py:212 deliberately floors W to 0.05 ONLY for the wavenumber axis (W = max(np.nan_to_num(W, nan=0.05), 0.05)) but stores the un-floored mean in pspd_rel (l3.py:184-189, comment '#59' explicitly notes an all-NaN window records NaN). So an all-NaN-speed window reaches L4 with W=NaN, K_AA becomes NaN, and that NaN propagates into the integration-limit logic: valid_K_limit = min(K_AA, K_95) keeps NaN (min(nan, x)=nan when nan is first), the clamp min(max(nan,7),150)=nan, 10**log10(K_AA)=nan, and np.searchsorted(K, nan, 'right') returns len(K) \u2014 integrating the ENTIRE spectrum past the resolved range. Confirmed via _variance_method: with NaN K_AA and a spectrum whose polyfit minimum is rejected, n_var = len(K) (full range) instead of the K_95/K_AA-clamped range, producing a finite but over-integrated (biased-high) epsilon rather than a clean NaN. The temp/viscosity path is already guarded this way (l4.py:154-160), but the speed path is not.",
+   "suggested_fix": "Mirror the L3 floor in L4: replace l4.py:180 with `K_AA = 0.9 * f_AA / max(np.nan_to_num(W, nan=0.05), 0.05)` (and/or floor pspd_rel in the L3 output so L4 and the wavenumber axis are consistent). This turns a degenerate all-NaN-speed window into a clean, floored estimate instead of a silently wrong finite epsilon."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "compare_l2 raises ValueError on empty section arrays (.max() on zero-size)",
+   "file": "src/odas_tpw/scor160/compare.py",
+   "line": "50-56",
+   "severity": "minor",
+   "category": "robustness",
+   "confidence": "high",
+   "evidence": "The 'section' dict is built unconditionally with int(ref_sec.max()) and int(comp_sec.max()) at compare.py:51-52. np.ndarray.max() raises ValueError('zero-size array to reduction operation maximum which has no identity') when section_number is empty (0 samples) \u2014 verified at runtime. process_l2 can return an L2 with zero-length arrays for a degenerate/empty L1 input, and the speed/shear/vib blocks below ARE guarded by both_in.any() but the section dict that runs first is not. A zero-sample comparison crashes the whole report instead of reporting 'no sections'.",
+   "suggested_fix": "Guard the reductions, e.g. `ref_n = int(ref_sec.max()) if ref_sec.size else 0` (and likewise for comp_sec), or early-return a minimal results dict when either section_number is empty."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "L4Data.fom docstring mislabels the benchmark FOM as the obs/Nasmyth variance ratio",
+   "file": "src/odas_tpw/scor160/io.py",
+   "line": "198",
+   "severity": "nit",
+   "category": "documentation",
+   "confidence": "high",
+   "evidence": "io.py:198 comments `fom` as 'figure of merit (obs/Nasmyth variance ratio)', but _read_l4 (io.py:666) loads it from the benchmark's FOM variable, whose long_name is 'The MAD of the spectrum relative to the 97.5 percentile of the expected MAD ...' (verified by reading the NetCDF attribute) \u2014 i.e. the Lueck (2022) MAD-normalized statistic, NOT the variance ratio. compare_l4 (compare.py:350-354) correctly compares computed.FM (the MAD-normalized statistic) against reference.fom, confirming the data flow is right; only the field comment is wrong. The variance-ratio quantity is the separate computed.fom in L4Data, which adds to the confusion.",
+   "suggested_fix": "Change the io.py:198 comment for the reference field to note it holds the ATOMIX FOM = MAD / (97.5-percentile expected MAD) (the Lueck 2022 statistic), distinct from the computed obs/Nasmyth variance-ratio fom."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "EPSI_FINAL fallback emits a value when every probe in a window is QC-flagged",
+   "file": "src/odas_tpw/scor160/l4.py",
+   "line": "774-778",
+   "severity": "nit",
+   "category": "correctness/QC",
+   "confidence": "low",
+   "evidence": "_compute_epsi_final first averages probes with flags==0; if none pass, it falls back to the geometric mean of ALL finite probes (l4.py:774-778), so a window where every probe failed QC still receives a non-NaN EPSI_FINAL. The ATOMIX benchmarks examined never contain an all-probes-flagged window (verified: VMP250 has 0 such windows), so this path is not exercised by the reference and there is no benchmark evidence it is wrong. But the behavior silently re-includes data that all per-probe flags rejected, which can mislead downstream consumers that treat EPSI_FINAL as 'best clean estimate'. Confidence low because it may be an intentional 'always produce a number' policy.",
+   "suggested_fix": "Either document this fallback explicitly as intentional, or set EPSI_FINAL=NaN (and let consumers fall back to per-probe epsi) when no probe passes QC, so the combined value never silently averages over uniformly-flagged data."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Method-1 epsilon time reference is corrupted by tz-offset stripping, silently NaN-ing all chi for non-UTC instruments",
+   "file": "src/odas_tpw/rsi/chi_io.py",
+   "line": "382-390",
+   "severity": "major",
+   "category": "correctness",
+   "confidence": "high",
+   "evidence": "When a per-file epsilon dataset is read back from NetCDF, xarray's decode_cf decodes the `t` coord to absolute datetime64 by HONORING the offset in `units = \"seconds since <start_time>\"`. _epsilon_ds_to_l4data then converts back to seconds via `start = np.datetime64(re.sub(r\"(Z|[+-]\\d{2}:?\\d{2})$\", \"\", start_str))`, which STRIPS the offset and reinterprets the local wall-clock time as the reference. The comment on line 386 (\"numpy.datetime64 doesn't accept tz suffix\") is factually wrong: `np.datetime64('2025-01-15T03:04:05+10:00')` returns `2025-01-14T17:04:05` (correctly normalized to UTC, only emitting a deprecation UserWarning). Because PFile.start_time is built with a real tzinfo from the header `timezone_min` word (p_file.py:326-341), a non-UTC deployment yields e.g. `+10:00`. I reproduced the result: decoded epsilon times that should be [0,10,20] s come out [-36000,-35990,-35980] s \u2014 a 10-hour (36000 s) shift. Since `l3_chi.time` (chi side) is genuine seconds-since-start with no tz involved, process_l4_chi_epsilon's nearest-neighbour match finds |epsi_times - chi_times| ~= 36000 s >> max_dt and returns None for EVERY window, so Method-1 chi is silently all-NaN. The ARCTERX file happens to be `+00:00` (offset zero, harmless), and every `_epsilon_ds_to_l4data` test uses a raw float `t` coord that xarray never decodes to datetime64, so the entire tz-strip branch (lines 383-390) is untested.",
+   "suggested_fix": "Do not strip the offset; let it normalize to UTC the same way decode_cf does. Replace `start = np.datetime64(re.sub(...))` with an offset-aware parse, e.g. `start = np.datetime64(pd.Timestamp(start_str))` (pandas honors the offset and converts to UTC without the numpy warning), or `np.datetime64(datetime.fromisoformat(start_str).astimezone(UTC).replace(tzinfo=None))`. Add a regression test that builds the epsilon dataset with a CF `t` coord using a non-UTC `units = \"seconds since 2025-01-15T03:04:05+10:00\"`, round-trips through NetCDF so xarray decodes it, and asserts the recovered L4Data.time matches chi-side seconds (and that process_l4_chi_epsilon still pairs windows)."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "_epsilon_ds_to_l4data reads `fom` (obs/Nasmyth ratio) but rsi epsilon also writes the correct `FM` statistic it never consults",
+   "file": "src/odas_tpw/rsi/chi_io.py",
+   "line": "353-366",
+   "severity": "minor",
+   "category": "correctness",
+   "confidence": "high",
+   "evidence": "The Method-1 multi-probe filter path (active for all standard rsi outputs, since `epsilonMean` is written ONLY in chi_io and never by the rsi pipeline \u2014 grep confirms `epsilonMean` appears only in src/odas_tpw/rsi/chi_io.py) reads `_probe_var(\"fom\")` and rejects probes with `fom > _EPS_FOM_LIMIT (1.15)`. The prior audit flagged that 1.15 is the FM limit, not a fom limit. The deeper, still-unaddressed half: dissipation.py writes BOTH `fom` (long_name 'observed/Nasmyth variance ratio', good ~1.0) AND `FM` (Lueck-2022 MAD statistic, good ~0, reject >1.15) as separate per-probe variables (dissipation.py:455-481), but chi_io reads only `fom`/`mad` and never `FM`. So even a one-line variable-name fix is insufficient context-free: the right QC field (`FM`) is present in the file but ignored.",
+   "suggested_fix": "In _epsilon_ds_to_l4data, read `_probe_var(\"FM\")` and filter `bad = ~np.isfinite(FM) | (FM > _EPS_FOM_LIMIT)` (FM good-fits approach 0). Keep `fom`/`mad` only for populating the L4Data diagnostic fields. Rename `_EPS_FOM_LIMIT` to `_EPS_FM_LIMIT` to reflect the Lueck statistic it gates."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "load_epsilon_dataset concatenates a stale single-profile `_eps.nc` together with per-profile `_prof00N_eps.nc`, double-counting epsilon times",
+   "file": "src/odas_tpw/rsi/chi_io.py",
+   "line": "857-871",
+   "severity": "minor",
+   "category": "correctness",
+   "confidence": "medium",
+   "evidence": "write_profile_results (helpers.py:473-477) names output `{stem}_eps.nc` when a file yields exactly one profile, but `{stem}_prof001_eps.nc`... when it yields several \u2014 a given run produces one form OR the other, never both. load_epsilon_dataset globs `{stem}_prof*_eps.nc` AND unconditionally inserts `single = {stem}_eps.nc` at index 0 if it exists (lines 858-861), then `xr.concat(datasets, dim=\"time\", combine_attrs=\"override\")`. If the output dir accumulates products from two runs whose profile detection disagreed (e.g. a re-run with different trim/direction params now finds 3 profiles where an earlier run found 1), both `{stem}_eps.nc` and `{stem}_prof00N_eps.nc` coexist and are concatenated, producing duplicated/overlapping epsilon time samples that silently bias the Method-1 nearest-neighbour epsilon. There is no overlap/duplicate-time guard.",
+   "suggested_fix": "Treat the single-profile and per-profile naming schemes as mutually exclusive: prefer the per-profile files when any `{stem}_prof*_eps.nc` exist and ignore `{stem}_eps.nc` in that case (or assert no time overlap before concatenating). Alternatively, after concat, drop duplicate `time` values (`ds = ds.sortby('time'); ds = ds.isel(time=np.unique(ds.time, return_index=True)[1])`) and warn."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Degenerate/duplicate epsilon window times collapse max_dt to 0, silently dropping all Method-1 chi",
+   "file": "src/odas_tpw/chi/l4_chi.py",
+   "line": "170-176",
+   "severity": "nit",
+   "category": "edge-case",
+   "confidence": "medium",
+   "evidence": "process_l4_chi_epsilon computes `max_dt = float(np.median(np.diff(np.sort(epsi_times)))) if len(epsi_times) > 1 else 30.0`. If two or more epsilon windows share an identical timestamp (degenerate/duplicate times \u2014 which the load_epsilon_dataset double-concat above can produce), `np.diff(np.sort(...))` contains zeros and the median can be exactly 0.0. Then the matcher `abs(epsi_times[idx_eps] - chi_times[j]) > max_dt` rejects every chi window whose time is not bit-exactly equal to an epsilon time, NaN-ing all Method-1 chi with no warning. Reproduced: median diff of [100,100,100] is 0.0.",
+   "suggested_fix": "Floor max_dt to a strictly positive value, e.g. `max_dt = max(float(np.median(np.diff(np.sort(np.unique(epsi_times))))), <one nominal window>)`, computing the median over unique times and guarding against a zero/NaN result before using it as a rejection threshold."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "np.arange bin-edge construction produces a spurious extra trailing bin and reassigns the deepest boundary sample for non-binary-exact bin widths",
+   "file": "src/odas_tpw/perturb/binning.py",
+   "line": "442 (depth); 576 (time)",
+   "severity": "minor",
+   "category": "correctness/numerical",
+   "confidence": "high",
+   "evidence": "bin_by_depth builds the grid as `d_min=np.floor(g_min/bw)*bw; d_max=np.ceil(g_max/bw)*bw; bin_edges=np.arange(d_min, d_max+bw, bw)`. When (d_max-d_min)/bw is an exact integer but bw is not binary-representable, np.arange's float accumulation makes the penultimate value land just below the `d_max+bw` stop, so an extra edge is emitted past d_max. Reproduced end-to-end: depths 0..7 m at bin_width=0.7 yield 11 bins (edges 0,0.7,...,7.0,7.7) instead of the intended 10 (edges 0..7.0). The spurious top bin [7.0,7.7) is mostly empty, AND the deepest sample at depth==7.0 (which under the correct 10-bin grid would hit the `coords==bin_edges[-1]` clamp and land in the last real bin [6.3,7.0)) instead becomes an interior-edge sample assigned to the spurious bin [7.0,7.7) \u2014 biasing both the intended deepest bin (loses its boundary sample) and adding a half-empty NaN-ish trailing bin to the published grid. Frequency over a depth sweep: bw=0.7 -> 160/1619 cases off-by-one; bw=0.1 -> 302/1619. Binary-exact widths (the defaults 1.0 m and 0.5 s, plus 0.25/2.0/5.0) never trigger it: 0/1619. The identical pattern is in bin_by_time (line 576) on epoch-second time grids. Tests use only binary-exact depth widths so the defect is uncovered (tests/test_perturb_binning.py bin widths: 1.0/2.0/5.0/10.0/20.0/100.0; the lone 0.1 is a time test that only checks variable presence, not bin count/edges).",
+   "suggested_fix": "Compute the bin count integer-first and build edges with np.linspace (or a count-bounded arange) to avoid float-stop drift, e.g. `n_bins = int(round((d_max - d_min) / bin_width)); bin_edges = d_min + np.arange(n_bins + 1) * bin_width`. Apply the same fix in both bin_by_depth (line 442) and bin_by_time (line 576). Add a regression test at bin_width=0.7 (depths 0..7) asserting result.sizes['bin']==10 and that the deepest sample lands in the last real bin."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Duplicate time-bin coalescing in make_combo silently drops one file's data and is non-deterministic under np.argsort's default (non-stable) quicksort",
+   "file": "src/odas_tpw/perturb/combo.py",
+   "line": "110, 118, 136",
+   "severity": "nit",
+   "category": "robustness/determinism",
+   "confidence": "medium",
+   "evidence": "For time combos, `order = np.argsort(tk)` then `keep[1:] &= tk[1:] != tk[:-1]` keeps the FIRST of any exact-duplicate timestamp after sorting and discards the whole duplicate row (data values included) via `combo.isel(time=np.flatnonzero(keep))` \u2014 no averaging/merge. Two issues: (1) np.argsort defaults to non-stable quicksort, so when two per-file binned datasets contribute the identical time-bin center, which file's row survives the tie is non-deterministic across numpy versions/pivots (verified: default kind is quicksort). (2) The surviving choice is arbitrary and the dropped row's binned values are silently lost rather than combined. In the standard pipeline each CTD file gets its own grid starting at its own t_min so exact bin-center collisions across files are rare, which keeps real-world impact low \u2014 but overlapping wall-clock windows that happen to align can hit it, and the loss is only logged as a count, not which samples.",
+   "suggested_fix": "Pass `kind='stable'` to np.argsort so tie order is deterministic (`order = np.argsort(tk, kind='stable')`). If silently discarding overlapping-window data is not desired, average/merge duplicate-time rows (e.g. groupby('time').mean()) instead of keep-first, or at minimum document that keep-first is intentional and the data are assumed non-overlapping."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "csd_matrix overlap<0 clamps to nfft//2 (50% overlap) where MATLAB clamps to 0 (no overlap)",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/scor160/spectral.py",
+   "line": "197-200",
+   "severity": "minor",
+   "category": "port-faithfulness",
+   "confidence": "high",
+   "evidence": "csd_matrix lines 197-200: `if overlap < 0 or overlap > 0.9 * nfft: overlap = nfft // 2`. The MATLAB reference csd_matrix_odas.m:132-136 handles the two cases differently: `if over_lap < 0, over_lap = 0; elseif over_lap > n_fft*0.9, over_lap = round(n_fft/2)`. So for a negative overlap MATLAB falls back to 0 (no overlap / non-overlapping segments), while the Python port silently substitutes 50% overlap. Verified numerically: overlap=-1 -> MATLAB 0, Python 128 (for nfft=256). This changes the segment count and the ensemble average. The same divergence exists in csd_matrix_batch (line 364: `if overlap is None or overlap < 0 or overlap > 0.9 * nfft: overlap = nfft // 2`). Low reachability: all internal callers (l3.py:148, l3_chi.py:141, window.py:365, goodman.py:150/238) pass `overlap = nfft // 2`, so a negative overlap never occurs in the pipeline; this only bites an external API user. The over-0.9*nfft branch already matches MATLAB (both -> nfft/2).",
+   "suggested_fix": "Split the clamp to mirror MATLAB exactly: `if overlap is not None and overlap < 0: overlap = 0` then `elif overlap is None or overlap > 0.9 * nfft: overlap = nfft // 2`. Apply the same change in both csd_matrix (line 197) and csd_matrix_batch (line 364)."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "csd_matrix/clean_shear_spec auto-transpose `shape[0] < shape[1]` flips legitimately wide matrices, unlike MATLAB's isrow-only force",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/scor160/spectral.py",
+   "line": "180-181",
+   "severity": "nit",
+   "category": "port-faithfulness",
+   "confidence": "medium",
+   "evidence": "csd_matrix lines 180-181 transpose x whenever `x.shape[0] < x.shape[1]` (and 189-190 for y); goodman.py:138-141 does the same for accel/shear. The MATLAB references only force *row vectors* to columns via isrow() (csd_matrix_odas.m:99-100 `if isrow(x), x = x'`; clean_shear_spec.m:74-75 `if isrow(A), A = A'`), i.e. MATLAB transposes only the 1xN vector case, never a genuine wide MxN matrix with M<N. The Python heuristic silently transposes any input with fewer rows than columns, so an (n_channels, n_samples) matrix where n_samples happens to be < n_channels, or a short window with more channels than samples, would be silently and wrongly transposed instead of raising. Not reachable in the current pipeline (windows always have n_samples >= 2*nfft >> n_channels, and the 2*nfft length check on line 182 catches most misuse after the transpose), so impact is confined to external/edge use.",
+   "suggested_fix": "Restrict the auto-transpose to the true 1-D/row-vector case, matching MATLAB's isrow semantics: only transpose when one dimension is 1 (e.g. `if x.ndim == 2 and x.shape[0] == 1: x = x.T`). For genuine 2-D matrices, require samples-major orientation and raise a clear error if shape[0] < 2*nfft rather than silently transposing."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "despike.py filtfilt uses scipy default padlen (6), not MATLAB convention (3) \u2014 port divergence the codebase already fixed elsewhere",
+   "file": "src/odas_tpw/scor160/despike.py",
+   "line": "109-114",
+   "severity": "minor",
+   "category": "port-faithfulness",
+   "confidence": "high",
+   "evidence": "Both filtfilt calls in _single_despike omit the padlen argument: `dv_hp = np.abs(filtfilt(b_hp, a_hp, dv_padded))` (line 110) and `dv_lp = filtfilt(b_lp, a_lp, dv_hp)` (line 114). scipy defaults to padlen = 3*max(len(a),len(b)) = 6 for these 1st-order Butterworth filters, whereas MATLAB's filtfilt (used by despike.m lines 184, 192) uses padlen = 3*(max(len(a),len(b))-1) = 3. The codebase explicitly documents and corrects exactly this divergence in the SAME subpackage: src/odas_tpw/scor160/l2.py:15-25 `_matlab_padlen()` notes 'scipy defaults to 3*nfilt ... For a 1st-order Butterworth (nfilt=2) this is padlen=3 vs scipy's 6 \u2014 enough to cause ~1% vibration RMS error', and applies it to its own filtfilt calls (l2.py:198,277,283). despike.py was not given the same treatment. Concrete consequence verified: for a length-2 input despike crashes with `ValueError: The length of the input vector x must be greater than padlen, which is 6` (padded length = 2 + 2*2 = 6, not > 6), whereas MATLAB despike runs (padded 6 > 3). Numeric impact on retained signal is negligible in normal operation because despike's own explicit reflect-padding (pad_len ~2048) dominates, but the inconsistency with the rest of the subpackage and the short-array crash are real.",
+   "suggested_fix": "Import/replicate `_matlab_padlen` and pass `padlen=_matlab_padlen(b_hp, a_hp)` and `padlen=_matlab_padlen(b_lp, a_lp)` to the two filtfilt calls so despike matches MATLAB's edge-transient handling and the convention already used by l2.py. This also lets length-2 sections run instead of crashing."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "despike.py silently replaces data with 0.0 when a bad block spans the whole (padded) array \u2014 diverges from MATLAB (NaN) and hides data loss",
+   "file": "src/odas_tpw/scor160/despike.py",
+   "line": "157-166",
+   "severity": "minor",
+   "category": "correctness",
+   "confidence": "high",
+   "evidence": "When both the before-region and after-region of a bad block contain no valid points, the replacement falls through to `replacement = 0.0` (line 164) and writes it into the signal (line 166). MATLAB despike.m unconditionally computes `dv(start:stop) = (start_value + stop_value)/2` where empty regions give `sum([])/length([]) = 0/0 = NaN` (lines 235-245), so MATLAB yields NaN, not 0.0. Verified reachable: `despike(np.array of length 5 with a spike at index 2, fs=512)` marks the entire padded array bad (bad window s\u00b12N_half clamps to [0,len]), hits the 0.0 branch, and returns a signal where the spike location is now exactly 0.0; for length 10 the reported fraction is 1.0 (whole signal replaced). Both MATLAB-NaN and Python-0.0 are pathological, but Python's silent 0.0 is worse because it masks total data loss (a finite, plausible-looking value) and the divergence is a port-faithfulness break. Only reachable when the removal width N exceeds the section length, so unreachable through the L2 pipeline (which enforces min_duration), but reachable via direct API use or a misconfigured large N.",
+   "suggested_fix": "When neither side has valid points, return NaN (to match MATLAB and to make the data loss visible to downstream QC) rather than 0.0; alternatively raise/skip when the bad block covers the entire array. Add a regression test on a short array exercising this branch."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "despike.py raises bare ValueError (no guard) for inputs of length <= 2",
+   "file": "src/odas_tpw/scor160/despike.py",
+   "line": "109-110",
+   "severity": "nit",
+   "category": "robustness",
+   "confidence": "high",
+   "evidence": "For length-1 or length-2 inputs, the first filtfilt call (line 110) raises `ValueError: The length of the input vector x must be greater than padlen, which is 6` because the reflect-padded length (3*L for L < 2*int(fs/smooth)) does not exceed scipy's padlen=6. There is no length guard in `despike()` or `_single_despike()`; the exception propagates uncaught. Tested: lengths 1 and 2 both raise; length 3 works. A degenerate 1-2 sample segment carries no useful information so erroring is defensible, but a bare scipy ValueError is an unhelpful failure mode for a public API function.",
+   "suggested_fix": "Add an early-return guard at the top of `despike()`: if the input is too short to filter (e.g. len(y) < 3, or len < the effective padlen), return the input unchanged with empty spike_indices, n_passes=0, fraction=0.0. Lowering padlen per the first finding also resolves the length-2 case."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "despike.py spike-removal window uses N//2 (floor) where MATLAB uses round(N/2), giving a ~1-sample window difference for odd N",
+   "file": "src/odas_tpw/scor160/despike.py",
+   "line": "93",
+   "severity": "nit",
+   "category": "port-faithfulness",
+   "confidence": "high",
+   "evidence": "Line 93 sets `N_half = N // 2` (integer floor) and the bad window is `good[max(0,s-N_half) : min(len, s+2*N_half+1)]` (lines 131-132). MATLAB despike.m sets local `N = N/2` (float) then `idx = round(max(1,s-N) : min(L, s+2*N))` (lines 166, 217), applying round() to a non-integer half-width. For odd user-supplied N the windows differ by ~1 sample on each side (e.g. N=15: MATLAB removes s-8..s+15 after rounding 7.5; Python removes s-7..s+14). The default N=round(0.04*fs)=20 for fs=512 is even, so the default path matches exactly; callers in l2.py compute `N = round(sh_hw*fs)` which can be odd. Physical impact is sub-sample (one extra/fewer point at a spike boundary) and negligible, but it is a genuine port divergence.",
+   "suggested_fix": "If exact MATLAB parity for odd N is desired, compute the half-width as a float (`N_half = N/2`) and round the resulting boundary indices (`round(s - N_half)`, `round(s + 2*N_half)`) instead of pre-flooring N to N_half. Otherwise, document the floor-vs-round difference. Low priority given the negligible physical effect and the even default."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "gradT_noise / gradT_noise_batch / fp07_tau drop the MATLAB speed>0 validation, yielding negative noise, inf, or NaN for invalid speed",
+   "file": "src/odas_tpw/chi/fp07.py",
+   "line": "492-498 (gradT_noise), 611-616 (gradT_noise_batch), 120-130 (fp07_tau)",
+   "severity": "minor",
+   "category": "robustness",
+   "confidence": "high",
+   "evidence": "The MATLAB reference gradT_noise_odas.m line 157 explicitly validates speed via `val_speed = @(x) isnumeric(x) && all(x) > 0`. The Python port drops this guard. Verified directly: `gradT_noise([10,20], 10.0, -0.7)` returns negative noise `[-2.5e-08, -6.9e-08]` (physically impossible \u2014 a noise PSD must be >=0); `speed=0.0` returns `[inf, inf]`; and `fp07_tau(-0.7, 'lueck')` returns NaN from `(1/speed)**0.5`. These are public API functions (exported in chi/__init__.py and called directly from rsi/window.py and rsi/quick_look.py). The live pipeline happens to be safe because both entry points floor speed upstream (rsi/window.py:100 `W = float(np.mean(np.abs(speed)))` then clamp to SPEED_MIN; chi/l3_chi.py:157 `np.maximum(nan_to_num(nanmean(np.abs(...))), 0.01)`), so this is a latent/defense-in-depth gap, not a live data-corruption bug.",
+   "suggested_fix": "Add a guard at the top of gradT_noise / gradT_noise_batch / fp07_tau, e.g. `speed = np.abs(np.asarray(speed, float)); speed = np.maximum(speed, 1e-3)` (or raise ValueError for speed<=0 to mirror MATLAB), so the standalone library functions cannot emit negative/inf/NaN noise when called outside the guarded pipeline."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Broken-thermistor R_ratio clamp warns in scalar noise_thermchannel but is silent in noise_thermchannel_batch",
+   "file": "src/odas_tpw/chi/fp07.py",
+   "line": "574 (batch) vs 435-441 (scalar)",
+   "severity": "nit",
+   "category": "consistency",
+   "confidence": "high",
+   "evidence": "Scalar noise_thermchannel (lines 435-441) emits `warnings.warn(f\"R_ratio={...} < 0.1 (possible broken thermistor ...); clamped to 1.0\")` when R_ratio < 0.1. The vectorized noise_thermchannel_batch (line 574) performs the identical clamp `R_ratio = np.where(R_ratio < 0.1, 1.0, R_ratio)` but emits NO warning. Since the batch path (chi/l3_chi.py:223 gradT_noise_batch) is the main production pipeline, a broken/abnormal thermistor T_mean that triggers the clamp is silently swallowed there, while the same condition is surfaced in the scalar path. Both produce numerically identical output (verified: scalar==batch at the clamped T), so this is purely a diagnostic-visibility inconsistency, not a numerical defect.",
+   "suggested_fix": "In noise_thermchannel_batch, after the np.where clamp, check `if np.any(R_ratio_pre < 0.1): warnings.warn(...)` reporting how many T_means were clamped, mirroring the scalar version, so broken-thermistor windows are not silently masked in the batch pipeline."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "PFile._read() lacks short-header length guard, raising raw struct.error on truncated files",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/p_file.py",
+   "line": "302-305",
+   "severity": "major",
+   "category": "robustness/error-handling",
+   "confidence": "high",
+   "evidence": "`_read()` does `raw_hdr = f.read(HEADER_BYTES)` then immediately calls `_detect_endian(raw_hdr, ...)` / `_parse_header(...)` with no length check. If the file is shorter than 128 bytes, `struct.unpack_from`/`struct.unpack` raise `struct.error` (NOT ValueError). Reproduced: `PFile` on a 32-byte file raises `struct.error: unpack_from requires a buffer of at least 128 bytes`. Notably, the sibling debug utility `extract_pfile_segment` (lines 128-130) DOES guard this exact case with `if len(raw_hdr) < HEADER_BYTES: raise ValueError(...)`, so the defensive precedent already exists but was not applied to the primary reader. Because `struct.error` is not a subclass of OSError/ValueError/RuntimeError, it escapes every downstream batch handler (see convert_all and cli.py), turning one corrupt file into a whole-batch crash.",
+   "suggested_fix": "After `raw_hdr = f.read(HEADER_BYTES)` in `_read()`, add `if len(raw_hdr) < HEADER_BYTES: raise ValueError(f\"{self.filepath.name}: file too small for header\")`, mirroring extract_pfile_segment. This converts the failure to the ValueError that all callers already catch."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "convert_all aborts entire batch on struct.error from a corrupt .p file",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/convert.py",
+   "line": "605, 616",
+   "severity": "major",
+   "category": "robustness/error-handling",
+   "confidence": "high",
+   "evidence": "Both the serial loop (`except (OSError, ValueError, RuntimeError) as e` at line 605) and the parallel loop (`future.result()` then same except at line 616) are explicitly designed to log-and-continue per file. But `PFile` on a sub-128-byte/truncated header raises `struct.error`, which is a subclass only of `Exception`, not of the three caught types. Reproduced: `convert_all([tiny_corrupt_file], out, jobs=1)` raises `struct.error` and aborts instead of logging and moving on. The CLI `nc` subcommand (cli.py:223) and its wrapper `except (FileNotFoundError, OSError, ValueError)` (cli.py:253) also miss `struct.error`, so `rsi-tpw nc VMP/*.p` crashes with a traceback if any file is corrupt.",
+   "suggested_fix": "Primary fix: guard the short header in PFile._read() (finding above) so a ValueError is raised. Defensively, also broaden the except clauses here to include struct.error, e.g. `except (OSError, ValueError, RuntimeError, struct.error) as e` (import struct), or catch `Exception` in these batch log-and-continue loops."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Corrupt record_size/n_cols produces cryptic 'cannot reshape array' crash instead of a clear diagnostic",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/p_file.py",
+   "line": "361-379",
+   "severity": "minor",
+   "category": "robustness/input-validation",
+   "confidence": "high",
+   "evidence": "`_read()` computes `data_words = (record_size - header_size) // 2`, `scans_per_record = data_words // self.n_cols`, `total_scans = n_records * scans_per_record`, then `raw_flat = records['data'].reshape(total_scans, self.n_cols)`. When a corrupt header makes `data_words` not an integer multiple of `n_cols`, `records['data']` has `n_records*data_words` elements but the target shape requests `total_scans*n_cols` (smaller), so reshape raises `ValueError: cannot reshape array of size N into shape (...)`. Reproduced via a synthetic file with fast_cols=3, record_size=256 (data_words=64, 64%3!=0). Unlike `extract_pfile_segment` (lines 142-148), `_read()` performs NO validation of record_size/header_size/config_size before use, so the failure surfaces as an opaque numpy reshape error rather than 'corrupt record_size'.",
+   "suggested_fix": "Before the reshape, validate header geometry in _read() as extract_pfile_segment already does: check `record_size > header_size >= HEADER_BYTES`, `config_size >= 0`, and that `(record_size - header_size) // 2` is a positive multiple of `n_cols`; raise a descriptive ValueError otherwise."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Zero n_cols or n_rows in a corrupt header causes bare ZeroDivisionError",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/p_file.py",
+   "line": "322-323",
+   "severity": "minor",
+   "category": "robustness/input-validation",
+   "confidence": "high",
+   "evidence": "`self.fs_fast = f_clock / self.n_cols` (line 322) and `self.fs_slow = self.fs_fast / self.n_rows` (line 323) use header-derived `n_cols = fast_cols + slow_cols` and `n_rows` without validating they are non-zero. Reproduced: a synthetic file with fast_cols=slow_cols=0 raises a bare `ZeroDivisionError: division by zero`; likewise n_rows=0. No file path/context is attached, making batch triage hard. extract_pfile_segment validates its size fields but the sampling-rate divisors here are unchecked.",
+   "suggested_fix": "Validate `n_cols >= 1` and `n_rows >= 1` (and `f_clock > 0`) right after reading them, raising `ValueError(f\"{self.filepath.name}: invalid matrix geometry n_cols={n_cols} n_rows={n_rows}\")`."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "GRADT temperature-gradient computation crashes on a single-sample fast channel",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/convert.py",
+   "line": "514-515",
+   "severity": "nit",
+   "category": "robustness/edge-case",
+   "confidence": "high",
+   "evidence": "For each fast FP07 channel: `dTdt = np.diff(T_fast_ch) * pf.fs_fast; dTdt = np.append(dTdt, dTdt[-1])`. If a fast channel has exactly one sample (a degenerate 1-scan file), `np.diff` returns an empty array and `dTdt[-1]` raises `IndexError: index -1 is out of bounds for axis 0 with size 0`. Reproduced in isolation. Reachable only for a pathological ~1-scan file (PFile already enforces n_records>=1, so this needs a single-scan record), hence nit severity.",
+   "suggested_fix": "Guard the degenerate case, e.g. `if T_fast_ch.size < 2: dTdt = np.zeros_like(T_fast_ch)` else compute as now; or skip GRADT when len(t_fast) < 2."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Corrupt matrix row / channel id in config string raises uncaught ValueError during PFile parse",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/p_file.py",
+   "line": "249, 390",
+   "severity": "nit",
+   "category": "robustness/untrusted-input",
+   "confidence": "medium",
+   "evidence": "parse_config line 249 does `[int(x) for x in val.split()]` for matrix rows, and _read line 390 does `[int(x) for x in ch['id'].replace(',',' ').split()]`. A corrupt/garbage config (e.g. `row1 = 1 abc 3`, or `id = 1 foo`) raises a bare `ValueError: invalid literal for int()` that propagates out of PFile.__init__. Reproduced for the matrix case via parse_config('[matrix]\\nrow1 = 1 abc 3\\n'). The config string is embedded untrusted data; the failure is a ValueError (which most batch loops catch) but the message lacks file/line context.",
+   "suggested_fix": "Wrap the int() conversions with a try/except that re-raises a contextual ValueError naming the file and the offending row/id token, so batch processing reports which file/section is malformed."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Joined 32-bit (2-id) channels never get ODAS's signed-by-default correction",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/p_file.py",
+   "line": "450-473, 503-523",
+   "severity": "minor",
+   "category": "port-faithfulness",
+   "confidence": "low",
+   "evidence": "For 2-id channels the port computes `odd_data * 2**16 + even_data` (always unsigned/positive, lines 471-473) and the later sign block (503-523) only ever performs the UNSIGNED wrap; there is no `value >= 2**31 -> value - 2**32` path anywhere in p_file.py (grep confirms no 2**31/2**32 occurrences except timezone/int16). ODAS read_odas.m (lines 388-398) treats every joined 32-bit channel as SIGNED by default unless `sign=unsigned`, applying `ch(ch>=2^31) -= 2^32`. So a 2-id channel of a non-skipped type with the high bit set would differ from ODAS by 2^32. Mitigating fact (why low confidence): the only 2-id channel in the real ARCTERX/SN479 data is JAC_C (type jac_c), which ODAS explicitly SKIPS in its sign loop (read_odas.m:362-368), keeping it unsigned-joined \u2014 matching the Python behavior. The divergence is latent unless a future config declares a signed raw 32-bit channel (as the unit test test_two_id_channel_decoded does with type=raw).",
+   "suggested_fix": "After joining 2-id channels, replicate ODAS default-signed behavior: for joined channels whose type is not in the ODAS skip set (sbt/sbc/jac_c/o2_43f) and not marked sign=unsigned, apply `ch[ch >= 2**31] -= 2**32`. At minimum add a comment documenting the intentional unsigned-only handling and that it is only safe because real 2-id channels are jac_c."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Bottom-crash trim silently skipped when detected crash depth is at/above the segment's first retained slow sample (caller off-by-one, aggravated by PR #78 M4)",
+   "file": "src/odas_tpw/perturb/pipeline.py",
+   "line": "434-438",
+   "severity": "minor",
+   "category": "correctness",
+   "confidence": "high",
+   "evidence": "Caller: `below = np.where(P_seg >= bottom_depth)[0]; candidate = new_s + int(below[0]) - 1; if candidate > new_s: new_e = candidate`. When the crash depth is <= P_slow[new_s] (whole remaining segment lies below the crash), `below[0]==0`, so `candidate = new_s - 1`, which fails the `candidate > new_s` guard. The crash is then NOT trimmed at all \u2014 the entire below-crash segment is retained. Reproduced: P_slow=[40,42,44,46,48], bottom_depth=39 -> below[0]=0 -> candidate=-1 -> no trim. PR #78's M4 change in processing/bottom.py now returns the flagged-bin SAMPLE MEAN (shallower than the bin center it previously returned), which marginally increases the chance that the reported depth falls at/above P_slow[new_s] and triggers this no-trim path. The off-by-one predates PR #78 (introduced in PR #8), but the M4 fix interacts with it.",
+   "suggested_fix": "Handle the `below[0]==0` case explicitly: if the entire segment is at/below the crash depth, the crash starts at or before new_s, so the segment should be dropped or trimmed to new_s (e.g. `candidate = new_s + int(below[0]) - 1; new_e = max(candidate, new_s)` only when below[0]>0, and treat below[0]==0 as 'crash encompasses the whole tail' -> set new_e=new_s or flag the profile). At minimum, log a warning so the un-trimmed-crash case is visible rather than silent."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Bottom-crash sample-mean can under-trim by up to half a bin width when the crash onset is early in the flagged bin",
+   "file": "src/odas_tpw/processing/bottom.py",
+   "line": "135-136",
+   "severity": "minor",
+   "category": "correctness",
+   "confidence": "high",
+   "evidence": "PR #78 M4 returns `float(np.nanmean(sel_depth))` \u2014 the mean depth of the flagged bin's samples. This guarantees the reported depth is <= the deepest sample (fixing the prior 'matches nothing' bug), but when the crash onset is early in the bin the mean lies BELOW the onset, leaving contaminated data un-trimmed. Reproduced with default depth_window=4m: crash onset at 46.2m in deepest bin [46,50), profile reaching 49.5m -> reported depth 47.75m -> 1.55m of crash data (46.2-47.75) kept above the reported depth. The trim is conservative in the over-shoot direction but under-trims relative to the crash onset by up to ~half a bin (~2m at the default window).",
+   "suggested_fix": "This is a fundamental limit of the 4m bin resolution; the mean is a defensible compromise (the prior center/edge had the same granularity plus the catastrophic match-nothing failure). If tighter bottom trimming matters, report the bin's MINIMUM (shallowest) flagged-sample depth, or sub-bin the flagged bin to locate the accel-magnitude rise edge. Otherwise document the ~half-bin under-trim in the docstring so callers can size depth_window accordingly."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "chi variance-correction grid is fixed at 80000 points per call regardless of n_fine, ~40x the prior size",
+   "file": "src/odas_tpw/chi/chi.py",
+   "line": "113",
+   "severity": "nit",
+   "category": "performance",
+   "confidence": "high",
+   "evidence": "PR #78 M1 sets `n = max(int(n_fine), _K_SPAN_KB * _PTS_PER_KB)` = max(2000, 40*2000) = 80000 always. `_variance_correction` is called once per fit/iteration per window (chi.py:261, 440, 588), each building two 80000-element float64 arrays plus a grad_func evaluation. Measured ~0.96 ms/call vs. the prior 2000-point grid. The commit's own verification showed <0.05% error at 2000 points-per-kB; the peak only needs ~few hundred points-per-kB to resolve, so _PTS_PER_KB=2000 over-resolves.",
+   "suggested_fix": "Lower `_PTS_PER_KB` (e.g. 200-500) after confirming accuracy stays <0.1% against the high-n reference, or cap n with an upper bound. The correctness of M1 is fine; this is purely the cost of the chosen resolution."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "top_trim silently skips length-mismatched channels instead of aborting, inconsistent with bottom-crash",
+   "file": "src/odas_tpw/processing/top_trim.py",
+   "line": "81-82",
+   "severity": "nit",
+   "category": "robustness",
+   "confidence": "medium",
+   "evidence": "In compute_trim_depth, a channel whose length != len(depth) is silently `continue`d (line 82), so the trim is computed from whatever channels happen to match. detect_bottom_crash takes the opposite stance \u2014 any length mismatch returns None and aborts the whole detection (bottom.py:82-83). A caller mistake (passing a channel sliced to the wrong rate) thus silently degrades top_trim to fewer channels with no warning, but aborts bottom-crash. Neither is wrong, but the inconsistency can mask a wiring bug.",
+   "suggested_fix": "Make the two helpers consistent: either both log a warning on a length mismatch (preferred \u2014 the caller can see the dropped channel), or both abort. A `logging.warning(\"top_trim: channel %s length %d != depth %d, skipping\", name, len(data), len(depth))` at the skip site would surface the misuse."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "compute_trim_depth returns the SHALLOWEST sub-threshold bin, not the prop-wash exit: a momentarily-quiet top bin causes severe under-trim that leaves the noisy near-surface section in the profile",
+   "file": "src/odas_tpw/processing/top_trim.py",
+   "line": "97-100",
+   "severity": "major",
+   "category": "correctness",
+   "confidence": "medium",
+   "evidence": "The per-channel loop `for i in range(len(std_arr)): if isfinite(std_arr[i]) and std_arr[i] < threshold: trim_depths.append(bin_centers[i]); break` returns the FIRST (shallowest) bin whose std drops below the channel's own quantile threshold. The module docstring (processing/__init__.py:9-10) states the intent is 'depth where shear/acceleration variance settles below a quantile threshold (prop-wash exit)' i.e. the depth past which the profile is settled. But on a real cast the very top bin is frequently momentarily quiet (instrument just released, before the prop-wash / instability ramps up). I verified: with noise injected only over 5-15 m and a quiet bin [0.5,1.5), `compute_trim_depth(depth, {'sh': sh}, dz=1.0, min_depth=1.0, max_depth=50.0, quantile=0.6)` returns 1.0 m, leaving the entire 5-15 m noisy section IN the profile. The caller (perturb/pipeline.py:398 `above = np.where(P_seg >= trim_depth)[0]`) faithfully pushes the start to ~1 m, propagating the under-trim into the trimmed cast. Compounding the problem, `threshold` is the 60th percentile of that channel's OWN std distribution INCLUDING the noisy top bins (line 95), which inflates the threshold and makes an early quiet bin even more likely to qualify. The correct 'exit' semantic is the deepest contiguous exceedance (scan from the top for the LAST bin >= threshold, then trim just below it), or scanning top-down for the first SUSTAINED quiet region.",
+   "suggested_fix": "Change the search to find the prop-wash EXIT, not the first quiet sample: scan from the top and record the deepest bin that still EXCEEDS the threshold, then return the next bin center below it (e.g. `last_noisy = max(i for i in range(len(std_arr)) if isfinite(std_arr[i]) and std_arr[i] >= threshold); trim_depths.append(bin_centers[last_noisy+1])`), guarding the end of the array. Add a regression test with a quiet-top / noisy-middle / quiet-bottom profile asserting the trim depth lands below the noisy section, not at min_depth."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "detect_bottom_crash emits a spurious 'All-NaN slice encountered' RuntimeWarning on the all-NaN-depth path it explicitly intends to handle silently (np.errstate does not suppress nanmax's warning)",
+   "file": "src/odas_tpw/processing/bottom.py",
+   "line": "89-90",
+   "severity": "minor",
+   "category": "correctness",
+   "confidence": "high",
+   "evidence": "Lines 89-92 wrap `max_depth = np.nanmax(depth)` in `with np.errstate(invalid='ignore'):` with the comment 'An all-NaN depth segment makes nanmax NaN ... Bail out cleanly instead of crashing the profile.' But `np.errstate(invalid='ignore')` only suppresses IEEE floating-point error flags; the 'All-NaN slice encountered' message is raised via `warnings.warn(RuntimeWarning)`, which errstate does NOT intercept. I confirmed against the production path: `detect_bottom_crash(np.full(1000, np.nan), {'Ax': np.random.randn(1000)}, fs=512.0)` raises RuntimeWarning under `-W error::RuntimeWarning`, and the existing test `test_all_nan_depth_returns_none` already trips it (pytest reports the warning). All-NaN depth segments are a legitimately-occurring case (e.g. a profile where P_fast is fully masked), so this pollutes logs / can be escalated to an error by callers that promote warnings.",
+   "suggested_fix": "Suppress the actual warning category instead of (or in addition to) the FP errstate, e.g. `with warnings.catch_warnings(): warnings.simplefilter('ignore', RuntimeWarning); max_depth = np.nanmax(depth)` \u2014 or short-circuit before nanmax with `if not np.any(np.isfinite(depth)): return None`. Same pattern should be checked anywhere `np.nanmax/nanmedian` is guarded only by `np.errstate`."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Undeclared `pandas` runtime dependency crashes documented GPS-CSV and hotel-CSV/ISO ingestion on a clean install",
+   "file": "src/odas_tpw/perturb/gps.py",
+   "line": "214 (also hotel.py:177,186,285)",
+   "severity": "major",
+   "category": "packaging/dependency",
+   "confidence": "high",
+   "evidence": "pandas is imported and used unconditionally with no ImportError guard in reachable, config-selected code paths, yet it is absent from pyproject.toml `dependencies` (numpy/netCDF4/scipy/xarray/gsw/ruamel.yaml/matplotlib/cmocean only). gps.py:214 `import pandas as pd; df = pd.read_csv(file)` is hit whenever `gps.source: \"csv\"` (a documented option, config.py:326) via the factory at gps.py:359 (`return GPSFromCSV(config[\"file\"], ...)`). hotel.py:285-287 `_load_csv` does the same `import pandas as pd; df = pd.read_csv(path)` and is dispatched by `load_hotel` for any `.csv` hotel file (hotel.py:268-269), which the perturb pipeline calls at pipeline.py:1884-1886. hotel.py:177 and :186 additionally hard-import pandas for `time_format='iso'` and the `auto`/non-numeric branch via `pd.to_datetime`. On a fresh `pip install microstructure-tpw`, all of these raise `ModuleNotFoundError: No module named 'pandas'` for valid user configurations. Unlike the optional-dep pattern used elsewhere (pyturb/bin.py:62-67 wraps `import gsw` in try/except ImportError with a graceful fallback), none of these pandas imports are guarded.",
+   "suggested_fix": "Add `\"pandas>=2.0,<3\"` to `[project] dependencies` in pyproject.toml (pandas 2.x is the current series and is compatible with the numpy>=2.0 floor). If pandas is meant to be optional (only needed for CSV/ISO hotel and CSV GPS ingestion), instead wrap each `import pandas as pd` in try/except ImportError and raise a clear actionable error (e.g. 'CSV/ISO ingestion requires pandas; install microstructure-tpw[csv]') and declare it under a new optional-dependencies group. Either way the current state (hard import, undeclared) is a defect."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "mypy per-module overrides reference three nonexistent modules (config drift), silently suppressing nothing",
+   "file": "pyproject.toml",
+   "line": "65-67",
+   "severity": "minor",
+   "category": "packaging/dependency",
+   "confidence": "high",
+   "evidence": "The `[[tool.mypy.overrides]]` `module` list includes `odas_tpw.rsi.spectral`, `odas_tpw.rsi.ocean`, and `odas_tpw.rsi.nasmyth` (pyproject.toml:65-67). None of these files exist under src/odas_tpw/rsi/ (verified: `find src/odas_tpw/rsi -name spectral* -o -name ocean* -o -name nasmyth*` returns nothing; no module imports `odas_tpw.rsi.spectral/ocean/nasmyth`; git log shows no deleted predecessors \u2014 the names appear to be leftovers from when these utilities were consolidated into scor160 (`odas_tpw.scor160.spectral/ocean/nasmyth`, which ARE present at lines 77-79). mypy silently ignores overrides for modules it never sees, so the `disable_error_code` block (operator/index/arg-type/etc.) is a no-op for these three entries. The drift is benign at runtime but misleads readers into thinking rsi.spectral/ocean/nasmyth exist and are intentionally lenient, and masks the fact that no real rsi module is getting that suppression by that name. Blame: added 2026-03-13 (b11117ae) and never updated after the move.",
+   "suggested_fix": "Delete the three stale lines `\"odas_tpw.rsi.spectral\",`, `\"odas_tpw.rsi.ocean\",`, `\"odas_tpw.rsi.nasmyth\",` from the override module list. If those error codes are still needed somewhere in rsi, add the correct current module name instead. Consider periodically validating override modules exist (a one-line script in CI) to prevent recurrence."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Deconvolution runs BEFORE the unsigned-wrap step, reversing ODAS order \u2014 corrupts any pre-emphasized unsigned channel (e.g. micro-conductivity C1_dC1) at the int16 wrap point",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/p_file.py",
+   "line": "498 (deconvolution) vs 503-523 (unsigned wrap)",
+   "severity": "major",
+   "category": "port-faithfulness / numerical correctness",
+   "confidence": "medium",
+   "evidence": "ODAS does sign/unsigned correction inside read_odas.m (called at odas_p2mat.m:372) FIRST, then deconvolves (odas_p2mat.m:526+). In read_odas.m the unsigned block runs `ch(ch<0)+=2^16` before any deconvolution. The Python _read() reverses this: _apply_deconvolution() is called at p_file.py:498, while the `sign=='unsigned'` wrap loop runs afterward at p_file.py:503-523. For a pre-emphasized channel whose raw int16 wraps past 32767 (high-amplitude unsigned sensors such as JAC/RSI micro-conductivity C1_dC1 \u2014 which carry diff_gain and are deconvolved), the deconvolve sees a sign discontinuity (e.g. 32767 -> -32768) that ODAS never sees. I reproduced this: deconvolving raw-signed-with-wrap vs unsigned-corrected-monotone data (counts 30000->40000) gives max abs difference 67655 = 6.8x the true signal range, because the wrap step is a huge spurious derivative the deconvolution amplifies. T1/T2/P in ARCTERX are signed so unaffected, but the order is latently wrong for any unsigned pre-emphasized channel.",
+   "suggested_fix": "Move the unsigned-wrap loop (p_file.py:503-523) to run BEFORE _apply_deconvolution() so deconvolve operates on sign-corrected data, matching ODAS read_odas->deconvolve ordering. Verify T1/T2/P (signed, no `sign` field) are unaffected by the reorder."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "parse_config crashes with a bare ValueError on a non-integer matrix entry or channel id in a corrupt/truncated config string",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/p_file.py",
+   "line": "249 (matrix), 390 (channel id)",
+   "severity": "minor",
+   "category": "untrusted-input / error propagation",
+   "confidence": "high",
+   "evidence": "parse_config line 249 does `result['matrix'].append([int(x) for x in val.split()])` and PFile._read line 390 does `ids=[int(x) for x in ch['id'].replace(',',' ').split()]`. A corrupted/garbled config (e.g. record-0 partially overwritten, or `errors='replace'` decode producing non-numeric tokens) raises a bare `ValueError: invalid literal for int() with base 10: 'x'` with no file context. Verified: parse_config on a config with `row01 = 1 2 x 4` crashes with exactly that message. This is distinct from the already-confirmed header-size/n_cols crashes (those are binary-header fields; this is the ASCII config block, a different parse path).",
+   "suggested_fix": "Wrap the int() conversions in try/except ValueError and re-raise with the filename and the offending key/line, e.g. `raise ValueError(f\"{self.filepath.name}: malformed matrix row {key!r}: {val!r}\") from exc`. Same for the channel id parse."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Deconvolve sign-inversion branch (p[0] < -0.5, which negates the entire pre-emphasized signal) has zero test coverage",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/deconvolve.py",
+   "line": "66-68",
+   "severity": "minor",
+   "category": "test gap",
+   "confidence": "high",
+   "evidence": "deconvolve.py:66-68 mutates the signal: `if p[0] < -0.5: X_dX = -X_dX.astype(np.float64)` \u2014 the in-place sign correction ODAS applies for instruments whose derivative circuit is inverted (deconvolve.m:188 `if p(1)<-0.5, X_dX=-X_dX`). tests/test_deconvolve.py exercises only the normal (positive-correlation), X=None, empty, and interpolation paths; grep for `-0.5`/`invert`/`negat`/`p[0]` in the test file returns nothing. A regression here (e.g. dropping the int16->float64 promotion, or flipping the threshold) would silently produce sign-flipped temperature/pressure with no failing test. The promotion guard is load-bearing: -int16(-32768) wraps without it.",
+   "suggested_fix": "Add a test that builds X_dX anti-correlated with X (so polyfit slope < -0.5), includes an int16 -32768 sample, and asserts deconvolve recovers the correct (un-inverted) signal and stays finite \u2014 exercising both the threshold and the .astype(np.float64) promotion."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Deconvolve propagates a single NaN across the entire channel via lfilter with no guard (same failure class as the PR #78 M3 ct_align fix, left uncovered in this path)",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/deconvolve.py",
+   "line": "65 (polyfit), 72/82/95 (lfilter)",
+   "severity": "nit",
+   "category": "numerical robustness / error propagation",
+   "confidence": "medium",
+   "evidence": "If any sample of X or X_dX is non-finite, np.polyfit(X_interp, X_dX, 1) at line 65 returns NaN coefficients and scipy lfilter (lines 72, 82, 95) smears the NaN forward through every subsequent output, silently corrupting the whole deconvolved channel \u2014 exactly the smearing the PR #78 M3 ct_align fix guards against (it added `if not (np.all(np.isfinite(seg_T)) and np.all(np.isfinite(seg_C))): continue`). In the normal PFile flow deconvolve receives raw int16 counts (cannot be NaN), so the live risk is low; but deconvolve() is a public function (imported in tests and callable on float64 hres / hotel-file data), and unlike ct_align it has no finite-input guard. A documented defense-in-depth gap given M3 just established the pattern.",
+   "suggested_fix": "At the top of deconvolve(), after the empty-array check, add `if not np.all(np.isfinite(X_dX)) or (X is not None and not np.all(np.isfinite(X))): warn and return X_dX-shaped NaN (or filter only finite span)`. Mirrors the M3 finite guard so the same poison cannot pass through the deconvolve path."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "csd_matrix accepts a length-1/scalar custom window and silently broadcasts it to a rectangular window (no nfft-length validation)",
+   "file": "src/odas_tpw/scor160/spectral.py",
+   "line": "201, 214, 235, 237",
+   "severity": "minor",
+   "category": "robustness/silent-data-corruption",
+   "confidence": "high",
+   "evidence": "When a caller passes an explicit window, the only handling is `window = ... if window is None else np.asarray(window, dtype=np.float64)` (line 201). There is no length check against nfft, unlike the MATLAB reference csd_matrix_odas.m lines 124-126 which errors if `size(Window,1) ~= n_fft`. The window is then applied via `_detrend_segment(...) * window` (line 214) / `... * window` (lines 235,237). A wrong-length window of length != {nfft,1} raises a numpy broadcast ValueError (verified), but a length-1 or 0-d scalar window broadcasts SILENTLY to a uniform rectangular window of that scale, producing a wrong (un-windowed) spectrum with no error (verified: `csd_matrix(x,None,256,100.0,window=np.array([2.0]))` returns shape (129,2,2) silently). All internal callers pass window=None, so this is an external-API hazard only.",
+   "suggested_fix": "After `window = np.asarray(window, ...)`, validate `if window.ndim != 1 or window.shape[0] != nfft: raise ValueError(f\"window must be a 1-D array of length nfft={nfft}, got shape {window.shape}\")`, matching csd_matrix_odas.m's check. csd_odas/csd_matrix_batch inherit the fix (batch has no window param, so add the same check there only if a window param is ever exposed)."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "csd_matrix_batch omits the 2*nfft minimum-length requirement enforced by csd_matrix and the MATLAB reference (allows statistically-weak single-segment spectra)",
+   "file": "src/odas_tpw/scor160/spectral.py",
+   "line": "371-375",
+   "severity": "minor",
+   "category": "port-faithfulness/robustness",
+   "confidence": "medium",
+   "evidence": "The non-batch csd_matrix enforces `if x.shape[0] < 2*nfft: raise` (line 182-183), matching csd_matrix_odas.m line 110-111 (`size(x,1) < 2*n_fft -> error`). The batch path only checks `n_seg < 1` (line 372), i.e. `diss_length >= nfft` (for 0 overlap) or `>= ~nfft` for 50% overlap \u2014 so a window of length between nfft and 2*nfft yields a single FFT segment and passes, diverging from both csd_matrix and MATLAB which require >=2 segments for statistical significance. clean_shear_spec also requires 2*nfft via the wrapped csd_matrix, but clean_shear_spec_batch does not. In practice l3/l3_chi dissipation windows are many multiples of nfft, so this is not currently triggered; it is a faithfulness/robustness gap, not an active bug.",
+   "suggested_fix": "Add `if diss_length < 2*nfft: raise ValueError(f\"diss_length ({diss_length}) must be at least 2*nfft ({2*nfft})\")` after unpacking the shape (around line 359), mirroring csd_matrix and csd_matrix_odas.m, so the batch and non-batch paths agree on the minimum statistical length."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Cross-spectrum DC/Nyquist halving is symmetric in Python but asymmetric in MATLAB reference (deliberate divergence; 2 edge bins differ)",
+   "file": "src/odas_tpw/scor160/spectral.py",
+   "line": "247-250",
+   "severity": "nit",
+   "category": "port-faithfulness",
+   "confidence": "medium",
+   "evidence": "In the cross case, csd_matrix halves DC and Nyquist for all three matrices (`for arr in (Cxx,Cyy,Cxy): arr[0]/=2; arr[-1]/=2`, lines 247-250). The MATLAB csd_matrix_odas.m halves Cxy at both ends (lines 252-253) but Cxx only at DC (line 257: `Cxx(1)/2`, no Cxx(end)) and Cyy only at Nyquist (line 258: `Cyy(end)/2`, no Cyy(1)). So Python additionally halves Cxx's Nyquist bin and Cyy's DC bin where MATLAB leaves them un-halved. The Python behavior is the physically-correct/Parseval-consistent one and the MATLAB asymmetry is a known RSI inconsistency; these bins (DC of AA, Nyquist of UU in the Goodman path) are excluded from the dissipation integral (l4 qc_idx starts at 1 and integrates well below Nyquist), so the numerical impact is negligible. Flagging only for traceability of the intentional divergence.",
+   "suggested_fix": "No code change needed; the symmetric halving is more correct. Add a one-line comment near lines 247-250 documenting that this deliberately corrects csd_matrix_odas.m's asymmetric Cxx/Cyy edge halving (Cxx(1)/2 and Cyy(end)/2 only), so future port-faithfulness reviews do not 'fix' it back to the MATLAB asymmetry."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Python Kraichnan gradient spectrum uses a different functional form than the in-repo MATLAB reference (and standard literature), biasing kB/epsilon_T/chi on the DEFAULT chi path",
+   "file": "src/odas_tpw/chi/batchelor.py",
+   "line": "131-179 (esp. 177)",
+   "severity": "major",
+   "category": "physics/port-faithfulness",
+   "confidence": "high",
+   "evidence": "Python kraichnan_grad (line 177) computes S = chi*q/(kappa_T*kB**2) * k * exp(-sqrt(6q)*y), a simple-exponential form. The project's own MATLAB reference matlab/kraichnan_gradT.m computes S = chi*q/(3*kappa_T*kB^2) * k * (1 + sqrt(6q)*y) * exp(-sqrt(6q)*y) -- it carries a 1/3 normalization AND a (1 + sqrt(6q)*y) polynomial prefactor that Python omits. Both integrate to chi/(6*kappa_T) (verified numerically: ratios 1.0000), so total-variance chi recovery agrees when kB is exactly known, but the SHAPES differ materially: for kB=100 the Python form peaks at k=17.8 cpm while the standard/MATLAB form peaks at k=28.8 cpm (1.62x), and the shape ratio (py/standard) ranges from ~2.3x at y=0.05 to ~0.25x at y=2.0. Because the MLE/iterative fit infers kB (and hence epsilon_T = (2*pi*kB)^4*nu*kappa_T^2) from the resolved spectral SHAPE, the two implementations fit different kB/epsilon from identical observed spectra. kraichnan is the default spectrum_model at every entry point (rsi/config.py:54, perturb/config.py:119, chi_io.py:46/231, l4_chi.py:142/203), so this affects kB, epsilon_T, the unresolved-variance correction, FOM, and the output spec_batch for BOTH Method 1 and Method 2. git show abb1930 (PR #54 'Scientific-accuracy review') shows the (1+sqrt(6q)*y)/3 form was DELETED in favor of the simple exponential; the (1+...) form is the one used in Steinbuck et al. 2009, Peterson & Fer 2014, and the repo MATLAB code. No test cross-validates the Kraichnan shape against MATLAB (test_chi.py only checks the Python form against itself: integral=chi/6kappa and peak=kB/sqrt(6q) at lines 128-146), so the divergence is unguarded.",
+   "suggested_fix": "Resolve the Python-vs-MATLAB Kraichnan disagreement. The literature-standard 1D temperature-gradient Kraichnan spectrum (Steinbuck et al. 2009 eq. A6; Peterson & Fer 2014; matching matlab/kraichnan_gradT.m) is S(k)=chi*q/(3*kappa_T*kB^2)*k*(1+sqrt(6q)*y)*exp(-sqrt(6q)*y). Restore that form in kraichnan_grad (this is the higher-confidence correction), OR, if the simple-exponential form is intentionally chosen, fix the MATLAB reference to match and document the deviation. Either way add a test_matlab_chi cross-check that asserts kraichnan_grad(k,kB,chi) equals the MATLAB output within tolerance, and update test_chi.py::test_peak_location (line 128) which currently codifies the non-standard peak at kB/sqrt(6q). Verify the Peterson & Fer (2014) eq. 8 claim in docs/chi_mathematics.md:124 against the actual paper before keeping the current form."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Variance-correction returns NaN (no correction) for high-kB / tiny-K_max windows where the old grid produced a finite value -- a behavioral regression from PR #78",
+   "file": "src/odas_tpw/chi/chi.py",
+   "line": "112-127",
+   "severity": "minor",
+   "category": "robustness/edge-case",
+   "confidence": "high",
+   "evidence": "The new kB-scaled grid starts at K_fine[0] = K_upper/n = kB/_PTS_PER_KB = kB/2000. The resolved mask is (K_fine >= K_min) & (K_fine <= min(K_max, K_upper)); when K_max < kB/2000 the mask selects no grid points and the function returns NaN (verified: kB=2240,K_max=0.7 -> nan; kB=4000,K_max=1.0 -> nan). The pre-PR#78 code used K_fine starting at K_upper/n_fine*0.01 (~kB*2.5e-5) so the same case returned a finite correction. Both _iterative_fit (line 591-594) and _chi_from_epsilon (line 262-265) fall back to the UNcorrected chi when correction is NaN, so there is no crash, but the FP07-attenuation + unresolved-variance correction is silently dropped for these degenerate windows, under-estimating chi. Impact is low because these windows resolve essentially no signal (K_max ~ K[1] while kB is huge) and usually fail the min_points>=6 gate earlier, but the silent loss-of-correction is a genuine change from prior behavior.",
+   "suggested_fix": "When K_max < K_fine[0] (i.e. min(K_max,K_upper) falls below the first grid point) but K_max > 0, either prepend a finer sub-grid over [K_min, K_max] for V_resolved, or clamp so at least the first bin near K_max is captured (e.g. ensure the grid's lowest point <= K_max, or compute V_resolved on a dedicated linspace(K_min, K_max, m)). Add a regression test for the high-kB/tiny-K_max case asserting a finite correction."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Stale code comment references non-existent function compute_chi_window",
+   "file": "src/odas_tpw/rsi/chi_io.py",
+   "line": "30, 360",
+   "severity": "nit",
+   "category": "maintainability",
+   "confidence": "high",
+   "evidence": "Line 30 comment '(matches compute_chi_window's fom_limit default)' and line 360 '...mirroring compute_chi_window's Method-1 filter...' reference a function compute_chi_window that no longer exists in the codebase (grep across src/ finds only these two comment references, no definition). The _EPS_FOM_LIMIT=1.15 value the comments justify is correct, but the cross-reference is dangling and will mislead future maintainers verifying the threshold's provenance.",
+   "suggested_fix": "Update both comments to point to the actual current source of the 1.15 epsilon-FOM limit (e.g. the Lueck 2022 FM QC limit cited in chi_io.py:562, or wherever the Method-1 probe filter now lives), or drop the stale function name."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "write_patched_pfile lacks the header_size >= HEADER_BYTES guard, raising a cryptic struct.error on a corrupt/small header_size",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/config_patch.py",
+   "line": "504-528",
+   "severity": "minor",
+   "category": "robustness/error-propagation",
+   "confidence": "high",
+   "evidence": "write_patched_pfile reads header_size = words[_H[\"config_size\"]] etc. but never validates header_size >= HEADER_BYTES, unlike extract_pfile_segment (p_file.py:138 raises 'invalid header_size'). At line 527-528 it does `header_region = bytearray(f.read(header_size))` then `struct.pack_into(f\"{endian}H\", header_region, _H[\"config_size\"]*2, len(new_bytes))`. _H['config_size']*2 = 22, so any advertised header_size in [12,23] yields a buffer shorter than offset 22+2. Reproduced on a crafted .p with header_size=20: write_patched_pfile raises `struct.error: pack_into requires a buffer of at least 24 bytes for packing 2 bytes at offset 22 (actual buffer size is 20)` \u2014 an uncaught, cryptic crash. _cmd_patch_config only catches (FileNotFoundError, FileExistsError, ValueError, OSError) (cli.py:291), so struct.error escapes to a full traceback.",
+   "suggested_fix": "Add the same guard extract_pfile_segment uses, before any seek/pack: `if header_size < HEADER_BYTES: raise ValueError(f\"{src.name}: invalid header_size={header_size}\")`. Apply it in both write_patched_pfile and read_config_text (which shares the same unvalidated read)."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "read_config_text silently returns garbage/truncated config on a corrupt header_size or oversized config_size",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/config_patch.py",
+   "line": "473-485",
+   "severity": "minor",
+   "category": "silent-data-corruption",
+   "confidence": "high",
+   "evidence": "read_config_text does `f.seek(header_size); return f.read(config_size).decode('latin-1')` with no validation of header_size (>= HEADER_BYTES) or that header_size+config_size fits the file. Reproduced: a .p advertising header_size=20 returns 40 bytes of binary header content decoded as 'config' (`'\\x00\\x06(\\x00...'`) with no error. Because patch_files calls read_config_text \u2192 edit_config_text \u2192 write_patched_pfile, a corrupt source can silently flow garbage 'active' config text into the patched output. f.read(config_size) at EOF also returns fewer bytes than requested without error, so an oversized config_size silently yields a truncated config that is then re-emitted as the patched config.",
+   "suggested_fix": "Validate header_size >= HEADER_BYTES and header_size+config_size <= file_size in read_config_text, and verify len(read) == config_size, raising ValueError otherwise. Reuse the same checks as extract_pfile_segment / the _read() loader for consistency."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "write_patched_pfile is not atomic: a mid-copy failure leaves a corrupt, valid-looking patched .p in the final destination",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/config_patch.py",
+   "line": "530-542",
+   "severity": "minor",
+   "category": "io-integrity",
+   "confidence": "high",
+   "evidence": "The function opens the FINAL destination with `open(dst, \"xb\")` and streams the source data in 1 MiB chunks with no try/except and no temp-file-then-rename. (Verified: inspect.getsource shows no 'except'/'unlink'/'os.remove'.) If the source read or destination write fails partway (disk full, I/O error, interrupt) after the header+config have been written, dst is left as a truncated file whose header still advertises the full config and (stale) record_size \u2014 i.e. a file that opens and parses but is missing data records. _cmd_patch_config catches OSError and prints an error (cli.py:291) but never removes the partial dst, so the user is left with a silently-corrupt 'patched' .p. The PR-#78-era hardening (0dc89c7) added the `xb` exclusive-create for TOCTOU but did not make the write atomic against mid-stream failure.",
+   "suggested_fix": "Write to a sibling temp file (e.g. dst.with_suffix(dst.suffix + '.tmp.<pid>') opened 'xb') and os.replace(tmp, dst) only after the full copy and flush/os.fsync succeed; on any exception, unlink the temp file. os.replace is atomic on the same filesystem and preserves the no-overwrite intent if you stat dst first."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "patch_files aborts the whole batch (and leaves the first output written) when two source files share a basename",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/rsi/config_patch.py",
+   "line": "631-657",
+   "severity": "minor",
+   "category": "robustness/usability",
+   "confidence": "high",
+   "evidence": "dst = out_dir / src.name uses only the basename. A glob spanning two directories (e.g. dirA/SAME.p and dirB/SAME.p \u2014 both are independently valid VMP files) maps both inputs to the same out_dir/SAME.p. Reproduced: the first file is written to outX/SAME.p, the second hits the `if dst.exists(): raise FileExistsError(...)` (line 655) / the `xb` create and the entire patch_files run aborts with 'outX/SAME.p already exists; remove it or choose another --out'. The first output is already on disk, the remaining inputs are silently unprocessed, and the error message points at a stale-output cause rather than the real basename collision. _cmd_patch_config converts this to a one-line CLI error with no indication that some files were patched and others skipped.",
+   "suggested_fix": "Detect basename collisions up front (e.g. before the loop, raise if len({s.name for s in srcs}) != len(srcs) with a message naming the colliding paths), or disambiguate outputs by including a parent-dir component / a uniquifying suffix. At minimum, make the per-file write a recoverable error that continues the batch and reports a summary, so one collision does not strand a half-finished run."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "round(v, 10) collapses tiny float config values (epsilon_minimum/chi_minimum = 1e-13) to 0.0, corrupting the version hash and signature provenance",
+   "file": "src/odas_tpw/config_base.py",
+   "line": "38",
+   "severity": "major",
+   "category": "correctness/silent-data-loss",
+   "confidence": "high",
+   "evidence": "_normalize_value uses decimal-place rounding `return round(v, 10)`, which zeroes any value with |v| < ~5e-11. The perturb DEFAULTS set `epsilon.epsilon_minimum = 1e-13` and `chi.chi_minimum = 1e-13` (perturb/config.py:94,125). Verified: `_normalize_value(1e-13)` -> 0.0; `compute_hash('epsilon',{'epsilon_minimum':1e-13})` == `compute_hash('epsilon',{'epsilon_minimum':5e-13})` (both hash as 0.0), and `canonicalize('chi',{})` writes `chi_minimum: 0.0` into the signature JSON. Two consequences: (a) distinct dissipation floors anywhere in [-5e-11,5e-11] (the physically meaningful 1e-13 W/kg and K^2/s range) collapse to one output directory, so changing the floor silently REUSES stale output instead of recomputing; (b) the .params_sha256 signature records `0.0` while write_resolved_config writes the true `1e-13` to config.yaml, so the hash provenance and the human-readable config disagree. No test covers this; test_config.py:68 actually asserts the round(v,10) behavior for a 0.12-magnitude value.",
+   "suggested_fix": "Normalize floats by significant figures, not decimal places, so magnitude is preserved: replace `return round(v, 10)` with `return float(f\"{v:.10e}\")`. Verified this keeps 1e-13 and 5e-13 distinct, still collapses 256.0->256 (caught by the earlier `v == int(v)` branch), and round-trips 0.123456789012345 to 0.12345678901. Add a regression test asserting compute_hash differs for epsilon_minimum 1e-13 vs 5e-13 and that the signature JSON records the true 1e-13."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Sequential output-dir glob `{prefix}_[0-9][0-9]` only matches 2-digit suffixes; once >100 distinct configs accumulate, dir 100 is invisible to the scan, causing reuse-failure and a hard data-corruption collision",
+   "file": "src/odas_tpw/config_base.py",
+   "line": "241",
+   "severity": "major",
+   "category": "correctness/silent-data-corruption",
+   "confidence": "medium",
+   "evidence": "resolve_output_dir scans with `pattern = str(base / f\"{prefix}_[0-9][0-9]\")` (line 241) but creates dirs with `{next_seq:02d}` (line 256), which for next_seq>=100 emits a 3-digit name (e.g. eps_100). The glob `eps_[0-9][0-9]` then never matches eps_100. Verified end-to-end: after pre-populating eps_00..eps_99 with distinct signatures, the 101st distinct config creates eps_100; the 102nd distinct config (fft_length=6000) ALSO resolves to eps_100 (max_seq recomputes to 99 because eps_100 is unseen, next_seq=100 again, mkdir(exist_ok=True) reuses it). The dir then holds TWO conflicting .params_sha256 signatures (5000 and 6000) and two parameter sets' NetCDF outputs co-mingled. Separately, a re-run requesting the exact config stored in eps_100 fails to find it and creates a fresh eps_01, orphaning eps_100's data. Trigger requires >100 distinct configs in one output_root (parameter sweeps over a campaign).",
+   "suggested_fix": "Make the scan glob width-adaptive and anchored: `pattern = str(base / f\"{prefix}_[0-9][0-9]*\")`. Verified it matches eps_00, eps_99, eps_100 while still excluding eps_binned_* and eps_xx; the existing `int(dp.name.split('_')[-1])` parse already handles 3+ digits. Optionally widen the format to a stable width or assert next_seq<=99."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "hash_exclude_keys (intended for parameter keys like 'diagnostics') is incorrectly applied to top-level keys of dynamic-key sections, so an instrument literally named 'diagnostics' is silently dropped from the hash and canonical config",
+   "file": "src/odas_tpw/config_base.py",
+   "line": "173",
+   "severity": "nit",
+   "category": "correctness/edge-case",
+   "confidence": "high",
+   "evidence": "In _canonicalize_section the dynamic-key branch filters `if k not in self.hash_exclude_keys` (line 173) where k is an instrument *name* (serial-number folder key), but hash_exclude_keys={'diagnostics'} is meant to exclude the per-section diagnostics *toggle* in STATIC sections. Verified: `canonicalize('instruments', {'diagnostics': {'exclude_shear_probes': ['sh1']}})` == `canonicalize('instruments', {})` -> the instrument override vanishes from the hash. Likelihood is very low (instrument keys are SN-style names), but the semantic conflation is real.",
+   "suggested_fix": "Do not apply hash_exclude_keys in the dynamic-key branch (instrument names are not parameter keys). Drop the `if k not in self.hash_exclude_keys` filter from the dynamic branch of _canonicalize_section, or scope hash_exclude_keys to static sections only."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "merge_config silently discards ALL overrides for dynamic-key sections (empty {} defaults), losing user data if ever called on 'instruments'",
+   "file": "src/odas_tpw/config_base.py",
+   "line": "152",
+   "severity": "nit",
+   "category": "robustness/latent-footgun",
+   "confidence": "medium",
+   "evidence": "merge_config is unaware of self.dynamic_key_sections: it seeds `merged = dict(self.defaults[section])` (line 152, == {} for instruments) and only keeps keys where `k in merged` (lines 156,161). Verified `merge_config('instruments', {'SN465': {'exclude_shear_probes': ['sh1']}})` returns `{}` \u2014 the entire override is dropped. Not triggered today (perturb consumes instruments via config.get('instruments') and _canonical_instruments_for_hash, never merge_config), but it is a silent-data-loss trap for any future caller and inconsistent with the rest of ConfigManager which special-cases dynamic sections.",
+   "suggested_fix": "Either short-circuit dynamic sections in merge_config (e.g. `if section in self.dynamic_key_sections: return {**(file_values or {}), **(cli_overrides or {})}` with None-filtering) or raise a clear ValueError that merge_config is undefined for dynamic-key sections, so misuse fails loudly instead of returning {}."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Bottom-crash trim keeps the shallow ~half of the spike bin (sample-mean depth still leaves seafloor-impact-contaminated data in epsilon/chi)",
+   "file": "src/odas_tpw/processing/bottom.py",
+   "line": "124-136",
+   "severity": "minor",
+   "category": "oceanographic-correctness",
+   "confidence": "medium",
+   "evidence": "PR #78 (M4) changed the flagged-bin report from the bin geometric center to `np.nanmean(depth[in_range & (idx == i)])` (the bin's sample mean). The caller (perturb/pipeline.py:432-438) trims with `below = np.where(P_seg >= bottom_depth)[0]; candidate = new_s + below[0] - 1`, i.e. it removes only samples at/below that mean depth. The bottom CRASH onset is at the SHALLOWEST edge of the spike bin, not its mean: the deepest bin spans [bins[i], bins[i+1]) and the loop flags it because its vibration std exceeds the threshold over the WHOLE bin. Reporting the sample mean (roughly mid-bin) keeps every spike-bin sample that lies above the mean \u2014 up to ~half a depth_window (~2 m by default) of genuinely impact-contaminated shear/temperature survives into the dissipation estimate, which biases epsilon/chi HIGH near the seafloor. The fix correctly solved the prior 'center below deepest sample' over-read, but swung past the conservative target. The minimum observed depth of the spike bin removes ALL crash-bin samples while staying within observed depths (so it is still robust to the fast/slow rate mismatch the comment cites).",
+   "suggested_fix": "Return the shallowest observed depth of the flagged bin instead of its mean: `sel_depth = depth[in_range & (idx == i)]; return float(np.nanmin(sel_depth))`. This trims the entire spike bin (the crash region) while remaining within the bin's real samples, so the caller's `P_seg >= bottom_depth` removes all impact-contaminated data rather than half of it. (`nanmin` over the same non-empty finite selection is as safe as the current `nanmean`.) If keeping some shallow margin is intentional, document the rationale explicitly in the code comment."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "compute_hash/canonicalize crash on mixed-type dict keys (numeric + string instrument serials, hotel.channels, qc.rules)",
+   "file": "src/odas_tpw/config_base.py",
+   "line": "51, 173",
+   "severity": "major",
+   "category": "edge-case / data-pipeline-abort",
+   "confidence": "high",
+   "evidence": "_normalize_nested (config_base.py:51) does `sorted(v.items())` and the dynamic-key branch of _canonicalize_section (config_base.py:173) does `sorted((params or {}).items())`. Python's sort compares keys directly, so any user-keyed dict containing BOTH a numeric and a string key raises `TypeError: '<' not supported between instances of 'str' and 'int'`. This is reachable from real YAML: an unquoted serial `465:` parses to int while `SN479:` is str. Confirmed: `pc.compute_hash('instruments', {465:{'exclude_shear_probes':['sh2']}, 'SN479':{...}})` raises TypeError; the full pipeline path also crashes \u2014 `pl._upstream_for('diss', {'instruments': {465:..., 'SN479':...}})` raises TypeError via _canonical_instruments_for_hash (pipeline.py:138, same `sorted(...items())`). The crash also fires for static sections with user-keyed nested dicts: `pc.compute_hash('hotel', {'channels': {1:{'name':'a'}, 'T1':{'name':'b'}}})` and `pc.compute_hash('qc', {'rules': {1:{'min':0}, 'r2':{...}}})` both raise. validate_config and load_config accept these configs without complaint (they check key names/structure, not key types), so the failure surfaces deep in resolve_output_dir as an opaque traceback that aborts the entire run. All-int or all-str key sets work; only the MIXED case crashes, making it insidious \u2014 a config that works with one instrument breaks the moment a second, differently-typed serial is added. No existing test covers mixed/numeric instrument keys (all use string 'SN465').",
+   "suggested_fix": "Sort by the string form of the key everywhere a user-keyed dict is canonicalized: config_base.py:51 `{str(k): _normalize_nested(val) for k, val in sorted(v.items(), key=lambda kv: str(kv[0]))}`; config_base.py:173 `sorted((params or {}).items(), key=lambda kv: str(kv[0]))`; and mirror in pipeline.py:138 `sorted((instruments or {}).items(), key=lambda kv: str(kv[0]))`. Optionally also coerce numeric YAML serial keys to str at load time in _validate_instruments and warn on int/str collisions (`465` and `\"465\"`). Add a test with `{465: {...}, 'SN479': {...}}` to test_perturb_config.py covering compute_hash and resolve_output_dir."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Concurrent runs of two different configs against the same output_root can collide into one directory (no lock / no O_EXCL)",
+   "file": "src/odas_tpw/config_base.py",
+   "line": "240-258",
+   "severity": "minor",
+   "category": "concurrency / IO-hazard",
+   "confidence": "medium",
+   "evidence": "resolve_output_dir performs a non-atomic glob->check-signature->mkdir sequence with no file lock (grep for lock/fcntl/flock/O_EXCL in config_base.py, rsi/config.py, perturb/config.py returns nothing) and uses `mkdir(parents=True, exist_ok=True)` (line 257). If two processes run DIFFERENT configs simultaneously against the same `base`, both compute distinct hashes, both see `max_seq=-1` (or the same max), both select the same `{prefix}_NN`, both mkdir it (exist_ok suppresses the error), and both write_signature into it \u2014 so two different parameter signatures and two configs' outputs share one directory. A later reuse scan then matches whichever signature it finds first, silently associating outputs with the wrong config. This requires two simultaneous invocations sharing one output root (e.g. a user running rsi-tpw twice, or two pipeline drivers), so it is niche, but the failure is silent data co-mingling rather than a crash.",
+   "suggested_fix": "Make directory claiming atomic: attempt `new_dir.mkdir(parents=True, exist_ok=False)` in a loop, incrementing next_seq on FileExistsError until a fresh dir is created, then write the signature; or take an advisory lock (filelock / fcntl.flock on a `base/.resolve.lock`) around the scan+create critical section. At minimum, after creating with exist_ok=True, verify the dir contains no foreign `.params_sha256_*` and re-resolve if it does."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "numpy scalar config values pass through normalization unconverted and crash json.dumps in compute_hash",
+   "file": "src/odas_tpw/config_base.py",
+   "line": "21-41",
+   "severity": "nit",
+   "category": "robustness / latent",
+   "confidence": "low",
+   "evidence": "_normalize_value special-cases Python `int`/`float` but `np.int64` is not an instance of Python `int` (confirmed `isinstance(np.int64(256), int)` is False), so it falls through to `return v` (line 41) unchanged; the subsequent `json.dumps` in canonicalize then raises `TypeError: Object of type int64 is not JSON serializable`. np.float64 happens to subclass float and is handled. Currently NOT reachable: every caller (rsi/cli.py:202, perturb/pipeline.py _setup_output_dirs/_upstream_for) feeds `merge_config` output derived from YAML/CLI native types, and a grep of the hashing callers shows no numpy/array/.values values entering. Flagged only as a defensive gap should config params ever be built from data arrays (e.g. a future geospatial auto-fill feeding gps.lat from a numpy array).",
+   "suggested_fix": "In _normalize_value, broaden the numeric checks to cover numpy scalars, e.g. `if isinstance(v, numbers.Integral): return int(v)` and `if isinstance(v, numbers.Real): ...` (import numbers), or explicitly call `.item()` on objects exposing it. This guarantees JSON-serializable output regardless of the scalar's concrete type."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "fp07_model config value is never validated; a typo silently selects an inconsistent double-pole transfer + single-pole (lueck) tau combination",
+   "file": "src/odas_tpw/chi/fp07.py",
+   "line": "82, 177-178",
+   "severity": "minor",
+   "category": "error-handling / silent-corruption",
+   "confidence": "high",
+   "evidence": "Unlike spectrum_model (chi.py:82 raises ValueError on unknown) and the tau model (fp07.py:129 raises ValueError), the fp07_model string ('single_pole'/'double_pole') is never validated anywhere. It is read straight from YAML config (rsi/config.py:50,113) and threaded into THREE else-fallthrough branches that each silently default to the wrong physics on any typo:\n  (1) default_tau_model (fp07.py:82): `return 'goto' if fp07_model=='double_pole' else 'lueck'`\n  (2) fp07_transfer_batch (fp07.py:177-178): `if model=='single_pole': ...single... else: ...double-pole...`\n  (3) l4_chi.py:88: `_h2 = fp07_transfer if l3_chi.fp07_model=='single_pole' else fp07_double_pole`\nvalidate_config (config_base.py:117-133) checks only section/key NAMES, never values, so `fp07_model: single` (or 'singlepole', 'SinglePole') passes validation. I confirmed the concrete consequence: a typo of 'single' yields tau_model='lueck' (speed-dependent single-pole tau) PAIRED WITH the double-pole |H|^2 (verified: H2==fp07_double_pole, H2!=fp07_transfer). That is neither the intended single_pole config NOR the valid double_pole(goto, fixed 3ms) config -- it is a physically inconsistent mix applied silently to the FP07 attenuation correction (H2 enters both the spectra and _variance_correction), biasing chi/kB with no error or warning.",
+   "suggested_fix": "Validate fp07_model against {'single_pole','double_pole'} at the entry point (e.g. raise ValueError in fp07_transfer_batch's else branch like fp07_tau does, and/or add a value check in validate_config / process_l3_chi). Mirror the existing `raise ValueError(f\"Unknown FP07 model: {model!r}\")` pattern so a config typo fails loudly instead of silently mixing tau and transfer-function models."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "_variance_correction leaks a NumPy RuntimeWarning on degenerate kB=inf (np.trapezoid subtract not inside errstate)",
+   "file": "src/odas_tpw/chi/chi.py",
+   "line": "114-117",
+   "severity": "nit",
+   "category": "numerical-stability / robustness",
+   "confidence": "high",
+   "evidence": "batchelor_grad/kraichnan_grad sanitize their own divide/invalid warnings, but in _variance_correction the grid `K_fine = np.arange(1,n+1)*(K_upper/n)` with K_upper=40*kB becomes all-inf when kB=inf, and the subsequent `np.trapezoid(spec_fine, K_fine)` performs an inf-inf subtract that emits 'RuntimeWarning: invalid value encountered in subtract' to the user (confirmed by catching it under simplefilter('error')). The kB>0 guard at chi.py:108 lets +inf through. In the real pipeline this is unreachable (callers guard kB<1 at chi.py:230/_iterative_fit:557 and the MLE kB grid is bounded to ~31623 cpm), so it only fires under direct misuse, but the leaked warning is noise an audited numerical kernel should not produce.",
+   "suggested_fix": "Tighten the guard to `if not (0 < kB < np.inf): return np.nan`, or wrap the K_fine construction + np.trapezoid calls in `with np.errstate(invalid='ignore'):` so a degenerate kB returns NaN cleanly without emitting a warning."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "fp07_transfer_batch silently treats any unrecognized model string as double_pole (no validation), unlike fp07_tau",
+   "file": "src/odas_tpw/chi/fp07.py",
+   "line": "175-178",
+   "severity": "nit",
+   "category": "error-handling",
+   "confidence": "high",
+   "evidence": "`if model == 'single_pole': return single...; else: return double-pole...`. Any value other than the exact string 'single_pole' (e.g. 'double-pole' with a hyphen, 'doublepole', or an empty string) is silently routed to the double-pole branch. fp07_tau (fp07.py:128-129) by contrast raises ValueError on an unknown model. This is the proximate mechanism behind the fp07_model finding above but is independently worth a guard: an internal caller passing a near-miss string gets a different |H|^2 with no diagnostic. Verified: fp07_transfer_batch(F, tau0, model='SinglePole') == fp07_double_pole output.",
+   "suggested_fix": "Make the branch explicit and validating: `if model=='single_pole': ...; elif model=='double_pole': ...; else: raise ValueError(f\"Unknown FP07 model: {model!r}\")`, matching fp07_tau's contract."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "merge: no time-continuity/restarted check \u2014 29 independent ARCTERX casts fuse into one chain (regressed/unfixed audit #1)",
+   "file": "src/odas_tpw/perturb/merge.py",
+   "line": "78-132 (find_mergeable_files); _file_group_key 58-75",
+   "severity": "major",
+   "category": "correctness/port-faithfulness",
+   "confidence": "high",
+   "evidence": "find_mergeable_files chains files purely on (config_hash, endian, record_size, header_size, config_size) + sequential file_number, with NO start-time continuity, gap tolerance, or restarted-flag gate. The 2026-06-19 audit flagged this exact issue at merge.py:99-114 as its top merge Major. Only the sibling header_size/config_size key fix (#55) was applied (test_different_header_size_not_merged exists); the continuity fix was never made. Verified live on the production data: `find_mergeable_files(sorted(Path('VMP').glob('*.p')))` returns ONE 29-file chain (0002..0030). The files are clearly independent casts, not size-limit rollovers: file 0002 starts 2025-01-14 15:30:17 and records 175.7 min, then file 0003 starts 2025-01-15 14:00:18 \u2014 a 22.50-hour gap; 0003->0004 is a 4.01-hour gap; even the tightest pair (0008 records 36.1 min, 0009 starts 40 min later) is non-contiguous. A genuine rollover would have the continuation start ~where the prior file's recording ended (gap ~0). restarted==0 for all files, so the header's restarted flag is NOT a usable continuity discriminator here; the inter-file start-time gap is. With files.merge=true (config files: merge), merge_p_files byte-concatenates all 29 casts into a single .p whose header time/geometry come from cast 0002, destroying per-cast structure and assigning one (wrong) time base to 24h+ of data. Default is merge:false so this is opt-in, hence major not blocker.",
+   "suggested_fix": "Before chaining group[i] onto chain[-1], require recording continuity: compute prev_end = prev.start_time + prev_n_scans/fs_fast and only chain when abs(next.start_time - prev_end) <= a tolerance (e.g. a few seconds / a few records). Compute start_time and duration in _read_merge_info from the header date words + (file_size-first_record)//record_size scans and clock_hz/clock_frac/n_cols (same arithmetic PFile._read uses). Reject the chain link otherwise (start a new chain). Optionally also require restarted==0 on the continuation as a secondary guard, but the time-gap test is the load-bearing one. Add a test mirroring the ARCTERX gap pattern (sequential file_number but multi-hour start gap -> no chain)."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "merge: no record-boundary validation of base or continuation files before splicing",
+   "file": "src/odas_tpw/perturb/merge.py",
+   "line": "224-235 (merge_p_files copy loop)",
+   "severity": "minor",
+   "category": "robustness/correctness",
+   "confidence": "high",
+   "evidence": "merge_p_files copies chain[0] in full via copyfileobj then, for each continuation, seeks past header_size+config_size and copyfileobj's the remainder to EOF. There is no check that (file_size - first_record_size) % record_size == 0 for the base, nor that (file_size - skip) % record_size == 0 for any continuation. If trim is disabled (files.trim:false, which is independently configurable from files.merge) or a non-final file in the chain carries a fractional trailing record, those leftover bytes are appended verbatim and shift every subsequent file's records by a sub-record offset. The merged file's size is then not an integer number of records relative to chain[0]'s geometry; PFile._read only warns about a *trailing* partial record (p_file.py:352) and silently mis-slices the misaligned interior records with no error. _read_merge_info already reads record_size, so the alignment is cheap to assert.",
+   "suggested_fix": "In merge_p_files (or _read_merge_info), validate each member: (file_size - header_size - config_size) % record_size == 0; raise/skip-with-log on violation, or copy only the integer-record prefix (skip + (n_complete*record_size)) of each continuation instead of to EOF. This makes the splice robust to an un-trimmed fractional file regardless of the files.trim setting."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "config: files.merge documented with no warning about the cast-fusion / continuity hazard",
+   "file": "src/odas_tpw/perturb/config.py",
+   "line": "323",
+   "severity": "nit",
+   "category": "documentation",
+   "confidence": "high",
+   "evidence": "The example config (config.py:323) lists `merge: false` with no comment, unlike the adjacent `force_trim` (322) which is annotated. Given that enabling merge on a typical multi-cast deployment directory (where casts share one config hash and carry sequential file_number) currently fuses all casts into one file (see the merge.py continuity finding), an operator has no in-config signal that merge is only safe for true size-limit rollovers.",
+   "suggested_fix": "Annotate line 323, e.g. `merge: false   # only for size-limit rollovers (contiguous in time); fuses casts otherwise`. Best paired with the continuity fix so the flag becomes safe to enable broadly."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "_mle_fit_kB applies the unresolved-variance correction over [0, K_max] but integrates observed variance over [K_fit_low, K_max], biasing chi low for low-epsilon windows",
+   "file": "src/odas_tpw/chi/chi.py",
+   "line": "440-452",
+   "severity": "minor",
+   "category": "physics/units",
+   "confidence": "medium",
+   "evidence": "In _mle_fit_kB the correction is computed as `_variance_correction(kB_best, K_max_fit, speed, tau0, _h2, grad_func)` with the default `K_min=0.0` (chi.py:440-447), so V_resolved integrates the model spectrum from the lowest grid wavenumber (~kB/2000, effectively 0) up to K_max. But `obs_var` is `trapezoid(max(spec_obs[fit_mask]-noise, 0), K[fit_mask])` (chi.py:449-451), whose lower bound is the first wavenumber above 2x noise (`_valid_wavenumber_mask`), i.e. K_fit_low > 0. The correction factor V_total/V_resolved therefore under-counts the missing band: V_resolved includes the model variance in [0, K_fit_low] that obs_var excludes, inflating V_resolved and so under-correcting chi. I quantified the affected band with batchelor_grad: for kB=200 cpm and K_fit_low=1-2 cpm the model variance below K_fit_low is <0.11% (negligible), but for low-epsilon windows (kB=30 cpm) where noise pushes K_fit_low up to 5-10 cpm, the model puts 21-54% of total variance below K_fit_low, so V_resolved is inflated by a comparable factor and chi is under-estimated by up to ~2x in exactly the low-signal windows where the correction matters most. The default chi path (`fit_method='iterative'`, l4_chi.py:204,226) is NOT affected because `_iterative_fit` correctly passes `K_min=k_l_new` matching its `chi_band` band (chi.py:588-589). This locus is reached only via the non-default `fit_method='mle'` path (l4_chi.py:259-270) and as the pre-fit grid-centre in `_chi_from_epsilon` (chi.py:261, where it is harmless because a log-LSQ fit follows). PR #78's grid change did not introduce this; the missing K_min is pre-existing.",
+   "suggested_fix": "Pass the same lower band edge to the correction that obs_var uses, e.g. `K_min = K[fit_mask][0]` (or `K_fit[0]`): `_variance_correction(kB_best, K_max_fit, speed, tau0, _h2, grad_func, K_min=float(K[fit_mask][0]))`. This makes V_resolved span the identical [K_fit_low, K_max] band as obs_var so the ratio purely corrects the truly-unresolved tails plus in-band |H|^2, matching the already-correct _iterative_fit treatment."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "pair_nearest silently drops all pairings when the source-time median spacing is zero (degenerate/duplicate epsilon window times)",
+   "file": "src/odas_tpw/processing/mixing.py",
+   "line": "511-514",
+   "severity": "nit",
+   "category": "edge-case/robustness",
+   "confidence": "medium",
+   "evidence": "When `max_dt is None`, the tolerance defaults to `float(np.median(np.diff(np.sort(src_times))))` (mixing.py:512-513). If more than half of the consecutive source-time differences are zero (e.g. duplicated/clamped window centre times), the median diff is exactly 0.0, so `ok = dt <= max_dt` becomes `dt <= 0` and only destinations landing *exactly* on a source time are paired; every other destination silently gets NaN. I reproduced this: `pair_nearest([5,5,5],[1,2,3],[5.0])` returns `[1.]` only because the destination exactly equals the (duplicated) source time; a destination at 5.1 would yield NaN even though a source sits 0.1 s away. In production `l4.time` are strictly increasing window centres so this is latent, not currently triggered, but it is a silent-total-data-loss failure mode rather than a safe fallback.",
+   "suggested_fix": "Guard the auto tolerance against a non-positive median, e.g. `med = float(np.median(np.diff(np.sort(src_times))))`; `max_dt = med if (len(src_times) > 1 and med > 0) else 30.0` (or some sensible positive floor), so a degenerate cadence falls back to a usable tolerance instead of 0."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "_variance_correction n_fine/_N_FINE floor is dead code (always dominated by _K_SPAN_KB*_PTS_PER_KB)",
+   "file": "src/odas_tpw/chi/chi.py",
+   "line": "113",
+   "severity": "nit",
+   "category": "dead-code/clarity",
+   "confidence": "high",
+   "evidence": "Line 113 computes `n = max(int(n_fine), _K_SPAN_KB * _PTS_PER_KB)`. With the module constants `_N_FINE=2000`, `_K_SPAN_KB=40`, `_PTS_PER_KB=2000`, the second term is 80000, which always dominates the 2000 floor, so the `n_fine` parameter (default `_N_FINE`) and the `int(n_fine)` floor never affect the grid size. The docstring at chi.py:111 states 'n_fine is a floor', which is technically true but never binding and is therefore misleading. This is a cosmetic/clarity issue from the PR #78 grid rework, not a correctness defect (the grid is fine).",
+   "suggested_fix": "Either drop the now-inert `n_fine` parameter and the `max(int(n_fine), ...)` (use `n = _K_SPAN_KB * _PTS_PER_KB` directly), or, if keeping the knob for callers, raise `_N_FINE` to a value that can actually bind and update the docstring; otherwise remove the dead floor to avoid implying tunability that does not exist."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Method-1 epsilon averaging filters the wrong FOM statistic (variance-ratio fom vs Lueck FM); the 1.15 limit is defined for FM, silently dropping good shear probes",
+   "file": "src/odas_tpw/rsi/chi_io.py",
+   "line": "353-366",
+   "severity": "major",
+   "category": "correctness",
+   "confidence": "high",
+   "evidence": "In `_epsilon_ds_to_l4data`, the `n_sh > 1` fallback path reads `fom_arr = _probe_var(\"fom\")` (line 353) and rejects probes with `fom_arr > _EPS_FOM_LIMIT` where `_EPS_FOM_LIMIT = 1.15` (lines 31, 365-366). But the epsilon NetCDF written by `rsi-tpw eps` carries TWO distinct statistics: the variance-ratio `fom` (dissipation.py:455-465: \"observed/Nasmyth variance ratio; values near 1.0 indicate a good fit\", centered on 1.0 and routinely 0.7-1.4 for perfectly good fits) and the MAD-based Lueck (2022) `FM` (dissipation.py:468-481: \"Good fits approach 0; ATOMIX recommends rejecting FM > ~1.15\"). The 1.15 limit belongs to FM, NOT to the variance-ratio fom. Two independent code paths confirm this: (1) the canonical QC path `scor160/l4.py:213-216` sets `fom_for_flags = FM` and explicitly comments \"Flag on the MAD-based FM statistic ... the ATOMIX convention the fom_limit default of 1.15 was written for\"; (2) the interactive viewer `rsi/viewer_base.py:183-186` passes `result.get(\"FMs\")` as the `fom` argument to `compute_chi_window` with the comment \"The 1.15 QC limit is defined for the MAD-based Lueck FM statistic, not the variance-ratio fom.\" `_epsilon_ds_to_l4data` instead applies the 1.15 limit to the variance-ratio `fom`, so any genuinely good shear probe whose variance-ratio fom happens to exceed 1.15 (a common, fully acceptable value) is marked `bad` and dropped from the Method-1 mean. When one of two probes is dropped, `epsi_final` is biased toward the surviving probe; this epsilon sets kB via `batchelor_kB` and the unresolved-variance correction in `_chi_from_epsilon`, so chi is silently biased. This is production-reachable: the rsi pipeline epsilon output has no `epsilonMean`, SN479 has 2 shear probes (n_sh=2>1), so `_compute_chi_one` -> `_epsilon_ds_to_l4data` takes exactly this branch. The dataset also contains the correct `FM` variable, which is read by neither `_probe_var` call.",
+   "suggested_fix": "Filter against the Lueck FM statistic, not the variance-ratio fom. Read `FM` (with fallback to `fom` only when `FM` is absent, mirroring l4.py's `fom_for_flags = FM if num_ffts > 0 else fom`): e.g. `fm_arr = _probe_var(\"FM\"); filt_arr = fm_arr if fm_arr is not None else fom_arr` and use `filt_arr > _EPS_FOM_LIMIT` for the `bad` mask. Update the comment at lines 29-31/359-366 to name FM, and fix `tests/test_chi.py::test_high_fom_probe_excluded_from_method1_mean` (line 885-908) and `test_all_probes_bad_fom_fall_back_to_all_mean` (910-925), which currently encode the same mislabeling by putting the reject value in a `fom` variable; they should populate `FM`."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "visc() Sharqawy branch lacks the negative-viscosity floor that visc35 has, crashing nasmyth on a spurious-cold window mean",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/scor160/ocean.py",
+   "line": "78-91",
+   "severity": "major",
+   "category": "oceanographic-correctness / numerical-stability",
+   "confidence": "high",
+   "evidence": "visc35 was hardened with a positive floor specifically because nasmyth() raises ValueError on nu<=0 (nasmyth.py:36-37 `if nu <= 0: raise ValueError`), and a single spurious-hot sample drove the cubic negative (ocean.py:32-37 comment, test_high_temperature_stays_positive #39). The PARALLEL Sharqawy branch used for all salinity-aware production processing (dissipation.py:218 `visc(l3.temp, sal_window, l3.pres)` when salinity is not None; l3_chi.py:190) has NO such floor. The Sharqawy mu_w denominator 0.157*(T+64.993)^2 - 91.296 crosses zero near T=-41.9 C and mu (and hence nu=mu/rho) goes NEGATIVE below it. Verified: `visc(-42.0, 34, 100) = -1.235e-4` and `visc(-50.0, 34, 100) = -1.84e-5` (both negative). A window whose mean temperature is below ~-42 C (an all-fill-value window, e.g. -99 sentinels, or a frozen/dropped-out thermistor, or a corrupt L3 temp record) feeds a negative nu straight into the per-window epsilon loop (dissipation.py:225 `nu = nu_out[j]`), where nasmyth() then raises ValueError and aborts the whole file. The visc35 floor closed exactly this crash on the hot side; the cold side of the same hazard is left open on the branch that is actually the documented default path (the docstring at ocean.py:50-52 states in-situ P>0 keeps a cast on the Sharqawy branch).",
+   "suggested_fix": "Mirror the visc35 hardening on the Sharqawy branch: floor the returned nu (e.g. `return np.maximum(mu / rho, 1.0e-7)`), and/or clamp/guard the mu_w denominator against the -42 C zero-crossing. A small positive floor well below realistic seawater viscosity leaves the 0-40 C ocean range untouched while preventing the negative-nu nasmyth crash, exactly as the floor on visc35 does. Add a regression test analogous to test_high_temperature_stays_positive but for a spurious-cold sample through the salinity branch."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "buoyancy_freq default lat=0 biases N^2 via gravity (TEOS-10 g(lat)) for non-equatorial data",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/scor160/ocean.py",
+   "line": "118-149",
+   "severity": "minor",
+   "category": "oceanographic-correctness (TEOS-10)",
+   "confidence": "high",
+   "evidence": "buoyancy_freq defaults `lat=0`. gsw.Nsquared scales N^2 by the latitude-dependent gravitational acceleration. Verified N2[0] = 2.4623e-4 at lat=0 vs 2.4854e-4 at lat=70 (a ~0.9% bias at high latitude; ~0.07% at the ARCTERX Saipan latitude ~15N). Unlike the production stratification path in processing/mixing.py (which threads a real `lat` through `_stable_window` -> gsw.Nsquared), this convenience function silently uses the equatorial gravity if the caller omits lat, so any user calling buoyancy_freq directly gets a systematically biased N^2 (and therefore biased Gamma/K_rho if they derive them) with no warning. Note this function currently has NO callers in src/ (only tests), so impact is latent.",
+   "suggested_fix": "Either drop the `lat=0` default and make lat a required argument (forcing the caller to supply the cast latitude, consistent with mixing.profile_stratification), or emit a one-time warning when lat is left at the default. Document that N^2 is gravity-scaled and lat materially affects it away from the equator."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "buoyancy_freq produces inf N^2 on duplicate/non-monotonic input pressure (unguarded dp=0 division)",
+   "file": "/Users/pat/tpw/turbulence/src/odas_tpw/scor160/ocean.py",
+   "line": "146-149",
+   "severity": "minor",
+   "category": "numerical-stability / edge-case",
+   "confidence": "high",
+   "evidence": "buoyancy_freq passes P straight to gsw.Nsquared with no monotonicity/spacing guard. gsw.Nsquared differentiates over dp between adjacent samples; a duplicate pressure (dp=0) yields a division by zero. Verified: with `p=[0,50,50,100]`, `gsw.Nsquared` returns `N2 = [2.464e-4, inf, 1.555e-4]` (a silent inf, not an error). Duplicate or repeated pressures are common in binned/decimated profiles and at turn-around points. The production path (processing/mixing.py `_stable_window`, line 314) guards this with `if p_pair[1]-p_pair[0] < min_dp/2: return nan`, but ocean.buoyancy_freq has no equivalent guard, so any direct caller silently propagates inf into N^2 (and thus Gamma/K_rho). Currently latent (no src callers), but it is a public, exported, tested API.",
+   "suggested_fix": "Before calling gsw.Nsquared, validate that P is strictly monotonic (or at least that no adjacent dp is <= a small floor); raise a clear ValueError or replace the offending N^2 entries with NaN, matching the min_dp guard that mixing.py already applies. At minimum, document the strict-monotonic-pressure precondition in the docstring."
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "ct_align discards an entire profile's lag contribution on a single non-finite C/T sample (over-discard)",
+   "file": "src/odas_tpw/processing/ct_align.py",
+   "line": "83-84",
+   "severity": "minor",
+   "category": "robustness",
+   "confidence": "high",
+   "evidence": "The new guard `if not (np.all(np.isfinite(seg_T)) and np.all(np.isfinite(seg_C))): continue` drops the WHOLE profile segment if even one sample is non-finite. convert_jac_c (channels.py:238) emits NaN only on isolated corrupt samples (v_part==0), so a single bad sample in a multi-thousand-sample cast removes that entire profile from the weighted-median lag estimate. If several profiles each carry one sporadic NaN, the consensus can collapse to too-few/zero usable profiles -> `total<=0` -> `C.copy(), 0.0` (no alignment applied at all). The skip is correct vs. the pre-fix poisoning, but it is coarser than necessary.",
+   "suggested_fix": "Instead of skipping the whole segment, drop/interpolate only the non-finite samples before diff/lfilter (e.g. mask the bad indices in seg_T/seg_C, or linearly interpolate them) so a sporadic corrupt sample doesn't forfeit the entire profile's alignment information. Keep the all-NaN/short-segment skip as the fallback when too few finite samples remain.",
+   "location_detail": "ct_align loop, per-profile finite guard"
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "_load_from_nc leaks the open NetCDF Dataset handle on every error/exception path",
+   "file": "src/odas_tpw/rsi/profile.py",
+   "line": "349-458",
+   "severity": "minor",
+   "category": "io-hazard",
+   "confidence": "high",
+   "evidence": "`ds = nc.Dataset(str(nc_path), \"r\")` (line 349) is only closed at line 458 on the success path. Any exception between open and close -- the `raise ValueError` at lines 385/416/418, an AttributeError from `_get_nc_attr`, or a KeyError on a missing TIME/PRES variable -- returns/propagates without `ds.close()`, leaking the file handle (and on some platforms holding a lock on the file). PR #78's `_nc_filled` additions did not change this, but they sit inside the same unprotected span. With batch/parallel extraction (`_extract_one`) this can accumulate descriptors.",
+   "suggested_fix": "Wrap the body in `try: ... finally: ds.close()` (or use `with nc.Dataset(str(nc_path), \"r\") as ds:`), so the handle is released on every exit path.",
+   "location_detail": "_load_from_nc Dataset lifetime"
+  },
+  {
+   "round": "?",
+   "subsystem": "",
+   "title": "Dead `n_fine`/`_N_FINE` parameter in _variance_correction after the kB-scaled grid rewrite",
+   "file": "src/odas_tpw/chi/chi.py",
+   "line": "92-113",
+   "severity": "nit",
+   "category": "maintainability",
+   "confidence": "high",
+   "evidence": "After PR #78, `n = max(int(n_fine), _K_SPAN_KB * _PTS_PER_KB)` with `_K_SPAN_KB*_PTS_PER_KB = 40*2000 = 80000`, while the only value ever passed for `n_fine` is the default `_N_FINE = 2000`. The floor is therefore never active and `n_fine` no longer controls grid resolution for any caller (chi.py:261, 440, 588 all use the default). A future caller passing a large `n_fine` expecting finer resolution would silently get 80000 points regardless. The docstring line 111 ('``n_fine`` is a floor') documents this, but the parameter is effectively vestigial.",
+   "suggested_fix": "Remove the `n_fine`/`_N_FINE` parameter (or rename to a clearly-internal floor and drop it from the public signature), and set `n = _K_SPAN_KB * _PTS_PER_KB` directly, to avoid the misleading appearance of a tunable resolution knob.",
+   "location_detail": "_variance_correction grid sizing"
+  }
+ ],
+ "verdicts": [
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "major"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "major"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "major"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "major"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "major"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "major"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "major"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "major"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "nit"
+  },
+  {
+   "label": "",
+   "real": true,
+   "sev": "minor"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  },
+  {
+   "label": "",
+   "real": false,
+   "sev": "not-a-bug"
+  }
+ ]
+}
