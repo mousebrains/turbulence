@@ -63,9 +63,12 @@ class TestNormalizeValue:
         assert isinstance(_normalize_value(256.0), int)
 
     def test_fractional_float_rounded(self):
+        # Normalized by significant figures (10 after the lead digit), not decimal
+        # places, so tiny magnitudes (1e-13 minima) survive the config hash (#84).
         val = _normalize_value(0.123456789012345)
         assert isinstance(val, float)
-        assert val == round(0.123456789012345, 10)
+        assert val == float(f"{0.123456789012345:.10e}")
+        assert _normalize_value(1e-13) == 1e-13
 
     def test_string_passthrough(self):
         assert _normalize_value("hello") == "hello"

@@ -133,7 +133,8 @@ def _prune_orphan_named_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
 def _canonical_instruments_for_hash(instruments: dict | None) -> dict[str, Any]:
     """Normalize set-like instrument settings before hashing."""
     normalized: dict[str, Any] = {}
-    for key, settings in sorted((instruments or {}).items()):
+    # Sort by str(key): instrument serials mix int (unquoted `465:`) and str keys.
+    for key, settings in sorted((instruments or {}).items(), key=lambda kv: str(kv[0])):
         if not isinstance(settings, dict):
             normalized[str(key)] = settings
             continue

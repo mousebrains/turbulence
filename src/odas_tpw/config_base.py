@@ -35,7 +35,11 @@ def _normalize_value(v):
             return repr(v)
         if v == int(v):
             return int(v)
-        return round(v, 10)
+        # Normalize by significant figures, not decimal places: round(v, 10)
+        # zeroes any |v| < ~5e-11, collapsing distinct small values (e.g. the
+        # 1e-13 epsilon_minimum/chi_minimum defaults) to 0.0 and corrupting the
+        # config hash / signature.
+        return float(f"{v:.10e}")
     if isinstance(v, str):
         return v
     return v
@@ -48,7 +52,13 @@ def _normalize_nested(v):
     if isinstance(v, tuple):
         return [_normalize_nested(item) for item in v]
     if isinstance(v, dict):
-        return {str(k): _normalize_nested(val) for k, val in sorted(v.items())}
+        # Sort by the STRING form of the key: a user-keyed dict (e.g. instrument
+        # serials) mixing int (unquoted `465:`) and str (`SN479:`) keys would
+        # otherwise raise TypeError comparing str < int.
+        return {
+            str(k): _normalize_nested(val)
+            for k, val in sorted(v.items(), key=lambda kv: str(kv[0]))
+        }
     return _normalize_value(v)
 
 
@@ -170,7 +180,7 @@ class ConfigManager:
         if section in self.dynamic_key_sections:
             return {
                 str(k): _normalize_nested(v)
-                for k, v in sorted((params or {}).items())
+                for k, v in sorted((params or {}).items(), key=lambda kv: str(kv[0]))
                 if k not in self.hash_exclude_keys
             }
 
@@ -238,7 +248,10 @@ class ConfigManager:
         target_hash = self.compute_hash(section, params, upstream=upstream)
 
         max_seq = -1
-        pattern = str(base / f"{prefix}_[0-9][0-9]")
+        # Width-adaptive: the dir format is :02d but rolls to 3+ digits past 99
+        # (eps_100). A fixed [0-9][0-9] glob would miss eps_100 and recompute
+        # max_seq as 99, colliding the 101st+ distinct config back onto eps_100.
+        pattern = str(base / f"{prefix}_[0-9][0-9]*")
         for d in sorted(globmod.glob(pattern)):
             dp = Path(d)
             try:
@@ -252,9 +265,21 @@ class ConfigManager:
             if sig_file.exists():
                 return dp
 
+        # Claim the next sequence ATOMICALLY (exist_ok=False): two concurrent
+        # runs of DIFFERENT configs would otherwise both pick the same
+        # {prefix}_NN and mkdir(exist_ok=True) it, fusing two configs into one
+        # output dir. On a lost race, reuse the dir if its signature matches
+        # ours, else advance to the next sequence.
         next_seq = max_seq + 1
-        new_dir = base / f"{prefix}_{next_seq:02d}"
-        new_dir.mkdir(parents=True, exist_ok=True)
+        while True:
+            new_dir = base / f"{prefix}_{next_seq:02d}"
+            try:
+                new_dir.mkdir(parents=True, exist_ok=False)
+                break
+            except FileExistsError:
+                if (new_dir / f".params_sha256_{target_hash}").exists():
+                    return new_dir
+                next_seq += 1
         self.write_signature(new_dir, section, params, upstream=upstream)
         return new_dir
 
