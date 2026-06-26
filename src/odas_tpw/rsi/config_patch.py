@@ -149,6 +149,15 @@ def _check_keymap(raw: object, ctx: str) -> dict[str, str]:
             raise ValueError(
                 f"{ctx}.{key}: '{RESERVED_KEY}' identifies a channel/section and cannot be set"
             )
+        # The key is written verbatim as ``{key} = {value}``. Validate it as
+        # strictly as the value: a newline/control char would split the
+        # assignment and a ';'/'['/']'/'=' would inject a stanza or comment,
+        # defeating the guarantee that acquisition params are unaddressable.
+        if not key.isascii() or any(ord(c) < 0x20 for c in key) or any(c in key for c in "=;[]"):
+            raise ValueError(
+                f"{ctx}: key {key!r} must be a single line of ASCII text with no "
+                f"'=', ';', '[' or ']' (the key is written verbatim as 'key = value')"
+            )
         out[key] = _check_value(value, f"{ctx}.{key}")
     return out
 

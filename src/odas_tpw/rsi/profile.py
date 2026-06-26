@@ -241,6 +241,14 @@ def extract_profiles(
             var[:] = trimmed.astype(np.float32)
             schema_entry = COMBO_SCHEMA.get(var_name, {})
             for k, v in attrs.items():
+                # netCDF4 forbids setting these reserved attrs after creation
+                # (e.g. _FillValue must be passed to createVariable). An
+                # external/CF/ATOMIX source that declares a _FillValue would
+                # otherwise crash the per-profile write with AttributeError.
+                # The data is already NaN-filled (see _nc_filled), so dropping
+                # _FillValue here is lossless.
+                if k in _UNSETTABLE_NC_ATTRS:
+                    continue
                 if k == "units":
                     v = canonicalize_units(str(v))
                 setattr(var, k, v)
@@ -325,6 +333,13 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         "global_attrs": global_attrs,
         "stem": pf.filepath.stem,
     }
+
+
+# netCDF4 reserved attributes that cannot be set with setattr after a variable
+# is created (they must go through createVariable or are managed internally).
+_UNSETTABLE_NC_ATTRS = frozenset(
+    {"_FillValue", "_Netcdf4Coordinates", "_Netcdf4Dimid", "_Unsigned", "_ChunkSizes"}
+)
 
 
 def _nc_filled(var) -> np.ndarray:

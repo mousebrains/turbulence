@@ -13,9 +13,14 @@ import os
 import shutil
 import struct
 import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS, _detect_endian
+
+# Max gap between a chained file's start and the previous file's computed end
+# for them to count as a genuine size-limit rollover (vs two independent casts).
+_MERGE_GAP_TOL_S = 5.0
 
 
 def _read_merge_info(path: Path) -> dict:
@@ -43,6 +48,29 @@ def _read_merge_info(path: Path) -> dict:
         f.seek(0, 2)
         file_size = f.tell()
 
+    # Recording start time and duration, for the rollover-continuity check.
+    # Both are None when the header lacks a valid date / clock geometry (e.g.
+    # a synthetic or corrupt header) — in that case continuity is treated as
+    # unverifiable and does not block a merge.
+    try:
+        start_dt: datetime | None = datetime(
+            header["year"], header["month"], header["day"],
+            header["hour"], header["minute"], header["second"],
+            header["millisecond"] * 1000,
+        )
+    except (ValueError, OverflowError):
+        start_dt = None
+
+    duration: float | None = None
+    n_cols = header["fast_cols"] + header["slow_cols"]
+    clock = header["clock_hz"] + header["clock_frac"] / 1000.0
+    if start_dt is not None and n_cols > 0 and clock > 0 and record_size > header_size:
+        fs_fast = clock / n_cols
+        n_records = (file_size - (header_size + config_size)) // record_size
+        scans_per_record = ((record_size - header_size) // 2) // n_cols
+        if fs_fast > 0 and n_records > 0 and scans_per_record > 0:
+            duration = (n_records * scans_per_record) / fs_fast
+
     return {
         "path": path,
         "file_number": file_number,
@@ -52,7 +80,24 @@ def _read_merge_info(path: Path) -> dict:
         "record_size": record_size,
         "config_hash": config_hash,
         "file_size": file_size,
+        "start_dt": start_dt,
+        "duration": duration,
     }
+
+
+def _is_continuous(prev: dict, nxt: dict, tol: float = _MERGE_GAP_TOL_S) -> bool:
+    """True if *nxt* starts within *tol* seconds of where *prev* ended.
+
+    A size-limit rollover continuation begins essentially where the previous
+    file ended; two independent casts are minutes/hours apart. When either
+    file's start time or the previous file's duration cannot be computed,
+    continuity is unverifiable and we return True (do not block the merge on
+    missing metadata — the config/geometry/sequence checks still apply).
+    """
+    if prev["start_dt"] is None or nxt["start_dt"] is None or prev["duration"] is None:
+        return True
+    prev_end = prev["start_dt"] + timedelta(seconds=prev["duration"])
+    return bool(abs((nxt["start_dt"] - prev_end).total_seconds()) <= tol)
 
 
 def _file_group_key(info: dict) -> tuple:
@@ -120,7 +165,9 @@ def find_mergeable_files(p_files: list[Path]) -> list[list[Path]]:
         # Build chains of sequential file numbers
         chain = [group[0]]
         for i in range(1, len(group)):
-            if group[i]["file_number"] == chain[-1]["file_number"] + 1:
+            if group[i]["file_number"] == chain[-1]["file_number"] + 1 and _is_continuous(
+                chain[-1], group[i]
+            ):
                 chain.append(group[i])
             else:
                 if len(chain) >= 2:
