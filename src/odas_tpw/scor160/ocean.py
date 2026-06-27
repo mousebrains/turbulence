@@ -88,7 +88,10 @@ def visc(T: npt.ArrayLike, S: npt.ArrayLike = 35, P: npt.ArrayLike = 0) -> np.nd
     CT = gsw.CT_from_t(SA, T, P)
     rho = gsw.rho(SA, CT, P)
 
-    return mu / rho
+    # Floor to a small positive value, mirroring visc35: a spurious-cold window
+    # mean (T well below 0) drives the Sharqawy polynomial negative, and a
+    # negative viscosity crashes the Nasmyth fit downstream.
+    return np.maximum(mu / rho, 1.0e-7)
 
 
 def density(T: npt.ArrayLike, S: npt.ArrayLike, P: npt.ArrayLike) -> np.ndarray:

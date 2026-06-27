@@ -579,10 +579,12 @@ def bin_by_time(
                     continue
                 t_min = float(np.nanmin(t[finite_t]))
                 t_max = float(np.nanmax(t[finite_t]))
-                # Defect fix: integer-first edge count (see bin_by_depth) so a
-                # non-binary-exact bin_width doesn't emit a spurious trailing
-                # bin past t_max via np.arange float-stop drift.
-                n_edges = round(float((t_max - t_min) / bin_width)) + 1
+                # Integer-first edge count via CEIL (not round): avoids the
+                # np.arange float-stop spurious trailing bin while still
+                # guaranteeing the last edge >= t_max, so the final partial bin's
+                # samples are never silently dropped (round() truncated the span
+                # when its fractional part was < 0.5).
+                n_edges = int(np.ceil((t_max - t_min) / bin_width)) + 1
                 bin_edges = t_min + np.arange(n_edges) * bin_width
                 if len(bin_edges) < 2:
                     bin_edges = np.array([t_min, t_min + bin_width])

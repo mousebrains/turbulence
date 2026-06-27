@@ -515,8 +515,10 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
 
     # If time is in days, convert to seconds for consistency
     if "day" in t_fast_units.lower():
-        t_fast = (t_fast - t_fast[0]) * 86400.0
-        t_slow = (t_slow - t_slow[0]) * 86400.0
+        # nanmin reference (not [0]): a _FillValue->NaN at index 0 of the TIME
+        # axis would otherwise poison the whole converted vector.
+        t_fast = (t_fast - np.nanmin(t_fast)) * 86400.0
+        t_slow = (t_slow - np.nanmin(t_slow)) * 86400.0
         t_fast_units = "seconds"
         t_slow_units = "seconds"
 

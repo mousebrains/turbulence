@@ -388,10 +388,16 @@ def _process_profile(
         logger.warning("No valid spectral windows")
         return None
 
+    # Salinity resolved once (measured JAC C/T > user-supplied > 35 PSU) so the
+    # epsilon, chi, and N2 viscosities never disagree within a run. This matches
+    # perturb's chi.salinity:"measured" feeding both process_l3_chi and N2.
+    chi_salinity, measured_sal = _resolve_salinity(l1, salinity)
+
     # Step 4: L4 epsilon
     l4 = process_l4(
         l3,
         temp=l3.temp,
+        salinity=chi_salinity,
         f_AA=f_AA,
         fit_order=fit_order,
         num_ffts=2 * (l3_params.diss_length // l3_params.fft_length) - 1,
@@ -399,11 +405,6 @@ def _process_profile(
         diss_length_s=l3_params.diss_length / l1.fs_fast,
     )
     logger.info(f"Epsilon: {l4.n_spectra} estimates")
-
-    # Salinity for chi viscosity and stratification, resolved once so the two
-    # never disagree: measured (JAC C/T) > user-supplied > 35 PSU. This matches
-    # perturb's chi.salinity:"measured" feeding both process_l3_chi and N2.
-    chi_salinity, measured_sal = _resolve_salinity(l1, salinity)
 
     # Step 5: L2_chi cleaning + chi spectra (if temperature data available)
     l3_chi = None

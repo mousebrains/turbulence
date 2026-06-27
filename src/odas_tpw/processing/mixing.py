@@ -510,6 +510,13 @@ def pair_nearest(
     dst_times = np.asarray(dst_times, dtype=np.float64)
 
     out = np.full(len(dst_times), np.nan)
+    # Only finite source estimates are candidates: a NaN (QC-rejected) epsilon
+    # window must not shadow a valid epsilon at an adjacent window within max_dt
+    # (else Gamma/K_rho are silently dropped while K_T survives).
+    finite = np.isfinite(src_values)
+    if not finite.all():
+        src_times = src_times[finite]
+        src_values = src_values[finite]
     if len(src_times) == 0:
         return out
     if max_dt is None:
