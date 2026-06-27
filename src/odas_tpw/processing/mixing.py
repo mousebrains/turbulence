@@ -536,38 +536,40 @@ def pair_nearest(
     = one median source spacing) rejects pairings with no temporally
     co-located source estimate.
     """
-    src_times = np.asarray(src_times, dtype=np.float64)
-    src_values = np.asarray(src_values, dtype=np.float64)
-    dst_times = np.asarray(dst_times, dtype=np.float64)
+    # Fresh ndarray-typed names (params are npt.ArrayLike; reusing them keeps
+    # mypy's declared type as ArrayLike and flags every later index/len).
+    src_t = np.asarray(src_times, dtype=np.float64)
+    src_v = np.asarray(src_values, dtype=np.float64)
+    dst_t = np.asarray(dst_times, dtype=np.float64)
 
-    out = np.full(len(dst_times), np.nan)
+    out = np.full(len(dst_t), np.nan)
     # Only finite source estimates are candidates: a NaN (QC-rejected) epsilon
     # window must not shadow a valid epsilon at an adjacent window within max_dt
     # (else Gamma/K_rho are silently dropped while K_T survives).
-    finite = np.isfinite(src_values)
+    finite = np.isfinite(src_v)
     if not finite.all():
-        src_times = src_times[finite]
-        src_values = src_values[finite]
-    if len(src_times) == 0:
+        src_t = src_t[finite]
+        src_v = src_v[finite]
+    if len(src_t) == 0:
         return out
     if max_dt is None:
         # Defect (audit): a zero/negative median spacing (duplicate or
         # clamped source times) would collapse the tolerance to <= 0 and
         # silently drop every pairing that is not an exact time match;
         # fall back to a usable positive floor instead.
-        med = float(np.median(np.diff(np.sort(src_times)))) if len(src_times) > 1 else 0.0
+        med = float(np.median(np.diff(np.sort(src_t)))) if len(src_t) > 1 else 0.0
         max_dt = med if med > 0 else 30.0
-    order = np.argsort(src_times)
-    st = src_times[order]
-    sv = src_values[order]
+    order = np.argsort(src_t)
+    st = src_t[order]
+    sv = src_v[order]
     if len(st) == 1:
-        ok = np.abs(st[0] - dst_times) <= max_dt
+        ok = np.abs(st[0] - dst_t) <= max_dt
         out[ok] = sv[0]
         return out
-    idx = np.clip(np.searchsorted(st, dst_times), 1, len(st) - 1)
+    idx = np.clip(np.searchsorted(st, dst_t), 1, len(st) - 1)
     left = idx - 1
-    pick = np.where(np.abs(st[idx] - dst_times) < np.abs(st[left] - dst_times), idx, left)
-    dt = np.abs(st[pick] - dst_times)
+    pick = np.where(np.abs(st[idx] - dst_t) < np.abs(st[left] - dst_t), idx, left)
+    dt = np.abs(st[pick] - dst_t)
     ok = dt <= max_dt
     out[ok] = sv[pick[ok]]
     return out
