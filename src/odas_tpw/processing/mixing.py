@@ -51,14 +51,15 @@ import gsw
 import numpy as np
 import numpy.typing as npt
 
-# Stratification floor [s^-2].  Defect (audit): a 1e-9 s^-2 floor only
-# averts division-by-zero; just above it (N ~ 0.02 cph) the water is
-# effectively unstratified, where Osborn K ~ epsilon/N^2 still diverges
-# to physically meaningless diffusivities (e.g. eps=1e-7, N2=2e-9 ->
-# K_rho ~ 10 m^2/s).  Floor at 1e-7 s^-2 (N ~ 0.26 cph), below which the
-# Osborn estimate is no longer meaningful, so near-floor windows are
-# masked rather than leaked into the product.
-DEFAULT_N2_MIN = 1e-7
+# Stratification floor [s^-2]. Below ~1e-9 s^-2 (N ~ 0.02 cph) the Osborn
+# estimate diverges (division-by-zero guard).
+# Audit #30 (deferred): a 1e-9 floor still admits unphysically inflated K_rho in
+# near-unstratified water; raising the floor to ~1e-7 was tried but it changes
+# scientific output (NaN's real weakly-stratified bins) without benchmark
+# validation and desynced the per-product metadata strings, so it is deferred in
+# favor of a future bounded-K_rho approach. Keeping 1e-9 here keeps the docs in
+# sync and behavior unchanged.
+DEFAULT_N2_MIN = 1e-9
 
 # Background temperature-gradient floor [K/m].  chi/(dT/dz)^2 diverges
 # as the mean gradient vanishes (well-mixed layers); 1e-4 K/m over a
