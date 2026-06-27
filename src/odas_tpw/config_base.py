@@ -159,6 +159,20 @@ class ConfigManager:
         if section not in self.defaults:
             raise ValueError(f"Unknown section: {section!r}")
 
+        # Dynamic-key sections (e.g. 'instruments') have empty {} defaults, so
+        # the `k in merged` gate below would discard every user-supplied key,
+        # silently losing all overrides. There are no fixed parameter keys to
+        # constrain against here: overlay file_values then cli_overrides, with
+        # None-filtering, keeping every user-defined key.
+        if section in self.dynamic_key_sections:
+            merged = dict(self.defaults[section])
+            for layer in (file_values, cli_overrides):
+                if layer:
+                    for k, v in layer.items():
+                        if v is not None:
+                            merged[k] = v
+            return {k: v for k, v in merged.items() if v is not None}
+
         merged = dict(self.defaults[section])
 
         if file_values:
@@ -178,10 +192,14 @@ class ConfigManager:
     def _canonicalize_section(self, section: str, params: dict) -> dict:
         """Canonicalize a single section's parameters into a normalized dict."""
         if section in self.dynamic_key_sections:
+            # Keys here are user-defined names (e.g. instrument serials), NOT
+            # parameter keys, so hash_exclude_keys (meant to drop per-section
+            # toggles like 'diagnostics' in static sections) must NOT be applied:
+            # an instrument literally named 'diagnostics' was silently dropped
+            # from the hash/canonical config.
             return {
                 str(k): _normalize_nested(v)
                 for k, v in sorted((params or {}).items(), key=lambda kv: str(kv[0]))
-                if k not in self.hash_exclude_keys
             }
 
         base = dict(self.defaults[section])

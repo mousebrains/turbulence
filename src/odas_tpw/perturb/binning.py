@@ -439,7 +439,13 @@ def bin_by_depth(
 
     d_min = np.floor(g_min / bin_width) * bin_width
     d_max = np.ceil(g_max / bin_width) * bin_width
-    bin_edges = np.arange(d_min, d_max + bin_width, bin_width)
+    # Defect fix: build edges from an integer bin count instead of
+    # np.arange(d_min, d_max + bin_width, bin_width).  For non-binary-exact
+    # bin_width (e.g. 0.7) np.arange's float accumulation can land the
+    # penultimate edge just below the stop and emit a spurious extra trailing
+    # bin past d_max, stealing the deepest boundary sample (round-then-arange).
+    n_edges = round(float((d_max - d_min) / bin_width)) + 1
+    bin_edges = d_min + np.arange(n_edges) * bin_width
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
     n_bins = len(bin_centers)
 
@@ -573,7 +579,11 @@ def bin_by_time(
                     continue
                 t_min = float(np.nanmin(t[finite_t]))
                 t_max = float(np.nanmax(t[finite_t]))
-                bin_edges = np.arange(t_min, t_max + bin_width, bin_width)
+                # Defect fix: integer-first edge count (see bin_by_depth) so a
+                # non-binary-exact bin_width doesn't emit a spurious trailing
+                # bin past t_max via np.arange float-stop drift.
+                n_edges = round(float((t_max - t_min) / bin_width)) + 1
+                bin_edges = t_min + np.arange(n_edges) * bin_width
                 if len(bin_edges) < 2:
                     bin_edges = np.array([t_min, t_min + bin_width])
                 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0

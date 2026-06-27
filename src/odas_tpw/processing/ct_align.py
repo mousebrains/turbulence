@@ -31,6 +31,31 @@ def shift_edge_hold(x: np.ndarray, shift: int) -> np.ndarray:
     return out
 
 
+def _repair_nonfinite(
+    seg: np.ndarray,
+    min_finite: int = 10,
+    max_nonfinite_frac: float = 0.25,
+) -> np.ndarray | None:
+    """Linearly interpolate isolated non-finite samples in a profile segment.
+
+    Returns a repaired copy, or ``None`` when too little finite data remains
+    (fewer than *min_finite* finite samples, or the non-finite fraction exceeds
+    *max_nonfinite_frac*) to carry useful alignment information. A fully-finite
+    segment is returned unchanged.
+    """
+    finite = np.isfinite(seg)
+    if finite.all():
+        return seg
+    n_finite = int(finite.sum())
+    if n_finite < min_finite or (len(seg) - n_finite) > max_nonfinite_frac * len(seg):
+        return None
+    idx = np.arange(len(seg))
+    repaired = seg.copy()
+    # np.interp clamps to the edge finite values for leading/trailing gaps.
+    repaired[~finite] = np.interp(idx[~finite], idx[finite], seg[finite])
+    return repaired
+
+
 def ct_align(
     T: np.ndarray,
     C: np.ndarray,
@@ -74,14 +99,19 @@ def ct_align(
         if len(seg_T) < 10:
             continue
 
-        # A single non-finite sample (e.g. convert_jac_c emits NaN for corrupt
-        # conductivity) is smeared across the whole segment by the IIR lfilter,
-        # making norm NaN. Since `norm <= 0` is False for NaN, such a profile
-        # would otherwise slip through and drive argmax(|all-NaN|)=0 -> the
-        # most-negative lag (-max_lag_seconds), a maximally-wrong estimate that
-        # corrupts the entire CT alignment. Skip it like a flatlined segment.
-        if not (np.all(np.isfinite(seg_T)) and np.all(np.isfinite(seg_C))):
+        # Audit over-discard fix: convert_jac_c emits NaN for *isolated* corrupt
+        # conductivity samples (v_part==0 bit errors), not whole-segment
+        # corruption. The earlier guard skipped the ENTIRE profile on any single
+        # non-finite sample, silently forfeiting that cast's alignment whenever
+        # every profile carried one transient bad sample. Instead, linearly
+        # interpolate the few non-finite points (so the IIR lfilter cannot smear
+        # a NaN across the segment and drive a maximally-wrong lag), and only
+        # skip when too little finite data remains to carry alignment info.
+        rep_T = _repair_nonfinite(seg_T)
+        rep_C = _repair_nonfinite(seg_C)
+        if rep_T is None or rep_C is None:
             continue
+        seg_T, seg_C = rep_T, rep_C
 
         dx = lfilter(bb, aa, np.diff(seg_T) - np.mean(np.diff(seg_T)))
         dy = lfilter(bb, aa, np.diff(seg_C) - np.mean(np.diff(seg_C)))

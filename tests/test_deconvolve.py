@@ -90,6 +90,75 @@ class TestDeconvolveInterpolation:
         np.testing.assert_allclose(result[trim:], X_true[trim:], rtol=0.10)
 
 
+class TestDeconvolveSignInversion:
+    """Exercise the inverted-derivative-circuit branch (p[0] < -0.5).
+
+    Regression guard for the in-place sign correction at deconvolve.py:66-68,
+    which negates X_dX when the pre-emphasis derivative circuit is wired with
+    inverted polarity (ODAS deconvolve.m:188 ``if p(1)<-0.5, X_dX=-X_dX``).
+    Previously this branch (and its int16 -> float64 promotion guard) had no
+    test coverage; a flipped threshold or a dropped promotion would silently
+    produce sign-flipped output.
+    """
+
+    def test_inverted_signal_recovered(self):
+        """An inverted pre-emphasized signal is un-inverted and recovered.
+
+        With X_dX = -lfilter(...), polyfit(X_true, X_dX) has slope ~-1 (< -0.5),
+        so the branch fires; the recovered signal must match X_true, not its
+        negation.
+        """
+        fs = 512.0
+        diff_gain = 0.006
+        N = 4096
+        t = np.arange(N) / fs
+        X_true = 10.0 + 0.5 * np.sin(2 * np.pi * 2.0 * t)
+
+        f_c = 1.0 / (2.0 * np.pi * diff_gain)
+        b, a = butter(1, f_c / (fs / 2.0))
+        # Inverted derivative circuit: pre-emphasized signal is negated.
+        X_dX_inverted = -lfilter(b, a, X_true)
+
+        # Confirm this input actually triggers the p[0] < -0.5 branch.
+        assert np.polyfit(X_true, X_dX_inverted, 1)[0] < -0.5
+
+        result = deconvolve(X_true, X_dX_inverted, fs, diff_gain)
+
+        assert result.shape == X_dX_inverted.shape
+        assert np.all(np.isfinite(result))
+        trim = int(0.5 * fs)
+        # Recovers X_true (un-inverted), NOT -X_true.
+        np.testing.assert_allclose(result[trim:], X_true[trim:], rtol=0.05)
+
+    def test_int16_negation_promotes_to_float64(self):
+        """The branch promotes int16 to float64 before negating.
+
+        ``-np.int16(-32768)`` wraps back to -32768 (two's-complement overflow),
+        so the ``.astype(np.float64)`` in the negation is load-bearing.  Build
+        an anti-correlated int16 X_dX containing -32768 and assert the result
+        is finite and float-typed (a missing promotion corrupts the extreme
+        sample and poisons the lfilter output).
+        """
+        fs = 512.0
+        diff_gain = 0.006
+        X = np.linspace(0.0, 1000.0, 512)
+        # Anti-correlated int16 signal -> polyfit slope < -0.5 (branch fires).
+        X_dX = (-X).astype(np.int16)
+        X_dX[0] = np.int16(-32768)  # extreme that wraps under a naive negate
+
+        # Sanity: the branch must actually fire for this input.
+        assert np.polyfit(X, X_dX.astype(np.float64), 1)[0] < -0.5
+        # Sanity: naive int16 negate would NOT recover +32768 (the bug guarded).
+        with np.errstate(over="ignore"):
+            assert (-X_dX[0]).astype(np.int16) == np.int16(-32768)
+
+        result = deconvolve(X, X_dX, fs, diff_gain)
+
+        assert result.shape == X_dX.shape
+        assert np.issubdtype(result.dtype, np.floating)
+        assert np.all(np.isfinite(result))
+
+
 # ---------------------------------------------------------------------------
 # _interp_if_required
 # ---------------------------------------------------------------------------

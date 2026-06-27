@@ -191,6 +191,35 @@ class TestCtdBinFile:
             assert var in ds, f"seawater property {var} missing"
         ds.close()
 
+    def test_time_coord_has_no_fillvalue(self, tmp_path):
+        # Regression: CF-1.13 §2.5.1 forbids _FillValue on coordinate
+        # variables. xarray auto-emits one for the float "time" coord unless
+        # encoding={'time': {'_FillValue': None}} is passed to to_netcdf.
+        n = 640
+        t_slow = np.linspace(0, 10, n)
+        channels = {
+            "JAC_T": np.linspace(5.0, 15.0, n),
+            "JAC_C": np.linspace(30.0, 35.0, n),
+            "P": np.linspace(0.0, 100.0, n),
+        }
+        pf = self._make_pf(channels, t_slow=t_slow)
+        gps = GPSFixed(15.0, 145.0)
+
+        out = ctd_bin_file(pf, gps, tmp_path, bin_width=0.5)
+        assert out is not None
+
+        # Inspect the raw on-disk attributes (decode_cf=False keeps _FillValue
+        # in .attrs rather than folding it into .encoding).
+        raw = xr.open_dataset(out, decode_cf=False)
+        try:
+            assert "_FillValue" not in raw["time"].attrs
+            for cname in raw.coords:
+                assert "_FillValue" not in raw[cname].attrs, (
+                    f"_FillValue present on coordinate {cname}"
+                )
+        finally:
+            raw.close()
+
     def test_vmp_aware_pins_descent_and_differs_from_flat(self, tmp_path):
         n = 640
         t_slow = np.linspace(0.0, 10.0, n)

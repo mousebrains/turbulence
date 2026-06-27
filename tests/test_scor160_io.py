@@ -154,6 +154,20 @@ class TestL4Data:
         assert l4.n_spectra == n_spec
         assert l4.n_shear == n_sh
 
+    def test_fom_field_comment_labels_atomix_mad_statistic(self):
+        # Regression: the reference `fom` field is loaded from the benchmark's
+        # FOM variable (the ATOMIX/Lueck 2022 MAD-normalized statistic), NOT the
+        # obs/Nasmyth variance ratio. Guard the inline comment against the old
+        # mislabel so the data-flow documentation stays correct.
+        import inspect
+
+        src = inspect.getsource(L4Data)
+        fom_lines = [ln for ln in src.splitlines() if "fom:" in ln]
+        assert len(fom_lines) == 1
+        comment = fom_lines[0].split("#", 1)[1].lower()
+        assert "mad" in comment
+        assert "nasmyth variance ratio" not in comment
+
 
 # ---------------------------------------------------------------------------
 # read_atomix() tests using synthetic ATOMIX NetCDF fixture

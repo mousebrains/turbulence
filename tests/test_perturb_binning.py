@@ -96,6 +96,38 @@ class TestBinByDepth:
         assert result.sizes["profile"] == 2
         assert result.sizes["bin"] > 0
 
+    def test_non_binary_exact_bin_width_no_spurious_trailing_bin(self, tmp_path):
+        """np.arange edge construction emitted a spurious extra trailing bin for
+        non-binary-exact bin_width (e.g. 0.7), stealing the deepest boundary
+        sample into a near-empty bin past d_max.
+
+        Depths 0..7 m at bin_width=0.7 must yield 10 bins (edges 0,0.7,...,7.0),
+        not 11 (the old np.arange added a spurious [7.0,7.7) bin). The deepest
+        sample at depth==7.0 must land in the last real bin [6.3,7.0).
+        On the OLD code result.sizes['bin']==11 and that sample lands in the
+        spurious bin, so both assertions below fail.
+        """
+        depth = np.arange(0.0, 7.0 + 0.001, 0.1)  # 0.0 .. 7.0 m, includes 7.0
+        # Tag each sample by depth so we can identify where 7.0 landed.
+        T = depth.copy()
+        ds = xr.Dataset(
+            {"T": (["time_slow"], T), "depth": (["time_slow"], depth)},
+            coords={"time_slow": np.arange(len(depth), dtype=float)},
+        )
+        ds.to_netcdf(tmp_path / "prof00.nc")
+        files = sorted(tmp_path.glob("*.nc"))
+
+        result = bin_by_depth(files, bin_width=0.7)
+        assert result.sizes["bin"] == 10
+        # Last bin center is 6.65 (bin [6.3, 7.0)); it must be populated by the
+        # deepest samples including depth==7.0, not left near-empty.
+        centers = result.coords["bin"].values
+        np.testing.assert_allclose(centers[-1], 6.65, atol=1e-9)
+        last_bin_mean = float(np.asarray(result["T"].values)[-1, 0])
+        # Samples in [6.3, 7.0] (inclusive upper edge): mean of 6.3..7.0 by 0.1.
+        in_last = depth[(depth >= 6.3 - 1e-9) & (depth <= 7.0 + 1e-9)]
+        np.testing.assert_allclose(last_bin_mean, float(np.mean(in_last)), atol=1e-9)
+
     def test_per_profile_scalars_propagate(self, tmp_path):
         """Scalar lat/lon/stime/etime on each per-profile NetCDF should
         appear as 1-D ``(profile,)`` vars on the binned output."""

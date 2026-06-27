@@ -5,6 +5,56 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
+# CF attributes (units/long_name/standard_name) for the variables that flow
+# through the rsi L5/L6 products.  Defect: bin_by_depth previously attached only
+# cell_methods, so epsilon/chi/K_T/Gamma/K_rho/P_mean/speed/N2/dTdz reached
+# L5_binned.nc / L6_combined.nc with no units — uncatalogued, non-CF-compliant
+# headline products.  Keyed by the variable names passed from
+# rsi/pipeline.py:bin_by_depth(...); unknown names are left metadata-free.
+_VAR_CF_ATTRS: dict[str, dict[str, str]] = {
+    "epsilon": {
+        "units": "W kg-1",
+        "long_name": "TKE dissipation rate",
+        "standard_name": (
+            "specific_turbulent_kinetic_energy_dissipation_in_sea_water"
+        ),
+    },
+    "chi": {
+        "units": "K2 s-1",
+        "long_name": "thermal variance dissipation rate",
+    },
+    "P_mean": {
+        "units": "dbar",
+        "long_name": "mean pressure within bin",
+        "standard_name": "sea_water_pressure",
+    },
+    "speed": {
+        "units": "m s-1",
+        "long_name": "profiling speed",
+    },
+    "N2": {
+        "units": "s-2",
+        "long_name": "buoyancy frequency squared",
+        "standard_name": "square_of_brunt_vaisala_frequency_in_sea_water",
+    },
+    "dTdz": {
+        "units": "K m-1",
+        "long_name": "background temperature gradient (positive down)",
+    },
+    "K_T": {
+        "units": "m2 s-1",
+        "long_name": "Osborn-Cox eddy diffusivity of heat",
+    },
+    "K_rho": {
+        "units": "m2 s-1",
+        "long_name": "Osborn diapycnal diffusivity",
+    },
+    "Gamma": {
+        "units": "1",
+        "long_name": "mixing coefficient",
+    },
+}
+
 
 def bin_by_depth(
     pres: np.ndarray,
@@ -118,6 +168,11 @@ def bin_by_depth(
             with np.errstate(invalid="ignore", divide="ignore"):
                 binned = np.where(counts_v > 0, sums_v / np.maximum(counts_v, 1), np.nan)
             attrs = {"cell_methods": "depth_bin: mean"}
+
+        # Defect fix: merge CF units/long_name/standard_name so the binned
+        # products are catalogued.  cell_methods stays authoritative; CF attrs
+        # only fill in for known variables (unknown names stay metadata-free).
+        attrs = {**_VAR_CF_ATTRS.get(name, {}), **attrs}
 
         data_vars[name] = (["depth_bin"], binned, attrs)
 

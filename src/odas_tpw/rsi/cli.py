@@ -273,6 +273,8 @@ def _cmd_patch_config(args: argparse.Namespace) -> None:
     """Patch config fields in .p file(s), writing new files."""
     from datetime import datetime
 
+    from ruamel.yaml import YAMLError
+
     from odas_tpw.rsi.config_patch import load_edit_spec, patch_files
 
     files = _resolve_p_files(args.files)
@@ -288,7 +290,9 @@ def _cmd_patch_config(args: argparse.Namespace) -> None:
             batch_cal=args.batch_cal,
             when=when,
         )
-    except (FileNotFoundError, FileExistsError, ValueError, OSError) as e:
+    # YAMLError: load_edit_spec parses with ruamel, whose ParserError/ScannerError
+    # subclass YAMLError (not ValueError/OSError) and otherwise escape as a traceback.
+    except (FileNotFoundError, FileExistsError, ValueError, OSError, YAMLError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 

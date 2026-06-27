@@ -320,7 +320,7 @@ files:
   output_root: "results/"
   trim: true
   force_trim: false         # re-trim even when output is already up to date
-  merge: false
+  merge: false              # size-limit rollovers only; fuses independent casts otherwise (#97)
 
 gps:
   source: "nan"           # nan | fixed | csv | netcdf

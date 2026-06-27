@@ -205,6 +205,57 @@ class TestMergePFiles:
         with pytest.raises(ValueError, match="Empty chain"):
             merge_p_files([], tmp_path / "out")
 
+    def test_fractional_trailing_record_dropped(self, tmp_path):
+        """A continuation with a fractional trailing record must not shift the
+        merged geometry (audit #96). Only complete data records are appended, so
+        the merged size stays an integer number of records relative to the base.
+
+        On the OLD code the leftover bytes were copied verbatim, leaving the
+        merged file mis-aligned (size != base_full + N*record_size)."""
+        record_size, config_size, n = 512, 128, 2
+        f1 = _make_p_file(tmp_path / "SN_0001.p", file_number=1,
+                          record_size=record_size, config_size=config_size,
+                          n_records=n, data_byte=0xAA)
+        f2 = _make_p_file(tmp_path / "SN_0002.p", file_number=2,
+                          record_size=record_size, config_size=config_size,
+                          n_records=n, data_byte=0xBB)
+        # Append a partial (sub-record) tail to the continuation, as an
+        # un-trimmed mid-record rollover would leave behind.
+        with open(f2, "ab") as fh:
+            fh.write(b"\xCC" * (record_size // 3))
+
+        out_dir = tmp_path / "merged"
+        merged = merge_p_files([f1, f2], out_dir)
+
+        first_record = HEADER_BYTES + config_size
+        f1_full = first_record + n * record_size
+        expected = f1_full + n * record_size  # only complete f2 records
+        assert merged.stat().st_size == expected
+        # Merged data region is an integer number of records of base geometry.
+        assert (merged.stat().st_size - first_record) % record_size == 0
+        # No 0xCC partial-record bytes leaked into the merged file.
+        assert b"\xCC" not in merged.read_bytes()
+
+    def test_base_fractional_trailing_record_dropped(self, tmp_path):
+        """A fractional tail on the BASE file is likewise trimmed so the
+        continuation's records stay aligned to base geometry (audit #96)."""
+        record_size, config_size, n = 256, 128, 1
+        f1 = _make_p_file(tmp_path / "B_0001.p", file_number=1,
+                          record_size=record_size, config_size=config_size,
+                          n_records=n, data_byte=0xAA)
+        f2 = _make_p_file(tmp_path / "B_0002.p", file_number=2,
+                          record_size=record_size, config_size=config_size,
+                          n_records=n, data_byte=0xBB)
+        with open(f1, "ab") as fh:
+            fh.write(b"\xCC" * 17)  # sub-record junk on the base
+
+        merged = merge_p_files([f1, f2], tmp_path / "merged")
+
+        first_record = HEADER_BYTES + config_size
+        expected = (first_record + n * record_size) + n * record_size
+        assert merged.stat().st_size == expected
+        assert b"\xCC" not in merged.read_bytes()
+
 
 # ---------------------------------------------------------------------------
 # Discovery edge cases

@@ -97,6 +97,14 @@ def combine_profiles(
     )
     result.coords["profile"].attrs["long_name"] = "profile number"
 
+    # CF/ACDD global attrs: the L6 headline product previously advertised no
+    # convention conformance (empty .attrs), unlike every other writer, so a
+    # CF/ACDD consumer could not validate it. L6 is a set of profiles on a
+    # shared depth grid -> CF §9 featureType "profile" (audit: missing
+    # Conventions/featureType on combined product).
+    result.attrs["Conventions"] = "CF-1.13, ACDD-1.3"
+    result.attrs["featureType"] = "profile"
+
     # Attach metadata
     if profile_metadata:
         for i, meta in enumerate(profile_metadata):

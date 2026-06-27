@@ -22,6 +22,24 @@ from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS, _detect_endian
 # for them to count as a genuine size-limit rollover (vs two independent casts).
 _MERGE_GAP_TOL_S = 5.0
 
+# I/O chunk size for the bounded record-aligned copy in merge_p_files.
+_COPY_CHUNK = 1 << 20  # 1 MiB
+
+
+def _copy_n(in_f, out_f, length: int) -> None:
+    """Copy exactly *length* bytes from *in_f* to *out_f* (record-aligned copy).
+
+    Unlike shutil.copyfileobj, this stops after *length* bytes so a fractional
+    trailing record in the source is never appended (audit #96).
+    """
+    remaining = length
+    while remaining > 0:
+        chunk = in_f.read(min(_COPY_CHUNK, remaining))
+        if not chunk:
+            break  # source shorter than expected; copy what exists
+        out_f.write(chunk)
+        remaining -= len(chunk)
+
 
 def _read_merge_info(path: Path) -> dict:
     """Read header fields needed for merge decisions."""
@@ -269,17 +287,30 @@ def merge_p_files(
     fd, tmp = tempfile.mkstemp(dir=str(dest.parent), prefix=".merge-", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as out_f:
-            # Copy entire first file
-            with open(chain[0], "rb") as in_f:
-                shutil.copyfileobj(in_f, out_f)
-
-            # Append data records from subsequent files
-            for p in chain[1:]:
+            # Defect (audit #96): the splice previously copied each member to
+            # EOF, so a fractional trailing record (e.g. when files.trim is off
+            # or a non-final file rolled over mid-record) was appended verbatim
+            # and shifted every subsequent file's records by a sub-record
+            # offset, silently mis-slicing the merged file's interior records.
+            # Copy only the integer-record prefix of every member so the
+            # merged geometry stays record-aligned regardless of trim setting.
+            for i, p in enumerate(chain):
                 info = _read_merge_info(p)
-                skip = info["header_size"] + info["config_size"]
+                data_start = info["header_size"] + info["config_size"]
+                record_size = info["record_size"]
+                if record_size <= 0:
+                    raise ValueError(f"{p.name}: invalid record_size {record_size}")
+                data_bytes = info["file_size"] - data_start
+                if data_bytes < 0:
+                    raise ValueError(f"{p.name}: file shorter than header+config")
+                n_complete = data_bytes // record_size
+                # Base file (i == 0) keeps its header+config + complete records;
+                # continuations contribute only their complete data records.
+                copy_start = 0 if i == 0 else data_start
+                copy_len = (data_start - copy_start) + n_complete * record_size
                 with open(p, "rb") as in_f:
-                    in_f.seek(skip)
-                    shutil.copyfileobj(in_f, out_f)
+                    in_f.seek(copy_start)
+                    _copy_n(in_f, out_f, copy_len)
         os.replace(tmp, dest)
     except BaseException:
         with contextlib.suppress(OSError):

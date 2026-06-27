@@ -68,6 +68,15 @@ def detect_bottom_crash(
     -------
     float or None
         Bottom depth [m], or None if no crash detected.
+
+    Notes
+    -----
+    The reported depth is the *mean* depth of the samples in the flagged
+    ``depth_window``-wide bin. When the crash onset falls early in that bin the
+    mean lies below the onset, so up to roughly half a bin width (~``depth_window
+    / 2``) of contaminated data can remain *above* the reported depth and be left
+    un-trimmed. This is a fundamental limit of the bin resolution; size
+    ``depth_window`` accordingly if tighter bottom trimming is required.
     """
     depth = np.asarray(depth_fast, dtype=np.float64)
 
@@ -86,10 +95,18 @@ def detect_bottom_crash(
     assert mag_sq is not None  # unreachable: guarded by `if not vibration_channels`
     accel_mag = np.sqrt(mag_sq)
 
-    with np.errstate(invalid="ignore"):
-        max_depth = np.nanmax(depth)
     # An all-NaN depth segment makes nanmax NaN; np.arange(..., NaN, ...) below
     # then raises. Bail out cleanly instead of crashing the profile.
+    #
+    # Audit fix: short-circuit BEFORE nanmax on an all-NaN depth. np.errstate
+    # only governs IEEE FP flags (invalid/divide/...), NOT numpy's Python-level
+    # "All-NaN slice encountered" RuntimeWarning — so the old errstate guard let
+    # that warning escape (spurious log noise; promotable to an error by callers
+    # that filter warnings). Guarding on np.isfinite up front avoids the warning
+    # and the NaN max_depth entirely.
+    if not np.any(np.isfinite(depth)):
+        return None
+    max_depth = np.nanmax(depth)
     if not np.isfinite(max_depth) or max_depth < depth_minimum:
         return None
 

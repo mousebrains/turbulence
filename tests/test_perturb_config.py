@@ -159,6 +159,18 @@ class TestInstrumentsSection:
         config = load_config(tmp_path / "config.yaml")
         assert config["instruments"]["SN465"]["exclude_shear_probes"] == ["sh2"]
 
+    def test_instrument_named_like_hash_exclude_key_is_not_dropped(self):
+        # Regression: hash_exclude_keys ({'diagnostics'}) is meant for per-section
+        # toggle keys in STATIC sections; it must NOT be applied to dynamic-key
+        # (instrument-name) sections. An instrument literally named 'diagnostics'
+        # was silently dropped from the hash/canonical config.
+        with_override = canonicalize(
+            "instruments", {"diagnostics": {"exclude_shear_probes": ["sh1"]}}
+        )
+        empty = canonicalize("instruments", {})
+        assert with_override != empty
+        assert "diagnostics" in json.loads(with_override)["instruments"]
+
 
 # ---------------------------------------------------------------------------
 # Merge (perturb-specific)
@@ -174,6 +186,27 @@ class TestMergeConfigPerturb:
     def test_diagnostics_preserved_in_merge(self):
         m = merge_config("profiles", file_values={"diagnostics": True})
         assert m["diagnostics"] is True
+
+    def test_dynamic_section_overrides_not_discarded(self):
+        # Regression: merge_config seeded `merged = defaults[section]` ({} for
+        # instruments) and kept only keys already present, silently dropping
+        # ALL user-supplied overrides for dynamic-key sections.
+        m = merge_config(
+            "instruments",
+            file_values={"SN465": {"exclude_shear_probes": ["sh1"]}},
+        )
+        assert m == {"SN465": {"exclude_shear_probes": ["sh1"]}}
+
+    def test_dynamic_section_cli_overrides_file_and_filters_none(self):
+        m = merge_config(
+            "instruments",
+            file_values={"SN465": {"exclude_shear_probes": ["sh1"]}},
+            cli_overrides={
+                "SN465": {"exclude_shear_probes": ["sh2"]},
+                "SN479": None,  # None layer values must not be retained
+            },
+        )
+        assert m == {"SN465": {"exclude_shear_probes": ["sh2"]}}
 
 
 # ---------------------------------------------------------------------------
@@ -222,3 +255,14 @@ class TestGenerateTemplatePerturb:
         p = generate_template(tmp_path / "config.yaml")
         text = p.read_text()
         assert "diagnostics:" in text
+
+    def test_merge_annotated_with_cast_fusion_warning(self, tmp_path):
+        # Regression: files.merge was undocumented, giving operators no in-config
+        # signal that enabling it fuses sequential casts into one file.
+        p = generate_template(tmp_path / "config.yaml")
+        text = p.read_text()
+        merge_line = next(
+            line for line in text.splitlines() if line.strip().startswith("merge:")
+        )
+        assert "#" in merge_line, "merge line must carry a warning comment"
+        assert "fuses" in merge_line.lower()

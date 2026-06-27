@@ -26,9 +26,11 @@ import xarray as xr
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
 
-# Max acceptable epsilon FOM for including a probe in the Method-1 mean
-# (matches compute_chi_window's fom_limit default).
-_EPS_FOM_LIMIT = 1.15
+# Max acceptable epsilon FM (Lueck 2022 MAD-based reject statistic; good fits
+# approach 0, ATOMIX rejects FM > ~1.15) for including a probe in the Method-1
+# mean. Named for FM, not the variance-ratio `fom` (centered on 1.0) it gates
+# only as a fallback when FM is absent. (matches compute_chi_window's default.)
+_EPS_FM_LIMIT = 1.15
 
 
 def _compute_chi(
@@ -369,7 +371,7 @@ def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
         # chi. Where a window has no good probe, fall back to the all-probe mean.
         eps_for_mean = eps_vals.astype(np.float64, copy=True)
         if fom_arr is not None and fom_arr.shape == eps_for_mean.shape:
-            bad = ~np.isfinite(fom_arr) | (fom_arr > _EPS_FOM_LIMIT)
+            bad = ~np.isfinite(fom_arr) | (fom_arr > _EPS_FM_LIMIT)
             eps_for_mean = np.where(bad, np.nan, eps_for_mean)
         # catch_warnings (not just errstate): an all-NaN window makes nanmean
         # emit a "Mean of empty slice" RuntimeWarning via warnings.warn, which
@@ -869,9 +871,16 @@ def load_epsilon_dataset(
     ]
     for d in candidates:
         files = sorted(d.glob(f"{stem}_prof*_eps.nc"))
-        single = d / f"{stem}_eps.nc"
-        if single.exists():
-            files.insert(0, single)
+        # The single-profile (`{stem}_eps.nc`) and per-profile
+        # (`{stem}_prof00N_eps.nc`) naming schemes are mutually exclusive within
+        # one run. Only fall back to the single-profile file when NO per-profile
+        # file exists: concatenating both (e.g. when a re-run with different
+        # trim/direction left stale products of both forms in the dir) would
+        # double-count epsilon times and silently bias the Method-1 match.
+        if not files:
+            single = d / f"{stem}_eps.nc"
+            if single.exists():
+                files = [single]
         if not files:
             continue
         if len(files) == 1:

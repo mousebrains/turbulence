@@ -195,7 +195,10 @@ class L4Data:
     epsi: np.ndarray  # (N_SHEAR, N_SPECTRA), epsilon per probe
     epsi_final: np.ndarray  # (N_SPECTRA,), combined epsilon
     epsi_flags: np.ndarray  # (N_SHEAR, N_SPECTRA), QC flags
-    fom: np.ndarray  # (N_SHEAR, N_SPECTRA), figure of merit (obs/Nasmyth variance ratio)
+    # NOTE: loaded from the benchmark's FOM variable = ATOMIX/Lueck (2022)
+    # MAD-normalized statistic (MAD / 97.5-percentile of expected MAD), NOT the
+    # obs/Nasmyth variance-ratio fom computed in our L4 pipeline.
+    fom: np.ndarray  # (N_SHEAR, N_SPECTRA), ATOMIX FOM (Lueck 2022 MAD-normalized statistic)
     mad: np.ndarray  # (N_SHEAR, N_SPECTRA), mean absolute deviation
     kmax: np.ndarray  # (N_SHEAR, N_SPECTRA), upper integration limit
     method: np.ndarray  # (N_SHEAR, N_SPECTRA), 0=variance, 1=ISR

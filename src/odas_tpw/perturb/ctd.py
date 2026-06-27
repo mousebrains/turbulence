@@ -416,5 +416,10 @@ def ctd_bin_file(
 
     stem = output_stem or pf.filepath.stem
     out_path = output_dir / f"{stem}.nc"
-    ds.to_netcdf(out_path)
+    # Strip the auto-applied _FillValue from coordinate variables (notably the
+    # float "time" coord) — CF-1.13 §2.5.1 forbids _FillValue on coordinates.
+    # xarray emits one by default for floats; clear it via encoding, mirroring
+    # make_combo. Without this the per-file ctd/*.nc products are non-compliant.
+    encoding: dict = {cname: {"_FillValue": None} for cname in ds.coords}
+    ds.to_netcdf(out_path, encoding=encoding)
     return out_path
