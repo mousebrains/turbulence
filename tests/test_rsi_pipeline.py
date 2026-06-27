@@ -359,6 +359,61 @@ class TestResolveSalinity:
 
 
 # ---------------------------------------------------------------------------
+# _epsilon_window_salinity — measured per-sample salinity -> per-window for L4
+# ---------------------------------------------------------------------------
+
+
+class TestEpsilonWindowSalinity:
+    def test_measured_series_interpolated_onto_windows(self):
+        """A measured per-sample series becomes per-window (size n_spectra)."""
+        from odas_tpw.rsi.pipeline import _epsilon_window_salinity
+
+        sample_time = np.linspace(0.0, 100.0, 1000)
+        sal = np.linspace(34.0, 35.0, 1000)  # rises linearly with time
+        win_time = np.array([25.0, 50.0, 75.0])
+        out = _epsilon_window_salinity(sal, sample_time, 1000, win_time, 3)
+        assert isinstance(out, np.ndarray) and out.size == 3
+        # Linear series -> exact linear interpolation at the window centers,
+        # and NOT collapsed to the profile mean (~34.5 everywhere).
+        np.testing.assert_allclose(out, [34.25, 34.5, 34.75], rtol=1e-6)
+        assert not np.allclose(out, np.nanmean(sal))
+
+    def test_nan_samples_excluded_from_interp(self):
+        from odas_tpw.rsi.pipeline import _epsilon_window_salinity
+
+        sample_time = np.linspace(0.0, 100.0, 1000)
+        sal = np.linspace(34.0, 35.0, 1000)
+        sal[400:600] = np.nan  # a gap straddling the middle window
+        win_time = np.array([50.0])
+        out = _epsilon_window_salinity(sal, sample_time, 1000, win_time, 1)
+        assert np.isfinite(out).all()
+        np.testing.assert_allclose(out, [34.5], atol=1e-3)
+
+    def test_scalar_none_and_mismatched_passthrough(self):
+        """Non per-sample inputs are returned unchanged (process_l4 handles them)."""
+        from odas_tpw.rsi.pipeline import _epsilon_window_salinity
+
+        st = np.linspace(0.0, 1.0, 100)
+        wt = np.array([0.5])
+        assert _epsilon_window_salinity(34.5, st, 100, wt, 1) == 34.5
+        assert _epsilon_window_salinity(None, st, 100, wt, 1) is None
+        # Already per-window (size != n_time) passes through to process_l4.
+        per_win = np.array([34.0, 35.0])
+        np.testing.assert_array_equal(
+            _epsilon_window_salinity(per_win, st, 100, wt, 1), per_win
+        )
+
+    def test_all_nan_series_passthrough(self):
+        from odas_tpw.rsi.pipeline import _epsilon_window_salinity
+
+        st = np.linspace(0.0, 1.0, 100)
+        sal = np.full(100, np.nan)
+        wt = np.array([0.5])
+        out = _epsilon_window_salinity(sal, st, 100, wt, 1)
+        assert out is sal  # unchanged; process_l4 applies its own 35-PSU fallback
+
+
+# ---------------------------------------------------------------------------
 # _epsilon_hp_cut — shear high-pass scales with the FFT length (match perturb)
 # ---------------------------------------------------------------------------
 

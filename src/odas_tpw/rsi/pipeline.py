@@ -118,6 +118,31 @@ def _resolve_salinity(
     return salinity, False
 
 
+def _epsilon_window_salinity(
+    salinity: float | np.ndarray | None,
+    sample_time: np.ndarray,
+    n_time: int,
+    win_time: np.ndarray,
+    n_spectra: int,
+) -> float | np.ndarray | None:
+    """Per-window salinity for L4 epsilon viscosity.
+
+    ``process_l4`` accepts only per-window salinity (size ``n_spectra``); it
+    collapses any other-sized array to its nanmean.  A *measured* per-sample
+    series (size ``n_time``) would therefore drive epsilon viscosity with a
+    constant profile mean while chi and N2 use the per-window measured series —
+    so the three viscosities would not share a salinity basis.  Interpolate the
+    per-sample series onto the window center times so they do.  Scalars,
+    ``None``, and already-per-window arrays pass through unchanged.
+    """
+    if not (isinstance(salinity, np.ndarray) and salinity.size == n_time and n_spectra > 0):
+        return salinity
+    finite = np.isfinite(salinity)
+    if not finite.any():
+        return salinity
+    return np.asarray(np.interp(win_time, sample_time[finite], salinity[finite]), dtype=np.float64)
+
+
 def run_pipeline(
     p_files: list[Path],
     output_dir: Path,
@@ -392,12 +417,19 @@ def _process_profile(
     # epsilon, chi, and N2 viscosities never disagree within a run. This matches
     # perturb's chi.salinity:"measured" feeding both process_l3_chi and N2.
     chi_salinity, measured_sal = _resolve_salinity(l1, salinity)
+    # chi (process_l3_chi) and N2 (sorted_stratification) consume the per-sample
+    # series with timestamps; process_l4 only takes per-window salinity, so a
+    # measured series is interpolated onto the L3 window times here — otherwise
+    # epsilon would silently use the profile mean while chi/N2 use per-window.
+    eps_salinity = _epsilon_window_salinity(
+        chi_salinity, l1.time, l1.n_time, l3.time, l3.n_spectra
+    )
 
     # Step 4: L4 epsilon
     l4 = process_l4(
         l3,
         temp=l3.temp,
-        salinity=chi_salinity,
+        salinity=eps_salinity,
         f_AA=f_AA,
         fit_order=fit_order,
         num_ffts=2 * (l3_params.diss_length // l3_params.fft_length) - 1,
