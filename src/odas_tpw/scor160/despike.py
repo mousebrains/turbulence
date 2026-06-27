@@ -4,11 +4,24 @@
 Port of despike.m from the ODAS MATLAB library.
 """
 
+import warnings
 from typing import NamedTuple
 
 import numpy as np
 import numpy.typing as npt
 from scipy.signal import butter, filtfilt
+
+
+def _matlab_padlen(b: np.ndarray, a: np.ndarray) -> int:
+    """Return the ``filtfilt`` *padlen* matching MATLAB's convention.
+
+    MATLAB pads with ``3*(nfilt-1)`` reflected samples where
+    ``nfilt = max(len(a), len(b))``; scipy defaults to ``3*nfilt``.
+    For a 1st-order Butterworth (nfilt=2) this is padlen=3 vs scipy's 6.
+    Replicated locally (rather than imported from ``l2``) to avoid a
+    circular import, mirroring ``l2._matlab_padlen``.
+    """
+    return 3 * (max(len(a), len(b)) - 1)
 
 
 class DespikeResult(NamedTuple):
@@ -65,6 +78,18 @@ def despike(
         N = round(0.04 * fs)
 
     y = np.array(signal_in, dtype=np.float64).ravel()
+    # Non-finite samples propagate through filtfilt and turn the entire
+    # detection ratio into NaN, silently disabling ALL spike removal so
+    # genuine spikes survive. ODAS removes/interpolates NaNs upstream; this
+    # port does not, so at minimum warn to make the silent no-op observable.
+    if y.size and not np.all(np.isfinite(y)):
+        warnings.warn(
+            "despike: input contains non-finite samples; filtfilt will "
+            "propagate them and spike detection is disabled for this array. "
+            "Remove or interpolate NaN/Inf before despiking.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     original = y.copy()
     all_spikes: set[int] = set()
     n_passes = 0
@@ -90,6 +115,11 @@ def _single_despike(
     dv: np.ndarray, thresh: float, smooth: float, fs: float, N: int
 ) -> tuple[np.ndarray, np.ndarray]:
     """Single pass of spike detection and removal."""
+    # Port note: MATLAB despike.m uses a float half-width (N/2) and rounds the
+    # resulting window boundaries, so for odd N its bad-window can differ from
+    # this floored N//2 by ~1 sample on each side. The physical effect is
+    # sub-sample and the default N=round(0.04*fs)=20 (fs=512) is even, so the
+    # default path matches MATLAB exactly; documented rather than changed.
     N_half = N // 2
     dv = dv.copy()
     length = len(dv)
@@ -105,13 +135,21 @@ def _single_despike(
     )
     rng = slice(pad_len, pad_len + length)
 
-    # High-pass filter at 0.5 Hz, rectify
+    # High-pass filter at 0.5 Hz, rectify.
+    # Use MATLAB's padlen (3) not scipy's default (6): restores port
+    # faithfulness and avoids a ValueError crash on short (e.g. length-2,
+    # padded-to-6) sections where scipy requires len(x) > padlen. Guard the
+    # still-too-short remainder (e.g. length-1, padded-to-3) so despike
+    # degrades to a no-op instead of crashing.
     b_hp, a_hp = butter(1, 0.5 / (fs / 2), btype="high")
-    dv_hp = np.abs(filtfilt(b_hp, a_hp, dv_padded))
+    scipy_min_len = _matlab_padlen(b_hp, a_hp) + 1
+    if len(dv_padded) < scipy_min_len:
+        return dv, np.array([], dtype=np.intp)
+    dv_hp = np.abs(filtfilt(b_hp, a_hp, dv_padded, padlen=_matlab_padlen(b_hp, a_hp)))
 
     # Smooth envelope
     b_lp, a_lp = butter(1, smooth / (fs / 2))
-    dv_lp = filtfilt(b_lp, a_lp, dv_hp)
+    dv_lp = filtfilt(b_lp, a_lp, dv_hp, padlen=_matlab_padlen(b_lp, a_lp))
 
     # Detect spikes (avoid divide-by-zero)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -154,14 +192,13 @@ def _single_despike(
         after_idx = np.arange(e_bad, min(len(good), e_bad + R))
         after_vals = dv_padded[after_idx[good[after_idx]]] if len(after_idx) > 0 else np.array([])
 
-        if len(before_vals) > 0 and len(after_vals) > 0:
-            replacement = (np.mean(before_vals) + np.mean(after_vals)) / 2
-        elif len(before_vals) > 0:
-            replacement = np.mean(before_vals)
-        elif len(after_vals) > 0:
-            replacement = np.mean(after_vals)
-        else:
-            replacement = 0.0
+        # Match MATLAB despike.m: start_value/stop_value are sum/length, so an
+        # empty region gives 0/0 = NaN and the average (NaN + x)/2 = NaN. The
+        # prior port fabricated 0.0 (and one-sided fallbacks), silently
+        # injecting plausible-looking data instead of a detectable NaN.
+        start_value = np.mean(before_vals) if len(before_vals) > 0 else np.nan
+        stop_value = np.mean(after_vals) if len(after_vals) > 0 else np.nan
+        replacement = (start_value + stop_value) / 2
 
         dv_padded[s_bad:e_bad] = replacement
 

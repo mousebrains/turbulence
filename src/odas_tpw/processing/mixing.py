@@ -51,10 +51,14 @@ import gsw
 import numpy as np
 import numpy.typing as npt
 
-# Stratification floor [s^-2].  Below ~1e-9 s^-2 (N ~ 0.02 cph) the
-# water column is effectively unstratified at the window scale and the
-# Osborn scaling K ~ epsilon/N^2 diverges.
-DEFAULT_N2_MIN = 1e-9
+# Stratification floor [s^-2].  Defect (audit): a 1e-9 s^-2 floor only
+# averts division-by-zero; just above it (N ~ 0.02 cph) the water is
+# effectively unstratified, where Osborn K ~ epsilon/N^2 still diverges
+# to physically meaningless diffusivities (e.g. eps=1e-7, N2=2e-9 ->
+# K_rho ~ 10 m^2/s).  Floor at 1e-7 s^-2 (N ~ 0.26 cph), below which the
+# Osborn estimate is no longer meaningful, so near-floor windows are
+# masked rather than leaked into the product.
+DEFAULT_N2_MIN = 1e-7
 
 # Background temperature-gradient floor [K/m].  chi/(dT/dz)^2 diverges
 # as the mean gradient vanishes (well-mixed layers); 1e-4 K/m over a
@@ -509,9 +513,12 @@ def pair_nearest(
     if len(src_times) == 0:
         return out
     if max_dt is None:
-        max_dt = (
-            float(np.median(np.diff(np.sort(src_times)))) if len(src_times) > 1 else 30.0
-        )
+        # Defect (audit): a zero/negative median spacing (duplicate or
+        # clamped source times) would collapse the tolerance to <= 0 and
+        # silently drop every pairing that is not an exact time match;
+        # fall back to a usable positive floor instead.
+        med = float(np.median(np.diff(np.sort(src_times)))) if len(src_times) > 1 else 0.0
+        max_dt = med if med > 0 else 30.0
     order = np.argsort(src_times)
     st = src_times[order]
     sv = src_values[order]
@@ -521,9 +528,7 @@ def pair_nearest(
         return out
     idx = np.clip(np.searchsorted(st, dst_times), 1, len(st) - 1)
     left = idx - 1
-    pick = np.where(
-        np.abs(st[idx] - dst_times) < np.abs(st[left] - dst_times), idx, left
-    )
+    pick = np.where(np.abs(st[idx] - dst_times) < np.abs(st[left] - dst_times), idx, left)
     dt = np.abs(st[pick] - dst_times)
     ok = dt <= max_dt
     out[ok] = sv[pick[ok]]

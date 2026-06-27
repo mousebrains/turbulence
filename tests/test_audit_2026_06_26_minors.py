@@ -5,11 +5,43 @@ Batch 1 — config_base hashing / output-dir defects:
   #84  round(v, 10) collapsed tiny minima (1e-13) to 0.0, corrupting the hash
   #85  the [0-9][0-9] glob missed 3-digit dirs (eps_100), causing collisions
   #89  mixed int/str dict keys raised TypeError during canonicalization
+
+Batch 2 — packaging/config drift:
+  #69  mypy per-module overrides listed three nonexistent rsi modules
+       (rsi.spectral/ocean/nasmyth), silently suppressing nothing
 """
 
 from __future__ import annotations
 
+import importlib.util
+import tomllib
+from pathlib import Path
+
 from odas_tpw.config_base import ConfigManager, _normalize_nested, _normalize_value
+
+_PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
+
+
+def _mypy_override_modules() -> list[str]:
+    data = tomllib.loads(_PYPROJECT.read_text())
+    mods: list[str] = []
+    for ov in data["tool"]["mypy"]["overrides"]:
+        mods.extend(ov["module"])
+    return mods
+
+
+class TestMypyOverrideModulesExist:
+    def test_no_stale_rsi_modules(self):
+        # The consolidated rsi.spectral/ocean/nasmyth names were never real
+        # modules; the override must not reference them.
+        stale = {"odas_tpw.rsi.spectral", "odas_tpw.rsi.ocean", "odas_tpw.rsi.nasmyth"}
+        assert stale.isdisjoint(_mypy_override_modules())
+
+    def test_every_override_module_is_importable(self):
+        # Each module named in a mypy override must actually exist, or the
+        # override silently suppresses nothing (config drift).
+        for mod in _mypy_override_modules():
+            assert importlib.util.find_spec(mod) is not None, f"missing module: {mod}"
 
 
 class TestConfigBaseHashing:

@@ -59,7 +59,6 @@ class ChiFitResult(NamedTuple):
 # Spectrum model dispatcher
 # ---------------------------------------------------------------------------
 
-_N_FINE = 2000  # Minimum points for fine-grid variance correction (floor)
 # The variance-correction grid resolves the model spectrum by its OWN scale kB,
 # not by K_max: a fixed point count spread over ~5*K_max leaves the steep
 # Batchelor/Kraichnan peak near kB unresolved when kB << K_max (low-epsilon
@@ -89,7 +88,6 @@ def _variance_correction(
     tau0: float,
     _h2,
     grad_func,
-    n_fine: int = _N_FINE,
     K_min: float = 0.0,
 ) -> float:
     """Compute V_total / V_resolved for the unresolved-variance correction.
@@ -99,18 +97,20 @@ def _variance_correction(
     so the ratio simultaneously corrects for the unresolved band edges and
     for in-band sensor response.  The correction factor is independent of
     chi (linear scaling cancels in the ratio).  The grid resolution is set by
-    kB (dK ~ kB/2000 over [0, 40*kB]), giving <0.1% accuracy independent of how
-    far K_max is pushed out — verified against a high-n reference for kB in
-    [2, 30].
+    kB (dK ~ kB/_PTS_PER_KB over [0, 40*kB]), giving <0.1% accuracy independent
+    of how far K_max is pushed out — verified against a high-n reference for kB
+    in [2, 400] including the K_min-masked iterative path.
 
     Returns correction factor, or NaN if integration fails.
     """
-    if not (kB > 0):
+    # Tightened guard: kB=+inf passes ``kB > 0`` but makes K_fine all-inf, and
+    # the inf-inf subtract in np.trapezoid leaks a RuntimeWarning (audit nit).
+    if not (0 < kB < np.inf):
         return np.nan
     # Fixed dK ~ kB/_PTS_PER_KB so the peak near kB is always resolved; span
-    # 40*kB so the model variance is fully captured. ``n_fine`` is a floor.
+    # 40*kB so the model variance is fully captured.
     K_upper = _K_SPAN_KB * kB
-    n = max(int(n_fine), _K_SPAN_KB * _PTS_PER_KB)
+    n = _K_SPAN_KB * _PTS_PER_KB
     K_fine = np.arange(1, n + 1, dtype=np.float64) * (K_upper / n)
     spec_fine = grad_func(K_fine, kB, 1.0)  # chi=1.0 (cancels in ratio)
 
@@ -270,8 +270,7 @@ def _chi_from_epsilon(
     chi_grid = np.logspace(np.log10(chi_lo), np.log10(chi_hi), 200)
     # model shape: (200, n_valid)
     models = (
-        chi_grid[:, np.newaxis] * B_unit[np.newaxis, :] * h2v[np.newaxis, :]
-        + nv[np.newaxis, :]
+        chi_grid[:, np.newaxis] * B_unit[np.newaxis, :] * h2v[np.newaxis, :] + nv[np.newaxis, :]
     )
     models = np.maximum(models, 1e-30)
     log_s = np.log(np.maximum(s, 1e-30))
@@ -436,7 +435,13 @@ def _mle_fit_kB(
     # Recover epsilon from kB
     epsilon = (2 * np.pi * kB_best) ** 4 * nu * KAPPA_T**2
 
-    # Re-estimate chi with unresolved-variance correction (like Method 1)
+    # Re-estimate chi with unresolved-variance correction (like Method 1).
+    # Pass the same lower band edge that obs_var uses (K[fit_mask][0]) so
+    # V_resolved spans the identical [K_fit_low, K_max] band: with the prior
+    # default K_min=0 the correction included model variance in [0, K_fit_low]
+    # that obs_var excludes, inflating V_resolved and biasing chi low for
+    # low-epsilon windows (audit finding) — matching the _iterative_fit path.
+    K_fit_low = float(K[fit_mask][0])
     correction = _variance_correction(
         kB_best,
         K_max_fit,
@@ -444,11 +449,10 @@ def _mle_fit_kB(
         tau0,
         _h2,
         grad_func,
+        K_min=K_fit_low,
     )
     if np.isfinite(correction):
-        obs_var = np.trapezoid(
-            np.maximum(spec_obs[fit_mask] - noise_K[fit_mask], 0), K[fit_mask]
-        )
+        obs_var = np.trapezoid(np.maximum(spec_obs[fit_mask] - noise_K[fit_mask], 0), K[fit_mask])
         chi = 6 * KAPPA_T * obs_var * correction
     else:
         chi = chi_obs
@@ -595,6 +599,32 @@ def _iterative_fit(
         else:
             chi_obs = 1e-14
 
+    # Recompute chi_obs once from the *final* kB_best so the returned kB,
+    # epsilon, chi and spec_batch are mutually consistent. On the convergence
+    # break the loop exits before re-deriving chi_obs for the newly-converged
+    # kB_best, leaving chi tied to the prior iteration's kB (audit finding:
+    # k_l_new and the variance correction both depend on kB).
+    if np.isfinite(kB_best) and kB_best >= 1:
+        k_star = 0.04 * kB_best * np.sqrt(KAPPA_T / nu)
+        k_l_final = max(K[1], 3 * k_star)
+        mask_final = (k_l_final <= K) & (k_u >= K)
+        if np.sum(mask_final) >= 3:
+            chi_band = (
+                6
+                * KAPPA_T
+                * np.trapezoid(
+                    np.maximum(spec_obs[mask_final] - noise_K[mask_final], 0),
+                    K[mask_final],
+                )
+            )
+            correction = _variance_correction(
+                kB_best, k_u, speed, tau0, _h2, grad_func, K_min=k_l_final
+            )
+            if chi_band > 0 and np.isfinite(correction):
+                chi_obs = chi_band * correction
+            elif chi_band > 0:
+                chi_obs = chi_band
+
     # Final values
     if np.isfinite(kB_best):
         epsilon = (2 * np.pi * kB_best) ** 4 * nu * KAPPA_T**2
@@ -640,13 +670,25 @@ def _bilinear_correction(F: np.ndarray, diff_gain: float, fs: float) -> np.ndarr
     H = 1/(1+(2*pi*f*diff_gain)^2) and the actual digital Butterworth
     used in deconvolution.
     """
-    # Digital Butterworth used in deconvolution
-    b, a = butter(1, 1 / (2 * np.pi * diff_gain * fs / 2))
     # Evaluate at the frequency points
     n = len(F)
     bl = np.ones(n)
     if n < 3:
         return bl
+    # Normalized cutoff for the digital Butterworth. butter() requires
+    # 0 < Wn < 1; a tiny diff_gain (e.g. a corrupt/patched .p config value)
+    # pushes Wn >= 1 and scipy raises, aborting chi for the whole cast (audit
+    # finding). Degrade to no bilinear correction (all-ones) instead.
+    wn = 1 / (2 * np.pi * diff_gain * fs / 2)
+    if not (0 < wn < 1):
+        warnings.warn(
+            f"bilinear cutoff Wn={wn:.3g} out of (0,1) for diff_gain={diff_gain:.3g}; "
+            "skipping bilinear correction",
+            stacklevel=2,
+        )
+        return bl
+    # Digital Butterworth used in deconvolution
+    b, a = butter(1, wn)
     # Compute for indices 1..N-2 (exclude DC and Nyquist), matching ODAS
     idx = np.arange(1, n - 1)
     F_eval = F[idx]

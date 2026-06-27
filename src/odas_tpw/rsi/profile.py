@@ -25,10 +25,13 @@ logger = logging.getLogger(__name__)
 # Backward-compatible alias (previously underscore-prefixed)
 _smooth_fall_rate = smooth_fall_rate
 
+
 # Backward-compatible alias — computed from VEHICLE_ATTRIBUTES
 def _build_vehicle_tau() -> dict[str, float]:
     from odas_tpw.rsi.vehicle import VEHICLE_ATTRIBUTES
+
     return {k: v[1] for k, v in VEHICLE_ATTRIBUTES.items()}
+
 
 _VEHICLE_TAU = _build_vehicle_tau()
 
@@ -112,7 +115,11 @@ def extract_profiles(
 
     data = _load_source(source)
     stem = output_stem or data["stem"]
-    P_slow = data["P"]
+    # Defect (audit M2 downstream): a single NaN in slow pressure (e.g. a
+    # _FillValue gap from a partial/external NetCDF) is smeared across the
+    # whole fall rate by smooth_fall_rate (gradient + zero-phase filtfilt),
+    # silently dropping every profile. Repair isolated NaNs before detection.
+    P_slow = _repair_nans(data["P"], "P_slow", stem)
     fs_slow = data["fs_slow"]
     fs_fast = data["fs_fast"]
     ratio = round(fs_fast / fs_slow)
@@ -357,111 +364,154 @@ def _nc_filled(var) -> np.ndarray:
     return np.asarray(np.ma.filled(var[:].astype(np.float64), np.nan))
 
 
+def _repair_nans(x: np.ndarray, name: str, stem: str) -> np.ndarray:
+    """Linearly interpolate NaNs (e.g. _FillValue gaps) over the sample index.
+
+    Defect (audit M2 downstream): ``_nc_filled`` correctly turns a masked
+    ``_FillValue`` into NaN, but a single NaN in the slow pressure is then
+    smeared across the *entire* fall rate by ``smooth_fall_rate`` (gradient
+    poisons two neighbours, zero-phase filtfilt poisons all samples), so a
+    lone mid-cast fill silently drops every profile in the file. Repairing
+    isolated NaNs by linear interpolation keeps the rest of the cast usable;
+    a warning makes a poisoned/partial cast visible rather than silently lost.
+    """
+    bad = ~np.isfinite(x)
+    n_bad = int(bad.sum())
+    if n_bad == 0:
+        return x
+    good = ~bad
+    if good.sum() < 2:
+        # Not enough finite samples to interpolate; leave as-is and warn loudly.
+        logger.warning(
+            "%s: %s has %d/%d non-finite samples; cannot repair", stem, name, n_bad, x.size
+        )
+        return x
+    idx = np.arange(x.size, dtype=np.float64)
+    repaired = x.copy()
+    # np.interp clamps to the finite endpoints, so leading/trailing NaNs are
+    # held flat rather than re-introducing NaN.
+    repaired[bad] = np.interp(idx[bad], idx[good], x[good])
+    logger.warning("%s: interpolated %d/%d non-finite samples in %s", stem, n_bad, x.size, name)
+    return repaired
+
+
 def _load_from_nc(nc_path: Path) -> dict[str, Any]:
     """Extract data dict from a full-record NetCDF file."""
     import netCDF4 as nc
 
+    # Defect (audit io-hazard): the Dataset must be closed on every exit path,
+    # not just the success path — the ValueError/AttributeError raises below
+    # would otherwise leak the open file handle (and its lock).
     ds = nc.Dataset(str(nc_path), "r")
+    stem = Path(nc_path).stem
+    try:
+        # Read global attributes
+        global_attrs = {}
+        for attr in ds.ncattrs():
+            if attr != "configuration_string":
+                global_attrs[attr] = getattr(ds, attr)
+        if "configuration_string" in ds.ncattrs():
+            global_attrs["configuration_string"] = ds.configuration_string
 
-    # Read global attributes
-    global_attrs = {}
-    for attr in ds.ncattrs():
-        if attr != "configuration_string":
-            global_attrs[attr] = getattr(ds, attr)
-    if "configuration_string" in ds.ncattrs():
-        global_attrs["configuration_string"] = ds.configuration_string
+        # Attributes may be on root or in L1_converted group
+        def _get_nc_attr(name: str, default=None):
+            for src in [ds]:
+                if name in {a for a in src.ncattrs()}:
+                    return src.getncattr(name)
+            if "L1_converted" in ds.groups:
+                g = ds.groups["L1_converted"]
+                if name in {a for a in g.ncattrs()}:
+                    return g.getncattr(name)
+            if default is not None:
+                return default
+            raise AttributeError(f"Attribute {name!r} not found in NetCDF file")
 
-    # Attributes may be on root or in L1_converted group
-    def _get_nc_attr(name: str, default=None):
-        for src in [ds]:
-            if name in {a for a in src.ncattrs()}:
-                return src.getncattr(name)
-        if "L1_converted" in ds.groups:
+        fs_fast = float(_get_nc_attr("fs_fast"))
+        fs_slow = float(_get_nc_attr("fs_slow"))
+
+        # Time vectors may be at root or inside L1_converted group
+        if "t_fast" in ds.variables:
+            t_fast = _nc_filled(ds.variables["t_fast"])
+            t_slow = _nc_filled(ds.variables["t_slow"])
+        elif "L1_converted" in ds.groups:
             g = ds.groups["L1_converted"]
-            if name in {a for a in g.ncattrs()}:
-                return g.getncattr(name)
-        if default is not None:
-            return default
-        raise AttributeError(f"Attribute {name!r} not found in NetCDF file")
+            # L1_converted uses TIME/TIME_SLOW dimension names
+            t_fast = _nc_filled(g.variables["TIME"])
+            t_slow = _nc_filled(g.variables["TIME_SLOW"])
+        else:
+            raise ValueError("No time variables found in NetCDF file")
+        # Determine time units
+        if "t_fast" in ds.variables:
+            t_fast_units = (
+                ds.variables["t_fast"].units
+                if hasattr(ds.variables["t_fast"], "units")
+                else "seconds"
+            )
+            t_slow_units = (
+                ds.variables["t_slow"].units
+                if hasattr(ds.variables["t_slow"], "units")
+                else "seconds"
+            )
+        elif "L1_converted" in ds.groups:
+            g = ds.groups["L1_converted"]
+            t_fast_units = (
+                g.variables["TIME"].units if hasattr(g.variables["TIME"], "units") else "days"
+            )
+            t_slow_units = (
+                g.variables["TIME_SLOW"].units
+                if hasattr(g.variables["TIME_SLOW"], "units")
+                else "days"
+            )
+        else:
+            t_fast_units = "seconds"
+            t_slow_units = "seconds"
 
-    fs_fast = float(_get_nc_attr("fs_fast"))
-    fs_slow = float(_get_nc_attr("fs_slow"))
-
-    # Time vectors may be at root or inside L1_converted group
-    if "t_fast" in ds.variables:
-        t_fast = _nc_filled(ds.variables["t_fast"])
-        t_slow = _nc_filled(ds.variables["t_slow"])
-    elif "L1_converted" in ds.groups:
-        g = ds.groups["L1_converted"]
-        # L1_converted uses TIME/TIME_SLOW dimension names
-        t_fast = _nc_filled(g.variables["TIME"])
-        t_slow = _nc_filled(g.variables["TIME_SLOW"])
-    else:
-        raise ValueError("No time variables found in NetCDF file")
-    # Determine time units
-    if "t_fast" in ds.variables:
-        t_fast_units = (
-            ds.variables["t_fast"].units if hasattr(ds.variables["t_fast"], "units") else "seconds"
-        )
-        t_slow_units = (
-            ds.variables["t_slow"].units if hasattr(ds.variables["t_slow"], "units") else "seconds"
-        )
-    elif "L1_converted" in ds.groups:
-        g = ds.groups["L1_converted"]
-        t_fast_units = (
-            g.variables["TIME"].units if hasattr(g.variables["TIME"], "units") else "days"
-        )
-        t_slow_units = (
-            g.variables["TIME_SLOW"].units if hasattr(g.variables["TIME_SLOW"], "units") else "days"
-        )
-    else:
-        t_fast_units = "seconds"
-        t_slow_units = "seconds"
-
-    # Pressure — need slow-rate pressure for profile detection
-    if "P" in ds.variables:
-        P = _nc_filled(ds.variables["P"])
-    elif "L1_converted" in ds.groups:
-        g = ds.groups["L1_converted"]
-        if "PRES_SLOW" in g.variables:
-            P = _nc_filled(g.variables["PRES_SLOW"])
-        elif "PRES" in g.variables:
-            P = _nc_filled(g.variables["PRES"])
+        # Pressure — need slow-rate pressure for profile detection
+        if "P" in ds.variables:
+            P = _nc_filled(ds.variables["P"])
+        elif "L1_converted" in ds.groups:
+            g = ds.groups["L1_converted"]
+            if "PRES_SLOW" in g.variables:
+                P = _nc_filled(g.variables["PRES_SLOW"])
+            elif "PRES" in g.variables:
+                P = _nc_filled(g.variables["PRES"])
+            else:
+                raise ValueError("No pressure variable found in NetCDF file")
         else:
             raise ValueError("No pressure variable found in NetCDF file")
-    else:
-        raise ValueError("No pressure variable found in NetCDF file")
 
-    # Channels — scan both root and L1_converted group
-    channels = []
-    _seen = set()
+        # Channels — scan both root and L1_converted group
+        channels = []
+        _seen = set()
 
-    def _scan_vars(source, time_dim_fast, time_dim_slow):
-        for vname in source.variables:
-            if vname in _seen or vname in ("t_fast", "t_slow", "TIME", "TIME_SLOW"):
-                continue
-            var = source.variables[vname]
-            dims = var.dimensions
-            if len(dims) != 1:
-                continue
-            dim = dims[0]
-            if dim == time_dim_fast:
-                mapped_dim = "time_fast"
-            elif dim == time_dim_slow:
-                mapped_dim = "time_slow"
-            else:
-                continue
-            attrs = {}
-            for a in var.ncattrs():
-                attrs[a] = getattr(var, a)
-            channels.append((vname, _nc_filled(var), mapped_dim, attrs))
-            _seen.add(vname)
+        def _scan_vars(source, time_dim_fast, time_dim_slow):
+            for vname in source.variables:
+                if vname in _seen or vname in ("t_fast", "t_slow", "TIME", "TIME_SLOW"):
+                    continue
+                var = source.variables[vname]
+                dims = var.dimensions
+                if len(dims) != 1:
+                    continue
+                dim = dims[0]
+                if dim == time_dim_fast:
+                    mapped_dim = "time_fast"
+                elif dim == time_dim_slow:
+                    mapped_dim = "time_slow"
+                else:
+                    continue
+                attrs = {}
+                for a in var.ncattrs():
+                    attrs[a] = getattr(var, a)
+                channels.append((vname, _nc_filled(var), mapped_dim, attrs))
+                _seen.add(vname)
 
-    # Scan root-level variables (old format)
-    _scan_vars(ds, "time_fast", "time_slow")
-    # Scan L1_converted group (new ATOMIX format)
-    if "L1_converted" in ds.groups:
-        _scan_vars(ds.groups["L1_converted"], "TIME", "TIME_SLOW")
+        # Scan root-level variables (old format)
+        _scan_vars(ds, "time_fast", "time_slow")
+        # Scan L1_converted group (new ATOMIX format)
+        if "L1_converted" in ds.groups:
+            _scan_vars(ds.groups["L1_converted"], "TIME", "TIME_SLOW")
+    finally:
+        ds.close()
 
     # If time is in days, convert to seconds for consistency
     if "day" in t_fast_units.lower():
@@ -469,8 +519,6 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
         t_slow = (t_slow - t_slow[0]) * 86400.0
         t_fast_units = "seconds"
         t_slow_units = "seconds"
-
-    ds.close()
 
     return {
         "P": P.astype(np.float64),
@@ -482,7 +530,7 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
         "t_slow_units": t_slow_units,
         "channels": channels,
         "global_attrs": global_attrs,
-        "stem": Path(nc_path).stem,
+        "stem": stem,
     }
 
 

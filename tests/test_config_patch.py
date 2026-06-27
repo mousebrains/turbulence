@@ -333,6 +333,36 @@ class TestEditorSemantics:
         assert len(changes) == 1
         assert "vehicle = rvmp" in text
 
+    def test_marker_inside_original_stays_editable(self):
+        # Defect: edit_config_text froze everything below the FIRST CONFIG_MARKER,
+        # even when the marker is part of the ORIGINAL config (e.g. an RSI-pre-
+        # patched file whose uncommented stanzas live below it). Those stanzas
+        # must remain editable, not be misreported as "not present".
+        cfg = (
+            "[instrument_info]\r\nvehicle = VMP\r\n"
+            + cp.CONFIG_MARKER
+            + "\r\n[cruise_info]\r\nship = Thompson\r\n"
+        )
+        text, changes = cp.edit_config_text(
+            cfg, cp.EditSpec(note="n", author="a", sections={"cruise_info": {"ship": "Sally Ride"}})
+        )
+        assert [c.key for c in changes] == ["ship"]
+        assert "ship = Sally Ride" in text
+
+    def test_self_produced_marker_block_still_frozen(self):
+        # A marker WE wrote (column 0, followed by a fully ';'-commented block)
+        # must still be treated as the frozen original (idempotent re-patch).
+        active = "[instrument_info]\r\nvehicle = VMP\r\n"
+        cfg = active + cp.CONFIG_MARKER + "\r\n; [instrument_info]\r\n; vehicle = VMP\r\n"
+        text, changes = cp.edit_config_text(
+            cfg,
+            cp.EditSpec(note="n", author="a", sections={"instrument_info": {"vehicle": "rvmp"}}),
+        )
+        assert [c.key for c in changes] == ["vehicle"]
+        # The frozen commented block is re-attached verbatim, not re-edited.
+        assert text.count(cp.CONFIG_MARKER) == 1
+        assert "; vehicle = VMP" in text.split(cp.CONFIG_MARKER, 1)[1]
+
 
 # ---------------------------------------------------------------------------
 # No-op behaviour
@@ -472,6 +502,33 @@ class TestSpecValidation:
         parsed = cp.parse_config(new.split(cp.CONFIG_MARKER, 1)[0])
         assert parsed["root"].get("rate") is None
 
+    def test_when_newline_sanitized_in_provenance_and_banner(self, tiny):
+        # Defect: 'when' was interpolated raw into both the provenance comment
+        # and the banner. A newline must be collapsed, not injected as a stanza.
+        new, _ch = cp.edit_config_text(
+            cp.read_config_text(tiny),
+            cp.EditSpec(note="n", author="a", sections={"instrument_info": {"vehicle": "rvmp"}}),
+            when="W\r\n[root]\r\nrate=9",
+        )
+        parsed = cp.parse_config(new.split(cp.CONFIG_MARKER, 1)[0])
+        assert parsed["root"].get("rate") is None
+
+    def test_provenance_note_newline_sanitized(self, tiny):
+        # Defect: spec.note/old/new were interpolated raw into the provenance
+        # comment (only the banner sanitized note). A directly-constructed
+        # EditSpec with a newline in 'note' must not inject active config.
+        new, _ch = cp.edit_config_text(
+            cp.read_config_text(tiny),
+            cp.EditSpec(
+                note="ok\r\n[root]\r\nrate=7",
+                author="a",
+                sections={"instrument_info": {"vehicle": "rvmp"}},
+            ),
+            when="W",
+        )
+        parsed = cp.parse_config(new.split(cp.CONFIG_MARKER, 1)[0])
+        assert parsed["root"].get("rate") is None
+
 
 # ---------------------------------------------------------------------------
 # Binary writer guards
@@ -525,6 +582,46 @@ class TestBinaryGuards:
         dst.write_bytes(b"x")
         with pytest.raises(FileExistsError):
             cp.write_patched_pfile(tiny, dst, cp.read_config_text(tiny))
+
+    def test_small_header_size_refused(self, tmp_path):
+        # Defect: header_size < HEADER_BYTES was unvalidated; with header_size in
+        # [12,23] struct.pack_into at offset 22 raised an uncatchable struct.error
+        # (and [24,127] silently wrote a truncated <128-byte header). Must be a
+        # clean, CLI-catchable ValueError instead.
+        cfg = b"[instrument_info]\r\nvehicle = VMP\r\n"
+        words = [0] * 64
+        words[10] = 0x0600
+        words[11] = len(cfg)
+        words[17] = 20  # header_size lies: < 128 and < the offset-22 pack region
+        words[18] = 200
+        words[63] = 1
+        src = tmp_path / "small_hdr.p"
+        src.write_bytes(struct.pack("<64H", *words) + cfg + b"\x00" * 200)
+        with pytest.raises(ValueError, match="invalid header_size"):
+            cp.write_patched_pfile(src, tmp_path / "o.p", "[x]\r\n")
+        # read_config_text shares the unvalidated read and must guard too.
+        with pytest.raises(ValueError, match="invalid header_size"):
+            cp.read_config_text(src)
+
+    def test_write_is_atomic_on_failure(self, tiny, tmp_path, monkeypatch):
+        # Defect: a mid-copy failure left a truncated, valid-looking patched .p in
+        # the final destination. The write must go via a temp file + os.replace so
+        # a commit-time failure leaves no dst and no orphaned temp file.
+        dst = tmp_path / "atomic.p"
+        text, _ = cp.edit_config_text(
+            cp.read_config_text(tiny),
+            cp.EditSpec(note="n", author="a", sections={"instrument_info": {"vehicle": "rvmp"}}),
+            when="W",
+        )
+
+        def boom(_a, _b):
+            raise OSError("simulated commit failure")
+
+        monkeypatch.setattr(cp.os, "replace", boom)
+        with pytest.raises(OSError, match="simulated commit failure"):
+            cp.write_patched_pfile(tiny, dst, text)
+        assert not dst.exists()  # no corrupt file left behind
+        assert list(tmp_path.glob("atomic.p.tmp.*")) == []  # temp cleaned up
 
     def test_odd_config_size_reads_back_identically(self, tiny, tmp_path):
         # Rockland ships odd config_size (the fixture itself is odd); a patched
@@ -582,6 +679,23 @@ class TestPatchFiles:
         cp.patch_files([tiny], out, spec)
         with pytest.raises(FileExistsError, match="already exists"):
             cp.patch_files([tiny], out, spec)
+
+    def test_basename_collision_refused_before_any_write(self, tmp_path):
+        # Defect: two inputs sharing a basename mapped to the same out_dir/NAME.p;
+        # the first was written, the second aborted the batch with a misleading
+        # "already exists" error. Detect the collision up front and write nothing.
+        da = tmp_path / "a"
+        db = tmp_path / "b"
+        da.mkdir()
+        db.mkdir()
+        extract_pfile_segment(DATA, da / "SAME.p", start_record=0, n_records=4)
+        extract_pfile_segment(DATA, db / "SAME.p", start_record=0, n_records=4)
+        out = tmp_path / "out"
+        spec = cp.EditSpec(note="n", author="a", sections={"instrument_info": {"vehicle": "rvmp"}})
+        with pytest.raises(ValueError, match="share a basename"):
+            cp.patch_files([da / "SAME.p", db / "SAME.p"], out, spec)
+        # Nothing written: the misleading partial-batch state is avoided.
+        assert not (out / "SAME.p").exists()
 
     def test_no_op_not_written(self, tiny, tmp_path, capsys):
         out = tmp_path / "out"

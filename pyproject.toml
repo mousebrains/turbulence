@@ -61,10 +61,9 @@ check_untyped_defs = true
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+# Drop stale rsi.spectral/ocean/nasmyth entries: those modules never existed
+# under rsi/ (consolidated into scor160.*); mypy silently no-op'd the override.
 module = [
-    "odas_tpw.rsi.spectral",
-    "odas_tpw.rsi.ocean",
-    "odas_tpw.rsi.nasmyth",
     "odas_tpw.rsi.deconvolve",
     "odas_tpw.rsi.profile",
     "odas_tpw.rsi.helpers",

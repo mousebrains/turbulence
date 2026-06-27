@@ -1,9 +1,12 @@
 # Tests for odas_tpw.scor160.despike
 """Unit tests for iterative spike removal."""
 
-import numpy as np
+import warnings
 
-from odas_tpw.scor160.despike import despike
+import numpy as np
+import pytest
+
+from odas_tpw.scor160.despike import _single_despike, despike
 
 
 class TestDespikeCleanSignal:
@@ -34,9 +37,68 @@ class TestDespikeCleanSignal:
         rng = np.random.default_rng(1)
         signal = 0.01 * rng.standard_normal(5000)
         signal[1234] = np.nan  # one dropout
-        _y, _spikes, n_passes, frac = despike(signal, fs)
-        assert n_passes == 0       # no spikes detectable through the NaN
-        assert frac == 0.0         # NaN != NaN must not inflate the fraction
+        with pytest.warns(RuntimeWarning, match="non-finite"):
+            _y, _spikes, n_passes, frac = despike(signal, fs)
+        assert n_passes == 0  # no spikes detectable through the NaN
+        assert frac == 0.0  # NaN != NaN must not inflate the fraction
+
+
+class TestDespikeEdgeCases:
+    """Regression tests for short-input and degenerate-region handling."""
+
+    @pytest.mark.parametrize("length", [1, 2, 3, 5])
+    def test_short_input_does_not_crash(self, length):
+        """Short sections must not raise scipy's 'len(x) > padlen' ValueError.
+
+        With the MATLAB padlen (3) plus a too-short guard, despike degrades to
+        a no-op instead of crashing. The old scipy-default padlen (6) raised
+        ValueError on a length-2 (padded-to-6) input. (#25/#49)
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = despike(np.zeros(length), 512.0)
+        assert result.y.shape == (length,)
+        assert result.n_passes == 0
+        assert len(result.spike_indices) == 0
+
+    def test_nan_input_emits_warning(self):
+        """A non-finite sample silently disables ALL spike detection via
+        filtfilt NaN propagation; despike must warn so the no-op is
+        observable rather than silently passing real spikes through. (#26)
+        """
+        rng = np.random.default_rng(2)
+        signal = 0.01 * rng.standard_normal(10000)
+        signal[3000] = 50.0  # a genuine spike that will NOT be removed
+        signal[7000] = np.nan  # one dropout disables detection globally
+        with pytest.warns(RuntimeWarning, match="non-finite"):
+            y, spikes, n_passes, _frac = despike(signal, 512.0)
+        # Detection is disabled, so the real spike survives (documents the
+        # data-integrity hazard the warning now surfaces).
+        assert len(spikes) == 0
+        assert n_passes == 0
+        assert y[3000] == 50.0
+
+    def test_finite_input_emits_no_nan_warning(self):
+        """Clean finite input must not raise the non-finite RuntimeWarning."""
+        rng = np.random.default_rng(3)
+        signal = 0.01 * rng.standard_normal(5000)
+        signal[2500] = 50.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            despike(signal, 512.0)  # must not raise
+
+    def test_unfillable_region_yields_nan_not_zero(self):
+        """When a bad region has no valid neighbors on either side, the
+        replacement must be NaN (matching MATLAB sum([])/length([])=NaN) so
+        the data loss is detectable, not a fabricated finite 0.0. (#27/#50)
+        """
+        dv = np.zeros(10)
+        dv[5] = 50.0
+        # A removal width N far larger than the array marks the whole
+        # (padded) array bad, leaving no valid neighbor on either side.
+        y, _spikes = _single_despike(dv, thresh=8.0, smooth=0.5, fs=512.0, N=1000)
+        assert np.all(np.isnan(y))
+        assert not np.any(y == 0.0)  # old code injected a finite 0.0 here
 
 
 class TestDespikeSyntheticSpikes:

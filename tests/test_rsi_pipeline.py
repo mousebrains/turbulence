@@ -396,3 +396,72 @@ class TestEpsilonHpCut:
         from odas_tpw.rsi.pipeline import _CHI_HP_CUT
 
         assert abs(_CHI_HP_CUT - 0.25) < 1e-12
+
+
+# ---------------------------------------------------------------------------
+# _qc_chi_final — per-probe spectral QC before the mixing products (K_T/Gamma)
+# ---------------------------------------------------------------------------
+
+
+class TestQcChiFinal:
+    """The mixing-quantity chi drops poorly-fit probes, unlike the raw
+    geometric-mean chi_final that the L4_chi output carries."""
+
+    def test_high_fom_probe_excluded(self):
+        """A probe with fom above the limit is dropped from the geometric mean.
+
+        On the OLD code the mixing call used the unfiltered all-probe mean, so
+        the bad probe pulled the result toward sqrt(1e-8 * 1e-6); the QC mean
+        keeps only the good probe.
+        """
+        from odas_tpw.rsi.pipeline import _CHI_FOM_LIMIT, _qc_chi_final
+
+        chi = np.array([[1e-8], [1e-6]])  # 2 probes, 1 window
+        fom = np.array([[1.0], [5.0]])  # probe 1 good, probe 2 bad fom
+        kmr = np.array([[0.8], [0.8]])
+        out = _qc_chi_final(chi, fom, kmr)
+        assert out[0] == pytest.approx(1e-8)  # only the good probe
+        # differs from the unfiltered all-probe geometric mean
+        raw = np.exp(np.mean(np.log(chi[:, 0])))
+        assert abs(out[0] - raw) > 1e-9
+        assert pytest.approx(1.15) == _CHI_FOM_LIMIT
+
+    def test_low_k_max_ratio_probe_excluded(self):
+        """A probe with K_max_ratio below 0.5 (mostly extrapolated) is dropped."""
+        from odas_tpw.rsi.pipeline import _qc_chi_final
+
+        chi = np.array([[1e-8], [1e-6]])
+        fom = np.array([[1.0], [1.0]])
+        kmr = np.array([[0.8], [0.3]])  # probe 2 under-resolved
+        out = _qc_chi_final(chi, fom, kmr)
+        assert out[0] == pytest.approx(1e-8)
+
+    def test_both_probes_pass_is_geometric_mean(self):
+        """When every probe passes QC the result is the plain geometric mean."""
+        from odas_tpw.rsi.pipeline import _qc_chi_final
+
+        chi = np.array([[1e-8], [1e-6]])
+        fom = np.array([[1.0], [1.0]])
+        kmr = np.array([[0.8], [0.8]])
+        out = _qc_chi_final(chi, fom, kmr)
+        assert out[0] == pytest.approx(np.sqrt(1e-8 * 1e-6))
+
+    def test_fallback_when_no_probe_passes(self):
+        """No window is silently lost: fall back to the all-finite-probe mean."""
+        from odas_tpw.rsi.pipeline import _qc_chi_final
+
+        chi = np.array([[1e-8], [1e-6]])
+        fom = np.array([[5.0], [5.0]])  # both fail fom
+        kmr = np.array([[0.8], [0.8]])
+        out = _qc_chi_final(chi, fom, kmr)
+        assert out[0] == pytest.approx(np.sqrt(1e-8 * 1e-6))
+
+    def test_nan_chi_window_stays_nan(self):
+        """A window with no finite chi>0 stays NaN (no spurious estimate)."""
+        from odas_tpw.rsi.pipeline import _qc_chi_final
+
+        chi = np.array([[np.nan], [-1.0]])
+        fom = np.array([[1.0], [1.0]])
+        kmr = np.array([[0.8], [0.8]])
+        out = _qc_chi_final(chi, fom, kmr)
+        assert np.isnan(out[0])

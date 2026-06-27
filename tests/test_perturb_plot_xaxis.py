@@ -69,9 +69,7 @@ def test_along_line_on_a_straight_meridian():
 def test_along_line_cross_track_for_off_line_point():
     waypoints = np.array([[0.0, 0.0], [1.0, 0.0]])
     # 0.1 deg east of the midpoint of the meridian.
-    along, cross = xaxis.project_along_line(
-        np.array([0.5]), np.array([0.1]), waypoints, units="km"
-    )
+    along, cross = xaxis.project_along_line(np.array([0.5]), np.array([0.1]), waypoints, units="km")
     assert along[0] == pytest.approx(0.5 * _DEG_KM, rel=1e-2)
     assert cross[0] == pytest.approx(0.1 * _DEG_KM * np.cos(np.radians(0.5)), rel=1e-2)
 
@@ -103,6 +101,29 @@ def test_compute_latitude_longitude_passthrough():
     t = np.zeros(2)
     assert np.allclose(xaxis.compute("latitude", lat, lon, t).x, lat)
     assert np.allclose(xaxis.compute("longitude", lat, lon, t).x, lon)
+
+
+def test_compute_longitude_dateline_stays_contiguous_and_monotone():
+    """A monotone track across +/-180 must yield a monotone, ~1-deg-wide x so
+    column sorting/clustering doesn't split it into two antipodal clusters with
+    a ~358-deg blank gap (bug_001 dateline)."""
+    lon = np.array([179.0, 179.5, -179.5, -179.0])
+    t = np.zeros(4)
+    x = xaxis.compute("longitude", np.full(4, 20.0), lon, t).x
+    # Old passthrough returned the raw degrees verbatim: not monotone and ~358
+    # deg wide. Unwrapped about the circular mean it is contiguous.
+    assert np.all(np.diff(x) > 0)
+    assert float(x.max() - x.min()) == pytest.approx(2.0, abs=1e-6)
+
+
+def test_compute_longitude_passthrough_unchanged_away_from_dateline():
+    """Off-dateline the unwrap is identity (to rounding) and NaNs propagate."""
+    lon = np.array([3.0, 4.0, np.nan])
+    t = np.zeros(3)
+    x = xaxis.compute("longitude", np.zeros(3), lon, t).x
+    assert x[0] == pytest.approx(3.0, abs=1e-9)
+    assert x[1] == pytest.approx(4.0, abs=1e-9)
+    assert np.isnan(x[2])
 
 
 def test_compute_rejects_unknown_method_and_missing_params():
@@ -139,9 +160,9 @@ def test_signed_distance_centered_and_time_signed():
     xa = xaxis.compute("signed_distance", lat, lon, _hourly(5))
     x = xa.x
     assert xa.kind == "spatial"
-    assert x.mean() == pytest.approx(0.0, abs=1e-6)          # midpoint origin
-    assert x[0] < 0 < x[-1]                                  # earliest -, latest +
-    assert np.all(np.diff(x) > 0)                            # monotone with time
+    assert x.mean() == pytest.approx(0.0, abs=1e-6)  # midpoint origin
+    assert x[0] < 0 < x[-1]  # earliest -, latest +
+    assert np.all(np.diff(x) > 0)  # monotone with time
     assert np.diff(x).mean() == pytest.approx(_DEG_KM, rel=1e-2)  # ~1 deg/step
 
 
@@ -208,7 +229,7 @@ def test_signed_distance_label_has_midpoint_and_orientation():
     lon = np.linspace(0.0, 2.0, 9)
     lbl = xaxis.compute("signed_distance", lat, lon, _hourly(9)).label
     assert lbl.startswith("Signed distance from")
-    assert "2°N, 1°E" in lbl                 # midpoint, 4 sig figs, hemispheres
+    assert "2°N, 1°E" in lbl  # midpoint, 4 sig figs, hemispheres
     assert "orientation" in lbl and "±" in lbl and "° T" in lbl
 
 

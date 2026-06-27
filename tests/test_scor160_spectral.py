@@ -195,6 +195,56 @@ class TestCsdMatrix:
         with pytest.raises(ValueError, match="at least 2\\*nfft"):
             csd_matrix(x, None, 256, 100.0)
 
+    def test_negative_overlap_maps_to_zero_not_half(self):
+        """#47: a negative overlap must fall back to 0 (non-overlapping
+        segments) like csd_matrix_odas.m:132-133, not silently to nfft/2."""
+        rng = np.random.default_rng(123)
+        nfft = 64
+        fs = 100.0
+        x = rng.standard_normal((1024, 1))
+
+        C_neg, _F, _, _ = csd_matrix(x, None, nfft, fs, overlap=-1)
+        C_zero, _F, _, _ = csd_matrix(x, None, nfft, fs, overlap=0)
+        C_half, _F, _, _ = csd_matrix(x, None, nfft, fs, overlap=nfft // 2)
+
+        # overlap=-1 must behave exactly like overlap=0 ...
+        np.testing.assert_allclose(C_neg, C_zero, rtol=1e-12)
+        # ... and differ from the 50%-overlap result (different segment count).
+        assert not np.allclose(C_neg, C_half)
+
+    def test_wrong_length_window_raises(self):
+        """#74: an explicit window whose length != nfft (including a length-1
+        scalar that would broadcast to a rectangular window) must raise."""
+        rng = np.random.default_rng(321)
+        nfft = 256
+        x = rng.standard_normal((1024, 1))
+        # Length-1 scalar window: previously broadcast silently to rectangular.
+        with pytest.raises(ValueError, match="length nfft"):
+            csd_matrix(x, None, nfft, 100.0, window=np.array([2.0]))
+        # Wrong (but >1) length window.
+        with pytest.raises(ValueError, match="length nfft"):
+            csd_matrix(x, None, nfft, 100.0, window=np.ones(nfft - 1))
+
+    def test_wide_matrix_not_auto_transposed(self):
+        """#48: a genuine wide MxN matrix with M < 2*nfft must NOT be silently
+        transposed (MATLAB only forces 1xN row vectors); it must raise the
+        too-short error instead."""
+        nfft = 64
+        # 3 rows (samples) x 200 cols: old code transposed to (200, 3) and ran;
+        # now it is treated as 3 samples and rejected as too short.
+        x = np.ones((3, 200))
+        with pytest.raises(ValueError, match="at least 2\\*nfft"):
+            csd_matrix(x, None, nfft, 100.0)
+
+    def test_row_vector_still_transposed(self):
+        """#48: a 1xN row vector must still be forced to column orientation
+        (isrow semantics preserved)."""
+        rng = np.random.default_rng(456)
+        nfft = 64
+        x_row = rng.standard_normal((1, 1024))  # 1 x N row vector
+        C, _F, _, _ = csd_matrix(x_row, None, nfft, 100.0)
+        assert C.shape == (nfft // 2 + 1, 1, 1)
+
 
 class TestCsdMatrixBatch:
     """Tests for batched cross-spectral density."""
@@ -254,8 +304,19 @@ class TestCsdMatrixBatch:
             csd_matrix_batch(np.ones((10, 2)), None, 8, 100.0)
 
     def test_too_short_diss_raises(self):
-        with pytest.raises(ValueError, match="too short"):
+        # #75: a window shorter than 2*nfft must raise (statistical-significance
+        # floor), mirroring csd_matrix and csd_matrix_odas.m. diss_length=10 is
+        # well below 2*64.
+        with pytest.raises(ValueError, match="at least 2\\*nfft"):
             csd_matrix_batch(np.ones((2, 10, 1)), None, 64, 100.0)
+
+    def test_diss_between_nfft_and_2nfft_raises(self):
+        # #75: regression — diss_length in [nfft, 2*nfft) used to yield a single
+        # weak FFT segment; it must now raise like the non-batch path.
+        nfft = 64
+        x_win = np.ones((2, nfft + nfft // 2, 1))  # nfft < diss_length < 2*nfft
+        with pytest.raises(ValueError, match="at least 2\\*nfft"):
+            csd_matrix_batch(x_win, None, nfft, 100.0)
 
     def test_overlap_equal_nfft_clamps_no_zerodivision(self):
         """overlap == nfft gives step == 0; it must be clamped, not raise a
@@ -266,6 +327,21 @@ class TestCsdMatrixBatch:
         # overlap == nfft (step 0) and overlap > 0.9*nfft both clamp to nfft//2.
         C, _F, _Cxx, _Cyy = csd_matrix_batch(x_win, None, nfft, 100.0, overlap=nfft)
         assert C.shape == (2, nfft // 2 + 1, 1, 1)
+
+    def test_negative_overlap_maps_to_zero_not_half(self):
+        """#47: batch path must mirror csd_matrix — negative overlap -> 0, not
+        nfft/2."""
+        rng = np.random.default_rng(135)
+        nfft = 64
+        fs = 100.0
+        x_win = rng.standard_normal((2, 1024, 1))
+
+        C_neg, _F, _, _ = csd_matrix_batch(x_win, None, nfft, fs, overlap=-1)
+        C_zero, _F, _, _ = csd_matrix_batch(x_win, None, nfft, fs, overlap=0)
+        C_half, _F, _, _ = csd_matrix_batch(x_win, None, nfft, fs, overlap=nfft // 2)
+
+        np.testing.assert_allclose(C_neg, C_zero, rtol=1e-12)
+        assert not np.allclose(C_neg, C_half)
 
     def test_shape_mismatch_raises(self):
         with pytest.raises(ValueError, match="incompatible"):
@@ -283,13 +359,13 @@ class TestDetrendSegmentNaN:
     def test_nan_does_not_raise_and_is_restored(self):
         from odas_tpw.scor160.spectral import _detrend_segment
 
-        seg = np.arange(10.0)          # a clean linear ramp
-        seg[5] = np.nan               # one dropout
+        seg = np.arange(10.0)  # a clean linear ramp
+        seg[5] = np.nan  # one dropout
         ramp = np.arange(10.0)
         for method in ("constant", "linear", "parabolic", "cubic"):
             out = _detrend_segment(seg.copy(), method, ramp)  # must not raise
-            assert np.isnan(out[5])                            # NaN restored
-            assert np.all(np.isfinite(np.delete(out, 5)))      # rest detrended, finite
+            assert np.isnan(out[5])  # NaN restored
+            assert np.all(np.isfinite(np.delete(out, 5)))  # rest detrended, finite
 
     def test_csd_matrix_nan_yields_nan_not_raise(self):
         # The single-arg csd_matrix path (used by clean_shear_spec) must produce

@@ -12,9 +12,17 @@ import pytest
 from odas_tpw.rsi.profile import _extract_one, _load_from_nc, _load_source, extract_profiles
 
 
-def _write_nc(path: Path, *, with_l1_group=False, with_root_vars=True, with_pressure=True,
-              with_pres_slow=False, no_time=False, with_extra_attr=None,
-              t_units_days=False) -> Path:
+def _write_nc(
+    path: Path,
+    *,
+    with_l1_group=False,
+    with_root_vars=True,
+    with_pressure=True,
+    with_pres_slow=False,
+    no_time=False,
+    with_extra_attr=None,
+    t_units_days=False,
+) -> Path:
     """Build minimal NC test files in different layouts."""
     n_fast = 256
     n_slow = 32
@@ -295,8 +303,9 @@ class TestExtractOneWorker:
 
 
 class TestExtractProfilesFastClamp:
-    def _write_short_fast_nc(self, path: Path, n_slow: int, n_fast: int,
-                             fs_fast: float, fs_slow: float) -> Path:
+    def _write_short_fast_nc(
+        self, path: Path, n_slow: int, n_fast: int, fs_fast: float, fs_slow: float
+    ) -> Path:
         """NC whose fast axis is short of n_slow*ratio, forcing the final
         profile's (e_slow+1)*ratio to over-run len(t_fast)."""
         ds = netCDF4.Dataset(str(path), "w", format="NETCDF4")
@@ -328,9 +337,7 @@ class TestExtractProfilesFastClamp:
         sizes the dim to the available fast samples."""
         n_slow, fs_fast, fs_slow = 32, 512.0, 64.0  # ratio = 8
         n_fast = 250  # 6 short of n_slow*ratio = 256
-        nc = self._write_short_fast_nc(
-            tmp_path / "short.nc", n_slow, n_fast, fs_fast, fs_slow
-        )
+        nc = self._write_short_fast_nc(tmp_path / "short.nc", n_slow, n_fast, fs_fast, fs_slow)
         out_dir = tmp_path / "out"
         # Explicit final profile reaching the last slow index (e_slow = 31):
         # (31+1)*8 = 256 > 250.
@@ -344,3 +351,90 @@ class TestExtractProfilesFastClamp:
             assert prof.variables["sh1"].shape[0] == n_fast
         finally:
             prof.close()
+
+
+# ---------------------------------------------------------------------------
+# Audit M2 downstream: a single mid-cast _FillValue in slow pressure must not
+# silently drop every profile in the file (NaN smearing through fall rate).
+# ---------------------------------------------------------------------------
+
+
+class TestMidCastFillDoesNotDropProfiles:
+    @staticmethod
+    def _write_cast_nc(path: Path, *, fill_idx=None) -> Path:
+        """A detectable down-cast (~1 dbar/s for 16 s), optionally with one
+        unwritten slow-pressure element (-> masked/_FillValue -> NaN)."""
+        fs_fast, fs_slow = 512.0, 64.0
+        n_slow = 1024
+        n_fast = n_slow * 8
+        ds = netCDF4.Dataset(str(path), "w")
+        try:
+            ds.fs_fast = fs_fast
+            ds.fs_slow = fs_slow
+            ds.createDimension("time_fast", n_fast)
+            ds.createDimension("time_slow", n_slow)
+            tf = ds.createVariable("t_fast", "f8", ("time_fast",))
+            tf[:] = np.arange(n_fast) / fs_fast
+            tf.units = "seconds"
+            ts = ds.createVariable("t_slow", "f8", ("time_slow",))
+            ts[:] = np.arange(n_slow) / fs_slow
+            ts.units = "seconds"
+            pv = 1.0 + np.arange(n_slow) / fs_slow * 1.0  # descend 1 -> 17 dbar
+            p = ds.createVariable("P", "f8", ("time_slow",), fill_value=9.969209968386869e36)
+            p.units = "dbar"
+            for i in range(n_slow):
+                if i != fill_idx:
+                    p[i] = pv[i]  # leave fill_idx unwritten -> NaN after read
+            t1 = ds.createVariable("T1", "f8", ("time_fast",))
+            t1[:] = np.linspace(10.0, 11.0, n_fast)
+            t1.units = "degC"
+        finally:
+            ds.close()
+        return path
+
+    def test_clean_cast_finds_one_profile(self, tmp_path):
+        nc = self._write_cast_nc(tmp_path / "clean.nc")
+        paths = extract_profiles(nc, tmp_path / "out_clean")
+        assert len(paths) == 1
+
+    def test_single_midcast_fill_still_finds_profile(self, tmp_path):
+        """Regression: one mid-cast _FillValue used to NaN the whole fall rate
+        (gradient + zero-phase filtfilt smear), yielding zero profiles for the
+        entire file. The NaN repair keeps the cast usable."""
+        nc = self._write_cast_nc(tmp_path / "fill.nc", fill_idx=500)
+        paths = extract_profiles(nc, tmp_path / "out_fill")
+        assert len(paths) == 1, "mid-cast fill silently dropped all profiles"
+
+
+# ---------------------------------------------------------------------------
+# Audit io-hazard: _load_from_nc must close the Dataset on every exit path.
+# ---------------------------------------------------------------------------
+
+
+class TestLoadFromNcClosesOnError:
+    def test_handle_closed_on_error_path(self, tmp_path, monkeypatch):
+        """A NetCDF with no time variables raises ValueError; the open Dataset
+        must still be closed (handle not leaked)."""
+        # NC with attrs but no time/pressure variables -> raises in _load_from_nc.
+        path = tmp_path / "notime.nc"
+        ds0 = netCDF4.Dataset(str(path), "w")
+        ds0.fs_fast = 512.0
+        ds0.fs_slow = 64.0
+        ds0.close()
+
+        opened = []
+        real_dataset = netCDF4.Dataset
+
+        def _tracking_dataset(*args, **kwargs):
+            ds = real_dataset(*args, **kwargs)
+            opened.append(ds)
+            return ds
+
+        # _load_from_nc does `import netCDF4 as nc`, so patch the module symbol.
+        monkeypatch.setattr("netCDF4.Dataset", _tracking_dataset)
+
+        with pytest.raises(ValueError, match="No time variables"):
+            _load_from_nc(path)
+
+        assert opened, "expected the Dataset to have been opened"
+        assert not opened[-1].isopen(), "Dataset handle leaked on error path"

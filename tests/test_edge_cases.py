@@ -51,8 +51,10 @@ class TestBatchelorEdgeCases:
 
 class TestDespikeEdgeCases:
     def test_empty_array(self):
-        with pytest.raises(ValueError):
-            despike(np.array([]), 512.0)
+        # Empty/short input despikes to an empty result rather than raising a
+        # scipy ValueError (audit #25 made short sections graceful).
+        result = despike(np.array([]), 512.0)
+        assert len(result.y) == 0
 
     def test_short_array(self):
         x = np.array([1.0, 2.0, 3.0])

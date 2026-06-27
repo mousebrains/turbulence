@@ -218,6 +218,27 @@ class TestMixingCoefficients:
         # K_T does not depend on N2
         assert np.all(np.isfinite(res.K_T))
 
+    def test_near_floor_stratification_masked(self):
+        # Audit: just above the old 1e-9 floor (N2=2e-9 s^-2) the Osborn
+        # scaling emits absurd diffusivities (~10 m^2/s).  The raised
+        # floor must mask Gamma and K_rho there instead of leaking them.
+        res = mixing_coefficients(
+            np.array([1e-7]),
+            np.array([1e-8]),
+            np.array([2e-9]),
+            np.array([0.05]),
+        )
+        assert np.isnan(res.Gamma[0])
+        assert np.isnan(res.K_rho[0])
+        # A clearly stratified window (N2 above the floor) still passes.
+        ok = mixing_coefficients(
+            np.array([1e-7]),
+            np.array([1e-8]),
+            np.array([1e-5]),
+            np.array([0.05]),
+        )
+        assert np.isfinite(ok.K_rho[0])
+
     def test_negative_gradient_same_as_positive(self):
         a = mixing_coefficients(
             np.array([1e-8]), np.array([1e-8]), np.array([1e-5]), np.array([0.05])
@@ -263,6 +284,14 @@ class TestPairNearest:
     def test_empty_source(self):
         out = pair_nearest(np.array([]), np.array([]), np.array([1.0, 2.0]))
         assert np.all(np.isnan(out))
+
+    def test_zero_median_spacing_falls_back(self):
+        # Audit: duplicate source times make the auto-tolerance median
+        # diff exactly 0.0; without a guard every destination not landing
+        # on a source time is silently dropped.  A destination 0.1 s from
+        # a (duplicated) source must now pair instead of going NaN.
+        out = pair_nearest(np.array([5.0, 5.0, 5.0]), np.array([1.0, 2.0, 3.0]), np.array([5.1]))
+        assert np.isfinite(out[0])
 
     def test_explicit_max_dt(self):
         t = np.array([0.0, 10.0])
