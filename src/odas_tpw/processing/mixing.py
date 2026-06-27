@@ -45,6 +45,7 @@ Gregg, M.C., E.A. D'Asaro, J.J. Riley, and E. Kunze, 2018: Mixing
 
 from __future__ import annotations
 
+import warnings
 from typing import NamedTuple
 
 import gsw
@@ -52,14 +53,22 @@ import numpy as np
 import numpy.typing as npt
 
 # Stratification floor [s^-2]. Below ~1e-9 s^-2 (N ~ 0.02 cph) the Osborn
-# estimate diverges (division-by-zero guard).
-# Audit #30 (deferred): a 1e-9 floor still admits unphysically inflated K_rho in
-# near-unstratified water; raising the floor to ~1e-7 was tried but it changes
-# scientific output (NaN's real weakly-stratified bins) without benchmark
-# validation and desynced the per-product metadata strings, so it is deferred in
-# favor of a future bounded-K_rho approach. Keeping 1e-9 here keeps the docs in
-# sync and behavior unchanged.
+# estimate diverges (division-by-zero guard). A 1e-9 floor prevents the divide
+# but not unphysical inflation: a window whose N^2 sits just above it still
+# yields an absurd K_rho = Gamma_0 * epsilon / N^2. Rather than raise the floor
+# (which would NaN genuinely weakly-stratified bins without benchmark support),
+# K_rho is bounded from above by DEFAULT_K_RHO_MAX below (audit #30).
 DEFAULT_N2_MIN = 1e-9
+
+# Upper sanity bound on K_rho [m^2/s] (audit #30). The N2_min floor below stops
+# the divide-by-zero but not magnitude inflation: K_rho = Gamma_0 * epsilon / N2
+# grows without bound as N^2 shrinks toward the floor, producing values (e.g.
+# ~10 m^2/s) far beyond any realizable diapycnal diffusivity. Windows above this
+# bound are masked (set to NaN) rather than emitted. 1 m^2/s sits at the upper
+# edge of even the most energetic real diapycnal mixing (overflows / hydraulic
+# jumps reach ~0.1-1 m^2/s); values above it are physically implausible. The
+# bound is configurable (K_rho_max) for regimes where larger values are expected.
+DEFAULT_K_RHO_MAX = 1.0
 
 # Background temperature-gradient floor [K/m].  chi/(dT/dz)^2 diverges
 # as the mean gradient vanishes (well-mixed layers); 1e-4 K/m over a
@@ -428,6 +437,7 @@ def mixing_coefficients(
     N2_min: float = DEFAULT_N2_MIN,
     dTdz_min: float = DEFAULT_DTDZ_MIN,
     gamma_osborn: float = GAMMA_OSBORN,
+    K_rho_max: float = DEFAULT_K_RHO_MAX,
 ) -> MixingResult:
     """Derived mixing quantities from epsilon, chi, and stratification.
 
@@ -446,6 +456,9 @@ def mixing_coefficients(
     - ``Gamma`` and ``K_rho`` where ``N2 < N2_min`` (unstratified or
       statically unstable at the window scale: the Osborn scaling does
       not apply).
+    - ``K_rho`` where the result exceeds ``K_rho_max`` (a physically
+      implausible diffusivity, most often from ``N2`` near its floor; the
+      masked count is reported via :mod:`warnings`).
     - Any output where the corresponding ``chi`` or ``epsilon`` is
       non-finite or non-positive (a positive dissipation rate is required
       for every quantity).
@@ -465,6 +478,9 @@ def mixing_coefficients(
         Validity floors (see module constants).
     gamma_osborn : float
         Constant mixing coefficient for ``K_rho`` (default 0.2).
+    K_rho_max : float
+        Upper sanity bound on ``K_rho`` [m^2/s]; windows exceeding it are
+        masked as near-floor ``N2`` inflation (see ``DEFAULT_K_RHO_MAX``).
 
     Returns
     -------
@@ -489,6 +505,20 @@ def mixing_coefficients(
             np.nan,
         )
         K_rho = np.where(strat_ok & eps_ok, gamma_osborn * epsilon / N2, np.nan)
+
+    # Mask physically implausible K_rho (audit #30): an unbounded magnitude,
+    # most often from N^2 near its floor. A NaN K_rho compares False, so only
+    # finite over-ceiling windows are counted.
+    over_ceiling = K_rho > K_rho_max
+    n_masked = int(np.count_nonzero(over_ceiling))
+    if n_masked:
+        K_rho = np.where(over_ceiling, np.nan, K_rho)
+        warnings.warn(
+            f"mixing_coefficients: masked {n_masked} K_rho value(s) exceeding "
+            f"{K_rho_max} m^2/s as physically implausible diapycnal diffusivity "
+            f"(typically near-floor N^2 inflation; N2_min={N2_min} s^-2)",
+            stacklevel=2,
+        )
 
     return MixingResult(K_T=K_T, Gamma=Gamma, K_rho=K_rho)
 

@@ -78,7 +78,8 @@ DEFAULTS: dict[str, dict] = {
         "dz": 0.5,
         "min_depth": 1.0,
         "max_depth": 50.0,
-        "quantile": 0.6,
+        "quantile": 0.25,
+        "noise_factor": 2.0,
     },
     "epsilon": {
         "fft_length": 256,
@@ -384,7 +385,8 @@ top_trim:
   dz: 0.5                 # depth bin size [m]
   min_depth: 1.0          # minimum search depth [m]
   max_depth: 50.0         # maximum search depth [m]
-  quantile: 0.6           # quantile threshold for trim detection
+  quantile: 0.25          # low quantile of per-bin std = settled quiet floor
+  noise_factor: 2.0       # std > noise_factor*background == still in prop wash
 
 epsilon:
   fft_length: 256         # FFT segment length [samples]

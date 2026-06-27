@@ -2,6 +2,7 @@
 """Tests for processing.top_trim — top trimming."""
 
 import numpy as np
+import pytest
 
 from odas_tpw.processing.top_trim import compute_trim_depth, compute_trim_depths
 
@@ -28,6 +29,86 @@ class TestComputeTrimDepth:
         assert trim is not None
         # Trim depth should be somewhere around 10m (where variance drops)
         assert 1.0 <= trim <= 20.0
+
+    def test_quiet_top_noisy_middle_not_under_trimmed(self):
+        """Audit #66: a quiet near-surface bin must not end the search early.
+
+        Quiet 0-2 m, noisy (prop wash) 2-15 m, quiet below. The old
+        first-bin-below-threshold logic stopped at the quiet 0-2 m cap and
+        trimmed to ~1 m, leaving the 2-15 m noise in the profile. The fix
+        must trim past the deepest noisy bin (~15 m).
+        """
+        rng = np.random.default_rng(0)
+        n = 5000
+        depth = np.linspace(0, 60, n)
+        sh1 = rng.standard_normal(n) * 0.01
+        noisy = (depth >= 2) & (depth < 15)
+        sh1[noisy] = rng.standard_normal(int(noisy.sum())) * 10.0
+        quiet_cap = depth < 2
+        sh1[quiet_cap] = rng.standard_normal(int(quiet_cap.sum())) * 0.01
+
+        trim = compute_trim_depth(
+            depth, {"sh1": sh1}, dz=1.0, min_depth=1.0, max_depth=50.0, quantile=0.6
+        )
+        assert trim is not None
+        # Must clear the deepest noisy bin (~15 m), not stop at the quiet cap.
+        assert trim >= 14.0, f"under-trimmed to {trim} m; should clear the 2-15 m noise"
+        assert trim <= 20.0
+
+    def test_momentary_dip_in_noisy_top_not_under_trimmed(self):
+        """Audit #66: a single quiet dip inside the prop wash must not stop it.
+
+        Noisy 0-12 m with a one-bin quiet dip at 5-6 m. The trim must reach
+        past 12 m, not stop at the 5-6 m dip.
+        """
+        rng = np.random.default_rng(1)
+        n = 5000
+        depth = np.linspace(0, 60, n)
+        sh1 = rng.standard_normal(n) * 0.01
+        sh1[depth < 12] = rng.standard_normal(int((depth < 12).sum())) * 10.0
+        dip = (depth >= 5) & (depth < 6)
+        sh1[dip] = rng.standard_normal(int(dip.sum())) * 0.01
+
+        trim = compute_trim_depth(
+            depth, {"sh1": sh1}, dz=1.0, min_depth=1.0, max_depth=50.0, quantile=0.6
+        )
+        assert trim is not None
+        assert trim >= 12.0, f"dip at 5-6 m ended the search early (trim={trim} m)"
+        assert trim <= 16.0
+
+    def test_deep_prop_wash_not_under_trimmed(self):
+        """Audit #66 (deep regime): prop wash over ~half the window.
+
+        Noisy 0-25 m (~48% of the 1-50 m search range). A central
+        background quantile would land inside the prop wash and silently
+        return ~min_depth; the low default quantile keeps the background on
+        the quiet floor so the trim clears the noisy region (~25 m). Uses
+        the default ``quantile`` to lock in the chosen default.
+        """
+        rng = np.random.default_rng(2)
+        n = 6000
+        depth = np.linspace(0, 60, n)
+        sh1 = rng.standard_normal(n) * 0.01
+        sh1[depth < 25] = rng.standard_normal(int((depth < 25).sum())) * 10.0
+
+        trim = compute_trim_depth(depth, {"sh1": sh1}, dz=1.0, min_depth=1.0, max_depth=50.0)
+        assert trim is not None
+        assert trim >= 24.0, f"deep prop wash under-trimmed to {trim} m"
+        assert trim <= 28.0
+
+    def test_invalid_quantile_raises(self):
+        depth = np.linspace(0, 60, 100)
+        sh1 = np.random.randn(100) * 0.01
+        for bad in (0.0, 1.0, -0.1, 1.5):
+            with pytest.raises(ValueError, match="quantile"):
+                compute_trim_depth(depth, {"sh1": sh1}, quantile=bad)
+
+    def test_invalid_noise_factor_raises(self):
+        depth = np.linspace(0, 60, 100)
+        sh1 = np.random.randn(100) * 0.01
+        for bad in (1.0, 0.5, 0.0):
+            with pytest.raises(ValueError, match="noise_factor"):
+                compute_trim_depth(depth, {"sh1": sh1}, noise_factor=bad)
 
     def test_all_stable(self):
         """Uniform low variance — trim at first bin."""
