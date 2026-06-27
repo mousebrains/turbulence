@@ -22,6 +22,12 @@ from odas_tpw.scor160.profile import get_profiles, smooth_fall_rate
 
 logger = logging.getLogger(__name__)
 
+# Default longest slow-pressure gap [s] still treated as an isolated fill and
+# linearly repaired. Longer non-finite spans are interpolated only so the
+# fall-rate filter has a NaN-free array; profiles overlapping such a span are
+# dropped rather than detected over fabricated pressure (audit / PR #79).
+_MAX_REPAIR_GAP_S = 1.0
+
 # Backward-compatible alias (previously underscore-prefixed)
 _smooth_fall_rate = smooth_fall_rate
 
@@ -44,6 +50,7 @@ def extract_profiles(
     gps: Any = ...,
     return_scalars: Literal[False] = ...,
     output_stem: str | None = ...,
+    max_repair_gap_s: float = ...,
     **profile_kwargs: Any,
 ) -> list[Path]: ...
 
@@ -57,6 +64,7 @@ def extract_profiles(
     *,
     return_scalars: Literal[True],
     output_stem: str | None = ...,
+    max_repair_gap_s: float = ...,
     **profile_kwargs: Any,
 ) -> tuple[list[Path], list[dict[str, float]]]: ...
 
@@ -68,6 +76,7 @@ def extract_profiles(
     gps: Any = None,
     return_scalars: bool = False,
     output_stem: str | None = None,
+    max_repair_gap_s: float = _MAX_REPAIR_GAP_S,
     **profile_kwargs: Any,
 ) -> list[Path] | tuple[list[Path], list[dict[str, float]]]:
     """Extract profiles from a PFile or full-record NetCDF.
@@ -97,6 +106,12 @@ def extract_profiles(
     output_stem : str, optional
         Override the filename/global-title stem used for per-profile NetCDFs.
         When omitted, the source file stem is used.
+    max_repair_gap_s : float, default 1.0
+        Longest slow-pressure non-finite span [s] still treated as an
+        isolated fill and linearly repaired. Longer gaps are interpolated
+        only so the fall-rate filter has a NaN-free array; any profile
+        overlapping such a fabricated span is dropped (relevant only to
+        external/partial NetCDF inputs — raw ``.p`` pressure has no fills).
     **profile_kwargs
         Keyword arguments passed to get_profiles (P_min, W_min, etc.).
 
@@ -115,13 +130,15 @@ def extract_profiles(
 
     data = _load_source(source)
     stem = output_stem or data["stem"]
+    fs_slow = data["fs_slow"]
+    fs_fast = data["fs_fast"]
     # Defect (audit M2 downstream): a single NaN in slow pressure (e.g. a
     # _FillValue gap from a partial/external NetCDF) is smeared across the
     # whole fall rate by smooth_fall_rate (gradient + zero-phase filtfilt),
-    # silently dropping every profile. Repair isolated NaNs before detection.
-    P_slow = _repair_nans(data["P"], "P_slow", stem)
-    fs_slow = data["fs_slow"]
-    fs_fast = data["fs_fast"]
+    # silently dropping every profile. Repair isolated NaNs before detection;
+    # long_gap flags fabricated long spans whose profiles are dropped below.
+    max_gap = max(1, round(max_repair_gap_s * fs_slow))
+    P_slow, long_gap = _repair_nans(data["P"], "P_slow", stem, max_gap)
     ratio = round(fs_fast / fs_slow)
     start_epoch_s = data.get("start_epoch_s")
 
@@ -130,6 +147,18 @@ def extract_profiles(
 
     if profiles is None:
         profiles = get_profiles(P_slow, W, fs_slow, **profile_kwargs)
+    if long_gap.any():
+        # Drop profiles overlapping a fabricated long gap (their pressure /
+        # boundaries are interpolated, not measured). Other casts survive.
+        kept = [(s, e) for (s, e) in profiles if not long_gap[s : e + 1].any()]
+        n_dropped = len(profiles) - len(kept)
+        if n_dropped:
+            logger.warning(
+                "%s: dropped %d profile(s) overlapping a fabricated pressure gap",
+                stem,
+                n_dropped,
+            )
+        profiles = kept
     if not profiles:
         logger.warning(f"No profiles found in {stem}")
         return ([], []) if return_scalars else []
@@ -364,7 +393,9 @@ def _nc_filled(var) -> np.ndarray:
     return np.asarray(np.ma.filled(var[:].astype(np.float64), np.nan))
 
 
-def _repair_nans(x: np.ndarray, name: str, stem: str) -> np.ndarray:
+def _repair_nans(
+    x: np.ndarray, name: str, stem: str, max_gap: int
+) -> tuple[np.ndarray, np.ndarray]:
     """Linearly interpolate NaNs (e.g. _FillValue gaps) over the sample index.
 
     Defect (audit M2 downstream): ``_nc_filled`` correctly turns a masked
@@ -374,25 +405,54 @@ def _repair_nans(x: np.ndarray, name: str, stem: str) -> np.ndarray:
     lone mid-cast fill silently drops every profile in the file. Repairing
     isolated NaNs by linear interpolation keeps the rest of the cast usable;
     a warning makes a poisoned/partial cast visible rather than silently lost.
+
+    Every gap is interpolated so the fall-rate filter sees a NaN-free array,
+    but a contiguous non-finite run longer than ``max_gap`` samples is
+    *fabricated*, not repaired: linear interpolation across many missing
+    samples invents pressure that must not define a profile (PR #79 review).
+    The returned boolean mask flags those long-gap samples so the caller can
+    drop any profile overlapping them.
+
+    Returns ``(repaired, long_gap_mask)``.
     """
+    long_gap = np.zeros(x.size, dtype=bool)
     bad = ~np.isfinite(x)
     n_bad = int(bad.sum())
     if n_bad == 0:
-        return x
+        return x, long_gap
     good = ~bad
     if good.sum() < 2:
         # Not enough finite samples to interpolate; leave as-is and warn loudly.
         logger.warning(
             "%s: %s has %d/%d non-finite samples; cannot repair", stem, name, n_bad, x.size
         )
-        return x
+        return x, long_gap
+    # Flag contiguous non-finite runs longer than max_gap. Padding with a finite
+    # sentinel at both ends turns run starts into +1 and ends into -1 in the diff.
+    d = np.diff(np.concatenate(([0], bad.astype(np.int8), [0])))
+    starts = np.flatnonzero(d == 1)
+    ends = np.flatnonzero(d == -1)  # exclusive
+    n_long = 0
+    for s, e in zip(starts, ends):
+        if (e - s) > max_gap:
+            long_gap[s:e] = True
+            n_long += 1
     idx = np.arange(x.size, dtype=np.float64)
     repaired = x.copy()
     # np.interp clamps to the finite endpoints, so leading/trailing NaNs are
     # held flat rather than re-introducing NaN.
     repaired[bad] = np.interp(idx[bad], idx[good], x[good])
+    if n_long:
+        logger.warning(
+            "%s: %s has %d non-finite span(s) longer than %d samples; interpolated for "
+            "fall-rate only, profiles overlapping them will be dropped",
+            stem,
+            name,
+            n_long,
+            max_gap,
+        )
     logger.warning("%s: interpolated %d/%d non-finite samples in %s", stem, n_bad, x.size, name)
-    return repaired
+    return repaired, long_gap
 
 
 def _load_from_nc(nc_path: Path) -> dict[str, Any]:

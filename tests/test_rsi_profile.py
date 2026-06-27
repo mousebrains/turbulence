@@ -361,12 +361,14 @@ class TestExtractProfilesFastClamp:
 
 class TestMidCastFillDoesNotDropProfiles:
     @staticmethod
-    def _write_cast_nc(path: Path, *, fill_idx=None) -> Path:
+    def _write_cast_nc(path: Path, *, fill_idx=None, fill_slice=None) -> Path:
         """A detectable down-cast (~1 dbar/s for 16 s), optionally with one
-        unwritten slow-pressure element (-> masked/_FillValue -> NaN)."""
+        unwritten slow-pressure element or a contiguous unwritten span
+        (-> masked/_FillValue -> NaN)."""
         fs_fast, fs_slow = 512.0, 64.0
         n_slow = 1024
         n_fast = n_slow * 8
+        lo, hi = fill_slice if fill_slice is not None else (None, None)
         ds = netCDF4.Dataset(str(path), "w")
         try:
             ds.fs_fast = fs_fast
@@ -383,8 +385,9 @@ class TestMidCastFillDoesNotDropProfiles:
             p = ds.createVariable("P", "f8", ("time_slow",), fill_value=9.969209968386869e36)
             p.units = "dbar"
             for i in range(n_slow):
-                if i != fill_idx:
-                    p[i] = pv[i]  # leave fill_idx unwritten -> NaN after read
+                in_slice = lo is not None and lo <= i < hi
+                if i != fill_idx and not in_slice:
+                    p[i] = pv[i]  # leave fill_idx / fill_slice unwritten -> NaN
             t1 = ds.createVariable("T1", "f8", ("time_fast",))
             t1[:] = np.linspace(10.0, 11.0, n_fast)
             t1.units = "degC"
@@ -404,6 +407,69 @@ class TestMidCastFillDoesNotDropProfiles:
         nc = self._write_cast_nc(tmp_path / "fill.nc", fill_idx=500)
         paths = extract_profiles(nc, tmp_path / "out_fill")
         assert len(paths) == 1, "mid-cast fill silently dropped all profiles"
+
+    def test_long_gap_profile_dropped(self, tmp_path, caplog):
+        """PR #79 review: a long contiguous fill (> max_repair_gap_s) fabricates
+        pressure; the profile overlapping it must be dropped, not detected over
+        synthetic data. fs_slow=64, default 1 s -> max_gap=64 samples; a 200-
+        sample gap is fabricated."""
+        nc = self._write_cast_nc(tmp_path / "biggap.nc", fill_slice=(400, 600))
+        with caplog.at_level("WARNING"):
+            paths = extract_profiles(nc, tmp_path / "out_biggap")
+        assert len(paths) == 0
+        assert any("fabricated pressure gap" in r.message for r in caplog.records)
+
+    def test_subthreshold_gap_still_repaired(self, tmp_path):
+        """A contiguous fill shorter than max_gap (64) is an isolated fill: it is
+        repaired and the profile is kept."""
+        nc = self._write_cast_nc(tmp_path / "smallgap.nc", fill_slice=(480, 520))
+        paths = extract_profiles(nc, tmp_path / "out_smallgap")
+        assert len(paths) == 1
+
+    def test_long_gap_can_be_repaired_with_larger_threshold(self, tmp_path):
+        """The cap is configurable: raising max_repair_gap_s readmits the cast."""
+        nc = self._write_cast_nc(tmp_path / "cfggap.nc", fill_slice=(400, 600))
+        paths = extract_profiles(nc, tmp_path / "out_cfggap", max_repair_gap_s=10.0)
+        assert len(paths) == 1
+
+
+# ---------------------------------------------------------------------------
+# _repair_nans — short gaps repaired, long gaps flagged (PR #79 review)
+# ---------------------------------------------------------------------------
+
+
+class TestRepairNans:
+    def test_short_repaired_long_flagged(self):
+        from odas_tpw.rsi.profile import _repair_nans
+
+        x = np.arange(100, dtype=np.float64)
+        x[10:13] = np.nan  # 3-sample run (short)
+        x[40:60] = np.nan  # 20-sample run (long, > max_gap=5)
+        repaired, long_gap = _repair_nans(x, "P_slow", "stem", max_gap=5)
+        # Every NaN is interpolated so the fall-rate filter has a clean array.
+        assert np.isfinite(repaired).all()
+        # Short run interpolated back to the true ramp; not flagged.
+        np.testing.assert_allclose(repaired[10:13], [10.0, 11.0, 12.0])
+        assert not long_gap[10:13].any()
+        # Long run flagged exactly over its span, nothing else.
+        assert long_gap[40:60].all()
+        assert long_gap.sum() == 20
+
+    def test_no_nan_returns_clean_mask(self):
+        from odas_tpw.rsi.profile import _repair_nans
+
+        x = np.linspace(0.0, 1.0, 50)
+        repaired, long_gap = _repair_nans(x, "P_slow", "stem", max_gap=5)
+        assert repaired is x
+        assert not long_gap.any()
+
+    def test_gap_exactly_at_threshold_not_flagged(self):
+        from odas_tpw.rsi.profile import _repair_nans
+
+        x = np.arange(50, dtype=np.float64)
+        x[20:25] = np.nan  # exactly 5 samples; not > max_gap=5
+        _, long_gap = _repair_nans(x, "P_slow", "stem", max_gap=5)
+        assert not long_gap.any()
 
 
 # ---------------------------------------------------------------------------
