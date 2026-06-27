@@ -267,6 +267,9 @@ def csd_matrix(
     norm = n_seg * nfft * rate / 2
     for arr in (Cxx, Cyy, Cxy):
         arr /= norm
+        # DC (f=0) and Nyquist bins are not doubled when folding to a one-sided
+        # spectrum (they have no negative-frequency twin), so halve them back
+        # (#76; matches csd_matrix_odas.m's one-sided normalization).
         arr[0] /= 2
         arr[-1] /= 2
     F = np.arange(n_freq) * rate / nfft

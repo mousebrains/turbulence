@@ -617,7 +617,7 @@ class TestBinaryGuards:
         def boom(_a, _b):
             raise OSError("simulated commit failure")
 
-        monkeypatch.setattr(cp.os, "replace", boom)
+        monkeypatch.setattr(cp.os, "link", boom)
         with pytest.raises(OSError, match="simulated commit failure"):
             cp.write_patched_pfile(tiny, dst, text)
         assert not dst.exists()  # no corrupt file left behind

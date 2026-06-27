@@ -12,6 +12,7 @@ import glob as globmod
 import hashlib
 import json
 import math
+import numbers
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -25,9 +26,13 @@ def _normalize_value(v):
     # bool check must come before int (bool is a subclass of int)
     if isinstance(v, bool):
         return v
-    if isinstance(v, int):
-        return v
-    if isinstance(v, float):
+    # numbers.Integral/Real (not int/float) so a numpy scalar from a config
+    # value is coerced to a JSON-serializable Python number instead of crashing
+    # json.dumps later in canonicalize().
+    if isinstance(v, numbers.Integral):
+        return int(v)
+    if isinstance(v, numbers.Real):
+        v = float(v)
         # int(nan) raises ValueError and int(inf) raises OverflowError, which
         # would crash canonicalize -> compute_hash -> resolve_output_dir with an
         # opaque message. Hash non-finite values by their repr instead.

@@ -290,6 +290,19 @@ class TestCombineProfiles:
         data_vars = {k: (["depth_bin"], v) for k, v in var_dict.items()}
         return xr.Dataset(data_vars, coords={"depth_bin": depth_vals})
 
+    def test_combine_carries_var_units_to_l6(self):
+        # combine_profiles must carry each variable's CF attrs from the L5 binned
+        # sources into the L6 combined product, not drop them.
+        def binned(eps):
+            return xr.Dataset(
+                {"epsilon": (["depth_bin"], eps, {"units": "W kg-1", "long_name": "TKE diss"})},
+                coords={"depth_bin": [0.5, 1.5]},
+            )
+
+        result = combine_profiles([binned([1e-8, 1e-7]), binned([2e-8, 2e-7])])
+        assert result["epsilon"].attrs["units"] == "W kg-1"
+        assert result["epsilon"].attrs["long_name"] == "TKE diss"
+
     def test_combine_two_profiles(self):
         ds1 = self._make_binned([0.5, 1.5], {"T": [10.0, 11.0]})
         ds2 = self._make_binned([0.5, 1.5], {"T": [12.0, 13.0]})

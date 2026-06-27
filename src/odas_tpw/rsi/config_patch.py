@@ -355,6 +355,14 @@ def edit_config_text(
     ``ValueError`` for unknown stanzas/keys (unless ``add_keys``), unknown or
     ambiguous channel names, or a missing target section.
     """
+    # Apply-boundary re-validation: a directly-constructed EditSpec (bypassing
+    # the validated load_edit_spec) is still key/value-checked here, so the
+    # stanza-injection guard holds on the programmatic API, not only the CLI.
+    for _sec, _kv in spec.sections.items():
+        _check_keymap(_kv, _sec)
+    for _name, _kv in spec.channels.items():
+        _check_keymap(_kv, f"channels.{_name}")
+
     eol = _detect_eol(config_str)
 
     # Separate any previously-embedded original block; we only edit above it and
@@ -539,8 +547,18 @@ def read_config_text(path: str | Path) -> str:
         # matching the guard extract_pfile_segment already enforces.
         if header_size < HEADER_BYTES:
             raise ValueError(f"{path.name}: invalid header_size={header_size}")
+        f.seek(0, 2)
+        file_size = f.tell()
+        if header_size + config_size > file_size:
+            raise ValueError(
+                f"{path.name}: header_size+config_size ({header_size + config_size}) exceeds "
+                f"file size ({file_size}); truncated or corrupt"
+            )
         f.seek(header_size)
-        return f.read(config_size).decode("latin-1")
+        cfg = f.read(config_size)
+        if len(cfg) != config_size:
+            raise ValueError(f"{path.name}: config string truncated")
+        return cfg.decode("latin-1")
 
 
 def write_patched_pfile(src: str | Path, dst: str | Path, new_config_text: str) -> Path:
@@ -616,7 +634,12 @@ def write_patched_pfile(src: str | Path, dst: str | Path, new_config_text: str) 
                 os.fsync(out.fileno())
             if dst.exists():
                 raise FileExistsError(f"{dst} already exists; remove it or choose another --out")
-            os.replace(tmp, dst)
+            # os.link (not os.replace): atomically fails if dst already exists,
+            # preserving the no-clobber-under-concurrency guarantee the prior
+            # open(dst, "xb") had — os.replace would silently overwrite a file a
+            # racing process created between the check above and the commit.
+            os.link(tmp, dst)
+            tmp.unlink()
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
