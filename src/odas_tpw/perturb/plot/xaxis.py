@@ -82,9 +82,7 @@ def _circmean_deg(lon: np.ndarray) -> float:
     if not np.any(finite):
         return float("nan")
     return float(
-        np.degrees(
-            np.arctan2(np.nanmean(np.sin(rad[finite])), np.nanmean(np.cos(rad[finite])))
-        )
+        np.degrees(np.arctan2(np.nanmean(np.sin(rad[finite])), np.nanmean(np.cos(rad[finite]))))
     )
 
 
@@ -101,9 +99,7 @@ def to_epoch_seconds(time: np.ndarray) -> np.ndarray:
     return t.astype(float)
 
 
-def haversine_m(
-    lat0: float, lon0: float, lat: np.ndarray, lon: np.ndarray
-) -> np.ndarray:
+def haversine_m(lat0: float, lon0: float, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     """Great-circle distance [m] from the fixed point (lat0, lon0) to each point.
 
     NaN positions propagate to NaN distance.  Dateline-safe via longitude
@@ -138,9 +134,11 @@ def _to_local_xy(
     lat: np.ndarray, lon: np.ndarray, lat_ref: float, lon_ref: float
 ) -> tuple[np.ndarray, np.ndarray]:
     """Local equirectangular (east, north) metres about (lat_ref, lon_ref)."""
-    x = np.radians(_wrap_deg(np.asarray(lon, float) - lon_ref)) * np.cos(
-        np.radians(lat_ref)
-    ) * _EARTH_RADIUS_M
+    x = (
+        np.radians(_wrap_deg(np.asarray(lon, float) - lon_ref))
+        * np.cos(np.radians(lat_ref))
+        * _EARTH_RADIUS_M
+    )
     y = np.radians(np.asarray(lat, float) - lat_ref) * _EARTH_RADIUS_M
     return x, y
 
@@ -255,7 +253,7 @@ def signed_distance_axis(
     # midpoint label) stays on the correct side of +/-180 (bug_001).
     mid_lon = _circmean_deg(lon)
     east, north = _to_local_xy(lat, lon, mid_lat, mid_lon)
-    de = east - float(np.mean(east[finite]))   # east displacement from centroid
+    de = east - float(np.mean(east[finite]))  # east displacement from centroid
     dn = north - float(np.mean(north[finite]))  # north displacement
     ef, nf = de[finite], dn[finite]
 
@@ -265,7 +263,7 @@ def signed_distance_axis(
 
     # Orientation tensor via the doubled-angle complex sum.
     s = complex(np.sum((ef + 1j * nf) ** 2))
-    phi = float(np.angle(s)) / 2.0               # major-axis angle from east
+    phi = float(np.angle(s)) / 2.0  # major-axis angle from east
     axis = np.array([np.cos(phi), np.sin(phi)])  # (east, north) unit vector
 
     proj = de * axis[0] + dn * axis[1]
@@ -281,7 +279,10 @@ def signed_distance_axis(
     std_deg = float(np.degrees(np.sqrt(-2.0 * np.log(r)) / 2.0))
     return SignedAxis(
         np.asarray(proj * _unit_scale(units), dtype=float),
-        mid_lat, mid_lon, bearing, std_deg,
+        mid_lat,
+        mid_lon,
+        bearing,
+        std_deg,
     )
 
 
@@ -324,7 +325,17 @@ def compute(
     if method == "latitude":
         return XAxis(x=np.asarray(lat, float), label=r"Latitude ($^{\circ}$N)", kind="spatial")
     if method == "longitude":
-        return XAxis(x=np.asarray(lon, float), label=r"Longitude ($^{\circ}$E)", kind="spatial")
+        # Unwrap about the circular mean so a track straddling +/-180 stays
+        # contiguous and monotone instead of splitting into two antipodal
+        # clusters with a ~358-deg blank gap once columns are sorted by x
+        # (bug_001 dateline). A non-crossing track is unchanged: the wrapped
+        # offset equals the raw offset, so x == lon to within rounding.
+        ref = _circmean_deg(np.asarray(lon, float))
+        if np.isfinite(ref):
+            x = ref + _wrap_deg(np.asarray(lon, float) - ref)
+        else:
+            x = np.asarray(lon, float)
+        return XAxis(x=np.asarray(x, float), label=r"Longitude ($^{\circ}$E)", kind="spatial")
     if method == "distance_from_point":
         point = params.get("point")
         if point is None or len(point) != 2:
@@ -337,9 +348,7 @@ def compute(
         if waypoints is None:
             raise ValueError("along_line needs params['waypoints'] = [[lat, lon], ...]")
         along, cross = project_along_line(lat, lon, np.asarray(waypoints, float), units)
-        return XAxis(
-            x=along, label=f"Along-track distance [{units}]", kind="spatial", cross=cross
-        )
+        return XAxis(x=along, label=f"Along-track distance [{units}]", kind="spatial", cross=cross)
     if method == "signed_distance":
         r = signed_distance_axis(lat, lon, time, units)
         if np.isfinite(r.mid_lat) and np.isfinite(r.bearing_deg):

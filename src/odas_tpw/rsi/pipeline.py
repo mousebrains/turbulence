@@ -34,6 +34,51 @@ logger = logging.getLogger(__name__)
 # epsilon shear high-pass (which scales with the epsilon FFT length).
 _CHI_HP_CUT = 0.25
 
+# QC thresholds for the per-probe chi used in the derived mixing quantities
+# (K_T/Gamma). Mirror the chi-from-epsilon fom_limit in window.py and the
+# K_max_ratio < 0.5 "most variance extrapolated" convention (see CLAUDE.md), so
+# a poorly-fit thermistor window cannot bias K_T/Gamma the way the raw
+# L4ChiData.chi_final (geometric mean over all finite probes, no QC) would.
+_CHI_FOM_LIMIT = 1.15
+_CHI_K_MAX_RATIO_MIN = 0.5
+
+
+def _qc_chi_final(
+    chi: np.ndarray,
+    fom: np.ndarray,
+    k_max_ratio: np.ndarray,
+    fom_limit: float = _CHI_FOM_LIMIT,
+    k_max_ratio_min: float = _CHI_K_MAX_RATIO_MIN,
+) -> np.ndarray:
+    """Per-window geometric-mean chi over probes that pass spectral QC.
+
+    bug: ``L4ChiData.chi_final`` averages every probe with finite chi>0 with no
+    fom / K_max_ratio cut, so a high-fom or poorly-resolved (K_max_ratio<0.5,
+    mostly-extrapolated) thermistor window biases the mixing products K_T/Gamma
+    in the rsi pipeline only — unlike the QC-filtered epsilon driving the same
+    products. Drop those probes here; fall back to the all-probe geometric mean
+    only when no probe survives, so a window is never silently lost.
+
+    All inputs are shape ``(n_probe, n_window)``. Returns ``(n_window,)``.
+    """
+    _n_probe, n_window = chi.shape
+    out = np.full(n_window, np.nan)
+    valid = np.isfinite(chi) & (chi > 0)
+    passes_qc = (
+        valid
+        & np.isfinite(fom)
+        & (fom <= fom_limit)
+        & np.isfinite(k_max_ratio)
+        & (k_max_ratio >= k_max_ratio_min)
+    )
+    for j in range(n_window):
+        good = passes_qc[:, j]
+        if not good.any():
+            good = valid[:, j]  # fall back to all finite probes
+        if good.any():
+            out[j] = np.exp(np.mean(np.log(chi[good, j])))
+    return out
+
 
 def _epsilon_hp_cut(fs_fast: float, fft_length: int, override: float | None) -> float:
     """Shear high-pass cutoff [Hz] for epsilon, matching ``_compute_epsilon``.
@@ -71,6 +116,31 @@ def _resolve_salinity(
     if isinstance(salinity, np.ndarray) and len(salinity) != l1.n_time:
         return float(np.nanmean(salinity)), False
     return salinity, False
+
+
+def _epsilon_window_salinity(
+    salinity: float | np.ndarray | None,
+    sample_time: np.ndarray,
+    n_time: int,
+    win_time: np.ndarray,
+    n_spectra: int,
+) -> float | np.ndarray | None:
+    """Per-window salinity for L4 epsilon viscosity.
+
+    ``process_l4`` accepts only per-window salinity (size ``n_spectra``); it
+    collapses any other-sized array to its nanmean.  A *measured* per-sample
+    series (size ``n_time``) would therefore drive epsilon viscosity with a
+    constant profile mean while chi and N2 use the per-window measured series —
+    so the three viscosities would not share a salinity basis.  Interpolate the
+    per-sample series onto the window center times so they do.  Scalars,
+    ``None``, and already-per-window arrays pass through unchanged.
+    """
+    if not (isinstance(salinity, np.ndarray) and salinity.size == n_time and n_spectra > 0):
+        return salinity
+    finite = np.isfinite(salinity)
+    if not finite.any():
+        return salinity
+    return np.asarray(np.interp(win_time, sample_time[finite], salinity[finite]), dtype=np.float64)
 
 
 def run_pipeline(
@@ -343,10 +413,23 @@ def _process_profile(
         logger.warning("No valid spectral windows")
         return None
 
+    # Salinity resolved once (measured JAC C/T > user-supplied > 35 PSU) so the
+    # epsilon, chi, and N2 viscosities never disagree within a run. This matches
+    # perturb's chi.salinity:"measured" feeding both process_l3_chi and N2.
+    chi_salinity, measured_sal = _resolve_salinity(l1, salinity)
+    # chi (process_l3_chi) and N2 (sorted_stratification) consume the per-sample
+    # series with timestamps; process_l4 only takes per-window salinity, so a
+    # measured series is interpolated onto the L3 window times here — otherwise
+    # epsilon would silently use the profile mean while chi/N2 use per-window.
+    eps_salinity = _epsilon_window_salinity(
+        chi_salinity, l1.time, l1.n_time, l3.time, l3.n_spectra
+    )
+
     # Step 4: L4 epsilon
     l4 = process_l4(
         l3,
         temp=l3.temp,
+        salinity=eps_salinity,
         f_AA=f_AA,
         fit_order=fit_order,
         num_ffts=2 * (l3_params.diss_length // l3_params.fft_length) - 1,
@@ -354,11 +437,6 @@ def _process_profile(
         diss_length_s=l3_params.diss_length / l1.fs_fast,
     )
     logger.info(f"Epsilon: {l4.n_spectra} estimates")
-
-    # Salinity for chi viscosity and stratification, resolved once so the two
-    # never disagree: measured (JAC C/T) > user-supplied > 35 PSU. This matches
-    # perturb's chi.salinity:"measured" feeding both process_l3_chi and N2.
-    chi_salinity, measured_sal = _resolve_salinity(l1, salinity)
 
     # Step 5: L2_chi cleaning + chi spectra (if temperature data available)
     l3_chi = None
@@ -429,11 +507,7 @@ def _process_profile(
     # silently dropping the whole block (bug_003).
     chi_primary = l4_chi_eps if l4_chi_eps is not None else l4_chi_fit_result
     mixing_vars: dict[str, tuple[np.ndarray, dict]] | None = None
-    if (
-        chi_primary is not None
-        and chi_primary.n_spectra > 0
-        and l1.temp.size == l1.n_time
-    ):
+    if chi_primary is not None and chi_primary.n_spectra > 0 and l1.temp.size == l1.n_time:
         try:
             from odas_tpw.processing.mixing import (
                 mixing_coefficients,
@@ -462,9 +536,14 @@ def _process_profile(
                 eps_on_chi = pair_nearest(l4.time, l4.epsi_final, chi_primary.time)
             else:
                 eps_on_chi = np.full(chi_primary.n_spectra, np.nan)
-            mix = mixing_coefficients(
-                eps_on_chi, chi_primary.chi_final, strat.N2, strat.dTdz
+            # QC the per-probe chi before the mixing products (K_T/Gamma) so a
+            # high-fom / poorly-resolved thermistor window cannot bias them; the
+            # raw chi_primary.chi_final (no QC) is still what the L4_chi output
+            # carries for traceability.
+            chi_for_mixing = _qc_chi_final(
+                chi_primary.chi, chi_primary.fom, chi_primary.K_max_ratio
             )
+            mix = mixing_coefficients(eps_on_chi, chi_for_mixing, strat.N2, strat.dTdz)
             if measured_sal:
                 sal_note = "practical salinity from JAC_C/JAC_T/P (TEOS-10)"
             elif salinity is None:
@@ -534,7 +613,8 @@ def _process_profile(
                             "doi:10.1175/1520-0485(1980)010<0083:EOTLRO>2.0.CO;2. "
                             "Compare with K_T: agreement implies the measured "
                             "Gamma is near the canonical 0.2. NaN where "
-                            "N2 < 1e-9 s-2."
+                            "N2 < 1e-9 s-2 or K_rho > 1 m2 s-1 (physically "
+                            "implausible diffusivity from near-floor N2)."
                         ),
                     },
                 ),

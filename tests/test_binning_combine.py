@@ -216,6 +216,67 @@ class TestBinByDepthOutputStructure:
         assert "T" in ds.data_vars
 
 
+class TestBinByDepthCFAttrs:
+    """Binned data variables carry CF units/long_name/standard_name.
+
+    Regression for the audit finding that bin_by_depth attached only
+    cell_methods, leaving the L5/L6 headline products (epsilon, chi, K_T,
+    Gamma, K_rho, P_mean, speed, N2, dTdz) with no units. On the OLD code
+    the units assertions below fail (KeyError).
+    """
+
+    def test_epsilon_has_cf_units(self):
+        ds = bin_by_depth(
+            np.array([0.5, 1.5]), {"epsilon": np.array([1e-8, 1e-7])}, bin_size=2.0
+        )
+        a = ds["epsilon"].attrs
+        assert a["units"] == "W kg-1"
+        assert (
+            a["standard_name"]
+            == "specific_turbulent_kinetic_energy_dissipation_in_sea_water"
+        )
+        # cell_methods is preserved alongside the new CF attrs.
+        assert a["cell_methods"] == "depth_bin: mean"
+
+    def test_chi_has_cf_units(self):
+        ds = bin_by_depth(
+            np.array([0.5, 1.5]), {"chi": np.array([1e-10, 1e-9])}, bin_size=2.0
+        )
+        assert ds["chi"].attrs["units"] == "K2 s-1"
+
+    def test_mixing_and_diag_vars_have_units(self):
+        pres = np.array([0.5, 1.5])
+        v = np.array([1.0, 2.0])
+        ds = bin_by_depth(
+            pres,
+            {
+                "K_T": v,
+                "K_rho": v,
+                "Gamma": v,
+                "P_mean": pres,
+                "speed": v,
+                "N2": v,
+                "dTdz": v,
+            },
+            bin_size=2.0,
+        )
+        assert ds["K_T"].attrs["units"] == "m2 s-1"
+        assert ds["K_rho"].attrs["units"] == "m2 s-1"
+        assert ds["Gamma"].attrs["units"] == "1"
+        assert ds["P_mean"].attrs["units"] == "dbar"
+        assert ds["speed"].attrs["units"] == "m s-1"
+        assert ds["N2"].attrs["units"] == "s-2"
+        assert ds["dTdz"].attrs["units"] == "K m-1"
+
+    def test_unknown_var_stays_metadata_free(self):
+        # A custom variable name gets no CF attrs, only cell_methods.
+        ds = bin_by_depth(
+            np.array([0.5, 1.5]), {"my_var": np.array([1.0, 2.0])}, bin_size=2.0
+        )
+        assert "units" not in ds["my_var"].attrs
+        assert ds["my_var"].attrs["cell_methods"] == "depth_bin: mean"
+
+
 # ---------------------------------------------------------------------------
 # combine_profiles
 # ---------------------------------------------------------------------------
@@ -228,6 +289,19 @@ class TestCombineProfiles:
         """Helper: build a bin_by_depth-style Dataset."""
         data_vars = {k: (["depth_bin"], v) for k, v in var_dict.items()}
         return xr.Dataset(data_vars, coords={"depth_bin": depth_vals})
+
+    def test_combine_carries_var_units_to_l6(self):
+        # combine_profiles must carry each variable's CF attrs from the L5 binned
+        # sources into the L6 combined product, not drop them.
+        def binned(eps):
+            return xr.Dataset(
+                {"epsilon": (["depth_bin"], eps, {"units": "W kg-1", "long_name": "TKE diss"})},
+                coords={"depth_bin": [0.5, 1.5]},
+            )
+
+        result = combine_profiles([binned([1e-8, 1e-7]), binned([2e-8, 2e-7])])
+        assert result["epsilon"].attrs["units"] == "W kg-1"
+        assert result["epsilon"].attrs["long_name"] == "TKE diss"
 
     def test_combine_two_profiles(self):
         ds1 = self._make_binned([0.5, 1.5], {"T": [10.0, 11.0]})
@@ -311,6 +385,25 @@ class TestCombineProfiles:
         result = combine_profiles([])
         assert isinstance(result, xr.Dataset)
         assert len(result.data_vars) == 0
+
+    def test_cf_global_attrs_present(self):
+        """The L6 combined product must advertise CF/ACDD conformance and the
+        CF §9 profile featureType, matching every other writer in the package
+        (audit: combined product previously had empty global .attrs)."""
+        ds1 = self._make_binned([0.5, 1.5], {"T": [10.0, 11.0]})
+        ds2 = self._make_binned([0.5, 1.5], {"T": [12.0, 13.0]})
+        result = combine_profiles([ds1, ds2])
+        assert result.attrs["Conventions"] == "CF-1.13, ACDD-1.3"
+        assert result.attrs["featureType"] == "profile"
+
+    def test_cf_global_attrs_with_metadata(self):
+        """CF attrs survive alongside per-profile metadata attrs."""
+        ds1 = self._make_binned([0.5], {"T": [10.0]})
+        meta = [{"file": "cast001.p"}]
+        result = combine_profiles([ds1], profile_metadata=meta)
+        assert result.attrs["Conventions"] == "CF-1.13, ACDD-1.3"
+        assert result.attrs["featureType"] == "profile"
+        assert result.attrs["profile_0_file"] == "cast001.p"
 
     def test_mixed_variables_across_profiles(self):
         ds1 = self._make_binned([0.5], {"T": [10.0], "S": [35.0]})

@@ -22,13 +22,22 @@ from odas_tpw.scor160.profile import get_profiles, smooth_fall_rate
 
 logger = logging.getLogger(__name__)
 
+# Default longest slow-pressure gap [s] still treated as an isolated fill and
+# linearly repaired. Longer non-finite spans are interpolated only so the
+# fall-rate filter has a NaN-free array; profiles overlapping such a span are
+# dropped rather than detected over fabricated pressure (audit / PR #79).
+_MAX_REPAIR_GAP_S = 1.0
+
 # Backward-compatible alias (previously underscore-prefixed)
 _smooth_fall_rate = smooth_fall_rate
+
 
 # Backward-compatible alias — computed from VEHICLE_ATTRIBUTES
 def _build_vehicle_tau() -> dict[str, float]:
     from odas_tpw.rsi.vehicle import VEHICLE_ATTRIBUTES
+
     return {k: v[1] for k, v in VEHICLE_ATTRIBUTES.items()}
+
 
 _VEHICLE_TAU = _build_vehicle_tau()
 
@@ -41,6 +50,7 @@ def extract_profiles(
     gps: Any = ...,
     return_scalars: Literal[False] = ...,
     output_stem: str | None = ...,
+    max_repair_gap_s: float = ...,
     **profile_kwargs: Any,
 ) -> list[Path]: ...
 
@@ -54,6 +64,7 @@ def extract_profiles(
     *,
     return_scalars: Literal[True],
     output_stem: str | None = ...,
+    max_repair_gap_s: float = ...,
     **profile_kwargs: Any,
 ) -> tuple[list[Path], list[dict[str, float]]]: ...
 
@@ -65,6 +76,7 @@ def extract_profiles(
     gps: Any = None,
     return_scalars: bool = False,
     output_stem: str | None = None,
+    max_repair_gap_s: float = _MAX_REPAIR_GAP_S,
     **profile_kwargs: Any,
 ) -> list[Path] | tuple[list[Path], list[dict[str, float]]]:
     """Extract profiles from a PFile or full-record NetCDF.
@@ -94,6 +106,12 @@ def extract_profiles(
     output_stem : str, optional
         Override the filename/global-title stem used for per-profile NetCDFs.
         When omitted, the source file stem is used.
+    max_repair_gap_s : float, default 1.0
+        Longest slow-pressure non-finite span [s] still treated as an
+        isolated fill and linearly repaired. Longer gaps are interpolated
+        only so the fall-rate filter has a NaN-free array; any profile
+        overlapping such a fabricated span is dropped (relevant only to
+        external/partial NetCDF inputs — raw ``.p`` pressure has no fills).
     **profile_kwargs
         Keyword arguments passed to get_profiles (P_min, W_min, etc.).
 
@@ -112,9 +130,15 @@ def extract_profiles(
 
     data = _load_source(source)
     stem = output_stem or data["stem"]
-    P_slow = data["P"]
     fs_slow = data["fs_slow"]
     fs_fast = data["fs_fast"]
+    # Defect (audit M2 downstream): a single NaN in slow pressure (e.g. a
+    # _FillValue gap from a partial/external NetCDF) is smeared across the
+    # whole fall rate by smooth_fall_rate (gradient + zero-phase filtfilt),
+    # silently dropping every profile. Repair isolated NaNs before detection;
+    # long_gap flags fabricated long spans whose profiles are dropped below.
+    max_gap = max(1, round(max_repair_gap_s * fs_slow))
+    P_slow, long_gap = _repair_nans(data["P"], "P_slow", stem, max_gap)
     ratio = round(fs_fast / fs_slow)
     start_epoch_s = data.get("start_epoch_s")
 
@@ -123,6 +147,18 @@ def extract_profiles(
 
     if profiles is None:
         profiles = get_profiles(P_slow, W, fs_slow, **profile_kwargs)
+    if long_gap.any():
+        # Drop profiles overlapping a fabricated long gap (their pressure /
+        # boundaries are interpolated, not measured). Other casts survive.
+        kept = [(s, e) for (s, e) in profiles if not long_gap[s : e + 1].any()]
+        n_dropped = len(profiles) - len(kept)
+        if n_dropped:
+            logger.warning(
+                "%s: dropped %d profile(s) overlapping a fabricated pressure gap",
+                stem,
+                n_dropped,
+            )
+        profiles = kept
     if not profiles:
         logger.warning(f"No profiles found in {stem}")
         return ([], []) if return_scalars else []
@@ -241,6 +277,14 @@ def extract_profiles(
             var[:] = trimmed.astype(np.float32)
             schema_entry = COMBO_SCHEMA.get(var_name, {})
             for k, v in attrs.items():
+                # netCDF4 forbids setting these reserved attrs after creation
+                # (e.g. _FillValue must be passed to createVariable). An
+                # external/CF/ATOMIX source that declares a _FillValue would
+                # otherwise crash the per-profile write with AttributeError.
+                # The data is already NaN-filled (see _nc_filled), so dropping
+                # _FillValue here is lossless.
+                if k in _UNSETTABLE_NC_ATTRS:
+                    continue
                 if k == "units":
                     v = canonicalize_units(str(v))
                 setattr(var, k, v)
@@ -327,6 +371,13 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
     }
 
 
+# netCDF4 reserved attributes that cannot be set with setattr after a variable
+# is created (they must go through createVariable or are managed internally).
+_UNSETTABLE_NC_ATTRS = frozenset(
+    {"_FillValue", "_Netcdf4Coordinates", "_Netcdf4Dimid", "_Unsigned", "_ChunkSizes"}
+)
+
+
 def _nc_filled(var) -> np.ndarray:
     """Read a NetCDF variable as float64 with masked/_FillValue entries -> NaN.
 
@@ -342,120 +393,194 @@ def _nc_filled(var) -> np.ndarray:
     return np.asarray(np.ma.filled(var[:].astype(np.float64), np.nan))
 
 
+def _repair_nans(
+    x: np.ndarray, name: str, stem: str, max_gap: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Linearly interpolate NaNs (e.g. _FillValue gaps) over the sample index.
+
+    Defect (audit M2 downstream): ``_nc_filled`` correctly turns a masked
+    ``_FillValue`` into NaN, but a single NaN in the slow pressure is then
+    smeared across the *entire* fall rate by ``smooth_fall_rate`` (gradient
+    poisons two neighbours, zero-phase filtfilt poisons all samples), so a
+    lone mid-cast fill silently drops every profile in the file. Repairing
+    isolated NaNs by linear interpolation keeps the rest of the cast usable;
+    a warning makes a poisoned/partial cast visible rather than silently lost.
+
+    Every gap is interpolated so the fall-rate filter sees a NaN-free array,
+    but a contiguous non-finite run longer than ``max_gap`` samples is
+    *fabricated*, not repaired: linear interpolation across many missing
+    samples invents pressure that must not define a profile (PR #79 review).
+    The returned boolean mask flags those long-gap samples so the caller can
+    drop any profile overlapping them.
+
+    Returns ``(repaired, long_gap_mask)``.
+    """
+    long_gap = np.zeros(x.size, dtype=bool)
+    bad = ~np.isfinite(x)
+    n_bad = int(bad.sum())
+    if n_bad == 0:
+        return x, long_gap
+    good = ~bad
+    if good.sum() < 2:
+        # Not enough finite samples to interpolate; leave as-is and warn loudly.
+        logger.warning(
+            "%s: %s has %d/%d non-finite samples; cannot repair", stem, name, n_bad, x.size
+        )
+        return x, long_gap
+    # Flag contiguous non-finite runs longer than max_gap. Padding with a finite
+    # sentinel at both ends turns run starts into +1 and ends into -1 in the diff.
+    d = np.diff(np.concatenate(([0], bad.astype(np.int8), [0])))
+    starts = np.flatnonzero(d == 1)
+    ends = np.flatnonzero(d == -1)  # exclusive
+    n_long = 0
+    for s, e in zip(starts, ends):
+        if (e - s) > max_gap:
+            long_gap[s:e] = True
+            n_long += 1
+    idx = np.arange(x.size, dtype=np.float64)
+    repaired = x.copy()
+    # np.interp clamps to the finite endpoints, so leading/trailing NaNs are
+    # held flat rather than re-introducing NaN.
+    repaired[bad] = np.interp(idx[bad], idx[good], x[good])
+    if n_long:
+        logger.warning(
+            "%s: %s has %d non-finite span(s) longer than %d samples; interpolated for "
+            "fall-rate only, profiles overlapping them will be dropped",
+            stem,
+            name,
+            n_long,
+            max_gap,
+        )
+    logger.warning("%s: interpolated %d/%d non-finite samples in %s", stem, n_bad, x.size, name)
+    return repaired, long_gap
+
+
 def _load_from_nc(nc_path: Path) -> dict[str, Any]:
     """Extract data dict from a full-record NetCDF file."""
     import netCDF4 as nc
 
+    # Defect (audit io-hazard): the Dataset must be closed on every exit path,
+    # not just the success path — the ValueError/AttributeError raises below
+    # would otherwise leak the open file handle (and its lock).
     ds = nc.Dataset(str(nc_path), "r")
+    stem = Path(nc_path).stem
+    try:
+        # Read global attributes
+        global_attrs = {}
+        for attr in ds.ncattrs():
+            if attr != "configuration_string":
+                global_attrs[attr] = getattr(ds, attr)
+        if "configuration_string" in ds.ncattrs():
+            global_attrs["configuration_string"] = ds.configuration_string
 
-    # Read global attributes
-    global_attrs = {}
-    for attr in ds.ncattrs():
-        if attr != "configuration_string":
-            global_attrs[attr] = getattr(ds, attr)
-    if "configuration_string" in ds.ncattrs():
-        global_attrs["configuration_string"] = ds.configuration_string
+        # Attributes may be on root or in L1_converted group
+        def _get_nc_attr(name: str, default=None):
+            for src in [ds]:
+                if name in {a for a in src.ncattrs()}:
+                    return src.getncattr(name)
+            if "L1_converted" in ds.groups:
+                g = ds.groups["L1_converted"]
+                if name in {a for a in g.ncattrs()}:
+                    return g.getncattr(name)
+            if default is not None:
+                return default
+            raise AttributeError(f"Attribute {name!r} not found in NetCDF file")
 
-    # Attributes may be on root or in L1_converted group
-    def _get_nc_attr(name: str, default=None):
-        for src in [ds]:
-            if name in {a for a in src.ncattrs()}:
-                return src.getncattr(name)
-        if "L1_converted" in ds.groups:
+        fs_fast = float(_get_nc_attr("fs_fast"))
+        fs_slow = float(_get_nc_attr("fs_slow"))
+
+        # Time vectors may be at root or inside L1_converted group
+        if "t_fast" in ds.variables:
+            t_fast = _nc_filled(ds.variables["t_fast"])
+            t_slow = _nc_filled(ds.variables["t_slow"])
+        elif "L1_converted" in ds.groups:
             g = ds.groups["L1_converted"]
-            if name in {a for a in g.ncattrs()}:
-                return g.getncattr(name)
-        if default is not None:
-            return default
-        raise AttributeError(f"Attribute {name!r} not found in NetCDF file")
+            # L1_converted uses TIME/TIME_SLOW dimension names
+            t_fast = _nc_filled(g.variables["TIME"])
+            t_slow = _nc_filled(g.variables["TIME_SLOW"])
+        else:
+            raise ValueError("No time variables found in NetCDF file")
+        # Determine time units
+        if "t_fast" in ds.variables:
+            t_fast_units = (
+                ds.variables["t_fast"].units
+                if hasattr(ds.variables["t_fast"], "units")
+                else "seconds"
+            )
+            t_slow_units = (
+                ds.variables["t_slow"].units
+                if hasattr(ds.variables["t_slow"], "units")
+                else "seconds"
+            )
+        elif "L1_converted" in ds.groups:
+            g = ds.groups["L1_converted"]
+            t_fast_units = (
+                g.variables["TIME"].units if hasattr(g.variables["TIME"], "units") else "days"
+            )
+            t_slow_units = (
+                g.variables["TIME_SLOW"].units
+                if hasattr(g.variables["TIME_SLOW"], "units")
+                else "days"
+            )
+        else:
+            t_fast_units = "seconds"
+            t_slow_units = "seconds"
 
-    fs_fast = float(_get_nc_attr("fs_fast"))
-    fs_slow = float(_get_nc_attr("fs_slow"))
-
-    # Time vectors may be at root or inside L1_converted group
-    if "t_fast" in ds.variables:
-        t_fast = _nc_filled(ds.variables["t_fast"])
-        t_slow = _nc_filled(ds.variables["t_slow"])
-    elif "L1_converted" in ds.groups:
-        g = ds.groups["L1_converted"]
-        # L1_converted uses TIME/TIME_SLOW dimension names
-        t_fast = _nc_filled(g.variables["TIME"])
-        t_slow = _nc_filled(g.variables["TIME_SLOW"])
-    else:
-        raise ValueError("No time variables found in NetCDF file")
-    # Determine time units
-    if "t_fast" in ds.variables:
-        t_fast_units = (
-            ds.variables["t_fast"].units if hasattr(ds.variables["t_fast"], "units") else "seconds"
-        )
-        t_slow_units = (
-            ds.variables["t_slow"].units if hasattr(ds.variables["t_slow"], "units") else "seconds"
-        )
-    elif "L1_converted" in ds.groups:
-        g = ds.groups["L1_converted"]
-        t_fast_units = (
-            g.variables["TIME"].units if hasattr(g.variables["TIME"], "units") else "days"
-        )
-        t_slow_units = (
-            g.variables["TIME_SLOW"].units if hasattr(g.variables["TIME_SLOW"], "units") else "days"
-        )
-    else:
-        t_fast_units = "seconds"
-        t_slow_units = "seconds"
-
-    # Pressure — need slow-rate pressure for profile detection
-    if "P" in ds.variables:
-        P = _nc_filled(ds.variables["P"])
-    elif "L1_converted" in ds.groups:
-        g = ds.groups["L1_converted"]
-        if "PRES_SLOW" in g.variables:
-            P = _nc_filled(g.variables["PRES_SLOW"])
-        elif "PRES" in g.variables:
-            P = _nc_filled(g.variables["PRES"])
+        # Pressure — need slow-rate pressure for profile detection
+        if "P" in ds.variables:
+            P = _nc_filled(ds.variables["P"])
+        elif "L1_converted" in ds.groups:
+            g = ds.groups["L1_converted"]
+            if "PRES_SLOW" in g.variables:
+                P = _nc_filled(g.variables["PRES_SLOW"])
+            elif "PRES" in g.variables:
+                P = _nc_filled(g.variables["PRES"])
+            else:
+                raise ValueError("No pressure variable found in NetCDF file")
         else:
             raise ValueError("No pressure variable found in NetCDF file")
-    else:
-        raise ValueError("No pressure variable found in NetCDF file")
 
-    # Channels — scan both root and L1_converted group
-    channels = []
-    _seen = set()
+        # Channels — scan both root and L1_converted group
+        channels = []
+        _seen = set()
 
-    def _scan_vars(source, time_dim_fast, time_dim_slow):
-        for vname in source.variables:
-            if vname in _seen or vname in ("t_fast", "t_slow", "TIME", "TIME_SLOW"):
-                continue
-            var = source.variables[vname]
-            dims = var.dimensions
-            if len(dims) != 1:
-                continue
-            dim = dims[0]
-            if dim == time_dim_fast:
-                mapped_dim = "time_fast"
-            elif dim == time_dim_slow:
-                mapped_dim = "time_slow"
-            else:
-                continue
-            attrs = {}
-            for a in var.ncattrs():
-                attrs[a] = getattr(var, a)
-            channels.append((vname, _nc_filled(var), mapped_dim, attrs))
-            _seen.add(vname)
+        def _scan_vars(source, time_dim_fast, time_dim_slow):
+            for vname in source.variables:
+                if vname in _seen or vname in ("t_fast", "t_slow", "TIME", "TIME_SLOW"):
+                    continue
+                var = source.variables[vname]
+                dims = var.dimensions
+                if len(dims) != 1:
+                    continue
+                dim = dims[0]
+                if dim == time_dim_fast:
+                    mapped_dim = "time_fast"
+                elif dim == time_dim_slow:
+                    mapped_dim = "time_slow"
+                else:
+                    continue
+                attrs = {}
+                for a in var.ncattrs():
+                    attrs[a] = getattr(var, a)
+                channels.append((vname, _nc_filled(var), mapped_dim, attrs))
+                _seen.add(vname)
 
-    # Scan root-level variables (old format)
-    _scan_vars(ds, "time_fast", "time_slow")
-    # Scan L1_converted group (new ATOMIX format)
-    if "L1_converted" in ds.groups:
-        _scan_vars(ds.groups["L1_converted"], "TIME", "TIME_SLOW")
+        # Scan root-level variables (old format)
+        _scan_vars(ds, "time_fast", "time_slow")
+        # Scan L1_converted group (new ATOMIX format)
+        if "L1_converted" in ds.groups:
+            _scan_vars(ds.groups["L1_converted"], "TIME", "TIME_SLOW")
+    finally:
+        ds.close()
 
     # If time is in days, convert to seconds for consistency
     if "day" in t_fast_units.lower():
-        t_fast = (t_fast - t_fast[0]) * 86400.0
-        t_slow = (t_slow - t_slow[0]) * 86400.0
+        # nanmin reference (not [0]): a _FillValue->NaN at index 0 of the TIME
+        # axis would otherwise poison the whole converted vector.
+        t_fast = (t_fast - np.nanmin(t_fast)) * 86400.0
+        t_slow = (t_slow - np.nanmin(t_slow)) * 86400.0
         t_fast_units = "seconds"
         t_slow_units = "seconds"
-
-    ds.close()
 
     return {
         "P": P.astype(np.float64),
@@ -467,7 +592,7 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
         "t_slow_units": t_slow_units,
         "channels": channels,
         "global_attrs": global_attrs,
-        "stem": Path(nc_path).stem,
+        "stem": stem,
     }
 
 

@@ -59,6 +59,14 @@ Estimates are masked (NaN) where $N^2 < 10^{-9}$ s$^{-2}$
 (unstratified — the Osborn scaling does not apply) or
 $|\partial\overline{T}/\partial z| < 10^{-4}$ K/m (well-mixed — the
 temperature-variance budget no longer constrains a diffusivity).
+`K_rho` is additionally masked where it exceeds an upper sanity bound
+(`K_rho_max`, default $1$ m$^2$ s$^{-1}$): a window whose $N^2$ sits just
+above the floor yields an Osborn diffusivity far larger than any
+physically realizable diapycnal value (e.g. $\sim 10$ m$^2$ s$^{-1}$),
+which is an artifact of near-floor $N^2$ rather than real mixing. The
+default bound sits well above even the most energetic real mixing
+(overflows and hydraulic jumps reach $\sim 0.1$–$1$ m$^2$ s$^{-1}$); the
+number of masked windows is reported via a warning.
 
 Two caveats for interpretation:
 

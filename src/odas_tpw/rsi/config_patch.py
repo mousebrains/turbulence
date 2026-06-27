@@ -149,6 +149,15 @@ def _check_keymap(raw: object, ctx: str) -> dict[str, str]:
             raise ValueError(
                 f"{ctx}.{key}: '{RESERVED_KEY}' identifies a channel/section and cannot be set"
             )
+        # The key is written verbatim as ``{key} = {value}``. Validate it as
+        # strictly as the value: a newline/control char would split the
+        # assignment and a ';'/'['/']'/'=' would inject a stanza or comment,
+        # defeating the guarantee that acquisition params are unaddressable.
+        if not key.isascii() or any(ord(c) < 0x20 for c in key) or any(c in key for c in "=;[]"):
+            raise ValueError(
+                f"{ctx}: key {key!r} must be a single line of ASCII text with no "
+                f"'=', ';', '[' or ']' (the key is written verbatim as 'key = value')"
+            )
         out[key] = _check_value(value, f"{ctx}.{key}")
     return out
 
@@ -302,6 +311,35 @@ def _comment_lines(text: str, eol: str) -> str:
     return "".join(out)
 
 
+def _find_self_original_marker(config_str: str) -> int:
+    """Index of the CONFIG_MARKER that begins *this tool's* frozen original block.
+
+    Returns -1 when no qualifying marker exists. The marker must (a) start at
+    column 0 (be the start of the string or immediately follow an EOL) and (b)
+    have every subsequent non-blank line be a ``; ``-prefixed comment — exactly
+    what :func:`_comment_lines` writes. This avoids mis-detecting a marker that
+    merely appears inside an ORIGINAL config (e.g. an RSI-pre-patched file whose
+    uncommented stanzas live below the marker, or a descriptive comment that
+    happens to contain the marker text), which would otherwise freeze those
+    stanzas and make them silently un-editable.
+    """
+    search_from = 0
+    while True:
+        idx = config_str.find(CONFIG_MARKER, search_from)
+        if idx < 0:
+            return -1
+        at_line_start = idx == 0 or config_str[idx - 1] in "\r\n"
+        if at_line_start:
+            # Everything after the marker line must be a fully commented block.
+            post = config_str[idx + len(CONFIG_MARKER) :]
+            if all(
+                (not (b := _split_eol(ln)[0].strip())) or b.startswith(";")
+                for ln in post.splitlines(keepends=True)
+            ):
+                return idx
+        search_from = idx + len(CONFIG_MARKER)
+
+
 def edit_config_text(
     config_str: str,
     spec: EditSpec,
@@ -317,11 +355,22 @@ def edit_config_text(
     ``ValueError`` for unknown stanzas/keys (unless ``add_keys``), unknown or
     ambiguous channel names, or a missing target section.
     """
+    # Apply-boundary re-validation: a directly-constructed EditSpec (bypassing
+    # the validated load_edit_spec) is still key/value-checked here, so the
+    # stanza-injection guard holds on the programmatic API, not only the CLI.
+    for _sec, _kv in spec.sections.items():
+        _check_keymap(_kv, _sec)
+    for _name, _kv in spec.channels.items():
+        _check_keymap(_kv, f"channels.{_name}")
+
     eol = _detect_eol(config_str)
 
     # Separate any previously-embedded original block; we only edit above it and
     # re-attach it verbatim (idempotent re-patch, mirroring patch_setupstr.m).
-    marker_idx = config_str.find(CONFIG_MARKER)
+    # Only a marker WE wrote (at column 0, followed by a fully commented block)
+    # is treated as frozen; a marker living inside an original config stays
+    # active so its stanzas remain editable.
+    marker_idx = _find_self_original_marker(config_str)
     if marker_idx >= 0:
         active = config_str[:marker_idx]
         original_block: str | None = config_str[marker_idx:]
@@ -348,13 +397,19 @@ def edit_config_text(
     inserts: dict[int, list[tuple[str, str]]] = {}
 
     def provenance(ch: Change) -> str:
-        head = f"; [PATCH {when} {spec.author}]".rstrip()
+        # Sanitize every interpolated field (when/author/note/old/new) the same
+        # way _build_banner does: a stray newline in a directly-constructed
+        # EditSpec or a non-trivial 'when' must not break out of the '; ' comment
+        # prefix and inject active config (defense-in-depth; mirrors the banner).
+        head = f"; [PATCH {_one_line(when)} {_one_line(spec.author)}]".rstrip()
+        note = _one_line(spec.note)
+        new = _one_line(ch.new)
         # Include the stanza/channel context and quote both values so the
         # original and new value are unambiguous (e.g. which channel's 'SN',
         # and that an empty old value really was empty).
         if ch.old is None:
-            return f'{head} {ch.where} {ch.key}: (added) = "{ch.new}"  ({spec.note}){eol}'
-        return f'{head} {ch.where} {ch.key}: "{ch.old}" -> "{ch.new}"  ({spec.note}){eol}'
+            return f'{head} {ch.where} {ch.key}: (added) = "{new}"  ({note}){eol}'
+        return f'{head} {ch.where} {ch.key}: "{_one_line(ch.old)}" -> "{new}"  ({note}){eol}'
 
     def schedule(
         keys: dict, block: dict, where: str, key: str, new_value: str, *, is_inst_sn: bool
@@ -450,9 +505,15 @@ def _one_line(text: str) -> str:
 
 def _build_banner(when: str, author: str, note: str, source_label: str, eol: str) -> str:
     # note/author are control-char-validated upstream; source_label is a
-    # machine-derived path. Collapse defensively so a stray newline in any of
-    # them cannot spill past the '; ' prefix and become active config.
-    author, note, source_label = (_one_line(author), _one_line(note), _one_line(source_label))
+    # machine-derived path; 'when' is caller-supplied (public API). Collapse all
+    # of them defensively so a stray newline cannot spill past the '; ' prefix
+    # and become active config.
+    when, author, note, source_label = (
+        _one_line(when),
+        _one_line(author),
+        _one_line(note),
+        _one_line(source_label),
+    )
     bar = "; " + "=" * 70 + eol
     lines = [
         bar,
@@ -481,8 +542,23 @@ def read_config_text(path: str | Path) -> str:
         words = struct.unpack(f"{endian}{HEADER_WORDS}H", head)
         header_size = words[_H["header_size"]]
         config_size = words[_H["config_size"]]
+        # Bounds-validate header_size: a corrupt source advertising header_size
+        # < HEADER_BYTES would otherwise read config from inside its own header,
+        # matching the guard extract_pfile_segment already enforces.
+        if header_size < HEADER_BYTES:
+            raise ValueError(f"{path.name}: invalid header_size={header_size}")
+        f.seek(0, 2)
+        file_size = f.tell()
+        if header_size + config_size > file_size:
+            raise ValueError(
+                f"{path.name}: header_size+config_size ({header_size + config_size}) exceeds "
+                f"file size ({file_size}); truncated or corrupt"
+            )
         f.seek(header_size)
-        return f.read(config_size).decode("latin-1")
+        cfg = f.read(config_size)
+        if len(cfg) != config_size:
+            raise ValueError(f"{path.name}: config string truncated")
+        return cfg.decode("latin-1")
 
 
 def write_patched_pfile(src: str | Path, dst: str | Path, new_config_text: str) -> Path:
@@ -503,6 +579,12 @@ def write_patched_pfile(src: str | Path, dst: str | Path, new_config_text: str) 
         words = struct.unpack(f"{endian}{HEADER_WORDS}H", head)
         header_size = words[_H["header_size"]]
         config_size = words[_H["config_size"]]
+        # Bounds-validate header_size before it is used to size header_region /
+        # pack config_size: a corrupt header_size < HEADER_BYTES would otherwise
+        # raise a cryptic struct.error (uncatchable by the CLI's ValueError/OSError
+        # handler) or silently write a truncated (<128-byte) header.
+        if header_size < HEADER_BYTES:
+            raise ValueError(f"{src.name}: invalid header_size={header_size}")
         major = words[_H["header_version"]] >> 8
         if major < 6:
             raise ValueError(
@@ -528,17 +610,39 @@ def write_patched_pfile(src: str | Path, dst: str | Path, new_config_text: str) 
         struct.pack_into(f"{endian}H", header_region, _H["config_size"] * 2, len(new_bytes))
 
         dst.parent.mkdir(parents=True, exist_ok=True)
+        # Preserve the no-overwrite intent up front (cheap, and avoids work on a
+        # collision); the final os.replace re-checks just before committing.
+        if dst.exists():
+            raise FileExistsError(f"{dst} already exists; remove it or choose another --out")
         f.seek(first_record_size)  # start of the first data record
-        # "xb": exclusive create is atomic, closing the TOCTOU window between
-        # the caller's existence check and the write.
-        with open(dst, "xb") as out:
-            out.write(header_region)
-            out.write(new_bytes)
-            while True:
-                chunk = f.read(1024 * 1024)
-                if not chunk:
-                    break
-                out.write(chunk)
+        # Atomic write: stream into a sibling temp file, fsync, then os.replace
+        # into place. A mid-copy failure (disk full, I/O error, interrupt) thus
+        # leaves only the temp file (which we unlink), never a truncated but
+        # valid-looking "patched" .p in the final destination. "xb" keeps the
+        # temp create exclusive so concurrent patches can't share it.
+        tmp = dst.with_name(f"{dst.name}.tmp.{os.getpid()}")
+        try:
+            with open(tmp, "xb") as out:
+                out.write(header_region)
+                out.write(new_bytes)
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                out.flush()
+                os.fsync(out.fileno())
+            if dst.exists():
+                raise FileExistsError(f"{dst} already exists; remove it or choose another --out")
+            # os.link (not os.replace): atomically fails if dst already exists,
+            # preserving the no-clobber-under-concurrency guarantee the prior
+            # open(dst, "xb") had — os.replace would silently overwrite a file a
+            # racing process created between the check above and the commit.
+            os.link(tmp, dst)
+            tmp.unlink()
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
     return dst
 
 
@@ -625,6 +729,24 @@ def patch_files(
         raise ValueError(
             "refusing to apply per-channel calibration edits to multiple files "
             "(calibrations are per-instrument); pass --batch-cal if this is intended"
+        )
+
+    # Outputs are keyed by basename (out_dir / src.name), so two inputs that
+    # share a basename (e.g. dirA/SAME.p and dirB/SAME.p) would collide: the
+    # first is written and the second aborts the whole batch with a misleading
+    # "already exists" error. Detect the real cause up front, before any output.
+    by_name: dict[str, list[Path]] = {}
+    for src in srcs:
+        by_name.setdefault(Path(src).name, []).append(Path(src))
+    collisions = {name: paths for name, paths in by_name.items() if len(paths) > 1}
+    if collisions:
+        detail = "; ".join(
+            f"{name}: {', '.join(str(p) for p in paths)}"
+            for name, paths in sorted(collisions.items())
+        )
+        raise ValueError(
+            f"multiple source files share a basename and would map to the same output "
+            f"in {out_dir}: {detail}; patch them separately into distinct --out directories"
         )
 
     results: list[tuple[Path, Path | None, list[Change]]] = []

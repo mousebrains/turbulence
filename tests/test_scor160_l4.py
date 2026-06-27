@@ -168,6 +168,58 @@ class TestProcessL4:
         np.testing.assert_array_equal(l4.pres, l3.pres)
         np.testing.assert_array_equal(l4.section_number, l3.section_number)
 
+    def test_nan_speed_window_floored_to_005(self):
+        """Finding 37: an all-NaN-speed window must reach the K_AA limit
+        with a floored speed, not a NaN.
+
+        ``l3.pspd_rel`` carries the *un-floored* per-window mean speed,
+        which is NaN for an all-NaN window.  The old ``max(W, 0.05)`` kept
+        that NaN (max(NaN, 0.05) == NaN), so ``K_AA`` became NaN — a latent
+        footgun that can leak NaN into the integration limits via
+        ``searchsorted(K, NaN) == len(K)``.  The fix mirrors the L3
+        wavenumber-axis floor (``max(np.nan_to_num(W, nan=0.05), 0.05)``),
+        so a NaN-speed window is processed exactly as a 0.05 m/s window.
+
+        This is an invariant guard: it asserts the floored-equivalence the
+        fix guarantees (NaN window == 0.05 window) and that the NaN window
+        produces finite, in-range results rather than NaN-tainted ones.
+        """
+        l3_nan = _make_l3_from_nasmyth(n_spec=2, n_shear=1, epsilon=1e-8)
+        l3_nan.pspd_rel[1] = np.nan  # degenerate all-NaN-speed window
+        l3_floor = _make_l3_from_nasmyth(n_spec=2, n_shear=1, epsilon=1e-8)
+        l3_floor.pspd_rel[1] = 0.05  # the floor value
+        # Match the kcyc axis too: L3 already floors the wavenumber grid for
+        # the NaN window, so use the floored speed's grid for both windows.
+        l3_nan.kcyc[:, 1] = l3_floor.kcyc[:, 1]
+
+        l4_nan = process_l4(l3_nan)
+        l4_floor = process_l4(l3_floor)
+
+        # NaN-speed window is computed exactly like the 0.05 m/s window.
+        assert np.isfinite(l4_nan.kmax[0, 1])
+        assert np.isfinite(l4_nan.epsi[0, 1])
+        assert l4_nan.kmax[0, 1] == pytest.approx(l4_floor.kmax[0, 1])
+        assert l4_nan.epsi[0, 1] == pytest.approx(l4_floor.epsi[0, 1])
+
+    def test_salinity_aware_viscosity_changes_epsilon(self):
+        """Regression (finding 2): supplying salinity switches epsilon
+        viscosity from visc35 (S=35,P=0) to the salinity/pressure-aware
+        ``visc``, so a non-35 salinity at depth changes epsilon; omitting
+        it preserves the visc35 default (ATOMIX benchmark parity)."""
+        l3 = _make_l3_from_nasmyth(n_spec=3, n_shear=2, epsilon=1e-7)
+        l3.pres[:] = 500.0  # deep window so the visc branch is salinity-aware
+
+        l4_default = process_l4(l3)  # visc35 default
+        l4_sal = process_l4(l3, salinity=37.0)  # visc(T, 37, P)
+
+        # visc(10,37,500) > visc35(10), so epsilon (~linear in nu) rises.
+        assert np.all(l4_sal.epsi[np.isfinite(l4_sal.epsi)] != 0)
+        finite = np.isfinite(l4_default.epsi) & np.isfinite(l4_sal.epsi)
+        assert np.any(l4_sal.epsi[finite] > l4_default.epsi[finite])
+        # salinity=None must reproduce the visc35 default bit-for-bit.
+        l4_none = process_l4(l3, salinity=None)
+        np.testing.assert_array_equal(l4_none.epsi, l4_default.epsi)
+
 
 class TestComputeFlags:
     """Tests for QC flag computation."""

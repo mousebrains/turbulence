@@ -359,6 +359,61 @@ class TestResolveSalinity:
 
 
 # ---------------------------------------------------------------------------
+# _epsilon_window_salinity — measured per-sample salinity -> per-window for L4
+# ---------------------------------------------------------------------------
+
+
+class TestEpsilonWindowSalinity:
+    def test_measured_series_interpolated_onto_windows(self):
+        """A measured per-sample series becomes per-window (size n_spectra)."""
+        from odas_tpw.rsi.pipeline import _epsilon_window_salinity
+
+        sample_time = np.linspace(0.0, 100.0, 1000)
+        sal = np.linspace(34.0, 35.0, 1000)  # rises linearly with time
+        win_time = np.array([25.0, 50.0, 75.0])
+        out = _epsilon_window_salinity(sal, sample_time, 1000, win_time, 3)
+        assert isinstance(out, np.ndarray) and out.size == 3
+        # Linear series -> exact linear interpolation at the window centers,
+        # and NOT collapsed to the profile mean (~34.5 everywhere).
+        np.testing.assert_allclose(out, [34.25, 34.5, 34.75], rtol=1e-6)
+        assert not np.allclose(out, np.nanmean(sal))
+
+    def test_nan_samples_excluded_from_interp(self):
+        from odas_tpw.rsi.pipeline import _epsilon_window_salinity
+
+        sample_time = np.linspace(0.0, 100.0, 1000)
+        sal = np.linspace(34.0, 35.0, 1000)
+        sal[400:600] = np.nan  # a gap straddling the middle window
+        win_time = np.array([50.0])
+        out = _epsilon_window_salinity(sal, sample_time, 1000, win_time, 1)
+        assert np.isfinite(out).all()
+        np.testing.assert_allclose(out, [34.5], atol=1e-3)
+
+    def test_scalar_none_and_mismatched_passthrough(self):
+        """Non per-sample inputs are returned unchanged (process_l4 handles them)."""
+        from odas_tpw.rsi.pipeline import _epsilon_window_salinity
+
+        st = np.linspace(0.0, 1.0, 100)
+        wt = np.array([0.5])
+        assert _epsilon_window_salinity(34.5, st, 100, wt, 1) == 34.5
+        assert _epsilon_window_salinity(None, st, 100, wt, 1) is None
+        # Already per-window (size != n_time) passes through to process_l4.
+        per_win = np.array([34.0, 35.0])
+        np.testing.assert_array_equal(
+            _epsilon_window_salinity(per_win, st, 100, wt, 1), per_win
+        )
+
+    def test_all_nan_series_passthrough(self):
+        from odas_tpw.rsi.pipeline import _epsilon_window_salinity
+
+        st = np.linspace(0.0, 1.0, 100)
+        sal = np.full(100, np.nan)
+        wt = np.array([0.5])
+        out = _epsilon_window_salinity(sal, st, 100, wt, 1)
+        assert out is sal  # unchanged; process_l4 applies its own 35-PSU fallback
+
+
+# ---------------------------------------------------------------------------
 # _epsilon_hp_cut — shear high-pass scales with the FFT length (match perturb)
 # ---------------------------------------------------------------------------
 
@@ -396,3 +451,72 @@ class TestEpsilonHpCut:
         from odas_tpw.rsi.pipeline import _CHI_HP_CUT
 
         assert abs(_CHI_HP_CUT - 0.25) < 1e-12
+
+
+# ---------------------------------------------------------------------------
+# _qc_chi_final — per-probe spectral QC before the mixing products (K_T/Gamma)
+# ---------------------------------------------------------------------------
+
+
+class TestQcChiFinal:
+    """The mixing-quantity chi drops poorly-fit probes, unlike the raw
+    geometric-mean chi_final that the L4_chi output carries."""
+
+    def test_high_fom_probe_excluded(self):
+        """A probe with fom above the limit is dropped from the geometric mean.
+
+        On the OLD code the mixing call used the unfiltered all-probe mean, so
+        the bad probe pulled the result toward sqrt(1e-8 * 1e-6); the QC mean
+        keeps only the good probe.
+        """
+        from odas_tpw.rsi.pipeline import _CHI_FOM_LIMIT, _qc_chi_final
+
+        chi = np.array([[1e-8], [1e-6]])  # 2 probes, 1 window
+        fom = np.array([[1.0], [5.0]])  # probe 1 good, probe 2 bad fom
+        kmr = np.array([[0.8], [0.8]])
+        out = _qc_chi_final(chi, fom, kmr)
+        assert out[0] == pytest.approx(1e-8)  # only the good probe
+        # differs from the unfiltered all-probe geometric mean
+        raw = np.exp(np.mean(np.log(chi[:, 0])))
+        assert abs(out[0] - raw) > 1e-9
+        assert pytest.approx(1.15) == _CHI_FOM_LIMIT
+
+    def test_low_k_max_ratio_probe_excluded(self):
+        """A probe with K_max_ratio below 0.5 (mostly extrapolated) is dropped."""
+        from odas_tpw.rsi.pipeline import _qc_chi_final
+
+        chi = np.array([[1e-8], [1e-6]])
+        fom = np.array([[1.0], [1.0]])
+        kmr = np.array([[0.8], [0.3]])  # probe 2 under-resolved
+        out = _qc_chi_final(chi, fom, kmr)
+        assert out[0] == pytest.approx(1e-8)
+
+    def test_both_probes_pass_is_geometric_mean(self):
+        """When every probe passes QC the result is the plain geometric mean."""
+        from odas_tpw.rsi.pipeline import _qc_chi_final
+
+        chi = np.array([[1e-8], [1e-6]])
+        fom = np.array([[1.0], [1.0]])
+        kmr = np.array([[0.8], [0.8]])
+        out = _qc_chi_final(chi, fom, kmr)
+        assert out[0] == pytest.approx(np.sqrt(1e-8 * 1e-6))
+
+    def test_fallback_when_no_probe_passes(self):
+        """No window is silently lost: fall back to the all-finite-probe mean."""
+        from odas_tpw.rsi.pipeline import _qc_chi_final
+
+        chi = np.array([[1e-8], [1e-6]])
+        fom = np.array([[5.0], [5.0]])  # both fail fom
+        kmr = np.array([[0.8], [0.8]])
+        out = _qc_chi_final(chi, fom, kmr)
+        assert out[0] == pytest.approx(np.sqrt(1e-8 * 1e-6))
+
+    def test_nan_chi_window_stays_nan(self):
+        """A window with no finite chi>0 stays NaN (no spurious estimate)."""
+        from odas_tpw.rsi.pipeline import _qc_chi_final
+
+        chi = np.array([[np.nan], [-1.0]])
+        fom = np.array([[1.0], [1.0]])
+        kmr = np.array([[0.8], [0.8]])
+        out = _qc_chi_final(chi, fom, kmr)
+        assert np.isnan(out[0])

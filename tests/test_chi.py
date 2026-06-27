@@ -1,6 +1,7 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Tests for the chi (thermal variance dissipation) pipeline modules."""
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -186,6 +187,38 @@ class TestFP07Transfer:
         H2_double = fp07_double_pole(f, 0.01)
         assert H2_double[0] < H2_single[0]
 
+    def test_transfer_batch_valid_models(self):
+        from odas_tpw.chi.fp07 import fp07_transfer_batch
+
+        F = np.array([10.0, 50.0])
+        tau0 = np.array([0.01])
+        h2_single = fp07_transfer_batch(F, tau0, model="single_pole")
+        h2_double = fp07_transfer_batch(F, tau0, model="double_pole")
+        # double-pole rolls off faster than single-pole away from DC
+        assert h2_double[0, -1] < h2_single[0, -1]
+
+    def test_transfer_batch_unknown_model_raises(self):
+        # Finding 94/92: an unrecognized model string must not silently fall
+        # through to double_pole (it did on OLD code, e.g. "SinglePole").
+        from odas_tpw.chi.fp07 import fp07_transfer_batch
+
+        F = np.array([10.0, 50.0])
+        tau0 = np.array([0.01])
+        for bad in ("SinglePole", "double-pole", "doublepole", ""):
+            with pytest.raises(ValueError, match="Unknown FP07 model"):
+                fp07_transfer_batch(F, tau0, model=bad)
+
+    def test_default_tau_model_unknown_raises(self):
+        # Finding 92: a typo in fp07_model previously fell through to 'lueck',
+        # pairing a single-pole tau with a double-pole transfer silently.
+        from odas_tpw.chi.fp07 import default_tau_model
+
+        assert default_tau_model("single_pole") == "lueck"
+        assert default_tau_model("double_pole") == "goto"
+        for bad in ("single", "SINGLE_POLE", ""):
+            with pytest.raises(ValueError, match="Unknown FP07 model"):
+                default_tau_model(bad)
+
 
 class TestFP07Tau:
     def test_lueck(self):
@@ -223,6 +256,15 @@ class TestFP07Tau:
         with pytest.raises(ValueError, match="Unknown FP07 tau model"):
             fp07_tau(1.0, model="invalid_model")
 
+    def test_nonpositive_speed_raises(self):
+        # Finding 53: non-positive speed yielded NaN/inf on OLD code; MATLAB
+        # gradT_noise_odas.m validates speed > 0.
+        from odas_tpw.chi.fp07 import fp07_tau
+
+        for bad in (-0.7, 0.0):
+            with pytest.raises(ValueError, match="speed must be > 0"):
+                fp07_tau(bad, model="lueck")
+
 
 class TestNoiseModel:
     def test_noise_positive(self):
@@ -238,6 +280,34 @@ class TestNoiseModel:
         F = np.logspace(-1, 2, 50)
         noise = noise_thermchannel(F, 10.0)
         assert noise.shape == (50,)
+
+    def test_gradT_noise_nonpositive_speed_raises(self):
+        # Finding 53: a non-positive speed produced negative (impossible) or
+        # inf noise PSD on OLD code instead of raising.
+        from odas_tpw.chi.fp07 import gradT_noise, gradT_noise_batch
+
+        F = np.array([10.0, 20.0])
+        for bad in (-0.7, 0.0):
+            with pytest.raises(ValueError, match="speed must be > 0"):
+                gradT_noise(F, 10.0, bad)
+        with pytest.raises(ValueError, match="speeds must all be > 0"):
+            gradT_noise_batch(F, [10.0, 10.0], [0.7, -0.7])
+        # valid speed still yields a non-negative spectrum
+        noise_K, _ = gradT_noise(F, 10.0, 0.7)
+        assert np.all(noise_K >= 0)
+
+    def test_batch_clamp_warns_like_scalar(self):
+        # Finding 54: the batch path clamped a broken-thermistor R_ratio < 0.1
+        # silently while the scalar path warned. T_mean ~100 deg C triggers it.
+        from odas_tpw.chi.fp07 import noise_thermchannel_batch
+
+        F = np.array([10.0, 20.0])
+        with pytest.warns(UserWarning, match="broken thermistor"):
+            noise_thermchannel_batch(F, [100.0])
+        # normal temperatures do not warn
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            noise_thermchannel_batch(F, [10.0, 12.0])
 
 
 # ---------------------------------------------------------------------------
@@ -789,6 +859,23 @@ class TestChiEdgeCases:
         bl = _bilinear_correction(F, 0.94, 512.0)
         np.testing.assert_array_equal(bl, np.ones(2))
 
+    def test_bilinear_correction_small_diff_gain_no_raise(self):
+        """A tiny diff_gain (cutoff Wn >= 1) degrades to all-ones, not ValueError.
+
+        Audit finding: butter(1, Wn) requires 0 < Wn < 1; a corrupt/patched
+        config diff_gain below ~1/(pi*fs) made Wn >= 1 and scipy raised,
+        aborting chi for the whole cast. It must now warn and skip the
+        correction instead.
+        """
+        from odas_tpw.chi.chi import _bilinear_correction
+
+        fs = 512.0
+        F = np.linspace(0.0, fs / 2, 50)
+        # diff_gain=1e-4, fs=512 -> Wn ~ 6.2 (>= 1): old code raised ValueError.
+        with pytest.warns(UserWarning, match="bilinear cutoff"):
+            bl = _bilinear_correction(F, 1e-4, fs)
+        np.testing.assert_array_equal(bl, np.ones(len(F)))
+
     def test_valid_mask_all_below_noise(self):
         """Spectrum below 2x noise everywhere should use fallback mask."""
         from odas_tpw.chi.chi import _valid_wavenumber_mask
@@ -891,7 +978,7 @@ class TestEpsilonDsToL4Data:
 
         n = 4
         eps = np.array([[1e-7] * n, [1e-9] * n], dtype=np.float64)  # probe 2 low
-        fom = np.array([[1.0] * n, [3.0] * n], dtype=np.float64)    # probe 2 fom>1.15
+        fom = np.array([[1.0] * n, [3.0] * n], dtype=np.float64)  # probe 2 fom>1.15
         ds = xr.Dataset(
             {
                 "epsilon": (["probe", "time"], eps),
@@ -1105,9 +1192,7 @@ class TestComputeChiOneWorker:
 
         out = tmp_path / "chi_out"
         out.mkdir()
-        _name, n = _compute_chi_one(
-            (PROFILE_FILE, out, {"fft_length": 512}, eps_dir)
-        )
+        _name, n = _compute_chi_one((PROFILE_FILE, out, {"fft_length": 512}, eps_dir))
         assert n >= 1
 
     def test_four_arg_missing_eps_falls_back(self, tmp_path):
@@ -1118,9 +1203,7 @@ class TestComputeChiOneWorker:
         empty_eps.mkdir()
         out = tmp_path / "chi_out"
         out.mkdir()
-        _name, n = _compute_chi_one(
-            (PROFILE_FILE, out, {"fft_length": 512}, empty_eps)
-        )
+        _name, n = _compute_chi_one((PROFILE_FILE, out, {"fft_length": 512}, empty_eps))
         assert n >= 1
 
 
@@ -1166,8 +1249,17 @@ class TestChiFromEpsilonBranches:
         # f_AA tiny → K_AA near zero → fallback mask captures ~0 points.
         with pytest.warns(UserWarning):
             result = _chi_from_epsilon(
-                noise_K * 0.5, K, 1e-7, 1.2e-6, noise_K, H2, tau0,
-                fp07_transfer, 0.01, speed, "batchelor",
+                noise_K * 0.5,
+                K,
+                1e-7,
+                1.2e-6,
+                noise_K,
+                H2,
+                tau0,
+                fp07_transfer,
+                0.01,
+                speed,
+                "batchelor",
             )
         assert np.isnan(result.chi)
 
@@ -1185,8 +1277,17 @@ class TestChiFromEpsilonBranches:
         spec = np.zeros(n_freq)
         with pytest.warns(UserWarning):
             result = _chi_from_epsilon(
-                spec, K, 1e-7, 1.2e-6, noise_K, H2, tau0,
-                fp07_transfer, 98.0, speed, "batchelor",
+                spec,
+                K,
+                1e-7,
+                1.2e-6,
+                noise_K,
+                H2,
+                tau0,
+                fp07_transfer,
+                98.0,
+                speed,
+                "batchelor",
             )
         assert np.isnan(result.chi)
 
@@ -1203,9 +1304,7 @@ class TestMLEFindKBBranches:
         noise = np.array([1e-7, 1e-7, 1e-7, 1e-7])
         H2 = np.ones_like(K)
 
-        kB, _mask, K_fit = _mle_find_kB(
-            spec, K, 1e-9, noise, H2, 50.0, 0.7, batchelor_grad
-        )
+        kB, _mask, K_fit = _mle_find_kB(spec, K, 1e-9, noise, H2, 50.0, 0.7, batchelor_grad)
         assert np.isnan(kB)
         assert len(K_fit) == 0
 
@@ -1224,8 +1323,14 @@ class TestMLEFindKBBranches:
         noise = np.full(n, 1e-30)
         H2 = np.ones(n)
         _kB, mask, K_fit = _mle_find_kB(
-            spec, K, chi_obs=0.0, noise_K=noise, H2=H2,
-            f_AA=98.0, speed=0.7, grad_func=batchelor_grad,
+            spec,
+            K,
+            chi_obs=0.0,
+            noise_K=noise,
+            H2=H2,
+            f_AA=98.0,
+            speed=0.7,
+            grad_func=batchelor_grad,
         )
         # With chi_obs=0, the Batchelor model is identically zero; spec_models
         # collapses to noise (1e-30) and spec/model ~1e60 → finite, so this
@@ -1248,12 +1353,98 @@ class TestMLEFitKBBranches:
         # Use a spec that yields a very low kB → V_total = 0 in correction
         spec = np.maximum(noise_K * 5, 1e-20)
         result = _mle_fit_kB(
-            spec, K, 1e-12, 1.2e-6, noise_K, H2, tau0,
-            fp07_transfer, 98.0, speed, "batchelor",
+            spec,
+            K,
+            1e-12,
+            1.2e-6,
+            noise_K,
+            H2,
+            tau0,
+            fp07_transfer,
+            98.0,
+            speed,
+            "batchelor",
         )
         # Either succeeds with a finite chi or falls through to chi_obs (1e-12).
         # Just verify call returns a ChiFitResult.
         assert hasattr(result, "chi")
+
+    def test_correction_uses_fit_band_lower_edge(self):
+        """chi correction must integrate V_resolved over [K_fit_low, K_max].
+
+        Audit finding: the correction previously used K_min=0 while obs_var
+        starts at the first above-noise wavenumber (K_fit_low > 0), inflating
+        V_resolved and biasing chi low for low-epsilon windows. After the fix
+        the returned chi matches the variance correction evaluated with
+        K_min=K[fit_mask][0]; this assertion fails on the old K_min=0 code.
+        """
+        from odas_tpw.chi.batchelor import batchelor_grad, batchelor_kB
+        from odas_tpw.chi.chi import (
+            KAPPA_T,
+            _mle_fit_kB,
+            _valid_wavenumber_mask,
+            _variance_correction,
+        )
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
+
+        # Low-epsilon window with an elevated noise floor so the first valid
+        # (above-2x-noise) wavenumber is well above zero.
+        chi_true = 3e-9
+        eps_true = 5e-10
+        nu = 1.2e-6
+        kB_true = batchelor_kB(eps_true, nu)
+        speed = 0.4
+        fs = 512
+        fft = 512
+        n_freq = fft // 2 + 1
+        F = np.arange(n_freq) * fs / fft
+        K = F / speed
+        tau0 = fp07_tau(speed)
+        H2 = fp07_transfer(F, tau0)
+        noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
+        noise_K = noise_K * 30
+        spec_obs = np.maximum(batchelor_grad(K, kB_true, chi_true) * H2 + noise_K * 0.5, 1e-22)
+
+        result = _mle_fit_kB(
+            spec_obs,
+            K,
+            chi_true,
+            nu,
+            noise_K,
+            H2,
+            tau0,
+            fp07_transfer,
+            98.0,
+            speed,
+            "batchelor",
+        )
+        assert np.isfinite(result.chi)
+
+        # Reproduce the band the fit used and the expected corrected chi.
+        K_AA = 98.0 / speed
+        fit_mask = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=3)
+        fi = np.where(fit_mask)[0]
+        K_fit_low = float(K[fi[0]])
+        assert K_fit_low > 1.0  # the noise floor pushed the band edge up
+
+        corr_new = _variance_correction(
+            result.kB,
+            result.K_max,
+            speed,
+            tau0,
+            fp07_transfer,
+            batchelor_grad,
+            K_min=K_fit_low,
+        )
+        obs_var = np.trapezoid(np.maximum(spec_obs[fit_mask] - noise_K[fit_mask], 0), K[fit_mask])
+        chi_expected = 6 * KAPPA_T * obs_var * corr_new
+        assert result.chi == pytest.approx(chi_expected, rel=1e-9)
+
+        # And the old K_min=0 correction would give a strictly smaller chi.
+        corr_old = _variance_correction(
+            result.kB, result.K_max, speed, tau0, fp07_transfer, batchelor_grad
+        )
+        assert corr_new > corr_old
 
 
 class TestIterativeFitBranches:
@@ -1269,6 +1460,7 @@ class TestIterativeFitBranches:
         F = np.arange(n_freq) * fs / (2 * (n_freq - 1))
         K = F / speed
         from odas_tpw.chi.fp07 import fp07_tau, gradT_noise
+
         tau0 = fp07_tau(speed)
         H2 = fp07_transfer(F, tau0)
         noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
@@ -1276,10 +1468,76 @@ class TestIterativeFitBranches:
 
         with pytest.warns(UserWarning, match="Too few valid points for iterative"):
             result = _iterative_fit(
-                spec, K, 1.2e-6, noise_K, H2, tau0,
-                fp07_transfer, 98.0, speed, "batchelor",
+                spec,
+                K,
+                1.2e-6,
+                noise_K,
+                H2,
+                tau0,
+                fp07_transfer,
+                98.0,
+                speed,
+                "batchelor",
             )
         assert np.isnan(result.kB)
+
+    def test_chi_consistent_with_final_kB_on_convergence_break(self):
+        """Returned chi must be recomputed from the final converged kB.
+
+        Audit finding: on the ``abs(kB-kB_prev)/kB_prev < 0.01`` convergence
+        break the loop exited before re-deriving chi for the newly-converged
+        kB, so the returned chi was tied to the *previous* iteration's kB. This
+        seed reproduces a break where kB drifts ~0.2% on the final pass; the
+        invariant ``chi == chi_band(kB) * correction(kB)`` holds only after the
+        fix (the old stale chi differs by ~0.14%).
+        """
+        from odas_tpw.chi.batchelor import batchelor_grad, batchelor_kB
+        from odas_tpw.chi.chi import KAPPA_T, _iterative_fit, _variance_correction
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
+
+        nu = 1.2e-6
+        fs = 512
+        fft = 512
+        n_freq = fft // 2 + 1
+        # Frozen seed that lands on a convergence break with kB_best != kB_prev.
+        rng = np.random.default_rng(26)
+        chi_true = 10 ** rng.uniform(-9, -6)
+        eps_true = 10 ** rng.uniform(-10, -6)
+        speed = rng.uniform(0.3, 1.0)
+        kB_true = batchelor_kB(eps_true, nu)
+        F = np.arange(n_freq) * fs / fft
+        K = F / speed
+        tau0 = fp07_tau(speed)
+        H2 = fp07_transfer(F, tau0)
+        spec = batchelor_grad(K, kB_true, chi_true) * H2
+        spec = spec * np.exp(rng.normal(0, 0.15, size=spec.shape))
+        spec_obs = np.maximum(spec, 1e-22)
+        noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
+
+        result = _iterative_fit(
+            spec_obs,
+            K,
+            nu,
+            noise_K,
+            H2,
+            tau0,
+            fp07_transfer,
+            98.0,
+            speed,
+            "batchelor",
+        )
+        assert np.isfinite(result.kB) and np.isfinite(result.chi)
+
+        # Recompute chi from the *returned* kB; must match the returned chi.
+        kB = result.kB
+        k_u = result.K_max
+        k_star = 0.04 * kB * np.sqrt(KAPPA_T / nu)
+        k_l = max(K[1], 3 * k_star)
+        mr = (k_l <= K) & (k_u >= K)
+        chi_band = 6 * KAPPA_T * np.trapezoid(np.maximum(spec_obs[mr] - noise_K[mr], 0), K[mr])
+        corr = _variance_correction(kB, k_u, speed, tau0, fp07_transfer, batchelor_grad, K_min=k_l)
+        chi_consistent = chi_band * corr
+        assert result.chi == pytest.approx(chi_consistent, rel=1e-9)
 
 
 class TestVarianceCorrection:
@@ -1290,10 +1548,67 @@ class TestVarianceCorrection:
         from odas_tpw.chi.fp07 import fp07_transfer
 
         # kB=0 → grad_func returns 0 everywhere → V_total = 0
-        result = _variance_correction(
-            0.0, 100.0, 0.7, 0.01, fp07_transfer, batchelor_grad
-        )
+        result = _variance_correction(0.0, 100.0, 0.7, 0.01, fp07_transfer, batchelor_grad)
         assert np.isnan(result)
+
+    def test_kB_inf_returns_nan_without_warning(self):
+        """Degenerate kB=+inf must return NaN cleanly, not leak a RuntimeWarning.
+
+        Audit nit: the prior ``kB > 0`` guard let +inf through, making K_fine
+        all-inf and the np.trapezoid inf-inf subtract emit a RuntimeWarning.
+        """
+        import warnings
+
+        from odas_tpw.chi.batchelor import batchelor_grad
+        from odas_tpw.chi.chi import _variance_correction
+        from odas_tpw.chi.fp07 import fp07_transfer
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # any RuntimeWarning becomes an error
+            result = _variance_correction(np.inf, 100.0, 0.7, 0.01, fp07_transfer, batchelor_grad)
+        assert np.isnan(result)
+
+    def test_no_n_fine_parameter(self):
+        """Dead ``n_fine`` floor removed; signature no longer exposes it."""
+        import inspect
+
+        from odas_tpw.chi.chi import _variance_correction
+
+        params = inspect.signature(_variance_correction).parameters
+        assert "n_fine" not in params
+
+    def test_K_min_reduces_resolved_band(self):
+        """A positive K_min must increase the correction (smaller V_resolved).
+
+        Guards the iterative/MLE band-edge consistency: V_resolved spanning
+        [K_min, K_max] excludes the model variance below K_min, so the
+        V_total/V_resolved ratio grows relative to K_min=0.
+        """
+        from odas_tpw.chi.batchelor import batchelor_grad
+        from odas_tpw.chi.chi import _variance_correction
+        from odas_tpw.chi.fp07 import fp07_transfer
+
+        kwargs = dict(speed=0.4, tau0=0.02)
+        c0 = _variance_correction(
+            60.0,
+            45.0,
+            kwargs["speed"],
+            kwargs["tau0"],
+            fp07_transfer,
+            batchelor_grad,
+            K_min=0.0,
+        )
+        c_lo = _variance_correction(
+            60.0,
+            45.0,
+            kwargs["speed"],
+            kwargs["tau0"],
+            fp07_transfer,
+            batchelor_grad,
+            K_min=5.0,
+        )
+        assert np.isfinite(c0) and np.isfinite(c_lo)
+        assert c_lo > c0
 
 
 # ---------------------------------------------------------------------------
@@ -1322,26 +1637,41 @@ class TestProcessL3ChiBranches:
         prepared = prepare_profiles(data, None, "auto", None, vehicle="vmp")
         if prepared is None:
             pytest.skip("No profiles detected")
-        (slow_profs, speed_fast, P_fast, T_fast, _sal_fast,
-         fs_fast, _fs_slow, ratio, t_fast) = prepared
+        (slow_profs, speed_fast, P_fast, T_fast, _sal_fast, fs_fast, _fs_slow, ratio, t_fast) = (
+            prepared
+        )
 
         s, e = slow_profs[0]
         s_fast = s * ratio
         e_fast = min((e + 1) * ratio, len(t_fast))
 
         l1 = _build_l1data_from_channels(
-            data, s_fast, e_fast, speed_fast, P_fast, T_fast, "auto",
-            therm_list=data["therm"], diff_gains=data.get("diff_gains", [0.94]),
+            data,
+            s_fast,
+            e_fast,
+            speed_fast,
+            P_fast,
+            T_fast,
+            "auto",
+            therm_list=data["therm"],
+            diff_gains=data.get("diff_gains", [0.94]),
         )
         l2_params = L2Params(
-            HP_cut=0.25, despike_sh=np.array([np.inf, 0.5, 0.04]),
+            HP_cut=0.25,
+            despike_sh=np.array([np.inf, 0.5, 0.04]),
             despike_A=np.array([np.inf, 0.5, 0.04]),
-            profile_min_W=0.05, profile_min_P=0.0, profile_min_duration=0.0,
+            profile_min_W=0.05,
+            profile_min_P=0.0,
+            profile_min_duration=0.0,
             speed_tau=0.0,
         )
         l3_params = L3Params(
-            fft_length=512, diss_length=2048, overlap=1024,
-            HP_cut=0.25, fs_fast=fs_fast, goodman=False,  # ← key flag
+            fft_length=512,
+            diss_length=2048,
+            overlap=1024,
+            HP_cut=0.25,
+            fs_fast=fs_fast,
+            goodman=False,  # ← key flag
         )
         l2 = process_l2(l1, l2_params)
         l2_chi = process_l2_chi(l1, l2)
@@ -1361,26 +1691,41 @@ class TestProcessL3ChiBranches:
         prepared = prepare_profiles(data, None, "auto", None, vehicle="vmp")
         if prepared is None:
             pytest.skip("No profiles detected")
-        (slow_profs, speed_fast, P_fast, T_fast, _sal_fast,
-         fs_fast, _fs_slow, ratio, t_fast) = prepared
+        (slow_profs, speed_fast, P_fast, T_fast, _sal_fast, fs_fast, _fs_slow, ratio, t_fast) = (
+            prepared
+        )
 
         s, e = slow_profs[0]
         s_fast = s * ratio
         e_fast = min((e + 1) * ratio, len(t_fast))
 
         l1 = _build_l1data_from_channels(
-            data, s_fast, e_fast, speed_fast, P_fast, T_fast, "auto",
-            therm_list=data["therm"], diff_gains=data.get("diff_gains", [0.94]),
+            data,
+            s_fast,
+            e_fast,
+            speed_fast,
+            P_fast,
+            T_fast,
+            "auto",
+            therm_list=data["therm"],
+            diff_gains=data.get("diff_gains", [0.94]),
         )
         l2_params = L2Params(
-            HP_cut=0.25, despike_sh=np.array([np.inf, 0.5, 0.04]),
+            HP_cut=0.25,
+            despike_sh=np.array([np.inf, 0.5, 0.04]),
             despike_A=np.array([np.inf, 0.5, 0.04]),
-            profile_min_W=0.05, profile_min_P=0.0, profile_min_duration=0.0,
+            profile_min_W=0.05,
+            profile_min_P=0.0,
+            profile_min_duration=0.0,
             speed_tau=0.0,
         )
         l3_params = L3Params(
-            fft_length=512, diss_length=2048, overlap=1024,
-            HP_cut=0.25, fs_fast=fs_fast, goodman=True,
+            fft_length=512,
+            diss_length=2048,
+            overlap=1024,
+            HP_cut=0.25,
+            fs_fast=fs_fast,
+            goodman=True,
         )
         l2 = process_l2(l1, l2_params)
         l2_chi = process_l2_chi(l1, l2)
@@ -1418,8 +1763,12 @@ class TestProcessL3ChiNaNHandling:
         from odas_tpw.scor160.io import L3Params
 
         return L3Params(
-            fft_length=256, diss_length=512, overlap=256,
-            HP_cut=0.25, fs_fast=fs, goodman=False,
+            fft_length=256,
+            diss_length=512,
+            overlap=256,
+            HP_cut=0.25,
+            fs_fast=fs,
+            goodman=False,
         )
 
     def test_partial_nan_speed_uses_finite_mean_not_floor(self):
@@ -1571,6 +1920,7 @@ class TestProcessL4ChiBranches:
     def test_process_l4_chi_fit_mle_path(self):
         """fit_method='mle' takes the alternate (non-iterative) branch."""
         from odas_tpw.rsi.chi_io import _compute_chi
+
         # Easiest: drive _compute_chi with fit_method=mle
         results = _compute_chi(PROFILE_FILE, fft_length=512, fit_method="mle")
         assert len(results) >= 1
@@ -1581,9 +1931,7 @@ class TestProcessL4ChiBranches:
         from odas_tpw.rsi.chi_io import _compute_chi
 
         def _median_eps(results):
-            vals = np.concatenate(
-                [np.asarray(d["epsilon_T"].values).ravel() for d in results]
-            )
+            vals = np.concatenate([np.asarray(d["epsilon_T"].values).ravel() for d in results])
             vals = vals[np.isfinite(vals) & (vals > 0)]
             return float(np.median(vals)) if vals.size else np.nan
 
@@ -1638,8 +1986,17 @@ class TestChiGridRefinement:
         for chi_true in (1.37e-8, 4.9e-9, 2.83e-7):
             spec_obs = chi_true * kraichnan_grad(K, kB, 1.0) * H2 + noise
             res = _chi_from_epsilon(
-                spec_obs, K, eps, nu, noise, H2, 0.01,
-                fp07_transfer, 98.0, speed, "kraichnan",
+                spec_obs,
+                K,
+                eps,
+                nu,
+                noise,
+                H2,
+                0.01,
+                fp07_transfer,
+                98.0,
+                speed,
+                "kraichnan",
             )
             assert abs(res.chi / chi_true - 1) < 0.005, (
                 f"chi_true={chi_true:.3e} recovered {res.chi:.3e}"

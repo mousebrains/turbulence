@@ -88,7 +88,10 @@ def visc(T: npt.ArrayLike, S: npt.ArrayLike = 35, P: npt.ArrayLike = 0) -> np.nd
     CT = gsw.CT_from_t(SA, T, P)
     rho = gsw.rho(SA, CT, P)
 
-    return mu / rho
+    # Floor to a small positive value, mirroring visc35: a spurious-cold window
+    # mean (T well below 0) drives the Sharqawy polynomial negative, and a
+    # negative viscosity crashes the Nasmyth fit downstream.
+    return np.maximum(mu / rho, 1.0e-7)
 
 
 def density(T: npt.ArrayLike, S: npt.ArrayLike, P: npt.ArrayLike) -> np.ndarray:
@@ -120,6 +123,7 @@ def buoyancy_freq(
     S: npt.ArrayLike,
     P: npt.ArrayLike,
     lat: float = 0,
+    min_dp: float = 1e-4,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Buoyancy frequency squared N² [s⁻²] from profiles.
 
@@ -132,7 +136,14 @@ def buoyancy_freq(
     P : array_like
         Pressure profile [dbar].
     lat : float
-        Latitude [°N]. Default: 0.
+        Latitude [°N]. Default: 0. N² is scaled by the latitude-dependent
+        gravitational acceleration g(lat) inside ``gsw.Nsquared``; away from
+        the equator this matters (≈0.9% bias at 70°N), so supply the cast
+        latitude rather than relying on the equatorial default.
+    min_dp : float
+        Minimum adjacent pressure spacing [dbar]; pairs with smaller spacing
+        yield NaN instead of a spurious ``inf`` from the dp=0 division.
+        Default: 1e-4.
 
     Returns
     -------
@@ -143,7 +154,24 @@ def buoyancy_freq(
     """
     import gsw
 
+    # Defect (audit 103): lat=0 silently uses equatorial gravity, biasing N²
+    # for non-equatorial casts. Warn once so the caller knows lat matters.
+    if lat == 0:
+        import warnings
+
+        warnings.warn(
+            "buoyancy_freq called with lat=0 (equatorial gravity); N² is "
+            "gravity-scaled, so supply the cast latitude for non-equatorial "
+            "data to avoid a systematic N² bias.",
+            stacklevel=2,
+        )
+
     SA = gsw.SA_from_SP(S, P, 0, 0)
     CT = gsw.CT_from_t(SA, T, P)
     N2, p_mid = gsw.Nsquared(SA, CT, P, lat)
+    # Defect (audit 104): gsw.Nsquared divides by adjacent dp; duplicate or
+    # non-monotonic pressures (common in binned/turn-around data) give a silent
+    # inf. Replace degenerate-spacing entries with NaN, matching mixing.py.
+    dp = np.diff(np.asarray(P, dtype=float))
+    N2 = np.where(np.abs(dp) < min_dp, np.nan, N2)
     return N2, p_mid

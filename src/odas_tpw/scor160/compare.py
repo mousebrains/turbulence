@@ -47,9 +47,11 @@ def compare_l2(computed: L2Data, reference: L2Data) -> dict:
     comp_in = comp_sec > 0
     both_in = ref_in & comp_in
 
+    # Guard the .max() reductions: np.max on a zero-size array raises
+    # ValueError; an empty/degenerate L2 should report 0 sections, not crash.
     results["section"] = {
-        "ref_n_sections": int(ref_sec.max()),
-        "comp_n_sections": int(comp_sec.max()),
+        "ref_n_sections": int(ref_sec.max()) if ref_sec.size else 0,
+        "comp_n_sections": int(comp_sec.max()) if comp_sec.size else 0,
         "ref_n_selected": int(ref_in.sum()),
         "comp_n_selected": int(comp_in.sum()),
         "overlap_frac": float(int(both_in.sum()) / max(int(ref_in.sum()), 1)),

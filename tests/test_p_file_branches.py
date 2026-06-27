@@ -143,6 +143,13 @@ class TestParseConfig:
         assert result["channels"] == []
         assert result["matrix"] == []
 
+    def test_corrupt_matrix_row_raises_contextual_error(self):
+        """A non-numeric matrix token raises a ValueError naming the row/value,
+        not a bare 'invalid literal for int()'."""
+        cfg = "[matrix]\nrow01 = 1 2 x 4\n"
+        with pytest.raises(ValueError, match="malformed matrix row 'row01'"):
+            parse_config(cfg)
+
 
 # ---------------------------------------------------------------------------
 # Synthetic .p file builder
@@ -161,8 +168,14 @@ def _make_minimal_p_file(
     clock_hz: int = 2048,
     endian: str = "<",
     set_endian_word: int | None = None,
+    record_data: np.ndarray | None = None,
 ):
-    """Build a minimal valid .p file from a config text string."""
+    """Build a minimal valid .p file from a config text string.
+
+    ``record_data`` (optional) is a per-record int16 array of length
+    ``(record_size - HEADER_BYTES) // 2`` used for every record instead of the
+    default sequential fill, so a test can control exact raw counts.
+    """
     config_bytes = config_text.encode("ascii")
     config_size = len(config_bytes)
 
@@ -200,7 +213,10 @@ def _make_minimal_p_file(
         out += rec_hdr
         # Build int16 data — fill with sequential values
         n_int16 = rec_data_size // 2
-        data = np.arange(n_int16, dtype=np.int16) + ri * n_int16
+        if record_data is not None:
+            data = np.asarray(record_data, dtype=np.int16)
+        else:
+            data = np.arange(n_int16, dtype=np.int16) + ri * n_int16
         out += data.tobytes()
 
     path.write_bytes(bytes(out))
@@ -317,6 +333,37 @@ type = raw
         assert "absent" not in pf.channels
 
 
+class TestPFileCorruptChannelId:
+    def test_non_numeric_channel_id_raises_contextual_error(self, tmp_path):
+        """A non-numeric channel id raises a ValueError naming the file and
+        channel, not a bare 'invalid literal for int()'."""
+        config = """
+[matrix]
+row1 = 1 1 1 1
+row2 = 1 1 1 1
+row3 = 1 1 1 1
+row4 = 1 1 1 1
+
+[instrument_info]
+model = test
+sn = 1
+
+[cruise_info]
+operator = pat
+
+[channel]
+id = bogus
+name = X
+type = raw
+"""
+        path = tmp_path / "bad_id.p"
+        _make_minimal_p_file(
+            path, config_text=config, fast_cols=1, slow_cols=0, n_rows=4, n_records=1
+        )
+        with pytest.raises(ValueError, match="malformed channel id"):
+            PFile(path)
+
+
 class TestPFileNoConverter:
     def test_unknown_type_warns_and_keeps_raw(self, tmp_path):
         """Channel type with no converter → warn and store raw counts."""
@@ -379,6 +426,52 @@ type = raw
         )
         pf = PFile(path)
         assert "bigval" in pf.channels
+
+    def test_two_id_signed_high_bit_wraps_negative(self, tmp_path):
+        """ODAS treats every joined 32-bit channel (not in the skip set and
+        not sign=unsigned) as signed by default: a value with the high bit set
+        must wrap down by 2**32.  Without that correction the port reported
+        ~4.29e9 instead of -65536."""
+        config = """
+[matrix]
+row1 = 1 2
+row2 = 1 2
+row3 = 1 2
+row4 = 1 2
+
+[instrument_info]
+model = test
+sn = 1
+
+[cruise_info]
+operator = pat
+
+[channel]
+id = 1, 2
+name = signed32
+type = raw
+"""
+        # record data: n_cols=2 (col0 = low/even id 1, col1 = high/odd id 2).
+        # n_int16 = (256 - 128)//2 = 64 -> 32 scans. Set every high word to
+        # int16 -1 (-> 0xFFFF unsigned), every low word to 0: joined value is
+        # 0xFFFF0000 >= 2**31, which must wrap to -65536.
+        n_int16 = (256 - HEADER_BYTES) // 2
+        rec = np.zeros(n_int16, dtype=np.int16)
+        rec[1::2] = -1  # col1 (high word) every scan
+        path = tmp_path / "signed32.p"
+        _make_minimal_p_file(
+            path,
+            config_text=config,
+            fast_cols=2,
+            slow_cols=0,
+            n_rows=4,
+            n_records=1,
+            record_data=rec,
+        )
+        pf = PFile(path)
+        assert "signed32" in pf.channels
+        # type=raw passes values through unchanged, so channels mirrors raw.
+        assert np.all(pf.channels["signed32"] == -65536)
 
     def test_two_id_one_missing_skipped(self, tmp_path):
         """If one of the two ids is absent from the matrix → skip the channel."""

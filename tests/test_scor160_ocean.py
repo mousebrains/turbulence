@@ -118,7 +118,7 @@ class TestBuoyancyFreq:
         T = np.array([20.0, 15.0, 10.0, 5.0])
         S = np.full(4, 35.0)
         P = np.array([0.0, 50.0, 100.0, 150.0])
-        N2, p_mid = buoyancy_freq(T, S, P)
+        N2, p_mid = buoyancy_freq(T, S, P, lat=15.0)
         assert len(N2) == 3
         assert len(p_mid) == 3
         assert np.all(N2 > 0)
@@ -129,7 +129,7 @@ class TestBuoyancyFreq:
         T = np.linspace(20, 5, n)
         S = np.full(n, 35.0)
         P = np.linspace(0, 200, n)
-        N2, p_mid = buoyancy_freq(T, S, P)
+        N2, p_mid = buoyancy_freq(T, S, P, lat=15.0)
         assert N2.shape == (n - 1,)
         assert p_mid.shape == (n - 1,)
 
@@ -138,6 +138,51 @@ class TestBuoyancyFreq:
         P = np.array([0.0, 100.0, 200.0])
         T = np.array([20.0, 15.0, 10.0])
         S = np.full(3, 35.0)
-        _, p_mid = buoyancy_freq(T, S, P)
+        _, p_mid = buoyancy_freq(T, S, P, lat=15.0)
         assert np.all(p_mid > P[:-1])
         assert np.all(p_mid < P[1:])
+
+    def test_lat_zero_warns(self):
+        """Defect (audit 103): lat=0 uses equatorial gravity and biases N²;
+        the convenience API must warn so the caller supplies the cast lat."""
+        T = np.array([20.0, 15.0, 10.0])
+        S = np.full(3, 35.0)
+        P = np.array([0.0, 50.0, 100.0])
+        with pytest.warns(UserWarning, match="equatorial gravity"):
+            buoyancy_freq(T, S, P)  # lat defaults to 0
+
+    def test_lat_supplied_no_warn(self):
+        """Supplying a non-zero latitude must not warn."""
+        T = np.array([20.0, 15.0, 10.0])
+        S = np.full(3, 35.0)
+        P = np.array([0.0, 50.0, 100.0])
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # any warning becomes an error
+            buoyancy_freq(T, S, P, lat=15.0)
+
+    def test_lat_scales_n2(self):
+        """N² is gravity-scaled by g(lat), so high-latitude N² exceeds the
+        equatorial value for the same profile (audit 103 evidence)."""
+        T = np.array([20.0, 15.0, 10.0])
+        S = np.full(3, 35.0)
+        P = np.array([0.0, 50.0, 100.0])
+        n2_eq, _ = buoyancy_freq(T, S, P, lat=0.0)
+        n2_hi, _ = buoyancy_freq(T, S, P, lat=70.0)
+        assert np.all(n2_hi > n2_eq)
+
+    def test_duplicate_pressure_no_inf(self):
+        """Defect (audit 104): duplicate pressure (dp=0) made gsw.Nsquared
+        emit a silent inf; the dp guard must yield NaN instead, with no inf."""
+        T = np.array([20.0, 15.0, 12.0, 10.0])
+        S = np.full(4, 35.0)
+        P = np.array([0.0, 50.0, 50.0, 100.0])  # duplicate pressure at index 2
+        # gsw divides by dp=0 internally (RuntimeWarning) before our NaN guard.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            N2, _ = buoyancy_freq(T, S, P, lat=15.0)
+        assert not np.any(np.isinf(N2))
+        assert np.isnan(N2[1])  # the degenerate-spacing pair
+        # The well-spaced pairs are unaffected.
+        assert np.isfinite(N2[0])
+        assert np.isfinite(N2[2])

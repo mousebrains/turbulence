@@ -194,7 +194,7 @@ class TestCsdMatrixBatch:
     def test_diss_length_too_short_raises(self):
         from odas_tpw.scor160.spectral import csd_matrix_batch
 
-        with pytest.raises(ValueError, match="too short"):
+        with pytest.raises(ValueError, match="at least 2"):
             csd_matrix_batch(np.zeros((5, 100, 2)), None, 256, 512.0)
 
     def test_shape_mismatch_raises(self):

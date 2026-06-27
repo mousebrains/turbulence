@@ -91,6 +91,17 @@ class TestCompareL2:
         assert "shear" in metrics
         assert "vibration" in metrics
 
+    def test_empty_section_arrays(self):
+        # Regression: zero-sample L2 must not raise ValueError on .max()
+        # over an empty section_number array; report 0 sections instead.
+        empty = _make_l2(n=0)
+        metrics = compare_l2(empty, empty)
+        assert metrics["section"]["ref_n_sections"] == 0
+        assert metrics["section"]["comp_n_sections"] == 0
+        assert metrics["section"]["ref_n_selected"] == 0
+        # Report must still be formattable for a degenerate input.
+        assert "Section selection" in format_l2_report(metrics)
+
 
 class TestCompareL3:
     def test_identical_data(self):

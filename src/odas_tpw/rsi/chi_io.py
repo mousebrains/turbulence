@@ -26,9 +26,11 @@ import xarray as xr
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
 
-# Max acceptable epsilon FOM for including a probe in the Method-1 mean
-# (matches compute_chi_window's fom_limit default).
-_EPS_FOM_LIMIT = 1.15
+# Max acceptable epsilon FM (Lueck 2022 MAD-based reject statistic; good fits
+# approach 0, ATOMIX rejects FM > ~1.15) for including a probe in the Method-1
+# mean. Named for FM, not the variance-ratio `fom` (centered on 1.0) it gates
+# only as a fallback when FM is absent. (matches compute_chi_window's default.)
+_EPS_FM_LIMIT = 1.15
 
 
 def _compute_chi(
@@ -350,19 +352,26 @@ def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
         a = np.asarray(epsilon_ds[name].values, dtype=np.float64)
         return a[np.newaxis] if a.ndim == 1 else a
 
-    fom_arr = _probe_var("fom")
+    # Probe-rejection filters on the Lueck (2022) MAD-based FM statistic (good
+    # fits approach 0; ATOMIX rejects FM > ~1.15), NOT the variance-ratio `fom`
+    # (centered on 1.0, 0.7-1.4 is a GOOD fit). Thresholding `fom` at 1.15 wrongly
+    # drops good probes. Fall back to `fom` only when FM is absent (older files),
+    # mirroring l4.py's fom_for_flags.
+    fom_arr = _probe_var("FM")
+    if fom_arr is None:
+        fom_arr = _probe_var("fom")
     mad_arr = _probe_var("mad")
 
     if "epsilonMean" in epsilon_ds:
         epsi_final = np.asarray(epsilon_ds["epsilonMean"].values, dtype=np.float64)
     elif n_sh > 1:
-        # Exclude bad-probe estimates (fom > fom_limit) before averaging across
-        # probes, mirroring compute_chi_window's Method-1 filter: a high-fom
+        # Exclude bad-probe estimates (FM > limit) before averaging across
+        # probes, mirroring compute_chi_window's Method-1 filter: a high-FM
         # shear probe must not bias the epsilon that drives every thermistor's
         # chi. Where a window has no good probe, fall back to the all-probe mean.
         eps_for_mean = eps_vals.astype(np.float64, copy=True)
         if fom_arr is not None and fom_arr.shape == eps_for_mean.shape:
-            bad = ~np.isfinite(fom_arr) | (fom_arr > _EPS_FOM_LIMIT)
+            bad = ~np.isfinite(fom_arr) | (fom_arr > _EPS_FM_LIMIT)
             eps_for_mean = np.where(bad, np.nan, eps_for_mean)
         # catch_warnings (not just errstate): an all-NaN window makes nanmean
         # emit a "Mean of empty slice" RuntimeWarning via warnings.warn, which
@@ -383,8 +392,14 @@ def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
     if np.issubdtype(times.dtype, np.datetime64):
         start_str = epsilon_ds.attrs.get("start_time")
         if start_str:
-            # numpy.datetime64 doesn't accept tz suffix; strip Z/±HH:MM.
-            start = np.datetime64(re.sub(r"(Z|[+-]\d{2}:?\d{2})$", "", start_str))
+            # HONOR the timezone offset (decode_cf did when it decoded `t`), then
+            # normalize to naive UTC — do NOT strip the offset and reinterpret the
+            # local wall-clock as the reference, which shifts the epsilon time base
+            # by the offset and silently NaNs all chi for a non-UTC instrument.
+            _dt = datetime.fromisoformat(start_str)
+            if _dt.tzinfo is not None:
+                _dt = _dt.astimezone(UTC).replace(tzinfo=None)
+            start = np.datetime64(_dt)
         else:
             start = times[0]
         times = ((times - start) / np.timedelta64(1, "ns")).astype(np.float64) / 1e9
@@ -856,9 +871,16 @@ def load_epsilon_dataset(
     ]
     for d in candidates:
         files = sorted(d.glob(f"{stem}_prof*_eps.nc"))
-        single = d / f"{stem}_eps.nc"
-        if single.exists():
-            files.insert(0, single)
+        # The single-profile (`{stem}_eps.nc`) and per-profile
+        # (`{stem}_prof00N_eps.nc`) naming schemes are mutually exclusive within
+        # one run. Only fall back to the single-profile file when NO per-profile
+        # file exists: concatenating both (e.g. when a re-run with different
+        # trim/direction left stale products of both forms in the dir) would
+        # double-count epsilon times and silently bias the Method-1 match.
+        if not files:
+            single = d / f"{stem}_eps.nc"
+            if single.exists():
+                files = [single]
         if not files:
             continue
         if len(files) == 1:

@@ -18,7 +18,7 @@ import numpy as np
 
 from odas_tpw.scor160.io import L3Data, L4Data
 from odas_tpw.scor160.nasmyth import LUECK_A, X_95, nasmyth_grid
-from odas_tpw.scor160.ocean import visc35
+from odas_tpw.scor160.ocean import visc, visc35
 
 # ---------------------------------------------------------------------------
 # Constants (matching rsi.dissipation)
@@ -87,6 +87,7 @@ def process_l4(
     l3: L3Data,
     *,
     temp: np.ndarray | None = None,
+    salinity: np.ndarray | float | None = None,
     f_AA: float = 98.0,
     fit_order: int = 3,
     fom_limit: float = DEFAULT_FOM_LIMIT,
@@ -106,6 +107,15 @@ def process_l4(
         Level-3 wavenumber spectra (clean spectra used for epsilon).
     temp : ndarray, optional
         Per-window temperature for viscosity. If None, uses 10 C default.
+    salinity : ndarray or float, optional
+        Per-window practical salinity [PSU] for viscosity.  When supplied,
+        viscosity is ``visc(temp, salinity, l3.pres)`` (salinity- and
+        pressure-aware), matching the deprecated ``dissipation.py`` path
+        and keeping epsilon on the same viscosity basis as chi/N2 in a
+        field run.  Defect when omitted: epsilon viscosity defaults to
+        ``visc35`` (S=35, P=0), which silently diverges from the measured
+        salinity used by chi/stratification in the same pipeline run.
+        ``None`` keeps the S=35 default to preserve ATOMIX benchmark parity.
     f_AA : float
         Anti-alias filter cutoff [Hz].
     fit_order : int
@@ -153,11 +163,25 @@ def process_l4(
     temp = np.asarray(temp, dtype=np.float64)
     if not np.all(np.isfinite(temp)):
         warnings.warn(
-            "Non-finite window temperature(s); using 10 degC for viscosity "
-            "in those windows",
+            "Non-finite window temperature(s); using 10 degC for viscosity in those windows",
             stacklevel=2,
         )
         temp = np.where(np.isfinite(temp), temp, 10.0)
+
+    # Per-window salinity for viscosity.  When provided, epsilon viscosity
+    # becomes salinity/pressure aware (visc); when None it stays at the
+    # S=35/P=0 visc35 reference (ATOMIX benchmark parity).
+    sal: np.ndarray | None = None
+    if salinity is not None:
+        if np.ndim(salinity) > 0:
+            sal = np.asarray(salinity, dtype=np.float64)
+            if sal.size != n_spec:
+                sal = np.full(n_spec, float(np.nanmean(sal)))
+        else:
+            sal = np.full(n_spec, float(salinity))
+        if not np.all(np.isfinite(sal)):
+            sal = np.where(np.isfinite(sal), sal, 35.0)
+    pres_arr = np.asarray(l3.pres, dtype=np.float64) if l3.pres.size == n_spec else np.zeros(n_spec)
 
     # Output arrays
     epsi = np.full((n_shear, n_spec), np.nan)
@@ -173,11 +197,20 @@ def process_l4(
         # Per-window wavenumber grid: kcyc is (N_WAVENUMBER, N_SPECTRA)
         K = l3.kcyc[:, j]  # cpm
         W = l3.pspd_rel[j]
-        nu = float(visc35(temp[j]))
+        if sal is not None:
+            nu = float(visc(temp[j], sal[j], pres_arr[j]))
+        else:
+            nu = float(visc35(temp[j]))
         nu_arr[j] = nu
 
-        # Anti-alias wavenumber limit
-        K_AA = 0.9 * f_AA / max(W, 0.05)
+        # Anti-alias wavenumber limit.  Defect: pspd_rel holds the
+        # un-floored per-window mean speed, which is NaN for an all-NaN
+        # window (l3.py records NaN there).  max(NaN, 0.05) keeps the NaN,
+        # so K_AA -> NaN and the integration limits silently widen to the
+        # full spectrum (searchsorted(K, NaN)=len(K)), yielding a wrong-but-
+        # finite over-integrated epsilon.  Mirror the L3 wavenumber-axis
+        # floor so a degenerate window gives a clean, floored estimate.
+        K_AA = 0.9 * f_AA / max(np.nan_to_num(W, nan=0.05), 0.05)
 
         for i in range(n_shear):
             # Use cleaned spectra
@@ -244,9 +277,7 @@ def process_l4(
         method=method_arr,
         var_resolved=var_resolved,
         FM=FM,
-        despike_fraction=(
-            l3.despike_fraction.copy() if l3.despike_fraction.size > 0 else None
-        ),
+        despike_fraction=(l3.despike_fraction.copy() if l3.despike_fraction.size > 0 else None),
     )
 
 
@@ -673,9 +704,7 @@ def _inertial_subrange(
 # ---------------------------------------------------------------------------
 
 
-def _sigma_ln_epsilon(
-    epsi: np.ndarray, nu: np.ndarray, L: np.ndarray
-) -> np.ndarray:
+def _sigma_ln_epsilon(epsi: np.ndarray, nu: np.ndarray, L: np.ndarray) -> np.ndarray:
     """Expected sigma of ln(epsilon) per probe/window (Lueck 2022a).
 
     var(ln eps) = 5.5 / (1 + (L_hat/4)^(7/9)) with L_hat = L/L_K and
@@ -739,9 +768,7 @@ def _compute_flags(
             epsi_pos = np.where(np.isfinite(epsi) & (epsi > 0), epsi, np.nan)
             e_min = np.nanmin(epsi_pos, axis=0)  # (n_spec,)
             ln_ratio = np.log(epsi_pos / e_min[np.newaxis, :])
-            mu_sigma = np.nanmean(
-                np.where(np.isfinite(epsi_pos), sigma_ln, np.nan), axis=0
-            )
+            mu_sigma = np.nanmean(np.where(np.isfinite(epsi_pos), sigma_ln, np.nan), axis=0)
             inconsistent = ln_ratio > diss_ratio_limit * mu_sigma[np.newaxis, :]
         flags[inconsistent] += 4
 

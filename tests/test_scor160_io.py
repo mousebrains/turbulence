@@ -154,6 +154,16 @@ class TestL4Data:
         assert l4.n_spectra == n_spec
         assert l4.n_shear == n_sh
 
+    def test_fom_field_comment_documents_dual_use(self):
+        # fom is dual-use: _read_l4 loads the benchmark FM (ATOMIX/Lueck 2022 MAD
+        # statistic); process_l4 fills the obs/Nasmyth variance-ratio fom. The
+        # field doc must name BOTH so callers don't threshold the wrong one.
+        import inspect
+
+        lo = inspect.getsource(L4Data).lower()
+        assert "mad" in lo
+        assert "variance-ratio fom" in lo
+
 
 # ---------------------------------------------------------------------------
 # read_atomix() tests using synthetic ATOMIX NetCDF fixture

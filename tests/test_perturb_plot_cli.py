@@ -245,6 +245,51 @@ class TestEpsChiCLI:
         assert out[0, 0] == 3.0  # 1 | 2, not max(1, 2) = 2
         assert np.isnan(out[1, 0])
 
+    def test_align_chi_to_eps_matched_but_all_nan_not_counted_unmatched(self):
+        """A chi column that matched in time (within 5 s) but is entirely NaN
+        over depth (e.g. QC dropped every bin) must NOT be counted as an
+        unmatched eps slot. Inferring n_unmatched from finiteness over-reports
+        the 'no chi' count; an explicit match boolean reports it correctly."""
+        from odas_tpw.perturb.plot import eps_chi
+
+        t0 = np.datetime64("2025-01-01T00:00:00")
+        # 3 eps slots; chi has a column at each slot's time but the middle chi
+        # column is all-NaN over depth (matched in time, no valid chi values).
+        t_eps = t0 + np.array([0, 60, 120], "timedelta64[s]")
+        t_chi = t0 + np.array([0, 60, 120], "timedelta64[s]")
+        chi = np.array(
+            [[1.0, np.nan, 3.0], [2.0, np.nan, 4.0]]  # 2 depth bins, 3 profiles
+        )
+        aligned, aligned_qc, n_unmatched = eps_chi._align_chi_to_eps(
+            t_eps, t_chi, chi, None
+        )
+        # All three chi columns matched in time -> zero genuinely unmatched.
+        # The old finiteness-based count would report 1 (the all-NaN column).
+        assert n_unmatched == 0
+        assert aligned_qc is None
+        # The matched-but-all-NaN column stays NaN; the others are placed.
+        assert aligned[0, 0] == 1.0 and aligned[1, 2] == 4.0
+        assert np.isnan(aligned[0, 1]) and np.isnan(aligned[1, 1])
+
+    def test_align_chi_to_eps_counts_time_unmatched_slots(self):
+        """An eps slot with no chi column within 5 s is correctly unmatched."""
+        from odas_tpw.perturb.plot import eps_chi
+
+        t0 = np.datetime64("2025-01-01T00:00:00")
+        t_eps = t0 + np.array([0, 60, 120], "timedelta64[s]")
+        # Only two chi columns, near eps slots 0 and 2; slot 1 has no chi.
+        t_chi = t0 + np.array([1, 121], "timedelta64[s]")
+        chi = np.array([[1.0, 3.0], [2.0, 4.0]])
+        chi_qc = np.array([[0.0, 1.0], [0.0, 0.0]])
+        aligned, aligned_qc, n_unmatched = eps_chi._align_chi_to_eps(
+            t_eps, t_chi, chi, chi_qc
+        )
+        assert n_unmatched == 1  # the middle eps slot
+        assert aligned_qc is not None
+        assert aligned[0, 0] == 1.0 and aligned[0, 2] == 3.0
+        assert np.isnan(aligned[0, 1])
+        assert aligned_qc[0, 2] == 1.0
+
     def test_missing_diss_combo_errors(self, tmp_path):
         with pytest.raises(SystemExit):
             cli.main(["eps-chi", "--root", str(tmp_path)])

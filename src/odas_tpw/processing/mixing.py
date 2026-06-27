@@ -45,16 +45,30 @@ Gregg, M.C., E.A. D'Asaro, J.J. Riley, and E. Kunze, 2018: Mixing
 
 from __future__ import annotations
 
+import warnings
 from typing import NamedTuple
 
 import gsw
 import numpy as np
 import numpy.typing as npt
 
-# Stratification floor [s^-2].  Below ~1e-9 s^-2 (N ~ 0.02 cph) the
-# water column is effectively unstratified at the window scale and the
-# Osborn scaling K ~ epsilon/N^2 diverges.
+# Stratification floor [s^-2]. Below ~1e-9 s^-2 (N ~ 0.02 cph) the Osborn
+# estimate diverges (division-by-zero guard). A 1e-9 floor prevents the divide
+# but not unphysical inflation: a window whose N^2 sits just above it still
+# yields an absurd K_rho = Gamma_0 * epsilon / N^2. Rather than raise the floor
+# (which would NaN genuinely weakly-stratified bins without benchmark support),
+# K_rho is bounded from above by DEFAULT_K_RHO_MAX below (audit #30).
 DEFAULT_N2_MIN = 1e-9
+
+# Upper sanity bound on K_rho [m^2/s] (audit #30). The N2_min floor below stops
+# the divide-by-zero but not magnitude inflation: K_rho = Gamma_0 * epsilon / N2
+# grows without bound as N^2 shrinks toward the floor, producing values (e.g.
+# ~10 m^2/s) far beyond any realizable diapycnal diffusivity. Windows above this
+# bound are masked (set to NaN) rather than emitted. 1 m^2/s sits at the upper
+# edge of even the most energetic real diapycnal mixing (overflows / hydraulic
+# jumps reach ~0.1-1 m^2/s); values above it are physically implausible. The
+# bound is configurable (K_rho_max) for regimes where larger values are expected.
+DEFAULT_K_RHO_MAX = 1.0
 
 # Background temperature-gradient floor [K/m].  chi/(dT/dz)^2 diverges
 # as the mean gradient vanishes (well-mixed layers); 1e-4 K/m over a
@@ -423,6 +437,7 @@ def mixing_coefficients(
     N2_min: float = DEFAULT_N2_MIN,
     dTdz_min: float = DEFAULT_DTDZ_MIN,
     gamma_osborn: float = GAMMA_OSBORN,
+    K_rho_max: float = DEFAULT_K_RHO_MAX,
 ) -> MixingResult:
     """Derived mixing quantities from epsilon, chi, and stratification.
 
@@ -441,6 +456,9 @@ def mixing_coefficients(
     - ``Gamma`` and ``K_rho`` where ``N2 < N2_min`` (unstratified or
       statically unstable at the window scale: the Osborn scaling does
       not apply).
+    - ``K_rho`` where the result exceeds ``K_rho_max`` (a physically
+      implausible diffusivity, most often from ``N2`` near its floor; the
+      masked count is reported via :mod:`warnings`).
     - Any output where the corresponding ``chi`` or ``epsilon`` is
       non-finite or non-positive (a positive dissipation rate is required
       for every quantity).
@@ -460,6 +478,9 @@ def mixing_coefficients(
         Validity floors (see module constants).
     gamma_osborn : float
         Constant mixing coefficient for ``K_rho`` (default 0.2).
+    K_rho_max : float
+        Upper sanity bound on ``K_rho`` [m^2/s]; windows exceeding it are
+        masked as near-floor ``N2`` inflation (see ``DEFAULT_K_RHO_MAX``).
 
     Returns
     -------
@@ -485,6 +506,20 @@ def mixing_coefficients(
         )
         K_rho = np.where(strat_ok & eps_ok, gamma_osborn * epsilon / N2, np.nan)
 
+    # Mask physically implausible K_rho (audit #30): an unbounded magnitude,
+    # most often from N^2 near its floor. A NaN K_rho compares False, so only
+    # finite over-ceiling windows are counted.
+    over_ceiling = K_rho > K_rho_max
+    n_masked = int(np.count_nonzero(over_ceiling))
+    if n_masked:
+        K_rho = np.where(over_ceiling, np.nan, K_rho)
+        warnings.warn(
+            f"mixing_coefficients: masked {n_masked} K_rho value(s) exceeding "
+            f"{K_rho_max} m^2/s as physically implausible diapycnal diffusivity "
+            f"(typically near-floor N^2 inflation; N2_min={N2_min} s^-2)",
+            stacklevel=2,
+        )
+
     return MixingResult(K_T=K_T, Gamma=Gamma, K_rho=K_rho)
 
 
@@ -501,30 +536,40 @@ def pair_nearest(
     = one median source spacing) rejects pairings with no temporally
     co-located source estimate.
     """
-    src_times = np.asarray(src_times, dtype=np.float64)
-    src_values = np.asarray(src_values, dtype=np.float64)
-    dst_times = np.asarray(dst_times, dtype=np.float64)
+    # Fresh ndarray-typed names (params are npt.ArrayLike; reusing them keeps
+    # mypy's declared type as ArrayLike and flags every later index/len).
+    src_t = np.asarray(src_times, dtype=np.float64)
+    src_v = np.asarray(src_values, dtype=np.float64)
+    dst_t = np.asarray(dst_times, dtype=np.float64)
 
-    out = np.full(len(dst_times), np.nan)
-    if len(src_times) == 0:
+    out = np.full(len(dst_t), np.nan)
+    # Only finite source estimates are candidates: a NaN (QC-rejected) epsilon
+    # window must not shadow a valid epsilon at an adjacent window within max_dt
+    # (else Gamma/K_rho are silently dropped while K_T survives).
+    finite = np.isfinite(src_v)
+    if not finite.all():
+        src_t = src_t[finite]
+        src_v = src_v[finite]
+    if len(src_t) == 0:
         return out
     if max_dt is None:
-        max_dt = (
-            float(np.median(np.diff(np.sort(src_times)))) if len(src_times) > 1 else 30.0
-        )
-    order = np.argsort(src_times)
-    st = src_times[order]
-    sv = src_values[order]
+        # Defect (audit): a zero/negative median spacing (duplicate or
+        # clamped source times) would collapse the tolerance to <= 0 and
+        # silently drop every pairing that is not an exact time match;
+        # fall back to a usable positive floor instead.
+        med = float(np.median(np.diff(np.sort(src_t)))) if len(src_t) > 1 else 0.0
+        max_dt = med if med > 0 else 30.0
+    order = np.argsort(src_t)
+    st = src_t[order]
+    sv = src_v[order]
     if len(st) == 1:
-        ok = np.abs(st[0] - dst_times) <= max_dt
+        ok = np.abs(st[0] - dst_t) <= max_dt
         out[ok] = sv[0]
         return out
-    idx = np.clip(np.searchsorted(st, dst_times), 1, len(st) - 1)
+    idx = np.clip(np.searchsorted(st, dst_t), 1, len(st) - 1)
     left = idx - 1
-    pick = np.where(
-        np.abs(st[idx] - dst_times) < np.abs(st[left] - dst_times), idx, left
-    )
-    dt = np.abs(st[pick] - dst_times)
+    pick = np.where(np.abs(st[idx] - dst_t) < np.abs(st[left] - dst_t), idx, left)
+    dt = np.abs(st[pick] - dst_t)
     ok = dt <= max_dt
     out[ok] = sv[pick[ok]]
     return out

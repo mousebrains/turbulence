@@ -79,7 +79,13 @@ def default_tau_model(fp07_model: str) -> str:
     who combined a double-pole response with a speed-dependent tau —
     see the :func:`fp07_tau` notes for how to do that explicitly.
     """
-    return "goto" if fp07_model == "double_pole" else "lueck"
+    # Defect: an unrecognized fp07_model previously fell through to 'lueck'
+    # silently, pairing a single-pole tau with a double-pole transfer on a typo.
+    if fp07_model == "double_pole":
+        return "goto"
+    elif fp07_model == "single_pole":
+        return "lueck"
+    raise ValueError(f"Unknown FP07 model: {fp07_model!r}")
 
 
 def fp07_tau(speed: npt.ArrayLike, model: str = "lueck") -> np.ndarray | float:
@@ -119,6 +125,10 @@ def fp07_tau(speed: npt.ArrayLike, model: str = "lueck") -> np.ndarray | float:
     """
     is_scalar = np.ndim(speed) == 0
     speed = np.asarray(speed, dtype=np.float64)
+    # Defect: MATLAB gradT_noise_odas.m validates speed > 0; without it a
+    # non-positive speed yields NaN (lueck/peterson) or inf downstream.
+    if np.any(speed <= 0):
+        raise ValueError(f"FP07 speed must be > 0, got min {np.min(speed)!r}")
     if model == "lueck":
         result = 0.01 * (1.0 / speed) ** 0.5
     elif model == "peterson":
@@ -172,10 +182,14 @@ def fp07_transfer_batch(
     F = np.asarray(F, dtype=np.float64)
     tau0 = np.asarray(tau0, dtype=np.float64)
     omega_tau_sq = (2 * np.pi * F[:, np.newaxis] * tau0[np.newaxis, :]) ** 2
+    # Defect: an unrecognized model string silently fell through to
+    # double_pole, mixing physics on a config typo. Validate like fp07_tau.
     if model == "single_pole":
         return (1.0 / (1.0 + omega_tau_sq)).T
-    else:
+    elif model == "double_pole":
         return (1.0 / (1.0 + omega_tau_sq) ** 2).T
+    else:
+        raise ValueError(f"Unknown FP07 model: {model!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +501,10 @@ def gradT_noise(
     K : ndarray
         Wavenumber vector [cpm].
     """
+    # Defect: a non-positive speed gives a negative noise PSD (impossible) or
+    # inf; MATLAB gradT_noise_odas.m validates speed > 0 (val_speed).
+    if not (np.isfinite(speed) and speed > 0):
+        raise ValueError(f"FP07 speed must be > 0, got {speed!r}")
     noise_f = noise_thermchannel(F, T_mean, fs=fs, diff_gain=diff_gain, **kwargs)
     F_arr = np.asarray(F, dtype=np.float64)
     K = F_arr / speed
@@ -571,6 +589,15 @@ def noise_thermchannel_batch(
     # --- T-dependent terms ---
     T_kelvin = T_means + 273.15  # (n_est,)
     R_ratio = np.exp(p["beta_1"] * (1.0 / T_kelvin - 1.0 / p["T_0"]))  # (n_est,)
+    # Defect: the batch path clamped R_ratio < 0.1 silently while the scalar
+    # noise_thermchannel warns; surface the broken-thermistor condition here too.
+    n_clamped = int(np.count_nonzero(R_ratio < 0.1))
+    if n_clamped:
+        warnings.warn(
+            f"R_ratio < 0.1 for {n_clamped} of {R_ratio.size} T_means "
+            "(possible broken thermistor); clamped to 1.0",
+            stacklevel=2,
+        )
     R_ratio = np.where(R_ratio < 0.1, 1.0, R_ratio)
     R_actual = R_ratio * p["R_0"]
     phi_R = 4 * p["K_B"] * R_actual * p["T_K"]  # (n_est,)
@@ -609,8 +636,12 @@ def gradT_noise_batch(
     noise_K : ndarray, shape ``(n_est, n_freq)``
         Noise spectrum [(K/m)^2 / cpm].
     """
-    noise_f = noise_thermchannel_batch(F, T_means, fs=fs, diff_gain=diff_gain, **kwargs)
     speeds = np.asarray(speeds, dtype=np.float64)
+    # Defect: non-positive speeds give a negative/inf noise PSD; MATLAB
+    # gradT_noise_odas.m validates speed > 0 (val_speed).
+    if not np.all(np.isfinite(speeds) & (speeds > 0)):
+        raise ValueError(f"FP07 speeds must all be > 0, got min {np.min(speeds)!r}")
+    noise_f = noise_thermchannel_batch(F, T_means, fs=fs, diff_gain=diff_gain, **kwargs)
     # Time-derivative noise -> gradient noise per cpm: /speed^2 * speed
     # (see gradT_noise).
     return noise_f / speeds[:, np.newaxis]

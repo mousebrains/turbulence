@@ -209,15 +209,28 @@ def _compute_epsilon(
         spec_shear = np.full((n_sh, n_freq, n_spec), np.nan)
         spec_nasmyth = np.full((n_sh, n_freq, n_spec), np.nan)
 
+        # Defect: window temperature may be NaN (l3.temp can hold NaN when temp
+        # data is absent), and visc/visc35(NaN)->NaN propagates to all-NaN
+        # epsilon and Nasmyth spectra with no warning. Mirror the process_l4
+        # guard: substitute the 10 degC default for non-finite temperatures.
+        temp_win = np.asarray(l3.temp, dtype=np.float64)
+        if not np.all(np.isfinite(temp_win)):
+            warnings.warn(
+                "Non-finite window temperature(s); using 10 degC for viscosity "
+                "in those windows",
+                stacklevel=2,
+            )
+            temp_win = np.where(np.isfinite(temp_win), temp_win, 10.0)
+
         # Viscosity per window (with salinity support) — visc/visc35 broadcast.
         if salinity is not None:
             if np.ndim(sal_prof) > 0:
                 sal_window = np.interp(l3.time, l1.time, sal_prof)
             else:
                 sal_window = np.full(n_spec, float(sal_prof))
-            nu_out = np.asarray(visc(l3.temp, sal_window, l3.pres), dtype=np.float64)
+            nu_out = np.asarray(visc(temp_win, sal_window, l3.pres), dtype=np.float64)
         else:
-            nu_out = np.asarray(visc35(l3.temp), dtype=np.float64)
+            nu_out = np.asarray(visc35(temp_win), dtype=np.float64)
 
         for j in range(n_spec):
             K = l3.kcyc[:, j]

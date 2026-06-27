@@ -1,11 +1,14 @@
 """Tests for derived mixing quantities (processing/mixing.py)."""
 
+import warnings
+
 import gsw
 import numpy as np
 import pytest
 
 from odas_tpw.processing.mixing import (
     DEFAULT_DTDZ_MIN,
+    DEFAULT_K_RHO_MAX,
     DEFAULT_N2_MIN,
     GAMMA_OSBORN,
     mixing_coefficients,
@@ -235,6 +238,39 @@ class TestMixingCoefficients:
         assert np.isnan(res.Gamma[0]) and np.isnan(res.K_rho[0])
         assert np.isfinite(res.K_T[0])  # K_T needs only chi and dT/dz
 
+    def test_near_floor_krho_inflation_masked(self):
+        """Audit #30: N2 just above the floor inflates K_rho to ~10 m^2/s.
+
+        Such windows are an artifact of N2 approaching N2_min, not real
+        diffusivity, so they are masked above K_rho_max while a normal
+        window and the other quantities are untouched.
+        """
+        eps = np.array([1e-8, 1e-7])
+        chi = np.array([1e-8, 1e-8])
+        N2 = np.array([1e-5, 2e-9])  # second window just above the 1e-9 floor
+        dTdz = np.array([0.05, 0.05])
+        # K_rho[1] = 0.2 * 1e-7 / 2e-9 = 10 m^2/s -> over the 1 m^2/s ceiling.
+        with pytest.warns(UserWarning, match="masked 1 K_rho"):
+            res = mixing_coefficients(eps, chi, N2, dTdz)
+        assert np.isfinite(res.K_rho[0])  # normal window survives
+        assert np.isnan(res.K_rho[1])  # inflated window masked
+        # The ceiling touches only K_rho.
+        assert np.all(np.isfinite(res.Gamma))
+        assert np.all(np.isfinite(res.K_T))
+
+    def test_krho_max_configurable(self):
+        """A raised ceiling keeps an otherwise-masked large K_rho; no warning."""
+        eps = np.array([1e-7])
+        chi = np.array([1e-8])
+        N2 = np.array([2e-9])
+        dTdz = np.array([0.05])
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = mixing_coefficients(eps, chi, N2, dTdz, K_rho_max=100.0)
+        assert not [w for w in caught if issubclass(w.category, UserWarning)]
+        np.testing.assert_allclose(res.K_rho[0], GAMMA_OSBORN * eps[0] / N2[0])
+        assert DEFAULT_K_RHO_MAX == 1.0  # default ceiling unchanged
+
 
 class TestPairNearest:
     def test_identical_grids(self):
@@ -263,6 +299,14 @@ class TestPairNearest:
     def test_empty_source(self):
         out = pair_nearest(np.array([]), np.array([]), np.array([1.0, 2.0]))
         assert np.all(np.isnan(out))
+
+    def test_zero_median_spacing_falls_back(self):
+        # Audit: duplicate source times make the auto-tolerance median
+        # diff exactly 0.0; without a guard every destination not landing
+        # on a source time is silently dropped.  A destination 0.1 s from
+        # a (duplicated) source must now pair instead of going NaN.
+        out = pair_nearest(np.array([5.0, 5.0, 5.0]), np.array([1.0, 2.0, 3.0]), np.array([5.1]))
+        assert np.isfinite(out[0])
 
     def test_explicit_max_dt(self):
         t = np.array([0.0, 10.0])

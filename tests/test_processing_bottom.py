@@ -83,6 +83,22 @@ class TestDetectBottomCrash:
         Ay = np.random.randn(n) * 10.0
         assert detect_bottom_crash(depth, {"Ax": Ax, "Ay": Ay}, fs=512.0) is None
 
+    def test_all_nan_depth_emits_no_runtime_warning(self):
+        """The all-NaN-depth path must be silent. np.errstate does NOT suppress
+        nanmax's 'All-NaN slice encountered' RuntimeWarning, so the prior
+        errstate-only guard let it escape as log noise (and callers that promote
+        RuntimeWarning to errors would crash). Short-circuiting before nanmax
+        keeps the path quiet (audit 2026-06-26)."""
+        import warnings
+
+        n = 1000
+        depth = np.full(n, np.nan)
+        Ax = np.random.randn(n) * 10.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            # Fails on the old code: nanmax raises "All-NaN slice encountered".
+            assert detect_bottom_crash(depth, {"Ax": Ax}, fs=512.0) is None
+
     def test_single_channel_pre_aggregated(self):
         """One pre-computed magnitude channel works just like Ax/Ay."""
         n = 5000

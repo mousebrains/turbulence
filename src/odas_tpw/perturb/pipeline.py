@@ -133,7 +133,8 @@ def _prune_orphan_named_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
 def _canonical_instruments_for_hash(instruments: dict | None) -> dict[str, Any]:
     """Normalize set-like instrument settings before hashing."""
     normalized: dict[str, Any] = {}
-    for key, settings in sorted((instruments or {}).items()):
+    # Sort by str(key): instrument serials mix int (unquoted `465:`) and str keys.
+    for key, settings in sorted((instruments or {}).items(), key=lambda kv: str(kv[0])):
         if not isinstance(settings, dict):
             normalized[str(key)] = settings
             continue
@@ -804,7 +805,9 @@ def _add_mixing_quantities(
                             "K_rho = 0.2*epsilon/N2, Osborn (1980), "
                             "doi:10.1175/1520-0485(1980)010<0083:EOTLRO>2.0.CO;2. "
                             "Compare with K_T: agreement implies the measured Gamma "
-                            "is near the canonical 0.2. NaN where N2 < 1e-9 s-2."
+                            "is near the canonical 0.2. NaN where N2 < 1e-9 s-2 or "
+                            "K_rho > 1 m2 s-1 (physically implausible diffusivity "
+                            "from near-floor N2)."
                         ),
                     },
                 ),

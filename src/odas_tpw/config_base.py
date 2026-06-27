@@ -12,6 +12,7 @@ import glob as globmod
 import hashlib
 import json
 import math
+import numbers
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -25,9 +26,13 @@ def _normalize_value(v):
     # bool check must come before int (bool is a subclass of int)
     if isinstance(v, bool):
         return v
-    if isinstance(v, int):
-        return v
-    if isinstance(v, float):
+    # numbers.Integral/Real (not int/float) so a numpy scalar from a config
+    # value is coerced to a JSON-serializable Python number instead of crashing
+    # json.dumps later in canonicalize().
+    if isinstance(v, numbers.Integral):
+        return int(v)
+    if isinstance(v, numbers.Real):
+        v = float(v)
         # int(nan) raises ValueError and int(inf) raises OverflowError, which
         # would crash canonicalize -> compute_hash -> resolve_output_dir with an
         # opaque message. Hash non-finite values by their repr instead.
@@ -35,7 +40,11 @@ def _normalize_value(v):
             return repr(v)
         if v == int(v):
             return int(v)
-        return round(v, 10)
+        # Normalize by significant figures, not decimal places: round(v, 10)
+        # zeroes any |v| < ~5e-11, collapsing distinct small values (e.g. the
+        # 1e-13 epsilon_minimum/chi_minimum defaults) to 0.0 and corrupting the
+        # config hash / signature.
+        return float(f"{v:.10e}")
     if isinstance(v, str):
         return v
     return v
@@ -48,7 +57,13 @@ def _normalize_nested(v):
     if isinstance(v, tuple):
         return [_normalize_nested(item) for item in v]
     if isinstance(v, dict):
-        return {str(k): _normalize_nested(val) for k, val in sorted(v.items())}
+        # Sort by the STRING form of the key: a user-keyed dict (e.g. instrument
+        # serials) mixing int (unquoted `465:`) and str (`SN479:`) keys would
+        # otherwise raise TypeError comparing str < int.
+        return {
+            str(k): _normalize_nested(val)
+            for k, val in sorted(v.items(), key=lambda kv: str(kv[0]))
+        }
     return _normalize_value(v)
 
 
@@ -149,6 +164,20 @@ class ConfigManager:
         if section not in self.defaults:
             raise ValueError(f"Unknown section: {section!r}")
 
+        # Dynamic-key sections (e.g. 'instruments') have empty {} defaults, so
+        # the `k in merged` gate below would discard every user-supplied key,
+        # silently losing all overrides. There are no fixed parameter keys to
+        # constrain against here: overlay file_values then cli_overrides, with
+        # None-filtering, keeping every user-defined key.
+        if section in self.dynamic_key_sections:
+            merged = dict(self.defaults[section])
+            for layer in (file_values, cli_overrides):
+                if layer:
+                    for k, v in layer.items():
+                        if v is not None:
+                            merged[k] = v
+            return {k: v for k, v in merged.items() if v is not None}
+
         merged = dict(self.defaults[section])
 
         if file_values:
@@ -168,10 +197,14 @@ class ConfigManager:
     def _canonicalize_section(self, section: str, params: dict) -> dict:
         """Canonicalize a single section's parameters into a normalized dict."""
         if section in self.dynamic_key_sections:
+            # Keys here are user-defined names (e.g. instrument serials), NOT
+            # parameter keys, so hash_exclude_keys (meant to drop per-section
+            # toggles like 'diagnostics' in static sections) must NOT be applied:
+            # an instrument literally named 'diagnostics' was silently dropped
+            # from the hash/canonical config.
             return {
                 str(k): _normalize_nested(v)
-                for k, v in sorted((params or {}).items())
-                if k not in self.hash_exclude_keys
+                for k, v in sorted((params or {}).items(), key=lambda kv: str(kv[0]))
             }
 
         base = dict(self.defaults[section])
@@ -238,7 +271,10 @@ class ConfigManager:
         target_hash = self.compute_hash(section, params, upstream=upstream)
 
         max_seq = -1
-        pattern = str(base / f"{prefix}_[0-9][0-9]")
+        # Width-adaptive: the dir format is :02d but rolls to 3+ digits past 99
+        # (eps_100). A fixed [0-9][0-9] glob would miss eps_100 and recompute
+        # max_seq as 99, colliding the 101st+ distinct config back onto eps_100.
+        pattern = str(base / f"{prefix}_[0-9][0-9]*")
         for d in sorted(globmod.glob(pattern)):
             dp = Path(d)
             try:
@@ -252,9 +288,21 @@ class ConfigManager:
             if sig_file.exists():
                 return dp
 
+        # Claim the next sequence ATOMICALLY (exist_ok=False): two concurrent
+        # runs of DIFFERENT configs would otherwise both pick the same
+        # {prefix}_NN and mkdir(exist_ok=True) it, fusing two configs into one
+        # output dir. On a lost race, reuse the dir if its signature matches
+        # ours, else advance to the next sequence.
         next_seq = max_seq + 1
-        new_dir = base / f"{prefix}_{next_seq:02d}"
-        new_dir.mkdir(parents=True, exist_ok=True)
+        while True:
+            new_dir = base / f"{prefix}_{next_seq:02d}"
+            try:
+                new_dir.mkdir(parents=True, exist_ok=False)
+                break
+            except FileExistsError:
+                if (new_dir / f".params_sha256_{target_hash}").exists():
+                    return new_dir
+                next_seq += 1
         self.write_signature(new_dir, section, params, upstream=upstream)
         return new_dir
 

@@ -143,6 +143,45 @@ def _reindex_rows_to_depth(
         return np.where(cnt > 0, acc if reduce == "max" else acc / cnt, np.nan)
 
 
+def _align_chi_to_eps(
+    t_eps: np.ndarray,
+    t_chi: np.ndarray,
+    chi: np.ndarray,
+    chi_qc: np.ndarray | None,
+):
+    """Realign chi columns onto the eps profile axis (nearest time, within 5 s).
+
+    Chi typically has *fewer* profiles than eps (fp07 calibration rejects
+    some), so eps slots with no chi match are padded with NaN. Returns the
+    aligned chi, aligned qc (or None), and the count of eps slots that had no
+    time-match.
+
+    Defect fixed: ``n_unmatched`` was inferred from finiteness
+    (``~np.isfinite(aligned).any(axis=0)``), which miscounts a chi column that
+    *did* match within 5 s but is entirely NaN over depth (every bin dropped by
+    QC, or an FP07 cast with no valid chi) as "unmatched". Track matches
+    explicitly with a boolean array so the diagnostic reflects only genuine
+    time-mismatches.
+    """
+    eps_secs = t_eps.astype("datetime64[s]").astype(np.int64)
+    chi_secs = t_chi.astype("datetime64[s]").astype(np.int64)
+    aligned = np.full((chi.shape[0], len(t_eps)), np.nan)
+    aligned_qc = (
+        np.full((chi.shape[0], len(t_eps)), np.nan) if chi_qc is not None else None
+    )
+    matched = np.zeros(len(t_eps), dtype=bool)
+    # Map each chi column to its nearest eps column (within 5 s).
+    for j, s in enumerate(chi_secs):
+        k = int(np.argmin(np.abs(eps_secs - s)))
+        if abs(eps_secs[k] - s) <= 5:
+            aligned[:, k] = chi[:, j]
+            matched[k] = True
+            if aligned_qc is not None and chi_qc is not None:
+                aligned_qc[:, k] = chi_qc[:, j]
+    n_unmatched = int((~matched).sum())
+    return aligned, aligned_qc, n_unmatched
+
+
 def _per_profile_attrs(root: str, sibling_prefix: str) -> dict:
     """Pick attrs from any per-profile NetCDF in ``<root>/<sibling_prefix>_NN/``."""
     sib_dirs = sorted(glob.glob(os.path.join(root, f"{sibling_prefix}_[0-9][0-9]")))
@@ -303,31 +342,12 @@ def run(args: argparse.Namespace) -> str:
             - t_eps.astype("datetime64[s]").astype(np.int64)
         ) > 5
     ):
-        # Realign chi onto the eps profile axis so gamma broadcasts.
-        # Chi typically has *fewer* profiles than eps (fp07 calibration
-        # rejects some), so we pad with NaN at eps profile slots that
-        # have no chi match.
-        eps_secs = t_eps.astype("datetime64[s]").astype(np.int64)
-        chi_secs = t_chi.astype("datetime64[s]").astype(np.int64)
-        aligned = np.full((chi.shape[0], len(t_eps)), np.nan)
-        aligned_qc = (
-            np.full((chi.shape[0], len(t_eps)), np.nan) if chi_qc is not None else None
-        )
-        # Map each chi column to its nearest eps column (within 5 s).
-        for j, s in enumerate(chi_secs):
-            k = int(np.argmin(np.abs(eps_secs - s)))
-            if abs(eps_secs[k] - s) <= 5:
-                aligned[:, k] = chi[:, j]
-                if aligned_qc is not None and chi_qc is not None:
-                    aligned_qc[:, k] = chi_qc[:, j]
-        n_unmatched = int(np.sum(~np.isfinite(aligned).any(axis=0)))
+        chi, chi_qc, n_unmatched = _align_chi_to_eps(t_eps, t_chi, chi, chi_qc)
         print(
             f"chi/eps profile counts differ ({len(t_chi)} chi vs "
             f"{len(t_eps)} eps); aligned chi onto eps axis "
             f"({n_unmatched} eps slots have no chi)"
         )
-        chi = aligned
-        chi_qc = aligned_qc
 
     if args.apply_qc:
         n_eps_dropped = 0

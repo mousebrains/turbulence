@@ -3,19 +3,31 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import netCDF4
 import numpy as np
 import pytest
 
-from odas_tpw.rsi.dissipation import _compute_diss_one, get_diss
+from odas_tpw.rsi.dissipation import _compute_diss_one, _compute_epsilon, get_diss
 
 
-def _write_nc(path: Path, *, with_shear=True, with_accel=True) -> Path:
-    """Build a minimal NC for get_diss."""
-    n_fast = 1024
-    n_slow = 128
+def _write_nc(
+    path: Path,
+    *,
+    with_shear=True,
+    with_accel=True,
+    n_fast=1024,
+    n_slow=128,
+    temp_nan=False,
+) -> Path:
+    """Build a minimal NC for get_diss.
+
+    ``n_fast``/``n_slow`` can be enlarged so at least one dissipation window
+    is produced; ``temp_nan`` fills the T1 channel with NaN to exercise the
+    non-finite window-temperature guard.
+    """
     fs_fast = 512.0
     fs_slow = 64.0
     rng = np.random.default_rng(0)
@@ -35,7 +47,7 @@ def _write_nc(path: Path, *, with_shear=True, with_accel=True) -> Path:
         p = ds.createVariable("P", "f8", ("time_slow",))
         p[:] = np.linspace(5.0, 50.0, n_slow)
         t1 = ds.createVariable("T1", "f8", ("time_slow",))
-        t1[:] = np.linspace(20.0, 5.0, n_slow)
+        t1[:] = np.nan if temp_nan else np.linspace(20.0, 5.0, n_slow)
 
         if with_shear:
             sh1 = ds.createVariable("sh1", "f8", ("time_fast",))
@@ -87,3 +99,36 @@ class TestComputeDissOneWorker:
         path_str, count = result
         assert path_str == str(nc)
         assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Non-finite window-temperature guard in _compute_epsilon
+# ---------------------------------------------------------------------------
+
+
+class TestNanTemperatureGuard:
+    def test_nan_temperature_warns_and_recovers(self, tmp_path):
+        """All-NaN window temperature: _compute_epsilon must substitute the
+        10 degC default (warning) and yield finite epsilon, mirroring
+        process_l4.  On the old code visc35(NaN)->NaN produced all-NaN
+        epsilon with no warning.
+        """
+        # Large enough to yield at least one dissipation window.
+        nc = _write_nc(
+            tmp_path / "nan_temp.nc",
+            n_fast=8192,
+            n_slow=1024,
+            temp_nan=True,
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            results = _compute_epsilon(nc, goodman=False, fft_length=512)
+
+        assert results, "expected at least one dissipation dataset"
+        for ds in results:
+            eps = ds["epsilon"].values
+            # Old code: every epsilon NaN. New code: all finite.
+            assert np.all(np.isfinite(eps))
+        assert any(
+            "Non-finite window temperature" in str(w.message) for w in caught
+        )

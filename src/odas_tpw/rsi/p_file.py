@@ -246,7 +246,13 @@ def parse_config(config_str: str) -> dict[str, Any]:
                 current_channel[key] = val
             elif current_section == "matrix":
                 if key.startswith("row"):
-                    result["matrix"].append([int(x) for x in val.split()])
+                    # A corrupt/garbled config (e.g. partially overwritten
+                    # record 0) otherwise raises a bare "invalid literal for
+                    # int()" with no section/token context.
+                    try:
+                        result["matrix"].append([int(x) for x in val.split()])
+                    except ValueError as exc:
+                        raise ValueError(f"malformed matrix row {key!r}: {val!r}") from exc
             elif current_section in result and isinstance(result[current_section], dict):
                 result[current_section][key] = val
 
@@ -301,12 +307,31 @@ class PFile:
     def _read(self):
         with open(self.filepath, "rb") as f:
             raw_hdr = f.read(HEADER_BYTES)
+            # Short-header guard: a truncated file otherwise raises a raw
+            # struct.error from _detect_endian/_parse_header, which is not an
+            # OSError/ValueError and so escapes every batch handler. Mirror
+            # extract_pfile_segment's ValueError that all callers catch.
+            if len(raw_hdr) < HEADER_BYTES:
+                raise ValueError(f"{self.filepath.name}: file too small for header")
             self.endian = _detect_endian(raw_hdr, self.filepath)
             self.header = _parse_header(raw_hdr, self.endian)
 
             header_size = self.header["header_size"]
             config_size = self.header["config_size"]
             record_size = self.header["record_size"]
+
+            # Header-geometry guard (mirrors extract_pfile_segment): without it
+            # a corrupt record_size/header_size surfaces only later as an opaque
+            # numpy "cannot reshape array" error instead of a clear diagnostic.
+            if header_size < HEADER_BYTES:
+                raise ValueError(f"{self.filepath.name}: invalid header_size={header_size}")
+            if config_size < 0:
+                raise ValueError(f"{self.filepath.name}: invalid config_size={config_size}")
+            if record_size <= header_size:
+                raise ValueError(
+                    f"{self.filepath.name}: invalid record_size={record_size}; "
+                    f"expected > header_size={header_size}"
+                )
 
             f.seek(header_size)
             self.config_str = f.read(config_size).decode("ascii", errors="replace")
@@ -319,6 +344,14 @@ class PFile:
             self.matrix = np.array(self.config["matrix"])
 
             f_clock = self.header["clock_hz"] + self.header["clock_frac"] / 1000
+            # Geometry guard: a corrupt header with n_cols/n_rows == 0 (or a
+            # zero clock) otherwise produces a bare ZeroDivisionError with no
+            # file context in the sampling-rate divisions below.
+            if self.n_cols < 1 or self.n_rows < 1 or f_clock <= 0:
+                raise ValueError(
+                    f"{self.filepath.name}: invalid matrix geometry "
+                    f"n_cols={self.n_cols} n_rows={self.n_rows} f_clock={f_clock}"
+                )
             self.fs_fast = f_clock / self.n_cols
             self.fs_slow = self.fs_fast / self.n_rows
 
@@ -359,6 +392,15 @@ class PFile:
                 )
 
             data_words = (record_size - header_size) // 2
+            # Scan-geometry guard: data_words must be a positive multiple of
+            # n_cols, otherwise the records['data'].reshape below raises an
+            # opaque "cannot reshape array" ValueError on a corrupt header.
+            if data_words < self.n_cols or data_words % self.n_cols != 0:
+                raise ValueError(
+                    f"{self.filepath.name}: corrupt record geometry; "
+                    f"data words per record ({data_words}) is not a positive "
+                    f"multiple of n_cols ({self.n_cols})"
+                )
             dtype = ">i2" if self.endian == ">" else "<i2"
             udtype = dtype.replace("i", "u")
 
@@ -382,12 +424,24 @@ class PFile:
             self.channels = {}
             self.channel_info = {}
             self._record_headers = records["hdr"]
+            # Names of joined 2-id (32-bit) channels — needed below to apply
+            # ODAS's default-signed correction only to true 32-bit values.
+            joined_channels: set[str] = set()
 
             ch_config = {}
             for ch in self.config["channels"]:
                 if "id" not in ch or "name" not in ch or "type" not in ch:
                     continue
-                ids = [int(x) for x in ch["id"].replace(",", " ").split()]
+                # Guard the channel-id parse the same way as the matrix rows:
+                # a non-numeric id token from a corrupt config otherwise raises
+                # a bare "invalid literal for int()" with no file/channel context.
+                try:
+                    ids = [int(x) for x in ch["id"].replace(",", " ").split()]
+                except ValueError as exc:
+                    raise ValueError(
+                        f"{self.filepath.name}: malformed channel id "
+                        f"{ch['id']!r} for channel {ch.get('name', '?')!r}"
+                    ) from exc
                 ch_config[ch["name"].strip()] = {"ids": ids, **ch}
 
             matrix = self.matrix
@@ -471,6 +525,7 @@ class PFile:
                     even_data[even_data < 0] += 2**16
                     odd_data[odd_data < 0] += 2**16
                     self.channels_raw[ch_name] = odd_data * 2**16 + even_data
+                    joined_channels.add(ch_name)
 
             self.t_fast = np.arange(matrix_count * self.n_rows) / self.fs_fast
             self.t_slow = np.arange(matrix_count) / self.fs_slow
@@ -501,6 +556,8 @@ class PFile:
             # need negative int16 values converted to unsigned before conversion.
             # Matches ODAS read_odas.m lines 370-398.
             _ALWAYS_UNSIGNED = {"jac_t"}
+            # Types ODAS skips entirely in its sign loop (already converted).
+            _SIGN_SKIP = {"sbt", "sbc", "jac_c", "o2_43f"}
             for ch_name in list(self.channels_raw.keys()):
                 info = ch_config.get(ch_name, {})
                 ch_type = info.get("type", "raw").strip().lower()
@@ -521,6 +578,16 @@ class PFile:
                         )
                     else:
                         raw[raw < 0] += 2**16
+                elif ch_name in joined_channels and ch_type not in _SIGN_SKIP:
+                    # ODAS default-signed branch (read_odas.m:393-397): every
+                    # joined 32-bit channel not in the skip set and not marked
+                    # unsigned is signed by default, so values with the high bit
+                    # set must wrap down by 2**32.  Real ARCTERX/SN479 2-id data
+                    # is jac_c (skipped, unsigned), so this only fires for other
+                    # signed 32-bit configs, but without it the port diverged
+                    # from ODAS by 2**32 on such channels.
+                    raw = self.channels_raw[ch_name]
+                    raw[raw >= 2**31] -= 2**32
 
             for ch_name in list(self.channels_raw.keys()):
                 info = ch_config.get(ch_name, {})

@@ -70,10 +70,54 @@ class TestTruncatedFile:
             PFile(p)
 
     def test_tiny_file_raises(self, tmp_path):
-        """A file smaller than one header cannot be parsed."""
+        """A file smaller than one header cannot be parsed.
+
+        Regression: the short-header guard must raise ValueError (caught by
+        every batch handler), not a raw struct.error that escapes them.
+        """
         p = tmp_path / "tiny.p"
         p.write_bytes(b"\x00" * 32)
-        with pytest.raises((ValueError, struct.error)):
+        with pytest.raises(ValueError, match="too small for header"):
+            PFile(p)
+
+
+class TestCorruptHeaderGeometry:
+    """A corrupt matrix/record geometry must raise a clear ValueError naming
+    the file, not a bare ZeroDivisionError or opaque numpy reshape error."""
+
+    def test_zero_cols_raises_clear_error(self, tmp_path, src_bytes):
+        """fast_cols == slow_cols == 0 -> ValueError, not ZeroDivisionError."""
+        mutated = _patch_word(src_bytes, 28, 0)  # fast_cols
+        mutated = _patch_word(mutated, 29, 0)  # slow_cols
+        p = tmp_path / "zero_cols.p"
+        p.write_bytes(mutated)
+        with pytest.raises(ValueError, match="invalid matrix geometry"):
+            PFile(p)
+
+    def test_zero_rows_raises_clear_error(self, tmp_path, src_bytes):
+        """n_rows == 0 -> ValueError, not ZeroDivisionError."""
+        mutated = _patch_word(src_bytes, 30, 0)  # n_rows
+        p = tmp_path / "zero_rows.p"
+        p.write_bytes(mutated)
+        with pytest.raises(ValueError, match="invalid matrix geometry"):
+            PFile(p)
+
+    def test_non_multiple_record_geometry_raises_clear_error(self, tmp_path, src_bytes):
+        """data_words not a multiple of n_cols -> ValueError, not a numpy
+        'cannot reshape array' error."""
+        words = _header_words(src_bytes)
+        header_size = words[17]
+        record_size = words[18]
+        n_cols = words[28] + words[29]
+        data_words = (record_size - header_size) // 2
+        assert data_words % n_cols == 0, "fixture should start well-formed"
+        # Shrink record_size by 2 bytes so data_words drops by 1 and is no
+        # longer a multiple of n_cols (n_cols > 1 for the SN479 fixture).
+        assert n_cols > 1
+        mutated = _patch_word(src_bytes, 18, record_size - 2)
+        p = tmp_path / "bad_geom.p"
+        p.write_bytes(mutated)
+        with pytest.raises(ValueError, match="corrupt record geometry"):
             PFile(p)
 
 

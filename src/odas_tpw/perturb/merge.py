@@ -13,9 +13,32 @@ import os
 import shutil
 import struct
 import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS, _detect_endian
+
+# Max gap between a chained file's start and the previous file's computed end
+# for them to count as a genuine size-limit rollover (vs two independent casts).
+_MERGE_GAP_TOL_S = 5.0
+
+# I/O chunk size for the bounded record-aligned copy in merge_p_files.
+_COPY_CHUNK = 1 << 20  # 1 MiB
+
+
+def _copy_n(in_f, out_f, length: int) -> None:
+    """Copy exactly *length* bytes from *in_f* to *out_f* (record-aligned copy).
+
+    Unlike shutil.copyfileobj, this stops after *length* bytes so a fractional
+    trailing record in the source is never appended (audit #96).
+    """
+    remaining = length
+    while remaining > 0:
+        chunk = in_f.read(min(_COPY_CHUNK, remaining))
+        if not chunk:
+            break  # source shorter than expected; copy what exists
+        out_f.write(chunk)
+        remaining -= len(chunk)
 
 
 def _read_merge_info(path: Path) -> dict:
@@ -43,6 +66,29 @@ def _read_merge_info(path: Path) -> dict:
         f.seek(0, 2)
         file_size = f.tell()
 
+    # Recording start time and duration, for the rollover-continuity check.
+    # Both are None when the header lacks a valid date / clock geometry (e.g.
+    # a synthetic or corrupt header) — in that case continuity is treated as
+    # unverifiable and does not block a merge.
+    try:
+        start_dt: datetime | None = datetime(
+            header["year"], header["month"], header["day"],
+            header["hour"], header["minute"], header["second"],
+            header["millisecond"] * 1000,
+        )
+    except (ValueError, OverflowError):
+        start_dt = None
+
+    duration: float | None = None
+    n_cols = header["fast_cols"] + header["slow_cols"]
+    clock = header["clock_hz"] + header["clock_frac"] / 1000.0
+    if start_dt is not None and n_cols > 0 and clock > 0 and record_size > header_size:
+        fs_fast = clock / n_cols
+        n_records = (file_size - (header_size + config_size)) // record_size
+        scans_per_record = ((record_size - header_size) // 2) // n_cols
+        if fs_fast > 0 and n_records > 0 and scans_per_record > 0:
+            duration = (n_records * scans_per_record) / fs_fast
+
     return {
         "path": path,
         "file_number": file_number,
@@ -52,7 +98,24 @@ def _read_merge_info(path: Path) -> dict:
         "record_size": record_size,
         "config_hash": config_hash,
         "file_size": file_size,
+        "start_dt": start_dt,
+        "duration": duration,
     }
+
+
+def _is_continuous(prev: dict, nxt: dict, tol: float = _MERGE_GAP_TOL_S) -> bool:
+    """True if *nxt* starts within *tol* seconds of where *prev* ended.
+
+    A size-limit rollover continuation begins essentially where the previous
+    file ended; two independent casts are minutes/hours apart. When either
+    file's start time or the previous file's duration cannot be computed,
+    continuity is unverifiable and we return True (do not block the merge on
+    missing metadata — the config/geometry/sequence checks still apply).
+    """
+    if prev["start_dt"] is None or nxt["start_dt"] is None or prev["duration"] is None:
+        return True
+    prev_end = prev["start_dt"] + timedelta(seconds=prev["duration"])
+    return bool(abs((nxt["start_dt"] - prev_end).total_seconds()) <= tol)
 
 
 def _file_group_key(info: dict) -> tuple:
@@ -120,7 +183,9 @@ def find_mergeable_files(p_files: list[Path]) -> list[list[Path]]:
         # Build chains of sequential file numbers
         chain = [group[0]]
         for i in range(1, len(group)):
-            if group[i]["file_number"] == chain[-1]["file_number"] + 1:
+            if group[i]["file_number"] == chain[-1]["file_number"] + 1 and _is_continuous(
+                chain[-1], group[i]
+            ):
                 chain.append(group[i])
             else:
                 if len(chain) >= 2:
@@ -222,17 +287,30 @@ def merge_p_files(
     fd, tmp = tempfile.mkstemp(dir=str(dest.parent), prefix=".merge-", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as out_f:
-            # Copy entire first file
-            with open(chain[0], "rb") as in_f:
-                shutil.copyfileobj(in_f, out_f)
-
-            # Append data records from subsequent files
-            for p in chain[1:]:
+            # Defect (audit #96): the splice previously copied each member to
+            # EOF, so a fractional trailing record (e.g. when files.trim is off
+            # or a non-final file rolled over mid-record) was appended verbatim
+            # and shifted every subsequent file's records by a sub-record
+            # offset, silently mis-slicing the merged file's interior records.
+            # Copy only the integer-record prefix of every member so the
+            # merged geometry stays record-aligned regardless of trim setting.
+            for i, p in enumerate(chain):
                 info = _read_merge_info(p)
-                skip = info["header_size"] + info["config_size"]
+                data_start = info["header_size"] + info["config_size"]
+                record_size = info["record_size"]
+                if record_size <= 0:
+                    raise ValueError(f"{p.name}: invalid record_size {record_size}")
+                data_bytes = info["file_size"] - data_start
+                if data_bytes < 0:
+                    raise ValueError(f"{p.name}: file shorter than header+config")
+                n_complete = data_bytes // record_size
+                # Base file (i == 0) keeps its header+config + complete records;
+                # continuations contribute only their complete data records.
+                copy_start = 0 if i == 0 else data_start
+                copy_len = (data_start - copy_start) + n_complete * record_size
                 with open(p, "rb") as in_f:
-                    in_f.seek(skip)
-                    shutil.copyfileobj(in_f, out_f)
+                    in_f.seek(copy_start)
+                    _copy_n(in_f, out_f, copy_len)
         os.replace(tmp, dest)
     except BaseException:
         with contextlib.suppress(OSError):

@@ -10,6 +10,7 @@ and temperature gradient.
 
 import logging
 import os
+import struct
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
@@ -356,8 +357,10 @@ def _l1_variable_specs(
             ("N_MAG_SENSORS", "TIME_SLOW"),
             _stack(mag_names) if mag_names else None,
             {
+                # 'micro_Tesla' is not UDUNITS-parseable; 'uT' is the canonical form
+                # ('magnetic_field' is likewise not a CF standard name, but left as-is).
                 "standard_name": "magnetic_field",
-                "units": "micro_Tesla",
+                "units": "uT",
                 "long_name": "magnetic field from magnetometer",
                 "sensor_names": ", ".join(mag_names),
             },
@@ -511,8 +514,12 @@ def p_to_L1(
         gradt_arrays = []
         for name in gradt_names:
             T_fast_ch = pf.channels[name]
-            dTdt = np.diff(T_fast_ch) * pf.fs_fast
-            dTdt = np.append(dTdt, dTdt[-1])
+            # np.diff on a single sample is empty; dTdt[-1] would IndexError
+            if T_fast_ch.size < 2:
+                dTdt = np.zeros_like(T_fast_ch)
+            else:
+                dTdt = np.diff(T_fast_ch) * pf.fs_fast
+                dTdt = np.append(dTdt, dTdt[-1])
             gradt_arrays.append(dTdt / speed_fast)
         gradt_data = np.stack(gradt_arrays, axis=0)
 
@@ -531,6 +538,8 @@ def p_to_L1(
     _create_l1_variables(L1, specs, complevel=complevel)
 
     # Supplementary channels (V_Bat, Gnd, etc.) — dynamic names/types
+    from odas_tpw.perturb.netcdf_schema import canonicalize_units
+
     use_zlib = complevel > 0
     for name in supplementary:
         info = pf.channel_info[name]
@@ -538,7 +547,9 @@ def p_to_L1(
         var_name = name.replace(" ", "_")
         v = L1.createVariable(var_name, "f4", dim, zlib=use_zlib, complevel=complevel)  # type: ignore[call-overload]
         v[:] = pf.channels[name].astype(np.float32)
-        v.units = info["units"]
+        # RSI emits non-UDUNITS unit strings (e.g. 'deg', 'mS_cm-1', 'deg_C');
+        # canonicalize to match the per-profile writer (profile.py).
+        v.units = canonicalize_units(info["units"])
         v.sensor_type = info["type"]
         v.long_name = name
 
@@ -586,12 +597,23 @@ def convert_all(p_files: list[Path], output_dir: Path | None = None, jobs: int =
         output_dir.mkdir(parents=True, exist_ok=True)
 
     work = []
+    # Detect output-name collisions: when output_dir is set we flatten to the
+    # basename, so same-named .p files in different directories would map to one
+    # .nc — silently overwriting (serial) or racing/corrupting (parallel).
+    seen: dict[Path, Path] = {}
     for pf_path in p_files:
         pf_path = Path(pf_path)
         if output_dir is not None:
             nc_path = output_dir / pf_path.with_suffix(".nc").name
         else:
             nc_path = pf_path.with_suffix(".nc")
+        prior = seen.get(nc_path)
+        if prior is not None and prior != pf_path:
+            raise ValueError(
+                f"Output name collision: {prior} and {pf_path} both map to "
+                f"{nc_path}. Use distinct filenames or per-source output dirs."
+            )
+        seen[nc_path] = pf_path
         work.append((pf_path, nc_path))
 
     if jobs == 0:
@@ -602,7 +624,8 @@ def convert_all(p_files: list[Path], output_dir: Path | None = None, jobs: int =
             try:
                 _name, _, size_mb = _convert_one((p_path, nc_path))
                 logger.info(f"{p_path.name} -> {nc_path.name}  {size_mb:.1f} MB")
-            except (OSError, ValueError, RuntimeError) as e:
+            # struct.error: truncated/short-header .p file must not abort the batch
+            except (OSError, ValueError, RuntimeError, struct.error) as e:
                 logger.error(f"{p_path.name}: {e}")
     else:
         logger.info(f"Converting {len(work)} files with {jobs} workers")
@@ -613,5 +636,6 @@ def convert_all(p_files: list[Path], output_dir: Path | None = None, jobs: int =
                 try:
                     _, _, size_mb = future.result()
                     logger.info(f"{p_path.name} -> {nc_path.name}  {size_mb:.1f} MB")
-                except (OSError, ValueError, RuntimeError) as e:
+                # struct.error: truncated/short-header .p file must not abort the batch
+                except (OSError, ValueError, RuntimeError, struct.error) as e:
                     logger.error(f"{p_path.name}: {e}")

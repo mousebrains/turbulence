@@ -70,16 +70,21 @@ def combine_profiles(
     data_vars = {}
     for var in sorted(var_names):
         combined = np.full((n_profiles, n_depths), np.nan)
+        var_attrs: dict = {}
         for i, ds in enumerate(binned_datasets):
             if var not in ds.data_vars:
                 continue
+            if not var_attrs:
+                # Carry CF units/long_name/standard_name from the L5 binned
+                # source so the L6 combined product is not metadata-free.
+                var_attrs = dict(ds[var].attrs)
             ds_depths = ds.coords["depth_bin"].values
             ds_vals = ds[var].values
             for j, d in enumerate(ds_depths):
                 idx = key_to_idx.get(_depth_key(d))
                 if idx is not None:
                     combined[i, idx] = ds_vals[j]
-        data_vars[var] = (["profile", "depth_bin"], combined)
+        data_vars[var] = (["profile", "depth_bin"], combined, var_attrs)
 
     coords = {
         "profile": np.arange(n_profiles),
@@ -96,6 +101,14 @@ def combine_profiles(
         }
     )
     result.coords["profile"].attrs["long_name"] = "profile number"
+
+    # CF/ACDD global attrs: the L6 headline product previously advertised no
+    # convention conformance (empty .attrs), unlike every other writer, so a
+    # CF/ACDD consumer could not validate it. L6 is a set of profiles on a
+    # shared depth grid -> CF §9 featureType "profile" (audit: missing
+    # Conventions/featureType on combined product).
+    result.attrs["Conventions"] = "CF-1.13, ACDD-1.3"
+    result.attrs["featureType"] = "profile"
 
     # Attach metadata
     if profile_metadata:

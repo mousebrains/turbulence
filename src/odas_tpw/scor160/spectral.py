@@ -177,7 +177,12 @@ def csd_matrix(
         Auto-spectral matrix of y (only if y is not None).
     """
     x = np.atleast_2d(np.asarray(x, dtype=np.float64))
-    if x.ndim == 2 and x.shape[0] < x.shape[1]:
+    # Port-faithfulness: csd_matrix_odas.m:99-100 forces only row vectors (1xN)
+    # to column orientation via isrow(). The previous `shape[0] < shape[1]`
+    # heuristic also silently transposed genuine wide MxN matrices; instead we
+    # require samples-major 2-D input and let the 2*nfft check below reject
+    # mis-oriented matrices.
+    if x.ndim == 2 and x.shape[0] == 1:
         x = x.T
     if x.shape[0] < 2 * nfft:
         raise ValueError(f"Input length ({x.shape[0]}) must be at least 2*nfft ({2 * nfft})")
@@ -186,7 +191,8 @@ def csd_matrix(
     auto = y is None
     if not auto:
         y = np.atleast_2d(np.asarray(y, dtype=np.float64))
-        if y.ndim == 2 and y.shape[0] < y.shape[1]:
+        # Same isrow-only orientation rule as for x (see above).
+        if y.ndim == 2 and y.shape[0] == 1:
             y = y.T
         n_y = y.shape[1]
         if x.shape[0] != y.shape[0]:
@@ -194,11 +200,26 @@ def csd_matrix(
 
     if overlap is None:
         overlap = nfft // 2
-    if overlap < 0 or overlap > 0.9 * nfft:
+    elif overlap < 0:
+        # Port-faithfulness: csd_matrix_odas.m:132-133 maps a negative overlap to
+        # 0 (non-overlapping segments), not to nfft/2.
+        overlap = 0
+    if overlap > 0.9 * nfft:
         # csd_matrix_odas.m:134-135 clamps excessive overlap to nfft/2;
         # overlap >= nfft would give step <= 0 (infinite loop / no segments)
         overlap = nfft // 2
-    window = _get_window(nfft) if window is None else np.asarray(window, dtype=np.float64)
+    if window is None:
+        window = _get_window(nfft)
+    else:
+        window = np.asarray(window, dtype=np.float64)
+        # Robustness: csd_matrix_odas.m:124-126 errors unless the window length
+        # equals nfft. Without this, a length-1/scalar window broadcasts
+        # silently to a rectangular window, yielding a wrong (un-windowed)
+        # spectrum instead of an error.
+        if window.ndim != 1 or window.shape[0] != nfft:
+            raise ValueError(
+                f"window must be a 1-D array of length nfft={nfft}, got shape {window.shape}"
+            )
 
     n_freq = nfft // 2 + 1
     step = nfft - overlap
@@ -246,6 +267,9 @@ def csd_matrix(
     norm = n_seg * nfft * rate / 2
     for arr in (Cxx, Cyy, Cxy):
         arr /= norm
+        # DC (f=0) and Nyquist bins are not doubled when folding to a one-sided
+        # spectrum (they have no negative-frequency twin), so halve them back
+        # (#76; matches csd_matrix_odas.m's one-sided normalization).
         arr[0] /= 2
         arr[-1] /= 2
     F = np.arange(n_freq) * rate / nfft
@@ -358,10 +382,22 @@ def csd_matrix_batch(
         )
     n_windows, diss_length, _n_x = x_windows.shape
 
-    # Clamp overlap to a valid range (mirrors the non-batch csd_matrix): an
-    # overlap == nfft gives step == 0 and a ZeroDivisionError below; overlap >
-    # nfft makes step negative and the segmentation wrong.
-    if overlap is None or overlap < 0 or overlap > 0.9 * nfft:
+    # Port-faithfulness/robustness: enforce the same minimum length as the
+    # non-batch csd_matrix and csd_matrix_odas.m (>=2 segments). A window
+    # between nfft and 2*nfft would otherwise yield a single FFT segment and a
+    # statistically-weak spectrum.
+    if diss_length < 2 * nfft:
+        raise ValueError(f"diss_length ({diss_length}) must be at least 2*nfft ({2 * nfft})")
+
+    # Clamp overlap to a valid range (mirrors the non-batch csd_matrix): a
+    # negative overlap maps to 0 (non-overlapping segments, per
+    # csd_matrix_odas.m:132-133), and an overlap == nfft gives step == 0 and a
+    # ZeroDivisionError below while overlap > nfft makes step negative.
+    if overlap is None:
+        overlap = nfft // 2
+    elif overlap < 0:
+        overlap = 0
+    if overlap > 0.9 * nfft:
         overlap = nfft // 2
     step = nfft - overlap
     n_freq = nfft // 2 + 1

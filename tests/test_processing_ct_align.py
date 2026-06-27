@@ -86,6 +86,62 @@ class TestCTAlign:
         assert lag == 0.0
         np.testing.assert_array_equal(C_aligned, C)
 
+    def test_isolated_nan_per_profile_recovers_consensus_lag(self):
+        """Audit over-discard fix: an isolated non-finite C sample in EVERY
+        profile must not wipe out alignment for the whole file. The old guard
+        skipped the entire segment on any single NaN, so when every profile
+        carried one transient bad sample per_profile went empty and the result
+        collapsed to the identity (lag 0.0). The fix interpolates the few bad
+        samples, so the consensus lag is still recovered."""
+        fs, max_lag_s = 64.0, 5.0
+        n = 900
+
+        def make(seed, lag_samples):
+            rng = np.random.default_rng(seed)
+            base = np.cumsum(rng.standard_normal(n + abs(lag_samples) + 4))
+            return base[:n].copy(), base[lag_samples : lag_samples + n].copy()
+
+        # Clean consensus lag for a 3-sample C/T shift across 3 profiles.
+        Ts, Cs, profs, off = [], [], [], 0
+        for seed in range(3):
+            T, C = make(seed, 3)
+            Ts.append(T)
+            Cs.append(C)
+            profs.append((off, off + n - 1))
+            off += n
+        _, clean_lag = ct_align(
+            np.concatenate(Ts), np.concatenate(Cs), fs, profs, max_lag_s
+        )
+        assert clean_lag != 0.0  # there is a real lag to recover
+
+        # Same profiles, but each carries ONE isolated NaN in C.
+        Ts, Cs, profs, off = [], [], [], 0
+        for seed in range(3):
+            T, C = make(seed, 3)
+            C[n // 2] = np.nan
+            Ts.append(T)
+            Cs.append(C)
+            profs.append((off, off + n - 1))
+            off += n
+        _, lag = ct_align(
+            np.concatenate(Ts), np.concatenate(Cs), fs, profs, max_lag_s
+        )
+        # Old code returned 0.0 (whole file over-discarded); fix recovers it.
+        assert lag == clean_lag
+
+    def test_all_nan_channel_is_skipped(self):
+        """A segment with too few finite samples (all-NaN C) must still be
+        skipped, falling back to the identity copy — interpolation must not
+        resurrect a degenerate profile."""
+        fs = 64.0
+        n = 900
+        rng = np.random.default_rng(0)
+        T = np.cumsum(rng.standard_normal(n))
+        C = np.full(n, np.nan)
+        C_aligned, lag = ct_align(T, C, fs, [(0, n - 1)])
+        assert lag == 0.0
+        np.testing.assert_array_equal(C_aligned, C)
+
     def test_weighted_median_multi_profile_consensus(self):
         """The rewritten weighted median (searchsorted to half-weight, #41)
         returns the consensus lag when multiple profiles agree."""

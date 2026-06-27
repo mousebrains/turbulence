@@ -1035,3 +1035,26 @@ def test_cmd_dl_defaults(monkeypatch, sample_p_file):
     assert kwargs["direction"] == "auto"
     assert kwargs["W_min"] == 0.3
     assert kwargs["goodman"] is True
+
+
+def test_patch_config_malformed_yaml_friendly_error(monkeypatch, capsys, tmp_path, sample_p_file):
+    """patch-config with malformed YAML must exit(1) with a friendly message, not a traceback.
+
+    Regression: load_edit_spec parses via ruamel, whose ParserError/ScannerError
+    subclass ruamel.yaml.YAMLError (not ValueError/OSError) and previously escaped
+    _cmd_patch_config's except tuple as an uncaught traceback.
+    """
+    bad = tmp_path / "badsyntax.yaml"
+    bad.write_text('note: "x"\ninstrument_info: {bad yaml\n')
+    out_dir = tmp_path / "patched"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["rsi-tpw", "patch-config", str(sample_p_file), "--edits", str(bad), "--out", str(out_dir)],
+    )
+    from odas_tpw.rsi.cli import main
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 1
+    assert "Error:" in capsys.readouterr().err
