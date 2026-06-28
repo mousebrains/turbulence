@@ -60,15 +60,18 @@ import numpy.typing as npt
 # K_rho is bounded from above by DEFAULT_K_RHO_MAX below (audit #30).
 DEFAULT_N2_MIN = 1e-9
 
-# Upper sanity bound on K_rho [m^2/s] (audit #30). The N2_min floor below stops
-# the divide-by-zero but not magnitude inflation: K_rho = Gamma_0 * epsilon / N2
-# grows without bound as N^2 shrinks toward the floor, producing values (e.g.
-# ~10 m^2/s) far beyond any realizable diapycnal diffusivity. Windows above this
-# bound are masked (set to NaN) rather than emitted. 1 m^2/s sits at the upper
-# edge of even the most energetic real diapycnal mixing (overflows / hydraulic
-# jumps reach ~0.1-1 m^2/s); values above it are physically implausible. The
-# bound is configurable (K_rho_max) for regimes where larger values are expected.
-DEFAULT_K_RHO_MAX = 1.0
+# Upper sanity bound on K_rho [m^2/s] (audit #30). The N2_min floor stops the
+# divide-by-zero but not magnitude inflation: K_rho = Gamma_0 * epsilon / N2 grows
+# without bound as N^2 shrinks toward the floor, so the artifact produces values
+# of tens to thousands of m^2/s. Windows above this bound are masked (set to NaN).
+# 10 m^2/s sits above even the most energetic real diapycnal mixing — overflows
+# and hydraulic jumps reach ~0.1-1 m^2/s, and energetic near-surface mixing on
+# ARCTERX VMP casts was observed up to a few m^2/s — so genuine signal is kept
+# and only physically implausible magnitudes are removed (the unbounded
+# near-floor-N^2 artifact, or extreme contaminated near-surface windows where
+# epsilon is itself spurious). (A 1 m^2/s bound was tried first but clipped real
+# energetic near-surface mixing.) Configurable via K_rho_max.
+DEFAULT_K_RHO_MAX = 10.0
 
 # Background temperature-gradient floor [K/m].  chi/(dT/dz)^2 diverges
 # as the mean gradient vanishes (well-mixed layers); 1e-4 K/m over a
@@ -457,8 +460,8 @@ def mixing_coefficients(
       statically unstable at the window scale: the Osborn scaling does
       not apply).
     - ``K_rho`` where the result exceeds ``K_rho_max`` (a physically
-      implausible diffusivity, most often from ``N2`` near its floor; the
-      masked count is reported via :mod:`warnings`).
+      implausible diffusivity — the unbounded near-floor ``N2`` artifact;
+      the masked count is reported via :mod:`warnings`).
     - Any output where the corresponding ``chi`` or ``epsilon`` is
       non-finite or non-positive (a positive dissipation rate is required
       for every quantity).
@@ -480,7 +483,7 @@ def mixing_coefficients(
         Constant mixing coefficient for ``K_rho`` (default 0.2).
     K_rho_max : float
         Upper sanity bound on ``K_rho`` [m^2/s]; windows exceeding it are
-        masked as near-floor ``N2`` inflation (see ``DEFAULT_K_RHO_MAX``).
+        masked as physically implausible (see ``DEFAULT_K_RHO_MAX``).
 
     Returns
     -------
@@ -506,8 +509,8 @@ def mixing_coefficients(
         )
         K_rho = np.where(strat_ok & eps_ok, gamma_osborn * epsilon / N2, np.nan)
 
-    # Mask physically implausible K_rho (audit #30): an unbounded magnitude,
-    # most often from N^2 near its floor. A NaN K_rho compares False, so only
+    # Mask physically implausible K_rho (audit #30): the unbounded magnitude an
+    # N^2 approaching its floor produces. A NaN K_rho compares False, so only
     # finite over-ceiling windows are counted.
     over_ceiling = K_rho > K_rho_max
     n_masked = int(np.count_nonzero(over_ceiling))
@@ -515,8 +518,7 @@ def mixing_coefficients(
         K_rho = np.where(over_ceiling, np.nan, K_rho)
         warnings.warn(
             f"mixing_coefficients: masked {n_masked} K_rho value(s) exceeding "
-            f"{K_rho_max} m^2/s as physically implausible diapycnal diffusivity "
-            f"(typically near-floor N^2 inflation; N2_min={N2_min} s^-2)",
+            f"{K_rho_max} m^2/s (physically implausible diapycnal diffusivity)",
             stacklevel=2,
         )
 

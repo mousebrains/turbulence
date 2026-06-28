@@ -815,7 +815,7 @@ def _add_mixing_quantities(
                             "doi:10.1175/1520-0485(1980)010<0083:EOTLRO>2.0.CO;2. "
                             "Compare with K_T: agreement implies the measured Gamma "
                             "is near the canonical 0.2. NaN where N2 < 1e-9 s-2 or "
-                            "K_rho > 1 m2 s-1 (physically implausible diffusivity "
+                            "K_rho > 10 m2 s-1 (physically implausible diffusivity "
                             "from near-floor N2)."
                         ),
                     },
