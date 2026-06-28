@@ -239,17 +239,17 @@ class TestMixingCoefficients:
         assert np.isfinite(res.K_T[0])  # K_T needs only chi and dT/dz
 
     def test_near_floor_krho_inflation_masked(self):
-        """Audit #30: N2 just above the floor inflates K_rho to ~10 m^2/s.
+        """Audit #30: N2 near the floor inflates K_rho without bound.
 
         Such windows are an artifact of N2 approaching N2_min, not real
         diffusivity, so they are masked above K_rho_max while a normal
         window and the other quantities are untouched.
         """
-        eps = np.array([1e-8, 1e-7])
+        eps = np.array([1e-8, 1e-6])
         chi = np.array([1e-8, 1e-8])
         N2 = np.array([1e-5, 2e-9])  # second window just above the 1e-9 floor
         dTdz = np.array([0.05, 0.05])
-        # K_rho[1] = 0.2 * 1e-7 / 2e-9 = 10 m^2/s -> over the 1 m^2/s ceiling.
+        # K_rho[1] = 0.2 * 1e-6 / 2e-9 = 100 m^2/s -> over the 10 m^2/s ceiling.
         with pytest.warns(UserWarning, match="masked 1 K_rho"):
             res = mixing_coefficients(eps, chi, N2, dTdz)
         assert np.isfinite(res.K_rho[0])  # normal window survives
@@ -258,18 +258,36 @@ class TestMixingCoefficients:
         assert np.all(np.isfinite(res.Gamma))
         assert np.all(np.isfinite(res.K_T))
 
+    def test_energetic_near_surface_krho_kept(self):
+        """K_rho of a few m^2/s (energetic near-surface mixing) is NOT masked.
+
+        With the default 10 m^2/s ceiling, a real energetic window
+        (eps ~ 1e-3, weak N2) yielding K_rho ~ 4 m^2/s survives.
+        """
+        eps = np.array([1.2e-3])
+        chi = np.array([1e-8])
+        N2 = np.array([6e-5])  # weak but real stratification
+        dTdz = np.array([0.05])
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = mixing_coefficients(eps, chi, N2, dTdz)  # default ceiling
+        assert not [w for w in caught if issubclass(w.category, UserWarning)]
+        krho = GAMMA_OSBORN * eps[0] / N2[0]
+        assert 1.0 < krho < 10.0  # would have been masked at the old 1.0 bound
+        np.testing.assert_allclose(res.K_rho[0], krho)
+
     def test_krho_max_configurable(self):
         """A raised ceiling keeps an otherwise-masked large K_rho; no warning."""
-        eps = np.array([1e-7])
+        eps = np.array([1e-6])
         chi = np.array([1e-8])
         N2 = np.array([2e-9])
         dTdz = np.array([0.05])
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            res = mixing_coefficients(eps, chi, N2, dTdz, K_rho_max=100.0)
+            res = mixing_coefficients(eps, chi, N2, dTdz, K_rho_max=1000.0)
         assert not [w for w in caught if issubclass(w.category, UserWarning)]
         np.testing.assert_allclose(res.K_rho[0], GAMMA_OSBORN * eps[0] / N2[0])
-        assert DEFAULT_K_RHO_MAX == 1.0  # default ceiling unchanged
+        assert DEFAULT_K_RHO_MAX == 10.0  # default ceiling
 
 
 class TestPairNearest:

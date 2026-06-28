@@ -60,13 +60,14 @@ Estimates are masked (NaN) where $N^2 < 10^{-9}$ s$^{-2}$
 $|\partial\overline{T}/\partial z| < 10^{-4}$ K/m (well-mixed — the
 temperature-variance budget no longer constrains a diffusivity).
 `K_rho` is additionally masked where it exceeds an upper sanity bound
-(`K_rho_max`, default $1$ m$^2$ s$^{-1}$): a window whose $N^2$ sits just
-above the floor yields an Osborn diffusivity far larger than any
-physically realizable diapycnal value (e.g. $\sim 10$ m$^2$ s$^{-1}$),
-which is an artifact of near-floor $N^2$ rather than real mixing. The
-default bound sits well above even the most energetic real mixing
-(overflows and hydraulic jumps reach $\sim 0.1$–$1$ m$^2$ s$^{-1}$); the
-number of masked windows is reported via a warning.
+(`K_rho_max`, default $10$ m$^2$ s$^{-1}$): as $N^2$ approaches the floor
+the Osborn diffusivity grows without bound (tens to thousands of
+m$^2$ s$^{-1}$), an artifact rather than real mixing. The bound sits above
+even the most energetic real mixing — overflows and hydraulic jumps reach
+$\sim 0.1$–$1$ m$^2$ s$^{-1}$, and energetic near-surface mixing on ARCTERX
+VMP casts reaches a few m$^2$ s$^{-1}$ — so genuine signal is retained and
+only the unbounded near-floor artifact is removed; the number of masked
+windows is reported via a warning.
 
 Two caveats for interpretation:
 
