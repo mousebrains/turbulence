@@ -388,8 +388,17 @@ def _adjust_profile_bounds(
 
         if do_top:
             try:
+                # Use only the accelerometers (Ax, Ay) to find the prop-wash /
+                # instrument-startup exit. On ARCTERX VMP data the accelerometers
+                # are the only channels that settle at the true exit (~2-6 m): the
+                # shear probes (sh1/sh2), inclinometers, and fall rate all stay
+                # "elevated" deep because they respond to *ocean* turbulence the
+                # instrument falls through, dragging the trim to 30-50 m. The
+                # accelerometers capture the mechanical entry transient, which
+                # ocean turbulence does not reproduce. (VMP only; MRs are trimmed
+                # by a separate operation.)
                 fast_channels: dict = {}
-                for name in ("sh1", "sh2", "Ax", "Ay"):
+                for name in ("Ax", "Ay"):
                     if name in pf.channels and pf.is_fast(name):
                         fast_channels[name] = pf.channels[name][s_fast:e_fast]
                 trim_depth = compute_trim_depth(depth_seg, fast_channels, **top_kwargs)

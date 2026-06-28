@@ -134,8 +134,10 @@ Controls removal of initial surface instabilities from profiles.
 | `dz` | float | `0.5` | Depth bin width for variance calculation [m] |
 | `min_depth` | float | `1.0` | Minimum trim depth [m] |
 | `max_depth` | float | `50.0` | Maximum trim depth [m] |
-| `quantile` | float | `0.25` | Low quantile of per-bin std taken as the settled quiet floor; trimming is robust while the prop wash spans less than `1 − quantile` of the search range |
+| `quantile` | float | `0.6` | Quantile of per-bin std taken as the settled background; trimming is robust while the prop wash spans less than `1 − quantile` of the search range |
 | `noise_factor` | float | `2.0` | A bin is still in the prop wash when its std exceeds `noise_factor` × background; trimming clears the deepest such bin |
+
+> Top trim is driven by the **accelerometers** (Ax, Ay) only — they mark the instrument's mechanical settling. Shear probes, inclinometers, and fall rate respond to the ocean turbulence the instrument falls through and would over-trim. VMP only; MicroRiders use a separate operation.
 
 ---
 

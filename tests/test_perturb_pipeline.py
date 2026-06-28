@@ -1332,12 +1332,16 @@ class TestAdjustProfileBounds:
         t_slow = np.arange(n_slow) / fs_slow
         t_fast = np.arange(n_fast) / fs_fast
 
-        # Quiet baseline noise; high variance only in top 8 m of descending limb
+        # Quiet baseline noise; high variance only in top 8 m of descending
+        # limb. top_trim is driven by the accelerometers, so the prop-wash
+        # signal lives on Ax/Ay (instrument motion), not the shear probes.
         rng = np.random.default_rng(42)
         depth_fast = np.repeat(P, ratio)
         top_mask = (depth_fast < 8.0) & (np.arange(n_fast) < half * ratio)
-        sh1 = rng.standard_normal(n_fast) * 0.01
-        sh1 = np.where(top_mask, rng.standard_normal(n_fast) * 5.0, sh1)
+        ax = rng.standard_normal(n_fast) * 0.01
+        ax = np.where(top_mask, rng.standard_normal(n_fast) * 5.0, ax)
+        ay = rng.standard_normal(n_fast) * 0.01
+        ay = np.where(top_mask, rng.standard_normal(n_fast) * 5.0, ay)
 
         pf = MagicMock()
         pf.fs_slow = fs_slow
@@ -1346,10 +1350,10 @@ class TestAdjustProfileBounds:
         pf.t_fast = t_fast
         pf.channels = {
             "P": P,
-            "sh1": sh1,
+            "sh1": rng.standard_normal(n_fast) * 0.01,
             "sh2": rng.standard_normal(n_fast) * 0.01,
-            "Ax": rng.standard_normal(n_fast) * 0.01,
-            "Ay": rng.standard_normal(n_fast) * 0.01,
+            "Ax": ax,
+            "Ay": ay,
         }
         pf.is_fast = lambda ch: ch in {"sh1", "sh2", "Ax", "Ay"}
         return pf, half

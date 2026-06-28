@@ -76,25 +76,50 @@ class TestComputeTrimDepth:
         assert trim >= 12.0, f"dip at 5-6 m ended the search early (trim={trim} m)"
         assert trim <= 16.0
 
-    def test_deep_prop_wash_not_under_trimmed(self):
-        """Audit #66 (deep regime): prop wash over ~half the window.
+    def test_median_combine_robust_to_one_deep_channel(self):
+        """One channel elevated to depth must not drag the trim down.
 
-        Noisy 0-25 m (~48% of the 1-50 m search range). A central
-        background quantile would land inside the prop wash and silently
-        return ~min_depth; the low default quantile keeps the background on
-        the quiet floor so the trim clears the noisy region (~25 m). Uses
-        the default ``quantile`` to lock in the chosen default.
+        Two channels settle by ~6 m; a third stays 'elevated' all the way
+        down (the failure mode of feeding shear, which tracks deep ocean
+        turbulence). The median across channels ignores the outlier — a max
+        combine would have followed it to the bottom.
         """
         rng = np.random.default_rng(2)
         n = 6000
         depth = np.linspace(0, 60, n)
-        sh1 = rng.standard_normal(n) * 0.01
-        sh1[depth < 25] = rng.standard_normal(int((depth < 25).sum())) * 10.0
-
-        trim = compute_trim_depth(depth, {"sh1": sh1}, dz=1.0, min_depth=1.0, max_depth=50.0)
+        shallow = lambda: np.where(  # noqa: E731 - quiet below 6 m, loud above
+            depth < 6.0, rng.standard_normal(n) * 5.0, rng.standard_normal(n) * 0.01
+        )
+        # Shear-like: loud prop-wash top AND a loud deep patch at 30-40 m, so its
+        # own prop-wash exit lands at ~40 m.
+        bad = rng.standard_normal(n) * 0.01
+        bad[depth < 6.0] = rng.standard_normal(int((depth < 6.0).sum())) * 5.0
+        patch = (depth >= 30.0) & (depth < 40.0)
+        bad[patch] = rng.standard_normal(int(patch.sum())) * 5.0
+        trim = compute_trim_depth(
+            depth,
+            {"Ax": shallow(), "Ay": shallow(), "bad": bad},
+            dz=1.0, min_depth=1.0, max_depth=50.0,
+        )
         assert trim is not None
-        assert trim >= 24.0, f"deep prop wash under-trimmed to {trim} m"
-        assert trim <= 28.0
+        assert trim <= 9.0, f"deep outlier channel dragged trim to {trim} m"
+
+    def test_dead_channel_dropped(self):
+        """A flat / zero-variance channel (dead sensor) is ignored."""
+        rng = np.random.default_rng(3)
+        n = 6000
+        depth = np.linspace(0, 60, n)
+        good = np.where(depth < 6.0, rng.standard_normal(n) * 5.0, rng.standard_normal(n) * 0.01)
+        dead = np.full(n, 1.234)  # constant -> zero per-bin std everywhere
+        trim_with_dead = compute_trim_depth(
+            depth, {"Ax": good, "Ay": dead}, dz=1.0, min_depth=1.0, max_depth=50.0
+        )
+        trim_alone = compute_trim_depth(
+            depth, {"Ax": good}, dz=1.0, min_depth=1.0, max_depth=50.0
+        )
+        # The dead channel contributes nothing; result matches the live channel.
+        assert trim_with_dead == trim_alone
+        assert trim_with_dead is not None and trim_with_dead <= 9.0
 
     def test_invalid_quantile_raises(self):
         depth = np.linspace(0, 60, 100)
