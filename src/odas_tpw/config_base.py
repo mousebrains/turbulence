@@ -67,6 +67,31 @@ def _normalize_nested(v):
     return _normalize_value(v)
 
 
+def iter_stage_dirs(base: str | Path, prefix: str) -> list[tuple[int, Path]]:
+    """Existing ``{prefix}_NN`` *directories* under *base*, sorted by sequence.
+
+    Read-only helper shared by the pipeline's resolver and the plot-time
+    config resolver. Uses the same width-adaptive glob as
+    :meth:`ConfigManager.resolve_output_dir` so ``{prefix}_100`` is not missed.
+    Returns ``(seq, dir)`` pairs; non-numeric suffixes and non-directories are
+    skipped. (Unlike ``resolve_output_dir``'s internal scan this drops non-dir
+    matches, because only directories can carry a signature.)
+    """
+    base = Path(base)
+    out: list[tuple[int, Path]] = []
+    for d in globmod.glob(str(base / f"{prefix}_[0-9][0-9]*")):
+        dp = Path(d)
+        if not dp.is_dir():
+            continue
+        try:
+            seq = int(dp.name.split("_")[-1])
+        except ValueError:
+            continue
+        out.append((seq, dp))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
 class ConfigManager:
     """Config management parameterized by a DEFAULTS dict.
 

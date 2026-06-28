@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
+from odas_tpw.perturb import resolve
 from odas_tpw.perturb.plot import diagnostics, grid, layout, xaxis
 from odas_tpw.perturb.plot.sections import (
     Section,
@@ -214,7 +215,7 @@ def _build_profiles_figure(
     pseudo_grids: dict[str, np.ndarray] = {}
     pseudo_in_panel = [v for v in panel_vars if diagnostics.is_pseudo_var(v)]
     if pseudo_in_panel:
-        pdir = layout.latest_stage_dir(args.root, "profiles")
+        pdir = resolve.resolve_for_args(args, "profiles", optional=True)
         if pdir is None:
             print(f"section {sec.name!r}: no profiles_NN dir; skipping diagnostics "
                   f"{pseudo_in_panel}")
@@ -329,11 +330,12 @@ def run(args: argparse.Namespace) -> str:
     with contextlib.suppress(locale.Error):
         locale.setlocale(locale.LC_NUMERIC, "")
 
+    args.root = resolve.require_root(args)  # backfill from --config if needed
     if args.gap_factor <= 0:
         raise SystemExit("--gap-factor must be > 0")
 
     product = PRODUCTS[args.product]
-    src = layout.latest_stage_dir(args.root, product.dir_prefix)
+    src = resolve.resolve_for_args(args, product.dir_prefix)
     if src is None:
         raise SystemExit(f"No {product.dir_prefix} dir under {args.root}")
     path = os.path.join(src, "combo.nc")
