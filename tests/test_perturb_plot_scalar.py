@@ -216,6 +216,157 @@ def test_adhoc_time_section_writes_png(tmp_path: Path):
     assert rc == str(out_dir)
 
 
+def _scalar_args(root: Path, **over) -> argparse.Namespace:
+    base = dict(
+        root=str(root), ctd_combo=None, sections=None, select=None, out_dir=None,
+        var=None, z_bin=2.0, x_bin=None, depth_max=None, vmin=None, vmax=None,
+        clim=None, name="s", xaxis="time", start=None, stop=None,
+        point=None, waypoints=None, units="km",
+        figsize=None, dpi=None, title=None,
+    )
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+def test_build_figures_yields_named_figures(tmp_path: Path):
+    """build_figures is a generator yielding (stem, Figure) per section without
+    saving — the handle the figure driver streams into a combined PDF."""
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+
+    _write_ctd_combo(tmp_path)
+    figs = list(scalar.build_figures(_scalar_args(tmp_path)))
+    assert len(figs) == 1
+    stem, fig = figs[0]
+    assert stem.startswith("scalar_") and isinstance(fig, Figure)
+    plt.close(fig)
+
+
+def test_build_figures_honours_figsize(tmp_path: Path):
+    import matplotlib.pyplot as plt
+
+    _write_ctd_combo(tmp_path)
+    (_, fig), = list(scalar.build_figures(_scalar_args(tmp_path, figsize=[7.0, 5.0])))
+    assert list(fig.get_size_inches()) == [7.0, 5.0]
+    plt.close(fig)
+
+
+def test_build_figures_honours_title(tmp_path: Path):
+    import matplotlib.pyplot as plt
+
+    _write_ctd_combo(tmp_path)
+    (_, fig), = list(scalar.build_figures(_scalar_args(tmp_path, title="My Title")))
+    assert fig.get_suptitle() == "My Title"
+    plt.close(fig)
+
+
+def test_fig_dpi_default_and_override():
+    from odas_tpw.perturb.plot.sections import fig_dpi
+
+    assert fig_dpi(argparse.Namespace(dpi=None)) == 150  # default
+    assert fig_dpi(argparse.Namespace(dpi=300)) == 300   # override
+    assert fig_dpi(argparse.Namespace()) == 150          # attr absent -> default
+
+
+def test_closing_figs_closes_generator_on_early_exit():
+    """closing_figs must run a generator's finally (its ds.close) deterministically
+    even when the consumer stops early — not leave it to GC."""
+    from odas_tpw.perturb.plot.sections import closing_figs
+
+    closed = []
+
+    def gen():
+        try:
+            yield ("a", 1)
+            yield ("b", 2)  # never reached
+        finally:
+            closed.append(True)
+
+    with closing_figs(gen()) as figs:
+        next(iter(figs))  # consume only the first, then abandon
+    assert closed == [True]
+
+
+def test_closing_figs_noop_on_plain_list():
+    """A plain list (no .close) passes through untouched."""
+    from odas_tpw.perturb.plot.sections import closing_figs
+
+    with closing_figs([("a", 1)]) as figs:
+        assert list(figs) == [("a", 1)]
+
+
+def test_save_path_streams_one_figure_at_a_time(tmp_path: Path, monkeypatch):
+    """The save path must hold at most ONE figure open at a time (build → save →
+    close), not build all sections up front. Guards the O(N)->O(1) memory fix."""
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+
+    _write_ctd_combo(tmp_path)
+    secs = tmp_path / "s.yaml"
+    secs.write_text("".join(
+        f"  - {{name: s{i}, xaxis: {{method: time}}}}\n" for i in range(4)
+    ).join(("sections:\n", "")))
+
+    plt.close("all")  # clear any figures other tests left open (global pyplot state)
+    open_at_save = []
+    orig_savefig = Figure.savefig
+
+    def spy(self, *a, **k):
+        open_at_save.append(len(plt.get_fignums()))
+        return orig_savefig(self, *a, **k)
+
+    monkeypatch.setattr(Figure, "savefig", spy)
+    scalar.run(_scalar_args(tmp_path, sections=str(secs),
+                            out_dir=str(tmp_path / "o"), xaxis=None))
+    assert len(open_at_save) == 4          # four sections saved
+    assert max(open_at_save) == 1          # never more than one open at once
+    assert plt.get_fignums() == []         # all closed afterwards
+
+
+def test_positive_int_type():
+    from odas_tpw.perturb.plot.sections import positive_int
+
+    assert positive_int("150") == 150
+    for bad in ("0", "-1", "1.5", "abc"):
+        with pytest.raises(ValueError):  # argparse + _coerce both catch ValueError
+            positive_int(bad)
+
+
+def test_cli_dpi_must_be_positive():
+    """--dpi is a positive_int: 0/negative rejected at the CLI, not silently
+    coerced to the default."""
+    from odas_tpw.perturb.plot import sections
+
+    p = argparse.ArgumentParser()
+    sections.add_output_arguments(p, title=False)
+    assert p.parse_args(["--dpi", "200"]).dpi == 200
+    with pytest.raises(SystemExit):
+        p.parse_args(["--dpi", "0"])
+    with pytest.raises(SystemExit):
+        p.parse_args(["--dpi", "-5"])
+
+
+def test_build_figures_closes_orphan_on_build_error(tmp_path: Path, monkeypatch):
+    """If building a figure raises after plt.subplots(), the half-built figure
+    must not be left open in pyplot — the caller's cleanup can't reach a figure
+    that was never yielded."""
+    import matplotlib.pyplot as plt
+
+    from odas_tpw.perturb.plot import grid
+
+    _write_ctd_combo(tmp_path)
+    plt.close("all")
+    before = set(plt.get_fignums())
+
+    def boom(*a, **k):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(grid, "grid_mean", boom)
+    with pytest.raises(ValueError, match="boom"):
+        list(scalar.build_figures(_scalar_args(tmp_path, var=["JAC_T"])))
+    assert set(plt.get_fignums()) == before  # orphan figure was closed
+
+
 def _run_cli(argv):
     from odas_tpw.perturb.plot.cli import main
 

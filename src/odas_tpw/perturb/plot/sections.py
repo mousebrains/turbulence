@@ -16,9 +16,13 @@ subcommand.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import locale
+import os
 import sys
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import xarray as xr
@@ -351,6 +355,123 @@ def add_section_arguments(p: argparse.ArgumentParser) -> None:
                    help="polyline for --xaxis along_line: 'lat,lon;lat,lon;...'")
     p.add_argument("--units", choices=("m", "km", "nm"), default="km",
                    help="distance units for spatial x-axes (default: km)")
+    add_output_arguments(p)
+
+
+def positive_int(s: str) -> int:
+    """argparse ``type`` for a strictly-positive integer (e.g. ``--dpi``).
+
+    Raises ``ValueError`` (not ``ArgumentTypeError``) on a non-positive or
+    non-integer value so the same check fires both at the CLI *and* through the
+    figure driver's ``_coerce`` (which calls the action's ``type`` and catches
+    ``ValueError``) — a 0/negative/float dpi fails up front, not at render time.
+    """
+    v = int(s)
+    if v <= 0:
+        raise ValueError(f"must be a positive integer, got {v}")
+    return v
+
+
+def add_output_arguments(p: argparse.ArgumentParser, *, title: bool = True) -> None:
+    """Register the shared figure-output flags (figsize / dpi [/ title]).
+
+    Honoured by every subcommand's renderer and by the ``figure`` batch driver
+    (per-figure ``figsize``/``dpi``/``title``). ``title=False`` for a subcommand
+    that already registers its own ``--title`` (eps-chi).
+    """
+    p.add_argument("--figsize", nargs=2, type=float, default=None, metavar=("W", "H"),
+                   help="figure size in inches, e.g. --figsize 11 9 "
+                        "(default: preset-specific).")
+    p.add_argument("--dpi", type=positive_int, default=None,
+                   help="raster resolution for saved PNG/PDF (default: 150).")
+    if title:
+        p.add_argument("--title", default=None,
+                       help="figure title (default: derived from the data).")
+
+
+def fig_dpi(args: argparse.Namespace) -> int:
+    """Raster resolution for a saved figure: ``--dpi`` or the 150 default."""
+    return getattr(args, "dpi", None) or 150
+
+
+@contextlib.contextmanager
+def close_new_figs_on_error() -> Iterator[None]:
+    """Close any pyplot figure created inside the block if it raises.
+
+    A figure built by ``plt.subplots`` registers in pyplot's global manager
+    immediately, so an exception while populating it (a gridding/limits error)
+    before it is returned/yielded would leave it open forever — the caller's
+    cleanup can't reach a figure it never received. Wrap each figure build in
+    this so a build-time error closes the orphan(s) and re-raises; figures that
+    existed before the block (already handed to the caller) are left untouched.
+    """
+    import matplotlib.pyplot as plt
+
+    before = set(plt.get_fignums())
+    try:
+        yield
+    except BaseException:
+        for num in set(plt.get_fignums()) - before:
+            plt.close(num)
+        raise
+
+
+@contextlib.contextmanager
+def closing_figs(
+    figs: Iterable[tuple[str, Any]],
+) -> Iterator[Iterable[tuple[str, Any]]]:
+    """Yield *figs*, then close it on exit if it is a generator.
+
+    A ``build_figures`` generator holds an open dataset until its ``finally``
+    runs (on exhaustion or close). Wrapping consumption in this guarantees that
+    handle is released deterministically even if a consumer stops early (a save
+    error mid-stream), rather than waiting on GC. A plain list/iterator with no
+    ``close`` is left untouched.
+    """
+    try:
+        yield figs
+    finally:
+        close = getattr(figs, "close", None)
+        if callable(close):
+            close()
+
+
+def save_or_show(figs: Iterable[tuple[str, Any]], out_dir: str | None,
+                 dpi: int) -> int:
+    """Consume a ``(stem, Figure)`` iterable and return how many it handled.
+
+    With *out_dir* set, write ``<out_dir>/<stem>.png`` **streaming** — one open
+    figure at a time, closing each before the next is pulled (bounded memory,
+    and a save error can't leak the not-yet-built figures). With *out_dir* None,
+    collect every figure (they must all be open together) and ``show()`` them.
+    Always closes the figures it created, even on error.
+    """
+    import matplotlib.pyplot as plt
+
+    if out_dir is None:  # interactive: all figures open together for show()
+        collected = []
+        try:
+            for _stem, fig in figs:
+                collected.append(fig)
+        except BaseException:
+            for fig in collected:
+                plt.close(fig)
+            raise
+        if collected:
+            plt.show()  # blocks until the user closes the window(s)
+            plt.close("all")
+        return len(collected)
+
+    count = 0
+    for stem, fig in figs:  # save path: at most one figure open at a time
+        try:
+            out = os.path.join(out_dir, f"{stem}.png")
+            fig.savefig(out, dpi=dpi)
+            print(f"Wrote {out}")
+            count += 1
+        finally:
+            plt.close(fig)
+    return count
 
 
 def single_var_limit_guard(args: argparse.Namespace, variables: list[str]) -> None:

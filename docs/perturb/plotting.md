@@ -25,18 +25,22 @@ forces the error, `--latest` forces the newest.
 
 One YAML lists figures, each naming a **preset** (the subcommands above) plus
 that subcommand's own options; the driver compiles each entry into the chosen
-subcommand and runs it (every kernel and behaviour is reused). Output is one
-subdirectory per figure under `output_dir`.
+subcommand and runs it (every kernel and behaviour is reused). Output is either
+one PNG tree (`output_dir`, one subdirectory per figure) **or** one combined
+multipage PDF (`output_pdf`, one page per figure the preset produces).
 
 ```yaml
 source:                          # exactly one of config / root
   config: perturb.yaml           # resolve directories from this config
   # output_root: ~/Desktop/VMP_results   # optional: override where to look
-output_dir: figs/
+output_dir: figs/                # one PNG tree (XOR output_pdf)
+# output_pdf: report.pdf         # ...or one combined multipage PDF
+dpi: 150                         # optional default for any figure without its own
 sections:                        # optional; file ref or an inline list
   file: sections.yaml
 figures:
-  - {name: ts,       preset: scalar,   vars: [JAC_T, SP, sigma0], depth_max: 150}
+  - {name: ts,       preset: scalar,   vars: [JAC_T, SP, sigma0], depth_max: 150,
+     figsize: [11, 9], title: "T/S overview", dpi: 200}
   - {name: mixing,   preset: profiles, product: mixing, vars: [K_T, Gamma, K_rho]}
   - {name: overview, preset: eps-chi,  gap_seconds: 600}
 ```
@@ -45,9 +49,14 @@ figures:
   `--var`; `clim` is a `{VAR: [min, max]}` map). `section` selects from the
   `sections` block by name, a list, or `"*"` (all). `eps-chi` has no x-axis, so
   `section`/`vars`/`clim` are rejected for it.
+- **Output controls** every preset accepts: `figsize: [w, h]` (inches), `title`,
+  and `dpi` (raster resolution; the top-level `dpi` is the default, a figure's
+  own `dpi` wins). `title` replaces the auto suptitle for `scalar`/`profiles`;
+  for `eps-chi` it sets the title *prefix* (the spectrum/method/QC summary is
+  still appended). Set exactly one of top-level `output_dir` / `output_pdf`.
 - Values are validated exactly as the CLI would parse them. Boolean keys take
   `true`/`false` (YAML 1.2; not `yes`/`no`), and a fixed-count option such as
-  `point: [lat, lon]` must be a list of that exact length.
+  `figsize: [w, h]` or `point: [lat, lon]` must be a list of that exact length.
 - `--select NAME` renders only the named figure(s); `--strict`/`--latest` pass
   through to config resolution.
 - `perturb-plot figure --list-presets` and `--dump-preset NAME` print copyable
