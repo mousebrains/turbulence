@@ -1,11 +1,12 @@
 # Jun-2026, Claude and Pat Welch, pat@mousebrains.com
 """Tests for perturb-plot's figure-spec driver (plot/figure.py)."""
 
+import argparse
 import os
 from types import SimpleNamespace
 
 import pytest
-import yaml
+from ruamel.yaml import YAML
 
 from odas_tpw.perturb.plot import figure as fig
 from odas_tpw.perturb.plot import profiles, scalar
@@ -16,6 +17,19 @@ def _cli(**kw):
                 select=None, strict=False, latest=False)
     base.update(kw)
     return SimpleNamespace(**base)
+
+
+class TestYamlBackend:
+    def test_uses_ruamel_not_pyyaml(self):
+        """figure.py must read/write YAML via ruamel.yaml (a declared runtime
+        dependency), NOT PyYAML — which is not a runtime dep, so `import yaml`
+        breaks `perturb-plot` in a non-dev install. Guard against a regression
+        to a bare PyYAML import (this whole module imports unconditionally from
+        cli.py, so a missing dep fails every subcommand before argparse)."""
+        import ruamel.yaml
+
+        assert fig.YAML is ruamel.yaml.YAML
+        assert not hasattr(fig, "yaml")  # no top-level PyYAML reference
 
 
 class TestValidateSource:
@@ -43,7 +57,7 @@ class TestSectionsFile:
         )
         assert f and os.path.exists(f) and tmp == [f]
         with open(f) as fh:
-            loaded = yaml.safe_load(fh)
+            loaded = YAML(typ="safe").load(fh)
         assert loaded["sections"][0]["name"] == "a"
         os.unlink(f)
 
@@ -193,6 +207,54 @@ class TestBuildArgs:
         with pytest.raises(SystemExit, match="Valid options"):
             fig._build_args({"name": "x", "preset": "scalar", "bogus_opt": 1},
                             {"config": "c"}, None, tmp_path, False, False)
+
+    def test_nargs_exact_list_accepted(self, tmp_path):
+        """--point is nargs=2: a 2-element list is accepted and float-coerced."""
+        _, args = fig._build_args(
+            {"name": "x", "preset": "scalar", "point": [12, 130]},
+            {"config": "c"}, None, tmp_path, False, False,
+        )
+        assert args.point == [12.0, 130.0]
+
+    def test_nargs_too_few_rejected(self, tmp_path):
+        with pytest.raises(SystemExit, match="exactly 2 values"):
+            fig._build_args({"name": "x", "preset": "scalar", "point": [12]},
+                            {"config": "c"}, None, tmp_path, False, False)
+
+    def test_nargs_too_many_rejected(self, tmp_path):
+        with pytest.raises(SystemExit, match="exactly 2 values"):
+            fig._build_args({"name": "x", "preset": "scalar", "point": [12, 130, 7]},
+                            {"config": "c"}, None, tmp_path, False, False)
+
+    def test_nargs_scalar_rejected(self, tmp_path):
+        """A bare scalar for an nargs list option is rejected (the CLI would
+        never produce a non-list there — downstream indexing would crash)."""
+        with pytest.raises(SystemExit, match="expects a list"):
+            fig._build_args({"name": "x", "preset": "scalar", "point": 12.0},
+                            {"config": "c"}, None, tmp_path, False, False)
+
+    def test_append_nargs_not_length_checked(self, tmp_path):
+        """clim is append+nargs=3 (a list of 3-tuples = several --clim); the
+        nargs length check must NOT apply to it (one entry here, not three)."""
+        _, args = fig._build_args(
+            {"name": "x", "preset": "scalar", "clim": {"T": [0, 10]}},
+            {"config": "c"}, None, tmp_path, False, False,
+        )
+        assert args.clim == [["T", "0", "10"]]
+
+    def test_nargs_plus_empty_rejected(self):
+        """nargs='+' requires >=1 value, exactly like the CLI (no preset uses
+        '+' today, so exercise _coerce directly with a synthetic action)."""
+        act = argparse.ArgumentParser(add_help=False).add_argument(
+            "--xs", nargs="+", type=int)
+        with pytest.raises(SystemExit, match="at least one value"):
+            fig._coerce(act, "xs", [], "fig")
+
+    def test_nargs_star_empty_ok(self):
+        """nargs='*' permits an empty list, like the CLI."""
+        act = argparse.ArgumentParser(add_help=False).add_argument(
+            "--xs", nargs="*", type=int)
+        assert fig._coerce(act, "xs", [], "fig") == []
 
 
 class TestRun:

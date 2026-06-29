@@ -39,7 +39,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import yaml
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from odas_tpw.perturb.plot import eps_chi, profiles, scalar
 
@@ -71,8 +72,8 @@ class SpecError(SystemExit):
 def _load_spec(path: str) -> dict:
     try:
         with open(path) as fh:
-            spec = yaml.safe_load(fh)
-    except (OSError, yaml.YAMLError) as exc:
+            spec = YAML(typ="safe").load(fh)
+    except (OSError, YAMLError) as exc:
         raise SpecError(f"cannot read figure spec {path}: {exc}") from exc
     if not isinstance(spec, dict):
         raise SpecError(f"figure spec {path}: top level must be a mapping")
@@ -105,7 +106,7 @@ def _sections_file(spec: dict, tmp: list[str]) -> str | None:
         fd, name = tempfile.mkstemp(suffix=".yaml", prefix="figspec_sections_")
         tmp.append(name)  # register before writing so a write error still cleans up
         with os.fdopen(fd, "w") as fh:
-            yaml.safe_dump({"sections": sections}, fh)
+            YAML(typ="safe").dump({"sections": sections}, fh)
         return name
     raise SpecError("figure spec: 'sections' must be {file: PATH} or a list")
 
@@ -133,8 +134,9 @@ def _adapt(key: str, value: Any) -> Any:
 def _coerce(action: argparse.Action, key: str, value: Any, fig_name: str) -> Any:
     """Apply the parser action's coercion/validation to a YAML value, so a spec
     gets the same handling the CLI would: ``vmin: 1e-7`` floats, ``product:
-    bogus`` is rejected, ``apply_qc: "false"`` is rejected (truthy string), and a
-    list for a scalar option is rejected."""
+    bogus`` is rejected, ``apply_qc: "false"`` is rejected (truthy string), a
+    list for a scalar option is rejected, and an nargs option (e.g. ``point:``
+    for ``--point nargs=2``) must be a list of the declared length."""
     # store_true/false: the value is the destination boolean directly. A bare
     # string ("false") would be truthy downstream, so require a real bool.
     if isinstance(action, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
@@ -154,6 +156,30 @@ def _coerce(action: argparse.Action, key: str, value: Any, fig_name: str) -> Any
         raise SpecError(
             f"figure {fig_name!r}: option {key!r} takes a single value, got list {value!r}"
         )
+
+    # An nargs option (e.g. --point nargs=2) consumes a fixed/variable number of
+    # values in ONE go — so the spec value must be a list of the right length,
+    # exactly as the CLI enforces. (append is different: a list there means
+    # several invocations, each consuming nargs values, so it isn't length-
+    # checked here — its per-invocation shape is handled by `_adapt`.)
+    nargs_list = not isinstance(action, argparse._AppendAction) and (
+        action.nargs in ("*", "+") or isinstance(action.nargs, int)
+    )
+    if nargs_list and not isinstance(value, list):
+        raise SpecError(
+            f"figure {fig_name!r}: option {key!r} expects a list of values, "
+            f"got {value!r}"
+        )
+    if nargs_list and isinstance(value, list):
+        if isinstance(action.nargs, int) and len(value) != action.nargs:
+            raise SpecError(
+                f"figure {fig_name!r}: option {key!r} expects exactly "
+                f"{action.nargs} values, got {len(value)}: {value!r}"
+            )
+        if action.nargs == "+" and not value:
+            raise SpecError(
+                f"figure {fig_name!r}: option {key!r} requires at least one value"
+            )
 
     typ, choices = action.type, action.choices
 
