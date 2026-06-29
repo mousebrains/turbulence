@@ -131,16 +131,38 @@ def _adapt(key: str, value: Any) -> Any:
 
 
 def _coerce(action: argparse.Action, key: str, value: Any, fig_name: str) -> Any:
-    """Apply the parser action's ``type``/``choices`` to a YAML value, so a spec
-    gets the same coercion/validation the CLI would (e.g. ``vmin: 1e-7`` parsed
-    as a float, ``product: bogus`` rejected). Lists are coerced element-wise."""
+    """Apply the parser action's coercion/validation to a YAML value, so a spec
+    gets the same handling the CLI would: ``vmin: 1e-7`` floats, ``product:
+    bogus`` is rejected, ``apply_qc: "false"`` is rejected (truthy string), and a
+    list for a scalar option is rejected."""
+    # store_true/false: the value is the destination boolean directly. A bare
+    # string ("false") would be truthy downstream, so require a real bool.
+    if isinstance(action, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
+        if not isinstance(value, bool):
+            raise SpecError(
+                f"figure {fig_name!r}: option {key!r} expects true/false, got {value!r}"
+            )
+        return value
+
+    # A list is only valid for list-producing actions (append, or nargs +/*/N).
+    takes_list = (
+        isinstance(action, argparse._AppendAction)
+        or action.nargs in ("*", "+")
+        or isinstance(action.nargs, int)
+    )
+    if isinstance(value, list) and not takes_list:
+        raise SpecError(
+            f"figure {fig_name!r}: option {key!r} takes a single value, got list {value!r}"
+        )
+
     typ, choices = action.type, action.choices
 
     def one(v: Any) -> Any:
-        # bool stays bool (store_true/false); don't float(True).
+        # str() first so coercion matches argparse exactly (int('1.5') raises —
+        # no silent float->int truncation); skip bools (don't float(True)).
         if callable(typ) and v is not None and not isinstance(v, bool):
             try:
-                v = typ(v)
+                v = typ(str(v))
             except (ValueError, TypeError) as exc:
                 tname = getattr(typ, "__name__", str(typ))
                 raise SpecError(
@@ -208,14 +230,17 @@ def _build_args(figure: dict, source: dict, sections_file, output_dir: Path,
     for key, value in figure.items():
         if key in _CONTROL_KEYS:
             continue
-        if key in _RESERVED_KEYS:
+        # Accept the CLI spelling (hyphens) as well as the dest (underscores).
+        attr = _KEY_ALIAS.get(key, key).replace("-", "_")
+        if attr in _RESERVED_KEYS:
             raise SpecError(
                 f"figure {name!r}: {key!r} is set by source/CLI, not per figure"
             )
-        attr = _KEY_ALIAS.get(key, key)
         if attr not in dest_map:
+            valid = sorted(k for k in dest_map if k not in _RESERVED_KEYS)
             raise SpecError(
-                f"figure {name!r}: option {key!r} is not valid for preset {preset!r}"
+                f"figure {name!r}: option {key!r} is not valid for preset "
+                f"{preset!r}. Valid options: {valid}"
             )
         setattr(args, attr, _coerce(dest_map[attr], key, _adapt(key, value), name))
 
@@ -299,8 +324,8 @@ def run(args: argparse.Namespace) -> str:
         sn = _safe(str(nm))
         if sn in safe_seen:
             raise SpecError(
-                f"figure spec: figures {safe_seen[sn]!r} and {nm!r} map to the "
-                f"same output name {sn!r}"
+                f"figure spec: figures {safe_seen[sn]!r} and {nm!r} both map to "
+                f"output subdir {sn!r} — give each figure a unique 'name:'."
             )
         safe_seen[sn] = nm
 

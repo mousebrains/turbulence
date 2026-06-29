@@ -153,6 +153,47 @@ class TestBuildArgs:
             fig._build_args({"name": "x", "preset": "scalar", "root": "/other"},
                             {"config": "c"}, None, tmp_path, False, False)
 
+    def test_reserved_hyphen_key_rejected(self, tmp_path):
+        with pytest.raises(SystemExit, match="set by source"):
+            fig._build_args({"name": "x", "preset": "scalar", "out-dir": "/x"},
+                            {"config": "c"}, None, tmp_path, False, False)
+
+    def test_list_for_scalar_option_rejected(self, tmp_path):
+        with pytest.raises(SystemExit, match="single value"):
+            fig._build_args({"name": "x", "preset": "profiles", "p_max": [100, 200]},
+                            {"config": "c"}, None, tmp_path, False, False)
+
+    def test_boolean_string_rejected(self, tmp_path):
+        with pytest.raises(SystemExit, match="true/false"):
+            fig._build_args({"name": "x", "preset": "profiles", "apply_qc": "false"},
+                            {"config": "c"}, None, tmp_path, False, False)
+
+    def test_boolean_bool_accepted(self, tmp_path):
+        _, args = fig._build_args(
+            {"name": "x", "preset": "profiles", "apply_qc": False},
+            {"config": "c"}, None, tmp_path, False, False,
+        )
+        assert args.apply_qc is False
+
+    def test_hyphenated_key_accepted(self, tmp_path):
+        _, args = fig._build_args(
+            {"name": "x", "preset": "profiles", "p-max": 150},
+            {"config": "c"}, None, tmp_path, False, False,
+        )
+        assert args.p_max == 150.0
+
+    def test_float_not_truncated(self, tmp_path):
+        _, args = fig._build_args(
+            {"name": "x", "preset": "profiles", "p_max": 1.5},
+            {"config": "c"}, None, tmp_path, False, False,
+        )
+        assert args.p_max == 1.5  # str()-coercion keeps the float (no int trunc)
+
+    def test_unknown_option_lists_valid(self, tmp_path):
+        with pytest.raises(SystemExit, match="Valid options"):
+            fig._build_args({"name": "x", "preset": "scalar", "bogus_opt": 1},
+                            {"config": "c"}, None, tmp_path, False, False)
+
 
 class TestRun:
     def test_missing_spec(self):
@@ -212,7 +253,7 @@ class TestRun:
             "source: {config: c}\noutput_dir: o\nfigures:\n"
             "  - {name: a, preset: scalar}\n  - {name: a, preset: profiles}\n"
         )
-        with pytest.raises(SystemExit, match="same output name"):
+        with pytest.raises(SystemExit, match="unique 'name:'"):
             fig.run(_cli(spec=str(spec)))
 
     def test_select_by_preset_when_unnamed(self, tmp_path, monkeypatch):
