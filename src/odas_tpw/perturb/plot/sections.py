@@ -358,6 +358,20 @@ def add_section_arguments(p: argparse.ArgumentParser) -> None:
     add_output_arguments(p)
 
 
+def positive_int(s: str) -> int:
+    """argparse ``type`` for a strictly-positive integer (e.g. ``--dpi``).
+
+    Raises ``ValueError`` (not ``ArgumentTypeError``) on a non-positive or
+    non-integer value so the same check fires both at the CLI *and* through the
+    figure driver's ``_coerce`` (which calls the action's ``type`` and catches
+    ``ValueError``) — a 0/negative/float dpi fails up front, not at render time.
+    """
+    v = int(s)
+    if v <= 0:
+        raise ValueError(f"must be a positive integer, got {v}")
+    return v
+
+
 def add_output_arguments(p: argparse.ArgumentParser, *, title: bool = True) -> None:
     """Register the shared figure-output flags (figsize / dpi [/ title]).
 
@@ -368,7 +382,7 @@ def add_output_arguments(p: argparse.ArgumentParser, *, title: bool = True) -> N
     p.add_argument("--figsize", nargs=2, type=float, default=None, metavar=("W", "H"),
                    help="figure size in inches, e.g. --figsize 11 9 "
                         "(default: preset-specific).")
-    p.add_argument("--dpi", type=int, default=None,
+    p.add_argument("--dpi", type=positive_int, default=None,
                    help="raster resolution for saved PNG/PDF (default: 150).")
     if title:
         p.add_argument("--title", default=None,
@@ -378,6 +392,28 @@ def add_output_arguments(p: argparse.ArgumentParser, *, title: bool = True) -> N
 def fig_dpi(args: argparse.Namespace) -> int:
     """Raster resolution for a saved figure: ``--dpi`` or the 150 default."""
     return getattr(args, "dpi", None) or 150
+
+
+@contextlib.contextmanager
+def close_new_figs_on_error() -> Iterator[None]:
+    """Close any pyplot figure created inside the block if it raises.
+
+    A figure built by ``plt.subplots`` registers in pyplot's global manager
+    immediately, so an exception while populating it (a gridding/limits error)
+    before it is returned/yielded would leave it open forever — the caller's
+    cleanup can't reach a figure it never received. Wrap each figure build in
+    this so a build-time error closes the orphan(s) and re-raises; figures that
+    existed before the block (already handed to the caller) are left untouched.
+    """
+    import matplotlib.pyplot as plt
+
+    before = set(plt.get_fignums())
+    try:
+        yield
+    except BaseException:
+        for num in set(plt.get_fignums()) - before:
+            plt.close(num)
+        raise
 
 
 @contextlib.contextmanager

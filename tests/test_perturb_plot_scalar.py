@@ -323,6 +323,50 @@ def test_save_path_streams_one_figure_at_a_time(tmp_path: Path, monkeypatch):
     assert plt.get_fignums() == []         # all closed afterwards
 
 
+def test_positive_int_type():
+    from odas_tpw.perturb.plot.sections import positive_int
+
+    assert positive_int("150") == 150
+    for bad in ("0", "-1", "1.5", "abc"):
+        with pytest.raises(ValueError):  # argparse + _coerce both catch ValueError
+            positive_int(bad)
+
+
+def test_cli_dpi_must_be_positive():
+    """--dpi is a positive_int: 0/negative rejected at the CLI, not silently
+    coerced to the default."""
+    from odas_tpw.perturb.plot import sections
+
+    p = argparse.ArgumentParser()
+    sections.add_output_arguments(p, title=False)
+    assert p.parse_args(["--dpi", "200"]).dpi == 200
+    with pytest.raises(SystemExit):
+        p.parse_args(["--dpi", "0"])
+    with pytest.raises(SystemExit):
+        p.parse_args(["--dpi", "-5"])
+
+
+def test_build_figures_closes_orphan_on_build_error(tmp_path: Path, monkeypatch):
+    """If building a figure raises after plt.subplots(), the half-built figure
+    must not be left open in pyplot — the caller's cleanup can't reach a figure
+    that was never yielded."""
+    import matplotlib.pyplot as plt
+
+    from odas_tpw.perturb.plot import grid
+
+    _write_ctd_combo(tmp_path)
+    plt.close("all")
+    before = set(plt.get_fignums())
+
+    def boom(*a, **k):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(grid, "grid_mean", boom)
+    with pytest.raises(ValueError, match="boom"):
+        list(scalar.build_figures(_scalar_args(tmp_path, var=["JAC_T"])))
+    assert set(plt.get_fignums()) == before  # orphan figure was closed
+
+
 def _run_cli(argv):
     from odas_tpw.perturb.plot.cli import main
 

@@ -256,6 +256,26 @@ class TestBuildArgs:
             "--xs", nargs="*", type=int)
         assert fig._coerce(act, "xs", [], "fig") == []
 
+    @pytest.mark.parametrize("dpi", [0, -10, 1.5])
+    def test_dpi_nonpositive_rejected(self, tmp_path, dpi):
+        """A per-figure dpi must be a positive int (same rule as top-level dpi
+        and the CLI), failing fast as a SpecError — not at matplotlib draw."""
+        with pytest.raises(SystemExit, match="positive_int"):
+            fig._build_args({"name": "x", "preset": "scalar", "dpi": dpi},
+                            {"config": "c"}, None, tmp_path, False, False)
+
+    @pytest.mark.parametrize("figure", [
+        {"name": "x", "preset": "scalar", "dpi": True},
+        {"name": "x", "preset": "scalar", "figsize": [True, 9]},
+        {"name": "x", "preset": "scalar", "depth_max": True},
+    ])
+    def test_boolean_rejected_for_numeric_options(self, tmp_path, figure):
+        """A YAML boolean for a typed numeric option must be rejected up front,
+        not pass through as Python True and crash matplotlib (e.g. dpi=True ->
+        FT_Set_Char_Size invalid ppem)."""
+        with pytest.raises(SystemExit, match="is a boolean"):
+            fig._build_args(figure, {"config": "c"}, None, tmp_path, False, False)
+
 
 class TestRun:
     def test_missing_spec(self):

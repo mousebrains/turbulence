@@ -42,6 +42,7 @@ from odas_tpw.perturb.plot import grid, xaxis
 from odas_tpw.perturb.plot.sections import (
     Section,
     add_section_arguments,
+    close_new_figs_on_error,
     closing_figs,
     fig_dpi,
     load_sections,
@@ -329,7 +330,8 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
         clim = _parse_clim(args.clim)
         single_var_limit_guard(args, variables)
         for sec in sections:
-            fig = _build_section_figure(ds, sec, variables, args, clim)
+            with close_new_figs_on_error():  # close a half-built figure if it raises
+                fig = _build_section_figure(ds, sec, variables, args, clim)
             if fig is not None:
                 yield f"scalar_{_safe_name(sec.name)}", fig
     finally:

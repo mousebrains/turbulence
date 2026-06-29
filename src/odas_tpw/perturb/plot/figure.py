@@ -182,9 +182,18 @@ def _coerce(action: argparse.Action, key: str, value: Any, fig_name: str) -> Any
     typ, choices = action.type, action.choices
 
     def one(v: Any) -> Any:
+        # A YAML bool reaching here is for a typed/positional option (store_true/
+        # store_false were handled above), never valid — reject it BEFORE
+        # coercion so `dpi: true` / `figsize: [true, 9]` / `depth_max: true` fail
+        # with a clean SpecError instead of crashing matplotlib at render time.
+        if isinstance(v, bool):
+            raise SpecError(
+                f"figure {fig_name!r}: option {key!r}={v!r} is a boolean; "
+                f"expected {getattr(typ, '__name__', 'a value')}"
+            )
         # str() first so coercion matches argparse exactly (int('1.5') raises —
-        # no silent float->int truncation); skip bools (don't float(True)).
-        if callable(typ) and v is not None and not isinstance(v, bool):
+        # no silent float->int truncation).
+        if callable(typ) and v is not None:
             try:
                 v = typ(str(v))
             except (ValueError, TypeError) as exc:
@@ -458,8 +467,11 @@ def _render_pdf(figures, source, sections_file, args, wanted, default_dpi,
                 Path("."), make_output=False,
             ):
                 # closing_figs releases the preset's dataset handle even if
-                # savefig raises mid-stream.
-                with sections.closing_figs(mod.build_figures(fig_args)) as gen:
+                # savefig raises mid-stream; close_new_figs_on_error closes a
+                # figure orphaned by a build error before it was yielded (e.g.
+                # eps-chi, which builds its figure inline).
+                with sections.closing_figs(mod.build_figures(fig_args)) as gen, \
+                        sections.close_new_figs_on_error():
                     for _stem, fig in gen:
                         try:
                             pdf.savefig(fig, dpi=fig_args.dpi or 150)

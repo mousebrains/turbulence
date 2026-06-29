@@ -497,7 +497,10 @@ def run(args: argparse.Namespace) -> str:
     """Render the pcolor figure, save it, and return the output path."""
     import matplotlib.pyplot as plt
 
-    (_stem, fig), = build_figures(args)  # one figure; fully consumed here
+    # eps-chi builds its single figure inline; guard the build so a failure
+    # before the figure is handed back doesn't orphan it in pyplot's registry.
+    with sections.close_new_figs_on_error():
+        (_stem, fig), = build_figures(args)  # one figure; fully consumed here
     out = args.out or os.path.join(args.root, "eps_chi_pcolor.png")
     fig.savefig(out, dpi=sections.fig_dpi(args))
     plt.close(fig)
