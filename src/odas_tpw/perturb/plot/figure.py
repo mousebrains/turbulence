@@ -162,9 +162,7 @@ def _coerce(action: argparse.Action, key: str, value: Any, fig_name: str) -> Any
     # exactly as the CLI enforces. (append is different: a list there means
     # several invocations, each consuming nargs values, so it isn't length-
     # checked here — its per-invocation shape is handled by `_adapt`.)
-    nargs_list = not isinstance(action, argparse._AppendAction) and (
-        action.nargs in ("*", "+") or isinstance(action.nargs, int)
-    )
+    nargs_list = takes_list and not isinstance(action, argparse._AppendAction)
     if nargs_list and not isinstance(value, list):
         raise SpecError(
             f"figure {fig_name!r}: option {key!r} expects a list of values, "

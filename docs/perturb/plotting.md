@@ -45,6 +45,9 @@ figures:
   `--var`; `clim` is a `{VAR: [min, max]}` map). `section` selects from the
   `sections` block by name, a list, or `"*"` (all). `eps-chi` has no x-axis, so
   `section`/`vars`/`clim` are rejected for it.
+- Values are validated exactly as the CLI would parse them. Boolean keys take
+  `true`/`false` (YAML 1.2; not `yes`/`no`), and a fixed-count option such as
+  `point: [lat, lon]` must be a list of that exact length.
 - `--select NAME` renders only the named figure(s); `--strict`/`--latest` pass
   through to config resolution.
 - `perturb-plot figure --list-presets` and `--dump-preset NAME` print copyable
