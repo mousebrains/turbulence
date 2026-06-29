@@ -229,7 +229,14 @@ def _apply_section(args: argparse.Namespace, preset: str, figure: dict, sections
 
 
 def _build_args(figure: dict, source: dict, sections_file, output_dir: Path,
-                strict: bool, latest: bool) -> tuple[Any, argparse.Namespace]:
+                strict: bool, latest: bool, *,
+                make_output: bool = True) -> tuple[Any, argparse.Namespace]:
+    """Compile a figure entry into ``(preset_module, Namespace)``.
+
+    With ``make_output`` (PNG mode) the per-figure output path is assigned and
+    its subdir created; the PDF driver passes ``make_output=False`` because it
+    collects ``build_figures()`` into one document and needs no subdirs.
+    """
     preset = figure.get("preset")
     name = str(figure.get("name") or preset)
     if preset not in _PRESETS:
@@ -270,14 +277,15 @@ def _build_args(figure: dict, source: dict, sections_file, output_dir: Path,
 
     _apply_section(args, preset, figure, sections_file)
 
-    # Output: one subdir per figure so different figures never collide.
-    fig_dir = output_dir / _safe(name)
-    fig_dir.mkdir(parents=True, exist_ok=True)
-    if preset == "eps-chi":
-        args.out = str(fig_dir / "eps_chi.png")
-    else:
-        args.out_dir = str(fig_dir)
-    return mod.run, args
+    if make_output:
+        # PNG mode: one subdir per figure so different figures never collide.
+        fig_dir = output_dir / _safe(name)
+        fig_dir.mkdir(parents=True, exist_ok=True)
+        if preset == "eps-chi":
+            args.out = str(fig_dir / "eps_chi.png")
+        else:
+            args.out_dir = str(fig_dir)
+    return mod, args
 
 
 def _safe(name: str) -> str:
@@ -318,8 +326,48 @@ def _dump_preset(name: str) -> None:
     print(path.read_text())
 
 
+def _output_config(spec: dict) -> tuple[str | None, str | None, int | None]:
+    """Validate the spec's output controls.
+
+    Exactly one of ``output_dir`` (one PNG tree, the default) or ``output_pdf``
+    (one combined multipage PDF); plus an optional default ``dpi`` applied to
+    any figure that doesn't set its own.
+    """
+    out_dir = spec.get("output_dir")
+    out_pdf = spec.get("output_pdf")
+    if out_dir is not None and out_pdf is not None:
+        raise SpecError("figure spec: set only one of 'output_dir' or 'output_pdf'")
+    dpi = spec.get("dpi")
+    if dpi is not None:
+        if isinstance(dpi, bool) or not isinstance(dpi, int):
+            raise SpecError(f"figure spec: 'dpi' must be an integer, got {dpi!r}")
+        if dpi <= 0:
+            raise SpecError(f"figure spec: 'dpi' must be a positive integer, got {dpi}")
+    if out_dir is None and out_pdf is None:
+        out_dir = "."  # default: a PNG tree in the cwd
+    return out_dir, out_pdf, dpi
+
+
+def _compiled_figures(figures, source, sections_file, args, wanted, default_dpi,
+                      output_dir: Path, *, make_output: bool):
+    """Yield ``(name, preset_module, Namespace)`` for each selected figure, with
+    the spec's default ``dpi`` filled in where the figure didn't set its own."""
+    for figure in figures:
+        name = figure.get("name") or figure.get("preset")
+        if wanted and name not in wanted:
+            continue
+        mod, fig_args = _build_args(
+            figure, source, sections_file, output_dir, args.strict, args.latest,
+            make_output=make_output,
+        )
+        if getattr(fig_args, "dpi", None) is None:
+            fig_args.dpi = default_dpi
+        print(f"=== figure {name!r} (preset {figure.get('preset')!r}) ===")
+        yield name, mod, fig_args
+
+
 def run(args: argparse.Namespace) -> str:
-    """Render every figure in the spec. Returns the output directory."""
+    """Render every figure in the spec. Returns the PNG dir or the PDF path."""
     if args.list_presets:
         _list_presets()
         return ""
@@ -334,10 +382,10 @@ def run(args: argparse.Namespace) -> str:
     figures = spec.get("figures")
     if not isinstance(figures, list) or not figures:
         raise SpecError("figure spec: a non-empty 'figures' list is required")
-    output_dir = Path(spec.get("output_dir", ".")).expanduser()
+    out_dir, out_pdf, default_dpi = _output_config(spec)
 
-    # Up-front: every entry is a mapping, and no two figures collide on the
-    # output subdir name (post-sanitization).
+    # Up-front: every entry is a mapping, and no two figures collide on their
+    # name (the PNG subdir / the --select key), post-sanitization.
     names: list[Any] = []
     safe_seen: dict[str, Any] = {}
     for f in figures:
@@ -349,7 +397,7 @@ def run(args: argparse.Namespace) -> str:
         if sn in safe_seen:
             raise SpecError(
                 f"figure spec: figures {safe_seen[sn]!r} and {nm!r} both map to "
-                f"output subdir {sn!r} — give each figure a unique 'name:'."
+                f"the same name {sn!r} — give each figure a unique 'name:'."
             )
         safe_seen[sn] = nm
 
@@ -362,20 +410,57 @@ def run(args: argparse.Namespace) -> str:
     tmp: list[str] = []
     try:
         sections_file = _sections_file(spec, tmp)
-        rendered = 0
-        for figure in figures:
-            name = figure.get("name") or figure.get("preset")
-            if wanted and name not in wanted:
-                continue
-            run_fn, fig_args = _build_args(
-                figure, source, sections_file, output_dir, args.strict, args.latest
+        if out_pdf is not None:
+            result = _render_pdf(
+                figures, source, sections_file, args, wanted, default_dpi, out_pdf
             )
-            print(f"=== figure {name!r} (preset {figure.get('preset')!r}) ===")
-            run_fn(fig_args)
-            rendered += 1
-        print(f"Rendered {rendered} figure(s) into {output_dir}")
+        else:
+            output_dir = Path(out_dir).expanduser()  # type: ignore[arg-type]
+            rendered = 0
+            for _name, mod, fig_args in _compiled_figures(
+                figures, source, sections_file, args, wanted, default_dpi,
+                output_dir, make_output=True,
+            ):
+                mod.run(fig_args)
+                rendered += 1
+            print(f"Rendered {rendered} figure(s) into {output_dir}")
+            result = str(output_dir)
     finally:
         for t in tmp:
             with contextlib.suppress(OSError):
                 os.unlink(t)
-    return str(output_dir)
+    return result
+
+
+def _render_pdf(figures, source, sections_file, args, wanted, default_dpi,
+                out_pdf: str) -> str:
+    """Render every selected figure into one multipage PDF (one page per figure
+    the preset produces). The file is created only once at least one page
+    exists, so an all-empty spec raises instead of leaving an invalid PDF."""
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    pdf_path = Path(out_pdf).expanduser()
+    pdf: PdfPages | None = None
+    pages = 0
+    try:
+        for _name, mod, fig_args in _compiled_figures(
+            figures, source, sections_file, args, wanted, default_dpi,
+            Path("."), make_output=False,
+        ):
+            for _stem, fig in mod.build_figures(fig_args):
+                if pdf is None:  # defer creation until there is a page to write
+                    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+                    pdf = PdfPages(str(pdf_path))
+                pdf.savefig(fig, dpi=fig_args.dpi or 150)
+                plt.close(fig)
+                pages += 1
+    finally:
+        if pdf is not None:
+            pdf.close()
+    if pages == 0:
+        raise SpecError(
+            "figure spec: no figures were produced — nothing to write to the PDF"
+        )
+    print(f"Wrote {pages} page(s) to {pdf_path}")
+    return str(pdf_path)

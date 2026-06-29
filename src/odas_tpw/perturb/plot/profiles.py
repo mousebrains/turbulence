@@ -29,7 +29,7 @@ import contextlib
 import locale
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import xarray as xr
@@ -40,6 +40,7 @@ from odas_tpw.perturb.plot.sections import (
     Section,
     add_section_arguments,
     can_display,
+    fig_dpi,
     grouped,
     parse_clim,
     resolve_sections,
@@ -239,7 +240,8 @@ def _build_profiles_figure(
 
     n = len(panel_vars)
     fig, axes = plt.subplots(
-        n, 1, figsize=(11, 3.0 * n + 1.0), sharex=True, sharey=True,
+        n, 1, figsize=getattr(args, "figsize", None) or (11, 3.0 * n + 1.0),
+        sharex=True, sharey=True,
         constrained_layout=True, squeeze=False,
     )
     axes = axes[:, 0]
@@ -285,10 +287,10 @@ def _build_profiles_figure(
             lbl.set_ha("right")
 
     title_id = ds.attrs.get("id") or os.path.basename(os.path.normpath(args.root))
-    fig.suptitle(
+    fig.suptitle(getattr(args, "title", None) or (
         f"{title_id}  —  {args.product}: {sec.name}  —  "
         f"x-axis: {sec.method}  —  {grouped(int(dss.sizes['profile']))} casts"
-    )
+    ))
     return fig
 
 
@@ -325,8 +327,13 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
                    help="max stime mismatch [s] when matching casts to raw files (default 1)")
 
 
-def run(args: argparse.Namespace) -> str:
-    """Render every section of the selected product; show or write PNGs."""
+def build_figures(args: argparse.Namespace) -> list[tuple[str, Any]]:
+    """Build one ``(stem, Figure)`` per resolved section (no saving/showing).
+
+    Shared by ``run`` (which saves/shows) and the ``figure`` batch driver
+    (which writes them into a combined PDF). Sections with no finite data are
+    skipped, so the returned list may be shorter than the section count.
+    """
     with contextlib.suppress(locale.Error):
         locale.setlocale(locale.LC_NUMERIC, "")
 
@@ -342,16 +349,9 @@ def run(args: argparse.Namespace) -> str:
     if not os.path.exists(path):
         raise SystemExit(f"{args.product} combo not found: {path}")
 
-    display = args.out_dir is None and can_display()
-    out_dir = args.out_dir or args.root
-    if not display:
-        os.makedirs(out_dir, exist_ok=True)
-
-    import matplotlib.pyplot as plt
-
     # decode_times=False keeps stime / bin numeric (epoch seconds / dbar).
     ds = xr.open_dataset(path, decode_times=False)
-    shown = 0
+    figs: list[tuple[str, Any]] = []
     try:
         if "profile" not in ds.dims or "bin" not in ds.dims:
             raise SystemExit(f"{path}: expected a (bin, profile) product")
@@ -370,18 +370,30 @@ def run(args: argparse.Namespace) -> str:
         single_var_limit_guard(args, variables)
         for sec in sections:
             fig = _build_profiles_figure(ds, sec, variables, args, clim, product)
-            if fig is None:
-                continue
-            if display:
-                shown += 1
-            else:
-                out = os.path.join(out_dir, f"{args.product}_{safe_name(sec.name)}.png")
-                fig.savefig(out, dpi=150)
-                plt.close(fig)
-                print(f"Wrote {out}")
-        if display and shown:
+            if fig is not None:
+                figs.append((f"{args.product}_{safe_name(sec.name)}", fig))
+    finally:
+        ds.close()  # figures hold their own arrays, so the dataset can close now
+    return figs
+
+
+def run(args: argparse.Namespace) -> str:
+    """Render every section of the selected product; show or write PNGs."""
+    import matplotlib.pyplot as plt
+
+    figs = build_figures(args)
+    display = args.out_dir is None and can_display()
+    if display:
+        if figs:
             plt.show()
             plt.close("all")
-    finally:
-        ds.close()
-    return f"displayed {shown} section(s)" if display else str(out_dir)
+        return f"displayed {len(figs)} section(s)"
+
+    out_dir = args.out_dir or args.root
+    os.makedirs(out_dir, exist_ok=True)
+    for stem, fig in figs:
+        out = os.path.join(out_dir, f"{stem}.png")
+        fig.savefig(out, dpi=fig_dpi(args))
+        plt.close(fig)
+        print(f"Wrote {out}")
+    return str(out_dir)

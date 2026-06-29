@@ -31,7 +31,7 @@ import argparse
 import contextlib
 import locale
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import xarray as xr
@@ -41,6 +41,7 @@ from odas_tpw.perturb.plot import grid, xaxis
 from odas_tpw.perturb.plot.sections import (
     Section,
     add_section_arguments,
+    fig_dpi,
     load_sections,
     resolve_sections,
     single_var_limit_guard,
@@ -203,7 +204,8 @@ def _build_section_figure(
 
     n = len(panel_vars)
     fig, axes = plt.subplots(
-        n, 1, figsize=(11, 3.0 * n + 1.0), sharex=True, sharey=True,
+        n, 1, figsize=getattr(args, "figsize", None) or (11, 3.0 * n + 1.0),
+        sharex=True, sharey=True,
         constrained_layout=True, squeeze=False,
     )
     axes = axes[:, 0]
@@ -268,10 +270,10 @@ def _build_section_figure(
 
     title_id = ds.attrs.get("id") or os.path.basename(os.path.normpath(args.root))
     npts = int(dss.sizes["time"])
-    fig.suptitle(
+    fig.suptitle(getattr(args, "title", None) or (
         f"{title_id}  —  section: {sec.name}  —  "
         f"x-axis: {sec.method}  —  {_grouped(npts)} samples"
-    )
+    ))
     return fig
 
 
@@ -292,8 +294,13 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
                    help="clip the depth axis at this value [m]")
 
 
-def run(args: argparse.Namespace) -> str:
-    """Render every section; show on screen, or write PNGs and return their dir."""
+def build_figures(args: argparse.Namespace) -> list[tuple[str, Any]]:
+    """Build one ``(stem, Figure)`` per resolved section (no saving/showing).
+
+    Shared by ``run`` (which saves/shows) and the ``figure`` batch driver
+    (which writes them into a combined PDF). Sections with no finite data are
+    skipped, so the returned list may be shorter than the section count.
+    """
     # Honour the user's locale for number formatting in titles. Scoped to
     # LC_NUMERIC so we don't disturb matplotlib's float parsing (LC_CTYPE) or
     # collation; falls back silently when the environment locale is unset.
@@ -309,16 +316,8 @@ def run(args: argparse.Namespace) -> str:
     if not os.path.exists(path):
         raise SystemExit(f"CTD combo not found: {path}")
 
-    # Show on screen unless the user asked for files or no display is available.
-    display = args.out_dir is None and _can_display()
-    out_dir = args.out_dir or args.root
-    if not display:
-        os.makedirs(out_dir, exist_ok=True)
-
-    import matplotlib.pyplot as plt
-
     ds = xr.open_dataset(path)  # default CF decoding -> datetime64 time
-    shown = 0
+    figs: list[tuple[str, Any]] = []
     try:
         if "time" not in ds.dims:
             raise SystemExit(f"{path}: expected a CTD trajectory with a 'time' dimension")
@@ -328,18 +327,31 @@ def run(args: argparse.Namespace) -> str:
         single_var_limit_guard(args, variables)
         for sec in sections:
             fig = _build_section_figure(ds, sec, variables, args, clim)
-            if fig is None:
-                continue
-            if display:
-                shown += 1
-            else:
-                out = os.path.join(out_dir, f"scalar_{_safe_name(sec.name)}.png")
-                fig.savefig(out, dpi=150)
-                plt.close(fig)
-                print(f"Wrote {out}")
-        if display and shown:
+            if fig is not None:
+                figs.append((f"scalar_{_safe_name(sec.name)}", fig))
+    finally:
+        ds.close()  # figures hold their own arrays, so the dataset can close now
+    return figs
+
+
+def run(args: argparse.Namespace) -> str:
+    """Render every section; show on screen, or write PNGs and return their dir."""
+    import matplotlib.pyplot as plt
+
+    figs = build_figures(args)
+    # Show on screen unless the user asked for files or no display is available.
+    display = args.out_dir is None and _can_display()
+    if display:
+        if figs:
             plt.show()  # blocks until the user closes the window(s)
             plt.close("all")
-    finally:
-        ds.close()
-    return f"displayed {shown} section(s)" if display else str(out_dir)
+        return f"displayed {len(figs)} section(s)"
+
+    out_dir = args.out_dir or args.root
+    os.makedirs(out_dir, exist_ok=True)
+    for stem, fig in figs:
+        out = os.path.join(out_dir, f"{stem}.png")
+        fig.savefig(out, dpi=fig_dpi(args))
+        plt.close(fig)
+        print(f"Wrote {out}")
+    return str(out_dir)

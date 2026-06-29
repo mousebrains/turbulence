@@ -70,8 +70,8 @@ class TestBuildArgs:
     def test_scalar_vars_clim_output(self, tmp_path):
         figure = {"name": "x", "preset": "scalar", "vars": ["JAC_T", "SP"],
                   "clim": {"JAC_T": [18, 28]}, "depth_max": 150}
-        run_fn, args = fig._build_args(figure, {"config": "c.yaml"}, None, tmp_path, False, False)
-        assert run_fn is scalar.run
+        mod, args = fig._build_args(figure, {"config": "c.yaml"}, None, tmp_path, False, False)
+        assert mod is scalar  # the preset module (driver calls mod.run / mod.build_figures)
         assert args.var == ["JAC_T", "SP"]
         assert args.clim == [["JAC_T", "18", "28"]]
         assert args.depth_max == 150
@@ -328,3 +328,96 @@ class TestRun:
         )
         fig.run(_cli(spec=str(spec), select=["scalar"]))  # selectable by preset
         assert calls == ["scalar"]
+
+
+class TestOutputConfig:
+    def test_default_is_cwd_png_tree(self):
+        assert fig._output_config({}) == (".", None, None)
+
+    def test_pdf_selected(self):
+        assert fig._output_config({"output_pdf": "r.pdf"}) == (None, "r.pdf", None)
+
+    def test_dir_and_pdf_conflict(self):
+        with pytest.raises(SystemExit, match="only one of"):
+            fig._output_config({"output_dir": "x", "output_pdf": "y.pdf"})
+
+    def test_default_dpi_passthrough(self):
+        assert fig._output_config({"dpi": 200}) == (".", None, 200)
+
+    def test_dpi_non_integer_rejected(self):
+        with pytest.raises(SystemExit, match="must be an integer"):
+            fig._output_config({"dpi": 1.5})
+        with pytest.raises(SystemExit, match="must be an integer"):
+            fig._output_config({"dpi": True})  # bool is not a real dpi
+
+    def test_dpi_nonpositive_rejected(self):
+        with pytest.raises(SystemExit, match="positive"):
+            fig._output_config({"dpi": 0})
+
+
+def _write_min_ctd_combo(root):
+    """A minimal ctd_combo_00 trajectory for end-to-end figure-driver tests."""
+    import numpy as np
+    import xarray as xr
+
+    per = 30
+    t0 = np.datetime64("2025-01-20T00:00:00")
+    depth = np.concatenate([np.linspace(0, 60, per // 2),
+                            np.linspace(60, 0, per // 2)])
+    time = np.array([t0 + np.timedelta64(i, "s") for i in range(per)],
+                    dtype="datetime64[ns]")
+    ds = xr.Dataset(
+        {"JAC_T": (("time",), 28 - 0.1 * depth, {"units": "degree_Celsius"}),
+         "SP": (("time",), 34.5 + 0.01 * depth, {"units": "PSU"}),
+         "sigma0": (("time",), -1 + 0.25 * depth, {"units": "kg/m^3"}),
+         "depth": (("time",), depth, {"units": "m", "positive": "down"}),
+         "lat": (("time",), np.full(per, 18.0)),
+         "lon": (("time",), np.full(per, 130.0))},
+        coords={"time": ("time", time)},
+    )
+    ds.attrs["id"] = "drv"
+    out = root / "ctd_combo_00"
+    out.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(out / "combo.nc")
+
+
+class TestPdfOutput:
+    def test_multipage_pdf(self, tmp_path):
+        pytest.importorskip("matplotlib").use("Agg")
+        _write_min_ctd_combo(tmp_path)
+        spec = tmp_path / "spec.yaml"
+        spec.write_text(
+            f"source: {{root: {tmp_path}}}\n"
+            f"output_pdf: {tmp_path}/report.pdf\n"
+            "dpi: 120\n"
+            "figures:\n"
+            "  - {name: ts, preset: scalar, vars: [JAC_T, SP], figsize: [7, 6], title: TS}\n"
+            "  - {name: dens, preset: scalar, vars: [sigma0]}\n"
+        )
+        res = fig.run(_cli(spec=str(spec)))
+        pdf = tmp_path / "report.pdf"
+        assert res == str(pdf)
+        assert pdf.exists() and pdf.read_bytes().startswith(b"%PDF")
+        # one /Pages tree node + two /Page leaves -> two rendered pages
+        body = pdf.read_bytes()
+        assert body.count(b"/Type /Page") + body.count(b"/Type/Page") == 3
+
+    def test_empty_pdf_raises_and_writes_nothing(self, tmp_path, monkeypatch):
+        pytest.importorskip("matplotlib").use("Agg")
+        # A preset that yields no figures (e.g. every section empty) must not
+        # leave behind an invalid zero-page PDF.
+        monkeypatch.setattr(scalar, "build_figures", lambda a: [])
+        spec = tmp_path / "spec.yaml"
+        spec.write_text(
+            f"source: {{root: {tmp_path}}}\n"
+            f"output_pdf: {tmp_path}/empty.pdf\n"
+            "figures:\n  - {name: a, preset: scalar, vars: [JAC_T]}\n"
+        )
+        with pytest.raises(SystemExit, match="nothing to write"):
+            fig.run(_cli(spec=str(spec)))
+        assert not (tmp_path / "empty.pdf").exists()
+
+    def test_figsize_wrong_length_rejected(self, tmp_path):
+        with pytest.raises(SystemExit, match="exactly 2 values"):
+            fig._build_args({"name": "x", "preset": "scalar", "figsize": [7]},
+                            {"config": "c"}, None, tmp_path, False, False)

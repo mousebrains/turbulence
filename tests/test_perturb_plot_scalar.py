@@ -216,6 +216,58 @@ def test_adhoc_time_section_writes_png(tmp_path: Path):
     assert rc == str(out_dir)
 
 
+def _scalar_args(root: Path, **over) -> argparse.Namespace:
+    base = dict(
+        root=str(root), ctd_combo=None, sections=None, select=None, out_dir=None,
+        var=None, z_bin=2.0, x_bin=None, depth_max=None, vmin=None, vmax=None,
+        clim=None, name="s", xaxis="time", start=None, stop=None,
+        point=None, waypoints=None, units="km",
+        figsize=None, dpi=None, title=None,
+    )
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+def test_build_figures_returns_named_figures(tmp_path: Path):
+    """build_figures yields (stem, Figure) per section without saving — the
+    handle the figure driver writes into a combined PDF."""
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+
+    _write_ctd_combo(tmp_path)
+    figs = scalar.build_figures(_scalar_args(tmp_path))
+    assert len(figs) == 1
+    stem, fig = figs[0]
+    assert stem.startswith("scalar_") and isinstance(fig, Figure)
+    plt.close(fig)
+
+
+def test_build_figures_honours_figsize(tmp_path: Path):
+    import matplotlib.pyplot as plt
+
+    _write_ctd_combo(tmp_path)
+    (_, fig), = scalar.build_figures(_scalar_args(tmp_path, figsize=[7.0, 5.0]))
+    assert list(fig.get_size_inches()) == [7.0, 5.0]
+    plt.close(fig)
+
+
+def test_build_figures_honours_title(tmp_path: Path):
+    import matplotlib.pyplot as plt
+
+    _write_ctd_combo(tmp_path)
+    (_, fig), = scalar.build_figures(_scalar_args(tmp_path, title="My Title"))
+    assert fig.get_suptitle() == "My Title"
+    plt.close(fig)
+
+
+def test_fig_dpi_default_and_override():
+    from odas_tpw.perturb.plot.sections import fig_dpi
+
+    assert fig_dpi(argparse.Namespace(dpi=None)) == 150  # default
+    assert fig_dpi(argparse.Namespace(dpi=300)) == 300   # override
+    assert fig_dpi(argparse.Namespace()) == 150          # attr absent -> default
+
+
 def _run_cli(argv):
     from odas_tpw.perturb.plot.cli import main
 

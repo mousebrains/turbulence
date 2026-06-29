@@ -351,6 +351,29 @@ def add_section_arguments(p: argparse.ArgumentParser) -> None:
                    help="polyline for --xaxis along_line: 'lat,lon;lat,lon;...'")
     p.add_argument("--units", choices=("m", "km", "nm"), default="km",
                    help="distance units for spatial x-axes (default: km)")
+    add_output_arguments(p)
+
+
+def add_output_arguments(p: argparse.ArgumentParser, *, title: bool = True) -> None:
+    """Register the shared figure-output flags (figsize / dpi [/ title]).
+
+    Honoured by every subcommand's renderer and by the ``figure`` batch driver
+    (per-figure ``figsize``/``dpi``/``title``). ``title=False`` for a subcommand
+    that already registers its own ``--title`` (eps-chi).
+    """
+    p.add_argument("--figsize", nargs=2, type=float, default=None, metavar=("W", "H"),
+                   help="figure size in inches, e.g. --figsize 11 9 "
+                        "(default: preset-specific).")
+    p.add_argument("--dpi", type=int, default=None,
+                   help="raster resolution for saved PNG/PDF (default: 150).")
+    if title:
+        p.add_argument("--title", default=None,
+                       help="figure title (default: derived from the data).")
+
+
+def fig_dpi(args: argparse.Namespace) -> int:
+    """Raster resolution for a saved figure: ``--dpi`` or the 150 default."""
+    return getattr(args, "dpi", None) or 150
 
 
 def single_var_limit_guard(args: argparse.Namespace, variables: list[str]) -> None:

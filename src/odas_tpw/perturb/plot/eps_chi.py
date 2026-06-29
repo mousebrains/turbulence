@@ -12,12 +12,13 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+from typing import Any
 
 import numpy as np
 import xarray as xr
 
 from odas_tpw.perturb import resolve
-from odas_tpw.perturb.plot import layout
+from odas_tpw.perturb.plot import layout, sections
 
 
 def _load_epsilon(diss_combo_path: str):
@@ -291,10 +292,13 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--no-qc", dest="apply_qc", action="store_false",
                    help="ignore qc_drop_* and plot raw values "
                         "(only useful with drop_action: flag_only)")
+    sections.add_output_arguments(p, title=False)  # --figsize/--dpi (--title above)
 
 
-def run(args: argparse.Namespace) -> str:
-    """Render the pcolor figure described by *args*. Returns the output path."""
+def build_figures(args: argparse.Namespace) -> list[tuple[str, Any]]:
+    """Build the eps-chi pcolor figure (no saving). Returns ``[(stem, Figure)]``
+    — a one-element list so the ``figure`` driver can treat every preset
+    uniformly (scalar/profiles return one figure per section)."""
     import cmocean
     import matplotlib.pyplot as plt
     from matplotlib.colors import LogNorm
@@ -393,7 +397,8 @@ def run(args: argparse.Namespace) -> str:
     )
 
     fig, (ax_e, ax_c, ax_g) = plt.subplots(
-        3, 1, figsize=(11, 11), sharex=True, sharey=True,
+        3, 1, figsize=getattr(args, "figsize", None) or (11, 11),
+        sharex=True, sharey=True,
         constrained_layout=True,
     )
     cmap = cmocean.cm.thermal
@@ -484,7 +489,16 @@ def run(args: argparse.Namespace) -> str:
         label.set_rotation(30)
         label.set_ha("right")
 
+    return [("eps_chi_pcolor", fig)]
+
+
+def run(args: argparse.Namespace) -> str:
+    """Render the pcolor figure, save it, and return the output path."""
+    import matplotlib.pyplot as plt
+
+    (_stem, fig), = build_figures(args)
     out = args.out or os.path.join(args.root, "eps_chi_pcolor.png")
-    fig.savefig(out, dpi=150)
+    fig.savefig(out, dpi=sections.fig_dpi(args))
+    plt.close(fig)
     print(f"Wrote {out}")
     return out
