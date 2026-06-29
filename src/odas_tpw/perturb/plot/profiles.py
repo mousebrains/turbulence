@@ -41,6 +41,7 @@ from odas_tpw.perturb.plot.sections import (
     Section,
     add_section_arguments,
     can_display,
+    closing_figs,
     fig_dpi,
     grouped,
     parse_clim,
@@ -382,11 +383,15 @@ def run(args: argparse.Namespace) -> str:
     """Render every section of the selected product; show or write PNGs."""
     args.root = resolve.require_root(args)  # so out_dir/display are known up front
     display = args.out_dir is None and can_display()
+    # closing_figs releases the generator's dataset handle even if a save raises
+    # mid-stream (not left to GC).
     if display:
-        shown = save_or_show(build_figures(args), None, fig_dpi(args))
+        with closing_figs(build_figures(args)) as figs:
+            shown = save_or_show(figs, None, fig_dpi(args))
         return f"displayed {shown} section(s)"
 
     out_dir = args.out_dir or args.root
     os.makedirs(out_dir, exist_ok=True)
-    save_or_show(build_figures(args), out_dir, fig_dpi(args))
+    with closing_figs(build_figures(args)) as figs:
+        save_or_show(figs, out_dir, fig_dpi(args))
     return str(out_dir)

@@ -268,6 +268,33 @@ def test_fig_dpi_default_and_override():
     assert fig_dpi(argparse.Namespace()) == 150          # attr absent -> default
 
 
+def test_closing_figs_closes_generator_on_early_exit():
+    """closing_figs must run a generator's finally (its ds.close) deterministically
+    even when the consumer stops early — not leave it to GC."""
+    from odas_tpw.perturb.plot.sections import closing_figs
+
+    closed = []
+
+    def gen():
+        try:
+            yield ("a", 1)
+            yield ("b", 2)  # never reached
+        finally:
+            closed.append(True)
+
+    with closing_figs(gen()) as figs:
+        next(iter(figs))  # consume only the first, then abandon
+    assert closed == [True]
+
+
+def test_closing_figs_noop_on_plain_list():
+    """A plain list (no .close) passes through untouched."""
+    from odas_tpw.perturb.plot.sections import closing_figs
+
+    with closing_figs([("a", 1)]) as figs:
+        assert list(figs) == [("a", 1)]
+
+
 def test_save_path_streams_one_figure_at_a_time(tmp_path: Path, monkeypatch):
     """The save path must hold at most ONE figure open at a time (build → save →
     close), not build all sections up front. Guards the O(N)->O(1) memory fix."""

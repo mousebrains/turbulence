@@ -42,7 +42,7 @@ from typing import Any
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from odas_tpw.perturb.plot import eps_chi, profiles, scalar
+from odas_tpw.perturb.plot import eps_chi, profiles, scalar, sections
 
 # preset name -> (module providing add_arguments/run, default output kind)
 _PRESETS: dict[str, Any] = {
@@ -235,7 +235,7 @@ def _build_args(figure: dict, source: dict, sections_file, output_dir: Path,
 
     With ``make_output`` (PNG mode) the per-figure output path is assigned and
     its subdir created; the PDF driver passes ``make_output=False`` because it
-    collects ``build_figures()`` into one document and needs no subdirs.
+    streams ``build_figures()`` into one document and needs no subdirs.
     """
     preset = figure.get("preset")
     name = str(figure.get("name") or preset)
@@ -457,12 +457,15 @@ def _render_pdf(figures, source, sections_file, args, wanted, default_dpi,
                 figures, source, sections_file, args, wanted, default_dpi,
                 Path("."), make_output=False,
             ):
-                for _stem, fig in mod.build_figures(fig_args):
-                    try:
-                        pdf.savefig(fig, dpi=fig_args.dpi or 150)
-                        pages += 1
-                    finally:
-                        plt.close(fig)
+                # closing_figs releases the preset's dataset handle even if
+                # savefig raises mid-stream.
+                with sections.closing_figs(mod.build_figures(fig_args)) as gen:
+                    for _stem, fig in gen:
+                        try:
+                            pdf.savefig(fig, dpi=fig_args.dpi or 150)
+                            pages += 1
+                        finally:
+                            plt.close(fig)
             if pages == 0:
                 raise SpecError(
                     "figure spec: no figures were produced — "

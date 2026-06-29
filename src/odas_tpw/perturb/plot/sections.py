@@ -16,10 +16,11 @@ subcommand.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import locale
 import os
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -377,6 +378,26 @@ def add_output_arguments(p: argparse.ArgumentParser, *, title: bool = True) -> N
 def fig_dpi(args: argparse.Namespace) -> int:
     """Raster resolution for a saved figure: ``--dpi`` or the 150 default."""
     return getattr(args, "dpi", None) or 150
+
+
+@contextlib.contextmanager
+def closing_figs(
+    figs: Iterable[tuple[str, Any]],
+) -> Iterator[Iterable[tuple[str, Any]]]:
+    """Yield *figs*, then close it on exit if it is a generator.
+
+    A ``build_figures`` generator holds an open dataset until its ``finally``
+    runs (on exhaustion or close). Wrapping consumption in this guarantees that
+    handle is released deterministically even if a consumer stops early (a save
+    error mid-stream), rather than waiting on GC. A plain list/iterator with no
+    ``close`` is left untouched.
+    """
+    try:
+        yield figs
+    finally:
+        close = getattr(figs, "close", None)
+        if callable(close):
+            close()
 
 
 def save_or_show(figs: Iterable[tuple[str, Any]], out_dir: str | None,
