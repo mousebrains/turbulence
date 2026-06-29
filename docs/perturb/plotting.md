@@ -49,10 +49,11 @@ figures:
   `--var`; `clim` is a `{VAR: [min, max]}` map). `section` selects from the
   `sections` block by name, a list, or `"*"` (all). `eps-chi` has no x-axis, so
   `section`/`vars`/`clim` are rejected for it.
-- **Output controls** every preset accepts: `figsize: [w, h]` (inches), `title`
-  (overrides the auto title), and `dpi` (raster resolution; the top-level `dpi`
-  is the default, a figure's own `dpi` wins). Set exactly one of top-level
-  `output_dir` / `output_pdf`.
+- **Output controls** every preset accepts: `figsize: [w, h]` (inches), `title`,
+  and `dpi` (raster resolution; the top-level `dpi` is the default, a figure's
+  own `dpi` wins). `title` replaces the auto suptitle for `scalar`/`profiles`;
+  for `eps-chi` it sets the title *prefix* (the spectrum/method/QC summary is
+  still appended). Set exactly one of top-level `output_dir` / `output_pdf`.
 - Values are validated exactly as the CLI would parse them. Boolean keys take
   `true`/`false` (YAML 1.2; not `yes`/`no`), and a fixed-count option such as
   `figsize: [w, h]` or `point: [lat, lon]` must be a list of that exact length.

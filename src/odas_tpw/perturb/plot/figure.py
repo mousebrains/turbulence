@@ -435,32 +435,43 @@ def run(args: argparse.Namespace) -> str:
 def _render_pdf(figures, source, sections_file, args, wanted, default_dpi,
                 out_pdf: str) -> str:
     """Render every selected figure into one multipage PDF (one page per figure
-    the preset produces). The file is created only once at least one page
-    exists, so an all-empty spec raises instead of leaving an invalid PDF."""
+    the preset produces).
+
+    Written to a temp file and ``os.replace``-d into place only on FULL success,
+    so a failure in a later figure never leaves a partial PDF that looks
+    complete but is silently missing pages; an all-empty spec raises and leaves
+    nothing. Figures stream one at a time and are closed as written.
+    """
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
 
     pdf_path = Path(out_pdf).expanduser()
-    pdf: PdfPages | None = None
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(suffix=".pdf", prefix=".figspec_",
+                                    dir=str(pdf_path.parent))
+    os.close(fd)
     pages = 0
     try:
-        for _name, mod, fig_args in _compiled_figures(
-            figures, source, sections_file, args, wanted, default_dpi,
-            Path("."), make_output=False,
-        ):
-            for _stem, fig in mod.build_figures(fig_args):
-                if pdf is None:  # defer creation until there is a page to write
-                    pdf_path.parent.mkdir(parents=True, exist_ok=True)
-                    pdf = PdfPages(str(pdf_path))
-                pdf.savefig(fig, dpi=fig_args.dpi or 150)
-                plt.close(fig)
-                pages += 1
-    finally:
-        if pdf is not None:
-            pdf.close()
-    if pages == 0:
-        raise SpecError(
-            "figure spec: no figures were produced — nothing to write to the PDF"
-        )
+        with PdfPages(tmp_name) as pdf:
+            for _name, mod, fig_args in _compiled_figures(
+                figures, source, sections_file, args, wanted, default_dpi,
+                Path("."), make_output=False,
+            ):
+                for _stem, fig in mod.build_figures(fig_args):
+                    try:
+                        pdf.savefig(fig, dpi=fig_args.dpi or 150)
+                        pages += 1
+                    finally:
+                        plt.close(fig)
+            if pages == 0:
+                raise SpecError(
+                    "figure spec: no figures were produced — "
+                    "nothing to write to the PDF"
+                )
+        os.replace(tmp_name, str(pdf_path))  # atomic; only after full success
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
     print(f"Wrote {pages} page(s) to {pdf_path}")
     return str(pdf_path)

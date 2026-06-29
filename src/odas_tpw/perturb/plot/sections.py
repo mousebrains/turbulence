@@ -17,8 +17,11 @@ from __future__ import annotations
 
 import argparse
 import locale
+import os
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import xarray as xr
@@ -374,6 +377,44 @@ def add_output_arguments(p: argparse.ArgumentParser, *, title: bool = True) -> N
 def fig_dpi(args: argparse.Namespace) -> int:
     """Raster resolution for a saved figure: ``--dpi`` or the 150 default."""
     return getattr(args, "dpi", None) or 150
+
+
+def save_or_show(figs: Iterable[tuple[str, Any]], out_dir: str | None,
+                 dpi: int) -> int:
+    """Consume a ``(stem, Figure)`` iterable and return how many it handled.
+
+    With *out_dir* set, write ``<out_dir>/<stem>.png`` **streaming** — one open
+    figure at a time, closing each before the next is pulled (bounded memory,
+    and a save error can't leak the not-yet-built figures). With *out_dir* None,
+    collect every figure (they must all be open together) and ``show()`` them.
+    Always closes the figures it created, even on error.
+    """
+    import matplotlib.pyplot as plt
+
+    if out_dir is None:  # interactive: all figures open together for show()
+        collected = []
+        try:
+            for _stem, fig in figs:
+                collected.append(fig)
+        except BaseException:
+            for fig in collected:
+                plt.close(fig)
+            raise
+        if collected:
+            plt.show()  # blocks until the user closes the window(s)
+            plt.close("all")
+        return len(collected)
+
+    count = 0
+    for stem, fig in figs:  # save path: at most one figure open at a time
+        try:
+            out = os.path.join(out_dir, f"{stem}.png")
+            fig.savefig(out, dpi=dpi)
+            print(f"Wrote {out}")
+            count += 1
+        finally:
+            plt.close(fig)
+    return count
 
 
 def single_var_limit_guard(args: argparse.Namespace, variables: list[str]) -> None:

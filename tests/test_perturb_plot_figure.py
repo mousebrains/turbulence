@@ -421,3 +421,22 @@ class TestPdfOutput:
         with pytest.raises(SystemExit, match="exactly 2 values"):
             fig._build_args({"name": "x", "preset": "scalar", "figsize": [7]},
                             {"config": "c"}, None, tmp_path, False, False)
+
+    def test_later_failure_leaves_no_partial_pdf(self, tmp_path):
+        """A first valid figure renders, but a second figure with an invalid
+        option must abort with NO report.pdf and no leftover temp file — not a
+        plausible-looking PDF silently missing pages."""
+        pytest.importorskip("matplotlib").use("Agg")
+        _write_min_ctd_combo(tmp_path)
+        spec = tmp_path / "spec.yaml"
+        spec.write_text(
+            f"source: {{root: {tmp_path}}}\n"
+            f"output_pdf: {tmp_path}/report.pdf\n"
+            "figures:\n"
+            "  - {name: ok, preset: scalar, vars: [JAC_T]}\n"
+            "  - {name: bad, preset: profiles, product: epsilon}\n"  # invalid choice
+        )
+        with pytest.raises(SystemExit, match="must be one of"):
+            fig.run(_cli(spec=str(spec)))
+        assert not (tmp_path / "report.pdf").exists()
+        assert not list(tmp_path.glob(".figspec_*.pdf"))  # temp cleaned up

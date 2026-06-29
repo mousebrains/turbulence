@@ -31,6 +31,7 @@ import argparse
 import contextlib
 import locale
 import os
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -44,6 +45,7 @@ from odas_tpw.perturb.plot.sections import (
     fig_dpi,
     load_sections,
     resolve_sections,
+    save_or_show,
     single_var_limit_guard,
 )
 from odas_tpw.perturb.plot.sections import (
@@ -294,12 +296,13 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
                    help="clip the depth axis at this value [m]")
 
 
-def build_figures(args: argparse.Namespace) -> list[tuple[str, Any]]:
-    """Build one ``(stem, Figure)`` per resolved section (no saving/showing).
+def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
+    """Yield one ``(stem, Figure)`` per resolved section (no saving/showing).
 
-    Shared by ``run`` (which saves/shows) and the ``figure`` batch driver
-    (which writes them into a combined PDF). Sections with no finite data are
-    skipped, so the returned list may be shorter than the section count.
+    A **generator**, lazily, so a streaming caller (``run``'s save path, the
+    ``figure`` PDF driver) can save and ``close`` each figure before the next is
+    built — bounded to one open figure at a time. Sections with no finite data
+    are skipped, so fewer figures may be yielded than there are sections.
     """
     # Honour the user's locale for number formatting in titles. Scoped to
     # LC_NUMERIC so we don't disturb matplotlib's float parsing (LC_CTYPE) or
@@ -317,7 +320,6 @@ def build_figures(args: argparse.Namespace) -> list[tuple[str, Any]]:
         raise SystemExit(f"CTD combo not found: {path}")
 
     ds = xr.open_dataset(path)  # default CF decoding -> datetime64 time
-    figs: list[tuple[str, Any]] = []
     try:
         if "time" not in ds.dims:
             raise SystemExit(f"{path}: expected a CTD trajectory with a 'time' dimension")
@@ -328,30 +330,21 @@ def build_figures(args: argparse.Namespace) -> list[tuple[str, Any]]:
         for sec in sections:
             fig = _build_section_figure(ds, sec, variables, args, clim)
             if fig is not None:
-                figs.append((f"scalar_{_safe_name(sec.name)}", fig))
+                yield f"scalar_{_safe_name(sec.name)}", fig
     finally:
         ds.close()  # figures hold their own arrays, so the dataset can close now
-    return figs
 
 
 def run(args: argparse.Namespace) -> str:
     """Render every section; show on screen, or write PNGs and return their dir."""
-    import matplotlib.pyplot as plt
-
-    figs = build_figures(args)
+    args.root = resolve.require_root(args)  # so out_dir/display are known up front
     # Show on screen unless the user asked for files or no display is available.
     display = args.out_dir is None and _can_display()
     if display:
-        if figs:
-            plt.show()  # blocks until the user closes the window(s)
-            plt.close("all")
-        return f"displayed {len(figs)} section(s)"
+        shown = save_or_show(build_figures(args), None, fig_dpi(args))
+        return f"displayed {shown} section(s)"
 
     out_dir = args.out_dir or args.root
     os.makedirs(out_dir, exist_ok=True)
-    for stem, fig in figs:
-        out = os.path.join(out_dir, f"{stem}.png")
-        fig.savefig(out, dpi=fig_dpi(args))
-        plt.close(fig)
-        print(f"Wrote {out}")
+    save_or_show(build_figures(args), out_dir, fig_dpi(args))
     return str(out_dir)
