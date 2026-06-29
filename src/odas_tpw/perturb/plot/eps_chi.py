@@ -307,9 +307,13 @@ def run(args: argparse.Namespace) -> str:
 
     # Per-profile diss dir for the title's processing params (fft/diss length).
     # Resolve it by the *same* config as the data so a multi-config root can't
-    # render old combo data under a newer run's title metadata. Optional: the
-    # title degrades to "?" if it cannot be resolved.
-    diss_attrs_dir = resolve.resolve_for_args(args, "diss", optional=True)
+    # render old combo data under a newer run's title metadata. This is purely
+    # cosmetic, so it must never fail the figure: a missing OR ambiguous diss
+    # dir (conflict_ok) degrades the title to "?" rather than aborting the plot
+    # (the data dir, diss_combo above, is what conflicts are fatal for).
+    diss_attrs_dir = resolve.resolve_for_args(
+        args, "diss", optional=True, conflict_ok=True
+    )
 
     # chi is optional: the figure degrades to ε-only when chi was not run.
     chi_combo_dir = resolve.resolve_for_args(args, "chi_combo", optional=True)

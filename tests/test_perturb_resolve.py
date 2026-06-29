@@ -212,6 +212,36 @@ class TestResolveForArgs:
         with pytest.raises(SystemExit):
             resolve.resolve_for_args(args, "chi_combo", optional=True)
 
+    def test_yaml_syntax_error_is_systemexit(self, tmp_path):
+        """A *syntactically* broken config raises ruamel YAMLError (not an
+        OSError/ValueError); it must still convert to a clean SystemExit, not
+        leak a raw parser traceback to the user."""
+        ypath = tmp_path / "p.yaml"
+        ypath.write_text("files: {output_root: [unterminated\n")  # broken flow seq
+        args = SimpleNamespace(config=str(ypath), root=None, strict=False, latest=False)
+        with pytest.raises(SystemExit):
+            resolve.resolve_for_args(args, "chi_combo")
+        with pytest.raises(SystemExit):
+            resolve.resolve_for_args(args, "chi_combo", optional=True)
+
+    def test_conflict_ok_degrades_to_none(self, tmp_path):
+        """A *cosmetic* lookup (conflict_ok=True) must degrade a config conflict
+        to None — the eps-chi title's per-profile diss dir must never fail the
+        whole figure. Without conflict_ok the same conflict is fatal."""
+        _write_stage(tmp_path, "diss", _cfg(tmp_path, epsilon={"fft_length": 256}), 0)
+        _write_stage(tmp_path, "diss", _cfg(tmp_path, epsilon={"fft_length": 512}), 1)
+        ypath = tmp_path / "p.yaml"
+        ypath.write_text(
+            f"files: {{output_root: {tmp_path}}}\n"
+            "epsilon: {fft_length: 9999}\n"  # matches neither diss dir
+        )
+        args = SimpleNamespace(config=str(ypath), root=None, strict=False, latest=False)
+        with pytest.raises(SystemExit, match="refusing to guess"):  # data stage
+            resolve.resolve_for_args(args, "diss", optional=True)
+        # cosmetic: same conflict degrades to None instead of aborting
+        assert resolve.resolve_for_args(
+            args, "diss", optional=True, conflict_ok=True) is None
+
     def test_latest_fallback_without_config(self, tmp_path):
         (tmp_path / "chi_combo_00").mkdir()
         args = SimpleNamespace(config=None, root=str(tmp_path), strict=False, latest=False)
@@ -221,3 +251,43 @@ class TestResolveForArgs:
         args = SimpleNamespace(config=None, root=None, strict=False, latest=False)
         with pytest.raises(SystemExit, match="one of --config or --root"):
             resolve.resolve_for_args(args, "chi_combo")
+
+
+class TestRequireRoot:
+    """require_root runs FIRST in every subcommand's run(); a bad config must be
+    cleanly fatal here too, or the user hits a raw traceback before
+    resolve_for_args (with its clean handling) is ever reached."""
+
+    def test_root_wins(self):
+        args = SimpleNamespace(root="/r", config=None)
+        assert resolve.require_root(args) == "/r"
+
+    def test_config_output_root(self, tmp_path):
+        ypath = tmp_path / "p.yaml"
+        ypath.write_text(f"files:\n  output_root: {tmp_path}\n")
+        args = SimpleNamespace(root=None, config=str(ypath))
+        assert resolve.require_root(args) == str(tmp_path)
+
+    def test_missing_config_is_systemexit(self, tmp_path):
+        args = SimpleNamespace(root=None, config=str(tmp_path / "nope.yaml"))
+        with pytest.raises(SystemExit):
+            resolve.require_root(args)
+
+    def test_unknown_section_config_is_systemexit(self, tmp_path):
+        ypath = tmp_path / "p.yaml"
+        ypath.write_text("not_a_real_section:\n  foo: 1\n")  # ValueError in load
+        args = SimpleNamespace(root=None, config=str(ypath))
+        with pytest.raises(SystemExit):
+            resolve.require_root(args)
+
+    def test_yaml_syntax_error_config_is_systemexit(self, tmp_path):
+        ypath = tmp_path / "p.yaml"
+        ypath.write_text("files: {output_root: [unterminated\n")  # YAMLError in load
+        args = SimpleNamespace(root=None, config=str(ypath))
+        with pytest.raises(SystemExit):
+            resolve.require_root(args)
+
+    def test_neither_is_systemexit(self):
+        args = SimpleNamespace(root=None, config=None)
+        with pytest.raises(SystemExit, match="one of --config or --root"):
+            resolve.require_root(args)

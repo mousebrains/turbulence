@@ -26,8 +26,17 @@ import json
 import warnings
 from pathlib import Path
 
+from ruamel.yaml.error import YAMLError
+
 from odas_tpw.config_base import iter_stage_dirs
 from odas_tpw.perturb import config as _cfg
+
+# Everything load_config can raise for a bad --config: missing/unreadable
+# (OSError, incl. FileNotFoundError), unknown section/key (ValueError), or a
+# YAML syntax error (ruamel YAMLError — NOT an OSError/ValueError subclass).
+# A bad config is ALWAYS fatal; these are converted to a clean SystemExit
+# wherever a config is loaded, so the user never sees a raw traceback.
+_CONFIG_LOAD_ERRORS = (OSError, ValueError, YAMLError)
 
 # files key rewritten by --output at run time and irrelevant to the data;
 # excluded from the signature comparison. p_file_root/p_file_pattern are kept
@@ -133,15 +142,18 @@ def stage_dir(
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
-        # Multiple dirs carry the *same* canonical signature, so they came from
-        # the same config and same inputs (output_root is stripped before
-        # comparison; nothing else here differs) — their data is equivalent.
-        # This happens when two identical-config `perturb run`s race to claim a
+        # Multiple dirs carry the *same* canonical signature. The expected
+        # cause is two identical-config `perturb run`s racing to claim a
         # sequence number under one output_root (one creates {stage}_00, the
         # other loses the mkdir, advances, and writes the same signature into
-        # {stage}_01). Picking the newest is safe and keeps plotting working;
-        # erroring here would needlessly lock the user out. Warn so a genuinely
-        # surprising duplicate (e.g. a hand-copied signature) is still visible.
+        # {stage}_01); output_root is stripped before comparison and nothing
+        # else differs, so those two were produced from the same config and
+        # inputs and their data is equivalent — picking the newest is safe and
+        # avoids needlessly locking the user out. A signature file is copied
+        # *text*, not a checksum of the dir's data, so a hand-copied signature
+        # into a dir with different data would also land here and is NOT
+        # guaranteed equivalent — hence we warn (listing the dirs) rather than
+        # resolve silently.
         listing = ", ".join(d.name for d in matches)
         warnings.warn(
             f"{stage}: {len(matches)} directories under {root} share the given "
@@ -210,9 +222,12 @@ def require_root(args: argparse.Namespace) -> str:
         return str(root)
     cfg_path = getattr(args, "config", None)
     if cfg_path:
+        # require_root runs FIRST in every subcommand's run(), so a bad config
+        # must be cleanly fatal here too (not just in resolve_for_args) — else
+        # the user gets a raw traceback before resolve_for_args is ever reached.
         try:
             out = _cfg.load_config(cfg_path).get("files", {}).get("output_root")
-        except OSError as exc:
+        except _CONFIG_LOAD_ERRORS as exc:
             raise SystemExit(str(exc)) from exc
         if out:
             return str(out)
@@ -220,7 +235,11 @@ def require_root(args: argparse.Namespace) -> str:
 
 
 def resolve_for_args(
-    args: argparse.Namespace, stage: str, *, optional: bool = False
+    args: argparse.Namespace,
+    stage: str,
+    *,
+    optional: bool = False,
+    conflict_ok: bool = False,
 ) -> str | None:
     """Resolve a stage directory from parsed plot args.
 
@@ -230,17 +249,25 @@ def resolve_for_args(
     per-profile ``chi`` dir, profiles' diagnostics overlay) — matching the
     legacy ``latest_stage_dir`` behavior. A required stage that cannot be
     resolved raises a clean ``SystemExit``.
+
+    *optional* makes a *missing* stage (no ``{stage}_NN``) degrade to None; by
+    default a config *conflict* (ambiguous/drift) still raises, even for an
+    optional stage, so the user's data is never silently dropped. *conflict_ok*
+    additionally degrades a conflict to None — for **cosmetic** lookups (e.g.
+    eps-chi's per-profile ``diss`` dir, used only for the title's processing
+    params) that must never fail the whole figure over which dir to caption it.
     """
     cfg_path = getattr(args, "config", None)
     root = getattr(args, "root", None)
     if cfg_path:
         # Loading the config is separate from finding the stage dir: a
-        # missing/unreadable --config (e.g. a typo) is ALWAYS fatal and must
-        # never be mistaken for "this optional stage was not run". Only a
-        # FileNotFoundError from stage_dir (no {stage}_NN dir) degrades to None.
+        # missing/unreadable/malformed --config (e.g. a typo, or invalid YAML)
+        # is ALWAYS fatal and must never be mistaken for "this optional stage
+        # was not run". Only a FileNotFoundError from stage_dir (no {stage}_NN
+        # dir) degrades to None.
         try:
             config = _cfg.load_config(cfg_path)
-        except (OSError, ValueError) as exc:  # missing/unreadable/malformed
+        except _CONFIG_LOAD_ERRORS as exc:
             raise SystemExit(str(exc)) from exc
         try:
             return str(
@@ -254,9 +281,13 @@ def resolve_for_args(
             if optional:  # stage simply absent -> degrade gracefully
                 return None
             raise SystemExit(str(exc)) from exc
-        except (StageConflict, ValueError, OSError) as exc:
-            # A config conflict (ambiguous/drift) must surface even for an
-            # optional stage rather than silently dropping the user's data.
+        except StageConflict as exc:
+            if conflict_ok:  # cosmetic lookup: ambiguity is non-fatal
+                return None
+            # For a data stage a conflict must surface even when optional,
+            # rather than silently dropping the user's data.
+            raise SystemExit(str(exc)) from exc
+        except (ValueError, OSError) as exc:
             raise SystemExit(str(exc)) from exc
     if not root:
         raise SystemExit("one of --config or --root is required")
