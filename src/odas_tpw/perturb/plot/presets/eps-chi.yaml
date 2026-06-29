@@ -1,0 +1,16 @@
+# Example figure spec — epsilon / chi / chi-over-epsilon pcolor. Copy and edit.
+#   perturb-plot figure --spec this.yaml
+# Note: eps-chi plots depth vs cast number and has no x-axis, so 'section'/
+# 'vars'/'clim' are not used for it; per-quantity limits are eps_vmin/eps_vmax,
+# chi_vmin/chi_vmax, gam_vmin/gam_vmax.
+source:
+  config: perturb.yaml
+
+output_dir: figs/
+
+figures:
+  - name: overview
+    preset: eps-chi
+    gap_seconds: 600
+    # eps_vmin: 1.0e-10
+    # eps_vmax: 1.0e-6

@@ -9,12 +9,54 @@ perturb-plot <subcommand> [options]
 
 | Subcommand | Description |
 |------------|-------------|
+| `figure`   | Render many figures from one YAML spec (presets `scalar`/`profiles`/`eps-chi`), resolving directories from a perturb config. |
 | `eps-chi`  | Pcolor of log10(epsilon), log10(chi), log10(chi/epsilon) vs depth and cast number (reads `diss_combo`/`chi_combo`). |
 | `scalar`   | Depth-vs-x scalar sections (T / S / density / ...) from the CTD combo, with selectable x-axis. |
 | `profiles` | Depth-vs-x sections from the binned `(bin, profile)` products (`--product profiles/diss/chi/mixing`), one column per cast. |
 
-Each subcommand discovers the latest versioned stage directory under `--root`
-(e.g. `ctd_combo_01/` in preference to `ctd_combo_00/`).
+Each subcommand finds its input directory either by **`--config perturb.yaml`**
+(the directory whose stored config-hash signature matches that config) or, with
+**`--root DIR`**, the newest versioned `{stage}_NN` under it. `--config` is
+exact — it never silently picks a different config's product. On a non-exact
+match it errors (or, with a single candidate, warns and uses it); `--strict`
+forces the error, `--latest` forces the newest.
+
+## `perturb-plot figure`
+
+One YAML lists figures, each naming a **preset** (the subcommands above) plus
+that subcommand's own options; the driver compiles each entry into the chosen
+subcommand and runs it (every kernel and behaviour is reused). Output is one
+subdirectory per figure under `output_dir`.
+
+```yaml
+source:                          # exactly one of config / root
+  config: perturb.yaml           # resolve directories from this config
+  # output_root: ~/Desktop/VMP_results   # optional: override where to look
+output_dir: figs/
+sections:                        # optional; file ref or an inline list
+  file: sections.yaml
+figures:
+  - {name: ts,       preset: scalar,   vars: [JAC_T, SP, sigma0], depth_max: 150}
+  - {name: mixing,   preset: profiles, product: mixing, vars: [K_T, Gamma, K_rho]}
+  - {name: overview, preset: eps-chi,  gap_seconds: 600}
+```
+
+- A figure's keys are the chosen preset's options (`vars` is sugar for repeated
+  `--var`; `clim` is a `{VAR: [min, max]}` map). `section` selects from the
+  `sections` block by name, a list, or `"*"` (all). `eps-chi` has no x-axis, so
+  `section`/`vars`/`clim` are rejected for it.
+- Values are validated exactly as the CLI would parse them. Boolean keys take
+  `true`/`false` (YAML 1.2; not `yes`/`no`), and a fixed-count option such as
+  `point: [lat, lon]` must be a list of that exact length.
+- `--select NAME` renders only the named figure(s); `--strict`/`--latest` pass
+  through to config resolution.
+- `perturb-plot figure --list-presets` and `--dump-preset NAME` print copyable
+  example specs.
+
+```bash
+perturb-plot figure --spec figure.yaml
+perturb-plot figure --dump-preset scalar > my_figure.yaml   # copy and edit
+```
 
 ---
 

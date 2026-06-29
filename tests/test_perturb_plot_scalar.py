@@ -121,6 +121,29 @@ def test_parse_time_utc_and_offset_rejection():
         scalar._parse_time("2025-01-20T00:00:00+09:00")
 
 
+def test_parse_time_rejects_space_separated_offset():
+    """An unquoted offset timestamp in YAML resolves to a tz-aware datetime
+    whose str() uses a SPACE separator (e.g. '2025-01-20 00:00:00+09:00').
+    parse_time must reject the offset, not silently shift it 9h — the offset
+    check has to look past a space as well as a 'T'."""
+    import datetime
+
+    aware = datetime.datetime(
+        2025, 1, 20, 0, 0, 0,
+        tzinfo=datetime.timezone(datetime.timedelta(hours=9)),
+    )
+    with pytest.raises(ValueError, match="must be UTC"):
+        scalar._parse_time(aware)
+    with pytest.raises(ValueError, match="must be UTC"):
+        scalar._parse_time("2025-01-20 00:00:00+09:00")
+    with pytest.raises(ValueError, match="must be UTC"):
+        scalar._parse_time("2025-01-20 00:00:00-05:00")
+    # a space-separated UTC time (naive datetime str) must still parse fine
+    assert scalar._parse_time("2025-01-20 06:30:00") == np.datetime64("2025-01-20T06:30:00")
+    assert scalar._parse_time(datetime.datetime(2025, 1, 20, 6, 30, 0)) == \
+        np.datetime64("2025-01-20T06:30:00")
+
+
 def test_load_sections_valid(tmp_path: Path):
     cfg = tmp_path / "sections.yaml"
     cfg.write_text(

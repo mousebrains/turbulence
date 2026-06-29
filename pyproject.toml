@@ -47,6 +47,9 @@ pyturb-cli = "odas_tpw.pyturb.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"odas_tpw.perturb.plot" = ["presets/*.yaml"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

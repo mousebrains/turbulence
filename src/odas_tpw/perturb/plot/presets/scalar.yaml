@@ -1,0 +1,20 @@
+# Example figure spec — CTD scalar sections. Copy and edit.
+#   perturb-plot figure --spec this.yaml
+source:
+  config: perturb.yaml          # resolve directories from this perturb config
+  # output_root: ~/Desktop/VMP_results   # optional: override where to look
+  # root: ~/Desktop/VMP_results          # opt-out of config resolution
+
+output_dir: figs/
+
+# Optional. Without a sections block, each figure renders one ad-hoc section
+# (time x-axis). With one, a figure's `section:` selects by name (or "*"/list).
+# sections:
+#   file: sections.yaml
+
+figures:
+  - name: ts
+    preset: scalar
+    vars: [JAC_T, SP, sigma0]   # repeated --var
+    depth_max: 200
+    clim: {JAC_T: [18, 28]}     # {VAR: [min, max]}
