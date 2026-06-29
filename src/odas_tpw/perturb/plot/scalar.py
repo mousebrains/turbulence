@@ -36,7 +36,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
-from odas_tpw.perturb.plot import grid, layout, xaxis
+from odas_tpw.perturb import resolve
+from odas_tpw.perturb.plot import grid, xaxis
 from odas_tpw.perturb.plot.sections import (
     Section,
     add_section_arguments,
@@ -299,7 +300,9 @@ def run(args: argparse.Namespace) -> str:
     with contextlib.suppress(locale.Error):
         locale.setlocale(locale.LC_NUMERIC, "")
 
-    src = args.ctd_combo or layout.latest_stage_dir(args.root, "ctd_combo")
+    args.root = resolve.require_root(args)  # backfill from --config if needed
+
+    src = args.ctd_combo or resolve.resolve_for_args(args, "ctd_combo")
     if src is None:
         raise SystemExit(f"No ctd_combo dir under {args.root}")
     path = src if src.endswith(".nc") else os.path.join(src, "combo.nc")

@@ -303,8 +303,11 @@ def add_section_arguments(p: argparse.ArgumentParser) -> None:
     Each subcommand adds its own product-reading and rendering flags (e.g.
     --ctd-combo / --z-bin for scalar, --product for profiles).
     """
-    p.add_argument("--root", required=True,
-                   help="perturb output root (contains the combo_NN/ products)")
+    p.add_argument("--root", default=None,
+                   help="perturb output root (contains the combo_NN/ products). "
+                        "Required unless --config is given.")
+    from odas_tpw.perturb import resolve
+    resolve.add_resolve_args(p)
     p.add_argument("--sections", default=None,
                    help="sections YAML (data-chopping + x-axis). If omitted, "
                         "a single ad-hoc section is built from the flags below.")

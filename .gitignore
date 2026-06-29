@@ -38,3 +38,8 @@ htmlcov/
 
 # Claude Code
 .claude/
+
+# Local run artifacts and example data (large; not tracked)
+examples/*/tpw/
+myout/
+results/

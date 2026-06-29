@@ -16,6 +16,7 @@ import os
 import numpy as np
 import xarray as xr
 
+from odas_tpw.perturb import resolve
 from odas_tpw.perturb.plot import layout
 
 
@@ -182,12 +183,15 @@ def _align_chi_to_eps(
     return aligned, aligned_qc, n_unmatched
 
 
-def _per_profile_attrs(root: str, sibling_prefix: str) -> dict:
-    """Pick attrs from any per-profile NetCDF in ``<root>/<sibling_prefix>_NN/``."""
-    sib_dirs = sorted(glob.glob(os.path.join(root, f"{sibling_prefix}_[0-9][0-9]")))
-    if not sib_dirs:
+def _per_profile_attrs(directory: str | None) -> dict:
+    """Pick attrs from any per-profile NetCDF in *directory* (the resolved
+    per-profile ``diss``/``chi`` dir). Empty dict if *directory* is None or
+    holds no per-profile file. The dir is resolved by the same config as the
+    data (see ``run``) so the title can never report a *different* run's
+    processing parameters."""
+    if directory is None:
         return {}
-    files = sorted(glob.glob(os.path.join(sib_dirs[-1], "*_prof*.nc")))
+    files = sorted(glob.glob(os.path.join(directory, "*_prof*.nc")))
     if not files:
         return {}
     with xr.open_dataset(files[0]) as ds:
@@ -258,8 +262,10 @@ def _time_ticks(
 
 def add_arguments(p: argparse.ArgumentParser) -> None:
     """Register CLI flags for the eps-chi subcommand on *p*."""
-    p.add_argument("--root", required=True,
-                   help="perturb output root (e.g. grg/processed/vmp)")
+    p.add_argument("--root", default=None,
+                   help="perturb output root (e.g. grg/processed/vmp). "
+                        "Required unless --config is given.")
+    resolve.add_resolve_args(p)
     p.add_argument("--out", default=None,
                    help="output figure path (default: <root>/eps_chi_pcolor.png)")
     p.add_argument("--title", default=None,
@@ -293,13 +299,25 @@ def run(args: argparse.Namespace) -> str:
     import matplotlib.pyplot as plt
     from matplotlib.colors import LogNorm
 
-    diss_dir = layout.latest_stage_dir(args.root, "diss_combo")
+    args.root = resolve.require_root(args)  # backfill from --config if needed
+    diss_dir = resolve.resolve_for_args(args, "diss_combo")
     if diss_dir is None:
         raise SystemExit(f"No diss_combo dir under {args.root}")
     diss_combo = os.path.join(diss_dir, "combo.nc")
 
-    chi_combo_dir = layout.latest_stage_dir(args.root, "chi_combo")
-    chi_dir = layout.latest_stage_dir(args.root, "chi")
+    # Per-profile diss dir for the title's processing params (fft/diss length).
+    # Resolve it by the *same* config as the data so a multi-config root can't
+    # render old combo data under a newer run's title metadata. This is purely
+    # cosmetic, so it must never fail the figure: a missing OR ambiguous diss
+    # dir (conflict_ok) degrades the title to "?" rather than aborting the plot
+    # (the data dir, diss_combo above, is what conflicts are fatal for).
+    diss_attrs_dir = resolve.resolve_for_args(
+        args, "diss", optional=True, conflict_ok=True
+    )
+
+    # chi is optional: the figure degrades to ε-only when chi was not run.
+    chi_combo_dir = resolve.resolve_for_args(args, "chi_combo", optional=True)
+    chi_dir = resolve.resolve_for_args(args, "chi", optional=True)
 
     t_eps, depth, eps, eps_qc = _load_epsilon(diss_combo)
 
@@ -415,7 +433,7 @@ def run(args: argparse.Namespace) -> str:
         ax.set_ylabel("Depth (m)")
     ax_g.set_xlabel("Cast number  (cluster start time, UTC)")
 
-    eps_attrs = _per_profile_attrs(args.root, "diss")
+    eps_attrs = _per_profile_attrs(diss_attrs_dir)
 
     def _secs(attrs: dict, key: str) -> str:
         fs = attrs.get("fs_fast") or attrs.get("fs")

@@ -67,6 +67,34 @@ def _normalize_nested(v):
     return _normalize_value(v)
 
 
+def iter_stage_dirs(base: str | Path, prefix: str) -> list[tuple[int, Path]]:
+    """Existing ``{prefix}_NN`` *directories* under *base*, sorted by sequence.
+
+    Read-only helper shared by the pipeline's resolver and the plot-time
+    config resolver. Uses the same width-adaptive glob as
+    :meth:`ConfigManager.resolve_output_dir` so ``{prefix}_100`` is not missed.
+    Returns ``(seq, dir)`` pairs; non-numeric suffixes and non-directories are
+    skipped. (Unlike ``resolve_output_dir``'s internal scan this drops non-dir
+    matches, because only directories can carry a signature.)
+    """
+    base = Path(base)
+    out: list[tuple[int, Path]] = []
+    # Escape the base so a glob-active char in output_root (e.g. a "[" in a path)
+    # is matched literally; only the {prefix}_NN suffix stays glob-active.
+    pattern = str(Path(globmod.escape(str(base))) / f"{prefix}_[0-9][0-9]*")
+    for d in globmod.glob(pattern):
+        dp = Path(d)
+        if not dp.is_dir():
+            continue
+        try:
+            seq = int(dp.name.split("_")[-1])
+        except ValueError:
+            continue
+        out.append((seq, dp))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
 class ConfigManager:
     """Config management parameterized by a DEFAULTS dict.
 
@@ -274,7 +302,9 @@ class ConfigManager:
         # Width-adaptive: the dir format is :02d but rolls to 3+ digits past 99
         # (eps_100). A fixed [0-9][0-9] glob would miss eps_100 and recompute
         # max_seq as 99, colliding the 101st+ distinct config back onto eps_100.
-        pattern = str(base / f"{prefix}_[0-9][0-9]*")
+        # Escape *base* so a glob-active char in the path (e.g. "[") matches
+        # literally; only the {prefix}_NN suffix is a glob.
+        pattern = str(Path(globmod.escape(str(base))) / f"{prefix}_[0-9][0-9]*")
         for d in sorted(globmod.glob(pattern)):
             dp = Path(d)
             try:

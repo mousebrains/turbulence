@@ -10,6 +10,7 @@ manager, and re-exports the methods as module-level functions.
 """
 
 from pathlib import Path
+from typing import Any
 
 from odas_tpw.config_base import ConfigManager
 
@@ -301,6 +302,130 @@ compute_hash = _mgr.compute_hash
 resolve_output_dir = _mgr.resolve_output_dir
 write_signature = _mgr.write_signature
 write_resolved_config = _mgr.write_resolved_config
+
+
+# ---------------------------------------------------------------------------
+# Per-stage signature inputs (relocated here from pipeline.py so the read-only
+# plot-time resolver in resolve.py can reproduce a stage's signature without
+# importing the heavy pipeline module). The pipeline imports these back.
+# ---------------------------------------------------------------------------
+
+# The section whose params are passed *positionally* to resolve_output_dir for
+# each stage. NOT always the stage name (e.g. `diss` hashes under `epsilon`,
+# every combo under `binning`/`ctd`) — mirrors the resolve_output_dir() calls
+# in pipeline.py. The discriminating detail lives in the upstream chain.
+_STAGE_SECTION: dict[str, str] = {
+    "profiles": "profiles",
+    "diss": "epsilon",
+    "chi": "chi",
+    "ctd": "ctd",
+    "profiles_binned": "binning",
+    "diss_binned": "binning",
+    "chi_binned": "binning",
+    "combo": "binning",
+    "diss_combo": "binning",
+    "chi_combo": "binning",
+    "ctd_combo": "ctd",
+}
+
+#: Stages a caller (e.g. the plot resolver) may resolve to a ``{stage}_NN`` dir.
+STAGES: frozenset[str] = frozenset(_STAGE_SECTION)
+
+
+def canonical_instruments_for_hash(instruments: dict | None) -> dict[str, Any]:
+    """Normalize set-like instrument settings before hashing."""
+    normalized: dict[str, Any] = {}
+    # Sort by str(key): instrument serials mix int (unquoted `465:`) and str keys.
+    for key, settings in sorted((instruments or {}).items(), key=lambda kv: str(kv[0])):
+        if not isinstance(settings, dict):
+            normalized[str(key)] = settings
+            continue
+        item = dict(settings)
+        excludes = item.get("exclude_shear_probes")
+        if isinstance(excludes, list):
+            item["exclude_shear_probes"] = sorted(str(probe) for probe in excludes)
+        normalized[str(key)] = item
+    return normalized
+
+
+def upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
+    """Return the full upstream parameter chain for *stage*.
+
+    Each downstream stage's ``.params_sha256_*`` signature is the hash of the
+    stage's own params plus every ancestor's params, so two runs that differ
+    only in a deep upstream knob still resolve to different output directories.
+    """
+    files_p = merge_config("files", config.get("files"))
+    gps_p = merge_config("gps", config.get("gps"))
+    hotel_p = merge_config("hotel", config.get("hotel"))
+    speed_p = merge_config("speed", config.get("speed"))
+    qc_p = merge_config("qc", config.get("qc"))
+    fp07_p = merge_config("fp07", config.get("fp07"))
+    ct_p = merge_config("ct", config.get("ct"))
+    bottom_p = merge_config("bottom", config.get("bottom"))
+    top_trim_p = merge_config("top_trim", config.get("top_trim"))
+    profiles_p = merge_config("profiles", config.get("profiles"))
+    eps_p = merge_config("epsilon", config.get("epsilon"))
+    chi_p = merge_config("chi", config.get("chi"))
+    ctd_p = merge_config("ctd", config.get("ctd"))
+    netcdf_p = merge_config("netcdf", config.get("netcdf"))
+    strat_p = merge_config("stratification", config.get("stratification"))
+    instruments_p = canonical_instruments_for_hash(config.get("instruments"))
+
+    profile_upstream = [
+        ("files", files_p),
+        ("gps", gps_p),
+        ("hotel", hotel_p),
+        ("speed", speed_p),
+        ("qc", qc_p),
+        ("fp07", fp07_p),
+        ("ct", ct_p),
+        ("bottom", bottom_p),
+        ("top_trim", top_trim_p),
+        # N2/dT/dz are injected onto the profile/diss products and gated by
+        # stratification.{enable,window}, so they must re-version those outputs.
+        ("stratification", strat_p),
+    ]
+    profile_chain = [*profile_upstream, ("profiles", profiles_p)]
+    diss_chain = [*profile_chain, ("instruments", instruments_p)]
+    chi_chain = [*diss_chain, ("epsilon", eps_p)]
+    # CTD salinity/density come from CT-aligned conductivity (depends on ct.* and
+    # the detected profiles), and the CTD product also carries the injected
+    # background N2/dT/dz — so ct, profiles, and stratification must be hashed.
+    ctd_chain = [
+        ("files", files_p),
+        ("gps", gps_p),
+        ("hotel", hotel_p),
+        ("speed", speed_p),
+        ("qc", qc_p),
+        ("ct", ct_p),
+        ("profiles", profiles_p),
+        ("stratification", strat_p),
+    ]
+
+    chains: dict[str, list[tuple[str, dict]]] = {
+        "profiles": profile_upstream,
+        "diss": diss_chain,
+        "chi": chi_chain,
+        "ctd": ctd_chain,
+        "profiles_binned": profile_chain,
+        "diss_binned": [*diss_chain, ("epsilon", eps_p)],
+        "chi_binned": [*chi_chain, ("chi", chi_p)],
+        "combo": [*profile_chain, ("netcdf", netcdf_p)],
+        "diss_combo": [*diss_chain, ("epsilon", eps_p), ("netcdf", netcdf_p)],
+        "chi_combo": [*chi_chain, ("chi", chi_p), ("netcdf", netcdf_p)],
+        "ctd_combo": [*ctd_chain, ("ctd", ctd_p), ("netcdf", netcdf_p)],
+    }
+    return chains[stage]
+
+
+def stage_signature(stage: str, config: dict) -> tuple[str, dict, list[tuple[str, dict]]]:
+    """The exact ``(section, params, upstream)`` triple the pipeline passes to
+    ``resolve_output_dir`` for *stage* — the single source of truth shared by
+    the pipeline and the plot resolver."""
+    section = _STAGE_SECTION[stage]
+    params = merge_config(section, config.get(section))
+    return section, params, upstream_for(stage, config)
 
 # Also keep _VALID_SECTIONS for any direct references
 _VALID_SECTIONS = _mgr.valid_sections
