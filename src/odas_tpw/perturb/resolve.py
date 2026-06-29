@@ -35,6 +35,17 @@ from odas_tpw.perturb import config as _cfg
 _VOLATILE_FILES_KEYS = ("output_root",)
 
 
+class StageConflict(RuntimeError):
+    """The stage directory is ambiguous w.r.t. the config (multiple matches, or
+    no match with several candidates / under ``strict``).
+
+    Distinct from ``FileNotFoundError`` (the stage simply does not exist): a
+    conflict must surface even for an *optional* stage rather than silently
+    degrading, since it means the user's data is present but doesn't agree with
+    the config.
+    """
+
+
 def _strip_volatile(canon: dict) -> dict:
     """Drop the run-environment output path from a canonical signature dict."""
     files = canon.get("files")
@@ -91,18 +102,20 @@ def stage_dir(
     - no match, exactly one ``{stage}_NN`` exists → that one, with a warning
       (the common "tweak config, re-plot" case — it cannot be a *different*
       config's data, there is only one);
-    - no match, two or more exist → ``FileNotFoundError`` listing each
-      directory's config (refuse to guess which is the caller's);
-    - ``strict=True`` → ``FileNotFoundError`` on any non-exact match.
+    - no match, two or more exist → ``StageConflict`` listing each directory's
+      config (refuse to guess which is the caller's);
+    - multiple exact matches (copied signatures) → ``StageConflict``;
+    - ``strict=True`` → ``StageConflict`` on any non-exact match.
 
-    Raises ``ValueError`` for an unknown *stage* and ``FileNotFoundError`` when
-    no ``{stage}_NN`` directory exists at all (stage disabled or never run).
-    Never creates a directory.
+    Raises ``ValueError`` for an unknown *stage*, ``FileNotFoundError`` when no
+    ``{stage}_NN`` directory exists at all (stage disabled or never run), and
+    ``StageConflict`` when the directory is ambiguous w.r.t. the config. Never
+    creates a directory.
     """
     if stage not in _cfg.STAGES:
         raise ValueError(f"unknown stage {stage!r}; known: {sorted(_cfg.STAGES)}")
     root = Path(
-        output_root or config.get("files", {}).get("output_root") or "."
+        output_root or (config.get("files") or {}).get("output_root") or "."
     ).expanduser()
     candidates = iter_stage_dirs(root, stage)
     if not candidates:
@@ -121,7 +134,7 @@ def stage_dir(
         # Should not happen with output_root-only stripping (dirs under one root
         # can't differ in output_root alone); guard against copied signatures.
         listing = "\n  ".join(_describe(d) for d in matches)
-        raise FileNotFoundError(
+        raise StageConflict(
             f"{len(matches)} {stage}_NN directories under {root} match the given "
             f"config — refusing to guess which is yours. Candidates:\n  {listing}\n"
             f"Force the newest with --latest."
@@ -139,7 +152,7 @@ def stage_dir(
 
     listing = "\n  ".join(_describe(d) for _, d in candidates)
     reason = "config drift" if strict else "and none matches the given config"
-    raise FileNotFoundError(
+    raise StageConflict(
         f"{len(candidates)} {stage}_NN directories under {root} {reason} — "
         f"refusing to guess which is yours. Candidates:\n  {listing}\n"
         f"Edit the config to match, re-run the pipeline, or force the newest "
@@ -220,10 +233,12 @@ def resolve_for_args(
                 )
             )
         except FileNotFoundError as exc:
-            if optional:
+            if optional:  # stage simply absent -> degrade gracefully
                 return None
             raise SystemExit(str(exc)) from exc
-        except (ValueError, OSError) as exc:
+        except (StageConflict, ValueError, OSError) as exc:
+            # A config conflict (ambiguous/drift) must surface even for an
+            # optional stage rather than silently dropping the user's data.
             raise SystemExit(str(exc)) from exc
     if not root:
         raise SystemExit("one of --config or --root is required")

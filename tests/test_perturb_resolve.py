@@ -58,7 +58,7 @@ class TestStageDir:
         d1.mkdir()
         sig = next(d0.glob(".params_sha256_*"))
         (d1 / sig.name).write_text(sig.read_text())
-        with pytest.raises(FileNotFoundError, match="match the given"):
+        with pytest.raises(resolve.StageConflict, match="match the given"):
             resolve.stage_dir(c, "chi_combo")
 
     def test_keeps_non_path_files_flags(self, tmp_path):
@@ -66,7 +66,7 @@ class TestStageDir:
         c_trim = _cfg(tmp_path, files={"output_root": str(tmp_path), "trim": True})
         c_notrim = _cfg(tmp_path, files={"output_root": str(tmp_path), "trim": False})
         _write_stage(tmp_path, "chi_combo", c_trim, 0)
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(resolve.StageConflict):
             resolve.stage_dir(c_notrim, "chi_combo", strict=True)
 
     def test_discriminates_configs(self, tmp_path):
@@ -94,12 +94,12 @@ class TestStageDir:
         _write_stage(tmp_path, "chi_combo", _cfg(tmp_path, top_trim={"enable": False}), 0)
         _write_stage(tmp_path, "chi_combo", _cfg(tmp_path, top_trim={"enable": True}), 1)
         other = _cfg(tmp_path, binning={"width": 7.0})  # matches neither
-        with pytest.raises(FileNotFoundError, match="refusing to guess"):
+        with pytest.raises(resolve.StageConflict, match="refusing to guess"):
             resolve.stage_dir(other, "chi_combo")
 
     def test_strict_raises_on_single_drift(self, tmp_path):
         _write_stage(tmp_path, "chi_combo", _cfg(tmp_path, top_trim={"enable": False}), 0)
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(resolve.StageConflict):
             resolve.stage_dir(_cfg(tmp_path, top_trim={"enable": True}), "chi_combo", strict=True)
 
     def test_latest_ignores_signature(self, tmp_path):
@@ -111,6 +111,20 @@ class TestStageDir:
     def test_no_dirs_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="never run"):
             resolve.stage_dir(_cfg(tmp_path), "chi_combo")
+
+    def test_glob_active_chars_in_output_root(self, tmp_path):
+        """An output_root containing glob chars (e.g. '[') must still resolve."""
+        root = tmp_path / "leg_[A]"
+        root.mkdir()
+        c = _cfg(root)
+        d = _write_stage(root, "chi_combo", c, 0)
+        assert resolve.stage_dir(c, "chi_combo") == d
+
+    def test_none_files_section(self, tmp_path):
+        """A config with files: None must not AttributeError."""
+        c = {"files": None}
+        d = _write_stage(tmp_path, "chi_combo", c, 0)
+        assert resolve.stage_dir(c, "chi_combo", output_root=tmp_path) == d
 
     def test_unknown_stage_raises(self, tmp_path):
         with pytest.raises(ValueError, match="unknown stage"):
@@ -146,6 +160,20 @@ class TestResolveForArgs:
         assert resolve.resolve_for_args(args, "chi_combo", optional=True) is None
         with pytest.raises(SystemExit):  # required (default) still aborts
             resolve.resolve_for_args(args, "chi_combo")
+
+    def test_optional_does_not_swallow_conflict(self, tmp_path):
+        """A config conflict (ambiguous/drift) must surface even for an optional
+        stage — not be masked as a silent degrade-to-None."""
+        _write_stage(tmp_path, "chi_combo", _cfg(tmp_path, top_trim={"enable": False}), 0)
+        _write_stage(tmp_path, "chi_combo", _cfg(tmp_path, top_trim={"enable": True}), 1)
+        ypath = tmp_path / "p.yaml"
+        ypath.write_text(
+            f"files: {{output_root: {tmp_path}}}\n"
+            "top_trim: {enable: true, max_depth: 99}\n"  # matches neither dir
+        )
+        args = SimpleNamespace(config=str(ypath), root=None, strict=False, latest=False)
+        with pytest.raises(SystemExit, match="refusing to guess"):
+            resolve.resolve_for_args(args, "chi_combo", optional=True)
 
     def test_latest_fallback_without_config(self, tmp_path):
         (tmp_path / "chi_combo_00").mkdir()

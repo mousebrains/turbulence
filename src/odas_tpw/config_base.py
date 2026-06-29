@@ -79,7 +79,10 @@ def iter_stage_dirs(base: str | Path, prefix: str) -> list[tuple[int, Path]]:
     """
     base = Path(base)
     out: list[tuple[int, Path]] = []
-    for d in globmod.glob(str(base / f"{prefix}_[0-9][0-9]*")):
+    # Escape the base so a glob-active char in output_root (e.g. a "[" in a path)
+    # is matched literally; only the {prefix}_NN suffix stays glob-active.
+    pattern = str(Path(globmod.escape(str(base))) / f"{prefix}_[0-9][0-9]*")
+    for d in globmod.glob(pattern):
         dp = Path(d)
         if not dp.is_dir():
             continue
@@ -299,7 +302,9 @@ class ConfigManager:
         # Width-adaptive: the dir format is :02d but rolls to 3+ digits past 99
         # (eps_100). A fixed [0-9][0-9] glob would miss eps_100 and recompute
         # max_seq as 99, colliding the 101st+ distinct config back onto eps_100.
-        pattern = str(base / f"{prefix}_[0-9][0-9]*")
+        # Escape *base* so a glob-active char in the path (e.g. "[") matches
+        # literally; only the {prefix}_NN suffix is a glob.
+        pattern = str(Path(globmod.escape(str(base))) / f"{prefix}_[0-9][0-9]*")
         for d in sorted(globmod.glob(pattern)):
             dp = Path(d)
             try:
