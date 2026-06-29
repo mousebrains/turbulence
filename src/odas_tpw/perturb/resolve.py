@@ -104,7 +104,9 @@ def stage_dir(
       config's data, there is only one);
     - no match, two or more exist → ``StageConflict`` listing each directory's
       config (refuse to guess which is the caller's);
-    - multiple exact matches (copied signatures) → ``StageConflict``;
+    - multiple *exact* matches (a concurrent same-config run that raced for a
+      sequence number, or a hand-copied signature) → the newest, with a warning
+      (identical signature ⇒ identical config and inputs ⇒ equivalent data);
     - ``strict=True`` → ``StageConflict`` on any non-exact match.
 
     Raises ``ValueError`` for an unknown *stage*, ``FileNotFoundError`` when no
@@ -131,14 +133,23 @@ def stage_dir(
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
-        # Should not happen with output_root-only stripping (dirs under one root
-        # can't differ in output_root alone); guard against copied signatures.
-        listing = "\n  ".join(_describe(d) for d in matches)
-        raise StageConflict(
-            f"{len(matches)} {stage}_NN directories under {root} match the given "
-            f"config — refusing to guess which is yours. Candidates:\n  {listing}\n"
-            f"Force the newest with --latest."
+        # Multiple dirs carry the *same* canonical signature, so they came from
+        # the same config and same inputs (output_root is stripped before
+        # comparison; nothing else here differs) — their data is equivalent.
+        # This happens when two identical-config `perturb run`s race to claim a
+        # sequence number under one output_root (one creates {stage}_00, the
+        # other loses the mkdir, advances, and writes the same signature into
+        # {stage}_01). Picking the newest is safe and keeps plotting working;
+        # erroring here would needlessly lock the user out. Warn so a genuinely
+        # surprising duplicate (e.g. a hand-copied signature) is still visible.
+        listing = ", ".join(d.name for d in matches)
+        warnings.warn(
+            f"{stage}: {len(matches)} directories under {root} share the given "
+            f"config's signature ({listing}) — same config and inputs, so using "
+            f"the newest ({matches[-1].name}).",
+            stacklevel=2,
         )
+        return matches[-1]
 
     if not strict and len(candidates) == 1:
         only = candidates[0][1]
@@ -223,8 +234,15 @@ def resolve_for_args(
     cfg_path = getattr(args, "config", None)
     root = getattr(args, "root", None)
     if cfg_path:
+        # Loading the config is separate from finding the stage dir: a
+        # missing/unreadable --config (e.g. a typo) is ALWAYS fatal and must
+        # never be mistaken for "this optional stage was not run". Only a
+        # FileNotFoundError from stage_dir (no {stage}_NN dir) degrades to None.
         try:
             config = _cfg.load_config(cfg_path)
+        except (OSError, ValueError) as exc:  # missing/unreadable/malformed
+            raise SystemExit(str(exc)) from exc
+        try:
             return str(
                 stage_dir(
                     config, stage, output_root=root,

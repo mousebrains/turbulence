@@ -49,17 +49,32 @@ class TestStageDir:
         assert resolve.stage_dir(cA, "chi_combo") == dA
         assert resolve.stage_dir(cB, "chi_combo") == dB
 
-    def test_duplicate_signature_multi_match_raises(self, tmp_path):
-        """Two dirs with the same signature (e.g. a hand-copied dir) must not
-        be silently disambiguated to the newest."""
+    def test_duplicate_signature_multi_match_uses_newest(self, tmp_path):
+        """Two dirs with the *same* signature (a concurrent same-config run that
+        raced for a sequence number, or a hand-copied signature) are config- and
+        input-identical, so their data is equivalent: resolve to the newest with
+        a warning rather than locking the user out with a StageConflict."""
         c = _cfg(tmp_path)
         d0 = _write_stage(tmp_path, "chi_combo", c, 0)
         d1 = tmp_path / "chi_combo_01"
         d1.mkdir()
         sig = next(d0.glob(".params_sha256_*"))
         (d1 / sig.name).write_text(sig.read_text())
-        with pytest.raises(resolve.StageConflict, match="match the given"):
-            resolve.stage_dir(c, "chi_combo")
+        with pytest.warns(UserWarning, match="share the given config's signature"):
+            got = resolve.stage_dir(c, "chi_combo")
+        assert got == d1  # newest of the two equivalent matches
+
+    def test_duplicate_signature_multi_match_strict_uses_newest(self, tmp_path):
+        """Even under strict the duplicates are *exact* matches (not drift), so
+        the same warn-and-pick-newest applies rather than a hard error."""
+        c = _cfg(tmp_path)
+        d0 = _write_stage(tmp_path, "chi_combo", c, 0)
+        d1 = tmp_path / "chi_combo_01"
+        d1.mkdir()
+        sig = next(d0.glob(".params_sha256_*"))
+        (d1 / sig.name).write_text(sig.read_text())
+        with pytest.warns(UserWarning, match="share the given config's signature"):
+            assert resolve.stage_dir(c, "chi_combo", strict=True) == d1
 
     def test_keeps_non_path_files_flags(self, tmp_path):
         """trim/merge are data-affecting and must still discriminate."""
@@ -173,6 +188,28 @@ class TestResolveForArgs:
         )
         args = SimpleNamespace(config=str(ypath), root=None, strict=False, latest=False)
         with pytest.raises(SystemExit, match="refusing to guess"):
+            resolve.resolve_for_args(args, "chi_combo", optional=True)
+
+    def test_missing_config_not_swallowed_by_optional(self, tmp_path):
+        """A typo'd/absent --config raises FileNotFoundError inside load_config;
+        the optional-stage degrade-to-None must NOT swallow it, or the user gets
+        a plot silently missing data with no hint their config never loaded."""
+        args = SimpleNamespace(
+            config=str(tmp_path / "does_not_exist.yaml"),
+            root=None, strict=False, latest=False,
+        )
+        with pytest.raises(SystemExit):  # required
+            resolve.resolve_for_args(args, "chi_combo")
+        with pytest.raises(SystemExit):  # optional must ALSO abort (B1)
+            resolve.resolve_for_args(args, "chi_combo", optional=True)
+
+    def test_malformed_config_not_swallowed_by_optional(self, tmp_path):
+        """A config with an unknown section raises ValueError in load_config;
+        that is always fatal too, never a silent optional degrade."""
+        ypath = tmp_path / "p.yaml"
+        ypath.write_text("not_a_real_section:\n  foo: 1\n")
+        args = SimpleNamespace(config=str(ypath), root=None, strict=False, latest=False)
+        with pytest.raises(SystemExit):
             resolve.resolve_for_args(args, "chi_combo", optional=True)
 
     def test_latest_fallback_without_config(self, tmp_path):
