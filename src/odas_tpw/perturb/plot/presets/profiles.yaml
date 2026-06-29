@@ -1,0 +1,17 @@
+# Example figure spec — binned (bin, profile) products. Copy and edit.
+#   perturb-plot figure --spec this.yaml
+source:
+  config: perturb.yaml
+
+output_dir: figs/
+
+figures:
+  - name: epsilon
+    preset: profiles
+    product: diss               # profiles | diss | chi | mixing
+    vars: [epsilonMean]
+  - name: mixing
+    preset: profiles
+    product: mixing
+    vars: [K_T, Gamma, K_rho]
+    p_max: 200

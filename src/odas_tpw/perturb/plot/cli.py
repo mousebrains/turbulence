@@ -18,10 +18,16 @@ from __future__ import annotations
 
 import argparse
 
-from odas_tpw.perturb.plot import eps_chi, profiles, scalar
+from odas_tpw.perturb.plot import eps_chi, figure, profiles, scalar
 
 # Map subcommand name -> (description, add_arguments, run).
 _SUBCOMMANDS = {
+    "figure": (
+        "Render many figures from one YAML spec (presets scalar/profiles/eps-chi), "
+        "resolving directories from a perturb config.",
+        figure.add_arguments,
+        figure.run,
+    ),
     "eps-chi": (
         "Pcolor of log10(epsilon), log10(chi) and log10(chi/epsilon) "
         "vs depth and cast number.",
