@@ -103,21 +103,28 @@ class TestCacheKeyAndMarker:
         m = pl._marker_path(tmp_path, "stem")
         m.parent.mkdir()
         m.write_text(json.dumps({"cachekey": "K", "outputs": []}))
-        assert pl._marker_is_current(m, "K", tmp_path)
-        assert not pl._marker_is_current(m, "DIFFERENT", tmp_path)
+        assert pl._marker_is_current(m, "K", set())
+        assert not pl._marker_is_current(m, "DIFFERENT", set())
 
-    def test_marker_current_requires_outputs_to_exist(self, tmp_path):
-        """A marker is a claim; the files are the truth. A recorded output that
-        was pruned/deleted forces a recompute (prune-then-readd safety)."""
-        (tmp_path / "diss_00").mkdir()
-        nc = tmp_path / "diss_00" / "a_prof001.nc"
-        nc.write_bytes(b"nc")
+    def test_marker_current_requires_outputs_present(self, tmp_path):
+        """A marker is a claim; the files are the truth. A recorded output absent
+        from the present-set forces a recompute (prune-then-readd safety)."""
         m = pl._marker_path(tmp_path, "a")
         m.parent.mkdir()
         m.write_text(json.dumps({"cachekey": "K", "outputs": ["diss_00/a_prof001.nc"]}))
-        assert pl._marker_is_current(m, "K", tmp_path)
-        nc.unlink()  # output pruned
-        assert not pl._marker_is_current(m, "K", tmp_path)
+        assert pl._marker_is_current(m, "K", {"diss_00/a_prof001.nc"})
+        assert not pl._marker_is_current(m, "K", set())  # output no longer present
+
+    def test_list_present_outputs_one_glob_per_stage(self, tmp_path):
+        """The present-set is gathered with one listing per stage dir (so the
+        per-file check is membership, not a stat per NC)."""
+        d = tmp_path / "diss_00"
+        d.mkdir()
+        (d / "a_prof001.nc").write_bytes(b"x")
+        (d / "b_prof001.nc").write_bytes(b"x")
+        (d / "ignore.txt").write_bytes(b"x")
+        present = pl._list_present_outputs({"diss": d}, tmp_path)
+        assert present == {"diss_00/a_prof001.nc", "diss_00/b_prof001.nc"}
 
     def test_stage_signature_hashes_reads_sig_files(self, tmp_path):
         d = tmp_path / "diss_00"
