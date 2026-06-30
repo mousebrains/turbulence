@@ -236,3 +236,50 @@ class TestIncrementalRun:
             nc.unlink()                               # delete a recorded output
         pl.run_pipeline(config, p_files=[src])
         assert len(calls) == 2
+
+    def test_bin_combo_skip_when_inputs_unchanged(self, tmp_path, monkeypatch):
+        """Part C end-to-end with NON-empty binned data: a second unchanged run
+        skips re-binning AND re-combining (manifest match); a changed input
+        forces both to re-run."""
+        import numpy as np
+        import xarray as xr
+
+        src = tmp_path / "VMP" / "a.p"
+        src.parent.mkdir(parents=True)
+        src.write_bytes(b"raw-data")
+
+        def fake_process(p_path, config, gps, output_dirs, **kw):
+            stem = kw["output_stem"]
+            for stage in ("profiles", "diss"):
+                xr.Dataset({"x": ("bin", np.zeros(3))}).to_netcdf(
+                    output_dirs[stage] / f"{stem}_prof001.nc"
+                )
+            return {"source": str(p_path), "profiles": ["p"], "diss": ["d"], "chi": []}
+
+        bin_calls, combo_calls = [], []
+
+        def fake_bin(*a, **k):
+            bin_calls.append(1)
+            return xr.Dataset({"v": ("bin", np.array([1.0, 2.0, 3.0]))})
+
+        def fake_make_combo(src_dir, dst, schema, **k):
+            combo_calls.append(1)
+            out = Path(dst) / "combo.nc"
+            xr.Dataset({"v": ("bin", np.array([1.0, 2.0]))}).to_netcdf(out)
+            return out
+
+        monkeypatch.setattr(pl, "process_file", fake_process)
+        monkeypatch.setattr("odas_tpw.perturb.binning.bin_by_depth", fake_bin)
+        monkeypatch.setattr("odas_tpw.perturb.binning.bin_diss", fake_bin)
+        monkeypatch.setattr("odas_tpw.perturb.combo.make_combo", fake_make_combo)
+
+        config = self._config(tmp_path)
+        pl.run_pipeline(config, p_files=[src])
+        assert len(bin_calls) == 2 and len(combo_calls) == 2   # profiles + diss
+
+        pl.run_pipeline(config, p_files=[src])                  # unchanged
+        assert len(bin_calls) == 2 and len(combo_calls) == 2   # both skipped
+
+        src.write_bytes(b"raw-data-CHANGED-longer")             # new input
+        pl.run_pipeline(config, p_files=[src])
+        assert len(bin_calls) == 4 and len(combo_calls) == 4   # rebin + recombo
