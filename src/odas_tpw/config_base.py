@@ -13,7 +13,7 @@ import hashlib
 import json
 import math
 import numbers
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from ruamel.yaml import YAML
@@ -109,6 +109,13 @@ class ConfigManager:
         serial numbers). Strict unknown-key validation is skipped for these
         sections; the caller is responsible for validating the inner
         structure where it is consumed.
+    engine_fingerprint : Callable[[], str] | None
+        Optional callable returning a hash of the *processing code* (and key
+        numeric deps). When set, its value is folded into every signature under
+        a synthetic ``_engine`` key, so a code change yields new ``{stage}_NN``
+        output dirs (forcing recompute) while unchanged code reuses them.
+        Plot-time consumers that match on *config only* strip ``_engine`` first
+        (see ``perturb.resolve``). Only the perturb pipeline sets this.
     """
 
     def __init__(
@@ -117,11 +124,13 @@ class ConfigManager:
         *,
         hash_exclude_keys: frozenset[str] = frozenset(),
         dynamic_key_sections: frozenset[str] = frozenset(),
+        engine_fingerprint: Callable[[], str] | None = None,
     ) -> None:
         self.defaults = defaults
         self.valid_sections = frozenset(defaults)
         self.hash_exclude_keys = hash_exclude_keys
         self.dynamic_key_sections = dynamic_key_sections
+        self.engine_fingerprint = engine_fingerprint
 
     # -- Load / validate ---------------------------------------------------
 
@@ -267,6 +276,12 @@ class ConfigManager:
             for up_section, up_params in upstream:
                 sections[up_section] = self._canonicalize_section(up_section, up_params)
         sections[section] = self._canonicalize_section(section, params)
+        if self.engine_fingerprint is not None:
+            # Synthetic, non-section key (added directly, NOT via
+            # _canonicalize_section, which validates real sections): folds the
+            # processing-code identity into every hash so a code change forces
+            # new output dirs. Config-only consumers strip it (perturb.resolve).
+            sections["_engine"] = {"fingerprint": self.engine_fingerprint()}
         return json.dumps(sections, sort_keys=True, separators=(",", ":"))
 
     def compute_hash(
