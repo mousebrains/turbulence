@@ -1042,6 +1042,7 @@ def process_file(
         pf = PFile(p_path)
     except Exception as exc:
         logger.error("loading %s: %s", p_path.name, exc)
+        result.setdefault("errors", []).append(f"load: {exc}")
         return result
 
     # ---- Hotel data injection ----
@@ -1228,6 +1229,7 @@ def process_file(
                 )
             except Exception as exc:
                 logger.error("CTD binning %s: %s", p_path.name, exc)
+                result.setdefault("errors", []).append(f"ctd: {exc}")
 
     if P_slow is None or not profiles:
         return result
@@ -1289,6 +1291,7 @@ def process_file(
                 }
             except Exception as exc:
                 logger.error("extracting profiles %s: %s", p_path.name, exc)
+                result.setdefault("errors", []).append(f"profiles: {exc}")
                 return result
 
     # Per-profile dissipation. Resolve via merge_config so the DEFAULTS (e.g.
@@ -1392,6 +1395,9 @@ def process_file(
                         diss_by_profile[prof_path] = out_path_str
                 except Exception as exc:
                     logger.error("diss for %s: %s", Path(prof_path).name, exc)
+                    result.setdefault("errors", []).append(
+                        f"diss {Path(prof_path).name}: {exc}"
+                    )
 
     # Per-profile chi (if enabled)
     if chi_enabled and result["diss"]:
@@ -1512,6 +1518,9 @@ def process_file(
                             result["chi"].append(str(out_path))
                     except Exception as exc:
                         logger.error("chi for %s: %s", Path(prof_path).name, exc)
+                        result.setdefault("errors", []).append(
+                            f"chi {Path(prof_path).name}: {exc}"
+                        )
                     finally:
                         if diss_ds is not None:
                             diss_ds.close()
@@ -1855,7 +1864,14 @@ def _process_file_timed(*args, cachekey: str | None = None, **kwargs) -> dict:
     result = process_file(*args, **kwargs)
     if isinstance(result, dict):
         result["elapsed_s"] = time.monotonic() - t0
-    if cachekey is not None:
+    # Only cache a CLEAN run. process_file catches and swallows real failures
+    # (PFile load, profile extraction, per-profile diss/chi, CTD binning),
+    # returning an empty/partial result with ``errors`` set. Writing a marker
+    # then would lock that incomplete output in as cache-valid until --force /
+    # an input or config change. A legitimately-empty file (no profiles found)
+    # has no ``errors`` and IS cached. The marker stays invalidated (unlinked
+    # above) so the next run retries.
+    if cachekey is not None and isinstance(result, dict) and not result.get("errors"):
         output_dirs = args[3] if len(args) > 3 else kwargs.get("output_dirs")
         output_stem = kwargs.get("output_stem")
         if output_dirs and output_stem:

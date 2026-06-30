@@ -237,6 +237,59 @@ class TestIncrementalRun:
         pl.run_pipeline(config, p_files=[src])
         assert len(calls) == 2
 
+    def test_failed_processing_is_not_cached(self, tmp_path, monkeypatch):
+        """A caught failure (process_file returns a partial result with
+        ``errors``) must NOT be cached — the next same-config run retries
+        instead of locking in incomplete science. A subsequent clean run caches."""
+        import numpy as np
+        import xarray as xr
+
+        src = tmp_path / "VMP" / "a.p"
+        src.parent.mkdir(parents=True)
+        src.write_bytes(b"raw-data")
+
+        calls: list[str] = []
+        fail = {"v": True}
+
+        def flaky_process(p_path, config, gps, output_dirs, **kw):
+            stem = kw["output_stem"]
+            calls.append(stem)
+            xr.Dataset({"x": ("bin", np.zeros(3))}).to_netcdf(
+                output_dirs["profiles"] / f"{stem}_prof001.nc"
+            )
+            result = {"source": str(p_path), "profiles": ["p"], "diss": [], "chi": []}
+            if fail["v"]:                              # simulate a caught diss failure
+                result["errors"] = ["diss boom"]
+            else:
+                xr.Dataset({"x": ("bin", np.zeros(3))}).to_netcdf(
+                    output_dirs["diss"] / f"{stem}_prof001.nc"
+                )
+                result["diss"] = ["d"]
+            return result
+
+        monkeypatch.setattr(pl, "process_file", flaky_process)
+        monkeypatch.setattr(pl, "_run_combo", _make_combo_noop)
+        monkeypatch.setattr(
+            "odas_tpw.perturb.binning.bin_by_depth", lambda *a, **k: xr.Dataset()
+        )
+        monkeypatch.setattr(
+            "odas_tpw.perturb.binning.bin_diss", lambda *a, **k: xr.Dataset()
+        )
+
+        config = self._config(tmp_path)
+        pl.run_pipeline(config, p_files=[src])        # run 1: failed -> not cached
+        assert len(calls) == 1
+        out_root = Path(config["files"]["output_root"])
+        assert not list(out_root.glob(".cache/*.json"))  # no marker for a failed run
+        pl.run_pipeline(config, p_files=[src])        # run 2: retries (no skip)
+        assert len(calls) == 2
+
+        fail["v"] = False                              # now it succeeds -> caches
+        pl.run_pipeline(config, p_files=[src])
+        assert len(calls) == 3
+        pl.run_pipeline(config, p_files=[src])         # run 4: clean result cached -> skip
+        assert len(calls) == 3
+
     def test_bin_combo_skip_when_inputs_unchanged(self, tmp_path, monkeypatch):
         """Part C end-to-end with NON-empty binned data: a second unchanged run
         skips re-binning AND re-combining (manifest match); a changed input
