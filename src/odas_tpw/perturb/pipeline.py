@@ -5,10 +5,12 @@ Reference: Code/process_P_files.m (233 lines), Code/mat2profile.m (170 lines)
 """
 
 import hashlib
+import json
 import logging
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -48,8 +50,9 @@ def _source_output_stem(path: Path, root: Path | str) -> str:
         rel = path.resolve().relative_to(root.resolve()).with_suffix("")
         parts = rel.parts
     except ValueError:
-        digest = hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()[:8]
-        parts = (path.stem, digest)
+        # File is not under root. Use parent directory name to provide likely
+        # uniqueness without relying on an absolute path that breaks cache portability.
+        parts = (path.parent.name, path.stem)
     return "__".join(_safe_stem_part(str(part)) for part in parts)
 
 
@@ -93,7 +96,9 @@ def _prune_orphan_profile_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
     return pruned
 
 
-def _write_binned_or_clear(ds: "xr.Dataset", out_dir: Path) -> None:
+def _write_binned_or_clear(
+    ds: "xr.Dataset", out_dir: Path, manifest: str | None = None
+) -> None:
     """Write *ds* to ``out_dir/binned.nc``, or remove a stale one if *ds* is empty.
 
     An empty re-run (same config but a reduced/changed input set) must not leave
@@ -101,12 +106,73 @@ def _write_binned_or_clear(ds: "xr.Dataset", out_dir: Path) -> None:
     config, not the input file set, so the same dir is reused across input sets,
     and the combo glob would otherwise republish the stale file as current data
     (#56).
+
+    *manifest* (a hash of the contributing per-file cache keys) is stored as the
+    ``_input_manifest`` attribute so a later run can skip re-binning when the
+    inputs are unchanged — keyed on content identity, NOT mtime (the data volume
+    may be exFAT, whose 2 s mtime granularity makes mtime ordering unsafe).
     """
     out = out_dir / "binned.nc"
     if ds.data_vars:
+        if manifest is not None:
+            ds = ds.assign_attrs(_input_manifest=manifest)
         ds.to_netcdf(out)
     elif out.exists():
         out.unlink()
+
+
+_MANIFEST_ATTR = "_input_manifest"
+
+
+def _inputs_manifest(
+    nc_files: "list[Path]", file_cachekeys: dict[str, str], volatile_cfg: dict | None = None
+) -> str:
+    """A content-identity hash of a bin/combo's inputs: each input file paired
+    with the per-file cache key of its source ``.p`` (or, for a binned input,
+    that file's own manifest). mtime-immune, so it is safe on exFAT."""
+    items: list[Any] = []
+    for f in sorted(nc_files):
+        m = _PROF_NC_RE.match(f.name)
+        stem = m.group("stem") if m else f.stem
+        items.append([f.name, file_cachekeys.get(stem, "?")])
+    if volatile_cfg:
+        items.append(["_volatile_cfg", volatile_cfg])
+    return hashlib.sha256(
+        json.dumps(items, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _output_is_current(nc_path: Path, manifest: str | None) -> bool:
+    """True iff *manifest* is set, *nc_path* exists, and its ``_input_manifest``
+    matches (None manifest → never current → always rebuild)."""
+    return manifest is not None and _read_manifest_attr(nc_path) == manifest
+
+
+def _read_manifest_attr(nc_path: Path) -> str | None:
+    """The ``_input_manifest`` global attribute of *nc_path*, or None."""
+    if not nc_path.exists():
+        return None
+    try:
+        import xarray as xr
+
+        with xr.open_dataset(nc_path) as ds:
+            val = ds.attrs.get(_MANIFEST_ATTR)
+            return str(val) if val is not None else None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def _stamp_manifest(nc_path: Path, manifest: str) -> None:
+    """Add the ``_input_manifest`` global attribute to an already-written NC
+    (header-only append — no data rewrite), so a combo can be skipped next run
+    when its inputs are unchanged."""
+    try:
+        import netCDF4
+
+        with netCDF4.Dataset(nc_path, "a") as nc:
+            nc.setncattr(_MANIFEST_ATTR, manifest)
+    except OSError as exc:
+        logger.warning("could not stamp manifest on %s: %s", nc_path, exc)
 
 
 def _prune_orphan_named_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
@@ -134,6 +200,123 @@ def _prune_orphan_named_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
             except OSError as exc:
                 logger.warning("could not prune %s: %s", nc.name, exc)
     return pruned
+
+
+# ---------------------------------------------------------------------------
+# Per-file processing cache (incremental re-runs)
+# ---------------------------------------------------------------------------
+# A file's outputs are skipped on re-run when nothing that could change them has
+# changed. The cache key folds: the input file's identity (size + mtime_ns of
+# the trimmed/merged .p), external inputs referenced by path (hotel/GPS files),
+# and the SIGNATURE HASHES of the output dirs the file targets — which already
+# encode config + the engine-code fingerprint (see perturb.config). Keying on
+# the signature hash, not the reusable ``{stage}_NN`` basename, prevents a stale
+# marker matching a *different* config that happens to reuse a sequence number.
+# A skip ALSO requires the recorded outputs to still exist on disk: a marker is
+# a claim, the files are the truth — so a pruned/deleted output forces recompute.
+_CACHE_DIRNAME = ".cache"
+_SIG_PREFIX = ".params_sha256_"
+
+
+def _file_fingerprint(p: Path) -> dict:
+    """Cheap content-change proxy for a file: size + nanosecond mtime.
+
+    A missing file yields ``{"missing": True}`` (no skip will ever match it, so
+    it is reprocessed — and process_file then surfaces the real error)."""
+    try:
+        st = p.stat()
+    except OSError:
+        return {"missing": True}
+    return {"size": st.st_size, "mtime_2s": int(st.st_mtime) // 2 * 2}
+
+
+def _external_input_fingerprints(config: dict, hotel_cfg: dict | None) -> dict:
+    """Fingerprint hotel/GPS files referenced *by path* in the config.
+
+    Their *contents* can change ε/χ/position while the config (and thus every
+    stage-dir hash) stays identical, so they must enter the per-file key or an
+    edited hotel/GPS file would be silently ignored on re-run.
+    """
+    out: dict[str, dict] = {}
+    gps_file = merge_config("gps", config.get("gps")).get("file")
+    for name, path in (("hotel", (hotel_cfg or {}).get("file")), ("gps", gps_file)):
+        if path:
+            fp = Path(path)
+            out[name] = _file_fingerprint(fp) if fp.exists() else {"missing": True}
+    return out
+
+
+def _stage_signature_hashes(output_dirs: dict[str, Path]) -> dict[str, str]:
+    """Each output dir's stored ``.params_sha256_<hash>`` value — the config +
+    engine identity of that stage (collision-proof, unlike its ``{stage}_NN``
+    basename)."""
+    out: dict[str, str] = {}
+    for stage, d in output_dirs.items():
+        sigs = sorted(d.glob(f"{_SIG_PREFIX}*"))
+        if sigs:
+            out[stage] = sigs[0].name[len(_SIG_PREFIX):]
+    return out
+
+
+def _file_cachekey(
+    p: Path, ext_fp: dict, stage_hashes: dict[str, str], volatile_cfg: dict | None = None
+) -> str:
+    payload: dict[str, Any] = {
+        "input": _file_fingerprint(p),
+        "external": ext_fp,
+        "stages": stage_hashes,
+    }
+    if volatile_cfg:
+        payload["volatile"] = volatile_cfg
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _marker_path(output_root: Path, output_stem: str) -> Path:
+    return output_root / _CACHE_DIRNAME / f"{output_stem}.json"
+
+
+def _outputs_for_stem(
+    output_dirs: dict[str, Path], output_stem: str, output_root: Path
+) -> list[str]:
+    """Relative paths of the NetCDFs a file produced: per-profile
+    ``{stem}_prof*.nc`` (profiles/diss/chi) and ``{stem}.nc`` (ctd)."""
+    rels: list[str] = []
+    for stage, d in output_dirs.items():
+        pattern = f"{output_stem}.nc" if stage == "ctd" else f"{output_stem}_prof*.nc"
+        rels.extend(nc.relative_to(output_root).as_posix() for nc in d.glob(pattern))
+    return sorted(rels)
+
+
+def _marker_is_current(marker: Path, cachekey: str, output_root: Path) -> bool:
+    """True iff the marker exists, its cachekey matches, AND every recorded
+    output still exists (so a pruned/deleted/foreign output forces recompute)."""
+    try:
+        data = json.loads(marker.read_text())
+    except (OSError, ValueError):
+        return False
+    if data.get("cachekey") != cachekey:
+        return False
+    outputs = data.get("outputs")
+    if not isinstance(outputs, list):
+        return False
+    return all((output_root / rel).exists() for rel in outputs)
+
+
+def _write_marker(
+    output_root: Path, output_stem: str, cachekey: str, output_dirs: dict[str, Path]
+) -> None:
+    """Atomically record a file's cache marker after a successful process_file."""
+    marker = _marker_path(output_root, output_stem)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "cachekey": cachekey,
+        "outputs": _outputs_for_stem(output_dirs, output_stem, output_root),
+    }
+    tmp = marker.with_name(f"{marker.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(payload))
+    os.replace(tmp, marker)  # atomic; concurrent workers write distinct stems
 
 
 _TIME_SCALAR_ATTRS: dict[str, dict[str, str]] = {
@@ -859,6 +1042,7 @@ def process_file(
         pf = PFile(p_path)
     except Exception as exc:
         logger.error("loading %s: %s", p_path.name, exc)
+        result.setdefault("errors", []).append(f"load: {exc}")
         return result
 
     # ---- Hotel data injection ----
@@ -1045,6 +1229,7 @@ def process_file(
                 )
             except Exception as exc:
                 logger.error("CTD binning %s: %s", p_path.name, exc)
+                result.setdefault("errors", []).append(f"ctd: {exc}")
 
     if P_slow is None or not profiles:
         return result
@@ -1106,6 +1291,7 @@ def process_file(
                 }
             except Exception as exc:
                 logger.error("extracting profiles %s: %s", p_path.name, exc)
+                result.setdefault("errors", []).append(f"profiles: {exc}")
                 return result
 
     # Per-profile dissipation. Resolve via merge_config so the DEFAULTS (e.g.
@@ -1209,6 +1395,9 @@ def process_file(
                         diss_by_profile[prof_path] = out_path_str
                 except Exception as exc:
                     logger.error("diss for %s: %s", Path(prof_path).name, exc)
+                    result.setdefault("errors", []).append(
+                        f"diss {Path(prof_path).name}: {exc}"
+                    )
 
     # Per-profile chi (if enabled)
     if chi_enabled and result["diss"]:
@@ -1329,6 +1518,9 @@ def process_file(
                             result["chi"].append(str(out_path))
                     except Exception as exc:
                         logger.error("chi for %s: %s", Path(prof_path).name, exc)
+                        result.setdefault("errors", []).append(
+                            f"chi {Path(prof_path).name}: {exc}"
+                        )
                     finally:
                         if diss_ds is not None:
                             diss_ds.close()
@@ -1634,20 +1826,60 @@ def _done_message(name: str, result: Any) -> str:
     )
 
 
-def _process_file_timed(*args, **kwargs) -> dict:
+def _process_file_timed(*args, cachekey: str | None = None, **kwargs) -> dict:
     """Run :func:`process_file`, recording its wall-clock as ``elapsed_s``.
 
     Wrapping rather than instrumenting process_file's several return points
     keeps the timing in one place. The elapsed seconds are measured inside the
     worker process, so they reflect true per-file processing time, not the
     time a file spent queued waiting for a free worker.
+
+    On success, writes the per-file cache marker (in the worker, so the real
+    outputs are on disk) when *cachekey* is supplied — keeping marker-writing
+    out of ``process_file`` itself so the mocked-``process_file`` tests are
+    unaffected.
     """
     import time
+
+    if cachekey is not None:
+        output_dirs = args[3] if len(args) > 3 else kwargs.get("output_dirs")
+        output_stem = kwargs.get("output_stem")
+        if output_dirs and output_stem:
+            output_root = Path(next(iter(output_dirs.values()))).parent
+            # Invalidate the old marker immediately. If processing is interrupted mid-write,
+            # we don't want a corrupted NetCDF to falsely validate against the old marker
+            # on a subsequent run.
+            with suppress(OSError):
+                _marker_path(output_root, output_stem).unlink(missing_ok=True)
+
+            # Unlink previous outputs for this stem so a failure doesn't leave
+            # stale NetCDFs that get silently swept up by the combo binning glob.
+            for stage, d in output_dirs.items():
+                pattern = f"{output_stem}.nc" if stage == "ctd" else f"{output_stem}_prof*.nc"
+                for nc_file in Path(d).glob(pattern):
+                    with suppress(OSError):
+                        nc_file.unlink()
 
     t0 = time.monotonic()
     result = process_file(*args, **kwargs)
     if isinstance(result, dict):
         result["elapsed_s"] = time.monotonic() - t0
+    # Only cache a CLEAN run. process_file catches and swallows real failures
+    # (PFile load, profile extraction, per-profile diss/chi, CTD binning),
+    # returning an empty/partial result with ``errors`` set. Writing a marker
+    # then would lock that incomplete output in as cache-valid until --force /
+    # an input or config change. A legitimately-empty file (no profiles found)
+    # has no ``errors`` and IS cached. The marker stays invalidated (unlinked
+    # above) so the next run retries.
+    if cachekey is not None and isinstance(result, dict) and not result.get("errors"):
+        output_dirs = args[3] if len(args) > 3 else kwargs.get("output_dirs")
+        output_stem = kwargs.get("output_stem")
+        if output_dirs and output_stem:
+            output_root = Path(next(iter(output_dirs.values()))).parent
+            try:
+                _write_marker(output_root, output_stem, cachekey, output_dirs)
+            except OSError as exc:
+                logger.warning("could not write cache marker for %s: %s", output_stem, exc)
     return result
 
 
@@ -1793,6 +2025,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
 
     # Setup output directories
     output_dirs = _setup_output_dirs(config)
+    output_root = Path(files_cfg.get("output_root", "results/"))
 
     # GPS provider
     gps_cfg = merge_config("gps", config.get("gps"))
@@ -1812,16 +2045,53 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         )
         logger.info("Loaded hotel file: %d channels", len(hotel_data.channels))
 
-    logger.info("Processing %d files (jobs=%d)...", len(p_files), jobs)
-
     def _instrument_key(p):
         return instrument_key_by_path.get(p.resolve(), p.parent.name)
 
     def _output_stem(p):
         return output_stem_by_path.get(p.resolve(), _source_output_stem(p, current_root))
 
+    # Per-file incremental cache: compute each file's cache key (input identity +
+    # external inputs + the config/engine-hashed output dirs it targets) and skip
+    # files whose marker still matches AND whose outputs still exist on disk.
+    # ``--force`` (files.force) reprocesses everything. Every file's key — skipped
+    # or not — also seeds the bin/combo manifest (``file_cachekeys``).
+    force = bool(files_cfg.get("force", False))
+    ext_fp = _external_input_fingerprints(config, hotel_cfg)
+    stage_hashes = _stage_signature_hashes(output_dirs)
+
+    # Fold in config keys that affect per-file output but are excluded from
+    # directory signature hashes (so they cause an in-place rebuild).
+    per_file_volatile: dict[str, Any] = {}
+    if "hotel" in config:
+        per_file_volatile["hotel"] = config["hotel"]
+    if config.get("ctd", {}).get("diagnostics"):
+        per_file_volatile["ctd_diagnostics"] = True
+
+    file_cachekeys: dict[str, str] = {}
+    to_process: list[tuple[Path, str]] = []
+    n_skipped = 0
+    for p in p_files:
+        stem = _output_stem(p)
+        cachekey = _file_cachekey(p, ext_fp, stage_hashes, volatile_cfg=per_file_volatile)
+        file_cachekeys[stem] = cachekey
+        if not force and _marker_is_current(
+            _marker_path(output_root, stem), cachekey, output_root
+        ):
+            n_skipped += 1
+        else:
+            to_process.append((p, cachekey))
+
+    if n_skipped:
+        logger.info(
+            "Processing %d file(s) (jobs=%d); %d up to date (skipped)",
+            len(to_process), jobs, n_skipped,
+        )
+    else:
+        logger.info("Processing %d files (jobs=%d)...", len(to_process), jobs)
+
     if jobs == 1:
-        for p_path in p_files:
+        for p_path, cachekey in to_process:
             logger.info("Processing %s...", p_path.name)
             result = _process_file_timed(
                 p_path,
@@ -1832,14 +2102,14 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 hotel_cfg=hotel_cfg,
                 instrument_key=_instrument_key(p_path),
                 output_stem=_output_stem(p_path),
+                cachekey=cachekey,
             )
             logger.info("%s", _done_message(p_path.name, result))
     else:
         # Spawn workers each get a per-pid log file inside <output_root>/logs/
         # so multi-process runs are diagnosable.  ``run_stamp`` is the parent
         # CLI's invocation timestamp so all workers share a prefix.
-        output_root_path = Path(files_cfg.get("output_root", "results/"))
-        worker_log_dir = output_root_path / "logs"
+        worker_log_dir = output_root / "logs"
         run_stamp = current_run_stamp()
         with ProcessPoolExecutor(
             max_workers=jobs,
@@ -1857,8 +2127,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                     hotel_cfg=hotel_cfg,
                     instrument_key=_instrument_key(p),
                     output_stem=_output_stem(p),
+                    cachekey=cachekey,
                 ): p
-                for p in p_files
+                for p, cachekey in to_process
             }
             for future in as_completed(futures):
                 p = futures[future]
@@ -1879,8 +2150,6 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     bin_width = binning_cfg.get("width", 1.0)
     aggregation = binning_cfg.get("aggregation", "mean")
     diagnostics = binning_cfg.get("diagnostics", False)
-
-    output_root = Path(files_cfg.get("output_root", "results/"))
 
     from odas_tpw.perturb.binning import bin_by_depth, bin_by_time, bin_chi, bin_diss
 
@@ -1952,48 +2221,62 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     # concurrently on a thread pool would over-commit (3 * jobs workers
     # competing for the same cores) and cost more than it saves.
 
+    binning_volatile = {"diagnostics": diagnostics} if diagnostics else None
+
     if prof_ncs and prof_binned_dir is not None:
-        logger.info("Binning profiles...")
-        if bin_method == "depth":
-            ds = bin_by_depth(
-                prof_ncs,
-                bin_width,
-                aggregation,
-                diagnostics,
-                log_dir=prof_binned_dir,
-                jobs=jobs,
-            )
+        manifest = _inputs_manifest(prof_ncs, file_cachekeys, volatile_cfg=binning_volatile)
+        if not force and _output_is_current(prof_binned_dir / "binned.nc", manifest):
+            logger.info("Binning profiles... up to date (skipped)")
         else:
-            ds = bin_by_time(
-                prof_ncs, bin_width, aggregation, diagnostics, log_dir=prof_binned_dir
-            )
-        _write_binned_or_clear(ds, prof_binned_dir)
+            logger.info("Binning profiles...")
+            if bin_method == "depth":
+                ds = bin_by_depth(
+                    prof_ncs,
+                    bin_width,
+                    aggregation,
+                    diagnostics,
+                    log_dir=prof_binned_dir,
+                    jobs=jobs,
+                )
+            else:
+                ds = bin_by_time(
+                    prof_ncs, bin_width, aggregation, diagnostics, log_dir=prof_binned_dir
+                )
+            _write_binned_or_clear(ds, prof_binned_dir, manifest)
 
     if diss_ncs and diss_binned_dir is not None:
-        logger.info("Binning dissipation...")
-        ds = bin_diss(
-            diss_ncs,
-            diss_width,
-            diss_agg,
-            bin_method,
-            diagnostics,
-            log_dir=diss_binned_dir,
-            jobs=jobs,
-        )
-        _write_binned_or_clear(ds, diss_binned_dir)
+        manifest = _inputs_manifest(diss_ncs, file_cachekeys, volatile_cfg=binning_volatile)
+        if not force and _output_is_current(diss_binned_dir / "binned.nc", manifest):
+            logger.info("Binning dissipation... up to date (skipped)")
+        else:
+            logger.info("Binning dissipation...")
+            ds = bin_diss(
+                diss_ncs,
+                diss_width,
+                diss_agg,
+                bin_method,
+                diagnostics,
+                log_dir=diss_binned_dir,
+                jobs=jobs,
+            )
+            _write_binned_or_clear(ds, diss_binned_dir, manifest)
 
     if chi_ncs and chi_binned_dir is not None:
-        logger.info("Binning chi...")
-        ds = bin_chi(
-            chi_ncs,
-            chi_width,
-            chi_agg,
-            bin_method,
-            diagnostics,
-            log_dir=chi_binned_dir,
-            jobs=jobs,
-        )
-        _write_binned_or_clear(ds, chi_binned_dir)
+        manifest = _inputs_manifest(chi_ncs, file_cachekeys, volatile_cfg=binning_volatile)
+        if not force and _output_is_current(chi_binned_dir / "binned.nc", manifest):
+            logger.info("Binning chi... up to date (skipped)")
+        else:
+            logger.info("Binning chi...")
+            ds = bin_chi(
+                chi_ncs,
+                chi_width,
+                chi_agg,
+                bin_method,
+                diagnostics,
+                log_dir=chi_binned_dir,
+                jobs=jobs,
+            )
+            _write_binned_or_clear(ds, chi_binned_dir, manifest)
 
     # Combo assembly
     _run_combo(
@@ -2005,6 +2288,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         config.get("netcdf", {}),
         config=config,
         bin_method=bin_method,
+        force=force,
+        file_cachekeys=file_cachekeys,
     )
 
     logger.info("Pipeline complete.")
@@ -2019,6 +2304,8 @@ def _run_combo(
     netcdf_attrs: dict,
     config: dict | None = None,
     bin_method: str = "depth",
+    force: bool = False,
+    file_cachekeys: dict[str, str] | None = None,
 ) -> None:
     """Assemble combo NetCDFs from each populated binned directory.
 
@@ -2076,10 +2363,20 @@ def _run_combo(
         if src is None or not src.exists():
             continue
         dst = _resolve_dst(stage, "binning", binning_p)
+        # Propagate the source binned.nc's input manifest: skip re-assembling
+        # the combo when its (unchanged) inputs already produced it. None when
+        # the binned dir carries no manifest (e.g. the standalone `perturb bin`
+        # path) → always rebuild, safely.
+        manifest = _read_manifest_attr(src / "binned.nc")
+        if not force and _output_is_current(dst / "combo.nc", manifest):
+            logger.info("%s up to date (skipped)", dst.name)
+            continue
         with stage_log(dst, "combo"):
             try:
                 out = func(src, dst, schema, netcdf_attrs=netcdf_attrs, method=method)
                 if out is not None:
+                    if manifest is not None:
+                        _stamp_manifest(Path(out), manifest)
                     logger.info("Wrote %s", out)
             except Exception as exc:
                 logger.error("combo %s: %s", dst.name, exc)
@@ -2087,12 +2384,22 @@ def _run_combo(
     if ctd_dir is not None and ctd_dir.exists():
         ctd_p = merge_config("ctd", config.get("ctd")) if config is not None else None
         ctd_combo_dir = _resolve_dst("ctd_combo", "ctd", ctd_p)
-        with stage_log(ctd_combo_dir, "combo"):
-            try:
-                out = make_ctd_combo(
-                    ctd_dir, ctd_combo_dir, CTD_SCHEMA, netcdf_attrs=netcdf_attrs
-                )
-                if out is not None:
-                    logger.info("Wrote %s", out)
-            except Exception as exc:
-                logger.error("ctd combo: %s", exc)
+        ctd_manifest = (
+            _inputs_manifest(sorted(ctd_dir.glob("*.nc")), file_cachekeys)
+            if file_cachekeys is not None
+            else None
+        )
+        if not force and _output_is_current(ctd_combo_dir / "combo.nc", ctd_manifest):
+            logger.info("%s up to date (skipped)", ctd_combo_dir.name)
+        else:
+            with stage_log(ctd_combo_dir, "combo"):
+                try:
+                    out = make_ctd_combo(
+                        ctd_dir, ctd_combo_dir, CTD_SCHEMA, netcdf_attrs=netcdf_attrs
+                    )
+                    if out is not None:
+                        if ctd_manifest is not None:
+                            _stamp_manifest(Path(out), ctd_manifest)
+                        logger.info("Wrote %s", out)
+                except Exception as exc:
+                    logger.error("ctd combo: %s", exc)

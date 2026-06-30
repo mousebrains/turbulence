@@ -145,6 +145,13 @@ def _cmd_run(args: argparse.Namespace) -> None:
         config.setdefault("hotel", {})["enable"] = True
         config.setdefault("hotel", {})["file"] = args.hotel_file
 
+    if getattr(args, "force", False):
+        # Redo everything: bypass the per-file processing/bin/combo cache AND
+        # re-trim (force_trim), so --force means a clean rebuild.
+        files = config.setdefault("files", {})
+        files["force"] = True
+        files["force_trim"] = True
+
     log_path = _install_logging(args, config)
     logging.getLogger(__name__).info("CLI run, log: %s", log_path)
 
@@ -238,7 +245,7 @@ def _cmd_bin(args: argparse.Namespace) -> None:
 
     # Bin profiles — binned dir resolved up front so per-input-file logs
     # (a.log, b.log, …) can be written into it via stage_log.
-    prof_dirs = sorted(globmod.glob(str(output_root / "profiles_[0-9][0-9]")))
+    prof_dirs = sorted(globmod.glob(str(output_root / "profiles_[0-9][0-9]*")))
     for prof_dir in prof_dirs:
         prof_ncs = sorted(Path(prof_dir).glob("*.nc"))
         if prof_ncs:
@@ -263,7 +270,7 @@ def _cmd_bin(args: argparse.Namespace) -> None:
                 ds.to_netcdf(prof_binned_dir / "binned.nc")
 
     # Bin diss
-    diss_dirs = sorted(globmod.glob(str(output_root / "diss_[0-9][0-9]")))
+    diss_dirs = sorted(globmod.glob(str(output_root / "diss_[0-9][0-9]*")))
     for diss_dir in diss_dirs:
         diss_ncs = sorted(Path(diss_dir).glob("*.nc"))
         if diss_ncs:
@@ -284,7 +291,7 @@ def _cmd_bin(args: argparse.Namespace) -> None:
                 ds.to_netcdf(diss_binned_dir / "binned.nc")
 
     # Bin chi
-    chi_dirs = sorted(globmod.glob(str(output_root / "chi_[0-9][0-9]")))
+    chi_dirs = sorted(globmod.glob(str(output_root / "chi_[0-9][0-9]*")))
     for chi_dir in chi_dirs:
         chi_ncs = sorted(Path(chi_dir).glob("*.nc"))
         if chi_ncs:
@@ -353,7 +360,7 @@ def _cmd_combo(args: argparse.Namespace) -> None:
         ("chi_binned", "chi_combo", CHI_SCHEMA, make_combo),
     ]
     for src_prefix, dst_stage, schema, func in targets:
-        for d in sorted(globmod.glob(str(output_root / f"{src_prefix}_[0-9][0-9]"))):
+        for d in sorted(globmod.glob(str(output_root / f"{src_prefix}_[0-9][0-9]*"))):
             out_dir = _combo_dst(dst_stage, "binning", binning_p)
             with stage_log(out_dir, "combo"):
                 out = func(d, out_dir, schema, netcdf_attrs=netcdf_attrs, method=bin_method)
@@ -361,7 +368,7 @@ def _cmd_combo(args: argparse.Namespace) -> None:
                     print(f"  Wrote {out}")
 
     ctd_p = merge_config("ctd", config.get("ctd"))
-    for d in sorted(globmod.glob(str(output_root / "ctd_[0-9][0-9]"))):
+    for d in sorted(globmod.glob(str(output_root / "ctd_[0-9][0-9]*"))):
         out_dir = _combo_dst("ctd_combo", "ctd", ctd_p)
         with stage_log(out_dir, "combo"):
             out = make_ctd_combo(d, out_dir, CTD_SCHEMA, netcdf_attrs=netcdf_attrs)
@@ -458,6 +465,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--hotel-file",
         metavar="FILE",
         help="hotel file (CSV, NetCDF, or .mat) with external telemetry",
+    )
+    p_run.add_argument(
+        "--force",
+        action="store_true",
+        help="ignore all caches: re-trim and reprocess every file, and "
+             "re-bin/re-combine, even when outputs are up to date.",
     )
 
     # trim

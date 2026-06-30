@@ -127,4 +127,38 @@ perturb run -j 1 -o results/ VMP/*.p   # serial (default)
 
 Parallelism applies to the per-file processing stage (Stage 3). Trimming, merging, binning, and combo assembly run serially.
 
+## Incremental re-runs (caching)
+
+Re-running `perturb run` with the same config skips work whose inputs are
+unchanged — each `.p` file is reprocessed only when something that could change
+its outputs has changed:
+
+- **Per-file processing** (Stage 3): a file is skipped when an up-to-date cache
+  marker (under `<output_root>/.cache/`) matches and its output NetCDFs still
+  exist. The marker key folds the input file's identity (size + mtime), the
+  hotel/GPS files referenced by path, and the **signature hash** of each output
+  dir the file targets.
+- **Bin/combo** (Stages 4–5): re-bin/re-combine is skipped when the contributing
+  per-file outputs are unchanged. This is keyed on the per-file cache keys (an
+  `_input_manifest` attribute on `binned.nc`/`combo.nc`), **not** on file mtimes
+  — so it is correct on filesystems with coarse mtime granularity (e.g. exFAT
+  external drives at 2 s).
+
+**Code-aware.** The output-dir hash includes a fingerprint of the processing
+code and key numeric dependencies (numpy/scipy/gsw/netCDF4/xarray). So editing
+the epsilon/chi/mixing code — or upgrading one of those packages — produces new
+`{stage}_NN` dirs and recomputes; it never silently reuses stale results.
+(Editing plotting/standalone code does not invalidate the cache.) Plotting still
+resolves a dir by config alone, independent of the code version that wrote it.
+
+To pin or override the fingerprint (e.g. to reuse the cache across a code change
+you know can't affect numerics, or for reproducible runs), set
+`$ODAS_TPW_ENGINE_FINGERPRINT`.
+
+```bash
+perturb run --config perturb.yaml          # incremental: skips up-to-date files
+perturb run --config perturb.yaml --force  # ignore all caches: re-trim, reprocess,
+                                            # re-bin, re-combine everything
+```
+
 See [Parallel Scaling](parallel.md) for benchmark results.

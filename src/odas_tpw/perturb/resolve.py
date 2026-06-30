@@ -56,7 +56,15 @@ class StageConflict(RuntimeError):
 
 
 def _strip_volatile(canon: dict) -> dict:
-    """Drop the run-environment output path from a canonical signature dict."""
+    """Drop signature components that must not affect *plot-time* matching.
+
+    Plotting resolves a dir by **config**, independent of the run environment
+    (``files.output_root``) and of the processing-code version (``_engine``):
+    you plot data regardless of which code wrote it. The pipeline keeps both in
+    the hash so its output dirs stay code-aware; the resolver strips them so a
+    code update doesn't stop it matching dirs an older engine produced.
+    """
+    canon.pop("_engine", None)
     files = canon.get("files")
     if isinstance(files, dict):
         for key in _VOLATILE_FILES_KEYS:

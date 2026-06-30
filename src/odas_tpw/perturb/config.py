@@ -9,6 +9,11 @@ this module defines perturb-specific DEFAULTS (17 sections), instantiates the
 manager, and re-exports the methods as module-level functions.
 """
 
+import functools
+import hashlib
+import importlib.metadata
+import os
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +30,7 @@ DEFAULTS: dict[str, dict] = {
         "output_root": "results/",
         "trim": True,
         "force_trim": False,
+        "force": False,
         "merge": False,
     },
     "gps": {
@@ -243,8 +249,11 @@ DEFAULTS: dict[str, dict] = {
     "instruments": {},
 }
 
-# Keys excluded from hashing — toggling diagnostics should not create new output dirs
-_HASH_EXCLUDE_KEYS = frozenset({"diagnostics"})
+# Keys excluded from hashing — runtime toggles that must NOT create new output
+# dirs: ``diagnostics`` (extra plots), and the cache-bypass flags ``force`` /
+# ``force_trim`` (they re-run work into the SAME dirs, so they cannot change the
+# dir identity or --force would defeat itself by recomputing into fresh dirs).
+_HASH_EXCLUDE_KEYS = frozenset({"diagnostics", "force", "force_trim"})
 
 # Sections whose inner keys are user-defined (e.g. instrument serials).
 # ConfigManager skips strict unknown-key validation for these; per-section
@@ -253,10 +262,72 @@ _DYNAMIC_KEY_SECTIONS = frozenset({"instruments"})
 
 _INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes"})
 
+# Numeric dependencies whose version can change ε/χ/N² outputs even with no
+# change to our own source — folded into the engine fingerprint so a dep
+# upgrade also invalidates cached results.
+_ENGINE_DEPS = ("numpy", "scipy", "gsw", "netCDF4", "xarray")
+# Subpackages that cannot affect processing numerics; excluded from the source
+# hash so editing plots/standalone tools doesn't invalidate cached science.
+_FINGERPRINT_EXCLUDE = ("perturb/plot/", "pyturb/")
+_ENGINE_OVERRIDE_ENV = "ODAS_TPW_ENGINE_FINGERPRINT"
+
+
+@functools.lru_cache(maxsize=1)
+def engine_fingerprint() -> str:
+    """Hash of the processing *code + key numeric deps*.
+
+    Folded into every stage signature so a change that could alter outputs
+    yields new ``{stage}_NN`` dirs (recompute) while an unchanged engine reuses
+    them — making "outputs already exist in this dir" a *safe* cache signal.
+    Covers our own ``.py`` source (excluding plot/pyturb) plus the installed
+    versions of the distribution and key numeric deps.
+
+    Override with ``$ODAS_TPW_ENGINE_FINGERPRINT`` to pin the value — to force
+    cache reuse across a code change you KNOW can't affect numerics, or for
+    deterministic tests.
+    """
+    override = os.environ.get(_ENGINE_OVERRIDE_ENV)
+    if override:
+        return override
+
+    h = hashlib.sha256()
+    for dist in ("microstructure-tpw", *_ENGINE_DEPS):
+        try:
+            version = importlib.metadata.version(dist)
+        except importlib.metadata.PackageNotFoundError:
+            version = "?"
+        h.update(f"{dist}={version}\n".encode())
+
+    pkg_root = Path(__file__).resolve().parent.parent  # .../odas_tpw
+    n_py = 0
+    for py in sorted(pkg_root.rglob("*.py")):
+        rel = py.relative_to(pkg_root).as_posix()
+        if any(rel.startswith(excl) for excl in _FINGERPRINT_EXCLUDE):
+            continue
+        try:
+            data = py.read_bytes()
+        except OSError:
+            continue
+        h.update(rel.encode())
+        h.update(b"\0")
+        h.update(hashlib.sha256(data).digest())
+        n_py += 1
+    if n_py == 0:
+        warnings.warn(
+            "engine_fingerprint: no .py source found under "
+            f"{pkg_root} (compiled/zip install?); the processing cache is keyed "
+            "on dependency versions only and will NOT detect source edits — set "
+            f"${_ENGINE_OVERRIDE_ENV} to manage cache invalidation manually.",
+            stacklevel=2,
+        )
+    return h.hexdigest()
+
+
 _mgr = ConfigManager(
     DEFAULTS,
     hash_exclude_keys=_HASH_EXCLUDE_KEYS,
     dynamic_key_sections=_DYNAMIC_KEY_SECTIONS,
+    engine_fingerprint=engine_fingerprint,
 )
 
 
