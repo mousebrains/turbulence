@@ -292,3 +292,17 @@ class TestTrimCache:
         r1.dest.unlink()  # trimmed output removed -> cache must not claim it current
         r2 = trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache)
         assert r2.action == "trimmed" and r2.dest.exists()  # re-trimmed
+
+    def test_cache_misses_when_trimmed_output_truncated(self, tmp_path):
+        """A trimmed output that exists but is the wrong size (truncated/
+        corrupted) must not be served from cache as up to date."""
+        src = _make_p_file(tmp_path / "vmp" / "f.p", n_records=3, extra_bytes=40)
+        out_dir = tmp_path / "trimmed"
+        cache = tmp_path / ".cache"
+        r1 = trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache)
+        assert r1.action == "trimmed"
+
+        with open(r1.dest, "r+b") as f:   # corrupt the trimmed output, source unchanged
+            f.truncate(10)
+        r2 = trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache)
+        assert r2.action == "trimmed" and r2.dest.stat().st_size > 10  # re-trimmed

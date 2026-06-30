@@ -113,9 +113,15 @@ def _trim_cache_lookup(
     if data.get("referenced"):
         # Complete file, unchanged — reference the original, no header read.
         return TrimResult(source, "referenced", 0, int(data.get("record_size", 0)))
-    # Previously trimmed — reuse the existing trimmed output if it's still there.
-    if dest.exists():
-        return TrimResult(dest, "skipped", 0, 0)
+    # Previously trimmed — reuse the existing trimmed output only if it is still
+    # present AND the right size. The size check preserves the original guard
+    # against a truncated/corrupted/externally-replaced trimmed output (the
+    # source fingerprint matched, but the *output* could have been disturbed).
+    try:
+        if dest.stat().st_size == data.get("dest_size"):
+            return TrimResult(dest, "skipped", 0, 0)
+    except OSError:
+        pass  # missing dest -> re-trim
     return None
 
 
@@ -131,6 +137,13 @@ def _trim_cache_store(
         "referenced": result.action == "referenced",
         "record_size": result.record_size,
     }
+    if result.action != "referenced":
+        # Record the trimmed output's size so a later run can verify it wasn't
+        # truncated/replaced before reusing it (see _trim_cache_lookup).
+        try:
+            payload["dest_size"] = dest.stat().st_size
+        except OSError:
+            return  # can't verify the output later -> don't cache it
     try:
         marker.parent.mkdir(parents=True, exist_ok=True)
         tmp = marker.with_name(f"{marker.name}.{os.getpid()}.tmp")
