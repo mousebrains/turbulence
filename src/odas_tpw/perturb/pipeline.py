@@ -10,6 +10,7 @@ import logging
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -49,8 +50,9 @@ def _source_output_stem(path: Path, root: Path | str) -> str:
         rel = path.resolve().relative_to(root.resolve()).with_suffix("")
         parts = rel.parts
     except ValueError:
-        digest = hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()[:8]
-        parts = (path.stem, digest)
+        # File is not under root. Use parent directory name to provide likely
+        # uniqueness without relying on an absolute path that breaks cache portability.
+        parts = (path.parent.name, path.stem)
     return "__".join(_safe_stem_part(str(part)) for part in parts)
 
 
@@ -122,17 +124,21 @@ def _write_binned_or_clear(
 _MANIFEST_ATTR = "_input_manifest"
 
 
-def _inputs_manifest(nc_files: "list[Path]", file_cachekeys: dict[str, str]) -> str:
+def _inputs_manifest(
+    nc_files: "list[Path]", file_cachekeys: dict[str, str], volatile_cfg: dict | None = None
+) -> str:
     """A content-identity hash of a bin/combo's inputs: each input file paired
     with the per-file cache key of its source ``.p`` (or, for a binned input,
     that file's own manifest). mtime-immune, so it is safe on exFAT."""
-    items = []
+    items: list[Any] = []
     for f in sorted(nc_files):
         m = _PROF_NC_RE.match(f.name)
         stem = m.group("stem") if m else f.stem
         items.append([f.name, file_cachekeys.get(stem, "?")])
+    if volatile_cfg:
+        items.append(["_volatile_cfg", volatile_cfg])
     return hashlib.sha256(
-        json.dumps(items, separators=(",", ":")).encode()
+        json.dumps(items, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
 
 
@@ -221,7 +227,7 @@ def _file_fingerprint(p: Path) -> dict:
         st = p.stat()
     except OSError:
         return {"missing": True}
-    return {"size": st.st_size, "mtime_ns": st.st_mtime_ns}
+    return {"size": st.st_size, "mtime_2s": int(st.st_mtime) // 2 * 2}
 
 
 def _external_input_fingerprints(config: dict, hotel_cfg: dict | None) -> dict:
@@ -252,8 +258,16 @@ def _stage_signature_hashes(output_dirs: dict[str, Path]) -> dict[str, str]:
     return out
 
 
-def _file_cachekey(p: Path, ext_fp: dict, stage_hashes: dict[str, str]) -> str:
-    payload = {"input": _file_fingerprint(p), "external": ext_fp, "stages": stage_hashes}
+def _file_cachekey(
+    p: Path, ext_fp: dict, stage_hashes: dict[str, str], volatile_cfg: dict | None = None
+) -> str:
+    payload: dict[str, Any] = {
+        "input": _file_fingerprint(p),
+        "external": ext_fp,
+        "stages": stage_hashes,
+    }
+    if volatile_cfg:
+        payload["volatile"] = volatile_cfg
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -271,7 +285,7 @@ def _outputs_for_stem(
     rels: list[str] = []
     for stage, d in output_dirs.items():
         pattern = f"{output_stem}.nc" if stage == "ctd" else f"{output_stem}_prof*.nc"
-        rels.extend(str(nc.relative_to(output_root)) for nc in d.glob(pattern))
+        rels.extend(nc.relative_to(output_root).as_posix() for nc in d.glob(pattern))
     return sorted(rels)
 
 
@@ -1818,6 +1832,25 @@ def _process_file_timed(*args, cachekey: str | None = None, **kwargs) -> dict:
     """
     import time
 
+    if cachekey is not None:
+        output_dirs = args[3] if len(args) > 3 else kwargs.get("output_dirs")
+        output_stem = kwargs.get("output_stem")
+        if output_dirs and output_stem:
+            output_root = Path(next(iter(output_dirs.values()))).parent
+            # Invalidate the old marker immediately. If processing is interrupted mid-write,
+            # we don't want a corrupted NetCDF to falsely validate against the old marker
+            # on a subsequent run.
+            with suppress(OSError):
+                _marker_path(output_root, output_stem).unlink(missing_ok=True)
+
+            # Unlink previous outputs for this stem so a failure doesn't leave
+            # stale NetCDFs that get silently swept up by the combo binning glob.
+            for stage, d in output_dirs.items():
+                pattern = f"{output_stem}.nc" if stage == "ctd" else f"{output_stem}_prof*.nc"
+                for nc_file in Path(d).glob(pattern):
+                    with suppress(OSError):
+                        nc_file.unlink()
+
     t0 = time.monotonic()
     result = process_file(*args, **kwargs)
     if isinstance(result, dict):
@@ -2010,12 +2043,21 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     force = bool(files_cfg.get("force", False))
     ext_fp = _external_input_fingerprints(config, hotel_cfg)
     stage_hashes = _stage_signature_hashes(output_dirs)
+
+    # Fold in config keys that affect per-file output but are excluded from
+    # directory signature hashes (so they cause an in-place rebuild).
+    per_file_volatile: dict[str, Any] = {}
+    if "hotel" in config:
+        per_file_volatile["hotel"] = config["hotel"]
+    if config.get("ctd", {}).get("diagnostics"):
+        per_file_volatile["ctd_diagnostics"] = True
+
     file_cachekeys: dict[str, str] = {}
     to_process: list[tuple[Path, str]] = []
     n_skipped = 0
     for p in p_files:
         stem = _output_stem(p)
-        cachekey = _file_cachekey(p, ext_fp, stage_hashes)
+        cachekey = _file_cachekey(p, ext_fp, stage_hashes, volatile_cfg=per_file_volatile)
         file_cachekeys[stem] = cachekey
         if not force and _marker_is_current(
             _marker_path(output_root, stem), cachekey, output_root
@@ -2163,8 +2205,10 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     # concurrently on a thread pool would over-commit (3 * jobs workers
     # competing for the same cores) and cost more than it saves.
 
+    binning_volatile = {"diagnostics": diagnostics} if diagnostics else None
+
     if prof_ncs and prof_binned_dir is not None:
-        manifest = _inputs_manifest(prof_ncs, file_cachekeys)
+        manifest = _inputs_manifest(prof_ncs, file_cachekeys, volatile_cfg=binning_volatile)
         if not force and _output_is_current(prof_binned_dir / "binned.nc", manifest):
             logger.info("Binning profiles... up to date (skipped)")
         else:
@@ -2185,7 +2229,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             _write_binned_or_clear(ds, prof_binned_dir, manifest)
 
     if diss_ncs and diss_binned_dir is not None:
-        manifest = _inputs_manifest(diss_ncs, file_cachekeys)
+        manifest = _inputs_manifest(diss_ncs, file_cachekeys, volatile_cfg=binning_volatile)
         if not force and _output_is_current(diss_binned_dir / "binned.nc", manifest):
             logger.info("Binning dissipation... up to date (skipped)")
         else:
@@ -2202,7 +2246,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             _write_binned_or_clear(ds, diss_binned_dir, manifest)
 
     if chi_ncs and chi_binned_dir is not None:
-        manifest = _inputs_manifest(chi_ncs, file_cachekeys)
+        manifest = _inputs_manifest(chi_ncs, file_cachekeys, volatile_cfg=binning_volatile)
         if not force and _output_is_current(chi_binned_dir / "binned.nc", manifest):
             logger.info("Binning chi... up to date (skipped)")
         else:
