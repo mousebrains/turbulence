@@ -219,10 +219,13 @@ _SIG_PREFIX = ".params_sha256_"
 
 
 def _file_fingerprint(p: Path) -> dict:
-    """Cheap content-change proxy for a file: size + nanosecond mtime.
+    """Cheap content-change proxy for a file: size + mtime binned to 2 s.
 
-    A missing file yields ``{"missing": True}`` (no skip will ever match it, so
-    it is reprocessed — and process_file then surfaces the real error)."""
+    mtime is floored to a 2 s boundary so the cache survives a copy to exFAT
+    (2 s mtime granularity); the trade-off is that a same-size edit landing in
+    the same 2 s bin is not re-detected (accepted file-identity model). A missing
+    file yields ``{"missing": True}`` (no skip will ever match it, so it is
+    reprocessed — and process_file then surfaces the real error)."""
     try:
         st = p.stat()
     except OSError:

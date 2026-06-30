@@ -79,7 +79,11 @@ def trim_destination(source: Path, output_dir: Path, root: Path | str | None = N
 # the source's path *relative to the trim dir* (portable across machines/mounts),
 # and only trusted when its physical output is still present. ``force`` / a
 # changed fingerprint re-reads the header. mtime is binned to 2 s so the cache
-# survives a copy to exFAT (2 s mtime granularity).
+# survives a copy to exFAT (2 s mtime granularity) — the same file-identity model
+# as the per-file processing cache (pipeline._file_fingerprint). A same-size
+# header-geometry change (e.g. record_size) landing in the same 2 s mtime bin is
+# therefore not re-detected without ``force``; this is field-unreachable for raw
+# acquisition files.
 
 
 def _trim_fingerprint(source: Path) -> dict | None:
