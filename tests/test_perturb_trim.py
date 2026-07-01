@@ -39,6 +39,7 @@ def _make_p_file(path, *, record_size=1024, config_size=256, n_records=3, extra_
     if extra_bytes > 0:
         data += b"\xff" * extra_bytes
 
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return path
 
@@ -242,3 +243,88 @@ class TestTrimPFile:
         src.write_bytes(struct.pack(f"<{HEADER_WORDS}H", *words) + b"\x00" * 16)
         with pytest.raises(ValueError, match="invalid record_size"):
             trim_p_file(src, tmp_path / "out")
+
+
+class TestTrimCache:
+    """The incremental trim-decision cache (skips the per-file header read on an
+    unchanged source — the cost that dominates over a slow SMB mount)."""
+
+    def test_cache_hit_skips_header_read(self, tmp_path, monkeypatch):
+        src = _make_p_file(tmp_path / "vmp" / "clean.p", n_records=3)
+        out_dir = tmp_path / "trimmed"
+        cache = tmp_path / ".cache"
+
+        r1 = trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache)
+        assert r1.action == "referenced"
+        assert list((cache / "trim").rglob("*.json"))  # marker written
+
+        # Make the header-read path explode; a cache hit must not reach it.
+        import odas_tpw.perturb.trim as trim_mod
+        def _boom(*a, **k):
+            raise AssertionError("header was read on a cache hit")
+        monkeypatch.setattr(trim_mod, "_detect_endian", _boom)
+
+        r2 = trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache)
+        assert r2.action == "referenced" and r2.dest == src   # served from cache
+
+        with pytest.raises(AssertionError):                    # --force bypasses cache
+            trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache, force=True)
+
+    def test_cache_invalidated_when_source_changes(self, tmp_path):
+        src = _make_p_file(tmp_path / "vmp" / "f.p", n_records=3)
+        out_dir = tmp_path / "trimmed"
+        cache = tmp_path / ".cache"
+        assert trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache).action == "referenced"
+
+        # Source grows an incomplete final record -> different size -> cache miss
+        # -> header re-read -> now trimmed.
+        _make_p_file(src, n_records=3, extra_bytes=40)
+        r = trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache)
+        assert r.action == "trimmed"
+
+    def test_cache_misses_when_trimmed_output_deleted(self, tmp_path):
+        src = _make_p_file(tmp_path / "vmp" / "f.p", n_records=3, extra_bytes=40)
+        out_dir = tmp_path / "trimmed"
+        cache = tmp_path / ".cache"
+        r1 = trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache)
+        assert r1.action == "trimmed" and r1.dest.exists()
+
+        r1.dest.unlink()  # trimmed output removed -> cache must not claim it current
+        r2 = trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache)
+        assert r2.action == "trimmed" and r2.dest.exists()  # re-trimmed
+
+    def test_cache_misses_when_trimmed_output_truncated(self, tmp_path):
+        """A trimmed output that exists but is the wrong size (truncated/
+        corrupted) must not be served from cache as up to date."""
+        src = _make_p_file(tmp_path / "vmp" / "f.p", n_records=3, extra_bytes=40)
+        out_dir = tmp_path / "trimmed"
+        cache = tmp_path / ".cache"
+        r1 = trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache)
+        assert r1.action == "trimmed"
+
+        with open(r1.dest, "r+b") as f:   # corrupt the trimmed output, source unchanged
+            f.truncate(10)
+        r2 = trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache)
+        assert r2.action == "trimmed" and r2.dest.stat().st_size > 10  # re-trimmed
+
+    def test_malformed_marker_is_a_miss_not_a_crash(self, tmp_path):
+        """A corrupt/hand-edited/future-schema marker must degrade to a cache
+        miss (fall back to the header read), never abort the trim."""
+        import json
+
+        src = _make_p_file(tmp_path / "vmp" / "clean.p", n_records=3)
+        out_dir = tmp_path / "trimmed"
+        cache = tmp_path / ".cache"
+        trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache)   # populate marker
+        marker = next((cache / "trim").rglob("*.json"))
+
+        data = json.loads(marker.read_text())
+        data["record_size"] = {}                                   # non-scalar -> int() would raise
+        marker.write_text(json.dumps(data))
+        assert trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache).action == "referenced"
+
+        marker.write_text("[1, 2, 3]")                             # non-dict payload
+        assert trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache).action == "referenced"
+
+        marker.write_text("{ not valid json")                      # unparseable
+        assert trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache).action == "referenced"

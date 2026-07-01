@@ -133,16 +133,28 @@ Re-running `perturb run` with the same config skips work whose inputs are
 unchanged — each `.p` file is reprocessed only when something that could change
 its outputs has changed:
 
+- **Trim** (Stage 1): an unchanged source's trim decision is reused from a
+  single `stat` (no per-file header read), keyed on the same `size + 2 s-mtime`
+  fingerprint, and trusted only while its physical output is still present.
+  Only a clean run is cached.
 - **Per-file processing** (Stage 3): a file is skipped when an up-to-date cache
   marker (under `<output_root>/.cache/`) matches and its output NetCDFs still
   exist. The marker key folds the input file's identity (size + mtime), the
   hotel/GPS files referenced by path, and the **signature hash** of each output
-  dir the file targets.
+  dir the file targets. A run that hit a caught failure is not cached (it retries
+  next run).
 - **Bin/combo** (Stages 4–5): re-bin/re-combine is skipped when the contributing
   per-file outputs are unchanged. This is keyed on the per-file cache keys (an
   `_input_manifest` attribute on `binned.nc`/`combo.nc`), **not** on file mtimes
   — so it is correct on filesystems with coarse mtime granularity (e.g. exFAT
   external drives at 2 s).
+
+**Built for slow/network mounts.** A no-op re-run touches each input once (a
+`stat`, not an `open`) and lists each output directory once (membership test, not
+a `stat` per NetCDF), so the per-run overhead is a handful of round-trips rather
+than thousands — important over an SMB mount where each round-trip is costly. On
+a 135-file campaign on an external drive, the trim re-check alone drops from
+~18 s to ~1.5 s on the second run.
 
 **Code-aware.** The output-dir hash includes a fingerprint of the processing
 code and key numeric dependencies (numpy/scipy/gsw/netCDF4/xarray). So editing

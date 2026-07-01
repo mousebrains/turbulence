@@ -8,6 +8,7 @@ Reference: Code/trim_P_files.m
 """
 
 import contextlib
+import json
 import os
 import struct
 import tempfile
@@ -67,12 +68,102 @@ def trim_destination(source: Path, output_dir: Path, root: Path | str | None = N
     return output_dir / source.name
 
 
+# ---------------------------------------------------------------------------
+# Trim decision cache (incremental re-runs / slow mounts)
+# ---------------------------------------------------------------------------
+# A re-run otherwise re-opens and header-reads EVERY source .p to decide it
+# needs no trimming — cheap locally, but minutes over an SMB/network mount where
+# each open is a round-trip. The cache records, per source, a ``size + 2 s-mtime``
+# fingerprint and whether the file was complete (referenced) or trimmed, so an
+# unchanged file is decided from a single ``stat`` with no header read. Keyed on
+# the source's path *relative to the trim dir* (portable across machines/mounts),
+# and only trusted when its physical output is still present. ``force`` / a
+# changed fingerprint re-reads the header. mtime is binned to 2 s so the cache
+# survives a copy to exFAT (2 s mtime granularity) — the same file-identity model
+# as the per-file processing cache (pipeline._file_fingerprint). A same-size
+# header-geometry change (e.g. record_size) landing in the same 2 s mtime bin is
+# therefore not re-detected without ``force``; this is field-unreachable for raw
+# acquisition files.
+
+
+def _trim_fingerprint(source: Path) -> dict | None:
+    try:
+        st = source.stat()
+    except OSError:
+        return None
+    return {"size": st.st_size, "mtime_2s": int(st.st_mtime) // 2 * 2}
+
+
+def _trim_marker(cache_dir: Path, dest: Path, output_dir: Path) -> Path:
+    """Marker path mirroring the source's relative layout (collision-free,
+    portable). *dest* is ``trim_destination(source, output_dir, root)``."""
+    try:
+        rel = dest.relative_to(output_dir).as_posix()
+    except ValueError:
+        rel = dest.name
+    return cache_dir / "trim" / f"{rel}.json"
+
+
+def _trim_cache_lookup(
+    cache_dir: Path, source: Path, dest: Path, output_dir: Path
+) -> "TrimResult | None":
+    marker = _trim_marker(cache_dir, dest, output_dir)
+    # Any unreadable/malformed marker is a cache MISS, never a hard failure: the
+    # cache only accelerates the header-read decision, so a corrupted / manually
+    # edited / future-schema-bad payload must fall through to the real trim.
+    try:
+        data = json.loads(marker.read_text())
+        if not isinstance(data, dict) or data.get("fp") != _trim_fingerprint(source):
+            return None
+        if data.get("referenced"):
+            # Complete file, unchanged — reference the original, no header read.
+            return TrimResult(source, "referenced", 0, int(data.get("record_size", 0)))
+        # Previously trimmed — reuse the existing trimmed output only if it is
+        # still present AND the right size. The size check preserves the original
+        # guard against a truncated/corrupted/externally-replaced trimmed output
+        # (the source fingerprint matched, but the *output* could have moved).
+        if dest.stat().st_size == data.get("dest_size"):
+            return TrimResult(dest, "skipped", 0, 0)
+    except (OSError, ValueError, TypeError):
+        return None
+    return None
+
+
+def _trim_cache_store(
+    cache_dir: Path, source: Path, dest: Path, output_dir: Path, result: "TrimResult"
+) -> None:
+    fp = _trim_fingerprint(source)
+    if fp is None:
+        return
+    marker = _trim_marker(cache_dir, dest, output_dir)
+    payload = {
+        "fp": fp,
+        "referenced": result.action == "referenced",
+        "record_size": result.record_size,
+    }
+    if result.action != "referenced":
+        # Record the trimmed output's size so a later run can verify it wasn't
+        # truncated/replaced before reusing it (see _trim_cache_lookup).
+        try:
+            payload["dest_size"] = dest.stat().st_size
+        except OSError:
+            return  # can't verify the output later -> don't cache it
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        tmp = marker.with_name(f"{marker.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(payload))
+        os.replace(tmp, marker)
+    except OSError:
+        pass  # caching is best-effort; never fail a trim over a marker write
+
+
 def trim_p_file(
     source: Path,
     output_dir: Path,
     root: Path | str | None = None,
     *,
     force: bool = False,
+    cache_dir: Path | None = None,
 ) -> TrimResult:
     """Trim an incomplete final record from a .p file, or reference it in place.
 
@@ -114,6 +205,19 @@ def trim_p_file(
     """
     dest = trim_destination(source, output_dir, root=root)
 
+    # Incremental skip: an unchanged source (fingerprint match) reuses last
+    # run's decision from a single stat — no per-file header read/open, which is
+    # what costs minutes over a slow mount. force_trim re-reads.
+    if not force and cache_dir is not None:
+        cached = _trim_cache_lookup(cache_dir, source, dest, output_dir)
+        if cached is not None:
+            return cached
+
+    def _finish(result: TrimResult) -> TrimResult:
+        if cache_dir is not None:
+            _trim_cache_store(cache_dir, source, dest, output_dir, result)
+        return result
+
     # Read the source header first (the same 128-byte read the 'referenced'
     # path already pays) so the skip decision is content-aware rather than
     # mtime-only. A previously-incomplete source that was later repaired (now
@@ -150,7 +254,7 @@ def trim_p_file(
         # Complete file — reference the original in place, no copy. Reached
         # also when a once-incomplete source has since been completed, so its
         # stale trimmed output is deliberately not reused.
-        return TrimResult(source, "referenced", 0, record_size)
+        return _finish(TrimResult(source, "referenced", 0, record_size))
 
     # Trim the fractional final record into the trim directory.
     n_complete = data_bytes // record_size
@@ -168,7 +272,7 @@ def trim_p_file(
         and dest.stat().st_size == trimmed_size
         and dest.stat().st_mtime_ns >= source.stat().st_mtime_ns
     ):
-        return TrimResult(dest, "skipped", 0, 0)
+        return _finish(TrimResult(dest, "skipped", 0, 0))
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     # Write to a temp file then atomically replace. If the dest resolves to the
@@ -192,4 +296,4 @@ def trim_p_file(
             os.unlink(tmp)
         raise
 
-    return TrimResult(dest, "trimmed", remainder, record_size)
+    return _finish(TrimResult(dest, "trimmed", remainder, record_size))

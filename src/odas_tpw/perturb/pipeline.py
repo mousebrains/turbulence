@@ -219,10 +219,13 @@ _SIG_PREFIX = ".params_sha256_"
 
 
 def _file_fingerprint(p: Path) -> dict:
-    """Cheap content-change proxy for a file: size + nanosecond mtime.
+    """Cheap content-change proxy for a file: size + mtime binned to 2 s.
 
-    A missing file yields ``{"missing": True}`` (no skip will ever match it, so
-    it is reprocessed — and process_file then surfaces the real error)."""
+    mtime is floored to a 2 s boundary so the cache survives a copy to exFAT
+    (2 s mtime granularity); the trade-off is that a same-size edit landing in
+    the same 2 s bin is not re-detected (accepted file-identity model). A missing
+    file yields ``{"missing": True}`` (no skip will ever match it, so it is
+    reprocessed — and process_file then surfaces the real error)."""
     try:
         st = p.stat()
     except OSError:
@@ -289,19 +292,32 @@ def _outputs_for_stem(
     return sorted(rels)
 
 
-def _marker_is_current(marker: Path, cachekey: str, output_root: Path) -> bool:
+def _list_present_outputs(output_dirs: dict[str, Path], output_root: Path) -> set[str]:
+    """All output-NetCDF relpaths currently on disk, gathered with ONE directory
+    listing per stage. The per-file output-exists check is then set membership
+    rather than a ``stat`` per NC — which on a slow/network mount (SMB) turns
+    thousands of round-trips into a handful (one ``glob`` per stage dir)."""
+    present: set[str] = set()
+    for d in output_dirs.values():
+        if d.exists():
+            present.update(nc.relative_to(output_root).as_posix() for nc in d.glob("*.nc"))
+    return present
+
+
+def _marker_is_current(marker: Path, cachekey: str, present_outputs: set[str]) -> bool:
     """True iff the marker exists, its cachekey matches, AND every recorded
-    output still exists (so a pruned/deleted/foreign output forces recompute)."""
+    output is present (membership in the pre-listed *present_outputs* set, so a
+    pruned/deleted/foreign output still forces recompute — no per-output stat)."""
     try:
         data = json.loads(marker.read_text())
     except (OSError, ValueError):
         return False
-    if data.get("cachekey") != cachekey:
-        return False
+    if not isinstance(data, dict) or data.get("cachekey") != cachekey:
+        return False  # unreadable/malformed marker -> miss, never a crash
     outputs = data.get("outputs")
     if not isinstance(outputs, list):
         return False
-    return all((output_root / rel).exists() for rel in outputs)
+    return all(rel in present_outputs for rel in outputs)
 
 
 def _write_marker(
@@ -1574,11 +1590,15 @@ def _trim_one(args: tuple):
     The first element is a :class:`~odas_tpw.perturb.trim.TrimResult` on
     success (or ``None`` with an error string on failure).
     """
-    p, trim_dir, root, force = args
+    p, trim_dir, root, force, cache_dir = args
     try:
         from odas_tpw.perturb.trim import trim_p_file
 
-        return trim_p_file(p, trim_dir, root=root, force=force), p, None
+        return (
+            trim_p_file(p, trim_dir, root=root, force=force, cache_dir=cache_dir),
+            p,
+            None,
+        )
     except Exception as exc:
         return None, p, str(exc)
 
@@ -1639,6 +1659,7 @@ def run_trim(
     files_cfg = config.get("files", {})
     output_root = Path(files_cfg.get("output_root", "results/"))
     trim_dir = output_root / "trimmed"
+    cache_dir = output_root / _CACHE_DIRNAME
     root = _configured_input_root(config)
     force = bool(files_cfg.get("force_trim", False))
 
@@ -1659,7 +1680,7 @@ def run_trim(
 
         for p in p_files:
             try:
-                result = trim_p_file(p, trim_dir, root=root, force=force)
+                result = trim_p_file(p, trim_dir, root=root, force=force, cache_dir=cache_dir)
                 trim_results.append(result)
                 logger.info("%s", _trim_log_message(result))
             except Exception as exc:
@@ -1668,7 +1689,7 @@ def run_trim(
     else:
         with ProcessPoolExecutor(max_workers=jobs) as executor:
             futures = {
-                executor.submit(_trim_one, (p, trim_dir, root, force)): p
+                executor.submit(_trim_one, (p, trim_dir, root, force, cache_dir)): p
                 for p in p_files
             }
             for future in as_completed(futures):
@@ -2068,6 +2089,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     if config.get("ctd", {}).get("diagnostics"):
         per_file_volatile["ctd_diagnostics"] = True
 
+    # One directory listing per stage up front, so each file's output-exists
+    # check is set membership instead of a stat per NetCDF (SMB-friendly).
+    present_outputs = _list_present_outputs(output_dirs, output_root)
     file_cachekeys: dict[str, str] = {}
     to_process: list[tuple[Path, str]] = []
     n_skipped = 0
@@ -2076,7 +2100,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         cachekey = _file_cachekey(p, ext_fp, stage_hashes, volatile_cfg=per_file_volatile)
         file_cachekeys[stem] = cachekey
         if not force and _marker_is_current(
-            _marker_path(output_root, stem), cachekey, output_root
+            _marker_path(output_root, stem), cachekey, present_outputs
         ):
             n_skipped += 1
         else:
