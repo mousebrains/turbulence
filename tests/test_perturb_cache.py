@@ -115,6 +115,15 @@ class TestCacheKeyAndMarker:
         assert pl._marker_is_current(m, "K", {"diss_00/a_prof001.nc"})
         assert not pl._marker_is_current(m, "K", set())  # output no longer present
 
+    def test_marker_malformed_is_miss_not_crash(self, tmp_path):
+        """A non-dict / unparseable marker degrades to a cache miss, not a crash."""
+        m = pl._marker_path(tmp_path, "s")
+        m.parent.mkdir()
+        m.write_text("[1, 2, 3]")            # valid JSON, but not an object
+        assert not pl._marker_is_current(m, "K", set())
+        m.write_text("{ not valid json")     # unparseable
+        assert not pl._marker_is_current(m, "K", set())
+
     def test_list_present_outputs_one_glob_per_stage(self, tmp_path):
         """The present-set is gathered with one listing per stage dir (so the
         per-file check is membership, not a stat per NC)."""

@@ -312,8 +312,8 @@ def _marker_is_current(marker: Path, cachekey: str, present_outputs: set[str]) -
         data = json.loads(marker.read_text())
     except (OSError, ValueError):
         return False
-    if data.get("cachekey") != cachekey:
-        return False
+    if not isinstance(data, dict) or data.get("cachekey") != cachekey:
+        return False  # unreadable/malformed marker -> miss, never a crash
     outputs = data.get("outputs")
     if not isinstance(outputs, list):
         return False

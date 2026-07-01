@@ -306,3 +306,25 @@ class TestTrimCache:
             f.truncate(10)
         r2 = trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache)
         assert r2.action == "trimmed" and r2.dest.stat().st_size > 10  # re-trimmed
+
+    def test_malformed_marker_is_a_miss_not_a_crash(self, tmp_path):
+        """A corrupt/hand-edited/future-schema marker must degrade to a cache
+        miss (fall back to the header read), never abort the trim."""
+        import json
+
+        src = _make_p_file(tmp_path / "vmp" / "clean.p", n_records=3)
+        out_dir = tmp_path / "trimmed"
+        cache = tmp_path / ".cache"
+        trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache)   # populate marker
+        marker = next((cache / "trim").rglob("*.json"))
+
+        data = json.loads(marker.read_text())
+        data["record_size"] = {}                                   # non-scalar -> int() would raise
+        marker.write_text(json.dumps(data))
+        assert trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache).action == "referenced"
+
+        marker.write_text("[1, 2, 3]")                             # non-dict payload
+        assert trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache).action == "referenced"
+
+        marker.write_text("{ not valid json")                      # unparseable
+        assert trim_p_file(src, out_dir, root=tmp_path, cache_dir=cache).action == "referenced"

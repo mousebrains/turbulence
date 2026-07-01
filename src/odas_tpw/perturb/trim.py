@@ -108,24 +108,24 @@ def _trim_cache_lookup(
     cache_dir: Path, source: Path, dest: Path, output_dir: Path
 ) -> "TrimResult | None":
     marker = _trim_marker(cache_dir, dest, output_dir)
+    # Any unreadable/malformed marker is a cache MISS, never a hard failure: the
+    # cache only accelerates the header-read decision, so a corrupted / manually
+    # edited / future-schema-bad payload must fall through to the real trim.
     try:
         data = json.loads(marker.read_text())
-    except (OSError, ValueError):
-        return None
-    if data.get("fp") != _trim_fingerprint(source):
-        return None
-    if data.get("referenced"):
-        # Complete file, unchanged — reference the original, no header read.
-        return TrimResult(source, "referenced", 0, int(data.get("record_size", 0)))
-    # Previously trimmed — reuse the existing trimmed output only if it is still
-    # present AND the right size. The size check preserves the original guard
-    # against a truncated/corrupted/externally-replaced trimmed output (the
-    # source fingerprint matched, but the *output* could have been disturbed).
-    try:
+        if not isinstance(data, dict) or data.get("fp") != _trim_fingerprint(source):
+            return None
+        if data.get("referenced"):
+            # Complete file, unchanged — reference the original, no header read.
+            return TrimResult(source, "referenced", 0, int(data.get("record_size", 0)))
+        # Previously trimmed — reuse the existing trimmed output only if it is
+        # still present AND the right size. The size check preserves the original
+        # guard against a truncated/corrupted/externally-replaced trimmed output
+        # (the source fingerprint matched, but the *output* could have moved).
         if dest.stat().st_size == data.get("dest_size"):
             return TrimResult(dest, "skipped", 0, 0)
-    except OSError:
-        pass  # missing dest -> re-trim
+    except (OSError, ValueError, TypeError):
+        return None
     return None
 
 
