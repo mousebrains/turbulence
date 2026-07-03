@@ -31,6 +31,14 @@ every code fix carries a regression test unless noted.
 | C cache integrity | `c95e6b3` | atomic per-profile diss/chi writes, stale-combo clearing |
 | E test-validity | `33d5441` | consistent MLE fixture, literal Nasmyth values, tightened synthetic-recovery windows |
 
+### Follow-up round (2026-07-03, at Pat's direction)
+| Finding | Commit | One-line |
+|---------|--------|----------|
+| `p_file.py:359` start_time +1 s vs ODAS | `795e622` | subtract recsize (default 1 s); verified vs MATLAB `_allch.nc` (offset → 7.6 µs) |
+| `netcdf_schema.py:44` bin coord pressure-labelled-depth | `abfd748` | convert P→depth in **metres** via `gsw.z_from_p` (profile lat; 45° fallback) + fix plot labels |
+| `mixing.py:515` K_rho-only ceiling | `3c0bfc3` | per-variable `K_T_max` (10 m²/s) and `Gamma_max` (5) ceilings |
+| `compare_atomix.py:282,630` AA cut + FOM plot | `8e5b3a9` | never use HP_cut as f_AA + 0.9 margin (Baltic RMSD 0.192→0.008, all 6 PASS); FOM plot axes fixed |
+
 ## Deferred — need a decision or data this session could not verify
 
 These are **not** dropped; each is documented in-code and/or here so it is not
@@ -39,13 +47,9 @@ cannot be verified without artifacts outside the repo.
 
 | Finding | Why deferred | Recommended fix |
 |---------|--------------|-----------------|
-| `chi/batchelor.py:23` — fixed `kappa_T` biases chi ~−6.5% / epsilon_T ~−12.6% in warm water | Threading per-window `kappa_T(T,S,P)` touches ~13 sites in the chi core and changes **every** published chi/epsilon_T value | Implement the T-dependent kappa_T and regenerate chi products (bias documented in `chi_mathematics.md` §11 and at the constant) |
-| `processing/mixing.py:515` — K_rho ceiling is one-sided; K_T/Gamma unbounded in the same windows | Choosing plausibility ceilings for K_T and Gamma is a domain judgement (what Γ / K_T is "implausible"?) | Add `K_T_max` / a Γ sanity bound, or mask K_T/Gamma at the K_rho-masked windows — needs your thresholds |
-| `perturb/netcdf_schema.py:44` — `bin` coord holds pressure (dbar) but is labelled depth/m | Which fix is correct depends on whether a true-depth var or `P_mean` was binned, and it changes a **published CF coordinate**; two valid resolutions | Relabel to `dbar`/`sea_water_pressure` (match rsi) **or** convert P→depth before binning; then fix combo geospatial attrs + plot axis labels |
-| `rsi/p_file.py:359` — `start_time` is +1 s vs the ODAS recsize convention | Shifts **every** absolute timestamp (GPS matching, merges); I could not confidently confirm the recsize source/value this session | Subtract recsize (default 1.0 s) after `parse_config`; pin `start_time` against the MATLAB `_allch.nc` in a test |
+| `chi/batchelor.py:23` — fixed `kappa_T` biases chi **~−6.5% (too low)** / epsilon_T ~−12.6% in warm water | Threading per-window `kappa_T(T,S,P)` touches ~13 sites in the chi core and changes **every** published chi/epsilon_T value | Implement the T-dependent kappa_T and regenerate chi products (bias documented in `chi_mathematics.md` §11 and at the constant). **The one remaining physics item.** |
 | Zero-input residual of `pipeline.py:2401` — stale `binned.nc` persists when input NCs shrink to exactly zero | Clearing needs the binned dirs resolved unconditionally (a dir-creation side effect); rare edge case | Resolve the binned dir even when the NC list is empty and clear its `binned.nc` |
-| `test_pipeline_vs_matlab.py:421`, `test_matlab_epsilon.py:218`, `test_matlab_chi.py:228` — accuracy gates too loose | These skip in CI (VMP/ and AtomixData are gitignored); tightening blind could assert an accuracy the code misses on real data | With the reference data present: tighten to ~0.05–0.1 decades, add a signed-bias assert, restrict chi to `F ≤ f_AA` |
-| `scripts/compare_atomix.py:282,630` — AA-cut fallback truncates integration; FOM plot mixes two statistics | Analysis **script**, not published-product code; lower priority | Use `0.9·f_AA` (not `HP_cut`) for the AA limit; plot the Lueck FM vs the package FM on separate axes |
+| `test_pipeline_vs_matlab.py:421`, `test_matlab_epsilon.py:218`, `test_matlab_chi.py:228` — accuracy gates too loose | These skip in CI (VMP/ and AtomixData stay gitignored — too large for GitHub) | With the reference data present locally: tighten to ~0.05–0.1 decades, add a signed-bias assert, restrict chi to `F ≤ f_AA` |
 | `rsi/dissipation.py:265` — perturb epsilon carries no ATOMIX spectral-fit QC by default | Behaviour/policy: adding an FM cut changes published epsilon | **Documented** (config `epsilon.fom_max` comment); decide whether to default an FM cut |
 
 ## Notes
