@@ -135,21 +135,21 @@ def test_make_norm_reversed_clim_errors_on_linear_var():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("product,var", [
-    ("profiles", "T1"), ("diss", "epsilonMean"), ("chi", "chiMean"), ("mixing", "K_T"),
+@pytest.mark.parametrize("cmd,var", [
+    ("profiles", "T1"), ("epsilon", "epsilonMean"), ("chi", "chiMean"), ("mixing", "K_T"),
 ])
-def test_render_each_product(tmp_path: Path, product, var):
+def test_render_each_product(tmp_path: Path, cmd, var):
     _build_all_products(tmp_path)
-    rc = _run(["profiles", "--root", str(tmp_path), "--product", product,
+    rc = _run([cmd, "--root", str(tmp_path),
                "--out-dir", str(tmp_path), "--name", "t", "--xaxis", "time", "--var", var])
     assert rc == 0
-    assert (tmp_path / f"{product}_t.png").exists()
+    assert (tmp_path / f"{cmd}_t.png").exists()  # file stem follows the subcommand
 
 
 def test_default_vars_and_latitude_axis(tmp_path: Path):
     _build_all_products(tmp_path)
     # mixing defaults to K_T/Gamma/K_rho; latitude x-axis.
-    rc = _run(["profiles", "--root", str(tmp_path), "--product", "mixing",
+    rc = _run(["mixing", "--root", str(tmp_path),
                "--out-dir", str(tmp_path), "--name", "m", "--xaxis", "latitude"])
     assert rc == 0
     assert (tmp_path / "mixing_m.png").exists()
@@ -159,7 +159,7 @@ def test_profiles_var_on_1d_var_is_graceful(tmp_path: Path):
     """`--var lat` (a 1-D profile-only var) must be treated as missing with a
     clear message, not crash on transpose('bin','profile') (M-15)."""
     _build_all_products(tmp_path)
-    rc = _run(["profiles", "--root", str(tmp_path), "--product", "profiles",
+    rc = _run(["profiles", "--root", str(tmp_path),
                "--out-dir", str(tmp_path), "--name", "x", "--var", "lat"])
     assert rc == 0                                   # graceful skip, no traceback
     assert not (tmp_path / "profiles_x.png").exists()  # no panel built
@@ -172,24 +172,23 @@ def test_profile_window_skips_when_empty(tmp_path: Path):
         "sections:\n  - name: future\n    start: '2099-01-01T00:00:00Z'\n"
         "    xaxis: {method: time}\n"
     )
-    rc = _run(["profiles", "--root", str(tmp_path), "--product", "diss",
+    rc = _run(["epsilon", "--root", str(tmp_path),
                "--sections", str(cfg), "--out-dir", str(tmp_path)])
     assert rc == 0
-    assert not (tmp_path / "diss_future.png").exists()
+    assert not (tmp_path / "epsilon_future.png").exists()
 
 
 def test_missing_default_vars_errors(tmp_path: Path):
     # A diss combo with none of the default vars -> clear error.
     _write_product(tmp_path, "diss_combo", {"speed": (np.ones((10, 6)), {"units": "m/s"})})
     with pytest.raises(SystemExit):
-        _run(["profiles", "--root", str(tmp_path), "--product", "diss",
-              "--out-dir", str(tmp_path)])
+        _run(["epsilon", "--root", str(tmp_path), "--out-dir", str(tmp_path)])
 
 
 def test_log_clim_nonpositive_errors(tmp_path: Path):
     _build_all_products(tmp_path)
     with pytest.raises(SystemExit):
-        _run(["profiles", "--root", str(tmp_path), "--product", "diss",
+        _run(["epsilon", "--root", str(tmp_path),
               "--out-dir", str(tmp_path), "--var", "epsilonMean",
               "--clim", "epsilonMean", "-1", "1"])  # MIN <= 0 on a log var
 
@@ -235,8 +234,8 @@ def test_plot_columns_clusters_on_original_x():
 
 def test_clim_and_no_qc(tmp_path: Path):
     _build_all_products(tmp_path)
-    rc = _run(["profiles", "--root", str(tmp_path), "--product", "diss", "--no-qc",
+    rc = _run(["epsilon", "--root", str(tmp_path), "--no-qc",
                "--out-dir", str(tmp_path), "--name", "c", "--var", "epsilonMean",
                "--clim", "epsilonMean", "1e-9", "1e-5"])
     assert rc == 0
-    assert (tmp_path / "diss_c.png").exists()
+    assert (tmp_path / "epsilon_c.png").exists()

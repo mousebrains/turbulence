@@ -9,10 +9,17 @@ perturb-plot <subcommand> [options]
 
 | Subcommand | Description |
 |------------|-------------|
-| `figure`   | Render many figures from one YAML spec (presets `scalar`/`profiles`/`eps-chi`), resolving directories from a perturb config. |
+| `figure`   | Render many figures from one YAML spec (presets `scalar`/`profiles`/`epsilon`/`chi`/`mixing`/`eps-chi`), resolving directories from a perturb config. |
 | `eps-chi`  | Pcolor of log10(epsilon), log10(chi), log10(chi/epsilon) vs depth and cast number (reads `diss_combo`/`chi_combo`). |
 | `scalar`   | Depth-vs-x scalar sections (T / S / density / ...) from the CTD combo, with selectable x-axis. |
-| `profiles` | Depth-vs-x sections from the binned `(bin, profile)` products (`--product profiles/diss/chi/mixing`), one column per cast. |
+| `profiles` | Depth-vs-x sections of the binned slow channels (`T1`/`T2`/`N2`/`dTdz`) from `combo_NN`, one column per cast. |
+| `epsilon`  | Depth-vs-x sections of binned epsilon (`epsilonMean`) from `diss_combo_NN`. |
+| `chi`      | Depth-vs-x sections of binned chi (`chiMean`) from `chi_combo_NN`. |
+| `mixing`   | Depth-vs-x sections of binned mixing (`K_T`/`Gamma`/`K_rho`) from `chi_combo_NN`. |
+
+`profiles`, `epsilon`, `chi`, and `mixing` share one engine (they differ only in
+which `(bin, profile)` product and default variables they read), so every
+section / x-axis / color / QC option below applies identically to all four.
 
 Each subcommand finds its input directory either by **`--config perturb.yaml`**
 (the directory whose stored config-hash signature matches that config) or, with
@@ -25,7 +32,7 @@ forces the error, `--latest` forces the newest.
 
 One YAML lists figures, each naming a **preset** (the subcommands above) plus
 that subcommand's own options; the driver compiles each entry into the chosen
-subcommand and runs it (every kernel and behaviour is reused). Output is either
+subcommand and runs it (every kernel and behavior is reused). Output is either
 one PNG tree (`output_dir`, one subdirectory per figure) **or** one combined
 multipage PDF (`output_pdf`, one page per figure the preset produces).
 
@@ -39,19 +46,20 @@ dpi: 150                         # optional default for any figure without its o
 sections:                        # optional; file ref or an inline list
   file: sections.yaml
 figures:
-  - {name: ts,       preset: scalar,   vars: [JAC_T, SP, sigma0], depth_max: 150,
+  - {name: ts,       preset: scalar,  vars: [JAC_T, SP, sigma0], depth_max: 150,
      figsize: [11, 9], title: "T/S overview", dpi: 200}
-  - {name: mixing,   preset: profiles, product: mixing, vars: [K_T, Gamma, K_rho]}
-  - {name: overview, preset: eps-chi,  gap_seconds: 600}
+  - {name: mixing,   preset: mixing,  vars: [K_T, Gamma, K_rho]}
+  - {name: overview, preset: eps-chi, gap_seconds: 600}
 ```
 
 - A figure's keys are the chosen preset's options (`vars` is sugar for repeated
-  `--var`; `clim` is a `{VAR: [min, max]}` map). `section` selects from the
-  `sections` block by name, a list, or `"*"` (all). `eps-chi` has no x-axis, so
-  `section`/`vars`/`clim` are rejected for it.
+  `--var`; `clim` is a `{VAR: [min, max]}` map). Each binned product is its own
+  preset (`profiles`/`epsilon`/`chi`/`mixing`) — there is no `product:` key.
+  `section` selects from the `sections` block by name, a list, or `"*"` (all).
+  `eps-chi` has no x-axis, so `section`/`vars`/`clim` are rejected for it.
 - **Output controls** every preset accepts: `figsize: [w, h]` (inches), `title`,
   and `dpi` (raster resolution; the top-level `dpi` is the default, a figure's
-  own `dpi` wins). `title` replaces the auto suptitle for `scalar`/`profiles`;
+  own `dpi` wins). `title` replaces the auto suptitle for the section presets;
   for `eps-chi` it sets the title *prefix* (the spectrum/method/QC summary is
   still appended). Set exactly one of top-level `output_dir` / `output_pdf`.
 - Values are validated exactly as the CLI would parse them. Boolean keys take
@@ -59,12 +67,21 @@ figures:
   `figsize: [w, h]` or `point: [lat, lon]` must be a list of that exact length.
 - `--select NAME` renders only the named figure(s); `--strict`/`--latest` pass
   through to config resolution.
+- **Compare runs without editing the spec.** The command line overrides the
+  spec's `source` and output destination: `--config PERTURB.YAML` (or `--root
+  DIR`) re-points the whole spec at another perturb run, and `--output-dir DIR`
+  / `--output-pdf PDF` redirect where the figures land. `--config`/`--root` are
+  mutually exclusive, as are `--output-dir`/`--output-pdf`.
 - `perturb-plot figure --list-presets` and `--dump-preset NAME` print copyable
   example specs.
 
 ```bash
 perturb-plot figure --spec figure.yaml
 perturb-plot figure --dump-preset scalar > my_figure.yaml   # copy and edit
+
+# Same spec, two perturb runs, side-by-side outputs:
+perturb-plot figure --spec figure.yaml --config perturb.1.yaml --output-dir figs/run1
+perturb-plot figure --spec figure.yaml --config perturb.2.yaml --output-dir figs/run2
 ```
 
 ---
@@ -72,7 +89,7 @@ perturb-plot figure --dump-preset scalar > my_figure.yaml   # copy and edit
 ## `perturb-plot scalar`
 
 Renders depth (y, inverted) against a chosen x-axis with a CTD scalar in
-colour, from the CTD trajectory product `ctd_combo_NN/combo.nc`.
+color, from the CTD trajectory product `ctd_combo_NN/combo.nc`.
 
 By default the figures are shown on screen. They are written to PNG files
 instead when `--out-dir` is given, or when no interactive display is available
@@ -82,7 +99,7 @@ case they go to `--root`.
 That product is a **continuous down/up sawtooth** on a `time` axis (the full
 file, both cast directions, not profile-segmented). The section is built by
 binning the scattered `(x, depth, value)` samples onto a regular grid and
-**averaging each cell** — empty cells stay blank (light grey). Nothing is
+**averaging each cell** — empty cells stay blank (light gray). Nothing is
 interpolated across unsampled gaps, so the figure never paints values into
 water the vehicle did not sample.
 
@@ -90,7 +107,7 @@ water the vehicle did not sample.
 
 A **section** is only a way of *chopping the trajectory and choosing the
 x-axis*: a name, an optional UTC time window, and an `xaxis` method with its
-parameters. *Rendering* choices — which variables, depth/x bin sizes, colour
+parameters. *Rendering* choices — which variables, depth/x bin sizes, color
 limits — are separate CLI flags that apply to every section in the run.
 
 Provide sections either from a YAML file (`--sections`) or as a single ad-hoc
@@ -152,11 +169,11 @@ pipeline configuration and is not validated against it.
 | `--select NAME` | Plot only the named section(s) from `--sections`, by their `name:` in the YAML (repeatable, or comma-separated). Default: every section. An unknown name is an error. |
 | `--out-dir DIR` | Write `scalar_<name>.png` here instead of showing on screen. Omit to display interactively (figures fall back to `--root` when no display is available). |
 | `--var NAME` | Scalar variable to panel (repeatable). Default: `JAC_T`, `SP`, `sigma0`, plus `DO`/`Chlorophyll`/`Turbidity` when present. |
-| `--z-bin M` | Depth bin width in metres (default 1.0). |
+| `--z-bin M` | Depth bin width in meters (default 1.0). |
 | `--x-bin U` | x bin width in x-axis units (default: ~300 columns). |
 | `--depth-max M` | Clip the depth axis at this value. |
-| `--vmin` / `--vmax` | Colour-scale limits. Apply **only with a single `--var`** (error otherwise); for multiple variables use `--clim`. Default: inner 1/99 percentile. |
-| `--clim VAR MIN MAX` | Per-variable colour limits (repeatable), e.g. `--clim JAC_T 18 28 --clim SP 34.5 34.9`. Wins over `--vmin`/`--vmax` for that variable. |
+| `--vmin` / `--vmax` | Color-scale limits. Apply **only with a single `--var`** (error otherwise); for multiple variables use `--clim`. Default: inner 1/99 percentile. |
+| `--clim VAR MIN MAX` | Per-variable color limits (repeatable), e.g. `--clim JAC_T 18 28 --clim SP 34.5 34.9`. Wins over `--vmin`/`--vmax` for that variable. |
 | `--xaxis METHOD` | X-axis method. Without `--sections`, builds one ad-hoc section (default `time`). With `--sections`, an explicit `--xaxis` **overrides every section's x-axis** (keeping each section's name + window); spatial methods then take `--point`/`--waypoints`/`--units` from the CLI. |
 | `--start` / `--stop` | Ad-hoc UTC window. |
 | `--point LAT LON` | Reference point for ad-hoc `distance_from_point`. |
@@ -164,8 +181,8 @@ pipeline configuration and is not validated against it.
 | `--units {m,km,nm}` | Distance units for spatial x-axes (default `km`). |
 
 Default density panel is `sigma0` (potential density **anomaly**); in-situ
-density is available with `--var rho` (stored and labelled as in-situ density
-− 1000 kg/m³). Colour limits are the
+density is available with `--var rho` (stored and labeled as in-situ density
+− 1000 kg/m³). Color limits are the
 inner 1/99 percentile (sign-aware, so a near-surface negative `sigma0` is not
 clipped). The salinity (`SP`) and density (`sigma0`) colorbars run min-at-top
 to max-at-bottom, mirroring the depth axis (both increase with depth).
@@ -189,7 +206,7 @@ perturb-plot scalar --root RESULTS --sections sections.yaml \
 
 ---
 
-## `perturb-plot profiles`
+## `perturb-plot profiles` / `epsilon` / `chi` / `mixing`
 
 Depth-vs-x sections from the binned **`(bin, profile)`** products — one column
 per cast. Unlike `scalar` (which grids a continuous trajectory), these products
@@ -198,30 +215,31 @@ profile is a single column placed at its x-position. Columns are sorted by x
 and drawn one mesh per x-cluster, leaving **blank gaps** where sampling is
 sparse (never stretched across unsampled water/time).
 
-`--product` selects the product (and its default variables):
+These four subcommands share one engine, one per product (and its default
+variables):
 
-| `--product` | Reads | Default variables | Scale |
-|-------------|-------|-------------------|-------|
-| `profiles` (default) | `combo_NN` | `T1`, `T2`, `N2`, `dTdz` | T linear, N2 log, dTdz diverging |
-| `diss` | `diss_combo_NN` | `epsilonMean` | log |
-| `chi` | `chi_combo_NN` | `chiMean` | log |
-| `mixing` | `chi_combo_NN` | `K_T`, `Gamma`, `K_rho` | log |
+| Subcommand | Reads | Default variables | Scale |
+|------------|-------|-------------------|-------|
+| `profiles` | `combo_NN` | `T1`, `T2`, `N2`, `dTdz` | T linear, N2 log, dTdz diverging |
+| `epsilon`  | `diss_combo_NN` | `epsilonMean` | log |
+| `chi`      | `chi_combo_NN` | `chiMean` | log |
+| `mixing`   | `chi_combo_NN` | `K_T`, `Gamma`, `K_rho` | log |
 
 Any combo variable can be panelled with `--var` (e.g. `--var e_1 --var e_2`).
 The section / `--sections` / `--select` / `--xaxis`-override / `--clim` /
-display options are identical to `scalar`. Additional options:
+display options are identical to `scalar`. Additional options (all four
+subcommands):
 
 | Flag | Description |
 |------|-------------|
-| `--product NAME` | Which `(bin, profile)` product to plot (default `profiles`). |
-| `--p-max DBAR` | Clip the pressure axis at this value. |
+| `--p-max M` | Clip the depth axis at this value [m]. |
 | `--gap-factor N` | Split casts into clusters when the x-gap exceeds N× the median cast spacing (default 4). |
 | `--apply-qc` / `--no-qc` | NaN cells flagged by the product's `qc_drop_*` field (default on). |
 
-The vertical axis is **pressure (dbar)** — the binned products' `bin` coordinate
-is built from the profile pressure `P`, so it is pressure, not depth (the
-product's `bin:units="m"` attribute is a known mislabel, independent of this
-plot). Dissipation/chi/diffusivity/`N2` panels use a log scale; `dTdz` and
+The vertical axis is **depth (m)** — the binned products' `bin` coordinate is
+converted to depth at write time via `gsw.z_from_p` (using each profile's own
+latitude, or a mid-latitude default when absent), so `bin:units="m"` is correct.
+Dissipation/chi/diffusivity/`N2` panels use a log scale; `dTdz` and
 inclinometers are diverging; temperatures are linear.
 
 ### Diagnostic pseudo-variables
@@ -239,7 +257,7 @@ product — it lives in the raw fast channels of the per-profile files
 These are computed **at plot time**: each cast is matched to its raw file by
 `stime`, the channel is high-pass filtered and despiked exactly as the epsilon
 path does (`--hp-cut`, `--despike-thresh`, `--despike-smooth`), and the
-time-variance is taken in each pressure bin (log-scaled). They are
+time-variance is taken in each depth bin (log-scaled). They are
 **contamination / activity diagnostics, not turbulence quantities** — `Ax`/`Ay`
 are raw piezo *counts* (instrument-relative), and shear variance is related to
 but not equal to ε. Reading the raw files makes these panels slower than the
@@ -247,7 +265,7 @@ stored variables; restrict the section window to keep it quick.
 
 ```bash
 # Epsilon beside shear/vibration/T-gradient variance, one cluster
-perturb-plot profiles --root RESULTS --product diss \
+perturb-plot epsilon --root RESULTS \
     --start 2025-02-04T00:00:00Z --stop 2025-02-06T00:00:00Z \
     --var epsilonMean --var sh1_var --var Ax_var --var T1_dT1_var
 ```
@@ -256,12 +274,12 @@ perturb-plot profiles --root RESULTS --product diss \
 
 ```bash
 # Epsilon vs cast/time, on screen
-perturb-plot profiles --root RESULTS --product diss
+perturb-plot epsilon --root RESULTS
 
 # Mixing (K_T, Gamma, K_rho) along a latitude transect, written to PNGs
-perturb-plot profiles --root RESULTS --product mixing --xaxis latitude --out-dir figs/
+perturb-plot mixing --root RESULTS --xaxis latitude --out-dir figs/
 
-# Chi by signed distance, top 150 dbar, custom colour limits
-perturb-plot profiles --root RESULTS --product chi --xaxis signed_distance \
+# Chi by signed distance, top 150 m, custom color limits
+perturb-plot chi --root RESULTS --xaxis signed_distance \
     --p-max 150 --clim chiMean 1e-10 1e-6
 ```

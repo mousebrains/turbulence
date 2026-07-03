@@ -1,10 +1,12 @@
 # Jun-2026, Claude and Pat Welch, pat@mousebrains.com
-"""``perturb-plot profiles`` — depth-vs-x sections from binned (bin, profile) combos.
+"""Depth-vs-x sections from binned (bin, profile) combos.
 
-One engine for every per-profile product, selected by ``--product``:
+One engine drives four ``perturb-plot`` subcommands, each a :class:`ProductView`
+bound to one product (the CLI dispatcher and the ``figure`` driver's presets
+share these views):
 
 * ``profiles`` -> ``combo_NN`` (binned slow channels: T1/T2, N2, dT/dz, ...)
-* ``diss``     -> ``diss_combo_NN`` (epsilonMean / e_1 / e_2)
+* ``epsilon``  -> ``diss_combo_NN`` (epsilonMean / e_1 / e_2)
 * ``chi``      -> ``chi_combo_NN`` (chiMean / chi_1 / chi_2)
 * ``mixing``   -> ``chi_combo_NN`` (K_T / Gamma / K_rho)
 
@@ -15,11 +17,12 @@ via the shared :mod:`xaxis` kernel; columns are sorted by x and drawn one mesh
 per x-cluster with blank gaps (:func:`layout.plot_columns`), so sparse/irregular
 sampling stays honest rather than being stretched across unsampled water.
 
-Vertical axis note: the binned products' ``bin`` coordinate is built from the
-profile pressure ``P`` (dbar), so it is **pressure**, labelled here as such (the
-product's ``bin:units="m"`` attribute is a known mislabel, separate from this
-plot).  Section parsing, ``--select``/``--xaxis`` override, ``--clim``, and
-display behaviour are shared with ``scalar`` via :mod:`sections`.
+Vertical axis note: the binned products' ``bin`` coordinate is **depth in
+meters** — profiles binned on pressure ``P`` are converted to depth at write
+time via ``gsw.z_from_p`` (:mod:`binning`), so ``bin:units="m"`` is correct and
+the y-axis reads ``Depth (m)``.  Section parsing, ``--select``/``--xaxis``
+override, ``--clim``, and display behavior are shared with ``scalar`` via
+:mod:`sections`.
 """
 
 from __future__ import annotations
@@ -62,13 +65,14 @@ class _Product:
     dir_prefix: str          # latest_stage_dir prefix (combo / diss_combo / ...)
     default_vars: tuple[str, ...]
     qc_var: str | None       # companion qc_drop_* field, NaN'd when --apply-qc
+    label: str               # user-facing name (subcommand / title / file stem)
 
 
 PRODUCTS: dict[str, _Product] = {
-    "profiles": _Product("combo", ("T1", "T2", "N2", "dTdz"), None),
-    "diss": _Product("diss_combo", ("epsilonMean",), "qc_drop_epsilon"),
-    "chi": _Product("chi_combo", ("chiMean",), "qc_drop_chi"),
-    "mixing": _Product("chi_combo", ("K_T", "Gamma", "K_rho"), "qc_drop_chi"),
+    "profiles": _Product("combo", ("T1", "T2", "N2", "dTdz"), None, "profiles"),
+    "diss": _Product("diss_combo", ("epsilonMean",), "qc_drop_epsilon", "epsilon"),
+    "chi": _Product("chi_combo", ("chiMean",), "qc_drop_chi", "chi"),
+    "mixing": _Product("chi_combo", ("K_T", "Gamma", "K_rho"), "qc_drop_chi", "mixing"),
 }
 
 # Per-variable cmocean colormap (default thermal).
@@ -88,7 +92,7 @@ _LOG_VARS: frozenset[str] = frozenset({
 # Log-scaled but sign-bearing (SymLogNorm): N2 is usually positive but can go
 # negative in overturning/unstable patches, which LogNorm would hide as no-data.
 _SYMLOG_VARS: frozenset[str] = frozenset({"N2"})
-# Diverging fields centred on zero.
+# Diverging fields centered on zero.
 _DIVERGING: frozenset[str] = frozenset({"dTdz", "Incl_X", "Incl_Y"})
 
 
@@ -123,7 +127,7 @@ def _make_norm(name: str, z: np.ndarray, args: argparse.Namespace, clim: dict):
     # linear/diverging paths; validate centrally so every branch errors clearly.
     if lo is not None and hi is not None and lo >= hi:
         raise SystemExit(
-            f"colour-scale minimum must be < maximum for {name!r} (got {lo}, {hi})"
+            f"color-scale minimum must be < maximum for {name!r} (got {lo}, {hi})"
         )
 
     if name in _SYMLOG_VARS:
@@ -153,7 +157,7 @@ def _make_norm(name: str, z: np.ndarray, args: argparse.Namespace, clim: dict):
     if name in _LOG_VARS or diagnostics.is_pseudo_var(name):  # variances are log
         if lo is not None and lo <= 0:
             raise SystemExit(
-                f"colour-scale minimum for log variable {name!r} must be > 0 (got {lo})"
+                f"color-scale minimum for log variable {name!r} must be > 0 (got {lo})"
             )
         vmin, vmax = layout.quantile_limits(z, lo, hi)  # filters to > 0
         if vmin is None or vmax is None or vmax <= 0:
@@ -213,7 +217,7 @@ def _build_profiles_figure(
         return None
     col = finite[np.argsort(x[finite])]   # finite profiles, sorted by x
     xs = x[col]
-    depth = np.asarray(dss["bin"].values, dtype=float)  # pressure, dbar
+    depth = np.asarray(dss["bin"].values, dtype=float)  # depth, m
 
     # Diagnostic pseudo-variables (shear/vibration/T_dT variance) are computed
     # at plot time from the raw per-profile files, matched by stime.
@@ -267,7 +271,7 @@ def _build_profiles_figure(
             ax.set_ylabel("Depth (m)")
             continue
         cmap = getattr(cmocean.cm, cmap_name).copy()
-        cmap.set_bad(color="0.85")  # unsampled depths: light grey
+        cmap.set_bad(color="0.85")  # unsampled depths: light gray
         layout.plot_columns(ax, fig, xs, depth, z, cmap, norm, label,
                             gap_factor=args.gap_factor)
         ax.set_ylabel("Depth (m)")
@@ -292,7 +296,7 @@ def _build_profiles_figure(
 
     title_id = ds.attrs.get("id") or os.path.basename(os.path.normpath(args.root))
     fig.suptitle(getattr(args, "title", None) or (
-        f"{title_id}  —  {args.product}: {sec.name}  —  "
+        f"{title_id}  —  {product.label}: {sec.name}  —  "
         f"x-axis: {sec.method}  —  {grouped(int(dss.sizes['profile']))} casts"
     ))
     return fig
@@ -304,12 +308,15 @@ def _build_profiles_figure(
 
 
 def add_arguments(p: argparse.ArgumentParser) -> None:
-    """Register CLI flags for the profiles subcommand on *p*."""
+    """Register the shared (bin, profile) section flags on *p*.
+
+    The product itself is fixed per subcommand (``profiles`` / ``epsilon`` /
+    ``chi`` / ``mixing``) by the :class:`ProductView` that owns *p*, so there is
+    no ``--product`` flag; the engine reads ``args.product`` set by the view.
+    """
     add_section_arguments(p)
-    p.add_argument("--product", choices=list(PRODUCTS), default="profiles",
-                   help="which (bin, profile) product to plot (default: profiles)")
     p.add_argument("--p-max", type=float, default=None,
-                   help="clip the pressure axis at this value [dbar]")
+                   help="clip the depth axis at this value [m]")
     p.add_argument("--gap-factor", type=float, default=4.0,
                    help="split casts into clusters when the x-gap exceeds this "
                         "multiple of the median cast spacing (default 4)")
@@ -352,9 +359,9 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
         raise SystemExit(f"No {product.dir_prefix} dir under {args.root}")
     path = os.path.join(src, "combo.nc")
     if not os.path.exists(path):
-        raise SystemExit(f"{args.product} combo not found: {path}")
+        raise SystemExit(f"{product.label} combo not found: {path}")
 
-    # decode_times=False keeps stime / bin numeric (epoch seconds / dbar).
+    # decode_times=False keeps stime / bin numeric (epoch seconds / meters).
     ds = xr.open_dataset(path, decode_times=False)
     try:
         if "profile" not in ds.dims or "bin" not in ds.dims:
@@ -366,7 +373,7 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
             variables = [v for v in product.default_vars if v in ds.data_vars]
             if not variables:
                 raise SystemExit(
-                    f"--product {args.product}: none of the default variables "
+                    f"{product.label}: none of the default variables "
                     f"{list(product.default_vars)} are present; available: "
                     f"{sorted(str(v) for v in ds.data_vars)}; pass --var"
                 )
@@ -376,7 +383,7 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
             with close_new_figs_on_error():  # close a half-built figure if it raises
                 fig = _build_profiles_figure(ds, sec, variables, args, clim, product)
             if fig is not None:
-                yield f"{args.product}_{safe_name(sec.name)}", fig
+                yield f"{product.label}_{safe_name(sec.name)}", fig
     finally:
         ds.close()  # figures hold their own arrays, so the dataset can close now
 
@@ -397,3 +404,45 @@ def run(args: argparse.Namespace) -> str:
     with closing_figs(build_figures(args)) as figs:
         save_or_show(figs, out_dir, fig_dpi(args))
     return str(out_dir)
+
+
+# ---------------------------------------------------------------------------
+# Per-product views
+# ---------------------------------------------------------------------------
+#
+# One engine, one subcommand per product. Each view binds ``args.product`` and
+# exposes the same ``add_arguments`` / ``build_figures`` / ``run`` surface the
+# CLI dispatcher (:mod:`cli`) and the figure driver (:mod:`figure`) consume from
+# a plain plot module — so ``perturb-plot epsilon`` and ``preset: epsilon`` reuse
+# this file without a ``--product`` flag.
+
+
+@dataclass(frozen=True)
+class ProductView:
+    """The profiles engine bound to one product (``diss`` / ``chi`` / ...).
+
+    Duck-types a plot module: ``add_arguments`` registers the shared section
+    flags (no ``--product``), and ``build_figures`` / ``run`` set
+    ``args.product`` before delegating to the module-level functions.
+    """
+
+    product: str
+
+    def _bind(self, args: argparse.Namespace) -> argparse.Namespace:
+        args.product = self.product
+        return args
+
+    def add_arguments(self, p: argparse.ArgumentParser) -> None:
+        add_arguments(p)
+
+    def build_figures(self, args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
+        return build_figures(self._bind(args))
+
+    def run(self, args: argparse.Namespace) -> str:
+        return run(self._bind(args))
+
+
+PROFILES = ProductView("profiles")
+EPSILON = ProductView("diss")
+CHI = ProductView("chi")
+MIXING = ProductView("mixing")

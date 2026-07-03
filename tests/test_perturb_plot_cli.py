@@ -306,3 +306,20 @@ class TestBuildParser:
         parser = cli.build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args([])
+
+    def test_binned_subcommands_registered(self):
+        """The profiles engine is split into one subcommand per product; none
+        exposes a --product flag (the product is the subcommand)."""
+        parser = cli.build_parser()
+        for cmd in ("profiles", "epsilon", "chi", "mixing"):
+            ns = parser.parse_args([cmd, "--root", "/x"])
+            assert ns.command == cmd
+        with pytest.raises(SystemExit):
+            parser.parse_args(["epsilon", "--root", "/x", "--product", "chi"])
+
+    def test_help_lists_new_subcommands(self, capsys):
+        with pytest.raises(SystemExit):
+            cli.main(["--help"])
+        out = capsys.readouterr().out
+        for cmd in ("profiles", "epsilon", "chi", "mixing"):
+            assert cmd in out
