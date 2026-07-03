@@ -2,6 +2,7 @@
 """Tests for perturb.binning — depth/time binning."""
 
 import numpy as np
+import pytest
 import xarray as xr
 
 from odas_tpw.perturb.binning import (
@@ -439,6 +440,63 @@ class TestBinByDepthEdges:
         # The datetime variable should not appear as a binned data variable
         assert "ts" not in result.data_vars
         assert "epsilon" in result
+
+    def test_fill_value_and_packing_are_cf_decoded(self, tmp_path):
+        """CF `_FillValue` sentinels and `scale_factor` packing must be decoded
+        before binning — not averaged as raw values.
+
+        Regression for the 2026-07-03 review (GPT-5.5 F2): the raw netCDF4 read
+        had mask+scale disabled, so a `-999` fill was averaged as data and a
+        packed int16 was averaged in raw counts.
+        """
+        import netCDF4 as nc
+
+        # (a) a -999 fill on a data var -> the filled cell drops out (NaN), so the
+        #     bin is the mean of the two real values (1, 3) = 2, not -331.7.
+        p1 = tmp_path / "fill.nc"
+        ds = nc.Dataset(str(p1), "w")
+        ds.createDimension("z", 3)
+        ds.createVariable("depth", "f8", ("z",))[:] = [0.0, 1.0, 2.0]
+        t = ds.createVariable("T", "f8", ("z",), fill_value=-999.0)
+        t[0] = 1.0
+        t[1] = t._FillValue
+        t[2] = 3.0
+        ds.close()
+        assert bin_by_depth([p1], bin_width=10.0)["T"].values.ravel()[0] == pytest.approx(2.0)
+
+        # (b) a packed int16 (scale_factor=0.1): physical values [10,20] are
+        #     stored as counts [100,200] and must read back as [10,20] -> binned
+        #     15.0, not the raw-count mean 150.
+        p2 = tmp_path / "packed.nc"
+        ds = nc.Dataset(str(p2), "w")
+        ds.createDimension("z", 2)
+        ds.createVariable("depth", "f8", ("z",))[:] = [0.0, 1.0]
+        tp = ds.createVariable("T", "i2", ("z",))
+        tp.scale_factor = 0.1
+        tp[:] = [10.0, 20.0]  # physical; stored as packed counts 100, 200
+        ds.close()
+        assert bin_by_depth([p2], bin_width=5.0)["T"].values.ravel()[0] == pytest.approx(15.0)
+
+    def test_nan_fill_happy_path_and_int_flag_dtype_preserved(self, tmp_path):
+        """The package's own files (NaN fill, unpacked int flags) are unchanged:
+        NaN cells drop out and integer qc flags keep their integer dtype."""
+        import netCDF4 as nc
+
+        from odas_tpw.perturb.binning import _load_profile_snapshot
+
+        p = tmp_path / "happy.nc"
+        ds = nc.Dataset(str(p), "w")
+        ds.createDimension("z", 3)
+        ds.createVariable("depth", "f8", ("z",))[:] = [0.0, 1.0, 2.0]
+        e = ds.createVariable("epsilonMean", "f8", ("z",), fill_value=np.nan)
+        e[:] = [1e-8, np.nan, 3e-8]
+        ds.createVariable("qc_drop_epsilon", "i4", ("z",))[:] = [0, 1, 0]
+        ds.close()
+
+        snap = _load_profile_snapshot(p)
+        assert snap["vars"]["qc_drop_epsilon"].dtype.kind in ("i", "u")  # not widened
+        binned = bin_by_depth([p], bin_width=10.0)["epsilonMean"].values.ravel()[0]
+        assert binned == pytest.approx(2e-8)
 
 
 class TestBinByTimeEdges:
