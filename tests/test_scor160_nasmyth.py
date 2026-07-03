@@ -25,10 +25,17 @@ class TestNasmythNondim:
         assert np.all(G2 > 0)
 
     def test_formula_values(self):
-        """Spot-check the Lueck formula: G2 = 8.05*x^(1/3) / (1+(20.6*x)^3.715)."""
+        """Pin G2 against LITERAL tabulated values, not the same expression.
+
+        Re-deriving ``expected`` from ``8.05*x^(1/3)/(1+(20.6*x)^3.715)`` (the
+        implementation's own formula) would faithfully mirror any transcription
+        error in the published Lueck coefficients and never catch it. These
+        constants are independently pinned so a coefficient typo in
+        nasmyth_nondim fails the test (Lueck TN-028 / McMillan et al. 2016).
+        """
         x = np.array([0.001, 0.01, 0.1])
-        expected = 8.05 * x ** (1 / 3) / (1 + (20.6 * x) ** 3.715)
-        np.testing.assert_allclose(nasmyth_nondim(x), expected)
+        expected = np.array([0.8049995617, 1.729434293, 0.238660501])
+        np.testing.assert_allclose(nasmyth_nondim(x), expected, rtol=1e-6)
 
     def test_rises_then_falls(self):
         """G2 should peak in the inertial subrange then decay."""

@@ -36,17 +36,25 @@ Each `.p` file is processed through several sub-stages:
 
 1. **Hotel data** (optional) — If a hotel file is configured, external telemetry channels (speed, pitch, roll, heading, CTD from gliders/AUVs) are loaded and interpolated onto the instrument's fast or slow time axes. Channels listed in `fast_channels` are interpolated onto `t_fast`; all others go to `t_slow`. The interpolated data is injected into `pf.channels` before any downstream processing, so hotel-provided channels (e.g., `speed`, `P`) are available to profile detection, dissipation, and chi stages.
 
-2. **CTD time-binning** — Bins slow channels (T, C, P) by time, interpolates GPS, computes seawater properties (SP, SA, CT, sigma0, rho, depth via TEOS-10).
+2. **Speed** — Computes the through-water speed channel (`|dP/dt|`, flight model, EM flowmeter, or a constant, per `speed.method`) and injects `speed_fast` / `W_slow` for the downstream stages.
 
-3. **Profile extraction** — Detects down-cast (or up-cast) segments from pressure and fall rate, writes per-profile NetCDF files.
+3. **Internal QC rules** — Evaluates the configured segment-drop rules (from external/hotel flag channels) so flagged windows can be masked in the dissipation stages.
 
-4. **FP07 calibration** — In-situ calibration of FP07 thermistors against a reference sensor (JAC_T) using Steinhart-Hart coefficients and cross-correlation lag estimation.
+4. **Profile detection + CT alignment** — Detects down-cast (or up-cast) segments from pressure and fall rate, then cross-correlation-aligns conductivity to temperature. Alignment runs **here**, before any product that consumes salinity — the CTD and stratification steps use the aligned C/T, not raw conductivity.
 
-5. **CT alignment** — Cross-correlation alignment of conductivity and temperature sensors to correct for spatial separation.
+5. **Background stratification** — Computes N² and dT·dz⁻¹ per window on the slow grid (TEOS-10), to be written into every per-profile NetCDF.
 
-6. **Dissipation (epsilon)** — Computes TKE dissipation rate per profile via `rsi.dissipation._compute_epsilon`, which drives the scor160 epsilon estimator (`scor160.l4._estimate_epsilon`). Combines multi-probe estimates via `mk_epsilon_mean` (geometric mean with 95% CI filtering).
+6. **CTD time-binning** — Bins the slow channels (T, C, P) by time and computes seawater properties (SP, SA, CT, sigma0, rho, depth via TEOS-10) from the aligned C/T; interpolates GPS.
 
-7. **Chi** (optional) — Computes thermal variance dissipation rate per profile via `rsi.chi_io._compute_chi`. By default (`chi.use_epsilon: true`) the combined epsilon seeds the calculation (Method 1); set `chi.use_epsilon: false` for Method 2 spectral fitting.
+7. **Profile-bound adjustment** — Trims each profile's start (prop-wash `top_trim`) and, if enabled, its end (bottom-crash detection).
+
+8. **FP07 calibration** — In-situ calibration of the FP07 thermistors against a reference sensor (JAC_T), using cross-correlation lag estimation. Runs **before** extraction, so the per-profile NetCDFs carry the in-situ calibration rather than factory coefficients.
+
+9. **Profile extraction** — Writes the per-profile NetCDF files (with the aligned/calibrated channels and the stratification fields).
+
+10. **Dissipation (epsilon)** — Computes TKE dissipation rate per profile via `rsi.dissipation._compute_epsilon`, which drives the scor160 epsilon estimator (`scor160.l4._estimate_epsilon`). Combines multi-probe estimates via `mk_epsilon_mean` (geometric mean with 95% CI filtering).
+
+11. **Chi** (optional) — Computes thermal variance dissipation rate per profile via `rsi.chi_io._compute_chi`. By default (`chi.use_epsilon: true`) the combined epsilon seeds the calculation (Method 1); set `chi.use_epsilon: false` for Method 2 spectral fitting.
 
 ### Stage 4: Bin
 

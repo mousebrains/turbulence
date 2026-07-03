@@ -514,7 +514,12 @@ def p_to_L1(
         gradt_arrays = []
         for name in gradt_names:
             T_fast_ch = pf.channels[name]
-            # np.diff on a single sample is empty; dTdt[-1] would IndexError
+            # GRADT uses the legacy ODAS 'first_difference' method
+            # (fs*diff(T)/speed), NOT the ODAS default 'high_pass' on the
+            # pre-emphasized signal, so this L1 GRADT differs sample-by-sample
+            # from the ODAS reference product. (epsilon/chi use their own
+            # spectral pre-emphasis path and do not consume this variable.)
+            # np.diff on a single sample is empty; dTdt[-1] would IndexError.
             if T_fast_ch.size < 2:
                 dTdt = np.zeros_like(T_fast_ch)
             else:

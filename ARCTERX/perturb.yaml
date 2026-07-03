@@ -73,7 +73,7 @@ top_trim:
 
 epsilon:
   fft_length: 256              # 0.5 s at 512 Hz
-  diss_length: null            # = 2 * fft_length (default)
+  diss_length: null            # = 4 * fft_length (default) -> 2 s / 1024 samples
   overlap: null                # = diss_length // 2 (default)
   goodman: true                # coherent-noise removal using Ax/Ay
   f_AA: 98.0                   # anti-alias filter cutoff
@@ -81,7 +81,7 @@ epsilon:
   fit_order: 3
   despike_thresh: 8
   despike_smooth: 0.5
-  salinity: null               # use CTD-derived salinity (preferred)
+  salinity: null               # null = fixed S=35 PSU (epsilon viscosity is NOT CTD-constrained)
   epsilon_minimum: 1.0e-13
   T_source: null               # blends T1 and T2 for viscosity
   T1_norm: 1.0
@@ -90,7 +90,7 @@ epsilon:
 chi:
   enable: true
   fft_length: 512              # 1 s at 512 Hz
-  diss_length: null            # = 3 * fft_length (default)
+  diss_length: null            # = 4 * fft_length (default) -> 4 s / 2048 samples
   overlap: null                # = diss_length // 2 (default)
   fp07_model: "single_pole"
   goodman: true

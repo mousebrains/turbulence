@@ -60,15 +60,17 @@ def _compute_chi_spectra(
     methods_results is a dict keyed by method name ("M1", "M2-MLE", "M2-Iter"),
     each mapping to a list of per-probe (batch_spec, chi_val, kB_val) tuples.
     """
-    from odas_tpw.chi.batchelor import KAPPA_T
     from odas_tpw.chi.chi import _mle_fit_kB
     from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer
     from odas_tpw.chi.fp07 import gradT_noise as _gradT_noise
+    from odas_tpw.scor160.ocean import kappa_T as _kappa_T_TSP
 
     w_sel = select_mid_window(P_fast, sel, fft_length, diss_length=None)
 
     # Per-window mean temperature (was the whole-cast mean -> ~14% visc bias).
     mean_T = float(np.mean(_interp_slow_to_fast(T_slow, len(P_fast))[w_sel]))
+    # T-dependent thermal diffusivity (S=35/P=0 reference for this diagnostic).
+    kappa_T_ql = float(_kappa_T_TSP(mean_T))
     mean_speed = float(np.mean(np.abs(speed_fast[w_sel])))
     if mean_speed < 0.01:
         mean_speed = 0.01
@@ -144,7 +146,7 @@ def _compute_chi_spectra(
         dg_i = diff_gains[ci] if ci < len(diff_gains) else 0.94
         valid = np.isfinite(grad) & (grad > 0) & (K > 0) & (K_AA_chi >= K)
         if np.sum(valid) >= 3:
-            chi_obs = max(6 * KAPPA_T * np.trapezoid(grad[valid], K[valid]), 1e-10)
+            chi_obs = max(6 * kappa_T_ql * np.trapezoid(grad[valid], K[valid]), 1e-10)
             # Pre-compute noise/H2 for _mle_fit_kB
             _tau0 = float(fp07_tau(mean_speed))
             _noise_K_i, _ = _gradT_noise(F, mean_T, mean_speed, fs=fs_fast, diff_gain=dg_i)
@@ -160,6 +162,7 @@ def _compute_chi_spectra(
                 f_AA_chi,
                 mean_speed,
                 spectrum_model,
+                kappa_T_ql,
             )
             spec_mle = spec_raw * H2 if np.isfinite(chi_val) else np.full(n_freq, np.nan)
             methods_results["M2-MLE"].append((spec_mle, chi_val, kB_best))
@@ -220,7 +223,15 @@ def _compute_windowed_eps_chi(
     eps_arr = np.full((n_shear, n_windows), np.nan)
     chi_arr = np.full((n_therm, n_windows), np.nan)
 
-    T_fast = _interp_slow_to_fast(T_slow, N)
+    # Full-length fast temperature: the window loop slices T_fast with ABSOLUTE
+    # fast indices (s = seg_start + idx*step), exactly as it slices the
+    # full-length P_fast/speed_fast/shear arrays. Sizing T_fast to the segment
+    # length N instead made every window past index N empty -> mean_T NaN ->
+    # all-NaN eps/chi for every profile after the first, and compressed the
+    # whole-record temperature onto profile 0's segment (biased viscosity).
+    # Regression from PR #75 M-7; matches viewer_base._interp_slow_to_fast use
+    # (audit r1-13).
+    T_fast = _interp_slow_to_fast(T_slow, len(P_fast))
     f_AA_chi = 0.9 * f_AA  # 10% margin, matching MATLAB get_chi
 
     for idx in range(n_windows):
@@ -410,7 +421,9 @@ class QuickLookViewer(ProfileViewer):
             ax.set_xlabel("\u03c7 [K\u00b2/s]")
             ax.set_ylabel("Pressure [dbar]")
             ax.legend(fontsize=6, loc="lower left")
-            selected = {1: "M1", 2: "M2-MLE"}.get(self.chi_method, "M1")
+            # chi_method=2 runs compute_chi_window(method=2) -> _iterative_fit,
+            # i.e. M2-Iter (NOT the MLE variant).
+            selected = {1: "M1", 2: "M2-Iter"}.get(self.chi_method, "M1")
             ax.set_title(f"\u03c7 profile ({selected}, {self.spectrum_model})", fontsize=9)
             ax.grid(True, alpha=0.3, which="both")
         else:
@@ -564,8 +577,10 @@ class QuickLookViewer(ProfileViewer):
         )
         K, _F, obs_spectra, methods_results, noise_K, mean_speed, _nu = self._cached_chi
 
-        # Line styles for each method; selected method drawn thicker
-        selected_method = {1: "M1", 2: "M2-MLE"}.get(self.chi_method, "M1")
+        # Line styles for each method; selected method drawn thicker. chi_method=2
+        # is the iterative fit (M2-Iter) — the same curve the chi-profile panel
+        # plots — so highlight it, not the separate M2-MLE curve.
+        selected_method = {1: "M1", 2: "M2-Iter"}.get(self.chi_method, "M1")
         method_styles = [
             ("M1", "--", 0.9),
             ("M2-MLE", "-.", 0.9),

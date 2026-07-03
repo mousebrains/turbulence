@@ -169,6 +169,47 @@ class TestManifest:
         nc.write_bytes(b"x")
         assert not pl._output_is_current(nc, None)  # None => always rebuild
 
+    def test_binned_write_success_stamps_manifest(self, tmp_path):
+        import numpy as np
+        import xarray as xr
+
+        ds = xr.Dataset({"epsilonMean": ("bin", np.arange(5.0))})
+        pl._write_binned_or_clear(ds, tmp_path, "mani-1")
+        out = tmp_path / "binned.nc"
+        assert out.exists()
+        assert pl._output_is_current(out, "mani-1")
+        assert not list(tmp_path.glob(".binned.nc.*.tmp"))  # temp cleaned up
+
+    def test_binned_write_atomic_on_failure(self, tmp_path, monkeypatch):
+        """Audit r1-5: an interrupted binned.nc write must NOT leave a partial
+        file that validates as cache-current — no live binned.nc, no temp leak,
+        and a prior good file is preserved."""
+        import numpy as np
+        import xarray as xr
+
+        # Seed a prior, valid binned.nc with a different manifest.
+        good = xr.Dataset({"epsilonMean": ("bin", np.arange(5.0))})
+        pl._write_binned_or_clear(good, tmp_path, "old-manifest")
+        out = tmp_path / "binned.nc"
+        assert out.exists()
+
+        # Simulate a mid-write failure: to_netcdf writes a truncated temp file
+        # then raises (as ENOSPC / SMB drop / Ctrl-C would).
+        def boom(self, path=None, *a, **k):
+            Path(path).write_bytes(b"partial-truncated")
+            raise OSError("ENOSPC")
+
+        monkeypatch.setattr(xr.Dataset, "to_netcdf", boom)
+        new = xr.Dataset({"epsilonMean": ("bin", np.arange(5.0))})
+        with pytest.raises(OSError):
+            pl._write_binned_or_clear(new, tmp_path, "new-manifest")
+
+        # The failed write never became live: temp is cleaned up, and the old
+        # file (old-manifest) is intact — the new manifest never validates.
+        assert not list(tmp_path.glob(".binned.nc.*.tmp"))
+        assert not pl._output_is_current(out, "new-manifest")
+        assert pl._output_is_current(out, "old-manifest")
+
 
 # ---------------------------------------------------------------------------
 # End-to-end: run_pipeline twice -> the second run skips unchanged files

@@ -94,6 +94,80 @@ def visc(T: npt.ArrayLike, S: npt.ArrayLike = 35, P: npt.ArrayLike = 0) -> np.nd
     return np.maximum(mu / rho, 1.0e-7)
 
 
+def kappa_T(
+    T: npt.ArrayLike, S: npt.ArrayLike = 35, P: npt.ArrayLike = 0
+) -> np.ndarray:
+    """Molecular thermal diffusivity of seawater [m²/s].
+
+    ``kappa_T = k / (rho * c_p)`` where the thermal conductivity ``k`` follows
+    the Jamieson & Tudhope (1970) correlation as compiled by Sharqawy et al.
+    (2010, Eq. 13) and the in-situ density ``rho`` and isobaric specific heat
+    ``c_p`` come from gsw (TEOS-10, ``gsw.rho`` / ``gsw.cp_t_exact``). This is
+    the same style of "published correlation over gsw" path :func:`visc` uses
+    off the S=35/P=0 seam; unlike :func:`visc` there is no ODAS-polynomial
+    fallback branch, so ``kappa_T`` always uses gsw (there is no ``kappa35``).
+
+    Over 0-32 °C at S=35, P=0 this rises from ~1.39e-7 to ~1.51e-7 m²/s — the
+    ~+8% swing the fixed ``chi.batchelor.KAPPA_T = 1.4e-7`` used to miss. Because
+    ``chi = 6*kappa_T*I`` and ``epsilon_T = (2*pi*kB)^4*nu*kappa_T^2``, using the
+    true value removes a chi bias that ran from ~-1% at -1 °C to ~+8% at 32 °C.
+
+    Parameters
+    ----------
+    T : float or array_like
+        In-situ temperature [°C].
+    S : float or array_like
+        Practical salinity [PSU]. Default: 35.
+    P : float or array_like
+        Pressure [dbar]. Default: 0.
+
+    Returns
+    -------
+    kappa_T : float or ndarray
+        Thermal diffusivity [m²/s].
+
+    Reference: Sharqawy, Lienhard & Zubair (2010), "Thermophysical properties
+    of seawater", Desalination and Water Treatment 16, 354-380 — Eq. 13
+    (Jamieson & Tudhope 1970 thermal conductivity, ±3%, 0-180 °C, 0-160 g/kg).
+    """
+    import gsw
+
+    T = np.asarray(T, dtype=float)
+    S = np.asarray(S, dtype=float)
+    P = np.asarray(P, dtype=float)
+
+    # Clip a spurious window-mean temperature into the physical seawater range
+    # before evaluating ANY term (both the k correlation and the gsw density /
+    # specific heat). A wild T from a bad window sends the k polynomial outside
+    # its fitted domain AND drives gsw.cp_t_exact / gsw.rho into extrapolation
+    # where they can go negative — yielding a negative kappa_T (hence negative
+    # chi). -2 °C is below the freezing point at any ocean salinity; 40 °C is
+    # above the warmest sea surface. Must clip T for gsw too, not just for k.
+    T_c = np.clip(T, -2.0, 40.0)
+
+    # Thermal conductivity [mW/(m·K)] — Jamieson & Tudhope (1970), Sharqawy Eq. 13
+    # (T in °C, S in g/kg ≈ PSU for open-ocean salinities).
+    Tk = T_c + 273.15
+    log10_k = (
+        np.log10(240.0 + 0.0002 * S)
+        + 0.434
+        * (2.3 - (343.5 + 0.037 * S) / Tk)
+        * (1.0 - Tk / (647.3 + 0.03 * S)) ** (1.0 / 3.0)
+    )
+    k = 10.0**log10_k * 1.0e-3  # mW/(m·K) → W/(m·K)
+
+    # Density and isobaric specific heat from gsw (TEOS-10).
+    SA = gsw.SA_from_SP(S, P, 0, 0)
+    CT = gsw.CT_from_t(SA, T_c, P)
+    rho = gsw.rho(SA, CT, P)
+    cp = gsw.cp_t_exact(SA, T_c, P)
+
+    # Floor to a small positive value (mirrors visc/visc35): guards any residual
+    # non-physical combination (e.g. a wildly out-of-range salinity) from
+    # emitting a zero/negative diffusivity that would corrupt chi downstream.
+    return np.maximum(k / (rho * cp), 1.0e-8)
+
+
 def density(T: npt.ArrayLike, S: npt.ArrayLike, P: npt.ArrayLike) -> np.ndarray:
     """In-situ density of seawater [kg/m³] via TEOS-10.
 

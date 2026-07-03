@@ -76,6 +76,60 @@ class TestComputeTrimDepth:
         assert trim >= 12.0, f"dip at 5-6 m ended the search early (trim={trim} m)"
         assert trim <= 16.0
 
+    def test_isolated_deep_transient_does_not_over_trim(self):
+        """Audit r1-2: a deep transient detached from the surface prop wash
+        must not drag the trim down through the quiet band above it.
+
+        Surface prop wash at 1-2.5 m, a wide quiet band, then an isolated
+        high-amplitude transient at 25-33 m on BOTH accelerometer axes (so the
+        median combine cannot reject it — the real ARCTERX SN479_0026 prof-8
+        case). The pre-fix deepest-elevated-bin rule trimmed to ~33 m,
+        discarding valid 3-24 m data; the surface-attached rule trims at the
+        surface run (~2.5 m).
+        """
+        rng = np.random.default_rng(10)
+        n = 8000
+        depth = np.linspace(0, 60, n)
+
+        def accel():
+            a = rng.standard_normal(n) * 0.01  # quiet background
+            surf = (depth >= 1.0) & (depth < 2.5)  # surface prop wash
+            a[surf] = rng.standard_normal(int(surf.sum())) * 5.0
+            deep = (depth >= 25.0) & (depth < 33.0)  # isolated deep transient
+            a[deep] = rng.standard_normal(int(deep.sum())) * 8.0
+            return a
+
+        trim = compute_trim_depth(
+            depth, {"Ax": accel(), "Ay": accel()},
+            dz=0.5, min_depth=1.0, max_depth=50.0, quantile=0.6,
+        )
+        assert trim is not None
+        assert trim <= 5.0, (
+            f"deep transient over-trimmed to {trim} m; should clear only the "
+            "~2.5 m surface wash"
+        )
+
+    def test_detached_deep_only_channel_abstains(self):
+        """A channel whose only elevated bins are deep (no surface wash) has
+        already settled at the surface; it abstains rather than trimming deep."""
+        rng = np.random.default_rng(11)
+        n = 8000
+        depth = np.linspace(0, 60, n)
+        # Ax: genuine surface wash 1-3 m. Ay: quiet at surface, lone deep patch.
+        ax = rng.standard_normal(n) * 0.01
+        ax[(depth >= 1.0) & (depth < 3.0)] = rng.standard_normal(
+            int(((depth >= 1.0) & (depth < 3.0)).sum())
+        ) * 5.0
+        ay = rng.standard_normal(n) * 0.01
+        ay[(depth >= 30.0) & (depth < 36.0)] = rng.standard_normal(
+            int(((depth >= 30.0) & (depth < 36.0)).sum())
+        ) * 8.0
+        trim = compute_trim_depth(
+            depth, {"Ax": ax, "Ay": ay}, dz=0.5, min_depth=1.0, max_depth=50.0
+        )
+        # Ay abstains (no surface wash); Ax decides the ~3 m surface exit.
+        assert trim is not None and trim <= 6.0, f"trim={trim} m"
+
     def test_median_combine_robust_to_one_deep_channel(self):
         """One channel elevated to depth must not drag the trim down.
 
@@ -134,6 +188,12 @@ class TestComputeTrimDepth:
         for bad in (1.0, 0.5, 0.0):
             with pytest.raises(ValueError, match="noise_factor"):
                 compute_trim_depth(depth, {"sh1": sh1}, noise_factor=bad)
+
+    def test_invalid_max_gap_raises(self):
+        depth = np.linspace(0, 60, 100)
+        sh1 = np.random.randn(100) * 0.01
+        with pytest.raises(ValueError, match="max_gap"):
+            compute_trim_depth(depth, {"sh1": sh1}, max_gap=-1)
 
     def test_all_stable(self):
         """Uniform low variance — trim at first bin."""

@@ -16,6 +16,7 @@ Peterson, A.K. and I. Fer, 2014: Dissipation measurements using temperature
     microstructure from an underwater glider. Methods in Oceanography, 10, 44-69.
 """
 
+import functools
 import warnings
 from typing import NamedTuple
 
@@ -191,6 +192,7 @@ def _chi_from_epsilon(
     f_AA: float,
     speed: float,
     spectrum_model: str,
+    kappa_T: float = KAPPA_T,
 ) -> ChiEpsilonResult:
     """Compute chi for one probe in one window, given epsilon (Method 1).
 
@@ -218,6 +220,10 @@ def _chi_from_epsilon(
         Profiling speed [m/s].
     spectrum_model : str
         Theoretical spectrum model ('batchelor' or 'kraichnan').
+    kappa_T : float
+        Molecular thermal diffusivity [m²/s]. Per-window T/S/P value from
+        :func:`odas_tpw.scor160.ocean.kappa_T`; defaults to the fixed
+        ``batchelor.KAPPA_T`` for backward compatibility.
 
     Returns
     -------
@@ -225,8 +231,12 @@ def _chi_from_epsilon(
         Named tuple: (chi, kB, K_max, spec_batch, fom, K_max_ratio).
     """
     grad_func, _q = _spectrum_func(spectrum_model)
+    # Bind kappa_T into the spectrum shape so every grad_func(...) call here and
+    # in _variance_correction uses the per-window value (its amplitude carries
+    # chi/(kB*kappa_T)).
+    grad_func = functools.partial(grad_func, kappa_T=kappa_T)
 
-    kB = float(batchelor_kB(epsilon, nu))
+    kB = float(batchelor_kB(epsilon, nu, kappa_T))
     if kB < 1:
         warnings.warn(f"kB={kB:.1f} < 1 cpm; epsilon too low for chi estimation", stacklevel=2)
         return ChiEpsilonResult(np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan)
@@ -260,9 +270,9 @@ def _chi_from_epsilon(
 
     correction = _variance_correction(kB, K_max, speed, tau0, _h2, grad_func)
     if np.isfinite(correction):
-        chi_vc = 6 * KAPPA_T * obs_var * correction
+        chi_vc = 6 * kappa_T * obs_var * correction
     else:
-        chi_vc = 6 * KAPPA_T * obs_var
+        chi_vc = 6 * kappa_T * obs_var
 
     # Vectorized grid search: 200 chi values spanning 4 decades around chi_vc
     chi_lo = max(chi_vc * 0.01, 1e-15)
@@ -386,6 +396,7 @@ def _mle_fit_kB(
     f_AA: float,
     speed: float,
     spectrum_model: str,
+    kappa_T: float = KAPPA_T,
 ) -> ChiFitResult:
     """Maximum-likelihood fit for Batchelor wavenumber kB (Ruddick et al. 2000).
 
@@ -411,6 +422,7 @@ def _mle_fit_kB(
         Named tuple: (kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio).
     """
     grad_func, _q = _spectrum_func(spectrum_model)
+    grad_func = functools.partial(grad_func, kappa_T=kappa_T)
 
     kB_best, fit_mask, K_fit = _mle_find_kB(
         spec_obs,
@@ -433,7 +445,7 @@ def _mle_fit_kB(
     K_max_fit = K_fit[-1]
 
     # Recover epsilon from kB
-    epsilon = (2 * np.pi * kB_best) ** 4 * nu * KAPPA_T**2
+    epsilon = (2 * np.pi * kB_best) ** 4 * nu * kappa_T**2
 
     # Re-estimate chi with unresolved-variance correction (like Method 1).
     # Pass the same lower band edge that obs_var uses (K[fit_mask][0]) so
@@ -453,7 +465,7 @@ def _mle_fit_kB(
     )
     if np.isfinite(correction):
         obs_var = np.trapezoid(np.maximum(spec_obs[fit_mask] - noise_K[fit_mask], 0), K[fit_mask])
-        chi = 6 * KAPPA_T * obs_var * correction
+        chi = 6 * kappa_T * obs_var * correction
     else:
         chi = chi_obs
 
@@ -485,6 +497,7 @@ def _iterative_fit(
     f_AA: float,
     speed: float,
     spectrum_model: str,
+    kappa_T: float = KAPPA_T,
 ) -> ChiFitResult:
     """Iterative MLE fitting (Peterson & Fer 2014, Method 2).
 
@@ -515,6 +528,7 @@ def _iterative_fit(
         Named tuple: (kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio).
     """
     grad_func, _q = _spectrum_func(spectrum_model)
+    grad_func = functools.partial(grad_func, kappa_T=kappa_T)
 
     # Initial integration limits
     K_AA = f_AA / speed
@@ -533,7 +547,7 @@ def _iterative_fit(
         mask_init = valid
     chi_obs = (
         6
-        * KAPPA_T
+        * kappa_T
         * np.trapezoid(np.maximum(spec_obs[mask_init] - noise_K[mask_init], 0), K[mask_init])
     )
 
@@ -544,6 +558,11 @@ def _iterative_fit(
     kB_best = np.nan
     kB_prev = np.nan
     epsilon = np.nan
+    # True once the refined integration band carries above-noise variance.
+    # If it never does (every in-band bin has Phi_obs <= Phi_noise), the
+    # window is below the detection limit and chi must be NaN, NOT the
+    # 1e-14 sentinel that chi_obs falls back to for model shaping.
+    band_has_signal = False
 
     for iteration in range(3):
         # MLE fit for kB (core search only — no variance correction)
@@ -567,7 +586,7 @@ def _iterative_fit(
         kB_prev = kB_best
 
         # Refine integration limits
-        k_star = 0.04 * kB_best * np.sqrt(KAPPA_T / nu)
+        k_star = 0.04 * kB_best * np.sqrt(kappa_T / nu)
         k_l_new = max(K[1], 3 * k_star)
         k_u_new = k_u
 
@@ -578,7 +597,7 @@ def _iterative_fit(
 
         chi_band = (
             6
-            * KAPPA_T
+            * kappa_T
             * np.trapezoid(
                 np.maximum(spec_obs[mask_refined] - noise_K[mask_refined], 0), K[mask_refined]
             )
@@ -594,8 +613,10 @@ def _iterative_fit(
         )
         if chi_band > 0 and np.isfinite(correction):
             chi_obs = chi_band * correction
+            band_has_signal = True
         elif chi_band > 0:
             chi_obs = chi_band
+            band_has_signal = True
         else:
             chi_obs = 1e-14
 
@@ -605,13 +626,13 @@ def _iterative_fit(
     # kB_best, leaving chi tied to the prior iteration's kB (audit finding:
     # k_l_new and the variance correction both depend on kB).
     if np.isfinite(kB_best) and kB_best >= 1:
-        k_star = 0.04 * kB_best * np.sqrt(KAPPA_T / nu)
+        k_star = 0.04 * kB_best * np.sqrt(kappa_T / nu)
         k_l_final = max(K[1], 3 * k_star)
         mask_final = (k_l_final <= K) & (k_u >= K)
         if np.sum(mask_final) >= 3:
             chi_band = (
                 6
-                * KAPPA_T
+                * kappa_T
                 * np.trapezoid(
                     np.maximum(spec_obs[mask_final] - noise_K[mask_final], 0),
                     K[mask_final],
@@ -622,18 +643,22 @@ def _iterative_fit(
             )
             if chi_band > 0 and np.isfinite(correction):
                 chi_obs = chi_band * correction
+                band_has_signal = True
             elif chi_band > 0:
                 chi_obs = chi_band
+                band_has_signal = True
 
     # Final values
     if np.isfinite(kB_best):
-        epsilon = (2 * np.pi * kB_best) ** 4 * nu * KAPPA_T**2
-    # A failed Batchelor/kB fit must not leak a finite chi: chi_obs is the
-    # initial (possibly noise-dominated) band integral, and with kB NaN the
-    # window has fom=NaN/K_max_ratio=NaN that no downstream QC cut can reach.
-    # Returning NaN excludes it from chi_final/chiMean (and thus K_T/Gamma),
-    # mirroring the epsilon side, where a failed shear fit yields NaN epsilon.
-    chi = chi_obs if np.isfinite(kB_best) else np.nan
+        epsilon = (2 * np.pi * kB_best) ** 4 * nu * kappa_T**2
+    # A finite chi requires BOTH a converged Batchelor/kB fit AND above-noise
+    # variance in the integration band. A failed fit (kB NaN) leaks the initial
+    # noise-dominated band integral; a below-detection window (band_has_signal
+    # False) leaks the 1e-14 model-shaping sentinel. Either way fom=NaN and no
+    # downstream QC cut can reach it, so return NaN — excluding it from
+    # chi_final/chiMean (and thus K_T/Gamma), mirroring the epsilon side where a
+    # failed shear fit yields NaN epsilon.
+    chi = chi_obs if (np.isfinite(kB_best) and band_has_signal) else np.nan
     spec_batch = grad_func(K, kB_best, chi) if np.isfinite(kB_best) else np.zeros_like(K)
 
     # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise).

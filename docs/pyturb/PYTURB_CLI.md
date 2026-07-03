@@ -65,14 +65,14 @@ pyturb-cli eps VMP/*.p -o eps/ --goodman    # enable Goodman cleaning
 | `-f/--fft-len` | 1.0 | FFT segment length [s] |
 | `-s/--min-speed` | 0.2 | Minimum profiling speed [m/s] |
 | `--pressure-smoothing` | 0.25 | Pressure LP filter [s] |
-| `-t/--temperature` | `JAC_T` | Temperature variable name |
-| `--speed` | `W` | Speed variable name |
+| `-t/--temperature` | `JAC_T` | Temperature variable name **(not implemented — ignored, warns)** |
+| `--speed` | `W` | Speed variable name **(not implemented — ignored, warns)** |
 | `--direction` | `down` | `down`, `up`, or `both` |
 | `--min-profile-pressure` | 0.0 | Minimum pressure [dbar] |
 | `--peaks-height` | 25.0 | Peak height [dbar] |
 | `--peaks-distance` | 200 | Peak distance [samples] |
 | `--peaks-prominence` | 25.0 | Peak prominence [dbar] |
-| `--despike-passes` | 6 | Despike iterations |
+| `--despike-passes` | 6 | Despike iterations **(not implemented — despike runs the scor160 default of 10 passes; warns if set otherwise)** |
 | `--salinity` | 35.0 | Salinity [PSU] |
 | `--goodman/--no-goodman` | off | Goodman coherent noise removal |
 | `-a/--aux` | — | Auxiliary CTD NetCDF |
@@ -105,6 +105,15 @@ pyturb-cli bin eps/*.nc -o binned.nc --dmax 500 --pressure
 | `-p/--pressure` | off | Bin by pressure instead of depth |
 | `-v/--vars` | `eps_1,eps_2,...` | Variables to bin |
 | `-n/--n-workers` | 1 | Parallel workers |
+
+> **Dissipation averaging.** `pyturb-cli bin` averages the dissipation variables
+> (`eps_*`, `epsilon`, `chi`, `chi_final`, `epsi_final`) with the **geometric**
+> (log-space) mean for pyturb-parity — i.e. the per-bin **median** of a lognormal.
+> This is systematically **lower** than the **arithmetic**-mean binned products
+> the `perturb`/`rsi-tpw` pipelines publish on the same data (by
+> `exp(-σ_ln²/2)`: ≈0.61× at σ_ln=1.0, ≈0.32× at 1.5). **Do not mix** the two
+> binned products in one analysis. There is currently no flag to switch to the
+> arithmetic mean.
 
 ## Differences from pyturb
 

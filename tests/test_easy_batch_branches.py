@@ -168,6 +168,7 @@ class TestL4ChiFitMLEEdges:
             pspd_rel=np.array([0.5]),
             section_number=np.array([1]),
             nu=np.array([1.2e-6]),
+            kappa_T=np.array([1.4e-7]),
             kcyc=kcyc,
             freq=F_const,
             gradt_spec=gradt_spec,

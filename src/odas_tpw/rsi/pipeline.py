@@ -64,10 +64,16 @@ def _qc_chi_final(
     _n_probe, n_window = chi.shape
     out = np.full(n_window, np.nan)
     valid = np.isfinite(chi) & (chi > 0)
+    # The chi fom is a two-sided obs/model VARIANCE RATIO: it is bad far from 1.0
+    # in EITHER direction. A one-sided ``fom <= fom_limit`` cut would pass a
+    # window whose model overestimates observed variance (e.g. fom=0.2, model 5x
+    # high) while rejecting a mildly high fom=1.2, so gate the log-symmetric band
+    # [1/fom_limit, fom_limit].
     passes_qc = (
         valid
         & np.isfinite(fom)
         & (fom <= fom_limit)
+        & (fom >= 1.0 / fom_limit)
         & np.isfinite(k_max_ratio)
         & (k_max_ratio >= k_max_ratio_min)
     )
@@ -614,7 +620,9 @@ def _process_profile(
                             "Compare with K_T: agreement implies the measured "
                             "Gamma is near the canonical 0.2. NaN where "
                             "N2 < 1e-9 s-2 or K_rho > 10 m2 s-1 (physically "
-                            "implausible diffusivity from near-floor N2)."
+                            "implausible diffusivity: the unbounded near-floor-N2 "
+                            "artifact, or contaminated near-surface windows where "
+                            "epsilon is itself spurious)."
                         ),
                     },
                 ),
@@ -747,8 +755,10 @@ def _write_l4_epsilon(l4: L4Data, l3: L3Data, path: Path, pf) -> None:
                     "comment": (
                         "FM = MAD_ln / (T_M * sigma_ln) with sigma_ln = "
                         "sqrt(1.25 * N_eff**(-7/9)) and T_M = 0.8 + sqrt(1.56/N_s) "
-                        "(Lueck 2022, doi:10.1175/JTECH-D-21-0051.1). Good fits "
-                        "approach 0; ATOMIX recommends rejecting FM > ~1.15."
+                        "(Lueck 2022, doi:10.1175/JTECH-D-21-0051.1). A good fit "
+                        "sits near its expected value ~0.7-0.8, NOT 0 (spectral "
+                        "scatter floors this MAD statistic); ATOMIX recommends "
+                        "rejecting FM > ~1.15."
                     ),
                 },
             ),

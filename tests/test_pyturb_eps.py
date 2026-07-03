@@ -137,6 +137,7 @@ class TestProcessProfile:
             pspd_rel=np.full(n_spec, 0.7),
             section_number=np.ones(n_spec),
             nu=np.full(n_spec, 1.1e-6),
+            kappa_T=np.full(n_spec, 1.4e-7),
             kcyc=np.tile(np.arange(n_freq, dtype=float)[:, None], (1, n_spec)),
             freq=np.arange(n_freq, dtype=float),
             gradt_spec=np.ones((2, n_freq, n_spec)) * 1e-4,
@@ -165,9 +166,9 @@ class TestProcessProfile:
 
 def _common_kwargs(**overrides):
     base = dict(
-        fft_length=512,
-        diss_length=2048,
-        overlap=256,
+        # durations in seconds; converted to samples per-file at the file's fs
+        fft_len_sec=1.0,
+        diss_len_sec=4.0,
         direction="down",
         min_speed=0.2,
         min_profile_pressure=1.0,

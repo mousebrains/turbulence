@@ -1838,6 +1838,44 @@ class TestAddMixingQuantities:
         out = _add_mixing_quantities(chi_ds, empty, prof_path, file_label="t")
         assert "Gamma" not in out
 
+    def test_chi_qc_drop_nans_chi_derived_mixing(self, tmp_path):
+        """Audit r1-4: a QC-dropped chi segment must NaN the chi-derived mixing
+        quantities (K_T, Gamma) — the pipeline applies chi QC BEFORE deriving
+        them. K_rho is epsilon-derived and stays finite (gated by epsilon QC)."""
+        from odas_tpw.perturb.pipeline import _add_mixing_quantities
+        from odas_tpw.perturb.qc_gate import apply_qc_to_dataset
+
+        class _StubPF:
+            def __init__(self, t_slow, channels):
+                self.t_slow = np.asarray(t_slow, dtype=np.float64)
+                self.channels = channels
+                self.channel_info = {}
+
+        chi_ds, diss_ds, prof_path = self._make_inputs(tmp_path)
+        win_t = chi_ds["t"].values  # [8, 16, 24, 32, 40, 48]
+        flagged = 2  # segment centered at t=24 s
+        t_slow = np.arange(4000) / 64.0
+        q = (np.abs(t_slow - win_t[flagged]) <= 1.0).astype(np.uint8)
+        pf = _StubPF(t_slow, {"q_drop_chi": q})
+
+        # Pipeline order: QC the chi vars, THEN derive mixing quantities.
+        apply_qc_to_dataset(
+            chi_ds, pf, ["q_drop_chi"], 2.0,
+            flag_var_name="qc_drop_chi", value_vars=["chiMean"],
+        )
+        assert np.isnan(chi_ds["chiMean"].values[flagged])
+        out = _add_mixing_quantities(chi_ds, diss_ds, prof_path, file_label="t")
+
+        # chi-derived quantities dropped at the flagged segment...
+        assert np.isnan(out["K_T"].values[flagged])
+        assert np.isnan(out["Gamma"].values[flagged])
+        # ...but epsilon-derived K_rho is not gated by the chi QC (eps is good).
+        assert np.isfinite(out["K_rho"].values[flagged])
+        # Unflagged segments keep finite chi-derived mixing quantities.
+        keep = [i for i in range(len(win_t)) if i != flagged]
+        assert np.all(np.isfinite(out["K_T"].values[keep]))
+        assert np.all(np.isfinite(out["Gamma"].values[keep]))
+
 
 class TestTimeEpochSeconds:
     def test_cf_units_converted(self):

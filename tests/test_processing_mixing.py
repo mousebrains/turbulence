@@ -49,6 +49,20 @@ def _expected_n2(P, T):
     return float(n2[0])
 
 
+def _expected_dCTdz(P, T, lat=0.0, lon=0.0):
+    """True background gradient the code recovers: d(conservative T)/d(depth).
+
+    ``dTdz`` is the *conservative*-temperature gradient (audit r1-1), which
+    differs from the in-situ ``DTDZ_TRUE`` by the adiabatic lapse rate. This
+    reference computes it over the full span the same way the code does per
+    window, so the recovery tests assert the physically-correct quantity.
+    """
+    SA = gsw.SA_from_SP(np.full_like(P, S_CONST), P, lon, lat)
+    CT = gsw.CT_from_t(SA, T, P)
+    depth = -gsw.z_from_p(P, lat)
+    return float(np.polyfit(depth, CT, 1)[0])
+
+
 class TestSortedStratification:
     def test_matches_window_when_monotonic(self):
         # A monotonic, statically stable profile has no overturns, so the
@@ -64,7 +78,10 @@ class TestSortedStratification:
     def test_recovers_linear_gradient(self):
         t, P, T = _make_profile()
         res = sorted_stratification(np.array([60.0]), 8.0, t, P, T, S=S_CONST)
-        np.testing.assert_allclose(res.dTdz, DTDZ_TRUE, rtol=1e-3)
+        # dTdz is the conservative-temperature gradient (audit r1-1), close to
+        # but not exactly the in-situ DTDZ_TRUE (differs by the lapse rate).
+        np.testing.assert_allclose(res.dTdz, _expected_dCTdz(P, T), rtol=3e-3)
+        np.testing.assert_allclose(res.dTdz, DTDZ_TRUE, rtol=1e-2)
         assert res.N2[0] > 0
 
     def test_sorting_restores_stability(self):
@@ -90,7 +107,9 @@ class TestProfileStratification:
         assert len(target_P) > 0
         finite = np.isfinite(dTdz)
         assert finite.any()
-        np.testing.assert_allclose(dTdz[finite], DTDZ_TRUE, rtol=2e-2)
+        # Conservative-temperature gradient (audit r1-1), within a lapse rate
+        # of the in-situ DTDZ_TRUE.
+        np.testing.assert_allclose(dTdz[finite], _expected_dCTdz(P, T), rtol=2e-2)
         assert np.all(N2[np.isfinite(N2)] > 0)  # cooling downward = stable
 
     def test_targets_span_range_at_half_window_spacing(self):
@@ -121,7 +140,9 @@ class TestWindowStratification:
         t, P, T = _make_profile()
         win_times = np.array([30.0, 60.0, 90.0])
         res = window_stratification(win_times, 4.0, t, P, T, S=S_CONST)
-        np.testing.assert_allclose(res.dTdz, DTDZ_TRUE, rtol=1e-3)
+        # Conservative-temperature gradient (audit r1-1).
+        np.testing.assert_allclose(res.dTdz, _expected_dCTdz(P, T), rtol=3e-3)
+        np.testing.assert_allclose(res.dTdz, DTDZ_TRUE, rtol=1e-2)
 
     def test_n2_matches_gsw(self):
         t, P, T = _make_profile()
@@ -172,7 +193,62 @@ class TestWindowStratification:
         T = T.copy()
         T[::7] = np.nan
         res = window_stratification(np.array([60.0]), 8.0, t, P, T, S=S_CONST)
-        np.testing.assert_allclose(res.dTdz, DTDZ_TRUE, rtol=1e-3)
+        # Conservative gradient ~ in-situ DTDZ_TRUE within a lapse rate.
+        np.testing.assert_allclose(res.dTdz, DTDZ_TRUE, rtol=1e-2)
+
+
+class TestConservativeTemperatureGradient:
+    """Audit r1-1: dTdz must be the conservative-temperature gradient.
+
+    A warm, uniform-conservative-temperature column is genuinely well-mixed
+    (no thermal-variance production), yet its *in-situ* temperature rises with
+    depth at the adiabatic lapse rate (~2.4e-4 K/m near 29 degC), above
+    ``DEFAULT_DTDZ_MIN``. Fitting in-situ T (the pre-fix behavior) reports a
+    spurious finite gradient and would drive a spurious finite K_T/Gamma;
+    fitting conservative T reports ~0 so the well-mixed mask fires.
+    """
+
+    LAT, LON, S_WARM, CT_WARM = 15.2, 145.7, 34.5, 29.0
+
+    def _uniform_ct_column(self, p_lo=10.0, p_hi=60.0, n=600):
+        P = np.linspace(p_lo, p_hi, n)
+        SA = gsw.SA_from_SP(np.full_like(P, self.S_WARM), P, self.LON, self.LAT)
+        # In-situ temperature the instrument sees for a uniform conservative T.
+        T = gsw.t_from_CT(SA, np.full_like(P, self.CT_WARM), P)
+        return P, T
+
+    def test_in_situ_gradient_would_falsely_pass_mask(self):
+        # Guard: the fixture must actually exercise the bug — the in-situ
+        # gradient the pre-fix code fit exceeds the well-mixed floor.
+        P, T = self._uniform_ct_column()
+        depth = -gsw.z_from_p(P, self.LAT)
+        insitu_grad = abs(float(np.polyfit(depth, T, 1)[0]))
+        assert insitu_grad > DEFAULT_DTDZ_MIN
+
+    def test_profile_stratification_reports_well_mixed(self):
+        P, T = self._uniform_ct_column()
+        _, _, dTdz = profile_stratification(
+            P, T, S=self.S_WARM, lat=self.LAT, lon=self.LON, window=4.0
+        )
+        finite = dTdz[np.isfinite(dTdz)]
+        assert finite.size > 0
+        assert np.all(np.abs(finite) < DEFAULT_DTDZ_MIN)
+
+    def test_window_and_sorted_report_well_mixed(self):
+        P, T = self._uniform_ct_column()
+        t = np.linspace(0.0, (P[-1] - P[0]) / W, len(P))  # constant fall speed
+        win = np.array([float(t[len(t) // 2])])
+        hw = (t[-1] - t[0]) / 2.0 * 0.8
+        for res in (
+            window_stratification(
+                win, hw, t, P, T, S=self.S_WARM, lat=self.LAT, lon=self.LON
+            ),
+            sorted_stratification(
+                win, hw, t, P, T, S=self.S_WARM, lat=self.LAT, lon=self.LON
+            ),
+        ):
+            assert np.isfinite(res.dTdz[0])
+            assert abs(res.dTdz[0]) < DEFAULT_DTDZ_MIN
 
 
 class TestMixingCoefficients:
@@ -194,7 +270,14 @@ class TestMixingCoefficients:
         N2 = 10.0 ** rng.uniform(-6, -4, 50)
         dTdz = rng.uniform(0.01, 0.1, 50)
         res = mixing_coefficients(eps, chi, N2, dTdz)
-        np.testing.assert_allclose(res.Gamma * eps / N2, res.K_T, rtol=1e-12)
+        # The identity K_T = Gamma*eps/N2 holds only where neither side was
+        # NaN'd by the per-variable plausibility ceilings (some synthetic draws
+        # give Gamma > Gamma_max or K_T > K_T_max).
+        ok = np.isfinite(res.Gamma) & np.isfinite(res.K_T)
+        assert ok.any()
+        np.testing.assert_allclose(
+            (res.Gamma * eps / N2)[ok], res.K_T[ok], rtol=1e-12
+        )
 
     def test_weak_gradient_masked(self):
         res = mixing_coefficients(

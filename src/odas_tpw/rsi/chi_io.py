@@ -26,8 +26,8 @@ import xarray as xr
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
 
-# Max acceptable epsilon FM (Lueck 2022 MAD-based reject statistic; good fits
-# approach 0, ATOMIX rejects FM > ~1.15) for including a probe in the Method-1
+# Max acceptable epsilon FM (Lueck 2022 MAD-based reject statistic; a good fit
+# sits near ~0.7-0.8, NOT 0, ATOMIX rejects FM > ~1.15) for including a probe in the Method-1
 # mean. Named for FM, not the variance-ratio `fom` (centered on 1.0) it gates
 # only as a fallback when FM is absent. (matches compute_chi_window's default.)
 _EPS_FM_LIMIT = 1.15
@@ -353,7 +353,7 @@ def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
         return a[np.newaxis] if a.ndim == 1 else a
 
     # Probe-rejection filters on the Lueck (2022) MAD-based FM statistic (good
-    # fits approach 0; ATOMIX rejects FM > ~1.15), NOT the variance-ratio `fom`
+    # a good fit sits near ~0.7-0.8 not 0; ATOMIX rejects FM > ~1.15), NOT the variance-ratio `fom`
     # (centered on 1.0, 0.7-1.4 is a GOOD fit). Thresholding `fom` at 1.15 wrongly
     # drops good probes. Fall back to `fom` only when FM is absent (older files),
     # mirroring l4.py's fom_for_flags.
@@ -573,8 +573,8 @@ def _build_chi_dataset(
                 "comment": (
                     "Ratio of observed to attenuated-model variance over the fit "
                     "range; values near 1.0 indicate a good fit. NOT the MAD-based "
-                    "ATOMIX/Rockland FM statistic (Lueck 2022), for which good fits "
-                    "approach 0 and the recommended QC limit is ~1.15."
+                    "ATOMIX/Rockland FM statistic (Lueck 2022), for which a good "
+                    "fit sits near ~0.7-0.8 (NOT 0) and the recommended QC limit is ~1.15."
                 ),
             },
         ),

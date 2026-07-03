@@ -272,6 +272,7 @@ def compute_chi_window(
     fom: np.ndarray | None = None,
     fom_limit: float = 1.15,
     method: int = 1,
+    kappa_T: float | None = None,
 ) -> ChiWindowResult:
     """Compute chi for one dissipation window.
 
@@ -308,9 +309,18 @@ def compute_chi_window(
         Maximum acceptable FOM for including an epsilon in the mean.
     method : int
         1 = chi from epsilon (requires epsilon), 2 = iterative fit.
+    kappa_T : float or None
+        Molecular thermal diffusivity [m²/s]. If None, computed from
+        ``T_mean`` (at the S=35/P=0 reference) via
+        :func:`odas_tpw.scor160.ocean.kappa_T`; pass an explicit value when
+        the caller has the window salinity/pressure.
     """
     from odas_tpw.chi.chi import _chi_from_epsilon, _iterative_fit
     from odas_tpw.chi.fp07 import default_tau_model
+    from odas_tpw.scor160.ocean import kappa_T as _kappa_T_TSP
+
+    if kappa_T is None:
+        kappa_T = float(_kappa_T_TSP(T_mean))
 
     n_therm = len(therm_segs)
     n_freq = fft_length // 2 + 1
@@ -387,6 +397,7 @@ def compute_chi_window(
                     f_AA,
                     W,
                     spectrum_model,
+                    kappa_T,
                 )
                 chi_arr[ci] = er.chi
                 kB_arr[ci] = er.kB
@@ -416,6 +427,7 @@ def compute_chi_window(
                 f_AA,
                 W,
                 spectrum_model,
+                kappa_T,
             )
             chi_val = fit.chi
             spec_raw = fit.spec_batch

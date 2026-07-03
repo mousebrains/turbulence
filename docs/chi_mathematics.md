@@ -30,7 +30,13 @@ chi = 6 * kappa_T * integral_0^inf  Phi_{dT/dz}(k)  dk       [K^2/s]
 where:
 
 - `Phi_{dT/dz}(k)` is the one-dimensional temperature gradient wavenumber spectrum in `[(K/m)^2 / cpm]`
-- `kappa_T = 1.4e-7 m^2/s` is the molecular thermal diffusivity of seawater
+- `kappa_T` is the molecular thermal diffusivity of seawater, evaluated
+  **per window** at the window-mean temperature/salinity/pressure via
+  [`scor160.ocean.kappa_T`](../src/odas_tpw/scor160/ocean.py) (Sharqawy 2010 /
+  Jamieson–Tudhope 1970 thermal conductivity ÷ gsw density·specific-heat). It
+  ranges from ~`1.39e-7` at −1 °C to ~`1.51e-7 m^2/s` at 32 °C. The fixed
+  `1.4e-7` (`chi.batchelor.KAPPA_T`) is now only the backward-compatible
+  fallback default — see §11.
 - `k` is the cyclic wavenumber in cycles per metre (cpm)
 - The factor 6 arises from the isotropy assumption: 3 spatial dimensions times a factor of 2 from the definition involving the full gradient tensor
 
@@ -346,7 +352,7 @@ cost(chi) = sum_i [ ln Phi_model(k_i; chi) - ln Phi_obs(k_i) ]^2
 chi = argmin_chi  cost(chi)       [K^2/s]
 ```
 
-Minimising in log space penalises over- and under-estimation symmetrically on the log-log plot, and is more robust than the pure variance-correction estimate when the epsilon-derived `kB` does not perfectly match the temperature spectrum. If the fit fails (all costs non-finite), `chi_vc` is used.
+Minimising in log space penalises over- and under-estimation symmetrically on the log-log plot, and is more robust than the pure variance-correction estimate when the epsilon-derived `kB` does not perfectly match the temperature spectrum. The reported chi is not the raw grid argmin: the grid minimum is refined by fitting a parabola through the minimum and its two neighbours in `(log10 chi, cost)` space, removing the ~half-grid-step (~2.3%) quantization. If the fit fails (all costs non-finite), `chi_vc` is used.
 
 
 ## 7. Method 2a: Maximum Likelihood Estimation
@@ -383,7 +389,7 @@ Total: 200 function evaluations.
 
 ### Fitting range
 
-- **Low-k cutoff:** first wavenumber bin above zero
+- **Low-k cutoff:** first wavenumber bin above the `2 * Phi_noise` criterion (fallback to all `k` in `(0, K_AA]` when fewer than 6 bins qualify)
 - **High-k cutoff:** highest `k` where `Phi_obs(k) > 2 * Phi_noise(k)` and `k <= f_AA / W`
 - Minimum 6 wavenumber points required in the fit range
 
@@ -407,7 +413,7 @@ where the correction ratio is computed from the fitted model at unit chi:
 
 ```
 V_total    = integral over all k    of  Phi_model(k; kB_fit, chi=1)
-V_resolved = integral_0^{K_max_fit} of  Phi_model(k; kB_fit, chi=1) * |H(k)|^2
+V_resolved = integral_{K_fit_low}^{K_max_fit} of  Phi_model(k; kB_fit, chi=1) * |H(k)|^2
 ```
 
 `V_resolved` includes the FP07 attenuation `|H|^2`, so the ratio simultaneously corrects for the unresolved band edges and for in-band sensor response. If the correction is not finite, the initial integrated estimate `chi_obs` is reported.
@@ -553,7 +559,7 @@ Phi_corrected(k) = Phi_raw(k) * C_FD(f)
 The profile is divided into overlapping windows of length `diss_length` samples (default `4 * fft_length = 4096` samples at 512 Hz = 8 seconds of data). Adjacent windows overlap by `overlap` samples (default `diss_length // 2 = 2048`). Within each window:
 
 - Mean pressure, temperature, speed, and time are computed
-- Kinematic viscosity `nu` is computed from [`visc35(T_mean)`](../src/odas_tpw/scor160/ocean.py)
+- Kinematic viscosity `nu` is computed from [`visc(T_mean, S, P_mean)`](../src/odas_tpw/scor160/ocean.py) when salinity is available (measured JAC C/T on the pipeline path, or user-supplied), falling back to `visc35(T_mean)` otherwise
 - The spectral estimate uses `2 * (diss_length // fft_length) - 1` overlapping FFT segments
 - Degrees of freedom: `d = 1.9 * num_ffts` (Nuttall 1971)
 
@@ -564,9 +570,23 @@ The profile is divided into overlapping windows of length `diss_length` samples 
 
 | Symbol | Value | Description | Source |
 |--------|-------|-------------|--------|
-| `kappa_T` | `1.4e-7 m^2/s` | Molecular thermal diffusivity of seawater | Standard value |
+| `kappa_T(T,S,P)` | `1.39e-7`–`1.51e-7 m^2/s` | Molecular thermal diffusivity of seawater, **per-window** temperature-dependent | [`scor160.ocean.kappa_T`](../src/odas_tpw/scor160/ocean.py); Sharqawy 2010 / Jamieson–Tudhope 1970 + gsw |
+| `KAPPA_T` | `1.4e-7 m^2/s` | Fixed ~15 °C fallback default only (used when no per-window value is supplied) | Standard value |
 | `q_B` | `3.7` | Batchelor universal constant | [Oakey 1982](https://doi.org/10.1175/1520-0485(1982)012%3C0256:DOTROD%3E2.0.CO;2) |
 | `q_K` | `5.26` | Kraichnan universal constant | [Bogucki et al. 1997](https://doi.org/10.1017/S0022112097005727) |
+
+> **Temperature-dependent `kappa_T` (audit 2026-07-01, fixed 2026-07-03).** The
+> molecular thermal diffusivity `kappa_T = k/(ρ·c_p)` is temperature-dependent:
+> ≈`1.39e-7` at −1 °C, ≈`1.45e-7` at 15 °C, ≈`1.50e-7` at 28 °C, ≈`1.51e-7` at
+> 32 °C. It is now evaluated **per window** at the window-mean T/S/P (the same
+> T/S/P already used for `ν`) in the L3 stage and threaded through every chi
+> integration in `chi.py`/`l4_chi.py`. Because `chi = 6·kappa_T·∫…` and
+> `epsilon_T = (2π·kB)⁴·ν·kappa_T²`, this removed a chi bias that ran from
+> **≈ −1 % at −1 °C to ≈ +8 % at 32 °C** (epsilon_T twice that in log-space)
+> against the old fixed `1.4e-7` — e.g. ARCTERX warm (~28 °C) surface chi rises
+> ≈ +7 %. The fixed `KAPPA_T` constant survives only as the fallback default for
+> the `chi.py` functions' `kappa_T=` argument. Verified in
+> [`tests/test_audit_2026_07_robustness.py::TestChiKappaTemperatureDependence`](../tests/test_audit_2026_07_robustness.py).
 
 ### Default instrument parameters
 

@@ -58,6 +58,50 @@ class TestDetectBottomCrash:
         )
         assert bottom is None
 
+    def test_midcolumn_spike_is_not_a_crash(self):
+        """Audit r1-3: a vibration spike far above the deepest sample is
+        mid-column contamination, not a bottom crash — the deep cast is kept
+        and a warning is emitted (no silent truncation)."""
+        import warnings as _w
+
+        n = 8000
+        depth = np.linspace(0.0, 230.0, n)  # cast keeps descending to 230 m
+        accel = np.random.default_rng(3).standard_normal(n) * 0.01
+        spike = (depth >= 98.0) & (depth < 104.0)  # transient ~100 m up
+        accel[spike] = np.random.default_rng(4).standard_normal(int(spike.sum())) * 8.0
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            bottom = detect_bottom_crash(
+                depth, {"vibration_rms": accel}, fs=512.0, vibration_factor=4.0
+            )
+        assert bottom is None, f"mid-column spike truncated the cast at {bottom} m"
+        assert any("mid-column" in str(w.message) for w in caught)
+
+    def test_near_bottom_spike_still_detected(self):
+        """A spike within proximity_bins of the deepest sample is a real crash."""
+        n = 8000
+        depth = np.linspace(0.0, 230.0, n)
+        accel = np.random.default_rng(5).standard_normal(n) * 0.01
+        spike = depth >= 228.0  # within ~2 m of the 230 m bottom
+        accel[spike] = np.random.default_rng(6).standard_normal(int(spike.sum())) * 8.0
+        bottom = detect_bottom_crash(
+            depth, {"vibration_rms": accel}, fs=512.0, vibration_factor=4.0
+        )
+        assert bottom is not None and bottom > 220.0
+
+    def test_proximity_bins_zero_requires_deepest_bin(self):
+        """proximity_bins=0 accepts only the single deepest sampled bin."""
+        n = 8000
+        depth = np.linspace(0.0, 100.0, n)
+        accel = np.random.default_rng(7).standard_normal(n) * 0.01
+        # Spike two bins above the bottom (bins are 4 m wide from depth_minimum).
+        spike = (depth >= 90.0) & (depth < 94.0)
+        accel[spike] = np.random.default_rng(8).standard_normal(int(spike.sum())) * 8.0
+        assert detect_bottom_crash(
+            depth, {"vibration_rms": accel}, fs=512.0, vibration_factor=4.0,
+            proximity_bins=0,
+        ) is None
+
     def test_shallow_profile_returns_none(self):
         """Profile too shallow — below depth_minimum."""
         n = 1000

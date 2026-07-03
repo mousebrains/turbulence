@@ -42,7 +42,7 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas
 - `goodman.py` — Goodman coherent noise removal using accelerometer spectra.
 - `despike.py` — Iterative spike removal for shear probe signals.
 - `nasmyth.py` — Nasmyth universal shear spectrum (Lueck improved fit).
-- `ocean.py` — Seawater properties: `visc35`, `visc(T,S,P)`, `density(T,S,P)`, `buoyancy_freq(T,S,P)` via gsw (TEOS-10).
+- `ocean.py` — Seawater properties: `visc35`, `visc(T,S,P)`, `density(T,S,P)`, `buoyancy_freq(T,S,P)`, `kappa_T(T,S,P)` (thermal diffusivity for chi) via gsw (TEOS-10).
 
 ### CLI Commands
 

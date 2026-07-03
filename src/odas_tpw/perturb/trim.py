@@ -130,9 +130,18 @@ def _trim_cache_lookup(
 
 
 def _trim_cache_store(
-    cache_dir: Path, source: Path, dest: Path, output_dir: Path, result: "TrimResult"
+    cache_dir: Path,
+    source: Path,
+    dest: Path,
+    output_dir: Path,
+    result: "TrimResult",
+    fp: dict | None,
 ) -> None:
-    fp = _trim_fingerprint(source)
+    # ``fp`` is the source fingerprint snapshot taken BEFORE the trim read (see
+    # trim_p_file). Re-stat'ing the source here instead would fold in any records
+    # appended during the trim (live acquisition / an rsync completing mid-trim),
+    # so a later run would match the grown source against a short trimmed output
+    # and silently drop the appended records.
     if fp is None:
         return
     marker = _trim_marker(cache_dir, dest, output_dir)
@@ -205,6 +214,11 @@ def trim_p_file(
     """
     dest = trim_destination(source, output_dir, root=root)
 
+    # Snapshot the source fingerprint BEFORE any read, so a source that grows
+    # during the trim (appended records) fails the fingerprint match on the next
+    # run and is re-trimmed, rather than matching against a short trimmed copy.
+    source_fp = _trim_fingerprint(source)
+
     # Incremental skip: an unchanged source (fingerprint match) reuses last
     # run's decision from a single stat — no per-file header read/open, which is
     # what costs minutes over a slow mount. force_trim re-reads.
@@ -215,7 +229,7 @@ def trim_p_file(
 
     def _finish(result: TrimResult) -> TrimResult:
         if cache_dir is not None:
-            _trim_cache_store(cache_dir, source, dest, output_dir, result)
+            _trim_cache_store(cache_dir, source, dest, output_dir, result, source_fp)
         return result
 
     # Read the source header first (the same 128-byte read the 'referenced'

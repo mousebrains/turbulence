@@ -4,6 +4,7 @@
 Reference: Code/process_P_files.m (233 lines), Code/mat2profile.m (170 lines)
 """
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -116,9 +117,43 @@ def _write_binned_or_clear(
     if ds.data_vars:
         if manifest is not None:
             ds = ds.assign_attrs(_input_manifest=manifest)
-        ds.to_netcdf(out)
+        # Atomic write: to a temp file in the same dir, then os.replace into
+        # place. A direct ds.to_netcdf(out) interrupted mid-payload (ENOSPC /
+        # SMB drop / Ctrl-C) leaves a truncated binned.nc whose _input_manifest
+        # header already validates as cache-current, permanently publishing
+        # fill data with no error (audit r1-5). os.replace is atomic within a
+        # filesystem, so a partial write never becomes the live file. (Mirrors
+        # _write_marker and trim.py; the temp file shares out_dir's filesystem.)
+        tmp = out.with_name(f".binned.nc.{os.getpid()}.tmp")
+        try:
+            ds.to_netcdf(tmp)
+            os.replace(tmp, out)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
     elif out.exists():
         out.unlink()
+
+
+def _atomic_to_netcdf(ds: "xr.Dataset", out_path: Path) -> None:
+    """Write *ds* to *out_path* atomically (temp file + os.replace).
+
+    A direct ds.to_netcdf(out_path) interrupted mid-payload (ENOSPC / SMB drop /
+    Ctrl-C) or raising leaves a readable PARTIAL NetCDF on disk; the same run
+    then bins it and the bin/combo manifest locks those fill-derived bins in, so
+    a correct retry (identical filenames -> identical manifest) skips re-binning
+    and permanently publishes the partial data (audit 2026-07-01). os.replace is
+    atomic within a filesystem, so a partial write never becomes the live file.
+    """
+    tmp = out_path.with_name(f".{out_path.name}.{os.getpid()}.tmp")
+    try:
+        ds.to_netcdf(tmp)
+        os.replace(tmp, out_path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 _MANIFEST_ATTR = "_input_manifest"
@@ -569,8 +604,14 @@ def _adjust_profile_bounds(
     return adjusted
 
 
-def _apply_fom_cut(ds, fom_max: float, file_label: str) -> int:
-    """NaN per-probe per-segment values where ``fom >= fom_max``.
+def _apply_fom_cut(ds, fom_max: float, file_label: str, two_sided: bool = False) -> int:
+    """NaN per-probe per-segment values where the fom fails its cut.
+
+    With ``two_sided=False`` (epsilon): ``fom >= fom_max``.
+    With ``two_sided=True`` (chi): ``fom >= fom_max`` OR ``fom <= 1/fom_max``.
+    The chi fom is an obs/model VARIANCE RATIO that is bad far from 1.0 in either
+    direction, so a model that overestimates observed variance (fom << 1) must be
+    cut too, not only a high fom.
 
     Operates on the (probe, time) array set returned by the diss / chi
     stages. Mutates *ds* in place; returns the count of (probe, segment)
@@ -598,6 +639,8 @@ def _apply_fom_cut(ds, fom_max: float, file_label: str) -> int:
         return 0
     fom = ds["fom"].values
     bad = np.isfinite(fom) & (fom >= fom_max)
+    if two_sided and fom_max > 0:
+        bad = bad | (np.isfinite(fom) & (fom <= 1.0 / fom_max))
     if not bad.any():
         return 0
     n_bad = int(bad.sum())
@@ -803,6 +846,7 @@ def _add_mixing_quantities(
     T_name: str = "JAC_T",
     C_name: str = "JAC_C",
     file_label: str = "",
+    epsilon_provenance: str = "",
 ):
     """Append stratification and (when available) mixing quantities to chi.
 
@@ -909,7 +953,7 @@ def _add_mixing_quantities(
                             "doi:10.1175/1520-0485(1982)012<0256:DOTROD>2.0.CO;2. "
                             "epsilonMean paired from the nearest dissipation window. "
                             "NaN where N2 < 1e-9 s-2 or |dT/dz| < 1e-4 K/m. "
-                            "Canonical value ~0.2."
+                            "Canonical value ~0.2." + epsilon_provenance
                         ),
                     },
                 ),
@@ -923,8 +967,10 @@ def _add_mixing_quantities(
                             "doi:10.1175/1520-0485(1980)010<0083:EOTLRO>2.0.CO;2. "
                             "Compare with K_T: agreement implies the measured Gamma "
                             "is near the canonical 0.2. NaN where N2 < 1e-9 s-2 or "
-                            "K_rho > 10 m2 s-1 (physically implausible diffusivity "
-                            "from near-floor N2)."
+                            "K_rho > 10 m2 s-1 (physically implausible diffusivity: "
+                            "the unbounded near-floor-N2 artifact, or contaminated "
+                            "near-surface windows where epsilon is itself spurious)."
+                            + epsilon_provenance
                         ),
                     },
                 ),
@@ -1137,15 +1183,19 @@ def process_file(
         if P_slow is None:
             logger.warning("No pressure channel in %s", p_path.name)
         else:
-            W = _smooth_fall_rate(P_slow, pf.fs_slow)
             # Resolve "auto" → vehicle default (e.g. slocum_glider → "glide").
             # ``scor160.profile.get_profiles`` doesn't know "auto" itself, so
             # without this it silently falls through to the "down" branch and
             # we lose every up-profile -- on a glider with MR-on-during-climb
             # only, that drops *all* the real flight data.
-            from odas_tpw.rsi.vehicle import resolve_direction
+            from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
 
             vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
+            # Smooth the detection fall rate with the VEHICLE tau, matching ODAS
+            # (odas_p2mat.m). The default 1.5 s is correct for a VMP but 2-40x
+            # too fast for gliders/floats (slocum 3.0 s, argo 60.0 s), which made
+            # W noisy at the W_min threshold and fragmented profile boundaries.
+            W = _smooth_fall_rate(P_slow, pf.fs_slow, tau=resolve_tau(vehicle))
             direction = resolve_direction(
                 profiles_cfg.get("direction", "auto"), vehicle,
             )
@@ -1405,7 +1455,7 @@ def process_file(
                             )
                         out_name = Path(prof_path).name
                         out_path = output_dirs["diss"] / out_name
-                        ds.to_netcdf(out_path)
+                        _atomic_to_netcdf(ds, out_path)
                         out_path_str = str(out_path)
                         result["diss"].append(out_path_str)
                         diss_by_profile[prof_path] = out_path_str
@@ -1486,30 +1536,18 @@ def process_file(
                             if chi_fom_max is not None:
                                 _apply_fom_cut(
                                     chi_ds, float(chi_fom_max), p_path.name,
+                                    two_sided=True,
                                 )
                             chi_ds = mk_chi_mean(
                                 chi_ds, chi_cfg.get("chi_minimum", 1e-13)
                             )
-                            # Derived mixing quantities (Gamma, K_T, K_rho)
-                            # with real salinity from the profile's own C/T/P
-                            if chi_cfg.get("mixing", True):
-                                mix_eps = (
-                                    diss_ds
-                                    if diss_ds is not None
-                                    else xr.open_dataset(diss_path)
-                                )
-                                try:
-                                    chi_ds = _add_mixing_quantities(
-                                        chi_ds,
-                                        mix_eps,
-                                        prof_path,
-                                        T_name=ct_cfg.get("T_name", "JAC_T"),
-                                        C_name=ct_cfg.get("C_name", "JAC_C"),
-                                        file_label=Path(prof_path).name,
-                                    )
-                                finally:
-                                    if mix_eps is not diss_ds:
-                                        mix_eps.close()
+                            # Apply chi QC BEFORE deriving mixing quantities so a
+                            # QC-dropped chi does not leak into K_T/Gamma (audit
+                            # r1-4). Mixing then consumes the NaN'd chiMean, so
+                            # K_T and Gamma (chi-derived) are NaN wherever chi was
+                            # dropped. K_rho is epsilon-derived (0.2*eps/N2) and is
+                            # correctly gated instead by the epsilon-side QC, via
+                            # the NaN epsilonMean paired in by _add_mixing_quantities.
                             if qc_enabled:
                                 n_cprobe = (
                                     int(chi_ds["probe"].size)
@@ -1527,10 +1565,51 @@ def process_file(
                                     ],
                                     drop_action=qc_drop_action,
                                 )
+                            # Derived mixing quantities (Gamma, K_T, K_rho)
+                            # with real salinity from the profile's own C/T/P
+                            if chi_cfg.get("mixing", True):
+                                mix_eps = (
+                                    diss_ds
+                                    if diss_ds is not None
+                                    else xr.open_dataset(diss_path)
+                                )
+                                # Gamma and K_rho are built from the shear-probe
+                                # epsilonMean even under Method 2 (use_epsilon=False),
+                                # the setting chosen precisely when shear epsilon is
+                                # distrusted. Record that provenance in the attrs and
+                                # warn so a downstream user is not misled.
+                                if not chi_use_epsilon:
+                                    eps_prov = (
+                                        " PROVENANCE: chi.use_epsilon=false (Method 2), "
+                                        "so chi is a pure spectral fit, but this epsilon "
+                                        "is still the shear-probe epsilonMean (the source "
+                                        "Method 2 is chosen to distrust); treat Gamma/K_rho "
+                                        "accordingly."
+                                    )
+                                    logger.warning(
+                                        "%s: chi.use_epsilon=false but mixing Gamma/K_rho "
+                                        "still use shear epsilonMean; see variable attrs",
+                                        Path(prof_path).name,
+                                    )
+                                else:
+                                    eps_prov = ""
+                                try:
+                                    chi_ds = _add_mixing_quantities(
+                                        chi_ds,
+                                        mix_eps,
+                                        prof_path,
+                                        T_name=ct_cfg.get("T_name", "JAC_T"),
+                                        C_name=ct_cfg.get("C_name", "JAC_C"),
+                                        file_label=Path(prof_path).name,
+                                        epsilon_provenance=eps_prov,
+                                    )
+                                finally:
+                                    if mix_eps is not diss_ds:
+                                        mix_eps.close()
                             _copy_profile_scalars(prof_path, chi_ds, prof_scalars_cache)
                             out_name = Path(prof_path).name
                             out_path = output_dirs["chi"] / out_name
-                            chi_ds.to_netcdf(out_path)
+                            _atomic_to_netcdf(chi_ds, out_path)
                             result["chi"].append(str(out_path))
                     except Exception as exc:
                         logger.error("chi for %s: %s", Path(prof_path).name, exc)
@@ -2402,6 +2481,15 @@ def _run_combo(
                     if manifest is not None:
                         _stamp_manifest(Path(out), manifest)
                     logger.info("Wrote %s", out)
+                else:
+                    # Empty binned source -> no combo produced. Remove any stale
+                    # combo.nc so a shrunk/zeroed input set does not leave the
+                    # previous run's combo as the apparently-current product
+                    # (mirrors _write_binned_or_clear on the binning side).
+                    stale = dst / "combo.nc"
+                    if stale.exists():
+                        stale.unlink()
+                        logger.info("Removed stale %s (no binned input)", stale)
             except Exception as exc:
                 logger.error("combo %s: %s", dst.name, exc)
 

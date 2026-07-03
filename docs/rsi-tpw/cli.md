@@ -22,6 +22,7 @@ rsi-tpw <subcommand> [options]
 | `rsi-tpw init`     | Generate a template YAML configuration file |
 | `rsi-tpw ql`       | Interactive quick-look viewer |
 | `rsi-tpw dl`       | Interactive dissipation quality viewer |
+| `rsi-tpw ml`       | Interactive mixing viewer (N²/dT·dz⁻¹/K_T/Γ/K_ρ) |
 
 ## Global Options
 
@@ -245,7 +246,15 @@ rsi-tpw pipeline VMP/*.p -o results/
 | `--fp07-model {single_pole,double_pole}` | FP07 transfer function (default: single_pole) |
 | `--spectrum-model {batchelor,kraichnan}` | Spectrum model for chi (default: kraichnan) |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
-| `--salinity FLOAT` | Salinity [PSU] for viscosity (default: 35, fixed S) |
+| `--salinity FLOAT` | Fixed salinity [PSU] fallback for viscosity (default: 35). **Ignored on conductivity-equipped instruments** — the pipeline resolves per-sample salinity from the measured JAC C/T, which takes precedence (see note below). |
+
+> **Salinity precedence (`pipeline` only):** `run_pipeline` prefers measured
+> salinity (from the instrument's own JAC conductivity/temperature) over
+> `--salinity`, so on a conductivity-equipped instrument (including the
+> campaign VMP-250) an explicit `--salinity` does **not** change the epsilon /
+> chi / N² viscosity. It applies only when no conductivity channel is present.
+> (The `eps` and `chi` subcommands, which have no CTD path, do honor
+> `--salinity`.)
 
 ## `rsi-tpw init`
 

@@ -246,7 +246,7 @@ where `H(f) = C_ua(f) / C_aa(f)` is the frequency-dependent transfer function fr
    ```
    C_uu_clean(f) = C_uu(f) - C_ua(f) * inv(C_aa(f)) * C_ua(f)^H
    ```
-   where `^H` denotes the conjugate transpose. If `C_aa(f)` is singular, the original spectrum is retained.
+   where `^H` denotes the conjugate transpose. If `C_aa(f)` is singular or rank-deficient, that frequency bin is set to NaN and excluded downstream — the uncleaned spectrum is never passed through as if it had been cleaned.
 
 3. **Apply bias correction** ([RSI TN-61](https://rocklandscientific.com/support/technical-notes/)):
    ```
@@ -261,7 +261,7 @@ where `H(f) = C_ua(f) / C_aa(f)` is the frequency-dependent transfer function fr
 
 ## 6. Macoun-Lueck Wavenumber Correction
 
-The airfoil shear probe has a finite spatial extent that attenuates the measured shear at low wavenumbers. The [Macoun & Lueck (2004)](https://doi.org/10.1175/1520-0426(2004)021%3C0284:MTSROT%3E2.0.CO;2) correction compensates for this:
+The airfoil shear probe has a finite spatial extent that spatially averages the velocity field, attenuating the measured shear at high wavenumbers (small scales). The [Macoun & Lueck (2004)](https://doi.org/10.1175/1520-0426(2004)021%3C0284:MTSROT%3E2.0.CO;2) correction compensates for this:
 
 ```
 correction(k) = 1 + (k / 48)^2       for k <= 150 cpm
@@ -366,7 +366,7 @@ To find the wavenumber where the observed spectrum departs from the turbulence s
    K_max = min(K_limit, K_polymin)
    ```
 
-If no suitable minimum is found (polynomial fit order is decreased until one is found, down to order 3), `K_max = K_limit`.
+A single polynomial fit is performed with the order clamped to `[3, 8]`; if no qualifying spectral minimum root is found, the code falls back to `K_95` (not an order-decreasing retry — that is ODAS `get_diss_odas.m` behavior, not this port), with `K_max = min(K_95, K_AA)` clipped to `[7, 150]` cpm.
 
 ([`l4.py: _variance_method`](../src/odas_tpw/scor160/l4.py))
 

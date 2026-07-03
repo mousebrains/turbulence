@@ -234,6 +234,13 @@ COMBO_SCHEMA: dict[str, dict] = {
         "nc_name": "epsilonLnSigma",
         "units": "",
         "long_name": "sigma of ln(epsilon)",
+        "comment": (
+            "Expected single-probe standard deviation of ln(epsilon) from the "
+            "Lueck variance model; this is NOT the sigma of the combined mean "
+            "(no sqrt(n) reduction is applied). After depth-binning it is the "
+            "RMS of the contributing per-window sigmas in the bin, not a spread "
+            "recomputed from the binned estimates."
+        ),
     },
     "FM_1": {
         "nc_name": "FM_1",
@@ -294,6 +301,26 @@ COMBO_SCHEMA: dict[str, dict] = {
 }
 
 CHI_SCHEMA: dict[str, dict] = {
+    # Headline combined chi products. Without these entries, binning strips all
+    # per-variable attrs and the published combo carries chiMean/chiLnSigma with
+    # no units or long_name.
+    "chiMean": {
+        "nc_name": "chiMean",
+        "units": "K^2/s",
+        "long_name": "combined thermal variance dissipation rate",
+    },
+    "chiLnSigma": {
+        "nc_name": "chiLnSigma",
+        "units": "",
+        "long_name": "sigma of ln(chi)",
+        "comment": (
+            "Expected single-probe standard deviation of ln(chi); this is NOT "
+            "the sigma of the combined mean (no sqrt(n) reduction is applied). "
+            "After depth-binning it is the RMS of the contributing per-window "
+            "sigmas in the bin, not a spread recomputed from the binned "
+            "estimates."
+        ),
+    },
     "chi_1": {
         "nc_name": "chi_1",
         "units": "K^2/s",

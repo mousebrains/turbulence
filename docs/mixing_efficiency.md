@@ -55,10 +55,13 @@ window grid:
 | `K_rho` | Osborn diffusivity $0.2\,\varepsilon/N^2$ with the canonical constant | m$^2$ s$^{-1}$ |
 
 Implementation: [`odas_tpw.processing.mixing`](../src/odas_tpw/processing/mixing.py).
-Estimates are masked (NaN) where $N^2 < 10^{-9}$ s$^{-2}$
-(unstratified — the Osborn scaling does not apply) or
-$|\partial\overline{T}/\partial z| < 10^{-4}$ K/m (well-mixed — the
-temperature-variance budget no longer constrains a diffusivity).
+Estimates are masked (NaN) **per variable**, mirroring which gradient each
+one divides by: `K_T` where $|\partial\overline{T}/\partial z| < 10^{-4}$ K/m
+(well-mixed — the temperature-variance budget no longer constrains a
+diffusivity); `K_rho` where $N^2 < 10^{-9}$ s$^{-2}$ (unstratified — the
+Osborn scaling does not apply); and `Gamma` where *either* floor is crossed
+(it divides by both). So `K_T` survives in unstratified water and `K_rho`
+survives in well-mixed water — only their intersection removes both.
 `K_rho` is additionally masked where it exceeds an upper sanity bound
 (`K_rho_max`, default $10$ m$^2$ s$^{-1}$): as $N^2$ approaches the floor
 the Osborn diffusivity grows without bound (tens to thousands of
@@ -66,8 +69,21 @@ m$^2$ s$^{-1}$), an artifact rather than real mixing. The bound sits above
 even the most energetic real mixing — overflows and hydraulic jumps reach
 $\sim 0.1$–$1$ m$^2$ s$^{-1}$, and energetic near-surface mixing on ARCTERX
 VMP casts reaches a few m$^2$ s$^{-1}$ — so genuine signal is retained and
-only the unbounded near-floor artifact is removed; the number of masked
-windows is reported via a warning.
+only physically implausible magnitudes are removed: the unbounded
+near-floor-$N^2$ artifact, or contaminated near-surface windows whose
+epsilon is itself spurious. The number of masked windows is reported via a
+warning.
+
+`K_T` and `Gamma` carry their **own** upper ceilings for the same reason,
+gated per variable rather than wherever `K_rho` is masked (they blow up in
+different regimes): `K_T` above `K_T_max` (default $10$ m$^2$ s$^{-1}$; a weak
+$\partial\overline{T}/\partial z$ with a contaminated $\chi$ can push the
+thermal diffusivity past any real value even where $N^2$ is fine), and `Gamma`
+above `Gamma_max` (default $5$; the measured mixing coefficient is $\sim 0.2$
+canonically and rarely exceeds $\sim 1$–$2$, so values of tens to hundreds —
+produced when a near-zero shear $\varepsilon$ lands in the denominator — are
+artifacts). Gating each on its own ceiling keeps a legitimately large `K_T` in
+low-$N^2$ water instead of discarding it with `K_rho`.
 
 Two caveats for interpretation:
 

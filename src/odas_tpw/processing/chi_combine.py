@@ -51,8 +51,10 @@ def mk_chi_mean(
       5. ``var_ln_chi = 5.5 / (1 + (L_hat/4)^(7/9))``; same Lueck-style
          expression used for epsilon.
       6. 95% CI range ``1.96 * sqrt(2) * mean(sigma_ln_chi)``.
-      7. Iteratively remove the largest probe value from rows whose
-         min/max log-spread exceeds the CI range.
+      7. Iteratively remove the probe FURTHEST from the cross-probe
+         ln-mean (symmetric — a low outlier is dropped as readily as a
+         high one) on rows whose min/max log-spread exceeds the CI range;
+         requires >= 3 probes and never prunes below 2 survivors.
       8. ``chiMean`` = geometric mean of surviving probes; ``chiLnSigma``
          = mean ``sigma_ln_chi`` across probes.
 

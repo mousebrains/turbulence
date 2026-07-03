@@ -82,6 +82,26 @@ class TestPressureMethod:
         )
         np.testing.assert_allclose(speed_fast, 0.07, atol=1e-12)
 
+    def test_glider_pressure_method_warns(self, vmp_descent):
+        """Audit r2-3: the pressure method on a glide vehicle warns that
+        |dP/dt| is the vertical (not through-water) speed and epsilon is
+        biased — matching the rsi path, which perturb otherwise bypasses."""
+        with pytest.warns(UserWarning, match="strongly biased"):
+            compute_speed_for_pfile(
+                vmp_descent, {"method": "pressure"}, vehicle="slocum_glider",
+            )
+
+    def test_vmp_pressure_method_does_not_warn(self, vmp_descent):
+        """A VMP's vertical speed IS its through-water speed — no warning."""
+        import warnings as _w
+
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            compute_speed_for_pfile(
+                vmp_descent, {"method": "pressure"}, vehicle="vmp",
+            )
+        assert not any("strongly biased" in str(w.message) for w in caught)
+
 
 class TestEMMethod:
     def test_em_returns_u_em(self, glider_with_em):

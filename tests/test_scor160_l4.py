@@ -118,8 +118,10 @@ class TestProcessL4:
         for i in range(l4.n_shear):
             for j in range(l4.n_spectra):
                 ratio = l4.epsi[i, j] / eps_in
-                # Should recover within a factor of 2
-                assert 0.5 < ratio < 2.0, f"probe {i}, spec {j}: ratio={ratio:.3f}"
+                # Synthetic pure-Nasmyth recovery is exact to <1%; a wide
+                # factor-of-2 window would pass a real systematic error. Gate
+                # +/-5% (audit 2026-07-01).
+                assert 0.95 < ratio < 1.05, f"probe {i}, spec {j}: ratio={ratio:.3f}"
 
     def test_nasmyth_recovery_high_epsilon(self):
         """High epsilon should use ISR method and still recover accurately."""
@@ -131,7 +133,8 @@ class TestProcessL4:
         for i in range(l4.n_shear):
             for j in range(l4.n_spectra):
                 ratio = l4.epsi[i, j] / eps_in
-                assert 0.3 < ratio < 3.0
+                # ISR-method recovery is likewise exact to <1% on synthetic input.
+                assert 0.95 < ratio < 1.05, f"probe {i}, spec {j}: ratio={ratio:.3f}"
 
     def test_variance_method_used_low_eps(self):
         """Low epsilon should use variance method (method=0)."""
