@@ -93,7 +93,7 @@ class StratificationResult(NamedTuple):
     """Per-window background stratification."""
 
     N2: np.ndarray  # buoyancy frequency squared [s^-2]
-    dTdz: np.ndarray  # background temperature gradient vs depth [K/m]
+    dTdz: np.ndarray  # background conservative-temperature (θ) gradient vs depth [K/m]
 
 
 class MixingResult(NamedTuple):
@@ -120,10 +120,12 @@ def window_stratification(
 
     For each window (center time ± half width):
 
-    - ``dTdz`` is the slope of a least-squares fit of in-situ
-      temperature against depth (positive down), i.e. the *background*
-      gradient at the window scale — the same quantity whose square
-      normalizes chi in the Osborn-Cox model.
+    - ``dTdz`` is the slope of a least-squares fit of *conservative*
+      temperature (θ, TEOS-10) against depth (positive down), i.e. the
+      *background* gradient at the window scale — the same quantity whose
+      square normalizes chi in the Osborn-Cox model. Conservative (not
+      in-situ) temperature is used so the adiabatic lapse rate, which
+      produces no thermal variance, does not enter the gradient.
     - ``N2`` is gsw.Nsquared (TEOS-10) evaluated between the mean
       (SA, CT, p) of the shallow and deep halves of the window, which
       averages out microstructure fluctuations.
@@ -199,8 +201,18 @@ def window_stratification(
         if np.ptp(Pw) < min_dp:
             continue
 
-        # Background temperature gradient vs depth (least squares)
-        dTdz[j] = np.polyfit(zw, Tw, 1)[0]
+        # Background conservative-temperature gradient vs depth (least
+        # squares). Osborn-Cox variance production is against the
+        # adiabatically-referenced (conservative) temperature gradient; fitting
+        # in-situ T folds in the adiabatic lapse rate (~2.4e-4 K/m in warm
+        # water), which biases K_T/Gamma and defeats the well-mixed mask
+        # (audit r1-1). chi itself is a microstructure quantity and is
+        # unaffected — in-situ and conservative temperature *fluctuations*
+        # coincide at those scales.
+        Sw_vals = Sw if Sw is not None else np.full(len(Pw), S_const)
+        SA_w = gsw.SA_from_SP(Sw_vals, Pw, lon, lat)
+        CT_w = gsw.CT_from_t(SA_w, Tw, Pw)
+        dTdz[j] = np.polyfit(zw, CT_w, 1)[0]
 
         # N² between the shallow- and deep-half means (TEOS-10)
         order = np.argsort(Pw)
@@ -253,8 +265,9 @@ def sorted_stratification(
       nonlinear equation of state, which (via cabbeling) is not guaranteed
       monotone under the potential-density (sigma0) sort. Such windows are
       treated as effectively unstratified by the downstream Osborn scaling.
-    - ``dTdz`` is the least-squares slope of the stably-sorted in-situ
-      temperature against depth (positive down).
+    - ``dTdz`` is the least-squares slope of the stably-sorted
+      *conservative* temperature (θ) against depth (positive down); see
+      :func:`window_stratification` for why conservative, not in-situ.
 
     Parameters and return value match :func:`window_stratification`; NaN is
     returned for windows with fewer than *min_samples* valid samples or a
@@ -313,8 +326,8 @@ def _stable_window(Pw, zw, Tw, SAw, CTw, sigmaw, lat, min_dp):
     position holds the k-th least-dense parcel), then returns ``(N2, dTdz)``:
     N² from ``gsw.Nsquared`` between the shallow/deep-half means of the stable
     profile (NaN if the half-mean pressure separation is below ``min_dp/2``),
-    and dT/dz as the least-squares slope of the stably-sorted temperature vs
-    depth. Inputs must be finite with length ≥ 2.
+    and dT/dz as the least-squares slope of the stably-sorted *conservative*
+    temperature (θ) vs depth. Inputs must be finite with length ≥ 2.
     """
     pos_order = np.argsort(Pw, kind="stable")
     den_order = np.argsort(sigmaw, kind="stable")
@@ -322,9 +335,11 @@ def _stable_window(Pw, zw, Tw, SAw, CTw, sigmaw, lat, min_dp):
     z_stable = zw[pos_order]
     SA_stable = SAw[den_order]
     CT_stable = CTw[den_order]
-    T_stable = Tw[den_order]
 
-    dTdz = float(np.polyfit(z_stable, T_stable, 1)[0])
+    # Fit the conservative-temperature gradient (not in-situ T): the adiabatic
+    # lapse rate is a reversible gradient that produces no thermal variance, so
+    # the Osborn-Cox K_T/Gamma denominator must use dCT/dz (audit r1-1).
+    dTdz = float(np.polyfit(z_stable, CT_stable, 1)[0])
 
     half = len(p_stable) // 2
     p_pair = np.array([np.mean(p_stable[:half]), np.mean(p_stable[half:])])
