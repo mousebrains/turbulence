@@ -4,6 +4,7 @@
 Reference: Code/process_P_files.m (233 lines), Code/mat2profile.m (170 lines)
 """
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -128,10 +129,8 @@ def _write_binned_or_clear(
             ds.to_netcdf(tmp)
             os.replace(tmp, out)
         except BaseException:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp)
-            except OSError:
-                pass
             raise
     elif out.exists():
         out.unlink()
@@ -152,10 +151,8 @@ def _atomic_to_netcdf(ds: "xr.Dataset", out_path: Path) -> None:
         ds.to_netcdf(tmp)
         os.replace(tmp, out_path)
     except BaseException:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
 
 

@@ -84,7 +84,7 @@ class TestFP07LagGuard:
         fp = np.empty_like(ref)
         fp[shift:] = -1000.0 * (ref[:-shift] - 22.0) + 5000.0
         fp[:shift] = fp[shift]
-        lag, corr = F._calc_lag(ref, fp, fs, must_be_negative=True)
+        lag, _corr = F._calc_lag(ref, fp, fs, must_be_negative=True)
         assert np.isfinite(lag)
 
 
@@ -307,8 +307,9 @@ class TestChiKappaTemperatureDependence:
 
         kap = float(kappa_T(28.0))  # warm: kap > KAPPA_T
         spec_obs, K, nu, noise_K, H2, tau0, h2f, W = self._synthetic_obs(kap)
-        fixed = _iterative_fit(spec_obs, K, nu, noise_K, H2, tau0, h2f, 88.2, W, "kraichnan", KAPPA_T)
-        true = _iterative_fit(spec_obs, K, nu, noise_K, H2, tau0, h2f, 88.2, W, "kraichnan", kap)
+        args = (spec_obs, K, nu, noise_K, H2, tau0, h2f, 88.2, W, "kraichnan")
+        fixed = _iterative_fit(*args, KAPPA_T)
+        true = _iterative_fit(*args, kap)
         r = kap / KAPPA_T
         # chi is linear in kappa_T (kB fit is kappa_T-independent in Method 2).
         assert true.chi / fixed.chi == pytest.approx(r, rel=0.02)
