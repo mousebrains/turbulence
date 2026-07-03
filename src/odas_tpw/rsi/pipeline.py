@@ -18,6 +18,8 @@ import xarray as xr
 from odas_tpw.chi.l2_chi import L2ChiParams, process_l2_chi
 from odas_tpw.chi.l3_chi import process_l3_chi
 from odas_tpw.chi.l4_chi import (
+    _CHI_FOM_LIMIT,
+    _CHI_K_MAX_RATIO_MIN,
     L4ChiData,
     _compute_chi_final,
     process_l4_chi_epsilon,
@@ -40,12 +42,11 @@ logger = logging.getLogger(__name__)
 _CHI_HP_CUT = 0.25
 
 # QC thresholds for the per-probe chi used in the derived mixing quantities
-# (K_T/Gamma). Mirror the chi-from-epsilon fom_limit in window.py and the
-# K_max_ratio < 0.5 "most variance extrapolated" convention (see CLAUDE.md), so
-# a poorly-fit thermistor window cannot bias K_T/Gamma the way the raw
-# L4ChiData.chi_final (geometric mean over all finite probes, no QC) would.
-_CHI_FOM_LIMIT = 1.15
-_CHI_K_MAX_RATIO_MIN = 0.5
+# (K_T/Gamma) are the SINGLE source of truth in l4_chi.py (imported above), so
+# the reported L4ChiData.chi_final and the mixing products here are guaranteed
+# to filter with identical limits — they cannot drift out of sync. The band
+# mirrors the chi-from-epsilon fom_limit in window.py and the K_max_ratio < 0.5
+# "most variance extrapolated" convention (see CLAUDE.md).
 
 
 def _qc_chi_final(

@@ -2027,6 +2027,29 @@ class TestComputeChiFinal:
         # Window 1: no probe passes -> fall back to all-finite geometric mean.
         np.testing.assert_allclose(qc[1], np.sqrt(1e-7 * 4e-7))
 
+    def test_qc_low_side_fom_band_and_kmr_cut(self):
+        """The fom QC is a two-sided band and K_max_ratio has its own floor: a
+        probe with fom below 1/1.15 (over-fit) OR K_max_ratio below 0.5 (mostly
+        extrapolated) is dropped, not just the high-fom case (2026-07-03 Gem-C).
+        """
+        from odas_tpw.chi.l4_chi import (
+            _CHI_FOM_LIMIT,
+            _CHI_K_MAX_RATIO_MIN,
+            _compute_chi_final,
+        )
+
+        # Rows are probes, cols are windows. Probe 0 (chi=1e-7) stays good;
+        # probe 1 (chi=4e-7) is dropped for a different reason each window.
+        chi = np.array([[1e-7, 1e-7], [4e-7, 4e-7]])
+        # Window 0: probe 1 fom below the low edge (1/1.15 ~ 0.87) -> dropped.
+        # Window 1: probe 1 K_max_ratio below 0.5 -> dropped.
+        fom = np.array([[1.0, 1.0], [1.0 / _CHI_FOM_LIMIT - 0.05, 1.0]])
+        kmr = np.array([[0.9, 0.9], [0.9, _CHI_K_MAX_RATIO_MIN - 0.1]])
+
+        qc = _compute_chi_final(chi, fom, kmr)
+        np.testing.assert_allclose(qc[0], 1e-7)  # low-side fom drop
+        np.testing.assert_allclose(qc[1], 1e-7)  # k_max_ratio drop
+
 
 class TestChiGridRefinement:
     """Parabolic refinement removes the log-grid quantization in Method 1."""
