@@ -668,3 +668,56 @@ type = raw
             warnings.simplefilter("always")
             PFile(path)
         assert not any("bad-buffer" in str(rec.message) for rec in w)
+
+
+class TestPFileStartTimeRecsize:
+    """PFile.start_time subtracts the ODAS record duration (recsize) from the header time."""
+
+    _CONFIG = """
+[root]
+prefix = test_
+
+[matrix]
+row1 = 1 1 1 1
+row2 = 1 1 1 1
+row3 = 1 1 1 1
+row4 = 1 1 1 1
+
+[instrument_info]
+model = test
+sn = 1
+
+[cruise_info]
+operator = pat
+
+[channel]
+id = 1
+name = X
+type = raw
+"""
+
+    def test_default_recsize_one_second(self, tmp_path):
+        import datetime as _dt
+
+        path = tmp_path / "st.p"
+        _make_minimal_p_file(
+            path, config_text=self._CONFIG, fast_cols=1, slow_cols=0,
+            n_rows=4, n_records=2,
+        )
+        pf = PFile(path)
+        # Header time is 2025-01-15 12:00:00 (set by _make_minimal_p_file); with
+        # the default recsize=1.0 s, the data start time is one second earlier.
+        assert pf.recsize == 1.0
+        assert pf.start_time.replace(tzinfo=None) == _dt.datetime(2025, 1, 15, 11, 59, 59)
+
+    def test_explicit_recordDuration_honored(self, tmp_path):
+        import datetime as _dt
+
+        cfg = self._CONFIG.replace("prefix = test_", "prefix = test_\nrecordDuration = 2.5")
+        path = tmp_path / "st2.p"
+        _make_minimal_p_file(
+            path, config_text=cfg, fast_cols=1, slow_cols=0, n_rows=4, n_records=2,
+        )
+        pf = PFile(path)
+        assert pf.recsize == 2.5
+        assert pf.start_time.replace(tzinfo=None) == _dt.datetime(2025, 1, 15, 11, 59, 57, 500000)

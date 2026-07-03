@@ -376,6 +376,23 @@ class PFile:
                 ),
             )
 
+            # ODAS defines the DATA start time as the header timestamp MINUS the
+            # record duration (odas_p2mat.m:413-417: t_start = filetime - recsize),
+            # because the header time marks the END of record 0. setupstr defaults
+            # recsize to 1.0 s when neither 'recsize' nor 'recordDuration' is present
+            # in the [root] config. Without this subtraction every absolute time
+            # coordinate is one record (~1 s) later than the Rockland/ODAS reference
+            # (verified +1.0000076 s vs the MATLAB _allch.nc on SN479_0013).
+            # parse_config lower-cases all keys, so match 'recsize' /
+            # 'recordduration' (ODAS's two accepted spellings).
+            root_cfg = self.config.get("root", {}) if isinstance(self.config, dict) else {}
+            _recsize_raw = root_cfg.get("recsize", root_cfg.get("recordduration"))
+            try:
+                self.recsize = float(_recsize_raw) if _recsize_raw is not None else 1.0
+            except (TypeError, ValueError):
+                self.recsize = 1.0
+            self.start_time -= timedelta(seconds=self.recsize)
+
             first_record_size = header_size + config_size
             f.seek(0, 2)
             file_size = f.tell()
