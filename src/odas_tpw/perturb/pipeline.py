@@ -1490,6 +1490,30 @@ def process_file(
                             chi_ds = mk_chi_mean(
                                 chi_ds, chi_cfg.get("chi_minimum", 1e-13)
                             )
+                            # Apply chi QC BEFORE deriving mixing quantities so a
+                            # QC-dropped chi does not leak into K_T/Gamma (audit
+                            # r1-4). Mixing then consumes the NaN'd chiMean, so
+                            # K_T and Gamma (chi-derived) are NaN wherever chi was
+                            # dropped. K_rho is epsilon-derived (0.2*eps/N2) and is
+                            # correctly gated instead by the epsilon-side QC, via
+                            # the NaN epsilonMean paired in by _add_mixing_quantities.
+                            if qc_enabled:
+                                n_cprobe = (
+                                    int(chi_ds["probe"].size)
+                                    if "probe" in chi_ds.dims else 2
+                                )
+                                apply_qc_to_dataset(
+                                    chi_ds, pf, qc_chi_drop_from,
+                                    chi_diss_length_seconds,
+                                    flag_var_name="qc_drop_chi",
+                                    value_vars=[
+                                        "chiMean", "chiLnSigma",
+                                        *[f"chi_{i + 1}" for i in range(n_cprobe)],
+                                        "chi",
+                                        "epsilon_T",
+                                    ],
+                                    drop_action=qc_drop_action,
+                                )
                             # Derived mixing quantities (Gamma, K_T, K_rho)
                             # with real salinity from the profile's own C/T/P
                             if chi_cfg.get("mixing", True):
@@ -1510,23 +1534,6 @@ def process_file(
                                 finally:
                                     if mix_eps is not diss_ds:
                                         mix_eps.close()
-                            if qc_enabled:
-                                n_cprobe = (
-                                    int(chi_ds["probe"].size)
-                                    if "probe" in chi_ds.dims else 2
-                                )
-                                apply_qc_to_dataset(
-                                    chi_ds, pf, qc_chi_drop_from,
-                                    chi_diss_length_seconds,
-                                    flag_var_name="qc_drop_chi",
-                                    value_vars=[
-                                        "chiMean", "chiLnSigma",
-                                        *[f"chi_{i + 1}" for i in range(n_cprobe)],
-                                        "chi",
-                                        "epsilon_T",
-                                    ],
-                                    drop_action=qc_drop_action,
-                                )
                             _copy_profile_scalars(prof_path, chi_ds, prof_scalars_cache)
                             out_name = Path(prof_path).name
                             out_path = output_dirs["chi"] / out_name
