@@ -96,6 +96,18 @@ class TestDensity:
         rho_4000 = density(10.0, 35.0, 4000.0)
         assert rho_4000 > rho_0
 
+    def test_lon_lat_thread_into_absolute_salinity(self):
+        """lon/lat feed the TEOS-10 composition anomaly (2026-07-03 review Gem-A).
+
+        Default (0,0) is unchanged; a real position shifts density slightly
+        (a few 1e-5, so this is correctness hygiene, not a material change).
+        """
+        base = density(15.0, 34.5, 100.0)
+        assert density(15.0, 34.5, 100.0, lon=0, lat=0) == base  # default unchanged
+        deep_npac = density(15.0, 34.5, 100.0, lon=145.7, lat=15.2)  # Saipan
+        assert deep_npac != base                                    # anomaly applied
+        assert abs(deep_npac / base - 1.0) < 1e-4                    # but tiny
+
     def test_density_increases_with_salinity(self):
         rho_30 = density(10.0, 30.0, 0.0)
         rho_38 = density(10.0, 38.0, 0.0)

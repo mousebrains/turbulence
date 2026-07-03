@@ -37,7 +37,13 @@ def visc35(T: npt.ArrayLike) -> np.ndarray:
     return np.maximum(np.polyval(pol, T), 1.0e-7)
 
 
-def visc(T: npt.ArrayLike, S: npt.ArrayLike = 35, P: npt.ArrayLike = 0) -> np.ndarray:
+def visc(
+    T: npt.ArrayLike,
+    S: npt.ArrayLike = 35,
+    P: npt.ArrayLike = 0,
+    lon: npt.ArrayLike = 0,
+    lat: npt.ArrayLike = 0,
+) -> np.ndarray:
     """Kinematic viscosity of seawater [m²/s].
 
     For S=35, P=0 falls back to the visc35 polynomial (matches ODAS).
@@ -59,6 +65,10 @@ def visc(T: npt.ArrayLike, S: npt.ArrayLike = 35, P: npt.ArrayLike = 0) -> np.nd
         Practical salinity [PSU]. Default: 35.
     P : float or array_like
         Pressure [dbar]. Default: 0.
+    lon, lat : float or array_like
+        Longitude [°E] / latitude [°N] for the TEOS-10 Absolute-Salinity
+        composition anomaly. Default: 0. The anomaly is tiny at typical
+        depths, so this rarely matters; pass the cast position for consistency.
 
     Returns
     -------
@@ -84,7 +94,7 @@ def visc(T: npt.ArrayLike, S: npt.ArrayLike = 35, P: npt.ArrayLike = 0) -> np.nd
     mu = mu_w * (1 + A * S_frac + B * S_frac**2)
 
     # In-situ density from gsw (TEOS-10)
-    SA = gsw.SA_from_SP(S, P, 0, 0)
+    SA = gsw.SA_from_SP(S, P, lon, lat)
     CT = gsw.CT_from_t(SA, T, P)
     rho = gsw.rho(SA, CT, P)
 
@@ -95,7 +105,11 @@ def visc(T: npt.ArrayLike, S: npt.ArrayLike = 35, P: npt.ArrayLike = 0) -> np.nd
 
 
 def kappa_T(
-    T: npt.ArrayLike, S: npt.ArrayLike = 35, P: npt.ArrayLike = 0
+    T: npt.ArrayLike,
+    S: npt.ArrayLike = 35,
+    P: npt.ArrayLike = 0,
+    lon: npt.ArrayLike = 0,
+    lat: npt.ArrayLike = 0,
 ) -> np.ndarray:
     """Molecular thermal diffusivity of seawater [m²/s].
 
@@ -120,6 +134,10 @@ def kappa_T(
         Practical salinity [PSU]. Default: 35.
     P : float or array_like
         Pressure [dbar]. Default: 0.
+    lon, lat : float or array_like
+        Longitude [°E] / latitude [°N] for the TEOS-10 Absolute-Salinity
+        composition anomaly. Default: 0. Immaterial at typical depths; pass the
+        cast position for consistency.
 
     Returns
     -------
@@ -157,7 +175,7 @@ def kappa_T(
     k = 10.0**log10_k * 1.0e-3  # mW/(m·K) → W/(m·K)
 
     # Density and isobaric specific heat from gsw (TEOS-10).
-    SA = gsw.SA_from_SP(S, P, 0, 0)
+    SA = gsw.SA_from_SP(S, P, lon, lat)
     CT = gsw.CT_from_t(SA, T_c, P)
     rho = gsw.rho(SA, CT, P)
     cp = gsw.cp_t_exact(SA, T_c, P)
@@ -168,7 +186,13 @@ def kappa_T(
     return np.maximum(k / (rho * cp), 1.0e-8)
 
 
-def density(T: npt.ArrayLike, S: npt.ArrayLike, P: npt.ArrayLike) -> np.ndarray:
+def density(
+    T: npt.ArrayLike,
+    S: npt.ArrayLike,
+    P: npt.ArrayLike,
+    lon: npt.ArrayLike = 0,
+    lat: npt.ArrayLike = 0,
+) -> np.ndarray:
     """In-situ density of seawater [kg/m³] via TEOS-10.
 
     Parameters
@@ -179,6 +203,10 @@ def density(T: npt.ArrayLike, S: npt.ArrayLike, P: npt.ArrayLike) -> np.ndarray:
         Practical salinity [PSU].
     P : float or array_like
         Pressure [dbar].
+    lon, lat : float or array_like
+        Longitude [°E] / latitude [°N] for the TEOS-10 Absolute-Salinity
+        composition anomaly. Default: 0. Immaterial at typical depths; pass the
+        cast position for consistency.
 
     Returns
     -------
@@ -187,7 +215,7 @@ def density(T: npt.ArrayLike, S: npt.ArrayLike, P: npt.ArrayLike) -> np.ndarray:
     """
     import gsw
 
-    SA = gsw.SA_from_SP(S, P, 0, 0)
+    SA = gsw.SA_from_SP(S, P, lon, lat)
     CT = gsw.CT_from_t(SA, T, P)
     return gsw.rho(SA, CT, P)
 
@@ -198,6 +226,7 @@ def buoyancy_freq(
     P: npt.ArrayLike,
     lat: float = 0,
     min_dp: float = 1e-4,
+    lon: npt.ArrayLike = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Buoyancy frequency squared N² [s⁻²] from profiles.
 
@@ -218,6 +247,9 @@ def buoyancy_freq(
         Minimum adjacent pressure spacing [dbar]; pairs with smaller spacing
         yield NaN instead of a spurious ``inf`` from the dp=0 division.
         Default: 1e-4.
+    lon : float or array_like
+        Longitude [°E] for the TEOS-10 Absolute-Salinity composition anomaly
+        (threaded into ``SA_from_SP`` alongside ``lat``). Default: 0.
 
     Returns
     -------
@@ -240,7 +272,11 @@ def buoyancy_freq(
             stacklevel=2,
         )
 
-    SA = gsw.SA_from_SP(S, P, 0, 0)
+    # Thread the cast lat/lon into Absolute Salinity too (not just the gravity
+    # scaling below), so the composition anomaly is consistent.  The anomaly is
+    # tiny at typical depths (~1e-3 g/kg), so this is correctness hygiene, not a
+    # material change; production N2 (processing/mixing.py) already passes lon/lat.
+    SA = gsw.SA_from_SP(S, P, lon, lat)
     CT = gsw.CT_from_t(SA, T, P)
     N2, p_mid = gsw.Nsquared(SA, CT, P, lat)
     # Defect (audit 104): gsw.Nsquared divides by adjacent dp; duplicate or
