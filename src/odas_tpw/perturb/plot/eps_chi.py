@@ -490,6 +490,7 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
         label.set_rotation(30)
         label.set_ha("right")
 
+    layout.fit_colorbar_labels(fig)  # keep long colorbar labels inside their bars
     yield "eps_chi_pcolor", fig
 
 

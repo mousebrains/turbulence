@@ -217,6 +217,46 @@ def column_edges(x: np.ndarray) -> np.ndarray:
     return np.concatenate(([first], mids, [last]))
 
 
+def fit_colorbar_labels(
+    fig, *, min_fontsize: float = 6.0, fit_frac: float = 0.95
+) -> None:
+    """Shrink over-long colorbar labels so each fits within its own bar.
+
+    A verbose ``long_name [units]`` label, rotated vertically onto a short
+    per-panel colorbar, can be *taller* than the colorbar bar itself.
+    matplotlib then centers it on the bar and it overflows above/below into the
+    neighboring panel's colorbar label.  ``constrained_layout`` reserves
+    horizontal width for the rotated label but does not police this vertical
+    collision, so stacked panels (``profiles``/``scalar``/``eps_chi``) show
+    colliding colorbar labels.
+
+    We settle the layout (``draw_without_rendering``), measure each colorbar
+    label against its bar along the bar's long axis, and scale the font *down*
+    to fit within ``fit_frac`` of the bar — never up — with a readability floor.
+    The sub-1 ``fit_frac`` leaves headroom for the savefig re-draw: text height
+    is not perfectly linear in font size and shrinking fonts frees layout space,
+    so the final bar geometry shifts slightly; the margin keeps the fit stable
+    rather than letting a 1-px residual creep back over the edge.  A no-op for
+    labels that already fit.
+    """
+    fig.draw_without_rendering()  # settle constrained_layout; cache a renderer
+    for ax in fig.axes:
+        cbar = getattr(ax, "_colorbar", None)
+        if cbar is None:
+            continue
+        vertical = getattr(cbar, "orientation", "vertical") == "vertical"
+        label = ax.yaxis.label if vertical else ax.xaxis.label
+        if not label.get_text():
+            continue
+        bar = ax.get_window_extent()  # no renderer arg: uses fig cached renderer
+        avail = (bar.height if vertical else bar.width) * fit_frac
+        need_box = label.get_window_extent()
+        need = need_box.height if vertical else need_box.width
+        if need > avail > 0:
+            scaled = label.get_fontsize() * avail / need
+            label.set_fontsize(max(scaled, min_fontsize))
+
+
 def plot_columns(
     ax,
     fig,

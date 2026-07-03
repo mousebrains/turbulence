@@ -299,6 +299,7 @@ def _build_profiles_figure(
         f"{title_id}  —  {product.label}: {sec.name}  —  "
         f"x-axis: {sec.method}  —  {grouped(int(dss.sizes['profile']))} casts"
     ))
+    layout.fit_colorbar_labels(fig)  # long var labels overflow short per-panel bars
     return fig
 
 
