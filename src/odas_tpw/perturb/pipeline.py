@@ -585,8 +585,14 @@ def _adjust_profile_bounds(
     return adjusted
 
 
-def _apply_fom_cut(ds, fom_max: float, file_label: str) -> int:
-    """NaN per-probe per-segment values where ``fom >= fom_max``.
+def _apply_fom_cut(ds, fom_max: float, file_label: str, two_sided: bool = False) -> int:
+    """NaN per-probe per-segment values where the fom fails its cut.
+
+    With ``two_sided=False`` (epsilon): ``fom >= fom_max``.
+    With ``two_sided=True`` (chi): ``fom >= fom_max`` OR ``fom <= 1/fom_max``.
+    The chi fom is an obs/model VARIANCE RATIO that is bad far from 1.0 in either
+    direction, so a model that overestimates observed variance (fom << 1) must be
+    cut too, not only a high fom.
 
     Operates on the (probe, time) array set returned by the diss / chi
     stages. Mutates *ds* in place; returns the count of (probe, segment)
@@ -614,6 +620,8 @@ def _apply_fom_cut(ds, fom_max: float, file_label: str) -> int:
         return 0
     fom = ds["fom"].values
     bad = np.isfinite(fom) & (fom >= fom_max)
+    if two_sided and fom_max > 0:
+        bad = bad | (np.isfinite(fom) & (fom <= 1.0 / fom_max))
     if not bad.any():
         return 0
     n_bad = int(bad.sum())
@@ -1503,6 +1511,7 @@ def process_file(
                             if chi_fom_max is not None:
                                 _apply_fom_cut(
                                     chi_ds, float(chi_fom_max), p_path.name,
+                                    two_sided=True,
                                 )
                             chi_ds = mk_chi_mean(
                                 chi_ds, chi_cfg.get("chi_minimum", 1e-13)

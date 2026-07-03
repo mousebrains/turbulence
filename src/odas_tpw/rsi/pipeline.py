@@ -64,10 +64,16 @@ def _qc_chi_final(
     _n_probe, n_window = chi.shape
     out = np.full(n_window, np.nan)
     valid = np.isfinite(chi) & (chi > 0)
+    # The chi fom is a two-sided obs/model VARIANCE RATIO: it is bad far from 1.0
+    # in EITHER direction. A one-sided ``fom <= fom_limit`` cut would pass a
+    # window whose model overestimates observed variance (e.g. fom=0.2, model 5x
+    # high) while rejecting a mildly high fom=1.2, so gate the log-symmetric band
+    # [1/fom_limit, fom_limit].
     passes_qc = (
         valid
         & np.isfinite(fom)
         & (fom <= fom_limit)
+        & (fom >= 1.0 / fom_limit)
         & np.isfinite(k_max_ratio)
         & (k_max_ratio >= k_max_ratio_min)
     )

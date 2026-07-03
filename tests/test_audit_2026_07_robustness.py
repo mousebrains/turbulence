@@ -160,6 +160,50 @@ class TestParseTimeZeroOffset:
             parse_time("2025-01-15T00:00:00-05:00")
 
 
+class TestChiFomTwoSided:
+    """Chi obs/model variance-ratio QC must reject fom << 1, not only fom > limit."""
+
+    def test_qc_chi_final_rejects_low_fom_probe(self):
+        from odas_tpw.rsi.pipeline import _qc_chi_final
+
+        chi = np.array([[1e-8], [1e-6]])  # probe0 good, probe1 much larger
+        fom = np.array([[1.0], [0.2]])  # probe1 model overestimates 5x -> bad
+        kmr = np.array([[0.9], [0.9]])
+        out = _qc_chi_final(chi, fom, kmr)
+        # Only probe0 passes the two-sided gate, so the combined chi is probe0's.
+        assert out[0] == pytest.approx(1e-8)
+
+    def test_apply_fom_cut_two_sided_nans_low_fom(self):
+        xr = pytest.importorskip("xarray")
+        from odas_tpw.perturb.pipeline import _apply_fom_cut
+
+        ds = xr.Dataset(
+            {
+                "fom": (("probe", "time"), np.array([[1.0, 0.1], [1.0, 1.0]])),
+                "chi": (("probe", "time"), np.array([[1e-8, 2e-8], [3e-8, 4e-8]])),
+                "chi_1": (("time",), np.array([1e-8, 2e-8])),
+                "chi_2": (("time",), np.array([3e-8, 4e-8])),
+            }
+        )
+        n = _apply_fom_cut(ds, 1.15, "test", two_sided=True)
+        assert n == 1
+        assert np.isnan(ds["chi"].values[0, 1])  # fom=0.1 <= 1/1.15
+        assert np.isnan(ds["chi_1"].values[1])
+        assert np.isfinite(ds["chi"].values[0, 0])  # fom=1.0 kept
+
+
+class TestChiSchemaHeadlineVars:
+    """CHI_SCHEMA must carry the published chiMean/chiLnSigma so combos get attrs."""
+
+    def test_chimean_and_chilnsigma_have_units(self):
+        from odas_tpw.perturb.netcdf_schema import CHI_SCHEMA
+
+        for name in ("chiMean", "chiLnSigma"):
+            assert name in CHI_SCHEMA
+            assert "units" in CHI_SCHEMA[name]
+            assert "long_name" in CHI_SCHEMA[name]
+
+
 class TestTopTrimNeverDeeperThanSamples:
     """processing/top_trim.py: a returned trim is always applicable to the cast."""
 

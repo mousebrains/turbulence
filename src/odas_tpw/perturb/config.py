@@ -265,7 +265,7 @@ _INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes"})
 # Numeric dependencies whose version can change ε/χ/N² outputs even with no
 # change to our own source — folded into the engine fingerprint so a dep
 # upgrade also invalidates cached results.
-_ENGINE_DEPS = ("numpy", "scipy", "gsw", "netCDF4", "xarray")
+_ENGINE_DEPS = ("numpy", "scipy", "gsw", "netCDF4", "xarray", "pandas")
 # Subpackages that cannot affect processing numerics; excluded from the source
 # hash so editing plots/standalone tools doesn't invalidate cached science.
 _FINGERPRINT_EXCLUDE = ("perturb/plot/", "pyturb/")
