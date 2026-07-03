@@ -185,6 +185,12 @@ class TestCleanShearSpec:
             clean_UU, _AA, _UU, _UA, _F = clean_shear_spec(accel, shear, 256, 100.0)
             assert len(w) >= 1
         assert clean_UU.shape[0] > 0  # should return something
+        # Fallback dtype matches the cleaned path (complex, real diagonal) so
+        # clean_UU is dtype-consistent across code paths (Gem-D-c).
+        assert np.iscomplexobj(clean_UU)
+        diag = np.diagonal(clean_UU, axis1=-2, axis2=-1)
+        finite = np.isfinite(diag)
+        assert np.allclose(diag[finite].imag, 0.0)
 
 
 class TestCleanShearSpecBatch:

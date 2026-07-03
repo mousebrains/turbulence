@@ -176,7 +176,11 @@ def clean_shear_spec(
         n_freq_fb = len(F)
         AA = np.zeros((n_freq_fb, n_ac, n_ac), dtype=np.complex128)
         UA = np.zeros((n_freq_fb, n_sh, n_ac), dtype=np.complex128)
-        return CleanShearResult(np.real(UU), AA, UU, UA, F)
+        # Keep the fallback consistent with the cleaned path (Gem-D-c): return a
+        # complex matrix with a sanitized real diagonal rather than np.real(UU),
+        # so clean_UU has one dtype across code paths and the off-diagonal is not
+        # silently dropped here.  .copy() so we don't mutate the raw UU field.
+        return CleanShearResult(_sanitize_autospectra(UU.copy()), AA, UU, UA, F)
     assert UU is not None and AA is not None  # always returned when y is provided
 
     # UU, AA, UA are complex; extract real diagonal for auto-spectra
