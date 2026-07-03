@@ -333,7 +333,7 @@ def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
     (small floats). When the diss dataset is read back from NetCDF, xarray
     decodes its ``t`` coord to absolute ``datetime64``. We convert it back
     to seconds-since-``start_time`` here so ``process_l4_chi_epsilon``'s
-    nearest-neighbour matching is over a common reference — otherwise every
+    nearest-neighbor matching is over a common reference — otherwise every
     chi window collapses onto ``epsilonMean[0]``.
     """
     from odas_tpw.scor160.io import L4Data

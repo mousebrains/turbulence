@@ -253,7 +253,7 @@ def _chi_from_epsilon(
 
     # Log-space least-squares fit for chi with kB fixed from epsilon.
     # Model: chi * Batchelor_unit(K) * H2(K) + noise(K).
-    # Minimises Σ [log(model) - log(obs)]² over valid K, which penalises
+    # Minimizes Σ [log(model) - log(obs)]² over valid K, which penalizes
     # over- and under-estimation symmetrically on the log-log plot.
     # This is more robust than the variance-correction approach when the
     # epsilon-derived kB doesn't perfectly match the temperature spectrum.
@@ -293,7 +293,7 @@ def _chi_from_epsilon(
         # Parabolic refinement of the minimum in log10(chi): the grid is
         # ~4.7% coarse (200 points over 4 decades), a visible quantization
         # on the primary output.  The vertex of the parabola through the
-        # minimum and its neighbours (uniform log spacing h) is
+        # minimum and its neighbors (uniform log spacing h) is
         # x1 + 0.5*h*(y0 - y2)/(y0 - 2*y1 + y2); curvature > 0 and
         # |offset| <= h are guaranteed when y1 is the strict minimum.
         if 0 < i_min < len(chi_grid) - 1:
@@ -400,7 +400,7 @@ def _mle_fit_kB(
 ) -> ChiFitResult:
     """Maximum-likelihood fit for Batchelor wavenumber kB (Ruddick et al. 2000).
 
-    Performs a coarse+fine grid search over kB to minimise the MLE
+    Performs a coarse+fine grid search over kB to minimize the MLE
     negative log-likelihood for chi-squared spectral estimates.
 
     Parameters

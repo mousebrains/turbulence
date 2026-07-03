@@ -368,7 +368,7 @@ def ctd_bin_file(
 
     # Promote bin_centers from file-relative seconds to epoch seconds so
     # concatenated CTD combos can be correctly ordered across files.  Add
-    # CF time attrs so xarray's encoder serialises them as datetimes.
+    # CF time attrs so xarray's encoder serializes them as datetimes.
     time_epoch = np.asarray(bin_centers, dtype=np.float64) + epoch_offset
 
     # Build xarray Dataset

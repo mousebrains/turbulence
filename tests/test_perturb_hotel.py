@@ -686,7 +686,7 @@ class TestPerChannelTimeColumn:
         # P linear-interp on its own grid (identity since pf.t_slow == its grid).
         np.testing.assert_allclose(result["P"], [10, 11, 12, 13, 14])
         # q_drop is on time_flight = [0.5, 2.0, 3.5] with values [0, 1, 0].
-        # nearest-neighbour at pf.t_slow gives:
+        # nearest-neighbor at pf.t_slow gives:
         #   t=0   → nearest 0.5 → 0
         #   t=1   → nearest 0.5 → 0
         #   t=2   → nearest 2.0 → 1

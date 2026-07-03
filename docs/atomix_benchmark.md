@@ -367,7 +367,7 @@ pipeline produces e_1 values that are systematically 2--4% higher than
 the MATLAB reference for the same spectra.  The cause is a subtle
 processing difference in the benchmark code version (the stored L3
 spectra are identical, but the internal e_1 computation differs).
-The margin of 1.6 was empirically tuned to maximise method agreement
+The margin of 1.6 was empirically tuned to maximize method agreement
 across all six benchmark datasets (99.8% overall, 100% for VMP250,
 VMP250_cs, Nemo, and MSS).
 

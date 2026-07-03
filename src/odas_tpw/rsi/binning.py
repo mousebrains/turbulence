@@ -170,7 +170,7 @@ def bin_by_depth(
             attrs = {"cell_methods": "depth_bin: mean"}
 
         # Defect fix: merge CF units/long_name/standard_name so the binned
-        # products are catalogued.  cell_methods stays authoritative; CF attrs
+        # products are cataloged.  cell_methods stays authoritative; CF attrs
         # only fill in for known variables (unknown names stay metadata-free).
         attrs = {**_VAR_CF_ATTRS.get(name, {}), **attrs}
 

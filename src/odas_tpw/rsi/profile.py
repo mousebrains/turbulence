@@ -401,7 +401,7 @@ def _repair_nans(
     Defect (audit M2 downstream): ``_nc_filled`` correctly turns a masked
     ``_FillValue`` into NaN, but a single NaN in the slow pressure is then
     smeared across the *entire* fall rate by ``smooth_fall_rate`` (gradient
-    poisons two neighbours, zero-phase filtfilt poisons all samples), so a
+    poisons two neighbors, zero-phase filtfilt poisons all samples), so a
     lone mid-cast fill silently drops every profile in the file. Repairing
     isolated NaNs by linear interpolation keeps the rest of the cast usable;
     a warning makes a poisoned/partial cast visible rather than silently lost.

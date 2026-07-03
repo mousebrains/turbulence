@@ -255,7 +255,7 @@ class TestCmdCombo:
         import xarray as xr
 
         # Create one populated upstream binned dir for each of the four
-        # combo flavours; the schema is loose enough that combo will accept
+        # combo flavors; the schema is loose enough that combo will accept
         # any 2-D var with bin/profile dims.
         for sub in ("profiles_binned_00", "diss_binned_00", "chi_binned_00"):
             d = tmp_path / sub

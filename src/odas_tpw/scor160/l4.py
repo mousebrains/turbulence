@@ -45,7 +45,7 @@ X_ISR = 0.01
 # pipeline's preliminary estimate e_1 runs high enough near the
 # threshold that a 1.0 margin overshoots the benchmark ISR fraction
 # (e.g. VMP250 tidal: 37.5% ISR vs 21.9% in the reference, dropping
-# method agreement from 100% to 84%); 1.6 maximises method agreement
+# method agreement from 100% to 84%); 1.6 maximizes method agreement
 # with the ATOMIX benchmark references.  Both epsilon estimates are
 # always computed, so the margin only affects which one is reported.
 DEFAULT_ISR_MARGIN = 1.6
@@ -371,7 +371,7 @@ def _estimate_epsilon(
     n_freq = len(K)
 
     # Corrupted spectral bins (ODAS get_diss_odas.m:577-587 convention):
-    # a single interior NaN/Inf bin is interpolated from its neighbours;
+    # a single interior NaN/Inf bin is interpolated from its neighbors;
     # multiple bad bins invalidate the estimate.  Zeroing bad bins (the
     # previous behavior) silently removes variance, biasing epsilon low
     # and corrupting the log-space polynomial minimum search.

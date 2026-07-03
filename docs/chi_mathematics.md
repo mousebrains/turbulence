@@ -346,13 +346,13 @@ where `S_unit` is the Batchelor/Kraichnan gradient spectrum at unit chi with `kB
 cost(chi) = sum_i [ ln Phi_model(k_i; chi) - ln Phi_obs(k_i) ]^2
 ```
 
-**Step 7.** Report the grid-minimising chi:
+**Step 7.** Report the grid-minimizing chi:
 
 ```
 chi = argmin_chi  cost(chi)       [K^2/s]
 ```
 
-Minimising in log space penalises over- and under-estimation symmetrically on the log-log plot, and is more robust than the pure variance-correction estimate when the epsilon-derived `kB` does not perfectly match the temperature spectrum. The reported chi is not the raw grid argmin: the grid minimum is refined by fitting a parabola through the minimum and its two neighbours in `(log10 chi, cost)` space, removing the ~half-grid-step (~2.3%) quantization. If the fit fails (all costs non-finite), `chi_vc` is used.
+Minimizing in log space penalizes over- and under-estimation symmetrically on the log-log plot, and is more robust than the pure variance-correction estimate when the epsilon-derived `kB` does not perfectly match the temperature spectrum. The reported chi is not the raw grid argmin: the grid minimum is refined by fitting a parabola through the minimum and its two neighbors in `(log10 chi, cost)` space, removing the ~half-grid-step (~2.3%) quantization. If the fit fails (all costs non-finite), `chi_vc` is used.
 
 
 ## 7. Method 2a: Maximum Likelihood Estimation

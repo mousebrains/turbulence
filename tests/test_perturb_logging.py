@@ -853,7 +853,7 @@ class TestBinningCoverage:
         assert (tmp_path / "p_mean_only.log").exists()
 
     def test_bin_by_time_returns_empty_when_no_time_coord(self, tmp_path):
-        """A NC with no recognised time coordinate is silently skipped."""
+        """A NC with no recognized time coordinate is silently skipped."""
         import numpy as np
         import xarray as xr
 

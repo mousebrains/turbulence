@@ -292,7 +292,7 @@ where `W` is the profiling speed [m/s]. The factor `W` accounts for the Jacobian
 
 ## 7. Epsilon Estimation: Variance Method
 
-The variance method integrates the shear spectrum directly. It is used when dissipation is moderate — specifically, when the preliminary estimate `e_1 < e_isr_threshold * isr_margin = 1.5e-5 * 1.6 = 2.4e-5 W/kg` — where the spectrum is well-resolved. ODAS switches at `e_isr_threshold` with no margin; the margin `DEFAULT_ISR_MARGIN = 1.6` ([`l4.py`](../src/odas_tpw/scor160/l4.py)) is an empirical adjustment that maximises method agreement with the ATOMIX benchmark references (this pipeline's preliminary `e_1` runs high enough near the threshold that a margin of 1.0 overshoots the benchmark ISR fraction). Both estimates are always computed; the margin only affects which one is reported.
+The variance method integrates the shear spectrum directly. It is used when dissipation is moderate — specifically, when the preliminary estimate `e_1 < e_isr_threshold * isr_margin = 1.5e-5 * 1.6 = 2.4e-5 W/kg` — where the spectrum is well-resolved. ODAS switches at `e_isr_threshold` with no margin; the margin `DEFAULT_ISR_MARGIN = 1.6` ([`l4.py`](../src/odas_tpw/scor160/l4.py)) is an empirical adjustment that maximizes method agreement with the ATOMIX benchmark references (this pipeline's preliminary `e_1` runs high enough near the threshold that a margin of 1.0 overshoots the benchmark ISR fraction). Both estimates are always computed; the margin only affects which one is reported.
 
 ### Step 1: Initial estimate from low wavenumbers
 
