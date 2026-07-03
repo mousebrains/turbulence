@@ -498,6 +498,36 @@ class TestBinByDepthEdges:
         binned = bin_by_depth([p], bin_width=10.0)["epsilonMean"].values.ravel()[0]
         assert binned == pytest.approx(2e-8)
 
+    def test_uint8_qc_flag_255_is_or_pooled_not_averaged(self, tmp_path):
+        """A uint8 qc bitfield whose value equals the type's default fill (255,
+        all 8 flags set) must be OR-pooled, not masked-and-averaged.
+
+        Regression for the adversarial review of F2: enabling CF decode made
+        netCDF4 auto-mask cells == the uint8 default fill (255) even with NO
+        explicit _FillValue, widening the bitfield to float and averaging it
+        (e.g. [1,255,2] -> ~86) instead of OR-pooling to 255.
+        """
+        import netCDF4 as nc
+
+        from odas_tpw.perturb.binning import _load_profile_snapshot
+
+        p = tmp_path / "qc255.nc"
+        ds = nc.Dataset(str(p), "w")
+        ds.createDimension("z", 3)
+        ds.createVariable("depth", "f8", ("z",))[:] = [0.0, 1.0, 2.0]
+        ds.createVariable("epsilonMean", "f8", ("z",))[:] = [1e-8, 2e-8, 3e-8]
+        # uint8 flag, NO explicit _FillValue; 255 is a legal all-flags-set value.
+        ds.createVariable("qc_drop_epsilon", "u1", ("z",))[:] = [1, 255, 2]
+        ds.close()
+
+        snap = _load_profile_snapshot(p)
+        # Read raw, dtype preserved, the legal 255 not masked away.
+        assert snap["vars"]["qc_drop_epsilon"].dtype.kind == "u"
+        assert 255 in snap["vars"]["qc_drop_epsilon"]
+        # All three depths fall in one bin -> OR-pool 1|255|2 == 255 (not ~86).
+        binned = bin_by_depth([p], bin_width=10.0)["qc_drop_epsilon"].values.ravel()[0]
+        assert binned == 255
+
 
 class TestBinByTimeEdges:
     def test_short_time_range_pads_bin_edges(self, tmp_path):

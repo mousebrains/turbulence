@@ -206,16 +206,30 @@ def _decoded(var) -> np.ndarray:
     With CF decoding on (see :func:`_load_profile_snapshot`), ``var[:]`` returns a
     scaled, masked array whenever the variable carries ``_FillValue`` /
     ``missing_value`` or ``scale_factor`` / ``add_offset``.  We convert masked
-    cells to NaN (``np.ma.filled``) and otherwise return the array unchanged — so
-    an ordinary unmasked integer flag (e.g. ``qc_drop_*``) keeps its integer
-    dtype, while packed or sentinel-filled data are decoded to physical float
-    values instead of being binned as raw counts / fill sentinels.  (2026-07-03
-    review, GPT-5.5 F2.)
+    cells to NaN (``np.ma.filled``) so packed or sentinel-filled *float* data are
+    decoded to physical values instead of being binned as raw counts / fill
+    sentinels.  (2026-07-03 review, GPT-5.5 F2.)
+
+    Exception — plain (non-packed) integer flag bitfields such as ``qc_drop_*``
+    are read RAW, bypassing CF mask/scale.  netCDF4's auto-mask masks any cell
+    equal to the type's *default* fill (255 for ``uint8``) even with no explicit
+    ``_FillValue`` — but 255 is a legal bitfield value (all 8 flags set), and
+    masking it would widen the array to float and defeat the uint OR-pool in
+    :func:`_bin_snapshot` (a bitfield must never be averaged).  Reading these raw
+    preserves the integer dtype and the exact pre-CF-decode values, so their
+    binning is unchanged; only genuinely packed integers (which carry
+    ``scale_factor`` / ``add_offset`` and decode to physical floats) fall through
+    to the float path.  (2026-07-03 adversarial review of F2.)
     """
+    attrs = var.ncattrs()
+    packed = "scale_factor" in attrs or "add_offset" in attrs
+    if var.dtype.kind in ("u", "i") and not packed:
+        var.set_auto_maskandscale(False)  # per-var override of the dataset default
+        return np.asarray(var[:])
+
     arr = var[:]
     # netCDF4 returns a MaskedArray under CF decoding even when nothing is
-    # masked; only widen to float64+NaN when cells are actually filled, so an
-    # ordinary integer flag (qc_drop_*) keeps its dtype exactly as before.
+    # masked; only widen to float64+NaN when cells are actually filled.
     if np.ma.isMaskedArray(arr) and np.ma.count_masked(arr):
         return np.asarray(np.ma.filled(arr.astype(np.float64), np.nan))
     return np.asarray(arr)
