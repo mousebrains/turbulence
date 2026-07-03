@@ -243,6 +243,23 @@ def _chi_from_epsilon(
 
     # Find integration limit: where observed meets noise
     K_AA = f_AA / speed
+
+    # Signal-presence gate.  A window whose gradient spectrum never rises above
+    # the FP07 electronics noise floor carries no resolvable thermal signal.
+    # Without this gate the log-space fit below still returns a small positive
+    # chi that merely fits the noise, and the figure of merit cannot catch it
+    # (fom = obs / model with the model fitted to obs, so fom ~= 1 for the noise
+    # floor itself).  Reject such windows as non-detections here, at the source,
+    # so they become NaN and drop out of chiMean rather than biasing its low
+    # tail and the derived mixing products.  (2026-07-03 review, GPT-5.5 F1.)
+    above_noise = (spec_obs > 2.0 * noise_K) & (K > 0) & (K <= K_AA)
+    if int(np.sum(above_noise)) < 3:
+        warnings.warn(
+            "No thermal signal above the FP07 noise floor; chi is a non-detection",
+            stacklevel=2,
+        )
+        return ChiEpsilonResult(np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan)
+
     valid = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=3)
     if np.sum(valid) < 3:
         warnings.warn("Too few valid wavenumber points for chi integration", stacklevel=2)

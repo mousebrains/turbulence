@@ -761,6 +761,42 @@ class TestChiEdgeCases:
         )
         assert np.isnan(result.chi)
 
+    def test_chi_from_epsilon_noise_floor_is_non_detection(self):
+        """A spectrum at (or below) the modeled FP07 noise floor carries no
+        thermal signal and must return chi=NaN, not a fitted noise-floor chi.
+
+        Regression for the 2026-07-03 review (GPT-5.5 F1): before the
+        signal-presence gate, feeding the noise floor itself yielded a finite,
+        QC-passing chi (~3e-12, fom~=0.99) that biased chiMean's low tail.
+        """
+        from odas_tpw.chi.batchelor import batchelor_grad, batchelor_kB
+        from odas_tpw.chi.chi import _chi_from_epsilon
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
+
+        speed, fs, n_freq = 0.7, 512, 257
+        F = np.arange(n_freq) * fs / (2 * (n_freq - 1))
+        K = F / speed
+        tau0 = fp07_tau(speed)
+        H2 = fp07_transfer(F, tau0)
+        noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
+        args = (K, 1e-7, 1.2e-6, noise_K, H2, tau0, fp07_transfer, 98.0,
+                speed, "batchelor")
+
+        # Spectrum == the noise floor, and 1.5x it, and half it: all non-detections.
+        for factor in (0.5, 1.0, 1.5):
+            with pytest.warns(UserWarning, match="above the FP07 noise floor"):
+                result = _chi_from_epsilon(noise_K * factor, *args)
+            assert np.isnan(result.chi), f"factor={factor} should be a non-detection"
+
+        # A genuine Batchelor signal well above the noise floor must still pass
+        # (the gate rejects noise, not weak-but-real turbulence).
+        chi_true = 1e-6
+        kB = batchelor_kB(1e-7, 1.2e-6)
+        signal = batchelor_grad(K, kB, chi_true) * H2 + noise_K
+        result = _chi_from_epsilon(signal, *args)
+        assert np.isfinite(result.chi)
+        assert 0.3 < result.chi / chi_true < 3.0
+
     def test_chi_from_epsilon_low_kB(self):
         """Very low epsilon should produce kB < 1 and chi=NaN."""
         from odas_tpw.chi.chi import _chi_from_epsilon
