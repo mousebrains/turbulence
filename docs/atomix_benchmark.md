@@ -319,10 +319,12 @@ strong tidal currents). Systematic +7% overestimate (median ratio
 
 3. **EPSI_FINAL aggregation**: With 4 probes, the reference uses
    QC flags (including flag 4 = diss_ratio check) to select probes
-   for the geometric mean. Our flag system doesn't include the
-   diss_ratio flag, leading to different probe selection and a larger
-   EPSI_FINAL discrepancy (median ratio 1.41) than the per-probe
-   epsilon (1.07).
+   for the geometric mean. The diss_ratio (bit 4) inter-probe
+   consistency flag **is** now implemented in the package, so the
+   probe-selection capability gap is closed; any residual EPSI_FINAL
+   discrepancy should be re-measured against the current code rather
+   than attributed to a missing flag (the previously reported median
+   ratio 1.41 is historical, pre-implementation).
 
 ### X_ISR constant
 

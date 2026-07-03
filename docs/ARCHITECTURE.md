@@ -420,16 +420,21 @@ several thermistors into one chi) by different code:
 What they **share**: the same `σ(ln ε)` variance model
 (`var = 5.5 / (1 + (L̂/4)^(7/9))`), the same inter-probe rejection threshold
 (`1.96·√2 ≈ 2.772`; `scor160.l4.DEFAULT_DISS_RATIO_LIMIT`), and the same final
-**geometric mean** of the surviving probes. For a **two-probe** instrument
-(e.g. the VMP-250 with `sh1`/`sh2`) the inter-probe rejection is mathematically
-identical between the two — iterative max-removal and single-pass flagging both
-either keep both probes or drop the larger one.
+**geometric mean** of the surviving probes. But for the campaign's **two-probe**
+VMP-250 (`sh1`/`sh2`) the two paths do **not** produce identical epsilon: on a
+disagreeing pair `perturb` keeps both probes while `rsi` drops the larger (see
+the "Rejection form" bullet below), so the published `epsilonMean` and
+`epsilon_final` diverge whenever the probes disagree beyond the CI.
 
 What they **differ** in:
 
 - **Rejection form** — `perturb` removes the worst probe iteratively and
-  re-evaluates; `rsi` flags all inconsistent probes in a single pass. (Same
-  result for two probes; can differ for three or more.)
+  re-evaluates; `rsi` flags all inconsistent probes in a single pass. For
+  **two** probes they already differ: `perturb`'s iterative loop is gated on
+  `n_probes >= 3` (`epsilon_combine.py:136`), so it never drops a probe and
+  reports the pair's geometric mean, whereas `rsi`'s bit-4 (`diss_ratio`) flag
+  drops the larger probe when the pair disagrees beyond the CI. They can also
+  differ for three or more.
 - **QC placement** — `rsi` folds FOM / variance-resolved / despike rejection
   *into* the combine via ATOMIX flags (`_compute_flags`); `perturb` applies
   FOM rejection earlier (the per-probe `fom_max` cut in `perturb.pipeline`,
@@ -443,6 +448,8 @@ are pinned by the ATOMIX shear-probe benchmark (`tests/test_scor160_*`,
 `AtomixData/*.nc`) — changing them would break benchmark agreement — so the
 `rsi` path must keep the ATOMIX combine. `perturb` deliberately follows the
 Matlab campaign convention with its own QC gate and the `epsilonLnSigma`
-uncertainty output. Because the two agree numerically for two-probe data, the
-remaining divergence is one of QC philosophy and output naming rather than
-science, and is kept intentionally distinct rather than forced to converge.
+uncertainty output. For two-probe data the two therefore diverge whenever the
+probes disagree beyond `1.96·√2·σ(ln ε)`: `rsi` yields `epsilon_final ≤
+epsilonMean` (larger probe dropped) while `perturb` keeps both. The divergence
+is one of QC philosophy — both are defensible — but the products are **not**
+numerically identical, and any comparison between them must account for it.

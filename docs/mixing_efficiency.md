@@ -55,10 +55,13 @@ window grid:
 | `K_rho` | Osborn diffusivity $0.2\,\varepsilon/N^2$ with the canonical constant | m$^2$ s$^{-1}$ |
 
 Implementation: [`odas_tpw.processing.mixing`](../src/odas_tpw/processing/mixing.py).
-Estimates are masked (NaN) where $N^2 < 10^{-9}$ s$^{-2}$
-(unstratified — the Osborn scaling does not apply) or
-$|\partial\overline{T}/\partial z| < 10^{-4}$ K/m (well-mixed — the
-temperature-variance budget no longer constrains a diffusivity).
+Estimates are masked (NaN) **per variable**, mirroring which gradient each
+one divides by: `K_T` where $|\partial\overline{T}/\partial z| < 10^{-4}$ K/m
+(well-mixed — the temperature-variance budget no longer constrains a
+diffusivity); `K_rho` where $N^2 < 10^{-9}$ s$^{-2}$ (unstratified — the
+Osborn scaling does not apply); and `Gamma` where *either* floor is crossed
+(it divides by both). So `K_T` survives in unstratified water and `K_rho`
+survives in well-mixed water — only their intersection removes both.
 `K_rho` is additionally masked where it exceeds an upper sanity bound
 (`K_rho_max`, default $10$ m$^2$ s$^{-1}$): as $N^2$ approaches the floor
 the Osborn diffusivity grows without bound (tens to thousands of

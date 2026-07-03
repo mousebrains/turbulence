@@ -24,6 +24,9 @@ Chi levels and binning are extensions to the SCOR-160 framework.
 | `rsi-tpw pipeline` | `.p` files | Multi-level directory tree | Full L1→L6 pipeline |
 | `rsi-tpw ql` | `.p` files | Interactive viewer | Quick-look exploration |
 | `rsi-tpw dl` | `.p` files | Interactive viewer | Dissipation quality inspection |
+| `rsi-tpw ml` | `.p` files | Interactive viewer | Mixing inspection (N²/dT·dz⁻¹/K_T/Γ/K_ρ) |
+| `rsi-tpw patch-template` | `.p` file | edit-spec `.yaml` | Scaffold a config edit-spec |
+| `rsi-tpw patch-config` | `.p` files | New `.p` files | Edit embedded config fields |
 | `rsi-tpw init` | — | `config.yaml` | Generate template config |
 
 ---
@@ -195,8 +198,11 @@ estimating χ and the Batchelor wavenumber (MLE or iterative method).
 **Output file:** `profile_NNN/L5_binned.nc`
 
 Epsilon and chi estimates from L4 are depth-binned together into a single
-dataset.  Log-normal variables (epsilon, chi) use geometric mean; others
-use arithmetic mean.
+dataset. All variables — including epsilon and chi — are depth-binned with the
+**arithmetic** mean by default: for lognormal dissipation the arithmetic mean
+is the unbiased estimator of the true mean that flux-relevant quantities
+(K_T, K_ρ, Γ) require, and it matches the perturb pipeline. Geometric
+(log-space) averaging is opt-in only, via the `log_mean_vars` argument.
 
 **Dimensions:** `(depth_bin,)` — bin centers in dbar (default 1 dbar bins)
 

@@ -346,7 +346,7 @@ cost(chi) = sum_i [ ln Phi_model(k_i; chi) - ln Phi_obs(k_i) ]^2
 chi = argmin_chi  cost(chi)       [K^2/s]
 ```
 
-Minimising in log space penalises over- and under-estimation symmetrically on the log-log plot, and is more robust than the pure variance-correction estimate when the epsilon-derived `kB` does not perfectly match the temperature spectrum. If the fit fails (all costs non-finite), `chi_vc` is used.
+Minimising in log space penalises over- and under-estimation symmetrically on the log-log plot, and is more robust than the pure variance-correction estimate when the epsilon-derived `kB` does not perfectly match the temperature spectrum. The reported chi is not the raw grid argmin: the grid minimum is refined by fitting a parabola through the minimum and its two neighbours in `(log10 chi, cost)` space, removing the ~half-grid-step (~2.3%) quantization. If the fit fails (all costs non-finite), `chi_vc` is used.
 
 
 ## 7. Method 2a: Maximum Likelihood Estimation
@@ -383,7 +383,7 @@ Total: 200 function evaluations.
 
 ### Fitting range
 
-- **Low-k cutoff:** first wavenumber bin above zero
+- **Low-k cutoff:** first wavenumber bin above the `2 * Phi_noise` criterion (fallback to all `k` in `(0, K_AA]` when fewer than 6 bins qualify)
 - **High-k cutoff:** highest `k` where `Phi_obs(k) > 2 * Phi_noise(k)` and `k <= f_AA / W`
 - Minimum 6 wavenumber points required in the fit range
 
@@ -407,7 +407,7 @@ where the correction ratio is computed from the fitted model at unit chi:
 
 ```
 V_total    = integral over all k    of  Phi_model(k; kB_fit, chi=1)
-V_resolved = integral_0^{K_max_fit} of  Phi_model(k; kB_fit, chi=1) * |H(k)|^2
+V_resolved = integral_{K_fit_low}^{K_max_fit} of  Phi_model(k; kB_fit, chi=1) * |H(k)|^2
 ```
 
 `V_resolved` includes the FP07 attenuation `|H|^2`, so the ratio simultaneously corrects for the unresolved band edges and for in-band sensor response. If the correction is not finite, the initial integrated estimate `chi_obs` is reported.
@@ -553,7 +553,7 @@ Phi_corrected(k) = Phi_raw(k) * C_FD(f)
 The profile is divided into overlapping windows of length `diss_length` samples (default `4 * fft_length = 4096` samples at 512 Hz = 8 seconds of data). Adjacent windows overlap by `overlap` samples (default `diss_length // 2 = 2048`). Within each window:
 
 - Mean pressure, temperature, speed, and time are computed
-- Kinematic viscosity `nu` is computed from [`visc35(T_mean)`](../src/odas_tpw/scor160/ocean.py)
+- Kinematic viscosity `nu` is computed from [`visc(T_mean, S, P_mean)`](../src/odas_tpw/scor160/ocean.py) when salinity is available (measured JAC C/T on the pipeline path, or user-supplied), falling back to `visc35(T_mean)` otherwise
 - The spectral estimate uses `2 * (diss_length // fft_length) - 1` overlapping FFT segments
 - Degrees of freedom: `d = 1.9 * num_ffts` (Nuttall 1971)
 
