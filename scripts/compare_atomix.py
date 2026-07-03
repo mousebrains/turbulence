@@ -279,7 +279,16 @@ def compare_dataset(nc_path: Path, key: str) -> DatasetResult:
     attrs = read_atomix_attrs(nc_path)
     print(f"  Title: {attrs.get('title', 'N/A')}")
 
-    f_AA = attrs.get("f_AA", attrs.get("HP_cut", 98.0))
+    # Anti-alias limit. NEVER fall back to HP_cut — that is a HIGH-PASS cutoff,
+    # not the anti-alias frequency; for MSS_Baltic (no f_AA, HP_cut=0.15) using
+    # it caps K_AA at ~7 cpm and inflates the reported RMSD ~24x (log10 RMSD
+    # 0.192 vs 0.008). When the benchmark file has no f_AA, apply no anti-alias
+    # truncation (a large, non-constraining limit) and say so.
+    f_AA = attrs.get("f_AA")
+    if f_AA is None:
+        f_AA = 1.0e4
+        print("  (no f_AA attribute; applying NO anti-alias truncation — "
+              "HP_cut is NOT the AA frequency)")
     fft_length = attrs.get("fft_length", None)
     goodman = attrs.get("goodman", 1)
     fit_order = 3  # default for rsi-tpw
@@ -392,12 +401,14 @@ def compare_dataset(nc_path: Path, key: str) -> DatasetResult:
             # Estimate from temperature if available, else use default
             nu = visc35(10.0)  # ~1.35e-6 m²/s at 10°C
 
-        # Anti-aliasing wavenumber: f_AA / speed
+        # Anti-aliasing wavenumber: 0.9 * f_AA / speed. The 0.9 margin matches
+        # ODAS and scor160.l4._estimate_epsilon (the production path), so the
+        # harness exercises the same epsilon configuration.
         W = float(speed_l3[i])
         if W <= 0 or not np.isfinite(W):
             n_skip += 1
             continue
-        K_AA = f_AA / W
+        K_AA = 0.9 * f_AA / W
 
         for p in range(n_probes):
             spec = sh_spec_clean[i, :, p]
@@ -625,17 +636,20 @@ def plot_fom_comparison(results: list[DatasetResult], output_dir: Path) -> Path:
             continue
 
         ax.plot(fom_a[valid], fom_r[valid], ".", ms=3, alpha=0.5)
-        lo, hi = 0.5, 2.0
-        ax.plot([lo, hi], [lo, hi], "k-", lw=0.8)
-        ax.axhline(1.15, color="r", ls="--", lw=0.5, alpha=0.5, label="FOM=1.15")
-        ax.axvline(1.15, color="r", ls="--", lw=0.5, alpha=0.5)
-        ax.set_xlim(lo, hi)
-        ax.set_ylim(lo, hi)
-        ax.set_aspect("equal")
-        ax.set_xlabel("FOM (ATOMIX)")
-        ax.set_ylabel("FOM (rsi-tpw)")
+        # fom_atomix and fom_rsi are DIFFERENT statistics (empirically
+        # anti-correlated, r~-0.5): ATOMIX's Lueck-2022 MAD-based FOM (good near
+        # 0.6-0.8, ATOMIX rejects > ~1.15) vs rsi-tpw's observed/Nasmyth variance
+        # ratio (good near 1.0). There is NO 1:1 relationship, so no 1:1 line,
+        # no equal aspect, and no shared threshold — mark only each axis's own
+        # reference so the scatter is read as a relationship, not agreement.
+        ax.axvline(1.15, color="r", ls="--", lw=0.6, alpha=0.6,
+                   label="ATOMIX FOM=1.15 (reject)")
+        ax.axhline(1.0, color="b", ls=":", lw=0.6, alpha=0.6,
+                   label="var-ratio=1.0 (ideal)")
+        ax.set_xlabel("FOM (ATOMIX; Lueck 2022 MAD statistic)")
+        ax.set_ylabel("fom (rsi-tpw; obs/Nasmyth variance ratio)")
         ax.set_title(res.name)
-        ax.legend(fontsize=7)
+        ax.legend(fontsize=6)
         ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
