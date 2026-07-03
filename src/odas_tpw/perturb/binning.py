@@ -192,6 +192,13 @@ _SCALAR_NAMES = ("lat", "lon", "stime", "etime")
 
 _DEPTH_CANDIDATES = ("depth", "P", "P_mean")
 
+# Latitude used to convert pressure -> depth when a profile carries no ``lat``.
+# gsw.z_from_p's latitude (gravity) dependence is ~3 m at 1000 dbar between the
+# equator and the poles; a mid-latitude default halves that worst-case error
+# (~+/-1.5 m) vs assuming the equator or a pole. Profiles from the perturb
+# pipeline normally carry their GPS ``lat``, so this fallback is rarely used.
+_DEFAULT_BIN_LATITUDE = 45.0
+
 
 def _load_profile_snapshot(profile_file: Path) -> dict | None:
     """Read a profile NC once and return a snapshot for binning.
@@ -244,6 +251,18 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
                 for a in sv.ncattrs()
                 if a not in ("units", "calendar")
             }
+
+        # The bin coordinate must be depth in METRES. A true 'depth' variable is
+        # already metres (TEOS-10, lat-aware) and used as-is; a pressure fallback
+        # (dbar) is converted via gsw.z_from_p using the profile's own latitude
+        # when present, else the mid-latitude default (see _DEFAULT_BIN_LATITUDE).
+        if depth_var in ("P", "P_mean"):
+            import gsw
+
+            _lat = scalars.get("lat")
+            if _lat is None or not np.isfinite(_lat):
+                _lat = _DEFAULT_BIN_LATITUDE
+            depth = -np.asarray(gsw.z_from_p(np.asarray(depth, dtype=float), _lat), dtype=float)
 
         n_depth = len(depth)
         data: dict[str, np.ndarray] = {}

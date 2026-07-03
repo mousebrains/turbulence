@@ -259,6 +259,50 @@ class TestChiSchemaHeadlineVars:
             assert "long_name" in CHI_SCHEMA[name]
 
 
+class TestBinCoordinateMeters:
+    """binning.py: a pressure-only profile is binned on depth in METRES."""
+
+    def _make_profile(self, path, lat=None):
+        import netCDF4 as nc
+
+        ds = nc.Dataset(str(path), "w")
+        ds.createDimension("time", 4)
+        p = ds.createVariable("P_mean", "f8", ("time",))
+        p[:] = [100.0, 500.0, 1000.0, 1500.0]
+        e = ds.createVariable("epsilonMean", "f8", ("time",))
+        e[:] = [1e-8, 2e-8, 3e-8, 4e-8]
+        if lat is not None:
+            la = ds.createVariable("lat", "f8", ())
+            la[()] = lat
+        ds.close()
+
+    def test_pressure_converted_with_lat(self, tmp_path):
+        import gsw
+
+        from odas_tpw.perturb.binning import _load_profile_snapshot
+
+        f = tmp_path / "prof.nc"
+        self._make_profile(f, lat=15.0)
+        snap = _load_profile_snapshot(f)
+        expected = -gsw.z_from_p(np.array([100.0, 500.0, 1000.0, 1500.0]), 15.0)
+        np.testing.assert_allclose(snap["depth"], expected)
+        # depth (m) is strictly shallower than pressure (dbar) in magnitude here
+        assert np.all(snap["depth"] < np.array([100.0, 500.0, 1000.0, 1500.0]))
+
+    def test_pressure_converted_default_lat_when_missing(self, tmp_path):
+        import gsw
+
+        from odas_tpw.perturb.binning import _DEFAULT_BIN_LATITUDE, _load_profile_snapshot
+
+        f = tmp_path / "prof_nolat.nc"
+        self._make_profile(f, lat=None)
+        snap = _load_profile_snapshot(f)
+        expected = -gsw.z_from_p(
+            np.array([100.0, 500.0, 1000.0, 1500.0]), _DEFAULT_BIN_LATITUDE
+        )
+        np.testing.assert_allclose(snap["depth"], expected)
+
+
 class TestTopTrimNeverDeeperThanSamples:
     """processing/top_trim.py: a returned trim is always applicable to the cast."""
 

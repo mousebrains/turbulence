@@ -264,13 +264,13 @@ def _build_profiles_figure(
         if norm is None or not np.any(np.isfinite(z)):
             ax.text(0.5, 0.5, f"no valid {name}", transform=ax.transAxes,
                     ha="center", va="center")
-            ax.set_ylabel("Pressure (dbar)")
+            ax.set_ylabel("Depth (m)")
             continue
         cmap = getattr(cmocean.cm, cmap_name).copy()
         cmap.set_bad(color="0.85")  # unsampled depths: light grey
         layout.plot_columns(ax, fig, xs, depth, z, cmap, norm, label,
                             gap_factor=args.gap_factor)
-        ax.set_ylabel("Pressure (dbar)")
+        ax.set_ylabel("Depth (m)")
 
     axes[0].invert_yaxis()
     if args.p_max is not None:
