@@ -827,6 +827,7 @@ def _add_mixing_quantities(
     T_name: str = "JAC_T",
     C_name: str = "JAC_C",
     file_label: str = "",
+    epsilon_provenance: str = "",
 ):
     """Append stratification and (when available) mixing quantities to chi.
 
@@ -933,7 +934,7 @@ def _add_mixing_quantities(
                             "doi:10.1175/1520-0485(1982)012<0256:DOTROD>2.0.CO;2. "
                             "epsilonMean paired from the nearest dissipation window. "
                             "NaN where N2 < 1e-9 s-2 or |dT/dz| < 1e-4 K/m. "
-                            "Canonical value ~0.2."
+                            "Canonical value ~0.2." + epsilon_provenance
                         ),
                     },
                 ),
@@ -950,6 +951,7 @@ def _add_mixing_quantities(
                             "K_rho > 10 m2 s-1 (physically implausible diffusivity: "
                             "the unbounded near-floor-N2 artifact, or contaminated "
                             "near-surface windows where epsilon is itself spurious)."
+                            + epsilon_provenance
                         ),
                     },
                 ),
@@ -1552,6 +1554,26 @@ def process_file(
                                     if diss_ds is not None
                                     else xr.open_dataset(diss_path)
                                 )
+                                # Gamma and K_rho are built from the shear-probe
+                                # epsilonMean even under Method 2 (use_epsilon=False),
+                                # the setting chosen precisely when shear epsilon is
+                                # distrusted. Record that provenance in the attrs and
+                                # warn so a downstream user is not misled.
+                                if not chi_use_epsilon:
+                                    eps_prov = (
+                                        " PROVENANCE: chi.use_epsilon=false (Method 2), "
+                                        "so chi is a pure spectral fit, but this epsilon "
+                                        "is still the shear-probe epsilonMean (the source "
+                                        "Method 2 is chosen to distrust); treat Gamma/K_rho "
+                                        "accordingly."
+                                    )
+                                    logger.warning(
+                                        "%s: chi.use_epsilon=false but mixing Gamma/K_rho "
+                                        "still use shear epsilonMean; see variable attrs",
+                                        Path(prof_path).name,
+                                    )
+                                else:
+                                    eps_prov = ""
                                 try:
                                     chi_ds = _add_mixing_quantities(
                                         chi_ds,
@@ -1560,6 +1582,7 @@ def process_file(
                                         T_name=ct_cfg.get("T_name", "JAC_T"),
                                         C_name=ct_cfg.get("C_name", "JAC_C"),
                                         file_label=Path(prof_path).name,
+                                        epsilon_provenance=eps_prov,
                                     )
                                 finally:
                                     if mix_eps is not diss_ds:

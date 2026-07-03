@@ -20,7 +20,16 @@ from scipy.special import erfc
 # Constants
 # ---------------------------------------------------------------------------
 
-KAPPA_T = 1.4e-7  # Thermal diffusivity of seawater [m^2/s]
+# Thermal diffusivity of seawater [m^2/s], held FIXED at a ~15 degC value.
+# NOTE (audit 2026-07-01): kappa_T is temperature-dependent (kappa_T = k/(rho*cp),
+# ~1.40e-7 at 15 degC rising to ~1.50e-7 at 28 degC, +7%). Because chi = 6*kappa_T*I
+# and epsilon_T = (2*pi*kB)^4*nu*kappa_T^2, the fixed value biases chi LOW by ~6.5%
+# and Method-2 epsilon_T LOW by ~12.6% in ARCTERX warm (~28 degC) surface water,
+# while nu in the same pipeline IS temperature-resolved. Threading a per-window
+# kappa_T(T_mean, S, P) through the ~13 KAPPA_T sites in chi.py/l4_chi.py is the
+# correct fix; it changes every published chi and is deferred pending review.
+# See docs/chi_mathematics.md Section 11 for the bias envelope.
+KAPPA_T = 1.4e-7
 Q_BATCHELOR = 3.7  # Batchelor universal constant (Oakey 1982)
 Q_KRAICHNAN = 5.26  # Kraichnan universal constant (Bogucki et al. 1997)
 _SQ6Q_KRAICHNAN = np.sqrt(6 * Q_KRAICHNAN)  # Precomputed for kraichnan_grad

@@ -564,9 +564,20 @@ The profile is divided into overlapping windows of length `diss_length` samples 
 
 | Symbol | Value | Description | Source |
 |--------|-------|-------------|--------|
-| `kappa_T` | `1.4e-7 m^2/s` | Molecular thermal diffusivity of seawater | Standard value |
+| `kappa_T` | `1.4e-7 m^2/s` | Molecular thermal diffusivity of seawater (**fixed**, ~15 °C value) | Standard value |
 | `q_B` | `3.7` | Batchelor universal constant | [Oakey 1982](https://doi.org/10.1175/1520-0485(1982)012%3C0256:DOTROD%3E2.0.CO;2) |
 | `q_K` | `5.26` | Kraichnan universal constant | [Bogucki et al. 1997](https://doi.org/10.1017/S0022112097005727) |
+
+> **Known bias — fixed `kappa_T` (audit 2026-07-01).** `kappa_T` is held at the
+> constant `1.4e-7 m²/s` at every use, but the molecular thermal diffusivity is
+> temperature-dependent (`kappa_T = k/(ρ·c_p)`): ≈`1.40e-7` at 15 °C rising to
+> ≈`1.50e-7` at 28 °C (**+7 %**). Because `chi = 6·kappa_T·∫…` and
+> `epsilon_T = (2π·kB)⁴·ν·kappa_T²`, the fixed value biases **chi ≈ −6.5 %** and
+> **Method-2 epsilon_T ≈ −12.6 %** (Method-1 `kB` high ≈ +3.5 %) in ARCTERX warm
+> (~28 °C) surface water — while `ν` in the same pipeline **is** temperature-
+> resolved (`visc(T, S, P)`). Threading a per-window `kappa_T(T_mean, S, P)`
+> through the ~13 `KAPPA_T` sites in `chi.py`/`l4_chi.py` is the correct fix; it
+> changes every published chi/epsilon_T value and is deferred pending review.
 
 ### Default instrument parameters
 

@@ -553,7 +553,8 @@ profiles:
   W_min: 0.3              # minimum fall rate [dbar/s]
   direction: "down"       # profile direction: up or down
   min_duration: 7.0       # minimum profile duration [s]
-  diagnostics: false      # write T1_raw, C_raw, W, cal attrs
+  diagnostics: false      # RESERVED / not yet implemented (would write T1_raw,
+                          # C_raw, W, cal attrs). Currently a no-op for profiles.
 
 fp07:
   calibrate: true
@@ -599,12 +600,19 @@ epsilon:
   T_source: null          # temperature source for viscosity (null = blend T1/T2)
   T1_norm: 1.0            # T1 blending weight
   T2_norm: 1.0            # T2 blending weight
-  fom_max: null           # null = no FOM cut. e.g. 2.0 NaNs each per-probe
-                          # cell (e_N, epsilon[probe,:]) where its FOM
-                          # >= fom_max -- applied BEFORE mk_epsilon_mean,
-                          # so bad probes drop out of the geomean
-                          # individually rather than spoiling the segment.
-  diagnostics: false      # write spec_shear_raw, spike_count, probe_mask
+  fom_max: null           # null = NO spectral-fit QC on epsilon. IMPORTANT: unlike
+                          # the rsi run_pipeline path (which applies the full ATOMIX
+                          # flag set -- FM>1.15, var_resolved<0.5, despike limits --
+                          # via _compute_flags), the perturb pipeline masks per-probe
+                          # epsilon ONLY via this cut. With null, epsilonMean / binned
+                          # / combo include estimates ATOMIX QC would reject. Set e.g.
+                          # 2.0 to NaN each per-probe cell (e_N, epsilon[probe,:])
+                          # whose variance-ratio FOM >= fom_max BEFORE mk_epsilon_mean,
+                          # so bad probes drop out of the geomean individually. (Note
+                          # this thresholds the variance-ratio `fom`, not the Lueck
+                          # `FM` the file also carries.)
+  diagnostics: false      # RESERVED / not yet implemented (would write
+                          # spec_shear_raw, spike_count, probe_mask). No-op for epsilon.
 
 chi:
   enable: false           # chi is optional, separate stage after diss
@@ -632,7 +640,8 @@ chi:
   fom_max: null           # null = no FOM cut. Same per-probe mechanism as
                           # epsilon.fom_max but on chi NCs (NaN's chi[probe,
                           # seg] / chi_N where fom[probe, seg] >= fom_max).
-  diagnostics: false      # write spec_noise, fp07_transfer, gradT_raw
+  diagnostics: false      # RESERVED / not yet implemented (would write
+                          # spec_noise, fp07_transfer, gradT_raw). No-op for chi.
 
 ctd:
   enable: true
