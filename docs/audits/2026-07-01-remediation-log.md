@@ -38,6 +38,7 @@ every code fix carries a regression test unless noted.
 | `netcdf_schema.py:44` bin coord pressure-labelled-depth | `abfd748` | convert P→depth in **metres** via `gsw.z_from_p` (profile lat; 45° fallback) + fix plot labels |
 | `mixing.py:515` K_rho-only ceiling | `3c0bfc3` | per-variable `K_T_max` (10 m²/s) and `Gamma_max` (5) ceilings |
 | `compare_atomix.py:282,630` AA cut + FOM plot | `8e5b3a9` | never use HP_cut as f_AA + 0.9 margin (Baltic RMSD 0.192→0.008, all 6 PASS); FOM plot axes fixed |
+| `batchelor.py:23` fixed `kappa_T` → chi bias | `30444a9` | per-window T-dependent `ocean.kappa_T(T,S,P)` (Sharqawy/Jamieson–Tudhope + gsw) threaded L3→L4→chi.py; removes a chi bias of ~−1% (−1 °C) to ~+8% (32 °C); epsilon_T ∝ kappa_T² verified |
 
 ## Deferred — need a decision or data this session could not verify
 
@@ -47,7 +48,6 @@ cannot be verified without artifacts outside the repo.
 
 | Finding | Why deferred | Recommended fix |
 |---------|--------------|-----------------|
-| `chi/batchelor.py:23` — fixed `kappa_T` biases chi **~−6.5% (too low)** / epsilon_T ~−12.6% in warm water | Threading per-window `kappa_T(T,S,P)` touches ~13 sites in the chi core and changes **every** published chi/epsilon_T value | Implement the T-dependent kappa_T and regenerate chi products (bias documented in `chi_mathematics.md` §11 and at the constant). **The one remaining physics item.** |
 | Zero-input residual of `pipeline.py:2401` — stale `binned.nc` persists when input NCs shrink to exactly zero | Clearing needs the binned dirs resolved unconditionally (a dir-creation side effect); rare edge case | Resolve the binned dir even when the NC list is empty and clear its `binned.nc` |
 | `test_pipeline_vs_matlab.py:421`, `test_matlab_epsilon.py:218`, `test_matlab_chi.py:228` — accuracy gates too loose | These skip in CI (VMP/ and AtomixData stay gitignored — too large for GitHub) | With the reference data present locally: tighten to ~0.05–0.1 decades, add a signed-bias assert, restrict chi to `F ≤ f_AA` |
 | `rsi/dissipation.py:265` — perturb epsilon carries no ATOMIX spectral-fit QC by default | Behaviour/policy: adding an FM cut changes published epsilon | **Documented** (config `epsilon.fom_max` comment); decide whether to default an FM cut |
