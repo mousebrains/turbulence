@@ -6,11 +6,15 @@ Caller supplies any number of fast-rate vibration channels as a dict
 ``{"vibration": …}`` for a pre-computed RMS). The algorithm forms the
 elementwise root-sum-square magnitude across all supplied channels, bins
 its std by depth, and flags the deepest bin whose std exceeds
-``vibration_factor`` times the median.
+``vibration_factor`` times the median — but only within a few bins of the
+deepest sampled depth, since a real seafloor strike is at the cast bottom.
+A supra-threshold spike far above the bottom is mid-column vibration, not a
+crash, and is reported via a warning rather than truncating the cast.
 
 Reference: Code/bottom_crash_profiles.m (currently a stub in Matlab)
 """
 
+import warnings
 from collections.abc import Mapping
 
 import numpy as np
@@ -28,6 +32,7 @@ def detect_bottom_crash(
     median_factor: float = 1.0,
     vibration_frequency: int = 16,
     vibration_factor: float = 4.0,
+    proximity_bins: int = 2,
 ) -> float | None:
     """Detect bottom crash from a set of vibration channels.
 
@@ -63,6 +68,14 @@ def detect_bottom_crash(
         Vibration std dev acceptance factor: the deepest bin whose
         magnitude std exceeds ``vibration_factor`` times the median
         marks the crash.
+    proximity_bins : int
+        A crash is accepted only in a bin within ``proximity_bins`` of the
+        deepest sampled bin — a real seafloor strike is at the cast bottom,
+        so a supra-threshold spike higher up is mid-column vibration, not a
+        crash (audit r1-3). Must be >= 0; at the default ``depth_window=4``
+        m, ``proximity_bins=2`` accepts a strike within ~8 m of the deepest
+        sample. This is the geometric stand-in for the unimplemented
+        ``speed_factor`` fall-rate-collapse confirmation.
 
     Returns
     -------
@@ -137,19 +150,46 @@ def detect_bottom_crash(
     med_std = np.nanmedian(bin_std[valid])
     threshold = med_std * vibration_factor
 
-    # Search from deepest bin upward for spike
-    for i in range(len(bin_std) - 1, -1, -1):
-        if np.isfinite(bin_std[i]) and bin_std[i] > threshold:
-            # Report the MEAN depth of the samples that actually fell in the
-            # flagged bin, not the bin's geometric center. The deepest bin's
-            # right edge overhangs nanmax(depth) by up to one bin width, so its
-            # center can lie BELOW the deepest real sample; the caller's
-            # `P >= bottom_depth` then matches nothing and the crash is silently
-            # left un-trimmed (~half of all detections). The sample mean is
-            # guaranteed to lie within the observed depths of the bin (and so is
-            # robust to the fast/slow rate mismatch between this depth series and
-            # the slow pressure the caller trims against).
-            sel_depth = depth[in_range & (idx == i)]
-            return float(np.nanmean(sel_depth))
+    # A real bottom crash is at the seafloor — the deepest point of the cast.
+    # Restrict crash candidates to the near-bottom zone (within `proximity_bins`
+    # of the deepest sampled bin). A supra-threshold spike far above the bottom
+    # is mid-column vibration (a cable transient or a turbulence patch), not a
+    # crash; truncating the cast there would silently delete valid deep data
+    # (audit r1-3). This proximity gate is the geometric stand-in for the
+    # unimplemented MATLAB speed-drop (`speed_factor`) confirmation.
+    valid_idx = np.flatnonzero(valid)
+    deepest_valid = int(valid_idx[-1])
+    zone_top = deepest_valid - max(proximity_bins, 0)
+
+    def _bin_mean_depth(i: int) -> float:
+        # MEAN depth of the samples in bin i, not its geometric center: the
+        # deepest bin's right edge overhangs nanmax(depth) by up to one bin
+        # width, so its center can lie BELOW the deepest real sample and the
+        # caller's `P >= bottom_depth` would match nothing. The sample mean is
+        # guaranteed to lie within the bin's observed depths (robust to the
+        # fast/slow rate mismatch against the slow pressure the caller trims).
+        return float(np.nanmean(depth[in_range & (idx == i)]))
+
+    # Search the near-bottom zone from the deepest bin upward for the spike.
+    for i in range(deepest_valid, zone_top - 1, -1):
+        if valid[i] and bin_std[i] > threshold:
+            return _bin_mean_depth(i)
+
+    # No crash at the bottom. Surface any supra-threshold spike higher up —
+    # what the pre-fix deepest-upward scan would have mis-reported as a crash —
+    # so genuine mid-column contamination is visible rather than silently
+    # ignored, without truncating the (valid) deep cast.
+    for i in range(zone_top - 1, -1, -1):
+        if valid[i] and bin_std[i] > threshold:
+            spike_depth = _bin_mean_depth(i)
+            deepest_depth = float(np.nanmax(depth[in_range]))
+            warnings.warn(
+                f"detect_bottom_crash: vibration spike at ~{spike_depth:.1f} m "
+                f"is {deepest_depth - spike_depth:.1f} m above the deepest "
+                "sample; treated as mid-column contamination, not a bottom "
+                "crash (cast not truncated)",
+                stacklevel=2,
+            )
+            break
 
     return None
