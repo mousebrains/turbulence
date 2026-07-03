@@ -10,7 +10,8 @@ search range, bridging quiet lulls up to ``max_gap`` bins. Bridging lulls
 keeps a momentarily quiet near-surface bin from ending the search early;
 anchoring to the surface keeps an isolated *deep* transient from
 over-trimming the quiet band above it. Channels are combined with the
-median, robust to one bad channel.
+median (fully robust to one bad channel only for three or more voters; the
+VMP caller feeds two accelerometers, where median == mean).
 
 The instrument-specific question of which channels to feed lives in the
 caller. They must reflect the *instrument's* state, not the ocean: on a
@@ -113,8 +114,14 @@ def compute_trim_depth(
     patch) from over-trimming the entire quiet band above it (audit r1-2).
     A channel whose only elevated bins are detached from the surface sees
     no prop wash and abstains. The profile trim depth is the **median**
-    exit across the channels that detected prop wash — robust to a single
-    misbehaving or dead channel (a flat / zero-variance channel is dropped).
+    exit across the channels that detected prop wash. Note the median is
+    fully robust to one bad channel only for *three or more* voters; the
+    production VMP caller feeds exactly two accelerometers (``Ax``/``Ay``),
+    for which the median equals the mean, so a disagreeing channel pulls
+    the trim halfway and a lone surface-detecting channel sets it outright.
+    The surface-attachment rule above (not the median) is what rejects a
+    single channel's spurious *deep* transient. A flat / zero-variance
+    channel carries no settling information and is dropped before voting.
 
     The caller chooses which channels best mark the instrument's settling.
     On VMP data the accelerometers are the right choice: they capture the

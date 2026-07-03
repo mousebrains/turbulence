@@ -65,11 +65,13 @@ def compute_speed_for_pfile(
     -------
     speed_fast : (n_fast,) float64, m/s, >= ``speed_cutout``.
                  For the pressure method this is numerically |dP/dt| in
-                 dbar/s treated as m/s (the ODAS convention; 1 dbar ~
-                 1.01-1.02 m depending on latitude/density).  The ~1-2 %
-                 systematic speed bias is amplified in epsilon, which has
-                 roughly U^4 leverage through the shear conversion and
-                 wavenumber transform.
+                 dbar/s treated as m/s (the ODAS convention). 1 dbar is
+                 ~0.99 m (equivalently 1 m ~ 1.006-1.009 dbar depending on
+                 latitude/density), so |dP/dt| in dbar/s slightly OVER-states
+                 the true speed in m/s, by <1%. Through epsilon's strong
+                 inverse speed leverage (~U^-4 in the shear conversion and
+                 wavenumber transform) that biases the reported epsilon
+                 slightly LOW.
     W_slow     : (n_slow,) float64, dbar/s. Always the smoothed |dP/dt|
                  -- independent of method, useful for QC/binning.
     """

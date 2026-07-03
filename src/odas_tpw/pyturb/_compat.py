@@ -170,7 +170,7 @@ def rename_eps_dataset(
         data_vars[f"S_sh{i + 1}"] = (
             ["frequency", "time"],
             l3.sh_spec_clean[i],
-            {"units": "s-2/cpm", "long_name": f"cleaned shear spectrum (probe {i + 1})"},
+            {"units": "s-2/cpm", "long_name": f"shear spectrum (probe {i + 1}); Goodman-cleaned when --goodman is set, otherwise the raw spectrum"},
         )
 
     # Temperature gradient spectra

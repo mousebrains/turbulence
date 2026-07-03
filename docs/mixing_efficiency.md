@@ -69,8 +69,10 @@ m$^2$ s$^{-1}$), an artifact rather than real mixing. The bound sits above
 even the most energetic real mixing — overflows and hydraulic jumps reach
 $\sim 0.1$–$1$ m$^2$ s$^{-1}$, and energetic near-surface mixing on ARCTERX
 VMP casts reaches a few m$^2$ s$^{-1}$ — so genuine signal is retained and
-only the unbounded near-floor artifact is removed; the number of masked
-windows is reported via a warning.
+only physically implausible magnitudes are removed: the unbounded
+near-floor-$N^2$ artifact, or contaminated near-surface windows whose
+epsilon is itself spurious. The number of masked windows is reported via a
+warning.
 
 Two caveats for interpretation:
 

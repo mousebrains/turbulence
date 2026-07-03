@@ -234,6 +234,13 @@ COMBO_SCHEMA: dict[str, dict] = {
         "nc_name": "epsilonLnSigma",
         "units": "",
         "long_name": "sigma of ln(epsilon)",
+        "comment": (
+            "Expected single-probe standard deviation of ln(epsilon) from the "
+            "Lueck variance model; this is NOT the sigma of the combined mean "
+            "(no sqrt(n) reduction is applied). After depth-binning it is the "
+            "RMS of the contributing per-window sigmas in the bin, not a spread "
+            "recomputed from the binned estimates."
+        ),
     },
     "FM_1": {
         "nc_name": "FM_1",

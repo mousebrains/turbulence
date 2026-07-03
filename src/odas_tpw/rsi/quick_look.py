@@ -418,7 +418,9 @@ class QuickLookViewer(ProfileViewer):
             ax.set_xlabel("\u03c7 [K\u00b2/s]")
             ax.set_ylabel("Pressure [dbar]")
             ax.legend(fontsize=6, loc="lower left")
-            selected = {1: "M1", 2: "M2-MLE"}.get(self.chi_method, "M1")
+            # chi_method=2 runs compute_chi_window(method=2) -> _iterative_fit,
+            # i.e. M2-Iter (NOT the MLE variant).
+            selected = {1: "M1", 2: "M2-Iter"}.get(self.chi_method, "M1")
             ax.set_title(f"\u03c7 profile ({selected}, {self.spectrum_model})", fontsize=9)
             ax.grid(True, alpha=0.3, which="both")
         else:
@@ -572,8 +574,10 @@ class QuickLookViewer(ProfileViewer):
         )
         K, _F, obs_spectra, methods_results, noise_K, mean_speed, _nu = self._cached_chi
 
-        # Line styles for each method; selected method drawn thicker
-        selected_method = {1: "M1", 2: "M2-MLE"}.get(self.chi_method, "M1")
+        # Line styles for each method; selected method drawn thicker. chi_method=2
+        # is the iterative fit (M2-Iter) — the same curve the chi-profile panel
+        # plots — so highlight it, not the separate M2-MLE curve.
+        selected_method = {1: "M1", 2: "M2-Iter"}.get(self.chi_method, "M1")
         method_styles = [
             ("M1", "--", 0.9),
             ("M2-MLE", "-.", 0.9),
