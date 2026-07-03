@@ -3,7 +3,7 @@
 
 The synthetic CTD combo deliberately moves lat/lon, sawtooths depth (so the
 grid's cell-averaging is exercised by revisited depth bins), and carries a
-negative sigma0 near the surface (so signed colour limits are exercised) —
+negative sigma0 near the surface (so signed color limits are exercised) —
 the clean fixed-field fixtures elsewhere would not catch those.
 """
 

@@ -576,7 +576,7 @@ def _build_diss_dataset(
             K_out,
             {
                 "units": "cpm",
-                "long_name": "wavenumber (cycles per metre)",
+                "long_name": "wavenumber (cycles per meter)",
             },
         ),
         (

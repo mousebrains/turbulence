@@ -11,7 +11,7 @@ from odas_tpw.scor160.profile import get_profiles, smooth_fall_rate
 
 
 class TestSmoothFallRateBasic:
-    """Core behaviour of smooth_fall_rate."""
+    """Core behavior of smooth_fall_rate."""
 
     def test_linear_ramp_constant_speed(self):
         """Linear pressure increase should give nearly constant fall rate."""

@@ -326,7 +326,7 @@ def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
     ``processing.epsilon_combine.mk_epsilon_mean``), that QC-filtered geometric
     mean is used as ``epsi_final``.  Otherwise we fall back to a plain
     ``nanmean`` across the per-probe ``epsilon`` array — the historical
-    behaviour, retained for inputs produced by the lower-level rsi pipeline
+    behavior, retained for inputs produced by the lower-level rsi pipeline
     that does not run the multi-probe combine step.
 
     Time reference: ``L3ChiData.time`` is in "seconds since start_time"
@@ -659,7 +659,7 @@ def _build_chi_dataset(
             K_out,
             {
                 "units": "cpm",
-                "long_name": "wavenumber (cycles per metre)",
+                "long_name": "wavenumber (cycles per meter)",
             },
         ),
         (

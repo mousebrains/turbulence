@@ -176,7 +176,7 @@ class TestWindowStratification:
 
     def test_too_few_samples_nan(self):
         t, P, T = _make_profile(duration=1.0)
-        # Window centred far outside the data
+        # Window centered far outside the data
         res = window_stratification(np.array([500.0]), 2.0, t, P, T)
         assert np.isnan(res.N2[0]) and np.isnan(res.dTdz[0])
 

@@ -252,8 +252,8 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
                 if a not in ("units", "calendar")
             }
 
-        # The bin coordinate must be depth in METRES. A true 'depth' variable is
-        # already metres (TEOS-10, lat-aware) and used as-is; a pressure fallback
+        # The bin coordinate must be depth in METERS. A true 'depth' variable is
+        # already meters (TEOS-10, lat-aware) and used as-is; a pressure fallback
         # (dbar) is converted via gsw.z_from_p using the profile's own latitude
         # when present, else the mid-latitude default (see _DEFAULT_BIN_LATITUDE).
         if depth_var in ("P", "P_mean"):

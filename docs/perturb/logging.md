@@ -42,7 +42,7 @@ suffix.
 | `*_binned_NN/<stem>.log` | Aggregated per-`.p`-file records during binning. Multiple per-profile NetCDFs from the same `.p` file append into one log. | A binned variable is missing for one source file; this isolates which one. |
 | `*_combo_*/combo.log` | The single combo-assembly step's records. | A combo NetCDF failed to write or contains the wrong files. |
 
-## Console behaviour
+## Console behavior
 
 By default `perturb` prints **nothing** to stderr — the run log captures
 everything.  Pass `--stdout` to also mirror records to stderr in a terse

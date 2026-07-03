@@ -27,7 +27,7 @@ import numpy as np
 # negligible against the sampling/binning scales of a microstructure section).
 _EARTH_RADIUS_M = 6_371_000.0
 
-# Distance unit -> metres-per-unit scale factor.  1 nm = 1852 m exactly.
+# Distance unit -> meters-per-unit scale factor.  1 nm = 1852 m exactly.
 _UNIT_PER_M: dict[str, float] = {"m": 1.0, "km": 1.0e-3, "nm": 1.0 / 1852.0}
 
 METHODS: tuple[str, ...] = (
@@ -133,7 +133,7 @@ def distance_from_point(
 def _to_local_xy(
     lat: np.ndarray, lon: np.ndarray, lat_ref: float, lon_ref: float
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Local equirectangular (east, north) metres about (lat_ref, lon_ref)."""
+    """Local equirectangular (east, north) meters about (lat_ref, lon_ref)."""
     x = (
         np.radians(_wrap_deg(np.asarray(lon, float) - lon_ref))
         * np.cos(np.radians(lat_ref))
@@ -157,7 +157,7 @@ def project_along_line(
     samples beyond the polyline ends fold onto the terminal waypoint.
 
     *waypoints* is an ``(M, 2)`` array of ``[lat, lon]`` rows (M >= 2).  The
-    projection uses a local equirectangular plane centred on the data
+    projection uses a local equirectangular plane centered on the data
     centroid — exact enough for the few-hundred-km transects this serves, but
     an approximation, not a geodesic.
     """

@@ -439,7 +439,7 @@ def csd_matrix_batch(
 
     if auto:
         # Auto-spectral matrix: Cxy[w, f, i, j] = <conj(X_i) * X_j>
-        # Average over segments, then normalise.
+        # Average over segments, then normalize.
         # einsum: for each (w, f), outer product over channel dimension
         # fft_x: (n_windows, n_seg, n_freq, n_x)
         Cxy = np.einsum("wsfi,wsfj->wfij", np.conj(fft_x), fft_x)  # (n_windows, n_freq, n_x, n_x)

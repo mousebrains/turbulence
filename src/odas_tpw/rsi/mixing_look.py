@@ -388,7 +388,7 @@ class MixingLookViewer(ProfileViewer):
         """Panel (1,3): K_T vs K_rho (log-log, 1:1 line), colored by pressure.
 
         Points on the 1:1 line have measured Γ ≈ 0.2 (K_T ≈ K_rho); the pressure
-        colour shows how the agreement varies with depth.
+        color shows how the agreement varies with depth.
         """
         if self._mix is None:
             self._no_data(ax, "No data")

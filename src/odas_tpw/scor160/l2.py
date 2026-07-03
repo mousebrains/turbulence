@@ -294,7 +294,7 @@ def _hp_filter(
 
     NaN values are linearly interpolated before filtering, then restored
     to NaN afterward.  This prevents ``filtfilt`` from propagating NaN
-    to the entire output while preserving whole-record filter behaviour
+    to the entire output while preserving whole-record filter behavior
     for files without NaN.
     """
     if data.size == 0 or f_hp <= 0:

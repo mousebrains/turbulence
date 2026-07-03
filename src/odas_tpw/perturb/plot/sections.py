@@ -133,7 +133,7 @@ def parse_time(value) -> np.datetime64 | None:
 
 
 def validate_params(method: str, params: dict, name: str) -> dict:
-    """Check method-specific params and normalise units; return a clean dict."""
+    """Check method-specific params and normalize units; return a clean dict."""
     if method not in xaxis.METHODS:
         raise ValueError(
             f"section {name!r}: unknown xaxis method {method!r}; "
@@ -315,7 +315,7 @@ def resolve_sections(args: argparse.Namespace) -> list[Section]:
 
 
 def add_section_arguments(p: argparse.ArgumentParser) -> None:
-    """Register the section / x-axis / colour / display flags shared by subcommands.
+    """Register the section / x-axis / color / display flags shared by subcommands.
 
     Each subcommand adds its own product-reading and rendering flags (e.g.
     --ctd-combo / --z-bin for scalar, --product for profiles).
@@ -340,13 +340,13 @@ def add_section_arguments(p: argparse.ArgumentParser) -> None:
                    help="variable to panel (repeatable; default: the product's "
                         "standard set)")
     p.add_argument("--vmin", type=float, default=None,
-                   help="colour-scale minimum. Applies only with a single --var; "
+                   help="color-scale minimum. Applies only with a single --var; "
                         "for multiple variables use --clim per variable.")
     p.add_argument("--vmax", type=float, default=None,
-                   help="colour-scale maximum (single --var only; see --clim)")
+                   help="color-scale maximum (single --var only; see --clim)")
     p.add_argument("--clim", action="append", nargs=3, default=None,
                    metavar=("VAR", "MIN", "MAX"),
-                   help="per-variable colour limits (repeatable), e.g. "
+                   help="per-variable color limits (repeatable), e.g. "
                         "--clim epsilonMean 1e-10 1e-7. Wins over --vmin/--vmax.")
     p.add_argument("--name", default="section", help="ad-hoc section name")
     p.add_argument("--xaxis", choices=xaxis.METHODS, default=None,

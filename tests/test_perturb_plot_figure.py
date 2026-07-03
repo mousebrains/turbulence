@@ -14,7 +14,8 @@ from odas_tpw.perturb.plot import profiles, scalar
 
 def _cli(**kw):
     base = dict(spec=None, list_presets=False, dump_preset=None,
-                select=None, strict=False, latest=False)
+                select=None, strict=False, latest=False,
+                config=None, root=None, output_dir=None, output_pdf=None)
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -41,6 +42,65 @@ class TestValidateSource:
         with pytest.raises(SystemExit):
             fig._validate_source({})
         assert fig._validate_source({"source": {"config": "c"}}) == {"config": "c"}
+
+
+class TestCliOverrides:
+    """CLI --config/--root/--output-* win over the spec (compare perturb runs)."""
+
+    def test_config_swaps_source_and_keeps_output_root(self):
+        spec = {"source": {"config": "spec.yaml", "output_root": "/results"}}
+        fig._apply_cli_overrides(spec, _cli(config="cli.yaml"))
+        # config replaced; output_root (a search-location hint) preserved.
+        assert spec["source"] == {"config": "cli.yaml", "output_root": "/results"}
+
+    def test_config_replaces_a_root_source(self):
+        spec = {"source": {"root": "/data"}}
+        fig._apply_cli_overrides(spec, _cli(config="cli.yaml"))
+        assert spec["source"] == {"config": "cli.yaml"}  # root selector dropped
+
+    def test_root_swaps_source_and_drops_config(self):
+        spec = {"source": {"config": "spec.yaml", "output_root": "/results"}}
+        fig._apply_cli_overrides(spec, _cli(root="/other"))
+        assert spec["source"] == {"root": "/other"}  # config + output_root dropped
+
+    def test_config_and_root_mutually_exclusive(self):
+        with pytest.raises(SystemExit, match="mutually exclusive"):
+            fig._apply_cli_overrides({"source": {"config": "c"}},
+                                     _cli(config="a.yaml", root="/b"))
+
+    def test_output_dir_override(self):
+        spec = {"source": {"config": "c"}, "output_pdf": "old.pdf"}
+        fig._apply_cli_overrides(spec, _cli(output_dir="figs/run2"))
+        assert spec["output_dir"] == "figs/run2" and "output_pdf" not in spec
+
+    def test_output_pdf_override(self):
+        spec = {"source": {"config": "c"}, "output_dir": "figs/"}
+        fig._apply_cli_overrides(spec, _cli(output_pdf="run2.pdf"))
+        assert spec["output_pdf"] == "run2.pdf" and "output_dir" not in spec
+
+    def test_output_dir_and_pdf_mutually_exclusive(self):
+        with pytest.raises(SystemExit, match="mutually exclusive"):
+            fig._apply_cli_overrides({"source": {"config": "c"}},
+                                     _cli(output_dir="d", output_pdf="p.pdf"))
+
+    def test_no_overrides_is_noop(self):
+        spec = {"source": {"config": "c"}, "output_dir": "figs/"}
+        fig._apply_cli_overrides(spec, _cli())
+        assert spec == {"source": {"config": "c"}, "output_dir": "figs/"}
+
+    def test_config_override_end_to_end(self, tmp_path, monkeypatch):
+        # The per-figure Namespace carries the CLI-overridden config, not the
+        # spec's — so `--config` re-points the whole spec at another run.
+        seen = []
+        monkeypatch.setattr(scalar, "run", lambda a: seen.append(a.config))
+        spec = tmp_path / "spec.yaml"
+        spec.write_text(
+            "source: {config: spec_cfg.yaml}\n"
+            f"output_dir: {tmp_path}/out\n"
+            "figures:\n  - {name: a, preset: scalar, vars: [JAC_T]}\n"
+        )
+        fig.run(_cli(spec=str(spec), config="cli_cfg.yaml"))
+        assert seen == ["cli_cfg.yaml"]
 
 
 class TestSectionsFile:
@@ -159,8 +219,24 @@ class TestBuildArgs:
 
     def test_invalid_choice_rejected(self, tmp_path):
         with pytest.raises(SystemExit, match="must be one of"):
-            fig._build_args({"name": "x", "preset": "profiles", "product": "bogus"},
+            fig._build_args({"name": "x", "preset": "profiles", "xaxis": "bogus"},
                             {"config": "c"}, None, tmp_path, False, False)
+
+    def test_product_key_rejected_after_split(self, tmp_path):
+        # `--product` was removed; the product is the preset now, so a leftover
+        # `product:` key is an unknown option, not a silent no-op.
+        with pytest.raises(SystemExit, match="not valid for preset"):
+            fig._build_args({"name": "x", "preset": "profiles", "product": "mixing"},
+                            {"config": "c"}, None, tmp_path, False, False)
+
+    def test_binned_presets_bind_product(self, tmp_path):
+        # Each binned preset maps to a ProductView carrying the right product.
+        for preset, product in [("profiles", "profiles"), ("epsilon", "diss"),
+                                ("chi", "chi"), ("mixing", "mixing")]:
+            mod, _args = fig._build_args({"name": "x", "preset": preset},
+                                         {"config": "c"}, None, tmp_path, False, False)
+            assert mod is fig._PRESETS[preset]
+            assert mod.product == product
 
     def test_reserved_key_rejected(self, tmp_path):
         with pytest.raises(SystemExit, match="set by source"):
@@ -298,17 +374,20 @@ class TestRun:
     def test_dispatch_and_select(self, tmp_path, monkeypatch):
         calls = []
         monkeypatch.setattr(scalar, "run", lambda a: calls.append(("scalar", a.var)))
-        monkeypatch.setattr(profiles, "run", lambda a: calls.append(("profiles", a.product)))
+        # The ProductView.run delegates to the module-level profiles.run, so
+        # patching it captures a `chi` preset dispatch (product bound to "chi").
+        monkeypatch.setattr(profiles, "run", lambda a: calls.append(("chi", a.product)))
         spec = tmp_path / "spec.yaml"
         spec.write_text(
             "source: {config: c.yaml}\n"
             f"output_dir: {tmp_path}/out\n"
             "figures:\n"
             "  - {name: a, preset: scalar, vars: [JAC_T]}\n"
-            "  - {name: b, preset: profiles, product: chi}\n"
+            "  - {name: b, preset: chi}\n"
         )
         fig.run(_cli(spec=str(spec)))
-        assert {c[0] for c in calls} == {"scalar", "profiles"}
+        assert {c[0] for c in calls} == {"scalar", "chi"}
+        assert ("chi", "chi") in calls  # ProductView bound args.product = "chi"
         calls.clear()
         fig.run(_cli(spec=str(spec), select=["a"]))  # only figure 'a'
         assert [c[0] for c in calls] == ["scalar"]
@@ -454,7 +533,7 @@ class TestPdfOutput:
             f"output_pdf: {tmp_path}/report.pdf\n"
             "figures:\n"
             "  - {name: ok, preset: scalar, vars: [JAC_T]}\n"
-            "  - {name: bad, preset: profiles, product: epsilon}\n"  # invalid choice
+            "  - {name: bad, preset: profiles, xaxis: bogus}\n"  # invalid choice
         )
         with pytest.raises(SystemExit, match="must be one of"):
             fig.run(_cli(spec=str(spec)))

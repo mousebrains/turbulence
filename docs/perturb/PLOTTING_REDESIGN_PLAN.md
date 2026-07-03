@@ -192,7 +192,7 @@ Second scope review (the slow one) — net-new, folded in:
   escape hatch (n13) and trim `source:` to "exactly one of {config, root}" (n14).
 - **S2-m7:** `section: "*"`/list expansion (§4). **S2-m10/m11:** shared `find_output_dir` +
   config-logic home (§3).
-- **S2 "missing capability":** a **shared colour scale across like-variable figures** (two ε
+- **S2 "missing capability":** a **shared color scale across like-variable figures** (two ε
   figures, or ε across two configs, visually comparable). Noted as a P2 stretch — cheap when
   the driver controls each figure's `clim`; a `clim_group:` could pin a common scale. Kept
   out of the hard scope for now; revisit after P2 lands.

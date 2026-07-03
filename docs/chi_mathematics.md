@@ -37,7 +37,7 @@ where:
   ranges from ~`1.39e-7` at −1 °C to ~`1.51e-7 m^2/s` at 32 °C. The fixed
   `1.4e-7` (`chi.batchelor.KAPPA_T`) is now only the backward-compatible
   fallback default — see §11.
-- `k` is the cyclic wavenumber in cycles per metre (cpm)
+- `k` is the cyclic wavenumber in cycles per meter (cpm)
 - The factor 6 arises from the isotropy assumption: 3 spatial dimensions times a factor of 2 from the definition involving the full gradient tensor
 
 The temperature gradient spectrum is obtained from measurements of fast-response FP07 thermistors sampling at ~512 Hz on a profiling instrument falling at speed `W`. Frequency `f` [Hz] maps to wavenumber via Taylor's frozen-turbulence hypothesis:
@@ -334,7 +334,7 @@ The correction `C` accounts for two effects simultaneously:
 chi_vc = 6 * kappa_T * V_obs * C       [K^2/s]
 ```
 
-**Step 6.** Refine chi by a log-space least-squares fit. `chi_vc` is used only to centre a grid search: 200 log-spaced chi values spanning 4 decades, `[0.01 * chi_vc, 100 * chi_vc]`. For each candidate chi the model spectrum is:
+**Step 6.** Refine chi by a log-space least-squares fit. `chi_vc` is used only to center a grid search: 200 log-spaced chi values spanning 4 decades, `[0.01 * chi_vc, 100 * chi_vc]`. For each candidate chi the model spectrum is:
 
 ```
 Phi_model(k; chi) = chi * S_unit(k; kB) * |H(k)|^2  +  Phi_noise(k)

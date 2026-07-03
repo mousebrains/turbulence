@@ -390,7 +390,7 @@ The `scor160.l2.process_l2` function implements:
    forwards and backwards (zero phase) on the entire record. NaN values
    are linearly interpolated before filtering and restored afterward,
    preventing propagation to the entire record. Uses MATLAB-compatible
-   `padlen = 3*(nfilt-1)` to match ODAS edge behaviour.
+   `padlen = 3*(nfilt-1)` to match ODAS edge behavior.
 
 4. **Despiking**: Within each section, the HP-filtered shear and
    vibration are despiked using the iterative threshold method with

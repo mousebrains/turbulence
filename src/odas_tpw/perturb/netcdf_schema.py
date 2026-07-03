@@ -45,7 +45,7 @@ COMBO_SCHEMA: dict[str, dict] = {
     "bin": {
         "units": "m",
         "standard_name": "depth",
-        "long_name": "depth bin centre",
+        "long_name": "depth bin center",
         "positive": "down",
         "axis": "Z",
     },
@@ -252,7 +252,7 @@ COMBO_SCHEMA: dict[str, dict] = {
         "units": "",
         "long_name": "figure of merit (probe 2)",
     },
-    # "cpm" (cycles per metre) is deliberately retained as the conventional
+    # "cpm" (cycles per meter) is deliberately retained as the conventional
     # oceanographic wavenumber unit here and on the K_max/kB vars below: it is
     # not strict UDUNITS (the parseable equivalent is "m-1"), but it is
     # unambiguous and matches the per-profile rsi/chi outputs. Left as-is by

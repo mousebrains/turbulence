@@ -4,13 +4,13 @@
 Reads the CTD trajectory product ``ctd_combo_NN/combo.nc`` (CF
 featureType=trajectory, a continuous down/up sawtooth on a ``time`` axis) and
 renders, for each *section*, depth (y, inverted) against a chosen x-axis with a
-scalar field in colour.
+scalar field in color.
 
 A **section** is purely a way of chopping the trajectory and choosing the
 x-axis: a name, an optional UTC ``start``/``stop`` window, and an ``xaxis``
 method with its parameters.  Sections come from a YAML file (``--sections``) or
 from ad-hoc CLI flags.  *Rendering* choices (which variables, depth/x bin
-sizes, colour limits) are separate CLI options that apply to every section in
+sizes, color limits) are separate CLI options that apply to every section in
 the run.
 
 By default the figures are shown on screen.  They are written to PNG files
@@ -101,7 +101,7 @@ __all__ = [
 _DEFAULT_VARS: tuple[str, ...] = ("JAC_T", "SP", "sigma0")
 _OPTIONAL_VARS: tuple[str, ...] = ("DO", "Chlorophyll", "Turbidity")
 
-# Per-variable cmocean colormap.  Diverging fields centre the colour scale at 0.
+# Per-variable cmocean colormap.  Diverging fields center the color scale at 0.
 _CMAP: dict[str, str] = {
     "JAC_T": "thermal",
     "CT": "thermal",
@@ -242,7 +242,7 @@ def _build_section_figure(
         else:
             norm = Normalize(vmin=vmin, vmax=vmax)
         cmap = getattr(cmocean.cm, _CMAP.get(name, "thermal")).copy()
-        cmap.set_bad(color="0.85")  # empty cells: light grey, visibly unsampled
+        cmap.set_bad(color="0.85")  # empty cells: light gray, visibly unsampled
         pcm = ax.pcolormesh(x_edges, z_edges, np.ma.masked_invalid(g),
                             cmap=cmap, norm=norm, shading="flat")
         cbar_fmt: str | None = None

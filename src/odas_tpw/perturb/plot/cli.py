@@ -23,8 +23,8 @@ from odas_tpw.perturb.plot import eps_chi, figure, profiles, scalar
 # Map subcommand name -> (description, add_arguments, run).
 _SUBCOMMANDS = {
     "figure": (
-        "Render many figures from one YAML spec (presets scalar/profiles/eps-chi), "
-        "resolving directories from a perturb config.",
+        "Render many figures from one YAML spec (presets scalar/profiles/epsilon/"
+        "chi/mixing/eps-chi), resolving directories from a perturb config.",
         figure.add_arguments,
         figure.run,
     ),
@@ -41,10 +41,24 @@ _SUBCOMMANDS = {
         scalar.run,
     ),
     "profiles": (
-        "Depth-vs-x sections from binned (bin, profile) products "
-        "(--product profiles/diss/chi/mixing), one column per cast.",
-        profiles.add_arguments,
-        profiles.run,
+        "Depth-vs-x sections of binned slow channels (T1/T2/N2/dTdz) per cast.",
+        profiles.PROFILES.add_arguments,
+        profiles.PROFILES.run,
+    ),
+    "epsilon": (
+        "Depth-vs-x sections of binned epsilon (dissipation) per cast.",
+        profiles.EPSILON.add_arguments,
+        profiles.EPSILON.run,
+    ),
+    "chi": (
+        "Depth-vs-x sections of binned chi (thermal-variance dissipation) per cast.",
+        profiles.CHI.add_arguments,
+        profiles.CHI.run,
+    ),
+    "mixing": (
+        "Depth-vs-x sections of binned mixing (K_T/Gamma/K_rho) per cast.",
+        profiles.MIXING.add_arguments,
+        profiles.MIXING.run,
     ),
 }
 

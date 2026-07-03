@@ -57,7 +57,7 @@ a multiplicative scale.
 
 - **Kraichnan vs Batchelor**: The Kraichnan model has a slower (exponential)
   rolloff than Batchelor (Gaussian erfc), which better matches DNS results.
-  Both are normalised to integrate to χ/(6κ_T), so chi values should be
+  Both are normalized to integrate to χ/(6κ_T), so chi values should be
   similar; differences arise from the spectral shape affecting the fit and
   variance correction.
 

@@ -199,7 +199,7 @@ def make_combo(
                 combo.attrs.setdefault("geospatial_vertical_max", float(np.nanmax(vals)))
                 combo.attrs.setdefault("geospatial_vertical_units", "m")
                 # EPSG:5831 = "Mean Sea Level depth" (positive down, in
-                # metres) — the right vertical CRS for our depth coord.
+                # meters) — the right vertical CRS for our depth coord.
                 combo.attrs.setdefault("geospatial_bounds_vertical_crs", "EPSG:5831")
                 combo.attrs.setdefault("geospatial_vertical_resolution", "1.0 m")
                 break

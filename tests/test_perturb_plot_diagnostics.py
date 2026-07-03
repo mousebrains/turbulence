@@ -139,8 +139,8 @@ def test_cli_diagnostic_pseudo_var(tmp_path: Path):
     _write_diss_combo(tmp_path, stime)
     _write_raw_profile(tmp_path / "profiles_00", "a_prof001", stime=1000.0, seed=1)
     _write_raw_profile(tmp_path / "profiles_00", "b_prof001", stime=2000.0, seed=2)
-    rc = main(["profiles", "--root", str(tmp_path), "--product", "diss",
+    rc = main(["epsilon", "--root", str(tmp_path),
                "--out-dir", str(tmp_path), "--name", "d",
                "--var", "epsilonMean", "--var", "sh1_var", "--var", "Ax_var"])
     assert rc == 0
-    assert (tmp_path / "diss_d.png").exists()
+    assert (tmp_path / "epsilon_d.png").exists()

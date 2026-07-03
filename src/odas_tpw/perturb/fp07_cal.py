@@ -71,7 +71,7 @@ def _compute_RT_R0(
 
     # Clip Z to +/-0.6 as ODAS convert_odas.m does (and rsi/channels.py):
     # |Z| near or beyond 1 indicates samples outside the bridge range, and
-    # clipping the *ratio* instead (previous behaviour) produced ln-ratio
+    # clipping the *ratio* instead (previous behavior) produced ln-ratio
     # outliers of ~-46 that passed the finite check and skewed the fit.
     Z = np.clip(Z, -0.6, 0.6)
     ratio = (1.0 - Z) / (1.0 + Z)

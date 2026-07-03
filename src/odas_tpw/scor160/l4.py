@@ -373,7 +373,7 @@ def _estimate_epsilon(
     # Corrupted spectral bins (ODAS get_diss_odas.m:577-587 convention):
     # a single interior NaN/Inf bin is interpolated from its neighbours;
     # multiple bad bins invalidate the estimate.  Zeroing bad bins (the
-    # previous behaviour) silently removes variance, biasing epsilon low
+    # previous behavior) silently removes variance, biasing epsilon low
     # and corrupting the log-space polynomial minimum search.
     bad = np.where(~np.isfinite(shear_spectrum))[0]
     if len(bad) == 0:
@@ -659,7 +659,7 @@ def _inertial_subrange(
     # Remove flyers.  The error vector keeps full length (non-positive
     # ratio bins become NaN, which compares False below) so that index i
     # in ``fit_error_vec`` always corresponds to ``fit_range[i+1]`` —
-    # compressing the array first (the previous behaviour) misaligned
+    # compressing the array first (the previous behavior) misaligned
     # the flyer indices whenever a zero bin was present.  Note: ODAS
     # itself has an off-by-one here (get_diss_odas.m:790-797 deletes
     # ``fit_range(index)`` where ``index`` refers to ``fit_range(2:end)``);

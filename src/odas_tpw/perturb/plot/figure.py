@@ -2,11 +2,12 @@
 """``perturb-plot figure`` — drive many figures from one YAML spec.
 
 A *figure spec* lists figures, each naming a **preset** (``scalar`` / ``profiles``
-/ ``eps-chi`` — the existing subcommands) plus that subcommand's own options.
-The driver resolves output directories from a perturb config (see
-:mod:`odas_tpw.perturb.resolve`), compiles each figure entry into the
-``argparse.Namespace`` the chosen ``run`` already accepts, and runs it — so
-every plotting kernel and existing behaviour is reused, not reimplemented.
+/ ``epsilon`` / ``chi`` / ``mixing`` / ``eps-chi`` — the ``perturb-plot``
+subcommands) plus that subcommand's own options. The driver resolves output
+directories from a perturb config (see :mod:`odas_tpw.perturb.resolve`),
+compiles each figure entry into the ``argparse.Namespace`` the chosen ``run``
+already accepts, and runs it — so every plotting kernel and existing behavior
+is reused, not reimplemented.
 
 ```yaml
 source:                       # exactly one of config / root
@@ -20,14 +21,20 @@ sections:                     # optional; a file ref or an inline list
   file: sections.yaml
 
 figures:
-  - {name: ts,       preset: scalar,   vars: [JAC_T, SP, sigma0], depth_max: 150}
-  - {name: overview, preset: eps-chi,  gap_seconds: 600}
-  - {name: mixing,   preset: profiles, product: mixing, section: "*"}
+  - {name: ts,       preset: scalar,  vars: [JAC_T, SP, sigma0], depth_max: 150}
+  - {name: overview, preset: eps-chi, gap_seconds: 600}
+  - {name: mixing,   preset: mixing,  section: "*"}
 ```
 
 A figure entry's keys are exactly the preset subcommand's options (``vars`` is
 sugar for repeated ``--var``; ``clim`` is a ``{VAR: [min, max]}`` map). ``eps-chi``
 has no x-axis, so ``section``/``vars``/``clim`` are rejected for it.
+
+The spec's ``source`` (``config``/``root``) and output destination
+(``output_dir``/``output_pdf``) can be overridden from the command line — e.g.
+``perturb-plot figure --spec fig.yaml --config perturb.2.yaml --output-dir
+figs/run2`` — so one spec renders the same figures across several perturb runs
+for comparison without editing the file.
 """
 
 from __future__ import annotations
@@ -44,10 +51,15 @@ from ruamel.yaml.error import YAMLError
 
 from odas_tpw.perturb.plot import eps_chi, profiles, scalar, sections
 
-# preset name -> (module providing add_arguments/run, default output kind)
+# preset name -> object providing add_arguments/build_figures/run. The binned
+# (bin, profile) presets are ProductView instances (one product each); scalar
+# and eps-chi are plain modules. All duck-type the same surface.
 _PRESETS: dict[str, Any] = {
     "scalar": scalar,
-    "profiles": profiles,
+    "profiles": profiles.PROFILES,
+    "epsilon": profiles.EPSILON,
+    "chi": profiles.CHI,
+    "mixing": profiles.MIXING,
     "eps-chi": eps_chi,
 }
 _PRESET_DIR = Path(__file__).parent / "presets"
@@ -89,6 +101,45 @@ def _validate_source(spec: dict) -> dict:
     if has_config == has_root:  # neither or both
         raise SpecError("figure spec: source needs exactly one of 'config' or 'root'")
     return source
+
+
+def _apply_cli_overrides(spec: dict, args: argparse.Namespace) -> None:
+    """Let CLI flags override the spec's source / output destination, in place.
+
+    Enables comparing perturb runs from a single spec: ``--config`` / ``--root``
+    swap where directories are resolved from, and ``--output-dir`` /
+    ``--output-pdf`` redirect where the figures land — all without editing the
+    spec file. Validation of the resulting values is left to
+    :func:`_validate_source` / :func:`_output_config`.
+    """
+    cli_config = getattr(args, "config", None)
+    cli_root = getattr(args, "root", None)
+    if cli_config and cli_root:
+        raise SpecError("figure: --config and --root are mutually exclusive")
+    if cli_config or cli_root:
+        src = spec.get("source")
+        # Keep a spec source's output_root (a search-location override) when only
+        # the config/root selector is swapped; drop whichever selector we replace.
+        src = dict(src) if isinstance(src, dict) else {}
+        src.pop("config", None)
+        src.pop("root", None)
+        if cli_root:
+            src.pop("output_root", None)  # a raw root is itself the search dir
+            src["root"] = cli_root
+        else:
+            src["config"] = cli_config
+        spec["source"] = src
+
+    cli_dir = getattr(args, "output_dir", None)
+    cli_pdf = getattr(args, "output_pdf", None)
+    if cli_dir and cli_pdf:
+        raise SpecError("figure: --output-dir and --output-pdf are mutually exclusive")
+    if cli_dir:
+        spec["output_dir"] = cli_dir
+        spec.pop("output_pdf", None)
+    elif cli_pdf:
+        spec["output_pdf"] = cli_pdf
+        spec.pop("output_dir", None)
 
 
 def _sections_file(spec: dict, tmp: list[str]) -> str | None:
@@ -310,6 +361,19 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--spec", help="figure-spec YAML (layout + contents).")
     p.add_argument("--select", action="append", default=None, metavar="NAME",
                    help="render only the named figure(s) (repeatable). Default: all.")
+    p.add_argument("--config", metavar="PERTURB.YAML", default=None,
+                   help="override the spec's source config (compare/contrast "
+                        "perturb runs from one spec). Mutually exclusive with --root.")
+    p.add_argument("--root", metavar="DIR", default=None,
+                   help="override the spec's source: resolve dirs by newest "
+                        "{stage}_NN under DIR instead of a config. "
+                        "Mutually exclusive with --config.")
+    p.add_argument("--output-dir", metavar="DIR", default=None,
+                   help="override the spec's output_dir (one PNG tree). "
+                        "Mutually exclusive with --output-pdf.")
+    p.add_argument("--output-pdf", metavar="PDF", default=None,
+                   help="override the spec's output_pdf (one combined PDF). "
+                        "Mutually exclusive with --output-dir.")
     p.add_argument("--strict", action="store_true",
                    help="error (don't fall back) when a config signature doesn't match.")
     p.add_argument("--latest", action="store_true",
@@ -387,6 +451,7 @@ def run(args: argparse.Namespace) -> str:
         raise SpecError("figure: --spec is required (or use --list-presets/--dump-preset)")
 
     spec = _load_spec(args.spec)
+    _apply_cli_overrides(spec, args)  # --config/--root/--output-* win over the spec
     source = _validate_source(spec)
     figures = spec.get("figures")
     if not isinstance(figures, list) or not figures:

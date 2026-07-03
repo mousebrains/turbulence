@@ -151,7 +151,7 @@ def _assign_gps_with_casts(
     A vertical profiler falls at essentially one position during a down-cast,
     then is reeled in while the ship steams on — so the GPS fix at the bin time
     (the ship's position) is *not* the instrument's position. This assigns,
-    per bin-centre time (epoch seconds):
+    per bin-center time (epoch seconds):
 
     - **Before the first cast**: the ship fix at the bin time.
     - **During a down-cast** ``[start, end]``: the ship fix at the cast *start*,
@@ -201,7 +201,7 @@ def _assign_gps_with_casts(
         # The ``first == 0`` guard deliberately departs from the reference: the
         # Matlab indexes ``ctd.lon(ii(1)-1)`` blindly and would error if a gap
         # begins at the very first bin (a cast ending before the first bin
-        # centre); here we degrade to the ship fix at t0 (zero offset -> plain
+        # center); here we degrade to the ship fix at t0 (zero offset -> plain
         # ship track) instead of crashing.
         lon0 = lon[first - 1] if first > 0 else float(_g(gps.lon, t0)[0])
         lat0 = lat[first - 1] if first > 0 else float(_g(gps.lat, t0)[0])
@@ -379,7 +379,7 @@ def ctd_bin_file(
     ds["time"].attrs["units"] = "seconds since 1970-01-01"
     ds["time"].attrs["calendar"] = "standard"
     ds["time"].attrs["standard_name"] = "time"
-    ds["time"].attrs["long_name"] = "time bin centre"
+    ds["time"].attrs["long_name"] = "time bin center"
     ds["time"].attrs["axis"] = "T"
     ds["time"].attrs["units_metadata"] = "leap_seconds: utc"
     # Self-describing metadata for the injected background stratification, so
