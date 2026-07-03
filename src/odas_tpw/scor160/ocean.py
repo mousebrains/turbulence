@@ -102,8 +102,10 @@ def kappa_T(
     ``kappa_T = k / (rho * c_p)`` where the thermal conductivity ``k`` follows
     the Jamieson & Tudhope (1970) correlation as compiled by Sharqawy et al.
     (2010, Eq. 13) and the in-situ density ``rho`` and isobaric specific heat
-    ``c_p`` come from gsw (TEOS-10, ``gsw.rho`` / ``gsw.cp_t_exact``). This
-    matches the Sharqawy-viscosity + gsw path already used by :func:`visc`.
+    ``c_p`` come from gsw (TEOS-10, ``gsw.rho`` / ``gsw.cp_t_exact``). This is
+    the same style of "published correlation over gsw" path :func:`visc` uses
+    off the S=35/P=0 seam; unlike :func:`visc` there is no ODAS-polynomial
+    fallback branch, so ``kappa_T`` always uses gsw (there is no ``kappa35``).
 
     Over 0-32 °C at S=35, P=0 this rises from ~1.39e-7 to ~1.51e-7 m²/s — the
     ~+8% swing the fixed ``chi.batchelor.KAPPA_T = 1.4e-7`` used to miss. Because
