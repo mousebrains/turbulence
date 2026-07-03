@@ -476,15 +476,18 @@ class TestMLEFit:
         F = np.arange(n_freq) * fs / fft_length
         K = F / speed
 
-        spec_obs = batchelor_grad(K, kB_true, chi_true)
-        spec_obs = np.maximum(spec_obs, 1e-20)
-
-        # Pre-compute noise/H2 for new signature
+        # Build a PHYSICALLY CONSISTENT observed spectrum: the true Batchelor
+        # gradient spectrum ATTENUATED by the FP07 response H2 and with the
+        # electronics noise added, exactly what _mle_fit_kB is written to invert.
+        # (A clean, unattenuated batchelor_grad here would make the fitter
+        # correct for an attenuation that never happened, and the recovered chi
+        # would be ~8x off — audit 2026-07-01.)
         tau0 = fp07_tau(speed)
         H2 = fp07_transfer(F, tau0)
         noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
+        spec_obs = np.maximum(batchelor_grad(K, kB_true, chi_true) * H2 + noise_K, 1e-20)
 
-        kB_fit, _chi_fit, _eps_fit, _K_max, _, _fom, _K_max_ratio = _mle_fit_kB(
+        kB_fit, chi_fit, eps_fit, _K_max, _, _fom, _K_max_ratio = _mle_fit_kB(
             spec_obs,
             K,
             chi_true,
@@ -499,9 +502,10 @@ class TestMLEFit:
         )
 
         assert np.isfinite(kB_fit)
-        # kB should be within 50% (broader tolerance for grid search)
-        ratio = kB_fit / kB_true
-        assert 0.5 < ratio < 2.0, f"kB ratio = {ratio}"
+        # On a consistent fixture the MLE recovers all three to a few percent.
+        assert kB_fit == pytest.approx(kB_true, rel=0.05), f"kB ratio = {kB_fit / kB_true}"
+        assert chi_fit == pytest.approx(chi_true, rel=0.05), f"chi ratio = {chi_fit / chi_true}"
+        assert eps_fit == pytest.approx(eps_true, rel=0.08), f"eps ratio = {eps_fit / eps_true}"
 
 
 # ---------------------------------------------------------------------------
