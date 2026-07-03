@@ -181,6 +181,7 @@ def _single_despike(
     if not good[-1]:
         ends = np.concatenate([ends, [len(good)]])
 
+    boundary_nan = False
     for s_bad, e_bad in zip(starts, ends):
         # Average from region R before start
         before_idx = np.arange(max(0, s_bad - R), s_bad)
@@ -200,7 +201,25 @@ def _single_despike(
         stop_value = np.mean(after_vals) if len(after_vals) > 0 else np.nan
         replacement = (start_value + stop_value) / 2
 
+        # A spike region touching a boundary can have no clean samples on one
+        # side, so the MATLAB-parity replacement above is NaN. Keep that NaN
+        # (never fabricate), but make it observable rather than silent —
+        # mirroring the non-finite-input warning. Only reachable for very short
+        # sections; a full-length record never trips it.
+        if not np.isfinite(replacement):
+            boundary_nan = True
+
         dv_padded[s_bad:e_bad] = replacement
+
+    if boundary_nan:
+        warnings.warn(
+            "despike: a spike region adjacent to the array boundary had no "
+            "clean neighboring samples on one side; those samples are set to "
+            "NaN (matching ODAS despike.m) rather than fabricated. This "
+            "typically affects only very short sections.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     # Remove padding, return spike indices in original coordinates
     result = dv_padded[rng]
