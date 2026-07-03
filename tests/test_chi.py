@@ -2005,6 +2005,28 @@ class TestComputeChiFinal:
         assert np.isnan(result[1])
         np.testing.assert_allclose(result[2], np.sqrt(2e-7 * 8e-7))
 
+    def test_qc_drops_bad_probes_when_fom_kmr_supplied(self):
+        """With per-probe fom/K_max_ratio, chi_final excludes QC-failing probes so
+        it matches the QC'd chi that drives K_T/Gamma (2026-07-03 review, Gem-C).
+
+        Falls back to all finite probes only when none pass QC, never losing a
+        window.
+        """
+        from odas_tpw.chi.l4_chi import _compute_chi_final
+
+        chi = np.array([[1e-7, 1e-7], [4e-7, 4e-7]])  # 2 probes, 2 windows
+        # Window 0: probe 1 fails (fom out of band); window 1: both probes fail.
+        fom = np.array([[1.0, 3.0], [3.0, 3.0]])          # band is [1/1.15, 1.15]
+        kmr = np.array([[0.9, 0.9], [0.9, 0.9]])          # all resolved
+
+        qc = _compute_chi_final(chi, fom, kmr)
+        raw = _compute_chi_final(chi)
+        # Window 0: only probe 0 survives -> chi_final = 1e-7 (not gmean 2e-7).
+        np.testing.assert_allclose(qc[0], 1e-7)
+        assert raw[0] == pytest.approx(np.sqrt(1e-7 * 4e-7))
+        # Window 1: no probe passes -> fall back to all-finite geometric mean.
+        np.testing.assert_allclose(qc[1], np.sqrt(1e-7 * 4e-7))
+
 
 class TestChiGridRefinement:
     """Parabolic refinement removes the log-grid quantization in Method 1."""

@@ -17,7 +17,12 @@ import xarray as xr
 
 from odas_tpw.chi.l2_chi import L2ChiParams, process_l2_chi
 from odas_tpw.chi.l3_chi import process_l3_chi
-from odas_tpw.chi.l4_chi import L4ChiData, process_l4_chi_epsilon, process_l4_chi_fit
+from odas_tpw.chi.l4_chi import (
+    L4ChiData,
+    _compute_chi_final,
+    process_l4_chi_epsilon,
+    process_l4_chi_fit,
+)
 from odas_tpw.rsi.adapter import pfile_to_l1data
 from odas_tpw.rsi.binning import bin_by_depth
 from odas_tpw.rsi.combine import combine_profiles
@@ -52,38 +57,15 @@ def _qc_chi_final(
 ) -> np.ndarray:
     """Per-window geometric-mean chi over probes that pass spectral QC.
 
-    bug: ``L4ChiData.chi_final`` averages every probe with finite chi>0 with no
-    fom / K_max_ratio cut, so a high-fom or poorly-resolved (K_max_ratio<0.5,
-    mostly-extrapolated) thermistor window biases the mixing products K_T/Gamma
-    in the rsi pipeline only — unlike the QC-filtered epsilon driving the same
-    products. Drop those probes here; fall back to the all-probe geometric mean
-    only when no probe survives, so a window is never silently lost.
-
-    All inputs are shape ``(n_probe, n_window)``. Returns ``(n_window,)``.
+    Thin wrapper over :func:`odas_tpw.chi.l4_chi._compute_chi_final` with the QC
+    arguments always supplied. As of the 2026-07-03 review (Gemini C),
+    ``L4ChiData.chi_final`` is itself QC'd at the source with these same
+    thresholds, so the mixing products and the reported chi are filtered
+    identically; this wrapper is retained for the two-sided-band QC contract it
+    documents and tests. All inputs are ``(n_probe, n_window)``; returns
+    ``(n_window,)``.
     """
-    _n_probe, n_window = chi.shape
-    out = np.full(n_window, np.nan)
-    valid = np.isfinite(chi) & (chi > 0)
-    # The chi fom is a two-sided obs/model VARIANCE RATIO: it is bad far from 1.0
-    # in EITHER direction. A one-sided ``fom <= fom_limit`` cut would pass a
-    # window whose model overestimates observed variance (e.g. fom=0.2, model 5x
-    # high) while rejecting a mildly high fom=1.2, so gate the log-symmetric band
-    # [1/fom_limit, fom_limit].
-    passes_qc = (
-        valid
-        & np.isfinite(fom)
-        & (fom <= fom_limit)
-        & (fom >= 1.0 / fom_limit)
-        & np.isfinite(k_max_ratio)
-        & (k_max_ratio >= k_max_ratio_min)
-    )
-    for j in range(n_window):
-        good = passes_qc[:, j]
-        if not good.any():
-            good = valid[:, j]  # fall back to all finite probes
-        if good.any():
-            out[j] = np.exp(np.mean(np.log(chi[good, j])))
-    return out
+    return _compute_chi_final(chi, fom, k_max_ratio, fom_limit, k_max_ratio_min)
 
 
 def _epsilon_hp_cut(fs_fast: float, fft_length: int, override: float | None) -> float:
@@ -543,9 +525,10 @@ def _process_profile(
             else:
                 eps_on_chi = np.full(chi_primary.n_spectra, np.nan)
             # QC the per-probe chi before the mixing products (K_T/Gamma) so a
-            # high-fom / poorly-resolved thermistor window cannot bias them; the
-            # raw chi_primary.chi_final (no QC) is still what the L4_chi output
-            # carries for traceability.
+            # high-fom / poorly-resolved thermistor window cannot bias them. This
+            # matches chi_primary.chi_final, which is now QC'd at the source with
+            # the same thresholds; the raw per-probe chi_primary.chi array is what
+            # the L4_chi output carries for traceability.
             chi_for_mixing = _qc_chi_final(
                 chi_primary.chi, chi_primary.fom, chi_primary.K_max_ratio
             )

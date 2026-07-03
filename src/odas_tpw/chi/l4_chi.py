@@ -119,7 +119,7 @@ def _process_l4_chi(
             fom_out[ci, j] = fom_val
             K_max_ratio_out[ci, j] = K_max_ratio_val
 
-    chi_final = _compute_chi_final(chi_out)
+    chi_final = _compute_chi_final(chi_out, fom_out, K_max_ratio_out)
 
     return L4ChiData(
         time=l3_chi.time.copy(),
@@ -287,12 +287,54 @@ def process_l4_chi_fit(
     return _process_l4_chi(l3_chi, _chi_fit_func, "fit", f_AA)
 
 
-def _compute_chi_final(chi: np.ndarray) -> np.ndarray:
-    """Compute chi_final: geometric mean of probes with valid chi."""
+# Chi spectral-QC thresholds shared by chi_final and the mixing products, so the
+# reported chi and the chi that drives K_T/Gamma are filtered identically.
+_CHI_FOM_LIMIT = 1.15          # two-sided obs/model variance-ratio band [1/x, x]
+_CHI_K_MAX_RATIO_MIN = 0.5     # reject windows whose chi is mostly extrapolated
+
+
+def _compute_chi_final(
+    chi: np.ndarray,
+    fom: np.ndarray | None = None,
+    k_max_ratio: np.ndarray | None = None,
+    fom_limit: float = _CHI_FOM_LIMIT,
+    k_max_ratio_min: float = _CHI_K_MAX_RATIO_MIN,
+) -> np.ndarray:
+    """Per-window geometric mean of chi over probes, with optional spectral QC.
+
+    Averages the probes with finite ``chi > 0``.  When per-probe ``fom`` and
+    ``k_max_ratio`` are supplied (both shape ``(n_probe, n_window)``), the
+    average is restricted to probes inside the two-sided fom band
+    ``[1/fom_limit, fom_limit]`` with ``k_max_ratio >= k_max_ratio_min`` — the
+    same QC that gates the mixing products — falling back to all finite probes
+    for a window where none pass, so a window is never silently lost.
+
+    Without ``fom``/``k_max_ratio`` it is the plain finite-chi geometric mean
+    (backward compatible).  QC'ing here means ``L4ChiData.chi_final`` (and the
+    reported binned chi built from it) is filtered consistently with the K_T /
+    Gamma it accompanies, rather than carrying poorly-resolved or bad-fit
+    windows that the mixing products already reject.  (2026-07-03 review,
+    Gemini C.)  The raw per-probe ``chi`` array is retained separately for
+    traceability.
+    """
     _n_gradt, n_spec = chi.shape
     chi_final = np.full(n_spec, np.nan)
+    valid = np.isfinite(chi) & (chi > 0)
+    if fom is not None and k_max_ratio is not None:
+        passes = (
+            valid
+            & np.isfinite(fom)
+            & (fom <= fom_limit)
+            & (fom >= 1.0 / fom_limit)
+            & np.isfinite(k_max_ratio)
+            & (k_max_ratio >= k_max_ratio_min)
+        )
+    else:
+        passes = valid
     for j in range(n_spec):
-        good = np.isfinite(chi[:, j]) & (chi[:, j] > 0)
+        good = passes[:, j]
+        if not good.any():
+            good = valid[:, j]  # fall back to all finite probes; never lose a window
         if good.any():
             chi_final[j] = np.exp(np.mean(np.log(chi[good, j])))
     return chi_final
