@@ -262,7 +262,7 @@ def _chi_from_epsilon(
     h2v = H2[valid]
     nv = noise_K[valid]
 
-    # Initial chi estimate from variance correction (used as grid centre)
+    # Initial chi estimate from variance correction (used as grid center)
     obs_var = np.trapezoid(s, K[valid])
     if obs_var <= 0:
         warnings.warn("Trial chi <= 0; observed variance too low", stacklevel=2)

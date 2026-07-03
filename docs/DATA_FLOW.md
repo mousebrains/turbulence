@@ -51,7 +51,7 @@ slow to fast rate.  Profiling speed is computed from dP/dt with Butterworth
 smoothing.
 
 **Contents (L1Data):**
-- Shear probes (sh1, sh2) normalised by speed: du/dz in s⁻¹
+- Shear probes (sh1, sh2) normalized by speed: du/dz in s⁻¹
 - Piezo accelerometers / vibration channels
 - Fast thermistor temperature (T1, T2)
 - Pressure interpolated to fast rate

@@ -440,7 +440,7 @@ def _interp_one(
     if kind == "pchip":
         interp = PchipInterpolator(hotel_t, data, extrapolate=False)
         out = interp(target_t)
-        # Fill NaN edges with boundary values, matching the historical behaviour.
+        # Fill NaN edges with boundary values, matching the historical behavior.
         mask = np.isnan(out)
         if np.any(mask):
             below = target_t < hotel_t[0]

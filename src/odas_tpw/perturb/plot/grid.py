@@ -1,5 +1,5 @@
 # Jun-2026, Claude and Pat Welch, pat@mousebrains.com
-"""Scatter-to-grid binning and signed-safe colour limits for section plots.
+"""Scatter-to-grid binning and signed-safe color limits for section plots.
 
 A distinct coordinate model from :mod:`layout` (which positions already-binned
 cast columns): here we bin irregular ``(x, depth, value)`` samples from a CTD

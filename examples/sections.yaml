@@ -2,7 +2,7 @@
 #
 # A "section" only chops the CTD trajectory and chooses the x-axis: a name, an
 # optional UTC time window, and an `xaxis` method with its parameters. Which
-# variables, bin sizes, and colour limits to render are separate CLI flags
+# variables, bin sizes, and color limits to render are separate CLI flags
 # (e.g. --var, --z-bin, --depth-max) that apply to every section here.
 #
 # Usage (omit --out-dir to show the figures on screen instead of writing PNGs):
@@ -47,7 +47,7 @@ sections:
 
   # Signed distance from the track midpoint along the principal axis of the
   # lat/lon points (no waypoints needed): earliest cast negative, latest
-  # positive, centred at 0. Handy for a roughly-linear transect.
+  # positive, centered at 0. Handy for a roughly-linear transect.
   - name: signed_transect
     xaxis:
       method: signed_distance

@@ -97,7 +97,7 @@ class TestTimeBin:
     def test_nan_and_out_of_range_times_excluded_not_folded(self):
         """NaN and below/above-edge times must NOT pollute the first/last bin
         (the np.clip fold this replaced did, audit #69/#70)."""
-        edges = np.array([0.0, 1.0, 2.0, 3.0])  # 3 bins centred 0.5/1.5/2.5
+        edges = np.array([0.0, 1.0, 2.0, 3.0])  # 3 bins centered 0.5/1.5/2.5
         # One clean sample per bin, plus three pollutants:
         #   t=-5 (below), t=99 (above), t=NaN — each carrying value 1000.
         t = np.array([0.5, 1.5, 2.5, -5.0, 99.0, np.nan])

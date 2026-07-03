@@ -32,7 +32,7 @@ where:
 
 - `Phi_shear(k)` is the one-dimensional shear wavenumber spectrum in `[s^-2 / cpm]`
 - `nu` is the kinematic viscosity of seawater `[m^2/s]`
-- `k` is the cyclic wavenumber in cycles per metre (cpm)
+- `k` is the cyclic wavenumber in cycles per meter (cpm)
 - The factor 7.5 arises from the isotropy assumption: `epsilon = 15/2 * nu * <(du/dz)^2>`
 
 The shear spectrum is measured by airfoil shear probes sampling at ~512 Hz on a profiling instrument falling at speed `W`. Frequency `f` [Hz] maps to wavenumber via Taylor's frozen-turbulence hypothesis:

@@ -1117,7 +1117,7 @@ def process_file(
     # Inject ``speed_fast`` and ``W_slow`` so extract_profiles writes them
     # to every per-profile NetCDF, and downstream prepare_profiles uses
     # them instead of recomputing from P. Default method is "pressure",
-    # which reproduces the historical VMP behaviour exactly.
+    # which reproduces the historical VMP behavior exactly.
     speed_cfg = merge_config("speed", config.get("speed"))
     if "P" in pf.channels:
         try:

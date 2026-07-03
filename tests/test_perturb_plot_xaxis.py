@@ -154,7 +154,7 @@ def _hourly(n):
 
 
 def test_signed_distance_centered_and_time_signed():
-    """N-S transect: centred at 0, earliest negative, increasing with time."""
+    """N-S transect: centered at 0, earliest negative, increasing with time."""
     lat = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
     lon = np.zeros(5)
     xa = xaxis.compute("signed_distance", lat, lon, _hourly(5))

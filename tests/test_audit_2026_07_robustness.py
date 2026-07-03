@@ -354,7 +354,7 @@ class TestMixingPerVariableCeilings:
 
 
 class TestBinCoordinateMeters:
-    """binning.py: a pressure-only profile is binned on depth in METRES."""
+    """binning.py: a pressure-only profile is binned on depth in METERS."""
 
     def _make_profile(self, path, lat=None):
         import netCDF4 as nc

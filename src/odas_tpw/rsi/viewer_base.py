@@ -1001,13 +1001,13 @@ class ProfileViewer:
 
         Left/right (◀ ▶) step the profile; up/down (▲ ▼) move the spectral
         depth window. Horizontally it sits between the middle two columns;
-        vertically it is centred in the gap between the top two rows, so it
+        vertically it is centered in the gap between the top two rows, so it
         lands in a clean inter-row gap rather than across a panel row. For a
-        two-row grid (quick_look/diss_look) that gap is the figure centre.
+        two-row grid (quick_look/diss_look) that gap is the figure center.
         """
         assert self.fig is not None
         cx = (left + right) / 2.0
-        # Centre of the gap between row 1 and row 2 from the subplot geometry.
+        # Center of the gap between row 1 and row 2 from the subplot geometry.
         row_h = (top - bottom) / (self._nrows + (self._nrows - 1) * hspace)
         cy = top - row_h - (hspace * row_h) / 2.0
         bw, bh = 0.024, 0.032  # button size [figure fraction]

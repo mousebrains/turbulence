@@ -27,7 +27,7 @@ def latest_stage_dir(root: str, prefix: str) -> str | None:
 
 
 def depth_edges(d: np.ndarray) -> np.ndarray:
-    """Centre-spaced edges around 1-D depth bin centers.
+    """Center-spaced edges around 1-D depth bin centers.
 
     Half-bin spacing is the median of ``diff(d)``; for a singleton bin we
     fall back to 0.5 m so the colorbar still renders something visible.
@@ -202,7 +202,7 @@ def strictly_increasing(x: np.ndarray) -> np.ndarray:
 
 
 def column_edges(x: np.ndarray) -> np.ndarray:
-    """Pcolor x-edges for columns centred at sorted-ascending positions *x*.
+    """Pcolor x-edges for columns centered at sorted-ascending positions *x*.
 
     Interior edges are midpoints; the outer edges extend by half the adjacent
     spacing so the first/last column matches its neighbour's width.  A single
@@ -234,7 +234,7 @@ def plot_columns(
     in x-order.  Each cluster (see :func:`column_clusters`) is drawn with
     midpoint edges; the gaps between clusters are left blank, never stretched.
     Internal-NaN holes are forward-filled within each column and NaN cells are
-    masked (so the cmap's ``set_bad`` colour shows for unsampled depths).
+    masked (so the cmap's ``set_bad`` color shows for unsampled depths).
     Returns the last ``QuadMesh`` (or ``None`` if every cluster was empty).
     """
     x = np.asarray(x, dtype=float)
