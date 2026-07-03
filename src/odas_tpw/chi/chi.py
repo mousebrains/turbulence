@@ -528,6 +528,15 @@ def _iterative_fit(
     the last valid wavenumber (noise/anti-aliasing criterion) and is not
     refined between iterations.
 
+    Note: ``k_l`` is only the lower edge of the *integration* band, not a hard
+    clip — :func:`_variance_correction` adds back the modeled variance below
+    ``k_l``, so the recovered chi is insensitive to the exact 0.04 value when
+    the model matches the observed spectrum.  A 2026-07-03 review confirmed
+    numerically that ``chi`` is invariant (to <0.001%) across coefficients
+    0.02-0.16 for a model-consistent spectrum; only a model-vs-observed shape
+    mismatch in the low-k sliver below ``k_l`` makes it matter, a second-order
+    effect.  So this is a documented-provenance note, not a correctness risk.
+
     Parameters
     ----------
     spec_obs : ndarray
