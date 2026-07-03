@@ -797,6 +797,44 @@ class TestChiEdgeCases:
         assert np.isfinite(result.chi)
         assert 0.3 < result.chi / chi_true < 3.0
 
+        # A weaker (lower-SNR) but still real signal must also survive the gate,
+        # confirming it rejects noise rather than low-amplitude turbulence.
+        chi_weak = 1e-9
+        weak = batchelor_grad(K, float(batchelor_kB(1e-8, 1.2e-6)), chi_weak) * H2 + noise_K
+        r_weak = _chi_from_epsilon(weak, *args)
+        assert np.isfinite(r_weak.chi)
+        assert 0.3 < r_weak.chi / chi_weak < 3.0
+
+    def test_chi_from_epsilon_min_points_boundary(self):
+        """Pin the non-detection gate's min_points boundary exactly: 2 in-band
+        bins above 2x noise → NaN (non-detection); 3 → accepted (finite chi).
+
+        The original F1 regression test only exercised the 0-points case, so an
+        off-by-one (<3 vs <=3) would have slipped through (2026-07-03 review).
+        """
+        from odas_tpw.chi.chi import _chi_from_epsilon
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
+
+        speed, fs, n_freq = 0.7, 512, 257
+        F = np.arange(n_freq) * fs / (2 * (n_freq - 1))
+        K = F / speed
+        tau0 = fp07_tau(speed)
+        H2 = fp07_transfer(F, tau0)
+        noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
+        f_AA = 98.0
+        K_AA = f_AA / speed
+        args = (K, 1e-7, 1.2e-6, noise_K, H2, tau0, fp07_transfer, f_AA, speed, "batchelor")
+        inband = np.where((K > 0) & (K <= K_AA))[0]
+
+        def craft(npts):
+            spec = noise_K.copy()
+            spec[inband[:npts]] = 5.0 * noise_K[inband[:npts]]  # exactly npts clear 2x
+            return spec
+
+        with pytest.warns(UserWarning, match="above the FP07 noise floor"):
+            assert np.isnan(_chi_from_epsilon(craft(2), *args).chi)  # 2 -> non-detection
+        assert np.isfinite(_chi_from_epsilon(craft(3), *args).chi)   # 3 -> accepted
+
     def test_chi_from_epsilon_low_kB(self):
         """Very low epsilon should produce kB < 1 and chi=NaN."""
         from odas_tpw.chi.chi import _chi_from_epsilon
@@ -829,24 +867,25 @@ class TestChiEdgeCases:
         assert np.isnan(result.chi)
 
     def test_mle_too_few_points(self):
-        """Too few valid wavenumber points should produce NaN from MLE fit."""
+        """Too few valid wavenumber points should produce NaN from MLE fit.
+
+        Uses 5 clean in-band bins so the non-detection gate passes (>=3 above
+        noise); the MLE's own min_points=6 requirement is what fails here.
+        """
         from odas_tpw.chi.chi import _mle_fit_kB
-        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer
 
         speed = 0.7
-        fs = 512
-        # Only 5 frequency points — fewer than the min_points=6 requirement
-        n_freq = 5
-        F = np.arange(n_freq) * fs / (2 * (n_freq - 1))
-        K = F / speed
-
+        # 5 clean in-band wavenumbers (K_AA = f_AA/speed = 140); 5 < 6.
+        K = np.array([20.0, 40.0, 60.0, 80.0, 100.0])
+        F = K * speed
         tau0 = fp07_tau(speed)
         H2 = fp07_transfer(F, tau0)
-        noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
+        noise_K = np.full(K.shape, 1e-12)
 
         with pytest.warns(UserWarning, match="Too few"):
             result = _mle_fit_kB(
-                np.ones(n_freq) * 1e-6,
+                np.full(K.shape, 1e-6),
                 K,
                 1e-7,
                 1.2e-6,
@@ -1489,22 +1528,21 @@ class TestMLEFitKBBranches:
 
 class TestIterativeFitBranches:
     def test_too_few_valid_points(self):
-        """spec_obs all below noise → fewer than 6 valid points → NaN."""
+        """>=3 in-band bins clear the noise floor (so the non-detection gate
+        passes), but the band has fewer than 6 valid points → NaN from the
+        iterative fit's too-few-valid guard."""
         from odas_tpw.chi.chi import _iterative_fit
-        from odas_tpw.chi.fp07 import fp07_transfer
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer
 
         speed = 0.7
-        fs = 512
-        # Tiny array: fewer than 6 freq points → fallback mask still has only 4
-        n_freq = 5
-        F = np.arange(n_freq) * fs / (2 * (n_freq - 1))
-        K = F / speed
-        from odas_tpw.chi.fp07 import fp07_tau, gradT_noise
-
+        # 5 clean in-band wavenumbers (K_AA = f_AA/speed = 98/0.7 = 140): passes
+        # the >=3-above-noise gate, but 5 < 6 valid points → too-few-valid path.
+        K = np.array([20.0, 40.0, 60.0, 80.0, 100.0])
+        F = K * speed
         tau0 = fp07_tau(speed)
         H2 = fp07_transfer(F, tau0)
-        noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
-        spec = np.full(n_freq, 1e-6)
+        noise_K = np.full(K.shape, 1e-12)
+        spec = np.full(K.shape, 1e-6)  # well above 2x noise
 
         with pytest.warns(UserWarning, match="Too few valid points for iterative"):
             result = _iterative_fit(
@@ -1520,6 +1558,38 @@ class TestIterativeFitBranches:
                 "batchelor",
             )
         assert np.isnan(result.kB)
+
+    def test_method2_noise_only_is_non_detection(self):
+        """Both Method-2 fitters (iterative + MLE) must reject a noise-only
+        window as a non-detection (chi=NaN), mirroring Method 1's gate — else
+        the MLE fits a Batchelor curve to noise and returns a spurious finite
+        chi/kB (2026-07-03 adversarial review of the Method-1 gate).
+        """
+        from odas_tpw.chi.batchelor import batchelor_grad, batchelor_kB
+        from odas_tpw.chi.chi import _iterative_fit, _mle_fit_kB
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
+
+        speed, fs, n_freq = 0.7, 512, 257
+        F = np.arange(n_freq) * fs / (2 * (n_freq - 1))
+        K = F / speed
+        tau0 = fp07_tau(speed)
+        H2 = fp07_transfer(F, tau0)
+        noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
+        f_AA = 98.0
+
+        # Noise-only window (== the modeled floor): no bin clears 2x noise.
+        for fitter, extra in ((_iterative_fit, ()), (_mle_fit_kB, (1e-9,))):
+            with pytest.warns(UserWarning, match="above the FP07 noise floor"):
+                r = fitter(noise_K.copy(), K, *extra, 1.2e-6, noise_K, H2, tau0,
+                           fp07_transfer, f_AA, speed, "batchelor")
+            assert np.isnan(r.chi) and np.isnan(r.kB)
+
+        # A genuine Batchelor signal well above noise must still be fit (finite).
+        sig = batchelor_grad(K, float(batchelor_kB(1e-8, 1.2e-6)), 1e-7) * H2 + noise_K
+        for fitter, extra in ((_iterative_fit, ()), (_mle_fit_kB, (1e-7,))):
+            r = fitter(sig, K, *extra, 1.2e-6, noise_K, H2, tau0,
+                       fp07_transfer, f_AA, speed, "batchelor")
+            assert np.isfinite(r.chi) and np.isfinite(r.kB)
 
     def test_chi_consistent_with_final_kB_on_convergence_break(self):
         """Returned chi must be recomputed from the final converged kB.
