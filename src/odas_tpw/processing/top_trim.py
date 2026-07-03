@@ -4,10 +4,13 @@
 Caller supplies one or more fast-rate motion proxies as a dict. The
 algorithm bins each by depth, computes per-bin std, and reports the depth
 below which the instrument's motion has settled. The settling depth is
-located as the first bin beneath the *deepest* still-elevated (prop-wash)
-bin, so a momentarily quiet near-surface bin cannot end the search
-prematurely; channels are combined with the median, robust to one bad
-channel.
+located as the first bin beneath the *surface-attached* elevated
+(prop-wash) run — the run of elevated bins anchored to the top of the
+search range, bridging quiet lulls up to ``max_gap`` bins. Bridging lulls
+keeps a momentarily quiet near-surface bin from ending the search early;
+anchoring to the surface keeps an isolated *deep* transient from
+over-trimming the quiet band above it. Channels are combined with the
+median, robust to one bad channel.
 
 The instrument-specific question of which channels to feed lives in the
 caller. They must reflect the *instrument's* state, not the ocean: on a
@@ -42,6 +45,46 @@ def _bin_std(values: np.ndarray, depth: np.ndarray, bin_edges: np.ndarray) -> np
     return result
 
 
+def _surface_run_end(elevated: np.ndarray, max_gap: int) -> int | None:
+    """Index of the deepest bin of the surface-attached elevated run.
+
+    Prop wash is a *surface-attached* transient: a run of elevated bins that
+    begins at (or within ``max_gap`` bins of) the top of the search range and
+    extends downward. Quiet lulls of up to ``max_gap`` bins inside the run are
+    bridged so a momentarily quiet near-surface bin does not end the search
+    early (audit #66). A wider quiet band separates the surface wash from any
+    deeper *isolated* elevated bin (a cable snap-load or mid-column turbulence
+    patch), which is contamination — not prop wash — and must not drive the
+    trim (audit r1-2).
+
+    ``elevated`` is a boolean array over a channel's valid bins, shallow→deep.
+    Returns the index (into ``elevated``) of the deepest bin in the
+    surface-attached run, or None when there is no surface-attached prop wash
+    (no elevated bins, or the only elevated bins are detached from the
+    surface).
+    """
+    idx = np.flatnonzero(elevated)
+    if idx.size == 0:
+        return None
+    first = int(idx[0])
+    if first > max_gap:
+        # Elevated bins exist, but none within max_gap of the surface: the
+        # descent was already settled at the top, so these are detached
+        # mid-column transients, not prop wash.
+        return None
+    last = first
+    gap = 0
+    for pos in range(first + 1, len(elevated)):
+        if elevated[pos]:
+            last = pos
+            gap = 0
+        else:
+            gap += 1
+            if gap > max_gap:
+                break
+    return last
+
+
 def compute_trim_depth(
     depth_fast: npt.ArrayLike,
     channels: dict[str, np.ndarray],
@@ -51,6 +94,7 @@ def compute_trim_depth(
     max_depth: float = 50.0,
     quantile: float = 0.6,
     noise_factor: float = 2.0,
+    max_gap: int = 3,
 ) -> float | None:
     """Compute the trim depth for a single profile.
 
@@ -60,10 +104,16 @@ def compute_trim_depth(
     spans less than ``1 - quantile`` of the binned range). A bin is treated
     as still inside the prop wash when its std exceeds ``noise_factor``
     times that background. The channel's prop-wash exit is the first bin
-    *below the deepest still-elevated bin*: scanning for the deepest
-    elevated bin (rather than the first quiet one) prevents a momentarily
-    quiet near-surface bin from ending the search early. The profile trim
-    depth is the **median** exit across channels — robust to a single
+    *below the surface-attached elevated run* — the run of elevated bins
+    that starts within ``max_gap`` bins of the top of the search range and
+    extends down, bridging quiet lulls of up to ``max_gap`` bins. Bridging
+    lulls prevents a momentarily quiet near-surface bin from ending the
+    search early (audit #66); anchoring the run to the surface prevents an
+    isolated *deep* transient (a cable snap-load or mid-column turbulence
+    patch) from over-trimming the entire quiet band above it (audit r1-2).
+    A channel whose only elevated bins are detached from the surface sees
+    no prop wash and abstains. The profile trim depth is the **median**
+    exit across the channels that detected prop wash — robust to a single
     misbehaving or dead channel (a flat / zero-variance channel is dropped).
 
     The caller chooses which channels best mark the instrument's settling.
@@ -95,6 +145,13 @@ def compute_trim_depth(
         A bin counts as still in the prop wash when its std exceeds
         ``noise_factor`` times the settled background. Must be > 1 so the
         background's own bin-to-bin scatter is not mistaken for prop wash.
+    max_gap : int
+        Maximum run of quiet bins bridged within the surface-attached
+        prop-wash run, and the maximum offset of the first elevated bin
+        from the surface for the run to count as surface-attached [bins].
+        Must be >= 0; ``>= 1`` preserves the audit-#66 momentary-lull
+        tolerance. At the default ``dz=0.5`` m, ``max_gap=3`` bridges lulls
+        up to ~1.5 m.
 
     Returns
     -------
@@ -111,6 +168,8 @@ def compute_trim_depth(
         raise ValueError(f"quantile must be in (0, 1), got {quantile}")
     if not noise_factor > 1.0:
         raise ValueError(f"noise_factor must be > 1, got {noise_factor}")
+    if max_gap < 0:
+        raise ValueError(f"max_gap must be >= 0, got {max_gap}")
     depth = np.asarray(depth_fast, dtype=np.float64)
     bin_edges = np.arange(min_depth - dz / 2, max_depth + dz, dz)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
@@ -136,9 +195,11 @@ def compute_trim_depth(
         return None
 
     # Per channel, locate the prop-wash exit: the bin just below the deepest
-    # bin whose std is still elevated above the settled background. Using the
-    # deepest elevated bin (not the first quiet one) prevents a momentarily
-    # quiet near-surface bin from ending the search early (audit #66).
+    # bin of the surface-attached elevated run. Anchoring the run to the
+    # surface (rather than taking the globally deepest elevated bin) bridges a
+    # momentary near-surface lull (audit #66) while rejecting isolated deep
+    # transients that would otherwise over-trim the whole quiet band above them
+    # (audit r1-2).
     exits = []
     any_live = False
     for std_arr in all_stds:
@@ -146,18 +207,20 @@ def compute_trim_depth(
         if np.sum(valid) < 3:
             continue
         any_live = True
+        valid_pos = np.flatnonzero(valid)
         background = np.nanquantile(std_arr[valid], quantile)
-        elevated = valid & (std_arr > noise_factor * background)
-        elevated_idx = np.flatnonzero(elevated)
-        if elevated_idx.size == 0:
-            # This channel sees no prop wash; it abstains rather than voting a
-            # shallow trim that would pull the median up against channels that
-            # do detect one.
+        elevated = std_arr[valid_pos] > noise_factor * background
+        run_end = _surface_run_end(elevated, max_gap)
+        if run_end is None:
+            # No surface-attached prop wash (none, or only detached deep
+            # contamination): abstain rather than voting a trim — a shallow
+            # vote would pull the median up, a deep vote to a transient would
+            # discard valid near-surface data.
             continue
-        deepest = int(elevated_idx[-1])
-        # First bin below the deepest elevated bin. If the deepest search bin is
-        # itself still elevated the profile never settled within range; fall
-        # back to that bin (the most conservative, deepest trim).
+        # Bin just below the deepest surface-run bin. If that is the deepest
+        # search bin the profile never settled within range; fall back to it
+        # (the most conservative, deepest trim).
+        deepest = int(valid_pos[run_end])
         exit_idx = min(deepest + 1, len(bin_centers) - 1)
         exits.append(bin_centers[exit_idx])
 
