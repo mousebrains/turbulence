@@ -544,6 +544,11 @@ def _iterative_fit(
     kB_best = np.nan
     kB_prev = np.nan
     epsilon = np.nan
+    # True once the refined integration band carries above-noise variance.
+    # If it never does (every in-band bin has Phi_obs <= Phi_noise), the
+    # window is below the detection limit and chi must be NaN, NOT the
+    # 1e-14 sentinel that chi_obs falls back to for model shaping.
+    band_has_signal = False
 
     for iteration in range(3):
         # MLE fit for kB (core search only — no variance correction)
@@ -594,8 +599,10 @@ def _iterative_fit(
         )
         if chi_band > 0 and np.isfinite(correction):
             chi_obs = chi_band * correction
+            band_has_signal = True
         elif chi_band > 0:
             chi_obs = chi_band
+            band_has_signal = True
         else:
             chi_obs = 1e-14
 
@@ -622,18 +629,22 @@ def _iterative_fit(
             )
             if chi_band > 0 and np.isfinite(correction):
                 chi_obs = chi_band * correction
+                band_has_signal = True
             elif chi_band > 0:
                 chi_obs = chi_band
+                band_has_signal = True
 
     # Final values
     if np.isfinite(kB_best):
         epsilon = (2 * np.pi * kB_best) ** 4 * nu * KAPPA_T**2
-    # A failed Batchelor/kB fit must not leak a finite chi: chi_obs is the
-    # initial (possibly noise-dominated) band integral, and with kB NaN the
-    # window has fom=NaN/K_max_ratio=NaN that no downstream QC cut can reach.
-    # Returning NaN excludes it from chi_final/chiMean (and thus K_T/Gamma),
-    # mirroring the epsilon side, where a failed shear fit yields NaN epsilon.
-    chi = chi_obs if np.isfinite(kB_best) else np.nan
+    # A finite chi requires BOTH a converged Batchelor/kB fit AND above-noise
+    # variance in the integration band. A failed fit (kB NaN) leaks the initial
+    # noise-dominated band integral; a below-detection window (band_has_signal
+    # False) leaks the 1e-14 model-shaping sentinel. Either way fom=NaN and no
+    # downstream QC cut can reach it, so return NaN — excluding it from
+    # chi_final/chiMean (and thus K_T/Gamma), mirroring the epsilon side where a
+    # failed shear fit yields NaN epsilon.
+    chi = chi_obs if (np.isfinite(kB_best) and band_has_signal) else np.nan
     spec_batch = grad_func(K, kB_best, chi) if np.isfinite(kB_best) else np.zeros_like(K)
 
     # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise).

@@ -19,6 +19,7 @@ import argparse
 import contextlib
 import locale
 import os
+import re
 import sys
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -106,18 +107,23 @@ def parse_time(value) -> np.datetime64 | None:
         return None
     if s.endswith("Z"):
         s = s[:-1]
-    # Reject an explicit numeric offset (e.g. +09:00 / -05:00) on the
-    # time-of-day part. The date/time separator may be 'T' OR a space: YAML
-    # resolves an unquoted timestamp to a (possibly tz-aware) datetime whose
-    # str() uses a SPACE, so checking only the post-'T' substring would miss
-    # the offset and silently shift the time (e.g. 00:00+09:00 -> 15:00 UTC).
+    # Handle an explicit timezone offset on the time-of-day part. The date/time
+    # separator may be 'T' OR a space: YAML resolves an unquoted '...Z'
+    # timestamp to a tz-AWARE datetime whose str() renders the zone as
+    # '+00:00' with a SPACE separator, so we must inspect the post-separator
+    # tail. A ZERO offset (Z / +00:00 / -00:00) is UTC and is accepted (and
+    # stripped, since numpy datetime64 rejects any offset); a NON-zero offset
+    # (e.g. +09:00 / -05:00) is rejected rather than silently shifted.
     sep = "T" if "T" in s else (" " if " " in s else "")
     tail = s.split(sep, 1)[-1] if sep else ""
-    if "+" in tail or "-" in tail:
-        raise ValueError(
-            f"time {value!r} must be UTC: use a trailing 'Z' or no offset, "
-            "not an explicit timezone"
-        )
+    off = re.search(r"([+-])(\d{2}):?(\d{2})?$", tail)
+    if off:
+        if int(off.group(2)) or int(off.group(3) or 0):
+            raise ValueError(
+                f"time {value!r} must be UTC: use a trailing 'Z' or no offset, "
+                "not an explicit timezone"
+            )
+        s = s[: s.rindex(off.group(0))]
     if sep == " ":  # numpy datetime64 wants the ISO 'T' separator
         s = s.replace(" ", "T", 1)
     try:

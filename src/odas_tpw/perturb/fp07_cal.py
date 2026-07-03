@@ -130,10 +130,15 @@ def _calc_lag(
 
     # Full cross-correlation
     corr = correlate(dx, dy, mode="full")
-    # Normalize
+    # Normalize. A flatlined segment (norm == 0) or one carrying a non-finite
+    # sample (norm NaN) leaves corr un-normalized/NaN; argmax(|corr|) over the
+    # negative-lag window would then return index 0 -> the most-negative
+    # searched lag (-max_lag_seconds), silently poisoning the median lag that
+    # aligns the Steinhart-Hart fit. Mirror ct_align and abstain instead.
     norm = np.sqrt(np.sum(dx**2) * np.sum(dy**2))
-    if norm > 0:
-        corr = corr / norm
+    if not np.isfinite(norm) or norm <= 0:
+        return np.nan, np.nan
+    corr = corr / norm
 
     n = len(dx)
     lags = np.arange(-(n - 1), n)
@@ -258,6 +263,10 @@ def fp07_calibrate(
                 max_lag_seconds=max_lag_seconds,
                 must_be_negative=must_be_negative,
             )
+            # _calc_lag returns NaN for a flatlined / non-finite segment; drop
+            # it so it cannot poison the median.
+            if not np.isfinite(lag):
+                continue
             lags_list.append(lag)
             corrs_list.append(corr)
 

@@ -235,7 +235,18 @@ def compute_trim_depth(
         # Median exit across the channels that detected prop wash: robust to a
         # single misbehaving channel (a `max` lets one bad channel drag the
         # trim arbitrarily deep).
-        return float(np.median(exits))
+        trim = float(np.median(exits))
+        # A never-settled cast (the surface run reaches the deepest populated
+        # bin) yields an exit bin center in the empty tail of the search range,
+        # deeper than every real sample; the caller's ``P >= trim_depth`` would
+        # then be empty and apply NO trim, silently keeping the whole
+        # wash-contaminated column. Clamp to the deepest observed in-range
+        # sample so the trim is always applicable (the cast is then trimmed to
+        # its bottom, i.e. flagged as all-wash, rather than passed untouched).
+        in_range = depth[(depth >= min_depth) & (depth <= max_depth) & np.isfinite(depth)]
+        if in_range.size:
+            trim = min(trim, float(np.max(in_range)))
+        return trim
     if any_live:
         # Live channels but none saw prop wash: trim minimally (top of range).
         return float(bin_centers[0])

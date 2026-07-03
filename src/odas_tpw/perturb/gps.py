@@ -215,11 +215,20 @@ class GPSFromCSV:
 
         df = pd.read_csv(file)
         t = _to_epoch_seconds(np.asarray(df[time_col].values))
-        self._t_min = float(np.nanmin(t))
-        self._t_max = float(np.nanmax(t))
+        lat = np.asarray(df[lat_col].values, dtype=np.float64)
+        lon = np.asarray(df[lon_col].values, dtype=np.float64)
+        # Coverage window = the finite (time, lat, lon) span the interpolators
+        # honor without extrapolating (see GPSFromNetCDF for the rationale).
+        _cov = np.isfinite(t) & np.isfinite(lat) & np.isfinite(lon)
+        if _cov.any():
+            self._t_min = float(np.min(t[_cov]))
+            self._t_max = float(np.max(t[_cov]))
+        else:
+            self._t_min = float(np.nanmin(t))
+            self._t_max = float(np.nanmax(t))
         self._max_time_diff = float(max_time_diff)
-        self._lat_interp = _finite_interp1d(t, np.asarray(df[lat_col].values))
-        self._lon_interp = _finite_interp1d(t, np.asarray(df[lon_col].values))
+        self._lat_interp = _finite_interp1d(t, lat)
+        self._lon_interp = _finite_interp1d(t, lon)
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:
         """Interpolate latitude from CSV at the given times."""
@@ -316,8 +325,19 @@ class GPSFromNetCDF:
             else:
                 t = _to_epoch_seconds(raw)
 
-        self._t_min = float(np.nanmin(t))
-        self._t_max = float(np.nanmax(t))
+        # Coverage window = the span the interpolators can actually honor
+        # without extrapolating: the finite (time, lat, lon) nodes. Using the
+        # full decoded time range would hide fabricated extrapolations when
+        # lat/lon drop out at the record's temporal extremes (a GPS fix dropout
+        # at the start/end of the file), since _finite_interp1d silently
+        # extrapolates past the last finite fix.
+        _cov = np.isfinite(t) & np.isfinite(lat) & np.isfinite(lon)
+        if _cov.any():
+            self._t_min = float(np.min(t[_cov]))
+            self._t_max = float(np.max(t[_cov]))
+        else:
+            self._t_min = float(np.nanmin(t))
+            self._t_max = float(np.nanmax(t))
         self._max_time_diff = float(max_time_diff)
         self._lat_interp = _finite_interp1d(t, lat)
         self._lon_interp = _finite_interp1d(t, lon)
