@@ -615,3 +615,56 @@ type = raw
         captured = capsys.readouterr()
         assert "TestModel" in captured.out
         assert "999" in captured.out
+
+
+class TestPFileBadBuffer:
+    """PFile warns on nonzero header word-16 (buffer_status) bad-buffer flags."""
+
+    _CONFIG = """
+[matrix]
+row1 = 1 1 1 1
+row2 = 1 1 1 1
+row3 = 1 1 1 1
+row4 = 1 1 1 1
+
+[instrument_info]
+model = test
+sn = 1
+
+[cruise_info]
+operator = pat
+
+[channel]
+id = 1
+name = X
+type = raw
+"""
+
+    def test_bad_buffer_flag_warns(self, tmp_path):
+        path = tmp_path / "badbuf.p"
+        _make_minimal_p_file(
+            path, config_text=self._CONFIG, fast_cols=1, slow_cols=0,
+            n_rows=4, n_records=2,
+        )
+        raw = bytearray(path.read_bytes())
+        config_size = len(self._CONFIG.encode("ascii"))
+        # First record header word 15 (0-indexed) -> byte offset 30 in the
+        # record header, little-endian to match _make_minimal_p_file's default.
+        off = HEADER_BYTES + config_size + 15 * 2
+        struct.pack_into("<H", raw, off, 1)
+        path.write_bytes(raw)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            PFile(path)
+        assert any("bad-buffer" in str(rec.message) for rec in w)
+
+    def test_clean_file_no_bad_buffer_warning(self, tmp_path):
+        path = tmp_path / "clean.p"
+        _make_minimal_p_file(
+            path, config_text=self._CONFIG, fast_cols=1, slow_cols=0,
+            n_rows=4, n_records=2,
+        )
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            PFile(path)
+        assert not any("bad-buffer" in str(rec.message) for rec in w)

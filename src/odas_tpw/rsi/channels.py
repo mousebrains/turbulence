@@ -191,9 +191,15 @@ def convert_accel(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     piezo type, whose output stays in counts).
     """
     adc_zero = _safe_float(params.get("adc_zero", "0"))
-    # See convert_voltage: a missing adc_bits would silently mis-scale by 2**16.
-    adc_fs = _require_float(params, "adc_fs", 1.0, "accel")
-    adc_bits = _require_float(params, "adc_bits", 16.0, "accel")
+    # ODAS odas_accel_internal defaults adc_bits to 0 (2**0 = 1) and adc_fs to 1
+    # for the counts-based coef0/coef1 calibration used by legacy calibrated
+    # accelerometers that omit the ADC params. (Unlike convert_voltage, whose
+    # ODAS default IS 16 — do NOT copy that here: the 2026-06-19 audit
+    # disconfirmed a 16 default for accel, and PR #74's 16.0 mis-scaled such
+    # configs by 2**16. SN479 configs carry adc_bits=16 explicitly, so this
+    # default does not change the campaign output.)
+    adc_fs = _safe_float(params.get("adc_fs", "1"))
+    adc_bits = _safe_float(params.get("adc_bits", "0"))
     sig_zero = _safe_float(params.get("sig_zero", "0"))
     coef0 = _require_float(params, "coef0", 0.0, "accel")
     coef1 = _require_float(params, "coef1", 1.0, "accel")

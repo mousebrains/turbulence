@@ -424,6 +424,21 @@ class PFile:
             self.channels = {}
             self.channel_info = {}
             self._record_headers = records["hdr"]
+            # ODAS odas_p2mat runs check_bad_buffers before conversion: header
+            # word 16 (0-indexed 15), buffer_status, is a per-record bad-buffer /
+            # DAQ-dropout flag. We do not repair flagged records, but warn so
+            # silent DAQ corruption is not mistaken for clean data feeding
+            # epsilon/chi. Clean acquisitions (e.g. all SN479 VMP files) carry 0.
+            if self._record_headers.shape[1] > 15:
+                n_bad_buf = int(np.count_nonzero(self._record_headers[:, 15]))
+                if n_bad_buf:
+                    warnings.warn(
+                        f"{self.filepath.name}: {n_bad_buf}/{n_records} records "
+                        "flagged bad-buffer (header word 16); DAQ dropouts may "
+                        "corrupt samples (ODAS check_bad_buffers would patch "
+                        "these before conversion)",
+                        stacklevel=2,
+                    )
             # Names of joined 2-id (32-bit) channels — needed below to apply
             # ODAS's default-signed correction only to true 32-bit values.
             joined_channels: set[str] = set()

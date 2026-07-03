@@ -160,6 +160,30 @@ class TestParseTimeZeroOffset:
             parse_time("2025-01-15T00:00:00-05:00")
 
 
+class TestConvertAccelODASParity:
+    """channels.py: convert_accel with only coef0/coef1 must match ODAS (adc_bits=0)."""
+
+    def test_counts_based_cal_matches_odas(self):
+        from odas_tpw.rsi.channels import convert_accel
+
+        d = np.array([1000, -2000, 15000], dtype=np.int16)
+        out, unit = convert_accel(d, {"coef0": "-100.0", "coef1": "1500.0"})
+        expected = 9.81 * (d.astype(float) - (-100.0)) / 1500.0
+        assert np.allclose(out, expected)
+        assert unit == "m_s-2"
+
+    def test_explicit_adc_bits_still_honored(self):
+        # SN479 configs carry adc_bits=16 explicitly; that path is unchanged.
+        from odas_tpw.rsi.channels import convert_accel
+
+        d = np.array([1000, 2000], dtype=np.int16)
+        out, _ = convert_accel(
+            d, {"coef0": "0", "coef1": "1", "adc_fs": "1", "adc_bits": "16"}
+        )
+        exp = 9.81 * (d.astype(float) / 2**16)
+        assert np.allclose(out, exp)
+
+
 class TestChiFomTwoSided:
     """Chi obs/model variance-ratio QC must reject fom << 1, not only fom > limit."""
 

@@ -1162,15 +1162,19 @@ def process_file(
         if P_slow is None:
             logger.warning("No pressure channel in %s", p_path.name)
         else:
-            W = _smooth_fall_rate(P_slow, pf.fs_slow)
             # Resolve "auto" → vehicle default (e.g. slocum_glider → "glide").
             # ``scor160.profile.get_profiles`` doesn't know "auto" itself, so
             # without this it silently falls through to the "down" branch and
             # we lose every up-profile -- on a glider with MR-on-during-climb
             # only, that drops *all* the real flight data.
-            from odas_tpw.rsi.vehicle import resolve_direction
+            from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
 
             vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
+            # Smooth the detection fall rate with the VEHICLE tau, matching ODAS
+            # (odas_p2mat.m). The default 1.5 s is correct for a VMP but 2-40x
+            # too fast for gliders/floats (slocum 3.0 s, argo 60.0 s), which made
+            # W noisy at the W_min threshold and fragmented profile boundaries.
+            W = _smooth_fall_rate(P_slow, pf.fs_slow, tau=resolve_tau(vehicle))
             direction = resolve_direction(
                 profiles_cfg.get("direction", "auto"), vehicle,
             )
