@@ -289,6 +289,17 @@ class TestChiKappaTemperatureDependence:
         assert 1.45e-7 < warm < 1.55e-7  # ~1.498e-7 (Sharqawy/Jamieson-Tudhope)
         assert 1.35e-7 < cold < 1.40e-7  # ~1.385e-7
 
+    def test_spurious_temperature_stays_positive(self):
+        # A finite-but-garbage window-mean T must not yield a negative kappa_T
+        # (gsw cp/rho extrapolate negative far out of range -> negative chi).
+        from odas_tpw.scor160.ocean import kappa_T
+
+        for T in (200.0, -50.0, 1e4):
+            val = float(kappa_T(T))
+            assert val > 0, f"kappa_T({T}) = {val} must stay positive"
+        # Clipping is a no-op inside the operating range: identical to unclipped.
+        assert float(kappa_T(28.0)) == pytest.approx(1.498e-7, rel=2e-3)
+
     def test_method2_chi_and_epsilonT_scale_with_kappa(self):
         from odas_tpw.chi.batchelor import KAPPA_T
         from odas_tpw.chi.chi import _iterative_fit

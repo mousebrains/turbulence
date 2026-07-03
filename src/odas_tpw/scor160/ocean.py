@@ -135,14 +135,17 @@ def kappa_T(
     P = np.asarray(P, dtype=float)
 
     # Clip a spurious window-mean temperature into the physical seawater range
-    # before the correlation (a wild T from a bad window would otherwise send the
-    # k polynomial well outside its fitted domain). -2 °C is below the freezing
-    # point at any ocean salinity; 40 °C is above the warmest sea surface.
-    T_k = np.clip(T, -2.0, 40.0)
+    # before evaluating ANY term (both the k correlation and the gsw density /
+    # specific heat). A wild T from a bad window sends the k polynomial outside
+    # its fitted domain AND drives gsw.cp_t_exact / gsw.rho into extrapolation
+    # where they can go negative — yielding a negative kappa_T (hence negative
+    # chi). -2 °C is below the freezing point at any ocean salinity; 40 °C is
+    # above the warmest sea surface. Must clip T for gsw too, not just for k.
+    T_c = np.clip(T, -2.0, 40.0)
 
     # Thermal conductivity [mW/(m·K)] — Jamieson & Tudhope (1970), Sharqawy Eq. 13
     # (T in °C, S in g/kg ≈ PSU for open-ocean salinities).
-    Tk = T_k + 273.15
+    Tk = T_c + 273.15
     log10_k = (
         np.log10(240.0 + 0.0002 * S)
         + 0.434
@@ -153,11 +156,14 @@ def kappa_T(
 
     # Density and isobaric specific heat from gsw (TEOS-10).
     SA = gsw.SA_from_SP(S, P, 0, 0)
-    CT = gsw.CT_from_t(SA, T, P)
+    CT = gsw.CT_from_t(SA, T_c, P)
     rho = gsw.rho(SA, CT, P)
-    cp = gsw.cp_t_exact(SA, T, P)
+    cp = gsw.cp_t_exact(SA, T_c, P)
 
-    return k / (rho * cp)
+    # Floor to a small positive value (mirrors visc/visc35): guards any residual
+    # non-physical combination (e.g. a wildly out-of-range salinity) from
+    # emitting a zero/negative diffusivity that would corrupt chi downstream.
+    return np.maximum(k / (rho * cp), 1.0e-8)
 
 
 def density(T: npt.ArrayLike, S: npt.ArrayLike, P: npt.ArrayLike) -> np.ndarray:

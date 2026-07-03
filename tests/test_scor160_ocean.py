@@ -4,7 +4,7 @@
 import numpy as np
 import pytest
 
-from odas_tpw.scor160.ocean import buoyancy_freq, density, visc, visc35
+from odas_tpw.scor160.ocean import buoyancy_freq, density, kappa_T, visc, visc35
 
 
 class TestVisc35:
@@ -108,6 +108,36 @@ class TestDensity:
         rho = density(T, S, P)
         assert rho.shape == (3,)
         assert np.all(rho > 1000)
+
+
+class TestKappaT:
+    """Tests for kappa_T(T, S, P) — molecular thermal diffusivity for chi."""
+
+    def test_reference_values(self):
+        # Sharqawy/Jamieson-Tudhope + gsw: ~1.45e-7 at 15 C, ~1.498e-7 at 28 C.
+        assert float(kappa_T(15.0, 35.0, 0.0)) == pytest.approx(1.45e-7, rel=0.01)
+        assert float(kappa_T(28.0, 35.0, 0.0)) == pytest.approx(1.498e-7, rel=0.01)
+
+    def test_increases_with_temperature(self):
+        # Thermal conductivity (hence diffusivity) rises with T over the ocean
+        # range; span the full -1..32 C these casts cover.
+        vals = np.asarray(kappa_T(np.array([-1.0, 0.0, 15.0, 28.0, 32.0])))
+        assert np.all(np.diff(vals) > 0)
+
+    def test_physical_magnitude(self):
+        # All values sit in the accepted seawater band ~1.3-1.6e-7 m^2/s.
+        v = np.asarray(kappa_T(np.linspace(-1.0, 32.0, 12)))
+        assert np.all((v > 1.3e-7) & (v < 1.6e-7))
+
+    def test_spurious_temperature_clipped_positive(self):
+        # A garbage window-mean T must never produce a negative diffusivity
+        # (gsw cp/rho extrapolate negative far out of range).
+        for T in (200.0, -50.0, 1e4):
+            assert float(kappa_T(T)) > 0
+
+    def test_array_shape_preserved(self):
+        out = kappa_T(np.full((2, 3), 20.0))
+        assert np.asarray(out).shape == (2, 3)
 
 
 class TestBuoyancyFreq:
