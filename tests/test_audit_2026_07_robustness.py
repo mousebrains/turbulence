@@ -216,6 +216,37 @@ class TestChiFomTwoSided:
         assert np.isfinite(ds["chi"].values[0, 0])  # fom=1.0 kept
 
 
+class TestAtomicToNetcdf:
+    """perturb/pipeline.py: _atomic_to_netcdf leaves no partial NC on failure."""
+
+    def test_success_writes_and_leaves_no_tmp(self, tmp_path):
+        xr = pytest.importorskip("xarray")
+        from odas_tpw.perturb.pipeline import _atomic_to_netcdf
+
+        ds = xr.Dataset({"x": (("t",), np.arange(5.0))})
+        out = tmp_path / "a.nc"
+        _atomic_to_netcdf(ds, out)
+        assert out.exists()
+        assert not list(tmp_path.glob(".a.nc.*.tmp"))
+
+    def test_failure_leaves_no_partial(self, tmp_path, monkeypatch):
+        xr = pytest.importorskip("xarray")
+        from odas_tpw.perturb import pipeline as P
+
+        ds = xr.Dataset({"x": (("t",), np.arange(5.0))})
+        out = tmp_path / "b.nc"
+
+        def boom(self, *a, **k):
+            # Simulate a mid-write abort after the tmp file is touched.
+            raise OSError("disk full")
+
+        monkeypatch.setattr(xr.Dataset, "to_netcdf", boom)
+        with pytest.raises(OSError):
+            P._atomic_to_netcdf(ds, out)
+        assert not out.exists()  # no partial at the live path
+        assert not list(tmp_path.glob(".b.nc.*.tmp"))
+
+
 class TestChiSchemaHeadlineVars:
     """CHI_SCHEMA must carry the published chiMean/chiLnSigma so combos get attrs."""
 

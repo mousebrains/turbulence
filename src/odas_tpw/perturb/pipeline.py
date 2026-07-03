@@ -137,6 +137,28 @@ def _write_binned_or_clear(
         out.unlink()
 
 
+def _atomic_to_netcdf(ds: "xr.Dataset", out_path: Path) -> None:
+    """Write *ds* to *out_path* atomically (temp file + os.replace).
+
+    A direct ds.to_netcdf(out_path) interrupted mid-payload (ENOSPC / SMB drop /
+    Ctrl-C) or raising leaves a readable PARTIAL NetCDF on disk; the same run
+    then bins it and the bin/combo manifest locks those fill-derived bins in, so
+    a correct retry (identical filenames -> identical manifest) skips re-binning
+    and permanently publishes the partial data (audit 2026-07-01). os.replace is
+    atomic within a filesystem, so a partial write never becomes the live file.
+    """
+    tmp = out_path.with_name(f".{out_path.name}.{os.getpid()}.tmp")
+    try:
+        ds.to_netcdf(tmp)
+        os.replace(tmp, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 _MANIFEST_ATTR = "_input_manifest"
 
 
@@ -1436,7 +1458,7 @@ def process_file(
                             )
                         out_name = Path(prof_path).name
                         out_path = output_dirs["diss"] / out_name
-                        ds.to_netcdf(out_path)
+                        _atomic_to_netcdf(ds, out_path)
                         out_path_str = str(out_path)
                         result["diss"].append(out_path_str)
                         diss_by_profile[prof_path] = out_path_str
@@ -1590,7 +1612,7 @@ def process_file(
                             _copy_profile_scalars(prof_path, chi_ds, prof_scalars_cache)
                             out_name = Path(prof_path).name
                             out_path = output_dirs["chi"] / out_name
-                            chi_ds.to_netcdf(out_path)
+                            _atomic_to_netcdf(chi_ds, out_path)
                             result["chi"].append(str(out_path))
                     except Exception as exc:
                         logger.error("chi for %s: %s", Path(prof_path).name, exc)
@@ -2462,6 +2484,15 @@ def _run_combo(
                     if manifest is not None:
                         _stamp_manifest(Path(out), manifest)
                     logger.info("Wrote %s", out)
+                else:
+                    # Empty binned source -> no combo produced. Remove any stale
+                    # combo.nc so a shrunk/zeroed input set does not leave the
+                    # previous run's combo as the apparently-current product
+                    # (mirrors _write_binned_or_clear on the binning side).
+                    stale = dst / "combo.nc"
+                    if stale.exists():
+                        stale.unlink()
+                        logger.info("Removed stale %s (no binned input)", stale)
             except Exception as exc:
                 logger.error("combo %s: %s", dst.name, exc)
 
