@@ -73,6 +73,24 @@ DEFAULT_N2_MIN = 1e-9
 # energetic near-surface mixing.) Configurable via K_rho_max.
 DEFAULT_K_RHO_MAX = 10.0
 
+# Upper sanity bound on K_T [m^2/s]. K_T = chi/(2*(dT/dz)^2) is a turbulent
+# thermal diffusivity on the same physical scale as K_rho (by the module
+# identity K_T = 5*Gamma*K_rho, so K_T ~ K_rho when Gamma ~ 0.2). It has no N^2
+# in it, so it does NOT blow up on the near-floor-N^2 artifact — but a weak
+# dT/dz combined with a contaminated chi can still push it past any real ocean
+# value, so it gets its OWN ceiling (not K_rho's mask). 10 m^2/s sits above the
+# most energetic real thermal mixing. Configurable via K_T_max.
+DEFAULT_K_T_MAX = 10.0
+
+# Upper sanity bound on the measured mixing coefficient Gamma [1]. Gamma is
+# dimensionless with a canonical value ~0.2 and rarely exceeds ~1-2 even in
+# energetic mixing (flux Richardson number Rf < ~0.5 => Gamma = Rf/(1-Rf) < ~1);
+# values of tens to hundreds arise only when a near-zero shear epsilon lands in
+# the denominator (Gamma = N2*chi/(2*epsilon*(dT/dz)^2)). 5.0 keeps all
+# physically plausible mixing efficiency while removing those gross artifacts.
+# Configurable via Gamma_max.
+DEFAULT_GAMMA_MAX = 5.0
+
 # Background temperature-gradient floor [K/m].  chi/(dT/dz)^2 diverges
 # as the mean gradient vanishes (well-mixed layers); 1e-4 K/m over a
 # ~5 m window corresponds to ~0.5 mK of signal, near FP07 resolution.
@@ -456,6 +474,8 @@ def mixing_coefficients(
     dTdz_min: float = DEFAULT_DTDZ_MIN,
     gamma_osborn: float = GAMMA_OSBORN,
     K_rho_max: float = DEFAULT_K_RHO_MAX,
+    K_T_max: float = DEFAULT_K_T_MAX,
+    Gamma_max: float = DEFAULT_GAMMA_MAX,
 ) -> MixingResult:
     """Derived mixing quantities from epsilon, chi, and stratification.
 
@@ -474,9 +494,13 @@ def mixing_coefficients(
     - ``Gamma`` and ``K_rho`` where ``N2 < N2_min`` (unstratified or
       statically unstable at the window scale: the Osborn scaling does
       not apply).
-    - ``K_rho`` where the result exceeds ``K_rho_max`` (a physically
-      implausible diffusivity — the unbounded near-floor ``N2`` artifact;
-      the masked count is reported via :mod:`warnings`).
+    - Each coefficient where it exceeds its OWN upper sanity bound —
+      ``K_rho`` > ``K_rho_max`` (near-floor-``N2`` artifact), ``K_T`` >
+      ``K_T_max`` (weak ``dT/dz`` with contaminated ``chi``), ``Gamma`` >
+      ``Gamma_max`` (near-zero ``epsilon`` in the denominator). Gating each on
+      its own ceiling (rather than masking all three wherever ``K_rho`` is
+      masked) keeps a legitimately large ``K_T`` in low-``N2`` water. The masked
+      count per variable is reported via :mod:`warnings`.
     - Any output where the corresponding ``chi`` or ``epsilon`` is
       non-finite or non-positive (a positive dissipation rate is required
       for every quantity).
@@ -499,6 +523,12 @@ def mixing_coefficients(
     K_rho_max : float
         Upper sanity bound on ``K_rho`` [m^2/s]; windows exceeding it are
         masked as physically implausible (see ``DEFAULT_K_RHO_MAX``).
+    K_T_max : float
+        Upper sanity bound on ``K_T`` [m^2/s] (see ``DEFAULT_K_T_MAX``,
+        default 10).
+    Gamma_max : float
+        Upper sanity bound on the measured ``Gamma`` [1] (see
+        ``DEFAULT_GAMMA_MAX``, default 5).
 
     Returns
     -------
@@ -524,18 +554,26 @@ def mixing_coefficients(
         )
         K_rho = np.where(strat_ok & eps_ok, gamma_osborn * epsilon / N2, np.nan)
 
-    # Mask physically implausible K_rho (audit #30): the unbounded magnitude an
-    # N^2 approaching its floor produces. A NaN K_rho compares False, so only
-    # finite over-ceiling windows are counted.
-    over_ceiling = K_rho > K_rho_max
-    n_masked = int(np.count_nonzero(over_ceiling))
-    if n_masked:
-        K_rho = np.where(over_ceiling, np.nan, K_rho)
-        warnings.warn(
-            f"mixing_coefficients: masked {n_masked} K_rho value(s) exceeding "
-            f"{K_rho_max} m^2/s (physically implausible diapycnal diffusivity)",
-            stacklevel=2,
-        )
+    # Mask physically implausible magnitudes per variable (audit #30, r-2026-07):
+    # each coefficient is gated on its OWN ceiling, not on K_rho's, because they
+    # blow up in different regimes — K_rho on near-floor N^2, K_T on a weak dT/dz
+    # with contaminated chi, Gamma on a near-zero shear epsilon. A NaN compares
+    # False, so only finite over-ceiling windows are masked/counted.
+    for name, arr, ceiling, unit in (
+        ("K_rho", K_rho, K_rho_max, "m^2/s"),
+        ("K_T", K_T, K_T_max, "m^2/s"),
+        ("Gamma", Gamma, Gamma_max, ""),
+    ):
+        over = arr > ceiling
+        n_over = int(np.count_nonzero(over))
+        if n_over:
+            arr[over] = np.nan
+            unit_str = f" {unit}" if unit else ""
+            warnings.warn(
+                f"mixing_coefficients: masked {n_over} {name} value(s) exceeding "
+                f"{ceiling}{unit_str} (physically implausible)",
+                stacklevel=2,
+            )
 
     return MixingResult(K_T=K_T, Gamma=Gamma, K_rho=K_rho)
 

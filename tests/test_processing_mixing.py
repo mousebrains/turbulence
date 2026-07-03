@@ -270,7 +270,14 @@ class TestMixingCoefficients:
         N2 = 10.0 ** rng.uniform(-6, -4, 50)
         dTdz = rng.uniform(0.01, 0.1, 50)
         res = mixing_coefficients(eps, chi, N2, dTdz)
-        np.testing.assert_allclose(res.Gamma * eps / N2, res.K_T, rtol=1e-12)
+        # The identity K_T = Gamma*eps/N2 holds only where neither side was
+        # NaN'd by the per-variable plausibility ceilings (some synthetic draws
+        # give Gamma > Gamma_max or K_T > K_T_max).
+        ok = np.isfinite(res.Gamma) & np.isfinite(res.K_T)
+        assert ok.any()
+        np.testing.assert_allclose(
+            (res.Gamma * eps / N2)[ok], res.K_T[ok], rtol=1e-12
+        )
 
     def test_weak_gradient_masked(self):
         res = mixing_coefficients(

@@ -74,6 +74,17 @@ near-floor-$N^2$ artifact, or contaminated near-surface windows whose
 epsilon is itself spurious. The number of masked windows is reported via a
 warning.
 
+`K_T` and `Gamma` carry their **own** upper ceilings for the same reason,
+gated per variable rather than wherever `K_rho` is masked (they blow up in
+different regimes): `K_T` above `K_T_max` (default $10$ m$^2$ s$^{-1}$; a weak
+$\partial\overline{T}/\partial z$ with a contaminated $\chi$ can push the
+thermal diffusivity past any real value even where $N^2$ is fine), and `Gamma`
+above `Gamma_max` (default $5$; the measured mixing coefficient is $\sim 0.2$
+canonically and rarely exceeds $\sim 1$–$2$, so values of tens to hundreds —
+produced when a near-zero shear $\varepsilon$ lands in the denominator — are
+artifacts). Gating each on its own ceiling keeps a legitimately large `K_T` in
+low-$N^2$ water instead of discarding it with `K_rho`.
+
 Two caveats for interpretation:
 
 1. When no salinity is supplied to the pipeline, $N^2$ assumes a uniform

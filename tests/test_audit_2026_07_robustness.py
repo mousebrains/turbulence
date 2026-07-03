@@ -259,6 +259,40 @@ class TestChiSchemaHeadlineVars:
             assert "long_name" in CHI_SCHEMA[name]
 
 
+class TestMixingPerVariableCeilings:
+    """mixing.py: K_T and Gamma get their own implausibility ceilings, not K_rho's."""
+
+    def test_kt_and_gamma_ceilings_fire_independently(self):
+        from odas_tpw.processing.mixing import mixing_coefficients
+
+        # Window 0: tiny epsilon -> huge Gamma; weak dT/dz + big chi -> huge K_T;
+        # but K_rho = 0.2*eps/N2 stays tiny (must NOT be masked).
+        eps = np.array([1e-12, 1e-7])
+        chi = np.array([1e-4, 1e-8])
+        N2 = np.array([1e-3, 1e-4])
+        dTdz = np.array([1e-3, 1e-2])
+        with np.errstate(all="ignore"):
+            r = mixing_coefficients(eps, chi, N2, dTdz)
+        assert np.isnan(r.K_T[0]) and np.isfinite(r.K_T[1])
+        assert np.isnan(r.Gamma[0]) and np.isfinite(r.Gamma[1])
+        # K_rho at window 0 is tiny and physical -> kept despite K_T/Gamma masks.
+        assert np.isfinite(r.K_rho[0])
+
+    def test_high_kt_in_low_n2_water_survives(self):
+        # A legitimately large K_T where N2 is at the floor must NOT be masked
+        # just because K_rho would be (per-variable gating).
+        from odas_tpw.processing.mixing import mixing_coefficients
+
+        eps = np.array([1e-9])
+        chi = np.array([1e-7])
+        N2 = np.array([1e-10])  # below N2_min -> K_rho/Gamma NaN
+        dTdz = np.array([1e-2])  # strong gradient -> modest, finite K_T
+        with np.errstate(all="ignore"):
+            r = mixing_coefficients(eps, chi, N2, dTdz)
+        assert np.isfinite(r.K_T[0])  # K_T survives in unstratified water
+        assert np.isnan(r.K_rho[0])
+
+
 class TestBinCoordinateMeters:
     """binning.py: a pressure-only profile is binned on depth in METRES."""
 
