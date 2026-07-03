@@ -200,6 +200,41 @@ _DEPTH_CANDIDATES = ("depth", "P", "P_mean")
 _DEFAULT_BIN_LATITUDE = 45.0
 
 
+def _decoded(var) -> np.ndarray:
+    """Read a ``netCDF4`` variable applying CF mask + scale, fill/missing -> NaN.
+
+    With CF decoding on (see :func:`_load_profile_snapshot`), ``var[:]`` returns a
+    scaled, masked array whenever the variable carries ``_FillValue`` /
+    ``missing_value`` or ``scale_factor`` / ``add_offset``.  We convert masked
+    cells to NaN (``np.ma.filled``) so packed or sentinel-filled *float* data are
+    decoded to physical values instead of being binned as raw counts / fill
+    sentinels.  (2026-07-03 review, GPT-5.5 F2.)
+
+    Exception — plain (non-packed) integer flag bitfields such as ``qc_drop_*``
+    are read RAW, bypassing CF mask/scale.  netCDF4's auto-mask masks any cell
+    equal to the type's *default* fill (255 for ``uint8``) even with no explicit
+    ``_FillValue`` — but 255 is a legal bitfield value (all 8 flags set), and
+    masking it would widen the array to float and defeat the uint OR-pool in
+    :func:`_bin_snapshot` (a bitfield must never be averaged).  Reading these raw
+    preserves the integer dtype and the exact pre-CF-decode values, so their
+    binning is unchanged; only genuinely packed integers (which carry
+    ``scale_factor`` / ``add_offset`` and decode to physical floats) fall through
+    to the float path.  (2026-07-03 adversarial review of F2.)
+    """
+    attrs = var.ncattrs()
+    packed = "scale_factor" in attrs or "add_offset" in attrs
+    if var.dtype.kind in ("u", "i") and not packed:
+        var.set_auto_maskandscale(False)  # per-var override of the dataset default
+        return np.asarray(var[:])
+
+    arr = var[:]
+    # netCDF4 returns a MaskedArray under CF decoding even when nothing is
+    # masked; only widen to float64+NaN when cells are actually filled.
+    if np.ma.isMaskedArray(arr) and np.ma.count_masked(arr):
+        return np.asarray(np.ma.filled(arr.astype(np.float64), np.nan))
+    return np.asarray(arr)
+
+
 def _load_profile_snapshot(profile_file: Path) -> dict | None:
     """Read a profile NC once and return a snapshot for binning.
 
@@ -218,24 +253,26 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
     establishment) dominated the per-call cost and we don't need any
     of it — we read a fixed shape of float arrays plus four scalars.
     Time variables are filtered out via the CF ``units`` convention
-    (' since ' substring); ``set_auto_mask(False)`` and
-    ``set_auto_scale(False)`` make the read return raw ndarrays
-    matching what xarray's ``decode_cf=False`` path produced
-    bit-for-bit.
+    (' since ' substring).  CF mask + scale decoding is left ON (the
+    ``netCDF4`` default): reads go through :func:`_decoded`, so
+    ``_FillValue`` / ``missing_value`` cells become NaN and
+    ``scale_factor`` / ``add_offset`` packing is applied.  This matches
+    xarray's ``decode_cf=True`` path — external, packed, or
+    partially-written files bin their physical values, not raw sentinels
+    or packed integer counts.
     """
     import netCDF4 as nc
 
     ds = nc.Dataset(str(profile_file), "r")
     try:
-        ds.set_auto_mask(False)
-        ds.set_auto_scale(False)
+        ds.set_auto_maskandscale(True)  # CF decode; _decoded fills masked -> NaN
 
         depth_var = next(
             (n for n in _DEPTH_CANDIDATES if n in ds.variables), None
         )
         if depth_var is None:
             return None
-        depth = np.asarray(ds.variables[depth_var][:])
+        depth = _decoded(ds.variables[depth_var])
 
         scalars: dict[str, float] = {}
         scalar_attrs: dict[str, dict] = {}
@@ -245,7 +282,9 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
             sv = ds.variables[sname]
             if sv.shape != ():
                 continue
-            scalars[sname] = float(sv[()])
+            # Fill-safe: a masked/filled scalar becomes NaN rather than crashing
+            # float() or reading a raw sentinel as a real lat/lon/time.
+            scalars[sname] = float(np.ma.filled(np.ma.asarray(sv[()]), np.nan))
             scalar_attrs[sname] = {
                 a: getattr(sv, a)
                 for a in sv.ncattrs()
@@ -288,7 +327,7 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
             # Skip non-numeric variables (string-typed labels, etc.).
             if var.dtype.kind not in ("f", "i", "u"):
                 continue
-            data[str(vname)] = np.asarray(var[:])
+            data[str(vname)] = _decoded(var)
     finally:
         ds.close()
 

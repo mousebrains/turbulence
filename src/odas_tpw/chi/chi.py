@@ -175,6 +175,27 @@ def _valid_wavenumber_mask(
     return mask
 
 
+def _below_detection(
+    spec_obs: np.ndarray,
+    noise: np.ndarray,
+    K: np.ndarray,
+    K_AA: float,
+    min_points: int = 3,
+) -> bool:
+    """True when a window is a non-detection.
+
+    Fewer than ``min_points`` bins clear 2x the noise floor within the resolved
+    band ``(0, K_AA]`` — the strict ``above_noise`` criterion of
+    :func:`_valid_wavenumber_mask` *without* its whole-band fallback.  Used to
+    reject noise-only windows before any chi path (the known-epsilon integral or
+    an MLE Batchelor fit) can shape a curve to the noise floor and emit a
+    spurious finite chi whose figure of merit (model fitted to obs) sits near 1.
+    Defined once so all three chi paths share the identical detection limit.
+    """
+    above_noise = (spec_obs > 2.0 * noise) & (K > 0) & (K <= K_AA)
+    return int(np.sum(above_noise)) < min_points
+
+
 # ---------------------------------------------------------------------------
 # Method 1: Chi from known epsilon
 # ---------------------------------------------------------------------------
@@ -243,6 +264,22 @@ def _chi_from_epsilon(
 
     # Find integration limit: where observed meets noise
     K_AA = f_AA / speed
+
+    # Signal-presence gate.  A window whose gradient spectrum never rises above
+    # the FP07 electronics noise floor carries no resolvable thermal signal.
+    # Without this gate the log-space fit below still returns a small positive
+    # chi that merely fits the noise, and the figure of merit cannot catch it
+    # (fom = obs / model with the model fitted to obs, so fom ~= 1 for the noise
+    # floor itself).  Reject such windows as non-detections here, at the source,
+    # so they become NaN and drop out of chiMean rather than biasing its low
+    # tail and the derived mixing products.  (2026-07-03 review, GPT-5.5 F1.)
+    if _below_detection(spec_obs, noise_K, K, K_AA):
+        warnings.warn(
+            "No thermal signal above the FP07 noise floor; chi is a non-detection",
+            stacklevel=2,
+        )
+        return ChiEpsilonResult(np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan)
+
     valid = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=3)
     if np.sum(valid) < 3:
         warnings.warn("Too few valid wavenumber points for chi integration", stacklevel=2)
@@ -424,6 +461,16 @@ def _mle_fit_kB(
     grad_func, _q = _spectrum_func(spectrum_model)
     grad_func = functools.partial(grad_func, kappa_T=kappa_T)
 
+    # Signal-presence gate (mirrors Method 1): reject a noise-only window before
+    # the MLE fits a Batchelor curve to noise and returns a spurious finite
+    # chi/kB.  (2026-07-03 adversarial review of the Method-1 gate.)
+    if _below_detection(spec_obs, noise_K, K, f_AA / speed):
+        warnings.warn(
+            "No thermal signal above the FP07 noise floor; chi is a non-detection",
+            stacklevel=2,
+        )
+        return ChiFitResult(np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan)
+
     kB_best, fit_mask, K_fit = _mle_find_kB(
         spec_obs,
         K,
@@ -511,6 +558,15 @@ def _iterative_fit(
     the last valid wavenumber (noise/anti-aliasing criterion) and is not
     refined between iterations.
 
+    Note: ``k_l`` is only the lower edge of the *integration* band, not a hard
+    clip — :func:`_variance_correction` adds back the modeled variance below
+    ``k_l``, so the recovered chi is insensitive to the exact 0.04 value when
+    the model matches the observed spectrum.  A 2026-07-03 review confirmed
+    numerically that ``chi`` is invariant (to <0.001%) across coefficients
+    0.02-0.16 for a model-consistent spectrum; only a model-vs-observed shape
+    mismatch in the low-k sliver below ``k_l`` makes it matter, a second-order
+    effect.  So this is a documented-provenance note, not a correctness risk.
+
     Parameters
     ----------
     spec_obs : ndarray
@@ -532,6 +588,20 @@ def _iterative_fit(
 
     # Initial integration limits
     K_AA = f_AA / speed
+
+    # Signal-presence gate (mirrors Method 1's _chi_from_epsilon): a window with
+    # fewer than 3 bins above 2x the noise floor is a non-detection. Without it
+    # the MLE below fits a Batchelor curve to noise and, together with the weak
+    # band_has_signal check (spec_obs > 1x noise), emits a spurious finite
+    # chi/kB. Reject at the source -> NaN, dropping it from chiMean rather than
+    # biasing the low tail.  (2026-07-03 adversarial review of the Method-1 gate.)
+    if _below_detection(spec_obs, noise_K, K, K_AA):
+        warnings.warn(
+            "No thermal signal above the FP07 noise floor; chi is a non-detection",
+            stacklevel=2,
+        )
+        return ChiFitResult(np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan)
+
     valid = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=6)
 
     valid_idx = np.where(valid)[0]

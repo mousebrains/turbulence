@@ -31,11 +31,13 @@ def _sanitize_autospectra(clean_UU: np.ndarray) -> np.ndarray:
       see consistent non-negative power.
 
     Operates on the last two (n_sh, n_sh) axes, so it works for both the single
-    (n_freq, ...) and batched (n_win, n_freq, ...) shapes.
+    (n_freq, ...) and batched (n_win, n_freq, ...) shapes.  Only the diagonal is
+    touched (and taken real — an auto-spectrum is real by definition), so a
+    complex ``clean_UU`` keeps its off-diagonal cleaned cross-spectra intact.
     """
     n_sh = clean_UU.shape[-1]
     for i in range(n_sh):
-        diag_i = clean_UU[..., i, i]
+        diag_i = np.real(clean_UU[..., i, i])
         clean_UU[..., i, i] = np.where(
             ~np.isfinite(diag_i), np.nan, np.where(diag_i < 0, 0.0, diag_i)
         )
@@ -174,7 +176,11 @@ def clean_shear_spec(
         n_freq_fb = len(F)
         AA = np.zeros((n_freq_fb, n_ac, n_ac), dtype=np.complex128)
         UA = np.zeros((n_freq_fb, n_sh, n_ac), dtype=np.complex128)
-        return CleanShearResult(np.real(UU), AA, UU, UA, F)
+        # Keep the fallback consistent with the cleaned path (Gem-D-c): return a
+        # complex matrix with a sanitized real diagonal rather than np.real(UU),
+        # so clean_UU has one dtype across code paths and the off-diagonal is not
+        # silently dropped here.  .copy() so we don't mutate the raw UU field.
+        return CleanShearResult(_sanitize_autospectra(UU.copy()), AA, UU, UA, F)
     assert UU is not None and AA is not None  # always returned when y is provided
 
     # UU, AA, UA are complex; extract real diagonal for auto-spectra
@@ -198,7 +204,11 @@ def clean_shear_spec(
             except np.linalg.LinAlgError:
                 clean_UU[f] = np.nan
 
-    clean_UU = _sanitize_autospectra(np.real(clean_UU))
+    # Keep clean_UU complex: sanitize only the (real) diagonal auto-spectra, so
+    # the off-diagonal cleaned cross-spectra are preserved for callers that want
+    # them (e.g. cross-probe coherence). Current consumers take np.real of the
+    # diagonal, which is numerically unchanged.  (2026-07-03 review, Gem-D-c.)
+    clean_UU = _sanitize_autospectra(clean_UU)
     clean_UU = _nan_singular_bins(clean_UU, AA)
 
     # Bias correction (ODAS Technical Note 61, Eq. 3)
@@ -225,7 +235,10 @@ def clean_shear_spec_batch(
     Returns
     -------
     clean_UU : ndarray, shape (n_windows, n_freq, n_shear, n_shear)
-        Cleaned shear spectral matrices (real).
+        Cleaned shear spectral matrices. Complex: the diagonal auto-spectra are
+        real (and non-negative), the off-diagonal cleaned cross-spectra retain
+        their imaginary part. Consumers of the auto-spectra take ``np.real`` of
+        the diagonal.
     F : ndarray, shape (n_freq,)
         Frequency vector [Hz].
     """
@@ -264,7 +277,9 @@ def clean_shear_spec_batch(
                     # Singular AA: NaN the bin rather than keep the raw UU.
                     clean_UU[w, fi] = np.nan
 
-    clean_UU = _sanitize_autospectra(np.real(clean_UU))
+    # Sanitize only the real diagonal; off-diagonal cleaned cross-spectra stay
+    # complex for future cross-probe consumers. (2026-07-03 review, Gem-D-c.)
+    clean_UU = _sanitize_autospectra(clean_UU)
     clean_UU = _nan_singular_bins(clean_UU, AA)
 
     # Bias correction

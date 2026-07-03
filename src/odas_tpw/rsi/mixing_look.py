@@ -155,7 +155,13 @@ class MixingLookViewer(ProfileViewer):
 
     def _mixing_chi(self, d) -> np.ndarray:
         """Per-window chi for mixing: mean(Batchelor, Kraichnan) per thermistor,
-        then geometric mean across thermistors (matching chi_final)."""
+        then geometric mean across thermistors.
+
+        Diagnostic approximation only: this pools finite, positive probes but
+        does NOT apply the fom / K_max_ratio spectral QC that the published
+        ``L4ChiData.chi_final`` now uses (2026-07-03 review, Gemini C), so it can
+        differ from the reported chi for windows with a poorly-fit thermistor.
+        """
         chi_b = d["chi_batchelor"]  # (n_therm, n_win)
         chi_k = d["chi_kraichnan"]
         n_therm, n_win = chi_b.shape

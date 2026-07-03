@@ -125,6 +125,18 @@ class TestNasmythGrid:
         result = grid.interp_g2(np.float64(0.01))
         assert isinstance(result, (float, np.floating))
 
+    def test_zero_wavenumber_emits_no_log10_warning(self):
+        """A k=0 (DC) entry in the 1-D hot path must not emit a divide-by-zero
+        log10 RuntimeWarning; the OOR cell is overwritten and stays correct.
+        (2026-07-03 review, Gem-D-a.)"""
+        grid = NasmythGrid()
+        x = np.array([0.0, 1e-3, 0.5, 2.0])  # 1-D float64 -> hot path
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            result = grid.interp_g2(x)
+        assert np.all(np.isfinite(result))
+        assert result[0] == 0.0  # nasmyth_nondim(0) == 0
+
 
 class TestNasmythGridFunction:
     """Tests for nasmyth_grid() — drop-in replacement for nasmyth()."""

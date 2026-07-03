@@ -363,13 +363,18 @@ class TestCleanShearSpecBatch:
         )
         np.testing.assert_allclose(clean_batch[0], clean_ref, atol=1e-10)
 
-    def test_cleaned_spectra_real(self):
+    def test_cleaned_spectra_diagonal_real(self):
+        """Batched clean_UU is complex (off-diagonal cross-spectra preserved),
+        but the diagonal auto-spectra are real-valued. (2026-07-03 Gem-D-c.)"""
         from odas_tpw.scor160.goodman import clean_shear_spec_batch
 
         rng = np.random.default_rng(42)
         d = self._make_windows(rng)
         clean, _ = clean_shear_spec_batch(d["accel"], d["shear"], 256, 512.0)
-        assert clean.dtype in (np.float64, np.float32)
+        assert np.iscomplexobj(clean)
+        diag = np.diagonal(clean, axis1=-2, axis2=-1)
+        finite = np.isfinite(diag)
+        assert np.allclose(diag[finite].imag, 0.0)
 
     def test_diagonal_positive(self):
         """Cleaned auto-spectra (diagonal) should be positive for well-conditioned data."""
@@ -380,7 +385,7 @@ class TestCleanShearSpecBatch:
         clean, _ = clean_shear_spec_batch(d["accel"], d["shear"], 256, 512.0)
         # Diagonal elements should be mostly positive
         for ch in range(2):
-            diag = clean[:, 1:, ch, ch]  # skip DC
+            diag = np.real(clean[:, 1:, ch, ch])  # skip DC; auto-spectrum is real
             frac_positive = np.mean(diag > 0)
             assert frac_positive > 0.9
 

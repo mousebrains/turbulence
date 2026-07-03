@@ -227,3 +227,28 @@ class TestDespikeReturnTypes:
         signal[7000] = -50.0
         _, spikes, _, _ = despike(signal, fs)
         assert np.all(np.diff(spikes) >= 0)
+
+
+class TestDespikeBoundaryNaN:
+    """A spike at the array boundary keeps the deliberate MATLAB-parity NaN,
+    but is now surfaced with a warning rather than injected silently.
+    (2026-07-03 review, Gem-D-b.)"""
+
+    def test_boundary_spike_warns_and_keeps_nan(self):
+        rng = np.random.default_rng(1)
+        dv = rng.standard_normal(30) * 0.001
+        dv[29] += 100.0  # spike at the last sample -> empty after-region
+        with pytest.warns(RuntimeWarning, match="adjacent to the array boundary"):
+            y, _spikes = _single_despike(dv, thresh=8.0, smooth=150.0, fs=512.0, N=20)
+        # MATLAB parity preserved: the un-interpolable boundary run is NaN, not
+        # fabricated data.
+        assert np.any(np.isnan(y))
+
+    def test_interior_spike_does_not_warn(self):
+        rng = np.random.default_rng(2)
+        dv = rng.standard_normal(2000) * 0.001
+        dv[1000] += 100.0  # interior spike has clean neighbors on both sides
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            y, _spikes = _single_despike(dv, thresh=8.0, smooth=0.5, fs=512.0, N=20)
+        assert not np.any(np.isnan(y))

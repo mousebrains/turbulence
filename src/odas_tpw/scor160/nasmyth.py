@@ -130,7 +130,11 @@ class NasmythGrid:
             # cells with the direct-formula result.  This avoids the cost
             # of constructing a boolean-indexed sub-array for the in-range
             # case (which dominates when nearly all values are in range).
-            log10_g2 = np.interp(np.log10(x), self._log10_x, self._log10_g2)
+            # log10 runs on the whole array (incl. out-of-range x<=0, e.g. a k=0
+            # DC bin); those cells are overwritten below, so silence the
+            # divide-by-zero / invalid warnings they would otherwise emit.
+            with np.errstate(divide="ignore", invalid="ignore"):
+                log10_g2 = np.interp(np.log10(x), self._log10_x, self._log10_g2)
             result = 10.0**log10_g2
             if not in_range_mask.all():
                 result[~in_range_mask] = _nasmyth_g2(x[~in_range_mask])

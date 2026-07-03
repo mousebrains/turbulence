@@ -144,12 +144,20 @@ class TestCleanShearSpec:
             uncleaned_power = np.sum(np.real(UU[:, i, i]))
             assert clean_power < uncleaned_power
 
-    def test_clean_spec_real(self):
-        """Cleaned spectrum diagonal should be real."""
+    def test_clean_spec_diagonal_real_offdiagonal_preserved(self):
+        """The cleaned auto-spectra (diagonal) are real & non-negative; the
+        off-diagonal cleaned cross-spectra keep their imaginary part (Gem-D-c).
+        """
         n, fs, nfft = 4096, 512.0, 256
         accel, shear = _make_signals(n, fs)
         clean_UU, _, _, _, _ = clean_shear_spec(accel, shear, nfft, fs)
-        assert clean_UU.dtype == np.float64
+        # Diagonal auto-spectra are real-valued (zero imaginary) and >= 0.
+        diag = np.diagonal(clean_UU, axis1=-2, axis2=-1)
+        finite = np.isfinite(diag)
+        assert np.allclose(diag[finite].imag, 0.0)
+        assert np.all(diag[finite].real >= 0.0)
+        # The off-diagonal cross-spectrum is no longer forced real.
+        assert np.iscomplexobj(clean_UU)
 
     def test_no_accel_no_cleaning(self):
         """With zero accelerometer signal, cleaned = uncleaned."""
@@ -177,6 +185,12 @@ class TestCleanShearSpec:
             clean_UU, _AA, _UU, _UA, _F = clean_shear_spec(accel, shear, 256, 100.0)
             assert len(w) >= 1
         assert clean_UU.shape[0] > 0  # should return something
+        # Fallback dtype matches the cleaned path (complex, real diagonal) so
+        # clean_UU is dtype-consistent across code paths (Gem-D-c).
+        assert np.iscomplexobj(clean_UU)
+        diag = np.diagonal(clean_UU, axis1=-2, axis2=-1)
+        finite = np.isfinite(diag)
+        assert np.allclose(diag[finite].imag, 0.0)
 
 
 class TestCleanShearSpecBatch:
