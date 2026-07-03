@@ -116,7 +116,23 @@ def _write_binned_or_clear(
     if ds.data_vars:
         if manifest is not None:
             ds = ds.assign_attrs(_input_manifest=manifest)
-        ds.to_netcdf(out)
+        # Atomic write: to a temp file in the same dir, then os.replace into
+        # place. A direct ds.to_netcdf(out) interrupted mid-payload (ENOSPC /
+        # SMB drop / Ctrl-C) leaves a truncated binned.nc whose _input_manifest
+        # header already validates as cache-current, permanently publishing
+        # fill data with no error (audit r1-5). os.replace is atomic within a
+        # filesystem, so a partial write never becomes the live file. (Mirrors
+        # _write_marker and trim.py; the temp file shares out_dir's filesystem.)
+        tmp = out.with_name(f".binned.nc.{os.getpid()}.tmp")
+        try:
+            ds.to_netcdf(tmp)
+            os.replace(tmp, out)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     elif out.exists():
         out.unlink()
 
