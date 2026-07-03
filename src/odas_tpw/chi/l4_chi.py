@@ -13,7 +13,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from odas_tpw.chi.batchelor import KAPPA_T
 from odas_tpw.chi.chi import (
     _chi_from_epsilon,
     _iterative_fit,
@@ -73,9 +72,9 @@ def _process_l4_chi(
     l3_chi : L3ChiData
         Level-3 temperature gradient spectra.
     chi_func : callable
-        ``chi_func(j, ci, spec_obs, noise_K, K, W, nu, tau0, H2, _h2, f_AA_eff)``
-        returns ``(chi_val, eps_val, kB_val, K_max_val, fom_val, K_max_ratio_val)``
-        or None to skip.
+        ``chi_func(j, ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2,
+        f_AA_eff)`` returns ``(chi_val, eps_val, kB_val, K_max_val, fom_val,
+        K_max_ratio_val)`` or None to skip.
     method_name : str
         "epsilon" or "fit".
     f_AA : float
@@ -98,6 +97,7 @@ def _process_l4_chi(
         K = l3_chi.kcyc[:, j]
         W = l3_chi.pspd_rel[j]
         nu = l3_chi.nu[j]
+        kappa_T = float(l3_chi.kappa_T[j])
         tau0 = l3_chi.tau0[j]
         H2 = l3_chi.H2[j]
 
@@ -105,7 +105,9 @@ def _process_l4_chi(
             spec_obs = l3_chi.gradt_spec[ci, :, j]
             noise_K = l3_chi.noise_spec[ci, :, j]
 
-            result = chi_func(j, ci, spec_obs, noise_K, K, W, nu, tau0, H2, _h2, f_AA_eff)
+            result = chi_func(
+                j, ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff
+            )
             if result is None:
                 continue
 
@@ -169,7 +171,7 @@ def process_l4_chi_epsilon(
     # with an estimate arbitrarily far away.
     max_dt = float(np.median(np.diff(np.sort(epsi_times)))) if len(epsi_times) > 1 else 30.0
 
-    def _chi_eps_func(j, _ci, spec_obs, noise_K, K, W, nu, tau0, H2, _h2, f_AA_eff):
+    def _chi_eps_func(j, _ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff):
         if len(epsi_times) > 0:
             idx_eps = int(np.argmin(np.abs(epsi_times - chi_times[j])))
             if abs(epsi_times[idx_eps] - chi_times[j]) > max_dt:
@@ -191,6 +193,7 @@ def process_l4_chi_epsilon(
             f_AA_eff,
             W,
             spectrum_model,
+            kappa_T,
         )
         return chi_val, epsilon_val, kB_val, K_max_val, fom_val, K_max_ratio_val
 
@@ -222,7 +225,7 @@ def process_l4_chi_fit(
     L4ChiData
     """
 
-    def _chi_fit_func(_j, _ci, spec_obs, noise_K, K, W, nu, tau0, H2, _h2, f_AA_eff):
+    def _chi_fit_func(_j, _ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff):
         if fit_method == "iterative":
             kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val = _iterative_fit(
                 spec_obs,
@@ -235,6 +238,7 @@ def process_l4_chi_fit(
                 f_AA_eff,
                 W,
                 spectrum_model,
+                kappa_T,
             )
         else:
             mask = (K > 0) & (f_AA_eff / W >= K)
@@ -242,7 +246,7 @@ def process_l4_chi_fit(
                 return None
             chi_obs = (
                 6
-                * KAPPA_T
+                * kappa_T
                 * np.trapezoid(
                     np.maximum(spec_obs[mask] - noise_K[mask], 0),
                     K[mask],
@@ -258,7 +262,7 @@ def process_l4_chi_fit(
             # Mirrors _iterative_fit's convergence loop. (M-6)
             result = _mle_fit_kB(
                 spec_obs, K, chi_obs, nu, noise_K, H2, tau0, _h2,
-                f_AA_eff, W, spectrum_model,
+                f_AA_eff, W, spectrum_model, kappa_T,
             )
             kB_prev = result.kB
             for _ in range(2):
@@ -266,7 +270,7 @@ def process_l4_chi_fit(
                     break
                 result = _mle_fit_kB(
                     spec_obs, K, result.chi, nu, noise_K, H2, tau0, _h2,
-                    f_AA_eff, W, spectrum_model,
+                    f_AA_eff, W, spectrum_model, kappa_T,
                 )
                 if (
                     np.isfinite(result.kB) and np.isfinite(kB_prev) and kB_prev > 0

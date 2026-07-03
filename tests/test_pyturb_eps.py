@@ -137,6 +137,7 @@ class TestProcessProfile:
             pspd_rel=np.full(n_spec, 0.7),
             section_number=np.ones(n_spec),
             nu=np.full(n_spec, 1.1e-6),
+            kappa_T=np.full(n_spec, 1.4e-7),
             kcyc=np.tile(np.arange(n_freq, dtype=float)[:, None], (1, n_spec)),
             freq=np.arange(n_freq, dtype=float),
             gradt_spec=np.ones((2, n_freq, n_spec)) * 1e-4,

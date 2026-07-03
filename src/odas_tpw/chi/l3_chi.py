@@ -24,6 +24,7 @@ from odas_tpw.chi.fp07 import (
 from odas_tpw.chi.l2_chi import L2ChiData
 from odas_tpw.scor160.goodman import clean_shear_spec_batch
 from odas_tpw.scor160.io import L3Params
+from odas_tpw.scor160.ocean import kappa_T as kappa_T_TSP
 from odas_tpw.scor160.ocean import visc, visc35
 from odas_tpw.scor160.spectral import csd_matrix_batch
 
@@ -43,6 +44,7 @@ class _SectionResult:
     H2: list = field(default_factory=list)
     tau0: list = field(default_factory=list)
     nu: list = field(default_factory=list)
+    kappa_T: list = field(default_factory=list)
 
 
 @dataclass
@@ -55,6 +57,7 @@ class L3ChiData:
     pspd_rel: np.ndarray  # (N_SPECTRA,), mean speed per window
     section_number: np.ndarray  # (N_SPECTRA,)
     nu: np.ndarray  # (N_SPECTRA,), kinematic viscosity
+    kappa_T: np.ndarray  # (N_SPECTRA,), molecular thermal diffusivity [m^2/s]
 
     kcyc: np.ndarray  # (N_WAVENUMBER, N_SPECTRA)
     freq: np.ndarray  # (N_FREQ,), frequency vector [Hz]
@@ -190,11 +193,19 @@ def _process_section_chi(
             [visc(T_means[i], sal_means[i], P_means[i]) for i in range(n_windows)],
             dtype=np.float64,
         )
+        # Molecular thermal diffusivity per window from the same T/S/P. chi is
+        # linear in kappa_T (chi = 6*kappa_T*I) and epsilon_T ∝ kappa_T², so the
+        # T-dependence (~+8% warm vs the old fixed 1.4e-7) propagates directly.
+        kappa_T_all = np.asarray(
+            kappa_T_TSP(T_means, sal_means, P_means), dtype=np.float64
+        )
     else:
         nu_all = np.asarray(
             [visc35(T_means[i]) for i in range(n_windows)],
             dtype=np.float64,
         )
+        # No salinity supplied: use the S=35, P=0 reference (matches visc35).
+        kappa_T_all = np.asarray(kappa_T_TSP(T_means), dtype=np.float64)
 
     K_all = F_const[:, np.newaxis] / speed_means[np.newaxis, :]
 
@@ -237,6 +248,7 @@ def _process_section_chi(
         acc.speed.append(speed_means[w])
         acc.section.append(sec_id)
         acc.nu.append(nu_all[w])
+        acc.kappa_T.append(kappa_T_all[w])
         acc.kcyc.append(K_all[:, w])
         acc.H2.append(H2_all[w])
         acc.tau0.append(tau0_all[w])
@@ -330,6 +342,7 @@ def process_l3_chi(
             pspd_rel=np.array([]),
             section_number=np.array([]),
             nu=np.array([]),
+            kappa_T=np.array([]),
             kcyc=np.zeros((n_freq, 0)),
             freq=F_const,
             gradt_spec=np.zeros((n_temp, n_freq, 0)),
@@ -347,6 +360,7 @@ def process_l3_chi(
     speed_out = np.array(acc.speed)
     section_out = np.array(acc.section)
     nu_out = np.array(acc.nu)
+    kappa_T_out = np.array(acc.kappa_T)
     tau0_out = np.array(acc.tau0)
 
     kcyc_out = np.column_stack(acc.kcyc)  # (n_freq, n_spec)
@@ -362,6 +376,7 @@ def process_l3_chi(
         pspd_rel=speed_out,
         section_number=section_out,
         nu=nu_out,
+        kappa_T=kappa_T_out,
         kcyc=kcyc_out,
         freq=F_const,
         gradt_spec=gradt_spec_out,

@@ -30,7 +30,13 @@ chi = 6 * kappa_T * integral_0^inf  Phi_{dT/dz}(k)  dk       [K^2/s]
 where:
 
 - `Phi_{dT/dz}(k)` is the one-dimensional temperature gradient wavenumber spectrum in `[(K/m)^2 / cpm]`
-- `kappa_T = 1.4e-7 m^2/s` is the molecular thermal diffusivity of seawater
+- `kappa_T` is the molecular thermal diffusivity of seawater, evaluated
+  **per window** at the window-mean temperature/salinity/pressure via
+  [`scor160.ocean.kappa_T`](../src/odas_tpw/scor160/ocean.py) (Sharqawy 2010 /
+  Jamieson–Tudhope 1970 thermal conductivity ÷ gsw density·specific-heat). It
+  ranges from ~`1.39e-7` at −1 °C to ~`1.51e-7 m^2/s` at 32 °C. The fixed
+  `1.4e-7` (`chi.batchelor.KAPPA_T`) is now only the backward-compatible
+  fallback default — see §11.
 - `k` is the cyclic wavenumber in cycles per metre (cpm)
 - The factor 6 arises from the isotropy assumption: 3 spatial dimensions times a factor of 2 from the definition involving the full gradient tensor
 
@@ -564,20 +570,23 @@ The profile is divided into overlapping windows of length `diss_length` samples 
 
 | Symbol | Value | Description | Source |
 |--------|-------|-------------|--------|
-| `kappa_T` | `1.4e-7 m^2/s` | Molecular thermal diffusivity of seawater (**fixed**, ~15 °C value) | Standard value |
+| `kappa_T(T,S,P)` | `1.39e-7`–`1.51e-7 m^2/s` | Molecular thermal diffusivity of seawater, **per-window** temperature-dependent | [`scor160.ocean.kappa_T`](../src/odas_tpw/scor160/ocean.py); Sharqawy 2010 / Jamieson–Tudhope 1970 + gsw |
+| `KAPPA_T` | `1.4e-7 m^2/s` | Fixed ~15 °C fallback default only (used when no per-window value is supplied) | Standard value |
 | `q_B` | `3.7` | Batchelor universal constant | [Oakey 1982](https://doi.org/10.1175/1520-0485(1982)012%3C0256:DOTROD%3E2.0.CO;2) |
 | `q_K` | `5.26` | Kraichnan universal constant | [Bogucki et al. 1997](https://doi.org/10.1017/S0022112097005727) |
 
-> **Known bias — fixed `kappa_T` (audit 2026-07-01).** `kappa_T` is held at the
-> constant `1.4e-7 m²/s` at every use, but the molecular thermal diffusivity is
-> temperature-dependent (`kappa_T = k/(ρ·c_p)`): ≈`1.40e-7` at 15 °C rising to
-> ≈`1.50e-7` at 28 °C (**+7 %**). Because `chi = 6·kappa_T·∫…` and
-> `epsilon_T = (2π·kB)⁴·ν·kappa_T²`, the fixed value biases **chi ≈ −6.5 %** and
-> **Method-2 epsilon_T ≈ −12.6 %** (Method-1 `kB` high ≈ +3.5 %) in ARCTERX warm
-> (~28 °C) surface water — while `ν` in the same pipeline **is** temperature-
-> resolved (`visc(T, S, P)`). Threading a per-window `kappa_T(T_mean, S, P)`
-> through the ~13 `KAPPA_T` sites in `chi.py`/`l4_chi.py` is the correct fix; it
-> changes every published chi/epsilon_T value and is deferred pending review.
+> **Temperature-dependent `kappa_T` (audit 2026-07-01, fixed 2026-07-03).** The
+> molecular thermal diffusivity `kappa_T = k/(ρ·c_p)` is temperature-dependent:
+> ≈`1.39e-7` at −1 °C, ≈`1.45e-7` at 15 °C, ≈`1.50e-7` at 28 °C, ≈`1.51e-7` at
+> 32 °C. It is now evaluated **per window** at the window-mean T/S/P (the same
+> T/S/P already used for `ν`) in the L3 stage and threaded through every chi
+> integration in `chi.py`/`l4_chi.py`. Because `chi = 6·kappa_T·∫…` and
+> `epsilon_T = (2π·kB)⁴·ν·kappa_T²`, this removed a chi bias that ran from
+> **≈ −1 % at −1 °C to ≈ +8 % at 32 °C** (epsilon_T twice that in log-space)
+> against the old fixed `1.4e-7` — e.g. ARCTERX warm (~28 °C) surface chi rises
+> ≈ +7 %. The fixed `KAPPA_T` constant survives only as the fallback default for
+> the `chi.py` functions' `kappa_T=` argument. Verified in
+> [`tests/test_audit_2026_07_robustness.py::TestChiKappaTemperatureDependence`](../tests/test_audit_2026_07_robustness.py).
 
 ### Default instrument parameters
 

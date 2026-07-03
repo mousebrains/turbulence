@@ -60,15 +60,17 @@ def _compute_chi_spectra(
     methods_results is a dict keyed by method name ("M1", "M2-MLE", "M2-Iter"),
     each mapping to a list of per-probe (batch_spec, chi_val, kB_val) tuples.
     """
-    from odas_tpw.chi.batchelor import KAPPA_T
     from odas_tpw.chi.chi import _mle_fit_kB
     from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer
     from odas_tpw.chi.fp07 import gradT_noise as _gradT_noise
+    from odas_tpw.scor160.ocean import kappa_T as _kappa_T_TSP
 
     w_sel = select_mid_window(P_fast, sel, fft_length, diss_length=None)
 
     # Per-window mean temperature (was the whole-cast mean -> ~14% visc bias).
     mean_T = float(np.mean(_interp_slow_to_fast(T_slow, len(P_fast))[w_sel]))
+    # T-dependent thermal diffusivity (S=35/P=0 reference for this diagnostic).
+    kappa_T_ql = float(_kappa_T_TSP(mean_T))
     mean_speed = float(np.mean(np.abs(speed_fast[w_sel])))
     if mean_speed < 0.01:
         mean_speed = 0.01
@@ -144,7 +146,7 @@ def _compute_chi_spectra(
         dg_i = diff_gains[ci] if ci < len(diff_gains) else 0.94
         valid = np.isfinite(grad) & (grad > 0) & (K > 0) & (K_AA_chi >= K)
         if np.sum(valid) >= 3:
-            chi_obs = max(6 * KAPPA_T * np.trapezoid(grad[valid], K[valid]), 1e-10)
+            chi_obs = max(6 * kappa_T_ql * np.trapezoid(grad[valid], K[valid]), 1e-10)
             # Pre-compute noise/H2 for _mle_fit_kB
             _tau0 = float(fp07_tau(mean_speed))
             _noise_K_i, _ = _gradT_noise(F, mean_T, mean_speed, fs=fs_fast, diff_gain=dg_i)
@@ -160,6 +162,7 @@ def _compute_chi_spectra(
                 f_AA_chi,
                 mean_speed,
                 spectrum_model,
+                kappa_T_ql,
             )
             spec_mle = spec_raw * H2 if np.isfinite(chi_val) else np.full(n_freq, np.nan)
             methods_results["M2-MLE"].append((spec_mle, chi_val, kB_best))

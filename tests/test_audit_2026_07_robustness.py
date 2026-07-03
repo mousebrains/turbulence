@@ -259,6 +259,54 @@ class TestChiSchemaHeadlineVars:
             assert "long_name" in CHI_SCHEMA[name]
 
 
+class TestChiKappaTemperatureDependence:
+    """chi core: chi scales with the per-window kappa_T, epsilon_T with kappa_T^2.
+
+    The old fixed KAPPA_T=1.4e-7 biased chi low in warm water and slightly high
+    in cold water; the threaded ocean.kappa_T(T,S,P) removes that.
+    """
+
+    def _synthetic_obs(self, kap):
+        from odas_tpw.chi.batchelor import batchelor_kB, kraichnan_grad
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
+
+        W, nu, fs, nfft = 0.7, 1.0e-6, 512.0, 1024
+        F = np.arange(nfft // 2 + 1) * fs / nfft
+        K = F / W
+        K[0] = 1e-9
+        tau0 = float(fp07_tau(W))
+        H2 = fp07_transfer(F, tau0)
+        noise_K, _ = gradT_noise(F, 15.0, W, fs=fs, diff_gain=0.94)
+        kB_true = float(batchelor_kB(1e-8, nu, kap))
+        spec_clean = kraichnan_grad(K, kB_true, 2e-6, kappa_T=kap)
+        return spec_clean * H2 + noise_K, K, nu, noise_K, H2, tau0, fp07_transfer, W
+
+    def test_kappa_T_is_temperature_dependent(self):
+        from odas_tpw.scor160.ocean import kappa_T
+
+        warm, cold = float(kappa_T(28.0)), float(kappa_T(-1.0))
+        assert warm > cold  # thermal conductivity rises with T
+        assert 1.45e-7 < warm < 1.55e-7  # ~1.498e-7 (Sharqawy/Jamieson-Tudhope)
+        assert 1.35e-7 < cold < 1.40e-7  # ~1.385e-7
+
+    def test_method2_chi_and_epsilonT_scale_with_kappa(self):
+        from odas_tpw.chi.batchelor import KAPPA_T
+        from odas_tpw.chi.chi import _iterative_fit
+        from odas_tpw.scor160.ocean import kappa_T
+
+        kap = float(kappa_T(28.0))  # warm: kap > KAPPA_T
+        spec_obs, K, nu, noise_K, H2, tau0, h2f, W = self._synthetic_obs(kap)
+        fixed = _iterative_fit(spec_obs, K, nu, noise_K, H2, tau0, h2f, 88.2, W, "kraichnan", KAPPA_T)
+        true = _iterative_fit(spec_obs, K, nu, noise_K, H2, tau0, h2f, 88.2, W, "kraichnan", kap)
+        r = kap / KAPPA_T
+        # chi is linear in kappa_T (kB fit is kappa_T-independent in Method 2).
+        assert true.chi / fixed.chi == pytest.approx(r, rel=0.02)
+        # epsilon_T = (2*pi*kB)^4 * nu * kappa_T^2 -> exact square law.
+        assert true.epsilon / fixed.epsilon == pytest.approx(r**2, rel=1e-6)
+        # Using the true kappa_T recovers the injected chi=2e-6 more accurately.
+        assert true.chi == pytest.approx(2e-6, rel=0.05)
+
+
 class TestMixingPerVariableCeilings:
     """mixing.py: K_T and Gamma get their own implausibility ceilings, not K_rho's."""
 
