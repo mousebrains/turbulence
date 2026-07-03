@@ -37,7 +37,17 @@ def run_bin(args: argparse.Namespace) -> None:
     binned_list: list[xr.Dataset] = []
     metadata_list: list[dict] = []
 
+    # pyturb-cli bins dissipation with the GEOMETRIC (log-space) mean for
+    # Jesse-parity. NOTE (audit 2026-07-01): this is the per-bin MEDIAN of a
+    # lognormal, systematically LOWER than the ARITHMETIC-mean binned products
+    # from the perturb/rsi pipelines on the same data (by exp(-sigma_ln^2/2):
+    # ~0.61x at sigma_ln=1.0, ~0.32x at 1.5). Do not mix these two products.
     log_mean_vars = {"eps_1", "eps_2", "eps_final", "epsilon", "chi", "chi_final", "epsi_final"}
+    logger.info(
+        "pyturb bin: dissipation (%s) uses the GEOMETRIC mean (median of a "
+        "lognormal), NOT the arithmetic mean used by the perturb/rsi products",
+        ", ".join(sorted(log_mean_vars)),
+    )
 
     for filepath in sorted(paths):
         try:

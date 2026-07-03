@@ -11,7 +11,6 @@ import numpy as np
 
 from odas_tpw.pyturb._compat import (
     check_overwrite,
-    compute_window_parameters,
     load_auxiliary,
     rename_eps_dataset,
 )
@@ -23,9 +22,8 @@ def _process_one_file(
     filepath: Path,
     output_dir: Path,
     *,
-    fft_length: int,
-    diss_length: int,
-    overlap: int,
+    fft_len_sec: float,
+    diss_len_sec: float,
     direction: str,
     min_speed: float,
     min_profile_pressure: float,
@@ -41,10 +39,20 @@ def _process_one_file(
     pressure_smoothing: float = 0.25,
 ) -> list[Path]:
     """Process a single file: detect profiles, compute epsilon + gradT spectra."""
+    from odas_tpw.pyturb._compat import compute_window_parameters
     from odas_tpw.pyturb._profind import find_profiles_peaks
     from odas_tpw.rsi.adapter import nc_to_l1data, pfile_to_l1data
     from odas_tpw.rsi.p_file import PFile
     from odas_tpw.scor160.io import L2Params, L3Params
+
+    def _window_for_fs(fs: float):
+        """Convert the requested FFT/diss DURATIONS to sample counts at this
+        file's actual fs (NOT a fixed 512 Hz), so window durations are correct
+        for non-512-Hz instruments."""
+        n_fft, n_diss, _fft_ovlp, diss_ovlp = compute_window_parameters(
+            fft_len_sec, diss_len_sec, fs
+        )
+        return n_fft, n_diss, diss_ovlp
 
     suffix = filepath.suffix.lower()
     stem = filepath.stem
@@ -65,12 +73,15 @@ def _process_one_file(
         speed_tau=1.5,
     )
 
+    # Window sample counts are (re)computed per file from its own fs_fast in
+    # each branch below; seed with the 512 Hz values so L3Params is valid.
+    _n_fft0, _n_diss0, _ovlp0 = _window_for_fs(512.0)
     l3_params = L3Params(
-        fft_length=fft_length,
-        diss_length=diss_length,
-        overlap=overlap,
+        fft_length=_n_fft0,
+        diss_length=_n_diss0,
+        overlap=_ovlp0,
         HP_cut=0.25,
-        fs_fast=512.0,  # will be overwritten below
+        fs_fast=512.0,  # overwritten per-file below
         goodman=goodman,
     )
 
@@ -81,6 +92,9 @@ def _process_one_file(
         fs_fast = pf.fs_fast
         fs_slow = pf.fs_slow
         l3_params.fs_fast = fs_fast
+        l3_params.fft_length, l3_params.diss_length, l3_params.overlap = (
+            _window_for_fs(fs_fast)
+        )
 
         # Detect profiles using peak-finding
         P_slow = pf.channels.get("P_dP", pf.channels.get("P"))
@@ -126,6 +140,9 @@ def _process_one_file(
         fs_fast = l1.fs_fast
         fs_slow = l1.fs_slow
         l3_params.fs_fast = fs_fast
+        l3_params.fft_length, l3_params.diss_length, l3_params.overlap = (
+            _window_for_fs(fs_fast)
+        )
 
         if l1.pres.size == 0:
             logger.error(f"{filepath.name}: no pressure data")
@@ -270,17 +287,26 @@ def run_eps(args: argparse.Namespace) -> None:
         logger.error("No input files found")
         return
 
-    # Convert seconds to samples using Jesse's convention (no power-of-2).
-    # Use 512 Hz as default (standard VMP); will be overridden per-file.
-    fs_default = 512.0
-    fft_length, diss_length, _fft_ovlp, diss_overlap = compute_window_parameters(
-        args.fft_len, args.diss_len, fs_default
-    )
+    # Warn about accepted-but-unimplemented flags rather than silently ignoring
+    # them (audit 2026-07-01): --despike-passes never reaches despike() (which
+    # runs the scor160 default of 10 passes), and --temperature/--speed are read
+    # nowhere.
+    if getattr(args, "despike_passes", None) not in (None, 10):
+        logger.warning(
+            "--despike-passes=%s is not implemented; despike runs the scor160 "
+            "default (10 passes)", args.despike_passes,
+        )
+    if getattr(args, "temperature", None) is not None:
+        logger.warning("-t/--temperature is not implemented and is ignored")
+    if getattr(args, "speed", None) is not None:
+        logger.warning("--speed is not implemented and is ignored")
 
+    # FFT/diss durations (seconds) are converted to sample counts PER FILE using
+    # that file's own fs_fast inside _process_one_file, so window durations are
+    # correct for non-512-Hz instruments.
     common_kwargs = dict(
-        fft_length=fft_length,
-        diss_length=diss_length,
-        overlap=diss_overlap,
+        fft_len_sec=args.fft_len,
+        diss_len_sec=args.diss_len,
         goodman=args.goodman,
         direction=args.direction,
         min_speed=args.min_speed,

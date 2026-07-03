@@ -165,9 +165,9 @@ class TestProcessProfile:
 
 def _common_kwargs(**overrides):
     base = dict(
-        fft_length=512,
-        diss_length=2048,
-        overlap=256,
+        # durations in seconds; converted to samples per-file at the file's fs
+        fft_len_sec=1.0,
+        diss_len_sec=4.0,
         direction="down",
         min_speed=0.2,
         min_profile_pressure=1.0,

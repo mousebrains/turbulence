@@ -54,13 +54,20 @@ def quantile_limits(
     )
 
 
-def ffill_down(z: np.ndarray) -> np.ndarray:
+def ffill_down(z: np.ndarray, max_gap: int = 1) -> np.ndarray:
     """Forward-fill internal NaNs along axis 0 (depth) within each column.
 
     Leading NaNs (above the shallowest valid sample) and trailing NaNs
     (below the deepest valid sample) are left as NaN — colors don't extend
     past either end of a cast. Used so the pcolor reads as a continuous
     profile when there are scattered missing bins inside the cast envelope.
+
+    The fill is bounded to runs of at most ``max_gap`` bins (default 1): an
+    isolated missing bin is cosmetically bridged, but a longer run — e.g. a
+    QC-rejected / pipeline-NaN'd region (``drop_action='nan'``) — is left as a
+    visible gap rather than repainted with the shallower bin's value. Without
+    this bound a "QC applied" figure would silently render the dropped bins as
+    if they had passed.
     """
     z = z.copy()
     n = z.shape[0]
@@ -70,7 +77,7 @@ def ffill_down(z: np.ndarray) -> np.ndarray:
     valid_or_below = np.cumsum(valid[::-1], axis=0)[::-1] > 0
     has_below = np.zeros_like(valid)
     has_below[:-1] = valid_or_below[1:]
-    fill = ~valid & (last_above >= 0) & has_below
+    fill = ~valid & (last_above >= 0) & has_below & ((rows - last_above) <= max_gap)
     cols = np.broadcast_to(np.arange(z.shape[1]), z.shape)
     z[fill] = z[last_above[fill], cols[fill]]
     return z
