@@ -178,3 +178,42 @@ class TestInterpSlowToFast:
             _interp_slow_to_fast(np.array([1.0, 2.0, 3.0]), 3), [1.0, 2.0, 3.0])
         np.testing.assert_array_equal(
             _interp_slow_to_fast(np.array([7.0]), 4), np.full(4, 7.0))
+
+
+class TestWindowedEpsChiTemperature:
+    """Audit r1-13: windowed eps/chi must use a full-length fast temperature."""
+
+    def test_later_profile_has_finite_window_temperature(self, monkeypatch):
+        """A profile whose absolute start is past the segment length must still
+        get finite per-window temperature. Pre-fix (T_fast sized to the segment)
+        every window past index N sliced empty -> mean_T NaN -> all-NaN panels."""
+        from odas_tpw.rsi import quick_look as ql
+
+        n_fast = 40000
+        fft_length = 512
+        P_fast = np.linspace(1.0, 200.0, n_fast)
+        speed_fast = np.full(n_fast, 0.7)
+        shear = np.zeros(n_fast)
+        T_slow = np.linspace(25.0, 10.0, n_fast // 64)  # 25 C surface -> 10 C deep
+
+        seen_T: list[float] = []
+
+        class _EpsStub:
+            epsilon = np.array([1e-8])
+
+        def fake_eps(sh_seg, ac_seg, speed, P, mean_T, *a, **k):
+            seen_T.append(mean_T)
+            return _EpsStub()
+
+        monkeypatch.setattr(ql, "compute_eps_window", fake_eps)
+
+        sel = slice(20000, 30000)  # a later profile: start >> segment length
+        _P, eps_arr, _chi = ql._compute_windowed_eps_chi(
+            [("sh1", shear)], None, [], [], P_fast, T_slow, speed_fast,
+            512.0, sel, fft_length, 100.0, False,
+        )
+        assert seen_T, "no windows computed"
+        assert all(np.isfinite(t) for t in seen_T)  # pre-fix: all NaN
+        # Temperature reflects the segment's depth (~0.5-0.75 of a 25->10 record).
+        assert all(13.0 <= t <= 18.0 for t in seen_T)
+        assert np.all(np.isfinite(eps_arr))  # epsilon panel not all-NaN

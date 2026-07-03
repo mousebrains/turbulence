@@ -220,7 +220,15 @@ def _compute_windowed_eps_chi(
     eps_arr = np.full((n_shear, n_windows), np.nan)
     chi_arr = np.full((n_therm, n_windows), np.nan)
 
-    T_fast = _interp_slow_to_fast(T_slow, N)
+    # Full-length fast temperature: the window loop slices T_fast with ABSOLUTE
+    # fast indices (s = seg_start + idx*step), exactly as it slices the
+    # full-length P_fast/speed_fast/shear arrays. Sizing T_fast to the segment
+    # length N instead made every window past index N empty -> mean_T NaN ->
+    # all-NaN eps/chi for every profile after the first, and compressed the
+    # whole-record temperature onto profile 0's segment (biased viscosity).
+    # Regression from PR #75 M-7; matches viewer_base._interp_slow_to_fast use
+    # (audit r1-13).
+    T_fast = _interp_slow_to_fast(T_slow, len(P_fast))
     f_AA_chi = 0.9 * f_AA  # 10% margin, matching MATLAB get_chi
 
     for idx in range(n_windows):
