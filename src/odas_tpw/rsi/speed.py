@@ -35,6 +35,7 @@ Methods
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -56,7 +57,9 @@ def compute_speed_for_pfile(
         Merged ``speed:`` section from the perturb config.
     vehicle : str | None
         Vehicle string from instrument_info (``"slocum_glider"``,
-        ``"vmp"`` etc.). Used only to auto-resolve ``tau``.
+        ``"vmp"`` etc.). Auto-resolves ``tau`` and, for the ``pressure``
+        method, triggers a bias warning on glide/horizontal platforms
+        (where ``|dP/dt|`` is not the through-water speed).
 
     Returns
     -------
@@ -70,7 +73,7 @@ def compute_speed_for_pfile(
     W_slow     : (n_slow,) float64, dbar/s. Always the smoothed |dP/dt|
                  -- independent of method, useful for QC/binning.
     """
-    from odas_tpw.rsi.vehicle import resolve_tau
+    from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
     from odas_tpw.scor160.profile import compute_speed_fast as _ode_speed
     from odas_tpw.scor160.profile import smooth_fall_rate
 
@@ -89,6 +92,21 @@ def compute_speed_for_pfile(
     W_slow = smooth_fall_rate(P_slow, fs_slow, tau=tau)
 
     if method == "pressure":
+        # For a glider / horizontal platform, |dP/dt| is the VERTICAL speed and
+        # underestimates the along-path flow past the sensors; epsilon has ~U^4
+        # leverage, so this strongly biases epsilon high. The rsi path warns
+        # about this in helpers.prepare_profiles, but perturb precomputes speed
+        # here and so never reaches that warning — emit the equivalent here so
+        # the perturb path is not silent (audit r2-3). VMP (down/up) is unaffected.
+        direction = resolve_direction("auto", vehicle or "")
+        if direction in ("glide", "horizontal"):
+            warnings.warn(
+                f"Vehicle direction '{direction}' but speed.method='pressure' "
+                "computes speed from |dP/dt| (vertical); set speed.method="
+                "'flight' (glider) or 'em' (horizontal), or speed.value — "
+                "epsilon scales as ~U^4 and will be strongly biased",
+                stacklevel=2,
+            )
         speed_fast, _ = _ode_speed(
             P_slow, t_fast, t_slow, fs_fast, fs_slow,
             tau=tau, speed_min=speed_cutout,
