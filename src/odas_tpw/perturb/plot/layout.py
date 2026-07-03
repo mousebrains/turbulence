@@ -102,7 +102,7 @@ def compute_layout(
     Returns ``(cast_x, segments, centers, t_starts, t_ends)`` where
     ``cast_x`` is the float x-position of every profile, ``segments`` are
     the half-open index ranges of each cluster, and the remaining tuples
-    annotate cluster centres / start / end timestamps for axis labels.
+    annotate cluster centers / start / end timestamps for axis labels.
     """
     segments = split_segments(t, gap_seconds)
     cast_x = np.zeros(len(t))
@@ -205,7 +205,7 @@ def column_edges(x: np.ndarray) -> np.ndarray:
     """Pcolor x-edges for columns centered at sorted-ascending positions *x*.
 
     Interior edges are midpoints; the outer edges extend by half the adjacent
-    spacing so the first/last column matches its neighbour's width.  A single
+    spacing so the first/last column matches its neighbor's width.  A single
     column gets a half-unit width on each side.
     """
     x = np.asarray(x, dtype=float)

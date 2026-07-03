@@ -17,7 +17,7 @@ import xarray as xr
 # RSI .p files carry unit strings in the embedded ASCII config that are
 # either UDUNITS-incompatible (``umol_L-1`` instead of ``umol L-1``) or
 # ambiguous (``deg`` — degree of arc or degree Celsius?). compliance-checker
-# emits hard CF errors on these. The mapping below normalises everything to
+# emits hard CF errors on these. The mapping below normalizes everything to
 # UDUNITS-parseable strings and is applied by :func:`canonicalize_units`
 # wherever we write per-channel attributes (e.g. extract_profiles).
 

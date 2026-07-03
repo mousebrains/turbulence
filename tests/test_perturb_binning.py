@@ -330,7 +330,7 @@ class TestBinByTime:
         assert float(result["time"].min()) > 1_700_000_000.0
 
     def test_no_time_coord(self, tmp_path):
-        """Profile NC without any recognised time coord returns empty Dataset."""
+        """Profile NC without any recognized time coord returns empty Dataset."""
         n = 30
         ds = xr.Dataset(
             {"T": (["samples"], np.ones(n))},

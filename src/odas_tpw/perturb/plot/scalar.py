@@ -307,7 +307,7 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
     built — bounded to one open figure at a time. Sections with no finite data
     are skipped, so fewer figures may be yielded than there are sections.
     """
-    # Honour the user's locale for number formatting in titles. Scoped to
+    # Honor the user's locale for number formatting in titles. Scoped to
     # LC_NUMERIC so we don't disturb matplotlib's float parsing (LC_CTYPE) or
     # collation; falls back silently when the environment locale is unset.
     with contextlib.suppress(locale.Error):

@@ -249,7 +249,7 @@ def test_long_colorbar_labels_fit_within_bars(tmp_path: Path):
     ``layout.fit_colorbar_labels`` — which shrinks the font (never grows it) so
     each label roughly fits its bar.
 
-    We assert the *behaviour* (font shrunk below the default; label brought to
+    We assert the *behavior* (font shrunk below the default; label brought to
     within its bar), not an exact pixel fit: rendered text height for a given
     font size varies ~5-8% across matplotlib backends/platforms, so a strict
     ``label_h <= bar_h`` is environment-fragile (passed locally, failed CI).

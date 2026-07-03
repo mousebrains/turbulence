@@ -381,7 +381,7 @@ def positive_int(s: str) -> int:
 def add_output_arguments(p: argparse.ArgumentParser, *, title: bool = True) -> None:
     """Register the shared figure-output flags (figsize / dpi [/ title]).
 
-    Honoured by every subcommand's renderer and by the ``figure`` batch driver
+    Honored by every subcommand's renderer and by the ``figure`` batch driver
     (per-figure ``figsize``/``dpi``/``title``). ``title=False`` for a subcommand
     that already registers its own ``--title`` (eps-chi).
     """

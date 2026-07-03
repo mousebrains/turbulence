@@ -381,7 +381,7 @@ def profile_stratification(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Sorted N²/dT/dz vs pressure for one cast, on a coarse depth grid.
 
-    The background (profile- and CTD-product) analogue of
+    The background (profile- and CTD-product) analog of
     :func:`sorted_stratification`: instead of dissipation-window *times*, it
     evaluates at target pressures spaced by ``window/2`` over the cast's
     pressure range. Within each ``±window/2`` pressure window the samples are

@@ -44,7 +44,7 @@ def _write_ctd_combo(root: Path, n_cast: int = 4, per: int = 60) -> None:
     time = np.array(t_list, dtype="datetime64[ns]")
     lat = np.concatenate(lat_list)
     lon = np.concatenate(lon_list)
-    # Physically-flavoured scalars; sigma0 dips negative in the warm surface.
+    # Physically-flavored scalars; sigma0 dips negative in the warm surface.
     jac_t = 28.0 - 0.1 * depth
     sp = 34.5 + 0.01 * depth
     sigma0 = -1.0 + 0.25 * depth  # negative for depth < 4 m
