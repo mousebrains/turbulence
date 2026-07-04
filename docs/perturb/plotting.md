@@ -32,7 +32,10 @@ forces the error, `--latest` forces the newest.
 
 One YAML lists figures, each naming a **preset** (the subcommands above) plus
 that subcommand's own options; the driver compiles each entry into the chosen
-subcommand and runs it (every kernel and behavior is reused). Output is either
+subcommand and runs it (every kernel and behavior is reused). With no output
+destination the figures are **shown on screen** when a display is available
+(falling back to a PNG tree in the cwd when it is not — headless / no tty / a
+non-GUI backend), mirroring the subcommands. Set a destination to force files:
 one PNG tree (`output_dir`, one subdirectory per figure) **or** one combined
 multipage PDF (`output_pdf`, one page per figure the preset produces).
 

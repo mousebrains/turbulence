@@ -30,6 +30,12 @@ A figure entry's keys are exactly the preset subcommand's options (``vars`` is
 sugar for repeated ``--var``; ``clim`` is a ``{VAR: [min, max]}`` map). ``eps-chi``
 has no x-axis, so ``section``/``vars``/``clim`` are rejected for it.
 
+With no output destination (neither the spec nor the CLI sets ``output_dir`` /
+``output_pdf``) the figures are shown on screen when a display is available,
+falling back to a PNG tree in the cwd when it is not (headless / no tty / a
+non-GUI backend) — mirroring the ``scalar``/``profiles`` subcommands. Set
+``output_dir`` or ``output_pdf`` to force writing files.
+
 The spec's ``source`` (``config``/``root``), output destination
 (``output_dir``/``output_pdf``), and ``sections:`` block can be overridden from
 the command line — e.g. ``perturb-plot figure --spec fig.yaml --config
@@ -453,9 +459,11 @@ def _dump_preset(name: str) -> None:
 def _output_config(spec: dict) -> tuple[str | None, str | None, int | None]:
     """Validate the spec's output controls.
 
-    Exactly one of ``output_dir`` (one PNG tree, the default) or ``output_pdf``
-    (one combined multipage PDF); plus an optional default ``dpi`` applied to
-    any figure that doesn't set its own.
+    At most one of ``output_dir`` (one PNG tree) or ``output_pdf`` (one combined
+    multipage PDF); plus an optional default ``dpi`` applied to any figure that
+    doesn't set its own. Both may be ``None`` -- with no output destination the
+    figures are displayed on screen when a display is available, else written to
+    a PNG tree in the cwd (decided in :func:`run`).
     """
     out_dir = spec.get("output_dir")
     out_pdf = spec.get("output_pdf")
@@ -467,8 +475,6 @@ def _output_config(spec: dict) -> tuple[str | None, str | None, int | None]:
             raise SpecError(f"figure spec: 'dpi' must be an integer, got {dpi!r}")
         if dpi <= 0:
             raise SpecError(f"figure spec: 'dpi' must be a positive integer, got {dpi}")
-    if out_dir is None and out_pdf is None:
-        out_dir = "."  # default: a PNG tree in the cwd
     return out_dir, out_pdf, dpi
 
 
@@ -564,13 +570,21 @@ def run(args: argparse.Namespace) -> str:
     try:
         sections_file = _sections_file(spec, tmp)
         section_select = _resolve_section_select(args.select, sections_file)
-        if out_pdf is not None:
+        if out_dir is None and out_pdf is None and sections.can_display():
+            # No output destination + a display available: show on screen,
+            # mirroring the scalar/profiles subcommands. Headless/CI (no tty or a
+            # non-GUI backend) falls through to a PNG tree in the cwd below.
+            result = _render_show(
+                figures, source, sections_file, args, wanted, default_dpi,
+                section_select,
+            )
+        elif out_pdf is not None:
             result = _render_pdf(
                 figures, source, sections_file, args, wanted, default_dpi, out_pdf,
                 section_select,
             )
         else:
-            output_dir = Path(out_dir).expanduser()  # type: ignore[arg-type]
+            output_dir = Path(out_dir or ".").expanduser()
             rendered = 0
             for _name, mod, fig_args in _compiled_figures(
                 figures, source, sections_file, args, wanted, default_dpi,
@@ -585,6 +599,32 @@ def run(args: argparse.Namespace) -> str:
             with contextlib.suppress(OSError):
                 os.unlink(t)
     return result
+
+
+def _render_show(figures, source, sections_file, args, wanted, default_dpi,
+                 section_select=None) -> str:
+    """Display the selected figures on screen (blocking), writing no files.
+
+    Streams each figure's ``build_figures`` (``make_output=False``, so no PNG
+    subdirs) and hands the open figures to ``sections.save_or_show`` with no
+    output dir, which holds them all open and calls ``plt.show()``. ``run`` only
+    routes here when ``sections.can_display()`` is true, so an interactive
+    backend is assumed. Note a broad spec (many figures x many sections) opens
+    that many windows at once.
+    """
+    def _stream():
+        for _name, mod, fig_args in _compiled_figures(
+            figures, source, sections_file, args, wanted, default_dpi,
+            Path("."), section_select, make_output=False,
+        ):
+            # closing_figs releases each preset's dataset handle; close_new_figs
+            # closes a figure orphaned by a build error before it was yielded.
+            with sections.closing_figs(mod.build_figures(fig_args)) as gen, \
+                    sections.close_new_figs_on_error():
+                yield from gen
+
+    shown = sections.save_or_show(_stream(), None, default_dpi or 150)
+    return f"displayed {shown} figure(s)"
 
 
 def _render_pdf(figures, source, sections_file, args, wanted, default_dpi,

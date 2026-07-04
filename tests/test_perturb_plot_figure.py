@@ -510,9 +510,55 @@ class TestSectionSelect:
         assert seen == [sfile]  # leaf received the CLI-supplied sections file
 
 
+class TestDefaultDisplay:
+    """With no output destination, figure displays on screen when a display is
+    available and falls back to a cwd PNG tree when it is not."""
+
+    def _spec(self, tmp_path):  # a minimal spec with NO output_dir/output_pdf
+        spec = tmp_path / "spec.yaml"
+        spec.write_text("source: {config: c}\nfigures:\n  - {name: a, preset: scalar}\n")
+        return spec
+
+    def test_shows_when_display_available(self, tmp_path, monkeypatch):
+        called = {}
+
+        def fake_show(*a, **k):
+            called["shown"] = True
+            return "displayed 1 figure(s)"
+
+        monkeypatch.setattr(fig.sections, "can_display", lambda: True)
+        monkeypatch.setattr(fig, "_render_show", fake_show)
+        result = fig.run(_cli(spec=str(self._spec(tmp_path))))
+        assert called.get("shown") and result == "displayed 1 figure(s)"
+
+    def test_writes_cwd_when_no_display(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(fig.sections, "can_display", lambda: False)
+        out_dirs = []
+        monkeypatch.setattr(scalar, "run", lambda a: out_dirs.append(a.out_dir))
+        monkeypatch.chdir(tmp_path)  # the cwd PNG-tree fallback lands here
+        fig.run(_cli(spec=str(self._spec(tmp_path))))
+        assert out_dirs and out_dirs[0].endswith("a")  # wrote to ./a, did not show
+
+    def test_output_dir_forces_write_even_with_display(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(fig.sections, "can_display", lambda: True)
+        monkeypatch.setattr(fig, "_render_show",
+                            lambda *a, **k: pytest.fail("should not display"))
+        out_dirs = []
+        monkeypatch.setattr(scalar, "run", lambda a: out_dirs.append(a.out_dir))
+        spec = tmp_path / "spec.yaml"
+        spec.write_text(
+            "source: {config: c}\n"
+            f"output_dir: {tmp_path}/out\n"
+            "figures:\n  - {name: a, preset: scalar}\n"
+        )
+        fig.run(_cli(spec=str(spec)))
+        assert out_dirs and out_dirs[0].endswith("a")  # spec output wins over display
+
+
 class TestOutputConfig:
-    def test_default_is_cwd_png_tree(self):
-        assert fig._output_config({}) == (".", None, None)
+    def test_no_output_when_unspecified(self):
+        # Both None: run() then decides display vs a cwd PNG tree.
+        assert fig._output_config({}) == (None, None, None)
 
     def test_pdf_selected(self):
         assert fig._output_config({"output_pdf": "r.pdf"}) == (None, "r.pdf", None)
@@ -522,7 +568,7 @@ class TestOutputConfig:
             fig._output_config({"output_dir": "x", "output_pdf": "y.pdf"})
 
     def test_default_dpi_passthrough(self):
-        assert fig._output_config({"dpi": 200}) == (".", None, 200)
+        assert fig._output_config({"dpi": 200}) == (None, None, 200)
 
     def test_dpi_non_integer_rejected(self):
         with pytest.raises(SystemExit, match="must be an integer"):
