@@ -121,6 +121,15 @@ _DIVERGING: frozenset[str] = frozenset({"dTdz"})
 # (inverted) depth axis -- salinity and density both increase with depth.
 _CBAR_MIN_AT_TOP: frozenset[str] = frozenset({"SP", "sigma0"})
 
+# Explicit colorbar labels that override the CF long_name/units default
+# (var_label) for the CTD scalars. "JFE" names the JFE Advantech CTD; the
+# density label uses mathtext so it renders as sigma-zero (sigma_0).
+_CBAR_LABEL: dict[str, str] = {
+    "JAC_T": "in-situ T (°C) (JFE)",
+    "SP": "Salinity (PSU) (JFE)",
+    "sigma0": r"$\sigma_0$ (kg/m³) (JFE)",
+}
+
 
 def _default_variables(ds: xr.Dataset) -> list[str]:
     """Default panel set: the standard scalars present, plus optional sensors."""
@@ -250,10 +259,17 @@ def _build_section_figure(
             # Salinity sits in a narrow band; show 2 decimals, or 1 when the
             # range is wide enough to read -- avoids false precision on ticks.
             cbar_fmt = "%.1f" if (vmax - vmin) >= 1.0 else "%.2f"
-        cbar = fig.colorbar(pcm, ax=ax, label=_var_label(ds, name), format=cbar_fmt)
+        cbar_label = _CBAR_LABEL.get(name, _var_label(ds, name))
+        cbar = fig.colorbar(pcm, ax=ax, label=cbar_label, format=cbar_fmt)
         if name in _CBAR_MIN_AT_TOP:
             cbar.ax.invert_yaxis()  # min at top, max at bottom (mirrors depth)
         ax.set_ylabel("Depth (m)")
+
+    for ax in axes:
+        # Draw the grid over the color mesh (axisbelow False), a thin muted
+        # line so it reads on both light (thermal/haline) and dark (dense) maps.
+        ax.set_axisbelow(False)
+        ax.grid(True, color="0.4", linewidth=0.4, alpha=0.5)
 
     axes[0].invert_yaxis()
     axes[0].set_xlim(x_edges[0], x_edges[-1])
