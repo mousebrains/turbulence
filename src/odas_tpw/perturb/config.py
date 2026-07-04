@@ -231,14 +231,15 @@ DEFAULTS: dict[str, dict] = {
         "Conventions": "CF-1.13, ACDD-1.3",
         "history": None,
     },
-    # Background stratification (N2, dT/dz) written to the diss, profile, and
-    # CTD products, independent of epsilon/chi. Computed with the Thorpe-sorted
+    # Background stratification (N2, dT/dz) written to the diss and profile
+    # products, independent of epsilon/chi. Computed with the Thorpe-sorted
     # (adiabatically leveled) method. diss uses its dissipation window; the
-    # profile and CTD products use the configurable ``window`` below.
+    # profile product uses the configurable ``window`` below. NOT written to the
+    # CTD product (profile-only; the CTD spans the whole up/down trajectory).
     "stratification": {
         "enable": True,
         "window": 2.0,           # background vertical window [dbar] for the
-                                 # profile and CTD products
+                                 # profile product
     },
     "parallel": {
         "jobs": 1,
@@ -461,8 +462,9 @@ def upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
     diss_chain = [*profile_chain, ("instruments", instruments_p)]
     chi_chain = [*diss_chain, ("epsilon", eps_p)]
     # CTD salinity/density come from CT-aligned conductivity (depends on ct.* and
-    # the detected profiles), and the CTD product also carries the injected
-    # background N2/dT/dz — so ct, profiles, and stratification must be hashed.
+    # the detected profiles) — so ct and profiles must be hashed. The CTD product
+    # does NOT carry the background N2/dT/dz (those are profile-only), so
+    # stratification.* deliberately does not version it.
     ctd_chain = [
         ("files", files_p),
         ("gps", gps_p),
@@ -471,7 +473,6 @@ def upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
         ("qc", qc_p),
         ("ct", ct_p),
         ("profiles", profiles_p),
-        ("stratification", strat_p),
     ]
 
     chains: dict[str, list[tuple[str, dict]]] = {
@@ -751,10 +752,11 @@ netcdf:
   history: null            # auto-filled with processing log
 
 stratification:
-  enable: true            # write N2 and dT/dz (Thorpe-sorted) to the diss,
-                          # profile, and CTD products, independent of eps/chi
+  enable: true            # write N2 and dT/dz (Thorpe-sorted) to the diss and
+                          # profile products, independent of eps/chi. Not on the
+                          # CTD product (profile-only; CTD spans up+down).
   window: 2.0             # background vertical window [dbar] for the profile
-                          # and CTD products (diss uses its dissipation window)
+                          # product (diss uses its dissipation window)
 
 parallel:
   jobs: 1

@@ -284,9 +284,10 @@ COMBO_SCHEMA: dict[str, dict] = {
         "units_metadata": "temperature: on_scale",
     },
     # Background stratification (Thorpe-sorted). The averaging scale differs by
-    # product (a pressure window for profile/CTD, the processing window for
-    # diss); each product NetCDF carries the precise scale in its variable
-    # comment, so the schema long_name stays scale-neutral.
+    # product (a pressure window for the profile product, the processing window
+    # for diss); each product NetCDF carries the precise scale in its variable
+    # comment, so the schema long_name stays scale-neutral. Profile-only (not on
+    # the CTD product, which spans the whole up/down trajectory).
     "N2": {
         "nc_name": "N2",
         "units": "s-2",
@@ -414,8 +415,8 @@ CTD_SCHEMA: dict[str, dict] = {
     "DO": COMBO_SCHEMA["DO"],
     "Chlorophyll": COMBO_SCHEMA["Chlorophyll"],
     "Turbidity": COMBO_SCHEMA["Turbidity"],
-    "N2": COMBO_SCHEMA["N2"],
-    "dTdz": COMBO_SCHEMA["dTdz"],
+    # N2/dTdz are profile-only (down-cast) quantities and are intentionally not
+    # carried on the CTD product; they live on the profile/diss/chi schemas.
 }
 
 # Fixed global attributes for CF-1.13 / ACDD-1.3 compliance

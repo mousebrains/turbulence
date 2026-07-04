@@ -295,9 +295,11 @@ class TestUpstreamFor:
         assert {"epsilon", "profiles", "instruments"}.issubset(set(self._sections("chi")))
 
     def test_ctd_includes_file_flow_and_gps(self):
+        # No 'stratification': N2/dTdz are profile-only and not on the CTD
+        # product, so stratification.* must not version the CTD output.
         assert set(self._sections("ctd")) == {
             "files", "gps", "hotel", "speed", "qc",
-            "ct", "profiles", "stratification",
+            "ct", "profiles",
         }
 
     def test_profiles_binned_includes_profiles(self):

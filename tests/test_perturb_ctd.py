@@ -191,6 +191,32 @@ class TestCtdBinFile:
             assert var in ds, f"seawater property {var} missing"
         ds.close()
 
+    def test_stratification_excluded_from_ctd(self, tmp_path):
+        # N2/dTdz are profile-only; even when the pipeline has injected them as
+        # slow channels, the CTD product (whole up/down trajectory) must not
+        # carry them. The base scalars/seawater props are still present.
+        n = 640
+        t_slow = np.linspace(0, 10, n)
+        channels = {
+            "JAC_T": np.linspace(5.0, 15.0, n),
+            "JAC_C": np.linspace(30.0, 35.0, n),
+            "P": np.linspace(0.0, 100.0, n),
+            "N2": np.linspace(1e-5, 1e-4, n),
+            "dTdz": np.linspace(0.01, 0.1, n),
+        }
+        pf = self._make_pf(channels, t_slow=t_slow)
+        gps = GPSFixed(15.0, 145.0)
+
+        out = ctd_bin_file(pf, gps, tmp_path, bin_width=0.5)
+        assert out is not None
+        ds = xr.open_dataset(out)
+        try:
+            assert "N2" not in ds and "dTdz" not in ds
+            for var in ("JAC_T", "JAC_C", "P", "SP", "sigma0"):
+                assert var in ds, f"{var} missing from output"
+        finally:
+            ds.close()
+
     def test_time_coord_has_no_fillvalue(self, tmp_path):
         # Regression: CF-1.13 §2.5.1 forbids _FillValue on coordinate
         # variables. xarray auto-emits one for the float "time" coord unless

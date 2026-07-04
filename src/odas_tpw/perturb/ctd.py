@@ -94,9 +94,9 @@ def _time_bin(
             binned = np.full(n_bins, np.nan)
             for i in range(n_bins):
                 sl = sorted_arr[splits[i] : splits[i + 1]]
-                # Guard on a finite value (not just size): channels like N2/dTdz
-                # are NaN outside casts, so an all-NaN slice would make nanmedian
-                # warn "All-NaN slice encountered" for every empty-of-data bin.
+                # Guard on a finite value (not just size): a slice may be
+                # entirely NaN (e.g. a sensor gap within the bin window), which
+                # would make nanmedian warn "All-NaN slice encountered".
                 if np.any(np.isfinite(sl)):
                     binned[i] = np.nanmedian(sl)
             result[name] = binned
@@ -279,10 +279,11 @@ def ctd_bin_file(
         channels_to_bin.add(C_name)
     if "P" in pf.channels:
         channels_to_bin.add("P")
-    # Background stratification injected by the pipeline (slow channels).
-    for name in ("N2", "dTdz"):
-        if name in pf.channels:
-            channels_to_bin.add(name)
+    # NOTE: the pipeline injects N2/dTdz (background stratification) as slow
+    # channels, but they are deliberately NOT binned here. They are meaningful
+    # only within detected profiles (down-casts) and are NaN across the reel-in
+    # and surface soak; the CTD product spans the whole up/down trajectory, so
+    # they belong on the profile and diss products, not here.
 
     if variables:
         for v in variables:
@@ -382,32 +383,6 @@ def ctd_bin_file(
     ds["time"].attrs["long_name"] = "time bin center"
     ds["time"].attrs["axis"] = "T"
     ds["time"].attrs["units_metadata"] = "leap_seconds: utc"
-    # Self-describing metadata for the injected background stratification, so
-    # the CTD product's N2/dTdz is not confused with the dissipation/chi-window
-    # N2/dTdz of the diss/chi products (different scale and method).
-    strat_attrs = {
-        "N2": {
-            "units": "s-2",
-            "long_name": "buoyancy frequency squared (background, Thorpe-sorted)",
-            "comment": (
-                "TEOS-10 N2 from the profile's own C/T/P over a background "
-                "pressure window, Thorpe-sorted to a stable profile, then "
-                "time-binned. Background (profile/CTD) scale — distinct from the "
-                "dissipation/chi-window N2 in the diss/chi products."
-            ),
-        },
-        "dTdz": {
-            "units": "K m-1",
-            "long_name": "background temperature gradient (positive down)",
-            "comment": (
-                "Least-squares slope of the Thorpe-sorted in-situ temperature "
-                "vs depth over a background pressure window, then time-binned."
-            ),
-        },
-    }
-    for name, attrs in strat_attrs.items():
-        if name in ds:
-            ds[name].attrs.update(attrs)
 
     ds.attrs["bin_width"] = bin_width
     ds.attrs["method"] = method
