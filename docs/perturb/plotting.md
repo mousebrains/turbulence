@@ -65,8 +65,12 @@ figures:
 - Values are validated exactly as the CLI would parse them. Boolean keys take
   `true`/`false` (YAML 1.2; not `yes`/`no`), and a fixed-count option such as
   `figsize: [w, h]` or `point: [lat, lon]` must be a list of that exact length.
-- `--select NAME` renders only the named figure(s); `--strict`/`--latest` pass
-  through to config resolution.
+- `--figure NAME` renders only the named figure(s) from the spec's `figures:`
+  list (repeatable). Separately, `--sections SECTIONS.YAML` overrides the spec's
+  `sections:` block and `--select NAME` renders only those section(s) — narrowing
+  every figure's own `section:`, exactly as `perturb-plot scalar --select` does
+  (`eps-chi` has no x-axis and ignores it). `--strict`/`--latest` pass through to
+  config resolution.
 - **Compare runs without editing the spec.** The command line overrides the
   spec's `source` and output destination: `--config PERTURB.YAML` (or `--root
   DIR`) re-points the whole spec at another perturb run, and `--output-dir DIR`

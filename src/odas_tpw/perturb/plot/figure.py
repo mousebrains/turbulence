@@ -30,11 +30,21 @@ A figure entry's keys are exactly the preset subcommand's options (``vars`` is
 sugar for repeated ``--var``; ``clim`` is a ``{VAR: [min, max]}`` map). ``eps-chi``
 has no x-axis, so ``section``/``vars``/``clim`` are rejected for it.
 
-The spec's ``source`` (``config``/``root``) and output destination
-(``output_dir``/``output_pdf``) can be overridden from the command line — e.g.
-``perturb-plot figure --spec fig.yaml --config perturb.2.yaml --output-dir
-figs/run2`` — so one spec renders the same figures across several perturb runs
-for comparison without editing the file.
+The spec's ``source`` (``config``/``root``), output destination
+(``output_dir``/``output_pdf``), and ``sections:`` block can be overridden from
+the command line — e.g. ``perturb-plot figure --spec fig.yaml --config
+perturb.2.yaml --output-dir figs/run2`` — so one spec renders the same figures
+across several perturb runs for comparison without editing the file.
+
+Two independent subsetting flags (note they select different things):
+
+* ``--figure NAME`` (repeatable) renders only the named *figures* from the
+  spec's ``figures:`` list.
+* ``--sections SECTIONS.YAML`` replaces the spec's ``sections:`` block, and
+  ``--select NAME`` (repeatable, comma-separated) renders only the named
+  *sections* — narrowing every figure's own ``section:`` choice, exactly as
+  ``perturb-plot scalar --select`` does. ``eps-chi`` has no x-axis, so it
+  ignores ``--select``; a figure narrowed to no sections is skipped.
 """
 
 from __future__ import annotations
@@ -140,6 +150,12 @@ def _apply_cli_overrides(spec: dict, args: argparse.Namespace) -> None:
     elif cli_pdf:
         spec["output_pdf"] = cli_pdf
         spec.pop("output_dir", None)
+
+    # --sections replaces the spec's whole sections block (like --config swaps
+    # the source), so one spec can be re-sectioned from the CLI without editing.
+    cli_sections = getattr(args, "sections", None)
+    if cli_sections:
+        spec["sections"] = {"file": cli_sections}
 
 
 def _sections_file(spec: dict, tmp: list[str]) -> str | None:
@@ -262,7 +278,17 @@ def _coerce(action: argparse.Action, key: str, value: Any, fig_name: str) -> Any
     return [one(v) for v in value] if isinstance(value, list) else one(value)
 
 
-def _apply_section(args: argparse.Namespace, preset: str, figure: dict, sections_file):
+def _apply_section(args: argparse.Namespace, preset: str, figure: dict, sections_file,
+                   section_select: frozenset[str] | None = None) -> bool:
+    """Set the leaf's section selection from the figure's own ``section:`` key,
+    narrowed by the global ``--select`` (*section_select*: a validated set of
+    section names, or None when ``--select`` was not given).
+
+    Returns True when the figure still has sections to render, False when the
+    global ``--select`` leaves this figure with none (the caller then skips it).
+    ``eps-chi`` has no x-axis, so sections do not apply: the global ``--select``
+    is a no-op and a per-figure ``section:`` is rejected.
+    """
     section = figure.get("section")
     if preset == "eps-chi":
         if section is not None:
@@ -270,28 +296,44 @@ def _apply_section(args: argparse.Namespace, preset: str, figure: dict, sections
                 f"figure {figure.get('name')!r}: preset 'eps-chi' has no x-axis; "
                 f"'section' is not allowed."
             )
-        return
+        return True  # global --select does not apply to a section-less preset
     if sections_file is not None:
         args.sections = sections_file
+    # The figure's own choice: None / "*" mean "every section in the file".
     if section is None or section == "*":
-        args.select = None  # all sections
+        own: list[str] | None = None
     elif isinstance(section, str):
-        args.select = [section]
+        own = [section]
     elif isinstance(section, list):
-        args.select = [str(s) for s in section]
+        own = [str(s) for s in section]
     else:
         raise SpecError(f"figure {figure.get('name')!r}: bad 'section' {section!r}")
+    # Narrow by the global --select. When the figure takes "all", the global set
+    # IS the selection; otherwise keep only the figure's sections that are in it.
+    if section_select is None:
+        effective = own
+    elif own is None:
+        effective = sorted(section_select)
+    else:
+        effective = [s for s in own if s in section_select]
+        if not effective:
+            return False  # nothing survives the --select narrowing; skip figure
+    args.select = effective  # None = every section
     if args.select and not sections_file:
         raise SpecError(
             f"figure {figure.get('name')!r}: 'section' names a section but the spec "
             f"has no 'sections' block."
         )
+    return True
 
 
 def _build_args(figure: dict, source: dict, sections_file, output_dir: Path,
-                strict: bool, latest: bool, *,
-                make_output: bool = True) -> tuple[Any, argparse.Namespace]:
+                strict: bool, latest: bool, section_select: frozenset[str] | None = None,
+                *, make_output: bool = True) -> tuple[Any, argparse.Namespace] | None:
     """Compile a figure entry into ``(preset_module, Namespace)``.
+
+    Returns ``None`` when the global ``--select`` (*section_select*) narrows this
+    figure to no sections — the caller skips it (no output dir is created).
 
     With ``make_output`` (PNG mode) the per-figure output path is assigned and
     its subdir created; the PDF driver passes ``make_output=False`` because it
@@ -335,7 +377,8 @@ def _build_args(figure: dict, source: dict, sections_file, output_dir: Path,
             )
         setattr(args, attr, _coerce(dest_map[attr], key, _adapt(key, value), name))
 
-    _apply_section(args, preset, figure, sections_file)
+    if not _apply_section(args, preset, figure, sections_file, section_select):
+        return None  # --select narrowed this figure to no sections; caller skips
 
     if make_output:
         # PNG mode: one subdir per figure so different figures never collide.
@@ -359,8 +402,16 @@ def _safe(name: str) -> str:
 def add_arguments(p: argparse.ArgumentParser) -> None:
     """Register CLI flags for the figure subcommand on *p*."""
     p.add_argument("--spec", help="figure-spec YAML (layout + contents).")
+    p.add_argument("--figure", action="append", default=None, metavar="NAME",
+                   help="render only the named figure(s) from the spec's 'figures:' "
+                        "list (repeatable). Default: all.")
+    p.add_argument("--sections", default=None, metavar="SECTIONS.YAML",
+                   help="override the spec's 'sections:' block with this sections "
+                        "YAML (same file 'perturb-plot scalar --sections' reads).")
     p.add_argument("--select", action="append", default=None, metavar="NAME",
-                   help="render only the named figure(s) (repeatable). Default: all.")
+                   help="render only the named section(s) (repeatable, or "
+                        "comma-separated), narrowing every figure's own section "
+                        "choice. Default: every section. Requires sections.")
     p.add_argument("--config", metavar="PERTURB.YAML", default=None,
                    help="override the spec's source config (compare/contrast "
                         "perturb runs from one spec). Mutually exclusive with --root.")
@@ -422,21 +473,49 @@ def _output_config(spec: dict) -> tuple[str | None, str | None, int | None]:
 
 
 def _compiled_figures(figures, source, sections_file, args, wanted, default_dpi,
-                      output_dir: Path, *, make_output: bool):
+                      output_dir: Path, section_select, *, make_output: bool):
     """Yield ``(name, preset_module, Namespace)`` for each selected figure, with
-    the spec's default ``dpi`` filled in where the figure didn't set its own."""
+    the spec's default ``dpi`` filled in where the figure didn't set its own.
+
+    A figure the global ``--select`` narrows to no sections is skipped (a note is
+    printed) rather than rendered empty."""
     for figure in figures:
         name = figure.get("name") or figure.get("preset")
         if wanted and name not in wanted:
             continue
-        mod, fig_args = _build_args(
+        built = _build_args(
             figure, source, sections_file, output_dir, args.strict, args.latest,
-            make_output=make_output,
+            section_select, make_output=make_output,
         )
+        if built is None:
+            print(f"figure {name!r}: no sections remain after --select; skipped")
+            continue
+        mod, fig_args = built
         if getattr(fig_args, "dpi", None) is None:
             fig_args.dpi = default_dpi
         print(f"=== figure {name!r} (preset {figure.get('preset')!r}) ===")
         yield name, mod, fig_args
+
+
+def _resolve_section_select(select, sections_file) -> frozenset[str] | None:
+    """Validate the global ``--select`` names against the sections file and return
+    them as a set (or None when ``--select`` was not given).
+
+    ``--select`` needs sections to select from — either the spec's ``sections:``
+    block or a ``--sections`` override. Unknown names are rejected here (via
+    ``sections.select_sections``) so the error names them, rather than silently
+    narrowing every figure to nothing.
+    """
+    if not select:
+        return None
+    if sections_file is None:
+        raise SpecError(
+            "figure --select requires sections: add a 'sections:' block to the "
+            "spec or pass --sections SECTIONS.YAML"
+        )
+    available = sections.load_sections(sections_file)
+    chosen = sections.select_sections(available, select)  # raises on unknown name
+    return frozenset(s.name for s in chosen)
 
 
 def run(args: argparse.Namespace) -> str:
@@ -475,25 +554,27 @@ def run(args: argparse.Namespace) -> str:
             )
         safe_seen[sn] = nm
 
-    wanted = set(args.select) if args.select else None
+    wanted = set(args.figure) if args.figure else None
     if wanted:
         missing = wanted - set(names)
         if missing:
-            raise SpecError(f"figure --select: unknown figure name(s) {sorted(missing)}")
+            raise SpecError(f"figure --figure: unknown figure name(s) {sorted(missing)}")
 
     tmp: list[str] = []
     try:
         sections_file = _sections_file(spec, tmp)
+        section_select = _resolve_section_select(args.select, sections_file)
         if out_pdf is not None:
             result = _render_pdf(
-                figures, source, sections_file, args, wanted, default_dpi, out_pdf
+                figures, source, sections_file, args, wanted, default_dpi, out_pdf,
+                section_select,
             )
         else:
             output_dir = Path(out_dir).expanduser()  # type: ignore[arg-type]
             rendered = 0
             for _name, mod, fig_args in _compiled_figures(
                 figures, source, sections_file, args, wanted, default_dpi,
-                output_dir, make_output=True,
+                output_dir, section_select, make_output=True,
             ):
                 mod.run(fig_args)
                 rendered += 1
@@ -507,7 +588,7 @@ def run(args: argparse.Namespace) -> str:
 
 
 def _render_pdf(figures, source, sections_file, args, wanted, default_dpi,
-                out_pdf: str) -> str:
+                out_pdf: str, section_select=None) -> str:
     """Render every selected figure into one multipage PDF (one page per figure
     the preset produces).
 
@@ -529,7 +610,7 @@ def _render_pdf(figures, source, sections_file, args, wanted, default_dpi,
         with PdfPages(tmp_name) as pdf:
             for _name, mod, fig_args in _compiled_figures(
                 figures, source, sections_file, args, wanted, default_dpi,
-                Path("."), make_output=False,
+                Path("."), section_select, make_output=False,
             ):
                 # closing_figs releases the preset's dataset handle even if
                 # savefig raises mid-stream; close_new_figs_on_error closes a

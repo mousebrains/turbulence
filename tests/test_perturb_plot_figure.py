@@ -14,7 +14,7 @@ from odas_tpw.perturb.plot import profiles, scalar
 
 def _cli(**kw):
     base = dict(spec=None, list_presets=False, dump_preset=None,
-                select=None, strict=False, latest=False,
+                figure=None, sections=None, select=None, strict=False, latest=False,
                 config=None, root=None, output_dir=None, output_pdf=None)
     base.update(kw)
     return SimpleNamespace(**base)
@@ -389,7 +389,7 @@ class TestRun:
         assert {c[0] for c in calls} == {"scalar", "chi"}
         assert ("chi", "chi") in calls  # ProductView bound args.product = "chi"
         calls.clear()
-        fig.run(_cli(spec=str(spec), select=["a"]))  # only figure 'a'
+        fig.run(_cli(spec=str(spec), figure=["a"]))  # only figure 'a'
         assert [c[0] for c in calls] == ["scalar"]
 
     def test_select_unknown_name(self, tmp_path):
@@ -400,7 +400,7 @@ class TestRun:
             "figures:\n  - {name: a, preset: scalar}\n"
         )
         with pytest.raises(SystemExit, match="unknown figure name"):
-            fig.run(_cli(spec=str(spec), select=["nope"]))
+            fig.run(_cli(spec=str(spec), figure=["nope"]))
 
     def test_empty_figures(self, tmp_path):
         spec = tmp_path / "spec.yaml"
@@ -425,8 +425,89 @@ class TestRun:
             "source: {config: c}\n" f"output_dir: {tmp_path}/o\n"
             "figures:\n  - {preset: scalar}\n"
         )
-        fig.run(_cli(spec=str(spec), select=["scalar"]))  # selectable by preset
+        fig.run(_cli(spec=str(spec), figure=["scalar"]))  # selectable by preset
         assert calls == ["scalar"]
+
+
+class TestSectionSelect:
+    """The global --sections / --select section narrowing on figure()."""
+
+    def _sections_file(self, tmp_path, *names):
+        p = tmp_path / "s.yaml"
+        p.write_text(
+            "sections:\n"
+            + "".join(f"  - {{name: {n}, xaxis: {{method: time}}}}\n" for n in names)
+        )
+        return str(p)
+
+    def test_cli_sections_overrides_block(self):
+        spec = {"sections": {"file": "orig.yaml"}}
+        fig._apply_cli_overrides(spec, _cli(sections="override.yaml"))
+        assert spec["sections"] == {"file": "override.yaml"}
+
+    def test_select_without_sections_errors(self):
+        with pytest.raises(SystemExit, match="requires sections"):
+            fig._resolve_section_select(["a"], None)
+
+    def test_select_unknown_section_errors(self, tmp_path):
+        sfile = self._sections_file(tmp_path, "a", "b")
+        with pytest.raises(SystemExit, match="no section named"):
+            fig._resolve_section_select(["nope"], sfile)
+
+    def test_select_intersects_figure_section(self, tmp_path):
+        _, args = fig._build_args(
+            {"name": "x", "preset": "profiles", "section": ["a", "b"]},
+            {"config": "c"}, "s.yaml", tmp_path, False, False, frozenset({"a"}),
+        )
+        assert args.select == ["a"]  # only the one in the global --select survives
+
+    def test_select_empty_intersection_skips_figure(self, tmp_path):
+        built = fig._build_args(
+            {"name": "x", "preset": "profiles", "section": ["a", "b"]},
+            {"config": "c"}, "s.yaml", tmp_path, False, False, frozenset({"z"}),
+        )
+        assert built is None  # nothing survives -> caller skips the figure
+
+    def test_select_star_uses_global_set(self, tmp_path):
+        _, args = fig._build_args(
+            {"name": "x", "preset": "profiles", "section": "*"},
+            {"config": "c"}, "s.yaml", tmp_path, False, False, frozenset({"a", "b"}),
+        )
+        assert sorted(args.select) == ["a", "b"]  # "all" becomes the global set
+
+    def test_eps_chi_ignores_global_select(self, tmp_path):
+        built = fig._build_args(
+            {"name": "x", "preset": "eps-chi"},
+            {"config": "c"}, "s.yaml", tmp_path, False, False, frozenset({"a"}),
+        )
+        assert built is not None  # section-less preset renders, not skipped
+
+    def test_run_select_narrows_sections(self, tmp_path, monkeypatch):
+        seen = []
+        monkeypatch.setattr(scalar, "run", lambda a: seen.append(list(a.select or [])))
+        sfile = self._sections_file(tmp_path, "a", "b")
+        spec = tmp_path / "spec.yaml"
+        spec.write_text(
+            "source: {config: c}\n"
+            f"output_dir: {tmp_path}/out\n"
+            f"sections: {{file: {sfile}}}\n"
+            "figures:\n  - {name: f, preset: scalar}\n"
+        )
+        fig.run(_cli(spec=str(spec), select=["a"]))
+        assert seen == [["a"]]  # the leaf saw only section 'a'
+
+    def test_run_cli_sections_override(self, tmp_path, monkeypatch):
+        seen = []
+        monkeypatch.setattr(scalar, "run", lambda a: seen.append(a.sections))
+        sfile = self._sections_file(tmp_path, "a")
+        spec = tmp_path / "spec.yaml"
+        spec.write_text(  # spec itself has NO sections block; --sections supplies it
+            "source: {config: c}\n"
+            f"output_dir: {tmp_path}/out\n"
+            "figures:\n  - {name: f, preset: scalar}\n"
+        )
+        fig.run(_cli(spec=str(spec), sections=sfile))
+        assert seen == [sfile]  # leaf received the CLI-supplied sections file
 
 
 class TestOutputConfig:
