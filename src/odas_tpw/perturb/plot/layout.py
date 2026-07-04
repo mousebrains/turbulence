@@ -9,8 +9,64 @@ from __future__ import annotations
 
 import glob
 import os
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
+
+
+def panel_grid(
+    n: int,
+    ncols: int = 1,
+    *,
+    figsize: tuple[float, float] | list[float] | None = None,
+) -> tuple[Figure, list[Axes], list[Axes], list[Axes]]:
+    """Create a figure of *n* panels sharing one x and one y axis.
+
+    Panels are arranged in ``ceil(n/ncols)`` rows by ``ncols`` columns, filled
+    row-major (left-to-right, top-to-bottom). ``ncols`` is clamped to
+    ``[1, n]``; the default (1) is the classic single vertical stack. Unused
+    cells of a ragged last row are blanked. The default figure size scales with
+    the grid: ``max(11, 5.5*ncols)`` wide by ``3*nrows + 1`` tall (so ``ncols=1``
+    reproduces the historical ``(11, 3n+1)``).
+
+    Returns ``(fig, panels, left, col_bottom)``:
+
+    * ``panels``: the *n* panel Axes, in variable order.
+    * ``left``: the left-column Axes. They carry the shared depth label; the
+      other columns' y tick labels are hidden by ``sharey``, so a y label there
+      would read as unlabeled numbers.
+    * ``col_bottom``: the bottom-most panel of each column. They carry the x
+      label; their x tick labels are re-enabled here so a ragged short column
+      still shows its axis (``sharex`` otherwise hides all but the last row).
+
+    The caller inverts the shared depth axis on ``panels[0]``, fills each panel,
+    sets the y label on ``left`` and the x label/formatter on ``col_bottom``.
+    """
+    import matplotlib.pyplot as plt
+
+    ncols = max(1, min(int(ncols or 1), n))
+    nrows = (n + ncols - 1) // ncols
+    fig, axes2d = plt.subplots(
+        nrows, ncols,
+        figsize=tuple(figsize) if figsize else (max(11.0, 5.5 * ncols), 3.0 * nrows + 1.0),
+        sharex=True, sharey=True, constrained_layout=True, squeeze=False,
+    )
+    axes = list(axes2d.ravel())  # row-major
+    for ax in axes[n:]:
+        ax.set_visible(False)  # blank the unused cells of a ragged last row
+    panels = axes[:n]
+    left = [ax for i, ax in enumerate(panels) if i % ncols == 0]
+    bottom_by_col: dict[int, Axes] = {}
+    for i, ax in enumerate(panels):
+        bottom_by_col[i % ncols] = ax  # later rows overwrite -> lowest row wins
+    col_bottom = list(bottom_by_col.values())
+    for ax in col_bottom:
+        ax.xaxis.set_tick_params(labelbottom=True)  # re-show ticks hidden by sharex
+    return fig, panels, left, col_bottom
 
 
 def latest_stage_dir(root: str, prefix: str) -> str | None:

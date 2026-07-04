@@ -177,7 +177,6 @@ def _build_section_figure(
     whether to display or save the returned figure.
     """
     import cmocean
-    import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
     from matplotlib.ticker import FuncFormatter
 
@@ -215,21 +214,25 @@ def _build_section_figure(
         z_hi = float(args.depth_max)
     z_edges = grid.make_edges(0.0, z_hi, args.z_bin)
 
-    n = len(panel_vars)
-    fig, axes = plt.subplots(
-        n, 1, figsize=getattr(args, "figsize", None) or (11, 3.0 * n + 1.0),
-        sharex=True, sharey=True,
-        constrained_layout=True, squeeze=False,
+    # Panels are arranged in `ncols` columns (default 1 = a vertical stack),
+    # filled left-to-right, top-to-bottom. Sections remain one figure each.
+    fig, axes, left_axes, col_bottom = layout.panel_grid(
+        len(panel_vars), getattr(args, "ncols", 1),
+        figsize=getattr(args, "figsize", None),
     )
-    axes = axes[:, 0]
+    left_set = set(left_axes)
 
     for ax, name in zip(axes, panel_vars):
+        # With sharey, only the left column carries the "Depth (m)" label (the
+        # other columns' y tick labels are hidden, so a bare label would mislead).
+        is_left = ax in left_set
         v = dss[name].values
         g, _count = grid.grid_mean(x, depth, v, x_edges, z_edges)
         if not np.any(np.isfinite(g)):
             ax.text(0.5, 0.5, f"no valid {name}", transform=ax.transAxes,
                     ha="center", va="center")
-            ax.set_ylabel("Depth (m)")
+            if is_left:
+                ax.set_ylabel("Depth (m)")
             continue
         # Per-variable --clim wins; else the global --vmin/--vmax (only set for
         # a single-variable plot, enforced in run()); else auto 1/99 percentile.
@@ -263,7 +266,8 @@ def _build_section_figure(
         cbar = fig.colorbar(pcm, ax=ax, label=cbar_label, format=cbar_fmt)
         if name in _CBAR_MIN_AT_TOP:
             cbar.ax.invert_yaxis()  # min at top, max at bottom (mirrors depth)
-        ax.set_ylabel("Depth (m)")
+        if is_left:
+            ax.set_ylabel("Depth (m)")
 
     for ax in axes:
         # Draw the grid over the color mesh (axisbelow False), a thin muted
@@ -271,22 +275,24 @@ def _build_section_figure(
         ax.set_axisbelow(False)
         ax.grid(True, color="0.4", linewidth=0.4, alpha=0.5)
 
-    axes[0].invert_yaxis()
+    axes[0].invert_yaxis()  # sharey: inverts every panel's depth axis
     axes[0].set_xlim(x_edges[0], x_edges[-1])
 
-    bottom = axes[-1]
-    bottom.set_xlabel(xa.label)
-    if xa.kind == "time":
-        bottom.xaxis.set_major_formatter(
-            FuncFormatter(
-                lambda val, _pos: np.datetime_as_string(
-                    np.datetime64(int(val), "s"), unit="m"
-                ).replace("T", " ")
+    # The x label/formatter goes on the bottom-most panel of each column
+    # (layout.panel_grid already re-enabled their tick labels).
+    for ax in col_bottom:
+        ax.set_xlabel(xa.label)
+        if xa.kind == "time":
+            ax.xaxis.set_major_formatter(
+                FuncFormatter(
+                    lambda val, _pos: np.datetime_as_string(
+                        np.datetime64(int(val), "s"), unit="m"
+                    ).replace("T", " ")
+                )
             )
-        )
-        for lbl in bottom.get_xticklabels():
-            lbl.set_rotation(30)
-            lbl.set_ha("right")
+            for lbl in ax.get_xticklabels():
+                lbl.set_rotation(30)
+                lbl.set_horizontalalignment("right")
 
     title_id = ds.attrs.get("id") or os.path.basename(os.path.normpath(args.root))
     npts = int(dss.sizes["time"])

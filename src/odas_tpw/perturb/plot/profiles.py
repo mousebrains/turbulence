@@ -181,7 +181,6 @@ def _build_profiles_figure(
 ) -> Figure | None:
     """Render one section of the (bin, profile) product to a Figure."""
     import cmocean
-    import matplotlib.pyplot as plt
     from matplotlib.ticker import FuncFormatter
 
     dss = ds.isel(profile=np.flatnonzero(_profile_window(ds["stime"].values, sec)))
@@ -246,13 +245,13 @@ def _build_profiles_figure(
         if n_drop:
             print(f"section {sec.name!r}: QC flags NaN {n_drop} cells per panel")
 
-    n = len(panel_vars)
-    fig, axes = plt.subplots(
-        n, 1, figsize=getattr(args, "figsize", None) or (11, 3.0 * n + 1.0),
-        sharex=True, sharey=True,
-        constrained_layout=True, squeeze=False,
+    # Panels in `ncols` columns (default 1 = a vertical stack), filled
+    # left-to-right, top-to-bottom. Sections remain one figure each.
+    fig, axes, left_axes, col_bottom = layout.panel_grid(
+        len(panel_vars), getattr(args, "ncols", 1),
+        figsize=getattr(args, "figsize", None),
     )
-    axes = axes[:, 0]
+    left_set = set(left_axes)
 
     for ax, name in zip(axes, panel_vars):
         is_pseudo = diagnostics.is_pseudo_var(name)
@@ -268,31 +267,33 @@ def _build_profiles_figure(
         if norm is None or not np.any(np.isfinite(z)):
             ax.text(0.5, 0.5, f"no valid {name}", transform=ax.transAxes,
                     ha="center", va="center")
-            ax.set_ylabel("Depth (m)")
+            if ax in left_set:  # only the left column carries the shared y label
+                ax.set_ylabel("Depth (m)")
             continue
         cmap = getattr(cmocean.cm, cmap_name).copy()
         cmap.set_bad(color="0.85")  # unsampled depths: light gray
         layout.plot_columns(ax, fig, xs, depth, z, cmap, norm, label,
                             gap_factor=args.gap_factor)
-        ax.set_ylabel("Depth (m)")
+        if ax in left_set:
+            ax.set_ylabel("Depth (m)")
 
     axes[0].invert_yaxis()
     if args.p_max is not None:
         axes[0].set_ylim(float(args.p_max), 0.0)
 
-    bottom = axes[-1]
-    bottom.set_xlabel(xa.label)
-    if xa.kind == "time":
-        bottom.xaxis.set_major_formatter(
-            FuncFormatter(
-                lambda val, _pos: np.datetime_as_string(
-                    np.datetime64(int(val), "s"), unit="m"
-                ).replace("T", " ")
+    for ax in col_bottom:
+        ax.set_xlabel(xa.label)
+        if xa.kind == "time":
+            ax.xaxis.set_major_formatter(
+                FuncFormatter(
+                    lambda val, _pos: np.datetime_as_string(
+                        np.datetime64(int(val), "s"), unit="m"
+                    ).replace("T", " ")
+                )
             )
-        )
-        for lbl in bottom.get_xticklabels():
-            lbl.set_rotation(30)
-            lbl.set_ha("right")
+            for lbl in ax.get_xticklabels():
+                lbl.set_rotation(30)
+                lbl.set_horizontalalignment("right")
 
     title_id = ds.attrs.get("id") or os.path.basename(os.path.normpath(args.root))
     fig.suptitle(getattr(args, "title", None) or (

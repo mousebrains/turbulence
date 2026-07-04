@@ -241,6 +241,41 @@ def test_clim_and_no_qc(tmp_path: Path):
     assert (tmp_path / "epsilon_c.png").exists()
 
 
+def test_ncols_grid_layout(tmp_path: Path):
+    """The profiles family honors --ncols: 4 default vars at ncols=2 give a
+    2-row figure (height 3*2+1) instead of the 4-row stack, with 4 colorbars."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "T1": (28.0 - bins * col, {"units": "degree_Celsius", "long_name": "T1"}),
+        "T2": (28.0 - bins * col, {"units": "degree_Celsius", "long_name": "T2"}),
+        "N2": (1.0e-4 * np.ones((10, 6)), {"units": "s-2", "long_name": "N2"}),
+        "dTdz": (-0.1 * np.ones((10, 6)), {"units": "K m-1", "long_name": "dTdz"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[], ncols=2,
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, list(profiles.PRODUCTS["profiles"].default_vars),
+            args, {}, profiles.PRODUCTS["profiles"],
+        )
+        assert fig is not None
+        assert list(fig.get_size_inches()) == [11.0, 7.0]  # 2x2 -> 3*2 + 1
+        cbars = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is not None]
+        assert len(cbars) == 4  # one colorbar per default var, grid or not
+    finally:
+        ds.close()
+        plt.close("all")
+
+
 def test_long_colorbar_labels_fit_within_bars(tmp_path: Path):
     """Regression: verbose ``long_name [units]`` colorbar labels on stacked
     panels must be shrunk to fit their bars, not overflow into the neighboring

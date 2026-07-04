@@ -388,6 +388,10 @@ def add_output_arguments(p: argparse.ArgumentParser, *, title: bool = True) -> N
     p.add_argument("--figsize", nargs=2, type=float, default=None, metavar=("W", "H"),
                    help="figure size in inches, e.g. --figsize 11 9 "
                         "(default: preset-specific).")
+    p.add_argument("--ncols", type=positive_int, default=1,
+                   help="arrange the variable panels in this many columns "
+                        "(default: 1, a single vertical stack); e.g. 2 with four "
+                        "variables gives a 2x2 grid. Sections stay one image each.")
     p.add_argument("--dpi", type=positive_int, default=None,
                    help="raster resolution for saved PNG/PDF (default: 150).")
     if title:

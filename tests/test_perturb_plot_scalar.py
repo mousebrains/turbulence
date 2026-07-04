@@ -221,7 +221,7 @@ def _scalar_args(root: Path, **over) -> argparse.Namespace:
         root=str(root), ctd_combo=None, sections=None, select=None, out_dir=None,
         var=None, z_bin=2.0, x_bin=None, depth_max=None, vmin=None, vmax=None,
         clim=None, name="s", xaxis="time", start=None, stop=None,
-        point=None, waypoints=None, units="km",
+        point=None, waypoints=None, units="km", ncols=1,
         figsize=None, dpi=None, title=None,
     )
     base.update(over)
@@ -248,6 +248,33 @@ def test_build_figures_honours_figsize(tmp_path: Path):
     _write_ctd_combo(tmp_path)
     (_, fig), = list(scalar.build_figures(_scalar_args(tmp_path, figsize=[7.0, 5.0])))
     assert list(fig.get_size_inches()) == [7.0, 5.0]
+    plt.close(fig)
+
+
+def test_ncols_grid_changes_layout(tmp_path: Path):
+    """ncols>1 arranges the variable panels in a grid: 4 variables at ncols=2
+    give a 2-row figure (height 3*2+1) instead of the 4-row stack (3*4+1)."""
+    import matplotlib.pyplot as plt
+
+    _write_ctd_combo(tmp_path)
+    vs = ["JAC_T", "SP", "sigma0", "dTdz"]
+    (_, f1), = list(scalar.build_figures(_scalar_args(tmp_path, var=vs)))
+    assert f1.get_size_inches()[1] == 13.0  # 4x1 stack -> 3*4 + 1
+    plt.close(f1)
+    (_, f2), = list(scalar.build_figures(_scalar_args(tmp_path, var=vs, ncols=2)))
+    assert list(f2.get_size_inches()) == [11.0, 7.0]  # 2x2 -> width 11, 3*2 + 1
+    plt.close(f2)
+
+
+def test_ncols_ragged_blanks_unused_cell(tmp_path: Path):
+    """3 variables in 2 columns -> a 2x2 grid with exactly one blanked cell."""
+    import matplotlib.pyplot as plt
+
+    _write_ctd_combo(tmp_path)
+    (_, fig), = list(scalar.build_figures(
+        _scalar_args(tmp_path, var=["JAC_T", "SP", "sigma0"], ncols=2)))
+    invisible = [ax for ax in fig.axes if not ax.get_visible()]
+    assert len(invisible) == 1
     plt.close(fig)
 
 
