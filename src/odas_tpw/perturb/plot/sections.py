@@ -401,9 +401,10 @@ def add_output_arguments(p: argparse.ArgumentParser, *, title: bool = True) -> N
                         "(default: preset-specific).")
     p.add_argument("--ncols", type=positive_int, default=None,
                    help="arrange the variable panels in this many columns "
-                        "(default: preset-specific — profiles is a 3-column grid, "
-                        "others a single vertical stack); e.g. 2 with four "
-                        "variables gives a 2x2 grid. Sections stay one image each.")
+                        "(default: preset-specific — profiles a 3-column and "
+                        "scalar a 2-column grid, others a single vertical stack); "
+                        "e.g. 2 with four variables gives a 2x2 grid. Sections "
+                        "stay one image each.")
     p.add_argument("--dpi", type=positive_int, default=None,
                    help="raster resolution for saved PNG/PDF (default: 150).")
     if title:

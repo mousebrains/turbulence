@@ -98,8 +98,10 @@ __all__ = [
 
 # Default scalar panels when the user names none, plus optional sensor channels
 # added automatically when the instrument carries them.
-_DEFAULT_VARS: tuple[str, ...] = ("JAC_T", "SP", "sigma0")
+_DEFAULT_VARS: tuple[str, ...] = ("JAC_T", "SP", "sigma0", "rho")
 _OPTIONAL_VARS: tuple[str, ...] = ("DO", "Chlorophyll", "Turbidity")
+# Default column count when --ncols is not given (a 2-wide grid).
+_DEFAULT_NCOLS = 2
 
 # Per-variable cmocean colormap.  Diverging fields center the color scale at 0.
 _CMAP: dict[str, str] = {
@@ -217,7 +219,7 @@ def _build_section_figure(
     # Panels are arranged in `ncols` columns (default 1 = a vertical stack),
     # filled left-to-right, top-to-bottom. Sections remain one figure each.
     fig, axes, left_axes, col_bottom = layout.panel_grid(
-        len(panel_vars), getattr(args, "ncols", None) or 1,
+        len(panel_vars), getattr(args, "ncols", None) or _DEFAULT_NCOLS,
         figsize=getattr(args, "figsize", None),
     )
     left_set = set(left_axes)

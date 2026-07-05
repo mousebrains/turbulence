@@ -48,6 +48,7 @@ def _write_ctd_combo(root: Path, n_cast: int = 4, per: int = 60) -> None:
     jac_t = 28.0 - 0.1 * depth
     sp = 34.5 + 0.01 * depth
     sigma0 = -1.0 + 0.25 * depth  # negative for depth < 4 m
+    rho = 24.0 + 0.25 * depth     # in-situ density anomaly
     dtdz = 0.02 + 0.0001 * depth  # one-signed (stable) -> diverging-cmap path
 
     ds = xr.Dataset(
@@ -56,7 +57,9 @@ def _write_ctd_combo(root: Path, n_cast: int = 4, per: int = 60) -> None:
                                           "units": "degree_Celsius"}),
             "SP": (("time",), sp, {"long_name": "practical salinity", "units": "PSU"}),
             "sigma0": (("time",), sigma0, {"long_name": "potential density anomaly",
-                                            "units": "kg/m^3"}),
+                                            "units": "kg m-3"}),
+            "rho": (("time",), rho, {"long_name": "in-situ density - 1000",
+                                      "units": "kg m-3"}),
             "dTdz": (("time",), dtdz, {"long_name": "temperature gradient",
                                         "units": "K m-1"}),
             "depth": (("time",), depth, {"units": "m", "positive": "down"}),
@@ -589,7 +592,20 @@ def test_default_variables(tmp_path: Path):
     _write_ctd_combo(tmp_path)
     with xr.open_dataset(tmp_path / "ctd_combo_00" / "combo.nc") as ds:
         # dTdz is present but not a default panel.
-        assert scalar._default_variables(ds) == ["JAC_T", "SP", "sigma0"]
+        assert scalar._default_variables(ds) == ["JAC_T", "SP", "sigma0", "rho"]
+
+
+def test_default_preset_is_2col_grid(tmp_path: Path):
+    """The scalar preset defaults to JAC_T/SP/sigma0/rho in a 2-column grid
+    when neither --var nor --ncols is given."""
+    import matplotlib.pyplot as plt
+
+    _write_ctd_combo(tmp_path)
+    (_, fig), = list(scalar.build_figures(_scalar_args(tmp_path, var=None, ncols=None)))
+    cbars = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is not None]
+    assert len(cbars) == 4                              # JAC_T, SP, sigma0, rho
+    assert list(fig.get_size_inches()) == [11.0, 7.0]   # 4 vars / 2 cols = 2 rows
+    plt.close("all")
 
 
 def test_diverging_variable_renders(tmp_path: Path):
