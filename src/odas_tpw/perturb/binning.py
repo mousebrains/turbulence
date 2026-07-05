@@ -235,6 +235,15 @@ def _decoded(var) -> np.ndarray:
     return np.asarray(arr)
 
 
+# Data-variable attributes carried through binning to the combo. Binning
+# otherwise drops all data-var attrs (they are recreated from the static schema
+# at combo time), which would discard per-run provenance like the in-situ FP07
+# calibration tag. Only this curated set survives, so the combo does not gain a
+# flood of source attrs — schema-controlled keys (units/long_name/...) are
+# unaffected. Extend when another provenance attr needs to reach the products.
+_PRESERVE_DATAVAR_ATTRS: frozenset[str] = frozenset({"calibration"})
+
+
 def _load_profile_snapshot(profile_file: Path) -> dict | None:
     """Read a profile NC once and return a snapshot for binning.
 
@@ -246,6 +255,8 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
     * ``scalars`` — ``{lat|lon|stime|etime: float}`` (epoch seconds for time)
     * ``scalar_attrs`` — ``{name: attrs_dict}`` (units/calendar stripped — the
       combo's CF encoder re-emits them on write)
+    * ``var_attrs`` — ``{var_name: attrs_dict}`` for the curated
+      :data:`_PRESERVE_DATAVAR_ATTRS` carried through to the combo
 
     Implementation note: we open with raw ``netCDF4.Dataset`` rather
     than ``xr.open_dataset`` here.  xarray's per-open overhead
@@ -305,6 +316,7 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
 
         n_depth = len(depth)
         data: dict[str, np.ndarray] = {}
+        var_attrs: dict[str, dict] = {}
         for vname, var in ds.variables.items():
             if vname == depth_var or vname in _SCALAR_NAMES:
                 continue
@@ -328,6 +340,10 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
             if var.dtype.kind not in ("f", "i", "u"):
                 continue
             data[str(vname)] = _decoded(var)
+            preserved = {a: getattr(var, a) for a in var.ncattrs()
+                         if a in _PRESERVE_DATAVAR_ATTRS}
+            if preserved:
+                var_attrs[str(vname)] = preserved
     finally:
         ds.close()
 
@@ -336,6 +352,7 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
         "vars": data,
         "scalars": scalars,
         "scalar_attrs": scalar_attrs,
+        "var_attrs": var_attrs,
     }
 
 
@@ -352,6 +369,7 @@ def _bin_snapshot(snapshot: dict, bin_edges: np.ndarray, agg, diagnostics: bool)
         "counts": None,
         "scalars": snapshot["scalars"],
         "scalar_attrs": snapshot["scalar_attrs"],
+        "var_attrs": snapshot.get("var_attrs", {}),
     }
     depth = snapshot["depth"]
     for vname, arr in snapshot["vars"].items():
@@ -398,7 +416,7 @@ def _bin_one_profile(
     """
     snap = _load_profile_snapshot(profile_file)
     if snap is None:
-        return {"vars": {}, "stds": {}, "scalars": {}, "scalar_attrs": {}}
+        return {"vars": {}, "stds": {}, "scalars": {}, "scalar_attrs": {}, "var_attrs": {}}
     return _bin_snapshot(snap, bin_edges, agg, diagnostics)
 
 
@@ -523,6 +541,9 @@ def bin_by_depth(
         "etime": np.full(n_profiles, np.nan),
     }
     profile_scalar_attrs: dict[str, dict] = {}
+    # Curated data-var attrs (e.g. the FP07 in-situ calibration tag) from the
+    # first profile that carries them; concat keeps the first anyway.
+    profile_var_attrs: dict[str, dict] = {}
 
     for pi, (pfile, res) in enumerate(zip(profile_files, results)):
         with stage_log(log_dir, _source_stem(pfile)):
@@ -533,6 +554,8 @@ def bin_by_depth(
                 if sname not in profile_scalar_attrs:
                     profile_scalar_attrs[sname] = res["scalar_attrs"].get(sname, {})
             for vname, binned in res["vars"].items():
+                if vname not in profile_var_attrs and res.get("var_attrs", {}).get(vname):
+                    profile_var_attrs[vname] = res["var_attrs"][vname]
                 if vname not in result_vars:
                     result_vars[vname] = np.full((n_bins, n_profiles), np.nan)
                     if diagnostics:
@@ -560,7 +583,10 @@ def bin_by_depth(
 
     data_vars: dict = {}
     for vname, arr in result_vars.items():
-        data_vars[str(vname)] = (["bin", "profile"], arr)
+        attrs = profile_var_attrs.get(vname, {})
+        data_vars[str(vname)] = (
+            (["bin", "profile"], arr, attrs) if attrs else (["bin", "profile"], arr)
+        )
 
     # Emit per-profile scalars as 1-D vars on the profile dim, only when at
     # least one profile actually carried them (preserves backward

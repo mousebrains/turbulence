@@ -342,6 +342,10 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         }
         if info.get("comment"):
             attrs["comment"] = info["comment"]
+        # Provenance (e.g. the in-situ FP07 calibration tag). Not a schema key,
+        # so it survives apply_schema; binning carries it to the combo.
+        if info.get("calibration"):
+            attrs["calibration"] = info["calibration"]
         channels.append((ch_name, ch_data, dim, attrs))
 
     global_attrs = {

@@ -1330,10 +1330,21 @@ def process_file(
                 # chi pipeline consumes.  Without the latter, chi keeps
                 # the factory calibration and scales with the square of
                 # the calibration slope error.
+                # Record the in-situ calibration as per-channel provenance so
+                # the products are self-describing (and plots can label it).
+                # Only channels actually recalibrated are tagged — if the
+                # reference was missing, cal_result is empty and the channels
+                # keep the factory calibration with no tag.
+                cal_tag = (
+                    f"in-situ (Steinhart-Hart order {fp07_cfg.get('order', 2)} "
+                    f"vs {fp07_cfg.get('reference', 'JAC_T')})"
+                )
                 for ch_name, cal_data in cal_result.get("channels", {}).items():
                     pf.channels[ch_name] = cal_data
+                    pf.channel_info.setdefault(ch_name, {})["calibration"] = cal_tag
                 for ch_name, cal_data in cal_result.get("fast_channels", {}).items():
                     pf.channels[ch_name] = cal_data
+                    pf.channel_info.setdefault(ch_name, {})["calibration"] = cal_tag
             except Exception as exc:
                 logger.warning("FP07 cal failed for %s: %s", p_path.name, exc)
 
