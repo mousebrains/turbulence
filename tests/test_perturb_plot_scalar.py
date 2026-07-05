@@ -90,8 +90,28 @@ def test_var_label_omits_dimensionless_units():
             "depth": (("t",), np.zeros(2), {"long_name": "depth", "units": "m"}),
         }
     )
-    assert var_label(ds, "SP") == "practical salinity (PSU)"  # no "[1]"
-    assert var_label(ds, "depth") == "depth [m]"  # real unit still shown
+    assert var_label(ds, "SP") == "practical salinity (PSU)"  # no "(1)"
+    assert var_label(ds, "depth") == "depth (m)"  # real unit in curved brackets
+
+
+def test_var_label_renders_celsius_compactly():
+    """Every degree_Celsius field reads as the compact "(°C)" (parenthetical,
+    like the curated T_1/T_2 labels), not the raw "[degree_Celsius]"."""
+    import xarray as xr
+
+    from odas_tpw.perturb.plot.sections import var_label
+
+    ds = xr.Dataset(
+        {
+            "JAC_T": (("t",), np.zeros(2),
+                      {"long_name": "in-situ temperature (JFE)",
+                       "units": "degree_Celsius"}),
+            "DO_T": (("t",), np.zeros(2),
+                     {"long_name": "optode temperature", "units": "degC"}),
+        }
+    )
+    assert var_label(ds, "JAC_T") == "in-situ temperature (JFE) (°C)"
+    assert var_label(ds, "DO_T") == "optode temperature (°C)"  # variant spelling
 
 
 def test_time_subset_handles_numeric_time_axis():

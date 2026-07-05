@@ -108,6 +108,25 @@ def test_make_norm_picks_scale():
     assert none is None                                    # log field, no positive data
 
 
+def test_make_norm_diverging_one_signed_not_symmetric():
+    """A diverging field whose robust (1/99%) range is one-signed must NOT be
+    mirrored about zero -- an all-stable dTdz (~ -0.2..0) or an offset Incl_Y
+    (~76..90 deg) would otherwise waste half the colorbar.  Zero-straddling
+    data stays symmetric (covered by test_make_norm_picks_scale)."""
+    from matplotlib.colors import Normalize
+
+    args = argparse.Namespace(vmin=None, vmax=None)
+    z = np.array([[-0.20, -0.02], [-0.15, -0.05]])  # all-negative dTdz
+    div = profiles._make_norm("dTdz", z, args, {})
+    assert isinstance(div, Normalize)
+    assert div.vmax < 0.0                             # positive half not padded on
+    assert div.vmin == pytest.approx(-0.20, abs=0.02)
+    iy = profiles._make_norm(
+        "Incl_Y", np.array([[76.0, 90.0], [80.0, 88.0]]), args, {})
+    assert iy.vmin > 0.0                              # not mirrored to negative
+    assert iy.vmax == pytest.approx(90.0, abs=0.5)
+
+
 def test_make_norm_n2_uses_symlog_for_negatives():
     """N2 can be negative (overturning); it must use SymLogNorm so negatives
     are visible, not LogNorm which would mask them as no-data (#20)."""
@@ -276,16 +295,331 @@ def test_ncols_grid_layout(tmp_path: Path):
         plt.close("all")
 
 
+def test_profiles_default_preset_is_3x3(tmp_path: Path):
+    """The profiles preset defaults to the 9-variable 3-column overview grid
+    when --ncols is not given."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    prod = profiles.PRODUCTS["profiles"]
+    assert prod.default_vars == (
+        "JAC_T", "T1", "T2", "SP", "rho", "sigma0", "W_slow", "dTdz", "N2")
+    assert prod.default_ncols == 3
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    data = {v: (20.0 + 0.1 * bins * col, {"units": "1", "long_name": v})
+            for v in prod.default_vars}
+    _write_product(tmp_path, "combo", data)
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(  # deliberately NO ncols -> product default (3)
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, list(prod.default_vars), args, {}, prod)
+        assert fig is not None
+        cbars = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is not None]
+        assert len(cbars) == 9
+        # 9 vars / 3 cols = 3 rows -> width max(11, 5.5*3)=16.5, height 3*3+1=10.
+        assert list(fig.get_size_inches()) == [16.5, 10.0]
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_cbar_label_overrides(tmp_path: Path):
+    """The profile scalars carry the custom T_1/T_2/N^2/dT-dz colorbar labels,
+    overriding the CF long_name/units default."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "T1": (28.0 - bins * col, {"units": "degree_Celsius", "long_name": "ignored"}),
+        "T2": (28.0 - bins * col, {"units": "degree_Celsius", "long_name": "ignored"}),
+        "N2": (1.0e-4 * np.ones((10, 6)), {"units": "s-2", "long_name": "ignored"}),
+        "dTdz": (-0.1 * np.ones((10, 6)), {"units": "K m-1", "long_name": "ignored"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["T1", "T2", "N2", "dTdz"], args, {},
+            profiles.PRODUCTS["profiles"],
+        )
+        labels = {ax.yaxis.label.get_text()
+                  for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert labels == {
+            r"$T_1$ (°C)", r"$T_2$ (°C)",
+            r"$N^2$ (s$^{-2}$) (Thorpe-sorted)",
+            r"$\frac{dT}{dz}$ (°C m$^{-1}$) (+ downwards)",
+        }
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_pdp_incl_cbar_label_overrides(tmp_path: Path):
+    """P_dP and the inclinometer channels carry the custom short colorbar
+    labels; Incl_T shows °C."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "P_dP": (5.0 + bins * col, {"units": "dbar", "long_name": "ignored"}),
+        "Incl_X": (bins * col - 5.0, {"units": "degree", "long_name": "ignored"}),
+        "Incl_Y": (76.0 + bins * col, {"units": "degree", "long_name": "ignored"}),
+        "Incl_T": (18.0 + bins * col, {"units": "degree_Celsius", "long_name": "x"}),
+        "W_slow": (0.8 + 0.01 * bins * col, {"units": "dbar s-1", "long_name": "x"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["P_dP", "Incl_X", "Incl_Y", "Incl_T", "W_slow"], args, {},
+            profiles.PRODUCTS["profiles"],
+        )
+        labels = {ax.yaxis.label.get_text()
+                  for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert labels == {
+            "P_dP (dbar)", "incl_X (°)", "incl_Y (°)", "incl_T (°C)",
+            r"W_slow (dbar s$^{-1}$)",
+        }
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_depth_axis_fits_valid_data(tmp_path: Path):
+    """Without --p-max, the depth axis fits where there is valid data, not the
+    full combo bin grid (which would pad empty gray below the deepest sample)."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    z = 20.0 * np.ones((10, 6))          # bins at 0.5, 1.5, ..., 9.5 m
+    z[5:, :] = np.nan                    # valid only in bins 0..4 (0.5..4.5 m)
+    _write_product(tmp_path, "combo", {
+        "T1": (z, {"units": "degree_Celsius", "long_name": "x"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["T1"], args, {}, profiles.PRODUCTS["profiles"])
+        deep, shallow = fig.axes[0].get_ylim()   # inverted: deep bound first
+        assert deep == pytest.approx(5.0)        # 4.5 deepest valid + 0.5 half-bin
+        assert shallow == pytest.approx(0.0)
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_depth_axis_respects_explicit_p_max(tmp_path: Path):
+    """--p-max overrides the data-driven fit: surface to p_max."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    z = 20.0 * np.ones((10, 6))
+    z[5:, :] = np.nan
+    _write_product(tmp_path, "combo", {
+        "T1": (z, {"units": "degree_Celsius", "long_name": "x"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=8.0, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["T1"], args, {}, profiles.PRODUCTS["profiles"])
+        deep, shallow = fig.axes[0].get_ylim()
+        assert deep == pytest.approx(8.0)        # explicit p_max, not the ~5 fit
+        assert shallow == pytest.approx(0.0)
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_jac_cbar_label_overrides(tmp_path: Path):
+    """JAC_T/JAC_C read as the familiar JAC_T/JAC_C names (JFE dropped),
+    overriding their CF long_name/units."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "JAC_T": (28.0 - bins * col,
+                  {"units": "degree_Celsius", "long_name": "in-situ temperature (JFE)"}),
+        "JAC_C": (50.0 + bins * col,
+                  {"units": "mS/cm", "long_name": "conductivity (JFE)"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["JAC_T", "JAC_C"], args, {}, profiles.PRODUCTS["profiles"])
+        labels = {ax.yaxis.label.get_text()
+                  for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert labels == {"JAC_T (°C)", "JAC_C (mS/cm)"}
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_reverse_cbar_inverts_pdp_colorbar(tmp_path: Path):
+    """P_dP's colorbar reads with the smallest value at the top (axis inverted);
+    a normal channel's colorbar keeps the default orientation."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "P_dP": (5.0 + bins * col, {"units": "dbar", "long_name": "x"}),
+        "T1": (28.0 - bins * col, {"units": "degree_Celsius", "long_name": "x"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["P_dP", "T1"], args, {}, profiles.PRODUCTS["profiles"],
+        )
+        cbars = {ax.yaxis.label.get_text(): ax
+                 for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert cbars["P_dP (dbar)"].yaxis_inverted()       # smallest at top
+        assert not cbars[r"$T_1$ (°C)"].yaxis_inverted()   # default orientation
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_seawater_vars_render_on_profiles(tmp_path: Path):
+    """SP/SA/CT/sigma0/rho render on the profiles product with the curated
+    labels (Theta, sigma_0, rho-1000, Salinity); SP and sigma0 read
+    smallest-at-top."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "SP": (34.0 + 0.02 * bins * col,
+               {"units": "1", "long_name": "practical salinity (PSU)"}),
+        "SA": (34.2 + 0.02 * bins * col,
+               {"units": "g/kg", "long_name": "absolute salinity"}),
+        "CT": (28.0 - 0.1 * bins * col,
+               {"units": "degree_Celsius", "long_name": "conservative temperature"}),
+        "sigma0": (22.0 + 0.05 * bins * col,
+                   {"units": "kg m-3", "long_name": "potential density anomaly"}),
+        "rho": (22.5 + 0.05 * bins * col,
+                {"units": "kg m-3", "long_name": "in-situ density - 1000"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["SP", "SA", "CT", "sigma0", "rho"], args, {},
+            profiles.PRODUCTS["profiles"])
+        assert fig is not None
+        cbars = {ax.yaxis.label.get_text(): ax
+                 for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert cbars.keys() == {
+            r"$\Theta$ (°C)", "Salinity (PSU)", "Salinity (g/kg)",
+            r"$\sigma_0$ (kg m$^{-3}$)", r"$\rho$-1000 (kg m$^{-3}$) (in-situ)",
+        }
+        assert cbars["Salinity (PSU)"].yaxis_inverted()             # min at top
+        assert cbars[r"$\sigma_0$ (kg m$^{-3}$)"].yaxis_inverted()
+        assert not cbars["Salinity (g/kg)"].yaxis_inverted()        # default
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_in_situ_calib_label_from_metadata(tmp_path: Path):
+    """A channel whose ``calibration`` attr marks it in-situ calibrated gets
+    ``(in-situ calib)`` appended to its colorbar label; an untagged channel does
+    not.  The tag is driven by the variable metadata, not the config."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "T1": (28.0 - bins * col,
+               {"units": "degree_Celsius", "long_name": "ignored",
+                "calibration": "in-situ (Steinhart-Hart order 1 vs JAC_T)"}),
+        "T2": (28.0 - bins * col, {"units": "degree_Celsius", "long_name": "ignored"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["T1", "T2"], args, {}, profiles.PRODUCTS["profiles"],
+        )
+        labels = {ax.yaxis.label.get_text()
+                  for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert labels == {r"$T_1$ (°C) (in-situ calib)", r"$T_2$ (°C)"}
+    finally:
+        ds.close()
+        plt.close("all")
+
+
 def test_long_colorbar_labels_fit_within_bars(tmp_path: Path):
     """Regression: verbose ``long_name [units]`` colorbar labels on stacked
     panels must be shrunk to fit their bars, not overflow into the neighboring
-    panel's label.  The four default profile labels are tall enough to collide
-    on a 3-in-per-panel figure, so the builder must call
-    ``layout.fit_colorbar_labels`` — which shrinks the font (never grows it) so
-    each label roughly fits its bar.
+    panel's label.  Four verbose labels are tall enough to collide on a
+    3-in-per-panel figure, so the builder must call ``layout.fit_colorbar_labels``
+    — which shrinks the font (never grows it) so each label roughly fits its bar.
 
-    We assert the *behavior* (font shrunk below the default; label brought to
-    within its bar), not an exact pixel fit: rendered text height for a given
+    Uses variables whose labels come from ``var_label`` (not the short
+    ``_CBAR_LABEL`` overrides for T1/T2/N2/dTdz), so the labels are genuinely
+    long. We assert the *behavior* (font shrunk below the default; label brought
+    to within its bar), not an exact pixel fit: rendered text height for a given
     font size varies ~5-8% across matplotlib backends/platforms, so a strict
     ``label_h <= bar_h`` is environment-fragile (passed locally, failed CI).
     The precise geometry of ``fit_colorbar_labels`` is pinned by its unit tests
@@ -297,30 +631,33 @@ def test_long_colorbar_labels_fit_within_bars(tmp_path: Path):
 
     bins, _cast = _bp()
     col = np.ones((1, 6))
+    # Non-overridden, non-Celsius vars so the labels come from var_label and stay
+    # genuinely long (overrides would shorten them; degree_Celsius -> "(°C)"
+    # would too).
     _write_product(tmp_path, "combo", {
-        "T1": (28.0 - bins * col,
-               {"units": "degree_Celsius",
-                "long_name": "FP07 thermistor temperature (probe 1)"}),
-        "T2": (28.0 - bins * col,
-               {"units": "degree_Celsius",
-                "long_name": "FP07 thermistor temperature (probe 2)"}),
-        "N2": (1.0e-4 * np.ones((10, 6)),
-               {"units": "s-2",
-                "long_name": "buoyancy frequency squared (Thorpe-sorted)"}),
-        "dTdz": (-0.1 * np.ones((10, 6)),
-                 {"units": "K m-1",
-                  "long_name": "background temperature gradient (positive down)"}),
+        "Gnd": (bins * col - 5.0,
+                {"units": "V",
+                 "long_name": "instrument ground reference voltage on analog board"}),
+        "V_Bat": (bins * col - 5.0,
+                  {"units": "V",
+                   "long_name": "vehicle battery pack terminal voltage during cast"}),
+        "PV": (bins * col - 5.0,
+               {"units": "V",
+                "long_name": "pressure transducer excitation voltage on sensor"}),
+        "speed": (bins * col + 1.0,
+                  {"units": "m s-1",
+                   "long_name": "vehicle profiling speed through the water column"}),
     })
     ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
     sec = profiles.Section(name="all", method="time")
     args = argparse.Namespace(
         root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
         apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
-        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[], ncols=1,
     )
     try:
         fig = profiles._build_profiles_figure(
-            ds, sec, list(profiles.PRODUCTS["profiles"].default_vars),
+            ds, sec, ["Gnd", "V_Bat", "PV", "speed"],
             args, {}, profiles.PRODUCTS["profiles"],
         )
         assert fig is not None

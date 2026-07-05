@@ -217,7 +217,7 @@ def _build_section_figure(
     # Panels are arranged in `ncols` columns (default 1 = a vertical stack),
     # filled left-to-right, top-to-bottom. Sections remain one figure each.
     fig, axes, left_axes, col_bottom = layout.panel_grid(
-        len(panel_vars), getattr(args, "ncols", 1),
+        len(panel_vars), getattr(args, "ncols", None) or 1,
         figsize=getattr(args, "figsize", None),
     )
     left_set = set(left_axes)

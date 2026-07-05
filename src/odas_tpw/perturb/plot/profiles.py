@@ -66,10 +66,18 @@ class _Product:
     default_vars: tuple[str, ...]
     qc_var: str | None       # companion qc_drop_* field, NaN'd when --apply-qc
     label: str               # user-facing name (subcommand / title / file stem)
+    default_ncols: int = 1   # column count when --ncols is not given
 
 
 PRODUCTS: dict[str, _Product] = {
-    "profiles": _Product("combo", ("T1", "T2", "N2", "dTdz"), None, "profiles"),
+    # Default profiles preset: a 3x3 overview (temperatures / water-mass /
+    # kinematics + stratification). Missing fields (e.g. SP/rho/sigma0 before a
+    # pipeline re-run) are silently dropped from the grid.
+    "profiles": _Product(
+        "combo",
+        ("JAC_T", "T1", "T2", "SP", "rho", "sigma0", "W_slow", "dTdz", "N2"),
+        None, "profiles", default_ncols=3,
+    ),
     "diss": _Product("diss_combo", ("epsilonMean",), "qc_drop_epsilon", "epsilon"),
     "chi": _Product("chi_combo", ("chiMean",), "qc_drop_chi", "chi"),
     "mixing": _Product("chi_combo", ("K_T", "Gamma", "K_rho"), "qc_drop_chi", "mixing"),
@@ -83,6 +91,8 @@ _CMAP: dict[str, str] = {
     "chiMean": "thermal", "chi_1": "thermal", "chi_2": "thermal",
     "K_T": "tempo", "K_rho": "tempo", "Gamma": "matter",
     "Incl_X": "balance", "Incl_Y": "balance",
+    "CT": "thermal", "SP": "haline", "SA": "haline",
+    "sigma0": "dense", "rho": "dense",
 }
 # Log-scaled fields (span orders of magnitude, strictly positive).
 _LOG_VARS: frozenset[str] = frozenset({
@@ -94,6 +104,36 @@ _LOG_VARS: frozenset[str] = frozenset({
 _SYMLOG_VARS: frozenset[str] = frozenset({"N2"})
 # Diverging fields centered on zero.
 _DIVERGING: frozenset[str] = frozenset({"dTdz", "Incl_X", "Incl_Y"})
+
+# Explicit colorbar labels overriding the CF long_name/units default
+# (var_label) for the profile-product scalars. Mathtext renders the sub/
+# superscripts and the dT/dz fraction; the degree sign stays outside mathtext
+# as a literal Unicode char. Note dTdz is a *conservative*-temperature (theta)
+# gradient (processing.mixing._stable_window), Thorpe-sorted over the background
+# window -- the label keeps the familiar dT/dz form.
+_CBAR_LABEL: dict[str, str] = {
+    "T1": r"$T_1$ (°C)",
+    "T2": r"$T_2$ (°C)",
+    "N2": r"$N^2$ (s$^{-2}$) (Thorpe-sorted)",
+    "dTdz": r"$\frac{dT}{dz}$ (°C m$^{-1}$) (+ downwards)",
+    "JAC_T": "JAC_T (°C)",
+    "JAC_C": "JAC_C (mS/cm)",
+    "CT": r"$\Theta$ (°C)",
+    "SP": "Salinity (PSU)",
+    "SA": "Salinity (g/kg)",
+    "sigma0": r"$\sigma_0$ (kg m$^{-3}$)",
+    "rho": r"$\rho$-1000 (kg m$^{-3}$) (in-situ)",
+    "P_dP": "P_dP (dbar)",
+    "Incl_X": "incl_X (°)",
+    "Incl_Y": "incl_Y (°)",
+    "Incl_T": "incl_T (°C)",
+    "W_slow": r"W_slow (dbar s$^{-1}$)",
+}
+
+# Variables whose colorbar reads with the smallest value at the top (axis
+# inverted) rather than the matplotlib default (smallest at the bottom).
+# SP/sigma0 mirror the scalar product (salinity/density rise with depth).
+_REVERSE_CBAR: frozenset[str] = frozenset({"P_dP", "SP", "sigma0"})
 
 
 def _profile_window(stime: np.ndarray, sec: Section) -> np.ndarray:
@@ -149,7 +189,12 @@ def _make_norm(name: str, z: np.ndarray, args: argparse.Namespace, clim: dict):
 
     if name in _DIVERGING:
         vmin, vmax = grid.linear_limits(z, lo, hi)
-        if not explicit and vmin is not None and vmax is not None:
+        # Center on zero only when the robust (1/99%) range actually straddles
+        # it.  One-signed data -- an all-stable dTdz (~ -0.17..0 K/m) or an
+        # offset Incl_Y (~76..90 deg) -- would otherwise mirror an unused sign
+        # and waste half the colorbar, making the range look far too wide.
+        if (not explicit and vmin is not None and vmax is not None
+                and vmin < 0.0 < vmax):
             m = max(abs(vmin), abs(vmax))
             return Normalize(vmin=-m, vmax=m)
         return Normalize(vmin=vmin, vmax=vmax)
@@ -245,13 +290,20 @@ def _build_profiles_figure(
         if n_drop:
             print(f"section {sec.name!r}: QC flags NaN {n_drop} cells per panel")
 
-    # Panels in `ncols` columns (default 1 = a vertical stack), filled
-    # left-to-right, top-to-bottom. Sections remain one figure each.
+    # Panels in `ncols` columns, filled left-to-right, top-to-bottom. When
+    # --ncols is not given, fall back to the product's default (profiles = 3;
+    # a vertical stack elsewhere). Sections remain one figure each.
+    ncols = getattr(args, "ncols", None)
+    if ncols is None:
+        ncols = product.default_ncols
     fig, axes, left_axes, col_bottom = layout.panel_grid(
-        len(panel_vars), getattr(args, "ncols", 1),
+        len(panel_vars), ncols,
         figsize=getattr(args, "figsize", None),
     )
     left_set = set(left_axes)
+    # Depth rows (bins) that carry finite data in at least one plotted panel;
+    # used to fit the shared depth axis to where there is valid data.
+    valid_rows = np.zeros(depth.shape, dtype=bool)
 
     for ax, name in zip(axes, panel_vars):
         is_pseudo = diagnostics.is_pseudo_var(name)
@@ -262,7 +314,14 @@ def _build_profiles_figure(
             z = np.asarray(dss[name].transpose("bin", "profile").values, dtype=float)[:, col]
             if qc is not None:
                 z = np.where(np.isfinite(qc) & (qc > 0), np.nan, z)
-            cmap_name, label = _CMAP.get(name, "thermal"), var_label(ds, name)
+            cmap_name = _CMAP.get(name, "thermal")
+            label = _CBAR_LABEL.get(name, var_label(ds, name))
+            # Flag in-situ-calibrated channels (FP07 T1/T2) from the variable's
+            # own provenance attr -- reflects what was actually applied, not the
+            # config intent (calibrate=true can fall back to factory).
+            cal = ds[name].attrs.get("calibration", "") if name in ds else ""
+            if isinstance(cal, str) and cal.startswith("in-situ"):
+                label = f"{label} (in-situ calib)"
         norm = _make_norm(name, z, args, clim)
         if norm is None or not np.any(np.isfinite(z)):
             ax.text(0.5, 0.5, f"no valid {name}", transform=ax.transAxes,
@@ -270,16 +329,31 @@ def _build_profiles_figure(
             if ax in left_set:  # only the left column carries the shared y label
                 ax.set_ylabel("Depth (m)")
             continue
+        valid_rows |= np.any(np.isfinite(z), axis=1)
         cmap = getattr(cmocean.cm, cmap_name).copy()
         cmap.set_bad(color="0.85")  # unsampled depths: light gray
         layout.plot_columns(ax, fig, xs, depth, z, cmap, norm, label,
-                            gap_factor=args.gap_factor)
+                            gap_factor=args.gap_factor,
+                            reverse_cbar=name in _REVERSE_CBAR)
         if ax in left_set:
             ax.set_ylabel("Depth (m)")
 
-    axes[0].invert_yaxis()
+    for ax in axes:
+        # Grid over the color mesh (axisbelow False) so it reads on any colormap.
+        ax.set_axisbelow(False)
+        ax.grid(True, color="0.4", linewidth=0.4, alpha=0.5)
+
+    axes[0].invert_yaxis()  # 0 m at top (shared across panels)
     if args.p_max is not None:
+        # Explicit depth clip wins over the data-driven fit.
         axes[0].set_ylim(float(args.p_max), 0.0)
+    elif valid_rows.any():
+        # Fit the depth axis to where there is valid data rather than spanning
+        # the whole combo's bin grid (which pads the section with empty gray
+        # below its deepest sample). Pad half a bin so edge cells aren't clipped.
+        dv = depth[valid_rows]
+        pad = 0.5 * float(np.median(np.diff(depth))) if depth.size > 1 else 0.0
+        axes[0].set_ylim(float(dv.max()) + pad, max(float(dv.min()) - pad, 0.0))
 
     for ax in col_bottom:
         ax.set_xlabel(xa.label)

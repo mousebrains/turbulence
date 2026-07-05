@@ -11,7 +11,9 @@ output_dir: figs/
 figures:
   - name: profiles
     preset: profiles
-    vars: [T1, T2, N2, dTdz]
+    # 3x3 overview (temperatures / water-mass / kinematics + stratification).
+    vars: [JAC_T, T1, T2, SP, rho, sigma0, W_slow, dTdz, N2]
+    ncols: 3
   - name: epsilon
     preset: epsilon
     vars: [epsilonMean]

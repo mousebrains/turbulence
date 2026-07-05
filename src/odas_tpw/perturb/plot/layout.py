@@ -323,6 +323,7 @@ def plot_columns(
     norm,
     cbar_label: str,
     gap_factor: float = 4.0,
+    reverse_cbar: bool = False,
 ):
     """Pcolor a depth-by-column field at arbitrary x; one mesh per x-cluster.
 
@@ -347,5 +348,7 @@ def plot_columns(
             cmap=cmap, norm=norm, shading="flat",
         )
     if pcm is not None:
-        fig.colorbar(pcm, ax=ax, label=cbar_label)
+        cbar = fig.colorbar(pcm, ax=ax, label=cbar_label)
+        if reverse_cbar:
+            cbar.ax.invert_yaxis()  # smallest value at the top
     return pcm
