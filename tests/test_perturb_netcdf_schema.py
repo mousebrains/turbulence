@@ -56,6 +56,18 @@ class TestSchemas:
         assert "ACDD-1.3" in GLOBAL_ATTRS["Conventions"]
 
 
+class TestChannelMetadata:
+    def test_pv_is_pressure_transducer_voltage(self):
+        """PV is the pressure transducer's voltage, not vehicle power."""
+        assert COMBO_SCHEMA["PV"]["long_name"] == "pressure transducer voltage"
+
+    def test_w_slow_carries_units_and_long_name(self):
+        """W_slow (profiling rate) needs self-describing metadata; it is a
+        computed non-schema channel otherwise stripped of units by binning."""
+        assert COMBO_SCHEMA["W_slow"]["units"] == "dbar s-1"
+        assert "long_name" in COMBO_SCHEMA["W_slow"]
+
+
 class TestApplySchema:
     def test_applies_attributes(self):
         import numpy as np

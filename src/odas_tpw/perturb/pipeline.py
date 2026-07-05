@@ -1136,6 +1136,7 @@ def process_file(
             pf.channel_info["W_slow"] = {
                 "units": "dbar s-1", "type": "computed",
                 "name": "W_slow",
+                "long_name": "profiling rate (smoothed |dP/dt|)",
             }
         except Exception as exc:
             logger.warning(

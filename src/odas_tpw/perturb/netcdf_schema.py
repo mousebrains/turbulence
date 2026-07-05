@@ -136,7 +136,7 @@ COMBO_SCHEMA: dict[str, dict] = {
     },
     "PV": {
         "units": "V",
-        "long_name": "vehicle power voltage",
+        "long_name": "pressure transducer voltage",
     },
     "Incl_X": {
         "units": "degree",
@@ -150,6 +150,10 @@ COMBO_SCHEMA: dict[str, dict] = {
         "units": "degree_Celsius",
         "long_name": "inclinometer temperature",
         "units_metadata": "temperature: on_scale",
+    },
+    "W_slow": {
+        "units": "dbar s-1",
+        "long_name": "profiling rate (smoothed |dP/dt|)",
     },
     "JAC_T": {
         "nc_name": "temp",
@@ -187,13 +191,13 @@ COMBO_SCHEMA: dict[str, dict] = {
     },
     "sigma0": {
         "nc_name": "sigma0",
-        "units": "kg/m^3",
+        "units": "kg m-3",
         "standard_name": "sea_water_sigma_theta",
         "long_name": "potential density anomaly",
     },
     "rho": {
         "nc_name": "rho",
-        "units": "kg/m^3",
+        "units": "kg m-3",
         # No CF standard_name: this is in-situ density MINUS 1000 (an offset
         # storage convention, mirroring sigma0), not full in-situ density.
         # CF's "sea_water_density" denotes the real ~1025 kg/m^3 value, so
@@ -459,6 +463,7 @@ _COVERAGE_CONTENT_TYPE: dict[str, str] = {
     "Incl_T": "auxiliaryInformation",
     "DO_T": "auxiliaryInformation",
     "speed": "auxiliaryInformation",
+    "W_slow": "auxiliaryInformation",
     "nu": "auxiliaryInformation",
 }
 
