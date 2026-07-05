@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from odas_tpw.perturb.pipeline import (
+    _inject_seawater_properties,
     _profile_practical_salinity,
     _setup_output_dirs,
     _upstream_for,
@@ -1909,3 +1910,56 @@ class TestTimeEpochSeconds:
             attrs={"units": "seconds since 1970-01-01T00:00:00+00:00"},
         )
         np.testing.assert_allclose(_time_epoch_seconds(da), [5.0])
+
+
+class _FakePF:
+    """Minimal PFile stand-in for the seawater-injection helper."""
+
+    def __init__(self, n: int = 120, drop: tuple[str, ...] = ()):
+        import datetime
+
+        self.t_slow = np.arange(n, dtype=float)
+        self.start_time = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+        self.channels = {
+            "JAC_T": np.full(n, 15.0),          # in-situ temperature [°C]
+            "JAC_C": np.full(n, 42.0),          # conductivity [mS/cm] ~ oceanic
+            "P": np.linspace(0.0, 50.0, n),     # pressure [dbar]
+        }
+        for name in drop:
+            del self.channels[name]
+        self.channel_info: dict[str, dict] = {}
+
+
+class _FakeGPS:
+    def lat(self, t):
+        return np.full(np.asarray(t, dtype=float).shape, 15.0)
+
+    def lon(self, t):
+        return np.full(np.asarray(t, dtype=float).shape, 145.0)
+
+
+class TestInjectSeawaterProperties:
+    def test_injects_full_suite_on_slow_grid(self):
+        pf, gps = _FakePF(), _FakeGPS()
+        names = _inject_seawater_properties(pf, gps, "JAC_T", "JAC_C")
+        assert names == ("SP", "SA", "CT", "sigma0", "rho")
+        for name in names:
+            assert name in pf.channels
+            assert len(pf.channels[name]) == len(pf.t_slow)   # slow-length
+            assert np.all(np.isfinite(pf.channels[name]))
+            assert pf.channel_info[name]["type"] == "derived"
+        # C~42 mS/cm at 15 °C, near-surface -> plausibly oceanic salinity.
+        assert 20.0 < float(np.nanmean(pf.channels["SP"])) < 40.0
+        assert pf.channel_info["SP"]["units"] == "1"          # CF dimensionless
+        assert pf.channel_info["CT"]["units"] == "degree_Celsius"
+
+    def test_noop_when_conductivity_missing(self):
+        pf, gps = _FakePF(drop=("JAC_C",)), _FakeGPS()
+        assert _inject_seawater_properties(pf, gps, "JAC_T", "JAC_C") == ()
+        assert "SP" not in pf.channels
+
+    def test_noop_on_length_mismatch(self):
+        pf, gps = _FakePF(), _FakeGPS()
+        pf.channels["JAC_C"] = np.full(len(pf.t_slow) // 2, 42.0)  # e.g. a fast C
+        assert _inject_seawater_properties(pf, gps, "JAC_T", "JAC_C") == ()
+        assert "SP" not in pf.channels
