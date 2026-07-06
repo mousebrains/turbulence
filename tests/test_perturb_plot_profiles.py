@@ -198,8 +198,10 @@ def test_profile_window_skips_when_empty(tmp_path: Path):
 
 
 def test_missing_default_vars_errors(tmp_path: Path):
-    # A diss combo with none of the default vars -> clear error.
-    _write_product(tmp_path, "diss_combo", {"speed": (np.ones((10, 6)), {"units": "m/s"})})
+    # A diss combo with none of the default vars -> clear error. epsilonLnSigma
+    # is a real diss field but not one of the default panels.
+    _write_product(tmp_path, "diss_combo",
+                   {"epsilonLnSigma": (np.ones((10, 6)), {"units": "1"})})
     with pytest.raises(SystemExit):
         _run(["epsilon", "--root", str(tmp_path), "--out-dir", str(tmp_path)])
 
@@ -326,6 +328,121 @@ def test_profiles_default_preset_is_3x3(tmp_path: Path):
         assert len(cbars) == 9
         # 9 vars / 3 cols = 3 rows -> width max(11, 5.5*3)=16.5, height 3*3+1=10.
         assert list(fig.get_size_inches()) == [16.5, 10.0]
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_epsilon_default_preset_is_3col(tmp_path: Path):
+    """The epsilon preset defaults to the 8-variable 3-column overview grid
+    (kinematics / window means / dissipation + stratification) when --ncols is
+    not given."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    prod = profiles.PRODUCTS["diss"]
+    assert prod.default_vars == (
+        "speed", "nu", "T_mean", "e_1", "e_2", "epsilonMean", "N2", "dTdz")
+    assert prod.default_ncols == 3
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    # Positive values keep the log-scaled epsilon panels valid.
+    data = {v: (20.0 + 0.1 * bins * col, {"units": "1", "long_name": v})
+            for v in prod.default_vars}
+    _write_product(tmp_path, "diss_combo", data)
+    ds = xr.open_dataset(tmp_path / "diss_combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(  # deliberately NO ncols -> product default (3)
+        root=str(tmp_path), product="diss", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, list(prod.default_vars), args, {}, prod)
+        assert fig is not None
+        cbars = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is not None]
+        assert len(cbars) == 8
+        # 8 vars / 3 cols = 3 rows -> width max(11, 5.5*3)=16.5, height 3*3+1=10.
+        assert list(fig.get_size_inches()) == [16.5, 10.0]
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_chi_default_preset_is_3col(tmp_path: Path):
+    """The chi preset defaults to the 9-variable 3-column overview grid
+    (kinematics / window means / chi / stratification / QC flag) when --ncols is
+    not given."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    prod = profiles.PRODUCTS["chi"]
+    assert prod.default_vars == (
+        "speed", "nu", "T_mean", "chi_1", "chi_2", "chiMean", "N2", "dTdz",
+        "qc_drop_chi")
+    assert prod.default_ncols == 3
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    data = {v: (20.0 + 0.1 * bins * col, {"units": "1", "long_name": v})
+            for v in prod.default_vars}
+    data["qc_drop_chi"] = (np.zeros((10, 6)), {"units": "1", "long_name": "flag"})
+    data["qc_drop_chi"][0][0, 0] = 1.0  # one flagged cell (non-constant norm)
+    _write_product(tmp_path, "chi_combo", data)
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(  # deliberately NO ncols -> product default (3)
+        root=str(tmp_path), product="chi", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, list(prod.default_vars), args, {}, prod)
+        assert fig is not None
+        cbars = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is not None]
+        assert len(cbars) == 9
+        # 9 vars / 3 cols = 3 rows -> width max(11, 5.5*3)=16.5, height 3*3+1=10.
+        assert list(fig.get_size_inches()) == [16.5, 10.0]
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_qc_flag_panel_is_not_self_masked(tmp_path: Path):
+    """Plotting the qc_drop_* field shows the raw flags: the QC mask blanks the
+    data panels but never the flag field itself (self-masking would hide exactly
+    the flagged cells you asked to see)."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    qc = np.zeros((10, 6))
+    qc[0, 0] = 1.0
+    qc[5, 3] = 1.0  # a couple of flagged cells
+    _write_product(tmp_path, "chi_combo", {
+        "qc_drop_chi": (qc, {"units": "1", "long_name": "QC drop flag"}),
+    })
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="chi", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["qc_drop_chi"], args, {}, profiles.PRODUCTS["chi"])
+        # The flag panel rendered (not dropped) and still carries the raw flags.
+        vals = []
+        for ax in fig.axes:
+            for m in ax.collections:
+                a = m.get_array()
+                if a is not None:
+                    vals.append(np.ma.filled(np.ma.asarray(a, dtype=float), np.nan).ravel())
+        arr = np.concatenate(vals)
+        assert np.nanmax(arr) == 1.0  # flagged cells survived (not self-masked)
     finally:
         ds.close()
         plt.close("all")

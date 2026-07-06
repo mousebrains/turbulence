@@ -78,8 +78,21 @@ PRODUCTS: dict[str, _Product] = {
         ("JAC_T", "T1", "T2", "SP", "rho", "sigma0", "W_slow", "dTdz", "N2"),
         None, "profiles", default_ncols=3,
     ),
-    "diss": _Product("diss_combo", ("epsilonMean",), "qc_drop_epsilon", "epsilon"),
-    "chi": _Product("chi_combo", ("chiMean",), "qc_drop_chi", "chi"),
+    # Default epsilon preset: a 3-column overview (kinematics / window means /
+    # per-probe + combined dissipation / stratification).
+    "diss": _Product(
+        "diss_combo",
+        ("speed", "nu", "T_mean", "e_1", "e_2", "epsilonMean", "N2", "dTdz"),
+        "qc_drop_epsilon", "epsilon", default_ncols=3,
+    ),
+    # Default chi preset: a 3-column overview (kinematics / window means /
+    # per-probe + combined chi / stratification / QC flag).
+    "chi": _Product(
+        "chi_combo",
+        ("speed", "nu", "T_mean", "chi_1", "chi_2", "chiMean", "N2", "dTdz",
+         "qc_drop_chi"),
+        "qc_drop_chi", "chi", default_ncols=3,
+    ),
     "mixing": _Product("chi_combo", ("K_T", "Gamma", "K_rho"), "qc_drop_chi", "mixing"),
 }
 
@@ -330,7 +343,10 @@ def _build_profiles_figure(
             cmap_name, label = diagnostics.pseudo_cmap(name), diagnostics.pseudo_label(name)
         else:
             z = np.asarray(dss[name].transpose("bin", "profile").values, dtype=float)[:, col]
-            if qc is not None:
+            # Apply the QC mask to the data panels, but never to the flag field
+            # itself -- plotting qc_drop_* is how you *see* which cells are
+            # flagged, so self-masking it would blank exactly what you asked for.
+            if qc is not None and name != product.qc_var:
                 z = np.where(np.isfinite(qc) & (qc > 0), np.nan, z)
             cmap_name = _CMAP.get(name, "thermal")
             label = _CBAR_LABEL.get(name, var_label(ds, name))

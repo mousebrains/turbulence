@@ -16,7 +16,14 @@ figures:
     ncols: 3
   - name: epsilon
     preset: epsilon
-    vars: [epsilonMean]
+    # 3-column overview (kinematics / window means / dissipation + stratification).
+    vars: [speed, nu, T_mean, e_1, e_2, epsilonMean, N2, dTdz]
+    ncols: 3
+  - name: chi
+    preset: chi
+    # 3-column overview (kinematics / window means / chi / stratification / QC).
+    vars: [speed, nu, T_mean, chi_1, chi_2, chiMean, N2, dTdz, qc_drop_chi]
+    ncols: 3
   - name: mixing
     preset: mixing
     vars: [K_T, Gamma, K_rho]
