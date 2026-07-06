@@ -299,8 +299,8 @@ class TestEpsilon:
             fom = ds["fom"].values
             valid = fom[np.isfinite(fom)]
             all_fom.extend(valid.tolist())
-        all_fom = np.array(all_fom)
-        median_fom = np.median(all_fom)
+        all_fom_arr = np.array(all_fom)
+        median_fom = np.median(all_fom_arr)
         assert 0.3 < median_fom < 3.0, f"Median FOM {median_fom:.2f} outside [0.3, 3.0]"
 
     def test_qc_K_max_ratio(self, eps_results):
@@ -310,8 +310,8 @@ class TestEpsilon:
             kmr = ds["K_max_ratio"].values
             valid = kmr[np.isfinite(kmr)]
             all_kmr.extend(valid.tolist())
-        all_kmr = np.array(all_kmr)
-        assert np.all(all_kmr > 0), "K_max_ratio should be positive"
+        all_kmr_arr = np.array(all_kmr)
+        assert np.all(all_kmr_arr > 0), "K_max_ratio should be positive"
 
     def test_epsilon_two_probes(self, eps_results):
         """Both shear probes should produce similar epsilon (within 1 decade)."""

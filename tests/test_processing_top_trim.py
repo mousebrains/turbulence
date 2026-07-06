@@ -16,7 +16,7 @@ class TestComputeTrimDepth:
         # High variance in top 10m, low below
         sh1 = np.random.randn(n) * 0.01
         top_mask = depth < 10.0
-        sh1[top_mask] = np.random.randn(np.sum(top_mask)) * 10.0
+        sh1[top_mask] = np.random.randn(int(np.count_nonzero(top_mask))) * 10.0
 
         trim = compute_trim_depth(
             depth,
@@ -260,7 +260,7 @@ class TestComputeTrimDepths:
             n = 2000
             depth = np.linspace(0, 50, n)
             sh1 = np.random.randn(n) * 0.01
-            sh1[depth < 5] = np.random.randn(np.sum(depth < 5)) * 5.0
+            sh1[depth < 5] = np.random.randn(int(np.count_nonzero(depth < 5))) * 5.0
             profiles_data.append({"depth_fast": depth, "channels": {"sh1": sh1}})
 
         results = compute_trim_depths(profiles_data, dz=1.0)

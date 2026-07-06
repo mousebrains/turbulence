@@ -5,7 +5,9 @@ Reference: Code/save2combo.m, Code/glue_widthwise.m, Code/glue_lengthwise.m,
            Code/save2NetCDF.m
 """
 
+import contextlib
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -13,6 +15,27 @@ import numpy as np
 import xarray as xr
 
 from odas_tpw.perturb.netcdf_schema import GLOBAL_ATTRS, apply_schema
+
+
+def _atomic_to_netcdf(ds: xr.Dataset, out_path: Path, encoding: dict) -> None:
+    """Write *ds* to *out_path* atomically (hidden temp file + os.replace).
+
+    A direct ``to_netcdf(out_path)`` publishes the file incrementally, so a
+    concurrent reader -- e.g. ``perturb-plot`` (the mixing product opens two
+    combos) running while the pipeline finishes -- can read a truncated
+    ``combo.nc``. ``os.replace`` is atomic within a filesystem, so the reader
+    sees either the old file or the complete new one. Mirrors
+    ``pipeline._atomic_to_netcdf`` (kept local to avoid a circular import),
+    adding ``encoding`` support.
+    """
+    tmp = out_path.with_name(f".{out_path.name}.{os.getpid()}.tmp")
+    try:
+        ds.to_netcdf(tmp, encoding=encoding)
+        os.replace(tmp, out_path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +107,10 @@ def make_combo(
 
     try:
         combo = _glue_widthwise(datasets) if method == "depth" else _glue_lengthwise(datasets)
+        # Materialize before closing the source handles below: the concat is
+        # lazy, so a later operation (or to_netcdf) would otherwise re-read the
+        # closed files via xarray's caching layer -- brittle and needless I/O.
+        combo.load()
     finally:
         # Close every opened handle even if the concat raises (e.g. mismatched
         # bin grids), so a failed combo doesn't leak file descriptors.
@@ -288,7 +315,7 @@ def make_combo(
         encoding[cname] = {"_FillValue": None}
 
     out_path = output_dir / "combo.nc"
-    combo.to_netcdf(out_path, encoding=encoding)
+    _atomic_to_netcdf(combo, out_path, encoding)
     return out_path
 
 

@@ -60,8 +60,11 @@ def add_seawater_properties(
     CT = gsw.CT_from_t(SA, T, P)
     sigma0 = gsw.sigma0(SA, CT)
     rho = gsw.rho(SA, CT, P) - 1000.0
+    # gsw.z_from_p returns height Z (m, <=0 below the surface); positive-down
+    # depth is -Z. Using -Z (not |Z|) keeps above-surface samples (P<0, e.g.
+    # deck calibrations) as negative depths instead of folding them back down.
     z = gsw.z_from_p(P, lat_safe)
-    depth = np.abs(z)
+    depth = -z
 
     return {
         "SP": np.asarray(SP),

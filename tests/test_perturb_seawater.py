@@ -80,3 +80,17 @@ class TestAddSeawaterProperties:
 
         props = add_seawater_properties(T, C, P, lat, lon)
         assert np.all(np.diff(props["depth"]) > 0)
+
+    def test_out_of_water_pressure_is_negative_depth(self):
+        """A P<0 sample (e.g. an out-of-water deck reading) yields a NEGATIVE
+        depth, not a spurious positive one: depth is -z (gsw height), not
+        abs(z), which would fold above-surface heights back down."""
+        T = np.array([20.0, 20.0])
+        C = np.array([37.0, 37.0])
+        P = np.array([-1.0, 50.0])   # above the surface, then in-water
+        lat = np.array([15.0, 15.0])
+        lon = np.array([145.0, 145.0])
+
+        props = add_seawater_properties(T, C, P, lat, lon)
+        assert props["depth"][0] < 0.0   # above surface -> negative (abs flips this)
+        assert props["depth"][1] > 0.0   # in-water -> positive
