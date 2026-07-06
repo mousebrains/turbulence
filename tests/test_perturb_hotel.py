@@ -2,6 +2,7 @@
 """Tests for perturb.hotel — hotel file loading and interpolation."""
 
 from datetime import UTC, datetime
+from typing import Any
 
 import numpy as np
 import pytest
@@ -22,7 +23,7 @@ def _make_csv(path, time_col="time", extra_cols=None):
     """Write a simple CSV hotel file."""
     import pandas as pd
 
-    data = {time_col: [0, 1, 2, 3, 4]}
+    data: dict[str, Any] = {time_col: [0, 1, 2, 3, 4]}
     defaults = {"speed": [0.5, 0.6, 0.7, 0.8, 0.9], "pitch": [1, 2, 3, 4, 5]}
     if extra_cols:
         defaults.update(extra_cols)
@@ -245,7 +246,8 @@ class TestTimeConversion:
         t = ds.createVariable("time", "f8", ("obs",))
         s = ds.createVariable("speed", "f8", ("obs",), fill_value=-999.0)
         t[:] = [0, 1, 2, 3, 4]
-        s[:] = np.ma.array([0.5, 0.6, 0.7, 0.8, 0.9], mask=[0, 0, 1, 0, 0])
+        s[:] = np.ma.array([0.5, 0.6, 0.7, 0.8, 0.9],
+                           mask=[False, False, True, False, False])
         ds.close()
         hd = load_hotel(path, time_format="seconds")
         assert np.isnan(hd.channels["speed"][2])
