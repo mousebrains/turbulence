@@ -407,6 +407,92 @@ def test_pdp_incl_cbar_label_overrides(tmp_path: Path):
         plt.close("all")
 
 
+def test_epsilon_cbar_label_overrides(tmp_path: Path):
+    """The epsilon (diss) product carries the Greek/angle-bracket colorbar
+    labels: nu for viscosity, an angle-bracket mean temperature, per-probe
+    epsilon_n ("probe n" dropped as redundant with the subscript), and an
+    angle-bracket combined epsilon."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    eps = 1.0e-8 * np.ones((10, 6))  # positive -> LogNorm path
+    _write_product(tmp_path, "diss_combo", {
+        "nu": (1.0e-6 * np.ones((10, 6)), {"units": "m2 s-1", "long_name": "ignored"}),
+        "T_mean": (18.0 + bins * col, {"units": "degree_Celsius", "long_name": "x"}),
+        "e_1": (eps, {"units": "W/kg", "long_name": "TKE dissipation rate (probe 1)"}),
+        "e_2": (eps, {"units": "W/kg", "long_name": "TKE dissipation rate (probe 2)"}),
+        "epsilonMean": (eps, {"units": "W/kg", "long_name": "combined TKE dissipation rate"}),
+    })
+    ds = xr.open_dataset(tmp_path / "diss_combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="diss", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["nu", "T_mean", "e_1", "e_2", "epsilonMean"], args, {},
+            profiles.PRODUCTS["diss"],
+        )
+        cbars = {ax.yaxis.label.get_text(): ax
+                 for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert set(cbars) == {
+            r"$\nu$ (m$^2$ s$^{-1}$)", r"$\langle T \rangle$ (°C)",
+            r"$\epsilon_1$ (W kg$^{-1}$)", r"$\epsilon_2$ (W kg$^{-1}$)",
+            r"$\langle \epsilon \rangle$ (W kg$^{-1}$)",
+        }
+        # nu reads smallest-at-top (viscosity falls with depth); epsilon does not.
+        assert cbars[r"$\nu$ (m$^2$ s$^{-1}$)"].yaxis_inverted()
+        assert not cbars[r"$\epsilon_1$ (W kg$^{-1}$)"].yaxis_inverted()
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_chi_mixing_cbar_label_overrides(tmp_path: Path):
+    """The chi/mixing products carry per-probe chi_n, an angle-bracket combined
+    chi, the K_T/K_rho diffusivities, and a dimensionless Gamma colorbar label
+    (Gamma carries no units bracket)."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    chi = 1.0e-7 * np.ones((10, 6))  # positive -> LogNorm path
+    kappa = 1.0e-4 * np.ones((10, 6))
+    _write_product(tmp_path, "chi_combo", {
+        "chi_1": (chi, {"units": "K2 s-1", "long_name": "x"}),
+        "chi_2": (chi, {"units": "K2 s-1", "long_name": "x"}),
+        "chiMean": (chi, {"units": "K2 s-1", "long_name": "x"}),
+        "K_T": (kappa, {"units": "m2 s-1", "long_name": "x"}),
+        "K_rho": (kappa, {"units": "m2 s-1", "long_name": "x"}),
+        "Gamma": (0.2 * np.ones((10, 6)), {"units": "1", "long_name": "x"}),
+    })
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="chi", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["chi_1", "chi_2", "chiMean", "K_T", "K_rho", "Gamma"], args, {},
+            profiles.PRODUCTS["chi"],
+        )
+        labels = {ax.yaxis.label.get_text()
+                  for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert labels == {
+            r"$\chi_1$ (K$^2$ s$^{-1}$)", r"$\chi_2$ (K$^2$ s$^{-1}$)",
+            r"$\langle \chi \rangle$ (K$^2$ s$^{-1}$)",
+            r"$K_T$ (m$^2$ s$^{-1}$)", r"$K_\rho$ (m$^2$ s$^{-1}$)", r"$\Gamma$",
+        }
+    finally:
+        ds.close()
+        plt.close("all")
+
+
 def test_depth_axis_fits_valid_data(tmp_path: Path):
     """Without --p-max, the depth axis fits where there is valid data, not the
     full combo bin grid (which would pad empty gray below the deepest sample)."""

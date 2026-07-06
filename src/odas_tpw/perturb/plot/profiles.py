@@ -128,12 +128,30 @@ _CBAR_LABEL: dict[str, str] = {
     "Incl_Y": "incl_Y (°)",
     "Incl_T": "incl_T (°C)",
     "W_slow": r"W_slow (dbar s$^{-1}$)",
+    # Epsilon (diss) product: Greek nu for viscosity, angle brackets for the
+    # window-mean temperature and combined epsilon (an overline renders faintly
+    # at colorbar-label size), and per-probe epsilons as ε_n (the "probe n" is
+    # redundant with the subscript).
+    "nu": r"$\nu$ (m$^2$ s$^{-1}$)",
+    "T_mean": r"$\langle T \rangle$ (°C)",
+    "e_1": r"$\epsilon_1$ (W kg$^{-1}$)",
+    "e_2": r"$\epsilon_2$ (W kg$^{-1}$)",
+    "epsilonMean": r"$\langle \epsilon \rangle$ (W kg$^{-1}$)",
+    # Chi (thermal-variance) and mixing product: per-probe χ_n, angle-bracket
+    # combined χ, the Osborn-Cox / Osborn diffusivities, and dimensionless Γ.
+    "chi_1": r"$\chi_1$ (K$^2$ s$^{-1}$)",
+    "chi_2": r"$\chi_2$ (K$^2$ s$^{-1}$)",
+    "chiMean": r"$\langle \chi \rangle$ (K$^2$ s$^{-1}$)",
+    "K_T": r"$K_T$ (m$^2$ s$^{-1}$)",
+    "K_rho": r"$K_\rho$ (m$^2$ s$^{-1}$)",
+    "Gamma": r"$\Gamma$",
 }
 
 # Variables whose colorbar reads with the smallest value at the top (axis
 # inverted) rather than the matplotlib default (smallest at the bottom).
-# SP/sigma0 mirror the scalar product (salinity/density rise with depth).
-_REVERSE_CBAR: frozenset[str] = frozenset({"P_dP", "SP", "sigma0"})
+# SP/sigma0 mirror the scalar product (salinity/density rise with depth); nu
+# (viscosity) falls with depth as temperature does, so it reads the same way.
+_REVERSE_CBAR: frozenset[str] = frozenset({"P_dP", "SP", "sigma0", "nu"})
 
 
 def _profile_window(stime: np.ndarray, sec: Section) -> np.ndarray:
