@@ -241,14 +241,95 @@ class TestDiagInspector:
         assert insp.iDepth == 3
 
 
+# --------------------------------------------------------------------- sections
+def _write_sections(path, body):
+    path.write_text(body, encoding="utf-8")
+    return str(path)
+
+
+class TestApplySections:
+    def _overview(self, tmp_path):
+        # Three casts a day apart so section windows can pick subsets.
+        from odas_tpw.perturb.diag.data import load_overview
+
+        stimes = (
+            np.datetime64("2025-01-20T00:00:00").astype("datetime64[s]").astype(float),
+            np.datetime64("2025-01-21T00:00:00").astype("datetime64[s]").astype(float),
+            np.datetime64("2025-01-22T00:00:00").astype("datetime64[s]").astype(float),
+        )
+        combo = tmp_path / "combo.nc"
+        _write_combo(combo, stimes=stimes)
+        return load_overview(str(combo), ("epsilonMean", "e_1", "e_2"))
+
+    def test_none_returns_all(self, tmp_path):
+        from odas_tpw.perturb.diag.data import apply_sections
+
+        ov = self._overview(tmp_path)
+        out = apply_sections(ov, None, None)
+        assert out.stime_epoch.size == 3
+
+    def test_time_window_narrows_casts(self, tmp_path):
+        from odas_tpw.perturb.diag.data import apply_sections
+
+        ov = self._overview(tmp_path)
+        secs = _write_sections(tmp_path / "s.yaml", """
+sections:
+  - name: mid
+    start: "2025-01-20T12:00:00Z"
+    stop:  "2025-01-21T12:00:00Z"
+""")
+        out = apply_sections(ov, secs, None)
+        # Only the 2025-01-21 cast falls inside the window.
+        assert out.stime_epoch.size == 1
+        assert out.fields["epsilonMean"].shape[1] == 1
+
+    def test_select_picks_named_section(self, tmp_path):
+        from odas_tpw.perturb.diag.data import apply_sections
+
+        ov = self._overview(tmp_path)
+        secs = _write_sections(tmp_path / "s.yaml", """
+sections:
+  - name: early
+    stop: "2025-01-20T12:00:00Z"
+  - name: late
+    start: "2025-01-21T12:00:00Z"
+""")
+        out = apply_sections(ov, secs, ["late"])
+        assert out.stime_epoch.size == 1
+        # The kept cast is 2025-01-22.
+        assert str(out.t[0].astype("datetime64[D]")) == "2025-01-22"
+
+    def test_select_without_sections_errors(self, tmp_path):
+        from odas_tpw.perturb.diag.data import apply_sections
+
+        ov = self._overview(tmp_path)
+        with pytest.raises(SystemExit, match="only applies together with"):
+            apply_sections(ov, None, ["late"])
+
+    def test_empty_selection_errors(self, tmp_path):
+        from odas_tpw.perturb.diag.data import apply_sections
+
+        ov = self._overview(tmp_path)
+        secs = _write_sections(tmp_path / "s.yaml", """
+sections:
+  - name: nope
+    start: "2030-01-01T00:00:00Z"
+""")
+        with pytest.raises(SystemExit, match="no casts fall within"):
+            apply_sections(ov, secs, None)
+
+
 # --------------------------------------------------------------------------- CLI
 def test_cli_parser_registers_epsilon():
     from odas_tpw.perturb.diag.cli import build_parser
 
     args = build_parser().parse_args(
-        ["epsilon", "--root", "results", "--out", "x.png", "--clim", "-10", "-4"]
+        ["epsilon", "--root", "results", "--out", "x.png", "--clim", "-10", "-4",
+         "--sections", "s.yaml", "--select", "a,b"]
     )
     assert args.command == "epsilon"
     assert args.root == "results"
     assert args.clim == [-10.0, -4.0]
     assert args.apply_qc is True
+    assert args.sections == "s.yaml"
+    assert args.select == ["a,b"]

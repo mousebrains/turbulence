@@ -80,6 +80,56 @@ def load_overview(
     return OverviewData(t=t, stime_epoch=stime_epoch, bin=bin_depth, fields=fields)
 
 
+def subset_profiles(ov: OverviewData, keep: np.ndarray) -> OverviewData:
+    """Return *ov* restricted to the profiles selected by the boolean *keep*."""
+    keep = np.asarray(keep, dtype=bool)
+    return OverviewData(
+        t=ov.t[keep],
+        stime_epoch=ov.stime_epoch[keep],
+        bin=ov.bin,
+        fields={n: f[:, keep] for n, f in ov.fields.items()},
+    )
+
+
+def apply_sections(
+    ov: OverviewData, sections_path: str | None, select: list[str] | None
+) -> OverviewData:
+    """Narrow *ov* to the casts within the selected section(s)' time window(s).
+
+    Reuses the ``perturb-plot`` sections format (``sections.load_sections`` +
+    ``select_sections``).  Only each section's UTC ``start``/``stop`` is used —
+    the overview x-axis is always cast index, so a section's ``xaxis`` method is
+    ignored.  The kept casts are the union over the selected sections (an open
+    ``start``/``stop`` is unbounded on that side).  ``--select`` without
+    ``--sections`` is an error, matching perturb-plot.
+    """
+    if not sections_path:
+        if select:
+            raise SystemExit("--select only applies together with --sections")
+        return ov
+
+    from odas_tpw.perturb.plot import sections as sec_mod
+
+    secs = sec_mod.load_sections(sections_path)
+    if select:
+        secs = sec_mod.select_sections(secs, select)
+
+    t = ov.t
+    if t.size == 0:
+        return ov
+    tmin, tmax = t.min(), t.max()
+    keep = np.zeros(t.shape, dtype=bool)
+    for s in secs:
+        lo = s.start if s.start is not None else tmin
+        hi = s.stop if s.stop is not None else tmax
+        keep |= (t >= lo) & (t <= hi)
+    if not keep.any():
+        raise SystemExit(
+            "no casts fall within the selected section time window(s)"
+        )
+    return subset_profiles(ov, keep)
+
+
 @dataclass
 class ProfileFile:
     """Per-window arrays from one ``diss_NN/*_prof*.nc`` file.

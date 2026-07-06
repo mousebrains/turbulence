@@ -14,7 +14,11 @@ import os
 
 from odas_tpw.perturb import resolve
 from odas_tpw.perturb.diag import render
-from odas_tpw.perturb.diag.data import EpsilonCellSource, load_overview
+from odas_tpw.perturb.diag.data import (
+    EpsilonCellSource,
+    apply_sections,
+    load_overview,
+)
 from odas_tpw.perturb.diag.inspector import DiagInspector
 
 # Overview panels: (combo variable, mathtext title). Matches the Matlab
@@ -34,6 +38,15 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     resolve.add_resolve_args(p)
     p.add_argument("--title", default=None,
                    help="figure title prefix (default: basename of --root)")
+    p.add_argument("--sections", default=None,
+                   help="sections YAML (perturb-plot format): narrow the overview "
+                        "to the selected section(s)' UTC start/stop window. The "
+                        "xaxis method is ignored (the overview is always cast x "
+                        "depth).")
+    p.add_argument("--select", action="append", default=None, metavar="NAME",
+                   help="show only the named section(s) from --sections "
+                        "(repeatable, or comma-separated). Default: every section "
+                        "in the file. Only valid together with --sections.")
     p.add_argument("--clim", type=float, nargs=2, default=None,
                    metavar=("LOG10_MIN", "LOG10_MAX"),
                    help="epsilon color limits as log10(W/kg) "
@@ -72,6 +85,7 @@ def run(args: argparse.Namespace) -> str:
     data = load_overview(
         combo_path, tuple(n for n, _ in _FIELDS), apply_qc=args.apply_qc
     )
+    data = apply_sections(data, args.sections, args.select)
     source = EpsilonCellSource(diss_dir)
     title = args.title or os.path.basename(os.path.normpath(args.root))
 
