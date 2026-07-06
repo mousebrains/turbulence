@@ -278,7 +278,7 @@ COMBO_SCHEMA: dict[str, dict] = {
     },
     "nu": {
         "nc_name": "nu",
-        "units": "m^2/s",
+        "units": "m2 s-1",
         "long_name": "kinematic viscosity",
     },
     "T_mean": {
@@ -311,7 +311,7 @@ CHI_SCHEMA: dict[str, dict] = {
     # no units or long_name.
     "chiMean": {
         "nc_name": "chiMean",
-        "units": "K^2/s",
+        "units": "K2 s-1",
         "long_name": "combined thermal variance dissipation rate",
     },
     "chiLnSigma": {
@@ -328,12 +328,12 @@ CHI_SCHEMA: dict[str, dict] = {
     },
     "chi_1": {
         "nc_name": "chi_1",
-        "units": "K^2/s",
+        "units": "K2 s-1",
         "long_name": "thermal variance dissipation (probe 1)",
     },
     "chi_2": {
         "nc_name": "chi_2",
-        "units": "K^2/s",
+        "units": "K2 s-1",
         "long_name": "thermal variance dissipation (probe 2)",
     },
     "kB_1": {

@@ -67,6 +67,17 @@ class TestChannelMetadata:
         assert COMBO_SCHEMA["W_slow"]["units"] == "dbar s-1"
         assert "long_name" in COMBO_SCHEMA["W_slow"]
 
+    def test_nu_units_are_cf_canonical(self):
+        """Kinematic viscosity uses CF-canonical "m2 s-1", not the "m^2/s"
+        caret form (matching the sigma0/rho kg m-3 convention)."""
+        assert COMBO_SCHEMA["nu"]["units"] == "m2 s-1"
+
+    def test_chi_units_are_cf_canonical(self):
+        """Thermal-variance dissipation uses CF-canonical "K2 s-1", not the
+        "K^2/s" caret form (matching the RSI-side chi output)."""
+        for v in ("chiMean", "chi_1", "chi_2"):
+            assert CHI_SCHEMA[v]["units"] == "K2 s-1"
+
 
 class TestApplySchema:
     def test_applies_attributes(self):

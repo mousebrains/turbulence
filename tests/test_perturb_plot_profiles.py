@@ -66,7 +66,7 @@ def _build_all_products(root: Path) -> None:
         "qc_drop_epsilon": (qc, {}),
     })
     _write_product(root, "chi_combo", {
-        "chiMean": (chi, {"units": "K^2/s", "long_name": "chi"}),
+        "chiMean": (chi, {"units": "K2 s-1", "long_name": "chi"}),
         "K_T": (1.0e-4 * cast * np.ones((10, 1)), {"units": "m2 s-1", "long_name": "K_T"}),
         "Gamma": (0.2 * np.ones((10, 6)), {"units": "1", "long_name": "Gamma"}),
         "K_rho": (1.0e-4 * cast * np.ones((10, 1)), {"units": "m2 s-1", "long_name": "K_rho"}),
