@@ -15,6 +15,7 @@ output_dir: figs/
 figures:
   - name: ts
     preset: scalar
-    vars: [JAC_T, SP, sigma0]   # repeated --var
+    vars: [JAC_T, SP, sigma0, rho]   # repeated --var
+    ncols: 2                         # 2-column grid
     depth_max: 200
-    clim: {JAC_T: [18, 28]}     # {VAR: [min, max]}
+    clim: {JAC_T: [18, 28]}          # {VAR: [min, max]}

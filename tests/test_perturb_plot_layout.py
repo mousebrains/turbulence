@@ -12,6 +12,46 @@ matplotlib.use("Agg")
 from odas_tpw.perturb.plot import layout  # noqa: E402
 
 
+class TestPanelGrid:
+    """The shared ncols panel layout used by scalar and the profiles family."""
+
+    def _close(self, fig):
+        import matplotlib.pyplot as plt
+        plt.close(fig)
+
+    def test_full_grid_selects_left_and_bottom(self):
+        # 4 panels x 2 columns -> full 2x2. Row-major fill: [0,1 / 2,3].
+        fig, panels, left, col_bottom = layout.panel_grid(4, 2)
+        assert len(panels) == 4
+        assert all(ax.get_visible() for ax in panels)
+        assert panels[0] in left and panels[2] in left      # left column
+        assert panels[1] not in left and panels[3] not in left
+        # bottom of each column: col0 -> panel 2, col1 -> panel 3
+        assert set(map(id, col_bottom)) == {id(panels[2]), id(panels[3])}
+        assert list(fig.get_size_inches()) == [11.0, 7.0]   # 3*nrows + 1, nrows=2
+        self._close(fig)
+
+    def test_ragged_last_row_blanks_one_cell(self):
+        # 3 panels x 2 columns -> 2x2 with the 4th cell blanked; col1's bottom
+        # is panel 1 (row 0), since (row 1, col 1) is empty.
+        fig, panels, _left, col_bottom = layout.panel_grid(3, 2)
+        assert len(panels) == 3
+        assert set(map(id, col_bottom)) == {id(panels[2]), id(panels[1])}
+        invisible = [ax for ax in fig.axes if not ax.get_visible()]
+        assert len(invisible) == 1
+        self._close(fig)
+
+    def test_ncols_clamped_to_range(self):
+        # ncols > n clamps to n; ncols < 1 clamps to 1 (a single column).
+        fig, _panels, left, col_bottom = layout.panel_grid(2, 9)
+        assert len(col_bottom) == 2 and len(left) == 1   # clamped to 2 columns
+        self._close(fig)
+        fig, _panels, left, col_bottom = layout.panel_grid(3, 0)
+        assert len(left) == 3 and len(col_bottom) == 1   # clamped to 1 column
+        assert list(fig.get_size_inches()) == [11.0, 10.0]  # 3*3 + 1
+        self._close(fig)
+
+
 class TestColumnHelpers:
     def test_clusters_uniform_is_one(self):
         x = np.arange(6.0)  # uniform spacing 1 -> single cluster

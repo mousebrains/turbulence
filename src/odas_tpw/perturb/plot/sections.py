@@ -63,18 +63,29 @@ def safe_name(name: str) -> str:
     return "".join(c if (c.isalnum() or c in "-_.") else "_" for c in name)
 
 
+# CF temperature unit strings, shown as the compact "°C" symbol.
+_CELSIUS_UNITS: frozenset[str] = frozenset(
+    {"degree_Celsius", "degrees_Celsius", "degC", "celsius", "Celsius"}
+)
+
+
 def var_label(ds: xr.Dataset, name: str) -> str:
     """Colorbar label from the variable's own CF attrs, falling back to name.
 
-    A dimensionless unit (``"1"`` — the CF/UDUNITS form for ratios such as
+    Units are rendered in curved brackets — ``long_name (unit)`` — consistently
+    across every plot, matching the curated ``_CBAR_LABEL`` overrides.  A
+    dimensionless unit (``"1"`` — the CF/UDUNITS form for ratios such as
     practical salinity, the mixing coefficient, or turbidity) is NOT rendered:
-    ``[1]`` is noise on a plot, and the meaning lives in the long_name /
-    standard_name. Empty/absent units are likewise omitted (#38).
+    ``(1)`` is noise on a plot, and the meaning lives in the long_name /
+    standard_name. Empty/absent units are likewise omitted (#38).  Every
+    ``degree_Celsius`` field shows the compact ``°C`` symbol.
     """
     attrs = ds[name].attrs if name in ds else {}
     long_name = attrs.get("long_name", name)
     units = attrs.get("units")
-    return f"{long_name} [{units}]" if units and units != "1" else str(long_name)
+    if units in _CELSIUS_UNITS:
+        units = "°C"
+    return f"{long_name} ({units})" if units and units != "1" else str(long_name)
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +399,12 @@ def add_output_arguments(p: argparse.ArgumentParser, *, title: bool = True) -> N
     p.add_argument("--figsize", nargs=2, type=float, default=None, metavar=("W", "H"),
                    help="figure size in inches, e.g. --figsize 11 9 "
                         "(default: preset-specific).")
+    p.add_argument("--ncols", type=positive_int, default=None,
+                   help="arrange the variable panels in this many columns "
+                        "(default: preset-specific — profiles a 3-column and "
+                        "scalar a 2-column grid, others a single vertical stack); "
+                        "e.g. 2 with four variables gives a 2x2 grid. Sections "
+                        "stay one image each.")
     p.add_argument("--dpi", type=positive_int, default=None,
                    help="raster resolution for saved PNG/PDF (default: 150).")
     if title:

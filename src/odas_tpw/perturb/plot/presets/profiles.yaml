@@ -11,11 +11,22 @@ output_dir: figs/
 figures:
   - name: profiles
     preset: profiles
-    vars: [T1, T2, N2, dTdz]
+    # 3x3 overview (temperatures / water-mass / kinematics + stratification).
+    vars: [JAC_T, T1, T2, SP, rho, sigma0, W_slow, dTdz, N2]
+    ncols: 3
   - name: epsilon
     preset: epsilon
-    vars: [epsilonMean]
+    # 3-column overview (kinematics / window means / dissipation + stratification).
+    vars: [speed, nu, T_mean, e_1, e_2, epsilonMean, N2, dTdz]
+    ncols: 3
+  - name: chi
+    preset: chi
+    # 3-column overview (kinematics / window means / chi / stratification / QC).
+    vars: [speed, nu, T_mean, chi_1, chi_2, chiMean, N2, dTdz, qc_drop_chi]
+    ncols: 3
   - name: mixing
     preset: mixing
-    vars: [K_T, Gamma, K_rho]
-    p_max: 200
+    # Pulls e_* from the diss combo and chi/K/Gamma from the chi combo, merged
+    # on the shared (bin, profile) grid. 3-column: dissipation / chi / mixing.
+    vars: [e_1, e_2, epsilonMean, chi_1, chi_2, chiMean, K_T, K_rho, Gamma]
+    ncols: 3

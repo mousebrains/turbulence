@@ -284,15 +284,16 @@ See [CF Conventions](https://cfconventions.org/) and [ACDD](https://wiki.esipfed
 
 Background buoyancy frequency (`N2`) and temperature gradient (`dTdz`), computed
 with the Thorpe-sorted (adiabatically leveled) method and written to the
-profile, CTD, and dissipation products independent of epsilon/chi (the chi
-product's `N2`/`dTdz` are governed by `chi.mixing`). The profile and CTD
-products use the configurable background `window`; the diss product uses its
-own dissipation window.
+profile and dissipation products independent of epsilon/chi (the chi
+product's `N2`/`dTdz` are governed by `chi.mixing`). The profile product uses
+the configurable background `window`; the diss product uses its own dissipation
+window. These are **profile-only** (down-cast) quantities and are **not** written
+to the CTD product, which spans the whole up/down trajectory.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `enable` | bool | `true` | Write `N2`/`dTdz` to the profile, CTD, and diss products |
-| `window` | float | `2.0` | Background vertical window [dbar] for the profile and CTD products |
+| `enable` | bool | `true` | Write `N2`/`dTdz` to the profile and diss products (not the CTD product) |
+| `window` | float | `2.0` | Background vertical window [dbar] for the profile product |
 
 ---
 

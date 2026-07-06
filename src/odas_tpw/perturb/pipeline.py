@@ -1049,6 +1049,50 @@ def _profile_practical_salinity(prof_path, T_name: str, C_name: str):
     return gsw.SP_from_C(C, T, P)
 
 
+_SEAWATER_UNITS = {
+    "SP": "1", "SA": "g/kg", "CT": "degree_Celsius",
+    "sigma0": "kg m-3", "rho": "kg m-3",
+}
+
+
+def _inject_seawater_properties(pf, gps, T_name: str, C_name: str) -> tuple[str, ...]:
+    """Compute SP/SA/CT/sigma0/rho on the slow grid and inject as pf channels.
+
+    For the profile product: the full-rate slow ``T_name``/``C_name``/``P`` feed
+    TEOS-10 (:func:`add_seawater_properties`) *before* depth-binning, so the
+    nonlinear conversions see unaveraged inputs; binning then averages the
+    derived properties like any other channel. ``T_name`` is the in-situ CTD
+    reference (e.g. JAC_T), untouched by FP07 recalibration. Per-slow-sample
+    lat/lon come from *gps* (SA's small position dependence). Long names /
+    canonical units are layered from ``COMBO_SCHEMA`` at write time, so only the
+    minimal ``units``/``type`` channel_info is set here.
+
+    Returns the names injected, or ``()`` when the C/T/P slow channels are
+    missing or length-mismatched (e.g. a fast conductivity).
+    """
+    import numpy as np
+
+    if not all(n in pf.channels for n in (T_name, C_name, "P")):
+        return ()
+    T = np.asarray(pf.channels[T_name], dtype=np.float64)
+    C = np.asarray(pf.channels[C_name], dtype=np.float64)
+    P = np.asarray(pf.channels["P"], dtype=np.float64)
+    n_slow = len(pf.t_slow)
+    if not (len(T) == len(C) == len(P) == n_slow):
+        return ()
+
+    from odas_tpw.perturb.seawater import add_seawater_properties
+
+    epoch = pf.start_time.timestamp() + np.asarray(pf.t_slow, dtype=np.float64)
+    sw = add_seawater_properties(T, C, P, gps.lat(epoch), gps.lon(epoch))
+    for name in ("SP", "SA", "CT", "sigma0", "rho"):
+        pf.channels[name] = sw[name]
+        pf.channel_info[name] = {
+            "units": _SEAWATER_UNITS[name], "type": "derived", "name": name,
+        }
+    return ("SP", "SA", "CT", "sigma0", "rho")
+
+
 def process_file(
     p_path: Path,
     config: dict,
@@ -1136,6 +1180,7 @@ def process_file(
             pf.channel_info["W_slow"] = {
                 "units": "dbar s-1", "type": "computed",
                 "name": "W_slow",
+                "long_name": "profiling rate (smoothed |dP/dt|)",
             }
         except Exception as exc:
             logger.warning(
@@ -1300,6 +1345,17 @@ def process_file(
     if P_slow is None or not profiles:
         return result
 
+    # ---- Seawater properties (SP/SA/CT/sigma0/rho) for the profile product ----
+    # Injected AFTER the CTD fork, which derives its own from post-bin T/C/P;
+    # here they are computed on the full slow-rate T/C/P and depth-binned with
+    # the profile, so both products stay self-consistent without conflicting.
+    try:
+        _inject_seawater_properties(
+            pf, gps, ct_cfg.get("T_name", "JAC_T"), ct_cfg.get("C_name", "JAC_C")
+        )
+    except Exception as exc:
+        logger.warning("seawater properties failed for %s: %s", p_path.name, exc)
+
     # ---- Profile fork ----
     # Wraps profile-bound adjustment, FP07 calibration, and the
     # extract_profiles write.  These all conceptually feed profiles_NN/.
@@ -1330,10 +1386,21 @@ def process_file(
                 # chi pipeline consumes.  Without the latter, chi keeps
                 # the factory calibration and scales with the square of
                 # the calibration slope error.
+                # Record the in-situ calibration as per-channel provenance so
+                # the products are self-describing (and plots can label it).
+                # Only channels actually recalibrated are tagged — if the
+                # reference was missing, cal_result is empty and the channels
+                # keep the factory calibration with no tag.
+                cal_tag = (
+                    f"in-situ (Steinhart-Hart order {fp07_cfg.get('order', 2)} "
+                    f"vs {fp07_cfg.get('reference', 'JAC_T')})"
+                )
                 for ch_name, cal_data in cal_result.get("channels", {}).items():
                     pf.channels[ch_name] = cal_data
+                    pf.channel_info.setdefault(ch_name, {})["calibration"] = cal_tag
                 for ch_name, cal_data in cal_result.get("fast_channels", {}).items():
                     pf.channels[ch_name] = cal_data
+                    pf.channel_info.setdefault(ch_name, {})["calibration"] = cal_tag
             except Exception as exc:
                 logger.warning("FP07 cal failed for %s: %s", p_path.name, exc)
 

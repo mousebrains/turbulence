@@ -136,7 +136,7 @@ COMBO_SCHEMA: dict[str, dict] = {
     },
     "PV": {
         "units": "V",
-        "long_name": "vehicle power voltage",
+        "long_name": "pressure transducer voltage",
     },
     "Incl_X": {
         "units": "degree",
@@ -150,6 +150,10 @@ COMBO_SCHEMA: dict[str, dict] = {
         "units": "degree_Celsius",
         "long_name": "inclinometer temperature",
         "units_metadata": "temperature: on_scale",
+    },
+    "W_slow": {
+        "units": "dbar s-1",
+        "long_name": "profiling rate (smoothed |dP/dt|)",
     },
     "JAC_T": {
         "nc_name": "temp",
@@ -187,13 +191,13 @@ COMBO_SCHEMA: dict[str, dict] = {
     },
     "sigma0": {
         "nc_name": "sigma0",
-        "units": "kg/m^3",
+        "units": "kg m-3",
         "standard_name": "sea_water_sigma_theta",
         "long_name": "potential density anomaly",
     },
     "rho": {
         "nc_name": "rho",
-        "units": "kg/m^3",
+        "units": "kg m-3",
         # No CF standard_name: this is in-situ density MINUS 1000 (an offset
         # storage convention, mirroring sigma0), not full in-situ density.
         # CF's "sea_water_density" denotes the real ~1025 kg/m^3 value, so
@@ -274,7 +278,7 @@ COMBO_SCHEMA: dict[str, dict] = {
     },
     "nu": {
         "nc_name": "nu",
-        "units": "m^2/s",
+        "units": "m2 s-1",
         "long_name": "kinematic viscosity",
     },
     "T_mean": {
@@ -284,9 +288,10 @@ COMBO_SCHEMA: dict[str, dict] = {
         "units_metadata": "temperature: on_scale",
     },
     # Background stratification (Thorpe-sorted). The averaging scale differs by
-    # product (a pressure window for profile/CTD, the processing window for
-    # diss); each product NetCDF carries the precise scale in its variable
-    # comment, so the schema long_name stays scale-neutral.
+    # product (a pressure window for the profile product, the processing window
+    # for diss); each product NetCDF carries the precise scale in its variable
+    # comment, so the schema long_name stays scale-neutral. Profile-only (not on
+    # the CTD product, which spans the whole up/down trajectory).
     "N2": {
         "nc_name": "N2",
         "units": "s-2",
@@ -306,7 +311,7 @@ CHI_SCHEMA: dict[str, dict] = {
     # no units or long_name.
     "chiMean": {
         "nc_name": "chiMean",
-        "units": "K^2/s",
+        "units": "K2 s-1",
         "long_name": "combined thermal variance dissipation rate",
     },
     "chiLnSigma": {
@@ -323,12 +328,12 @@ CHI_SCHEMA: dict[str, dict] = {
     },
     "chi_1": {
         "nc_name": "chi_1",
-        "units": "K^2/s",
+        "units": "K2 s-1",
         "long_name": "thermal variance dissipation (probe 1)",
     },
     "chi_2": {
         "nc_name": "chi_2",
-        "units": "K^2/s",
+        "units": "K2 s-1",
         "long_name": "thermal variance dissipation (probe 2)",
     },
     "kB_1": {
@@ -414,8 +419,8 @@ CTD_SCHEMA: dict[str, dict] = {
     "DO": COMBO_SCHEMA["DO"],
     "Chlorophyll": COMBO_SCHEMA["Chlorophyll"],
     "Turbidity": COMBO_SCHEMA["Turbidity"],
-    "N2": COMBO_SCHEMA["N2"],
-    "dTdz": COMBO_SCHEMA["dTdz"],
+    # N2/dTdz are profile-only (down-cast) quantities and are intentionally not
+    # carried on the CTD product; they live on the profile/diss/chi schemas.
 }
 
 # Fixed global attributes for CF-1.13 / ACDD-1.3 compliance
@@ -458,6 +463,7 @@ _COVERAGE_CONTENT_TYPE: dict[str, str] = {
     "Incl_T": "auxiliaryInformation",
     "DO_T": "auxiliaryInformation",
     "speed": "auxiliaryInformation",
+    "W_slow": "auxiliaryInformation",
     "nu": "auxiliaryInformation",
 }
 

@@ -157,7 +157,7 @@ spans remain non-goals.
 
 ## 8. CLI surface
 
-- `perturb-plot figure --spec figure.yaml [--select NAME] [--latest]` — the batch driver.
+- `perturb-plot figure --spec figure.yaml [--figure NAME] [--sections F.yaml] [--select NAME] [--latest]` — the batch driver.
 - `--config PATH` added to `scalar`/`profiles`/`eps-chi` (single-figure, config-resolved).
 - `--list-presets` / `--dump-preset NAME`.
 

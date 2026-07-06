@@ -165,6 +165,27 @@ class TestBinByDepth:
         np.testing.assert_allclose(result["stime"].values, stimes)
         np.testing.assert_allclose(result["etime"].values, etimes)
 
+    def test_curated_datavar_attrs_survive_binning(self, tmp_path):
+        """A data variable's ``calibration`` provenance attr is carried through
+        depth-binning to the combo; non-allow-listed attrs (e.g. sensor_type)
+        are dropped."""
+        n = 50
+        depth = np.linspace(0, 50, n)
+        ds = xr.Dataset(
+            {
+                "T1": (["time_slow"], 20.0 - 0.1 * depth,
+                       {"calibration": "in-situ (Steinhart-Hart order 1 vs JAC_T)",
+                        "sensor_type": "therm"}),
+                "depth": (["time_slow"], depth),
+            },
+            coords={"time_slow": np.arange(n, dtype=float)},
+        )
+        ds.to_netcdf(tmp_path / "prof00.nc")
+        result = bin_by_depth([tmp_path / "prof00.nc"], bin_width=5.0)
+        assert (result["T1"].attrs.get("calibration")
+                == "in-situ (Steinhart-Hart order 1 vs JAC_T)")
+        assert "sensor_type" not in result["T1"].attrs  # allow-list keeps it out
+
     def test_datetime64_stime_etime_decoded_to_epoch_seconds(self, tmp_path):
         """When stime/etime are written with CF units, xarray decodes them
         to datetime64 on read.  bin_by_depth must reduce back to epoch

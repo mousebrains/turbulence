@@ -30,14 +30,14 @@ import os
 
 import numpy as np
 
-# pseudo-var -> (raw fast channel, colorbar label [mathtext units], cmocean cmap)
+# pseudo-var -> (raw fast channel, colorbar label (mathtext units), cmocean cmap)
 _DIAG_INFO: dict[str, tuple[str, str, str]] = {
-    "sh1_var": ("sh1", r"sh1 HP/despiked variance [s$^{-2}$]", "amp"),
-    "sh2_var": ("sh2", r"sh2 HP/despiked variance [s$^{-2}$]", "amp"),
-    "Ax_var": ("Ax", r"Ax vibration variance [counts$^2$]", "amp"),
-    "Ay_var": ("Ay", r"Ay vibration variance [counts$^2$]", "amp"),
-    "T1_dT1_var": ("T1_dT1", r"T1 gradient-channel variance [K$^2$]", "amp"),
-    "T2_dT2_var": ("T2_dT2", r"T2 gradient-channel variance [K$^2$]", "amp"),
+    "sh1_var": ("sh1", r"sh1 HP/despiked variance (s$^{-2}$)", "amp"),
+    "sh2_var": ("sh2", r"sh2 HP/despiked variance (s$^{-2}$)", "amp"),
+    "Ax_var": ("Ax", r"Ax vibration variance (counts$^2$)", "amp"),
+    "Ay_var": ("Ay", r"Ay vibration variance (counts$^2$)", "amp"),
+    "T1_dT1_var": ("T1_dT1", r"T1 gradient-channel variance (K$^2$)", "amp"),
+    "T2_dT2_var": ("T2_dT2", r"T2 gradient-channel variance (K$^2$)", "amp"),
 }
 
 # Cache of {round(stime,3) -> rawpath} per profiles dir (built once per run).

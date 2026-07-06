@@ -66,7 +66,7 @@ def _build_all_products(root: Path) -> None:
         "qc_drop_epsilon": (qc, {}),
     })
     _write_product(root, "chi_combo", {
-        "chiMean": (chi, {"units": "K^2/s", "long_name": "chi"}),
+        "chiMean": (chi, {"units": "K2 s-1", "long_name": "chi"}),
         "K_T": (1.0e-4 * cast * np.ones((10, 1)), {"units": "m2 s-1", "long_name": "K_T"}),
         "Gamma": (0.2 * np.ones((10, 6)), {"units": "1", "long_name": "Gamma"}),
         "K_rho": (1.0e-4 * cast * np.ones((10, 1)), {"units": "m2 s-1", "long_name": "K_rho"}),
@@ -106,6 +106,25 @@ def test_make_norm_picks_scale():
     assert isinstance(lin, Normalize) and not isinstance(lin, LogNorm)
     none = profiles._make_norm("epsilonMean", np.full((2, 2), np.nan), args, {})
     assert none is None                                    # log field, no positive data
+
+
+def test_make_norm_diverging_one_signed_not_symmetric():
+    """A diverging field whose robust (1/99%) range is one-signed must NOT be
+    mirrored about zero -- an all-stable dTdz (~ -0.2..0) or an offset Incl_Y
+    (~76..90 deg) would otherwise waste half the colorbar.  Zero-straddling
+    data stays symmetric (covered by test_make_norm_picks_scale)."""
+    from matplotlib.colors import Normalize
+
+    args = argparse.Namespace(vmin=None, vmax=None)
+    z = np.array([[-0.20, -0.02], [-0.15, -0.05]])  # all-negative dTdz
+    div = profiles._make_norm("dTdz", z, args, {})
+    assert isinstance(div, Normalize)
+    assert div.vmax < 0.0                             # positive half not padded on
+    assert div.vmin == pytest.approx(-0.20, abs=0.02)
+    iy = profiles._make_norm(
+        "Incl_Y", np.array([[76.0, 90.0], [80.0, 88.0]]), args, {})
+    assert iy.vmin > 0.0                              # not mirrored to negative
+    assert iy.vmax == pytest.approx(90.0, abs=0.5)
 
 
 def test_make_norm_n2_uses_symlog_for_negatives():
@@ -179,8 +198,10 @@ def test_profile_window_skips_when_empty(tmp_path: Path):
 
 
 def test_missing_default_vars_errors(tmp_path: Path):
-    # A diss combo with none of the default vars -> clear error.
-    _write_product(tmp_path, "diss_combo", {"speed": (np.ones((10, 6)), {"units": "m/s"})})
+    # A diss combo with none of the default vars -> clear error. epsilonLnSigma
+    # is a real diss field but not one of the default panels.
+    _write_product(tmp_path, "diss_combo",
+                   {"epsilonLnSigma": (np.ones((10, 6)), {"units": "1"})})
     with pytest.raises(SystemExit):
         _run(["epsilon", "--root", str(tmp_path), "--out-dir", str(tmp_path)])
 
@@ -241,16 +262,834 @@ def test_clim_and_no_qc(tmp_path: Path):
     assert (tmp_path / "epsilon_c.png").exists()
 
 
+def test_ncols_grid_layout(tmp_path: Path):
+    """The profiles family honors --ncols: 4 default vars at ncols=2 give a
+    2-row figure (height 3*2+1) instead of the 4-row stack, with 4 colorbars."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "T1": (28.0 - bins * col, {"units": "degree_Celsius", "long_name": "T1"}),
+        "T2": (28.0 - bins * col, {"units": "degree_Celsius", "long_name": "T2"}),
+        "N2": (1.0e-4 * np.ones((10, 6)), {"units": "s-2", "long_name": "N2"}),
+        "dTdz": (-0.1 * np.ones((10, 6)), {"units": "K m-1", "long_name": "dTdz"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[], ncols=2,
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, list(profiles.PRODUCTS["profiles"].default_vars),
+            args, {}, profiles.PRODUCTS["profiles"],
+        )
+        assert fig is not None
+        assert list(fig.get_size_inches()) == [11.0, 7.0]  # 2x2 -> 3*2 + 1
+        cbars = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is not None]
+        assert len(cbars) == 4  # one colorbar per default var, grid or not
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_profiles_default_preset_is_3x3(tmp_path: Path):
+    """The profiles preset defaults to the 9-variable 3-column overview grid
+    when --ncols is not given."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    prod = profiles.PRODUCTS["profiles"]
+    assert prod.default_vars == (
+        "JAC_T", "T1", "T2", "SP", "rho", "sigma0", "W_slow", "dTdz", "N2")
+    assert prod.default_ncols == 3
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    data = {v: (20.0 + 0.1 * bins * col, {"units": "1", "long_name": v})
+            for v in prod.default_vars}
+    _write_product(tmp_path, "combo", data)
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(  # deliberately NO ncols -> product default (3)
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, list(prod.default_vars), args, {}, prod)
+        assert fig is not None
+        cbars = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is not None]
+        assert len(cbars) == 9
+        # 9 vars / 3 cols = 3 rows -> width max(11, 5.5*3)=16.5, height 3*3+1=10.
+        assert list(fig.get_size_inches()) == [16.5, 10.0]
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_epsilon_default_preset_is_3col(tmp_path: Path):
+    """The epsilon preset defaults to the 8-variable 3-column overview grid
+    (kinematics / window means / dissipation + stratification) when --ncols is
+    not given."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    prod = profiles.PRODUCTS["diss"]
+    assert prod.default_vars == (
+        "speed", "nu", "T_mean", "e_1", "e_2", "epsilonMean", "N2", "dTdz")
+    assert prod.default_ncols == 3
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    # Positive values keep the log-scaled epsilon panels valid.
+    data = {v: (20.0 + 0.1 * bins * col, {"units": "1", "long_name": v})
+            for v in prod.default_vars}
+    _write_product(tmp_path, "diss_combo", data)
+    ds = xr.open_dataset(tmp_path / "diss_combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(  # deliberately NO ncols -> product default (3)
+        root=str(tmp_path), product="diss", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, list(prod.default_vars), args, {}, prod)
+        assert fig is not None
+        cbars = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is not None]
+        assert len(cbars) == 8
+        # 8 vars / 3 cols = 3 rows -> width max(11, 5.5*3)=16.5, height 3*3+1=10.
+        assert list(fig.get_size_inches()) == [16.5, 10.0]
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_chi_default_preset_is_3col(tmp_path: Path):
+    """The chi preset defaults to the 9-variable 3-column overview grid
+    (kinematics / window means / chi / stratification / QC flag) when --ncols is
+    not given."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    prod = profiles.PRODUCTS["chi"]
+    assert prod.default_vars == (
+        "speed", "nu", "T_mean", "chi_1", "chi_2", "chiMean", "N2", "dTdz",
+        "qc_drop_chi")
+    assert prod.default_ncols == 3
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    data = {v: (20.0 + 0.1 * bins * col, {"units": "1", "long_name": v})
+            for v in prod.default_vars}
+    data["qc_drop_chi"] = (np.zeros((10, 6)), {"units": "1", "long_name": "flag"})
+    data["qc_drop_chi"][0][0, 0] = 1.0  # one flagged cell (non-constant norm)
+    _write_product(tmp_path, "chi_combo", data)
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(  # deliberately NO ncols -> product default (3)
+        root=str(tmp_path), product="chi", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, list(prod.default_vars), args, {}, prod)
+        assert fig is not None
+        cbars = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is not None]
+        assert len(cbars) == 9
+        # 9 vars / 3 cols = 3 rows -> width max(11, 5.5*3)=16.5, height 3*3+1=10.
+        assert list(fig.get_size_inches()) == [16.5, 10.0]
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_qc_flag_panel_is_not_self_masked(tmp_path: Path):
+    """Plotting the qc_drop_* field shows the raw flags: the QC mask blanks the
+    data panels but never the flag field itself (self-masking would hide exactly
+    the flagged cells you asked to see)."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    qc = np.zeros((10, 6))
+    qc[0, 0] = 1.0
+    qc[5, 3] = 1.0  # a couple of flagged cells
+    _write_product(tmp_path, "chi_combo", {
+        "qc_drop_chi": (qc, {"units": "1", "long_name": "QC drop flag"}),
+    })
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="chi", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["qc_drop_chi"], args, {}, profiles.PRODUCTS["chi"])
+        # Restrict to the DATA panel (exclude colorbar axes, whose [0,1] solids
+        # would themselves reach 1.0 and mask a self-masking regression).
+        data_axes = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is None]
+        vals = []
+        for ax in data_axes:
+            for m in ax.collections:
+                a = m.get_array()
+                if a is not None:
+                    vals.append(np.ma.filled(np.ma.asarray(a, dtype=float), np.nan).ravel())
+        arr = np.concatenate(vals)
+        # Both flagged cells survive with value 1.0 (self-masking would NaN them,
+        # leaving only the unflagged 0.0 cells -> nanmax 0.0, count 0).
+        assert np.nanmax(arr) == 1.0
+        assert int((arr == 1.0).sum()) == 2
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_union_qc_mask_ors_both_flags():
+    """The mixing product's mask is the union of qc_drop_epsilon and
+    qc_drop_chi; absent/empty flag sets degrade cleanly."""
+    import xarray as xr
+
+    qc_e = np.zeros((4, 3))
+    qc_e[0, 0] = 1.0
+    qc_c = np.zeros((4, 3))
+    qc_c[3, 2] = 1.0
+    ds = xr.Dataset({
+        "qc_drop_epsilon": (("bin", "profile"), qc_e),
+        "qc_drop_chi": (("bin", "profile"), qc_c),
+    })
+    col = np.arange(3)
+    mask = profiles._union_qc_mask(ds, ("qc_drop_epsilon", "qc_drop_chi"), col)
+    assert mask[0, 0] and mask[3, 2]          # both sources contribute
+    assert int(mask.sum()) == 2               # union, nothing extra
+    # A single source, and a var that isn't present, behave.
+    assert int(profiles._union_qc_mask(ds, ("qc_drop_chi",), col).sum()) == 1
+    assert profiles._union_qc_mask(ds, ("absent",), col) is None
+    assert profiles._union_qc_mask(ds, (), col) is None
+    # The SAME cell flagged by both sources is counted once (OR, not a sum).
+    both_same = xr.Dataset({
+        "qc_drop_epsilon": (("bin", "profile"), qc_e),
+        "qc_drop_chi": (("bin", "profile"), qc_e),  # identical -> same cell
+    })
+    assert int(profiles._union_qc_mask(
+        both_same, ("qc_drop_epsilon", "qc_drop_chi"), col).sum()) == 1
+    # A present-but-all-NaN flag contributes nothing (the isfinite guard); the
+    # mask is all-False, not None, since the var exists.
+    nan_ds = xr.Dataset({"qc_drop_chi": (("bin", "profile"), np.full((4, 3), np.nan))})
+    nan_mask = profiles._union_qc_mask(nan_ds, ("qc_drop_chi",), col)
+    assert nan_mask is not None and int(nan_mask.sum()) == 0
+
+
+def test_merge_source_dirs_pulls_diss_vars_onto_chi(tmp_path: Path):
+    """_merge_source_dirs copies diss-only vars (and its qc flag) onto the chi
+    combo using the primary grid; shared vars keep the chi copy."""
+    import xarray as xr
+
+    _write_product(tmp_path, "chi_combo", {
+        "chi_1": (np.ones((10, 6)), {"units": "K2 s-1"}),
+        "nu": (np.full((10, 6), 2.0), {"units": "m2 s-1"}),  # shared; chi wins
+        "qc_drop_chi": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    _write_product(tmp_path, "diss_combo", {
+        "e_1": (np.full((10, 6), 7.0), {"units": "W/kg"}),
+        "nu": (np.full((10, 6), 9.0), {"units": "m2 s-1"}),  # must NOT override chi
+        "qc_drop_epsilon": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    args = argparse.Namespace(root=str(tmp_path), config=None)
+    try:
+        merged = profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+        assert "e_1" in merged.data_vars            # diss-only var pulled in
+        assert "qc_drop_epsilon" in merged.data_vars  # its flag too (for union QC)
+        assert float(merged["e_1"].values[0, 0]) == 7.0
+        assert float(merged["nu"].values[0, 0]) == 2.0  # shared var kept chi's copy
+    finally:
+        ds.close()
+
+
+def _write_grid_combo(tmp_path: Path, prefix: str, var: str,
+                      bins: np.ndarray, stime: np.ndarray) -> None:
+    """A 10x(len stime) combo with caller-controlled bin centers and cast times,
+    for the merge-guard tests (the shared _write_product pins both to defaults)."""
+    import xarray as xr
+
+    ds = xr.Dataset(
+        {var: (("bin", "profile"), np.ones((10, len(stime))))},
+        coords={"bin": ("bin", bins),
+                "profile": ("profile", np.arange(len(stime), dtype=np.int32))},
+    )
+    ds["stime"] = (("profile",), stime, {"units": "seconds since 1970-01-01"})
+    (tmp_path / f"{prefix}_00").mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(tmp_path / f"{prefix}_00" / "combo.nc")
+
+
+def test_merge_source_dirs_rejects_mismatched_grid(tmp_path: Path):
+    """A diss combo on a different (bin, profile) grid is a hard error, not a
+    silent mis-join."""
+    import xarray as xr
+
+    _write_product(tmp_path, "chi_combo", {"chi_1": (np.ones((10, 6)), {"units": "K2 s-1"})})
+    # diss combo with a different bin count.
+    _write_product(tmp_path, "diss_combo",
+                   {"e_1": (np.ones((8, 6)), {"units": "W/kg"})}, n_bin=8)
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    args = argparse.Namespace(root=str(tmp_path), config=None)
+    try:
+        with pytest.raises(SystemExit, match="cannot merge mixing sources"):
+            profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+    finally:
+        ds.close()
+
+
+def test_merge_source_dirs_rejects_mismatched_bins(tmp_path: Path):
+    """Same bin COUNT but different bin centers must raise -- the positional
+    merge would otherwise place diss data at the chi depths (silent mis-join)."""
+    import xarray as xr
+
+    _write_product(tmp_path, "chi_combo", {"chi_1": (np.ones((10, 6)), {"units": "K2 s-1"})})
+    _write_grid_combo(tmp_path, "diss_combo", "e_1",
+                      np.arange(10, dtype=float) + 100.5, _STIME)
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    args = argparse.Namespace(root=str(tmp_path), config=None)
+    try:
+        with pytest.raises(SystemExit, match="depth bins differ"):
+            profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+    finally:
+        ds.close()
+
+
+def test_merge_source_dirs_rejects_stime_mismatch(tmp_path: Path):
+    """Same grid but different cast start times must raise. The stimes are
+    realistic epoch seconds (~1.7e9), where np.allclose's default rtol spans
+    ~4.8 h -- a 1 h drift would slip through the old loose check, so this pins
+    the tightened 1 s absolute tolerance."""
+    import xarray as xr
+
+    bins = np.arange(10, dtype=float) + 0.5
+    base = 1.7e9 + np.array([0.0, 300.0, 600.0, 3600.0, 3900.0, 4200.0])
+    _write_grid_combo(tmp_path, "chi_combo", "chi_1", bins, base)
+    _write_grid_combo(tmp_path, "diss_combo", "e_1", bins, base + 3600.0)  # 1 h drift
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    args = argparse.Namespace(root=str(tmp_path), config=None)
+    try:
+        with pytest.raises(SystemExit, match="not the same casts"):
+            profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+    finally:
+        ds.close()
+
+
+def test_mixing_missing_diss_combo_degrades(tmp_path: Path):
+    """With no diss_combo (e.g. a chi-only run), mixing still renders the
+    chi-side panels; the diss vars (e_*) drop out instead of crashing."""
+    import xarray as xr
+
+    _write_product(tmp_path, "chi_combo", {
+        "chi_1": (1.0e-7 * (1.0 + np.arange(60).reshape(10, 6)), {"units": "K2 s-1"}),
+        "K_T": (1.0e-4 * (1.0 + np.arange(60).reshape(10, 6)), {"units": "m2 s-1"}),
+        "qc_drop_chi": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    args = argparse.Namespace(root=str(tmp_path), config=None)
+    try:
+        merged = profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+        assert "e_1" not in merged.data_vars   # diss absent -> dropped, no raise
+        assert "chi_1" in merged.data_vars
+    finally:
+        ds.close()
+    # And end-to-end it still produces a figure (chi-only mixing).
+    rc = _run(["mixing", "--root", str(tmp_path), "--out-dir", str(tmp_path),
+               "--name", "m", "--xaxis", "time"])
+    assert rc == 0
+    assert (tmp_path / "mixing_m.png").exists()
+
+
+def test_mixing_merges_and_renders_both_sources(tmp_path: Path):
+    """End-to-end: `perturb-plot mixing` merges e_* (diss) with chi/K/Gamma
+    (chi) and renders panels from both combos."""
+    _write_product(tmp_path, "diss_combo", {
+        "e_1": (1.0e-8 * (1.0 + np.arange(60).reshape(10, 6)), {"units": "W/kg"}),
+        "e_2": (1.0e-8 * (1.0 + np.arange(60).reshape(10, 6)), {"units": "W/kg"}),
+        "qc_drop_epsilon": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    _write_product(tmp_path, "chi_combo", {
+        "chi_1": (1.0e-7 * (1.0 + np.arange(60).reshape(10, 6)), {"units": "K2 s-1"}),
+        "K_T": (1.0e-4 * (1.0 + np.arange(60).reshape(10, 6)), {"units": "m2 s-1"}),
+        "Gamma": (0.2 * np.ones((10, 6)), {"units": "1"}),
+        "qc_drop_chi": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    rc = _run(["mixing", "--root", str(tmp_path), "--out-dir", str(tmp_path),
+               "--name", "m", "--xaxis", "time",
+               "--var", "e_1", "--var", "chi_1", "--var", "K_T"])
+    assert rc == 0
+    assert (tmp_path / "mixing_m.png").exists()
+
+
+def test_mixing_merge_renders_diss_panel(tmp_path: Path):
+    """Through the real merge path, a diss panel (e_1) renders alongside a chi
+    panel (chi_1) -- proving the cross-combo join reaches the figure, not just
+    that a PNG was written."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    vals = 1.0e-7 * (1.0 + np.arange(60).reshape(10, 6))
+    _write_product(tmp_path, "diss_combo", {
+        "e_1": (vals, {"units": "W/kg"}),
+        "qc_drop_epsilon": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    _write_product(tmp_path, "chi_combo", {
+        "chi_1": (vals, {"units": "K2 s-1"}),
+        "qc_drop_chi": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    args = argparse.Namespace(
+        root=str(tmp_path), config=None, product="mixing", p_max=None,
+        gap_factor=4.0, apply_qc=True, hp_cut=1.0, despike_thresh=8.0,
+        despike_smooth=0.5, stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    sec = profiles.Section(name="all", method="time")
+    try:
+        merged = profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+        fig = profiles._build_profiles_figure(
+            merged, sec, ["e_1", "chi_1"], args, {}, profiles.PRODUCTS["mixing"])
+        labels = {ax.yaxis.label.get_text()
+                  for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert r"$\epsilon_1$ (W kg$^{-1}$)" in labels   # from diss_combo (merged)
+        assert r"$\chi_1$ (K$^2$ s$^{-1}$)" in labels    # from chi_combo (primary)
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_mixing_union_qc_masks_both_sources(tmp_path: Path):
+    """A cell flagged by EITHER qc_drop_epsilon or qc_drop_chi is dropped from
+    every data panel (union). Compares finite-cell counts with QC on vs off so
+    the assertion is robust to gap columns."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    vals = 1.0e-8 * (1.0 + np.arange(60).reshape(10, 6))  # varying, positive
+    qc_e = np.zeros((10, 6))
+    qc_e[0, 0] = 1.0
+    qc_c = np.zeros((10, 6))
+    qc_c[9, 5] = 1.0  # a different cell, other source
+    _write_product(tmp_path, "chi_combo", {   # stands in for the merged input
+        "e_1": (vals, {"units": "W/kg"}),
+        "chi_1": (vals, {"units": "K2 s-1"}),
+        "qc_drop_epsilon": (qc_e, {"units": "1"}),
+        "qc_drop_chi": (qc_c, {"units": "1"}),
+    })
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+
+    def total_finite(apply_qc: bool) -> int:
+        args = argparse.Namespace(
+            root=str(tmp_path), product="mixing", p_max=None, gap_factor=4.0,
+            apply_qc=apply_qc, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+            stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+        )
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["e_1", "chi_1"], args, {}, profiles.PRODUCTS["mixing"])
+        tot = 0
+        for ax in fig.axes:
+            for m in ax.collections:
+                a = m.get_array()
+                if a is not None:
+                    tot += int(np.isfinite(
+                        np.ma.filled(np.ma.asarray(a, dtype=float), np.nan)).sum())
+        plt.close(fig)
+        return tot
+
+    try:
+        # 2 union-flagged cells removed from each of the 2 data panels = 4.
+        assert total_finite(False) - total_finite(True) == 4
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_cbar_label_overrides(tmp_path: Path):
+    """The profile scalars carry the custom T_1/T_2/N^2/dT-dz colorbar labels,
+    overriding the CF long_name/units default."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "T1": (28.0 - bins * col, {"units": "degree_Celsius", "long_name": "ignored"}),
+        "T2": (28.0 - bins * col, {"units": "degree_Celsius", "long_name": "ignored"}),
+        "N2": (1.0e-4 * np.ones((10, 6)), {"units": "s-2", "long_name": "ignored"}),
+        "dTdz": (-0.1 * np.ones((10, 6)), {"units": "K m-1", "long_name": "ignored"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["T1", "T2", "N2", "dTdz"], args, {},
+            profiles.PRODUCTS["profiles"],
+        )
+        labels = {ax.yaxis.label.get_text()
+                  for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert labels == {
+            r"$T_1$ (°C)", r"$T_2$ (°C)",
+            r"$N^2$ (s$^{-2}$) (Thorpe-sorted)",
+            r"$\frac{dT}{dz}$ (°C m$^{-1}$) (+ downwards)",
+        }
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_pdp_incl_cbar_label_overrides(tmp_path: Path):
+    """P_dP and the inclinometer channels carry the custom short colorbar
+    labels; Incl_T shows °C."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "P_dP": (5.0 + bins * col, {"units": "dbar", "long_name": "ignored"}),
+        "Incl_X": (bins * col - 5.0, {"units": "degree", "long_name": "ignored"}),
+        "Incl_Y": (76.0 + bins * col, {"units": "degree", "long_name": "ignored"}),
+        "Incl_T": (18.0 + bins * col, {"units": "degree_Celsius", "long_name": "x"}),
+        "W_slow": (0.8 + 0.01 * bins * col, {"units": "dbar s-1", "long_name": "x"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["P_dP", "Incl_X", "Incl_Y", "Incl_T", "W_slow"], args, {},
+            profiles.PRODUCTS["profiles"],
+        )
+        labels = {ax.yaxis.label.get_text()
+                  for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert labels == {
+            "P_dP (dbar)", "incl_X (°)", "incl_Y (°)", "incl_T (°C)",
+            r"W_slow (dbar s$^{-1}$)",
+        }
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_epsilon_cbar_label_overrides(tmp_path: Path):
+    """The epsilon (diss) product carries the Greek/angle-bracket colorbar
+    labels: nu for viscosity, an angle-bracket mean temperature, per-probe
+    epsilon_n ("probe n" dropped as redundant with the subscript), and an
+    angle-bracket combined epsilon."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    eps = 1.0e-8 * np.ones((10, 6))  # positive -> LogNorm path
+    _write_product(tmp_path, "diss_combo", {
+        "nu": (1.0e-6 * np.ones((10, 6)), {"units": "m2 s-1", "long_name": "ignored"}),
+        "T_mean": (18.0 + bins * col, {"units": "degree_Celsius", "long_name": "x"}),
+        "e_1": (eps, {"units": "W/kg", "long_name": "TKE dissipation rate (probe 1)"}),
+        "e_2": (eps, {"units": "W/kg", "long_name": "TKE dissipation rate (probe 2)"}),
+        "epsilonMean": (eps, {"units": "W/kg", "long_name": "combined TKE dissipation rate"}),
+    })
+    ds = xr.open_dataset(tmp_path / "diss_combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="diss", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["nu", "T_mean", "e_1", "e_2", "epsilonMean"], args, {},
+            profiles.PRODUCTS["diss"],
+        )
+        cbars = {ax.yaxis.label.get_text(): ax
+                 for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert set(cbars) == {
+            r"$\nu$ (m$^2$ s$^{-1}$)", r"$\langle T \rangle$ (°C)",
+            r"$\epsilon_1$ (W kg$^{-1}$)", r"$\epsilon_2$ (W kg$^{-1}$)",
+            r"$\langle \epsilon \rangle$ (W kg$^{-1}$)",
+        }
+        # nu reads smallest-at-top (viscosity falls with depth); epsilon does not.
+        assert cbars[r"$\nu$ (m$^2$ s$^{-1}$)"].yaxis_inverted()
+        assert not cbars[r"$\epsilon_1$ (W kg$^{-1}$)"].yaxis_inverted()
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_chi_mixing_cbar_label_overrides(tmp_path: Path):
+    """The chi/mixing products carry per-probe chi_n, an angle-bracket combined
+    chi, the K_T/K_rho diffusivities, and a dimensionless Gamma colorbar label
+    (Gamma carries no units bracket)."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    chi = 1.0e-7 * np.ones((10, 6))  # positive -> LogNorm path
+    kappa = 1.0e-4 * np.ones((10, 6))
+    _write_product(tmp_path, "chi_combo", {
+        "chi_1": (chi, {"units": "K2 s-1", "long_name": "x"}),
+        "chi_2": (chi, {"units": "K2 s-1", "long_name": "x"}),
+        "chiMean": (chi, {"units": "K2 s-1", "long_name": "x"}),
+        "K_T": (kappa, {"units": "m2 s-1", "long_name": "x"}),
+        "K_rho": (kappa, {"units": "m2 s-1", "long_name": "x"}),
+        "Gamma": (0.2 * np.ones((10, 6)), {"units": "1", "long_name": "x"}),
+    })
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="chi", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["chi_1", "chi_2", "chiMean", "K_T", "K_rho", "Gamma"], args, {},
+            profiles.PRODUCTS["chi"],
+        )
+        labels = {ax.yaxis.label.get_text()
+                  for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert labels == {
+            r"$\chi_1$ (K$^2$ s$^{-1}$)", r"$\chi_2$ (K$^2$ s$^{-1}$)",
+            r"$\langle \chi \rangle$ (K$^2$ s$^{-1}$)",
+            r"$K_T$ (m$^2$ s$^{-1}$)", r"$K_\rho$ (m$^2$ s$^{-1}$)", r"$\Gamma$",
+        }
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_depth_axis_fits_valid_data(tmp_path: Path):
+    """Without --p-max, the depth axis fits where there is valid data, not the
+    full combo bin grid (which would pad empty gray below the deepest sample)."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    z = 20.0 * np.ones((10, 6))          # bins at 0.5, 1.5, ..., 9.5 m
+    z[5:, :] = np.nan                    # valid only in bins 0..4 (0.5..4.5 m)
+    _write_product(tmp_path, "combo", {
+        "T1": (z, {"units": "degree_Celsius", "long_name": "x"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["T1"], args, {}, profiles.PRODUCTS["profiles"])
+        deep, shallow = fig.axes[0].get_ylim()   # inverted: deep bound first
+        assert deep == pytest.approx(5.0)        # 4.5 deepest valid + 0.5 half-bin
+        assert shallow == pytest.approx(0.0)
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_depth_axis_respects_explicit_p_max(tmp_path: Path):
+    """--p-max overrides the data-driven fit: surface to p_max."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    z = 20.0 * np.ones((10, 6))
+    z[5:, :] = np.nan
+    _write_product(tmp_path, "combo", {
+        "T1": (z, {"units": "degree_Celsius", "long_name": "x"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=8.0, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["T1"], args, {}, profiles.PRODUCTS["profiles"])
+        deep, shallow = fig.axes[0].get_ylim()
+        assert deep == pytest.approx(8.0)        # explicit p_max, not the ~5 fit
+        assert shallow == pytest.approx(0.0)
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_jac_cbar_label_overrides(tmp_path: Path):
+    """JAC_T/JAC_C read as the familiar JAC_T/JAC_C names (JFE dropped),
+    overriding their CF long_name/units."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "JAC_T": (28.0 - bins * col,
+                  {"units": "degree_Celsius", "long_name": "in-situ temperature (JFE)"}),
+        "JAC_C": (50.0 + bins * col,
+                  {"units": "mS/cm", "long_name": "conductivity (JFE)"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["JAC_T", "JAC_C"], args, {}, profiles.PRODUCTS["profiles"])
+        labels = {ax.yaxis.label.get_text()
+                  for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert labels == {"JAC_T (°C)", "JAC_C (mS/cm)"}
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_reverse_cbar_inverts_pdp_colorbar(tmp_path: Path):
+    """P_dP's colorbar reads with the smallest value at the top (axis inverted);
+    a normal channel's colorbar keeps the default orientation."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "P_dP": (5.0 + bins * col, {"units": "dbar", "long_name": "x"}),
+        "T1": (28.0 - bins * col, {"units": "degree_Celsius", "long_name": "x"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["P_dP", "T1"], args, {}, profiles.PRODUCTS["profiles"],
+        )
+        cbars = {ax.yaxis.label.get_text(): ax
+                 for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert cbars["P_dP (dbar)"].yaxis_inverted()       # smallest at top
+        assert not cbars[r"$T_1$ (°C)"].yaxis_inverted()   # default orientation
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_seawater_vars_render_on_profiles(tmp_path: Path):
+    """SP/SA/CT/sigma0/rho render on the profiles product with the curated
+    labels (Theta, sigma_0, rho-1000, Salinity); SP and sigma0 read
+    smallest-at-top."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "SP": (34.0 + 0.02 * bins * col,
+               {"units": "1", "long_name": "practical salinity (PSU)"}),
+        "SA": (34.2 + 0.02 * bins * col,
+               {"units": "g/kg", "long_name": "absolute salinity"}),
+        "CT": (28.0 - 0.1 * bins * col,
+               {"units": "degree_Celsius", "long_name": "conservative temperature"}),
+        "sigma0": (22.0 + 0.05 * bins * col,
+                   {"units": "kg m-3", "long_name": "potential density anomaly"}),
+        "rho": (22.5 + 0.05 * bins * col,
+                {"units": "kg m-3", "long_name": "in-situ density - 1000"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["SP", "SA", "CT", "sigma0", "rho"], args, {},
+            profiles.PRODUCTS["profiles"])
+        assert fig is not None
+        cbars = {ax.yaxis.label.get_text(): ax
+                 for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert cbars.keys() == {
+            r"$\Theta$ (°C)", "Salinity (PSU)", "Salinity (g/kg)",
+            r"$\sigma_0$ (kg m$^{-3}$)", r"$\rho$-1000 (kg m$^{-3}$) (in-situ)",
+        }
+        assert cbars["Salinity (PSU)"].yaxis_inverted()             # min at top
+        assert cbars[r"$\sigma_0$ (kg m$^{-3}$)"].yaxis_inverted()
+        assert not cbars["Salinity (g/kg)"].yaxis_inverted()        # default
+    finally:
+        ds.close()
+        plt.close("all")
+
+
+def test_in_situ_calib_label_from_metadata(tmp_path: Path):
+    """A channel whose ``calibration`` attr marks it in-situ calibrated gets
+    ``(in-situ calib)`` appended to its colorbar label; an untagged channel does
+    not.  The tag is driven by the variable metadata, not the config."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    bins, _cast = _bp()
+    col = np.ones((1, 6))
+    _write_product(tmp_path, "combo", {
+        "T1": (28.0 - bins * col,
+               {"units": "degree_Celsius", "long_name": "ignored",
+                "calibration": "in-situ (Steinhart-Hart order 1 vs JAC_T)"}),
+        "T2": (28.0 - bins * col, {"units": "degree_Celsius", "long_name": "ignored"}),
+    })
+    ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+    args = argparse.Namespace(
+        root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
+        apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    try:
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["T1", "T2"], args, {}, profiles.PRODUCTS["profiles"],
+        )
+        labels = {ax.yaxis.label.get_text()
+                  for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert labels == {r"$T_1$ (°C) (in-situ calib)", r"$T_2$ (°C)"}
+    finally:
+        ds.close()
+        plt.close("all")
+
+
 def test_long_colorbar_labels_fit_within_bars(tmp_path: Path):
     """Regression: verbose ``long_name [units]`` colorbar labels on stacked
     panels must be shrunk to fit their bars, not overflow into the neighboring
-    panel's label.  The four default profile labels are tall enough to collide
-    on a 3-in-per-panel figure, so the builder must call
-    ``layout.fit_colorbar_labels`` — which shrinks the font (never grows it) so
-    each label roughly fits its bar.
+    panel's label.  Four verbose labels are tall enough to collide on a
+    3-in-per-panel figure, so the builder must call ``layout.fit_colorbar_labels``
+    — which shrinks the font (never grows it) so each label roughly fits its bar.
 
-    We assert the *behavior* (font shrunk below the default; label brought to
-    within its bar), not an exact pixel fit: rendered text height for a given
+    Uses variables whose labels come from ``var_label`` (not the short
+    ``_CBAR_LABEL`` overrides for T1/T2/N2/dTdz), so the labels are genuinely
+    long. We assert the *behavior* (font shrunk below the default; label brought
+    to within its bar), not an exact pixel fit: rendered text height for a given
     font size varies ~5-8% across matplotlib backends/platforms, so a strict
     ``label_h <= bar_h`` is environment-fragile (passed locally, failed CI).
     The precise geometry of ``fit_colorbar_labels`` is pinned by its unit tests
@@ -262,30 +1101,33 @@ def test_long_colorbar_labels_fit_within_bars(tmp_path: Path):
 
     bins, _cast = _bp()
     col = np.ones((1, 6))
+    # Non-overridden, non-Celsius vars so the labels come from var_label and stay
+    # genuinely long (overrides would shorten them; degree_Celsius -> "(°C)"
+    # would too).
     _write_product(tmp_path, "combo", {
-        "T1": (28.0 - bins * col,
-               {"units": "degree_Celsius",
-                "long_name": "FP07 thermistor temperature (probe 1)"}),
-        "T2": (28.0 - bins * col,
-               {"units": "degree_Celsius",
-                "long_name": "FP07 thermistor temperature (probe 2)"}),
-        "N2": (1.0e-4 * np.ones((10, 6)),
-               {"units": "s-2",
-                "long_name": "buoyancy frequency squared (Thorpe-sorted)"}),
-        "dTdz": (-0.1 * np.ones((10, 6)),
-                 {"units": "K m-1",
-                  "long_name": "background temperature gradient (positive down)"}),
+        "Gnd": (bins * col - 5.0,
+                {"units": "V",
+                 "long_name": "instrument ground reference voltage on analog board"}),
+        "V_Bat": (bins * col - 5.0,
+                  {"units": "V",
+                   "long_name": "vehicle battery pack terminal voltage during cast"}),
+        "PV": (bins * col - 5.0,
+               {"units": "V",
+                "long_name": "pressure transducer excitation voltage on sensor"}),
+        "speed": (bins * col + 1.0,
+                  {"units": "m s-1",
+                   "long_name": "vehicle profiling speed through the water column"}),
     })
     ds = xr.open_dataset(tmp_path / "combo_00" / "combo.nc", decode_times=False)
     sec = profiles.Section(name="all", method="time")
     args = argparse.Namespace(
         root=str(tmp_path), product="profiles", p_max=None, gap_factor=4.0,
         apply_qc=True, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
-        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+        stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[], ncols=1,
     )
     try:
         fig = profiles._build_profiles_figure(
-            ds, sec, list(profiles.PRODUCTS["profiles"].default_vars),
+            ds, sec, ["Gnd", "V_Bat", "PV", "speed"],
             args, {}, profiles.PRODUCTS["profiles"],
         )
         assert fig is not None

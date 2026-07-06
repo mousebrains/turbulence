@@ -48,6 +48,7 @@ def _write_ctd_combo(root: Path, n_cast: int = 4, per: int = 60) -> None:
     jac_t = 28.0 - 0.1 * depth
     sp = 34.5 + 0.01 * depth
     sigma0 = -1.0 + 0.25 * depth  # negative for depth < 4 m
+    rho = 24.0 + 0.25 * depth     # in-situ density anomaly
     dtdz = 0.02 + 0.0001 * depth  # one-signed (stable) -> diverging-cmap path
 
     ds = xr.Dataset(
@@ -56,7 +57,9 @@ def _write_ctd_combo(root: Path, n_cast: int = 4, per: int = 60) -> None:
                                           "units": "degree_Celsius"}),
             "SP": (("time",), sp, {"long_name": "practical salinity", "units": "PSU"}),
             "sigma0": (("time",), sigma0, {"long_name": "potential density anomaly",
-                                            "units": "kg/m^3"}),
+                                            "units": "kg m-3"}),
+            "rho": (("time",), rho, {"long_name": "in-situ density - 1000",
+                                      "units": "kg m-3"}),
             "dTdz": (("time",), dtdz, {"long_name": "temperature gradient",
                                         "units": "K m-1"}),
             "depth": (("time",), depth, {"units": "m", "positive": "down"}),
@@ -90,8 +93,28 @@ def test_var_label_omits_dimensionless_units():
             "depth": (("t",), np.zeros(2), {"long_name": "depth", "units": "m"}),
         }
     )
-    assert var_label(ds, "SP") == "practical salinity (PSU)"  # no "[1]"
-    assert var_label(ds, "depth") == "depth [m]"  # real unit still shown
+    assert var_label(ds, "SP") == "practical salinity (PSU)"  # no "(1)"
+    assert var_label(ds, "depth") == "depth (m)"  # real unit in curved brackets
+
+
+def test_var_label_renders_celsius_compactly():
+    """Every degree_Celsius field reads as the compact "(°C)" (parenthetical,
+    like the curated T_1/T_2 labels), not the raw "[degree_Celsius]"."""
+    import xarray as xr
+
+    from odas_tpw.perturb.plot.sections import var_label
+
+    ds = xr.Dataset(
+        {
+            "JAC_T": (("t",), np.zeros(2),
+                      {"long_name": "in-situ temperature (JFE)",
+                       "units": "degree_Celsius"}),
+            "DO_T": (("t",), np.zeros(2),
+                     {"long_name": "optode temperature", "units": "degC"}),
+        }
+    )
+    assert var_label(ds, "JAC_T") == "in-situ temperature (JFE) (°C)"
+    assert var_label(ds, "DO_T") == "optode temperature (°C)"  # variant spelling
 
 
 def test_time_subset_handles_numeric_time_axis():
@@ -221,7 +244,7 @@ def _scalar_args(root: Path, **over) -> argparse.Namespace:
         root=str(root), ctd_combo=None, sections=None, select=None, out_dir=None,
         var=None, z_bin=2.0, x_bin=None, depth_max=None, vmin=None, vmax=None,
         clim=None, name="s", xaxis="time", start=None, stop=None,
-        point=None, waypoints=None, units="km",
+        point=None, waypoints=None, units="km", ncols=1,
         figsize=None, dpi=None, title=None,
     )
     base.update(over)
@@ -248,6 +271,33 @@ def test_build_figures_honours_figsize(tmp_path: Path):
     _write_ctd_combo(tmp_path)
     (_, fig), = list(scalar.build_figures(_scalar_args(tmp_path, figsize=[7.0, 5.0])))
     assert list(fig.get_size_inches()) == [7.0, 5.0]
+    plt.close(fig)
+
+
+def test_ncols_grid_changes_layout(tmp_path: Path):
+    """ncols>1 arranges the variable panels in a grid: 4 variables at ncols=2
+    give a 2-row figure (height 3*2+1) instead of the 4-row stack (3*4+1)."""
+    import matplotlib.pyplot as plt
+
+    _write_ctd_combo(tmp_path)
+    vs = ["JAC_T", "SP", "sigma0", "dTdz"]
+    (_, f1), = list(scalar.build_figures(_scalar_args(tmp_path, var=vs)))
+    assert f1.get_size_inches()[1] == 13.0  # 4x1 stack -> 3*4 + 1
+    plt.close(f1)
+    (_, f2), = list(scalar.build_figures(_scalar_args(tmp_path, var=vs, ncols=2)))
+    assert list(f2.get_size_inches()) == [11.0, 7.0]  # 2x2 -> width 11, 3*2 + 1
+    plt.close(f2)
+
+
+def test_ncols_ragged_blanks_unused_cell(tmp_path: Path):
+    """3 variables in 2 columns -> a 2x2 grid with exactly one blanked cell."""
+    import matplotlib.pyplot as plt
+
+    _write_ctd_combo(tmp_path)
+    (_, fig), = list(scalar.build_figures(
+        _scalar_args(tmp_path, var=["JAC_T", "SP", "sigma0"], ncols=2)))
+    invisible = [ax for ax in fig.axes if not ax.get_visible()]
+    assert len(invisible) == 1
     plt.close(fig)
 
 
@@ -542,7 +592,20 @@ def test_default_variables(tmp_path: Path):
     _write_ctd_combo(tmp_path)
     with xr.open_dataset(tmp_path / "ctd_combo_00" / "combo.nc") as ds:
         # dTdz is present but not a default panel.
-        assert scalar._default_variables(ds) == ["JAC_T", "SP", "sigma0"]
+        assert scalar._default_variables(ds) == ["JAC_T", "SP", "sigma0", "rho"]
+
+
+def test_default_preset_is_2col_grid(tmp_path: Path):
+    """The scalar preset defaults to JAC_T/SP/sigma0/rho in a 2-column grid
+    when neither --var nor --ncols is given."""
+    import matplotlib.pyplot as plt
+
+    _write_ctd_combo(tmp_path)
+    (_, fig), = list(scalar.build_figures(_scalar_args(tmp_path, var=None, ncols=None)))
+    cbars = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is not None]
+    assert len(cbars) == 4                              # JAC_T, SP, sigma0, rho
+    assert list(fig.get_size_inches()) == [11.0, 7.0]   # 4 vars / 2 cols = 2 rows
+    plt.close("all")
 
 
 def test_diverging_variable_renders(tmp_path: Path):

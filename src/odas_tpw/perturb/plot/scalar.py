@@ -98,8 +98,10 @@ __all__ = [
 
 # Default scalar panels when the user names none, plus optional sensor channels
 # added automatically when the instrument carries them.
-_DEFAULT_VARS: tuple[str, ...] = ("JAC_T", "SP", "sigma0")
+_DEFAULT_VARS: tuple[str, ...] = ("JAC_T", "SP", "sigma0", "rho")
 _OPTIONAL_VARS: tuple[str, ...] = ("DO", "Chlorophyll", "Turbidity")
+# Default column count when --ncols is not given (a 2-wide grid).
+_DEFAULT_NCOLS = 2
 
 # Per-variable cmocean colormap.  Diverging fields center the color scale at 0.
 _CMAP: dict[str, str] = {
@@ -120,6 +122,15 @@ _DIVERGING: frozenset[str] = frozenset({"dTdz"})
 # Variables whose colorbar runs min-at-top to max-at-bottom, mirroring the
 # (inverted) depth axis -- salinity and density both increase with depth.
 _CBAR_MIN_AT_TOP: frozenset[str] = frozenset({"SP", "sigma0"})
+
+# Explicit colorbar labels that override the CF long_name/units default
+# (var_label) for the CTD scalars. "JFE" names the JFE Advantech CTD; the
+# density label uses mathtext so it renders as sigma-zero (sigma_0).
+_CBAR_LABEL: dict[str, str] = {
+    "JAC_T": "in-situ T (°C) (JFE)",
+    "SP": "Salinity (PSU) (JFE)",
+    "sigma0": r"$\sigma_0$ (kg/m³) (JFE)",
+}
 
 
 def _default_variables(ds: xr.Dataset) -> list[str]:
@@ -168,7 +179,6 @@ def _build_section_figure(
     whether to display or save the returned figure.
     """
     import cmocean
-    import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
     from matplotlib.ticker import FuncFormatter
 
@@ -206,21 +216,25 @@ def _build_section_figure(
         z_hi = float(args.depth_max)
     z_edges = grid.make_edges(0.0, z_hi, args.z_bin)
 
-    n = len(panel_vars)
-    fig, axes = plt.subplots(
-        n, 1, figsize=getattr(args, "figsize", None) or (11, 3.0 * n + 1.0),
-        sharex=True, sharey=True,
-        constrained_layout=True, squeeze=False,
+    # Panels are arranged in `ncols` columns (default 1 = a vertical stack),
+    # filled left-to-right, top-to-bottom. Sections remain one figure each.
+    fig, axes, left_axes, col_bottom = layout.panel_grid(
+        len(panel_vars), getattr(args, "ncols", None) or _DEFAULT_NCOLS,
+        figsize=getattr(args, "figsize", None),
     )
-    axes = axes[:, 0]
+    left_set = set(left_axes)
 
     for ax, name in zip(axes, panel_vars):
+        # With sharey, only the left column carries the "Depth (m)" label (the
+        # other columns' y tick labels are hidden, so a bare label would mislead).
+        is_left = ax in left_set
         v = dss[name].values
         g, _count = grid.grid_mean(x, depth, v, x_edges, z_edges)
         if not np.any(np.isfinite(g)):
             ax.text(0.5, 0.5, f"no valid {name}", transform=ax.transAxes,
                     ha="center", va="center")
-            ax.set_ylabel("Depth (m)")
+            if is_left:
+                ax.set_ylabel("Depth (m)")
             continue
         # Per-variable --clim wins; else the global --vmin/--vmax (only set for
         # a single-variable plot, enforced in run()); else auto 1/99 percentile.
@@ -250,27 +264,37 @@ def _build_section_figure(
             # Salinity sits in a narrow band; show 2 decimals, or 1 when the
             # range is wide enough to read -- avoids false precision on ticks.
             cbar_fmt = "%.1f" if (vmax - vmin) >= 1.0 else "%.2f"
-        cbar = fig.colorbar(pcm, ax=ax, label=_var_label(ds, name), format=cbar_fmt)
+        cbar_label = _CBAR_LABEL.get(name, _var_label(ds, name))
+        cbar = fig.colorbar(pcm, ax=ax, label=cbar_label, format=cbar_fmt)
         if name in _CBAR_MIN_AT_TOP:
             cbar.ax.invert_yaxis()  # min at top, max at bottom (mirrors depth)
-        ax.set_ylabel("Depth (m)")
+        if is_left:
+            ax.set_ylabel("Depth (m)")
 
-    axes[0].invert_yaxis()
+    for ax in axes:
+        # Draw the grid over the color mesh (axisbelow False), a thin muted
+        # line so it reads on both light (thermal/haline) and dark (dense) maps.
+        ax.set_axisbelow(False)
+        ax.grid(True, color="0.4", linewidth=0.4, alpha=0.5)
+
+    axes[0].invert_yaxis()  # sharey: inverts every panel's depth axis
     axes[0].set_xlim(x_edges[0], x_edges[-1])
 
-    bottom = axes[-1]
-    bottom.set_xlabel(xa.label)
-    if xa.kind == "time":
-        bottom.xaxis.set_major_formatter(
-            FuncFormatter(
-                lambda val, _pos: np.datetime_as_string(
-                    np.datetime64(int(val), "s"), unit="m"
-                ).replace("T", " ")
+    # The x label/formatter goes on the bottom-most panel of each column
+    # (layout.panel_grid already re-enabled their tick labels).
+    for ax in col_bottom:
+        ax.set_xlabel(xa.label)
+        if xa.kind == "time":
+            ax.xaxis.set_major_formatter(
+                FuncFormatter(
+                    lambda val, _pos: np.datetime_as_string(
+                        np.datetime64(int(val), "s"), unit="m"
+                    ).replace("T", " ")
+                )
             )
-        )
-        for lbl in bottom.get_xticklabels():
-            lbl.set_rotation(30)
-            lbl.set_ha("right")
+            for lbl in ax.get_xticklabels():
+                lbl.set_rotation(30)
+                lbl.set_horizontalalignment("right")
 
     title_id = ds.attrs.get("id") or os.path.basename(os.path.normpath(args.root))
     npts = int(dss.sizes["time"])

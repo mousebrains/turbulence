@@ -62,17 +62,48 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class _Product:
-    dir_prefix: str          # latest_stage_dir prefix (combo / diss_combo / ...)
+    dir_prefix: str          # primary latest_stage_dir prefix (combo / chi_combo / ...)
     default_vars: tuple[str, ...]
-    qc_var: str | None       # companion qc_drop_* field, NaN'd when --apply-qc
+    qc_vars: tuple[str, ...]  # companion qc_drop_* fields; union-ORed into the mask
     label: str               # user-facing name (subcommand / title / file stem)
+    default_ncols: int = 1   # column count when --ncols is not given
+    merge_dirs: tuple[str, ...] = ()  # extra combo dirs merged onto the primary grid
 
 
 PRODUCTS: dict[str, _Product] = {
-    "profiles": _Product("combo", ("T1", "T2", "N2", "dTdz"), None, "profiles"),
-    "diss": _Product("diss_combo", ("epsilonMean",), "qc_drop_epsilon", "epsilon"),
-    "chi": _Product("chi_combo", ("chiMean",), "qc_drop_chi", "chi"),
-    "mixing": _Product("chi_combo", ("K_T", "Gamma", "K_rho"), "qc_drop_chi", "mixing"),
+    # Default profiles preset: a 3x3 overview (temperatures / water-mass /
+    # kinematics + stratification). Missing fields (e.g. SP/rho/sigma0 before a
+    # pipeline re-run) are silently dropped from the grid.
+    "profiles": _Product(
+        "combo",
+        ("JAC_T", "T1", "T2", "SP", "rho", "sigma0", "W_slow", "dTdz", "N2"),
+        (), "profiles", default_ncols=3,
+    ),
+    # Default epsilon preset: a 3-column overview (kinematics / window means /
+    # per-probe + combined dissipation / stratification).
+    "diss": _Product(
+        "diss_combo",
+        ("speed", "nu", "T_mean", "e_1", "e_2", "epsilonMean", "N2", "dTdz"),
+        ("qc_drop_epsilon",), "epsilon", default_ncols=3,
+    ),
+    # Default chi preset: a 3-column overview (kinematics / window means /
+    # per-probe + combined chi / stratification / QC flag).
+    "chi": _Product(
+        "chi_combo",
+        ("speed", "nu", "T_mean", "chi_1", "chi_2", "chiMean", "N2", "dTdz",
+         "qc_drop_chi"),
+        ("qc_drop_chi",), "chi", default_ncols=3,
+    ),
+    # Mixing draws from BOTH the chi combo (chi / K_T / K_rho / Gamma) and the
+    # diss combo (e_*), merged on their shared (bin, profile) grid. A cell is
+    # dropped if EITHER product's QC flags it (union of qc_drop_epsilon/chi).
+    "mixing": _Product(
+        "chi_combo",
+        ("e_1", "e_2", "epsilonMean", "chi_1", "chi_2", "chiMean",
+         "K_T", "K_rho", "Gamma"),
+        ("qc_drop_epsilon", "qc_drop_chi"), "mixing", default_ncols=3,
+        merge_dirs=("diss_combo",),
+    ),
 }
 
 # Per-variable cmocean colormap (default thermal).
@@ -83,6 +114,8 @@ _CMAP: dict[str, str] = {
     "chiMean": "thermal", "chi_1": "thermal", "chi_2": "thermal",
     "K_T": "tempo", "K_rho": "tempo", "Gamma": "matter",
     "Incl_X": "balance", "Incl_Y": "balance",
+    "CT": "thermal", "SP": "haline", "SA": "haline",
+    "sigma0": "dense", "rho": "dense",
 }
 # Log-scaled fields (span orders of magnitude, strictly positive).
 _LOG_VARS: frozenset[str] = frozenset({
@@ -94,6 +127,54 @@ _LOG_VARS: frozenset[str] = frozenset({
 _SYMLOG_VARS: frozenset[str] = frozenset({"N2"})
 # Diverging fields centered on zero.
 _DIVERGING: frozenset[str] = frozenset({"dTdz", "Incl_X", "Incl_Y"})
+
+# Explicit colorbar labels overriding the CF long_name/units default
+# (var_label) for the profile-product scalars. Mathtext renders the sub/
+# superscripts and the dT/dz fraction; the degree sign stays outside mathtext
+# as a literal Unicode char. Note dTdz is a *conservative*-temperature (theta)
+# gradient (processing.mixing._stable_window), Thorpe-sorted over the background
+# window -- the label keeps the familiar dT/dz form.
+_CBAR_LABEL: dict[str, str] = {
+    "T1": r"$T_1$ (°C)",
+    "T2": r"$T_2$ (°C)",
+    "N2": r"$N^2$ (s$^{-2}$) (Thorpe-sorted)",
+    "dTdz": r"$\frac{dT}{dz}$ (°C m$^{-1}$) (+ downwards)",
+    "JAC_T": "JAC_T (°C)",
+    "JAC_C": "JAC_C (mS/cm)",
+    "CT": r"$\Theta$ (°C)",
+    "SP": "Salinity (PSU)",
+    "SA": "Salinity (g/kg)",
+    "sigma0": r"$\sigma_0$ (kg m$^{-3}$)",
+    "rho": r"$\rho$-1000 (kg m$^{-3}$) (in-situ)",
+    "P_dP": "P_dP (dbar)",
+    "Incl_X": "incl_X (°)",
+    "Incl_Y": "incl_Y (°)",
+    "Incl_T": "incl_T (°C)",
+    "W_slow": r"W_slow (dbar s$^{-1}$)",
+    # Epsilon (diss) product: Greek nu for viscosity, angle brackets for the
+    # window-mean temperature and combined epsilon (an overline renders faintly
+    # at colorbar-label size), and per-probe epsilons as ε_n (the "probe n" is
+    # redundant with the subscript).
+    "nu": r"$\nu$ (m$^2$ s$^{-1}$)",
+    "T_mean": r"$\langle T \rangle$ (°C)",
+    "e_1": r"$\epsilon_1$ (W kg$^{-1}$)",
+    "e_2": r"$\epsilon_2$ (W kg$^{-1}$)",
+    "epsilonMean": r"$\langle \epsilon \rangle$ (W kg$^{-1}$)",
+    # Chi (thermal-variance) and mixing product: per-probe χ_n, angle-bracket
+    # combined χ, the Osborn-Cox / Osborn diffusivities, and dimensionless Γ.
+    "chi_1": r"$\chi_1$ (K$^2$ s$^{-1}$)",
+    "chi_2": r"$\chi_2$ (K$^2$ s$^{-1}$)",
+    "chiMean": r"$\langle \chi \rangle$ (K$^2$ s$^{-1}$)",
+    "K_T": r"$K_T$ (m$^2$ s$^{-1}$)",
+    "K_rho": r"$K_\rho$ (m$^2$ s$^{-1}$)",
+    "Gamma": r"$\Gamma$",
+}
+
+# Variables whose colorbar reads with the smallest value at the top (axis
+# inverted) rather than the matplotlib default (smallest at the bottom).
+# SP/sigma0 mirror the scalar product (salinity/density rise with depth); nu
+# (viscosity) rises with depth as the water cools, so it reads the same way.
+_REVERSE_CBAR: frozenset[str] = frozenset({"P_dP", "SP", "sigma0", "nu"})
 
 
 def _profile_window(stime: np.ndarray, sec: Section) -> np.ndarray:
@@ -149,7 +230,12 @@ def _make_norm(name: str, z: np.ndarray, args: argparse.Namespace, clim: dict):
 
     if name in _DIVERGING:
         vmin, vmax = grid.linear_limits(z, lo, hi)
-        if not explicit and vmin is not None and vmax is not None:
+        # Center on zero only when the robust (1/99%) range actually straddles
+        # it.  One-signed data -- an all-stable dTdz (~ -0.17..0 K/m) or an
+        # offset Incl_Y (~76..90 deg) -- would otherwise mirror an unused sign
+        # and waste half the colorbar, making the range look far too wide.
+        if (not explicit and vmin is not None and vmax is not None
+                and vmin < 0.0 < vmax):
             m = max(abs(vmin), abs(vmax))
             return Normalize(vmin=-m, vmax=m)
         return Normalize(vmin=vmin, vmax=vmax)
@@ -171,6 +257,83 @@ def _make_norm(name: str, z: np.ndarray, args: argparse.Namespace, clim: dict):
     return Normalize(vmin=vmin, vmax=vmax)
 
 
+def _union_qc_mask(
+    dss: xr.Dataset, qc_vars: tuple[str, ...], col: np.ndarray
+) -> np.ndarray | None:
+    """Boolean (bin, selected-profile) mask: True where ANY qc_drop_* flag is set.
+
+    Products may carry more than one flag field (mixing pulls both
+    ``qc_drop_epsilon`` and ``qc_drop_chi``); a cell is dropped if either marks
+    it (union). Absent flag fields are skipped; ``None`` means no QC to apply.
+    """
+    mask: np.ndarray | None = None
+    for qv in qc_vars:
+        if qv not in dss.data_vars:
+            continue
+        flag = np.asarray(dss[qv].transpose("bin", "profile").values)[:, col]
+        marked = np.isfinite(flag) & (flag > 0)
+        mask = marked if mask is None else (mask | marked)
+    return mask
+
+
+def _merge_source_dirs(
+    ds: xr.Dataset, product: _Product, args: argparse.Namespace
+) -> xr.Dataset:
+    """Merge variables from ``product.merge_dirs`` onto the primary dataset.
+
+    Mixing draws from both the diss and chi combos, which share an identical
+    (bin, profile) grid from the same pipeline run. Extra variables (and their
+    qc_drop_* flags) are copied onto the primary dataset using its own
+    coordinates; shared variables keep the primary's copy. A missing extra dir
+    is skipped -- its variables simply drop out of the default grid -- but a
+    grid that does not line up is a hard error rather than a silent mis-join.
+    """
+    for prefix in product.merge_dirs:
+        # optional=True: a supplemental combo that simply was not produced (e.g.
+        # a chi-only run with no diss) degrades to None and is skipped in BOTH
+        # --root and --config modes -- matching the diagnostics / eps-chi idiom.
+        # (A genuine config *conflict* still raises, so data is never dropped
+        # silently over an ambiguous stage.)
+        src = resolve.resolve_for_args(args, prefix, optional=True)
+        if src is None:
+            continue
+        path = os.path.join(src, "combo.nc")
+        if not os.path.exists(path):
+            continue
+        with xr.open_dataset(path, decode_times=False) as extra:
+            # The assignment below is POSITIONAL (it bypasses xarray coordinate
+            # alignment), so the two combos must share the same grid by *value*,
+            # not merely the same counts -- otherwise extra data would be placed
+            # on the primary's axes and silently mis-joined.
+            if (extra.sizes.get("bin") != ds.sizes.get("bin")
+                    or extra.sizes.get("profile") != ds.sizes.get("profile")):
+                raise SystemExit(
+                    f"{prefix} grid {dict(extra.sizes)} != {product.dir_prefix} "
+                    f"{dict(ds.sizes)}; cannot merge mixing sources")
+            if "bin" in ds.coords and "bin" in extra.coords and not np.allclose(
+                    np.asarray(ds["bin"].values, dtype=float),
+                    np.asarray(extra["bin"].values, dtype=float),
+                    rtol=0.0, atol=1e-6):
+                raise SystemExit(
+                    f"{prefix} depth bins differ from {product.dir_prefix}; "
+                    "cannot merge mixing sources")
+            # stime is epoch seconds (~1.7e9), where np.allclose's default
+            # rtol=1e-5 spans ~4.8 h -- far too loose to detect different casts.
+            # Compare with a 1 s absolute tolerance (and no relative term).
+            if "stime" in ds and "stime" in extra and not np.allclose(
+                    np.asarray(ds["stime"].values, dtype=float),
+                    np.asarray(extra["stime"].values, dtype=float),
+                    rtol=0.0, atol=1.0, equal_nan=True):
+                raise SystemExit(
+                    f"{prefix} profiles (stime) differ from {product.dir_prefix}; "
+                    "the combos are not the same casts")
+            for name, da in extra.data_vars.items():
+                if name in ds.data_vars or not set(da.dims) <= set(ds.dims):
+                    continue
+                ds[name] = (da.dims, da.load().values, dict(da.attrs))
+    return ds
+
+
 def _build_profiles_figure(
     ds: xr.Dataset,
     sec: Section,
@@ -181,7 +344,6 @@ def _build_profiles_figure(
 ) -> Figure | None:
     """Render one section of the (bin, profile) product to a Figure."""
     import cmocean
-    import matplotlib.pyplot as plt
     from matplotlib.ticker import FuncFormatter
 
     dss = ds.isel(profile=np.flatnonzero(_profile_window(ds["stime"].values, sec)))
@@ -239,20 +401,24 @@ def _build_profiles_figure(
                     despike_smooth=args.despike_smooth, tol=args.stime_tol,
                 )
 
-    qc = None
-    if args.apply_qc and product.qc_var and product.qc_var in dss.data_vars:
-        qc = np.asarray(dss[product.qc_var].transpose("bin", "profile").values)[:, col]
-        n_drop = int((np.isfinite(qc) & (qc > 0)).sum())
-        if n_drop:
-            print(f"section {sec.name!r}: QC flags NaN {n_drop} cells per panel")
+    qc = _union_qc_mask(dss, product.qc_vars, col) if args.apply_qc else None
+    if qc is not None and qc.any():
+        print(f"section {sec.name!r}: QC flags NaN {int(qc.sum())} cells per panel")
 
-    n = len(panel_vars)
-    fig, axes = plt.subplots(
-        n, 1, figsize=getattr(args, "figsize", None) or (11, 3.0 * n + 1.0),
-        sharex=True, sharey=True,
-        constrained_layout=True, squeeze=False,
+    # Panels in `ncols` columns, filled left-to-right, top-to-bottom. When
+    # --ncols is not given, fall back to the product's default (profiles = 3;
+    # a vertical stack elsewhere). Sections remain one figure each.
+    ncols = getattr(args, "ncols", None)
+    if ncols is None:
+        ncols = product.default_ncols
+    fig, axes, left_axes, col_bottom = layout.panel_grid(
+        len(panel_vars), ncols,
+        figsize=getattr(args, "figsize", None),
     )
-    axes = axes[:, 0]
+    left_set = set(left_axes)
+    # Depth rows (bins) that carry finite data in at least one plotted panel;
+    # used to fit the shared depth axis to where there is valid data.
+    valid_rows = np.zeros(depth.shape, dtype=bool)
 
     for ax, name in zip(axes, panel_vars):
         is_pseudo = diagnostics.is_pseudo_var(name)
@@ -261,38 +427,65 @@ def _build_profiles_figure(
             cmap_name, label = diagnostics.pseudo_cmap(name), diagnostics.pseudo_label(name)
         else:
             z = np.asarray(dss[name].transpose("bin", "profile").values, dtype=float)[:, col]
-            if qc is not None:
-                z = np.where(np.isfinite(qc) & (qc > 0), np.nan, z)
-            cmap_name, label = _CMAP.get(name, "thermal"), var_label(ds, name)
+            # Apply the QC mask to the data panels, but never to a flag field
+            # itself -- plotting qc_drop_* is how you *see* which cells are
+            # flagged, so self-masking it would blank exactly what you asked for.
+            if qc is not None and name not in product.qc_vars:
+                z = np.where(qc, np.nan, z)
+            cmap_name = _CMAP.get(name, "thermal")
+            label = _CBAR_LABEL.get(name, var_label(ds, name))
+            # Flag in-situ-calibrated channels (FP07 T1/T2) from the variable's
+            # own provenance attr -- reflects what was actually applied, not the
+            # config intent (calibrate=true can fall back to factory).
+            cal = ds[name].attrs.get("calibration", "") if name in ds else ""
+            if isinstance(cal, str) and cal.startswith("in-situ"):
+                label = f"{label} (in-situ calib)"
         norm = _make_norm(name, z, args, clim)
         if norm is None or not np.any(np.isfinite(z)):
             ax.text(0.5, 0.5, f"no valid {name}", transform=ax.transAxes,
                     ha="center", va="center")
-            ax.set_ylabel("Depth (m)")
+            if ax in left_set:  # only the left column carries the shared y label
+                ax.set_ylabel("Depth (m)")
             continue
+        valid_rows |= np.any(np.isfinite(z), axis=1)
         cmap = getattr(cmocean.cm, cmap_name).copy()
         cmap.set_bad(color="0.85")  # unsampled depths: light gray
         layout.plot_columns(ax, fig, xs, depth, z, cmap, norm, label,
-                            gap_factor=args.gap_factor)
-        ax.set_ylabel("Depth (m)")
+                            gap_factor=args.gap_factor,
+                            reverse_cbar=name in _REVERSE_CBAR)
+        if ax in left_set:
+            ax.set_ylabel("Depth (m)")
 
-    axes[0].invert_yaxis()
+    for ax in axes:
+        # Grid over the color mesh (axisbelow False) so it reads on any colormap.
+        ax.set_axisbelow(False)
+        ax.grid(True, color="0.4", linewidth=0.4, alpha=0.5)
+
+    axes[0].invert_yaxis()  # 0 m at top (shared across panels)
     if args.p_max is not None:
+        # Explicit depth clip wins over the data-driven fit.
         axes[0].set_ylim(float(args.p_max), 0.0)
+    elif valid_rows.any():
+        # Fit the depth axis to where there is valid data rather than spanning
+        # the whole combo's bin grid (which pads the section with empty gray
+        # below its deepest sample). Pad half a bin so edge cells aren't clipped.
+        dv = depth[valid_rows]
+        pad = 0.5 * float(np.median(np.diff(depth))) if depth.size > 1 else 0.0
+        axes[0].set_ylim(float(dv.max()) + pad, max(float(dv.min()) - pad, 0.0))
 
-    bottom = axes[-1]
-    bottom.set_xlabel(xa.label)
-    if xa.kind == "time":
-        bottom.xaxis.set_major_formatter(
-            FuncFormatter(
-                lambda val, _pos: np.datetime_as_string(
-                    np.datetime64(int(val), "s"), unit="m"
-                ).replace("T", " ")
+    for ax in col_bottom:
+        ax.set_xlabel(xa.label)
+        if xa.kind == "time":
+            ax.xaxis.set_major_formatter(
+                FuncFormatter(
+                    lambda val, _pos: np.datetime_as_string(
+                        np.datetime64(int(val), "s"), unit="m"
+                    ).replace("T", " ")
+                )
             )
-        )
-        for lbl in bottom.get_xticklabels():
-            lbl.set_rotation(30)
-            lbl.set_ha("right")
+            for lbl in ax.get_xticklabels():
+                lbl.set_rotation(30)
+                lbl.set_horizontalalignment("right")
 
     title_id = ds.attrs.get("id") or os.path.basename(os.path.normpath(args.root))
     fig.suptitle(getattr(args, "title", None) or (
@@ -365,8 +558,12 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
     # decode_times=False keeps stime / bin numeric (epoch seconds / meters).
     ds = xr.open_dataset(path, decode_times=False)
     try:
+        # Validate the primary grid first, so a malformed combo reports the
+        # clear "expected a (bin, profile) product" rather than a merge-size
+        # mismatch against a None dim.
         if "profile" not in ds.dims or "bin" not in ds.dims:
             raise SystemExit(f"{path}: expected a (bin, profile) product")
+        ds = _merge_source_dirs(ds, product, args)  # pull in e.g. diss vars for mixing
         sections = resolve_sections(args)
         if args.var:
             variables = list(args.var)
