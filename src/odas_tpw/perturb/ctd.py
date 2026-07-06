@@ -16,6 +16,7 @@ only, or none detected) it falls back to the ship fix at each bin time.
 Reference: Code/ctd2binned.m (the ``addGPS`` subfunction)
 """
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +25,15 @@ import xarray as xr
 from odas_tpw.perturb.binning import _bin_indices
 from odas_tpw.perturb.gps import GPSProvider
 from odas_tpw.perturb.seawater import add_seawater_properties
+
+logger = logging.getLogger(__name__)
+
+# Profile-only background stratification: injected as slow channels by the
+# pipeline but never a CTD-product variable. The CTD hash deliberately omits
+# stratification.* (config.build_signatures), so letting these reach the CTD
+# product -- even via an explicit ctd.variables -- would make the versioned CTD
+# dir silently stale across stratification changes.
+_STRATIFICATION_ONLY = frozenset({"N2", "dTdz"})
 
 
 def _time_bin(
@@ -295,6 +305,16 @@ def ctd_bin_file(
         for name in auto_names:
             if name in pf.channels:
                 channels_to_bin.add(name)
+
+    # Enforce the profile-only contract even for explicit ctd.variables: N2/dTdz
+    # must never land on the CTD product (see _STRATIFICATION_ONLY).
+    requested_strat = _STRATIFICATION_ONLY & channels_to_bin
+    if requested_strat:
+        logger.warning(
+            "ctd.variables requested profile-only stratification %s; these are "
+            "not written to the CTD product (they live on the profile/diss "
+            "products, gated by stratification.*)", sorted(requested_strat))
+        channels_to_bin -= requested_strat
 
     if not channels_to_bin:
         return None

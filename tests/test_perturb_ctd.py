@@ -217,6 +217,34 @@ class TestCtdBinFile:
         finally:
             ds.close()
 
+    def test_stratification_excluded_even_when_requested(self, tmp_path):
+        # The contract holds even for an EXPLICIT ctd.variables=["N2", "dTdz"]:
+        # they depend on stratification.*, which the CTD hash omits, so letting
+        # them through would silently stale the versioned CTD dir. DO (a real
+        # CTD scalar) requested alongside is still written.
+        n = 640
+        t_slow = np.linspace(0, 10, n)
+        channels = {
+            "JAC_T": np.linspace(5.0, 15.0, n),
+            "JAC_C": np.linspace(30.0, 35.0, n),
+            "P": np.linspace(0.0, 100.0, n),
+            "N2": np.linspace(1e-5, 1e-4, n),
+            "dTdz": np.linspace(0.01, 0.1, n),
+            "DO": np.linspace(200.0, 250.0, n),
+        }
+        pf = self._make_pf(channels, t_slow=t_slow)
+        gps = GPSFixed(15.0, 145.0)
+
+        out = ctd_bin_file(pf, gps, tmp_path, bin_width=0.5,
+                           variables=["N2", "dTdz", "DO"])
+        assert out is not None
+        ds = xr.open_dataset(out)
+        try:
+            assert "N2" not in ds and "dTdz" not in ds  # filtered despite request
+            assert "DO" in ds                           # real scalar still written
+        finally:
+            ds.close()
+
     def test_time_coord_has_no_fillvalue(self, tmp_path):
         # Regression: CF-1.13 §2.5.1 forbids _FillValue on coordinate
         # variables. xarray auto-emits one for the float "time" coord unless

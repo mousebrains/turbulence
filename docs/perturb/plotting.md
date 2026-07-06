@@ -175,7 +175,7 @@ pipeline configuration and is not validated against it.
 | `--sections YAML` | Sections file. If omitted, one ad-hoc section is built from the flags below. |
 | `--select NAME` | Plot only the named section(s) from `--sections`, by their `name:` in the YAML (repeatable, or comma-separated). Default: every section. An unknown name is an error. |
 | `--out-dir DIR` | Write `scalar_<name>.png` here instead of showing on screen. Omit to display interactively (figures fall back to `--root` when no display is available). |
-| `--var NAME` | Scalar variable to panel (repeatable). Default: `JAC_T`, `SP`, `sigma0`, plus `DO`/`Chlorophyll`/`Turbidity` when present. |
+| `--var NAME` | Scalar variable to panel (repeatable). Default: `JAC_T`, `SP`, `sigma0`, `rho`, plus `DO`/`Chlorophyll`/`Turbidity` when present, arranged in a 2-column grid (`--ncols` overrides). |
 | `--z-bin M` | Depth bin width in meters (default 1.0). |
 | `--x-bin U` | x bin width in x-axis units (default: ~300 columns). |
 | `--depth-max M` | Clip the depth axis at this value. |
@@ -187,9 +187,8 @@ pipeline configuration and is not validated against it.
 | `--waypoints "lat,lon;lat,lon;..."` | Polyline for ad-hoc `along_line`. |
 | `--units {m,km,nm}` | Distance units for spatial x-axes (default `km`). |
 
-Default density panel is `sigma0` (potential density **anomaly**); in-situ
-density is available with `--var rho` (stored and labeled as in-situ density
-− 1000 kg/m³). Color limits are the
+Default density panels are `sigma0` (potential density **anomaly**) and `rho`
+(in-situ density − 1000 kg/m³, stored and labeled as such). Color limits are the
 inner 1/99 percentile (sign-aware, so a near-surface negative `sigma0` is not
 clipped). The salinity (`SP`) and density (`sigma0`) colorbars run min-at-top
 to max-at-bottom, mirroring the depth axis (both increase with depth).
@@ -222,15 +221,21 @@ profile is a single column placed at its x-position. Columns are sorted by x
 and drawn one mesh per x-cluster, leaving **blank gaps** where sampling is
 sparse (never stretched across unsampled water/time).
 
-These four subcommands share one engine, one per product (and its default
-variables):
+These four subcommands share one engine, one per product. Each defaults to a
+multi-panel overview in a 3-column grid (`--ncols` overrides):
 
-| Subcommand | Reads | Default variables | Scale |
+| Subcommand | Reads | Default variables (3-column grid) | Scale |
 |------------|-------|-------------------|-------|
-| `profiles` | `combo_NN` | `T1`, `T2`, `N2`, `dTdz` | T linear, N2 log, dTdz diverging |
-| `epsilon`  | `diss_combo_NN` | `epsilonMean` | log |
-| `chi`      | `chi_combo_NN` | `chiMean` | log |
-| `mixing`   | `chi_combo_NN` | `K_T`, `Gamma`, `K_rho` | log |
+| `profiles` | `combo_NN` | `JAC_T`, `T1`, `T2`, `SP`, `rho`, `sigma0`, `W_slow`, `dTdz`, `N2` | T linear, N2 symlog, dTdz diverging |
+| `epsilon`  | `diss_combo_NN` | `speed`, `nu`, `T_mean`, `e_1`, `e_2`, `epsilonMean`, `N2`, `dTdz` | epsilon log |
+| `chi`      | `chi_combo_NN` | `speed`, `nu`, `T_mean`, `chi_1`, `chi_2`, `chiMean`, `N2`, `dTdz`, `qc_drop_chi` | chi log |
+| `mixing`   | `chi_combo_NN` **+** `diss_combo_NN` | `e_1`, `e_2`, `epsilonMean`, `chi_1`, `chi_2`, `chiMean`, `K_T`, `K_rho`, `Gamma` | log |
+
+`mixing` merges the two combos on their shared `(bin, profile)` grid — `e_*`
+come from the diss combo, chi/K/Gamma from the chi combo. If the diss combo is
+absent (a chi-only run) the `e_*` panels are simply dropped. Its QC is the
+**union** of `qc_drop_epsilon` and `qc_drop_chi` (a cell is masked if either
+flags it).
 
 Any combo variable can be panelled with `--var` (e.g. `--var e_1 --var e_2`).
 The section / `--sections` / `--select` / `--xaxis`-override / `--clim` /
