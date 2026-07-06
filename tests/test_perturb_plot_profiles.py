@@ -434,15 +434,20 @@ def test_qc_flag_panel_is_not_self_masked(tmp_path: Path):
     try:
         fig = profiles._build_profiles_figure(
             ds, sec, ["qc_drop_chi"], args, {}, profiles.PRODUCTS["chi"])
-        # The flag panel rendered (not dropped) and still carries the raw flags.
+        # Restrict to the DATA panel (exclude colorbar axes, whose [0,1] solids
+        # would themselves reach 1.0 and mask a self-masking regression).
+        data_axes = [ax for ax in fig.axes if getattr(ax, "_colorbar", None) is None]
         vals = []
-        for ax in fig.axes:
+        for ax in data_axes:
             for m in ax.collections:
                 a = m.get_array()
                 if a is not None:
                     vals.append(np.ma.filled(np.ma.asarray(a, dtype=float), np.nan).ravel())
         arr = np.concatenate(vals)
-        assert np.nanmax(arr) == 1.0  # flagged cells survived (not self-masked)
+        # Both flagged cells survive with value 1.0 (self-masking would NaN them,
+        # leaving only the unflagged 0.0 cells -> nanmax 0.0, count 0).
+        assert np.nanmax(arr) == 1.0
+        assert int((arr == 1.0).sum()) == 2
     finally:
         ds.close()
         plt.close("all")
@@ -469,6 +474,18 @@ def test_union_qc_mask_ors_both_flags():
     assert int(profiles._union_qc_mask(ds, ("qc_drop_chi",), col).sum()) == 1
     assert profiles._union_qc_mask(ds, ("absent",), col) is None
     assert profiles._union_qc_mask(ds, (), col) is None
+    # The SAME cell flagged by both sources is counted once (OR, not a sum).
+    both_same = xr.Dataset({
+        "qc_drop_epsilon": (("bin", "profile"), qc_e),
+        "qc_drop_chi": (("bin", "profile"), qc_e),  # identical -> same cell
+    })
+    assert int(profiles._union_qc_mask(
+        both_same, ("qc_drop_epsilon", "qc_drop_chi"), col).sum()) == 1
+    # A present-but-all-NaN flag contributes nothing (the isfinite guard); the
+    # mask is all-False, not None, since the var exists.
+    nan_ds = xr.Dataset({"qc_drop_chi": (("bin", "profile"), np.full((4, 3), np.nan))})
+    nan_mask = profiles._union_qc_mask(nan_ds, ("qc_drop_chi",), col)
+    assert nan_mask is not None and int(nan_mask.sum()) == 0
 
 
 def test_merge_source_dirs_pulls_diss_vars_onto_chi(tmp_path: Path):
@@ -498,6 +515,22 @@ def test_merge_source_dirs_pulls_diss_vars_onto_chi(tmp_path: Path):
         ds.close()
 
 
+def _write_grid_combo(tmp_path: Path, prefix: str, var: str,
+                      bins: np.ndarray, stime: np.ndarray) -> None:
+    """A 10x(len stime) combo with caller-controlled bin centers and cast times,
+    for the merge-guard tests (the shared _write_product pins both to defaults)."""
+    import xarray as xr
+
+    ds = xr.Dataset(
+        {var: (("bin", "profile"), np.ones((10, len(stime))))},
+        coords={"bin": ("bin", bins),
+                "profile": ("profile", np.arange(len(stime), dtype=np.int32))},
+    )
+    ds["stime"] = (("profile",), stime, {"units": "seconds since 1970-01-01"})
+    (tmp_path / f"{prefix}_00").mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(tmp_path / f"{prefix}_00" / "combo.nc")
+
+
 def test_merge_source_dirs_rejects_mismatched_grid(tmp_path: Path):
     """A diss combo on a different (bin, profile) grid is a hard error, not a
     silent mis-join."""
@@ -510,10 +543,72 @@ def test_merge_source_dirs_rejects_mismatched_grid(tmp_path: Path):
     ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
     args = argparse.Namespace(root=str(tmp_path), config=None)
     try:
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit, match="cannot merge mixing sources"):
             profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
     finally:
         ds.close()
+
+
+def test_merge_source_dirs_rejects_mismatched_bins(tmp_path: Path):
+    """Same bin COUNT but different bin centers must raise -- the positional
+    merge would otherwise place diss data at the chi depths (silent mis-join)."""
+    import xarray as xr
+
+    _write_product(tmp_path, "chi_combo", {"chi_1": (np.ones((10, 6)), {"units": "K2 s-1"})})
+    _write_grid_combo(tmp_path, "diss_combo", "e_1",
+                      np.arange(10, dtype=float) + 100.5, _STIME)
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    args = argparse.Namespace(root=str(tmp_path), config=None)
+    try:
+        with pytest.raises(SystemExit, match="depth bins differ"):
+            profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+    finally:
+        ds.close()
+
+
+def test_merge_source_dirs_rejects_stime_mismatch(tmp_path: Path):
+    """Same grid but different cast start times must raise. The stimes are
+    realistic epoch seconds (~1.7e9), where np.allclose's default rtol spans
+    ~4.8 h -- a 1 h drift would slip through the old loose check, so this pins
+    the tightened 1 s absolute tolerance."""
+    import xarray as xr
+
+    bins = np.arange(10, dtype=float) + 0.5
+    base = 1.7e9 + np.array([0.0, 300.0, 600.0, 3600.0, 3900.0, 4200.0])
+    _write_grid_combo(tmp_path, "chi_combo", "chi_1", bins, base)
+    _write_grid_combo(tmp_path, "diss_combo", "e_1", bins, base + 3600.0)  # 1 h drift
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    args = argparse.Namespace(root=str(tmp_path), config=None)
+    try:
+        with pytest.raises(SystemExit, match="not the same casts"):
+            profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+    finally:
+        ds.close()
+
+
+def test_mixing_missing_diss_combo_degrades(tmp_path: Path):
+    """With no diss_combo (e.g. a chi-only run), mixing still renders the
+    chi-side panels; the diss vars (e_*) drop out instead of crashing."""
+    import xarray as xr
+
+    _write_product(tmp_path, "chi_combo", {
+        "chi_1": (1.0e-7 * (1.0 + np.arange(60).reshape(10, 6)), {"units": "K2 s-1"}),
+        "K_T": (1.0e-4 * (1.0 + np.arange(60).reshape(10, 6)), {"units": "m2 s-1"}),
+        "qc_drop_chi": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    args = argparse.Namespace(root=str(tmp_path), config=None)
+    try:
+        merged = profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+        assert "e_1" not in merged.data_vars   # diss absent -> dropped, no raise
+        assert "chi_1" in merged.data_vars
+    finally:
+        ds.close()
+    # And end-to-end it still produces a figure (chi-only mixing).
+    rc = _run(["mixing", "--root", str(tmp_path), "--out-dir", str(tmp_path),
+               "--name", "m", "--xaxis", "time"])
+    assert rc == 0
+    assert (tmp_path / "mixing_m.png").exists()
 
 
 def test_mixing_merges_and_renders_both_sources(tmp_path: Path):
@@ -535,6 +630,42 @@ def test_mixing_merges_and_renders_both_sources(tmp_path: Path):
                "--var", "e_1", "--var", "chi_1", "--var", "K_T"])
     assert rc == 0
     assert (tmp_path / "mixing_m.png").exists()
+
+
+def test_mixing_merge_renders_diss_panel(tmp_path: Path):
+    """Through the real merge path, a diss panel (e_1) renders alongside a chi
+    panel (chi_1) -- proving the cross-combo join reaches the figure, not just
+    that a PNG was written."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    vals = 1.0e-7 * (1.0 + np.arange(60).reshape(10, 6))
+    _write_product(tmp_path, "diss_combo", {
+        "e_1": (vals, {"units": "W/kg"}),
+        "qc_drop_epsilon": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    _write_product(tmp_path, "chi_combo", {
+        "chi_1": (vals, {"units": "K2 s-1"}),
+        "qc_drop_chi": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    args = argparse.Namespace(
+        root=str(tmp_path), config=None, product="mixing", p_max=None,
+        gap_factor=4.0, apply_qc=True, hp_cut=1.0, despike_thresh=8.0,
+        despike_smooth=0.5, stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+    )
+    sec = profiles.Section(name="all", method="time")
+    try:
+        merged = profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+        fig = profiles._build_profiles_figure(
+            merged, sec, ["e_1", "chi_1"], args, {}, profiles.PRODUCTS["mixing"])
+        labels = {ax.yaxis.label.get_text()
+                  for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
+        assert r"$\epsilon_1$ (W kg$^{-1}$)" in labels   # from diss_combo (merged)
+        assert r"$\chi_1$ (K$^2$ s$^{-1}$)" in labels    # from chi_combo (primary)
+    finally:
+        ds.close()
+        plt.close("all")
 
 
 def test_mixing_union_qc_masks_both_sources(tmp_path: Path):

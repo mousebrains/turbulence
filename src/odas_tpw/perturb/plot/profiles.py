@@ -173,7 +173,7 @@ _CBAR_LABEL: dict[str, str] = {
 # Variables whose colorbar reads with the smallest value at the top (axis
 # inverted) rather than the matplotlib default (smallest at the bottom).
 # SP/sigma0 mirror the scalar product (salinity/density rise with depth); nu
-# (viscosity) falls with depth as temperature does, so it reads the same way.
+# (viscosity) rises with depth as the water cools, so it reads the same way.
 _REVERSE_CBAR: frozenset[str] = frozenset({"P_dP", "SP", "sigma0", "nu"})
 
 
@@ -289,22 +289,41 @@ def _merge_source_dirs(
     grid that does not line up is a hard error rather than a silent mis-join.
     """
     for prefix in product.merge_dirs:
-        src = resolve.resolve_for_args(args, prefix)
+        # optional=True: a supplemental combo that simply was not produced (e.g.
+        # a chi-only run with no diss) degrades to None and is skipped in BOTH
+        # --root and --config modes -- matching the diagnostics / eps-chi idiom.
+        # (A genuine config *conflict* still raises, so data is never dropped
+        # silently over an ambiguous stage.)
+        src = resolve.resolve_for_args(args, prefix, optional=True)
         if src is None:
             continue
         path = os.path.join(src, "combo.nc")
         if not os.path.exists(path):
             continue
         with xr.open_dataset(path, decode_times=False) as extra:
+            # The assignment below is POSITIONAL (it bypasses xarray coordinate
+            # alignment), so the two combos must share the same grid by *value*,
+            # not merely the same counts -- otherwise extra data would be placed
+            # on the primary's axes and silently mis-joined.
             if (extra.sizes.get("bin") != ds.sizes.get("bin")
                     or extra.sizes.get("profile") != ds.sizes.get("profile")):
                 raise SystemExit(
                     f"{prefix} grid {dict(extra.sizes)} != {product.dir_prefix} "
                     f"{dict(ds.sizes)}; cannot merge mixing sources")
+            if "bin" in ds.coords and "bin" in extra.coords and not np.allclose(
+                    np.asarray(ds["bin"].values, dtype=float),
+                    np.asarray(extra["bin"].values, dtype=float),
+                    rtol=0.0, atol=1e-6):
+                raise SystemExit(
+                    f"{prefix} depth bins differ from {product.dir_prefix}; "
+                    "cannot merge mixing sources")
+            # stime is epoch seconds (~1.7e9), where np.allclose's default
+            # rtol=1e-5 spans ~4.8 h -- far too loose to detect different casts.
+            # Compare with a 1 s absolute tolerance (and no relative term).
             if "stime" in ds and "stime" in extra and not np.allclose(
                     np.asarray(ds["stime"].values, dtype=float),
                     np.asarray(extra["stime"].values, dtype=float),
-                    equal_nan=True):
+                    rtol=0.0, atol=1.0, equal_nan=True):
                 raise SystemExit(
                     f"{prefix} profiles (stime) differ from {product.dir_prefix}; "
                     "the combos are not the same casts")
@@ -539,9 +558,12 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
     # decode_times=False keeps stime / bin numeric (epoch seconds / meters).
     ds = xr.open_dataset(path, decode_times=False)
     try:
-        ds = _merge_source_dirs(ds, product, args)  # pull in e.g. diss vars for mixing
+        # Validate the primary grid first, so a malformed combo reports the
+        # clear "expected a (bin, profile) product" rather than a merge-size
+        # mismatch against a None dim.
         if "profile" not in ds.dims or "bin" not in ds.dims:
             raise SystemExit(f"{path}: expected a (bin, profile) product")
+        ds = _merge_source_dirs(ds, product, args)  # pull in e.g. diss vars for mixing
         sections = resolve_sections(args)
         if args.var:
             variables = list(args.var)
