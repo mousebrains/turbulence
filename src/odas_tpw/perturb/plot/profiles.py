@@ -62,11 +62,12 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class _Product:
-    dir_prefix: str          # latest_stage_dir prefix (combo / diss_combo / ...)
+    dir_prefix: str          # primary latest_stage_dir prefix (combo / chi_combo / ...)
     default_vars: tuple[str, ...]
-    qc_var: str | None       # companion qc_drop_* field, NaN'd when --apply-qc
+    qc_vars: tuple[str, ...]  # companion qc_drop_* fields; union-ORed into the mask
     label: str               # user-facing name (subcommand / title / file stem)
     default_ncols: int = 1   # column count when --ncols is not given
+    merge_dirs: tuple[str, ...] = ()  # extra combo dirs merged onto the primary grid
 
 
 PRODUCTS: dict[str, _Product] = {
@@ -76,14 +77,14 @@ PRODUCTS: dict[str, _Product] = {
     "profiles": _Product(
         "combo",
         ("JAC_T", "T1", "T2", "SP", "rho", "sigma0", "W_slow", "dTdz", "N2"),
-        None, "profiles", default_ncols=3,
+        (), "profiles", default_ncols=3,
     ),
     # Default epsilon preset: a 3-column overview (kinematics / window means /
     # per-probe + combined dissipation / stratification).
     "diss": _Product(
         "diss_combo",
         ("speed", "nu", "T_mean", "e_1", "e_2", "epsilonMean", "N2", "dTdz"),
-        "qc_drop_epsilon", "epsilon", default_ncols=3,
+        ("qc_drop_epsilon",), "epsilon", default_ncols=3,
     ),
     # Default chi preset: a 3-column overview (kinematics / window means /
     # per-probe + combined chi / stratification / QC flag).
@@ -91,9 +92,18 @@ PRODUCTS: dict[str, _Product] = {
         "chi_combo",
         ("speed", "nu", "T_mean", "chi_1", "chi_2", "chiMean", "N2", "dTdz",
          "qc_drop_chi"),
-        "qc_drop_chi", "chi", default_ncols=3,
+        ("qc_drop_chi",), "chi", default_ncols=3,
     ),
-    "mixing": _Product("chi_combo", ("K_T", "Gamma", "K_rho"), "qc_drop_chi", "mixing"),
+    # Mixing draws from BOTH the chi combo (chi / K_T / K_rho / Gamma) and the
+    # diss combo (e_*), merged on their shared (bin, profile) grid. A cell is
+    # dropped if EITHER product's QC flags it (union of qc_drop_epsilon/chi).
+    "mixing": _Product(
+        "chi_combo",
+        ("e_1", "e_2", "epsilonMean", "chi_1", "chi_2", "chiMean",
+         "K_T", "K_rho", "Gamma"),
+        ("qc_drop_epsilon", "qc_drop_chi"), "mixing", default_ncols=3,
+        merge_dirs=("diss_combo",),
+    ),
 }
 
 # Per-variable cmocean colormap (default thermal).
@@ -247,6 +257,64 @@ def _make_norm(name: str, z: np.ndarray, args: argparse.Namespace, clim: dict):
     return Normalize(vmin=vmin, vmax=vmax)
 
 
+def _union_qc_mask(
+    dss: xr.Dataset, qc_vars: tuple[str, ...], col: np.ndarray
+) -> np.ndarray | None:
+    """Boolean (bin, selected-profile) mask: True where ANY qc_drop_* flag is set.
+
+    Products may carry more than one flag field (mixing pulls both
+    ``qc_drop_epsilon`` and ``qc_drop_chi``); a cell is dropped if either marks
+    it (union). Absent flag fields are skipped; ``None`` means no QC to apply.
+    """
+    mask: np.ndarray | None = None
+    for qv in qc_vars:
+        if qv not in dss.data_vars:
+            continue
+        flag = np.asarray(dss[qv].transpose("bin", "profile").values)[:, col]
+        marked = np.isfinite(flag) & (flag > 0)
+        mask = marked if mask is None else (mask | marked)
+    return mask
+
+
+def _merge_source_dirs(
+    ds: xr.Dataset, product: _Product, args: argparse.Namespace
+) -> xr.Dataset:
+    """Merge variables from ``product.merge_dirs`` onto the primary dataset.
+
+    Mixing draws from both the diss and chi combos, which share an identical
+    (bin, profile) grid from the same pipeline run. Extra variables (and their
+    qc_drop_* flags) are copied onto the primary dataset using its own
+    coordinates; shared variables keep the primary's copy. A missing extra dir
+    is skipped -- its variables simply drop out of the default grid -- but a
+    grid that does not line up is a hard error rather than a silent mis-join.
+    """
+    for prefix in product.merge_dirs:
+        src = resolve.resolve_for_args(args, prefix)
+        if src is None:
+            continue
+        path = os.path.join(src, "combo.nc")
+        if not os.path.exists(path):
+            continue
+        with xr.open_dataset(path, decode_times=False) as extra:
+            if (extra.sizes.get("bin") != ds.sizes.get("bin")
+                    or extra.sizes.get("profile") != ds.sizes.get("profile")):
+                raise SystemExit(
+                    f"{prefix} grid {dict(extra.sizes)} != {product.dir_prefix} "
+                    f"{dict(ds.sizes)}; cannot merge mixing sources")
+            if "stime" in ds and "stime" in extra and not np.allclose(
+                    np.asarray(ds["stime"].values, dtype=float),
+                    np.asarray(extra["stime"].values, dtype=float),
+                    equal_nan=True):
+                raise SystemExit(
+                    f"{prefix} profiles (stime) differ from {product.dir_prefix}; "
+                    "the combos are not the same casts")
+            for name, da in extra.data_vars.items():
+                if name in ds.data_vars or not set(da.dims) <= set(ds.dims):
+                    continue
+                ds[name] = (da.dims, da.load().values, dict(da.attrs))
+    return ds
+
+
 def _build_profiles_figure(
     ds: xr.Dataset,
     sec: Section,
@@ -314,12 +382,9 @@ def _build_profiles_figure(
                     despike_smooth=args.despike_smooth, tol=args.stime_tol,
                 )
 
-    qc = None
-    if args.apply_qc and product.qc_var and product.qc_var in dss.data_vars:
-        qc = np.asarray(dss[product.qc_var].transpose("bin", "profile").values)[:, col]
-        n_drop = int((np.isfinite(qc) & (qc > 0)).sum())
-        if n_drop:
-            print(f"section {sec.name!r}: QC flags NaN {n_drop} cells per panel")
+    qc = _union_qc_mask(dss, product.qc_vars, col) if args.apply_qc else None
+    if qc is not None and qc.any():
+        print(f"section {sec.name!r}: QC flags NaN {int(qc.sum())} cells per panel")
 
     # Panels in `ncols` columns, filled left-to-right, top-to-bottom. When
     # --ncols is not given, fall back to the product's default (profiles = 3;
@@ -343,11 +408,11 @@ def _build_profiles_figure(
             cmap_name, label = diagnostics.pseudo_cmap(name), diagnostics.pseudo_label(name)
         else:
             z = np.asarray(dss[name].transpose("bin", "profile").values, dtype=float)[:, col]
-            # Apply the QC mask to the data panels, but never to the flag field
+            # Apply the QC mask to the data panels, but never to a flag field
             # itself -- plotting qc_drop_* is how you *see* which cells are
             # flagged, so self-masking it would blank exactly what you asked for.
-            if qc is not None and name != product.qc_var:
-                z = np.where(np.isfinite(qc) & (qc > 0), np.nan, z)
+            if qc is not None and name not in product.qc_vars:
+                z = np.where(qc, np.nan, z)
             cmap_name = _CMAP.get(name, "thermal")
             label = _CBAR_LABEL.get(name, var_label(ds, name))
             # Flag in-situ-calibrated channels (FP07 T1/T2) from the variable's
@@ -474,6 +539,7 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
     # decode_times=False keeps stime / bin numeric (epoch seconds / meters).
     ds = xr.open_dataset(path, decode_times=False)
     try:
+        ds = _merge_source_dirs(ds, product, args)  # pull in e.g. diss vars for mixing
         if "profile" not in ds.dims or "bin" not in ds.dims:
             raise SystemExit(f"{path}: expected a (bin, profile) product")
         sections = resolve_sections(args)

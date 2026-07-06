@@ -26,5 +26,7 @@ figures:
     ncols: 3
   - name: mixing
     preset: mixing
-    vars: [K_T, Gamma, K_rho]
-    p_max: 200
+    # Pulls e_* from the diss combo and chi/K/Gamma from the chi combo, merged
+    # on the shared (bin, profile) grid. 3-column: dissipation / chi / mixing.
+    vars: [e_1, e_2, epsilonMean, chi_1, chi_2, chiMean, K_T, K_rho, Gamma]
+    ncols: 3

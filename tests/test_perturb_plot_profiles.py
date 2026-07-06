@@ -448,6 +448,142 @@ def test_qc_flag_panel_is_not_self_masked(tmp_path: Path):
         plt.close("all")
 
 
+def test_union_qc_mask_ors_both_flags():
+    """The mixing product's mask is the union of qc_drop_epsilon and
+    qc_drop_chi; absent/empty flag sets degrade cleanly."""
+    import xarray as xr
+
+    qc_e = np.zeros((4, 3))
+    qc_e[0, 0] = 1.0
+    qc_c = np.zeros((4, 3))
+    qc_c[3, 2] = 1.0
+    ds = xr.Dataset({
+        "qc_drop_epsilon": (("bin", "profile"), qc_e),
+        "qc_drop_chi": (("bin", "profile"), qc_c),
+    })
+    col = np.arange(3)
+    mask = profiles._union_qc_mask(ds, ("qc_drop_epsilon", "qc_drop_chi"), col)
+    assert mask[0, 0] and mask[3, 2]          # both sources contribute
+    assert int(mask.sum()) == 2               # union, nothing extra
+    # A single source, and a var that isn't present, behave.
+    assert int(profiles._union_qc_mask(ds, ("qc_drop_chi",), col).sum()) == 1
+    assert profiles._union_qc_mask(ds, ("absent",), col) is None
+    assert profiles._union_qc_mask(ds, (), col) is None
+
+
+def test_merge_source_dirs_pulls_diss_vars_onto_chi(tmp_path: Path):
+    """_merge_source_dirs copies diss-only vars (and its qc flag) onto the chi
+    combo using the primary grid; shared vars keep the chi copy."""
+    import xarray as xr
+
+    _write_product(tmp_path, "chi_combo", {
+        "chi_1": (np.ones((10, 6)), {"units": "K2 s-1"}),
+        "nu": (np.full((10, 6), 2.0), {"units": "m2 s-1"}),  # shared; chi wins
+        "qc_drop_chi": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    _write_product(tmp_path, "diss_combo", {
+        "e_1": (np.full((10, 6), 7.0), {"units": "W/kg"}),
+        "nu": (np.full((10, 6), 9.0), {"units": "m2 s-1"}),  # must NOT override chi
+        "qc_drop_epsilon": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    args = argparse.Namespace(root=str(tmp_path), config=None)
+    try:
+        merged = profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+        assert "e_1" in merged.data_vars            # diss-only var pulled in
+        assert "qc_drop_epsilon" in merged.data_vars  # its flag too (for union QC)
+        assert float(merged["e_1"].values[0, 0]) == 7.0
+        assert float(merged["nu"].values[0, 0]) == 2.0  # shared var kept chi's copy
+    finally:
+        ds.close()
+
+
+def test_merge_source_dirs_rejects_mismatched_grid(tmp_path: Path):
+    """A diss combo on a different (bin, profile) grid is a hard error, not a
+    silent mis-join."""
+    import xarray as xr
+
+    _write_product(tmp_path, "chi_combo", {"chi_1": (np.ones((10, 6)), {"units": "K2 s-1"})})
+    # diss combo with a different bin count.
+    _write_product(tmp_path, "diss_combo",
+                   {"e_1": (np.ones((8, 6)), {"units": "W/kg"})}, n_bin=8)
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    args = argparse.Namespace(root=str(tmp_path), config=None)
+    try:
+        with pytest.raises(SystemExit):
+            profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+    finally:
+        ds.close()
+
+
+def test_mixing_merges_and_renders_both_sources(tmp_path: Path):
+    """End-to-end: `perturb-plot mixing` merges e_* (diss) with chi/K/Gamma
+    (chi) and renders panels from both combos."""
+    _write_product(tmp_path, "diss_combo", {
+        "e_1": (1.0e-8 * (1.0 + np.arange(60).reshape(10, 6)), {"units": "W/kg"}),
+        "e_2": (1.0e-8 * (1.0 + np.arange(60).reshape(10, 6)), {"units": "W/kg"}),
+        "qc_drop_epsilon": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    _write_product(tmp_path, "chi_combo", {
+        "chi_1": (1.0e-7 * (1.0 + np.arange(60).reshape(10, 6)), {"units": "K2 s-1"}),
+        "K_T": (1.0e-4 * (1.0 + np.arange(60).reshape(10, 6)), {"units": "m2 s-1"}),
+        "Gamma": (0.2 * np.ones((10, 6)), {"units": "1"}),
+        "qc_drop_chi": (np.zeros((10, 6)), {"units": "1"}),
+    })
+    rc = _run(["mixing", "--root", str(tmp_path), "--out-dir", str(tmp_path),
+               "--name", "m", "--xaxis", "time",
+               "--var", "e_1", "--var", "chi_1", "--var", "K_T"])
+    assert rc == 0
+    assert (tmp_path / "mixing_m.png").exists()
+
+
+def test_mixing_union_qc_masks_both_sources(tmp_path: Path):
+    """A cell flagged by EITHER qc_drop_epsilon or qc_drop_chi is dropped from
+    every data panel (union). Compares finite-cell counts with QC on vs off so
+    the assertion is robust to gap columns."""
+    import matplotlib.pyplot as plt
+    import xarray as xr
+
+    vals = 1.0e-8 * (1.0 + np.arange(60).reshape(10, 6))  # varying, positive
+    qc_e = np.zeros((10, 6))
+    qc_e[0, 0] = 1.0
+    qc_c = np.zeros((10, 6))
+    qc_c[9, 5] = 1.0  # a different cell, other source
+    _write_product(tmp_path, "chi_combo", {   # stands in for the merged input
+        "e_1": (vals, {"units": "W/kg"}),
+        "chi_1": (vals, {"units": "K2 s-1"}),
+        "qc_drop_epsilon": (qc_e, {"units": "1"}),
+        "qc_drop_chi": (qc_c, {"units": "1"}),
+    })
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    sec = profiles.Section(name="all", method="time")
+
+    def total_finite(apply_qc: bool) -> int:
+        args = argparse.Namespace(
+            root=str(tmp_path), product="mixing", p_max=None, gap_factor=4.0,
+            apply_qc=apply_qc, hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+            stime_tol=1.0, vmin=None, vmax=None, var=None, clim=[],
+        )
+        fig = profiles._build_profiles_figure(
+            ds, sec, ["e_1", "chi_1"], args, {}, profiles.PRODUCTS["mixing"])
+        tot = 0
+        for ax in fig.axes:
+            for m in ax.collections:
+                a = m.get_array()
+                if a is not None:
+                    tot += int(np.isfinite(
+                        np.ma.filled(np.ma.asarray(a, dtype=float), np.nan)).sum())
+        plt.close(fig)
+        return tot
+
+    try:
+        # 2 union-flagged cells removed from each of the 2 data panels = 4.
+        assert total_finite(False) - total_finite(True) == 4
+    finally:
+        ds.close()
+        plt.close("all")
+
+
 def test_cbar_label_overrides(tmp_path: Path):
     """The profile scalars carry the custom T_1/T_2/N^2/dT-dz colorbar labels,
     overriding the CF long_name/units default."""
