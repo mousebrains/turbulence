@@ -16,12 +16,22 @@ from collections.abc import Callable
 import numpy as np
 
 from odas_tpw.perturb.diag import render
-from odas_tpw.perturb.diag.data import Cell, EpsilonCellSource, OverviewData
+from odas_tpw.perturb.diag.data import (
+    Cell,
+    EpsilonCellSource,
+    OverviewData,
+    ProfilesCellSource,
+    ProfilesFile,
+)
 from odas_tpw.perturb.plot import layout
 
-# Signature of a drill-down renderer: (axes-or-ax, cell) -> optional depth range.
+# Drill-down renderer signatures. The strip renderers take an explicit depth
+# band so the dissipation and scalar strips share one cell band.
 SpectraFn = Callable[[object, Cell], None]
-StripFn = Callable[[list, Cell], "tuple[float, float]"]
+StripFn = Callable[[list, Cell, "tuple[float, float]"], "tuple[float, float]"]
+ScalarFn = Callable[
+    [list, ProfilesFile, "tuple[float, float]"], "tuple[float, float]"
+]
 
 
 class DiagInspector:
@@ -36,26 +46,31 @@ class DiagInspector:
         spectra_fn: SpectraFn,
         strip_fn: StripFn,
         n_strip: int = 5,
+        scalar_source: ProfilesCellSource | None = None,
+        scalar_fn: ScalarFn | None = None,
+        n_scalar: int = 6,
         title: str = "",
         clim: tuple[float, float] | None = None,
         gap_seconds: float = 600.0,
-        figsize: tuple[float, float] = (16.0, 9.0),
+        figsize: tuple[float, float] | None = None,
     ) -> None:
         self.data = data
         self.source = source
         self.field_specs = field_specs
         self.spectra_fn = spectra_fn
         self.strip_fn = strip_fn
+        self.scalar_source = scalar_source
+        self.scalar_fn = scalar_fn
         self.title = title
         self.gap_seconds = gap_seconds
 
         self.iProfile = 0
         self.iDepth = 0
 
-        self._build(n_strip, clim, figsize)
+        self._build(n_strip, n_scalar, clim, figsize)
 
     # ------------------------------------------------------------------ build
-    def _build(self, n_strip, clim, figsize) -> None:
+    def _build(self, n_strip, n_scalar, clim, figsize) -> None:
         import cmocean
         import matplotlib.pyplot as plt
 
@@ -63,10 +78,17 @@ class DiagInspector:
             self.data.t, gap_seconds=self.gap_seconds
         )
 
+        has_scalar = self.scalar_source is not None and self.scalar_fn is not None
+        if figsize is None:
+            figsize = (17.0, 13.0) if has_scalar else (16.0, 9.0)
+
         fig = plt.figure(figsize=figsize, constrained_layout=True)
         self.fig = fig
         n_ov = len(self.field_specs)
-        gs = fig.add_gridspec(2, 1, height_ratios=[1.0, 1.05])
+        if has_scalar:
+            gs = fig.add_gridspec(3, 1, height_ratios=[1.0, 1.0, 1.0])
+        else:
+            gs = fig.add_gridspec(2, 1, height_ratios=[1.0, 1.05])
         gs_top = gs[0].subgridspec(1, n_ov, wspace=0.06)
         gs_bot = gs[1].subgridspec(1, 2 + n_strip, wspace=0.30)
 
@@ -80,6 +102,15 @@ class DiagInspector:
         self.ax_strip = [fig.add_subplot(gs_bot[0, 2 + i]) for i in range(n_strip)]
         for ax in self.ax_strip[1:]:
             ax.sharey(self.ax_strip[0])
+
+        # Optional third row: raw scalar / vehicle diagnostics.
+        self.ax_scalar: list = []
+        if has_scalar:
+            gs_sca = gs[2].subgridspec(1, n_scalar, wspace=0.30)
+            self.ax_scalar = [fig.add_subplot(gs_sca[0, i]) for i in range(n_scalar)]
+            for ax in self.ax_scalar[1:]:
+                ax.sharey(self.ax_scalar[0])
+            self.ax_scalar[0].set_ylabel("Depth (m)")
 
         # Shared log color scale from the finite positive values of all fields.
         stacked = np.concatenate([f.ravel() for f in self.data.fields.values()])
@@ -126,7 +157,7 @@ class DiagInspector:
 
     # -------------------------------------------------------------- selection
     def _placeholder(self, msg: str) -> None:
-        for ax in [self.ax_spec, *self.ax_strip]:
+        for ax in [self.ax_spec, *self.ax_strip, *self.ax_scalar]:
             ax.clear()
         self.ax_spec.text(0.5, 0.5, msg, transform=self.ax_spec.transAxes,
                           ha="center", va="center", fontsize=9)
@@ -148,20 +179,52 @@ class DiagInspector:
 
         stime = float(self.data.stime_epoch[self.iProfile])
         cell = self.source.cell(stime, y)
+        # One depth band for both strips: the dissipation cell's extent, or a
+        # small fallback around the clicked bin when there is no diss file.
+        band = render.band_extent(cell.profile, cell.window) if cell else (y - 1.0, y + 1.0)
+
+        ranges: list[tuple[float, float]] = []
+        src_name: str | None = None
+
+        # Spectra + dissipation strip (from the diss product).
         if cell is None:
-            self._placeholder(f"no per-profile file for cast {self.iProfile + 1}")
+            self.ax_spec.clear()
+            self.ax_spec.text(0.5, 0.5, f"no diss file for cast {self.iProfile + 1}",
+                              transform=self.ax_spec.transAxes, ha="center",
+                              va="center", fontsize=9)
+            for ax in self.ax_strip:
+                ax.clear()
         else:
             self.spectra_fn(self.ax_spec, cell)
-            dlo, dhi = self.strip_fn(self.ax_strip, cell)
-            for ax in self.ax_strip:
-                ax.set_ylim(dhi, dlo)  # inverted (depth increases downward)
-            for ax in self.ax_strip[1:]:
+            ranges.append(self.strip_fn(self.ax_strip, cell, band))
+            src_name = cell.profile.path.rsplit("/", 1)[-1]
+
+        # Scalar diagnostics strip (from the profiles product).
+        if self.ax_scalar and self.scalar_fn is not None:
+            pf = self.scalar_source.profile(stime) if self.scalar_source else None
+            if pf is None:
+                for ax in self.ax_scalar:
+                    ax.clear()
+                    ax.text(0.5, 0.5, "no profiles file", transform=ax.transAxes,
+                            ha="center", va="center", fontsize=8)
+            else:
+                ranges.append(self.scalar_fn(self.ax_scalar, pf, band))
+                if src_name is None:
+                    src_name = pf.path.rsplit("/", 1)[-1]
+
+        # Share one inverted depth range across both strips.
+        if ranges:
+            dlo = min(r[0] for r in ranges)
+            dhi = max(r[1] for r in ranges)
+            for ax in [*self.ax_strip, *self.ax_scalar]:
+                ax.set_ylim(dhi, dlo)
+            for ax in [*self.ax_strip[1:], *self.ax_scalar[1:]]:
                 ax.tick_params(labelleft=False)
-            src = cell.profile.path.rsplit("/", 1)[-1]
-            self.fig.suptitle(
-                f"{self.title}\ncast {self.iProfile + 1}/{n_prof}  —  {src}",
-                fontsize=9,
-            )
+
+        tail = f"  —  {src_name}" if src_name else ""
+        self.fig.suptitle(
+            f"{self.title}\ncast {self.iProfile + 1}/{n_prof}{tail}", fontsize=9
+        )
         self.fig.canvas.draw_idle()
 
     # ----------------------------------------------------------------- events

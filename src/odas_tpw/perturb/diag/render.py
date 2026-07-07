@@ -11,11 +11,27 @@ from __future__ import annotations
 
 import numpy as np
 
-from odas_tpw.perturb.diag.data import Cell, ProfileFile
+from odas_tpw.perturb.diag.data import Cell, ProfileFile, ProfilesFile
 from odas_tpw.perturb.plot import layout
 
 # Per-probe colors, matching the rsi ProfileViewer palette.
 _PROBE_COLORS = ("C0", "C1", "C4", "C5")
+
+
+def _decimate(
+    y: np.ndarray, depth: np.ndarray, maxn: int = 6000
+) -> tuple[np.ndarray, np.ndarray]:
+    """Stride a fast series down to ~*maxn* points for a responsive redraw.
+
+    A diagnostic overview of vehicle attitude / prop-wash needs the gross
+    structure, not every one of ~85k fast samples; striding keeps interaction
+    snappy.  Slow (~10k) series pass through untouched.
+    """
+    n = len(y)
+    if n <= maxn:
+        return y, depth
+    step = n // maxn + 1
+    return y[::step], depth[::step]
 
 
 def draw_overview_mesh(ax, cast_x, segments, depth, z, cmap, norm):
@@ -119,15 +135,17 @@ def draw_eps_spectra(ax, cell: Cell) -> None:
 
 # Diagnostic strip: (label, per-probe 2-D array or None, per-window 1-D array,
 # log-x flag).  Rendered left-to-right vs depth.
-def draw_diss_strip(axes, cell: Cell) -> tuple[float, float]:
+def draw_diss_strip(
+    axes, cell: Cell, band: tuple[float, float]
+) -> tuple[float, float]:
     """Per-profile dissipation diagnostics vs depth, with a cell depth band.
 
     Returns the (min, max) finite depth so the caller can set a shared,
     inverted y range.  Panels: epsilon (per probe + mean), FM, speed, nu, T.
     """
-    pf, w = cell.profile, cell.window
+    pf = cell.profile
     depth = pf.depth
-    lo, hi = band_extent(pf, w)
+    lo, hi = band
 
     # Panel 0: per-probe epsilon (points) + mean (line), log-x.
     ax = axes[0]
@@ -168,6 +186,64 @@ def draw_diss_strip(axes, cell: Cell) -> tuple[float, float]:
         ax.grid(True, alpha=0.3)
 
     finite = depth[np.isfinite(depth)]
+    if finite.size:
+        return float(finite.min()), float(finite.max())
+    return 0.0, 1.0
+
+
+def draw_scalar_strip(
+    axes, pf: ProfilesFile, band: tuple[float, float]
+) -> tuple[float, float]:
+    """Raw scalar/vehicle diagnostics vs depth (the Matlab Fig-13 panels).
+
+    Panels: temperature (T1/T2/JAC_T), delta-T (fast thermistor minus CT),
+    conductivity, inclinometers, accelerometers, and shear.  Slow channels plot
+    full-resolution; the fast accelerometer/shear traces are decimated for a
+    responsive redraw.  A missing channel is skipped; an empty panel says n/a.
+    """
+    lo, hi = band
+    ds, df = pf.depth_slow, pf.depth_fast
+    s, f = pf.slow.get, pf.fast.get
+
+    jac, t1, t2 = s("JAC_T"), s("T1"), s("T2")
+    dt: list = []
+    if jac is not None and t1 is not None:
+        dt.append((t1 - jac, ds, "C3", "T1-JAC"))
+    if jac is not None and t2 is not None:
+        dt.append((t2 - jac, ds, "C1", "T2-JAC"))
+
+    # (xlabel, [(series, depth, color, label), ...]); slow series full-res,
+    # fast (Ax/Ay/sh1/sh2) decimated inside the plotting loop.
+    panels: list[tuple[str, list]] = [
+        ("T (°C)", [(t1, ds, "C3", "T1"), (t2, ds, "C1", "T2"),
+                    (jac, ds, "C9", "JAC_T")]),
+        (r"$\delta$T (°C)", dt),
+        ("JAC_C", [(s("JAC_C"), ds, "C0", "C")]),
+        ("Incl (°)", [(s("Incl_X"), ds, "C4", "X"), (s("Incl_Y"), ds, "C5", "Y")]),
+        ("Ax / Ay", [(f("Ax"), df, "C4", "Ax"), (f("Ay"), df, "C5", "Ay")]),
+        (r"sh1 / sh2 (s$^{-1}$)",
+         [(f("sh1"), df, "C0", "sh1"), (f("sh2"), df, "C1", "sh2")]),
+    ]
+
+    for ax, (xlabel, series) in zip(axes, panels):
+        ax.clear()
+        drew = False
+        for y, depth, c, label in series:
+            if y is None:
+                continue
+            xx, dd = _decimate(np.asarray(y), np.asarray(depth))
+            ax.plot(xx, dd, "-", color=c, linewidth=0.5, label=label)
+            drew = True
+        if drew:
+            ax.legend(fontsize=5, loc="best")
+        else:
+            ax.text(0.5, 0.5, "n/a", transform=ax.transAxes,
+                    ha="center", va="center", fontsize=8)
+        ax.axhspan(lo, hi, color="0.5", alpha=0.25, zorder=0)
+        ax.set_xlabel(xlabel)
+        ax.grid(True, alpha=0.3)
+
+    finite = ds[np.isfinite(ds)]
     if finite.size:
         return float(finite.min()), float(finite.max())
     return 0.0, 1.0

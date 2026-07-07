@@ -167,6 +167,95 @@ def _p_to_depth(P: np.ndarray, lat: float) -> np.ndarray:
     return -np.asarray(gsw.z_from_p(np.asarray(P, dtype=float), lat_safe))
 
 
+# Raw diagnostic channels read from the per-profile *profiles* file for the
+# drill-down's instrument-diagnostics row.  Fast channels (piezo shear /
+# vibration / pre-emphasized temperature-gradient, ~512 Hz) get an HP+despike
+# "processed" overlay; slow channels (inclinometer, ~64 Hz) are shown raw.
+_FAST_DIAG_CHANNELS = ("Ax", "Ay", "sh1", "sh2", "T1_dT1", "T2_dT2")
+_SLOW_DIAG_CHANNELS = ("Incl_X", "Incl_Y")
+
+
+@dataclass
+class RawProfile:
+    """Raw diagnostic channels for one profile, aligned to depth.
+
+    ``raw`` holds each channel on its native clock; ``proc`` holds the
+    HP-filtered + despiked version of the *fast* channels (the same cleanup the
+    epsilon path applies to shear); ``is_fast`` records each channel's clock so a
+    renderer can pick ``depth_fast`` vs ``depth_slow``.  All dicts are empty when
+    the file lacks the pressure/time coordinates needed to place the signals in
+    depth (the drill-down then shows "no raw data").
+    """
+
+    path: str
+    depth_fast: np.ndarray     # (time_fast,) m, positive down
+    depth_slow: np.ndarray     # (time_slow,) m, positive down
+    raw: dict[str, np.ndarray]   # name -> signal on its native clock
+    proc: dict[str, np.ndarray]  # name -> HP+despiked (fast channels only)
+    is_fast: dict[str, bool]     # name -> True (fast clock) / False (slow)
+
+
+def load_raw_profile(
+    path: str,
+    *,
+    hp_cut: float = 1.0,
+    despike_thresh: float = 8.0,
+    despike_smooth: float = 0.5,
+) -> RawProfile:
+    """Load raw inclinometer/accel/shear/temp-gradient channels from *path*.
+
+    Fast channels are HP-filtered then despiked (``scor160`` helpers — the same
+    preprocessing the ``perturb-plot`` variance diagnostics use) to give the
+    ``proc`` overlay.  Missing channels are skipped; a file without
+    ``P``/``t_fast``/``t_slow`` (or one that fails to open) yields an empty
+    :class:`RawProfile` rather than raising, so one bad file cannot break the
+    inspector.
+    """
+    empty = RawProfile(path, np.array([]), np.array([]), {}, {}, {})
+    try:
+        with xr.open_dataset(path, decode_times=False) as ds:
+            if not {"P", "t_fast", "t_slow"}.issubset(ds.variables):
+                return empty
+            lat = float(ds["lat"].values) if "lat" in ds.variables else np.nan
+            t_fast = np.asarray(ds["t_fast"].values, dtype=float)
+            t_slow = np.asarray(ds["t_slow"].values, dtype=float)
+            P = np.asarray(ds["P"].values, dtype=float)
+            raw: dict[str, np.ndarray] = {}
+            is_fast: dict[str, bool] = {}
+            for ch in _FAST_DIAG_CHANNELS:
+                if ch in ds.variables:
+                    sig = np.asarray(ds[ch].values, dtype=float).ravel()
+                    if sig.size == t_fast.size:
+                        raw[ch] = sig
+                        is_fast[ch] = True
+            for ch in _SLOW_DIAG_CHANNELS:
+                if ch in ds.variables:
+                    sig = np.asarray(ds[ch].values, dtype=float).ravel()
+                    if sig.size == t_slow.size:
+                        raw[ch] = sig
+                        is_fast[ch] = False
+    except (OSError, ValueError, RuntimeError):
+        return empty
+
+    depth_slow = _p_to_depth(P, lat)
+    depth_fast = _p_to_depth(np.interp(t_fast, t_slow, P), lat)
+
+    proc: dict[str, np.ndarray] = {}
+    dt = float(np.median(np.diff(t_fast))) if t_fast.size > 1 else np.nan
+    if np.isfinite(dt) and dt > 0:
+        from odas_tpw.scor160.despike import despike
+        from odas_tpw.scor160.l2 import _hp_filter
+
+        fs = 1.0 / dt
+        for ch, sig in raw.items():
+            if is_fast[ch] and sig.size >= 16:
+                proc[ch] = despike(
+                    _hp_filter(sig, fs, hp_cut), fs,
+                    thresh=despike_thresh, smooth=despike_smooth,
+                ).y
+    return RawProfile(path, depth_fast, depth_slow, raw, proc, is_fast)
+
+
 def load_profile_file(path: str) -> ProfileFile:
     """Load the arrays a diagnostic drill-down needs from one diss file."""
     with xr.open_dataset(path, decode_times=False) as ds:
@@ -200,10 +289,28 @@ def load_profile_file(path: str) -> ProfileFile:
 
 @dataclass
 class Cell:
-    """A resolved overview cell: a per-profile file and one window index."""
+    """A resolved overview cell: a per-profile file and one window index.
+
+    ``raw`` carries the matching profile's raw diagnostic channels when the
+    source was given a ``profiles_dir``; it is ``None`` otherwise (or when no
+    profiles file matched this cast).
+    """
 
     profile: ProfileFile
     window: int
+    raw: RawProfile | None = None
+
+
+def _match_file(
+    keys: np.ndarray, smap: dict[float, str], stime_epoch: float, tol: float
+) -> str | None:
+    """Path whose scalar stime is nearest *stime_epoch* within *tol*, else None."""
+    if not keys.size or not np.isfinite(stime_epoch):
+        return None
+    i = int(np.argmin(np.abs(keys - stime_epoch)))
+    if abs(keys[i] - stime_epoch) <= tol:
+        return smap[keys[i]]
+    return None
 
 
 class EpsilonCellSource:
@@ -223,12 +330,7 @@ class EpsilonCellSource:
         self._cache: dict[str, ProfileFile] = {}
 
     def _file_for(self, stime_epoch: float) -> str | None:
-        if not self._keys.size or not np.isfinite(stime_epoch):
-            return None
-        i = int(np.argmin(np.abs(self._keys - stime_epoch)))
-        if abs(self._keys[i] - stime_epoch) <= self._tol:
-            return self._smap[self._keys[i]]
-        return None
+        return _match_file(self._keys, self._smap, stime_epoch, self._tol)
 
     def load(self, path: str) -> ProfileFile:
         pf = self._cache.get(path)
@@ -253,3 +355,70 @@ class EpsilonCellSource:
         d[~finite] = np.inf
         window = int(np.argmin(np.abs(d - bin_depth)))
         return Cell(profile=pf, window=window)
+
+
+# Scalar-diagnostic channels pulled from the raw per-profile ``profiles_NN``
+# file (the Matlab diss_inspector's "profile" figure): the ones present are
+# loaded, the rest skipped, so a run missing a channel still renders.
+_SLOW_CHANNELS = ("JAC_T", "T1", "T2", "JAC_C", "Incl_X", "Incl_Y", "W_slow")
+_FAST_CHANNELS = ("Ax", "Ay", "sh1", "sh2", "speed_fast")
+
+
+@dataclass
+class ProfilesFile:
+    """Raw slow/fast channels of one ``profiles_NN/*_prof*.nc`` cast.
+
+    ``slow``/``fast`` map a channel name to its 1-D series; ``depth_slow`` and
+    ``depth_fast`` are the matching positive-down depths (fast interpolated from
+    the slow pressure record).
+    """
+
+    path: str
+    depth_slow: np.ndarray
+    depth_fast: np.ndarray
+    slow: dict[str, np.ndarray]
+    fast: dict[str, np.ndarray]
+
+
+def load_profiles_file(path: str) -> ProfilesFile:
+    """Load the scalar-diagnostic channels a drill-down needs from one cast."""
+    with xr.open_dataset(path, decode_times=False) as ds:
+        lat = float(ds["lat"].values) if "lat" in ds.variables else np.nan
+        pres = np.asarray(ds["P"].values, dtype=float)
+        depth_slow = _p_to_depth(pres, lat)
+        t_fast = np.asarray(ds["t_fast"].values, dtype=float)
+        t_slow = np.asarray(ds["t_slow"].values, dtype=float)
+        depth_fast = np.interp(t_fast, t_slow, depth_slow)
+        slow = {
+            n: np.asarray(ds[n].values, dtype=float)
+            for n in _SLOW_CHANNELS if n in ds.variables
+        }
+        fast = {
+            n: np.asarray(ds[n].values, dtype=float)
+            for n in _FAST_CHANNELS if n in ds.variables
+        }
+    return ProfilesFile(
+        path=path, depth_slow=depth_slow, depth_fast=depth_fast,
+        slow=slow, fast=fast,
+    )
+
+
+class ProfilesCellSource:
+    """Map an overview profile (by ``stime``) to its raw ``profiles_NN`` cast."""
+
+    def __init__(self, profiles_dir: str, *, tol: float = 1.0) -> None:
+        self._tol = float(tol)
+        self._smap = _raw_stime_map(profiles_dir)
+        self._keys = np.array(sorted(self._smap), dtype=float)
+        self._cache: dict[str, ProfilesFile] = {}
+
+    def profile(self, stime_epoch: float) -> ProfilesFile | None:
+        """The raw cast whose stime matches, or None if none is within tol."""
+        path = _match_file(self._keys, self._smap, stime_epoch, self._tol)
+        if path is None:
+            return None
+        pf = self._cache.get(path)
+        if pf is None:
+            pf = load_profiles_file(path)
+            self._cache[path] = pf
+        return pf

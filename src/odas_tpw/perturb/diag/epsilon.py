@@ -16,6 +16,7 @@ from odas_tpw.perturb import resolve
 from odas_tpw.perturb.diag import render
 from odas_tpw.perturb.diag.data import (
     EpsilonCellSource,
+    ProfilesCellSource,
     apply_sections,
     load_overview,
 )
@@ -59,6 +60,10 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
                    help="NaN overview bins where qc_drop_epsilon is set (default)")
     p.add_argument("--no-qc", dest="apply_qc", action="store_false",
                    help="ignore qc_drop_epsilon and show raw values")
+    p.add_argument("--no-scalars", dest="no_scalars", action="store_true",
+                   help="hide the raw scalar-diagnostics row (T/deltaT/C, "
+                        "inclinometers, accelerometers, shear) read from the "
+                        "profiles product")
     p.add_argument("--out", default=None,
                    help="save a static snapshot of a representative cell to this "
                         "PNG instead of opening the interactive window")
@@ -89,12 +94,27 @@ def run(args: argparse.Namespace) -> str:
     source = EpsilonCellSource(diss_dir)
     title = args.title or os.path.basename(os.path.normpath(args.root))
 
+    # Raw scalar diagnostics come from the profiles product; degrade gracefully
+    # (drop the row) when it isn't present or the user opted out.
+    scalar_source = None
+    if not args.no_scalars:
+        profiles_dir = resolve.resolve_for_args(
+            args, "profiles", optional=True, conflict_ok=True
+        )
+        if profiles_dir is not None:
+            scalar_source = ProfilesCellSource(profiles_dir)
+        else:
+            print("no profiles_NN dir found; scalar diagnostics row disabled")
+
     inspector = DiagInspector(
         data, source,
         field_specs=_FIELDS,
         spectra_fn=render.draw_eps_spectra,
         strip_fn=render.draw_diss_strip,
         n_strip=5,
+        scalar_source=scalar_source,
+        scalar_fn=render.draw_scalar_strip if scalar_source else None,
+        n_scalar=6,
         title=title,
         clim=tuple(args.clim) if args.clim else None,
         gap_seconds=args.gap_seconds,
