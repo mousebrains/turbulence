@@ -65,7 +65,7 @@ from typing import Any
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from odas_tpw.perturb.plot import eps_chi, profiles, scalar, sections
+from odas_tpw.perturb.plot import eps_chi, overview, profiles, scalar, sections
 
 # preset name -> object providing add_arguments/build_figures/run. The binned
 # (bin, profile) presets are ProductView instances (one product each); scalar
@@ -77,6 +77,7 @@ _PRESETS: dict[str, Any] = {
     "chi": profiles.CHI,
     "mixing": profiles.MIXING,
     "eps-chi": eps_chi,
+    "overview": overview,
 }
 _PRESET_DIR = Path(__file__).parent / "presets"
 

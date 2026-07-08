@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import argparse
 
-from odas_tpw.perturb.plot import eps_chi, figure, profiles, scalar
+from odas_tpw.perturb.plot import eps_chi, figure, overview, profiles, scalar
 
 # Map subcommand name -> (description, add_arguments, run).
 _SUBCOMMANDS = {
@@ -33,6 +33,13 @@ _SUBCOMMANDS = {
         "vs depth and cast number.",
         eps_chi.add_arguments,
         eps_chi.run,
+    ),
+    "overview": (
+        "Per-section overview: epsilon and chi (two full-width rows) over a "
+        "context row chosen by --bottom (ctd: dT/dz, CT, salinity; mixing: "
+        "K_rho, K_T, Gamma), all vs depth and the section x-axis.",
+        overview.add_arguments,
+        overview.run,
     ),
     "scalar": (
         "Depth-vs-x scalar sections (T/S/density/...) from the CTD combo, "
