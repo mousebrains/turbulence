@@ -389,8 +389,11 @@ def expand_config_dir(value: Any, config_dir: str | None) -> Any:
             f"{CONFIG_DIR_TOKEN} in path {text!r} requires a config loaded from "
             f"a file (no config directory is known)"
         )
-    rest = text[len(CONFIG_DIR_TOKEN):].lstrip("/\\")
-    return os.path.join(config_dir, rest) if rest else config_dir
+    # Split the remainder on either separator and re-join with the OS separator,
+    # so a config's forward-slash paths yield a clean native path on Windows too
+    # (a bare os.path.join would leave the internal "/" -> a mixed "C:\x/y").
+    parts = [seg for seg in text[len(CONFIG_DIR_TOKEN):].replace("\\", "/").split("/") if seg]
+    return os.path.join(config_dir, *parts) if parts else config_dir
 
 
 def config_dir_of(config: dict) -> str | None:
