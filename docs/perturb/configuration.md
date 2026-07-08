@@ -33,6 +33,33 @@ Controls where `.p` files are found and where output goes.
 | `force_trim` | bool | `false` | Re-trim even when an up-to-date trimmed output already exists |
 | `merge` | bool | `false` | Enable merging of split .p files |
 
+#### Config-relative paths (`<CONFIG_DIR>`)
+
+`p_file_root`, `output_root`, `gps.file`, and `hotel.file` may begin with the
+token `<CONFIG_DIR>`, which expands to the **directory of the config file
+itself** at the moment a path is used. This lets a config and its data tree live
+together and be run from any working directory (or mounted at a different point
+on another machine):
+
+```yaml
+files:
+  p_file_root: <CONFIG_DIR>/VMP      # the VMP/ folder next to this YAML
+  output_root: <CONFIG_DIR>/results
+```
+
+Paths **without** the token keep their existing meaning — relative to the
+current working directory. Crucially, the `<CONFIG_DIR>` *token* (not the
+resolved absolute path) is what feeds the stage-directory cache signatures, so
+moving or remounting the config + data tree does **not** invalidate previously
+computed outputs. `<CONFIG_DIR>` is only meaningful for a config loaded from a
+file; using it in a config assembled in memory raises an error.
+
+This applies to the versioned `{stage}_NN` output *directories*. The finer-grained
+per-file skip markers additionally key on each input's size and modification time,
+so a copy/remount that does **not** preserve mtimes will re-process the individual
+`.p` files — into the same, correctly matched output directory (no orphans), just
+not for free.
+
 ---
 
 ### `gps` — GPS Providers

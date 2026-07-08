@@ -38,11 +38,15 @@ def _resolve_output_root(args: argparse.Namespace, config: dict[str, Any]) -> Pa
     """Determine the output_root used for ``logs/`` placement.
 
     Precedence matches every subcommand's later override logic: ``args.output``
-    > config ``files.output_root`` > the default ``"results/"``.
+    > config ``files.output_root`` > the default ``"results/"``. A ``<CONFIG_DIR>``
+    token (from either source) is resolved against the loaded config's directory.
     """
-    if getattr(args, "output", None):
-        return Path(args.output)
-    return Path(config.get("files", {}).get("output_root", "results/"))
+    from odas_tpw.perturb.config import config_dir_of, expand_config_dir
+
+    value = getattr(args, "output", None) or config.get("files", {}).get(
+        "output_root", "results/"
+    )
+    return Path(expand_config_dir(value, config_dir_of(config)))
 
 
 def _install_logging(args: argparse.Namespace, config: dict[str, Any]) -> Path:
@@ -228,11 +232,19 @@ def _cmd_bin(args: argparse.Namespace) -> None:
     logging.getLogger(__name__).info("CLI bin, log: %s", log_path)
 
     from odas_tpw.perturb.binning import bin_by_depth, bin_by_time, bin_chi, bin_diss
-    from odas_tpw.perturb.config import DEFAULTS, merge_config, resolve_output_dir
+    from odas_tpw.perturb.config import (
+        DEFAULTS,
+        config_dir_of,
+        expand_config_dir,
+        merge_config,
+        resolve_output_dir,
+    )
     from odas_tpw.perturb.pipeline import _upstream_for
 
     files_cfg = config.get("files", {})
-    output_root = Path(files_cfg.get("output_root", "results/"))
+    output_root = Path(
+        expand_config_dir(files_cfg.get("output_root", "results/"), config_dir_of(config))
+    )
 
     binning_cfg = config.get("binning", {})
     bin_method = binning_cfg.get("method", DEFAULTS["binning"]["method"])
@@ -329,13 +341,21 @@ def _cmd_combo(args: argparse.Namespace) -> None:
     logging.getLogger(__name__).info("CLI combo, log: %s", log_path)
 
     from odas_tpw.perturb.combo import make_combo, make_ctd_combo
-    from odas_tpw.perturb.config import DEFAULTS, merge_config, resolve_output_dir
+    from odas_tpw.perturb.config import (
+        DEFAULTS,
+        config_dir_of,
+        expand_config_dir,
+        merge_config,
+        resolve_output_dir,
+    )
     from odas_tpw.perturb.logging_setup import stage_log
     from odas_tpw.perturb.netcdf_schema import CHI_SCHEMA, COMBO_SCHEMA, CTD_SCHEMA
     from odas_tpw.perturb.pipeline import _upstream_for
 
     files_cfg = config.get("files", {})
-    output_root = Path(files_cfg.get("output_root", "results/"))
+    output_root = Path(
+        expand_config_dir(files_cfg.get("output_root", "results/"), config_dir_of(config))
+    )
     netcdf_attrs = config.get("netcdf", {})
 
     # Combo glue method follows the binning method: ``depth`` for vertical

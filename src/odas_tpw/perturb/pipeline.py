@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     import xarray as xr
 
 from odas_tpw.perturb.config import (
+    config_dir_of,
+    expand_config_dir,
     merge_config,
     resolve_output_dir,
 )
@@ -276,10 +278,11 @@ def _external_input_fingerprints(config: dict, hotel_cfg: dict | None) -> dict:
     edited hotel/GPS file would be silently ignored on re-run.
     """
     out: dict[str, dict] = {}
+    cdir = config_dir_of(config)
     gps_file = merge_config("gps", config.get("gps")).get("file")
     for name, path in (("hotel", (hotel_cfg or {}).get("file")), ("gps", gps_file)):
         if path:
-            fp = Path(path)
+            fp = Path(expand_config_dir(path, cdir))
             out[name] = _file_fingerprint(fp) if fp.exists() else {"missing": True}
     return out
 
@@ -1698,7 +1701,15 @@ def process_file(
 def _configured_input_root(config: dict) -> Path:
     """Return the configured input root for preserving relative paths."""
     files_cfg = config.get("files", {})
-    return Path(files_cfg.get("p_file_root", "VMP/"))
+    root = expand_config_dir(files_cfg.get("p_file_root", "VMP/"), config_dir_of(config))
+    return Path(root)
+
+
+def _configured_output_root(config: dict) -> Path:
+    """The configured output root, with any ``<CONFIG_DIR>`` token resolved."""
+    files_cfg = config.get("files", {})
+    root = expand_config_dir(files_cfg.get("output_root", "results/"), config_dir_of(config))
+    return Path(root)
 
 
 def _check_unique_outputs(destinations: list[Path]) -> None:
@@ -1803,7 +1814,7 @@ def run_trim(
     from odas_tpw.perturb.trim import trim_destination
 
     files_cfg = config.get("files", {})
-    output_root = Path(files_cfg.get("output_root", "results/"))
+    output_root = _configured_output_root(config)
     trim_dir = output_root / "trimmed"
     cache_dir = output_root / _CACHE_DIRNAME
     root = _configured_input_root(config)
@@ -1871,7 +1882,7 @@ def run_merge(
 
     files_cfg = config.get("files", {})
     root = Path(input_root) if input_root is not None else _configured_input_root(config)
-    output_root = Path(files_cfg.get("output_root", "results/"))
+    output_root = _configured_output_root(config)
     merge_dir = output_root / "merged"
 
     if p_files is None:
@@ -1908,8 +1919,7 @@ def run_merge(
 
 def _setup_output_dirs(config: dict) -> dict[str, Path]:
     """Set up versioned output directories based on config."""
-    files_cfg = config.get("files", {})
-    output_root = Path(files_cfg.get("output_root", "results/"))
+    output_root = _configured_output_root(config)
 
     dirs = {}
 
@@ -2067,7 +2077,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
 
     # Discover files
     if p_files is None:
-        root = files_cfg.get("p_file_root", "VMP/")
+        root = _configured_input_root(config)
         pattern = files_cfg.get("p_file_pattern", "**/*.p")
         p_files = find_p_files(root, pattern)
 
@@ -2097,7 +2107,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         if trimmed:
             from odas_tpw.perturb.trim import trim_destination
 
-            trim_dir = Path(files_cfg.get("output_root", "results/")) / "trimmed"
+            trim_dir = _configured_output_root(config) / "trimmed"
             # run_trim returns the trim-dir path for trimmed/skipped files and
             # the *original* path for complete (referenced) files. Recover the
             # per-file physical path and keep stems/instrument keys canonical
@@ -2134,7 +2144,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         logger.info("Merging...")
         from odas_tpw.perturb.merge import plan_merge_outputs
 
-        merge_dir = Path(files_cfg.get("output_root", "results/")) / "merged"
+        merge_dir = _configured_output_root(config) / "merged"
         merge_plan = plan_merge_outputs(p_files, merge_dir, root=current_root)
         merged_files = run_merge(
             config,
@@ -2192,10 +2202,13 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
 
     # Setup output directories
     output_dirs = _setup_output_dirs(config)
-    output_root = Path(files_cfg.get("output_root", "results/"))
+    output_root = _configured_output_root(config)
 
-    # GPS provider
+    # GPS provider (resolve any <CONFIG_DIR> in gps.file before it hits disk)
+    cdir = config_dir_of(config)
     gps_cfg = merge_config("gps", config.get("gps"))
+    if gps_cfg.get("file"):
+        gps_cfg = {**gps_cfg, "file": expand_config_dir(gps_cfg["file"], cdir)}
     gps = create_gps(gps_cfg)
 
     # Hotel data
@@ -2205,7 +2218,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         from odas_tpw.perturb.hotel import load_hotel
 
         hotel_data = load_hotel(
-            hotel_cfg["file"],
+            expand_config_dir(hotel_cfg["file"], cdir),
             hotel_cfg.get("time_column", "time"),
             hotel_cfg.get("time_format", "auto"),
             hotel_cfg.get("channels", {}),
