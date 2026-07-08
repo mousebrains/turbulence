@@ -40,6 +40,16 @@ class OverviewData:
     fields: dict[str, np.ndarray]  # name -> (bin, profile)
 
 
+# HDF5 — and thus netCDF4 / xarray's default backend — is not thread-safe unless
+# libhdf5 was built with --enable-threadsafe, which varies by wheel and platform.
+# The inspector prewarms its stime indexes on a daemon thread (DiagInspector.
+# _start_prewarm) while the main thread loads a clicked cell, so two file opens
+# can overlap. Serialize every open+read in this module through one lock so that
+# race cannot corrupt HDF5's global state ("NetCDF: HDF error", seen in CI on the
+# non-threadsafe py3.12 wheel under `pytest -n auto`).
+_NETCDF_LOCK = threading.Lock()
+
+
 def load_overview(
     combo_path: str,
     field_names: tuple[str, ...],
@@ -55,7 +65,7 @@ def load_overview(
     non-zero cells are NaN'd in every field (a single epsilon drop flag gates all
     epsilon variables together).
     """
-    with xr.open_dataset(combo_path, decode_times=False) as ds:
+    with _NETCDF_LOCK, xr.open_dataset(combo_path, decode_times=False) as ds:
         missing = [n for n in field_names if n not in ds.variables]
         if missing:
             raise SystemExit(
@@ -222,7 +232,7 @@ def load_raw_profile(
     """
     empty = RawProfile(path, np.array([]), np.array([]), {}, {}, {}, {})
     try:
-        with xr.open_dataset(path, decode_times=False) as ds:
+        with _NETCDF_LOCK, xr.open_dataset(path, decode_times=False) as ds:
             if not {"P", "t_fast", "t_slow"}.issubset(ds.variables):
                 return empty
             lat = float(ds["lat"].values) if "lat" in ds.variables else np.nan
@@ -269,7 +279,7 @@ def load_raw_profile(
 
 def load_profile_file(path: str) -> ProfileFile:
     """Load the arrays a diagnostic drill-down needs from one diss file."""
-    with xr.open_dataset(path, decode_times=False) as ds:
+    with _NETCDF_LOCK, xr.open_dataset(path, decode_times=False) as ds:
         lat = float(ds["lat"].values) if "lat" in ds.variables else np.nan
         P_mean = np.asarray(ds["P_mean"].values, dtype=float)
 
@@ -342,7 +352,7 @@ def load_chi_profile_file(path: str) -> ChiProfileFile:
     mixing run with CTD appends them to the chi file — and left ``None``
     otherwise, so this same loader backs both the chi and mixing inspectors.
     """
-    with xr.open_dataset(path, decode_times=False) as ds:
+    with _NETCDF_LOCK, xr.open_dataset(path, decode_times=False) as ds:
         lat = float(ds["lat"].values) if "lat" in ds.variables else np.nan
         P_mean = np.asarray(ds["P_mean"].values, dtype=float)
 
@@ -412,14 +422,14 @@ def _read_stime(path: str) -> float | None:
         netCDF4 = None  # type: ignore[assignment]
     if netCDF4 is not None:
         try:
-            with netCDF4.Dataset(path) as ds:
+            with _NETCDF_LOCK, netCDF4.Dataset(path) as ds:
                 if "stime" in ds.variables:
                     return float(ds.variables["stime"][...])
             return None
         except (OSError, RuntimeError, ValueError):
             return None
     try:
-        with xr.open_dataset(path, decode_times=False) as ds:
+        with _NETCDF_LOCK, xr.open_dataset(path, decode_times=False) as ds:
             if "stime" in ds.variables:
                 return float(ds["stime"].values)
     except (OSError, ValueError, RuntimeError):

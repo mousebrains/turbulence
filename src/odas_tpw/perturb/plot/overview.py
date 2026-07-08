@@ -233,8 +233,8 @@ def _draw_traj_panel(
 ) -> _Extent | None:
     """Grid a ``ctd_combo`` trajectory scalar onto depth-vs-x (scalar path)."""
     dss = _time_subset(ds, sec)
-    if dss.sizes.get("time", 0) == 0:
-        return None
+    if dss.sizes.get("time", 0) == 0 or "depth" not in dss:
+        return None  # no window, or a trajectory without a depth axis -> "no valid"
     n = dss.sizes["time"]
     lat = dss["lat"].values if "lat" in dss else np.full(n, np.nan)
     lon = dss["lon"].values if "lon" in dss else np.full(n, np.nan)
@@ -296,7 +296,12 @@ def _build_overview_figure(
     # colorbars aligned *within* the region — a single spanning gridspec detaches
     # the context-row colorbars from their panels (constrained_layout can't
     # reconcile a 3-wide colorbar row under two full-width spanning bars).
-    top_sf, bot_sf = fig.subfigures(2, 1, height_ratios=(2.0, 1.2))
+    # squeeze=False -> a (2, 1) array of SubFigures. (The default squeeze=True
+    # returns a 1-D array here, which unpacks fine at runtime but trips mypy: its
+    # overload for the squeezed form is typed as a scalar SubFigure — "not
+    # iterable" — so pin squeeze=False and index explicitly.)
+    subfigs = fig.subfigures(2, 1, squeeze=False, height_ratios=(2.0, 1.2))
+    top_sf, bot_sf = subfigs[0, 0], subfigs[1, 0]
     ax_eps, ax_chi = top_sf.subplots(2, 1, sharex=True, sharey=True)
     bottom_axes = list(
         bot_sf.subplots(1, ncols, sharex=True, sharey=True, squeeze=False)[0]
