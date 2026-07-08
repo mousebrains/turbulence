@@ -199,3 +199,120 @@ def test_require_root_expands_token(tmp_path):
     p = _write_cfg(tmp_path / "cfg", "files:\n  output_root: <CONFIG_DIR>/results\n")
     args = argparse.Namespace(root=None, config=str(p))
     assert require_root(args) == os.path.join(str((tmp_path / "cfg").resolve()), "results")
+
+
+# --------------------------------------------------------------------------- #
+# Adversarial-review additions: consumer expansion, discovery, invariants
+# --------------------------------------------------------------------------- #
+
+
+def test_load_does_not_expand_stored_paths(tmp_path):
+    """Portability rests on the token surviving load UNCHANGED — expansion must
+    happen only at filesystem access, never in the stored (hashed) config."""
+    p = _write_cfg(
+        tmp_path / "cfg",
+        "files:\n  p_file_root: <CONFIG_DIR>/VMP\n"
+        "gps:\n  file: <CONFIG_DIR>/gps.nc\n"
+        "hotel:\n  file: <CONFIG_DIR>/hotel.csv\n",
+    )
+    cfg = load_config(str(p))
+    assert cfg["files"]["p_file_root"] == "<CONFIG_DIR>/VMP"
+    assert cfg["gps"]["file"] == "<CONFIG_DIR>/gps.nc"
+    assert cfg["hotel"]["file"] == "<CONFIG_DIR>/hotel.csv"
+
+
+def test_config_dir_excluded_from_hash_every_stage():
+    """The hash-exclusion invariant must hold for EVERY stage, not just one."""
+    base = {"files": {"p_file_root": "VMP/", "output_root": "results/"}}
+    for stage in sorted(C.STAGES):
+        absent = _sig(base, stage)
+        withdir = {"files": {**base["files"], "config_dir": "/some/mount/point"}}
+        assert _sig(withdir, stage) == absent, stage
+        assert "config_dir" not in absent
+
+
+def test_gps_and_hotel_files_expanded_at_consumer(tmp_path):
+    """gps.file / hotel.file must resolve the token before they are stat'd — the
+    hash test alone passes even if these leaked the literal token to disk."""
+    from odas_tpw.perturb.pipeline import _external_input_fingerprints
+
+    d = tmp_path / "cfg"
+    d.mkdir()
+    (d / "gps.nc").write_bytes(b"\x00")
+    (d / "hotel.csv").write_text("t\n")
+    p = _write_cfg(
+        d,
+        "gps:\n  source: netcdf\n  file: <CONFIG_DIR>/gps.nc\n"
+        "hotel:\n  enable: true\n  file: <CONFIG_DIR>/hotel.csv\n",
+    )
+    cfg = load_config(str(p))
+    hotel_cfg = C.merge_config("hotel", cfg.get("hotel"))
+    fp = _external_input_fingerprints(cfg, hotel_cfg)
+    # a successful stat (has "size") proves the token resolved to the real file;
+    # an unexpanded token would not exist and report {"missing": True}
+    assert "size" in fp["gps"], fp
+    assert "size" in fp["hotel"], fp
+
+
+def test_missing_gps_hotel_after_expansion_reports_missing(tmp_path):
+    from odas_tpw.perturb.pipeline import _external_input_fingerprints
+
+    d = tmp_path / "cfg"
+    d.mkdir()
+    p = _write_cfg(
+        d,
+        "gps:\n  source: netcdf\n  file: <CONFIG_DIR>/nope.nc\n"
+        "hotel:\n  enable: true\n  file: <CONFIG_DIR>/nope.csv\n",
+    )
+    cfg = load_config(str(p))
+    hotel_cfg = C.merge_config("hotel", cfg.get("hotel"))
+    fp = _external_input_fingerprints(cfg, hotel_cfg)
+    assert fp["gps"] == {"missing": True}
+    assert fp["hotel"] == {"missing": True}
+
+
+def test_pipeline_discovers_p_files_under_config_dir(tmp_path):
+    """End-to-end: the resolved input root actually finds files on disk."""
+    from odas_tpw.perturb.discover import find_p_files
+    from odas_tpw.perturb.pipeline import _configured_input_root
+
+    d = tmp_path / "cfg"
+    (d / "VMP").mkdir(parents=True)
+    (d / "VMP" / "a.p").write_bytes(b"\x00")
+    p = _write_cfg(d, "files:\n  p_file_root: <CONFIG_DIR>/VMP\n")
+    cfg = load_config(str(p))
+    found = find_p_files(_configured_input_root(cfg), "**/*.p")
+    assert [f.name for f in found] == ["a.p"]
+
+
+def test_cli_output_override_expands_token(tmp_path):
+    from odas_tpw.perturb.cli import _resolve_output_root
+
+    p = _write_cfg(tmp_path / "cfg", "files:\n  output_root: results/\n")
+    cfg = load_config(str(p))
+    got = _resolve_output_root(argparse.Namespace(output="<CONFIG_DIR>/out"), cfg)
+    assert str(got) == os.path.join(str((tmp_path / "cfg").resolve()), "out")
+
+
+def test_cli_output_token_without_config_fails_closed():
+    from odas_tpw.perturb.cli import _resolve_output_root
+
+    # no config loaded -> no config_dir -> the token cannot resolve; must raise
+    # (fail-closed) rather than write to a dir literally named <CONFIG_DIR>
+    with pytest.raises(ValueError, match="CONFIG_DIR"):
+        _resolve_output_root(argparse.Namespace(output="<CONFIG_DIR>/out"), {})
+
+
+def test_expand_pathlike_token_does_not_leak():
+    from pathlib import Path as _P
+
+    out = expand_config_dir(_P("<CONFIG_DIR>/x"), "/root")
+    assert "<CONFIG_DIR>" not in str(out)
+    assert str(out) == os.path.join("/root", "x")
+    # a plain Path (no token) is returned unchanged, original type preserved
+    assert expand_config_dir(_P("plain/x"), "/root") == _P("plain/x")
+
+
+def test_expand_token_without_separator_is_lenient():
+    # documented behavior: "<CONFIG_DIR>foo" joins as config_dir/foo
+    assert expand_config_dir("<CONFIG_DIR>foo", "/root") == os.path.join("/root", "foo")

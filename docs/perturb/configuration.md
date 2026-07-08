@@ -54,6 +54,12 @@ moving or remounting the config + data tree does **not** invalidate previously
 computed outputs. `<CONFIG_DIR>` is only meaningful for a config loaded from a
 file; using it in a config assembled in memory raises an error.
 
+This applies to the versioned `{stage}_NN` output *directories*. The finer-grained
+per-file skip markers additionally key on each input's size and modification time,
+so a copy/remount that does **not** preserve mtimes will re-process the individual
+`.p` files — into the same, correctly matched output directory (no orphans), just
+not for free.
+
 ---
 
 ### `gps` — GPS Providers

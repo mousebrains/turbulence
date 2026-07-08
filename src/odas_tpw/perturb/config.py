@@ -373,14 +373,23 @@ def expand_config_dir(value: Any, config_dir: str | None) -> Any:
     ``ValueError`` if the token is used but no config directory is known (e.g. a
     config assembled in memory rather than loaded from a file).
     """
-    if not isinstance(value, str) or not value.startswith(CONFIG_DIR_TOKEN):
+    # Accept str or os.PathLike (a Path holding the token must not slip through
+    # the isinstance check and reach the filesystem verbatim). None/numbers and
+    # any non-token value pass through unchanged, preserving the original type.
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, os.PathLike):
+        text = os.fspath(value)
+    else:
+        return value
+    if not text.startswith(CONFIG_DIR_TOKEN):
         return value
     if not config_dir:
         raise ValueError(
-            f"{CONFIG_DIR_TOKEN} in path {value!r} requires a config loaded from "
+            f"{CONFIG_DIR_TOKEN} in path {text!r} requires a config loaded from "
             f"a file (no config directory is known)"
         )
-    rest = value[len(CONFIG_DIR_TOKEN):].lstrip("/\\")
+    rest = text[len(CONFIG_DIR_TOKEN):].lstrip("/\\")
     return os.path.join(config_dir, rest) if rest else config_dir
 
 
@@ -396,7 +405,10 @@ def _load_config_with_instruments_check(path: str | Path) -> dict[str, dict]:
     # Stamp the config's own directory so <CONFIG_DIR> path tokens resolve
     # relative to it. Excluded from every stage hash (_HASH_EXCLUDE_KEYS) so the
     # same config on a different mount still matches its existing output dirs.
-    config.setdefault("files", {})["config_dir"] = str(Path(path).resolve().parent)
+    # An empty config file loads to {} (shared contract, and it has no paths to
+    # resolve), so it is left untouched.
+    if config:
+        config.setdefault("files", {})["config_dir"] = str(Path(path).resolve().parent)
     return config
 
 
