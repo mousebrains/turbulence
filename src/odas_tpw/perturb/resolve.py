@@ -133,8 +133,9 @@ def stage_dir(
     """
     if stage not in _cfg.STAGES:
         raise ValueError(f"unknown stage {stage!r}; known: {sorted(_cfg.STAGES)}")
+    raw_root = output_root or (config.get("files") or {}).get("output_root") or "."
     root = Path(
-        output_root or (config.get("files") or {}).get("output_root") or "."
+        _cfg.expand_config_dir(raw_root, _cfg.config_dir_of(config))
     ).expanduser()
     candidates = iter_stage_dirs(root, stage)
     if not candidates:
@@ -234,11 +235,12 @@ def require_root(args: argparse.Namespace) -> str:
         # must be cleanly fatal here too (not just in resolve_for_args) — else
         # the user gets a raw traceback before resolve_for_args is ever reached.
         try:
-            out = _cfg.load_config(cfg_path).get("files", {}).get("output_root")
+            cfg = _cfg.load_config(cfg_path)
         except _CONFIG_LOAD_ERRORS as exc:
             raise SystemExit(str(exc)) from exc
+        out = (cfg.get("files") or {}).get("output_root")
         if out:
-            return str(out)
+            return str(_cfg.expand_config_dir(out, _cfg.config_dir_of(cfg)))
     raise SystemExit("one of --config or --root is required")
 
 

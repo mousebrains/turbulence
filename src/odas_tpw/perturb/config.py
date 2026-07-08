@@ -32,6 +32,13 @@ DEFAULTS: dict[str, dict] = {
         "force_trim": False,
         "force": False,
         "merge": False,
+        # Absolute directory of the loaded YAML, stamped by load_config so path
+        # values written with the <CONFIG_DIR> token can be resolved relative to
+        # the config file. None when the config was not loaded from a file.
+        # Hash-excluded (see _HASH_EXCLUDE_KEYS): it is mount-specific, so the
+        # portable <CONFIG_DIR> token — not this absolute path — is what feeds
+        # the stage-dir signatures.
+        "config_dir": None,
     },
     "gps": {
         "source": "nan",
@@ -254,7 +261,7 @@ DEFAULTS: dict[str, dict] = {
 # dirs: ``diagnostics`` (extra plots), and the cache-bypass flags ``force`` /
 # ``force_trim`` (they re-run work into the SAME dirs, so they cannot change the
 # dir identity or --force would defeat itself by recomputing into fresh dirs).
-_HASH_EXCLUDE_KEYS = frozenset({"diagnostics", "force", "force_trim"})
+_HASH_EXCLUDE_KEYS = frozenset({"diagnostics", "force", "force_trim", "config_dir"})
 
 # Sections whose inner keys are user-defined (e.g. instrument serials).
 # ConfigManager skips strict unknown-key validation for these; per-section
@@ -353,10 +360,43 @@ def _validate_instruments(instruments: dict) -> None:
             )
 
 
+CONFIG_DIR_TOKEN = "<CONFIG_DIR>"
+
+
+def expand_config_dir(value: Any, config_dir: str | None) -> Any:
+    """Resolve a leading ``<CONFIG_DIR>`` token against *config_dir*.
+
+    A path written as ``<CONFIG_DIR>/sub`` in a YAML config is made absolute
+    relative to the config file's own directory, so a config plus its data tree
+    can be moved (or mounted at a different point) without editing paths. Values
+    without the token — and non-strings — pass through unchanged. Raises
+    ``ValueError`` if the token is used but no config directory is known (e.g. a
+    config assembled in memory rather than loaded from a file).
+    """
+    if not isinstance(value, str) or not value.startswith(CONFIG_DIR_TOKEN):
+        return value
+    if not config_dir:
+        raise ValueError(
+            f"{CONFIG_DIR_TOKEN} in path {value!r} requires a config loaded from "
+            f"a file (no config directory is known)"
+        )
+    rest = value[len(CONFIG_DIR_TOKEN):].lstrip("/\\")
+    return os.path.join(config_dir, rest) if rest else config_dir
+
+
+def config_dir_of(config: dict) -> str | None:
+    """The absolute directory of the loaded config, or None (see load_config)."""
+    return (config.get("files") or {}).get("config_dir")
+
+
 def _load_config_with_instruments_check(path: str | Path) -> dict[str, dict]:
     """Load and validate a perturb config, including the instruments section."""
     config = _mgr.load_config(path)
     _validate_instruments(config.get("instruments", {}))
+    # Stamp the config's own directory so <CONFIG_DIR> path tokens resolve
+    # relative to it. Excluded from every stage hash (_HASH_EXCLUDE_KEYS) so the
+    # same config on a different mount still matches its existing output dirs.
+    config.setdefault("files", {})["config_dir"] = str(Path(path).resolve().parent)
     return config
 
 
@@ -511,6 +551,14 @@ _TEMPLATE = """\
 # perturb configuration
 # Values shown are the defaults. Uncomment and edit to customize.
 # CLI flags override values in this file.
+#
+# Paths (p_file_root, output_root, gps.file, hotel.file) may begin with the
+# token <CONFIG_DIR>, which expands to this file's own directory — so a config
+# plus its data tree can be moved or mounted elsewhere without editing paths
+# (e.g. p_file_root: <CONFIG_DIR>/VMP). Relative paths without the token stay
+# relative to the current working directory, as before. The token — not the
+# resolved absolute path — is what feeds the cache signatures, so a remount
+# reuses existing output directories.
 
 files:
   p_file_root: "VMP/"
