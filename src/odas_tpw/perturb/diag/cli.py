@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import argparse
 
-from odas_tpw.perturb.diag import epsilon
+from odas_tpw.perturb.diag import chi, epsilon, mixing
 
 # Map subcommand name -> (description, add_arguments, run).
 _SUBCOMMANDS = {
@@ -26,6 +26,20 @@ _SUBCOMMANDS = {
         "to see its shear spectra (Nasmyth + K_max) and profile diagnostics.",
         epsilon.add_arguments,
         epsilon.run,
+    ),
+    "chi": (
+        "Interactive thermal-dissipation inspector: click a cast x depth chi "
+        "cell to see its temperature-gradient spectra (Batchelor + noise floor) "
+        "and profile diagnostics.",
+        chi.add_arguments,
+        chi.run,
+    ),
+    "mixing": (
+        "Interactive mixing inspector: click a K_rho / K_T / Gamma cell for the "
+        "spectrum that sets it (shear for K_rho, temperature gradient for K_T) "
+        "and a strip of epsilon/chi/N2/dTdz/K_T/K_rho/Gamma vs depth.",
+        mixing.add_arguments,
+        mixing.run,
     ),
 }
 
