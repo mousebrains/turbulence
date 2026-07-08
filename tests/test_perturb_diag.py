@@ -17,6 +17,17 @@ import xarray as xr
 matplotlib.use("Agg")
 
 
+@pytest.fixture(autouse=True)
+def _close_figures():
+    """Close every pyplot figure after each test — the inspector tests build a
+    DiagInspector figure via plt.figure() and don't own a close, so without this
+    they accumulate in Gcf for the worker's lifetime."""
+    yield
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+
+
 def _write_combo(path, *, n_bin=5, stimes=(1000.0, 1000.5), qc_cell=None):
     """A minimal diss_combo: epsilonMean/e_1/e_2/qc over (bin, profile)."""
     bins = np.linspace(10.0, 100.0, n_bin)

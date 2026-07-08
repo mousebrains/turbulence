@@ -56,6 +56,11 @@ def run(args: argparse.Namespace) -> str:
             f"under {args.root} for the adaptive drill-down"
         )
 
+    # The coarse overview map uses the chi flag for every field. K_rho is
+    # epsilon-derived and would ideally gate on qc_drop_epsilon, but under the
+    # default drop_action="nan" it is already NaN wherever epsilon dropped, so a
+    # single chi flag over-masks K_rho only under the non-default "flag" mode
+    # (the per-cell drill-down below still reads the true per-quantity values).
     data = load_overview(
         combo_path, tuple(n for n, _ in _FIELDS),
         qc_var="qc_drop_chi", apply_qc=args.apply_qc,

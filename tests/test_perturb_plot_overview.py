@@ -224,9 +224,10 @@ def test_single_shared_context_xlabel(tmp_path):
     try:
         _stem, fig = figs[0]
         assert all(ax.get_xlabel() == "" for ax in fig.axes)  # no per-panel labels
-        supx = [getattr(sf, "_supxlabel", None) for sf in fig.subfigs]
-        texts = [t.get_text() for t in supx if t is not None and t.get_text()]
-        assert len(texts) == 1 and "Latitude" in texts[0]  # one shared label
+        top_sf, bot_sf = fig.subfigs[0], fig.subfigs[1]
+        # the one shared label lives on the BOTTOM (context) subfigure, not the top
+        assert bot_sf._supxlabel is not None and "Latitude" in bot_sf._supxlabel.get_text()
+        assert top_sf._supxlabel is None or not top_sf._supxlabel.get_text()
     finally:
         _close(figs)
 
@@ -307,3 +308,153 @@ def test_run_writes_png(tmp_path):
     result = overview.run(_args(tmp_path, out))
     assert Path(result) == out
     assert (out / "overview_section.png").exists()
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-review regressions (PR #95)
+# ---------------------------------------------------------------------------
+
+
+def _write_xy(root: Path, prefix: str, var: str, attrs: dict,
+              lat: np.ndarray, lon: np.ndarray, stime: np.ndarray) -> None:
+    """A minimal (bin, profile) product with arbitrary per-cast lat/lon/stime."""
+    import xarray as xr
+
+    nprof = len(stime)
+    field = np.exp(-_DEPTH[:, None] / 20.0) * (np.arange(nprof)[None, :] + 1.0)
+    ds = xr.Dataset(
+        {var: (("bin", "profile"), field, attrs)},
+        coords={"bin": ("bin", _DEPTH),
+                "profile": ("profile", np.arange(nprof, dtype=np.int32))},
+    )
+    ds["bin"].attrs.update(units="m", standard_name="depth", positive="down")
+    ds["lat"] = (("profile",), np.asarray(lat, float), {"units": "degrees_north"})
+    ds["lon"] = (("profile",), np.asarray(lon, float), {"units": "degrees_east"})
+    ds["stime"] = (("profile",), np.asarray(stime, float),
+                   {"units": "seconds since 1970-01-01"})
+    ds.attrs["id"] = "OV-TEST"
+    out = root / f"{prefix}_00"
+    out.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(out / "combo.nc")
+
+
+def test_signed_distance_shares_one_frame_across_products(tmp_path):
+    """signed_distance must fit ONE frame over every panel's casts, so a cast
+    shared by two products lands at the same x in both rows.  Regression: each
+    panel derived its own centroid/orientation from its own product, so differing
+    cast sets (or the ctd_combo trajectory) shifted the rows apart."""
+    from odas_tpw.perturb.plot import xaxis
+    from odas_tpw.perturb.plot.sections import resolve_sections
+
+    # diss casts run north (lon fixed); chi casts run east (lat fixed).  They
+    # share the corner cast (15.5 N, 145.0 E); their independent principal axes
+    # are ~90 deg apart, so a per-product frame would misplace that shared cast.
+    lat_a, lon_a = np.linspace(15.0, 15.5, 6), np.full(6, 145.0)
+    lat_b, lon_b = np.full(6, 15.5), np.linspace(145.0, 145.5, 6)
+    st = 1.706e9 + np.arange(6) * 400.0
+    _write_xy(tmp_path, "diss_combo", "epsilonMean",
+              {"units": "W/kg", "long_name": "epsilon"}, lat_a, lon_a, st)
+    _write_xy(tmp_path, "chi_combo", "chiMean",
+              {"units": "K2 s-1", "long_name": "chi"}, lat_b, lon_b, st + 86400.0)
+
+    args = _args(tmp_path, tmp_path, "--xaxis", "signed_distance")
+    sec = resolve_sections(args)[0]
+    stages = overview._Stages(args)
+    try:
+        frame = overview._shared_frame(stages, sec, ["epsilonMean", "chiMean"])
+        assert frame is not None
+        # The per-product frames are genuinely different (N-S vs E-W tracks) ...
+        fa = xaxis.signed_distance_axis(lat_a, lon_a, st)
+        fb = xaxis.signed_distance_axis(lat_b, lon_b, st)
+        sep = abs((fa.bearing_deg - fb.bearing_deg + 180.0) % 360.0 - 180.0)
+        assert sep > 45.0
+        # ... and would place the shared corner cast >0.5 km apart:
+        pa = xaxis.project_onto_signed_axis([15.5], [145.0],
+                                            fa.mid_lat, fa.mid_lon, fa.bearing_deg)
+        pb = xaxis.project_onto_signed_axis([15.5], [145.0],
+                                            fb.mid_lat, fb.mid_lon, fb.bearing_deg)
+        assert abs(float(pa[0]) - float(pb[0])) > 0.5
+        # The shared frame places it at ONE x regardless of which panel asks.
+        corner = (np.array([15.5]), np.array([145.0]), np.array([0.0]))
+        x_eps = overview._panel_xaxis(sec, *corner, frame).x[0]
+        x_chi = overview._panel_xaxis(sec, *corner, frame).x[0]
+        assert x_eps == x_chi
+    finally:
+        stages.close()
+
+
+def test_shared_frame_none_for_absolute_methods(tmp_path):
+    """latitude/longitude/time need no shared frame (absolute coordinates)."""
+    from odas_tpw.perturb.plot.sections import resolve_sections
+
+    _build_full(tmp_path, binned_ctd=True)
+    args = _args(tmp_path, tmp_path)  # latitude
+    sec = resolve_sections(args)[0]
+    stages = overview._Stages(args)
+    try:
+        assert overview._shared_frame(stages, sec, ["epsilonMean", "chiMean"]) is None
+    finally:
+        stages.close()
+
+
+def test_qc_masking_default_on_masks_flagged_cells(tmp_path):
+    """--apply-qc (default) NaNs cells a qc_drop_* flag marks; --no-qc keeps them.
+    Every other fixture writes all-zero flags, so this exercises the default-ON
+    masking branch (and its post-x-sort reindex) that would otherwise ship
+    untested."""
+    flag = np.zeros((_NBIN, 12))
+    flag[:, 3] = 1.0  # cast 3 fully flagged (lat monotonic in profile -> stays col 3)
+    _write_product(tmp_path, "diss_combo", {
+        "epsilonMean": (_bp(1e-6), {"units": "W/kg", "long_name": "epsilon"}),
+        "qc_drop_epsilon": (flag, {}),
+    })
+    figs = _figs(tmp_path, tmp_path)  # QC on (default)
+    try:
+        arr = _drawn(figs[0][1])[0].collections[0].get_array()
+        assert int(np.ma.getmaskarray(arr).sum()) == _NBIN  # exactly one column masked
+    finally:
+        _close(figs)
+    figs2 = _figs(tmp_path, tmp_path, "--no-qc")  # QC off
+    try:
+        arr = _drawn(figs2[0][1])[0].collections[0].get_array()
+        assert int(np.ma.getmaskarray(arr).sum()) == 0  # nothing masked
+    finally:
+        _close(figs2)
+
+
+def test_panels_bind_variable_to_row(tmp_path):
+    """Each row/column draws its OWN variable: colorbars are created in panel
+    order [eps, chi, dTdz, CT, SP], so a swap (eps<->chi or CT<->SP) fails here."""
+    _build_full(tmp_path, binned_ctd=True)
+    figs = _figs(tmp_path, tmp_path)
+    try:
+        cbars = [ax.yaxis.get_label().get_text()
+                 for ax in figs[0][1].axes if ax.get_label() == "<colorbar>"]
+        assert len(cbars) == 5
+        assert "epsilon" in cbars[0]   # top row
+        assert "chi" in cbars[1]       # middle row
+        assert "Theta" in cbars[3]     # context col 2 = CT
+        assert "Salinity" in cbars[4]  # context col 3 = SP
+    finally:
+        _close(figs)
+
+
+def test_time_axis_and_pmax(tmp_path):
+    """time x-axis wires the datetime formatter onto the context row, and --p-max
+    clips the (inverted) depth axis."""
+    _build_full(tmp_path, binned_ctd=True)
+    figs = _figs(tmp_path, tmp_path, "--xaxis", "time", "--p-max", "20")
+    try:
+        drawn = _drawn(figs[0][1])
+        assert len(drawn) == 5
+        lo, hi = drawn[0].get_ylim()
+        assert max(lo, hi) <= 20.0 + 1e-6  # depth clipped at 20 m
+    finally:
+        _close(figs)
+
+
+def test_time_fmt_formats_epoch_seconds():
+    import re
+
+    s = overview._time_fmt(1.706e9, None)
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", s)

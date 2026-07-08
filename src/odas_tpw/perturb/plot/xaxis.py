@@ -304,6 +304,47 @@ def _fmt_lat_lon(lat: float, lon: float) -> str:
     return f"{abs(lat):.4g}°{ns}, {abs(lon):.4g}°{ew}"
 
 
+def project_onto_signed_axis(
+    lat: np.ndarray,
+    lon: np.ndarray,
+    mid_lat: float,
+    mid_lon: float,
+    bearing_deg: float,
+    units: str = "km",
+) -> np.ndarray:
+    """Signed along-axis distance of ``(lat, lon)`` from a FIXED frame.
+
+    The frame is a centroid ``(mid_lat, mid_lon)`` and an orientation
+    ``bearing_deg`` (clockwise from true north, the direction of increasing
+    distance) — typically the ``mid_*`` / ``bearing_deg`` of a
+    :func:`signed_distance_axis` fit over a *reference* point set.  Unlike
+    :func:`signed_distance_axis` (which derives the frame from the points it is
+    handed), this projects an arbitrary point set onto a *given* frame, so
+    several products can share one coordinate system instead of each deriving
+    its own centroid/orientation.  Non-finite positions propagate to NaN.
+    """
+    east, north = _to_local_xy(
+        np.asarray(lat, dtype=float), np.asarray(lon, dtype=float), mid_lat, mid_lon
+    )
+    # bearing is CW-from-north for increasing distance -> unit vector
+    # (east, north) = (sin, cos); east/north are displacements from the origin.
+    br = np.radians(bearing_deg)
+    proj = east * np.sin(br) + north * np.cos(br)
+    return np.asarray(proj * _unit_scale(units), dtype=float)
+
+
+def signed_axis_label(r: SignedAxis, units: str) -> str:
+    """Human-readable x-axis label for a :func:`signed_distance_axis` fit *r*."""
+    if np.isfinite(r.mid_lat) and np.isfinite(r.bearing_deg):
+        return (
+            f"Signed distance from {_fmt_lat_lon(r.mid_lat, r.mid_lon)} [{units}], "
+            f"orientation {r.bearing_deg:.1f}°±{r.bearing_std_deg:.1f}° T"
+        )
+    if np.isfinite(r.mid_lat):
+        return f"Signed distance from {_fmt_lat_lon(r.mid_lat, r.mid_lon)} [{units}]"
+    return f"Signed distance from midpoint [{units}]"
+
+
 def compute(
     method: str,
     lat: np.ndarray,
@@ -351,14 +392,5 @@ def compute(
         return XAxis(x=along, label=f"Along-track distance [{units}]", kind="spatial", cross=cross)
     if method == "signed_distance":
         r = signed_distance_axis(lat, lon, time, units)
-        if np.isfinite(r.mid_lat) and np.isfinite(r.bearing_deg):
-            label = (
-                f"Signed distance from {_fmt_lat_lon(r.mid_lat, r.mid_lon)} [{units}], "
-                f"orientation {r.bearing_deg:.1f}°±{r.bearing_std_deg:.1f}° T"
-            )
-        elif np.isfinite(r.mid_lat):
-            label = f"Signed distance from {_fmt_lat_lon(r.mid_lat, r.mid_lon)} [{units}]"
-        else:
-            label = f"Signed distance from midpoint [{units}]"
-        return XAxis(x=r.x, label=label, kind="spatial")
+        return XAxis(x=r.x, label=signed_axis_label(r, units), kind="spatial")
     raise ValueError(f"unknown x-axis method {method!r}; choose from {METHODS}")

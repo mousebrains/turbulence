@@ -113,6 +113,14 @@ _DEFAULT_STAGES: tuple[tuple[str, str], ...] = (
 )
 
 # A dissipation panel is masked by its product's own QC flag (same dataset).
+# The mixing context vars (K_T / K_rho / Gamma) are deliberately absent: their
+# correct flags span two products (K_T/Gamma <- qc_drop_chi, but K_rho is
+# epsilon-derived <- qc_drop_epsilon, which lives in diss_combo, not the
+# chi_combo they are read from), so a same-dataset mask cannot reproduce what
+# `perturb-plot mixing` does. Under the default qc.drop_action="nan" the pipeline
+# already NaNs these derived quantities at compute time, so the context row is
+# blank in dropped cells regardless; only under drop_action="flag" would the
+# overview show mixing cells the mixing plot hides (documented divergence).
 _VAR_QC: dict[str, str] = {
     "epsilonMean": "qc_drop_epsilon", "e_1": "qc_drop_epsilon", "e_2": "qc_drop_epsilon",
     "chiMean": "qc_drop_chi", "chi_1": "qc_drop_chi", "chi_2": "qc_drop_chi",
@@ -189,9 +197,84 @@ def _style(ds: xr.Dataset, var: str):
     return cmap, label, var in _prof._REVERSE_CBAR
 
 
+def _panel_positions(
+    ds: xr.Dataset, kind: str, sec,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """``(lat, lon, epoch-seconds time)`` for a panel's windowed points, or None.
+
+    Positions only (no field read), so one shared ``signed_distance`` frame can
+    be fit over every panel before any is drawn.  Times are normalized to epoch
+    seconds up front so the numeric (``stime``) column path and the datetime64
+    (``time``) trajectory path concatenate cleanly.
+    """
+    if kind == "traj":
+        dss = _time_subset(ds, sec)
+        if dss.sizes.get("time", 0) == 0 or "depth" not in dss:
+            return None
+        n = dss.sizes["time"]
+        lat = dss["lat"].values if "lat" in dss else np.full(n, np.nan)
+        lon = dss["lon"].values if "lon" in dss else np.full(n, np.nan)
+        t = dss["time"].values
+    else:
+        win = _prof._profile_window(ds["stime"].values, sec)
+        dss = ds.isel(profile=np.flatnonzero(win))
+        if dss.sizes.get("profile", 0) == 0:
+            return None
+        lat, lon, t = dss["lat"].values, dss["lon"].values, dss["stime"].values
+    return (np.asarray(lat, dtype=float).ravel(),
+            np.asarray(lon, dtype=float).ravel(),
+            np.asarray(xaxis.to_epoch_seconds(t), dtype=float).ravel())
+
+
+def _shared_frame(stages, sec, panel_vars):
+    """One ``signed_distance`` frame (fit + label) over ALL panels' positions.
+
+    Only ``signed_distance`` derives its origin and orientation from the data,
+    so panels resolved to different products — or the dense ``ctd_combo``
+    trajectory — would each fit a *different* frame and fail to line up on the
+    shared x-axis this figure imposes.  Fitting one frame over the union of
+    positions and projecting every panel onto it (see :func:`_panel_xaxis`)
+    keeps the rows in a common coordinate system.  Absolute methods
+    (time / latitude / longitude / distance_from_point / along_line) need no
+    shared frame → ``None`` (per-panel ``xaxis.compute`` already agrees).
+    """
+    if sec.method != "signed_distance":
+        return None
+    lats, lons, times = [], [], []
+    for var in panel_vars:
+        res = _resolve_var(var, stages)
+        if res is None:
+            continue
+        pos = _panel_positions(res[1], res[0], sec)
+        if pos is not None:
+            lats.append(pos[0])
+            lons.append(pos[1])
+            times.append(pos[2])
+    if not lats:
+        return None
+    units = sec.params.get("units", "km")
+    r = xaxis.signed_distance_axis(
+        np.concatenate(lats), np.concatenate(lons), np.concatenate(times), units)
+    if not (np.isfinite(r.mid_lat) and np.isfinite(r.bearing_deg)):
+        return None  # single station / no spatial spread — per-panel fallback is fine
+    return r, xaxis.signed_axis_label(r, units)
+
+
+def _panel_xaxis(sec, lat, lon, time, frame):
+    """XAxis for one panel: project onto the shared *frame* (signed_distance),
+    else the standard per-panel :func:`xaxis.compute`."""
+    if frame is not None:
+        r, label = frame
+        units = sec.params.get("units", "km")
+        x = xaxis.project_onto_signed_axis(
+            lat, lon, r.mid_lat, r.mid_lon, r.bearing_deg, units)
+        return xaxis.XAxis(x=np.asarray(x, dtype=float), label=label, kind="spatial")
+    return xaxis.compute(sec.method, lat, lon, time, sec.params)
+
+
 def _draw_col_panel(
     ax: Axes, fig: Figure, ds: xr.Dataset, sec, var: str,
-    args: argparse.Namespace, clim: dict,
+    args: argparse.Namespace, clim: dict, frame=None,
 ) -> _Extent | None:
     """Draw a (bin, profile) field as a depth-by-column mesh (profiles path)."""
     win = _prof._profile_window(ds["stime"].values, sec)
@@ -199,7 +282,7 @@ def _draw_col_panel(
     if dss.sizes.get("profile", 0) == 0 or {"bin", "profile"} - set(dss[var].dims):
         return None
     lat, lon = dss["lat"].values, dss["lon"].values
-    xa = xaxis.compute(sec.method, lat, lon, dss["stime"].values, sec.params)
+    xa = _panel_xaxis(sec, lat, lon, dss["stime"].values, frame)
     x = np.asarray(xa.x, dtype=float)
     finite = np.flatnonzero(np.isfinite(x))
     if finite.size == 0:
@@ -229,7 +312,7 @@ def _draw_col_panel(
 
 def _draw_traj_panel(
     ax: Axes, fig: Figure, ds: xr.Dataset, sec, var: str,
-    args: argparse.Namespace, clim: dict,
+    args: argparse.Namespace, clim: dict, frame=None,
 ) -> _Extent | None:
     """Grid a ``ctd_combo`` trajectory scalar onto depth-vs-x (scalar path)."""
     dss = _time_subset(ds, sec)
@@ -239,7 +322,7 @@ def _draw_traj_panel(
     lat = dss["lat"].values if "lat" in dss else np.full(n, np.nan)
     lon = dss["lon"].values if "lon" in dss else np.full(n, np.nan)
     depth = dss["depth"].values
-    xa = xaxis.compute(sec.method, lat, lon, dss["time"].values, sec.params)
+    xa = _panel_xaxis(sec, lat, lon, dss["time"].values, frame)
     x = np.asarray(xa.x, dtype=float)
     finite_x = x[np.isfinite(x)]
     if finite_x.size == 0:
@@ -309,6 +392,10 @@ def _build_overview_figure(
     axes = [ax_eps, ax_chi, *bottom_axes]
     panel_vars = [eps_var, chi_var, *bottom]
 
+    # For signed_distance, fit ONE frame over every panel's positions so the rows
+    # share a coordinate system (see _shared_frame); other methods -> None.
+    frame = _shared_frame(stages, sec, panel_vars)
+
     extents: list[_Extent] = []
     for ax, var in zip(axes, panel_vars):
         res = _resolve_var(var, stages)
@@ -317,7 +404,7 @@ def _build_overview_figure(
             continue
         kind, ds = res
         draw = _draw_traj_panel if kind == "traj" else _draw_col_panel
-        ext = draw(ax, fig, ds, sec, var, args, clim)
+        ext = draw(ax, fig, ds, sec, var, args, clim, frame)
         if ext is None:
             _no_data(ax, var)
         else:
