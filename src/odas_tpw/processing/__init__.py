@@ -19,6 +19,9 @@ right arrays.
 - :func:`mixing.window_stratification` / :func:`mixing.mixing_coefficients`
   — background N² and dT/dz per dissipation window, and the derived
   mixing quantities K_T (Osborn-Cox), Gamma (Oakey), K_rho (Osborn).
+- :func:`thorpe.window_thorpe` / :func:`thorpe.patch_n2` — per-window
+  Thorpe displacements/scale L_T and the overturn-weighted "patch"
+  stratification (Smyth et al. 2001), plus Ozmidov/R_OT/Re_b/Cox helpers.
 """
 
 from odas_tpw.processing.bottom import detect_bottom_crash
@@ -30,16 +33,30 @@ from odas_tpw.processing.mixing import (
     pair_nearest,
     window_stratification,
 )
+from odas_tpw.processing.thorpe import (
+    cox_number,
+    ozmidov,
+    patch_n2,
+    r_ot,
+    reynolds_buoyancy,
+    window_thorpe,
+)
 from odas_tpw.processing.top_trim import compute_trim_depth, compute_trim_depths
 
 __all__ = [
     "compute_trim_depth",
     "compute_trim_depths",
+    "cox_number",
     "ct_align",
     "detect_bottom_crash",
     "mixing_coefficients",
     "mk_chi_mean",
     "mk_epsilon_mean",
+    "ozmidov",
     "pair_nearest",
+    "patch_n2",
+    "r_ot",
+    "reynolds_buoyancy",
     "window_stratification",
+    "window_thorpe",
 ]
