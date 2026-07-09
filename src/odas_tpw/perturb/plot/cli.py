@@ -18,7 +18,14 @@ from __future__ import annotations
 
 import argparse
 
-from odas_tpw.perturb.plot import eps_chi, figure, overview, profiles, scalar
+from odas_tpw.perturb.plot import (
+    eps_chi,
+    figure,
+    gamma_scaling,
+    overview,
+    profiles,
+    scalar,
+)
 
 # Map subcommand name -> (description, add_arguments, run).
 _SUBCOMMANDS = {
@@ -66,6 +73,13 @@ _SUBCOMMANDS = {
         "Depth-vs-x sections of binned mixing (K_T/Gamma/K_rho) per cast.",
         profiles.MIXING.add_arguments,
         profiles.MIXING.run,
+    ),
+    "gamma-scaling": (
+        "Mixing-efficiency scaling scatter (Lewin et al. 2025 Fig. 5): "
+        "Gamma vs R_OT, Re_b, and (with --adcp) Ri_g per window, plus a "
+        "Thorpe-route comparison figure.",
+        gamma_scaling.add_arguments,
+        gamma_scaling.run,
     ),
 }
 

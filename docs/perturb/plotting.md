@@ -16,6 +16,7 @@ perturb-plot <subcommand> [options]
 | `epsilon`  | Depth-vs-x sections of binned epsilon (`epsilonMean`) from `diss_combo_NN`. |
 | `chi`      | Depth-vs-x sections of binned chi (`chiMean`) from `chi_combo_NN`. |
 | `mixing`   | Depth-vs-x sections of binned mixing (`K_T`/`Gamma`/`K_rho`) from `chi_combo_NN`. |
+| `gamma-scaling` | Mixing-efficiency scaling scatter (Lewin et al. 2025 Fig. 5): per-window Γ vs `R_OT`/`Re_b`/`Ri_g` from `chi_NN`+`diss_NN`+`profiles_NN` (+ `--adcp`), plus a Thorpe-route comparison. |
 
 `profiles`, `epsilon`, `chi`, and `mixing` share one engine (they differ only in
 which `(bin, profile)` product and default variables they read), so every
@@ -294,4 +295,74 @@ perturb-plot mixing --root RESULTS --xaxis latitude --out-dir figs/
 # Chi by signed distance, top 150 m, custom color limits
 perturb-plot chi --root RESULTS --xaxis signed_distance \
     --p-max 150 --clim chiMean 1e-10 1e-6
+```
+
+## `perturb-plot gamma-scaling`
+
+Mixing-efficiency scaling scatter after Fig. 5 of
+[Lewin et al. (2025)](https://doi.org/10.1175/JPO-D-25-0012.1): the local flux
+coefficient Γ against the three dimensionless mixing parameters, one panel
+each —
+
+| Panel | x variable | Slope guides | Needs |
+|-------|------------|--------------|-------|
+| a | `R_OT = L_O / L_T` (Ozmidov / Thorpe) | −1, −4/3 | `profiles_NN` (Thorpe scales) |
+| b | `Re_b = ε / (ν N²_patch)` (buoyancy Reynolds) | −1/2 | — |
+| c | `Ri_g = N² / S²` (gradient Richardson) | +1 | `--adcp` |
+
+Unlike the other subcommands this reads the **per-window** products
+(`chi_NN` + `diss_NN` + `profiles_NN`), not the binned combos: each point is
+one dissipation window (~1 s). Γ is **recomputed from unmasked components**
+(`chiMean`, nearest-window `epsilonMean`, `N2`, `dTdz`) rather than read from
+the stored `Gamma`, whose plotting-oriented ceilings (Γ ≤ 5, `|dTdz|` floor)
+would clip exactly the distribution tails this figure exists to show. The
+default QC is the paper's: `Re_b > 20`, Cox number `> 50`, the upper 10 dbar
+dropped, plus the pipeline's `qc_drop_*` flags.
+
+Thorpe scales are computed on the slow grid over a `--sort-window` (default
+4 s, the paper's segment span) centered on each window, by **two routes**:
+JAC `sigma0` (default; trusted salinity) and FP07 `T1` (the paper's proxy).
+An overturn only counts as *resolved* — and only then feeds `L_T`, `N²_patch`,
+and panel (a) — when it clears the route's `L_T` floor, shows a coherent
+same-sign displacement run (`--min-run`), and is not clipped by the sort
+window (`--keep-truncated` overrides). Unresolved windows fall back to the
+background window `N²` (the paper does the same below 0.05 m). A second
+figure, `gamma_thorpe_compare.png`, plots the two routes against each other
+with their floors so `--lt-floor-density` can be judged from data.
+
+`Ri_g` needs shipboard ADCP shear: pass one or more CODAS gridded files
+(`--adcp .../proc/wh300/contour/wh300.nc`). Ensembles within
+`--time-tolerance` of each window are averaged **before** first-differencing
+adjacent bins, and each sonar gets its **own** panel — 16-m `os75` shear and
+2-m `wh300` shear are different quantities and are never blended. The Ri_g
+numerator `N²` is recomputed over `--ri-n2-span` (default 4 m ≈ 2 ADCP bins)
+so both operands live at a matched vertical scale.
+
+Documented deviations from the paper: our `N²` is full TEOS-10 (temperature
+**and** JAC salinity; theirs is temperature-only), our windows are 2 s vs
+their 4 s, and the hull-mounted 120-s-ensemble ADCP makes panel (c) a
+coarse-grained analog of their pole-mounted 20-s shear, with an S² noise
+floor of order 1e-4 s⁻² — treat large `Ri_g` as a lower bound on shear, not a
+measurement.
+
+With `--sections`, points and marginal pdfs are colored by which section's
+`start`/`stop` window they fall in (the analog of the paper's W1/W2 red/blue;
+the sections' x-axis entries are ignored here).
+
+### Examples
+
+```bash
+# Both figures from a completed run, on screen (panels a+b only)
+perturb-plot gamma-scaling --root RESULTS
+
+# The full three-panel figure with the 300 kHz sonar, colored by section
+perturb-plot gamma-scaling -c perturb.yaml \
+    --adcp adcp/proc/wh300/contour/wh300.nc \
+    --sections sections.yaml --out-dir figs/
+
+# Paper-style temperature-route Thorpe scales, keep truncated overturns
+perturb-plot gamma-scaling --root RESULTS --route temperature --keep-truncated
+
+# Quick look at the first 20 casts with looser QC
+perturb-plot gamma-scaling --root RESULTS --max-profiles 20 --min-cox 0
 ```
