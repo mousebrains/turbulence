@@ -20,6 +20,7 @@ perturb <subcommand> [options]
 | `perturb ctd`      | Time-bin CTD channels per file |
 | `perturb bin`      | Depth/time bin profiles, diss, and chi |
 | `perturb combo`    | Assemble combo NetCDFs from binned data |
+| `perturb sections` | Auto-generate a plotting `sections.yaml` by splitting casts on time gaps |
 
 ## Common Options
 
@@ -156,3 +157,37 @@ perturb combo -c config.yaml -o results/
 ```
 
 Does not accept `-j` (combo assembly runs serially).
+
+## `perturb sections`
+
+Auto-generate a plotting `sections.yaml` from a completed run's profiles. Casts
+usually arrive in station batches separated by transits; this reads the run's
+per-profile start times from the `combo` product and starts a new section
+wherever the gap between consecutive casts exceeds `--gap`. The emitted file is
+the same schema `perturb-plot`/`perturb-diag` consume via `--sections` (see
+[plotting.md](plotting.md) for the x-axis methods) and is validated against that
+loader before it is written.
+
+```bash
+perturb sections -c perturb.yaml                       # preview on stdout (1h gap)
+perturb sections -c perturb.yaml -o sections.yaml       # write the file
+perturb sections -c perturb.yaml --gap 2h -o sections.yaml   # coarser batching
+perturb sections -c perturb.yaml --xaxis signed_distance --units km -o sections.yaml
+```
+
+It prints the profile count, resulting section count, and the largest
+inter-cast gaps to stderr so `--gap` is easy to tune. The output is a starting
+point — edit the windows, rename sections, or change any section's `xaxis`
+by hand afterward. Unlike the pipeline subcommands, `-o`/`--output` names a
+**file** (not a directory) and there is no `-j`.
+
+| Flag | Description |
+|------|-------------|
+| `-c`, `--config YAML` | Perturb config; locates the run's combo output (required) |
+| `-o`, `--output FILE` | Write the sections YAML here (default: stdout) |
+| `--gap DUR` | New section when the inter-cast gap exceeds this (`90m`, `1.5h`, `3600s`, `2d`; default `1h`) |
+| `--xaxis METHOD` | x-axis for every section: `time` (default), `latitude`, `longitude`, `signed_distance` |
+| `--units U` | Distance units for a spatial `--xaxis` (`m`/`km`/`nm`; default `km`) |
+| `--pad SEC` | Pad each section's time window by this many seconds (default 30) |
+| `--product P` | Combo product to read per-profile times from (default `combo`) |
+| `-f`, `--force` | Overwrite `--output` if it already exists |
