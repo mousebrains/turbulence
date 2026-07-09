@@ -2,11 +2,16 @@
 # Example deployment config; values that deviate from the package defaults are
 # set for this cruise (e.g. gps.source, fp07.order, chi.enable/fft_length/salinity).
 # CLI flags override values in this file.
+#
+# Paths use the <CONFIG_DIR> token, which resolves to this file's own directory.
+# Drop this config into the cruise's VMP directory (alongside the vmp*/ cast
+# folders, with the ship/ directory as a sibling) and it runs from any working
+# directory or mount point without editing paths.
 
 files:
-  p_file_root: "/Volumes/SeaChest/ARCTERX/2025/Interior/VMP/"
+  p_file_root: "<CONFIG_DIR>"                # vmp*/ cast folders sit beside this config
   p_file_pattern: "vmp**/*.p"
-  output_root: "/Users/pat/Desktop/VMP_results/"
+  output_root: "<CONFIG_DIR>/VMP_results"
   trim: true
   merge: false
 
@@ -14,7 +19,7 @@ gps:
   source: "netcdf"           # nan | fixed | csv | netcdf
   lat: null
   lon: null
-  file: "/Volumes/SeaChest/ARCTERX/2025/Interior/ship/ship.nc"
+  file: "<CONFIG_DIR>/../ship/ship.nc"       # sibling ship/ directory
   time_col: "time"
   lat_col: "lat"
   lon_col: "lon"
