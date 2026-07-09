@@ -101,6 +101,12 @@ DEFAULT_MIN_SAMPLES = 8
 # so L_T is a lower bound there.
 EDGE_TRUNCATION_FRACTION = 0.4
 
+# A displacement at the first/last sample counts as edge truncation only
+# when it exceeds this fraction of the span. Requiring merely *nonzero*
+# boundary displacement flags essentially every real (noisy) window — a
+# one-sample jiggle at the boundary is noise, not a clipped overturn.
+EDGE_BOUNDARY_FRACTION = 0.1
+
 
 class ThorpeDisplacements(NamedTuple):
     """Depth-ordered displacement decomposition of one profile segment."""
@@ -221,9 +227,12 @@ def thorpe_stats(disp: ThorpeDisplacements) -> ThorpeStats:
     frac = float(np.mean(displaced))
     max_run = _max_same_sign_run(delta)
     edge = bool(
-        displaced[0]
-        or displaced[-1]
-        or (span > 0 and float(np.max(np.abs(delta))) > EDGE_TRUNCATION_FRACTION * span)
+        span > 0
+        and (
+            abs(float(delta[0])) > EDGE_BOUNDARY_FRACTION * span
+            or abs(float(delta[-1])) > EDGE_BOUNDARY_FRACTION * span
+            or float(np.max(np.abs(delta))) > EDGE_TRUNCATION_FRACTION * span
+        )
     )
     return ThorpeStats(
         L_T=L_T,

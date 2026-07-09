@@ -154,6 +154,23 @@ def test_stats_large_interior_overturn_flags_truncation():
     assert stats.edge_truncated
 
 
+def test_boundary_jiggle_is_not_edge_truncation():
+    # A one-sample noise displacement at the window boundary must NOT raise
+    # the truncation flag (with a literal nonzero-at-edge test, essentially
+    # every real noisy window would be flagged).
+    z = np.arange(0.0, 2.01, 0.05)
+    sigma = 25.0 + 0.1 * z
+    sigma[0], sigma[1] = sigma[1], sigma[0]  # single-sample boundary swap
+    stats = thorpe_stats(thorpe_displacements(z, sigma, increasing_down=True))
+    assert stats.L_T > 0
+    assert not stats.edge_truncated  # 0.05 m << 0.1 * 2.0 m span
+    # ... but a SUBSTANTIAL displacement at the boundary still flags.
+    sigma2 = 25.0 + 0.1 * z
+    sigma2[0], sigma2[6] = sigma2[6], sigma2[0]  # 0.3 m > 0.1 * 2.0 m
+    stats2 = thorpe_stats(thorpe_displacements(z, sigma2, increasing_down=True))
+    assert stats2.edge_truncated
+
+
 def test_noise_yields_short_runs():
     # Uncorrelated noise on zero stratification: Galbraith-Kelley runs stay
     # far below a coherent overturn's run length.
