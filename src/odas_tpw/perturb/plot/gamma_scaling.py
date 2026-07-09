@@ -300,17 +300,31 @@ def _window_means(
     return out
 
 
-def _pair_indices(src_t: np.ndarray, dst_t: np.ndarray, max_dt: float) -> np.ndarray:
+def _pair_indices(
+    src_t: np.ndarray,
+    dst_t: np.ndarray,
+    max_dt: float,
+    valid: np.ndarray | None = None,
+) -> np.ndarray:
     """Index of the nearest src window per dst window (-1 = unpaired).
 
     A single index pairing (rather than per-variable ``pair_nearest`` calls)
     guarantees every diss column — epsilon, its QC flag — comes from the SAME
-    source window.
+    source window.  *valid* restricts the candidate source windows (e.g. to
+    finite-epsilon ones), matching ``pair_nearest``'s own NaN-source rule: a
+    QC'd-out window must not shadow a valid neighbor within ``max_dt``.
     """
     from odas_tpw.processing.mixing import pair_nearest
 
-    idxf = pair_nearest(src_t, np.arange(src_t.size, dtype=float), dst_t, max_dt)
+    keep = (
+        np.flatnonzero(np.asarray(valid, dtype=bool))
+        if valid is not None
+        else np.arange(src_t.size)
+    )
     idx = np.full(dst_t.size, -1, dtype=np.intp)
+    if keep.size == 0:
+        return idx
+    idxf = pair_nearest(src_t[keep], keep.astype(float), dst_t, max_dt)
     ok = np.isfinite(idxf)
     idx[ok] = idxf[ok].astype(np.intp)
     return idx
@@ -359,8 +373,9 @@ def _sweep_profile(
             if "qc_drop_chi" in c.variables
             else np.zeros(n)
         )
-        idx = _pair_indices(_epoch(d["t"]), ct, args.max_dt)
-        eps = _gather(d["epsilonMean"].values, idx)
+        eps_src = np.asarray(d["epsilonMean"].values, dtype=float)
+        idx = _pair_indices(_epoch(d["t"]), ct, args.max_dt, valid=np.isfinite(eps_src))
+        eps = _gather(eps_src, idx)
         qc_eps = (
             _gather(d["qc_drop_epsilon"].values, idx)
             if "qc_drop_epsilon" in d.variables
@@ -558,6 +573,8 @@ def sweep(args: argparse.Namespace) -> _Table:
         cols={k: np.concatenate(v) if v else np.empty(0) for k, v in cols.items()},
         n_profiles=n_done,
     )
+    if table.n == 0:
+        raise SystemExit("the chi product contains no dissipation windows")
     for name, count in counters.items():
         if count:
             print(f"note: {count} profile(s) skipped/degraded ({name})", file=sys.stderr)
@@ -603,14 +620,28 @@ def sweep(args: argparse.Namespace) -> _Table:
 
     # Per-sonar S2 -> Ri_g (matched-scale numerator; sonars never blended).
     depth_m = np.asarray(-gsw.z_from_p(table["P"], table["lat"]), dtype=float)
-    for path in args.adcp or []:
-        src = adcp_mod.read_codas(path, min_pg=args.min_pg)
-        ws = adcp_mod.window_shear(src, table["epoch"], depth_m, time_tolerance=args.time_tolerance)
+    for k, path in enumerate(args.adcp or []):
+        try:
+            src = adcp_mod.read_codas(path, min_pg=args.min_pg)
+        except ValueError as exc:  # corrupt file / min_pg without pg / ...
+            raise SystemExit(str(exc)) from exc
+        name = src.name
+        if name in table.rig:
+            # Two --adcp files with the same stem (e.g. two legs' wh300.nc)
+            # must not silently overwrite each other's panel.
+            name = f"{name}#{k + 1}"
+            print(f"note: duplicate sonar name; labeling {path} as {name!r}", file=sys.stderr)
+        try:
+            ws = adcp_mod.window_shear(
+                src, table["epoch"], depth_m, time_tolerance=args.time_tolerance
+            )
+        except ValueError as exc:  # bad tolerance / unusable geometry
+            raise SystemExit(str(exc)) from exc
         n2r = table["N2_ri"]
         with np.errstate(divide="ignore", invalid="ignore"):
             ok = np.isfinite(n2r) & (n2r > 0) & np.isfinite(ws.S2) & (ws.S2 > 0)
-            table.rig[src.name] = np.where(ok, n2r / np.where(ok, ws.S2, 1.0), np.nan)
-        table.s2[src.name] = ws.S2
+            table.rig[name] = np.where(ok, n2r / np.where(ok, ws.S2, 1.0), np.nan)
+        table.s2[name] = ws.S2
     return table
 
 
@@ -633,7 +664,14 @@ def qc_mask(table: _Table, args: argparse.Namespace) -> np.ndarray:
 
 
 def _section_colors(table: _Table, args: argparse.Namespace) -> tuple[np.ndarray, list[str]]:
-    """(per-window section index, section names); index -1 = unsectioned."""
+    """(per-window section index, section names); index -1 = unsectioned.
+
+    Where sections overlap, the **narrowest** time window wins.  Files often
+    lead with an umbrella section (e.g. the ARCTERX example's unbounded
+    ``full_timeseries``); with first-wins ordering it would swallow every
+    window and render the figure monochrome, so specific sections take
+    precedence and the umbrella only catches windows nothing narrower claims.
+    """
     idx = np.full(table.n, -1, dtype=int)
     if not args.sections:
         return idx, []
@@ -641,7 +679,15 @@ def _section_colors(table: _Table, args: argparse.Namespace) -> tuple[np.ndarray
     if args.select:
         sections = select_sections(sections, args.select)
     epoch = table["epoch"]
-    for i, sec in enumerate(sections):
+
+    def _width(i: int) -> float:
+        sec = sections[i]
+        if sec.start is None or sec.stop is None:
+            return np.inf
+        return float((sec.stop - sec.start) / np.timedelta64(1, "s"))
+
+    for i in sorted(range(len(sections)), key=_width):
+        sec = sections[i]
         m = np.ones(table.n, dtype=bool)
         if sec.start is not None:
             m &= epoch >= float(xaxis.to_epoch_seconds(np.array([sec.start]))[0])
@@ -745,6 +791,7 @@ def _fig_gamma(table: _Table, args: argparse.Namespace) -> Figure | None:
     """The Fig.-5 analog: Gamma vs R_OT / Re_b / Ri_g (one panel per sonar)."""
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
+    from matplotlib.ticker import NullFormatter
 
     ok = qc_mask(table, args)
     gamma = np.where(ok, table["Gamma"], np.nan)
@@ -761,6 +808,13 @@ def _fig_gamma(table: _Table, args: argparse.Namespace) -> Figure | None:
 
     sec_idx, sec_names = _section_colors(table, args)
     cmap = plt.get_cmap("tab10")
+    if len(sec_names) > 10:
+        print(
+            f"gamma-scaling: {len(sec_names)} sections but only 10 distinct "
+            "colors (tab10 wraps); consider --select",
+            file=sys.stderr,
+        )
+    sec_plotted = np.zeros(len(sec_names), dtype=bool)  # for the legend
 
     n_p = len(panels)
     figsize = args.figsize or (4.6 * n_p, 5.0)
@@ -786,6 +840,7 @@ def _fig_gamma(table: _Table, args: argparse.Namespace) -> Figure | None:
                 m = fin & (sec_idx == si)
                 if not m.any():
                     continue
+                sec_plotted[si] = True
                 color = cmap(si % 10)
                 ax.scatter(x[m], gamma[m], s=5, color=color, alpha=0.45, lw=0, rasterized=True)
                 _marginal_pdf(ax_top, x[m], _log_bins(x[fin]), color)
@@ -805,7 +860,25 @@ def _fig_gamma(table: _Table, args: argparse.Namespace) -> Figure | None:
         xf = x[fin & (x > 0)]
         if xf.size:
             ax.set_xlim(10 ** np.floor(np.log10(xf.min())), 10 ** np.ceil(np.log10(xf.max())))
+        # Whole-decade limits alone don't stop the label pileup: matplotlib
+        # still labels minor ticks when the span is <= 1 decade.
+        ax.xaxis.set_minor_formatter(NullFormatter())
         ax.set_xlabel(xlabel)
+        if kind == "R_OT":
+            # R_OT exists only for resolved (floor/coherence/truncation-
+            # gated) overturns — say how selective that gate was, so this
+            # panel is not read as the full window population.
+            n_rot = int(np.count_nonzero(fin))
+            n_ok_all = int(np.count_nonzero(ok))
+            frac = n_rot / n_ok_all if n_ok_all else 0.0
+            ax.text(
+                0.03,
+                0.03,
+                f"{grouped(n_rot)} resolved overturns ({frac:.0%} of QC-pass)",
+                transform=ax.transAxes,
+                fontsize=7,
+                color="0.35",
+            )
         if i == 0:
             ax.set_ylabel(r"$\Gamma = N^2\chi\,/\,(2\epsilon\,(dT/dz)^2)$")
         ax.grid(True, which="major", color="0.85", lw=0.5)
@@ -815,10 +888,14 @@ def _fig_gamma(table: _Table, args: argparse.Namespace) -> Figure | None:
         ax_top.axis("off")
         ax_right.axis("off")
 
-    if sec_names:
+    if sec_names and sec_plotted.any():
+        # Only sections that actually placed points — an empty legend entry
+        # (e.g. an umbrella section fully shadowed by narrower ones) would
+        # mislabel colors that never appear.
         handles = [
             Line2D([], [], marker="o", ls="", color=cmap(i % 10), label=name)
             for i, name in enumerate(sec_names)
+            if sec_plotted[i]
         ]
         fig.legend(handles=handles, loc="upper right", fontsize=8, ncols=2, frameon=False)
     n_ok = int(np.count_nonzero(ok))
@@ -921,6 +998,8 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
     args.root = resolve.require_root(args)
     if args.sort_window <= 0:
         raise SystemExit("--sort-window must be > 0")
+    if args.select and not args.sections:
+        raise SystemExit("--select requires --sections")
     table = sweep(args)
     _report(table, args)
     for stem, builder in (

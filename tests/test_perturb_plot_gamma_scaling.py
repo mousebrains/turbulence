@@ -36,7 +36,9 @@ def _times(seconds):
     return T0 + (np.asarray(seconds) * 1e9).astype("timedelta64[ns]")
 
 
-def _write_run(root, n_prof=2, with_overturn=True, with_profiles=True, diss_offset=0.0):
+def _write_run(
+    root, n_prof=2, with_overturn=True, with_profiles=True, diss_offset=0.0, ot_span=(OT_LO, OT_HI)
+):
     """Write a synthetic chi_00/diss_00/profiles_00 run under *root*."""
     for k in range(n_prof):
         name = f"synth_prof{k:03d}.nc"
@@ -78,7 +80,7 @@ def _write_run(root, n_prof=2, with_overturn=True, with_profiles=True, diss_offs
         sigma = 25.0 + dsig_dz * P
         T1 = 25.0 - DTDZ * P
         if with_overturn:
-            m = (ts >= OT_LO) & (ts <= OT_HI)
+            m = (ts >= ot_span[0]) & (ts <= ot_span[1])
             sigma[m] = sigma[m][::-1]
             T1[m] = T1[m][::-1]
         prof = xr.Dataset(
@@ -167,12 +169,19 @@ def test_sweep_recomputes_gamma_from_components(tmp_path):
     ok = np.isfinite(table["Gamma"])
     assert ok.sum() == table.n
     np.testing.assert_allclose(table["Gamma"][ok], 2.0, rtol=1e-6)
+    unresolved = ~np.isfinite(table["R_OT"])
+    assert unresolved.any()  # guard: the check below must not be vacuous
     np.testing.assert_allclose(
-        table["Re_b"][~np.isfinite(table["R_OT"])][:1],
+        table["Re_b"][unresolved][:1],
         EPS / (NU * N2),
         rtol=0.05,
     )
-    assert np.all(table["Cox"] > 1000)
+    # Cox pinned exactly against the same kappa_T the sweep uses (SP=35
+    # window means, chi-file T_mean/P_mean).
+    from odas_tpw.scor160.ocean import kappa_T
+
+    expect = CHI / (2.0 * kappa_T(20.0, 35.0, table["P"]) * DTDZ**2)
+    np.testing.assert_allclose(table["Cox"], expect, rtol=1e-9)
 
 
 def test_sweep_thorpe_resolves_only_the_overturn(tmp_path):
@@ -323,3 +332,72 @@ def test_cli_registers_gamma_scaling():
     assert args.command == "gamma-scaling"
     assert args.adcp == ["a.nc", "b.nc"]
     assert args.route == "density" and args.min_reb == 20.0
+
+
+def test_route_temperature_uses_its_own_floor_and_patch(tmp_path):
+    _write_run(tmp_path)
+    # An impossible density floor kills the density route entirely...
+    t_dens = G.sweep(_args(tmp_path, lt_floor_density=1e9))
+    assert not (t_dens["resolved"] > 0).any()
+    # ...but the temperature route is untouched by it (route plumbing).
+    t_temp = G.sweep(_args(tmp_path, route="temperature", lt_floor_density=1e9))
+    res = t_temp["resolved"] > 0
+    assert res.any()
+    # and the temperature route's patch N2 (alpha*g) feeds N2_scale there.
+    np.testing.assert_allclose(t_temp["N2_scale"][res], t_temp["N2p_temp"][res], rtol=1e-12)
+
+
+def test_min_run_and_keep_truncated_gate_resolution(tmp_path):
+    _write_run(tmp_path)
+    # A run-length demand no real overturn meets -> nothing resolves.
+    t = G.sweep(_args(tmp_path, min_run=10_000))
+    assert not (t["resolved"] > 0).any()
+    # An overturn spanning most of the sort window is edge-truncated:
+    # excluded by default, admitted with --keep-truncated.
+    big = tmp_path / "big"
+    _write_run(big, ot_span=(26.2, 29.8))  # ~3.2 m of a ~3.6 m window
+    t_def = G.sweep(_args(big))
+    t_keep = G.sweep(_args(big, keep_truncated=True))
+    assert not (t_def["resolved"] > 0).any()
+    assert (t_keep["resolved"] > 0).any()
+
+
+def test_duplicate_adcp_stems_not_blended(tmp_path):
+    _write_run(tmp_path)
+    a1 = _write_adcp(tmp_path / "leg1" / "wh300.nc", du_dz=0.01)
+    a2 = _write_adcp(tmp_path / "leg2" / "wh300.nc", du_dz=0.005)
+    table = G.sweep(_args(tmp_path, adcp=[str(a1), str(a2)]))
+    assert len(table.rig) == 2  # second file gets a disambiguated label
+    assert "wh300" in table.rig
+    (other,) = [k for k in table.rig if k != "wh300"]
+    r1, r2 = table.rig["wh300"], table.rig[other]
+    fin = np.isfinite(r1) & np.isfinite(r2)
+    assert fin.any()
+    np.testing.assert_allclose(r2[fin] / r1[fin], 4.0, rtol=1e-6)
+
+
+def test_select_requires_sections(tmp_path):
+    _write_run(tmp_path)
+    with pytest.raises(SystemExit, match="--select requires --sections"):
+        list(G.build_figures(_args(tmp_path, select=["s1"])))
+
+
+def test_section_umbrella_does_not_swallow_narrow_sections(tmp_path):
+    _write_run(tmp_path)
+    sec = tmp_path / "sections.yaml"
+    sec.write_text(
+        "sections:\n"
+        "  - name: everything\n"  # unbounded umbrella FIRST
+        "    xaxis: {method: time}\n"
+        "  - name: narrow\n"
+        '    start: "2025-02-11T00:00:00Z"\n'
+        '    stop:  "2025-02-11T12:00:00Z"\n'
+        "    xaxis: {method: time}\n"
+    )
+    args = _args(tmp_path, sections=str(sec))
+    table = G.sweep(args)
+    idx, names = G._section_colors(table, args)
+    assert names == ["everything", "narrow"]
+    # The narrow section wins its own window; the umbrella takes the rest.
+    assert (idx == 1).sum() == table.n // 2
+    assert (idx == 0).sum() == table.n - table.n // 2
