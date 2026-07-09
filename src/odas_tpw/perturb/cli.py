@@ -15,6 +15,7 @@ Subcommands:
     ctd      — Time-bin CTD channels per file
     bin      — Depth/time bin profiles, diss, and chi
     combo    — Assemble combo NetCDFs from binned data
+    sections — Auto-generate a plotting sections.yaml by splitting casts on time gaps
 """
 
 import argparse
@@ -403,6 +404,13 @@ def _cmd_combo(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _cmd_sections(args: argparse.Namespace) -> None:
+    """Auto-generate a plotting sections.yaml from a run's profile times."""
+    from odas_tpw.perturb.mk_sections import run
+
+    run(args)
+
+
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
     """Add common arguments shared by most subcommands."""
     parser.add_argument(
@@ -536,6 +544,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_combo = sub.add_parser("combo", help="assemble combo NetCDFs")
     _add_common_args(p_combo)
 
+    # sections
+    from odas_tpw.perturb import mk_sections
+    p_sec = sub.add_parser(
+        "sections",
+        help="auto-generate a plotting sections.yaml by splitting casts on time gaps",
+    )
+    mk_sections.add_arguments(p_sec)
+
     return parser
 
 
@@ -564,6 +580,7 @@ def main(argv: list[str] | None = None) -> None:
         "ctd": _cmd_ctd,
         "bin": _cmd_bin,
         "combo": _cmd_combo,
+        "sections": _cmd_sections,
     }
 
     handler = dispatch.get(args.command)
