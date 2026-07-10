@@ -115,9 +115,7 @@ class TestComputeSlowStratification:
         assert np.all(N2[np.isfinite(N2)] > 0)  # stable column
         # Outside the (single, full-span) cast nothing is masked here, but a
         # short cast yields all-NaN for that cast rather than raising.
-        N2b, _ = _compute_slow_stratification(
-            pf, [(0, 2)], "JAC_T", "JAC_C", 2.0
-        )
+        N2b, _ = _compute_slow_stratification(pf, [(0, 2)], "JAC_T", "JAC_C", 2.0)
         assert np.all(np.isnan(N2b[0:3]))
 
     def test_returns_none_without_pressure(self):
@@ -163,9 +161,7 @@ class TestAttachWindowStratification:
             {"epsilonMean": ("time", [1e-9, 1e-9, 1e-9])},
             coords={"t": ("time", np.array([25.0, 50.0, 75.0]))},
         )
-        _attach_window_stratification(
-            ds, prof, 5.0, "JAC_T", "JAC_C", "prof.nc", "dissipation"
-        )
+        _attach_window_stratification(ds, prof, 5.0, "JAC_T", "JAC_C", "prof.nc", "dissipation")
         assert "N2" in ds and "dTdz" in ds
         assert ds["N2"].dims == ("time",)
         assert np.isfinite(ds["N2"].values).all()
@@ -179,9 +175,7 @@ class TestAttachWindowStratification:
         bad = tmp_path / "empty.nc"
         bad.touch()
         ds = xr.Dataset(coords={"t": ("time", np.array([1.0]))})
-        _attach_window_stratification(
-            ds, bad, 5.0, "JAC_T", "JAC_C", "empty.nc", "dissipation"
-        )
+        _attach_window_stratification(ds, bad, 5.0, "JAC_T", "JAC_C", "empty.nc", "dissipation")
         assert "N2" not in ds  # unreadable profile -> silently skipped
 
 
@@ -299,8 +293,13 @@ class TestUpstreamFor:
         # No 'stratification': N2/dTdz are profile-only and not on the CTD
         # product, so stratification.* must not version the CTD output.
         assert set(self._sections("ctd")) == {
-            "files", "gps", "hotel", "speed", "qc",
-            "ct", "profiles",
+            "files",
+            "gps",
+            "hotel",
+            "speed",
+            "qc",
+            "ct",
+            "profiles",
         }
 
     def test_profiles_binned_includes_profiles(self):
@@ -308,9 +307,7 @@ class TestUpstreamFor:
 
     def test_diss_binned_includes_epsilon_and_profiles(self):
         # was missing profiles before _upstream_for refactor
-        assert {"epsilon", "profiles", "instruments"}.issubset(
-            set(self._sections("diss_binned"))
-        )
+        assert {"epsilon", "profiles", "instruments"}.issubset(set(self._sections("diss_binned")))
 
     def test_chi_binned_includes_full_chain(self):
         # was missing epsilon and profiles before _upstream_for refactor
@@ -612,8 +609,7 @@ class TestProcessFile:
         mock_get_prof.assert_called()
         kwargs = mock_get_prof.call_args.kwargs
         assert kwargs["direction"] == "glide", (
-            f"slocum_glider 'auto' should resolve to 'glide', "
-            f"got {kwargs['direction']!r}"
+            f"slocum_glider 'auto' should resolve to 'glide', got {kwargs['direction']!r}"
         )
 
     @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
@@ -1186,8 +1182,8 @@ class TestApplyFomCut:
         #   probe 0 bad at segs 2, 3.
         #   probe 1 bad at seg 3.
         fom = np.array(
-            [[0.5, 1.0, 5.0, 10.0, 0.8],
-             [0.5, 0.5, 0.5, 50.0, 0.5]], dtype=np.float64,
+            [[0.5, 1.0, 5.0, 10.0, 0.8], [0.5, 0.5, 0.5, 50.0, 0.5]],
+            dtype=np.float64,
         )
         epsilon = np.full_like(fom, 1e-9)
         return xr.Dataset(
@@ -1249,7 +1245,8 @@ class TestApplyFomCut:
         from odas_tpw.perturb.pipeline import _apply_fom_cut
 
         fom = np.array(
-            [[0.5, 50.0], [0.5, 0.5]], dtype=np.float64,
+            [[0.5, 50.0], [0.5, 0.5]],
+            dtype=np.float64,
         )
         chi = np.full_like(fom, 1e-9)
         ds = xr.Dataset(
@@ -1328,10 +1325,12 @@ class TestAdjustProfileBounds:
         n_fast = n_slow * ratio
         # Triangle profile: 0 -> max_depth -> 0
         half = n_slow // 2
-        P = np.concatenate([
-            np.linspace(0.0, max_depth, half),
-            np.linspace(max_depth, 0.0, n_slow - half),
-        ])
+        P = np.concatenate(
+            [
+                np.linspace(0.0, max_depth, half),
+                np.linspace(max_depth, 0.0, n_slow - half),
+            ]
+        )
         t_slow = np.arange(n_slow) / fs_slow
         t_fast = np.arange(n_fast) / fs_fast
 
@@ -1798,9 +1797,12 @@ class TestAddMixingQuantities:
             coords={"t": ("time", win_t, {"units": units})},
             attrs={"diss_length": 2048, "fs_fast": 512.0},
         )
+        # Distinct per-window epsilon on a slightly offset grid, so a wrong
+        # pairing (off-by-one, reversed, verbatim copy) is detectable.
+        eps_vals = 1e-9 * (1.0 + np.arange(len(win_t)))
         diss_ds = xr.Dataset(
-            {"epsilonMean": (["time"], np.full(len(win_t), 1e-8))},
-            coords={"t": ("time", win_t, {"units": units})},
+            {"epsilonMean": (["time"], eps_vals)},
+            coords={"t": ("time", win_t + 0.25, {"units": units})},
         )
         return chi_ds, diss_ds, prof_path
 
@@ -1809,9 +1811,14 @@ class TestAddMixingQuantities:
 
         chi_ds, diss_ds, prof_path = self._make_inputs(tmp_path)
         out = _add_mixing_quantities(chi_ds, diss_ds, prof_path, file_label="t")
-        for v in ("N2", "dTdz", "K_T", "Gamma", "K_rho"):
+        for v in ("N2", "dTdz", "K_T", "Gamma", "K_rho", "epsilon_paired"):
             assert v in out
             assert np.all(np.isfinite(out[v].values))
+        # epsilon_paired is the exact epsilon that entered Gamma: each chi
+        # window pairs with its nearest (0.25-s offset) diss window, whose
+        # values are distinct per window — a wrong pairing cannot pass.
+        np.testing.assert_array_equal(out["epsilon_paired"].values, diss_ds["epsilonMean"].values)
+        assert out["epsilon_paired"].attrs["units"] == "W/kg"
         np.testing.assert_allclose(out["dTdz"].values, -0.05, rtol=1e-2)
         assert "practical salinity from JAC_C" in out["N2"].attrs["comment"]
         assert np.all(out["N2"].values > 0)
@@ -1840,6 +1847,7 @@ class TestAddMixingQuantities:
         empty = xr.Dataset()
         out = _add_mixing_quantities(chi_ds, empty, prof_path, file_label="t")
         assert "Gamma" not in out
+        assert "epsilon_paired" not in out
 
     def test_chi_qc_drop_nans_chi_derived_mixing(self, tmp_path):
         """Audit r1-4: a QC-dropped chi segment must NaN the chi-derived mixing
@@ -1863,8 +1871,12 @@ class TestAddMixingQuantities:
 
         # Pipeline order: QC the chi vars, THEN derive mixing quantities.
         apply_qc_to_dataset(
-            chi_ds, pf, ["q_drop_chi"], 2.0,
-            flag_var_name="qc_drop_chi", value_vars=["chiMean"],
+            chi_ds,
+            pf,
+            ["q_drop_chi"],
+            2.0,
+            flag_var_name="qc_drop_chi",
+            value_vars=["chiMean"],
         )
         assert np.isnan(chi_ds["chiMean"].values[flagged])
         out = _add_mixing_quantities(chi_ds, diss_ds, prof_path, file_label="t")
@@ -1921,9 +1933,9 @@ class _FakePF:
         self.t_slow = np.arange(n, dtype=float)
         self.start_time = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
         self.channels = {
-            "JAC_T": np.full(n, 15.0),          # in-situ temperature [°C]
-            "JAC_C": np.full(n, 42.0),          # conductivity [mS/cm] ~ oceanic
-            "P": np.linspace(0.0, 50.0, n),     # pressure [dbar]
+            "JAC_T": np.full(n, 15.0),  # in-situ temperature [°C]
+            "JAC_C": np.full(n, 42.0),  # conductivity [mS/cm] ~ oceanic
+            "P": np.linspace(0.0, 50.0, n),  # pressure [dbar]
         }
         for name in drop:
             del self.channels[name]
@@ -1945,12 +1957,12 @@ class TestInjectSeawaterProperties:
         assert names == ("SP", "SA", "CT", "sigma0", "rho")
         for name in names:
             assert name in pf.channels
-            assert len(pf.channels[name]) == len(pf.t_slow)   # slow-length
+            assert len(pf.channels[name]) == len(pf.t_slow)  # slow-length
             assert np.all(np.isfinite(pf.channels[name]))
             assert pf.channel_info[name]["type"] == "derived"
         # C~42 mS/cm at 15 °C, near-surface -> plausibly oceanic salinity.
         assert 20.0 < float(np.nanmean(pf.channels["SP"])) < 40.0
-        assert pf.channel_info["SP"]["units"] == "1"          # CF dimensionless
+        assert pf.channel_info["SP"]["units"] == "1"  # CF dimensionless
         assert pf.channel_info["CT"]["units"] == "degree_Celsius"
 
     def test_noop_when_conductivity_missing(self):

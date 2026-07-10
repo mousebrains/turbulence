@@ -16,7 +16,7 @@ perturb-plot <subcommand> [options]
 | `epsilon`  | Depth-vs-x sections of binned epsilon (`epsilonMean`) from `diss_combo_NN`. |
 | `chi`      | Depth-vs-x sections of binned chi (`chiMean`) from `chi_combo_NN`. |
 | `mixing`   | Depth-vs-x sections of binned mixing (`K_T`/`Gamma`/`K_rho`) from `chi_combo_NN`. |
-| `gamma-scaling` | Mixing-efficiency scaling scatter (Lewin et al. 2025 Fig. 5): per-window Γ vs `R_OT`/`Re_b`/`Ri_g` from `chi_NN`+`diss_NN`+`profiles_NN` (+ `--adcp`), plus a Thorpe-route comparison. |
+| `gamma-scaling` | Mixing-efficiency scaling scatter (Lewin et al. 2025 Fig. 5): per-window Γ vs `R_OT`/`Re_b`/`Ri_g` from `chi_NN`+`profiles_NN` (+ `--adcp`; `diss_NN` for QC/legacy re-pairing), plus a Thorpe-route comparison. |
 
 `profiles`, `epsilon`, `chi`, and `mixing` share one engine (they differ only in
 which `(bin, profile)` product and default variables they read), so every
@@ -311,11 +311,15 @@ each —
 | c | `Ri_g = N² / S²` (gradient Richardson) | +1 | `--adcp` |
 
 Unlike the other subcommands this reads the **per-window** products
-(`chi_NN` + `diss_NN` + `profiles_NN`), not the binned combos: each point is
-one dissipation window (~1 s). Γ is **recomputed from unmasked components**
-(`chiMean`, nearest-window `epsilonMean`, `N2`, `dTdz`) rather than read from
-the stored `Gamma`, whose plotting-oriented ceilings (Γ ≤ 5, `|dTdz|` floor)
-would clip exactly the distribution tails this figure exists to show. The
+(`chi_NN` + `profiles_NN`, plus `diss_NN` when needed), not the binned combos:
+each point is one dissipation window (~1 s). Γ is **recomputed from unmasked
+components** (`chiMean`, the paired `epsilonMean`, `N2`, `dTdz`) rather than
+read from the stored `Gamma`, whose plotting-oriented ceilings (Γ ≤ 5,
+`|dTdz|` floor) would clip exactly the distribution tails this figure exists
+to show. Chi products that carry `epsilon_paired` (the pipeline stores the
+exact ε that entered `Gamma`) are consumed directly — the figure then uses
+the *same* pairing as the products, and `diss_NN` is only consulted for its
+`qc_drop_epsilon` flags (older chi products fall back to re-pairing). The
 default QC is the paper's: `Re_b > 20`, Cox number `> 50`, the upper 10 dbar
 dropped, plus the pipeline's `qc_drop_*` flags.
 
