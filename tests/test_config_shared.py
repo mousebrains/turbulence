@@ -114,7 +114,14 @@ class TestValidateConfig:
 class TestMergeConfig:
     def test_empty_inputs(self, config_mod):
         m = config_mod.merge_config("epsilon")
-        assert m["fft_length"] == config_mod.DEFAULTS["epsilon"]["fft_length"]
+        default_fft = config_mod.DEFAULTS["epsilon"]["fft_length"]
+        if default_fft is None:
+            # duration-first defaults (perturb): the sample key's None default
+            # is dropped from the merged dict; the duration key governs.
+            assert "fft_length" not in m
+            assert m["fft_sec"] == config_mod.DEFAULTS["epsilon"]["fft_sec"]
+        else:
+            assert m["fft_length"] == default_fft
         assert "diss_length" not in m
 
     def test_config_overrides_default(self, config_mod):

@@ -627,7 +627,7 @@ Valid for 0 <= T <= 20 degrees C. Typical values: ~1.3e-6 m^2/s at 10 degrees C,
 | `isr_margin` | 1.6 | Empirical margin on the method-switch threshold (Section 7) |
 | `X_ISR` | 0.01 | ISR fit upper limit as fraction of `k_s` (Section 8) |
 
-These are the `rsi-tpw` defaults ([`rsi/dissipation.py`](../src/odas_tpw/rsi/dissipation.py), [`rsi/config.py`](../src/odas_tpw/rsi/config.py)). The `perturb` campaign pipeline uses different defaults — `fft_length = 256` for epsilon (and 512 for chi), see [`perturb/config.py`](../src/odas_tpw/perturb/config.py).
+These are the `rsi-tpw` defaults ([`rsi/dissipation.py`](../src/odas_tpw/rsi/dissipation.py), [`rsi/config.py`](../src/odas_tpw/rsi/config.py)). The `perturb` campaign pipeline uses different, duration-based defaults — `fft_sec = 1.0` for both epsilon and chi, resolved to samples at each instrument's sampling rate (512 samples on a 512-Hz VMP-250), see [`perturb/config.py`](../src/odas_tpw/perturb/config.py) and [perturb/dissipation_length.md](perturb/dissipation_length.md).
 
 ### Macoun-Lueck correction
 

@@ -23,6 +23,7 @@ from odas_tpw.perturb.config import (
     expand_config_dir,
     merge_config,
     resolve_output_dir,
+    resolve_window_config,
 )
 from odas_tpw.perturb.config import (
     upstream_for as _upstream_for,
@@ -1455,11 +1456,18 @@ def process_file(
     # fft_length fall to _compute_epsilon's own 1024 default (mis-sizing windows
     # and making the diss-dir provenance hash, which IS merge_config-based, lie).
     eps_cfg = merge_config("epsilon", config.get("epsilon"))
+    # Durations -> integer sample counts at THIS file's sampling rate, so one
+    # duration-based config serves instruments at 512 Hz and 1-2 kHz alike.
+    eps_cfg = resolve_window_config(eps_cfg, float(pf.fs_fast), section="epsilon")
     inst_lookup = instrument_key if instrument_key is not None else p_path.parent.name
     instrument_cfg = config.get("instruments", {}).get(inst_lookup, {})
     excluded_probes = list(instrument_cfg.get("exclude_shear_probes", []))
     chi_cfg = merge_config("chi", config.get("chi"))
     chi_enabled = bool(chi_cfg.get("enable", False)) and "chi" in output_dirs
+    if chi_enabled:
+        # Only resolve windows for a stage that will run: a mis-set chi
+        # window in a chi-disabled config must not abort epsilon processing.
+        chi_cfg = resolve_window_config(chi_cfg, float(pf.fs_fast), section="chi")
 
     # Per-profile channels cache: filled here, consumed by the chi loop
     # below.  Holds ~1 MB / profile of fast-time numpy arrays — bounded by
@@ -1478,12 +1486,11 @@ def process_file(
     strat_enabled = bool(strat_cfg.get("enable", True))
     ct_T_name = ct_cfg.get("T_name", "JAC_T")
     ct_C_name = ct_cfg.get("C_name", "JAC_C")
-    diss_length_samples = float(eps_cfg.get("diss_length") or 4 * eps_cfg.get("fft_length", 256))
-    diss_length_seconds = diss_length_samples / float(pf.fs_fast)
-    chi_diss_length_samples = float(
-        chi_cfg.get("diss_length") or 4 * chi_cfg.get("fft_length", 512)
+    # resolve_window_config guarantees concrete integer diss_length values.
+    diss_length_seconds = float(eps_cfg["diss_length"]) / float(pf.fs_fast)
+    chi_diss_length_seconds = (
+        float(chi_cfg["diss_length"]) / float(pf.fs_fast) if chi_enabled else None
     )
-    chi_diss_length_seconds = chi_diss_length_samples / float(pf.fs_fast)
 
     if "diss" in output_dirs and result["profiles"]:
         with stage_log(output_dirs.get("diss"), log_basename):
@@ -1562,6 +1569,8 @@ def process_file(
 
     # Per-profile chi (if enabled)
     if chi_enabled and result["diss"]:
+        # chi_enabled guarantees the chi windows were resolved above.
+        assert chi_diss_length_seconds is not None
         try:
             from odas_tpw.rsi.chi_io import _compute_chi
         except ImportError:

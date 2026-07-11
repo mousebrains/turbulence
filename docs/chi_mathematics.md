@@ -617,7 +617,7 @@ The profile is divided into overlapping windows of length `diss_length` samples 
 | `fit_method` | `iterative` | Method 2 fitting algorithm (mle or iterative) |
 | `goodman` | `True` | Goodman coherent noise removal using accelerometers |
 
-These are the `rsi-tpw` defaults ([`rsi/chi_io.py`](../src/odas_tpw/rsi/chi_io.py), [`rsi/config.py`](../src/odas_tpw/rsi/config.py)). The `perturb` campaign pipeline uses different defaults — `fft_length = 512` for chi (and 256 for epsilon), see [`perturb/config.py`](../src/odas_tpw/perturb/config.py).
+These are the `rsi-tpw` defaults ([`rsi/chi_io.py`](../src/odas_tpw/rsi/chi_io.py), [`rsi/config.py`](../src/odas_tpw/rsi/config.py)). The `perturb` campaign pipeline uses different, duration-based defaults — `fft_sec = 1.0` for both chi and epsilon, resolved to samples at each instrument's sampling rate (512 samples on a 512-Hz VMP-250; numerically identical to the old 512-sample chi default at that rate), see [`perturb/config.py`](../src/odas_tpw/perturb/config.py) and [perturb/dissipation_length.md](perturb/dissipation_length.md).
 
 
 ## 12. References

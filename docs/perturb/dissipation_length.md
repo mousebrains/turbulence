@@ -142,19 +142,37 @@ configured in **spatial units** and converted per-window by measured speed
 (the Lueck statistics are formulated spatially; ATOMIX already converts by
 per-spectrum mean speed).
 
+## Fall-speed profiles interact with window units
+
+Tethered VMPs decelerate with depth (body compression is less than the
+potential-density increase, and the ~0.98-specific-gravity line
+increasingly retards the fall). This is a hardware win exactly where ε is
+low: at fixed *spatial* spans, the slow deep fall provides more raw
+samples per meter (despiking and Goodman statistics), maps the Batchelor
+rolloff into the FP07's honest response band (k_B·W ≈ 35 Hz at 1 m/s but
+~21 Hz at 0.6 m/s for ε = 1e-10 — χ improves with depth), and moves the
+whole resolvable shear band to low, quiet frequencies. **But the win is
+conditional on spatial-unit windows**: with `fft_length`/`diss_length`
+fixed in samples, deceleration *shrinks* the spatial spans at depth —
+raising k_l and lowering L̂ precisely where both need to grow. The
+near-neutral line keeps the profiler quasi-free, so the body-length
+ceiling applies as stated.
+
 ## Recommendations for this pipeline
 
-1. **Now (config practice)**: for VMP-250 work make `fft_length: 512`
-   (1 s, at the 1-m body ceiling) with `diss_length: 2048` (4 s) the
-   default — same statistics as 4-s/0.5-s, strictly better spectral
-   coverage. Reserve 2-s/0.5-s for cases needing its vertical resolution
-   in energetic water (ε ≳ 1e-8, where all configurations agree), and
-   treat historical 2-s/0.5-s ε below 1e-9 as biased low (up to ×1.8 at
-   1e-10). Multiple configurations coexist under one `output_root`
-   (config signatures).
-2. **Near term (small feature)**: allow `fft_length` / `diss_length` in
-   meters plus an optional depth-banded schedule in the config — static per
-   band, no algorithmic risk, covers the MR use case's first order.
+1. **Now (shipped)**: the pipeline default is `fft_sec: 1.0` with
+   `diss_sec: null` (= 4 s), specified as **durations** and converted per
+   instrument via its sampling rate — so a 512-Hz VMP-250 gets 512-sample
+   FFTs and a 2-kHz coastal unit gets 2048 automatically, and the 1-s
+   choice sits at the VMP-250's 1-m body ceiling. Explicit sample keys
+   (`fft_length` etc.) remain as expert overrides and win (legacy configs
+   keep bit-identical signatures). Treat historical 2-s/0.5-s ε below
+   1e-9 as biased low (up to ×1.8 at 1e-10). Multiple configurations
+   coexist under one `output_root` (config signatures).
+2. **Near term (small feature)**: spatial-unit windows (meters, converted
+   per window by measured speed — the remaining step beyond durations,
+   needed for decelerating VMPs and slow MR platforms) plus an optional
+   depth-banded schedule — static per band, no algorithmic risk.
 3. **Longer term (prototype)**: two-pass ε-adaptive lengths per the
    max-rule above, with the L_T fixed-point (grow until edge-truncation
    clears) supplying the eddy term in pass 1. Validate against the twin-run

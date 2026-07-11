@@ -11,8 +11,11 @@ ARCTERX/*
 # Rockland ODAS MATLAB reference (third-party)
 odas/
 
-# Reference papers (large PDFs)
-papers/
+# Reference papers (large PDFs; the README indexes ARE tracked — an ignored
+# DIRECTORY is never descended into, hence the ** + unignore pattern)
+papers/**
+!papers/**/
+!papers/**/README.md
 
 # macOS
 .DS_Store

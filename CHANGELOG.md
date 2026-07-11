@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **perturb epsilon/chi windows are now duration-based** (`fft_sec`,
+  `diss_sec`, `overlap_sec`), resolved to sample counts at each
+  instrument's sampling rate, and the **epsilon FFT default changed from
+  256 samples to 1 second** (512 samples on a 512-Hz VMP-250; 1-2 kHz
+  coastal units scale automatically) per Lueck et al. (2024) best
+  practices — see docs/perturb/dissipation_length.md. Sample-count keys
+  (`fft_length`/`diss_length`/`overlap`) remain as expert overrides that
+  win when set; legacy configs pinning them keep byte-identical stage
+  signatures and resolve their existing output directories unchanged.
+
 ### Fixed
 - CT alignment (`ct_align`) and the despike pass-count flag: conductivity
   is now shifted with edge-hold instead of `np.roll` (which wrapped one
