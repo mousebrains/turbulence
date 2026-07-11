@@ -26,6 +26,16 @@ free profiler because the profiler will be advected by eddies comparable to
 and larger than the profiler" (Lueck et al. 2024). So k_l cannot honestly go
 below ~1/(profiler length) no matter how quiet the water.
 
+For the **VMP-250 (body length ≈ 1 m)** the ceiling means k_l ≥ ~1 cpm —
+the low-ε tier above is unreachable, and the platform's full-fidelity floor
+is where the spectral peak stays resolvable: **ε ≳ 1–3e-10 W/kg** (below
+that, estimates rest on the viscous rolloff alone). The practical VMP-250
+optimum is `fft_length: 512` (1 s ≈ 0.75 m at fall speed, just under the
+ceiling); the historical 256-sample FFT leaves a factor of ~2 of legitimate
+low-wavenumber coverage unused. A MicroRider inherits its *host's* length
+(~2 m on a glider), so k_l ≈ 0.5 cpm — the tier the deep ocean needs — is
+reachable there.
+
 **2. Statistical reliability — dissipation length (also ε-dependent).**
 Lueck (2022a, Eq. 11): `σ²_lnε = 5.5/(1+(L̂_f/4)^{7/9})` with
 `L̂_f = (l_ε/L_K)·V_f^{3/4}` — the window length **in Kolmogorov lengths**
@@ -62,13 +72,17 @@ and 2048 (4 s ≈ 3 m), `fft_length` = 256 (0.5 s) in both:
 - **The Lueck model verifies quantitatively**: doubling the window reduced
   the median per-window `epsilonLnSigma` by ×0.76 in every ε decade —
   exactly the predicted `(L̂)^{-7/18}` scaling.
-- **A low-ε bias appears when the FFT is too short**: pairing the runs
-  window-by-window, the 2-s/0.5-s-FFT estimates run **1.36× lower** than
-  the 4-s estimates for ε ∈ [1e-10, 1e-9], converging to parity above 1e-8.
-  At those ε the 0.5-s FFT (k_l ≈ 2.7 cpm at 0.75 m/s) no longer resolves
-  the spectral peak (k_peak ≈ 1.3 cpm at 1e-10) — the low-wavenumber
-  variance is simply missing. This is the k_l tier table, observed in our
-  own data.
+- **A low-ε window-length bias**: pairing the runs window-by-window, the
+  2-s estimates run **1.36× lower** than the 4-s estimates for
+  ε ∈ [1e-10, 1e-9], converging to parity above 1e-8. Both runs share the
+  same 0.5-s FFT, so this is NOT the unresolved-peak effect — it is a
+  dissipation-window effect at fixed FFT: lognormal patch-averaging
+  (longer windows arithmetic-mean across patches and read higher where
+  turbulence is intermittent) and/or Goodman coherency dof (N_f = 7 vs 15;
+  low dof over-removes at low signal-to-vibration ratio, biasing the short
+  window low). A third processing (`perturb.4f1.yaml`: 4-s windows, 1-s
+  FFT) isolates the FFT-span effect; note the k_l tier requirement itself
+  rests on Lueck et al. (2024), not yet on our own data.
 - **Overturn containment**: at 2 s, ~80% of mixed-layer windows had
   Thorpe overturns clipped by the window (`perturb-plot gamma-scaling`
   edge-truncation diagnostics); 4 s roughly halves the cap deficit.
