@@ -177,7 +177,7 @@ Note that perturb and `rsi-tpw` use different spectral defaults (perturb: `fft_l
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `fft_length` | int | `256` | FFT segment length [samples] |
-| `diss_length` | int | `null` | Dissipation window [samples] (null = 4 x fft_length) |
+| `diss_length` | int | `null` | Dissipation window [samples] (null = 4 x fft_length). See [dissipation_length.md](dissipation_length.md) for how to choose these (the optimum is ε-dependent) |
 | `overlap` | int | `null` | Window overlap [samples] (null = diss_length // 2) |
 | `goodman` | bool | `true` | Enable Goodman coherent noise removal |
 | `f_AA` | float | `98.0` | Anti-aliasing filter cutoff [Hz] |
