@@ -172,12 +172,15 @@ Controls removal of initial surface instabilities from profiles.
 
 Controls computation of epsilon from shear probe spectra.
 
-Note that perturb and `rsi-tpw` use different spectral defaults (perturb: `fft_length` 256 for epsilon and 512 for chi; `rsi-tpw`: 1024 with a 4096-sample dissipation window), so their outputs differ in vertical resolution and noise behavior.
+Note that perturb and `rsi-tpw` use different spectral defaults (perturb: `fft_sec` 1.0 — one second, resolved per instrument sampling rate — for both epsilon and chi; `rsi-tpw`: 1024 samples with a 4096-sample dissipation window), so their outputs can differ in vertical resolution and noise behavior.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `fft_length` | int | `256` | FFT segment length [samples] |
-| `diss_length` | int | `null` | Dissipation window [samples] (null = 4 x fft_length) |
+| `fft_sec` | float | `1.0` | FFT segment duration [s], converted per instrument via its sampling rate (512 Hz VMP-250 → 512 samples; 1–2 kHz coastal units scale automatically) |
+| `diss_sec` | float | `null` | Dissipation window [s] (null = 4 × fft_sec). See [dissipation_length.md](dissipation_length.md) for how to choose these (the optimum is ε-dependent) |
+| `overlap_sec` | float | `null` | Window overlap [s] (null = half the window) |
+| `fft_length` | int | `null` | EXPERT override [samples]; wins over `fft_sec` (legacy configs keep bit-identical behavior and signatures) |
+| `diss_length` | int | `null` | EXPERT override [samples]; wins over `diss_sec` (null = 4 x fft) |
 | `overlap` | int | `null` | Window overlap [samples] (null = diss_length // 2) |
 | `goodman` | bool | `true` | Enable Goodman coherent noise removal |
 | `f_AA` | float | `98.0` | Anti-aliasing filter cutoff [Hz] |
@@ -202,8 +205,11 @@ Controls computation of chi from FP07 thermistor spectra.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enable` | bool | `false` | Enable chi computation |
-| `fft_length` | int | `512` | FFT segment length [samples] |
-| `diss_length` | int | `null` | Dissipation window [samples] (null = 4 x fft_length) |
+| `fft_sec` | float | `1.0` | FFT segment duration [s] (same duration-first interface as `[epsilon]`) |
+| `diss_sec` | float | `null` | Dissipation window [s] (null = 4 x fft_sec) |
+| `overlap_sec` | float | `null` | Window overlap [s] (null = half the window) |
+| `fft_length` | int | `null` | EXPERT override [samples]; wins over `fft_sec` |
+| `diss_length` | int | `null` | EXPERT override [samples]; wins over `diss_sec` (null = 4 x fft) |
 | `overlap` | int | `null` | Window overlap [samples] (null = diss_length // 2) |
 | `fp07_model` | string | `"single_pole"` | FP07 transfer function: `single_pole` or `double_pole` |
 | `goodman` | bool | `true` | Enable Goodman coherent noise removal |

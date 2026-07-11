@@ -45,7 +45,7 @@ DEFAULTS: dict[str, dict] = {
         "lat": None,
         "lon": None,
         "file": None,
-        "time_col": None,        # null = source default ("t" CSV, "time" NetCDF)
+        "time_col": None,  # null = source default ("t" CSV, "time" NetCDF)
         "lat_col": "lat",
         "lon_col": "lon",
         "max_time_diff": 60,
@@ -96,7 +96,16 @@ DEFAULTS: dict[str, dict] = {
         "noise_factor": 2.0,
     },
     "epsilon": {
-        "fft_length": 256,
+        # Durations (seconds) are the primary interface — instruments sample
+        # at different rates (standard VMP-250: 512 Hz; coastal/high-energy
+        # units: 1-2 kHz), while the physical constraints on the windows are
+        # durations x speed (Lueck et al. 2024, doi:10.3389/fmars.2024.1334327).
+        # Sample-count keys (fft_length/diss_length/overlap), when set, are an
+        # exact-control override and win over the duration keys.
+        "fft_sec": 1.0,
+        "diss_sec": None,  # None = 4 x fft
+        "overlap_sec": None,  # None = half the dissipation window
+        "fft_length": None,
         "diss_length": None,
         "overlap": None,
         "goodman": True,
@@ -110,37 +119,41 @@ DEFAULTS: dict[str, dict] = {
         "T_source": None,
         "T1_norm": 1.0,
         "T2_norm": 1.0,
-        "fom_max": None,         # null = no FOM cut. e.g. 2.0 NaNs each
-                                 # per-probe (e_N, epsilon[probe,:]) cell
-                                 # whose figure-of-merit fom[probe,seg]
-                                 # >= fom_max BEFORE mk_epsilon_mean, so
-                                 # bad probes drop out of the geomean
-                                 # individually.
+        "fom_max": None,  # null = no FOM cut. e.g. 2.0 NaNs each
+        # per-probe (e_N, epsilon[probe,:]) cell
+        # whose figure-of-merit fom[probe,seg]
+        # >= fom_max BEFORE mk_epsilon_mean, so
+        # bad probes drop out of the geomean
+        # individually.
         "diagnostics": False,
     },
     "chi": {
         "enable": False,
-        "fft_length": 512,
+        # Same duration-first interface as [epsilon] above.
+        "fft_sec": 1.0,
+        "diss_sec": None,
+        "overlap_sec": None,
+        "fft_length": None,
         "diss_length": None,
         "overlap": None,
         "fp07_model": "single_pole",
         "goodman": True,
         "f_AA": 98.0,
-        "use_epsilon": True,     # Method 1 (chi from shear epsilon).
-                                 # Set false for Method 2 spectral fit -- a
-                                 # MR on a vibrating glider has unreliable
-                                 # epsilon and should not seed chi from it.
+        "use_epsilon": True,  # Method 1 (chi from shear epsilon).
+        # Set false for Method 2 spectral fit -- a
+        # MR on a vibrating glider has unreliable
+        # epsilon and should not seed chi from it.
         "fit_method": "iterative",  # Only used when use_epsilon=False
         "spectrum_model": "kraichnan",
         "salinity": None,
-        "mixing": True,          # Derived mixing quantities (N2, dTdz,
-                                 # K_T, Gamma, K_rho) on the chi grid,
-                                 # with salinity from the profile's own
-                                 # C/T/P (TEOS-10).
+        "mixing": True,  # Derived mixing quantities (N2, dTdz,
+        # K_T, Gamma, K_rho) on the chi grid,
+        # with salinity from the profile's own
+        # C/T/P (TEOS-10).
         "chi_minimum": 1.0e-13,
-        "fom_max": None,         # null = no FOM cut. Same per-probe
-                                 # mechanism as epsilon.fom_max but
-                                 # operates on chi NCs.
+        "fom_max": None,  # null = no FOM cut. Same per-probe
+        # mechanism as epsilon.fom_max but
+        # operates on chi NCs.
         "diagnostics": False,
     },
     "ctd": {
@@ -153,12 +166,12 @@ DEFAULTS: dict[str, dict] = {
         "diagnostics": False,
     },
     "speed": {
-        "method": "pressure",   # pressure | em | flight | constant
-        "value": None,           # m/s, only for method="constant"
-        "aoa_deg": 3.0,          # angle of attack, only for method="flight"
-        "min_pitch_deg": 5.0,    # flight: skip |pitch+aoa| below this (deg)
-        "speed_cutout": 0.05,    # m/s floor applied to fast-rate speed
-        "tau": None,             # smoothing time constant; null = vehicle default
+        "method": "pressure",  # pressure | em | flight | constant
+        "value": None,  # m/s, only for method="constant"
+        "aoa_deg": 3.0,  # angle of attack, only for method="flight"
+        "min_pitch_deg": 5.0,  # flight: skip |pitch+aoa| below this (deg)
+        "speed_cutout": 0.05,  # m/s floor applied to fast-rate speed
+        "tau": None,  # smoothing time constant; null = vehicle default
         "amplitude_quantile": [1.0, 99.0],  # for flight pitch-axis auto-pick
     },
     # Per-segment QC gate. Each "_drop_from" entry names a hotel-injected
@@ -170,9 +183,9 @@ DEFAULTS: dict[str, dict] = {
     # NaN'd so default plots and combos exclude them.
     "qc": {
         "enable": True,
-        "drop_action": "nan",     # nan | flag_only
+        "drop_action": "nan",  # nan | flag_only
         "epsilon_drop_from": [],  # e.g. ["q_drop_epsilon"]
-        "chi_drop_from": [],      # e.g. ["q_drop_chi"]
+        "chi_drop_from": [],  # e.g. ["q_drop_chi"]
         # Internal range-check rules. Each entry produces a synthetic
         # uint8 channel and can be referenced by *_drop_from.
         # See odas_tpw.perturb.qc_rules for the per-entry schema.
@@ -245,8 +258,8 @@ DEFAULTS: dict[str, dict] = {
     # CTD product (profile-only; the CTD spans the whole up/down trajectory).
     "stratification": {
         "enable": True,
-        "window": 2.0,           # background vertical window [dbar] for the
-                                 # profile product
+        "window": 2.0,  # background vertical window [dbar] for the
+        # profile product
     },
     "parallel": {
         "jobs": 1,
@@ -331,7 +344,71 @@ def engine_fingerprint() -> str:
     return h.hexdigest()
 
 
-_mgr = ConfigManager(
+_WINDOW_KEY_PAIRS = (
+    ("fft_length", "fft_sec"),
+    ("diss_length", "diss_sec"),
+    ("overlap", "overlap_sec"),
+)
+
+_WINDOW_SECTIONS = ("epsilon", "chi")
+
+
+class _PerturbConfigManager(ConfigManager):
+    """ConfigManager with perturb's window-duration key semantics.
+
+    In [epsilon]/[chi] a duration key (fft_sec/diss_sec/overlap_sec) is
+    dropped from every section VIEW — the canonical form that is hashed
+    into stage-directory signatures, and the resolved config.yaml written
+    into each stage dir — when it is inert: null, or overridden by a
+    non-null sample-count twin. A legacy config that pins fft_length
+    therefore keeps a byte-identical canonical form (and signature) across
+    this feature; only a GOVERNING duration key changes hashes.
+    """
+
+    def _section_view_postprocess(self, section: str, mapping: dict) -> dict:
+        if section in _WINDOW_SECTIONS:
+            for samples_key, sec_key in _WINDOW_KEY_PAIRS:
+                if sec_key in mapping and (
+                    mapping[sec_key] is None or mapping.get(samples_key) is not None
+                ):
+                    del mapping[sec_key]
+        return mapping
+
+    def validate_config(self, config: dict) -> None:
+        """Structural validation plus fs-independent window-duration checks.
+
+        Durations are validated at LOAD time so a sign typo (fft_sec: -1)
+        or an inverted window pair fails before any stage directory is
+        created, rather than aborting mid-run inside per-file processing.
+        """
+        super().validate_config(config)
+        for section in _WINDOW_SECTIONS:
+            params = config.get(section) or {}
+            for _, sec_key in _WINDOW_KEY_PAIRS:
+                val = params.get(sec_key)
+                if val is None:
+                    continue
+                if not isinstance(val, (int, float)) or isinstance(val, bool):
+                    raise ValueError(
+                        f"{section}.{sec_key}: expected a number of seconds, got {val!r}"
+                    )
+                if not (val > 0 and val == val and val != float("inf")):
+                    raise ValueError(
+                        f"{section}.{sec_key}: must be a positive finite "
+                        f"number of seconds, got {val!r}"
+                    )
+            fft_s, diss_s = params.get("fft_sec"), params.get("diss_sec")
+            if (
+                isinstance(fft_s, (int, float))
+                and isinstance(diss_s, (int, float))
+                and diss_s < fft_s
+            ):
+                raise ValueError(
+                    f"{section}: diss_sec ({diss_s}) is shorter than fft_sec ({fft_s})"
+                )
+
+
+_mgr = _PerturbConfigManager(
     DEFAULTS,
     hash_exclude_keys=_HASH_EXCLUDE_KEYS,
     dynamic_key_sections=_DYNAMIC_KEY_SECTIONS,
@@ -343,9 +420,7 @@ def _validate_instruments(instruments: dict) -> None:
     """Validate the inner structure of the dynamic ``instruments`` section."""
     for sn, settings in instruments.items():
         if not isinstance(settings, dict):
-            raise ValueError(
-                f"instruments.{sn}: must be a mapping, got {type(settings).__name__}"
-            )
+            raise ValueError(f"instruments.{sn}: must be a mapping, got {type(settings).__name__}")
         unknown = set(settings) - _INSTRUMENT_VALID_KEYS
         if unknown:
             raise ValueError(
@@ -392,7 +467,7 @@ def expand_config_dir(value: Any, config_dir: str | None) -> Any:
     # Split the remainder on either separator and re-join with the OS separator,
     # so a config's forward-slash paths yield a clean native path on Windows too
     # (a bare os.path.join would leave the internal "/" -> a mixed "C:\x/y").
-    parts = [seg for seg in text[len(CONFIG_DIR_TOKEN):].replace("\\", "/").split("/") if seg]
+    parts = [seg for seg in text[len(CONFIG_DIR_TOKEN) :].replace("\\", "/").split("/") if seg]
     return os.path.join(config_dir, *parts) if parts else config_dir
 
 
@@ -420,10 +495,102 @@ def _validate_config_with_instruments_check(config: dict[str, dict]) -> None:
     _mgr.validate_config(config)
     _validate_instruments(config.get("instruments", {}))
 
+
 # Re-export manager methods as module-level functions
 load_config = _load_config_with_instruments_check
 validate_config = _validate_config_with_instruments_check
-merge_config = _mgr.merge_config
+
+
+def merge_config(
+    section: str,
+    file_values: dict | None = None,
+    cli_overrides: dict | None = None,
+) -> dict:
+    """merge defaults <- file <- CLI, then drop inert window-duration keys.
+
+    In the [epsilon]/[chi] sections an explicit sample-count key
+    (fft_length/diss_length/overlap) wins over its duration twin
+    (fft_sec/diss_sec/overlap_sec); the duration key is then inert and is
+    removed so it cannot perturb the stage-directory signature — a legacy
+    config that pins fft_length keeps a bit-identical signature.
+    """
+    merged = _mgr.merge_config(section, file_values, cli_overrides)
+    if section in ("epsilon", "chi"):
+        for samples_key, sec_key in _WINDOW_KEY_PAIRS:
+            if samples_key in merged and sec_key in merged:
+                del merged[sec_key]
+    return merged
+
+
+def resolve_window_config(cfg: dict, fs: float, *, section: str = "epsilon") -> dict:
+    """Resolve fft/diss/overlap windows to integer sample counts at rate *fs*.
+
+    *cfg* is a merge_config-merged [epsilon] or [chi] section. Duration keys
+    (seconds) are converted via *fs* and rounded to the nearest even sample
+    count; explicit sample keys pass through unchanged (they won at merge
+    time). Defaults: fft = 1 s, dissipation window = 4 x fft, overlap =
+    downstream default (half the window). Returns a copy with concrete
+    integer ``fft_length``/``diss_length`` (and ``overlap`` when
+    determined) and the ``*_sec`` keys removed, suitable for splatting into
+    the compute functions.
+    """
+    if not (fs and fs > 0):
+        raise ValueError(f"{section}: invalid sampling rate {fs!r}")
+
+    import math
+
+    def seconds(key: str) -> float | None:
+        val = cfg.get(key)
+        if val is None:
+            return None
+        try:
+            sec = float(val)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"{section}.{key}: expected a number of seconds, got {val!r}"
+            ) from None
+        if not (math.isfinite(sec) and sec > 0):
+            raise ValueError(
+                f"{section}.{key}: must be a positive finite number of seconds, got {val!r}"
+            )
+        return sec
+
+    def even(x: float) -> int:
+        return max(2, 2 * round(x / 2.0))
+
+    out = {k: v for k, v in cfg.items() if k not in ("fft_sec", "diss_sec", "overlap_sec")}
+    fft = cfg.get("fft_length")
+    if fft is None:
+        fft = even(fs * (seconds("fft_sec") or 1.0))
+    fft = int(fft)
+    diss = cfg.get("diss_length")
+    if diss is None:
+        diss_sec = seconds("diss_sec")
+        diss = even(fs * diss_sec) if diss_sec is not None else 4 * fft
+    diss = int(diss)
+    if diss < fft:
+        raise ValueError(
+            f"{section}: dissipation window ({diss} samples) is shorter than "
+            f"the FFT segment ({fft} samples)"
+        )
+    overlap = cfg.get("overlap")
+    if overlap is None:
+        overlap_sec = seconds("overlap_sec")
+        if overlap_sec is not None:
+            overlap = even(fs * overlap_sec)
+    if overlap is not None:
+        overlap = int(overlap)
+        if overlap >= diss:
+            raise ValueError(
+                f"{section}: overlap ({overlap} samples) must be smaller than "
+                f"the dissipation window ({diss} samples)"
+            )
+        out["overlap"] = overlap
+    out["fft_length"] = fft
+    out["diss_length"] = diss
+    return out
+
+
 canonicalize = _mgr.canonicalize
 compute_hash = _mgr.compute_hash
 resolve_output_dir = _mgr.resolve_output_dir
@@ -554,6 +721,7 @@ def stage_signature(stage: str, config: dict) -> tuple[str, dict, list[tuple[str
     params = merge_config(section, config.get(section))
     return section, params, upstream_for(stage, config)
 
+
 # Also keep _VALID_SECTIONS for any direct references
 _VALID_SECTIONS = _mgr.valid_sections
 
@@ -650,9 +818,30 @@ top_trim:
   noise_factor: 2.0       # std > noise_factor*background == still in prop wash
 
 epsilon:
-  fft_length: 256         # FFT segment length [samples]
-  diss_length: null       # dissipation window [samples] (null = 4 * fft_length)
-  overlap: null           # window overlap [samples] (null = diss_length // 2)
+  # Windows are specified as DURATIONS (seconds) and converted per instrument
+  # via its sampling rate (standard VMP-250: 512 Hz; coastal units: 1-2 kHz),
+  # so one config serves a mixed fleet. Choosing fft_sec is a sandwich
+  # (Lueck et al. 2024, Front. Mar. Sci. 11:1334327,
+  # doi:10.3389/fmars.2024.1334327):
+  #  - MINIMUM: the spectrum must resolve its peak, so the lowest resolved
+  #    wavenumber k_l = 1/(fft_sec*W) must be <= ~0.5 cpm for low epsilon
+  #    (<~1e-9 W/kg), ~1 cpm for moderate (<~1e-7), ~2 cpm for high.
+  #  - MAXIMUM: the FFT span fft_sec*W must not exceed the profiler's body
+  #    length (larger eddies advect the whole body; their shear is
+  #    attenuated, not measured).
+  # For a ~1-m VMP-250 at ~1 m/s the bounds meet at fft_sec = 1.0, and
+  # epsilon <~1e-9 cannot resolve the peak on that platform. Slower/longer
+  # platforms (MicroRider on a glider) shift both bounds; see
+  # docs/perturb/dissipation_length.md.
+  fft_sec: 1.0            # FFT segment duration [s]
+  diss_sec: null          # dissipation window [s] (null = 4 * fft_sec);
+                          # longer windows lower the statistical uncertainty
+                          # (sigma_lnE, Lueck 2022 doi:10.1175/JTECH-D-21-0051.1)
+                          # at the cost of vertical resolution and patch mixing
+  overlap_sec: null       # window overlap [s] (null = half the window)
+  fft_length: null        # EXPERT override [samples]; wins over fft_sec
+  diss_length: null       # EXPERT override [samples]; wins over diss_sec
+  overlap: null           # EXPERT override [samples]; wins over overlap_sec
   goodman: true           # Goodman coherent noise removal
   f_AA: 98.0              # anti-aliasing filter cutoff [Hz]
   f_limit: null           # upper frequency limit [Hz] (null = f_AA)
@@ -680,9 +869,13 @@ epsilon:
 
 chi:
   enable: false           # chi is optional, separate stage after diss
-  fft_length: 512         # FFT segment length [samples]
-  diss_length: null       # dissipation window [samples] (null = 4 * fft_length)
-  overlap: null           # window overlap [samples] (null = diss_length // 2)
+  fft_sec: 1.0            # FFT segment duration [s]; same sandwich
+                          # constraints as epsilon.fft_sec above
+  diss_sec: null          # dissipation window [s] (null = 4 * fft_sec)
+  overlap_sec: null       # window overlap [s] (null = half the window)
+  fft_length: null        # EXPERT override [samples]; wins over fft_sec
+  diss_length: null       # EXPERT override [samples]; wins over diss_sec
+  overlap: null           # EXPERT override [samples]; wins over overlap_sec
   fp07_model: "single_pole"  # FP07 transfer function model
   goodman: true           # Goodman coherent noise removal
   f_AA: 98.0              # anti-aliasing filter cutoff [Hz]

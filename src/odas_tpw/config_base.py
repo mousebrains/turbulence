@@ -50,6 +50,15 @@ def _normalize_value(v):
     return v
 
 
+def _overlay(defaults: dict, params: dict) -> dict:
+    """Defaults overlaid with non-None params (the standard section view)."""
+    out = dict(defaults)
+    for k, v in (params or {}).items():
+        if k in out and v is not None:
+            out[k] = v
+    return out
+
+
 def _normalize_nested(v):
     """Normalize nested JSON-like values for deterministic hashing."""
     if isinstance(v, list):
@@ -146,10 +155,7 @@ class ConfigManager:
         if raw is None:
             return {}
         if not isinstance(raw, Mapping):
-            raise ValueError(
-                f"Config file must be a mapping of sections, got "
-                f"{type(raw).__name__}"
-            )
+            raise ValueError(f"Config file must be a mapping of sections, got {type(raw).__name__}")
         # Each section must itself be a mapping (key: value). A list/scalar
         # section otherwise hits dict(v) with an opaque TypeError (#29).
         config: dict[str, dict] = {}
@@ -231,6 +237,18 @@ class ConfigManager:
 
     # -- Canonicalization and hashing --------------------------------------
 
+    def _section_view_postprocess(self, section: str, mapping: dict) -> dict:
+        """Hook: adjust a defaults-overlaid section view before hashing/writing.
+
+        Called on the overlay produced by :meth:`_canonicalize_section` and
+        :meth:`write_resolved_config`. The base implementation is the
+        identity; subclasses may drop keys that are inert for a given
+        combination of settings (e.g. perturb's window-duration keys when
+        their sample-count twins are pinned) so that signatures and the
+        human-readable resolved config reflect only what governs the output.
+        """
+        return mapping
+
     def _canonicalize_section(self, section: str, params: dict) -> dict:
         """Canonicalize a single section's parameters into a normalized dict."""
         if section in self.dynamic_key_sections:
@@ -254,11 +272,14 @@ class ConfigManager:
         # through untouched, so [1.0, 99.0] and [1, 99] would hash differently
         # -> different output dirs / spurious recompute. Matches the
         # dynamic-key branch above. For scalars the two are identical.
-        return {
-            k: _normalize_nested(v)
-            for k, v in sorted(base.items())
-            if k not in self.hash_exclude_keys
-        }
+        return self._section_view_postprocess(
+            section,
+            {
+                k: _normalize_nested(v)
+                for k, v in sorted(base.items())
+                if k not in self.hash_exclude_keys
+            },
+        )
 
     def canonicalize(
         self,
@@ -382,19 +403,18 @@ class ConfigManager:
                 if up_section in self.dynamic_key_sections:
                     resolved = dict(up_params or {})
                 else:
-                    resolved = dict(self.defaults[up_section])
-                    for k, v in up_params.items():
-                        if k in resolved and v is not None:
-                            resolved[k] = v
+                    resolved = self._section_view_postprocess(
+                        up_section,
+                        _overlay(self.defaults[up_section], up_params),
+                    )
                 data[up_section] = resolved
 
         if section in self.dynamic_key_sections:
             resolved = dict(params or {})
         else:
-            resolved = dict(self.defaults[section])
-            for k, v in params.items():
-                if k in resolved and v is not None:
-                    resolved[k] = v
+            resolved = self._section_view_postprocess(
+                section, _overlay(self.defaults[section], params)
+            )
         data[section] = resolved
 
         out = directory / "config.yaml"

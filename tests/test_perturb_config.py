@@ -132,12 +132,7 @@ class TestInstrumentsSection:
 
     def test_load_yaml_with_instruments(self, tmp_path):
         cfg = tmp_path / "config.yaml"
-        cfg.write_text(
-            "instruments:\n"
-            "  SN465:\n"
-            "    exclude_shear_probes:\n"
-            "      - sh2\n"
-        )
+        cfg.write_text("instruments:\n  SN465:\n    exclude_shear_probes:\n      - sh2\n")
         config = load_config(cfg)
         assert config["instruments"]["SN465"]["exclude_shear_probes"] == ["sh2"]
 
@@ -261,8 +256,141 @@ class TestGenerateTemplatePerturb:
         # signal that enabling it fuses sequential casts into one file.
         p = generate_template(tmp_path / "config.yaml")
         text = p.read_text()
-        merge_line = next(
-            line for line in text.splitlines() if line.strip().startswith("merge:")
-        )
+        merge_line = next(line for line in text.splitlines() if line.strip().startswith("merge:"))
         assert "#" in merge_line, "merge line must carry a warning comment"
         assert "fuses" in merge_line.lower()
+
+
+class TestWindowDurationResolution:
+    """Duration-first window keys (fft_sec/diss_sec/overlap_sec)."""
+
+    def test_default_is_one_second_across_sampling_rates(self):
+        from odas_tpw.perturb.config import merge_config, resolve_window_config
+
+        merged = merge_config("epsilon", None)
+        assert merged["fft_sec"] == 1.0
+        assert "fft_length" not in merged  # duration governs by default
+        for fs, want in ((512.03275, 512), (1024.0, 1024), (2048.0, 2048)):
+            r = resolve_window_config(merged, fs)
+            assert r["fft_length"] == want
+            assert r["diss_length"] == 4 * want  # default diss = 4 x fft
+            assert "fft_sec" not in r  # stripped: safe to splat downstream
+
+    def test_explicit_samples_win_and_keep_signature_stable(self):
+        # A legacy config pinning sample counts must merge to a dict WITHOUT
+        # the inert duration keys (otherwise every legacy stage-directory
+        # signature would drift) and resolve to exactly those counts.
+        from odas_tpw.perturb.config import merge_config, resolve_window_config
+
+        merged = merge_config("epsilon", {"fft_length": 256})
+        assert "fft_sec" not in merged
+        r = resolve_window_config(merged, 512.0)
+        assert (r["fft_length"], r["diss_length"]) == (256, 1024)
+
+    def test_legacy_signature_is_byte_identical_pre_change(self):
+        # THE invariant: signatures hash the CANONICAL section (defaults
+        # overlaid, then the perturb view postprocess), so a legacy config
+        # that pins fft_length must produce a canonical form byte-identical
+        # to a pre-change manager built from the OLD defaults (no *_sec
+        # keys, fft_length 256). Merged-dict equality is NOT sufficient —
+        # canonicalization re-overlays onto DEFAULTS.
+        from odas_tpw.config_base import ConfigManager
+        from odas_tpw.perturb import config as C
+
+        old_eps = {
+            k: v
+            for k, v in C.DEFAULTS["epsilon"].items()
+            if k not in ("fft_sec", "diss_sec", "overlap_sec")
+        }
+        old_eps["fft_length"] = 256
+        old_mgr = ConfigManager(
+            {**C.DEFAULTS, "epsilon": old_eps},
+            hash_exclude_keys=C._HASH_EXCLUDE_KEYS,
+            dynamic_key_sections=C._DYNAMIC_KEY_SECTIONS,
+            engine_fingerprint=C.engine_fingerprint,
+        )
+        user = {"fft_length": 256}
+        assert old_mgr._canonicalize_section("epsilon", user) == C._mgr._canonicalize_section(
+            "epsilon", user
+        )
+        assert old_mgr.compute_hash("epsilon", user) == C._mgr.compute_hash("epsilon", user)
+        # ...while a GOVERNING duration key changes the hash (it must).
+        assert C._mgr.compute_hash("epsilon", {}) != C._mgr.compute_hash("epsilon", user)
+
+    def test_resolved_dict_strips_all_duration_keys(self):
+        # Splat-safety: the resolver output is passed as **kwargs into
+        # _compute_epsilon/_compute_chi; ANY surviving *_sec key would
+        # TypeError there.
+        from odas_tpw.perturb.config import merge_config, resolve_window_config
+
+        merged = merge_config("epsilon", {"fft_sec": 2.0, "diss_sec": 10.0, "overlap_sec": 5.0})
+        r = resolve_window_config(merged, 512.0)
+        assert not {"fft_sec", "diss_sec", "overlap_sec"} & set(r)
+
+    def test_nonpositive_durations_rejected(self):
+        import pytest
+
+        from odas_tpw.perturb.config import merge_config, resolve_window_config
+
+        for bad in (0.0, -3.0, float("nan"), float("inf")):
+            with pytest.raises(ValueError, match="positive finite"):
+                resolve_window_config(merge_config("epsilon", {"fft_sec": bad}), 512.0)
+
+    def test_overlap_must_be_smaller_than_window(self):
+        import pytest
+
+        from odas_tpw.perturb.config import merge_config, resolve_window_config
+
+        for sec in (4.0, 10.0):  # == window and > window
+            with pytest.raises(ValueError, match="overlap"):
+                resolve_window_config(merge_config("epsilon", {"overlap_sec": sec}), 512.0)
+
+    def test_load_time_validation_of_durations(self, tmp_path):
+        # A sign typo must fail at config LOAD, before any processing.
+        import pytest
+
+        from odas_tpw.perturb.config import load_config
+
+        p = tmp_path / "bad.yaml"
+        p.write_text("epsilon:\n  fft_sec: -1.0\n")
+        with pytest.raises(ValueError, match="positive finite"):
+            load_config(p)
+        p.write_text("chi:\n  fft_sec: 2.0\n  diss_sec: 1.0\n")
+        with pytest.raises(ValueError, match="shorter than fft_sec"):
+            load_config(p)
+        p.write_text('epsilon:\n  fft_sec: "abc"\n')
+        with pytest.raises(ValueError, match="expected a number"):
+            load_config(p)
+
+    def test_duration_overrides_and_even_rounding(self):
+        from odas_tpw.perturb.config import merge_config, resolve_window_config
+
+        merged = merge_config("epsilon", {"fft_sec": 2.0, "diss_sec": 10.0, "overlap_sec": 5.0})
+        r = resolve_window_config(merged, 512.0)
+        assert (r["fft_length"], r["diss_length"], r["overlap"]) == (1024, 5120, 2560)
+        # odd sample products round to the nearest even count
+        r2 = resolve_window_config(merge_config("epsilon", {"fft_sec": 0.999}), 512.0)
+        assert r2["fft_length"] % 2 == 0
+
+    def test_diss_shorter_than_fft_rejected(self):
+        import pytest
+
+        from odas_tpw.perturb.config import merge_config, resolve_window_config
+
+        merged = merge_config("epsilon", {"fft_sec": 2.0, "diss_sec": 1.0})
+        with pytest.raises(ValueError, match="shorter than"):
+            resolve_window_config(merged, 512.0)
+
+    def test_bad_sampling_rate_rejected(self):
+        import pytest
+
+        from odas_tpw.perturb.config import merge_config, resolve_window_config
+
+        with pytest.raises(ValueError, match="sampling rate"):
+            resolve_window_config(merge_config("epsilon", None), 0.0)
+
+    def test_chi_section_mirrors_epsilon(self):
+        from odas_tpw.perturb.config import merge_config, resolve_window_config
+
+        r = resolve_window_config(merge_config("chi", None), 1024.0, section="chi")
+        assert (r["fft_length"], r["diss_length"]) == (1024, 4096)
