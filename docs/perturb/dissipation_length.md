@@ -80,9 +80,16 @@ and 2048 (4 s ≈ 3 m), `fft_length` = 256 (0.5 s) in both:
   (longer windows arithmetic-mean across patches and read higher where
   turbulence is intermittent) and/or Goodman coherency dof (N_f = 7 vs 15;
   low dof over-removes at low signal-to-vibration ratio, biasing the short
-  window low). A third processing (`perturb.4f1.yaml`: 4-s windows, 1-s
-  FFT) isolates the FFT-span effect; note the k_l tier requirement itself
-  rests on Lueck et al. (2024), not yet on our own data.
+  window low).
+- **The FFT-span effect, isolated** (`perturb.4f1.yaml`: 4-s windows, 1-s
+  FFT, vs the same windows at 0.5-s FFT): the 1-s-FFT ε reads ×1.31 higher
+  at ε ∈ [1e-10, 1e-9] (MAD 0.17 — tightly systematic), ×1.18 at
+  [1e-9, 1e-8], converging to ×1.02 above 1e-7 — the unresolved-peak
+  signature, now measured in our own data, with `epsilonLnSigma` unchanged
+  (statistics depend on the window, not the FFT). **Combined**, the
+  historical 2-s/0.5-s configuration underestimates ε by up to ×1.8 in the
+  quietest decade; any low-ε science from those products (thermocline
+  Re_b, K_rho, Gamma) inherits that bias.
 - **Overturn containment**: at 2 s, ~80% of mixed-layer windows had
   Thorpe overturns clipped by the window (`perturb-plot gamma-scaling`
   edge-truncation diagnostics); 4 s roughly halves the cap deficit.
@@ -137,11 +144,14 @@ per-spectrum mean speed).
 
 ## Recommendations for this pipeline
 
-1. **Now (config practice)**: keep 2-s/0.5-s for energetic upper-ocean VMP
-   work; prefer 4-s (`perturb.4.yaml` pattern) when the science lives below
-   ~1e-9 W/kg, and treat 2-s ε below 1e-9 as biased low by ~35%. Both
-   window lengths' products can coexist under one `output_root` (config
-   signatures).
+1. **Now (config practice)**: for VMP-250 work make `fft_length: 512`
+   (1 s, at the 1-m body ceiling) with `diss_length: 2048` (4 s) the
+   default — same statistics as 4-s/0.5-s, strictly better spectral
+   coverage. Reserve 2-s/0.5-s for cases needing its vertical resolution
+   in energetic water (ε ≳ 1e-8, where all configurations agree), and
+   treat historical 2-s/0.5-s ε below 1e-9 as biased low (up to ×1.8 at
+   1e-10). Multiple configurations coexist under one `output_root`
+   (config signatures).
 2. **Near term (small feature)**: allow `fft_length` / `diss_length` in
    meters plus an optional depth-banded schedule in the config — static per
    band, no algorithmic risk, covers the MR use case's first order.
