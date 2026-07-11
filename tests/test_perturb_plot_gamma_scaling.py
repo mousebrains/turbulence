@@ -37,27 +37,38 @@ def _times(seconds):
 
 
 def _write_run(
-    root, n_prof=2, with_overturn=True, with_profiles=True, diss_offset=0.0, ot_span=(OT_LO, OT_HI)
+    root,
+    n_prof=2,
+    with_overturn=True,
+    with_profiles=True,
+    diss_offset=0.0,
+    ot_span=(OT_LO, OT_HI),
+    with_eps_paired=False,
+    with_diss=True,
+    eps_paired_value=EPS,
 ):
     """Write a synthetic chi_00/diss_00/profiles_00 run under *root*."""
     for k in range(n_prof):
         name = f"synth_prof{k:03d}.nc"
         wt = np.arange(10.0, 40.0, 1.0)  # window centers [s]
         n = wt.size
+        chi_vars = {
+            "chiMean": ("time", np.full(n, CHI)),
+            "N2": ("time", np.full(n, N2)),
+            "dTdz": ("time", np.full(n, -DTDZ)),
+            "nu": ("time", np.full(n, NU)),
+            "P_mean": ("time", 5.0 + FALL * wt),
+            "T_mean": ("time", np.full(n, 20.0)),
+            "speed": ("time", np.full(n, FALL)),
+            "qc_drop_chi": ("time", np.zeros(n)),
+            "stime": ((), _times(0.0 + 86400 * k)),
+            "lat": ((), 20.5),
+            "lon": ((), 130.5),
+        }
+        if with_eps_paired:
+            chi_vars["epsilon_paired"] = ("time", np.full(n, eps_paired_value))
         chi = xr.Dataset(
-            {
-                "chiMean": ("time", np.full(n, CHI)),
-                "N2": ("time", np.full(n, N2)),
-                "dTdz": ("time", np.full(n, -DTDZ)),
-                "nu": ("time", np.full(n, NU)),
-                "P_mean": ("time", 5.0 + FALL * wt),
-                "T_mean": ("time", np.full(n, 20.0)),
-                "speed": ("time", np.full(n, FALL)),
-                "qc_drop_chi": ("time", np.zeros(n)),
-                "stime": ((), _times(0.0 + 86400 * k)),
-                "lat": ((), 20.5),
-                "lon": ((), 130.5),
-            },
+            chi_vars,
             coords={"t": ("time", _times(wt + 86400 * k))},
         )
         diss = xr.Dataset(
@@ -68,9 +79,10 @@ def _write_run(
             coords={"t": ("time", _times(wt + diss_offset + 86400 * k))},
         )
         (root / "chi_00").mkdir(exist_ok=True, parents=True)
-        (root / "diss_00").mkdir(exist_ok=True, parents=True)
         chi.to_netcdf(root / "chi_00" / name)
-        diss.to_netcdf(root / "diss_00" / name)
+        if with_diss:
+            (root / "diss_00").mkdir(exist_ok=True, parents=True)
+            diss.to_netcdf(root / "diss_00" / name)
         if not with_profiles:
             continue
         ts = np.arange(0.0, 60.0, 1.0 / FS_SLOW)
@@ -228,9 +240,41 @@ def test_sweep_pairs_offset_diss_grid(tmp_path):
     assert not np.isfinite(table2["eps"]).any()
 
 
-def test_sweep_requires_chi_and_diss(tmp_path):
+def test_sweep_requires_chi(tmp_path):
     (tmp_path / "profiles_00").mkdir(parents=True)
     with pytest.raises(SystemExit, match="chi"):
+        G.sweep(_args(tmp_path))
+
+
+def test_sweep_prefers_stored_epsilon_paired(tmp_path):
+    # A DIFFERENT stored pairing must win over the diss product: proves the
+    # sweep reads epsilon_paired rather than silently re-pairing.
+    _write_run(tmp_path, with_eps_paired=True, eps_paired_value=2 * EPS)
+    table = G.sweep(_args(tmp_path))
+    np.testing.assert_allclose(table["eps"][np.isfinite(table["eps"])], 2 * EPS, rtol=1e-9)
+
+
+def test_sweep_works_without_diss_when_paired(tmp_path):
+    # chi carries epsilon_paired -> the diss product is not needed at all.
+    _write_run(tmp_path, with_eps_paired=True, with_diss=False)
+    table = G.sweep(_args(tmp_path))
+    assert np.isfinite(table["eps"]).all()
+    np.testing.assert_allclose(table["Gamma"][np.isfinite(table["Gamma"])], 2.0, rtol=1e-6)
+
+
+def test_sweep_errors_on_all_nan_stored_pairing(tmp_path):
+    # A stored pairing that paired NOTHING (all NaN) is as epsilon-less as a
+    # missing one: with no other epsilon source the sweep exits cleanly.
+    _write_run(tmp_path, with_eps_paired=True, with_diss=False, eps_paired_value=np.nan)
+    with pytest.raises(SystemExit, match="no epsilon available"):
+        G.sweep(_args(tmp_path))
+
+
+def test_sweep_errors_without_any_epsilon(tmp_path):
+    # No epsilon_paired and no diss product: a clean SystemExit, not an
+    # empty figure.
+    _write_run(tmp_path, with_diss=False)
+    with pytest.raises(SystemExit, match="no epsilon available"):
         G.sweep(_args(tmp_path))
 
 

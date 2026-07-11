@@ -212,7 +212,7 @@ Controls computation of chi from FP07 thermistor spectra.
 | `fit_method` | string | `"iterative"` | Method 2 fitting: `iterative` or `mle` (ignored when `use_epsilon: true`) |
 | `spectrum_model` | string | `"kraichnan"` | Theoretical spectrum: `batchelor` or `kraichnan` |
 | `salinity` | float \| `"measured"` \| `null` | `null` | Salinity [PSU] for the viscosity in the chi spectral fit. `null` = fixed 35; a number = that fixed value; `"measured"` = per-profile practical salinity from the profile's own `JAC_C`/`JAC_T`/`P` (TEOS-10), resolved by the perturb pipeline |
-| `mixing` | bool | `true` | Append derived mixing quantities (`N2`, `dTdz`, `K_T`, `Gamma`, `K_rho`) to the chi NetCDFs, on the chi window grid. Practical salinity comes from the profile's own conductivity/temperature/pressure (TEOS-10) when `JAC_C` exists, so `N2` is fully constrained; see [mixing_efficiency.md](../mixing_efficiency.md) for definitions and masking |
+| `mixing` | bool | `true` | Append derived mixing quantities (`N2`, `dTdz`, `K_T`, `Gamma`, `K_rho`, plus the paired `epsilon_paired` for traceability) to the chi NetCDFs, on the chi window grid. Practical salinity comes from the profile's own conductivity/temperature/pressure (TEOS-10) when `JAC_C` exists, so `N2` is fully constrained; see [mixing_efficiency.md](../mixing_efficiency.md) for definitions and masking |
 | `chi_minimum` | float | `1e-13` | Floor for `mk_chi_mean`: values <= this go to NaN |
 | `fom_max` | float | `null` | Per-probe figure-of-merit cut (null = no cut). Same mechanism as `epsilon.fom_max` but on the chi NetCDFs: NaNs `chi[probe,seg]` / `chi_N` where `fom[probe,seg]` >= `fom_max` |
 | `diagnostics` | bool | `false` | Include diagnostic variables |

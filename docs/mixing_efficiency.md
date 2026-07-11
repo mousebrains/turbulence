@@ -53,6 +53,7 @@ window grid:
 | `K_T` | Osborn–Cox heat diffusivity $\chi/(2(\partial\overline{T}/\partial z)^2)$ | m$^2$ s$^{-1}$ |
 | `Gamma` | Measured mixing coefficient (Oakey 1982) | 1 |
 | `K_rho` | Osborn diffusivity $0.2\,\varepsilon/N^2$ with the canonical constant | m$^2$ s$^{-1}$ |
+| `epsilon_paired` | The nearest-window `epsilonMean` that entered `Gamma`/`K_rho` (traceability) | W kg$^{-1}$ |
 
 Implementation: [`odas_tpw.processing.mixing`](../src/odas_tpw/processing/mixing.py).
 Estimates are masked (NaN) **per variable**, mirroring which gradient each

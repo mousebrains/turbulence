@@ -91,17 +91,13 @@ def _prune_orphan_profile_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
         try:
             nc.unlink()
             pruned += 1
-            logger.info(
-                "pruned orphaned %s (no source .p in current input set)", nc.name
-            )
+            logger.info("pruned orphaned %s (no source .p in current input set)", nc.name)
         except OSError as exc:
             logger.warning("could not prune %s: %s", nc.name, exc)
     return pruned
 
 
-def _write_binned_or_clear(
-    ds: "xr.Dataset", out_dir: Path, manifest: str | None = None
-) -> None:
+def _write_binned_or_clear(ds: "xr.Dataset", out_dir: Path, manifest: str | None = None) -> None:
     """Write *ds* to ``out_dir/binned.nc``, or remove a stale one if *ds* is empty.
 
     An empty re-run (same config but a reduced/changed input set) must not leave
@@ -295,7 +291,7 @@ def _stage_signature_hashes(output_dirs: dict[str, Path]) -> dict[str, str]:
     for stage, d in output_dirs.items():
         sigs = sorted(d.glob(f"{_SIG_PREFIX}*"))
         if sigs:
-            out[stage] = sigs[0].name[len(_SIG_PREFIX):]
+            out[stage] = sigs[0].name[len(_SIG_PREFIX) :]
     return out
 
 
@@ -667,7 +663,9 @@ def _apply_fom_cut(ds, fom_max: float, file_label: str, two_sided: bool = False)
 
     logger.info(
         "%s: fom_max=%g cut %d (probe,segment) cells",
-        file_label, fom_max, n_bad,
+        file_label,
+        fom_max,
+        n_bad,
     )
     return n_bad
 
@@ -689,9 +687,7 @@ def _time_epoch_seconds(da) -> Any:
         # np.datetime64 rejects timezone-aware strings; these stamps are UTC.
         origin = units.split(" since ", 1)[1].strip()
         origin = origin.replace("Z", "").replace("+00:00", "")
-        origin_s = (
-            np.datetime64(origin).astype("datetime64[ns]").astype("int64") / 1e9
-        )
+        origin_s = np.datetime64(origin).astype("datetime64[ns]").astype("int64") / 1e9
         return vals.astype(np.float64) + origin_s
     return vals.astype(np.float64)
 
@@ -766,14 +762,16 @@ def _window_stratification_for_profile(
     except Exception as exc:
         logger.info(
             "stratification skipped for %s: cannot read profile (%s)",
-            file_label, exc,
+            file_label,
+            exc,
         )
         return None
     with prof:
         if any(v not in prof for v in ("t_slow", "P", T_name)):
             logger.info(
                 "stratification skipped for %s: profile lacks t_slow/P/%s",
-                file_label, T_name,
+                file_label,
+                T_name,
             )
             return None
         t_slow = _time_epoch_seconds(prof["t_slow"])
@@ -797,9 +795,7 @@ def _window_stratification_for_profile(
     return strat.N2, strat.dTdz, sal_note
 
 
-def _attach_window_stratification(
-    ds, prof_path, half_w, T_name, C_name, file_label, scale_name
-):
+def _attach_window_stratification(ds, prof_path, half_w, T_name, C_name, file_label, scale_name):
     """Attach sorted N2/dTdz to a window-grid dataset (e.g. diss). No-op on failure.
 
     *half_w* is the window half-width [s]; *scale_name* names the window in the
@@ -876,19 +872,13 @@ def _add_mixing_quantities(
     # N2/dTdz are stratification quantities — they need only the CTD profile,
     # not epsilon or chi — so they are always computed and attached. Only the
     # derived coefficients (K_T, Gamma, K_rho) require epsilon and/or chi.
-    have_mix = (
-        diss_ds is not None
-        and "epsilonMean" in diss_ds
-        and "chiMean" in chi_ds
-    )
+    have_mix = diss_ds is not None and "epsilonMean" in diss_ds and "chiMean" in chi_ds
 
     try:
         chi_t = _time_epoch_seconds(chi_ds["t"])
         half_w = 0.5 * float(chi_ds.attrs["diss_length"]) / float(chi_ds.attrs["fs_fast"])
     except (KeyError, TypeError, ValueError):
-        logger.info(
-            "mixing quantities skipped for %s: no chi time/window attrs", file_label
-        )
+        logger.info("mixing quantities skipped for %s: no chi time/window attrs", file_label)
         return chi_ds
 
     strat_out = _window_stratification_for_profile(
@@ -929,11 +919,27 @@ def _add_mixing_quantities(
         eps_on_chi = pair_nearest(
             _time_epoch_seconds(diss_ds["t"]), diss_ds["epsilonMean"].values, chi_t
         )
-        mix = mixing_coefficients(
-            eps_on_chi, chi_ds["chiMean"].values, N2, dTdz
-        )
+        mix = mixing_coefficients(eps_on_chi, chi_ds["chiMean"].values, N2, dTdz)
         var_specs.update(
             {
+                # The exact epsilon that entered Gamma/K_rho, stored for
+                # traceability: consumers (e.g. perturb-plot gamma-scaling)
+                # can recompute ratio quantities from the same pairing the
+                # pipeline used instead of re-pairing against the diss
+                # product (and possibly choosing different windows).
+                "epsilon_paired": (
+                    eps_on_chi,
+                    {
+                        "units": "W/kg",
+                        "long_name": "epsilonMean paired onto the chi window grid",
+                        "comment": (
+                            "Nearest-window epsilonMean from the matching diss "
+                            "dataset (processing.mixing.pair_nearest); the "
+                            "epsilon used in this dataset's Gamma and K_rho. "
+                            "NaN where no diss window paired." + epsilon_provenance
+                        ),
+                    },
+                ),
                 "K_T": (
                     mix.K_T,
                     {
@@ -984,14 +990,13 @@ def _add_mixing_quantities(
         chi_ds[name] = xr.DataArray(arr, dims=["time"], attrs=attrs)
     if have_mix:
         n_gamma = int(np.sum(np.isfinite(var_specs["Gamma"][0])))
-        logger.info(
-            "mixing quantities for %s: %d valid Gamma estimates", file_label, n_gamma
-        )
+        logger.info("mixing quantities for %s: %d valid Gamma estimates", file_label, n_gamma)
     else:
         n_n2 = int(np.sum(np.isfinite(N2)))
         logger.info(
-            "stratification for %s: %d valid N2 windows (no epsilon/chi "
-            "coefficients)", file_label, n_n2,
+            "stratification for %s: %d valid N2 windows (no epsilon/chi coefficients)",
+            file_label,
+            n_n2,
         )
     return chi_ds
 
@@ -1053,8 +1058,11 @@ def _profile_practical_salinity(prof_path, T_name: str, C_name: str):
 
 
 _SEAWATER_UNITS = {
-    "SP": "1", "SA": "g/kg", "CT": "degree_Celsius",
-    "sigma0": "kg m-3", "rho": "kg m-3",
+    "SP": "1",
+    "SA": "g/kg",
+    "CT": "degree_Celsius",
+    "sigma0": "kg m-3",
+    "rho": "kg m-3",
 }
 
 
@@ -1091,7 +1099,9 @@ def _inject_seawater_properties(pf, gps, T_name: str, C_name: str) -> tuple[str,
     for name in ("SP", "SA", "CT", "sigma0", "rho"):
         pf.channels[name] = sw[name]
         pf.channel_info[name] = {
-            "units": _SEAWATER_UNITS[name], "type": "derived", "name": name,
+            "units": _SEAWATER_UNITS[name],
+            "type": "derived",
+            "name": name,
         }
     return ("SP", "SA", "CT", "sigma0", "rho")
 
@@ -1176,19 +1186,23 @@ def process_file(
             pf.channels["speed_fast"] = speed_fast
             pf._fast_channels.add("speed_fast")
             pf.channel_info["speed_fast"] = {
-                "units": "m s-1", "type": "computed",
+                "units": "m s-1",
+                "type": "computed",
                 "name": "speed_fast",
             }
             pf.channels["W_slow"] = W_slow
             pf.channel_info["W_slow"] = {
-                "units": "dbar s-1", "type": "computed",
+                "units": "dbar s-1",
+                "type": "computed",
                 "name": "W_slow",
                 "long_name": "profiling rate (smoothed |dP/dt|)",
             }
         except Exception as exc:
             logger.warning(
                 "speed channel computation failed for %s (method=%s): %s",
-                p_path.name, speed_cfg.get("method", "pressure"), exc,
+                p_path.name,
+                speed_cfg.get("method", "pressure"),
+                exc,
             )
 
     # ---- Internal QC rules (after hotel + speed so all channels exist) ----
@@ -1204,7 +1218,9 @@ def process_file(
             register_rule_channels(pf, evaluated, qc_rules_cfg)
         except Exception as exc:
             logger.warning(
-                "qc.rules evaluation failed for %s: %s", p_path.name, exc,
+                "qc.rules evaluation failed for %s: %s",
+                p_path.name,
+                exc,
             )
 
     # Per-stage log files: each ``with stage_log(...)`` adds a FileHandler
@@ -1245,7 +1261,8 @@ def process_file(
             # W noisy at the W_min threshold and fragmented profile boundaries.
             W = _smooth_fall_rate(P_slow, pf.fs_slow, tau=resolve_tau(vehicle))
             direction = resolve_direction(
-                profiles_cfg.get("direction", "auto"), vehicle,
+                profiles_cfg.get("direction", "auto"),
+                vehicle,
             )
             profiles = get_profiles(
                 P_slow,
@@ -1293,10 +1310,11 @@ def process_file(
                 win = float(strat_cfg.get("window", 2.0))
                 pf.channels["N2"] = N2_full
                 pf.channel_info["N2"] = {
-                    "units": "s-2", "type": "derived", "name": "N2",
+                    "units": "s-2",
+                    "type": "derived",
+                    "name": "N2",
                     "long_name": (
-                        f"buoyancy frequency squared (background, {win:g}-dbar "
-                        "Thorpe-sorted)"
+                        f"buoyancy frequency squared (background, {win:g}-dbar Thorpe-sorted)"
                     ),
                     "comment": (
                         "TEOS-10 N2 from the profile's own C/T/P over a "
@@ -1307,7 +1325,9 @@ def process_file(
                 }
                 pf.channels["dTdz"] = dTdz_full
                 pf.channel_info["dTdz"] = {
-                    "units": "K m-1", "type": "derived", "name": "dTdz",
+                    "units": "K m-1",
+                    "type": "derived",
+                    "name": "dTdz",
                     "long_name": (
                         "background temperature gradient (positive down, "
                         f"{win:g}-dbar Thorpe-sorted)"
@@ -1422,9 +1442,7 @@ def process_file(
                     output_stem=output_stem,
                 )
                 result["profiles"] = [str(p) for p in prof_paths]
-                prof_scalars_cache = {
-                    str(p): s for p, s in zip(prof_paths, prof_scalars)
-                }
+                prof_scalars_cache = {str(p): s for p, s in zip(prof_paths, prof_scalars)}
             except Exception as exc:
                 logger.error("extracting profiles %s: %s", p_path.name, exc)
                 result.setdefault("errors", []).append(f"profiles: {exc}")
@@ -1508,10 +1526,14 @@ def process_file(
                         if qc_enabled:
                             n_probe = int(ds["probe"].size) if "probe" in ds.dims else 2
                             apply_qc_to_dataset(
-                                ds, pf, qc_eps_drop_from, diss_length_seconds,
+                                ds,
+                                pf,
+                                qc_eps_drop_from,
+                                diss_length_seconds,
                                 flag_var_name="qc_drop_epsilon",
                                 value_vars=[
-                                    "epsilonMean", "epsilonLnSigma",
+                                    "epsilonMean",
+                                    "epsilonLnSigma",
                                     *[f"e_{i + 1}" for i in range(n_probe)],
                                     "epsilon",
                                 ],
@@ -1520,8 +1542,13 @@ def process_file(
                         _copy_profile_scalars(prof_path, ds, prof_scalars_cache)
                         if strat_enabled:
                             _attach_window_stratification(
-                                ds, prof_path, diss_length_seconds / 2,
-                                ct_T_name, ct_C_name, p_path.name, "dissipation",
+                                ds,
+                                prof_path,
+                                diss_length_seconds / 2,
+                                ct_T_name,
+                                ct_C_name,
+                                p_path.name,
+                                "dissipation",
                             )
                         out_name = Path(prof_path).name
                         out_path = output_dirs["diss"] / out_name
@@ -1531,9 +1558,7 @@ def process_file(
                         diss_by_profile[prof_path] = out_path_str
                 except Exception as exc:
                     logger.error("diss for %s: %s", Path(prof_path).name, exc)
-                    result.setdefault("errors", []).append(
-                        f"diss {Path(prof_path).name}: {exc}"
-                    )
+                    result.setdefault("errors", []).append(f"diss {Path(prof_path).name}: {exc}")
 
     # Per-profile chi (if enabled)
     if chi_enabled and result["diss"]:
@@ -1547,9 +1572,15 @@ def process_file(
             chi_kwargs = {
                 k: v
                 for k, v in chi_cfg.items()
-                if k not in (
-                    "enable", "chi_minimum", "diagnostics",
-                    "use_epsilon", "fom_max", "mixing", "salinity",
+                if k
+                not in (
+                    "enable",
+                    "chi_minimum",
+                    "diagnostics",
+                    "use_epsilon",
+                    "fom_max",
+                    "mixing",
+                    "salinity",
                 )
             }
             # Resolve chi.salinity: "measured" -> per-profile practical salinity
@@ -1557,8 +1588,7 @@ def process_file(
             # through (None -> fixed 35 PSU viscosity in process_l3_chi).
             chi_sal_cfg = chi_cfg.get("salinity")
             chi_use_measured_sal = (
-                isinstance(chi_sal_cfg, str)
-                and chi_sal_cfg.strip().lower() == "measured"
+                isinstance(chi_sal_cfg, str) and chi_sal_cfg.strip().lower() == "measured"
             )
             with stage_log(output_dirs.get("chi"), log_basename):
                 for prof_path in result["profiles"]:
@@ -1605,12 +1635,12 @@ def process_file(
                         for chi_ds in chi_results:
                             if chi_fom_max is not None:
                                 _apply_fom_cut(
-                                    chi_ds, float(chi_fom_max), p_path.name,
+                                    chi_ds,
+                                    float(chi_fom_max),
+                                    p_path.name,
                                     two_sided=True,
                                 )
-                            chi_ds = mk_chi_mean(
-                                chi_ds, chi_cfg.get("chi_minimum", 1e-13)
-                            )
+                            chi_ds = mk_chi_mean(chi_ds, chi_cfg.get("chi_minimum", 1e-13))
                             # Apply chi QC BEFORE deriving mixing quantities so a
                             # QC-dropped chi does not leak into K_T/Gamma (audit
                             # r1-4). Mixing then consumes the NaN'd chiMean, so
@@ -1620,15 +1650,17 @@ def process_file(
                             # the NaN epsilonMean paired in by _add_mixing_quantities.
                             if qc_enabled:
                                 n_cprobe = (
-                                    int(chi_ds["probe"].size)
-                                    if "probe" in chi_ds.dims else 2
+                                    int(chi_ds["probe"].size) if "probe" in chi_ds.dims else 2
                                 )
                                 apply_qc_to_dataset(
-                                    chi_ds, pf, qc_chi_drop_from,
+                                    chi_ds,
+                                    pf,
+                                    qc_chi_drop_from,
                                     chi_diss_length_seconds,
                                     flag_var_name="qc_drop_chi",
                                     value_vars=[
-                                        "chiMean", "chiLnSigma",
+                                        "chiMean",
+                                        "chiLnSigma",
                                         *[f"chi_{i + 1}" for i in range(n_cprobe)],
                                         "chi",
                                         "epsilon_T",
@@ -1639,9 +1671,7 @@ def process_file(
                             # with real salinity from the profile's own C/T/P
                             if chi_cfg.get("mixing", True):
                                 mix_eps = (
-                                    diss_ds
-                                    if diss_ds is not None
-                                    else xr.open_dataset(diss_path)
+                                    diss_ds if diss_ds is not None else xr.open_dataset(diss_path)
                                 )
                                 # Gamma and K_rho are built from the shear-probe
                                 # epsilonMean even under Method 2 (use_epsilon=False),
@@ -1683,9 +1713,7 @@ def process_file(
                             result["chi"].append(str(out_path))
                     except Exception as exc:
                         logger.error("chi for %s: %s", Path(prof_path).name, exc)
-                        result.setdefault("errors", []).append(
-                            f"chi {Path(prof_path).name}: {exc}"
-                        )
+                        result.setdefault("errors", []).append(f"chi {Path(prof_path).name}: {exc}")
                     finally:
                         if diss_ds is not None:
                             diss_ds.close()
@@ -1721,8 +1749,7 @@ def _check_unique_outputs(destinations: list[Path]) -> None:
     duplicates = [str(path) for path, count in seen.items() if count > 1]
     if duplicates:
         raise ValueError(
-            "multiple input files map to the same output path: "
-            + ", ".join(sorted(duplicates))
+            "multiple input files map to the same output path: " + ", ".join(sorted(duplicates))
         )
 
 
@@ -1734,8 +1761,7 @@ def _check_unique_output_stems(stems: list[str]) -> None:
     duplicates = [stem for stem, count in seen.items() if count > 1]
     if duplicates:
         raise ValueError(
-            "multiple input files map to the same output stem: "
-            + ", ".join(sorted(duplicates))
+            "multiple input files map to the same output stem: " + ", ".join(sorted(duplicates))
         )
 
 
@@ -1784,9 +1810,11 @@ def _log_trim_summary(results: list, n_failed: int) -> None:
     for r in results:
         counts[r.action] = counts.get(r.action, 0) + 1
     logger.info(
-        "Trim summary: %d trimmed, %d referenced in place, %d skipped (up to date), "
-        "%d failed",
-        counts["trimmed"], counts["referenced"], counts["skipped"], n_failed,
+        "Trim summary: %d trimmed, %d referenced in place, %d skipped (up to date), %d failed",
+        counts["trimmed"],
+        counts["referenced"],
+        counts["skipped"],
+        n_failed,
     )
 
 
@@ -1891,12 +1919,11 @@ def run_merge(
     if not p_files:
         return []
 
-    plan = merge_plan if merge_plan is not None else plan_merge_outputs(
-        p_files, merge_dir, root=root
+    plan = (
+        merge_plan if merge_plan is not None else plan_merge_outputs(p_files, merge_dir, root=root)
     )
     planned_outputs = [
-        output_path for output_path, chain in plan
-        if include_singletons or len(chain) > 1
+        output_path for output_path, chain in plan if include_singletons or len(chain) > 1
     ]
     _check_unique_outputs(planned_outputs)
 
@@ -2090,9 +2117,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     input_root = _configured_input_root(config)
     current_root = input_root
     instrument_key_by_path = {p.resolve(): p.parent.name for p in p_files}
-    output_stem_by_path = {
-        p.resolve(): _source_output_stem(p, current_root) for p in p_files
-    }
+    output_stem_by_path = {p.resolve(): _source_output_stem(p, current_root) for p in p_files}
 
     # Parallel processing
     parallel_cfg = config.get("parallel", {})
@@ -2121,16 +2146,14 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 src_key = source.resolve()
                 dest = trim_destination(source, trim_dir, root=current_root)
                 if dest.resolve() in trimmed_keys:
-                    physical = dest          # rewritten (trimmed) or reused (skipped)
+                    physical = dest  # rewritten (trimmed) or reused (skipped)
                 elif src_key in trimmed_keys:
-                    physical = source        # complete — referenced in place
+                    physical = source  # complete — referenced in place
                 else:
-                    continue                 # trim failed for this file; drop it
+                    continue  # trim failed for this file; drop it
                 key = physical.resolve()
                 next_p_files.append(physical)
-                next_instruments[key] = instrument_key_by_path.get(
-                    src_key, source.parent.name
-                )
+                next_instruments[key] = instrument_key_by_path.get(src_key, source.parent.name)
                 next_stems[key] = _source_output_stem(source, current_root)
             p_files = next_p_files
             instrument_key_by_path = next_instruments
@@ -2166,9 +2189,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                     )
                     if len(chain) > 1:
                         # Genuinely merged → new file under merge_dir.
-                        next_output_stems[output_key] = _source_output_stem(
-                            output_path, merge_dir
-                        )
+                        next_output_stems[output_key] = _source_output_stem(output_path, merge_dir)
                     else:
                         # Passthrough singleton — keep the canonical stem the
                         # trim stage assigned (the physical file may sit under
@@ -2193,9 +2214,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
 
     _check_unique_output_stems(
         [
-            output_stem_by_path.get(
-                p.resolve(), _source_output_stem(p, current_root)
-            )
+            output_stem_by_path.get(p.resolve(), _source_output_stem(p, current_root))
             for p in p_files
         ]
     )
@@ -2268,7 +2287,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     if n_skipped:
         logger.info(
             "Processing %d file(s) (jobs=%d); %d up to date (skipped)",
-            len(to_process), jobs, n_skipped,
+            len(to_process),
+            jobs,
+            n_skipped,
         )
     else:
         logger.info("Processing %d files (jobs=%d)...", len(to_process), jobs)
@@ -2384,9 +2405,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     chi_ncs: list[Path] = []
     chi_width = binning_cfg.get("chi_width") or binning_cfg.get("diss_width") or bin_width
     chi_agg = (
-        binning_cfg.get("chi_aggregation")
-        or binning_cfg.get("diss_aggregation")
-        or aggregation
+        binning_cfg.get("chi_aggregation") or binning_cfg.get("diss_aggregation") or aggregation
     )
     if "chi" in output_dirs:
         chi_ncs = sorted(output_dirs["chi"].glob("*.nc"))
@@ -2533,7 +2552,10 @@ def _run_combo(
             d.mkdir(parents=True, exist_ok=True)
             return d
         return resolve_output_dir(
-            output_root, stage, section, params,
+            output_root,
+            stage,
+            section,
+            params,
             upstream=_upstream_for(stage, config),
         )
 

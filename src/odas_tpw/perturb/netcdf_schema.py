@@ -37,6 +37,7 @@ def canonicalize_units(units: str) -> str:
     """Translate an RSI-emitted unit string to a UDUNITS-parseable one."""
     return UNITS_FIXUP.get(units.strip(), units.strip())
 
+
 # ---------------------------------------------------------------------------
 # Schema definitions — maps variable names to CF attributes
 # ---------------------------------------------------------------------------
@@ -324,6 +325,18 @@ CHI_SCHEMA: dict[str, dict] = {
             "After depth-binning it is the RMS of the contributing per-window "
             "sigmas in the bin, not a spread recomputed from the binned "
             "estimates."
+        ),
+    },
+    "epsilon_paired": {
+        "nc_name": "epsilon_paired",
+        "units": "W/kg",
+        "standard_name": "specific_turbulent_kinetic_energy_dissipation_in_sea_water",
+        "long_name": "epsilonMean paired onto the chi window grid",
+        "comment": (
+            "Nearest-window epsilonMean from the matching diss dataset — the "
+            "epsilon that entered the per-window Gamma and K_rho. In binned/"
+            "combo products this is the bin aggregate of that pairing (see "
+            "the per-profile chi product for exact per-window traceability)."
         ),
     },
     "chi_1": {

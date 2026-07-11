@@ -99,10 +99,21 @@ python -m pytest tests/test_p_file.py::test_header  # single test
 - **P file format** (RSI TN-051): binary records with 128-byte headers (64 uint16 words). Record 0 = header + ASCII config string. Records 1..N = header + multiplexed int16 data. Endian flag at header word 64 (1=little, 2=big).
 - **fom (figure of merit)**: Ratio of observed to model variance in the spectral fit range; values near 1.0 indicate a good fit. For **epsilon** the model is the **Nasmyth** spectrum (observed/Nasmyth variance ratio; see `scor160/l4.py`). For **chi** the model is the **Batchelor/Kraichnan** spectrum convolved with the FP07 transfer function plus the noise floor (`chi/chi.py`). (Distinct from the Lueck-2022 `FM` reject statistic on the epsilon side.)
 - **K_max_ratio**: K_max/K_95 (epsilon) or K_max/kB (chi). Values < 0.5 mean most variance is extrapolated.
+- **Inclinometers**: on a VMP, `Incl_Y` is capped at 90° with **+90° = pointing
+  straight down** (so a falling VMP reads Incl_Y ≈ +90). On an MR, `Incl_Y` is
+  approximately pitch and `Incl_X` mostly roll.
 
 ## Data
 
-- **Instrument**: VMP-250IR_RT SN 479 (ARCTERX campaign, R/V Thompson, Jan 2025, Saipan)
+- **ARCTERX campaign structure**: a three-year effort with at least six field
+  campaigns (~2/year; each year split into a **Wake** effort and an
+  **Interior** effort). Ships: R/V Revelle (2022), R/V Thompson (2023, 2025).
+  Instruments differ per effort — e.g. ARCTERX-2025-**Interior** used VMP SNs
+  **142 and 194** (`/Volumes/SeaChest/ARCTERX/2025/Interior/`), while SN
+  **479** was a **Wake** effort (believed 2025). Do not assume one serial
+  number spans the campaign.
+- **Instrument (repo-local `VMP/` data)**: VMP-250IR_RT SN 479 (ARCTERX Wake,
+  R/V Thompson, Jan 2025, Saipan)
 - **Address matrix**: 8 rows × 10 cols (8 fast + 2 slow). fs_fast ≈ 512 Hz, fs_slow ≈ 64 Hz.
 - `VMP/` — 30 raw `.p` files
 - `odas/` — Rockland's ODAS MATLAB Library (v4.5.1), reference implementation. Key files: `odas_p2mat.m`, `read_odas.m`, `convert_odas.m`, `setupstr.m`.

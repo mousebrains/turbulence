@@ -2,7 +2,9 @@
 """Mixing-efficiency scaling figures (Lewin et al. 2025, Fig. 5).
 
 ``perturb-plot gamma-scaling`` sweeps a run's **per-window** products
-(``chi_NN`` + ``diss_NN`` + ``profiles_NN``) and renders the flux
+(``chi_NN`` + ``profiles_NN``, plus ``diss_NN`` for QC flags / legacy
+epsilon re-pairing when the chi product lacks ``epsilon_paired``) and
+renders the flux
 coefficient Gamma against the three dimensionless mixing parameters of
 Lewin et al. (2025, https://doi.org/10.1175/JPO-D-25-0012.1):
 
@@ -230,7 +232,9 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
         type=float,
         default=DEFAULT_MAX_DT,
         metavar="SEC",
-        help="diss->chi window pairing tolerance (default 0.5)",
+        help="diss->chi window pairing tolerance (default 0.5); applies to "
+        "the legacy re-pairing when the chi product has no epsilon_paired "
+        "(stored pairings are consumed as-is)",
     )
     p.add_argument(
         "--ri-n2-span",
@@ -303,7 +307,7 @@ def _window_means(
 def _pair_indices(
     src_t: np.ndarray,
     dst_t: np.ndarray,
-    max_dt: float,
+    max_dt: float | None,
     valid: np.ndarray | None = None,
 ) -> np.ndarray:
     """Index of the nearest src window per dst window (-1 = unpaired).
@@ -345,7 +349,7 @@ def _epoch(var: xr.DataArray) -> np.ndarray:
 
 def _sweep_profile(
     chi_path: str,
-    diss_path: str,
+    diss_path: str | None,
     prof_path: str | None,
     args: argparse.Namespace,
     cols: dict[str, list],
@@ -356,7 +360,7 @@ def _sweep_profile(
 
     from odas_tpw.processing import mixing, thorpe
 
-    with xr.open_dataset(chi_path) as c, xr.open_dataset(diss_path) as d:
+    with xr.open_dataset(chi_path) as c:
         ct = _epoch(c["t"])
         n = ct.size
         lat = float(np.atleast_1d(c["lat"].values)[0])
@@ -373,14 +377,44 @@ def _sweep_profile(
             if "qc_drop_chi" in c.variables
             else np.zeros(n)
         )
-        eps_src = np.asarray(d["epsilonMean"].values, dtype=float)
-        idx = _pair_indices(_epoch(d["t"]), ct, args.max_dt, valid=np.isfinite(eps_src))
-        eps = _gather(eps_src, idx)
-        qc_eps = (
-            _gather(d["qc_drop_epsilon"].values, idx)
-            if "qc_drop_epsilon" in d.variables
-            else np.zeros(n)
-        )
+        # Prefer the pipeline's stored pairing (epsilon_paired): the figure is
+        # then built from the SAME epsilon that entered the product's Gamma,
+        # and the diss product is not needed at all.
+        eps_stored = "epsilon_paired" in c.variables
+        eps = np.asarray(c["epsilon_paired"].values, dtype=float) if eps_stored else None
+    qc_eps = np.zeros(n)
+    if diss_path is not None:
+        with xr.open_dataset(diss_path) as d:
+            eps_src = np.asarray(d["epsilonMean"].values, dtype=float)
+            # With a stored pairing, QC flags are paired at the PIPELINE's
+            # tolerance (pair_nearest's median-spacing default, max_dt=None)
+            # so a window whose stored eps paired looser than --max-dt still
+            # gets its qc_drop_epsilon; --max-dt governs only the legacy
+            # re-pair path.
+            idx = _pair_indices(
+                _epoch(d["t"]),
+                ct,
+                args.max_dt if eps is None else None,
+                valid=np.isfinite(eps_src),
+            )
+            if eps is None:  # older chi product without epsilon_paired
+                counters["re_pair_fallback"] += 1
+                idx_eps = _pair_indices(_epoch(d["t"]), ct, args.max_dt, valid=np.isfinite(eps_src))
+                eps = _gather(eps_src, idx_eps)
+            if "qc_drop_epsilon" in d.variables:
+                qc_eps = _gather(d["qc_drop_epsilon"].values, idx)
+    if eps is None:
+        # No stored pairing and no diss file: epsilon-dependent quantities
+        # (Gamma, Re_b, R_OT) are unavailable for this profile.
+        counters["no_epsilon"] += 1
+        eps = np.full(n, np.nan)
+    elif eps_stored and not np.isfinite(eps).any():
+        # A stored-but-empty pairing (e.g. every diss window QC'd out) is
+        # just as epsilon-less; count it so the all-profiles guard can fire.
+        # (A legacy re-pair that found nothing is NOT counted: there the
+        # user's --max-dt did the excluding, and an all-NaN column is the
+        # honest result of that experiment.)
+        counters["no_epsilon"] += 1
 
     half = args.sort_window / 2.0
     lt_s = np.full(n, np.nan)
@@ -507,12 +541,16 @@ def sweep(args: argparse.Namespace) -> _Table:
     from odas_tpw.processing import thorpe
 
     chi_dir = resolve.resolve_for_args(args, "chi")
-    diss_dir = resolve.resolve_for_args(args, "diss")
-    if chi_dir is None or diss_dir is None:
+    if chi_dir is None:
         raise SystemExit(
-            "gamma-scaling needs per-profile chi_NN and diss_NN products "
-            "(Gamma's ingredients); run the pipeline with chi enabled first"
+            "gamma-scaling needs the per-profile chi_NN product; run the "
+            "pipeline with chi enabled first"
         )
+    # diss is optional: chi products written by pipelines that store
+    # epsilon_paired carry Gamma's epsilon themselves; diss is then only
+    # consulted for its qc_drop_epsilon flags (and as the epsilon fallback
+    # for older chi products).
+    diss_dir = resolve.resolve_for_args(args, "diss", optional=True)
     prof_dir = resolve.resolve_for_args(args, "profiles", optional=True)
     if prof_dir is None:
         print(
@@ -552,13 +590,14 @@ def sweep(args: argparse.Namespace) -> _Table:
             "qc",
         )
     }
-    counters = {"no_diss_file": 0, "no_profiles_file": 0}
+    counters = {"no_profiles_file": 0, "re_pair_fallback": 0, "no_epsilon": 0}
     n_done = 0
     for f in files:
-        diss_path = os.path.join(diss_dir, f)
-        if not os.path.exists(diss_path):
-            counters["no_diss_file"] += 1
-            continue
+        diss_path = (
+            os.path.join(diss_dir, f)
+            if diss_dir is not None and os.path.exists(os.path.join(diss_dir, f))
+            else None
+        )
         prof_path = (
             os.path.join(prof_dir, f)
             if prof_dir is not None and os.path.exists(os.path.join(prof_dir, f))
@@ -568,7 +607,14 @@ def sweep(args: argparse.Namespace) -> _Table:
         n_done += 1
 
     if n_done == 0:
-        raise SystemExit("no chi/diss per-profile file pairs found")
+        raise SystemExit("no per-profile chi files could be swept")
+    if counters["no_epsilon"] == n_done:
+        raise SystemExit(
+            "no epsilon available for any profile (no usable epsilon_paired "
+            "in the chi product and no diss_NN product to fall back on) — "
+            "run the pipeline's diss stage, or a pipeline that stores "
+            "epsilon_paired"
+        )
     table = _Table(
         cols={k: np.concatenate(v) if v else np.empty(0) for k, v in cols.items()},
         n_profiles=n_done,
