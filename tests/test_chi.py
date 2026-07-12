@@ -456,6 +456,73 @@ class TestChiFromEpsilon:
         ratio = chi_est / chi_true
         assert 0.3 < ratio < 3.0, f"chi ratio = {ratio}"
 
+    @pytest.mark.parametrize("noise_factor", [1e-4, 1e-2])  # high, moderate SNR
+    def test_amplitude_estimator_unbiased_mc(self, noise_factor):
+        """Method 1 chi is an UNBIASED amplitude estimator (issue #104 U3-C1).
+
+        Monte-Carlo contract: over many chi^2(dof)/dof multiplicative-noise
+        realizations of a Batchelor spectrum at the production dof (~13.3, i.e.
+        num_ffts=7 for the chi_00/chi_02 configs), the geometric-mean recovered
+        chi must sit within +/-2% of truth at the high/moderate SNR that
+        dominates real signal-bearing windows.  The former log-space
+        least-squares fit was biased LOW by ~6% (geomean ~0.94) here and would
+        FAIL this test; the noise-subtracted variance integral is unbiased.
+
+        The near-detection-floor overshoot (a pre-existing property of the
+        above-2x-noise band selection, shared with Method 2) is intentionally
+        NOT exercised here -- it is not an estimator defect.
+        """
+        from odas_tpw.chi.batchelor import batchelor_grad, batchelor_kB
+        from odas_tpw.chi.chi import _chi_from_epsilon
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer
+
+        chi_true = 1e-8
+        eps_true = 1e-8
+        nu = 1e-6
+        speed = 0.7
+        kB = batchelor_kB(eps_true, nu)
+
+        fs, fft_length = 512, 256  # production chi_00/chi_02 geometry -> dof ~13.3
+        n_freq = fft_length // 2 + 1
+        F = np.arange(n_freq) * fs / fft_length
+        F[0] = F[1] * 0.01  # avoid exact DC
+        K = F / speed
+        tau0 = fp07_tau(speed)
+        H2 = fp07_transfer(F, tau0)
+
+        signal = batchelor_grad(K, kB, chi_true) * H2
+        noise_K = np.full_like(K, signal.max() * noise_factor)
+        mean_obs = signal + noise_K
+
+        dof = 13.3
+        rng = np.random.default_rng(20260712)
+        ratios = []
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            for _ in range(3000):
+                spec_obs = mean_obs * rng.gamma(dof / 2.0, 2.0 / dof, size=K.shape)
+                res = _chi_from_epsilon(
+                    spec_obs,
+                    K,
+                    eps_true,
+                    nu,
+                    noise_K,
+                    H2,
+                    tau0,
+                    fp07_transfer,
+                    98.0,
+                    speed,
+                    "batchelor",
+                )
+                if np.isfinite(res.chi) and res.chi > 0:
+                    ratios.append(res.chi / chi_true)
+
+        geomean = float(np.exp(np.mean(np.log(ratios))))
+        assert 0.98 < geomean < 1.02, (
+            f"chi amplitude biased at noise_factor={noise_factor}: "
+            f"geomean(chi_hat/chi_true)={geomean:.4f} (want ~1.0; log-LSQ gave ~0.94)"
+        )
+
 
 class TestMLEFit:
     def test_synthetic_recovery(self):

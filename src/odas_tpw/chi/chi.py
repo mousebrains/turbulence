@@ -267,12 +267,12 @@ def _chi_from_epsilon(
 
     # Signal-presence gate.  A window whose gradient spectrum never rises above
     # the FP07 electronics noise floor carries no resolvable thermal signal.
-    # Without this gate the log-space fit below still returns a small positive
-    # chi that merely fits the noise, and the figure of merit cannot catch it
-    # (fom = obs / model with the model fitted to obs, so fom ~= 1 for the noise
-    # floor itself).  Reject such windows as non-detections here, at the source,
-    # so they become NaN and drop out of chiMean rather than biasing its low
-    # tail and the derived mixing products.  (2026-07-03 review, GPT-5.5 F1.)
+    # Without this gate the variance integral below still returns a small positive
+    # chi from residual above-noise scatter, and the figure of merit cannot catch
+    # it (fom = obs / model with the model amplitude derived from obs, so
+    # fom ~= 1 for the noise floor itself).  Reject such windows as non-detections
+    # here, at the source, so they become NaN and drop out of chiMean rather than
+    # biasing its low tail and the derived mixing products.  (2026-07-03 review.)
     if _below_detection(spec_obs, noise_K, K, K_AA):
         warnings.warn(
             "No thermal signal above the FP07 noise floor; chi is a non-detection",
@@ -288,61 +288,40 @@ def _chi_from_epsilon(
     valid_idx = np.where(valid)[0]
     K_max = K[valid_idx[-1]]
 
-    # Log-space least-squares fit for chi with kB fixed from epsilon.
-    # Model: chi * Batchelor_unit(K) * H2(K) + noise(K).
-    # Minimizes Σ [log(model) - log(obs)]² over valid K, which penalizes
-    # over- and under-estimation symmetrically on the log-log plot.
-    # This is more robust than the variance-correction approach when the
-    # epsilon-derived kB doesn't perfectly match the temperature spectrum.
-    B_unit = grad_func(K[valid], kB, 1.0)  # unit-chi Batchelor at valid K
+    # Chi amplitude from the noise-subtracted resolved temperature-gradient
+    # variance, with kB fixed from epsilon.  This is the linear-space
+    # (method-of-moments) estimator: E[obs] = signal + noise, so subtracting the
+    # noise floor and integrating recovers the in-band gradient variance, and the
+    # analytic V_total / V_resolved correction (which also undoes the in-band FP07
+    # |H|^2 attenuation) scales it to chi = 6 * kappa_T * <(dT/dz)^2>.
+    #
+    # It replaces the former log-space least-squares grid fit, which is biased low
+    # by exactly exp(psi(d/2) - ln(d/2)) (~ -6% at the production dof ~13) because
+    # for chi^2-distributed Welch spectra E[ln(obs)] = ln(signal) + (psi(d/2) -
+    # ln(d/2)) < ln E[obs] (Jensen).  The variance integral is unbiased in linear
+    # space, and it is the SAME estimator Method 2 already uses (_mle_fit_kB /
+    # _iterative_fit), so the two methods now share one amplitude form.  A
+    # Monte-Carlo bias test (test_chi) pins the ~1% high/moderate-SNR bias; the
+    # residual near-detection-floor overshoot is a pre-existing property of the
+    # above-2x-noise band selection, not of this estimator.  (issue #104 U3-C1.)
     s = spec_obs[valid]
-    h2v = H2[valid]
     nv = noise_K[valid]
 
-    # Initial chi estimate from variance correction (used as grid center)
+    # Raw in-band variance (NO noise subtraction) — retained only for the figure
+    # of merit below (matching the historical fom numerator).  The chi estimate
+    # uses the noise-subtracted variance instead; do not conflate the two.
     obs_var = np.trapezoid(s, K[valid])
     if obs_var <= 0:
-        warnings.warn("Trial chi <= 0; observed variance too low", stacklevel=2)
+        warnings.warn("Observed variance <= 0; chi is a non-detection", stacklevel=2)
         return ChiEpsilonResult(np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan)
 
-    correction = _variance_correction(kB, K_max, speed, tau0, _h2, grad_func)
-    if np.isfinite(correction):
-        chi_vc = 6 * kappa_T * obs_var * correction
-    else:
-        chi_vc = 6 * kappa_T * obs_var
-
-    # Vectorized grid search: 200 chi values spanning 4 decades around chi_vc
-    chi_lo = max(chi_vc * 0.01, 1e-15)
-    chi_hi = chi_vc * 100
-    chi_grid = np.logspace(np.log10(chi_lo), np.log10(chi_hi), 200)
-    # model shape: (200, n_valid)
-    models = (
-        chi_grid[:, np.newaxis] * B_unit[np.newaxis, :] * h2v[np.newaxis, :] + nv[np.newaxis, :]
-    )
-    models = np.maximum(models, 1e-30)
-    log_s = np.log(np.maximum(s, 1e-30))
-    cost = np.sum((np.log(models) - log_s[np.newaxis, :]) ** 2, axis=1)
-    cost = np.where(np.isfinite(cost), cost, np.inf)
-
-    if not np.all(np.isinf(cost)):
-        i_min = int(np.argmin(cost))
-        chi = float(chi_grid[i_min])
-        # Parabolic refinement of the minimum in log10(chi): the grid is
-        # ~4.7% coarse (200 points over 4 decades), a visible quantization
-        # on the primary output.  The vertex of the parabola through the
-        # minimum and its neighbors (uniform log spacing h) is
-        # x1 + 0.5*h*(y0 - y2)/(y0 - 2*y1 + y2); curvature > 0 and
-        # |offset| <= h are guaranteed when y1 is the strict minimum.
-        if 0 < i_min < len(chi_grid) - 1:
-            y0, y1, y2 = cost[i_min - 1 : i_min + 2]
-            if np.all(np.isfinite([y0, y1, y2])):
-                denom = y0 - 2.0 * y1 + y2
-                if denom > 0:
-                    h = np.log10(chi_grid[1] / chi_grid[0])
-                    dx = 0.5 * h * (y0 - y2) / denom
-                    chi = float(10.0 ** (np.log10(chi_grid[i_min]) + dx))
-    else:
-        chi = chi_vc
+    # V_resolved spans the SAME measured band [K[valid][0], K_max] that the
+    # observed integral covers (K_min set accordingly), mirroring the Method-2
+    # path so the unresolved-variance correction is not double-counted.
+    K_min = float(K[valid][0])
+    correction = _variance_correction(kB, K_max, speed, tau0, _h2, grad_func, K_min=K_min)
+    chi_var = np.trapezoid(np.maximum(s - nv, 0.0), K[valid])
+    chi = 6.0 * kappa_T * chi_var * (correction if np.isfinite(correction) else 1.0)
 
     # Compute fitted Batchelor spectrum for output
     spec_batch = grad_func(K, kB, chi)
