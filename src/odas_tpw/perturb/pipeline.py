@@ -1578,6 +1578,7 @@ def process_file(
         else:
             chi_use_epsilon = bool(chi_cfg.get("use_epsilon", True))
             chi_fom_max = chi_cfg.get("fom_max")
+            chi_spectral_qc = bool(chi_cfg.get("spectral_qc", True))
             chi_kwargs = {
                 k: v
                 for k, v in chi_cfg.items()
@@ -1585,6 +1586,7 @@ def process_file(
                 not in (
                     "enable",
                     "chi_minimum",
+                    "spectral_qc",
                     "diagnostics",
                     "use_epsilon",
                     "fom_max",
@@ -1592,6 +1594,18 @@ def process_file(
                     "salinity",
                 )
             }
+            # Soft spectral-QC thresholds for mk_chi_mean — the SAME limits the rsi
+            # pipeline's chi_final uses, so both pipelines filter chiMean/K_T/Gamma
+            # identically (issue #104 U3-C2).
+            if chi_spectral_qc:
+                from odas_tpw.chi.l4_chi import _CHI_FOM_LIMIT, _CHI_K_MAX_RATIO_MIN
+
+                chi_qc_kwargs = {
+                    "fom_limit": _CHI_FOM_LIMIT,
+                    "k_max_ratio_min": _CHI_K_MAX_RATIO_MIN,
+                }
+            else:
+                chi_qc_kwargs = {}
             # Resolve chi.salinity: "measured" -> per-profile practical salinity
             # from the profile's own C/T/P (TEOS-10); a number or None is passed
             # through (None -> fixed 35 PSU viscosity in process_l3_chi).
@@ -1649,7 +1663,11 @@ def process_file(
                                     p_path.name,
                                     two_sided=True,
                                 )
-                            chi_ds = mk_chi_mean(chi_ds, chi_cfg.get("chi_minimum", 1e-13))
+                            chi_ds = mk_chi_mean(
+                                chi_ds,
+                                chi_cfg.get("chi_minimum", 1e-13),
+                                **chi_qc_kwargs,
+                            )
                             # Apply chi QC BEFORE deriving mixing quantities so a
                             # QC-dropped chi does not leak into K_T/Gamma (audit
                             # r1-4). Mixing then consumes the NaN'd chiMean, so

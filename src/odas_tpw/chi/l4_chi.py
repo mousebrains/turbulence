@@ -310,12 +310,20 @@ def _compute_chi_final(
     for a window where none pass, so a window is never silently lost.
 
     Without ``fom``/``k_max_ratio`` it is the plain finite-chi geometric mean
-    (backward compatible).  QC'ing here means ``L4ChiData.chi_final`` (and the
-    reported binned chi built from it) is filtered consistently with the K_T /
-    Gamma it accompanies, rather than carrying poorly-resolved or bad-fit
-    windows that the mixing products already reject.  (2026-07-03 review,
-    Gemini C.)  The raw per-probe ``chi`` array is retained separately for
-    traceability.
+    (backward compatible).  ``L4ChiData.chi_final`` is what the **rsi** pipeline
+    reports and what gates its K_T / Gamma, so there the reported chi is filtered
+    consistently with the mixing products.  The **perturb** pipeline does NOT
+    report ``chi_final``: it reports ``chiMean`` from
+    :func:`odas_tpw.processing.chi_combine.mk_chi_mean`, which applies the SAME
+    ``_CHI_FOM_LIMIT`` / ``_CHI_K_MAX_RATIO_MIN`` soft QC (issue #104 U3-C2) so
+    its chiMean/K_T/Gamma are filtered identically — via a different code path,
+    not via ``chi_final``.  Both read the shared ``_CHI_FOM_LIMIT`` /
+    ``_CHI_K_MAX_RATIO_MIN`` constants below, so one definition governs every
+    path.  CAUTION: those constants are NOT part of the perturb config signature
+    (only the ``chi.spectral_qc`` toggle is), so editing them changes chi numbers
+    WITHOUT re-versioning cached ``chi_NN`` directories — bump a config value or
+    clear the cache if you change them.  The raw per-probe ``chi`` array is
+    retained separately for traceability.  (2026-07-03 review; 2026-07 #104.)
     """
     _n_gradt, n_spec = chi.shape
     chi_final = np.full(n_spec, np.nan)

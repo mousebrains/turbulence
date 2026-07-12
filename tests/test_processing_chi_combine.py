@@ -317,3 +317,108 @@ class TestMkChiMean:
         sigma_hi = mk_chi_mean(ds_hi)["chiLnSigma"].values
         # Different epsilon_T → different L_K → different sigma_ln_chi.
         assert not np.allclose(sigma_low, sigma_hi)
+
+
+def _make_chi_qc_ds(chi_2d, fom_2d, kmr_2d):
+    """Build a (probe, time) chi dataset carrying per-probe fom / K_max_ratio,
+    matching the perturb pipeline's chi product (issue #104 U3-C2 QC tests)."""
+    chi_2d = np.asarray(chi_2d, dtype=float)
+    n_probe, n_time = chi_2d.shape
+    return xr.Dataset(
+        {
+            "chi": (["probe", "time"], chi_2d),
+            "fom": (["probe", "time"], np.asarray(fom_2d, dtype=float)),
+            "K_max_ratio": (["probe", "time"], np.asarray(kmr_2d, dtype=float)),
+            "epsilon_T": (["probe", "time"], np.full((n_probe, n_time), 1e-8)),
+            "speed": (["time"], np.full(n_time, 0.7)),
+            "nu": (["time"], np.full(n_time, 1e-6)),
+        },
+        coords={"probe": np.arange(n_probe), "time": np.arange(n_time, dtype=float)},
+        attrs={"diss_length": 1024.0, "fs_fast": 512.0},
+    )
+
+
+class TestMkChiMeanSpectralQC:
+    """Soft fom + K_max_ratio QC on chiMean (issue #104 U3-C2)."""
+
+    from odas_tpw.chi.l4_chi import _CHI_FOM_LIMIT as FOM
+    from odas_tpw.chi.l4_chi import _CHI_K_MAX_RATIO_MIN as KMR
+
+    def _qc(self, chi, fom, kmr):
+        """mk_chi_mean with the shared spectral-QC thresholds enabled."""
+        ds = _make_chi_qc_ds(chi, fom, kmr)
+        return mk_chi_mean(ds, fom_limit=self.FOM, k_max_ratio_min=self.KMR)
+
+    def test_off_by_default_is_backward_compatible(self):
+        # No fom_limit/k_max_ratio_min -> QC disabled even when fom/Kmr present.
+        chi = np.array([[1e-8, 1e-8], [2e-8, 2e-8]])  # (probe, time)
+        fom = np.array([[1.0, 1.0], [3.0, 3.0]])  # probe 2 out of band
+        kmr = np.array([[0.9, 0.9], [0.9, 0.9]])
+        out = mk_chi_mean(_make_chi_qc_ds(chi, fom, kmr))
+        np.testing.assert_allclose(out["chiMean"].values, np.sqrt(1e-8 * 2e-8), rtol=1e-6)
+        assert "comment" not in out["chiMean"].attrs
+
+    def test_drops_failing_probe_when_another_passes(self):
+        chi = np.array([[1e-8, 1e-8], [2e-8, 2e-8]])
+        fom = np.array([[1.0, 1.0], [3.0, 3.0]])  # probe 2 fails both windows
+        kmr = np.array([[0.9, 0.9], [0.9, 0.9]])
+        out = self._qc(chi, fom, kmr)
+        np.testing.assert_allclose(out["chiMean"].values, 1e-8, rtol=1e-6)  # only probe 1
+        assert "spectral QC applied" in out["chiMean"].attrs.get("comment", "")
+
+    def test_kmax_ratio_floor_drops_underresolved_probe(self):
+        chi = np.array([[1e-8, 1e-8], [2e-8, 2e-8]])
+        fom = np.array([[1.0, 1.0], [1.0, 1.0]])  # both in fom band
+        kmr = np.array([[0.9, 0.9], [0.2, 0.2]])  # probe 2 under-resolved
+        out = self._qc(chi, fom, kmr)
+        np.testing.assert_allclose(out["chiMean"].values, 1e-8, rtol=1e-6)
+
+    def test_all_fail_falls_back_no_window_dropped(self):
+        chi = np.array([[1e-8, 1e-8], [2e-8, 2e-8]])
+        fom = np.array([[3.0, 3.0], [3.0, 3.0]])  # every probe fails
+        kmr = np.array([[0.2, 0.2], [0.2, 0.2]])
+        out = self._qc(chi, fom, kmr)
+        # Fallback keeps both -> geometric mean, never NaN.
+        assert np.all(np.isfinite(out["chiMean"].values))
+        np.testing.assert_allclose(out["chiMean"].values, np.sqrt(1e-8 * 2e-8), rtol=1e-6)
+
+    def test_both_pass_unchanged(self):
+        chi = np.array([[1e-8, 1e-8], [2e-8, 2e-8]])
+        fom = np.array([[1.0, 1.0], [1.0, 1.0]])
+        kmr = np.array([[0.9, 0.9], [0.9, 0.9]])
+        qc = self._qc(chi, fom, kmr)
+        noqc = mk_chi_mean(_make_chi_qc_ds(chi, fom, kmr))
+        np.testing.assert_allclose(qc["chiMean"].values, noqc["chiMean"].values, rtol=1e-6)
+
+    def test_no_fom_present_skips_qc_and_writes_no_comment(self):
+        # Limits passed but the dataset lacks fom/K_max_ratio (old-format NC):
+        # the QC is silently skipped and no misleading QC-applied comment is set.
+        n = 6
+        c = np.full(n, 1e-8)
+        ds = xr.Dataset(
+            {
+                "chi_1": (["time"], c),
+                "chi_2": (["time"], c * 2),
+                "speed": (["time"], np.full(n, 0.7)),
+                "nu": (["time"], np.full(n, 1e-6)),
+            },
+            coords={"time": np.arange(n, dtype=float)},
+            attrs={"diss_length": 1024.0, "fs_fast": 512.0},
+        )
+        out = mk_chi_mean(ds, fom_limit=self.FOM, k_max_ratio_min=self.KMR)
+        np.testing.assert_allclose(out["chiMean"].values, np.sqrt(1e-8 * 2e-8), rtol=1e-6)
+        assert "comment" not in out["chiMean"].attrs
+
+    def test_matches_compute_chi_final_probe_selection(self):
+        """The probe set entering chiMean must match _compute_chi_final's `passes`
+        mask on the same inputs (single shared-threshold definition)."""
+        from odas_tpw.chi.l4_chi import _compute_chi_final
+
+        rng = np.random.default_rng(0)
+        chi = 10.0 ** rng.uniform(-9, -7, size=(2, 6))
+        fom = rng.uniform(0.6, 1.6, size=(2, 6))
+        kmr = rng.uniform(0.2, 1.0, size=(2, 6))
+        out = self._qc(chi, fom, kmr)
+        # _compute_chi_final applies the identical soft QC (with fallback).
+        expected = _compute_chi_final(chi, fom, kmr)
+        np.testing.assert_allclose(out["chiMean"].values, expected, rtol=1e-6)
