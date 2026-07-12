@@ -151,9 +151,15 @@ DEFAULTS: dict[str, dict] = {
         # with salinity from the profile's own
         # C/T/P (TEOS-10).
         "chi_minimum": 1.0e-13,
-        "fom_max": None,  # null = no FOM cut. Same per-probe
-        # mechanism as epsilon.fom_max but
-        # operates on chi NCs.
+        "spectral_qc": True,  # Soft fom + K_max_ratio QC on chiMean
+        # (hence K_T/Gamma), matching the rsi
+        # chi_final. Never drops a window (falls
+        # back to all probes when none pass). Set
+        # false to publish unfiltered chiMean.
+        "fom_max": None,  # null = no FOM cut. An OPTIONAL, more
+        # aggressive HARD per-probe pre-cut (can NaN a
+        # whole window); independent of spectral_qc.
+        # Same mechanism as epsilon.fom_max.
         "diagnostics": False,
     },
     "ctd": {

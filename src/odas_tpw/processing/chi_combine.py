@@ -32,9 +32,27 @@ def _probe_sort_key(name: str) -> tuple[int, str]:
     return (int(suffix), "") if suffix.isdigit() else (2**31, name)
 
 
+def _stack_probe_var(ds: xr.Dataset, var: str, n_probe: int) -> np.ndarray | None:
+    """Stack a per-probe ``(probe, time)`` variable into ``(time, n_probe)``,
+    column-aligned with the chi probes; ``None`` when the variable or a matching
+    ``probe`` dim is absent.
+
+    The perturb pipeline always feeds ``chi(probe, time)`` (no pre-existing
+    ``chi_N``), so column ``i`` corresponds to probe index ``i`` (both from the
+    same ``probe`` dim).  Older / hand-built datasets that supply per-probe
+    ``chi_N`` as 1-D vars WITHOUT a matching ``probe`` dim return ``None`` here,
+    so the spectral QC is skipped rather than misaligned.
+    """
+    if var in ds and "probe" in ds[var].dims and ds.sizes.get("probe", 0) == n_probe:
+        return np.column_stack([ds[var].isel(probe=i).values for i in range(n_probe)])
+    return None
+
+
 def mk_chi_mean(
     ds: xr.Dataset,
     chi_minimum: float = 1e-13,
+    fom_limit: float | None = None,
+    k_max_ratio_min: float | None = None,
 ) -> xr.Dataset:
     """Combine per-probe chi into a mean estimate with CI filtering.
 
@@ -68,6 +86,16 @@ def mk_chi_mean(
         for the Kolmogorov length term.
     chi_minimum : float
         Floor — values at or below are set to NaN.
+    fom_limit : float or None
+        Two-sided figure-of-merit band ``[1/fom_limit, fom_limit]`` for the soft
+        spectral QC.  ``None`` (default) disables the QC entirely (backward
+        compatible). Supply together with ``k_max_ratio_min``.
+    k_max_ratio_min : float or None
+        Minimum ``K_max/kB`` spectral-resolution ratio for the soft spectral QC.
+        ``None`` disables the QC. When both limits are set and per-probe
+        ``fom`` / ``K_max_ratio`` are present, probes failing the band or the
+        resolution floor are dropped from ``chiMean`` *unless* no probe in the
+        window passes, in which case all are kept (no window is dropped).
 
     Returns
     -------
@@ -100,6 +128,44 @@ def mk_chi_mean(
     chi = np.column_stack([ds[name].values.copy() for name in probe_names])
 
     chi[chi <= chi_minimum] = np.nan
+
+    # Soft spectral QC (issue #104 U3-C2): when fom/K_max_ratio limits are supplied
+    # and the per-probe fom / K_max_ratio arrays are present, prefer the probes
+    # inside the two-sided fom band with sufficient spectral resolution — the SAME
+    # thresholds `_compute_chi_final` uses for the rsi chi_final, so the perturb
+    # chiMean (and the K_T / Gamma built from it) is filtered consistently with the
+    # rsi pipeline.  It is SOFT: if no probe in a window passes, that window's
+    # probes are all restored (no window is ever dropped), mirroring
+    # `_compute_chi_final`'s fallback.  For 2-probe Method-1 data the K_max_ratio
+    # floor is largely inert (both probes share the epsilon-derived kB, so they
+    # pass/fail together and the fallback keeps both) — the QC only re-weights
+    # windows where the probes genuinely disagree in fit quality.
+    qc_comment: str | None = None
+    if fom_limit is not None and k_max_ratio_min is not None:
+        n_probe = chi.shape[1]
+        fom = _stack_probe_var(ds, "fom", n_probe)
+        kmr = _stack_probe_var(ds, "K_max_ratio", n_probe)
+        if fom is not None and kmr is not None:
+            with np.errstate(invalid="ignore"):
+                passes = (
+                    np.isfinite(fom)
+                    & (fom <= fom_limit)
+                    & (fom >= 1.0 / fom_limit)
+                    & np.isfinite(kmr)
+                    & (kmr >= k_max_ratio_min)
+                )
+            finite_chi = np.isfinite(chi)
+            # Restrict the drop to windows where at least one probe passes QC AND
+            # still has a finite chi, so a window is never emptied.
+            any_pass = np.any(passes & finite_chi, axis=1)
+            drop = (~passes) & finite_chi & any_pass[:, np.newaxis]
+            chi[drop] = np.nan
+            qc_comment = (
+                f"soft spectral QC applied: probes preferred inside fom band "
+                f"[{1.0 / fom_limit:.4g}, {fom_limit:.4g}] with K_max_ratio >= "
+                f"{k_max_ratio_min:.4g}; windows with no passing probe keep all "
+                f"probes (no window dropped)"
+            )
 
     speed = ds["speed"].values if "speed" in ds else np.ones(n_time)
     nu = ds["nu"].values if "nu" in ds else np.full(n_time, 1e-6)
@@ -192,10 +258,13 @@ def mk_chi_mean(
     with np.errstate(invalid="ignore"):
         chi_mean = np.exp(np.nanmean(np.log(chi), axis=1))
 
+    chi_mean_attrs = {"long_name": "combined chi (geometric mean)", "units": "K2 s-1"}
+    if qc_comment is not None:
+        chi_mean_attrs["comment"] = qc_comment
     ds["chiMean"] = xr.DataArray(
         chi_mean,
         dims=["time"],
-        attrs={"long_name": "combined chi (geometric mean)", "units": "K2 s-1"},
+        attrs=chi_mean_attrs,
     )
     sigma_attrs = {"long_name": "sigma of ln(chi)", "units": "1"}
     if not have_eps_T:
