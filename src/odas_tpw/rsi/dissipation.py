@@ -205,6 +205,7 @@ def _compute_epsilon(
         fom_out = np.full((n_sh, n_spec), np.nan)
         FM_out = np.full((n_sh, n_spec), np.nan)
         K_max_ratio_out = np.full((n_sh, n_spec), np.nan)
+        var_resolved_out = np.full((n_sh, n_spec), np.nan)
         method_out = np.zeros((n_sh, n_spec), dtype=np.int8)
         spec_shear = np.full((n_sh, n_freq, n_spec), np.nan)
         spec_nasmyth = np.full((n_sh, n_freq, n_spec), np.nan)
@@ -246,7 +247,7 @@ def _compute_epsilon(
                     mad,
                     meth,
                     fom_val,
-                    _var_res,
+                    var_res,
                     nas_spec,
                     K_max_ratio_val,
                     FM_val,
@@ -268,6 +269,7 @@ def _compute_epsilon(
                 fom_out[ci, j] = fom_val
                 FM_out[ci, j] = FM_val
                 K_max_ratio_out[ci, j] = K_max_ratio_val
+                var_resolved_out[ci, j] = var_res
                 method_out[ci, j] = meth
                 spec_shear[ci, :, j] = shear_spec
                 spec_nasmyth[ci, :, j] = nas_spec
@@ -284,6 +286,7 @@ def _compute_epsilon(
             fom_out=fom_out,
             FM_out=FM_out,
             K_max_ratio_out=K_max_ratio_out,
+            var_resolved_out=var_resolved_out,
             method_out=method_out,
             speed_out=l3.pspd_rel,
             nu_out=nu_out,
@@ -413,6 +416,7 @@ def _build_diss_dataset(
     fom_out: np.ndarray,
     FM_out: np.ndarray,
     K_max_ratio_out: np.ndarray,
+    var_resolved_out: np.ndarray,
     method_out: np.ndarray,
     speed_out: np.ndarray,
     nu_out: np.ndarray,
@@ -501,6 +505,21 @@ def _build_diss_dataset(
             {
                 "units": "1",
                 "long_name": "K_max / K_95 spectral resolution ratio",
+            },
+        ),
+        (
+            "var_resolved",
+            ["probe", "time"],
+            var_resolved_out,
+            {
+                "units": "1",
+                "long_name": "fraction of Nasmyth shear variance resolved below K_max",
+                "comment": (
+                    "V_f in Lueck (2022, doi:10.1175/JTECH-D-21-0051.1) eq (17); "
+                    "used to apply the eq (18) L_hat_f = L_hat * V_f**0.75 "
+                    "spectral-truncation correction to sigma_ln(epsilon) in "
+                    "mk_epsilon_mean."
+                ),
             },
         ),
         (

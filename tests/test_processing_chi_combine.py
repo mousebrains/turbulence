@@ -422,3 +422,43 @@ class TestMkChiMeanSpectralQC:
         # _compute_chi_final applies the identical soft QC (with fallback).
         expected = _compute_chi_final(chi, fom, kmr)
         np.testing.assert_allclose(out["chiMean"].values, expected, rtol=1e-6)
+
+
+class TestChiLnSigmaVfTruncation:
+    """chi_combine's Lueck eq (18) var_resolved hook (issue #104 U4-F1).
+
+    The chi diss product carries no Batchelor V_f today, so the hook is a
+    guarded no-op (chiLnSigma unchanged). These tests lock that no-op AND verify
+    the correction is wired the same as the epsilon combiner for the day a
+    Batchelor V_f is stored (future-proofing / parity guard)."""
+
+    def _ds(self, var_resolved=None, n=6):
+        data = {
+            "chi": (["probe", "time"], np.full((2, n), 1e-8)),
+            "epsilon_T": (["probe", "time"], np.full((2, n), 1e-8)),
+            "speed": (["time"], np.full(n, 0.7)),
+            "nu": (["time"], np.full(n, 1e-6)),
+        }
+        if var_resolved is not None:
+            data["var_resolved"] = (["probe", "time"], np.full((2, n), var_resolved))
+        return xr.Dataset(
+            data,
+            coords={"probe": [0, 1], "time": np.arange(n, dtype=float)},
+            attrs={"diss_length": 1024.0, "fs_fast": 512.0},
+        )
+
+    def test_absent_var_resolved_unchanged(self):
+        # No var_resolved (the real chi path today) -> plain L_hat, finite sigma.
+        out = mk_chi_mean(self._ds())["chiLnSigma"].values
+        assert np.all(np.isfinite(out))
+
+    def test_vf_present_applies_correction_parity_with_epsilon(self):
+        base = mk_chi_mean(self._ds())["chiLnSigma"].values
+        vf = mk_chi_mean(self._ds(var_resolved=0.6))["chiLnSigma"].values
+        # Same direction as the epsilon combiner: V_f<1 raises sigma.
+        assert np.all(vf > base)
+
+    def test_vf_one_is_no_op(self):
+        base = mk_chi_mean(self._ds())["chiLnSigma"].values
+        vf1 = mk_chi_mean(self._ds(var_resolved=1.0))["chiLnSigma"].values
+        np.testing.assert_allclose(vf1, base, rtol=1e-9)

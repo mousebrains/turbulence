@@ -84,6 +84,20 @@ def mk_epsilon_mean(
     # Floor small values
     epsilon[epsilon <= epsilon_minimum] = np.nan
 
+    # Lueck (2022) eq (18) spectral-truncation correction input: the fraction of
+    # Nasmyth variance resolved below K_max, per probe (issue #104 U4-F1). Written
+    # by the diss build as var_resolved(probe, time); older diss NetCDFs lack it,
+    # in which case we fall back to the plain L_hat below.
+    var_resolved = None
+    if (
+        "var_resolved" in ds
+        and "probe" in ds["var_resolved"].dims
+        and ds.sizes.get("probe", 0) == len(probe_names)
+    ):
+        var_resolved = np.column_stack(
+            [ds["var_resolved"].isel(probe=i).values for i in range(len(probe_names))]
+        )
+
     # Get parameters
     speed = ds["speed"].values if "speed" in ds else np.ones(n_time)
     nu = ds["nu"].values if "nu" in ds else np.full(n_time, 1e-6)
@@ -113,6 +127,12 @@ def mk_epsilon_mean(
     # Normalized length
     with np.errstate(invalid="ignore", divide="ignore"):
         L_hat = L / L_K
+        if var_resolved is not None:
+            # Lueck (2022) Part I eq (18): truncating the spectrum at K_max
+            # reduces the dof by V_f**(3/4), so reduce the nondimensional
+            # averaging length accordingly (L_hat_f = L_hat * V_f**0.75).
+            # Clip the floor so a zero/near-zero V_f cannot collapse L_hat.
+            L_hat = L_hat * np.clip(var_resolved, 1e-6, 1.0) ** 0.75
 
     # Variance of ln(epsilon)
     with np.errstate(invalid="ignore"):
@@ -179,8 +199,10 @@ def mk_epsilon_mean(
             "units": "1",
             "comment": (
                 "Expected single-probe sigma_ln(epsilon) (Lueck 2022 "
-                "variance model), averaged across probes — NOT the sigma "
-                "of the combined epsilonMean (no sqrt(n) reduction applied)."
+                "variance model eq 11), averaged across probes — NOT the sigma "
+                "of the combined epsilonMean (no sqrt(n) reduction applied). "
+                "When var_resolved (V_f) is present the eq (18) spectral-"
+                "truncation correction L_hat_f = L_hat * V_f**0.75 is applied."
             ),
         },
     )

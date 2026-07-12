@@ -308,3 +308,61 @@ class TestMkEpsilonMean:
         assert "epsilonMean" in result
         expected = np.sqrt(1e-8 * 2e-8)
         np.testing.assert_allclose(result["epsilonMean"].values, expected, rtol=0.1)
+
+
+def _make_diss_ds_vf(eps, var_resolved=None, n=8):
+    """2-D epsilon(probe, time) diss ds, optionally with var_resolved(probe, time)
+    (issue #104 U4-F1 eq (18) truncation-correction tests)."""
+    data = {
+        "epsilon": (["probe", "time"], np.full((2, n), eps)),
+        "speed": (["time"], np.full(n, 0.7)),
+        "nu": (["time"], np.full(n, 1e-6)),
+    }
+    if var_resolved is not None:
+        data["var_resolved"] = (["probe", "time"], np.full((2, n), var_resolved))
+    return xr.Dataset(
+        data,
+        coords={"probe": [0, 1], "time": np.arange(n, dtype=float)},
+        attrs={"diss_length": 1024.0, "fs_fast": 512.0},
+    )
+
+
+class TestEpsilonLnSigmaVfTruncation:
+    """Lueck (2022) eq (18) L_hat_f = L_hat * V_f**0.75 correction (#104 U4-F1)."""
+
+    def test_absent_var_resolved_backward_compatible(self):
+        base = mk_epsilon_mean(_make_diss_ds_vf(1e-8))["epsilonLnSigma"].values
+        assert np.all(np.isfinite(base))
+        # No var_resolved -> unchanged behavior (the fixture without it).
+
+    def test_vf_equal_one_is_no_op(self):
+        base = mk_epsilon_mean(_make_diss_ds_vf(1e-8))["epsilonLnSigma"].values
+        vf1 = mk_epsilon_mean(_make_diss_ds_vf(1e-8, var_resolved=1.0))["epsilonLnSigma"].values
+        np.testing.assert_allclose(vf1, base, rtol=1e-9)
+
+    def test_vf_below_one_increases_sigma(self):
+        # Truncation reduces dof -> sigma_ln(epsilon) must INCREASE (the omission
+        # understated it). Monotone: smaller V_f -> larger sigma.
+        base = mk_epsilon_mean(_make_diss_ds_vf(1e-8))["epsilonLnSigma"].values
+        vf95 = mk_epsilon_mean(_make_diss_ds_vf(1e-8, var_resolved=0.95))["epsilonLnSigma"].values
+        vf60 = mk_epsilon_mean(_make_diss_ds_vf(1e-8, var_resolved=0.60))["epsilonLnSigma"].values
+        assert np.all(vf95 > base)
+        assert np.all(vf60 > vf95)
+
+    def test_hand_value(self):
+        vf = 0.95
+        out = mk_epsilon_mean(_make_diss_ds_vf(1e-8, var_resolved=vf))["epsilonLnSigma"].values
+        L = 0.7 * 1024.0 / 512.0
+        L_K = (1e-6**3 / 1e-8) ** 0.25
+        L_hat = (L / L_K) * vf**0.75
+        expected = np.sqrt(5.5 / (1.0 + (L_hat / 4.0) ** (7.0 / 9.0)))
+        np.testing.assert_allclose(out, expected, rtol=1e-9)
+
+    def test_zero_and_nan_vf_do_not_crash(self):
+        # V_f=0 is clipped (no L_hat collapse); a NaN slot propagates to NaN sigma.
+        out0 = mk_epsilon_mean(_make_diss_ds_vf(1e-8, var_resolved=0.0))["epsilonLnSigma"].values
+        assert np.all(np.isfinite(out0))
+        ds = _make_diss_ds_vf(1e-8, var_resolved=0.9)
+        ds["var_resolved"].values[0, 0] = np.nan
+        out_nan = mk_epsilon_mean(ds)["epsilonLnSigma"].values
+        assert np.all(np.isfinite(out_nan[1:]))  # other windows unaffected
