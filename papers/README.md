@@ -1,32 +1,24 @@
-# papers/ — general reference collection
+# papers/ — annotated reference library
 
-Topic-specific collections live in subdirectories (see
-[anisotropy/README.md](anisotropy/README.md) for the isotropy +
-mixing-efficiency library). This root holds general instrument/methods
-references:
+Reading list for the microstructure-tpw processing chain and the associated
+analyses (epsilon, chi, mixing efficiency, overturns, isotropy). The PDFs are
+**not** tracked in git (they are large and mostly copyrighted); only these
+`README.md` indexes are. Each subject subdirectory holds its own PDFs plus a
+`README.md` with a `Paper | File | Why it matters` table.
 
-| Paper | File | Why it matters |
+## Subject groups
+
+| Group | Papers | Scope |
 |---|---|---|
-| Lueck et al. (2024), "Best practices recommendations for estimating dissipation rates from shear probes," *Front. Mar. Sci.* **11**, 1334327. [doi:10.3389/fmars.2024.1334327](https://doi.org/10.3389/fmars.2024.1334327) | `Lueck_2024_Best_Practices_Shear_Probes.pdf` | The ATOMIX community standard; source of the FFT-length "sandwich" in `docs/perturb/dissipation_length.md`. |
-| Fer, Dengler, Holtermann, Le Boyer & Lueck (2024), "ATOMIX benchmark datasets for dissipation rate measurements using shear probes," *Sci. Data* **11**, 518. [doi:10.1038/s41597-024-03323-y](https://doi.org/10.1038/s41597-024-03323-y) | `Fer_2024_ATOMIX_Benchmark_Datasets.pdf` | Benchmark datasets validating the epsilon pipeline (see `AtomixData/`). |
-| Whalen (2021), "Best practices for comparing ocean turbulence measurements across spatiotemporal scales," *JTECH* **38**, 837–841. [doi:10.1175/JTECH-D-20-0175.1](https://doi.org/10.1175/JTECH-D-20-0175.1) | `Whalen_2021_Best_Practices_Comparing_Ocean_Turbulence.pdf` | Lognormal averaging-scale pitfalls when comparing ε products. |
-| Le Boyer et al. (2021), "Modular, flexible, low-cost microstructure measurements: The Epsilometer," *JTECH* **38**, 657–668. [doi:10.1175/JTECH-D-20-0116.1](https://doi.org/10.1175/JTECH-D-20-0116.1) | `LeBoyer_2021_Epsilometer.pdf` | Alternative microstructure instrument; processing comparison point. |
-| Nash, Caldwell, Zelman & Moum (1999), "A thermocouple probe for high-speed temperature measurement in the ocean," *JTECH* **16**, 1474–1483. [doi:10.1175/1520-0426(1999)016<1474:ATPFHS>2.0.CO;2](https://doi.org/10.1175/1520-0426(1999)016%3C1474:ATPFHS%3E2.0.CO;2) | `Nash_1999_Thermocouple_Probe_HighSpeed.pdf` | Fast-temperature sensing background (OCR text layer added locally). |
-| Dillon & Caldwell (1980), "The Batchelor spectrum and dissipation in the upper ocean," *JGR* **85**(C4), 1910–1916. [doi:10.1029/JC085iC04p01910](https://doi.org/10.1029/JC085iC04p01910) | `Dillon_Caldwell_1980_Batchelor_Spectrum_Upper_Ocean.pdf` | Batchelor-spectrum fitting foundations for the chi path. |
-| Ruddick, Anis & Thompson (2000), "Maximum likelihood spectral fitting: The Batchelor spectrum," *JTECH* **17**, 1541–1555. [doi:10.1175/1520-0426(2000)017<1541:MLSFTB>2.0.CO;2](https://doi.org/10.1175/1520-0426%282000%29017%3C1541:MLSFTB%3E2.0.CO;2) | `Ruddick_2000_ML_Batchelor_Fitting.pdf` | The MLE Batchelor-fitting method family our chi path belongs to. |
-| Bluteau, Wain, Mullarney & Stevens (2025, EGUsphere preprint), "Best practices for estimating turbulent dissipation from oceanic single-point measurements." [doi:10.5194/egusphere-2025-4433](https://doi.org/10.5194/egusphere-2025-4433) | `Bluteau_2025_SinglePoint_Dissipation_Best_Practices_preprint.pdf` | Companion best-practices to Lueck 2024 (point-velocity side of ATOMIX). |
-| Mudge & Lueck (1994), "Digital signal processing to enhance oceanographic observations," *JTECH* **11**, 825–836. [doi:10.1175/1520-0426(1994)011<0825:DSPTEO>2.0.CO;2](https://doi.org/10.1175/1520-0426%281994%29011%3C0825:DSPTEO%3E2.0.CO;2) | `Mudge_Lueck_1994_DSP_Oceanographic_Observations.pdf` | Pre-emphasis/deconvolution background for the RSI signal chain (OCR added locally). |
-| McMillan, Hay, Lueck & Wolk (2016), "Rates of dissipation of turbulent kinetic energy in a high Reynolds number tidal channel," *JTECH* **33**, 817–837. [doi:10.1175/JTECH-D-15-0167.1](https://doi.org/10.1175/JTECH-D-15-0167.1) | `McMillan_2016_Dissipation_HighRe_Tidal_Channel.pdf` | Inertial-subrange ε fitting at high Re — the high-ε method branch. |
-| Goto, Yasuda & Nagasawa (2016), "Turbulence estimation using fast-response thermistors attached to a free-fall vertical microstructure profiler," *JTECH* **33**, 2065–2078. [doi:10.1175/JTECH-D-15-0220.1](https://doi.org/10.1175/JTECH-D-15-0220.1) | `Goto_2016_FastThermistor_Turbulence_VMP.pdf` | Thermistor-based ε estimation — chi-side methods. |
-| Ijichi & St. Laurent (2025), "Revisiting issues in estimating spectra of ocean temperature microstructure," *JTECH* **42**, 1137–1148. [doi:10.1175/JTECH-D-24-0087.1](https://doi.org/10.1175/JTECH-D-24-0087.1) | `Ijichi_StLaurent_2025_Temperature_Microstructure_Spectra.pdf` | Current state of the art on temperature-microstructure spectra. |
-| Kraichnan (1968), "Small-scale structure of a scalar field convected by turbulence," *Phys. Fluids* **11**, 945–953. [doi:10.1063/1.1692063](https://doi.org/10.1063/1.1692063) | `Kraichnan_1968_Scalar_Field_Turbulence.pdf` | The Kraichnan scalar spectrum our chi fitting uses. |
-| Welch (1967), "The use of fast Fourier transform for the estimation of power spectra," *IEEE Trans. Audio Electroacoust.* **AU-15**, 70–73. [doi:10.1109/TAU.1967.1161901](https://doi.org/10.1109/TAU.1967.1161901) | `Welch_1967_FFT_Power_Spectra.pdf` | The Welch method behind all our spectral estimation. |
-| Lueck, Hertzman & Osborn (1977), "The spectral response of thermistors," *Deep-Sea Res.* **24**, 951–970. [doi:10.1016/0146-6291(77)90565-3](https://doi.org/10.1016/0146-6291%2877%2990565-3) | `Lueck_1977_Spectral_Response_Thermistors.pdf` | Thermistor frequency-response foundations for the FP07 corrections. |
-| Gregg & Meagher (1980), "The dynamic response of glass rod thermistors," *JGR* **85**(C5), 2779–2786. [doi:10.1029/JC085iC05p02779](https://doi.org/10.1029/JC085iC05p02779) | `Gregg_Meagher_1980_Glass_Rod_Thermistor_Response.pdf` | Companion thermistor-response reference. |
-| Peterson & Fer (2014), "Dissipation measurements using temperature microstructure from an underwater glider," *Methods Oceanogr.* **10**, 44–69. [doi:10.1016/j.mio.2014.05.002](https://doi.org/10.1016/j.mio.2014.05.002) | `Peterson_Fer_2014_Glider_Temperature_Microstructure.pdf` | Chi-based ε from a glider — MR-relevant methods. |
-| Mater & Venayagamoorthy (2014), "The quest for an unambiguous parameterization of mixing efficiency...," *GRL* **41**, 4646–4653. [doi:10.1002/2014GL060571](https://doi.org/10.1002/2014GL060571) | `Mater_Venayagamoorthy_2014_Mixing_Efficiency_Parameterization.pdf` | Mixing-efficiency parameterization context (gamma-scaling). |
-| Ijichi, St. Laurent, Polzin & Toole (2020), "How variable is mixing efficiency in the abyss?" *GRL* **47**, e2019GL086813. [doi:10.1029/2019GL086813](https://doi.org/10.1029/2019GL086813) | `Ijichi_2020_Mixing_Efficiency_Abyss.pdf` | Abyssal Γ variability — companion to Ijichi & Hibiya 2018. |
-| Bogucki, Domaradzki & Yeung (1997), "Direct numerical simulations of passive scalars with Pr>1 advected by turbulent flow," *JFM* **343**, 111–130. [doi:10.1017/S0022112097005727](https://doi.org/10.1017/S0022112097005727) | `Bogucki_1997_DNS_Passive_Scalars_Pr1.pdf` | DNS basis for the Kraichnan scalar spectrum used in chi fitting. |
+| [spectra-and-sensor-response/](spectra-and-sensor-response/README.md) | 9 | Spectral-estimation foundations (Welch, DSP) and thermistor / shear-probe frequency response — the transfer functions behind FP07 and shear corrections. |
+| [epsilon-shear/](epsilon-shear/README.md) | 9 | TKE dissipation (ε) from shear probes: ATOMIX best practices and benchmark, the Lueck (2022) statistics, Goodman coherent-noise removal, and cross-method comparisons. |
+| [chi-thermal/](chi-thermal/README.md) | 5 | Thermal-variance dissipation (χ): Batchelor / Kraichnan spectrum fitting, MLE estimation, and temperature-microstructure methods. |
+| [mixing-efficiency/](mixing-efficiency/README.md) | 14 | Mixing efficiency Γ and the gamma-scaling chain (Lewin Fig. 5): Osborn / Osborn–Cox, Re_b and R_OT parameterizations, and Γ observations. |
+| [overturns-thorpe/](overturns-thorpe/README.md) | 5 | Thorpe-scale overturn analysis: the sort, the Thorpe–Ozmidov link, overturn-validity tests, and the Thorpe-scale ε biases. |
+| [stratified-turbulence-anisotropy/](stratified-turbulence-anisotropy/README.md) | 5 | Isotropy criteria and the structure of stratified turbulence — the backdrop for the VMP two-probe isotropy investigation. |
+| [gliders-and-platforms/](gliders-and-platforms/README.md) | 3 | MicroRider-on-glider / AUV platform processing — precedent for the deep-MR window and noise-floor choices. |
+
+50 PDFs in hand across the seven groups.
 
 ## Cited in the repository docs, no local PDF yet
 
@@ -34,9 +26,24 @@ The full annotated bibliography behind `docs/chi_mathematics.md` /
 `docs/epsilon_mathematics.md` lives in `docs/bibliography.md` (git-tracked).
 Papers cited there but not yet in this collection:
 
-| Citation | DOI |
-|---|---|
-| Batchelor (1959), Small-scale variation of convected quantities, *JFM* 5, 113–133 | [10.1017/S002211205900009X](https://doi.org/10.1017/S002211205900009X) |
+| Citation | DOI | Intended group |
+|---|---|---|
+| Batchelor (1959), Small-scale variation of convected quantities, *JFM* 5, 113–133 | [10.1017/S002211205900009X](https://doi.org/10.1017/S002211205900009X) | `chi-thermal/` |
 
 (The BODC `10.5285/...` and Zenodo DOIs cited in `docs/atomix_benchmark.md` are
-*dataset* DOIs — data lives in `AtomixData/`, not here.)
+*dataset* DOIs — the data lives in `AtomixData/`, not here.)
+
+## Provenance notes
+
+- Assembled 2026-07-09/12 from publisher open access plus Pat's library copies.
+- OCR text layers were added locally to three legacy AMS scans — Osborn (1980)
+  and Oakey (1982) in `mixing-efficiency/`, Galbraith & Kelley (1996) in
+  `overturns-thorpe/` — and to Nash (1999) and Mudge & Lueck (1994) in
+  `spectra-and-sensor-response/`.
+- Osborn & Cox (1972, `mixing-efficiency/`) and Gargett et al. (1984,
+  `stratified-turbulence-anisotropy/`) are inter-library-loan scans with their
+  cover sheets on page 1.
+- Several papers sit at a topic boundary and are cross-referenced from the
+  neighboring group's README where relevant (e.g. the Lueck 2022 statistics
+  under `epsilon-shear/` also underpin the two-probe isotropy null; Peterson &
+  Fer 2014 under `chi-thermal/` is also a glider-platform paper).
