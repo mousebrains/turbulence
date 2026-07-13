@@ -376,14 +376,35 @@ def _estimate_epsilon(
     # previous behavior) silently removes variance, biasing epsilon low
     # and corrupting the log-space polynomial minimum search.
     bad = np.where(~np.isfinite(shear_spectrum))[0]
-    if len(bad) == 0:
-        spec_safe = shear_spectrum
-    elif len(bad) == 1 and 0 < bad[0] < n_freq - 1:
+    spec_safe = shear_spectrum
+    if len(bad) > 0:
         spec_safe = shear_spectrum.copy()
-        spec_safe[bad[0]] = 0.5 * (spec_safe[bad[0] - 1] + spec_safe[bad[0] + 1])
-    else:
-        nan_spec = np.full(n_freq, np.nan)
-        return (np.nan, np.nan, np.nan, 0, np.nan, np.nan, nan_spec, np.nan, np.nan, np.nan, np.nan)
+        # The DC bin (index 0, K=0) is excluded from the log-spectrum polynomial
+        # fit (ODAS fits log10(shear_spectrum(2:Index_limit))) but IS included in
+        # the variance trapezoid below, so repairing it from a finite neighbor
+        # keeps that integral finite (a repaired DC shifts a variance-regime
+        # estimate by ~5%, immaterial vs the factor-2 epsilon uncertainty). A
+        # non-finite DC value is common in externally Goodman-cleaned L3 spectra
+        # (the ATOMIX Epsifish set is NaN@DC in every spectrum). NOTE: ODAS
+        # itself voids a DC-NaN spectrum; this repair deliberately IMPROVES on it
+        # so such externally-cleaned spectra remain usable. (issue #104 U8-1.)
+        if bad[0] == 0 and n_freq > 1 and np.isfinite(shear_spectrum[1]):
+            spec_safe[0] = shear_spectrum[1]
+            bad = bad[1:]
+        # A single remaining interior bad bin is interpolated from its neighbors;
+        # anything else (>=2 bad, or an un-repairable boundary bin) invalidates
+        # the estimate — but WARN rather than dropping it silently.
+        if len(bad) == 1 and 0 < bad[0] < n_freq - 1:
+            spec_safe[bad[0]] = 0.5 * (spec_safe[bad[0] - 1] + spec_safe[bad[0] + 1])
+        elif len(bad) > 0:
+            warnings.warn(
+                f"{len(bad)} non-finite shear-spectrum bin(s) at {bad.tolist()}; "
+                "epsilon set to NaN",
+                stacklevel=2,
+            )
+            nan_spec = np.full(n_freq, np.nan)
+            nan = np.nan
+            return (nan, nan, nan, 0, nan, nan, nan_spec, nan, nan, nan, nan)
 
     # Initial estimate: integrate to K_INITIAL_CUTOFF cpm.  K is monotone
     # nondecreasing (it's an FFT wavenumber grid divided by a positive

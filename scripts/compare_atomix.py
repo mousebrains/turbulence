@@ -895,11 +895,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # Process each dataset
     results = []
+    n_errors = 0
     for key, nc_path in found.items():
         try:
             result = compare_dataset(nc_path, key)
             results.append(result)
         except Exception as exc:
+            n_errors += 1
             print(f"\n  ERROR processing {key}: {exc}")
             import traceback
 
@@ -924,17 +926,32 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\n{'=' * 60}")
     print("SUMMARY")
     print(f"{'=' * 60}")
+    datasets_with_data = [r for r in results if r.spectra]
+    # A run passes only if at least one dataset actually produced comparable
+    # spectra, NO dataset raised, and every dataset-with-data is within
+    # tolerance.  Without the first two conditions a run that errors on (or
+    # finds no spectra in) every dataset would vacuously return 0 and pass a CI
+    # gate. (issue #104 I2b-F2.)
+    overall_pass = n_errors == 0 and len(datasets_with_data) > 0
     for r in results:
         if r.spectra:
             rmsd_ok = r.log10_rmsd < PASS_THRESHOLDS["log10_rmsd"]
             corr_ok = r.correlation > PASS_THRESHOLDS["correlation"]
             frac_ok = r.frac_within_1_decade > PASS_THRESHOLDS["frac_within_1_decade"]
-            status = "PASS" if (rmsd_ok and corr_ok and frac_ok) else "FAIL"
+            passed = rmsd_ok and corr_ok and frac_ok
+            overall_pass = overall_pass and passed
+            status = "PASS" if passed else "FAIL"
             print(f"  {r.name:30s}  RMSD={r.log10_rmsd:.3f}  r={r.correlation:.3f}  [{status}]")
         else:
             print(f"  {r.name:30s}  (no spectra)")
+    if n_errors:
+        print(f"  {n_errors} dataset(s) raised an error — run FAILS")
+    elif not datasets_with_data:
+        print("  no dataset produced comparable spectra — run FAILS")
 
-    return 0
+    # Non-zero exit on FAIL so the script can serve as a CI/regression gate
+    # (issue #104 I2b-F2: previously returned 0 unconditionally).
+    return 0 if overall_pass else 1
 
 
 if __name__ == "__main__":
