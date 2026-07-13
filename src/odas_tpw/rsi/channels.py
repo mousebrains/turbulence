@@ -142,6 +142,13 @@ def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     sig_zero = _safe_float(params.get("sig_zero", "0"))
     phys = (adc_fs / 2**adc_bits) * data + (adc_zero - sig_zero)
     phys = phys / (2 * np.sqrt(2) * diff_gain * sens)
+    # NB: this is the ODAS intermediate — still MISSING the /speed^2 fall-rate
+    # normalization that makes it true physical shear (applied exactly once
+    # downstream in helpers.py + adapter). The units stay the UDUNITS-valid
+    # "s-1" so CF-declared per-profile files remain compliant; the
+    # pre-normalization caveat is surfaced CF-legally via the sh1/sh2 ``comment``
+    # attribute (set during channel conversion in PFile._read), not baked into
+    # ``units``. (#104 U1-1.)
     return phys, "s-1"
 
 

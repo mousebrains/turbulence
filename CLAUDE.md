@@ -69,7 +69,7 @@ from pathlib import Path
 
 pf = PFile("VMP/ARCTERX_Thompson_2025_SN479_0001.p")
 pf.channels["T1"]    # numpy array, physical units (°C)
-pf.channels["sh1"]   # shear in s⁻¹
+pf.channels["sh1"]   # un-normalized shear intermediate (needs /speed²; s⁻¹ only after)
 pf.t_fast             # time vector for fast channels
 pf.fs_fast            # fast sampling rate (~512 Hz)
 

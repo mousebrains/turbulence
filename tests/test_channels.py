@@ -79,6 +79,8 @@ class TestConvertShear:
         }
         data = np.array([-100.0, -50.0, 0.0, 50.0, 100.0])
         shear, units = convert_shear(data, params)
+        # Units stay UDUNITS-valid "s-1" (CF compliance); the pre-normalization
+        # caveat is carried in the sh1/sh2 ``comment`` attr instead (#104 U1-1).
         assert units == "s-1"
         # Should be antisymmetric around zero
         np.testing.assert_allclose(shear[2], 0.0, atol=1e-10)
