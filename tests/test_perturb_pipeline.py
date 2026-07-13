@@ -1,6 +1,7 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Tests for perturb.pipeline — orchestration and stage runners."""
 
+import logging
 import struct
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -564,6 +565,30 @@ class TestProcessFile:
         assert result["profiles"] == []
         assert result["diss"] == []
 
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_fast_length_pressure_skips_profile_detection(
+        self, mock_pfile_cls, tmp_path, caplog
+    ):
+        """A 'P' channel whose length != the slow grid (e.g. a hotel-injected
+        fast-rate P clobbering native slow P) must not drive profile detection:
+        dP/dt would be wrong and the file would be silently dropped. Guard B
+        (U5-1) skips detection loudly instead of trusting the mismatched P."""
+        mock_pf = MagicMock()
+        # Fast-length P (200) with a slow grid of 100 -> mismatch.
+        mock_pf.channels = {"P": np.linspace(0, 50, 200), "T1": np.zeros(200)}
+        mock_pf.t_slow = np.linspace(0.0, 3.125, 100)
+        mock_pfile_cls.return_value = mock_pf
+
+        config = self._base_config(tmp_path)
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+            result = process_file(tmp_path / "test.p", config, None, output_dirs)
+
+        assert result["profiles"] == []
+        assert result["diss"] == []
+        assert "slow-grid length" in caplog.text
+        assert "cannot drive" in caplog.text
+
     @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
     @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
     @patch("odas_tpw.rsi.p_file.PFile")
@@ -571,6 +596,7 @@ class TestProcessFile:
         """No profiles detected returns early with empty result."""
         mock_pf = MagicMock()
         mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
         mock_pf.fs_slow = 64.0
         mock_pfile_cls.return_value = mock_pf
 
@@ -595,6 +621,7 @@ class TestProcessFile:
         """
         mock_pf = MagicMock()
         mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
         mock_pf.fs_slow = 64.0
         mock_pf.config = {"instrument_info": {"vehicle": "slocum_glider"}}
         mock_pfile_cls.return_value = mock_pf
@@ -624,6 +651,7 @@ class TestProcessFile:
         """Explicit direction values bypass the resolver."""
         mock_pf = MagicMock()
         mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
         mock_pf.fs_slow = 64.0
         mock_pf.config = {"instrument_info": {"vehicle": "slocum_glider"}}
         mock_pfile_cls.return_value = mock_pf
@@ -650,6 +678,7 @@ class TestProcessFile:
         """fp07.calibrate=False skips FP07 calibration."""
         mock_pf = MagicMock()
         mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
         mock_pf.fs_slow = 64.0
         mock_pfile_cls.return_value = mock_pf
         mock_get_prof.return_value = [{"start": 0, "end": 50}]
@@ -707,6 +736,7 @@ class TestProcessFile:
         """ctd.enable=False skips CTD binning (ctd_bin_file not called)."""
         mock_pf = MagicMock()
         mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
         mock_pf.fs_slow = 64.0
         mock_pfile_cls.return_value = mock_pf
         mock_get_prof.return_value = []
@@ -733,6 +763,7 @@ class TestProcessFile:
         """Hotel data should be injected into pf.channels when provided."""
         mock_pf = MagicMock()
         mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
         mock_pf.fs_slow = 64.0
         mock_pfile_cls.return_value = mock_pf
 
@@ -751,6 +782,7 @@ class TestProcessFile:
         """ctd.enable=True and 'ctd' in output_dirs calls ctd_bin_file."""
         mock_pf = MagicMock()
         mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
         mock_pf.fs_slow = 64.0
         mock_pfile_cls.return_value = mock_pf
 
@@ -773,6 +805,7 @@ class TestProcessFile:
         """CTD outputs use the pipeline's unique per-file stem."""
         mock_pf = MagicMock()
         mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
         mock_pf.fs_slow = 64.0
         mock_pfile_cls.return_value = mock_pf
 
@@ -805,6 +838,7 @@ class TestProcessFile:
         """Profile outputs use the pipeline's unique per-file stem."""
         mock_pf = MagicMock()
         mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
         mock_pf.fs_slow = 64.0
         mock_pfile_cls.return_value = mock_pf
         mock_get_prof.return_value = [{"start": 0, "end": 50}]
@@ -848,6 +882,7 @@ class TestProcessFile:
 
         mock_pf = MagicMock()
         mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
         mock_pf.fs_slow = 64.0
         mock_pfile_cls.return_value = mock_pf
         mock_get_prof.return_value = [{"start": 0, "end": 50}]
@@ -907,6 +942,7 @@ class TestProcessFile:
 
         mock_pf = MagicMock()
         mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
         mock_pf.fs_slow = 64.0
         mock_pfile_cls.return_value = mock_pf
         mock_get_prof.return_value = [{"start": 0, "end": 50}]
@@ -966,6 +1002,7 @@ class TestProcessFile:
 
         mock_pf = MagicMock()
         mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
         mock_pf.fs_slow = 64.0
         mock_pfile_cls.return_value = mock_pf
         mock_get_prof.return_value = [{"start": 0, "end": 50}]

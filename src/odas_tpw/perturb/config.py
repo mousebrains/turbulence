@@ -777,8 +777,11 @@ hotel:
                           #   ~ (null) / {}     : include with defaults
                           #   "new_name"        : rename only
                           #   {name, interp,    : per-variable options
-                          #    scale, offset,   #   (any subset)
-                          #    units, fast}
+                          #    scale, offset,   #   (any subset). replace:true
+                          #    units, fast,     #   lets a hotel channel
+                          #    replace}         #   overwrite a native one
+                          #                     #   (else refused; pair with
+                          #                     #   fast:false for slow P).
   fast_channels:          # default fast set when 'fast' is unset per-var
     - speed
     - P
