@@ -9,6 +9,7 @@ Both call existing, tested chi fitting functions.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -21,6 +22,8 @@ from odas_tpw.chi.chi import (
 from odas_tpw.chi.fp07 import fp07_double_pole, fp07_transfer
 from odas_tpw.chi.l3_chi import L3ChiData
 from odas_tpw.scor160.io import L4Data
+
+logger = logging.getLogger(__name__)
 
 
 def _to_float64_seconds(arr: np.ndarray) -> np.ndarray:
@@ -118,6 +121,28 @@ def _process_l4_chi(
             K_max_out[ci, j] = K_max_val
             fom_out[ci, j] = fom_val
             K_max_ratio_out[ci, j] = K_max_ratio_val
+
+    # U3-C3: drop Method-2 windows whose fitted kB reaches past the anti-alias
+    # band (kB > _CHI_KB_KAA_MAX * K_AA). Applied BEFORE _compute_chi_final so
+    # the dropped windows also leave chi_final. Method 1 ("epsilon") fixes kB
+    # from the shear epsilon rather than fitting it, so this can never fire
+    # there and is skipped by construction. K_max_ratio (= k_u/kB) divides by
+    # the biased-low kB and so cannot catch these on its own — see U3-C3 grounding.
+    if method_name == "fit":
+        with np.errstate(divide="ignore", invalid="ignore"):
+            K_AA_w = f_AA_eff / l3_chi.pspd_rel  # (n_spec,) anti-alias wavenumber
+        under_resolved = np.isfinite(kB_out) & (kB_out > _CHI_KB_KAA_MAX * K_AA_w[None, :])
+        n_dropped = int(under_resolved.sum())
+        if n_dropped:
+            logger.warning(
+                "%d Method-2 chi window(s) dropped: fitted kB > %.1f*K_AA "
+                "(Batchelor rolloff beyond the anti-alias band; chi and "
+                "epsilon_T under-resolved, biased low)",
+                n_dropped,
+                _CHI_KB_KAA_MAX,
+            )
+        chi_out[under_resolved] = np.nan
+        eps_out[under_resolved] = np.nan
 
     chi_final = _compute_chi_final(chi_out, fom_out, K_max_ratio_out)
 
@@ -291,6 +316,14 @@ def process_l4_chi_fit(
 # reported chi and the chi that drives K_T/Gamma are filtered identically.
 _CHI_FOM_LIMIT = 1.15          # two-sided obs/model variance-ratio band [1/x, x]
 _CHI_K_MAX_RATIO_MIN = 0.5     # reject windows whose chi is mostly extrapolated
+
+# Method-2 (spectral-fit) applicability limit. The Batchelor wavenumber kB is
+# recovered from in-band spectrum only (K <= K_AA = f_AA_eff / speed); when the
+# true rolloff lies beyond K_AA the fit is under-constrained and kB is pulled
+# LOW, so chi and (∝kB⁴) epsilon_T are underestimated. A fitted kB that itself
+# exceeds this multiple of K_AA proves the rolloff is unresolved -> drop the
+# window. (issue #104 U3-C3; kB/K_AA ≈ 1.8 -> ~13% low eps, ≈ 2.1 -> ~59% low.)
+_CHI_KB_KAA_MAX = 1.5
 
 
 def _compute_chi_final(

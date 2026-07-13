@@ -812,16 +812,21 @@ def _compute_flags(
 
 
 def _compute_epsi_final(epsi: np.ndarray, flags: np.ndarray) -> np.ndarray:
-    """Compute EPSI_FINAL: geometric mean of probes with flags == 0."""
+    """Compute EPSI_FINAL: geometric mean of the probes with ``flags == 0``.
+
+    A window in which *no* probe is clean (all flagged) returns ``NaN`` — it is
+    dropped, not silently backfilled. Averaging QC-failed probes would emit a
+    value indistinguishable from a clean estimate while contradicting Lueck et
+    al. 2024 §3.4.5 (average over Q=0 estimates only). NaN is also the safer
+    output for the Method-1 chi coupling: a finite-but-wrong epsilon rescales
+    chi ~linearly while the chi FOM stays ≈1 (so the FOM cut cannot reject it),
+    whereas NaN self-excludes at the ``l4_chi`` finiteness guard. (#104 U2-F2.)
+    """
     _n_shear, n_spec = epsi.shape
     epsi_final = np.full(n_spec, np.nan)
     for j in range(n_spec):
         good = (flags[:, j] == 0) & np.isfinite(epsi[:, j]) & (epsi[:, j] > 0)
         if good.any():
             epsi_final[j] = np.exp(np.mean(np.log(epsi[good, j])))
-        else:
-            # Fall back to geometric mean of all finite probes
-            finite = np.isfinite(epsi[:, j]) & (epsi[:, j] > 0)
-            if finite.any():
-                epsi_final[j] = np.exp(np.mean(np.log(epsi[finite, j])))
+        # else: no clean probe -> leave NaN (all-failed windows drop out).
     return epsi_final
