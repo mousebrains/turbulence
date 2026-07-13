@@ -44,7 +44,7 @@ _INTERP_KINDS = frozenset({
 })
 
 _CHANNEL_OPTION_KEYS = frozenset({
-    "name", "interp", "scale", "offset", "units", "fast", "time_column",
+    "name", "interp", "scale", "offset", "units", "fast", "time_column", "replace",
 })
 
 
@@ -97,7 +97,11 @@ def _normalize_channels_cfg(
       "take every source channel with default options"), and ``True`` when
       the user explicitly listed source names.
     - ``options`` maps source_name → ``{"name", "interp", "scale", "offset",
-      "units", "fast"}`` (any subset; missing keys mean "use the default").
+      "units", "fast", "replace"}`` (any subset; missing keys mean "use the
+      default"). ``replace: true`` permits a hotel channel to overwrite a
+      native instrument channel of the same output name (refused otherwise;
+      U5-1) — pair it with ``fast: false`` when overwriting a slow native
+      channel such as ``P``, or the fast-gridded replacement is dropped.
 
     Per-source values may be:
 
@@ -506,16 +510,46 @@ def merge_hotel_into_pfile(hotel_data: HotelData, pf, hotel_cfg: dict) -> None:
     renamed) output name, registers a ``pf.channel_info`` entry so
     :func:`extract_profiles` can read units, and updates
     ``pf._fast_channels`` so :meth:`PFile.is_fast` returns the correct dim.
-    Names that already exist on ``pf`` are overwritten and their fast/slow
-    membership is rewritten to match the hotel choice.
+    A hotel channel whose output name collides with one the instrument
+    already carries raises ``ValueError`` unless it sets ``replace: true`` —
+    this protects instrument channels that downstream processing depends on
+    (notably ``P``, whose fast-rate hotel version silently breaks profile
+    detection; issue #104 U5-1).
     """
     fast_channels = set(hotel_cfg.get("fast_channels", ["speed", "P"]))
     _, channels_opts = _normalize_channels_cfg(hotel_cfg.get("channels"))
     interpolated = interpolate_hotel(hotel_data, pf, hotel_cfg)
 
+    # Snapshot the instrument's own channels so a hotel variable cannot silently
+    # clobber one profile detection depends on (a hotel "P" would overwrite the
+    # native slow pressure with a fast-rate array, understating dP/dt ~8x and
+    # silently dropping the file). Require explicit opt-in to replace. (U5-1.)
+    native = set(pf.channels)
+
     for src, data in interpolated.items():
         opts = channels_opts.get(src, {})
         out_name = opts.get("name", src)
+        if out_name in native and not bool(opts.get("replace", False)):
+            # If replacing would still land the hotel channel on a different grid
+            # than the native one it overwrites (e.g. native slow P but hotel P
+            # defaults to the fast set), replace: true alone is a trap — the
+            # regridded channel is later dropped downstream. Name the second
+            # remedy (fast:) so the escape hatch actually works. (U5-1.)
+            native_is_fast = out_name in getattr(pf, "_fast_channels", set())
+            would_be_fast = bool(opts["fast"]) if "fast" in opts else out_name in fast_channels
+            msg = (
+                f"hotel channel {src!r} would overwrite the instrument's own "
+                f"{out_name!r} channel; rename it (hotel.channels.{src}.name: ...) "
+                f"or set hotel.channels.{src}.replace: true to override."
+            )
+            if would_be_fast != native_is_fast:
+                grid = "fast" if native_is_fast else "slow"
+                msg += (
+                    f" Note: the native {out_name!r} is on the {grid} grid, so also "
+                    f"set hotel.channels.{src}.fast: {str(native_is_fast).lower()} "
+                    f"so the replacement matches it (otherwise it is dropped)."
+                )
+            raise ValueError(msg)
         scale = float(opts.get("scale", 1.0))
         offset = float(opts.get("offset", 0.0))
         if scale != 1.0 or offset != 0.0:

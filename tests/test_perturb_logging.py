@@ -372,6 +372,7 @@ class TestProcessFilePerStageLogs:
         ):
             mock_pf = MagicMock()
             mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+            mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
             mock_pf.fs_slow = 64.0
             mock_pfile_cls.return_value = mock_pf
 
@@ -435,6 +436,7 @@ class TestProcessFileExceptionBranches:
             "JAC_C": np.zeros(100),
         }
         mock_pf.fs_slow = 64.0
+        mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
         return mock_pf
 
     def _config(self, tmp_path, **overrides):
@@ -909,6 +911,7 @@ class TestProcessFileExcludedProbes:
         ):
             mock_pf = MagicMock()
             mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+            mock_pf.t_slow = np.linspace(0, 50, 100)  # native slow P: len == slow grid
             mock_pf.fs_slow = 64.0
             mock_pfile_cls.return_value = mock_pf
 

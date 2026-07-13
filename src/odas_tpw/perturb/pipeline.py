@@ -1247,6 +1247,19 @@ def process_file(
     with stage_log(output_dirs.get("profiles"), log_basename):
         if P_slow is None:
             logger.warning("No pressure channel in %s", p_path.name)
+        elif len(P_slow) != len(pf.t_slow):
+            # Defense-in-depth for U5-1: profile detection drives P on the SLOW
+            # grid (fs_slow), so a P whose length != the slow-grid length — e.g.
+            # a hotel-injected fast-rate P — would make dP/dt (hence W) wrong and
+            # silently drop the file. Skip loudly instead. (merge_hotel_into_pfile
+            # normally prevents this upstream by refusing to clobber native P.)
+            logger.warning(
+                "Pressure channel length %d != slow-grid length %d in %s; "
+                "skipping profile detection (a fast-rate P cannot drive it)",
+                len(P_slow),
+                len(pf.t_slow),
+                p_path.name,
+            )
         else:
             # Resolve "auto" → vehicle default (e.g. slocum_glider → "glide").
             # ``scor160.profile.get_profiles`` doesn't know "auto" itself, so

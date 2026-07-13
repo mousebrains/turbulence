@@ -458,20 +458,59 @@ class TestMergeHotelIntoPFile:
         assert pf.channel_info["speed"]["units"] == "m s-1"
 
     def test_fast_set_membership_overrides_existing(self, tmp_path):
-        """If an MR's slow-rate name collides with a hotel name set as
-        fast, the fast/slow dim must follow the hotel choice."""
+        """A hotel name colliding with an existing channel follows the hotel
+        fast/slow choice — but only with the explicit replace:true opt-in
+        (#104 U5-1: silent clobbering is otherwise refused)."""
         nc_file = _make_nc(tmp_path / "hotel.nc")
         hd = load_hotel(nc_file, time_format="seconds")
         pf = _MockPFileWithInfo()
         # Pretend the .p file already has a slow-rate "speed" channel.
         pf.channels["speed"] = np.zeros_like(pf.t_slow)
-        merge_hotel_into_pfile(hd, pf, {"fast_channels": ["speed"]})
+        merge_hotel_into_pfile(
+            hd,
+            pf,
+            {"fast_channels": ["speed"], "channels": {"speed": {"replace": True}}},
+        )
         assert "speed" in pf._fast_channels
         # And demoted-to-slow case:
         pf2 = _MockPFileWithInfo()
+        pf2.channels["speed"] = np.zeros_like(pf2.t_slow)
         pf2._fast_channels.add("speed")
-        merge_hotel_into_pfile(hd, pf2, {"fast_channels": []})
+        merge_hotel_into_pfile(
+            hd, pf2, {"fast_channels": [], "channels": {"speed": {"replace": True}}}
+        )
         assert "speed" not in pf2._fast_channels
+
+    def test_refuses_to_clobber_native_channel_without_replace(self, tmp_path):
+        """A hotel channel colliding with a native .p channel raises unless
+        replace:true — protects P/speed profile detection depends on (U5-1).
+
+        The native "speed" is slow-length while the hotel one defaults to the
+        fast set, so the raise must also name the ``fast: false`` remedy: with
+        only ``replace: true`` the regridded channel is later dropped, so the
+        documented escape hatch would silently under-deliver (PR5 review MAJOR)."""
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(nc_file, time_format="seconds")
+        pf = _MockPFileWithInfo()
+        pf.channels["speed"] = np.zeros_like(pf.t_slow)  # native slow channel
+        with pytest.raises(ValueError, match="would overwrite") as exc:
+            merge_hotel_into_pfile(hd, pf, {"fast_channels": ["speed"]})
+        # Grid mismatch between native (slow) and hotel (fast set) -> the error
+        # must point at fast: false as well, else replace:true alone drops it.
+        assert "fast: false" in str(exc.value)
+
+    def test_replace_of_same_grid_channel_omits_fast_hint(self, tmp_path):
+        """When native and hotel land on the same grid, the collision error
+        should NOT append the fast: hint (it would only confuse). Native fast
+        "speed" + hotel "speed" also in the fast set => no grid mismatch."""
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(nc_file, time_format="seconds")
+        pf = _MockPFileWithInfo()
+        pf.channels["speed"] = np.zeros_like(pf.t_fast)  # native fast channel
+        pf._fast_channels.add("speed")
+        with pytest.raises(ValueError, match="would overwrite") as exc:
+            merge_hotel_into_pfile(hd, pf, {"fast_channels": ["speed"]})
+        assert "fast:" not in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
