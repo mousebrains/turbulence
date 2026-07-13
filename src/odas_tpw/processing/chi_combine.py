@@ -167,6 +167,16 @@ def mk_chi_mean(
                 f"probes (no window dropped)"
             )
 
+    # Lueck (2022) eq (18) truncation-correction input, mirroring mk_epsilon_mean
+    # (issue #104 U4-F1).  The chi diss product does NOT currently store a
+    # Batchelor variance-resolved fraction, so this is a GUARDED NO-OP today
+    # (var_resolved absent -> plain L_hat) and chiLnSigma stays UNCORRECTED for
+    # spectral truncation (understated wherever the Batchelor spectrum is
+    # truncated at K_max).  A genuine chi correction needs the Batchelor
+    # cumulative-variance curve (separate follow-up); do NOT substitute the
+    # Nasmyth shear V_f here.  Present only to future-proof the combiner.
+    var_resolved = _stack_probe_var(ds, "var_resolved", chi.shape[1])
+
     speed = ds["speed"].values if "speed" in ds else np.ones(n_time)
     nu = ds["nu"].values if "nu" in ds else np.full(n_time, 1e-6)
 
@@ -206,6 +216,10 @@ def mk_chi_mean(
 
     with np.errstate(invalid="ignore", divide="ignore"):
         L_hat = L / L_K
+        if var_resolved is not None:
+            # Lueck (2022) eq (18) L_hat_f = L_hat * V_f**0.75 (no-op today; see
+            # the var_resolved note above — chi has no Batchelor V_f yet).
+            L_hat = L_hat * np.clip(var_resolved, 1e-6, 1.0) ** 0.75
 
     with np.errstate(invalid="ignore"):
         var_ln_chi = 5.5 / (1.0 + (L_hat / 4.0) ** (7.0 / 9.0))
