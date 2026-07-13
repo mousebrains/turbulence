@@ -283,13 +283,24 @@ class TestComputeEpsiFinal:
         final = _compute_epsi_final(epsi, flags)
         assert final[0] == pytest.approx(1e-8)
 
-    def test_all_flagged_fallback(self):
-        """If all probes flagged, fall back to geometric mean of all finite."""
+    def test_all_flagged_returns_nan(self):
+        """If every probe is flagged, the window is dropped (NaN) — NOT
+        backfilled with a geo-mean of QC-failed probes. Averaging failed probes
+        would emit a value indistinguishable from a clean estimate and, via the
+        Method-1 chi coupling, rescale chi while fom stays ≈1 (#104 U2-F2)."""
         epsi = np.array([[1e-8], [1e-6]])
         flags = np.array([[1.0], [1.0]])
         final = _compute_epsi_final(epsi, flags)
-        expected = np.exp(np.mean(np.log([1e-8, 1e-6])))
-        assert final[0] == pytest.approx(expected, rel=1e-10)
+        assert np.isnan(final[0])
+
+    def test_mixed_columns_drop_only_all_flagged(self):
+        """A window with ≥1 clean probe is unchanged; only the all-flagged
+        window drops to NaN."""
+        epsi = np.array([[1e-8, 1e-7], [1e-6, 1e-5]])
+        flags = np.array([[0.0, 1.0], [1.0, 1.0]])  # col0: 1 clean; col1: all flagged
+        final = _compute_epsi_final(epsi, flags)
+        assert final[0] == pytest.approx(1e-8, rel=1e-10)  # only the clean probe
+        assert np.isnan(final[1])  # all flagged -> dropped
 
 
 class TestVarianceCorrection:

@@ -153,14 +153,31 @@ class TestFullPipeline:
             for j in range(l4.n_spectra):
                 assert l4.epsi_flags[i, j] in valid_flags
 
-    def test_epsi_final_computed(self, l1_data, l2_params, l3_params):
-        """EPSI_FINAL should be computed for most windows."""
+    def test_epsi_final_matches_clean_probe_contract(self, l1_data, l2_params, l3_params):
+        """EPSI_FINAL is the geometric mean of the clean (flag==0) probes in a
+        window, and NaN where NO probe is clean — there is no silent fallback
+        to QC-failed probes (#104 U2-F2). This synthetic fixture happens to have
+        FOM well above the limit in every window (so the correct EPSI_FINAL is
+        all-NaN); the assertion tests the contract, not a fixed clean fraction,
+        so it holds whether or not clean windows exist. The pre-fix fallback
+        masked the all-flagged state by backfilling a geo-mean of failed probes.
+        """
         l2 = process_l2(l1_data, l2_params)
         l3 = process_l3(l2, l1_data, l3_params)
         l4 = process_l4(l3, f_AA=l1_data.f_AA)
 
-        frac_finite = np.mean(np.isfinite(l4.epsi_final))
-        assert frac_finite > 0.3
+        any_clean = (l4.epsi_flags == 0).any(axis=0)
+        # Finite exactly where a clean probe exists; NaN where all are flagged.
+        assert np.array_equal(np.isfinite(l4.epsi_final), any_clean)
+        # Where clean, EPSI_FINAL is the geo-mean over flag==0 probes only.
+        for j in np.where(any_clean)[0]:
+            good = (
+                (l4.epsi_flags[:, j] == 0)
+                & np.isfinite(l4.epsi[:, j])
+                & (l4.epsi[:, j] > 0)
+            )
+            expected = np.exp(np.mean(np.log(l4.epsi[good, j])))
+            assert l4.epsi_final[j] == pytest.approx(expected, rel=1e-10)
 
 
 class TestPipelineVariations:
