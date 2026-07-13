@@ -218,18 +218,34 @@ class TestEpsChiCLI:
         from odas_tpw.perturb.plot import eps_chi
 
         # src centers offset by +1 from dst; reindex should shift rows down one
-        # eps bin (value at src 1.5 lands in dst bin centered at 2.0).
+        # eps bin (value at src 1.5 lands in dst bin centered at 2.0). Each dst
+        # bin gets a single source value, so the geometric mean == that value
+        # (approx, via the log10/10** round-trip).
         src_depth = np.array([1.5, 2.5, 3.5])
         dst_depth = np.array([1.0, 2.0, 3.0])
         arr = np.array([[10.0], [20.0], [30.0]])
         out = eps_chi._reindex_rows_to_depth(arr, src_depth, dst_depth)
         # dst edges are [0.5,1.5,2.5,3.5] -> src 1.5->bin1, 2.5->bin2, 3.5->out
         assert np.isnan(out[0, 0])
-        assert out[1, 0] == 10.0
-        assert out[2, 0] == 20.0
+        assert out[1, 0] == pytest.approx(10.0)
+        assert out[2, 0] == pytest.approx(20.0)
         # identical grids are a no-op (common matched case)
         same = eps_chi._reindex_rows_to_depth(arr, dst_depth, dst_depth)
         assert same is arr
+
+    def test_reindex_rows_to_depth_mean_is_geometric(self):
+        """#104 U6-F6: two source rows collapsing into one dst bin combine as a
+        GEOMETRIC (log-space) mean of the log-distributed chi, not an arithmetic
+        mean (which the largest sample would dominate)."""
+        from odas_tpw.perturb.plot import eps_chi
+
+        # Both src centers fall in dst bin 0 (edges [0.5, 1.5, 2.5]).
+        src_depth = np.array([0.9, 1.1])
+        dst_depth = np.array([1.0, 2.0])
+        arr = np.array([[1e-6], [1e-8]])  # chi spanning two decades
+        out = eps_chi._reindex_rows_to_depth(arr, src_depth, dst_depth)
+        assert out[0, 0] == pytest.approx(1e-7)  # sqrt(1e-6 * 1e-8), not 5.05e-7
+        assert np.isnan(out[1, 0])
 
     def test_reindex_rows_to_depth_max_ors_drop_bitfield(self):
         """reduce='max' must bitwise-OR drop bitfields, not take the max: two
