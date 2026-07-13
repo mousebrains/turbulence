@@ -459,7 +459,7 @@ x_43 = x^(4/3)
 V_resolved(x) = tanh(48 * x_43) - 2.9 * x_43 * exp(-22.3 * x_43)
 ```
 
-This empirical fit ([Lueck 2022](https://doi.org/10.1175/JTECH-D-21-0051.1)) captures the shape of the cumulative Nasmyth spectrum integral. At `x = X_95 = 0.1205`, `V_resolved = 0.95` (95% of variance).
+This empirical fit ([Lueck 2022](https://doi.org/10.1175/JTECH-D-21-0051.1)) captures the shape of the cumulative Nasmyth spectrum integral. At `x = X_95 = 0.1205`, `V_resolved = 0.9476` (≈0.95, within 0.3% — i.e. ~95% of variance).
 
 ### Iterative correction
 

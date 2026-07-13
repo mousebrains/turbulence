@@ -73,8 +73,10 @@ and 2048 (4 s ≈ 3 m), `fft_length` = 256 (0.5 s) in both:
   the median per-window `epsilonLnSigma` by ×0.76 in every ε decade —
   exactly the predicted `(L̂)^{-7/18}` scaling.
 - **A low-ε window-length bias**: pairing the runs window-by-window, the
-  2-s estimates run **1.36× lower** than the 4-s estimates for
-  ε ∈ [1e-10, 1e-9], converging to parity above 1e-8. Both runs share the
+  2-s estimates run ~**1.2–1.4× lower** (estimator-sensitive) than the 4-s
+  estimates for ε ∈ [1e-10, 1e-9], converging to parity above 1e-8. The exact
+  ratio depends on the ε patch estimator (arithmetic vs log/geometric mean),
+  so it is not a single fixed factor. Both runs share the
   same 0.5-s FFT, so this is NOT the unresolved-peak effect — it is a
   dissipation-window effect at fixed FFT: lognormal patch-averaging
   (longer windows arithmetic-mean across patches and read higher where
@@ -83,7 +85,7 @@ and 2048 (4 s ≈ 3 m), `fft_length` = 256 (0.5 s) in both:
   window low).
 - **The FFT-span effect, isolated** (`perturb.4f1.yaml`: 4-s windows, 1-s
   FFT, vs the same windows at 0.5-s FFT): the 1-s-FFT ε reads ×1.31 higher
-  at ε ∈ [1e-10, 1e-9] (MAD 0.17 — tightly systematic), ×1.18 at
+  at ε ∈ [1e-10, 1e-9] (MAD 0.147 — tightly systematic), ×1.18 at
   [1e-9, 1e-8], converging to ×1.02 above 1e-7 — the unresolved-peak
   signature, now measured in our own data, with `epsilonLnSigma` unchanged
   (statistics depend on the window, not the FFT). **Combined**, the
@@ -185,7 +187,7 @@ ceiling applies as stated.
 
 ## References
 
-- Lueck, R.G., 2022a: Statistics Part I. JTECH 39, 1259–1272.
+- Lueck, R.G., 2022a: Statistics Part I. JTECH 39, 1259–1271.
   https://doi.org/10.1175/JTECH-D-21-0051.1
 - Lueck, R.G., 2022b: Statistics Part II. JTECH 39, 1273–1282.
   https://doi.org/10.1175/JTECH-D-21-0050.1
