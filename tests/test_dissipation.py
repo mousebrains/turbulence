@@ -142,6 +142,52 @@ class TestEpsilonRecovery:
         assert np.isfinite(K_max_ratio)
         assert K_max_ratio > 0
 
+    def test_dc_bin_nan_repaired_not_fatal(self):
+        """A non-finite DC bin (index 0, K=0) is repaired, not fatal (#104 U8-1).
+
+        ODAS excludes the DC bin from the epsilon fit, so a NaN there — common in
+        externally Goodman-cleaned L3 spectra (the ATOMIX Epsifish set) — must
+        yield a finite epsilon, NOT the all-NaN the guard returned before."""
+        speed = 0.6
+        K, spec = _make_nasmyth_spectrum(1e-7, self.NU, speed=speed)
+        K_AA = F_AA_MARGIN * 98.0 / speed
+        dc = spec.copy()
+        dc[0] = np.nan
+        e_dc = _estimate_epsilon(K, dc, self.NU, K_AA, fit_order=3)[0]
+        assert np.isfinite(e_dc) and e_dc > 0
+
+    def test_single_interior_nan_interpolated(self):
+        speed = 0.6
+        K, spec = _make_nasmyth_spectrum(1e-7, self.NU, speed=speed)
+        K_AA = F_AA_MARGIN * 98.0 / speed
+        s = spec.copy()
+        s[50] = np.nan
+        assert np.isfinite(_estimate_epsilon(K, s, self.NU, K_AA, fit_order=3)[0])
+
+    def test_two_bad_bins_invalidate_with_warning(self):
+        speed = 0.6
+        K, spec = _make_nasmyth_spectrum(1e-7, self.NU, speed=speed)
+        K_AA = F_AA_MARGIN * 98.0 / speed
+        s = spec.copy()
+        s[50] = np.nan
+        s[80] = np.nan
+        with pytest.warns(UserWarning, match="non-finite shear-spectrum"):
+            e = _estimate_epsilon(K, s, self.NU, K_AA, fit_order=3)[0]
+        assert np.isnan(e)
+
+    def test_dc_nan_with_nan_neighbor_invalidates(self):
+        """A DC NaN whose neighbor (bin 1) is also NaN cannot be repaired, so the
+        window is invalidated with a warning — not crashed (#104 U8-1 edge)."""
+        speed = 0.6
+        K, spec = _make_nasmyth_spectrum(1e-7, self.NU, speed=speed)
+        K_AA = F_AA_MARGIN * 98.0 / speed
+        s = spec.copy()
+        s[0] = np.nan
+        s[1] = np.nan
+        with pytest.warns(UserWarning, match="non-finite shear-spectrum"):
+            e = _estimate_epsilon(K, s, self.NU, K_AA, fit_order=3)[0]
+        assert np.isnan(e)
+
 
 # ---------------------------------------------------------------------------
 # Macoun-Lueck correction
