@@ -8,6 +8,7 @@ re-exports them for backward compatibility and adds RSI-specific I/O
 """
 
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
@@ -163,6 +164,12 @@ def extract_profiles(
         logger.warning(f"No profiles found in {stem}")
         return ([], []) if return_scalars else []
 
+    # Lazy import: reaching perturb.atomic_io runs perturb/__init__ (config +
+    # pipeline). Deferring it keeps that heavier perturb graph out of rsi at
+    # module-load time (not a hard cycle — pipeline imports rsi.profile only
+    # lazily — just a layering choice). Mirrors the netcdf_schema import below.
+    from odas_tpw.perturb.atomic_io import tmp_sibling
+
     output_paths = []
     output_scalars: list[dict[str, float]] = []
     for pi, (s_slow, e_slow) in enumerate(profiles, 1):
@@ -175,7 +182,12 @@ def extract_profiles(
 
         prof_path = output_dir / f"{stem}_prof{pi:03d}.nc"
 
-        ds = nc.Dataset(str(prof_path), "w", format="NETCDF4")
+        # Write to a temp sibling and os.replace into place only after a clean
+        # close, so a mid-write SMB/network drop on SeaChest never leaves a
+        # readable partial *_profNNN.nc that the manifest then locks in on a
+        # clean retry (identical source .p key -> skip). (#104 U5-2.)
+        prof_tmp = tmp_sibling(prof_path)
+        ds = nc.Dataset(str(prof_tmp), "w", format="NETCDF4")
 
         # Copy global attributes
         for attr in data["global_attrs"]:
@@ -297,6 +309,11 @@ def extract_profiles(
         ds.fs_fast = float(fs_fast)
         ds.fs_slow = float(fs_slow)
         ds.close()
+        # Publish atomically only after a complete close (U5-2): os.replace is
+        # atomic within a filesystem, so prof_path never appears as a partial.
+        # A mid-write crash leaves the hidden temp behind, but never a readable
+        # partial product that the bin/combo manifest would lock in.
+        os.replace(str(prof_tmp), str(prof_path))
         output_paths.append(prof_path)
         output_scalars.append(scalars)
         logger.info(

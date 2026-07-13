@@ -163,6 +163,34 @@ class TestFFillDown:
         layout.ffill_down(z)
         np.testing.assert_array_equal(z, before)
 
+    # --- U6-F2: gate on the internal-run length, not distance-below-valid ---
+
+    def test_length2_internal_run_left_as_gap(self):
+        """A 2-bin internal run must stay fully NaN at max_gap=1 — the first bin
+        of a QC-dropped block must NOT be repainted from the bin above."""
+        z = np.array([[1.0], [np.nan], [np.nan], [4.0]])
+        out = layout.ffill_down(z, max_gap=1)
+        assert np.isnan(out[1, 0]) and np.isnan(out[2, 0])
+
+    def test_length1_internal_run_bridged(self):
+        z = np.array([[1.0], [np.nan], [3.0]])
+        out = layout.ffill_down(z, max_gap=1)
+        assert out[1, 0] == 1.0
+
+    def test_run_filled_entirely_when_within_max_gap(self):
+        """A 3-bin run is filled in full when max_gap=3 (all from the bin above)."""
+        z = np.array([[1.0], [np.nan], [np.nan], [np.nan], [5.0]])
+        out = layout.ffill_down(z, max_gap=3)
+        assert out[1, 0] == 1.0 and out[2, 0] == 1.0 and out[3, 0] == 1.0
+
+    def test_regression_matrix_first_bin_of_run_not_repainted(self):
+        """Regression pin for the pre-fix bug: col 1's length-2 run stayed
+        (nan at row 1 was repainted to 1.0). Now both rows stay NaN."""
+        z = np.array([[1.0, 1.0], [np.nan, np.nan], [3.0, np.nan], [4.0, 4.0]])
+        out = layout.ffill_down(z, max_gap=1)
+        assert out[1, 0] == 1.0  # col 0: isolated NaN bridged
+        assert np.isnan(out[1, 1]) and np.isnan(out[2, 1])  # col 1: 2-run kept
+
 
 class TestSplitSegments:
     def test_no_gap_one_segment(self):

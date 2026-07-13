@@ -190,6 +190,29 @@ class TestCtdBinFile:
         for var in ("SP", "SA", "CT", "sigma0", "rho", "depth"):
             assert var in ds, f"seawater property {var} missing"
         ds.close()
+        # Atomic write (#104 U5-2): no leftover temp sibling on success.
+        assert not list(tmp_path.glob(".*.tmp"))
+
+    def test_write_failure_leaves_no_partial(self, tmp_path, monkeypatch):
+        """A mid-write failure must leave no partial ctd/*.nc at the live path
+        (the manifest would otherwise lock a truncated file in). (#104 U5-2.)"""
+        n = 640
+        t_slow = np.linspace(0, 10, n)
+        channels = {
+            "JAC_T": np.linspace(5.0, 15.0, n),
+            "JAC_C": np.linspace(30.0, 35.0, n),
+            "P": np.linspace(0.0, 100.0, n),
+        }
+        pf = self._make_pf(channels, t_slow=t_slow)
+
+        def boom(self, *a, **k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(xr.Dataset, "to_netcdf", boom)
+        with pytest.raises(OSError):
+            ctd_bin_file(pf, GPSFixed(15.0, 145.0), tmp_path, bin_width=0.5)
+        assert not (tmp_path / "test_001.nc").exists()  # no partial published
+        assert not list(tmp_path.glob(".*.tmp"))  # temp cleaned up
 
     def test_stratification_excluded_from_ctd(self, tmp_path):
         # N2/dTdz are profile-only; even when the pipeline has injected them as

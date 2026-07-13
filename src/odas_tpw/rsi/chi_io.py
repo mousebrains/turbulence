@@ -13,6 +13,7 @@ detection, and file-level orchestration.
 
 from __future__ import annotations
 
+import functools
 import re
 import warnings
 from datetime import UTC, datetime
@@ -423,6 +424,39 @@ def _epsilon_ds_to_l4data(epsilon_ds: xr.Dataset) -> Any:
     )
 
 
+def _reconstruct_spec_batch(l3_chi, l4_chi, grad_func) -> np.ndarray:
+    """``(n_gradt, n_wavenumber, n_spec)`` fitted gradient spectra for the
+    perturb-diag overlay.
+
+    Bind the per-window molecular thermal diffusivity ``kappa_T`` (mirroring the
+    amplitude/fit at ``chi.py:258``) so the overlay matches the stored chi. The
+    bare ``grad_func`` would fall back to the module default ``KAPPA_T=1.4e-7``,
+    and since the gradient amplitude scales as ``1/kappa_T`` the overlay would
+    run ~6% high in warm water where the per-window kappa exceeds the default.
+    Falls back to the bare ``grad_func`` only when ``kappa_T`` is not per-window
+    sized (e.g. the degenerate no-spectra path). Diagnostic-only — published
+    chi/kB/K_T/Gamma come from ``l4_chi`` (already computed with per-window
+    kappa), not this reconstruction. (#104 I2a-4.)
+    """
+    n_spec = l3_chi.n_spectra
+    n_gradt = l3_chi.n_gradt
+    n_wave = l3_chi.n_wavenumber
+    spec_batch = np.full((n_gradt, n_wave, n_spec), np.nan)
+    kappa_per_window = l3_chi.kappa_T.size == n_spec
+    for j in range(n_spec):
+        gf = (
+            functools.partial(grad_func, kappa_T=float(l3_chi.kappa_T[j]))
+            if kappa_per_window
+            else grad_func
+        )
+        for ci in range(n_gradt):
+            kB = l4_chi.kB[ci, j]
+            chi_val = l4_chi.chi[ci, j]
+            if np.isfinite(kB) and np.isfinite(chi_val):
+                spec_batch[ci, :, j] = gf(l3_chi.kcyc[:, j], kB, chi_val)
+    return spec_batch
+
+
 def _build_chi_ds_from_pipeline(
     l3_chi,
     l4_chi,
@@ -441,21 +475,14 @@ def _build_chi_ds_from_pipeline(
 ) -> xr.Dataset:
     """Build old-format xr.Dataset from L3ChiData + L4ChiData."""
     n_spec = l3_chi.n_spectra
-    n_gradt = l3_chi.n_gradt
     n_freq = l3_chi.n_wavenumber
 
     # DOF
     num_ffts = 2 * (diss_length // fft_length) - 1
     dof_spec = 1.9 * num_ffts
 
-    # Reconstruct fitted Batchelor spectra
-    spec_batch = np.full((n_gradt, n_freq, n_spec), np.nan)
-    for j in range(n_spec):
-        for ci in range(n_gradt):
-            kB = l4_chi.kB[ci, j]
-            chi_val = l4_chi.chi[ci, j]
-            if np.isfinite(kB) and np.isfinite(chi_val):
-                spec_batch[ci, :, j] = grad_func(l3_chi.kcyc[:, j], kB, chi_val)
+    # Reconstruct fitted gradient spectra for the diagnostic overlay.
+    spec_batch = _reconstruct_spec_batch(l3_chi, l4_chi, grad_func)
 
     # F vector (constant across windows) — broadcast view is read-only
     # but suffices for xarray storage and NetCDF serialization.

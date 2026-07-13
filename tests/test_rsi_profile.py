@@ -353,6 +353,34 @@ class TestExtractProfilesFastClamp:
             prof.close()
 
 
+class TestExtractProfilesAtomicWrite:
+    """Per-profile writes go temp + os.replace, so a mid-write drop never leaves
+    a readable partial *_profNNN.nc at the live path (#104 U5-2)."""
+
+    def test_success_leaves_no_tmp(self, tmp_path):
+        nc = _write_nc(tmp_path / "src.nc")
+        out_dir = tmp_path / "out"
+        paths = extract_profiles(nc, out_dir, profiles=[(0, 31)])
+        assert len(paths) == 1 and Path(paths[0]).exists()
+        assert not list(out_dir.glob(".*.tmp"))  # temp consumed by os.replace
+
+    def test_publish_failure_leaves_no_partial_at_live_path(self, tmp_path, monkeypatch):
+        import odas_tpw.rsi.profile as prof_mod
+
+        nc = _write_nc(tmp_path / "src.nc")
+        out_dir = tmp_path / "out"
+
+        def boom(src, dst):
+            raise OSError("network drop during publish")
+
+        # os.replace is the ONLY step that writes the live product name, so a
+        # failed publish must leave NO *_profNNN.nc (only the hidden temp).
+        monkeypatch.setattr(prof_mod.os, "replace", boom)
+        with pytest.raises(OSError):
+            extract_profiles(nc, out_dir, profiles=[(0, 31)])
+        assert not list(out_dir.glob("*_prof*.nc"))
+
+
 # ---------------------------------------------------------------------------
 # Audit M2 downstream: a single mid-cast _FillValue in slow pressure must not
 # silently drop every profile in the file (NaN smearing through fall rate).

@@ -105,9 +105,11 @@ def _binned_channel_variance(
     rawpath: str, channel: str, bin_edges: np.ndarray,
     hp_cut: float, despike_thresh: float, despike_smooth: float,
 ) -> np.ndarray | None:
-    """Per-pressure-bin variance of one HP-filtered, despiked fast channel."""
+    """Per-depth-bin variance of one HP-filtered, despiked fast channel."""
+    import gsw
     import xarray as xr
 
+    from odas_tpw.perturb.binning import _DEFAULT_BIN_LATITUDE
     from odas_tpw.scor160.despike import despike
     from odas_tpw.scor160.l2 import _hp_filter
 
@@ -119,6 +121,7 @@ def _binned_channel_variance(
             t_fast = np.asarray(ds["t_fast"].values, dtype=float)
             t_slow = np.asarray(ds["t_slow"].values, dtype=float)
             pres = np.asarray(ds["P"].values, dtype=float)
+            lat = float(ds["lat"].values) if "lat" in ds.variables else None
     except (OSError, ValueError, RuntimeError):  # one bad raw file shouldn't kill the figure
         return None
 
@@ -132,7 +135,14 @@ def _binned_channel_variance(
     clean = despike(_hp_filter(sig, fs, hp_cut), fs,
                     thresh=despike_thresh, smooth=despike_smooth).y
     pressure_fast = np.interp(t_fast, t_slow, pres)
-    return _variance_by_bin(clean, pressure_fast, bin_edges)
+    # The combo "bin" coordinate is depth in METERS (binning.py), and bin_edges
+    # are built from it, so convert the raw dbar pressure to depth on the same
+    # gsw convention before binning. Binning dbar straight onto meter edges puts
+    # every sample ~0.6-0.7 %/dbar too deep (~1 bin at depth). (#104 U6-F1.)
+    if lat is None or not np.isfinite(lat):
+        lat = _DEFAULT_BIN_LATITUDE
+    depth_fast = -np.asarray(gsw.z_from_p(pressure_fast, lat), dtype=float)
+    return _variance_by_bin(clean, depth_fast, bin_edges)
 
 
 def compute_pseudo_grid(
@@ -150,7 +160,7 @@ def compute_pseudo_grid(
 
     Each combo profile (one per column of ``combo_stime``) is matched to its raw
     file by ``stime`` (within ``tol`` seconds) and its channel variance is binned
-    on the combo's pressure grid (``bin_centers``, dbar).  Unmatched profiles are
+    on the combo's depth grid (``bin_centers``, m).  Unmatched profiles are
     left NaN and reported.  Binning uses the combo's own bin edges so the panel
     aligns with the stored-variable panels.
     """
