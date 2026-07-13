@@ -75,6 +75,26 @@ def _finite_interp1d(t: np.ndarray, vals: np.ndarray):
     return interp1d([0.0, 1.0], [fill, fill], bounds_error=False, fill_value=fill)
 
 
+class _DatelineSafeLon:
+    """Callable that evaluates an unwrapped-phase longitude interpolator and
+    wraps only out-of-[-180, 180) results back into range.
+
+    A module-level class rather than a closure so a GPS provider holding one
+    stays picklable: the perturb pipeline ships providers to a
+    ``ProcessPoolExecutor``, and a local-function closure would raise
+    ``Can't pickle local object`` there. ``base`` is a scipy ``interp1d``,
+    which pickles cleanly. (#104 U5-4 follow-up.)
+    """
+
+    def __init__(self, base) -> None:
+        self._base = base
+
+    def __call__(self, query: npt.ArrayLike) -> np.ndarray:
+        out = np.asarray(self._base(query), dtype=np.float64)
+        wrap = np.isfinite(out) & ((out < -180.0) | (out >= 180.0))
+        return np.where(wrap, (out + 180.0) % 360.0 - 180.0, out)
+
+
 def _lon_interp_dateline_safe(t: np.ndarray, lon: np.ndarray):
     """Linear longitude interpolator that is safe across the +/-180 seam.
 
@@ -115,12 +135,7 @@ def _lon_interp_dateline_safe(t: np.ndarray, lon: np.ndarray):
         fill = float(lon[good][0]) if good.any() else np.nan
         base = interp1d([0.0, 1.0], [fill, fill], bounds_error=False, fill_value=fill)
 
-    def _interp(query: npt.ArrayLike) -> np.ndarray:
-        out = np.asarray(base(query), dtype=np.float64)
-        wrap = np.isfinite(out) & ((out < -180.0) | (out >= 180.0))
-        return np.where(wrap, (out + 180.0) % 360.0 - 180.0, out)
-
-    return _interp
+    return _DatelineSafeLon(base)
 
 
 # CF time unit -> seconds factor.  Only common units; falls back to

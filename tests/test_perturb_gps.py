@@ -174,6 +174,21 @@ class TestGPSFromCSV:
         q = gps.lon(np.array([0.5]))[0]
         assert q == pytest.approx(179.5)
 
+    def test_provider_is_picklable(self, tmp_path):
+        """The perturb pipeline ships GPS providers to a ProcessPoolExecutor,
+        so a provider (incl. its dateline-safe lon interpolator) must pickle.
+        Regression: #104 U5-4 first shipped the lon interpolator as a local
+        closure, which raised 'Can't pickle local object' in the worker pool
+        and silently failed every profile."""
+        import pickle
+
+        csv_file = self._make_csv(tmp_path / "gps.csv")
+        gps = GPSFromCSV(csv_file)
+        restored = pickle.loads(pickle.dumps(gps))
+        t = np.array([0.5, 1.5])
+        np.testing.assert_array_equal(restored.lon(t), gps.lon(t))
+        np.testing.assert_array_equal(restored.lat(t), gps.lat(t))
+
     def test_custom_columns(self, tmp_path):
         csv_file = self._make_csv(
             tmp_path / "gps.csv",
