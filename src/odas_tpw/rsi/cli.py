@@ -15,6 +15,7 @@ Subcommands:
     eps      — Compute epsilon (TKE dissipation) from any pipeline stage
     chi      — Compute chi (thermal variance dissipation) from any pipeline stage
     pipeline — Run full processing pipeline (.p → profiles → epsilon → chi)
+    sensors  — Inventory shear/FP07 sensors across a .p file tree
     ql       — Interactive quick-look viewer
     dl       — Interactive dissipation quality viewer
     init     — Generate a template configuration file
@@ -531,6 +532,21 @@ def _cmd_dl(args: argparse.Namespace) -> None:
             W_min=W_min,
             spec_P_range=spec_P_range,
         )
+
+
+def _cmd_sensors(args: argparse.Namespace) -> None:
+    """Inventory microstructure sensors across a tree of .p files."""
+    from odas_tpw.rsi.sensor_inventory import resolve_kinds, run
+
+    kinds = resolve_kinds(args.shear, args.fp07, args.want_all)
+    code = run(
+        [Path(p) for p in args.paths],
+        kinds,
+        csv_out=Path(args.csv) if args.csv else None,
+        verbose=args.verbose,
+    )
+    if code != 0:
+        sys.exit(code)
 
 
 def _cmd_ml(args: argparse.Namespace) -> None:
@@ -1101,6 +1117,45 @@ def _add_dl_parser(subparsers: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_cmd_dl)
 
 
+def _add_sensors_parser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "sensors",
+        help="Inventory shear/FP07 sensors across a .p file tree",
+        description=(
+            "Walk a directory tree of Rockland .p files and summarize, per sensor "
+            "serial number, the date range of use, the number of files, the "
+            "platform(s) it was mounted on, and whether its calibration parameters "
+            "changed. Reads only each file's header + config block (not the data), "
+            "so it is fast over large trees. Select sensor kinds with --shear / "
+            "--fp07 / --all (default: all)."
+        ),
+    )
+    p.add_argument(
+        "paths",
+        nargs="+",
+        metavar="PATH",
+        help="Directories to scan recursively and/or individual .p files",
+    )
+    p.add_argument("--shear", action="store_true", help="Inventory shear probes")
+    p.add_argument("--fp07", action="store_true", help="Inventory FP07 thermistors")
+    p.add_argument(
+        "--all",
+        dest="want_all",
+        action="store_true",
+        help="Inventory every sensor kind (shear + fp07; the default if none is given)",
+    )
+    p.add_argument(
+        "--csv", metavar="PATH", default=None, help="Write a per-(file,channel) CSV table"
+    )
+    p.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="List the individual files behind each changed parameter value",
+    )
+    p.set_defaults(func=_cmd_sensors)
+
+
 def _add_ml_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "ml",
@@ -1250,6 +1305,7 @@ def main() -> None:
     _add_ql_parser(subparsers)
     _add_dl_parser(subparsers)
     _add_ml_parser(subparsers)
+    _add_sensors_parser(subparsers)
 
     args = parser.parse_args()
     args.func(args)
