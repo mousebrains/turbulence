@@ -1,7 +1,11 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Tests for processing.bottom — bottom crash detection."""
 
+import warnings
+from typing import ClassVar
+
 import numpy as np
+import pytest
 
 from odas_tpw.processing.bottom import detect_bottom_crash
 
@@ -212,3 +216,29 @@ class TestDetectBottomCrash:
             depth, {"Ax": Ax}, fs=64.0, depth_window=4.0, depth_minimum=10.0
         )
         assert result is None
+
+
+class TestUnwiredKnobWarnings:
+    """#104 U4-F2: speed_factor / median_factor / vibration_frequency are
+    accepted for backward compatibility but not implemented; tuning one must
+    warn rather than be a silent no-op."""
+
+    depth: ClassVar = np.array([10.5, 11.0, 11.5, 12.0])
+    channels: ClassVar = {"Ax": np.array([0.1, 0.2, 0.3, 0.4])}
+
+    def test_default_values_do_not_warn(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # any warning fails
+            detect_bottom_crash(self.depth, self.channels, fs=64.0)
+
+    @pytest.mark.parametrize(
+        "kwargs, needle",
+        [
+            ({"speed_factor": 0.5}, "speed_factor"),
+            ({"median_factor": 2.0}, "median_factor"),
+            ({"vibration_frequency": 8}, "vibration_frequency"),
+        ],
+    )
+    def test_non_default_knob_warns(self, kwargs, needle):
+        with pytest.warns(UserWarning, match=needle):
+            detect_bottom_crash(self.depth, self.channels, fs=64.0, **kwargs)

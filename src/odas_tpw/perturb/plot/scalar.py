@@ -297,10 +297,19 @@ def _build_section_figure(
                 lbl.set_horizontalalignment("right")
 
     title_id = ds.attrs.get("id") or os.path.basename(os.path.normpath(args.root))
-    npts = int(dss.sizes["time"])
+    # Report the count actually placed on the grid (finite-x samples), not the
+    # full time dim — samples with a non-finite spatial x are dropped, so
+    # dss.sizes['time'] over-counts. Show "N of M" when they differ.
+    n_drawn = int(finite_x.size)
+    n_total = int(dss.sizes["time"])
+    samples = (
+        _grouped(n_drawn)
+        if n_drawn == n_total
+        else f"{_grouped(n_drawn)} of {_grouped(n_total)}"
+    )
     fig.suptitle(getattr(args, "title", None) or (
         f"{title_id}  —  section: {sec.name}  —  "
-        f"x-axis: {sec.method}  —  {_grouped(npts)} samples"
+        f"x-axis: {sec.method}  —  {samples} samples"
     ))
     layout.fit_colorbar_labels(fig)  # long var labels overflow short per-panel bars
     return fig
