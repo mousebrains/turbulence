@@ -84,10 +84,17 @@ def _load_chi_legacy_per_profile(chi_dir: str, depth: np.ndarray):
             p = np.asarray(d["P_mean"].values)
             times[j] = d["stime"].values
         idx = np.digitize(p, edges) - 1
-        ok = (idx >= 0) & (idx < depth.size) & np.isfinite(c)
-        for i, v in zip(idx[ok], c[ok]):
-            cur = chi[i, j]
-            chi[i, j] = v if np.isnan(cur) else 0.5 * (cur + v)
+        # chi spans orders of magnitude: accumulate log10 and take the geometric
+        # mean per depth bin (matches _reindex_rows_to_depth). The old running
+        # 0.5*(cur+v) both over-weighted later samples and averaged linearly;
+        # sum/count in log space fixes both. (#104 U6-F3, U6-F6.)
+        ok = (idx >= 0) & (idx < depth.size) & np.isfinite(c) & (c > 0)
+        log_sum = np.zeros(depth.size)
+        cnt = np.zeros(depth.size)
+        np.add.at(log_sum, idx[ok], np.log10(c[ok]))
+        np.add.at(cnt, idx[ok], 1.0)
+        with np.errstate(invalid="ignore"):
+            chi[:, j] = np.where(cnt > 0, 10 ** (log_sum / cnt), np.nan)
 
     order = np.argsort(times)
     # Legacy fallback has no aggregated qc bitfield.
@@ -111,9 +118,11 @@ def _reindex_rows_to_depth(
     chi at one depth by eps at another in gamma). Mirrors the legacy per-profile
     path's ``depth_edges`` + ``digitize`` re-binning.
 
-    ``reduce='mean'`` linearly averages source rows that fall in the same eps
-    bin (consistent with the legacy path); ``reduce='max'`` ORs a drop bitfield
-    so a flagged source bin flags its destination.
+    ``reduce='mean'`` combines source rows that fall in the same eps bin as a
+    geometric (log-space) mean — chi/epsilon are log-distributed, so an
+    arithmetic mean is over-weighted by the largest sample and is not the
+    physically appropriate reduction (#104 U6-F6). ``reduce='max'`` ORs a drop
+    bitfield so a flagged source bin flags its destination.
     """
     src_depth = np.asarray(src_depth, dtype=float)
     dst_depth = np.asarray(dst_depth, dtype=float)
@@ -129,21 +138,27 @@ def _reindex_rows_to_depth(
     for src, dst in enumerate(idx.tolist()):
         if 0 <= dst < dst_depth.size:
             row = arr[src]
-            ok = np.isfinite(row)
             if reduce == "max":
                 # True bitwise OR for the drop bitfield: np.maximum loses bits
                 # (max(1,2)=2 but 1|2=3), contradicting the "ORs a drop
                 # bitfield" contract. Flags are integral values carried in a
                 # float array, so cast per-combine and store back (#52).
+                ok = np.isfinite(row)
                 acc[dst, ok] = np.bitwise_or(
                     acc[dst, ok].astype(np.int64), row[ok].astype(np.int64)
                 )
                 cnt[dst, ok] += 1
             else:
-                acc[dst, ok] += row[ok]
+                # Accumulate log10 for a geometric mean; a log needs strictly
+                # positive values (a chi <= 0 is unphysical/numerical noise that
+                # a log-plot cannot show anyway), so exclude it.
+                ok = np.isfinite(row) & (row > 0)
+                acc[dst, ok] += np.log10(row[ok])
                 cnt[dst, ok] += 1
     with np.errstate(invalid="ignore"):
-        return np.where(cnt > 0, acc if reduce == "max" else acc / cnt, np.nan)
+        if reduce == "max":
+            return np.where(cnt > 0, acc, np.nan)
+        return np.where(cnt > 0, 10 ** (acc / cnt), np.nan)
 
 
 def _align_chi_to_eps(

@@ -79,6 +79,8 @@ class TestConvertShear:
         }
         data = np.array([-100.0, -50.0, 0.0, 50.0, 100.0])
         shear, units = convert_shear(data, params)
+        # Units stay UDUNITS-valid "s-1" (CF compliance); the pre-normalization
+        # caveat is carried in the sh1/sh2 ``comment`` attr instead (#104 U1-1).
         assert units == "s-1"
         # Should be antisymmetric around zero
         np.testing.assert_allclose(shear[2], 0.0, atol=1e-10)
@@ -320,11 +322,23 @@ class TestConvertInclXY:
         assert units == "deg"
         np.testing.assert_allclose(result[0], 0.05 * 40 + 10.0, rtol=1e-10)
 
-    def test_defaults(self):
-        """Default coefficients: coef0=0, coef1=0.025."""
+    def test_defaults_warn_on_missing(self):
+        """Missing coefficients WARN (ODAS errors; we default+warn, #104 U1-3)
+        while still applying coef0=0, coef1=0.025."""
         data = np.array([8.0])  # adis: passthrough
-        result, units = convert_inclxy(data, {})
+        with pytest.warns(UserWarning, match="inclxy: calibration coefficient"):
+            result, units = convert_inclxy(data, {})
         assert units == "deg"
+        np.testing.assert_allclose(result[0], 0.025 * 8, rtol=1e-10)
+
+    def test_supplied_coefficients_do_not_warn(self):
+        """Explicit coef0/coef1 present → no missing-calibration warning."""
+        import warnings
+
+        data = np.array([8.0])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # any warning fails the test
+            result, _ = convert_inclxy(data, {"coef0": "0", "coef1": "0.025"})
         np.testing.assert_allclose(result[0], 0.025 * 8, rtol=1e-10)
 
 
@@ -467,13 +481,29 @@ class TestConvertJacT:
 
 class TestConvertAroftO2:
     def test_positive_values(self):
-        """Positive values divided by 100."""
-        data = np.array([25000.0, 10000.0, 0.0])
+        """Mid-range values (clear of the deglitch rails) divided by 100."""
+        data = np.array([25000.0, 10000.0, 200.0])
         result, units = convert_aroft_o2(data, {})
         assert units == "umol_L-1"
         np.testing.assert_allclose(result[0], 250.0, rtol=1e-10)
         np.testing.assert_allclose(result[1], 100.0, rtol=1e-10)
-        np.testing.assert_allclose(result[2], 0.0, atol=1e-12)
+        np.testing.assert_allclose(result[2], 2.0, rtol=1e-10)
+
+    def test_rs232_deglitch(self):
+        """RS232 rail glitches (<=50 or >=2^16-50) hold the previous sample;
+        the first sample is never replaced (ODAS parity, #104 U1-2)."""
+        # 30 (<=50) and 65535 (>=65486) are glitches -> take preceding value;
+        # a run of consecutive glitches all inherit the last good value.
+        data = np.array([10000.0, 30.0, 20000.0, 65535.0, 40.0])
+        result, _ = convert_aroft_o2(data, {})
+        # unsigned holds: [10000, 10000, 20000, 20000, 20000] -> /100
+        np.testing.assert_allclose(result, [100.0, 100.0, 200.0, 200.0, 200.0], rtol=1e-10)
+
+    def test_rs232_deglitch_keeps_first_sample(self):
+        """A leading glitch is kept (ODAS loops from the 2nd sample)."""
+        data = np.array([30.0, 10000.0])
+        result, _ = convert_aroft_o2(data, {})
+        np.testing.assert_allclose(result, [0.3, 100.0], rtol=1e-10)
 
     def test_unsigned_wrapping(self):
         """Negative values wrap to unsigned before dividing."""
@@ -501,13 +531,20 @@ class TestConvertAroftO2:
 
 class TestConvertAroftT:
     def test_positive_values(self):
-        """Positive values: d/1000 - 5."""
-        data = np.array([10000.0, 5000.0, 0.0])
+        """Mid-range values (clear of the deglitch rails): d/1000 - 5."""
+        data = np.array([10000.0, 5000.0, 8000.0])
         result, units = convert_aroft_t(data, {})
         assert units == "deg_C"
         np.testing.assert_allclose(result[0], 5.0, rtol=1e-10)
         np.testing.assert_allclose(result[1], 0.0, atol=1e-12)
-        np.testing.assert_allclose(result[2], -5.0, rtol=1e-10)
+        np.testing.assert_allclose(result[2], 3.0, rtol=1e-10)
+
+    def test_rs232_deglitch(self):
+        """RS232 rail glitches hold the previous sample (#104 U1-2)."""
+        data = np.array([10000.0, 20.0, 8000.0])
+        result, _ = convert_aroft_t(data, {})
+        # unsigned holds: [10000, 10000, 8000] -> /1000 - 5
+        np.testing.assert_allclose(result, [5.0, 5.0, 3.0], rtol=1e-10)
 
     def test_unsigned_wrapping(self):
         """Negative values wrap to unsigned before scaling."""

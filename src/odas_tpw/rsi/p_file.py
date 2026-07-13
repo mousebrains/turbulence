@@ -273,7 +273,11 @@ class PFile:
         Path to the source .p file.
     channels : dict[str, ndarray]
         Channel data arrays keyed by name (e.g. 'P', 'T1', 'sh1', 'Ax').
-        Values are in physical units after conversion.  Note:
+        Values are in physical units after conversion, EXCEPT the shear
+        channels 'sh1'/'sh2', which hold the ODAS intermediate still missing
+        the /speed² fall-rate normalization (applied downstream in the
+        epsilon/chi path); they become physical shear (s⁻¹) only after that.
+        Note:
         pre-emphasized channels keep their raw names after deconvolution —
         'T1_dT1' holds the *deconvolved* fast temperature in deg C (not
         the pre-emphasized signal), and 'P_dP' holds the deconvolved
@@ -636,6 +640,17 @@ class PFile:
                 phys, units = converter(self.channels_raw[ch_name], convert_info)
                 self.channels[ch_name] = phys
                 self.channel_info[ch_name] = {"units": units, "type": ch_type}
+                # Shear (sh1/sh2) carries the ODAS intermediate that still needs
+                # the /speed^2 fall-rate normalization to become physical shear.
+                # ``units`` stays UDUNITS-valid "s-1"; flag the pre-normalization
+                # state CF-legally in a free-text ``comment`` so a reader of the
+                # per-profile NetCDF does not treat it as final shear. (#104 U1-1.)
+                if ch_type == "shear":
+                    self.channel_info[ch_name]["comment"] = (
+                        "un-normalized ODAS shear intermediate; still missing the "
+                        "/speed^2 fall-rate normalization applied downstream in the "
+                        "epsilon/chi path (physical velocity shear, s-1, only after)"
+                    )
 
     def _apply_deconvolution(self, ch_config: dict, matrix: np.ndarray) -> None:
         """Deconvolve pre-emphasized channels to produce high-resolution data.

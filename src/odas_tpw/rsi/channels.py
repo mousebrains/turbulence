@@ -86,6 +86,28 @@ def _unsigned_16bit(data: np.ndarray) -> np.ndarray:
     return d
 
 
+def _deglitch_rs232(d: np.ndarray) -> np.ndarray:
+    """Forward-fill obvious RS232-receiver glitches (RINKO FT sensors).
+
+    Faithful port of the "Temporary fix of a buggy RS232 receiver" in ODAS
+    ``convert_odas.m`` (odas_aroft_o2_internal / odas_aroft_t_internal): any
+    sample sitting at/near the unsigned rails (``<= 50`` or ``>= 2^16 - 50``)
+    is replaced by the preceding sample. The first sample is never replaced
+    (ODAS loops from index 2, 1-based), and a run of consecutive glitches all
+    inherit the last good value. Applied to the UNSIGNED-wrapped values, i.e.
+    after :func:`_unsigned_16bit`, matching the ODAS ordering. (#104 U1-2.)
+    """
+    out = np.asarray(d, dtype=np.float64).copy()
+    if out.size == 0:
+        return out
+    glitch = (out <= 50) | (out >= 2**16 - 50)
+    glitch[0] = False  # ODAS keeps the first sample regardless
+    # Standard forward-fill: map each glitch to the last non-glitch index.
+    idx = np.where(glitch, 0, np.arange(out.size))
+    np.maximum.accumulate(idx, out=idx)
+    return out[idx]
+
+
 def convert_therm(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """FP07 thermistor via Steinhart-Hart equation and half-bridge circuit.
 
@@ -142,6 +164,13 @@ def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     sig_zero = _safe_float(params.get("sig_zero", "0"))
     phys = (adc_fs / 2**adc_bits) * data + (adc_zero - sig_zero)
     phys = phys / (2 * np.sqrt(2) * diff_gain * sens)
+    # NB: this is the ODAS intermediate — still MISSING the /speed^2 fall-rate
+    # normalization that makes it true physical shear (applied exactly once
+    # downstream in helpers.py + adapter). The units stay the UDUNITS-valid
+    # "s-1" so CF-declared per-profile files remain compliant; the
+    # pre-normalization caveat is surfaced CF-legally via the sh1/sh2 ``comment``
+    # attribute (set during channel conversion in PFile._read), not baked into
+    # ``units``. (#104 U1-1.)
     return phys, "s-1"
 
 
@@ -221,8 +250,12 @@ def convert_magn(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, 
 def convert_inclxy(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """ADIS inclinometer X or Y: 14-bit two's complement → degrees."""
     val = _adis_14bit(data)
-    coef0 = _safe_float(params.get("coef0", "0"))
-    coef1 = _safe_float(params.get("coef1", "0.025"))
+    # ODAS odas_inclxy_internal has no default for coef1 — MATLAB errors on a
+    # missing scale rather than fabricating one. Route through _require_float so
+    # a missing coefficient WARNS (house style: shear/voltage/accel/magn) instead
+    # of silently substituting the ADIS16209 nominal 0.025 deg/LSB. (#104 U1-3.)
+    coef0 = _require_float(params, "coef0", 0.0, "inclxy")
+    coef1 = _require_float(params, "coef1", 0.025, "inclxy")
     return coef1 * val + coef0, "deg"
 
 
@@ -267,13 +300,13 @@ def convert_raw(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, s
 
 def convert_aroft_o2(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """RINKO FT dissolved oxygen: unsigned 16-bit wrapping / 100 → µmol/L."""
-    d = _unsigned_16bit(data)
+    d = _deglitch_rs232(_unsigned_16bit(data))
     return d / 100.0, "umol_L-1"
 
 
 def convert_aroft_t(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """RINKO FT temperature: unsigned 16-bit wrapping / 1000 - 5 -> deg C."""
-    d = _unsigned_16bit(data)
+    d = _deglitch_rs232(_unsigned_16bit(data))
     return d / 1000.0 - 5.0, "deg_C"
 
 

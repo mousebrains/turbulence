@@ -60,6 +60,18 @@ def test_shear_centered(pf):
     assert abs(np.nanmean(sh)) < 1.0
 
 
+def test_shear_units_cf_valid_with_prenorm_comment(pf):
+    """#104 U1-1: sh1/sh2 hold the un-normalized ODAS intermediate. The units
+    stay UDUNITS-valid "s-1" so CF-declared per-profile files stay compliant;
+    the pre-normalization caveat rides in a free-text ``comment`` attr instead
+    of being baked into ``units`` (which would be CF-invalid)."""
+    for name in ("sh1", "sh2"):
+        info = pf.channel_info[name]
+        assert info["units"] == "s-1"  # UDUNITS-parseable, not prose
+        assert "normaliz" in info.get("comment", "").lower()
+        assert "speed^2" in info.get("comment", "")
+
+
 def test_two_id_channel_assembles_in_config_order(pf):
     """JAC_C is the one 2-id (32-bit split) channel; it must assemble its high/
     low words in config-declared order (ODAS read_odas.m) and decode to a

@@ -91,6 +91,26 @@ def detect_bottom_crash(
     un-trimmed. This is a fundamental limit of the bin resolution; size
     ``depth_window`` accordingly if tighter bottom trimming is required.
     """
+    # speed_factor / median_factor / vibration_frequency are accepted for
+    # backward compatibility but are not yet wired into the algorithm (see the
+    # parameter docs above). They are kept as valid config keys — strict
+    # validate_config would reject a YAML that still lists them — but warn if a
+    # caller tunes one off its default so it is no longer a SILENT no-op.
+    # (#104 U4-F2.)
+    _unwired = {
+        "speed_factor": (speed_factor, 0.3),
+        "median_factor": (median_factor, 1.0),
+        "vibration_frequency": (vibration_frequency, 16),
+    }
+    _tuned = [name for name, (val, default) in _unwired.items() if val != default]
+    if _tuned:
+        warnings.warn(
+            "detect_bottom_crash: parameter(s) "
+            f"{', '.join(_tuned)} are accepted but not yet implemented; the "
+            "supplied value(s) have no effect on bottom detection",
+            stacklevel=2,
+        )
+
     depth = np.asarray(depth_fast, dtype=np.float64)
 
     if not vibration_channels:

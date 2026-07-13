@@ -690,6 +690,19 @@ def _inertial_subrange(
     # itself has an off-by-one here (get_diss_odas.m:790-797 deletes
     # ``fit_range(index)`` where ``index`` refers to ``fit_range(2:end)``);
     # the ``keep[b + 1]`` mapping below is the corrected version.
+    #
+    # Worked example: fit_range = bins [1..10]; fit_error runs over
+    # fit_range(2:end) = bins [2..10] (length 9). A single flyer at
+    # fit_error position 5 is really bin fit_range(5+1) = bin 6.
+    #   ODAS  (1-based): index=5 -> ``fit_range(5)=[]`` removes bin 5 — one
+    #                    below the flyer (wrong); k_max/refit then use a
+    #                    mis-trimmed range.
+    #   here  (0-based): same flyer at fit_error_vec[4] -> ``keep[4+1]`` =
+    #                    keep[5] = False -> removes fit_range[5] = bin 6, the
+    #                    actual flyer (correct).
+    # This deliberate DEVIATION from the RSI reference is what the ATOMIX
+    # scor160 L2->L4 benchmark is validated against, so it is correct-by-test,
+    # not merely asserted.
     nas = nasmyth_grid(max(e, EPSILON_FLOOR), nu, K_inner)
     if len(fit_range) > 2:
         with np.errstate(divide="ignore", invalid="ignore"):

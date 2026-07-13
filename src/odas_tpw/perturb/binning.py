@@ -241,7 +241,17 @@ def _decoded(var) -> np.ndarray:
 # calibration tag. Only this curated set survives, so the combo does not gain a
 # flood of source attrs — schema-controlled keys (units/long_name/...) are
 # unaffected. Extend when another provenance attr needs to reach the products.
-_PRESERVE_DATAVAR_ATTRS: frozenset[str] = frozenset({"calibration"})
+#
+# flag_meanings / flag_masks are the CF bitfield metadata written on the
+# qc_drop_epsilon / qc_drop_chi flags (qc_gate.py); without them the combo's qc
+# field is an attr-less integer whose bits cannot be decoded. combo's
+# apply_schema only *adds* schema keys (it never clears existing attrs), so
+# preserving them here carries them to the product. One caveat: make_combo's
+# xr.concat uses the default combine_attrs="override" (per-variable attrs come
+# from the FIRST binned file), so in the normal homogeneous case (every source
+# QC'd identically) they survive, but a heterogeneous run whose first-sorted
+# source lacks the flags would drop them combo-wide. (#104 U5-3.)
+_PRESERVE_DATAVAR_ATTRS: frozenset[str] = frozenset({"calibration", "flag_meanings", "flag_masks"})
 
 
 def _load_profile_snapshot(profile_file: Path) -> dict | None:

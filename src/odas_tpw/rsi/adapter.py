@@ -185,7 +185,7 @@ def pfile_to_l1data(
         vib=vib,
         vib_type=vib_type,
         fs_fast=pf.fs_fast,
-        f_AA=98.0,
+        f_AA=98.0,  # RSI/ODAS default AA cutoff, hardcoded (not parsed from config); #104 U1-4
         vehicle=pf.config["instrument_info"].get("vehicle", "").lower(),
         profile_dir=direction,
         time_reference_year=ref_year,

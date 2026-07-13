@@ -186,6 +186,32 @@ class TestBinByDepth:
                 == "in-situ (Steinhart-Hart order 1 vs JAC_T)")
         assert "sensor_type" not in result["T1"].attrs  # allow-list keeps it out
 
+    def test_qc_flag_cf_attrs_survive_binning(self, tmp_path):
+        """#104 U5-3: a qc_drop flag's CF bitfield metadata (flag_meanings /
+        flag_masks) is carried through binning, so the combo's flag stays
+        decodable rather than becoming an attr-less integer."""
+        n = 50
+        depth = np.linspace(0, 50, n)
+        ds = xr.Dataset(
+            {
+                "qc_drop_epsilon": (
+                    ["time_slow"],
+                    np.zeros(n, dtype=np.int32),
+                    {
+                        "flag_meanings": "fom kmax_ratio",
+                        "flag_masks": np.array([1, 2], dtype=np.int32),
+                    },
+                ),
+                "depth": (["time_slow"], depth),
+            },
+            coords={"time_slow": np.arange(n, dtype=float)},
+        )
+        ds.to_netcdf(tmp_path / "prof00.nc")
+        result = bin_by_depth([tmp_path / "prof00.nc"], bin_width=5.0)
+        attrs = result["qc_drop_epsilon"].attrs
+        assert attrs.get("flag_meanings") == "fom kmax_ratio"
+        np.testing.assert_array_equal(attrs.get("flag_masks"), [1, 2])
+
     def test_datetime64_stime_etime_decoded_to_epoch_seconds(self, tmp_path):
         """When stime/etime are written with CF units, xarray decodes them
         to datetime64 on read.  bin_by_depth must reduce back to epoch

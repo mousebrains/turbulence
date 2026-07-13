@@ -488,9 +488,15 @@ def _build_profiles_figure(
                 lbl.set_horizontalalignment("right")
 
     title_id = ds.attrs.get("id") or os.path.basename(os.path.normpath(args.root))
+    # Report the count actually drawn (finite-x casts, == len(col)), not the
+    # full profile dim — a non-finite spatial x drops that cast from the plot,
+    # so dss.sizes['profile'] over-counts. Show "N of M" when they differ.
+    n_drawn = len(col)
+    n_total = int(dss.sizes["profile"])
+    casts = grouped(n_drawn) if n_drawn == n_total else f"{grouped(n_drawn)} of {grouped(n_total)}"
     fig.suptitle(getattr(args, "title", None) or (
         f"{title_id}  —  {product.label}: {sec.name}  —  "
-        f"x-axis: {sec.method}  —  {grouped(int(dss.sizes['profile']))} casts"
+        f"x-axis: {sec.method}  —  {casts} casts"
     ))
     layout.fit_colorbar_labels(fig)  # long var labels overflow short per-panel bars
     return fig

@@ -64,6 +64,36 @@ class TestMakeCombo:
         assert "Conventions" in combo.attrs
         combo.close()
 
+    def test_qc_flag_cf_attrs_survive_to_combo(self, tmp_path):
+        """#104 U5-3 (end-to-end): the qc_drop_* CF bitfield metadata carried
+        through binning must also survive make_combo's concat + apply_schema +
+        netCDF round-trip, so the combo's flag stays decodable. COMBO_SCHEMA has
+        no qc_drop_epsilon entry, so the attrs can only come from preservation."""
+        binned_dir = tmp_path / "binned"
+        binned_dir.mkdir()
+        n_bins = 8
+        for i in range(2):  # homogeneous sources: both carry the flag defs
+            ds = xr.Dataset(
+                {
+                    "qc_drop_epsilon": (
+                        ["bin", "profile"],
+                        np.zeros((n_bins, 3), dtype=np.int32),
+                        {
+                            "flag_meanings": "fom kmax_ratio",
+                            "flag_masks": np.array([1, 2], dtype=np.int32),
+                        },
+                    ),
+                },
+                coords={"bin": np.arange(n_bins, dtype=float), "profile": np.arange(3)},
+            )
+            ds.to_netcdf(binned_dir / f"file{i:02d}.nc")
+
+        out = make_combo(binned_dir, tmp_path / "combo", COMBO_SCHEMA, method="depth")
+        with xr.open_dataset(out) as combo:
+            attrs = combo["qc_drop_epsilon"].attrs
+            assert attrs.get("flag_meanings") == "fom kmax_ratio"
+            np.testing.assert_array_equal(attrs.get("flag_masks"), [1, 2])
+
     def test_time_combo(self, tmp_path):
         """Time-based combo → lengthwise glue."""
         binned_dir = tmp_path / "binned"

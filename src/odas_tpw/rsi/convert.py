@@ -562,6 +562,11 @@ def p_to_L1(
     L1.time_reference_year = float(ref_year)
     L1.fs_fast = pf.fs_fast
     L1.fs_slow = pf.fs_slow
+    # 98.0 Hz is the RSI/ODAS default anti-alias cutoff, hardcoded because the
+    # AA cutoff is not parsed from the instrument config. Every writer and every
+    # read-with-recovery (adapter.py, io.py) defaults to the same 98.0, so it is
+    # self-consistent and does not alter published epsilon. Parsing the actual
+    # AA cutoff from the config is a separate follow-up. (#104 U1-4.)
     L1.f_AA = 98.0
     L1.vehicle = pf.config["instrument_info"].get("vehicle", "").lower()
 

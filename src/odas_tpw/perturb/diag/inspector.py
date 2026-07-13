@@ -284,8 +284,9 @@ class DiagInspector:
 
     # -------------------------------------------------------------- launching
     def default_cell(self) -> tuple[int, int]:
-        """A representative (profile, depth): the cast with the most data, at a
-        mid depth among its finite bins.  Used for a headless snapshot."""
+        """A representative (depth, profile): the cast with the most data, at a
+        mid depth among its finite bins.  Returns (depth-bin index, profile
+        index) — the order the caller unpacks.  Used for a headless snapshot."""
         primary = next(iter(self.data.fields.values()))
         finite = np.isfinite(primary)
         if not finite.any():
