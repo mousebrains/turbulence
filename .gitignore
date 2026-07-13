@@ -4,6 +4,9 @@ VMP/
 AtomixData
 benchmarks/
 
+# Microstructure sensor calibration sheets (local reference PDFs)
+microstructure_sensors/
+
 # Per-cruise data directories — only the YAML config is tracked.
 ARCTERX/*
 !ARCTERX/perturb.yaml
