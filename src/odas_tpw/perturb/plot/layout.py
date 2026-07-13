@@ -118,22 +118,29 @@ def ffill_down(z: np.ndarray, max_gap: int = 1) -> np.ndarray:
     past either end of a cast. Used so the pcolor reads as a continuous
     profile when there are scattered missing bins inside the cast envelope.
 
-    The fill is bounded to runs of at most ``max_gap`` bins (default 1): an
-    isolated missing bin is cosmetically bridged, but a longer run — e.g. a
-    QC-rejected / pipeline-NaN'd region (``drop_action='nan'``) — is left as a
-    visible gap rather than repainted with the shallower bin's value. Without
-    this bound a "QC applied" figure would silently render the dropped bins as
-    if they had passed.
+    The fill is bounded by the length of the whole internal NaN run (default
+    ``max_gap=1``): a run is bridged only if its entire length is ``<= max_gap``,
+    otherwise it is left as a visible gap. So an isolated missing bin is
+    cosmetically bridged, but a longer run — e.g. a QC-rejected / pipeline-NaN'd
+    region (``drop_action='nan'``) — is left untouched rather than having its
+    first bins repainted with the shallower bin's value. Gating on the run
+    length (not the distance below the last valid sample) is what keeps the
+    *first* bin of a multi-bin dropped block from being silently repainted as if
+    it had passed.
     """
     z = z.copy()
     n = z.shape[0]
     rows = np.arange(n)[:, None]
     valid = np.isfinite(z)
+    # Nearest valid bin above (>=0) and below (index, else n) each cell.
     last_above = np.maximum.accumulate(np.where(valid, rows, -1), axis=0)
-    valid_or_below = np.cumsum(valid[::-1], axis=0)[::-1] > 0
-    has_below = np.zeros_like(valid)
-    has_below[:-1] = valid_or_below[1:]
-    fill = ~valid & (last_above >= 0) & has_below & ((rows - last_above) <= max_gap)
+    idx_below = np.where(valid, rows, n)
+    first_below = np.minimum.accumulate(idx_below[::-1], axis=0)[::-1]
+    has_below = first_below < n
+    # Length of the internal NaN run a cell belongs to (all NaNs in one run
+    # share last_above/first_below, so they get one run_len and fill together).
+    run_len = first_below - last_above - 1
+    fill = ~valid & (last_above >= 0) & has_below & (run_len <= max_gap)
     cols = np.broadcast_to(np.arange(z.shape[1]), z.shape)
     z[fill] = z[last_above[fill], cols[fill]]
     return z

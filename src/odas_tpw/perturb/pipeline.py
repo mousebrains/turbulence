@@ -138,21 +138,16 @@ def _write_binned_or_clear(ds: "xr.Dataset", out_dir: Path, manifest: str | None
 def _atomic_to_netcdf(ds: "xr.Dataset", out_path: Path) -> None:
     """Write *ds* to *out_path* atomically (temp file + os.replace).
 
-    A direct ds.to_netcdf(out_path) interrupted mid-payload (ENOSPC / SMB drop /
-    Ctrl-C) or raising leaves a readable PARTIAL NetCDF on disk; the same run
-    then bins it and the bin/combo manifest locks those fill-derived bins in, so
-    a correct retry (identical filenames -> identical manifest) skips re-binning
-    and permanently publishes the partial data (audit 2026-07-01). os.replace is
-    atomic within a filesystem, so a partial write never becomes the live file.
+    Thin wrapper over the shared :func:`odas_tpw.perturb.atomic_io.atomic_to_netcdf`
+    (one canonical implementation, also used by ctd.py; kept under this name for
+    the diss/chi call sites). A direct ds.to_netcdf(out_path) interrupted
+    mid-payload (ENOSPC / SMB drop / Ctrl-C) leaves a readable PARTIAL NetCDF the
+    bin/combo manifest then locks in on a clean retry; os.replace never lets a
+    partial write become the live file. (audit 2026-07-01; #104 U5-2.)
     """
-    tmp = out_path.with_name(f".{out_path.name}.{os.getpid()}.tmp")
-    try:
-        ds.to_netcdf(tmp)
-        os.replace(tmp, out_path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    from odas_tpw.perturb.atomic_io import atomic_to_netcdf
+
+    atomic_to_netcdf(ds, out_path)
 
 
 _MANIFEST_ATTR = "_input_manifest"

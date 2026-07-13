@@ -81,6 +81,78 @@ def test_binned_channel_variance_real_filter(tmp_path: Path):
     assert np.any(np.isfinite(out)) and np.all(out[np.isfinite(out)] >= 0)
 
 
+def test_binned_channel_variance_bins_by_depth_not_pressure(tmp_path: Path, monkeypatch):
+    """U6-F1: the combo bin coordinate is depth in METERS, so the fast pressure
+    (dbar) must be converted via gsw before binning — binning dbar straight onto
+    meter edges mis-registers samples ~0.6-0.7 %/dbar too deep."""
+    import gsw
+
+    _write_raw_profile(tmp_path, "a_prof001", stime=1000.0)  # P 0..100 dbar, lat=20
+    captured: dict = {}
+    real = diagnostics._variance_by_bin
+
+    def spy(clean, coord, edges):
+        captured["coord"] = np.asarray(coord, dtype=float)
+        return real(clean, coord, edges)
+
+    monkeypatch.setattr(diagnostics, "_variance_by_bin", spy)
+    diagnostics._binned_channel_variance(
+        str(tmp_path / "a_prof001.nc"), "sh1", np.arange(0.0, 101.0),
+        hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+    )
+
+    # Reconstruct the fast pressure the function builds, and the depth it must bin.
+    n_slow, fs_slow, fs_fast = 256, 64.0, 512.0
+    t_slow = np.arange(n_slow) / fs_slow
+    t_fast = np.arange(n_slow * int(fs_fast / fs_slow)) / fs_fast
+    pres_fast = np.interp(t_fast, t_slow, np.linspace(0.0, 100.0, n_slow))
+    expected_depth = -np.asarray(gsw.z_from_p(pres_fast, 20.0))
+
+    np.testing.assert_allclose(captured["coord"], expected_depth, rtol=1e-12)
+    # And it is genuinely depth, NOT the raw dbar pressure (the pre-fix bug).
+    assert not np.allclose(captured["coord"], pres_fast)
+    assert np.all(captured["coord"] < pres_fast + 1e-9)  # depth < pressure (dbar)
+
+
+def test_binned_channel_variance_default_lat_when_missing(tmp_path: Path, monkeypatch):
+    """No 'lat' in the profile -> fall back to _DEFAULT_BIN_LATITUDE."""
+    import gsw
+    import xarray as xr
+
+    from odas_tpw.perturb.binning import _DEFAULT_BIN_LATITUDE
+
+    n_slow, fs_slow, fs_fast = 64, 64.0, 512.0
+    ratio = int(fs_fast / fs_slow)
+    t_slow = np.arange(n_slow) / fs_slow
+    t_fast = np.arange(n_slow * ratio) / fs_fast
+    pres = np.linspace(0.0, 50.0, n_slow)
+    rng = np.random.RandomState(1)
+    sh1 = 1e-2 * np.sin(2 * np.pi * 5.0 * t_fast) + 1e-3 * rng.standard_normal(t_fast.size)
+    ds = xr.Dataset({  # deliberately NO "lat"
+        "sh1": (("time_fast",), sh1, {"units": "s-1"}),
+        "P": (("time_slow",), pres, {"units": "dbar"}),
+        "t_fast": (("time_fast",), t_fast, {}),
+        "t_slow": (("time_slow",), t_slow, {}),
+    })
+    ds.to_netcdf(tmp_path / "nolat_prof001.nc")
+
+    captured: dict = {}
+    real = diagnostics._variance_by_bin
+
+    def spy(clean, coord, edges):
+        captured["coord"] = np.asarray(coord, dtype=float)
+        return real(clean, coord, edges)
+
+    monkeypatch.setattr(diagnostics, "_variance_by_bin", spy)
+    diagnostics._binned_channel_variance(
+        str(tmp_path / "nolat_prof001.nc"), "sh1", np.arange(0.0, 51.0),
+        hp_cut=1.0, despike_thresh=8.0, despike_smooth=0.5,
+    )
+    pres_fast = np.interp(t_fast, t_slow, pres)
+    expected = -np.asarray(gsw.z_from_p(pres_fast, _DEFAULT_BIN_LATITUDE))
+    np.testing.assert_allclose(captured["coord"], expected, rtol=1e-12)
+
+
 def test_compute_pseudo_grid_matches_by_stime(tmp_path: Path):
     diagnostics._STIME_CACHE.clear()
     pdir = tmp_path / "profiles_00"
