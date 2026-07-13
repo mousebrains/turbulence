@@ -40,7 +40,7 @@ See [docs/installation.md](docs/installation.md) for more options.
 
 ## Quick Start
 
-Several CLIs ship with the package (`rsi-tpw`, `perturb`, `perturb-plot`, `scor160-tpw`, `pyturb-cli`); the two primary ones, for different workflows:
+Several CLIs ship with the package (`rsi-tpw`, `perturb`, `perturb-plot`, `perturb-diag`, `scor160-tpw`, `pyturb-cli`); the two primary ones, for different workflows:
 
 - **`rsi-tpw`** — single-file or short batch processing on the command line.
 - **`perturb`** — full campaign pipeline driven by a YAML config file
@@ -48,9 +48,10 @@ Several CLIs ship with the package (`rsi-tpw`, `perturb`, `perturb-plot`, `scor1
   workers and stage-aware logging. Use this for cruise-scale runs.
 
 The two CLIs use different spectral defaults (`rsi-tpw`: `fft_length=1024`
-with a 4096-sample dissipation window; `perturb`: `fft_length=256` for
-epsilon and `512` for chi), so their outputs differ in vertical resolution
-and noise behavior.
+with a 4096-sample dissipation window; `perturb`: duration-based
+`fft_sec=1.0` — one second, resolved per instrument sampling rate,
+= 512 samples on a 512-Hz VMP-250 — for both epsilon and chi), so their
+outputs differ in vertical resolution and noise behavior.
 
 ### `rsi-tpw` (single files / short batches)
 

@@ -13,7 +13,7 @@ References
 ----------
 Lueck, R.G., 2022a: The statistics of oceanic turbulence measurements.
     Part 1: Shear variance and dissipation rates. J. Atmos. Oceanic
-    Technol., 39, 1259-1276.
+    Technol., 39, 1259-1271.
 Lueck, R.G., 2022b: The statistics of oceanic turbulence measurements.
     Part 2: Shear spectra and a new spectral model. J. Atmos. Oceanic
     Technol., 39, 1273-1282.

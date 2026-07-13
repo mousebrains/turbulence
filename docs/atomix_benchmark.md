@@ -343,6 +343,13 @@ spectra and Nemo data when using X_ISR = 0.02.
 Both `scor160.l4` and `rsi.dissipation` use X_ISR = 0.01 to
 match the benchmark processing.
 
+**Transparency note:** `X_ISR = 0.01` (and `ISR_MARGIN = 1.6` below) were
+selected to maximize agreement with these ATOMIX benchmark datasets, which are
+then used to validate the pipeline. Their benchmark agreement for these two
+constants is therefore partly circular and not an independent confirmation of
+them; an independent check would require a held-out dataset. `X_ISR = 0.01`
+also diverges from ODAS v4.5.1's experimental `0.02`.
+
 ### FOM discrepancy
 
 Our FOM (observed/Nasmyth variance ratio over the fit range) is
@@ -370,6 +377,10 @@ spectra are identical, but the internal e_1 computation differs).
 The margin of 1.6 was empirically tuned to maximize method agreement
 across all six benchmark datasets (99.8% overall, 100% for VMP250,
 VMP250_cs, Nemo, and MSS).
+
+**Transparency note:** as with `X_ISR` above, `ISR_MARGIN = 1.6` was tuned on
+the same benchmark used to validate the pipeline, so its benchmark agreement is
+partly circular rather than an independent confirmation.
 
 
 ## L2 Processing Details

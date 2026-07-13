@@ -75,9 +75,11 @@ def default_tau_model(fp07_model: str) -> str:
 
     ``double_pole`` pairs with 'goto' (fixed tau = 3 ms, Goto et al.
     2016); ``single_pole`` pairs with 'lueck' (speed-dependent).  Note
-    this means ``double_pole`` does NOT reproduce Peterson & Fer (2014),
-    who combined a double-pole response with a speed-dependent tau —
-    see the :func:`fp07_tau` notes for how to do that explicitly.
+    that Peterson & Fer (2014) used a SINGLE-pole response,
+    H^2(f) = (1 + (f/fc)^2)^-1, with a speed-dependent cut-off, so
+    reproducing them means the ``single_pole`` transfer with the
+    'peterson' tau (not the default 'lueck') — see the :func:`fp07_tau`
+    notes for how to do that explicitly.
     """
     # Defect: an unrecognized fp07_model previously fell through to 'lueck'
     # silently, pairing a single-pole tau with a double-pole transfer on a typo.
@@ -111,12 +113,12 @@ def fp07_tau(speed: npt.ArrayLike, model: str = "lueck") -> np.ndarray | float:
     The pipeline pairs tau models with transfer-function models via
     :func:`default_tau_model`: ``fp07_model='single_pole'`` uses 'lueck'
     and ``'double_pole'`` uses 'goto'.  Be aware that Peterson & Fer
-    (2014) used a DOUBLE-pole response together with their
-    speed-dependent tau — selecting ``double_pole`` here reproduces the
-    Goto et al. (2016) correction (fixed 3 ms), NOT Peterson & Fer's.
-    To reproduce Peterson & Fer exactly, call the transfer function with
-    ``fp07_double_pole`` and ``fp07_tau(speed, model='peterson')``
-    explicitly.
+    (2014) used a SINGLE-pole response, H^2(f) = (1 + (f/fc)^2)^-1, with
+    a speed-dependent cut-off fc = (2*pi*tau*U^-0.32)^-1, tau = 12 ms
+    (their double-pole tau = 8 ms is only a Fig. 15 sensitivity test).
+    The default 'lueck' tau therefore does NOT reproduce them.  To
+    reproduce Peterson & Fer exactly, call the single-pole transfer with
+    ``fp07_transfer`` and ``fp07_tau(speed, model='peterson')``.
 
     Returns
     -------

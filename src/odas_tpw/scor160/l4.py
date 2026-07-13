@@ -37,6 +37,9 @@ ISOTROPY_FACTOR = 7.5
 # 0.01 distinctly better (verified by rerunning the L2->L4 comparison
 # with 0.02: per-probe mean log10 errors on MR1000 Minas Passage grow
 # from ~+0.02 to +0.05..+0.08), so we keep 0.01.
+# NB: tuned on the same ATOMIX benchmark later used to validate the pipeline,
+# so its benchmark agreement is partly circular (not an independent test); see
+# docs/atomix_benchmark.md.
 X_ISR = 0.01
 
 # Margin applied to the variance->ISR method-switch threshold:
@@ -48,6 +51,8 @@ X_ISR = 0.01
 # method agreement from 100% to 84%); 1.6 maximizes method agreement
 # with the ATOMIX benchmark references.  Both epsilon estimates are
 # always computed, so the margin only affects which one is reported.
+# NB: like X_ISR above, tuned on the same benchmark used to validate the
+# pipeline — partly circular; see docs/atomix_benchmark.md.
 DEFAULT_ISR_MARGIN = 1.6
 
 VARIANCE_TANH_COEFF = 48
