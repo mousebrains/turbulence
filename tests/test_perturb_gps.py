@@ -155,6 +155,25 @@ class TestGPSFromCSV:
         np.testing.assert_allclose(lat, [15.0, 20.0, 25.0])
         np.testing.assert_allclose(lon, [105.0, 110.0, 115.0])
 
+    def test_dateline_crossing_uses_short_path(self, tmp_path):
+        """#104 U5-4: a track crossing the +/-180 antimeridian must interpolate
+        the SHORT way (through 180), not sweep ~360 deg through 0 to the wrong
+        side of the globe."""
+        import pandas as pd
+
+        path = tmp_path / "gps_dateline.csv"
+        # 179 E -> 181 E (== -179), a 2-degree eastward step across the seam.
+        df = pd.DataFrame({"t": [0, 2], "lat": [10.0, 10.0], "lon": [179.0, -179.0]})
+        df.to_csv(path, index=False)
+        gps = GPSFromCSV(path)
+        # Midpoint is the antimeridian (~+/-180), NOT 0 (the old wrong-way sweep).
+        mid = gps.lon(np.array([1.0]))[0]
+        assert abs(abs(mid) - 180.0) < 1e-6
+        # A quarter step east of 179 is 179.5 E, still in range (no re-wrap),
+        # NOT ~89.5 (a linear interp of raw 179 -> -179).
+        q = gps.lon(np.array([0.5]))[0]
+        assert q == pytest.approx(179.5)
+
     def test_custom_columns(self, tmp_path):
         csv_file = self._make_csv(
             tmp_path / "gps.csv",

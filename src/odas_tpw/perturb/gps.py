@@ -75,6 +75,54 @@ def _finite_interp1d(t: np.ndarray, vals: np.ndarray):
     return interp1d([0.0, 1.0], [fill, fill], bounds_error=False, fill_value=fill)
 
 
+def _lon_interp_dateline_safe(t: np.ndarray, lon: np.ndarray):
+    """Linear longitude interpolator that is safe across the +/-180 seam.
+
+    A plain linear interp of raw longitude sweeps ~360 deg the *wrong* way when
+    a track crosses the antimeridian (e.g. 179.9 -> -179.9 would pass through 0,
+    landing on the opposite side of the globe). Unwrap the finite nodes to a
+    continuous phase (``period=360``), interpolate that, then wrap only the
+    results that land outside [-180, 180) back into range. A track that never
+    crosses the seam unwraps to itself, and any interpolated value already in
+    [-180, 180) passes through untouched — so the result is bit-identical to the
+    old raw interpolation everywhere the position is in range (all of ARCTERX,
+    whose positions and time-bounded extrapolations stay near 145 E). Two kinds
+    of value differ from the old raw interp, both corrections rather than
+    regressions: (1) points on a seam-crossing segment, where the old code swept
+    the wrong way through 0 to the far side of the globe (still in range, but
+    wrong) while the new code takes the short path across +/-180; and (2) an
+    extreme extrapolation the old code pushed past +/-180, which the new code
+    wraps to the equivalent in-range meridian instead of a meaningless >180 deg
+    longitude.
+
+    Convention: output is normalized to [-180, 180). Inputs in the usual
+    [-180, 180) convention are unchanged (subject to the wrap above); a
+    [0, 360)-convention track is re-expressed in [-180, 180) — the same physical
+    positions, a different label. (#104 U5-4.)
+    """
+    from scipy.interpolate import interp1d
+
+    t = np.asarray(t, dtype=np.float64)
+    lon = np.asarray(lon, dtype=np.float64)
+    good = np.isfinite(t) & np.isfinite(lon)
+    if int(good.sum()) >= 2:
+        # unwrap needs the nodes in time order; interp1d otherwise sorts itself.
+        order = np.argsort(t[good])
+        t_g = t[good][order]
+        lon_u = np.unwrap(lon[good][order], period=360.0)
+        base = interp1d(t_g, lon_u, bounds_error=False, fill_value="extrapolate")
+    else:
+        fill = float(lon[good][0]) if good.any() else np.nan
+        base = interp1d([0.0, 1.0], [fill, fill], bounds_error=False, fill_value=fill)
+
+    def _interp(query: npt.ArrayLike) -> np.ndarray:
+        out = np.asarray(base(query), dtype=np.float64)
+        wrap = np.isfinite(out) & ((out < -180.0) | (out >= 180.0))
+        return np.where(wrap, (out + 180.0) % 360.0 - 180.0, out)
+
+    return _interp
+
+
 # CF time unit -> seconds factor.  Only common units; falls back to
 # ``num2date`` for the long tail (months, years, weird calendars, etc.)
 _CF_TIME_UNIT_FACTORS: dict[str, float] = {
@@ -228,7 +276,7 @@ class GPSFromCSV:
             self._t_max = float(np.nanmax(t))
         self._max_time_diff = float(max_time_diff)
         self._lat_interp = _finite_interp1d(t, lat)
-        self._lon_interp = _finite_interp1d(t, lon)
+        self._lon_interp = _lon_interp_dateline_safe(t, lon)
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:
         """Interpolate latitude from CSV at the given times."""
@@ -340,7 +388,7 @@ class GPSFromNetCDF:
             self._t_max = float(np.nanmax(t))
         self._max_time_diff = float(max_time_diff)
         self._lat_interp = _finite_interp1d(t, lat)
-        self._lon_interp = _finite_interp1d(t, lon)
+        self._lon_interp = _lon_interp_dateline_safe(t, lon)
 
     def lat(self, t: npt.ArrayLike) -> np.ndarray:
         """Interpolate latitude from NetCDF at the given times."""
