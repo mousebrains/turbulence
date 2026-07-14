@@ -23,6 +23,7 @@ rsi-tpw <subcommand> [options]
 | `rsi-tpw ql`       | Interactive quick-look viewer |
 | `rsi-tpw dl`       | Interactive dissipation quality viewer |
 | `rsi-tpw ml`       | Interactive mixing viewer (N²/dT·dz⁻¹/K_T/Γ/K_ρ) |
+| `rsi-tpw bench`    | Bench-test diagnostic (quick_bench figures + checklist) |
 
 ## Global Options
 
@@ -312,3 +313,33 @@ rsi-tpw dl VMP/*.p
 | `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
 | `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: 0.3) |
 | `--spec-P-range P_MIN P_MAX` | Pressure range [dbar] for spectral calculations |
+
+## `rsi-tpw bench`
+
+Bench-test diagnostic — a Python port of ODAS `quick_bench.m`, extended with an
+automatic evaluation of the **Rockland Bench Test Review Checklist**. Run it on a
+short recording taken with the instrument at rest on foam and dummy probes
+installed, to catch corroded connections, dead channels and excessive electronic
+noise before deployment. See [bench.md](bench.md) for the full checklist mapping.
+
+```bash
+rsi-tpw bench VMP/SN479_0001.p                 # writes figures + checklist to ./bench/
+rsi-tpw bench VMP/SN479_0001.p -o bench/ --show # save AND open interactive windows
+rsi-tpw bench VMP/SN479_0001.p --show          # display only, write nothing
+```
+
+Two figures are produced (`_timeseries`, `_spectra`, plus `_ctclu` when JAC /
+turbidity / chlorophyll channels exist), all in **raw counts** / **counts²·Hz⁻¹**
+so the spectra can be compared directly against the instrument's RSI calibration
+report. The checklist text (`_checklist.txt`) reports each quantitative criterion
+as PASS/FAIL with its measured value and flags the subjective ones (spectral
+shape, "similar to each other", spikes) as REVIEW.
+
+| Flag | Description |
+|------|-------------|
+| `-o`, `--output DIR` | Output directory for figures + checklist (default: `./bench/`, unless `--show` is given without `-o`, which only displays) |
+| `--show` | Open the figures in interactive windows |
+| `--sn SN` | Serial number for figure titles/filenames (default: from config) |
+| `--fft-sec FLOAT` | FFT segment length for spectra [seconds] (default: 2.0) |
+| `--dpi INT` | Figure resolution when saving (default: 150) |
+| `--format {png,pdf,both,pdf-bundle}` | Figure format: one file per figure (`png`/`pdf`/`both`), or `pdf-bundle` for a single multi-page PDF (default: png) |

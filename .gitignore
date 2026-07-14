@@ -2,6 +2,8 @@
 MR/
 VMP/
 AtomixData
+bench_tests/
+bench/
 benchmarks/
 
 # Microstructure sensor calibration sheets (local reference PDFs)
