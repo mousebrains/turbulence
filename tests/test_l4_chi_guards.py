@@ -52,8 +52,9 @@ def _chi_func_for(kB_by_window):
     """A chi_func returning fixed chi/eps and a per-window kB (keyed by j)."""
 
     def _chi_func(j, _ci, _spec, _noise, _K, _W, _nu, _kappa, _tau0, _H2, _h2, _f_AA_eff):
-        # (chi, eps, kB, K_max, fom, K_max_ratio) — fom/Kmr chosen to pass QC.
-        return CHI_VAL, EPS_VAL, float(kB_by_window[j]), 50.0, 1.0, 1.0
+        # (chi, eps, kB, K_max, fom, K_max_ratio, var_resolved) — fom/Kmr chosen
+        # to pass QC; var_resolved=1.0 (fully resolved) is inert for these guards.
+        return CHI_VAL, EPS_VAL, float(kB_by_window[j]), 50.0, 1.0, 1.0, 1.0
 
     return _chi_func
 

@@ -282,6 +282,8 @@ def get_chi(
         K_max_T     (probe, time) — integration limit [cpm]
         fom         (probe, time) — figure of merit (obs/model variance)
         K_max_ratio (probe, time) — K_max / kB (spectral resolution)
+        var_resolved (probe, time) — Batchelor gradient-variance resolved
+                                     fraction (chi-side V_f; feeds chiLnSigma)
         speed       (time) — profiling speed [m/s]
         nu          (time) — kinematic viscosity [m^2/s]
         T_mean      (time) — mean temperature [deg C]
@@ -496,6 +498,7 @@ def _build_chi_ds_from_pipeline(
         K_max_out=l4_chi.K_max,
         fom_out=l4_chi.fom,
         K_max_ratio_out=l4_chi.K_max_ratio,
+        var_resolved_out=l4_chi.var_resolved,
         speed_out=l3_chi.pspd_rel,
         nu_out=l3_chi.nu,
         P_out=l3_chi.pres,
@@ -528,6 +531,7 @@ def _build_chi_dataset(
     K_max_out: np.ndarray,
     fom_out: np.ndarray,
     K_max_ratio_out: np.ndarray,
+    var_resolved_out: np.ndarray,
     speed_out: np.ndarray,
     nu_out: np.ndarray,
     P_out: np.ndarray,
@@ -612,6 +616,28 @@ def _build_chi_dataset(
             {
                 "units": "1",
                 "long_name": "K_max / kB spectral resolution ratio",
+            },
+        ),
+        (
+            "var_resolved",
+            ["probe", "time"],
+            var_resolved_out,
+            {
+                "units": "1",
+                "long_name": "Batchelor gradient-spectrum variance-resolved fraction",
+                "comment": (
+                    "Fraction of the model temperature-gradient (Batchelor/"
+                    "Kraichnan) variance within the fit band [K_min, K_max], "
+                    "relative to the full spectrum; NO FP07 |H|^2 attenuation "
+                    "(the chi-side analog of the Nasmyth V_f, Lueck 2022 eq 17). "
+                    "mk_chi_mean applies the eq (18) truncation "
+                    "L_hat_f = L_hat * var_resolved**0.75 to widen chiLnSigma "
+                    "where the spectrum is truncated at K_max. (issue #104 U4-F1.) "
+                    "NOTE: the diss (epsilon) product also has a 'var_resolved' "
+                    "but it is the Nasmyth SHEAR fraction; the two are distinct "
+                    "per-product quantities and must not be cross-read (mk_chi_mean "
+                    "reads only the chi product, mk_epsilon_mean only the diss product)."
+                ),
             },
         ),
         (

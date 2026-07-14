@@ -427,10 +427,12 @@ class TestMkChiMeanSpectralQC:
 class TestChiLnSigmaVfTruncation:
     """chi_combine's Lueck eq (18) var_resolved hook (issue #104 U4-F1).
 
-    The chi diss product carries no Batchelor V_f today, so the hook is a
-    guarded no-op (chiLnSigma unchanged). These tests lock that no-op AND verify
-    the correction is wired the same as the epsilon combiner for the day a
-    Batchelor V_f is stored (future-proofing / parity guard)."""
+    The chi diss product now stores a Batchelor variance-resolved fraction
+    (``var_resolved``; produced in ``chi.py`` / ``chi_io.py``), so this hook is
+    live: ``mk_chi_mean`` applies ``L_hat_f = L_hat * V_f**0.75`` to widen
+    chiLnSigma where the spectrum is truncated. These tests lock the
+    consumer behavior — no-op when var_resolved is absent (old products) or
+    == 1, widening when V_f < 1 — in parity with the epsilon combiner."""
 
     def _ds(self, var_resolved=None, n=6):
         data = {
@@ -462,3 +464,12 @@ class TestChiLnSigmaVfTruncation:
         base = mk_chi_mean(self._ds())["chiLnSigma"].values
         vf1 = mk_chi_mean(self._ds(var_resolved=1.0))["chiLnSigma"].values
         np.testing.assert_allclose(vf1, base, rtol=1e-9)
+
+    def test_nan_var_resolved_does_not_poison_sigma(self):
+        # A U3-C3-dropped window carries NaN var_resolved (chi is NaN too). The
+        # NaN in one probe must not blank the combined chiLnSigma where the other
+        # probe is valid.
+        ds = self._ds(var_resolved=0.7, n=6)
+        ds["var_resolved"].values[0, 2] = np.nan  # one probe/time dropped
+        out = mk_chi_mean(ds)["chiLnSigma"].values
+        assert np.all(np.isfinite(out))

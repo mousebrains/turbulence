@@ -437,7 +437,7 @@ class TestChiFromEpsilon:
         # Pre-compute noise for new signature
         noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
 
-        chi_est, _kB_est, _K_max, _, _fom, _K_max_ratio = _chi_from_epsilon(
+        chi_est, _kB_est, _K_max, _, _fom, _K_max_ratio, _var_res = _chi_from_epsilon(
             spec_obs,
             K,
             eps_true,
@@ -524,6 +524,122 @@ class TestChiFromEpsilon:
         )
 
 
+class TestBatchelorResolvedFraction:
+    """chi-side Batchelor V_f helper (#104 U4-F1): the fraction of the model
+    temperature-gradient variance resolved within [K_min, K_max]."""
+
+    def _gf(self):
+        from odas_tpw.chi.batchelor import batchelor_grad
+
+        return batchelor_grad
+
+    def test_nearly_all_variance_below_a_few_kB(self):
+        from odas_tpw.chi.chi import _batchelor_resolved_fraction
+
+        # Non-tautological: K_max = 5*kB is well inside the 40*kB grid, so this
+        # asserts the gradient variance really is concentrated below ~5*kB
+        # (>99.9% resolved), not just that the mask spans the whole grid.
+        v = _batchelor_resolved_fraction(100.0, 500.0, self._gf(), 0.0)
+        assert 0.999 < v <= 1.0
+
+    def test_empty_band_returns_nan(self):
+        from odas_tpw.chi.chi import _batchelor_resolved_fraction
+
+        # K_min above K_max -> empty resolved band -> NaN (not 0, not 1).
+        assert np.isnan(_batchelor_resolved_fraction(100.0, 10.0, self._gf(), K_min=50.0))
+
+    def test_monotone_increasing_in_kmax(self):
+        from odas_tpw.chi.chi import _batchelor_resolved_fraction
+
+        gf = self._gf()
+        vs = [_batchelor_resolved_fraction(100.0, f * 100.0, gf, 0.0) for f in (0.2, 0.5, 1.0, 4.0)]
+        assert vs[0] < vs[1] < vs[2] < vs[3]
+        # All strictly inside [0, 1] except the fully-resolved end.
+        assert 0.0 < vs[0] < vs[1] < 1.0
+
+    def test_kmin_reduces_fraction(self):
+        from odas_tpw.chi.chi import _batchelor_resolved_fraction
+
+        gf = self._gf()
+        full = _batchelor_resolved_fraction(100.0, 200.0, gf, 0.0)
+        clipped_low = _batchelor_resolved_fraction(100.0, 200.0, gf, 50.0)
+        assert clipped_low < full  # excluding [0, 50] removes some resolved variance
+
+    def test_result_is_bounded_and_clipped(self):
+        from odas_tpw.chi.chi import _batchelor_resolved_fraction
+
+        gf = self._gf()
+        for kmax in (1.0, 37.0, 250.0, 9000.0):
+            v = _batchelor_resolved_fraction(100.0, kmax, gf, 0.0)
+            assert 0.0 <= v <= 1.0
+
+    def test_nan_for_nonfinite_or_nonpositive_kB(self):
+        from odas_tpw.chi.chi import _batchelor_resolved_fraction
+
+        gf = self._gf()
+        assert np.isnan(_batchelor_resolved_fraction(np.nan, 100.0, gf, 0.0))
+        assert np.isnan(_batchelor_resolved_fraction(np.inf, 100.0, gf, 0.0))
+        assert np.isnan(_batchelor_resolved_fraction(-1.0, 100.0, gf, 0.0))
+        assert np.isnan(_batchelor_resolved_fraction(0.0, 100.0, gf, 0.0))
+
+    def test_kraichnan_model_also_resolves(self):
+        from odas_tpw.chi.chi import _batchelor_resolved_fraction, _spectrum_func
+
+        gf, _ = _spectrum_func("kraichnan")
+        assert _batchelor_resolved_fraction(100.0, 4000.0, gf, 0.0) == pytest.approx(1.0, abs=1e-6)
+        assert 0.0 < _batchelor_resolved_fraction(100.0, 20.0, gf, 0.0) < 1.0
+
+
+class TestChiFromEpsilonVarResolved:
+    """_chi_from_epsilon populates the stored Batchelor V_f (#104 U4-F1)."""
+
+    def _window(self, f_AA=98.0):
+        from odas_tpw.chi.batchelor import batchelor_grad, batchelor_kB
+        from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer
+
+        eps_true, nu, speed, chi_true = 1e-8, 1e-6, 0.7, 1e-8
+        kB = batchelor_kB(eps_true, nu)
+        fs, fft_length = 512, 256
+        n_freq = fft_length // 2 + 1
+        F = np.arange(n_freq) * fs / fft_length
+        F[0] = F[1] * 0.01
+        K = F / speed
+        tau0 = fp07_tau(speed)
+        H2 = fp07_transfer(F, tau0)
+        signal = batchelor_grad(K, kB, chi_true) * H2
+        noise_K = np.full_like(K, signal.max() * 1e-3)
+        spec_obs = signal + noise_K
+        return dict(
+            spec_obs=spec_obs, K=K, epsilon=eps_true, nu=nu, noise_K=noise_K,
+            H2=H2, tau0=tau0, _h2=fp07_transfer, f_AA=f_AA, speed=speed,
+        )
+
+    def test_var_resolved_finite_in_unit_interval(self):
+        from odas_tpw.chi.chi import _chi_from_epsilon
+
+        w = self._window()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = _chi_from_epsilon(
+                w["spec_obs"], w["K"], w["epsilon"], w["nu"], w["noise_K"],
+                w["H2"], w["tau0"], w["_h2"], w["f_AA"], w["speed"], "batchelor",
+            )
+        assert np.isfinite(res.var_resolved)
+        assert 0.0 < res.var_resolved <= 1.0
+
+    def test_tighter_anti_alias_lowers_var_resolved(self):
+        # A lower f_AA truncates K_max, so less of the Batchelor variance is
+        # resolved -> smaller V_f (which will widen chiLnSigma downstream).
+        from odas_tpw.chi.chi import _chi_from_epsilon
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            wide = _chi_from_epsilon(**self._window(f_AA=98.0), spectrum_model="batchelor")
+            narrow = _chi_from_epsilon(**self._window(f_AA=20.0), spectrum_model="batchelor")
+        assert np.isfinite(narrow.var_resolved) and np.isfinite(wide.var_resolved)
+        assert narrow.var_resolved < wide.var_resolved
+
+
 class TestMLEFit:
     def test_synthetic_recovery(self):
         """Method 2 MLE: fit kB from synthetic Batchelor spectrum."""
@@ -554,7 +670,7 @@ class TestMLEFit:
         noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
         spec_obs = np.maximum(batchelor_grad(K, kB_true, chi_true) * H2 + noise_K, 1e-20)
 
-        kB_fit, chi_fit, eps_fit, _K_max, _, _fom, _K_max_ratio = _mle_fit_kB(
+        kB_fit, chi_fit, eps_fit, _K_max, _, _fom, _K_max_ratio, _var_res = _mle_fit_kB(
             spec_obs,
             K,
             chi_true,

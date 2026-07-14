@@ -150,7 +150,7 @@ def _compute_chi_spectra(
             # Pre-compute noise/H2 for _mle_fit_kB
             _tau0 = float(fp07_tau(mean_speed))
             _noise_K_i, _ = _gradT_noise(F, mean_T, mean_speed, fs=fs_fast, diff_gain=dg_i)
-            kB_best, chi_val, _, _, spec_raw, _, _ = _mle_fit_kB(
+            kB_best, chi_val, _, _, spec_raw, _, _, _ = _mle_fit_kB(
                 grad,
                 K,
                 chi_obs,
