@@ -13,6 +13,16 @@ authors = [
     { name = "Pat Welch", email = "pat@mousebrains.com" },
 ]
 keywords = ["oceanography", "turbulence", "microprofiler", "rockland"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
 dependencies = [
     "numpy>=2.0,<3",  # np.trapezoid (used across chi/epsilon L4) is NumPy 2.0+
     "netCDF4>=1.6,<2",
@@ -35,7 +45,11 @@ dev = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/mousebrains/turbulence"
 Repository = "https://github.com/mousebrains/turbulence"
+Documentation = "https://github.com/mousebrains/turbulence/tree/main/docs"
+Changelog = "https://github.com/mousebrains/turbulence/blob/main/CHANGELOG.md"
+Issues = "https://github.com/mousebrains/turbulence/issues"
 
 [project.scripts]
 rsi-tpw = "odas_tpw.rsi.cli:main"

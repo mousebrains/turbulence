@@ -180,6 +180,15 @@ python -m pytest tests/test_epsilon.py    # epsilon pipeline tests only
 
 This project was developed in collaboration with [Claude Code](https://claude.ai/code).
 
+## Citation
+
+If you use this software in published work, please cite it. Citation metadata
+lives in [`CITATION.cff`](CITATION.cff) — GitHub renders a **"Cite this
+repository"** button from it (BibTeX/APA export). Each tagged release is
+archived on Zenodo with a DOI; cite the *concept* (all-versions) DOI so the
+reference always resolves to the latest release. The DOI badge and identifier
+are added here once the first release is minted.
+
 ## License
 
 GPLv3 — see [LICENSE](LICENSE) for details.

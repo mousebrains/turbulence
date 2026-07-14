@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Release/citation metadata** — `CITATION.cff` (drives GitHub's "Cite this
+  repository" button) and `.zenodo.json` (controls the Zenodo archive record),
+  PyPI trove classifiers and expanded `[project.urls]`, a package-level
+  `odas_tpw.__version__` sourced from the installed distribution, and a
+  Citation section in the README. Groundwork for a tagged, DOI-archived
+  `v0.3.0` release published to PyPI.
 - **`rsi-tpw bench`** — a bench-test diagnostic, ported from ODAS
   `quick_bench.m` and extended to auto-evaluate the *Rockland Bench Test
   Review Checklist* (V3). Produces raw-count time-series and
