@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **`rsi-tpw bench`** — a bench-test diagnostic, ported from ODAS
+  `quick_bench.m` and extended to auto-evaluate the *Rockland Bench Test
+  Review Checklist* (V3). Produces raw-count time-series and
+  counts²·Hz⁻¹ spectra figures (plus a CT/CLTU figure when those
+  channels exist) and a checklist report that marks each quantitative
+  criterion PASS/FAIL and flags the subjective ones REVIEW. Reads with a
+  new `PFile(path, deconvolve=False)` option so the pre-emphasized
+  channels (`T1_dT1`, `T2_dT2`, `P_dP`) carry the raw counts the
+  checklist thresholds are defined on. See docs/rsi-tpw/bench.md.
+
 ### Changed
 - **perturb epsilon/chi windows are now duration-based** (`fft_sec`,
   `diss_sec`, `overlap_sec`), resolved to sample counts at each

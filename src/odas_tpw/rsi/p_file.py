@@ -304,8 +304,16 @@ class PFile:
         Byte order ('little' or 'big').
     """
 
-    def __init__(self, filepath: str | Path) -> None:
+    def __init__(self, filepath: str | Path, *, deconvolve: bool = True) -> None:
         self.filepath = Path(filepath)
+        # deconvolve=False leaves the pre-emphasized channels (T1_dT1, P_dP, …)
+        # and their bases (T1, P, …) as the raw counts read from the file,
+        # skipping the Mudge & Lueck high-resolution reconstruction. The bench
+        # test (bench.py) needs the raw pre-emphasized counts, because the
+        # Rockland bench-test checklist thresholds are defined on that signal
+        # (and compared against the RSI calibration report). Every production
+        # caller uses the default and gets the deconvolved data as before.
+        self._deconvolve = deconvolve
         self._read()
 
     def _read(self):
@@ -586,7 +594,8 @@ class PFile:
             # by combining the slow-rate channel X with its pre-emphasized
             # fast-rate counterpart X_dX to produce a high-resolution signal.
             # This matches ODAS odas_p2mat.m lines 516-570.
-            self._apply_deconvolution(ch_config, matrix)
+            if self._deconvolve:
+                self._apply_deconvolution(ch_config, matrix)
 
             # Unsigned wrapping: channels with sign=unsigned (or jac_t type)
             # need negative int16 values converted to unsigned before conversion.
@@ -629,6 +638,19 @@ class PFile:
                 info = ch_config.get(ch_name, {})
                 ch_type = info.get("type", "raw").strip().lower()
                 convert_info = dict(info)
+
+                # When deconvolution is skipped, a pre-emphasized channel
+                # (X_dX, e.g. T1_dT1 / P_dP) keeps its own sparse config, which
+                # lacks the base channel's calibration coefficients. Converting
+                # it would emit misleading "physical units are suspect" warnings
+                # and produce a physical value that is undefined anyway (the
+                # differentiator output only becomes temperature/pressure after
+                # deconvolution). Keep raw counts instead — callers that ask for
+                # deconvolve=False want the raw pre-emphasized counts.
+                if not self._deconvolve and re.match(r"^(\w+)_d\1$", ch_name):
+                    self.channels[ch_name] = self.channels_raw[ch_name]
+                    self.channel_info[ch_name] = {"units": "counts", "type": ch_type}
+                    continue
 
                 converter = CONVERTERS.get(ch_type)
                 if converter is None:

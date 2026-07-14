@@ -18,6 +18,8 @@ Subcommands:
     sensors  — Inventory shear/FP07 sensors across a .p file tree
     ql       — Interactive quick-look viewer
     dl       — Interactive dissipation quality viewer
+    ml       — Interactive mixing viewer
+    bench    — Bench-test diagnostic (quick_bench + auto checklist)
     init     — Generate a template configuration file
 """
 
@@ -532,6 +534,42 @@ def _cmd_dl(args: argparse.Namespace) -> None:
             W_min=W_min,
             spec_P_range=spec_P_range,
         )
+
+
+def _cmd_bench(args: argparse.Namespace) -> None:
+    """Bench-test diagnostic: raw-count figures + auto-evaluated checklist."""
+    # Force a non-interactive backend unless the user wants windows, so batch /
+    # headless runs need no display. Must precede the bench import, which loads
+    # pyplot at module level.
+    if not args.show:
+        import matplotlib
+
+        matplotlib.use("Agg")
+    from odas_tpw.rsi.bench import run_bench
+
+    p_files = _resolve_p_files(args.files)
+
+    # Save by default (to ./bench/) unless the user only wants an interactive
+    # look (--show with no -o), in which case display without writing files.
+    out_dir = args.output
+    if out_dir is None and not args.show:
+        out_dir = "bench"
+
+    for i, pf_path in enumerate(p_files):
+        if i > 0:
+            print("\n" + "=" * 60 + "\n")
+        try:
+            run_bench(
+                pf_path,
+                out_dir=out_dir,
+                show=args.show,
+                sn=args.sn,
+                fft_sec=args.fft_sec,
+                dpi=args.dpi,
+                fmt=args.format,
+            )
+        except (OSError, ValueError) as e:
+            print(f"  ERROR: {e}", file=sys.stderr)
 
 
 def _cmd_sensors(args: argparse.Namespace) -> None:
@@ -1224,6 +1262,58 @@ def _add_ml_parser(subparsers: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_cmd_ml)
 
 
+def _add_bench_parser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "bench",
+        help="Bench-test diagnostic (quick_bench + checklist)",
+        description=(
+            "Evaluate a bench-test recording (dummy probes, instrument at rest on "
+            "foam). Produces the raw-count time-series and counts^2/Hz spectra "
+            "figures of ODAS quick_bench.m, plus an automatic PASS/FAIL evaluation "
+            "of the Rockland Bench Test Review Checklist (subjective items are "
+            "flagged REVIEW). Figures and the checklist text are written to the "
+            "output directory (default: ./bench/); --show also opens them "
+            "interactively. Compare the spectra against the instrument's RSI "
+            "calibration report."
+        ),
+    )
+    p.add_argument("files", nargs="+", metavar="FILE", help=".p file(s) or glob pattern(s)")
+    p.add_argument(
+        "-o",
+        "--output",
+        metavar="DIR",
+        default=None,
+        help="Output directory for figures + checklist (default: ./bench/, unless "
+        "--show is given without -o, which only displays)",
+    )
+    p.add_argument(
+        "--show", action="store_true", help="Open the figures in interactive windows"
+    )
+    p.add_argument(
+        "--sn",
+        default=None,
+        metavar="SN",
+        help="Serial number for figure titles/filenames (default: from config)",
+    )
+    p.add_argument(
+        "--fft-sec",
+        type=float,
+        default=2.0,
+        help="FFT segment length for spectra [seconds] (default: 2.0)",
+    )
+    p.add_argument(
+        "--dpi", type=int, default=150, help="Figure resolution when saving (default: 150)"
+    )
+    p.add_argument(
+        "--format",
+        choices=["png", "pdf", "both", "pdf-bundle"],
+        default="png",
+        help="Saved figure format: one file per figure (png/pdf/both), or "
+        "'pdf-bundle' for a single multi-page PDF (default: png)",
+    )
+    p.set_defaults(func=_cmd_bench)
+
+
 def _add_patchconfig_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "patch-config",
@@ -1314,6 +1404,7 @@ def main() -> None:
     _add_ql_parser(subparsers)
     _add_dl_parser(subparsers)
     _add_ml_parser(subparsers)
+    _add_bench_parser(subparsers)
     _add_sensors_parser(subparsers)
 
     args = parser.parse_args()

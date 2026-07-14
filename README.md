@@ -59,6 +59,10 @@ rsi-tpw pipeline VMP/*.p -o results/
 # Or run individual stages
 rsi-tpw eps VMP/*.p -o epsilon/                       # writes into epsilon/eps_00/
 rsi-tpw chi VMP/*.p --epsilon-dir epsilon/ -o chi/    # finds eps_00/ automatically
+
+# Pre-deployment bench test (dummy probes, instrument at rest): raw-count
+# figures + spectra + an auto-evaluated Rockland checklist (see docs/rsi-tpw/bench.md)
+rsi-tpw bench VMP/*.p -o bench/
 ```
 
 > **Note:** `eps` writes into a hash-tracked subdirectory (`epsilon/eps_00/`,
@@ -124,6 +128,7 @@ See [docs/perturb/pipeline.md](docs/perturb/pipeline.md) for the full stage list
 | [Python API](docs/rsi-tpw/python_api.md) | Using microstructure-tpw from Python code |
 | [Output Directories](docs/rsi-tpw/output_directories.md) | Sequential hash-tracked output scheme |
 | [Vectorization](docs/rsi-tpw/vectorization.md) | Vectorized compute internals |
+| [Bench Test](docs/rsi-tpw/bench.md) | Pre-deployment bench check (`bench`): quick_bench figures + auto checklist |
 
 ### perturb (batch pipeline)
 
