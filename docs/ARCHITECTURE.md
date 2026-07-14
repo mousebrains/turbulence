@@ -418,9 +418,14 @@ several thermistors into one chi) by different code:
 | Output names | `epsilon_final`, `chi_final` | `epsilonMean`, `chiMean`, `epsilonLnSigma` |
 
 What they **share**: the same `σ(ln ε)` variance model
-(`var = 5.5 / (1 + (L̂/4)^(7/9))`), the same inter-probe rejection threshold
-(`1.96·√2 ≈ 2.772`; `scor160.l4.DEFAULT_DISS_RATIO_LIMIT`), and the same final
-**geometric mean** of the surviving probes. But for the campaign's **two-probe**
+(`var = 5.5 / (1 + (L̂_f/4)^(7/9))`, Lueck 2022a), the same inter-probe rejection
+threshold (`1.96·√2 ≈ 2.772`; `scor160.l4.DEFAULT_DISS_RATIO_LIMIT`), and the same
+final **geometric mean** of the surviving probes. The length is derated by the
+Lueck eq (18) spectral-truncation factor `L̂_f = L̂ · V_f^(3/4)`, where `V_f` is
+the resolved-variance fraction — the **Nasmyth** fraction for `epsilonLnSigma`
+and the **Batchelor** gradient-spectrum fraction for `chiLnSigma` (each stored as
+`var_resolved` in its own product; a window truncated at `K_max` gets a wider
+sigma). Older products lacking `var_resolved` fall back to the plain `L̂` (no-op). But for the campaign's **two-probe**
 VMP-250 (`sh1`/`sh2`) the two paths do **not** produce identical epsilon: on a
 disagreeing pair `perturb` keeps both probes while `rsi` drops the larger (see
 the "Rejection form" bullet below), so the published `epsilonMean` and

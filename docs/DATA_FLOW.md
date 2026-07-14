@@ -120,7 +120,7 @@ TKE dissipation rate ε estimated by fitting the Nasmyth spectrum.
 | fom | (probe, time) | Figure of merit |
 | mad | (probe, time) | Mean absolute deviation |
 | kmax | (probe, time) | Upper integration wavenumber |
-| var_resolved | (probe, time) | Fraction of variance resolved |
+| var_resolved | (probe, time) | Nasmyth shear-variance resolved fraction (epsilon-side V_f; feeds the eq (18) epsilonLnSigma truncation) |
 | sea_water_pressure | (time,) | Mean pressure per window |
 | pspd_rel | (time,) | Profiling speed |
 
@@ -186,6 +186,7 @@ estimating χ and the Batchelor wavenumber (MLE or iterative method).
 | K_max | (probe, time) | Upper integration wavenumber |
 | fom | (probe, time) | Figure of merit |
 | K_max_ratio | (probe, time) | K_max / kB ratio |
+| var_resolved | (probe, time) | Batchelor gradient-variance resolved fraction (chi-side V_f; feeds the eq (18) chiLnSigma truncation, no FP07 &#124;H&#124;²) |
 | sea_water_pressure | (time,) | Mean pressure per window |
 | pspd_rel | (time,) | Profiling speed |
 

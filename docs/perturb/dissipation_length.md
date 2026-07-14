@@ -58,6 +58,23 @@ Goodman coherency is only *well*-estimated for N_f ≳ 19 (Lueck 2022b) —
 below that the bias correction `1/(1−1.02·N_A/N_f)` (implemented in
 `scor160.goodman`) carries the load.
 
+**Chi (`chiLnSigma`) applies the same eq (18) truncation.** `mk_chi_mean`
+reuses the identical variance model `σ²_lnχ = 5.5/(1+(L̂_f/4)^{7/9})` with
+`L̂_f = L̂ · V_f^{3/4}`, but `V_f` is the **Batchelor gradient-spectrum**
+resolved fraction (fraction of the model temperature-gradient variance within
+the fit band `[K_min, K_max]`, without the FP07 `|H|²`), **not** the Nasmyth
+shear fraction. It is computed per window in `chi.chi._batchelor_resolved_fraction`
+and stored as `var_resolved` in the chi product; older products lacking it fall
+back to the plain `L̂` (no-op). Because the band excludes the lowest wavenumbers
+(`K_min > 0` — the lowest valid data wavenumber in Method 1, or
+`k_l ≈ 0.04·kB·√(κ_T/ν)` in the Method-2 iterative fit), `V_f` can be < 1 even
+for a top-resolved window, so `chiLnSigma` carries a small floor of extra
+widening the epsilon path never applies (real ARCTERX SN479 Method-2: median
+`V_f` 0.84, median per-window `chiLnSigma` +2.9%). Caveat: the base
+`5.5/(1+(L̂_f/4)^{7/9})` model is a Lueck **shear** statistic, not validated for
+the Batchelor estimator — this Batchelor `V_f` is correct in direction, its
+quantitative chi accuracy an open assumption (issue #104 U4-F1).
+
 **3. Ceilings — stationarity and resolution.** Longer is not free: ε is
 lognormal and patchy, so long windows average across patches (mean-of-ε
 weighting; Whalen 2021 shows order-10 discrepancies from mismatched

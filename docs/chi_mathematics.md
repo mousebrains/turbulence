@@ -513,6 +513,16 @@ K_max_ratio = K_max / kB
 
 where `K_max` is the upper limit of the fit/integration range and `kB` is the Batchelor wavenumber. Values < 0.5 mean the resolved band ends well below the spectral rolloff, so most of the variance is extrapolated through the model-based variance correction and the chi estimate should be treated with caution.
 
+### Resolved-variance fraction (`var_resolved`)
+
+Alongside the amplitude correction of Section 6/8, each window also stores `var_resolved` = `V_f`, the fraction of the model temperature-gradient variance that falls **within** the fit band `[K_min, K_max]` relative to the full spectrum:
+
+```
+V_f = integral_{K_min}^{K_max} S(k) dk / integral_0^inf S(k) dk
+```
+
+for the model (Batchelor/Kraichnan) gradient spectrum `S`, **without** the FP07 `|H|²` (unlike the amplitude correction — including `|H|²` here would double-count the sensor response). This is the chi-side analog of the Nasmyth resolved-variance fraction on the epsilon side. It is *not* used in the per-window chi estimate; it is consumed downstream by `mk_chi_mean`, which derates the dissipation length by `V_f^{3/4}` (Lueck 2022a eq (18)) to widen `chiLnSigma` where the spectrum is truncated at `K_max`. See [perturb/dissipation_length.md](perturb/dissipation_length.md) and [`chi.chi._batchelor_resolved_fraction`](../src/odas_tpw/chi/chi.py). Because the band uses the **same** `[K_min, K_max]` as the amplitude correction (not `[0, K_max]`), `V_f` can be < 1 even for a window fully resolved at `K_max`: the low-wavenumber bound is the lowest valid data wavenumber (Method 1) or `k_l ≈ 0.04·kB·√(κ_T/ν)` (the Method-2 iterative fit). On the Method-2 ARCTERX SN479 spectra the median `V_f` was 0.84 (max 0.972).
+
 ### FP07 validity caveat
 
 As noted in Section 8, [Peterson & Fer (2014)](https://doi.org/10.1016/j.mio.2014.05.002) recommend trusting FP07-derived estimates only for `epsilon <= ~2e-7 W/kg`; at higher dissipation rates the Batchelor rolloff moves beyond the sensor's resolved bandwidth (low `K_max_ratio`).
