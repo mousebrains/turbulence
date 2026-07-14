@@ -1,0 +1,19 @@
+{
+  "title": "microstructure-tpw: Ocean microstructure turbulence processing (TKE dissipation and chi)",
+  "description": "Python tools for reading Rockland Scientific microprofiler data (VMP and MicroRider) and computing the rate of dissipation of turbulent kinetic energy (epsilon) and the rate of dissipation of thermal variance (chi) from shear probes and FP07 fast thermistors.",
+  "upload_type": "software",
+  "access_right": "open",
+  "license": "GPL-3.0-or-later",
+  "creators": [
+    { "name": "Welch, Pat", "orcid": "0000-0002-3483-982X" }
+  ],
+  "keywords": [
+    "oceanography",
+    "turbulence",
+    "microstructure",
+    "dissipation",
+    "Rockland Scientific",
+    "VMP",
+    "MicroRider"
+  ]
+}
