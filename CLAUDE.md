@@ -117,3 +117,14 @@ python -m pytest tests/test_p_file.py::test_header  # single test
 - **Address matrix**: 8 rows × 10 cols (8 fast + 2 slow). fs_fast ≈ 512 Hz, fs_slow ≈ 64 Hz.
 - `VMP/` — 30 raw `.p` files
 - `odas/` — Rockland's ODAS MATLAB Library (v4.5.1), reference implementation. Key files: `odas_p2mat.m`, `read_odas.m`, `convert_odas.m`, `setupstr.m`.
+
+## MATLAB parallel (removed)
+
+A hand-maintained MATLAB port of the chi calculation and its comparison tests
+used to live in `matlab/`. It drifted ~4 months behind the Python side and no
+CI test enforced parity, so it was **removed on purpose** (commit on branch
+`chore/remove-matlab-parallel`, July 2026) pending a re-sync once the Python
+code base settles. This is not the vendor `odas/` library above — that stays.
+The removed files remain in git history; a working copy was archived outside the
+repo at `/Users/pat/tpw/turbulence-matlab-reference/` (see its `ARCHIVE_NOTE.md`
+for the source commit). Revisit re-porting after the algorithms stabilize.

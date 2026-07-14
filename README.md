@@ -6,7 +6,6 @@
 [![codecov](https://codecov.io/gh/mousebrains/turbulence/graph/badge.svg?token=RwbKxeE7rA)](https://codecov.io/gh/mousebrains/turbulence)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![type checked: mypy](https://img.shields.io/badge/type%20checked-mypy-blue.svg)](https://mypy-lang.org/)
-[![MATLAB: MISS_HIT](https://img.shields.io/badge/MATLAB-MISS__HIT-blue.svg)](https://misshit.org/)
 
 Python tools for reading Rockland Scientific microprofiler data and computing turbulent dissipation rates from VMP (Vertical Microstructure Profiler) and MicroRider instruments.
 
@@ -17,8 +16,6 @@ Python tools for reading Rockland Scientific microprofiler data and computing tu
 - **Epsilon (TKE dissipation rate)** from shear probe spectra ([detailed mathematics](docs/epsilon_mathematics.md)), including Goodman coherent noise removal, Nasmyth spectrum fitting, and Macoun & Lueck wavenumber correction.
 
 - **Chi (thermal variance dissipation rate)** from FP07 thermistor spectra ([detailed mathematics](docs/chi_mathematics.md)), including Batchelor/Kraichnan spectrum models, FP07 transfer function correction, and spectral fitting (iterative Peterson & Fer 2014, the default, or MLE).
-
-A **MATLAB implementation** of the chi calculation is also available — see [matlab/MATLAB.md](matlab/MATLAB.md).
 
 The package is organized into six subpackages under `odas_tpw`:
 
@@ -155,7 +152,6 @@ See [docs/perturb/pipeline.md](docs/perturb/pipeline.md) for the full stage list
 | [Best Practices](docs/best_practices.md) | Guidance for comparing turbulence measurements |
 | [Bibliography](docs/bibliography.md) | Consolidated references |
 | [Installation](docs/installation.md) | Installation options |
-| [MATLAB](matlab/MATLAB.md) | MATLAB chi implementation |
 | [Changelog](CHANGELOG.md) | Version history |
 
 ## References
