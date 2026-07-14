@@ -12,23 +12,20 @@ analyses (epsilon, chi, mixing efficiency, overturns, isotropy). The PDFs are
 |---|---|---|
 | [spectra-and-sensor-response/](spectra-and-sensor-response/README.md) | 9 | Spectral-estimation foundations (Welch, DSP) and thermistor / shear-probe frequency response — the transfer functions behind FP07 and shear corrections. |
 | [epsilon-shear/](epsilon-shear/README.md) | 9 | TKE dissipation (ε) from shear probes: ATOMIX best practices and benchmark, the Lueck (2022) statistics, Goodman coherent-noise removal, and cross-method comparisons. |
-| [chi-thermal/](chi-thermal/README.md) | 5 | Thermal-variance dissipation (χ): Batchelor / Kraichnan spectrum fitting, MLE estimation, and temperature-microstructure methods. |
+| [chi-thermal/](chi-thermal/README.md) | 7 | Thermal-variance dissipation (χ): the Batchelor (1959) origin papers, Batchelor / Kraichnan spectrum fitting, MLE estimation, and temperature-microstructure methods. |
 | [mixing-efficiency/](mixing-efficiency/README.md) | 14 | Mixing efficiency Γ and the gamma-scaling chain (Lewin Fig. 5): Osborn / Osborn–Cox, Re_b and R_OT parameterizations, and Γ observations. |
 | [overturns-thorpe/](overturns-thorpe/README.md) | 5 | Thorpe-scale overturn analysis: the sort, the Thorpe–Ozmidov link, overturn-validity tests, and the Thorpe-scale ε biases. |
 | [stratified-turbulence-anisotropy/](stratified-turbulence-anisotropy/README.md) | 5 | Isotropy criteria and the structure of stratified turbulence — the backdrop for the VMP two-probe isotropy investigation. |
 | [gliders-and-platforms/](gliders-and-platforms/README.md) | 3 | MicroRider-on-glider / AUV platform processing — precedent for the deep-MR window and noise-floor choices. |
 
-50 PDFs in hand across the seven groups.
+52 PDFs in hand across the seven groups.
 
 ## Cited in the repository docs, no local PDF yet
 
 The full annotated bibliography behind `docs/chi_mathematics.md` /
 `docs/epsilon_mathematics.md` lives in `docs/bibliography.md` (git-tracked).
-Papers cited there but not yet in this collection:
-
-| Citation | DOI | Intended group |
-|---|---|---|
-| Batchelor (1959), Small-scale variation of convected quantities, *JFM* 5, 113–133 | [10.1017/S002211205900009X](https://doi.org/10.1017/S002211205900009X) | `chi-thermal/` |
+Every paper cited there is now in this collection — Batchelor (1959) Parts 1 & 2
+were the last gap, now filed under `chi-thermal/`.
 
 (The BODC `10.5285/...` and Zenodo DOIs cited in `docs/atomix_benchmark.md` are
 *dataset* DOIs — the data lives in `AtomixData/`, not here.)
