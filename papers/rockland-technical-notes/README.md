@@ -82,8 +82,8 @@ here:
 | Note | Is really | Filed under |
 |---|---|---|
 | TN-002 — Digital Signal Processing to Enhance Oceanographic Observations | Mudge & Lueck (1994), *JTECH* **11**, 825–836. [doi:10.1175/1520-0426(1994)011<0825:DSPTEO>2.0.CO;2](https://doi.org/10.1175/1520-0426%281994%29011%3C0825:DSPTEO%3E2.0.CO;2) | [`../spectra-and-sensor-response/`](../spectra-and-sensor-response/README.md) → `Mudge_Lueck_1994_DSP_Oceanographic_Observations.pdf` |
-| TN-015 — Modeling the Spatial Response of the Airfoil Shear Probe Using Different Sized Probes | Macoun & Lueck (2004), *JAOT* **21**, 284–297. [doi:10.1175/1520-0426(2004)021<0284:MTSROT>2.0.CO;2](https://doi.org/10.1175/1520-0426(2004)021%3C0284:MTSROT%3E2.0.CO;2) | [`../spectra-and-sensor-response/`](../spectra-and-sensor-response/README.md) → `Macoun_Lueck_2004_Shear_Probe_Spatial_Response.pdf` |
-| TN-016 — Small-Scale Structure of Strongly Stratified Turbulence | Rehmann & Hwang (2005), *JPO* **35**, 151–164. [doi:10.1175/JPO2676.1](https://doi.org/10.1175/JPO2676.1) | [`../stratified-turbulence-anisotropy/`](../stratified-turbulence-anisotropy/README.md) → `Rehmann_Hwang_2005_SmallScale_Stratified_Turbulence.pdf` |
+| TN-015 — Modeling the Spatial Response of the Airfoil Shear Probe Using Different Sized Probes | Macoun & Lueck (2004), *JAOT* **21**, 284–297. [doi:10.1175/1520-0426(2004)021<0284:MTSROT>2.0.CO;2](https://doi.org/10.1175/1520-0426%282004%29021%3C0284:MTSROT%3E2.0.CO;2) | [`../spectra-and-sensor-response/`](../spectra-and-sensor-response/README.md) → `Macoun_Lueck_2004_Shear_Probe_Spatial_Response.pdf` |
+| TN-016 — Small-Scale Structure of Strongly Stratified Turbulence | Rehmann & Hwang (2005), *JPO* **35**, 151–164. [doi:10.1175/JPO-2676.1](https://doi.org/10.1175/JPO-2676.1) | [`../stratified-turbulence-anisotropy/`](../stratified-turbulence-anisotropy/README.md) → `Rehmann_Hwang_2005_SmallScale_Stratified_Turbulence.pdf` |
 
 ## Restricted, not held
 
