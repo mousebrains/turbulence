@@ -42,6 +42,11 @@ class ChiEpsilonResult(NamedTuple):
     spec_batch: np.ndarray
     fom: float
     K_max_ratio: float
+    # Fraction of the model temperature-gradient variance resolved in
+    # [K_min, K_max] (Batchelor V_f; see _batchelor_resolved_fraction). Feeds
+    # the Lueck (2022) eq (18) L_hat*V_f^0.75 truncation in chiLnSigma. Trailing
+    # default so failure-path constructions need not supply it. (#104 U4-F1.)
+    var_resolved: float = np.nan
 
 
 class ChiFitResult(NamedTuple):
@@ -54,6 +59,7 @@ class ChiFitResult(NamedTuple):
     spec_batch: np.ndarray
     fom: float
     K_max_ratio: float
+    var_resolved: float = np.nan  # Batchelor V_f; see ChiEpsilonResult.
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +137,61 @@ def _variance_correction(
     if V_resolved <= 0:
         return np.nan
     return float(V_total / V_resolved)
+
+
+def _batchelor_resolved_fraction(
+    kB: float,
+    K_max: float,
+    grad_func,
+    K_min: float = 0.0,
+) -> float:
+    """Fraction of the model temperature-gradient variance resolved in [K_min, K_max].
+
+    The chi-side analog of the shear/Nasmyth ``_variance_resolved_fraction``
+    (``scor160.l4``, Lueck 2022 Part 1 eq (17)):
+    ``V_f = integral_{K_min}^{K_max} S(k) dk / integral_0^inf S(k) dk`` for the
+    model (Batchelor/Kraichnan) temperature-gradient spectrum ``S``.
+
+    Unlike :func:`_variance_correction` this does **not** apply the FP07 ``|H|²``
+    attenuation: it is the pure spectral band-truncation fraction, analogous to
+    the shear V_f (which is likewise a band fraction of the universal Nasmyth
+    spectrum, with no sensor response). It feeds the Lueck 2022 Part 1 eq (18)
+    degrees-of-freedom reduction ``L_hat_f = L_hat * V_f**0.75`` used to widen
+    ``chiLnSigma`` when the Batchelor spectrum is truncated at ``K_max``.
+    Including ``|H|²`` here would double-count the sensor response that the chi
+    amplitude correction (``_variance_correction``'s ``V_total/V_resolved``)
+    already undoes. (#104 U4-F1 chi-side follow-up.)
+
+    One difference from the shear V_f: this uses the *same* ``[K_min, K_max]``
+    band as the chi amplitude correction (band-consistent, so the two are not
+    double-counted), whereas the shear ``_variance_resolved_fraction`` integrates
+    ``[0, K_upper]`` with no low-k bound. Because the chi fit band starts at
+    ``K_min ~ 0.044*kB``, a few percent of the gradient variance sits below
+    ``K_min``, so this V_f is ~0.97 (not 1.0) even for a window fully resolved at
+    the top — chiLnSigma therefore gets a small non-zero widening the epsilon
+    path never applies.
+
+    Shares the kB-scaled integration grid of :func:`_variance_correction`
+    (span ``_K_SPAN_KB*kB`` at ``_PTS_PER_KB`` points per kB) so ``V_total`` is
+    fully captured regardless of how far ``K_max`` is pushed out. Returns the
+    fraction clipped to ``[0, 1]``, or ``NaN`` if the model variance cannot be
+    integrated (non-finite ``kB`` etc.).
+    """
+    if not (0 < kB < np.inf):
+        return np.nan
+    K_upper = _K_SPAN_KB * kB
+    n = _K_SPAN_KB * _PTS_PER_KB
+    K_fine = np.arange(1, n + 1, dtype=np.float64) * (K_upper / n)
+    spec_fine = grad_func(K_fine, kB, 1.0)  # chi=1.0 cancels in the ratio
+    V_total = np.trapezoid(spec_fine, K_fine)
+    if not (V_total > 0):
+        return np.nan
+    # Same band the correction uses: [K_min, min(K_max, K_upper)], but without |H|².
+    mask = (K_fine >= K_min) & (K_fine <= min(K_max, K_upper))
+    if not np.any(mask):
+        return np.nan
+    V_resolved = np.trapezoid(spec_fine[mask], K_fine[mask])
+    return float(np.clip(V_resolved / V_total, 0.0, 1.0))
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +310,7 @@ def _chi_from_epsilon(
     Returns
     -------
     ChiEpsilonResult
-        Named tuple: (chi, kB, K_max, spec_batch, fom, K_max_ratio).
+        Named tuple: (chi, kB, K_max, spec_batch, fom, K_max_ratio, var_resolved).
     """
     grad_func, _q = _spectrum_func(spectrum_model)
     # Bind kappa_T into the spectrum shape so every grad_func(...) call here and
@@ -335,7 +396,11 @@ def _chi_from_epsilon(
 
     K_max_ratio_val = K_max / kB if kB > 0 else np.nan
 
-    return ChiEpsilonResult(chi, kB, K_max, spec_batch, fom, K_max_ratio_val)
+    # Batchelor variance-resolved fraction over the SAME [K_min, K_max] band the
+    # correction/integral use — feeds the eq (18) chiLnSigma truncation (U4-F1).
+    var_resolved_val = _batchelor_resolved_fraction(kB, K_max, grad_func, K_min=K_min)
+
+    return ChiEpsilonResult(chi, kB, K_max, spec_batch, fom, K_max_ratio_val, var_resolved_val)
 
 
 # ---------------------------------------------------------------------------
@@ -435,7 +500,7 @@ def _mle_fit_kB(
     Returns
     -------
     ChiFitResult
-        Named tuple: (kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio).
+        Named tuple: (kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio, var_resolved).
     """
     grad_func, _q = _spectrum_func(spectrum_model)
     grad_func = functools.partial(grad_func, kappa_T=kappa_T)
@@ -508,8 +573,13 @@ def _mle_fit_kB(
         fom = np.nan
 
     K_max_ratio_val = K_max_fit / kB_best if kB_best > 0 else np.nan
+    var_resolved_val = _batchelor_resolved_fraction(
+        kB_best, K_max_fit, grad_func, K_min=K_fit_low
+    )
 
-    return ChiFitResult(kB_best, chi, epsilon, K_max_fit, spec_batch, fom, K_max_ratio_val)
+    return ChiFitResult(
+        kB_best, chi, epsilon, K_max_fit, spec_batch, fom, K_max_ratio_val, var_resolved_val
+    )
 
 
 def _iterative_fit(
@@ -560,7 +630,7 @@ def _iterative_fit(
     Returns
     -------
     ChiFitResult
-        Named tuple: (kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio).
+        Named tuple: (kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio, var_resolved).
     """
     grad_func, _q = _spectrum_func(spectrum_model)
     grad_func = functools.partial(grad_func, kappa_T=kappa_T)
@@ -674,9 +744,14 @@ def _iterative_fit(
     # break the loop exits before re-deriving chi_obs for the newly-converged
     # kB_best, leaving chi tied to the prior iteration's kB (audit finding:
     # k_l_new and the variance correction both depend on kB).
+    var_resolved_val = np.nan
     if np.isfinite(kB_best) and kB_best >= 1:
         k_star = 0.04 * kB_best * np.sqrt(kappa_T / nu)
         k_l_final = max(K[1], 3 * k_star)
+        # Batchelor V_f over the final [k_l_final, k_u] band (eq (18); U4-F1).
+        var_resolved_val = _batchelor_resolved_fraction(
+            kB_best, k_u, grad_func, K_min=k_l_final
+        )
         mask_final = (k_l_final <= K) & (k_u >= K)
         if np.sum(mask_final) >= 3:
             chi_band = (
@@ -733,7 +808,9 @@ def _iterative_fit(
 
     K_max_ratio_val = k_u / kB_best if np.isfinite(kB_best) and kB_best > 0 else np.nan
 
-    return ChiFitResult(kB_best, chi, epsilon, k_u, spec_batch, fom, K_max_ratio_val)
+    return ChiFitResult(
+        kB_best, chi, epsilon, k_u, spec_batch, fom, K_max_ratio_val, var_resolved_val
+    )
 
 
 def _bilinear_correction(F: np.ndarray, diff_gain: float, fs: float) -> np.ndarray:

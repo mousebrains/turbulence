@@ -15,7 +15,11 @@ borrowed from the dissipation pipeline. For chi this is a reasonable
 first-order estimate when the FFT segments are long compared to the
 Batchelor scale, but the chi-specific theoretical variance differs
 from the shear case; refine here if a chi-tuned model becomes
-available.
+available. The eq (18) spectral-truncation input, however, IS
+chi-specific: ``L_hat`` is multiplied by ``V_f**0.75`` using the
+Batchelor gradient-variance-resolved fraction stored as ``var_resolved``
+(chi.py::_batchelor_resolved_fraction), not the Nasmyth shear V_f
+(issue #104 U4-F1).
 """
 
 import warnings
@@ -168,13 +172,13 @@ def mk_chi_mean(
             )
 
     # Lueck (2022) eq (18) truncation-correction input, mirroring mk_epsilon_mean
-    # (issue #104 U4-F1).  The chi diss product does NOT currently store a
-    # Batchelor variance-resolved fraction, so this is a GUARDED NO-OP today
-    # (var_resolved absent -> plain L_hat) and chiLnSigma stays UNCORRECTED for
-    # spectral truncation (understated wherever the Batchelor spectrum is
-    # truncated at K_max).  A genuine chi correction needs the Batchelor
-    # cumulative-variance curve (separate follow-up); do NOT substitute the
-    # Nasmyth shear V_f here.  Present only to future-proof the combiner.
+    # (issue #104 U4-F1).  The chi diss product now stores a genuine Batchelor
+    # variance-resolved fraction (chi.py::_batchelor_resolved_fraction, written to
+    # `var_resolved` by chi_io) — the fraction of the model temperature-gradient
+    # variance within [K_min, K_max], WITHOUT the FP07 |H|^2 (the chi-side analog
+    # of the Nasmyth V_f, NOT the shear value).  When present it corrects
+    # chiLnSigma for spectral truncation; older products lacking it keep the plain
+    # L_hat (guarded no-op / backward compatible).
     var_resolved = _stack_probe_var(ds, "var_resolved", chi.shape[1])
 
     speed = ds["speed"].values if "speed" in ds else np.ones(n_time)
@@ -217,8 +221,8 @@ def mk_chi_mean(
     with np.errstate(invalid="ignore", divide="ignore"):
         L_hat = L / L_K
         if var_resolved is not None:
-            # Lueck (2022) eq (18) L_hat_f = L_hat * V_f**0.75 (no-op today; see
-            # the var_resolved note above — chi has no Batchelor V_f yet).
+            # Lueck (2022) eq (18) L_hat_f = L_hat * V_f**0.75, using the Batchelor
+            # variance-resolved fraction stored by the chi path (see note above).
             L_hat = L_hat * np.clip(var_resolved, 1e-6, 1.0) ** 0.75
 
     with np.errstate(invalid="ignore"):

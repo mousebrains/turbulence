@@ -485,6 +485,10 @@ The iteration typically converges in 3-5 steps. The correction is larger when `K
 
 ([`l4.py: _variance_correction`](../src/odas_tpw/scor160/l4.py))
 
+### Resolved fraction as a stored output (`var_resolved`)
+
+The same resolved-variance fraction `V_f = V_resolved(x)` — evaluated once at the final epsilon (`l4.py: _variance_resolved_fraction`, Lueck eq (17)) — is stored per probe/window as `var_resolved`. Beyond the amplitude correction above, it feeds the **uncertainty**: `mk_epsilon_mean` derates the dissipation length by the Lueck eq (18) factor `L̂_f = L̂ · V_f^{3/4}` before the `σ²_lnε = 5.5/(1+(L̂_f/4)^{7/9})` variance model, so a window truncated at `K_max` gets a wider `epsilonLnSigma`. The chi path applies the identical construction with a **Batchelor** gradient-spectrum `V_f` (see [chi_mathematics.md](chi_mathematics.md) §9 and [perturb/dissipation_length.md](perturb/dissipation_length.md)). Older products without `var_resolved` fall back to the plain `L̂` (no-op).
+
 
 ## 10. Quality Control Metrics
 

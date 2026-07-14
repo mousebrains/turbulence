@@ -49,6 +49,7 @@ class L4ChiData:
     K_max: np.ndarray  # (N_GRADT, N_SPECTRA)
     fom: np.ndarray  # (N_GRADT, N_SPECTRA)
     K_max_ratio: np.ndarray  # (N_GRADT, N_SPECTRA)
+    var_resolved: np.ndarray  # (N_GRADT, N_SPECTRA) Batchelor V_f (#104 U4-F1)
     method: str  # "epsilon" or "fit"
 
     @property
@@ -77,7 +78,7 @@ def _process_l4_chi(
     chi_func : callable
         ``chi_func(j, ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2,
         f_AA_eff)`` returns ``(chi_val, eps_val, kB_val, K_max_val, fom_val,
-        K_max_ratio_val)`` or None to skip.
+        K_max_ratio_val, var_resolved_val)`` or None to skip.
     method_name : str
         "epsilon" or "fit".
     f_AA : float
@@ -95,6 +96,7 @@ def _process_l4_chi(
     K_max_out = np.full((n_gradt, n_spec), np.nan)
     fom_out = np.full((n_gradt, n_spec), np.nan)
     K_max_ratio_out = np.full((n_gradt, n_spec), np.nan)
+    var_resolved_out = np.full((n_gradt, n_spec), np.nan)
 
     for j in range(n_spec):
         K = l3_chi.kcyc[:, j]
@@ -114,13 +116,14 @@ def _process_l4_chi(
             if result is None:
                 continue
 
-            chi_val, eps_val, kB_val, K_max_val, fom_val, K_max_ratio_val = result
+            chi_val, eps_val, kB_val, K_max_val, fom_val, K_max_ratio_val, var_res_val = result
             chi_out[ci, j] = chi_val
             eps_out[ci, j] = eps_val
             kB_out[ci, j] = kB_val
             K_max_out[ci, j] = K_max_val
             fom_out[ci, j] = fom_val
             K_max_ratio_out[ci, j] = K_max_ratio_val
+            var_resolved_out[ci, j] = var_res_val
 
     # U3-C3: drop Method-2 windows whose fitted kB reaches past the anti-alias
     # band (kB > _CHI_KB_KAA_MAX * K_AA). Applied BEFORE _compute_chi_final so
@@ -143,6 +146,9 @@ def _process_l4_chi(
             )
         chi_out[under_resolved] = np.nan
         eps_out[under_resolved] = np.nan
+        # Keep var_resolved consistent with the NaN'd chi (dropped window carries
+        # no valid uncertainty input either).
+        var_resolved_out[under_resolved] = np.nan
 
     chi_final = _compute_chi_final(chi_out, fom_out, K_max_ratio_out)
 
@@ -158,6 +164,7 @@ def _process_l4_chi(
         K_max=K_max_out,
         fom=fom_out,
         K_max_ratio=K_max_ratio_out,
+        var_resolved=var_resolved_out,
         method=method_name,
     )
 
@@ -206,7 +213,7 @@ def process_l4_chi_epsilon(
             epsilon_val = np.nan
         if not np.isfinite(epsilon_val) or epsilon_val <= 0:
             return None
-        chi_val, kB_val, K_max_val, _, fom_val, K_max_ratio_val = _chi_from_epsilon(
+        chi_val, kB_val, K_max_val, _, fom_val, K_max_ratio_val, var_res_val = _chi_from_epsilon(
             spec_obs,
             K,
             epsilon_val,
@@ -220,7 +227,7 @@ def process_l4_chi_epsilon(
             spectrum_model,
             kappa_T,
         )
-        return chi_val, epsilon_val, kB_val, K_max_val, fom_val, K_max_ratio_val
+        return chi_val, epsilon_val, kB_val, K_max_val, fom_val, K_max_ratio_val, var_res_val
 
     return _process_l4_chi(l3_chi, _chi_eps_func, "epsilon", f_AA)
 
@@ -252,7 +259,9 @@ def process_l4_chi_fit(
 
     def _chi_fit_func(_j, _ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff):
         if fit_method == "iterative":
-            kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val = _iterative_fit(
+            (
+                kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val, var_res_val
+            ) = _iterative_fit(
                 spec_obs,
                 K,
                 nu,
@@ -307,7 +316,8 @@ def process_l4_chi_fit(
                 result.kB, result.chi, result.epsilon, result.K_max
             )
             fom_val, K_max_ratio_val = result.fom, result.K_max_ratio
-        return chi_val, eps_val, kB_val, K_max_val, fom_val, K_max_ratio_val
+            var_res_val = result.var_resolved
+        return chi_val, eps_val, kB_val, K_max_val, fom_val, K_max_ratio_val, var_res_val
 
     return _process_l4_chi(l3_chi, _chi_fit_func, "fit", f_AA)
 
