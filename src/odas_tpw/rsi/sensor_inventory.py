@@ -38,6 +38,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import glob as globmod
+import math
 import re
 import struct
 import sys
@@ -166,6 +168,18 @@ def _start_time_utc(header: dict, config: dict) -> datetime | None:
     """
     h = header
     tz_min = h["timezone_min"] - 2**16 if h["timezone_min"] >= 2**15 else h["timezone_min"]
+    root = config.get("root", {}) if isinstance(config, dict) else {}
+    raw = root.get("recsize", root.get("recordduration"))
+    try:
+        recsize = float(raw) if raw is not None else 1.0
+    except (TypeError, ValueError):
+        recsize = 1.0
+    if not math.isfinite(recsize):  # a corrupt 'recsize = 1e999' -> inf -> timedelta OverflowError
+        recsize = 1.0
+    # Everything that can raise on a garbage header must stay inside the guard so
+    # a single bad file returns None (undated) rather than aborting the batch:
+    # out-of-range date fields and tz -> ValueError; a datetime at the floor of
+    # the range minus recsize, or a huge recsize -> OverflowError.
     try:
         st = datetime(
             h["year"],
@@ -177,16 +191,10 @@ def _start_time_utc(header: dict, config: dict) -> datetime | None:
             h["millisecond"] * 1000,
             tzinfo=timezone(timedelta(minutes=tz_min)),
         )
+        st -= timedelta(seconds=recsize)
+        return st.astimezone(UTC)
     except (ValueError, OverflowError):
         return None
-    root = config.get("root", {}) if isinstance(config, dict) else {}
-    raw = root.get("recsize", root.get("recordduration"))
-    try:
-        recsize = float(raw) if raw is not None else 1.0
-    except (TypeError, ValueError):
-        recsize = 1.0
-    st -= timedelta(seconds=recsize)
-    return st.astimezone(UTC)
 
 
 @dataclass
@@ -203,6 +211,20 @@ class SensorUse:
     params: dict[str, str]  # kind.params -> raw string value
 
 
+def _platform_from_instrument(inst: dict) -> tuple[str, str]:
+    """(vehicle, platform_sn) from an instrument_info block, tolerant of gaps.
+
+    Strip BEFORE falling back, so a whitespace-only field (truthy but empty)
+    still degrades to model/"?" instead of collapsing to "" — otherwise the
+    ("", sn) platform key would split from the ("?", sn) of a genuinely-missing
+    field.  A microrider-on-glider leaves vehicle set ("slocum_glider"); a file
+    whose host had not populated instrument_info yet yields ("?", "?").
+    """
+    vehicle = inst.get("vehicle", "").strip() or inst.get("model", "").strip() or "?"
+    platform_sn = inst.get("sn", "").strip() or "?"
+    return vehicle, platform_sn
+
+
 def scan_file(path: Path, kinds: list[str]) -> list[SensorUse]:
     """Extract every sensor use of the requested *kinds* from a single .p file.
 
@@ -212,9 +234,7 @@ def scan_file(path: Path, kinds: list[str]) -> list[SensorUse]:
     header, config = _read_header_and_config(path)
     st = _start_time_utc(header, config)
 
-    inst = config.get("instrument_info", {})
-    vehicle = (inst.get("vehicle") or inst.get("model") or "?").strip()
-    platform_sn = (inst.get("sn") or "?").strip()
+    vehicle, platform_sn = _platform_from_instrument(config.get("instrument_info", {}))
 
     # Channel type -> owning kind, for the requested kinds only.
     type_to_kind: dict[str, SensorKind] = {}
@@ -257,18 +277,23 @@ def _norm(key: str, value: str):
     Numeric params compare by value so cosmetic formatting differences
     ("0.933" vs "0.9330") are not mistaken for a real change; non-numeric or
     unparseable values (e.g. cal_date) fall back to the stripped string.
+
+    Non-finite floats from a corrupt config (nan/inf) fall back to the exact
+    string too — otherwise two identical "nan" values would compare unequal
+    (a false CHANGED) and two different overflowing values ("1e400"/"1e999",
+    both inf) would merge (a false constant).
     """
     if value == "":
         return ""
-    if key == "adc_bits":
-        try:
-            return int(float(value))
-        except ValueError:
-            return value
     try:
-        return float(value)
+        f = float(value)
     except ValueError:
         return value
+    if not math.isfinite(f):
+        return value
+    # int() only after the finite check, so int(float("inf")) can't raise
+    # OverflowError here (this runs in build_inventory, which has no guard).
+    return int(f) if key == "adc_bits" else f
 
 
 def _new_value_slot() -> dict:
@@ -304,7 +329,8 @@ class SensorAgg:
         self.platforms[(use.vehicle, use.platform_sn)].add(use.channel)
         for key, raw in use.params.items():
             slot = self.params[key][_norm(key, raw)]
-            slot["display"] = raw if raw != "" else "(blank)"
+            if not slot["display"]:  # first-seen wins → deterministic (files sorted)
+                slot["display"] = raw if raw != "" else "(blank)"
             slot["files"].add(use.path)
             if st is not None:
                 if slot["first"] is None or st < slot["first"]:
@@ -331,7 +357,7 @@ def collect_uses(
     for fp in files:
         try:
             found = scan_file(fp, kinds)
-        except (OSError, ValueError, KeyError, struct.error) as exc:
+        except (OSError, ValueError, KeyError, OverflowError, struct.error) as exc:
             errors.append((fp, str(exc)))
             continue
         if not found:
@@ -345,17 +371,34 @@ def collect_uses(
 # ---------------------------------------------------------------------------
 
 
+def _collect_from(p: Path, found: set[Path]) -> None:
+    """Add every .p/.P file at or under *p* (a directory or a single file)."""
+    if p.is_dir():
+        for pat in ("*.p", "*.P"):
+            found.update(q for q in p.rglob(pat) if q.is_file())
+    elif p.is_file():
+        found.add(p)
+
+
 def iter_pfiles(paths: list[Path]) -> list[Path]:
-    """All ``.p``/``.P`` files under the given files/directories, de-duplicated."""
+    """All ``.p``/``.P`` files under the given files/directories, de-duplicated.
+
+    Each argument may be a directory (scanned recursively), a single file, or a
+    glob pattern.  A path that does not exist is passed to ``glob`` so that a
+    quoted or shell-unexpanded pattern (e.g. ``'VMP/*.p'``) works the same way it
+    does for the other rsi-tpw subcommands.
+    """
     found: set[Path] = set()
     for p in paths:
-        if p.is_dir():
-            for pat in ("*.p", "*.P"):
-                found.update(q for q in p.rglob(pat) if q.is_file())
-        elif p.is_file():
-            found.add(p)
-        else:
-            print(f"warning: {p} does not exist; skipping", file=sys.stderr)
+        if p.exists():
+            _collect_from(p, found)
+            continue
+        matches = globmod.glob(str(p), recursive=True)
+        if not matches:
+            print(f"warning: {p} matched no files or directories; skipping", file=sys.stderr)
+            continue
+        for m in matches:
+            _collect_from(Path(m), found)
     return sorted(found)
 
 
@@ -488,9 +531,17 @@ def run(
 ) -> int:
     """Scan *paths* for the requested sensor *kinds* and print a summary.
 
-    Returns a process exit code (0 = ok, 1 = no .p files found).
+    Returns a process exit code: 0 = ok, 1 = no .p files found / unwritable CSV
+    target / every file failed to parse.
     """
     out = stream if stream is not None else sys.stdout
+
+    # Fail fast on an unwritable CSV target BEFORE the (potentially long) scan,
+    # rather than crashing with a raw traceback after all the work is done.
+    if csv_out is not None and (csv_out.is_dir() or not csv_out.parent.is_dir()):
+        print(f"Error: cannot write CSV to {csv_out}", file=sys.stderr)
+        return 1
+
     files = iter_pfiles(paths)
     if not files:
         print("No .p files found.", file=sys.stderr)
@@ -526,10 +577,16 @@ def run(
         print(file=out)
 
     if csv_out is not None:
-        write_csv(uses, csv_out, kinds)
+        try:  # backstop for a race/permission change since the pre-scan check
+            write_csv(uses, csv_out, kinds)
+        except OSError as exc:
+            print(f"Error: could not write CSV to {csv_out}: {exc}", file=sys.stderr)
+            return 1
         print(f"Wrote {len(uses)} rows to {csv_out}", file=out)
 
-    return 0
+    # Non-zero only when the scan wholly failed (files present, all errored),
+    # so a script can distinguish "nothing worked" from "found no sensors".
+    return 1 if errors and not uses else 0
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +600,12 @@ def build_arg_parser(prog: str = "sensor_inventory") -> argparse.ArgumentParser:
         prog=prog,
         description="Inventory microstructure sensors across a tree of Rockland .p files.",
     )
-    ap.add_argument("paths", nargs="+", type=Path, help="Directories to scan and/or .p files")
+    ap.add_argument(
+        "paths",
+        nargs="+",
+        type=Path,
+        help="Directories (scanned recursively), .p files, or glob patterns",
+    )
     ap.add_argument("--shear", action="store_true", help="Inventory shear probes")
     ap.add_argument("--fp07", action="store_true", help="Inventory FP07 thermistors")
     ap.add_argument(
@@ -552,7 +614,12 @@ def build_arg_parser(prog: str = "sensor_inventory") -> argparse.ArgumentParser:
         action="store_true",
         help="Inventory every sensor kind (shear + fp07; the default if none is given)",
     )
-    ap.add_argument("--csv", type=Path, metavar="PATH", help="Write a per-(file,channel) CSV table")
+    ap.add_argument(
+        "--csv",
+        type=Path,
+        metavar="PATH",
+        help="Write a per-(file,channel) CSV table (overwritten if it exists)",
+    )
     ap.add_argument(
         "-v",
         "--verbose",

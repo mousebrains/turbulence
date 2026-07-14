@@ -1134,7 +1134,7 @@ def _add_sensors_parser(subparsers: argparse._SubParsersAction) -> None:
         "paths",
         nargs="+",
         metavar="PATH",
-        help="Directories to scan recursively and/or individual .p files",
+        help="Directories (scanned recursively), .p files, or glob patterns",
     )
     p.add_argument("--shear", action="store_true", help="Inventory shear probes")
     p.add_argument("--fp07", action="store_true", help="Inventory FP07 thermistors")
@@ -1145,7 +1145,10 @@ def _add_sensors_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Inventory every sensor kind (shear + fp07; the default if none is given)",
     )
     p.add_argument(
-        "--csv", metavar="PATH", default=None, help="Write a per-(file,channel) CSV table"
+        "--csv",
+        metavar="PATH",
+        default=None,
+        help="Write a per-(file,channel) CSV table (overwritten if it exists)",
     )
     p.add_argument(
         "-v",
