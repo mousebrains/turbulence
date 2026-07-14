@@ -544,6 +544,7 @@ def _cmd_sensors(args: argparse.Namespace) -> None:
         kinds,
         csv_out=Path(args.csv) if args.csv else None,
         verbose=args.verbose,
+        compact=args.compact,
     )
     if code != 0:
         sys.exit(code)
@@ -1155,6 +1156,11 @@ def _add_sensors_parser(subparsers: argparse._SubParsersAction) -> None:
         "--verbose",
         action="store_true",
         help="List the individual files behind each changed parameter value",
+    )
+    p.add_argument(
+        "--compact",
+        action="store_true",
+        help="One line per probe: SN, file count, calibration, and date range",
     )
     p.set_defaults(func=_cmd_sensors)
 

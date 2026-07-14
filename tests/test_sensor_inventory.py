@@ -263,10 +263,24 @@ def test_platform_from_instrument_fallbacks():
 # ---------------------------------------------------------------------------
 
 
-def _render(uses, kinds, verbose=False):
+def _render(uses, kinds, verbose=False, compact=False):
     buf = io.StringIO()
-    si.print_report(si.build_inventory(uses), kinds, verbose=verbose, stream=buf)
+    si.print_report(si.build_inventory(uses), kinds, verbose=verbose, compact=compact, stream=buf)
     return buf.getvalue()
+
+
+def _use(path, start, sn="M2499", params=None, vehicle="slocum_glider", psn="433", channel="sh1"):
+    """A SensorUse with an explicit path + timestamp (finer control than _mk)."""
+    return si.SensorUse(
+        kind="shear",
+        path=path,
+        start_time=start,
+        vehicle=vehicle,
+        platform_sn=psn,
+        channel=channel,
+        sensor_sn=sn,
+        params=params or {},
+    )
 
 
 def test_print_report_changed_lists_values_oldest_first():
@@ -295,6 +309,69 @@ def test_print_report_verbose_lists_the_files(tmp_path):
     verbose = _render(uses, ["shear"], verbose=True)
     assert "f0.p" not in plain  # non-verbose does not list files
     assert "f0.p" in verbose and "f9.p" in verbose  # verbose lists them under each value
+
+
+# ---------------------------------------------------------------------------
+# Compact one-line-per-probe rendering (--compact)
+# ---------------------------------------------------------------------------
+
+_CAL = {
+    "adc_fs": "4.096", "adc_bits": "16",
+    "diff_gain": "0.927", "sens": "0.0817", "cal_date": "",
+}  # fmt: skip
+
+
+def _compact_lines(uses):
+    text = _render(uses, ["shear"], compact=True)
+    return [ln for ln in text.splitlines() if ln and ln[0] == "M"]
+
+
+def test_compact_line_exact_shape():
+    # Reproduces the requested target line exactly (two same-day files → HH:MM range).
+    uses = [
+        _use("a.p", datetime(2025, 1, 30, 1, 20, tzinfo=UTC), params=_CAL),
+        _use("b.p", datetime(2025, 1, 30, 2, 40, tzinfo=UTC), params=_CAL),
+    ]
+    (line,) = _compact_lines(uses)
+    assert line == (
+        "M2499 #2 diff_gain: 0.927 sens: 0.0817 cal_date: (blank) used: 2025-01-30 01:20 → 02:40"
+    )
+
+
+def test_compact_omits_adc_platform_and_constant_markers():
+    (line,) = _compact_lines([_use("a.p", datetime(2025, 1, 1, tzinfo=UTC), params=_CAL)])
+    assert "adc_fs" not in line and "adc_bits" not in line  # ADC settings dropped
+    assert "slocum_glider" not in line and "SN 433" not in line  # platform dropped
+    assert "(constant)" not in line
+
+
+def test_compact_joins_changed_values_oldest_first():
+    p1 = {**_CAL, "diff_gain": "0.95"}
+    p2 = {**_CAL, "diff_gain": "0.97"}
+    uses = [
+        _use("a.p", datetime(2025, 1, 1, tzinfo=UTC), params=p1),
+        _use("b.p", datetime(2025, 1, 2, tzinfo=UTC), params=p2),
+    ]
+    (line,) = _compact_lines(uses)
+    assert "diff_gain: 0.95→0.97" in line  # changed → arrow-joined, oldest first
+    assert "sens: 0.0817 " in line  # unchanged param stays a single value
+
+
+def test_compact_undated_probe():
+    (line,) = _compact_lines([_use("a.p", None, params=_CAL)])
+    assert line.endswith("used: (no valid timestamp)")
+
+
+def test_cli_sensors_compact(monkeypatch, tmp_path, sample_p_file, capsys):
+    p = tmp_path / "x.p"
+    shutil.copy(sample_p_file, p)
+    monkeypatch.setattr(sys, "argv", ["rsi-tpw", "sensors", "--shear", "--compact", str(p)])
+    from odas_tpw.rsi.cli import main
+
+    main()
+    out = capsys.readouterr().out
+    assert "date range:" not in out  # not the multi-line block
+    assert any(ln.startswith("M2732") and "used:" in ln for ln in out.splitlines())
 
 
 # ---------------------------------------------------------------------------

@@ -432,10 +432,43 @@ def _fmt_platform(vehicle: str, platform_sn: str, channels: set[str]) -> str:
     return f"{where} (as {chans})"
 
 
+# Acquisition/ADC settings dropped from the one-line --compact view: they are
+# instrument config shared across probes, not part of a probe's own calibration.
+_COMPACT_ADC_PARAMS = frozenset({"adc_fs", "adc_bits"})
+
+
+def _compact_value(agg: SensorAgg, key: str) -> str:
+    """The value of *key* for a compact line: the single value, or the distinct
+    values joined oldest-first by ``→`` when the parameter changed across uses."""
+    values = agg.params.get(key, {})
+    if not values:
+        return "(none)"
+    slots = sorted(values.values(), key=lambda s: s["first"] or datetime.max.replace(tzinfo=UTC))
+    displays = [s["display"] for s in slots]
+    return displays[0] if len(displays) == 1 else "→".join(displays)
+
+
+def _compact_line(kind: SensorKind, sn: str, agg: SensorAgg) -> str:
+    """One-line probe summary: ``<sn> #<files> <param>: <value> ... used: <range>``.
+
+    Omits the ADC settings, the platform, and the ``(constant)`` markers of the
+    full report; a changed parameter shows its values joined by ``→``.
+    """
+    parts = [sn, f"#{len(agg.files)}"]
+    parts += [
+        f"{key}: {_compact_value(agg, key)}"
+        for key in kind.params
+        if key not in _COMPACT_ADC_PARAMS
+    ]
+    parts.append(f"used: {_fmt_range(agg.first, agg.last).removesuffix(' UTC')}")
+    return " ".join(parts)
+
+
 def print_report(
     inventory: dict[str, dict[str, SensorAgg]],
     kinds: list[str],
     verbose: bool = False,
+    compact: bool = False,
     stream: TextIO | None = None,
 ) -> None:
     out = stream if stream is not None else sys.stdout
@@ -448,6 +481,12 @@ def print_report(
         print(heading, file=out)
         print("=" * len(heading), file=out)
         print(file=out)
+
+        if compact:
+            for sn in sorted(probes):
+                print(_compact_line(kind, sn, probes[sn]), file=out)
+            print(file=out)
+            continue
 
         width = max(len(p) for p in kind.params) + 1
         for sn in sorted(probes):
@@ -527,6 +566,7 @@ def run(
     kinds: list[str],
     csv_out: Path | None = None,
     verbose: bool = False,
+    compact: bool = False,
     stream: TextIO | None = None,
 ) -> int:
     """Scan *paths* for the requested sensor *kinds* and print a summary.
@@ -568,7 +608,7 @@ def run(
         )
     print(file=out)
 
-    print_report(inventory, kinds, verbose=verbose, stream=out)
+    print_report(inventory, kinds, verbose=verbose, compact=compact, stream=out)
 
     if errors:
         print("Errors:", file=out)
@@ -626,13 +666,18 @@ def build_arg_parser(prog: str = "sensor_inventory") -> argparse.ArgumentParser:
         action="store_true",
         help="List the individual files behind each changed parameter value",
     )
+    ap.add_argument(
+        "--compact",
+        action="store_true",
+        help="One line per probe: SN, file count, calibration, and date range",
+    )
     return ap
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     kinds = resolve_kinds(args.shear, args.fp07, args.want_all)
-    return run(args.paths, kinds, csv_out=args.csv, verbose=args.verbose)
+    return run(args.paths, kinds, csv_out=args.csv, verbose=args.verbose, compact=args.compact)
 
 
 if __name__ == "__main__":
