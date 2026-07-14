@@ -16,3 +16,11 @@ comparison references.
 | McMillan, Hay, Lueck & Wolk (2016), "Rates of dissipation of turbulent kinetic energy in a high Reynolds number tidal channel," *JTECH* **33**, 817–837. [doi:10.1175/JTECH-D-15-0167.1](https://doi.org/10.1175/JTECH-D-15-0167.1) | `McMillan_2016_Dissipation_HighRe_Tidal_Channel.pdf` | Inertial-subrange ε fitting at high Re — the high-ε method branch. |
 | Le Boyer et al. (2021), "Modular, flexible, low-cost microstructure measurements: The Epsilometer," *JTECH* **38**, 657–668. [doi:10.1175/JTECH-D-20-0116.1](https://doi.org/10.1175/JTECH-D-20-0116.1) | `LeBoyer_2021_Epsilometer.pdf` | Alternative microstructure instrument; processing comparison point. |
 | Whalen (2021), "Best practices for comparing ocean turbulence measurements across spatiotemporal scales," *JTECH* **38**, 837–841. [doi:10.1175/JTECH-D-20-0175.1](https://doi.org/10.1175/JTECH-D-20-0175.1) | `Whalen_2021_Best_Practices_Comparing_Ocean_Turbulence.pdf` | Lognormal averaging-scale pitfalls when comparing ε products. |
+
+Rockland's own ε recipe and noise floors are in the vendor Technical Notes:
+[TN-028](../rockland-technical-notes/README.md) (calculating the TKE dissipation
+rate), [TN-030](../rockland-technical-notes/README.md) (forms of the shear /
+strain spectra), [TN-042](../rockland-technical-notes/README.md) (shear-probe
+noise), [TN-043](../rockland-technical-notes/README.md) (band of interest), and
+[TN-061](../rockland-technical-notes/README.md) (Goodman coherent-noise spectral
+bias). See [`../rockland-technical-notes/`](../rockland-technical-notes/README.md).

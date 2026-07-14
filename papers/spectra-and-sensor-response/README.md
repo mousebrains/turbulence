@@ -15,3 +15,11 @@ and the shear-probe ε path.
 | Nash, Caldwell, Zelman & Moum (1999), "A thermocouple probe for high-speed temperature measurement in the ocean," *JTECH* **16**, 1474–1483. [doi:10.1175/1520-0426(1999)016<1474:ATPFHS>2.0.CO;2](https://doi.org/10.1175/1520-0426(1999)016%3C1474:ATPFHS%3E2.0.CO;2) | `Nash_1999_Thermocouple_Probe_HighSpeed.pdf` | Fast-temperature sensing background (OCR text layer added locally). |
 | Nash & Moum (2002), *JPO* **32**, 2312–2333. [doi:10.1175/1520-0485(2002)032<2312:MEOTSF>2.0.CO;2](https://doi.org/10.1175/1520-0485(2002)032%3C2312:MEOTSF%3E2.0.CO;2) | `Nash_Moum_2002_Salinity_Dissipation_FP07.pdf` | FP07 double-pole response (τ = 5.5 ms) context; thermistor response for the χ pair. See `docs/chi_mathematics.md` for which pole model the pipeline actually ships (single-pole default). |
 | Macoun & Lueck (2004), *JTECH* **21**, 284–297. [doi:10.1175/1520-0426(2004)021<0284:MTSROT>2.0.CO;2](https://doi.org/10.1175/1520-0426(2004)021%3C0284:MTSROT%3E2.0.CO;2) | `Macoun_Lueck_2004_Shear_Probe_Spatial_Response.pdf` | Shear-probe spatial response — probe separation/averaging effects on two-probe comparisons. |
+
+Two of these are also in Rockland's Technical Note series — Mudge & Lueck (1994)
+is **TN-002** and Macoun & Lueck (2004) is **TN-015**; they are filed here as the
+papers. The vendor conversions and sensor/calibration notes live in
+[`../rockland-technical-notes/`](../rockland-technical-notes/README.md):
+TN-005 (counts → physical units), TN-010 (anti-aliasing filters), TN-030 (spectral
+forms), TN-040 (temperature-gradient noise), TN-046 (inclinometers), and
+TN-047 / TN-048 (FP07 calibration).
