@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-14
+
 ### Added
 - **Release/citation metadata** — `CITATION.cff` (drives GitHub's "Cite this
   repository" button) and `.zenodo.json` (controls the Zenodo archive record),

@@ -13,7 +13,7 @@ authors:
     email: pat@mousebrains.com
     orcid: "https://orcid.org/0000-0002-3483-982X"
 version: 0.3.0
-date-released: 2026-07-14  # update to the tag date when v0.3.0 is actually cut
+date-released: 2026-07-14
 license: GPL-3.0-or-later
 repository-code: "https://github.com/mousebrains/turbulence"
 url: "https://github.com/mousebrains/turbulence"
