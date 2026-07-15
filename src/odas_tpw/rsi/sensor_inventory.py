@@ -568,6 +568,8 @@ def run(
     verbose: bool = False,
     compact: bool = False,
     stream: TextIO | None = None,
+    cal_dir: Path | None = None,
+    cal_tol: float = 0.00005,
 ) -> int:
     """Scan *paths* for the requested sensor *kinds* and print a summary.
 
@@ -576,11 +578,20 @@ def run(
     """
     out = stream if stream is not None else sys.stdout
 
-    # Fail fast on an unwritable CSV target BEFORE the (potentially long) scan,
-    # rather than crashing with a raw traceback after all the work is done.
+    # Fail fast on a bad output target BEFORE the (potentially long) scan,
+    # rather than crashing / erroring only after all the work is done.
     if csv_out is not None and (csv_out.is_dir() or not csv_out.parent.is_dir()):
         print(f"Error: cannot write CSV to {csv_out}", file=sys.stderr)
         return 1
+    if cal_dir is not None and not cal_dir.is_dir():
+        print(f"Error: --cal-dir {cal_dir} is not a directory", file=sys.stderr)
+        return 1
+    if cal_dir is not None and "shear" not in kinds:
+        print(
+            "Warning: --cal-dir checks shear probes, but shear channels are not "
+            "being scanned (pass --shear or --all); nothing will be checked.",
+            file=sys.stderr,
+        )
 
     files = iter_pfiles(paths)
     if not files:
@@ -609,6 +620,17 @@ def run(
     print(file=out)
 
     print_report(inventory, kinds, verbose=verbose, compact=compact, stream=out)
+
+    if cal_dir is not None:
+        from odas_tpw.rsi import shear_cal
+
+        try:
+            timelines, cal_warns = shear_cal.load_cal_dir(cal_dir)
+        except shear_cal.CalDependencyError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        summary = shear_cal.check_uses(uses, timelines)
+        shear_cal.print_check(summary, cal_dir, cal_tol, cal_warns, stream=out)
 
     if errors:
         print("Errors:", file=out)
@@ -671,13 +693,38 @@ def build_arg_parser(prog: str = "sensor_inventory") -> argparse.ArgumentParser:
         action="store_true",
         help="One line per probe: SN, file count, calibration, and date range",
     )
+    ap.add_argument(
+        "--cal-dir",
+        type=Path,
+        metavar="DIR",
+        help="Directory of Rockland shear-probe calibration PDFs. Check each shear "
+        "probe's configured sensitivity against the calibration in effect at its "
+        "observation time and report mismatches. Needs the 'cal' extra "
+        "(pip install 'microstructure-tpw[cal]').",
+    )
+    ap.add_argument(
+        "--cal-tol",
+        type=float,
+        default=0.00005,
+        metavar="SENS",
+        help="Sensitivity-mismatch threshold for --cal-dir, in absolute sensitivity "
+        "units (default: 0.00005, half the sheets' 4th-decimal resolution).",
+    )
     return ap
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     kinds = resolve_kinds(args.shear, args.fp07, args.want_all)
-    return run(args.paths, kinds, csv_out=args.csv, verbose=args.verbose, compact=args.compact)
+    return run(
+        args.paths,
+        kinds,
+        csv_out=args.csv,
+        verbose=args.verbose,
+        compact=args.compact,
+        cal_dir=args.cal_dir,
+        cal_tol=args.cal_tol,
+    )
 
 
 if __name__ == "__main__":
