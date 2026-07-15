@@ -11,10 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   new `stratification.salinity` now accept `"hotel"` (or `"hotel:<var>"`) to draw
   practical salinity from a hotel-injected channel (default variable `salinity`),
   in addition to the existing `null` / number / `"measured"` forms. This feeds ε
-  and χ viscosity **and** the `N2`/`Γ`/`K_ρ` mixing path from an external CTD
+  and χ **viscosity** and the `N2`/`Γ`/`K_ρ` **mixing** path from an external CTD
   feed, so gliders and MicroRiders with no onboard conductivity get correct
-  seawater physics instead of the fixed 35-PSU fallback. `epsilon.salinity` also
-  gains the `"measured"` form for parity with `chi`. See
+  viscosity and stratification instead of the fixed 35-PSU fallback. Set all
+  three keys together (an unset `stratification.salinity` while ε/χ use `"hotel"`
+  now warns). `epsilon.salinity` also gains the `"measured"` form for parity with
+  `chi`. Note: the practical-/absolute-salinity/density (`SP`/`SA`/`ρ`) CTD and
+  profile products still require onboard conductivity and are unaffected. See
   docs/perturb/configuration.md.
 - **Shell tab-completion** for the argparse CLIs (`rsi-tpw`, `perturb`,
   `perturb-plot`, `perturb-diag`) via the optional

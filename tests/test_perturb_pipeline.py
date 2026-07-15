@@ -12,9 +12,12 @@ import pytest
 from odas_tpw.perturb.pipeline import (
     _hotel_salinity_var,
     _inject_seawater_properties,
+    _normalize_config_salinity,
+    _normalize_salinity_setting,
     _profile_channel_salinity,
     _profile_practical_salinity,
     _resolve_salinity_cfg,
+    _scrub_salinity,
     _setup_output_dirs,
     _upstream_for,
     process_file,
@@ -179,6 +182,93 @@ class TestHotelSalinityResolution:
         with pytest.raises(ValueError, match="not recognised"):
             _resolve_salinity_cfg("saltiness", path, "JAC_T", "JAC_C", "chi")
 
+    def test_resolve_scrubs_partial_nan_with_median(self, tmp_path, caplog):
+        # NaN outside CTD coverage must be filled (with the median), not left to
+        # NaN out the viscosity for those windows.
+        import xarray as xr
+
+        S = np.array([32.0, np.nan, 32.4, np.nan, 32.2])
+        path = tmp_path / "prof.nc"
+        ds = xr.Dataset({"t_slow": ("time_slow", np.arange(5.0)), "salinity": ("time_slow", S)})
+        ds.to_netcdf(path)
+        with caplog.at_level(logging.WARNING):
+            out = _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "chi")
+        assert np.isfinite(out).all()
+        assert out[1] == pytest.approx(np.nanmedian(S))  # gap filled with median
+        assert "non-finite" in caplog.text
+
+    def test_resolve_all_nan_falls_back_to_none(self, tmp_path, caplog):
+        import xarray as xr
+
+        S = np.full(4, np.nan)
+        path = tmp_path / "prof.nc"
+        ds = xr.Dataset({"t_slow": ("time_slow", np.arange(4.0)), "salinity": ("time_slow", S)})
+        ds.to_netcdf(path)
+        with caplog.at_level(logging.WARNING):
+            out = _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "chi")
+        assert out is None  # -> fixed 35 PSU downstream
+        assert "non-finite" in caplog.text
+
+    def test_profile_channel_salinity_rejects_wrong_length(self, tmp_path, caplog):
+        # A variable matching the hotel name but on neither the slow nor fast
+        # grid must be ignored (else prepare_profiles raises and drops the file).
+        import xarray as xr
+
+        path = tmp_path / "prof.nc"
+        xr.Dataset(
+            {
+                "t_slow": ("time_slow", np.arange(10.0)),
+                "t_fast": ("time_fast", np.arange(80.0)),
+                "salinity": ("odd", np.arange(3.0)),  # length 3: neither grid
+            }
+        ).to_netcdf(path)
+        with caplog.at_level(logging.WARNING):
+            assert _profile_channel_salinity(path, "salinity") is None
+        assert "matching neither" in caplog.text
+
+    def test_scrub_salinity_scalar_and_none_passthrough(self):
+        assert _scrub_salinity(None, "chi", "x") is None
+        assert _scrub_salinity(34.0, "chi", "x") == 34.0  # 0-d passes through
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (None, None),
+            (34, 34.0),
+            (34.5, 34.5),
+            ("34.5", 34.5),  # numeric string parsed
+            ("measured", "measured"),
+            ("hotel", "hotel"),
+            ("hotel:SP", "hotel:SP"),
+        ],
+    )
+    def test_normalize_salinity_setting_accepts(self, value, expected):
+        assert _normalize_salinity_setting(value, "epsilon") == expected
+
+    @pytest.mark.parametrize("bad", [True, False, "measued", "saltiness", "hotle"])
+    def test_normalize_salinity_setting_rejects(self, bad):
+        with pytest.raises(ValueError):
+            _normalize_salinity_setting(bad, "epsilon")
+
+    def test_normalize_config_warns_on_viscosity_n2_mismatch(self, caplog):
+        # epsilon uses hotel S but stratification is unset -> N2 would use 35 PSU.
+        config = {"epsilon": {"salinity": "hotel"}, "chi": {}, "stratification": {}}
+        with caplog.at_level(logging.WARNING):
+            _normalize_config_salinity(config)
+        assert "stratification.salinity is unset" in caplog.text
+        # normalized in place
+        assert config["epsilon"]["salinity"] == "hotel"
+
+    def test_normalize_config_no_warn_when_consistent(self, caplog):
+        config = {"epsilon": {"salinity": "hotel"}, "stratification": {"salinity": "hotel"}}
+        with caplog.at_level(logging.WARNING):
+            _normalize_config_salinity(config)
+        assert "stratification.salinity is unset" not in caplog.text
+
+    def test_normalize_config_rejects_bad_value(self):
+        with pytest.raises(ValueError):
+            _normalize_config_salinity({"chi": {"salinity": "typo"}})
+
 
 class TestComputeSlowStratification:
     """Per-cast sorted N2/dTdz on the slow grid, fed to profile + CTD products."""
@@ -235,8 +325,9 @@ class TestComputeSlowStratification:
         assert m.any()
         assert not np.allclose(N2_cond[m], N2_hotel[m])
 
-    def test_fixed_number_salinity_used(self):
-        """A numeric sal_source is applied as a constant, not derived from C."""
+    def test_fixed_number_salinity_changes_n2(self):
+        """A numeric sal_source is applied, not ignored: N2 differs from the
+        no-salinity (temperature-only) result and from a different fixed value."""
         from odas_tpw.perturb.pipeline import _compute_slow_stratification
 
         n = 300
@@ -245,10 +336,14 @@ class TestComputeSlowStratification:
         pf = MagicMock()
         pf.channels = {"P": P, "JAC_T": T}  # no conductivity at all
         pf.is_fast = lambda name: False
-        # Without C and without a source, N2 is temperature-only but still finite;
-        # with a fixed salinity it must also succeed (exercises the number branch).
-        N2, _ = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, 32.0)
-        assert np.isfinite(N2).any()
+
+        N2_30, _ = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, 30.0)
+        N2_35, _ = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, 35.0)
+        m = np.isfinite(N2_30)
+        assert m.any()
+        # Absolute-salinity anomaly shifts density -> a fixed S=30 must move N2
+        # off the S=35 result, proving the number branch is actually applied.
+        assert not np.allclose(N2_30[m], N2_35[m])
 
 
 class TestAttachWindowStratification:
@@ -840,6 +935,47 @@ class TestProcessFile:
         process_file(tmp_path / "test.p", config, None, output_dirs)
         kwargs = mock_get_prof.call_args.kwargs
         assert kwargs["direction"] == "down"
+
+    @patch("odas_tpw.rsi.dissipation._compute_epsilon", return_value=[])
+    @patch(
+        "odas_tpw.rsi.profile.extract_profiles",
+        return_value=([Path("/fake/prof.nc")], [{}]),
+    )
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[(0, 99)])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_epsilon_salinity_reaches_compute_epsilon(
+        self,
+        mock_pfile_cls,
+        mock_smooth,
+        mock_get_prof,
+        mock_fp07_cal,
+        mock_extract,
+        mock_compute_eps,
+        tmp_path,
+    ):
+        """Regression guard: the resolved epsilon.salinity must actually be passed
+        to _compute_epsilon. Deleting `salinity=eps_sal` at the call site would
+        silently revert epsilon to 35 PSU, and only this test would catch it."""
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)
+        mock_pf.fs_slow = 64.0
+        mock_pf.fs_fast = 512.0
+        mock_pf.config = {"instrument_info": {"vehicle": "slocum_glider"}}
+        mock_pfile_cls.return_value = mock_pf
+
+        config = self._base_config(tmp_path)
+        config["epsilon"] = {"salinity": 30.0}  # a distinctive, non-default value
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+
+        mock_compute_eps.assert_called()
+        assert mock_compute_eps.call_args.kwargs.get("salinity") == 30.0
 
     @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
     @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")

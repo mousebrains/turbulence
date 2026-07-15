@@ -806,10 +806,25 @@ def _window_stratification_for_profile(
         lat = 0.0 if not np.isfinite(lat) else lat
         lon = 0.0 if not np.isfinite(lon) else lon
         hv = _hotel_salinity_var(sal_source)
+        # The hotel channel must be on the profile's slow grid (same length as
+        # P/t_slow) or sorted_stratification's boolean-mask slice raises; warn
+        # and fall through to conductivity/35 on a mismatch rather than dropping
+        # the whole product (matches the slow-path guard).
+        hotel_ok = hv is not None and hv in prof and prof[hv].shape[0] == len(P)
+        if hv is not None and hv in prof and not hotel_ok:
+            logger.warning(
+                "stratification salinity=%r but %s channel %r length %d != t_slow %d; "
+                "using conductivity/35 PSU",
+                sal_source,
+                file_label,
+                hv,
+                prof[hv].shape[0],
+                len(P),
+            )
         if isinstance(sal_source, (int, float)) and not isinstance(sal_source, bool):
             S = np.full(len(P), float(sal_source))
             sal_note = f"fixed {float(sal_source):g} PSU"
-        elif hv is not None and hv in prof:
+        elif hotel_ok:
             S = prof[hv].values.astype(np.float64)
             sal_note = f"salinity from hotel channel {hv!r}"
         elif C_name in prof:
@@ -817,11 +832,11 @@ def _window_stratification_for_profile(
             S = gsw.SP_from_C(C, T, P)
             sal_note = f"practical salinity from {C_name}/{T_name}/P (TEOS-10)"
             if hv is not None:
-                sal_note += f" (hotel channel {hv!r} absent)"
+                sal_note += f" (hotel channel {hv!r} not usable)"
         else:
             S = None
             missing = (
-                f"hotel channel {hv!r} and {C_name} both absent"
+                f"hotel channel {hv!r} and {C_name} both unavailable"
                 if hv is not None
                 else "no conductivity channel"
             )
@@ -1124,6 +1139,11 @@ def _profile_channel_salinity(prof_path, var_name: str):
     CTD feed — returning ``None`` (so the caller falls back to 35 PSU) when the
     variable is absent. Unlike :func:`_profile_practical_salinity` this needs no
     onboard conductivity, which is the point for gliders / MicroRiders.
+
+    Returns ``None`` (with a warning) when the variable is present but sits on
+    neither the slow nor the fast grid: the viscosity regrid in
+    ``prepare_profiles`` would otherwise raise on a length matching neither, and
+    silently accept a same-length-but-wrong-time-base array.
     """
     import numpy as np
     import xarray as xr
@@ -1131,14 +1151,133 @@ def _profile_channel_salinity(prof_path, var_name: str):
     with xr.open_dataset(prof_path, decode_times=False) as ds:
         if var_name not in ds:
             return None
-        return ds[var_name].values.astype(np.float64)
+        arr = ds[var_name].values.astype(np.float64)
+        grid_lengths = {ds[t].size for t in ("t_slow", "t_fast") if t in ds}
+        if grid_lengths and arr.shape[0] not in grid_lengths:
+            logger.warning(
+                "hotel salinity channel %r in %s has length %d, matching neither "
+                "t_slow nor t_fast %s; ignoring and using fixed 35 PSU",
+                var_name,
+                Path(prof_path).name,
+                arr.shape[0],
+                sorted(grid_lengths),
+            )
+            return None
+        return arr
+
+
+def _scrub_salinity(sal, label: str, src: str):
+    """Replace non-finite salinity samples so viscosity/N2 don't silently NaN out.
+
+    A hotel salinity channel is NaN wherever the external CTD feed does not cover
+    the cast (pchip ``extrapolate=False``), and ``SP_from_C`` NaNs on bad
+    conductivity. Feeding those to ``visc`` yields NaN viscosity and discards the
+    whole (otherwise valid) epsilon/chi estimate for that window. Fill the gaps
+    with the profile's own median salinity — a far better estimate than dropping
+    the window — and warn. An all-non-finite array returns ``None`` so the caller
+    falls back to the fixed 35 PSU default. Mirrors the temperature path, which
+    already substitutes 10 degC and warns.
+    """
+    import numpy as np
+
+    if sal is None or np.ndim(sal) == 0:
+        return sal
+    sal = np.asarray(sal, dtype=np.float64)
+    finite = np.isfinite(sal)
+    if finite.all():
+        return sal
+    if not finite.any():
+        logger.warning(
+            "%s salinity from %s is entirely non-finite; using fixed 35 PSU", label, src
+        )
+        return None
+    fill = float(np.nanmedian(sal))
+    logger.warning(
+        "%s salinity from %s has %d/%d non-finite sample(s) (e.g. outside CTD "
+        "coverage); filling with the profile median %.3f PSU",
+        label,
+        src,
+        int((~finite).sum()),
+        sal.size,
+        fill,
+    )
+    out = sal.copy()
+    out[~finite] = fill
+    return out
+
+
+def _normalize_salinity_setting(value, section: str):
+    """Validate and normalize a ``salinity`` config value, once, up front.
+
+    Accepts ``None``, a number, a numeric string (e.g. ``"34.5"`` -> ``34.5``),
+    ``"measured"``, or ``"hotel"``/``"hotel:<var>"`` (returned verbatim). Raises
+    ``ValueError`` on anything else — a YAML bool (``bool`` is an ``int``
+    subclass and would otherwise be read as 1 PSU) or an unrecognised string
+    (e.g. a typo like ``"measued"``). Doing this once per section before any
+    profile loop turns a silent-wrong-physics or per-profile-repeated failure
+    into a single clear error, and keeps the three sections consistent.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(
+            f"{section}.salinity={value!r} is not valid; expected null, a number, "
+            "'measured', or 'hotel[:<var>]'"
+        )
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        v = value.strip()
+        if v.lower() == "measured" or _hotel_salinity_var(v) is not None:
+            return v
+        try:
+            return float(v)
+        except ValueError:
+            pass
+    raise ValueError(
+        f"{section}.salinity={value!r} is not recognised; expected null, a number, "
+        "'measured', or 'hotel[:<var>]'"
+    )
+
+
+def _normalize_config_salinity(config: dict) -> None:
+    """Validate/normalize the three ``salinity`` settings in *config*, in place.
+
+    Runs once per file before any profile loop, so a bad value (YAML bool,
+    typo, unrecognised string) fails fast and loudly instead of silently using
+    the wrong physics or raising once per profile mid-run. Also warns when the
+    viscosity salinity (``epsilon``/``chi``) draws from a hotel channel but the
+    N2 salinity (``stratification``) is left unset — for a conductivity-less
+    glider/MR that leaves N2/Gamma/K_rho on the 35-PSU fallback, inconsistent
+    with the viscosity, which is exactly this feature's target case.
+    """
+    norm: dict[str, Any] = {}
+    for section in ("epsilon", "chi", "stratification"):
+        merged = merge_config(section, config.get(section))
+        val = _normalize_salinity_setting(merged.get("salinity"), section)
+        norm[section] = val
+        sec_cfg = config.get(section)
+        if not isinstance(sec_cfg, dict):
+            sec_cfg = {}
+            config[section] = sec_cfg
+        sec_cfg["salinity"] = val
+
+    if norm["stratification"] is None:
+        hotel_visc = [s for s in ("epsilon", "chi") if _hotel_salinity_var(norm[s]) is not None]
+        if hotel_visc:
+            logger.warning(
+                "%s.salinity uses a hotel channel but stratification.salinity is unset; "
+                "N2/Gamma/K_rho will fall back to conductivity or 35 PSU, inconsistent "
+                "with the viscosity salinity. Set stratification.salinity to match.",
+                "/".join(hotel_visc),
+            )
 
 
 def _resolve_salinity_cfg(value, prof_path, T_name: str, C_name: str, label: str):
     """Resolve a ``salinity`` config value to a scalar / per-slow-sample array / None.
 
-    Shared by the epsilon, chi, and stratification stages so all three read the
-    same forms:
+    Shared by the epsilon and chi stages. Expects an already-normalized value
+    (see :func:`_normalize_salinity_setting`):
 
     * ``None`` or a number -> passed through unchanged (``None`` -> fixed 35 PSU
       downstream).
@@ -1147,11 +1286,14 @@ def _resolve_salinity_cfg(value, prof_path, T_name: str, C_name: str, label: str
       from the profile NetCDF.
 
     A ``"measured"``/``"hotel"`` request that cannot be satisfied (missing C/T/P
-    or missing channel) logs a warning and returns ``None`` so processing
-    continues at 35 PSU rather than failing the file. Any other string raises.
+    or missing/odd-length channel) logs a warning and returns ``None`` so
+    processing continues at 35 PSU rather than failing the file; non-finite
+    samples are filled from the profile median. Any other string raises (a
+    defensive backstop — normalization should have caught it up front).
     """
     if not isinstance(value, str):
         return value  # None or a number
+    src = Path(prof_path).name
     v = value.strip().lower()
     if v == "measured":
         sal = _profile_practical_salinity(prof_path, T_name, C_name)
@@ -1159,21 +1301,21 @@ def _resolve_salinity_cfg(value, prof_path, T_name: str, C_name: str, label: str
             logger.warning(
                 "%s salinity='measured' but %s lacks C/T/P; using fixed 35 PSU",
                 label,
-                Path(prof_path).name,
+                src,
             )
-        return sal
+        return _scrub_salinity(sal, label, src)
     hotel_var = _hotel_salinity_var(value)
     if hotel_var is not None:
         sal = _profile_channel_salinity(prof_path, hotel_var)
         if sal is None:
             logger.warning(
-                "%s salinity=%r but %s has no %r channel; using fixed 35 PSU",
+                "%s salinity=%r but %s has no usable %r channel; using fixed 35 PSU",
                 label,
                 value,
-                Path(prof_path).name,
+                src,
                 hotel_var,
             )
-        return sal
+        return _scrub_salinity(sal, label, src)
     raise ValueError(
         f"{label} salinity={value!r} is not recognised; expected null, a number, "
         "'measured', or 'hotel[:<var>]'"
@@ -1279,6 +1421,10 @@ def process_file(
         "diss": [],
         "chi": [],
     }
+
+    # Validate/normalize salinity settings once, up front, so a bad value fails
+    # loudly here rather than silently (bool -> 1 PSU) or once per profile.
+    _normalize_config_salinity(config)
 
     try:
         pf = PFile(p_path)
