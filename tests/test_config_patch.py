@@ -724,6 +724,21 @@ class TestScaffold:
         assert 'vehicle: "VMP"' in text
         assert "sh1:" in text and 'sens: "0.1075"' in text
 
+    def test_scaffold_includes_higher_order_and_thermistor_coeffs(self, tiny):
+        """Scaffold must not drop calibration fields beyond coef0/coef1.
+
+        Regression: a hardcoded ("sens","sn","cal_date","coef0","coef1") whitelist
+        silently omitted a pressure channel's coef2 (and coef3+, and thermistor
+        Steinhart-Hart terms), so the field a user needed to fix never appeared.
+        """
+        text = cp.scaffold_yaml(tiny)
+        # Pressure carries a quadratic term -> it must be offered for editing.
+        assert "coef2:" in text
+        # Fast thermistors carry Steinhart-Hart calibration; it must appear too.
+        assert "beta_1:" in text and "t_0:" in text
+        # Structural identifiers are still excluded.
+        assert "\n#     type:" not in text and "\n#     id:" not in text
+
     def test_scaffold_unedited_is_noop(self, tiny, tmp_path):
         # Applying the scaffold with only its current vehicle value is a no-op.
         text = cp.scaffold_yaml(tiny)

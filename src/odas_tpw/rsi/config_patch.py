@@ -650,6 +650,17 @@ def write_patched_pfile(src: str | Path, dst: str | Path, new_config_text: str) 
 # Template scaffolding
 # ---------------------------------------------------------------------------
 
+# Keys that merely identify or describe a channel — never calibration values to
+# patch — are omitted from the scaffold. Everything else a channel carries is a
+# potentially patchable calibration field and is shown. This is a data-driven
+# exclusion rather than a coefficient whitelist so no field is ever silently
+# dropped (an earlier whitelist emitted only coef0/coef1, hiding a pressure
+# channel's coef2 and every higher-order or thermistor coefficient).
+_SCAFFOLD_SKIP_KEYS = frozenset({"id", "name", "type", "units", "sign"})
+# Lead with the most commonly edited fields; the rest follow in config-file
+# order, which keeps coef0, coef1, coef2, … in sequence.
+_SCAFFOLD_LEAD_KEYS = ("sens", "sn", "cal_date")
+
 
 def scaffold_yaml(pfile_path: str | Path) -> str:
     """Build a commented edit-spec template pre-filled from *pfile_path*."""
@@ -691,7 +702,9 @@ def scaffold_yaml(pfile_path: str | Path) -> str:
         name = ch.get("name")
         if not name:
             continue
-        shown = [k for k in ("sens", "sn", "cal_date", "coef0", "coef1") if k in ch]
+        lead = [k for k in _SCAFFOLD_LEAD_KEYS if k in ch]
+        rest = [k for k in ch if k not in _SCAFFOLD_SKIP_KEYS and k not in _SCAFFOLD_LEAD_KEYS]
+        shown = lead + rest
         if not shown:
             continue
         lines.append(f"#   {name}:")

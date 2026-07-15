@@ -23,6 +23,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   version DOI `10.5281/zenodo.21366143`) in the README and `CITATION.cff`,
   plus a PyPI version badge — back-filled after v0.3.0 was archived on Zenodo.
 
+### Fixed
+- **`rsi-tpw patch-template`** now scaffolds *every* per-channel calibration
+  field, not just `coef0`/`coef1`. The previous hardcoded whitelist silently
+  dropped higher-order polynomial coefficients (a pressure channel's `coef2`,
+  `coef3`…) and thermistor Steinhart-Hart terms (`a`, `b`, `beta_1`, `t_0`, …),
+  so a coefficient a user needed to patch never appeared in the template. The
+  scaffold now emits all fields except the structural identifiers
+  (`id`, `name`, `type`, `units`, `sign`), in config-file order.
+
 ## [0.3.0] - 2026-07-14
 
 ### Added
