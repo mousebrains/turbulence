@@ -2,6 +2,7 @@
 """Tests for the rsi-tpw CLI."""
 
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -983,7 +984,9 @@ def test_cmd_ql_defaults(monkeypatch, sample_p_file):
     # spec_P_range left at None, direction defaults to "auto"
     assert kwargs["spec_P_range"] is None
     assert kwargs["direction"] == "auto"
-    assert kwargs["W_min"] == 0.3
+    # W_min is passed through as None so the viewer can apply a direction-aware
+    # default (0.3 for down/up, 0.05 for glide/horizontal).
+    assert kwargs["W_min"] is None
     assert kwargs["goodman"] is True
 
 
@@ -1033,7 +1036,8 @@ def test_cmd_dl_defaults(monkeypatch, sample_p_file):
     kwargs = mock_dl.call_args.kwargs
     assert kwargs["spec_P_range"] is None
     assert kwargs["direction"] == "auto"
-    assert kwargs["W_min"] == 0.3
+    # None -> viewer applies a direction-aware default (see test_cmd_ql_defaults).
+    assert kwargs["W_min"] is None
     assert kwargs["goodman"] is True
 
 
@@ -1058,3 +1062,99 @@ def test_patch_config_malformed_yaml_friendly_error(monkeypatch, capsys, tmp_pat
         main()
     assert exc_info.value.code == 1
     assert "Error:" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# config subcommand (dump the embedded INI record)
+# ---------------------------------------------------------------------------
+
+_DATA_DIR = Path(__file__).parent / "data"
+_STARTUP_FILE = _DATA_DIR / "VMP142_startup_noclock.p"
+
+
+def test_cmd_config_prints_ini(monkeypatch, sample_p_file, capsys):
+    """rsi-tpw config prints the raw embedded config (channels + matrix)."""
+    monkeypatch.setattr(sys, "argv", ["rsi-tpw", "config", str(sample_p_file)])
+    from odas_tpw.rsi.cli import main
+
+    main()
+    out = capsys.readouterr().out
+    assert "[channel]" in out
+    assert "matrix" in out.lower()
+    # Single-file output carries no banner.
+    assert "=====" not in out
+
+
+def test_cmd_config_multi_file_banner(monkeypatch, sample_p_file, capsys):
+    """With >1 file, each config is preceded by a '# ===== <path> =====' banner."""
+    monkeypatch.setattr(
+        sys, "argv", ["rsi-tpw", "config", str(sample_p_file), str(sample_p_file)]
+    )
+    from odas_tpw.rsi.cli import main
+
+    main()
+    out = capsys.readouterr().out
+    assert out.count(f"# ===== {sample_p_file} =====") == 2
+
+
+def test_read_config_string_works_where_pfile_fails():
+    """read_config_string reads a startup file that PFile itself cannot load.
+
+    The startup fixture has valid header+config but a degenerate data geometry,
+    so PFile(...) raises; the config record is still recoverable, which is the
+    whole point of the lightweight reader behind `rsi-tpw config`.
+    """
+    if not _STARTUP_FILE.exists():
+        pytest.skip("startup test fixture not available")
+    from odas_tpw.rsi.p_file import PFile, read_config_string
+
+    with pytest.raises(ValueError):
+        PFile(_STARTUP_FILE)
+
+    cfg = read_config_string(_STARTUP_FILE)
+    assert "[channel]" in cfg
+    assert "matrix" in cfg.lower()
+
+
+def test_cmd_config_reads_startup_file(monkeypatch, capsys):
+    """The config subcommand succeeds on a no-data startup file (exit 0)."""
+    if not _STARTUP_FILE.exists():
+        pytest.skip("startup test fixture not available")
+    monkeypatch.setattr(sys, "argv", ["rsi-tpw", "config", str(_STARTUP_FILE)])
+    from odas_tpw.rsi.cli import main
+
+    main()  # must not raise
+    assert "[channel]" in capsys.readouterr().out
+
+
+def test_cmd_config_bad_file_exits(monkeypatch, capsys, tmp_path):
+    """A resolvable-but-unreadable .p file makes config exit(1) with a message."""
+    junk = tmp_path / "truncated.p"
+    junk.write_bytes(b"\x00\x01\x02")  # too small for a 128-byte header
+    monkeypatch.setattr(sys, "argv", ["rsi-tpw", "config", str(junk)])
+    from odas_tpw.rsi.cli import main
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 1
+    assert "Error:" in capsys.readouterr().err
+
+
+def test_read_config_string_rejects_truncated_config(tmp_path):
+    """A valid header advertising a config the file no longer contains must raise.
+
+    Regression: read_config_string used to seek+read config_size with no bounds
+    check, so a truncated file silently returned a partial config and `config`
+    exited 0 — while the sibling read_config_text (used by patch-template) raised
+    on the same input. The two now agree.
+    """
+    if not _STARTUP_FILE.exists():
+        pytest.skip("startup test fixture not available")
+    from odas_tpw.rsi.p_file import read_config_string
+
+    # Keep the 128-byte header (which advertises the full config_size) but drop
+    # all but the first sliver of the config block.
+    truncated = tmp_path / "cut.p"
+    truncated.write_bytes(_STARTUP_FILE.read_bytes()[:200])
+    with pytest.raises(ValueError, match="truncated or corrupt"):
+        read_config_string(truncated)

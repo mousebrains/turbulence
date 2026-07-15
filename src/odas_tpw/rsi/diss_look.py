@@ -283,7 +283,7 @@ def diss_look(
     goodman=True,
     direction="auto",
     P_min=0.5,
-    W_min=0.3,
+    W_min=None,
     min_duration=7.0,
     spec_P_range=None,
     diss_length=None,

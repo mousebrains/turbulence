@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Shell tab-completion** for the argparse CLIs (`rsi-tpw`, `perturb`,
+  `perturb-plot`, `perturb-diag`) via the optional
+  [argcomplete](https://github.com/kislyuk/argcomplete) dependency (new
+  `completion` extra: `pip install 'microstructure-tpw[completion]'`). Each CLI
+  calls a shared `enable_argcomplete()` hook before parsing; it is a no-op unless
+  argcomplete is installed and the shell's completion machinery is driving the
+  process, so normal runs are unaffected. Enable it per shell with
+  `eval "$(register-python-argcomplete rsi-tpw)"`. See docs/rsi-tpw/completion.md.
+- **`rsi-tpw config FILE...`** — print a `.p` file's raw embedded configuration
+  (INI) record — the `setup.cfg`-style text with the address matrix and every
+  channel's calibration coefficients — to stdout. Useful for inspecting a
+  coefficient in place (e.g. a suspect pressure `coef2`). Reads only the header
+  and config record, so unlike `info` it also works on startup/truncated files
+  that carry a config but no data records; backed by the new
+  `PFile`-independent `read_config_string()`. See docs/rsi-tpw/cli.md.
 - **`rsi-tpw sensors --cal-dir DIR`** — check each shear probe's configured
   `sens` against Rockland shear-probe calibration sheets (PDFs) in `DIR` and
   report mismatches. Parses `Probe SN`, sensitivity, calibration date, and the
@@ -22,6 +37,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Zenodo DOI badge + identifiers (concept DOI `10.5281/zenodo.21366142`,
   version DOI `10.5281/zenodo.21366143`) in the README and `CITATION.cff`,
   plus a PyPI version badge — back-filled after v0.3.0 was archived on Zenodo.
+
+### Fixed
+- **`rsi-tpw patch-template`** now scaffolds *every* per-channel calibration
+  field, not just `coef0`/`coef1`. The previous hardcoded whitelist silently
+  dropped higher-order polynomial coefficients (a pressure channel's `coef2`,
+  `coef3`…) and thermistor Steinhart-Hart terms (`a`, `b`, `beta_1`, `t_0`, …),
+  so a coefficient a user needed to patch never appeared in the template. The
+  scaffold now emits all fields except the structural identifiers
+  (`id`, `name`, `type`, `units`, `sign`), in config-file order.
+- **Interactive viewers (`ql`/`dl`/`ml`) — direction-aware `W_min` default.**
+  The fall-rate floor for profile detection now defaults to **0.05 dbar/s** when
+  the resolved direction is `glide` or `horizontal` (slow glider/AUV motion),
+  and stays **0.3 dbar/s** for `down`/`up` (free-falling profilers). Previously a
+  fixed 0.3 rejected every cast from a slow platform, so `--direction glide`
+  alone still found nothing; now it works without also passing `--W-min`. An
+  explicit `--W-min` still overrides. The batch `prof` command is unchanged.
+- **Interactive viewers (`ql`/`dl`/`ml`)** now explain *why* no profiles were
+  detected instead of the bare "No profiles detected in this file". The message
+  reports the observed pressure span and peak fall/rise rate against the
+  `P_min`/`W_min` thresholds and suggests the fix — e.g. a slow or glider-style
+  cast whose fall rate never reaches the `W_min` default is told to lower
+  `--W-min` and/or use `--direction glide`.
 
 ## [0.3.0] - 2026-07-14
 

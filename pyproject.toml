@@ -39,6 +39,11 @@ dependencies = [
 cal = [
     "pypdf>=4",
 ]
+# Shell tab-completion for the argparse CLIs (rsi-tpw, perturb, perturb-plot,
+# perturb-diag). See docs/rsi-tpw/completion.md.
+completion = [
+    "argcomplete>=3",
+]
 dev = [
     "pytest",
     "pytest-cov",
@@ -47,6 +52,7 @@ dev = [
     "mypy",
     "pre-commit",
     "pypdf>=4",  # so the calibration-sheet tests run in CI
+    "argcomplete>=3",  # so the tab-completion tests run in CI
 ]
 
 [project.urls]
