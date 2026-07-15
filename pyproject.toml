@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "microstructure-tpw"
-version = "0.3.0"
+version = "0.3.1"
 description = "Ocean microstructure turbulence processing: TKE dissipation and chi from Rockland Scientific instruments"
 requires-python = ">=3.12"
 license = "GPL-3.0-or-later"
