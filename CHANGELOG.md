@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Zenodo DOI badge + identifiers (concept DOI `10.5281/zenodo.21366142`,
+  version DOI `10.5281/zenodo.21366143`) in the README and `CITATION.cff`,
+  plus a PyPI version badge — back-filled after v0.3.0 was archived on Zenodo.
+
 ## [0.3.0] - 2026-07-14
 
 ### Added
