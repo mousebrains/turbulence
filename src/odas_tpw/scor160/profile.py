@@ -256,15 +256,25 @@ def explain_no_profiles(
     else:
         rate, sense = W, "downward"
 
-    peak = float(np.nanmax(rate)) if rate.size else 0.0
-    p_lo = float(np.nanmin(P)) if P.size else 0.0
-    p_hi = float(np.nanmax(P)) if P.size else 0.0
+    # Reduce over finite values only: an all-NaN pressure (e.g. a bad pressure
+    # coefficient) is itself the likely cause and must neither crash the reduce
+    # nor be silently ignored — nanmax on an all-NaN slice returns NaN and warns.
+    finite_P = P[np.isfinite(P)]
+    finite_rate = rate[np.isfinite(rate)]
+    peak = float(finite_rate.max()) if finite_rate.size else float("nan")
+    p_lo = float(finite_P.min()) if finite_P.size else float("nan")
+    p_hi = float(finite_P.max()) if finite_P.size else float("nan")
 
     parts = [
         f"No profiles detected (direction={d}, W_min={W_min:g} dbar/s, P_min={P_min:g} dbar). "
         f"Observed pressure {p_lo:.3g}-{p_hi:.3g} dbar, peak {sense} rate {peak:.3g} dbar/s."
     ]
-    if p_hi <= P_min:
+    if not np.isfinite(p_hi) or not np.isfinite(peak):
+        parts.append(
+            "Pressure or fall rate is non-finite (NaN/inf) — check the pressure "
+            "calibration; a bad coefficient can blank out or explode the depth."
+        )
+    elif p_hi <= P_min:
         parts.append(
             "Pressure never exceeds P_min — check the pressure calibration "
             "(a bad coefficient can flatten or explode the depth)."
@@ -284,8 +294,13 @@ def explain_no_profiles(
         )
         parts.append(hint)
     else:
+        # Each threshold is individually cleared but no contiguous run satisfies
+        # both at once for long enough (e.g. fast while shallow, then slow at
+        # depth). Don't assert the thresholds "were cleared" — state the joint
+        # condition honestly.
         parts.append(
-            "Segments clear the thresholds but none lasts long enough; try a shorter "
-            "min-duration or --direction glide."
+            f"No run of samples satisfied P > {P_min:g} dbar and {sense} rate "
+            f">= {W_min:g} dbar/s together for long enough; try --direction glide, "
+            "a lower --W-min, or a shorter min-duration."
         )
     return " ".join(parts)

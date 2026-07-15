@@ -1138,3 +1138,23 @@ def test_cmd_config_bad_file_exits(monkeypatch, capsys, tmp_path):
         main()
     assert exc_info.value.code == 1
     assert "Error:" in capsys.readouterr().err
+
+
+def test_read_config_string_rejects_truncated_config(tmp_path):
+    """A valid header advertising a config the file no longer contains must raise.
+
+    Regression: read_config_string used to seek+read config_size with no bounds
+    check, so a truncated file silently returned a partial config and `config`
+    exited 0 — while the sibling read_config_text (used by patch-template) raised
+    on the same input. The two now agree.
+    """
+    if not _STARTUP_FILE.exists():
+        pytest.skip("startup test fixture not available")
+    from odas_tpw.rsi.p_file import read_config_string
+
+    # Keep the 128-byte header (which advertises the full config_size) but drop
+    # all but the first sliver of the config block.
+    truncated = tmp_path / "cut.p"
+    truncated.write_bytes(_STARTUP_FILE.read_bytes()[:200])
+    with pytest.raises(ValueError, match="truncated or corrupt"):
+        read_config_string(truncated)

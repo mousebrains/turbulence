@@ -264,10 +264,13 @@ def read_config_string(filepath: str | Path) -> str:
 
     This reads only the 128-byte header and the record-0 config block; it does
     not demultiplex any data records. Unlike constructing a :class:`PFile`, it
-    therefore succeeds on startup or truncated files that carry a config record
-    but no data (e.g. an instrument power-up file), which are exactly the files
-    whose configuration you most often want to inspect. The same header-geometry
-    guards as :meth:`PFile._read` apply.
+    therefore succeeds on startup files that carry a config record but no data
+    (e.g. an instrument power-up file), which are exactly the files whose
+    configuration you most often want to inspect. It still validates the
+    header-geometry (``header_size``) and that the advertised config block is
+    fully present in the file, so a genuinely truncated/corrupt config raises
+    rather than silently returning a partial string (matching
+    :func:`odas_tpw.rsi.config_patch.read_config_text`).
     """
     filepath = Path(filepath)
     with open(filepath, "rb") as f:
@@ -281,11 +284,19 @@ def read_config_string(filepath: str | Path) -> str:
         config_size = header["config_size"]
         if header_size < HEADER_BYTES:
             raise ValueError(f"{filepath.name}: invalid header_size={header_size}")
-        if config_size < 0:
-            raise ValueError(f"{filepath.name}: invalid config_size={config_size}")
+
+        file_size = f.seek(0, 2)
+        if header_size + config_size > file_size:
+            raise ValueError(
+                f"{filepath.name}: header_size+config_size ({header_size + config_size}) "
+                f"exceeds file size ({file_size}); truncated or corrupt"
+            )
 
         f.seek(header_size)
-        return f.read(config_size).decode("ascii", errors="replace")
+        cfg = f.read(config_size)
+        if len(cfg) != config_size:
+            raise ValueError(f"{filepath.name}: config string truncated")
+        return cfg.decode("ascii", errors="replace")
 
 
 # ---------------------------------------------------------------------------

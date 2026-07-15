@@ -246,7 +246,8 @@ def _cmd_config(args: argparse.Namespace) -> None:
     p_files = _resolve_p_files(args.files)
     multi = len(p_files) > 1
     failures = 0
-    for i, pf_path in enumerate(p_files):
+    printed = 0
+    for pf_path in p_files:
         try:
             cfg = read_config_string(pf_path)
         except (OSError, ValueError) as e:
@@ -254,10 +255,11 @@ def _cmd_config(args: argparse.Namespace) -> None:
             failures += 1
             continue
         if multi:
-            if i > 0:
+            if printed:
                 print()
             print(f"# ===== {pf_path} =====")
         print(cfg, end="" if cfg.endswith("\n") else "\n")
+        printed += 1
     if failures:
         sys.exit(1)
 

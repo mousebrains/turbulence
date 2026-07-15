@@ -227,6 +227,27 @@ class TestExplainNoProfiles:
         assert "vertical rate" in msg
         assert "--direction glide" not in msg
 
+    def test_all_nan_pressure_blames_calibration_without_warning(self, recwarn):
+        # A bad pressure coefficient can yield all-NaN pressure. The message must
+        # point at the pressure calibration (the true cause), not misfire the
+        # "clears thresholds but too short" fallback, and must not emit an
+        # all-NaN-slice RuntimeWarning.
+        P = np.full(500, np.nan)
+        W = np.full(500, np.nan)
+        msg = explain_no_profiles(P, W, P_min=0.5, W_min=0.3, direction="down")
+        assert "non-finite" in msg and "calibration" in msg
+        assert not any(issubclass(w.category, RuntimeWarning) for w in recwarn.list)
+
+    def test_thresholds_cleared_individually_not_jointly(self):
+        # Fast while shallow (P<P_min), then slow at depth (W<W_min): each
+        # threshold is met somewhere but never together. The fallback must state
+        # the joint condition, not falsely claim the thresholds were cleared.
+        P = np.concatenate([np.linspace(0.0, 0.4, 250), np.full(250, 10.0)])
+        W = np.concatenate([np.full(250, 1.0), np.full(250, 0.01)])
+        msg = explain_no_profiles(P, W, P_min=0.5, W_min=0.3, direction="down")
+        assert "together" in msg
+        assert "clear the thresholds" not in msg
+
 
 class TestGetProfilesFiltering:
     """Threshold and duration filtering."""
