@@ -1,7 +1,7 @@
 # Tests for odas_tpw.rsi.vehicle
 """Unit tests for vehicle attribute resolution."""
 
-from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
+from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau, resolve_w_min
 
 
 class TestResolveDirection:
@@ -71,3 +71,25 @@ class TestResolveTau:
 
     def test_case_insensitive(self):
         assert resolve_tau("Slocum_Glider") == 3.0
+
+
+class TestResolveWMin:
+    """resolve_w_min() returns a direction-aware fall-rate floor."""
+
+    def test_down_gives_default(self):
+        assert resolve_w_min("down") == 0.3
+
+    def test_up_gives_default(self):
+        assert resolve_w_min("up") == 0.3
+
+    def test_glide_gives_slow_floor(self):
+        assert resolve_w_min("glide") == 0.05
+
+    def test_horizontal_gives_slow_floor(self):
+        assert resolve_w_min("horizontal") == 0.05
+
+    def test_case_insensitive(self):
+        assert resolve_w_min("Glide") == 0.05
+
+    def test_unknown_direction_gives_default(self):
+        assert resolve_w_min("sideways") == 0.3

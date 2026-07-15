@@ -229,3 +229,63 @@ def get_profiles(
     # Filter by minimum duration
     profiles = [(s, e) for s, e in profiles if (e - s) >= min_samples]
     return profiles
+
+
+def explain_no_profiles(
+    P: npt.ArrayLike,
+    W: npt.ArrayLike,
+    P_min: float = 0.5,
+    W_min: float = 0.3,
+    direction: str = "down",
+) -> str:
+    """Build an actionable message explaining why :func:`get_profiles` found none.
+
+    Reports the observed pressure span and peak fall/rise rate against the
+    ``P_min`` / ``W_min`` thresholds and, when a threshold is the binding
+    constraint, suggests the flag to relax. A common cause is a slow or
+    glider-style cast whose fall rate never reaches the VMP-tuned ``W_min``
+    default (0.3 dbar/s).
+    """
+    P = np.asarray(P, dtype=np.float64).ravel()
+    W = np.asarray(W, dtype=np.float64).ravel()
+    d = direction.lower()
+    if d == "up":
+        rate, sense = -W, "upward"
+    elif d in ("glide", "horizontal"):
+        rate, sense = np.abs(W), "vertical"
+    else:
+        rate, sense = W, "downward"
+
+    peak = float(np.nanmax(rate)) if rate.size else 0.0
+    p_lo = float(np.nanmin(P)) if P.size else 0.0
+    p_hi = float(np.nanmax(P)) if P.size else 0.0
+
+    parts = [
+        f"No profiles detected (direction={d}, W_min={W_min:g} dbar/s, P_min={P_min:g} dbar). "
+        f"Observed pressure {p_lo:.3g}-{p_hi:.3g} dbar, peak {sense} rate {peak:.3g} dbar/s."
+    ]
+    if p_hi <= P_min:
+        parts.append(
+            "Pressure never exceeds P_min — check the pressure calibration "
+            "(a bad coefficient can flatten or explode the depth)."
+        )
+    elif peak < W_min:
+        suggest = max(round(peak * 0.5, 3), 0.01)
+        hint = (
+            f"The {sense} rate never reaches W_min. For a slow or glider-style cast, "
+            f"lower it (e.g. --W-min {suggest:g})"
+        )
+        # Only nudge toward glide when a single-sense search might be missing the
+        # other half of an up/down cast.
+        hint += (
+            " and/or use --direction glide to catch both down and up."
+            if d in ("down", "up")
+            else "."
+        )
+        parts.append(hint)
+    else:
+        parts.append(
+            "Segments clear the thresholds but none lasts long enough; try a shorter "
+            "min-duration or --direction glide."
+        )
+    return " ".join(parts)

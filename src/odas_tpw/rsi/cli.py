@@ -509,7 +509,7 @@ def _cmd_ql(args: argparse.Namespace) -> None:
     f_AA = args.f_AA or merged.get("f_AA", 98.0)
     goodman = merged.get("goodman", True) if not args.no_goodman else False
 
-    W_min = getattr(args, "W_min", None) or 0.3
+    W_min = getattr(args, "W_min", None)  # None -> direction-aware default in the viewer
 
     p_files = _resolve_p_files(args.files)
     for pf_path in p_files:
@@ -543,7 +543,7 @@ def _cmd_dl(args: argparse.Namespace) -> None:
     f_AA = args.f_AA or merged.get("f_AA", 98.0)
     goodman = merged.get("goodman", True) if not args.no_goodman else False
 
-    W_min = getattr(args, "W_min", None) or 0.3
+    W_min = getattr(args, "W_min", None)  # None -> direction-aware default in the viewer
 
     p_files = _resolve_p_files(args.files)
     for pf_path in p_files:
@@ -629,7 +629,7 @@ def _cmd_ml(args: argparse.Namespace) -> None:
     f_AA = args.f_AA or merged.get("f_AA", 98.0)
     goodman = merged.get("goodman", True) if not args.no_goodman else False
 
-    W_min = getattr(args, "W_min", None) or 0.3
+    W_min = getattr(args, "W_min", None)  # None -> direction-aware default in the viewer
 
     p_files = _resolve_p_files(args.files)
     for pf_path in p_files:
@@ -1121,7 +1121,10 @@ def _add_ql_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Vehicle type override (e.g. slocum_glider, vmp)",
     )
     p.add_argument(
-        "--W-min", type=float, default=None, help="Minimum fall rate [dbar/s] (default: 0.3)"
+        "--W-min",
+        type=float,
+        default=None,
+        help="Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal)",
     )
     p.add_argument(
         "--spec-P-range",
@@ -1186,7 +1189,10 @@ def _add_dl_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Vehicle type override (e.g. slocum_glider, vmp)",
     )
     p.add_argument(
-        "--W-min", type=float, default=None, help="Minimum fall rate [dbar/s] (default: 0.3)"
+        "--W-min",
+        type=float,
+        default=None,
+        help="Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal)",
     )
     p.add_argument(
         "--spec-P-range",
@@ -1302,7 +1308,10 @@ def _add_ml_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Vehicle type override (e.g. slocum_glider, vmp)",
     )
     p.add_argument(
-        "--W-min", type=float, default=None, help="Minimum fall rate [dbar/s] (default: 0.3)"
+        "--W-min",
+        type=float,
+        default=None,
+        help="Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal)",
     )
     p.add_argument(
         "--spec-P-range",

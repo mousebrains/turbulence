@@ -26,7 +26,16 @@ VEHICLE_ATTRIBUTES: dict[str, tuple[str, float]] = {
 DEFAULT_DIRECTION = "down"
 DEFAULT_TAU = 1.5
 
+# Default fall-rate floor [dbar/s] for profile detection. A free-falling VMP
+# clears 0.3 easily; slow near-horizontal platforms (gliders, AUVs) do not, so
+# their vertical rate needs a lower floor or every cast is rejected. ODAS leaves
+# W_min to the caller (its default_vehicle_attributes.ini has no W_min); this is
+# a local default keyed on the resolved profile direction.
+DEFAULT_W_MIN = 0.3
+SLOW_W_MIN = 0.05
+
 _EXPLICIT_DIRECTIONS = {"up", "down", "glide", "horizontal"}
+_SLOW_DIRECTIONS = {"glide", "horizontal"}
 
 
 def resolve_direction(direction: str, vehicle: str) -> str:
@@ -53,6 +62,19 @@ def resolve_direction(direction: str, vehicle: str) -> str:
     if attrs is not None:
         return attrs[0]
     return DEFAULT_DIRECTION
+
+
+def resolve_w_min(direction: str) -> float:
+    """Return the default fall-rate floor [dbar/s] for a resolved *direction*.
+
+    Slow, near-horizontal platforms (``glide``/``horizontal``) use a lower floor
+    (:data:`SLOW_W_MIN`) than a free-falling profiler (:data:`DEFAULT_W_MIN`),
+    because their vertical rate is far below the VMP-tuned 0.3 dbar/s default and
+    would otherwise reject every cast. Callers passing an explicit ``W_min``
+    (e.g. ``--W-min``) bypass this. Expects an already-resolved direction, not
+    ``"auto"``.
+    """
+    return SLOW_W_MIN if direction.lower() in _SLOW_DIRECTIONS else DEFAULT_W_MIN
 
 
 def resolve_tau(vehicle: str) -> float:

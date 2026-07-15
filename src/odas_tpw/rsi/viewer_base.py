@@ -389,13 +389,13 @@ class ProfileViewer:
         goodman=True,
         direction="auto",
         P_min=0.5,
-        W_min=0.3,
+        W_min=None,
         min_duration=7.0,
         spec_P_range=None,
         diss_length=None,
         vehicle=None,
     ):
-        from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
+        from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau, resolve_w_min
 
         self.pf = pf
         self.fft_length = fft_length
@@ -409,6 +409,11 @@ class ProfileViewer:
             vehicle = pf.config["instrument_info"].get("vehicle", "").lower()
         direction = resolve_direction(direction, vehicle)
         tau = resolve_tau(vehicle)
+        # W_min defaults are direction-aware: a slow glider/AUV (glide/horizontal)
+        # needs a lower fall-rate floor than a free-falling VMP or every cast is
+        # rejected. An explicit W_min (e.g. --W-min) passes through untouched.
+        if W_min is None:
+            W_min = resolve_w_min(direction)
 
         # Extract channel data
         self.shear = sorted(
@@ -459,7 +464,9 @@ class ProfileViewer:
             min_duration=min_duration,
         )
         if not self.profiles:
-            raise ValueError("No profiles detected in this file")
+            from odas_tpw.scor160.profile import explain_no_profiles
+
+            raise ValueError(explain_no_profiles(self.P, W, P_min, W_min, direction))
 
         # Interpolate slow -> fast. Clamp speed to the 0.05 m/s cutout (matching
         # the pipeline's speed_min) before the shear/speed**2 division below, so

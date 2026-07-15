@@ -46,6 +46,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   so a coefficient a user needed to patch never appeared in the template. The
   scaffold now emits all fields except the structural identifiers
   (`id`, `name`, `type`, `units`, `sign`), in config-file order.
+- **Interactive viewers (`ql`/`dl`/`ml`) — direction-aware `W_min` default.**
+  The fall-rate floor for profile detection now defaults to **0.05 dbar/s** when
+  the resolved direction is `glide` or `horizontal` (slow glider/AUV motion),
+  and stays **0.3 dbar/s** for `down`/`up` (free-falling profilers). Previously a
+  fixed 0.3 rejected every cast from a slow platform, so `--direction glide`
+  alone still found nothing; now it works without also passing `--W-min`. An
+  explicit `--W-min` still overrides. The batch `prof` command is unchanged.
+- **Interactive viewers (`ql`/`dl`/`ml`)** now explain *why* no profiles were
+  detected instead of the bare "No profiles detected in this file". The message
+  reports the observed pressure span and peak fall/rise rate against the
+  `P_min`/`W_min` thresholds and suggests the fix — e.g. a slow or glider-style
+  cast whose fall rate never reaches the `W_min` default is told to lower
+  `--W-min` and/or use `--direction glide`.
 
 ## [0.3.0] - 2026-07-14
 

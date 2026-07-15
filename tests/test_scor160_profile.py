@@ -3,7 +3,7 @@
 
 import numpy as np
 
-from odas_tpw.scor160.profile import get_profiles, smooth_fall_rate
+from odas_tpw.scor160.profile import explain_no_profiles, get_profiles, smooth_fall_rate
 
 # ---------------------------------------------------------------------------
 # smooth_fall_rate
@@ -196,6 +196,36 @@ class TestGetProfilesNoDetection:
     def test_empty_arrays(self):
         profiles = get_profiles([], [], fs=64.0)
         assert profiles == []
+
+
+class TestExplainNoProfiles:
+    """The actionable message built when get_profiles finds nothing."""
+
+    def test_slow_cast_blames_w_min_and_suggests_lower(self):
+        # A real, slow cast (peak rate 0.15 dbar/s) below the default W_min.
+        P = np.linspace(3.0, 14.0, 500)
+        W = np.full_like(P, 0.15)
+        msg = explain_no_profiles(P, W, P_min=0.5, W_min=0.3, direction="down")
+        assert "W_min" in msg
+        assert "0.15" in msg  # reports the observed peak rate
+        assert "--W-min" in msg  # suggests the flag to relax
+        assert "3-14 dbar" in msg  # reports the observed pressure span
+
+    def test_flat_pressure_blames_calibration(self):
+        # Pressure never clears P_min -> the message points at pressure, not W_min.
+        P = np.full(500, 0.2)
+        W = np.full(500, 1.0)
+        msg = explain_no_profiles(P, W, P_min=0.5, W_min=0.3, direction="down")
+        assert "P_min" in msg and "calibration" in msg
+        assert "--W-min" not in msg  # not the binding constraint here
+
+    def test_glide_direction_not_redundantly_suggested(self):
+        # When already searching glide, don't suggest --direction glide again.
+        P = np.linspace(3.0, 14.0, 500)
+        W = np.full_like(P, 0.15)
+        msg = explain_no_profiles(P, W, P_min=0.5, W_min=0.3, direction="glide")
+        assert "vertical rate" in msg
+        assert "--direction glide" not in msg
 
 
 class TestGetProfilesFiltering:

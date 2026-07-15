@@ -984,7 +984,9 @@ def test_cmd_ql_defaults(monkeypatch, sample_p_file):
     # spec_P_range left at None, direction defaults to "auto"
     assert kwargs["spec_P_range"] is None
     assert kwargs["direction"] == "auto"
-    assert kwargs["W_min"] == 0.3
+    # W_min is passed through as None so the viewer can apply a direction-aware
+    # default (0.3 for down/up, 0.05 for glide/horizontal).
+    assert kwargs["W_min"] is None
     assert kwargs["goodman"] is True
 
 
@@ -1034,7 +1036,8 @@ def test_cmd_dl_defaults(monkeypatch, sample_p_file):
     kwargs = mock_dl.call_args.kwargs
     assert kwargs["spec_P_range"] is None
     assert kwargs["direction"] == "auto"
-    assert kwargs["W_min"] == 0.3
+    # None -> viewer applies a direction-aware default (see test_cmd_ql_defaults).
+    assert kwargs["W_min"] is None
     assert kwargs["goodman"] is True
 
 
