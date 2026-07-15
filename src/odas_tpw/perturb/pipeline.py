@@ -688,16 +688,20 @@ def _time_epoch_seconds(da) -> Any:
     return vals.astype(np.float64)
 
 
-def _compute_slow_stratification(pf, profiles, T_name, C_name, window):
+def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_source=None):
     """Per-cast sorted N2/dT/dz on the full slow grid (NaN outside casts).
 
     Computes background stratification once per detected cast with
     :func:`profile_stratification` on a *window*-dbar scale, then interpolates
     each cast's coarse result onto the slow pressure grid. Returns
     ``(N2_full, dTdz_full)`` aligned with the slow channels, or ``(None, None)``
-    when pressure/temperature are unavailable. Practical salinity comes from
-    conductivity via TEOS-10 when present. Position defaults to 0/0 (a <0.3%
-    gravity and negligible salinity-anomaly effect on N2).
+    when pressure/temperature are unavailable.
+
+    *sal_source* selects the salinity: ``None`` (or ``"measured"``) derives it
+    from conductivity via TEOS-10 when present; a number applies that fixed PSU;
+    ``"hotel"``/``"hotel:<var>"`` uses a hotel-injected slow salinity channel.
+    Position defaults to 0/0 (a <0.3% gravity and negligible salinity-anomaly
+    effect on N2).
     """
     import gsw
     import numpy as np
@@ -718,12 +722,34 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window):
     C = np.asarray(C, dtype=np.float64) if C is not None else None
 
     n = len(P)
+    # Optional whole-cast salinity override (per-slow-sample); None -> derive
+    # from C per cast in the loop below.
+    sal_arr = None
+    if isinstance(sal_source, (int, float)) and not isinstance(sal_source, bool):
+        sal_arr = np.full(n, float(sal_source))
+    elif (hv := _hotel_salinity_var(sal_source)) is not None:
+        cand = pf.channels.get(hv)
+        if cand is not None and len(cand) == n:
+            sal_arr = np.asarray(cand, dtype=np.float64)
+        else:
+            logger.warning(
+                "stratification salinity=%r but no matching %r slow channel; "
+                "using conductivity/35 PSU",
+                sal_source,
+                hv,
+            )
+
     N2_full = np.full(n, np.nan)
     dTdz_full = np.full(n, np.nan)
     for s, e in profiles:
         sl = slice(s, e + 1)
         P_c, T_c = P[sl], T[sl]
-        S_c = gsw.SP_from_C(C[sl], T_c, P_c) if C is not None else None
+        if sal_arr is not None:
+            S_c = sal_arr[sl]
+        elif C is not None:
+            S_c = gsw.SP_from_C(C[sl], T_c, P_c)
+        else:
+            S_c = None
         target_P, N2, dTdz = profile_stratification(P_c, T_c, S=S_c, window=window)
         good = np.isfinite(N2)
         if good.sum() >= 2:
@@ -735,17 +761,19 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window):
 
 
 def _window_stratification_for_profile(
-    prof_path, win_t, half_w, T_name: str, C_name: str, file_label: str
+    prof_path, win_t, half_w, T_name: str, C_name: str, file_label: str, sal_source=None
 ):
     """Sorted N2/dTdz at window times *win_t* from a profile's CTD channels.
 
     Returns ``(N2, dTdz, sal_note)`` evaluated on the *win_t* grid, or ``None``
-    when the profile cannot be read or lacks t_slow/P/T. Practical salinity
-    comes from the profile's own conductivity via TEOS-10 when present, else
-    35 PSU is assumed (recorded in *sal_note*). Shared by the diss and chi
-    products, each evaluating stratification at its own window scale (the diss
-    path passes diss_length_seconds/2, the chi path 0.5*chi diss_length/fs), so
-    the two coincide only when their diss_length/fft_length settings match.
+    when the profile cannot be read or lacks t_slow/P/T. *sal_source* selects the
+    salinity: ``None`` (or ``"measured"``) uses the profile's own conductivity
+    via TEOS-10 when present, else 35 PSU; a number applies that fixed PSU;
+    ``"hotel"``/``"hotel:<var>"`` uses a hotel-injected salinity channel. The
+    choice is recorded in *sal_note*. Shared by the diss and chi products, each
+    evaluating stratification at its own window scale (the diss path passes
+    diss_length_seconds/2, the chi path 0.5*chi diss_length/fs), so the two
+    coincide only when their diss_length/fft_length settings match.
     """
     import gsw
     import numpy as np
@@ -777,32 +805,49 @@ def _window_stratification_for_profile(
         lon = float(prof["lon"].values) if "lon" in prof else np.nan
         lat = 0.0 if not np.isfinite(lat) else lat
         lon = 0.0 if not np.isfinite(lon) else lon
-        if C_name in prof:
+        hv = _hotel_salinity_var(sal_source)
+        if isinstance(sal_source, (int, float)) and not isinstance(sal_source, bool):
+            S = np.full(len(P), float(sal_source))
+            sal_note = f"fixed {float(sal_source):g} PSU"
+        elif hv is not None and hv in prof:
+            S = prof[hv].values.astype(np.float64)
+            sal_note = f"salinity from hotel channel {hv!r}"
+        elif C_name in prof:
             C = prof[C_name].values.astype(np.float64)
             S = gsw.SP_from_C(C, T, P)
             sal_note = f"practical salinity from {C_name}/{T_name}/P (TEOS-10)"
+            if hv is not None:
+                sal_note += f" (hotel channel {hv!r} absent)"
         else:
             S = None
+            missing = (
+                f"hotel channel {hv!r} and {C_name} both absent"
+                if hv is not None
+                else "no conductivity channel"
+            )
             sal_note = (
-                "salinity assumed 35 PSU (no conductivity channel); N2 "
-                "reflects temperature stratification only"
+                f"salinity assumed 35 PSU ({missing}); N2 reflects temperature "
+                "stratification only"
             )
     strat = sorted_stratification(win_t, half_w, t_slow, P, T, S=S, lat=lat, lon=lon)
     return strat.N2, strat.dTdz, sal_note
 
 
-def _attach_window_stratification(ds, prof_path, half_w, T_name, C_name, file_label, scale_name):
+def _attach_window_stratification(
+    ds, prof_path, half_w, T_name, C_name, file_label, scale_name, sal_source=None
+):
     """Attach sorted N2/dTdz to a window-grid dataset (e.g. diss). No-op on failure.
 
     *half_w* is the window half-width [s]; *scale_name* names the window in the
-    variable comments (e.g. "dissipation").
+    variable comments (e.g. "dissipation"). *sal_source* is forwarded to
+    :func:`_window_stratification_for_profile` to select the salinity source.
     """
     import xarray as xr
 
     if "t" not in ds:
         return
     out = _window_stratification_for_profile(
-        prof_path, _time_epoch_seconds(ds["t"]), half_w, T_name, C_name, file_label
+        prof_path, _time_epoch_seconds(ds["t"]), half_w, T_name, C_name, file_label, sal_source
     )
     if out is None:
         return
@@ -842,6 +887,7 @@ def _add_mixing_quantities(
     C_name: str = "JAC_C",
     file_label: str = "",
     epsilon_provenance: str = "",
+    sal_source=None,
 ):
     """Append stratification and (when available) mixing quantities to chi.
 
@@ -878,7 +924,7 @@ def _add_mixing_quantities(
         return chi_ds
 
     strat_out = _window_stratification_for_profile(
-        prof_path, chi_t, half_w, T_name, C_name, file_label
+        prof_path, chi_t, half_w, T_name, C_name, file_label, sal_source
     )
     if strat_out is None:
         return chi_ds
@@ -1051,6 +1097,87 @@ def _profile_practical_salinity(prof_path, T_name: str, C_name: str):
         T = ds[T_name].values.astype(np.float64)
         C = ds[C_name].values.astype(np.float64)
     return gsw.SP_from_C(C, T, P)
+
+
+def _hotel_salinity_var(value) -> str | None:
+    """Variable name if *value* is a ``"hotel"`` / ``"hotel:<var>"`` selector.
+
+    ``"hotel"`` -> the default channel name ``"salinity"``; ``"hotel:SP"`` ->
+    ``"SP"``. Returns ``None`` for any other value (number, ``None``,
+    ``"measured"``), so callers can distinguish the hotel-channel form.
+    """
+    if not isinstance(value, str):
+        return None
+    v = value.strip()
+    if v.lower() == "hotel":
+        return "salinity"
+    if v.lower().startswith("hotel:"):
+        return v.split(":", 1)[1].strip() or "salinity"
+    return None
+
+
+def _profile_channel_salinity(prof_path, var_name: str):
+    """Per-slow-sample salinity read from a named profile variable, or None.
+
+    Reads a practical-salinity channel already present in the profile NetCDF —
+    typically a hotel-injected ``salinity`` slow channel merged from an external
+    CTD feed — returning ``None`` (so the caller falls back to 35 PSU) when the
+    variable is absent. Unlike :func:`_profile_practical_salinity` this needs no
+    onboard conductivity, which is the point for gliders / MicroRiders.
+    """
+    import numpy as np
+    import xarray as xr
+
+    with xr.open_dataset(prof_path, decode_times=False) as ds:
+        if var_name not in ds:
+            return None
+        return ds[var_name].values.astype(np.float64)
+
+
+def _resolve_salinity_cfg(value, prof_path, T_name: str, C_name: str, label: str):
+    """Resolve a ``salinity`` config value to a scalar / per-slow-sample array / None.
+
+    Shared by the epsilon, chi, and stratification stages so all three read the
+    same forms:
+
+    * ``None`` or a number -> passed through unchanged (``None`` -> fixed 35 PSU
+      downstream).
+    * ``"measured"`` -> per-profile practical salinity from C/T/P (TEOS-10).
+    * ``"hotel"`` / ``"hotel:<var>"`` -> a hotel-injected salinity channel read
+      from the profile NetCDF.
+
+    A ``"measured"``/``"hotel"`` request that cannot be satisfied (missing C/T/P
+    or missing channel) logs a warning and returns ``None`` so processing
+    continues at 35 PSU rather than failing the file. Any other string raises.
+    """
+    if not isinstance(value, str):
+        return value  # None or a number
+    v = value.strip().lower()
+    if v == "measured":
+        sal = _profile_practical_salinity(prof_path, T_name, C_name)
+        if sal is None:
+            logger.warning(
+                "%s salinity='measured' but %s lacks C/T/P; using fixed 35 PSU",
+                label,
+                Path(prof_path).name,
+            )
+        return sal
+    hotel_var = _hotel_salinity_var(value)
+    if hotel_var is not None:
+        sal = _profile_channel_salinity(prof_path, hotel_var)
+        if sal is None:
+            logger.warning(
+                "%s salinity=%r but %s has no %r channel; using fixed 35 PSU",
+                label,
+                value,
+                Path(prof_path).name,
+                hotel_var,
+            )
+        return sal
+    raise ValueError(
+        f"{label} salinity={value!r} is not recognised; expected null, a number, "
+        "'measured', or 'hotel[:<var>]'"
+    )
 
 
 _SEAWATER_UNITS = {
@@ -1314,6 +1441,7 @@ def process_file(
                 ct_cfg.get("T_name", "JAC_T"),
                 ct_cfg.get("C_name", "JAC_C"),
                 float(strat_cfg.get("window", 2.0)),
+                strat_cfg.get("salinity"),
             )
             if N2_full is not None:
                 win = float(strat_cfg.get("window", 2.0))
@@ -1514,6 +1642,13 @@ def process_file(
                         prof_data_cache[prof_path] = pre_loaded
                     else:
                         pre_loaded = None
+                    # Resolve epsilon.salinity (null/number/"measured"/"hotel")
+                    # to a scalar or per-slow-sample array the viscosity path
+                    # consumes; "salinity" is excluded from the kwargs splat
+                    # below so the raw config string never reaches _compute_epsilon.
+                    eps_sal = _resolve_salinity_cfg(
+                        eps_cfg.get("salinity"), prof_path, ct_T_name, ct_C_name, "epsilon"
+                    )
                     diss_results = _compute_epsilon(
                         prof_path,
                         **{
@@ -1527,8 +1662,10 @@ def process_file(
                                 "T2_norm",
                                 "fom_max",
                                 "diagnostics",
+                                "salinity",
                             )
                         },
+                        salinity=eps_sal,
                         _pre_loaded=pre_loaded,
                     )
                     eps_fom_max = eps_cfg.get("fom_max")
@@ -1564,6 +1701,7 @@ def process_file(
                                 ct_C_name,
                                 p_path.name,
                                 "dissipation",
+                                strat_cfg.get("salinity"),
                             )
                         out_name = Path(prof_path).name
                         out_path = output_dirs["diss"] / out_name
@@ -1614,13 +1752,10 @@ def process_file(
                 }
             else:
                 chi_qc_kwargs = {}
-            # Resolve chi.salinity: "measured" -> per-profile practical salinity
-            # from the profile's own C/T/P (TEOS-10); a number or None is passed
-            # through (None -> fixed 35 PSU viscosity in process_l3_chi).
+            # chi.salinity forms: null/number pass through (null -> 35 PSU in
+            # process_l3_chi); "measured" -> C/T/P (TEOS-10); "hotel[:<var>]" ->
+            # a hotel-injected salinity channel. Resolved per profile below.
             chi_sal_cfg = chi_cfg.get("salinity")
-            chi_use_measured_sal = (
-                isinstance(chi_sal_cfg, str) and chi_sal_cfg.strip().lower() == "measured"
-            )
             with stage_log(output_dirs.get("chi"), log_basename):
                 for prof_path in result["profiles"]:
                     diss_path = diss_by_profile.get(prof_path)
@@ -1642,20 +1777,9 @@ def process_file(
                         diss_ds = xr.open_dataset(diss_path) if chi_use_epsilon else None
                         # Pop so the cache is released as we consume it.
                         pre_loaded = prof_data_cache.pop(prof_path, None)
-                        if chi_use_measured_sal:
-                            chi_sal = _profile_practical_salinity(
-                                prof_path,
-                                ct_cfg.get("T_name", "JAC_T"),
-                                ct_cfg.get("C_name", "JAC_C"),
-                            )
-                            if chi_sal is None:
-                                logger.warning(
-                                    "chi salinity='measured' but %s lacks C/T/P; "
-                                    "using fixed 35 PSU",
-                                    Path(prof_path).name,
-                                )
-                        else:
-                            chi_sal = chi_sal_cfg
+                        chi_sal = _resolve_salinity_cfg(
+                            chi_sal_cfg, prof_path, ct_T_name, ct_C_name, "chi"
+                        )
                         chi_results = _compute_chi(
                             prof_path,
                             epsilon_ds=diss_ds,
@@ -1737,6 +1861,7 @@ def process_file(
                                         C_name=ct_cfg.get("C_name", "JAC_C"),
                                         file_label=Path(prof_path).name,
                                         epsilon_provenance=eps_prov,
+                                        sal_source=strat_cfg.get("salinity"),
                                     )
                                 finally:
                                     if mix_eps is not diss_ds:

@@ -10,8 +10,11 @@ import numpy as np
 import pytest
 
 from odas_tpw.perturb.pipeline import (
+    _hotel_salinity_var,
     _inject_seawater_properties,
+    _profile_channel_salinity,
     _profile_practical_salinity,
+    _resolve_salinity_cfg,
     _setup_output_dirs,
     _upstream_for,
     process_file,
@@ -96,6 +99,87 @@ class TestProfilePracticalSalinity:
         assert _profile_practical_salinity(path, "JAC_T", "JAC_C") is None
 
 
+class TestHotelSalinityResolution:
+    """salinity: 'hotel'[:<var>] reads a hotel-injected salinity channel."""
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (None, None),
+            (34.5, None),
+            ("measured", None),
+            ("hotel", "salinity"),
+            ("hotel:SP", "SP"),
+            ("HOTEL:S ", "S"),
+            ("hotel:", "salinity"),  # empty var -> default
+            ("bogus", None),
+        ],
+    )
+    def test_hotel_salinity_var_parser(self, value, expected):
+        assert _hotel_salinity_var(value) == expected
+
+    def test_profile_channel_salinity_reads_variable(self, tmp_path):
+        import xarray as xr
+
+        S = np.array([32.1, 32.3, 32.5])
+        path = tmp_path / "prof.nc"
+        xr.Dataset({"salinity": ("time_slow", S)}).to_netcdf(path)
+        np.testing.assert_allclose(_profile_channel_salinity(path, "salinity"), S)
+
+    def test_profile_channel_salinity_missing_returns_none(self, tmp_path):
+        import xarray as xr
+
+        path = tmp_path / "prof.nc"
+        xr.Dataset({"P": ("time_slow", np.array([1.0, 2.0]))}).to_netcdf(path)
+        assert _profile_channel_salinity(path, "salinity") is None
+
+    def _prof_with(self, tmp_path, **vars_):
+        import xarray as xr
+
+        ds = xr.Dataset({k: ("time_slow", np.asarray(v)) for k, v in vars_.items()})
+        path = tmp_path / "prof.nc"
+        ds.to_netcdf(path)
+        return path
+
+    def test_resolve_passthrough_number_and_none(self, tmp_path):
+        path = self._prof_with(tmp_path, P=[1.0, 2.0])
+        assert _resolve_salinity_cfg(None, path, "JAC_T", "JAC_C", "chi") is None
+        assert _resolve_salinity_cfg(34.0, path, "JAC_T", "JAC_C", "chi") == 34.0
+
+    def test_resolve_measured_from_ctp(self, tmp_path):
+        import gsw
+
+        P = np.array([1.0, 5.0, 10.0])
+        T = np.array([20.0, 19.5, 19.0])
+        C = np.array([45.0, 44.8, 44.5])
+        path = self._prof_with(tmp_path, P=P, JAC_T=T, JAC_C=C)
+        out = _resolve_salinity_cfg("measured", path, "JAC_T", "JAC_C", "chi")
+        np.testing.assert_allclose(out, gsw.SP_from_C(C, T, P))
+
+    def test_resolve_hotel_channel(self, tmp_path):
+        S = np.array([32.0, 32.2, 32.4])
+        path = self._prof_with(tmp_path, salinity=S, SP=S + 1.0)
+        np.testing.assert_allclose(
+            _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "chi"), S
+        )
+        # renamed variable via hotel:<var>
+        np.testing.assert_allclose(
+            _resolve_salinity_cfg("hotel:SP", path, "JAC_T", "JAC_C", "chi"), S + 1.0
+        )
+
+    def test_resolve_hotel_missing_warns_and_falls_back(self, tmp_path, caplog):
+        path = self._prof_with(tmp_path, P=[1.0, 2.0])
+        with caplog.at_level(logging.WARNING):
+            out = _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "chi")
+        assert out is None
+        assert "using fixed 35 PSU" in caplog.text
+
+    def test_resolve_unknown_string_raises(self, tmp_path):
+        path = self._prof_with(tmp_path, P=[1.0, 2.0])
+        with pytest.raises(ValueError, match="not recognised"):
+            _resolve_salinity_cfg("saltiness", path, "JAC_T", "JAC_C", "chi")
+
+
 class TestComputeSlowStratification:
     """Per-cast sorted N2/dTdz on the slow grid, fed to profile + CTD products."""
 
@@ -127,6 +211,44 @@ class TestComputeSlowStratification:
         pf.is_fast = lambda name: False
         N2, dTdz = _compute_slow_stratification(pf, [(0, 9)], "JAC_T", "JAC_C", 2.0)
         assert N2 is None and dTdz is None
+
+    def test_hotel_salinity_overrides_conductivity(self):
+        """sal_source='hotel' uses the injected salinity channel, changing N2."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        C = np.full(n, 45.0)
+        # A salinity that increases with depth adds stratification beyond T alone.
+        S_hotel = 31.0 + 0.05 * P
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T, "JAC_C": C, "salinity": S_hotel}
+        pf.is_fast = lambda name: False
+
+        N2_cond, _ = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
+        N2_hotel, _ = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, "hotel"
+        )
+        # Both finite, but the hotel-salinity N2 differs from the C-derived one.
+        m = np.isfinite(N2_cond) & np.isfinite(N2_hotel)
+        assert m.any()
+        assert not np.allclose(N2_cond[m], N2_hotel[m])
+
+    def test_fixed_number_salinity_used(self):
+        """A numeric sal_source is applied as a constant, not derived from C."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 300
+        P = np.linspace(1.0, 40.0, n)
+        T = 20.0 - 0.1 * P
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T}  # no conductivity at all
+        pf.is_fast = lambda name: False
+        # Without C and without a source, N2 is temperature-only but still finite;
+        # with a fixed salinity it must also succeed (exercises the number branch).
+        N2, _ = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, 32.0)
+        assert np.isfinite(N2).any()
 
 
 class TestAttachWindowStratification:
@@ -178,6 +300,58 @@ class TestAttachWindowStratification:
         ds = xr.Dataset(coords={"t": ("time", np.array([1.0]))})
         _attach_window_stratification(ds, bad, 5.0, "JAC_T", "JAC_C", "empty.nc", "dissipation")
         assert "N2" not in ds  # unreadable profile -> silently skipped
+
+    def test_hotel_salinity_source_used_and_noted(self, tmp_path):
+        """sal_source='hotel' reads the profile's salinity var and records it."""
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        n = 200
+        t_slow = np.linspace(0.0, 100.0, n)
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        S = 31.0 + 0.05 * P  # depth-varying salinity, no conductivity channel
+        prof = tmp_path / "prof_hotel.nc"
+        xr.Dataset(
+            {
+                "t_slow": ("time_slow", t_slow),
+                "P": ("time_slow", P),
+                "JAC_T": ("time_slow", T),
+                "salinity": ("time_slow", S),
+            }
+        ).to_netcdf(prof)
+
+        win_t = np.array([25.0, 50.0, 75.0])
+        out = _window_stratification_for_profile(
+            prof, win_t, 5.0, "JAC_T", "JAC_C", "prof_hotel.nc", "hotel"
+        )
+        assert out is not None
+        N2, _dTdz, sal_note = out
+        assert "hotel channel 'salinity'" in sal_note
+        assert np.isfinite(N2).any()
+
+    def test_hotel_missing_falls_back_to_35(self, tmp_path):
+        """hotel requested but neither the channel nor conductivity present -> 35 PSU note."""
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        n = 100
+        prof = tmp_path / "prof_bare.nc"
+        xr.Dataset(
+            {
+                "t_slow": ("time_slow", np.linspace(0.0, 50.0, n)),
+                "P": ("time_slow", np.linspace(1.0, 30.0, n)),
+                "JAC_T": ("time_slow", 20.0 - 0.1 * np.linspace(1.0, 30.0, n)),
+            }
+        ).to_netcdf(prof)
+        out = _window_stratification_for_profile(
+            prof, np.array([10.0, 25.0]), 5.0, "JAC_T", "JAC_C", "prof_bare.nc", "hotel"
+        )
+        assert out is not None
+        _, _, sal_note = out
+        assert "35 PSU" in sal_note and "salinity" in sal_note
 
 
 class TestSetupOutputDirs:

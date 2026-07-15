@@ -188,7 +188,7 @@ Note that perturb and `rsi-tpw` use different spectral defaults (perturb: `fft_s
 | `fit_order` | int | `3` | Polynomial fit order for Nasmyth integration |
 | `despike_thresh` | float | `8` | Despike threshold: ratio of the rectified high-passed signal to its low-passed envelope |
 | `despike_smooth` | float | `0.5` | Low-pass cutoff [Hz] for the despike envelope smoother |
-| `salinity` | float | `null` | Salinity [PSU] for viscosity (null = S=35 approx) |
+| `salinity` | float \| `"measured"` \| `"hotel"` \| `null` | `null` | Salinity [PSU] for viscosity. `null` = fixed 35; a number = that fixed value; `"measured"` = per-profile from C/T/P (TEOS-10, needs conductivity); `"hotel"` (or `"hotel:<var>"`) = a [hotel](#hotel--hotel-file-external-telemetry)-injected salinity channel (default variable `salinity`) — for gliders/MicroRiders without onboard conductivity |
 | `epsilon_minimum` | float | `1e-13` | Floor: values below this are set to NaN |
 | `T_source` | string | `null` | Temperature source for viscosity |
 | `T1_norm` | float | `1.0` | Shear probe 1 normalization factor |
@@ -217,8 +217,8 @@ Controls computation of chi from FP07 thermistor spectra.
 | `use_epsilon` | bool | `true` | Method selector. `true` = Method 1 (chi from shear-probe epsilon); `false` = Method 2 spectral fit (uses `fit_method`). Set `false` for instruments where shear epsilon is unreliable, e.g. a MicroRider on a vibrating glider |
 | `fit_method` | string | `"iterative"` | Method 2 fitting: `iterative` or `mle` (ignored when `use_epsilon: true`) |
 | `spectrum_model` | string | `"kraichnan"` | Theoretical spectrum: `batchelor` or `kraichnan` |
-| `salinity` | float \| `"measured"` \| `null` | `null` | Salinity [PSU] for the viscosity in the chi spectral fit. `null` = fixed 35; a number = that fixed value; `"measured"` = per-profile practical salinity from the profile's own `JAC_C`/`JAC_T`/`P` (TEOS-10), resolved by the perturb pipeline |
-| `mixing` | bool | `true` | Append derived mixing quantities (`N2`, `dTdz`, `K_T`, `Gamma`, `K_rho`, plus the paired `epsilon_paired` for traceability) to the chi NetCDFs, on the chi window grid. Practical salinity comes from the profile's own conductivity/temperature/pressure (TEOS-10) when `JAC_C` exists, so `N2` is fully constrained; see [mixing_efficiency.md](../mixing_efficiency.md) for definitions and masking |
+| `salinity` | float \| `"measured"` \| `"hotel"` \| `null` | `null` | Salinity [PSU] for the viscosity in the chi spectral fit. `null` = fixed 35; a number = that fixed value; `"measured"` = per-profile practical salinity from the profile's own `JAC_C`/`JAC_T`/`P` (TEOS-10); `"hotel"` (or `"hotel:<var>"`) = a [hotel](#hotel--hotel-file-external-telemetry)-injected salinity channel |
+| `mixing` | bool | `true` | Append derived mixing quantities (`N2`, `dTdz`, `K_T`, `Gamma`, `K_rho`, plus the paired `epsilon_paired` for traceability) to the chi NetCDFs, on the chi window grid. The `N2` salinity follows the `stratification.salinity` setting (conductivity by default, or a hotel channel); see [mixing_efficiency.md](../mixing_efficiency.md) for definitions and masking |
 | `chi_minimum` | float | `1e-13` | Floor for `mk_chi_mean`: values <= this go to NaN |
 | `fom_max` | float | `null` | Per-probe figure-of-merit cut (null = no cut). Same mechanism as `epsilon.fom_max` but on the chi NetCDFs: NaNs `chi[probe,seg]` / `chi_N` where `fom[probe,seg]` >= `fom_max` |
 | `diagnostics` | bool | `false` | Include diagnostic variables |
@@ -327,6 +327,7 @@ to the CTD product, which spans the whole up/down trajectory.
 |-----------|------|---------|-------------|
 | `enable` | bool | `true` | Write `N2`/`dTdz` to the profile and diss products (not the CTD product) |
 | `window` | float | `2.0` | Background vertical window [dbar] for the profile product |
+| `salinity` | float \| `"measured"` \| `"hotel"` \| `null` | `null` | Salinity source for `N2`. `null` = the profile's own conductivity via TEOS-10 (else 35 PSU); a number = that fixed PSU; `"measured"` = C/T/P (TEOS-10); `"hotel"` (or `"hotel:<var>"`) = a [hotel](#hotel--hotel-file-external-telemetry)-injected salinity channel (default variable `salinity`). Use `"hotel"` for gliders/MicroRiders with no onboard conductivity but an external CTD feed |
 
 ---
 

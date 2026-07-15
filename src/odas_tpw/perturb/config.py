@@ -266,6 +266,9 @@ DEFAULTS: dict[str, dict] = {
         "enable": True,
         "window": 2.0,  # background vertical window [dbar] for the
         # profile product
+        "salinity": None,  # N2 salinity source: null = conductivity (else 35),
+        # a number = fixed PSU, "measured" = C/T/P (TEOS-10),
+        # "hotel"/"hotel:<var>" = a hotel-injected salinity channel
     },
     "parallel": {
         "jobs": 1,
@@ -857,7 +860,12 @@ epsilon:
   fit_order: 3            # polynomial fit order for Nasmyth integration
   despike_thresh: 8       # despike threshold (rectified-HP / LP-envelope ratio, not MAD)
   despike_smooth: 0.5     # despike envelope low-pass cutoff [Hz]
-  salinity: null          # salinity [PSU] (null = 35, fixed S)
+  salinity: null          # viscosity salinity: null = fixed 35; a number =
+                          # that fixed PSU; "measured" = per-profile from
+                          # C/T/P (TEOS-10, needs conductivity); "hotel" (or
+                          # "hotel:<var>") = a hotel-injected salinity channel
+                          # (default var "salinity") — for gliders/MRs with no
+                          # onboard conductivity but a hotel CTD feed
   epsilon_minimum: 1.0e-13  # floor for small epsilon values
   T_source: null          # temperature source for viscosity (null = blend T1/T2)
   T1_norm: 1.0            # T1 blending weight
@@ -898,10 +906,11 @@ chi:
   spectrum_model: "kraichnan"  # theoretical spectrum: batchelor or kraichnan
   salinity: null          # viscosity salinity [PSU]: null = fixed 35; a
                           # number = that fixed S; "measured" = per-profile
-                          # from JAC_C/JAC_T/P (TEOS-10)
+                          # from JAC_C/JAC_T/P (TEOS-10); "hotel" (or
+                          # "hotel:<var>") = a hotel-injected salinity channel
   mixing: true            # derived mixing quantities (N2, dTdz, K_T, Gamma,
-                          # K_rho) on the chi grid, with salinity from the
-                          # profile's own C/T/P (TEOS-10)
+                          # K_rho) on the chi grid; N2 salinity follows the
+                          # stratification.salinity setting
   chi_minimum: 1.0e-13    # floor for mk_chi_mean (values <= go to NaN)
   fom_max: null           # null = no FOM cut. Same per-probe mechanism as
                           # epsilon.fom_max but on chi NCs (NaN's chi[probe,
@@ -1022,6 +1031,10 @@ stratification:
                           # CTD product (profile-only; CTD spans up+down).
   window: 2.0             # background vertical window [dbar] for the profile
                           # product (diss uses its dissipation window)
+  salinity: null          # N2 salinity source: null = conductivity via TEOS-10
+                          # (else 35 PSU); a number = that fixed PSU; "measured"
+                          # = C/T/P (TEOS-10); "hotel" (or "hotel:<var>") = a
+                          # hotel-injected salinity channel (default "salinity")
 
 parallel:
   jobs: 1
