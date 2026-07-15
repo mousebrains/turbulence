@@ -171,21 +171,25 @@ def _use(sn, sens, day=0, *, kind="shear", channel="sh1", dated=True):
 
 def test_check_flags_mismatch_beyond_tolerance():
     tls = {"M1458": _timeline()}
-    # obs in 2023 -> in-effect sens is 0.0679; a config of 0.0777 is +14.4%.
+    # obs in 2023 -> in-effect sens is 0.0679; a config of 0.0777 differs by
+    # +0.0098 in absolute sensitivity units (well beyond the 0.00005 tolerance).
     summary = sc.check_uses([_use("M1458", "0.0777")], tls)
     assert summary.n_checked == 1
     assert not summary.no_sheet
-    m = summary.mismatches(1.0)
+    m = summary.mismatches(0.00005)
     assert len(m) == 1
     assert m[0].expected == pytest.approx(0.0679)
+    assert m[0].abs_diff == pytest.approx(0.0098)
     assert m[0].pct_diff == pytest.approx(14.43, abs=0.05)
 
 
 def test_check_no_mismatch_within_tolerance():
     tls = {"M1458": _timeline()}
-    summary = sc.check_uses([_use("M1458", "0.0679")], tls)  # matches in-effect cal
+    # A 0.00004 drift (below the 0.00005 tolerance) is not flagged even though it
+    # would be a nonzero percent difference.
+    summary = sc.check_uses([_use("M1458", "0.06794")], tls)  # in-effect cal is 0.0679
     assert summary.n_checked == 1
-    assert summary.mismatches(1.0) == []
+    assert summary.mismatches(0.00005) == []
 
 
 def test_check_lookup_is_case_insensitive():
@@ -220,17 +224,21 @@ def test_check_counts_no_sheet_undated_and_blank():
 def test_format_check_reports_only_mismatches():
     tls = {"M1458": _timeline()}
     summary = sc.check_uses([_use("M1458", "0.0777")], tls)
-    text = "\n".join(sc.format_check(summary, Path("/cal"), 1.0))
+    text = "\n".join(sc.format_check(summary, Path("/cal"), 0.00005))
     assert "Shear calibration check" in text
     assert "M1458" in text
-    assert "+14.4%" in text
+    # Absolute delta is the flag metric; the tolerance renders plainly (no 5e-05).
+    assert "Δ +0.0098" in text
+    assert "±0.00005 (sensitivity units)" in text
+    assert "+14.4%" in text  # percent still shown for context
 
 
 def test_format_check_clean_pass_message():
     tls = {"M1458": _timeline()}
     summary = sc.check_uses([_use("M1458", "0.0679")], tls)
-    text = "\n".join(sc.format_check(summary, Path("/cal"), 1.0))
+    text = "\n".join(sc.format_check(summary, Path("/cal"), 0.00005))
     assert "No mismatches" in text
+    assert "within ±0.00005" in text
 
 
 def test_format_check_nothing_checked_message():
@@ -239,7 +247,7 @@ def test_format_check_nothing_checked_message():
     tls = {"M1458": _timeline()}
     summary = sc.check_uses([_use("M9999", "0.10")], tls)
     assert summary.n_checked == 0
-    text = "\n".join(sc.format_check(summary, Path("/cal"), 1.0))
+    text = "\n".join(sc.format_check(summary, Path("/cal"), 0.00005))
     assert "No shear observations were checked" in text
     assert "all 0" not in text
 
@@ -250,7 +258,7 @@ def test_format_check_marks_before_earliest():
     u = _use("M1458", "0.0777")
     u.start_time = datetime(2019, 1, 1, tzinfo=UTC)
     summary = sc.check_uses([u], tls)
-    text = "\n".join(sc.format_check(summary, Path("/cal"), 1.0))
+    text = "\n".join(sc.format_check(summary, Path("/cal"), 0.00005))
     assert "before earliest cal" in text
 
 

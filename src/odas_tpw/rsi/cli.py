@@ -1214,9 +1214,10 @@ def _add_sensors_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--cal-tol",
         type=float,
-        default=1.0,
-        metavar="PCT",
-        help="Sensitivity-mismatch threshold in percent for --cal-dir (default: 1.0).",
+        default=0.00005,
+        metavar="SENS",
+        help="Sensitivity-mismatch threshold for --cal-dir, in absolute sensitivity "
+        "units (default: 0.00005, half the sheets' 4th-decimal resolution).",
     )
     p.set_defaults(func=_cmd_sensors)
 

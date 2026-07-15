@@ -13,7 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   optional previous calibration date/sensitivity; the sensitivity applied to an
   observation is the calibration **in effect** at its date (hold-previous;
   linear interpolation between calibrations is intentionally deferred).
-  `--cal-tol PCT` sets the flag threshold (default 1%). PDF reading uses the new
+  `--cal-tol` sets the flag threshold as an **absolute** sensitivity difference
+  (same units as `sens`, default `0.00005` — half the sheets' 4th-decimal
+  resolution), not a percentage. PDF reading uses the new
   optional `cal` extra (`pip install 'microstructure-tpw[cal]'`, i.e. `pypdf`);
   it is imported lazily so the rest of `sensors` works without it. See
   docs/rsi-tpw/sensors.md.

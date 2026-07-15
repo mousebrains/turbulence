@@ -569,7 +569,7 @@ def run(
     compact: bool = False,
     stream: TextIO | None = None,
     cal_dir: Path | None = None,
-    cal_tol: float = 1.0,
+    cal_tol: float = 0.00005,
 ) -> int:
     """Scan *paths* for the requested sensor *kinds* and print a summary.
 
@@ -705,9 +705,10 @@ def build_arg_parser(prog: str = "sensor_inventory") -> argparse.ArgumentParser:
     ap.add_argument(
         "--cal-tol",
         type=float,
-        default=1.0,
-        metavar="PCT",
-        help="Sensitivity-mismatch threshold in percent for --cal-dir (default: 1.0).",
+        default=0.00005,
+        metavar="SENS",
+        help="Sensitivity-mismatch threshold for --cal-dir, in absolute sensitivity "
+        "units (default: 0.00005, half the sheets' 4th-decimal resolution).",
     )
     return ap
 

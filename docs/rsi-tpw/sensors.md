@@ -24,7 +24,7 @@ calibration that was in effect when the file was recorded.
 
 ```bash
 rsi-tpw sensors VMP/ --cal-dir /path/to/microstructure_sensors
-rsi-tpw sensors VMP/ --cal-dir /path/to/sheets --cal-tol 2   # flag beyond 2%
+rsi-tpw sensors VMP/ --cal-dir /path/to/sheets --cal-tol 0.0001   # widen the threshold
 ```
 
 Sheets are matched to probes by serial number. The serial and calibration date
@@ -50,10 +50,14 @@ how the command is used.
 ### Output
 
 Only **mismatches** are reported (configured vs in-effect sensitivity differing
-by more than `--cal-tol`, default 1%), grouped by probe with the file count,
-observation-date span, and percent difference. A coverage line notes any probes
-that had no matching sheet, and observations skipped for a missing clock or a
-blank configured `sens`.
+by more than `--cal-tol`), grouped by probe with the file count, observation-date
+span, the absolute difference `Δ`, and the percent difference (shown for
+context). `--cal-tol` is an **absolute** sensitivity threshold in the same units
+as `sens` — not a percentage — because sensitivity is an absolute quantity and
+the sheets quote it to four decimals. The default is `0.00005`, half that
+4th-decimal resolution, so any difference that would round to a different quoted
+value is flagged. A coverage line notes any probes that had no matching sheet,
+and observations skipped for a missing clock or a blank configured `sens`.
 
 ### The `cal` extra
 

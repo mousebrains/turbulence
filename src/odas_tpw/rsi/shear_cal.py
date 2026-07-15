@@ -314,7 +314,13 @@ class ObsCheck:
     status: str  # "in-effect" | "before-earliest"
 
     @property
+    def abs_diff(self) -> float:
+        """Signed ``configured - expected``, in sensitivity units (the flag metric)."""
+        return self.configured - self.expected
+
+    @property
     def pct_diff(self) -> float:
+        """Signed percent difference — reported for context, not the flag metric."""
         if self.expected == 0:  # defensive; parse rejects non-positive sensitivities
             return float("inf")
         return (self.configured - self.expected) / self.expected * 100.0
@@ -330,8 +336,9 @@ class CheckSummary:
     n_no_sens: int  # observations whose configured sens was blank/unparseable
     n_undated: int  # observations with no usable clock
 
-    def mismatches(self, tol_pct: float) -> list[ObsCheck]:
-        return [c for c in self.checks if abs(c.pct_diff) > tol_pct]
+    def mismatches(self, tol: float) -> list[ObsCheck]:
+        """Checks whose |configured - expected| exceeds *tol* (sensitivity units)."""
+        return [c for c in self.checks if abs(c.abs_diff) > tol]
 
 
 def _to_float(raw: str) -> float | None:
@@ -382,6 +389,13 @@ def check_uses(uses: list[SensorUse], timelines: dict[str, CalTimeline]) -> Chec
 # ---------------------------------------------------------------------------
 
 
+def _fmt_tol(x: float) -> str:
+    """Format an absolute tolerance plainly (``0.00005``, not ``5e-05``)."""
+    if x == 0:
+        return "0"
+    return f"{x:.10f}".rstrip("0").rstrip(".")
+
+
 def _fmt_group(key: tuple, obs: list[ObsCheck]) -> list[str]:
     sn, configured, expected, status, gov_date = key
     dates = sorted(o.obs_date for o in obs if o.obs_date is not None)
@@ -389,13 +403,14 @@ def _fmt_group(key: tuple, obs: list[ObsCheck]) -> list[str]:
     if dates:
         when = f"{dates[0]}" if dates[0] == dates[-1] else f"{dates[0]}…{dates[-1]}"
     channels = ", ".join(sorted({o.channel for o in obs}))
-    pct = float("inf") if expected == 0 else (configured - expected) / expected * 100.0
+    delta = configured - expected
+    pct = float("inf") if expected == 0 else delta / expected * 100.0
     tag = " [before earliest cal]" if status == "before-earliest" else ""
     n = len(obs)
     unit = "file" if n == 1 else "files"
     return [
         f"  {sn}  configured sens {configured:g}  vs  calibration {expected:g} "
-        f"(cal {gov_date}){tag}  →  {pct:+.1f}%",
+        f"(cal {gov_date}){tag}  →  Δ {delta:+.4f} ({pct:+.1f}%)",
         f"      {n} {unit}, obs {when}, as {channels}",
     ]
 
@@ -403,15 +418,20 @@ def _fmt_group(key: tuple, obs: list[ObsCheck]) -> list[str]:
 def format_check(
     summary: CheckSummary,
     cal_dir: Path,
-    tol_pct: float,
+    tol: float,
     load_warnings: list[str] | None = None,
 ) -> list[str]:
-    """Render the calibration-check section (mismatches only) as text lines."""
+    """Render the calibration-check section (mismatches only) as text lines.
+
+    *tol* is an absolute sensitivity difference (same units as ``sens``), not a
+    percentage — a configured ``sens`` is flagged when it differs from the
+    in-effect calibration by more than *tol*.
+    """
     lines: list[str] = []
     heading = "Shear calibration check"
     lines.append(heading)
     lines.append("=" * len(heading))
-    lines.append(f"cal-dir: {cal_dir}   tolerance: {tol_pct:g}%")
+    lines.append(f"cal-dir: {cal_dir}   tolerance: ±{_fmt_tol(tol)} (sensitivity units)")
 
     n_probes_checked = len({c.sn for c in summary.checks})
     lines.append(
@@ -431,7 +451,7 @@ def format_check(
         lines.append(f"warning: {w}")
     lines.append("")
 
-    mism = summary.mismatches(tol_pct)
+    mism = summary.mismatches(tol)
     if summary.n_checked == 0:
         lines.append(
             "No shear observations were checked "
@@ -442,7 +462,7 @@ def format_check(
     if not mism:
         lines.append(
             f"No mismatches: all {summary.n_checked} checked observation(s) agree "
-            f"with their calibration within {tol_pct:g}%."
+            f"with their calibration within ±{_fmt_tol(tol)}."
         )
         lines.append("")
         return lines
@@ -462,12 +482,12 @@ def format_check(
 def print_check(
     summary: CheckSummary,
     cal_dir: Path,
-    tol_pct: float,
+    tol: float,
     load_warnings: list[str] | None = None,
     stream: TextIO | None = None,
 ) -> None:
     import sys
 
     out = stream if stream is not None else sys.stdout
-    for line in format_check(summary, cal_dir, tol_pct, load_warnings):
+    for line in format_check(summary, cal_dir, tol, load_warnings):
         print(line, file=out)
