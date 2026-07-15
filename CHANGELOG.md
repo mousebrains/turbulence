@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`rsi-tpw sensors --cal-dir DIR`** — check each shear probe's configured
+  `sens` against Rockland shear-probe calibration sheets (PDFs) in `DIR` and
+  report mismatches. Parses `Probe SN`, sensitivity, calibration date, and the
+  optional previous calibration date/sensitivity; the sensitivity applied to an
+  observation is the calibration **in effect** at its date (hold-previous;
+  linear interpolation between calibrations is intentionally deferred).
+  `--cal-tol PCT` sets the flag threshold (default 1%). PDF reading uses the new
+  optional `cal` extra (`pip install 'microstructure-tpw[cal]'`, i.e. `pypdf`);
+  it is imported lazily so the rest of `sensors` works without it. See
+  docs/rsi-tpw/sensors.md.
 - Zenodo DOI badge + identifiers (concept DOI `10.5281/zenodo.21366142`,
   version DOI `10.5281/zenodo.21366143`) in the README and `CITATION.cff`,
   plus a PyPI version badge — back-filled after v0.3.0 was archived on Zenodo.

@@ -35,6 +35,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Reading Rockland shear-probe calibration PDFs (rsi-tpw sensors --cal-dir).
+cal = [
+    "pypdf>=4",
+]
 dev = [
     "pytest",
     "pytest-cov",
@@ -42,6 +46,7 @@ dev = [
     "ruff",
     "mypy",
     "pre-commit",
+    "pypdf>=4",  # so the calibration-sheet tests run in CI
 ]
 
 [project.urls]

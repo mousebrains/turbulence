@@ -583,6 +583,8 @@ def _cmd_sensors(args: argparse.Namespace) -> None:
         csv_out=Path(args.csv) if args.csv else None,
         verbose=args.verbose,
         compact=args.compact,
+        cal_dir=Path(args.cal_dir) if args.cal_dir else None,
+        cal_tol=args.cal_tol,
     )
     if code != 0:
         sys.exit(code)
@@ -1199,6 +1201,22 @@ def _add_sensors_parser(subparsers: argparse._SubParsersAction) -> None:
         "--compact",
         action="store_true",
         help="One line per probe: SN, file count, calibration, and date range",
+    )
+    p.add_argument(
+        "--cal-dir",
+        metavar="DIR",
+        default=None,
+        help="Directory of Rockland shear-probe calibration PDFs. Check each shear "
+        "probe's configured sensitivity against the calibration in effect at its "
+        "observation time and report mismatches. Needs the 'cal' extra "
+        "(pip install 'microstructure-tpw[cal]').",
+    )
+    p.add_argument(
+        "--cal-tol",
+        type=float,
+        default=1.0,
+        metavar="PCT",
+        help="Sensitivity-mismatch threshold in percent for --cal-dir (default: 1.0).",
     )
     p.set_defaults(func=_cmd_sensors)
 
