@@ -27,8 +27,11 @@ rsi-tpw sensors VMP/ --cal-dir /path/to/microstructure_sensors
 rsi-tpw sensors VMP/ --cal-dir /path/to/sheets --cal-tol 2   # flag beyond 2%
 ```
 
-Sheets are matched to probes by serial number, taken from both the PDF's
-`Probe SN:` line and the filename (`M<sn>_<YYYY>_<MM>_<DD>.pdf`).
+Sheets are matched to probes by serial number. The serial and calibration date
+are read from the PDF text (`Probe SN:` / `Calibration Date:`), falling back to
+the filename (`M<sn>_<YYYY>_<MM>_<DD>.pdf`) when the text can't be parsed, and
+the two are cross-checked when both are present. The **sensitivity** is only ever
+taken from the PDF text. Serial matching is case-insensitive.
 
 ### Sensitivity model — hold-previous
 

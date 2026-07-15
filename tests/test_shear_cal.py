@@ -80,6 +80,14 @@ def test_parse_does_not_confuse_recommended_or_previous_dates():
     assert s.sensitivity == pytest.approx(0.0777)
 
 
+def test_parse_sn_not_swallowed_from_glued_caption():
+    # A page-2 plot caption glues the serial to the fall-rate variable, e.g.
+    # "...ProbeSN:M1254U=0.703m/s...".  The serial must come out as M1254, not
+    # M1254U (the trailing 'U' belongs to the U=... fall rate, not the probe).
+    s = sc.parse_sheet_text("Calibrationdate:2026-04-28 ProbeSN:M1254U=0.703 ms!1")
+    assert s.sn == "M1254"
+
+
 def test_parse_unusable_when_fields_missing():
     s = sc.parse_sheet_text("Probe SN: M9999\n(no calibration numbers here)")
     assert s.sn == "M9999"
@@ -136,6 +144,12 @@ def test_sensitivity_before_earliest_clamps_and_flags():
     assert gov.date == date(2021, 4, 27)
 
 
+def test_sensitivity_at_empty_timeline_raises():
+    tl = sc.CalTimeline("M0000", [])
+    with pytest.raises(ValueError, match="no calibration points"):
+        tl.sensitivity_at(date(2023, 1, 1))
+
+
 # ---------------------------------------------------------------------------
 # Checking .p-file uses against the timelines
 # ---------------------------------------------------------------------------
@@ -174,6 +188,15 @@ def test_check_no_mismatch_within_tolerance():
     assert summary.mismatches(1.0) == []
 
 
+def test_check_lookup_is_case_insensitive():
+    # Sheet timelines are keyed upper-case; a .p config with a lower-case serial
+    # must still match (else it silently reads as "no calibration sheet").
+    tls = {"M1458": _timeline()}
+    summary = sc.check_uses([_use("m1458", "0.0679")], tls)
+    assert summary.n_checked == 1
+    assert summary.no_sheet == set()
+
+
 def test_check_counts_no_sheet_undated_and_blank():
     tls = {"M1458": _timeline()}
     uses = [
@@ -210,6 +233,17 @@ def test_format_check_clean_pass_message():
     assert "No mismatches" in text
 
 
+def test_format_check_nothing_checked_message():
+    # A probe with no matching sheet means nothing was checked; the report must
+    # say so rather than claiming "all 0 observation(s) agree" (reads as a pass).
+    tls = {"M1458": _timeline()}
+    summary = sc.check_uses([_use("M9999", "0.10")], tls)
+    assert summary.n_checked == 0
+    text = "\n".join(sc.format_check(summary, Path("/cal"), 1.0))
+    assert "No shear observations were checked" in text
+    assert "all 0" not in text
+
+
 def test_format_check_marks_before_earliest():
     tls = {"M1458": _timeline()}
     # obs in 2019 (before earliest 2021 cal) with a mismatching config
@@ -242,6 +276,29 @@ def test_load_cal_dir_end_to_end(tmp_path):
     assert tls["M1458"].sensitivity_at(date(2023, 6, 1))[0] == pytest.approx(0.0679)
 
 
+def test_load_cal_dir_fills_sn_and_date_from_filename(monkeypatch, tmp_path):
+    # PDF text with a garbled/absent "Probe SN:" line is still usable: the serial
+    # (and, if missing, the date) come from the M<sn>_<Y>_<M>_<D>.pdf filename.
+    text = "Sensitivity (sens or S): 0.0777 V\nCalibration Date: 2026/06/19\n"
+    monkeypatch.setattr(sc, "extract_pdf_text", lambda p: text)
+    d = tmp_path / "sheets"
+    d.mkdir()
+    (d / "M1458_2026_06_19.pdf").write_bytes(b"%PDF-1.4\n")
+
+    tls, warns = sc.load_cal_dir(d)
+    assert set(tls) == {"M1458"}
+    assert warns == []
+    assert tls["M1458"].sensitivity_at(date(2026, 6, 19))[0] == pytest.approx(0.0777)
+
+
+def test_load_cal_dir_warns_on_empty_dir(tmp_path):
+    d = tmp_path / "empty"
+    d.mkdir()
+    tls, warns = sc.load_cal_dir(d)  # no PDFs -> pypdf never touched
+    assert tls == {}
+    assert any("no *.pdf" in w for w in warns)
+
+
 def test_extract_pdf_text_missing_pypdf(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "pypdf", None)  # force ImportError on `from pypdf ...`
     pdf = tmp_path / "x.pdf"
@@ -256,14 +313,21 @@ def test_extract_pdf_text_missing_pypdf(monkeypatch, tmp_path):
 
 
 def test_run_cal_dir_not_a_directory(tmp_path, capsys):
-    p = Path(__file__).parent / "data" / "SN479_0006.p"
-    if not p.exists():
-        pytest.skip("SN479 fixture missing")
-    # A real .p file gets run() past the "no files" check, so a missing cal_dir
-    # reaches the is_dir() guard.
-    code = si.run([p], si.resolve_kinds(shear=True), cal_dir=tmp_path / "does_not_exist")
+    # The --cal-dir directory check is a pre-scan fail-fast, so it fires before
+    # any .p file is read (no fixture needed).
+    code = si.run(
+        [tmp_path / "x.p"], si.resolve_kinds(shear=True), cal_dir=tmp_path / "does_not_exist"
+    )
     assert code == 1
     assert "not a directory" in capsys.readouterr().err
+
+
+def test_run_warns_when_cal_dir_but_shear_not_scanned(tmp_path, capsys):
+    # --cal-dir with an fp07-only scan checks nothing; the user must be warned.
+    d = tmp_path / "sheets"
+    d.mkdir()
+    si.run([tmp_path / "x.p"], si.resolve_kinds(fp07=True), cal_dir=d)
+    assert "shear channels are not being scanned" in capsys.readouterr().err
 
 
 def test_run_reports_no_sheet_for_unmatched_probe(tmp_path, capsys):

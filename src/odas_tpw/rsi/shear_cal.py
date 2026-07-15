@@ -50,8 +50,11 @@ class CalDependencyError(RuntimeError):
 _NUM = r"([0-9]*\.?[0-9]+)"
 _DATE = r"(\d{4})[/_.-](\d{1,2})[/_.-](\d{1,2})"
 
-# "Probe SN: M1458"
-_SN_RE = re.compile(r"Probe\s*SN\s*:?\s*([A-Za-z]?\d[\w-]*)", re.I)
+# "Probe SN: M1458".  The capture is a letter-prefix + digits, plus an optional
+# hyphenated suffix (e.g. "M1254-2") — but NOT a bare trailing letter, so the
+# glued page-2 plot caption "...ProbeSN:M1254U=0.703m/s..." yields M1254, not
+# M1254U (the fall-rate variable U must not become part of the serial).
+_SN_RE = re.compile(r"Probe\s*SN\s*:?\s*([A-Za-z]{0,3}\d+(?:-\w+)?)", re.I)
 # "Sensitivity (sens or S): 0.0777 m2Vs-2"  — the "(sens or S)" pins it to the
 # current value and away from "Previous Sensitivity:" and the "S(0) = ..." line.
 _SENS_RE = re.compile(r"Sensitivity\s*\(sens\s*or\s*S\)\s*:?\s*" + _NUM, re.I)
@@ -214,6 +217,8 @@ class CalTimeline:
         governs, or ``"before-earliest"`` when *obs* precedes every known
         calibration and the earliest is clamped to.
         """
+        if not self.points:
+            raise ValueError(f"CalTimeline for {self.sn!r} has no calibration points")
         prior = [p for p in self.points if p.date <= obs]
         if prior:
             gov = max(prior, key=lambda p: p.date)
@@ -234,9 +239,35 @@ def load_cal_dir(cal_dir: Path) -> tuple[dict[str, CalTimeline], list[str]]:
     warnings: list[str] = []
     per_sn: dict[str, dict[date, CalPoint]] = {}
 
-    for pdf in sorted(cal_dir.glob("*.pdf")):
+    pdfs = sorted(cal_dir.glob("*.pdf"))
+    if not pdfs:
+        warnings.append(f"no *.pdf calibration sheets found in {cal_dir}")
+
+    for pdf in pdfs:
         text = extract_pdf_text(pdf)  # CalDependencyError propagates (fail fast, once)
         sheet = parse_sheet_text(text, source=pdf.name)
+
+        # The filename (M<sn>_<YYYY>_<MM>_<DD>.pdf) also encodes the serial and
+        # calibration date, so use it to fill anything the PDF text didn't yield
+        # (a garbled SN line still leaves a usable sheet), and to cross-check the
+        # rest.  Sensitivity has no filename source, so the sheet still needs it.
+        fn = parse_filename(pdf.name)
+        if fn is not None:
+            fn_sn, fn_date = fn
+            if sheet.sn is None:
+                sheet.sn = fn_sn
+            elif fn_sn != sheet.sn:
+                warnings.append(
+                    f"{pdf.name}: filename SN {fn_sn} != sheet SN {sheet.sn}; using sheet SN"
+                )
+            if fn_date is not None:
+                if sheet.cal_date is None:
+                    sheet.cal_date = fn_date
+                elif fn_date != sheet.cal_date:
+                    warnings.append(
+                        f"{pdf.name}: filename date {fn_date} != sheet date {sheet.cal_date}"
+                    )
+
         if not sheet.is_usable():
             missing = [
                 f for f, v in (("SN", sheet.sn), ("sensitivity", sheet.sensitivity),
@@ -244,18 +275,6 @@ def load_cal_dir(cal_dir: Path) -> tuple[dict[str, CalTimeline], list[str]]:
             ]
             warnings.append(f"{pdf.name}: could not parse {', '.join(missing)}; skipped")
             continue
-
-        fn = parse_filename(pdf.name)
-        if fn is not None:
-            fn_sn, fn_date = fn
-            if fn_sn != sheet.sn:
-                warnings.append(
-                    f"{pdf.name}: filename SN {fn_sn} != sheet SN {sheet.sn}; using sheet SN"
-                )
-            if fn_date is not None and fn_date != sheet.cal_date:
-                warnings.append(
-                    f"{pdf.name}: filename date {fn_date} != sheet date {sheet.cal_date}"
-                )
 
         assert sheet.sn is not None  # is_usable() guarantees it (for type-checkers)
         dated = per_sn.setdefault(sheet.sn, {})
@@ -333,7 +352,10 @@ def check_uses(uses: list[SensorUse], timelines: dict[str, CalTimeline]) -> Chec
     for use in uses:
         if use.kind != "shear":
             continue
-        tl = timelines.get(use.sensor_sn)
+        # Sheet timelines are keyed upper-case; the .p-config serial can be any
+        # case, so normalize the lookup or a case difference silently reads as
+        # "no calibration sheet".
+        tl = timelines.get(use.sensor_sn.upper())
         if tl is None:
             no_sheet.add(use.sensor_sn)
             continue
@@ -410,6 +432,13 @@ def format_check(
     lines.append("")
 
     mism = summary.mismatches(tol_pct)
+    if summary.n_checked == 0:
+        lines.append(
+            "No shear observations were checked "
+            "(no probe matched a calibration sheet with a usable clock and sens)."
+        )
+        lines.append("")
+        return lines
     if not mism:
         lines.append(
             f"No mismatches: all {summary.n_checked} checked observation(s) agree "

@@ -578,11 +578,20 @@ def run(
     """
     out = stream if stream is not None else sys.stdout
 
-    # Fail fast on an unwritable CSV target BEFORE the (potentially long) scan,
-    # rather than crashing with a raw traceback after all the work is done.
+    # Fail fast on a bad output target BEFORE the (potentially long) scan,
+    # rather than crashing / erroring only after all the work is done.
     if csv_out is not None and (csv_out.is_dir() or not csv_out.parent.is_dir()):
         print(f"Error: cannot write CSV to {csv_out}", file=sys.stderr)
         return 1
+    if cal_dir is not None and not cal_dir.is_dir():
+        print(f"Error: --cal-dir {cal_dir} is not a directory", file=sys.stderr)
+        return 1
+    if cal_dir is not None and "shear" not in kinds:
+        print(
+            "Warning: --cal-dir checks shear probes, but shear channels are not "
+            "being scanned (pass --shear or --all); nothing will be checked.",
+            file=sys.stderr,
+        )
 
     files = iter_pfiles(paths)
     if not files:
@@ -615,9 +624,6 @@ def run(
     if cal_dir is not None:
         from odas_tpw.rsi import shear_cal
 
-        if not cal_dir.is_dir():
-            print(f"Error: --cal-dir {cal_dir} is not a directory", file=sys.stderr)
-            return 1
         try:
             timelines, cal_warns = shear_cal.load_cal_dir(cal_dir)
         except shear_cal.CalDependencyError as exc:
