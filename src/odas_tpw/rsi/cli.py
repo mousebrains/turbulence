@@ -1468,5 +1468,8 @@ def main() -> None:
     _add_bench_parser(subparsers)
     _add_sensors_parser(subparsers)
 
+    from odas_tpw._completion import enable_argcomplete
+
+    enable_argcomplete(parser)
     args = parser.parse_args()
     args.func(args)

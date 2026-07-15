@@ -131,6 +131,7 @@ See [docs/perturb/pipeline.md](docs/perturb/pipeline.md) for the full stage list
 | [Output Directories](docs/rsi-tpw/output_directories.md) | Sequential hash-tracked output scheme |
 | [Vectorization](docs/rsi-tpw/vectorization.md) | Vectorized compute internals |
 | [Bench Test](docs/rsi-tpw/bench.md) | Pre-deployment bench check (`bench`): quick_bench figures + auto checklist |
+| [Tab-completion](docs/rsi-tpw/completion.md) | Optional shell `<TAB>` completion for the CLIs (argcomplete) |
 
 ### perturb (batch pipeline)
 

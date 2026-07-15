@@ -562,7 +562,10 @@ def main(argv: list[str] | None = None) -> None:
     config is merged enough to know ``output_root`` (where the
     ``logs/run_<timestamp>.log`` file lives).
     """
+    from odas_tpw._completion import enable_argcomplete
+
     parser = build_parser()
+    enable_argcomplete(parser)
     args = parser.parse_args(argv)
 
     if args.command is None:

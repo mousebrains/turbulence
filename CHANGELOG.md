@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Shell tab-completion** for the argparse CLIs (`rsi-tpw`, `perturb`,
+  `perturb-plot`, `perturb-diag`) via the optional
+  [argcomplete](https://github.com/kislyuk/argcomplete) dependency (new
+  `completion` extra: `pip install 'microstructure-tpw[completion]'`). Each CLI
+  calls a shared `enable_argcomplete()` hook before parsing; it is a no-op unless
+  argcomplete is installed and the shell's completion machinery is driving the
+  process, so normal runs are unaffected. Enable it per shell with
+  `eval "$(register-python-argcomplete rsi-tpw)"`. See docs/rsi-tpw/completion.md.
 - **`rsi-tpw config FILE...`** — print a `.p` file's raw embedded configuration
   (INI) record — the `setup.cfg`-style text with the address matrix and every
   channel's calibration coefficients — to stdout. Useful for inspecting a

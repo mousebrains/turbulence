@@ -97,7 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    from odas_tpw._completion import enable_argcomplete
+
+    parser = build_parser()
+    enable_argcomplete(parser)
+    args = parser.parse_args(argv)
     _, _, run_fn = _SUBCOMMANDS[args.command]
     run_fn(args)
     return 0
