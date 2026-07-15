@@ -37,6 +37,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   signatures and resolve their existing output directories unchanged.
 
 ### Fixed
+- Reference library (`papers/`) DOI corrections: fixed three wrong DOIs —
+  Rehmann & Hwang (2005) was a dead link (`JPO2676.1` → `JPO-2676.1`) and
+  the two Smyth & Moum (2000) companion papers were cross-linked to each
+  other / an unrelated paper — plus nine old-AMS DOI hrefs whose literal
+  parentheses truncated the clickable link (now percent-encoded), and two
+  citation nits (Nash et al. 1999 page range, Shapiro et al. glider-paper
+  year). All 53 DOIs now resolve to the correct paper.
 - CT alignment (`ct_align`) and the despike pass-count flag: conductivity
   is now shifted with edge-hold instead of `np.roll` (which wrapped one
   end of the record into the other), and the too-many-passes QC flag
