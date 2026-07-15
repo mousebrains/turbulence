@@ -10,7 +10,12 @@ from odas_tpw.rsi.chi_io import get_chi
 from odas_tpw.rsi.combine import combine_profiles
 from odas_tpw.rsi.convert import convert_all, p_to_L1, p_to_netcdf
 from odas_tpw.rsi.dissipation import get_diss
-from odas_tpw.rsi.p_file import PFile, extract_pfile_segment, parse_config
+from odas_tpw.rsi.p_file import (
+    PFile,
+    extract_pfile_segment,
+    parse_config,
+    read_config_string,
+)
 from odas_tpw.rsi.pipeline import run_pipeline
 from odas_tpw.rsi.profile import extract_profiles, get_profiles
 
@@ -27,5 +32,6 @@ __all__ = [
     "p_to_L1",
     "p_to_netcdf",
     "parse_config",
+    "read_config_string",
     "run_pipeline",
 ]

@@ -7,6 +7,7 @@ Main command:
 
 Subcommands:
     info     — Print summary of .p file(s)
+    config   — Print a .p file's raw embedded configuration (INI) record
     cutp     — Copy a short record range from a .p file for debugging
     nc       — Convert .p files to NetCDF
     patch-config   — Edit config fields in .p file(s), writing new files
@@ -236,6 +237,29 @@ def _cmd_info(args: argparse.Namespace) -> None:
             print("\n" + "=" * 60 + "\n")
         pf = PFile(pf_path)
         pf.summary()
+
+
+def _cmd_config(args: argparse.Namespace) -> None:
+    """Print the raw embedded configuration (INI) record of .p file(s)."""
+    from odas_tpw.rsi.p_file import read_config_string
+
+    p_files = _resolve_p_files(args.files)
+    multi = len(p_files) > 1
+    failures = 0
+    for i, pf_path in enumerate(p_files):
+        try:
+            cfg = read_config_string(pf_path)
+        except (OSError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            failures += 1
+            continue
+        if multi:
+            if i > 0:
+                print()
+            print(f"# ===== {pf_path} =====")
+        print(cfg, end="" if cfg.endswith("\n") else "\n")
+    if failures:
+        sys.exit(1)
 
 
 def _cmd_cutp(args: argparse.Namespace) -> None:
@@ -661,6 +685,23 @@ def _add_info_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument("files", nargs="+", metavar="FILE", help=".p file(s) or glob pattern(s)")
     p.set_defaults(func=_cmd_info)
+
+
+def _add_config_parser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "config",
+        help="Print a .p file's embedded config record",
+        description=(
+            "Print the raw embedded configuration (INI) record from Rockland .p "
+            "file(s) to stdout — the setup.cfg-style text with the address matrix "
+            "and per-channel calibration coefficients. Reads only the header and "
+            "config record, so it also works on startup/truncated files that carry "
+            "a config but no data records. With multiple files, each is preceded by "
+            "a '# ===== <path> =====' banner."
+        ),
+    )
+    p.add_argument("files", nargs="+", metavar="FILE", help=".p file(s) or glob pattern(s)")
+    p.set_defaults(func=_cmd_config)
 
 
 def _add_cutp_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -1411,6 +1452,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     _add_info_parser(subparsers)
+    _add_config_parser(subparsers)
     _add_cutp_parser(subparsers)
     _add_nc_parser(subparsers)
     _add_init_parser(subparsers)

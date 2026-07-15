@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`rsi-tpw config FILE...`** — print a `.p` file's raw embedded configuration
+  (INI) record — the `setup.cfg`-style text with the address matrix and every
+  channel's calibration coefficients — to stdout. Useful for inspecting a
+  coefficient in place (e.g. a suspect pressure `coef2`). Reads only the header
+  and config record, so unlike `info` it also works on startup/truncated files
+  that carry a config but no data records; backed by the new
+  `PFile`-independent `read_config_string()`. See docs/rsi-tpw/cli.md.
 - **`rsi-tpw sensors --cal-dir DIR`** — check each shear probe's configured
   `sens` against Rockland shear-probe calibration sheets (PDFs) in `DIR` and
   report mismatches. Parses `Probe SN`, sensitivity, calibration date, and the

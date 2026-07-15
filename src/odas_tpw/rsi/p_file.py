@@ -259,6 +259,35 @@ def parse_config(config_str: str) -> dict[str, Any]:
     return result
 
 
+def read_config_string(filepath: str | Path) -> str:
+    """Return the raw embedded configuration (INI) string from a .p file.
+
+    This reads only the 128-byte header and the record-0 config block; it does
+    not demultiplex any data records. Unlike constructing a :class:`PFile`, it
+    therefore succeeds on startup or truncated files that carry a config record
+    but no data (e.g. an instrument power-up file), which are exactly the files
+    whose configuration you most often want to inspect. The same header-geometry
+    guards as :meth:`PFile._read` apply.
+    """
+    filepath = Path(filepath)
+    with open(filepath, "rb") as f:
+        raw_hdr = f.read(HEADER_BYTES)
+        if len(raw_hdr) < HEADER_BYTES:
+            raise ValueError(f"{filepath.name}: file too small for header")
+        endian = _detect_endian(raw_hdr, filepath)
+        header = _parse_header(raw_hdr, endian)
+
+        header_size = header["header_size"]
+        config_size = header["config_size"]
+        if header_size < HEADER_BYTES:
+            raise ValueError(f"{filepath.name}: invalid header_size={header_size}")
+        if config_size < 0:
+            raise ValueError(f"{filepath.name}: invalid config_size={config_size}")
+
+        f.seek(header_size)
+        return f.read(config_size).decode("ascii", errors="replace")
+
+
 # ---------------------------------------------------------------------------
 # Main reader
 # ---------------------------------------------------------------------------

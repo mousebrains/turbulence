@@ -11,6 +11,7 @@ rsi-tpw <subcommand> [options]
 | Subcommand | Description |
 |------------|-------------|
 | `rsi-tpw info`     | Print summary of `.p` file(s) |
+| `rsi-tpw config`   | Print a `.p` file's raw embedded configuration (INI) record |
 | `rsi-tpw cutp`     | Copy a short `.p` record range for debugging |
 | `rsi-tpw nc`       | Convert `.p` files to NetCDF |
 | `rsi-tpw patch-template` | Scaffold a config edit-spec YAML from a `.p` file |
@@ -39,6 +40,23 @@ Print summary information about `.p` file(s).
 ```bash
 rsi-tpw info VMP/*.p
 ```
+
+## `rsi-tpw config`
+
+Print the raw embedded configuration record — the `setup.cfg`-style INI text
+stored in record 0, containing the address `matrix` and every channel's
+calibration coefficients — to stdout. This is the authoritative way to inspect a
+coefficient in place (e.g. a suspect pressure `coef2`).
+
+```bash
+rsi-tpw config VMP/file.p                       # dump the whole config
+rsi-tpw config VMP/file.p | grep -A6 'name .*= P$'   # just the pressure channel
+```
+
+It reads only the header and config record, so — unlike `info` — it also works
+on startup or truncated files that carry a config but no data records. With more
+than one file, each config is preceded by a `# ===== <path> =====` banner. To
+*change* a coefficient, see [`patch-config`](#rsi-tpw-patch-config).
 
 ## `rsi-tpw cutp`
 
