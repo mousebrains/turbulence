@@ -1,6 +1,8 @@
 # microstructure-tpw
 
 [![CI](https://github.com/mousebrains/turbulence/actions/workflows/ci.yml/badge.svg)](https://github.com/mousebrains/turbulence/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/microstructure-tpw.svg)](https://pypi.org/project/microstructure-tpw/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21366142.svg)](https://doi.org/10.5281/zenodo.21366142)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![codecov](https://codecov.io/gh/mousebrains/turbulence/graph/badge.svg?token=RwbKxeE7rA)](https://codecov.io/gh/mousebrains/turbulence)
@@ -185,9 +187,10 @@ This project was developed in collaboration with [Claude Code](https://claude.ai
 If you use this software in published work, please cite it. Citation metadata
 lives in [`CITATION.cff`](CITATION.cff) — GitHub renders a **"Cite this
 repository"** button from it (BibTeX/APA export). Each tagged release is
-archived on Zenodo with a DOI; cite the *concept* (all-versions) DOI so the
-reference always resolves to the latest release. The DOI badge and identifier
-are added here once the first release is minted.
+archived on Zenodo with a DOI. Cite the **concept (all-versions) DOI**
+[`10.5281/zenodo.21366142`](https://doi.org/10.5281/zenodo.21366142) so the
+reference always resolves to the latest release; the v0.3.0 version DOI is
+[`10.5281/zenodo.21366143`](https://doi.org/10.5281/zenodo.21366143).
 
 ## License
 
