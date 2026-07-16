@@ -18,8 +18,15 @@ One row per (probe, calibration). Columns:
 | `recal_due` | Rockland's "Recommended re-calibration" date, when the sheet carries one |
 | `notes` | provenance/caveats; `previous-calibration entry on this sheet` marks the sheet's own history row |
 
-Update workflow: add new Rockland PDFs here, re-run the sheet parser
-(`odas_tpw.rsi.shear_cal.parse_sheet_text`) to append their rows, or add
-`manual` rows by hand with a provenance note. Keep rows sorted by
-(serial, cal_date). The `.p`-config cross-check tool is
+Update workflow: drop new Rockland PDFs into this directory and run
+
+```bash
+rsi-tpw cal-csv microstructure_sensors
+```
+
+Idempotent — existing rows (including hand-added `source=manual` history) are
+preserved; a sheet's own entry upgrades a previous-calibration attestation of
+the same point; conflicting sensitivities for the same probe+date are kept
+side by side and reported (exit 1). Add `manual` rows by hand with a
+provenance note in `notes`. The `.p`-config cross-check tool is
 `rsi-tpw sensors --cal-dir microstructure_sensors --shear`.
