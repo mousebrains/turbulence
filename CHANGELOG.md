@@ -175,7 +175,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   template comment ("null = blend T1/T2") described behavior that never
   existed. **Breaking**: `validate_config` is strict, so a config that still
   sets them now fails loudly with an unknown-key error — delete the two lines
-  (they never did anything).
+  (they never did anything). The shipped configs (`ARCTERX/perturb.yaml`,
+  `examples/arcterx_2025_interior/perturb.yaml`) are migrated in this change,
+  and a test now loads every tracked shipped perturb config against the
+  current schema so a future key change cannot strand one again.
 
 ### Fixed
 - **Measured-salinity CT pairing QC** (rsi `run_pipeline` adapter): the
