@@ -78,6 +78,7 @@ perturb run -o results/ --p-file-root /data/VMP/
 | `-j`, `--jobs N` | Parallel workers (0=auto, 1=serial) |
 | `--p-file-root DIR` | Root directory for .p file discovery |
 | `--hotel-file FILE` | Hotel data file (external telemetry: speed, pitch, roll, heading, CTD) |
+| `--force` | Ignore all caches: re-trim and reprocess every file, and re-bin/re-combine, even when outputs are up to date |
 | `FILE ...` | Explicit .p file paths or globs |
 
 ## `perturb trim`

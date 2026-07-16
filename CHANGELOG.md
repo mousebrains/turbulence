@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Real-glider MicroRider end-to-end fixture + test** (issue #131 m11) —
+  `tests/data/MR_SL685_climb.p`, a 150 s / 1.4 MB climb segment (481 → 429 dbar
+  at ~0.35 dbar/s, EM speed ~0.5 m/s) cut at record boundaries from
+  `MR/AIOP2_SL685_0450.p` (MR1000RDL-EM SN 435 on Slocum osu685, ARCTERX IOP2),
+  and `tests/test_mr_e2e.py`: the first test to run the batch machinery
+  (PFile → vehicle resolution → glide profile detection → ε → χ Method 2)
+  against real MicroRider-on-glider data instead of mocks. Direction, `W_min`,
+  and speed (median `|U_EM|`) are passed explicitly so the test is independent
+  of vehicle-resolved defaults.
+- Docs drift fixes (issue #131 m13): `docs/perturb/cli.md` documents
+  `perturb run --force`; `docs/rsi-tpw/cli.md` adds the missing `sensors` row
+  to the subcommand table and a `rsi-tpw ml` reference section.
 - **Salinity from a hotel file** — `epsilon.salinity`, `chi.salinity`, and the
   new `stratification.salinity` now accept `"hotel"` (or `"hotel:<var>"`) to draw
   practical salinity from a hotel-injected channel (default variable `salinity`),
