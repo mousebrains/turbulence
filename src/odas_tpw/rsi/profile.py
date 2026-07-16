@@ -387,6 +387,15 @@ def _load_source(source: "PFile | str | Path") -> dict[str, Any]:
 
 def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
     """Extract data dict from a PFile."""
+    # Lazy imports: chi_io pulls xarray; helpers is only needed for the
+    # channel-name patterns. Keeps profile.py light at module-load time.
+    from odas_tpw.rsi.chi_io import (
+        _DEFAULT_DIFF_GAIN,
+        _extract_therm_cal,
+        _therm_gradient_config,
+    )
+    from odas_tpw.rsi.helpers import DT_PATTERN, T_PATTERN
+
     channels = []
     for ch_name, ch_data in pf.channels.items():
         dim = "time_fast" if pf.is_fast(ch_name) else "time_slow"
@@ -395,7 +404,7 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         # (e.g. injected derived channels like N2/dTdz); otherwise fall back to
         # the bare channel name. The canonical schema still wins where it has an
         # opinion for known variables.
-        attrs = {
+        attrs: dict[str, Any] = {
             "units": info["units"],
             "sensor_type": info["type"],
             "long_name": info.get("long_name", ch_name),
@@ -406,6 +415,35 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         # so it survives apply_schema; binning carries it to the combo.
         if info.get("calibration"):
             attrs["calibration"] = info["calibration"]
+        # FP07 electronics coefficients for the chi path (#131 m8): embed
+        # diff_gain plus exactly _extract_therm_cal's output for the base
+        # thermistor (including 'b' — noise_thermchannel's eta consumes it)
+        # as float attrs on each pre-emphasized gradient channel, so chi
+        # computed from a per-profile NetCDF uses the instrument's real
+        # coefficients instead of generic defaults (SN479: diff_gain=0.912,
+        # b=0.99861 vs the 0.94/1.0 fallbacks). NOTE: these attrs carry the
+        # FACTORY calibration from the embedded config string; perturb's fp07
+        # in-situ calibration may have rewritten the channel DATA in
+        # pf.channels before this write. That is intended — the attrs
+        # describe the electronics (noise floor, bilinear differentiator
+        # gain), and factory coefficients still beat generic defaults.
+        if dim == "time_fast" and DT_PATTERN.match(ch_name):
+            diff_gain, therm_cal = _therm_gradient_config(pf.config, ch_name)
+            attrs["diff_gain"] = diff_gain
+            attrs.update(therm_cal)
+        elif dim == "time_fast" and T_PATTERN.match(ch_name):
+            # Plain fast T channel (no pre-emphasis): mirror the chi_io .p
+            # branch's first-difference fallback exactly — diff_gain fixed at
+            # the generic default, calibration from the channel's OWN config
+            # section — so an instrument with no T*_dT* channels round-trips
+            # through the per-profile NetCDF without a spurious "predates
+            # their introduction" warning (W5-ii review F1).
+            ch_cfg: dict = next(
+                (ch for ch in pf.config["channels"] if ch.get("name") == ch_name),
+                {},
+            )
+            attrs["diff_gain"] = _DEFAULT_DIFF_GAIN
+            attrs.update(_extract_therm_cal(ch_cfg))
         channels.append((ch_name, ch_data, dim, attrs))
 
     global_attrs = {
