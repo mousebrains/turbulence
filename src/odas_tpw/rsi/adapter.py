@@ -161,7 +161,7 @@ def pfile_to_l1data(
         # over-amplification for a tiny speed, baked into L1.shear.
         pspd_rel = np.full(len(t_fast), max(abs(speed), 0.05))
     elif speed_method in ("em", "flight"):
-        # EM flowmeter (U_EM) or inviscid flight model U=|W|/sin(|pitch|-aoa)
+        # EM flowmeter (U_EM) or inviscid flight model U=|W|/sin(|pitch|+aoa)
         # from the inclinometers, for MicroRiders/gliders where |dP/dt| is the
         # vertical speed, not the through-water flow. Shared with perturb.
         from odas_tpw.rsi.speed import compute_speed_for_pfile

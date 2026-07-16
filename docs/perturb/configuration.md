@@ -249,11 +249,11 @@ Controls how the through-water (profiling) speed is computed. Speed is computed 
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `method` | string | `"pressure"` | Speed source: `"pressure"` (ODAS smoothed \|dP/dt\|; correct for VMP), `"em"` (the `U_EM` channel from a MicroRider EM flowmeter; errors out if missing), `"flight"` (glider flight model: \|W\| / (sin(\|pitch\|−aoa)·cos\|roll\|), pitch axis auto-picked from `Incl_X`/`Incl_Y` by amplitude), `"constant"` (the scalar in `value`), or `"hotel"` (the hotel-merged channel named by `hotel_var`; errors out when the channel is missing, matches neither time grid, or is less than 50% finite — the file is aborted with a recorded error, never silently floored to `speed_cutout` or substituted with \|dP/dt\|) |
+| `method` | string | `"pressure"` | Speed source: `"pressure"` (ODAS smoothed \|dP/dt\|; correct for VMP), `"em"` (the `U_EM` channel from a MicroRider EM flowmeter; errors out if missing), `"flight"` (glider flight model: \|W\| / sin(\|pitch\|+aoa), the ODAS convention — the glide path is steeper than pitch by the angle of attack; roll does not enter; pitch axis auto-picked from `Incl_X`/`Incl_Y` by amplitude), `"constant"` (the scalar in `value`), or `"hotel"` (the hotel-merged channel named by `hotel_var`; errors out when the channel is missing, matches neither time grid, or is less than 50% finite — the file is aborted with a recorded error, never silently floored to `speed_cutout` or substituted with \|dP/dt\|) |
 | `value` | float | `null` | Fixed speed [m/s], only for `method: constant` |
 | `hotel_var` | string | `"speed"` | Merged channel name, only for `method: hotel`. Map a hotel source variable onto it via `hotel.channels` (e.g. `m_speed: "speed"`); the default `hotel.fast_channels` puts `"speed"` on the fast grid, and slow-grid channels are interpolated/smoothed to fast rate like the other methods |
 | `aoa_deg` | float | `3.0` | Angle of attack [deg], only for `method: flight` |
-| `min_pitch_deg` | float | `5.0` | Flight method: drop samples with \|pitch\|−aoa below this [deg] |
+| `min_pitch_deg` | float | `5.0` | Flight method: drop samples with \|pitch\| below this [deg] (steady-glide flight is invalid near dive/climb inflections) |
 | `speed_cutout` | float | `0.05` | Floor [m/s] applied to the fast-rate speed |
 | `tau` | float | `null` | Smoothing time constant [s]; null = vehicle default (vmp/xmp 1.5, slocum_glider 3.0, ...) |
 | `amplitude_quantile` | list | `[1.0, 99.0]` | Flight method: percentile spread used to auto-pick the pitch axis from `Incl_X`/`Incl_Y`; 1..99 strips outliers (surface tumbles, sensor saturation spikes) |

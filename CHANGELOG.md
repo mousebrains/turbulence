@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Flight-model glide angle now ADDS the angle of attack** (issue #131 M7).
+  `speed.method: "flight"` computed `U = |W| / sin(|pitch| − aoa)`; steady-glide
+  force balance (Merckelbach et al. 2010) and the ODAS reference
+  (`odas_p2mat.m`: `glide_angle = abs(Incl_Y) + aoa`) both make the glide path
+  STEEPER than the pitch attitude, `U = |W| / sin(|pitch| + aoa)`. The
+  subtraction inflated U by sin(|pitch|+aoa)/sin(|pitch|−aoa) — 1.24× at a
+  typical 26° Slocum pitch — and, through epsilon's ~U⁻⁴ speed leverage, biased
+  flight-method epsilon ~2.4× LOW (up to ~5× at 15° pitch; ~1.55× on steep 44°
+  SL685 climbs). On `MR/AIOP2_SL685_0450.p` the corrected flight speed
+  (0.397 m/s) now sits within 10% of the independent `U_EM` flowmeter
+  (0.428 m/s). Only `speed.method: "flight"` output is affected; `pressure`,
+  `em`, and `constant` are unchanged. A new cross-check warns whenever the
+  flight speed and a present `U_EM` channel disagree by more than 20% (median),
+  since a bad `aoa_deg`, a mis-picked pitch axis, or a stale EM calibration all
+  leak into epsilon the same way. `min_pitch_deg` now gates on the pitch
+  attitude itself (`|pitch| < min_pitch_deg` → NaN), not the aoa-shifted path
+  angle — the steady-glide model is invalid near dive/climb inflections
+  regardless of aoa; the effective default gate moves from |pitch| > 8° to
+  |pitch| ≥ 5°. The path angle is clamped at 90° (railed inclinometers).
+  Stale `sin(|pitch|−aoa)·cos|roll|` formulas in the perturb template, the
+  ARCTERX example config, `--speed-method` help, and
+  docs/perturb/configuration.md were corrected to match the code.
+
 ### Added
 - **Old-format (2013-2017 CASPER-era) MicroRider config dialects** (#131 m1,
   m5, m6, m7) — pre-2017 configs now inventory and convert faithfully:

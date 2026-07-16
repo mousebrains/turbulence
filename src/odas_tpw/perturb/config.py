@@ -179,7 +179,7 @@ DEFAULTS: dict[str, dict] = {
         "value": None,  # m/s, only for method="constant"
         "hotel_var": "speed",  # merged channel name, only for method="hotel"
         "aoa_deg": 3.0,  # angle of attack, only for method="flight"
-        "min_pitch_deg": 5.0,  # flight: skip |pitch+aoa| below this (deg)
+        "min_pitch_deg": 5.0,  # flight: skip |pitch| below this (deg)
         "speed_cutout": 0.05,  # m/s floor applied to fast-rate speed
         "tau": None,  # smoothing time constant; null = vehicle default
         "amplitude_quantile": [1.0, 99.0],  # for flight pitch-axis auto-pick
@@ -951,8 +951,9 @@ speed:
   # pressure : ODAS smoothed |dP/dt|. Correct for VMP. (default)
   # em       : use the U_EM channel from the .p file (MicroRider EM
   #            flowmeter). Errors out if U_EM is missing.
-  # flight   : |W| / (sin(|pitch|-aoa)*cos|roll|), pitch axis auto-
-  #            picked from Incl_X/Incl_Y by amplitude.
+  # flight   : |W| / sin(|pitch|+aoa) (glide path steeper than pitch;
+  #            ODAS convention), pitch axis auto-picked from
+  #            Incl_X/Incl_Y by amplitude.
   # constant : use the scalar in `value`.
   # hotel    : use the hotel-merged channel named by `hotel_var` (map a
   #            source variable onto it via hotel.channels, e.g.
@@ -962,7 +963,7 @@ speed:
   value: null             # m/s, only when method="constant"
   hotel_var: "speed"      # merged channel name, only when method="hotel"
   aoa_deg: 3.0            # angle of attack [deg], for method="flight"
-  min_pitch_deg: 5.0      # flight: drop samples with |pitch|-aoa < this
+  min_pitch_deg: 5.0      # flight: drop samples with |pitch| < this
   speed_cutout: 0.05      # m/s floor applied to fast-rate speed
   tau: null               # smoothing tau [s]; null = vehicle default
                           # (vmp/xmp 1.5, slocum_glider 3.0, ...)

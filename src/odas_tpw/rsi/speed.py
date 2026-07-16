@@ -22,10 +22,12 @@ Methods
     Construct an inviscid flight-model along-axis speed from the MR's
     own pressure and inclinometers:
 
-        U_along = |W| / sin(|pitch| - aoa)
+        U_along = |W| / sin(|pitch| + aoa)
 
     where ``aoa`` is the angle of attack (``aoa_deg``, default 3 deg
-    matching ODAS Slocum trim). The pitch axis is auto-picked from the
+    matching ODAS Slocum trim). The glide path is steeper than the
+    pitch attitude by the angle of attack (ODAS odas_p2mat.m uses
+    ``abs(Incl_Y) + aoa``). The pitch axis is auto-picked from the
     inclinometer axis with the larger swing -- Slocum mountings some-
     times have ``Incl_X`` carrying pitch, sometimes ``Incl_Y``.
 
@@ -176,6 +178,21 @@ def compute_speed_for_pfile(
     if method == "flight":
         aoa_deg = float(cfg.get("aoa_deg", 3.0))
         min_pitch_deg = float(cfg.get("min_pitch_deg", 5.0))
+        # Reject implausible flight parameters up front: a negative aoa can
+        # drive the effective glide angle negative, and the resulting negative
+        # speed would be silently replaced by the 0.05 m/s cutout — a
+        # plausible-looking wrong answer for an accepted input. The physical
+        # attack angle is a small positive number (ODAS default 3 deg).
+        if not np.isfinite(aoa_deg) or aoa_deg < 0:
+            raise ValueError(
+                f"speed.aoa_deg={aoa_deg!r} is not valid: the angle of attack "
+                "must be a finite value >= 0 deg (ODAS Slocum default: 3)"
+            )
+        if not np.isfinite(min_pitch_deg) or min_pitch_deg < 0:
+            raise ValueError(
+                f"speed.min_pitch_deg={min_pitch_deg!r} is not valid: the "
+                "minimum pitch gate must be a finite value >= 0 deg"
+            )
         aq = cfg.get("amplitude_quantile") or (1.0, 99.0)
         speed_slow = _flight_model_slow(
             W_slow, pf, aoa_deg=aoa_deg, min_pitch_deg=min_pitch_deg,
@@ -356,7 +373,18 @@ def _flight_model_slow(
 
     Steady-flight kinematics (Merckelbach et al. 2010,
     doi:10.1175/2009JTECHO710.1): W = U * sin(gamma) with glide-path
-    angle gamma = |pitch| - angle of attack, so U = |W| / sin(gamma).
+    angle |gamma| = |pitch| + angle of attack, so U = |W| / sin(|gamma|).
+    The glide path is STEEPER than the pitch attitude on both dive and
+    climb: the flow must meet the wing at a nonzero attack angle for its
+    lift to balance the net (negative or positive) buoyancy, which slips
+    the velocity vector away from the nose toward the buoyancy force —
+    the attack angle's MAGNITUDE adds to |pitch| in both directions
+    (in Merckelbach's signed convention alpha flips sign on climb).
+    ODAS agrees:
+    odas_p2mat.m computes glide_angle = abs(Incl_Y) + aoa. An earlier
+    version here SUBTRACTED aoa, inflating U by sin(|pitch|+aoa)/
+    sin(|pitch|-aoa) (1.24x at 26 deg pitch) and, through epsilon's
+    ~U^-4 leverage, biasing epsilon ~2.4x low (issue #131 M7).
     Roll does not enter the along-path relation (it rotates the body
     about the flight axis without changing the vertical velocity
     component); an earlier version multiplied by cos(roll), which
@@ -383,8 +411,35 @@ def _flight_model_slow(
 
     pitch = np.deg2rad(pitch_deg)
     aoa = np.deg2rad(aoa_deg)
-    eff = np.maximum(np.abs(pitch) - aoa, 0.0)
+    # Clamp at 90 deg: inclinometers rail at +/-90 and sin() is non-monotonic
+    # past vertical; a vertical glide path means U = |W| exactly.
+    eff = np.minimum(np.abs(pitch) + aoa, np.pi / 2)
     sin_path = np.sin(eff)
-    sin_floor = np.sin(np.deg2rad(min_pitch_deg))
-    sin_path = np.where(sin_path > sin_floor, sin_path, np.nan)
-    return np.asarray(np.abs(W_slow) / sin_path, dtype=np.float64)
+    # Gate on ATTITUDE, not the aoa-shifted path angle: the steady-glide
+    # model is invalid near dive/climb inflections, and that invalidity is
+    # a property of |pitch| itself. (min_pitch_deg=5 -> samples with
+    # |pitch| < 5 deg are NaN'd and bridged by _slow_to_fast's interp.)
+    sin_path = np.where(np.abs(pitch_deg) >= min_pitch_deg, sin_path, np.nan)
+    speed_slow = np.asarray(np.abs(W_slow) / sin_path, dtype=np.float64)
+
+    # Cross-check against the EM flowmeter when the platform carries one:
+    # flight and U_EM measure the same along-axis speed, so a large
+    # systematic disagreement means a bad aoa, a mis-picked pitch axis, or
+    # a mis-calibrated U_EM — and epsilon (~U^-4) inherits it either way.
+    # A fast-rate U_EM (hotel channel with fast: true) fails the length
+    # match and intentionally skips the check.
+    u_em = pf.channels.get("U_EM")
+    if u_em is not None and len(u_em) == len(speed_slow):
+        u_em = np.abs(np.asarray(u_em, dtype=np.float64))
+        both = np.isfinite(speed_slow) & np.isfinite(u_em) & (u_em > 0.01)
+        if both.sum() >= 10:
+            ratio = float(np.median(speed_slow[both] / u_em[both]))
+            if not 0.8 <= ratio <= 1.25:
+                warnings.warn(
+                    f"flight-model speed disagrees with U_EM by a median "
+                    f"factor {ratio:.2f} (outside [0.8, 1.25]); check "
+                    f"aoa_deg, the pitch-axis pick, and the U_EM "
+                    f"calibration — epsilon scales as ~U^-4",
+                    stacklevel=3,
+                )
+    return speed_slow

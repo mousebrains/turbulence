@@ -290,9 +290,10 @@ class TestSpeedMethods:
         assert ds.attrs["speed_source"] == "flight (aoa=3)"
         assert ds.attrs["speed_method"] == "flight"
         # pitch ~ -30 deg (on Incl_Y), aoa 3 deg, W = 0.5 dbar/s
-        # -> U ~ 0.5 / sin(27 deg); the +-0.5 deg pitch wobble allows ~2%.
+        # -> U ~ 0.5 / sin(33 deg): |pitch|+aoa = 30+3 (PR #132, ODAS
+        # convention); the +-0.5 deg pitch wobble allows ~2%.
         np.testing.assert_allclose(
-            float(ds["speed"].median()), 0.5 / np.sin(np.deg2rad(27.0)), rtol=0.02
+            float(ds["speed"].median()), 0.5 / np.sin(np.deg2rad(33.0)), rtol=0.02
         )
 
     def test_fixed_speed_provenance(self, tmp_path):
