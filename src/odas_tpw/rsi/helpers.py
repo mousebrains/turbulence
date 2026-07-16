@@ -116,6 +116,8 @@ def load_channels(
 def _channels_from_pfile(
     pf: PFile, sh_pat: str, ac_pat: str, p_name: str, t_name: str
 ) -> ChannelsDict:
+    from odas_tpw.rsi.p_file import instrument_sn
+
     sh_re = re.compile(sh_pat) if sh_pat != SH_PATTERN.pattern else SH_PATTERN
     ac_re = re.compile(ac_pat) if ac_pat != AC_PATTERN.pattern else AC_PATTERN
     shear = sorted(
@@ -140,7 +142,7 @@ def _channels_from_pfile(
         "metadata": {
             "source": str(pf.filepath),
             "instrument": pf.config["instrument_info"].get("model", ""),
-            "sn": pf.config["instrument_info"].get("sn", ""),
+            "sn": instrument_sn(pf.config["instrument_info"]),
             "start_time": pf.start_time.isoformat(),
         },
     }

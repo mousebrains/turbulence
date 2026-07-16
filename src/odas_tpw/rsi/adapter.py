@@ -130,8 +130,16 @@ def pfile_to_l1data(
     else:
         shear = np.zeros((0, len(t_fast)), dtype=np.float64)
 
-    # Vibration / accelerometer channels
-    acc_names = sorted(n for n in pf._fast_channels if AC_PATTERN.match(n))
+    # Vibration / accelerometer channels. Piezo-typed channels are VIB even
+    # when named Ax/Ay — RSI names piezo sensors that way on MRs and modern
+    # VMPs, and parse_config's accel→piezo rewrite (setupstr.m parity) makes
+    # CASPER-era accel(0,1) configs piezo too. Only true DC-response
+    # accelerometers (type=accel with a real calibration) are ACC.
+    acc_names = sorted(
+        n
+        for n in pf._fast_channels
+        if AC_PATTERN.match(n) and pf.channel_info[n]["type"] != "piezo"
+    )
     vib_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "piezo")
     if acc_names:
         vib = np.stack(
