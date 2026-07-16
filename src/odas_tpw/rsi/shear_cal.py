@@ -179,15 +179,24 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
             if m:
                 sens = float(m.group(1))
 
-        # Dates: the "Recommended re-calibration" line feeds recal_due only
-        # (never cal_date); keep previous vs current apart below.
+        # Dates: the "Recommended re-calibration" label feeds recal_due only
+        # (never cal_date); keep previous vs current apart below.  pypdf can
+        # glue lines ("Calibration date: 2024/01/01 Recommended
+        # re-calibration: 2025/01/01"), so the recal date is searched only
+        # AFTER the label — a preceding glued cal-date can never be captured
+        # as recal_due — and the text BEFORE the label still feeds the normal
+        # cal-date logic (P3, PR #136 review).
         low = line.lower()
+        recal_m = _RECAL_RE.search(line)
         if "recommend" in low or _RECAL_SKIP_RE.search(line):
-            if recal_due is None and _RECAL_RE.search(line):
-                m = _DATE_RE.search(line)
+            if recal_due is None and recal_m:
+                m = _DATE_RE.search(line, recal_m.end())
                 if m:
                     recal_due = _parse_date_parts(m.group(1), m.group(2), m.group(3))
-            continue
+            if recal_m is None:
+                continue  # prose recommendation line, nothing else to take
+            line = line[: recal_m.start()]
+            low = line.lower()
         if "previous" in low and "calibration date" in low and prev_cal_date is None:
             m = _DATE_RE.search(line)
             if m:
@@ -377,6 +386,22 @@ def load_cal_dir(cal_dir: Path) -> tuple[dict[str, CalTimeline], list[str]]:
                     warnings.append(
                         f"{pdf.name}: filename date {fn_date} != sheet date {sheet.cal_date}"
                     )
+
+        # Re-run parse_sheet_text's recal-due sanity guard: cal_date may only
+        # now be known (filled from the filename above), and a recommended
+        # re-calibration on/before the calibration itself is a mis-parse that
+        # would otherwise report every post-cal observation as stale (P3,
+        # PR #136 review).
+        if (
+            sheet.recal_due is not None
+            and sheet.cal_date is not None
+            and sheet.recal_due <= sheet.cal_date
+        ):
+            warnings.append(
+                f"{pdf.name}: recommended re-calibration {sheet.recal_due} is on/before "
+                f"the calibration date {sheet.cal_date}; ignored (mis-parse)"
+            )
+            sheet.recal_due = None
 
         if not sheet.is_usable():
             missing = [

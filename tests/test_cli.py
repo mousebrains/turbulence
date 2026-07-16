@@ -762,7 +762,8 @@ def _stub_pool_factory(exc=None, result=("dummy", 0)):
 
 
 def test_cmd_eps_serial_exception(monkeypatch, sample_p_file, tmp_path, capsys):
-    """Serial _cmd_eps catches OSError/ValueError/RuntimeError and prints ERROR."""
+    """Serial _cmd_eps catches per-file errors, prints ERROR, and — with every
+    file failed — exits 1 instead of pretending success (#131 M4)."""
 
     def boom(*args, **kwargs):
         raise RuntimeError("synthetic eps failure")
@@ -775,13 +776,17 @@ def test_cmd_eps_serial_exception(monkeypatch, sample_p_file, tmp_path, capsys):
     )
     from odas_tpw.rsi.cli import main
 
-    main()
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "ERROR: synthetic eps failure" in captured.out
+    assert "0 of 1 file(s) produced output" in captured.out
 
 
 def test_cmd_eps_parallel_exception(monkeypatch, sample_p_file, tmp_path, capsys):
-    """Parallel _cmd_eps catches future.result() exceptions."""
+    """Parallel _cmd_eps catches future.result() exceptions (and exits 1 when
+    nothing was produced)."""
     monkeypatch.setattr(
         "odas_tpw.rsi.cli.ProcessPoolExecutor",
         _stub_pool_factory(exc=RuntimeError("synthetic parallel eps failure")),
@@ -793,7 +798,9 @@ def test_cmd_eps_parallel_exception(monkeypatch, sample_p_file, tmp_path, capsys
     )
     from odas_tpw.rsi.cli import main
 
-    main()
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "ERROR: synthetic parallel eps failure" in captured.out
 
@@ -835,7 +842,8 @@ def test_cmd_eps_jobs_zero_uses_cpu_count(monkeypatch, sample_p_file, tmp_path):
 
 
 def test_cmd_chi_serial_exception(monkeypatch, sample_p_file, tmp_path, capsys):
-    """Serial _cmd_chi catches errors from compute_chi_file."""
+    """Serial _cmd_chi catches errors from compute_chi_file (exit 1 when
+    every file failed)."""
 
     def boom(*args, **kwargs):
         raise ValueError("synthetic chi failure")
@@ -848,13 +856,17 @@ def test_cmd_chi_serial_exception(monkeypatch, sample_p_file, tmp_path, capsys):
     )
     from odas_tpw.rsi.cli import main
 
-    main()
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "ERROR: synthetic chi failure" in captured.out
+    assert "0 of 1 file(s) produced output" in captured.out
 
 
 def test_cmd_chi_parallel_exception(monkeypatch, sample_p_file, tmp_path, capsys):
-    """Parallel _cmd_chi catches future.result() exceptions."""
+    """Parallel _cmd_chi catches future.result() exceptions (and exits 1 when
+    nothing was produced)."""
     monkeypatch.setattr(
         "odas_tpw.rsi.cli.ProcessPoolExecutor",
         _stub_pool_factory(exc=OSError("synthetic parallel chi failure")),
@@ -866,7 +878,9 @@ def test_cmd_chi_parallel_exception(monkeypatch, sample_p_file, tmp_path, capsys
     )
     from odas_tpw.rsi.cli import main
 
-    main()
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "ERROR: synthetic parallel chi failure" in captured.out
 

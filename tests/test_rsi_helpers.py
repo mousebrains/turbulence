@@ -322,6 +322,70 @@ class TestBuildL1DataFromChannelsEdges:
 
 
 # ---------------------------------------------------------------------------
+# _build_l1data_from_channels — vib_type label (piezo -> "VIB", #131 W5-ii)
+# ---------------------------------------------------------------------------
+
+
+class TestVibTypeLabel:
+    """Piezo-typed vibration channels are labeled "VIB" like the adapter.
+
+    Label-only (W3 review F5): no numeric consumer branches on vib_type; the
+    Goodman path treats ACC and VIB identically.
+    """
+
+    @staticmethod
+    def _build(data):
+        n_slow = len(data["t_slow"])
+        ratio = round(data["fs_fast"] / data["fs_slow"])
+        s_fast, e_fast = 0, min(n_slow * ratio, len(data["t_fast"]))
+        speed_fast = np.full(e_fast, 0.5)
+        P_fast = np.full(e_fast, 10.0)
+        T_fast = np.full(e_fast, 12.0)
+        return _build_l1data_from_channels(
+            data, s_fast, e_fast, speed_fast, P_fast, T_fast, direction="down"
+        )
+
+    def test_piezo_typed_labeled_vib(self):
+        data = _make_channels_dict(n_accel=2)
+        data["channel_types"] = {"Ax": "piezo", "Ay": "piezo"}
+        l1 = self._build(data)
+        assert l1.vib_type == "VIB"
+        assert l1.n_vib == 2
+
+    def test_accel_typed_labeled_acc(self):
+        data = _make_channels_dict(n_accel=2)
+        data["channel_types"] = {"Ax": "accel", "Ay": "accel"}
+        assert self._build(data).vib_type == "ACC"
+
+    def test_missing_channel_types_keeps_historical_acc(self):
+        data = _make_channels_dict(n_accel=2)  # no channel_types key
+        assert self._build(data).vib_type == "ACC"
+
+    def test_mixed_types_labeled_acc(self):
+        data = _make_channels_dict(n_accel=2)
+        data["channel_types"] = {"Ax": "piezo", "Ay": "accel"}
+        assert self._build(data).vib_type == "ACC"
+
+    def test_real_pfile_and_profile_nc_carry_piezo_types(self, tmp_path):
+        """SN479's Ax/Ay are piezo-typed: both loaders carry the type and the
+        builder labels the stack VIB — .p via pf.channel_info, per-profile nc
+        via the sensor_type attr extract_profiles writes."""
+        p_file = Path(__file__).parent / "data" / "SN479_0006.p"
+        if not p_file.exists():
+            pytest.skip("Test data not available")
+        from odas_tpw.rsi.profile import extract_profiles
+
+        data_p = load_channels(p_file)
+        assert data_p["channel_types"] == {"Ax": "piezo", "Ay": "piezo"}
+        assert self._build(dict(data_p)).vib_type == "VIB"
+
+        prof = extract_profiles(p_file, tmp_path)[0]
+        data_nc = load_channels(prof)
+        assert data_nc["channel_types"] == {"Ax": "piezo", "Ay": "piezo"}
+        assert self._build(dict(data_nc)).vib_type == "VIB"
+
+
+# ---------------------------------------------------------------------------
 # write_profile_results — single vs multi naming
 # ---------------------------------------------------------------------------
 

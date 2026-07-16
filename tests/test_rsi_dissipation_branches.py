@@ -107,11 +107,27 @@ class TestComputeDissOneWorker:
 
 
 class TestNanTemperatureGuard:
+    def test_all_nan_t1_auto_raises(self, tmp_path):
+        """With the default temperature='auto', an all-NaN T1 (and no other
+        candidate) is implausible → loud per-file ValueError, not silent
+        products (#131 B1)."""
+        nc = _write_nc(
+            tmp_path / "nan_temp_auto.nc",
+            n_fast=8192,
+            n_slow=1024,
+            temp_nan=True,
+        )
+        with (
+            pytest.warns(UserWarning, match="skipping reference temperature"),
+            pytest.raises(ValueError, match="no plausible reference temperature"),
+        ):
+            _compute_epsilon(nc, goodman=False, fft_length=512)
+
     def test_nan_temperature_warns_and_recovers(self, tmp_path):
-        """All-NaN window temperature: _compute_epsilon must substitute the
-        10 degC default (warning) and yield finite epsilon, mirroring
-        process_l4.  On the old code visc35(NaN)->NaN produced all-NaN
-        epsilon with no warning.
+        """Explicitly selected all-NaN T1 (user's choice: proceed with
+        warning): _compute_epsilon must substitute the 10 degC default
+        (warning) and yield finite epsilon, mirroring process_l4.  On the
+        old code visc35(NaN)->NaN produced all-NaN epsilon with no warning.
         """
         # Large enough to yield at least one dissipation window.
         nc = _write_nc(
@@ -122,13 +138,16 @@ class TestNanTemperatureGuard:
         )
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            results = _compute_epsilon(nc, goodman=False, fft_length=512)
+            results = _compute_epsilon(nc, goodman=False, fft_length=512, temperature="T1")
 
         assert results, "expected at least one dissipation dataset"
         for ds in results:
             eps = ds["epsilon"].values
             # Old code: every epsilon NaN. New code: all finite.
             assert np.all(np.isfinite(eps))
+            assert ds.attrs["temperature_source"] == "T1"
+            assert ds.attrs["temperature_qc"] != "pass"
         assert any(
             "Non-finite window temperature" in str(w.message) for w in caught
         )
+        assert any("fails plausibility QC" in str(w.message) for w in caught)

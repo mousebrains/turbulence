@@ -46,8 +46,11 @@ hotel:
 
 profiles:
   P_min: 0.5              # minimum pressure [dbar]
-  W_min: 0.3              # minimum fall rate [dbar/s]
-  direction: "down"       # profile direction: up or down
+  W_min: 0.3              # minimum fall rate [dbar/s] (null = auto: 0.3
+                          # free-fall, 0.05 glide/horizontal)
+  direction: "down"       # auto | up | down | glide | horizontal
+                          # (auto = vehicle-resolved; explicit down for
+                          # this free-falling VMP corpus)
   min_duration: 7.0       # minimum profile duration [s]
   diagnostics: false      # write T1_raw, C_raw, W, cal attrs
 
@@ -94,9 +97,10 @@ epsilon:
   despike_smooth: 0.5     # despike envelope low-pass cutoff [Hz]
   salinity: null          # salinity [PSU] (null = 35, fixed S)
   epsilon_minimum: 1.0e-13  # floor for small epsilon values
-  T_source: null          # temperature source for viscosity (null = blend T1/T2)
-  T1_norm: 1.0            # T1 blending weight
-  T2_norm: 1.0            # T2 blending weight
+  T_source: null          # reference temperature for seawater properties
+                          # (serves epsilon AND chi): null/"auto" = first
+                          # plausible of T1, T2, ..., T, JAC_T; a channel
+                          # name; or a number = constant reference [degC]
   fom_max: null           # null = no FOM cut. e.g. 2.0 NaNs each per-probe
                           # cell (e_N, epsilon[probe,:]) where its FOM
                           # >= fom_max -- applied BEFORE mk_epsilon_mean,
@@ -148,12 +152,13 @@ speed:
   # pressure : ODAS smoothed |dP/dt|. Correct for VMP. (default)
   # em       : use the U_EM channel from the .p file (MicroRider EM
   #            flowmeter). Errors out if U_EM is missing.
-  # flight   : |W| / (sin(|pitch|-aoa)*cos|roll|), pitch axis auto-
-  #            picked from Incl_X/Incl_Y by amplitude.
+  # flight   : |W| / sin(|pitch|+aoa) (glide path steeper than pitch;
+  #            ODAS convention), pitch axis auto-picked from
+  #            Incl_X/Incl_Y by amplitude.
   # constant : use the scalar in `value`.
   value: null             # m/s, only when method="constant"
   aoa_deg: 3.0            # angle of attack [deg], for method="flight"
-  min_pitch_deg: 5.0      # flight: drop samples with |pitch|-aoa < this
+  min_pitch_deg: 5.0      # flight: drop samples with |pitch| < this
   speed_cutout: 0.05      # m/s floor applied to fast-rate speed
   tau: null               # smoothing tau [s]; null = vehicle default
                           # (vmp/xmp 1.5, slocum_glider 3.0, ...)

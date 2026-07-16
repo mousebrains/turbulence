@@ -694,14 +694,20 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
     Computes background stratification once per detected cast with
     :func:`profile_stratification` on a *window*-dbar scale, then interpolates
     each cast's coarse result onto the slow pressure grid. Returns
-    ``(N2_full, dTdz_full)`` aligned with the slow channels, or ``(None, None)``
-    when pressure/temperature are unavailable.
+    ``(N2_full, dTdz_full, sal_note)`` aligned with the slow channels —
+    *sal_note* records the salinity source actually used, for the N2 channel
+    comment — or ``(None, None, None)`` when pressure/temperature are
+    unavailable.
 
     *sal_source* selects the salinity: ``None`` (or ``"measured"``) derives it
-    from conductivity via TEOS-10 when present; a number applies that fixed PSU;
-    ``"hotel"``/``"hotel:<var>"`` uses a hotel-injected slow salinity channel.
-    Position defaults to 0/0 (a <0.3% gravity and negligible salinity-anomaly
-    effect on N2).
+    from conductivity via TEOS-10 when present *and* the derived salinity has
+    at least two finite samples (else 35 PSU); a number applies that fixed
+    PSU; ``"hotel"``/``"hotel:<var>"`` uses a hotel-injected slow salinity
+    channel. Non-finite samples in a hotel channel are interp-filled **per
+    cast** (with the in-cast counts noted in *sal_note*); a channel — or a
+    cast slice — with fewer than two finite samples falls back to
+    conductivity/35 PSU with the reason noted. Position defaults to 0/0 (a
+    <0.3% gravity and negligible salinity-anomaly effect on N2).
     """
     import gsw
     import numpy as np
@@ -711,7 +717,7 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
     P = pf.channels.get("P")
     T = pf.channels.get(T_name)
     if P is None or T is None:
-        return None, None
+        return None, None, None
     P = np.asarray(P, dtype=np.float64)
     T = np.asarray(T, dtype=np.float64)
     C = pf.channels.get(C_name)
@@ -723,33 +729,122 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
 
     n = len(P)
     # Optional whole-cast salinity override (per-slow-sample); None -> derive
-    # from C per cast in the loop below.
+    # from C per cast in the loop below. sal_note records the source actually
+    # used, for the N2 channel comment (never claim hotel salinity when no
+    # finite hotel sample contributed).
     sal_arr = None
+    hotel_raw = None
+    hv = None
+    sal_note = None
+    hotel_reason = None  # why a requested hotel channel was not used
     if isinstance(sal_source, (int, float)) and not isinstance(sal_source, bool):
         sal_arr = np.full(n, float(sal_source))
+        sal_note = f"fixed {float(sal_source):g} PSU"
     elif (hv := _hotel_salinity_var(sal_source)) is not None:
         cand = pf.channels.get(hv)
-        if cand is not None and len(cand) == n:
-            sal_arr = np.asarray(cand, dtype=np.float64)
-        else:
+        if cand is None or len(cand) != n:
             logger.warning(
                 "stratification salinity=%r but no matching %r slow channel; "
                 "using conductivity/35 PSU",
                 sal_source,
                 hv,
             )
+            hotel_reason = (
+                f"hotel channel {hv!r} missing"
+                if cand is None
+                else f"hotel channel {hv!r} length mismatch"
+            )
+        else:
+            raw = np.asarray(cand, dtype=np.float64)
+            n_finite = int(np.isfinite(raw).sum())
+            if n_finite < 2:
+                logger.warning(
+                    "stratification salinity from hotel channel %r has %d finite "
+                    "sample(s) (fewer than two); falling back to conductivity/35 PSU",
+                    hv,
+                    n_finite,
+                )
+                hotel_reason = (
+                    f"hotel channel {hv!r} entirely non-finite"
+                    if n_finite == 0
+                    else f"hotel channel {hv!r} has a single finite sample"
+                )
+            else:
+                hotel_raw = raw  # scrubbed per cast in the loop below
+
+    # Conductivity fallback — gate the DERIVED salinity, not the channel's
+    # mere presence: SP_from_C returns NaN samplewise on bad conductivity, so
+    # an all-NaN (or single-finite) result would silently NaN out N2 for
+    # every cast while sal_note claimed C-derived salinity. Same <2-finite
+    # convention as the hotel channel. SP_from_C is a pointwise conversion,
+    # so converting once on the full slow grid is identical to the per-cast
+    # conversion it replaces. Non-finite samples within a >=2-finite SP keep
+    # the existing per-window masking inside profile_stratification
+    # (interp-filling the derived SP is a W5 candidate).
+    SP = None
+    cond_reason = None  # why a present conductivity channel was not used
+    if sal_arr is None and C is not None:
+        SP_cand = gsw.SP_from_C(C, T, P)
+        n_finite_sp = int(np.isfinite(SP_cand).sum())
+        if n_finite_sp >= 2:
+            SP = SP_cand
+        else:
+            logger.warning(
+                "stratification %s yielded %d finite salinity sample(s) (fewer "
+                "than two) via SP_from_C; using fixed 35 PSU",
+                C_name,
+                n_finite_sp,
+            )
+            cond_reason = (
+                f"{C_name} present but yielded no finite salinity"
+                if n_finite_sp == 0
+                else f"{C_name} present but yielded a single finite salinity sample"
+            )
+    if sal_note is None and hotel_raw is None:
+        if SP is not None:
+            sal_note = f"practical salinity from {C_name}/{T_name}/P (TEOS-10)"
+            if hotel_reason is not None:
+                sal_note += f" ({hotel_reason})"
+        else:
+            cond_part = (
+                cond_reason
+                if cond_reason is not None
+                else (f"no {C_name}" if hotel_reason is not None else "no conductivity channel")
+            )
+            missing = f"{hotel_reason}; {cond_part}" if hotel_reason is not None else cond_part
+            sal_note = (
+                f"salinity assumed 35 PSU ({missing}); N2 reflects temperature "
+                "stratification only"
+            )
 
     N2_full = np.full(n, np.nan)
     dTdz_full = np.full(n, np.nan)
+    n_interp = n_held = n_in_cast = n_fallback_casts = 0
     for s, e in profiles:
         sl = slice(s, e + 1)
         P_c, T_c = P[sl], T[sl]
+        S_c: Any = None  # None -> profile_stratification assumes 35 PSU
         if sal_arr is not None:
             S_c = sal_arr[sl]
-        elif C is not None:
-            S_c = gsw.SP_from_C(C[sl], T_c, P_c)
-        else:
-            S_c = None
+        elif hotel_raw is not None:
+            # Scrub each cast slice INDEPENDENTLY — never across cast
+            # boundaries: index-space interpolation through the inter-cast
+            # span would blend cast-1's deep salinity toward cast-2's shallow
+            # salinity, fabricating a wrong-sign within-cast dS/dz (and a
+            # collapsed N2) in the samples adjacent to the boundary. A cast
+            # slice with <2 finite samples falls back to conductivity/35.
+            n_in_cast += e + 1 - s
+            filled = _fill_nonfinite_by_interp(hotel_raw[sl])
+            if filled is None:
+                n_fallback_casts += 1
+                if SP is not None:
+                    S_c = SP[sl]
+            else:
+                S_c, n_i, n_h = filled
+                n_interp += n_i
+                n_held += n_h
+        elif SP is not None:
+            S_c = SP[sl]
         target_P, N2, dTdz = profile_stratification(P_c, T_c, S=S_c, window=window)
         good = np.isfinite(N2)
         if good.sum() >= 2:
@@ -757,7 +852,30 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
         good_d = np.isfinite(dTdz)
         if good_d.sum() >= 2:
             dTdz_full[sl] = np.interp(P_c, target_P[good_d], dTdz[good_d])
-    return N2_full, dTdz_full
+
+    if hotel_raw is not None:
+        sal_note = f"salinity from hotel channel {hv!r}" + _fill_note_annotation(
+            n_interp, n_held, n_in_cast, per_cast=True
+        )
+        if n_fallback_casts:
+            sal_note += (
+                f"; {n_fallback_casts} cast(s) with <2 finite hotel samples "
+                "fell back to conductivity/35 PSU"
+            )
+        if n_interp or n_held or n_fallback_casts:
+            logger.warning(
+                "stratification salinity from hotel channel %r: %d/%d in-cast "
+                "sample(s) interpolated, %d/%d edge-held%s",
+                hv,
+                n_interp,
+                n_in_cast,
+                n_held,
+                n_in_cast,
+                f"; {n_fallback_casts} cast(s) fell back to conductivity/35 PSU"
+                if n_fallback_casts
+                else "",
+            )
+    return N2_full, dTdz_full, sal_note
 
 
 def _window_stratification_for_profile(
@@ -768,9 +886,13 @@ def _window_stratification_for_profile(
     Returns ``(N2, dTdz, sal_note)`` evaluated on the *win_t* grid, or ``None``
     when the profile cannot be read or lacks t_slow/P/T. *sal_source* selects the
     salinity: ``None`` (or ``"measured"``) uses the profile's own conductivity
-    via TEOS-10 when present, else 35 PSU; a number applies that fixed PSU;
+    via TEOS-10 when present and the derived salinity has at least two finite
+    samples, else 35 PSU; a number applies that fixed PSU;
     ``"hotel"``/``"hotel:<var>"`` uses a hotel-injected salinity channel. The
-    choice is recorded in *sal_note*. Shared by the diss and chi products, each
+    choice is recorded in *sal_note*, truthfully: non-finite samples in a
+    hotel-sourced salinity are interp-filled (with the count noted), and an
+    entirely non-finite channel falls back to conductivity/35 PSU with the
+    reason noted. Shared by the diss and chi products, each
     evaluating stratification at its own window scale (the diss path passes
     diss_length_seconds/2, the chi path 0.5*chi diss_length/fs), so the two
     coincide only when their diss_length/fft_length settings match.
@@ -806,44 +928,122 @@ def _window_stratification_for_profile(
         lat = 0.0 if not np.isfinite(lat) else lat
         lon = 0.0 if not np.isfinite(lon) else lon
         hv = _hotel_salinity_var(sal_source)
-        # The hotel channel must be on the profile's slow grid (same length as
-        # P/t_slow) or sorted_stratification's boolean-mask slice raises; warn
-        # and fall through to conductivity/35 on a mismatch rather than dropping
-        # the whole product (matches the slow-path guard).
-        hotel_ok = hv is not None and hv in prof and prof[hv].shape[0] == len(P)
-        if hv is not None and hv in prof and not hotel_ok:
-            logger.warning(
-                "stratification salinity=%r but %s channel %r length %d != t_slow %d; "
-                "using conductivity/35 PSU",
-                sal_source,
-                file_label,
-                hv,
-                prof[hv].shape[0],
-                len(P),
-            )
+        # Resolve a requested hotel channel up front. It must be on the
+        # profile's slow grid (same length as P/t_slow) or
+        # sorted_stratification's boolean-mask slice raises, and it must hold
+        # at least two finite samples — an all-NaN merged channel (or a fully
+        # bad "hotel:<var>" derived variable) would otherwise mask every
+        # window and NaN out all mixing products, and a single finite sample
+        # would constant-fill the whole profile. Non-finite samples are
+        # interp-filled (see _fill_nonfinite_by_interp for why never a
+        # constant fill). On any failure, record why and fall through to
+        # conductivity/35 rather than dropping the whole product (matches the
+        # slow-path guard).
+        S_hotel = None
+        hotel_note = ""
+        hotel_reason = None  # why a requested hotel channel was not used
+        if hv is not None:
+            if hv not in prof:
+                hotel_reason = f"hotel channel {hv!r} missing"
+            elif prof[hv].shape[0] != len(P):
+                logger.warning(
+                    "stratification salinity=%r but %s channel %r length %d != t_slow %d; "
+                    "using conductivity/35 PSU",
+                    sal_source,
+                    file_label,
+                    hv,
+                    prof[hv].shape[0],
+                    len(P),
+                )
+                hotel_reason = f"hotel channel {hv!r} length mismatch"
+            else:
+                raw = prof[hv].values.astype(np.float64)
+                filled = _fill_nonfinite_by_interp(raw)
+                if filled is None:
+                    n_finite = int(np.isfinite(raw).sum())
+                    hotel_reason = (
+                        f"hotel channel {hv!r} entirely non-finite"
+                        if n_finite == 0
+                        else f"hotel channel {hv!r} has a single finite sample"
+                    )
+                    logger.warning(
+                        "stratification salinity from hotel channel %r in %s has "
+                        "%d finite sample(s) (fewer than two); falling back to "
+                        "conductivity/35 PSU",
+                        hv,
+                        file_label,
+                        n_finite,
+                    )
+                else:
+                    S_hotel, n_interp, n_held = filled
+                    if n_interp or n_held:
+                        logger.warning(
+                            "stratification salinity from hotel channel %r in %s has "
+                            "%d/%d non-finite sample(s); filled by interpolation over "
+                            "the finite samples (%d interpolated, %d edge-held)",
+                            hv,
+                            file_label,
+                            n_interp + n_held,
+                            raw.size,
+                            n_interp,
+                            n_held,
+                        )
+                    hotel_note = f"salinity from hotel channel {hv!r}" + _fill_note_annotation(
+                        n_interp, n_held, raw.size
+                    )
         if isinstance(sal_source, (int, float)) and not isinstance(sal_source, bool):
             S = np.full(len(P), float(sal_source))
             sal_note = f"fixed {float(sal_source):g} PSU"
-        elif hotel_ok:
-            S = prof[hv].values.astype(np.float64)
-            sal_note = f"salinity from hotel channel {hv!r}"
-        elif C_name in prof:
-            C = prof[C_name].values.astype(np.float64)
-            S = gsw.SP_from_C(C, T, P)
-            sal_note = f"practical salinity from {C_name}/{T_name}/P (TEOS-10)"
-            if hv is not None:
-                sal_note += f" (hotel channel {hv!r} not usable)"
+        elif S_hotel is not None:
+            S = S_hotel
+            sal_note = hotel_note
         else:
+            # Conductivity fallback — gate the DERIVED salinity, not the
+            # channel's mere presence: SP_from_C returns NaN samplewise on
+            # bad conductivity, so an all-NaN (or single-finite) result would
+            # silently NaN out N2 for every window while sal_note claimed
+            # C-derived salinity. Same <2-finite convention as the hotel
+            # channel. Non-finite samples within a >=2-finite SP keep the
+            # existing per-window masking inside sorted_stratification
+            # (interp-filling the derived SP is a W5 candidate).
             S = None
-            missing = (
-                f"hotel channel {hv!r} and {C_name} both unavailable"
-                if hv is not None
-                else "no conductivity channel"
-            )
-            sal_note = (
-                f"salinity assumed 35 PSU ({missing}); N2 reflects temperature "
-                "stratification only"
-            )
+            cond_reason = None  # why a present conductivity channel was not used
+            if C_name in prof:
+                C = prof[C_name].values.astype(np.float64)
+                SP = gsw.SP_from_C(C, T, P)
+                n_finite_sp = int(np.isfinite(SP).sum())
+                if n_finite_sp >= 2:
+                    S = SP
+                    sal_note = f"practical salinity from {C_name}/{T_name}/P (TEOS-10)"
+                    if hotel_reason is not None:
+                        sal_note += f" ({hotel_reason})"
+                else:
+                    logger.warning(
+                        "stratification %s in %s yielded %d finite salinity "
+                        "sample(s) (fewer than two) via SP_from_C; using fixed "
+                        "35 PSU",
+                        C_name,
+                        file_label,
+                        n_finite_sp,
+                    )
+                    cond_reason = (
+                        f"{C_name} present but yielded no finite salinity"
+                        if n_finite_sp == 0
+                        else f"{C_name} present but yielded a single finite salinity sample"
+                    )
+            if S is None:
+                cond_part = (
+                    cond_reason
+                    if cond_reason is not None
+                    else (
+                        f"no {C_name}" if hotel_reason is not None else "no conductivity channel"
+                    )
+                )
+                missing = f"{hotel_reason}; {cond_part}" if hotel_reason is not None else cond_part
+                sal_note = (
+                    f"salinity assumed 35 PSU ({missing}); N2 reflects temperature "
+                    "stratification only"
+                )
     strat = sorted_stratification(win_t, half_w, t_slow, P, T, S=S, lat=lat, lon=lon)
     return strat.N2, strat.dTdz, sal_note
 
@@ -906,12 +1106,13 @@ def _add_mixing_quantities(
 ):
     """Append stratification and (when available) mixing quantities to chi.
 
-    Always computes window-scale N2 and dT/dz from the profile's own slow CTD
-    channels via the Thorpe-sorted (adiabatically leveled) method — with
-    practical salinity from C/T/P via TEOS-10 when the conductivity channel
-    exists, so N2 is fully constrained (unlike the rsi path, which may assume
-    35 PSU). N2 and dT/dz depend only on the CTD profile, so they are written
-    regardless of epsilon/chi.
+    Always computes window-scale N2 and dT/dz from the profile's slow P/T via
+    the Thorpe-sorted (adiabatically leveled) method, with the salinity chosen
+    by *sal_source* — a fixed value, a hotel-injected channel, or (the default)
+    practical salinity from the profile's own C/T/P via TEOS-10 when the
+    conductivity channel exists and yields finite salinity, else 35 PSU; see
+    :func:`_window_stratification_for_profile`. N2 and dT/dz depend only on
+    those profile channels, so they are written regardless of epsilon/chi.
 
     When epsilonMean (from the matching diss dataset) and chiMean are both
     present, additionally computes K_T (Osborn-Cox), Gamma (Oakey 1982), and
@@ -1166,17 +1367,91 @@ def _profile_channel_salinity(prof_path, var_name: str):
         return arr
 
 
-def _scrub_salinity(sal, label: str, src: str):
-    """Replace non-finite salinity samples so viscosity/N2 don't silently NaN out.
+def _fill_nonfinite_by_interp(arr):
+    """Interp-fill non-finite samples over the finite ones; hold at the edges.
 
-    A hotel salinity channel is NaN wherever the external CTD feed does not cover
-    the cast (pchip ``extrapolate=False``), and ``SP_from_C`` NaNs on bad
-    conductivity. Feeding those to ``visc`` yields NaN viscosity and discards the
-    whole (otherwise valid) epsilon/chi estimate for that window. Fill the gaps
-    with the profile's own median salinity — a far better estimate than dropping
-    the window — and warn. An all-non-finite array returns ``None`` so the caller
-    falls back to the fixed 35 PSU default. Mirrors the temperature path, which
-    already substitutes 10 degC and warns.
+    Interior gaps are bridged by linear interpolation over the finite samples;
+    leading/trailing non-finite samples are held at the nearest finite value
+    (same treatment as the slow->fast speed regrid). Never a constant (e.g.
+    median) fill: N2 is first-order in dS/dz, so a constant fill would insert
+    a spurious salinity step at every fill boundary.
+
+    Returns ``(filled, n_interp, n_held)`` — the filled array (the *same*
+    object when nothing needed filling) and the interior-interpolated /
+    edge-held sample counts — or ``None`` when fewer than two finite samples
+    exist: there is nothing to interpolate between, and a single sample would
+    constant-fill the whole array (the hotel merge's ``_interp_one`` uses the
+    same <2-finite convention).
+    """
+    import numpy as np
+
+    arr = np.asarray(arr, dtype=np.float64)
+    finite = np.isfinite(arr)
+    if int(finite.sum()) < 2:
+        return None
+    if finite.all():
+        return arr, 0, 0
+    bad = ~finite
+    first = int(np.argmax(finite))
+    last = int(arr.size - 1 - np.argmax(finite[::-1]))
+    n_held = int(bad[:first].sum() + bad[last + 1 :].sum())
+    n_interp = int(bad.sum()) - n_held
+    idx = np.arange(arr.size, dtype=np.float64)
+    out = arr.copy()
+    out[bad] = np.interp(idx[bad], idx[finite], arr[finite])
+    return out, n_interp, n_held
+
+
+def _fill_note_annotation(n_interp: int, n_held: int, n_total: int, per_cast: bool = False) -> str:
+    """Parenthetical sal_note annotation for interp-filled salinity, or ``""``.
+
+    *n_total* is the number of samples the fill saw (the in-cast samples on
+    the per-cast slow path, flagged by *per_cast*). Edge-held samples carry no
+    salinity gradient, so the note flags that N2 approaches temperature-only
+    there (same convention as the 35-PSU note's "N2 reflects temperature
+    stratification only").
+    """
+    if not (n_interp or n_held):
+        return ""
+    bits = []
+    if n_interp:
+        bits.append(f"{n_interp}/{n_total} non-finite salinity samples interpolated")
+    if n_held:
+        bits.append(f"{n_held}/{n_total} edge samples held at the nearest finite value")
+    prefix = "per-cast scrub: " if per_cast else ""
+    tail = "; N2 approaches temperature-only where held" if n_held else ""
+    return " (" + prefix + ", ".join(bits) + tail + ")"
+
+
+def _scrub_salinity(sal, label: str, src: str):
+    """Fill non-finite viscosity salinity so epsilon/chi don't silently NaN out.
+
+    Serves :func:`_resolve_salinity_cfg` — the epsilon/chi **viscosity** path.
+    Non-finite samples are reachable two ways. A hotel variable with fewer than
+    two finite source samples merges as an *all-NaN* channel (the hotel merge
+    itself never produces NaN outside the hotel file's time coverage — it
+    boundary-holds and bridges interior gaps). A *partially* NaN array comes
+    from ``"hotel:<var>"`` pointing at a derived profile variable (e.g. an SP
+    computed from bad conductivity samples), or from ``SP_from_C`` on bad
+    conductivity under ``salinity="measured"``. Feeding those to ``visc``
+    yields NaN viscosity and discards the whole (otherwise valid) epsilon/chi
+    estimate for that window.
+
+    Gaps are filled by :func:`_fill_nonfinite_by_interp` (interpolation over
+    the finite samples, nearest-finite hold at the edges — see there for why
+    never a constant fill) and warned about. With fewer than two finite
+    samples there is nothing to interpolate between, so return ``None`` and
+    the caller falls back to fixed 35 PSU — a single finite sample must not
+    constant-fill the whole profile (and thereby beat a fully valid
+    conductivity channel). Mirrors the temperature path, which already
+    substitutes 10 degC and warns.
+
+    The stratification paths (:func:`_window_stratification_for_profile`,
+    :func:`_compute_slow_stratification`) do NOT route through this scrub:
+    they call :func:`_fill_nonfinite_by_interp` themselves (per cast on the
+    slow path) and build their own provenance notes. In particular their
+    measured (``SP_from_C``) salinity is not scrubbed — non-finite samples
+    there are masked per window inside the stratification code.
     """
     import numpy as np
 
@@ -1191,18 +1466,26 @@ def _scrub_salinity(sal, label: str, src: str):
             "%s salinity from %s is entirely non-finite; using fixed 35 PSU", label, src
         )
         return None
-    fill = float(np.nanmedian(sal))
+    filled = _fill_nonfinite_by_interp(sal)
+    if filled is None:
+        logger.warning(
+            "%s salinity from %s has a single finite sample (non-finite otherwise; "
+            "nothing to interpolate between); using fixed 35 PSU",
+            label,
+            src,
+        )
+        return None
+    out, n_interp, n_held = filled
     logger.warning(
-        "%s salinity from %s has %d/%d non-finite sample(s) (e.g. outside CTD "
-        "coverage); filling with the profile median %.3f PSU",
+        "%s salinity from %s has %d/%d non-finite sample(s); filled by "
+        "interpolation over the finite samples (%d interpolated, %d edge-held)",
         label,
         src,
-        int((~finite).sum()),
+        n_interp + n_held,
         sal.size,
-        fill,
+        n_interp,
+        n_held,
     )
-    out = sal.copy()
-    out[~finite] = fill
     return out
 
 
@@ -1288,8 +1571,9 @@ def _resolve_salinity_cfg(value, prof_path, T_name: str, C_name: str, label: str
     A ``"measured"``/``"hotel"`` request that cannot be satisfied (missing C/T/P
     or missing/odd-length channel) logs a warning and returns ``None`` so
     processing continues at 35 PSU rather than failing the file; non-finite
-    samples are filled from the profile median. Any other string raises (a
-    defensive backstop — normalization should have caught it up front).
+    samples are interp-filled by :func:`_scrub_salinity`. Any other string
+    raises (a defensive backstop — normalization should have caught it up
+    front).
     """
     if not isinstance(value, str):
         return value  # None or a number
@@ -1445,12 +1729,65 @@ def process_file(
     # them instead of recomputing from P. Default method is "pressure",
     # which reproduces the historical VMP behavior exactly.
     speed_cfg = merge_config("speed", config.get("speed"))
+    # Speed provenance for the per-profile NetCDFs (extract_profiles
+    # extra_attrs): the diss/chi stages read it back and stamp
+    # "precomputed speed_fast (perturb speed.method=...)" on their products.
+    speed_attrs: dict[str, str] = {}
     if "P" in pf.channels:
         try:
             from odas_tpw.perturb.speed import compute_speed_for_pfile
 
             vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
-            speed_fast, W_slow = compute_speed_for_pfile(pf, speed_cfg, vehicle)
+            speed_fast, W_slow, speed_source = compute_speed_for_pfile(pf, speed_cfg, vehicle)
+            speed_method = str(speed_cfg.get("method", "pressure"))
+            speed_attrs = {
+                "speed_method": speed_method,
+                "speed_source": speed_source,
+            }
+
+            # No silent overwrite (#131 M10): a hotel merge may have injected
+            # channels literally named "speed_fast"/"W_slow"; the assignments
+            # below recompute them, discarding the hotel values. Warn with
+            # the applicable remedy. W_slow is ALWAYS recomputed (smoothed
+            # |dP/dt|, method-independent), so a hotel W_slow always warns.
+            if pf.channel_info.get("W_slow", {}).get("type") == "hotel":
+                logger.warning(
+                    "hotel merge injected channel 'W_slow' but the speed "
+                    "stage always recomputes it as smoothed |dP/dt| for %s — "
+                    "the hotel-provided values are discarded; give the hotel "
+                    "channel a different output name "
+                    "(hotel.channels.<src>.name) to keep it",
+                    p_path.name,
+                )
+            # A hotel speed_fast is discarded unless method 'hotel' actually
+            # consumes it (hotel_var == 'speed_fast'); consuming a DIFFERENT
+            # hotel channel still clobbers an injected literal speed_fast.
+            hotel_var = str(speed_cfg.get("hotel_var") or "speed")
+            if pf.channel_info.get("speed_fast", {}).get("type") == "hotel" and not (
+                speed_method == "hotel" and hotel_var == "speed_fast"
+            ):
+                if speed_method == "hotel":
+                    logger.warning(
+                        "hotel merge injected channel 'speed_fast' but "
+                        "speed.method='hotel' consumes %r (speed.hotel_var) "
+                        "and overwrites it for %s — the injected "
+                        "'speed_fast' values are discarded; set "
+                        "speed.hotel_var: 'speed_fast' to consume them, or "
+                        "give the hotel channel a different output name",
+                        hotel_var,
+                        p_path.name,
+                    )
+                else:
+                    logger.warning(
+                        "hotel merge injected channel 'speed_fast' but "
+                        "speed.method=%r recomputes it for %s — the "
+                        "hotel-provided values are discarded; set "
+                        "speed.method: 'hotel' (with speed.hotel_var naming "
+                        "the merged channel, default 'speed') to use hotel "
+                        "telemetry as the through-water speed",
+                        speed_method,
+                        p_path.name,
+                    )
 
             pf.channels["speed_fast"] = speed_fast
             pf._fast_channels.add("speed_fast")
@@ -1467,10 +1804,31 @@ def process_file(
                 "long_name": "profiling rate (smoothed |dP/dt|)",
             }
         except Exception as exc:
+            method_cfg = str(speed_cfg.get("method", "pressure"))
+            if method_cfg != "pressure":
+                # An explicitly selected non-pressure speed source (em /
+                # flight / constant / hotel — "pressure" is the DEFAULT, so a
+                # non-pressure method here is always user-configured) failed:
+                # do NOT fall through. Downstream diss/chi would silently
+                # recompute |dP/dt| (pressure) — with ~U^4 leverage on
+                # epsilon, that is the exact silent substitution M10 exists
+                # to prevent. Record and abort this file, mirroring the
+                # PFile-load failure path; the run's per-file jobs loop
+                # contains the failure so other files in the batch proceed.
+                logger.error(
+                    "speed channel computation failed for %s (method=%s): %s",
+                    p_path.name,
+                    method_cfg,
+                    exc,
+                )
+                result.setdefault("errors", []).append(f"speed: {exc}")
+                return result
+            # Default pressure method: the downstream fallback recomputes the
+            # same |dP/dt|, so continuing is honest — warn and carry on.
             logger.warning(
                 "speed channel computation failed for %s (method=%s): %s",
                 p_path.name,
-                speed_cfg.get("method", "pressure"),
+                method_cfg,
                 exc,
             )
 
@@ -1499,7 +1857,12 @@ def process_file(
     output_stem = output_stem or p_path.stem
     log_basename = output_stem
 
-    profiles_cfg = config.get("profiles", {})
+    # merge_config (not raw config.get): the detection below must see the same
+    # effective defaults as the cache signature (upstream_for hashes the merged
+    # section) — e.g. direction "auto" and the vehicle-resolved W_min. An
+    # explicit `W_min: null` in the YAML is dropped by merge_config, so a
+    # missing key below means "resolve from the vehicle direction".
+    profiles_cfg = merge_config("profiles", config.get("profiles"))
     fp07_cfg = config.get("fp07", {})
     ct_cfg = config.get("ct", {})
 
@@ -1534,16 +1897,27 @@ def process_file(
             # without this it silently falls through to the "down" branch and
             # we lose every up-profile -- on a glider with MR-on-during-climb
             # only, that drops *all* the real flight data.
-            from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
+            from odas_tpw.rsi.vehicle import resolve_detection
 
             vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
-            # Smooth the detection fall rate with the VEHICLE tau, matching ODAS
-            # (odas_p2mat.m). The default 1.5 s is correct for a VMP but 2-40x
-            # too fast for gliders/floats (slocum 3.0 s, argo 60.0 s), which made
-            # W noisy at the W_min threshold and fragmented profile boundaries.
-            W = _smooth_fall_rate(P_slow, pf.fs_slow, tau=resolve_tau(vehicle))
-            direction = resolve_direction(
+            # Resolve direction ("auto" = vehicle default), the detection
+            # fall-rate floor (W_min null/absent = 0.3 free-fall, 0.05
+            # glide/horizontal — the VMP-tuned 0.3 rejects every glider
+            # cast), and the smoothing tau. Tau matches ODAS (odas_p2mat.m):
+            # the 1.5 s default is correct for a VMP but 2-40x too fast for
+            # gliders/floats (slocum 3.0 s, argo 60.0 s), which made W noisy
+            # at the W_min threshold and fragmented profile boundaries.
+            direction, tau, w_min = resolve_detection(
                 profiles_cfg.get("direction", "auto"),
+                vehicle,
+                W_min=profiles_cfg.get("W_min"),
+            )
+            W = _smooth_fall_rate(P_slow, pf.fs_slow, tau=tau)
+            logger.info(
+                "%s: profile detection direction=%s W_min=%g dbar/s (vehicle=%r)",
+                p_path.name,
+                direction,
+                w_min,
                 vehicle,
             )
             profiles = get_profiles(
@@ -1551,7 +1925,7 @@ def process_file(
                 W,
                 pf.fs_slow,
                 P_min=profiles_cfg.get("P_min", 0.5),
-                W_min=profiles_cfg.get("W_min", 0.3),
+                W_min=w_min,
                 direction=direction,
                 min_duration=profiles_cfg.get("min_duration", 7.0),
             )
@@ -1581,7 +1955,7 @@ def process_file(
     strat_cfg = merge_config("stratification", config.get("stratification"))
     if profiles and bool(strat_cfg.get("enable", True)):
         try:
-            N2_full, dTdz_full = _compute_slow_stratification(
+            N2_full, dTdz_full, sal_note = _compute_slow_stratification(
                 pf,
                 profiles,
                 ct_cfg.get("T_name", "JAC_T"),
@@ -1600,10 +1974,10 @@ def process_file(
                         f"buoyancy frequency squared (background, {win:g}-dbar Thorpe-sorted)"
                     ),
                     "comment": (
-                        "TEOS-10 N2 from the profile's own C/T/P over a "
-                        f"{win:g}-dbar pressure window, Thorpe-sorted to a stable "
-                        "profile. Background (profile/CTD) scale — distinct from "
-                        "the dissipation/chi-window N2 in the diss/chi products."
+                        f"TEOS-10 N2 over a {win:g}-dbar pressure window, "
+                        f"Thorpe-sorted to a stable profile; {sal_note}. "
+                        "Background (profile/CTD) scale — distinct from the "
+                        "dissipation/chi-window N2 in the diss/chi products."
                     ),
                 }
                 pf.channels["dTdz"] = dTdz_full
@@ -1723,6 +2097,7 @@ def process_file(
                     gps=gps,
                     return_scalars=True,
                     output_stem=output_stem,
+                    extra_attrs=speed_attrs,
                 )
                 result["profiles"] = [str(p) for p in prof_paths]
                 prof_scalars_cache = {str(p): s for p, s in zip(prof_paths, prof_scalars)}
@@ -1741,6 +2116,14 @@ def process_file(
     # Durations -> integer sample counts at THIS file's sampling rate, so one
     # duration-based config serves instruments at 512 Hz and 1-2 kHz alike.
     eps_cfg = resolve_window_config(eps_cfg, float(pf.fs_fast), section="epsilon")
+    # Reference temperature for seawater properties (epsilon viscosity; chi
+    # viscosity/kappa_T). One knob serves both stages — the pre_loaded channels
+    # dict is shared by design. None (merge_config drops nulls) = "auto" QC
+    # chain; a channel name or a number (constant reference) pass through.
+    # NOTE: `or "auto"` would swallow a legitimate T_source of 0.0 degC.
+    t_src = eps_cfg.get("T_source")
+    if t_src is None:
+        t_src = "auto"
     inst_lookup = instrument_key if instrument_key is not None else p_path.parent.name
     instrument_cfg = config.get("instruments", {}).get(inst_lookup, {})
     excluded_probes = list(instrument_cfg.get("exclude_shear_probes", []))
@@ -1784,7 +2167,7 @@ def process_file(
                         # therm-gradient channels; reused below for chi.
                         from odas_tpw.rsi.chi_io import _load_therm_channels
 
-                        pre_loaded = _load_therm_channels(prof_path)
+                        pre_loaded = _load_therm_channels(prof_path, temperature_name=t_src)
                         prof_data_cache[prof_path] = pre_loaded
                     else:
                         pre_loaded = None
@@ -1795,6 +2178,10 @@ def process_file(
                     eps_sal = _resolve_salinity_cfg(
                         eps_cfg.get("salinity"), prof_path, ct_T_name, ct_C_name, "epsilon"
                     )
+                    # T_source stays in the strip list: the resolved t_src is
+                    # passed explicitly as `temperature` (used only when
+                    # pre_loaded is None; the pre_loaded dict already carries
+                    # the resolved reference temperature).
                     diss_results = _compute_epsilon(
                         prof_path,
                         **{
@@ -1804,14 +2191,13 @@ def process_file(
                             not in (
                                 "epsilon_minimum",
                                 "T_source",
-                                "T1_norm",
-                                "T2_norm",
                                 "fom_max",
                                 "diagnostics",
                                 "salinity",
                             )
                         },
                         salinity=eps_sal,
+                        temperature=t_src,
                         _pre_loaded=pre_loaded,
                     )
                     eps_fom_max = eps_cfg.get("fom_max")
@@ -1930,6 +2316,10 @@ def process_file(
                             prof_path,
                             epsilon_ds=diss_ds,
                             salinity=chi_sal,
+                            # Same reference temperature as the diss stage
+                            # (epsilon.T_source); only used when pre_loaded
+                            # is None (e.g. a diss-stage load failure).
+                            temperature=t_src,
                             **chi_kwargs,
                             _pre_loaded=pre_loaded,
                         )
@@ -1972,8 +2362,9 @@ def process_file(
                                     ],
                                     drop_action=qc_drop_action,
                                 )
-                            # Derived mixing quantities (Gamma, K_T, K_rho)
-                            # with real salinity from the profile's own C/T/P
+                            # Derived mixing quantities (Gamma, K_T, K_rho);
+                            # N2 salinity per stratification.salinity (own
+                            # C/T/P by default, or fixed/hotel-injected)
                             if chi_cfg.get("mixing", True):
                                 mix_eps = (
                                     diss_ds if diss_ds is not None else xr.open_dataset(diss_path)

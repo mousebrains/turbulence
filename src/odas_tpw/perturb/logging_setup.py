@@ -123,6 +123,16 @@ def setup_root_logging(
         sh.setFormatter(_STREAM_FORMATTER)
         root.addHandler(_mark_owned(sh))
 
+    # Route warnings.warn(...) (e.g. the glider |dP/dt| speed-bias warning)
+    # through the "py.warnings" logger, which propagates to the root handlers
+    # installed above — so UserWarnings land in the run/worker/stage logs
+    # instead of vanishing to an unwatched stderr. Set here (and in
+    # init_worker_logging, which is all a spawn worker runs), never at module
+    # import: rsi imports perturb modules lazily and must not have its
+    # warning routing changed by a mere import. (The test suite resets this
+    # state after every test — see the autouse fixture in tests/conftest.py.)
+    logging.captureWarnings(True)
+
     return log_file
 
 
@@ -147,6 +157,10 @@ def init_worker_logging(log_dir: Path, run_stamp: str) -> Path:
     fh.setLevel(logging.INFO)
     fh.setFormatter(_FILE_FORMATTER)
     root.addHandler(_mark_owned(fh))
+
+    # Spawn-context workers never run setup_root_logging, so warning capture
+    # must be enabled here too — see the comment there.
+    logging.captureWarnings(True)
 
     return log_file
 

@@ -31,6 +31,52 @@ def _reset_root_logger():
     root.setLevel(saved_level)
 
 
+class TestCaptureWarnings:
+    """warnings.warn(...) routes into the log files (#131 M8, F13-F15)."""
+
+    def test_warning_inside_stage_block_lands_in_stage_log(self, tmp_path):
+        """A warning fired inside a stage block (as _compute_epsilon does in
+        the diss stage) must land in the stage log, not vanish to stderr."""
+        import warnings
+
+        try:
+            setup_root_logging(tmp_path / "logs" / "run.log")
+            stage_dir = tmp_path / "diss_00"
+            with stage_log(stage_dir, "afile"):
+                warnings.warn("synthetic stage warning", UserWarning, stacklevel=1)
+            assert "synthetic stage warning" in (stage_dir / "afile.log").read_text()
+        finally:
+            logging.captureWarnings(False)
+
+    def test_worker_init_enables_capture(self, tmp_path):
+        """Spawn workers never run setup_root_logging, so init_worker_logging
+        must enable capture itself (F14)."""
+        import warnings
+
+        try:
+            log_file = init_worker_logging(tmp_path / "logs", "20260101T000000Z")
+            with stage_log(tmp_path / "chi_00", "bfile"):
+                warnings.warn("worker capture check", UserWarning, stacklevel=1)
+            assert "worker capture check" in (tmp_path / "chi_00" / "bfile.log").read_text()
+            assert log_file.exists()
+        finally:
+            logging.captureWarnings(False)
+
+    def test_import_does_not_enable_capture(self):
+        """Merely importing perturb (which rsi does lazily) must not hijack
+        warning routing (F13): capture is enabled only by the setup calls.
+        Checked in a fresh interpreter — this module is already imported here."""
+        import subprocess
+        import sys
+
+        code = (
+            "import warnings, odas_tpw.perturb.logging_setup;"
+            "assert getattr(warnings.showwarning, '__module__', '') != 'logging',"
+            "'import enabled logging.captureWarnings'"
+        )
+        subprocess.run([sys.executable, "-c", code], check=True)
+
+
 class TestRunTimestamp:
     def test_format(self):
         ts = run_timestamp()

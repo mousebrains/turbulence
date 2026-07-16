@@ -182,20 +182,42 @@ class TestHotelSalinityResolution:
         with pytest.raises(ValueError, match="not recognised"):
             _resolve_salinity_cfg("saltiness", path, "JAC_T", "JAC_C", "chi")
 
-    def test_resolve_scrubs_partial_nan_with_median(self, tmp_path, caplog):
-        # NaN outside CTD coverage must be filled (with the median), not left to
-        # NaN out the viscosity for those windows.
+    def test_resolve_scrubs_partial_nan_by_interpolation(self, tmp_path, caplog):
+        # Non-finite samples (e.g. hotel:<var> pointing at a derived variable
+        # with bad-conductivity NaNs) must be interp-filled, not left to NaN
+        # out the viscosity for those windows — and never median-filled, which
+        # would step the salinity at each fill boundary (spurious N2 on the
+        # stratification path, which shares this scrub).
         import xarray as xr
 
-        S = np.array([32.0, np.nan, 32.4, np.nan, 32.2])
+        # Values chosen so interp and the (retired) median differ at EVERY
+        # asserted index: median of {32.0, 32.8, 32.2} is 32.2, while interp
+        # gives 32.4 and 32.5.
+        S = np.array([32.0, np.nan, 32.8, np.nan, 32.2])
         path = tmp_path / "prof.nc"
         ds = xr.Dataset({"t_slow": ("time_slow", np.arange(5.0)), "salinity": ("time_slow", S)})
         ds.to_netcdf(path)
         with caplog.at_level(logging.WARNING):
             out = _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "chi")
         assert np.isfinite(out).all()
-        assert out[1] == pytest.approx(np.nanmedian(S))  # gap filled with median
+        assert out[1] == pytest.approx(0.5 * (32.0 + 32.8))  # interp between neighbors
+        assert out[3] == pytest.approx(0.5 * (32.8 + 32.2))
         assert "non-finite" in caplog.text
+        assert "interpolation" in caplog.text
+
+    def test_resolve_scrub_holds_nearest_finite_at_edges(self, tmp_path, caplog):
+        # Leading/trailing non-finite samples hold the nearest finite value
+        # (matching the slow->fast speed regrid), not an extrapolation.
+        import xarray as xr
+
+        S = np.array([np.nan, 32.0, 32.4, np.nan])
+        path = tmp_path / "prof.nc"
+        ds = xr.Dataset({"t_slow": ("time_slow", np.arange(4.0)), "salinity": ("time_slow", S)})
+        ds.to_netcdf(path)
+        with caplog.at_level(logging.WARNING):
+            out = _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "chi")
+        assert out[0] == pytest.approx(32.0)
+        assert out[3] == pytest.approx(32.4)
 
     def test_resolve_all_nan_falls_back_to_none(self, tmp_path, caplog):
         import xarray as xr
@@ -208,6 +230,22 @@ class TestHotelSalinityResolution:
             out = _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "chi")
         assert out is None  # -> fixed 35 PSU downstream
         assert "non-finite" in caplog.text
+
+    def test_resolve_single_finite_sample_falls_back_to_none(self, tmp_path, caplog):
+        # A single finite sample would constant-fill the whole profile (and
+        # beat a fully valid conductivity channel); treat it like
+        # all-non-finite — the hotel merge's _interp_one uses the same
+        # <2-finite convention.
+        import xarray as xr
+
+        S = np.array([np.nan, 32.0, np.nan, np.nan])
+        path = tmp_path / "prof.nc"
+        ds = xr.Dataset({"t_slow": ("time_slow", np.arange(4.0)), "salinity": ("time_slow", S)})
+        ds.to_netcdf(path)
+        with caplog.at_level(logging.WARNING):
+            out = _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "chi")
+        assert out is None  # -> fixed 35 PSU downstream
+        assert "single finite sample" in caplog.text
 
     def test_profile_channel_salinity_rejects_wrong_length(self, tmp_path, caplog):
         # A variable matching the hotel name but on neither the slow nor fast
@@ -229,6 +267,12 @@ class TestHotelSalinityResolution:
     def test_scrub_salinity_scalar_and_none_passthrough(self):
         assert _scrub_salinity(None, "chi", "x") is None
         assert _scrub_salinity(34.0, "chi", "x") == 34.0  # 0-d passes through
+
+    def test_scrub_salinity_finite_array_returned_unchanged(self):
+        # Fully finite input passes through as-is (same object for float64),
+        # keeping behavior bit-identical when no scrubbing is needed.
+        arr = np.array([32.0, 32.2, 32.4])
+        assert _scrub_salinity(arr, "chi", "x") is arr
 
     @pytest.mark.parametrize(
         "value,expected",
@@ -284,13 +328,14 @@ class TestComputeSlowStratification:
         pf.channels = {"P": P, "JAC_T": T, "JAC_C": C}
         pf.is_fast = lambda name: False  # JAC_C is a slow channel
 
-        N2, dTdz = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
+        N2, dTdz, sal_note = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
         assert N2.shape == (n,) and dTdz.shape == (n,)
         assert np.isfinite(N2).any() and np.isfinite(dTdz).any()
         assert np.all(N2[np.isfinite(N2)] > 0)  # stable column
+        assert "TEOS-10" in sal_note  # conductivity-derived salinity, truthfully noted
         # Outside the (single, full-span) cast nothing is masked here, but a
         # short cast yields all-NaN for that cast rather than raising.
-        N2b, _ = _compute_slow_stratification(pf, [(0, 2)], "JAC_T", "JAC_C", 2.0)
+        N2b, _, _ = _compute_slow_stratification(pf, [(0, 2)], "JAC_T", "JAC_C", 2.0)
         assert np.all(np.isnan(N2b[0:3]))
 
     def test_returns_none_without_pressure(self):
@@ -299,8 +344,8 @@ class TestComputeSlowStratification:
         pf = MagicMock()
         pf.channels = {"JAC_T": np.zeros(10)}
         pf.is_fast = lambda name: False
-        N2, dTdz = _compute_slow_stratification(pf, [(0, 9)], "JAC_T", "JAC_C", 2.0)
-        assert N2 is None and dTdz is None
+        N2, dTdz, sal_note = _compute_slow_stratification(pf, [(0, 9)], "JAC_T", "JAC_C", 2.0)
+        assert N2 is None and dTdz is None and sal_note is None
 
     def test_hotel_salinity_overrides_conductivity(self):
         """sal_source='hotel' uses the injected salinity channel, changing N2."""
@@ -316,14 +361,20 @@ class TestComputeSlowStratification:
         pf.channels = {"P": P, "JAC_T": T, "JAC_C": C, "salinity": S_hotel}
         pf.is_fast = lambda name: False
 
-        N2_cond, _ = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
-        N2_hotel, _ = _compute_slow_stratification(
+        N2_cond, _, note_cond = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0
+        )
+        N2_hotel, _, note_hotel = _compute_slow_stratification(
             pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, "hotel"
         )
         # Both finite, but the hotel-salinity N2 differs from the C-derived one.
         m = np.isfinite(N2_cond) & np.isfinite(N2_hotel)
         assert m.any()
         assert not np.allclose(N2_cond[m], N2_hotel[m])
+        # Fully finite hotel channel: the note claims exactly that, with no
+        # fill annotation (case (c): behavior and note unchanged).
+        assert note_hotel == "salinity from hotel channel 'salinity'"
+        assert "TEOS-10" in note_cond
 
     def test_fixed_number_salinity_changes_n2(self):
         """A numeric sal_source is applied, not ignored: N2 differs from the
@@ -337,13 +388,240 @@ class TestComputeSlowStratification:
         pf.channels = {"P": P, "JAC_T": T}  # no conductivity at all
         pf.is_fast = lambda name: False
 
-        N2_30, _ = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, 30.0)
-        N2_35, _ = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, 35.0)
+        N2_30, _, note_30 = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, 30.0
+        )
+        N2_35, _, _ = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, 35.0
+        )
         m = np.isfinite(N2_30)
         assert m.any()
         # Absolute-salinity anomaly shifts density -> a fixed S=30 must move N2
         # off the S=35 result, proving the number branch is actually applied.
         assert not np.allclose(N2_30[m], N2_35[m])
+        assert note_30 == "fixed 30 PSU"
+
+    def test_hotel_partial_nan_interp_filled_no_n2_spike(self):
+        """Case (a): a gap in the hotel salinity is interp-filled — N2 stays
+        finite through the gap, does not spike above the true-profile maximum
+        at the fill boundaries (N2 is first-order in dS/dz, so a constant fill
+        would step S there), and the note counts the filled samples."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        S_true = 31.0 + 0.05 * P  # linear in P: interp fill reproduces it
+        S_gap = S_true.copy()
+        S_gap[150:250] = np.nan
+        pf_true = MagicMock()
+        pf_true.channels = {"P": P, "JAC_T": T, "salinity": S_true}
+        pf_true.is_fast = lambda name: False
+        pf_gap = MagicMock()
+        pf_gap.channels = {"P": P, "JAC_T": T, "salinity": S_gap}
+        pf_gap.is_fast = lambda name: False
+
+        N2_true, _, _ = _compute_slow_stratification(
+            pf_true, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, "hotel"
+        )
+        N2_gap, _, note = _compute_slow_stratification(
+            pf_gap, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, "hotel"
+        )
+        finite_true = np.isfinite(N2_true)
+        assert finite_true.any()
+        # Finite everywhere the true profile is finite (the gap is bridged) ...
+        assert np.isfinite(N2_gap[finite_true]).all()
+        # ... with no spurious spike above the true-profile maximum.
+        assert np.nanmax(N2_gap) <= np.nanmax(N2_true) * 1.05
+        np.testing.assert_allclose(
+            N2_gap[finite_true], N2_true[finite_true], rtol=1e-6
+        )
+        assert "salinity from hotel channel 'salinity'" in note
+        assert "per-cast scrub: 100/400 non-finite salinity samples interpolated" in note
+
+    def test_two_cast_boundary_gap_scrubbed_per_cast(self):
+        """A NaN gap straddling a cast boundary must be filled PER CAST
+        (edge-hold within each cast), never by index-space interpolation
+        across the inter-cast span — that would blend cast-1's deep salinity
+        toward cast-2's shallow salinity, fabricating a wrong-sign within-cast
+        dS/dz and collapsing N2 in the cast-1 tail."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n_cast, n_gap = 390, 20
+        P1 = np.linspace(1.0, 50.0, n_cast)
+        P = np.concatenate([P1, np.linspace(50.0, 1.0, n_gap), P1])
+        T = 20.0 - 0.1 * P
+        S_true = 31.0 + 0.05 * P
+        casts = [(0, n_cast - 1), (n_cast + n_gap, len(P) - 1)]
+
+        # Gap straddling the boundary: cast-1 tail + inter-cast + cast-2 head.
+        S_gap = S_true.copy()
+        S_gap[300:501] = np.nan
+
+        # What a correct per-cast fill produces: the non-finite samples are all
+        # leading/trailing within their own cast, so each cast holds the
+        # nearest finite value of ITS OWN cast (no cross-boundary blending).
+        S_held = S_true.copy()
+        S_held[300:410] = S_true[299]  # cast-1 tail (inter-cast span unused)
+        S_held[410:501] = S_true[501]  # cast-2 head
+
+        def run(S):
+            pf = MagicMock()
+            pf.channels = {"P": P, "JAC_T": T, "salinity": S}
+            pf.is_fast = lambda name: False
+            return _compute_slow_stratification(pf, casts, "JAC_T", "JAC_C", 2.0, "hotel")
+
+        N2_true, _, _ = run(S_true)
+        N2_gap, _, note = run(S_gap)
+        N2_held, _, _ = run(S_held)
+
+        # Exactly per-cast semantics: the gap run equals the manually-held run.
+        np.testing.assert_allclose(N2_gap, N2_held, equal_nan=True)
+        # No wrong-sign dS/dz / N2 collapse in the cast-1 tail: with the held
+        # (constant) salinity and cooling-downward T the tail stays stably
+        # stratified (N2 > 0), just closer to temperature-only than the truth.
+        tail = slice(310, 385)
+        m = np.isfinite(N2_true[tail]) & np.isfinite(N2_gap[tail])
+        assert m.any()
+        assert np.all(N2_gap[tail][m] > 0)
+        assert "per-cast scrub" in note
+        assert "edge samples held at the nearest finite value" in note
+        assert "N2 approaches temperature-only where held" in note
+
+    def test_cast_with_too_few_finite_hotel_samples_falls_back(self):
+        """A cast whose hotel salinity slice has <2 finite samples falls back
+        to conductivity for THAT cast (recorded in the note) instead of being
+        constant-filled from a single sample or silently dropped."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n_cast, n_gap = 390, 20
+        P1 = np.linspace(1.0, 50.0, n_cast)
+        P = np.concatenate([P1, np.linspace(50.0, 1.0, n_gap), P1])
+        T = 20.0 - 0.1 * P
+        C = np.full(len(P), 45.0)
+        S = 31.0 + 0.05 * P
+        S[n_cast + n_gap :] = np.nan  # cast 2 entirely non-finite
+        casts = [(0, n_cast - 1), (n_cast + n_gap, len(P) - 1)]
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T, "JAC_C": C, "salinity": S}
+        pf.is_fast = lambda name: False
+
+        N2, _, note = _compute_slow_stratification(pf, casts, "JAC_T", "JAC_C", 2.0, "hotel")
+        pf_cond = MagicMock()
+        pf_cond.channels = {"P": P, "JAC_T": T, "JAC_C": C}
+        pf_cond.is_fast = lambda name: False
+        N2_cond, _, _ = _compute_slow_stratification(pf_cond, casts, "JAC_T", "JAC_C", 2.0)
+
+        sl2 = slice(n_cast + n_gap, len(P))
+        np.testing.assert_allclose(N2[sl2], N2_cond[sl2], equal_nan=True)
+        assert np.isfinite(N2[sl2]).any()  # cast 2 not dropped
+        assert "1 cast(s) with <2 finite hotel samples fell back to conductivity/35 PSU" in note
+
+    def test_hotel_all_nan_falls_back_to_conductivity_with_note(self):
+        """Case (b): an all-NaN hotel channel (e.g. <2 finite source samples in
+        the hotel merge) falls through to conductivity — N2 matches the plain
+        C-derived run instead of going all-NaN — and the note says why."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        C = np.full(n, 45.0)
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T, "JAC_C": C, "salinity": np.full(n, np.nan)}
+        pf.is_fast = lambda name: False
+
+        N2_cond, _, _ = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
+        N2_hotel, _, note = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, "hotel"
+        )
+        np.testing.assert_allclose(N2_hotel, N2_cond, equal_nan=True)
+        assert "TEOS-10" in note
+        assert "hotel channel 'salinity' entirely non-finite" in note
+
+    def test_hotel_all_nan_without_conductivity_falls_back_to_35(self):
+        """Case (b) without conductivity: all-NaN hotel channel -> 35 PSU with a
+        truthful note; N2 still computed from temperature stratification."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T, "salinity": np.full(n, np.nan)}
+        pf.is_fast = lambda name: False
+
+        N2, _, note = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, "hotel"
+        )
+        assert np.isfinite(N2).any()
+        assert "35 PSU" in note
+        assert "hotel channel 'salinity' entirely non-finite" in note
+
+    def test_all_nan_conductivity_falls_back_to_35(self):
+        """P1: a conductivity channel that is PRESENT but all-NaN must not be
+        treated as a successful fallback — SP_from_C yields all-NaN salinity,
+        which previously NaNed out N2 for every cast while the note claimed
+        C-derived salinity. Gate the derived SP; fall through to 35 PSU."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T, "JAC_C": np.full(n, np.nan)}
+        pf.is_fast = lambda name: False
+
+        N2, _, note = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
+        assert np.isfinite(N2).any()  # 35 PSU fallback, not all-NaN
+        assert "assumed 35 PSU" in note
+        assert "JAC_C present but yielded no finite salinity" in note
+        assert "temperature stratification only" in note
+
+    def test_all_nan_hotel_and_conductivity_reaches_35(self):
+        """Pat's repro: finite P/T + all-NaN hotel salinity + all-NaN JAC_C
+        must reach the intended 35 PSU fallback (finite N2) with BOTH reasons
+        recorded, not all-NaN N2 under a C/T/P claim."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        pf = MagicMock()
+        pf.channels = {
+            "P": P,
+            "JAC_T": T,
+            "JAC_C": np.full(n, np.nan),
+            "salinity": np.full(n, np.nan),
+        }
+        pf.is_fast = lambda name: False
+
+        N2, _, note = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, "hotel"
+        )
+        assert np.isfinite(N2).any()
+        assert "assumed 35 PSU" in note
+        assert "hotel channel 'salinity' entirely non-finite" in note
+        assert "JAC_C present but yielded no finite salinity" in note
+
+    def test_partially_nan_conductivity_keeps_teos10_masking(self):
+        """A derived SP with >=2 finite samples is used as before — non-finite
+        samples are masked per window inside profile_stratification, and the
+        note still (truthfully) claims C-derived salinity."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        C = np.full(n, 45.0)
+        C[150:250] = np.nan  # partial bad conductivity -> partial-NaN SP
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T, "JAC_C": C}
+        pf.is_fast = lambda name: False
+
+        N2, _, note = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
+        assert np.isfinite(N2).any()
+        assert note == "practical salinity from JAC_C/JAC_T/P (TEOS-10)"
 
 
 class TestAttachWindowStratification:
@@ -423,8 +701,199 @@ class TestAttachWindowStratification:
         )
         assert out is not None
         N2, _dTdz, sal_note = out
-        assert "hotel channel 'salinity'" in sal_note
+        # Case (c): fully finite hotel channel -> exact note, no fill annotation.
+        assert sal_note == "salinity from hotel channel 'salinity'"
         assert np.isfinite(N2).any()
+
+    def _hotel_profile_nc(self, path, S):
+        """Profile nc with a hotel salinity channel (no conductivity)."""
+        import xarray as xr
+
+        n = len(S)
+        P = np.linspace(1.0, 50.0, n)
+        xr.Dataset(
+            {
+                "t_slow": ("time_slow", np.linspace(0.0, 100.0, n)),
+                "P": ("time_slow", P),
+                "JAC_T": ("time_slow", 20.0 - 0.1 * P),
+                "salinity": ("time_slow", S),
+            }
+        ).to_netcdf(path)
+
+    def test_hotel_partial_nan_gap_interp_filled_no_n2_spike(self, tmp_path):
+        """Case (a) physics regression: a salinity coverage gap is bridged by
+        interpolation, so window N2 stays finite through the gap and shows no
+        spike above the true-profile maximum near the fill boundaries. (A
+        median fill would step S at the boundary: N2_spurious ~ g*beta*dS/dz,
+        orders above thermocline values, and Thorpe sorting keeps it.)"""
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        S_true = 31.0 + 0.05 * P  # linear in P: interp fill reproduces it
+        S_gap = S_true.copy()
+        S_gap[150:250] = np.nan  # coverage gap spanning t ~ [37.6, 62.4] s
+        prof_true = tmp_path / "prof_true.nc"
+        prof_gap = tmp_path / "prof_gap.nc"
+        self._hotel_profile_nc(prof_true, S_true)
+        self._hotel_profile_nc(prof_gap, S_gap)
+
+        # Windows straddling both fill boundaries and inside the gap.
+        win_t = np.array([30.0, 37.5, 45.0, 50.0, 55.0, 62.5, 70.0])
+        out_true = _window_stratification_for_profile(
+            prof_true, win_t, 5.0, "JAC_T", "JAC_C", "prof_true.nc", "hotel"
+        )
+        out_gap = _window_stratification_for_profile(
+            prof_gap, win_t, 5.0, "JAC_T", "JAC_C", "prof_gap.nc", "hotel"
+        )
+        N2_true, _, note_true = out_true
+        N2_gap, _, note_gap = out_gap
+        assert np.isfinite(N2_true).all()
+        assert np.isfinite(N2_gap).all()  # the gap is bridged, not NaNed out
+        assert np.nanmax(N2_gap) <= np.nanmax(N2_true) * 1.05  # no fill-boundary spike
+        np.testing.assert_allclose(N2_gap, N2_true, rtol=1e-6)
+        assert note_true == "salinity from hotel channel 'salinity'"
+        assert "salinity from hotel channel 'salinity'" in note_gap
+        assert "100/400 non-finite salinity samples interpolated" in note_gap
+        assert "held" not in note_gap  # interior gap: interpolated, nothing edge-held
+
+    def test_hotel_edge_held_zone_noted_as_temperature_only(self, tmp_path):
+        """Leading/trailing non-finite salinity is edge-held (constant S -> no
+        salinity gradient there), and the note must flag that N2 approaches
+        temperature-only in the held zone."""
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        n = 200
+        P = np.linspace(1.0, 50.0, n)
+        S = 31.0 + 0.05 * P
+        S[:50] = np.nan  # leading zone: held at the first finite value
+        prof = tmp_path / "prof_edge.nc"
+        self._hotel_profile_nc(prof, S)
+        out = _window_stratification_for_profile(
+            prof, np.array([10.0, 50.0, 90.0]), 5.0, "JAC_T", "JAC_C", "p.nc", "hotel"
+        )
+        N2, _, note = out
+        assert np.isfinite(N2).any()
+        assert "50/200 edge samples held at the nearest finite value" in note
+        assert "N2 approaches temperature-only where held" in note
+
+    def test_hotel_all_nan_falls_back_to_conductivity_with_note(self, tmp_path):
+        """Case (b): an all-NaN hotel channel must not NaN out every mixing
+        product — fall through to conductivity, and never claim hotel salinity
+        when no finite hotel sample contributed."""
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        n = 200
+        P = np.linspace(1.0, 50.0, n)
+        prof = tmp_path / "prof_allnan.nc"
+        xr.Dataset(
+            {
+                "t_slow": ("time_slow", np.linspace(0.0, 100.0, n)),
+                "P": ("time_slow", P),
+                "JAC_T": ("time_slow", 20.0 - 0.1 * P),
+                "JAC_C": ("time_slow", np.full(n, 45.0)),
+                "salinity": ("time_slow", np.full(n, np.nan)),
+            }
+        ).to_netcdf(prof)
+
+        win_t = np.array([25.0, 50.0, 75.0])
+        out_hotel = _window_stratification_for_profile(
+            prof, win_t, 5.0, "JAC_T", "JAC_C", "prof_allnan.nc", "hotel"
+        )
+        out_cond = _window_stratification_for_profile(
+            prof, win_t, 5.0, "JAC_T", "JAC_C", "prof_allnan.nc", None
+        )
+        N2_hotel, _, note = out_hotel
+        N2_cond, _, _ = out_cond
+        np.testing.assert_allclose(N2_hotel, N2_cond, equal_nan=True)
+        assert np.isfinite(N2_hotel).any()
+        assert "TEOS-10" in note
+        assert "hotel channel 'salinity' entirely non-finite" in note
+
+    def test_hotel_all_nan_without_conductivity_falls_back_to_35(self, tmp_path):
+        """Case (b) without conductivity: all-NaN hotel channel -> 35 PSU note
+        recording the reason; N2 still computed (temperature stratification)."""
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        prof = tmp_path / "prof_allnan35.nc"
+        self._hotel_profile_nc(prof, np.full(200, np.nan))
+        out = _window_stratification_for_profile(
+            prof, np.array([25.0, 50.0, 75.0]), 5.0, "JAC_T", "JAC_C", "p.nc", "hotel"
+        )
+        N2, _, note = out
+        assert np.isfinite(N2).any()
+        assert "35 PSU" in note
+        assert "hotel channel 'salinity' entirely non-finite" in note
+
+    def _profile_nc_with_c(self, path, C, S_hotel=None):
+        """Profile nc with a conductivity channel (and optional hotel S)."""
+        import xarray as xr
+
+        n = len(C)
+        P = np.linspace(1.0, 50.0, n)
+        data = {
+            "t_slow": ("time_slow", np.linspace(0.0, 100.0, n)),
+            "P": ("time_slow", P),
+            "JAC_T": ("time_slow", 20.0 - 0.1 * P),
+            "JAC_C": ("time_slow", C),
+        }
+        if S_hotel is not None:
+            data["salinity"] = ("time_slow", S_hotel)
+        xr.Dataset(data).to_netcdf(path)
+
+    def test_all_nan_conductivity_falls_back_to_35_with_truthful_note(self, tmp_path):
+        """P1: a conductivity channel that is PRESENT but all-NaN must not be
+        treated as a successful fallback — SP_from_C yields all-NaN salinity,
+        which previously NaNed out N2 for every window while the note claimed
+        C-derived salinity. Gate the derived SP; fall through to 35 PSU."""
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        prof = tmp_path / "prof_badC.nc"
+        self._profile_nc_with_c(prof, np.full(200, np.nan))
+        out = _window_stratification_for_profile(
+            prof, np.array([25.0, 50.0, 75.0]), 5.0, "JAC_T", "JAC_C", "p.nc", None
+        )
+        N2, _, note = out
+        assert np.isfinite(N2).any()  # 35 PSU fallback, not all-NaN
+        assert "assumed 35 PSU" in note
+        assert "JAC_C present but yielded no finite salinity" in note
+        assert "temperature stratification only" in note
+
+    def test_all_nan_hotel_and_conductivity_reaches_35(self, tmp_path):
+        """Pat's repro: finite P/T + all-NaN hotel salinity + all-NaN JAC_C
+        must reach the intended 35 PSU fallback (finite N2) with BOTH reasons
+        recorded, not all-NaN N2 under a C/T/P claim."""
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        prof = tmp_path / "prof_badC_badS.nc"
+        self._profile_nc_with_c(prof, np.full(200, np.nan), S_hotel=np.full(200, np.nan))
+        out = _window_stratification_for_profile(
+            prof, np.array([25.0, 50.0, 75.0]), 5.0, "JAC_T", "JAC_C", "p.nc", "hotel"
+        )
+        N2, _, note = out
+        assert np.isfinite(N2).any()
+        assert "assumed 35 PSU" in note
+        assert "hotel channel 'salinity' entirely non-finite" in note
+        assert "JAC_C present but yielded no finite salinity" in note
+
+    def test_partially_nan_conductivity_keeps_teos10_masking(self, tmp_path):
+        """A derived SP with >=2 finite samples is used as before — non-finite
+        samples are masked per window inside sorted_stratification, and the
+        note still (truthfully) claims C-derived salinity."""
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        C = np.full(200, 45.0)
+        C[80:120] = np.nan  # partial bad conductivity -> partial-NaN SP
+        prof = tmp_path / "prof_partC.nc"
+        self._profile_nc_with_c(prof, C)
+        out = _window_stratification_for_profile(
+            prof, np.array([25.0, 75.0]), 5.0, "JAC_T", "JAC_C", "p.nc", None
+        )
+        N2, _, note = out
+        assert np.isfinite(N2).all()  # windows clear of the bad zone
+        assert note == "practical salinity from JAC_C/JAC_T/P (TEOS-10)"
 
     def test_hotel_missing_falls_back_to_35(self, tmp_path):
         """hotel requested but neither the channel nor conductivity present -> 35 PSU note."""
@@ -936,6 +1405,63 @@ class TestProcessFile:
         kwargs = mock_get_prof.call_args.kwargs
         assert kwargs["direction"] == "down"
 
+    @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_w_min_auto_resolves_glide_floor(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_fp07_cal, mock_extract, tmp_path
+    ):
+        """profiles.W_min unset (DEFAULT null) resolves per direction: a
+        Slocum glider (direction auto -> glide) gets the 0.05 dbar/s floor —
+        the VMP-tuned 0.3 rejected every glider cast (#131 M3). The defaults
+        also come through merge_config, so direction 'auto' need not be set
+        in the user config at all."""
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)
+        mock_pf.fs_slow = 64.0
+        mock_pf.config = {"instrument_info": {"vehicle": "slocum_glider"}}
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = []
+
+        config = self._base_config(tmp_path)  # no direction/W_min keys at all
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+        kwargs = mock_get_prof.call_args.kwargs
+        assert kwargs["direction"] == "glide"
+        assert kwargs["W_min"] == 0.05
+
+    @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_w_min_explicit_passes_through(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_fp07_cal, mock_extract, tmp_path
+    ):
+        """An explicit numeric W_min keeps exact current behavior."""
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)
+        mock_pf.fs_slow = 64.0
+        mock_pf.config = {"instrument_info": {"vehicle": "slocum_glider"}}
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = []
+
+        config = self._base_config(tmp_path)
+        config["profiles"]["W_min"] = 0.3
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+        assert mock_get_prof.call_args.kwargs["W_min"] == 0.3
+
     @patch("odas_tpw.rsi.dissipation._compute_epsilon", return_value=[])
     @patch(
         "odas_tpw.rsi.profile.extract_profiles",
@@ -976,6 +1502,47 @@ class TestProcessFile:
 
         mock_compute_eps.assert_called()
         assert mock_compute_eps.call_args.kwargs.get("salinity") == 30.0
+
+    @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(400))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_stratification_salinity_note_reaches_n2_channel_comment(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_fp07_cal, mock_extract, tmp_path
+    ):
+        """The slow-path sal_note must land in channel_info['N2']['comment'] so
+        per-profile NetCDFs record the salinity actually used. The old static
+        comment claimed N2 came 'from the profile's own C/T/P' — false for
+        hotel/number salinity."""
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        S = 31.0 + 0.05 * P
+        S[150:250] = np.nan  # partial hotel coverage -> interp-filled, noted
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": P, "JAC_T": 20.0 - 0.1 * P, "salinity": S}
+        mock_pf.channel_info = {}
+        mock_pf.t_slow = np.linspace(0.0, 100.0, n)
+        mock_pf.fs_slow = 64.0
+        mock_pf.config = {"instrument_info": {}}
+        mock_pf.is_fast = lambda name: False
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = [(0, n - 1)]
+
+        config = self._base_config(tmp_path)
+        config["fp07"]["calibrate"] = False
+        config["stratification"] = {"salinity": "hotel"}
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+
+        assert "N2" in mock_pf.channel_info
+        comment = mock_pf.channel_info["N2"]["comment"]
+        assert "salinity from hotel channel 'salinity'" in comment
+        assert "per-cast scrub: 100/400 non-finite salinity samples interpolated" in comment
+        assert "profile's own C/T/P" not in comment
 
     @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
     @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
@@ -1350,6 +1917,378 @@ class TestProcessFile:
         assert called_profiles == ["prof1.nc", "prof3.nc"]
         assert result["diss"] == [str(diss_dir / "prof1.nc"), str(diss_dir / "prof3.nc")]
         assert result["chi"] == [str(chi_dir / "prof1.nc"), str(chi_dir / "prof3.nc")]
+
+
+# ---------------------------------------------------------------------------
+# Hotel speed method + no-silent-overwrite at the injection site (#131 M10)
+# ---------------------------------------------------------------------------
+
+
+class _SpeedStubPFile:
+    """Real-array PFile stand-in for the speed-injection stage: enough for
+    compute_speed_for_pfile (real grids/rates) plus the channel_info /
+    _fast_channels registration the hotel-overwrite warning inspects."""
+
+    def __init__(self):
+        self.fs_slow, self.fs_fast = 64.0, 512.0
+        dur = 10.0
+        n_slow, n_fast = int(dur * self.fs_slow), int(dur * self.fs_fast)
+        self.t_slow = np.arange(n_slow) / self.fs_slow
+        self.t_fast = np.arange(n_fast) / self.fs_fast
+        # 0.5 dbar/s descent so the pressure method recovers 0.5 m/s.
+        self.channels: dict = {"P": 10.0 + 0.5 * self.t_slow}
+        self.channel_info: dict = {}
+        self._fast_channels: set = set()
+        self.config: dict = {"instrument_info": {}}
+
+    def is_fast(self, name):
+        return name in self._fast_channels
+
+    def inject_hotel(self, name, values, *, fast):
+        """Mimic merge_hotel_into_pfile's channel registration."""
+        self.channels[name] = np.asarray(values, dtype=np.float64)
+        self.channel_info[name] = {"units": "m s-1", "type": "hotel", "name": name}
+        if fast:
+            self._fast_channels.add(name)
+
+
+class TestHotelSpeedInjection:
+    """speed.method='hotel' at the perturb injection site, and the
+    no-silent-overwrite warning for hotel-injected speed_fast/W_slow."""
+
+    def _config(self, tmp_path, **speed):
+        return {
+            "files": {"output_root": str(tmp_path)},
+            "profiles": {"P_min": 0.5},
+            "epsilon": {},
+            "fp07": {"calibrate": False},
+            "ct": {"align": False},
+            "ctd": {"enable": False},
+            "chi": {"enable": False},
+            "stratification": {"enable": False},
+            "top_trim": {"enable": False},
+            "bottom": {"enable": False},
+            "speed": dict(speed),
+        }
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_warns_when_pressure_overwrites_hotel_speed_fast(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        """A hotel-injected channel literally named speed_fast is recomputed
+        by the default pressure method: warn naming the remedy, but keep the
+        overwrite behavior itself unchanged (M10)."""
+        pf = _SpeedStubPFile()
+        pf.inject_hotel("speed_fast", np.full(len(pf.t_fast), 0.35), fast=True)
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+            process_file(tmp_path / "test.p", self._config(tmp_path), None, output_dirs)
+
+        assert "hotel merge injected channel 'speed_fast'" in caplog.text
+        assert "speed.method: 'hotel'" in caplog.text
+        assert "speed.hotel_var" in caplog.text
+        # Overwrite unchanged: speed_fast is the recomputed |dP/dt| (0.5),
+        # not the hotel 0.35.
+        np.testing.assert_allclose(
+            np.median(pf.channels["speed_fast"][1000:-1000]), 0.5, atol=0.02
+        )
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_warns_when_recompute_overwrites_hotel_w_slow(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        pf = _SpeedStubPFile()
+        pf.inject_hotel("W_slow", np.full(len(pf.t_slow), 0.4), fast=False)
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+            process_file(tmp_path / "test.p", self._config(tmp_path), None, output_dirs)
+
+        assert "hotel merge injected channel 'W_slow'" in caplog.text
+        assert "always recomputes it as smoothed |dP/dt|" in caplog.text
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_w_slow_warns_even_when_method_hotel(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        """W_slow is recomputed as smoothed |dP/dt| regardless of method —
+        method='hotel' does not rescue a hotel-injected W_slow, so the
+        warning must fire unconditionally."""
+        pf = _SpeedStubPFile()
+        pf.inject_hotel("speed", np.full(len(pf.t_fast), 0.35), fast=True)
+        pf.inject_hotel("W_slow", np.full(len(pf.t_slow), 0.4), fast=False)
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+            process_file(
+                tmp_path / "test.p",
+                self._config(tmp_path, method="hotel"),
+                None,
+                output_dirs,
+            )
+
+        assert "hotel merge injected channel 'W_slow'" in caplog.text
+        # The hotel W_slow (0.4) really was replaced by |dP/dt| (0.5).
+        np.testing.assert_allclose(
+            np.median(np.abs(pf.channels["W_slow"][100:-100])), 0.5, atol=0.02
+        )
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_no_warning_when_method_hotel(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        """method='hotel' consuming its channel, with no hotel-injected
+        speed_fast/W_slow literals — nothing is discarded, no warning."""
+        pf = _SpeedStubPFile()
+        pf.inject_hotel("speed", np.full(len(pf.t_fast), 0.35), fast=True)
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+            process_file(
+                tmp_path / "test.p",
+                self._config(tmp_path, method="hotel"),
+                None,
+                output_dirs,
+            )
+
+        assert "hotel merge injected channel" not in caplog.text
+        np.testing.assert_allclose(
+            np.median(pf.channels["speed_fast"][1000:-1000]), 0.35, atol=1e-3
+        )
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_speed_fast_discarded_warns_when_hotel_var_differs(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        """method='hotel' consuming 'speed' (default hotel_var) still
+        clobbers a hotel-injected literal speed_fast — warn, naming the
+        speed.hotel_var: 'speed_fast' remedy."""
+        pf = _SpeedStubPFile()
+        pf.inject_hotel("speed", np.full(len(pf.t_fast), 0.35), fast=True)
+        pf.inject_hotel("speed_fast", np.full(len(pf.t_fast), 0.99), fast=True)
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+            process_file(
+                tmp_path / "test.p",
+                self._config(tmp_path, method="hotel"),
+                None,
+                output_dirs,
+            )
+
+        assert "hotel merge injected channel 'speed_fast'" in caplog.text
+        assert "speed.hotel_var: 'speed_fast'" in caplog.text
+        # It consumed 'speed' (0.35), discarding the injected 0.99.
+        np.testing.assert_allclose(
+            np.median(pf.channels["speed_fast"][1000:-1000]), 0.35, atol=1e-3
+        )
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_no_warning_when_hotel_var_consumes_speed_fast(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        """hotel_var='speed_fast' actually consumes the injected channel —
+        nothing is discarded, so no warning."""
+        pf = _SpeedStubPFile()
+        pf.inject_hotel("speed_fast", np.full(len(pf.t_fast), 0.35), fast=True)
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+            process_file(
+                tmp_path / "test.p",
+                self._config(tmp_path, method="hotel", hotel_var="speed_fast"),
+                None,
+                output_dirs,
+            )
+
+        assert "hotel merge injected channel" not in caplog.text
+        np.testing.assert_allclose(
+            np.median(pf.channels["speed_fast"][1000:-1000]), 0.35, atol=1e-3
+        )
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_hotel_speed_failure_aborts_file(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        """An unusable hotel speed (all-NaN channel) must abort the file
+        with a recorded error — NOT fall through to downstream diss/chi,
+        which would silently recompute pressure |dP/dt| (the U^4 silent
+        substitution M10 exists to prevent). Batch containment lives in the
+        run loop's per-file isolation, mirroring the PFile-load failure."""
+        pf = _SpeedStubPFile()
+        pf.inject_hotel("speed", np.full(len(pf.t_fast), np.nan), fast=True)
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.perturb.pipeline"):
+            result = process_file(
+                tmp_path / "test.p",
+                self._config(tmp_path, method="hotel"),
+                None,
+                output_dirs,
+            )
+
+        assert any(e.startswith("speed:") for e in result.get("errors", [])), result
+        assert result["profiles"] == []
+        assert result["diss"] == []
+        assert "speed_fast" not in pf.channels  # nothing injected
+        assert "speed channel computation failed" in caplog.text
+        # Profile detection must not have run — the file was aborted early.
+        mock_get_prof.assert_not_called()
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_em_all_nan_aborts_file(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        """PR #139 P1: an all-NaN U_EM used to sail through _slow_to_fast's
+        cutout fill as a finite 0.05 m/s array with provenance 'em', so the
+        explicit-method abort never fired. It must now error and abort."""
+        pf = _SpeedStubPFile()
+        pf.channels["U_EM"] = np.full(len(pf.t_slow), np.nan)
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.perturb.pipeline"):
+            result = process_file(
+                tmp_path / "test.p",
+                self._config(tmp_path, method="em"),
+                None,
+                output_dirs,
+            )
+
+        assert any(e.startswith("speed:") for e in result.get("errors", [])), result
+        assert result["profiles"] == []
+        assert result["diss"] == []
+        assert "speed_fast" not in pf.channels
+        assert "no finite samples" in caplog.text
+        mock_get_prof.assert_not_called()
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_constant_nan_value_aborts_file(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        """PR #139 P1: a non-finite speed.value must abort the file instead
+        of publishing a floored NaN as 'constant:nan'."""
+        pf = _SpeedStubPFile()
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.perturb.pipeline"):
+            result = process_file(
+                tmp_path / "test.p",
+                self._config(tmp_path, method="constant", value=float("nan")),
+                None,
+                output_dirs,
+            )
+
+        assert any(e.startswith("speed:") for e in result.get("errors", [])), result
+        assert result["profiles"] == []
+        assert "speed_fast" not in pf.channels
+        assert "is not finite" in caplog.text
+        mock_get_prof.assert_not_called()
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_no_warning_without_hotel_channels(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        pf = _SpeedStubPFile()
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+            process_file(tmp_path / "test.p", self._config(tmp_path), None, output_dirs)
+
+        assert "hotel merge injected channel" not in caplog.text
+
+    @patch(
+        "odas_tpw.rsi.profile.extract_profiles",
+        return_value=([Path("/fake/prof.nc")], [{}]),
+    )
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[(0, 639)])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_hotel_speed_end_to_end_provenance(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_extract, tmp_path
+    ):
+        """Hotel file -> real merge (the module docstring's m_speed: 'speed'
+        example) -> speed.method='hotel' -> per-profile NetCDF attrs carry
+        speed_method='hotel' / speed_source='hotel:speed' via extract_profiles
+        extra_attrs (the W1b provenance mechanism)."""
+        from odas_tpw.perturb.hotel import HotelData
+
+        pf = _SpeedStubPFile()
+        mock_pfile_cls.return_value = pf
+        hotel = HotelData(
+            time=np.linspace(0.0, 10.0, 50),
+            channels={"m_speed": np.full(50, 0.35)},
+            time_is_relative=True,
+        )
+        hotel_cfg = {"channels": {"m_speed": "speed"}}
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        process_file(
+            tmp_path / "test.p",
+            self._config(tmp_path, method="hotel"),
+            None,
+            output_dirs,
+            hotel_data=hotel,
+            hotel_cfg=hotel_cfg,
+        )
+
+        # The merge registered the hotel channel on the fast grid (default
+        # hotel.fast_channels)...
+        assert pf.channel_info["speed"]["type"] == "hotel"
+        assert pf.is_fast("speed")
+        # ...the speed stage consumed it...
+        np.testing.assert_allclose(
+            np.median(pf.channels["speed_fast"][1000:-1000]), 0.35, atol=1e-3
+        )
+        # ...and stamped the full provenance into the per-profile NetCDFs.
+        kwargs = mock_extract.call_args.kwargs
+        assert kwargs["extra_attrs"] == {
+            "speed_method": "hotel",
+            "speed_source": "hotel:speed",
+        }
 
 
 # ---------------------------------------------------------------------------
