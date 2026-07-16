@@ -700,13 +700,14 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
     unavailable.
 
     *sal_source* selects the salinity: ``None`` (or ``"measured"``) derives it
-    from conductivity via TEOS-10 when present; a number applies that fixed PSU;
-    ``"hotel"``/``"hotel:<var>"`` uses a hotel-injected slow salinity channel.
-    Non-finite samples in a hotel channel are interp-filled **per cast** (with
-    the in-cast counts noted in *sal_note*); a channel — or a cast slice —
-    with fewer than two finite samples falls back to conductivity/35 PSU with
-    the reason noted. Position defaults to 0/0 (a <0.3% gravity and negligible
-    salinity-anomaly effect on N2).
+    from conductivity via TEOS-10 when present *and* the derived salinity has
+    at least two finite samples (else 35 PSU); a number applies that fixed
+    PSU; ``"hotel"``/``"hotel:<var>"`` uses a hotel-injected slow salinity
+    channel. Non-finite samples in a hotel channel are interp-filled **per
+    cast** (with the in-cast counts noted in *sal_note*); a channel — or a
+    cast slice — with fewer than two finite samples falls back to
+    conductivity/35 PSU with the reason noted. Position defaults to 0/0 (a
+    <0.3% gravity and negligible salinity-anomaly effect on N2).
     """
     import gsw
     import numpy as np
@@ -770,17 +771,47 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
                 )
             else:
                 hotel_raw = raw  # scrubbed per cast in the loop below
+
+    # Conductivity fallback — gate the DERIVED salinity, not the channel's
+    # mere presence: SP_from_C returns NaN samplewise on bad conductivity, so
+    # an all-NaN (or single-finite) result would silently NaN out N2 for
+    # every cast while sal_note claimed C-derived salinity. Same <2-finite
+    # convention as the hotel channel. SP_from_C is a pointwise conversion,
+    # so converting once on the full slow grid is identical to the per-cast
+    # conversion it replaces. Non-finite samples within a >=2-finite SP keep
+    # the existing per-window masking inside profile_stratification
+    # (interp-filling the derived SP is a W5 candidate).
+    SP = None
+    cond_reason = None  # why a present conductivity channel was not used
+    if sal_arr is None and C is not None:
+        SP_cand = gsw.SP_from_C(C, T, P)
+        n_finite_sp = int(np.isfinite(SP_cand).sum())
+        if n_finite_sp >= 2:
+            SP = SP_cand
+        else:
+            logger.warning(
+                "stratification %s yielded %d finite salinity sample(s) (fewer "
+                "than two) via SP_from_C; using fixed 35 PSU",
+                C_name,
+                n_finite_sp,
+            )
+            cond_reason = (
+                f"{C_name} present but yielded no finite salinity"
+                if n_finite_sp == 0
+                else f"{C_name} present but yielded a single finite salinity sample"
+            )
     if sal_note is None and hotel_raw is None:
-        if C is not None:
+        if SP is not None:
             sal_note = f"practical salinity from {C_name}/{T_name}/P (TEOS-10)"
             if hotel_reason is not None:
                 sal_note += f" ({hotel_reason})"
         else:
-            missing = (
-                f"{hotel_reason}; no {C_name}"
-                if hotel_reason is not None
-                else "no conductivity channel"
+            cond_part = (
+                cond_reason
+                if cond_reason is not None
+                else (f"no {C_name}" if hotel_reason is not None else "no conductivity channel")
             )
+            missing = f"{hotel_reason}; {cond_part}" if hotel_reason is not None else cond_part
             sal_note = (
                 f"salinity assumed 35 PSU ({missing}); N2 reflects temperature "
                 "stratification only"
@@ -806,14 +837,14 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
             filled = _fill_nonfinite_by_interp(hotel_raw[sl])
             if filled is None:
                 n_fallback_casts += 1
-                if C is not None:
-                    S_c = gsw.SP_from_C(C[sl], T_c, P_c)
+                if SP is not None:
+                    S_c = SP[sl]
             else:
                 S_c, n_i, n_h = filled
                 n_interp += n_i
                 n_held += n_h
-        elif C is not None:
-            S_c = gsw.SP_from_C(C[sl], T_c, P_c)
+        elif SP is not None:
+            S_c = SP[sl]
         target_P, N2, dTdz = profile_stratification(P_c, T_c, S=S_c, window=window)
         good = np.isfinite(N2)
         if good.sum() >= 2:
@@ -855,7 +886,8 @@ def _window_stratification_for_profile(
     Returns ``(N2, dTdz, sal_note)`` evaluated on the *win_t* grid, or ``None``
     when the profile cannot be read or lacks t_slow/P/T. *sal_source* selects the
     salinity: ``None`` (or ``"measured"``) uses the profile's own conductivity
-    via TEOS-10 when present, else 35 PSU; a number applies that fixed PSU;
+    via TEOS-10 when present and the derived salinity has at least two finite
+    samples, else 35 PSU; a number applies that fixed PSU;
     ``"hotel"``/``"hotel:<var>"`` uses a hotel-injected salinity channel. The
     choice is recorded in *sal_note*, truthfully: non-finite samples in a
     hotel-sourced salinity are interp-filled (with the count noted), and an
@@ -965,23 +997,53 @@ def _window_stratification_for_profile(
         elif S_hotel is not None:
             S = S_hotel
             sal_note = hotel_note
-        elif C_name in prof:
-            C = prof[C_name].values.astype(np.float64)
-            S = gsw.SP_from_C(C, T, P)
-            sal_note = f"practical salinity from {C_name}/{T_name}/P (TEOS-10)"
-            if hotel_reason is not None:
-                sal_note += f" ({hotel_reason})"
         else:
+            # Conductivity fallback — gate the DERIVED salinity, not the
+            # channel's mere presence: SP_from_C returns NaN samplewise on
+            # bad conductivity, so an all-NaN (or single-finite) result would
+            # silently NaN out N2 for every window while sal_note claimed
+            # C-derived salinity. Same <2-finite convention as the hotel
+            # channel. Non-finite samples within a >=2-finite SP keep the
+            # existing per-window masking inside sorted_stratification
+            # (interp-filling the derived SP is a W5 candidate).
             S = None
-            missing = (
-                f"{hotel_reason}; no {C_name}"
-                if hotel_reason is not None
-                else "no conductivity channel"
-            )
-            sal_note = (
-                f"salinity assumed 35 PSU ({missing}); N2 reflects temperature "
-                "stratification only"
-            )
+            cond_reason = None  # why a present conductivity channel was not used
+            if C_name in prof:
+                C = prof[C_name].values.astype(np.float64)
+                SP = gsw.SP_from_C(C, T, P)
+                n_finite_sp = int(np.isfinite(SP).sum())
+                if n_finite_sp >= 2:
+                    S = SP
+                    sal_note = f"practical salinity from {C_name}/{T_name}/P (TEOS-10)"
+                    if hotel_reason is not None:
+                        sal_note += f" ({hotel_reason})"
+                else:
+                    logger.warning(
+                        "stratification %s in %s yielded %d finite salinity "
+                        "sample(s) (fewer than two) via SP_from_C; using fixed "
+                        "35 PSU",
+                        C_name,
+                        file_label,
+                        n_finite_sp,
+                    )
+                    cond_reason = (
+                        f"{C_name} present but yielded no finite salinity"
+                        if n_finite_sp == 0
+                        else f"{C_name} present but yielded a single finite salinity sample"
+                    )
+            if S is None:
+                cond_part = (
+                    cond_reason
+                    if cond_reason is not None
+                    else (
+                        f"no {C_name}" if hotel_reason is not None else "no conductivity channel"
+                    )
+                )
+                missing = f"{hotel_reason}; {cond_part}" if hotel_reason is not None else cond_part
+                sal_note = (
+                    f"salinity assumed 35 PSU ({missing}); N2 reflects temperature "
+                    "stratification only"
+                )
     strat = sorted_stratification(win_t, half_w, t_slow, P, T, S=S, lat=lat, lon=lon)
     return strat.N2, strat.dTdz, sal_note
 
@@ -1048,7 +1110,7 @@ def _add_mixing_quantities(
     the Thorpe-sorted (adiabatically leveled) method, with the salinity chosen
     by *sal_source* — a fixed value, a hotel-injected channel, or (the default)
     practical salinity from the profile's own C/T/P via TEOS-10 when the
-    conductivity channel exists, else 35 PSU; see
+    conductivity channel exists and yields finite salinity, else 35 PSU; see
     :func:`_window_stratification_for_profile`. N2 and dT/dz depend only on
     those profile channels, so they are written regardless of epsilon/chi.
 

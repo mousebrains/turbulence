@@ -558,6 +558,71 @@ class TestComputeSlowStratification:
         assert "35 PSU" in note
         assert "hotel channel 'salinity' entirely non-finite" in note
 
+    def test_all_nan_conductivity_falls_back_to_35(self):
+        """P1: a conductivity channel that is PRESENT but all-NaN must not be
+        treated as a successful fallback — SP_from_C yields all-NaN salinity,
+        which previously NaNed out N2 for every cast while the note claimed
+        C-derived salinity. Gate the derived SP; fall through to 35 PSU."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T, "JAC_C": np.full(n, np.nan)}
+        pf.is_fast = lambda name: False
+
+        N2, _, note = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
+        assert np.isfinite(N2).any()  # 35 PSU fallback, not all-NaN
+        assert "assumed 35 PSU" in note
+        assert "JAC_C present but yielded no finite salinity" in note
+        assert "temperature stratification only" in note
+
+    def test_all_nan_hotel_and_conductivity_reaches_35(self):
+        """Pat's repro: finite P/T + all-NaN hotel salinity + all-NaN JAC_C
+        must reach the intended 35 PSU fallback (finite N2) with BOTH reasons
+        recorded, not all-NaN N2 under a C/T/P claim."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        pf = MagicMock()
+        pf.channels = {
+            "P": P,
+            "JAC_T": T,
+            "JAC_C": np.full(n, np.nan),
+            "salinity": np.full(n, np.nan),
+        }
+        pf.is_fast = lambda name: False
+
+        N2, _, note = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, "hotel"
+        )
+        assert np.isfinite(N2).any()
+        assert "assumed 35 PSU" in note
+        assert "hotel channel 'salinity' entirely non-finite" in note
+        assert "JAC_C present but yielded no finite salinity" in note
+
+    def test_partially_nan_conductivity_keeps_teos10_masking(self):
+        """A derived SP with >=2 finite samples is used as before — non-finite
+        samples are masked per window inside profile_stratification, and the
+        note still (truthfully) claims C-derived salinity."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        C = np.full(n, 45.0)
+        C[150:250] = np.nan  # partial bad conductivity -> partial-NaN SP
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T, "JAC_C": C}
+        pf.is_fast = lambda name: False
+
+        N2, _, note = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
+        assert np.isfinite(N2).any()
+        assert note == "practical salinity from JAC_C/JAC_T/P (TEOS-10)"
+
 
 class TestAttachWindowStratification:
     """N2/dTdz attached to a window-grid (diss) dataset from a profile's CTD."""
@@ -761,6 +826,74 @@ class TestAttachWindowStratification:
         assert np.isfinite(N2).any()
         assert "35 PSU" in note
         assert "hotel channel 'salinity' entirely non-finite" in note
+
+    def _profile_nc_with_c(self, path, C, S_hotel=None):
+        """Profile nc with a conductivity channel (and optional hotel S)."""
+        import xarray as xr
+
+        n = len(C)
+        P = np.linspace(1.0, 50.0, n)
+        data = {
+            "t_slow": ("time_slow", np.linspace(0.0, 100.0, n)),
+            "P": ("time_slow", P),
+            "JAC_T": ("time_slow", 20.0 - 0.1 * P),
+            "JAC_C": ("time_slow", C),
+        }
+        if S_hotel is not None:
+            data["salinity"] = ("time_slow", S_hotel)
+        xr.Dataset(data).to_netcdf(path)
+
+    def test_all_nan_conductivity_falls_back_to_35_with_truthful_note(self, tmp_path):
+        """P1: a conductivity channel that is PRESENT but all-NaN must not be
+        treated as a successful fallback — SP_from_C yields all-NaN salinity,
+        which previously NaNed out N2 for every window while the note claimed
+        C-derived salinity. Gate the derived SP; fall through to 35 PSU."""
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        prof = tmp_path / "prof_badC.nc"
+        self._profile_nc_with_c(prof, np.full(200, np.nan))
+        out = _window_stratification_for_profile(
+            prof, np.array([25.0, 50.0, 75.0]), 5.0, "JAC_T", "JAC_C", "p.nc", None
+        )
+        N2, _, note = out
+        assert np.isfinite(N2).any()  # 35 PSU fallback, not all-NaN
+        assert "assumed 35 PSU" in note
+        assert "JAC_C present but yielded no finite salinity" in note
+        assert "temperature stratification only" in note
+
+    def test_all_nan_hotel_and_conductivity_reaches_35(self, tmp_path):
+        """Pat's repro: finite P/T + all-NaN hotel salinity + all-NaN JAC_C
+        must reach the intended 35 PSU fallback (finite N2) with BOTH reasons
+        recorded, not all-NaN N2 under a C/T/P claim."""
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        prof = tmp_path / "prof_badC_badS.nc"
+        self._profile_nc_with_c(prof, np.full(200, np.nan), S_hotel=np.full(200, np.nan))
+        out = _window_stratification_for_profile(
+            prof, np.array([25.0, 50.0, 75.0]), 5.0, "JAC_T", "JAC_C", "p.nc", "hotel"
+        )
+        N2, _, note = out
+        assert np.isfinite(N2).any()
+        assert "assumed 35 PSU" in note
+        assert "hotel channel 'salinity' entirely non-finite" in note
+        assert "JAC_C present but yielded no finite salinity" in note
+
+    def test_partially_nan_conductivity_keeps_teos10_masking(self, tmp_path):
+        """A derived SP with >=2 finite samples is used as before — non-finite
+        samples are masked per window inside sorted_stratification, and the
+        note still (truthfully) claims C-derived salinity."""
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        C = np.full(200, 45.0)
+        C[80:120] = np.nan  # partial bad conductivity -> partial-NaN SP
+        prof = tmp_path / "prof_partC.nc"
+        self._profile_nc_with_c(prof, C)
+        out = _window_stratification_for_profile(
+            prof, np.array([25.0, 75.0]), 5.0, "JAC_T", "JAC_C", "p.nc", None
+        )
+        N2, _, note = out
+        assert np.isfinite(N2).all()  # windows clear of the bad zone
+        assert note == "practical salinity from JAC_C/JAC_T/P (TEOS-10)"
 
     def test_hotel_missing_falls_back_to_35(self, tmp_path):
         """hotel requested but neither the channel nor conductivity present -> 35 PSU note."""

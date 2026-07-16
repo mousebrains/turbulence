@@ -75,7 +75,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   edge-held counts ("N/M non-finite salinity samples interpolated", "N/M edge
   samples held at the nearest finite value; N2 approaches temperature-only
   where held") or the fallback reason ("hotel channel 'x' entirely
-  non-finite"). The slow-grid N² comment also no longer claims the salinity
+  non-finite"). The **conductivity fallback is gated the same way**: a
+  conductivity channel that is present but whose derived `SP_from_C` salinity
+  has fewer than two finite samples (e.g. an all-NaN `JAC_C`) now falls
+  through to the documented 35 PSU fallback with the reason noted ("JAC_C
+  present but yielded no finite salinity"), instead of producing all-NaN N²
+  under a note claiming C-derived salinity; a partially-NaN derived SP (two
+  or more finite samples) keeps the existing per-window masking
+  (interp-filling derived SP is deferred). The slow-grid N² comment also no
+  longer claims the salinity
   came "from the profile's own C/T/P" when it did not. The viscosity path's
   scrub switches from a whole-profile **median** fill to the same
   interpolation fill: N² is first-order in dS/dz, so a constant fill would
