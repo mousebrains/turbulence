@@ -20,7 +20,7 @@ from odas_tpw.config_base import ConfigManager, _normalize_value  # noqa: F401
 DEFAULTS: dict[str, dict] = {
     "profiles": {
         "P_min": 0.5,
-        "W_min": 0.3,
+        "W_min": None,  # null = auto: 0.3 free-fall, 0.05 glide/horizontal
         "direction": "auto",
         "vehicle": None,
         "min_duration": 7.0,
@@ -30,8 +30,11 @@ DEFAULTS: dict[str, dict] = {
         "diss_length": None,
         "overlap": None,
         "speed": None,
+        "speed_method": None,  # null = pressure |dP/dt|; em | flight
+        "aoa_deg": 3.0,
         "direction": "auto",
         "vehicle": None,
+        "W_min": None,  # null = auto: 0.3 free-fall, 0.05 glide/horizontal
         "goodman": True,
         "f_AA": 98.0,
         "f_limit": None,
@@ -39,20 +42,27 @@ DEFAULTS: dict[str, dict] = {
         "despike_thresh": 8,
         "despike_smooth": 0.5,
         "salinity": None,
+        "temperature": "auto",
+        "conductivity": "auto",
     },
     "chi": {
         "fft_length": 1024,
         "diss_length": None,
         "overlap": None,
         "speed": None,
+        "speed_method": None,  # null = pressure |dP/dt|; em | flight
+        "aoa_deg": 3.0,
         "direction": "auto",
         "vehicle": None,
+        "W_min": None,  # null = auto: 0.3 free-fall, 0.05 glide/horizontal
         "fp07_model": "single_pole",
         "goodman": True,
         "f_AA": 98.0,
         "fit_method": "iterative",
         "spectrum_model": "kraichnan",
         "salinity": None,
+        "temperature": "auto",
+        "conductivity": "auto",
     },
 }
 
@@ -83,7 +93,8 @@ _TEMPLATE = """\
 
 profiles:
   P_min: 0.5            # minimum pressure [dbar]
-  W_min: 0.3            # minimum fall rate [dbar/s]
+  W_min: null           # minimum fall rate [dbar/s] (null = auto: 0.3
+                        # free-fall, 0.05 glide/horizontal)
   direction: auto       # profile direction: auto, up, down, glide, horizontal
   vehicle: null         # vehicle override (null = from .p file)
   min_duration: 7.0     # minimum profile duration [s]
@@ -92,30 +103,52 @@ epsilon:
   fft_length: 1024      # FFT segment length [samples]
   diss_length: null     # dissipation window [samples] (null = 4 * fft_length)
   overlap: null         # window overlap [samples] (null = diss_length // 2)
-  speed: null           # profiling speed [m/s] (null = from dP/dt)
+  speed: null           # fixed profiling speed [m/s] (null = speed_method)
+  speed_method: null    # through-water speed model: null = pressure |dP/dt|;
+                        # em (U_EM flowmeter); flight (|W|/sin(|pitch|-aoa))
+  aoa_deg: 3.0          # angle of attack [deg] for speed_method: flight
   direction: auto       # profile direction: auto, up, down, glide, horizontal
   vehicle: null         # vehicle override (null = from .p file)
+  W_min: null           # minimum fall rate [dbar/s] (null = auto: 0.3
+                        # free-fall, 0.05 glide/horizontal)
   goodman: true         # Goodman coherent noise removal
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
   f_limit: null         # upper frequency limit [Hz] (null = f_AA)
   fit_order: 3          # polynomial fit order for Nasmyth integration
   despike_thresh: 8     # despike threshold (rectified-HP / LP-envelope ratio, not MAD)
   despike_smooth: 0.5   # despike envelope low-pass cutoff [Hz]
-  salinity: null        # salinity [PSU] (null = 35, fixed S)
+  salinity: null        # PSU value, or "measured" (JAC/selected C+T) (null = 35, fixed S)
+  temperature: auto     # reference temperature for viscosity: auto = first
+                        # plausible of T1..Tn, T, JAC_T; a channel name (QC
+                        # failure warns but proceeds); or a number = constant
+                        # reference temperature [degC]
+  conductivity: auto    # conductivity channel for salinity "measured"
+                        # (auto = JAC_C when present)
 
 chi:
   fft_length: 1024      # FFT segment length [samples]
   diss_length: null     # dissipation window [samples] (null = 4 * fft_length)
   overlap: null         # window overlap [samples] (null = diss_length // 2)
-  speed: null           # profiling speed [m/s] (null = from dP/dt)
+  speed: null           # fixed profiling speed [m/s] (null = speed_method)
+  speed_method: null    # through-water speed model: null = pressure |dP/dt|;
+                        # em (U_EM flowmeter); flight (|W|/sin(|pitch|-aoa))
+  aoa_deg: 3.0          # angle of attack [deg] for speed_method: flight
   direction: auto       # profile direction: auto, up, down, glide, horizontal
   vehicle: null         # vehicle override (null = from .p file)
+  W_min: null           # minimum fall rate [dbar/s] (null = auto: 0.3
+                        # free-fall, 0.05 glide/horizontal)
   fp07_model: single_pole  # FP07 transfer function: single_pole or double_pole
   goodman: true         # Goodman coherent noise removal
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
   fit_method: iterative # Method 2 fitting: iterative or mle
   spectrum_model: kraichnan  # theoretical spectrum: batchelor or kraichnan
-  salinity: null        # salinity [PSU] (null = 35, fixed S)
+  salinity: null        # PSU value, or "measured" (JAC/selected C+T) (null = 35, fixed S)
+  temperature: auto     # reference temperature for viscosity/kappa_T: auto =
+                        # first plausible of T1..Tn, T, JAC_T; a channel name
+                        # (QC failure warns but proceeds); or a number =
+                        # constant reference temperature [degC]
+  conductivity: auto    # conductivity channel for salinity "measured"
+                        # (auto = JAC_C when present)
 """
 
 

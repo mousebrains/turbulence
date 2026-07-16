@@ -196,9 +196,9 @@ epsilon:
   despike_smooth: 0.5
   salinity: null
   epsilon_minimum: 1e-13
-  T_source: null           # temperature source for viscosity (null = blend T1/T2)
-  T1_norm: 1.0             # T1 blending weight
-  T2_norm: 1.0             # T2 blending weight
+  T_source: null           # reference temperature for viscosity: null/"auto" =
+                           # QC chain (T1, T2, ..., T, JAC_T); a channel name;
+                           # or a number = constant reference [degC]
 
 chi:
   enable: false            # chi is optional, separate stage after diss
