@@ -60,6 +60,23 @@ def attrless_nc(tmp_path) -> Path:
     return paths[0]
 
 
+def test_attr_keys_cover_extract_therm_cal_output():
+    """THERM_CAL_ATTR_KEYS == every key _extract_therm_cal can produce.
+
+    The round-trip contract (write attrs -> read the same keys back) is
+    guarded here by construction, not just de-facto by the SN479 fixture's
+    config: a mapping whose .get answers for ANY key enumerates the
+    function's full producible key set (review F5).
+    """
+    from odas_tpw.rsi.chi_io import _extract_therm_cal
+
+    class _AnyCfg(dict):
+        def get(self, key, default=None):
+            return 1.0
+
+    assert set(_extract_therm_cal(_AnyCfg())) == set(THERM_CAL_ATTR_KEYS)
+
+
 class TestAttrWrite:
     """extract_profiles writes exactly _extract_therm_cal's output + diff_gain."""
 
@@ -126,6 +143,61 @@ class TestRoundTrip:
         assert not [r for r in caplog.records if "FP07 calibration" in r.message]
 
 
+class TestPlainTFallbackRoundTrip:
+    """Instrument with NO pre-emphasized T*_dT* channels (review F1).
+
+    The chi loaders fall back to plain fast T channels (first-difference
+    gradient, diff_gain fixed at the generic default, calibration from the
+    channel's OWN config section). extract_profiles must annotate those
+    channels too, or a FRESHLY-extracted per-profile file draws the spurious
+    "predates their introduction" warning and its .p-side therm_cal silently
+    degrades to {} on the NetCDF path.
+    """
+
+    @pytest.fixture()
+    def plain_t_pfile(self):
+        """Real SN479 PFile mutated into a no-pre-emphasis instrument:
+        T*_dT* removed, a plain fast 'T9' thermistor with its own
+        calibration section added."""
+        from odas_tpw.rsi.p_file import PFile
+
+        pf = PFile(P_FILE)
+        for name in ("T1_dT1", "T2_dT2"):
+            del pf.channels[name]
+            pf._fast_channels.discard(name)
+            pf.channel_info.pop(name, None)
+        pf.channels["T9"] = np.linspace(20.0, 5.0, len(pf.t_fast))
+        pf.channel_info["T9"] = {"type": "therm", "units": "degC"}
+        pf._fast_channels.add("T9")
+        pf.config["channels"].append(
+            {
+                "name": "T9",
+                "e_b": "0.7",
+                "b": "0.998",
+                "g": "6.0",
+                "beta_1": "3100.0",
+                "beta_2": "2.4e5",
+                "adc_fs": "4.096",
+                "adc_bits": "16",
+                "t_0": "289.0",
+            }
+        )
+        return pf
+
+    def test_plain_t_round_trip_no_warning(self, plain_t_pfile, tmp_path, caplog):
+        prof = extract_profiles(plain_t_pfile, tmp_path)[0]
+        d_p = _load_therm_channels(plain_t_pfile)
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.rsi.chi_io"):
+            d_nc = _load_therm_channels(prof)
+        assert [t[0] for t in d_p["therm"]] == ["T9"]
+        assert [t[0] for t in d_nc["therm"]] == ["T9"]
+        assert d_nc["diff_gains"] == d_p["diff_gains"] == [0.94]
+        assert d_nc["therm_cal"] == d_p["therm_cal"]  # exact, no tolerance
+        assert d_p["therm_cal"][0]["b"] == 0.998  # own-config cal, not {}
+        # A freshly-extracted file must NOT warn about missing attrs.
+        assert not [r for r in caplog.records if "FP07 calibration" in r.message]
+
+
 class TestChiParity:
     """chi(.p) == chi(new per-profile nc) within tolerance on matched windows.
 
@@ -139,10 +211,14 @@ class TestChiParity:
     the electronics (noise floor, bilinear gain), and factory coefficients
     beat the generic defaults either way.
 
-    Discrimination check (measured on this fixture, fft_length=512):
-    with the m8 attrs max |log10 ratio| ~ 6e-4; with the generic defaults
-    (pre-m8 files) max ~ 1.5e-2, p95 ~ 8e-3. The 5e-3 max / 1e-3 median
-    bounds pass the former and fail the latter.
+    Discrimination check (measured on this fixture, fft_length=512): with
+    the m8 attrs max |log10 ratio| ~ 6e-4; with the generic defaults
+    (pre-m8 files) max ~ 1.5e-2, p95 ~ 8e-3, but median only ~ 4e-5 — most
+    windows are strong-signal, where the noise-floor coefficients barely
+    matter. The 5e-3 MAX bound is therefore the discriminating assertion;
+    the 1e-3 median bound passes in BOTH cases and only guards gross
+    regressions. Do not loosen the max bound expecting the median to
+    backstop it (review F3).
     """
 
     def test_chi_parity(self, prof_nc):

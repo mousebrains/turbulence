@@ -404,17 +404,27 @@ def test_temperature_route_resolves_renamed_channel(tmp_path):
     (#131 W5-ii)."""
     _write_run(tmp_path, t_name="T5")
     table = G.sweep(_args(tmp_path))
-    assert np.isfinite(table["LT_temp"]).any()
+    assert (table["LT_temp"] > 0).any()  # the overturn resolves via T5
 
 
 def test_temperature_route_falls_back_past_railed_t1(tmp_path):
     """A railed T1 (58.46 degC, a real corpus pathology) is skipped; the
-    resolver falls through to the healthy JAC_T and the route survives."""
+    resolver falls through to the healthy JAC_T and the route survives.
+
+    Discrimination (review F2): a railed CONSTANT T1 still yields finite
+    L_T == 0.0 everywhere on the pre-resolver code, so ``isfinite().any()``
+    cannot catch the regression — assert a RESOLVED overturn (L_T > 0) and
+    that it matches the healthy channel's exactly (JAC_T carries the same
+    series a healthy T1 would)."""
     _write_run(tmp_path, rail_temperature=True)
     table = G.sweep(_args(tmp_path))
-    assert np.isfinite(table["LT_temp"]).any()
+    assert (table["LT_temp"] > 0).any()
+    healthy_root = tmp_path / "healthy"
+    _write_run(healthy_root)
+    healthy = G.sweep(_args(healthy_root))
+    np.testing.assert_allclose(table["LT_temp"], healthy["LT_temp"], equal_nan=True)
     # density route untouched
-    assert np.isfinite(table["LT_sigma"]).any()
+    assert (table["LT_sigma"] > 0).any()
 
 
 def test_temperature_route_degrades_never_crashes(tmp_path, capsys):

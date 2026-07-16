@@ -345,9 +345,13 @@ def _load_source(source: "PFile | str | Path") -> dict[str, Any]:
 def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
     """Extract data dict from a PFile."""
     # Lazy imports: chi_io pulls xarray; helpers is only needed for the
-    # channel-name pattern. Keeps profile.py light at module-load time.
-    from odas_tpw.rsi.chi_io import _therm_gradient_config
-    from odas_tpw.rsi.helpers import DT_PATTERN
+    # channel-name patterns. Keeps profile.py light at module-load time.
+    from odas_tpw.rsi.chi_io import (
+        _DEFAULT_DIFF_GAIN,
+        _extract_therm_cal,
+        _therm_gradient_config,
+    )
+    from odas_tpw.rsi.helpers import DT_PATTERN, T_PATTERN
 
     channels = []
     for ch_name, ch_data in pf.channels.items():
@@ -384,6 +388,19 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
             diff_gain, therm_cal = _therm_gradient_config(pf.config, ch_name)
             attrs["diff_gain"] = diff_gain
             attrs.update(therm_cal)
+        elif dim == "time_fast" and T_PATTERN.match(ch_name):
+            # Plain fast T channel (no pre-emphasis): mirror the chi_io .p
+            # branch's first-difference fallback exactly — diff_gain fixed at
+            # the generic default, calibration from the channel's OWN config
+            # section — so an instrument with no T*_dT* channels round-trips
+            # through the per-profile NetCDF without a spurious "predates
+            # their introduction" warning (W5-ii review F1).
+            ch_cfg: dict = next(
+                (ch for ch in pf.config["channels"] if ch.get("name") == ch_name),
+                {},
+            )
+            attrs["diff_gain"] = _DEFAULT_DIFF_GAIN
+            attrs.update(_extract_therm_cal(ch_cfg))
         channels.append((ch_name, ch_data, dim, attrs))
 
     global_attrs = {

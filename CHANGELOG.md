@@ -95,13 +95,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **FP07 factory calibration travels with per-profile NetCDFs** (issue #131
   finding m8). `extract_profiles` now writes `diff_gain` and the base
   thermistor's calibration (`e_b`, `b`, `gain`, `beta_1`, `beta_2`, `adc_fs`,
-  `adc_bits`, `T_0` — exactly the set the FP07 electronics-noise model
-  consumes, including `b` for the eta term) as float variable attrs on every
-  `T*_dT*` gradient channel, and the chi loader reads them back from NetCDF
-  sources. A per-profile file without the attrs (written before this change)
-  falls back to the old generic defaults (`diff_gain=0.94`, ODAS-default
-  thermistor coefficients) with a logged warning naming the file — never
-  silently. The attrs carry the **factory** coefficients from the embedded
+  `adc_bits`, `T_0` — exactly the set `_extract_therm_cal` can produce,
+  including `b`, consumed by the electronics-noise model's eta term; the
+  noise model's remaining knobs keep their defaults) as float variable attrs
+  on every `T*_dT*` gradient channel — and on plain fast `T*` channels for
+  instruments without pre-emphasis (the first-difference fallback) — and the
+  chi loader reads them back from NetCDF sources. A per-profile file without
+  the attrs (written before this change) falls back to the old generic
+  defaults (`diff_gain=0.94`, ODAS-default thermistor coefficients) with a
+  logged warning naming the file — never silently. The attrs carry the **factory** coefficients from the embedded
   `.p` config string; perturb's FP07 in-situ calibration may rewrite the
   channel *data*, which is compatible — the attrs describe the electronics.
 - **`load_channels` carries vibration-sensor types** (`channel_types`: `.p`
