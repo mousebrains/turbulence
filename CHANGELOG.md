@@ -30,10 +30,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     falling back to the selected reference temperature (with a warning) when
     JAC_T is implausible; on `pipeline`, `--salinity measured` maps to the
     automatic path (measured JAC salinity was already preferred there).
-  - Product provenance: the diss/chi NetCDFs (and the run_pipeline L4
-    products) gain `temperature_source`, `temperature_qc`,
-    `conductivity_source` (and `salinity_pair_temperature` when measured
-    salinity is computed) attributes.
+  - Product provenance: the diss/chi NetCDFs gain `temperature_source`,
+    `temperature_qc`, and `conductivity_source` (the resolved conductivity
+    channel — consumed only under `salinity: measured`), plus
+    `salinity_pair_temperature` when a measured salinity was actually
+    computed; the run_pipeline L4 products gain `temperature_source`/
+    `temperature_qc`. A constant reference outside the plausible ocean
+    range is recorded in `temperature_qc` (and warns) instead of claiming
+    "pass".
   - **perturb**: `epsilon.T_source` is now actually implemented (it was
     parsed but stripped before the computation — a dead key). `null`/`"auto"`
     = the QC chain above; a channel name or a number work as in rsi. One knob

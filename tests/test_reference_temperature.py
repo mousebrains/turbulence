@@ -322,7 +322,18 @@ class TestLoadChannelsNc:
         nc = _write_nc(tmp_path / "const.nc", t1_railed=True)
         data = load_channels(nc, temperature_name=12.0)
         assert data["metadata"]["temperature_source"] == "constant:12"
+        assert data["metadata"]["temperature_qc"] == "pass"
         np.testing.assert_array_equal(data["T"], np.full(128, 12.0))
+
+    def test_constant_out_of_range_warns_and_records_qc(self, tmp_path):
+        """An implausible constant reference (e.g. 99 degC) must not claim
+        temperature_qc='pass' — the escape hatch is explicit, but the
+        provenance stays honest and a warning fires."""
+        nc = _write_nc(tmp_path / "const99.nc", t1_railed=True)
+        with pytest.warns(UserWarning, match="outside plausible ocean range"):
+            data = load_channels(nc, temperature_name=99.0)
+        assert data["metadata"]["temperature_source"] == "constant:99"
+        assert "outside plausible" in data["metadata"]["temperature_qc"]
 
     def test_explicit_conductivity_missing_raises(self, tmp_path):
         nc = _write_nc(tmp_path / "noc.nc")
@@ -379,6 +390,17 @@ class TestMeasuredSalinity:
         expected = gsw.SP_from_C(data["C"], data["T"], data["P"])
         np.testing.assert_allclose(sal, expected)
         assert data["metadata"]["salinity_pair_temperature"] == "T1"
+
+    def test_abandoned_measured_salinity_records_no_pair(self):
+        """All-NaN conductivity abandons measured salinity (visc35 fallback);
+        the product must NOT carry a salinity_pair_temperature claiming a
+        pairing that never produced a usable salinity."""
+        data = self._data()
+        data["C"] = np.full_like(data["C"], np.nan)
+        with pytest.warns(UserWarning, match="entirely non-finite"):
+            sal = resolve_measured_salinity(data)
+        assert sal is None
+        assert "salinity_pair_temperature" not in data["metadata"]
 
     def test_nan_gaps_median_filled(self):
         data = self._data()

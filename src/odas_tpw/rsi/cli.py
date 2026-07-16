@@ -526,6 +526,19 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
             )
             sys.exit(1)
 
+    # The pipeline resolves ONE temperature/conductivity for both epsilon and
+    # chi (they share the per-file L1 load); a differing [chi] value in the
+    # config would otherwise be silently ignored.
+    for key in ("temperature", "conductivity"):
+        eps_val, chi_val = eps_merged.get(key, "auto"), chi_merged.get(key, "auto")
+        if chi_val != eps_val:
+            print(
+                f"Warning: pipeline uses a single {key} for epsilon and chi; "
+                f"[chi] {key}={chi_val!r} is ignored in favor of [epsilon] "
+                f"{key}={eps_val!r}",
+                file=sys.stderr,
+            )
+
     kwargs = {
         "direction": eps_merged.get("direction", "auto"),
         "vehicle": eps_merged.get("vehicle"),

@@ -323,8 +323,6 @@ def resolve_measured_salinity(data: ChannelsDict | dict[str, Any]) -> np.ndarray
                 f"reference temperature ({pair_name})",
                 stacklevel=2,
             )
-    metadata["salinity_pair_temperature"] = pair_name
-
     import gsw
 
     SP = np.asarray(gsw.SP_from_C(C, pair_T, P), dtype=np.float64)
@@ -336,8 +334,9 @@ def resolve_measured_salinity(data: ChannelsDict | dict[str, Any]) -> np.ndarray
             stacklevel=2,
         )
         return None
+    metadata["salinity_pair_temperature"] = pair_name
     if not finite.all():
-        fill = float(np.nanmedian(SP))
+        fill = float(np.median(SP[finite]))
         warnings.warn(
             f"measured salinity has {int((~finite).sum())}/{SP.size} "
             f"non-finite sample(s); filling with the profile median "
@@ -456,7 +455,18 @@ def _resolve_reference_temperature(
         raise ValueError(f"temperature={t_name!r} is not valid; use a channel name or a number")
     if isinstance(t_name, (int, float)):
         value = float(t_name)
-        return np.full(n_slow, value), f"constant:{value:g}", "pass"
+        qc = "pass"
+        if not np.isfinite(value) or not (TEMP_QC_MIN <= value <= TEMP_QC_MAX):
+            qc = (
+                f"constant {value:g} degC outside plausible ocean range "
+                f"[{TEMP_QC_MIN:g}, {TEMP_QC_MAX:g}]"
+            )
+            warnings.warn(
+                f"{context}: reference temperature {qc}; proceeding — "
+                "viscosity/kappa_T will reflect this value",
+                stacklevel=3,
+            )
+        return np.full(n_slow, value), f"constant:{value:g}", qc
     name, reason = resolve_temperature_channel(
         channels, n_slow, t_name, pressure=pressure, context=context
     )
@@ -552,7 +562,10 @@ def _channels_from_nc(
     for vname in sorted(ds.variables.keys()):
         var = ds.variables[vname]
         wanted = (
-            REF_T_PATTERN.match(vname) or vname in ("JAC_T", "JAC_C") or vname in (t_name, c_name)
+            var.dimensions == ("time_slow",)
+            or REF_T_PATTERN.match(vname)
+            or vname in ("JAC_T", "JAC_C")
+            or vname in (t_name, c_name)
         )
         if wanted and var.dimensions in (("time_slow",), ("time_fast",)):
             resolve_map[vname] = var[:].data.astype(np.float64)
