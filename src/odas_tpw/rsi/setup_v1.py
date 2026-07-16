@@ -41,6 +41,7 @@ may add to their setup-file copies):
   ``vmp`` for a ``profile: vertical`` setup).
 """
 
+import math
 import re
 import warnings
 from fnmatch import fnmatch
@@ -106,6 +107,28 @@ def _split_values(raw: str) -> list[str]:
     return raw.split()
 
 
+def _validate_sens_overrides(sens_overrides: dict[str, float] | None) -> dict[str, float]:
+    """Lower-cased sens override map; rejects non-finite / non-positive values.
+
+    NaN would bypass every downstream sign comparison (NaN compares False)
+    and +inf yields all-zero shear — both fabricate garbage epsilon, so the
+    API path is guarded exactly like the CLI ``--sens`` parser and the
+    conversion-time check in :func:`odas_tpw.rsi.channels.convert_shear`.
+    """
+    out: dict[str, float] = {}
+    for k, v in (sens_overrides or {}).items():
+        try:
+            val = float(v)
+        except (TypeError, ValueError):
+            val = float("nan")
+        if not math.isfinite(val) or val <= 0:
+            raise ValueError(
+                f"sens override for {k!r} must be a finite positive number, got {v!r}"
+            )
+        out[k.lower()] = val
+    return out
+
+
 def _strip_trailing_zeros(values: list[str]) -> list[str]:
     """Drop trailing all-zero padding values, keeping at least one value."""
     end = len(values)
@@ -157,7 +180,7 @@ def parse_setup_v1(
     "cruise_info": {}, "root": {...}}``. Channel dicts use modern keys, so
     ``channels.py`` converters apply unchanged.
     """
-    sens_map = {k.lower(): v for k, v in (sens_overrides or {}).items()}
+    sens_map = _validate_sens_overrides(sens_overrides)
 
     root: dict[str, str] = {}
     matrix: list[list[int]] = []
@@ -442,7 +465,7 @@ def load_setup_file(
 
         cfg = parse_config(text)
         if sens_overrides:
-            lowmap = {k.lower(): v for k, v in sens_overrides.items()}
+            lowmap = _validate_sens_overrides(sens_overrides)
             for ch in cfg.get("channels", []):
                 sens = lowmap.get(ch.get("name", "").lower())
                 if sens is not None:

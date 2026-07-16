@@ -489,6 +489,11 @@ def p_to_L1(
     ds.source_file = pf.filepath.name
     ds.history = f"L1 converted from {pf.filepath.name} on {datetime.now(UTC).isoformat()}"
     ds.configuration_string = pf.config_str
+    # v1->v6 translation provenance (issue #141): complete key set (incl.
+    # setup_file_md5 / sens_source, the sens^-2 audit trail) for both the
+    # in-memory raw-v1 route and on-disk translated sources.
+    for key, val in (getattr(pf, "v1_provenance", None) or {}).items():
+        ds.setncattr(key, str(val))
 
     # Root dimensions (shared across groups, following ATOMIX convention)
     ds.createDimension("TIME", len(pf.t_fast))

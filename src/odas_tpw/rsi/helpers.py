@@ -548,17 +548,14 @@ def _channels_from_pfile(
             "temperature_qc": t_qc,
         },
     }
-    # v1-translation provenance (issue #141): from the in-memory route's
-    # attributes, or from the [root] keys of an on-disk translated file.
-    root_cfg = pf.config.get("root", {}) if isinstance(pf.config, dict) else {}
-    if getattr(pf, "translated_from_v1", False):
-        out["metadata"]["translated_from"] = "odas_v1"
-        if getattr(pf, "setup_file_source", None):
-            out["metadata"]["setup_file_source"] = str(pf.setup_file_source)
-    elif root_cfg.get("translated_from"):
-        out["metadata"]["translated_from"] = root_cfg["translated_from"]
-        if root_cfg.get("setup_file_source"):
-            out["metadata"]["setup_file_source"] = root_cfg["setup_file_source"]
+    # v1-translation provenance (issue #141): PFile.v1_provenance carries the
+    # COMPLETE key set (p_file.V1_PROVENANCE_KEYS — incl. setup_file_md5 and
+    # sens_source, the audit trail for the sens^-2 epsilon scaling) for both
+    # the in-memory raw-v1 route and on-disk translated files; copy all of it
+    # into the product metadata.
+    out["metadata"].update(
+        {k: str(v) for k, v in (getattr(pf, "v1_provenance", None) or {}).items()}
+    )
     c_found = resolve_conductivity_channel(pf.channels, n_slow, c_name, context=pf.filepath.name)
     if c_found is not None:
         out["C"] = pf.channels[c_found]
@@ -630,7 +627,13 @@ def _channels_from_nc(
                 accel.append((vname, data))
 
     metadata = {"source": str(nc_path)}
-    for attr in ("instrument_model", "instrument_sn", "source_file", "start_time"):
+    from odas_tpw.rsi.p_file import V1_PROVENANCE_KEYS
+
+    # V1_PROVENANCE_KEYS: the .p -> NC converters copy the complete v1
+    # translation provenance (setup md5, sens source, ...) as global attrs;
+    # carry it through to the diss/chi products of the NC route too (#141).
+    for attr in ("instrument_model", "instrument_sn", "source_file", "start_time",
+                 *V1_PROVENANCE_KEYS):
         if hasattr(ds, attr):
             metadata[attr] = getattr(ds, attr)
 

@@ -18,11 +18,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `rsi/setup_v1.py`; auto-detected `setup.txt` > `setup*.txt` > `setup*.cfg`
   siblings with INI-dialect sniffing, cross-candidate consistency warnings,
   and a hard record-0-matrix assertion) with machine-readable provenance keys
-  in `[root]`. `PFile` reads raw v1 files directly via the same translation
-  in memory (`setup_file=` kwarg to override discovery; `translated_from_v1`
-  / `setup_file_source` attributes), refuses any other pre-v6 version loudly
-  (raw + decoded version in the message), and the v6 path is pinned
-  bit-identical by golden per-channel hashes of the three committed fixtures.
+  in `[root]`. The **complete** provenance set (`translated_from`,
+  `v1_source_file`, `setup_file_source`, `setup_file_md5`, `sens_source`,
+  `translator`, `translated_on`) is carried onto every derived product —
+  full-record and per-profile NetCDF, standalone epsilon/chi files, and the
+  pipeline L4 writers — on both routes (on-disk translated file and direct
+  raw-v1 read); the setup-file md5 + sens source are the audit trail for the
+  sens⁻² epsilon scaling. `PFile` reads raw v1 files directly via the same
+  translation in memory (`setup_file=` kwarg to override discovery;
+  `translated_from_v1` / `v1_provenance` attributes), refuses any other
+  pre-v6 version loudly (raw + decoded version in the message), and the v6
+  path is pinned by golden per-channel regressions of the three committed
+  fixtures (exact raw-count hashes; converted channels via stats plus
+  order-sensitive shape/finite-mask/decimated-value goldens).
   Shear sens is never defaulted: `--sens sh1=…,sh2=…`, `<name>_sens:` setup
   keys, or `patch-config --add-keys` on translated files (the per-epoch
   workflow); a sens-less shear channel errors at conversion time. FP07
@@ -149,12 +157,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   plus a PyPI version badge — back-filled after v0.3.0 was archived on Zenodo.
 
 ### Changed
-- **A shear channel without `sens` is now a hard per-file error** (was: a
-  warning plus a fabricated default of 1.0 — plausible-looking shear that
-  scales epsilon by sens⁻²). ODAS `convert_odas.m` parity: the vendor errors
-  outright too. Modern configs always carry `sens`, so only genuinely broken
-  configs and un-patched v1 translations are affected; the error names the
-  three remedies (`patch-config --add-keys`, `v1to6 --sens`,
+- **A shear channel without a usable `sens` is now a hard per-file error**
+  (was: a warning plus a fabricated default of 1.0 — plausible-looking shear
+  that scales epsilon by sens⁻²). "Usable" means parseable, **finite**, and
+  positive: `nan` would bypass a bare sign check (every NaN comparison is
+  False → all-NaN shear) and `inf` yields all-zero shear, so both are
+  rejected everywhere sens enters — conversion, the `v1to6 --sens` CLI
+  parser, and the Python-API overrides. ODAS `convert_odas.m` parity: the
+  vendor errors outright too. Modern configs always carry `sens`, so only
+  genuinely broken configs and un-patched v1 translations are affected; the
+  error names the three remedies (`patch-config --add-keys`, `v1to6 --sens`,
   `<name>_sens:` setup keys). (#141)
 
 ### Removed

@@ -167,17 +167,20 @@ def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     # Strict parse: a present-but-unparseable sens (stray comma, typo) must
     # not fall through _safe_float's default — that silently fabricates
     # sens=1.0 and scales epsilon by sens^-2 (~125x on real probes).
+    # `not np.isfinite(...)` (rather than `<= 0` alone) also rejects
+    # sens="nan" — every comparison with NaN is False, so it would sail
+    # through a sign check into all-NaN shear — and sens="inf" (zero shear).
     raw_sens = params.get("sens")
     sens: float | None
     try:
         sens = float(raw_sens) if raw_sens not in (None, "") else None
     except (TypeError, ValueError):
         sens = None
-    if sens is None or sens <= 0:
+    if sens is None or not np.isfinite(sens) or sens <= 0:
         problem = (
             "missing from the channel config"
             if raw_sens in (None, "")
-            else f"unusable ({raw_sens!r}; must be a positive number)"
+            else f"unusable ({raw_sens!r}; must be a finite positive number)"
         )
         raise ValueError(
             f"shear channel {params.get('name', '?')}: calibration coefficient "

@@ -147,6 +147,41 @@ def make_v1_file(
     return path
 
 
+def make_v1_profile_file(path: Path, *, seconds: float = 14.0) -> Path:
+    """A profile-shaped synthetic v1 file: steady ~1 dbar/s descent with
+    noisy shear — long enough for profile detection and epsilon windows."""
+    rng = np.random.default_rng(42)
+    n_cycles = int(seconds * 128)  # fs_slow = 128 Hz for this geometry
+    n_scans = n_cycles * 4
+    n_records = n_scans // V1_SCANS_PER_RECORD
+    out = bytearray()
+    out += _v1_header(0)
+    m = np.array(V1_MATRIX, dtype="<u2").ravel()
+    block = bytearray(V1_RECORD_SIZE - HEADER_BYTES)
+    block[: m.nbytes] = m.tobytes()
+    out += block
+    sh = rng.integers(-150, 150, size=n_scans + V1_SCANS_PER_RECORD)
+    scan = 0
+    for rec in range(1, n_records + 1):
+        out += _v1_header(rec)
+        words = []
+        for _ in range(V1_SCANS_PER_RECORD):
+            cyc, r = divmod(scan, 4)
+            if r == 0:
+                # sp_char; sbt even word (small wiggle: an exactly-constant
+                # temperature trips the railed-sensor QC)
+                words += [32752, 29640 + (cyc % 7), int(sh[scan]), 0]
+            elif r == 1:
+                # ~1 dbar/s descent: +0.15625 P counts/cycle at ~0.05 dbar/count
+                words += [200 + int(cyc * 0.15625), 10, int(sh[scan]), 0]
+            else:
+                words += [7000, 11, int(sh[scan]), 0]  # T1 slots; gnd
+            scan += 1
+        out += np.array(words, dtype="<i2").tobytes()
+    path.write_bytes(bytes(out))
+    return path
+
+
 @pytest.fixture
 def v1_dir(tmp_path):
     """tmp dir holding a synthetic v1 file + its setup.txt sibling."""
@@ -567,6 +602,19 @@ class TestCliV1to6:
             main()
         assert "NAME=VALUE" in capsys.readouterr().err
 
+    @pytest.mark.parametrize(
+        "bad", ["sh1=nan,sh2=inf", "sh1=nan", "sh2=inf", "sh1=-inf", "sh1=0", "sh2=-0.05"]
+    )
+    def test_nonfinite_sens_argument_rejected(self, bad, monkeypatch, capsys):
+        """--sens must be finite and positive: 'nan' bypasses sign checks
+        (NaN compares False -> all-NaN shear) and 'inf' zeroes the shear."""
+        from odas_tpw.rsi.cli import main
+
+        monkeypatch.setattr(sys, "argv", ["rsi-tpw", "v1to6", "x.p", "-o", "y", "--sens", bad])
+        with pytest.raises(SystemExit):
+            main()
+        assert "finite positive" in capsys.readouterr().err
+
 
 # ---------------------------------------------------------------------------
 # sbt / sbc converters (SPEC §2.4 items 3-4)
@@ -632,15 +680,27 @@ class TestShearSensHardError:
         with pytest.raises(ValueError, match="'sens' missing"):
             convert_shear(np.array([1.0]), {"name": "sh1", "diff_gain": "1.0", "sens": ""})
 
-    @pytest.mark.parametrize("bad", ["0.0893,", "abc", "  ", "0", "-0.08"])
+    @pytest.mark.parametrize(
+        "bad", ["0.0893,", "abc", "  ", "0", "-0.08", "nan", "NaN", "inf", "-inf", "Infinity"]
+    )
     def test_convert_shear_unusable_sens_raises(self, bad):
-        """A PRESENT-but-unparseable/non-positive sens (stray trailing comma,
-        typo, zero) must raise, never fall through to a fabricated 1.0 —
-        epsilon would be silently wrong by sens^-2 (~125x on real probes)."""
+        """A PRESENT-but-unusable sens (stray trailing comma, typo, zero,
+        negative, NaN, infinite) must raise, never fall through to a
+        fabricated 1.0 — epsilon would be silently wrong by sens^-2 (~125x on
+        real probes). NaN is the nasty one: every comparison with NaN is
+        False, so a bare `sens <= 0` check waves it through into all-NaN
+        shear; +inf sails through a sign check into all-zero shear."""
         with pytest.raises(ValueError, match="sens"):
             convert_shear(
                 np.array([1.0]), {"name": "sh1", "diff_gain": "1.0", "sens": bad}
             )
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), 0.0, -0.1])
+    def test_sens_override_api_rejects_nonfinite(self, bad):
+        """The Python-API override path (translate_v1_bytes(sens=...) ->
+        parse_setup_v1) is guarded like the CLI parser and convert_shear."""
+        with pytest.raises(ValueError, match="finite positive"):
+            parse_setup_v1(SETUP_TEXT, sens_overrides={"sh1": bad})
 
     def test_synthesize_ini_refuses_unroundtrippable_value(self):
         """parse_config strips ';' as an inline comment: a value carrying one
@@ -653,6 +713,22 @@ class TestShearSensHardError:
             "instrument_info": {},
             "root": {"disk": "c:\\data;archive"},
         }
+        with pytest.raises(ValueError, match="round-trip"):
+            synthesize_ini(cfg, {})
+
+    def test_synthesize_ini_guards_ordered_channel_fields(self):
+        """The ordered id/name/type channel fields go through the same
+        round-trip guard: a legacy pair name carrying ';' must refuse to
+        synthesize, not survive to a parse_config silent truncation."""
+        from odas_tpw.rsi.v1_translate import synthesize_ini
+
+        setup = (
+            "matrix: 16 17\n"
+            "channel: 16,SBT1;wrongE,1,2,3,4,5,6,7\n"
+            "channel: 17,SBT1;wrongO,1,2,3,4,5,6,7\n"
+        )
+        cfg = parse_setup_v1(setup)
+        assert cfg["channels"][0]["name"] == "SBT1;wrong"  # parser keeps it
         with pytest.raises(ValueError, match="round-trip"):
             synthesize_ini(cfg, {})
 
@@ -689,6 +765,103 @@ class TestSbtTemperatureCandidate:
         assert data["metadata"]["temperature_source"] == "SBT1"
         assert data["metadata"]["translated_from"] == "odas_v1"
         assert data["metadata"]["setup_file_source"] == str(v1_dir / "setup.txt")
+
+
+# ---------------------------------------------------------------------------
+# Complete translation provenance on derived products (#141 review P2)
+# ---------------------------------------------------------------------------
+
+
+class TestV1ProvenanceOnProducts:
+    """The COMPLETE provenance set (V1_PROVENANCE_KEYS — incl. setup_file_md5
+    and sens_source, the audit trail for the sens^-2 epsilon scaling) must
+    land on epsilon products from (a) an on-disk translated file, (b) a
+    direct raw-v1 read, and (c) the per-profile NC route."""
+
+    def _assert_provenance(self, attrs, *, src_name: str, sens_source: str) -> None:
+        from odas_tpw.rsi.p_file import V1_PROVENANCE_KEYS
+
+        missing = [k for k in V1_PROVENANCE_KEYS if k not in attrs]
+        assert not missing, f"missing provenance attrs: {missing}"
+        assert attrs["translated_from"] == "odas_v1"
+        assert attrs["v1_source_file"] == src_name
+        assert str(attrs["setup_file_source"]).endswith("setup.txt")
+        assert len(str(attrs["setup_file_md5"])) == 32
+        assert sens_source in str(attrs["sens_source"])
+        assert "v1to6" in str(attrs["translator"])
+        assert str(attrs["translated_on"])
+
+    @pytest.fixture
+    def profile_dir(self, tmp_path):
+        (tmp_path / "setup.txt").write_text(SETUP_TEXT)
+        make_v1_profile_file(tmp_path / "PROF_001.p")
+        return tmp_path
+
+    def test_epsilon_attrs_from_translated_file(self, profile_dir, tmp_path):
+        import xarray as xr
+
+        from odas_tpw.rsi.dissipation import compute_diss_file
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            dst, meta = translate_v1_to_v6(
+                profile_dir / "PROF_001.p",
+                tmp_path / "out" / "PROF_001.p",
+                sens={"sh1": 0.08},
+            )
+            paths = compute_diss_file(dst, tmp_path / "eps_a", fft_length=256, goodman=False)
+        assert paths
+        with xr.open_dataset(paths[0]) as ds:
+            self._assert_provenance(
+                ds.attrs, src_name="PROF_001.p", sens_source="--sens override"
+            )
+            assert ds.attrs["setup_file_md5"] == meta["setup_md5"]
+
+    def test_epsilon_attrs_from_raw_v1_read(self, profile_dir, tmp_path):
+        """Direct raw-v1 read (sens via the setup-file extension keys): the
+        in-memory route publishes the identical provenance set."""
+        import xarray as xr
+
+        from odas_tpw.rsi.dissipation import compute_diss_file
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            paths = compute_diss_file(
+                profile_dir / "PROF_001.p", tmp_path / "eps_b", fft_length=256, goodman=False
+            )
+        assert paths
+        with xr.open_dataset(paths[0]) as ds:
+            self._assert_provenance(ds.attrs, src_name="PROF_001.p", sens_source="_sens keys")
+
+    def test_epsilon_attrs_via_per_profile_nc(self, profile_dir, tmp_path):
+        """.p -> per-profile NC -> epsilon: the NC global attrs and the
+        NC-branch metadata allowlist both carry the complete set."""
+        import xarray as xr
+
+        from odas_tpw.rsi.dissipation import compute_diss_file
+        from odas_tpw.rsi.profile import extract_profiles
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            extract_profiles(profile_dir / "PROF_001.p", tmp_path / "prof")
+            prof_ncs = sorted((tmp_path / "prof").glob("*prof*.nc"))
+            assert prof_ncs, "no per-profile NC produced"
+            paths = compute_diss_file(
+                prof_ncs[0], tmp_path / "eps_c", fft_length=256, goodman=False
+            )
+        assert paths
+        with xr.open_dataset(paths[0]) as ds:
+            self._assert_provenance(ds.attrs, src_name="PROF_001.p", sens_source="_sens keys")
+
+    def test_load_channels_metadata_complete(self, profile_dir):
+        from odas_tpw.rsi.helpers import load_channels
+        from odas_tpw.rsi.p_file import V1_PROVENANCE_KEYS
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            data = load_channels(profile_dir / "PROF_001.p")
+        for key in V1_PROVENANCE_KEYS:
+            assert key in data["metadata"], key
 
 
 # ---------------------------------------------------------------------------
@@ -918,3 +1091,48 @@ def test_v6_golden_channel_stats(fixture):
         got = (float(np.nanmean(arr)), float(np.nanmin(arr)), float(np.nanmax(arr)))
         np.testing.assert_allclose(got, (m, lo, hi), rtol=1e-8, atol=0,
                                    err_msg=f"{fixture}:{name}")
+
+
+# Order-sensitive converted-channel goldens (review P3b): whole-array stats
+# alone cannot see a one-sample roll (nanmean/min/max are order-blind) or a
+# single interior NaN (nanmean moves ~1/N). tests/data/v6_golden_converted.npz
+# commits, per fixture/channel: the exact SHAPE, a sha256 of the finite-mask
+# BYTES (pins NaN placement sample-exactly; bools are platform-stable ints),
+# and a ~256-point DECIMATED float array compared via allclose (never byte
+# hashes of floats — libm last-ulp noise is ~1e-15 relative across platforms,
+# far below the 1e-8 tolerance, while a roll shifts each sampled point by the
+# local sample-to-sample signal difference, orders of magnitude above it).
+_GOLDEN_CONVERTED_NPZ = DATA / "v6_golden_converted.npz"
+
+
+@pytest.mark.parametrize("fixture", sorted(GOLDEN_V6_STATS))
+def test_v6_golden_converted_arrays(fixture):
+    """Shape + finite-mask + decimated-value v6 regression (order-sensitive)."""
+    ref = np.load(_GOLDEN_CONVERTED_NPZ)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pf = PFile(DATA / f"{fixture}.p")
+    ref_names = sorted({k.split("|")[1] for k in ref.files if k.startswith(f"{fixture}|")})
+    assert sorted(pf.channels) == ref_names
+    for name in ref_names:
+        arr = np.asarray(pf.channels[name], dtype=np.float64)
+        # (i) exact shape
+        assert list(arr.shape) == ref[f"{fixture}|{name}|shape"].tolist(), name
+        # (ii) exact finite-mask bytes: catches any injected/moved NaN
+        mask = np.ascontiguousarray(np.isfinite(arr))
+        got_hash = hashlib.sha256(mask.tobytes()).hexdigest()[:16]
+        assert got_hash == str(ref[f"{fixture}|{name}|maskhash"]), name
+        # (iii) decimated whole-array comparison: order-sensitive, catches
+        # rolls/shifts that channel-wide stats cannot. atol is scaled to the
+        # channel magnitude so exact zeros compare exactly.
+        want = ref[f"{fixture}|{name}|dec"]
+        got = arr[:: max(1, arr.size // 256)]
+        scale = float(np.nanmax(np.abs(want))) if want.size else 0.0
+        np.testing.assert_allclose(
+            got,
+            want,
+            rtol=1e-8,
+            atol=1e-8 * max(scale, 1e-30),
+            equal_nan=True,
+            err_msg=f"{fixture}:{name}",
+        )

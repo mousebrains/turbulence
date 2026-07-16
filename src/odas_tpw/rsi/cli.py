@@ -107,7 +107,14 @@ def _parse_temperature(value: str) -> float | str:
 
 
 def _parse_sens(value: str) -> dict[str, float]:
-    """--sens: 'sh1=0.0893,sh2=0.0558' -> {'sh1': 0.0893, 'sh2': 0.0558}."""
+    """--sens: 'sh1=0.0893,sh2=0.0558' -> {'sh1': 0.0893, 'sh2': 0.0558}.
+
+    A sensitivity must be a FINITE positive number: 'nan' would bypass
+    downstream sign checks (NaN compares False) and 'inf' yields all-zero
+    shear — both would fabricate garbage epsilon, so reject them here.
+    """
+    import math
+
     out: dict[str, float] = {}
     for item in value.split(","):
         item = item.strip()
@@ -118,12 +125,18 @@ def _parse_sens(value: str) -> dict[str, float]:
         try:
             if not eq or not name:
                 raise ValueError
-            out[name] = float(num)
+            val = float(num)
         except ValueError:
             raise argparse.ArgumentTypeError(
                 f"expected NAME=VALUE[,NAME=VALUE...] (e.g. sh1=0.0893,sh2=0.0558), "
                 f"got {value!r}"
             ) from None
+        if not math.isfinite(val) or val <= 0:
+            raise argparse.ArgumentTypeError(
+                f"sensitivity for {name!r} must be a finite positive number, "
+                f"got {num.strip()!r}"
+            )
+        out[name] = val
     if not out:
         raise argparse.ArgumentTypeError("empty --sens value")
     return out

@@ -27,6 +27,22 @@ from odas_tpw.rsi.deconvolve import deconvolve
 HEADER_WORDS = 64
 HEADER_BYTES = 128
 
+# Complete v1->v6 translation provenance key set (issue #141). The translator
+# writes ALL of these into the synthesized [root]; PFile.v1_provenance carries
+# the same set for both routes (on-disk translated file and direct raw-v1
+# read), and every derived product (full-record/per-profile NC, epsilon/chi,
+# pipeline L4) copies them through — setup_file_md5 + sens_source are the
+# audit trail for the sens^-2 epsilon scaling.
+V1_PROVENANCE_KEYS = (
+    "translated_from",
+    "v1_source_file",
+    "setup_file_source",
+    "setup_file_md5",
+    "sens_source",
+    "translator",
+    "translated_on",
+)
+
 # 0-indexed word positions (TN-051 Table 1 uses 1-indexed)
 _H = {
     "file_number": 0,
@@ -438,10 +454,14 @@ class PFile:
         # embed no configuration); ignored for v6+ files. Default: auto-detect
         # siblings of the .p file (see odas_tpw.rsi.setup_v1).
         self._setup_file = setup_file
-        # v1-translation provenance (populated by the v1 branch of _read).
+        # v1-translation provenance (populated by the v1 branch of _read for
+        # direct raw-v1 reads, or from the synthesized [root] keys when the
+        # source is an on-disk translated file). Complete key set:
+        # V1_PROVENANCE_KEYS; empty dict for ordinary v6 sources.
         self.translated_from_v1 = False
         self.setup_file_source: str | None = None
         self.setup_file_md5: str | None = None
+        self.v1_provenance: dict[str, str] = {}
         self._read()
 
     def _read(self):
@@ -466,6 +486,15 @@ class PFile:
             version_raw = self.header["header_version"]
             if (version_raw >> 8) >= 6:
                 self._read_v6(f)
+                # An on-disk v1->v6 translated file carries the complete
+                # provenance set as [root] keys; surface it identically to
+                # the in-memory route so derived products (NC, epsilon/chi,
+                # L4) publish the same audit trail either way (issue #141).
+                root_cfg = self.config.get("root", {}) if isinstance(self.config, dict) else {}
+                if root_cfg.get("translated_from"):
+                    self.v1_provenance = {
+                        k: root_cfg[k] for k in V1_PROVENANCE_KEYS if k in root_cfg
+                    }
                 return
 
         # The v1 branch runs outside the `with` block: the translator re-reads
@@ -486,6 +515,7 @@ class PFile:
             self.translated_from_v1 = True
             self.setup_file_source = meta["setup_file"]
             self.setup_file_md5 = meta["setup_md5"]
+            self.v1_provenance = dict(meta["provenance"])
             self._read_v6(bio)
             return
 

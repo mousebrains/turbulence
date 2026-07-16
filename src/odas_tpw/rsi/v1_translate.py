@@ -100,9 +100,13 @@ def synthesize_ini(cfg: dict[str, Any], provenance: dict[str, str]) -> str:
 
     for ch in cfg.get("channels", []):
         lines.append("[channel]")
+        # EVERY emitted key/value goes through _emit — the ordered id/name/
+        # type fields included, or a legacy channel name carrying ';' or a
+        # newline would synthesize "successfully" and parse_config would
+        # silently truncate it on read-back.
         for k in _CHANNEL_KEY_ORDER:
             if k in ch:
-                lines.append(f"{k} = {ch[k]}")
+                lines.append(_emit(k, ch[k]))
         for k, v in ch.items():
             if k not in _CHANNEL_KEY_ORDER:
                 lines.append(_emit(k, v))
@@ -358,6 +362,7 @@ def translate_v1_bytes(
 
     setup_md5 = hashlib.md5(chosen.read_bytes()).hexdigest()
     from odas_tpw.rsi import __version__ as _pkg_version
+    from odas_tpw.rsi.p_file import V1_PROVENANCE_KEYS
 
     provenance = {
         "translated_from": "odas_v1",
@@ -368,6 +373,9 @@ def translate_v1_bytes(
         "translator": f"microstructure-tpw {_pkg_version} rsi-tpw v1to6",
         "translated_on": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
+    # Keep the writer and the reader-side contract (PFile.v1_provenance,
+    # product attrs) in lockstep — drift here silently drops provenance.
+    assert tuple(provenance) == V1_PROVENANCE_KEYS
     ini = synthesize_ini(cfg, provenance)
     ini_bytes = ini.encode("ascii", errors="replace")
     if len(ini_bytes) > 0xFFFF:
@@ -394,6 +402,10 @@ def translate_v1_bytes(
         "sens_source": sens_source,
         "config_str": ini,
         "n_records": n_total - 1,
+        # The COMPLETE provenance set (p_file.V1_PROVENANCE_KEYS) — the
+        # in-memory PFile route carries this verbatim so direct raw-v1 reads
+        # publish the same product provenance as on-disk translated files.
+        "provenance": dict(provenance),
     }
     return out, meta
 
