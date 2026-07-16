@@ -1455,10 +1455,30 @@ def process_file(
 
             vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
             speed_fast, W_slow, speed_source = compute_speed_for_pfile(pf, speed_cfg, vehicle)
+            speed_method = str(speed_cfg.get("method", "pressure"))
             speed_attrs = {
-                "speed_method": str(speed_cfg.get("method", "pressure")),
+                "speed_method": speed_method,
                 "speed_source": speed_source,
             }
+
+            # No silent overwrite (#131 M10): a hotel merge may have injected
+            # channels literally named "speed_fast"/"W_slow"; the assignments
+            # below recompute and discard those values. Warn with the remedy.
+            # method "hotel" consumes hotel telemetry by design — no warning.
+            if speed_method != "hotel":
+                for _name in ("speed_fast", "W_slow"):
+                    if pf.channel_info.get(_name, {}).get("type") == "hotel":
+                        logger.warning(
+                            "hotel merge injected channel %r but speed.method="
+                            "%r recomputes it for %s — the hotel-provided "
+                            "values are discarded; set speed.method: 'hotel' "
+                            "(with speed.hotel_var naming the merged channel, "
+                            "default 'speed') to use hotel telemetry as the "
+                            "through-water speed",
+                            _name,
+                            speed_method,
+                            p_path.name,
+                        )
 
             pf.channels["speed_fast"] = speed_fast
             pf._fast_channels.add("speed_fast")

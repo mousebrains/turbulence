@@ -83,6 +83,8 @@ Controls how GPS positions are assigned to measurements.
 
 Injects external vehicle telemetry (speed, pitch, roll, heading, CTD) from gliders, AUVs, or Remus into the instrument channels. Data is interpolated onto the instrument's fast or slow time axes.
 
+Merged channels become plain instrument channels: they are written into the per-profile NetCDFs, can drive [QC rules](#qc--per-segment-qc-gate), and feed salinity (`epsilon`/`chi`/`stratification` `salinity: "hotel[:<var>]"`). A merged **speed** channel drives the through-water speed only when [`speed.method: "hotel"`](#speed--through-water-speed-source) selects it — merging alone does not change the speed used by epsilon/chi.
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enable` | bool | `false` | Enable hotel file loading |
@@ -243,12 +245,13 @@ Controls time-binning of CTD channels per file.
 
 ### `speed` — Through-Water Speed Source
 
-Controls how the through-water (profiling) speed is computed. The speed is computed after the hotel merge, so all methods have access to both `.p`-file and hotel channels.
+Controls how the through-water (profiling) speed is computed. Speed is computed after the [hotel merge](#hotel--hotel-file-external-telemetry): `method: "hotel"` consumes a hotel-merged channel (named by `hotel_var`), while the other methods read the instrument's own channels. The selected source is recorded on the products as `speed_source` (`"pressure"`, `"em"`, `"flight"`, `"constant:<v>"`, or `"hotel:<var>"`).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `method` | string | `"pressure"` | Speed source: `"pressure"` (ODAS smoothed \|dP/dt\|; correct for VMP), `"em"` (the `U_EM` channel from a MicroRider EM flowmeter; errors out if missing), `"flight"` (glider flight model: \|W\| / (sin(\|pitch\|−aoa)·cos\|roll\|), pitch axis auto-picked from `Incl_X`/`Incl_Y` by amplitude), or `"constant"` (the scalar in `value`) |
+| `method` | string | `"pressure"` | Speed source: `"pressure"` (ODAS smoothed \|dP/dt\|; correct for VMP), `"em"` (the `U_EM` channel from a MicroRider EM flowmeter; errors out if missing), `"flight"` (glider flight model: \|W\| / sin(\|pitch\|−aoa), pitch axis auto-picked from `Incl_X`/`Incl_Y` by amplitude), `"constant"` (the scalar in `value`), or `"hotel"` (the hotel-merged channel named by `hotel_var`; errors out — never falls back to the `speed_cutout` floor — when the channel is missing, matches neither time grid, or is less than 50% finite) |
 | `value` | float | `null` | Fixed speed [m/s], only for `method: constant` |
+| `hotel_var` | string | `"speed"` | Merged channel name, only for `method: hotel`. Map a hotel source variable onto it via `hotel.channels` (e.g. `m_speed: "speed"`); the default `hotel.fast_channels` puts `"speed"` on the fast grid, and slow-grid channels are interpolated/smoothed to fast rate like the other methods |
 | `aoa_deg` | float | `3.0` | Angle of attack [deg], only for `method: flight` |
 | `min_pitch_deg` | float | `5.0` | Flight method: drop samples with \|pitch\|−aoa below this [deg] |
 | `speed_cutout` | float | `0.05` | Floor [m/s] applied to the fast-rate speed |

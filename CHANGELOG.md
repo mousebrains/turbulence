@@ -7,6 +7,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Hotel-telemetry speed method** (issue #131 finding M10). New perturb
+  `speed.method: "hotel"` (+ `speed.hotel_var`, default `"speed"`) consumes a
+  hotel-merged channel as the through-water speed for epsilon/chi — previously
+  a merged hotel `speed` channel was written to the outputs but consumed by
+  nothing, while the docs claimed it fed the pipeline (finding m10; the
+  pipeline/configuration docs now describe the real mechanism, which this
+  change makes true). Slow-grid channels are interpolated and
+  Butterworth-smoothed onto the fast grid exactly like the em/flight methods;
+  fast-grid channels (the default `hotel.fast_channels` placement for
+  `"speed"`) get the same NaN-interp/smooth/floor treatment without
+  regridding. An explicitly requested hotel speed that is unusable (channel
+  missing, matching neither time grid, or < 50% finite) is a per-file
+  **error**, never a silent fall-back to the 0.05 m/s `speed_cutout` floor.
+  Product provenance: `speed_source = "hotel:<var>"` on the per-profile
+  NetCDFs, carried through to the diss/chi attrs by the precomputed-speed
+  mechanism (which now retains upstream source strings that say more than the
+  method name, e.g. `"hotel:speed"`, `"constant:0.4"`). And the other half of
+  M10: when a hotel merge injected channels literally named
+  `speed_fast`/`W_slow` and a non-hotel `speed.method` recomputes them, the
+  pipeline now **warns** that the hotel values are being discarded and names
+  the remedy instead of overwriting silently. The rsi `--speed-method` layer
+  keeps `hotel` perturb-only (hotel channels are merged there) and says so
+  when asked for it. Note — hash churn: the new `speed.hotel_var` key changes
+  the perturb `speed` section hash, so stage directories keyed on it recompute
+  into fresh directories on the next run (the key set is part of the
+  provenance signature).
 - **Selectable reference temperature/conductivity with plausibility QC**
   (issue #131 finding B1). The reference temperature that drives seawater
   properties (viscosity ν for ε; ν and κ_T for χ; the published `T_mean`) is

@@ -330,6 +330,37 @@ class TestSpeedMethods:
         ds = _compute_epsilon(nc_path)[0]
         assert ds.attrs["speed_source"] == "precomputed speed_fast channel"
 
+    def test_precomputed_hotel_provenance_lands_in_diss_attrs(self, tmp_path):
+        """End-to-end for the perturb hotel speed method (#131 M10): the
+        'hotel:<var>' source string stamped on a perturb per-profile NC rides
+        the W1b precomputed-speed mechanism into the diss product attrs —
+        the upstream source is retained because it says more than the
+        method name (it names the hotel channel)."""
+        from odas_tpw.rsi.dissipation import _compute_epsilon
+
+        nc_path = _write_profile_nc(
+            tmp_path / "prof.nc",
+            speed_fast=0.37,
+            speed_attrs={"speed_method": "hotel", "speed_source": "hotel:speed"},
+        )
+        ds = _compute_epsilon(nc_path)[0]
+        assert ds.attrs["speed_method"] == "hotel"
+        assert "hotel:speed" in ds.attrs["speed_source"]
+        assert ds.attrs["speed_source"] == (
+            "precomputed speed_fast (perturb speed.method=hotel, source=hotel:speed)"
+        )
+        np.testing.assert_allclose(float(ds["speed"].median()), 0.37, atol=1e-6)
+
+    def test_hotel_method_rejected_with_perturb_hint(self, tmp_path):
+        """The rsi layer never sees hotel channels (they are merged in
+        perturb), so speed_method='hotel' is rejected with a hint pointing
+        at the perturb pipeline instead of a bare vocabulary error."""
+        from odas_tpw.rsi.dissipation import _compute_epsilon
+
+        nc_path = _write_profile_nc(tmp_path / "prof.nc")
+        with pytest.raises(ValueError, match=r"hotel speed method is perturb-only"):
+            _compute_epsilon(nc_path, speed_method="hotel")
+
     def test_explicit_pressure_overrides_precomputed(self, tmp_path):
         """An EXPLICIT --speed-method pressure forces the |dP/dt| path even
         when the source carries a precomputed speed_fast channel; only the

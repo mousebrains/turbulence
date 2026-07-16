@@ -769,9 +769,20 @@ def prepare_profiles(
     elif speed_method is None and precomputed is not None and len(precomputed) == len(t_fast):
         speed_fast = np.asarray(precomputed, dtype=np.float64)
         upstream_method = (metadata or {}).get("speed_method")
+        upstream_source = (metadata or {}).get("speed_source")
         speed_method_out = upstream_method
         if upstream_method:
-            speed_source = f"precomputed speed_fast (perturb speed.method={upstream_method})"
+            # Keep the upstream source string when it carries information
+            # beyond the method name (e.g. "hotel:speed" names the hotel
+            # channel, "constant:0.4" the value) so the diss/chi products
+            # retain the full provenance, not just the method (#131 M10).
+            if upstream_source and upstream_source != upstream_method:
+                speed_source = (
+                    f"precomputed speed_fast (perturb speed.method="
+                    f"{upstream_method}, source={upstream_source})"
+                )
+            else:
+                speed_source = f"precomputed speed_fast (perturb speed.method={upstream_method})"
         else:
             speed_source = "precomputed speed_fast channel"
     else:
@@ -859,13 +870,25 @@ def _validate_speed_selection(speed: float | None, speed_method: str | None) -> 
     ``"constant"`` exists in ``compute_speed_for_pfile``'s vocabulary (the
     perturb ``speed:`` section carries its ``value``), but this layer has no
     value plumbing — the fixed ``speed`` parameter is the equivalent here.
+    ``"hotel"`` is likewise perturb-only: hotel channels are merged into the
+    instrument channels there, and this layer never sees them (load_channels
+    carries only the named channels the em/flight methods need). A perturb
+    per-profile NetCDF produced with ``speed.method: "hotel"`` arrives here
+    as a precomputed ``speed_fast`` channel, which is preferred by default.
     """
     if speed_method not in _SPEED_METHODS:
-        hint = (
-            " Use --speed for a fixed (constant) speed."
-            if speed_method == "constant"
-            else ""
-        )
+        if speed_method == "constant":
+            hint = " Use --speed for a fixed (constant) speed."
+        elif speed_method == "hotel":
+            hint = (
+                " The hotel speed method is perturb-only (hotel channels are"
+                " merged there): run the perturb pipeline with speed.method:"
+                " 'hotel'; its per-profile NetCDFs carry the result as a"
+                " precomputed speed_fast channel, which this layer uses"
+                " automatically."
+            )
+        else:
+            hint = ""
         raise ValueError(
             f"speed_method={speed_method!r} is not valid here; expected "
             f"pressure | em | flight.{hint}"

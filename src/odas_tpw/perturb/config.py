@@ -175,8 +175,9 @@ DEFAULTS: dict[str, dict] = {
         "diagnostics": False,
     },
     "speed": {
-        "method": "pressure",  # pressure | em | flight | constant
+        "method": "pressure",  # pressure | em | flight | constant | hotel
         "value": None,  # m/s, only for method="constant"
+        "hotel_var": "speed",  # merged channel name, only for method="hotel"
         "aoa_deg": 3.0,  # angle of attack, only for method="flight"
         "min_pitch_deg": 5.0,  # flight: skip |pitch+aoa| below this (deg)
         "speed_cutout": 0.05,  # m/s floor applied to fast-rate speed
@@ -944,16 +945,22 @@ ctd:
   diagnostics: false      # write n_samples, *_std per bin
 
 speed:
-  # Through-water speed source. Computed AFTER hotel merge so the
-  # method has access to both .p-file and hotel channels.
-  method: "pressure"      # pressure | em | flight | constant
+  # Through-water speed source. Computed AFTER the hotel merge, so
+  # method "hotel" can consume a hotel-merged channel.
+  method: "pressure"      # pressure | em | flight | constant | hotel
   # pressure : ODAS smoothed |dP/dt|. Correct for VMP. (default)
   # em       : use the U_EM channel from the .p file (MicroRider EM
   #            flowmeter). Errors out if U_EM is missing.
-  # flight   : |W| / (sin(|pitch|-aoa)*cos|roll|), pitch axis auto-
-  #            picked from Incl_X/Incl_Y by amplitude.
+  # flight   : |W| / sin(|pitch|-aoa), pitch axis auto-picked from
+  #            Incl_X/Incl_Y by amplitude.
   # constant : use the scalar in `value`.
+  # hotel    : use the hotel-merged channel named by `hotel_var` (map a
+  #            source variable onto it via hotel.channels, e.g.
+  #            hotel.channels.m_speed: "speed"). Errors out when the
+  #            channel is missing or mostly non-finite — it never
+  #            silently falls back to the speed_cutout floor.
   value: null             # m/s, only when method="constant"
+  hotel_var: "speed"      # merged channel name, only when method="hotel"
   aoa_deg: 3.0            # angle of attack [deg], for method="flight"
   min_pitch_deg: 5.0      # flight: drop samples with |pitch|-aoa < this
   speed_cutout: 0.05      # m/s floor applied to fast-rate speed

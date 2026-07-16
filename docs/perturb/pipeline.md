@@ -34,9 +34,9 @@ Merges split `.p` files that were recorded as sequential segments of the same de
 
 Each `.p` file is processed through several sub-stages:
 
-1. **Hotel data** (optional) — If a hotel file is configured, external telemetry channels (speed, pitch, roll, heading, CTD from gliders/AUVs) are loaded and interpolated onto the instrument's fast or slow time axes. Channels listed in `fast_channels` are interpolated onto `t_fast`; all others go to `t_slow`. The interpolated data is injected into `pf.channels` before any downstream processing, so hotel-provided channels (e.g., `speed`, `P`) are available to profile detection, dissipation, and chi stages.
+1. **Hotel data** (optional) — If a hotel file is configured, external telemetry channels (speed, pitch, roll, heading, CTD from gliders/AUVs) are loaded and interpolated onto the instrument's fast or slow time axes. Channels listed in `fast_channels` are interpolated onto `t_fast`; all others go to `t_slow`. The interpolated data is injected into `pf.channels` before any downstream processing: merged channels are written into the per-profile NetCDFs and can feed QC rules and the `salinity: "hotel[:<var>]"` selectors. A merged speed channel drives the through-water speed only when `speed.method: "hotel"` selects it (step 2); a hotel channel colliding with a native instrument channel (e.g. `P`) is refused unless `replace: true` is set, so hotel data cannot silently redefine profile detection.
 
-2. **Speed** — Computes the through-water speed channel (`|dP/dt|`, flight model, EM flowmeter, or a constant, per `speed.method`) and injects `speed_fast` / `W_slow` for the downstream stages.
+2. **Speed** — Computes the through-water speed channel (`|dP/dt|`, flight model, EM flowmeter, a constant, or a hotel-merged channel, per `speed.method`) and injects `speed_fast` / `W_slow` for the downstream stages, stamping `speed_source` provenance (e.g. `"hotel:speed"`) into the per-profile NetCDFs. If a hotel merge injected channels literally named `speed_fast`/`W_slow` and a non-hotel method recomputes them, a warning names the remedy (`speed.method: "hotel"` + `speed.hotel_var`) instead of discarding the hotel values silently.
 
 3. **Internal QC rules** — Evaluates the configured segment-drop rules (from external/hotel flag channels) so flagged windows can be masked in the dissipation stages.
 

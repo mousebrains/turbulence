@@ -1410,6 +1410,199 @@ class TestProcessFile:
 
 
 # ---------------------------------------------------------------------------
+# Hotel speed method + no-silent-overwrite at the injection site (#131 M10)
+# ---------------------------------------------------------------------------
+
+
+class _SpeedStubPFile:
+    """Real-array PFile stand-in for the speed-injection stage: enough for
+    compute_speed_for_pfile (real grids/rates) plus the channel_info /
+    _fast_channels registration the hotel-overwrite warning inspects."""
+
+    def __init__(self):
+        self.fs_slow, self.fs_fast = 64.0, 512.0
+        dur = 10.0
+        n_slow, n_fast = int(dur * self.fs_slow), int(dur * self.fs_fast)
+        self.t_slow = np.arange(n_slow) / self.fs_slow
+        self.t_fast = np.arange(n_fast) / self.fs_fast
+        # 0.5 dbar/s descent so the pressure method recovers 0.5 m/s.
+        self.channels: dict = {"P": 10.0 + 0.5 * self.t_slow}
+        self.channel_info: dict = {}
+        self._fast_channels: set = set()
+        self.config: dict = {"instrument_info": {}}
+
+    def is_fast(self, name):
+        return name in self._fast_channels
+
+    def inject_hotel(self, name, values, *, fast):
+        """Mimic merge_hotel_into_pfile's channel registration."""
+        self.channels[name] = np.asarray(values, dtype=np.float64)
+        self.channel_info[name] = {"units": "m s-1", "type": "hotel", "name": name}
+        if fast:
+            self._fast_channels.add(name)
+
+
+class TestHotelSpeedInjection:
+    """speed.method='hotel' at the perturb injection site, and the
+    no-silent-overwrite warning for hotel-injected speed_fast/W_slow."""
+
+    def _config(self, tmp_path, **speed):
+        return {
+            "files": {"output_root": str(tmp_path)},
+            "profiles": {"P_min": 0.5},
+            "epsilon": {},
+            "fp07": {"calibrate": False},
+            "ct": {"align": False},
+            "ctd": {"enable": False},
+            "chi": {"enable": False},
+            "stratification": {"enable": False},
+            "top_trim": {"enable": False},
+            "bottom": {"enable": False},
+            "speed": dict(speed),
+        }
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_warns_when_pressure_overwrites_hotel_speed_fast(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        """A hotel-injected channel literally named speed_fast is recomputed
+        by the default pressure method: warn naming the remedy, but keep the
+        overwrite behavior itself unchanged (M10)."""
+        pf = _SpeedStubPFile()
+        pf.inject_hotel("speed_fast", np.full(len(pf.t_fast), 0.35), fast=True)
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+            process_file(tmp_path / "test.p", self._config(tmp_path), None, output_dirs)
+
+        assert "hotel merge injected channel 'speed_fast'" in caplog.text
+        assert "speed.method: 'hotel'" in caplog.text
+        assert "speed.hotel_var" in caplog.text
+        # Overwrite unchanged: speed_fast is the recomputed |dP/dt| (0.5),
+        # not the hotel 0.35.
+        np.testing.assert_allclose(
+            np.median(pf.channels["speed_fast"][1000:-1000]), 0.5, atol=0.02
+        )
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_warns_when_recompute_overwrites_hotel_w_slow(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        pf = _SpeedStubPFile()
+        pf.inject_hotel("W_slow", np.full(len(pf.t_slow), 0.4), fast=False)
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+            process_file(tmp_path / "test.p", self._config(tmp_path), None, output_dirs)
+
+        assert "hotel merge injected channel 'W_slow'" in caplog.text
+        assert "speed.method: 'hotel'" in caplog.text
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_no_warning_when_method_hotel(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        """method='hotel' consumes hotel telemetry by design — the overwrite
+        warning is suppressed, and speed_fast comes from the hotel channel."""
+        pf = _SpeedStubPFile()
+        pf.inject_hotel("speed", np.full(len(pf.t_fast), 0.35), fast=True)
+        pf.inject_hotel("speed_fast", np.full(len(pf.t_fast), 0.99), fast=True)
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+            process_file(
+                tmp_path / "test.p",
+                self._config(tmp_path, method="hotel"),
+                None,
+                output_dirs,
+            )
+
+        assert "hotel merge injected channel" not in caplog.text
+        np.testing.assert_allclose(
+            np.median(pf.channels["speed_fast"][1000:-1000]), 0.35, atol=1e-3
+        )
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_no_warning_without_hotel_channels(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        pf = _SpeedStubPFile()
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+            process_file(tmp_path / "test.p", self._config(tmp_path), None, output_dirs)
+
+        assert "hotel merge injected channel" not in caplog.text
+
+    @patch(
+        "odas_tpw.rsi.profile.extract_profiles",
+        return_value=([Path("/fake/prof.nc")], [{}]),
+    )
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[(0, 639)])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_hotel_speed_end_to_end_provenance(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_extract, tmp_path
+    ):
+        """Hotel file -> real merge (the module docstring's m_speed: 'speed'
+        example) -> speed.method='hotel' -> per-profile NetCDF attrs carry
+        speed_method='hotel' / speed_source='hotel:speed' via extract_profiles
+        extra_attrs (the W1b provenance mechanism)."""
+        from odas_tpw.perturb.hotel import HotelData
+
+        pf = _SpeedStubPFile()
+        mock_pfile_cls.return_value = pf
+        hotel = HotelData(
+            time=np.linspace(0.0, 10.0, 50),
+            channels={"m_speed": np.full(50, 0.35)},
+            time_is_relative=True,
+        )
+        hotel_cfg = {"channels": {"m_speed": "speed"}}
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        process_file(
+            tmp_path / "test.p",
+            self._config(tmp_path, method="hotel"),
+            None,
+            output_dirs,
+            hotel_data=hotel,
+            hotel_cfg=hotel_cfg,
+        )
+
+        # The merge registered the hotel channel on the fast grid (default
+        # hotel.fast_channels)...
+        assert pf.channel_info["speed"]["type"] == "hotel"
+        assert pf.is_fast("speed")
+        # ...the speed stage consumed it...
+        np.testing.assert_allclose(
+            np.median(pf.channels["speed_fast"][1000:-1000]), 0.35, atol=1e-3
+        )
+        # ...and stamped the full provenance into the per-profile NetCDFs.
+        kwargs = mock_extract.call_args.kwargs
+        assert kwargs["extra_attrs"] == {
+            "speed_method": "hotel",
+            "speed_source": "hotel:speed",
+        }
+
+
+# ---------------------------------------------------------------------------
 # run_pipeline tests
 # ---------------------------------------------------------------------------
 

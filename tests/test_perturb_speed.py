@@ -26,6 +26,18 @@ class _StubPF:
         self.fs_fast = float(fs_fast)
 
 
+class _StubPFWithGrid(_StubPF):
+    """_StubPF plus the ``is_fast`` grid registration a real PFile carries
+    (updated by ``merge_hotel_into_pfile`` for hotel channels)."""
+
+    def __init__(self, *args, fast_channels=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self._fast_channels = set(fast_channels)
+
+    def is_fast(self, name):
+        return name in self._fast_channels
+
+
 @pytest.fixture
 def vmp_descent():
     """Linear descent: 0.5 m/s for 10 s, slow 64 Hz, fast 512 Hz."""
@@ -255,6 +267,122 @@ class TestConstantMethod:
             compute_speed_for_pfile(
                 vmp_descent, {"method": "constant", "value": None}, vehicle="vmp",
             )
+
+
+class TestHotelMethod:
+    """speed.method='hotel': consume a hotel-merged channel (#131 M10)."""
+
+    def test_slow_grid_channel_by_length(self, vmp_descent):
+        """A slow-grid hotel channel (duck-typed source without is_fast:
+        length matching) is |·|/interp/smoothed to fast rate."""
+        pf = vmp_descent
+        pf.channels["speed"] = np.full_like(pf.channels["P"], 0.35)
+        speed_fast, W_slow, src = compute_speed_for_pfile(
+            pf, {"method": "hotel"}, vehicle="slocum_glider",
+        )
+        assert src == "hotel:speed"
+        assert speed_fast.shape == pf.t_fast.shape
+        np.testing.assert_allclose(np.median(speed_fast[1000:-1000]), 0.35, atol=1e-3)
+        # W_slow is independent of method — still the |dP/dt| of the descent.
+        np.testing.assert_allclose(np.median(np.abs(W_slow[100:-100])), 0.5, atol=0.02)
+
+    def test_fast_grid_channel_via_is_fast(self):
+        """The default hotel fast_channels puts 'speed' on the FAST grid;
+        the grid comes from pf.is_fast, and the fast branch mirrors
+        _slow_to_fast (NaN-interp + Butterworth + floor, no regrid)."""
+        fs_slow, fs_fast = 64.0, 512.0
+        n_slow, n_fast = 640, 5120
+        pf = _StubPFWithGrid(
+            P=0.5 * np.arange(n_slow) / fs_slow,
+            t_slow=np.arange(n_slow) / fs_slow,
+            t_fast=np.arange(n_fast) / fs_fast,
+            fs_slow=fs_slow, fs_fast=fs_fast,
+            fast_channels={"speed"},
+        )
+        speed = np.full(n_fast, 0.28)
+        speed[100:200] = np.nan  # interior gap: interpolated, not floored
+        pf.channels["speed"] = speed
+        speed_fast, _, src = compute_speed_for_pfile(
+            pf, {"method": "hotel"}, vehicle="slocum_glider",
+        )
+        assert src == "hotel:speed"
+        assert np.isfinite(speed_fast).all()
+        np.testing.assert_allclose(np.median(speed_fast[1000:-1000]), 0.28, atol=1e-3)
+        # The gap must be bridged with neighboring data, not the 0.05 floor.
+        np.testing.assert_allclose(speed_fast[100:200], 0.28, atol=1e-2)
+
+    def test_is_fast_preferred_over_length(self):
+        """A channel registered fast but with slow-grid length must error:
+        the merge's grid registration wins over length matching."""
+        fs_slow, fs_fast = 64.0, 512.0
+        n_slow, n_fast = 640, 5120
+        pf = _StubPFWithGrid(
+            P=0.5 * np.arange(n_slow) / fs_slow,
+            t_slow=np.arange(n_slow) / fs_slow,
+            t_fast=np.arange(n_fast) / fs_fast,
+            fs_slow=fs_slow, fs_fast=fs_fast,
+            fast_channels={"speed"},
+        )
+        pf.channels["speed"] = np.full(n_slow, 0.3)  # slow length, fast-registered
+        with pytest.raises(ValueError, match=r"registered on the fast grid"):
+            compute_speed_for_pfile(pf, {"method": "hotel"}, vehicle="slocum_glider")
+
+    def test_hotel_var_selects_channel(self, vmp_descent):
+        pf = vmp_descent
+        pf.channels["u_thru"] = np.full_like(pf.channels["P"], 0.42)
+        speed_fast, _, src = compute_speed_for_pfile(
+            pf, {"method": "hotel", "hotel_var": "u_thru"}, vehicle="slocum_glider",
+        )
+        assert src == "hotel:u_thru"
+        np.testing.assert_allclose(np.median(speed_fast[1000:-1000]), 0.42, atol=1e-3)
+
+    def test_takes_abs(self, vmp_descent):
+        """Negative telemetry (sign convention) is mapped to |speed|."""
+        pf = vmp_descent
+        pf.channels["speed"] = np.full_like(pf.channels["P"], -0.35)
+        speed_fast, _, _ = compute_speed_for_pfile(
+            pf, {"method": "hotel"}, vehicle="slocum_glider",
+        )
+        np.testing.assert_allclose(np.median(speed_fast[1000:-1000]), 0.35, atol=1e-3)
+
+    def test_missing_channel_raises(self, vmp_descent):
+        """Missing hotel channel is an error naming hotel_var and the
+        hotel.channels remedy — no fall-back."""
+        with pytest.raises(ValueError, match=r"'speed' is not present.*hotel\.channels"):
+            compute_speed_for_pfile(
+                vmp_descent, {"method": "hotel"}, vehicle="slocum_glider",
+            )
+
+    def test_missing_custom_var_named_in_error(self, vmp_descent):
+        with pytest.raises(ValueError, match=r"'u_thru' is not present"):
+            compute_speed_for_pfile(
+                vmp_descent, {"method": "hotel", "hotel_var": "u_thru"},
+                vehicle="slocum_glider",
+            )
+
+    def test_neither_grid_raises(self, vmp_descent):
+        pf = vmp_descent
+        pf.channels["speed"] = np.full(17, 0.3)  # matches neither grid
+        with pytest.raises(ValueError, match=r"matching neither the fast grid"):
+            compute_speed_for_pfile(pf, {"method": "hotel"}, vehicle="slocum_glider")
+
+    def test_mostly_nan_raises_not_floor(self, vmp_descent):
+        """< 50% finite must ERROR — an explicitly requested hotel speed is
+        never silently replaced by the 0.05 m/s speed_cutout floor (F6)."""
+        pf = vmp_descent
+        speed = np.full_like(pf.channels["P"], 0.35)
+        speed[: int(0.6 * len(speed))] = np.nan  # 60% NaN
+        pf.channels["speed"] = speed
+        with pytest.raises(ValueError, match=r"finite.*speed_cutout floor"):
+            compute_speed_for_pfile(pf, {"method": "hotel"}, vehicle="slocum_glider")
+
+    def test_all_nan_raises_not_floor(self, vmp_descent):
+        """All-NaN (dead external feed) would historically become a constant
+        0.05 m/s via _slow_to_fast's fallback; for hotel it is an error."""
+        pf = vmp_descent
+        pf.channels["speed"] = np.full_like(pf.channels["P"], np.nan)
+        with pytest.raises(ValueError, match=r"0% finite"):
+            compute_speed_for_pfile(pf, {"method": "hotel"}, vehicle="slocum_glider")
 
 
 class TestSourceReturn:

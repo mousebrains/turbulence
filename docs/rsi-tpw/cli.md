@@ -193,7 +193,7 @@ rsi-tpw eps VMP/*.p -o epsilon/ --salinity 34.5
 | `--diss-length N` | Dissipation window [samples] (default: 4×fft-length) |
 | `--overlap N` | Window overlap [samples] (default: diss-length//2) |
 | `--speed FLOAT` | Fixed profiling speed [m/s] (default: from dP/dt). Mutually exclusive with `--speed-method em/flight` |
-| `--speed-method {pressure,em,flight}` | Through-water speed model (default: pressure = \|dP/dt\|). `em` uses the `U_EM` flowmeter channel; `flight` uses the inviscid glider flight model \|W\|/sin(\|pitch\|−aoa) from the inclinometers; an explicit `pressure` forces \|dP/dt\| even when the source carries a precomputed `speed_fast` channel (a perturb per-profile file). The choice is recorded in the product attrs (`speed_source`) |
+| `--speed-method {pressure,em,flight}` | Through-water speed model (default: pressure = \|dP/dt\|). `em` uses the `U_EM` flowmeter channel; `flight` uses the inviscid glider flight model \|W\|/sin(\|pitch\|−aoa) from the inclinometers; an explicit `pressure` forces \|dP/dt\| even when the source carries a precomputed `speed_fast` channel (a perturb per-profile file). The choice is recorded in the product attrs (`speed_source`). The `hotel` speed method is perturb-only (hotel channels are merged there); perturb per-profile files carry its result as the precomputed `speed_fast` channel, which is used automatically |
 | `--aoa FLOAT` | Angle of attack [deg] for `--speed-method flight` (default: 3.0) |
 | `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
 | `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
