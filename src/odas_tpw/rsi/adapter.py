@@ -5,12 +5,22 @@ Bridges instrument-specific I/O with the generic scor160 processing pipeline.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
-from odas_tpw.rsi.helpers import AC_PATTERN, DT_PATTERN, SH_PATTERN, T_PATTERN
+from odas_tpw.rsi.helpers import (
+    AC_PATTERN,
+    DT_PATTERN,
+    SH_PATTERN,
+    T_PATTERN,
+    reference_temperature_qc,
+    resolve_conductivity_channel,
+    resolve_temperature_channel,
+    temperature_candidates,
+)
 from odas_tpw.scor160.io import L1Data
 
 if TYPE_CHECKING:
@@ -25,6 +35,8 @@ def pfile_to_l1data(
     speed_tau: float = 1.5,
     speed_method: str = "pressure",
     aoa_deg: float = 3.0,
+    temperature: str | float = "auto",
+    conductivity: str = "auto",
 ) -> L1Data:
     """Convert a PFile (or profile slice) to scor160 L1Data.
 
@@ -40,6 +52,15 @@ def pfile_to_l1data(
         'up' or 'down' for speed sign convention.
     speed_tau : float
         Speed smoothing time constant [s].
+    temperature : str or float
+        Reference-temperature source for ``L1.temp``: ``"auto"`` (first
+        plausible of T1..Tn, T, JAC_T, QC'd on the full channel and sliced
+        after), an explicit channel name (QC failure warns but proceeds), or
+        a number = constant reference temperature [degC] (ODAS
+        ``constant_temp`` parity).
+    conductivity : str
+        Conductivity channel for the measured practical salinity
+        (``"auto"`` = JAC_C when present, else no salinity).
 
     Returns
     -------
@@ -70,24 +91,67 @@ def pfile_to_l1data(
     P_slow_slice = P_slow[s_slow : e_slow + 1]
     pres = np.interp(t_fast, t_slow, P_slow_slice)
 
-    # Temperature (slow, for L1.temp)
-    T_slow = pf.channels.get("T1", np.full(len(pf.t_slow), np.nan))
-    T_slow_slice = T_slow[s_slow : e_slow + 1]
+    # Reference temperature (slow, for L1.temp): resolved on the FULL channel
+    # (QC over the whole file), sliced after. An instrument with no slow
+    # temperature channel at all still converts (historical tolerance —
+    # downstream L4 substitutes 10 degC for NaN loudly); channels that exist
+    # but are all implausible raise instead of yielding silent products.
+    n_slow_full = len(pf.t_slow)
+    ctx = str(getattr(pf, "filepath", "") or "")
+    if isinstance(temperature, bool):
+        raise ValueError(
+            f"temperature={temperature!r} is not valid; use a channel name or a number"
+        )
+    if isinstance(temperature, (int, float)):
+        T_slow_full = np.full(n_slow_full, float(temperature))
+    elif temperature == "auto" and not temperature_candidates(pf.channels, n_slow_full):
+        warnings.warn(
+            "no slow temperature channel found; L1.temp will be NaN "
+            "(downstream substitutes 10 degC for seawater properties)",
+            stacklevel=2,
+        )
+        T_slow_full = np.full(n_slow_full, np.nan)
+    else:
+        t_chan, _t_reason = resolve_temperature_channel(
+            pf.channels, n_slow_full, temperature, pressure=P_slow, context=ctx
+        )
+        T_slow_full = np.asarray(pf.channels[t_chan], dtype=np.float64)
+    T_slow_slice = T_slow_full[s_slow : e_slow + 1]
     temp = np.interp(t_fast, t_slow, T_slow_slice)
 
-    # Practical salinity (fast) from CTD conductivity when the .p file carries a
-    # JAC C/T pair (VMP). MicroRiders have no conductivity at the .p level, so
-    # this stays empty and stratification falls back to a supplied/assumed S.
+    # Practical salinity (fast) from CTD conductivity when the .p file carries
+    # a conductivity channel (VMP JAC_C, or an explicit selection). MicroRiders
+    # have no conductivity at the .p level, so this stays empty and
+    # stratification falls back to a supplied/assumed S. The pair temperature
+    # is the co-located JAC_T when conductivity is JAC_C and JAC_T passes
+    # plausibility QC, else the resolved reference temperature (a railed JAC_T
+    # must not silently poison the measured salinity).
     salinity_fast = np.array([])
-    JAC_C = pf.channels.get("JAC_C")
-    JAC_T = pf.channels.get("JAC_T")
-    if JAC_C is not None and JAC_T is not None:
+    c_chan = resolve_conductivity_channel(pf.channels, n_slow_full, conductivity, context=ctx)
+    if c_chan is not None:
         import gsw
 
-        sp_slow = gsw.SP_from_C(
-            JAC_C[s_slow : e_slow + 1], JAC_T[s_slow : e_slow + 1], P_slow_slice
-        )
-        salinity_fast = np.interp(t_fast, t_slow, sp_slow)
+        pair_T = None
+        if c_chan == "JAC_C":
+            JAC_T = pf.channels.get("JAC_T")
+            if JAC_T is not None and len(JAC_T) == n_slow_full:
+                reason = reference_temperature_qc(JAC_T, pressure=P_slow)
+                if reason is None:
+                    pair_T = JAC_T
+                else:
+                    warnings.warn(
+                        f"JAC_T fails plausibility QC ({reason}); pairing JAC_C "
+                        "with the reference temperature for measured salinity",
+                        stacklevel=2,
+                    )
+        if pair_T is None:
+            pair_T = T_slow_full
+        pair_slice = pair_T[s_slow : e_slow + 1]
+        if np.isfinite(pair_slice).any():
+            sp_slow = gsw.SP_from_C(
+                pf.channels[c_chan][s_slow : e_slow + 1], pair_slice, P_slow_slice
+            )
+            salinity_fast = np.interp(t_fast, t_slow, sp_slow)
 
     # Profiling speed
     if speed is not None:
@@ -102,7 +166,7 @@ def pfile_to_l1data(
         # vertical speed, not the through-water flow. Shared with perturb.
         from odas_tpw.rsi.speed import compute_speed_for_pfile
 
-        speed_fast_full, _ = compute_speed_for_pfile(
+        speed_fast_full, _, _source = compute_speed_for_pfile(
             pf, {"method": speed_method, "aoa_deg": aoa_deg, "tau": speed_tau}, vehicle
         )
         pspd_rel = speed_fast_full[s_fast:e_fast]
@@ -130,21 +194,29 @@ def pfile_to_l1data(
     else:
         shear = np.zeros((0, len(t_fast)), dtype=np.float64)
 
-    # Vibration / accelerometer channels
-    acc_names = sorted(n for n in pf._fast_channels if AC_PATTERN.match(n))
-    vib_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "piezo")
-    if acc_names:
-        vib = np.stack(
-            [pf.channels[n][s_fast:e_fast] for n in acc_names],
-            axis=0,
-        )
-        vib_type = "ACC"
-    elif vib_names:
+    # Vibration / accelerometer channels. Piezo-typed channels count even
+    # when named Ax/Ay — RSI names piezo sensors that way on MRs and modern
+    # VMPs, and parse_config's accel→piezo rewrite (setupstr.m parity) makes
+    # CASPER-era accel(0,1) configs piezo too. Only true DC-response
+    # accelerometers (type=accel with a real calibration) are ACC. The
+    # vibration stack is the UNION of both kinds (name-sorted, de-duplicated):
+    # on mixed hardware, dropping the piezo channels would cost Goodman
+    # coherent-noise removal a vibration reference. vib_type is label-only
+    # downstream — "ACC" when any true accelerometer is present, "VIB" for
+    # an all-piezo stack.
+    acc_names = sorted(
+        n
+        for n in pf._fast_channels
+        if AC_PATTERN.match(n) and pf.channel_info[n]["type"] != "piezo"
+    )
+    piezo_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "piezo")
+    vib_names = sorted(set(acc_names) | set(piezo_names))
+    if vib_names:
         vib = np.stack(
             [pf.channels[n][s_fast:e_fast] for n in vib_names],
             axis=0,
         )
-        vib_type = "VIB"
+        vib_type = "ACC" if acc_names else "VIB"
     else:
         vib = np.zeros((0, len(t_fast)), dtype=np.float64)
         vib_type = "NONE"
@@ -212,6 +284,12 @@ def nc_to_l1data(nc_path: str | Path) -> L1Data:
     Returns
     -------
     L1Data
+
+    Notes
+    -----
+    ``temp`` here is the nanmean of the FP07 stack (a different path from
+    ``pfile_to_l1data``); wiring it through the reference-temperature
+    resolver is deferred to #131 W5.
     """
     import netCDF4
 

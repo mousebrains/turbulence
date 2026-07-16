@@ -440,7 +440,7 @@ def p_to_L1(
     """
     import netCDF4 as nc
 
-    from odas_tpw.rsi.p_file import PFile
+    from odas_tpw.rsi.p_file import PFile, instrument_sn
 
     pf = PFile(p_filepath)
     if nc_filepath is None:
@@ -482,7 +482,7 @@ def p_to_L1(
     ds.title = f"VMP data from {pf.filepath.name}"
     ds.source = pf.config["instrument_info"].get("model", "")
     ds.platform_type = pf.config["instrument_info"].get("vehicle", "")
-    ds.instrument_sn = pf.config["instrument_info"].get("sn", "")
+    ds.instrument_sn = instrument_sn(pf.config["instrument_info"])
     ds.operator = pf.config["cruise_info"].get("operator", "")
     ds.project = pf.config["cruise_info"].get("project", "")
     ds.start_time = pf.start_time.isoformat()

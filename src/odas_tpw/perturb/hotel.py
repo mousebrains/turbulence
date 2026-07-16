@@ -9,7 +9,11 @@ The ``hotel.channels`` YAML block supports three forms per source name:
     channels:
       # Take with all defaults from the section
       lat:
-      # Legacy flat name map: rename source -> output
+      # Legacy flat name map: rename source -> output. Mapping a source
+      # variable onto the output name "speed" pairs with the perturb
+      # ``speed.method: "hotel"`` (see ``speed.hotel_var``), which uses the
+      # merged channel as the through-water speed for epsilon/chi. The
+      # default ``hotel.fast_channels`` puts "speed" on the FAST grid.
       m_speed: "speed"
       # Per-variable options
       pitch:

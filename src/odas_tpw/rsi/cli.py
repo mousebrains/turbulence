@@ -26,10 +26,15 @@ Subcommands:
 
 import argparse
 import os
+import struct
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
+
+# Per-file errors the batch subcommands survive (print + continue).
+# struct.error covers a .p file truncated mid-record (parity with convert_all).
+_BATCH_ERRORS = (OSError, ValueError, RuntimeError, struct.error)
 
 
 def _resolve_p_files(patterns: list[str]) -> list[Path]:
@@ -80,6 +85,32 @@ def _resolve_files(patterns: list[str], extensions: set[str] | None = None) -> l
 
 
 # ---------------------------------------------------------------------------
+# Argument-type parsers
+# ---------------------------------------------------------------------------
+
+
+def _parse_salinity(value: str) -> float | str:
+    """--salinity: a PSU number, or 'measured' (from the C/T channels)."""
+    v = value.strip()
+    if v.lower() == "measured":
+        return "measured"
+    try:
+        return float(v)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected a salinity in PSU or 'measured', got {value!r}"
+        ) from None
+
+
+def _parse_temperature(value: str) -> float | str:
+    """--temperature: a channel name, 'auto', or a fixed value [degC]."""
+    try:
+        return float(value)
+    except ValueError:
+        return value
+
+
+# ---------------------------------------------------------------------------
 # Config integration helpers
 # ---------------------------------------------------------------------------
 
@@ -114,10 +145,15 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
             "diss_length": "diss_length",
             "overlap": "overlap",
             "speed": "speed",
+            "speed_method": "speed_method",
+            "aoa": "aoa_deg",
             "direction": "direction",
             "vehicle": "vehicle",
+            "W_min": "W_min",
             "f_AA": "f_AA",
             "salinity": "salinity",
+            "temperature": "temperature",
+            "conductivity": "conductivity",
         }
     elif section == "chi":
         mapping = {
@@ -125,33 +161,48 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
             "diss_length": "diss_length",
             "overlap": "overlap",
             "speed": "speed",
+            "speed_method": "speed_method",
+            "aoa": "aoa_deg",
             "direction": "direction",
             "vehicle": "vehicle",
+            "W_min": "W_min",
             "fp07_model": "fp07_model",
             "f_AA": "f_AA",
             "fit_method": "fit_method",
             "spectrum_model": "spectrum_model",
             "salinity": "salinity",
+            "temperature": "temperature",
+            "conductivity": "conductivity",
         }
     elif section == "epsilon_pipeline":
         mapping = {
             "eps_fft_length": "fft_length",
             "direction": "direction",
             "vehicle": "vehicle",
+            "W_min": "W_min",
             "f_AA": "f_AA",
             "speed": "speed",
+            "speed_method": "speed_method",
+            "aoa": "aoa_deg",
             "salinity": "salinity",
+            "temperature": "temperature",
+            "conductivity": "conductivity",
         }
     elif section == "chi_pipeline":
         mapping = {
             "chi_fft_length": "fft_length",
             "direction": "direction",
             "vehicle": "vehicle",
+            "W_min": "W_min",
             "f_AA": "f_AA",
             "fp07_model": "fp07_model",
             "spectrum_model": "spectrum_model",
             "speed": "speed",
+            "speed_method": "speed_method",
+            "aoa": "aoa_deg",
             "salinity": "salinity",
+            "temperature": "temperature",
+            "conductivity": "conductivity",
         }
     else:
         return {}
@@ -232,11 +283,22 @@ def _cmd_info(args: argparse.Namespace) -> None:
     from odas_tpw.rsi.p_file import PFile
 
     p_files = _resolve_p_files(args.files)
+    failures = 0
     for i, pf_path in enumerate(p_files):
         if i > 0:
             print("\n" + "=" * 60 + "\n")
-        pf = PFile(pf_path)
-        pf.summary()
+        # Per-file guard: startup files (valid config, no data records) and
+        # 0-byte/truncated files must not abort a batch.
+        try:
+            pf = PFile(pf_path)
+            pf.summary()
+        except _BATCH_ERRORS as e:
+            print(f"{pf_path.name}:\n  ERROR: {e}")
+            failures += 1
+    if failures:
+        print(f"\n{failures} of {len(p_files)} file(s) failed")
+        if failures == len(p_files):
+            sys.exit(1)
 
 
 def _cmd_config(args: argparse.Namespace) -> None:
@@ -360,9 +422,31 @@ def _cmd_prof(args: argparse.Namespace) -> None:
     output_dir = _setup_output_dir(args, "prof", "profiles", merged)
     print(f"Output directory: {output_dir}")
 
+    failures = 0
     for f in files:
         print(f"{f.name}:")
-        extract_profiles(f, output_dir, **merged)
+        # Per-file guard: startup/truncated files must not abort the batch.
+        try:
+            extract_profiles(f, output_dir, **merged)
+        except _BATCH_ERRORS as e:
+            print(f"  ERROR: {e}")
+            failures += 1
+    if failures:
+        print(f"{failures} of {len(files)} file(s) failed")
+        if failures == len(files):
+            sys.exit(1)
+
+
+def _exit_on_bad_speed_selection(merged: dict[str, Any]) -> None:
+    """Invocation errors (e.g. --speed with --speed-method) are reported once,
+    cleanly, instead of once per file or as a traceback."""
+    from odas_tpw.rsi.helpers import _validate_speed_selection
+
+    try:
+        _validate_speed_selection(merged.get("speed"), merged.get("speed_method"))
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def _cmd_eps(args: argparse.Namespace) -> None:
@@ -372,6 +456,7 @@ def _cmd_eps(args: argparse.Namespace) -> None:
     files = _resolve_files(args.files, {".p", ".nc"})
 
     merged = _merge_for_section(args, "epsilon")
+    _exit_on_bad_speed_selection(merged)
     output_dir = _setup_output_dir(args, "eps", "epsilon", merged)
     print(f"Output directory: {output_dir}")
 
@@ -379,13 +464,19 @@ def _cmd_eps(args: argparse.Namespace) -> None:
     if jobs == 0:
         jobs = os.cpu_count() or 1
 
+    produced = 0
     if jobs == 1:
         for f in files:
             print(f"{f.name}:")
             try:
-                compute_diss_file(f, output_dir, **merged)
-            except (OSError, ValueError, RuntimeError) as e:
+                paths = compute_diss_file(f, output_dir, **merged)
+            except _BATCH_ERRORS as e:
                 print(f"  ERROR: {e}")
+            else:
+                if paths:
+                    produced += 1
+                else:
+                    print("  no output produced (no profiles detected, or no spectra survived)")
     else:
         work = []
         for f in files:
@@ -398,8 +489,13 @@ def _cmd_eps(args: argparse.Namespace) -> None:
                 try:
                     name, n_profiles = future.result()
                     print(f"  {Path(name).name}: {n_profiles} profile(s)")
-                except (OSError, ValueError, RuntimeError) as e:
+                    if n_profiles:
+                        produced += 1
+                except _BATCH_ERRORS as e:
                     print(f"  {src.name}: ERROR: {e}")
+    print(f"{produced} of {len(files)} file(s) produced output")
+    if files and produced == 0:
+        sys.exit(1)
 
 
 def _cmd_chi(args: argparse.Namespace) -> None:
@@ -409,6 +505,7 @@ def _cmd_chi(args: argparse.Namespace) -> None:
     files = _resolve_files(args.files, {".p", ".nc"})
 
     merged = _merge_for_section(args, "chi")
+    _exit_on_bad_speed_selection(merged)
     output_dir = _setup_output_dir(args, "chi", "chi", merged)
     print(f"Output directory: {output_dir}")
 
@@ -419,6 +516,7 @@ def _cmd_chi(args: argparse.Namespace) -> None:
     if jobs == 0:
         jobs = os.cpu_count() or 1
 
+    produced = 0
     if jobs == 1:
         for f in files:
             print(f"{f.name}:")
@@ -439,9 +537,14 @@ def _cmd_chi(args: argparse.Namespace) -> None:
                     )
 
             try:
-                compute_chi_file(f, output_dir, **kw)
-            except (OSError, ValueError, RuntimeError) as e:
+                paths = compute_chi_file(f, output_dir, **kw)
+            except _BATCH_ERRORS as e:
                 print(f"  ERROR: {e}")
+            else:
+                if paths:
+                    produced += 1
+                else:
+                    print("  no output produced (no profiles detected, or no spectra survived)")
             finally:
                 if eps_ds is not None:
                     eps_ds.close()
@@ -457,8 +560,13 @@ def _cmd_chi(args: argparse.Namespace) -> None:
                 try:
                     name, n_profiles = future.result()
                     print(f"  {Path(name).name}: {n_profiles} profile(s)")
-                except (OSError, ValueError, RuntimeError) as e:
+                    if n_profiles:
+                        produced += 1
+                except _BATCH_ERRORS as e:
                     print(f"  {Path(src).name}: ERROR: {e}")
+    print(f"{produced} of {len(files)} file(s) produced output")
+    if files and produced == 0:
+        sys.exit(1)
 
 
 def _cmd_pipeline(args: argparse.Namespace) -> None:
@@ -472,26 +580,63 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
     eps_merged = _merge_for_section(args, "epsilon_pipeline")
     chi_merged = _merge_for_section(args, "chi_pipeline")
 
+    # --salinity measured maps to None: run_pipeline already auto-prefers
+    # measured JAC C/T salinity (rsi/pipeline._resolve_salinity); the string
+    # must never reach the numeric salinity paths.
+    salinity = eps_merged.get("salinity")
+    if isinstance(salinity, str):
+        if salinity.strip().lower() == "measured":
+            print(
+                "Note: salinity 'measured' is the pipeline's automatic behavior "
+                "(measured JAC C/T salinity is preferred when present); "
+                "proceeding with the automatic path"
+            )
+            salinity = None
+        else:
+            print(
+                f"Error: salinity={salinity!r} is not valid for the pipeline; "
+                "use a number or 'measured'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    # The pipeline resolves ONE value per file for these knobs (epsilon and
+    # chi share the per-file L1 load and profile detection); a differing
+    # [chi] value in the config would otherwise be silently ignored.
+    for key in ("temperature", "conductivity", "speed_method", "aoa_deg", "W_min"):
+        eps_val, chi_val = eps_merged.get(key), chi_merged.get(key)
+        if chi_val != eps_val:
+            print(
+                f"Warning: pipeline uses a single {key} for epsilon and chi; "
+                f"[chi] {key}={chi_val!r} is ignored in favor of [epsilon] "
+                f"{key}={eps_val!r}",
+                file=sys.stderr,
+            )
+
     kwargs = {
         "direction": eps_merged.get("direction", "auto"),
         "vehicle": eps_merged.get("vehicle"),
         "speed": eps_merged.get("speed"),
+        # Speed model (default pressure / |dP/dt|) and detection floor, from
+        # the merged [epsilon] section so YAML values are honored, not just
+        # the CLI flags.
+        "speed_method": eps_merged.get("speed_method"),
+        "aoa_deg": eps_merged.get("aoa_deg"),
+        "W_min": eps_merged.get("W_min"),
         "fft_length": eps_merged.get("fft_length", 1024),
         "f_AA": eps_merged.get("f_AA", 98.0),
-        "salinity": eps_merged.get("salinity"),
+        "salinity": salinity,
+        "temperature": eps_merged.get("temperature", "auto"),
+        "conductivity": eps_merged.get("conductivity", "auto"),
         "goodman": eps_merged.get("goodman", True),
         "chi_fft_length": chi_merged.get("fft_length", 1024),
         "fp07_model": chi_merged.get("fp07_model", "single_pole"),
         "spectrum_model": chi_merged.get("spectrum_model", "kraichnan"),
     }
-    # Remove None values
+    # Remove None values (run_pipeline's own defaults apply: W_min resolves
+    # per file from the vehicle direction, speed_method falls to "pressure")
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
-
-    # Speed model (pipeline-level; default pressure / |dP/dt|).
-    if getattr(args, "speed_method", None):
-        kwargs["speed_method"] = args.speed_method
-    if getattr(args, "aoa", None) is not None:
-        kwargs["aoa_deg"] = args.aoa
+    _exit_on_bad_speed_selection(kwargs)
 
     run_pipeline(p_files, output_dir, **kwargs)
 
@@ -633,6 +778,12 @@ def _cmd_ml(args: argparse.Namespace) -> None:
 
     W_min = getattr(args, "W_min", None)  # None -> direction-aware default in the viewer
 
+    # The viewer already prefers measured JAC C/T salinity when no fixed value
+    # is given, so 'measured' maps to None (the automatic path).
+    salinity = args.salinity
+    if isinstance(salinity, str):
+        salinity = None
+
     p_files = _resolve_p_files(args.files)
     for pf_path in p_files:
         mixing_look(
@@ -645,7 +796,7 @@ def _cmd_ml(args: argparse.Namespace) -> None:
             vehicle=getattr(args, "vehicle", None),
             W_min=W_min,
             spec_P_range=spec_P_range,
-            salinity=args.salinity,
+            salinity=salinity,
         )
 
 
@@ -799,7 +950,10 @@ def _add_prof_parser(subparsers: argparse._SubParsersAction) -> None:
         "--P-min", type=float, default=None, help="Minimum pressure [dbar] (default: 0.5)"
     )
     p.add_argument(
-        "--W-min", type=float, default=None, help="Minimum fall rate [dbar/s] (default: 0.3)"
+        "--W-min",
+        type=float,
+        default=None,
+        help="Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal)",
     )
     p.add_argument(
         "--direction",
@@ -864,6 +1018,27 @@ def _add_eps_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Fixed profiling speed [m/s] (default: from dP/dt)",
     )
     p.add_argument(
+        "--speed-method",
+        choices=["pressure", "em", "flight"],
+        default=None,
+        help=(
+            "Through-water speed model (default: pressure = |dP/dt|). "
+            "'em' uses the U_EM flowmeter channel; 'flight' uses the inviscid "
+            "glider flight model |W|/sin(|pitch|-aoa) from the inclinometers; "
+            "an explicit 'pressure' forces |dP/dt| even over a precomputed "
+            "speed_fast channel. em/flight are mutually exclusive with --speed. "
+            "The 'hotel' speed method is perturb-only (hotel channels are "
+            "merged there); perturb per-profile NetCDFs arrive here as a "
+            "precomputed speed_fast channel."
+        ),
+    )
+    p.add_argument(
+        "--aoa",
+        type=float,
+        default=None,
+        help="Angle of attack [deg] for --speed-method flight (default: 3.0)",
+    )
+    p.add_argument(
         "--direction",
         default=None,
         choices=["auto", "up", "down", "glide", "horizontal"],
@@ -873,6 +1048,12 @@ def _add_eps_parser(subparsers: argparse._SubParsersAction) -> None:
         "--vehicle",
         default=None,
         help="Vehicle type override (e.g. slocum_glider, vmp)",
+    )
+    p.add_argument(
+        "--W-min",
+        type=float,
+        default=None,
+        help="Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal)",
     )
     p.add_argument(
         "--no-goodman",
@@ -886,9 +1067,27 @@ def _add_eps_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--salinity",
-        type=float,
+        type=_parse_salinity,
         default=None,
-        help="Salinity [PSU] for viscosity (default: 35, fixed S)",
+        metavar="PSU|measured",
+        help="Salinity for viscosity: a PSU value, or 'measured' to compute it "
+        "from the conductivity/temperature channels (default: 35, fixed S)",
+    )
+    p.add_argument(
+        "--temperature",
+        type=_parse_temperature,
+        default=None,
+        metavar="NAME|degC",
+        help="Reference temperature for viscosity: a channel name (e.g. T2, "
+        "JAC_T), a fixed value [degC], or 'auto' = first plausible of "
+        "T1..Tn, T, JAC_T (default: auto)",
+    )
+    p.add_argument(
+        "--conductivity",
+        default=None,
+        metavar="NAME",
+        help="Conductivity channel for --salinity measured "
+        "(default: auto = JAC_C when present)",
     )
     p.set_defaults(func=_cmd_eps)
 
@@ -939,6 +1138,27 @@ def _add_chi_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Fixed profiling speed [m/s] (default: from dP/dt)",
     )
     p.add_argument(
+        "--speed-method",
+        choices=["pressure", "em", "flight"],
+        default=None,
+        help=(
+            "Through-water speed model (default: pressure = |dP/dt|). "
+            "'em' uses the U_EM flowmeter channel; 'flight' uses the inviscid "
+            "glider flight model |W|/sin(|pitch|-aoa) from the inclinometers; "
+            "an explicit 'pressure' forces |dP/dt| even over a precomputed "
+            "speed_fast channel. em/flight are mutually exclusive with --speed. "
+            "The 'hotel' speed method is perturb-only (hotel channels are "
+            "merged there); perturb per-profile NetCDFs arrive here as a "
+            "precomputed speed_fast channel."
+        ),
+    )
+    p.add_argument(
+        "--aoa",
+        type=float,
+        default=None,
+        help="Angle of attack [deg] for --speed-method flight (default: 3.0)",
+    )
+    p.add_argument(
         "--direction",
         default=None,
         choices=["auto", "up", "down", "glide", "horizontal"],
@@ -948,6 +1168,12 @@ def _add_chi_parser(subparsers: argparse._SubParsersAction) -> None:
         "--vehicle",
         default=None,
         help="Vehicle type override (e.g. slocum_glider, vmp)",
+    )
+    p.add_argument(
+        "--W-min",
+        type=float,
+        default=None,
+        help="Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal)",
     )
     p.add_argument(
         "--no-goodman",
@@ -986,9 +1212,27 @@ def _add_chi_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--salinity",
-        type=float,
+        type=_parse_salinity,
         default=None,
-        help="Salinity [PSU] for viscosity (default: 35, fixed S)",
+        metavar="PSU|measured",
+        help="Salinity for viscosity: a PSU value, or 'measured' to compute it "
+        "from the conductivity/temperature channels (default: 35, fixed S)",
+    )
+    p.add_argument(
+        "--temperature",
+        type=_parse_temperature,
+        default=None,
+        metavar="NAME|degC",
+        help="Reference temperature for viscosity/kappa_T: a channel name "
+        "(e.g. T2, JAC_T), a fixed value [degC], or 'auto' = first plausible "
+        "of T1..Tn, T, JAC_T (default: auto)",
+    )
+    p.add_argument(
+        "--conductivity",
+        default=None,
+        metavar="NAME",
+        help="Conductivity channel for --salinity measured "
+        "(default: auto = JAC_C when present)",
     )
     p.set_defaults(func=_cmd_chi)
 
@@ -1022,6 +1266,12 @@ def _add_pipeline_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Vehicle type override (e.g. slocum_glider, vmp)",
     )
     p.add_argument(
+        "--W-min",
+        type=float,
+        default=None,
+        help="Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal)",
+    )
+    p.add_argument(
         "--speed",
         type=float,
         default=None,
@@ -1034,7 +1284,9 @@ def _add_pipeline_parser(subparsers: argparse._SubParsersAction) -> None:
         help=(
             "Through-water speed model (default: pressure = |dP/dt|). "
             "'em' uses the U_EM flowmeter channel; 'flight' uses the inviscid "
-            "glider flight model |W|/sin(|pitch|+aoa) from the inclinometers."
+            "glider flight model |W|/sin(|pitch|+aoa) from the inclinometers. "
+            "The 'hotel' speed method is perturb-only (hotel channels are "
+            "merged there)."
         ),
     )
     p.add_argument(
@@ -1079,9 +1331,28 @@ def _add_pipeline_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--salinity",
-        type=float,
+        type=_parse_salinity,
         default=None,
-        help="Salinity [PSU] for viscosity (default: 35, fixed S)",
+        metavar="PSU|measured",
+        help="Fixed salinity [PSU] fallback for viscosity (default: 35). "
+        "'measured' maps to the pipeline's automatic behavior — measured JAC "
+        "C/T salinity is already preferred when conductivity is present",
+    )
+    p.add_argument(
+        "--temperature",
+        type=_parse_temperature,
+        default=None,
+        metavar="NAME|degC",
+        help="Reference temperature for viscosity: a channel name (e.g. T2, "
+        "JAC_T), a fixed value [degC], or 'auto' = first plausible of "
+        "T1..Tn, T, JAC_T (default: auto)",
+    )
+    p.add_argument(
+        "--conductivity",
+        default=None,
+        metavar="NAME",
+        help="Conductivity channel for the measured practical salinity "
+        "(default: auto = JAC_C when present)",
     )
     p.set_defaults(func=_cmd_pipeline)
 
@@ -1325,10 +1596,12 @@ def _add_ml_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--salinity",
-        type=float,
+        type=_parse_salinity,
         default=None,
+        metavar="PSU|measured",
         help="Fixed practical salinity [PSU] for stratification "
-        "(default: measured from JAC C/T, else 35)",
+        "(default: measured from JAC C/T, else 35; 'measured' selects "
+        "that automatic behavior explicitly)",
     )
     p.set_defaults(func=_cmd_ml)
 

@@ -165,10 +165,14 @@ rsi-tpw prof VMP/*.p -o profiles/
 | `-o`, `--output DIR` | Output directory (required) |
 | `-j`, `--jobs N` | Parallel workers (0 = all cores, default: 1) |
 | `--P-min FLOAT` | Minimum pressure [dbar] (default: 0.5) |
-| `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: 0.3) |
+| `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: auto — 0.3 free-fall, 0.05 glide/horizontal) |
 | `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
 | `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
 | `--min-duration FLOAT` | Minimum profile duration [s] (default: 7) |
+
+An unreadable file in a batch (e.g. a startup file with no data records, or a
+truncated `.p`) prints `ERROR: ...` and processing continues; the exit status
+is 1 only when **every** file failed. `rsi-tpw info` behaves the same way.
 
 ## `rsi-tpw eps`
 
@@ -188,12 +192,23 @@ rsi-tpw eps VMP/*.p -o epsilon/ --salinity 34.5
 | `--fft-length N` | FFT segment length [samples] (default: 1024) |
 | `--diss-length N` | Dissipation window [samples] (default: 4×fft-length) |
 | `--overlap N` | Window overlap [samples] (default: diss-length//2) |
-| `--speed FLOAT` | Fixed profiling speed [m/s] (default: from dP/dt) |
+| `--speed FLOAT` | Fixed profiling speed [m/s] (default: from dP/dt). Mutually exclusive with `--speed-method em/flight` |
+| `--speed-method {pressure,em,flight}` | Through-water speed model (default: pressure = \|dP/dt\|). `em` uses the `U_EM` flowmeter channel; `flight` uses the inviscid glider flight model \|W\|/sin(\|pitch\|−aoa) from the inclinometers; an explicit `pressure` forces \|dP/dt\| even when the source carries a precomputed `speed_fast` channel (a perturb per-profile file). The choice is recorded in the product attrs (`speed_source`). The `hotel` speed method is perturb-only (hotel channels are merged there); perturb per-profile files carry its result as the precomputed `speed_fast` channel, which is used automatically |
+| `--aoa FLOAT` | Angle of attack [deg] for `--speed-method flight` (default: 3.0) |
 | `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
 | `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
+| `--W-min FLOAT` | Profile-detection fall-rate floor [dbar/s] (default: auto — 0.3 free-fall, 0.05 glide/horizontal) |
 | `--no-goodman` | Disable Goodman coherent noise removal |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
-| `--salinity FLOAT` | Salinity [PSU] for viscosity (default: 35, fixed S) |
+| `--salinity PSU\|measured` | Salinity for viscosity: a PSU value, or `measured` = computed from the conductivity/temperature channels via TEOS-10 (default: 35, fixed S) |
+| `--temperature NAME\|degC` | Reference temperature for viscosity: a channel name (e.g. `T2`, `JAC_T`, or a hotel temperature channel), a fixed value [°C], or `auto` = first plausible of `T1`..`Tn`, `T`, `JAC_T` (default: auto). Implausible channels (railed, drifting, mostly non-finite) are skipped with a warning; an explicitly named channel that fails QC warns but is honored. The selection is recorded in the product attrs (`temperature_source`/`temperature_qc`). |
+| `--conductivity NAME` | Conductivity channel for `--salinity measured` (default: auto = `JAC_C` when present) |
+
+`eps` (and `chi`) exit with status 1 when **no** input file produced output —
+whether because every file failed or because no profiles were detected — and
+print a final `N of M file(s) produced output` summary, so a batch that
+silently produced nothing fails a `set -e` script instead of masquerading as
+success.
 
 The output NetCDF contains two distinct spectral-fit quality metrics:
 
@@ -234,16 +249,21 @@ rsi-tpw chi VMP/*.p --spectrum-model batchelor -o chi/
 | `--fft-length N` | FFT segment length [samples] (default: 1024) |
 | `--diss-length N` | Dissipation window [samples] (default: 4×fft-length) |
 | `--overlap N` | Window overlap [samples] (default: diss-length//2) |
-| `--speed FLOAT` | Fixed profiling speed [m/s] (default: from dP/dt) |
+| `--speed FLOAT` | Fixed profiling speed [m/s] (default: from dP/dt). Mutually exclusive with `--speed-method em/flight` |
+| `--speed-method {pressure,em,flight}` | Through-water speed model (default: pressure = \|dP/dt\|; same semantics as `eps`) |
+| `--aoa FLOAT` | Angle of attack [deg] for `--speed-method flight` (default: 3.0) |
 | `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
 | `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
+| `--W-min FLOAT` | Profile-detection fall-rate floor [dbar/s] (default: auto — 0.3 free-fall, 0.05 glide/horizontal) |
 | `--fp07-model {single_pole,double_pole}` | FP07 transfer function (default: single_pole) |
 | `--epsilon-dir DIR` | Directory with epsilon `.nc` files for Method 1 (the `eps_NN/` subdirectory; see warning above). If omitted, or if no matching `{stem}_eps.nc` exists, Method 2 is used |
 | `--no-goodman` | Disable Goodman coherent noise removal |
 | `--fit-method {mle,iterative}` | Method 2 fitting algorithm (default: iterative) |
 | `--spectrum-model {batchelor,kraichnan}` | Theoretical spectrum model (default: kraichnan) |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
-| `--salinity FLOAT` | Salinity [PSU] for viscosity (default: 35, fixed S) |
+| `--salinity PSU\|measured` | Salinity for viscosity: a PSU value, or `measured` = computed from the conductivity/temperature channels via TEOS-10 (default: 35, fixed S) |
+| `--temperature NAME\|degC` | Reference temperature for viscosity/κ_T: a channel name, a fixed value [°C], or `auto` = first plausible of `T1`..`Tn`, `T`, `JAC_T` (default: auto; same semantics as `eps`) |
+| `--conductivity NAME` | Conductivity channel for `--salinity measured` (default: auto = `JAC_C` when present) |
 
 ## `rsi-tpw pipeline`
 
@@ -258,14 +278,19 @@ rsi-tpw pipeline VMP/*.p -o results/
 | `-o`, `--output DIR` | Base output directory (required) |
 | `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
 | `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
+| `--W-min FLOAT` | Profile-detection fall-rate floor [dbar/s] (default: auto — 0.3 free-fall, 0.05 glide/horizontal; also feeds the L2 section selector) |
 | `--speed FLOAT` | Fixed profiling speed [m/s] (default: from dP/dt) |
+| `--speed-method {pressure,em,flight}` | Through-water speed model (default: pressure = \|dP/dt\|). Also settable as `epsilon.speed_method` in the YAML config |
+| `--aoa FLOAT` | Angle of attack [deg] for `--speed-method flight` (default: 3.0) |
 | `--eps-fft-length N` | FFT length for epsilon (default: 1024) |
 | `--chi-fft-length N` | FFT length for chi (default: 1024) |
 | `--no-goodman` | Disable Goodman noise removal for epsilon and chi |
 | `--fp07-model {single_pole,double_pole}` | FP07 transfer function (default: single_pole) |
 | `--spectrum-model {batchelor,kraichnan}` | Spectrum model for chi (default: kraichnan) |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
-| `--salinity FLOAT` | Fixed salinity [PSU] fallback for viscosity (default: 35). **Ignored on conductivity-equipped instruments** — the pipeline resolves per-sample salinity from the measured JAC C/T, which takes precedence (see note below). |
+| `--salinity PSU\|measured` | Fixed salinity [PSU] fallback for viscosity (default: 35). **Ignored on conductivity-equipped instruments** — the pipeline resolves per-sample salinity from the measured JAC C/T, which takes precedence (see note below). `measured` maps to that automatic behavior (never treated as a number). |
+| `--temperature NAME\|degC` | Reference temperature for viscosity: a channel name, a fixed value [°C], or `auto` = first plausible of `T1`..`Tn`, `T`, `JAC_T` (default: auto; same semantics as `eps`). Recorded in the L4 products as `temperature_source`/`temperature_qc`. |
+| `--conductivity NAME` | Conductivity channel for the measured practical salinity (default: auto = `JAC_C` when present) |
 
 > **Salinity precedence (`pipeline` only):** `run_pipeline` prefers measured
 > salinity (from the instrument's own JAC conductivity/temperature) over
@@ -307,7 +332,7 @@ rsi-tpw ql VMP/*.p --fft-length 512
 | `--no-goodman` | Disable Goodman coherent noise removal |
 | `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
 | `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
-| `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: 0.3) |
+| `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal) |
 | `--spec-P-range P_MIN P_MAX` | Pressure range [dbar] for spectral calculations |
 | `--chi-method {1,2}` | Chi method: 1 = from epsilon, 2 = spectral fit (default: 1) |
 | `--spectrum-model {batchelor,kraichnan}` | Theoretical spectrum model (default: kraichnan) |
@@ -329,7 +354,7 @@ rsi-tpw dl VMP/*.p
 | `--no-goodman` | Disable Goodman coherent noise removal |
 | `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
 | `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
-| `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: 0.3) |
+| `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal) |
 | `--spec-P-range P_MIN P_MAX` | Pressure range [dbar] for spectral calculations |
 
 ## `rsi-tpw bench`
