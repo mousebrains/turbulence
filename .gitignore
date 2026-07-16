@@ -7,7 +7,7 @@ bench/
 benchmarks/
 
 # Microstructure sensor calibration sheets (local reference PDFs)
-microstructure_sensors/
+microstructure_sensors/*
 
 # Per-cruise data directories — only the YAML config is tracked.
 ARCTERX/*
@@ -51,3 +51,5 @@ htmlcov/
 examples/*/tpw/
 myout/
 results/
+!microstructure_sensors/shear_sensitivities.csv
+!microstructure_sensors/README.md

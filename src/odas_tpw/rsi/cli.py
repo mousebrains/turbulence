@@ -1486,6 +1486,51 @@ def _add_dl_parser(subparsers: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_cmd_dl)
 
 
+def _cmd_cal_csv(args: argparse.Namespace) -> None:
+    """Merge Rockland calibration sheets into the sensitivity CSV registry."""
+    from odas_tpw.rsi.shear_cal import update_sensitivity_csv
+
+    cal_dir = Path(args.cal_dir)
+    if not cal_dir.is_dir():
+        print(f"Error: {cal_dir} is not a directory", file=sys.stderr)
+        sys.exit(1)
+    csv_path = Path(args.csv) if args.csv else cal_dir / "shear_sensitivities.csv"
+    stats = update_sensitivity_csv(cal_dir, csv_path)
+    print(
+        f"{csv_path}: {stats.sheets_parsed} sheet(s) parsed, "
+        f"{stats.added} row(s) added, {stats.upgraded} upgraded, "
+        f"{stats.unchanged} already present"
+        + (f", {stats.sheets_failed} sheet(s) failed to parse" if stats.sheets_failed else "")
+    )
+    for c in stats.conflicts:
+        print(f"  CONFLICT (kept both): {c}", file=sys.stderr)
+    if stats.sheets_failed or stats.conflicts:
+        sys.exit(1)
+
+
+def _add_cal_csv_parser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "cal-csv",
+        help="Merge Rockland calibration sheets into shear_sensitivities.csv",
+        description=(
+            "Parse every calibration-sheet PDF in CAL_DIR and merge the current "
+            "and previous-calibration entries into the tracked CSV registry. "
+            "Idempotent: existing rows (including hand-added source=manual "
+            "history) are preserved; a sheet's own entry upgrades a "
+            "previous-calibration attestation of the same point; conflicting "
+            "sensitivities for the same probe+date are kept side by side and "
+            "reported (exit 1)."
+        ),
+    )
+    p.add_argument("cal_dir", help="Directory of Rockland calibration-sheet PDFs")
+    p.add_argument(
+        "--csv",
+        default=None,
+        help="Registry path (default: CAL_DIR/shear_sensitivities.csv)",
+    )
+    p.set_defaults(func=_cmd_cal_csv)
+
+
 def _add_sensors_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "sensors",
@@ -1775,6 +1820,7 @@ def main() -> None:
     _add_ml_parser(subparsers)
     _add_bench_parser(subparsers)
     _add_sensors_parser(subparsers)
+    _add_cal_csv_parser(subparsers)
 
     from odas_tpw._completion import enable_argcomplete
 

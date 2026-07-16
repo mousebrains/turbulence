@@ -587,6 +587,116 @@ def test_run_reports_no_sheet_for_unmatched_probe(tmp_path, capsys):
 
 
 # ---------------------------------------------------------------------------
+# CSV registry updater (rsi-tpw cal-csv)
+# ---------------------------------------------------------------------------
+
+
+def _fake_sheets(monkeypatch, sheets: dict):
+    """Route extract_pdf_text through a dict of {filename: sheet text}."""
+    monkeypatch.setattr(sc, "extract_pdf_text", lambda p: sheets[p.name])
+
+
+M9001_TEXT = (
+    "Probe SN: M9001\n"
+    "Sensitivity (sens or S): 0.0700\n"
+    "Calibration Date: 2026/01/10\n"
+    "Previous Sensitivity: 0.0650\n"
+    "Previous Calibration Date: 2021/01/09\n"
+)
+M9001_OLD_TEXT = (
+    "Probe SN: M9001\n"
+    "Sensitivity (sens or S): 0.0650\n"
+    "Calibration Date: 2021/01/09\n"
+)
+
+
+class TestUpdateSensitivityCsv:
+    def _dir(self, tmp_path, names):
+        d = tmp_path / "cal"
+        d.mkdir()
+        for n in names:
+            (d / n).write_bytes(b"%PDF fake")
+        return d
+
+    def _read(self, path):
+        import csv
+
+        with path.open(newline="") as f:
+            return list(csv.DictReader(f))
+
+    def test_creates_and_is_idempotent(self, tmp_path, monkeypatch):
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf"])
+        _fake_sheets(monkeypatch, {"M9001_2026_01_10.pdf": M9001_TEXT})
+        s1 = sc.update_sensitivity_csv(d)
+        rows = self._read(d / "shear_sensitivities.csv")
+        assert s1.added == 2 and len(rows) == 2  # current + previous entry
+        s2 = sc.update_sensitivity_csv(d)
+        assert s2.added == 0 and s2.unchanged == 2
+        assert self._read(d / "shear_sensitivities.csv") == rows
+
+    def test_manual_rows_preserved(self, tmp_path, monkeypatch):
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf"])
+        _fake_sheets(monkeypatch, {"M9001_2026_01_10.pdf": M9001_TEXT})
+        csv_path = d / "shear_sensitivities.csv"
+        csv_path.write_text(
+            "serial,cal_date,sens,units,source,sheet,recal_due,notes\n"
+            "M9001,2016-04-25,0.696,V/(m^2 s^-2),manual,,,from Rockland records\n"
+        )
+        sc.update_sensitivity_csv(d)
+        rows = self._read(csv_path)
+        manual = [r for r in rows if r["source"] == "manual"]
+        assert len(manual) == 1 and manual[0]["sens"] == "0.696"
+        assert len(rows) == 3
+
+    def test_own_sheet_upgrades_previous_attestation(self, tmp_path, monkeypatch):
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf"])
+        _fake_sheets(
+            monkeypatch,
+            {
+                "M9001_2026_01_10.pdf": M9001_TEXT,
+                "M9001_2021_01_09.pdf": M9001_OLD_TEXT,
+            },
+        )
+        sc.update_sensitivity_csv(d)
+        (d / "M9001_2021_01_09.pdf").write_bytes(b"%PDF fake")
+        stats = sc.update_sensitivity_csv(d)
+        assert stats.upgraded == 1
+        rows = self._read(d / "shear_sensitivities.csv")
+        r2021 = [r for r in rows if r["cal_date"] == "2021-01-09"]
+        assert len(r2021) == 1
+        assert r2021[0]["sheet"] == "M9001_2021_01_09.pdf"
+        assert r2021[0]["notes"] == ""
+
+    def test_conflicting_sens_kept_and_reported(self, tmp_path, monkeypatch):
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf", "M9001_dup_2026_01_10.pdf"])
+        conflict = M9001_TEXT.replace("0.0700", "0.0777")
+        _fake_sheets(
+            monkeypatch,
+            {
+                "M9001_2026_01_10.pdf": M9001_TEXT,
+                "M9001_dup_2026_01_10.pdf": conflict,
+            },
+        )
+        stats = sc.update_sensitivity_csv(d)
+        assert len(stats.conflicts) == 1
+        all_rows = self._read(d / "shear_sensitivities.csv")
+        rows = [r for r in all_rows if r["cal_date"] == "2026-01-10"]
+        assert sorted(r["sens"] for r in rows) == ["0.07", "0.0777"]
+
+    def test_unparseable_sheet_counted_not_fatal(self, tmp_path, monkeypatch):
+        d = self._dir(tmp_path, ["good_2026_01_10.pdf", "bad.pdf"])
+
+        def _extract(p):
+            if p.name == "bad.pdf":
+                raise ValueError("garbage")
+            return M9001_TEXT
+
+        monkeypatch.setattr(sc, "extract_pdf_text", _extract)
+        stats = sc.update_sensitivity_csv(d)
+        assert stats.sheets_failed == 1 and stats.sheets_parsed == 1
+
+
+# ---------------------------------------------------------------------------
 # --cal-strict exit codes (m3).  The synthetic-sheet texts stand in for the
 # gitignored microstructure_sensors/ directory: extract_pdf_text is
 # monkeypatched, so no pypdf (and no real PDF) is needed.  MR_SL435.p has
@@ -678,3 +788,62 @@ def test_rsi_cli_sensors_wires_cal_strict(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as exc_info:
         main()
     assert exc_info.value.code == 3
+
+
+class TestUpdateSensitivityCsvReviewFixes:
+    """PR #143 review: persisted conflicts keep reporting; pypdf errors are
+    counted per sheet; no-op runs are byte-idempotent; recal_due populates."""
+
+    def _dir(self, tmp_path, names):
+        d = tmp_path / "cal"
+        d.mkdir()
+        for n in names:
+            (d / n).write_bytes(b"%PDF fake")
+        return d
+
+    def test_persisted_conflict_reported_on_rerun(self, tmp_path, monkeypatch):
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf", "M9001_dup_2026_01_10.pdf"])
+        conflict = M9001_TEXT.replace("0.0700", "0.0777")
+        _fake_sheets(
+            monkeypatch,
+            {"M9001_2026_01_10.pdf": M9001_TEXT, "M9001_dup_2026_01_10.pdf": conflict},
+        )
+        s1 = sc.update_sensitivity_csv(d)
+        assert len(s1.conflicts) == 1
+        s2 = sc.update_sensitivity_csv(d)  # rows already persisted
+        assert len(s2.conflicts) == 1 and s2.added == 0
+
+    def test_pypdf_error_counted_not_fatal(self, tmp_path, monkeypatch):
+        pytest.importorskip("pypdf")
+        from pypdf.errors import PdfStreamError
+
+        d = self._dir(tmp_path, ["good_2026_01_10.pdf", "bad.pdf"])
+
+        def _extract(p):
+            if p.name == "bad.pdf":
+                raise PdfStreamError("malformed stream")
+            return M9001_TEXT
+
+        monkeypatch.setattr(sc, "extract_pdf_text", _extract)
+        stats = sc.update_sensitivity_csv(d)
+        assert stats.sheets_failed == 1 and stats.sheets_parsed == 1
+
+    def test_noop_run_is_byte_idempotent(self, tmp_path, monkeypatch):
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf"])
+        _fake_sheets(monkeypatch, {"M9001_2026_01_10.pdf": M9001_TEXT})
+        sc.update_sensitivity_csv(d)
+        first = (d / "shear_sensitivities.csv").read_bytes()
+        assert b"\r\n" not in first  # LF, matching the committed registry
+        sc.update_sensitivity_csv(d)
+        assert (d / "shear_sensitivities.csv").read_bytes() == first
+
+    def test_recal_due_populates_from_sheet(self, tmp_path, monkeypatch):
+        text = M9001_TEXT + "Recommended re-calibration: 2027/01/10\n"
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf"])
+        _fake_sheets(monkeypatch, {"M9001_2026_01_10.pdf": text})
+        sc.update_sensitivity_csv(d)
+        import csv
+
+        with (d / "shear_sensitivities.csv").open(newline="") as f:
+            rows = {r["cal_date"]: r for r in csv.DictReader(f)}
+        assert rows["2026-01-10"]["recal_due"] == "2027-01-10"

@@ -38,8 +38,9 @@ plain strings (see :func:`parse_sheet_text`), independent of any PDF.
 from __future__ import annotations
 
 import calendar
+import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from datetime import date as _Date  # for annotations inside classes with a `date` field
 from pathlib import Path
@@ -47,6 +48,9 @@ from typing import TYPE_CHECKING, TextIO
 
 if TYPE_CHECKING:  # avoid a runtime import cycle (sensor_inventory imports us lazily)
     from odas_tpw.rsi.sensor_inventory import SensorUse
+
+
+logger = logging.getLogger(__name__)
 
 
 class CalDependencyError(RuntimeError):
@@ -665,3 +669,147 @@ def print_check(
     out = stream if stream is not None else sys.stdout
     for line in format_check(summary, cal_dir, tol, load_warnings):
         print(line, file=out)
+
+
+# ---------------------------------------------------------------------------
+# Tracked sensitivity registry (shear_sensitivities.csv)
+# ---------------------------------------------------------------------------
+
+CSV_FIELDS = ["serial", "cal_date", "sens", "units", "source", "sheet", "recal_due", "notes"]
+CSV_UNITS = "V/(m^2 s^-2)"
+_PREV_NOTE = "previous-calibration entry on this sheet"
+
+
+@dataclass
+class CsvUpdateStats:
+    sheets_parsed: int = 0
+    sheets_failed: int = 0
+    added: int = 0
+    upgraded: int = 0
+    unchanged: int = 0
+    conflicts: list[str] = field(default_factory=list)
+
+
+def _pdf_errors() -> tuple[type[Exception], ...]:
+    """pypdf's exception hierarchy, when pypdf is installed.
+
+    Malformed PDFs raise e.g. PdfStreamError; a batch updater must count the
+    failed sheet and continue rather than abort with a traceback.
+    """
+    try:
+        from pypdf import errors as _pe
+    except ImportError:
+        return ()
+    return (_pe.PyPdfError,)
+
+
+def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUpdateStats:
+    """Merge every calibration sheet in *cal_dir* into the CSV registry.
+
+    Idempotent: re-running adds nothing. Merge rules —
+    - key = (serial, cal_date, sens): an existing row with the same key is
+      kept (``manual`` rows are never touched), EXCEPT that a sheet's own
+      "current" entry replaces a previous-calibration attestation of the same
+      point (better provenance: it carries the sheet id and recal date).
+    - same (serial, cal_date) with a DIFFERENT sens is kept side by side and
+      reported as a conflict — conflicting records must stay visible, never
+      be silently dropped.
+    """
+    import csv as _csv
+
+    cal_dir = Path(cal_dir)
+    if csv_path is None:
+        csv_path = cal_dir / "shear_sensitivities.csv"
+    stats = CsvUpdateStats()
+    sheet_errors: tuple[type[Exception], ...] = (
+        CalDependencyError,
+        OSError,
+        ValueError,
+        *_pdf_errors(),
+    )
+
+    rows: list[dict[str, str]] = []
+    if csv_path.exists():
+        with csv_path.open(newline="") as f:
+            for row in _csv.DictReader(f):
+                rows.append({k: (row.get(k) or "") for k in CSV_FIELDS})
+
+    def _key(r: dict[str, str]) -> tuple[str, str, str]:
+        return (r["serial"], r["cal_date"], r["sens"])
+
+    index = {_key(r): i for i, r in enumerate(rows)}
+
+    def _merge(new: dict[str, str]) -> None:
+        k = _key(new)
+        if k in index:
+            old = rows[index[k]]
+            # Upgrade a previous-entry attestation to the point's own sheet.
+            if old["notes"] == _PREV_NOTE and new["notes"] != _PREV_NOTE:
+                rows[index[k]] = new
+                stats.upgraded += 1
+            else:
+                stats.unchanged += 1
+            return
+        rows.append(new)
+        index[k] = len(rows) - 1
+        stats.added += 1
+
+    for pdf in sorted(cal_dir.glob("*.pdf")):
+        try:
+            sheet = parse_sheet_text(extract_pdf_text(pdf), source=pdf.name)
+        except sheet_errors as e:
+            stats.sheets_failed += 1
+            logger.warning("%s: could not parse calibration sheet: %s", pdf.name, e)
+            continue
+        if sheet.sn is None or sheet.sensitivity is None or sheet.cal_date is None:
+            stats.sheets_failed += 1
+            logger.warning("%s: sheet lacks serial/sensitivity/date; skipped", pdf.name)
+            continue
+        stats.sheets_parsed += 1
+        recal = sheet.recal_due
+        _merge({
+            "serial": sheet.sn,
+            "cal_date": sheet.cal_date.isoformat(),
+            "sens": f"{sheet.sensitivity}",
+            "units": CSV_UNITS,
+            "source": "sheet",
+            "sheet": pdf.name,
+            "recal_due": recal.isoformat() if recal else "",
+            "notes": "",
+        })
+        if sheet.prev_sensitivity is not None and sheet.prev_cal_date is not None:
+            _merge({
+                "serial": sheet.sn,
+                "cal_date": sheet.prev_cal_date.isoformat(),
+                "sens": f"{sheet.prev_sensitivity}",
+                "units": CSV_UNITS,
+                "source": "sheet",
+                "sheet": pdf.name,
+                "recal_due": "",
+                "notes": _PREV_NOTE,
+            })
+
+    # Conflicts are scanned over the COMPLETE final registry on every run, so
+    # a disagreement persisted in an earlier invocation keeps being reported
+    # (and keeps the nonzero exit) until a human resolves it.
+    by_point: dict[tuple[str, str], list[dict[str, str]]] = {}
+    for r in rows:
+        by_point.setdefault((r["serial"], r["cal_date"]), []).append(r)
+    for (serial, cal_date), grp in sorted(by_point.items()):
+        sens_values = {g["sens"] for g in grp}
+        if len(sens_values) > 1:
+            stats.conflicts.append(
+                f"{serial} {cal_date}: "
+                + " vs ".join(
+                    f"{g['sens']} ({g['sheet'] or g['source']})" for g in grp
+                )
+            )
+
+    rows.sort(key=lambda r: (r["serial"], r["cal_date"], r["source"]))
+    with csv_path.open("w", newline="") as f:
+        # LF terminator: DictWriter's CRLF default would rewrite every line of
+        # the LF-committed registry on a no-op run, dirtying the checkout.
+        w = _csv.DictWriter(f, fieldnames=CSV_FIELDS, lineterminator="\n")
+        w.writeheader()
+        w.writerows(rows)
+    return stats
