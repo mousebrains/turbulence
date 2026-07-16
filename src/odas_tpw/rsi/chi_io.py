@@ -901,26 +901,27 @@ def _load_therm_channels(
                     )
                     therm_cal.append(_extract_therm_cal(ch_cfg))
     else:
-        # NetCDF source — look for gradient channels or T channels
+        # NetCDF source — look for gradient channels or T channels.
+        # _nc_filled: masked _FillValue samples become NaN, never the raw
+        # ~9.97e36 fill buffer (see _channels_from_nc).
         import netCDF4 as nc
 
         from odas_tpw.rsi.helpers import DT_PATTERN, T_PATTERN
+        from odas_tpw.rsi.profile import _nc_filled
 
         ds = nc.Dataset(str(source), "r")
 
         for vname in sorted(ds.variables.keys()):
             var = ds.variables[vname]
-            if var.dimensions == ("time_fast",):
-                arr = var[:].data.astype(np.float64)
-                if DT_PATTERN.match(vname):
-                    therm.append((vname, arr))
-                    diff_gains.append(0.94)
+            if var.dimensions == ("time_fast",) and DT_PATTERN.match(vname):
+                therm.append((vname, _nc_filled(var)))
+                diff_gains.append(0.94)
 
         if not therm:
             for vname in sorted(ds.variables.keys()):
                 var = ds.variables[vname]
                 if var.dimensions == ("time_fast",) and T_PATTERN.match(vname):
-                    therm.append((vname, var[:].data.astype(np.float64)))
+                    therm.append((vname, _nc_filled(var)))
                     diff_gains.append(0.94)
 
         ds.close()

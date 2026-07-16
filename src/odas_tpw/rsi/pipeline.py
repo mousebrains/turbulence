@@ -143,7 +143,7 @@ def run_pipeline(
     min_duration: float = 7.0,
     speed: float | None = None,
     speed_tau: float = 1.5,
-    speed_method: str = "pressure",
+    speed_method: str | None = None,
     aoa_deg: float = 3.0,
     vehicle: str | None = None,
     # L2 params
@@ -218,8 +218,13 @@ def run_pipeline(
     from odas_tpw.rsi.helpers import _validate_speed_selection
 
     # Same speed/speed_method exclusivity contract as the eps/chi commands —
-    # the adapter would otherwise silently prefer the fixed speed.
+    # the adapter would otherwise silently prefer the fixed speed. Validate
+    # the EXPLICIT combination first (None = unset), and only then resolve
+    # the unset method to the historical pressure default: a "pressure"
+    # default here would make a plain fixed speed always trip the guard.
     _validate_speed_selection(speed, speed_method)
+    if speed_method is None:
+        speed_method = "pressure"
 
     if diss_length is None:
         diss_length = 4 * fft_length
