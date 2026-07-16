@@ -437,6 +437,18 @@ def _cmd_prof(args: argparse.Namespace) -> None:
             sys.exit(1)
 
 
+def _exit_on_bad_speed_selection(merged: dict[str, Any]) -> None:
+    """Invocation errors (e.g. --speed with --speed-method) are reported once,
+    cleanly, instead of once per file or as a traceback."""
+    from odas_tpw.rsi.helpers import _validate_speed_selection
+
+    try:
+        _validate_speed_selection(merged.get("speed"), merged.get("speed_method"))
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_eps(args: argparse.Namespace) -> None:
     """Compute epsilon (TKE dissipation rate) from any pipeline stage."""
     from odas_tpw.rsi.dissipation import _compute_diss_one, compute_diss_file
@@ -444,6 +456,7 @@ def _cmd_eps(args: argparse.Namespace) -> None:
     files = _resolve_files(args.files, {".p", ".nc"})
 
     merged = _merge_for_section(args, "epsilon")
+    _exit_on_bad_speed_selection(merged)
     output_dir = _setup_output_dir(args, "eps", "epsilon", merged)
     print(f"Output directory: {output_dir}")
 
@@ -463,7 +476,7 @@ def _cmd_eps(args: argparse.Namespace) -> None:
                 if paths:
                     produced += 1
                 else:
-                    print("  no profiles detected")
+                    print("  no output produced (no profiles detected, or no spectra survived)")
     else:
         work = []
         for f in files:
@@ -492,6 +505,7 @@ def _cmd_chi(args: argparse.Namespace) -> None:
     files = _resolve_files(args.files, {".p", ".nc"})
 
     merged = _merge_for_section(args, "chi")
+    _exit_on_bad_speed_selection(merged)
     output_dir = _setup_output_dir(args, "chi", "chi", merged)
     print(f"Output directory: {output_dir}")
 
@@ -530,7 +544,7 @@ def _cmd_chi(args: argparse.Namespace) -> None:
                 if paths:
                     produced += 1
                 else:
-                    print("  no profiles detected")
+                    print("  no output produced (no profiles detected, or no spectra survived)")
             finally:
                 if eps_ds is not None:
                     eps_ds.close()
@@ -622,6 +636,7 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
     # Remove None values (run_pipeline's own defaults apply: W_min resolves
     # per file from the vehicle direction, speed_method falls to "pressure")
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
+    _exit_on_bad_speed_selection(kwargs)
 
     run_pipeline(p_files, output_dir, **kwargs)
 

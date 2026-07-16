@@ -109,8 +109,13 @@ def vehicle_from_nc_attrs(attrs: Mapping[str, Any]) -> str:
     """
     for key in ("vehicle", "platform_type"):
         v = str(attrs.get(key, "") or "").lower()
-        if v:
+        if v in VEHICLE_ATTRIBUTES:
             return v
+        if v:
+            # Free-text ACDD platform strings (e.g. a ship name) are not a
+            # vehicle; fall through to the model heuristic rather than
+            # silently defaulting the unknown string to down/0.3 downstream.
+            break
     return vehicle_from_model(str(attrs.get("instrument_model", "") or ""))
 
 

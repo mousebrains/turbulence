@@ -47,7 +47,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - **Note — hash churn**: adding the `temperature`/`conductivity` keys to
     the rsi `epsilon`/`chi` sections (and removing perturb's `T1_norm`/
     `T2_norm`, below) changes the config hashes, so existing `eps_NN`/
-    `chi_NN` (and perturb stage) directories will not be reused — the next
+    `chi_NN` (and perturb stage) directories will not be reused (epsilon/chi always; prof dirs only when the merged profiles key-set changed — an explicit numeric W_min keeps them) — the next
     run recomputes into fresh directories. Deliberate: the key set is part
     of the provenance signature.
 - **Salinity from a hotel file** — `epsilon.salinity`, `chi.salinity`, and the

@@ -870,7 +870,7 @@ def _validate_speed_selection(speed: float | None, speed_method: str | None) -> 
             f"speed_method={speed_method!r} is not valid here; expected "
             f"pressure | em | flight.{hint}"
         )
-    if speed is not None and speed_method not in (None, "pressure"):
+    if speed is not None and speed_method is not None:
         raise ValueError(
             f"--speed (fixed speed {speed:g} m/s) and --speed-method "
             f"{speed_method!r} are mutually exclusive; pass one or the other"

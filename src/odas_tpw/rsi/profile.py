@@ -412,6 +412,7 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         "Conventions": "CF-1.13, ACDD-1.3",
         "instrument_model": pf.config["instrument_info"].get("model", ""),
         "instrument_sn": pf.config["instrument_info"].get("sn", ""),
+        "platform_type": pf.config["instrument_info"].get("vehicle", ""),
         "operator": pf.config["cruise_info"].get("operator", ""),
         "project": pf.config["cruise_info"].get("project", ""),
         "start_time": pf.start_time.isoformat(),
