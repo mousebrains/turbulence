@@ -32,7 +32,9 @@ Method notes (deliberate deviations from the paper are called out):
   plus the pipeline's ``qc_drop_*`` hotel flags.
 - **Thorpe scales** come from the slow (64 Hz) grid — both routes:
   ``sigma0`` (JAC CT; trusted salinity, so an upgrade on the paper's
-  temperature-only sort) and the FP07 ``T1`` (the paper's proxy) — over
+  temperature-only sort) and the FP07 ``T1`` (the paper's proxy; still
+  hard-coded — routing through the QC'd reference-temperature resolver
+  is deferred to #131 W5) — over
   a ``--sort-window`` (default 4 s, the paper's segment span) centered
   on each chi window.  ``N2_patch`` is the Smyth/Kaminski
   overturn-weighted form (see :mod:`odas_tpw.processing.thorpe`); when

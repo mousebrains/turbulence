@@ -48,21 +48,39 @@ def _compute_chi(
     fit_method: str = "iterative",
     spectrum_model: str = "kraichnan",
     salinity: npt.ArrayLike | None = None,
+    temperature: str | float = "auto",
+    conductivity: str = "auto",
     vehicle: str | None = None,
     _pre_loaded: dict[str, Any] | None = None,
 ) -> list[xr.Dataset]:
     """Compute chi from temperature gradient spectra (internal, no deprecation warning).
 
+    ``temperature`` selects the reference-temperature source for viscosity /
+    kappa_T and ``T_mean``: ``"auto"`` (first plausible of T1..Tn, T, JAC_T),
+    an explicit channel name (QC failure warns but proceeds), or a number =
+    constant reference temperature [degC] (ODAS ``constant_temp`` parity).
+    ``conductivity`` selects the channel behind ``salinity="measured"``
+    (``"auto"`` = JAC_C when present); ``salinity="measured"`` computes
+    practical salinity from the resolved C/T pair and pressure (TEOS-10),
+    falling back to ``None`` (visc35) with a warning when no conductivity
+    channel exists.
+
     ``_pre_loaded`` is a private hook accepting the dict produced by
     :func:`_load_therm_channels` (i.e. channels + ``therm`` + ``diff_gains`` +
     ``therm_cal``) so callers like ``perturb.pipeline`` can avoid the
-    redundant NC reads when diss and chi share the same source.
+    redundant NC reads when diss and chi share the same source; when given,
+    the dict already carries the resolved T/C/metadata, so
+    ``temperature``/``conductivity`` are ignored for loading.
     """
     from odas_tpw.chi.chi import _spectrum_func
     from odas_tpw.chi.l2_chi import process_l2_chi
     from odas_tpw.chi.l3_chi import process_l3_chi
     from odas_tpw.chi.l4_chi import process_l4_chi_epsilon, process_l4_chi_fit
-    from odas_tpw.rsi.helpers import _build_l1data_from_channels, prepare_profiles
+    from odas_tpw.rsi.helpers import (
+        _build_l1data_from_channels,
+        prepare_profiles,
+        resolve_measured_salinity,
+    )
     from odas_tpw.scor160.io import L2Params, L3Params
     from odas_tpw.scor160.l2 import process_l2
 
@@ -71,18 +89,34 @@ def _compute_chi(
     if overlap is None:
         overlap = diss_length // 2
 
+    # Validate the salinity form BEFORE any file access so a bad string fails
+    # fast; "measured" itself is resolved after the channels are loaded.
+    salinity_is_measured = False
     if isinstance(salinity, str):
-        # The "measured" sentinel is resolved upstream (perturb.pipeline reads
-        # the profile's conductivity); _compute_chi only accepts a concrete
-        # value here, so fail clearly rather than crash in np.asarray(...).
-        raise ValueError(
-            f"salinity={salinity!r} is not resolved at this layer; pass a "
-            "number, an array, or None. The 'measured' option is resolved by "
-            "the perturb pipeline from the profile's C/T/P."
-        )
+        if salinity.strip().lower() == "measured":
+            salinity_is_measured = True
+        else:
+            # Other string forms (e.g. "hotel:<var>") are resolved upstream by
+            # the perturb pipeline; _compute_chi only accepts a concrete value
+            # or "measured" here, so fail clearly rather than crash in
+            # np.asarray(...).
+            raise ValueError(
+                f"salinity={salinity!r} is not resolved at this layer; pass a "
+                "number, an array, None, or 'measured'. The 'hotel[:<var>]' "
+                "option is resolved by the perturb pipeline."
+            )
 
     # Load channels including thermistor data
-    data = _pre_loaded if _pre_loaded is not None else _load_therm_channels(source)
+    data = (
+        _pre_loaded
+        if _pre_loaded is not None
+        else _load_therm_channels(
+            source, temperature_name=temperature, conductivity_name=conductivity
+        )
+    )
+
+    if salinity_is_measured:
+        salinity = resolve_measured_salinity(data)
 
     therm_names = [t[0] for t in data["therm"]]
     n_therm = len(therm_names)
@@ -771,17 +805,28 @@ def _extract_therm_cal(ch_cfg: dict[str, Any]) -> dict[str, float]:
     return cal
 
 
-def _load_therm_channels(source: PFile | str | Path) -> dict[str, Any]:
+def _load_therm_channels(
+    source: PFile | str | Path,
+    temperature_name: str | float = "auto",
+    conductivity_name: str = "auto",
+) -> dict[str, Any]:
     """Load thermistor gradient channels from any source.
 
     Looks for channels matching T*_dT* pattern (pre-emphasized temperature),
     or falls back to T1/T2 channels for first-difference gradient.
+    ``temperature_name``/``conductivity_name`` select the slow reference
+    temperature / conductivity channels (see :func:`load_channels`); they do
+    not affect the fast thermistor-gradient channels gathered here.
     """
     from odas_tpw.rsi.helpers import load_channels
     from odas_tpw.rsi.p_file import PFile
 
     # First load standard channels (convert TypedDict → plain dict for extra keys)
-    data: dict[str, Any] = dict(load_channels(source))
+    data: dict[str, Any] = dict(
+        load_channels(
+            source, temperature_name=temperature_name, conductivity_name=conductivity_name
+        )
+    )
 
     therm: list[tuple[str, np.ndarray]] = []
     diff_gains: list[float] = []

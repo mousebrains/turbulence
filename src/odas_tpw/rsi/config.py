@@ -39,6 +39,8 @@ DEFAULTS: dict[str, dict] = {
         "despike_thresh": 8,
         "despike_smooth": 0.5,
         "salinity": None,
+        "temperature": "auto",
+        "conductivity": "auto",
     },
     "chi": {
         "fft_length": 1024,
@@ -53,6 +55,8 @@ DEFAULTS: dict[str, dict] = {
         "fit_method": "iterative",
         "spectrum_model": "kraichnan",
         "salinity": None,
+        "temperature": "auto",
+        "conductivity": "auto",
     },
 }
 
@@ -101,7 +105,13 @@ epsilon:
   fit_order: 3          # polynomial fit order for Nasmyth integration
   despike_thresh: 8     # despike threshold (rectified-HP / LP-envelope ratio, not MAD)
   despike_smooth: 0.5   # despike envelope low-pass cutoff [Hz]
-  salinity: null        # salinity [PSU] (null = 35, fixed S)
+  salinity: null        # PSU value, or "measured" (JAC/selected C+T) (null = 35, fixed S)
+  temperature: auto     # reference temperature for viscosity: auto = first
+                        # plausible of T1..Tn, T, JAC_T; a channel name (QC
+                        # failure warns but proceeds); or a number = constant
+                        # reference temperature [degC]
+  conductivity: auto    # conductivity channel for salinity "measured"
+                        # (auto = JAC_C when present)
 
 chi:
   fft_length: 1024      # FFT segment length [samples]
@@ -115,7 +125,13 @@ chi:
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
   fit_method: iterative # Method 2 fitting: iterative or mle
   spectrum_model: kraichnan  # theoretical spectrum: batchelor or kraichnan
-  salinity: null        # salinity [PSU] (null = 35, fixed S)
+  salinity: null        # PSU value, or "measured" (JAC/selected C+T) (null = 35, fixed S)
+  temperature: auto     # reference temperature for viscosity/kappa_T: auto =
+                        # first plausible of T1..Tn, T, JAC_T; a channel name
+                        # (QC failure warns but proceeds); or a number =
+                        # constant reference temperature [degC]
+  conductivity: auto    # conductivity channel for salinity "measured"
+                        # (auto = JAC_C when present)
 """
 
 

@@ -190,9 +190,7 @@ Note that perturb and `rsi-tpw` use different spectral defaults (perturb: `fft_s
 | `despike_smooth` | float | `0.5` | Low-pass cutoff [Hz] for the despike envelope smoother |
 | `salinity` | float \| `"measured"` \| `"hotel"` \| `null` | `null` | Salinity [PSU] for viscosity. `null` = fixed 35; a number = that fixed value; `"measured"` = per-profile from C/T/P (TEOS-10, needs conductivity); `"hotel"` (or `"hotel:<var>"`) = a [hotel](#hotel--hotel-file-external-telemetry)-injected salinity channel (default variable `salinity`) — for gliders/MicroRiders without onboard conductivity |
 | `epsilon_minimum` | float | `1e-13` | Floor: values below this are set to NaN |
-| `T_source` | string | `null` | Temperature source for viscosity |
-| `T1_norm` | float | `1.0` | Shear probe 1 normalization factor |
-| `T2_norm` | float | `1.0` | Shear probe 2 normalization factor |
+| `T_source` | string \| float \| `null` | `null` | Reference temperature for seawater properties (viscosity for ε; viscosity and κ_T for χ — one knob serves both stages). `null`/`"auto"` = first plausible of `T1`, `T2`, …, `T`, `JAC_T` (implausible channels — railed, drifting, mostly non-finite — are skipped with a warning; QC evaluates in-water samples, P > 0.5 dbar, when pressure is available); a channel name (e.g. `"T2"`, `"JAC_T"`, or a hotel temperature channel) = use that channel (a QC failure warns but proceeds); a number = constant reference temperature [°C] (ODAS `constant_temp` parity). The resolved source is recorded in the diss/chi products as `temperature_source`/`temperature_qc` attributes. |
 | `fom_max` | float | `null` | Per-probe figure-of-merit cut (null = no cut). E.g. `2.0` NaNs each per-probe cell (`e_N`, `epsilon[probe,:]`) whose `fom[probe,seg]` >= `fom_max`, applied **before** `mk_epsilon_mean` so bad probes drop out of the geometric mean individually |
 | `diagnostics` | bool | `false` | Include diagnostic variables |
 
@@ -200,7 +198,9 @@ Note that perturb and `rsi-tpw` use different spectral defaults (perturb: `fft_s
 
 ### `chi` — Thermal Variance Dissipation Rate
 
-Controls computation of chi from FP07 thermistor spectra.
+Controls computation of chi from FP07 thermistor spectra. The reference
+temperature for the χ viscosity/κ_T comes from `epsilon.T_source` — one knob
+serves both stages (there is no `chi.T_source`).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

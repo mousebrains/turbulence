@@ -156,6 +156,8 @@ def run_pipeline(
     f_AA: float = 98.0,
     fit_order: int = 3,
     salinity: float | None = None,
+    temperature: str | float = "auto",
+    conductivity: str = "auto",
     # Chi cleaning params
     despike_T_thresh: float = 10.0,
     # Chi spectral params
@@ -191,6 +193,16 @@ def run_pipeline(
         Input .P files.
     output_dir : Path
         Base output directory.
+    temperature : str or float
+        Reference-temperature source: "auto" (first plausible of T1..Tn, T,
+        JAC_T — see helpers.resolve_temperature_channel), an explicit channel
+        name (QC failure warns but proceeds), or a number = constant
+        reference temperature [degC] (ODAS ``constant_temp`` parity). The
+        resolved source lands in the L4 products' ``temperature_source`` /
+        ``temperature_qc`` attrs.
+    conductivity : str
+        Conductivity channel for the measured practical salinity
+        ("auto" = JAC_C when present).
     (all other params documented in plan)
 
     Returns
@@ -198,9 +210,6 @@ def run_pipeline(
     Path
         Output directory.
     """
-    from odas_tpw.rsi.p_file import PFile
-    from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
-
     if diss_length is None:
         diss_length = 4 * fft_length
     if overlap is None:
@@ -226,88 +235,32 @@ def run_pipeline(
         logger.info(p_path.name)
         logger.info("=" * 60)
 
-        pf = PFile(p_path)
-        pfile_dir = output_dir / p_path.stem
-        pfile_dir.mkdir(parents=True, exist_ok=True)
-
-        # Resolve vehicle, direction, and tau per file
-        from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
-
-        file_vehicle = vehicle or pf.config["instrument_info"].get("vehicle", "").lower()
-        file_direction = resolve_direction(direction, file_vehicle)
-        file_tau = resolve_tau(file_vehicle)
-        file_speed_tau = file_tau if speed_tau == 1.5 else speed_tau
-
-        # Detect profiles on slow-rate pressure
-        P_slow = pf.channels.get("P_dP", pf.channels.get("P"))
-        assert P_slow is not None, "No pressure channel (P or P_dP) found"
-        W_slow = _smooth_fall_rate(P_slow, pf.fs_slow, tau=file_speed_tau)
-        profiles = get_profiles(
-            P_slow,
-            W_slow,
-            pf.fs_slow,
-            P_min=P_min,
-            W_min=W_min,
-            direction=file_direction,
-            min_duration=min_duration,
-        )
-
-        if not profiles:
-            logger.warning("No profiles detected")
-            continue
-
-        logger.info(f"{len(profiles)} profile(s) detected")
-
-        # Epsilon shear high-pass cutoff, scaled with the epsilon FFT length
-        # exactly as the modular _compute_epsilon / perturb path: 0.25 Hz at the
-        # default 1024-sample FFT (512 Hz), 1.0 Hz at 256 samples. Chi keeps the
-        # fixed canonical 0.25 Hz (see _CHI_HP_CUT) regardless of its FFT length.
-        eps_hp_cut = _epsilon_hp_cut(pf.fs_fast, fft_length, HP_cut)
-
-        all_binned = []
-        profile_metadata = []
-
-        for prof_idx, (s_slow, e_slow) in enumerate(profiles):
-            prof_num = prof_idx + 1
-            prof_dir = pfile_dir / f"profile_{prof_num:03d}"
-            prof_dir.mkdir(parents=True, exist_ok=True)
-
-            logger.info(f"Profile {prof_num}: slow samples {s_slow}-{e_slow}")
-
-            binned = _process_profile(
-                pf,
-                prof_slice=(s_slow, e_slow),
-                prof_num=prof_num,
-                prof_dir=prof_dir,
-                p_path=p_path,
+        # Per-file guard (mirrors the eps/chi CLI loops): one bad file — e.g.
+        # unreadable, or no plausible reference temperature — must not kill a
+        # multi-file pipeline run.
+        try:
+            _pipeline_one_file(
+                p_path,
+                output_dir,
+                P_min=P_min,
+                W_min=W_min,
+                direction=direction,
+                min_duration=min_duration,
                 speed=speed,
-                direction=file_direction,
-                speed_tau=file_speed_tau,
+                speed_tau=speed_tau,
                 speed_method=speed_method,
                 aoa_deg=aoa_deg,
-                l2_params=L2Params(
-                    HP_cut=eps_hp_cut,
-                    despike_sh=np.array([despike_thresh, 0.5, 0.04]),
-                    despike_A=np.array([np.inf, 0.5, 0.04]),
-                    profile_min_W=W_min,
-                    profile_min_P=P_min,
-                    profile_min_duration=min_duration,
-                    # Vehicle-resolved tau (matches L1 speed + profile detection);
-                    # the raw user default 1.5 would re-smooth glider speed at the
-                    # wrong 0.68/1.5 cutoff for non-VMP vehicles.
-                    speed_tau=file_speed_tau,
-                ),
-                l3_params=L3Params(
-                    fft_length=fft_length,
-                    diss_length=diss_length,
-                    overlap=overlap,
-                    HP_cut=eps_hp_cut,
-                    fs_fast=0,  # placeholder, overridden in _process_profile
-                    goodman=goodman,
-                ),
+                vehicle=vehicle,
+                HP_cut=HP_cut,
+                despike_thresh=despike_thresh,
+                fft_length=fft_length,
+                diss_length=diss_length,
+                overlap=overlap,
                 f_AA=f_AA,
                 fit_order=fit_order,
                 salinity=salinity,
+                temperature=temperature,
+                conductivity=conductivity,
                 despike_T_thresh=despike_T_thresh,
                 chi_fft_length=chi_fft_length,
                 chi_diss_length=chi_diss_length,
@@ -318,28 +271,201 @@ def run_pipeline(
                 compute_chi_epsilon=compute_chi_epsilon,
                 compute_chi_fit=compute_chi_fit,
                 bin_size=bin_size,
+                goodman=goodman,
             )
-
-            if binned is not None:
-                all_binned.append(binned)
-                profile_metadata.append(
-                    {
-                        "source_file": p_path.name,
-                        "profile_number": prof_num,
-                        "s_slow": s_slow,
-                        "e_slow": e_slow,
-                    }
-                )
-
-        # Step 8: Combine profiles
-        if all_binned:
-            combined = combine_profiles(all_binned, profile_metadata)
-            combined_path = pfile_dir / "L6_combined.nc"
-            combined.to_netcdf(combined_path)
-            logger.info(f"Combined: {combined_path}")
+        except (OSError, ValueError, RuntimeError) as e:
+            logger.error(f"{p_path.name}: ERROR: {e}")
 
     logger.info(f"Pipeline complete. Output: {output_dir}")
     return output_dir
+
+
+def _pipeline_one_file(
+    p_path: Path,
+    output_dir: Path,
+    *,
+    P_min: float,
+    W_min: float,
+    direction: str,
+    min_duration: float,
+    speed: float | None,
+    speed_tau: float,
+    speed_method: str,
+    aoa_deg: float,
+    vehicle: str | None,
+    HP_cut: float | None,
+    despike_thresh: float,
+    fft_length: int,
+    diss_length: int,
+    overlap: int,
+    f_AA: float,
+    fit_order: int,
+    salinity: float | None,
+    temperature: str | float,
+    conductivity: str,
+    despike_T_thresh: float,
+    chi_fft_length: int,
+    chi_diss_length: int,
+    chi_overlap: int,
+    fp07_model: str,
+    spectrum_model: str,
+    fit_method: str,
+    compute_chi_epsilon: bool,
+    compute_chi_fit: bool,
+    bin_size: float,
+    goodman: bool,
+) -> None:
+    """Process one .P file (run_pipeline's per-file body)."""
+    from odas_tpw.rsi.helpers import resolve_temperature_channel, temperature_candidates
+    from odas_tpw.rsi.p_file import PFile
+    from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
+
+    pf = PFile(p_path)
+    pfile_dir = output_dir / p_path.stem
+    pfile_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resolve vehicle, direction, and tau per file
+    from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
+
+    file_vehicle = vehicle or pf.config["instrument_info"].get("vehicle", "").lower()
+    file_direction = resolve_direction(direction, file_vehicle)
+    file_tau = resolve_tau(file_vehicle)
+    file_speed_tau = file_tau if speed_tau == 1.5 else speed_tau
+
+    # Detect profiles on slow-rate pressure
+    P_slow = pf.channels.get("P_dP", pf.channels.get("P"))
+    assert P_slow is not None, "No pressure channel (P or P_dP) found"
+
+    # Resolve the reference-temperature source ONCE per file (full-channel QC)
+    # for provenance; the concrete selection is passed to the adapter so the
+    # per-profile resolution cannot diverge from what the attrs report.
+    if isinstance(temperature, bool):
+        raise ValueError(
+            f"temperature={temperature!r} is not valid; use a channel name or a number"
+        )
+    if isinstance(temperature, (int, float)):
+        temp_for_l1: str | float = float(temperature)
+        temperature_source = f"constant:{float(temperature):g}"
+        temperature_qc = "pass"
+    elif temperature == "auto" and not temperature_candidates(pf.channels, len(pf.t_slow)):
+        # Historical tolerance: an instrument with no slow temperature channel
+        # still runs; the adapter warns and fills L1.temp with NaN (downstream
+        # substitutes 10 degC loudly).
+        temp_for_l1 = "auto"
+        temperature_source = "none"
+        temperature_qc = "no slow temperature channel found"
+    else:
+        t_chan, t_reason = resolve_temperature_channel(
+            pf.channels,
+            len(pf.t_slow),
+            temperature,
+            pressure=P_slow,
+            context=p_path.name,
+        )
+        temp_for_l1 = t_chan
+        temperature_source = t_chan
+        temperature_qc = "pass" if t_reason is None else t_reason
+
+    W_slow = _smooth_fall_rate(P_slow, pf.fs_slow, tau=file_speed_tau)
+    profiles = get_profiles(
+        P_slow,
+        W_slow,
+        pf.fs_slow,
+        P_min=P_min,
+        W_min=W_min,
+        direction=file_direction,
+        min_duration=min_duration,
+    )
+
+    if not profiles:
+        logger.warning("No profiles detected")
+        return
+
+    logger.info(f"{len(profiles)} profile(s) detected")
+
+    # Epsilon shear high-pass cutoff, scaled with the epsilon FFT length
+    # exactly as the modular _compute_epsilon / perturb path: 0.25 Hz at the
+    # default 1024-sample FFT (512 Hz), 1.0 Hz at 256 samples. Chi keeps the
+    # fixed canonical 0.25 Hz (see _CHI_HP_CUT) regardless of its FFT length.
+    eps_hp_cut = _epsilon_hp_cut(pf.fs_fast, fft_length, HP_cut)
+
+    all_binned = []
+    profile_metadata = []
+
+    for prof_idx, (s_slow, e_slow) in enumerate(profiles):
+        prof_num = prof_idx + 1
+        prof_dir = pfile_dir / f"profile_{prof_num:03d}"
+        prof_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"Profile {prof_num}: slow samples {s_slow}-{e_slow}")
+
+        binned = _process_profile(
+            pf,
+            prof_slice=(s_slow, e_slow),
+            prof_num=prof_num,
+            prof_dir=prof_dir,
+            p_path=p_path,
+            speed=speed,
+            direction=file_direction,
+            speed_tau=file_speed_tau,
+            speed_method=speed_method,
+            aoa_deg=aoa_deg,
+            l2_params=L2Params(
+                HP_cut=eps_hp_cut,
+                despike_sh=np.array([despike_thresh, 0.5, 0.04]),
+                despike_A=np.array([np.inf, 0.5, 0.04]),
+                profile_min_W=W_min,
+                profile_min_P=P_min,
+                profile_min_duration=min_duration,
+                # Vehicle-resolved tau (matches L1 speed + profile detection);
+                # the raw user default 1.5 would re-smooth glider speed at the
+                # wrong 0.68/1.5 cutoff for non-VMP vehicles.
+                speed_tau=file_speed_tau,
+            ),
+            l3_params=L3Params(
+                fft_length=fft_length,
+                diss_length=diss_length,
+                overlap=overlap,
+                HP_cut=eps_hp_cut,
+                fs_fast=0,  # placeholder, overridden in _process_profile
+                goodman=goodman,
+            ),
+            f_AA=f_AA,
+            fit_order=fit_order,
+            salinity=salinity,
+            temperature=temp_for_l1,
+            conductivity=conductivity,
+            temperature_source=temperature_source,
+            temperature_qc=temperature_qc,
+            despike_T_thresh=despike_T_thresh,
+            chi_fft_length=chi_fft_length,
+            chi_diss_length=chi_diss_length,
+            chi_overlap=chi_overlap,
+            fp07_model=fp07_model,
+            spectrum_model=spectrum_model,
+            fit_method=fit_method,
+            compute_chi_epsilon=compute_chi_epsilon,
+            compute_chi_fit=compute_chi_fit,
+            bin_size=bin_size,
+        )
+
+        if binned is not None:
+            all_binned.append(binned)
+            profile_metadata.append(
+                {
+                    "source_file": p_path.name,
+                    "profile_number": prof_num,
+                    "s_slow": s_slow,
+                    "e_slow": e_slow,
+                }
+            )
+
+    # Step 8: Combine profiles
+    if all_binned:
+        combined = combine_profiles(all_binned, profile_metadata)
+        combined_path = pfile_dir / "L6_combined.nc"
+        combined.to_netcdf(combined_path)
+        logger.info(f"Combined: {combined_path}")
 
 
 def _process_profile(
@@ -359,6 +485,10 @@ def _process_profile(
     f_AA: float,
     fit_order: int,
     salinity: float | None,
+    temperature: str | float = "auto",
+    conductivity: str = "auto",
+    temperature_source: str | None = None,
+    temperature_qc: str | None = None,
     despike_T_thresh: float,
     chi_fft_length: int,
     chi_diss_length: int,
@@ -382,6 +512,8 @@ def _process_profile(
         speed_tau=speed_tau,
         speed_method=speed_method,
         aoa_deg=aoa_deg,
+        temperature=temperature,
+        conductivity=conductivity,
     )
 
     # Step 2: L2
@@ -672,7 +804,14 @@ def _process_profile(
 
     # Write per-level NetCDF
     time_ref = pf.start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
-    _write_l4_epsilon(l4, l3, prof_dir / "L4_epsilon.nc", pf)
+    _write_l4_epsilon(
+        l4,
+        l3,
+        prof_dir / "L4_epsilon.nc",
+        pf,
+        temperature_source=temperature_source,
+        temperature_qc=temperature_qc,
+    )
 
     # Attach the mixing vars to whichever chi product they were computed on
     # (chi_primary): Method-1 when present, else the Method-2 fit (bug_003).
@@ -682,6 +821,8 @@ def _process_profile(
             prof_dir / "L4_chi_epsilon.nc",
             time_ref,
             extra_vars=mixing_vars if chi_primary is l4_chi_eps else None,
+            temperature_source=temperature_source,
+            temperature_qc=temperature_qc,
         )
     if l4_chi_fit_result is not None:
         _write_l4_chi(
@@ -689,12 +830,21 @@ def _process_profile(
             prof_dir / "L4_chi_fit.nc",
             time_ref,
             extra_vars=mixing_vars if chi_primary is l4_chi_fit_result else None,
+            temperature_source=temperature_source,
+            temperature_qc=temperature_qc,
         )
 
     return binned
 
 
-def _write_l4_epsilon(l4: L4Data, l3: L3Data, path: Path, pf) -> None:
+def _write_l4_epsilon(
+    l4: L4Data,
+    l3: L3Data,
+    path: Path,
+    pf,
+    temperature_source: str | None = None,
+    temperature_qc: str | None = None,
+) -> None:
     """Write L4 epsilon to NetCDF."""
     n_shear = l4.n_shear
     probe_names = [f"sh{i + 1}" for i in range(n_shear)]
@@ -806,6 +956,10 @@ def _write_l4_epsilon(l4: L4Data, l3: L3Data, path: Path, pf) -> None:
             "history": f"Pipeline on {datetime.now(UTC).isoformat()}",
         },
     )
+    if temperature_source is not None:
+        ds.attrs["temperature_source"] = temperature_source
+    if temperature_qc is not None:
+        ds.attrs["temperature_qc"] = temperature_qc
     ds.to_netcdf(path)
 
 
@@ -814,6 +968,8 @@ def _write_l4_chi(
     path: Path,
     time_ref: str,
     extra_vars: dict[str, tuple[np.ndarray, dict]] | None = None,
+    temperature_source: str | None = None,
+    temperature_qc: str | None = None,
 ) -> None:
     """Write L4 chi to NetCDF.
 
@@ -918,6 +1074,10 @@ def _write_l4_chi(
             "history": f"Pipeline on {datetime.now(UTC).isoformat()}",
         },
     )
+    if temperature_source is not None:
+        ds.attrs["temperature_source"] = temperature_source
+    if temperature_qc is not None:
+        ds.attrs["temperature_qc"] = temperature_qc
     if extra_vars:
         for name, (arr, attrs) in extra_vars.items():
             ds[name] = xr.DataArray(arr, dims=["time"], attrs=attrs)

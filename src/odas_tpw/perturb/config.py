@@ -116,9 +116,12 @@ DEFAULTS: dict[str, dict] = {
         "despike_smooth": 0.5,
         "salinity": None,
         "epsilon_minimum": 1e-13,
-        "T_source": None,
-        "T1_norm": 1.0,
-        "T2_norm": 1.0,
+        "T_source": None,  # reference temperature for seawater
+        # properties (epsilon viscosity; chi
+        # viscosity/kappa_T — one knob serves both
+        # stages). null = "auto" QC chain; a channel
+        # name; or a number = constant reference
+        # temperature [degC].
         "fom_max": None,  # null = no FOM cut. e.g. 2.0 NaNs each
         # per-probe (e_N, epsilon[probe,:]) cell
         # whose figure-of-merit fom[probe,seg]
@@ -867,9 +870,16 @@ epsilon:
                           # (default var "salinity") — for gliders/MRs with no
                           # onboard conductivity but a hotel CTD feed
   epsilon_minimum: 1.0e-13  # floor for small epsilon values
-  T_source: null          # temperature source for viscosity (null = blend T1/T2)
-  T1_norm: 1.0            # T1 blending weight
-  T2_norm: 1.0            # T2 blending weight
+  T_source: null          # reference temperature for seawater properties
+                          # (viscosity for epsilon; viscosity and kappa_T for
+                          # chi — one knob serves both stages). null/"auto" =
+                          # first plausible of T1, T2, ..., T, JAC_T (railed/
+                          # implausible channels are skipped with a warning);
+                          # a channel name (e.g. "T2", "JAC_T", or a hotel
+                          # temperature channel) = use that channel (a QC
+                          # failure warns but proceeds); a number = constant
+                          # reference temperature [degC] (like ODAS
+                          # constant_temp)
   fom_max: null           # null = NO spectral-fit QC on epsilon. IMPORTANT: unlike
                           # the rsi run_pipeline path (which applies the full ATOMIX
                           # flag set -- FM>1.15, var_resolved<0.5, despike limits --
@@ -886,6 +896,9 @@ epsilon:
 
 chi:
   enable: false           # chi is optional, separate stage after diss
+                          # (the reference temperature for viscosity/kappa_T
+                          # comes from epsilon.T_source — one knob serves
+                          # both stages)
   fft_sec: 1.0            # FFT segment duration [s]; same sandwich
                           # constraints as epsilon.fft_sec above
   diss_sec: null          # dissipation window [s] (null = 4 * fft_sec)

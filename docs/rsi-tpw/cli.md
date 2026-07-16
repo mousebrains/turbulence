@@ -193,7 +193,9 @@ rsi-tpw eps VMP/*.p -o epsilon/ --salinity 34.5
 | `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
 | `--no-goodman` | Disable Goodman coherent noise removal |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
-| `--salinity FLOAT` | Salinity [PSU] for viscosity (default: 35, fixed S) |
+| `--salinity PSU\|measured` | Salinity for viscosity: a PSU value, or `measured` = computed from the conductivity/temperature channels via TEOS-10 (default: 35, fixed S) |
+| `--temperature NAME\|degC` | Reference temperature for viscosity: a channel name (e.g. `T2`, `JAC_T`, or a hotel temperature channel), a fixed value [°C], or `auto` = first plausible of `T1`..`Tn`, `T`, `JAC_T` (default: auto). Implausible channels (railed, drifting, mostly non-finite) are skipped with a warning; an explicitly named channel that fails QC warns but is honored. The selection is recorded in the product attrs (`temperature_source`/`temperature_qc`). |
+| `--conductivity NAME` | Conductivity channel for `--salinity measured` (default: auto = `JAC_C` when present) |
 
 The output NetCDF contains two distinct spectral-fit quality metrics:
 
@@ -243,7 +245,9 @@ rsi-tpw chi VMP/*.p --spectrum-model batchelor -o chi/
 | `--fit-method {mle,iterative}` | Method 2 fitting algorithm (default: iterative) |
 | `--spectrum-model {batchelor,kraichnan}` | Theoretical spectrum model (default: kraichnan) |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
-| `--salinity FLOAT` | Salinity [PSU] for viscosity (default: 35, fixed S) |
+| `--salinity PSU\|measured` | Salinity for viscosity: a PSU value, or `measured` = computed from the conductivity/temperature channels via TEOS-10 (default: 35, fixed S) |
+| `--temperature NAME\|degC` | Reference temperature for viscosity/κ_T: a channel name, a fixed value [°C], or `auto` = first plausible of `T1`..`Tn`, `T`, `JAC_T` (default: auto; same semantics as `eps`) |
+| `--conductivity NAME` | Conductivity channel for `--salinity measured` (default: auto = `JAC_C` when present) |
 
 ## `rsi-tpw pipeline`
 
@@ -265,7 +269,9 @@ rsi-tpw pipeline VMP/*.p -o results/
 | `--fp07-model {single_pole,double_pole}` | FP07 transfer function (default: single_pole) |
 | `--spectrum-model {batchelor,kraichnan}` | Spectrum model for chi (default: kraichnan) |
 | `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
-| `--salinity FLOAT` | Fixed salinity [PSU] fallback for viscosity (default: 35). **Ignored on conductivity-equipped instruments** — the pipeline resolves per-sample salinity from the measured JAC C/T, which takes precedence (see note below). |
+| `--salinity PSU\|measured` | Fixed salinity [PSU] fallback for viscosity (default: 35). **Ignored on conductivity-equipped instruments** — the pipeline resolves per-sample salinity from the measured JAC C/T, which takes precedence (see note below). `measured` maps to that automatic behavior (never treated as a number). |
+| `--temperature NAME\|degC` | Reference temperature for viscosity: a channel name, a fixed value [°C], or `auto` = first plausible of `T1`..`Tn`, `T`, `JAC_T` (default: auto; same semantics as `eps`). Recorded in the L4 products as `temperature_source`/`temperature_qc`. |
+| `--conductivity NAME` | Conductivity channel for the measured practical salinity (default: auto = `JAC_C` when present) |
 
 > **Salinity precedence (`pipeline` only):** `run_pipeline` prefers measured
 > salinity (from the instrument's own JAC conductivity/temperature) over

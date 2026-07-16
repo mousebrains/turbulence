@@ -1741,6 +1741,14 @@ def process_file(
     # Durations -> integer sample counts at THIS file's sampling rate, so one
     # duration-based config serves instruments at 512 Hz and 1-2 kHz alike.
     eps_cfg = resolve_window_config(eps_cfg, float(pf.fs_fast), section="epsilon")
+    # Reference temperature for seawater properties (epsilon viscosity; chi
+    # viscosity/kappa_T). One knob serves both stages — the pre_loaded channels
+    # dict is shared by design. None (merge_config drops nulls) = "auto" QC
+    # chain; a channel name or a number (constant reference) pass through.
+    # NOTE: `or "auto"` would swallow a legitimate T_source of 0.0 degC.
+    t_src = eps_cfg.get("T_source")
+    if t_src is None:
+        t_src = "auto"
     inst_lookup = instrument_key if instrument_key is not None else p_path.parent.name
     instrument_cfg = config.get("instruments", {}).get(inst_lookup, {})
     excluded_probes = list(instrument_cfg.get("exclude_shear_probes", []))
@@ -1784,7 +1792,7 @@ def process_file(
                         # therm-gradient channels; reused below for chi.
                         from odas_tpw.rsi.chi_io import _load_therm_channels
 
-                        pre_loaded = _load_therm_channels(prof_path)
+                        pre_loaded = _load_therm_channels(prof_path, temperature_name=t_src)
                         prof_data_cache[prof_path] = pre_loaded
                     else:
                         pre_loaded = None
@@ -1795,6 +1803,10 @@ def process_file(
                     eps_sal = _resolve_salinity_cfg(
                         eps_cfg.get("salinity"), prof_path, ct_T_name, ct_C_name, "epsilon"
                     )
+                    # T_source stays in the strip list: the resolved t_src is
+                    # passed explicitly as `temperature` (used only when
+                    # pre_loaded is None; the pre_loaded dict already carries
+                    # the resolved reference temperature).
                     diss_results = _compute_epsilon(
                         prof_path,
                         **{
@@ -1804,14 +1816,13 @@ def process_file(
                             not in (
                                 "epsilon_minimum",
                                 "T_source",
-                                "T1_norm",
-                                "T2_norm",
                                 "fom_max",
                                 "diagnostics",
                                 "salinity",
                             )
                         },
                         salinity=eps_sal,
+                        temperature=t_src,
                         _pre_loaded=pre_loaded,
                     )
                     eps_fom_max = eps_cfg.get("fom_max")
@@ -1930,6 +1941,10 @@ def process_file(
                             prof_path,
                             epsilon_ds=diss_ds,
                             salinity=chi_sal,
+                            # Same reference temperature as the diss stage
+                            # (epsilon.T_source); only used when pre_loaded
+                            # is None (e.g. a diss-stage load failure).
+                            temperature=t_src,
                             **chi_kwargs,
                             _pre_loaded=pre_loaded,
                         )

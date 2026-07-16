@@ -63,7 +63,9 @@ Controls computation of the turbulent kinetic energy dissipation rate (epsilon) 
 | `fit_order` | int | `3` | Polynomial order for the log-log fit used to determine the upper integration limit in the Nasmyth spectrum fitting. |
 | `despike_thresh` | float | `8` | Spike detection threshold. Ratio of the instantaneous rectified high-pass signal to its smoothed envelope. Higher values are less aggressive. |
 | `despike_smooth` | float | `0.5` | Low-pass cutoff frequency [Hz] for the spike detection envelope smoother. |
-| `salinity` | float | `null` | Fixed salinity [PSU] for computing kinematic viscosity via TEOS-10 (gsw). If `null`, uses a simplified viscosity formula assuming S = 35. |
+| `salinity` | float \| `"measured"` | `null` | Salinity for computing kinematic viscosity via TEOS-10 (gsw): a fixed PSU value, or `"measured"` = per-sample practical salinity from the resolved conductivity/temperature channels and pressure (falls back to fixed S with a warning when no conductivity exists). If `null`, uses a simplified viscosity formula assuming S = 35. |
+| `temperature` | string \| float | `"auto"` | Reference-temperature source for viscosity and `T_mean`. `"auto"` = first plausible of `T1`..`Tn`, `T`, `JAC_T` — implausible channels (railed, drifting, mostly non-finite) are skipped with a warning, and QC evaluates in-water samples (P > 0.5 dbar) when pressure is available; a channel name is honored even when it fails QC (with a warning); a number = constant reference temperature [°C] (ODAS `constant_temp` parity). Recorded in the products as `temperature_source`/`temperature_qc`. (ODAS divergence, deliberate: ODAS uses T1 with no plausibility check and silently substitutes 10 °C when temperature is missing; here a file with no plausible reference temperature errors instead of publishing wrong-viscosity products.) |
+| `conductivity` | string | `"auto"` | Conductivity channel behind `salinity: "measured"`. `"auto"` = `JAC_C` when present (no error otherwise); an explicit name must exist as a slow channel. Recorded as `conductivity_source`. |
 
 ---
 
@@ -84,7 +86,9 @@ Controls computation of the thermal variance dissipation rate (chi) from FP07 th
 | `f_AA` | float | `98.0` | Anti-aliasing filter cutoff frequency [Hz]. |
 | `fit_method` | string | `"iterative"` | Method 2 spectral fitting algorithm. `"iterative"`: Iterative integration (Peterson & Fer 2014). `"mle"`: Maximum Likelihood Estimation (Ruddick et al. 2000). Only used when epsilon is not provided. |
 | `spectrum_model` | string | `"kraichnan"` | Theoretical temperature gradient spectrum model. `"batchelor"`: Gaussian rolloff (Batchelor 1959). `"kraichnan"`: Exponential rolloff (Bogucki et al. 1997). |
-| `salinity` | float | `null` | Fixed salinity [PSU] for computing kinematic viscosity. If `null`, uses simplified S = 35 formula. |
+| `salinity` | float \| `"measured"` | `null` | Salinity for computing kinematic viscosity: a fixed PSU value, or `"measured"` (see the `epsilon` section). If `null`, uses simplified S = 35 formula. |
+| `temperature` | string \| float | `"auto"` | Reference-temperature source for viscosity/κ_T and `T_mean` (same semantics as the `epsilon` section). |
+| `conductivity` | string | `"auto"` | Conductivity channel behind `salinity: "measured"` (same semantics as the `epsilon` section). |
 
 ---
 
@@ -115,7 +119,13 @@ epsilon:
   fit_order: 3          # polynomial fit order for Nasmyth integration
   despike_thresh: 8     # despike threshold: ratio of rectified HP signal to its LP envelope
   despike_smooth: 0.5   # despike envelope low-pass cutoff [Hz]
-  salinity: null        # salinity [PSU] (null = 35, fixed S)
+  salinity: null        # PSU value, or "measured" (JAC/selected C+T) (null = 35, fixed S)
+  temperature: auto     # reference temperature for viscosity: auto = first
+                        # plausible of T1..Tn, T, JAC_T; a channel name (QC
+                        # failure warns but proceeds); or a number = constant
+                        # reference temperature [degC]
+  conductivity: auto    # conductivity channel for salinity "measured"
+                        # (auto = JAC_C when present)
 
 chi:
   fft_length: 1024      # FFT segment length [samples]
@@ -129,7 +139,13 @@ chi:
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
   fit_method: iterative # Method 2 fitting: iterative or mle
   spectrum_model: kraichnan  # theoretical spectrum: batchelor or kraichnan
-  salinity: null        # salinity [PSU] (null = 35, fixed S)
+  salinity: null        # PSU value, or "measured" (JAC/selected C+T) (null = 35, fixed S)
+  temperature: auto     # reference temperature for viscosity/kappa_T: auto =
+                        # first plausible of T1..Tn, T, JAC_T; a channel name
+                        # (QC failure warns but proceeds); or a number =
+                        # constant reference temperature [degC]
+  conductivity: auto    # conductivity channel for salinity "measured"
+                        # (auto = JAC_C when present)
 ```
 
 ## `null` Values
@@ -139,7 +155,7 @@ In YAML, `null` means "not set." When a parameter is `null`:
 - **`overlap`**: Computed as `diss_length // 2`.
 - **`speed`**: Derived from the pressure time series (dP/dt).
 - **`f_limit`**: Uses `f_AA` as the upper frequency limit.
-- **`salinity`**: Uses a simplified viscosity formula assuming S = 35 PSU (visc35). Set an explicit salinity to use the full TEOS-10 equation of state via gsw.
+- **`salinity`**: Uses a simplified viscosity formula assuming S = 35 PSU (visc35). Set an explicit salinity — or `"measured"` to derive it per sample from the conductivity/temperature channels — to use the full TEOS-10 equation of state via gsw.
 
 ## Chi Computation Methods
 
