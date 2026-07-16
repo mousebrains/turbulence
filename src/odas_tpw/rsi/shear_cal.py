@@ -665,6 +665,19 @@ class CsvUpdateStats:
     conflicts: list[str] = field(default_factory=list)
 
 
+def _pdf_errors() -> tuple[type[Exception], ...]:
+    """pypdf's exception hierarchy, when pypdf is installed.
+
+    Malformed PDFs raise e.g. PdfStreamError; a batch updater must count the
+    failed sheet and continue rather than abort with a traceback.
+    """
+    try:
+        from pypdf import errors as _pe
+    except ImportError:
+        return ()
+    return (_pe.PyPdfError,)
+
+
 def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUpdateStats:
     """Merge every calibration sheet in *cal_dir* into the CSV registry.
 
@@ -683,6 +696,12 @@ def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUp
     if csv_path is None:
         csv_path = cal_dir / "shear_sensitivities.csv"
     stats = CsvUpdateStats()
+    sheet_errors: tuple[type[Exception], ...] = (
+        CalDependencyError,
+        OSError,
+        ValueError,
+        *_pdf_errors(),
+    )
 
     rows: list[dict[str, str]] = []
     if csv_path.exists():
@@ -706,16 +725,6 @@ def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUp
             else:
                 stats.unchanged += 1
             return
-        clash = [
-            r for r in rows
-            if r["serial"] == new["serial"] and r["cal_date"] == new["cal_date"]
-        ]
-        if clash:
-            stats.conflicts.append(
-                f"{new['serial']} {new['cal_date']}: sens {new['sens']} "
-                f"({new['sheet'] or new['source']}) vs existing "
-                + ", ".join(f"{r['sens']} ({r['sheet'] or r['source']})" for r in clash)
-            )
         rows.append(new)
         index[k] = len(rows) - 1
         stats.added += 1
@@ -723,7 +732,7 @@ def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUp
     for pdf in sorted(cal_dir.glob("*.pdf")):
         try:
             sheet = parse_sheet_text(extract_pdf_text(pdf), source=pdf.name)
-        except (CalDependencyError, OSError, ValueError) as e:
+        except sheet_errors as e:
             stats.sheets_failed += 1
             logger.warning("%s: could not parse calibration sheet: %s", pdf.name, e)
             continue
@@ -732,7 +741,7 @@ def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUp
             logger.warning("%s: sheet lacks serial/sensitivity/date; skipped", pdf.name)
             continue
         stats.sheets_parsed += 1
-        recal = getattr(sheet, "recal_due", None)  # present once the staleness guard lands
+        recal = sheet.recal_due
         _merge({
             "serial": sheet.sn,
             "cal_date": sheet.cal_date.isoformat(),
@@ -755,9 +764,27 @@ def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUp
                 "notes": _PREV_NOTE,
             })
 
+    # Conflicts are scanned over the COMPLETE final registry on every run, so
+    # a disagreement persisted in an earlier invocation keeps being reported
+    # (and keeps the nonzero exit) until a human resolves it.
+    by_point: dict[tuple[str, str], list[dict[str, str]]] = {}
+    for r in rows:
+        by_point.setdefault((r["serial"], r["cal_date"]), []).append(r)
+    for (serial, cal_date), grp in sorted(by_point.items()):
+        sens_values = {g["sens"] for g in grp}
+        if len(sens_values) > 1:
+            stats.conflicts.append(
+                f"{serial} {cal_date}: "
+                + " vs ".join(
+                    f"{g['sens']} ({g['sheet'] or g['source']})" for g in grp
+                )
+            )
+
     rows.sort(key=lambda r: (r["serial"], r["cal_date"], r["source"]))
     with csv_path.open("w", newline="") as f:
-        w = _csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        # LF terminator: DictWriter's CRLF default would rewrite every line of
+        # the LF-committed registry on a no-op run, dirtying the checkout.
+        w = _csv.DictWriter(f, fieldnames=CSV_FIELDS, lineterminator="\n")
         w.writeheader()
         w.writerows(rows)
     return stats

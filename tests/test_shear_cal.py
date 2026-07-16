@@ -731,3 +731,62 @@ def test_rsi_cli_sensors_wires_cal_strict(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as exc_info:
         main()
     assert exc_info.value.code == 3
+
+
+class TestUpdateSensitivityCsvReviewFixes:
+    """PR #143 review: persisted conflicts keep reporting; pypdf errors are
+    counted per sheet; no-op runs are byte-idempotent; recal_due populates."""
+
+    def _dir(self, tmp_path, names):
+        d = tmp_path / "cal"
+        d.mkdir()
+        for n in names:
+            (d / n).write_bytes(b"%PDF fake")
+        return d
+
+    def test_persisted_conflict_reported_on_rerun(self, tmp_path, monkeypatch):
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf", "M9001_dup_2026_01_10.pdf"])
+        conflict = M9001_TEXT.replace("0.0700", "0.0777")
+        _fake_sheets(
+            monkeypatch,
+            {"M9001_2026_01_10.pdf": M9001_TEXT, "M9001_dup_2026_01_10.pdf": conflict},
+        )
+        s1 = sc.update_sensitivity_csv(d)
+        assert len(s1.conflicts) == 1
+        s2 = sc.update_sensitivity_csv(d)  # rows already persisted
+        assert len(s2.conflicts) == 1 and s2.added == 0
+
+    def test_pypdf_error_counted_not_fatal(self, tmp_path, monkeypatch):
+        pytest.importorskip("pypdf")
+        from pypdf.errors import PdfStreamError
+
+        d = self._dir(tmp_path, ["good_2026_01_10.pdf", "bad.pdf"])
+
+        def _extract(p):
+            if p.name == "bad.pdf":
+                raise PdfStreamError("malformed stream")
+            return M9001_TEXT
+
+        monkeypatch.setattr(sc, "extract_pdf_text", _extract)
+        stats = sc.update_sensitivity_csv(d)
+        assert stats.sheets_failed == 1 and stats.sheets_parsed == 1
+
+    def test_noop_run_is_byte_idempotent(self, tmp_path, monkeypatch):
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf"])
+        _fake_sheets(monkeypatch, {"M9001_2026_01_10.pdf": M9001_TEXT})
+        sc.update_sensitivity_csv(d)
+        first = (d / "shear_sensitivities.csv").read_bytes()
+        assert b"\r\n" not in first  # LF, matching the committed registry
+        sc.update_sensitivity_csv(d)
+        assert (d / "shear_sensitivities.csv").read_bytes() == first
+
+    def test_recal_due_populates_from_sheet(self, tmp_path, monkeypatch):
+        text = M9001_TEXT + "Recommended re-calibration: 2027/01/10\n"
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf"])
+        _fake_sheets(monkeypatch, {"M9001_2026_01_10.pdf": text})
+        sc.update_sensitivity_csv(d)
+        import csv
+
+        with (d / "shear_sensitivities.csv").open(newline="") as f:
+            rows = {r["cal_date"]: r for r in csv.DictReader(f)}
+        assert rows["2026-01-10"]["recal_due"] == "2027-01-10"
