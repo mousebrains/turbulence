@@ -2344,14 +2344,15 @@ class TestChiGridRefinement:
 
 
 class TestComputeChiSalinityGuard:
-    """_compute_chi only accepts a concrete salinity, not the sentinel string."""
+    """_compute_chi accepts a concrete salinity or 'measured' — other strings
+    (e.g. the perturb-only 'hotel[:<var>]' form) are rejected."""
 
     def test_string_salinity_raises_clear_error(self):
         from odas_tpw.rsi.chi_io import _compute_chi
 
         # Guard fires before any file access, so the source need not exist.
         with pytest.raises(ValueError, match="not resolved"):
-            _compute_chi("nonexistent.nc", salinity="measured")
+            _compute_chi("nonexistent.nc", salinity="hotel:salinity")
 
 
 class TestEpsilonDsToL4DataAllNaN:

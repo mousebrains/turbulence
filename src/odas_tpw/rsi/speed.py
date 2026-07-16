@@ -31,6 +31,18 @@ Methods
 
 ``"constant"``
     Use the scalar in ``speed.value`` for every fast-rate sample.
+
+``"hotel"``
+    Use a hotel-merged channel (named by ``speed.hotel_var``, default
+    ``"speed"``) as the through-water speed — external vehicle telemetry
+    interpolated onto the instrument grids by the perturb hotel merge.
+    The channel's grid is taken from ``pf.is_fast`` (the default
+    ``hotel.fast_channels`` puts ``"speed"`` on the FAST grid); a
+    slow-grid channel is interpolated and Butterworth-smoothed to fast
+    rate exactly like the em/flight methods. An unusable channel
+    (missing, on neither grid, or mostly non-finite) is an ERROR — an
+    explicitly requested hotel speed is never silently replaced by the
+    ``speed_cutout`` floor (issue #131 M10).
 """
 
 from __future__ import annotations
@@ -45,8 +57,8 @@ def compute_speed_for_pfile(
     pf: Any,
     speed_cfg: dict | None,
     vehicle: str | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return (speed_fast, W_slow) from configured method, in m/s and dbar/s.
+) -> tuple[np.ndarray, np.ndarray, str]:
+    """Return (speed_fast, W_slow, source) from the configured method.
 
     Parameters
     ----------
@@ -74,6 +86,11 @@ def compute_speed_for_pfile(
                  slightly LOW.
     W_slow     : (n_slow,) float64, dbar/s. Always the smoothed |dP/dt|
                  -- independent of method, useful for QC/binning.
+    source     : str, the provenance vocabulary for the speed actually
+                 computed: ``"pressure"`` | ``"em"`` | ``"flight"`` |
+                 ``"constant:<v>"`` | ``"hotel:<var>"``. Callers stamp
+                 product provenance from this return value rather than
+                 re-deriving it from the cfg.
     """
     from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
     from odas_tpw.scor160.profile import compute_speed_fast as _ode_speed
@@ -113,24 +130,48 @@ def compute_speed_for_pfile(
             P_slow, t_fast, t_slow, fs_fast, fs_slow,
             tau=tau, speed_min=speed_cutout,
         )
-        return speed_fast, W_slow
+        return speed_fast, W_slow, "pressure"
+
+    # Finite-coverage guards for EXPLICITLY requested non-pressure methods,
+    # applied BEFORE _slow_to_fast's cutout floor: _slow_to_fast fills an
+    # all-NaN input with speed_min (that fill is load-bearing for the
+    # pressure path and stays), which would otherwise publish a constant
+    # 0.05 m/s with provenance "em"/"flight" — missing telemetry would be
+    # indistinguishable from a real 0.05 m/s speed, and the perturb
+    # explicit-method abort could never fire (the array is already finite).
+    # Threshold asymmetry vs the hotel method (50% rule): the flight model
+    # legitimately NaNs every sample below min_pitch_deg (dive/climb
+    # inflections), so a fraction threshold could false-error real casts —
+    # em/flight only reject ZERO finite samples.
 
     if method == "constant":
         v = cfg.get("value")
         if v is None:
             raise ValueError("speed.method='constant' but speed.value is null")
-        speed_fast = np.full(len(t_fast), max(abs(float(v)), speed_cutout))
-        return speed_fast, W_slow
+        v = float(v)
+        if not np.isfinite(v):
+            raise ValueError(
+                f"speed.method='constant' but speed.value={v!r} is not finite"
+            )
+        speed_fast = np.full(len(t_fast), max(abs(v), speed_cutout))
+        return speed_fast, W_slow, f"constant:{v:g}"
 
     if method == "em":
         if "U_EM" not in pf.channels:
             raise ValueError(
                 "speed.method='em' but channel U_EM is missing from the "
-                ".p file. Use 'flight' or 'pressure' instead."
+                "source. Use 'flight' or 'pressure' instead."
             )
         U_em_slow = np.abs(np.asarray(pf.channels["U_EM"], dtype=np.float64))
+        if not np.isfinite(U_em_slow).any():
+            raise ValueError(
+                "speed.method='em': channel U_EM has no finite samples "
+                "(dead or disconnected flowmeter) — refusing to publish "
+                f"the {speed_cutout:g} m/s speed_cutout floor as "
+                "through-water speed."
+            )
         return _slow_to_fast(U_em_slow, t_fast, t_slow, fs_fast, fs_slow,
-                             tau=tau, speed_min=speed_cutout), W_slow
+                             tau=tau, speed_min=speed_cutout), W_slow, "em"
 
     if method == "flight":
         aoa_deg = float(cfg.get("aoa_deg", 3.0))
@@ -140,12 +181,29 @@ def compute_speed_for_pfile(
             W_slow, pf, aoa_deg=aoa_deg, min_pitch_deg=min_pitch_deg,
             amplitude_quantile=(float(aq[0]), float(aq[1])),
         )
+        if not np.isfinite(speed_slow).any():
+            raise ValueError(
+                "speed.method='flight': the flight model produced no finite "
+                "samples — the effective pitch never cleared min_pitch_deg "
+                f"({min_pitch_deg:g} deg; level flight / all-inflection "
+                "record) or the inclinometer/pressure inputs are all-NaN — "
+                f"refusing to publish the {speed_cutout:g} m/s speed_cutout "
+                "floor as through-water speed."
+            )
         return _slow_to_fast(speed_slow, t_fast, t_slow, fs_fast, fs_slow,
-                             tau=tau, speed_min=speed_cutout), W_slow
+                             tau=tau, speed_min=speed_cutout), W_slow, "flight"
+
+    if method == "hotel":
+        hotel_var = str(cfg.get("hotel_var") or "speed")
+        speed_fast = _hotel_speed_fast(
+            pf, hotel_var, t_fast, t_slow, fs_fast, fs_slow,
+            tau=tau, speed_min=speed_cutout,
+        )
+        return speed_fast, W_slow, f"hotel:{hotel_var}"
 
     raise ValueError(
         f"Unknown speed.method={method!r}. "
-        "Expected: pressure | em | flight | constant."
+        "Expected: pressure | em | flight | constant | hotel."
     )
 
 
@@ -170,6 +228,117 @@ def _slow_to_fast(
         np.interp(t_slow, t_slow[finite], arr_slow[finite]),
     )
     arr_fast = np.interp(t_fast, t_slow, arr_slow)
+    f_c = 0.68 / tau
+    b, a = butter(1, f_c / (fs_fast / 2.0))
+    arr_fast = np.asarray(filtfilt(b, a, arr_fast))
+    return np.asarray(np.maximum(arr_fast, speed_min), dtype=np.float64)
+
+
+# A hotel speed channel that is mostly non-finite (external feed dropped out,
+# wrong hotel.channels mapping, derived-variable NaN cascade) must be an error,
+# not data: _slow_to_fast would silently fill an all-NaN channel with the
+# speed_cutout floor, and epsilon has ~U^4 leverage on speed (#131 M10 / F6).
+_HOTEL_MIN_FINITE_FRACTION = 0.5
+
+
+def _hotel_speed_fast(
+    pf: Any,
+    hotel_var: str,
+    t_fast: np.ndarray,
+    t_slow: np.ndarray,
+    fs_fast: float,
+    fs_slow: float,
+    tau: float,
+    speed_min: float,
+) -> np.ndarray:
+    """Through-water speed from a hotel-merged channel, on the fast grid.
+
+    Raises ``ValueError`` (never falls back) when the channel is missing,
+    matches neither grid, or is less than ``_HOTEL_MIN_FINITE_FRACTION``
+    finite — an explicitly requested hotel speed must not silently publish
+    the ``speed_min`` floor as data.
+    """
+    if hotel_var not in pf.channels:
+        raise ValueError(
+            f"speed.method='hotel' but channel {hotel_var!r} is not present "
+            "after the hotel merge. Map a hotel variable onto it via "
+            f"hotel.channels (e.g. hotel.channels.m_speed: {hotel_var!r}) or "
+            "point speed.hotel_var at the merged channel name."
+        )
+    arr = np.asarray(pf.channels[hotel_var], dtype=np.float64)
+    n_fast, n_slow = len(t_fast), len(t_slow)
+
+    # Grid resolution: trust the merge's fast/slow registration when the
+    # source exposes it (the default hotel.fast_channels puts "speed" on the
+    # FAST grid); fall back to length matching for duck-typed sources.
+    is_fast: bool | None
+    if hasattr(pf, "is_fast"):
+        is_fast = bool(pf.is_fast(hotel_var))
+    elif len(arr) == n_fast:
+        is_fast = True
+    elif len(arr) == n_slow:
+        is_fast = False
+    else:
+        is_fast = None
+    if is_fast is None:
+        raise ValueError(
+            f"speed.method='hotel': channel {hotel_var!r} has length "
+            f"{len(arr)}, matching neither the fast grid ({n_fast}) nor the "
+            f"slow grid ({n_slow}); check the hotel.channels mapping (its "
+            "'fast:' option controls the target grid)."
+        )
+    n_expected = n_fast if is_fast else n_slow
+    if len(arr) != n_expected:
+        # Phrased as "resolves to", not "registered on": PFile.is_fast
+        # returns False for names never registered at all, and those land
+        # here too when their length is not the slow-grid length.
+        grid = "fast" if is_fast else "slow"
+        raise ValueError(
+            f"speed.method='hotel': channel {hotel_var!r} has length "
+            f"{len(arr)}, which does not match the {grid} grid it resolves "
+            f"to ({n_expected} samples); check the hotel.channels mapping "
+            "(its 'fast:' option controls the target grid)."
+        )
+
+    finite = np.isfinite(arr)
+    finite_fraction = float(finite.mean()) if arr.size else 0.0
+    if finite_fraction < _HOTEL_MIN_FINITE_FRACTION:
+        raise ValueError(
+            f"speed.method='hotel': channel {hotel_var!r} is only "
+            f"{100.0 * finite_fraction:.1f}% finite "
+            f"(< {100.0 * _HOTEL_MIN_FINITE_FRACTION:.0f}%) — refusing to "
+            f"publish the {speed_min:g} m/s speed_cutout floor as "
+            "through-water speed. Check the hotel file's coverage and the "
+            f"hotel.channels mapping for {hotel_var!r}."
+        )
+
+    arr = np.abs(arr)
+    if is_fast:
+        return _clean_fast_speed(arr, t_fast, fs_fast, tau=tau, speed_min=speed_min)
+    return _slow_to_fast(arr, t_fast, t_slow, fs_fast, fs_slow,
+                         tau=tau, speed_min=speed_min)
+
+
+def _clean_fast_speed(
+    arr_fast: np.ndarray,
+    t_fast: np.ndarray,
+    fs_fast: float,
+    tau: float,
+    speed_min: float,
+) -> np.ndarray:
+    """Mirror ``_slow_to_fast``'s NaN-interp/Butterworth/floor treatment for
+    an array already on the fast grid (no regridding step).
+
+    The caller guarantees at least one finite sample (finite-fraction gate).
+    """
+    from scipy.signal import butter, filtfilt
+
+    finite = np.isfinite(arr_fast)
+    if not finite.all():
+        arr_fast = np.where(
+            finite, arr_fast,
+            np.interp(t_fast, t_fast[finite], arr_fast[finite]),
+        )
     f_c = 0.68 / tau
     b, a = butter(1, f_c / (fs_fast / 2.0))
     arr_fast = np.asarray(filtfilt(b, a, arr_fast))

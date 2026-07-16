@@ -76,7 +76,10 @@ def _compute_epsilon(
     diss_length: int | None = None,
     overlap: int | None = None,
     speed: float | None = None,
+    speed_method: str | None = None,
+    aoa_deg: float = 3.0,
     direction: str = "auto",
+    W_min: float | None = None,
     goodman: bool = True,
     f_AA: float = 98.0,
     f_limit: float | None = None,
@@ -84,16 +87,39 @@ def _compute_epsilon(
     despike_thresh: float = 8,
     despike_smooth: float = 0.5,
     salinity: npt.ArrayLike | None = None,
+    temperature: str | float = "auto",
+    conductivity: str = "auto",
     vehicle: str | None = None,
     _pre_loaded: dict[str, Any] | None = None,
 ) -> list[xr.Dataset]:
     """Compute epsilon from any source (internal, no deprecation warning).
 
+    ``speed_method`` selects the through-water speed model: ``None`` /
+    ``"pressure"`` is the historical |dP/dt| path (with a bias warning on
+    glide/horizontal platforms); ``"em"`` uses the U_EM flowmeter channel;
+    ``"flight"`` the inviscid glider flight model (``aoa_deg`` = angle of
+    attack). Mutually exclusive with a fixed ``speed``. ``W_min`` is the
+    profile-detection fall-rate floor [dbar/s]; ``None`` resolves it from
+    the vehicle direction (0.3 free-fall, 0.05 glide/horizontal).
+
+    ``temperature`` selects the reference-temperature source for viscosity
+    and ``T_mean``: ``"auto"`` (first plausible of T1..Tn, T, JAC_T), an
+    explicit channel name (QC failure warns but proceeds), or a number =
+    constant reference temperature [degC] (ODAS ``constant_temp`` parity).
+    ``conductivity`` selects the channel behind ``salinity="measured"``
+    (``"auto"`` = JAC_C when present). ``salinity`` additionally accepts the
+    string ``"measured"``: practical salinity is computed from the resolved
+    C/T pair and pressure (TEOS-10), falling back to ``None`` (visc35) with
+    a warning when no conductivity channel exists.
+
     ``_pre_loaded`` is a private hook for ``perturb.pipeline`` to pass an
     already-loaded channels dict (saving the redundant per-profile NC read
     when both diss and chi are computed for the same source).  External
-    callers should not use it.
+    callers should not use it; when given, the dict already carries the
+    resolved T/C/metadata, so ``temperature``/``conductivity`` are ignored
+    for loading.
     """
+    from odas_tpw.rsi.helpers import _validate_speed_selection, resolve_measured_salinity
     from odas_tpw.scor160.io import L2Params, L3Params
     from odas_tpw.scor160.l2 import process_l2
     from odas_tpw.scor160.l3 import process_l3
@@ -104,8 +130,32 @@ def _compute_epsilon(
         overlap = diss_length // 2
     if f_limit is None:
         f_limit = np.inf
+    # Fail fast (before any file access); prepare_profiles re-validates.
+    _validate_speed_selection(speed, speed_method)
 
-    data = _pre_loaded if _pre_loaded is not None else load_channels(source)
+    # Validate the salinity form BEFORE any file access so a bad string fails
+    # fast; "measured" itself is resolved after the channels are loaded.
+    salinity_is_measured = False
+    if isinstance(salinity, str):
+        if salinity.strip().lower() == "measured":
+            salinity_is_measured = True
+        else:
+            # Other string forms (e.g. "hotel:<var>") are resolved upstream by
+            # the perturb pipeline; only "measured" is handled at this layer.
+            raise ValueError(
+                f"salinity={salinity!r} is not resolved at this layer; pass a "
+                "number, an array, None, or 'measured'. The 'hotel[:<var>]' "
+                "option is resolved by the perturb pipeline."
+            )
+
+    data = (
+        _pre_loaded
+        if _pre_loaded is not None
+        else load_channels(source, temperature_name=temperature, conductivity_name=conductivity)
+    )
+
+    if salinity_is_measured:
+        salinity = resolve_measured_salinity(data)
 
     shear_names = [s[0] for s in data["shear"]]
     n_shear = len(shear_names)
@@ -127,7 +177,19 @@ def _compute_epsilon(
     from odas_tpw.rsi.vehicle import resolve_direction
 
     direction = resolve_direction(direction, vehicle)
-    prepared = prepare_profiles(data, speed, direction, salinity, vehicle=vehicle)
+    # prepare_profiles owns the speed precedence (fixed speed > em/flight
+    # method > precomputed speed_fast > pressure) and stamps speed_source/
+    # speed_method into data["metadata"] accordingly.
+    prepared = prepare_profiles(
+        data,
+        speed,
+        direction,
+        salinity,
+        vehicle=vehicle,
+        W_min=W_min,
+        speed_method=speed_method,
+        aoa_deg=aoa_deg,
+    )
     if prepared is None:
         return []
     (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, _fs_slow, ratio, t_fast) = (

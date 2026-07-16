@@ -83,6 +83,8 @@ Controls how GPS positions are assigned to measurements.
 
 Injects external vehicle telemetry (speed, pitch, roll, heading, CTD) from gliders, AUVs, or Remus into the instrument channels. Data is interpolated onto the instrument's fast or slow time axes.
 
+Merged channels become plain instrument channels: they are written into the per-profile NetCDFs, can drive [QC rules](#qc--per-segment-qc-gate), and feed salinity (`epsilon`/`chi`/`stratification` `salinity: "hotel[:<var>]"`). A merged **speed** channel drives the through-water speed only when [`speed.method: "hotel"`](#speed--through-water-speed-source) selects it — merging alone does not change the speed used by epsilon/chi.
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enable` | bool | `false` | Enable hotel file loading |
@@ -102,8 +104,8 @@ Controls how profiling segments are identified from pressure data.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `P_min` | float | `0.5` | Minimum pressure threshold [dbar] |
-| `W_min` | float | `0.3` | Minimum fall rate [dbar/s] |
-| `direction` | string | `"down"` | Profile direction: `"up"` or `"down"` |
+| `W_min` | float | `null` | Minimum fall rate [dbar/s]. `null` = auto: 0.3 for a free-falling profiler, 0.05 for glide/horizontal platforms (the VMP-tuned 0.3 rejects every glider cast) |
+| `direction` | string | `"auto"` | Profile direction: `"auto"`, `"up"`, `"down"`, `"glide"` (up + down), or `"horizontal"`. `"auto"` resolves from the instrument's `vehicle` (e.g. `slocum_glider` → `glide`); instruments without a `vehicle` in their config default to `down` — set `direction: glide` explicitly for such glider corpora |
 | `min_duration` | float | `7.0` | Minimum profile duration [seconds] |
 | `diagnostics` | bool | `false` | Include diagnostic variables in output |
 
@@ -190,9 +192,7 @@ Note that perturb and `rsi-tpw` use different spectral defaults (perturb: `fft_s
 | `despike_smooth` | float | `0.5` | Low-pass cutoff [Hz] for the despike envelope smoother |
 | `salinity` | float \| `"measured"` \| `"hotel"` \| `null` | `null` | Salinity [PSU] for viscosity. `null` = fixed 35; a number = that fixed value; `"measured"` = per-profile from C/T/P (TEOS-10, needs conductivity); `"hotel"` (or `"hotel:<var>"`) = a [hotel](#hotel--hotel-file-external-telemetry)-injected salinity channel (default variable `salinity`) — for gliders/MicroRiders without onboard conductivity |
 | `epsilon_minimum` | float | `1e-13` | Floor: values below this are set to NaN |
-| `T_source` | string | `null` | Temperature source for viscosity |
-| `T1_norm` | float | `1.0` | Shear probe 1 normalization factor |
-| `T2_norm` | float | `1.0` | Shear probe 2 normalization factor |
+| `T_source` | string \| float \| `null` | `null` | Reference temperature for seawater properties (viscosity for ε; viscosity and κ_T for χ — one knob serves both stages). `null`/`"auto"` = first plausible of `T1`, `T2`, …, `T`, `JAC_T` (implausible channels — railed, drifting, mostly non-finite — are skipped with a warning; QC evaluates in-water samples, P > 0.5 dbar, when pressure is available); a channel name (e.g. `"T2"`, `"JAC_T"`, or a hotel temperature channel) = use that channel (a QC failure warns but proceeds); a number = constant reference temperature [°C] (ODAS `constant_temp` parity). The resolved source is recorded in the diss/chi products as `temperature_source`/`temperature_qc` attributes. |
 | `fom_max` | float | `null` | Per-probe figure-of-merit cut (null = no cut). E.g. `2.0` NaNs each per-probe cell (`e_N`, `epsilon[probe,:]`) whose `fom[probe,seg]` >= `fom_max`, applied **before** `mk_epsilon_mean` so bad probes drop out of the geometric mean individually |
 | `diagnostics` | bool | `false` | Include diagnostic variables |
 
@@ -200,7 +200,9 @@ Note that perturb and `rsi-tpw` use different spectral defaults (perturb: `fft_s
 
 ### `chi` — Thermal Variance Dissipation Rate
 
-Controls computation of chi from FP07 thermistor spectra.
+Controls computation of chi from FP07 thermistor spectra. The reference
+temperature for the χ viscosity/κ_T comes from `epsilon.T_source` — one knob
+serves both stages (there is no `chi.T_source`).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -243,12 +245,13 @@ Controls time-binning of CTD channels per file.
 
 ### `speed` — Through-Water Speed Source
 
-Controls how the through-water (profiling) speed is computed. The speed is computed after the hotel merge, so all methods have access to both `.p`-file and hotel channels.
+Controls how the through-water (profiling) speed is computed. Speed is computed after the [hotel merge](#hotel--hotel-file-external-telemetry): `method: "hotel"` consumes a hotel-merged channel (named by `hotel_var`), while the other methods read the instrument's own channels. The selected source is recorded on the products as `speed_source` (`"pressure"`, `"em"`, `"flight"`, `"constant:<v>"`, or `"hotel:<var>"`). If an explicitly selected non-pressure method fails (an unusable hotel channel; a missing or all-NaN `U_EM`; a flight model with zero finite samples — pitch never clearing `min_pitch_deg`; a non-finite `value`), the file is **aborted with a recorded error** — it never silently falls back to \|dP/dt\| (which has ~U⁴ leverage on ε) or publishes the `speed_cutout` floor as data.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `method` | string | `"pressure"` | Speed source: `"pressure"` (ODAS smoothed \|dP/dt\|; correct for VMP), `"em"` (the `U_EM` channel from a MicroRider EM flowmeter; errors out if missing), `"flight"` (glider flight model: \|W\| / (sin(\|pitch\|−aoa)·cos\|roll\|), pitch axis auto-picked from `Incl_X`/`Incl_Y` by amplitude), or `"constant"` (the scalar in `value`) |
+| `method` | string | `"pressure"` | Speed source: `"pressure"` (ODAS smoothed \|dP/dt\|; correct for VMP), `"em"` (the `U_EM` channel from a MicroRider EM flowmeter; errors out if missing), `"flight"` (glider flight model: \|W\| / (sin(\|pitch\|−aoa)·cos\|roll\|), pitch axis auto-picked from `Incl_X`/`Incl_Y` by amplitude), `"constant"` (the scalar in `value`), or `"hotel"` (the hotel-merged channel named by `hotel_var`; errors out when the channel is missing, matches neither time grid, or is less than 50% finite — the file is aborted with a recorded error, never silently floored to `speed_cutout` or substituted with \|dP/dt\|) |
 | `value` | float | `null` | Fixed speed [m/s], only for `method: constant` |
+| `hotel_var` | string | `"speed"` | Merged channel name, only for `method: hotel`. Map a hotel source variable onto it via `hotel.channels` (e.g. `m_speed: "speed"`); the default `hotel.fast_channels` puts `"speed"` on the fast grid, and slow-grid channels are interpolated/smoothed to fast rate like the other methods |
 | `aoa_deg` | float | `3.0` | Angle of attack [deg], only for `method: flight` |
 | `min_pitch_deg` | float | `5.0` | Flight method: drop samples with \|pitch\|−aoa below this [deg] |
 | `speed_cutout` | float | `0.05` | Floor [m/s] applied to the fast-rate speed |

@@ -52,6 +52,7 @@ def extract_profiles(
     return_scalars: Literal[False] = ...,
     output_stem: str | None = ...,
     max_repair_gap_s: float = ...,
+    extra_attrs: dict[str, Any] | None = ...,
     **profile_kwargs: Any,
 ) -> list[Path]: ...
 
@@ -66,6 +67,7 @@ def extract_profiles(
     return_scalars: Literal[True],
     output_stem: str | None = ...,
     max_repair_gap_s: float = ...,
+    extra_attrs: dict[str, Any] | None = ...,
     **profile_kwargs: Any,
 ) -> tuple[list[Path], list[dict[str, float]]]: ...
 
@@ -78,6 +80,7 @@ def extract_profiles(
     return_scalars: bool = False,
     output_stem: str | None = None,
     max_repair_gap_s: float = _MAX_REPAIR_GAP_S,
+    extra_attrs: dict[str, Any] | None = None,
     **profile_kwargs: Any,
 ) -> list[Path] | tuple[list[Path], list[dict[str, float]]]:
     """Extract profiles from a PFile or full-record NetCDF.
@@ -113,8 +116,18 @@ def extract_profiles(
         only so the fall-rate filter has a NaN-free array; any profile
         overlapping such a fabricated span is dropped (relevant only to
         external/partial NetCDF inputs — raw ``.p`` pressure has no fills).
+    extra_attrs : dict, optional
+        Extra global attributes written to every per-profile NetCDF (after
+        the source's own global attrs, so they win on collision). The
+        perturb pipeline uses this for the speed provenance
+        (``speed_method`` / ``speed_source``).
     **profile_kwargs
-        Keyword arguments passed to get_profiles (P_min, W_min, etc.).
+        Detection keyword arguments (P_min, W_min, direction, vehicle,
+        min_duration). ``vehicle`` (default: from the source) resolves
+        ``direction="auto"`` and the fall-rate smoothing tau; a
+        missing/None ``W_min`` resolves from the direction (0.3 dbar/s
+        free-fall, 0.05 glide/horizontal). The remaining kwargs pass
+        through to :func:`get_profiles`.
 
     Returns
     -------
@@ -143,11 +156,36 @@ def extract_profiles(
     ratio = round(fs_fast / fs_slow)
     start_epoch_s = data.get("start_epoch_s")
 
+    # Resolve vehicle-dependent detection parameters BEFORE get_profiles:
+    # "auto" direction and a None W_min are meaningless to get_profiles (it
+    # would silently treat "auto" as "down"), and the fall-rate smoothing tau
+    # is a vehicle attribute (ODAS default_vehicle_attributes.ini) — a VMP
+    # keeps tau=1.5 bit-identically, a Slocum gets 3.0.
+    from odas_tpw.rsi.vehicle import resolve_detection
+
+    vehicle = profile_kwargs.pop("vehicle", None)
+    if vehicle is None:
+        vehicle = data.get("vehicle", "")
+    direction, tau, W_min = resolve_detection(
+        profile_kwargs.pop("direction", "auto"),
+        vehicle,
+        W_min=profile_kwargs.pop("W_min", None),
+    )
+
     # Compute smoothed fall rate from slow pressure
-    W = _smooth_fall_rate(P_slow, fs_slow)
+    W = _smooth_fall_rate(P_slow, fs_slow, tau=tau)
 
     if profiles is None:
-        profiles = get_profiles(P_slow, W, fs_slow, **profile_kwargs)
+        logger.info(
+            "%s: profile detection direction=%s W_min=%g dbar/s (vehicle=%r)",
+            stem,
+            direction,
+            W_min,
+            vehicle,
+        )
+        profiles = get_profiles(
+            P_slow, W, fs_slow, W_min=W_min, direction=direction, **profile_kwargs
+        )
     if long_gap.any():
         # Drop profiles overlapping a fabricated long gap (their pressure /
         # boundaries are interpolated, not measured). Other casts survive.
@@ -192,6 +230,11 @@ def extract_profiles(
         # Copy global attributes
         for attr in data["global_attrs"]:
             setattr(ds, attr, data["global_attrs"][attr])
+        # Caller-supplied provenance (e.g. perturb's speed_method/speed_source)
+        # wins over any same-named source attribute.
+        if extra_attrs:
+            for attr, value in extra_attrs.items():
+                setattr(ds, attr, value)
 
         ds.Conventions = "CF-1.13, ACDD-1.3"
         ds.title = f"{stem} profile {pi}"
@@ -344,6 +387,14 @@ def _load_source(source: "PFile | str | Path") -> dict[str, Any]:
 
 def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
     """Extract data dict from a PFile."""
+    # Lazy imports: chi_io pulls xarray; helpers is only needed for the
+    # channel-name patterns. Keeps profile.py light at module-load time.
+    from odas_tpw.rsi.chi_io import (
+        _DEFAULT_DIFF_GAIN,
+        _extract_therm_cal,
+        _therm_gradient_config,
+    )
+    from odas_tpw.rsi.helpers import DT_PATTERN, T_PATTERN
     from odas_tpw.rsi.p_file import instrument_sn
 
     channels = []
@@ -354,7 +405,7 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         # (e.g. injected derived channels like N2/dTdz); otherwise fall back to
         # the bare channel name. The canonical schema still wins where it has an
         # opinion for known variables.
-        attrs = {
+        attrs: dict[str, Any] = {
             "units": info["units"],
             "sensor_type": info["type"],
             "long_name": info.get("long_name", ch_name),
@@ -365,12 +416,42 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         # so it survives apply_schema; binning carries it to the combo.
         if info.get("calibration"):
             attrs["calibration"] = info["calibration"]
+        # FP07 electronics coefficients for the chi path (#131 m8): embed
+        # diff_gain plus exactly _extract_therm_cal's output for the base
+        # thermistor (including 'b' — noise_thermchannel's eta consumes it)
+        # as float attrs on each pre-emphasized gradient channel, so chi
+        # computed from a per-profile NetCDF uses the instrument's real
+        # coefficients instead of generic defaults (SN479: diff_gain=0.912,
+        # b=0.99861 vs the 0.94/1.0 fallbacks). NOTE: these attrs carry the
+        # FACTORY calibration from the embedded config string; perturb's fp07
+        # in-situ calibration may have rewritten the channel DATA in
+        # pf.channels before this write. That is intended — the attrs
+        # describe the electronics (noise floor, bilinear differentiator
+        # gain), and factory coefficients still beat generic defaults.
+        if dim == "time_fast" and DT_PATTERN.match(ch_name):
+            diff_gain, therm_cal = _therm_gradient_config(pf.config, ch_name)
+            attrs["diff_gain"] = diff_gain
+            attrs.update(therm_cal)
+        elif dim == "time_fast" and T_PATTERN.match(ch_name):
+            # Plain fast T channel (no pre-emphasis): mirror the chi_io .p
+            # branch's first-difference fallback exactly — diff_gain fixed at
+            # the generic default, calibration from the channel's OWN config
+            # section — so an instrument with no T*_dT* channels round-trips
+            # through the per-profile NetCDF without a spurious "predates
+            # their introduction" warning (W5-ii review F1).
+            ch_cfg: dict = next(
+                (ch for ch in pf.config["channels"] if ch.get("name") == ch_name),
+                {},
+            )
+            attrs["diff_gain"] = _DEFAULT_DIFF_GAIN
+            attrs.update(_extract_therm_cal(ch_cfg))
         channels.append((ch_name, ch_data, dim, attrs))
 
     global_attrs = {
         "Conventions": "CF-1.13, ACDD-1.3",
         "instrument_model": pf.config["instrument_info"].get("model", ""),
         "instrument_sn": instrument_sn(pf.config["instrument_info"]),
+        "platform_type": pf.config["instrument_info"].get("vehicle", ""),
         "operator": pf.config["cruise_info"].get("operator", ""),
         "project": pf.config["cruise_info"].get("project", ""),
         "start_time": pf.start_time.isoformat(),
@@ -391,6 +472,7 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         "channels": channels,
         "global_attrs": global_attrs,
         "stem": pf.filepath.stem,
+        "vehicle": pf.config["instrument_info"].get("vehicle", "").lower(),
     }
 
 
@@ -605,6 +687,13 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
         t_fast_units = "seconds"
         t_slow_units = "seconds"
 
+    # Vehicle: explicit vehicle attr, then platform_type (what p_to_L1
+    # writes), then a model-string heuristic — shared with the eps/chi NC
+    # loader so both resolve the same vehicle for the same file.
+    from odas_tpw.rsi.vehicle import vehicle_from_nc_attrs
+
+    vehicle = vehicle_from_nc_attrs(global_attrs)
+
     return {
         "P": P.astype(np.float64),
         "fs_fast": fs_fast,
@@ -616,6 +705,7 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
         "channels": channels,
         "global_attrs": global_attrs,
         "stem": stem,
+        "vehicle": vehicle,
     }
 
 

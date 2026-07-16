@@ -32,7 +32,11 @@ Method notes (deliberate deviations from the paper are called out):
   plus the pipeline's ``qc_drop_*`` hotel flags.
 - **Thorpe scales** come from the slow (64 Hz) grid — both routes:
   ``sigma0`` (JAC CT; trusted salinity, so an upgrade on the paper's
-  temperature-only sort) and the FP07 ``T1`` (the paper's proxy) — over
+  temperature-only sort) and the FP07 temperature (the paper's proxy;
+  resolved through the QC'd reference-temperature resolver — T1 first,
+  then T2…/T/JAC_T when T1 is missing or implausible; a profile with no
+  plausible slow temperature loses only its temperature route, never the
+  figure — #131 W5-ii) — over
   a ``--sort-window`` (default 4 s, the paper's segment span) centered
   on each chi window.  ``N2_patch`` is the Smyth/Kaminski
   overturn-weighted form (see :mod:`odas_tpw.processing.thorpe`); when
@@ -189,8 +193,8 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
         choices=("density", "temperature"),
         default="density",
         help="which Thorpe route feeds R_OT/Re_b: density "
-        "(JAC sigma0; default) or temperature (FP07 T1, "
-        "paper-style)",
+        "(JAC sigma0; default) or temperature (QC-resolved "
+        "FP07, T1 first; paper-style)",
     )
     p.add_argument(
         "--lt-floor-density",
@@ -206,7 +210,7 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
         type=float,
         default=None,
         metavar="M",
-        help="L_T floor for the T1 route (default 0.05 m, per the paper)",
+        help="L_T floor for the temperature route (default 0.05 m, per the paper)",
     )
     p.add_argument(
         "--min-reb",
@@ -428,11 +432,35 @@ def _sweep_profile(
     n2_ri = np.array(n2_win, dtype=float, copy=True)
     sp_mean = np.full(n, np.nan)
     if prof_path is not None:
+        from odas_tpw.rsi.helpers import REF_T_PATTERN, resolve_temperature_channel
+
         with xr.open_dataset(prof_path) as p:
             ts = _epoch(p["t_slow"])
             Ps = np.asarray(p["P"].values, dtype=float)
-            have = {v for v in ("sigma0", "T1", "JAC_T", "SA", "CT", "SP") if v in p.variables}
+            have = {
+                str(v)
+                for v in p.variables
+                if str(v) in ("sigma0", "JAC_T", "SA", "CT", "SP")
+                or REF_T_PATTERN.match(str(v))
+            }
             slow = {v: np.asarray(p[v].values, dtype=float) for v in have}
+
+        # Temperature-route channel via the QC'd resolver (T1 first, then
+        # T2…/T/JAC_T) instead of the historical hard-coded "T1" (#131
+        # W5-ii). Plot context: a profile with no plausible slow temperature
+        # degrades to a NaN temperature route (counted + noted), never a
+        # crashed figure.
+        t_route: str | None = None
+        try:
+            t_route, _t_qc = resolve_temperature_channel(
+                slow, ts.size, "auto", pressure=Ps, context=os.path.basename(prof_path)
+            )
+        except ValueError as exc:
+            counters["no_temperature_route"] += 1
+            print(
+                f"note: {exc} — temperature Thorpe route skipped",
+                file=sys.stderr,
+            )
 
         means = _window_means(
             ct,
@@ -452,9 +480,9 @@ def _sweep_profile(
             sig_means = _window_means(ct, half, ts, {"s0": slow["sigma0"]})
             rho0 = 1000.0 + sig_means["s0"]
             n2p_s = thorpe.patch_n2(res_s.rms_fluct, lt_s, g / rho0)
-        if "T1" in slow:
+        if t_route is not None:
             res_t = thorpe.window_thorpe(
-                ct, half, ts, Ps, slow["T1"], increasing_down=False, lat=lat
+                ct, half, ts, Ps, slow[t_route], increasing_down=False, lat=lat
             )
             lt_t = res_t.L_T
             edge_t = res_t.edge_truncated.astype(float)
@@ -590,7 +618,12 @@ def sweep(args: argparse.Namespace) -> _Table:
             "qc",
         )
     }
-    counters = {"no_profiles_file": 0, "re_pair_fallback": 0, "no_epsilon": 0}
+    counters = {
+        "no_profiles_file": 0,
+        "re_pair_fallback": 0,
+        "no_epsilon": 0,
+        "no_temperature_route": 0,
+    }
     n_done = 0
     for f in files:
         diss_path = (
