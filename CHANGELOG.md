@@ -51,6 +51,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   plus a PyPI version badge — back-filled after v0.3.0 was archived on Zenodo.
 
 ### Fixed
+- **Stratification salinity is now scrubbed, with a truthful provenance note**
+  (#131 M6). The N²/dT/dz paths (window-scale in the diss/chi products,
+  slow-grid in the profile product) previously read a hotel-sourced salinity
+  channel raw: an **all-NaN merged channel** (a hotel variable with fewer than
+  two finite source samples) silently NaNed out N² and every mixing product
+  (K_T/Γ/K_ρ) while the metadata still claimed "salinity from hotel channel",
+  and **partial NaNs** (a `"hotel:<var>"` pointing at a derived profile
+  variable, e.g. an SP computed from bad conductivity) NaNed the affected
+  windows with no note. (The hotel merge itself never produces NaN outside the
+  hotel file's time coverage — it boundary-holds and bridges interior gaps —
+  so the earlier "outside CTD coverage" description of this failure mode was
+  wrong.) Both stratification consumers now scrub the salinity: non-finite
+  samples are filled by **interpolation over the finite samples**
+  (nearest-finite hold at the edges), an entirely non-finite channel falls
+  through to conductivity/35 PSU, and the N² `comment` records exactly what
+  was used ("N/M non-finite salinity samples interpolated/held" / "hotel
+  channel 'x' entirely non-finite"). The slow-grid N² comment also no longer
+  claims the salinity came "from the profile's own C/T/P" when it did not.
+  The viscosity path's scrub switches from a whole-profile **median** fill to
+  the same interpolation fill: N² is first-order in dS/dz, so a constant fill
+  would insert a spurious salinity step at every fill boundary (spurious N² ~
+  g·β·ΔS/Δz, orders above thermocline values, and Thorpe sorting keeps it);
+  for viscosity the difference is negligible.
 - **`rsi-tpw patch-template`** now scaffolds *every* per-channel calibration
   field, not just `coef0`/`coef1`. The previous hardcoded whitelist silently
   dropped higher-order polynomial coefficients (a pressure channel's `coef2`,

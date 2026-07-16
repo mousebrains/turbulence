@@ -182,9 +182,12 @@ class TestHotelSalinityResolution:
         with pytest.raises(ValueError, match="not recognised"):
             _resolve_salinity_cfg("saltiness", path, "JAC_T", "JAC_C", "chi")
 
-    def test_resolve_scrubs_partial_nan_with_median(self, tmp_path, caplog):
-        # NaN outside CTD coverage must be filled (with the median), not left to
-        # NaN out the viscosity for those windows.
+    def test_resolve_scrubs_partial_nan_by_interpolation(self, tmp_path, caplog):
+        # Non-finite samples (e.g. hotel:<var> pointing at a derived variable
+        # with bad-conductivity NaNs) must be interp-filled, not left to NaN
+        # out the viscosity for those windows — and never median-filled, which
+        # would step the salinity at each fill boundary (spurious N2 on the
+        # stratification path, which shares this scrub).
         import xarray as xr
 
         S = np.array([32.0, np.nan, 32.4, np.nan, 32.2])
@@ -194,8 +197,24 @@ class TestHotelSalinityResolution:
         with caplog.at_level(logging.WARNING):
             out = _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "chi")
         assert np.isfinite(out).all()
-        assert out[1] == pytest.approx(np.nanmedian(S))  # gap filled with median
+        assert out[1] == pytest.approx(0.5 * (32.0 + 32.4))  # interp between neighbors
+        assert out[3] == pytest.approx(0.5 * (32.4 + 32.2))
         assert "non-finite" in caplog.text
+        assert "interpolation" in caplog.text
+
+    def test_resolve_scrub_holds_nearest_finite_at_edges(self, tmp_path, caplog):
+        # Leading/trailing non-finite samples hold the nearest finite value
+        # (matching the slow->fast speed regrid), not an extrapolation.
+        import xarray as xr
+
+        S = np.array([np.nan, 32.0, 32.4, np.nan])
+        path = tmp_path / "prof.nc"
+        ds = xr.Dataset({"t_slow": ("time_slow", np.arange(4.0)), "salinity": ("time_slow", S)})
+        ds.to_netcdf(path)
+        with caplog.at_level(logging.WARNING):
+            out = _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "chi")
+        assert out[0] == pytest.approx(32.0)
+        assert out[3] == pytest.approx(32.4)
 
     def test_resolve_all_nan_falls_back_to_none(self, tmp_path, caplog):
         import xarray as xr
@@ -229,6 +248,12 @@ class TestHotelSalinityResolution:
     def test_scrub_salinity_scalar_and_none_passthrough(self):
         assert _scrub_salinity(None, "chi", "x") is None
         assert _scrub_salinity(34.0, "chi", "x") == 34.0  # 0-d passes through
+
+    def test_scrub_salinity_finite_array_returned_unchanged(self):
+        # Fully finite input passes through as-is (same object for float64),
+        # keeping behavior bit-identical when no scrubbing is needed.
+        arr = np.array([32.0, 32.2, 32.4])
+        assert _scrub_salinity(arr, "chi", "x") is arr
 
     @pytest.mark.parametrize(
         "value,expected",
@@ -284,13 +309,14 @@ class TestComputeSlowStratification:
         pf.channels = {"P": P, "JAC_T": T, "JAC_C": C}
         pf.is_fast = lambda name: False  # JAC_C is a slow channel
 
-        N2, dTdz = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
+        N2, dTdz, sal_note = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
         assert N2.shape == (n,) and dTdz.shape == (n,)
         assert np.isfinite(N2).any() and np.isfinite(dTdz).any()
         assert np.all(N2[np.isfinite(N2)] > 0)  # stable column
+        assert "TEOS-10" in sal_note  # conductivity-derived salinity, truthfully noted
         # Outside the (single, full-span) cast nothing is masked here, but a
         # short cast yields all-NaN for that cast rather than raising.
-        N2b, _ = _compute_slow_stratification(pf, [(0, 2)], "JAC_T", "JAC_C", 2.0)
+        N2b, _, _ = _compute_slow_stratification(pf, [(0, 2)], "JAC_T", "JAC_C", 2.0)
         assert np.all(np.isnan(N2b[0:3]))
 
     def test_returns_none_without_pressure(self):
@@ -299,8 +325,8 @@ class TestComputeSlowStratification:
         pf = MagicMock()
         pf.channels = {"JAC_T": np.zeros(10)}
         pf.is_fast = lambda name: False
-        N2, dTdz = _compute_slow_stratification(pf, [(0, 9)], "JAC_T", "JAC_C", 2.0)
-        assert N2 is None and dTdz is None
+        N2, dTdz, sal_note = _compute_slow_stratification(pf, [(0, 9)], "JAC_T", "JAC_C", 2.0)
+        assert N2 is None and dTdz is None and sal_note is None
 
     def test_hotel_salinity_overrides_conductivity(self):
         """sal_source='hotel' uses the injected salinity channel, changing N2."""
@@ -316,14 +342,20 @@ class TestComputeSlowStratification:
         pf.channels = {"P": P, "JAC_T": T, "JAC_C": C, "salinity": S_hotel}
         pf.is_fast = lambda name: False
 
-        N2_cond, _ = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
-        N2_hotel, _ = _compute_slow_stratification(
+        N2_cond, _, note_cond = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0
+        )
+        N2_hotel, _, note_hotel = _compute_slow_stratification(
             pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, "hotel"
         )
         # Both finite, but the hotel-salinity N2 differs from the C-derived one.
         m = np.isfinite(N2_cond) & np.isfinite(N2_hotel)
         assert m.any()
         assert not np.allclose(N2_cond[m], N2_hotel[m])
+        # Fully finite hotel channel: the note claims exactly that, with no
+        # fill annotation (case (c): behavior and note unchanged).
+        assert note_hotel == "salinity from hotel channel 'salinity'"
+        assert "TEOS-10" in note_cond
 
     def test_fixed_number_salinity_changes_n2(self):
         """A numeric sal_source is applied, not ignored: N2 differs from the
@@ -337,13 +369,97 @@ class TestComputeSlowStratification:
         pf.channels = {"P": P, "JAC_T": T}  # no conductivity at all
         pf.is_fast = lambda name: False
 
-        N2_30, _ = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, 30.0)
-        N2_35, _ = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, 35.0)
+        N2_30, _, note_30 = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, 30.0
+        )
+        N2_35, _, _ = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, 35.0
+        )
         m = np.isfinite(N2_30)
         assert m.any()
         # Absolute-salinity anomaly shifts density -> a fixed S=30 must move N2
         # off the S=35 result, proving the number branch is actually applied.
         assert not np.allclose(N2_30[m], N2_35[m])
+        assert note_30 == "fixed 30 PSU"
+
+    def test_hotel_partial_nan_interp_filled_no_n2_spike(self):
+        """Case (a): a gap in the hotel salinity is interp-filled — N2 stays
+        finite through the gap, does not spike above the true-profile maximum
+        at the fill boundaries (N2 is first-order in dS/dz, so a constant fill
+        would step S there), and the note counts the filled samples."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        S_true = 31.0 + 0.05 * P  # linear in P: interp fill reproduces it
+        S_gap = S_true.copy()
+        S_gap[150:250] = np.nan
+        pf_true = MagicMock()
+        pf_true.channels = {"P": P, "JAC_T": T, "salinity": S_true}
+        pf_true.is_fast = lambda name: False
+        pf_gap = MagicMock()
+        pf_gap.channels = {"P": P, "JAC_T": T, "salinity": S_gap}
+        pf_gap.is_fast = lambda name: False
+
+        N2_true, _, _ = _compute_slow_stratification(
+            pf_true, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, "hotel"
+        )
+        N2_gap, _, note = _compute_slow_stratification(
+            pf_gap, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, "hotel"
+        )
+        finite_true = np.isfinite(N2_true)
+        assert finite_true.any()
+        # Finite everywhere the true profile is finite (the gap is bridged) ...
+        assert np.isfinite(N2_gap[finite_true]).all()
+        # ... with no spurious spike above the true-profile maximum.
+        assert np.nanmax(N2_gap) <= np.nanmax(N2_true) * 1.05
+        np.testing.assert_allclose(
+            N2_gap[finite_true], N2_true[finite_true], rtol=1e-6
+        )
+        assert "salinity from hotel channel 'salinity'" in note
+        assert "100/400 non-finite salinity samples interpolated/held" in note
+
+    def test_hotel_all_nan_falls_back_to_conductivity_with_note(self):
+        """Case (b): an all-NaN hotel channel (e.g. <2 finite source samples in
+        the hotel merge) falls through to conductivity — N2 matches the plain
+        C-derived run instead of going all-NaN — and the note says why."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        C = np.full(n, 45.0)
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T, "JAC_C": C, "salinity": np.full(n, np.nan)}
+        pf.is_fast = lambda name: False
+
+        N2_cond, _, _ = _compute_slow_stratification(pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0)
+        N2_hotel, _, note = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, "hotel"
+        )
+        np.testing.assert_allclose(N2_hotel, N2_cond, equal_nan=True)
+        assert "TEOS-10" in note
+        assert "hotel channel 'salinity' entirely non-finite" in note
+
+    def test_hotel_all_nan_without_conductivity_falls_back_to_35(self):
+        """Case (b) without conductivity: all-NaN hotel channel -> 35 PSU with a
+        truthful note; N2 still computed from temperature stratification."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T, "salinity": np.full(n, np.nan)}
+        pf.is_fast = lambda name: False
+
+        N2, _, note = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, "hotel"
+        )
+        assert np.isfinite(N2).any()
+        assert "35 PSU" in note
+        assert "hotel channel 'salinity' entirely non-finite" in note
 
 
 class TestAttachWindowStratification:
@@ -423,8 +539,110 @@ class TestAttachWindowStratification:
         )
         assert out is not None
         N2, _dTdz, sal_note = out
-        assert "hotel channel 'salinity'" in sal_note
+        # Case (c): fully finite hotel channel -> exact note, no fill annotation.
+        assert sal_note == "salinity from hotel channel 'salinity'"
         assert np.isfinite(N2).any()
+
+    def _hotel_profile_nc(self, path, S):
+        """Profile nc with a hotel salinity channel (no conductivity)."""
+        import xarray as xr
+
+        n = len(S)
+        P = np.linspace(1.0, 50.0, n)
+        xr.Dataset(
+            {
+                "t_slow": ("time_slow", np.linspace(0.0, 100.0, n)),
+                "P": ("time_slow", P),
+                "JAC_T": ("time_slow", 20.0 - 0.1 * P),
+                "salinity": ("time_slow", S),
+            }
+        ).to_netcdf(path)
+
+    def test_hotel_partial_nan_gap_interp_filled_no_n2_spike(self, tmp_path):
+        """Case (a) physics regression: a salinity coverage gap is bridged by
+        interpolation, so window N2 stays finite through the gap and shows no
+        spike above the true-profile maximum near the fill boundaries. (A
+        median fill would step S at the boundary: N2_spurious ~ g*beta*dS/dz,
+        orders above thermocline values, and Thorpe sorting keeps it.)"""
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        S_true = 31.0 + 0.05 * P  # linear in P: interp fill reproduces it
+        S_gap = S_true.copy()
+        S_gap[150:250] = np.nan  # coverage gap spanning t ~ [37.6, 62.4] s
+        prof_true = tmp_path / "prof_true.nc"
+        prof_gap = tmp_path / "prof_gap.nc"
+        self._hotel_profile_nc(prof_true, S_true)
+        self._hotel_profile_nc(prof_gap, S_gap)
+
+        # Windows straddling both fill boundaries and inside the gap.
+        win_t = np.array([30.0, 37.5, 45.0, 50.0, 55.0, 62.5, 70.0])
+        out_true = _window_stratification_for_profile(
+            prof_true, win_t, 5.0, "JAC_T", "JAC_C", "prof_true.nc", "hotel"
+        )
+        out_gap = _window_stratification_for_profile(
+            prof_gap, win_t, 5.0, "JAC_T", "JAC_C", "prof_gap.nc", "hotel"
+        )
+        N2_true, _, note_true = out_true
+        N2_gap, _, note_gap = out_gap
+        assert np.isfinite(N2_true).all()
+        assert np.isfinite(N2_gap).all()  # the gap is bridged, not NaNed out
+        assert np.nanmax(N2_gap) <= np.nanmax(N2_true) * 1.05  # no fill-boundary spike
+        np.testing.assert_allclose(N2_gap, N2_true, rtol=1e-6)
+        assert note_true == "salinity from hotel channel 'salinity'"
+        assert "salinity from hotel channel 'salinity'" in note_gap
+        assert "100/400 non-finite salinity samples interpolated/held" in note_gap
+
+    def test_hotel_all_nan_falls_back_to_conductivity_with_note(self, tmp_path):
+        """Case (b): an all-NaN hotel channel must not NaN out every mixing
+        product — fall through to conductivity, and never claim hotel salinity
+        when no finite hotel sample contributed."""
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        n = 200
+        P = np.linspace(1.0, 50.0, n)
+        prof = tmp_path / "prof_allnan.nc"
+        xr.Dataset(
+            {
+                "t_slow": ("time_slow", np.linspace(0.0, 100.0, n)),
+                "P": ("time_slow", P),
+                "JAC_T": ("time_slow", 20.0 - 0.1 * P),
+                "JAC_C": ("time_slow", np.full(n, 45.0)),
+                "salinity": ("time_slow", np.full(n, np.nan)),
+            }
+        ).to_netcdf(prof)
+
+        win_t = np.array([25.0, 50.0, 75.0])
+        out_hotel = _window_stratification_for_profile(
+            prof, win_t, 5.0, "JAC_T", "JAC_C", "prof_allnan.nc", "hotel"
+        )
+        out_cond = _window_stratification_for_profile(
+            prof, win_t, 5.0, "JAC_T", "JAC_C", "prof_allnan.nc", None
+        )
+        N2_hotel, _, note = out_hotel
+        N2_cond, _, _ = out_cond
+        np.testing.assert_allclose(N2_hotel, N2_cond, equal_nan=True)
+        assert np.isfinite(N2_hotel).any()
+        assert "TEOS-10" in note
+        assert "hotel channel 'salinity' entirely non-finite" in note
+
+    def test_hotel_all_nan_without_conductivity_falls_back_to_35(self, tmp_path):
+        """Case (b) without conductivity: all-NaN hotel channel -> 35 PSU note
+        recording the reason; N2 still computed (temperature stratification)."""
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        prof = tmp_path / "prof_allnan35.nc"
+        self._hotel_profile_nc(prof, np.full(200, np.nan))
+        out = _window_stratification_for_profile(
+            prof, np.array([25.0, 50.0, 75.0]), 5.0, "JAC_T", "JAC_C", "p.nc", "hotel"
+        )
+        N2, _, note = out
+        assert np.isfinite(N2).any()
+        assert "35 PSU" in note
+        assert "hotel channel 'salinity' entirely non-finite" in note
 
     def test_hotel_missing_falls_back_to_35(self, tmp_path):
         """hotel requested but neither the channel nor conductivity present -> 35 PSU note."""
@@ -976,6 +1194,47 @@ class TestProcessFile:
 
         mock_compute_eps.assert_called()
         assert mock_compute_eps.call_args.kwargs.get("salinity") == 30.0
+
+    @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(400))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_stratification_salinity_note_reaches_n2_channel_comment(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_fp07_cal, mock_extract, tmp_path
+    ):
+        """The slow-path sal_note must land in channel_info['N2']['comment'] so
+        per-profile NetCDFs record the salinity actually used. The old static
+        comment claimed N2 came 'from the profile's own C/T/P' — false for
+        hotel/number salinity."""
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        S = 31.0 + 0.05 * P
+        S[150:250] = np.nan  # partial hotel coverage -> interp-filled, noted
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": P, "JAC_T": 20.0 - 0.1 * P, "salinity": S}
+        mock_pf.channel_info = {}
+        mock_pf.t_slow = np.linspace(0.0, 100.0, n)
+        mock_pf.fs_slow = 64.0
+        mock_pf.config = {"instrument_info": {}}
+        mock_pf.is_fast = lambda name: False
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = [(0, n - 1)]
+
+        config = self._base_config(tmp_path)
+        config["fp07"]["calibrate"] = False
+        config["stratification"] = {"salinity": "hotel"}
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+
+        assert "N2" in mock_pf.channel_info
+        comment = mock_pf.channel_info["N2"]["comment"]
+        assert "salinity from hotel channel 'salinity'" in comment
+        assert "100/400 non-finite salinity samples interpolated/held" in comment
+        assert "profile's own C/T/P" not in comment
 
     @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
     @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
