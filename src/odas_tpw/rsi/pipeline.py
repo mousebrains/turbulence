@@ -316,7 +316,11 @@ def _pipeline_one_file(
     goodman: bool,
 ) -> None:
     """Process one .P file (run_pipeline's per-file body)."""
-    from odas_tpw.rsi.helpers import resolve_temperature_channel, temperature_candidates
+    from odas_tpw.rsi.helpers import (
+        pfile_channel_types,
+        resolve_temperature_channel,
+        temperature_candidates,
+    )
     from odas_tpw.rsi.p_file import PFile
     from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
 
@@ -347,7 +351,9 @@ def _pipeline_one_file(
         temp_for_l1: str | float = float(temperature)
         temperature_source = f"constant:{float(temperature):g}"
         temperature_qc = "pass"
-    elif temperature == "auto" and not temperature_candidates(pf.channels, len(pf.t_slow)):
+    elif temperature == "auto" and not temperature_candidates(
+        pf.channels, len(pf.t_slow), pfile_channel_types(pf)
+    ):
         # Historical tolerance: an instrument with no slow temperature channel
         # still runs; the adapter warns and fills L1.temp with NaN (downstream
         # substitutes 10 degC loudly).
@@ -361,6 +367,7 @@ def _pipeline_one_file(
             temperature,
             pressure=P_slow,
             context=p_path.name,
+            types=pfile_channel_types(pf),
         )
         temp_for_l1 = t_chan
         temperature_source = t_chan

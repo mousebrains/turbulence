@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
-from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS, _detect_endian
+from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS, _detect_endian, raise_if_v1_layout
 
 
 class TrimResult(NamedTuple):
@@ -246,6 +246,12 @@ def trim_p_file(
         fmt = f"{endian}{HEADER_WORDS}H"
         words = struct.unpack(fmt, raw_hdr)
         header = {name: words[idx] for name, idx in _H.items()}
+
+        # A v1 file's record 0 IS a full record (first_record_size ==
+        # record_size, config_size == 0), so the v6 arithmetic below computes
+        # a bogus 'partial trailing record' for EVERY v1 file and the default-
+        # on trim would write a corrupt copy (issue #141).
+        raise_if_v1_layout(header["header_version"], source, "perturb trim")
 
         header_size = header["header_size"]
         config_size = header["config_size"]

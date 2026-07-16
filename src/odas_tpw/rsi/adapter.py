@@ -21,6 +21,9 @@ from odas_tpw.rsi.helpers import (
     resolve_temperature_channel,
     temperature_candidates,
 )
+from odas_tpw.rsi.helpers import (
+    pfile_channel_types as _pf_types,
+)
 from odas_tpw.scor160.io import L1Data
 
 if TYPE_CHECKING:
@@ -104,7 +107,9 @@ def pfile_to_l1data(
         )
     if isinstance(temperature, (int, float)):
         T_slow_full = np.full(n_slow_full, float(temperature))
-    elif temperature == "auto" and not temperature_candidates(pf.channels, n_slow_full):
+    elif temperature == "auto" and not temperature_candidates(
+        pf.channels, n_slow_full, _pf_types(pf)
+    ):
         warnings.warn(
             "no slow temperature channel found; L1.temp will be NaN "
             "(downstream substitutes 10 degC for seawater properties)",
@@ -113,7 +118,12 @@ def pfile_to_l1data(
         T_slow_full = np.full(n_slow_full, np.nan)
     else:
         t_chan, _t_reason = resolve_temperature_channel(
-            pf.channels, n_slow_full, temperature, pressure=P_slow, context=ctx
+            pf.channels,
+            n_slow_full,
+            temperature,
+            pressure=P_slow,
+            context=ctx,
+            types=_pf_types(pf),
         )
         T_slow_full = np.asarray(pf.channels[t_chan], dtype=np.float64)
     T_slow_slice = T_slow_full[s_slow : e_slow + 1]

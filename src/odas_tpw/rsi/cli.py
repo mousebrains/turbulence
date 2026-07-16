@@ -9,6 +9,7 @@ Subcommands:
     info     — Print summary of .p file(s)
     config   — Print a .p file's raw embedded configuration (INI) record
     cutp     — Copy a short record range from a .p file for debugging
+    v1to6    — Translate legacy header-v1 .p files to v6 (issue #141)
     nc       — Convert .p files to NetCDF
     patch-config   — Edit config fields in .p file(s), writing new files
     patch-template — Scaffold a patch-config edit spec from a .p file
@@ -103,6 +104,29 @@ def _parse_temperature(value: str) -> float | str:
         return float(value)
     except ValueError:
         return value
+
+
+def _parse_sens(value: str) -> dict[str, float]:
+    """--sens: 'sh1=0.0893,sh2=0.0558' -> {'sh1': 0.0893, 'sh2': 0.0558}."""
+    out: dict[str, float] = {}
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        name, eq, num = item.partition("=")
+        name = name.strip()
+        try:
+            if not eq or not name:
+                raise ValueError
+            out[name] = float(num)
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                f"expected NAME=VALUE[,NAME=VALUE...] (e.g. sh1=0.0893,sh2=0.0558), "
+                f"got {value!r}"
+            ) from None
+    if not out:
+        raise argparse.ArgumentTypeError("empty --sens value")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +342,36 @@ def _cmd_cutp(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     print(f"Wrote {args.n_records} record(s) to {out}")
+
+
+def _cmd_v1to6(args: argparse.Namespace) -> None:
+    """Translate legacy ODAS header-v1 .p files to v6 (issue #141)."""
+    from odas_tpw.rsi.v1_translate import translate_v1_to_v6
+
+    p_files = _resolve_p_files(args.files)
+    out_dir = Path(args.output)
+    failures = 0
+    for f in p_files:
+        dst = out_dir / f.name
+        try:
+            dst_path, meta = translate_v1_to_v6(
+                f,
+                dst,
+                setup_file=args.setup_file,
+                sens=args.sens,
+                overwrite=args.force,
+            )
+        except (OSError, ValueError, FileExistsError) as e:
+            print(f"  {f.name}: ERROR: {e}", file=sys.stderr)
+            failures += 1
+            continue
+        print(
+            f"  {f.name} -> {dst_path} "
+            f"({meta['n_records']} data records; setup: {meta['setup_file']} "
+            f"md5 {meta['setup_md5']}; sens: {meta['sens_source']})"
+        )
+    if failures:
+        sys.exit(1)
 
 
 def _cmd_init(args: argparse.Namespace) -> None:
@@ -826,6 +880,57 @@ def _add_cutp_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Overwrite output file if it exists",
     )
     p.set_defaults(func=_cmd_cutp)
+
+
+def _add_v1to6_parser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "v1to6",
+        help="Translate legacy header-v1 .p files to v6",
+        description=(
+            "Translate ODAS header-version-1 .p files (pre-2015 instruments; "
+            "record 0 holds a binary address matrix and the configuration lives "
+            "in an external setup file) into standard v6 files with an embedded "
+            "INI configuration synthesized from the setup file. Data records "
+            "are copied verbatim (lossless). The translated files work with "
+            "every rsi-tpw / perturb tool unchanged. Shear-probe sensitivities "
+            "are NOT in v1 setup files: supply them with --sens, with "
+            "sh1_sens:/sh2_sens: keys added to the setup file, or afterwards "
+            "with 'rsi-tpw patch-config --add-keys' on the translated files "
+            "(processing errors loudly until a sens exists). See GitHub issue "
+            "#141."
+        ),
+    )
+    p.add_argument("files", nargs="+", metavar="FILE", help="v1 .p file(s) or glob pattern(s)")
+    p.add_argument(
+        "-o",
+        "--output",
+        metavar="DIR",
+        required=True,
+        help="Output directory for the translated v6 .p files (same basenames)",
+    )
+    p.add_argument(
+        "--setup-file",
+        metavar="PATH",
+        default=None,
+        help="Setup file to use (old 'key: values' dialect or INI). Default: "
+        "auto-detect next to each .p file, then one level up (setup.txt first, "
+        "then setup*.txt, setup*.cfg; case-insensitive)",
+    )
+    p.add_argument(
+        "--sens",
+        type=_parse_sens,
+        default=None,
+        metavar="NAME=VAL[,...]",
+        help="Shear-probe sensitivities, e.g. sh1=0.0893,sh2=0.0558 "
+        "(overrides <name>_sens: keys in the setup file)",
+    )
+    p.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Overwrite existing output files",
+    )
+    p.set_defaults(func=_cmd_v1to6)
 
 
 def _add_init_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -1597,6 +1702,7 @@ def main() -> None:
     _add_info_parser(subparsers)
     _add_config_parser(subparsers)
     _add_cutp_parser(subparsers)
+    _add_v1to6_parser(subparsers)
     _add_nc_parser(subparsers)
     _add_init_parser(subparsers)
     _add_patchconfig_parser(subparsers)

@@ -13,6 +13,7 @@ rsi-tpw <subcommand> [options]
 | `rsi-tpw info`     | Print summary of `.p` file(s) |
 | `rsi-tpw config`   | Print a `.p` file's raw embedded configuration (INI) record |
 | `rsi-tpw cutp`     | Copy a short `.p` record range for debugging |
+| `rsi-tpw v1to6`    | Translate legacy header-v1 `.p` files to v6 ([legacy_v1.md](legacy_v1.md)) |
 | `rsi-tpw nc`       | Convert `.p` files to NetCDF |
 | `rsi-tpw patch-template` | Scaffold a config edit-spec YAML from a `.p` file |
 | `rsi-tpw patch-config`   | Edit config fields in `.p` file(s), writing new files |
@@ -78,6 +79,26 @@ rsi-tpw cutp VMP/file.p -o debug_segment.p --start 300 --n-records 60
 | `-s`, `--start N` | First data record to copy, 0-based after the config record (default: 0) |
 | `-n`, `--n-records N` | Number of complete data records to copy (default: 60) |
 | `-f`, `--force`, `--overwrite` | Overwrite output file if it exists |
+
+## `rsi-tpw v1to6`
+
+Translate legacy ODAS header-version-1 `.p` files (pre-2015 instruments;
+record 0 holds a binary address matrix and the configuration lives in an
+external setup file) into standard v6 files that every other tool accepts
+unchanged. Data records are copied byte-for-byte; the embedded INI is
+synthesized from the setup file with full provenance keys. See
+[legacy_v1.md](legacy_v1.md).
+
+```bash
+rsi-tpw v1to6 VMP_002/TAI_013_00*.p -o translated/ --sens sh1=0.0893,sh2=0.0558
+```
+
+| Flag | Description |
+|------|-------------|
+| `-o`, `--output DIR` | Output directory for translated files, same basenames (required) |
+| `--setup-file PATH` | Setup file to use (default: auto-detect `setup.txt`, `setup*.txt`, `setup*.cfg` next to each `.p` file, then one level up) |
+| `--sens NAME=VAL[,...]` | Shear-probe sensitivities (e.g. `sh1=0.0893,sh2=0.0558`); overrides `<name>_sens:` setup keys |
+| `-f`, `--force` | Overwrite existing output files |
 
 ## `rsi-tpw nc`
 

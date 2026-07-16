@@ -169,17 +169,21 @@ def _make_minimal_p_file(
     endian: str = "<",
     set_endian_word: int | None = None,
     record_data: np.ndarray | None = None,
+    header_version: int = 0x0600,
 ):
     """Build a minimal valid .p file from a config text string.
 
     ``record_data`` (optional) is a per-record int16 array of length
     ``(record_size - HEADER_BYTES) // 2`` used for every record instead of the
     default sequential fill, so a test can control exact raw counts.
+    ``header_version`` is the raw header word 11 (MSB=major); the default
+    claims v6.0 so the file takes PFile's modern path (issue #141 dispatch).
     """
     config_bytes = config_text.encode("ascii")
     config_size = len(config_bytes)
 
     words = [0] * HEADER_WORDS
+    words[_H["header_version"]] = header_version
     words[_H["header_size"]] = HEADER_BYTES
     words[_H["config_size"]] = config_size
     words[_H["record_size"]] = record_size

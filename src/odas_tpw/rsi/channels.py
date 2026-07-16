@@ -155,11 +155,25 @@ def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     """Shear probe: raw counts to velocity shear [s⁻¹].
 
     Formula: ``(adc_fs / 2^adc_bits * data + offset) / (2*sqrt(2)*diff_gain*sens)``.
+
+    A missing probe sensitivity ``sens`` is a hard error (ODAS convert_odas.m
+    parity — it errors outright): a fabricated default of 1.0 would produce
+    plausible-looking shear that scales epsilon by sens⁻², and legacy v1
+    corpora genuinely lack sens in their setup files (issue #141).
     """
     adc_fs = _safe_float(params.get("adc_fs", "4.096"))
     adc_bits = _safe_float(params.get("adc_bits", "16"))
     diff_gain = _require_float(params, "diff_gain", 1.0, "shear")
-    sens = _require_float(params, "sens", 1.0, "shear")
+    if params.get("sens") in (None, ""):
+        raise ValueError(
+            f"shear channel {params.get('name', '?')}: calibration coefficient "
+            "'sens' missing from the channel config; refusing to fabricate "
+            "physical shear. Inject the probe sensitivity with 'rsi-tpw "
+            "patch-config' (--add-keys), or — for legacy v1 corpora — "
+            "re-translate with 'rsi-tpw v1to6 --sens' or add "
+            "'sh1_sens:'/'sh2_sens:' keys to the setup file (issue #141)."
+        )
+    sens = _safe_float(params["sens"], 1.0)
     adc_zero = _safe_float(params.get("adc_zero", "0"))
     sig_zero = _safe_float(params.get("sig_zero", "0"))
     phys = (adc_fs / 2**adc_bits) * data + (adc_zero - sig_zero)
@@ -298,6 +312,60 @@ def convert_raw(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, s
     return data, "counts"
 
 
+def convert_sbt(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
+    """Sea-Bird SBE3 temperature from a 32-bit period count → °C.
+
+    Matches ODAS ``convert_odas.m`` ``odas_sbt_internal``:
+      ``f[Hz] = coef6 * coef5 / w``  (n_periods * f_ref / count)
+      ``x = ln(coef4 / f)``          (ln(f0/f))
+      ``T = 1/(coef0 + coef1·x + coef2·x² + coef3·x³) - 273.15``
+
+    The input is the joined even/odd 32-bit word (the PFile 2-id join).
+    Verified to ≤ 6.4e-10 °C against the 2013 Taiwan ground truth (issue
+    #141). Deviation from ODAS: a zero count (corrupt sample) yields NaN
+    instead of a division blow-up.
+    """
+    g = _require_float(params, "coef0", 0.0, "sbt")
+    h = _require_float(params, "coef1", 0.0, "sbt")
+    i = _require_float(params, "coef2", 0.0, "sbt")
+    j = _require_float(params, "coef3", 0.0, "sbt")
+    f0 = _require_float(params, "coef4", 1000.0, "sbt")
+    f_ref = _require_float(params, "coef5", 24e6, "sbt")
+    n_periods = _require_float(params, "coef6", 128.0, "sbt")
+    w = np.asarray(data, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        f = np.where(w != 0, n_periods * f_ref / w, np.nan)
+        x = np.log(f0 / f)
+        T = 1.0 / np.polyval([j, i, h, g], x) - 273.15
+    return T, "deg_C"
+
+
+def convert_sbc(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
+    """Sea-Bird SBE4 conductivity from a 32-bit period count → mS/cm.
+
+    Matches ODAS ``convert_odas.m`` ``odas_sbc_internal``:
+      ``f[kHz] = coef6 * coef5 / w / 1000``
+      ``C = coef0 + coef1·f + coef2·f² + coef3·f³ + coef4·f⁴``
+
+    No thermal-expansion/compressibility correction (vendor comment: done
+    separately). Output is mS/cm, directly compatible with ``gsw.SP_from_C``.
+    Verified to ≤ 1.8e-9 mS/cm against the 2013 Taiwan ground truth (issue
+    #141). Deviation from ODAS: a zero count yields NaN.
+    """
+    c0 = _require_float(params, "coef0", 0.0, "sbc")
+    c1 = _require_float(params, "coef1", 0.0, "sbc")
+    c2 = _require_float(params, "coef2", 0.0, "sbc")
+    c3 = _require_float(params, "coef3", 0.0, "sbc")
+    c4 = _require_float(params, "coef4", 0.0, "sbc")
+    f_ref = _require_float(params, "coef5", 24e6, "sbc")
+    n_periods = _require_float(params, "coef6", 128.0, "sbc")
+    w = np.asarray(data, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        f = np.where(w != 0, n_periods * f_ref / w / 1000.0, np.nan)
+        C = np.polyval([c4, c3, c2, c1, c0], f)
+    return C, "mS_cm-1"
+
+
 def convert_aroft_o2(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """RINKO FT dissolved oxygen: unsigned 16-bit wrapping / 100 → µmol/L."""
     d = _deglitch_rs232(_unsigned_16bit(data))
@@ -365,6 +433,8 @@ CONVERTERS = {
     "inclt": convert_inclt,
     "jac_c": convert_jac_c,
     "jac_t": convert_jac_t,
+    "sbt": convert_sbt,
+    "sbc": convert_sbc,
     "raw": convert_raw,
     "aroft_o2": convert_aroft_o2,
     "aroft_t": convert_aroft_t,

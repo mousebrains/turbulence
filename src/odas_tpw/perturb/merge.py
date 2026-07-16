@@ -16,7 +16,7 @@ import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS, _detect_endian
+from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS, _detect_endian, raise_if_v1_layout
 
 # Max gap between a chained file's start and the previous file's computed end
 # for them to count as a genuine size-limit rollover (vs two independent casts).
@@ -52,6 +52,11 @@ def _read_merge_info(path: Path) -> dict:
         fmt = f"{endian}{HEADER_WORDS}H"
         words = struct.unpack(fmt, raw_hdr)
         header = {name: words[idx] for name, idx in _H.items()}
+
+        # v1 files have no embedded config (config_size == 0), so the config
+        # hash/splice arithmetic below would silently mis-group and mis-copy
+        # them (issue #141).
+        raise_if_v1_layout(header["header_version"], path, "perturb merge")
 
         header_size = header["header_size"]
         config_size = header["config_size"]

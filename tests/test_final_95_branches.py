@@ -68,6 +68,7 @@ def _make_minimal_p_file(path, *, config_text):
     n_rows = 4
 
     words = [0] * HEADER_WORDS
+    words[_H["header_version"]] = 0x0600  # claim v6.0 (issue #141 dispatch)
     words[_H["header_size"]] = HEADER_BYTES
     words[_H["config_size"]] = config_size
     words[_H["record_size"]] = record_size
