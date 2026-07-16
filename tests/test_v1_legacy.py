@@ -632,6 +632,30 @@ class TestShearSensHardError:
         with pytest.raises(ValueError, match="'sens' missing"):
             convert_shear(np.array([1.0]), {"name": "sh1", "diff_gain": "1.0", "sens": ""})
 
+    @pytest.mark.parametrize("bad", ["0.0893,", "abc", "  ", "0", "-0.08"])
+    def test_convert_shear_unusable_sens_raises(self, bad):
+        """A PRESENT-but-unparseable/non-positive sens (stray trailing comma,
+        typo, zero) must raise, never fall through to a fabricated 1.0 —
+        epsilon would be silently wrong by sens^-2 (~125x on real probes)."""
+        with pytest.raises(ValueError, match="sens"):
+            convert_shear(
+                np.array([1.0]), {"name": "sh1", "diff_gain": "1.0", "sens": bad}
+            )
+
+    def test_synthesize_ini_refuses_unroundtrippable_value(self):
+        """parse_config strips ';' as an inline comment: a value carrying one
+        cannot round-trip and must be refused, not silently corrupted."""
+        from odas_tpw.rsi.v1_translate import synthesize_ini
+
+        cfg = {
+            "matrix": [[0, 1]],
+            "channels": [],
+            "instrument_info": {},
+            "root": {"disk": "c:\\data;archive"},
+        }
+        with pytest.raises(ValueError, match="round-trip"):
+            synthesize_ini(cfg, {})
+
 
 # ---------------------------------------------------------------------------
 # Type-based sbt reference-temperature candidacy (delta F8)

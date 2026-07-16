@@ -118,3 +118,13 @@ calibration against the SBE3 is the natural follow-up).
 - Instrument identity: v1 setup files record none. Add `model:`/`sn:`/
   `vehicle:` extension keys to the setup file if known; `vehicle` defaults
   to `vmp`.
+
+## Known limitation: reading a raw v1 file whose setup lacks `sens`
+
+`info`/`nc`/`prof`/`eps`/`chi` do not take `--setup-file` — direct reads of raw
+v1 files rely on sibling auto-detection (the Python API accepts
+`PFile(..., setup_file=...)`). If the only discoverable setup file lacks probe
+sensitivities and the media is read-only, translate first:
+`rsi-tpw v1to6 FILE --setup-file /path/to/edited_setup.txt -o out/` (or
+`--sens sh1=...,sh2=...`) and process the translated copy — the intended
+workflow. Per-command `--setup-file` flags are a possible follow-up (issue #141).

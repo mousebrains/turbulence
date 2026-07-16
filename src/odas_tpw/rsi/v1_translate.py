@@ -58,6 +58,18 @@ def synthesize_ini(cfg: dict[str, Any], provenance: dict[str, str]) -> str:
     ``matrix``, ``channels``, ``instrument_info``, and ``root`` content (the
     provenance keys are added to ``[root]``).
     """
+    def _emit(k: str, v: Any) -> str:
+        # parse_config strips ';' as an inline comment and splits on newlines;
+        # a value containing either cannot round-trip — refuse rather than
+        # silently corrupt (round-trip guarantee above).
+        text = f"{k} = {v}"
+        if ";" in str(v) or "\n" in str(v) or "\n" in str(k):
+            raise ValueError(
+                f"cannot synthesize INI: value for {k!r} contains ';' or a "
+                f"newline and would not survive parse_config round-trip: {v!r}"
+            )
+        return text
+
     lines: list[str] = []
     lines.append("; v6 configuration synthesized from a header-v1 setup file")
     lines.append("; by microstructure-tpw 'rsi-tpw v1to6' (GitHub issue #141).")
@@ -65,9 +77,9 @@ def synthesize_ini(cfg: dict[str, Any], provenance: dict[str, str]) -> str:
     lines.append("")
     lines.append("[root]")
     for k, v in cfg.get("root", {}).items():
-        lines.append(f"{k} = {v}")
+        lines.append(_emit(k, v))
     for k, v in provenance.items():
-        lines.append(f"{k} = {v}")
+        lines.append(_emit(k, v))
     lines.append("")
 
     inst = cfg.get("instrument_info", {})
@@ -76,7 +88,7 @@ def synthesize_ini(cfg: dict[str, Any], provenance: dict[str, str]) -> str:
         lines.append("; v1 setup files record no instrument identity; add the")
         lines.append("; model:/sn: extension keys to the setup file to set one.")
     for k, v in inst.items():
-        lines.append(f"{k} = {v}")
+        lines.append(_emit(k, v))
     lines.append("")
 
     matrix = cfg.get("matrix", [])
@@ -93,7 +105,7 @@ def synthesize_ini(cfg: dict[str, Any], provenance: dict[str, str]) -> str:
                 lines.append(f"{k} = {ch[k]}")
         for k, v in ch.items():
             if k not in _CHANNEL_KEY_ORDER:
-                lines.append(f"{k} = {v}")
+                lines.append(_emit(k, v))
         lines.append("")
 
     return "\n".join(lines)
@@ -340,7 +352,7 @@ def translate_v1_bytes(
         raise ValueError(
             f"{src.name}: address matrix in setup file {chosen.name} does not "
             f"match the binary matrix in record 0; wrong setup file for this "
-            "acquisition (issue #141)"
+            "acquisition — point --setup-file at the correct one (issue #141)"
         )
     _check_setup_against_header(cfg, header, f_clock, src.name, chosen.name)
 

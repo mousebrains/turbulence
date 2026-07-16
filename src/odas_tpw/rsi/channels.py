@@ -164,16 +164,29 @@ def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     adc_fs = _safe_float(params.get("adc_fs", "4.096"))
     adc_bits = _safe_float(params.get("adc_bits", "16"))
     diff_gain = _require_float(params, "diff_gain", 1.0, "shear")
-    if params.get("sens") in (None, ""):
+    # Strict parse: a present-but-unparseable sens (stray comma, typo) must
+    # not fall through _safe_float's default — that silently fabricates
+    # sens=1.0 and scales epsilon by sens^-2 (~125x on real probes).
+    raw_sens = params.get("sens")
+    sens: float | None
+    try:
+        sens = float(raw_sens) if raw_sens not in (None, "") else None
+    except (TypeError, ValueError):
+        sens = None
+    if sens is None or sens <= 0:
+        problem = (
+            "missing from the channel config"
+            if raw_sens in (None, "")
+            else f"unusable ({raw_sens!r}; must be a positive number)"
+        )
         raise ValueError(
             f"shear channel {params.get('name', '?')}: calibration coefficient "
-            "'sens' missing from the channel config; refusing to fabricate "
+            f"'sens' {problem}; refusing to fabricate "
             "physical shear. Inject the probe sensitivity with 'rsi-tpw "
             "patch-config' (--add-keys), or — for legacy v1 corpora — "
             "re-translate with 'rsi-tpw v1to6 --sens' or add "
             "'sh1_sens:'/'sh2_sens:' keys to the setup file (issue #141)."
         )
-    sens = _safe_float(params["sens"], 1.0)
     adc_zero = _safe_float(params.get("adc_zero", "0"))
     sig_zero = _safe_float(params.get("sig_zero", "0"))
     phys = (adc_fs / 2**adc_bits) * data + (adc_zero - sig_zero)
