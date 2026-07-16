@@ -103,14 +103,15 @@ def extract_pfile_segment(
     """Copy a contiguous data-record range from a Rockland ``.p`` file.
 
     This is a byte-level debugging utility. It copies the first record
-    containing the binary header and configuration string unchanged, then
-    appends ``n_records`` complete data records starting at the 0-based
+    containing the binary header and configuration string, then appends
+    ``n_records`` complete data records starting at the 0-based
     ``start_record`` index. The output is a parseable P-file segment with the
-    original calibration metadata preserved, but header fields are copied
-    verbatim. Absolute time is correct only when ``start_record`` is 0; for
-    later starts, data is shifted relative to the copied timestamp. The header
-    record count is not authoritative because local readers derive the count
-    from file size.
+    original calibration metadata preserved. For ``start_record > 0`` the
+    record-0 header timestamp is advanced by ``start_record`` record
+    durations (config ``recsize``, default 1.0 s) so a reader's derived
+    absolute start time matches the copied data; all other header fields are
+    copied verbatim. The header record count is not authoritative because
+    local readers derive the count from file size.
     """
     source = Path(source)
     dest = Path(dest)
@@ -172,6 +173,8 @@ def extract_pfile_segment(
 
         src.seek(0)
         first_record = src.read(first_record_size)
+        if start_record > 0:
+            first_record = _advance_record0_timestamp(first_record, endian, start_record)
         src.seek(first_record_size + start_record * record_size)
         data_records = src.read(n_records * record_size)
 
@@ -181,6 +184,67 @@ def extract_pfile_segment(
         out.write(data_records)
 
     return dest
+
+
+def _advance_record0_timestamp(first_record: bytes, endian: str, start_record: int) -> bytes:
+    """Advance record 0's header timestamp by ``start_record`` record durations.
+
+    The record-0 header timestamp marks the END of record 0 (odas_p2mat.m:
+    ``t_start = filetime - recsize``), so a segment cut starting at data
+    record ``start_record`` must carry that timestamp forward by
+    ``start_record x recsize`` for a reader's derived absolute start time to
+    match the copied data. The record duration is derived the same way
+    :class:`PFile` does it: ``[root]`` ``recsize`` / ``recordDuration`` from
+    the embedded config, defaulting to 1.0 s. Datetime arithmetic carries
+    milliseconds across minute/hour/day boundaries; the timezone word is left
+    untouched (the offset does not move the clock between zones). When the
+    header date is not a valid calendar date (e.g. a startup file's year-0
+    clock), the record is returned unchanged with a warning — such files
+    carry no meaningful absolute time to preserve.
+    """
+    header = _parse_header(first_record[:HEADER_BYTES], endian)
+    header_size = int(header["header_size"])
+    config_size = int(header["config_size"])
+    config_str = first_record[header_size : header_size + config_size].decode(
+        "ascii", errors="replace"
+    )
+    root_cfg = parse_config(config_str).get("root", {})
+    _recsize_raw = root_cfg.get("recsize", root_cfg.get("recordduration"))
+    try:
+        recsize = float(_recsize_raw) if _recsize_raw is not None else 1.0
+    except (TypeError, ValueError):
+        recsize = 1.0
+
+    try:
+        stamp = datetime(
+            header["year"],
+            header["month"],
+            header["day"],
+            header["hour"],
+            header["minute"],
+            header["second"],
+            header["millisecond"] * 1000,
+        )
+    except ValueError:
+        warnings.warn(
+            "record-0 header date is not a valid calendar date; "
+            "leaving the segment's timestamp unadjusted"
+        )
+        return first_record
+
+    stamp += timedelta(milliseconds=round(start_record * recsize * 1000))
+    out = bytearray(first_record)
+    for name, value in (
+        ("year", stamp.year),
+        ("month", stamp.month),
+        ("day", stamp.day),
+        ("hour", stamp.hour),
+        ("minute", stamp.minute),
+        ("second", stamp.second),
+        ("millisecond", stamp.microsecond // 1000),
+    ):
+        struct.pack_into(f"{endian}H", out, _H[name] * 2, value)
+    return bytes(out)
 
 
 # ---------------------------------------------------------------------------

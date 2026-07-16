@@ -63,9 +63,10 @@ than one file, each config is preceded by a `# ===== <path> =====` banner. To
 
 Copy a contiguous range of complete data records from a `.p` file into a new
 valid `.p` file. This is byte-level debugging support, not a pressure- or
-profile-aware scientific extraction. The header and configuration string are
-copied unchanged. Absolute time is correct only for `--start 0`; for `--start
-N>0`, the data is shifted relative to the copied timestamp. The header record
+profile-aware scientific extraction. For `--start N>0` the record-0 header
+timestamp is advanced by N record durations (config `recsize`, default 1.0 s)
+so the segment's absolute start time matches the copied data; the rest of the
+header and the configuration string are copied unchanged. The header record
 count is not authoritative because local readers derive the count from file
 size.
 

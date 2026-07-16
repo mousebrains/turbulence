@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import struct
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,50 @@ def test_extract_pfile_segment_from_fixture_opens_as_pfile(tmp_path):
     pf = PFile(dest)
     assert pf.header["header_size"] == 128
     assert len(pf._record_headers) == 3
+
+
+def test_extract_pfile_segment_nonzero_start_advances_timestamp(tmp_path):
+    """A segment cut at start_record N carries absolute time N records forward."""
+    if not SAMPLE_FILE.exists():
+        pytest.skip("Test data not available")
+
+    src = PFile(SAMPLE_FILE)
+    dest = extract_pfile_segment(SAMPLE_FILE, tmp_path / "segment.p", start_record=5, n_records=2)
+    seg = PFile(dest)
+    assert seg.start_time == src.start_time + timedelta(seconds=5 * src.recsize)
+
+    # Only the timestamp words (year..millisecond, words 3-9) may differ in
+    # record 0; everything else — including the config — is copied verbatim.
+    first_record_size = src.header["header_size"] + src.header["config_size"]
+    src_r0 = SAMPLE_FILE.read_bytes()[:first_record_size]
+    dst_r0 = dest.read_bytes()[:first_record_size]
+    ts_lo, ts_hi = _H["year"] * 2, (_H["millisecond"] + 1) * 2
+    assert dst_r0[:ts_lo] == src_r0[:ts_lo]
+    assert dst_r0[ts_hi:] == src_r0[ts_hi:]
+
+
+def test_extract_pfile_segment_timestamp_crosses_minute_boundary(tmp_path):
+    """Offsets >= 60 s force a minute rollover regardless of the source clock."""
+    if not SAMPLE_FILE.exists():
+        pytest.skip("Test data not available")
+
+    src = PFile(SAMPLE_FILE)
+    dest = extract_pfile_segment(SAMPLE_FILE, tmp_path / "segment.p", start_record=61, n_records=1)
+    seg = PFile(dest)
+    expected = src.start_time + timedelta(seconds=61 * src.recsize)
+    assert seg.start_time == expected
+    assert seg.start_time.minute != src.start_time.minute  # boundary actually crossed
+
+
+def test_extract_pfile_segment_invalid_header_date_left_unchanged(tmp_path):
+    """A year-0 (startup) clock cannot be advanced: warn and copy verbatim."""
+    first_record, records = _write_synthetic_pfile(tmp_path / "source.p", n_records=6)
+
+    with pytest.warns(UserWarning, match="valid calendar date"):
+        dest = extract_pfile_segment(
+            tmp_path / "source.p", tmp_path / "segment.p", start_record=3, n_records=1
+        )
+    assert dest.read_bytes() == first_record + records[3]
 
 
 def test_rsi_cli_cutp_writes_segment(monkeypatch, tmp_path):

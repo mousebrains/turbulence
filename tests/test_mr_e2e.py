@@ -88,6 +88,17 @@ def test_fixture_is_glider_microrider(pf: PFile) -> None:
     assert pf.fs_slow == pytest.approx(64.0, abs=1.0)
 
 
+def test_fixture_absolute_start_time(pf: PFile) -> None:
+    """The cut carries true absolute time: source start + 120 one-second records.
+
+    ``extract_pfile_segment`` advances record-0's header timestamp by
+    ``start_record`` record durations, so the fixture's derived start time
+    matches the source data (MR/AIOP2_SL685_0450.p starts 2025-02-23
+    18:42:59.877Z; the cut begins at data record 120).
+    """
+    assert pf.start_time.isoformat() == "2025-02-23T18:44:59.877000+00:00"
+
+
 def test_fixture_has_mr_channels(pf: PFile) -> None:
     for name in ("P", "U_EM", "Incl_X", "Incl_Y", "sh1", "sh2", "T1_dT1", "T2_dT2", "Ax", "Ay"):
         assert name in pf.channels, f"channel {name} missing from fixture"

@@ -63,6 +63,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   plus a PyPI version badge — back-filled after v0.3.0 was archived on Zenodo.
 
 ### Fixed
+- **`rsi-tpw cutp` / `extract_pfile_segment` absolute time** — a segment cut
+  with `--start N>0` used to copy record 0's header timestamp verbatim, so the
+  output's derived start time read N records too early (embedded provenance
+  that would mislead any hotel/GPS join or absolute-time consumer). The tool
+  now advances the record-0 timestamp by `N x recsize` (record duration from
+  the embedded config, default 1.0 s; datetime arithmetic carries milliseconds
+  across minute/hour/day boundaries; a year-0 startup clock is left unchanged
+  with a warning). `tests/data/MR_SL685_climb.p` was regenerated with the
+  fixed tool — data records byte-identical, only the record-0 timestamp words
+  changed — and `test_mr_e2e.py` now pins the fixture's absolute start time.
 - **`rsi-tpw patch-template`** now scaffolds *every* per-channel calibration
   field, not just `coef0`/`coef1`. The previous hardcoded whitelist silently
   dropped higher-order polynomial coefficients (a pressure channel's `coef2`,
