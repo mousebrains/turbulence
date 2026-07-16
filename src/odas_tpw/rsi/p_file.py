@@ -583,7 +583,8 @@ class PFile:
             unique_ids = set(matrix.flatten())
             matrix_count = total_scans // self.n_rows
 
-            # read_odas.m:285-302 parity: a matrix address with no usable
+            # Matches the intent of read_odas.m's missing-channel warning
+            # (its message text describes this case): a matrix address with no usable
             # [channel] section is silently unprocessable — warn so the data
             # loss is visible. Address 255 is the RSI special character, for
             # which read_odas.m:236-243 inserts a synthetic 'ch255' section;
@@ -831,7 +832,11 @@ class PFile:
             rate_mult = len(X_dX_raw) // n_slow
             # Extraction guarantees exact multiples: a full column yields
             # n_rows*n_slow samples, anything else exactly n_slow.
-            assert rate_mult * n_slow == len(X_dX_raw)
+            if rate_mult * n_slow != len(X_dX_raw):
+                raise ValueError(
+                    f"{self.filepath.name}: {dX_name} length {len(X_dX_raw)} "
+                    f"is not a multiple of the scan count {n_slow}"
+                )
             fs_dX = self.fs_slow * rate_mult
             is_dX_fast = rate_mult == self.n_rows
 

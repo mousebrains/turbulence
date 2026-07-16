@@ -83,6 +83,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   mis-blending P and P_dP — the pressure feeding fall-rate/speed and thus ε/χ.
   The deconvolution rate (and fast/slow branch) is now derived from the array
   actually extracted.
+- **`rsi-tpw patch-template`** now scaffolds *every* per-channel calibration
   field, not just `coef0`/`coef1`. The previous hardcoded whitelist silently
   dropped higher-order polynomial coefficients (a pressure channel's `coef2`,
   `coef3`…) and thermistor Steinhart-Hart terms (`a`, `b`, `beta_1`, `t_0`, …),
