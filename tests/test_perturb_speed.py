@@ -132,16 +132,64 @@ class TestEMMethod:
 
 class TestFlightMethod:
     def test_flight_recovers_along_axis_speed(self, glider_with_incl):
-        """For pitch=-30°, roll=2°, AoA=3°: U = |W| / (sin(27°)cos(2°))."""
+        """For pitch=-30°, AoA=3°: U = |W| / sin(33°) (glide path steeper
+        than pitch by the attack angle; ODAS odas_p2mat.m convention)."""
         speed_fast, _ = compute_speed_for_pfile(
             glider_with_incl,
             {"method": "flight", "aoa_deg": 3.0},
             vehicle="slocum_glider",
         )
-        expected = 0.5 / (np.sin(np.deg2rad(27.0)) * np.cos(np.deg2rad(2.0)))
+        expected = 0.5 / np.sin(np.deg2rad(33.0))
         np.testing.assert_allclose(
             np.median(speed_fast[1000:-1000]), expected, atol=0.02,
         )
+
+    def test_flight_aoa_steepens_glide_path(self, glider_with_incl):
+        """Sign regression for issue #131 M6: a larger angle of attack
+        makes the glide path STEEPER (|pitch| + aoa), so the recovered
+        along-path speed must DECREASE with aoa. The pre-fix code
+        subtracted aoa, which reversed this ordering (and biased epsilon
+        ~2.4x low at Slocum pitch through the ~U^-4 leverage)."""
+        u0, _ = compute_speed_for_pfile(
+            glider_with_incl, {"method": "flight", "aoa_deg": 0.0},
+            vehicle="slocum_glider",
+        )
+        u6, _ = compute_speed_for_pfile(
+            glider_with_incl, {"method": "flight", "aoa_deg": 6.0},
+            vehicle="slocum_glider",
+        )
+        m0 = float(np.median(u0[1000:-1000]))
+        m6 = float(np.median(u6[1000:-1000]))
+        assert m6 < m0, f"aoa=6 speed {m6} should be below aoa=0 speed {m0}"
+        # And quantitatively: sin(30°)/sin(36°) ratio.
+        np.testing.assert_allclose(
+            m6 / m0, np.sin(np.deg2rad(30.0)) / np.sin(np.deg2rad(36.0)),
+            rtol=0.02,
+        )
+
+    def test_flight_uem_crosscheck_warns_on_disagreement(self, glider_with_incl):
+        """A U_EM channel disagreeing with the flight speed by >20% warns."""
+        pf = glider_with_incl
+        pf.channels["U_EM"] = np.full_like(pf.channels["P"], 0.4)  # flight ~0.92
+        with pytest.warns(UserWarning, match="disagrees with U_EM"):
+            compute_speed_for_pfile(
+                pf, {"method": "flight", "aoa_deg": 3.0},
+                vehicle="slocum_glider",
+            )
+
+    def test_flight_uem_crosscheck_silent_when_consistent(self, glider_with_incl):
+        import warnings as _w
+
+        pf = glider_with_incl
+        consistent = 0.5 / np.sin(np.deg2rad(33.0))
+        pf.channels["U_EM"] = np.full_like(pf.channels["P"], consistent)
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            compute_speed_for_pfile(
+                pf, {"method": "flight", "aoa_deg": 3.0},
+                vehicle="slocum_glider",
+            )
+        assert not any("disagrees with U_EM" in str(w.message) for w in caught)
 
     def test_flight_picks_pitch_axis_by_amplitude(self, vmp_descent):
         """Pitch on Incl_Y (larger amplitude) → recovered the same."""
@@ -154,8 +202,8 @@ class TestFlightMethod:
             pf, {"method": "flight", "aoa_deg": 3.0}, vehicle="slocum_glider",
         )
         # Pitch axis = Incl_Y (range ~2°), roll ≈ Incl_X (range ~1°).
-        # Effective sin path ≈ sin(27°)·cos(0°) on average.
-        expected = 0.5 / np.sin(np.deg2rad(27.0))
+        # Effective sin path ≈ sin(30° + 3°) on average.
+        expected = 0.5 / np.sin(np.deg2rad(33.0))
         np.testing.assert_allclose(
             np.median(speed_fast[1000:-1000]), expected, rtol=0.05,
         )
@@ -180,11 +228,12 @@ class TestFlightMethod:
         speed_fast, _ = compute_speed_for_pfile(
             pf, {"method": "flight", "aoa_deg": 3.0}, vehicle="slocum_glider",
         )
-        # If the picker was fooled, pitch≈±5° and U = |W|/sin(2°) is huge
-        # (>10 m/s), or hits the floor. With the right axis the median
-        # speed should be order |W|/sin(~22°) ~ 1.3 m/s.
+        # With the right axis (|pitch| median ~18°+aoa, min-pitch gate on)
+        # the median speed is ~1.4 m/s; a fooled pick (pitch read off the
+        # ±5° roll axis) yields ~3.6 m/s. Band chosen to separate the two
+        # (measured 1.41 vs 3.58 under the current formula).
         median_speed = float(np.median(speed_fast[1000:-1000]))
-        assert 0.5 < median_speed < 5.0, (
+        assert 0.8 < median_speed < 3.0, (
             f"axis pick likely fooled by outlier: median speed {median_speed}"
         )
 

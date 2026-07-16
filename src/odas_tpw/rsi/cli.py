@@ -1034,7 +1034,7 @@ def _add_pipeline_parser(subparsers: argparse._SubParsersAction) -> None:
         help=(
             "Through-water speed model (default: pressure = |dP/dt|). "
             "'em' uses the U_EM flowmeter channel; 'flight' uses the inviscid "
-            "glider flight model |W|/sin(|pitch|-aoa) from the inclinometers."
+            "glider flight model |W|/sin(|pitch|+aoa) from the inclinometers."
         ),
     )
     p.add_argument(

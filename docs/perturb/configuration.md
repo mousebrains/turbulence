@@ -247,10 +247,10 @@ Controls how the through-water (profiling) speed is computed. The speed is compu
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `method` | string | `"pressure"` | Speed source: `"pressure"` (ODAS smoothed \|dP/dt\|; correct for VMP), `"em"` (the `U_EM` channel from a MicroRider EM flowmeter; errors out if missing), `"flight"` (glider flight model: \|W\| / (sin(\|pitch\|−aoa)·cos\|roll\|), pitch axis auto-picked from `Incl_X`/`Incl_Y` by amplitude), or `"constant"` (the scalar in `value`) |
+| `method` | string | `"pressure"` | Speed source: `"pressure"` (ODAS smoothed \|dP/dt\|; correct for VMP), `"em"` (the `U_EM` channel from a MicroRider EM flowmeter; errors out if missing), `"flight"` (glider flight model: \|W\| / sin(\|pitch\|+aoa), the ODAS convention — the glide path is steeper than pitch by the angle of attack; roll does not enter; pitch axis auto-picked from `Incl_X`/`Incl_Y` by amplitude), or `"constant"` (the scalar in `value`) |
 | `value` | float | `null` | Fixed speed [m/s], only for `method: constant` |
 | `aoa_deg` | float | `3.0` | Angle of attack [deg], only for `method: flight` |
-| `min_pitch_deg` | float | `5.0` | Flight method: drop samples with \|pitch\|−aoa below this [deg] |
+| `min_pitch_deg` | float | `5.0` | Flight method: drop samples with \|pitch\| below this [deg] (steady-glide flight is invalid near dive/climb inflections) |
 | `speed_cutout` | float | `0.05` | Floor [m/s] applied to the fast-rate speed |
 | `tau` | float | `null` | Smoothing time constant [s]; null = vehicle default (vmp/xmp 1.5, slocum_glider 3.0, ...) |
 | `amplitude_quantile` | list | `[1.0, 99.0]` | Flight method: percentile spread used to auto-pick the pitch axis from `Incl_X`/`Incl_Y`; 1..99 strips outliers (surface tumbles, sensor saturation spikes) |
