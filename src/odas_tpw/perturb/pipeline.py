@@ -702,10 +702,11 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
     *sal_source* selects the salinity: ``None`` (or ``"measured"``) derives it
     from conductivity via TEOS-10 when present; a number applies that fixed PSU;
     ``"hotel"``/``"hotel:<var>"`` uses a hotel-injected slow salinity channel.
-    Non-finite samples in a hotel channel are interp-filled (with the count
-    noted in *sal_note*); an entirely non-finite channel falls back to
-    conductivity/35 PSU with the reason noted. Position defaults to 0/0 (a
-    <0.3% gravity and negligible salinity-anomaly effect on N2).
+    Non-finite samples in a hotel channel are interp-filled **per cast** (with
+    the in-cast counts noted in *sal_note*); a channel — or a cast slice —
+    with fewer than two finite samples falls back to conductivity/35 PSU with
+    the reason noted. Position defaults to 0/0 (a <0.3% gravity and negligible
+    salinity-anomaly effect on N2).
     """
     import gsw
     import numpy as np
@@ -731,6 +732,8 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
     # used, for the N2 channel comment (never claim hotel salinity when no
     # finite hotel sample contributed).
     sal_arr = None
+    hotel_raw = None
+    hv = None
     sal_note = None
     hotel_reason = None  # why a requested hotel channel was not used
     if isinstance(sal_source, (int, float)) and not isinstance(sal_source, bool):
@@ -752,24 +755,22 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
             )
         else:
             raw = np.asarray(cand, dtype=np.float64)
-            n_bad = int((~np.isfinite(raw)).sum())
-            # Scrub the whole slow grid (casts + inter-cast samples): the
-            # interp fill is safe across cast boundaries, where a constant
-            # (median) fill would blend casts. All-NaN -> sal_arr None so the
-            # per-cast loop falls through to conductivity/35.
-            sal_arr = _scrub_salinity(
-                raw,
-                "stratification",
-                f"hotel channel {hv!r}",
-                fallback="falling back to conductivity/35 PSU",
-            )
-            if sal_arr is None:
-                hotel_reason = f"hotel channel {hv!r} entirely non-finite"
+            n_finite = int(np.isfinite(raw).sum())
+            if n_finite < 2:
+                logger.warning(
+                    "stratification salinity from hotel channel %r has %d finite "
+                    "sample(s) (fewer than two); falling back to conductivity/35 PSU",
+                    hv,
+                    n_finite,
+                )
+                hotel_reason = (
+                    f"hotel channel {hv!r} entirely non-finite"
+                    if n_finite == 0
+                    else f"hotel channel {hv!r} has a single finite sample"
+                )
             else:
-                sal_note = f"salinity from hotel channel {hv!r}"
-                if n_bad:
-                    sal_note += f" ({n_bad}/{n} non-finite salinity samples interpolated/held)"
-    if sal_note is None:
+                hotel_raw = raw  # scrubbed per cast in the loop below
+    if sal_note is None and hotel_raw is None:
         if C is not None:
             sal_note = f"practical salinity from {C_name}/{T_name}/P (TEOS-10)"
             if hotel_reason is not None:
@@ -787,15 +788,32 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
 
     N2_full = np.full(n, np.nan)
     dTdz_full = np.full(n, np.nan)
+    n_interp = n_held = n_in_cast = n_fallback_casts = 0
     for s, e in profiles:
         sl = slice(s, e + 1)
         P_c, T_c = P[sl], T[sl]
+        S_c: Any = None  # None -> profile_stratification assumes 35 PSU
         if sal_arr is not None:
             S_c = sal_arr[sl]
+        elif hotel_raw is not None:
+            # Scrub each cast slice INDEPENDENTLY — never across cast
+            # boundaries: index-space interpolation through the inter-cast
+            # span would blend cast-1's deep salinity toward cast-2's shallow
+            # salinity, fabricating a wrong-sign within-cast dS/dz (and a
+            # collapsed N2) in the samples adjacent to the boundary. A cast
+            # slice with <2 finite samples falls back to conductivity/35.
+            n_in_cast += e + 1 - s
+            filled = _fill_nonfinite_by_interp(hotel_raw[sl])
+            if filled is None:
+                n_fallback_casts += 1
+                if C is not None:
+                    S_c = gsw.SP_from_C(C[sl], T_c, P_c)
+            else:
+                S_c, n_i, n_h = filled
+                n_interp += n_i
+                n_held += n_h
         elif C is not None:
             S_c = gsw.SP_from_C(C[sl], T_c, P_c)
-        else:
-            S_c = None
         target_P, N2, dTdz = profile_stratification(P_c, T_c, S=S_c, window=window)
         good = np.isfinite(N2)
         if good.sum() >= 2:
@@ -803,6 +821,29 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
         good_d = np.isfinite(dTdz)
         if good_d.sum() >= 2:
             dTdz_full[sl] = np.interp(P_c, target_P[good_d], dTdz[good_d])
+
+    if hotel_raw is not None:
+        sal_note = f"salinity from hotel channel {hv!r}" + _fill_note_annotation(
+            n_interp, n_held, n_in_cast, per_cast=True
+        )
+        if n_fallback_casts:
+            sal_note += (
+                f"; {n_fallback_casts} cast(s) with <2 finite hotel samples "
+                "fell back to conductivity/35 PSU"
+            )
+        if n_interp or n_held or n_fallback_casts:
+            logger.warning(
+                "stratification salinity from hotel channel %r: %d/%d in-cast "
+                "sample(s) interpolated, %d/%d edge-held%s",
+                hv,
+                n_interp,
+                n_in_cast,
+                n_held,
+                n_in_cast,
+                f"; {n_fallback_casts} cast(s) fell back to conductivity/35 PSU"
+                if n_fallback_casts
+                else "",
+            )
     return N2_full, dTdz_full, sal_note
 
 
@@ -858,12 +899,12 @@ def _window_stratification_for_profile(
         # Resolve a requested hotel channel up front. It must be on the
         # profile's slow grid (same length as P/t_slow) or
         # sorted_stratification's boolean-mask slice raises, and it must hold
-        # at least one finite sample — an all-NaN merged channel (or a fully
+        # at least two finite samples — an all-NaN merged channel (or a fully
         # bad "hotel:<var>" derived variable) would otherwise mask every
-        # window and NaN out all mixing products. Non-finite samples are
-        # interp-filled (never a constant fill: N2 is first-order in dS/dz,
-        # so a constant fill inserts a spurious salinity step at each fill
-        # boundary). On any failure, record why and fall through to
+        # window and NaN out all mixing products, and a single finite sample
+        # would constant-fill the whole profile. Non-finite samples are
+        # interp-filled (see _fill_nonfinite_by_interp for why never a
+        # constant fill). On any failure, record why and fall through to
         # conductivity/35 rather than dropping the whole product (matches the
         # slow-path guard).
         S_hotel = None
@@ -885,22 +926,39 @@ def _window_stratification_for_profile(
                 hotel_reason = f"hotel channel {hv!r} length mismatch"
             else:
                 raw = prof[hv].values.astype(np.float64)
-                n_bad = int((~np.isfinite(raw)).sum())
-                S_hotel = _scrub_salinity(
-                    raw,
-                    "stratification",
-                    f"hotel channel {hv!r} in {file_label}",
-                    fallback="falling back to conductivity/35 PSU",
-                )
-                if S_hotel is None:
-                    hotel_reason = f"hotel channel {hv!r} entirely non-finite"
+                filled = _fill_nonfinite_by_interp(raw)
+                if filled is None:
+                    n_finite = int(np.isfinite(raw).sum())
+                    hotel_reason = (
+                        f"hotel channel {hv!r} entirely non-finite"
+                        if n_finite == 0
+                        else f"hotel channel {hv!r} has a single finite sample"
+                    )
+                    logger.warning(
+                        "stratification salinity from hotel channel %r in %s has "
+                        "%d finite sample(s) (fewer than two); falling back to "
+                        "conductivity/35 PSU",
+                        hv,
+                        file_label,
+                        n_finite,
+                    )
                 else:
-                    hotel_note = f"salinity from hotel channel {hv!r}"
-                    if n_bad:
-                        hotel_note += (
-                            f" ({n_bad}/{raw.size} non-finite salinity samples "
-                            "interpolated/held)"
+                    S_hotel, n_interp, n_held = filled
+                    if n_interp or n_held:
+                        logger.warning(
+                            "stratification salinity from hotel channel %r in %s has "
+                            "%d/%d non-finite sample(s); filled by interpolation over "
+                            "the finite samples (%d interpolated, %d edge-held)",
+                            hv,
+                            file_label,
+                            n_interp + n_held,
+                            raw.size,
+                            n_interp,
+                            n_held,
                         )
+                    hotel_note = f"salinity from hotel channel {hv!r}" + _fill_note_annotation(
+                        n_interp, n_held, raw.size
+                    )
         if isinstance(sal_source, (int, float)) and not isinstance(sal_source, bool):
             S = np.full(len(P), float(sal_source))
             sal_note = f"fixed {float(sal_source):g} PSU"
@@ -986,12 +1044,13 @@ def _add_mixing_quantities(
 ):
     """Append stratification and (when available) mixing quantities to chi.
 
-    Always computes window-scale N2 and dT/dz from the profile's own slow CTD
-    channels via the Thorpe-sorted (adiabatically leveled) method — with
-    practical salinity from C/T/P via TEOS-10 when the conductivity channel
-    exists, so N2 is fully constrained (unlike the rsi path, which may assume
-    35 PSU). N2 and dT/dz depend only on the CTD profile, so they are written
-    regardless of epsilon/chi.
+    Always computes window-scale N2 and dT/dz from the profile's slow P/T via
+    the Thorpe-sorted (adiabatically leveled) method, with the salinity chosen
+    by *sal_source* — a fixed value, a hotel-injected channel, or (the default)
+    practical salinity from the profile's own C/T/P via TEOS-10 when the
+    conductivity channel exists, else 35 PSU; see
+    :func:`_window_stratification_for_profile`. N2 and dT/dz depend only on
+    those profile channels, so they are written regardless of epsilon/chi.
 
     When epsilonMean (from the matching diss dataset) and chiMean are both
     present, additionally computes K_T (Osborn-Cox), Gamma (Oakey 1982), and
@@ -1246,26 +1305,91 @@ def _profile_channel_salinity(prof_path, var_name: str):
         return arr
 
 
-def _scrub_salinity(sal, label: str, src: str, fallback: str = "using fixed 35 PSU"):
-    """Fill non-finite salinity samples so viscosity/N2 don't silently NaN out.
+def _fill_nonfinite_by_interp(arr):
+    """Interp-fill non-finite samples over the finite ones; hold at the edges.
 
+    Interior gaps are bridged by linear interpolation over the finite samples;
+    leading/trailing non-finite samples are held at the nearest finite value
+    (same treatment as the slow->fast speed regrid). Never a constant (e.g.
+    median) fill: N2 is first-order in dS/dz, so a constant fill would insert
+    a spurious salinity step at every fill boundary.
+
+    Returns ``(filled, n_interp, n_held)`` — the filled array (the *same*
+    object when nothing needed filling) and the interior-interpolated /
+    edge-held sample counts — or ``None`` when fewer than two finite samples
+    exist: there is nothing to interpolate between, and a single sample would
+    constant-fill the whole array (the hotel merge's ``_interp_one`` uses the
+    same <2-finite convention).
+    """
+    import numpy as np
+
+    arr = np.asarray(arr, dtype=np.float64)
+    finite = np.isfinite(arr)
+    if int(finite.sum()) < 2:
+        return None
+    if finite.all():
+        return arr, 0, 0
+    bad = ~finite
+    first = int(np.argmax(finite))
+    last = int(arr.size - 1 - np.argmax(finite[::-1]))
+    n_held = int(bad[:first].sum() + bad[last + 1 :].sum())
+    n_interp = int(bad.sum()) - n_held
+    idx = np.arange(arr.size, dtype=np.float64)
+    out = arr.copy()
+    out[bad] = np.interp(idx[bad], idx[finite], arr[finite])
+    return out, n_interp, n_held
+
+
+def _fill_note_annotation(n_interp: int, n_held: int, n_total: int, per_cast: bool = False) -> str:
+    """Parenthetical sal_note annotation for interp-filled salinity, or ``""``.
+
+    *n_total* is the number of samples the fill saw (the in-cast samples on
+    the per-cast slow path, flagged by *per_cast*). Edge-held samples carry no
+    salinity gradient, so the note flags that N2 approaches temperature-only
+    there (same convention as the 35-PSU note's "N2 reflects temperature
+    stratification only").
+    """
+    if not (n_interp or n_held):
+        return ""
+    bits = []
+    if n_interp:
+        bits.append(f"{n_interp}/{n_total} non-finite salinity samples interpolated")
+    if n_held:
+        bits.append(f"{n_held}/{n_total} edge samples held at the nearest finite value")
+    prefix = "per-cast scrub: " if per_cast else ""
+    tail = "; N2 approaches temperature-only where held" if n_held else ""
+    return " (" + prefix + ", ".join(bits) + tail + ")"
+
+
+def _scrub_salinity(sal, label: str, src: str):
+    """Fill non-finite viscosity salinity so epsilon/chi don't silently NaN out.
+
+    Serves :func:`_resolve_salinity_cfg` — the epsilon/chi **viscosity** path.
     Non-finite samples are reachable two ways. A hotel variable with fewer than
     two finite source samples merges as an *all-NaN* channel (the hotel merge
     itself never produces NaN outside the hotel file's time coverage — it
     boundary-holds and bridges interior gaps). A *partially* NaN array comes
     from ``"hotel:<var>"`` pointing at a derived profile variable (e.g. an SP
     computed from bad conductivity samples), or from ``SP_from_C`` on bad
-    conductivity in the ``"measured"`` path. Feeding those to ``visc`` or the
-    stratification yields NaN outputs and discards the whole (otherwise valid)
-    window.
+    conductivity under ``salinity="measured"``. Feeding those to ``visc``
+    yields NaN viscosity and discards the whole (otherwise valid) epsilon/chi
+    estimate for that window.
 
-    Fill the gaps by linear interpolation over the finite samples, holding the
-    nearest finite value at the edges (same treatment as the slow->fast speed
-    regrid) — never a constant (e.g. median) fill: N2 is first-order in dS/dz,
-    so a constant fill would insert a spurious salinity step at every fill
-    boundary — and warn. An all-non-finite array returns ``None`` so the caller
-    falls back; *fallback* describes that fallback in the warning. Mirrors the
-    temperature path, which already substitutes 10 degC and warns.
+    Gaps are filled by :func:`_fill_nonfinite_by_interp` (interpolation over
+    the finite samples, nearest-finite hold at the edges — see there for why
+    never a constant fill) and warned about. With fewer than two finite
+    samples there is nothing to interpolate between, so return ``None`` and
+    the caller falls back to fixed 35 PSU — a single finite sample must not
+    constant-fill the whole profile (and thereby beat a fully valid
+    conductivity channel). Mirrors the temperature path, which already
+    substitutes 10 degC and warns.
+
+    The stratification paths (:func:`_window_stratification_for_profile`,
+    :func:`_compute_slow_stratification`) do NOT route through this scrub:
+    they call :func:`_fill_nonfinite_by_interp` themselves (per cast on the
+    slow path) and build their own provenance notes. In particular their
+    measured (``SP_from_C``) salinity is not scrubbed — non-finite samples
+    there are masked per window inside the stratification code.
     """
     import numpy as np
 
@@ -1276,19 +1400,30 @@ def _scrub_salinity(sal, label: str, src: str, fallback: str = "using fixed 35 P
     if finite.all():
         return sal
     if not finite.any():
-        logger.warning("%s salinity from %s is entirely non-finite; %s", label, src, fallback)
+        logger.warning(
+            "%s salinity from %s is entirely non-finite; using fixed 35 PSU", label, src
+        )
         return None
+    filled = _fill_nonfinite_by_interp(sal)
+    if filled is None:
+        logger.warning(
+            "%s salinity from %s has a single finite sample (non-finite otherwise; "
+            "nothing to interpolate between); using fixed 35 PSU",
+            label,
+            src,
+        )
+        return None
+    out, n_interp, n_held = filled
     logger.warning(
-        "%s salinity from %s has %d/%d non-finite sample(s); filling by "
-        "interpolation over the finite samples (nearest-finite hold at the edges)",
+        "%s salinity from %s has %d/%d non-finite sample(s); filled by "
+        "interpolation over the finite samples (%d interpolated, %d edge-held)",
         label,
         src,
-        int((~finite).sum()),
+        n_interp + n_held,
         sal.size,
+        n_interp,
+        n_held,
     )
-    idx = np.arange(sal.size, dtype=np.float64)
-    out = sal.copy()
-    out[~finite] = np.interp(idx[~finite], idx[finite], sal[finite])
     return out
 
 
@@ -2059,8 +2194,9 @@ def process_file(
                                     ],
                                     drop_action=qc_drop_action,
                                 )
-                            # Derived mixing quantities (Gamma, K_T, K_rho)
-                            # with real salinity from the profile's own C/T/P
+                            # Derived mixing quantities (Gamma, K_T, K_rho);
+                            # N2 salinity per stratification.salinity (own
+                            # C/T/P by default, or fixed/hotel-injected)
                             if chi_cfg.get("mixing", True):
                                 mix_eps = (
                                     diss_ds if diss_ds is not None else xr.open_dataset(diss_path)

@@ -147,9 +147,11 @@ DEFAULTS: dict[str, dict] = {
         "spectrum_model": "kraichnan",
         "salinity": None,
         "mixing": True,  # Derived mixing quantities (N2, dTdz,
-        # K_T, Gamma, K_rho) on the chi grid,
-        # with salinity from the profile's own
-        # C/T/P (TEOS-10).
+        # K_T, Gamma, K_rho) on the chi grid.
+        # N2 salinity follows
+        # stratification.salinity: the profile's
+        # own C/T/P (TEOS-10) by default, or a
+        # fixed value / hotel-injected channel.
         "chi_minimum": 1.0e-13,
         "spectral_qc": True,  # Soft fom + K_max_ratio QC on chiMean
         # (hence K_T/Gamma), matching the rsi

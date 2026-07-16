@@ -64,14 +64,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   so the earlier "outside CTD coverage" description of this failure mode was
   wrong.) Both stratification consumers now scrub the salinity: non-finite
   samples are filled by **interpolation over the finite samples**
-  (nearest-finite hold at the edges), an entirely non-finite channel falls
-  through to conductivity/35 PSU, and the N² `comment` records exactly what
-  was used ("N/M non-finite salinity samples interpolated/held" / "hotel
-  channel 'x' entirely non-finite"). The slow-grid N² comment also no longer
-  claims the salinity came "from the profile's own C/T/P" when it did not.
-  The viscosity path's scrub switches from a whole-profile **median** fill to
-  the same interpolation fill: N² is first-order in dS/dz, so a constant fill
-  would insert a spurious salinity step at every fill boundary (spurious N² ~
+  (nearest-finite hold at the edges) — **per cast** on the slow-grid path,
+  because interpolating across a cast boundary would blend one cast's deep
+  salinity toward the next cast's shallow values and fabricate a wrong-sign
+  within-cast dS/dz (collapsing N² near the boundary). A channel — or a cast
+  slice — with **fewer than two finite samples** falls through to
+  conductivity/35 PSU (the hotel merge's own <2-finite convention; a single
+  sample must not constant-fill a profile and beat a valid conductivity
+  channel). The N² `comment` records exactly what was used: interpolated vs
+  edge-held counts ("N/M non-finite salinity samples interpolated", "N/M edge
+  samples held at the nearest finite value; N2 approaches temperature-only
+  where held") or the fallback reason ("hotel channel 'x' entirely
+  non-finite"). The slow-grid N² comment also no longer claims the salinity
+  came "from the profile's own C/T/P" when it did not. The viscosity path's
+  scrub switches from a whole-profile **median** fill to the same
+  interpolation fill: N² is first-order in dS/dz, so a constant fill would
+  insert a spurious salinity step at every fill boundary (spurious N² ~
   g·β·ΔS/Δz, orders above thermocline values, and Thorpe sorting keeps it);
   for viscosity the difference is negligible.
 - **`rsi-tpw patch-template`** now scaffolds *every* per-channel calibration

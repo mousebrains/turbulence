@@ -190,15 +190,18 @@ class TestHotelSalinityResolution:
         # stratification path, which shares this scrub).
         import xarray as xr
 
-        S = np.array([32.0, np.nan, 32.4, np.nan, 32.2])
+        # Values chosen so interp and the (retired) median differ at EVERY
+        # asserted index: median of {32.0, 32.8, 32.2} is 32.2, while interp
+        # gives 32.4 and 32.5.
+        S = np.array([32.0, np.nan, 32.8, np.nan, 32.2])
         path = tmp_path / "prof.nc"
         ds = xr.Dataset({"t_slow": ("time_slow", np.arange(5.0)), "salinity": ("time_slow", S)})
         ds.to_netcdf(path)
         with caplog.at_level(logging.WARNING):
             out = _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "chi")
         assert np.isfinite(out).all()
-        assert out[1] == pytest.approx(0.5 * (32.0 + 32.4))  # interp between neighbors
-        assert out[3] == pytest.approx(0.5 * (32.4 + 32.2))
+        assert out[1] == pytest.approx(0.5 * (32.0 + 32.8))  # interp between neighbors
+        assert out[3] == pytest.approx(0.5 * (32.8 + 32.2))
         assert "non-finite" in caplog.text
         assert "interpolation" in caplog.text
 
@@ -227,6 +230,22 @@ class TestHotelSalinityResolution:
             out = _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "chi")
         assert out is None  # -> fixed 35 PSU downstream
         assert "non-finite" in caplog.text
+
+    def test_resolve_single_finite_sample_falls_back_to_none(self, tmp_path, caplog):
+        # A single finite sample would constant-fill the whole profile (and
+        # beat a fully valid conductivity channel); treat it like
+        # all-non-finite — the hotel merge's _interp_one uses the same
+        # <2-finite convention.
+        import xarray as xr
+
+        S = np.array([np.nan, 32.0, np.nan, np.nan])
+        path = tmp_path / "prof.nc"
+        ds = xr.Dataset({"t_slow": ("time_slow", np.arange(4.0)), "salinity": ("time_slow", S)})
+        ds.to_netcdf(path)
+        with caplog.at_level(logging.WARNING):
+            out = _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "chi")
+        assert out is None  # -> fixed 35 PSU downstream
+        assert "single finite sample" in caplog.text
 
     def test_profile_channel_salinity_rejects_wrong_length(self, tmp_path, caplog):
         # A variable matching the hotel name but on neither the slow nor fast
@@ -418,7 +437,85 @@ class TestComputeSlowStratification:
             N2_gap[finite_true], N2_true[finite_true], rtol=1e-6
         )
         assert "salinity from hotel channel 'salinity'" in note
-        assert "100/400 non-finite salinity samples interpolated/held" in note
+        assert "per-cast scrub: 100/400 non-finite salinity samples interpolated" in note
+
+    def test_two_cast_boundary_gap_scrubbed_per_cast(self):
+        """A NaN gap straddling a cast boundary must be filled PER CAST
+        (edge-hold within each cast), never by index-space interpolation
+        across the inter-cast span — that would blend cast-1's deep salinity
+        toward cast-2's shallow salinity, fabricating a wrong-sign within-cast
+        dS/dz and collapsing N2 in the cast-1 tail."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n_cast, n_gap = 390, 20
+        P1 = np.linspace(1.0, 50.0, n_cast)
+        P = np.concatenate([P1, np.linspace(50.0, 1.0, n_gap), P1])
+        T = 20.0 - 0.1 * P
+        S_true = 31.0 + 0.05 * P
+        casts = [(0, n_cast - 1), (n_cast + n_gap, len(P) - 1)]
+
+        # Gap straddling the boundary: cast-1 tail + inter-cast + cast-2 head.
+        S_gap = S_true.copy()
+        S_gap[300:501] = np.nan
+
+        # What a correct per-cast fill produces: the non-finite samples are all
+        # leading/trailing within their own cast, so each cast holds the
+        # nearest finite value of ITS OWN cast (no cross-boundary blending).
+        S_held = S_true.copy()
+        S_held[300:410] = S_true[299]  # cast-1 tail (inter-cast span unused)
+        S_held[410:501] = S_true[501]  # cast-2 head
+
+        def run(S):
+            pf = MagicMock()
+            pf.channels = {"P": P, "JAC_T": T, "salinity": S}
+            pf.is_fast = lambda name: False
+            return _compute_slow_stratification(pf, casts, "JAC_T", "JAC_C", 2.0, "hotel")
+
+        N2_true, _, _ = run(S_true)
+        N2_gap, _, note = run(S_gap)
+        N2_held, _, _ = run(S_held)
+
+        # Exactly per-cast semantics: the gap run equals the manually-held run.
+        np.testing.assert_allclose(N2_gap, N2_held, equal_nan=True)
+        # No wrong-sign dS/dz / N2 collapse in the cast-1 tail: with the held
+        # (constant) salinity and cooling-downward T the tail stays stably
+        # stratified (N2 > 0), just closer to temperature-only than the truth.
+        tail = slice(310, 385)
+        m = np.isfinite(N2_true[tail]) & np.isfinite(N2_gap[tail])
+        assert m.any()
+        assert np.all(N2_gap[tail][m] > 0)
+        assert "per-cast scrub" in note
+        assert "edge samples held at the nearest finite value" in note
+        assert "N2 approaches temperature-only where held" in note
+
+    def test_cast_with_too_few_finite_hotel_samples_falls_back(self):
+        """A cast whose hotel salinity slice has <2 finite samples falls back
+        to conductivity for THAT cast (recorded in the note) instead of being
+        constant-filled from a single sample or silently dropped."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n_cast, n_gap = 390, 20
+        P1 = np.linspace(1.0, 50.0, n_cast)
+        P = np.concatenate([P1, np.linspace(50.0, 1.0, n_gap), P1])
+        T = 20.0 - 0.1 * P
+        C = np.full(len(P), 45.0)
+        S = 31.0 + 0.05 * P
+        S[n_cast + n_gap :] = np.nan  # cast 2 entirely non-finite
+        casts = [(0, n_cast - 1), (n_cast + n_gap, len(P) - 1)]
+        pf = MagicMock()
+        pf.channels = {"P": P, "JAC_T": T, "JAC_C": C, "salinity": S}
+        pf.is_fast = lambda name: False
+
+        N2, _, note = _compute_slow_stratification(pf, casts, "JAC_T", "JAC_C", 2.0, "hotel")
+        pf_cond = MagicMock()
+        pf_cond.channels = {"P": P, "JAC_T": T, "JAC_C": C}
+        pf_cond.is_fast = lambda name: False
+        N2_cond, _, _ = _compute_slow_stratification(pf_cond, casts, "JAC_T", "JAC_C", 2.0)
+
+        sl2 = slice(n_cast + n_gap, len(P))
+        np.testing.assert_allclose(N2[sl2], N2_cond[sl2], equal_nan=True)
+        assert np.isfinite(N2[sl2]).any()  # cast 2 not dropped
+        assert "1 cast(s) with <2 finite hotel samples fell back to conductivity/35 PSU" in note
 
     def test_hotel_all_nan_falls_back_to_conductivity_with_note(self):
         """Case (b): an all-NaN hotel channel (e.g. <2 finite source samples in
@@ -592,7 +689,28 @@ class TestAttachWindowStratification:
         np.testing.assert_allclose(N2_gap, N2_true, rtol=1e-6)
         assert note_true == "salinity from hotel channel 'salinity'"
         assert "salinity from hotel channel 'salinity'" in note_gap
-        assert "100/400 non-finite salinity samples interpolated/held" in note_gap
+        assert "100/400 non-finite salinity samples interpolated" in note_gap
+        assert "held" not in note_gap  # interior gap: interpolated, nothing edge-held
+
+    def test_hotel_edge_held_zone_noted_as_temperature_only(self, tmp_path):
+        """Leading/trailing non-finite salinity is edge-held (constant S -> no
+        salinity gradient there), and the note must flag that N2 approaches
+        temperature-only in the held zone."""
+        from odas_tpw.perturb.pipeline import _window_stratification_for_profile
+
+        n = 200
+        P = np.linspace(1.0, 50.0, n)
+        S = 31.0 + 0.05 * P
+        S[:50] = np.nan  # leading zone: held at the first finite value
+        prof = tmp_path / "prof_edge.nc"
+        self._hotel_profile_nc(prof, S)
+        out = _window_stratification_for_profile(
+            prof, np.array([10.0, 50.0, 90.0]), 5.0, "JAC_T", "JAC_C", "p.nc", "hotel"
+        )
+        N2, _, note = out
+        assert np.isfinite(N2).any()
+        assert "50/200 edge samples held at the nearest finite value" in note
+        assert "N2 approaches temperature-only where held" in note
 
     def test_hotel_all_nan_falls_back_to_conductivity_with_note(self, tmp_path):
         """Case (b): an all-NaN hotel channel must not NaN out every mixing
@@ -1233,7 +1351,7 @@ class TestProcessFile:
         assert "N2" in mock_pf.channel_info
         comment = mock_pf.channel_info["N2"]["comment"]
         assert "salinity from hotel channel 'salinity'" in comment
-        assert "100/400 non-finite salinity samples interpolated/held" in comment
+        assert "per-cast scrub: 100/400 non-finite salinity samples interpolated" in comment
         assert "profile's own C/T/P" not in comment
 
     @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
