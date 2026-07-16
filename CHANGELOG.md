@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
-- **Flight-model glide angle now ADDS the angle of attack** (issue #131 M6).
+- **Flight-model glide angle now ADDS the angle of attack** (issue #131 M7).
   `speed.method: "flight"` computed `U = |W| / sin(|pitch| − aoa)`; steady-glide
   force balance (Merckelbach et al. 2010) and the ODAS reference
   (`odas_p2mat.m`: `glide_angle = abs(Incl_Y) + aoa`) both make the glide path

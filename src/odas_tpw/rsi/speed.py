@@ -200,7 +200,7 @@ def _flight_model_slow(
     odas_p2mat.m computes glide_angle = abs(Incl_Y) + aoa. An earlier
     version here SUBTRACTED aoa, inflating U by sin(|pitch|+aoa)/
     sin(|pitch|-aoa) (1.24x at 26 deg pitch) and, through epsilon's
-    ~U^-4 leverage, biasing epsilon ~2.4x low (issue #131 M6).
+    ~U^-4 leverage, biasing epsilon ~2.4x low (issue #131 M7).
     Roll does not enter the along-path relation (it rotates the body
     about the flight axis without changing the vertical velocity
     component); an earlier version multiplied by cos(roll), which
