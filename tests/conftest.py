@@ -1,12 +1,27 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Shared test fixtures."""
 
+import logging
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 TEST_DATA_DIR = Path(__file__).parent / "data"
+
+
+@pytest.fixture(autouse=True)
+def _reset_warning_capture():
+    """Reset logging.captureWarnings state after every test.
+
+    perturb's setup_root_logging/init_worker_logging enable capture; pytest's
+    per-test warnings context then restores ``warnings.showwarning`` WITHOUT
+    clearing logging's saved original, which would make every later
+    ``captureWarnings(True)`` call in the same process a silent no-op (an
+    order-dependent heisenbug). Disabling after each test clears that state.
+    """
+    yield
+    logging.captureWarnings(False)
 
 
 # ---------------------------------------------------------------------------

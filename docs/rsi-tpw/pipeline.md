@@ -89,6 +89,35 @@ rsi-tpw chi VMP/*.p --spectrum-model batchelor -o chi/
 
 See [chi_mathematics.md](../chi_mathematics.md) for the mathematical details.
 
+## Cross-probe consistency diagnostics
+
+With two or more shear probes (or FP07s), every per-profile epsilon/chi dataset
+carries an observational cross-probe consistency diagnostic (issue #131):
+per-pair global attributes `probe_ratio_pairs`, `probe_ratio_median` (read back from NetCDF, single-pair values are scalars,
+multi-pair values arrays — use `np.atleast_1d`) (median
+first/second-probe ratio over the windows where both are finite),
+`n_ratio_windows`, and `probe_ratio_z` (significance of the median ln-ratio
+given the Lueck 2022 per-window `sigma_ln`; the chi product uses a `chi_`
+prefix). A two-tier `logging` warning fires on persistent disagreement:
+
+- **statistical** — `z > 3` with at least 20 windows (catches offsets that are
+  small but statistically unambiguous — a 1.2-1.3x systematic pair offset needs
+  deployment-scale window counts (or low per-window sigma) to reach z>3;
+- **practical** — median ratio beyond **1.8x** in either direction with at
+  least 10 windows (calibration-scale offsets, regardless of formal
+  significance — per-window QC like `fom` can look perfect while one probe
+  reads 1000x the other).
+
+Nothing is auto-dropped — the metric exists because per-window QC cannot see a
+*persistent* systematic offset. On this rsi path it is computed at the dataset
+build over **all** finite windows (no fom/FM cut has been applied at that
+stage).
+
+> **Note:** these attrs live on the per-profile epsilon/chi files only. Depth
+> binning and the combine stage rebuild global attributes from a schema, so the
+> diagnostic does **not** survive into binned or combined products — read it
+> from the per-profile files (or the log).
+
 ## Output Directory Management
 
 The stage subcommands (`prof`, `eps`, `chi`) use a sequential, hash-tracked output naming scheme (`eps_00/`, `eps_01/`, ...) that automatically deduplicates runs with identical parameters. (The `pipeline` subcommand writes its `{pfile_stem}/profile_NNN/` tree directly into the given output directory instead.) Each hash-tracked output directory contains:

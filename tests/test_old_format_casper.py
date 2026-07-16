@@ -367,14 +367,21 @@ type = accel
         data = load_channels(pf)
         assert [name for name, _ in data["accel"]] == ["Ax", "Ay"]
 
-    def test_real_accel_stays_acc(self, tmp_path):
+    def test_real_accel_mixed_hardware(self, tmp_path):
+        """Mixed hardware: Ax accel(0,1)→piezo alongside a genuinely
+        calibrated Ay accel. The vibration stack is the union of both
+        (Goodman must keep every coherent reference), name-sorted, with the
+        ACC label because a true accelerometer is present."""
         pf = PFile(self._make_vib_file(tmp_path, real_accel=True))
+        assert pf.channel_info["Ax"] == {"units": "counts", "type": "piezo"}
         assert pf.channel_info["Ay"] == {"units": "m_s-2", "type": "accel"}
 
-        # A true DC-response accelerometer still wins the ACC route.
         l1 = pfile_to_l1data(pf, speed=0.5)
         assert l1.vib_type == "ACC"
-        assert l1.n_vib == 1
+        assert l1.n_vib == 2
+        # Deterministic name-sorted order: row 0 = Ax (piezo), row 1 = Ay.
+        np.testing.assert_array_equal(l1.vib[0], pf.channels["Ax"])
+        np.testing.assert_array_equal(l1.vib[1], pf.channels["Ay"])
 
     @pytest.mark.skipif(not SN479_FILE.exists(), reason="SN479_0006.p test data not available")
     def test_sn479_adapter_vib(self):

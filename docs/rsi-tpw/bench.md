@@ -113,6 +113,13 @@ See the [`rsi-tpw bench` section of the CLI reference](cli.md#rsi-tpw-bench) for
 the full flag list (`-o/--output`, `--show`, `--sn`, `--fft-sec`, `--dpi`,
 `--format`).
 
+## Exit code
+
+Per-file errors (an unreadable or corrupt `.p`) are reported without aborting
+the batch, and the process exits **1** when any file failed, 0 otherwise — so
+scripts can gate on it. Checklist FAIL/REVIEW verdicts are findings for a
+human, not process errors, and do not affect the exit code.
+
 ## References
 
 - ODAS `quick_bench.m` (Rockland Scientific ODAS MATLAB Library v4.5.1).

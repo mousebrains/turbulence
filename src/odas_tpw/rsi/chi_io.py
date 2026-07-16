@@ -14,6 +14,7 @@ detection, and file-level orchestration.
 from __future__ import annotations
 
 import functools
+import logging
 import re
 import warnings
 from datetime import UTC, datetime
@@ -24,14 +25,32 @@ import numpy as np
 import numpy.typing as npt
 import xarray as xr
 
+from odas_tpw.rsi.dissipation import DOF_NUTTALL
+
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
+
+logger = logging.getLogger(__name__)
 
 # Max acceptable epsilon FM (Lueck 2022 MAD-based reject statistic; a good fit
 # sits near ~0.7-0.8, NOT 0, ATOMIX rejects FM > ~1.15) for including a probe in the Method-1
 # mean. Named for FM, not the variance-ratio `fom` (centered on 1.0) it gates
 # only as a fallback when FM is absent. (matches compute_chi_window's default.)
 _EPS_FM_LIMIT = 1.15
+
+# Generic RSI differentiator gain, used only when neither the .p config nor
+# per-profile NetCDF attributes carry the channel's real value. Real
+# instruments differ (SN479: T1_dT1 diff_gain=0.912, T2_dT2 0.920), so the
+# fallback is provably wrong there — hence the m8 attr round-trip below.
+_DEFAULT_DIFF_GAIN = 0.94
+
+# Exactly the keys _extract_therm_cal can produce (after its g->gain and
+# t_0->T_0 renames). extract_profiles writes these (when present in the .p
+# config), plus ``diff_gain``, as float variable attrs on each T*_dT*
+# per-profile variable, and the NetCDF branch of _load_therm_channels reads
+# the same keys back (#131 m8, single source of truth). 'b' is included on
+# purpose: noise_thermchannel's eta term consumes it.
+THERM_CAL_ATTR_KEYS = ("e_b", "b", "gain", "beta_1", "beta_2", "adc_fs", "adc_bits", "T_0")
 
 
 def _compute_chi(
@@ -41,7 +60,10 @@ def _compute_chi(
     diss_length: int | None = None,
     overlap: int | None = None,
     speed: float | None = None,
+    speed_method: str | None = None,
+    aoa_deg: float = 3.0,
     direction: str = "auto",
+    W_min: float | None = None,
     fp07_model: str = "single_pole",
     goodman: bool = True,
     f_AA: float = 98.0,
@@ -54,6 +76,13 @@ def _compute_chi(
     _pre_loaded: dict[str, Any] | None = None,
 ) -> list[xr.Dataset]:
     """Compute chi from temperature gradient spectra (internal, no deprecation warning).
+
+    ``speed_method`` selects the through-water speed model (``None`` /
+    ``"pressure"`` = historical |dP/dt|; ``"em"`` = U_EM flowmeter;
+    ``"flight"`` = inviscid flight model with angle of attack ``aoa_deg``),
+    mutually exclusive with a fixed ``speed``. ``W_min`` is the
+    profile-detection fall-rate floor [dbar/s]; ``None`` resolves it from
+    the vehicle direction (0.3 free-fall, 0.05 glide/horizontal).
 
     ``temperature`` selects the reference-temperature source for viscosity /
     kappa_T and ``T_mean``: ``"auto"`` (first plausible of T1..Tn, T, JAC_T),
@@ -78,6 +107,7 @@ def _compute_chi(
     from odas_tpw.chi.l4_chi import process_l4_chi_epsilon, process_l4_chi_fit
     from odas_tpw.rsi.helpers import (
         _build_l1data_from_channels,
+        _validate_speed_selection,
         prepare_profiles,
         resolve_measured_salinity,
     )
@@ -88,6 +118,8 @@ def _compute_chi(
         diss_length = 4 * fft_length
     if overlap is None:
         overlap = diss_length // 2
+    # Fail fast (before any file access); prepare_profiles re-validates.
+    _validate_speed_selection(speed, speed_method)
 
     # Validate the salinity form BEFORE any file access so a bad string fails
     # fast; "measured" itself is resolved after the channels are loaded.
@@ -120,7 +152,7 @@ def _compute_chi(
 
     therm_names = [t[0] for t in data["therm"]]
     n_therm = len(therm_names)
-    diff_gains = data.get("diff_gains", [0.94] * n_therm)
+    diff_gains = data.get("diff_gains", [_DEFAULT_DIFF_GAIN] * n_therm)
     therm_cal = data.get("therm_cal", [{}] * n_therm)
 
     if n_therm == 0:
@@ -136,7 +168,19 @@ def _compute_chi(
     from odas_tpw.rsi.vehicle import resolve_direction
 
     direction = resolve_direction(direction, vehicle)
-    prepared = prepare_profiles(data, speed, direction, salinity, vehicle=vehicle)
+    # prepare_profiles owns the speed precedence (fixed speed > em/flight
+    # method > precomputed speed_fast > pressure) and stamps speed_source/
+    # speed_method into data["metadata"] accordingly.
+    prepared = prepare_profiles(
+        data,
+        speed,
+        direction,
+        salinity,
+        vehicle=vehicle,
+        W_min=W_min,
+        speed_method=speed_method,
+        aoa_deg=aoa_deg,
+    )
     if prepared is None:
         return []
     (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, _fs_slow, ratio, t_fast) = (
@@ -164,7 +208,7 @@ def _compute_chi(
 
     grad_func, _ = _spectrum_func(spectrum_model)
 
-    results = []
+    results: list[xr.Dataset] = []
     for s_slow, e_slow in profiles_slow:
         s_fast = s_slow * ratio
         e_fast = min((e_slow + 1) * ratio, len(t_fast))
@@ -219,6 +263,12 @@ def _compute_chi(
                 f_AA=f_AA,
             )
 
+        # Goodman DOF loss (#131 m9): each coherently-removed vibration signal
+        # costs one FFT segment of DOF (Lueck 2022b), mirroring the epsilon
+        # dof_spec in dissipation.py.  Gated exactly like l3_chi's do_goodman
+        # (goodman requested AND vibration channels present).
+        n_v = l2_chi.n_vib if (goodman and l2_chi.n_vib > 0) else 0
+
         # Build output dataset
         ds = _build_chi_ds_from_pipeline(
             l3_chi,
@@ -234,6 +284,7 @@ def _compute_chi(
             f_AA=f_AA,
             grad_func=grad_func,
             chi_method=l4_chi.method,
+            n_v=n_v,
         )
         ds.attrs.update(data["metadata"])
         ds.attrs["history"] = f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
@@ -248,6 +299,37 @@ def _compute_chi(
                 "axis": "T",
             }
         )
+
+        # Cross-probe consistency diagnostic (issue #131): chi_-prefixed
+        # per-pair median chi ratio + significance attrs, mirroring the diss
+        # build.  sigma_ln uses epsilon_T for the Kolmogorov length (the
+        # mk_chi_mean convention).  Computed over ALL finite windows (no fom
+        # cut at this stage); the attrs do not survive binning/combo.
+        if n_therm >= 2:
+            from odas_tpw.processing.probe_consistency import (
+                annotate_probe_consistency,
+                lueck_ln_sigma,
+            )
+
+            sigma_ln = lueck_ln_sigma(
+                l4_chi.epsilon_T,
+                l3_chi.nu,
+                l3_chi.pspd_rel,
+                diss_length,
+                fs_fast,
+                l4_chi.var_resolved,
+            )
+            src_name = Path(str(data["metadata"].get("source", ""))).name
+            annotate_probe_consistency(
+                ds,
+                l4_chi.chi,
+                sigma_ln,
+                therm_names,
+                quantity="chi",
+                attr_prefix="chi_",
+                context=f"{src_name} profile {len(results) + 1}",
+            )
+
         results.append(ds)
 
     return results
@@ -508,14 +590,21 @@ def _build_chi_ds_from_pipeline(
     f_AA: float,
     grad_func,
     chi_method: str = "epsilon",
+    n_v: int = 0,
 ) -> xr.Dataset:
-    """Build old-format xr.Dataset from L3ChiData + L4ChiData."""
+    """Build old-format xr.Dataset from L3ChiData + L4ChiData.
+
+    ``n_v`` is the number of Goodman-removed vibration signals (0 when
+    Goodman did not run); each costs one FFT segment of spectral DOF
+    (Lueck 2022b), so ``dof_spec`` here matches the epsilon convention in
+    ``dissipation.py`` rather than ODAS's uncorrected ``1.9*num_of_ffts``.
+    """
     n_spec = l3_chi.n_spectra
     n_freq = l3_chi.n_wavenumber
 
-    # DOF
+    # DOF (Nuttall 1971 factor, minus the Goodman DOF loss — see docstring)
     num_ffts = 2 * (diss_length // fft_length) - 1
-    dof_spec = 1.9 * num_ffts
+    dof_spec = DOF_NUTTALL * max(num_ffts - n_v, 1)
 
     # Reconstruct fitted gradient spectra for the diagnostic overlay.
     spec_batch = _reconstruct_spec_batch(l3_chi, l4_chi, grad_func)
@@ -805,6 +894,31 @@ def _extract_therm_cal(ch_cfg: dict[str, Any]) -> dict[str, float]:
     return cal
 
 
+def _therm_gradient_config(config: dict[str, Any], name: str) -> tuple[float, dict[str, float]]:
+    """``(diff_gain, therm_cal)`` for a pre-emphasized T*_dT* channel.
+
+    ``diff_gain`` comes from the gradient channel's own config section; the
+    thermistor calibration comes from the base channel (T1 for T1_dT1) via
+    :func:`_extract_therm_cal`. Single source of truth (#131 m8 F7): the .p
+    branch of :func:`_load_therm_channels` and the per-profile NetCDF write
+    path (``profile._load_from_pfile``) both call this, so what
+    ``extract_profiles`` embeds as variable attrs is byte-for-byte what the
+    .p path computes.
+    """
+    ch_cfg: dict = next(
+        (ch for ch in config["channels"] if ch.get("name") == name),
+        {},
+    )
+    diff_gain = float(ch_cfg.get("diff_gain", _DEFAULT_DIFF_GAIN))
+    m = re.match(r"^(\w+)_d\1$", name)
+    base_name = m.group(1) if m else name
+    base_cfg: dict = next(
+        (ch for ch in config["channels"] if ch.get("name") == base_name),
+        {},
+    )
+    return diff_gain, _extract_therm_cal(base_cfg)
+
+
 def _load_therm_channels(
     source: PFile | str | Path,
     temperature_name: str | float = "auto",
@@ -817,6 +931,12 @@ def _load_therm_channels(
     ``temperature_name``/``conductivity_name`` select the slow reference
     temperature / conductivity channels (see :func:`load_channels`); they do
     not affect the fast thermistor-gradient channels gathered here.
+
+    ``diff_gains``/``therm_cal`` come from the .p config for PFile sources
+    and from the per-profile variable attrs written by ``extract_profiles``
+    for NetCDF sources (#131 m8); a NetCDF file without those attrs (written
+    before their introduction) falls back to the generic defaults with a
+    logged warning.
     """
     from odas_tpw.rsi.helpers import load_channels
     from odas_tpw.rsi.p_file import PFile
@@ -846,21 +966,12 @@ def _load_therm_channels(
         for name in sorted(pf._fast_channels):
             if DT_PATTERN.match(name):
                 therm.append((name, pf.channels[name]))
-                # Get diff_gain from config
-                ch_cfg: dict = next(
-                    (ch for ch in pf.config["channels"] if ch.get("name") == name),
-                    {},
-                )
-                dg = ch_cfg.get("diff_gain", "0.94")
-                diff_gains.append(float(dg))
-                # Extract calibration from base channel (T1 for T1_dT1)
-                m = re.match(r"^(\w+)_d\1$", name)
-                base_name = m.group(1) if m else name
-                base_cfg: dict = next(
-                    (ch for ch in pf.config["channels"] if ch.get("name") == base_name),
-                    {},
-                )
-                therm_cal.append(_extract_therm_cal(base_cfg))
+                # diff_gain from the gradient channel's config; thermistor
+                # calibration from the base channel (T1 for T1_dT1). Shared
+                # with the per-profile NetCDF write path (#131 m8 F7).
+                dg, cal = _therm_gradient_config(pf.config, name)
+                diff_gains.append(dg)
+                therm_cal.append(cal)
 
         # If no pre-emphasized channels, use T channels with first-difference
         if not therm:
@@ -869,36 +980,75 @@ def _load_therm_channels(
                     # Compute gradient via first-difference
                     T_data = pf.channels[name]
                     therm.append((name, T_data))
-                    diff_gains.append(0.94)
-                    ch_cfg = next(
+                    diff_gains.append(_DEFAULT_DIFF_GAIN)
+                    ch_cfg: dict = next(
                         (ch for ch in pf.config["channels"] if ch.get("name") == name),
                         {},
                     )
                     therm_cal.append(_extract_therm_cal(ch_cfg))
     else:
-        # NetCDF source — look for gradient channels or T channels
+        # NetCDF source — look for gradient channels or T channels.
+        # _nc_filled: masked _FillValue samples become NaN, never the raw
+        # ~9.97e36 fill buffer (see _channels_from_nc).
         import netCDF4 as nc
 
         from odas_tpw.rsi.helpers import DT_PATTERN, T_PATTERN
+        from odas_tpw.rsi.profile import _nc_filled
 
+        assert not isinstance(source, PFile)  # pf is None only for path sources
         ds = nc.Dataset(str(source), "r")
+
+        # Per-profile files written by extract_profiles carry the FP07
+        # electronics coefficients as variable attrs (#131 m8): ``diff_gain``
+        # plus the THERM_CAL_ATTR_KEYS subset present in the .p config.
+        # NOTE: the attrs carry the FACTORY coefficients from the embedded
+        # config string; perturb's fp07 in-situ calibration may have rewritten
+        # the channel DATA before the per-profile file was written. That is
+        # correct here — the attrs describe the ELECTRONICS (noise floor and
+        # bilinear differentiator gain), and the factory coefficients still
+        # beat the generic defaults they replace.
+        missing_attr_vars: list[str] = []
+
+        def _read_therm_attrs(vname: str, var: Any) -> None:
+            attr_names = set(var.ncattrs())
+            if "diff_gain" in attr_names:
+                diff_gains.append(float(var.getncattr("diff_gain")))
+            else:
+                # Older per-profile file (pre-m8) — fall back, never silently.
+                diff_gains.append(_DEFAULT_DIFF_GAIN)
+                missing_attr_vars.append(vname)
+            therm_cal.append(
+                {k: float(var.getncattr(k)) for k in THERM_CAL_ATTR_KEYS if k in attr_names}
+            )
 
         for vname in sorted(ds.variables.keys()):
             var = ds.variables[vname]
-            if var.dimensions == ("time_fast",):
-                arr = var[:].data.astype(np.float64)
-                if DT_PATTERN.match(vname):
-                    therm.append((vname, arr))
-                    diff_gains.append(0.94)
+            # Union of PR #137 (masked samples -> NaN via _nc_filled) and
+            # PR #138 (embedded FP07 calibration attrs).
+            if var.dimensions == ("time_fast",) and DT_PATTERN.match(vname):
+                therm.append((vname, _nc_filled(var)))
+                _read_therm_attrs(vname, var)
 
         if not therm:
             for vname in sorted(ds.variables.keys()):
                 var = ds.variables[vname]
                 if var.dimensions == ("time_fast",) and T_PATTERN.match(vname):
-                    therm.append((vname, var[:].data.astype(np.float64)))
-                    diff_gains.append(0.94)
+                    therm.append((vname, _nc_filled(var)))
+                    _read_therm_attrs(vname, var)
 
         ds.close()
+
+        if missing_attr_vars:
+            logger.warning(
+                "%s: no FP07 calibration attributes on %s (per-profile file "
+                "predates their introduction); falling back to generic "
+                "diff_gain=%.2f and default thermistor coefficients — "
+                "re-extract profiles from the .p file to embed the factory "
+                "values",
+                Path(source).name,
+                ", ".join(missing_attr_vars),
+                _DEFAULT_DIFF_GAIN,
+            )
 
     data["therm"] = therm
     data["diff_gains"] = diff_gains

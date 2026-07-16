@@ -38,7 +38,7 @@ Controls how profiling segments are identified from pressure data.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `P_min` | float | `0.5` | Minimum pressure threshold [dbar]. Data below this pressure is excluded from profiles. |
-| `W_min` | float | `0.3` | Minimum fall rate [dbar/s]. Segments with fall rate below this are not considered part of a profile. |
+| `W_min` | float | `null` | Minimum fall rate [dbar/s]. Segments with fall rate below this are not considered part of a profile. `null` = auto: 0.3 for a free-falling profiler, 0.05 for glide/horizontal platforms (a glider's vertical rate never reaches the VMP-tuned 0.3). |
 | `direction` | string | `"auto"` | Profile direction: `"auto"`, `"up"`, `"down"`, `"glide"`, or `"horizontal"`. `"auto"` infers from the vehicle. |
 | `vehicle` | string | `null` | Vehicle type override (e.g. `"slocum_glider"`, `"vmp"`). If `null`, the vehicle is read from the `.p` file. |
 | `min_duration` | float | `7.0` | Minimum profile duration [seconds]. Profiles shorter than this are discarded. |
@@ -54,9 +54,12 @@ Controls computation of the turbulent kinetic energy dissipation rate (epsilon) 
 | `fft_length` | int | `1024` | FFT segment length in samples. At 512 Hz sampling, 1024 samples = 2.0 s. Determines the spectral resolution (df = fs / fft_length). |
 | `diss_length` | int | `null` | Dissipation estimate window length in samples. Each epsilon estimate uses this many samples. Default: `4 * fft_length`. |
 | `overlap` | int | `null` | Overlap between successive dissipation windows in samples. Default: `diss_length // 2` (50% overlap). |
-| `speed` | float | `null` | Fixed profiling speed [m/s]. If `null`, speed is computed from dP/dt (pressure rate of change). Use a fixed value when pressure data is unreliable. |
+| `speed` | float | `null` | Fixed profiling speed [m/s]. If `null`, speed follows `speed_method`. Use a fixed value when pressure data is unreliable. Mutually exclusive with `speed_method: em`/`flight`. |
+| `speed_method` | string | `null` | Through-water speed model: `null`/`"pressure"` = \|dP/dt\| (the historical default; correct for a free-falling profiler, biased for gliders); `"em"` = the `U_EM` flowmeter channel; `"flight"` = the inviscid glider flight model \|W\|/sin(\|pitch\|−aoa) from the inclinometers. An explicit `"pressure"` forces \|dP/dt\| even when the source carries a precomputed `speed_fast` channel; `null` prefers that channel. The resolved provenance is recorded in the products as `speed_source`. (The `hotel` speed method is perturb-only — its result arrives here as the precomputed `speed_fast` channel.) |
+| `aoa_deg` | float | `3.0` | Angle of attack [deg] for `speed_method: flight`. |
 | `direction` | string | `"auto"` | Profile direction: `"auto"`, `"up"`, `"down"`, `"glide"`, or `"horizontal"`. |
 | `vehicle` | string | `null` | Vehicle type override (e.g. `"slocum_glider"`, `"vmp"`). If `null`, the vehicle is read from the `.p` file. |
+| `W_min` | float | `null` | Profile-detection fall-rate floor [dbar/s]. `null` = auto (0.3 free-fall, 0.05 glide/horizontal). |
 | `goodman` | bool | `true` | Enable Goodman coherent noise removal using accelerometer cross-spectra. Removes vibration-coherent contamination from shear spectra. Disable with `--no-goodman` on the CLI. |
 | `f_AA` | float | `98.0` | Anti-aliasing filter cutoff frequency [Hz]. Spectral estimates above this frequency are excluded from variance integration. |
 | `f_limit` | float | `null` | Upper frequency limit [Hz] for spectral integration. If `null`, uses `f_AA`. Set lower to exclude high-frequency noise. |
@@ -78,9 +81,12 @@ Controls computation of the thermal variance dissipation rate (chi) from FP07 th
 | `fft_length` | int | `1024` | FFT segment length in samples. At 512 Hz, 1024 samples = 2.0 s. |
 | `diss_length` | int | `null` | Dissipation estimate window length in samples. Default: `4 * fft_length`. |
 | `overlap` | int | `null` | Overlap between successive dissipation windows in samples. Default: `diss_length // 2`. |
-| `speed` | float | `null` | Fixed profiling speed [m/s]. If `null`, computed from dP/dt. |
+| `speed` | float | `null` | Fixed profiling speed [m/s]. If `null`, speed follows `speed_method`. Mutually exclusive with `speed_method: em`/`flight`. |
+| `speed_method` | string | `null` | Through-water speed model (same semantics as the `epsilon` section). |
+| `aoa_deg` | float | `3.0` | Angle of attack [deg] for `speed_method: flight`. |
 | `direction` | string | `"auto"` | Profile direction: `"auto"`, `"up"`, `"down"`, `"glide"`, or `"horizontal"`. |
 | `vehicle` | string | `null` | Vehicle type override (e.g. `"slocum_glider"`, `"vmp"`). If `null`, the vehicle is read from the `.p` file. |
+| `W_min` | float | `null` | Profile-detection fall-rate floor [dbar/s]. `null` = auto (0.3 free-fall, 0.05 glide/horizontal). |
 | `fp07_model` | string | `"single_pole"` | FP07 thermistor transfer function model. `"single_pole"`: Lueck et al. 1977. `"double_pole"`: Gregg & Meagher 1980 (accounts for thermal boundary layer). |
 | `goodman` | bool | `true` | Enable Goodman coherent noise removal for temperature spectra. Disable with `--no-goodman` on the CLI. |
 | `f_AA` | float | `98.0` | Anti-aliasing filter cutoff frequency [Hz]. |
@@ -101,7 +107,8 @@ Controls computation of the thermal variance dissipation rate (chi) from FP07 th
 
 profiles:
   P_min: 0.5            # minimum pressure [dbar]
-  W_min: 0.3            # minimum fall rate [dbar/s]
+  W_min: null           # minimum fall rate [dbar/s] (null = auto: 0.3
+                        # free-fall, 0.05 glide/horizontal)
   direction: auto       # profile direction: auto, up, down, glide, horizontal
   vehicle: null         # vehicle override (null = from .p file)
   min_duration: 7.0     # minimum profile duration [s]
@@ -110,9 +117,14 @@ epsilon:
   fft_length: 1024      # FFT segment length [samples]
   diss_length: null     # dissipation window [samples] (null = 4 * fft_length)
   overlap: null         # window overlap [samples] (null = diss_length // 2)
-  speed: null           # profiling speed [m/s] (null = from dP/dt)
+  speed: null           # fixed profiling speed [m/s] (null = speed_method)
+  speed_method: null    # through-water speed model: null = pressure |dP/dt|;
+                        # em (U_EM flowmeter); flight (|W|/sin(|pitch|-aoa))
+  aoa_deg: 3.0          # angle of attack [deg] for speed_method: flight
   direction: auto       # profile direction: auto, up, down, glide, horizontal
   vehicle: null         # vehicle override (null = from .p file)
+  W_min: null           # minimum fall rate [dbar/s] (null = auto: 0.3
+                        # free-fall, 0.05 glide/horizontal)
   goodman: true         # Goodman coherent noise removal
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
   f_limit: null         # upper frequency limit [Hz] (null = f_AA)
@@ -131,9 +143,14 @@ chi:
   fft_length: 1024      # FFT segment length [samples]
   diss_length: null     # dissipation window [samples] (null = 4 * fft_length)
   overlap: null         # window overlap [samples] (null = diss_length // 2)
-  speed: null           # profiling speed [m/s] (null = from dP/dt)
+  speed: null           # fixed profiling speed [m/s] (null = speed_method)
+  speed_method: null    # through-water speed model: null = pressure |dP/dt|;
+                        # em (U_EM flowmeter); flight (|W|/sin(|pitch|-aoa))
+  aoa_deg: 3.0          # angle of attack [deg] for speed_method: flight
   direction: auto       # profile direction: auto, up, down, glide, horizontal
   vehicle: null         # vehicle override (null = from .p file)
+  W_min: null           # minimum fall rate [dbar/s] (null = auto: 0.3
+                        # free-fall, 0.05 glide/horizontal)
   fp07_model: single_pole  # FP07 transfer function: single_pole or double_pole
   goodman: true         # Goodman coherent noise removal
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
@@ -153,7 +170,9 @@ chi:
 In YAML, `null` means "not set." When a parameter is `null`:
 - **`diss_length`**: Computed as `4 * fft_length` for both epsilon and chi.
 - **`overlap`**: Computed as `diss_length // 2`.
-- **`speed`**: Derived from the pressure time series (dP/dt).
+- **`speed`**: Derived per `speed_method` (default: the pressure time series, dP/dt).
+- **`speed_method`**: The pressure method (\|dP/dt\|).
+- **`W_min`**: Resolved from the vehicle direction: 0.3 dbar/s for a free-falling profiler, 0.05 for glide/horizontal platforms.
 - **`f_limit`**: Uses `f_AA` as the upper frequency limit.
 - **`salinity`**: Uses a simplified viscosity formula assuming S = 35 PSU (visc35). Set an explicit salinity — or `"measured"` to derive it per sample from the conductivity/temperature channels — to use the full TEOS-10 equation of state via gsw.
 
