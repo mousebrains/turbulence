@@ -127,6 +127,63 @@ def test_parse_recal_due_rejects_prose_glued_to_stray_date():
     assert s2.cal_date == date(2024, 1, 2)
 
 
+# pypdf can glue the cal-date and recommendation lines into ONE extracted line
+# (P3, PR #136 review): the date BEFORE the label must feed cal_date and the
+# one AFTER it recal_due — never the whole-line first date as recal_due.
+GLUED_TEXT = """
+Probe SN: M9997
+Sensitivity (sens or S): 0.0812 V
+Calibration date: 2024/01/01 Recommended re-calibration: 2025/01/01
+"""
+
+
+def test_parse_glued_cal_and_recal_line():
+    s = sc.parse_sheet_text(GLUED_TEXT)
+    assert s.cal_date == date(2024, 1, 1)
+    assert s.recal_due == date(2025, 1, 1)
+
+
+def test_load_cal_dir_glued_line_not_falsely_stale(monkeypatch, tmp_path):
+    """End-to-end P3 pin: with the glued line, an observation the day after the
+    calibration must NOT be stale (recal_due = 2025-01-01, cal = 2024-01-01)."""
+    monkeypatch.setattr(sc, "extract_pdf_text", lambda p: GLUED_TEXT)
+    d = tmp_path / "sheets"
+    d.mkdir()
+    (d / "M9997_2024_01_01.pdf").write_bytes(b"%PDF-1.4\n")
+
+    tls, warns = sc.load_cal_dir(d)
+    assert warns == []
+    (pt,) = tls["M9997"].points
+    assert pt.date == date(2024, 1, 1)
+    assert pt.recal_due == date(2025, 1, 1)
+    assert tls["M9997"].sensitivity_at(date(2024, 1, 2))[3] is None  # NOT stale
+    # ... and staleness still engages once past the recommendation.
+    assert tls["M9997"].sensitivity_at(date(2025, 1, 2))[3] is not None
+
+
+def test_load_cal_dir_filename_fallback_reruns_recal_guard(monkeypatch, tmp_path):
+    """When cal_date only arrives via the filename fallback, the
+    recal_due <= cal_date mis-parse guard must be re-run there: parse_sheet_text
+    could not apply it without a text cal date (P3, PR #136 review)."""
+    text = (
+        "Probe SN: M9996\n"
+        "Sensitivity (sens or S): 0.08 V\n"
+        "Recommended re-calibration: 2024/01/01\n"  # no cal date in the TEXT
+    )
+    monkeypatch.setattr(sc, "extract_pdf_text", lambda p: text)
+    d = tmp_path / "sheets"
+    d.mkdir()
+    (d / "M9996_2024_01_01.pdf").write_bytes(b"%PDF-1.4\n")  # cal_date == recal_due
+
+    tls, warns = sc.load_cal_dir(d)
+    (pt,) = tls["M9996"].points
+    assert pt.date == date(2024, 1, 1)
+    assert pt.recal_due is None  # dropped as a mis-parse
+    assert any("ignored (mis-parse)" in w for w in warns)
+    # Falls back to the max-age staleness rule: one day after the cal is fresh.
+    assert tls["M9996"].sensitivity_at(date(2024, 1, 2))[3] is None
+
+
 def test_points_carry_recal_due_on_current_only():
     s = sc.parse_sheet_text(M1458_TEXT)
     by_date = {p.date: p for p in s.points()}
