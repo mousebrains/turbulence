@@ -23,8 +23,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   exempt). Note one deliberate side effect: the adapter's vibration routing is
   now type-based, so modern files whose Ax/Ay are declared `type = piezo`
   (e.g. SN479) report `vib_type = "VIB"` instead of `"ACC"` — harmonizing with
-  `p_to_netcdf`'s classification; the label is descriptive only and epsilon/chi
-  values are unchanged.
+  `p_to_netcdf`'s classification. On mixed hardware the vibration stack is the
+  name-sorted union of true accelerometers and piezo channels (labeled `ACC`),
+  so Goodman noise removal keeps every coherent reference; the label is
+  descriptive only and epsilon/chi values are unchanged.
 - **Salinity from a hotel file** — `epsilon.salinity`, `chi.salinity`, and the
   new `stratification.salinity` now accept `"hotel"` (or `"hotel:<var>"`) to draw
   practical salinity from a hotel-injected channel (default variable `salinity`),
