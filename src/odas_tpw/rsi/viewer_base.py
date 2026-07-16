@@ -7,11 +7,19 @@ drawing methods.  Subclasses define their panel layout by overriding
 ``_setup_axes`` and ``_draw``.
 """
 
+import warnings
+
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.widgets import Button
 
-from odas_tpw.rsi.helpers import AC_PATTERN, DT_PATTERN, SH_PATTERN, T_PATTERN
+from odas_tpw.rsi.helpers import (
+    AC_PATTERN,
+    DT_PATTERN,
+    SH_PATTERN,
+    T_PATTERN,
+    resolve_temperature_channel,
+)
 from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
 from odas_tpw.rsi.window import compute_chi_window, compute_eps_window
 from odas_tpw.scor160.despike import despike
@@ -444,7 +452,22 @@ class ProfileViewer:
                 self.temp_channels.append((name, pf.channels[name]))
 
         self.P = pf.channels["P"]
-        self.T = pf.channels.get("T1", pf.channels.get("T", np.zeros_like(self.P)))
+        # Reference temperature for the epsilon-preview viscosity: same QC'd
+        # resolver as the pipelines (auto = first plausible of T1..Tn, T,
+        # JAC_T). When nothing plausible exists the viewer must not crash;
+        # fall back to a 10 degC constant (the pipelines' NaN-temperature
+        # substitute) with a warning.
+        try:
+            _t_chan, _t_reason = resolve_temperature_channel(
+                pf.channels, len(pf.t_slow), "auto", pressure=self.P
+            )
+            self.T = pf.channels[_t_chan]
+        except ValueError as e:
+            warnings.warn(
+                f"{e}; using a 10 degC constant for the viewer's viscosity preview",
+                stacklevel=2,
+            )
+            self.T = np.full_like(self.P, 10.0)
         self.JAC_T = pf.channels.get("JAC_T", None)
         self.t_fast = pf.t_fast
         self.t_slow = pf.t_slow

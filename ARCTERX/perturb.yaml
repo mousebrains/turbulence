@@ -83,9 +83,10 @@ epsilon:
   despike_smooth: 0.5
   salinity: null               # null = fixed S=35 PSU (epsilon viscosity is NOT CTD-constrained)
   epsilon_minimum: 1.0e-13
-  T_source: null               # blends T1 and T2 for viscosity
-  T1_norm: 1.0
-  T2_norm: 1.0
+  T_source: null               # reference temperature for seawater properties
+                               # (serves epsilon AND chi): null/"auto" = first
+                               # plausible of T1, T2, ..., T, JAC_T; a channel
+                               # name; or a number = constant reference [degC]
 
 chi:
   enable: true
