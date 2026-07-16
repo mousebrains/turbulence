@@ -137,6 +137,21 @@ def compute_speed_for_pfile(
     if method == "flight":
         aoa_deg = float(cfg.get("aoa_deg", 3.0))
         min_pitch_deg = float(cfg.get("min_pitch_deg", 5.0))
+        # Reject implausible flight parameters up front: a negative aoa can
+        # drive the effective glide angle negative, and the resulting negative
+        # speed would be silently replaced by the 0.05 m/s cutout — a
+        # plausible-looking wrong answer for an accepted input. The physical
+        # attack angle is a small positive number (ODAS default 3 deg).
+        if not np.isfinite(aoa_deg) or aoa_deg < 0:
+            raise ValueError(
+                f"speed.aoa_deg={aoa_deg!r} is not valid: the angle of attack "
+                "must be a finite value >= 0 deg (ODAS Slocum default: 3)"
+            )
+        if not np.isfinite(min_pitch_deg) or min_pitch_deg < 0:
+            raise ValueError(
+                f"speed.min_pitch_deg={min_pitch_deg!r} is not valid: the "
+                "minimum pitch gate must be a finite value >= 0 deg"
+            )
         aq = cfg.get("amplitude_quantile") or (1.0, 99.0)
         speed_slow = _flight_model_slow(
             W_slow, pf, aoa_deg=aoa_deg, min_pitch_deg=min_pitch_deg,

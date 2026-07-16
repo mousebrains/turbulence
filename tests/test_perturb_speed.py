@@ -324,3 +324,36 @@ def test_speed_model_is_shared_not_duplicated():
     from odas_tpw.rsi.speed import compute_speed_for_pfile as rsi_fn
 
     assert perturb_fn is rsi_fn
+
+
+class TestFlightParameterValidation:
+    """#132 review [P3]: invalid aoa must error, not silently produce the
+    speed cutout (pitch=-30, aoa=-40 previously returned 0.05 m/s)."""
+
+    @pytest.mark.parametrize("bad_aoa", [-40.0, -0.1, float("nan"), float("inf")])
+    def test_invalid_aoa_raises(self, glider_with_incl, bad_aoa):
+        with pytest.raises(ValueError, match="aoa_deg"):
+            compute_speed_for_pfile(
+                glider_with_incl,
+                {"method": "flight", "aoa_deg": bad_aoa},
+                vehicle="slocum_glider",
+            )
+
+    @pytest.mark.parametrize("bad_gate", [-1.0, float("nan")])
+    def test_invalid_min_pitch_raises(self, glider_with_incl, bad_gate):
+        with pytest.raises(ValueError, match="min_pitch_deg"):
+            compute_speed_for_pfile(
+                glider_with_incl,
+                {"method": "flight", "aoa_deg": 3.0, "min_pitch_deg": bad_gate},
+                vehicle="slocum_glider",
+            )
+
+    def test_zero_aoa_is_valid(self, glider_with_incl):
+        speed, _ = compute_speed_for_pfile(
+            glider_with_incl,
+            {"method": "flight", "aoa_deg": 0.0},
+            vehicle="slocum_glider",
+        )
+        np.testing.assert_allclose(
+            np.median(speed[1000:-1000]), 0.5 / np.sin(np.deg2rad(30.0)), atol=0.02
+        )
