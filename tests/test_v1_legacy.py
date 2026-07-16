@@ -743,85 +743,178 @@ class TestV1RefusalGuards:
 # ---------------------------------------------------------------------------
 
 # Computed on the W7 integration base (main + #133 + #134 merges) BEFORE any
-# v1 work, via sha256(channel_array.tobytes())[:16]. None of these fixtures
-# carries sbt/sbc-type channels, so the new converters cannot move them.
-GOLDEN_V6_HASHES = {
-    "SN479_0006": {
-        "Ax": "a61d427617b6918d",
-        "Ay": "f95155be380604fe",
-        "Chlorophyll": "8f6de426dfb5c362",
-        "DO": "4f0cd67e10051f53",
-        "DO_T": "91f04f25c6bcb22b",
-        "Gnd": "dbd9fbfa4b22d3f1",
-        "Incl_T": "e5da6d1ac433be60",
-        "Incl_X": "86fe2ce2667efeef",
-        "Incl_Y": "a1fe378e076828d0",
-        "JAC_C": "20b55409f370c7d1",
-        "JAC_T": "93ca7dd6123e20f5",
-        "P": "62c511ab5fc327cf",
-        "PV": "384a5e055fdc1645",
-        "P_dP": "62c511ab5fc327cf",
-        "T1": "ec57f5d2d542a527",
-        "T1_dT1": "b1ae40c0abf510cf",
-        "T2": "5a739072c354307e",
-        "T2_dT2": "24f4ba20f2daa940",
-        "Turbidity": "d721e274eb51f15a",
-        "V_Bat": "82c684bcba5505e7",
-        "sh1": "b2f348fdeab765f6",
-        "sh2": "92c3001eb5bdb1df",
-    },
+# v1 work. Two layers, split by what is platform-stable:
+#  - RAW demuxed counts (deconvolve=False -> pure integer demux) hash exactly
+#    on every OS/Python: this pins the dispatch/record-tiling/demux surface
+#    the v1 work touches, bit-for-bit.
+#  - CONVERTED channels involve transcendental libm calls (thermistor log,
+#    Butterworth deconvolution) whose last-ulp differs across platforms, so
+#    exact hashes are NOT portable (they broke CI on ubuntu/windows). They
+#    are pinned instead by (nanmean, nanmin, nanmax) at rtol=1e-8 — platform
+#    noise is ~1e-15 relative, while any conversion regression (wrong
+#    coefficient, formula, channel routing) moves these far beyond 1e-8.
+# None of these fixtures carries sbt/sbc-type channels, so the new
+# converters cannot move them.
+GOLDEN_V6_RAW_HASHES = {
     "MR_SL435": {
-        "Ax": "862cdaf2b0556bdf",
-        "Ay": "8da7192fb79dbcf6",
-        "EMC_Cur": "8ee2bd803c6c6c8e",
-        "Gnd": "a93b0d91ca597e58",
-        "Incl_T": "e95eade6809608c3",
-        "Incl_X": "3e1484dc25c0b128",
-        "Incl_Y": "6f7ebc5744586e28",
-        "P": "26c58fc2f60e583a",
-        "PV": "cf2da47866cf44af",
-        "P_dP": "26c58fc2f60e583a",
-        "T1": "011369160998d579",
-        "T1_dT1": "0e6e0c9cdf1a99e0",
-        "T2": "bcffc31f135b2702",
-        "T2_dT2": "940750d3b8ef5890",
-        "U_EM": "842347c50f8333a8",
-        "V_Bat": "78a3b5c41de3796b",
-        "sh1": "121f054917d7b835",
-        "sh2": "4369b359b21c1dac",
+        "Ax": "596375b644308bd6",
+        "Ay": "76ee2f7bad34853e",
+        "EMC_Cur": "2f38651863e3cc02",
+        "Gnd": "a1acf47935d76283",
+        "Incl_T": "4d6dd2dfdd2ae3eb",
+        "Incl_X": "c060927bd9ede51d",
+        "Incl_Y": "357bdef3f4499c53",
+        "P": "597440b5cc5af030",
+        "PV": "be9d0104e15ee0d4",
+        "P_dP": "0be2c084d990fef1",
+        "T1": "b117abfef732d903",
+        "T1_dT1": "e29eae1d16aac372",
+        "T2": "12b20793b88f9a81",
+        "T2_dT2": "c9dd233e7a30d518",
+        "U_EM": "9d68b759bc5fc113",
+        "V_Bat": "146eb13f9240970b",
+        "sh1": "b3b8b218046ed064",
+        "sh2": "aeafcb2125b7c24f",
+    },
+    "SN479_0006": {
+        "Ax": "b7474f5f77b0415e",
+        "Ay": "1fa055a822117127",
+        "Chlorophyll": "4e0ec947b34248e7",
+        "DO": "bd88b978aaf3ed3f",
+        "DO_T": "c6a2d10a24c1b4d7",
+        "Gnd": "1ea50be7e8167463",
+        "Incl_T": "73fb39facf234d5b",
+        "Incl_X": "3deb4d44be616085",
+        "Incl_Y": "0e5f2b0c7c1fa934",
+        "JAC_C": "422b62fab62ec5ee",
+        "JAC_T": "5154654b928ab776",
+        "P": "b154c93ea3b9d9d8",
+        "PV": "34019042cb73934a",
+        "P_dP": "84b4ec973ee51c68",
+        "T1": "de915377413aa116",
+        "T1_dT1": "6a48e83ddde4bc8f",
+        "T2": "9befa5a08939d2ff",
+        "T2_dT2": "7908ff8dfee8e4d2",
+        "Turbidity": "028a41ea4f142e3d",
+        "V_Bat": "2875323333466b14",
+        "sh1": "86f5f0266590e67e",
+        "sh2": "cfbdbdbc275153d8",
     },
     "VMP142_bench": {
-        "Ax": "f30c93cd04db040d",
-        "Ay": "b4e644e20d9d4e02",
-        "Gnd": "51be6287dc7c573e",
-        "Incl_T": "b3ce9bf2afa25565",
-        "Incl_X": "26714cb5b7964f5c",
-        "Incl_Y": "69c6a375cba3efb8",
-        "JAC_C": "a6ecc2db3089703b",
-        "JAC_T": "fe351014dd41c00a",
-        "P": "f9a4dd36c8cd5bb1",
-        "PV": "df7d1ad0f905d869",
-        "P_dP": "f9a4dd36c8cd5bb1",
-        "T1": "d28affcc80485e0e",
-        "T1_dT1": "2e27e779538386de",
-        "T2": "56cf7f61cbf3e359",
-        "T2_dT2": "255fe622fc09ecef",
-        "V_Bat": "85923f4e93a27d58",
-        "sh1": "18d09bc85df4a7f1",
-        "sh2": "e2558f062dfe7eaf",
+        "Ax": "bce7385cdb2add1b",
+        "Ay": "f5e6f5c04aa75308",
+        "Gnd": "c10dbfc803f2d291",
+        "Incl_T": "c97ce52801dbbb4b",
+        "Incl_X": "a00f1bf86857c51f",
+        "Incl_Y": "b51198c7baae332f",
+        "JAC_C": "c2c9db4e798eebd6",
+        "JAC_T": "434db0bdf8b9393b",
+        "P": "03514c8cfbdc651e",
+        "PV": "bb9a5cb85d2b266d",
+        "P_dP": "9348660d4e20060c",
+        "T1": "a7698b640619a04f",
+        "T1_dT1": "30ec1dbb54c96cfc",
+        "T2": "6a7c1cebc3c0b96e",
+        "T2_dT2": "9a4f090bfedd78c0",
+        "V_Bat": "83207e58d3264006",
+        "sh1": "77de3929d31d33cd",
+        "sh2": "649b5be587ce1e9c",
+    },
+}
+
+GOLDEN_V6_STATS = {
+    "MR_SL435": {
+        "Ax": (-1.4130859375, -3384.0, 3368.0),
+        "Ay": (-2.45732421875, -2020.0, 1697.0),
+        "EMC_Cur": (-0.03642034301757813, -0.793875, 0.723),
+        "Gnd": (-0.9953125, -2.0, 0.0),
+        "Incl_T": (13.0, 13.0, 13.0),
+        "Incl_X": (11.224531250000002, 10.875, 11.525),
+        "Incl_Y": (-20.909960937500003, -26.375, -16.05),
+        "P": (506.2075301469202, 505.46664752242043, 506.6902011702802),
+        "PV": (3.8819456054687507, 3.881625, 3.88225),
+        "P_dP": (506.2075301469202, 505.46664752242043, 506.6902011702802),
+        "T1": (12.096820415826603, 12.095993418224282, 12.098329765050607),
+        "T1_dT1": (12.096821178056981, 12.095993418224282, 12.098342333671326),
+        "T2": (11.109274872349648, 11.106009263127135, 11.111500484441933),
+        "T2_dT2": (11.109276994249996, 11.105999046959653, 11.111511022270236),
+        "U_EM": (0.13549874154593752, -0.2659174, 0.15097912219999998),
+        "V_Bat": (13.6215244140625, 13.575, 13.665625),
+        "sh1": (-9.269801734550487e-05, -0.616276157293797, 0.5014575028053113),
+        "sh2": (-0.0005741897618813179, -0.23150099810766922, 0.3506524743373511),
+    },
+    "SN479_0006": {
+        "Ax": (-2.0428292410714284, -6410.0, 6292.0),
+        "Ay": (-2.0635734437003967, -15032.0, 17705.0),
+        "Chlorophyll": (0.27238653297510507, -1.2878584340000003, 1.7220515029999994),
+        "DO": (218.97191499255953, 197.7, 228.7),
+        "DO_T": (24.79482682291667, 16.556, 28.729999999999997),
+        "Gnd": (-1.4685639880952381, -3.0, 0.0),
+        "Incl_T": (23.679123883928625, 22.870000000000005, 24.280000000000086),
+        "Incl_X": (-30.354417007688493, -90.0, 2.1750000000000003),
+        "Incl_Y": (58.59761672247024, 7.2250000000000005, 90.0),
+        "JAC_C": (52.67294093271342, 44.13009425495208, 57.51683679477821),
+        "JAC_T": (24.812081204233255, 16.471109912590247, 28.739318840562923),
+        "P": (113.6230423843735, 0.22480541080417638, 262.52192592897546),
+        "PV": (3.855852767702133, 3.8305000000000002, 3.875375),
+        "P_dP": (113.6230423843735, 0.22480541080417638, 262.52192592897546),
+        "T1": (23.92485570795937, 15.762638141907246, 27.741034264235623),
+        "T1_dT1": (23.92485664792897, 15.76222182673638, 27.741034264235623),
+        "T2": (32.58799599530332, 24.149816607348725, 36.55255866404195),
+        "T2_dT2": (32.587996482371466, 24.149753781713457, 36.55255866404195),
+        "Turbidity": (0.8369726211018556, -0.6400297487078213, 6.247696848686701),
+        "V_Bat": (14.56040331643725, 14.456249999999999, 14.594999999999999),
+        "sh1": (-0.25838922629818684, -6.977641875684132, 6.847716046538951),
+        "sh2": (-0.2500851945673939, -6.78764058890531, 6.660627768251408),
+    },
+    "VMP142_bench": {
+        "Ax": (7.5885633680555555, -4468.0, 4437.0),
+        "Ay": (8.995442708333334, -5545.0, 6654.0),
+        "Gnd": (7.0578125, 6.0, 8.0),
+        "Incl_T": (18.32609548611114, 17.700000000000045, 18.639999999999986),
+        "Incl_X": (31.85534722222222, 31.8, 31.900000000000002),
+        "Incl_Y": (0.23493489583333335, 0.17500000000000002, 0.30000000000000004),
+        "JAC_C": (0.022591772065860806, 0.01730732799970599, 0.02777614159700873),
+        "JAC_T": (21.746821094470032, 21.65854341324288, 21.781292978578747),
+        "P": (0.30736272589596597, 0.3053025990938696, 0.30793836512702),
+        "PV": (4.0106680338541665, 4.0105, 4.010875),
+        "P_dP": (0.30736272589596597, 0.3053025990938696, 0.30793836512702),
+        "T1": (16.1569150871382, 16.156904844929784, 16.157311548123346),
+        "T1_dT1": (16.156915066536943, 16.15690450258313, 16.157311548123346),
+        "T2": (16.145748038894958, 16.145745181298878, 16.14591898407184),
+        "T2_dT2": (16.145748026781277, 16.145745181298878, 16.14591898407184),
+        "V_Bat": (16.545872829861114, 16.476875, 16.5575),
+        "sh1": (0.002504827736571818, 0.0010244566918550186, 0.004097826767420074),
+        "sh2": (0.00275363126114523, 0.0012347569505908953, 0.004321649327068134),
     },
 }
 
 
-@pytest.mark.parametrize("fixture", sorted(GOLDEN_V6_HASHES))
-def test_v6_golden_channel_hashes(fixture):
-    """Bit-identical v6 regression: every channel of every committed v6
-    fixture hashes exactly as on the pre-#141 integration base."""
+@pytest.mark.parametrize("fixture", sorted(GOLDEN_V6_RAW_HASHES))
+def test_v6_golden_raw_hashes(fixture):
+    """Bit-identical v6 demux regression (platform-stable integer arrays)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pf = PFile(DATA / f"{fixture}.p", deconvolve=False)
+    got = {
+        name: hashlib.sha256(
+            str(np.ascontiguousarray(arr).dtype).encode()
+            + np.ascontiguousarray(arr).tobytes()
+        ).hexdigest()[:16]
+        for name, arr in pf.channels_raw.items()
+    }
+    assert got == GOLDEN_V6_RAW_HASHES[fixture]
+
+
+@pytest.mark.parametrize("fixture", sorted(GOLDEN_V6_STATS))
+def test_v6_golden_channel_stats(fixture):
+    """Converted-channel v6 regression at platform-safe tolerance."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         pf = PFile(DATA / f"{fixture}.p")
-    got = {
-        name: hashlib.sha256(np.ascontiguousarray(arr).tobytes()).hexdigest()[:16]
-        for name, arr in pf.channels.items()
-    }
-    assert got == GOLDEN_V6_HASHES[fixture]
+    assert sorted(pf.channels) == sorted(GOLDEN_V6_STATS[fixture])
+    for name, (m, lo, hi) in GOLDEN_V6_STATS[fixture].items():
+        arr = np.asarray(pf.channels[name], dtype=np.float64)
+        got = (float(np.nanmean(arr)), float(np.nanmin(arr)), float(np.nanmax(arr)))
+        np.testing.assert_allclose(got, (m, lo, hi), rtol=1e-8, atol=0,
+                                   err_msg=f"{fixture}:{name}")
