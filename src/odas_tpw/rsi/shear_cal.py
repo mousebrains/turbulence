@@ -76,10 +76,14 @@ _SN_RE = re.compile(r"Probe\s*SN\s*:?\s*([A-Za-z]{0,3}\d+(?:-\w+)?)", re.I)
 _SENS_RE = re.compile(r"Sensitivity\s*\(sens\s*or\s*S\)\s*:?\s*" + _NUM, re.I)
 _PREV_SENS_RE = re.compile(r"Previous\s+Sensitivity\s*:?\s*" + _NUM, re.I)
 _DATE_RE = re.compile(_DATE)
-# "Recommended re-calibration: 2027/06/19".  Anchored on 're-?calibration' AND
-# a date on the same line: sheets also carry dateless "Rockland recommends
-# re-calibrating ..." prose lines that must not be mistaken for the date.
-_RECAL_RE = re.compile(r"re-?calibration", re.I)
+# "Recommended re-calibration: 2027/06/19".  Anchored on the LABEL
+# ("recommended re-calibration") plus a date on the same line: sheets also
+# carry prose like "Frequent re-calibration is strongly recommended" that,
+# depending on pypdf line-gluing, can land on the same extracted line as an
+# unrelated date and must never feed recal_due.
+_RECAL_RE = re.compile(r"recommended\s+re-?calibration", re.I)
+# Looser match used only to SKIP prose recommendation lines.
+_RECAL_SKIP_RE = re.compile(r"re-?calibration", re.I)
 # "M1458_2026_06_19].pdf" -> ("M1458", 2026, 6, 19); tolerant of trailing junk.
 _FNAME_RE = re.compile(r"([A-Za-z]?\d[\w-]*?)[_-](\d{4})[_-](\d{1,2})[_-](\d{1,2})")
 
@@ -174,7 +178,7 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
         # Dates: the "Recommended re-calibration" line feeds recal_due only
         # (never cal_date); keep previous vs current apart below.
         low = line.lower()
-        if "recommend" in low or _RECAL_RE.search(line):
+        if "recommend" in low or _RECAL_SKIP_RE.search(line):
             if recal_due is None and _RECAL_RE.search(line):
                 m = _DATE_RE.search(line)
                 if m:
@@ -196,6 +200,10 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
         sens = None
     if prev_sens is not None and prev_sens <= 0:
         prev_sens = None
+    # A recal-due on/before the calibration date is a mis-parse (e.g. a prose
+    # line glued to an unrelated date) — staleness from it would be nonsense.
+    if recal_due is not None and cal_date is not None and recal_due <= cal_date:
+        recal_due = None
 
     return CalSheet(
         sn, sens, cal_date, prev_sens, prev_cal_date, source=source, recal_due=recal_due

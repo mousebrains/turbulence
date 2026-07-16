@@ -101,6 +101,32 @@ def test_parse_recal_due_ignores_dateless_recommendation_lines():
     assert s.cal_date == date(2024, 1, 2)
 
 
+def test_parse_recal_due_rejects_prose_glued_to_stray_date():
+    """pypdf line-gluing can merge a prose recommendation with an unrelated
+    date; the label-anchored regex must not take it, and a recal_due on/before
+    the calibration date is discarded as a mis-parse."""
+    text = (
+        "Probe SN: M2222\n"
+        "Sensitivity (sens or S): 0.08\n"
+        "Frequent re-calibration is strongly recommended. Date: 2016/04/19\n"
+        "Calibration Date: 2024/01/02\n"
+    )
+    s = sc.parse_sheet_text(text)
+    assert s.recal_due is None
+    assert s.cal_date == date(2024, 1, 2)
+
+    # Even a label-anchored line whose date is on/before cal_date is rejected.
+    text2 = (
+        "Probe SN: M3333\n"
+        "Sensitivity (sens or S): 0.08\n"
+        "Calibration Date: 2024/01/02\n"
+        "Recommended re-calibration: 2023/01/02\n"
+    )
+    s2 = sc.parse_sheet_text(text2)
+    assert s2.recal_due is None
+    assert s2.cal_date == date(2024, 1, 2)
+
+
 def test_points_carry_recal_due_on_current_only():
     s = sc.parse_sheet_text(M1458_TEXT)
     by_date = {p.date: p for p in s.points()}

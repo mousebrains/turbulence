@@ -93,14 +93,16 @@ See [chi_mathematics.md](../chi_mathematics.md) for the mathematical details.
 
 With two or more shear probes (or FP07s), every per-profile epsilon/chi dataset
 carries an observational cross-probe consistency diagnostic (issue #131):
-per-pair global attributes `probe_ratio_pairs`, `probe_ratio_median` (median
+per-pair global attributes `probe_ratio_pairs`, `probe_ratio_median` (read back from NetCDF, single-pair values are scalars,
+multi-pair values arrays — use `np.atleast_1d`) (median
 first/second-probe ratio over the windows where both are finite),
 `n_ratio_windows`, and `probe_ratio_z` (significance of the median ln-ratio
 given the Lueck 2022 per-window `sigma_ln`; the chi product uses a `chi_`
 prefix). A two-tier `logging` warning fires on persistent disagreement:
 
 - **statistical** — `z > 3` with at least 20 windows (catches offsets that are
-  small but statistically unambiguous, e.g. a 1.2-1.3x systematic pair offset);
+  small but statistically unambiguous — a 1.2-1.3x systematic pair offset needs
+  deployment-scale window counts (or low per-window sigma) to reach z>3;
 - **practical** — median ratio beyond **1.8x** in either direction with at
   least 10 windows (calibration-scale offsets, regardless of formal
   significance — per-window QC like `fom` can look perfect while one probe

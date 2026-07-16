@@ -25,7 +25,8 @@ statistical
     ln values, each with the Lueck (2022) single-probe ``sigma_ln``); and
     ``0.7 * n`` approximates the effective number of independent windows under
     the standard 50% window overlap.  This tier catches offsets that are small
-    but statistically unambiguous (the ARCTERX-B2-class 1.2-1.3x pathologies).
+    but statistically unambiguous (ARCTERX-B2-class 1.2-1.3x pathologies become
+    detectable at deployment-scale window counts, not in a single short profile).
 practical
     ``max(ratio, 1/ratio) > ratio_max`` (:data:`PROBE_RATIO_MAX`, default 1.8
     — the vmp142 epsilon scale) with ``n >= N_MIN_PRACTICAL`` (10) windows,
@@ -61,6 +62,9 @@ logger = logging.getLogger(__name__)
 # Statistical tier: significance threshold and minimum window count.
 Z_WARN = 3.0
 N_MIN_STATISTICAL = 20
+# NOTE: n_eff = 0.7*N assumes mild window correlation; under heavy 50%-overlap
+# correlation the z>3 false-positive rate can reach ~1% (still per-profile,
+# observational logging only).
 
 # Practical tier: calibration-scale median-ratio floor (vmp142's epsilon pair
 # disagreed by 1.8x with clean per-window QC) and its minimum window count.
