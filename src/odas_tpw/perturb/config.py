@@ -61,8 +61,8 @@ DEFAULTS: dict[str, dict] = {
     },
     "profiles": {
         "P_min": 0.5,
-        "W_min": 0.3,
-        "direction": "down",
+        "W_min": None,  # null = auto: 0.3 free-fall, 0.05 glide/horizontal
+        "direction": "auto",  # auto = vehicle-resolved (glide for a glider)
         "min_duration": 7.0,
         "diagnostics": False,
     },
@@ -116,9 +116,12 @@ DEFAULTS: dict[str, dict] = {
         "despike_smooth": 0.5,
         "salinity": None,
         "epsilon_minimum": 1e-13,
-        "T_source": None,
-        "T1_norm": 1.0,
-        "T2_norm": 1.0,
+        "T_source": None,  # reference temperature for seawater
+        # properties (epsilon viscosity; chi
+        # viscosity/kappa_T — one knob serves both
+        # stages). null = "auto" QC chain; a channel
+        # name; or a number = constant reference
+        # temperature [degC].
         "fom_max": None,  # null = no FOM cut. e.g. 2.0 NaNs each
         # per-probe (e_N, epsilon[probe,:]) cell
         # whose figure-of-merit fom[probe,seg]
@@ -147,9 +150,11 @@ DEFAULTS: dict[str, dict] = {
         "spectrum_model": "kraichnan",
         "salinity": None,
         "mixing": True,  # Derived mixing quantities (N2, dTdz,
-        # K_T, Gamma, K_rho) on the chi grid,
-        # with salinity from the profile's own
-        # C/T/P (TEOS-10).
+        # K_T, Gamma, K_rho) on the chi grid.
+        # N2 salinity follows
+        # stratification.salinity: the profile's
+        # own C/T/P (TEOS-10) by default, or a
+        # fixed value / hotel-injected channel.
         "chi_minimum": 1.0e-13,
         "spectral_qc": True,  # Soft fom + K_max_ratio QC on chiMean
         # (hence K_T/Gamma), matching the rsi
@@ -172,10 +177,11 @@ DEFAULTS: dict[str, dict] = {
         "diagnostics": False,
     },
     "speed": {
-        "method": "pressure",  # pressure | em | flight | constant
+        "method": "pressure",  # pressure | em | flight | constant | hotel
         "value": None,  # m/s, only for method="constant"
+        "hotel_var": "speed",  # merged channel name, only for method="hotel"
         "aoa_deg": 3.0,  # angle of attack, only for method="flight"
-        "min_pitch_deg": 5.0,  # flight: skip |pitch+aoa| below this (deg)
+        "min_pitch_deg": 5.0,  # flight: skip |pitch| below this (deg)
         "speed_cutout": 0.05,  # m/s floor applied to fast-rate speed
         "tau": None,  # smoothing time constant; null = vehicle default
         "amplitude_quantile": [1.0, 99.0],  # for flight pitch-axis auto-pick
@@ -794,8 +800,11 @@ hotel:
 
 profiles:
   P_min: 0.5              # minimum pressure [dbar]
-  W_min: 0.3              # minimum fall rate [dbar/s]
-  direction: "down"       # profile direction: up or down
+  W_min: null             # minimum fall rate [dbar/s] (null = auto: 0.3
+                          # free-fall, 0.05 glide/horizontal)
+  direction: "auto"       # profile direction: auto | up | down | glide |
+                          # horizontal (auto = vehicle-resolved: down for a
+                          # VMP, glide = up + down for a glider)
   min_duration: 7.0       # minimum profile duration [s]
   diagnostics: false      # RESERVED / not yet implemented (would write T1_raw,
                           # C_raw, W, cal attrs). Currently a no-op for profiles.
@@ -867,9 +876,16 @@ epsilon:
                           # (default var "salinity") — for gliders/MRs with no
                           # onboard conductivity but a hotel CTD feed
   epsilon_minimum: 1.0e-13  # floor for small epsilon values
-  T_source: null          # temperature source for viscosity (null = blend T1/T2)
-  T1_norm: 1.0            # T1 blending weight
-  T2_norm: 1.0            # T2 blending weight
+  T_source: null          # reference temperature for seawater properties
+                          # (viscosity for epsilon; viscosity and kappa_T for
+                          # chi — one knob serves both stages). null/"auto" =
+                          # first plausible of T1, T2, ..., T, JAC_T (railed/
+                          # implausible channels are skipped with a warning);
+                          # a channel name (e.g. "T2", "JAC_T", or a hotel
+                          # temperature channel) = use that channel (a QC
+                          # failure warns but proceeds); a number = constant
+                          # reference temperature [degC] (like ODAS
+                          # constant_temp)
   fom_max: null           # null = NO spectral-fit QC on epsilon. IMPORTANT: unlike
                           # the rsi run_pipeline path (which applies the full ATOMIX
                           # flag set -- FM>1.15, var_resolved<0.5, despike limits --
@@ -886,6 +902,9 @@ epsilon:
 
 chi:
   enable: false           # chi is optional, separate stage after diss
+                          # (the reference temperature for viscosity/kappa_T
+                          # comes from epsilon.T_source — one knob serves
+                          # both stages)
   fft_sec: 1.0            # FFT segment duration [s]; same sandwich
                           # constraints as epsilon.fft_sec above
   diss_sec: null          # dissipation window [s] (null = 4 * fft_sec)
@@ -928,18 +947,25 @@ ctd:
   diagnostics: false      # write n_samples, *_std per bin
 
 speed:
-  # Through-water speed source. Computed AFTER hotel merge so the
-  # method has access to both .p-file and hotel channels.
-  method: "pressure"      # pressure | em | flight | constant
+  # Through-water speed source. Computed AFTER the hotel merge, so
+  # method "hotel" can consume a hotel-merged channel.
+  method: "pressure"      # pressure | em | flight | constant | hotel
   # pressure : ODAS smoothed |dP/dt|. Correct for VMP. (default)
   # em       : use the U_EM channel from the .p file (MicroRider EM
   #            flowmeter). Errors out if U_EM is missing.
-  # flight   : |W| / (sin(|pitch|-aoa)*cos|roll|), pitch axis auto-
-  #            picked from Incl_X/Incl_Y by amplitude.
+  # flight   : |W| / sin(|pitch|+aoa) (glide path steeper than pitch;
+  #            ODAS convention), pitch axis auto-picked from
+  #            Incl_X/Incl_Y by amplitude.
   # constant : use the scalar in `value`.
+  # hotel    : use the hotel-merged channel named by `hotel_var` (map a
+  #            source variable onto it via hotel.channels, e.g.
+  #            hotel.channels.m_speed: "speed"). Errors out when the
+  #            channel is missing or mostly non-finite — it never
+  #            silently falls back to the speed_cutout floor.
   value: null             # m/s, only when method="constant"
+  hotel_var: "speed"      # merged channel name, only when method="hotel"
   aoa_deg: 3.0            # angle of attack [deg], for method="flight"
-  min_pitch_deg: 5.0      # flight: drop samples with |pitch|-aoa < this
+  min_pitch_deg: 5.0      # flight: drop samples with |pitch| < this
   speed_cutout: 0.05      # m/s floor applied to fast-rate speed
   tau: null               # smoothing tau [s]; null = vehicle default
                           # (vmp/xmp 1.5, slocum_glider 3.0, ...)
