@@ -291,6 +291,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (they never did anything).
 
 ### Fixed
+- **Stratification salinity is now scrubbed, with a truthful provenance note**
+  (#131 M6). The N²/dT/dz paths (window-scale in the diss/chi products,
+  slow-grid in the profile product) previously read a hotel-sourced salinity
+  channel raw: an **all-NaN merged channel** (a hotel variable with fewer than
+  two finite source samples) silently NaNed out N² and every mixing product
+  (K_T/Γ/K_ρ) while the metadata still claimed "salinity from hotel channel",
+  and **partial NaNs** (a `"hotel:<var>"` pointing at a derived profile
+  variable, e.g. an SP computed from bad conductivity) NaNed the affected
+  windows with no note. (The hotel merge itself never produces NaN outside the
+  hotel file's time coverage — it boundary-holds and bridges interior gaps —
+  so the earlier "outside CTD coverage" description of this failure mode was
+  wrong.) Both stratification consumers now scrub the salinity: non-finite
+  samples are filled by **interpolation over the finite samples**
+  (nearest-finite hold at the edges) — **per cast** on the slow-grid path,
+  because interpolating across a cast boundary would blend one cast's deep
+  salinity toward the next cast's shallow values and fabricate a wrong-sign
+  within-cast dS/dz (collapsing N² near the boundary). A channel — or a cast
+  slice — with **fewer than two finite samples** falls through to
+  conductivity/35 PSU (the hotel merge's own <2-finite convention; a single
+  sample must not constant-fill a profile and beat a valid conductivity
+  channel). The N² `comment` records exactly what was used: interpolated vs
+  edge-held counts ("N/M non-finite salinity samples interpolated", "N/M edge
+  samples held at the nearest finite value; N2 approaches temperature-only
+  where held") or the fallback reason ("hotel channel 'x' entirely
+  non-finite"). The **conductivity fallback is gated the same way**: a
+  conductivity channel that is present but whose derived `SP_from_C` salinity
+  has fewer than two finite samples (e.g. an all-NaN `JAC_C`) now falls
+  through to the documented 35 PSU fallback with the reason noted ("JAC_C
+  present but yielded no finite salinity"), instead of producing all-NaN N²
+  under a note claiming C-derived salinity; a partially-NaN derived SP (two
+  or more finite samples) keeps the existing per-window masking
+  (interp-filling derived SP is deferred). The slow-grid N² comment also no
+  longer claims the salinity
+  came "from the profile's own C/T/P" when it did not. The viscosity path's
+  scrub switches from a whole-profile **median** fill to the same
+  interpolation fill: N² is first-order in dS/dz, so a constant fill would
+  insert a spurious salinity step at every fill boundary (spurious N² ~
+  g·β·ΔS/Δz, orders above thermocline values, and Thorpe sorting keeps it);
+  for viscosity the difference is negligible.
 - **Old-format MicroRider deconvolution** (#131 M11, M12) — two bugs that
   corrupted or crashed processing of old-MR corpora (e.g. CASPER 2015_East
   CAS_001-006, whose 4×10 matrix samples T1 *and* T1_dT1 as full fast columns
