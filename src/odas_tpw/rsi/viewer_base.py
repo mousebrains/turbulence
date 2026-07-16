@@ -458,8 +458,14 @@ class ProfileViewer:
         # fall back to a 10 degC constant (the pipelines' NaN-temperature
         # substitute) with a warning.
         try:
+            from odas_tpw.rsi.helpers import pfile_channel_types
+
             _t_chan, _t_reason = resolve_temperature_channel(
-                pf.channels, len(pf.t_slow), "auto", pressure=self.P
+                pf.channels,
+                len(pf.t_slow),
+                "auto",
+                pressure=self.P,
+                types=pfile_channel_types(pf),
             )
             self.T = pf.channels[_t_chan]
         except ValueError as e:

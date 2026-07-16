@@ -332,7 +332,11 @@ def _pipeline_one_file(
     goodman: bool,
 ) -> None:
     """Process one .P file (run_pipeline's per-file body)."""
-    from odas_tpw.rsi.helpers import _resolve_reference_temperature, temperature_candidates
+    from odas_tpw.rsi.helpers import (
+        _resolve_reference_temperature,
+        pfile_channel_types,
+        temperature_candidates,
+    )
     from odas_tpw.rsi.p_file import PFile
     from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
 
@@ -364,7 +368,9 @@ def _pipeline_one_file(
     # Resolve the reference-temperature source ONCE per file (full-channel QC)
     # for provenance; the concrete selection is passed to the adapter so the
     # per-profile resolution cannot diverge from what the attrs report.
-    if temperature == "auto" and not temperature_candidates(pf.channels, len(pf.t_slow)):
+    if temperature == "auto" and not temperature_candidates(
+        pf.channels, len(pf.t_slow), pfile_channel_types(pf)
+    ):
         # Historical tolerance: an instrument with no slow temperature channel
         # still runs; the adapter warns and fills L1.temp with NaN (downstream
         # substitutes 10 degC loudly).
@@ -376,8 +382,14 @@ def _pipeline_one_file(
         # auto/explicit channels AND the numeric constant escape hatch, so an
         # implausible constant (99 degC, NaN) warns and records its QC reason
         # identically on both paths (and a bool is rejected identically).
+        # types= carries channel types for the sbt CT candidate tail (#141).
         _T, temperature_source, temperature_qc = _resolve_reference_temperature(
-            pf.channels, len(pf.t_slow), temperature, P_slow, p_path.name
+            pf.channels,
+            len(pf.t_slow),
+            temperature,
+            P_slow,
+            p_path.name,
+            types=pfile_channel_types(pf),
         )
         temp_for_l1 = (
             float(temperature) if isinstance(temperature, (int, float)) else temperature_source
@@ -827,6 +839,7 @@ def _process_profile(
 
     # Write per-level NetCDF
     time_ref = pf.start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    v1_provenance = getattr(pf, "v1_provenance", None) or None
     _write_l4_epsilon(
         l4,
         l3,
@@ -834,6 +847,7 @@ def _process_profile(
         pf,
         temperature_source=temperature_source,
         temperature_qc=temperature_qc,
+        provenance=v1_provenance,
     )
 
     # Attach the mixing vars to whichever chi product they were computed on
@@ -846,6 +860,7 @@ def _process_profile(
             extra_vars=mixing_vars if chi_primary is l4_chi_eps else None,
             temperature_source=temperature_source,
             temperature_qc=temperature_qc,
+            provenance=v1_provenance,
         )
     if l4_chi_fit_result is not None:
         _write_l4_chi(
@@ -855,6 +870,7 @@ def _process_profile(
             extra_vars=mixing_vars if chi_primary is l4_chi_fit_result else None,
             temperature_source=temperature_source,
             temperature_qc=temperature_qc,
+            provenance=v1_provenance,
         )
 
     return binned
@@ -867,6 +883,7 @@ def _write_l4_epsilon(
     pf,
     temperature_source: str | None = None,
     temperature_qc: str | None = None,
+    provenance: dict[str, str] | None = None,
 ) -> None:
     """Write L4 epsilon to NetCDF."""
     n_shear = l4.n_shear
@@ -983,6 +1000,10 @@ def _write_l4_epsilon(
         ds.attrs["temperature_source"] = temperature_source
     if temperature_qc is not None:
         ds.attrs["temperature_qc"] = temperature_qc
+    if provenance:
+        # Complete v1->v6 translation provenance (issue #141): the
+        # setup-file md5 + sens source audit the sens^-2 epsilon scaling.
+        ds.attrs.update({k: str(v) for k, v in provenance.items()})
     ds.to_netcdf(path)
 
 
@@ -993,6 +1014,7 @@ def _write_l4_chi(
     extra_vars: dict[str, tuple[np.ndarray, dict]] | None = None,
     temperature_source: str | None = None,
     temperature_qc: str | None = None,
+    provenance: dict[str, str] | None = None,
 ) -> None:
     """Write L4 chi to NetCDF.
 
@@ -1101,6 +1123,9 @@ def _write_l4_chi(
         ds.attrs["temperature_source"] = temperature_source
     if temperature_qc is not None:
         ds.attrs["temperature_qc"] = temperature_qc
+    if provenance:
+        # Complete v1->v6 translation provenance (issue #141).
+        ds.attrs.update({k: str(v) for k, v in provenance.items()})
     if extra_vars:
         for name, (arr, attrs) in extra_vars.items():
             ds[name] = xr.DataArray(arr, dims=["time"], attrs=attrs)

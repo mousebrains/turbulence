@@ -459,6 +459,11 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
     }
     if hasattr(pf, "config_str"):
         global_attrs["configuration_string"] = pf.config_str
+    # v1->v6 translation provenance (issue #141): the complete key set rides
+    # on every per-profile file so the NC->epsilon/chi route publishes the
+    # same audit trail (setup md5, sens source) as the direct .p route.
+    for key, val in (getattr(pf, "v1_provenance", None) or {}).items():
+        global_attrs[key] = str(val)
 
     return {
         "P": pf.channels["P"],

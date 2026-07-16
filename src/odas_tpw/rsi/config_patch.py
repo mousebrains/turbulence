@@ -48,6 +48,7 @@ from odas_tpw.rsi.p_file import (
     HEADER_WORDS,
     _detect_endian,
     parse_config,
+    raise_if_v1_layout,
 )
 
 try:  # package version for the provenance banner
@@ -547,6 +548,10 @@ def read_config_text(path: str | Path) -> str:
             raise ValueError(f"{path.name}: file too small for a header")
         endian = _detect_endian(head, path)
         words = struct.unpack(f"{endian}{HEADER_WORDS}H", head)
+        # A v1 file has no embedded config; a "config" read here would be
+        # empty (or worse, the binary matrix record) — refuse with a remedy
+        # (issue #141).
+        raise_if_v1_layout(words[_H["header_version"]], path, "patch-config/patch-template")
         header_size = words[_H["header_size"]]
         config_size = words[_H["config_size"]]
         # Bounds-validate header_size: a corrupt source advertising header_size
@@ -592,6 +597,10 @@ def write_patched_pfile(src: str | Path, dst: str | Path, new_config_text: str) 
         # handler) or silently write a truncated (<128-byte) header.
         if header_size < HEADER_BYTES:
             raise ValueError(f"{src.name}: invalid header_size={header_size}")
+        # Name the v1 remedy explicitly (patching a v1 file would inject INI
+        # text into the binary matrix record; issue #141), then refuse any
+        # other pre-v6 version as before.
+        raise_if_v1_layout(words[_H["header_version"]], src, "patch-config")
         major = words[_H["header_version"]] >> 8
         if major < 6:
             raise ValueError(

@@ -137,11 +137,20 @@ def reference_temperature_qc(
     return None
 
 
-def temperature_candidates(channels: Mapping[str, Any], n_slow: int) -> list[str]:
+def temperature_candidates(
+    channels: Mapping[str, Any],
+    n_slow: int,
+    types: Mapping[str, str] | None = None,
+) -> list[str]:
     """Slow reference-temperature candidates in ``auto`` QC order.
 
     Numbered FP07s first (T1, T2, ... — numeric order), then a bare slow
-    ``T``, then ``JAC_T``. Only channels of slow length qualify.
+    ``T``, then ``JAC_T``, then — when channel *types* are supplied — any
+    slow channel of type ``sbt`` (Sea-Bird SBE3, the CT temperature on
+    pre-JAC-era Rocklands, e.g. the translated 2013 v1 corpus, issue #141).
+    The sbt candidacy is by channel TYPE, not name, because corpora name
+    those channels freely (``SBT1`` here). Only channels of slow length
+    qualify.
     """
 
     def _is_slow(name: str) -> bool:
@@ -159,6 +168,16 @@ def temperature_candidates(channels: Mapping[str, Any], n_slow: int) -> list[str
         out.append("T")
     if "JAC_T" in channels and _is_slow("JAC_T"):
         out.append("JAC_T")
+    if types:
+        out.extend(
+            sorted(
+                n
+                for n in channels
+                if n not in out
+                and _is_slow(n)
+                and types.get(n, "").strip().lower() == "sbt"
+            )
+        )
     return out
 
 
@@ -169,6 +188,7 @@ def resolve_temperature_channel(
     *,
     pressure: npt.ArrayLike | None = None,
     context: str = "",
+    types: Mapping[str, str] | None = None,
 ) -> tuple[str, str | None]:
     """Select the reference-temperature channel (viscosity for epsilon;
     viscosity and kappa_T for chi; the published ``T_mean``).
@@ -192,6 +212,9 @@ def resolve_temperature_channel(
         Slow pressure for in-water-only QC (see reference_temperature_qc).
     context : str
         Prefix for warnings/errors (e.g. the source file name).
+    types : mapping, optional
+        Channel name -> sensor type; enables the type-based candidate tail
+        (``sbt`` CT channels) in :func:`temperature_candidates`.
 
     Returns
     -------
@@ -199,13 +222,13 @@ def resolve_temperature_channel(
     """
     prefix = f"{context}: " if context else ""
     if requested == "auto":
-        candidates = temperature_candidates(channels, n_slow)
+        candidates = temperature_candidates(channels, n_slow, types)
         if not candidates:
             raise ValueError(
                 f"{prefix}no slow temperature channel found (looked for "
-                "T1..Tn, T, JAC_T); pass --temperature / temperature: to "
-                "select a channel explicitly, or a number for a constant "
-                "reference temperature"
+                "T1..Tn, T, JAC_T, and sbt-type CT channels); pass "
+                "--temperature / temperature: to select a channel "
+                "explicitly, or a number for a constant reference temperature"
             )
         reasons: list[tuple[str, str]] = []
         for name in candidates:
@@ -459,6 +482,7 @@ def _resolve_reference_temperature(
     t_name: str | float,
     pressure: np.ndarray | None,
     context: str,
+    types: Mapping[str, str] | None = None,
 ) -> tuple[np.ndarray, str, str]:
     """Shared T resolution: returns ``(T_array, source_label, qc_label)``.
 
@@ -483,10 +507,15 @@ def _resolve_reference_temperature(
             )
         return np.full(n_slow, value), f"constant:{value:g}", qc
     name, reason = resolve_temperature_channel(
-        channels, n_slow, t_name, pressure=pressure, context=context
+        channels, n_slow, t_name, pressure=pressure, context=context, types=types
     )
     T = np.asarray(channels[name], dtype=np.float64)
     return T, name, "pass" if reason is None else reason
+
+
+def pfile_channel_types(pf: PFile) -> dict[str, str]:
+    """Channel name -> sensor type map for :func:`temperature_candidates`."""
+    return {n: (pf.channel_info.get(n) or {}).get("type", "") for n in pf.channels}
 
 
 def _channels_from_pfile(
@@ -512,7 +541,7 @@ def _channels_from_pfile(
     n_slow = len(pf.t_slow)
     P = pf.channels[p_name]
     T, t_source, t_qc = _resolve_reference_temperature(
-        pf.channels, n_slow, t_name, P, pf.filepath.name
+        pf.channels, n_slow, t_name, P, pf.filepath.name, types=pfile_channel_types(pf)
     )
     out: dict[str, Any] = {
         "shear": shear,
@@ -539,6 +568,14 @@ def _channels_from_pfile(
             "temperature_qc": t_qc,
         },
     }
+    # v1-translation provenance (issue #141): PFile.v1_provenance carries the
+    # COMPLETE key set (p_file.V1_PROVENANCE_KEYS — incl. setup_file_md5 and
+    # sens_source, the audit trail for the sens^-2 epsilon scaling) for both
+    # the in-memory raw-v1 route and on-disk translated files; copy all of it
+    # into the product metadata.
+    out["metadata"].update(
+        {k: str(v) for k, v in (getattr(pf, "v1_provenance", None) or {}).items()}
+    )
     c_found = resolve_conductivity_channel(pf.channels, n_slow, c_name, context=pf.filepath.name)
     if c_found is not None:
         out["C"] = pf.channels[c_found]
@@ -593,6 +630,7 @@ def _channels_from_nc(
     # name (read regardless of dims so a fast channel gets the clear
     # "not a slow channel" error from the resolver rather than "not found").
     resolve_map: dict[str, np.ndarray] = {}
+    resolve_types: dict[str, str] = {}
     for vname in sorted(ds.variables.keys()):
         var = ds.variables[vname]
         wanted = (
@@ -603,6 +641,11 @@ def _channels_from_nc(
         )
         if wanted and var.dimensions in (("time_slow",), ("time_fast",)):
             resolve_map[vname] = _nc_filled(var)
+            # sensor_type is written by the .p -> NetCDF converters; it
+            # enables the type-based candidate tail (sbt CT channels).
+            stype = getattr(var, "sensor_type", "")
+            if stype:
+                resolve_types[vname] = str(stype)
 
     shear = []
     accel = []
@@ -620,9 +663,14 @@ def _channels_from_nc(
                 channel_types[vname] = str(getattr(var, "sensor_type", ""))
 
     metadata = {"source": str(nc_path)}
+    from odas_tpw.rsi.p_file import V1_PROVENANCE_KEYS
+
     # speed_method / speed_source: per-profile speed provenance written by the
     # perturb pipeline (extract_profiles extra_attrs); prepare_profiles uses
     # them to enrich the precomputed-speed_fast provenance it stamps.
+    # V1_PROVENANCE_KEYS: the .p -> NC converters copy the complete v1
+    # translation provenance (setup md5, sens source, ...) as global attrs;
+    # carry it through to the diss/chi products of the NC route too (#141).
     for attr in (
         "instrument_model",
         "instrument_sn",
@@ -630,6 +678,7 @@ def _channels_from_nc(
         "start_time",
         "speed_method",
         "speed_source",
+        *V1_PROVENANCE_KEYS,
     ):
         if hasattr(ds, attr):
             metadata[attr] = getattr(ds, attr)
@@ -656,7 +705,7 @@ def _channels_from_nc(
     # Resolve AFTER the dataset is closed (everything needed is in numpy by
     # now), so a QC ValueError cannot leak an open netCDF handle.
     T, t_source, t_qc = _resolve_reference_temperature(
-        resolve_map, n_slow, t_name, P, nc_path.name
+        resolve_map, n_slow, t_name, P, nc_path.name, types=resolve_types
     )
     metadata["temperature_source"] = t_source
     metadata["temperature_qc"] = t_qc

@@ -56,6 +56,7 @@ from odas_tpw.rsi.p_file import (
     _parse_header,
     instrument_sn,
     parse_config,
+    raise_if_v1_layout,
 )
 
 
@@ -141,6 +142,11 @@ def _read_header_and_config(path: Path) -> tuple[dict, dict]:
             warnings.simplefilter("ignore")
             endian = _detect_endian(raw_hdr, path)
             header = _parse_header(raw_hdr, endian)
+
+        # A v1 file has no embedded config (config_size == 0), so it would be
+        # inventoried as silently EMPTY rather than reporting its sensors;
+        # refuse with a remedy instead (issue #141).
+        raise_if_v1_layout(header["header_version"], path, "the sensor inventory")
 
         header_size = int(header["header_size"])
         config_size = int(header["config_size"])

@@ -7,12 +7,13 @@ Anatomy) and mirrors the conversion logic in the ODAS MATLAB Library
 (read_odas.m, convert_odas.m).
 """
 
+import io
 import re
 import struct
 import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import numpy as np
 
@@ -25,6 +26,22 @@ from odas_tpw.rsi.deconvolve import deconvolve
 
 HEADER_WORDS = 64
 HEADER_BYTES = 128
+
+# Complete v1->v6 translation provenance key set (issue #141). The translator
+# writes ALL of these into the synthesized [root]; PFile.v1_provenance carries
+# the same set for both routes (on-disk translated file and direct raw-v1
+# read), and every derived product (full-record/per-profile NC, epsilon/chi,
+# pipeline L4) copies them through — setup_file_md5 + sens_source are the
+# audit trail for the sens^-2 epsilon scaling.
+V1_PROVENANCE_KEYS = (
+    "translated_from",
+    "v1_source_file",
+    "setup_file_source",
+    "setup_file_md5",
+    "sens_source",
+    "translator",
+    "translated_on",
+)
 
 # 0-indexed word positions (TN-051 Table 1 uses 1-indexed)
 _H = {
@@ -92,6 +109,27 @@ def _parse_header(raw: bytes, endian: str) -> dict:
     return {name: words[idx] for name, idx in _H.items()}
 
 
+def raise_if_v1_layout(header_version_raw: int, source: str | Path, tool: str) -> None:
+    """Refuse an ODAS header-version-1 file in a v6-layout-only code path.
+
+    Legacy v1 files (header word 11 == 1, vendor precedent
+    patch_setupstr.m ``header(11)==1``) store a **binary address matrix** in
+    record 0 instead of the embedded INI configuration, and record 0 is a
+    full-size record (``first_record_size = record_size``, not ``header_size
+    + config_size``). Every reader that walks records with v6 arithmetic
+    would mis-tile such a file — some destructively (perturb trim would
+    write a corrupt copy). This guard makes the failure loud and names the
+    remedy. See GitHub issue #141.
+    """
+    if header_version_raw == 1:
+        raise ValueError(
+            f"{Path(source).name}: ODAS header version 1 (legacy pre-2015 "
+            "layout: record 0 holds a binary address matrix, not an embedded "
+            f"INI config) is not supported by {tool}; translate the file to "
+            "v6 first with 'rsi-tpw v1to6' (issue #141)"
+        )
+
+
 def extract_pfile_segment(
     source: str | Path,
     dest: str | Path,
@@ -132,6 +170,7 @@ def extract_pfile_segment(
 
         endian = _detect_endian(raw_hdr, source)
         header = _parse_header(raw_hdr, endian)
+        raise_if_v1_layout(header["header_version"], source, "cutp/extract_pfile_segment")
         header_size = int(header["header_size"])
         config_size = int(header["config_size"])
         record_size = int(header["record_size"])
@@ -383,6 +422,11 @@ def read_config_string(filepath: str | Path) -> str:
             raise ValueError(f"{filepath.name}: file too small for header")
         endian = _detect_endian(raw_hdr, filepath)
         header = _parse_header(raw_hdr, endian)
+        raise_if_v1_layout(
+            header["header_version"],
+            filepath,
+            "read_config_string (a v1 file has no embedded config record)",
+        )
 
         header_size = header["header_size"]
         config_size = header["config_size"]
@@ -446,9 +490,21 @@ class PFile:
         Parsed 128-byte binary header fields.
     endian : str
         Byte order ('little' or 'big').
+    translated_from_v1 : bool
+        True when the source was a legacy ODAS header-v1 file that was
+        translated to v6 in memory before parsing (issue #141).
+    setup_file_source, setup_file_md5 : str or None
+        Provenance of the external setup file used for the v1 translation
+        (None for v6+ sources).
     """
 
-    def __init__(self, filepath: str | Path, *, deconvolve: bool = True) -> None:
+    def __init__(
+        self,
+        filepath: str | Path,
+        *,
+        deconvolve: bool = True,
+        setup_file: str | Path | None = None,
+    ) -> None:
         self.filepath = Path(filepath)
         # deconvolve=False leaves the pre-emphasized channels (T1_dT1, P_dP, …)
         # and their bases (T1, P, …) as the raw counts read from the file,
@@ -458,6 +514,18 @@ class PFile:
         # (and compared against the RSI calibration report). Every production
         # caller uses the default and gets the deconvolved data as before.
         self._deconvolve = deconvolve
+        # setup_file: external setup file for legacy header-v1 files (which
+        # embed no configuration); ignored for v6+ files. Default: auto-detect
+        # siblings of the .p file (see odas_tpw.rsi.setup_v1).
+        self._setup_file = setup_file
+        # v1-translation provenance (populated by the v1 branch of _read for
+        # direct raw-v1 reads, or from the synthesized [root] keys when the
+        # source is an on-disk translated file). Complete key set:
+        # V1_PROVENANCE_KEYS; empty dict for ordinary v6 sources.
+        self.translated_from_v1 = False
+        self.setup_file_source: str | None = None
+        self.setup_file_md5: str | None = None
+        self.v1_provenance: dict[str, str] = {}
         self._read()
 
     def _read(self):
@@ -472,378 +540,446 @@ class PFile:
             self.endian = _detect_endian(raw_hdr, self.filepath)
             self.header = _parse_header(raw_hdr, self.endian)
 
-            header_size = self.header["header_size"]
-            config_size = self.header["config_size"]
-            record_size = self.header["record_size"]
+            # --- Header-version dispatch (issue #141) ---------------------
+            # Word 11 is MSB=major / LSB=minor (TN-051; ODAS read_odas.m:176).
+            # Observed: v6+ acquisitions carry 0x06NN (SN479: 0x0601 = v6.1;
+            # MR SL435: 0x0603 = v6.3); legacy pre-2015 files carry raw 1
+            # (vendor v1 test: patch_setupstr.m header(11)==1). Anything else
+            # (v2-v5, corrupt) is refused loudly instead of being mis-parsed
+            # with v6 record arithmetic.
+            version_raw = self.header["header_version"]
+            if (version_raw >> 8) >= 6:
+                self._read_v6(f)
+                # An on-disk v1->v6 translated file carries the complete
+                # provenance set as [root] keys; surface it identically to
+                # the in-memory route so derived products (NC, epsilon/chi,
+                # L4) publish the same audit trail either way (issue #141).
+                root_cfg = self.config.get("root", {}) if isinstance(self.config, dict) else {}
+                if root_cfg.get("translated_from"):
+                    self.v1_provenance = {
+                        k: root_cfg[k] for k in V1_PROVENANCE_KEYS if k in root_cfg
+                    }
+                return
 
-            # Header-geometry guard (mirrors extract_pfile_segment): without it
-            # a corrupt record_size/header_size surfaces only later as an opaque
-            # numpy "cannot reshape array" error instead of a clear diagnostic.
-            if header_size < HEADER_BYTES:
-                raise ValueError(f"{self.filepath.name}: invalid header_size={header_size}")
-            if config_size < 0:
-                raise ValueError(f"{self.filepath.name}: invalid config_size={config_size}")
-            if record_size <= header_size:
-                raise ValueError(
-                    f"{self.filepath.name}: invalid record_size={record_size}; "
-                    f"expected > header_size={header_size}"
-                )
+        # The v1 branch runs outside the `with` block: the translator re-reads
+        # the source itself, and the v6 parse then runs on the in-memory
+        # translated stream.
+        if version_raw == 1:
+            # Legacy ODAS header-v1: record 0 holds a binary address matrix
+            # and the configuration lives in an external setup file. Translate
+            # to v6 in memory (vendor precedent: patch_setupstr.m) and parse
+            # the result with the unchanged v6 reader below.
+            from odas_tpw.rsi.v1_translate import translate_v1_bytes
 
-            f.seek(header_size)
-            self.config_str = f.read(config_size).decode("ascii", errors="replace")
-            self.config = parse_config(self.config_str)
+            buf, meta = translate_v1_bytes(self.filepath, setup_file=self._setup_file)
+            bio = io.BytesIO(buf)
+            raw_hdr = bio.read(HEADER_BYTES)
+            self.endian = _detect_endian(raw_hdr, self.filepath)
+            self.header = _parse_header(raw_hdr, self.endian)
+            self.translated_from_v1 = True
+            self.setup_file_source = meta["setup_file"]
+            self.setup_file_md5 = meta["setup_md5"]
+            self.v1_provenance = dict(meta["provenance"])
+            self._read_v6(bio)
+            return
 
-            self.fast_cols = self.header["fast_cols"]
-            self.slow_cols = self.header["slow_cols"]
-            self.n_cols = self.fast_cols + self.slow_cols
-            self.n_rows = self.header["n_rows"]
-            self.matrix = np.array(self.config["matrix"])
+        raise ValueError(
+            f"{self.filepath.name}: unsupported ODAS header version (word 11 = "
+            f"{version_raw} = v{version_raw >> 8}.{version_raw & 0xFF}); "
+            "supported are v6+ files and legacy header-v1 files (translated "
+            "automatically on read, or explicitly with 'rsi-tpw v1to6'); "
+            "see issue #141"
+        )
 
-            f_clock = self.header["clock_hz"] + self.header["clock_frac"] / 1000
-            # Geometry guard: a corrupt header with n_cols/n_rows == 0 (or a
-            # zero clock) otherwise produces a bare ZeroDivisionError with no
-            # file context in the sampling-rate divisions below.
-            if self.n_cols < 1 or self.n_rows < 1 or f_clock <= 0:
-                raise ValueError(
-                    f"{self.filepath.name}: invalid matrix geometry "
-                    f"n_cols={self.n_cols} n_rows={self.n_rows} f_clock={f_clock}"
-                )
-            self.fs_fast = f_clock / self.n_cols
-            self.fs_slow = self.fs_fast / self.n_rows
+    def _read_v6(self, f: BinaryIO) -> None:
+        """Parse a v6-layout stream (header already read into self.header).
 
-            h = self.header
-            self.start_time = datetime(
-                h["year"],
-                h["month"],
-                h["day"],
-                h["hour"],
-                h["minute"],
-                h["second"],
-                h["millisecond"] * 1000,
-                # Header words are unpacked unsigned; a negative timezone
-                # (west of UTC) is stored as two's complement and must be
-                # reinterpreted as int16 or timezone() raises ValueError.
-                tzinfo=timezone(
-                    timedelta(
-                        minutes=h["timezone_min"] - 2**16
-                        if h["timezone_min"] >= 2**15
-                        else h["timezone_min"]
-                    )
-                ),
+        *f* is the open source file positioned anywhere (absolute seeks
+        below), or an ``io.BytesIO`` holding an in-memory v1→v6 translation.
+        This is the pre-#141 ``_read`` body unchanged (mechanically dedented
+        one level out of the ``with`` block; the only functional edit is the
+        BytesIO branch at the ``np.fromfile`` call) — the v6 regression suite
+        pins it with golden per-channel hashes.
+        """
+        header_size = self.header["header_size"]
+        config_size = self.header["config_size"]
+        record_size = self.header["record_size"]
+
+        # Header-geometry guard (mirrors extract_pfile_segment): without it
+        # a corrupt record_size/header_size surfaces only later as an opaque
+        # numpy "cannot reshape array" error instead of a clear diagnostic.
+        if header_size < HEADER_BYTES:
+            raise ValueError(f"{self.filepath.name}: invalid header_size={header_size}")
+        if config_size < 0:
+            raise ValueError(f"{self.filepath.name}: invalid config_size={config_size}")
+        if record_size <= header_size:
+            raise ValueError(
+                f"{self.filepath.name}: invalid record_size={record_size}; "
+                f"expected > header_size={header_size}"
             )
 
-            # ODAS defines the DATA start time as the header timestamp MINUS the
-            # record duration (odas_p2mat.m:413-417: t_start = filetime - recsize),
-            # because the header time marks the END of record 0. setupstr defaults
-            # recsize to 1.0 s when neither 'recsize' nor 'recordDuration' is present
-            # in the [root] config. Without this subtraction every absolute time
-            # coordinate is one record (~1 s) later than the Rockland/ODAS reference
-            # (verified +1.0000076 s vs the MATLAB _allch.nc on SN479_0013).
-            # parse_config lower-cases all keys, so match 'recsize' /
-            # 'recordduration' (ODAS's two accepted spellings).
-            root_cfg = self.config.get("root", {}) if isinstance(self.config, dict) else {}
-            _recsize_raw = root_cfg.get("recsize", root_cfg.get("recordduration"))
-            try:
-                self.recsize = float(_recsize_raw) if _recsize_raw is not None else 1.0
-            except (TypeError, ValueError):
-                self.recsize = 1.0
-            self.start_time -= timedelta(seconds=self.recsize)
+        f.seek(header_size)
+        self.config_str = f.read(config_size).decode("ascii", errors="replace")
+        self.config = parse_config(self.config_str)
 
-            first_record_size = header_size + config_size
-            f.seek(0, 2)
-            file_size = f.tell()
-            n_records = (file_size - first_record_size) // record_size
-            if n_records < 1:
-                raise ValueError(f"{self.filepath.name} contains no data records")
-            if (file_size - first_record_size) % record_size != 0:
-                # read_odas.m:184-187 warns in this case; a partial record
-                # usually means a truncated download or interrupted DAQ.
-                warnings.warn(
-                    f"{self.filepath.name}: file size is not an integer number "
-                    f"of records; trailing partial record ignored",
-                    stacklevel=2,
-                )
+        self.fast_cols = self.header["fast_cols"]
+        self.slow_cols = self.header["slow_cols"]
+        self.n_cols = self.fast_cols + self.slow_cols
+        self.n_rows = self.header["n_rows"]
+        self.matrix = np.array(self.config["matrix"])
 
-            data_words = (record_size - header_size) // 2
-            # Scan-geometry guard: data_words must be a positive multiple of
-            # n_cols, otherwise the records['data'].reshape below raises an
-            # opaque "cannot reshape array" ValueError on a corrupt header.
-            if data_words < self.n_cols or data_words % self.n_cols != 0:
-                raise ValueError(
-                    f"{self.filepath.name}: corrupt record geometry; "
-                    f"data words per record ({data_words}) is not a positive "
-                    f"multiple of n_cols ({self.n_cols})"
-                )
-            dtype = ">i2" if self.endian == ">" else "<i2"
-            udtype = dtype.replace("i", "u")
-
-            # Single np.fromfile read with a structured dtype: avoids the
-            # per-record Python loop and the n_records-way list+vstack that
-            # used to dominate the loader for large files (15-record VMP →
-            # 5,000-record SN465 jumps from <1 s to ~7 s with the old loop).
-            record_dtype = np.dtype(
-                [
-                    ("hdr", udtype, (header_size // 2,)),
-                    ("data", dtype, (data_words,)),
-                ]
+        f_clock = self.header["clock_hz"] + self.header["clock_frac"] / 1000
+        # Geometry guard: a corrupt header with n_cols/n_rows == 0 (or a
+        # zero clock) otherwise produces a bare ZeroDivisionError with no
+        # file context in the sampling-rate divisions below.
+        if self.n_cols < 1 or self.n_rows < 1 or f_clock <= 0:
+            raise ValueError(
+                f"{self.filepath.name}: invalid matrix geometry "
+                f"n_cols={self.n_cols} n_rows={self.n_rows} f_clock={f_clock}"
             )
+        self.fs_fast = f_clock / self.n_cols
+        self.fs_slow = self.fs_fast / self.n_rows
+
+        h = self.header
+        self.start_time = datetime(
+            h["year"],
+            h["month"],
+            h["day"],
+            h["hour"],
+            h["minute"],
+            h["second"],
+            h["millisecond"] * 1000,
+            # Header words are unpacked unsigned; a negative timezone
+            # (west of UTC) is stored as two's complement and must be
+            # reinterpreted as int16 or timezone() raises ValueError.
+            tzinfo=timezone(
+                timedelta(
+                    minutes=h["timezone_min"] - 2**16
+                    if h["timezone_min"] >= 2**15
+                    else h["timezone_min"]
+                )
+            ),
+        )
+
+        # ODAS defines the DATA start time as the header timestamp MINUS the
+        # record duration (odas_p2mat.m:413-417: t_start = filetime - recsize),
+        # because the header time marks the END of record 0. setupstr defaults
+        # recsize to 1.0 s when neither 'recsize' nor 'recordDuration' is present
+        # in the [root] config. Without this subtraction every absolute time
+        # coordinate is one record (~1 s) later than the Rockland/ODAS reference
+        # (verified +1.0000076 s vs the MATLAB _allch.nc on SN479_0013).
+        # parse_config lower-cases all keys, so match 'recsize' /
+        # 'recordduration' (ODAS's two accepted spellings).
+        root_cfg = self.config.get("root", {}) if isinstance(self.config, dict) else {}
+        _recsize_raw = root_cfg.get("recsize", root_cfg.get("recordduration"))
+        try:
+            self.recsize = float(_recsize_raw) if _recsize_raw is not None else 1.0
+        except (TypeError, ValueError):
+            self.recsize = 1.0
+        self.start_time -= timedelta(seconds=self.recsize)
+
+        first_record_size = header_size + config_size
+        f.seek(0, 2)
+        file_size = f.tell()
+        n_records = (file_size - first_record_size) // record_size
+        if n_records < 1:
+            raise ValueError(f"{self.filepath.name} contains no data records")
+        if (file_size - first_record_size) % record_size != 0:
+            # read_odas.m:184-187 warns in this case; a partial record
+            # usually means a truncated download or interrupted DAQ.
+            warnings.warn(
+                f"{self.filepath.name}: file size is not an integer number "
+                f"of records; trailing partial record ignored",
+                stacklevel=2,
+            )
+
+        data_words = (record_size - header_size) // 2
+        # Scan-geometry guard: data_words must be a positive multiple of
+        # n_cols, otherwise the records['data'].reshape below raises an
+        # opaque "cannot reshape array" ValueError on a corrupt header.
+        if data_words < self.n_cols or data_words % self.n_cols != 0:
+            raise ValueError(
+                f"{self.filepath.name}: corrupt record geometry; "
+                f"data words per record ({data_words}) is not a positive "
+                f"multiple of n_cols ({self.n_cols})"
+            )
+        dtype = ">i2" if self.endian == ">" else "<i2"
+        udtype = dtype.replace("i", "u")
+
+        # Single np.fromfile read with a structured dtype: avoids the
+        # per-record Python loop and the n_records-way list+vstack that
+        # used to dominate the loader for large files (15-record VMP →
+        # 5,000-record SN465 jumps from <1 s to ~7 s with the old loop).
+        record_dtype = np.dtype(
+            [
+                ("hdr", udtype, (header_size // 2,)),
+                ("data", dtype, (data_words,)),
+            ]
+        )
+        if isinstance(f, io.BytesIO):
+            # In-memory v1→v6 translation route: np.fromfile needs a real
+            # file descriptor, so read through the buffer protocol instead.
+            records = np.frombuffer(
+                f.getbuffer(), dtype=record_dtype, count=n_records, offset=first_record_size
+            )
+        else:
             f.seek(first_record_size)
             records = np.fromfile(f, dtype=record_dtype, count=n_records)
-            scans_per_record = data_words // self.n_cols
-            total_scans = n_records * scans_per_record
-            raw_flat = records["data"].reshape(total_scans, self.n_cols)
+        scans_per_record = data_words // self.n_cols
+        total_scans = n_records * scans_per_record
+        raw_flat = records["data"].reshape(total_scans, self.n_cols)
 
-            self.channels_raw = {}
-            self.channels = {}
-            self.channel_info = {}
-            self._record_headers = records["hdr"]
-            # ODAS odas_p2mat runs check_bad_buffers before conversion: header
-            # word 16 (0-indexed 15), buffer_status, is a per-record bad-buffer /
-            # DAQ-dropout flag. We do not repair flagged records, but warn so
-            # silent DAQ corruption is not mistaken for clean data feeding
-            # epsilon/chi. Clean acquisitions (e.g. all SN479 VMP files) carry 0.
-            if self._record_headers.shape[1] > 15:
-                n_bad_buf = int(np.count_nonzero(self._record_headers[:, 15]))
-                if n_bad_buf:
-                    warnings.warn(
-                        f"{self.filepath.name}: {n_bad_buf}/{n_records} records "
-                        "flagged bad-buffer (header word 16); DAQ dropouts may "
-                        "corrupt samples (ODAS check_bad_buffers would patch "
-                        "these before conversion)",
-                        stacklevel=2,
-                    )
-            # Names of joined 2-id (32-bit) channels — needed below to apply
-            # ODAS's default-signed correction only to true 32-bit values.
-            joined_channels: set[str] = set()
-
-            ch_config = {}
-            for ch in self.config["channels"]:
-                if "name" not in ch or "type" not in ch:
-                    continue
-                if "id" in ch:
-                    id_str = ch["id"]
-                elif "id_even" in ch and "id_odd" in ch:
-                    # setupstr.m:441-455 dialect: old configs may declare a
-                    # 32-bit channel's word pair as id_even/id_odd with no
-                    # 'id'. Synthesize even-then-odd (even = low word), so the
-                    # 2-id join below behaves identically to an explicit
-                    # "id = even,odd" (#131 m7).
-                    id_str = f"{ch['id_even']} {ch['id_odd']}"
-                else:
-                    continue
-                # Guard the channel-id parse the same way as the matrix rows:
-                # a non-numeric id token from a corrupt config otherwise raises
-                # a bare "invalid literal for int()" with no file/channel context.
-                try:
-                    ids = [int(x) for x in id_str.replace(",", " ").split()]
-                except ValueError as exc:
-                    raise ValueError(
-                        f"{self.filepath.name}: malformed channel id "
-                        f"{id_str!r} for channel {ch.get('name', '?')!r}"
-                    ) from exc
-                ch_config[ch["name"].strip()] = {"ids": ids, **ch}
-
-            matrix = self.matrix
-            unique_ids = set(matrix.flatten())
-            matrix_count = total_scans // self.n_rows
-
-            # Matches the intent of read_odas.m's missing-channel warning
-            # (its message text describes this case): a matrix address with no usable
-            # [channel] section is silently unprocessable — warn so the data
-            # loss is visible. Address 255 is the RSI special character, for
-            # which read_odas.m:236-243 inserts a synthetic 'ch255' section;
-            # old CASPER matrices carry it with no section, so it is exempt.
-            claimed_ids = {i for info in ch_config.values() for i in info["ids"]}
-            orphan_ids = sorted(int(i) for i in unique_ids - claimed_ids if i != 255)
-            if orphan_ids:
+        self.channels_raw = {}
+        self.channels = {}
+        self.channel_info = {}
+        self._record_headers = records["hdr"]
+        # ODAS odas_p2mat runs check_bad_buffers before conversion: header
+        # word 16 (0-indexed 15), buffer_status, is a per-record bad-buffer /
+        # DAQ-dropout flag. We do not repair flagged records, but warn so
+        # silent DAQ corruption is not mistaken for clean data feeding
+        # epsilon/chi. Clean acquisitions (e.g. all SN479 VMP files) carry 0.
+        if self._record_headers.shape[1] > 15:
+            n_bad_buf = int(np.count_nonzero(self._record_headers[:, 15]))
+            if n_bad_buf:
                 warnings.warn(
-                    f"{self.filepath.name}: matrix address(es) "
-                    f"{', '.join(map(str, orphan_ids))} have no usable "
-                    f"[channel] section; their samples will not be processed",
+                    f"{self.filepath.name}: {n_bad_buf}/{n_records} records "
+                    "flagged bad-buffer (header word 16); DAQ dropouts may "
+                    "corrupt samples (ODAS check_bad_buffers would patch "
+                    "these before conversion)",
                     stacklevel=2,
                 )
+        # Names of joined 2-id (32-bit) channels — needed below to apply
+        # ODAS's default-signed correction only to true 32-bit values.
+        joined_channels: set[str] = set()
 
-            for ch_name, info in ch_config.items():
-                ids = info["ids"]
+        ch_config = {}
+        for ch in self.config["channels"]:
+            if "name" not in ch or "type" not in ch:
+                continue
+            if "id" in ch:
+                id_str = ch["id"]
+            elif "id_even" in ch and "id_odd" in ch:
+                # setupstr.m:441-455 dialect: old configs may declare a
+                # 32-bit channel's word pair as id_even/id_odd with no
+                # 'id'. Synthesize even-then-odd (even = low word), so the
+                # 2-id join below behaves identically to an explicit
+                # "id = even,odd" (#131 m7).
+                id_str = f"{ch['id_even']} {ch['id_odd']}"
+            else:
+                continue
+            # Guard the channel-id parse the same way as the matrix rows:
+            # a non-numeric id token from a corrupt config otherwise raises
+            # a bare "invalid literal for int()" with no file/channel context.
+            try:
+                ids = [int(x) for x in id_str.replace(",", " ").split()]
+            except ValueError as exc:
+                raise ValueError(
+                    f"{self.filepath.name}: malformed channel id "
+                    f"{id_str!r} for channel {ch.get('name', '?')!r}"
+                ) from exc
+            ch_config[ch["name"].strip()] = {"ids": ids, **ch}
 
-                if len(ids) == 1:
-                    ch_id = ids[0]
-                    if ch_id not in unique_ids:
-                        continue
-                    col_positions = np.where(matrix == ch_id)
-                    if len(col_positions[1]) == 0:
-                        continue
-                    all_rows_same = np.all(matrix[:, col_positions[1][0]] == ch_id)
-                    n_occ = len(col_positions[0])
+        matrix = self.matrix
+        unique_ids = set(matrix.flatten())
+        matrix_count = total_scans // self.n_rows
 
-                    # Only two layouts are supported: a full matrix column
-                    # (fast channel) or a single occurrence (slow channel).
-                    # Intermediate rates (read_odas.m:328-333 gathers every
-                    # occurrence in scan order) would be silently decimated
-                    # here — warn so the data loss is visible.  Ground
-                    # reference channels are exempt: sampling 'gnd' several
-                    # times per scan is normal instrument design and its
-                    # data content is a zero reference, not a measurement.
-                    expected_occ = self.n_rows if all_rows_same else 1
-                    is_gnd = (
-                        info.get("type", "").strip().lower() == "gnd"
-                        or ch_name.strip().lower() == "gnd"
-                    )
-                    if n_occ != expected_occ and not is_gnd:
-                        warnings.warn(
-                            f"{self.filepath.name}: channel '{ch_name}' (id {ch_id}) "
-                            f"appears {n_occ}x per scan matrix; only "
-                            f"{'one column' if all_rows_same else 'the first occurrence'} "
-                            f"is used, so its sample rate and data are incomplete",
-                            stacklevel=2,
-                        )
+        # Matches the intent of read_odas.m's missing-channel warning
+        # (its message text describes this case): a matrix address with no usable
+        # [channel] section is silently unprocessable — warn so the data
+        # loss is visible. Address 255 is the RSI special character, for
+        # which read_odas.m:236-243 inserts a synthetic 'ch255' section;
+        # old CASPER matrices carry it with no section, so it is exempt.
+        claimed_ids = {i for info in ch_config.values() for i in info["ids"]}
+        orphan_ids = sorted(int(i) for i in unique_ids - claimed_ids if i != 255)
+        if orphan_ids:
+            warnings.warn(
+                f"{self.filepath.name}: matrix address(es) "
+                f"{', '.join(map(str, orphan_ids))} have no usable "
+                f"[channel] section; their samples will not be processed",
+                stacklevel=2,
+            )
 
-                    # Keep raw int16 — converters auto-promote via numpy
-                    # broadcasting when they multiply by float scale factors.
-                    # Skipping the .astype(np.float64) here saves a permanent
-                    # 4x-per-channel buffer (~40-60 MB on SN465-class files).
-                    # .copy() so subsequent in-place ops (unsigned wrap,
-                    # deconvolution overwrites) don't alias raw_flat.
-                    if all_rows_same:
-                        col_idx = col_positions[1][0]
-                        raw_ch = raw_flat[: matrix_count * self.n_rows, col_idx].copy()
-                    else:
-                        row_idx, col_idx = col_positions[0][0], col_positions[1][0]
-                        raw_ch = raw_flat[
-                            row_idx : matrix_count * self.n_rows : self.n_rows,
-                            col_idx,
-                        ].copy()
+        for ch_name, info in ch_config.items():
+            ids = info["ids"]
 
-                    self.channels_raw[ch_name] = raw_ch
-
-                elif len(ids) == 2:
-                    # Config-declared order, not sorted(): ODAS read_odas.m
-                    # tags the FIRST-listed id even/low word (`_E`) and the
-                    # SECOND odd/high word (`_O`), then joins chO*2^16 + chE.
-                    # sorted() only coincides when the low word is listed first
-                    # (#0).
-                    id_even, id_odd = ids[0], ids[1]
-                    if id_even not in unique_ids or id_odd not in unique_ids:
-                        continue
-                    col_e = np.where(matrix == id_even)
-                    col_o = np.where(matrix == id_odd)
-                    row_e, ce = col_e[0][0], col_e[1][0]
-                    row_o, co = col_o[0][0], col_o[1][0]
-                    even_data = raw_flat[
-                        row_e : matrix_count * self.n_rows : self.n_rows,
-                        ce,
-                    ].astype(np.float64)
-                    odd_data = raw_flat[
-                        row_o : matrix_count * self.n_rows : self.n_rows,
-                        co,
-                    ].astype(np.float64)
-                    even_data[even_data < 0] += 2**16
-                    odd_data[odd_data < 0] += 2**16
-                    self.channels_raw[ch_name] = odd_data * 2**16 + even_data
-                    joined_channels.add(ch_name)
-
-            self.t_fast = np.arange(matrix_count * self.n_rows) / self.fs_fast
-            self.t_slow = np.arange(matrix_count) / self.fs_slow
-
-            self._fast_channels = set()
-            self._slow_channels = set()
-            for ch_name, info in ch_config.items():
-                if ch_name not in self.channels_raw:
-                    continue
-                ids = info["ids"]
+            if len(ids) == 1:
                 ch_id = ids[0]
+                if ch_id not in unique_ids:
+                    continue
                 col_positions = np.where(matrix == ch_id)
                 if len(col_positions[1]) == 0:
                     continue
-                if np.all(matrix[:, col_positions[1][0]] == ch_id) and len(ids) == 1:
-                    self._fast_channels.add(ch_name)
-                else:
-                    self._slow_channels.add(ch_name)
+                all_rows_same = np.all(matrix[:, col_positions[1][0]] == ch_id)
+                n_occ = len(col_positions[0])
 
-            # --- Deconvolution (Mudge & Lueck 1994) ---
-            # Channels with diff_gain (except shear probes) are deconvolved
-            # by combining the slow-rate channel X with its pre-emphasized
-            # fast-rate counterpart X_dX to produce a high-resolution signal.
-            # This matches ODAS odas_p2mat.m lines 516-570.
-            if self._deconvolve:
-                self._apply_deconvolution(ch_config)
-
-            # Unsigned wrapping: channels with sign=unsigned (or jac_t type)
-            # need negative int16 values converted to unsigned before conversion.
-            # Matches ODAS read_odas.m lines 370-398.
-            _ALWAYS_UNSIGNED = {"jac_t"}
-            # Types ODAS skips entirely in its sign loop (already converted).
-            _SIGN_SKIP = {"sbt", "sbc", "jac_c", "o2_43f"}
-            for ch_name in list(self.channels_raw.keys()):
-                info = ch_config.get(ch_name, {})
-                ch_type = info.get("type", "raw").strip().lower()
-                sign = info.get("sign", "").strip().lower()
-                if sign == "unsigned" or ch_type in _ALWAYS_UNSIGNED:
-                    raw = self.channels_raw[ch_name]
-                    # Zero-copy bit reinterpretation — int16 -1 → uint16 65535,
-                    # which is what ``raw[raw<0] += 2**16`` produced when raw
-                    # was already float64.  Falls through to the in-place add
-                    # for any non-int16 (deconvolved float64) channels, where
-                    # the wrap can't overflow.  ``raw.dtype == np.int16``
-                    # would fail on the endian-marked ``>i2`` / ``<i2`` dtypes
-                    # that frombuffer/fromfile actually return — compare on
-                    # kind+itemsize instead.
-                    if raw.dtype.kind == "i" and raw.dtype.itemsize == 2:
-                        self.channels_raw[ch_name] = raw.view(
-                            np.dtype(raw.dtype.str.replace("i", "u"))
-                        )
-                    else:
-                        raw[raw < 0] += 2**16
-                elif ch_name in joined_channels and ch_type not in _SIGN_SKIP:
-                    # ODAS default-signed branch (read_odas.m:393-397): every
-                    # joined 32-bit channel not in the skip set and not marked
-                    # unsigned is signed by default, so values with the high bit
-                    # set must wrap down by 2**32.  Real ARCTERX/SN479 2-id data
-                    # is jac_c (skipped, unsigned), so this only fires for other
-                    # signed 32-bit configs, but without it the port diverged
-                    # from ODAS by 2**32 on such channels.
-                    raw = self.channels_raw[ch_name]
-                    raw[raw >= 2**31] -= 2**32
-
-            for ch_name in list(self.channels_raw.keys()):
-                info = ch_config.get(ch_name, {})
-                ch_type = info.get("type", "raw").strip().lower()
-                convert_info = dict(info)
-
-                # When deconvolution is skipped, a pre-emphasized channel
-                # (X_dX, e.g. T1_dT1 / P_dP) keeps its own sparse config, which
-                # lacks the base channel's calibration coefficients. Converting
-                # it would emit misleading "physical units are suspect" warnings
-                # and produce a physical value that is undefined anyway (the
-                # differentiator output only becomes temperature/pressure after
-                # deconvolution). Keep raw counts instead — callers that ask for
-                # deconvolve=False want the raw pre-emphasized counts.
-                if not self._deconvolve and re.match(r"^(\w+)_d\1$", ch_name):
-                    self.channels[ch_name] = self.channels_raw[ch_name]
-                    self.channel_info[ch_name] = {"units": "counts", "type": ch_type}
-                    continue
-
-                converter = CONVERTERS.get(ch_type)
-                if converter is None:
-                    warnings.warn(f"No converter for type '{ch_type}' (channel {ch_name})")
-                    self.channels[ch_name] = self.channels_raw[ch_name]
-                    self.channel_info[ch_name] = {"units": "counts", "type": ch_type}
-                    continue
-
-                phys, units = converter(self.channels_raw[ch_name], convert_info)
-                self.channels[ch_name] = phys
-                self.channel_info[ch_name] = {"units": units, "type": ch_type}
-                # Shear (sh1/sh2) carries the ODAS intermediate that still needs
-                # the /speed^2 fall-rate normalization to become physical shear.
-                # ``units`` stays UDUNITS-valid "s-1"; flag the pre-normalization
-                # state CF-legally in a free-text ``comment`` so a reader of the
-                # per-profile NetCDF does not treat it as final shear. (#104 U1-1.)
-                if ch_type == "shear":
-                    self.channel_info[ch_name]["comment"] = (
-                        "un-normalized ODAS shear intermediate; still missing the "
-                        "/speed^2 fall-rate normalization applied downstream in the "
-                        "epsilon/chi path (physical velocity shear, s-1, only after)"
+                # Only two layouts are supported: a full matrix column
+                # (fast channel) or a single occurrence (slow channel).
+                # Intermediate rates (read_odas.m:328-333 gathers every
+                # occurrence in scan order) would be silently decimated
+                # here — warn so the data loss is visible.  Ground
+                # reference channels are exempt: sampling 'gnd' several
+                # times per scan is normal instrument design and its
+                # data content is a zero reference, not a measurement.
+                expected_occ = self.n_rows if all_rows_same else 1
+                is_gnd = (
+                    info.get("type", "").strip().lower() == "gnd"
+                    or ch_name.strip().lower() == "gnd"
+                )
+                if n_occ != expected_occ and not is_gnd:
+                    warnings.warn(
+                        f"{self.filepath.name}: channel '{ch_name}' (id {ch_id}) "
+                        f"appears {n_occ}x per scan matrix; only "
+                        f"{'one column' if all_rows_same else 'the first occurrence'} "
+                        f"is used, so its sample rate and data are incomplete",
+                        stacklevel=2,
                     )
+
+                # Keep raw int16 — converters auto-promote via numpy
+                # broadcasting when they multiply by float scale factors.
+                # Skipping the .astype(np.float64) here saves a permanent
+                # 4x-per-channel buffer (~40-60 MB on SN465-class files).
+                # .copy() so subsequent in-place ops (unsigned wrap,
+                # deconvolution overwrites) don't alias raw_flat.
+                if all_rows_same:
+                    col_idx = col_positions[1][0]
+                    raw_ch = raw_flat[: matrix_count * self.n_rows, col_idx].copy()
+                else:
+                    row_idx, col_idx = col_positions[0][0], col_positions[1][0]
+                    raw_ch = raw_flat[
+                        row_idx : matrix_count * self.n_rows : self.n_rows,
+                        col_idx,
+                    ].copy()
+
+                self.channels_raw[ch_name] = raw_ch
+
+            elif len(ids) == 2:
+                # Config-declared order, not sorted(): ODAS read_odas.m
+                # tags the FIRST-listed id even/low word (`_E`) and the
+                # SECOND odd/high word (`_O`), then joins chO*2^16 + chE.
+                # sorted() only coincides when the low word is listed first
+                # (#0).
+                id_even, id_odd = ids[0], ids[1]
+                if id_even not in unique_ids or id_odd not in unique_ids:
+                    continue
+                col_e = np.where(matrix == id_even)
+                col_o = np.where(matrix == id_odd)
+                row_e, ce = col_e[0][0], col_e[1][0]
+                row_o, co = col_o[0][0], col_o[1][0]
+                even_data = raw_flat[
+                    row_e : matrix_count * self.n_rows : self.n_rows,
+                    ce,
+                ].astype(np.float64)
+                odd_data = raw_flat[
+                    row_o : matrix_count * self.n_rows : self.n_rows,
+                    co,
+                ].astype(np.float64)
+                even_data[even_data < 0] += 2**16
+                odd_data[odd_data < 0] += 2**16
+                self.channels_raw[ch_name] = odd_data * 2**16 + even_data
+                joined_channels.add(ch_name)
+
+        self.t_fast = np.arange(matrix_count * self.n_rows) / self.fs_fast
+        self.t_slow = np.arange(matrix_count) / self.fs_slow
+
+        self._fast_channels = set()
+        self._slow_channels = set()
+        for ch_name, info in ch_config.items():
+            if ch_name not in self.channels_raw:
+                continue
+            ids = info["ids"]
+            ch_id = ids[0]
+            col_positions = np.where(matrix == ch_id)
+            if len(col_positions[1]) == 0:
+                continue
+            if np.all(matrix[:, col_positions[1][0]] == ch_id) and len(ids) == 1:
+                self._fast_channels.add(ch_name)
+            else:
+                self._slow_channels.add(ch_name)
+
+        # --- Deconvolution (Mudge & Lueck 1994) ---
+        # Channels with diff_gain (except shear probes) are deconvolved
+        # by combining the slow-rate channel X with its pre-emphasized
+        # fast-rate counterpart X_dX to produce a high-resolution signal.
+        # This matches ODAS odas_p2mat.m lines 516-570.
+        if self._deconvolve:
+            self._apply_deconvolution(ch_config)
+
+        # Unsigned wrapping: channels with sign=unsigned (or jac_t type)
+        # need negative int16 values converted to unsigned before conversion.
+        # Matches ODAS read_odas.m lines 370-398.
+        _ALWAYS_UNSIGNED = {"jac_t"}
+        # Types ODAS skips entirely in its sign loop (already converted).
+        _SIGN_SKIP = {"sbt", "sbc", "jac_c", "o2_43f"}
+        for ch_name in list(self.channels_raw.keys()):
+            info = ch_config.get(ch_name, {})
+            ch_type = info.get("type", "raw").strip().lower()
+            sign = info.get("sign", "").strip().lower()
+            if sign == "unsigned" or ch_type in _ALWAYS_UNSIGNED:
+                raw = self.channels_raw[ch_name]
+                # Zero-copy bit reinterpretation — int16 -1 → uint16 65535,
+                # which is what ``raw[raw<0] += 2**16`` produced when raw
+                # was already float64.  Falls through to the in-place add
+                # for any non-int16 (deconvolved float64) channels, where
+                # the wrap can't overflow.  ``raw.dtype == np.int16``
+                # would fail on the endian-marked ``>i2`` / ``<i2`` dtypes
+                # that frombuffer/fromfile actually return — compare on
+                # kind+itemsize instead.
+                if raw.dtype.kind == "i" and raw.dtype.itemsize == 2:
+                    self.channels_raw[ch_name] = raw.view(
+                        np.dtype(raw.dtype.str.replace("i", "u"))
+                    )
+                else:
+                    raw[raw < 0] += 2**16
+            elif ch_name in joined_channels and ch_type not in _SIGN_SKIP:
+                # ODAS default-signed branch (read_odas.m:393-397): every
+                # joined 32-bit channel not in the skip set and not marked
+                # unsigned is signed by default, so values with the high bit
+                # set must wrap down by 2**32.  Real ARCTERX/SN479 2-id data
+                # is jac_c (skipped, unsigned), so this only fires for other
+                # signed 32-bit configs, but without it the port diverged
+                # from ODAS by 2**32 on such channels.
+                raw = self.channels_raw[ch_name]
+                raw[raw >= 2**31] -= 2**32
+
+        for ch_name in list(self.channels_raw.keys()):
+            info = ch_config.get(ch_name, {})
+            ch_type = info.get("type", "raw").strip().lower()
+            convert_info = dict(info)
+
+            # When deconvolution is skipped, a pre-emphasized channel
+            # (X_dX, e.g. T1_dT1 / P_dP) keeps its own sparse config, which
+            # lacks the base channel's calibration coefficients. Converting
+            # it would emit misleading "physical units are suspect" warnings
+            # and produce a physical value that is undefined anyway (the
+            # differentiator output only becomes temperature/pressure after
+            # deconvolution). Keep raw counts instead — callers that ask for
+            # deconvolve=False want the raw pre-emphasized counts.
+            if not self._deconvolve and re.match(r"^(\w+)_d\1$", ch_name):
+                self.channels[ch_name] = self.channels_raw[ch_name]
+                self.channel_info[ch_name] = {"units": "counts", "type": ch_type}
+                continue
+
+            converter = CONVERTERS.get(ch_type)
+            if converter is None:
+                warnings.warn(f"No converter for type '{ch_type}' (channel {ch_name})")
+                self.channels[ch_name] = self.channels_raw[ch_name]
+                self.channel_info[ch_name] = {"units": "counts", "type": ch_type}
+                continue
+
+            phys, units = converter(self.channels_raw[ch_name], convert_info)
+            self.channels[ch_name] = phys
+            self.channel_info[ch_name] = {"units": units, "type": ch_type}
+            # Shear (sh1/sh2) carries the ODAS intermediate that still needs
+            # the /speed^2 fall-rate normalization to become physical shear.
+            # ``units`` stays UDUNITS-valid "s-1"; flag the pre-normalization
+            # state CF-legally in a free-text ``comment`` so a reader of the
+            # per-profile NetCDF does not treat it as final shear. (#104 U1-1.)
+            if ch_type == "shear":
+                self.channel_info[ch_name]["comment"] = (
+                    "un-normalized ODAS shear intermediate; still missing the "
+                    "/speed^2 fall-rate normalization applied downstream in the "
+                    "epsilon/chi path (physical velocity shear, s-1, only after)"
+                )
 
     def _apply_deconvolution(self, ch_config: dict) -> None:
         """Deconvolve pre-emphasized channels to produce high-resolution data.
@@ -948,6 +1084,12 @@ class PFile:
 
     def summary(self) -> None:
         print(f"File: {self.filepath.name}")
+        if self.translated_from_v1:
+            print(
+                "Legacy ODAS header-v1 file, translated to v6 in memory "
+                f"(setup file: {self.setup_file_source}, md5 {self.setup_file_md5}; "
+                "issue #141)"
+            )
         print(
             f"Instrument: {self.config['instrument_info'].get('model', '?')} "
             f"SN {instrument_sn(self.config['instrument_info']) or '?'}"

@@ -138,6 +138,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the perturb `speed` section hash, so stage directories keyed on it recompute
   into fresh directories on the next run (the key set is part of the
   provenance signature).
+- **Legacy ODAS header-v1 `.p` support: the `rsi-tpw v1to6` translator**
+  (issue #141). Pre-2015 files (header word 11 == 1; record 0 holds a binary
+  address matrix, configuration in an external old-dialect setup file) are
+  translated to standard v6 files — vendor `patch_setupstr.m` header contract
+  (words 11-14 → `0x0600`/config-size/0/0, everything else preserved), data
+  records copied byte-for-byte (unlike the vendor tool, per-record headers,
+  timestamps, and bad-buffer flags survive), and the embedded INI is
+  **synthesized** from the setup file (old `key: values` dialect parser in
+  `rsi/setup_v1.py`; auto-detected `setup.txt` > `setup*.txt` > `setup*.cfg`
+  siblings with INI-dialect sniffing, cross-candidate consistency warnings,
+  and a hard record-0-matrix assertion) with machine-readable provenance keys
+  in `[root]`. The **complete** provenance set (`translated_from`,
+  `v1_source_file`, `setup_file_source`, `setup_file_md5`, `sens_source`,
+  `translator`, `translated_on`) is carried onto every derived product —
+  full-record and per-profile NetCDF, standalone epsilon/chi files, and the
+  pipeline L4 writers — on both routes (on-disk translated file and direct
+  raw-v1 read); the setup-file md5 + sens source are the audit trail for the
+  sens⁻² epsilon scaling. `PFile` reads raw v1 files directly via the same
+  translation in memory (`setup_file=` kwarg to override discovery;
+  `translated_from_v1` / `v1_provenance` attributes), refuses any other
+  pre-v6 version loudly (raw + decoded version in the message), and the v6
+  path is pinned by golden per-channel regressions of the three committed
+  fixtures (exact raw-count hashes; converted channels via stats plus
+  order-sensitive shape/finite-mask/decimated-value goldens).
+  Shear sens is never defaulted: `--sens sh1=…,sh2=…`, `<name>_sens:` setup
+  keys, or `patch-config --add-keys` on translated files (the per-epoch
+  workflow); a sens-less shear channel errors at conversion time. FP07
+  thermistors stay raw counts on v1 corpora (no authoritative calibration —
+  the ~4.2 °C offset of the only on-disk candidate coefficients makes them
+  untrustworthy); chi on v1 is deferred. See `docs/rsi-tpw/legacy_v1.md`.
+- **Sea-Bird SBE3/SBE4 (`sbt`/`sbc`) converters** (vendor
+  `odas_sbt/sbc_internal` parity; coef4-6 carry f0/f_ref/n_periods; verified
+  to ≤1e-8 °C / ≤1e-8 mS/cm against the 2013 Taiwan channel-level ground
+  truth; zero counts yield NaN instead of a division blow-up). Files whose
+  configs declare `sbt`/`sbc`-type channels previously kept raw counts with a
+  "no converter" warning — they now convert; files without such channels are
+  bit-identical. The `auto` reference-temperature chain gains an `sbt`-typed
+  candidate tail (after `JAC_T`, matched by channel TYPE, not name), so a v1
+  corpus with counts-valued FP07s lands on the SeaBird automatically, and
+  `--conductivity SBC1 --salinity measured` works (mS/cm, SP_from_C-ready).
+- **v1 refusal guards** in every other positional `.p` reader — perturb trim
+  (which would otherwise write a corrupt "trimmed" copy of every v1 file),
+  perturb merge, `rsi-tpw sensors` (silently-empty inventory), patch-config /
+  patch-template, `rsi-tpw config` (`read_config_string`), and `cutp`
+  (`extract_pfile_segment`) — each names the `rsi-tpw v1to6` remedy.
 - **Selectable reference temperature/conductivity with plausibility QC**
   (issue #131 finding B1). The reference temperature that drives seawater
   properties (viscosity ν for ε; ν and κ_T for χ; the published `T_mean`) is
@@ -326,6 +371,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   every candidate is missing or implausible loses only its temperature route
   (NaN `LT_temp`, counted in the "skipped/degraded" notes) — a figure is
   never crashed by a railed thermistor.
+
+### Changed
+- **A shear channel without a usable `sens` is now a hard per-file error**
+  (was: a warning plus a fabricated default of 1.0 — plausible-looking shear
+  that scales epsilon by sens⁻²). "Usable" means parseable, **finite**, and
+  positive: `nan` would bypass a bare sign check (every NaN comparison is
+  False → all-NaN shear) and `inf` yields all-zero shear, so both are
+  rejected everywhere sens enters — conversion, the `v1to6 --sens` CLI
+  parser, and the Python-API overrides. ODAS `convert_odas.m` parity: the
+  vendor errors outright too. Modern configs always carry `sens`, so only
+  genuinely broken configs and un-patched v1 translations are affected; the
+  error names the three remedies (`patch-config --add-keys`, `v1to6 --sens`,
+  `<name>_sens:` setup keys). (#141)
 
 ### Removed
 - **perturb `epsilon.T1_norm` / `epsilon.T2_norm` config keys** — they were
