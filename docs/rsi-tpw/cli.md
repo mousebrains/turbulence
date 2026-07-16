@@ -25,6 +25,7 @@ rsi-tpw <subcommand> [options]
 | `rsi-tpw dl`       | Interactive dissipation quality viewer |
 | `rsi-tpw ml`       | Interactive mixing viewer (N²/dT·dz⁻¹/K_T/Γ/K_ρ) |
 | `rsi-tpw bench`    | Bench-test diagnostic (quick_bench figures + checklist) |
+| `rsi-tpw sensors`  | Inventory shear/FP07 sensors across a `.p` file tree (see [sensors.md](sensors.md)) |
 
 ## Global Options
 
@@ -62,9 +63,10 @@ than one file, each config is preceded by a `# ===== <path> =====` banner. To
 
 Copy a contiguous range of complete data records from a `.p` file into a new
 valid `.p` file. This is byte-level debugging support, not a pressure- or
-profile-aware scientific extraction. The header and configuration string are
-copied unchanged. Absolute time is correct only for `--start 0`; for `--start
-N>0`, the data is shifted relative to the copied timestamp. The header record
+profile-aware scientific extraction. For `--start N>0` the record-0 header
+timestamp is advanced by N record durations (config `recsize`, default 1.0 s)
+so the segment's absolute start time matches the copied data; the rest of the
+header and the configuration string are copied unchanged. The header record
 count is not authoritative because local readers derive the count from file
 size.
 
@@ -356,6 +358,29 @@ rsi-tpw dl VMP/*.p
 | `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
 | `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal) |
 | `--spec-P-range P_MIN P_MAX` | Pressure range [dbar] for spectral calculations |
+
+## `rsi-tpw ml`
+
+Interactive mixing viewer. Opens an interactive display of the background
+stratification (N², dT/dz) and derived diapycnal-mixing quantities (K_T, Γ,
+K_ρ) with profile navigation.
+
+```bash
+rsi-tpw ml VMP/*.p
+rsi-tpw ml VMP/*.p --salinity 34.5
+```
+
+| Flag | Description |
+|------|-------------|
+| `--fft-length N` | FFT segment length [samples] (default: 1024) |
+| `--diss-length N` | Dissipation window [samples] (default: 4×fft-length) |
+| `--f-AA FLOAT` | Anti-aliasing filter cutoff [Hz] (default: 98) |
+| `--no-goodman` | Disable Goodman coherent noise removal |
+| `--direction {auto,up,down,glide,horizontal}` | Profile direction (default: auto, from vehicle) |
+| `--vehicle NAME` | Vehicle type override (e.g. slocum_glider, vmp) |
+| `--W-min FLOAT` | Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal) |
+| `--spec-P-range P_MIN P_MAX` | Pressure range [dbar] to highlight on the profiles (default: none) |
+| `--salinity FLOAT` | Fixed practical salinity [PSU] for stratification (default: measured from JAC C/T, else 35) |
 
 ## `rsi-tpw bench`
 

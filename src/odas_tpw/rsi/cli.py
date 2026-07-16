@@ -872,9 +872,10 @@ def _add_cutp_parser(subparsers: argparse._SubParsersAction) -> None:
         description=(
             "Create a valid .p file containing a contiguous range of complete "
             "data records. This is a byte-level debugging utility, not a "
-            "pressure- or profile-aware scientific extraction. Absolute time "
-            "is correct only when --start is 0 because the header is copied "
-            "unchanged."
+            "pressure- or profile-aware scientific extraction. For --start "
+            "N>0 the record-0 header timestamp is advanced by N record "
+            "durations so absolute time matches the copied data; the rest of "
+            "the header and config are copied unchanged."
         ),
     )
     p.add_argument("file", metavar="FILE", help="Input .p file")

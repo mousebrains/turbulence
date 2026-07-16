@@ -31,6 +31,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   docs/perturb/configuration.md were corrected to match the code.
 
 ### Added
+- **Real-glider MicroRider end-to-end fixture + test** (issue #131 m11) —
+  `tests/data/MR_SL685_climb.p`, a 150 s / 1.4 MB climb segment (481 → 429 dbar
+  at ~0.35 dbar/s, EM speed ~0.5 m/s) cut at record boundaries from
+  `MR/AIOP2_SL685_0450.p` (MR1000RDL-EM SN 435 on Slocum osu685, ARCTERX IOP2),
+  and `tests/test_mr_e2e.py`: the first test to run the batch machinery
+  (PFile → vehicle resolution → glide profile detection → ε → χ Method 2)
+  against real MicroRider-on-glider data instead of mocks. Direction, `W_min`,
+  and speed (median `|U_EM|`) are passed explicitly so the test is independent
+  of vehicle-resolved defaults.
+- Docs drift fixes (issue #131 m13): `docs/perturb/cli.md` documents
+  `perturb run --force`; `docs/rsi-tpw/cli.md` adds the missing `sensors` row
+  to the subcommand table and a `rsi-tpw ml` reference section.
 - **Cross-probe consistency diagnostics** (#131) — with two or more shear
   probes (or FP07s), every per-profile epsilon/chi dataset now carries
   per-pair global attrs `probe_ratio_pairs` / `probe_ratio_median` /
@@ -324,6 +336,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (they never did anything).
 
 ### Fixed
+- **`rsi-tpw cutp` / `extract_pfile_segment` absolute time** — a segment cut
+  with `--start N>0` used to copy record 0's header timestamp verbatim, so the
+  output's derived start time read N records too early (embedded provenance
+  that would mislead any hotel/GPS join or absolute-time consumer). The tool
+  now advances the record-0 timestamp by `N x recsize` (record duration from
+  the embedded config, default 1.0 s; datetime arithmetic carries milliseconds
+  across minute/hour/day boundaries; a year-0 startup clock is left unchanged
+  with a warning). `tests/data/MR_SL685_climb.p` was regenerated with the
+  fixed tool — data records byte-identical, only the record-0 timestamp words
+  changed — and `test_mr_e2e.py` now pins the fixture's absolute start time.
 - **chi `dof_spec` now subtracts the Goodman DOF loss** (#131 m9) — the chi
   product's `dof_spec` attribute is `1.9 * max(num_ffts − n_vib, 1)` when
   Goodman noise removal ran (each coherently-removed vibration signal costs
