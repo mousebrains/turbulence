@@ -42,6 +42,11 @@ class ChannelsDict(TypedDict, total=False):
     is_profile: bool
     metadata: dict[str, str]
     vehicle: str
+    # Sensor type per loaded vibration/accelerometer channel name (.p:
+    # pf.channel_info; nc: the sensor_type attr extract_profiles writes), so
+    # _build_l1data_from_channels can label piezo-typed channels "VIB" like
+    # the adapter (#131 W5-ii, W3 review F5).
+    channel_types: dict[str, str]
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +394,9 @@ def load_channels(
     dict with keys:
         shear : list of (name, ndarray) — shear probe signals
         accel : list of (name, ndarray) — accelerometer signals
+        channel_types : dict — sensor type per accel channel name (.p:
+            pf.channel_info; nc: the sensor_type variable attr), so the
+            L1 builder can label piezo-typed channels "VIB"
         P : ndarray — pressure (slow)
         T : ndarray — reference temperature (slow)
         C : ndarray — conductivity (slow; only when resolved)
@@ -500,6 +508,11 @@ def _channels_from_pfile(
     out: dict[str, Any] = {
         "shear": shear,
         "accel": accel,
+        # Sensor types of the loaded vibration/accelerometer channels; lets
+        # the L1 builder label piezo sensors "VIB" (see ChannelsDict).
+        "channel_types": {
+            n: str(pf.channel_info.get(n, {}).get("type", "")) for n, _ in accel
+        },
         "P": P,
         "T": T,
         "t_fast": pf.t_fast,
@@ -572,6 +585,7 @@ def _channels_from_nc(
 
     shear = []
     accel = []
+    channel_types: dict[str, str] = {}
     for vname in sorted(ds.variables.keys()):
         var = ds.variables[vname]
         if var.dimensions == ("time_fast",):
@@ -580,6 +594,9 @@ def _channels_from_nc(
                 shear.append((vname, data))
             elif ac_re.match(vname):
                 accel.append((vname, data))
+                # sensor_type attr written by extract_profiles; lets the L1
+                # builder label piezo sensors "VIB" (see ChannelsDict).
+                channel_types[vname] = str(getattr(var, "sensor_type", ""))
 
     metadata = {"source": str(nc_path)}
     for attr in ("instrument_model", "instrument_sn", "source_file", "start_time"):
@@ -621,6 +638,7 @@ def _channels_from_nc(
     out: dict[str, Any] = {
         "shear": shear,
         "accel": accel,
+        "channel_types": channel_types,
         "P": P,
         "T": T,
         "t_fast": t_fast,
@@ -825,7 +843,18 @@ def _build_l1data_from_channels(
     # Vibration/accelerometer
     if accel_arrays:
         vib = np.stack([arr[s_fast:e_fast] for arr in accel_arrays], axis=0)
-        vib_type = "ACC"
+        # Piezo-typed channels are uncalibrated vibration sensors, not linear
+        # accelerometers: label them "VIB", mirroring the adapter's piezo ->
+        # "VIB" convention (#131 W5-ii, W3 review F5). Types come from
+        # load_channels (channel_types); dicts without them (older callers,
+        # synthetic tests) keep the historical "ACC". Label-only: no numeric
+        # consumer branches on vib_type (Goodman treats ACC and VIB alike).
+        types = data.get("channel_types") or {}
+        accel_names = [name for name, _ in data["accel"]]
+        if accel_names and all(types.get(name) == "piezo" for name in accel_names):
+            vib_type = "VIB"
+        else:
+            vib_type = "ACC"
     else:
         vib = np.zeros((0, n), dtype=np.float64)
         vib_type = "NONE"

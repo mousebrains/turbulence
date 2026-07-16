@@ -92,6 +92,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Zenodo DOI badge + identifiers (concept DOI `10.5281/zenodo.21366142`,
   version DOI `10.5281/zenodo.21366143`) in the README and `CITATION.cff`,
   plus a PyPI version badge — back-filled after v0.3.0 was archived on Zenodo.
+- **FP07 factory calibration travels with per-profile NetCDFs** (issue #131
+  finding m8). `extract_profiles` now writes `diff_gain` and the base
+  thermistor's calibration (`e_b`, `b`, `gain`, `beta_1`, `beta_2`, `adc_fs`,
+  `adc_bits`, `T_0` — exactly the set the FP07 electronics-noise model
+  consumes, including `b` for the eta term) as float variable attrs on every
+  `T*_dT*` gradient channel, and the chi loader reads them back from NetCDF
+  sources. A per-profile file without the attrs (written before this change)
+  falls back to the old generic defaults (`diff_gain=0.94`, ODAS-default
+  thermistor coefficients) with a logged warning naming the file — never
+  silently. The attrs carry the **factory** coefficients from the embedded
+  `.p` config string; perturb's FP07 in-situ calibration may rewrite the
+  channel *data*, which is compatible — the attrs describe the electronics.
+- **`load_channels` carries vibration-sensor types** (`channel_types`: `.p`
+  from `pf.channel_info`, NetCDF from the `sensor_type` attr
+  `extract_profiles` writes), and the shared L1 builder labels an
+  all-piezo-typed vibration stack `VIB` instead of `ACC`, matching the
+  adapter's piezo convention (#131 W5-ii, W3 review F5). Label-only: no
+  numeric consumer branches on `vib_type` (Goodman treats both alike), but
+  displays now say `VIB` for piezo instruments (e.g. SN479's `Ax`/`Ay`).
+- **`perturb-plot gamma-scaling` temperature Thorpe route resolves its
+  channel** through the QC'd reference-temperature resolver (`T1` first,
+  then `T2`…/`T`/`JAC_T`) instead of hard-coding slow `T1`. A profile whose
+  every candidate is missing or implausible loses only its temperature route
+  (NaN `LT_temp`, counted in the "skipped/degraded" notes) — a figure is
+  never crashed by a railed thermistor.
 
 ### Removed
 - **perturb `epsilon.T1_norm` / `epsilon.T2_norm` config keys** — they were
@@ -102,6 +127,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (they never did anything).
 
 ### Fixed
+- **Perturb chi no longer computed with generic FP07 calibration** (issue
+  #131 finding m8). The perturb pipeline computes chi from per-profile
+  NetCDFs, whose loader hard-coded `diff_gain=0.94` and an empty thermistor
+  calibration; with the new attrs (see Added) it now uses the instrument's
+  real coefficients — on SN479, `diff_gain=0.912`/`0.920` and `b=0.99861`/
+  `0.99927`, so the 0.94/1.0 hardcodes were provably wrong there. **Numerics
+  note**: chi's FP07 noise floor and bilinear differentiator correction on
+  the perturb path change wherever the real coefficients differ from the
+  defaults — expected, and in the correct direction (`rsi-tpw chi` on the
+  `.p` file and perturb-on-NetCDF now agree; measured on the SN479 fixture
+  the residual matched-window difference drops from ≲3.5% to ≲0.15%).
 - **Measured-salinity CT pairing QC** (rsi `run_pipeline` adapter): the
   practical salinity computed from `JAC_C` now pairs with `JAC_T` only when
   JAC_T passes the plausibility QC, falling back to the resolved reference

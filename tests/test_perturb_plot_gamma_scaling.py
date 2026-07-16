@@ -46,6 +46,9 @@ def _write_run(
     with_eps_paired=False,
     with_diss=True,
     eps_paired_value=EPS,
+    t_name="T1",
+    rail_temperature=False,
+    rail_jac_t=False,
 ):
     """Write a synthetic chi_00/diss_00/profiles_00 run under *root*."""
     for k in range(n_prof):
@@ -95,12 +98,17 @@ def _write_run(
             m = (ts >= ot_span[0]) & (ts <= ot_span[1])
             sigma[m] = sigma[m][::-1]
             T1[m] = T1[m][::-1]
+        # rail_temperature: the named FP07 channel reads a railed 58.46 degC
+        # (a real corpus pathology) so the resolver must skip it;
+        # rail_jac_t rails the JAC_T fallback too (no plausible channel left).
+        t_fp07 = np.full(ts.size, 58.46) if rail_temperature else T1
+        jac_t = np.full(ts.size, 58.46) if rail_jac_t else T1
         prof = xr.Dataset(
             {
                 "P": ("time_slow", P),
                 "sigma0": ("time_slow", sigma),
-                "T1": ("time_slow", T1),
-                "JAC_T": ("time_slow", T1),
+                t_name: ("time_slow", t_fp07),
+                "JAC_T": ("time_slow", jac_t),
                 "SP": ("time_slow", np.full(ts.size, 35.0)),
                 "SA": ("time_slow", np.full(ts.size, 35.16)),
                 "CT": ("time_slow", T1),
@@ -389,6 +397,35 @@ def test_route_temperature_uses_its_own_floor_and_patch(tmp_path):
     assert res.any()
     # and the temperature route's patch N2 (alpha*g) feeds N2_scale there.
     np.testing.assert_allclose(t_temp["N2_scale"][res], t_temp["N2p_temp"][res], rtol=1e-12)
+
+
+def test_temperature_route_resolves_renamed_channel(tmp_path):
+    """No slow T1: the QC'd resolver finds T5 instead of hard-coding T1
+    (#131 W5-ii)."""
+    _write_run(tmp_path, t_name="T5")
+    table = G.sweep(_args(tmp_path))
+    assert np.isfinite(table["LT_temp"]).any()
+
+
+def test_temperature_route_falls_back_past_railed_t1(tmp_path):
+    """A railed T1 (58.46 degC, a real corpus pathology) is skipped; the
+    resolver falls through to the healthy JAC_T and the route survives."""
+    _write_run(tmp_path, rail_temperature=True)
+    table = G.sweep(_args(tmp_path))
+    assert np.isfinite(table["LT_temp"]).any()
+    # density route untouched
+    assert np.isfinite(table["LT_sigma"]).any()
+
+
+def test_temperature_route_degrades_never_crashes(tmp_path, capsys):
+    """Every temperature candidate railed: the route degrades to NaN with a
+    stderr note; the sweep (and thus the figure) still completes."""
+    _write_run(tmp_path, rail_temperature=True, rail_jac_t=True)
+    table = G.sweep(_args(tmp_path))
+    assert not np.isfinite(table["LT_temp"]).any()
+    assert np.isfinite(table["LT_sigma"]).any()  # density route unaffected
+    err = capsys.readouterr().err
+    assert "no_temperature_route" in err
 
 
 def test_min_run_and_keep_truncated_gate_resolution(tmp_path):
