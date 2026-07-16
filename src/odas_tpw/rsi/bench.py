@@ -47,7 +47,7 @@ import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
-from odas_tpw.rsi.p_file import PFile
+from odas_tpw.rsi.p_file import PFile, instrument_sn
 from odas_tpw.scor160.spectral import csd_odas
 
 log = logging.getLogger(__name__)
@@ -211,7 +211,7 @@ def compute_bench_stats(pf: PFile, fft_sec: float = DEFAULT_FFT_SEC) -> BenchSta
     spec_names = set(_spectrum_channels(pf))
     stats = BenchStats(
         filename=pf.filepath.name,
-        sn=str(pf.config.get("instrument_info", {}).get("sn", "") or ""),
+        sn=str(instrument_sn(pf.config.get("instrument_info", {}))),
         fs_fast=float(pf.fs_fast),
         fs_slow=float(pf.fs_slow),
         fft_sec=float(fft_sec),

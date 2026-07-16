@@ -344,6 +344,8 @@ def _load_source(source: "PFile | str | Path") -> dict[str, Any]:
 
 def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
     """Extract data dict from a PFile."""
+    from odas_tpw.rsi.p_file import instrument_sn
+
     channels = []
     for ch_name, ch_data in pf.channels.items():
         dim = "time_fast" if pf.is_fast(ch_name) else "time_slow"
@@ -368,7 +370,7 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
     global_attrs = {
         "Conventions": "CF-1.13, ACDD-1.3",
         "instrument_model": pf.config["instrument_info"].get("model", ""),
-        "instrument_sn": pf.config["instrument_info"].get("sn", ""),
+        "instrument_sn": instrument_sn(pf.config["instrument_info"]),
         "operator": pf.config["cruise_info"].get("operator", ""),
         "project": pf.config["cruise_info"].get("project", ""),
         "start_time": pf.start_time.isoformat(),
