@@ -786,3 +786,111 @@ class TestCliTemperatureFlags:
         assert "salinity" not in captured  # None values are stripped
         assert captured["temperature"] == "T2"
         assert "automatic" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# run_pipeline path: constant reference temperature goes through the SAME
+# shared resolver as the modular path (#133 P2-2)
+# ---------------------------------------------------------------------------
+
+SAMPLE_P = Path(__file__).parent / "data" / "SN479_0006.p"
+
+
+@pytest.mark.skipif(not SAMPLE_P.exists(), reason="Test data not available")
+class TestRunPipelineConstantTemperatureQC:
+    """An implausible constant on the full-pipeline path must warn and record
+    its QC reason in the L4 attrs, identically to the modular path — not
+    claim temperature_qc='pass'."""
+
+    def _run(self, tmp_path, temperature):
+        from odas_tpw.rsi.pipeline import run_pipeline
+
+        run_pipeline(
+            [SAMPLE_P],
+            tmp_path,
+            temperature=temperature,
+            compute_chi_epsilon=False,
+            compute_chi_fit=False,
+        )
+        l4_files = sorted((tmp_path / SAMPLE_P.stem).glob("profile_*/L4_epsilon.nc"))
+        assert l4_files, "pipeline produced no L4_epsilon.nc"
+        import xarray as xr
+
+        with xr.open_dataset(l4_files[0]) as ds:
+            return dict(ds.attrs)
+
+    def test_constant_99_warns_and_records_reason(self, tmp_path):
+        with pytest.warns(UserWarning, match="outside plausible ocean range"):
+            attrs = self._run(tmp_path, 99.0)
+        assert attrs["temperature_source"] == "constant:99"
+        assert "outside plausible" in attrs["temperature_qc"]
+        assert attrs["temperature_qc"] != "pass"
+
+    def test_constant_nan_warns_and_records_reason(self, tmp_path):
+        with pytest.warns(UserWarning, match="outside plausible ocean range"):
+            attrs = self._run(tmp_path, float("nan"))
+        assert attrs["temperature_source"] == "constant:nan"
+        assert "outside plausible" in attrs["temperature_qc"]
+
+    def test_constant_in_range_still_passes(self, tmp_path):
+        attrs = self._run(tmp_path, 12.0)
+        assert attrs["temperature_source"] == "constant:12"
+        assert attrs["temperature_qc"] == "pass"
+
+
+# ---------------------------------------------------------------------------
+# Every shipped tracked perturb config must load against the current schema
+# (#133 P2-1: the T1_norm/T2_norm removal stranded ARCTERX/perturb.yaml)
+# ---------------------------------------------------------------------------
+
+
+def _tracked_perturb_configs() -> list[Path]:
+    """Tracked perturb YAML configs shipped in the repo (examples/, ARCTERX/).
+
+    Uses ``git ls-files`` so untracked local configs (e.g. scratch campaign
+    dirs) are excluded; returns [] outside a git checkout.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "--", "examples/", "ARCTERX/"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    return [
+        REPO_ROOT / line
+        for line in out.splitlines()
+        if line.endswith(".yaml") and Path(line).name.startswith("perturb")
+    ]
+
+
+class TestShippedConfigsValidate:
+    """A schema change (key added/removed) must never strand a shipped
+    config: every tracked perturb.yaml has to load under the current strict
+    validation."""
+
+    def test_finds_the_shipped_configs(self):
+        configs = _tracked_perturb_configs()
+        if not configs:
+            pytest.skip("not a git checkout (no tracked configs found)")
+        names = {p.relative_to(REPO_ROOT).as_posix() for p in configs}
+        assert "ARCTERX/perturb.yaml" in names
+        assert "examples/arcterx_2025_interior/perturb.yaml" in names
+
+    @pytest.mark.parametrize(
+        "cfg_path",
+        _tracked_perturb_configs() or [None],
+        ids=lambda p: p.relative_to(REPO_ROOT).as_posix() if p else "no-git",
+    )
+    def test_load_config_succeeds(self, cfg_path):
+        if cfg_path is None:
+            pytest.skip("not a git checkout (no tracked configs found)")
+        from odas_tpw.perturb.config import load_config
+
+        config = load_config(cfg_path)
+        assert isinstance(config, dict) and config

@@ -552,6 +552,14 @@ def _channels_from_nc(
 ) -> ChannelsDict:
     import netCDF4 as nc
 
+    # Masked samples (_FillValue gaps) must become NaN, not the raw fill
+    # buffer (~9.97e36): a single masked U_EM/Incl/P sample would otherwise
+    # enter the speed estimation as a physical value and blow up epsilon
+    # through the shear/speed**2 normalization. The NaN-safe interpolation
+    # in the speed paths then repairs the gap. Applied to EVERY variable
+    # this loader reads (no special-casing); a no-op for unmasked data.
+    from odas_tpw.rsi.profile import _nc_filled
+
     ds = nc.Dataset(str(nc_path), "r")
     sh_re = re.compile(sh_pat) if sh_pat != SH_PATTERN.pattern else SH_PATTERN
     ac_re = re.compile(ac_pat) if ac_pat != AC_PATTERN.pattern else AC_PATTERN
@@ -560,10 +568,10 @@ def _channels_from_nc(
     fs_slow = float(ds.fs_slow)
     is_profile = hasattr(ds, "profile_number")
 
-    t_fast = ds.variables["t_fast"][:].data
-    t_slow = ds.variables["t_slow"][:].data
+    t_fast = _nc_filled(ds.variables["t_fast"])
+    t_slow = _nc_filled(ds.variables["t_slow"])
     n_slow = len(t_slow)
-    P = ds.variables[p_name][:].data.astype(np.float64)
+    P = _nc_filled(ds.variables[p_name])
 
     # Temperature/conductivity candidates: slow variables matching the
     # reference-T pattern plus the JAC CT pair, and any explicitly requested
@@ -579,18 +587,17 @@ def _channels_from_nc(
             or vname in (t_name, c_name)
         )
         if wanted and var.dimensions in (("time_slow",), ("time_fast",)):
-            resolve_map[vname] = var[:].data.astype(np.float64)
+            resolve_map[vname] = _nc_filled(var)
 
     shear = []
     accel = []
     for vname in sorted(ds.variables.keys()):
         var = ds.variables[vname]
         if var.dimensions == ("time_fast",):
-            data = var[:].data.astype(np.float64)
             if sh_re.match(vname):
-                shear.append((vname, data))
+                shear.append((vname, _nc_filled(var)))
             elif ac_re.match(vname):
-                accel.append((vname, data))
+                accel.append((vname, _nc_filled(var)))
 
     metadata = {"source": str(nc_path)}
     # speed_method / speed_source: per-profile speed provenance written by the
@@ -620,9 +627,9 @@ def _channels_from_nc(
     speed_fast = None
     W_slow = None
     if "speed_fast" in ds.variables:
-        speed_fast = ds.variables["speed_fast"][:].data.astype(np.float64)
+        speed_fast = _nc_filled(ds.variables["speed_fast"])
     if "W_slow" in ds.variables:
-        W_slow = ds.variables["W_slow"][:].data.astype(np.float64)
+        W_slow = _nc_filled(ds.variables["W_slow"])
 
     ds.close()
 

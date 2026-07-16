@@ -37,6 +37,7 @@ def _write_profile_nc(
     path: Path,
     *,
     u_em: float | None = 0.43,
+    u_em_masked_at: int | None = None,
     incl: bool = False,
     speed_fast: float | None = None,
     speed_attrs: dict | None = None,
@@ -44,7 +45,9 @@ def _write_profile_nc(
 ) -> Path:
     """Per-profile NC (is_profile=True): 8 s at 512/64 Hz, P descending
     0.5 dbar/s, shear+accel noise, optional U_EM / inclinometers /
-    precomputed speed_fast / perturb-style speed provenance attrs."""
+    precomputed speed_fast / perturb-style speed provenance attrs.
+    ``u_em_masked_at`` leaves one U_EM sample unwritten, so it reads back
+    masked at the netCDF default _FillValue (~9.97e36)."""
     import netCDF4 as nc
 
     fs_fast, fs_slow = 512.0, 64.0
@@ -70,7 +73,12 @@ def _write_profile_nc(
             rng.standard_normal(n_fast) * 0.001
         )
     if u_em is not None:
-        ds.createVariable("U_EM", "f8", ("time_slow",))[:] = np.full(n_slow, u_em)
+        v = ds.createVariable("U_EM", "f8", ("time_slow",))
+        if u_em_masked_at is None:
+            v[:] = np.full(n_slow, u_em)
+        else:
+            v[:u_em_masked_at] = u_em
+            v[u_em_masked_at + 1 :] = u_em
     if incl:
         # MR convention (CLAUDE.md): Incl_Y ~ pitch, Incl_X mostly roll. A
         # small pitch wobble gives Incl_Y the larger percentile spread so
@@ -393,6 +401,20 @@ class TestSpeedMethods:
         assert ds.attrs["speed_source"] == "fixed --speed 0.6"
         assert "speed_method" not in ds.attrs
 
+    def test_masked_u_em_sample_stays_physical(self, tmp_path):
+        """PR #137 review P2: a masked (_FillValue) U_EM sample must become
+        NaN and be interpolated across, never enter the speed as the raw
+        ~9.97e36 fill buffer (which corrupted every fast sample through the
+        Butterworth smoothing and hence epsilon via shear/speed**2)."""
+        from odas_tpw.rsi.dissipation import _compute_epsilon
+
+        nc_path = _write_profile_nc(tmp_path / "prof.nc", u_em_masked_at=100)
+        ds = _compute_epsilon(nc_path, speed_method="em")[0]
+        speed = np.asarray(ds["speed"].values, dtype=float)
+        assert np.isfinite(speed).all()
+        assert float(np.max(speed)) < 1.0  # nothing remotely near 1e36
+        np.testing.assert_allclose(float(ds["speed"].median()), 0.43, atol=0.01)
+
     def test_constant_method_rejected_with_hint(self, tmp_path):
         """'constant' is compute_speed_for_pfile vocabulary (perturb has the
         value plumbing); here the fixed --speed is the equivalent, so the
@@ -498,6 +520,13 @@ class TestRunPipelineWmin:
         assert detect["W_min"] == 0.2
         assert l2_params.profile_min_W == 0.2
 
+    def test_speed_only_does_not_trip_exclusivity(self, monkeypatch, tmp_path):
+        """PR #137 review P1: run_pipeline(speed=0.6) with speed_method unset
+        must run — the old speed_method='pressure' DEFAULT made the
+        exclusivity guard reject every fixed-speed call."""
+        detect, _l2_params = self._run(monkeypatch, tmp_path, speed=0.6)
+        assert detect  # reached detection/processing, no ValueError
+
 
 # ---------------------------------------------------------------------------
 # pipeline CLI routes YAML epsilon.speed_method/aoa_deg/W_min (F10)
@@ -566,3 +595,34 @@ def test_run_pipeline_rejects_speed_and_method(tmp_path):
 
     with pytest.raises(ValueError, match="mutually exclusive"):
         run_pipeline([Path("does_not_exist.p")], tmp_path, speed=0.6, speed_method="em")
+
+
+def test_pipeline_cli_speed_only_runs(monkeypatch, tmp_path):
+    """PR #137 review P1 (CLI path): `rsi-tpw pipeline --speed 0.6` passes a
+    fixed speed with NO speed_method kwarg and must reach run_pipeline."""
+    _require(_MR_FILE)
+    captured: dict = {}
+
+    def fake_run_pipeline(p_files, output_dir, **kwargs):
+        captured.update(kwargs)
+        return output_dir
+
+    monkeypatch.setattr("odas_tpw.rsi.pipeline.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rsi-tpw", "pipeline", str(_MR_FILE),
+            "--speed", "0.6", "-o", str(tmp_path / "out"),
+        ],
+    )
+    from odas_tpw.rsi.cli import main
+
+    main()  # must not raise
+    assert captured["speed"] == 0.6
+    assert "speed_method" not in captured
+    # And the real run_pipeline accepts exactly this combination:
+    from odas_tpw.rsi.pipeline import run_pipeline
+
+    out = run_pipeline([Path("does_not_exist.p")], tmp_path, **captured)
+    assert out == tmp_path
