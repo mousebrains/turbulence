@@ -378,6 +378,12 @@ report. The checklist text (`_checklist.txt`) reports each quantitative criterio
 as PASS/FAIL with its measured value and flags the subjective ones (spectral
 shape, "similar to each other", spikes) as REVIEW.
 
+A file that cannot be evaluated (unreadable/corrupt `.p`) is reported per-file
+without aborting the batch, and the process **exits 1** when any file failed —
+so a scripted pre-deployment check can gate on the exit code. (Checklist
+FAIL/REVIEW verdicts do not affect the exit code; they are findings, not
+errors.)
+
 | Flag | Description |
 |------|-------------|
 | `-o`, `--output DIR` | Output directory for figures + checklist (default: `./bench/`, unless `--show` is given without `-o`, which only displays) |

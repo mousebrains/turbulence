@@ -31,6 +31,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   docs/perturb/configuration.md were corrected to match the code.
 
 ### Added
+- **Cross-probe consistency diagnostics** (#131) — with two or more shear
+  probes (or FP07s), every per-profile epsilon/chi dataset now carries
+  per-pair global attrs `probe_ratio_pairs` / `probe_ratio_median` /
+  `n_ratio_windows` / `probe_ratio_z` (`chi_`-prefixed on the chi product):
+  the median first/second-probe ratio over the windows where both are finite,
+  plus the significance z of the median ln-ratio given the Lueck (2022)
+  per-window `sigma_ln`. A two-tier `logging` warning flags persistent
+  inter-probe disagreement — statistical (z > 3, ≥ 20 windows) and practical
+  (median ratio beyond 1.8× either way, ≥ 10 windows) — because per-window QC
+  (fom/FM) cannot see a persistent systematic offset (vmp142's pairs disagreed
+  1.8×/2.2× with clean per-window QC; CAS_080.P has sh1 ≈ 1000× sh2 with
+  fom ≈ 1). Observational only, nothing is auto-dropped; the attrs do **not**
+  survive depth binning / combining (attrs are rebuilt from a schema there) —
+  read them from the per-profile files. Shared helper in
+  `processing/probe_consistency.py`; see docs/rsi-tpw/pipeline.md.
+- **Calibration staleness guard** for `rsi-tpw sensors --cal-dir` (#131 m2) —
+  each sheet's "Recommended re-calibration" date is parsed onto its
+  calibration point, and observations governed by a calibration past that
+  date are annotated `[cal N months old at use; recal was recommended by
+  YYYY-MM-DD — verify no newer sheet exists]`. Sheets without the line fall
+  back to `--cal-max-age-months` (default **12**, Rockland's actual
+  recommendation — the flag only sets the fallback). The mismatch summary
+  reports the stale count even when no sensitivities mismatch. The check is
+  only as good as the sheets directory (completeness assumption documented in
+  docs/rsi-tpw/sensors.md).
+- **Strict exit codes** (#131 m3) — `rsi-tpw bench` now exits **1** when any
+  file failed to evaluate (per-file errors still don't abort the batch;
+  checklist FAIL/REVIEW verdicts don't affect the code), and
+  `rsi-tpw sensors --cal-strict` exits **3** (distinct from the scan-failure
+  code 1) when the `--cal-dir` check finds sensitivity mismatches outside
+  `--cal-tol`; default behavior stays report-only. `--cal-strict` without
+  `--cal-dir` is an error. Both flags are available on `rsi-tpw sensors` and
+  `python -m odas_tpw.rsi.sensor_inventory`.
 - **Old-format (2013-2017 CASPER-era) MicroRider config dialects** (#131 m1,
   m5, m6, m7) — pre-2017 configs now inventory and convert faithfully:
   `serial_num` is honored wherever the instrument SN is read (`summary`,
@@ -291,6 +324,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (they never did anything).
 
 ### Fixed
+- **chi `dof_spec` now subtracts the Goodman DOF loss** (#131 m9) — the chi
+  product's `dof_spec` attribute is `1.9 * max(num_ffts − n_vib, 1)` when
+  Goodman noise removal ran (each coherently-removed vibration signal costs
+  one FFT segment of DOF, Lueck 2022b), matching the epsilon convention in
+  `dissipation.py` instead of the uncorrected `1.9 * num_ffts`. **Note for
+  downstream consumers of `dof_spec`:** values on the chi product are now
+  smaller wherever Goodman ran with vibration channels present (e.g. 9.5
+  instead of 13.3 for the default 4-segment window with 2 accelerometers);
+  chi values themselves are unchanged.
 - **Stratification salinity is now scrubbed, with a truthful provenance note**
   (#131 M6). The N²/dT/dz paths (window-scale in the diss/chi products,
   slow-grid in the profile product) previously read a hotel-sourced salinity
