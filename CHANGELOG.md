@@ -7,6 +7,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Selectable reference temperature/conductivity with plausibility QC**
+  (issue #131 finding B1). The reference temperature that drives seawater
+  properties (viscosity ν for ε; ν and κ_T for χ; the published `T_mean`) is
+  no longer hard-coded to `T1`:
+  - **rsi**: new `epsilon.temperature` / `epsilon.conductivity` config keys
+    (and the same in `chi`), plus `--temperature` / `--conductivity` flags on
+    `rsi-tpw eps`, `chi`, and `pipeline`. Default `"auto"` picks the first
+    plausible of `T1`..`Tn`, bare `T`, `JAC_T` — a railed/drifting/mostly-NaN
+    channel is skipped with a warning (QC evaluates in-water samples,
+    P > 0.5 dbar, when pressure is available), and a file with **no**
+    plausible reference temperature errors per file instead of publishing
+    wrong-viscosity products (on a railed-T1 corpus the old behavior was
+    ε ≈ 5× low with all-green QC). An explicitly named channel is honored
+    even when it fails QC (loud warning); a **number** is a constant
+    reference temperature in °C (ODAS `constant_temp` parity). ODAS
+    divergence is deliberate: ODAS uses T1 unchecked and silently
+    substitutes 10 °C when temperature is missing.
+  - `--salinity` (eps/chi) now also accepts `"measured"`: per-sample
+    practical salinity from the resolved conductivity/temperature pair and
+    pressure (TEOS-10), preferring the co-located `JAC_C`/`JAC_T` pair and
+    falling back to the selected reference temperature (with a warning) when
+    JAC_T is implausible; on `pipeline`, `--salinity measured` maps to the
+    automatic path (measured JAC salinity was already preferred there).
+  - Product provenance: the diss/chi NetCDFs gain `temperature_source`,
+    `temperature_qc`, and `conductivity_source` (the resolved conductivity
+    channel — consumed only under `salinity: measured`), plus
+    `salinity_pair_temperature` when a measured salinity was actually
+    computed; the run_pipeline L4 products gain `temperature_source`/
+    `temperature_qc`. A constant reference outside the plausible ocean
+    range is recorded in `temperature_qc` (and warns) instead of claiming
+    "pass".
+  - **perturb**: `epsilon.T_source` is now actually implemented (it was
+    parsed but stripped before the computation — a dead key). `null`/`"auto"`
+    = the QC chain above; a channel name or a number work as in rsi. One knob
+    serves both the diss and chi stages. The interactive rsi viewers
+    (`rsi-tpw ql`/`dl`/`ml`) reuse the same resolver for their viscosity
+    preview.
+  - **Note — hash churn**: adding the `temperature`/`conductivity` keys to
+    the rsi `epsilon`/`chi` sections (and removing perturb's `T1_norm`/
+    `T2_norm`, below) changes the config hashes, so existing `eps_NN`/
+    `chi_NN` (and perturb stage) directories will not be reused — the next
+    run recomputes into fresh directories. Deliberate: the key set is part
+    of the provenance signature.
 - **Salinity from a hotel file** — `epsilon.salinity`, `chi.salinity`, and the
   new `stratification.salinity` now accept `"hotel"` (or `"hotel:<var>"`) to draw
   practical salinity from a hotel-injected channel (default variable `salinity`),
@@ -50,7 +93,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   version DOI `10.5281/zenodo.21366143`) in the README and `CITATION.cff`,
   plus a PyPI version badge — back-filled after v0.3.0 was archived on Zenodo.
 
+### Removed
+- **perturb `epsilon.T1_norm` / `epsilon.T2_norm` config keys** — they were
+  never implemented (stripped before the computation, a silent no-op) and the
+  template comment ("null = blend T1/T2") described behavior that never
+  existed. **Breaking**: `validate_config` is strict, so a config that still
+  sets them now fails loudly with an unknown-key error — delete the two lines
+  (they never did anything). The shipped configs (`ARCTERX/perturb.yaml`,
+  `examples/arcterx_2025_interior/perturb.yaml`) are migrated in this change,
+  and a test now loads every tracked shipped perturb config against the
+  current schema so a future key change cannot strand one again.
+
 ### Fixed
+- **Measured-salinity CT pairing QC** (rsi `run_pipeline` adapter): the
+  practical salinity computed from `JAC_C` now pairs with `JAC_T` only when
+  JAC_T passes the plausibility QC, falling back to the resolved reference
+  temperature with a warning — previously a railed JAC_T silently poisoned
+  the measured salinity.
+- **`rsi-tpw pipeline` batch robustness**: one unreadable/implausible file no
+  longer aborts a multi-file run; the pipeline logs the per-file error and
+  continues (mirroring the `eps`/`chi` loops).
 - **`rsi-tpw patch-template`** now scaffolds *every* per-channel calibration
   field, not just `coef0`/`coef1`. The previous hardcoded whitelist silently
   dropped higher-order polynomial coefficients (a pressure channel's `coef2`,

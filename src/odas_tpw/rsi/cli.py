@@ -80,6 +80,32 @@ def _resolve_files(patterns: list[str], extensions: set[str] | None = None) -> l
 
 
 # ---------------------------------------------------------------------------
+# Argument-type parsers
+# ---------------------------------------------------------------------------
+
+
+def _parse_salinity(value: str) -> float | str:
+    """--salinity: a PSU number, or 'measured' (from the C/T channels)."""
+    v = value.strip()
+    if v.lower() == "measured":
+        return "measured"
+    try:
+        return float(v)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected a salinity in PSU or 'measured', got {value!r}"
+        ) from None
+
+
+def _parse_temperature(value: str) -> float | str:
+    """--temperature: a channel name, 'auto', or a fixed value [degC]."""
+    try:
+        return float(value)
+    except ValueError:
+        return value
+
+
+# ---------------------------------------------------------------------------
 # Config integration helpers
 # ---------------------------------------------------------------------------
 
@@ -118,6 +144,8 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
             "vehicle": "vehicle",
             "f_AA": "f_AA",
             "salinity": "salinity",
+            "temperature": "temperature",
+            "conductivity": "conductivity",
         }
     elif section == "chi":
         mapping = {
@@ -132,6 +160,8 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
             "fit_method": "fit_method",
             "spectrum_model": "spectrum_model",
             "salinity": "salinity",
+            "temperature": "temperature",
+            "conductivity": "conductivity",
         }
     elif section == "epsilon_pipeline":
         mapping = {
@@ -141,6 +171,8 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
             "f_AA": "f_AA",
             "speed": "speed",
             "salinity": "salinity",
+            "temperature": "temperature",
+            "conductivity": "conductivity",
         }
     elif section == "chi_pipeline":
         mapping = {
@@ -152,6 +184,8 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
             "spectrum_model": "spectrum_model",
             "speed": "speed",
             "salinity": "salinity",
+            "temperature": "temperature",
+            "conductivity": "conductivity",
         }
     else:
         return {}
@@ -472,13 +506,48 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
     eps_merged = _merge_for_section(args, "epsilon_pipeline")
     chi_merged = _merge_for_section(args, "chi_pipeline")
 
+    # --salinity measured maps to None: run_pipeline already auto-prefers
+    # measured JAC C/T salinity (rsi/pipeline._resolve_salinity); the string
+    # must never reach the numeric salinity paths.
+    salinity = eps_merged.get("salinity")
+    if isinstance(salinity, str):
+        if salinity.strip().lower() == "measured":
+            print(
+                "Note: salinity 'measured' is the pipeline's automatic behavior "
+                "(measured JAC C/T salinity is preferred when present); "
+                "proceeding with the automatic path"
+            )
+            salinity = None
+        else:
+            print(
+                f"Error: salinity={salinity!r} is not valid for the pipeline; "
+                "use a number or 'measured'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    # The pipeline resolves ONE temperature/conductivity for both epsilon and
+    # chi (they share the per-file L1 load); a differing [chi] value in the
+    # config would otherwise be silently ignored.
+    for key in ("temperature", "conductivity"):
+        eps_val, chi_val = eps_merged.get(key, "auto"), chi_merged.get(key, "auto")
+        if chi_val != eps_val:
+            print(
+                f"Warning: pipeline uses a single {key} for epsilon and chi; "
+                f"[chi] {key}={chi_val!r} is ignored in favor of [epsilon] "
+                f"{key}={eps_val!r}",
+                file=sys.stderr,
+            )
+
     kwargs = {
         "direction": eps_merged.get("direction", "auto"),
         "vehicle": eps_merged.get("vehicle"),
         "speed": eps_merged.get("speed"),
         "fft_length": eps_merged.get("fft_length", 1024),
         "f_AA": eps_merged.get("f_AA", 98.0),
-        "salinity": eps_merged.get("salinity"),
+        "salinity": salinity,
+        "temperature": eps_merged.get("temperature", "auto"),
+        "conductivity": eps_merged.get("conductivity", "auto"),
         "goodman": eps_merged.get("goodman", True),
         "chi_fft_length": chi_merged.get("fft_length", 1024),
         "fp07_model": chi_merged.get("fp07_model", "single_pole"),
@@ -633,6 +702,12 @@ def _cmd_ml(args: argparse.Namespace) -> None:
 
     W_min = getattr(args, "W_min", None)  # None -> direction-aware default in the viewer
 
+    # The viewer already prefers measured JAC C/T salinity when no fixed value
+    # is given, so 'measured' maps to None (the automatic path).
+    salinity = args.salinity
+    if isinstance(salinity, str):
+        salinity = None
+
     p_files = _resolve_p_files(args.files)
     for pf_path in p_files:
         mixing_look(
@@ -645,7 +720,7 @@ def _cmd_ml(args: argparse.Namespace) -> None:
             vehicle=getattr(args, "vehicle", None),
             W_min=W_min,
             spec_P_range=spec_P_range,
-            salinity=args.salinity,
+            salinity=salinity,
         )
 
 
@@ -886,9 +961,27 @@ def _add_eps_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--salinity",
-        type=float,
+        type=_parse_salinity,
         default=None,
-        help="Salinity [PSU] for viscosity (default: 35, fixed S)",
+        metavar="PSU|measured",
+        help="Salinity for viscosity: a PSU value, or 'measured' to compute it "
+        "from the conductivity/temperature channels (default: 35, fixed S)",
+    )
+    p.add_argument(
+        "--temperature",
+        type=_parse_temperature,
+        default=None,
+        metavar="NAME|degC",
+        help="Reference temperature for viscosity: a channel name (e.g. T2, "
+        "JAC_T), a fixed value [degC], or 'auto' = first plausible of "
+        "T1..Tn, T, JAC_T (default: auto)",
+    )
+    p.add_argument(
+        "--conductivity",
+        default=None,
+        metavar="NAME",
+        help="Conductivity channel for --salinity measured "
+        "(default: auto = JAC_C when present)",
     )
     p.set_defaults(func=_cmd_eps)
 
@@ -986,9 +1079,27 @@ def _add_chi_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--salinity",
-        type=float,
+        type=_parse_salinity,
         default=None,
-        help="Salinity [PSU] for viscosity (default: 35, fixed S)",
+        metavar="PSU|measured",
+        help="Salinity for viscosity: a PSU value, or 'measured' to compute it "
+        "from the conductivity/temperature channels (default: 35, fixed S)",
+    )
+    p.add_argument(
+        "--temperature",
+        type=_parse_temperature,
+        default=None,
+        metavar="NAME|degC",
+        help="Reference temperature for viscosity/kappa_T: a channel name "
+        "(e.g. T2, JAC_T), a fixed value [degC], or 'auto' = first plausible "
+        "of T1..Tn, T, JAC_T (default: auto)",
+    )
+    p.add_argument(
+        "--conductivity",
+        default=None,
+        metavar="NAME",
+        help="Conductivity channel for --salinity measured "
+        "(default: auto = JAC_C when present)",
     )
     p.set_defaults(func=_cmd_chi)
 
@@ -1079,9 +1190,28 @@ def _add_pipeline_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--salinity",
-        type=float,
+        type=_parse_salinity,
         default=None,
-        help="Salinity [PSU] for viscosity (default: 35, fixed S)",
+        metavar="PSU|measured",
+        help="Fixed salinity [PSU] fallback for viscosity (default: 35). "
+        "'measured' maps to the pipeline's automatic behavior — measured JAC "
+        "C/T salinity is already preferred when conductivity is present",
+    )
+    p.add_argument(
+        "--temperature",
+        type=_parse_temperature,
+        default=None,
+        metavar="NAME|degC",
+        help="Reference temperature for viscosity: a channel name (e.g. T2, "
+        "JAC_T), a fixed value [degC], or 'auto' = first plausible of "
+        "T1..Tn, T, JAC_T (default: auto)",
+    )
+    p.add_argument(
+        "--conductivity",
+        default=None,
+        metavar="NAME",
+        help="Conductivity channel for the measured practical salinity "
+        "(default: auto = JAC_C when present)",
     )
     p.set_defaults(func=_cmd_pipeline)
 
@@ -1325,10 +1455,12 @@ def _add_ml_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--salinity",
-        type=float,
+        type=_parse_salinity,
         default=None,
+        metavar="PSU|measured",
         help="Fixed practical salinity [PSU] for stratification "
-        "(default: measured from JAC C/T, else 35)",
+        "(default: measured from JAC C/T, else 35; 'measured' selects "
+        "that automatic behavior explicitly)",
     )
     p.set_defaults(func=_cmd_ml)
 

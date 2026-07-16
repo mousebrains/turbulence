@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 import warnings
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -32,6 +33,8 @@ class ChannelsDict(TypedDict, total=False):
     accel: list[tuple[str, np.ndarray]]
     P: np.ndarray
     T: np.ndarray
+    C: np.ndarray
+    JAC_T: np.ndarray
     t_fast: np.ndarray
     t_slow: np.ndarray
     fs_fast: float
@@ -49,6 +52,301 @@ SH_PATTERN = re.compile(r"^sh\d+$")
 AC_PATTERN = re.compile(r"^A[xyz]$")
 T_PATTERN = re.compile(r"^T\d+$")
 DT_PATTERN = re.compile(r"^T\d+_dT\d+$")
+# Reference-temperature candidates: numbered FP07s (T1, T2, ...) plus a bare
+# slow "T" (some per-profile NC stores carry only that).
+REF_T_PATTERN = re.compile(r"^T\d*$")
+
+# ---------------------------------------------------------------------------
+# Reference temperature/conductivity source selection + plausibility QC
+# (issue #131 B1). ODAS divergence, deliberate: ODAS uses T1 (or the
+# constant_temp override) with no plausibility check and silently substitutes
+# 10 degC when temperature is missing; here "auto" walks a QC'd candidate
+# chain (T1..Tn, bare T, JAC_T) and raises a per-file error instead of
+# publishing products computed from an implausible temperature.
+# ---------------------------------------------------------------------------
+
+TEMP_QC_MIN = -3.0  # degC; below the freezing point of seawater with margin
+# for ice-shelf-cavity ISW (in-situ T down to ~-2.6 degC)
+TEMP_QC_MAX = 40.0  # degC; warmest plausible open-ocean surface water
+TEMP_QC_MAX_BAD_FRAC = 0.10  # max fraction of finite samples outside range
+TEMP_QC_MIN_FINITE_FRAC = 0.5  # min fraction of finite samples
+IN_WATER_P_MIN = 0.5  # dbar; QC evaluates in-water samples only (deck/air
+# readings must not fail a healthy sensor)
+
+
+def reference_temperature_qc(
+    T: npt.ArrayLike,
+    n_min: int = 100,
+    *,
+    pressure: npt.ArrayLike | None = None,
+) -> str | None:
+    """Plausibility QC for a candidate reference-temperature channel.
+
+    Returns ``None`` when the channel is plausible, else a short failure
+    reason. When *pressure* (same length as *T*) is given, only in-water
+    samples (P > ``IN_WATER_P_MIN``) are evaluated, falling back to the full
+    channel when none qualify (e.g. a bench recording) — deck data in
+    tropical sun or polar winter must not fail a healthy sensor.
+
+    Checks, in order: mostly-non-finite; median outside the plausible ocean
+    range (catches railed sensors, e.g. a corpus-wide 58.46 degC, or a dead
+    -17.09 degC); too many samples outside the range (catches drift with an
+    in-range median); exactly constant with at least *n_min* samples (a
+    railed ADC — note a genuinely constant lab bath would also trip this).
+    """
+    T = np.asarray(T, dtype=np.float64)
+    if pressure is not None:
+        P = np.asarray(pressure, dtype=np.float64)
+        if P.shape == T.shape:
+            in_water = P > IN_WATER_P_MIN
+            if np.any(in_water):
+                T = T[in_water]
+    if T.size == 0:
+        return "no samples"
+    finite = np.isfinite(T)
+    finite_frac = finite.mean()
+    if finite_frac < TEMP_QC_MIN_FINITE_FRAC:
+        return f"mostly non-finite ({100 * finite_frac:.0f}% finite)"
+    median = float(np.nanmedian(T))
+    if not (TEMP_QC_MIN <= median <= TEMP_QC_MAX):
+        return (
+            f"median {median:.1f} degC outside plausible ocean range "
+            f"[{TEMP_QC_MIN:g}, {TEMP_QC_MAX:g}] degC"
+        )
+    T_finite = T[finite]
+    bad_frac = float(
+        np.mean((T_finite < TEMP_QC_MIN) | (T_finite > TEMP_QC_MAX))
+    )
+    if bad_frac > TEMP_QC_MAX_BAD_FRAC:
+        return (
+            f"{100 * bad_frac:.0f}% of samples outside plausible ocean range "
+            f"[{TEMP_QC_MIN:g}, {TEMP_QC_MAX:g}] degC"
+        )
+    if T.size >= n_min and np.nanmax(T) == np.nanmin(T):
+        return f"constant at {median:.2f} degC (railed sensor?)"
+    return None
+
+
+def temperature_candidates(channels: Mapping[str, Any], n_slow: int) -> list[str]:
+    """Slow reference-temperature candidates in ``auto`` QC order.
+
+    Numbered FP07s first (T1, T2, ... — numeric order), then a bare slow
+    ``T``, then ``JAC_T``. Only channels of slow length qualify.
+    """
+
+    def _is_slow(name: str) -> bool:
+        try:
+            return len(channels[name]) == n_slow
+        except TypeError:
+            return False
+
+    numbered = sorted(
+        (n for n in channels if REF_T_PATTERN.match(n) and n != "T" and _is_slow(n)),
+        key=lambda n: int(n[1:]),
+    )
+    out = numbered
+    if "T" in channels and _is_slow("T"):
+        out.append("T")
+    if "JAC_T" in channels and _is_slow("JAC_T"):
+        out.append("JAC_T")
+    return out
+
+
+def resolve_temperature_channel(
+    channels: Mapping[str, Any],
+    n_slow: int,
+    requested: str = "auto",
+    *,
+    pressure: npt.ArrayLike | None = None,
+    context: str = "",
+) -> tuple[str, str | None]:
+    """Select the reference-temperature channel (viscosity for epsilon;
+    viscosity and kappa_T for chi; the published ``T_mean``).
+
+    Parameters
+    ----------
+    channels : mapping of name -> array
+        Available channels (fast channels are filtered out by length).
+    n_slow : int
+        Slow-grid length; a reference temperature must be a slow channel.
+    requested : str
+        ``"auto"`` walks the candidate chain (T1..Tn, bare T, JAC_T) and
+        returns the first that passes :func:`reference_temperature_qc`; each
+        skipped candidate emits one warning naming the reason, and when none
+        pass a ValueError lists every candidate + reason. An explicit channel
+        name is honored even when it fails QC (warn loudly but proceed — the
+        user's explicit choice); missing or non-slow names raise ValueError.
+        A *numeric* temperature (constant reference, ODAS ``constant_temp``
+        parity) is handled by the callers, not here.
+    pressure : array, optional
+        Slow pressure for in-water-only QC (see reference_temperature_qc).
+    context : str
+        Prefix for warnings/errors (e.g. the source file name).
+
+    Returns
+    -------
+    (name, qc_reason_or_None)
+    """
+    prefix = f"{context}: " if context else ""
+    if requested == "auto":
+        candidates = temperature_candidates(channels, n_slow)
+        if not candidates:
+            raise ValueError(
+                f"{prefix}no slow temperature channel found (looked for "
+                "T1..Tn, T, JAC_T); pass --temperature / temperature: to "
+                "select a channel explicitly, or a number for a constant "
+                "reference temperature"
+            )
+        reasons: list[tuple[str, str]] = []
+        for name in candidates:
+            reason = reference_temperature_qc(channels[name], pressure=pressure)
+            if reason is None:
+                return name, None
+            reasons.append((name, reason))
+            warnings.warn(
+                f"{prefix}skipping reference temperature channel {name}: {reason}",
+                stacklevel=2,
+            )
+        detail = "; ".join(f"{n}: {r}" for n, r in reasons)
+        raise ValueError(
+            f"{prefix}no plausible reference temperature channel ({detail}); "
+            "pass --temperature / temperature: to select one explicitly, or "
+            "a number for a constant reference temperature"
+        )
+
+    if requested not in channels:
+        raise ValueError(
+            f"{prefix}temperature channel {requested!r} not found; slow "
+            f"channels: {sorted(n for n in channels if _len_is(channels[n], n_slow))}"
+        )
+    if not _len_is(channels[requested], n_slow):
+        raise ValueError(
+            f"{prefix}temperature channel {requested!r} is not a slow channel "
+            f"(length {len(channels[requested])} != {n_slow})"
+        )
+    reason = reference_temperature_qc(channels[requested], pressure=pressure)
+    if reason is not None:
+        warnings.warn(
+            f"{prefix}explicitly selected temperature channel {requested} "
+            f"fails plausibility QC ({reason}); proceeding with it anyway — "
+            "pass a numeric temperature for a constant reference instead",
+            stacklevel=2,
+        )
+    return requested, reason
+
+
+def _len_is(arr: Any, n: int) -> bool:
+    try:
+        return len(arr) == n
+    except TypeError:
+        return False
+
+
+def resolve_conductivity_channel(
+    channels: Mapping[str, Any],
+    n_slow: int,
+    requested: str = "auto",
+    *,
+    context: str = "",
+) -> str | None:
+    """Select the conductivity channel for ``salinity="measured"``.
+
+    ``"auto"`` returns ``JAC_C`` when present as a slow channel, else ``None``
+    (no error — conductivity is optional; the salinity step falls back). An
+    explicit name raises ValueError when missing or not a slow channel. No
+    plausibility QC on conductivity in this pass (non-finite salinity samples
+    are handled at the salinity step).
+    """
+    prefix = f"{context}: " if context else ""
+    if requested == "auto":
+        if "JAC_C" in channels and _len_is(channels["JAC_C"], n_slow):
+            return "JAC_C"
+        return None
+    if requested not in channels:
+        raise ValueError(f"{prefix}conductivity channel {requested!r} not found")
+    if not _len_is(channels[requested], n_slow):
+        raise ValueError(
+            f"{prefix}conductivity channel {requested!r} is not a slow channel "
+            f"(length {len(channels[requested])} != {n_slow})"
+        )
+    return requested
+
+
+def resolve_measured_salinity(data: ChannelsDict | dict[str, Any]) -> np.ndarray | None:
+    """Per-slow-sample practical salinity [PSU] for ``salinity="measured"``.
+
+    Computes ``gsw.SP_from_C(C, T_pair, P)`` from the conductivity channel
+    resolved by :func:`load_channels` (``data["C"]``). The pair temperature
+    prefers the co-located ``JAC_T`` when the conductivity is ``JAC_C`` and
+    JAC_T passes plausibility QC, falling back to the resolved reference
+    temperature (with a warning); the pair used is recorded as
+    ``metadata["salinity_pair_temperature"]``. Non-finite salinity samples
+    are filled with the profile median (with a warning; perturb's
+    ``_scrub_salinity`` policy). Returns ``None`` — fixed-S viscosity
+    downstream — when there is no conductivity channel or the computed
+    salinity is entirely non-finite.
+    """
+    metadata = data.get("metadata") or {}
+    src = metadata.get("source", "")
+    C = data.get("C")
+    if C is None:
+        warnings.warn(
+            f"salinity='measured' but no conductivity channel was found in "
+            f"{src}; falling back to fixed-salinity viscosity (visc35)",
+            stacklevel=2,
+        )
+        return None
+    C = np.asarray(C, dtype=np.float64)
+    P = np.asarray(data["P"], dtype=np.float64)
+
+    pair_T: np.ndarray | None = None
+    pair_name = ""
+    if metadata.get("conductivity_source") == "JAC_C":
+        jac_t = data.get("JAC_T")
+        if jac_t is not None:
+            reason = reference_temperature_qc(jac_t, pressure=P)
+            if reason is None:
+                pair_T = np.asarray(jac_t, dtype=np.float64)
+                pair_name = "JAC_T"
+            else:
+                warnings.warn(
+                    f"measured salinity: JAC_T fails plausibility QC ({reason}); "
+                    "pairing JAC_C with the reference temperature instead",
+                    stacklevel=2,
+                )
+    if pair_T is None:
+        pair_name = metadata.get("temperature_source", "T")
+        pair_T = np.asarray(data["T"], dtype=np.float64)
+        if metadata.get("conductivity_source") == "JAC_C" and "JAC_T" not in data:
+            warnings.warn(
+                "measured salinity: no JAC_T channel; pairing JAC_C with the "
+                f"reference temperature ({pair_name})",
+                stacklevel=2,
+            )
+    import gsw
+
+    SP = np.asarray(gsw.SP_from_C(C, pair_T, P), dtype=np.float64)
+    finite = np.isfinite(SP)
+    if not finite.any():
+        warnings.warn(
+            f"measured salinity from {src} is entirely non-finite; falling "
+            "back to fixed-salinity viscosity (visc35)",
+            stacklevel=2,
+        )
+        return None
+    metadata["salinity_pair_temperature"] = pair_name
+    if not finite.all():
+        fill = float(np.median(SP[finite]))
+        warnings.warn(
+            f"measured salinity has {int((~finite).sum())}/{SP.size} "
+            f"non-finite sample(s); filling with the profile median "
+            f"{fill:.3f} PSU",
+            stacklevel=2,
+        )
+        SP = SP.copy()
+        SP[~finite] = fill
+    return SP
+
 
 # ---------------------------------------------------------------------------
 # Channel loading
@@ -60,7 +358,8 @@ def load_channels(
     shear_pattern: str = r"^sh\d+$",
     accel_pattern: str = r"^A[xyz]$",
     pressure_name: str = "P",
-    temperature_name: str = "T1",
+    temperature_name: str | float = "auto",
+    conductivity_name: str = "auto",
 ) -> ChannelsDict:
     """Load channel data from any supported source.
 
@@ -75,8 +374,15 @@ def load_channels(
         Regex pattern matching accelerometer channel names.
     pressure_name : str
         Name of the pressure channel.
-    temperature_name : str
-        Name of the temperature channel.
+    temperature_name : str or float
+        Reference-temperature source: ``"auto"`` (first plausible of
+        T1..Tn, T, JAC_T — see :func:`resolve_temperature_channel`), an
+        explicit channel name (honored even when it fails plausibility QC,
+        with a warning), or a number = constant reference temperature
+        [degC] (ODAS ``constant_temp`` parity).
+    conductivity_name : str
+        ``"auto"`` (JAC_C when present; absent otherwise, no error) or an
+        explicit channel name (missing/non-slow raises ValueError).
 
     Returns
     -------
@@ -84,37 +390,97 @@ def load_channels(
         shear : list of (name, ndarray) — shear probe signals
         accel : list of (name, ndarray) — accelerometer signals
         P : ndarray — pressure (slow)
-        T : ndarray — temperature (slow)
+        T : ndarray — reference temperature (slow)
+        C : ndarray — conductivity (slow; only when resolved)
+        JAC_T : ndarray — CT temperature (slow; only when present, for
+            the measured-salinity pairing)
         t_fast : ndarray — fast time vector
         t_slow : ndarray — slow time vector
         fs_fast : float
         fs_slow : float
         is_profile : bool — whether source is a per-profile file
-        metadata : dict
+        metadata : dict — includes temperature_source / temperature_qc
+            (and conductivity_source when conductivity was resolved)
     """
     from odas_tpw.rsi.p_file import PFile
 
     if isinstance(source, PFile):
         return _channels_from_pfile(
-            source, shear_pattern, accel_pattern, pressure_name, temperature_name
+            source,
+            shear_pattern,
+            accel_pattern,
+            pressure_name,
+            temperature_name,
+            conductivity_name,
         )
 
     source = Path(source)
     if source.suffix.lower() == ".p":
         pf = PFile(source)
         return _channels_from_pfile(
-            pf, shear_pattern, accel_pattern, pressure_name, temperature_name
+            pf,
+            shear_pattern,
+            accel_pattern,
+            pressure_name,
+            temperature_name,
+            conductivity_name,
         )
     elif source.suffix.lower() == ".nc":
         return _channels_from_nc(
-            source, shear_pattern, accel_pattern, pressure_name, temperature_name
+            source,
+            shear_pattern,
+            accel_pattern,
+            pressure_name,
+            temperature_name,
+            conductivity_name,
         )
     else:
         raise ValueError(f"Unsupported file type: {source.suffix}")
 
 
+def _resolve_reference_temperature(
+    channels: Mapping[str, Any],
+    n_slow: int,
+    t_name: str | float,
+    pressure: np.ndarray | None,
+    context: str,
+) -> tuple[np.ndarray, str, str]:
+    """Shared T resolution: returns ``(T_array, source_label, qc_label)``.
+
+    A numeric *t_name* is the constant-reference escape hatch (ODAS
+    ``constant_temp`` parity — the vendor's own remedy for "measured
+    temperature unreliable").
+    """
+    if isinstance(t_name, bool):
+        raise ValueError(f"temperature={t_name!r} is not valid; use a channel name or a number")
+    if isinstance(t_name, (int, float)):
+        value = float(t_name)
+        qc = "pass"
+        if not np.isfinite(value) or not (TEMP_QC_MIN <= value <= TEMP_QC_MAX):
+            qc = (
+                f"constant {value:g} degC outside plausible ocean range "
+                f"[{TEMP_QC_MIN:g}, {TEMP_QC_MAX:g}]"
+            )
+            warnings.warn(
+                f"{context}: reference temperature {qc}; proceeding — "
+                "viscosity/kappa_T will reflect this value",
+                stacklevel=3,
+            )
+        return np.full(n_slow, value), f"constant:{value:g}", qc
+    name, reason = resolve_temperature_channel(
+        channels, n_slow, t_name, pressure=pressure, context=context
+    )
+    T = np.asarray(channels[name], dtype=np.float64)
+    return T, name, "pass" if reason is None else reason
+
+
 def _channels_from_pfile(
-    pf: PFile, sh_pat: str, ac_pat: str, p_name: str, t_name: str
+    pf: PFile,
+    sh_pat: str,
+    ac_pat: str,
+    p_name: str,
+    t_name: str | float,
+    c_name: str = "auto",
 ) -> ChannelsDict:
     sh_re = re.compile(sh_pat) if sh_pat != SH_PATTERN.pattern else SH_PATTERN
     ac_re = re.compile(ac_pat) if ac_pat != AC_PATTERN.pattern else AC_PATTERN
@@ -126,11 +492,16 @@ def _channels_from_pfile(
         [(n, pf.channels[n]) for n in pf._fast_channels if ac_re.match(n)],
         key=lambda x: x[0],
     )
+    n_slow = len(pf.t_slow)
+    P = pf.channels[p_name]
+    T, t_source, t_qc = _resolve_reference_temperature(
+        pf.channels, n_slow, t_name, P, pf.filepath.name
+    )
     out: dict[str, Any] = {
         "shear": shear,
         "accel": accel,
-        "P": pf.channels[p_name],
-        "T": pf.channels[t_name],
+        "P": P,
+        "T": T,
         "t_fast": pf.t_fast,
         "t_slow": pf.t_slow,
         "fs_fast": pf.fs_fast,
@@ -142,8 +513,16 @@ def _channels_from_pfile(
             "instrument": pf.config["instrument_info"].get("model", ""),
             "sn": pf.config["instrument_info"].get("sn", ""),
             "start_time": pf.start_time.isoformat(),
+            "temperature_source": t_source,
+            "temperature_qc": t_qc,
         },
     }
+    c_found = resolve_conductivity_channel(pf.channels, n_slow, c_name, context=pf.filepath.name)
+    if c_found is not None:
+        out["C"] = pf.channels[c_found]
+        out["metadata"]["conductivity_source"] = c_found
+    if "JAC_T" in pf.channels and _len_is(pf.channels["JAC_T"], n_slow):
+        out["JAC_T"] = pf.channels["JAC_T"]
     # Carry through the perturb-injected speed channel(s) if present.
     if "speed_fast" in pf.channels:
         out["speed_fast"] = pf.channels["speed_fast"]
@@ -153,7 +532,12 @@ def _channels_from_pfile(
 
 
 def _channels_from_nc(
-    nc_path: Path, sh_pat: str, ac_pat: str, p_name: str, t_name: str
+    nc_path: Path,
+    sh_pat: str,
+    ac_pat: str,
+    p_name: str,
+    t_name: str | float,
+    c_name: str = "auto",
 ) -> ChannelsDict:
     import netCDF4 as nc
 
@@ -167,8 +551,24 @@ def _channels_from_nc(
 
     t_fast = ds.variables["t_fast"][:].data
     t_slow = ds.variables["t_slow"][:].data
+    n_slow = len(t_slow)
     P = ds.variables[p_name][:].data.astype(np.float64)
-    T = ds.variables[t_name][:].data.astype(np.float64)
+
+    # Temperature/conductivity candidates: slow variables matching the
+    # reference-T pattern plus the JAC CT pair, and any explicitly requested
+    # name (read regardless of dims so a fast channel gets the clear
+    # "not a slow channel" error from the resolver rather than "not found").
+    resolve_map: dict[str, np.ndarray] = {}
+    for vname in sorted(ds.variables.keys()):
+        var = ds.variables[vname]
+        wanted = (
+            var.dimensions == ("time_slow",)
+            or REF_T_PATTERN.match(vname)
+            or vname in ("JAC_T", "JAC_C")
+            or vname in (t_name, c_name)
+        )
+        if wanted and var.dimensions in (("time_slow",), ("time_fast",)):
+            resolve_map[vname] = var[:].data.astype(np.float64)
 
     shear = []
     accel = []
@@ -207,6 +607,17 @@ def _channels_from_nc(
 
     ds.close()
 
+    # Resolve AFTER the dataset is closed (everything needed is in numpy by
+    # now), so a QC ValueError cannot leak an open netCDF handle.
+    T, t_source, t_qc = _resolve_reference_temperature(
+        resolve_map, n_slow, t_name, P, nc_path.name
+    )
+    metadata["temperature_source"] = t_source
+    metadata["temperature_qc"] = t_qc
+    c_found = resolve_conductivity_channel(resolve_map, n_slow, c_name, context=nc_path.name)
+    if c_found is not None:
+        metadata["conductivity_source"] = c_found
+
     out: dict[str, Any] = {
         "shear": shear,
         "accel": accel,
@@ -220,6 +631,10 @@ def _channels_from_nc(
         "vehicle": vehicle,
         "metadata": metadata,
     }
+    if c_found is not None:
+        out["C"] = resolve_map[c_found]
+    if "JAC_T" in resolve_map and _len_is(resolve_map["JAC_T"], n_slow):
+        out["JAC_T"] = resolve_map["JAC_T"]
     if speed_fast is not None:
         out["speed_fast"] = speed_fast
     if W_slow is not None:

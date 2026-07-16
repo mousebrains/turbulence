@@ -94,9 +94,10 @@ epsilon:
   despike_smooth: 0.5     # despike envelope low-pass cutoff [Hz]
   salinity: null          # salinity [PSU] (null = 35, fixed S)
   epsilon_minimum: 1.0e-13  # floor for small epsilon values
-  T_source: null          # temperature source for viscosity (null = blend T1/T2)
-  T1_norm: 1.0            # T1 blending weight
-  T2_norm: 1.0            # T2 blending weight
+  T_source: null          # reference temperature for seawater properties
+                          # (serves epsilon AND chi): null/"auto" = first
+                          # plausible of T1, T2, ..., T, JAC_T; a channel
+                          # name; or a number = constant reference [degC]
   fom_max: null           # null = no FOM cut. e.g. 2.0 NaNs each per-probe
                           # cell (e_N, epsilon[probe,:]) where its FOM
                           # >= fom_max -- applied BEFORE mk_epsilon_mean,
