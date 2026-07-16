@@ -7,6 +7,9 @@ time constant (tau), matching ODAS ``default_vehicle_attributes.ini``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 # (direction, tau) per vehicle — matches ODAS default_vehicle_attributes.ini
 VEHICLE_ATTRIBUTES: dict[str, tuple[str, float]] = {
     "vmp": ("down", 1.5),
@@ -75,6 +78,63 @@ def resolve_w_min(direction: str) -> float:
     ``"auto"``.
     """
     return SLOW_W_MIN if direction.lower() in _SLOW_DIRECTIONS else DEFAULT_W_MIN
+
+
+def vehicle_from_model(model: str) -> str:
+    """Best-effort vehicle guess from an instrument model string.
+
+    Used when a NetCDF source carries no explicit vehicle/platform_type
+    attribute: ``"VMP-250"`` -> ``"vmp"``, ``"MR1000RDL-EM"`` ->
+    ``"slocum_glider"`` (a MicroRider is glider-mounted). Returns ``""``
+    when the model is unrecognized.
+    """
+    m = model.lower()
+    if "vmp" in m:
+        return "vmp"
+    if "xmp" in m:
+        return "xmp"
+    if "mr" in m or "microrider" in m:
+        return "slocum_glider"
+    return ""
+
+
+def vehicle_from_nc_attrs(attrs: Mapping[str, Any]) -> str:
+    """Resolve the vehicle from NetCDF global attributes.
+
+    Precedence: an explicit ``vehicle`` attr, then ``platform_type``
+    (what ``p_to_L1``/``convert.py`` writes on full-record files), then
+    the :func:`vehicle_from_model` heuristic on ``instrument_model``.
+    Shared by every NetCDF loader so ``prof`` and ``eps``/``chi`` cannot
+    resolve different vehicles for the same file.
+    """
+    for key in ("vehicle", "platform_type"):
+        v = str(attrs.get(key, "") or "").lower()
+        if v:
+            return v
+    return vehicle_from_model(str(attrs.get("instrument_model", "") or ""))
+
+
+def resolve_detection(
+    direction: str,
+    vehicle: str,
+    W_min: float | None = None,
+    tau: float | None = None,
+) -> tuple[str, float, float]:
+    """Resolve the vehicle-dependent profile-detection parameters in one step.
+
+    Returns ``(direction, tau, W_min)`` with ``"auto"`` direction resolved
+    from *vehicle*, ``tau=None`` resolved from the vehicle table, and
+    ``W_min=None`` resolved from the RESOLVED direction (0.3 dbar/s
+    free-fall, 0.05 glide/horizontal). Resolving in this fixed order matters:
+    ``resolve_w_min("auto")`` would silently return the free-fall floor.
+    Explicit values pass through unchanged.
+    """
+    direction = resolve_direction(direction, vehicle)
+    if tau is None:
+        tau = resolve_tau(vehicle)
+    if W_min is None:
+        W_min = resolve_w_min(direction)
+    return direction, float(tau), float(W_min)
 
 
 def resolve_tau(vehicle: str) -> float:

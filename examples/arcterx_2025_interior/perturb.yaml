@@ -46,8 +46,11 @@ hotel:
 
 profiles:
   P_min: 0.5              # minimum pressure [dbar]
-  W_min: 0.3              # minimum fall rate [dbar/s]
-  direction: "down"       # profile direction: up or down
+  W_min: 0.3              # minimum fall rate [dbar/s] (null = auto: 0.3
+                          # free-fall, 0.05 glide/horizontal)
+  direction: "down"       # auto | up | down | glide | horizontal
+                          # (auto = vehicle-resolved; explicit down for
+                          # this free-falling VMP corpus)
   min_duration: 7.0       # minimum profile duration [s]
   diagnostics: false      # write T1_raw, C_raw, W, cal attrs
 

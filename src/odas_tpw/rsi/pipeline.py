@@ -138,7 +138,7 @@ def run_pipeline(
     *,
     # Profile detection
     P_min: float = 0.5,
-    W_min: float = 0.3,
+    W_min: float | None = None,
     direction: str = "auto",
     min_duration: float = 7.0,
     speed: float | None = None,
@@ -193,6 +193,11 @@ def run_pipeline(
         Input .P files.
     output_dir : Path
         Base output directory.
+    W_min : float or None
+        Profile-detection fall-rate floor [dbar/s]. ``None`` (default)
+        resolves per file from the vehicle direction — 0.3 for a
+        free-falling profiler, 0.05 for glide/horizontal platforms — and
+        the resolved value also feeds ``L2Params.profile_min_W``.
     temperature : str or float
         Reference-temperature source: "auto" (first plausible of T1..Tn, T,
         JAC_T — see helpers.resolve_temperature_channel), an explicit channel
@@ -210,6 +215,12 @@ def run_pipeline(
     Path
         Output directory.
     """
+    from odas_tpw.rsi.helpers import _validate_speed_selection
+
+    # Same speed/speed_method exclusivity contract as the eps/chi commands —
+    # the adapter would otherwise silently prefer the fixed speed.
+    _validate_speed_selection(speed, speed_method)
+
     if diss_length is None:
         diss_length = 4 * fft_length
     if overlap is None:
@@ -285,7 +296,7 @@ def _pipeline_one_file(
     output_dir: Path,
     *,
     P_min: float,
-    W_min: float,
+    W_min: float | None,
     direction: str,
     min_duration: float,
     speed: float | None,
@@ -324,13 +335,22 @@ def _pipeline_one_file(
     pfile_dir = output_dir / p_path.stem
     pfile_dir.mkdir(parents=True, exist_ok=True)
 
-    # Resolve vehicle, direction, and tau per file
-    from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
+    # Resolve vehicle, direction, tau, and the detection floor per file.
+    # Resolved once so profile detection and L2Params.profile_min_W (the L2
+    # section selector) apply the same floor.
+    from odas_tpw.rsi.vehicle import resolve_detection
 
     file_vehicle = vehicle or pf.config["instrument_info"].get("vehicle", "").lower()
-    file_direction = resolve_direction(direction, file_vehicle)
-    file_tau = resolve_tau(file_vehicle)
+    file_direction, file_tau, file_W_min = resolve_detection(
+        direction, file_vehicle, W_min=W_min
+    )
     file_speed_tau = file_tau if speed_tau == 1.5 else speed_tau
+    logger.info(
+        "profile detection: direction=%s W_min=%g dbar/s (vehicle=%r)",
+        file_direction,
+        file_W_min,
+        file_vehicle,
+    )
 
     # Detect profiles on slow-rate pressure
     P_slow = pf.channels.get("P_dP", pf.channels.get("P"))
@@ -372,13 +392,19 @@ def _pipeline_one_file(
         W_slow,
         pf.fs_slow,
         P_min=P_min,
-        W_min=W_min,
+        W_min=file_W_min,
         direction=file_direction,
         min_duration=min_duration,
     )
 
     if not profiles:
-        logger.warning("No profiles detected")
+        from odas_tpw.scor160.profile import explain_no_profiles
+
+        logger.warning(
+            explain_no_profiles(
+                P_slow, W_slow, P_min=P_min, W_min=file_W_min, direction=file_direction
+            )
+        )
         return
 
     logger.info(f"{len(profiles)} profile(s) detected")
@@ -414,7 +440,7 @@ def _pipeline_one_file(
                 HP_cut=eps_hp_cut,
                 despike_sh=np.array([despike_thresh, 0.5, 0.04]),
                 despike_A=np.array([np.inf, 0.5, 0.04]),
-                profile_min_W=W_min,
+                profile_min_W=file_W_min,
                 profile_min_P=P_min,
                 profile_min_duration=min_duration,
                 # Vehicle-resolved tau (matches L1 speed + profile detection);

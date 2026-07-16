@@ -936,6 +936,63 @@ class TestProcessFile:
         kwargs = mock_get_prof.call_args.kwargs
         assert kwargs["direction"] == "down"
 
+    @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_w_min_auto_resolves_glide_floor(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_fp07_cal, mock_extract, tmp_path
+    ):
+        """profiles.W_min unset (DEFAULT null) resolves per direction: a
+        Slocum glider (direction auto -> glide) gets the 0.05 dbar/s floor —
+        the VMP-tuned 0.3 rejected every glider cast (#131 M3). The defaults
+        also come through merge_config, so direction 'auto' need not be set
+        in the user config at all."""
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)
+        mock_pf.fs_slow = 64.0
+        mock_pf.config = {"instrument_info": {"vehicle": "slocum_glider"}}
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = []
+
+        config = self._base_config(tmp_path)  # no direction/W_min keys at all
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+        kwargs = mock_get_prof.call_args.kwargs
+        assert kwargs["direction"] == "glide"
+        assert kwargs["W_min"] == 0.05
+
+    @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
+    @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
+    @patch("odas_tpw.rsi.profile.get_profiles")
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_w_min_explicit_passes_through(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, mock_fp07_cal, mock_extract, tmp_path
+    ):
+        """An explicit numeric W_min keeps exact current behavior."""
+        mock_pf = MagicMock()
+        mock_pf.channels = {"P": np.linspace(0, 50, 100), "T1": np.zeros(100)}
+        mock_pf.t_slow = np.linspace(0, 50, 100)
+        mock_pf.fs_slow = 64.0
+        mock_pf.config = {"instrument_info": {"vehicle": "slocum_glider"}}
+        mock_pfile_cls.return_value = mock_pf
+        mock_get_prof.return_value = []
+
+        config = self._base_config(tmp_path)
+        config["profiles"]["W_min"] = 0.3
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+
+        process_file(tmp_path / "test.p", config, None, output_dirs)
+        assert mock_get_prof.call_args.kwargs["W_min"] == 0.3
+
     @patch("odas_tpw.rsi.dissipation._compute_epsilon", return_value=[])
     @patch(
         "odas_tpw.rsi.profile.extract_profiles",

@@ -26,10 +26,15 @@ Subcommands:
 
 import argparse
 import os
+import struct
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
+
+# Per-file errors the batch subcommands survive (print + continue).
+# struct.error covers a .p file truncated mid-record (parity with convert_all).
+_BATCH_ERRORS = (OSError, ValueError, RuntimeError, struct.error)
 
 
 def _resolve_p_files(patterns: list[str]) -> list[Path]:
@@ -140,8 +145,11 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
             "diss_length": "diss_length",
             "overlap": "overlap",
             "speed": "speed",
+            "speed_method": "speed_method",
+            "aoa": "aoa_deg",
             "direction": "direction",
             "vehicle": "vehicle",
+            "W_min": "W_min",
             "f_AA": "f_AA",
             "salinity": "salinity",
             "temperature": "temperature",
@@ -153,8 +161,11 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
             "diss_length": "diss_length",
             "overlap": "overlap",
             "speed": "speed",
+            "speed_method": "speed_method",
+            "aoa": "aoa_deg",
             "direction": "direction",
             "vehicle": "vehicle",
+            "W_min": "W_min",
             "fp07_model": "fp07_model",
             "f_AA": "f_AA",
             "fit_method": "fit_method",
@@ -168,8 +179,11 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
             "eps_fft_length": "fft_length",
             "direction": "direction",
             "vehicle": "vehicle",
+            "W_min": "W_min",
             "f_AA": "f_AA",
             "speed": "speed",
+            "speed_method": "speed_method",
+            "aoa": "aoa_deg",
             "salinity": "salinity",
             "temperature": "temperature",
             "conductivity": "conductivity",
@@ -179,10 +193,13 @@ def _extract_cli_overrides(args: argparse.Namespace, section: str) -> dict[str, 
             "chi_fft_length": "fft_length",
             "direction": "direction",
             "vehicle": "vehicle",
+            "W_min": "W_min",
             "f_AA": "f_AA",
             "fp07_model": "fp07_model",
             "spectrum_model": "spectrum_model",
             "speed": "speed",
+            "speed_method": "speed_method",
+            "aoa": "aoa_deg",
             "salinity": "salinity",
             "temperature": "temperature",
             "conductivity": "conductivity",
@@ -266,11 +283,22 @@ def _cmd_info(args: argparse.Namespace) -> None:
     from odas_tpw.rsi.p_file import PFile
 
     p_files = _resolve_p_files(args.files)
+    failures = 0
     for i, pf_path in enumerate(p_files):
         if i > 0:
             print("\n" + "=" * 60 + "\n")
-        pf = PFile(pf_path)
-        pf.summary()
+        # Per-file guard: startup files (valid config, no data records) and
+        # 0-byte/truncated files must not abort a batch.
+        try:
+            pf = PFile(pf_path)
+            pf.summary()
+        except _BATCH_ERRORS as e:
+            print(f"{pf_path.name}:\n  ERROR: {e}")
+            failures += 1
+    if failures:
+        print(f"\n{failures} of {len(p_files)} file(s) failed")
+        if failures == len(p_files):
+            sys.exit(1)
 
 
 def _cmd_config(args: argparse.Namespace) -> None:
@@ -394,9 +422,19 @@ def _cmd_prof(args: argparse.Namespace) -> None:
     output_dir = _setup_output_dir(args, "prof", "profiles", merged)
     print(f"Output directory: {output_dir}")
 
+    failures = 0
     for f in files:
         print(f"{f.name}:")
-        extract_profiles(f, output_dir, **merged)
+        # Per-file guard: startup/truncated files must not abort the batch.
+        try:
+            extract_profiles(f, output_dir, **merged)
+        except _BATCH_ERRORS as e:
+            print(f"  ERROR: {e}")
+            failures += 1
+    if failures:
+        print(f"{failures} of {len(files)} file(s) failed")
+        if failures == len(files):
+            sys.exit(1)
 
 
 def _cmd_eps(args: argparse.Namespace) -> None:
@@ -413,13 +451,19 @@ def _cmd_eps(args: argparse.Namespace) -> None:
     if jobs == 0:
         jobs = os.cpu_count() or 1
 
+    produced = 0
     if jobs == 1:
         for f in files:
             print(f"{f.name}:")
             try:
-                compute_diss_file(f, output_dir, **merged)
-            except (OSError, ValueError, RuntimeError) as e:
+                paths = compute_diss_file(f, output_dir, **merged)
+            except _BATCH_ERRORS as e:
                 print(f"  ERROR: {e}")
+            else:
+                if paths:
+                    produced += 1
+                else:
+                    print("  no profiles detected")
     else:
         work = []
         for f in files:
@@ -432,8 +476,13 @@ def _cmd_eps(args: argparse.Namespace) -> None:
                 try:
                     name, n_profiles = future.result()
                     print(f"  {Path(name).name}: {n_profiles} profile(s)")
-                except (OSError, ValueError, RuntimeError) as e:
+                    if n_profiles:
+                        produced += 1
+                except _BATCH_ERRORS as e:
                     print(f"  {src.name}: ERROR: {e}")
+    print(f"{produced} of {len(files)} file(s) produced output")
+    if files and produced == 0:
+        sys.exit(1)
 
 
 def _cmd_chi(args: argparse.Namespace) -> None:
@@ -453,6 +502,7 @@ def _cmd_chi(args: argparse.Namespace) -> None:
     if jobs == 0:
         jobs = os.cpu_count() or 1
 
+    produced = 0
     if jobs == 1:
         for f in files:
             print(f"{f.name}:")
@@ -473,9 +523,14 @@ def _cmd_chi(args: argparse.Namespace) -> None:
                     )
 
             try:
-                compute_chi_file(f, output_dir, **kw)
-            except (OSError, ValueError, RuntimeError) as e:
+                paths = compute_chi_file(f, output_dir, **kw)
+            except _BATCH_ERRORS as e:
                 print(f"  ERROR: {e}")
+            else:
+                if paths:
+                    produced += 1
+                else:
+                    print("  no profiles detected")
             finally:
                 if eps_ds is not None:
                     eps_ds.close()
@@ -491,8 +546,13 @@ def _cmd_chi(args: argparse.Namespace) -> None:
                 try:
                     name, n_profiles = future.result()
                     print(f"  {Path(name).name}: {n_profiles} profile(s)")
-                except (OSError, ValueError, RuntimeError) as e:
+                    if n_profiles:
+                        produced += 1
+                except _BATCH_ERRORS as e:
                     print(f"  {Path(src).name}: ERROR: {e}")
+    print(f"{produced} of {len(files)} file(s) produced output")
+    if files and produced == 0:
+        sys.exit(1)
 
 
 def _cmd_pipeline(args: argparse.Namespace) -> None:
@@ -526,11 +586,11 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
             )
             sys.exit(1)
 
-    # The pipeline resolves ONE temperature/conductivity for both epsilon and
-    # chi (they share the per-file L1 load); a differing [chi] value in the
-    # config would otherwise be silently ignored.
-    for key in ("temperature", "conductivity"):
-        eps_val, chi_val = eps_merged.get(key, "auto"), chi_merged.get(key, "auto")
+    # The pipeline resolves ONE value per file for these knobs (epsilon and
+    # chi share the per-file L1 load and profile detection); a differing
+    # [chi] value in the config would otherwise be silently ignored.
+    for key in ("temperature", "conductivity", "speed_method", "aoa_deg", "W_min"):
+        eps_val, chi_val = eps_merged.get(key), chi_merged.get(key)
         if chi_val != eps_val:
             print(
                 f"Warning: pipeline uses a single {key} for epsilon and chi; "
@@ -543,6 +603,12 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
         "direction": eps_merged.get("direction", "auto"),
         "vehicle": eps_merged.get("vehicle"),
         "speed": eps_merged.get("speed"),
+        # Speed model (default pressure / |dP/dt|) and detection floor, from
+        # the merged [epsilon] section so YAML values are honored, not just
+        # the CLI flags.
+        "speed_method": eps_merged.get("speed_method"),
+        "aoa_deg": eps_merged.get("aoa_deg"),
+        "W_min": eps_merged.get("W_min"),
         "fft_length": eps_merged.get("fft_length", 1024),
         "f_AA": eps_merged.get("f_AA", 98.0),
         "salinity": salinity,
@@ -553,14 +619,9 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
         "fp07_model": chi_merged.get("fp07_model", "single_pole"),
         "spectrum_model": chi_merged.get("spectrum_model", "kraichnan"),
     }
-    # Remove None values
+    # Remove None values (run_pipeline's own defaults apply: W_min resolves
+    # per file from the vehicle direction, speed_method falls to "pressure")
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
-
-    # Speed model (pipeline-level; default pressure / |dP/dt|).
-    if getattr(args, "speed_method", None):
-        kwargs["speed_method"] = args.speed_method
-    if getattr(args, "aoa", None) is not None:
-        kwargs["aoa_deg"] = args.aoa
 
     run_pipeline(p_files, output_dir, **kwargs)
 
@@ -874,7 +935,10 @@ def _add_prof_parser(subparsers: argparse._SubParsersAction) -> None:
         "--P-min", type=float, default=None, help="Minimum pressure [dbar] (default: 0.5)"
     )
     p.add_argument(
-        "--W-min", type=float, default=None, help="Minimum fall rate [dbar/s] (default: 0.3)"
+        "--W-min",
+        type=float,
+        default=None,
+        help="Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal)",
     )
     p.add_argument(
         "--direction",
@@ -939,6 +1003,24 @@ def _add_eps_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Fixed profiling speed [m/s] (default: from dP/dt)",
     )
     p.add_argument(
+        "--speed-method",
+        choices=["pressure", "em", "flight"],
+        default=None,
+        help=(
+            "Through-water speed model (default: pressure = |dP/dt|). "
+            "'em' uses the U_EM flowmeter channel; 'flight' uses the inviscid "
+            "glider flight model |W|/sin(|pitch|-aoa) from the inclinometers; "
+            "an explicit 'pressure' forces |dP/dt| even over a precomputed "
+            "speed_fast channel. em/flight are mutually exclusive with --speed."
+        ),
+    )
+    p.add_argument(
+        "--aoa",
+        type=float,
+        default=None,
+        help="Angle of attack [deg] for --speed-method flight (default: 3.0)",
+    )
+    p.add_argument(
         "--direction",
         default=None,
         choices=["auto", "up", "down", "glide", "horizontal"],
@@ -948,6 +1030,12 @@ def _add_eps_parser(subparsers: argparse._SubParsersAction) -> None:
         "--vehicle",
         default=None,
         help="Vehicle type override (e.g. slocum_glider, vmp)",
+    )
+    p.add_argument(
+        "--W-min",
+        type=float,
+        default=None,
+        help="Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal)",
     )
     p.add_argument(
         "--no-goodman",
@@ -1032,6 +1120,24 @@ def _add_chi_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Fixed profiling speed [m/s] (default: from dP/dt)",
     )
     p.add_argument(
+        "--speed-method",
+        choices=["pressure", "em", "flight"],
+        default=None,
+        help=(
+            "Through-water speed model (default: pressure = |dP/dt|). "
+            "'em' uses the U_EM flowmeter channel; 'flight' uses the inviscid "
+            "glider flight model |W|/sin(|pitch|-aoa) from the inclinometers; "
+            "an explicit 'pressure' forces |dP/dt| even over a precomputed "
+            "speed_fast channel. em/flight are mutually exclusive with --speed."
+        ),
+    )
+    p.add_argument(
+        "--aoa",
+        type=float,
+        default=None,
+        help="Angle of attack [deg] for --speed-method flight (default: 3.0)",
+    )
+    p.add_argument(
         "--direction",
         default=None,
         choices=["auto", "up", "down", "glide", "horizontal"],
@@ -1041,6 +1147,12 @@ def _add_chi_parser(subparsers: argparse._SubParsersAction) -> None:
         "--vehicle",
         default=None,
         help="Vehicle type override (e.g. slocum_glider, vmp)",
+    )
+    p.add_argument(
+        "--W-min",
+        type=float,
+        default=None,
+        help="Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal)",
     )
     p.add_argument(
         "--no-goodman",
@@ -1131,6 +1243,12 @@ def _add_pipeline_parser(subparsers: argparse._SubParsersAction) -> None:
         "--vehicle",
         default=None,
         help="Vehicle type override (e.g. slocum_glider, vmp)",
+    )
+    p.add_argument(
+        "--W-min",
+        type=float,
+        default=None,
+        help="Minimum fall rate [dbar/s] (default: 0.3, or 0.05 for glide/horizontal)",
     )
     p.add_argument(
         "--speed",
