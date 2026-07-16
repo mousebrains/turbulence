@@ -440,7 +440,8 @@ class TestWithFixture:
         assert (tmp_path / "bench" / f"QB_479_{TEST_P.stem}_checklist.txt").exists()
 
     def test_cli_bench_bad_file_is_caught(self, tmp_path, monkeypatch, capsys):
-        # A malformed .p is caught per-file (stderr) without aborting the batch.
+        # A malformed .p is caught per-file (stderr) without aborting the batch,
+        # but the process must exit 1 so scripts can gate on it (#131 m3).
         bad = tmp_path / "bad.p"
         bad.write_bytes(b"not a real p file")
         monkeypatch.setattr(
@@ -448,7 +449,25 @@ class TestWithFixture:
         )
         from odas_tpw.rsi.cli import main
 
-        main()  # must not raise
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+        assert "ERROR" in capsys.readouterr().err
+
+    def test_cli_bench_exit_1_on_no_data_startup_file(self, tmp_path, monkeypatch, capsys):
+        # A startup file (valid header+config, no data records) cannot be bench
+        # evaluated; the per-file error must surface as exit code 1 (#131 m3).
+        startup = Path(__file__).parent / "data" / "VMP142_startup_noclock.p"
+        if not startup.exists():
+            pytest.skip("startup fixture missing")
+        monkeypatch.setattr(
+            sys, "argv", ["rsi-tpw", "bench", str(startup), "-o", str(tmp_path / "out")]
+        )
+        from odas_tpw.rsi.cli import main
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
         assert "ERROR" in capsys.readouterr().err
 
 

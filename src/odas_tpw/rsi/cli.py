@@ -581,6 +581,7 @@ def _cmd_bench(args: argparse.Namespace) -> None:
     if out_dir is None and not args.show:
         out_dir = "bench"
 
+    failures = 0
     for i, pf_path in enumerate(p_files):
         if i > 0:
             print("\n" + "=" * 60 + "\n")
@@ -596,6 +597,11 @@ def _cmd_bench(args: argparse.Namespace) -> None:
             )
         except (OSError, ValueError) as e:
             print(f"  ERROR: {e}", file=sys.stderr)
+            failures += 1
+    # Per-file errors don't abort the batch, but the process must not exit 0
+    # when a file could not be evaluated (mirrors `config`'s convention, #129).
+    if failures:
+        sys.exit(1)
 
 
 def _cmd_sensors(args: argparse.Namespace) -> None:
@@ -611,6 +617,8 @@ def _cmd_sensors(args: argparse.Namespace) -> None:
         compact=args.compact,
         cal_dir=Path(args.cal_dir) if args.cal_dir else None,
         cal_tol=args.cal_tol,
+        cal_max_age_months=args.cal_max_age_months,
+        cal_strict=args.cal_strict,
     )
     if code != 0:
         sys.exit(code)
@@ -1312,6 +1320,22 @@ def _add_sensors_parser(subparsers: argparse._SubParsersAction) -> None:
         metavar="SENS",
         help="Sensitivity-mismatch threshold for --cal-dir, in absolute sensitivity "
         "units (default: 0.00005, half the sheets' 4th-decimal resolution).",
+    )
+    p.add_argument(
+        "--cal-max-age-months",
+        type=int,
+        default=12,
+        metavar="N",
+        help="Staleness fallback for --cal-dir: flag observations whose governing "
+        "calibration is older than N months when its sheet carries no 'Recommended "
+        "re-calibration' line (default: 12, Rockland's recommendation). Sheets "
+        "with the line use its date directly.",
+    )
+    p.add_argument(
+        "--cal-strict",
+        action="store_true",
+        help="Exit with code 3 when the --cal-dir check finds sensitivity "
+        "mismatches outside --cal-tol (default: report-only). Requires --cal-dir.",
     )
     p.set_defaults(func=_cmd_sensors)
 

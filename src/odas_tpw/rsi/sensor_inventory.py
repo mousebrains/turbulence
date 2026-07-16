@@ -570,11 +570,16 @@ def run(
     stream: TextIO | None = None,
     cal_dir: Path | None = None,
     cal_tol: float = 0.00005,
+    cal_max_age_months: int = 12,  # shear_cal.DEFAULT_CAL_MAX_AGE_MONTHS (lazy import)
+    cal_strict: bool = False,
 ) -> int:
     """Scan *paths* for the requested sensor *kinds* and print a summary.
 
     Returns a process exit code: 0 = ok, 1 = no .p files found / unwritable CSV
-    target / every file failed to parse.
+    target / every file failed to parse / ``cal_strict`` without ``cal_dir``,
+    3 = ``cal_strict`` and the calibration check found sensitivity mismatches
+    outside ``cal_tol`` (distinct so scripts can tell "cal mismatch" from
+    "scan failed").
     """
     out = stream if stream is not None else sys.stdout
 
@@ -582,6 +587,9 @@ def run(
     # rather than crashing / erroring only after all the work is done.
     if csv_out is not None and (csv_out.is_dir() or not csv_out.parent.is_dir()):
         print(f"Error: cannot write CSV to {csv_out}", file=sys.stderr)
+        return 1
+    if cal_strict and cal_dir is None:
+        print("Error: --cal-strict requires --cal-dir", file=sys.stderr)
         return 1
     if cal_dir is not None and not cal_dir.is_dir():
         print(f"Error: --cal-dir {cal_dir} is not a directory", file=sys.stderr)
@@ -621,6 +629,7 @@ def run(
 
     print_report(inventory, kinds, verbose=verbose, compact=compact, stream=out)
 
+    cal_mismatch = False
     if cal_dir is not None:
         from odas_tpw.rsi import shear_cal
 
@@ -629,8 +638,9 @@ def run(
         except shear_cal.CalDependencyError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
-        summary = shear_cal.check_uses(uses, timelines)
+        summary = shear_cal.check_uses(uses, timelines, max_age_months=cal_max_age_months)
         shear_cal.print_check(summary, cal_dir, cal_tol, cal_warns, stream=out)
+        cal_mismatch = bool(summary.mismatches(cal_tol))
 
     if errors:
         print("Errors:", file=out)
@@ -646,9 +656,14 @@ def run(
             return 1
         print(f"Wrote {len(uses)} rows to {csv_out}", file=out)
 
-    # Non-zero only when the scan wholly failed (files present, all errored),
-    # so a script can distinguish "nothing worked" from "found no sensors".
-    return 1 if errors and not uses else 0
+    # Non-zero when the scan wholly failed (files present, all errored) — so a
+    # script can distinguish "nothing worked" from "found no sensors" — or,
+    # with --cal-strict, code 3 when the calibration check found mismatches.
+    if errors and not uses:
+        return 1
+    if cal_strict and cal_mismatch:
+        return 3
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -710,6 +725,22 @@ def build_arg_parser(prog: str = "sensor_inventory") -> argparse.ArgumentParser:
         help="Sensitivity-mismatch threshold for --cal-dir, in absolute sensitivity "
         "units (default: 0.00005, half the sheets' 4th-decimal resolution).",
     )
+    ap.add_argument(
+        "--cal-max-age-months",
+        type=int,
+        default=12,
+        metavar="N",
+        help="Staleness fallback for --cal-dir: flag observations whose governing "
+        "calibration is older than N months when its sheet carries no 'Recommended "
+        "re-calibration' line (default: 12, Rockland's recommendation). Sheets "
+        "with the line use its date directly.",
+    )
+    ap.add_argument(
+        "--cal-strict",
+        action="store_true",
+        help="Exit with code 3 when the --cal-dir check finds sensitivity "
+        "mismatches outside --cal-tol (default: report-only). Requires --cal-dir.",
+    )
     return ap
 
 
@@ -724,6 +755,8 @@ def main(argv: list[str] | None = None) -> int:
         compact=args.compact,
         cal_dir=args.cal_dir,
         cal_tol=args.cal_tol,
+        cal_max_age_months=args.cal_max_age_months,
+        cal_strict=args.cal_strict,
     )
 
 

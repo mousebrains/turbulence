@@ -80,6 +80,61 @@ def test_parse_does_not_confuse_recommended_or_previous_dates():
     assert s.sensitivity == pytest.approx(0.0777)
 
 
+def test_parse_recal_due():
+    assert sc.parse_sheet_text(M1458_TEXT).recal_due == date(2027, 6, 19)
+    assert sc.parse_sheet_text(M3039_TEXT).recal_due == date(2025, 7, 9)
+
+
+def test_parse_recal_due_ignores_dateless_recommendation_lines():
+    # Real sheets carry dateless prose ("Rockland recommends re-calibrating
+    # shear probes ...", "Frequent re-calibration is strongly ..."); only the
+    # anchored 're-?calibration' line WITH a date may set recal_due.
+    text = (
+        "Probe SN: M1111\n"
+        "Sensitivity (sens or S): 0.08\n"
+        "Frequent re-calibration is strongly\n"
+        "Rockland recommends re-calibrating shear probes annually\n"
+        "Calibration Date: 2024/01/02\n"
+    )
+    s = sc.parse_sheet_text(text)
+    assert s.recal_due is None
+    assert s.cal_date == date(2024, 1, 2)
+
+
+def test_parse_recal_due_rejects_prose_glued_to_stray_date():
+    """pypdf line-gluing can merge a prose recommendation with an unrelated
+    date; the label-anchored regex must not take it, and a recal_due on/before
+    the calibration date is discarded as a mis-parse."""
+    text = (
+        "Probe SN: M2222\n"
+        "Sensitivity (sens or S): 0.08\n"
+        "Frequent re-calibration is strongly recommended. Date: 2016/04/19\n"
+        "Calibration Date: 2024/01/02\n"
+    )
+    s = sc.parse_sheet_text(text)
+    assert s.recal_due is None
+    assert s.cal_date == date(2024, 1, 2)
+
+    # Even a label-anchored line whose date is on/before cal_date is rejected.
+    text2 = (
+        "Probe SN: M3333\n"
+        "Sensitivity (sens or S): 0.08\n"
+        "Calibration Date: 2024/01/02\n"
+        "Recommended re-calibration: 2023/01/02\n"
+    )
+    s2 = sc.parse_sheet_text(text2)
+    assert s2.recal_due is None
+    assert s2.cal_date == date(2024, 1, 2)
+
+
+def test_points_carry_recal_due_on_current_only():
+    s = sc.parse_sheet_text(M1458_TEXT)
+    by_date = {p.date: p for p in s.points()}
+    assert by_date[date(2026, 6, 19)].recal_due == date(2027, 6, 19)
+    # The sheet never states a recal date for the PREVIOUS calibration.
+    assert by_date[date(2021, 4, 27)].recal_due is None
+
+
 def test_parse_sn_not_swallowed_from_glued_caption():
     # A page-2 plot caption glues the serial to the fall-rate variable, e.g.
     # "...ProbeSN:M1254U=0.703m/s...".  The serial must come out as M1254, not
@@ -125,7 +180,7 @@ def _timeline(sn="M1458"):
 
 
 def test_sensitivity_hold_previous_between_cals():
-    s, gov, status = _timeline().sensitivity_at(date(2023, 1, 1))
+    s, gov, status, _stale = _timeline().sensitivity_at(date(2023, 1, 1))
     assert s == pytest.approx(0.0679)  # the *previous* value, not interpolated
     assert status == "in-effect"
     assert gov.date == date(2021, 4, 27)
@@ -138,16 +193,70 @@ def test_sensitivity_on_and_after_latest_cal():
 
 
 def test_sensitivity_before_earliest_clamps_and_flags():
-    s, gov, status = _timeline().sensitivity_at(date(2019, 1, 1))
+    s, gov, status, stale = _timeline().sensitivity_at(date(2019, 1, 1))
     assert s == pytest.approx(0.0679)
     assert status == "before-earliest"
     assert gov.date == date(2021, 4, 27)
+    assert stale is None  # before-earliest is never additionally marked stale
 
 
 def test_sensitivity_at_empty_timeline_raises():
     tl = sc.CalTimeline("M0000", [])
     with pytest.raises(ValueError, match="no calibration points"):
         tl.sensitivity_at(date(2023, 1, 1))
+
+
+# ---------------------------------------------------------------------------
+# Staleness (m2): recommended-recal date, or the max-age fallback
+# ---------------------------------------------------------------------------
+
+
+def test_cal_staleness_uses_sheet_recal_date():
+    gov = sc.CalPoint(date(2024, 7, 9), 0.1189, "s", recal_due=date(2025, 7, 9))
+    assert sc.cal_staleness(gov, date(2025, 7, 9)) is None  # on the due date: fresh
+    st = sc.cal_staleness(gov, date(2025, 8, 1))
+    assert st is not None
+    assert st.recal_due == date(2025, 7, 9)
+    assert st.max_age_months is None
+    assert st.months_old == 12
+    assert "recal was recommended by 2025-07-09" in st.describe()
+    assert "verify no newer sheet exists" in st.describe()
+
+
+def test_cal_staleness_fallback_max_age_only_without_sheet_line():
+    gov = sc.CalPoint(date(2024, 1, 15), 0.1, "s")  # sheet lacked the recal line
+    assert sc.cal_staleness(gov, date(2025, 1, 15)) is None  # exactly 12 months: fresh
+    st = sc.cal_staleness(gov, date(2025, 1, 16))
+    assert st is not None
+    assert st.recal_due is None
+    assert st.max_age_months == 12
+    assert "older than the 12-month max age" in st.describe()
+    # The CLI age is only the fallback — a wider age keeps it fresh ...
+    assert sc.cal_staleness(gov, date(2025, 1, 16), max_age_months=24) is None
+    # ... but never overrides a sheet that DOES carry the line.
+    with_line = sc.CalPoint(date(2024, 1, 15), 0.1, "s", recal_due=date(2025, 1, 15))
+    assert sc.cal_staleness(with_line, date(2025, 1, 16), max_age_months=24) is not None
+
+
+def test_sensitivity_at_reports_staleness():
+    pts = [sc.CalPoint(date(2021, 4, 27), 0.0679, "old", recal_due=date(2022, 4, 27))]
+    tl = sc.CalTimeline("M1458", pts)
+    assert tl.sensitivity_at(date(2021, 6, 1))[3] is None  # fresh
+    stale = tl.sensitivity_at(date(2023, 1, 1))[3]
+    assert stale is not None
+    assert stale.recal_due == date(2022, 4, 27)
+
+
+def test_check_uses_counts_stale_and_honors_max_age():
+    tls = {"M1458": _timeline()}  # points carry no recal_due -> fallback age
+    # obs 2023-01-01, governing cal 2021-04-27 -> 20 whole months old
+    summary = sc.check_uses([_use("M1458", "0.0679")], tls)
+    assert summary.n_stale == 1
+    assert summary.checks[0].stale is not None
+    assert summary.checks[0].stale.months_old == 20
+    # A 48-month fallback age keeps it fresh.
+    summary = sc.check_uses([_use("M1458", "0.0679")], tls, max_age_months=48)
+    assert summary.n_stale == 0
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +369,43 @@ def test_format_check_marks_before_earliest():
     summary = sc.check_uses([u], tls)
     text = "\n".join(sc.format_check(summary, Path("/cal"), 0.00005))
     assert "before earliest cal" in text
+    assert "stale" not in text  # before-earliest is never additionally stale
+
+
+def test_format_check_annotates_stale_mismatch_rows():
+    tls = {"M1458": _timeline()}  # no recal line on the points -> 12-month fallback
+    # obs 2023-01-01 governed by the 2021-04-27 cal (20 months old), mismatching
+    summary = sc.check_uses([_use("M1458", "0.0777")], tls)
+    text = "\n".join(sc.format_check(summary, Path("/cal"), 0.00005))
+    assert "[cal 20 months old at use; older than the 12-month max age" in text
+    assert "verify no newer sheet exists" in text
+    assert "1 of 1 checked observation(s) governed by stale calibrations" in text
+
+
+def test_format_check_stale_annotation_quotes_recal_date():
+    pts = [sc.CalPoint(date(2021, 4, 27), 0.0679, "old", recal_due=date(2022, 4, 27))]
+    tls = {"M1458": sc.CalTimeline("M1458", pts)}
+    summary = sc.check_uses([_use("M1458", "0.0777")], tls)
+    text = "\n".join(sc.format_check(summary, Path("/cal"), 0.00005))
+    assert "recal was recommended by 2022-04-27" in text
+
+
+def test_format_check_no_mismatch_reports_stale_count():
+    tls = {"M1458": _timeline()}
+    summary = sc.check_uses([_use("M1458", "0.0679")], tls)  # agrees, but stale
+    text = "\n".join(sc.format_check(summary, Path("/cal"), 0.00005))
+    assert "No mismatches" in text
+    assert "(1 observation(s) governed by stale calibrations)" in text
+
+
+def test_format_check_fresh_observation_no_stale_noise():
+    tls = {"M1458": _timeline()}
+    u = _use("M1458", "0.0679")
+    u.start_time = datetime(2021, 6, 1, tzinfo=UTC)  # 1 month after the 2021 cal
+    summary = sc.check_uses([u], tls)
+    text = "\n".join(sc.format_check(summary, Path("/cal"), 0.00005))
+    assert "No mismatches" in text
+    assert "stale" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +428,35 @@ def test_load_cal_dir_end_to_end(tmp_path):
     assert pts == {(date(2021, 4, 27), 0.0679), (date(2026, 6, 19), 0.0777)}
     # hold-previous through the real timeline
     assert tls["M1458"].sensitivity_at(date(2023, 6, 1))[0] == pytest.approx(0.0679)
+    # The real sheet's "Recommended re-calibration: 2027/06/19" is parsed onto
+    # the current calibration point (m2 staleness guard).
+    by_date = {p.date: p for p in tls["M1458"].points}
+    assert by_date[date(2026, 6, 19)].recal_due == date(2027, 6, 19)
+    assert by_date[date(2021, 4, 27)].recal_due is None
+
+
+@pytest.mark.parametrize("old_name", ["M1458_2021_04_27.pdf", "Z-M1458_2021_04_27.pdf"])
+def test_load_cal_dir_dedup_prefers_recal_due(monkeypatch, tmp_path, old_name):
+    """A newer sheet's "previous" point repeats an older sheet's current point
+    WITHOUT its recommended-recal date; whichever sheet order glob yields, the
+    merged timeline must keep the copy that carries recal_due."""
+    old_sheet = (
+        "Probe SN: M1458\n"
+        "Sensitivity (sens or S): 0.0679 V\n"
+        "Calibration Date: 2021/04/27\n"
+        "Recommended re-calibration: 2022/04/27\n"
+    )
+    texts = {old_name: old_sheet, "M1458_2026_06_19.pdf": M1458_TEXT}
+    monkeypatch.setattr(sc, "extract_pdf_text", lambda p: texts[p.name])
+    d = tmp_path / "sheets"
+    d.mkdir()
+    for name in texts:
+        (d / name).write_bytes(b"%PDF-1.4\n")
+
+    tls, _warns = sc.load_cal_dir(d)
+    by_date = {p.date: p for p in tls["M1458"].points}
+    assert by_date[date(2021, 4, 27)].recal_due == date(2022, 4, 27)
+    assert by_date[date(2026, 6, 19)].recal_due == date(2027, 6, 19)
 
 
 def test_load_cal_dir_fills_sn_and_date_from_filename(monkeypatch, tmp_path):
@@ -462,3 +637,97 @@ class TestUpdateSensitivityCsv:
         monkeypatch.setattr(sc, "extract_pdf_text", _extract)
         stats = sc.update_sensitivity_csv(d)
         assert stats.sheets_failed == 1 and stats.sheets_parsed == 1
+
+
+# ---------------------------------------------------------------------------
+# --cal-strict exit codes (m3).  The synthetic-sheet texts stand in for the
+# gitignored microstructure_sensors/ directory: extract_pdf_text is
+# monkeypatched, so no pypdf (and no real PDF) is needed.  MR_SL435.p has
+# sh1 = M3038 configured with sens 0.1041 on 2025-02-12.
+# ---------------------------------------------------------------------------
+
+MR_FIXTURE = Path(__file__).parent / "data" / "MR_SL435.p"
+
+M3038_MISMATCH_TEXT = """
+Probe SN: M3038
+Sensitivity (sens or S): 0.0950 V
+Calibration Date: 2024/07/09
+Recommended re-calibration: 2025/07/09
+"""
+
+M3038_MATCH_TEXT = """
+Probe SN: M3038
+Sensitivity (sens or S): 0.1041 V
+Calibration Date: 2024/07/09
+Recommended re-calibration: 2025/07/09
+"""
+
+
+def _synthetic_cal_dir(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(sc, "extract_pdf_text", lambda p: text)
+    d = tmp_path / "sheets"
+    d.mkdir()
+    (d / "M3038_2024_07_09.pdf").write_bytes(b"%PDF-1.4\n")
+    return d
+
+
+def test_run_cal_mismatch_default_is_report_only(monkeypatch, tmp_path, capsys):
+    if not MR_FIXTURE.exists():
+        pytest.skip("MR fixture missing")
+    d = _synthetic_cal_dir(monkeypatch, tmp_path, M3038_MISMATCH_TEXT)
+    code = si.run([MR_FIXTURE], si.resolve_kinds(shear=True), cal_dir=d)
+    assert code == 0  # default behavior unchanged: mismatches reported, exit 0
+    assert "mismatching observation(s)" in capsys.readouterr().out
+
+
+def test_run_cal_strict_exits_3_on_mismatch(monkeypatch, tmp_path, capsys):
+    if not MR_FIXTURE.exists():
+        pytest.skip("MR fixture missing")
+    d = _synthetic_cal_dir(monkeypatch, tmp_path, M3038_MISMATCH_TEXT)
+    code = si.run([MR_FIXTURE], si.resolve_kinds(shear=True), cal_dir=d, cal_strict=True)
+    assert code == 3
+    # The report is still fully printed before the strict exit.
+    assert "mismatching observation(s)" in capsys.readouterr().out
+
+
+def test_run_cal_strict_exit_0_when_within_tolerance(monkeypatch, tmp_path):
+    if not MR_FIXTURE.exists():
+        pytest.skip("MR fixture missing")
+    d = _synthetic_cal_dir(monkeypatch, tmp_path, M3038_MATCH_TEXT)
+    code = si.run([MR_FIXTURE], si.resolve_kinds(shear=True), cal_dir=d, cal_strict=True)
+    assert code == 0
+
+
+def test_run_cal_strict_requires_cal_dir(capsys):
+    code = si.run([Path("x.p")], si.resolve_kinds(shear=True), cal_strict=True)
+    assert code == 1
+    assert "requires --cal-dir" in capsys.readouterr().err
+
+
+def test_sensor_inventory_main_wires_cal_strict(monkeypatch, tmp_path):
+    """build_arg_parser must carry --cal-strict / --cal-max-age-months (F6)."""
+    if not MR_FIXTURE.exists():
+        pytest.skip("MR fixture missing")
+    d = _synthetic_cal_dir(monkeypatch, tmp_path, M3038_MISMATCH_TEXT)
+    code = si.main(
+        [str(MR_FIXTURE), "--shear", "--cal-dir", str(d), "--cal-strict",
+         "--cal-max-age-months", "6"]
+    )
+    assert code == 3
+
+
+def test_rsi_cli_sensors_wires_cal_strict(monkeypatch, tmp_path):
+    """The rsi-tpw sensors parser must carry the same flags (F6)."""
+    if not MR_FIXTURE.exists():
+        pytest.skip("MR fixture missing")
+    d = _synthetic_cal_dir(monkeypatch, tmp_path, M3038_MISMATCH_TEXT)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["rsi-tpw", "sensors", str(MR_FIXTURE), "--shear", "--cal-dir", str(d), "--cal-strict"],
+    )
+    from odas_tpw.rsi.cli import main
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 3

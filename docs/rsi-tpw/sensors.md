@@ -47,6 +47,32 @@ Linear interpolation of the drift *between* calibration dates is intentionally
 lookup carries a `mode`, so interpolation can be added later without changing
 how the command is used.
 
+> **Completeness assumption:** the check is only as good as the sheets
+> directory. A probe that *was* recalibrated but whose newer sheet is missing
+> from `--cal-dir` will be checked (and possibly flagged stale or mismatching)
+> against the older calibration. Keep the directory complete, and treat every
+> stale annotation as "verify no newer sheet exists" — which is exactly what it
+> says.
+
+### Stale calibrations — `--cal-max-age-months`
+
+Each sheet's **"Recommended re-calibration"** date is parsed alongside the
+calibration itself. An observation whose *governing* calibration is past that
+date at observation time is annotated **stale**:
+
+```
+[cal 15 months old at use; recal was recommended by 2025-07-09 — verify no newer sheet exists]
+```
+
+When a sheet carries no recommended-recal line, the fallback is a maximum age
+of `--cal-max-age-months` (default **12** months — Rockland's actual
+recommendation; every parsed sheet's recal date is exactly cal + 12 months).
+The flag only changes the fallback; sheets with the line always use its date.
+Stale annotations appear on mismatch rows, and the summary reports the stale
+count even when there are no mismatches ("No mismatches: ... (M observation(s)
+governed by stale calibrations)"). An observation *before* the earliest known
+calibration is flagged `[before earliest cal]` instead, never stale.
+
 ### Output
 
 Only **mismatches** are reported (configured vs in-effect sensitivity differing
@@ -58,6 +84,26 @@ the sheets quote it to four decimals. The default is `0.00005`, half that
 4th-decimal resolution, so any difference that would round to a different quoted
 value is flagged. A coverage line notes any probes that had no matching sheet,
 and observations skipped for a missing clock or a blank configured `sens`.
+
+### Exit codes — `--cal-strict`
+
+By default the calibration check is **report-only**: mismatches are printed but
+the exit code stays 0. For CI / scripted gating, pass `--cal-strict` to exit
+with code **3** (distinct from the scan-failure code 1) when the check found
+mismatches outside `--cal-tol`:
+
+```bash
+rsi-tpw sensors VMP/ --cal-dir sheets/ --cal-strict && echo "sens OK"
+```
+
+| Exit code | Meaning |
+|-----------|---------|
+| 0 | Scan (and, with `--cal-dir`, the check) completed; no strict failure |
+| 1 | No `.p` files found / unwritable CSV / every file failed to parse / `--cal-strict` without `--cal-dir` |
+| 3 | `--cal-strict` and the calibration check found mismatches outside `--cal-tol` |
+
+`--cal-strict` requires `--cal-dir` (it errors otherwise); stale annotations
+alone never trip it — only sensitivity mismatches do.
 
 ### The `cal` extra
 

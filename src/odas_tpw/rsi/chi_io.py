@@ -24,6 +24,8 @@ import numpy as np
 import numpy.typing as npt
 import xarray as xr
 
+from odas_tpw.rsi.dissipation import DOF_NUTTALL
+
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
 
@@ -130,7 +132,7 @@ def _compute_chi(
 
     grad_func, _ = _spectrum_func(spectrum_model)
 
-    results = []
+    results: list[xr.Dataset] = []
     for s_slow, e_slow in profiles_slow:
         s_fast = s_slow * ratio
         e_fast = min((e_slow + 1) * ratio, len(t_fast))
@@ -185,6 +187,12 @@ def _compute_chi(
                 f_AA=f_AA,
             )
 
+        # Goodman DOF loss (#131 m9): each coherently-removed vibration signal
+        # costs one FFT segment of DOF (Lueck 2022b), mirroring the epsilon
+        # dof_spec in dissipation.py.  Gated exactly like l3_chi's do_goodman
+        # (goodman requested AND vibration channels present).
+        n_v = l2_chi.n_vib if (goodman and l2_chi.n_vib > 0) else 0
+
         # Build output dataset
         ds = _build_chi_ds_from_pipeline(
             l3_chi,
@@ -200,6 +208,7 @@ def _compute_chi(
             f_AA=f_AA,
             grad_func=grad_func,
             chi_method=l4_chi.method,
+            n_v=n_v,
         )
         ds.attrs.update(data["metadata"])
         ds.attrs["history"] = f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
@@ -214,6 +223,37 @@ def _compute_chi(
                 "axis": "T",
             }
         )
+
+        # Cross-probe consistency diagnostic (issue #131): chi_-prefixed
+        # per-pair median chi ratio + significance attrs, mirroring the diss
+        # build.  sigma_ln uses epsilon_T for the Kolmogorov length (the
+        # mk_chi_mean convention).  Computed over ALL finite windows (no fom
+        # cut at this stage); the attrs do not survive binning/combo.
+        if n_therm >= 2:
+            from odas_tpw.processing.probe_consistency import (
+                annotate_probe_consistency,
+                lueck_ln_sigma,
+            )
+
+            sigma_ln = lueck_ln_sigma(
+                l4_chi.epsilon_T,
+                l3_chi.nu,
+                l3_chi.pspd_rel,
+                diss_length,
+                fs_fast,
+                l4_chi.var_resolved,
+            )
+            src_name = Path(str(data["metadata"].get("source", ""))).name
+            annotate_probe_consistency(
+                ds,
+                l4_chi.chi,
+                sigma_ln,
+                therm_names,
+                quantity="chi",
+                attr_prefix="chi_",
+                context=f"{src_name} profile {len(results) + 1}",
+            )
+
         results.append(ds)
 
     return results
@@ -474,14 +514,21 @@ def _build_chi_ds_from_pipeline(
     f_AA: float,
     grad_func,
     chi_method: str = "epsilon",
+    n_v: int = 0,
 ) -> xr.Dataset:
-    """Build old-format xr.Dataset from L3ChiData + L4ChiData."""
+    """Build old-format xr.Dataset from L3ChiData + L4ChiData.
+
+    ``n_v`` is the number of Goodman-removed vibration signals (0 when
+    Goodman did not run); each costs one FFT segment of spectral DOF
+    (Lueck 2022b), so ``dof_spec`` here matches the epsilon convention in
+    ``dissipation.py`` rather than ODAS's uncorrected ``1.9*num_of_ffts``.
+    """
     n_spec = l3_chi.n_spectra
     n_freq = l3_chi.n_wavenumber
 
-    # DOF
+    # DOF (Nuttall 1971 factor, minus the Goodman DOF loss — see docstring)
     num_ffts = 2 * (diss_length // fft_length) - 1
-    dof_spec = 1.9 * num_ffts
+    dof_spec = DOF_NUTTALL * max(num_ffts - n_v, 1)
 
     # Reconstruct fitted gradient spectra for the diagnostic overlay.
     spec_batch = _reconstruct_spec_batch(l3_chi, l4_chi, grad_func)

@@ -23,16 +23,26 @@ interpolation between calibration dates is deliberately *not* done yet;
 :class:`CalTimeline` carries a ``mode`` so it can be added later without
 touching callers.
 
+Staleness: each sheet's "Recommended re-calibration" date is parsed onto its
+calibration point, and observations governed by a calibration past that date
+(or, when a sheet lacks the line, older than a fallback maximum age — default
+12 months, Rockland's recommendation) are annotated stale in the report.  The
+check is only as good as the sheets directory: a missing newer sheet makes a
+recalibrated probe look stale/mismatching, hence the "verify no newer sheet
+exists" wording.
+
 Text-parsing is separated from PDF reading so the parser is unit-testable on
 plain strings (see :func:`parse_sheet_text`), independent of any PDF.
 """
 
 from __future__ import annotations
 
+import calendar
 import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from datetime import date as _Date  # for annotations inside classes with a `date` field
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
 
@@ -45,6 +55,12 @@ logger = logging.getLogger(__name__)
 
 class CalDependencyError(RuntimeError):
     """Raised when reading calibration PDFs but the ``cal`` extra is missing."""
+
+
+# Fallback staleness age when a sheet carries no "Recommended re-calibration"
+# line: Rockland recommends re-calibrating shear probes every 12 months (every
+# parsed sheet's recal date is exactly cal + 12 months).
+DEFAULT_CAL_MAX_AGE_MONTHS = 12
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +80,14 @@ _SN_RE = re.compile(r"Probe\s*SN\s*:?\s*([A-Za-z]{0,3}\d+(?:-\w+)?)", re.I)
 _SENS_RE = re.compile(r"Sensitivity\s*\(sens\s*or\s*S\)\s*:?\s*" + _NUM, re.I)
 _PREV_SENS_RE = re.compile(r"Previous\s+Sensitivity\s*:?\s*" + _NUM, re.I)
 _DATE_RE = re.compile(_DATE)
+# "Recommended re-calibration: 2027/06/19".  Anchored on the LABEL
+# ("recommended re-calibration") plus a date on the same line: sheets also
+# carry prose like "Frequent re-calibration is strongly recommended" that,
+# depending on pypdf line-gluing, can land on the same extracted line as an
+# unrelated date and must never feed recal_due.
+_RECAL_RE = re.compile(r"recommended\s+re-?calibration", re.I)
+# Looser match used only to SKIP prose recommendation lines.
+_RECAL_SKIP_RE = re.compile(r"re-?calibration", re.I)
 # "M1458_2026_06_19].pdf" -> ("M1458", 2026, 6, 19); tolerant of trailing junk.
 _FNAME_RE = re.compile(r"([A-Za-z]?\d[\w-]*?)[_-](\d{4})[_-](\d{1,2})[_-](\d{1,2})")
 
@@ -80,7 +104,9 @@ class CalSheet:
     """The calibration facts parsed from one sheet.
 
     ``prev_*`` are ``None`` for a probe's first-ever calibration (the sheet then
-    simply omits the "Previous ..." lines, as Rockland's do).
+    simply omits the "Previous ..." lines, as Rockland's do).  ``recal_due`` is
+    the sheet's "Recommended re-calibration" date for the CURRENT calibration
+    (the sheets never state one for the previous calibration).
     """
 
     sn: str | None
@@ -89,6 +115,7 @@ class CalSheet:
     prev_sensitivity: float | None = None
     prev_cal_date: date | None = None
     source: str = ""
+    recal_due: date | None = None
 
     def is_usable(self) -> bool:
         return self.sn is not None and self.sensitivity is not None and self.cal_date is not None
@@ -97,7 +124,9 @@ class CalSheet:
         """Every ``(date, sensitivity)`` calibration point this sheet supplies."""
         pts: list[CalPoint] = []
         if self.cal_date is not None and self.sensitivity is not None:
-            pts.append(CalPoint(self.cal_date, self.sensitivity, self.source))
+            pts.append(
+                CalPoint(self.cal_date, self.sensitivity, self.source, recal_due=self.recal_due)
+            )
         if self.prev_cal_date is not None and self.prev_sensitivity is not None:
             pts.append(
                 CalPoint(self.prev_cal_date, self.prev_sensitivity, f"{self.source} (previous)")
@@ -129,6 +158,7 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
     cal_date: date | None = None
     prev_sens: float | None = None
     prev_cal_date: date | None = None
+    recal_due: date | None = None
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -149,9 +179,14 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
             if m:
                 sens = float(m.group(1))
 
-        # Dates: skip the "Recommended re-calibration" line; keep previous vs current apart.
+        # Dates: the "Recommended re-calibration" line feeds recal_due only
+        # (never cal_date); keep previous vs current apart below.
         low = line.lower()
-        if "recommend" in low:
+        if "recommend" in low or _RECAL_SKIP_RE.search(line):
+            if recal_due is None and _RECAL_RE.search(line):
+                m = _DATE_RE.search(line)
+                if m:
+                    recal_due = _parse_date_parts(m.group(1), m.group(2), m.group(3))
             continue
         if "previous" in low and "calibration date" in low and prev_cal_date is None:
             m = _DATE_RE.search(line)
@@ -169,8 +204,14 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
         sens = None
     if prev_sens is not None and prev_sens <= 0:
         prev_sens = None
+    # A recal-due on/before the calibration date is a mis-parse (e.g. a prose
+    # line glued to an unrelated date) — staleness from it would be nonsense.
+    if recal_due is not None and cal_date is not None and recal_due <= cal_date:
+        recal_due = None
 
-    return CalSheet(sn, sens, cal_date, prev_sens, prev_cal_date, source=source)
+    return CalSheet(
+        sn, sens, cal_date, prev_sens, prev_cal_date, source=source, recal_due=recal_due
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +245,66 @@ class CalPoint:
     date: date
     sensitivity: float
     source: str
+    # The sheet's "Recommended re-calibration" date for THIS calibration, when
+    # the sheet carries the line (a sheet's "previous" point never does).
+    # (_Date, not date: the `date` field above shadows the type in class scope.)
+    recal_due: _Date | None = None
+
+
+def _add_months(d: date, months: int) -> date:
+    """*d* plus *months* calendar months, clamping the day to the month end."""
+    total = d.year * 12 + (d.month - 1) + months
+    y, m0 = divmod(total, 12)
+    day = min(d.day, calendar.monthrange(y, m0 + 1)[1])
+    return date(y, m0 + 1, day)
+
+
+def _months_between(a: date, b: date) -> int:
+    """Whole calendar months from *a* to *b* (0 when ``b <= a``)."""
+    months = (b.year - a.year) * 12 + (b.month - a.month)
+    if b.day < a.day:
+        months -= 1
+    return max(months, 0)
+
+
+@dataclass(frozen=True)
+class Staleness:
+    """Why a governing calibration is stale at an observation date.
+
+    Exactly one of ``recal_due`` (the sheet's recommended-recal date was
+    passed) and ``max_age_months`` (the sheet lacked the line and the
+    fallback age limit was exceeded) is set.
+    """
+
+    months_old: int  # whole months from the governing calibration to the obs
+    recal_due: date | None = None
+    max_age_months: int | None = None
+
+    def describe(self) -> str:
+        if self.recal_due is not None:
+            why = f"recal was recommended by {self.recal_due}"
+        else:
+            why = f"older than the {self.max_age_months}-month max age"
+        return f"cal {self.months_old} months old at use; {why} — verify no newer sheet exists"
+
+
+def cal_staleness(
+    gov: CalPoint, obs: date, max_age_months: int = DEFAULT_CAL_MAX_AGE_MONTHS
+) -> Staleness | None:
+    """``None`` when *gov* is fresh at *obs*, else the :class:`Staleness`.
+
+    Stale when *obs* is past the sheet's recommended re-calibration date, or —
+    only as a fallback when the sheet lacks the line — when the calibration is
+    more than *max_age_months* calendar months old at *obs*.  An observation
+    before the calibration (the ``before-earliest`` clamp) is never stale.
+    """
+    if gov.recal_due is not None:
+        if obs > gov.recal_due:
+            return Staleness(_months_between(gov.date, obs), recal_due=gov.recal_due)
+        return None
+    if obs > _add_months(gov.date, max_age_months):
+        return Staleness(_months_between(gov.date, obs), max_age_months=max_age_months)
+    return None
 
 
 @dataclass
@@ -214,21 +315,26 @@ class CalTimeline:
     points: list[CalPoint]  # sorted ascending by date, de-duplicated
     mode: str = "hold-previous"  # future: "interpolate"
 
-    def sensitivity_at(self, obs: date) -> tuple[float, CalPoint, str]:
-        """``(sensitivity, governing point, status)`` for an observation date.
+    def sensitivity_at(
+        self, obs: date, max_age_months: int = DEFAULT_CAL_MAX_AGE_MONTHS
+    ) -> tuple[float, CalPoint, str, Staleness | None]:
+        """``(sensitivity, governing point, status, staleness)`` for an observation date.
 
         ``status`` is ``"in-effect"`` when a calibration on or before *obs*
         governs, or ``"before-earliest"`` when *obs* precedes every known
-        calibration and the earliest is clamped to.
+        calibration and the earliest is clamped to.  ``staleness`` is ``None``
+        when the governing calibration is fresh at *obs*, else why it is stale
+        (past its recommended-recal date, or older than *max_age_months* when
+        the sheet lacks that line — see :func:`cal_staleness`).
         """
         if not self.points:
             raise ValueError(f"CalTimeline for {self.sn!r} has no calibration points")
         prior = [p for p in self.points if p.date <= obs]
         if prior:
             gov = max(prior, key=lambda p: p.date)
-            return gov.sensitivity, gov, "in-effect"
+            return gov.sensitivity, gov, "in-effect", cal_staleness(gov, obs, max_age_months)
         earliest = min(self.points, key=lambda p: p.date)
-        return earliest.sensitivity, earliest, "before-earliest"
+        return earliest.sensitivity, earliest, "before-earliest", None
 
 
 def load_cal_dir(cal_dir: Path) -> tuple[dict[str, CalTimeline], list[str]]:
@@ -289,8 +395,12 @@ def load_cal_dir(cal_dir: Path) -> tuple[dict[str, CalTimeline], list[str]]:
                     f"{sheet.sn}: conflicting sensitivity for {pt.date} "
                     f"({existing.sensitivity} vs {pt.sensitivity}); kept {existing.sensitivity}"
                 )
-            else:
-                dated.setdefault(pt.date, pt)
+            elif existing is None or (existing.recal_due is None and pt.recal_due is not None):
+                # A newer sheet's "previous" point repeats an older sheet's
+                # current point but WITHOUT its recommended-recal date; keep
+                # whichever copy carries recal_due so staleness checks work
+                # regardless of the (sorted-filename) sheet order.
+                dated[pt.date] = pt
 
     timelines = {
         sn: CalTimeline(sn, sorted(pts.values(), key=lambda p: p.date))
@@ -316,6 +426,7 @@ class ObsCheck:
     expected: float
     governing: CalPoint
     status: str  # "in-effect" | "before-earliest"
+    stale: Staleness | None = None  # governing cal stale at obs_date (see cal_staleness)
 
     @property
     def abs_diff(self) -> float:
@@ -344,6 +455,11 @@ class CheckSummary:
         """Checks whose |configured - expected| exceeds *tol* (sensitivity units)."""
         return [c for c in self.checks if abs(c.abs_diff) > tol]
 
+    @property
+    def n_stale(self) -> int:
+        """Observations governed by a stale calibration (see :func:`cal_staleness`)."""
+        return sum(1 for c in self.checks if c.stale is not None)
+
 
 def _to_float(raw: str) -> float | None:
     try:
@@ -353,8 +469,16 @@ def _to_float(raw: str) -> float | None:
     return f if f == f and f not in (float("inf"), float("-inf")) else None
 
 
-def check_uses(uses: list[SensorUse], timelines: dict[str, CalTimeline]) -> CheckSummary:
-    """Compare every shear :class:`SensorUse` to its probe's calibration timeline."""
+def check_uses(
+    uses: list[SensorUse],
+    timelines: dict[str, CalTimeline],
+    max_age_months: int = DEFAULT_CAL_MAX_AGE_MONTHS,
+) -> CheckSummary:
+    """Compare every shear :class:`SensorUse` to its probe's calibration timeline.
+
+    *max_age_months* is the staleness fallback age for calibrations whose sheet
+    carries no "Recommended re-calibration" line (see :func:`cal_staleness`).
+    """
     checks: list[ObsCheck] = []
     no_sheet: set[str] = set()
     n_no_sens = 0
@@ -378,10 +502,18 @@ def check_uses(uses: list[SensorUse], timelines: dict[str, CalTimeline]) -> Chec
             n_undated += 1
             continue
         obs_date = use.start_time.date()
-        expected, gov, status = tl.sensitivity_at(obs_date)
+        expected, gov, status, stale = tl.sensitivity_at(obs_date, max_age_months)
         checks.append(
             ObsCheck(
-                use.sensor_sn, use.channel, use.path, obs_date, configured, expected, gov, status
+                use.sensor_sn,
+                use.channel,
+                use.path,
+                obs_date,
+                configured,
+                expected,
+                gov,
+                status,
+                stale,
             )
         )
 
@@ -412,11 +544,18 @@ def _fmt_group(key: tuple, obs: list[ObsCheck]) -> list[str]:
     tag = " [before earliest cal]" if status == "before-earliest" else ""
     n = len(obs)
     unit = "file" if n == 1 else "files"
-    return [
+    lines = [
         f"  {sn}  configured sens {configured:g}  vs  calibration {expected:g} "
         f"(cal {gov_date}){tag}  →  Δ {delta:+.4f} ({pct:+.1f}%)",
         f"      {n} {unit}, obs {when}, as {channels}",
     ]
+    # Stale-calibration annotation: all obs in a group share the governing
+    # point (same gov_date), so describe the WORST (latest) stale observation.
+    stales = [o.stale for o in obs if o.stale is not None]
+    if stales:
+        worst = max(stales, key=lambda s: s.months_old)
+        lines.append(f"      [{worst.describe()}]")
+    return lines
 
 
 def format_check(
@@ -464,9 +603,14 @@ def format_check(
         lines.append("")
         return lines
     if not mism:
+        stale_note = (
+            f" ({summary.n_stale} observation(s) governed by stale calibrations)"
+            if summary.n_stale
+            else ""
+        )
         lines.append(
             f"No mismatches: all {summary.n_checked} checked observation(s) agree "
-            f"with their calibration within ±{_fmt_tol(tol)}."
+            f"with their calibration within ±{_fmt_tol(tol)}.{stale_note}"
         )
         lines.append("")
         return lines
@@ -479,6 +623,11 @@ def format_check(
     lines.append(f"{len(mism)} mismatching observation(s):")
     for key in sorted(grouped, key=lambda k: (k[0], str(k[4]))):
         lines.extend(_fmt_group(key, grouped[key]))
+    if summary.n_stale:
+        lines.append(
+            f"{summary.n_stale} of {summary.n_checked} checked observation(s) governed "
+            "by stale calibrations — verify no newer sheet exists."
+        )
     lines.append("")
     return lines
 
