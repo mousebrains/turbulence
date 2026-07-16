@@ -102,8 +102,8 @@ Controls how profiling segments are identified from pressure data.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `P_min` | float | `0.5` | Minimum pressure threshold [dbar] |
-| `W_min` | float | `0.3` | Minimum fall rate [dbar/s] |
-| `direction` | string | `"down"` | Profile direction: `"up"` or `"down"` |
+| `W_min` | float | `null` | Minimum fall rate [dbar/s]. `null` = auto: 0.3 for a free-falling profiler, 0.05 for glide/horizontal platforms (the VMP-tuned 0.3 rejects every glider cast) |
+| `direction` | string | `"auto"` | Profile direction: `"auto"`, `"up"`, `"down"`, `"glide"` (up + down), or `"horizontal"`. `"auto"` resolves from the instrument's `vehicle` (e.g. `slocum_glider` → `glide`); instruments without a `vehicle` in their config default to `down` — set `direction: glide` explicitly for such glider corpora |
 | `min_duration` | float | `7.0` | Minimum profile duration [seconds] |
 | `diagnostics` | bool | `false` | Include diagnostic variables in output |
 

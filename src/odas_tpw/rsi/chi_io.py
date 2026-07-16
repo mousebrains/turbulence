@@ -41,7 +41,10 @@ def _compute_chi(
     diss_length: int | None = None,
     overlap: int | None = None,
     speed: float | None = None,
+    speed_method: str | None = None,
+    aoa_deg: float = 3.0,
     direction: str = "auto",
+    W_min: float | None = None,
     fp07_model: str = "single_pole",
     goodman: bool = True,
     f_AA: float = 98.0,
@@ -54,6 +57,13 @@ def _compute_chi(
     _pre_loaded: dict[str, Any] | None = None,
 ) -> list[xr.Dataset]:
     """Compute chi from temperature gradient spectra (internal, no deprecation warning).
+
+    ``speed_method`` selects the through-water speed model (``None`` /
+    ``"pressure"`` = historical |dP/dt|; ``"em"`` = U_EM flowmeter;
+    ``"flight"`` = inviscid flight model with angle of attack ``aoa_deg``),
+    mutually exclusive with a fixed ``speed``. ``W_min`` is the
+    profile-detection fall-rate floor [dbar/s]; ``None`` resolves it from
+    the vehicle direction (0.3 free-fall, 0.05 glide/horizontal).
 
     ``temperature`` selects the reference-temperature source for viscosity /
     kappa_T and ``T_mean``: ``"auto"`` (first plausible of T1..Tn, T, JAC_T),
@@ -78,6 +88,7 @@ def _compute_chi(
     from odas_tpw.chi.l4_chi import process_l4_chi_epsilon, process_l4_chi_fit
     from odas_tpw.rsi.helpers import (
         _build_l1data_from_channels,
+        _validate_speed_selection,
         prepare_profiles,
         resolve_measured_salinity,
     )
@@ -88,6 +99,8 @@ def _compute_chi(
         diss_length = 4 * fft_length
     if overlap is None:
         overlap = diss_length // 2
+    # Fail fast (before any file access); prepare_profiles re-validates.
+    _validate_speed_selection(speed, speed_method)
 
     # Validate the salinity form BEFORE any file access so a bad string fails
     # fast; "measured" itself is resolved after the channels are loaded.
@@ -136,7 +149,19 @@ def _compute_chi(
     from odas_tpw.rsi.vehicle import resolve_direction
 
     direction = resolve_direction(direction, vehicle)
-    prepared = prepare_profiles(data, speed, direction, salinity, vehicle=vehicle)
+    # prepare_profiles owns the speed precedence (fixed speed > em/flight
+    # method > precomputed speed_fast > pressure) and stamps speed_source/
+    # speed_method into data["metadata"] accordingly.
+    prepared = prepare_profiles(
+        data,
+        speed,
+        direction,
+        salinity,
+        vehicle=vehicle,
+        W_min=W_min,
+        speed_method=speed_method,
+        aoa_deg=aoa_deg,
+    )
     if prepared is None:
         return []
     (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, _fs_slow, ratio, t_fast) = (
@@ -876,26 +901,27 @@ def _load_therm_channels(
                     )
                     therm_cal.append(_extract_therm_cal(ch_cfg))
     else:
-        # NetCDF source — look for gradient channels or T channels
+        # NetCDF source — look for gradient channels or T channels.
+        # _nc_filled: masked _FillValue samples become NaN, never the raw
+        # ~9.97e36 fill buffer (see _channels_from_nc).
         import netCDF4 as nc
 
         from odas_tpw.rsi.helpers import DT_PATTERN, T_PATTERN
+        from odas_tpw.rsi.profile import _nc_filled
 
         ds = nc.Dataset(str(source), "r")
 
         for vname in sorted(ds.variables.keys()):
             var = ds.variables[vname]
-            if var.dimensions == ("time_fast",):
-                arr = var[:].data.astype(np.float64)
-                if DT_PATTERN.match(vname):
-                    therm.append((vname, arr))
-                    diff_gains.append(0.94)
+            if var.dimensions == ("time_fast",) and DT_PATTERN.match(vname):
+                therm.append((vname, _nc_filled(var)))
+                diff_gains.append(0.94)
 
         if not therm:
             for vname in sorted(ds.variables.keys()):
                 var = ds.variables[vname]
                 if var.dimensions == ("time_fast",) and T_PATTERN.match(vname):
-                    therm.append((vname, var[:].data.astype(np.float64)))
+                    therm.append((vname, _nc_filled(var)))
                     diff_gains.append(0.94)
 
         ds.close()

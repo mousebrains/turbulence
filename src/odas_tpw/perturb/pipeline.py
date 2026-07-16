@@ -1445,12 +1445,20 @@ def process_file(
     # them instead of recomputing from P. Default method is "pressure",
     # which reproduces the historical VMP behavior exactly.
     speed_cfg = merge_config("speed", config.get("speed"))
+    # Speed provenance for the per-profile NetCDFs (extract_profiles
+    # extra_attrs): the diss/chi stages read it back and stamp
+    # "precomputed speed_fast (perturb speed.method=...)" on their products.
+    speed_attrs: dict[str, str] = {}
     if "P" in pf.channels:
         try:
             from odas_tpw.perturb.speed import compute_speed_for_pfile
 
             vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
-            speed_fast, W_slow = compute_speed_for_pfile(pf, speed_cfg, vehicle)
+            speed_fast, W_slow, speed_source = compute_speed_for_pfile(pf, speed_cfg, vehicle)
+            speed_attrs = {
+                "speed_method": str(speed_cfg.get("method", "pressure")),
+                "speed_source": speed_source,
+            }
 
             pf.channels["speed_fast"] = speed_fast
             pf._fast_channels.add("speed_fast")
@@ -1499,7 +1507,12 @@ def process_file(
     output_stem = output_stem or p_path.stem
     log_basename = output_stem
 
-    profiles_cfg = config.get("profiles", {})
+    # merge_config (not raw config.get): the detection below must see the same
+    # effective defaults as the cache signature (upstream_for hashes the merged
+    # section) — e.g. direction "auto" and the vehicle-resolved W_min. An
+    # explicit `W_min: null` in the YAML is dropped by merge_config, so a
+    # missing key below means "resolve from the vehicle direction".
+    profiles_cfg = merge_config("profiles", config.get("profiles"))
     fp07_cfg = config.get("fp07", {})
     ct_cfg = config.get("ct", {})
 
@@ -1534,16 +1547,27 @@ def process_file(
             # without this it silently falls through to the "down" branch and
             # we lose every up-profile -- on a glider with MR-on-during-climb
             # only, that drops *all* the real flight data.
-            from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
+            from odas_tpw.rsi.vehicle import resolve_detection
 
             vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
-            # Smooth the detection fall rate with the VEHICLE tau, matching ODAS
-            # (odas_p2mat.m). The default 1.5 s is correct for a VMP but 2-40x
-            # too fast for gliders/floats (slocum 3.0 s, argo 60.0 s), which made
-            # W noisy at the W_min threshold and fragmented profile boundaries.
-            W = _smooth_fall_rate(P_slow, pf.fs_slow, tau=resolve_tau(vehicle))
-            direction = resolve_direction(
+            # Resolve direction ("auto" = vehicle default), the detection
+            # fall-rate floor (W_min null/absent = 0.3 free-fall, 0.05
+            # glide/horizontal — the VMP-tuned 0.3 rejects every glider
+            # cast), and the smoothing tau. Tau matches ODAS (odas_p2mat.m):
+            # the 1.5 s default is correct for a VMP but 2-40x too fast for
+            # gliders/floats (slocum 3.0 s, argo 60.0 s), which made W noisy
+            # at the W_min threshold and fragmented profile boundaries.
+            direction, tau, w_min = resolve_detection(
                 profiles_cfg.get("direction", "auto"),
+                vehicle,
+                W_min=profiles_cfg.get("W_min"),
+            )
+            W = _smooth_fall_rate(P_slow, pf.fs_slow, tau=tau)
+            logger.info(
+                "%s: profile detection direction=%s W_min=%g dbar/s (vehicle=%r)",
+                p_path.name,
+                direction,
+                w_min,
                 vehicle,
             )
             profiles = get_profiles(
@@ -1551,7 +1575,7 @@ def process_file(
                 W,
                 pf.fs_slow,
                 P_min=profiles_cfg.get("P_min", 0.5),
-                W_min=profiles_cfg.get("W_min", 0.3),
+                W_min=w_min,
                 direction=direction,
                 min_duration=profiles_cfg.get("min_duration", 7.0),
             )
@@ -1723,6 +1747,7 @@ def process_file(
                     gps=gps,
                     return_scalars=True,
                     output_stem=output_stem,
+                    extra_attrs=speed_attrs,
                 )
                 result["profiles"] = [str(p) for p in prof_paths]
                 prof_scalars_cache = {str(p): s for p, s in zip(prof_paths, prof_scalars)}

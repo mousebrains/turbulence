@@ -47,7 +47,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - **Note — hash churn**: adding the `temperature`/`conductivity` keys to
     the rsi `epsilon`/`chi` sections (and removing perturb's `T1_norm`/
     `T2_norm`, below) changes the config hashes, so existing `eps_NN`/
-    `chi_NN` (and perturb stage) directories will not be reused — the next
+    `chi_NN` (and perturb stage) directories will not be reused (epsilon/chi always; prof dirs only when the merged profiles key-set changed — an explicit numeric W_min keeps them) — the next
     run recomputes into fresh directories. Deliberate: the key set is part
     of the provenance signature.
 - **Salinity from a hotel file** — `epsilon.salinity`, `chi.salinity`, and the
@@ -92,6 +92,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Zenodo DOI badge + identifiers (concept DOI `10.5281/zenodo.21366142`,
   version DOI `10.5281/zenodo.21366143`) in the README and `CITATION.cff`,
   plus a PyPI version badge — back-filled after v0.3.0 was archived on Zenodo.
+- **`--speed-method {pressure,em,flight}` + `--aoa` on `rsi-tpw eps` and `chi`**
+  (issue #131 findings M1/M2) — the through-water speed models that `pipeline`
+  and perturb already had are now reachable from the modular commands (config
+  keys `epsilon.speed_method` / `epsilon.aoa_deg`, same in `chi`; the
+  `em`/`flight` methods are mutually exclusive with a fixed `--speed`, and
+  the same exclusivity is now enforced by `run_pipeline`). An **explicit**
+  `--speed-method pressure` forces the |dP/dt| path even when the input (a
+  perturb per-profile file) carries a precomputed `speed_fast` channel;
+  leaving the method unset prefers that channel, as before. `rsi-tpw
+  pipeline` additionally honors the YAML `epsilon.speed_method`/`aoa_deg`
+  (previously CLI-flag-only) and warns when the `[chi]` section sets a
+  different `speed_method`/`aoa_deg`/`W_min` (single per-file resolution,
+  like `temperature`/`conductivity`).
+- **Speed provenance** (issue #131 finding M8): the diss/chi products now carry
+  a `speed_source` attr stamped at the speed precedence point —
+  `"fixed --speed <v>"` / `"precomputed speed_fast (perturb speed.method=em)"`
+  / `"em (U_EM)"` / `"flight (aoa=3)"` / `"pressure |dP/dt|"` — and
+  `compute_speed_for_pfile` returns its source string
+  (`"pressure" | "em" | "flight" | "constant:<v>"`) as a third value so callers
+  stamp what was actually computed. A stale upstream `speed_method` attr is
+  cleared when a fixed speed or the pressure path is used, so the attrs can
+  never claim e.g. `speed_method="em"` next to a fixed-speed source. The
+  perturb pipeline writes `speed_method`/`speed_source` global attrs into the
+  per-profile NetCDFs (new `extra_attrs` parameter on `extract_profiles`;
+  written whenever the speed channel was computed) and the diss/chi stages
+  inherit them.
+- **perturb warning capture** (issue #131 finding M8): `warnings.warn(...)`
+  (e.g. the glider |dP/dt| speed-bias warning) is now routed into the perturb
+  run/worker/stage log files via `logging.captureWarnings(True)`, enabled in
+  both `setup_root_logging` and `init_worker_logging` (spawn workers never run
+  the former) — never at module import.
+
+### Changed
+- **Glider-correct detection defaults** (issue #131 findings M3/M13/M7):
+  `W_min` now defaults to **auto** everywhere — 0.3 dbar/s for a free-falling
+  profiler, 0.05 for glide/horizontal platforms — in rsi `prof`/`eps`/`chi`/
+  `pipeline` (config `profiles.W_min: null`, new `epsilon.W_min`/`chi.W_min`
+  keys + `--W-min` flags) and in perturb (`profiles.W_min: null`). In
+  `run_pipeline` the resolved value also feeds `L2Params.profile_min_W`, so
+  the L2 section selector no longer discards glider data that detection
+  accepted. perturb's `profiles.direction` default flips **"down" → "auto"**
+  (vehicle-resolved; a Slocum gets `glide` = up + down), and its detection
+  site now resolves the same merged defaults that the cache signature hashes.
+  Scope qualifier: **auto helps only vehicle-declaring corpora** — files whose
+  `instrument_info` carries no `vehicle` (e.g. CASPER-era MicroRiders) still
+  resolve to `down`/0.3 and need an explicit `direction: glide`. Note for
+  local Rutgers configs: the `Rutgers/perturb.yaml` workaround comment
+  ("REQUIRED: batch default 0.3 rejects gliders") is now obsolete — `W_min`
+  and `direction` can be left unset there.
+- **`rsi-tpw prof` is vehicle-aware** (issue #131 finding M13):
+  `extract_profiles` now resolves `vehicle`/`direction`/`W_min`/tau before
+  detection — `--vehicle slocum_glider` previously crashed with a
+  `TypeError` (unexpected keyword) and `--direction auto` silently behaved
+  as `down`. Full-record NetCDF sources resolve the vehicle from their
+  `platform_type` attr (falling back to an instrument-model heuristic). VMP
+  defaults are bit-identical (`down`, tau 1.5, W_min 0.3).
+- **No more silent-empty products** (issue #131 finding M4): when profile
+  detection finds nothing, `eps`/`chi` warn with the observed pressure span
+  and peak fall rate vs the thresholds (and the flag to relax), print a
+  per-file "no profiles detected" plus a final "N of M file(s) produced
+  output" summary. **Exit-code change**: `rsi-tpw eps`/`chi` now exit **1**
+  when *no* input file produced output (all failed and/or all empty), so a
+  `set -e` batch script fails instead of reporting success over an empty
+  directory — deliberate.
+- **`rsi-tpw info`/`prof` batch robustness** (issue #131 finding M5): a
+  startup file (valid config, no data records), 0-byte, or truncated `.p`
+  file no longer aborts the batch — per-file errors print `ERROR: ...` and
+  processing continues (exit 1 only when every file failed). The `eps`/`chi`
+  loops additionally catch `struct.error` (truncated mid-file `.p`), matching
+  `nc`.
+- **Note — hash churn**: the `profiles`/`epsilon`/`chi` key-set and default
+  changes above alter the rsi and perturb config hashes, so existing
+  `prof_NN`/`eps_NN`/`chi_NN` and perturb stage directories will not be
+  reused — the next run recomputes into fresh directories. Deliberate: the
+  key set is part of the provenance signature, and this lands in the same
+  release as the reference-temperature keys (one churn, not two).
 
 ### Removed
 - **perturb `epsilon.T1_norm` / `epsilon.T2_norm` config keys** — they were

@@ -349,8 +349,9 @@ The `rsi-tpw` CLI supports YAML configuration files with three sections:
 ```yaml
 profiles:
   P_min: 0.5            # Minimum pressure [dbar]
-  W_min: 0.3            # Minimum fall rate [dbar/s]
-  direction: down        # Profile direction
+  W_min: null           # Minimum fall rate [dbar/s] (null = auto: 0.3
+                        # free-fall, 0.05 glide/horizontal)
+  direction: auto        # Profile direction (vehicle-resolved)
   min_duration: 7.0      # Minimum duration [s]
 
 epsilon:

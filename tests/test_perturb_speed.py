@@ -64,7 +64,7 @@ def glider_with_incl(vmp_descent):
 class TestPressureMethod:
     def test_pressure_default_returns_vertical_speed(self, vmp_descent):
         """Default ``pressure`` method recovers the imposed 0.5 m/s descent."""
-        speed_fast, W_slow = compute_speed_for_pfile(vmp_descent, {}, vehicle="vmp")
+        speed_fast, W_slow, _ = compute_speed_for_pfile(vmp_descent, {}, vehicle="vmp")
         # Trim filter transients at the array ends.
         assert speed_fast.shape == vmp_descent.t_fast.shape
         np.testing.assert_allclose(np.median(speed_fast[1000:-1000]), 0.5, atol=0.02)
@@ -77,7 +77,7 @@ class TestPressureMethod:
             P=np.zeros(n_slow), t_slow=np.arange(n_slow) / 64.0,
             t_fast=np.arange(n_fast) / 512.0, fs_slow=64.0, fs_fast=512.0,
         )
-        speed_fast, _ = compute_speed_for_pfile(
+        speed_fast, _, _ = compute_speed_for_pfile(
             pf, {"method": "pressure", "speed_cutout": 0.07}, vehicle="vmp",
         )
         np.testing.assert_allclose(speed_fast, 0.07, atol=1e-12)
@@ -105,7 +105,7 @@ class TestPressureMethod:
 
 class TestEMMethod:
     def test_em_returns_u_em(self, glider_with_em):
-        speed_fast, W_slow = compute_speed_for_pfile(
+        speed_fast, W_slow, _ = compute_speed_for_pfile(
             glider_with_em, {"method": "em"}, vehicle="slocum_glider",
         )
         # Constant U_EM=0.32 → fast-rate output should sit at 0.32 (after
@@ -118,7 +118,7 @@ class TestEMMethod:
         """Negative U_EM (stall noise) is mapped to |U_EM|."""
         pf = vmp_descent
         pf.channels["U_EM"] = np.full_like(pf.channels["P"], -0.4)
-        speed_fast, _ = compute_speed_for_pfile(
+        speed_fast, _, _ = compute_speed_for_pfile(
             pf, {"method": "em"}, vehicle="slocum_glider",
         )
         np.testing.assert_allclose(np.median(speed_fast[1000:-1000]), 0.4, atol=1e-3)
@@ -133,7 +133,7 @@ class TestEMMethod:
 class TestFlightMethod:
     def test_flight_recovers_along_axis_speed(self, glider_with_incl):
         """For pitch=-30°, roll=2°, AoA=3°: U = |W| / (sin(27°)cos(2°))."""
-        speed_fast, _ = compute_speed_for_pfile(
+        speed_fast, _, _ = compute_speed_for_pfile(
             glider_with_incl,
             {"method": "flight", "aoa_deg": 3.0},
             vehicle="slocum_glider",
@@ -150,7 +150,7 @@ class TestFlightMethod:
         # Roll: tiny +/-0.5 deg wobble. Pitch: -30 deg +/- 1 deg gentle drift.
         pf.channels["Incl_X"] = 0.5 * np.sin(2 * np.pi * np.arange(n) / n)
         pf.channels["Incl_Y"] = -30.0 + np.sin(2 * np.pi * np.arange(n) / n)
-        speed_fast, _ = compute_speed_for_pfile(
+        speed_fast, _, _ = compute_speed_for_pfile(
             pf, {"method": "flight", "aoa_deg": 3.0}, vehicle="slocum_glider",
         )
         # Pitch axis = Incl_Y (range ~2°), roll ≈ Incl_X (range ~1°).
@@ -177,7 +177,7 @@ class TestFlightMethod:
         roll = 5.0 * np.sin(2 * np.pi * np.arange(n) / 600)
         roll[10] = -90.0
         pf.channels["Incl_X"] = roll
-        speed_fast, _ = compute_speed_for_pfile(
+        speed_fast, _, _ = compute_speed_for_pfile(
             pf, {"method": "flight", "aoa_deg": 3.0}, vehicle="slocum_glider",
         )
         # If the picker was fooled, pitch≈±5° and U = |W|/sin(2°) is huge
@@ -205,13 +205,13 @@ class TestFlightMethod:
         roll[10] = -90.0
         pf.channels["Incl_X"] = roll
 
-        good, _ = compute_speed_for_pfile(
+        good, _, _ = compute_speed_for_pfile(
             pf,
             {"method": "flight", "aoa_deg": 3.0,
              "amplitude_quantile": [1.0, 99.0]},
             vehicle="slocum_glider",
         )
-        bad, _ = compute_speed_for_pfile(
+        bad, _, _ = compute_speed_for_pfile(
             pf,
             {"method": "flight", "aoa_deg": 3.0,
              "amplitude_quantile": [0.0, 100.0]},
@@ -227,10 +227,10 @@ class TestFlightMethod:
 
     def test_flight_default_aoa_is_3deg(self, glider_with_incl):
         """Omitting ``aoa_deg`` uses ODAS default 3°."""
-        a, _ = compute_speed_for_pfile(
+        a, _, _ = compute_speed_for_pfile(
             glider_with_incl, {"method": "flight"}, vehicle="slocum_glider",
         )
-        b, _ = compute_speed_for_pfile(
+        b, _, _ = compute_speed_for_pfile(
             glider_with_incl, {"method": "flight", "aoa_deg": 3.0},
             vehicle="slocum_glider",
         )
@@ -245,7 +245,7 @@ class TestFlightMethod:
 
 class TestConstantMethod:
     def test_constant_uses_value(self, vmp_descent):
-        speed_fast, _ = compute_speed_for_pfile(
+        speed_fast, _, _ = compute_speed_for_pfile(
             vmp_descent, {"method": "constant", "value": 0.42}, vehicle="vmp",
         )
         np.testing.assert_allclose(speed_fast, 0.42)
@@ -255,6 +255,32 @@ class TestConstantMethod:
             compute_speed_for_pfile(
                 vmp_descent, {"method": "constant", "value": None}, vehicle="vmp",
             )
+
+
+class TestSourceReturn:
+    """Third return value: the provenance vocabulary (#131 W1b/F17)."""
+
+    def test_source_vocabulary(self, vmp_descent):
+        pf = vmp_descent
+        _, _, src = compute_speed_for_pfile(pf, {}, vehicle="vmp")
+        assert src == "pressure"
+        _, _, src = compute_speed_for_pfile(
+            pf, {"method": "constant", "value": 0.4}, vehicle="vmp",
+        )
+        assert src == "constant:0.4"
+        pf.channels["U_EM"] = np.full_like(pf.channels["P"], 0.3)
+        _, _, src = compute_speed_for_pfile(
+            pf, {"method": "em"}, vehicle="slocum_glider",
+        )
+        assert src == "em"
+        # MR convention: Incl_Y ~ pitch (larger swing), Incl_X mostly roll.
+        n = pf.channels["P"].size
+        pf.channels["Incl_X"] = np.full_like(pf.channels["P"], 2.0)
+        pf.channels["Incl_Y"] = -30.0 + np.sin(2 * np.pi * np.arange(n) / n)
+        _, _, src = compute_speed_for_pfile(
+            pf, {"method": "flight"}, vehicle="slocum_glider",
+        )
+        assert src == "flight"
 
 
 class TestUnknownMethod:

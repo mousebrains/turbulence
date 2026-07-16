@@ -61,8 +61,8 @@ DEFAULTS: dict[str, dict] = {
     },
     "profiles": {
         "P_min": 0.5,
-        "W_min": 0.3,
-        "direction": "down",
+        "W_min": None,  # null = auto: 0.3 free-fall, 0.05 glide/horizontal
+        "direction": "auto",  # auto = vehicle-resolved (glide for a glider)
         "min_duration": 7.0,
         "diagnostics": False,
     },
@@ -797,8 +797,11 @@ hotel:
 
 profiles:
   P_min: 0.5              # minimum pressure [dbar]
-  W_min: 0.3              # minimum fall rate [dbar/s]
-  direction: "down"       # profile direction: up or down
+  W_min: null             # minimum fall rate [dbar/s] (null = auto: 0.3
+                          # free-fall, 0.05 glide/horizontal)
+  direction: "auto"       # profile direction: auto | up | down | glide |
+                          # horizontal (auto = vehicle-resolved: down for a
+                          # VMP, glide = up + down for a glider)
   min_duration: 7.0       # minimum profile duration [s]
   diagnostics: false      # RESERVED / not yet implemented (would write T1_raw,
                           # C_raw, W, cal attrs). Currently a no-op for profiles.

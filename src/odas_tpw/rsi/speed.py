@@ -45,8 +45,8 @@ def compute_speed_for_pfile(
     pf: Any,
     speed_cfg: dict | None,
     vehicle: str | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return (speed_fast, W_slow) from configured method, in m/s and dbar/s.
+) -> tuple[np.ndarray, np.ndarray, str]:
+    """Return (speed_fast, W_slow, source) from the configured method.
 
     Parameters
     ----------
@@ -74,6 +74,10 @@ def compute_speed_for_pfile(
                  slightly LOW.
     W_slow     : (n_slow,) float64, dbar/s. Always the smoothed |dP/dt|
                  -- independent of method, useful for QC/binning.
+    source     : str, the provenance vocabulary for the speed actually
+                 computed: ``"pressure"`` | ``"em"`` | ``"flight"`` |
+                 ``"constant:<v>"``. Callers stamp product provenance from
+                 this return value rather than re-deriving it from the cfg.
     """
     from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
     from odas_tpw.scor160.profile import compute_speed_fast as _ode_speed
@@ -113,24 +117,24 @@ def compute_speed_for_pfile(
             P_slow, t_fast, t_slow, fs_fast, fs_slow,
             tau=tau, speed_min=speed_cutout,
         )
-        return speed_fast, W_slow
+        return speed_fast, W_slow, "pressure"
 
     if method == "constant":
         v = cfg.get("value")
         if v is None:
             raise ValueError("speed.method='constant' but speed.value is null")
         speed_fast = np.full(len(t_fast), max(abs(float(v)), speed_cutout))
-        return speed_fast, W_slow
+        return speed_fast, W_slow, f"constant:{float(v):g}"
 
     if method == "em":
         if "U_EM" not in pf.channels:
             raise ValueError(
                 "speed.method='em' but channel U_EM is missing from the "
-                ".p file. Use 'flight' or 'pressure' instead."
+                "source. Use 'flight' or 'pressure' instead."
             )
         U_em_slow = np.abs(np.asarray(pf.channels["U_EM"], dtype=np.float64))
         return _slow_to_fast(U_em_slow, t_fast, t_slow, fs_fast, fs_slow,
-                             tau=tau, speed_min=speed_cutout), W_slow
+                             tau=tau, speed_min=speed_cutout), W_slow, "em"
 
     if method == "flight":
         aoa_deg = float(cfg.get("aoa_deg", 3.0))
@@ -141,7 +145,7 @@ def compute_speed_for_pfile(
             amplitude_quantile=(float(aq[0]), float(aq[1])),
         )
         return _slow_to_fast(speed_slow, t_fast, t_slow, fs_fast, fs_slow,
-                             tau=tau, speed_min=speed_cutout), W_slow
+                             tau=tau, speed_min=speed_cutout), W_slow, "flight"
 
     raise ValueError(
         f"Unknown speed.method={method!r}. "
