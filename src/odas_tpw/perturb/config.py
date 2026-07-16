@@ -951,8 +951,8 @@ speed:
   # pressure : ODAS smoothed |dP/dt|. Correct for VMP. (default)
   # em       : use the U_EM channel from the .p file (MicroRider EM
   #            flowmeter). Errors out if U_EM is missing.
-  # flight   : |W| / sin(|pitch|-aoa), pitch axis auto-picked from
-  #            Incl_X/Incl_Y by amplitude.
+  # flight   : |W| / (sin(|pitch|-aoa)*cos|roll|), pitch axis auto-
+  #            picked from Incl_X/Incl_Y by amplitude.
   # constant : use the scalar in `value`.
   # hotel    : use the hotel-merged channel named by `hotel_var` (map a
   #            source variable onto it via hotel.channels, e.g.

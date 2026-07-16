@@ -324,7 +324,7 @@ class TestHotelMethod:
             fast_channels={"speed"},
         )
         pf.channels["speed"] = np.full(n_slow, 0.3)  # slow length, fast-registered
-        with pytest.raises(ValueError, match=r"registered on the fast grid"):
+        with pytest.raises(ValueError, match=r"does not match the fast grid"):
             compute_speed_for_pfile(pf, {"method": "hotel"}, vehicle="slocum_glider")
 
     def test_hotel_var_selects_channel(self, vmp_descent):
@@ -381,7 +381,7 @@ class TestHotelMethod:
         0.05 m/s via _slow_to_fast's fallback; for hotel it is an error."""
         pf = vmp_descent
         pf.channels["speed"] = np.full_like(pf.channels["P"], np.nan)
-        with pytest.raises(ValueError, match=r"0% finite"):
+        with pytest.raises(ValueError, match=r"0\.0% finite"):
             compute_speed_for_pfile(pf, {"method": "hotel"}, vehicle="slocum_glider")
 
 

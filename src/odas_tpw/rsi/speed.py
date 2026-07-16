@@ -256,12 +256,15 @@ def _hotel_speed_fast(
         )
     n_expected = n_fast if is_fast else n_slow
     if len(arr) != n_expected:
+        # Phrased as "resolves to", not "registered on": PFile.is_fast
+        # returns False for names never registered at all, and those land
+        # here too when their length is not the slow-grid length.
         grid = "fast" if is_fast else "slow"
         raise ValueError(
-            f"speed.method='hotel': channel {hotel_var!r} is registered on "
-            f"the {grid} grid but has length {len(arr)} (expected "
-            f"{n_expected}); check the hotel.channels mapping (its 'fast:' "
-            "option controls the target grid)."
+            f"speed.method='hotel': channel {hotel_var!r} has length "
+            f"{len(arr)}, which does not match the {grid} grid it resolves "
+            f"to ({n_expected} samples); check the hotel.channels mapping "
+            "(its 'fast:' option controls the target grid)."
         )
 
     finite = np.isfinite(arr)
@@ -269,7 +272,7 @@ def _hotel_speed_fast(
     if finite_fraction < _HOTEL_MIN_FINITE_FRACTION:
         raise ValueError(
             f"speed.method='hotel': channel {hotel_var!r} is only "
-            f"{100.0 * finite_fraction:.0f}% finite "
+            f"{100.0 * finite_fraction:.1f}% finite "
             f"(< {100.0 * _HOTEL_MIN_FINITE_FRACTION:.0f}%) — refusing to "
             f"publish the {speed_min:g} m/s speed_cutout floor as "
             "through-water speed. Check the hotel file's coverage and the "
