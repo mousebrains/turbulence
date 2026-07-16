@@ -1,0 +1,16 @@
+serial,cal_date,sens,units,source,sheet,recal_due,notes
+M1254,2021-04-27,0.0739,V/(m^2 s^-2),sheet,M1254_2026_04_28.pdf,,previous-calibration entry on this sheet
+M1254,2026-04-28,0.0847,V/(m^2 s^-2),sheet,M1254_2026_04_28.pdf,2027-04-28,
+M1458,2016-04-25,0.696,V/(m^2 s^-2),manual,,,provided by Pat Welch 2026-07-16 from Rockland records (earliest of three Rockland calibrations for M1458); value ~10x the 2021/2026 calibrations - verify units convention before use
+M1458,2021-04-27,0.0679,V/(m^2 s^-2),sheet,M1458_2026_06_19].pdf,,previous-calibration entry on this sheet
+M1458,2026-06-19,0.0777,V/(m^2 s^-2),sheet,M1458_2026_06_19].pdf,2027-06-19,
+M2502,2021-12-17,0.0624,V/(m^2 s^-2),sheet,M2502_2026_06_19.pdf,,previous-calibration entry on this sheet
+M2502,2026-06-19,0.0533,V/(m^2 s^-2),sheet,M2502_2026_06_19.pdf,2027-06-19,
+M2506,2021-12-16,0.0821,V/(m^2 s^-2),sheet,M2506_2026_06_19.pdf,,previous-calibration entry on this sheet
+M2506,2026-06-19,0.0755,V/(m^2 s^-2),sheet,M2506_2026_06_19.pdf,2027-06-19,
+M2507,2021-12-16,0.0781,V/(m^2 s^-2),sheet,M2507_2026_06_19.pdf,,previous-calibration entry on this sheet
+M2507,2026-06-19,0.0784,V/(m^2 s^-2),sheet,M2507_2026_06_19.pdf,2027-06-19,
+M2508,2021-12-16,0.0852,V/(m^2 s^-2),sheet,M2508_2026_06_19.pdf,,previous-calibration entry on this sheet
+M2508,2026-06-19,0.0812,V/(m^2 s^-2),sheet,M2508_2026_06_19.pdf,2027-06-19,
+M3038,2024-07-09,0.1093,V/(m^2 s^-2),sheet,M3038_2024_07_09.pdf,2025-07-09,
+M3039,2024-07-09,0.1189,V/(m^2 s^-2),sheet,M3039_2024_07_09.pdf,2025-07-09,
