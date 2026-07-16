@@ -316,7 +316,7 @@ def _pipeline_one_file(
     goodman: bool,
 ) -> None:
     """Process one .P file (run_pipeline's per-file body)."""
-    from odas_tpw.rsi.helpers import resolve_temperature_channel, temperature_candidates
+    from odas_tpw.rsi.helpers import _resolve_reference_temperature, temperature_candidates
     from odas_tpw.rsi.p_file import PFile
     from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
 
@@ -339,32 +339,24 @@ def _pipeline_one_file(
     # Resolve the reference-temperature source ONCE per file (full-channel QC)
     # for provenance; the concrete selection is passed to the adapter so the
     # per-profile resolution cannot diverge from what the attrs report.
-    if isinstance(temperature, bool):
-        raise ValueError(
-            f"temperature={temperature!r} is not valid; use a channel name or a number"
-        )
-    if isinstance(temperature, (int, float)):
-        temp_for_l1: str | float = float(temperature)
-        temperature_source = f"constant:{float(temperature):g}"
-        temperature_qc = "pass"
-    elif temperature == "auto" and not temperature_candidates(pf.channels, len(pf.t_slow)):
+    if temperature == "auto" and not temperature_candidates(pf.channels, len(pf.t_slow)):
         # Historical tolerance: an instrument with no slow temperature channel
         # still runs; the adapter warns and fills L1.temp with NaN (downstream
         # substitutes 10 degC loudly).
-        temp_for_l1 = "auto"
+        temp_for_l1: str | float = "auto"
         temperature_source = "none"
         temperature_qc = "no slow temperature channel found"
     else:
-        t_chan, t_reason = resolve_temperature_channel(
-            pf.channels,
-            len(pf.t_slow),
-            temperature,
-            pressure=P_slow,
-            context=p_path.name,
+        # Same shared resolver as the modular path (load_channels): handles
+        # auto/explicit channels AND the numeric constant escape hatch, so an
+        # implausible constant (99 degC, NaN) warns and records its QC reason
+        # identically on both paths (and a bool is rejected identically).
+        _T, temperature_source, temperature_qc = _resolve_reference_temperature(
+            pf.channels, len(pf.t_slow), temperature, P_slow, p_path.name
         )
-        temp_for_l1 = t_chan
-        temperature_source = t_chan
-        temperature_qc = "pass" if t_reason is None else t_reason
+        temp_for_l1 = (
+            float(temperature) if isinstance(temperature, (int, float)) else temperature_source
+        )
 
     W_slow = _smooth_fall_rate(P_slow, pf.fs_slow, tau=file_speed_tau)
     profiles = get_profiles(
