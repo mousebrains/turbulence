@@ -163,7 +163,7 @@ def _compute_epsilon(
         goodman=goodman,
     )
 
-    results = []
+    results: list[xr.Dataset] = []
     for s_slow, e_slow in profiles_slow:
         s_fast = s_slow * ratio
         e_fast = min((e_slow + 1) * ratio, len(t_fast))
@@ -320,6 +320,31 @@ def _compute_epsilon(
                 "axis": "T",
             }
         )
+
+        # Cross-probe consistency diagnostic (issue #131): per-pair median
+        # epsilon ratio + significance attrs, with a two-tier warning on
+        # persistent disagreement.  Computed here at the ds build over ALL
+        # finite windows (no fom/FM cut at this stage) — the attrs do not
+        # survive binning/combo (see probe_consistency module docs).
+        if n_shear >= 2:
+            from odas_tpw.processing.probe_consistency import (
+                annotate_probe_consistency,
+                lueck_ln_sigma,
+            )
+
+            sigma_ln = lueck_ln_sigma(
+                epsilon, nu_out, l3.pspd_rel, diss_length, fs_fast, var_resolved_out
+            )
+            src_name = Path(str(data["metadata"].get("source", ""))).name
+            annotate_probe_consistency(
+                ds,
+                epsilon,
+                sigma_ln,
+                shear_names,
+                quantity="epsilon",
+                context=f"{src_name} profile {len(results) + 1}",
+            )
+
         results.append(ds)
 
     return results

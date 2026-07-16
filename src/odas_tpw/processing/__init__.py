@@ -22,6 +22,9 @@ right arrays.
 - :func:`thorpe.window_thorpe` / :func:`thorpe.patch_n2` — per-window
   Thorpe displacements/scale L_T and the overturn-weighted "patch"
   stratification (Smyth et al. 2001), plus Ozmidov/R_OT/Re_b/Cox helpers.
+- :func:`probe_consistency.annotate_probe_consistency` — cross-probe
+  median-ratio consistency diagnostic (per-pair attrs + two-tier
+  logger warning; issue #131).
 """
 
 from odas_tpw.processing.bottom import detect_bottom_crash
@@ -32,6 +35,12 @@ from odas_tpw.processing.mixing import (
     mixing_coefficients,
     pair_nearest,
     window_stratification,
+)
+from odas_tpw.processing.probe_consistency import (
+    PairStat,
+    annotate_probe_consistency,
+    lueck_ln_sigma,
+    probe_pair_stats,
 )
 from odas_tpw.processing.thorpe import (
     cox_number,
@@ -44,17 +53,21 @@ from odas_tpw.processing.thorpe import (
 from odas_tpw.processing.top_trim import compute_trim_depth, compute_trim_depths
 
 __all__ = [
+    "PairStat",
+    "annotate_probe_consistency",
     "compute_trim_depth",
     "compute_trim_depths",
     "cox_number",
     "ct_align",
     "detect_bottom_crash",
+    "lueck_ln_sigma",
     "mixing_coefficients",
     "mk_chi_mean",
     "mk_epsilon_mean",
     "ozmidov",
     "pair_nearest",
     "patch_n2",
+    "probe_pair_stats",
     "r_ot",
     "reynolds_buoyancy",
     "window_stratification",
