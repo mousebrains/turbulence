@@ -1455,10 +1455,55 @@ def process_file(
 
             vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
             speed_fast, W_slow, speed_source = compute_speed_for_pfile(pf, speed_cfg, vehicle)
+            speed_method = str(speed_cfg.get("method", "pressure"))
             speed_attrs = {
-                "speed_method": str(speed_cfg.get("method", "pressure")),
+                "speed_method": speed_method,
                 "speed_source": speed_source,
             }
+
+            # No silent overwrite (#131 M10): a hotel merge may have injected
+            # channels literally named "speed_fast"/"W_slow"; the assignments
+            # below recompute them, discarding the hotel values. Warn with
+            # the applicable remedy. W_slow is ALWAYS recomputed (smoothed
+            # |dP/dt|, method-independent), so a hotel W_slow always warns.
+            if pf.channel_info.get("W_slow", {}).get("type") == "hotel":
+                logger.warning(
+                    "hotel merge injected channel 'W_slow' but the speed "
+                    "stage always recomputes it as smoothed |dP/dt| for %s — "
+                    "the hotel-provided values are discarded; give the hotel "
+                    "channel a different output name "
+                    "(hotel.channels.<src>.name) to keep it",
+                    p_path.name,
+                )
+            # A hotel speed_fast is discarded unless method 'hotel' actually
+            # consumes it (hotel_var == 'speed_fast'); consuming a DIFFERENT
+            # hotel channel still clobbers an injected literal speed_fast.
+            hotel_var = str(speed_cfg.get("hotel_var") or "speed")
+            if pf.channel_info.get("speed_fast", {}).get("type") == "hotel" and not (
+                speed_method == "hotel" and hotel_var == "speed_fast"
+            ):
+                if speed_method == "hotel":
+                    logger.warning(
+                        "hotel merge injected channel 'speed_fast' but "
+                        "speed.method='hotel' consumes %r (speed.hotel_var) "
+                        "and overwrites it for %s — the injected "
+                        "'speed_fast' values are discarded; set "
+                        "speed.hotel_var: 'speed_fast' to consume them, or "
+                        "give the hotel channel a different output name",
+                        hotel_var,
+                        p_path.name,
+                    )
+                else:
+                    logger.warning(
+                        "hotel merge injected channel 'speed_fast' but "
+                        "speed.method=%r recomputes it for %s — the "
+                        "hotel-provided values are discarded; set "
+                        "speed.method: 'hotel' (with speed.hotel_var naming "
+                        "the merged channel, default 'speed') to use hotel "
+                        "telemetry as the through-water speed",
+                        speed_method,
+                        p_path.name,
+                    )
 
             pf.channels["speed_fast"] = speed_fast
             pf._fast_channels.add("speed_fast")
@@ -1475,10 +1520,31 @@ def process_file(
                 "long_name": "profiling rate (smoothed |dP/dt|)",
             }
         except Exception as exc:
+            method_cfg = str(speed_cfg.get("method", "pressure"))
+            if method_cfg != "pressure":
+                # An explicitly selected non-pressure speed source (em /
+                # flight / constant / hotel — "pressure" is the DEFAULT, so a
+                # non-pressure method here is always user-configured) failed:
+                # do NOT fall through. Downstream diss/chi would silently
+                # recompute |dP/dt| (pressure) — with ~U^4 leverage on
+                # epsilon, that is the exact silent substitution M10 exists
+                # to prevent. Record and abort this file, mirroring the
+                # PFile-load failure path; the run's per-file jobs loop
+                # contains the failure so other files in the batch proceed.
+                logger.error(
+                    "speed channel computation failed for %s (method=%s): %s",
+                    p_path.name,
+                    method_cfg,
+                    exc,
+                )
+                result.setdefault("errors", []).append(f"speed: {exc}")
+                return result
+            # Default pressure method: the downstream fallback recomputes the
+            # same |dP/dt|, so continuing is honest — warn and carry on.
             logger.warning(
                 "speed channel computation failed for %s (method=%s): %s",
                 p_path.name,
-                speed_cfg.get("method", "pressure"),
+                method_cfg,
                 exc,
             )
 

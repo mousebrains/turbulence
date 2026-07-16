@@ -1026,7 +1026,10 @@ def _add_eps_parser(subparsers: argparse._SubParsersAction) -> None:
             "'em' uses the U_EM flowmeter channel; 'flight' uses the inviscid "
             "glider flight model |W|/sin(|pitch|-aoa) from the inclinometers; "
             "an explicit 'pressure' forces |dP/dt| even over a precomputed "
-            "speed_fast channel. em/flight are mutually exclusive with --speed."
+            "speed_fast channel. em/flight are mutually exclusive with --speed. "
+            "The 'hotel' speed method is perturb-only (hotel channels are "
+            "merged there); perturb per-profile NetCDFs arrive here as a "
+            "precomputed speed_fast channel."
         ),
     )
     p.add_argument(
@@ -1143,7 +1146,10 @@ def _add_chi_parser(subparsers: argparse._SubParsersAction) -> None:
             "'em' uses the U_EM flowmeter channel; 'flight' uses the inviscid "
             "glider flight model |W|/sin(|pitch|-aoa) from the inclinometers; "
             "an explicit 'pressure' forces |dP/dt| even over a precomputed "
-            "speed_fast channel. em/flight are mutually exclusive with --speed."
+            "speed_fast channel. em/flight are mutually exclusive with --speed. "
+            "The 'hotel' speed method is perturb-only (hotel channels are "
+            "merged there); perturb per-profile NetCDFs arrive here as a "
+            "precomputed speed_fast channel."
         ),
     )
     p.add_argument(
@@ -1278,7 +1284,9 @@ def _add_pipeline_parser(subparsers: argparse._SubParsersAction) -> None:
         help=(
             "Through-water speed model (default: pressure = |dP/dt|). "
             "'em' uses the U_EM flowmeter channel; 'flight' uses the inviscid "
-            "glider flight model |W|/sin(|pitch|-aoa) from the inclinometers."
+            "glider flight model |W|/sin(|pitch|+aoa) from the inclinometers. "
+            "The 'hotel' speed method is perturb-only (hotel channels are "
+            "merged there)."
         ),
     )
     p.add_argument(
