@@ -141,6 +141,26 @@ class TestEMMethod:
                 vmp_descent, {"method": "em"}, vehicle="slocum_glider",
             )
 
+    def test_em_all_nan_raises_not_floor(self, vmp_descent):
+        """An all-NaN U_EM (dead/disconnected flowmeter) must ERROR: the
+        _slow_to_fast all-NaN fill would otherwise publish a constant
+        0.05 m/s with provenance 'em' — missing telemetry indistinguishable
+        from a real 0.05 m/s speed (PR #139 P1)."""
+        pf = vmp_descent
+        pf.channels["U_EM"] = np.full_like(pf.channels["P"], np.nan)
+        with pytest.raises(ValueError, match=r"no finite samples.*speed_cutout floor"):
+            compute_speed_for_pfile(pf, {"method": "em"}, vehicle="slocum_glider")
+
+    def test_em_partial_nan_ok(self, glider_with_em):
+        """em rejects only ZERO finite samples — gaps are bridged."""
+        pf = glider_with_em
+        pf.channels["U_EM"][100:200] = np.nan
+        speed_fast, _, _ = compute_speed_for_pfile(
+            pf, {"method": "em"}, vehicle="slocum_glider",
+        )
+        assert np.isfinite(speed_fast).all()
+        np.testing.assert_allclose(np.median(speed_fast[1000:-1000]), 0.32, atol=1e-3)
+
 
 class TestFlightMethod:
     def test_flight_recovers_along_axis_speed(self, glider_with_incl):
@@ -254,6 +274,33 @@ class TestFlightMethod:
                 vmp_descent, {"method": "flight"}, vehicle="slocum_glider",
             )
 
+    def test_flight_zero_finite_raises_not_floor(self, vmp_descent):
+        """Pitch below min_pitch_deg for the WHOLE record (level flight /
+        all-inflection) → flight model all-NaN → ERROR, not a constant
+        0.05 m/s published with provenance 'flight' (PR #139 P1)."""
+        pf = vmp_descent
+        # |pitch| - aoa(3°) = 0 everywhere → sin path 0 < sin(min_pitch) → NaN
+        pf.channels["Incl_X"] = np.full_like(pf.channels["P"], 2.0)
+        pf.channels["Incl_Y"] = np.full_like(pf.channels["P"], 1.0)
+        with pytest.raises(ValueError, match=r"no finite samples.*speed_cutout floor"):
+            compute_speed_for_pfile(pf, {"method": "flight"}, vehicle="slocum_glider")
+
+    def test_flight_partial_nan_below_min_pitch_ok(self, vmp_descent):
+        """The em/flight guard is ZERO-finite, not hotel's 50% rule: flight
+        legitimately NaNs samples below min_pitch_deg at dive/climb
+        inflections, so a mostly-NaN cast with real steady-glide stretches
+        must still compute (asymmetry documented in speed.py)."""
+        pf = vmp_descent
+        n = pf.channels["P"].size
+        pitch = np.full(n, 1.0)          # below min_pitch → NaN in the model
+        pitch[: n // 4] = -30.0          # a real glide stretch (25% of cast)
+        pf.channels["Incl_Y"] = pitch
+        pf.channels["Incl_X"] = np.full(n, 2.0)
+        speed_fast, _, _ = compute_speed_for_pfile(
+            pf, {"method": "flight"}, vehicle="slocum_glider",
+        )
+        assert np.isfinite(speed_fast).all()
+
 
 class TestConstantMethod:
     def test_constant_uses_value(self, vmp_descent):
@@ -267,6 +314,16 @@ class TestConstantMethod:
             compute_speed_for_pfile(
                 vmp_descent, {"method": "constant", "value": None}, vehicle="vmp",
             )
+
+    def test_constant_non_finite_value_raises(self, vmp_descent):
+        """A NaN/inf speed.value must ERROR (PR #139 P1): max(nan, cutout)
+        propagates NaN, which downstream would be floored to 0.05 m/s and
+        published with provenance 'constant:nan'."""
+        for bad in (float("nan"), float("inf")):
+            with pytest.raises(ValueError, match=r"is not finite"):
+                compute_speed_for_pfile(
+                    vmp_descent, {"method": "constant", "value": bad}, vehicle="vmp",
+                )
 
 
 class TestHotelMethod:

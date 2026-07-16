@@ -25,6 +25,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   explicitly selected non-pressure method (em/flight/constant/hotel) whose
   speed stage fails; only the default pressure method keeps the historical
   warn-and-continue (its downstream fallback recomputes the same |dP/dt|).
+  And the failures now actually fire: an `em`/`flight` speed with **zero**
+  finite samples (dead flowmeter; level-flight/all-inflection pitch) errors
+  before the cutout floor is applied — previously the all-NaN fill published
+  a constant 0.05 m/s with provenance `"em"`/`"flight"`, indistinguishable
+  from a real 0.05 m/s speed — and a non-finite `speed.value` errors for
+  `constant`. em/flight deliberately use a zero-finite threshold rather than
+  hotel's 50% rule: the flight model legitimately NaNs every sample below
+  `min_pitch_deg` at dive/climb inflections, so a fraction cut could
+  false-error real casts.
   Product provenance: `speed_source = "hotel:<var>"` on the per-profile
   NetCDFs, carried through to the diss/chi attrs by the precomputed-speed
   mechanism (which now retains upstream source strings that say more than the

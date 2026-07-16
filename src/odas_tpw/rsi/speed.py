@@ -132,12 +132,29 @@ def compute_speed_for_pfile(
         )
         return speed_fast, W_slow, "pressure"
 
+    # Finite-coverage guards for EXPLICITLY requested non-pressure methods,
+    # applied BEFORE _slow_to_fast's cutout floor: _slow_to_fast fills an
+    # all-NaN input with speed_min (that fill is load-bearing for the
+    # pressure path and stays), which would otherwise publish a constant
+    # 0.05 m/s with provenance "em"/"flight" — missing telemetry would be
+    # indistinguishable from a real 0.05 m/s speed, and the perturb
+    # explicit-method abort could never fire (the array is already finite).
+    # Threshold asymmetry vs the hotel method (50% rule): the flight model
+    # legitimately NaNs every sample below min_pitch_deg (dive/climb
+    # inflections), so a fraction threshold could false-error real casts —
+    # em/flight only reject ZERO finite samples.
+
     if method == "constant":
         v = cfg.get("value")
         if v is None:
             raise ValueError("speed.method='constant' but speed.value is null")
-        speed_fast = np.full(len(t_fast), max(abs(float(v)), speed_cutout))
-        return speed_fast, W_slow, f"constant:{float(v):g}"
+        v = float(v)
+        if not np.isfinite(v):
+            raise ValueError(
+                f"speed.method='constant' but speed.value={v!r} is not finite"
+            )
+        speed_fast = np.full(len(t_fast), max(abs(v), speed_cutout))
+        return speed_fast, W_slow, f"constant:{v:g}"
 
     if method == "em":
         if "U_EM" not in pf.channels:
@@ -146,6 +163,13 @@ def compute_speed_for_pfile(
                 "source. Use 'flight' or 'pressure' instead."
             )
         U_em_slow = np.abs(np.asarray(pf.channels["U_EM"], dtype=np.float64))
+        if not np.isfinite(U_em_slow).any():
+            raise ValueError(
+                "speed.method='em': channel U_EM has no finite samples "
+                "(dead or disconnected flowmeter) — refusing to publish "
+                f"the {speed_cutout:g} m/s speed_cutout floor as "
+                "through-water speed."
+            )
         return _slow_to_fast(U_em_slow, t_fast, t_slow, fs_fast, fs_slow,
                              tau=tau, speed_min=speed_cutout), W_slow, "em"
 
@@ -157,6 +181,15 @@ def compute_speed_for_pfile(
             W_slow, pf, aoa_deg=aoa_deg, min_pitch_deg=min_pitch_deg,
             amplitude_quantile=(float(aq[0]), float(aq[1])),
         )
+        if not np.isfinite(speed_slow).any():
+            raise ValueError(
+                "speed.method='flight': the flight model produced no finite "
+                "samples — the effective pitch never cleared min_pitch_deg "
+                f"({min_pitch_deg:g} deg; level flight / all-inflection "
+                "record) or the inclinometer/pressure inputs are all-NaN — "
+                f"refusing to publish the {speed_cutout:g} m/s speed_cutout "
+                "floor as through-water speed."
+            )
         return _slow_to_fast(speed_slow, t_fast, t_slow, fs_fast, fs_slow,
                              tau=tau, speed_min=speed_cutout), W_slow, "flight"
 

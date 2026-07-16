@@ -245,7 +245,7 @@ Controls time-binning of CTD channels per file.
 
 ### `speed` — Through-Water Speed Source
 
-Controls how the through-water (profiling) speed is computed. Speed is computed after the [hotel merge](#hotel--hotel-file-external-telemetry): `method: "hotel"` consumes a hotel-merged channel (named by `hotel_var`), while the other methods read the instrument's own channels. The selected source is recorded on the products as `speed_source` (`"pressure"`, `"em"`, `"flight"`, `"constant:<v>"`, or `"hotel:<var>"`). If an explicitly selected non-pressure method fails (e.g. an unusable hotel channel or a missing `U_EM`), the file is **aborted with a recorded error** — it never silently falls back to \|dP/dt\|, which has ~U⁴ leverage on ε.
+Controls how the through-water (profiling) speed is computed. Speed is computed after the [hotel merge](#hotel--hotel-file-external-telemetry): `method: "hotel"` consumes a hotel-merged channel (named by `hotel_var`), while the other methods read the instrument's own channels. The selected source is recorded on the products as `speed_source` (`"pressure"`, `"em"`, `"flight"`, `"constant:<v>"`, or `"hotel:<var>"`). If an explicitly selected non-pressure method fails (an unusable hotel channel; a missing or all-NaN `U_EM`; a flight model with zero finite samples — pitch never clearing `min_pitch_deg`; a non-finite `value`), the file is **aborted with a recorded error** — it never silently falls back to \|dP/dt\| (which has ~U⁴ leverage on ε) or publishes the `speed_cutout` floor as data.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

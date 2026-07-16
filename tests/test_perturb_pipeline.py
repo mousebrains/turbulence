@@ -1658,6 +1658,64 @@ class TestHotelSpeedInjection:
     @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
     @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
     @patch("odas_tpw.rsi.p_file.PFile")
+    def test_em_all_nan_aborts_file(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        """PR #139 P1: an all-NaN U_EM used to sail through _slow_to_fast's
+        cutout fill as a finite 0.05 m/s array with provenance 'em', so the
+        explicit-method abort never fired. It must now error and abort."""
+        pf = _SpeedStubPFile()
+        pf.channels["U_EM"] = np.full(len(pf.t_slow), np.nan)
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "diss").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.perturb.pipeline"):
+            result = process_file(
+                tmp_path / "test.p",
+                self._config(tmp_path, method="em"),
+                None,
+                output_dirs,
+            )
+
+        assert any(e.startswith("speed:") for e in result.get("errors", [])), result
+        assert result["profiles"] == []
+        assert result["diss"] == []
+        assert "speed_fast" not in pf.channels
+        assert "no finite samples" in caplog.text
+        mock_get_prof.assert_not_called()
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
+    def test_constant_nan_value_aborts_file(
+        self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
+    ):
+        """PR #139 P1: a non-finite speed.value must abort the file instead
+        of publishing a floored NaN as 'constant:nan'."""
+        pf = _SpeedStubPFile()
+        mock_pfile_cls.return_value = pf
+        (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
+        output_dirs = {"profiles": tmp_path / "profiles"}
+
+        with caplog.at_level(logging.ERROR, logger="odas_tpw.perturb.pipeline"):
+            result = process_file(
+                tmp_path / "test.p",
+                self._config(tmp_path, method="constant", value=float("nan")),
+                None,
+                output_dirs,
+            )
+
+        assert any(e.startswith("speed:") for e in result.get("errors", [])), result
+        assert result["profiles"] == []
+        assert "speed_fast" not in pf.channels
+        assert "is not finite" in caplog.text
+        mock_get_prof.assert_not_called()
+
+    @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
+    @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(640))
+    @patch("odas_tpw.rsi.p_file.PFile")
     def test_no_warning_without_hotel_channels(
         self, mock_pfile_cls, mock_smooth, mock_get_prof, tmp_path, caplog
     ):
