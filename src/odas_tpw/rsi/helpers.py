@@ -35,6 +35,11 @@ class ChannelsDict(TypedDict, total=False):
     T: np.ndarray
     C: np.ndarray
     JAC_T: np.ndarray
+    U_EM: np.ndarray
+    Incl_X: np.ndarray
+    Incl_Y: np.ndarray
+    speed_fast: np.ndarray
+    W_slow: np.ndarray
     t_fast: np.ndarray
     t_slow: np.ndarray
     fs_fast: float
@@ -402,6 +407,8 @@ def load_channels(
         C : ndarray — conductivity (slow; only when resolved)
         JAC_T : ndarray — CT temperature (slow; only when present, for
             the measured-salinity pairing)
+        U_EM, Incl_X, Incl_Y : ndarray — slow channels consumed by the
+            em/flight speed methods (only when present)
         t_fast : ndarray — fast time vector
         t_slow : ndarray — slow time vector
         fs_fast : float
@@ -536,6 +543,10 @@ def _channels_from_pfile(
         out["metadata"]["conductivity_source"] = c_found
     if "JAC_T" in pf.channels and _len_is(pf.channels["JAC_T"], n_slow):
         out["JAC_T"] = pf.channels["JAC_T"]
+    # Slow channels the speed methods (em/flight) need, when present.
+    for name in ("U_EM", "Incl_X", "Incl_Y"):
+        if name in pf.channels and _len_is(pf.channels[name], n_slow):
+            out[name] = pf.channels[name]
     # Carry through the perturb-injected speed channel(s) if present.
     if "speed_fast" in pf.channels:
         out["speed_fast"] = pf.channels["speed_fast"]
@@ -554,6 +565,14 @@ def _channels_from_nc(
 ) -> ChannelsDict:
     import netCDF4 as nc
 
+    # Masked samples (_FillValue gaps) must become NaN, not the raw fill
+    # buffer (~9.97e36): a single masked U_EM/Incl/P sample would otherwise
+    # enter the speed estimation as a physical value and blow up epsilon
+    # through the shear/speed**2 normalization. The NaN-safe interpolation
+    # in the speed paths then repairs the gap. Applied to EVERY variable
+    # this loader reads (no special-casing); a no-op for unmasked data.
+    from odas_tpw.rsi.profile import _nc_filled
+
     ds = nc.Dataset(str(nc_path), "r")
     sh_re = re.compile(sh_pat) if sh_pat != SH_PATTERN.pattern else SH_PATTERN
     ac_re = re.compile(ac_pat) if ac_pat != AC_PATTERN.pattern else AC_PATTERN
@@ -562,10 +581,10 @@ def _channels_from_nc(
     fs_slow = float(ds.fs_slow)
     is_profile = hasattr(ds, "profile_number")
 
-    t_fast = ds.variables["t_fast"][:].data
-    t_slow = ds.variables["t_slow"][:].data
+    t_fast = _nc_filled(ds.variables["t_fast"])
+    t_slow = _nc_filled(ds.variables["t_slow"])
     n_slow = len(t_slow)
-    P = ds.variables[p_name][:].data.astype(np.float64)
+    P = _nc_filled(ds.variables[p_name])
 
     # Temperature/conductivity candidates: slow variables matching the
     # reference-T pattern plus the JAC CT pair, and any explicitly requested
@@ -581,7 +600,7 @@ def _channels_from_nc(
             or vname in (t_name, c_name)
         )
         if wanted and var.dimensions in (("time_slow",), ("time_fast",)):
-            resolve_map[vname] = var[:].data.astype(np.float64)
+            resolve_map[vname] = _nc_filled(var)
 
     shear = []
     accel = []
@@ -589,38 +608,46 @@ def _channels_from_nc(
     for vname in sorted(ds.variables.keys()):
         var = ds.variables[vname]
         if var.dimensions == ("time_fast",):
-            data = var[:].data.astype(np.float64)
             if sh_re.match(vname):
-                shear.append((vname, data))
+                shear.append((vname, _nc_filled(var)))
             elif ac_re.match(vname):
-                accel.append((vname, data))
+                # Union of PR #137 (masked -> NaN) and PR #138 (type label).
+                accel.append((vname, _nc_filled(var)))
                 # sensor_type attr written by extract_profiles; lets the L1
                 # builder label piezo sensors "VIB" (see ChannelsDict).
                 channel_types[vname] = str(getattr(var, "sensor_type", ""))
 
     metadata = {"source": str(nc_path)}
-    for attr in ("instrument_model", "instrument_sn", "source_file", "start_time"):
+    # speed_method / speed_source: per-profile speed provenance written by the
+    # perturb pipeline (extract_profiles extra_attrs); prepare_profiles uses
+    # them to enrich the precomputed-speed_fast provenance it stamps.
+    for attr in (
+        "instrument_model",
+        "instrument_sn",
+        "source_file",
+        "start_time",
+        "speed_method",
+        "speed_source",
+    ):
         if hasattr(ds, attr):
             metadata[attr] = getattr(ds, attr)
 
-    vehicle = ""
-    if hasattr(ds, "vehicle"):
-        vehicle = ds.vehicle.lower()
-    elif hasattr(ds, "instrument_model"):
-        model = ds.instrument_model.lower()
-        if "vmp" in model:
-            vehicle = "vmp"
-        elif "xmp" in model:
-            vehicle = "xmp"
-        elif "mr" in model or "microrider" in model:
-            vehicle = "slocum_glider"
+    from odas_tpw.rsi.vehicle import vehicle_from_nc_attrs
+
+    vehicle = vehicle_from_nc_attrs(
+        {
+            k: getattr(ds, k)
+            for k in ("vehicle", "platform_type", "instrument_model")
+            if hasattr(ds, k)
+        }
+    )
 
     speed_fast = None
     W_slow = None
     if "speed_fast" in ds.variables:
-        speed_fast = ds.variables["speed_fast"][:].data.astype(np.float64)
+        speed_fast = _nc_filled(ds.variables["speed_fast"])
     if "W_slow" in ds.variables:
-        W_slow = ds.variables["W_slow"][:].data.astype(np.float64)
+        W_slow = _nc_filled(ds.variables["W_slow"])
 
     ds.close()
 
@@ -653,6 +680,10 @@ def _channels_from_nc(
         out["C"] = resolve_map[c_found]
     if "JAC_T" in resolve_map and _len_is(resolve_map["JAC_T"], n_slow):
         out["JAC_T"] = resolve_map["JAC_T"]
+    # Slow channels the speed methods (em/flight) need, when present.
+    for name in ("U_EM", "Incl_X", "Incl_Y"):
+        if name in resolve_map and _len_is(resolve_map[name], n_slow):
+            out[name] = resolve_map[name]
     if speed_fast is not None:
         out["speed_fast"] = speed_fast
     if W_slow is not None:
@@ -673,6 +704,9 @@ def prepare_profiles(
     tau: float | None = None,
     speed_cutout: float = 0.05,
     vehicle: str | None = None,
+    W_min: float | None = None,
+    speed_method: str | None = None,
+    aoa_deg: float = 3.0,
 ) -> tuple | None:
     """Profile detection, speed computation, and salinity interpolation.
 
@@ -683,12 +717,29 @@ def prepare_profiles(
       4. speed clamped to speed_cutout minimum
 
     ``tau=None`` (default) resolves the smoothing time constant from the
-    vehicle table; pass an explicit value to override it.
+    vehicle table; pass an explicit value to override it.  ``W_min=None``
+    (default) resolves the detection fall-rate floor from the resolved
+    direction (0.3 dbar/s free-fall, 0.05 glide/horizontal); an explicit
+    value passes through unchanged.
+
+    Speed precedence (this function is the single owner): fixed ``speed`` >
+    selected ``speed_method`` (``"em"``/``"flight"``, computed here via the
+    shared speed module) > a precomputed ``speed_fast`` channel (perturb
+    per-profile NetCDFs) > the historical |dP/dt| pressure path. An
+    EXPLICIT ``speed_method="pressure"`` forces the pressure path even when
+    a precomputed channel exists; ``None`` prefers the precomputed channel.
+    A fixed ``speed`` together with an em/flight ``speed_method`` raises.
+
+    Side effect: stamps ``data["metadata"]["speed_source"]`` (and keeps
+    ``speed_method`` truthful) with the provenance of the speed actually
+    used; the diss/chi builders merge the metadata into the product attrs.
 
     Returns (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast,
     fs_slow, ratio, t_fast).
     """
-    from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
+    from odas_tpw.rsi.vehicle import resolve_detection
+
+    _validate_speed_selection(speed, speed_method)
 
     fs_fast = data["fs_fast"]
     fs_slow = data["fs_slow"]
@@ -699,44 +750,86 @@ def prepare_profiles(
     t_fast = data["t_fast"]
     t_slow = data["t_slow"]
 
-    # Resolve vehicle, direction, and tau
+    # Resolve vehicle, direction, tau, and the detection fall-rate floor
     if vehicle is None:
         vehicle = data.get("vehicle", "")
-    direction = resolve_direction(direction, vehicle)
-    if tau is None:
-        tau = resolve_tau(vehicle)
+    direction, tau, W_min = resolve_detection(direction, vehicle, W_min=W_min, tau=tau)
 
     if data["is_profile"]:
         profiles_slow = [(0, len(P_slow) - 1)]
     else:
         from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
+        from odas_tpw.scor160.profile import explain_no_profiles
 
+        logger.info(
+            "profile detection: direction=%s W_min=%g dbar/s (vehicle=%r)",
+            direction,
+            W_min,
+            vehicle,
+        )
         W_slow = _smooth_fall_rate(P_slow, fs_slow, tau=tau)
-        profiles_slow = get_profiles(P_slow, W_slow, fs_slow, direction=direction)
+        profiles_slow = get_profiles(
+            P_slow, W_slow, fs_slow, W_min=W_min, direction=direction
+        )
         if not profiles_slow:
+            warnings.warn(
+                explain_no_profiles(P_slow, W_slow, W_min=W_min, direction=direction),
+                stacklevel=2,
+            )
             return None
 
-    # Prefer a precomputed ``speed_fast`` channel if the caller (perturb
-    # pipeline post-hotel-merge) has injected one; otherwise fall back to
-    # the historical ODAS pressure-rate path.
+    metadata = data.get("metadata") if hasattr(data, "get") else None
+
+    # Speed precedence point (see docstring); provenance is stamped here.
+    # A stale upstream ``speed_method`` (copied from a perturb per-profile
+    # NC) is cleared on the paths that do not use it, so the product attrs
+    # can never pair e.g. speed_method="em" with a fixed-speed source.
     precomputed = data.get("speed_fast") if hasattr(data, "get") else None
+    speed_method_out: str | None = None
     if speed is not None:
         speed_fast = np.full(len(t_fast), abs(speed))
-    elif precomputed is not None and len(precomputed) == len(t_fast):
+        speed_source = f"fixed --speed {abs(speed):g}"
+    elif speed_method is not None and speed_method != "pressure":
+        speed_fast, speed_source = speed_from_method(data, speed_method, aoa_deg, vehicle)
+        speed_method_out = speed_method
+    elif speed_method is None and precomputed is not None and len(precomputed) == len(t_fast):
         speed_fast = np.asarray(precomputed, dtype=np.float64)
+        upstream_method = (metadata or {}).get("speed_method")
+        upstream_source = (metadata or {}).get("speed_source")
+        speed_method_out = upstream_method
+        if upstream_method:
+            # Keep the upstream source string when it carries information
+            # beyond the method name (e.g. "hotel:speed" names the hotel
+            # channel, "constant:0.4" the value) so the diss/chi products
+            # retain the full provenance, not just the method (#131 M10).
+            if upstream_source and upstream_source != upstream_method:
+                speed_source = (
+                    f"precomputed speed_fast (perturb speed.method="
+                    f"{upstream_method}, source={upstream_source})"
+                )
+            else:
+                speed_source = f"precomputed speed_fast (perturb speed.method={upstream_method})"
+        else:
+            speed_source = "precomputed speed_fast channel"
     else:
         from odas_tpw.scor160.profile import compute_speed_fast
 
-        if direction in ("glide", "horizontal"):
+        if direction in ("glide", "horizontal") and speed_method is None:
             # ODAS uses a flight model (glide) or EM current meter /
             # hotel speed (horizontal) for these vehicles; |dP/dt|
             # underestimates the flow past the sensors, and epsilon has
             # roughly U^4 leverage on the speed through the shear
-            # conversion and wavenumber transform.
+            # conversion and wavenumber transform. An EXPLICIT
+            # speed_method="pressure" is the user's informed choice — no
+            # warning then.
+            fix = (
+                "pass --speed-method em (U_EM present)"
+                if "U_EM" in data
+                else "provide an explicit speed or a precomputed speed_fast channel"
+            )
             warnings.warn(
                 f"Vehicle direction '{direction}' but speed is being computed "
-                "from |dP/dt|; provide an explicit speed or a precomputed "
-                "speed_fast channel for glider/horizontal platforms — "
+                f"from |dP/dt|; {fix} for glider/horizontal platforms — "
                 "epsilon scales as ~U^4 and will be strongly biased",
                 stacklevel=2,
             )
@@ -749,6 +842,13 @@ def prepare_profiles(
             tau=tau,
             speed_min=speed_cutout,
         )
+        speed_source = "pressure |dP/dt|"
+    if metadata is not None:
+        metadata["speed_source"] = speed_source
+        if speed_method_out:
+            metadata["speed_method"] = str(speed_method_out)
+        else:
+            metadata.pop("speed_method", None)
 
     # Floor (and NaN-scrub) speed once at this choke point so every consumer
     # gets a clean, positive speed: shear normalization (shear /= speed**2) and
@@ -781,6 +881,87 @@ def prepare_profiles(
         sal_fast = None
 
     return (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, fs_slow, ratio, t_fast)
+
+
+# ---------------------------------------------------------------------------
+# Speed-method selection (em / flight) over a loaded channels dict
+# ---------------------------------------------------------------------------
+
+_SPEED_METHODS = (None, "pressure", "em", "flight")
+
+
+def _validate_speed_selection(speed: float | None, speed_method: str | None) -> None:
+    """Reject invalid ``speed``/``speed_method`` combinations up front.
+
+    ``"constant"`` exists in ``compute_speed_for_pfile``'s vocabulary (the
+    perturb ``speed:`` section carries its ``value``), but this layer has no
+    value plumbing — the fixed ``speed`` parameter is the equivalent here.
+    ``"hotel"`` is likewise perturb-only: hotel channels are merged into the
+    instrument channels there, and this layer never sees them (load_channels
+    carries only the named channels the em/flight methods need). A perturb
+    per-profile NetCDF produced with ``speed.method: "hotel"`` arrives here
+    as a precomputed ``speed_fast`` channel, which is preferred by default.
+    """
+    if speed_method not in _SPEED_METHODS:
+        if speed_method == "constant":
+            hint = " Use --speed for a fixed (constant) speed."
+        elif speed_method == "hotel":
+            hint = (
+                " The hotel speed method is perturb-only (hotel channels are"
+                " merged there): run the perturb pipeline with speed.method:"
+                " 'hotel'; its per-profile NetCDFs carry the result as a"
+                " precomputed speed_fast channel, which this layer uses"
+                " automatically."
+            )
+        else:
+            hint = ""
+        raise ValueError(
+            f"speed_method={speed_method!r} is not valid here; expected "
+            f"pressure | em | flight.{hint}"
+        )
+    if speed is not None and speed_method is not None:
+        raise ValueError(
+            f"--speed (fixed speed {speed:g} m/s) and --speed-method "
+            f"{speed_method!r} are mutually exclusive; pass one or the other"
+        )
+
+
+def speed_from_method(
+    data: ChannelsDict | dict[str, Any],
+    speed_method: str,
+    aoa_deg: float = 3.0,
+    vehicle: str | None = None,
+) -> tuple[np.ndarray, str]:
+    """Compute a through-water speed via :func:`compute_speed_for_pfile`.
+
+    Builds a duck-typed shim over the loaded channels dict so the shared
+    speed module (written against PFile) works for NetCDF-loaded sources
+    too. Returns ``(speed_fast, speed_source)`` where ``speed_source`` is
+    the human-readable provenance string for the product attrs (e.g.
+    ``"em (U_EM)"``). Consumed by ``prepare_profiles``.
+    """
+    from types import SimpleNamespace
+
+    from odas_tpw.rsi.speed import compute_speed_for_pfile
+
+    channels: dict[str, Any] = {"P": data["P"]}
+    for name in ("U_EM", "Incl_X", "Incl_Y"):
+        if name in data:
+            channels[name] = data[name]
+    shim = SimpleNamespace(
+        channels=channels,
+        t_fast=data["t_fast"],
+        t_slow=data["t_slow"],
+        fs_fast=data["fs_fast"],
+        fs_slow=data["fs_slow"],
+    )
+    if vehicle is None:
+        vehicle = data.get("vehicle", "")
+    speed_fast, _W_slow, source = compute_speed_for_pfile(
+        shim, {"method": speed_method, "aoa_deg": aoa_deg}, vehicle
+    )
+    labels = {"em": "em (U_EM)", "flight": f"flight (aoa={aoa_deg:g})"}
+    return speed_fast, labels.get(source, "pressure |dP/dt|")
 
 
 # ---------------------------------------------------------------------------

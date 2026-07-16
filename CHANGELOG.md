@@ -7,6 +7,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Hotel-telemetry speed method** (issue #131 finding M10). New perturb
+  `speed.method: "hotel"` (+ `speed.hotel_var`, default `"speed"`) consumes a
+  hotel-merged channel as the through-water speed for epsilon/chi — previously
+  a merged hotel `speed` channel was written to the outputs but consumed by
+  nothing, while the docs claimed it fed the pipeline (finding m10; the
+  pipeline/configuration docs now describe the real mechanism, which this
+  change makes true). Slow-grid channels are interpolated and
+  Butterworth-smoothed onto the fast grid exactly like the em/flight methods;
+  fast-grid channels (the default `hotel.fast_channels` placement for
+  `"speed"`) get the same NaN-interp/smooth/floor treatment without
+  regridding. An explicitly requested hotel speed that is unusable (channel
+  missing, matching neither time grid, or < 50% finite) is a per-file
+  **error** that aborts the file with a recorded `errors` entry — never a
+  silent fall-back to the 0.05 m/s `speed_cutout` floor, and never a silent
+  downstream substitution with |dP/dt|. The same abort applies to any
+  explicitly selected non-pressure method (em/flight/constant/hotel) whose
+  speed stage fails; only the default pressure method keeps the historical
+  warn-and-continue (its downstream fallback recomputes the same |dP/dt|).
+  And the failures now actually fire: an `em`/`flight` speed with **zero**
+  finite samples (dead flowmeter; level-flight/all-inflection pitch) errors
+  before the cutout floor is applied — previously the all-NaN fill published
+  a constant 0.05 m/s with provenance `"em"`/`"flight"`, indistinguishable
+  from a real 0.05 m/s speed — and a non-finite `speed.value` errors for
+  `constant`. em/flight deliberately use a zero-finite threshold rather than
+  hotel's 50% rule: the flight model legitimately NaNs every sample below
+  `min_pitch_deg` at dive/climb inflections, so a fraction cut could
+  false-error real casts.
+  Product provenance: `speed_source = "hotel:<var>"` on the per-profile
+  NetCDFs, carried through to the diss/chi attrs by the precomputed-speed
+  mechanism (which now retains upstream source strings that say more than the
+  method name, e.g. `"hotel:speed"`, `"constant:0.4"`). And the other half of
+  M10: when a hotel merge injected channels literally named
+  `speed_fast`/`W_slow` whose values the speed stage recomputes and discards,
+  the pipeline now **warns** and names the remedy instead of overwriting
+  silently — `W_slow` always (it is always recomputed as smoothed |dP/dt|,
+  method-independent), and `speed_fast` unless `speed.method: "hotel"` with
+  `speed.hotel_var: "speed_fast"` actually consumes it. The rsi `--speed-method` layer
+  keeps `hotel` perturb-only (hotel channels are merged there) and says so
+  when asked for it. Note — hash churn: the new `speed.hotel_var` key changes
+  the perturb `speed` section hash, so stage directories keyed on it recompute
+  into fresh directories on the next run (the key set is part of the
+  provenance signature).
 - **Selectable reference temperature/conductivity with plausibility QC**
   (issue #131 finding B1). The reference temperature that drives seawater
   properties (viscosity ν for ε; ν and κ_T for χ; the published `T_mean`) is
@@ -47,7 +89,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - **Note — hash churn**: adding the `temperature`/`conductivity` keys to
     the rsi `epsilon`/`chi` sections (and removing perturb's `T1_norm`/
     `T2_norm`, below) changes the config hashes, so existing `eps_NN`/
-    `chi_NN` (and perturb stage) directories will not be reused — the next
+    `chi_NN` (and perturb stage) directories will not be reused (epsilon/chi always; prof dirs only when the merged profiles key-set changed — an explicit numeric W_min keeps them) — the next
     run recomputes into fresh directories. Deliberate: the key set is part
     of the provenance signature.
 - **Salinity from a hotel file** — `epsilon.salinity`, `chi.salinity`, and the
@@ -92,6 +134,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Zenodo DOI badge + identifiers (concept DOI `10.5281/zenodo.21366142`,
   version DOI `10.5281/zenodo.21366143`) in the README and `CITATION.cff`,
   plus a PyPI version badge — back-filled after v0.3.0 was archived on Zenodo.
+- **`--speed-method {pressure,em,flight}` + `--aoa` on `rsi-tpw eps` and `chi`**
+  (issue #131 findings M1/M2) — the through-water speed models that `pipeline`
+  and perturb already had are now reachable from the modular commands (config
+  keys `epsilon.speed_method` / `epsilon.aoa_deg`, same in `chi`; the
+  `em`/`flight` methods are mutually exclusive with a fixed `--speed`, and
+  the same exclusivity is now enforced by `run_pipeline`). An **explicit**
+  `--speed-method pressure` forces the |dP/dt| path even when the input (a
+  perturb per-profile file) carries a precomputed `speed_fast` channel;
+  leaving the method unset prefers that channel, as before. `rsi-tpw
+  pipeline` additionally honors the YAML `epsilon.speed_method`/`aoa_deg`
+  (previously CLI-flag-only) and warns when the `[chi]` section sets a
+  different `speed_method`/`aoa_deg`/`W_min` (single per-file resolution,
+  like `temperature`/`conductivity`).
+- **Speed provenance** (issue #131 finding M8): the diss/chi products now carry
+  a `speed_source` attr stamped at the speed precedence point —
+  `"fixed --speed <v>"` / `"precomputed speed_fast (perturb speed.method=em)"`
+  / `"em (U_EM)"` / `"flight (aoa=3)"` / `"pressure |dP/dt|"` — and
+  `compute_speed_for_pfile` returns its source string
+  (`"pressure" | "em" | "flight" | "constant:<v>"`) as a third value so callers
+  stamp what was actually computed. A stale upstream `speed_method` attr is
+  cleared when a fixed speed or the pressure path is used, so the attrs can
+  never claim e.g. `speed_method="em"` next to a fixed-speed source. The
+  perturb pipeline writes `speed_method`/`speed_source` global attrs into the
+  per-profile NetCDFs (new `extra_attrs` parameter on `extract_profiles`;
+  written whenever the speed channel was computed) and the diss/chi stages
+  inherit them.
+- **perturb warning capture** (issue #131 finding M8): `warnings.warn(...)`
+  (e.g. the glider |dP/dt| speed-bias warning) is now routed into the perturb
+  run/worker/stage log files via `logging.captureWarnings(True)`, enabled in
+  both `setup_root_logging` and `init_worker_logging` (spawn workers never run
+  the former) — never at module import.
+
+### Changed
+- **Glider-correct detection defaults** (issue #131 findings M3/M13/M7):
+  `W_min` now defaults to **auto** everywhere — 0.3 dbar/s for a free-falling
+  profiler, 0.05 for glide/horizontal platforms — in rsi `prof`/`eps`/`chi`/
+  `pipeline` (config `profiles.W_min: null`, new `epsilon.W_min`/`chi.W_min`
+  keys + `--W-min` flags) and in perturb (`profiles.W_min: null`). In
+  `run_pipeline` the resolved value also feeds `L2Params.profile_min_W`, so
+  the L2 section selector no longer discards glider data that detection
+  accepted. perturb's `profiles.direction` default flips **"down" → "auto"**
+  (vehicle-resolved; a Slocum gets `glide` = up + down), and its detection
+  site now resolves the same merged defaults that the cache signature hashes.
+  Scope qualifier: **auto helps only vehicle-declaring corpora** — files whose
+  `instrument_info` carries no `vehicle` (e.g. CASPER-era MicroRiders) still
+  resolve to `down`/0.3 and need an explicit `direction: glide`. Note for
+  local Rutgers configs: the `Rutgers/perturb.yaml` workaround comment
+  ("REQUIRED: batch default 0.3 rejects gliders") is now obsolete — `W_min`
+  and `direction` can be left unset there.
+- **`rsi-tpw prof` is vehicle-aware** (issue #131 finding M13):
+  `extract_profiles` now resolves `vehicle`/`direction`/`W_min`/tau before
+  detection — `--vehicle slocum_glider` previously crashed with a
+  `TypeError` (unexpected keyword) and `--direction auto` silently behaved
+  as `down`. Full-record NetCDF sources resolve the vehicle from their
+  `platform_type` attr (falling back to an instrument-model heuristic). VMP
+  defaults are bit-identical (`down`, tau 1.5, W_min 0.3).
+- **No more silent-empty products** (issue #131 finding M4): when profile
+  detection finds nothing, `eps`/`chi` warn with the observed pressure span
+  and peak fall rate vs the thresholds (and the flag to relax), print a
+  per-file "no profiles detected" plus a final "N of M file(s) produced
+  output" summary. **Exit-code change**: `rsi-tpw eps`/`chi` now exit **1**
+  when *no* input file produced output (all failed and/or all empty), so a
+  `set -e` batch script fails instead of reporting success over an empty
+  directory — deliberate.
+- **`rsi-tpw info`/`prof` batch robustness** (issue #131 finding M5): a
+  startup file (valid config, no data records), 0-byte, or truncated `.p`
+  file no longer aborts the batch — per-file errors print `ERROR: ...` and
+  processing continues (exit 1 only when every file failed). The `eps`/`chi`
+  loops additionally catch `struct.error` (truncated mid-file `.p`), matching
+  `nc`.
+- **Note — hash churn**: the `profiles`/`epsilon`/`chi` key-set and default
+  changes above alter the rsi and perturb config hashes, so existing
+  `prof_NN`/`eps_NN`/`chi_NN` and perturb stage directories will not be
+  reused — the next run recomputes into fresh directories. Deliberate: the
+  key set is part of the provenance signature, and this lands in the same
+  release as the reference-temperature keys (one churn, not two).
 - **FP07 factory calibration travels with per-profile NetCDFs** (issue #131
   finding m8). `extract_profiles` now writes `diff_gain` and the base
   thermistor's calibration (`e_b`, `b`, `gain`, `beta_1`, `beta_2`, `adc_fs`,

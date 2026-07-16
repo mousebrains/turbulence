@@ -166,7 +166,7 @@ def pfile_to_l1data(
         # vertical speed, not the through-water flow. Shared with perturb.
         from odas_tpw.rsi.speed import compute_speed_for_pfile
 
-        speed_fast_full, _ = compute_speed_for_pfile(
+        speed_fast_full, _, _source = compute_speed_for_pfile(
             pf, {"method": speed_method, "aoa_deg": aoa_deg, "tau": speed_tau}, vehicle
         )
         pspd_rel = speed_fast_full[s_fast:e_fast]

@@ -1445,12 +1445,65 @@ def process_file(
     # them instead of recomputing from P. Default method is "pressure",
     # which reproduces the historical VMP behavior exactly.
     speed_cfg = merge_config("speed", config.get("speed"))
+    # Speed provenance for the per-profile NetCDFs (extract_profiles
+    # extra_attrs): the diss/chi stages read it back and stamp
+    # "precomputed speed_fast (perturb speed.method=...)" on their products.
+    speed_attrs: dict[str, str] = {}
     if "P" in pf.channels:
         try:
             from odas_tpw.perturb.speed import compute_speed_for_pfile
 
             vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
-            speed_fast, W_slow = compute_speed_for_pfile(pf, speed_cfg, vehicle)
+            speed_fast, W_slow, speed_source = compute_speed_for_pfile(pf, speed_cfg, vehicle)
+            speed_method = str(speed_cfg.get("method", "pressure"))
+            speed_attrs = {
+                "speed_method": speed_method,
+                "speed_source": speed_source,
+            }
+
+            # No silent overwrite (#131 M10): a hotel merge may have injected
+            # channels literally named "speed_fast"/"W_slow"; the assignments
+            # below recompute them, discarding the hotel values. Warn with
+            # the applicable remedy. W_slow is ALWAYS recomputed (smoothed
+            # |dP/dt|, method-independent), so a hotel W_slow always warns.
+            if pf.channel_info.get("W_slow", {}).get("type") == "hotel":
+                logger.warning(
+                    "hotel merge injected channel 'W_slow' but the speed "
+                    "stage always recomputes it as smoothed |dP/dt| for %s — "
+                    "the hotel-provided values are discarded; give the hotel "
+                    "channel a different output name "
+                    "(hotel.channels.<src>.name) to keep it",
+                    p_path.name,
+                )
+            # A hotel speed_fast is discarded unless method 'hotel' actually
+            # consumes it (hotel_var == 'speed_fast'); consuming a DIFFERENT
+            # hotel channel still clobbers an injected literal speed_fast.
+            hotel_var = str(speed_cfg.get("hotel_var") or "speed")
+            if pf.channel_info.get("speed_fast", {}).get("type") == "hotel" and not (
+                speed_method == "hotel" and hotel_var == "speed_fast"
+            ):
+                if speed_method == "hotel":
+                    logger.warning(
+                        "hotel merge injected channel 'speed_fast' but "
+                        "speed.method='hotel' consumes %r (speed.hotel_var) "
+                        "and overwrites it for %s — the injected "
+                        "'speed_fast' values are discarded; set "
+                        "speed.hotel_var: 'speed_fast' to consume them, or "
+                        "give the hotel channel a different output name",
+                        hotel_var,
+                        p_path.name,
+                    )
+                else:
+                    logger.warning(
+                        "hotel merge injected channel 'speed_fast' but "
+                        "speed.method=%r recomputes it for %s — the "
+                        "hotel-provided values are discarded; set "
+                        "speed.method: 'hotel' (with speed.hotel_var naming "
+                        "the merged channel, default 'speed') to use hotel "
+                        "telemetry as the through-water speed",
+                        speed_method,
+                        p_path.name,
+                    )
 
             pf.channels["speed_fast"] = speed_fast
             pf._fast_channels.add("speed_fast")
@@ -1467,10 +1520,31 @@ def process_file(
                 "long_name": "profiling rate (smoothed |dP/dt|)",
             }
         except Exception as exc:
+            method_cfg = str(speed_cfg.get("method", "pressure"))
+            if method_cfg != "pressure":
+                # An explicitly selected non-pressure speed source (em /
+                # flight / constant / hotel — "pressure" is the DEFAULT, so a
+                # non-pressure method here is always user-configured) failed:
+                # do NOT fall through. Downstream diss/chi would silently
+                # recompute |dP/dt| (pressure) — with ~U^4 leverage on
+                # epsilon, that is the exact silent substitution M10 exists
+                # to prevent. Record and abort this file, mirroring the
+                # PFile-load failure path; the run's per-file jobs loop
+                # contains the failure so other files in the batch proceed.
+                logger.error(
+                    "speed channel computation failed for %s (method=%s): %s",
+                    p_path.name,
+                    method_cfg,
+                    exc,
+                )
+                result.setdefault("errors", []).append(f"speed: {exc}")
+                return result
+            # Default pressure method: the downstream fallback recomputes the
+            # same |dP/dt|, so continuing is honest — warn and carry on.
             logger.warning(
                 "speed channel computation failed for %s (method=%s): %s",
                 p_path.name,
-                speed_cfg.get("method", "pressure"),
+                method_cfg,
                 exc,
             )
 
@@ -1499,7 +1573,12 @@ def process_file(
     output_stem = output_stem or p_path.stem
     log_basename = output_stem
 
-    profiles_cfg = config.get("profiles", {})
+    # merge_config (not raw config.get): the detection below must see the same
+    # effective defaults as the cache signature (upstream_for hashes the merged
+    # section) — e.g. direction "auto" and the vehicle-resolved W_min. An
+    # explicit `W_min: null` in the YAML is dropped by merge_config, so a
+    # missing key below means "resolve from the vehicle direction".
+    profiles_cfg = merge_config("profiles", config.get("profiles"))
     fp07_cfg = config.get("fp07", {})
     ct_cfg = config.get("ct", {})
 
@@ -1534,16 +1613,27 @@ def process_file(
             # without this it silently falls through to the "down" branch and
             # we lose every up-profile -- on a glider with MR-on-during-climb
             # only, that drops *all* the real flight data.
-            from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
+            from odas_tpw.rsi.vehicle import resolve_detection
 
             vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
-            # Smooth the detection fall rate with the VEHICLE tau, matching ODAS
-            # (odas_p2mat.m). The default 1.5 s is correct for a VMP but 2-40x
-            # too fast for gliders/floats (slocum 3.0 s, argo 60.0 s), which made
-            # W noisy at the W_min threshold and fragmented profile boundaries.
-            W = _smooth_fall_rate(P_slow, pf.fs_slow, tau=resolve_tau(vehicle))
-            direction = resolve_direction(
+            # Resolve direction ("auto" = vehicle default), the detection
+            # fall-rate floor (W_min null/absent = 0.3 free-fall, 0.05
+            # glide/horizontal — the VMP-tuned 0.3 rejects every glider
+            # cast), and the smoothing tau. Tau matches ODAS (odas_p2mat.m):
+            # the 1.5 s default is correct for a VMP but 2-40x too fast for
+            # gliders/floats (slocum 3.0 s, argo 60.0 s), which made W noisy
+            # at the W_min threshold and fragmented profile boundaries.
+            direction, tau, w_min = resolve_detection(
                 profiles_cfg.get("direction", "auto"),
+                vehicle,
+                W_min=profiles_cfg.get("W_min"),
+            )
+            W = _smooth_fall_rate(P_slow, pf.fs_slow, tau=tau)
+            logger.info(
+                "%s: profile detection direction=%s W_min=%g dbar/s (vehicle=%r)",
+                p_path.name,
+                direction,
+                w_min,
                 vehicle,
             )
             profiles = get_profiles(
@@ -1551,7 +1641,7 @@ def process_file(
                 W,
                 pf.fs_slow,
                 P_min=profiles_cfg.get("P_min", 0.5),
-                W_min=profiles_cfg.get("W_min", 0.3),
+                W_min=w_min,
                 direction=direction,
                 min_duration=profiles_cfg.get("min_duration", 7.0),
             )
@@ -1723,6 +1813,7 @@ def process_file(
                     gps=gps,
                     return_scalars=True,
                     output_stem=output_stem,
+                    extra_attrs=speed_attrs,
                 )
                 result["profiles"] = [str(p) for p in prof_paths]
                 prof_scalars_cache = {str(p): s for p, s in zip(prof_paths, prof_scalars)}
