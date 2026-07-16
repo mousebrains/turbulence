@@ -267,7 +267,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (they never did anything).
 
 ### Fixed
-<<<<<<< HEAD
 - **Old-format MicroRider deconvolution** (#131 M11, M12) — two bugs that
   corrupted or crashed processing of old-MR corpora (e.g. CASPER 2015_East
   CAS_001-006, whose 4×10 matrix samples T1 *and* T1_dT1 as full fast columns
@@ -282,7 +281,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   mis-blending P and P_dP — the pressure feeding fall-rate/speed and thus ε/χ.
   The deconvolution rate (and fast/slow branch) is now derived from the array
   actually extracted.
-=======
 - **Perturb chi no longer computed with generic FP07 calibration** (issue
   #131 finding m8). The perturb pipeline computes chi from per-profile
   NetCDFs, whose loader hard-coded `diff_gain=0.94` and an empty thermistor
@@ -302,7 +300,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`rsi-tpw pipeline` batch robustness**: one unreadable/implausible file no
   longer aborts a multi-file run; the pipeline logs the per-file error and
   continues (mirroring the `eps`/`chi` loops).
->>>>>>> 476c1732e292ee9e8d5bbec3f5c6ea0892b82f3a
 - **`rsi-tpw patch-template`** now scaffolds *every* per-channel calibration
   field, not just `coef0`/`coef1`. The previous hardcoded whitelist silently
   dropped higher-order polynomial coefficients (a pressure channel's `coef2`,
