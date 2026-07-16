@@ -194,21 +194,29 @@ def pfile_to_l1data(
     else:
         shear = np.zeros((0, len(t_fast)), dtype=np.float64)
 
-    # Vibration / accelerometer channels
-    acc_names = sorted(n for n in pf._fast_channels if AC_PATTERN.match(n))
-    vib_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "piezo")
-    if acc_names:
-        vib = np.stack(
-            [pf.channels[n][s_fast:e_fast] for n in acc_names],
-            axis=0,
-        )
-        vib_type = "ACC"
-    elif vib_names:
+    # Vibration / accelerometer channels. Piezo-typed channels count even
+    # when named Ax/Ay — RSI names piezo sensors that way on MRs and modern
+    # VMPs, and parse_config's accel→piezo rewrite (setupstr.m parity) makes
+    # CASPER-era accel(0,1) configs piezo too. Only true DC-response
+    # accelerometers (type=accel with a real calibration) are ACC. The
+    # vibration stack is the UNION of both kinds (name-sorted, de-duplicated):
+    # on mixed hardware, dropping the piezo channels would cost Goodman
+    # coherent-noise removal a vibration reference. vib_type is label-only
+    # downstream — "ACC" when any true accelerometer is present, "VIB" for
+    # an all-piezo stack.
+    acc_names = sorted(
+        n
+        for n in pf._fast_channels
+        if AC_PATTERN.match(n) and pf.channel_info[n]["type"] != "piezo"
+    )
+    piezo_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "piezo")
+    vib_names = sorted(set(acc_names) | set(piezo_names))
+    if vib_names:
         vib = np.stack(
             [pf.channels[n][s_fast:e_fast] for n in vib_names],
             axis=0,
         )
-        vib_type = "VIB"
+        vib_type = "ACC" if acc_names else "VIB"
     else:
         vib = np.zeros((0, len(t_fast)), dtype=np.float64)
         vib_type = "NONE"

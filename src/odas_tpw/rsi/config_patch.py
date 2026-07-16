@@ -25,8 +25,9 @@ this avoids YAML coercing ``0.1130`` → ``0.113`` or ``2.5e5`` → ``250000.0``
 
 The text editor mirrors :func:`odas_tpw.rsi.p_file.parse_config` tokenization
 exactly (comment stripped at the first ``;``, section/assignment regexes on the
-stripped line, keys compared case-insensitively, channel ``name`` values verbatim)
-so that what the editor targets is exactly what ``PFile`` later reads.
+stripped line, keys compared case-insensitively, section names case/whitespace-
+folded, channel ``name`` values verbatim) so that what the editor targets is
+exactly what ``PFile`` later reads.
 """
 
 from __future__ import annotations
@@ -271,7 +272,10 @@ def _parse_blocks(raw_lines: list[str]) -> list[dict[str, Any]]:
         ms = _SECTION_RE.match(stripped)
         if ms:
             cur = {
-                "section": ms.group(1).strip().lower(),
+                # Whitespace→'_' fold matches parse_config (the CASPER-era
+                # "[cruise info]" → cruise_info) so scaffold/patch and PFile
+                # agree on old files; setupstr.m keeps names verbatim.
+                "section": "_".join(ms.group(1).strip().lower().split()),
                 "name": None,
                 "keys": {},
                 "header_idx": i,
@@ -450,6 +454,9 @@ def edit_config_text(
                 section,
                 key,
                 val,
+                # Keys on the literal 'sn' only: editing a CASPER-era
+                # 'serial_num' skips the change-SN warning — accepted (the
+                # warning is advisory and old-dialect SN edits are rare).
                 is_inst_sn=(section == "instrument_info" and key.lower() == "sn"),
             )
 

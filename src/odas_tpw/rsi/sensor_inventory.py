@@ -54,6 +54,7 @@ from odas_tpw.rsi.p_file import (
     HEADER_BYTES,
     _detect_endian,
     _parse_header,
+    instrument_sn,
     parse_config,
 )
 
@@ -221,7 +222,7 @@ def _platform_from_instrument(inst: dict) -> tuple[str, str]:
     whose host had not populated instrument_info yet yields ("?", "?").
     """
     vehicle = inst.get("vehicle", "").strip() or inst.get("model", "").strip() or "?"
-    platform_sn = inst.get("sn", "").strip() or "?"
+    platform_sn = instrument_sn(inst).strip() or "?"
     return vehicle, platform_sn
 
 

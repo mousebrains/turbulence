@@ -268,6 +268,20 @@ class TestVibrationChannels:
         assert l1.vib_type == "VIB"
         assert l1.n_vib == 2
 
+    def test_mixed_hardware_union(self):
+        """A true accelerometer must not drop piezo channels from the stack:
+        the union of both kinds is used, in deterministic name-sorted order,
+        labeled ACC because a true accel is present (label-only downstream).
+        Goodman coherent-noise removal keeps every vibration reference."""
+        pf = MockPFile(acc_names=("Ay",), piezo_names=("Ax",))
+        l1 = pfile_to_l1data(pf, speed=0.5)
+
+        assert l1.vib_type == "ACC"
+        assert l1.n_vib == 2
+        # Name-sorted: row 0 = Ax (piezo), row 1 = Ay (accel).
+        np.testing.assert_array_equal(l1.vib[0], pf.channels["Ax"])
+        np.testing.assert_array_equal(l1.vib[1], pf.channels["Ay"])
+
     def test_no_vibration(self):
         pf = MockPFile(acc_names=(), piezo_names=())
         l1 = pfile_to_l1data(pf, speed=0.5)

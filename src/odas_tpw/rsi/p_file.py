@@ -204,6 +204,15 @@ def parse_config(config_str: str) -> dict[str, Any]:
       'instrument_info': dict
       'cruise_info': dict
       'root': dict
+      plus one dict per other section found in the file (setupstr.m keeps
+      every section). Section names are normalized: lower-cased with internal
+      whitespace folded to '_', so the CASPER-era ``[cruise info]`` lands in
+      'cruise_info'. (Deviation from setupstr.m, which keeps names verbatim;
+      the fold gives old and modern dialects one canonical key.)
+
+    Channel dicts of type ``accel`` with ``coef0 = 0`` and ``coef1 = 1`` are
+    rewritten to type ``piezo`` (setupstr.m:478-495: configs made before type
+    'piezo' existed), so every consumer sees the corrected type.
     """
     result: dict[str, Any] = {
         "matrix": [],
@@ -230,12 +239,19 @@ def parse_config(config_str: str) -> dict[str, Any]:
 
         m = re.match(r"^\[(.+)\]$", line)
         if m:
-            current_section = m.group(1).strip().lower()
+            current_section = "_".join(m.group(1).strip().lower().split())
             if current_section == "channel":
                 current_channel = {}
                 result["channels"].append(current_channel)
             else:
                 current_channel = None
+                # Keep unknown sections (setupstr.m keeps every section)
+                # instead of dropping their keys. 'matrix' and 'channels'
+                # already hold lists — a section by either name must not
+                # clobber them, so only absent names get a fresh dict (the
+                # assignment branch below drops keys for non-dict targets).
+                if current_section not in result:
+                    result[current_section] = {}
             continue
 
         m = re.match(r"^(.+?)\s*=\s*(.*)$", line)
@@ -256,7 +272,31 @@ def parse_config(config_str: str) -> dict[str, Any]:
             elif current_section in result and isinstance(result[current_section], dict):
                 result[current_section][key] = val
 
+    # setupstr.m:478-495 parity: configuration files made before type 'piezo'
+    # existed declare piezo sensors as type=accel with coef0=0 and coef1=1
+    # (all 2013-2016 CASPER MicroRider configs). EXACT-string comparison like
+    # the vendor's strcmp — "0.0"/"1.0" must NOT flip, and both keys must be
+    # present. Rewriting here means every consumer (PFile conversion, adapter,
+    # convert, sensor inventory) agrees on the corrected type.
+    for ch in result["channels"]:
+        if (
+            ch.get("type", "").strip().lower() == "accel"
+            and ch.get("coef0", "").strip() == "0"
+            and ch.get("coef1", "").strip() == "1"
+        ):
+            ch["type"] = "piezo"
+
     return result
+
+
+def instrument_sn(info: dict[str, str]) -> str:
+    """Instrument serial number from a parsed ``instrument_info`` mapping.
+
+    Modern configs write ``sn``; CASPER-era (pre-2017) MicroRider configs
+    write ``serial_num`` (vendor parity: quick_look.m reads serial_num).
+    Returns "" when neither key carries a non-empty value.
+    """
+    return info.get("sn") or info.get("serial_num") or ""
 
 
 def read_config_string(filepath: str | Path) -> str:
@@ -514,23 +554,50 @@ class PFile:
 
             ch_config = {}
             for ch in self.config["channels"]:
-                if "id" not in ch or "name" not in ch or "type" not in ch:
+                if "name" not in ch or "type" not in ch:
+                    continue
+                if "id" in ch:
+                    id_str = ch["id"]
+                elif "id_even" in ch and "id_odd" in ch:
+                    # setupstr.m:441-455 dialect: old configs may declare a
+                    # 32-bit channel's word pair as id_even/id_odd with no
+                    # 'id'. Synthesize even-then-odd (even = low word), so the
+                    # 2-id join below behaves identically to an explicit
+                    # "id = even,odd" (#131 m7).
+                    id_str = f"{ch['id_even']} {ch['id_odd']}"
+                else:
                     continue
                 # Guard the channel-id parse the same way as the matrix rows:
                 # a non-numeric id token from a corrupt config otherwise raises
                 # a bare "invalid literal for int()" with no file/channel context.
                 try:
-                    ids = [int(x) for x in ch["id"].replace(",", " ").split()]
+                    ids = [int(x) for x in id_str.replace(",", " ").split()]
                 except ValueError as exc:
                     raise ValueError(
                         f"{self.filepath.name}: malformed channel id "
-                        f"{ch['id']!r} for channel {ch.get('name', '?')!r}"
+                        f"{id_str!r} for channel {ch.get('name', '?')!r}"
                     ) from exc
                 ch_config[ch["name"].strip()] = {"ids": ids, **ch}
 
             matrix = self.matrix
             unique_ids = set(matrix.flatten())
             matrix_count = total_scans // self.n_rows
+
+            # Matches the intent of read_odas.m's missing-channel warning
+            # (its message text describes this case): a matrix address with no usable
+            # [channel] section is silently unprocessable — warn so the data
+            # loss is visible. Address 255 is the RSI special character, for
+            # which read_odas.m:236-243 inserts a synthetic 'ch255' section;
+            # old CASPER matrices carry it with no section, so it is exempt.
+            claimed_ids = {i for info in ch_config.values() for i in info["ids"]}
+            orphan_ids = sorted(int(i) for i in unique_ids - claimed_ids if i != 255)
+            if orphan_ids:
+                warnings.warn(
+                    f"{self.filepath.name}: matrix address(es) "
+                    f"{', '.join(map(str, orphan_ids))} have no usable "
+                    f"[channel] section; their samples will not be processed",
+                    stacklevel=2,
+                )
 
             for ch_name, info in ch_config.items():
                 ids = info["ids"]
@@ -635,7 +702,7 @@ class PFile:
             # fast-rate counterpart X_dX to produce a high-resolution signal.
             # This matches ODAS odas_p2mat.m lines 516-570.
             if self._deconvolve:
-                self._apply_deconvolution(ch_config, matrix)
+                self._apply_deconvolution(ch_config)
 
             # Unsigned wrapping: channels with sign=unsigned (or jac_t type)
             # need negative int16 values converted to unsigned before conversion.
@@ -714,7 +781,7 @@ class PFile:
                         "epsilon/chi path (physical velocity shear, s-1, only after)"
                     )
 
-    def _apply_deconvolution(self, ch_config: dict, matrix: np.ndarray) -> None:
+    def _apply_deconvolution(self, ch_config: dict) -> None:
         """Deconvolve pre-emphasized channels to produce high-resolution data.
 
         For each channel with ``diff_gain`` that is not a shear probe,
@@ -727,6 +794,8 @@ class PFile:
         shear_types = {"shear", "xmp_shear"}
         n_slow = len(self.t_slow)
         n_fast = len(self.t_fast)
+        if n_slow == 0:
+            return
 
         for ch_name, info in list(ch_config.items()):
             ch_type = info.get("type", "").strip().lower()
@@ -750,12 +819,26 @@ class PFile:
             diff_gain_val = float(info["diff_gain"])
             X_dX_raw = self.channels_raw[dX_name]
 
-            # Determine sampling rate of the pre-emphasized channel from
-            # its occurrence count in the address matrix (odas_p2mat.m l.564).
-            dX_id = int(info["ids"][0])
-            occurrences = np.sum(matrix == dX_id)
-            fs_dX = self.fs_fast * occurrences / self.n_rows
-            is_dX_fast = occurrences == self.n_rows
+            # Sampling rate of the pre-emphasized channel, derived from the
+            # ARRAY actually extracted rather than the matrix occurrence
+            # count (odas_p2mat.m l.564 counts occurrences, but ODAS also
+            # KEEPS every occurrence; extraction above keeps either a full
+            # fast column or only the FIRST occurrence per scan). For a
+            # duplicate-sampled slow channel (CASPER 4x10 P/P_dP, 2x per
+            # scan) the matrix count would drive deconvolve() at 2x the
+            # decimated array's true rate, applying the Butterworth
+            # pre-emphasis crossover at twice its design frequency and
+            # mis-blending X and X_dX (#131 M12).
+            rate_mult = len(X_dX_raw) // n_slow
+            # Extraction guarantees exact multiples: a full column yields
+            # n_rows*n_slow samples, anything else exactly n_slow.
+            if rate_mult * n_slow != len(X_dX_raw):
+                raise ValueError(
+                    f"{self.filepath.name}: {dX_name} length {len(X_dX_raw)} "
+                    f"is not a multiple of the scan count {n_slow}"
+                )
+            fs_dX = self.fs_slow * rate_mult
+            is_dX_fast = rate_mult == self.n_rows
 
             # Get the non-pre-emphasized channel if available
             X_raw = self.channels_raw.get(base_name)
@@ -776,6 +859,16 @@ class PFile:
                 # The _dX raw data also becomes hres (same slow rate).
                 self.channels_raw[dX_name] = hres[:n_slow]
 
+            # Both branches leave the base holding a slow-length view, no
+            # matter how it was sampled. Old MR configs (RSI 2013 small-form
+            # template; CASPER 2015_East CAS_001-006) sample the base as a
+            # full fast column too — reclassify it or is_fast() lies and the
+            # rate/length invariant breaks downstream (nc gradT crash,
+            # #131 M11). The full fast-rate signal lives on in the dX channel.
+            if base_name in self._fast_channels:
+                self._fast_channels.discard(base_name)
+                self._slow_channels.add(base_name)
+
             # The _dX channel should now be converted using the base
             # channel's calibration parameters (not its own sparse ones).
             if base_name in ch_config:
@@ -793,7 +886,7 @@ class PFile:
         print(f"File: {self.filepath.name}")
         print(
             f"Instrument: {self.config['instrument_info'].get('model', '?')} "
-            f"SN {self.config['instrument_info'].get('sn', '?')}"
+            f"SN {instrument_sn(self.config['instrument_info']) or '?'}"
         )
         print(f"Start: {self.start_time.isoformat()}")
         print(f"Endian: {'big' if self.endian == '>' else 'little'}")

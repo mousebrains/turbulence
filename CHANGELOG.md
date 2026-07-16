@@ -7,6 +7,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Old-format (2013-2017 CASPER-era) MicroRider config dialects** (#131 m1,
+  m5, m6, m7) — pre-2017 configs now inventory and convert faithfully:
+  `serial_num` is honored wherever the instrument SN is read (`summary`,
+  NetCDF `instrument_sn`, epsilon/chi metadata, `rsi-tpw sensors` platform SN);
+  `[cruise info]` — and any unknown section — is kept by `parse_config`
+  (section names normalized: lower-cased, internal whitespace folded to `_`;
+  `config-patch`/`patch-template` agree on the normalized name); channels
+  declared `accel` with `coef0 = 0` / `coef1 = 1` are rewritten to `piezo`
+  during config parsing (setupstr.m parity, exact-string trigger), so
+  CASPER Ax/Ay convert as piezo counts and route to the `VIB` role instead of
+  a fake 9.81·counts "m/s²" ACC; `id_even`/`id_odd` channel sections with no
+  `id` synthesize the 2-id (32-bit) join; and a matrix address with no usable
+  `[channel]` section now warns (read_odas.m parity; special address 255
+  exempt). Note one deliberate side effect: the adapter's vibration routing is
+  now type-based, so modern files whose Ax/Ay are declared `type = piezo`
+  (e.g. SN479) report `vib_type = "VIB"` instead of `"ACC"` — harmonizing with
+  `p_to_netcdf`'s classification. On mixed hardware the vibration stack is the
+  name-sorted union of true accelerometers and piezo channels (labeled `ACC`),
+  so Goodman noise removal keeps every coherent reference; the label is
+  descriptive only and epsilon/chi values are unchanged.
 - **Hotel-telemetry speed method** (issue #131 finding M10). New perturb
   `speed.method: "hotel"` (+ `speed.hotel_var`, default `"speed"`) consumes a
   hotel-merged channel as the through-water speed for epsilon/chi — previously
@@ -247,6 +267,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (they never did anything).
 
 ### Fixed
+<<<<<<< HEAD
+- **Old-format MicroRider deconvolution** (#131 M11, M12) — two bugs that
+  corrupted or crashed processing of old-MR corpora (e.g. CASPER 2015_East
+  CAS_001-006, whose 4×10 matrix samples T1 *and* T1_dT1 as full fast columns
+  and P/P_dP twice per scan). **M11**: a natively-fast base channel (T1) kept
+  its "fast" classification after deconvolution overwrote it with slow-length
+  data, so `is_fast()` lied and `rsi-tpw nc` crashed with a broadcast error in
+  the gradT builder; the base is now reclassified slow (the full fast-rate
+  deconvolved signal lives in `T1_dT1`, matching the modern-config invariant).
+  **M12**: a duplicate-sampled slow pair (P/P_dP, 2× per scan) was deconvolved
+  at the 2× matrix-occurrence rate instead of the decimated array's true rate,
+  applying the pre-emphasis crossover at twice its design frequency and
+  mis-blending P and P_dP — the pressure feeding fall-rate/speed and thus ε/χ.
+  The deconvolution rate (and fast/slow branch) is now derived from the array
+  actually extracted.
+=======
 - **Perturb chi no longer computed with generic FP07 calibration** (issue
   #131 finding m8). The perturb pipeline computes chi from per-profile
   NetCDFs, whose loader hard-coded `diff_gain=0.94` and an empty thermistor
@@ -266,6 +302,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`rsi-tpw pipeline` batch robustness**: one unreadable/implausible file no
   longer aborts a multi-file run; the pipeline logs the per-file error and
   continues (mirroring the `eps`/`chi` loops).
+>>>>>>> 476c1732e292ee9e8d5bbec3f5c6ea0892b82f3a
 - **`rsi-tpw patch-template`** now scaffolds *every* per-channel calibration
   field, not just `coef0`/`coef1`. The previous hardcoded whitelist silently
   dropped higher-order polynomial coefficients (a pressure channel's `coef2`,
