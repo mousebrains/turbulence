@@ -28,7 +28,10 @@ Idempotent — existing rows (including hand-added `source=manual` history) are
 preserved; a sheet's own entry upgrades a previous-calibration attestation of
 the same point; conflicting sensitivities for the same probe+date are kept
 side by side and reported (exit 1). Add `manual` rows by hand with a
-provenance note in `notes`. The `.p`-config cross-check tool is
+provenance note in `notes`. A row must have exactly eight comma-separated
+fields, so quote any value containing a comma (`"a, b"`) — an unquoted one is
+rejected with the file and line number, leaving the registry untouched rather
+than truncating the note. The `.p`-config cross-check tool is
 `rsi-tpw sensors --cal-dir microstructure_sensors --shear`.
 
 ### Sheet layouts

@@ -702,6 +702,23 @@ def print_check(
 CSV_FIELDS = ["serial", "cal_date", "sens", "units", "source", "sheet", "recal_due", "notes"]
 CSV_UNITS = "V/(m^2 s^-2)"
 _PREV_NOTE = "previous-calibration entry on this sheet"
+# csv.DictReader parks fields beyond the header under this key instead of
+# dropping them, so an over-long row can be detected rather than truncated.
+_RESTKEY = "__extra__"
+
+
+class CsvRegistryError(RuntimeError):
+    """Raised when the existing CSV registry is malformed.
+
+    The registry is normally machine-written but is *meant* to be hand-edited
+    (``source=manual`` rows, provenance notes), and the most likely hand-edit
+    slip — an unquoted comma in ``notes`` — splits the row into more fields
+    than the header has.  Reading such a row with a plain
+    ``{k: row.get(k) for k in CSV_FIELDS}`` silently discards everything past
+    the comma, and the next write persists the truncation, destroying the note.
+    So the read validates instead, and raising here (before anything is
+    written) leaves the file on disk untouched for the user to fix.
+    """
 
 
 @dataclass
@@ -725,6 +742,49 @@ def _pdf_errors() -> tuple[type[Exception], ...]:
     except ImportError:
         return ()
     return (_pe.PyPdfError,)
+
+
+def _read_registry(csv_path: Path) -> list[dict[str, str]]:
+    """Read the CSV registry, rejecting rows that would silently lose data.
+
+    Raises :class:`CsvRegistryError` on an unexpected header or on any row
+    whose field count differs from the header's, naming the file and line so a
+    hand-edit slip is a one-line fix rather than a vanished note.
+    """
+    import csv as _csv
+
+    if not csv_path.exists():
+        return []
+
+    rows: list[dict[str, str]] = []
+    with csv_path.open(newline="") as f:
+        reader = _csv.DictReader(f, restkey=_RESTKEY)
+        if reader.fieldnames is None:  # empty file — same as no registry yet
+            return []
+        if list(reader.fieldnames) != CSV_FIELDS:
+            raise CsvRegistryError(
+                f"{csv_path}: header is {list(reader.fieldnames)}, expected {CSV_FIELDS}"
+            )
+        for row in reader:
+            # More fields than the header: almost always an unquoted comma.
+            extra = row.pop(_RESTKEY, None)
+            if extra:
+                raise CsvRegistryError(
+                    f"{csv_path}:{reader.line_num}: {len(CSV_FIELDS) + len(extra)} fields, "
+                    f"expected {len(CSV_FIELDS)} — an unquoted comma in a hand-edited value? "
+                    f"Quote the field (e.g. \"a, b\"); trailing text was {extra!r}"
+                )
+            # Fewer fields: DictReader pads with None, which would be written
+            # back as empty and could mean the columns are shifted.
+            short = [k for k in CSV_FIELDS if row.get(k) is None]
+            if short:
+                raise CsvRegistryError(
+                    f"{csv_path}:{reader.line_num}: row is missing {len(short)} field(s) "
+                    f"({', '.join(short)}); every row needs {len(CSV_FIELDS)} "
+                    f"comma-separated fields"
+                )
+            rows.append({k: (row.get(k) or "") for k in CSV_FIELDS})
+    return rows
 
 
 def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUpdateStats:
@@ -752,11 +812,7 @@ def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUp
         *_pdf_errors(),
     )
 
-    rows: list[dict[str, str]] = []
-    if csv_path.exists():
-        with csv_path.open(newline="") as f:
-            for row in _csv.DictReader(f):
-                rows.append({k: (row.get(k) or "") for k in CSV_FIELDS})
+    rows = _read_registry(csv_path)
 
     def _key(r: dict[str, str]) -> tuple[str, str, str]:
         return (r["serial"], r["cal_date"], r["sens"])

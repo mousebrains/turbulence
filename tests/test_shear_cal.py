@@ -752,6 +752,53 @@ class TestUpdateSensitivityCsv:
         stats = sc.update_sensitivity_csv(d)
         assert stats.sheets_failed == 1 and stats.sheets_parsed == 1
 
+    # -- malformed-registry guards ------------------------------------------
+    # A hand-edited row that does not have exactly len(CSV_FIELDS) fields must
+    # abort the run untouched rather than be silently truncated/padded and
+    # written back that way (which would destroy the hand-written value).
+
+    def _seed(self, tmp_path, monkeypatch, body):
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf"])
+        _fake_sheets(monkeypatch, {"M9001_2026_01_10.pdf": M9001_TEXT})
+        csv_path = d / "shear_sensitivities.csv"
+        csv_path.write_text("serial,cal_date,sens,units,source,sheet,recal_due,notes\n" + body)
+        return d, csv_path
+
+    def test_unquoted_comma_in_notes_raises_and_leaves_file_untouched(self, tmp_path, monkeypatch):
+        row = "M9001,2016-04-25,0.696,V/(m^2 s^-2),manual,,,a note, with comma\n"
+        d, csv_path = self._seed(tmp_path, monkeypatch, row)
+        before = csv_path.read_text()
+        with pytest.raises(sc.CsvRegistryError, match="unquoted comma"):
+            sc.update_sensitivity_csv(d)
+        assert csv_path.read_text() == before  # note preserved for the user to fix
+
+    def test_short_row_raises(self, tmp_path, monkeypatch):
+        d, _ = self._seed(tmp_path, monkeypatch, "M9001,2016-04-25,0.696,V/(m^2 s^-2)\n")
+        with pytest.raises(sc.CsvRegistryError, match="missing 4 field"):
+            sc.update_sensitivity_csv(d)
+
+    def test_unexpected_header_raises(self, tmp_path, monkeypatch):
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf"])
+        _fake_sheets(monkeypatch, {"M9001_2026_01_10.pdf": M9001_TEXT})
+        (d / "shear_sensitivities.csv").write_text("serial,sens\nM9001,0.05\n")
+        with pytest.raises(sc.CsvRegistryError, match="header is"):
+            sc.update_sensitivity_csv(d)
+
+    def test_properly_quoted_comma_round_trips(self, tmp_path, monkeypatch):
+        note = "a note, with comma"
+        d, csv_path = self._seed(
+            tmp_path, monkeypatch, f'M9001,2016-04-25,0.696,V/(m^2 s^-2),manual,,,"{note}"\n'
+        )
+        sc.update_sensitivity_csv(d)
+        manual = [r for r in self._read(csv_path) if r["source"] == "manual"]
+        assert len(manual) == 1 and manual[0]["notes"] == note
+
+    def test_empty_registry_file_is_not_an_error(self, tmp_path, monkeypatch):
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf"])
+        _fake_sheets(monkeypatch, {"M9001_2026_01_10.pdf": M9001_TEXT})
+        (d / "shear_sensitivities.csv").write_text("")
+        assert sc.update_sensitivity_csv(d).added == 2
+
 
 # ---------------------------------------------------------------------------
 # --cal-strict exit codes (m3).  The synthetic-sheet texts stand in for the
