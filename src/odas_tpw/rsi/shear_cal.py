@@ -75,10 +75,25 @@ _DATE = r"(\d{4})[/_.-](\d{1,2})[/_.-](\d{1,2})"
 # glued page-2 plot caption "...ProbeSN:M1254U=0.703m/s..." yields M1254, not
 # M1254U (the fall-rate variable U must not become part of the serial).
 _SN_RE = re.compile(r"Probe\s*SN\s*:?\s*([A-Za-z]{0,3}\d+(?:-\w+)?)", re.I)
-# "Sensitivity (sens or S): 0.0777 m2Vs-2"  — the "(sens or S)" pins it to the
-# current value and away from "Previous Sensitivity:" and the "S(0) = ..." line.
-_SENS_RE = re.compile(r"Sensitivity\s*\(sens\s*or\s*S\)\s*:?\s*" + _NUM, re.I)
+# The current sensitivity, across the three Rockland sheet layouts seen so far:
+#   "Sensitivity (sens or S): 0.0777 V"  (2024-06 onward)
+#   "Sensitivity (sens): 0.1115 V"       (mid-2023)
+#   "sens: 0.0720 V"                     (through mid-2023)
+# The label is pinned so this never picks up "Previous Sensitivity:" or the
+# "S(0) = ..." regression line.  The bare-``sens`` alternative is anchored at
+# line start (the caller matches per stripped line) and requires the colon, so
+# the old sheets' "sensitivity 0.0655" previous-calibration line cannot match.
+_SENS_RE = re.compile(r"(?:Sensitivity\s*\(sens(?:\s*or\s*S)?\)|^sens)\s*:?\s*" + _NUM, re.I | re.M)
 _PREV_SENS_RE = re.compile(r"Previous\s+Sensitivity\s*:?\s*" + _NUM, re.I)
+# Older sheets state the previous calibration as free-form prose that pypdf
+# splits across two lines: "Previous calibration on 2021-11-10 with\nsensitivity
+# 0.0655".  Matched against the WHOLE text (not per line) because of that wrap;
+# \s+ spans the newline.  Newer sheets use the labeled "Previous Calibration
+# Date:"/"Previous Sensitivity:" pair handled above.
+_PREV_OLD_RE = re.compile(
+    r"Previous\s+calibration\s+on\s+" + _DATE + r"\s+with\s+sensitivity\s+" + _NUM,
+    re.I,
+)
 _DATE_RE = re.compile(_DATE)
 # "Recommended re-calibration: 2027/06/19".  Anchored on the LABEL
 # ("recommended re-calibration") plus a date on the same line: sheets also
@@ -205,6 +220,15 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
             m = _DATE_RE.search(line)
             if m:
                 cal_date = _parse_date_parts(m.group(1), m.group(2), m.group(3))
+
+    # Old-layout previous calibration: prose that wraps across lines, so it is
+    # matched against the whole text only when the labeled (newer) form above
+    # yielded nothing — a sheet never carries both.
+    if prev_sens is None and prev_cal_date is None:
+        m = _PREV_OLD_RE.search(text)
+        if m:
+            prev_cal_date = _parse_date_parts(m.group(1), m.group(2), m.group(3))
+            prev_sens = float(m.group(4))
 
     # A physically-valid sensitivity is positive; treat 0/negative (a misparse or
     # a corrupt sheet) as missing so it can't seed a bogus timeline point or a
