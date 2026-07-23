@@ -72,6 +72,63 @@ def test_parse_sheet_without_previous():
     assert [(p.date, p.sensitivity) for p in s.points()] == [(date(2024, 7, 9), 0.1189)]
 
 
+# Rockland has issued three sheet layouts.  The two below predate the
+# "Sensitivity (sens or S):" wording of M1458_TEXT and appear throughout the
+# 2021-2023 sheets; text is as pypdf actually extracts it, including the
+# previous calibration wrapping onto a second line in the oldest layout.
+M2479_OLD_TEXT = """
+Shear Probe Calibration Report
+Probe SN: M2479
+sens: 0.0618 V
+m2s-2
+Calibration Date: 2022/06/20
+Recommended re-calibration: 2023/06/20
+S(0) = 0.0618
+c = 0.024337
+Calibration data and results shown on next page.
+Previous calibration on 2021-11-10 with
+sensitivity 0.0655
+"""
+
+M2863_MID_TEXT = """
+Probe SN: M2863
+Sensitivity (sens): 0.1115 V
+Calibration Date: 2023/09/22
+Recommended re-calibration: 2024/09/21
+S(0) =0.1115
+"""
+
+
+def test_parse_old_layout_bare_sens_and_wrapped_previous():
+    """2021-2023 layout: ``sens:`` label, previous cal as prose over two lines."""
+    s = sc.parse_sheet_text(M2479_OLD_TEXT, source="M2479_2022_6_20.pdf")
+    assert s.sn == "M2479"
+    assert s.sensitivity == pytest.approx(0.0618)
+    assert s.cal_date == date(2022, 6, 20)
+    assert s.recal_due == date(2023, 6, 20)
+    # The wrapped "Previous calibration on ... with / sensitivity ..." prose,
+    # whose date uses hyphens while the cal date above uses slashes.
+    assert s.prev_cal_date == date(2021, 11, 10)
+    assert s.prev_sensitivity == pytest.approx(0.0655)
+
+
+def test_parse_mid_layout_sens_without_or_s():
+    """Mid-2023 layout: ``Sensitivity (sens):`` — no "or S" in the label."""
+    s = sc.parse_sheet_text(M2863_MID_TEXT, source="M2863_2023_09_22.pdf")
+    assert s.sn == "M2863"
+    assert s.sensitivity == pytest.approx(0.1115)
+    assert s.cal_date == date(2023, 9, 22)
+    assert s.prev_sensitivity is None
+
+
+def test_old_layout_previous_prose_does_not_leak_into_current_sens():
+    """``sensitivity 0.0655`` (no colon) must never be read as the current sens."""
+    text = "Probe SN: M2479\nCalibration Date: 2022/06/20\nsensitivity 0.0655\n"
+    s = sc.parse_sheet_text(text)
+    assert s.sensitivity is None
+    assert not s.is_usable()
+
+
 def test_parse_does_not_confuse_recommended_or_previous_dates():
     s = sc.parse_sheet_text(M1458_TEXT)
     # 2027 is the *recommended* re-calibration; must not be taken as the cal date.
