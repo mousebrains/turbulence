@@ -1607,14 +1607,19 @@ def _add_dl_parser(subparsers: argparse._SubParsersAction) -> None:
 
 def _cmd_cal_csv(args: argparse.Namespace) -> None:
     """Merge Rockland calibration sheets into the sensitivity CSV registry."""
-    from odas_tpw.rsi.shear_cal import update_sensitivity_csv
+    from odas_tpw.rsi.shear_cal import CsvRegistryError, update_sensitivity_csv
 
     cal_dir = Path(args.cal_dir)
     if not cal_dir.is_dir():
         print(f"Error: {cal_dir} is not a directory", file=sys.stderr)
         sys.exit(1)
     csv_path = Path(args.csv) if args.csv else cal_dir / "shear_sensitivities.csv"
-    stats = update_sensitivity_csv(cal_dir, csv_path)
+    try:
+        stats = update_sensitivity_csv(cal_dir, csv_path)
+    except CsvRegistryError as e:
+        # The registry was left untouched; a traceback would only bury the fix.
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
     print(
         f"{csv_path}: {stats.sheets_parsed} sheet(s) parsed, "
         f"{stats.added} row(s) added, {stats.upgraded} upgraded, "
