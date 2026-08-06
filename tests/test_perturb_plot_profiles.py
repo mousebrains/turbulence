@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -125,6 +126,38 @@ def test_make_norm_diverging_one_signed_not_symmetric():
         "Incl_Y", np.array([[76.0, 90.0], [80.0, 88.0]]), args, {})
     assert iy.vmin > 0.0                              # not mirrored to negative
     assert iy.vmax == pytest.approx(90.0, abs=0.5)
+
+
+def test_make_norm_gamma_diverges_about_the_osborn_anchor():
+    """Gamma is log-scaled but drawn on a diverging cmap anchored at the
+    canonical 0.2, so the anchor must land on the colormap's NEUTRAL midpoint
+    (norm(0.2) == 0.5) -- i.e. the auto range is symmetric in LOG space, equal
+    color distance <-> equal ratio from 0.2.  A lopsided input is the case that
+    matters: a plain LogNorm over the same data would put 0.2 anywhere."""
+    from matplotlib.colors import LogNorm
+
+    args = argparse.Namespace(vmin=None, vmax=None)
+    anchor = profiles._DIVERGING_LOG["Gamma"]
+    # Robust range runs ~0.002..0.5: far more spread below the anchor than above.
+    z = np.array([[0.002, 0.02], [0.05, 0.5]])
+    n = profiles._make_norm("Gamma", z, args, {})
+    assert isinstance(n, LogNorm)
+    assert float(n(anchor)) == pytest.approx(0.5, abs=1e-9)
+    assert n.vmin * n.vmax == pytest.approx(anchor**2, rel=1e-9)  # log-symmetric
+    # The WIDER side sets the half-range: the long low tail here pushes vmax
+    # well past the data's own maximum (0.5) so the anchor stays centered.
+    assert n.vmin < 0.02 < anchor < 0.5 < n.vmax
+
+    # Degenerate: every value AT the anchor still yields a valid, centered norm.
+    flat = profiles._make_norm("Gamma", np.full((2, 2), anchor), args, {})
+    assert float(flat(anchor)) == pytest.approx(0.5, abs=1e-9)
+    assert flat.vmin < anchor < flat.vmax
+
+    # An explicit --clim wins outright (same rule as the zero-centered branch):
+    # the user asked for a range, not for a centered one.
+    ex = profiles._make_norm("Gamma", z, args, {"Gamma": (0.01, 1.0)})
+    assert (ex.vmin, ex.vmax) == (0.01, 1.0)
+    assert float(ex(anchor)) != pytest.approx(0.5, abs=1e-3)
 
 
 def test_make_norm_n2_uses_symlog_for_negatives():
@@ -870,7 +903,8 @@ def test_chi_mixing_cbar_label_overrides(tmp_path: Path):
         assert labels == {
             r"$\chi_1$ (K$^2$ s$^{-1}$)", r"$\chi_2$ (K$^2$ s$^{-1}$)",
             r"$\langle \chi \rangle$ (K$^2$ s$^{-1}$)",
-            r"$K_T$ (m$^2$ s$^{-1}$)", r"$K_\rho$ (m$^2$ s$^{-1}$)", r"$\Gamma$",
+            r"$K_T$ (m$^2$ s$^{-1}$)", r"$K_\rho$ (m$^2$ s$^{-1}$)",
+            r"$\Gamma$ (diverging about 0.2)",
         }
     finally:
         ds.close()
@@ -1150,3 +1184,91 @@ def test_long_colorbar_labels_fit_within_bars(tmp_path: Path):
     finally:
         ds.close()
         plt.close("all")
+
+
+class TestDivergingLogAnchor:
+    """The anchor rule must mark the value it claims to, in every bar direction."""
+
+    def test_anchor_config_is_internally_consistent(self):
+        """A _DIVERGING_LOG member outside _LOG_VARS would never reach the
+        centering branch (it is nested inside the log branch) and would silently
+        fall back to an uncentered scale; one without a diverging cmap would
+        centre an anchor on a colormap that has no neutral midpoint."""
+        import cmocean
+
+        diverging = {"balance", "delta", "curl", "diff", "tarn"}
+        for name in profiles._DIVERGING_LOG:
+            assert name in profiles._LOG_VARS, name
+            assert name not in profiles._DIVERGING, name  # zero-centered is a
+            assert name not in profiles._SYMLOG_VARS, name  # different branch
+            cmap_name = profiles._CMAP.get(name)
+            assert cmap_name in diverging, (name, cmap_name)
+            assert hasattr(cmocean.cm, cmap_name)
+
+    def test_rule_marks_the_anchor_on_a_normal_bar(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import LogNorm
+
+        from odas_tpw.perturb.plot import layout
+
+        fig, ax = plt.subplots()
+        try:
+            pcm = ax.pcolormesh(np.ones((3, 3)), norm=LogNorm(0.01, 100))
+            cbar = fig.colorbar(pcm, ax=ax)
+            layout.draw_cbar_anchor(cbar, 0.2)
+            (line,) = list(cbar.ax.lines)
+            frac = line.get_ydata()[0]
+            assert float(cbar.norm.inverse(frac)) == pytest.approx(0.2, rel=1e-9)
+        finally:
+            plt.close("all")
+
+    def test_rule_marks_the_anchor_on_an_inverted_bar(self):
+        """Axes fractions run bottom-to-top whatever the data does, so an
+        inverted colorbar needs 1-frac. Without it a 0.2 anchor on a 0.01..100
+        log bar silently marks 5.0 -- an anchor that points at the wrong value
+        is worse than no anchor."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import LogNorm
+
+        from odas_tpw.perturb.plot import layout
+
+        fig, ax = plt.subplots()
+        try:
+            pcm = ax.pcolormesh(np.ones((3, 3)), norm=LogNorm(0.01, 100))
+            cbar = fig.colorbar(pcm, ax=ax)
+            cbar.ax.invert_yaxis()
+            layout.draw_cbar_anchor(cbar, 0.2)
+            (line,) = list(cbar.ax.lines)
+            frac = line.get_ydata()[0]
+            # Screen fraction is measured from the bottom; the bar runs the
+            # other way, so the data value there is inverse(1 - frac).
+            assert float(cbar.norm.inverse(1.0 - frac)) == pytest.approx(0.2, rel=1e-9)
+        finally:
+            plt.close("all")
+
+    def test_rule_skipped_when_anchor_is_off_scale_or_unmappable(self):
+        """Out of range, or non-positive under a LogNorm (which masks it): draw
+        nothing rather than clamping the rule to an edge it does not mark."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import LogNorm
+
+        from odas_tpw.perturb.plot import layout
+
+        fig, ax = plt.subplots()
+        try:
+            pcm = ax.pcolormesh(np.ones((3, 3)), norm=LogNorm(1.0, 100.0))
+            cbar = fig.colorbar(pcm, ax=ax)
+            layout.draw_cbar_anchor(cbar, 0.2)     # below vmin
+            layout.draw_cbar_anchor(cbar, 1.0e6)   # above vmax
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")     # must not warn its way there
+                layout.draw_cbar_anchor(cbar, 0.0)  # masked by LogNorm
+            assert len(cbar.ax.lines) == 0
+        finally:
+            plt.close("all")

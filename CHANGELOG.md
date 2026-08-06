@@ -7,6 +7,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- **`perturb run` no longer exits 0 after failing to write a product.** A combo
+  stage that raised was caught, logged into that stage's own `combo.log`, and
+  the run went on to log "Pipeline complete." and exit 0 — and since `perturb`
+  installs **no console handler without `--stdout`**, the terminal showed
+  nothing at all. The two together made a missing `combo.nc` indistinguishable
+  from a clean run: observed on ARCTERX-2023-Wake, where a transient `OSError`
+  reading `chi_binned_00/binned.nc` off an SMB mount lost `chi_combo_00/combo.nc`
+  silently, surfacing only later as `perturb-plot mixing: mixing combo not
+  found`. `run_pipeline` now returns a `PipelineResult` separating **stage**
+  failures (a product the config asked for was not written — combo, ctd combo,
+  merge) from **file** failures the pipeline absorbs by design (a startup
+  fragment with no data records, one profile whose fit blew up — trim, and
+  everything `process_file` records in `result["errors"]`). The CLI prints a
+  one-line-per-failure summary to **stderr unconditionally**, names the run log,
+  and **exits 1 on any stage failure**; file-level errors are reported but still
+  exit 0, since a campaign with one bad `.p` among 200 is a normal successful run
+  and failing on those would train the operator to ignore the status entirely.
+  Both buckets survive the incremental cache — a file with recorded errors is
+  not cached, and a failed stage left no output to skip — so a repeat run
+  reproduces the status instead of laundering it into a clean exit.
+  `run_trim`/`run_merge` take an optional `errors` out-parameter (their
+  `list[Path]` returns are consumed directly by the `trim`/`merge` subcommands,
+  so the return type is unchanged).
 - **Flight-model glide angle now ADDS the angle of attack** (issue #131 M7).
   `speed.method: "flight"` computed `U = |W| / sin(|pitch| − aoa)`; steady-glide
   force balance (Merckelbach et al. 2010) and the ODAS reference
@@ -29,6 +52,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Stale `sin(|pitch|−aoa)·cos|roll|` formulas in the perturb template, the
   ARCTERX example config, `--speed-method` help, and
   docs/perturb/configuration.md were corrected to match the code.
+
+### Changed
+- **Γ (mixing efficiency) now plots on a diverging colormap anchored at 0.2**
+  in `perturb-plot mixing`/`overview` (and the `epsilon`/`chi`/`profiles`
+  products, which share the same tables). Γ used to use the sequential cmocean
+  `matter` on a plain `LogNorm`, so the canonical Osborn (1980) value the whole
+  χ→K_ρ conversion assumes had no visual position at all. It now uses `balance`
+  (two hues, neutral midpoint) with the robust 1/99% range symmetrized **in log
+  space** about 0.2 — equal color distance ⇔ equal *ratio* from the anchor,
+  which is the only reading that makes sense for a quantity spanning decades,
+  and the reason this is not a `TwoSlopeNorm` (linear within each half, it would
+  crush the entire sub-0.2 range into a sliver of the ramp). Staying on a plain
+  `LogNorm` also keeps the colorbar's decade ticks. A thin rule marks the anchor
+  on the colorbar (`layout.draw_cbar_anchor`, placed through the norm so it is
+  norm-shape agnostic) and the label reads `Γ (diverging about 0.2)`. An
+  explicit `--clim Gamma MIN MAX` / `--vmin` / `--vmax` wins outright and drops
+  the centering, matching what the existing zero-centered diverging branch
+  already does. New anchors go in `profiles._DIVERGING_LOG`.
 
 ### Added
 - **Real-glider MicroRider end-to-end fixture + test** (issue #131 m11) —

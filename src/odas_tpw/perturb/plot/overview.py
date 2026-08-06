@@ -302,7 +302,8 @@ def _draw_col_panel(
         return None
     cmap, label, reverse = _style(ds, var)
     layout.plot_columns(ax, fig, xs, depth, z, cmap, norm, label,
-                        gap_factor=args.gap_factor, reverse_cbar=reverse)
+                        gap_factor=args.gap_factor, reverse_cbar=reverse,
+                        cbar_center=_prof._DIVERGING_LOG.get(var))
 
     rows = depth[np.any(np.isfinite(z), axis=1)]
     z_lo, z_hi = (float(rows.min()), float(rows.max())) if rows.size else (np.nan, np.nan)
@@ -346,6 +347,9 @@ def _draw_traj_panel(
     cbar = fig.colorbar(pcm, ax=ax, label=label)
     if reverse:
         cbar.ax.invert_yaxis()
+    anchor = _prof._DIVERGING_LOG.get(var)  # after invert: see draw_cbar_anchor
+    if anchor is not None:
+        layout.draw_cbar_anchor(cbar, anchor)
 
     z_cen = 0.5 * (z_edges[:-1] + z_edges[1:])
     zv = z_cen[np.any(np.isfinite(g), axis=1)]

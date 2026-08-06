@@ -331,6 +331,7 @@ def plot_columns(
     cbar_label: str,
     gap_factor: float = 4.0,
     reverse_cbar: bool = False,
+    cbar_center: float | None = None,
 ):
     """Pcolor a depth-by-column field at arbitrary x; one mesh per x-cluster.
 
@@ -340,6 +341,11 @@ def plot_columns(
     Internal-NaN holes are forward-filled within each column and NaN cells are
     masked (so the cmap's ``set_bad`` color shows for unsampled depths).
     Returns the last ``QuadMesh`` (or ``None`` if every cluster was empty).
+
+    *cbar_center* draws a rule across the colorbar at that data value -- for a
+    diverging map anchored somewhere other than zero (e.g. Gamma about 0.2), the
+    neutral midpoint is otherwise only implied by the colors, and a reader has no
+    way to recover the anchor from the figure alone.
     """
     x = np.asarray(x, dtype=float)
     z = ffill_down(z)
@@ -358,4 +364,40 @@ def plot_columns(
         cbar = fig.colorbar(pcm, ax=ax, label=cbar_label)
         if reverse_cbar:
             cbar.ax.invert_yaxis()  # smallest value at the top
+        # AFTER any inversion: the rule is drawn in axes fractions, which do not
+        # follow invert_yaxis(), so it must know which way the bar now runs.
+        if cbar_center is not None:
+            draw_cbar_anchor(cbar, cbar_center)
     return pcm
+
+
+def draw_cbar_anchor(cbar, value: float) -> None:
+    """Draw a thin rule across a vertical *cbar* at data *value*.
+
+    Placed in the colorbar's NORMALIZED coordinates (``cbar.norm``) via
+    ``transAxes``, so it lands correctly whatever the norm's shape -- log,
+    symlog or linear -- rather than depending on the colorbar axes' data limits,
+    which differ by matplotlib version.  Silently skipped when the value falls
+    outside the drawn range or the norm cannot map it.  ``axhline`` refuses an
+    explicit transform, hence ``plot``.
+
+    Axes fractions run bottom-to-top regardless of the data direction, so an
+    inverted bar (``_REVERSE_CBAR``) needs ``1 - frac``: without it the rule
+    would silently mark a DIFFERENT value than the one asked for (on a
+    0.01..100 log bar, an anchor of 0.2 would land on 5.0).  Call this after
+    ``invert_yaxis()``.  Horizontal colorbars are not supported -- no caller
+    makes one, and the rule would be drawn along the wrong axis.
+    """
+    masked = np.ma.getmaskarray(np.ma.asarray(cbar.norm(value)))
+    if masked.any():  # e.g. a non-positive value under LogNorm
+        return
+    try:
+        frac = float(cbar.norm(value))
+    except (ValueError, TypeError, ZeroDivisionError):
+        return
+    if not np.isfinite(frac) or not 0.0 <= frac <= 1.0:
+        return
+    if cbar.ax.yaxis_inverted():
+        frac = 1.0 - frac
+    cbar.ax.plot([0, 1], [frac, frac], color="0.15", linewidth=0.8,
+                 transform=cbar.ax.transAxes)
