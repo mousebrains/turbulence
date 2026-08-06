@@ -112,7 +112,7 @@ _CMAP: dict[str, str] = {
     "N2": "amp", "dTdz": "balance",
     "epsilonMean": "thermal", "e_1": "thermal", "e_2": "thermal",
     "chiMean": "thermal", "chi_1": "thermal", "chi_2": "thermal",
-    "K_T": "tempo", "K_rho": "tempo", "Gamma": "matter",
+    "K_T": "tempo", "K_rho": "tempo", "Gamma": "balance",
     "Incl_X": "balance", "Incl_Y": "balance",
     "CT": "thermal", "SP": "haline", "SA": "haline",
     "sigma0": "dense", "rho": "dense",
@@ -127,6 +127,15 @@ _LOG_VARS: frozenset[str] = frozenset({
 _SYMLOG_VARS: frozenset[str] = frozenset({"N2"})
 # Diverging fields centered on zero.
 _DIVERGING: frozenset[str] = frozenset({"dTdz", "Incl_X", "Incl_Y"})
+# Log-scaled fields drawn on a DIVERGING colormap anchored at a physically
+# meaningful reference value instead of zero: {name: anchor}.  Gamma's anchor is
+# the canonical Osborn (1980) mixing efficiency 0.2 -- the value assumed whenever
+# chi/N^2 is converted to K_rho -- so the panel answers "where does the measured
+# Gamma sit above/below 0.2, and by what factor".  The anchor is centered in LOG
+# space (equal color distance <-> equal RATIO from the anchor), the only reading
+# that makes sense for a quantity spanning decades.  Members must also appear in
+# _LOG_VARS and carry a diverging cmap with a neutral midpoint (e.g. balance).
+_DIVERGING_LOG: dict[str, float] = {"Gamma": 0.2}
 
 # Explicit colorbar labels overriding the CF long_name/units default
 # (var_label) for the profile-product scalars. Mathtext renders the sub/
@@ -167,7 +176,7 @@ _CBAR_LABEL: dict[str, str] = {
     "chiMean": r"$\langle \chi \rangle$ (K$^2$ s$^{-1}$)",
     "K_T": r"$K_T$ (m$^2$ s$^{-1}$)",
     "K_rho": r"$K_\rho$ (m$^2$ s$^{-1}$)",
-    "Gamma": r"$\Gamma$",
+    "Gamma": r"$\Gamma$ (diverging about 0.2)",
 }
 
 # Variables whose colorbar reads with the smallest value at the top (axis
@@ -248,6 +257,21 @@ def _make_norm(name: str, z: np.ndarray, args: argparse.Namespace, clim: dict):
         vmin, vmax = layout.quantile_limits(z, lo, hi)  # filters to > 0
         if vmin is None or vmax is None or vmax <= 0:
             return None
+        center = _DIVERGING_LOG.get(name)
+        if center is not None and not explicit:
+            # Symmetrize the robust range in log space about the anchor so the
+            # colormap's neutral midpoint lands exactly on it.  Ratio here is the
+            # log-space analogue of the zero-centered branch's max(abs(...)); a
+            # plain LogNorm then does the job, so the colorbar keeps its decade
+            # ticks and no custom Normalize subclass is needed.  An explicit
+            # --clim/--vmin/--vmax wins outright (same rule as _DIVERGING): the
+            # user asked for a range, not for a centered one.
+            ratio = max(center / vmin, vmax / center)
+            if ratio <= 1.0:  # degenerate (all data at the anchor): show a decade
+                ratio = 10.0
+            # Return here rather than fall through: the dynamic-range clamp below
+            # would shift vmin only, silently pulling the anchor off center.
+            return LogNorm(vmin=center / ratio, vmax=center * ratio)
         vmin = max(vmin, vmax / 1.0e6)
         if vmin >= vmax:  # all-equal data: show one decade so LogNorm is valid
             vmin = vmax / 10.0
@@ -452,7 +476,8 @@ def _build_profiles_figure(
         cmap.set_bad(color="0.85")  # unsampled depths: light gray
         layout.plot_columns(ax, fig, xs, depth, z, cmap, norm, label,
                             gap_factor=args.gap_factor,
-                            reverse_cbar=name in _REVERSE_CBAR)
+                            reverse_cbar=name in _REVERSE_CBAR,
+                            cbar_center=_DIVERGING_LOG.get(name))
         if ax in left_set:
             ax.set_ylabel("Depth (m)")
 

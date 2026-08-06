@@ -2893,8 +2893,12 @@ class TestRunCombo:
         _run_combo(tmp_path, None, None, None, ctd_dir, {})
         assert (tmp_path / "ctd_combo" / "combo.nc").exists()
 
-    def test_combo_exception_logged_and_swallowed(self, tmp_path, caplog):
-        """A make_combo failure is logged but does not propagate."""
+    def test_combo_exception_logged_and_reported(self, tmp_path, caplog):
+        """A make_combo failure is logged, does not propagate (the other combos
+        are independent products and must still be written), and is RETURNED so
+        the caller can fail the run.  Before, it was logged into the stage's own
+        combo.log and nothing else ever saw it -- the run exited 0 with no
+        combo.nc."""
         from odas_tpw.perturb.pipeline import _run_combo
 
         prof_dir = tmp_path / "profiles_binned_00"
@@ -2902,19 +2906,42 @@ class TestRunCombo:
         # Put a non-NetCDF file in there to make xr.open_dataset raise.
         (prof_dir / "broken.nc").write_bytes(b"this is not a netcdf file")
         with caplog.at_level("ERROR", logger="odas_tpw.perturb.pipeline"):
-            _run_combo(tmp_path, prof_dir, None, None, None, {})
+            errors = _run_combo(tmp_path, prof_dir, None, None, None, {})
         assert "combo combo" in caplog.text or "combo" in caplog.text
+        assert len(errors) == 1
+        assert errors[0].startswith("combo:")
 
-    def test_ctd_combo_exception_logged_and_swallowed(self, tmp_path, caplog):
-        """A make_ctd_combo failure is logged but does not propagate."""
+    def test_ctd_combo_exception_logged_and_reported(self, tmp_path, caplog):
+        """A make_ctd_combo failure is logged, swallowed, and returned."""
         from odas_tpw.perturb.pipeline import _run_combo
 
         ctd_dir = tmp_path / "ctd_00"
         ctd_dir.mkdir()
         (ctd_dir / "broken.nc").write_bytes(b"this is not a netcdf file")
         with caplog.at_level("ERROR", logger="odas_tpw.perturb.pipeline"):
-            _run_combo(tmp_path, None, None, None, ctd_dir, {})
+            errors = _run_combo(tmp_path, None, None, None, ctd_dir, {})
         assert "ctd combo" in caplog.text
+        assert len(errors) == 1
+        assert errors[0].startswith("ctd_combo:")
+
+    def test_combo_success_reports_no_errors(self, tmp_path):
+        """The happy path must return an EMPTY list -- otherwise every clean run
+        would exit non-zero and the status would be noise.  (No *config* here,
+        so the combo lands in the legacy unversioned ``combo/``, not
+        ``combo_00/`` -- see ``_resolve_dst``.)"""
+        import numpy as np
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _run_combo
+
+        prof_dir = tmp_path / "profiles_binned_00"
+        prof_dir.mkdir()
+        xr.Dataset(
+            {"T1": (("bin", "profile"), np.ones((3, 2)))},
+            coords={"bin": np.arange(3.0), "profile": np.arange(2)},
+        ).to_netcdf(prof_dir / "binned.nc")
+        assert _run_combo(tmp_path, prof_dir, None, None, None, {}) == []
+        assert (tmp_path / "combo" / "combo.nc").exists()
 
     def test_combo_writes_signature_when_config_passed(self, tmp_path):
         """When _run_combo is given *config*, each produced combo dir gets a
@@ -3262,3 +3289,124 @@ class TestInjectSeawaterProperties:
         pf.channels["JAC_C"] = np.full(len(pf.t_slow) // 2, 42.0)  # e.g. a fast C
         assert _inject_seawater_properties(pf, gps, "JAC_T", "JAC_C") == ()
         assert "SP" not in pf.channels
+
+
+class TestPipelineExitStatus:
+    """`perturb run` must not report success when it failed to write a product.
+
+    A run that lost a combo used to log the exception into that stage's own
+    combo.log, print nothing (there is no console handler without --stdout),
+    log "Pipeline complete.", and exit 0 -- so a missing combo.nc looked
+    exactly like a clean run until something downstream tried to read it.
+    """
+
+    def test_result_separates_stage_from_file_failures(self):
+        from odas_tpw.perturb.pipeline import PipelineResult
+
+        clean = PipelineResult()
+        assert clean.ok and "no errors" in clean.summary()
+
+        # A per-file failure is ABSORBED by design: one startup fragment among
+        # 200 casts is a normal, successful run.  Failing on those would train
+        # the operator to ignore the exit status.
+        tolerated = PipelineResult(file_errors=["x_0001.p: load: no data records"])
+        assert tolerated.ok
+        assert "1 file error(s)" in tolerated.summary()
+        assert "x_0001.p" in tolerated.summary()
+
+        # A missing product is NOT absorbed.
+        failed = PipelineResult(stage_errors=["chi_combo_00: bad magic"])
+        assert not failed.ok
+        assert "STAGE FAILED" in failed.summary()
+        assert "chi_combo_00" in failed.summary()
+
+    def test_summary_is_scannable_and_ascii_safe(self):
+        """The summary is printed to stderr on the failure path, so it must not
+        scroll (a run where every input failed) and must not itself raise: under
+        a C/POSIX locale (cron, systemd) stderr encodes as ASCII, and a non-ASCII
+        ellipsis would UnicodeEncodeError while reporting an error."""
+        from odas_tpw.perturb.pipeline import PipelineResult
+
+        many = PipelineResult(file_errors=[f"f{i}.p: boom" for i in range(25)])
+        text = many.summary()
+        assert "25 file error(s)" in text          # the true count is in the head
+        assert "and 15 more" in text               # 25 - 10 shown
+        assert len(text.splitlines()) == 1 + 10 + 1
+
+        # A multi-line library exception collapses to ONE clipped line.
+        long = PipelineResult(stage_errors=["chi_combo_00: " + "x " * 400])
+        (_, line) = long.summary().splitlines()
+        assert len(line) < 220 and "\n" not in line
+
+        text.encode("ascii")                        # both must survive ASCII
+        long.summary().encode("ascii")
+
+    def test_file_errors_extracted_from_worker_result(self):
+        """process_file already records every absorbed exception in its result;
+        running in a spawned worker, that return value is the ONLY channel back
+        to the parent (worker log handlers are the worker's own)."""
+        from odas_tpw.perturb.pipeline import _file_errors
+
+        assert _file_errors("a.p", {"errors": ["load: boom", "chi p3: nope"]}) == [
+            "a.p: load: boom", "a.p: chi p3: nope",
+        ]
+        assert _file_errors("a.p", {"profiles": [1, 2]}) == []   # clean run
+        assert _file_errors("a.p", None) == []                   # worker died
+
+    def test_cli_exits_nonzero_only_on_stage_failure(self, tmp_path, capsys):
+        """The exit status is the contract: 1 when a product is missing, 0 when
+        only inputs were absorbed.  And the summary reaches stderr WITHOUT
+        --stdout -- an exit status the operator cannot see is barely better
+        than none."""
+        import argparse
+
+        import pytest
+
+        from odas_tpw.perturb.cli import _finish_pipeline
+        from odas_tpw.perturb.pipeline import PipelineResult
+
+        args = argparse.Namespace(stdout=False)
+        log_path = tmp_path / "logs" / "run.log"
+
+        with pytest.raises(SystemExit) as exc:
+            _finish_pipeline(args, PipelineResult(stage_errors=["chi_combo_00: x"]), log_path)
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert "STAGE FAILED" in err and "chi_combo_00" in err
+        assert str(log_path) in err
+
+        # File-only errors: still a success, but never silent.
+        _finish_pipeline(args, PipelineResult(file_errors=["a.p: load: boom"]), log_path)
+        err = capsys.readouterr().err
+        assert "1 file error(s)" in err and "a.p" in err
+
+        # Clean run: summary still printed, no exit.
+        _finish_pipeline(args, PipelineResult(), log_path)
+        assert "no errors" in capsys.readouterr().err
+
+    def test_cli_does_not_double_print_under_stdout(self, tmp_path, capsys):
+        """--stdout installs a console handler that already emitted the summary
+        via the root logger; printing it again would duplicate every line."""
+        import argparse
+
+        import pytest
+
+        from odas_tpw.perturb.cli import _finish_pipeline
+        from odas_tpw.perturb.pipeline import PipelineResult
+
+        args = argparse.Namespace(stdout=True)
+        with pytest.raises(SystemExit) as exc:
+            _finish_pipeline(args, PipelineResult(stage_errors=["chi_combo_00: x"]),
+                             tmp_path / "run.log")
+        assert exc.value.code == 1
+        assert capsys.readouterr().err == ""   # the logger owns the console here
+
+    def test_run_pipeline_returns_result_on_empty_input(self, tmp_path):
+        """Every exit path returns a result -- an early `return` that yielded
+        None would crash the CLI's `.ok` check instead of reporting."""
+        from odas_tpw.perturb.pipeline import PipelineResult, run_pipeline
+
+        config = {"files": {"output_root": str(tmp_path)}}
+        out = run_pipeline(config, p_files=[])
+        assert isinstance(out, PipelineResult)
+        assert out.ok

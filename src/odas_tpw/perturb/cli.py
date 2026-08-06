@@ -23,7 +23,10 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # heavy module — imported lazily inside the handlers
+    from odas_tpw.perturb.pipeline import PipelineResult
 
 
 def _load_and_merge(config_path: str | None) -> dict[str, Any]:
@@ -67,6 +70,29 @@ def _install_logging(args: argparse.Namespace, config: dict[str, Any]) -> Path:
     return log_path
 
 
+def _finish_pipeline(
+    args: argparse.Namespace, outcome: "PipelineResult", log_path: Path
+) -> None:
+    """Report a pipeline outcome to the console and set the exit status.
+
+    Two failures used to combine to hide a broken run: nothing at all reaches
+    the terminal without ``--stdout``, and a stage that raised was caught and
+    logged, so ``perturb run`` printed nothing and exited 0 even when a
+    ``combo.nc`` was never written.  So the summary goes to **stderr
+    unconditionally** — an exit status the operator cannot see is barely better
+    than none — and a stage failure exits 1.
+
+    Skipped when ``--stdout`` already installed a console handler, which has
+    printed the same summary via the root logger.
+    """
+    if not args.stdout:
+        print(outcome.summary(), file=sys.stderr)
+        if not outcome.ok or outcome.file_errors:
+            print(f"See {log_path} for detail.", file=sys.stderr)
+    if not outcome.ok:
+        sys.exit(1)
+
+
 def _glob_p_files(patterns: list[str] | None) -> list[Path] | None:
     """Expand glob patterns to a list of .p file paths."""
     if not patterns:
@@ -106,7 +132,8 @@ def _run_analysis(
 
     from odas_tpw.perturb.pipeline import run_pipeline
 
-    run_pipeline(config, p_files=_glob_p_files(args.files))
+    outcome = run_pipeline(config, p_files=_glob_p_files(args.files))
+    _finish_pipeline(args, outcome, log_path)
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +189,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
     from odas_tpw.perturb.pipeline import run_pipeline
 
-    run_pipeline(config, p_files=p_files)
+    outcome = run_pipeline(config, p_files=p_files)
+    _finish_pipeline(args, outcome, log_path)
 
 
 def _cmd_trim(args: argparse.Namespace) -> None:

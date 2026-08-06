@@ -216,7 +216,7 @@ class TestManifest:
 # ---------------------------------------------------------------------------
 
 def _make_combo_noop(*a, **k):
-    return None
+    return []          # _run_combo's contract: the list of stage failures
 
 
 class TestIncrementalRun:

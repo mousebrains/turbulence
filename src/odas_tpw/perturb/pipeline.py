@@ -12,6 +12,7 @@ import os
 import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import suppress
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -35,6 +36,92 @@ from odas_tpw.perturb.logging_setup import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SUMMARY_WIDTH = 200
+_SUMMARY_MAX_LINES = 10
+
+
+def _one_line(text: str, width: int = _SUMMARY_WIDTH) -> str:
+    """Collapse *text* to a single whitespace-normalized line, clipped to *width*.
+
+    ASCII-only ellipsis on purpose: this string is printed to stderr on the
+    failure path, and under a C/POSIX locale (cron, systemd) ``sys.stderr``
+    encodes as ASCII — a "..." keeps the error reporter from raising
+    UnicodeEncodeError at exactly the moment it is reporting an error.
+    """
+    flat = " ".join(str(text).split())
+    return flat if len(flat) <= width else flat[: width - 3] + "..."
+
+
+def _summary_lines(prefix: str, errors: list[str]) -> list[str]:
+    """At most :data:`_SUMMARY_MAX_LINES` formatted lines, then a count of the rest.
+
+    A run where every input failed would otherwise scroll the whole list past
+    the operator; the full set is in the run log, which the CLI names.
+    """
+    lines = [f"  {prefix}: {_one_line(e)}" for e in errors[:_SUMMARY_MAX_LINES]]
+    extra = len(errors) - _SUMMARY_MAX_LINES
+    if extra > 0:
+        lines.append(f"  ... and {extra} more (see the run log)")
+    return lines
+
+
+@dataclass
+class PipelineResult:
+    """Outcome of a :func:`run_pipeline` call — what the CLI's exit status means.
+
+    The pipeline is deliberately fault-TOLERANT: one unreadable ``.p`` file must
+    not abandon a campaign, so per-input failures are logged and the run carries
+    on.  That tolerance used to extend to whole *products*: a ``combo`` stage
+    that raised was caught, logged into its own ``combo.log``, and the run still
+    reported "Pipeline complete." and exited 0 — so a missing ``combo.nc`` was
+    indistinguishable from success until something downstream tried to read it.
+
+    The two buckets carry that distinction:
+
+    *stage_errors* — a product the config asked for was NOT written (a combo or
+    a merge that raised).  The run did not deliver, so the CLI exits non-zero.
+
+    *file_errors* — a single input or profile failed and the pipeline absorbed
+    it (a startup fragment with no data records, one profile whose fit blew up).
+    Reported in the summary, but the run still succeeds: a campaign with one bad
+    ``.p`` file among 200 is a normal, successful run, and failing on those would
+    train the operator to ignore the exit status entirely.
+
+    Both buckets survive the incremental cache: a file whose ``process_file``
+    recorded errors is deliberately NOT cached (see
+    ``test_failed_processing_is_not_cached``), so the next run retries it and
+    re-reports; and a stage that failed left no output, so ``_output_is_current``
+    can never skip it. A repeat run therefore reproduces the same status rather
+    than laundering a failure into a clean exit.
+    """
+
+    file_errors: list[str] = field(default_factory=list)
+    stage_errors: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        """True when every product the config asked for was written."""
+        return not self.stage_errors
+
+    def summary(self) -> str:
+        """One line naming the counts, plus ONE line per failure.
+
+        Each message is flattened and clipped: library exceptions run to several
+        lines (xarray's backend error carries two doc URLs), and a summary whose
+        job is to be scanned at a glance must not scroll.  The untruncated text
+        is in the run log, which the CLI names alongside this.
+        """
+        if not self.stage_errors and not self.file_errors:
+            return "Pipeline complete: no errors."
+        head = (
+            f"Pipeline complete with {len(self.stage_errors)} stage failure(s) "
+            f"and {len(self.file_errors)} file error(s)."
+        )
+        lines = [head]
+        lines += _summary_lines("STAGE FAILED", self.stage_errors)
+        lines += _summary_lines("file error:  ", self.file_errors)
+        return "\n".join(lines)
 
 
 _SAFE_STEM_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -2520,6 +2607,7 @@ def run_trim(
     p_files: list[Path] | None = None,
     *,
     jobs: int = 1,
+    errors: list[str] | None = None,
 ) -> list[Path]:
     """Trim corrupt final records from .p files; reference complete ones in place.
 
@@ -2534,6 +2622,11 @@ def run_trim(
     when an up-to-date output already exists (``files.force_trim: true``
     re-trims unconditionally). The returned list is the per-file path to
     use downstream (original for referenced files, trimmed path otherwise).
+
+    *errors*, when given, collects one string per file that failed to trim — a
+    dropped input, so :func:`run_pipeline` counts these as file-level. An
+    out-parameter for the same reason as :func:`run_merge`'s: the ``trim``
+    subcommand consumes the ``list[Path]`` return directly.
     """
     from odas_tpw.perturb.discover import find_p_files
     from odas_tpw.perturb.trim import trim_destination
@@ -2568,6 +2661,8 @@ def run_trim(
             except Exception as exc:
                 n_failed += 1
                 logger.error("trimming %s: %s", p.name, exc)
+                if errors is not None:
+                    errors.append(f"trim {p.name}: {exc}")
     else:
         with ProcessPoolExecutor(max_workers=jobs) as executor:
             futures = {
@@ -2579,6 +2674,8 @@ def run_trim(
                 if err is not None:
                     n_failed += 1
                     logger.error("trimming %s: %s", src.name, err)
+                    if errors is not None:
+                        errors.append(f"trim {src.name}: {err}")
                     continue
                 assert result is not None  # narrow for the type checker
                 trim_results.append(result)
@@ -2595,12 +2692,19 @@ def run_merge(
     include_singletons: bool = False,
     input_root: Path | str | None = None,
     merge_plan: list[tuple[Path, list[Path]]] | None = None,
+    errors: list[str] | None = None,
 ) -> list[Path]:
     """Merge split .p files.
 
     By default, returns only newly merged outputs for CLI compatibility.
     When *include_singletons* is true, returns the complete post-merge file
     list: merged outputs plus untouched non-mergeable inputs.
+
+    *errors*, when given, collects one string per merge chain that raised.  An
+    out-parameter rather than a changed return type because the ``merge``
+    subcommand consumes the ``list[Path]`` directly; a failed merge means a
+    whole product is missing, so :func:`run_pipeline` counts it as a stage
+    failure.
     """
     from odas_tpw.perturb.discover import find_p_files
     from odas_tpw.perturb.merge import merge_p_files, plan_merge_outputs
@@ -2636,6 +2740,8 @@ def run_merge(
             logger.info("Merged %d files -> %s", len(chain), merged.name)
         except Exception as exc:
             logger.error("merging: %s", exc)
+            if errors is not None:
+                errors.append(f"merge {output_path.name}: {exc}")
             if include_singletons:
                 results.extend(chain)
     return results
@@ -2700,6 +2806,19 @@ def _format_elapsed(seconds: float) -> str:
     if seconds >= 60:
         return f"{int(seconds // 60)}m {seconds % 60:02.0f}s"
     return f"{seconds:.1f}s"
+
+
+def _file_errors(name: str, result: Any) -> list[str]:
+    """Per-file failures recorded by :func:`process_file`, prefixed with *name*.
+
+    ``process_file`` already appends to ``result["errors"]`` at every point it
+    absorbs an exception (load, speed, ctd, profiles, diss, chi) — and runs in a
+    spawned worker whose log handlers are its own, so this return value is the
+    only channel by which the parent can learn what went wrong in it.
+    """
+    if not isinstance(result, dict):
+        return []
+    return [f"{name}: {e}" for e in result.get("errors", [])]
 
 
 def _done_message(name: str, result: Any) -> str:
@@ -2784,7 +2903,7 @@ def _process_file_timed(*args, cachekey: str | None = None, **kwargs) -> dict:
     return result
 
 
-def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
+def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineResult:
     """Run the full pipeline: discover -> trim -> merge -> process -> bin -> combo.
 
     Parameters
@@ -2793,11 +2912,19 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         Full merged config (all sections).
     p_files : list of Path, optional
         Override file discovery with explicit file list.
+
+    Returns
+    -------
+    PipelineResult
+        Stage-level (product missing) and file-level (input absorbed) failures.
+        Callers that care about success should check ``.ok``; the CLI turns it
+        into the process exit status.
     """
     from odas_tpw.perturb.discover import find_p_files
     from odas_tpw.perturb.gps import create_gps
 
     files_cfg = config.get("files", {})
+    outcome = PipelineResult()
 
     # Discover files
     if p_files is None:
@@ -2807,7 +2934,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
 
     if not p_files:
         logger.warning("No .p files found")
-        return
+        return outcome
 
     logger.info("Found %d .p files", len(p_files))
 
@@ -2825,7 +2952,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
     # Trim
     if files_cfg.get("trim", True):
         logger.info("Trimming...")
-        trimmed = run_trim(config, p_files, jobs=jobs)
+        trimmed = run_trim(config, p_files, jobs=jobs, errors=outcome.file_errors)
         if trimmed:
             from odas_tpw.perturb.trim import trim_destination
 
@@ -2872,6 +2999,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             include_singletons=True,
             input_root=current_root,
             merge_plan=merge_plan,
+            errors=outcome.stage_errors,
         )
         if merged_files:
             merged_keys = {p.resolve() for p in merged_files}
@@ -3006,6 +3134,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 cachekey=cachekey,
             )
             logger.info("%s", _done_message(p_path.name, result))
+            outcome.file_errors += _file_errors(p_path.name, result)
     else:
         # Spawn workers each get a per-pid log file inside <output_root>/logs/
         # so multi-process runs are diagnosable.  ``run_stamp`` is the parent
@@ -3037,8 +3166,13 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
                 try:
                     result = future.result()
                     logger.info("%s", _done_message(p.name, result))
+                    outcome.file_errors += _file_errors(p.name, result)
                 except Exception as exc:
+                    # The worker died rather than returning a result, so its own
+                    # `errors` list never made it back; record the future's
+                    # exception in its place.
                     logger.error("processing %s: %s", p.name, exc)
+                    outcome.file_errors.append(f"{p.name}: {exc}")
 
     # Binning — three independent stages (profiles / diss / chi) that
     # share no data, so we run them concurrently on a thread pool.  Each
@@ -3178,7 +3312,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
             _write_binned_or_clear(ds, chi_binned_dir, manifest)
 
     # Combo assembly
-    _run_combo(
+    outcome.stage_errors += _run_combo(
         output_root,
         prof_binned_dir,
         diss_binned_dir,
@@ -3191,7 +3325,14 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> None:
         file_cachekeys=file_cachekeys,
     )
 
-    logger.info("Pipeline complete.")
+    # Log at a level that matches the outcome: an unqualified "Pipeline
+    # complete." on a run that failed to write a product is precisely the
+    # mis-report this summary exists to end.
+    level = logging.ERROR if outcome.stage_errors else (
+        logging.WARNING if outcome.file_errors else logging.INFO
+    )
+    logger.log(level, "%s", outcome.summary())
+    return outcome
 
 
 def _run_combo(
@@ -3205,8 +3346,14 @@ def _run_combo(
     bin_method: str = "depth",
     force: bool = False,
     file_cachekeys: dict[str, str] | None = None,
-) -> None:
+) -> list[str]:
     """Assemble combo NetCDFs from each populated binned directory.
+
+    Returns a list of ``"<dir>: <error>"`` strings, one per combo that failed to
+    write.  Failures are still caught (one bad combo must not cost the others,
+    which are independent products), but the caller now learns about them —
+    before, a raised combo was logged into its own ``combo.log`` and nothing
+    else ever saw it.
 
     Each combo writes ``output_root/<name>_combo/combo.nc`` with CF/ACDD
     metadata applied via :mod:`odas_tpw.perturb.netcdf_schema`. Missing
@@ -3235,6 +3382,7 @@ def _run_combo(
     from odas_tpw.perturb.netcdf_schema import CHI_SCHEMA, COMBO_SCHEMA, CTD_SCHEMA
 
     logger.info("Assembling combo files (method=%s)...", bin_method)
+    stage_errors: list[str] = []
 
     binning_p = (
         merge_config("binning", config.get("binning") if config else None)
@@ -3291,6 +3439,7 @@ def _run_combo(
                         logger.info("Removed stale %s (no binned input)", stale)
             except Exception as exc:
                 logger.error("combo %s: %s", dst.name, exc)
+                stage_errors.append(f"{dst.name}: {exc}")
 
     if ctd_dir is not None and ctd_dir.exists():
         ctd_p = merge_config("ctd", config.get("ctd")) if config is not None else None
@@ -3314,3 +3463,6 @@ def _run_combo(
                         logger.info("Wrote %s", out)
                 except Exception as exc:
                     logger.error("ctd combo: %s", exc)
+                    stage_errors.append(f"{ctd_combo_dir.name}: {exc}")
+
+    return stage_errors
