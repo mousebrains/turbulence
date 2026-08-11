@@ -90,25 +90,59 @@ apply none: `fs_fast` is always `(word21 + word22/1000) / n_cols`, matching
 
 Two findings from the local files, both from `diagnose_daq_clock()`:
 
-**1. The clock is 48 MHz, not the 38.4 MHz of note 5.** Every observed rate is
-an exact integer divisor of 48 MHz and of neither 38.4 nor 40 MHz:
+**1. The clock is a multiple of 24 MHz, not the 38.4 MHz of note 5.** A
+header-only scan of 5360 v6+ files across the archive finds exactly **four**
+distinct reported clock values:
 
-| Instrument | Version | Reported | 48 MHz count | 38.4 MHz count |
+| f_clock | cols | fs_fast | files | versions | 48 MHz count | back-calc err | 38.4 MHz count |
+|---|---|---|---|---|---|---|---|
+| 4096.262 | 8 | 512.0327 | 292 | 6.0×15, 6.1×264, 6.2×13 | **11718** | 0.0002 Hz | 9374.**400** |
+| 4608.295 | 9 | 512.0328 | 3049 | 6.0×5, 6.1×1550, 6.3×1494 | **10416** | 0.0001 Hz | 8332.**800** |
+| 5119.454 | 10 | 511.9454 | 1138 | 6.0×90, 6.1×1001, 6.2×47 | **9376** | 0.0001 Hz | 7500.**800** |
+| 9216.590 | 9 | 1024.0656 | 881 | 6.0×647, 6.1×18, 6.2×216 | **5208** | 0.0001 Hz | 4166.**400** |
+
+All four are integers under 48 MHz to within 5 × 10⁻⁴, and back-calculating
+`48e6/count` reproduces the stored value to ≤ 0.0002 Hz — inside the header's
+own 0.001 Hz resolution. Under 38.4 MHz none is an integer and the back-calc
+errors are 0.11–0.88 Hz, 100–900× that resolution.
+
+The failure is structural: **38.4/48 = 0.8 exactly**, so the 38.4 MHz "counts"
+are precisely 0.8× the 48 MHz ones — every one landing on .400 or .800. A base
+that is 4/5 of the true base yields an integer only when the true count is a
+multiple of 5, and none of these are.
+
+A search over 19 candidate bases leaves only **24, 48, 72 and 96 MHz** viable
+— integer multiples of 24 MHz; 38.4 and 40 MHz are excluded. The data cannot
+distinguish 24 from 48 MHz (all four counts are even, which either favors
+24 MHz or indicates a divide-by-2 prescaler), so the defensible claim is *a
+multiple of 24 MHz, and definitely not 38.4*. Do not hard-code 38.4 MHz.
+
+**2. One configuration is off by one.** The selection rule is evidently
+`count = floor(base / f_requested)` — truncation, not rounding, since 10417
+would be *nearer* to 512 Hz than 10416:
+
+| configuration | 48e6/requested | floor | used | |
 |---|---|---|---|---|
-| VMP-250IR SN479 | 6.1 | 5119.454 Hz | **9376** ✓ | 7500.80 ✗ |
-| MR1000 SN410 | 6.0 | 4608.295 Hz | **10416** ✓ | 8332.80 ✗ |
-| MR1000RDL SN435 | 6.3 | 4608.295 Hz | **10416** ✓ | 8332.80 ✗ |
+| 8 col @ 512 Hz | 11718.75 | 11718 | 11718 | ok |
+| 9 col @ 512 Hz | 10416.667 | 10416 | 10416 | ok |
+| 9 col @ 1024 Hz | 5208.333 | 5208 | 5208 | ok |
+| **10 col @ 512 Hz** | **9375.000** | **9375** | **9376** | **+1** |
 
-Both counts land within 2 × 10⁻⁴ of an integer and round back to the stored
-millihertz exactly. Two unrelated instrument families agreeing rules out
-coincidence. Do not hard-code 38.4 MHz anywhere.
+The three configurations with a non-zero remainder follow the rule; the single
+one whose division is *exact* is off by exactly one — the classic signature of
+an off-by-one at an exact-division boundary, and why only the 10-column VMP
+shows it. The reported rate is **107 ppm low** (511.9454 Hz where 512.0000 was
+requested).
 
-**2. The SN479 v6.1 files look affected.** Correct-firmware files take
-`floor(clock / requested_rate)`: the MR's 4608 Hz is not an exact divisor
-(48e6/4608 = 10416.67) and both its v6.0 and v6.3 files use 10416. SN479's
-5120 Hz *is* exact — count 9375 — yet its v6.1 files use 9376, one too high,
-putting the reported rate **107 ppm low** (511.9454 Hz where 512.0000 was
-asked for).
+**Complication to disclose when reporting this.** 90 files claiming **v6.0**
+also carry 5119.454, which sits awkwardly with TN-051 attributing the bug to
+v6.1/v6.2 only. 48 are in `2025/Wake/VMP/SN479_processed` and
+`SN428_processed`; every raw SN479 file on hand is v6.1, so those are very
+likely re-stamped downstream (vendor `patch_setupstr.m` rewrites the version
+word to 6.0 while preserving the clock words) — none carry our v1→v6
+provenance. The remaining ~42 are 2022 Interior/Wake VMP files of
+unestablished provenance. If any of those are genuine v6.0 acquisitions, the
+off-by-one predates v6.1 and the version attribution needs revisiting.
 
 Magnitude if the inference is right: 1.5 s of drift across a full 14400 s
 file, and ~0.02 % in ε — negligible for dissipation, marginal for tight time
