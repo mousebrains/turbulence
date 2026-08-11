@@ -2,6 +2,11 @@
 """Tests for perturb.merge — split file merging."""
 
 import struct
+import warnings
+from datetime import datetime, timedelta
+from typing import ClassVar
+
+import pytest
 
 from odas_tpw.perturb.merge import find_mergeable_files, merge_p_files
 from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS
@@ -17,14 +22,39 @@ def _make_p_file(
     n_records=2,
     data_byte=0x01,
     header_size=HEADER_BYTES,
+    start=None,
+    header_version=0,
+    clock_hz=0,
+    fast_cols=0,
+    slow_cols=0,
+    n_rows=0,
 ):
-    """Create a synthetic .p file for merge testing."""
+    """Create a synthetic .p file for merge testing.
+
+    ``start`` (a datetime), ``clock_hz`` and the matrix-geometry words are
+    optional: they default to zero, which leaves the file's start time and
+    duration uncomputable, so continuity checks are skipped exactly as before
+    these parameters existed. Pass them to exercise the gap logic.
+    """
     words = [0] * HEADER_WORDS
     words[_H["header_size"]] = header_size
     words[_H["config_size"]] = config_size
     words[_H["record_size"]] = record_size
     words[_H["file_number"]] = file_number
     words[_H["endian"]] = 1  # little-endian
+    words[_H["header_version"]] = header_version
+    words[_H["clock_hz"]] = clock_hz
+    words[_H["fast_cols"]] = fast_cols
+    words[_H["slow_cols"]] = slow_cols
+    words[_H["n_rows"]] = n_rows
+    if start is not None:
+        words[_H["year"]] = start.year
+        words[_H["month"]] = start.month
+        words[_H["day"]] = start.day
+        words[_H["hour"]] = start.hour
+        words[_H["minute"]] = start.minute
+        words[_H["second"]] = start.second
+        words[_H["millisecond"]] = start.microsecond // 1000
 
     hdr_bytes = struct.pack(f"<{HEADER_WORDS}H", *words)
     # Pad the header region out to header_size (config starts at header_size).
@@ -39,6 +69,69 @@ def _make_p_file(
 
     path.write_bytes(data)
     return path
+
+
+class TestWriteTimeGapAmbiguity:
+    """TN-051 (rev. 2026-01-12) s2.4.5: a pre-6.2 header stamp is the time a
+    record was WRITTEN, and the RDL can buffer minutes of records first, so a
+    timestamp gap between sequential files is not evidence of a data gap. Such
+    a pair must not be merged on that evidence — but the ambiguity is reported
+    rather than swallowed.
+    """
+
+    # 192 words/record / 1 column = 192 scans; 2 records at 512 Hz = 0.75 s.
+    _GEOM: ClassVar[dict] = dict(
+        record_size=512, clock_hz=512, fast_cols=1, slow_cols=0, n_rows=1, n_records=2
+    )
+    _DURATION = 0.75
+
+    def _pair(self, tmp_path, gap_s, version):
+        t0 = datetime(2025, 1, 15, 12, 0, 0)
+        f1 = _make_p_file(
+            tmp_path / "SN479_0001.p",
+            file_number=1,
+            start=t0,
+            header_version=version,
+            **self._GEOM,
+        )
+        f2 = _make_p_file(
+            tmp_path / "SN479_0002.p",
+            file_number=2,
+            start=t0 + timedelta(seconds=self._DURATION + gap_s),
+            header_version=version,
+            **self._GEOM,
+        )
+        return [f1, f2]
+
+    def test_v61_ambiguous_gap_warns_and_does_not_merge(self, tmp_path):
+        files = self._pair(tmp_path, gap_s=60.0, version=0x0601)
+        with pytest.warns(UserWarning, match="may be a buffering artifact"):
+            chains = find_mergeable_files(files)
+        assert chains == [], "an unverifiable gap must not be spliced together"
+
+    def test_v63_ambiguous_gap_is_silent(self, tmp_path):
+        """v6.2+ timestamps are calculated from the DAQ clock, so a gap is a
+        gap — nothing to flag."""
+        files = self._pair(tmp_path, gap_s=60.0, version=0x0603)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            chains = find_mergeable_files(files)
+        assert chains == []
+
+    def test_v61_large_gap_is_silent(self, tmp_path):
+        """Beyond the few minutes TN-051 describes, the gap is taken as real."""
+        files = self._pair(tmp_path, gap_s=3600.0, version=0x0601)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            chains = find_mergeable_files(files)
+        assert chains == []
+
+    def test_v61_contiguous_files_still_merge(self, tmp_path):
+        files = self._pair(tmp_path, gap_s=0.0, version=0x0601)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            chains = find_mergeable_files(files)
+        assert len(chains) == 1 and len(chains[0]) == 2
 
 
 class TestFindMergeableFiles:
