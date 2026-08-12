@@ -20,8 +20,14 @@ below.
 | 6.1 | RDL OS ≤ 4.11 | Read; per-sample bad buffers detected |
 | 6.2 | RDL OS 4.12–4.16 | Read; per-record timestamps drift (§2.4.3), unused by us |
 | 6.3 | RDL OS 4.17+ | Read; nothing outstanding |
+| 6.4 | not yet public | Reads as-is — no record-layout change |
 
-Dispatch is on `major >= 6`, so a future 6.4 reads without a code change.
+Dispatch is on `major >= 6`, so 6.4 reads without a code change. Per Rockland
+(via Pat, who co-drove these changes), **6.4 changes no record layout**: it adds
+a subtle timing correction and **an explicit flag for stitching files
+together**. When it ships, that flag should replace the timestamp-gap heuristic
+described under [Time](#time) — it answers directly the question that heuristic
+can only guess at. No v6.4 file appears in the 6665-file ARCTERX census.
 
 ## Bad buffers
 
@@ -197,3 +203,24 @@ files whose gap falls between the 5 s chaining tolerance and 5 minutes are
 therefore **not** merged — splicing a real gap into one time base is worse
 than leaving files apart — but the ambiguity is warned about so an operator
 can check the acquisition log. v6.2+ stamps are calculated and trusted as-is.
+
+**This heuristic has a known expiry date.** v6.4 adds an explicit
+stitch-together flag (see the version table), which states outright what the
+gap test can only infer. Replace `_warn_if_gap_may_be_a_timestamp_artifact`
+and the `_MERGE_GAP_AMBIGUOUS_S` band with that flag once v6.4 files appear.
+
+### Clock drift between instruments
+
+The instrument clock drifts enough to matter when aligning *across*
+instruments over long deployments, though not within one. Measured by Pat over
+a month-long deployment: **~10 s per month, i.e. ~3.9 ppm** — above the
+~1.5 ppm accuracy and 0.5 ppm temperature stability TN-051 note 5 quotes. Two
+MicroRiders were self-consistent and a CTD + Signature1000 were self-consistent
+but the two groups diverged; calibrating against wave phase shifts and
+arbitrating with pressure sensors and tidal models showed **the MicroRiders
+were the ones drifting**.
+
+Irrelevant to dissipation — 3.9 ppm on `fs_fast` does nothing to a spectrum —
+and this package applies no drift correction. It matters only when MR data is
+time-matched against another instrument over weeks (ADCP shear, CTD casts),
+where ~10 s/month of relative offset accumulates.
