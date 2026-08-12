@@ -105,6 +105,15 @@ _RECAL_RE = re.compile(r"recommended\s+re-?calibration", re.I)
 _RECAL_SKIP_RE = re.compile(r"re-?calibration", re.I)
 # "M1458_2026_06_19].pdf" -> ("M1458", 2026, 6, 19); tolerant of trailing junk.
 _FNAME_RE = re.compile(r"([A-Za-z]?\d[\w-]*?)[_-](\d{4})[_-](\d{1,2})[_-](\d{1,2})")
+# "Pressure Test Date: 2021-11-03" (layouts through 2025; hyphens OR slashes).
+# The 2026 layout drops the label: the "Pressure Testing Details" section
+# header is followed by a bare "Date: 2016/04/19" line (its "Operator:" and
+# "Depth Rating:" siblings carry no date), so a line-leading bare "Date:" is
+# accepted only after the section header has been seen.  "Calibration Date:"
+# lines never START with "Date", so they can never feed this.
+_PT_DATE_RE = re.compile(r"pressure\s*test\s*date\s*:?\s*" + _DATE, re.I)
+_PT_SECTION_RE = re.compile(r"pressure\s*test", re.I)
+_PT_BARE_DATE_RE = re.compile(r"^date\s*:?\s*" + _DATE, re.I)
 
 
 def _parse_date_parts(y: str, m: str, d: str) -> date | None:
@@ -122,6 +131,12 @@ class CalSheet:
     simply omits the "Previous ..." lines, as Rockland's do).  ``recal_due`` is
     the sheet's "Recommended re-calibration" date for the CURRENT calibration
     (the sheets never state one for the previous calibration).
+    ``pressure_test_date`` is the sheet's pressure-test date, which likewise
+    describes the CURRENT calibration only.  Rockland guidance (relayed by
+    Rockland support, Jul 2026): a calibration is suspect when it was done
+    within ~10 days AFTER the pressure test (the probe may not have re-settled
+    from the squeeze); a test after the calibration, or ≥ ~10 days before it,
+    is fine.
     """
 
     sn: str | None
@@ -131,6 +146,7 @@ class CalSheet:
     prev_cal_date: date | None = None
     source: str = ""
     recal_due: date | None = None
+    pressure_test_date: date | None = None
 
     def is_usable(self) -> bool:
         return self.sn is not None and self.sensitivity is not None and self.cal_date is not None
@@ -174,6 +190,8 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
     prev_sens: float | None = None
     prev_cal_date: date | None = None
     recal_due: date | None = None
+    pt_date: date | None = None
+    in_pt_section = False  # a "Pressure Test(ing)" line has been seen
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -193,6 +211,17 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
             m = _SENS_RE.search(line)
             if m:
                 sens = float(m.group(1))
+
+        # Pressure-test date: labeled through 2025; the 2026 layout has a bare
+        # "Date:" line under the "Pressure Testing Details" header instead.
+        if pt_date is None:
+            m = _PT_DATE_RE.search(line)
+            if m is None and in_pt_section:
+                m = _PT_BARE_DATE_RE.match(line)
+            if m:
+                pt_date = _parse_date_parts(m.group(1), m.group(2), m.group(3))
+        if _PT_SECTION_RE.search(line):
+            in_pt_section = True
 
         # Dates: the "Recommended re-calibration" label feeds recal_due only
         # (never cal_date); keep previous vs current apart below.  pypdf can
@@ -243,7 +272,14 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
         recal_due = None
 
     return CalSheet(
-        sn, sens, cal_date, prev_sens, prev_cal_date, source=source, recal_due=recal_due
+        sn,
+        sens,
+        cal_date,
+        prev_sens,
+        prev_cal_date,
+        source=source,
+        recal_due=recal_due,
+        pressure_test_date=pt_date,
     )
 
 
@@ -699,7 +735,20 @@ def print_check(
 # Tracked sensitivity registry (shear_sensitivities.csv)
 # ---------------------------------------------------------------------------
 
-CSV_FIELDS = ["serial", "cal_date", "sens", "units", "source", "sheet", "recal_due", "notes"]
+CSV_FIELDS = [
+    "serial",
+    "cal_date",
+    "sens",
+    "units",
+    "source",
+    "sheet",
+    "recal_due",
+    "pressure_test_date",
+    "notes",
+]
+# The registry header from before pressure_test_date existed (pre-Jul-2026):
+# still read transparently, and upgraded to CSV_FIELDS on the next write.
+_LEGACY_CSV_FIELDS = [f for f in CSV_FIELDS if f != "pressure_test_date"]
 CSV_UNITS = "V/(m^2 s^-2)"
 _PREV_NOTE = "previous-calibration entry on this sheet"
 # csv.DictReader parks fields beyond the header under this key instead of
@@ -727,6 +776,7 @@ class CsvUpdateStats:
     sheets_failed: int = 0
     added: int = 0
     upgraded: int = 0
+    backfilled: int = 0  # existing rows whose empty pressure_test_date was filled
     unchanged: int = 0
     conflicts: list[str] = field(default_factory=list)
 
@@ -761,26 +811,29 @@ def _read_registry(csv_path: Path) -> list[dict[str, str]]:
         reader = _csv.DictReader(f, restkey=_RESTKEY)
         if reader.fieldnames is None:  # empty file — same as no registry yet
             return []
-        if list(reader.fieldnames) != CSV_FIELDS:
+        fields = list(reader.fieldnames)
+        if fields not in (CSV_FIELDS, _LEGACY_CSV_FIELDS):
             raise CsvRegistryError(
-                f"{csv_path}: header is {list(reader.fieldnames)}, expected {CSV_FIELDS}"
+                f"{csv_path}: header is {fields}, expected {CSV_FIELDS}"
             )
         for row in reader:
             # More fields than the header: almost always an unquoted comma.
             extra = row.pop(_RESTKEY, None)
             if extra:
                 raise CsvRegistryError(
-                    f"{csv_path}:{reader.line_num}: {len(CSV_FIELDS) + len(extra)} fields, "
-                    f"expected {len(CSV_FIELDS)} — an unquoted comma in a hand-edited value? "
+                    f"{csv_path}:{reader.line_num}: {len(fields) + len(extra)} fields, "
+                    f"expected {len(fields)} — an unquoted comma in a hand-edited value? "
                     f"Quote the field (e.g. \"a, b\"); trailing text was {extra!r}"
                 )
             # Fewer fields: DictReader pads with None, which would be written
-            # back as empty and could mean the columns are shifted.
-            short = [k for k in CSV_FIELDS if row.get(k) is None]
+            # back as empty and could mean the columns are shifted.  Validated
+            # against the file's OWN header, so a legacy (pre-pressure_test_date)
+            # registry reads cleanly; the missing column is filled empty below.
+            short = [k for k in fields if row.get(k) is None]
             if short:
                 raise CsvRegistryError(
                     f"{csv_path}:{reader.line_num}: row is missing {len(short)} field(s) "
-                    f"({', '.join(short)}); every row needs {len(CSV_FIELDS)} "
+                    f"({', '.join(short)}); every row needs {len(fields)} "
                     f"comma-separated fields"
                 )
             rows.append({k: (row.get(k) or "") for k in CSV_FIELDS})
@@ -795,6 +848,9 @@ def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUp
       kept (``manual`` rows are never touched), EXCEPT that a sheet's own
       "current" entry replaces a previous-calibration attestation of the same
       point (better provenance: it carries the sheet id and recal date).
+    - a row whose ``pressure_test_date`` is empty but whose own sheet now
+      yields one (a registry written before the column existed) gets just
+      that field filled in place — notes and provenance untouched.
     - same (serial, cal_date) with a DIFFERENT sens is kept side by side and
       reported as a conflict — conflicting records must stay visible, never
       be silently dropped.
@@ -827,6 +883,15 @@ def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUp
             if old["notes"] == _PREV_NOTE and new["notes"] != _PREV_NOTE:
                 rows[index[k]] = new
                 stats.upgraded += 1
+            elif (
+                new["pressure_test_date"]
+                and not old["pressure_test_date"]
+                and old["sheet"] == new["sheet"]
+            ):
+                # Same sheet, re-parsed after the pressure_test_date column
+                # was added: fill only that field, preserving hand-edits.
+                old["pressure_test_date"] = new["pressure_test_date"]
+                stats.backfilled += 1
             else:
                 stats.unchanged += 1
             return
@@ -847,6 +912,7 @@ def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUp
             continue
         stats.sheets_parsed += 1
         recal = sheet.recal_due
+        pt = sheet.pressure_test_date
         _merge({
             "serial": sheet.sn,
             "cal_date": sheet.cal_date.isoformat(),
@@ -855,9 +921,12 @@ def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUp
             "source": "sheet",
             "sheet": pdf.name,
             "recal_due": recal.isoformat() if recal else "",
+            "pressure_test_date": pt.isoformat() if pt else "",
             "notes": "",
         })
         if sheet.prev_sensitivity is not None and sheet.prev_cal_date is not None:
+            # The sheet's pressure test describes its CURRENT calibration; a
+            # previous-calibration entry never gets it.
             _merge({
                 "serial": sheet.sn,
                 "cal_date": sheet.prev_cal_date.isoformat(),
@@ -866,6 +935,7 @@ def update_sensitivity_csv(cal_dir: Path, csv_path: Path | None = None) -> CsvUp
                 "source": "sheet",
                 "sheet": pdf.name,
                 "recal_due": "",
+                "pressure_test_date": "",
                 "notes": _PREV_NOTE,
             })
 

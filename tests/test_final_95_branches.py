@@ -106,10 +106,10 @@ class TestDeconvolutionBranches:
         # Channel "weird" has diff_gain but doesn't follow T1_dT1 / P_dP pattern
         config = """
 [matrix]
-row1 = 1 1 1 1
-row2 = 1 1 1 1
-row3 = 1 1 1 1
-row4 = 1 1 1 1
+row1 = 1
+row2 = 1
+row3 = 1
+row4 = 1
 
 [instrument_info]
 model = test

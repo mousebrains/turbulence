@@ -13,6 +13,7 @@ import os
 import shutil
 import struct
 import tempfile
+import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -21,6 +22,13 @@ from odas_tpw.rsi.p_file import _H, HEADER_BYTES, HEADER_WORDS, _detect_endian, 
 # Max gap between a chained file's start and the previous file's computed end
 # for them to count as a genuine size-limit rollover (vs two independent casts).
 _MERGE_GAP_TOL_S = 5.0
+
+# Upper bound on a header-timestamp gap that TN-051 s2.4.5 still allows to be
+# an artifact rather than a real gap, on files whose stamps are write-times
+# (pre-6.2). The note describes the RDL holding "up to a few minutes of data
+# records (in the FIFO)" before writing; 5 minutes covers that. Used only to
+# decide whether an unchainable pair is worth reporting — never to merge.
+_MERGE_GAP_AMBIGUOUS_S = 300.0
 
 # I/O chunk size for the bounded record-aligned copy in merge_p_files.
 _COPY_CHUNK = 1 << 20  # 1 MiB
@@ -105,7 +113,29 @@ def _read_merge_info(path: Path) -> dict:
         "file_size": file_size,
         "start_dt": start_dt,
         "duration": duration,
+        "header_version": header["header_version"],
     }
+
+
+def _gap_seconds(prev: dict, nxt: dict) -> float | None:
+    """Seconds between where *prev* ended and where *nxt* starts, or None."""
+    if prev["start_dt"] is None or nxt["start_dt"] is None or prev["duration"] is None:
+        return None
+    prev_end = prev["start_dt"] + timedelta(seconds=prev["duration"])
+    return float((nxt["start_dt"] - prev_end).total_seconds())
+
+
+def _timestamps_are_calculated(info: dict) -> bool:
+    """True when the header date-time is a calculated (trustworthy) time.
+
+    TN-051 (rev. 2026-01-12) s2.4: only v6.2 and newer derive record
+    date-times from the data acquisition clock. v6.0 and v6.1 record the time
+    at which a record was WRITTEN to storage, and s2.4.2/s2.4.5 note the RDL
+    can hold a few minutes of records in its FIFO first — so a v6.1 gap in the
+    timestamps is not evidence of a gap in the data.
+    """
+    v = info.get("header_version", 0)
+    return (v >> 8, v & 0xFF) >= (6, 2)
 
 
 def _is_continuous(prev: dict, nxt: dict, tol: float = _MERGE_GAP_TOL_S) -> bool:
@@ -117,10 +147,44 @@ def _is_continuous(prev: dict, nxt: dict, tol: float = _MERGE_GAP_TOL_S) -> bool
     continuity is unverifiable and we return True (do not block the merge on
     missing metadata — the config/geometry/sequence checks still apply).
     """
-    if prev["start_dt"] is None or nxt["start_dt"] is None or prev["duration"] is None:
+    gap = _gap_seconds(prev, nxt)
+    if gap is None:
         return True
-    prev_end = prev["start_dt"] + timedelta(seconds=prev["duration"])
-    return bool(abs((nxt["start_dt"] - prev_end).total_seconds()) <= tol)
+    return bool(abs(gap) <= tol)
+
+
+def _warn_if_gap_may_be_a_timestamp_artifact(prev: dict, nxt: dict) -> None:
+    """Flag a rejected chain whose "gap" the file format cannot vouch for.
+
+    TN-051 (rev. 2026-01-12) s2.4.5: files rolled over by ``maxfilesize``,
+    ``maxfiletime`` or ``odas restart`` hold contiguous data, and for v6.1 the
+    write-time header stamps "may suggest a time gap between files, however
+    this is not correct, the data is contiguous". So on a pre-6.2 file a gap
+    of a few minutes is exactly as consistent with FIFO buffering jitter as
+    with a genuine stop/start.
+
+    Merging on that evidence would be worse than not merging — it would splice
+    a real gap into one time base — so the chain is still rejected and the
+    ambiguity is reported instead, for the operator to resolve. Above
+    ``_MERGE_GAP_AMBIGUOUS_S`` the format's own bound no longer covers the
+    gap and it is treated as real, silently.
+    """
+    if _timestamps_are_calculated(prev) and _timestamps_are_calculated(nxt):
+        return  # v6.2+ timestamps are calculated; the gap is trustworthy
+    gap = _gap_seconds(prev, nxt)
+    if gap is None or not (_MERGE_GAP_TOL_S < abs(gap) <= _MERGE_GAP_AMBIGUOUS_S):
+        return
+    v = prev["header_version"]
+    warnings.warn(
+        f"{prev['path'].name} -> {nxt['path'].name}: sequential files whose "
+        f"header timestamps differ by {gap:.1f} s, too much to chain "
+        f"automatically. These are ODAS v{v >> 8}.{v & 0xFF} files, whose "
+        "header time is when a record was WRITTEN, not measured, so TN-051 "
+        "s2.4.5 warns this gap may be a buffering artifact of contiguous "
+        "data. They were NOT merged; check the acquisition log if they should "
+        "have been.",
+        stacklevel=3,
+    )
 
 
 def _file_group_key(info: dict) -> tuple:
@@ -188,11 +252,12 @@ def find_mergeable_files(p_files: list[Path]) -> list[list[Path]]:
         # Build chains of sequential file numbers
         chain = [group[0]]
         for i in range(1, len(group)):
-            if group[i]["file_number"] == chain[-1]["file_number"] + 1 and _is_continuous(
-                chain[-1], group[i]
-            ):
+            sequential = group[i]["file_number"] == chain[-1]["file_number"] + 1
+            if sequential and _is_continuous(chain[-1], group[i]):
                 chain.append(group[i])
             else:
+                if sequential:
+                    _warn_if_gap_may_be_a_timestamp_artifact(chain[-1], group[i])
                 if len(chain) >= 2:
                     chains.append([info["path"] for info in chain])
                 chain = [group[i]]

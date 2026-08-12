@@ -232,15 +232,70 @@ def _make_minimal_p_file(
 # ---------------------------------------------------------------------------
 
 
+class TestPFileMatrixShape:
+    """The config [matrix] must match header words 29/30/31 (TN-051 note 6).
+
+    Shape agreement is checked against a real file in test_p_file_corrupt.py;
+    these cover the degenerate configs a real header cannot express.
+    """
+
+    _CHANNEL = """
+[instrument_info]
+model = test
+sn = 1
+
+[channel]
+id = 1
+name = X
+type = raw
+"""
+
+    def _build(self, tmp_path, matrix_text):
+        return _make_minimal_p_file(
+            tmp_path / "m.p",
+            config_text=f"\n[matrix]\n{matrix_text}\n{self._CHANNEL}",
+            fast_cols=1,
+            slow_cols=0,
+            n_rows=4,
+            n_records=1,
+        )
+
+    def test_ragged_matrix_raises(self, tmp_path):
+        """Rows of differing width would build a numpy object array."""
+        path = self._build(tmp_path, "row1 = 1\nrow2 = 1 1\nrow3 = 1\nrow4 = 1")
+        with pytest.raises(ValueError, match="ragged config"):
+            PFile(path)
+
+    def test_missing_matrix_section_raises(self, tmp_path):
+        """No [matrix] rows at all → named error, not an empty-array crash."""
+        path = _make_minimal_p_file(
+            tmp_path / "nomatrix.p",
+            config_text=self._CHANNEL,
+            fast_cols=1,
+            slow_cols=0,
+            n_rows=4,
+            n_records=1,
+        )
+        with pytest.raises(ValueError, match=r"no \[matrix\] section"):
+            PFile(path)
+
+    def test_matching_matrix_accepted(self, tmp_path):
+        """The 4x1 control case still loads (guards the guard)."""
+        path = self._build(tmp_path, "row1 = 1\nrow2 = 1\nrow3 = 1\nrow4 = 1")
+        pf = PFile(path)
+        assert pf.matrix.shape == (4, 1)
+        assert "X" in pf.channels
+
+
 class TestPFileNoDataRecords:
     def test_zero_records_raises(self, tmp_path):
         """File with header + config but no data records → raise ValueError."""
         config = """
 [matrix]
-row1 = 1 1 1 1
-row2 = 1 1 1 1
-row3 = 1 1 1 1
-row4 = 1 1 1 1
+row1 = 1
+row2 = 1
+row3 = 1
+row4 = 1
 
 [instrument_info]
 model = test
@@ -273,10 +328,10 @@ class TestPFileChannelSkips:
         """Channels missing id/name/type are silently skipped."""
         config = """
 [matrix]
-row1 = 1 1 1 1
-row2 = 1 1 1 1
-row3 = 1 1 1 1
-row4 = 1 1 1 1
+row1 = 1
+row2 = 1
+row3 = 1
+row4 = 1
 
 [instrument_info]
 model = test
@@ -306,10 +361,10 @@ name = no_id_no_type
         """Channel whose id never appears in the address matrix is skipped."""
         config = """
 [matrix]
-row1 = 1 1 1 1
-row2 = 1 1 1 1
-row3 = 1 1 1 1
-row4 = 1 1 1 1
+row1 = 1
+row2 = 1
+row3 = 1
+row4 = 1
 
 [instrument_info]
 model = test
@@ -343,10 +398,10 @@ class TestPFileCorruptChannelId:
         channel, not a bare 'invalid literal for int()'."""
         config = """
 [matrix]
-row1 = 1 1 1 1
-row2 = 1 1 1 1
-row3 = 1 1 1 1
-row4 = 1 1 1 1
+row1 = 1
+row2 = 1
+row3 = 1
+row4 = 1
 
 [instrument_info]
 model = test
@@ -373,10 +428,10 @@ class TestPFileNoConverter:
         """Channel type with no converter → warn and store raw counts."""
         config = """
 [matrix]
-row1 = 1 1 1 1
-row2 = 1 1 1 1
-row3 = 1 1 1 1
-row4 = 1 1 1 1
+row1 = 1
+row2 = 1
+row3 = 1
+row4 = 1
 
 [instrument_info]
 model = test
@@ -555,10 +610,10 @@ class TestPFileUnsignedSign:
         """Channel with sign=unsigned wraps negative int16 to unsigned."""
         config = """
 [matrix]
-row1 = 1 1 1 1
-row2 = 1 1 1 1
-row3 = 1 1 1 1
-row4 = 1 1 1 1
+row1 = 1
+row2 = 1
+row3 = 1
+row4 = 1
 
 [instrument_info]
 model = test
@@ -593,10 +648,10 @@ class TestPFileSummary:
         """summary() prints to stdout without errors."""
         config = """
 [matrix]
-row1 = 1 1 1 1
-row2 = 1 1 1 1
-row3 = 1 1 1 1
-row4 = 1 1 1 1
+row1 = 1
+row2 = 1
+row3 = 1
+row4 = 1
 
 [instrument_info]
 model = TestModel
@@ -626,10 +681,10 @@ class TestPFileBadBuffer:
 
     _CONFIG = """
 [matrix]
-row1 = 1 1 1 1
-row2 = 1 1 1 1
-row3 = 1 1 1 1
-row4 = 1 1 1 1
+row1 = 1
+row2 = 1
+row3 = 1
+row4 = 1
 
 [instrument_info]
 model = test
@@ -682,10 +737,10 @@ class TestPFileStartTimeRecsize:
 prefix = test_
 
 [matrix]
-row1 = 1 1 1 1
-row2 = 1 1 1 1
-row3 = 1 1 1 1
-row4 = 1 1 1 1
+row1 = 1
+row2 = 1
+row3 = 1
+row4 = 1
 
 [instrument_info]
 model = test

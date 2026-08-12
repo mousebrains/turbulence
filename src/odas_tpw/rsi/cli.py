@@ -1624,6 +1624,11 @@ def _cmd_cal_csv(args: argparse.Namespace) -> None:
         f"{csv_path}: {stats.sheets_parsed} sheet(s) parsed, "
         f"{stats.added} row(s) added, {stats.upgraded} upgraded, "
         f"{stats.unchanged} already present"
+        + (
+            f", {stats.backfilled} back-filled with pressure-test dates"
+            if stats.backfilled
+            else ""
+        )
         + (f", {stats.sheets_failed} sheet(s) failed to parse" if stats.sheets_failed else "")
     )
     for c in stats.conflicts:

@@ -2,9 +2,10 @@
 """
 Read Rockland Scientific .p binary data files.
 
-Implements the format described in RSI Technical Note 051 (Rockland Data File
-Anatomy) and mirrors the conversion logic in the ODAS MATLAB Library
-(read_odas.m, convert_odas.m).
+Implements the format described in RSI Technical Note 051 (Rockland ODAS v6
+Data File Format, rev. 2026-01-12; titled "Rockland Data File Anatomy" in the
+2020-11-05 original) and mirrors the conversion logic in the ODAS MATLAB
+Library (read_odas.m, convert_odas.m).
 """
 
 import io
@@ -43,7 +44,7 @@ V1_PROVENANCE_KEYS = (
     "translated_on",
 )
 
-# 0-indexed word positions (TN-051 Table 1 uses 1-indexed)
+# 0-indexed word positions (TN-051 rev. 2026-01-12 Table 3 uses 1-indexed)
 _H = {
     "file_number": 0,
     "record_number": 1,
@@ -392,6 +393,98 @@ def parse_config(config_str: str) -> dict[str, Any]:
     return result
 
 
+# --- v6.1+ bad-buffer marker (TN-051 rev. 2026-01-12 section 3.2) ----------
+# When the RDL detects missing or erroneous data from a specific channel it
+# writes this value in place of the sample, so a record stays the right size
+# and a single record can carry several bad buffers. v6.0 files instead use
+# the whole-record header word-16 flag and the channel-255 special character
+# (32752 / 0x7FF0), so this scan is gated on version >= 6.1.
+BAD_BUFFER_SENTINEL = -32753  # 0x800F as int16
+
+# Minimum consecutive-sample run before a hit is reported as a real dropout.
+#
+# The sentinel is only "an unlikely number", not an impossible one: a channel
+# whose signal rides the negative rail produces isolated coincidences at a
+# measurable rate. Measured over the 29 SN479 v6.1 files (2.9e8 samples), the
+# two populations separate cleanly with nothing in between:
+#
+#   real dropouts   DO_T (id 152), 14 of 29 files, 1-4 runs each, every run
+#                   63 or 64 samples long, entered from ordinary values as
+#                   far away as +32741 -- unmistakably injected.
+#   coincidences    JAC_T, JAC_C, Turbidity: 1-24 hits per file, runs of 1
+#                   (rarely 2), embedded in data already wandering across
+#                   +/-32767. JAC_T is `sign = unsigned`, so the sentinel's
+#                   bit pattern (32783 unsigned) is mid-range ordinary data
+#                   for it, which is why it collects the most coincidences.
+#
+# 4 sits in the empty gap: 16x above the longest observed coincidence and 16x
+# below the shortest observed dropout. Isolated hits are still counted and
+# reported separately rather than thrown away, but they do not raise a
+# warning -- on this instrument they would fire on 24 of 29 files with no
+# real dropout behind them.
+BAD_BUFFER_MIN_RUN = 4
+
+
+def _mask_runs(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Start index and length of each run of consecutive True in *mask*."""
+    empty = np.empty(0, dtype=np.int64)
+    if mask.size == 0 or not mask.any():
+        return empty, empty
+    d = np.diff(mask.astype(np.int8))
+    starts = np.flatnonzero(d == 1) + 1
+    ends = np.flatnonzero(d == -1) + 1
+    if mask[0]:
+        starts = np.concatenate(([0], starts))
+    if mask[-1]:
+        ends = np.concatenate((ends, [mask.size]))
+    return starts, ends - starts
+
+
+def _validate_matrix(
+    rows: list[list[int]], n_rows: int, n_cols: int, source: str | Path
+) -> np.ndarray:
+    """Cross-check the config address [matrix] against header words 29-31.
+
+    TN-051 note 6: words 29/30 (fast + slow columns) and word 31 (rows) ARE
+    the dimensions of the address matrix, and the data block is de-multiplexed
+    with them. The matrix VALUES, though, come from the config string, so the
+    two can disagree — a mis-patched or truncated config is the usual cause.
+
+    That disagreement is silent and destructive rather than loud: the data
+    block is reshaped on the header's ``n_cols`` while channel columns are
+    located in the config matrix, so a narrower config matrix still yields
+    in-bounds column indices that address the WRONG multiplexer slot, and a
+    short row count breaks the slow-channel stride (``n_rows``). The vendor
+    reader gets this check for free — read_odas.m:218 preallocates
+    ``ch_matrix = zeros(n_rows, n_cols)`` from the header and assigns each
+    config row into it, so a mismatched row raises a MATLAB dimension error.
+    This is that guard, made explicit.
+    """
+    if not rows:
+        raise ValueError(
+            f"{Path(source).name}: config has no [matrix] section (or no row* "
+            f"entries); cannot de-multiplex the {n_rows}x{n_cols} address matrix "
+            "the header declares"
+        )
+    widths = sorted({len(r) for r in rows})
+    if len(widths) != 1:
+        raise ValueError(
+            f"{Path(source).name}: ragged config [matrix] — rows have "
+            f"{', '.join(map(str, widths))} entries; every row must have "
+            f"{n_cols} (header words 29+30)"
+        )
+    matrix = np.array(rows, dtype=np.int64)
+    if matrix.shape != (n_rows, n_cols):
+        raise ValueError(
+            f"{Path(source).name}: config [matrix] is "
+            f"{matrix.shape[0]}x{matrix.shape[1]} but the header declares "
+            f"{n_rows}x{n_cols} (word 31 rows, words 29+30 columns); the "
+            "embedded config does not match the recorded data layout, so "
+            "de-multiplexing would silently read the wrong channels"
+        )
+    return matrix
+
+
 def instrument_sn(info: dict[str, str]) -> str:
     """Instrument serial number from a parsed ``instrument_info`` mapping.
 
@@ -496,6 +589,11 @@ class PFile:
     setup_file_source, setup_file_md5 : str or None
         Provenance of the external setup file used for the v1 translation
         (None for v6+ sources).
+    bad_buffer_report : dict
+        v6.1+ RDL bad-buffer findings (TN-051 section 3.2), empty for a clean
+        or pre-6.1 file. ``{'confirmed': {channel: {...}}, 'isolated':
+        {channel: n}}``; see :meth:`_check_bad_buffer_markers`. The affected
+        samples are reported, never modified.
     """
 
     def __init__(
@@ -526,6 +624,9 @@ class PFile:
         self.setup_file_source: str | None = None
         self.setup_file_md5: str | None = None
         self.v1_provenance: dict[str, str] = {}
+        # Populated by _check_bad_buffer_markers during the v6 parse; set here
+        # too so the attribute exists even on the paths that return early.
+        self.bad_buffer_report: dict[str, Any] = {}
         self._read()
 
     def _read(self):
@@ -626,7 +727,6 @@ class PFile:
         self.slow_cols = self.header["slow_cols"]
         self.n_cols = self.fast_cols + self.slow_cols
         self.n_rows = self.header["n_rows"]
-        self.matrix = np.array(self.config["matrix"])
 
         f_clock = self.header["clock_hz"] + self.header["clock_frac"] / 1000
         # Geometry guard: a corrupt header with n_cols/n_rows == 0 (or a
@@ -637,6 +737,11 @@ class PFile:
                 f"{self.filepath.name}: invalid matrix geometry "
                 f"n_cols={self.n_cols} n_rows={self.n_rows} f_clock={f_clock}"
             )
+        # Only after the header's own geometry is known-sane: the config
+        # matrix is checked AGAINST those dimensions.
+        self.matrix = _validate_matrix(
+            self.config["matrix"], self.n_rows, self.n_cols, self.filepath
+        )
         self.fs_fast = f_clock / self.n_cols
         self.fs_slow = self.fs_fast / self.n_rows
 
@@ -703,6 +808,20 @@ class PFile:
                 f"data words per record ({data_words}) is not a positive "
                 f"multiple of n_cols ({self.n_cols})"
             )
+        # TN-051 section 2.3 states the stronger rule: the number of words in a
+        # data block is a multiple of the size of the ADDRESS MATRIX, i.e. of
+        # n_rows*n_cols, so every record holds whole multiplexer cycles and the
+        # cycle phase restarts at each record boundary. Extraction below slices
+        # the concatenated scan stream with a fixed n_rows stride, which is
+        # only equivalent while that holds; a record carrying a fractional
+        # cycle would shift the phase at every boundary and silently mis-assign
+        # slow-channel samples. Real files comply (VMP/MR: 512 scans, 8 rows).
+        if (data_words // self.n_cols) % self.n_rows != 0:
+            raise ValueError(
+                f"{self.filepath.name}: corrupt record geometry; each record "
+                f"holds {data_words // self.n_cols} scans, not a whole number "
+                f"of {self.n_rows}-row address-matrix cycles (TN-051 s2.3)"
+            )
         dtype = ">i2" if self.endian == ">" else "<i2"
         udtype = dtype.replace("i", "u")
 
@@ -737,7 +856,12 @@ class PFile:
         # word 16 (0-indexed 15), buffer_status, is a per-record bad-buffer /
         # DAQ-dropout flag. We do not repair flagged records, but warn so
         # silent DAQ corruption is not mistaken for clean data feeding
-        # epsilon/chi. Clean acquisitions (e.g. all SN479 VMP files) carry 0.
+        # epsilon/chi. This is the v6.0 mechanism ONLY: TN-051 (rev.
+        # 2026-01-12) s3.2 says v6.1+ dropped whole-record flagging and
+        # removed the channel-255 special character whose failed check sets
+        # word 16, so on a v6.1+ file this can no longer fire (confirmed: word
+        # 16 == 0 in every record of all 29 SN479 v6.1 and 10 MR v6.3 files).
+        # _check_bad_buffer_markers below is the v6.1+ replacement.
         if self._record_headers.shape[1] > 15:
             n_bad_buf = int(np.count_nonzero(self._record_headers[:, 15]))
             if n_bad_buf:
@@ -748,6 +872,8 @@ class PFile:
                     "these before conversion)",
                     stacklevel=2,
                 )
+        self._warn_on_dropped_records()
+
         # Names of joined 2-id (32-bit) channels — needed below to apply
         # ODAS's default-signed correction only to true 32-bit values.
         joined_channels: set[str] = set()
@@ -896,6 +1022,11 @@ class PFile:
             else:
                 self._slow_channels.add(ch_name)
 
+        # Runs on the untouched multiplexed block, before deconvolution
+        # overwrites channels and before unsigned wrapping / 32-bit joining
+        # destroy the sentinel's bit pattern.
+        self._check_bad_buffer_markers(raw_flat, matrix_count, ch_config)
+
         # --- Deconvolution (Mudge & Lueck 1994) ---
         # Channels with diff_gain (except shear probes) are deconvolved
         # by combining the slow-rate channel X with its pre-emphasized
@@ -980,6 +1111,148 @@ class PFile:
                     "/speed^2 fall-rate normalization applied downstream in the "
                     "epsilon/chi path (physical velocity shear, s-1, only after)"
                 )
+
+    def _warn_on_dropped_records(self) -> None:
+        """Report records missing from the file, using header word 2.
+
+        TN-051 Table 3 word 2 is the record number. In practice it (and word
+        20) is a running counter: record 0 carries 0 and data record k carries
+        k — verified on SN479 v6.1 and MR SL685 v6.3 files. Neither this
+        reader nor ODAS uses it (both derive the record count from the file
+        size), so a record lost in transfer currently costs a silent time gap:
+        every later sample simply shifts earlier, because timestamps are
+        derived from the sample index, not from the record headers.
+
+        Only FORWARD jumps are reported. A counter that resets to a lower
+        value is a splice boundary, not a loss — that is what our own
+        ``perturb merge`` output looks like, and what a uint16 wrap at 65536
+        records looks like — so treating it as damage would cry wolf on
+        healthy files. A file whose headers never populate the counter leaves
+        every difference at zero and is silently skipped.
+        """
+        if self._record_headers.shape[0] < 2 or self._record_headers.shape[1] < 2:
+            return
+        numbers = self._record_headers[:, 1].astype(np.int64)
+        steps = np.diff(numbers)
+        gaps = steps > 1
+        if not gaps.any():
+            return
+        missing = int(steps[gaps].sum() - int(gaps.sum()))
+        first = int(np.flatnonzero(gaps)[0])
+        warnings.warn(
+            f"{self.filepath.name}: record numbers (header word 2) skip "
+            f"{missing} record(s) across {int(gaps.sum())} gap(s), first "
+            f"after record {numbers[first]}; those data are missing from the "
+            "file and every later sample is shifted earlier in time, since "
+            "timestamps come from the sample index",
+            stacklevel=2,
+        )
+
+    def _check_bad_buffer_markers(
+        self, raw_flat: np.ndarray, matrix_count: int, ch_config: dict
+    ) -> None:
+        """Scan a v6.1+ data block for RDL bad-buffer markers.
+
+        TN-051 (rev. 2026-01-12) section 3.2: from v6.1 the RDL replaces
+        missing or erroneous data for a SPECIFIC channel with
+        ``BAD_BUFFER_SENTINEL`` in place of the sample, instead of flagging
+        the whole record in header word 16. Those samples are not
+        measurements, and nothing downstream would otherwise notice them —
+        they convert to physical units like any other count.
+
+        Detection works on the multiplexed block rather than the extracted
+        channels so that every sampled cell is covered uniformly, including
+        both words of a 32-bit (2-id) channel, whose join would otherwise
+        erase the pattern. Each matrix address is scanned in its own sampling
+        order — down the full column for a fast channel, strided by ``n_rows``
+        for a single-cell (slow) one — so run lengths are the real
+        consecutive-sample runs of that channel and not an artifact of scan
+        interleaving.
+
+        Findings land in :attr:`bad_buffer_report` and, for runs at least
+        ``BAD_BUFFER_MIN_RUN`` long, raise a warning. Samples are NOT
+        modified: which repair (mask, interpolate, drop the profile) is right
+        depends on the channel and the analysis, so that stays the caller's
+        decision — the report's ``spans`` carry ``(start, length)`` into the
+        channel's own samples so a caller can mask them directly.
+        """
+        self.bad_buffer_report = {}
+        version = self.header["header_version"]
+        if (version >> 8, version & 0xFF) < (6, 1):
+            return  # v6.0 and older use the word-16 / channel-255 mechanism
+
+        hits = raw_flat == BAD_BUFFER_SENTINEL
+        if not hits.any():
+            return
+
+        id_to_name: dict[int, str] = {}
+        for ch_name, info in ch_config.items():
+            for ch_id in info["ids"]:
+                id_to_name.setdefault(int(ch_id), ch_name)
+
+        usable = hits[: matrix_count * self.n_rows]
+        confirmed: dict[str, dict] = {}
+        isolated: dict[str, int] = {}
+        for addr in np.unique(self.matrix):
+            addr = int(addr)
+            where = np.where(self.matrix == addr)
+            if len(where[0]) == 0:
+                continue
+            col = int(where[1][0])
+            if np.all(self.matrix[:, col] == addr):
+                # Fast channel: one series, the whole column in scan order.
+                series = [usable[:, col]]
+            else:
+                # One series per matrix cell, strided by n_rows. A 32-bit
+                # (2-id) channel lands here as its two constituent words.
+                series = [usable[int(r) :: self.n_rows, int(c)] for r, c in zip(*where)]
+            per_series = [_mask_runs(s) for s in series]
+            runs = np.concatenate([lengths for _, lengths in per_series])
+            if runs.size == 0:
+                continue
+            name = id_to_name.get(addr, f"address {addr}")
+            long_runs = runs[runs >= BAD_BUFFER_MIN_RUN]
+            if long_runs.size:
+                # Positions index the channel's own extracted samples, so a
+                # caller can mask directly — but only when the address maps to
+                # a single series; with several the index space is ambiguous.
+                spans: list[tuple[int, int]] | None = None
+                if len(per_series) == 1:
+                    starts, lengths = per_series[0]
+                    keep = lengths >= BAD_BUFFER_MIN_RUN
+                    spans = [(int(s), int(n)) for s, n in zip(starts[keep], lengths[keep])]
+                confirmed[name] = {
+                    "address": addr,
+                    "n_runs": int(long_runs.size),
+                    "n_samples": int(long_runs.sum()),
+                    "longest_run": int(long_runs.max()),
+                    "spans": spans,
+                }
+            n_short = int(runs[runs < BAD_BUFFER_MIN_RUN].sum())
+            if n_short:
+                isolated[name] = n_short
+
+        self.bad_buffer_report = {"confirmed": confirmed, "isolated": isolated}
+        if confirmed:
+            detail = "; ".join(
+                f"{name}: {d['n_samples']} samples in {d['n_runs']} run(s), "
+                f"longest {d['longest_run']}"
+                for name, d in sorted(confirmed.items())
+            )
+            extra = ""
+            if isolated:
+                extra = (
+                    f" ({sum(isolated.values())} further isolated hit(s) on "
+                    f"{', '.join(sorted(isolated))} are consistent with ordinary "
+                    "data and were not counted)"
+                )
+            warnings.warn(
+                f"{self.filepath.name}: RDL bad-buffer markers "
+                f"({BAD_BUFFER_SENTINEL}, TN-051 s3.2) replace missing or "
+                f"erroneous data on {detail}{extra}; these samples are not "
+                "measurements — see PFile.bad_buffer_report",
+                stacklevel=2,
+            )
 
     def _apply_deconvolution(self, ch_config: dict) -> None:
         """Deconvolve pre-emphasized channels to produce high-resolution data.

@@ -125,6 +125,7 @@ See [docs/perturb/pipeline.md](docs/perturb/pipeline.md) for the full stage list
 | Document | Description |
 |----------|-------------|
 | [CLI Reference](docs/rsi-tpw/cli.md) | All `rsi-tpw` subcommands and flags |
+| [ODAS `.p` File Format](docs/rsi-tpw/odas_file_format.md) | TN-051 compliance: versions, bad buffers, sampling-rate and timestamp notes |
 | [Configuration](docs/rsi-tpw/configuration.md) | YAML config file format and all parameter defaults |
 | [Pipeline](docs/rsi-tpw/pipeline.md) | Processing stages and data flow |
 | [Python API](docs/rsi-tpw/python_api.md) | Using microstructure-tpw from Python code |
