@@ -90,6 +90,7 @@ def _compute_epsilon(
     temperature: str | float = "auto",
     conductivity: str = "auto",
     vehicle: str | None = None,
+    mask_bad_buffers: bool = True,
     _pre_loaded: dict[str, Any] | None = None,
 ) -> list[xr.Dataset]:
     """Compute epsilon from any source (internal, no deprecation warning).
@@ -111,6 +112,11 @@ def _compute_epsilon(
     string ``"measured"``: practical salinity is computed from the resolved
     C/T pair and pressure (TEOS-10), falling back to ``None`` (visc35) with
     a warning when no conductivity channel exists.
+
+    ``mask_bad_buffers`` (default True) rejects any epsilon estimate whose
+    window overlaps an RDL bad-buffer dropout (TN-051 s3.2) on a channel that
+    probe depends on; ``EPSILON_BAD_FRACTION`` records the overlap either way,
+    so False keeps the estimates and leaves the filtering to the caller.
 
     ``_pre_loaded`` is a private hook for ``perturb.pipeline`` to pass an
     already-loaded channels dict (saving the redundant per-profile NC read
@@ -241,6 +247,7 @@ def _compute_epsilon(
             P_fast,
             T_fast,
             direction,
+            goodman=goodman,
         )
 
         # L2: HP filter + despike + section selection
@@ -336,6 +343,25 @@ def _compute_epsilon(
                 spec_shear[ci, :, j] = shear_spec
                 spec_nasmyth[ci, :, j] = nas_spec
 
+        # RDL bad-buffer dropouts (TN-051 s3.2): a window holding samples the
+        # RDL substituted on a channel THIS probe depends on has no usable
+        # spectrum — the sentinel converts to a physical value like any other
+        # count, so nothing further downstream would notice. Reject those
+        # estimates and keep the fraction as the audit trail.
+        bad_frac_out = np.zeros((n_sh, n_spec))
+        if l3.bad_fraction.size > 0 and l3.bad_fraction.shape == (n_sh, n_spec):
+            bad_frac_out = l3.bad_fraction
+            if mask_bad_buffers:
+                hit = bad_frac_out > 0
+                if hit.any():
+                    epsilon[hit] = np.nan
+                    warnings.warn(
+                        f"{int(hit.sum())} of {n_sh * n_spec} epsilon estimate(s) "
+                        "rejected: their window overlaps RDL bad-buffer dropouts "
+                        f"({data['metadata'].get('bad_buffer_channels', '')})",
+                        stacklevel=2,
+                    )
+
         # F vector (constant across windows) — broadcast view is read-only
         # but suffices for xarray storage and NetCDF serialization.
         F = np.arange(n_freq) * fs_fast / fft_length
@@ -350,6 +376,7 @@ def _compute_epsilon(
             K_max_ratio_out=K_max_ratio_out,
             var_resolved_out=var_resolved_out,
             method_out=method_out,
+            bad_frac_out=bad_frac_out,
             speed_out=l3.pspd_rel,
             nu_out=nu_out,
             P_out=l3.pres,
@@ -505,6 +532,7 @@ def _build_diss_dataset(
     K_max_ratio_out: np.ndarray,
     var_resolved_out: np.ndarray,
     method_out: np.ndarray,
+    bad_frac_out: np.ndarray,
     speed_out: np.ndarray,
     nu_out: np.ndarray,
     P_out: np.ndarray,
@@ -617,6 +645,25 @@ def _build_diss_dataset(
                 "long_name": "spectral fitting method",
                 "flag_values": np.array([0, 1], dtype=np.int8),
                 "flag_meanings": "variance inertial_subrange",
+            },
+        ),
+        (
+            "bad_buffer_fraction",
+            ["probe", "time"],
+            bad_frac_out,
+            {
+                "units": "1",
+                "long_name": "fraction of window replaced by RDL bad-buffer markers",
+                "comment": (
+                    "RDL v6.1+ substitutes a sentinel for missing samples "
+                    "(TN-051 rev. 2026-01-12 s3.2). Counted per probe over the "
+                    "channels THAT probe depends on: its own shear channel, the "
+                    "vibration stack when Goodman cleaning is on, pressure, the "
+                    "reference T/C, and the speed inputs actually used — a U_EM "
+                    "dropout counts only when the speed came from U_EM, not "
+                    "under a flight model. Nonzero values have epsilon set to "
+                    "NaN unless mask_bad_buffers=False."
+                ),
             },
         ),
         (

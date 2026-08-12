@@ -102,6 +102,7 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     all_kcyc = []
     all_despike_frac = []
     all_despike_passes = []
+    all_bad_frac = []
 
     sections = np.unique(l2.section_number)
     sections = sections[sections > 0]
@@ -203,6 +204,14 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
             else:
                 all_despike_passes.append(np.zeros(n_shear, dtype=np.int64))
 
+            # Fraction of this window masked as an RDL bad-buffer dropout on a
+            # channel this probe depends on (TN-051 s3.2). Indexed on l1
+            # because the mask shares l1's time base, exactly as l1.pres above.
+            if l1.bad_mask_sh.shape == (n_shear, l1.n_time):
+                all_bad_frac.append(l1.bad_mask_sh[:, s:e].mean(axis=1))
+            else:
+                all_bad_frac.append(np.zeros(n_shear))
+
             # Convert frequency spectrum → wavenumber spectrum
             # k = f / W [cpm], Ψ(k) = Ψ(f) * W [variance/cpm]
             W = all_speed[-1]
@@ -265,6 +274,8 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
         else np.zeros((0, 0), dtype=np.int64)
     )
 
+    bad_frac_out = np.column_stack(all_bad_frac) if all_bad_frac else np.zeros((0, 0))
+
     return L3Data(
         time=time_out,
         pres=pres_out,
@@ -276,4 +287,5 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
         sh_spec_clean=sh_spec_clean_out,
         despike_fraction=despike_frac_out,
         despike_passes=despike_passes_out,
+        bad_fraction=bad_frac_out,
     )

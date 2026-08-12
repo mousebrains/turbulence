@@ -593,7 +593,10 @@ class PFile:
         v6.1+ RDL bad-buffer findings (TN-051 section 3.2), empty for a clean
         or pre-6.1 file. ``{'confirmed': {channel: {...}}, 'isolated':
         {channel: n}}``; see :meth:`_check_bad_buffer_markers`. The affected
-        samples are reported, never modified.
+        samples are reported, never modified — each confirmed entry's
+        ``spans`` are ``(start, length)`` pairs into that channel's own
+        extracted samples, which :mod:`odas_tpw.rsi.bad_buffer` turns into
+        per-consumer epsilon/chi masks.
     """
 
     def __init__(
@@ -1174,7 +1177,8 @@ class PFile:
         modified: which repair (mask, interpolate, drop the profile) is right
         depends on the channel and the analysis, so that stays the caller's
         decision — the report's ``spans`` carry ``(start, length)`` into the
-        channel's own samples so a caller can mask them directly.
+        channel's own extracted samples so a caller can mask them directly.
+        :mod:`odas_tpw.rsi.bad_buffer` turns them into the epsilon/chi masks.
         """
         self.bad_buffer_report = {}
         version = self.header["header_version"]
@@ -1191,42 +1195,81 @@ class PFile:
                 id_to_name.setdefault(int(ch_id), ch_name)
 
         usable = hits[: matrix_count * self.n_rows]
+
+        # Group addresses by the channel that owns them. A 32-bit (2-id)
+        # channel has TWO addresses; keying the report on the address would
+        # report it twice under one name, the second entry overwriting the
+        # first and losing half the dropout.
+        by_name: dict[str, list[int]] = {}
+        for addr in np.unique(self.matrix):
+            by_name.setdefault(id_to_name.get(int(addr), f"address {int(addr)}"), []).append(
+                int(addr)
+            )
+
         confirmed: dict[str, dict] = {}
         isolated: dict[str, int] = {}
-        for addr in np.unique(self.matrix):
-            addr = int(addr)
-            where = np.where(self.matrix == addr)
-            if len(where[0]) == 0:
+        for name, addrs in by_name.items():
+            all_lengths: list[np.ndarray] = []
+            # Mask over the samples _read actually extracts for this channel
+            # (see below); None until the first address contributes one.
+            extracted: np.ndarray | None = None
+            rate = "slow"
+            for addr in addrs:
+                where = np.where(self.matrix == addr)
+                if len(where[0]) == 0:
+                    continue
+                col = int(where[1][0])
+                if np.all(self.matrix[:, col] == addr) and len(addrs) == 1:
+                    # Fast channel: one series, the whole column in scan order.
+                    series = [usable[:, col]]
+                    rate = "fast"
+                else:
+                    # One series per matrix cell, strided by n_rows. A 32-bit
+                    # (2-id) channel lands here as its two constituent words.
+                    series = [usable[int(r) :: self.n_rows, int(c)] for r, c in zip(*where)]
+                all_lengths.extend(_mask_runs(s)[1] for s in series)
+                # Detection covers every cell, but extraction does not: _read
+                # keeps the whole column for a fast channel and only the FIRST
+                # occurrence of a slow address (an address in several cells is
+                # decimated, with its own warning), then ORs the two words of a
+                # 2-id channel into one sample vector. The mask that indexes
+                # the EXTRACTED samples is therefore the union over the
+                # channel's first-occurrence series — every contributing series
+                # has length matrix_count (slow) or matrix_count*n_rows (fast),
+                # so the union is well defined.
+                first = series[0]
+                extracted = first if extracted is None else (extracted | first)
+            if not all_lengths:
                 continue
-            col = int(where[1][0])
-            if np.all(self.matrix[:, col] == addr):
-                # Fast channel: one series, the whole column in scan order.
-                series = [usable[:, col]]
-            else:
-                # One series per matrix cell, strided by n_rows. A 32-bit
-                # (2-id) channel lands here as its two constituent words.
-                series = [usable[int(r) :: self.n_rows, int(c)] for r, c in zip(*where)]
-            per_series = [_mask_runs(s) for s in series]
-            runs = np.concatenate([lengths for _, lengths in per_series])
+            runs = np.concatenate(all_lengths)
             if runs.size == 0:
                 continue
-            name = id_to_name.get(addr, f"address {addr}")
             long_runs = runs[runs >= BAD_BUFFER_MIN_RUN]
             if long_runs.size:
                 # Positions index the channel's own extracted samples, so a
-                # caller can mask directly — but only when the address maps to
-                # a single series; with several the index space is ambiguous.
-                spans: list[tuple[int, int]] | None = None
-                if len(per_series) == 1:
-                    starts, lengths = per_series[0]
-                    keep = lengths >= BAD_BUFFER_MIN_RUN
-                    spans = [(int(s), int(n)) for s, n in zip(starts[keep], lengths[keep])]
+                # caller can mask directly (odas_tpw.rsi.bad_buffer does).
+                # ``spans`` can legitimately come back empty when the only long
+                # run sits in a decimated occurrence that extraction discards —
+                # the channel is dirty in the file but clean in the data we use.
+                starts, lengths = _mask_runs(
+                    extracted if extracted is not None else np.zeros(0, dtype=bool)
+                )
+                keep = lengths >= BAD_BUFFER_MIN_RUN
                 confirmed[name] = {
-                    "address": addr,
+                    "address": addrs[0],
+                    "addresses": list(addrs),
                     "n_runs": int(long_runs.size),
                     "n_samples": int(long_runs.sum()),
                     "longest_run": int(long_runs.max()),
-                    "spans": spans,
+                    # Index space of ``spans``, recorded here because it cannot
+                    # be recovered later. This scan runs BEFORE deconvolution,
+                    # which reclassifies a base channel sampled as a full fast
+                    # column down to a slow-length view (see
+                    # _apply_deconvolution, "no matter how it was sampled").
+                    # After that neither len(channels[name]) nor is_fast()
+                    # reports the axis this scan measured runs on.
+                    "rate": rate,
+                    "spans": [(int(s), int(n)) for s, n in zip(starts[keep], lengths[keep])],
                 }
             n_short = int(runs[runs < BAD_BUFFER_MIN_RUN].sum())
             if n_short:

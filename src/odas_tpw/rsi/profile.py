@@ -348,6 +348,22 @@ def extract_profiles(
             for k, v in schema_entry.items():
                 if k != "nc_name":
                     setattr(var, k, v)
+            # RDL bad-buffer dropouts on this channel, in PROFILE-LOCAL sample
+            # indices, so the NC route masks epsilon/chi exactly as the direct
+            # .p route does. Masks are already on the channel's written axis
+            # (see _load_from_pfile), so they slice like the data.
+            ch_mask = (data.get("bad_masks") or {}).get(ch_name)
+            if ch_mask is not None:
+                from odas_tpw.rsi.bad_buffer import encode_spans
+
+                local = (
+                    ch_mask[s_fast:e_fast]
+                    if dim == "time_fast"
+                    else ch_mask[s_slow:s_slow_end]
+                )
+                spans = encode_spans(local)
+                if spans:
+                    var.bad_buffer_spans = spans
 
         ds.fs_fast = float(fs_fast)
         ds.fs_slow = float(fs_slow)
@@ -465,12 +481,32 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
     for key, val in (getattr(pf, "v1_provenance", None) or {}).items():
         global_attrs[key] = str(val)
 
+    # RDL bad-buffer dropouts, re-expressed on each channel's OWN written axis
+    # so the per-profile writer can slice them exactly like the data. Needed
+    # because detection runs pre-deconvolution, which can move a channel
+    # between the two axes, so the detection axis and the written axis are not
+    # always the same one.
+    from odas_tpw.rsi.bad_buffer import expand_to_fast, sample_masks
+
+    bad_masks: dict[str, np.ndarray] = {}
+    for name, m in sample_masks(
+        getattr(pf, "bad_buffer_report", {}), len(pf.t_fast), len(pf.t_slow)
+    ).items():
+        arr = pf.channels.get(name)
+        if arr is None:
+            continue
+        if len(arr) == len(pf.t_fast) and m.size == len(pf.t_slow):
+            m = expand_to_fast(m, pf.t_slow, pf.t_fast)
+        if m.size == len(arr):
+            bad_masks[name] = m
+
     return {
         "P": pf.channels["P"],
         "fs_fast": pf.fs_fast,
         "fs_slow": pf.fs_slow,
         "t_fast": pf.t_fast,
         "t_slow": pf.t_slow,
+        "bad_masks": bad_masks,
         "t_fast_units": f"seconds since {pf.start_time.isoformat()}",
         "t_slow_units": f"seconds since {pf.start_time.isoformat()}",
         "start_epoch_s": pf.start_time.timestamp(),

@@ -6,7 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **RDL bad-buffer dropouts now mask ε and χ.** v6.1+ files substitute `-32753`
+  for individual missing samples (TN-051 rev. 2026-01-12 §3.2); `PFile` already
+  detected them, but the affected samples still entered the spectra as ordinary
+  physical values. Any ε/χ estimate whose window overlaps a dropout **on a
+  channel that estimate depends on** is now rejected, with the overlap published
+  as `bad_buffer_fraction` (probe × time) in both products and
+  `mask_bad_buffers=False` to opt out. The dependency is the point: a `sh1`
+  dropout rejects only probe 1; an accelerometer dropout rejects every probe but
+  only under Goodman; and a **`U_EM` dropout rejects nothing when the speed came
+  from the flight model**, since `U_EM` is not a flight-model input (pressure
+  still is, through `W_slow`). `prepare_profiles` stamps
+  `metadata["speed_channels"]` with the channels the selected speed actually
+  read, rather than letting the mask builder guess from a method name. On the χ
+  side the rejection lands before `chi_final` is formed, so a contaminated probe
+  cannot be averaged back in. Masks survive the per-profile NetCDF, so the
+  `prof → eps/chi` and perturb routes behave like the direct `.p` route. Null
+  test: ε, χ, `fom` and `epsilon_T` are bit-identical to the pre-masking code on
+  the SN479 set, whose only dropouts are on `DO_T` (feeds nothing). See
+  `docs/rsi-tpw/odas_file_format.md`.
+
 ### Fixed
+- **A 32-bit channel's bad buffers were reported once instead of twice.**
+  `bad_buffer_report` was keyed on the matrix address, so both words of a 2-id
+  channel mapped to the same channel name and the second silently overwrote the
+  first. Findings are now grouped per channel and the spans unioned. `spans` is
+  also always populated (previously `None` whenever an address occupied several
+  matrix cells) and is aligned with the samples extraction actually keeps, which
+  is what makes it usable as a mask.
 - **`perturb run` no longer exits 0 after failing to write a product.** A combo
   stage that raised was caught, logged into that stage's own `combo.log`, and
   the run went on to log "Pipeline complete." and exit 0 — and since `perturb`

@@ -45,6 +45,7 @@ class _SectionResult:
     tau0: list = field(default_factory=list)
     nu: list = field(default_factory=list)
     kappa_T: list = field(default_factory=list)
+    bad_frac: list = field(default_factory=list)
 
 
 @dataclass
@@ -68,6 +69,9 @@ class L3ChiData:
 
     diff_gains: list[float] = field(default_factory=list)
     fp07_model: str = "single_pole"
+    # Per-window fraction of samples masked as RDL bad-buffer dropouts, from
+    # L2ChiData.bad_mask. (N_GRADT, N_SPECTRA); empty when no mask was supplied.
+    bad_fraction: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
 
     @property
     def n_spectra(self) -> int:
@@ -254,6 +258,12 @@ def _process_section_chi(
         acc.tau0.append(tau0_all[w])
         acc.gradt_spec.append(clean_spectra[w].T)
         acc.noise_spec.append(noise_all[:, w, :])
+        # Fraction of this window masked as an RDL bad-buffer dropout on a
+        # channel this thermistor depends on (TN-051 s3.2).
+        if l2_chi.bad_mask.shape == (n_temp, l2_chi.n_time):
+            acc.bad_frac.append(l2_chi.bad_mask[:, indices[w]].mean(axis=1))
+        else:
+            acc.bad_frac.append(np.zeros(n_temp))
 
 
 def process_l3_chi(
@@ -351,6 +361,7 @@ def process_l3_chi(
             tau0=np.array([]),
             diff_gains=diff_gains,
             fp07_model=fp07_model,
+            bad_fraction=np.zeros((0, 0)),
         )
 
     # Assemble output arrays
@@ -385,4 +396,7 @@ def process_l3_chi(
         tau0=tau0_out,
         diff_gains=diff_gains,
         fp07_model=fp07_model,
+        bad_fraction=(
+            np.column_stack(acc.bad_frac) if acc.bad_frac else np.zeros((0, 0))
+        ),
     )

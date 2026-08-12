@@ -61,7 +61,21 @@ is 4, sitting in the empty gap with 16× margin either side.
 
 Affected samples are **reported, never modified** — the right repair (mask,
 interpolate, drop the profile) depends on the channel and the analysis. The
-report's `spans` give `(start, length)` into the channel's own samples.
+report's `spans` give `(start, length)` into the channel's own **extracted**
+samples, and each entry declares the `rate` (`fast`/`slow`) those indices are
+on. The rate has to be recorded at detection time: the scan runs before
+deconvolution, which demotes a base channel sampled as a full fast column to a
+slow-length view and reclassifies it (`_apply_deconvolution`, "both branches
+leave the base holding a slow-length view, no matter how it was sampled").
+Afterwards neither the stored length nor `is_fast()` reports the axis the scan
+measured runs on.
+
+Extraction and detection do not cover the same cells, and `spans` follow
+extraction: `_read` keeps a fast channel's whole column but only the **first
+occurrence** of a slow address, and joins the two words of a 32-bit (2-id)
+channel. So `spans` is the union over the channel's first-occurrence series,
+and it can be empty for a confirmed channel whose only long run sits in a
+decimated occurrence — dirty in the file, clean in the data we use.
 
 ### Which channels are affected, and does it matter
 
@@ -82,9 +96,53 @@ than the dropout itself, and ε carries roughly a U⁻⁴ sensitivity to the res
 At 64 Hz slow rate, a 7-sample run is ~0.11 s — a small fraction of a
 dissipation window, but a large excursion within it.
 
-**Open action:** decide whether the ε/χ path should mask confirmed dropouts
-before deriving speed. The detector deliberately does not modify samples, and
-`PFile.bad_buffer_report[...]['spans']` gives the indices needed to do it.
+### Masking ε and χ — RESOLVED
+
+`odas_tpw.rsi.bad_buffer` turns confirmed dropouts into per-probe masks, and
+any ε/χ estimate whose window overlaps one is **rejected (set NaN)**. The
+overlap itself is published as `bad_buffer_fraction` (probe × time) in both
+products, so the rejection is auditable and `mask_bad_buffers=False` keeps the
+estimates for anyone who wants to filter differently. On the χ side the
+rejection happens inside L4 *before* `chi_final` is formed, so a contaminated
+probe cannot be averaged back into the reported χ.
+
+The masking is **dependency-scoped** — a dropout only rejects what that channel
+actually feeds:
+
+| channel | rejects |
+|---|---|
+| `sh{i}` | ε for probe *i* only |
+| `T{i}_dT{i}` | χ for thermistor *i* only (and its `T{i}` base — deconvolution couples them) |
+| accelerometer / piezo | ε for **every** probe, but only when Goodman is on: it mixes the vibration reference into every shear spectrum |
+| `P` / `P_dP` | both, always (depth), plus speed on the pressure and flight paths |
+| `U_EM` | both, **only when the speed actually came from the EM flowmeter** |
+| `Incl_X` / `Incl_Y` | both, only when the speed came from the flight model |
+| reference `T`, `C` | both, via viscosity / κ_T |
+
+The `U_EM` row is the point of the design. Under a **flight model** `U_EM` is
+not a speed input — `speed.py` reads it only to raise a disagreement warning —
+so a `U_EM` dropout must reject nothing, even though it is exactly the channel
+the archive scan found dropouts on. Conversely the flight model *does* read
+`W_slow`, hence pressure, so a `P` dropout still rejects. Getting this from the
+method name alone is not safe (a precomputed `speed_fast` reads no channel of
+this file at all), so `prepare_profiles` — the branch that knows which speed
+path won — stamps `metadata["speed_channels"]` with what it consumed, and the
+mask builder reads that.
+
+Two smears are applied because a dropout contaminates more than its own
+samples: slow-channel masks expand to every fast sample whose `np.interp`
+stencil touches the bad sample; speed inputs widen by the Butterworth smoothing
+constant; and a pre-emphasized channel widens forward by 3 × `diff_gain`, the
+e-folding reach of the deconvolution filter.
+
+Masks ride through the per-profile NetCDF as a `bad_buffer_spans` attribute on
+each affected variable (profile-local indices, that variable's own axis), so
+the `prof → eps/chi` and perturb routes reject the same windows as the direct
+`.p` route rather than silently losing the dropouts at the file boundary.
+
+Verified as a null test on the SN479 set: because every dropout there is on
+`DO_T`, which feeds nothing, ε, χ, `fom` and `epsilon_T` come out **bit-identical**
+to the pre-masking code across 29 profiles.
 
 ## Sampling rate and the §2.4.3 count-by-one error — RESOLVED
 

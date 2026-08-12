@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any, TypedDict
 import numpy as np
 import numpy.typing as npt
 
+from odas_tpw.rsi.bad_buffer import SPEED_INPUT_CHANNELS
+
 if TYPE_CHECKING:
     import xarray as xr
 
@@ -52,6 +54,12 @@ class ChannelsDict(TypedDict, total=False):
     # _build_l1data_from_channels can label piezo-typed channels "VIB" like
     # the adapter (#131 W5-ii, W3 review F5).
     channel_types: dict[str, str]
+    # RDL bad-buffer dropouts (TN-051 s3.2): per-channel boolean masks over
+    # that channel's own extracted samples, and the differentiator gains the
+    # deconvolution smear needs. Absent for clean/pre-6.1 sources. See
+    # odas_tpw.rsi.bad_buffer, which turns these into per-probe window masks.
+    bad_masks: dict[str, np.ndarray]
+    diff_gain_by_name: dict[str, float]
 
 
 # ---------------------------------------------------------------------------
@@ -591,6 +599,21 @@ def _channels_from_pfile(
         out["speed_fast"] = pf.channels["speed_fast"]
     if "W_slow" in pf.channels:
         out["W_slow"] = pf.channels["W_slow"]
+    # RDL bad-buffer dropouts, keyed to the axis the detection ran on (the
+    # report declares it: after deconvolution a slow base channel's array is
+    # fast-rate, so its length no longer identifies the axis).
+    from odas_tpw.rsi.bad_buffer import sample_masks
+
+    # getattr: _channels_from_pfile also accepts duck-typed PFile shims that
+    # predate the report and carry no such attribute.
+    bad = sample_masks(getattr(pf, "bad_buffer_report", {}), len(pf.t_fast), n_slow)
+    if bad:
+        out["bad_masks"] = bad
+        out["diff_gain_by_name"] = {
+            str(ch.get("name")): float(ch.get("diff_gain", 0.94))
+            for ch in (pf.config.get("channels") or [])
+            if ch.get("name") and ch.get("diff_gain") is not None
+        }
     return out
 
 
@@ -700,6 +723,23 @@ def _channels_from_nc(
     if "W_slow" in ds.variables:
         W_slow = _nc_filled(ds.variables["W_slow"])
 
+    # RDL bad-buffer dropouts, written per variable by extract_profiles in
+    # profile-local indices on that variable's own axis. Diff gains come from
+    # the per-channel attrs the same writer embeds.
+    from odas_tpw.rsi.bad_buffer import decode_spans
+
+    nc_bad_masks: dict[str, np.ndarray] = {}
+    nc_diff_gains: dict[str, float] = {}
+    for vname in ds.variables:
+        var = ds.variables[vname]
+        spans = getattr(var, "bad_buffer_spans", "")
+        if spans:
+            n = len(t_fast) if var.dimensions == ("time_fast",) else n_slow
+            nc_bad_masks[vname] = decode_spans(str(spans), n)
+        gain = getattr(var, "diff_gain", None)
+        if gain is not None:
+            nc_diff_gains[vname] = float(gain)
+
     ds.close()
 
     # Resolve AFTER the dataset is closed (everything needed is in numpy by
@@ -727,6 +767,9 @@ def _channels_from_nc(
         "vehicle": vehicle,
         "metadata": metadata,
     }
+    if nc_bad_masks:
+        out["bad_masks"] = nc_bad_masks
+        out["diff_gain_by_name"] = nc_diff_gains
     if c_found is not None:
         out["C"] = resolve_map[c_found]
     if "JAC_T" in resolve_map and _len_is(resolve_map["JAC_T"], n_slow):
@@ -837,12 +880,18 @@ def prepare_profiles(
     # can never pair e.g. speed_method="em" with a fixed-speed source.
     precomputed = data.get("speed_fast") if hasattr(data, "get") else None
     speed_method_out: str | None = None
+    # Channels the selected speed actually READS. Stamped rather than
+    # re-derived downstream, because only this branch knows which path won:
+    # bad_buffer masks a telemetry dropout only when the speed depended on it
+    # (a dead U_EM sample is irrelevant to a flight-model or fixed speed).
+    speed_inputs: tuple[str, ...] = ()
     if speed is not None:
         speed_fast = np.full(len(t_fast), abs(speed))
         speed_source = f"fixed --speed {abs(speed):g}"
     elif speed_method is not None and speed_method != "pressure":
         speed_fast, speed_source = speed_from_method(data, speed_method, aoa_deg, vehicle)
         speed_method_out = speed_method
+        speed_inputs = SPEED_INPUT_CHANNELS.get(speed_method, ())
     elif speed_method is None and precomputed is not None and len(precomputed) == len(t_fast):
         speed_fast = np.asarray(precomputed, dtype=np.float64)
         upstream_method = (metadata or {}).get("speed_method")
@@ -862,6 +911,9 @@ def prepare_profiles(
                 speed_source = f"precomputed speed_fast (perturb speed.method={upstream_method})"
         else:
             speed_source = "precomputed speed_fast channel"
+        # The upstream method names channels of the file perturb read, not of
+        # this one; speed_fast arrives already computed, so no channel here
+        # feeds it and nothing is masked on its account.
     else:
         from odas_tpw.scor160.profile import compute_speed_fast
 
@@ -894,12 +946,19 @@ def prepare_profiles(
             speed_min=speed_cutout,
         )
         speed_source = "pressure |dP/dt|"
+        speed_inputs = SPEED_INPUT_CHANNELS["pressure"]
     if metadata is not None:
         metadata["speed_source"] = speed_source
         if speed_method_out:
             metadata["speed_method"] = str(speed_method_out)
         else:
             metadata.pop("speed_method", None)
+        # Comma-joined, not a tuple: metadata is merged verbatim into the
+        # product's NetCDF attributes, which take scalars and strings.
+        metadata["speed_channels"] = ",".join(speed_inputs)
+        # Resolved (vehicle-dependent) smoothing constant, so the bad-buffer
+        # mask can widen a speed-input dropout by the smoother's reach.
+        metadata["speed_tau"] = f"{tau:g}"
 
     # Floor (and NaN-scrub) speed once at this choke point so every consumer
     # gets a clean, positive speed: shear normalization (shear /= speed**2) and
@@ -1031,6 +1090,7 @@ def _build_l1data_from_channels(
     *,
     therm_list: list[tuple[str, np.ndarray]] | None = None,
     diff_gains: list[float] | None = None,
+    goodman: bool = True,
 ) -> Any:
     """Build L1Data from load_channels output and interpolated profile arrays.
 
@@ -1050,6 +1110,11 @@ def _build_l1data_from_channels(
         Thermistor data for chi computation.
     diff_gains : list of float, optional
         Per-thermistor differentiator gains.
+    goodman : bool
+        Whether Goodman coherent-noise removal will run. It mixes the
+        vibration reference into every shear spectrum, so a dropout on an
+        accelerometer contaminates all probes when it is on and none when it
+        is off -- the only thing this flag changes here.
     """
     from odas_tpw.scor160.io import L1Data
 
@@ -1097,6 +1162,14 @@ def _build_l1data_from_channels(
     else:
         tf = np.zeros((0, 0), dtype=np.float64)
 
+    bad_sh, bad_tf = _bad_buffer_masks(
+        data,
+        s_fast,
+        e_fast,
+        therm_list=therm_list,
+        goodman=goodman,
+    )
+
     return L1Data(
         time=data["t_fast"][s_fast:e_fast],
         pres=P_fast[s_fast:e_fast],
@@ -1112,7 +1185,79 @@ def _build_l1data_from_channels(
         temp=T_fast[s_fast:e_fast],
         temp_fast=tf,
         diff_gains=diff_gains or [],
+        bad_mask_sh=bad_sh,
+        bad_mask_temp=bad_tf,
     )
+
+
+def _bad_buffer_masks(
+    data: ChannelsDict | dict[str, Any],
+    s_fast: int,
+    e_fast: int,
+    *,
+    therm_list: list[tuple[str, np.ndarray]] | None = None,
+    goodman: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-probe bad-buffer masks for this profile slice.
+
+    Returns ``(shear_mask, thermistor_mask)``, each ``(n_probe, n_sample)``
+    boolean and empty when the source reported no dropouts. Also stamps
+    ``metadata["bad_buffer_channels"]`` with ``name:role`` provenance so the
+    product records WHY a window was masked, not just that it was.
+    """
+    bad_masks = data.get("bad_masks") or {}
+    empty = np.zeros((0, 0), dtype=bool)
+    if not bad_masks:
+        return empty, empty
+
+    from odas_tpw.rsi.bad_buffer import probe_masks, speed_channels
+
+    meta = data.get("metadata") or {}
+    # Pressure under both names: detection runs before deconvolution, so a
+    # dropout can be reported on the pre-emphasized P_dP, the slow P, or both.
+    shared = ["P", "P_dP"]
+    for key in ("temperature_source", "conductivity_source"):
+        src = str(meta.get(key) or "")
+        # "constant:10" is a synthesized array, not a channel that can drop out.
+        if src and not src.startswith("constant:"):
+            shared.append(src)
+    if goodman:
+        shared.extend(name for name, _ in data.get("accel", []))
+
+    try:
+        speed_tau = float(meta.get("speed_tau") or 1.5)
+    except (TypeError, ValueError):
+        speed_tau = 1.5
+
+    common = {
+        "masks": bad_masks,
+        "shared_names": shared,
+        "t_fast": data["t_fast"],
+        "t_slow": data["t_slow"],
+        "fs_fast": data["fs_fast"],
+        "speed_names": speed_channels(meta),
+        "speed_tau": speed_tau,
+        "diff_gains": data.get("diff_gain_by_name"),
+    }
+
+    provenance: dict[str, str] = {}
+    out: list[np.ndarray] = []
+    for names in (
+        [name for name, _ in data.get("shear", [])],
+        [name for name, _ in (therm_list or [])],
+    ):
+        if not names:
+            out.append(empty)
+            continue
+        mask, prov = probe_masks(probe_names=names, **common)  # type: ignore[arg-type]
+        provenance.update(prov)
+        out.append(mask[:, s_fast:e_fast])
+
+    if provenance and isinstance(meta, dict):
+        meta["bad_buffer_channels"] = ",".join(
+            f"{name}:{role}" for name, role in sorted(provenance.items())
+        )
+    return out[0], out[1]
 
 
 # ---------------------------------------------------------------------------

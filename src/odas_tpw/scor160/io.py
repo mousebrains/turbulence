@@ -48,6 +48,15 @@ class L1Data:
     # stratification falls back to a supplied/assumed salinity.
     salinity: np.ndarray = field(default_factory=lambda: np.array([]))
 
+    # Optional per-probe masks of RDL bad-buffer dropouts (TN-051 s3.2),
+    # (N_SHEAR, N_TIME) and (N_TEMP, N_TIME) boolean. True marks a sample that
+    # is not a measurement on a channel THAT PROBE depends on -- assembled by
+    # odas_tpw.rsi.bad_buffer, which resolves the dependency (notably: a U_EM
+    # dropout only counts when the speed actually came from U_EM). Empty for
+    # clean files, pre-6.1 files, and every non-RSI benchmark source.
+    bad_mask_sh: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=bool))
+    bad_mask_temp: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=bool))
+
     @property
     def n_shear(self) -> int:
         """Number of shear probe channels."""
@@ -153,6 +162,9 @@ class L3Data:
     despike_passes: np.ndarray = field(
         default_factory=lambda: np.zeros((0, 0), dtype=np.int64)
     )  # (N_SHEAR, N_SPECTRA)
+    # Per-window fraction of samples masked as RDL bad-buffer dropouts, from
+    # L1Data.bad_mask_sh. (N_SHEAR, N_SPECTRA); empty when no mask was supplied.
+    bad_fraction: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
 
     @property
     def n_spectra(self) -> int:
