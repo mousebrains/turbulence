@@ -31,7 +31,8 @@ S(0) = 0.0777
 """
 
 # A sheet with NO previous calibration (first-ever); the "Previous ..." lines
-# are simply absent, plus an unrelated "Pressure Test Date" to not confuse.
+# are simply absent. The labeled "Pressure Test Date:" (layouts through 2025)
+# must feed pressure_test_date and never cal_date.
 M3039_TEXT = """
 Probe SN: M3039
 Sensitivity (sens or S): 0.1189 V
@@ -69,6 +70,7 @@ def test_parse_sheet_without_previous():
     assert s.cal_date == date(2024, 7, 9)
     assert s.prev_sensitivity is None
     assert s.prev_cal_date is None
+    assert s.pressure_test_date == date(2024, 7, 5)
     assert [(p.date, p.sensitivity) for p in s.points()] == [(date(2024, 7, 9), 0.1189)]
 
 
@@ -119,6 +121,51 @@ def test_parse_mid_layout_sens_without_or_s():
     assert s.sensitivity == pytest.approx(0.1115)
     assert s.cal_date == date(2023, 9, 22)
     assert s.prev_sensitivity is None
+
+
+def test_parse_pressure_test_date_hyphenated_old_layout():
+    """2021-era sheets write the pressure-test date with hyphens."""
+    text = (
+        "Probe SN: M2475\n"
+        "sens: 0.0720 V\n"
+        "Pressure Test Operator: SY\n"
+        "Pressure Test Date: 2021-11-03\n"
+        "Pressure Rating: 6000 m\n"
+        "Calibration Date: 2021/11/09\n"
+    )
+    s = sc.parse_sheet_text(text)
+    assert s.pressure_test_date == date(2021, 11, 3)
+    assert s.cal_date == date(2021, 11, 9)
+
+
+def test_parse_pressure_test_date_2026_bare_date_layout():
+    """2026 layout: bare "Date:" under the "Pressure Testing Details" header
+    (which pypdf extracts with a broken word: "Det ails")."""
+    text = (
+        "Probe SN: M1458\n"
+        "Sensitivity (sens or S): 0.0777 V\n"
+        "Calibration Date: 2026/06/19\n"
+        "Pressure Testing Det ails\n"
+        "Operator: SY\n"
+        "Date: 2016/04/19\n"
+        "Depth Rating: 6000 m\n"
+    )
+    s = sc.parse_sheet_text(text)
+    assert s.pressure_test_date == date(2016, 4, 19)
+    assert s.cal_date == date(2026, 6, 19)  # bare Date: must not disturb cal_date
+
+
+def test_bare_date_line_before_pressure_section_is_ignored():
+    """A leading "Date:" line is only a pressure-test date once the Pressure
+    Testing section header has been seen."""
+    text = (
+        "Probe SN: M1458\n"
+        "Date: 2016/04/19\n"
+        "Sensitivity (sens or S): 0.0777 V\n"
+        "Calibration Date: 2026/06/19\n"
+    )
+    s = sc.parse_sheet_text(text)
+    assert s.pressure_test_date is None
 
 
 def test_old_layout_previous_prose_does_not_leak_into_current_sens():
@@ -547,6 +594,10 @@ def test_load_cal_dir_end_to_end(tmp_path):
     by_date = {p.date: p for p in tls["M1458"].points}
     assert by_date[date(2026, 6, 19)].recal_due == date(2027, 6, 19)
     assert by_date[date(2021, 4, 27)].recal_due is None
+    # The real sheet's pressure-test date (2026 layout: bare "Date:" line under
+    # the "Pressure Testing Details" header) is parsed too.
+    s = sc.parse_sheet_text(sc.extract_pdf_text(d / CAL_PDF.name))
+    assert s.pressure_test_date == date(2016, 4, 19)
 
 
 @pytest.mark.parametrize("old_name", ["M1458_2021_04_27.pdf", "Z-M1458_2021_04_27.pdf"])
@@ -659,6 +710,7 @@ M9001_TEXT = (
     "Calibration Date: 2026/01/10\n"
     "Previous Sensitivity: 0.0650\n"
     "Previous Calibration Date: 2021/01/09\n"
+    "Pressure Test Date: 2026/01/02\n"
 )
 M9001_OLD_TEXT = (
     "Probe SN: M9001\n"
@@ -688,8 +740,41 @@ class TestUpdateSensitivityCsv:
         rows = self._read(d / "shear_sensitivities.csv")
         assert s1.added == 2 and len(rows) == 2  # current + previous entry
         s2 = sc.update_sensitivity_csv(d)
-        assert s2.added == 0 and s2.unchanged == 2
+        assert s2.added == 0 and s2.unchanged == 2 and s2.backfilled == 0
         assert self._read(d / "shear_sensitivities.csv") == rows
+
+    def test_pressure_test_date_on_current_entry_only(self, tmp_path, monkeypatch):
+        # The sheet's pressure test describes its CURRENT calibration; the
+        # previous-calibration history row must not inherit it.
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf"])
+        _fake_sheets(monkeypatch, {"M9001_2026_01_10.pdf": M9001_TEXT})
+        sc.update_sensitivity_csv(d)
+        by_date = {r["cal_date"]: r for r in self._read(d / "shear_sensitivities.csv")}
+        assert by_date["2026-01-10"]["pressure_test_date"] == "2026-01-02"
+        assert by_date["2021-01-09"]["pressure_test_date"] == ""
+
+    def test_legacy_header_migrated_and_backfilled(self, tmp_path, monkeypatch):
+        # A registry written before the pressure_test_date column existed:
+        # reads transparently, the header is upgraded on write, and the
+        # sheet's own row gets ONLY its pressure_test_date filled — the
+        # hand-written note stays.
+        d = self._dir(tmp_path, ["M9001_2026_01_10.pdf"])
+        _fake_sheets(monkeypatch, {"M9001_2026_01_10.pdf": M9001_TEXT})
+        csv_path = d / "shear_sensitivities.csv"
+        csv_path.write_text(
+            "serial,cal_date,sens,units,source,sheet,recal_due,notes\n"
+            "M9001,2026-01-10,0.07,V/(m^2 s^-2),sheet,M9001_2026_01_10.pdf,,hand note\n"
+        )
+        stats = sc.update_sensitivity_csv(d)
+        assert stats.backfilled == 1
+        rows = self._read(csv_path)
+        assert csv_path.read_text().splitlines()[0].split(",") == sc.CSV_FIELDS
+        own = [r for r in rows if r["cal_date"] == "2026-01-10"]
+        assert len(own) == 1
+        assert own[0]["pressure_test_date"] == "2026-01-02"
+        assert own[0]["notes"] == "hand note"
+        # Second run: nothing left to back-fill.
+        assert sc.update_sensitivity_csv(d).backfilled == 0
 
     def test_manual_rows_preserved(self, tmp_path, monkeypatch):
         d = self._dir(tmp_path, ["M9001_2026_01_10.pdf"])

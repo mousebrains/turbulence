@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from odas_tpw.rsi.p_file import PFile, diagnose_daq_clock
+from odas_tpw.rsi.p_file import PFile
 
 SRC = Path(__file__).parent / "data" / "SN479_0006.p"
 
@@ -229,42 +229,6 @@ class TestDroppedRecords:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             PFile(SRC)
-
-
-class TestDaqClockDiagnosis:
-    """TN-051 (rev. 2026-01-12) s2.4.3: v6.1/v6.2 firmware put a count-by-one
-    error in the DAQ clock. The note publishes no correction, so this is a
-    diagnostic only — fs_fast must keep the header's value.
-    """
-
-    def test_sn479_v61_flagged(self):
-        """The real fixture: divisor 9376 where 9375 gives exactly 5120 Hz."""
-        d = diagnose_daq_clock(5119.454, 10, 0x0601)
-        assert d is not None
-        assert (d["count"], d["expected_count"]) == (9376, 9375)
-        assert d["corrected_fs_fast"] == pytest.approx(512.0)
-        assert d["ppm"] == pytest.approx(106.65, abs=0.01)
-
-    def test_fs_fast_is_not_corrected(self):
-        """The diagnosis must not leak into the time base."""
-        pf = PFile(SRC)
-        assert pf.clock_diagnosis is not None
-        assert pf.fs_fast == pytest.approx(511.9454), "fs must stay as recorded"
-        assert pf.t_fast[1] - pf.t_fast[0] == pytest.approx(1 / 511.9454)
-
-    @pytest.mark.parametrize(
-        "f_clock,n_cols,version,why",
-        [
-            (48e6 / 9375, 10, 0x0601, "count already gives the exact rate"),
-            (48e6 / 10416, 9, 0x0601, "requested rate not an exact divisor"),
-            (5119.454, 10, 0x0603, "v6.3 firmware fixed the bug"),
-            (5119.454, 10, 0x0600, "v6.0 predates it"),
-            (1234.567, 10, 0x0601, "not an integer divisor of the clock"),
-            (0.0, 10, 0x0601, "degenerate clock"),
-        ],
-    )
-    def test_not_flagged(self, f_clock, n_cols, version, why):
-        assert diagnose_daq_clock(f_clock, n_cols, version) is None, why
 
 
 class TestBadBufferMarkers:

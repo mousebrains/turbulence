@@ -425,76 +425,6 @@ BAD_BUFFER_SENTINEL = -32753  # 0x800F as int16
 BAD_BUFFER_MIN_RUN = 4
 
 
-# --- Data acquisition clock -----------------------------------------------
-# TN-051 note 5 states a 38.4 MHz data acquisition clock, but no file here is
-# consistent with that and every one is an exact integer divisor of 48 MHz:
-#
-#   VMP-250IR SN479 (v6.1)   5119.454 Hz   48e6/9376  = 5119.4539  (38.4e6 ->
-#                                                        7500.80, non-integer)
-#   MR1000 SN410 (v6.0) and
-#   MR1000RDL SN435 (v6.3)   4608.295 Hz   48e6/10416 = 4608.2949  (38.4e6 ->
-#                                                        8332.80, non-integer)
-#
-# Both land within 2e-4 of an integer count and round back to the stored
-# millihertz exactly. Two unrelated instrument families agreeing rules out
-# coincidence (a random rate near 5120 Hz has a ~2% chance of sitting that
-# close to a 48 MHz integer divisor). Used only for the diagnostic below —
-# fs always comes from header words 21/22, as in read_odas.m:170.
-DAQ_CLOCK_HZ = 48_000_000
-
-
-def diagnose_daq_clock(f_clock: float, n_cols: int, header_version: int) -> dict | None:
-    """Flag the TN-051 s2.4.3 count-by-one clock error, if present.
-
-    v6.1 and v6.2 files carry a firmware bug that put a count-by-one error in
-    the data acquisition clock; v6.3 fixed it, and Zissou corrects for it when
-    processing the affected versions. TN-051 does not publish the correction,
-    so this only DIAGNOSES — nothing here changes ``fs_fast``.
-
-    The signature: the divisor count is one above the count that would have
-    produced the requested rate exactly. Correct-firmware files pick
-    ``floor(clock / requested)`` — the MR's 4608 Hz is not an exact divisor
-    (48e6/4608 = 10416.67) and both its v6.0 and v6.3 files use 10416. SN479's
-    5120 Hz IS exact (count 9375), yet its v6.1 files use 9376, putting the
-    reported rate 107 ppm low. Returns None when the file is a version the bug
-    does not apply to, or when the count shows no off-by-one.
-
-    Confidence: the arithmetic is solid, the direction is inferred. It assumes
-    the header reports a rate the instrument did not actually run at (implied
-    by Zissou "correcting" it) rather than faithfully reporting an off-nominal
-    rate it did run at. Worth confirming with Rockland before relying on the
-    corrected value for anything tighter than the ~1.5 s/4 h it moves.
-    """
-    major, minor = header_version >> 8, header_version & 0xFF
-    if (major, minor) not in {(6, 1), (6, 2)}:
-        return None
-    if f_clock <= 0 or n_cols < 1:
-        return None
-
-    count = DAQ_CLOCK_HZ / f_clock
-    if abs(count - round(count)) > 0.01:
-        return None  # not an integer divisor of the assumed clock; stay quiet
-    count = round(count)
-
-    nominal_fs = round(f_clock / n_cols)  # the whole-Hz rate that was asked for
-    if nominal_fs < 1:
-        return None
-    exact = DAQ_CLOCK_HZ / (nominal_fs * n_cols)
-    if abs(exact - round(exact)) > 1e-9 or round(exact) != count - 1:
-        return None  # requested rate was not exactly available, or count is right
-
-    corrected = DAQ_CLOCK_HZ / (count - 1)
-    return {
-        "reported_clock_hz": f_clock,
-        "reported_fs_fast": f_clock / n_cols,
-        "count": count,
-        "expected_count": count - 1,
-        "corrected_clock_hz": corrected,
-        "corrected_fs_fast": corrected / n_cols,
-        "ppm": (corrected - f_clock) / f_clock * 1e6,
-    }
-
-
 def _mask_runs(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Start index and length of each run of consecutive True in *mask*."""
     empty = np.empty(0, dtype=np.int64)
@@ -659,10 +589,6 @@ class PFile:
     setup_file_source, setup_file_md5 : str or None
         Provenance of the external setup file used for the v1 translation
         (None for v6+ sources).
-    clock_diagnosis : dict or None
-        Non-None when the header's sampling rate carries the TN-051 s2.4.3
-        v6.1/v6.2 count-by-one clock error; see :func:`diagnose_daq_clock`.
-        Reported only — ``fs_fast`` is always the header's value.
     bad_buffer_report : dict
         v6.1+ RDL bad-buffer findings (TN-051 section 3.2), empty for a clean
         or pre-6.1 file. ``{'confirmed': {channel: {...}}, 'isolated':
@@ -818,12 +744,6 @@ class PFile:
         )
         self.fs_fast = f_clock / self.n_cols
         self.fs_slow = self.fs_fast / self.n_rows
-        # Diagnostic only — fs stays exactly what the header says, matching
-        # read_odas.m:170-172. See diagnose_daq_clock for why this is not
-        # applied automatically.
-        self.clock_diagnosis = diagnose_daq_clock(
-            f_clock, self.n_cols, self.header["header_version"]
-        )
 
         h = self.header
         self.start_time = datetime(
@@ -1454,15 +1374,6 @@ class PFile:
             f"({self.fast_cols} fast + {self.slow_cols} slow)"
         )
         print(f"fs_fast = {self.fs_fast:.3f} Hz, fs_slow = {self.fs_slow:.3f} Hz")
-        if self.clock_diagnosis:
-            d = self.clock_diagnosis
-            print(
-                f"  NOTE: clock divisor {d['count']} is one above the "
-                f"{d['expected_count']} that gives exactly "
-                f"{d['corrected_fs_fast']:.4f} Hz — the TN-051 s2.4.3 "
-                f"count-by-one error in v6.1/v6.2 firmware ({d['ppm']:+.0f} ppm; "
-                "uncorrected here, see diagnose_daq_clock)"
-            )
         print(f"Duration: {self.t_fast[-1]:.1f} s")
         print(f"\nChannels ({len(self.channels)}):")
         for name in sorted(self.channels.keys()):

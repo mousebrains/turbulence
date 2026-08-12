@@ -17,8 +17,8 @@ below.
 |---|---|---|
 | 1.0 | pre-2015 | Translated to v6 on read (`rsi-tpw v1to6`, see [legacy_v1.md](legacy_v1.md)) |
 | 6.0 | ODAS-RT, ODAS5IR (CF2 Persistor) | Read; whole-record bad-buffer flag honored |
-| 6.1 | RDL OS ≤ 4.11 | Read; per-sample bad buffers detected; clock caveat below |
-| 6.2 | RDL OS 4.12–4.16 | Read; same clock caveat |
+| 6.1 | RDL OS ≤ 4.11 | Read; per-sample bad buffers detected |
+| 6.2 | RDL OS 4.12–4.16 | Read; per-record timestamps drift (§2.4.3), unused by us |
 | 6.3 | RDL OS 4.17+ | Read; nothing outstanding |
 
 Dispatch is on `major >= 6`, so a future 6.4 reads without a code change.
@@ -80,19 +80,48 @@ dissipation window, but a large excursion within it.
 before deriving speed. The detector deliberately does not modify samples, and
 `PFile.bad_buffer_report[...]['spans']` gives the indices needed to do it.
 
-## Sampling rate: the v6.1/v6.2 count-by-one error — UNRESOLVED
+## Sampling rate and the §2.4.3 count-by-one error — RESOLVED
 
-TN-051 §2.4.3–2.4.4 record that a firmware bug "caused a count-by-one error in
-the data acquisition clock" in v6.1 and v6.2 files, fixed in v6.3, and that
-Zissou corrects for it. **The note does not publish the correction**, so we
-apply none: `fs_fast` is always `(word21 + word22/1000) / n_cols`, matching
-`read_odas.m:170`.
+**We are not affected, and `fs_fast` is correct as read.** `fs_fast` is always
+`(word21 + word22/1000) / n_cols`, matching `read_odas.m:170`.
 
-Two findings from the local files, both from `diagnose_daq_clock()`:
+TN-051 §2.4.3 notes that "a firmware bug caused a count-by-one error in the
+data acquisition clock" in v6.1/v6.2, fixed in v6.3, and that Zissou corrects
+for it. Read in context that paragraph sits inside **"Version 6.2 Time"**,
+describing how records get synthesized date-times "derived from the previous
+record time and the expected duration of a record"; the version table calls
+6.3's fix "the **timing error** in version 6.2 data files". So the bug is in
+the **record-duration accumulation used to synthesize per-record timestamps**,
+not in the sampling rate.
 
-**1. The clock is a multiple of 24 MHz, not the 38.4 MHz of note 5.** A
-header-only scan of 5360 v6+ files across the archive finds exactly **four**
-distinct reported clock values:
+We never read per-record timestamps — the absolute start comes from record 0
+only and every later time is derived from `fs_fast` (see [Time](#time)) — so
+the bug cannot reach our time base. Anyone who *does* consume per-record
+header date-times from a v6.1/v6.2 file should expect them to drift.
+
+Two checks confirm the rate itself is right, correcting an earlier reading of
+this document that treated 511.9454 Hz as a symptom:
+
+- **Vendor agreement.** ODAS MATLAB's `_allch.nc` for a v6.1 SN479 file gives
+  `fs = 511.945400 Hz` — identical to our header-derived value to 0.00 ppm.
+  The vendor library applies no rate correction.
+- **Operator experience.** 511.9454 Hz is the rate this instrument class has
+  reported historically; it is the by-design rate, not a fault.
+
+For the record, the coincidence that prompted the earlier misreading: of the
+four archive configurations, three take `count = floor(clock / nominal)`
+(truncation, not rounding — 10417 would be *nearer* 512 Hz than the 10416
+used), while the 10-column @512 Hz config, whose division is exact at 9375,
+uses 9376. That is numerology on an unrelated coincidence, and nothing in the
+file states a requested rate anyway — the config carries no rate or frequency
+key at all (`[root]` holds only `prefix`), so the requested rate lives in the
+RDL OS settings, outside the data file.
+
+## The documented 38.4 MHz clock is wrong — OPEN, report to Rockland
+
+Independent of the above, and still worth reporting. TN-051 note 5 states a
+38.4 MHz data acquisition clock. A header-only scan of 5360 v6+ files finds
+exactly **four** distinct reported clock values, none consistent with it:
 
 | f_clock | cols | fs_fast | files | versions | 48 MHz count | back-calc err | 38.4 MHz count |
 |---|---|---|---|---|---|---|---|
@@ -117,44 +146,15 @@ distinguish 24 from 48 MHz (all four counts are even, which either favors
 24 MHz or indicates a divide-by-2 prescaler), so the defensible claim is *a
 multiple of 24 MHz, and definitely not 38.4*. Do not hard-code 38.4 MHz.
 
-**2. One configuration is off by one.** The selection rule is evidently
-`count = floor(base / f_requested)` — truncation, not rounding, since 10417
-would be *nearer* to 512 Hz than 10416:
+This is a documentation-accuracy issue only: we read the frequency from words
+21/22 and never use a base clock, so nothing in our processing depends on it.
 
-| configuration | 48e6/requested | floor | used | |
-|---|---|---|---|---|
-| 8 col @ 512 Hz | 11718.75 | 11718 | 11718 | ok |
-| 9 col @ 512 Hz | 10416.667 | 10416 | 10416 | ok |
-| 9 col @ 1024 Hz | 5208.333 | 5208 | 5208 | ok |
-| **10 col @ 512 Hz** | **9375.000** | **9375** | **9376** | **+1** |
-
-The three configurations with a non-zero remainder follow the rule; the single
-one whose division is *exact* is off by exactly one — the classic signature of
-an off-by-one at an exact-division boundary, and why only the 10-column VMP
-shows it. The reported rate is **107 ppm low** (511.9454 Hz where 512.0000 was
-requested).
-
-**Complication to disclose when reporting this.** 90 files claiming **v6.0**
-also carry 5119.454, which sits awkwardly with TN-051 attributing the bug to
-v6.1/v6.2 only. 48 are in `2025/Wake/VMP/SN479_processed` and
-`SN428_processed`; every raw SN479 file on hand is v6.1, so those are very
-likely re-stamped downstream (vendor `patch_setupstr.m` rewrites the version
-word to 6.0 while preserving the clock words) — none carry our v1→v6
-provenance. The remaining ~42 are 2022 Interior/Wake VMP files of
-unestablished provenance. If any of those are genuine v6.0 acquisitions, the
-off-by-one predates v6.1 and the version attribution needs revisiting.
-
-Magnitude if the inference is right: 1.5 s of drift across a full 14400 s
-file, and ~0.02 % in ε — negligible for dissipation, marginal for tight time
-matching against shipboard data.
-
-**What is unverified:** the *direction*. That the header reports a rate the
-instrument did not run at (rather than faithfully reporting an off-nominal
-rate it did) is inferred from Zissou "correcting" the value, not stated. The
-~20 s restart gaps between the SN479 files are far too coarse to settle 1.5 s
-empirically. **Confirm with `support@rocklandscientific.com` before applying
-any correction.** Until then `PFile.clock_diagnosis` reports it, `rsi-tpw
-info` prints a note, and nothing is changed.
+*(The 90 files claiming v6.0 while reporting 5119.454 Hz were checked: all 90
+carry a `; <date> patched configuration string` first line — the vendor
+`patch_setupstr.m` signature — and none has channel 255 in its matrix or a
+single 32752 special character, which TN-051 §3.1 requires of a genuine v6.0
+acquisition. They are v6.1 files whose version word was rewritten downstream,
+not v6.0 acquisitions.)*
 
 ## Header fields
 
