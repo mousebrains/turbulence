@@ -21,6 +21,7 @@ from odas_tpw.chi.chi import (
 )
 from odas_tpw.chi.fp07 import fp07_double_pole, fp07_transfer
 from odas_tpw.chi.l3_chi import L3ChiData
+from odas_tpw.scor160.io import BAD_MAX_INTERP_FRACTION as MAX_INTERP_FRACTION
 from odas_tpw.scor160.io import L4Data
 
 logger = logging.getLogger(__name__)
@@ -151,19 +152,24 @@ def _process_l4_chi(
         # no valid uncertainty input either).
         var_resolved_out[under_resolved] = np.nan
 
-    # RDL bad-buffer dropouts (TN-051 s3.2): a window containing samples the
-    # RDL substituted on a channel this thermistor depends on has no usable
-    # gradient spectrum. Dropped here, before _compute_chi_final, for the same
-    # reason as the kB rejection above — otherwise chi_final would average a
-    # rejected probe back in.
+    # RDL bad-buffer dropouts (TN-051 s3.2) on a channel this thermistor
+    # depends on. Short gaps were already repaired by interpolation upstream, so
+    # they only cost a window once they accumulate past MAX_INTERP_FRACTION;
+    # gaps too long to interpolate through reject it outright. Dropped here,
+    # before _compute_chi_final, for the same reason as the kB rejection above —
+    # otherwise chi_final would average a rejected probe back in.
     if mask_bad_buffers and l3_chi.bad_fraction.shape == chi_out.shape:
         contaminated = l3_chi.bad_fraction > 0
+        if l3_chi.interp_fraction.shape == chi_out.shape:
+            contaminated = contaminated | (l3_chi.interp_fraction > MAX_INTERP_FRACTION)
         n_bad = int(contaminated.sum())
         if n_bad:
             logger.warning(
-                "%d chi window(s) dropped: window overlaps RDL bad-buffer "
-                "dropouts (TN-051 s3.2) on a channel the thermistor depends on",
+                "%d chi window(s) dropped: RDL bad-buffer gap too long to "
+                "interpolate, or more than %.0f%% of the window interpolated "
+                "(TN-051 s3.2), on a channel the thermistor depends on",
                 n_bad,
+                100 * MAX_INTERP_FRACTION,
             )
             chi_out[contaminated] = np.nan
             eps_out[contaminated] = np.nan

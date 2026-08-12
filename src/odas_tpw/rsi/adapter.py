@@ -271,7 +271,13 @@ def pfile_to_l1data(
     bad_tf = np.zeros((0, 0), dtype=bool)
     # getattr: this function accepts duck-typed PFile shims (tests, perturb)
     # that predate the report and carry no such attribute.
-    bad_masks = sample_masks(getattr(pf, "bad_buffer_report", {}), len(pf.t_fast), n_slow_full)
+    bad_masks = sample_masks(
+        getattr(pf, "bad_buffer_report", {}),
+        len(pf.t_fast),
+        n_slow_full,
+        fs_fast=pf.fs_fast,
+        fs_slow=pf.fs_slow,
+    )
     if bad_masks:
         shared = ["P", "P_dP", *vib_names]
         if isinstance(temperature, str) and temperature != "auto":

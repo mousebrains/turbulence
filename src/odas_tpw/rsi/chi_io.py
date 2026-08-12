@@ -95,11 +95,14 @@ def _compute_chi(
     falling back to ``None`` (visc35) with a warning when no conductivity
     channel exists.
 
-    ``mask_bad_buffers`` (default True) rejects any chi estimate whose window
-    overlaps an RDL bad-buffer dropout (TN-051 s3.2) on a channel that
-    thermistor depends on; the rejection happens before ``chi_final`` is
-    formed, so a contaminated probe cannot be averaged back in.
-    ``CHI_BAD_FRACTION`` records the overlap either way.
+    ``mask_bad_buffers`` (default True) rejects a chi estimate whose window
+    carries an RDL bad-buffer gap (TN-051 s3.2) too long to interpolate on a
+    channel that thermistor depends on, or more than
+    ``bad_buffer.MAX_INTERP_FRACTION`` of interpolated samples; short gaps are
+    repaired at the load boundary regardless. The rejection happens before
+    ``chi_final`` is formed, so a contaminated probe cannot be averaged back
+    in. ``bad_buffer_fraction`` and ``interpolated_fraction`` record both
+    either way.
 
     ``_pre_loaded`` is a private hook accepting the dict produced by
     :func:`_load_therm_channels` (i.e. channels + ``therm`` + ``diff_gains`` +
@@ -296,6 +299,7 @@ def _compute_chi(
             chi_method=l4_chi.method,
             n_v=n_v,
             bad_frac=l3_chi.bad_fraction,
+            interp_frac=l3_chi.interp_fraction,
         )
         ds.attrs.update(data["metadata"])
         ds.attrs["history"] = f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
@@ -603,6 +607,7 @@ def _build_chi_ds_from_pipeline(
     chi_method: str = "epsilon",
     n_v: int = 0,
     bad_frac: np.ndarray | None = None,
+    interp_frac: np.ndarray | None = None,
 ) -> xr.Dataset:
     """Build old-format xr.Dataset from L3ChiData + L4ChiData.
 
@@ -660,6 +665,11 @@ def _build_chi_ds_from_pipeline(
             if bad_frac is not None and bad_frac.shape == l4_chi.chi.shape
             else np.zeros_like(l4_chi.chi)
         ),
+        interp_frac_out=(
+            interp_frac
+            if interp_frac is not None and interp_frac.shape == l4_chi.chi.shape
+            else np.zeros_like(l4_chi.chi)
+        ),
     )
 
 
@@ -673,6 +683,7 @@ def _build_chi_dataset(
     K_max_ratio_out: np.ndarray,
     var_resolved_out: np.ndarray,
     bad_frac_out: np.ndarray,
+    interp_frac_out: np.ndarray,
     speed_out: np.ndarray,
     nu_out: np.ndarray,
     P_out: np.ndarray,
@@ -787,10 +798,11 @@ def _build_chi_dataset(
             bad_frac_out,
             {
                 "units": "1",
-                "long_name": "fraction of window replaced by RDL bad-buffer markers",
+                "long_name": "fraction of window dropped as unrepairable RDL bad buffer",
                 "comment": (
                     "RDL v6.1+ substitutes a sentinel for missing samples "
-                    "(TN-051 rev. 2026-01-12 s3.2). Counted per thermistor over "
+                    "(TN-051 rev. 2026-01-12 s3.2). This counts only the gaps too "
+                    "long to interpolate through (> 0.25 s), per thermistor over "
                     "the channels THAT thermistor depends on: its own gradient "
                     "channel and base, the vibration stack when Goodman cleaning "
                     "is on, pressure, the reference T/C, and the speed inputs "
@@ -798,6 +810,21 @@ def _build_chi_dataset(
                     "came from U_EM, not under a flight model. Nonzero values "
                     "have chi, epsilon_T and var_resolved set to NaN (before "
                     "chi_final is formed) unless mask_bad_buffers=False."
+                ),
+            },
+        ),
+        (
+            "interpolated_fraction",
+            ["probe", "time"],
+            interp_frac_out,
+            {
+                "units": "1",
+                "long_name": "fraction of window linearly interpolated across short RDL gaps",
+                "comment": (
+                    "RDL bad-buffer gaps of 0.25 s or less are repaired by linear "
+                    "interpolation before the spectra rather than rejected. chi is "
+                    "still set to NaN where this exceeds 0.05, bounding the "
+                    "variance lost to the repair."
                 ),
             },
         ),

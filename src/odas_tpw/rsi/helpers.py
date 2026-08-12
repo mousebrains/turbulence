@@ -13,7 +13,7 @@ import re
 import warnings
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -606,7 +606,13 @@ def _channels_from_pfile(
 
     # getattr: _channels_from_pfile also accepts duck-typed PFile shims that
     # predate the report and carry no such attribute.
-    bad = sample_masks(getattr(pf, "bad_buffer_report", {}), len(pf.t_fast), n_slow)
+    bad = sample_masks(
+        getattr(pf, "bad_buffer_report", {}),
+        len(pf.t_fast),
+        n_slow,
+        fs_fast=pf.fs_fast,
+        fs_slow=pf.fs_slow,
+    )
     if bad:
         out["bad_masks"] = bad
         out["diff_gain_by_name"] = {
@@ -614,6 +620,7 @@ def _channels_from_pfile(
             for ch in (pf.config.get("channels") or [])
             if ch.get("name") and ch.get("diff_gain") is not None
         }
+        _repair_short_gaps(out, bad)
     return out
 
 
@@ -770,6 +777,7 @@ def _channels_from_nc(
     if nc_bad_masks:
         out["bad_masks"] = nc_bad_masks
         out["diff_gain_by_name"] = nc_diff_gains
+        _repair_short_gaps(out, nc_bad_masks)
     if c_found is not None:
         out["C"] = resolve_map[c_found]
     if "JAC_T" in resolve_map and _len_is(resolve_map["JAC_T"], n_slow):
@@ -1077,6 +1085,53 @@ def speed_from_method(
 # ---------------------------------------------------------------------------
 # L1Data construction from load_channels output
 # ---------------------------------------------------------------------------
+
+
+def _repair_short_gaps(
+    data: ChannelsDict | dict[str, Any], masks: Mapping[str, np.ndarray]
+) -> None:
+    """Linear-interpolate the short RDL gaps in every channel we consume.
+
+    Short runs are repaired at the load boundary rather than in ``PFile`` (the
+    reader's contract is report-never-modify) and rather than per consumer, so
+    that EVERY downstream user of this dict -- shear, vibration, thermistors,
+    pressure, reference T/C and the speed methods -- sees the same repaired
+    series. Long runs are left in place: those windows get rejected instead,
+    and inventing data there would hide the rejection.
+
+    Mutates *data* in place with repaired copies; the arrays it replaces are
+    views onto ``PFile.channels`` and are never written through.
+    """
+    from odas_tpw.rsi.bad_buffer import repair
+
+    # "therm" is added by chi_io._load_therm_channels, which extends the dict
+    # beyond ChannelsDict's declared keys — hence the cast rather than a direct
+    # subscript.
+    mutable = cast(dict[str, Any], data)
+    for key in ("shear", "accel", "therm"):
+        seq = mutable.get(key)
+        if seq:
+            mutable[key] = [
+                (name, repair(np.asarray(arr), masks[name]) if name in masks else arr)
+                for name, arr in seq
+            ]
+    # Named single channels. "P"/"T" are the resolved reference series, so the
+    # mask is looked up under the source channel's own name.
+    metadata = data.get("metadata") or {}
+    named = {
+        "P": "P",
+        "T": str(metadata.get("temperature_source", "")),
+        "C": str(metadata.get("conductivity_source", "")),
+        "JAC_T": "JAC_T",
+        "U_EM": "U_EM",
+        "Incl_X": "Incl_X",
+        "Incl_Y": "Incl_Y",
+    }
+    for key, source in named.items():
+        arr = mutable.get(key)
+        m = masks.get(source)
+        if arr is not None and m is not None:
+            mutable[key] = repair(np.asarray(arr), m)
 
 
 def _build_l1data_from_channels(

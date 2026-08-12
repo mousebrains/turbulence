@@ -5,12 +5,24 @@ From v6.1 the RDL substitutes ``BAD_BUFFER_SENTINEL`` for individual missing
 samples (TN-051 rev. 2026-01-12, section 3.2).  :class:`~odas_tpw.rsi.p_file.PFile`
 detects them and reports ``(start, length)`` spans into each channel's own
 extracted samples, deliberately without modifying the data.  This module is the
-consumer side of that contract: it turns those spans into per-probe boolean
-masks on the fast time base, so a dissipation estimate whose window overlaps a
-dropout on a channel it actually depends on can be rejected.
+consumer side of that contract.
 
-The whole point is *actually depends on*.  A dropout only invalidates an
-estimate if the contaminated channel feeds it:
+**Short gaps are interpolated, long gaps are dropped.**  Interpolating across a
+gap removes roughly its own fraction of the variance, so for a gap that is a
+small part of an FFT segment the bias is far inside a dissipation estimate's
+own uncertainty -- while a long contiguous gap has no information to
+interpolate across at any scale.  The boundary is :data:`MAX_INTERP_S`
+(0.25 s), which is where the RDL's fixed 64-sample buffer loss actually
+separates: 0.125 s on a fast channel (interpolate) against 1.0 s on a slow one
+(drop).  A window is dropped anyway once more than
+:data:`MAX_INTERP_FRACTION` of it has been interpolated, bounding the
+accumulated variance loss.
+
+Masks are graded, not boolean: :data:`CLEAN`, :data:`INTERPOLATED`,
+:data:`DROPPED`.
+
+The scoping is the other half.  A dropout only invalidates an estimate if the
+contaminated channel feeds it:
 
 ==================  ====================================================
 channel             what it invalidates
@@ -25,7 +37,7 @@ piezo               coherent-noise removal is on -- it mixes the
 ``U_EM``            ONLY when the speed actually used came from the EM
                     flowmeter.  Under a flight model U_EM is not an
                     input -- it is at most a cross-check -- so a U_EM
-                    dropout masks nothing.
+                    dropout neither masks nor repairs anything.
 ``Incl_X/Y``        ONLY when the speed came from the flight model
 reference T, C      both, via viscosity / kappa_T
 ==================  ====================================================
@@ -42,9 +54,37 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from itertools import pairwise
 from typing import Any
 
 import numpy as np
+
+from odas_tpw.scor160.io import (
+    BAD_CLEAN,
+    BAD_DROPPED,
+    BAD_INTERPOLATED,
+    BAD_MAX_INTERP_FRACTION,
+)
+
+# Mask grades. A graded int8 array rather than two boolean arrays: every
+# consumer (probe combination, window fractions, NetCDF spans) then carries one
+# field, and combining channels is an elementwise maximum -- dropped beats
+# interpolated beats clean. Defined in scor160.io beside the structures that
+# carry them, so the generic layers need not import this package.
+CLEAN = BAD_CLEAN
+INTERPOLATED = BAD_INTERPOLATED
+DROPPED = BAD_DROPPED
+
+# Gap duration at or below which a run is repaired by linear interpolation
+# rather than rejected [s]. Set from where the observed dropouts separate: the
+# RDL substitutes one fixed 64-sample buffer, which is 0.125 s on a 512 Hz fast
+# channel but 1.0 s on a 64 Hz slow one. 0.25 s is 12.5% of the default 2 s FFT
+# segment and 3.1% of the default 8 s dissipation window.
+MAX_INTERP_S = 0.25
+
+# Per-window ceiling on the interpolated fraction (defined in scor160.io, which
+# the L4 stages can import without depending on this package).
+MAX_INTERP_FRACTION = BAD_MAX_INTERP_FRACTION
 
 # Which channels each speed method actually reads.  Sourced from
 # speed.compute_speed_for_pfile, not from the method's name:
@@ -85,8 +125,18 @@ def sample_masks(
     report: Mapping[str, Any],
     n_fast: int,
     n_slow: int,
+    *,
+    fs_fast: float,
+    fs_slow: float,
+    max_interp_s: float = MAX_INTERP_S,
 ) -> dict[str, np.ndarray]:
-    """Per-channel boolean masks of RDL-substituted samples.
+    """Per-channel graded masks of RDL-substituted samples.
+
+    Values are :data:`CLEAN` / :data:`INTERPOLATED` / :data:`DROPPED`, graded
+    per RUN by its duration: ``length / rate`` at or below *max_interp_s* is
+    repairable, longer is not.  Duration, not sample count -- the RDL loses a
+    fixed 64-sample buffer, which is 0.125 s of a fast channel but 1.0 s of a
+    slow one, and only one of those is short enough to interpolate through.
 
     *report* is :attr:`PFile.bad_buffer_report`.  Each entry declares the
     ``rate`` its spans index (``"fast"`` or ``"slow"``), which is why the
@@ -96,44 +146,78 @@ def sample_masks(
     ``is_fast`` follows).  Neither the stored length nor ``is_fast`` still
     reports the axis the scan ran on.
 
-    Only confirmed runs are masked -- the isolated single hits are consistent
+    Only confirmed runs are graded -- the isolated single hits are consistent
     with ordinary data riding the negative rail, and masking them would
     reject windows on most real files (see ``p_file.BAD_BUFFER_MIN_RUN``).
     """
     out: dict[str, np.ndarray] = {}
     for name, found in (report.get("confirmed") or {}).items():
-        n = n_fast if str(found.get("rate", "slow")) == "fast" else n_slow
-        if n <= 0:
+        is_fast = str(found.get("rate", "slow")) == "fast"
+        n = n_fast if is_fast else n_slow
+        rate = float(fs_fast if is_fast else fs_slow)
+        if n <= 0 or not np.isfinite(rate) or rate <= 0:
             continue
-        mask = np.zeros(n, dtype=bool)
+        mask = np.zeros(n, dtype=np.int8)
         for start, length in found.get("spans") or []:
             if start >= n:
                 continue
-            mask[start : min(start + length, n)] = True
+            stop = min(start + length, n)
+            grade = INTERPOLATED if (stop - start) / rate <= max_interp_s else DROPPED
+            mask[start:stop] = grade
         if mask.any():
             out[name] = mask
     return out
 
 
+def repair(values: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Linear-interpolate the :data:`INTERPOLATED` samples of *values*.
+
+    Returns a repaired copy; *values* is never modified, since the arrays come
+    straight off ``PFile.channels`` and are shared with every other consumer.
+    Samples marked :data:`DROPPED` are left alone -- those windows are rejected
+    outright, and inventing data there would only hide the rejection.
+
+    Endpoint runs have no bracketing sample on one side, so ``np.interp``
+    holds the nearest good value flat rather than extrapolating.
+    """
+    if mask.size != values.size:
+        return values
+    fix = mask == INTERPOLATED
+    if not fix.any():
+        return values
+    good = ~fix & (mask != DROPPED)
+    if not good.any():
+        return values
+    out = np.array(values, dtype=np.float64, copy=True)
+    idx = np.arange(values.size)
+    out[fix] = np.interp(idx[fix], idx[good], out[good])
+    return out
+
+
 def dilate(mask: np.ndarray, before: int = 0, after: int = 0) -> np.ndarray:
-    """Widen each run of True by *before* samples left and *after* right.
+    """Widen each run of :data:`DROPPED` by *before* left and *after* right.
+
+    Only the dropped grade widens: an interpolated sample has been replaced by
+    a plausible value before anything downstream sees it, so it no longer
+    contaminates the filters that would otherwise smear it.
 
     Run-based rather than convolution-based: the windows here are ~10^3
-    samples wide over ~10^6-sample channels, and a moving-window OR would be
-    O(N*w) for a handful of runs.
+    samples wide over ~10^6-sample channels, and a moving-window maximum would
+    be O(N*w) for a handful of runs.
     """
-    if (before <= 0 and after <= 0) or not mask.any():
+    hit = mask == DROPPED
+    if (before <= 0 and after <= 0) or not hit.any():
         return mask
     out = mask.copy()
-    d = np.diff(mask.astype(np.int8))
+    d = np.diff(hit.astype(np.int8))
     starts = np.flatnonzero(d == 1) + 1
     ends = np.flatnonzero(d == -1) + 1
-    if mask[0]:
+    if hit[0]:
         starts = np.concatenate(([0], starts))
-    if mask[-1]:
-        ends = np.concatenate((ends, [mask.size]))
-    for s, e in zip(starts, ends):
-        out[max(0, s - before) : min(mask.size, e + after)] = True
+    if hit[-1]:
+        ends = np.concatenate((ends, [hit.size]))
+    for st, en in zip(starts, ends):
+        out[max(0, st - before) : min(hit.size, en + after)] = DROPPED
     return out
 
 
@@ -142,22 +226,20 @@ def expand_to_fast(
     t_slow: np.ndarray,
     t_fast: np.ndarray,
 ) -> np.ndarray:
-    """Project a slow-rate mask onto the fast time base.
+    """Project a slow-rate graded mask onto the fast time base.
 
     Slow channels reach the fast grid through ``np.interp``, so a bad slow
     sample contaminates every fast sample whose two-point stencil touches it
     -- the interval from the previous slow sample to the next.
     """
-    if mask_slow.size == 0 or t_slow.size == 0:
-        return np.zeros(len(t_fast), dtype=bool)
-    if mask_slow.size != t_slow.size:
+    if mask_slow.size == 0 or t_slow.size == 0 or mask_slow.size != t_slow.size:
         # Length disagreement means the mask does not belong to this time
         # base; refusing to guess beats masking the wrong samples.
-        return np.zeros(len(t_fast), dtype=bool)
+        return np.zeros(len(t_fast), dtype=np.int8)
     idx = np.searchsorted(t_slow, t_fast, side="right") - 1
     lo = np.clip(idx, 0, mask_slow.size - 1)
     hi = np.clip(idx + 1, 0, mask_slow.size - 1)
-    return np.asarray(mask_slow[lo] | mask_slow[hi], dtype=bool)
+    return np.asarray(np.maximum(mask_slow[lo], mask_slow[hi]), dtype=np.int8)
 
 
 def _to_fast(
@@ -176,7 +258,7 @@ def _to_fast(
     elif mask.size == len(t_slow):
         fast = expand_to_fast(mask, t_slow, t_fast)
     else:
-        return np.zeros(n_fast, dtype=bool)
+        return np.zeros(n_fast, dtype=np.int8)
     m = _PRE_EMPHASIS.match(name)
     if m is not None:
         gain = float((diff_gains or {}).get(name, 0.94))
@@ -222,11 +304,11 @@ def probe_masks(
     Parameters
     ----------
     masks
-        Per-channel masks from :func:`sample_masks`.
+        Per-channel graded masks from :func:`sample_masks`.
     probe_names
         The per-probe channels, in output order: shear channels for epsilon,
-        thermistor gradient channels for chi.  A dropout here masks only that
-        probe.
+        thermistor gradient channels for chi.  A dropout here affects only
+        that probe.
     shared_names
         Channels every probe depends on (pressure, reference temperature,
         conductivity, and the vibration stack when Goodman is on).
@@ -241,17 +323,18 @@ def probe_masks(
     Returns
     -------
     (mask, provenance)
-        ``mask`` is ``(len(probe_names), len(t_fast))`` boolean; ``provenance``
-        maps each contributing channel to the role that pulled it in, for the
-        product attributes.
+        ``mask`` is ``(len(probe_names), len(t_fast))`` int8 grades (CLEAN /
+        INTERPOLATED / DROPPED, combined across channels by maximum);
+        ``provenance`` maps each contributing channel to the role that pulled
+        it in, for the product attributes.
     """
     n_fast = len(t_fast)
-    out = np.zeros((len(probe_names), n_fast), dtype=bool)
+    out = np.zeros((len(probe_names), n_fast), dtype=np.int8)
     provenance: dict[str, str] = {}
     if not masks:
         return out, provenance
 
-    common = np.zeros(n_fast, dtype=bool)
+    common = np.zeros(n_fast, dtype=np.int8)
     for name in shared_names:
         m = masks.get(name)
         if m is None:
@@ -260,7 +343,7 @@ def probe_masks(
             name, m, t_fast=t_fast, t_slow=t_slow, fs_fast=fs_fast, diff_gains=diff_gains
         )
         if fast.any():
-            common |= fast
+            common = np.maximum(common, fast)
             provenance[name] = "shared"
 
     pad = round(SPEED_DILATE_TAU * speed_tau * fs_fast)
@@ -273,7 +356,7 @@ def probe_masks(
         )
         fast = dilate(fast, before=pad, after=pad)
         if fast.any():
-            common |= fast
+            common = np.maximum(common, fast)
             provenance[name] = "speed"
 
     for i, name in enumerate(probe_names):
@@ -284,7 +367,7 @@ def probe_masks(
                 name, m, t_fast=t_fast, t_slow=t_slow, fs_fast=fs_fast, diff_gains=diff_gains
             )
             if fast.any():
-                probe = common | fast
+                probe = np.maximum(common, fast)
                 provenance[name] = "probe"
         # A pre-emphasized probe channel carries its base channel's dropouts
         # too (deconvolution couples them).
@@ -295,47 +378,55 @@ def probe_masks(
                 name, base, t_fast=t_fast, t_slow=t_slow, fs_fast=fs_fast, diff_gains=diff_gains
             )
             if fast.any():
-                probe = probe | fast
+                probe = np.maximum(probe, fast)
                 provenance[m2.group("base")] = "probe"  # type: ignore[union-attr]
         out[i] = probe
     return out, provenance
 
 
 def encode_spans(mask: np.ndarray) -> str:
-    """Serialize a mask as ``"start:length,start:length"`` for a NetCDF attr.
+    """Serialize a graded mask as ``"start:length:grade,..."`` for a NetCDF attr.
 
     Per-profile NetCDFs are an intermediate in the ``prof -> eps/chi`` and
     perturb routes; without this the dropouts are known only to whoever read
-    the ``.p`` file, and the masking would silently stop at the file boundary.
+    the ``.p`` file, and the handling would silently stop at the file boundary.
     Spans rather than a companion variable: there are a handful per file, and
     an attribute needs no new dimension.
+
+    The grade travels with the span because it cannot be recovered downstream:
+    it depends on the run's duration on its ORIGINAL axis, and a profile slice
+    can also cut a run short.
     """
     if mask.size == 0 or not mask.any():
         return ""
-    d = np.diff(mask.astype(np.int8))
-    starts = np.flatnonzero(d == 1) + 1
-    ends = np.flatnonzero(d == -1) + 1
-    if mask[0]:
-        starts = np.concatenate(([0], starts))
-    if mask[-1]:
-        ends = np.concatenate((ends, [mask.size]))
-    return ",".join(f"{int(s)}:{int(e - s)}" for s, e in zip(starts, ends))
+    graded = mask.astype(np.int8)
+    # Split wherever the grade changes, so an interpolated run abutting a
+    # dropped one is not merged into one span with a single grade.
+    edges = np.flatnonzero(np.diff(graded)) + 1
+    bounds = np.concatenate(([0], edges, [graded.size]))
+    parts = []
+    for st, en in pairwise(bounds):
+        grade = int(graded[st])
+        if grade != CLEAN:
+            parts.append(f"{int(st)}:{int(en - st)}:{grade}")
+    return ",".join(parts)
 
 
 def decode_spans(text: str, n: int) -> np.ndarray:
     """Inverse of :func:`encode_spans`; malformed entries are skipped."""
-    mask = np.zeros(n, dtype=bool)
+    mask = np.zeros(n, dtype=np.int8)
     for part in str(text or "").split(","):
         part = part.strip()
         if not part:
             continue
+        fields = part.split(":")
         try:
-            start_s, length_s = part.split(":")
-            start, length = int(start_s), int(length_s)
-        except ValueError:
+            start, length = int(fields[0]), int(fields[1])
+            grade = int(fields[2]) if len(fields) > 2 else DROPPED
+        except (ValueError, IndexError):
             continue
-        if 0 <= start < n and length > 0:
-            mask[start : min(start + length, n)] = True
+        if 0 <= start < n and length > 0 and grade in (INTERPOLATED, DROPPED):
+            mask[start : min(start + length, n)] = grade
     return mask
 
 
@@ -343,16 +434,19 @@ def window_fractions(
     mask: np.ndarray,
     starts: np.ndarray,
     diss_length: int,
+    grade: int = DROPPED,
 ) -> np.ndarray:
-    """Fraction of each dissipation window that is masked, per probe.
+    """Fraction of each dissipation window carrying *grade*, per probe.
 
-    *mask* is ``(n_probe, n_time)``; returns ``(n_probe, len(starts))``.
+    *mask* is ``(n_probe, n_time)`` of grades; *grade* selects which one is
+    counted.  Returns ``(n_probe, len(starts))``.
     """
     starts = np.asarray(starts, dtype=np.int64)
     if mask.size == 0 or starts.size == 0:
         return np.zeros((mask.shape[0], starts.size))
+    hit = (mask == grade).astype(np.int64)
     csum = np.concatenate(
-        [np.zeros((mask.shape[0], 1), dtype=np.int64), np.cumsum(mask, axis=1)], axis=1
+        [np.zeros((mask.shape[0], 1), dtype=np.int64), np.cumsum(hit, axis=1)], axis=1
     )
     n = mask.shape[1]
     lo = np.clip(starts, 0, n)

@@ -490,7 +490,11 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
 
     bad_masks: dict[str, np.ndarray] = {}
     for name, m in sample_masks(
-        getattr(pf, "bad_buffer_report", {}), len(pf.t_fast), len(pf.t_slow)
+        getattr(pf, "bad_buffer_report", {}),
+        len(pf.t_fast),
+        len(pf.t_slow),
+        fs_fast=pf.fs_fast,
+        fs_slow=pf.fs_slow,
     ).items():
         arr = pf.channels.get(name)
         if arr is None:

@@ -7,13 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **RDL bad-buffer dropouts now mask ε and χ.** v6.1+ files substitute `-32753`
-  for individual missing samples (TN-051 rev. 2026-01-12 §3.2); `PFile` already
-  detected them, but the affected samples still entered the spectra as ordinary
-  physical values. Any ε/χ estimate whose window overlaps a dropout **on a
-  channel that estimate depends on** is now rejected, with the overlap published
-  as `bad_buffer_fraction` (probe × time) in both products and
-  `mask_bad_buffers=False` to opt out. The dependency is the point: a `sh1`
+- **RDL bad-buffer dropouts are now repaired or rejected in ε and χ.** v6.1+
+  files substitute `-32753` for individual missing samples (TN-051 rev.
+  2026-01-12 §3.2); `PFile` already detected them, but the affected samples
+  still entered the spectra as ordinary physical values. Runs are now graded by
+  **duration**: **≤ 0.25 s is linearly interpolated** in the channel data at the
+  load boundary, **longer is rejected** — every ε/χ estimate whose window
+  overlaps it is set NaN. Interpolating costs roughly the gap's own fraction of
+  the variance, far inside a single estimate's uncertainty, while a long
+  contiguous gap has no information to interpolate across; the threshold is
+  where the observed dropouts separate, since the RDL's fixed 64-sample buffer
+  loss is 0.125 s on a fast channel but 1.0 s on a slow one. A window is
+  rejected anyway once more than 5% of it has been interpolated. Both are
+  published per probe × time as `bad_buffer_fraction` and
+  `interpolated_fraction`, with `mask_bad_buffers=False` to opt out. The
+  dependency scoping is the other half: a `sh1`
   dropout rejects only probe 1; an accelerometer dropout rejects every probe but
   only under Goodman; and a **`U_EM` dropout rejects nothing when the speed came
   from the flight model**, since `U_EM` is not a flight-model input (pressure
