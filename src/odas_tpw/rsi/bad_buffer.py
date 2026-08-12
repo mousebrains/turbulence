@@ -7,16 +7,23 @@ detects them and reports ``(start, length)`` spans into each channel's own
 extracted samples, deliberately without modifying the data.  This module is the
 consumer side of that contract.
 
-**Short gaps are interpolated, long gaps are dropped.**  Interpolating across a
-gap removes roughly its own fraction of the variance, so for a gap that is a
-small part of an FFT segment the bias is far inside a dissipation estimate's
-own uncertainty -- while a long contiguous gap has no information to
-interpolate across at any scale.  The boundary is :data:`MAX_INTERP_S`
-(0.25 s), which is where the RDL's fixed 64-sample buffer loss actually
-separates: 0.125 s on a fast channel (interpolate) against 1.0 s on a slow one
-(drop).  A window is dropped anyway once more than
-:data:`MAX_INTERP_FRACTION` of it has been interpolated, bounding the
-accumulated variance loss.
+**A short gap in a CONTEXT channel is interpolated; everything else is
+dropped.**  Two tests, both of which must pass before a run is repaired:
+
+1. The channel is consumed as a slowly-varying scalar rather than as a
+   spectrum -- speed, pressure, reference T/C (:data:`INTERPOLATABLE_CHANNELS`).
+   Shear, vibration and the FP07 thermistors never qualify: their
+   high-frequency content is the measurement, so interpolating substitutes a
+   smooth ramp for real variance inside the band being fitted.  That is a
+   fabricated spectrum, not a repaired one.
+2. The gap is at most :data:`MAX_INTERP_S` (0.25 s) long.  Interpolating a
+   short gap in a context channel perturbs a window mean and little else,
+   while a long one has no information to interpolate across at any scale.
+   0.25 s is where the RDL's fixed 64-sample buffer loss separates: 0.125 s on
+   a fast channel against 1.0 s on a slow one.
+
+A window is dropped anyway once more than :data:`MAX_INTERP_FRACTION` of it has
+been interpolated, bounding the accumulated perturbation.
 
 Masks are graded, not boolean: :data:`CLEAN`, :data:`INTERPOLATED`,
 :data:`DROPPED`.
@@ -53,7 +60,7 @@ reads that rather than re-deriving it from a method name.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from itertools import pairwise
 from typing import Any
 
@@ -75,11 +82,30 @@ CLEAN = BAD_CLEAN
 INTERPOLATED = BAD_INTERPOLATED
 DROPPED = BAD_DROPPED
 
-# Gap duration at or below which a run is repaired by linear interpolation
-# rather than rejected [s]. Set from where the observed dropouts separate: the
-# RDL substitutes one fixed 64-sample buffer, which is 0.125 s on a 512 Hz fast
-# channel but 1.0 s on a 64 Hz slow one. 0.25 s is 12.5% of the default 2 s FFT
-# segment and 3.1% of the default 8 s dissipation window.
+# Channels a short gap may be REPAIRED in, rather than rejecting the window.
+#
+# The split is what the channel is consumed AS, not how clean it looks. These
+# are vehicle-state and seawater-property channels, read as slowly-varying
+# scalars: speed is smoothed and then averaged over a dissipation window,
+# pressure becomes a depth, T/C become a viscosity and a kappa_T. Interpolating
+# 0.1 s of one of those perturbs a window mean and nothing else.
+#
+# Everything absent from this set -- shear, the vibration stack, and the FP07
+# thermistors (T*_dT* and their T* bases) -- is consumed as a SPECTRUM, and its
+# high-frequency content IS the measurement. Interpolating there does not
+# recover the samples; it substitutes a smooth ramp for real variance inside
+# the exact band being fitted, which is a fabricated spectrum rather than a
+# repaired one. Those channels always reject the window instead.
+INTERPOLATABLE_CHANNELS = frozenset(
+    {"P", "P_dP", "U_EM", "Incl_X", "Incl_Y", "JAC_T", "JAC_C"}
+)
+
+# Gap duration at or below which a run in an INTERPOLATABLE_CHANNELS channel is
+# repaired by linear interpolation rather than rejected [s]. Set from where the
+# observed dropouts separate: the RDL substitutes one fixed 64-sample buffer,
+# which is 0.125 s on a 512 Hz fast channel but 1.0 s on a 64 Hz slow one.
+# 0.25 s is 12.5% of the default 2 s FFT segment and 3.1% of the default 8 s
+# dissipation window.
 MAX_INTERP_S = 0.25
 
 # Per-window ceiling on the interpolated fraction (defined in scor160.io, which
@@ -129,14 +155,19 @@ def sample_masks(
     fs_fast: float,
     fs_slow: float,
     max_interp_s: float = MAX_INTERP_S,
+    interpolatable: Collection[str] = INTERPOLATABLE_CHANNELS,
 ) -> dict[str, np.ndarray]:
     """Per-channel graded masks of RDL-substituted samples.
 
-    Values are :data:`CLEAN` / :data:`INTERPOLATED` / :data:`DROPPED`, graded
-    per RUN by its duration: ``length / rate`` at or below *max_interp_s* is
-    repairable, longer is not.  Duration, not sample count -- the RDL loses a
-    fixed 64-sample buffer, which is 0.125 s of a fast channel but 1.0 s of a
-    slow one, and only one of those is short enough to interpolate through.
+    Values are :data:`CLEAN` / :data:`INTERPOLATED` / :data:`DROPPED`.  A run
+    is repairable only if BOTH tests pass: its channel is in *interpolatable*
+    (consumed as a slowly-varying scalar, not as a spectrum -- see
+    :data:`INTERPOLATABLE_CHANNELS`), and its duration ``length / rate`` is at
+    or below *max_interp_s*.  Anything else is :data:`DROPPED`.
+
+    Duration, not sample count -- the RDL loses a fixed 64-sample buffer, which
+    is 0.125 s of a fast channel but 1.0 s of a slow one, and only one of those
+    is short enough to interpolate through.
 
     *report* is :attr:`PFile.bad_buffer_report`.  Each entry declares the
     ``rate`` its spans index (``"fast"`` or ``"slow"``), which is why the
@@ -157,13 +188,14 @@ def sample_masks(
         rate = float(fs_fast if is_fast else fs_slow)
         if n <= 0 or not np.isfinite(rate) or rate <= 0:
             continue
+        repairable = name in interpolatable
         mask = np.zeros(n, dtype=np.int8)
         for start, length in found.get("spans") or []:
             if start >= n:
                 continue
             stop = min(start + length, n)
-            grade = INTERPOLATED if (stop - start) / rate <= max_interp_s else DROPPED
-            mask[start:stop] = grade
+            short = (stop - start) / rate <= max_interp_s
+            mask[start:stop] = INTERPOLATED if (repairable and short) else DROPPED
         if mask.any():
             out[name] = mask
     return out

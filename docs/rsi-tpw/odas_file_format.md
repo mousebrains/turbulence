@@ -102,23 +102,31 @@ loss (1.0 s) is not, and rejects its windows.
 
 ### Repairing and masking ε and χ — RESOLVED
 
-`odas_tpw.rsi.bad_buffer` grades every confirmed run by **duration** and treats
-the two regimes differently:
+`odas_tpw.rsi.bad_buffer` repairs a run only when **both** tests pass; anything
+else rejects every ε/χ estimate whose window overlaps it.
 
-| gap | treatment |
-|---|---|
-| ≤ 0.25 s (`MAX_INTERP_S`) | **linearly interpolated** in the channel data, at the load boundary, before anything consumes it |
-| > 0.25 s | **rejected** — every ε/χ estimate whose window overlaps it is set NaN |
+**1. The channel must be consumed as a scalar, not as a spectrum.**
+`INTERPOLATABLE_CHANNELS` = `P`, `P_dP`, `U_EM`, `Incl_X`, `Incl_Y`, `JAC_T`,
+`JAC_C` — vehicle state and seawater properties, read as slowly-varying values:
+speed is smoothed and then averaged over a window, pressure becomes a depth,
+T/C become a viscosity and a κ_T. Bridging 0.1 s of one of those perturbs a
+window mean and nothing else.
 
-Interpolating across a gap removes roughly its own fraction of the variance, so
-for a gap that is a small part of an FFT segment the bias is far inside a single
-dissipation estimate's own uncertainty; a long contiguous gap has no information
-to interpolate across at any scale. The threshold is where the observed dropouts
-actually separate: the RDL always loses one fixed 64-sample buffer, which is
-**0.125 s on a fast channel** (sh, T_dT at 512 Hz) but **1.0 s on a slow one**
-(U_EM, P, DO_T at 64 Hz). A window is rejected anyway once more than
-`MAX_INTERP_FRACTION` (5%) of it has been interpolated, bounding the accumulated
-variance loss.
+**Shear, the vibration stack, and the FP07 thermistors are never interpolated**,
+however short the gap. Their high-frequency content *is* the measurement, so a
+linear bridge does not recover the samples — it substitutes a smooth ramp for
+real variance inside the exact band being fitted, which fabricates a spectrum
+rather than repairing one.
+
+**2. The gap must be at most 0.25 s** (`MAX_INTERP_S`). A long contiguous gap
+has no information to interpolate across at any scale. The threshold is where
+the observed dropouts separate: the RDL always loses one fixed 64-sample buffer,
+which is **0.125 s on a fast channel** but **1.0 s on a slow one** (U_EM, P at
+64 Hz) — so a full buffer loss on a slow context channel still rejects, while
+the 7-sample (0.11 s) `U_EM` runs the archive scan found are repaired.
+
+A window is rejected anyway once more than `MAX_INTERP_FRACTION` (5%) of it has
+been interpolated, bounding the accumulated perturbation.
 
 Both are published per probe × time — `bad_buffer_fraction` (rejected) and
 `interpolated_fraction` (repaired) — so the treatment is auditable, and
@@ -133,11 +141,21 @@ actually feeds:
 |---|---|
 | `sh{i}` | ε for probe *i* only |
 | `T{i}_dT{i}` | χ for thermistor *i* only (and its `T{i}` base — deconvolution couples them) |
-| accelerometer / piezo | ε for **every** probe, but only when Goodman is on: it mixes the vibration reference into every shear spectrum |
+| accelerometer / piezo | ε for **every** probe, but only when Goodman is on — see below |
 | `P` / `P_dP` | both, always (depth), plus speed on the pressure and flight paths |
 | `U_EM` | both, **only when the speed actually came from the EM flowmeter** |
 | `Incl_X` / `Incl_Y` | both, only when the speed came from the flight model |
 | reference `T`, `C` | both, via viscosity / κ_T |
+
+The vibration row is a *reference* loss rather than a measurement loss, and it
+behaves differently from both other cases. Goodman regresses each shear spectrum
+against the vibration spectra and subtracts the coherent part, so a corrupted
+accelerometer degrades the cleaning for **every** probe at once. It also fails
+in a known direction: a bridged or sentinel-corrupted vibration record is less
+coherent with the true shear, so *less* noise is removed and ε is biased
+**high** — which is why the vibration stack is excluded from interpolation along
+with the measurement channels. When Goodman is off the vibration channels are
+never read at all, and the same dropout costs nothing.
 
 The `U_EM` row is the point of the design. Under a **flight model** `U_EM` is
 not a speed input — `speed.py` reads it only to raise a disagreement warning —

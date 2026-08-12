@@ -10,15 +10,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **RDL bad-buffer dropouts are now repaired or rejected in ε and χ.** v6.1+
   files substitute `-32753` for individual missing samples (TN-051 rev.
   2026-01-12 §3.2); `PFile` already detected them, but the affected samples
-  still entered the spectra as ordinary physical values. Runs are now graded by
-  **duration**: **≤ 0.25 s is linearly interpolated** in the channel data at the
-  load boundary, **longer is rejected** — every ε/χ estimate whose window
-  overlaps it is set NaN. Interpolating costs roughly the gap's own fraction of
-  the variance, far inside a single estimate's uncertainty, while a long
-  contiguous gap has no information to interpolate across; the threshold is
-  where the observed dropouts separate, since the RDL's fixed 64-sample buffer
-  loss is 0.125 s on a fast channel but 1.0 s on a slow one. A window is
-  rejected anyway once more than 5% of it has been interpolated. Both are
+  still entered the spectra as ordinary physical values. A run is now repaired
+  only when **both** tests pass, and rejects its windows otherwise. First, the
+  channel must be consumed as a slowly-varying **scalar** — speed, pressure,
+  reference T/C. **Shear, vibration and the FP07 thermistors are never
+  interpolated**, however short the gap: their high-frequency content *is* the
+  measurement, so a linear bridge substitutes a smooth ramp for real variance
+  inside the band being fitted, fabricating a spectrum rather than repairing
+  one. Second, the gap must be **≤ 0.25 s**; a longer one has no information to
+  interpolate across at any scale, and the threshold is where the observed
+  dropouts separate, since the RDL's fixed 64-sample buffer loss is 0.125 s on a
+  fast channel but 1.0 s on a slow one. A window is rejected anyway once more
+  than 5% of it has been interpolated. Both are
   published per probe × time as `bad_buffer_fraction` and
   `interpolated_fraction`, with `mask_bad_buffers=False` to opt out. The
   dependency scoping is the other half: a `sh1`

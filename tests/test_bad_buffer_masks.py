@@ -1,9 +1,11 @@
 """RDL bad-buffer dropouts -> epsilon/chi repair and masks (TN-051 s3.2).
 
-Short gaps are interpolated, long gaps reject the window. The boundary is a
-DURATION (bad_buffer.MAX_INTERP_S), not a sample count, because the RDL always
-loses the same 64-sample buffer -- 0.125 s of a fast channel but 1.0 s of a
-slow one, and only the first is short enough to interpolate through.
+A gap is repaired only if BOTH hold: the channel is consumed as a slowly-varying
+scalar (speed, pressure, reference T/C) rather than as a spectrum, and the gap
+is at most bad_buffer.MAX_INTERP_S long. Shear, vibration and the FP07
+thermistors never qualify -- their high-frequency content IS the measurement.
+The duration test is on TIME, not sample count, because the RDL always loses the
+same 64-sample buffer: 0.125 s of a fast channel but 1.0 s of a slow one.
 
 The unit tests pin the grading, the repair and the dependency scoping; the
 integration tests inject the sentinel into real .p files and check what
@@ -140,37 +142,72 @@ def profile_cycle(clean_pf) -> int:
 
 
 class TestGrading:
-    """Duration decides, so the same sample count grades differently on the
-    fast and slow axes."""
+    """Two tests gate a repair: the channel's ROLE, then the gap's DURATION."""
 
-    def test_rdl_buffer_interpolates_on_fast_but_drops_on_slow(self):
+    def test_measurement_channels_are_never_interpolated(self):
+        """Shear, vibration and the FP07s are consumed as spectra -- their
+        high-frequency content is the measurement, so a smooth ramp across the
+        gap fabricates spectral content rather than repairing it."""
+        spans = [(100, 8)]  # 0.016 s: far below the duration threshold
         report = {
             "confirmed": {
-                "sh1": {"rate": "fast", "spans": [(1000, 64)]},  # 0.125 s @ 512 Hz
-                "U_EM": {"rate": "slow", "spans": [(100, 64)]},  # 1.0 s @ 64 Hz
+                name: {"rate": "fast", "spans": spans}
+                for name in ("sh1", "sh2", "T1_dT1", "T1", "Ax", "Ay")
             }
         }
         masks = bb.sample_masks(report, 8000, 1000, fs_fast=512.0, fs_slow=64.0)
-        assert set(np.unique(masks["sh1"][1000:1064])) == {bb.INTERPOLATED}
+        for name, mask in masks.items():
+            assert set(np.unique(mask[100:108])) == {bb.DROPPED}, (
+                f"{name} must never be interpolated"
+            )
+
+    def test_context_channels_are_interpolated_when_short(self):
+        """Speed, pressure and the CT pair are read as slowly-varying scalars."""
+        report = {
+            "confirmed": {
+                name: {"rate": "slow", "spans": [(10, 7)]}  # 0.11 s @ 64 Hz
+                for name in sorted(bb.INTERPOLATABLE_CHANNELS)
+            }
+        }
+        masks = bb.sample_masks(report, 8000, 1000, fs_fast=512.0, fs_slow=64.0)
+        assert set(masks) == set(bb.INTERPOLATABLE_CHANNELS)
+        for name, mask in masks.items():
+            assert set(np.unique(mask[10:17])) == {bb.INTERPOLATED}, name
+
+    def test_shear_is_not_in_the_interpolatable_set(self):
+        for name in ("sh1", "sh2", "T1", "T1_dT1", "T2_dT2", "Ax", "Ay", "Az"):
+            assert name not in bb.INTERPOLATABLE_CHANNELS
+
+    def test_a_long_gap_drops_even_in_a_context_channel(self):
+        """1.0 s of U_EM is one RDL buffer at 64 Hz -- too long to bridge."""
+        report = {"confirmed": {"U_EM": {"rate": "slow", "spans": [(100, 64)]}}}
+        masks = bb.sample_masks(report, 8000, 1000, fs_fast=512.0, fs_slow=64.0)
         assert set(np.unique(masks["U_EM"][100:164])) == {bb.DROPPED}
 
     def test_boundary_is_inclusive(self):
         report = {
             "confirmed": {
-                "a": {"rate": "fast", "spans": [(0, 128)]},  # exactly 0.25 s
-                "b": {"rate": "fast", "spans": [(200, 129)]},  # just over
+                "P": {"rate": "fast", "spans": [(0, 128)]},  # exactly 0.25 s
+                "U_EM": {"rate": "fast", "spans": [(200, 129)]},  # just over
             }
         }
         masks = bb.sample_masks(report, 8000, 1000, fs_fast=512.0, fs_slow=64.0)
-        assert masks["a"][0] == bb.INTERPOLATED
-        assert masks["b"][200] == bb.DROPPED
+        assert masks["P"][0] == bb.INTERPOLATED
+        assert masks["U_EM"][200] == bb.DROPPED
 
     def test_threshold_is_configurable(self):
-        report = {"confirmed": {"a": {"rate": "fast", "spans": [(0, 64)]}}}
+        report = {"confirmed": {"P": {"rate": "fast", "spans": [(0, 64)]}}}
         strict = bb.sample_masks(
             report, 8000, 1000, fs_fast=512.0, fs_slow=64.0, max_interp_s=0.01
         )
-        assert strict["a"][0] == bb.DROPPED
+        assert strict["P"][0] == bb.DROPPED
+
+    def test_interpolatable_set_is_configurable(self):
+        report = {"confirmed": {"sh1": {"rate": "fast", "spans": [(0, 8)]}}}
+        opened = bb.sample_masks(
+            report, 8000, 1000, fs_fast=512.0, fs_slow=64.0, interpolatable={"sh1"}
+        )
+        assert opened["sh1"][0] == bb.INTERPOLATED
 
     def test_uses_the_declared_rate_not_the_length(self):
         """Deconvolution moves a base channel between axes, so the array length
@@ -180,7 +217,7 @@ class TestGrading:
                 "slowly": {"rate": "slow", "spans": [(3, 4)]},
                 "fastly": {"rate": "fast", "spans": [(5, 2)]},
             }
-        }
+        }  # names outside INTERPOLATABLE_CHANNELS: grade is irrelevant here
         masks = bb.sample_masks(report, 800, 100, fs_fast=512.0, fs_slow=64.0)
         assert masks["slowly"].size == 100
         assert masks["fastly"].size == 800
@@ -446,51 +483,149 @@ SHORT_FAST = 64
 LONG_FAST = 256
 
 
-class TestEpsilonShortGap:
-    def test_short_gap_is_interpolated_and_the_estimate_kept(
+class TestShortGapByChannelRole:
+    """A short gap is repaired only in a context channel; in a measurement
+    channel it still rejects the window."""
+
+    def test_short_shear_gap_is_rejected_not_interpolated(
         self, src_bytes, clean_pf, tmp_path, profile_cycle
     ):
+        """0.125 s is short in time, but shear is consumed as a spectrum:
+        bridging it would substitute a smooth ramp for real variance inside the
+        band being fitted."""
         from odas_tpw.rsi.dissipation import _compute_epsilon
 
-        p = tmp_path / "short.p"
+        p = tmp_path / "short_sh1.p"
         p.write_bytes(_inject_fast_run(src_bytes, clean_pf, "sh1", profile_cycle, SHORT_FAST))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             results = _compute_epsilon(p)
 
-        hit = [ds for ds in results if float(ds["interpolated_fraction"].max()) > 0]
-        assert hit, "a 0.125 s gap should be recorded as interpolated"
+        hit = [ds for ds in results if float(ds["bad_buffer_fraction"].max()) > 0]
+        assert hit, "a short shear gap must still reject its windows"
         ds = hit[0]
-        i = [str(v) for v in ds["probe"].values].index("sh1")
-        touched = ds["interpolated_fraction"].values[i] > 0
-        assert float(ds["bad_buffer_fraction"].max()) == 0.0, "nothing should be dropped"
-        assert np.isfinite(ds["epsilon"].values[i][touched]).all(), (
-            "a repaired window must still yield epsilon"
+        assert float(ds["interpolated_fraction"].max()) == 0.0, (
+            "shear must never be interpolated"
         )
+        i = [str(v) for v in ds["probe"].values].index("sh1")
+        frac = ds["bad_buffer_fraction"].values
+        assert np.all(np.isnan(ds["epsilon"].values[i][frac[i] > 0]))
 
-    def test_repair_removes_the_sentinel_from_the_loaded_channel(
+    def test_short_thermistor_gap_is_rejected_not_interpolated(
         self, src_bytes, clean_pf, tmp_path, profile_cycle
     ):
-        """The sentinel converts to a physical value like any other count, so
-        the repair has to happen before anything consumes the channel."""
-        from odas_tpw.rsi.helpers import load_channels
+        from odas_tpw.rsi.chi_io import _compute_chi
 
-        p = tmp_path / "short_load.p"
-        p.write_bytes(_inject_fast_run(src_bytes, clean_pf, "sh1", profile_cycle, SHORT_FAST))
+        p = tmp_path / "short_T1.p"
+        p.write_bytes(
+            _inject_fast_run(src_bytes, clean_pf, "T1_dT1", profile_cycle, SHORT_FAST)
+        )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            raw = PFile(p)
+            results = _compute_chi(p)
+        hit = [ds for ds in results if float(ds["bad_buffer_fraction"].max()) > 0]
+        assert hit, "a short FP07 gap must still reject its windows"
+        assert float(hit[0]["interpolated_fraction"].max()) == 0.0
+
+    def test_short_speed_gap_is_interpolated_and_the_estimate_kept(self, tmp_path):
+        """The case this repair exists for: U_EM feeds a window-mean speed, so
+        bridging 0.11 s of it perturbs a scalar and nothing else."""
+        from odas_tpw.rsi.dissipation import _compute_epsilon
+
+        raw = MR_SRC.read_bytes()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pf = PFile(MR_SRC)
+        p = tmp_path / "short_u_em.p"
+        # 7 slow samples at 64 Hz = 0.11 s, the run length the archive scan
+        # actually found on glider U_EM channels.
+        p.write_bytes(_inject_slow_run(raw, pf, "U_EM", len(pf.t_slow) // 2, 7))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = _compute_epsilon(p, speed_method="em")
+
+        assert results
+        assert sum(int((ds["bad_buffer_fraction"].values > 0).sum()) for ds in results) == 0
+        touched = sum(
+            int((ds["interpolated_fraction"].values > 0).sum()) for ds in results
+        )
+        assert touched > 0, "a short U_EM gap should be repaired, not ignored"
+        for ds in results:
+            hit = ds["interpolated_fraction"].values > 0
+            assert np.isfinite(ds["epsilon"].values[hit]).all(), (
+                "a repaired window must still yield epsilon"
+            )
+
+    def test_repair_removes_the_sentinel_from_the_loaded_channel(self, tmp_path):
+        """The sentinel converts to 3.52 m/s through the aem1g_d calibration, so
+        the repair has to land before anything consumes the channel."""
+        from odas_tpw.rsi.helpers import load_channels
+
+        raw = MR_SRC.read_bytes()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pf = PFile(MR_SRC)
+        start = len(pf.t_slow) // 2
+        p = tmp_path / "u_em_load.p"
+        p.write_bytes(_inject_slow_run(raw, pf, "U_EM", start, 7))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            bad = PFile(p)
             data = load_channels(p)
 
-        span_start, span_len = raw.bad_buffer_report["confirmed"]["sh1"]["spans"][0]
-        loaded = dict(data["shear"])["sh1"]
-        gap = loaded[span_start : span_start + span_len]
-        neighbourhood = loaded[max(0, span_start - 200) : span_start + span_len + 200]
+        span_start, span_len = bad.bad_buffer_report["confirmed"]["U_EM"]["spans"][0]
+        gap = data["U_EM"][span_start : span_start + span_len]
+        clean = np.asarray(pf.channels["U_EM"])
+        lo, hi = np.nanmin(clean), np.nanmax(clean)
         assert np.isfinite(gap).all()
-        # The repaired values must sit inside the surrounding signal's range,
-        # not at the sentinel's converted value.
-        assert gap.min() >= neighbourhood.min()
-        assert gap.max() <= neighbourhood.max()
+        assert gap.min() >= lo and gap.max() <= hi, (
+            "repaired speed must sit inside the real channel's range"
+        )
+        # And the raw sentinel value is gone.
+        assert np.abs(gap - np.asarray(bad.channels["U_EM"])[span_start]).max() > 0
+
+
+class TestGoodmanCoupling:
+    """A vibration dropout is not a measurement loss, it is a REFERENCE loss:
+    Goodman regresses the shear spectra against the vibration spectra, so a
+    corrupted accelerometer degrades the cleaning for every probe -- and only
+    matters at all when Goodman is running."""
+
+    @staticmethod
+    def _accel_dropout(src_bytes, pf, tmp_path, cycle):
+        p = tmp_path / "accel.p"
+        p.write_bytes(_inject_fast_run(src_bytes, pf, "Ax", cycle, LONG_FAST))
+        return p
+
+    def test_accel_dropout_rejects_every_probe_under_goodman(
+        self, src_bytes, clean_pf, tmp_path, profile_cycle
+    ):
+        from odas_tpw.rsi.dissipation import _compute_epsilon
+
+        p = self._accel_dropout(src_bytes, clean_pf, tmp_path, profile_cycle)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = _compute_epsilon(p, goodman=True)
+        hit = [ds for ds in results if float(ds["bad_buffer_fraction"].max()) > 0]
+        assert hit
+        frac = hit[0]["bad_buffer_fraction"].values
+        # Every probe, not just one: the vibration reference is shared.
+        assert (frac.max(axis=1) > 0).all()
+        assert float(hit[0]["interpolated_fraction"].max()) == 0.0
+
+    def test_accel_dropout_is_irrelevant_without_goodman(
+        self, src_bytes, clean_pf, tmp_path, profile_cycle
+    ):
+        """With Goodman off the vibration channels are never read, so the same
+        dropout must cost nothing."""
+        from odas_tpw.rsi.dissipation import _compute_epsilon
+
+        p = self._accel_dropout(src_bytes, clean_pf, tmp_path, profile_cycle)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = _compute_epsilon(p, goodman=False)
+        assert results
+        assert sum(int((ds["bad_buffer_fraction"].values > 0).sum()) for ds in results) == 0
 
 
 class TestEpsilonLongGap:
