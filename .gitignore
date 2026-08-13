@@ -13,6 +13,9 @@ microstructure_sensors/*
 ARCTERX/*
 !ARCTERX/perturb.yaml
 
+# Local ARCTERX 2023 Wake workspace (inputs and generated products).
+ARCTERX-2023-Wake/
+
 # Rockland ODAS MATLAB reference (third-party)
 odas/
 
