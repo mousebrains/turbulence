@@ -16,6 +16,7 @@ One row per (probe, calibration). Columns:
 | `source` | `sheet` (parsed from a Rockland PDF) or `manual` (historical/other records) |
 | `sheet` | PDF filename in this directory (empty for `manual` rows) — uniquely identifies the sheet across users |
 | `recal_due` | Rockland's "Recommended re-calibration" date, when the sheet carries one |
+| `pressure_test_date` | the sheet's pressure-test date; applies to the sheet's own calibration only (empty for previous-calibration and `manual` rows) |
 | `notes` | provenance/caveats; `previous-calibration entry on this sheet` marks the sheet's own history row |
 
 Update workflow: drop new Rockland PDFs into this directory and run
@@ -28,11 +29,25 @@ Idempotent — existing rows (including hand-added `source=manual` history) are
 preserved; a sheet's own entry upgrades a previous-calibration attestation of
 the same point; conflicting sensitivities for the same probe+date are kept
 side by side and reported (exit 1). Add `manual` rows by hand with a
-provenance note in `notes`. A row must have exactly eight comma-separated
+provenance note in `notes`. A row must have exactly nine comma-separated
 fields, so quote any value containing a comma (`"a, b"`) — an unquoted one is
 rejected with the file and line number, leaving the registry untouched rather
-than truncating the note. The `.p`-config cross-check tool is
+than truncating the note. (Registries written before the
+`pressure_test_date` column existed are read transparently and upgraded on
+the next run.) The `.p`-config cross-check tool is
 `rsi-tpw sensors --cal-dir microstructure_sensors --shear`.
+
+### Pressure-test timing
+
+Rockland guidance (via Rockland support, Jul 2026): the pressure test should
+occur **after** the calibration, or **~10 days or more before** it. A
+calibration performed within ~10 days *after* the pressure test is suspect —
+the probe may not have re-settled from the squeeze. In this collection, all
+nine probes with both a too-soon calibration and a later compliant
+recalibration off the same pressure test show the too-soon one reading high
+(+0.4% to +7.0%, median +2.0%). Compare `cal_date` against
+`pressure_test_date` when judging a sheet; where a probe has a later,
+compliant recalibration, prefer it.
 
 ### Sheet layouts
 
