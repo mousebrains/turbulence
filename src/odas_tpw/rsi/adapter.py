@@ -233,12 +233,14 @@ def pfile_to_l1data(
 
     # Fast thermistor temperature (for chi)
     temp_fast_list: list[np.ndarray] = []
+    temp_fast_names: list[str] = []
     diff_gains: list[float] = []
 
     # Prefer deconvolved pre-emphasized channels (T1_dT1, T2_dT2)
     for name in sorted(pf._fast_channels):
         if DT_PATTERN.match(name):
             temp_fast_list.append(pf.channels[name][s_fast:e_fast])
+            temp_fast_names.append(name)
             ch_cfg: dict = next(
                 (ch for ch in pf.config["channels"] if ch.get("name") == name),
                 {},
@@ -250,12 +252,59 @@ def pfile_to_l1data(
         for name in sorted(pf._fast_channels):
             if T_PATTERN.match(name):
                 temp_fast_list.append(pf.channels[name][s_fast:e_fast])
+                temp_fast_names.append(name)
                 diff_gains.append(0.94)
 
     if temp_fast_list:
         temp_fast = np.stack(temp_fast_list, axis=0)
     else:
         temp_fast = np.zeros((0, 0), dtype=np.float64)
+
+    # RDL bad-buffer dropouts (TN-051 s3.2) -> per-probe masks. Built here so
+    # the run_pipeline route (PFile -> L1Data directly) gets the same rejection
+    # as the load_channels route. speed_method is what this function was told
+    # to use, so the speed-input dependency is exact: U_EM only matters under
+    # "em", the inclinometers only under "flight".
+    from odas_tpw.rsi.bad_buffer import SPEED_INPUT_CHANNELS, probe_masks, sample_masks
+
+    bad_sh = np.zeros((0, 0), dtype=bool)
+    bad_tf = np.zeros((0, 0), dtype=bool)
+    # getattr: this function accepts duck-typed PFile shims (tests, perturb)
+    # that predate the report and carry no such attribute.
+    bad_masks = sample_masks(
+        getattr(pf, "bad_buffer_report", {}),
+        len(pf.t_fast),
+        n_slow_full,
+        fs_fast=pf.fs_fast,
+        fs_slow=pf.fs_slow,
+    )
+    if bad_masks:
+        shared = ["P", "P_dP", *vib_names]
+        if isinstance(temperature, str) and temperature != "auto":
+            shared.append(temperature)
+        if c_chan is not None:
+            shared.append(c_chan)
+        speed_names: tuple[str, ...] = ()
+        if speed is None:
+            speed_names = SPEED_INPUT_CHANNELS.get(speed_method, ("P",))
+        common = {
+            "masks": bad_masks,
+            "shared_names": shared,
+            "t_fast": pf.t_fast,
+            "t_slow": pf.t_slow,
+            "fs_fast": pf.fs_fast,
+            "speed_names": speed_names,
+            "speed_tau": speed_tau,
+            "diff_gains": {
+                str(ch.get("name")): float(ch.get("diff_gain", 0.94))
+                for ch in (pf.config.get("channels") or [])
+                if ch.get("name") and ch.get("diff_gain") is not None
+            },
+        }
+        if shear_names:
+            bad_sh = probe_masks(probe_names=shear_names, **common)[0][:, s_fast:e_fast]
+        if temp_fast_names:
+            bad_tf = probe_masks(probe_names=temp_fast_names, **common)[0][:, s_fast:e_fast]
 
     # Time reference
     ref_year = pf.start_time.year
@@ -279,6 +328,8 @@ def pfile_to_l1data(
         temp_fast=temp_fast,
         diff_gains=diff_gains,
         salinity=salinity_fast,
+        bad_mask_sh=bad_sh,
+        bad_mask_temp=bad_tf,
     )
 
 

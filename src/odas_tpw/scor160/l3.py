@@ -15,7 +15,14 @@ from __future__ import annotations
 import numpy as np
 
 from odas_tpw.scor160.goodman import clean_shear_spec_batch
-from odas_tpw.scor160.io import L1Data, L2Data, L3Data, L3Params
+from odas_tpw.scor160.io import (
+    BAD_DROPPED,
+    BAD_INTERPOLATED,
+    L1Data,
+    L2Data,
+    L3Data,
+    L3Params,
+)
 from odas_tpw.scor160.spectral import csd_matrix_batch
 
 # Macoun & Lueck (2004) spatial response correction constants
@@ -102,6 +109,8 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     all_kcyc = []
     all_despike_frac = []
     all_despike_passes = []
+    all_bad_frac = []
+    all_interp_frac = []
 
     sections = np.unique(l2.section_number)
     sections = sections[sections > 0]
@@ -203,6 +212,18 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
             else:
                 all_despike_passes.append(np.zeros(n_shear, dtype=np.int64))
 
+            # Fractions of this window hit by RDL bad-buffer dropouts on a
+            # channel this probe depends on (TN-051 s3.2), split by whether the
+            # gap was short enough to interpolate. Indexed on l1 because the
+            # mask shares l1's time base, exactly as l1.pres above.
+            if l1.bad_mask_sh.shape == (n_shear, l1.n_time):
+                seg = l1.bad_mask_sh[:, s:e]
+                all_bad_frac.append((seg == BAD_DROPPED).mean(axis=1))
+                all_interp_frac.append((seg == BAD_INTERPOLATED).mean(axis=1))
+            else:
+                all_bad_frac.append(np.zeros(n_shear))
+                all_interp_frac.append(np.zeros(n_shear))
+
             # Convert frequency spectrum → wavenumber spectrum
             # k = f / W [cpm], Ψ(k) = Ψ(f) * W [variance/cpm]
             W = all_speed[-1]
@@ -265,6 +286,11 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
         else np.zeros((0, 0), dtype=np.int64)
     )
 
+    bad_frac_out = np.column_stack(all_bad_frac) if all_bad_frac else np.zeros((0, 0))
+    interp_frac_out = (
+        np.column_stack(all_interp_frac) if all_interp_frac else np.zeros((0, 0))
+    )
+
     return L3Data(
         time=time_out,
         pres=pres_out,
@@ -276,4 +302,6 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
         sh_spec_clean=sh_spec_clean_out,
         despike_fraction=despike_frac_out,
         despike_passes=despike_passes_out,
+        bad_fraction=bad_frac_out,
+        interp_fraction=interp_frac_out,
     )

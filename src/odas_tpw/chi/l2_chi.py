@@ -29,6 +29,11 @@ class L2ChiData:
     section_number: np.ndarray  # (N_TIME,), 0 = excluded
     diff_gains: list[float]
     fs_fast: float
+    # (N_TEMP, N_TIME) int8 grades (BAD_CLEAN / BAD_INTERPOLATED /
+    # BAD_DROPPED) for RDL bad-buffer dropouts on channels each thermistor
+    # depends on, carried through from L1Data.bad_mask_temp. Empty when no mask
+    # was supplied. See odas_tpw.rsi.bad_buffer.
+    bad_mask: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=np.int8))
 
     @property
     def n_temp(self) -> int:
@@ -150,4 +155,9 @@ def process_l2_chi(
         section_number=l2.section_number.copy(),
         diff_gains=diff_gains,
         fs_fast=fs,
+        bad_mask=(
+            l1.bad_mask_temp.copy()
+            if l1.bad_mask_temp.shape == (temp_fast.shape[0], l1.n_time)
+            else np.zeros((0, 0), dtype=np.int8)
+        ),
     )

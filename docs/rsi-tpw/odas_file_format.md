@@ -59,9 +59,25 @@ mid-range data for it. The real dropouts enter from values as far away as
 +32741 and hold exactly `-32753` for a full 63–64-sample buffer. The threshold
 is 4, sitting in the empty gap with 16× margin either side.
 
-Affected samples are **reported, never modified** — the right repair (mask,
-interpolate, drop the profile) depends on the channel and the analysis. The
-report's `spans` give `(start, length)` into the channel's own samples.
+Affected samples are **reported, never modified by the reader** — `PFile`'s
+contract is detection only, and the repair happens at the load boundary
+instead (see [below](#repairing-and-masking-ε-and-χ--resolved)), so the raw
+reader and the archival per-profile NetCDF both keep the file as it was. The
+report's `spans` give `(start, length)` into the channel's own **extracted**
+samples, and each entry declares the `rate` (`fast`/`slow`) those indices are
+on. The rate has to be recorded at detection time: the scan runs before
+deconvolution, which demotes a base channel sampled as a full fast column to a
+slow-length view and reclassifies it (`_apply_deconvolution`, "both branches
+leave the base holding a slow-length view, no matter how it was sampled").
+Afterwards neither the stored length nor `is_fast()` reports the axis the scan
+measured runs on.
+
+Extraction and detection do not cover the same cells, and `spans` follow
+extraction: `_read` keeps a fast channel's whole column but only the **first
+occurrence** of a slow address, and joins the two words of a 32-bit (2-id)
+channel. So `spans` is the union over the channel's first-occurrence series,
+and it can be empty for a confirmed channel whose only long run sits in a
+decimated occurrence — dirty in the file, clean in the data we use.
 
 ### Which channels are affected, and does it matter
 
@@ -80,11 +96,95 @@ is a 6.6× outlier which nothing downstream currently rejects: `_slow_to_fast`
 low-pass smooths it rather than removing it, so it contaminates a window wider
 than the dropout itself, and ε carries roughly a U⁻⁴ sensitivity to the result.
 At 64 Hz slow rate, a 7-sample run is ~0.11 s — a small fraction of a
-dissipation window, but a large excursion within it.
+dissipation window, but a large excursion within it. Under the treatment below
+that run is short enough to interpolate away; a full 64-sample `U_EM` buffer
+loss (1.0 s) is not, and rejects its windows.
 
-**Open action:** decide whether the ε/χ path should mask confirmed dropouts
-before deriving speed. The detector deliberately does not modify samples, and
-`PFile.bad_buffer_report[...]['spans']` gives the indices needed to do it.
+### Repairing and masking ε and χ — RESOLVED
+
+`odas_tpw.rsi.bad_buffer` repairs a run only when **both** tests pass; anything
+else rejects every ε/χ estimate whose window overlaps it.
+
+**1. The channel must be consumed as a scalar, not as a spectrum.**
+`INTERPOLATABLE_CHANNELS` = `P`, `P_dP`, `U_EM`, `Incl_X`, `Incl_Y`, `JAC_T`,
+`JAC_C` — vehicle state and seawater properties, read as slowly-varying values:
+speed is smoothed and then averaged over a window, pressure becomes a depth,
+T/C become a viscosity and a κ_T. Bridging 0.1 s of one of those perturbs a
+window mean and nothing else.
+
+**Shear, the vibration stack, and the FP07 thermistors are never interpolated**,
+however short the gap. Their high-frequency content *is* the measurement, so a
+linear bridge does not recover the samples — it substitutes a smooth ramp for
+real variance inside the exact band being fitted, which fabricates a spectrum
+rather than repairing one.
+
+**2. The gap must be at most 0.25 s** (`MAX_INTERP_S`). A long contiguous gap
+has no information to interpolate across at any scale. The threshold is where
+the observed dropouts separate: the RDL always loses one fixed 64-sample buffer,
+which is **0.125 s on a fast channel** but **1.0 s on a slow one** (U_EM, P at
+64 Hz) — so a full buffer loss on a slow context channel still rejects, while
+the 7-sample (0.11 s) `U_EM` runs the archive scan found are repaired.
+
+A window is rejected anyway once more than `MAX_INTERP_FRACTION` (5%) of it has
+been interpolated, bounding the accumulated perturbation.
+
+Both are published per probe × time — `bad_buffer_fraction` (rejected) and
+`interpolated_fraction` (repaired) — so the treatment is auditable, and
+`mask_bad_buffers=False` keeps the estimates for anyone who wants to filter
+differently. On the χ side the rejection happens inside L4 *before* `chi_final`
+is formed, so a contaminated probe cannot be averaged back into the reported χ.
+
+The handling is **dependency-scoped** — a dropout only affects what that channel
+actually feeds:
+
+| channel | affects |
+|---|---|
+| `sh{i}` | ε for probe *i* only |
+| `T{i}_dT{i}` | χ for thermistor *i* only (and its `T{i}` base — deconvolution couples them) |
+| accelerometer / piezo | ε for **every** probe, but only when Goodman is on — see below |
+| `P` / `P_dP` | both, always (depth), plus speed on the pressure and flight paths |
+| `U_EM` | both, **only when the speed actually came from the EM flowmeter** |
+| `Incl_X` / `Incl_Y` | both, only when the speed came from the flight model |
+| reference `T`, `C` | both, via viscosity / κ_T |
+
+The vibration row is a *reference* loss rather than a measurement loss, and it
+behaves differently from both other cases. Goodman regresses each shear spectrum
+against the vibration spectra and subtracts the coherent part, so a corrupted
+accelerometer degrades the cleaning for **every** probe at once. It also fails
+in a known direction: a bridged or sentinel-corrupted vibration record is less
+coherent with the true shear, so *less* noise is removed and ε is biased
+**high** — which is why the vibration stack is excluded from interpolation along
+with the measurement channels. When Goodman is off the vibration channels are
+never read at all, and the same dropout costs nothing.
+
+The `U_EM` row is the point of the design. Under a **flight model** `U_EM` is
+not a speed input — `speed.py` reads it only to raise a disagreement warning —
+so a `U_EM` dropout is neither repaired nor rejected there, even though it is
+exactly the channel the archive scan found dropouts on. Conversely the flight
+model *does* read `W_slow`, hence pressure, so a `P` dropout still counts. Getting this from the
+method name alone is not safe (a precomputed `speed_fast` reads no channel of
+this file at all), so `prepare_profiles` — the branch that knows which speed
+path won — stamps `metadata["speed_channels"]` with what it consumed, and the
+mask builder reads that.
+
+Smears are applied to the **rejected** grade only, because an interpolated
+sample carries a plausible value before any filter sees it: slow-channel masks
+expand to every fast sample whose `np.interp` stencil touches the bad sample;
+speed inputs widen by the Butterworth smoothing constant; and a pre-emphasized
+channel widens forward by 3 × `diff_gain`, the e-folding reach of the
+deconvolution filter.
+
+Masks ride through the per-profile NetCDF as a `bad_buffer_spans` attribute on
+each affected variable — `start:length:grade`, profile-local indices on that
+variable's own axis — so the `prof → eps/chi` and perturb routes behave like the
+direct `.p` route rather than silently losing the dropouts at the file boundary.
+The grade travels with the span because it cannot be recomputed downstream: it
+depends on the run's duration on its original axis, and a profile slice can cut
+a run short.
+
+Verified as a null test on the SN479 set: because every dropout there is on
+`DO_T`, which feeds nothing, ε, χ, `fom` and `epsilon_T` come out **bit-identical**
+to the pre-masking code across 29 profiles.
 
 ## Sampling rate and the §2.4.3 count-by-one error — RESOLVED
 

@@ -9,6 +9,23 @@ from typing import NamedTuple
 import netCDF4
 import numpy as np
 
+# Grades for the RDL bad-buffer masks carried on L1Data/L2ChiData (TN-051
+# s3.2). Defined here, with the structures that hold them, so the generic
+# scor160/chi layers can read them without importing the instrument-specific
+# odas_tpw.rsi package (which depends on this one, not the other way round).
+# odas_tpw.rsi.bad_buffer -- which assigns them -- re-exports these names.
+BAD_CLEAN = 0
+BAD_INTERPOLATED = 1
+BAD_DROPPED = 2
+
+# Per-window ceiling on the interpolated fraction, above which the window is
+# rejected even though every individual gap was short enough to repair.
+# Interpolating a fraction f of a stationary record removes ~f of its variance,
+# biasing epsilon low by ~f; 5% sits well inside the ~10-20% uncertainty of a
+# single dissipation estimate. Lives here rather than in odas_tpw.rsi.bad_buffer
+# so the L4 stages can apply it without importing that package.
+BAD_MAX_INTERP_FRACTION = 0.05
+
 
 @dataclass
 class L1Data:
@@ -47,6 +64,17 @@ class L1Data:
     # conductivity at the .p level (e.g. MicroRiders), in which case the
     # stratification falls back to a supplied/assumed salinity.
     salinity: np.ndarray = field(default_factory=lambda: np.array([]))
+
+    # Optional per-probe grades for RDL bad-buffer dropouts (TN-051 s3.2),
+    # (N_SHEAR, N_TIME) and (N_TEMP, N_TIME) int8: CLEAN / INTERPOLATED /
+    # DROPPED, over the channels THAT PROBE depends on. Assembled by
+    # odas_tpw.rsi.bad_buffer, which resolves both the dependency (a U_EM
+    # dropout only counts when the speed actually came from U_EM) and the
+    # repair (short gaps are already interpolated in the data by the time this
+    # arrives; long ones are not, and their windows get rejected). Empty for
+    # clean files, pre-6.1 files, and every non-RSI benchmark source.
+    bad_mask_sh: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=np.int8))
+    bad_mask_temp: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=np.int8))
 
     @property
     def n_shear(self) -> int:
@@ -153,6 +181,13 @@ class L3Data:
     despike_passes: np.ndarray = field(
         default_factory=lambda: np.zeros((0, 0), dtype=np.int64)
     )  # (N_SHEAR, N_SPECTRA)
+    # Per-window fractions of RDL bad-buffer samples, from L1Data.bad_mask_sh:
+    # bad_fraction counts DROPPED (unrepairable, rejects the window),
+    # interp_fraction counts INTERPOLATED (repaired, rejects the window only
+    # once it exceeds bad_buffer.MAX_INTERP_FRACTION). Both (N_SHEAR,
+    # N_SPECTRA); empty when no mask was supplied.
+    bad_fraction: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
+    interp_fraction: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
 
     @property
     def n_spectra(self) -> int:

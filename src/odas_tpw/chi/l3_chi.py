@@ -23,7 +23,7 @@ from odas_tpw.chi.fp07 import (
 )
 from odas_tpw.chi.l2_chi import L2ChiData
 from odas_tpw.scor160.goodman import clean_shear_spec_batch
-from odas_tpw.scor160.io import L3Params
+from odas_tpw.scor160.io import BAD_DROPPED, BAD_INTERPOLATED, L3Params
 from odas_tpw.scor160.ocean import kappa_T as kappa_T_TSP
 from odas_tpw.scor160.ocean import visc, visc35
 from odas_tpw.scor160.spectral import csd_matrix_batch
@@ -45,6 +45,8 @@ class _SectionResult:
     tau0: list = field(default_factory=list)
     nu: list = field(default_factory=list)
     kappa_T: list = field(default_factory=list)
+    bad_frac: list = field(default_factory=list)
+    interp_frac: list = field(default_factory=list)
 
 
 @dataclass
@@ -68,6 +70,12 @@ class L3ChiData:
 
     diff_gains: list[float] = field(default_factory=list)
     fp07_model: str = "single_pole"
+    # Per-window fractions of RDL bad-buffer samples, from L2ChiData.bad_mask:
+    # bad_fraction counts BAD_DROPPED (rejects the window), interp_fraction
+    # counts BAD_INTERPOLATED (rejects it only above MAX_INTERP_FRACTION).
+    # Both (N_GRADT, N_SPECTRA); empty when no mask was supplied.
+    bad_fraction: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
+    interp_fraction: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
 
     @property
     def n_spectra(self) -> int:
@@ -254,6 +262,15 @@ def _process_section_chi(
         acc.tau0.append(tau0_all[w])
         acc.gradt_spec.append(clean_spectra[w].T)
         acc.noise_spec.append(noise_all[:, w, :])
+        # Fractions of this window hit by RDL bad-buffer dropouts on a channel
+        # this thermistor depends on (TN-051 s3.2), split by repairability.
+        if l2_chi.bad_mask.shape == (n_temp, l2_chi.n_time):
+            seg = l2_chi.bad_mask[:, indices[w]]
+            acc.bad_frac.append((seg == BAD_DROPPED).mean(axis=1))
+            acc.interp_frac.append((seg == BAD_INTERPOLATED).mean(axis=1))
+        else:
+            acc.bad_frac.append(np.zeros(n_temp))
+            acc.interp_frac.append(np.zeros(n_temp))
 
 
 def process_l3_chi(
@@ -351,6 +368,8 @@ def process_l3_chi(
             tau0=np.array([]),
             diff_gains=diff_gains,
             fp07_model=fp07_model,
+            bad_fraction=np.zeros((0, 0)),
+            interp_fraction=np.zeros((0, 0)),
         )
 
     # Assemble output arrays
@@ -385,4 +404,10 @@ def process_l3_chi(
         tau0=tau0_out,
         diff_gains=diff_gains,
         fp07_model=fp07_model,
+        bad_fraction=(
+            np.column_stack(acc.bad_frac) if acc.bad_frac else np.zeros((0, 0))
+        ),
+        interp_fraction=(
+            np.column_stack(acc.interp_frac) if acc.interp_frac else np.zeros((0, 0))
+        ),
     )
