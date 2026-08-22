@@ -1,0 +1,278 @@
+# perturb configuration — MicroRider on a Slocum glider, CTD supplied by a
+# hotel file built from the glider's EBD (science) files.
+#
+# The point of this config: the CTD used by every downstream computation is the
+# glider's own SBE41cp, merged in as hotel channels. Their SOURCE names
+# (sci_water_temp / sci_water_cond) are carried through unchanged, so the three
+# places that name a T/C channel — ct, ctd, fp07 — are pointed at them instead
+# of the VMP's JAC_T / JAC_C. Nothing else in the pipeline names a CTD channel:
+# stratification, seawater properties (SP/SA/CT/sigma0/rho), and the
+# `salinity: "measured"` paths in epsilon/chi all read ct.T_name / ct.C_name.
+#
+# Paths use the <CONFIG_DIR> token, which resolves to this file's own directory.
+
+files:
+  p_file_root: "<CONFIG_DIR>"      # MR .p files sit beside this config
+  p_file_pattern: "**/*.p"
+  output_root: "<CONFIG_DIR>/MR_results"
+  trim: true
+  merge: false
+
+gps:
+  # A glider has no continuous ship fix. "nan" leaves lat/lon NaN (seawater
+  # properties then evaluate at 0/0 — a <0.3% effect on N2, negligible on SA).
+  # Supply the surfacing/dead-reckoned track instead if you have it:
+  #   source: "csv"    file: "<CONFIG_DIR>/glider_track.csv"
+  #                    time_col: "t"  lat_col: "lat"  lon_col: "lon"
+  #   source: "netcdf" file: "<CONFIG_DIR>/glider_track.nc"  time_col: "time"
+  source: "nan"           # nan | fixed | csv | netcdf
+  lat: null
+  lon: null
+  file: null
+  time_col: null
+  lat_col: "lat"
+  lon_col: "lon"
+  max_time_diff: 60       # warn when extrapolating > this [s] outside coverage
+
+hotel:
+  # Hotel file built from the Slocum EBD files. Requirements:
+  #   * NetCDF (.nc), CSV, or .mat — this example assumes NetCDF.
+  #   * sci_ctd41cp_timestamp is the CTD sample clock, POSIX seconds, and must
+  #     be STRICTLY INCREASING with no duplicate or zero/fill rows. Slocum EBD
+  #     repeats the last CTD timestamp on non-CTD science rows and writes 0.0
+  #     where the field is absent — drop those rows when converting, don't
+  #     interpolate through them.
+  #   * sci_water_temp [degC] and sci_water_cond [S/m] carry NaN (not a fill
+  #     value) wherever the CTD did not report; the loader drops non-finite
+  #     samples before interpolating.
+  enable: true
+  file: "<CONFIG_DIR>/hotel.nc"
+  time_column: "sci_ctd41cp_timestamp"   # default time base for every channel
+  time_format: "epoch"    # Slocum times are POSIX seconds — state it rather
+                          # than relying on "auto"
+  channels:
+    sci_water_temp:
+      # No rename: the source name is what ct/ctd/fp07 below refer to.
+      units: "degree_Celsius"
+      fast: false         # must land on the SLOW grid — the stratification and
+                          # seawater-property injectors require T, C and P to
+                          # share the slow grid and silently skip otherwise
+    sci_water_cond:
+      scale: 10.0         # Slocum reports S/m; gsw.SP_from_C wants mS/cm
+      units: "mS/cm"
+      fast: false
+    sci_water_pressure:
+      # The CTD's OWN pressure — the depth each T/C sample was actually taken
+      # at. Kept alongside (not instead of) the MicroRider's native P: the
+      # difference between the two is the glider-vs-MR clock offset plus the
+      # CTD-vs-MR mounting offset, which is worth watching. See ctd.variables
+      # below, which puts it in the CTD product for exactly that check.
+      scale: 10.0         # Slocum reports bar; everything here wants dbar
+      units: "dbar"
+      fast: false         # SLOW on purpose — see the note under fast_channels
+
+    # ---- optional glider flight channels ------------------------------------
+    # These live on the glider's own science/flight clock, not the CTD clock,
+    # so give them an explicit time_column. Uncomment what your hotel file
+    # actually carries.
+    #
+    # m_present_time is then a variable in the file used only as a time axis.
+    #
+    # m_speed:
+    #   name: "speed"          # pairs with speed.method: "hotel" below
+    #   time_column: "m_present_time"
+    # sci_oxy4_oxygen:
+    #   name: "DO"
+    #   units: "umol kg-1"
+    #   time_column: "sci_ctd41cp_timestamp"
+
+  fast_channels:          # names that default to the fast grid when a channel
+    - speed               # does not set `fast:` itself. The stock default is
+                          # ["speed", "P"]; "P" is deliberately dropped here.
+  # Why sci_water_pressure is slow, not fast:
+  #   * A hotel channel goes fast only if its OUTPUT name is in fast_channels
+  #     or it sets `fast: true`. Under the source name it matches neither, so
+  #     "fast: false" above is belt-and-braces rather than an override.
+  #   * The CTD samples at ~1 Hz. Putting it on the 512 Hz grid interpolates
+  #     in no new information; it just makes a 1 Hz signal 8x bigger on disk.
+  #   * Nothing downstream reads a fast pressure CHANNEL. The dissipation and
+  #     chi stages build their own P_fast by interpolating the SLOW pressure
+  #     (rsi/helpers.py:981, `P_fast = np.interp(t_fast, t_slow, P_slow)`), so
+  #     a fast hotel pressure would have no consumer.
+  #   * Slow keeps it eligible for the CTD product and for any T/C/P path,
+  #     all of which require the three to share the slow grid.
+  # To use the GLIDER pressure as THE pressure instead of the MicroRider's,
+  # the merge requires an explicit opt-in (it refuses to clobber a native
+  # channel silently) AND the grid must match, or the replacement is dropped:
+  #     sci_water_pressure: {name: "P", replace: true, fast: false, scale: 10.0}
+  # Think twice: native P is 64 Hz and drives profile detection and |dP/dt|;
+  # the glider CTD pressure is 1 Hz and on a different clock.
+  interpolation: "linear" # 1 Hz CTD onto the 64 Hz slow grid. "linear" is the
+                          # conservative choice; "pchip" is shape-preserving
+                          # but raises on duplicated timestamps.
+
+profiles:
+  P_min: 0.5              # minimum pressure [dbar]
+  W_min: null             # null = auto: 0.05 dbar/s for a glider (the
+                          # VMP-tuned 0.3 rejects every glide)
+  direction: "auto"       # auto = resolved from the .p file's vehicle field;
+                          # a slocum_glider resolves to "glide" (dive AND
+                          # climb). Set "up"/"down" only to keep one leg.
+  min_duration: 7.0       # minimum profile duration [s]
+  diagnostics: false
+
+fp07:
+  # The glider CTD temperature is the in-situ reference for the FP07
+  # Steinhart-Hart recalibration.
+  calibrate: true
+  order: 1                # a single glider deployment rarely spans the >8 degC
+                          # needed to constrain an order-2 fit
+  max_lag_seconds: 10
+  reference: "sci_water_temp"
+  must_be_negative: false # the VMP assumption (FP07 leads a hull-mounted JAC
+                          # on a free fall) does not hold here: the lag is the
+                          # MR-vs-glider clock offset plus the SBE41cp response
+                          # and can go either way, so search both signs
+
+ct:
+  # T_name / C_name here are the pipeline-wide CTD channel names: they feed CT
+  # alignment, background stratification (N2, dT/dz), the SP/SA/CT/sigma0/rho
+  # injection onto the profile product, and every `salinity: "measured"`.
+  align: false            # the SBE41cp is PUMPED and T and C share one sample
+                          # timestamp, so there is no C-vs-T lag to remove;
+                          # running the alignment would fit interpolation noise
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+bottom:
+  enable: false           # seafloor-crash detection is a free-fall VMP concern
+
+top_trim:
+  enable: false           # prop-wash trimming is a ship-deployed VMP concern
+
+epsilon:
+  fft_sec: 1.0
+  diss_sec: null          # null = 4 * fft
+  overlap_sec: null       # null = half the dissipation window
+  fft_length: null
+  diss_length: null
+  overlap: null
+  goodman: true           # essential on a glider — vibration contaminates shear
+  f_AA: 98.0
+  f_limit: null
+  fit_order: 3
+  despike_thresh: 8
+  despike_smooth: 0.5
+  salinity: "measured"    # per-profile S from sci_water_cond/sci_water_temp/P
+                          # (TEOS-10), i.e. the hotel CTD
+  epsilon_minimum: 1.0e-13
+  T_source: "sci_water_temp"  # reference temperature for viscosity (epsilon)
+                              # and viscosity + kappa_T (chi). Named explicitly
+                              # so both stages use the CTD rather than whichever
+                              # FP07 the "auto" chain happens to pick first.
+  fom_max: null
+  diagnostics: false
+
+chi:
+  enable: true
+  fft_sec: 1.0
+  diss_sec: null
+  overlap_sec: null
+  fft_length: null
+  diss_length: null
+  overlap: null
+  fp07_model: "single_pole"
+  goodman: true
+  f_AA: 98.0
+  use_epsilon: false      # Method 2 (spectral fit). Shear epsilon on a glider
+                          # MR is vibration-contaminated; do not seed chi from it
+  fit_method: "iterative"
+  spectrum_model: "kraichnan"
+  salinity: "measured"
+  mixing: true            # N2, dTdz, K_T, Gamma, K_rho on the chi grid
+  chi_minimum: 1.0e-13
+  spectral_qc: true
+  fom_max: null
+  diagnostics: false
+
+ctd:
+  # The CTD product is built from the hotel channels under their source names,
+  # binned over the whole record (dive and climb), plus P from the MicroRider
+  # and the derived SP/SA/CT/sigma0/rho/depth.
+  enable: true
+  bin_width: 1.0          # [s] — matches the SBE41cp's ~1 Hz sampling; a
+                          # narrower bin just re-reports the interpolant
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+  variables:              # extra channels to bin (null = auto-detect). Add any
+    - sci_water_pressure  # renamed hotel science channels here too, e.g. "DO".
+                          # Binned beside the MicroRider's own P, so
+                          # (sci_water_pressure - P) reads out the CTD-vs-MR
+                          # offset directly off the CTD product.
+  # NOTE: in the assembled ctd_combo the two channels carry no units /
+  # standard_name — netcdf_schema.CTD_SCHEMA keys CF attributes on JAC_T /
+  # JAC_C only, and there is no entry for these names. The per-profile product
+  # is unaffected (it takes units from hotel.channels above).
+  method: "mean"
+  diagnostics: false
+
+speed:
+  # |dP/dt| is VERTICAL speed on a glider, and epsilon scales as ~U^4 — never
+  # leave this at "pressure" here.
+  method: "em"            # the MicroRider's own EM flowmeter (U_EM channel).
+                          # Preferred when the MR carries one; it measures
+                          # through-water speed directly. Falls over loudly
+                          # (recorded error, no silent |dP/dt| fallback) if
+                          # U_EM is missing — then use:
+                          #   "flight" : |W| / sin(|pitch| + aoa), pitch axis
+                          #              auto-picked from Incl_X/Incl_Y. The
+                          #              pipeline cross-checks it against U_EM
+                          #              when both exist and warns on a >25%
+                          #              median disagreement.
+                          #   "hotel"  : a glider through-water speed mapped
+                          #              onto "speed" in hotel.channels above.
+  value: null
+  hotel_var: "speed"      # only for method: "hotel"
+  aoa_deg: 3.0
+  min_pitch_deg: 5.0      # skip near-horizontal samples (apogee, surfacing)
+  speed_cutout: 0.05
+  tau: null               # null = vehicle default (slocum_glider: 3.0 s)
+  amplitude_quantile: [1.0, 99.0]
+
+qc:
+  enable: true
+  drop_action: "nan"
+  epsilon_drop_from: []
+  chi_drop_from: []
+  rules: {}
+
+stratification:
+  enable: true
+  window: 2.0             # [dbar] background N2 / dT/dz scale
+  salinity: null          # null = the profile's own conductivity via TEOS-10,
+                          # i.e. the merged sci_water_cond
+
+binning:
+  method: "depth"
+  width: 1.0              # [m]
+  aggregation: "mean"
+  diss_width: null
+  diss_aggregation: null
+  chi_width: null
+  chi_aggregation: null
+  diagnostics: false
+
+netcdf:
+  title: "Slocum glider MicroRider"
+  summary: "MicroRider turbulence with glider SBE41cp CTD merged via hotel file"
+  institution: "Oregon State University"
+  creator_name: "CEOAS/Oregon State University"
+  creator_email: "pat.welch@oregonstate.edu"
+  platform: "Slocum glider"
+  instrument: "MicroRider"
+  source: "Slocum EBD science data (sci_water_temp, sci_water_cond, sci_ctd41cp_timestamp)"
+  geospatial_vertical_positive: "down"
+  standard_name_vocabulary: "CF Standard Name Table v89"
+
+parallel:
+  jobs: 1
