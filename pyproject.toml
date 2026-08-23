@@ -63,6 +63,7 @@ Changelog = "https://github.com/mousebrains/turbulence/blob/main/CHANGELOG.md"
 Issues = "https://github.com/mousebrains/turbulence/issues"
 
 [project.scripts]
+fp07-cal = "odas_tpw.fp07cal.cli:main"
 rsi-tpw = "odas_tpw.rsi.cli:main"
 perturb = "odas_tpw.perturb.cli:main"
 perturb-plot = "odas_tpw.perturb.plot.cli:main"
