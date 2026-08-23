@@ -121,7 +121,8 @@ Key facts (details in `docs/dinkum_hotel.md`):
 - **Unit conversion happens once, in the builder** (`sensors.*.scale`: S/m →
   mS/cm and bar → dbar are both `10.0`). The perturb side must not re-apply it.
 - The **sensor-list cache directory is effectively required**: a Slocum file
-  whose sensor-list hash is not cached cannot be decoded and is skipped.
+  whose sensor-list hash is not cached cannot be decoded. The build refuses to
+  proceed on a partial decode, naming the skipped files.
 
 ### Python API
 

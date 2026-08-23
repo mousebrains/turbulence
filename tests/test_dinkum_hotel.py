@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import shutil
+from pathlib import Path
 
 import netCDF4 as nc
 import numpy as np
@@ -389,3 +391,294 @@ def test_load_dinkum_missing_file(tmp_path):
 def test_load_dinkum_empty_list():
     with pytest.raises(ValueError, match="No input files"):
         load_dinkum([], backend="netcdf")
+
+
+# --------------------------------------------------- fill masking (D2, netcdf)
+
+
+def _nc_with_fills(tmp_path):
+    """A NetCDF whose sensors carry explicit _FillValue, float and integer."""
+    path = tmp_path / "fills.nc"
+    n = 6
+    with nc.Dataset(path, "w") as ds:
+        ds.createDimension("i", n)
+        t = ds.createVariable("m_present_time", "f8", ("i",), fill_value=np.nan)
+        t[:] = T0 + np.arange(n, dtype=float)
+        f = ds.createVariable("sci_water_temp", "f8", ("i",), fill_value=-999.0)
+        f[:] = [20.0, -999.0, 20.2, -999.0, 20.4, 20.5]
+        g = ds.createVariable("m_gps_status", "i1", ("i",), fill_value=np.int8(-127))
+        g[:] = np.array([0, -127, -127, 1, -127, 0], dtype=np.int8)
+    return path
+
+
+def test_netcdf_backend_masks_fill_values(tmp_path):
+    ds = load_dinkum([_nc_with_fills(tmp_path)], backend="netcdf")
+    temp = np.asarray(ds["sci_water_temp"].values, dtype=np.float64)
+    gps = np.asarray(ds["m_gps_status"].values, dtype=np.float64)
+    # A float _FillValue must become NaN, never data.
+    assert not np.any(temp == -999.0)
+    assert np.isnan(temp[[1, 3]]).all()
+    # An integer fill (-127 for int8) must become NaN, never a "status".
+    assert not np.any(gps == -127)
+    assert np.isnan(gps[[1, 2, 4]]).all()
+    assert gps[[0, 3, 5]].tolist() == [0.0, 1.0, 0.0]
+
+
+# ------------------------------------------- name collisions incl. base (D4)
+
+
+def test_normalize_sensors_rejects_duplicate_output_names():
+    with pytest.raises(ValueError, match="same output name"):
+        normalize_sensors({"a": "x", "b": {"name": "x"}}, "t")
+
+
+def test_normalize_sensors_allows_a_swap():
+    out = normalize_sensors({"a": "b", "b": "a"}, "t")
+    assert out["a"]["name"] == "b" and out["b"]["name"] == "a"
+
+
+@pytest.mark.parametrize(
+    "sensors",
+    [
+        {"sci_water_temp": "sci_ctd41cp_timestamp"},  # rename onto the base
+        {"sci_ctd41cp_timestamp": None},  # list the base as a sensor
+    ],
+)
+def test_normalize_sensors_rejects_collision_with_time_base(sensors):
+    # The base becomes the output's time coordinate; a data variable with the
+    # same name would previously die deep inside xarray at write time.
+    with pytest.raises(ValueError, match="same output name"):
+        normalize_sensors(sensors, "sci_ctd41cp_timestamp")
+
+
+def test_build_hotel_rejects_sensor_named_after_time_base(glider_nc):
+    cfg = _config(glider_nc)
+    cfg["sensors"]["sci_water_temp"] = {"name": "sci_ctd41cp_timestamp"}
+    with pytest.raises(ValueError, match="same output name"):
+        build_hotel(cfg, now=T0)
+
+
+# -------------------------------------------------- per-sensor dedupe (D5)
+
+
+def test_normalize_sensors_dedupe_defaults():
+    out = normalize_sensors(
+        {
+            "held": {"method": "previous"},
+            "stepped": {"method": "nearest", "dedupe": "first"},
+            "smooth": {"method": "linear"},
+            "bad": None,
+        },
+        "t",
+    )
+    # Step-like methods default to "last": the value actually in force.
+    assert out["held"]["dedupe"] == "last"
+    # An explicit per-sensor dedupe always wins.
+    assert out["stepped"]["dedupe"] == "first"
+    # Continuous methods inherit the global (decided in build_hotel).
+    assert "dedupe" not in out["smooth"] and "dedupe" not in out["bad"]
+
+
+def test_normalize_sensors_rejects_unknown_dedupe():
+    with pytest.raises(ValueError, match="dedupe"):
+        normalize_sensors({"a": {"dedupe": "median"}}, "t")
+
+
+def _state_nc(tmp_path):
+    """A held state sensor whose timestamp repeats across a state change."""
+    path = tmp_path / "state.nc"
+    t = np.array([T0, T0 + 1, T0 + 1, T0 + 10])
+    v = np.array([1.0, 1.0, 2.0, 2.0])
+    with nc.Dataset(path, "w") as ds:
+        ds.createDimension("i", t.size)
+        tv = ds.createVariable("m_present_time", "f8", ("i",), fill_value=np.nan)
+        tv[:] = t
+        sv = ds.createVariable("m_state", "f8", ("i",), fill_value=np.nan)
+        sv[:] = v
+    return path
+
+
+def _state_config(path, state_opts):
+    return {
+        "files": {
+            "root": str(path.parent),
+            "patterns": [path.name],
+            "output": str(path.parent / "hotel.nc"),
+            "reader": "netcdf",
+        },
+        "time": {"base": "m_present_time", "min_value": 100, "dedupe": "mean"},
+        "projection": {"method": "linear"},
+        "sensors": {"m_state": state_opts},
+    }
+
+
+def test_build_hotel_state_sensor_dedupes_last_not_mean(tmp_path):
+    # Global dedupe is "mean", but a "previous"-projected state must collapse
+    # the duplicate stamp to the value in force (2), not invent 1.5.
+    path = _state_nc(tmp_path)
+    out = build_hotel(_state_config(path, {"method": "previous"}), now=T0)
+    ds = xr.open_dataset(out, decode_cf=False)
+    assert ds["m_state"].attrs["dedupe"] == "last"
+    times = ds["m_present_time"].values
+    vals = ds["m_state"].values
+    assert vals[times == T0 + 1][0] == 2.0
+
+
+def test_build_hotel_explicit_dedupe_overrides_state_default(tmp_path):
+    path = _state_nc(tmp_path)
+    out = build_hotel(
+        _state_config(path, {"method": "previous", "dedupe": "first"}), now=T0
+    )
+    ds = xr.open_dataset(out, decode_cf=False)
+    assert ds["m_state"].attrs["dedupe"] == "first"
+    vals = ds["m_state"].values
+    times = ds["m_present_time"].values
+    assert vals[times == T0 + 1][0] == 1.0
+
+
+def test_build_hotel_step_like_global_method_also_dedupes_last(tmp_path):
+    # A sensor with no method of its own inheriting a step-like GLOBAL method
+    # gets "last" too.
+    path = _state_nc(tmp_path)
+    cfg = _state_config(path, None)
+    cfg["projection"]["method"] = "previous"
+    out = build_hotel(cfg, now=T0)
+    ds = xr.open_dataset(out, decode_cf=False)
+    assert ds["m_state"].attrs["dedupe"] == "last"
+
+
+# ------------------------------------------------ per-sensor max_gap (D6)
+
+
+def test_normalize_sensors_null_max_gap_inherits_global():
+    out = normalize_sensors({"a": {"max_gap": None}, "b": {"max_gap": 30.0}}, "t")
+    assert "max_gap" not in out["a"], "null must mean 'inherit', not 'disable'"
+    assert out["b"]["max_gap"] == 30.0
+
+
+def test_build_hotel_null_max_gap_inherits_global(tmp_path):
+    # m_state has a 9 s hole (T0+1 .. T0+10); with projection.max_gap: 5 the
+    # base times inside the hole must be NaN even though the sensor says
+    # `max_gap: null`.
+    path = _state_nc(tmp_path)
+    cfg = _state_config(path, {"max_gap": None})
+    cfg["projection"]["max_gap"] = 5.0
+    # A denser base so there ARE output times inside the hole.
+    with nc.Dataset(path, "a") as ds:
+        dv = ds.createVariable("m_present_time_dense", "f8", ("i",), fill_value=np.nan)
+        dv[:] = [T0, T0 + 4, T0 + 6, T0 + 10]
+    cfg["time"]["base"] = "m_present_time_dense"
+    cfg["sensors"]["m_state"]["time_sensor"] = "m_present_time"
+    out = build_hotel(cfg, now=T0)
+    ds = xr.open_dataset(out, decode_cf=False)
+    times = ds["m_present_time_dense"].values
+    vals = ds["m_state"].values
+    inside = (times > T0 + 1) & (times < T0 + 10)
+    assert inside.any()
+    assert np.isnan(vals[inside]).all(), "global max_gap must apply through null"
+
+
+# ------------------------------------------- real DBD backends (D1, D2, D3)
+#
+# The smallest usable real fixture (01330001.dcd, 8 KB) needs its 117 KB
+# sensor-list cache file, which is too big to check in; these tests run only
+# where the reference Slocum files exist (and the required backend does).
+
+_DBD_DIR = Path("/Users/pat/tpw/dbd_files")
+_needs_dbd_files = pytest.mark.skipif(
+    not (_DBD_DIR / "01330001.dcd").exists(),
+    reason=f"real Slocum files not present under {_DBD_DIR}",
+)
+_needs_dbd2netcdf = pytest.mark.skipif(
+    shutil.which("dbd2netCDF") is None, reason="dbd2netCDF not on PATH"
+)
+
+# 01330001.dcd: 21 data records (22 with the first record kept); its
+# sensor-list hash IS in the cache. 01330002.ecd's hash is NOT.
+_CACHED_DCD = "01330001.dcd"
+_UNCACHED_ECD = "01330002.ecd"
+
+
+@_needs_dbd_files
+class TestXarrayDbdBackend:
+    @pytest.fixture(autouse=True)
+    def _need(self):
+        pytest.importorskip("xarray_dbd")
+
+    def test_reads_a_cached_file(self):
+        ds = load_dinkum(
+            [_DBD_DIR / _CACHED_DCD], backend="xarray-dbd", cache=_DBD_DIR / "cache"
+        )
+        assert ds.sizes["record"] == 21  # first record skipped
+        assert ds.attrs["dinkum_reader"] == "xarray-dbd"
+        assert ds.attrs["dinkum_source_files"] == 1
+        assert ds.attrs["dinkum_requested_files"] == 1
+
+    def test_uncached_file_among_cached_raises_with_cache_hint(self):
+        # D1: the .ecd's sensor-list hash is not cached; silently building a
+        # flight-only hotel file is exactly the failure this guards against.
+        with pytest.raises(RuntimeError, match=r"Decoded 1 of 2 .*cache"):
+            load_dinkum(
+                [_DBD_DIR / _CACHED_DCD, _DBD_DIR / _UNCACHED_ECD],
+                backend="xarray-dbd",
+                cache=_DBD_DIR / "cache",
+            )
+
+    def test_all_files_uncached_raises_with_cache_hint(self):
+        # xarray-dbd raises ValueError("No valid data found...") here; it must
+        # surface as the cache-hint RuntimeError, not the raw ValueError.
+        with pytest.raises(RuntimeError, match=r"Decoded 0 of 1 .*cache"):
+            load_dinkum(
+                [_DBD_DIR / _UNCACHED_ECD], backend="xarray-dbd", cache=_DBD_DIR / "cache"
+            )
+
+    def test_integer_fill_is_masked(self):
+        # D2 parity check: both DBD backends must agree that fill is NaN.
+        ds = load_dinkum(
+            [_DBD_DIR / _CACHED_DCD], backend="xarray-dbd", cache=_DBD_DIR / "cache"
+        )
+        gps = np.asarray(ds["m_gps_status"].values, dtype=np.float64)
+        assert not np.any(gps == -127)
+
+
+@_needs_dbd_files
+@_needs_dbd2netcdf
+class TestDbd2netcdfBackend:
+    def test_reads_a_cached_file_and_skips_first_record(self):
+        # D3: skip_first_record must reach dbd2netCDF as -A; without the flag
+        # this file yields 22 records, with it 21 (matching xarray-dbd).
+        ds = load_dinkum(
+            [_DBD_DIR / _CACHED_DCD], backend="dbd2netcdf", cache=_DBD_DIR / "cache"
+        )
+        assert ds.sizes["record"] == 21
+        assert ds.attrs["dinkum_source_files"] == 1
+
+    def test_skip_first_record_false_keeps_it(self):
+        ds = load_dinkum(
+            [_DBD_DIR / _CACHED_DCD],
+            backend="dbd2netcdf",
+            cache=_DBD_DIR / "cache",
+            skip_first_record=False,
+        )
+        assert ds.sizes["record"] == 22
+
+    def test_uncached_file_raises_with_cache_hint(self):
+        # D1 on the subprocess backend: --strict turns the skip into an error.
+        with pytest.raises(RuntimeError, match=r"(?s)cache"):
+            load_dinkum(
+                [_DBD_DIR / _CACHED_DCD, _DBD_DIR / _UNCACHED_ECD],
+                backend="dbd2netcdf",
+                cache=_DBD_DIR / "cache",
+            )
+
+    def test_integer_fill_is_masked(self):
+        # D2: dbd2netCDF writes int8 m_gps_status with _FillValue=-127; on
+        # this file every non-reporting row carried that fill.
+        ds = load_dinkum(
+            [_DBD_DIR / _CACHED_DCD], backend="dbd2netcdf", cache=_DBD_DIR / "cache"
+        )
+        gps = np.asarray(ds["m_gps_status"].values, dtype=np.float64)
+        assert not np.any(gps == -127)
+        # On this file the GPS only reported in the (skipped) first record,
+        # so every remaining row is fill -> NaN.
+        assert np.isnan(gps).all()

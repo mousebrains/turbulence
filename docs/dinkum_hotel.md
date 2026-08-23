@@ -82,8 +82,16 @@ Use `previous` (zero-order hold) for flight state and discrete flags, where
 interpolating between states invents values that never held. `linear` is right
 for the CTD.
 
+Duplicate timestamps are collapsed per `time.dedupe` (`mean` by default), but a
+sensor projected with a step-like method (`previous`, `next`, `nearest`,
+`zero`) defaults to `last` — the value actually in force — because a mean of
+two states is a state the sensor never reported. A per-sensor `dedupe` always
+wins.
+
 `max_gap` NaNs the output where the bracketing source samples are farther apart
-than the limit, rather than ruling a straight line across a dropout. Output
+than the limit, rather than ruling a straight line across a dropout. A
+per-sensor `max_gap` overrides the global; `max_gap: null` on a sensor inherits
+the global rather than disabling it. Output
 times that land **exactly** on a source sample are measurements, not
 interpolations, and are kept regardless — this matters because every sensor
 riding the base clock lands on the output times exactly.
@@ -99,9 +107,16 @@ riding the base clock lands on the output times exactly.
 
 **The sensor-list cache is not optional.** Slocum files reference their sensor
 list by hash rather than carrying it, so a file whose hash is missing from
-`files.cache` cannot be decoded — both readers skip it. A run over only-uncached
-files decodes zero records, which `dinkum-hotel` reports as an error rather than
-writing an empty file.
+`files.cache` cannot be decoded. `dinkum-hotel` treats a skipped file as an
+error: it compares the number of files decoded with the number requested and
+refuses to build a partial hotel file (a mission whose science-file hashes are
+uncached would otherwise quietly become flight-only). The error names the
+skipped files and points at `files.cache`.
+
+`files.skip_first_record` is honoured by both DBD backends (xarray-dbd's
+`skip_first_record`, dbd2netCDF's `--skipAll`); neither reader skips the first
+record on its own. Integer-coded sensors (status/flag enums) have their NetCDF
+fill values masked to NaN on every backend.
 
 ## Worked example
 
