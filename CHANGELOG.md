@@ -30,6 +30,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   own median sample interval warns, naming the channel and the fabricated
   fraction.
 
+  The gate is honoured downstream, not just at the merge: the resolved
+  `max_gap` travels with each merged channel (a `hotel_max_gap` attr in the
+  per-profile NetCDFs), and the stratification / viscosity-salinity refills
+  that interp-fill non-finite samples refuse to rule across a wider hole
+  (viscosity falls back to fixed 35 PSU there, with a warning). Epsilon's
+  per-window temperature now averages the finite samples only, so a window
+  merely touching a NaN-ed gap keeps a real temperature; the 10 °C fallback
+  (still warned about) applies only to windows with no finite sample at all.
+  A missing `max_gap` fails once at config-load time, not once per file in
+  the worker pool.
+
 ### Added
 - **RDL bad-buffer dropouts are now repaired or rejected in ε and χ.** v6.1+
   files substitute `-32753` for individual missing samples (TN-051 rev.
