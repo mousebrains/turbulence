@@ -190,6 +190,42 @@ def _reference_indices_in_span(ref: ReferenceSeries, cfg: PairConfig, t0: float,
     return np.concatenate(idx) if idx else np.empty(0, dtype=int)
 
 
+@dataclass
+class PreparedProbe:
+    """Per-probe arrays that do not depend on the lag.
+
+    The lag search evaluates ~160 trial lags, and everything here --- the
+    bridge conversion, the single-pole filter over ~200k samples, the
+    per-sample profile ids, the vertical speed --- is identical at every one of
+    them.  Only the boxcar centres move.  Recomputing them per lag made the
+    lag search roughly an order of magnitude slower than it needs to be on a
+    real deployment.
+    """
+
+    channel: str
+    L_slow: np.ndarray
+    clipped: np.ndarray
+    w: np.ndarray
+    pid: np.ndarray
+    dt: float
+
+
+def prepare_probe(probe: ProbeSeries, channel: str, cfg: PairConfig) -> PreparedProbe | None:
+    """Precompute the lag-independent half of :func:`build_pairs`."""
+    if channel not in probe.counts or probe.time.size < 2:
+        return None
+    dt = 1.0 / probe.fs
+    L_raw, clipped = log_r(probe.counts[channel], probe.bridge[channel])
+    return PreparedProbe(
+        channel=channel,
+        L_slow=_single_pole(L_raw, dt, cfg.kernel_tau),
+        clipped=clipped,
+        w=np.gradient(probe.pressure, probe.time),
+        pid=probe.profile_id(),
+        dt=dt,
+    )
+
+
 def build_pairs(
     probe: ProbeSeries,
     ref: ReferenceSeries,
@@ -197,9 +233,18 @@ def build_pairs(
     *,
     lag: float = 0.0,
     cfg: PairConfig | None = None,
+    prepared: PreparedProbe | None = None,
 ) -> PairSet:
-    """Pairs from one file and one channel.  Zero pairs is a normal outcome."""
+    """Pairs from one file and one channel.  Zero pairs is a normal outcome.
+
+    Pass *prepared* (from :func:`prepare_probe`) when sweeping many lags over
+    the same probe; it skips the lag-independent work.
+    """
     cfg = cfg or PairConfig()
+    if prepared is not None and prepared.channel != channel:
+        raise ValueError(
+            f"prepared probe is for {prepared.channel!r}, not {channel!r}"
+        )
     rejected: Counter = Counter()
     empty = PairSet(channel=channel, lag=lag, rejected=rejected)
 
@@ -210,7 +255,12 @@ def build_pairs(
         rejected["probe_too_short"] += 1
         return replace(empty, per_file={probe.label: 0})
 
-    dt = 1.0 / probe.fs
+    if prepared is None:
+        prepared = prepare_probe(probe, channel, cfg)
+        if prepared is None:
+            rejected["probe_too_short"] += 1
+            return replace(empty, per_file={probe.label: 0})
+    dt = prepared.dt
     width = cfg.kernel_width if cfg.kernel_width else ref.median_interval()
     if not np.isfinite(width) or width <= 0:
         width = max(dt, 1.0)
@@ -225,9 +275,9 @@ def build_pairs(
         rejected["no_reference_coverage"] += 1
         return replace(empty, per_file={probe.label: 0})
 
-    w_probe = np.gradient(probe.pressure, probe.time)
-    L_raw, clipped = log_r(probe.counts[channel], probe.bridge[channel])
-    L_slow = _single_pole(L_raw, dt, cfg.kernel_tau)
+    w_probe = prepared.w
+    clipped = prepared.clipped
+    L_slow = prepared.L_slow
 
     centers = ref.time[k] - lag
     L_k, n_k = _boxcar_at(probe.time, L_slow, centers, width)
@@ -249,12 +299,12 @@ def build_pairs(
     j = np.clip(np.searchsorted(probe.time, centers), 0, probe.time.size - 1)
 
     if cfg.require_profile:
-        pid = probe.profile_id()[j]
+        pid = prepared.pid[j]
         outside = pid < 0
         rejected["outside_profile"] += int(np.sum(outside & keep))
         keep &= ~outside
     else:
-        pid = probe.profile_id()[j]
+        pid = prepared.pid[j]
 
     if probe.speed is not None and cfg.min_speed > 0:
         slow = ~(probe.speed[j] >= cfg.min_speed)

@@ -37,7 +37,13 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from odas_tpw.fp07cal.pairs import PairConfig, PairSet, build_pairs, build_pairs_multi
+from odas_tpw.fp07cal.pairs import (
+    PairConfig,
+    PairSet,
+    build_pairs,
+    build_pairs_multi,
+    prepare_probe,
+)
 from odas_tpw.fp07cal.series import ProbeSeries, ReferenceSeries
 
 
@@ -170,11 +176,16 @@ def temperature_lag(
     cfg = cfg or PairConfig()
     lags = np.arange(-max_lag, max_lag + step / 2, step)
     scores = np.full(lags.size, np.nan)
+    # The bridge conversion and the single-pole filter are identical at every
+    # trial lag; only the boxcar centres move.  Preparing once per probe turns
+    # an O(n_lags) sweep over 200k-sample arrays into O(1).
+    prep = [(probe, prepare_probe(probe, channel, cfg)) for probe in probes]
+    prep = [(probe, pp) for probe, pp in prep if pp is not None]
     for j, lag in enumerate(lags):
         A: list[np.ndarray] = []
         B: list[np.ndarray] = []
-        for probe in probes:
-            ps = build_pairs(probe, ref, channel, lag=float(lag), cfg=cfg)
+        for probe, pp in prep:
+            ps = build_pairs(probe, ref, channel, lag=float(lag), cfg=cfg, prepared=pp)
             if len(ps) < 50:
                 continue
             o = np.argsort(ps.time)
