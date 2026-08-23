@@ -6,9 +6,9 @@ deployment and hands perturb `.p` files that already carry the right
 coefficients, so perturb itself needs no changes.
 
 ```
-raw *.p ──┐
-          ├─► perturb trim ─► trimmed *.p ─┬─► fp07-cal fit ─► coefficients.json
-*.ebd ────┴─► dinkum-hotel ─► hotel.nc  ──┘        │            + reports
+raw *.p ───► perturb trim ─► trimmed *.p ─┬─► fp07-cal fit ─► coefficients.json
+                                          │                    + reports
+*.ebd ─────► (any converter) ─► hotel.nc ─┘        │
                                                     ▼
                               trimmed *.p ─► fp07-cal patch ─► calibrated *.p
                                                                      │
@@ -36,7 +36,7 @@ The template is commented. The three settings that actually matter:
 
 | setting | why |
 |---|---|
-| `reference.pressure_scale` | A Slocum reports `sci_water_pressure` in **bar**. A `dinkum-hotel` file has already applied the ×10, so leave it at `1.0`; set **`10.0`** if pointing straight at a converted `ebd.nc`. Getting this wrong does not affect the lags (they are correlation-based) but does corrupt the sensor-geometry term. |
+| `reference.pressure_scale` | A Slocum reports `sci_water_pressure` in **bar**. Use `1.0` if the ×10 was applied when the hotel file was built; **`10.0`** when pointing straight at a converted `ebd.nc`, which is what was validated. Getting this wrong does not affect the lags (correlation-based, scale-invariant) but does corrupt the sensor-geometry term. Sanity check: pressure should read ~1000 at 1000 m. |
 | `pairs.max_gap` | Defines where the reference *exists*. Not a smoothing knob. CTD samples further apart than this are treated as separate coverage spans, and nothing is interpolated across the hole. |
 | `files.max_fit_files` | How many files are held in memory for the lag and fit stage. Everything else streams. 100 is plenty; a full deployment at once is several GB. |
 
@@ -126,4 +126,5 @@ fp07:
 - **Don't route the reference through perturb's hotel merge for this.** It
   interpolates across arbitrary gaps and edge-holds outside coverage, so on a
   sparsely-sampled CT it would hand the fit a fabricated ramp. `fp07-cal` reads
-  the CTD on its own clock for exactly this reason.
+  the CTD on its own clock for exactly this reason. Any NetCDF carrying the CTD
+  and its own timestamps will do — a hotel file, or a converted `ebd.nc`.

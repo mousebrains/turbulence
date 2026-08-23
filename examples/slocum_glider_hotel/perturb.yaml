@@ -124,6 +124,23 @@ profiles:
 fp07:
   # The glider CTD temperature is the in-situ reference for the FP07
   # Steinhart-Hart recalibration.
+  #
+  # PREFER THE PRE-PIPELINE ROUTE. `fp07-cal` (see fp07-cal.yaml beside this
+  # file) fits ONE coefficient set for the whole deployment and writes it into
+  # the .p files, then you run perturb over those with `calibrate: false`:
+  #
+  #     perturb trim -> fp07-cal fit -> fp07-cal patch -> perturb run
+  #
+  # It is better here for three reasons:
+  #   * the per-file fit below needs a reference in EVERY file, so on a glider
+  #     that ran CT on only some yos it silently leaves the rest on the nominal
+  #     coefficients — adjacent yos then carry different calibrations;
+  #   * worse, where the hotel merge has interpolated across a CT gap the
+  #     per-file fit regresses against a fabricated ramp and nothing notices;
+  #   * `fp07-cal` measures whether the calibration is stable in time and depth,
+  #     and reports the lag decomposition, rather than assuming.
+  #
+  # Set `calibrate: false` once the .p files are patched.
   calibrate: true
   order: 1                # a single glider deployment rarely spans the >8 degC
                           # needed to constrain an order-2 fit

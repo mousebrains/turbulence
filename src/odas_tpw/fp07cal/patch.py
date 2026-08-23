@@ -71,6 +71,37 @@ def _fmt(value: float) -> str:
     return repr(float(value))
 
 
+def _validity_warnings(ch: str, entry: dict) -> list[str]:
+    """Warn where the coefficients are being used outside what they were fitted on.
+
+    Both are warnings, not errors, and deliberately so: leaving a file on the
+    nominal coefficients would re-create exactly the discontinuity this tool
+    exists to remove (plan section 3.3).  Consistency beats a false show of
+    caution --- as long as it is visible.
+    """
+    out: list[str] = []
+    v = entry.get("validity") or {}
+    below = float(v.get("extrapolated_below_K") or 0.0)
+    above = float(v.get("extrapolated_above_K") or 0.0)
+    if below > 0.05 or above > 0.05:
+        lo, hi = v.get("T_fitted", [float("nan")] * 2)
+        slo, shi = v.get("T_seen", [float("nan")] * 2)
+        out.append(
+            f"{ch}: the deployment spans {slo:.2f}..{shi:.2f} degC but the fit only "
+            f"covered {lo:.2f}..{hi:.2f} — extrapolating {below:.2f} degC below and "
+            f"{above:.2f} degC above on {v.get('n_profiles_outside', '?')} of "
+            f"{v.get('n_profiles_total', '?')} profiles. A polynomial is not "
+            f"constrained outside its fitted range; check the order."
+        )
+    if not entry.get("probe_sn_trusted", True):
+        out.append(
+            f"{ch}: probe serial {entry.get('probe_sn')!r} looks like a placeholder "
+            f"(shared across channels), so it is not a usable identity — this "
+            f"record is keyed on instrument SN and channel only."
+        )
+    return out
+
+
 def build_edits(record: dict, config: dict, *, channels: list[str] | None = None) -> PatchPlan:
     """Turn a coefficient record into per-channel config edits.
 
@@ -136,6 +167,8 @@ def build_edits(record: dict, config: dict, *, channels: list[str] | None = None
                 f"reader will use"
             )
 
+        warnings.extend(_validity_warnings(ch, entry))
+
         ce = entry["config_equivalent"]
         ch_edits: dict[str, str] = {"t_0": _fmt(ce["t_0"])}
         if "beta_1" in ce:
@@ -160,6 +193,35 @@ def build_edits(record: dict, config: dict, *, channels: list[str] | None = None
         edits[ch] = ch_edits
 
     return PatchPlan(edits=edits, warnings=warnings, errors=errors)
+
+
+def _time_range_warnings(record: dict, srcs: list[Path]) -> list[str]:
+    """Note when the fit sampled fewer files than are being patched.
+
+    The coefficients are applied to EVERY file by design --- that is the whole
+    point of pooling --- but the operator should see how much of the deployment
+    actually contributed to them.  The ``.p`` header date is not reliably
+    parseable across dialects, so this reports the counts rather than
+    re-deriving each file's acquisition time.
+    """
+    t0, t1 = record.get("time_start"), record.get("time_end")
+    n_fit = record.get("n_fit_files")
+    if t0 is None or t1 is None or not n_fit or len(srcs) <= n_fit:
+        return []
+    return [
+        f"patching {len(srcs)} files from a fit that sampled {n_fit} of them "
+        f"({_iso(t0)}..{_iso(t1)}); coefficients are applied to every file, "
+        f"including any acquired outside that window"
+    ]
+
+
+def _iso(t) -> str:
+    from datetime import UTC, datetime
+
+    try:
+        return datetime.fromtimestamp(float(t), tz=UTC).strftime("%Y-%m-%d")
+    except Exception:
+        return "?"
 
 
 def already_patched(path: str | Path) -> bool:
@@ -199,6 +261,7 @@ def patch_deployment(
         )
 
     plan = build_edits(record, parse_config(read_config_text(srcs[0])), channels=channels)
+    plan.warnings.extend(_time_range_warnings(record, srcs))
     if not plan.ok:
         return plan, []
 

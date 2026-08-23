@@ -215,6 +215,15 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
     # A coefficient set is meaningless without the L-definition it was fitted
     # against, so the bridge constants travel with it and the patch step
     # refuses on any mismatch.
+    # A serial shared by two channels is a placeholder, not an identity
+    # (sensor_inventory.py records `sn = T` on both T1 and T2 as common), so a
+    # coefficient record must not key on it.
+    sn_counts: dict[str, int] = {}
+    for probe in probes:
+        for _ch, sn in probe.probe_sn.items():
+            sn_counts[sn] = sn_counts.get(sn, 0) + 1
+    n_files = max(1, len(probes))
+
     provenance = {
         "instrument_sn": probes[0].instrument_sn if probes else "?",
         "n_fit_files": len(probes),
@@ -321,6 +330,12 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             "probe_sn": next(
                 (p.probe_sn.get(ch) for p in probes if ch in p.probe_sn), "?"
             ),
+            "probe_sn_trusted": bool(
+                (lambda sn: sn not in ("?", "", "(no SN)")
+                 and sn_counts.get(sn, 0) <= n_files)(
+                    next((p.probe_sn.get(ch) for p in probes if ch in p.probe_sn), "?")
+                )
+            ),
             "factory": next(
                 (p.factory[ch].tolist() for p in probes if ch in p.factory), None
             ),
@@ -407,11 +422,40 @@ def _cmd_fit(args) -> int:
     if not args.no_stream and len(paths) > len(probes):
         print(f"streaming all {len(paths)} files for per-profile statistics...")
         res["per_profile"] = _stream_stats(paths, ref, cfg, res, out_dir)
+        _record_validity(res)
         (out_dir / "coefficients.json").write_text(
             json.dumps(res, indent=2, default=float)
         )
     print(f"wrote {out_dir}/")
     return 0
+
+
+def _record_validity(res: dict) -> None:
+    """Compare what the deployment actually spans against what the fit covered.
+
+    The temperature gate cannot be evaluated at patch time --- knowing a file's
+    range means reading its data, and ``patch`` only reads the config.  The
+    streaming pass already reads every file, so the comparison is made here and
+    the verdict travels in the record for ``patch`` to act on.
+    """
+    pp = res.get("per_profile") or {}
+    for ch, entry in res.get("channels", {}).items():
+        seen = (pp.get("channels", {}).get(ch) or {})
+        fit_lo, fit_hi = entry.get("T_range", [None, None])
+        if fit_lo is None or seen.get("T_min") is None:
+            continue
+        below = fit_lo - seen["T_min"]
+        above = seen["T_max"] - fit_hi
+        entry["validity"] = {
+            "T_fitted": [fit_lo, fit_hi],
+            "T_seen": [seen["T_min"], seen["T_max"]],
+            "extrapolated_below_K": max(0.0, float(below)),
+            "extrapolated_above_K": max(0.0, float(above)),
+            "n_profiles_outside": int(seen.get("n_outside", 0)),
+            "n_profiles_total": int(seen.get("n_profiles", 0)),
+            "time_start": res.get("time_start"),
+            "time_end": res.get("time_end"),
+        }
 
 
 def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
@@ -461,16 +505,35 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
                 recs[ch].append((float(np.mean(ps.time[sel])),
                                  float(np.mean(a0[sel][good])),
                                  float(np.mean(resid[sel][good])),
-                                 float(np.median(ps.T_ref[sel]))))
+                                 float(np.median(ps.T_ref[sel])),
+                                 float(np.min(ps.T_ref[sel])),
+                                 float(np.max(ps.T_ref[sel]))))
 
     out: dict = {"n_files_streamed": n_files, "channels": {}}
     for ch, R in recs.items():
-        if len(R) < 12:
-            out["channels"][ch] = {"n_profiles": len(R), "note": "too few to block"}
+        if not R:
+            out["channels"][ch] = {"n_profiles": 0, "note": "no profiles"}
             continue
         arr = np.array(R)
         o = np.argsort(arr[:, 0])
         t, a0, resid, Tm = arr[o, 0], arr[o, 1], arr[o, 2], arr[o, 3]
+        T_lo_all, T_hi_all = arr[o, 4], arr[o, 5]
+        fit_lo, fit_hi = res["channels"][ch].get("T_range", [-np.inf, np.inf])
+        n_outside = int(np.sum((T_lo_all < fit_lo) | (T_hi_all > fit_hi)))
+
+        # The temperature coverage is recorded even when there are too few
+        # profiles to block, because it is what feeds the patch-time
+        # extrapolation warning -- and a short deployment is exactly where the
+        # fit is most likely to have missed part of the range.
+        coverage = {
+            "n_profiles": len(R),
+            "T_min": float(np.min(T_lo_all)),
+            "T_max": float(np.max(T_hi_all)),
+            "n_outside": n_outside,
+        }
+        if len(R) < 12:
+            out["channels"][ch] = {**coverage, "note": "too few to block"}
+            continue
         nb = int(st_cfg.get("n_blocks", 12) or 12)
         edges = np.linspace(t.min(), t.max(), nb + 1)
         TK = float(np.median(Tm)) + 273.15
@@ -493,7 +556,7 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
         stab.channel = ch
         print(f"  {stab.summary()}")
         out["channels"][ch] = {
-            "n_profiles": len(R),
+            **coverage,
             "span_days": float((t.max() - t.min()) / SECONDS_PER_DAY),
             "resid_median_K": float(np.median(resid)),
             "resid_sd_K": float(np.std(resid)),

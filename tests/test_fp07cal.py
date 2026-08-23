@@ -394,6 +394,44 @@ def test_patch_writes_to_the_live_beta_key():
     assert "beta_1" not in plan.edits["T1"]
 
 
+def test_patch_warns_when_extrapolating_outside_the_fitted_range():
+    """Applying a polynomial outside its fitted range must be visible."""
+    from odas_tpw.fp07cal.patch import build_edits
+
+    record = {"instrument_sn": "435", "channels": {"T1": {
+        "config_equivalent": {"t_0": 286.65, "beta_1": 3051.45},
+        "bridge": {}, "beta_key": "beta_1", "lag_trustworthy": True,
+        "T_range": [10.0, 20.0],
+        "validity": {
+            "T_fitted": [10.0, 20.0], "T_seen": [4.0, 26.0],
+            "extrapolated_below_K": 6.0, "extrapolated_above_K": 6.0,
+            "n_profiles_outside": 40, "n_profiles_total": 100,
+        },
+    }}}
+    config = {"instrument_info": {"sn": "435"},
+              "channels": [{"name": "T1", "t_0": "289.301", "beta_1": "3143.55"}]}
+    plan = build_edits(record, config)
+    # A warning, not an error: leaving files on the nominal coefficients would
+    # re-create the very discontinuity the tool removes.
+    assert plan.ok
+    assert any("extrapolating" in w for w in plan.warnings)
+
+
+def test_patch_warns_on_an_untrusted_probe_serial():
+    from odas_tpw.fp07cal.patch import build_edits
+
+    record = {"instrument_sn": "435", "channels": {"T1": {
+        "config_equivalent": {"t_0": 286.65, "beta_1": 3051.45},
+        "bridge": {}, "beta_key": "beta_1", "lag_trustworthy": True,
+        "probe_sn": "T", "probe_sn_trusted": False,
+    }}}
+    config = {"instrument_info": {"sn": "435"},
+              "channels": [{"name": "T1", "t_0": "289.301", "beta_1": "3143.55"}]}
+    plan = build_edits(record, config)
+    assert plan.ok
+    assert any("placeholder" in w for w in plan.warnings)
+
+
 def test_select_order_prefers_the_order_that_extrapolates():
     """In-sample fit always improves with order; held-out is the real test."""
     from odas_tpw.fp07cal.fit import select_order

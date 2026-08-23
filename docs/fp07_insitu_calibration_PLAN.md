@@ -533,8 +533,8 @@ only if the disk cost above turns out to be prohibitive.
 | 0 | `fp07-cal coverage` + fix A4 | Read-only. Tells us how many yos actually have CT, the gap structure, T range, dive/climb balance, clipping rate. **Do this before writing the estimator** — it may change the design. A4 is a standalone safety fix. |
 | 1 | Synthetic generator + `fp07-cal pairs` | Generator emits a `.p` + `hotel.nc` from known coefficients, known lag, known noise, with configurable reference sparsity. |
 | 2 | `fp07-cal fit` + diagnostics + **stability report** | D4, D5, D8 (§8). Cheap given the pairs/fit split; answers the drift question from this deployment's own data. |
-| 3 | Coefficient record + `fp07-cal patch` | D6, D7, A5, A6. Resolve the delete-key question. |
-| 4 | Worked example + docs | `examples/slocum_glider_hotel/fp07-cal.yaml`, the trim→fit→patch→run runbook, and `fp07.calibrate: false` in the example `perturb.yaml`. No perturb code change. |
+| 3 | Coefficient record + `fp07-cal patch` | **DONE.** D6, D7, A5, A6. The delete-key question resolved without touching `config_patch`: `beta_k = 0` raises `ZeroDivisionError` (the value is a reciprocal), while `beta_k = 1e30` is bit-identical to omitting the key. |
+| 4 | Worked example + docs | **DONE.** `examples/slocum_glider_hotel/fp07-cal.yaml`, `docs/fp07cal/runbook.md`, a pointer from the example `perturb.yaml`, and a CLAUDE.md section. No perturb code change — V11 confirms it. |
 | 5 | **Transferability study** | The empirical answer to the generalizability question. See §6. |
 
 Phases 0–2 are the load-bearing ones; 3 is plumbing onto machinery that already
@@ -559,7 +559,7 @@ exists (`config_patch`), and 4 is documentation.
 | V12 | **No-CT files are still patched.** A synthetic set where only every 3rd file has CT: all files must come out patched with identical coefficients, and the no-CT files must contribute zero pairs (§3.2). |
 | V13 | **Gap-ramp rejection.** The measured §3.1 failure — a fabricated mid-gap ramp yielding `lag -7.05 s, corr 0.021` — must produce zero pairs and trip R9, not a fit. |
 | V14 | **Drift recovery.** Inject a known `t_0` ramp with `beta_1` fixed; the blocked estimator (D8) must recover the rate, and must report "no significant drift" on a drift-free control. |
-| V11 | **Pipeline is untouched.** `perturb run` over patched files with `fp07.calibrate: false` produces the calibrated temperatures with **zero** changes to `perturb/`. This is the test that proves "pre-pipeline" actually held. |
+| V11 | **Pipeline is untouched.** ✅ **Verified on osu685.** `perturb profiles` over patched files with `fp07.calibrate: false` produced profile products shifted by −2.658 K (T1) / −1.617 K (T2) against the same run on the originals — matching the reader-level −2.659 / −1.620 exactly, with zero changes to `perturb/`. Provenance travels too: the profile NetCDF's `configuration_string` global attribute carries the full patched config including the `; PATCHED by fp07-cal` banner and the original values commented out. |
 
 ---
 

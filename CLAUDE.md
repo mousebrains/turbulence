@@ -18,6 +18,7 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas
 - `processing/` — Instrument-agnostic profile processing (top_trim, bottom-crash, ct_align, mk_epsilon_mean, mk_chi_mean, mixing N²/dT/dz/Γ/K_T/K_ρ)
 - `perturb/` — Full campaign processing pipeline (trim, merge, calibrate, compute, bin)
 - `pyturb/` — Jesse's standalone analysis code (hosted here; `pyturb-cli` entry point)
+- `fp07cal/` — FP07 in-situ calibration against a CTD (`fp07-cal` entry point). A **pre-pipeline** step: fits one Steinhart-Hart set per deployment and patches it into the `.p` files. See `docs/fp07cal/runbook.md`.
 
 ### Key Modules (rsi)
 
@@ -55,7 +56,49 @@ rsi-tpw chi VMP/*.p -o chi/                    # compute chi (Method 2)
 rsi-tpw chi VMP/*.p --epsilon-dir epsilon/ -o chi/  # chi with epsilon (Method 1)
 rsi-tpw pipeline VMP/*.p -o results/           # full pipeline
 rsi-tpw eps VMP/*.p --salinity 34.5 -o epsilon/  # custom salinity
+
+fp07-cal demo                                  # exercise the chain on synthetic data
+fp07-cal init -o fp07-cal.yaml                 # commented template config
+fp07-cal coverage -c fp07-cal.yaml             # what CTD reference do we actually have?
+fp07-cal fit -c fp07-cal.yaml                  # coefficients + stability diagnostic
+fp07-cal patch -c fp07-cal.yaml                # write them into calibrated .p copies
 ```
+
+### FP07 in-situ calibration (`fp07-cal`)
+
+A **pre-pipeline** tool, run once per deployment against a CTD reference;
+perturb then reads the patched files with `fp07.calibrate: false` and needs no
+changes. Runbook: `docs/fp07cal/runbook.md`. Worked 72-day result:
+`docs/fp07cal/osu685_stability.md`. Design and adversarial review:
+`docs/fp07_insitu_calibration_PLAN.md`.
+
+Facts that are easy to get wrong:
+
+- The reference is read **directly from the CTD NetCDF on the CTD's own
+  clock**, never through `perturb/hotel.py`. That merge interpolates across
+  arbitrary gaps and edge-holds outside coverage, so on a CT that ran only some
+  yos it hands the fit a fabricated ramp. Confirmed empirically: NaN-marking a
+  gap produces **byte-identical** output from the perturb loader, so gap
+  control applied when building a hotel file does not survive the merge.
+- The thermistor is **decimated down onto real CTD sample times**, not the CTD
+  interpolated up. That invents no reference, bandwidth-matches the regressor
+  (so `beta_1` is not attenuated by errors-in-variables), and makes a sparse
+  reference a non-event: no CTD sample, no pair.
+- **Lag is gated on peak sharpness, never on `r`.** A glider dive is a
+  monotonic ramp, and a shifted straight line is the same line plus a constant,
+  which every correlation removes: on real data raw pressure scored
+  `r = 1.000000` at *every* lag over ±30 s. Scores are computed on high-passed
+  series, and a peak at the search boundary is refused.
+- **`beta_2 = 0` does not delete a quadratic term** — the config value is a
+  reciprocal, so zero means an infinite term and `convert_therm` raises
+  `ZeroDivisionError`. `beta_2 = 1e30` is bit-identical to omitting the key.
+- Sensor geometry (`dz·dT/dz`, from the FP07 and CTD sitting at different
+  depths at the same instant) is fitted **jointly** with the coefficients.
+  Estimating it from post-fit residuals lets the calibration absorb it into
+  `t_0` — 25 cm injected came back as 0.4 cm.
+- Polynomial order is chosen by **held-out** error split on temperature, not by
+  in-sample fit or a t-test: `beta_3` can carry a t-statistic of 10 while
+  making extrapolation four times worse.
 
 ### Python API
 
