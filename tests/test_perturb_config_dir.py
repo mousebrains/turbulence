@@ -126,6 +126,7 @@ def test_token_paths_hash_identically_across_mounts(tmp_path):
         "hotel:\n"
         "  enable: true\n"
         "  file: <CONFIG_DIR>/hotel.csv\n"
+        "  max_gap: 30.0\n"
     )
     p1 = _write_cfg(tmp_path / "mountA" / "data", body)
     p2 = _write_cfg(tmp_path / "mountB" / "elsewhere" / "data", body)
@@ -243,7 +244,7 @@ def test_gps_and_hotel_files_expanded_at_consumer(tmp_path):
     p = _write_cfg(
         d,
         "gps:\n  source: netcdf\n  file: <CONFIG_DIR>/gps.nc\n"
-        "hotel:\n  enable: true\n  file: <CONFIG_DIR>/hotel.csv\n",
+        "hotel:\n  enable: true\n  file: <CONFIG_DIR>/hotel.csv\n  max_gap: 30.0\n",
     )
     cfg = load_config(str(p))
     hotel_cfg = C.merge_config("hotel", cfg.get("hotel"))
@@ -262,7 +263,7 @@ def test_missing_gps_hotel_after_expansion_reports_missing(tmp_path):
     p = _write_cfg(
         d,
         "gps:\n  source: netcdf\n  file: <CONFIG_DIR>/nope.nc\n"
-        "hotel:\n  enable: true\n  file: <CONFIG_DIR>/nope.csv\n",
+        "hotel:\n  enable: true\n  file: <CONFIG_DIR>/nope.csv\n  max_gap: 30.0\n",
     )
     cfg = load_config(str(p))
     hotel_cfg = C.merge_config("hotel", cfg.get("hotel"))

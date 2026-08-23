@@ -431,6 +431,14 @@ class _PerturbConfigManager(ConfigManager):
                 raise ValueError(
                     f"{section}: diss_sec ({diss_s}) is shorter than fft_sec ({fft_s})"
                 )
+        # hotel.max_gap is required when the hotel merge is enabled; validate
+        # it (and every per-channel override) here so a missing value fails
+        # once at load time rather than once per file inside the worker pool.
+        hotel = config.get("hotel") or {}
+        if isinstance(hotel, dict) and hotel.get("enable", False):
+            from odas_tpw.perturb.hotel import resolve_gap_settings
+
+            resolve_gap_settings({**DEFAULTS["hotel"], **hotel})
 
 
 _mgr = _PerturbConfigManager(

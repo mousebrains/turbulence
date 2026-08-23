@@ -267,3 +267,122 @@ def test_per_channel_max_gap_is_validated_too():
     with pytest.raises(ValueError, match=r"channels\['a'\].max_gap"):
         interpolate_hotel(hd, pf, {"max_gap": 30.0,
                                    "channels": {"a": {"max_gap": "no"}}})
+
+
+# ---------------------------------------------------------------------------
+# Round-2 review items: sorting, inherit-on-null, measured tolerance,
+# fail-fast validation, and the gate travelling downstream.
+# ---------------------------------------------------------------------------
+
+
+def test_unsorted_source_times_are_sorted_before_use():
+    """An unsorted CSV/NetCDF must not turn into all-NaN output.
+
+    interp1d sorts internally, but the range/gap bookkeeping reads
+    hotel_t[0]/hotel_t[-1] directly, so unsorted times used to reject
+    everything as "outside coverage"; pchip raised outright.
+    """
+    hotel_t = np.array([15.0, 0.0, 5.0, 10.0])
+    data = 2.0 + hotel_t  # linear in time regardless of storage order
+    targets = np.array([0.0, 5.0, 10.0])
+    for kind in ("linear", "nearest", "pchip"):
+        out = _interp_one(hotel_t, data, targets, kind, max_gap=100.0)
+        np.testing.assert_allclose(out, [2.0, 7.0, 12.0])
+
+
+def test_per_channel_null_inherits_the_global():
+    """`max_gap: null` / `extrapolate: null` on a channel mean "inherit"."""
+    from odas_tpw.perturb.hotel import resolve_gap_settings
+
+    settings = resolve_gap_settings({
+        "max_gap": 30.0,
+        "extrapolate": True,
+        "channels": {"a": {"max_gap": None, "extrapolate": None}},
+    })
+    assert settings["a"] == (30.0, True)
+    assert settings[None] == (30.0, True)
+
+
+def test_per_channel_null_does_not_raise_when_global_is_set():
+    t, v = _sparse()
+    hd = HotelData(time=t, channels={"a": v}, time_is_relative=True)
+    pf = _PF(np.array([1800.0, 20000.0]))
+    out = interpolate_hotel(hd, pf, {
+        "max_gap": 30.0,
+        "extrapolate": True,
+        "channels": {"a": {"max_gap": None, "extrapolate": None}},
+    })
+    assert np.isnan(out["a"][0])      # inherited the 30 s gate
+    assert np.isfinite(out["a"][1])   # inherited extrapolate: true
+
+
+def test_measured_match_tolerates_float_slop():
+    """A target within ~1e-6 of a source sample is that sample, not the gap.
+
+    Hotel epochs shifted by the file start have ~1e-7 s resolution, so exact
+    equality was luck: a target 1e-9 s before the first sample after a 98 s
+    dropout was NaN-ed while 1e-9 after was kept.
+    """
+    hotel_t = np.array([0.0, 1.0, 99.0, 100.0])
+    data = hotel_t.copy()
+    for slop in (-1e-9, 0.0, 1e-9):
+        out = _interp_one(hotel_t, data, np.array([99.0 + slop]), "linear",
+                          max_gap=10.0)
+        assert np.isfinite(out[0]), f"slop={slop}"
+    # A target genuinely inside the dropout is still rejected.
+    out = _interp_one(hotel_t, data, np.array([50.0]), "linear", max_gap=10.0)
+    assert np.isnan(out[0])
+
+
+def test_bridged_gap_tolerance_direct():
+    hotel_t = np.array([0.0, 1.0, 99.0, 100.0])
+    gap = _bridged_gap(hotel_t, np.array([99.0 - 1e-9, 99.0 + 1e-9, 50.0]))
+    assert gap[0] == 0.0 and gap[1] == 0.0
+    assert gap[2] == 98.0
+
+
+def test_validate_config_fails_fast_on_missing_max_gap(tmp_path):
+    """A missing max_gap errors once at config-load time, not per file."""
+    import yaml
+
+    from odas_tpw.perturb.config import load_config
+
+    cfg = tmp_path / "perturb.yaml"
+    cfg.write_text(yaml.safe_dump({
+        "files": {"p_file_root": str(tmp_path), "output_root": str(tmp_path)},
+        "hotel": {"enable": True, "file": "hotel.csv"},
+    }))
+    with pytest.raises(ValueError, match=r"hotel\.max_gap is required"):
+        load_config(str(cfg))
+
+
+def test_validate_config_checks_per_channel_overrides_too(tmp_path):
+    import yaml
+
+    from odas_tpw.perturb.config import load_config
+
+    cfg = tmp_path / "perturb.yaml"
+    cfg.write_text(yaml.safe_dump({
+        "files": {"p_file_root": str(tmp_path), "output_root": str(tmp_path)},
+        "hotel": {"enable": True, "file": "hotel.csv", "max_gap": 30.0,
+                  "channels": {"a": {"max_gap": "bogus"}}},
+    }))
+    with pytest.raises(ValueError, match=r"channels\['a'\]\.max_gap"):
+        load_config(str(cfg))
+
+
+def test_merge_records_max_gap_on_channel_info():
+    """The resolved gate travels with the channel for downstream refills."""
+    from odas_tpw.perturb.hotel import merge_hotel_into_pfile
+
+    t, v = _sparse()
+    hd = HotelData(time=t, channels={"a": v, "b": v}, time_is_relative=True)
+    pf = _PF(np.linspace(0.0, 7260.0, 500))
+    pf.channel_info = {}
+    pf._fast_channels = set()
+    merge_hotel_into_pfile(hd, pf, {
+        "max_gap": 30.0,
+        "channels": {"a": {}, "b": {"max_gap": "unlimited"}},
+    })
+    assert pf.channel_info["a"]["hotel_max_gap"] == 30.0
+    assert "hotel_max_gap" not in pf.channel_info["b"]  # unlimited: no gate

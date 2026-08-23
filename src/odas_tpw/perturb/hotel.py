@@ -22,11 +22,13 @@ The ``hotel.channels`` YAML block supports three forms per source name:
         max_gap: 30.0        # [s] NaN the output where the two bracketing
                              # SOURCE samples are farther apart than this,
                              # instead of ruling a straight line across the
-                             # hole (default: hotel.max_gap, itself null =
-                             # interpolate across anything)
+                             # hole (default: hotel.max_gap, which is
+                             # REQUIRED -- a number or "unlimited"; a
+                             # per-channel null inherits it)
         extrapolate: false   # NaN outside the source's own time range instead
                              # of holding the end values (default:
-                             # hotel.extrapolate, itself true)
+                             # hotel.extrapolate, itself false; a per-channel
+                             # null inherits it)
         scale: 0.0174533     # multiplicative factor (default 1.0)
         offset: 0.0          # additive offset (default 0.0)
         units: "rad"         # CF units string (default: source file's units)
@@ -471,6 +473,11 @@ def _load_mat(
                      units=units, time_is_relative=is_relative)
 
 
+# Relative tolerance for "the target lands ON a source sample" (see
+# _bridged_gap), scaled by max(1 s, median source interval).
+_MEASURED_TOL = 1e-6
+
+
 def _bridged_gap(hotel_t: np.ndarray, target_t: np.ndarray) -> np.ndarray:
     """Width of the source gap each target sample is interpolated ACROSS.
 
@@ -492,7 +499,17 @@ def _bridged_gap(hotel_t: np.ndarray, target_t: np.ndarray) -> np.ndarray:
     inside = (target_t >= hotel_t[0]) & (target_t <= hotel_t[-1])
     lo = np.clip(idx - 1, 0, n - 1)
     hi = np.clip(idx, 0, n - 1)
-    measured = hotel_t[hi] == target_t
+    # Float tolerance: target times are exact k/fs but hotel epochs shifted by
+    # the file start have ~1e-7 s resolution, so an exact match is luck. A
+    # target within a sliver of a source sample is that sample, not the gap.
+    dt = np.diff(hotel_t)
+    median_dt = float(np.median(dt)) if dt.size else 1.0
+    tol = _MEASURED_TOL * max(1.0, median_dt)
+    # Check both bracketing neighbours: a target a sliver AFTER a sample has
+    # ``hi`` pointing at the next one, so hi alone would miss the match.
+    measured = (np.abs(hotel_t[hi] - target_t) <= tol) | (
+        np.abs(hotel_t[lo] - target_t) <= tol
+    )
     return np.where(inside & ~measured, hotel_t[hi] - hotel_t[lo], 0.0)
 
 
@@ -542,6 +559,13 @@ def _interp_one(
         return np.full(np.shape(target_t), np.nan, dtype=np.float64)
     hotel_t = np.asarray(hotel_t, dtype=np.float64)[finite]
     data = np.asarray(data, dtype=np.float64)[finite]
+    # Sort: interp1d sorts internally, but the range / gap bookkeeping below
+    # reads hotel_t[0] and hotel_t[-1] directly, and PchipInterpolator requires
+    # increasing x. No loader sorts, and a CSV/NetCDF need not be in order.
+    if np.any(np.diff(hotel_t) < 0):
+        order = np.argsort(hotel_t, kind="stable")
+        hotel_t = hotel_t[order]
+        data = data[order]
 
     if kind == "pchip":
         interp = PchipInterpolator(hotel_t, data, extrapolate=False)
@@ -610,11 +634,9 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
         raise ValueError(
             f"hotel.interpolation={default_kind!r}: not in {sorted(_INTERP_KINDS)}"
         )
-    # Both default to the historical behaviour so an existing config keeps
-    # producing the numbers it produced before; the warning above is what makes
-    # the situation visible without changing them.
-    default_max_gap = _resolve_max_gap(hotel_cfg.get("max_gap"), "hotel.max_gap")
-    default_extrapolate = bool(hotel_cfg.get("extrapolate", False))
+    # max_gap is required (a number or "unlimited") and extrapolate defaults to
+    # False; resolve_gap_settings validates both, globally and per channel.
+    gap_settings = resolve_gap_settings(hotel_cfg)
     _, channels_opts = _normalize_channels_cfg(hotel_cfg.get("channels"))
 
     pf_start_offset = 0.0 if hotel_data.time_is_relative else pf.start_time.timestamp()
@@ -634,12 +656,7 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
         # gets nothing for that channel, same as a missing channel.
         if hotel_t.size < 2:
             continue
-        max_gap = (
-            _resolve_max_gap(opts["max_gap"], f"hotel.channels[{src!r}].max_gap")
-            if "max_gap" in opts
-            else default_max_gap
-        )
-        extrapolate = bool(opts.get("extrapolate", default_extrapolate))
+        max_gap, extrapolate = gap_settings.get(src, gap_settings[None])
         stats: dict = {}
         result[src] = _interp_one(
             hotel_t, data, target_t, kind,
@@ -650,6 +667,39 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
         _warn_if_fabricated(src, stats, max_gap, extrapolate)
 
     return result
+
+
+def resolve_gap_settings(hotel_cfg: dict) -> dict[str | None, tuple[float | None, bool]]:
+    """Validate ``max_gap`` / ``extrapolate`` once, globally and per channel.
+
+    Returns ``{source_name: (max_gap, extrapolate)}`` with the global defaults
+    under the key ``None``; ``max_gap`` is a float in seconds or ``None`` for
+    ``"unlimited"``.  A per-channel ``null`` (or an absent key) inherits the
+    global value for either setting.
+
+    Raises ``ValueError`` on a missing or malformed value.  Called at config
+    time by the pipeline so a bad config fails once, up front, rather than
+    once per file inside the worker pool.
+    """
+    default_max_gap = _resolve_max_gap(hotel_cfg.get("max_gap"), "hotel.max_gap")
+    default_extrapolate = bool(hotel_cfg.get("extrapolate") or False)
+    _, channels_opts = _normalize_channels_cfg(hotel_cfg.get("channels"))
+    out: dict[str | None, tuple[float | None, bool]] = {
+        None: (default_max_gap, default_extrapolate)
+    }
+    for src, opts in channels_opts.items():
+        max_gap = (
+            _resolve_max_gap(opts["max_gap"], f"hotel.channels[{src!r}].max_gap")
+            if opts.get("max_gap") is not None
+            else default_max_gap
+        )
+        extrapolate = (
+            bool(opts["extrapolate"])
+            if opts.get("extrapolate") is not None
+            else default_extrapolate
+        )
+        out[src] = (max_gap, extrapolate)
+    return out
 
 
 def _resolve_max_gap(value, where: str) -> float | None:
@@ -756,6 +806,7 @@ def merge_hotel_into_pfile(hotel_data: HotelData, pf, hotel_cfg: dict) -> None:
     fast_channels = set(hotel_cfg.get("fast_channels", ["speed", "P"]))
     _, channels_opts = _normalize_channels_cfg(hotel_cfg.get("channels"))
     interpolated = interpolate_hotel(hotel_data, pf, hotel_cfg)
+    gap_settings = resolve_gap_settings(hotel_cfg)  # validated above already
 
     # Snapshot the instrument's own channels so a hotel variable cannot silently
     # clobber one profile detection depends on (a hotel "P" would overwrite the
@@ -796,11 +847,19 @@ def merge_hotel_into_pfile(hotel_data: HotelData, pf, hotel_cfg: dict) -> None:
         units = opts.get("units")
         if units is None:
             units = hotel_data.units.get(src, "")
-        pf.channel_info[out_name] = {
+        info = {
             "units": units,
             "type": "hotel",
             "name": out_name,
         }
+        # Carry the gate downstream: the per-profile NetCDF writer copies this
+        # to a ``hotel_max_gap`` attr, so consumers that interp-fill NaN
+        # samples (stratification / viscosity salinity) can refuse to rule
+        # across the very hole the merge just NaN-ed.  None = unlimited.
+        max_gap, _ = gap_settings.get(src, gap_settings[None])
+        if max_gap is not None:
+            info["hotel_max_gap"] = float(max_gap)
+        pf.channel_info[out_name] = info
 
         is_fast = bool(opts["fast"]) if "fast" in opts else out_name in fast_channels
         if is_fast:
