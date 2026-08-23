@@ -21,13 +21,11 @@ files:
                          # A full deployment held at once is several GB.
 
 reference:
-  # Read STRAIGHT from the hotel NetCDF, on the CTD's own clock. Deliberately
-  # NOT through perturb's hotel merge: that path interpolates across arbitrary
-  # gaps and edge-holds outside coverage, so on a CT that ran only some yos it
-  # would hand the fit a fabricated ramp over most of the record. (Confirmed:
-  # NaN-marking a gap in the source produces byte-identical output from the
-  # perturb loader — gap control applied when BUILDING a hotel file does not
-  # survive the merge.)
+  # Read STRAIGHT from the hotel NetCDF, on the CTD's own clock — real samples
+  # only, deliberately NOT through perturb's hotel merge. How that merge treats
+  # gaps is governed by perturb's hotel.max_gap / extrapolate settings (PR
+  # #150); a calibration must not depend on merge configuration, so this tool
+  # takes only what the CTD actually measured and invents nothing in between.
   #
   # Any NetCDF carrying the CTD on its own clock works: a hotel file, or a
   # converted Slocum ebd.nc read directly (which is what was validated).
@@ -54,7 +52,12 @@ pairs:
                          # zero pairs are normal — they are still calibrated,
                          # from the pooled fit.
   kernel_width: null     # [s] boxcar; null = the CTD's median sample interval
-  kernel_tau: 0.5        # [s] single pole approximating the CTD's response
+  kernel_tau: 2.7        # [s] single pole approximating the CTD's response.
+                         # 2.7 s is the SBE41cp response measured in situ on
+                         # osu685 (thermal lag minus clock offset — runbook.md).
+                         # A pole mismatch is not a delay, so the lag search
+                         # cannot remove it; too-fast a pole leaks a few mK
+                         # into a one-signed (climb-only) deployment.
   min_speed: 0.05        # [m/s] below this the thermistor is not flushing
   require_profile: true
 

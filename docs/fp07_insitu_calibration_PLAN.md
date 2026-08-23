@@ -1,6 +1,10 @@
 # FP07 in-situ calibration — extracting reusable coefficients
 
-**Status:** plan, not yet implemented.
+**Status:** implemented in `src/odas_tpw/fp07cal/` (CLI `fp07-cal`); this
+document is the original plan, kept for the design rationale. The reference
+plumbing in §1 ("`perturb/hotel.py` … merged onto the `.p` time grid") is
+**superseded** — the shipped tool reads the CTD NetCDF directly on the CTD's
+own clock; see `docs/fp07cal/runbook.md`.
 **Branch/worktree:** `worktree-fp07-insitu-cal` @ `.claude/worktrees/fp07-insitu-cal`
 **Date:** 2026-08-22
 

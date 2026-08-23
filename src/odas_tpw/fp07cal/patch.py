@@ -27,24 +27,36 @@ Refusals
 A coefficient set is only valid alongside the bridge constants it was fitted
 against and for the instrument it came from, so a mismatch in any bridge
 parameter, the instrument serial number, or the live ``beta`` key is an error
-rather than a warning.  Re-patching an already-patched file is refused too: a
-second pass would nest banners and the "original configuration" block would no
-longer be original.
+rather than a warning.  A file that already carries an **fp07-cal** banner is
+refused too: stacking two in-situ calibrations makes the provenance ambiguous.
+A file patched by ``rsi-tpw patch-config`` for some other reason (a bridge
+parameter fix, say) is fine --- ``config_patch`` keeps a single frozen
+original-config block across passes, and fixing the bridge constants first is
+exactly the workflow ``logr.py`` recommends.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from odas_tpw.rsi.config_patch import (
-    CONFIG_MARKER,
     EditSpec,
     patch_files,
     read_config_text,
 )
 from odas_tpw.rsi.p_file import parse_config
+
+SCHEMA = "fp07-cal/1"
+"""The ``schema`` value ``fp07-cal fit`` writes and ``patch`` requires."""
+
+AUTHOR = "fp07-cal"
+"""Banner author written by :func:`patch_deployment`; what :func:`already_patched` looks for."""
+
+# config_patch writes "; PATCHED <when> by <author> -- <tool> <version>".
+_BANNER_RE = re.compile(r"^;\s*PATCHED\b.*\bby\s+" + re.escape(AUTHOR) + r"\b", re.MULTILINE)
 
 # 1/1e30 is 1e-30; against L^2 ~ 1e-2 and 1/T_K ~ 3.4e-3 the term contributes
 # ~1e-32 -- below float64 resolution on the sum, hence bit-identical to absent.
@@ -225,11 +237,101 @@ def _iso(t) -> str:
 
 
 def already_patched(path: str | Path) -> bool:
-    """True when the file already carries an fp07-cal/config_patch banner."""
+    """True when the file already carries an **fp07-cal** provenance banner.
+
+    Only this tool's banner counts.  A generic ``rsi-tpw patch-config`` pass
+    (e.g. fixing a bridge parameter before calibrating) leaves the file
+    eligible.
+    """
     try:
-        return CONFIG_MARKER in read_config_text(path)
+        return _BANNER_RE.search(read_config_text(path)) is not None
     except Exception:
         return False
+
+
+_REQUIRED_TOP = ("instrument_sn", "channels")
+
+
+def validate_record(record: object) -> dict:
+    """Check that *record* is a complete ``fp07-cal/1`` coefficient record.
+
+    Every safety gate in :func:`build_edits` is a comparison against a field of
+    the record, so a record missing that field makes the gate vacuous.  A
+    foreign JSON or a hand-trimmed one must therefore be refused outright
+    rather than partially applied.  Raises ``ValueError``.
+    """
+    if not isinstance(record, dict):
+        raise ValueError("coefficient record is not a JSON object")
+    schema = record.get("schema")
+    if schema != SCHEMA:
+        raise ValueError(
+            f"coefficient record schema is {schema!r}, expected {SCHEMA!r}; "
+            f"this is not an fp07-cal coefficients.json"
+        )
+    missing = [k for k in _REQUIRED_TOP if k not in record]
+    if missing:
+        raise ValueError(f"coefficient record is missing {missing}")
+    chans = record["channels"]
+    if not isinstance(chans, dict) or not chans:
+        raise ValueError("coefficient record has no channels")
+    problems: list[str] = []
+    for ch, entry in chans.items():
+        if not isinstance(entry, dict):
+            problems.append(f"{ch}: entry is not an object")
+            continue
+        if "config_equivalent" not in entry:
+            # A channel that failed (e.g. zero pairs) is recorded with an
+            # "error" key and no coefficients; build_edits skips it with a
+            # warning.  Only an entry that claims coefficients is checked.
+            if "error" in entry:
+                continue
+            problems.append(f"{ch}: no config_equivalent")
+            continue
+        for key in ("bridge", "coefficients"):
+            if not entry.get(key):
+                problems.append(f"{ch}: missing {key!r}")
+        ce = entry["config_equivalent"]
+        if not isinstance(ce, dict) or "t_0" not in ce:
+            problems.append(f"{ch}: config_equivalent has no t_0")
+    if problems:
+        raise ValueError("incomplete coefficient record: " + "; ".join(problems))
+    return record
+
+
+# config_size is a uint16 in the .p header; config_patch refuses anything
+# larger at write time.  The patch roughly doubles the config (the original is
+# retained commented-out), so the projection is checked BEFORE any file is
+# written rather than discovered halfway through the batch.
+_CONFIG_SIZE_LIMIT = 0xFFFF
+
+
+def _precheck_destinations(srcs: list[Path], out_dir: str | Path, *, dry_run: bool) -> None:
+    """Refuse before writing anything if any output exists or any config would overflow."""
+    out_dir = Path(out_dir)
+    if not dry_run:
+        existing = [s.name for s in srcs if (out_dir / s.name).exists()]
+        if existing:
+            raise ValueError(
+                f"{len(existing)} destination file(s) already exist in {out_dir} "
+                f"(e.g. {existing[0]}); remove them or choose another output dir. "
+                f"Nothing was written."
+            )
+    too_big = []
+    for s in srcs:
+        try:
+            n = len(read_config_text(s).encode("latin-1"))
+        except Exception:
+            continue  # reported by build_edits as an unreadable config
+        # Conservative projection: the original is retained commented-out
+        # (+"; " per line) plus a banner and a change line per edit.
+        projected = 2 * n + 2048
+        if projected > _CONFIG_SIZE_LIMIT:
+            too_big.append(f"{s.name} ({n} bytes -> ~{projected})")
+    if too_big:
+        raise ValueError(
+            f"patched config would exceed the {_CONFIG_SIZE_LIMIT}-byte config_size "
+            f"limit for {len(too_big)} file(s): {', '.join(too_big[:3])}. Nothing was written."
+        )
 
 
 def patch_deployment(
@@ -239,7 +341,7 @@ def patch_deployment(
     *,
     channels: list[str] | None = None,
     note: str = "",
-    author: str = "fp07-cal",
+    author: str = AUTHOR,
     dry_run: bool = False,
 ) -> tuple[PatchPlan, list]:
     """Apply a coefficient record to every ``.p`` file of one deployment.
@@ -247,7 +349,11 @@ def patch_deployment(
     Returns ``(plan, results)`` where *results* is ``patch_files``' per-file
     ``(src, dst_or_None, changes)``.
     """
-    record = json.loads(Path(record_path).read_text())
+    try:
+        record = json.loads(Path(record_path).read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{record_path}: not valid JSON ({exc})") from exc
+    validate_record(record)
     srcs = [Path(s) for s in srcs]
     if not srcs:
         raise ValueError("no source .p files")
@@ -255,10 +361,11 @@ def patch_deployment(
     done = [s for s in srcs if already_patched(s)]
     if done:
         raise ValueError(
-            f"{len(done)} of {len(srcs)} inputs are already patched "
-            f"(e.g. {done[0].name}). Patch from the ORIGINAL files: a second "
-            f"pass nests banners and destroys the original-config block."
+            f"{len(done)} of {len(srcs)} inputs already carry an fp07-cal "
+            f"calibration (e.g. {done[0].name}). Patch the files that have not "
+            f"been calibrated yet, so the provenance stays unambiguous."
         )
+    _precheck_destinations(srcs, out_dir, dry_run=dry_run)
 
     # EVERY source is validated, not just the first. The instrument-SN and
     # bridge-parameter checks are the whole safety story of this step, and

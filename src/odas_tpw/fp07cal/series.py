@@ -12,24 +12,21 @@ Two containers, deliberately kept apart:
     real samples only**.
 
 The separation is the point.  ``perturb/hotel.py`` merges the CTD onto the
-instrument's grid by interpolating across arbitrary gaps and edge-holding
-outside coverage, so on a glider that samples CT every n-th yo the merged
-``sci_water_temp`` channel is a fabricated ramp over most of the record --- and
-a fit against it is a fit against fiction (plan findings A1, section 3.1).
-``ReferenceSeries`` therefore never interpolates and never extrapolates.  Its
-``valid_spans`` say where real samples sit closely enough together to be usable
-at all; everywhere else there is simply no reference, and the calibration
-contributes no data rather than inventing some.
-
-Confirmed empirically: NaN-marking a gap --- what ``dinkum-hotel``'s
-``projection.max_gap`` does --- produces byte-identical output from the perturb
-loader, so builder-side gap control does not survive the merge.  Reading the
-hotel file directly here is the only way to honour it.
+instrument's grid; how it treats gaps and out-of-coverage samples is governed
+by its ``hotel.max_gap`` / ``extrapolate`` settings (PR #150), so what the
+merged ``sci_water_temp`` channel contains depends on configuration.  A
+calibration must not: it needs the CTD's real samples on the CTD's own clock,
+regardless of how any downstream merge is configured (plan findings A1,
+section 3.1).  ``ReferenceSeries`` therefore never interpolates and never
+extrapolates.  Its ``valid_spans`` say where real samples sit closely enough
+together to be usable at all; everywhere else there is simply no reference,
+and the calibration contributes no data rather than inventing some.
 """
 
 from __future__ import annotations
 
 import re
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -183,9 +180,17 @@ def sanitize_reference(
             np.add.at(cnts, inv, 1.0)
             v = sums / cnts
             if p is not None:
+                # NaN-aware: `keep` filtered on time and value only, so a
+                # repeated stamp can pair a real pressure with a NaN one, and
+                # a plain sum would turn the whole group NaN — which highpass
+                # then smears over a full window of pressure_offset data.
+                fin = np.isfinite(p)
                 psums = np.zeros(uniq.size)
-                np.add.at(psums, inv, p)
-                p = psums / cnts
+                pcnts = np.zeros(uniq.size)
+                np.add.at(psums, inv[fin], p[fin])
+                np.add.at(pcnts, inv[fin], 1.0)
+                with np.errstate(invalid="ignore"):
+                    p = np.where(pcnts > 0, psums / np.maximum(pcnts, 1.0), np.nan)
             t = uniq
 
     return ReferenceSeries(time=t, value=v, source=source, pressure=p)
@@ -223,9 +228,10 @@ def load_hotel_reference(
 ) -> ReferenceSeries:
     """Read the CTD reference straight out of a hotel NetCDF.
 
-    Deliberately bypasses ``perturb.hotel``: that path interpolates across gaps
-    and edge-holds outside coverage (plan A1).  Here the file's own samples are
-    all we take.
+    Deliberately bypasses ``perturb.hotel``: that merge's gap handling is a
+    configuration matter (``hotel.max_gap`` / ``extrapolate``, PR #150),
+    whereas a calibration must see only the file's own samples (plan A1).
+    Here they are all we take.
 
     ``pressure_scale`` exists because a Slocum reports ``sci_water_pressure`` in
     **bar**.  A hotel file built by ``dinkum-hotel`` has already applied the
@@ -343,7 +349,15 @@ def load_probe_series(
                     direction="glide", min_duration=min_duration,
                 )
             ]
-        except Exception:
+        except Exception as exc:
+            # An empty profile list is a normal outcome (surface fragment);
+            # a detector CRASH is not, and hiding it makes "0 profiles"
+            # undiagnosable. Warn, then carry on with none.
+            warnings.warn(
+                f"{Path(path).name}: profile detection failed "
+                f"({type(exc).__name__}: {exc}); treating as no profiles",
+                stacklevel=2,
+            )
             profiles = []
 
     return ProbeSeries(

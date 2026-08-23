@@ -8,6 +8,7 @@ drift.
 """
 
 import itertools
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -501,56 +502,404 @@ def test_bridge_inverse_is_exact():
 
 
 # --- review findings on PR #149 -------------------------------------------
-def test_patch_validates_every_source_not_just_the_first():
-    """Checking one file while patching a list is not a check.
-
-    A mixed-instrument directory, or a probe swap that changed a bridge
-    constant partway through a deployment, would otherwise sail past the
-    instrument-SN and bridge-parameter gates and be written with coefficients
-    that cannot reproduce.
-    """
-    import json
-    import tempfile
-    from pathlib import Path
-
-    from odas_tpw.fp07cal.patch import patch_deployment
-
-    record = {
-        "instrument_sn": "435",
+def _schema_record(sn="435", t_0=286.65, beta_1=3051.45, bridge=None):
+    """A complete fp07-cal/1 record, as `fp07-cal fit` writes it."""
+    return {
+        "schema": "fp07-cal/1",
+        "instrument_sn": sn,
         "n_fit_files": 1,
         "channels": {"T1": {
-            "config_equivalent": {"t_0": 286.65, "beta_1": 3051.45},
-            "bridge": {"a": -12.3}, "beta_key": "beta_1", "lag_trustworthy": True,
+            "config_equivalent": {"t_0": t_0, "beta_1": beta_1},
+            "coefficients": [1.0 / t_0, 1.0 / beta_1],
+            "bridge": bridge or {"a": -12.3, "b": 0.99921, "g": 6.0, "e_b": 0.6828,
+                                 "adc_fs": 4.096, "adc_bits": 16.0},
+            "beta_key": "beta_1", "lag_trustworthy": True,
         }},
     }
 
-    def fake_config(sn, a):
-        return {"instrument_info": {"sn": sn},
-                "channels": [{"name": "T1", "a": a, "t_0": "289.301",
-                              "beta_1": "3143.55"}]}
+
+def _monkeypatched_plan(record, configs, tmp_path):
+    """Run patch_deployment (dry) against fake per-file configs."""
+    import json
 
     import odas_tpw.fp07cal.patch as P
-    configs = {"first.p": fake_config("435", "-12.3"),
-               "second.p": fake_config("479", "-16.3")}
-    orig_read, orig_parse, orig_patched = P.read_config_text, P.parse_config, P.already_patched
+
+    orig = (P.read_config_text, P.parse_config, P.already_patched)
     P.read_config_text = lambda p: Path(p).name
     P.parse_config = lambda name: configs[name]
     P.already_patched = lambda p: False
     try:
-        with tempfile.TemporaryDirectory() as d:
-            recf = Path(d) / "rec.json"
-            recf.write_text(json.dumps(record))
-            srcs = [Path(d) / "first.p", Path(d) / "second.p"]
-            plan, _results = patch_deployment(recf, srcs, Path(d) / "out",
-                                             dry_run=True)
+        recf = Path(tmp_path) / "rec.json"
+        recf.write_text(json.dumps(record))
+        srcs = [Path(tmp_path) / name for name in configs]
+        plan, _results = P.patch_deployment(recf, srcs, Path(tmp_path) / "out",
+                                            dry_run=True)
     finally:
-        P.read_config_text, P.parse_config, P.already_patched = (
-            orig_read, orig_parse, orig_patched)
+        P.read_config_text, P.parse_config, P.already_patched = orig
+    return plan
 
-    assert not plan.ok, "a mismatched second file must block the patch"
+
+def _fake_config(sn="435", a="-12.3", extra=None):
+    ch = {"name": "T1", "a": a, "t_0": "289.301", "beta_1": "3143.55"}
+    ch.update(extra or {})
+    return {"instrument_info": {"sn": sn}, "channels": [ch]}
+
+
+def test_patch_flags_an_sn_mismatch_in_a_later_source(tmp_path):
+    """Checking one file while patching a list is not a check (SN gate)."""
+    record = _schema_record(bridge={"a": -12.3})
+    plan = _monkeypatched_plan(record, {
+        "first.p": _fake_config(sn="435"),
+        "second.p": _fake_config(sn="479"),  # same bridge, different instrument
+    }, tmp_path)
+    assert not plan.ok
     joined = " ".join(plan.errors)
-    assert "second.p" in joined
-    assert "instrument SN mismatch" in joined or "bridge parameter" in joined
+    assert "second.p" in joined and "instrument SN mismatch" in joined
+
+
+def test_patch_flags_a_bridge_mismatch_in_a_later_source(tmp_path):
+    """The bridge gate must fire independently of the SN gate."""
+    record = _schema_record(bridge={"a": -12.3})
+    plan = _monkeypatched_plan(record, {
+        "first.p": _fake_config(a="-12.3"),
+        "second.p": _fake_config(a="-16.3"),  # same SN, different bridge
+    }, tmp_path)
+    assert not plan.ok
+    joined = " ".join(plan.errors)
+    assert "second.p" in joined and "bridge parameter" in joined
+    assert "instrument SN mismatch" not in joined
+
+
+def test_patch_flags_divergent_edits_across_sources(tmp_path):
+    """Two files that resolve to different edits do not share one calibration."""
+    record = _schema_record(bridge={"a": -12.3})
+    plan = _monkeypatched_plan(record, {
+        "first.p": _fake_config(),
+        # Same SN and bridge, but carries a live beta_2 the first lacks: its
+        # edit set gains a neutralisation and so differs from first.p's.
+        "second.p": _fake_config(extra={"beta_2": "2.5e5"}),
+    }, tmp_path)
+    assert not plan.ok
+    assert any("different edits" in e for e in plan.errors)
+
+
+# ---- P1: the record itself is validated ----------------------------------
+def test_patch_refuses_a_foreign_schema(tmp_path):
+    """A JSON that is not an fp07-cal record must be refused outright."""
+    import json
+
+    from odas_tpw.fp07cal.patch import patch_deployment
+
+    rec = tmp_path / "rec.json"
+    rec.write_text(json.dumps({
+        "schema": "something-else/9",
+        "channels": {"T1": {"config_equivalent": {"t_0": 291.0}}},
+    }))
+    with pytest.raises(ValueError, match="schema"):
+        patch_deployment(rec, [Path("tests/data/MR_SL435.p")], tmp_path / "out",
+                         dry_run=True)
+
+
+def test_patch_refuses_a_partial_record(tmp_path):
+    """Missing bridge/coefficients would make every safety gate vacuous."""
+    import json
+
+    from odas_tpw.fp07cal.patch import patch_deployment, validate_record
+
+    rec = _schema_record()
+    del rec["channels"]["T1"]["bridge"]
+    with pytest.raises(ValueError, match="missing 'bridge'"):
+        validate_record(rec)
+
+    # config_equivalent without t_0 must be a ValueError, not a KeyError later.
+    rec2 = _schema_record()
+    rec2["channels"]["T1"]["config_equivalent"] = {"T0": 291.0}
+    f = tmp_path / "rec.json"
+    f.write_text(json.dumps(rec2))
+    with pytest.raises(ValueError, match="t_0"):
+        patch_deployment(f, [Path("tests/data/MR_SL435.p")], tmp_path / "out",
+                         dry_run=True)
+
+    with pytest.raises(ValueError, match="instrument_sn"):
+        validate_record({"schema": "fp07-cal/1",
+                         "channels": {"T1": {"config_equivalent": {"t_0": 1.0},
+                                             "coefficients": [1.0],
+                                             "bridge": {"a": 1.0}}}})
+
+
+def test_patch_real_sn_mismatch_on_disk(tmp_path):
+    """Mixed-instrument directory with REAL files: nothing may be written."""
+    import json
+
+    from odas_tpw.fp07cal.patch import patch_deployment
+
+    rec = tmp_path / "rec.json"
+    rec.write_text(json.dumps(_schema_record()))
+    srcs = [Path("tests/data/MR_SL435.p"), Path("tests/data/SN479_0006.p")]
+    plan, results = patch_deployment(rec, srcs, tmp_path / "out", dry_run=False)
+    assert not plan.ok
+    assert results == []
+    assert not (tmp_path / "out").exists()
+    joined = " ".join(plan.errors)
+    assert "instrument SN mismatch" in joined
+
+
+# ---- P2/(d): fp07-cal banner detection, not any config_patch banner -------
+def _patch_435(tmp_path, out_name="patched"):
+    import json
+    import shutil
+
+    from odas_tpw.fp07cal.patch import patch_deployment
+
+    src = tmp_path / "MR_SL435.p"
+    if not src.exists():
+        shutil.copy("tests/data/MR_SL435.p", src)
+    rec = tmp_path / "rec.json"
+    rec.write_text(json.dumps(_schema_record()))
+    return patch_deployment(rec, [src], tmp_path / out_name)
+
+
+def test_generic_config_patch_does_not_block_calibration(tmp_path):
+    """A bridge-parameter fix via rsi-tpw patch-config must leave the file
+    eligible — fixing the config FIRST is the documented workflow."""
+    import json
+    import shutil
+
+    from odas_tpw.fp07cal.patch import already_patched, patch_deployment
+    from odas_tpw.rsi.config_patch import EditSpec, patch_files
+
+    orig = tmp_path / "MR_SL435.p"
+    shutil.copy("tests/data/MR_SL435.p", orig)
+    spec = EditSpec(note="fix a bridge value", author="operator",
+                    channels={"T1": {"b": "0.99922"}})
+    results = patch_files([orig], tmp_path / "fixed", spec, batch_cal=True)
+    fixed = results[0][1]
+    assert fixed is not None
+    assert not already_patched(fixed)  # generic banner, not fp07-cal's
+
+    rec = tmp_path / "rec.json"
+    record = _schema_record()
+    record["channels"]["T1"]["bridge"]["b"] = 0.99922  # match the fixed file
+    rec.write_text(json.dumps(record))
+    plan, res = patch_deployment(rec, [fixed], tmp_path / "cal")
+    assert plan.ok
+    assert res[0][1] is not None
+
+
+def test_patch_deployment_twice_refuses(tmp_path):
+    """A REALLY patched file (not a hand-built one) must be refused."""
+
+    from odas_tpw.fp07cal.patch import already_patched, patch_deployment
+
+    plan, results = _patch_435(tmp_path)
+    assert plan.ok
+    patched = results[0][1]
+    assert already_patched(patched)
+    assert not already_patched(tmp_path / "MR_SL435.p")
+
+    rec = tmp_path / "rec.json"  # written by _patch_435
+    with pytest.raises(ValueError, match="already carry an fp07-cal"):
+        patch_deployment(rec, [patched], tmp_path / "again")
+    assert not (tmp_path / "again").exists()
+
+
+# ---- (e): real .p round-trip through the reader ---------------------------
+def test_patched_file_reproduces_the_fit_exactly(tmp_path):
+    """PFile on the patched copy must evaluate the fitted polynomial to 0.0 K."""
+    from odas_tpw.rsi.p_file import PFile
+
+    plan, results = _patch_435(tmp_path)
+    assert plan.ok
+    pf = PFile(str(results[0][1]))
+    cfg_t1 = next(c for c in pf.config["channels"]
+                  if str(c.get("name", "")).strip() == "T1")
+    bp = BridgeParams.from_channel_config(cfg_t1, "T1")
+    L, _clipped = log_r(np.asarray(pf.channels_raw["T1"], dtype=np.float64), bp)
+    rec = _schema_record()["channels"]["T1"]
+    mine = temperature(L, np.asarray(rec["coefficients"]))
+    np.testing.assert_allclose(mine, pf.channels["T1"], rtol=0, atol=0)
+
+
+# ---- P3/P4: gathering and the reference -----------------------------------
+def test_gather_excludes_the_output_dir(tmp_path, capsys):
+    """patch writes output_dir/patched/*.p inside the default layout; the
+    recursive glob must not sweep the tool's own output back in as input."""
+    from odas_tpw.fp07cal.cli import _gather_paths
+
+    (tmp_path / "a.p").write_bytes(b"x")
+    out = tmp_path / "fp07cal" / "patched"
+    out.mkdir(parents=True)
+    (out / "a.p").write_bytes(b"x")
+    cfg = {"files": {"p_file_root": str(tmp_path), "p_file_pattern": "**/*.p",
+                     "output_dir": str(tmp_path / "fp07cal")}}
+    paths = _gather_paths(cfg)
+    assert paths == [tmp_path / "a.p"]
+    assert "output_dir" in capsys.readouterr().err
+
+
+def test_missing_reference_block_is_a_clear_error():
+    from odas_tpw.fp07cal.cli import _load_reference
+
+    with pytest.raises(ValueError, match="reference"):
+        _load_reference({})
+    with pytest.raises(ValueError, match="does not exist"):
+        _load_reference({"reference": {"file": "/no/such/hotel.nc"}})
+
+
+def test_cli_patch_does_not_need_the_hotel_file(tmp_path):
+    """`fp07-cal patch` edits configs; a missing hotel.nc must not stop it."""
+    import json
+    import shutil
+
+    from odas_tpw.fp07cal.cli import main
+
+    root = tmp_path / "deploy"
+    root.mkdir()
+    shutil.copy("tests/data/MR_SL435.p", root / "MR_SL435.p")
+    out_dir = root / "fp07cal"
+    out_dir.mkdir()
+    (out_dir / "coefficients.json").write_text(json.dumps(_schema_record()))
+    cfg = root / "fp07-cal.yaml"
+    cfg.write_text(
+        "files:\n"
+        f"  p_file_root: \"{root}\"\n"
+        "  p_file_pattern: \"**/*.p\"\n"
+        f"  output_dir: \"{out_dir}\"\n"
+        "reference:\n"
+        f"  file: \"{root}/no_such_hotel.nc\"\n"
+        "channels: [\"T1\"]\n"
+    )
+    assert main(["patch", "-c", str(cfg), "--dry-run"]) == 0
+
+
+# ---- P5: nothing written when a destination exists ------------------------
+def test_patch_prechecks_destinations_before_writing(tmp_path):
+    import shutil
+
+    from odas_tpw.fp07cal.patch import patch_deployment
+
+    _plan, results = _patch_435(tmp_path)  # occupies tmp_path/patched
+    assert results[0][1] is not None
+    # Second run into the same out dir: refuse up front, write nothing new.
+    rec = tmp_path / "rec.json"
+    src2 = tmp_path / "src2"
+    src2.mkdir()
+    shutil.copy("tests/data/MR_SL435.p", src2 / "MR_SL435.p")
+    before = sorted((tmp_path / "patched").iterdir())
+    with pytest.raises(ValueError, match="already exist"):
+        patch_deployment(rec, [src2 / "MR_SL435.p"], tmp_path / "patched")
+    assert sorted((tmp_path / "patched").iterdir()) == before
+
+
+# ---- P6: streaming skips are counted --------------------------------------
+def test_stream_reports_failures(tmp_path):
+    from odas_tpw.fp07cal.cli import _stream
+
+    bad = tmp_path / "bad.p"
+    bad.write_bytes(b"1234567")
+    failures: list = []
+    assert list(_stream([bad], None, failures)) == []
+    assert len(failures) == 1
+    assert failures[0][0] == "bad.p"
+    assert "Error" in failures[0][1] or "error" in failures[0][1]
+
+
+# ---- P7: profile knobs are plumbed ----------------------------------------
+def test_profile_kwargs_come_from_the_config():
+    from odas_tpw.fp07cal.cli import _profile_kwargs
+
+    kw = _profile_kwargs({"profiles": {"W_min": 0.2, "min_duration": 10,
+                                       "speed_var": None}})
+    assert kw == {"speed_var": None, "W_min": 0.2, "P_min": 0.5,
+                  "min_duration": 10.0}
+    assert _profile_kwargs({})["W_min"] == pytest.approx(0.05)
+
+
+# ---- P8 -------------------------------------------------------------------
+def test_sanitize_pressure_dedupe_is_nan_aware():
+    """p=[5, nan] on a repeated stamp must give 5.0, not NaN."""
+    t = np.array([1.7e9, 1.7e9, 1.7e9 + 1])
+    v = np.array([20.0, 20.5, 21.0])
+    p = np.array([5.0, np.nan, 6.0])
+    ref = sanitize_reference(t, v, pressure=p)
+    assert ref.pressure[0] == pytest.approx(5.0)
+    assert ref.pressure[1] == pytest.approx(6.0)
+
+
+# ---- N1: a killing test for order selection -------------------------------
+def test_select_order_finds_a_known_quadratic_truth():
+    """Thermocline-like density (dense cold sliver, sparse warm tail) with an
+    order-2 truth: order 2 must be chosen, and order 3 must score WORSE
+    held-out — the overfit direction, so this is not `min(scores)` restated."""
+    from odas_tpw.fp07cal.fit import select_order
+    from odas_tpw.fp07cal.pairs import PairSet
+
+    rng = np.random.default_rng(7)
+    coeffs = np.array([1.0 / 289.0, 1.0 / 3100.0, 1.0 / 2.5e5])
+    # The cold cluster spans ~0.27 K, the warm tail ~10 K: under a median
+    # split the "cold half" is the sliver alone and extrapolating it across
+    # the tail punishes every order >= 2 (a median-split mutant picks 1 here).
+    L = np.concatenate([rng.uniform(0.110, 0.120, 4000),  # dense cold sliver
+                        rng.uniform(-0.30, 0.110, 800)])  # sparse warm tail
+    invT = coeffs[0] + coeffs[1] * L + coeffs[2] * L**2
+    T = 1.0 / invT - 273.15 + rng.normal(0.0, 1e-3, L.size)
+    n = L.size
+    ps = PairSet(time=np.arange(n, dtype=float), T_ref=T, L=L,
+                 pressure=np.full(n, 50.0), w=np.full(n, 0.2),
+                 direction=np.ones(n),
+                 profile_uid=np.array(["p0"] * n, dtype=object),
+                 file_label=np.array(["f0"] * n, dtype=object), channel="T1")
+    order, scores = select_order(ps)
+    assert order == 2
+    assert scores[3]["held_out_K"] > scores[2]["held_out_K"]
+
+
+# ---- (a): the estimators must POPULATE the sharpness gate -----------------
+def test_estimators_populate_a_trustworthy_gate():
+    """Not the predicate alone: running the estimators on a resolvable
+    deployment must yield trustworthy() results."""
+    probes, ref, _t = _deployment(ct_every_n=1)
+    lr, _pairs = temperature_lag(probes, ref, "T1", cfg=PairConfig(max_gap=30.0),
+                                 max_lag=12.0, step=0.5)
+    assert lr.trustworthy(), lr.summary()
+    po = pressure_offset(probes, ref, max_lag=12.0, step=0.5)
+    assert po.trustworthy(), po.summary()
+
+
+def test_without_highpass_the_peak_is_flat():
+    """Mean removal instead of high-passing must FAIL the gate: a shifted
+    monotone ramp is the same ramp plus a constant, so the score plateaus."""
+    probes, ref, _t = _deployment(ct_every_n=1)
+    # detrend_s longer than any file makes highpass degrade to mean removal —
+    # exactly the mutation that previously survived the test suite.
+    lr, _pairs = temperature_lag(probes, ref, "T1", cfg=PairConfig(max_gap=30.0),
+                                 max_lag=12.0, step=0.5, detrend_s=1e9)
+    assert not lr.trustworthy(), lr.summary()
+    po = pressure_offset(probes, ref, max_lag=12.0, step=0.5, detrend_s=1e9)
+    assert not po.trustworthy(), po.summary()
+
+
+# ---- (b): a peak outside the search range must flag at_boundary -----------
+def test_offset_beyond_max_lag_hits_the_boundary():
+    probes, ref, _t = _deployment(ct_every_n=1, clock_offset=8.0)
+    po = pressure_offset(probes, ref, max_lag=4.0, step=0.5)
+    assert po.at_boundary
+    assert not po.trustworthy()
+
+
+# ---- (c): gradient_lag tracks an injected shift ---------------------------
+def test_gradient_lag_recovers_an_injected_shift():
+    from dataclasses import replace
+
+    from odas_tpw.fp07cal.gradient_lag import gradient_lag
+
+    probes, ref, _t = _deployment(ct_every_n=1)
+    pc = PairConfig(max_gap=30.0)
+    base = gradient_lag(probes, ref, "T1", cfg=pc, max_lag=8.0, step=0.5)
+    assert np.isfinite(base.lag)
+    shifted_ref = replace(ref, time=ref.time + 3.0)
+    shifted = gradient_lag(probes, shifted_ref, "T1", cfg=pc, max_lag=8.0, step=0.5)
+    assert shifted.lag - base.lag == pytest.approx(3.0, abs=0.6)
 
 
 def test_dinkum_refuses_two_sensors_sharing_an_output_name():

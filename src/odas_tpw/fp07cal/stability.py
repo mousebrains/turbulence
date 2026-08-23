@@ -207,6 +207,11 @@ def drift_fit(
     produces a trend this steep.  A formal standard error alone would not do,
     because the blocks are few and their errors are not identically
     distributed.
+
+    Weights are ``1 / max(se_i, median(se))^2`` --- each block's standard
+    error is FLOORED at the median SE before inverting, so one block with a
+    luckily tiny (or zero) SE cannot dominate the trend.  This is deliberately
+    not the textbook ``1/sigma^2``.
     """
     res = StabilityResult(blocks=blocks)
     if len(blocks) < min_blocks:

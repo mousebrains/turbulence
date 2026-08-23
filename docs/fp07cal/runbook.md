@@ -98,8 +98,11 @@ fp07-cal patch -c fp07-cal.yaml
 Writes corrected `.p` copies with the original configuration retained
 commented-out and a provenance banner. It **refuses** on: an instrument serial
 mismatch, any bridge-parameter mismatch, a lag that failed the sharpness gate,
-or an input that is already patched (a second pass would nest banners and
-destroy the original-config block — always patch from the originals).
+or an input that already carries an **fp07-cal** banner (stacking two in-situ
+calibrations would make the provenance ambiguous). A file patched by
+`rsi-tpw patch-config` for some other reason — a bridge-parameter fix, say —
+is fine: `config_patch` keeps a single frozen original-config block across
+passes.
 
 Then point perturb at the patched files with:
 
@@ -123,8 +126,9 @@ fp07:
 - **Record some dives if you can.** Climb-only costs you the dive/climb residual
   split, leaves the sensor-geometry decomposition unresolved, and confounds
   depth with elapsed-time-since-file-start.
-- **Don't route the reference through perturb's hotel merge for this.** It
-  interpolates across arbitrary gaps and edge-holds outside coverage, so on a
-  sparsely-sampled CT it would hand the fit a fabricated ramp. `fp07-cal` reads
-  the CTD on its own clock for exactly this reason. Any NetCDF carrying the CTD
-  and its own timestamps will do — a hotel file, or a converted `ebd.nc`.
+- **Don't route the reference through perturb's hotel merge for this.** Its
+  gap handling is a configuration matter (`hotel.max_gap` / `extrapolate`,
+  PR #150), and a calibration must not depend on how a downstream merge is
+  configured. `fp07-cal` reads the CTD on its own clock — real samples only —
+  for exactly this reason. Any NetCDF carrying the CTD and its own timestamps
+  will do — a hotel file, or a converted `ebd.nc`.

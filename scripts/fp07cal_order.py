@@ -12,19 +12,32 @@ Three questions, three tests:
    happens when a coefficient set is applied to profiles that went outside the
    range it was fitted on.
 """
+import argparse
 import glob
-import sys
+import os
 
 import numpy as np
 
-sys.path.insert(0, "/Users/pat/Desktop/turbulence/.claude/worktrees/fp07-insitu-cal/src")
 from odas_tpw.fp07cal import PairConfig, load_hotel_reference, load_probe_series
 from odas_tpw.fp07cal.fit import _design, _uncenter
 from odas_tpw.fp07cal.lag import temperature_lag
 from odas_tpw.fp07cal.logr import coeffs_to_config, temperature
 from odas_tpw.fp07cal.pairs import PairSet
 
-D = "/Volumes/SeaChest/ARCTERX/2025/Interior/Gliders/osu685"
+D = None  # set in __main__ from _data_dir()
+
+
+def _data_dir() -> str:
+    """Deployment root (contains MR/*.p and PASS0/ebd.nc) from argv or $FP07CAL_DATA."""
+    ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    ap.add_argument("data_dir", nargs="?", default=os.environ.get("FP07CAL_DATA"),
+                    help="deployment root containing MR/*.p and PASS0/ebd.nc "
+                         "(default: $FP07CAL_DATA)")
+    a = ap.parse_args()
+    if not a.data_dir:
+        ap.error("give the deployment root as an argument or set FP07CAL_DATA")
+    return a.data_dir
+
 
 
 def fit_with_errors(L, T, order):
@@ -106,4 +119,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    D = _data_dir()
     main()

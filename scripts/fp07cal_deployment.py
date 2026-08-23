@@ -19,14 +19,14 @@ climbs have been running about twice as long, so comparing the two populations
 at matched depth isolates a genuine depth dependence from anything that grows
 with elapsed time.
 """
+import argparse
 import glob
 import json
-import sys
+import os
 import time
 
 import numpy as np
 
-sys.path.insert(0, "/Users/pat/Desktop/turbulence/.claude/worktrees/fp07-insitu-cal/src")
 from odas_tpw.fp07cal import PairConfig, load_hotel_reference, load_probe_series, log_r
 from odas_tpw.fp07cal.geometry import joint_fit, local_dTdz
 from odas_tpw.fp07cal.lag import pressure_offset, temperature_lag
@@ -34,12 +34,23 @@ from odas_tpw.fp07cal.logr import temperature
 from odas_tpw.fp07cal.pairs import build_pairs
 from odas_tpw.fp07cal.stability import SECONDS_PER_DAY, Block, drift_fit
 
-D = "/Volumes/SeaChest/ARCTERX/2025/Interior/Gliders/osu685"
 CH = ("T1", "T2")
 DEPTH_EDGES = np.arange(0.0, 1050.0, 50.0)
-FIT_STRIDE = int(sys.argv[1]) if len(sys.argv) > 1 else 8
-RUN_STRIDE = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-OUT = sys.argv[3] if len(sys.argv) > 3 else "scratch/deployment"
+
+_ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+_ap.add_argument("data_dir", nargs="?", default=os.environ.get("FP07CAL_DATA"),
+                 help="deployment root containing MR/*.p and PASS0/ebd.nc "
+                      "(default: $FP07CAL_DATA)")
+_ap.add_argument("--fit-stride", type=int, default=8)
+_ap.add_argument("--run-stride", type=int, default=1)
+_ap.add_argument("-o", "--out", default="scratch/deployment")
+_args = _ap.parse_args()
+if not _args.data_dir:
+    _ap.error("give the deployment root as an argument or set FP07CAL_DATA")
+D = _args.data_dir
+FIT_STRIDE = _args.fit_stride
+RUN_STRIDE = _args.run_stride
+OUT = _args.out
 
 
 def files(stride):

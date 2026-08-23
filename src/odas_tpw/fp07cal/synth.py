@@ -59,7 +59,10 @@ class SynthConfig:
     ref_rate: float = 1.0
     clock_offset: float = 0.0
     ctd_delay: float = 0.0
-    ctd_tau: float = 0.5
+    ctd_tau: float = 2.7
+    """CTD single-pole response [s] — default matches the SBE41cp measured in
+    situ on osu685 (and PairConfig.kernel_tau, so the default kernel is
+    matched to the default synthetic CTD)."""
 
     probe_noise_K: float = 0.002
     ref_noise_K: float = 0.002

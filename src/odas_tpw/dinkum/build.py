@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MIN_TIME = 100.0
 DEFAULT_MAX_TIME_HORIZON_DAYS = 365.0
 
-_DEDUPE_METHODS = ("mean", "first", "last")
+_DEDUPE_METHODS = ("mean", "first", "last")  # same set as config.DEDUPE_METHODS
 
 
 def _parse_time_bound(value: Any, label: str) -> float | None:
@@ -407,13 +407,22 @@ def build_hotel(
         out_name = str(opts["name"])
         time_sensor = str(opts["time_sensor"])
         method = str(opts.get("method") or default_method)
+        # normalize_sensors drops a per-sensor `max_gap: null`, so .get's
+        # default is the global; an explicit per-sensor value wins.
         gap = opts.get("max_gap", default_gap)
+        # normalize_sensors only sets a per-sensor dedupe for an explicit
+        # method; a sensor inheriting a step-like GLOBAL method gets "last"
+        # here for the same reason (a mean of two states is neither state).
+        sensor_dedupe = str(
+            opts.get("dedupe")
+            or ("last" if method in ("previous", "next", "nearest", "zero") else dedupe)
+        )
         values, stats = project_sensor(
             _col(time_sensor),
             _col(src),
             times,
             method=method,
-            dedupe=dedupe,
+            dedupe=sensor_dedupe,
             extrapolate=extrapolate,
             max_gap=None if gap is None else float(gap),
             valid_min=opts.get("valid_min"),
@@ -453,6 +462,7 @@ def build_hotel(
             "dinkum_sensor": src,
             "dinkum_time_sensor": time_sensor,
             "projection_method": method,
+            "dedupe": sensor_dedupe,
             "source_samples": stats["n_source"],
         }
         if opts.get("long_name"):

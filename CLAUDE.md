@@ -81,11 +81,11 @@ changes. Runbook: `docs/fp07cal/runbook.md`. Worked 72-day result:
 Facts that are easy to get wrong:
 
 - The reference is read **directly from the CTD NetCDF on the CTD's own
-  clock**, never through `perturb/hotel.py`. That merge interpolates across
-  arbitrary gaps and edge-holds outside coverage, so on a CT that ran only some
-  yos it hands the fit a fabricated ramp. Confirmed empirically: NaN-marking a
-  gap produces **byte-identical** output from the perturb loader, so
-  `dinkum-hotel`'s `projection.max_gap` does not survive the merge.
+  clock**, never through `perturb/hotel.py`. How that merge treats gaps and
+  out-of-coverage samples is controlled by perturb's `hotel.max_gap` /
+  `extrapolate` settings (PR #150); a calibration must not depend on any such
+  configuration, so `fp07-cal` takes the file's **real samples only** and
+  invents nothing between them.
 - The thermistor is **decimated down onto real CTD samples**, not the CTD
   interpolated up. That invents no reference, bandwidth-matches the regressor
   (so `beta_1` is not attenuated by errors-in-variables), and makes a sparse
@@ -121,7 +121,8 @@ Key facts (details in `docs/dinkum_hotel.md`):
 - **Unit conversion happens once, in the builder** (`sensors.*.scale`: S/m →
   mS/cm and bar → dbar are both `10.0`). The perturb side must not re-apply it.
 - The **sensor-list cache directory is effectively required**: a Slocum file
-  whose sensor-list hash is not cached cannot be decoded and is skipped.
+  whose sensor-list hash is not cached cannot be decoded. The build refuses to
+  proceed on a partial decode, naming the skipped files.
 
 ### Python API
 
