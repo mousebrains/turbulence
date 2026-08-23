@@ -760,14 +760,17 @@ def test_cli_patch_does_not_need_the_hotel_file(tmp_path):
     out_dir.mkdir()
     (out_dir / "coefficients.json").write_text(json.dumps(_schema_record()))
     cfg = root / "fp07-cal.yaml"
+    # POSIX-style paths, and single quotes so YAML does no escape processing:
+    # a Windows tmp_path in a DOUBLE-quoted scalar makes "C:\\Users" a \\U
+    # unicode escape and ruamel raises before the test can run.
     cfg.write_text(
         "files:\n"
-        f"  p_file_root: \"{root}\"\n"
-        "  p_file_pattern: \"**/*.p\"\n"
-        f"  output_dir: \"{out_dir}\"\n"
+        f"  p_file_root: '{root.as_posix()}'\n"
+        "  p_file_pattern: '**/*.p'\n"
+        f"  output_dir: '{out_dir.as_posix()}'\n"
         "reference:\n"
-        f"  file: \"{root}/no_such_hotel.nc\"\n"
-        "channels: [\"T1\"]\n"
+        f"  file: '{root.as_posix()}/no_such_hotel.nc'\n"
+        "channels: ['T1']\n"
     )
     assert main(["patch", "-c", str(cfg), "--dry-run"]) == 0
 
