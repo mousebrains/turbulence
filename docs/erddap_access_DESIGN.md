@@ -25,6 +25,12 @@ server to still be reproducible a year later.
 In scope: ERDDAP as a source for the **hotel/CTD feed**, which is what Rutgers
 publish and what the FP07 calibration and half of perturb consume.
 
+Also in scope, by assumption: **the MicroRider data itself arriving over
+ERDDAP.** That is a much bigger change than it sounds and gets its own section
+(§7) — it is not simply "another feed", because ERDDAP serves tables and the
+pipeline's entry point is a binary format carrying its own calibration
+metadata.
+
 Out of scope for now, but the design should not preclude them: GPS tracks
 (`gps.source`), ADCP, and publishing our *outputs* to ERDDAP.
 
@@ -299,25 +305,59 @@ erddap-hotel verify -c erddap-hotel.yaml     # has the dataset changed?
 
 `erddapy` is the standard Python ERDDAP client, but **neither it nor `requests`
 is currently installed**, and the notebook shows the whole fetch is six lines of
-`urllib`. Recommendation: **stdlib `urllib` in the core path**, no new required
-dependency. Put `erddapy` behind an optional extra only if `datasets`-style
-discovery is wanted — it is a convenience for exploration, not a dependency the
-pipeline should carry.
+`urllib`. **Decision: stdlib `urllib`, no new required dependency.**
+
+`urllib` is sufficient, with three things it does not give you for free and
+which the fetcher must therefore do itself:
+
+- **A timeout.** `urlopen` defaults to no timeout, so a hung server hangs the
+  build forever. Always pass one.
+- **Retry and backoff.** No built-in retry; the loop is ours (and see F8 — 5xx
+  and connection errors only, never 4xx).
+- **Connection reuse.** No pooling, so each chunk is a fresh TCP+TLS handshake.
+  Irrelevant at `chunk_days` granularity — tens of requests, not thousands.
+
+None of those argues for a dependency. `erddapy` stays an optional extra, and
+only if `datasets`-style discovery turns out to be wanted.
 
 ---
 
 ## 6. QC: three sanitisers, three different answers
 
-This is the part most likely to cause quiet damage, because the tree already
-contains three implementations of "clean up a Slocum CTD table" that do not
+This is the part most likely to cause quiet damage. Once #149 merges, the tree
+contains **three independent implementations of "clean up a Slocum CTD table"**,
+plus a fourth thing that silently drops data without being one. They do not
 agree.
 
-| | notebook | `dinkum-hotel` (#149) | `fp07cal.sanitize_reference` (#149) |
+| | **1.** notebook | **2.** `dinkum/build.py` | **3.** `fp07cal/series.py` |
 |---|---|---|---|
-| bad values | `== 0.0` → NaN, **all variables** | per-sensor `valid_min`/`valid_max` | per-variable `valid_min`/`valid_max` |
-| bad times | drop NaN | `time.min_value`/`max_value` | `t < 100` or `t > 4e9` |
-| duplicates | keep **first** | `mean` \| `first` \| `last` | **mean** |
-| ordering | stable sort | sort | sort |
+| where | Rutgers, external | `sanitize_time`, `_dedupe`, `time_validity` | `sanitize_reference` |
+| bad values | `== 0.0` → NaN, **every variable** | per-sensor `valid_min`/`valid_max` | per-variable `valid_min`/`valid_max` |
+| bad times | drop NaN only | finite ∧ within `time.min_value`…`max_value` | finite ∧ `100 ≤ t ≤ 4e9` |
+| duplicates | keep **first** | `mean` \| `first` \| `last`, configurable | **mean**, not configurable |
+| ordering | stable sort | sort | stable sort |
+| reports what it dropped | yes, into `history` | yes, a stats tally | **no** |
+
+And the fourth:
+
+**4. `perturb/hotel.py::_interp_one`** — not a sanitiser, but it drops every
+non-finite sample and then interpolates across the hole, which un-does whatever
+the three above decided to mark bad. That is what PR #150 gates behind
+`max_gap`; before it, a builder that carefully NaN-marked a dropout produced
+byte-identical output to one that did not.
+
+### What to do about it
+
+Short term, for this design: **the ERDDAP builder should use rule set 2's
+shape** — per-variable ranges, configurable dedupe, and a rejection tally —
+because it is the most complete of the three and already has a config schema
+that expresses it.
+
+Longer term, three implementations is two too many. The natural convergence is
+a single `sanitize_table(ds, rules) -> (ds, stats)` that all of
+`dinkum-hotel`, `erddap-hotel` and `fp07cal` call, with `sanitize_reference`
+becoming a thin caller. Deliberately **not** proposed as part of this work: it
+is a refactor across #149 before it has merged.
 
 **The `0.0`-as-fill rule is the dangerous one.** Applied to
 `sci_ctd41cp_timestamp` it is exactly right — `0.0` is the never-set sentinel.
@@ -347,7 +387,84 @@ let the merge decide.
 
 ---
 
-## 7. Failure modes
+## 7. If the MicroRider data also arrives over ERDDAP
+
+Assume it can. This is **not** just another feed, and it is worth being precise
+about why before anyone builds it.
+
+### 7.1 ERDDAP cannot serve a `.p` file
+
+`tabledap` serves rows; `griddap` serves grids. Neither serves the RSI binary
+format. So "MR data over ERDDAP" necessarily means **already-converted** data,
+which changes the pipeline's entry point from `PFile` to a table — and with it,
+what is recoverable.
+
+The pipeline needs three things from a `.p` file that a naive conversion drops:
+
+1. **Raw counts.** The FP07 in-situ calibration computes
+   `L = ln(R_T/R_0)` from *counts* and the bridge constants. Given temperature
+   in degC you cannot recover `L`, so you cannot refit Steinhart-Hart
+   coefficients at all — only apply an offset in temperature space, which is a
+   strictly weaker and different correction. The same argument applies to shear:
+   epsilon needs raw shear counts and the probe sensitivity.
+2. **The calibration metadata** — `a`, `b`, `g`, `e_b`, `adc_fs`, `adc_bits`,
+   `t_0`, `beta_*`, probe serials. These live in the config string in record 0.
+3. **The two sample rates.** Fast channels at ~512 Hz and slow at ~64 Hz, with
+   `is_fast` distinguishing them. A single `tabledap` table is one row rate.
+
+### 7.2 What a usable MR dataset would have to carry
+
+- **Raw counts as variables**, not (or as well as) physical units, for any
+  channel that is later recalibrated.
+- **The configuration string as a global attribute.** Our own converter already
+  does this — the per-profile NetCDFs carry `configuration_string`, which is
+  how the `fp07-cal patch` provenance survives into the products. If an ERDDAP
+  dataset is built from our converter, calibration metadata survives; if it is
+  built from someone else's, assume it does not until checked.
+- **A rate story.** Either two datasets (`…-fast`, `…-slow`), or one table at
+  the fast rate with slow columns repeated (wasteful but simple), or `griddap`.
+  Two datasets is the honest option; the pipeline already treats the two grids
+  separately.
+
+### 7.3 Volume makes raw fast data impractical
+
+Rough arithmetic for the osu685-scale deployment: 512 Hz × 8 fast channels ×
+72 days ≈ **2.5 × 10¹⁰ samples**. That is not a `tabledap` request, chunked or
+otherwise. Raw fast data over ERDDAP is not a realistic pipeline input.
+
+This splits the capability into three tiers, and they should not be conflated:
+
+| tier | content | rate | viable? |
+|---|---|---|---|
+| 1 | hotel/CTD feed | ~1 Hz | **Yes** — this is what Rutgers publish and what §5 designs |
+| 2 | MR **derived** products: binned profiles, ε, χ, mixing | ~1 per metre or per window | **Yes**, and useful — for downstream consumers and cross-comparison |
+| 3 | MR **raw** channels | 512 / 64 Hz | Slow channels are arguably feasible per-deployment; fast channels are not |
+
+### 7.4 The consequence nobody will expect
+
+If MR data arrives over ERDDAP, **`fp07-cal patch` has nothing to patch.** Its
+whole design is to write corrected coefficients into a `.p` file so that perturb
+needs no changes (#149, §D7). You cannot patch a remote dataset.
+
+That resurrects the in-pipeline apply — `fp07.mode: coefficients` reading a
+coefficient record at run time — which #149 explicitly ruled out as a second
+place for the apply logic to live. **That trade should be reopened only if tier
+3 actually happens**, and if it does, the coefficient record (#149, §D6) is
+already the right carrier: it is keyed, it declares its validity, and it is what
+`patch` consumes today.
+
+### 7.5 Recommendation
+
+Design for tier 1 now, exactly as §5 describes. Keep tier 2 in mind as the
+natural next step, because a derived-product reader is the same fetch/QC
+machinery pointed at a different dataset and is genuinely useful. **Do not build
+tier 3 speculatively** — ask Rutgers what the dataset actually contains first
+(§10 Q2), because the answer decides whether it is a pipeline input at all or
+only a comparison product.
+
+---
+
+## 8. Failure modes
 
 Ordered by how quietly they corrupt a result.
 
@@ -367,7 +484,7 @@ and "the run succeeded against an HTML page".
 
 ---
 
-## 8. Testing without a server
+## 9. Testing without a server
 
 We have no ERDDAP to test against, and the design should not need one.
 
@@ -391,14 +508,18 @@ neither needs a server. Getting a test server is not on the critical path.
 
 ---
 
-## 9. Open questions
+## 10. Open questions
 
 1. **Which dataset variant?** `-raw-delayed` versus a QC'd/science product. The
    raw one is what the notebook uses and what the Slocum-native path expects,
    but it is also the one most likely to be reprocessed.
-2. **Does Rutgers' ERDDAP expose the MicroRider data too**, or only the glider
-   science? If only the latter, the `.p` files still arrive as files and only
-   the hotel feed comes over the network — which is what this design assumes.
+2. **What does Rutgers' MicroRider dataset actually contain, if it exists?**
+   Pat is asking. The answer decides which tier of §7 applies, and the two
+   questions that settle it are: does it carry **raw counts** or only physical
+   units, and does it carry the **configuration string** (or the bridge
+   constants) as metadata? Without those it is a comparison product, not a
+   pipeline input — no FP07 recalibration and no epsilon are possible from
+   converted values alone.
 3. **Should `erddap-hotel` and `dinkum-hotel` converge?** They differ only in
    where the rows come from; the projection/QC/write half is nearly identical.
    A shared `hotel_builder` core with two front ends is tempting but is a
@@ -412,7 +533,7 @@ neither needs a server. Getting a test server is not on the critical path.
 
 ---
 
-## 10. Adversarial review
+## 11. Adversarial review
 
 Attacks on this design, and what changed.
 
@@ -425,11 +546,14 @@ Attacks on this design, and what changed.
 | "Check the HTTP status and you are safe." | **Rejected.** ERDDAP reports errors in the body, sometimes with a 200. Content-type plus magic-byte sniffing is the check that actually works. |
 | "Retry on failure." | **Qualified.** Retry connection errors and 5xx; never retry a 4xx — a malformed variable list is a bug, and retrying it three times just makes it slower to diagnose. |
 | "We cannot design this without a server to test against." | **Rejected.** The QC layer and the query builder are the parts most likely to be wrong and neither needs a network. Recorded fixtures plus a fake server cover the rest. |
+| "If MR data comes over ERDDAP, treat it as just another feed." | **Rejected.** ERDDAP serves tables, not `.p` binaries, so it necessarily means already-converted data — and converted values cannot be recalibrated: `L = ln(R_T/R_0)` needs raw counts and the bridge constants. Forced §7 and its three tiers. |
+| "Fetch the raw fast channels too, then." | **Rejected on arithmetic.** 512 Hz x 8 channels x 72 days is ~2.5e10 samples. Not a tabledap request. |
+| "Use erddapy — it is the standard client." | **Rejected as a required dependency.** Neither it nor `requests` is installed, the fetch is six lines of stdlib `urllib`, and the three things urllib lacks (timeout, retry, pooling) are either trivial to add or irrelevant at tens-of-requests scale. Optional extra only. |
 | "Make `erddap-hotel` share code with `dinkum-hotel` now." | **Deferred.** They genuinely overlap, but #149 has not merged and refactoring across an open PR is how you get a painful rebase. Noted as a follow-up. |
 
 ---
 
-## 11. What I would build first
+## 12. What I would build first
 
 In order, each independently useful:
 
