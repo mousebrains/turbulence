@@ -25,13 +25,11 @@ server to still be reproducible a year later.
 In scope: ERDDAP as a source for the **hotel/CTD feed**, which is what Rutgers
 publish and what the FP07 calibration and half of perturb consume.
 
-Also in scope, by assumption: **the MicroRider data itself arriving over
-ERDDAP.** That is a much bigger change than it sounds and gets its own section
-(§7) — it is not simply "another feed", because ERDDAP serves tables and the
-pipeline's entry point is a binary format carrying its own calibration
-metadata.
+**Explicitly out of scope: the MicroRider data itself.** `.p` files always
+arrive as files. This was considered and dropped; §7 records why, so it does not
+get re-proposed.
 
-Out of scope for now, but the design should not preclude them: GPS tracks
+Also out of scope for now, but the design should not preclude them: GPS tracks
 (`gps.source`), ADCP, and publishing our *outputs* to ERDDAP.
 
 ### A note on the current tree
@@ -387,80 +385,39 @@ let the merge decide.
 
 ---
 
-## 7. If the MicroRider data also arrives over ERDDAP
+## 7. Decided: the MicroRider data does not come over ERDDAP
 
-Assume it can. This is **not** just another feed, and it is worth being precise
-about why before anyone builds it.
+Considered, and dropped. Recorded here because the reasoning is not obvious and
+the idea is otherwise attractive.
 
-### 7.1 ERDDAP cannot serve a `.p` file
+**ERDDAP cannot serve a `.p` file.** `tabledap` serves rows, `griddap` serves
+grids; neither serves the RSI binary. So "MR over ERDDAP" necessarily means
+*already-converted* data — and conversion is lossy in exactly the way that
+matters:
 
-`tabledap` serves rows; `griddap` serves grids. Neither serves the RSI binary
-format. So "MR data over ERDDAP" necessarily means **already-converted** data,
-which changes the pipeline's entry point from `PFile` to a table — and with it,
-what is recoverable.
+- **Recalibration becomes impossible.** The FP07 in-situ fit computes
+  `L = ln(R_T/R_0)` from **raw counts** plus the bridge constants
+  (`a`, `b`, `g`, `e_b`, `adc_fs`, `adc_bits`). Given temperature in degC there
+  is no way back to `L`, so Steinhart-Hart cannot be refitted at all — only an
+  offset applied in temperature space, which is a strictly weaker and different
+  correction. The same argument kills epsilon: it needs raw shear counts and the
+  probe sensitivity.
+- **The calibration metadata lives in the file.** The config string in record 0
+  carries the bridge constants, the coefficients and the probe serials. A table
+  of physical values carries none of it unless someone deliberately attaches it.
+- **The volume is not serviceable anyway.** For an osu685-scale deployment,
+  512 Hz × 8 fast channels × 72 days ≈ **2.5 × 10¹⁰ samples**. That is not a
+  `tabledap` request, chunked or otherwise.
 
-The pipeline needs three things from a `.p` file that a naive conversion drops:
+So the pipeline's input path stays: **`.p` files as files, hotel/CTD feed over
+ERDDAP.** That also keeps `fp07-cal patch` intact — its whole design is to write
+corrected coefficients into a `.p` file so perturb needs no changes (#149 §D7),
+and there is nothing to patch in a remote dataset.
 
-1. **Raw counts.** The FP07 in-situ calibration computes
-   `L = ln(R_T/R_0)` from *counts* and the bridge constants. Given temperature
-   in degC you cannot recover `L`, so you cannot refit Steinhart-Hart
-   coefficients at all — only apply an offset in temperature space, which is a
-   strictly weaker and different correction. The same argument applies to shear:
-   epsilon needs raw shear counts and the probe sensitivity.
-2. **The calibration metadata** — `a`, `b`, `g`, `e_b`, `adc_fs`, `adc_bits`,
-   `t_0`, `beta_*`, probe serials. These live in the config string in record 0.
-3. **The two sample rates.** Fast channels at ~512 Hz and slow at ~64 Hz, with
-   `is_fast` distinguishing them. A single `tabledap` table is one row rate.
-
-### 7.2 What a usable MR dataset would have to carry
-
-- **Raw counts as variables**, not (or as well as) physical units, for any
-  channel that is later recalibrated.
-- **The configuration string as a global attribute.** Our own converter already
-  does this — the per-profile NetCDFs carry `configuration_string`, which is
-  how the `fp07-cal patch` provenance survives into the products. If an ERDDAP
-  dataset is built from our converter, calibration metadata survives; if it is
-  built from someone else's, assume it does not until checked.
-- **A rate story.** Either two datasets (`…-fast`, `…-slow`), or one table at
-  the fast rate with slow columns repeated (wasteful but simple), or `griddap`.
-  Two datasets is the honest option; the pipeline already treats the two grids
-  separately.
-
-### 7.3 Volume makes raw fast data impractical
-
-Rough arithmetic for the osu685-scale deployment: 512 Hz × 8 fast channels ×
-72 days ≈ **2.5 × 10¹⁰ samples**. That is not a `tabledap` request, chunked or
-otherwise. Raw fast data over ERDDAP is not a realistic pipeline input.
-
-This splits the capability into three tiers, and they should not be conflated:
-
-| tier | content | rate | viable? |
-|---|---|---|---|
-| 1 | hotel/CTD feed | ~1 Hz | **Yes** — this is what Rutgers publish and what §5 designs |
-| 2 | MR **derived** products: binned profiles, ε, χ, mixing | ~1 per metre or per window | **Yes**, and useful — for downstream consumers and cross-comparison |
-| 3 | MR **raw** channels | 512 / 64 Hz | Slow channels are arguably feasible per-deployment; fast channels are not |
-
-### 7.4 The consequence nobody will expect
-
-If MR data arrives over ERDDAP, **`fp07-cal patch` has nothing to patch.** Its
-whole design is to write corrected coefficients into a `.p` file so that perturb
-needs no changes (#149, §D7). You cannot patch a remote dataset.
-
-That resurrects the in-pipeline apply — `fp07.mode: coefficients` reading a
-coefficient record at run time — which #149 explicitly ruled out as a second
-place for the apply logic to live. **That trade should be reopened only if tier
-3 actually happens**, and if it does, the coefficient record (#149, §D6) is
-already the right carrier: it is keyed, it declares its validity, and it is what
-`patch` consumes today.
-
-### 7.5 Recommendation
-
-Design for tier 1 now, exactly as §5 describes. Keep tier 2 in mind as the
-natural next step, because a derived-product reader is the same fetch/QC
-machinery pointed at a different dataset and is genuinely useful. **Do not build
-tier 3 speculatively** — ask Rutgers what the dataset actually contains first
-(§10 Q2), because the answer decides whether it is a pipeline input at all or
-only a comparison product.
+**What remains genuinely interesting, and is a separate piece of work:**
+publishing *our own* derived products — binned profiles, ε, χ, mixing — to
+ERDDAP for downstream consumers. That is an output path, not an input path, and
+shares only the QC machinery with this design. Not proposed here.
 
 ---
 
@@ -513,13 +470,10 @@ neither needs a server. Getting a test server is not on the critical path.
 1. **Which dataset variant?** `-raw-delayed` versus a QC'd/science product. The
    raw one is what the notebook uses and what the Slocum-native path expects,
    but it is also the one most likely to be reprocessed.
-2. **What does Rutgers' MicroRider dataset actually contain, if it exists?**
-   Pat is asking. The answer decides which tier of §7 applies, and the two
-   questions that settle it are: does it carry **raw counts** or only physical
-   units, and does it carry the **configuration string** (or the bridge
-   constants) as metadata? Without those it is a comparison product, not a
-   pipeline input — no FP07 recalibration and no epsilon are possible from
-   converted values alone.
+2. **Which glider datasets does Rutgers publish, and under what IDs?** Only
+   the science/CTD feed matters now that MR data is out of scope, but the
+   dataset naming convention decides how much of the config can be shared
+   between deployments.
 3. **Should `erddap-hotel` and `dinkum-hotel` converge?** They differ only in
    where the rows come from; the projection/QC/write half is nearly identical.
    A shared `hotel_builder` core with two front ends is tempting but is a
@@ -546,8 +500,7 @@ Attacks on this design, and what changed.
 | "Check the HTTP status and you are safe." | **Rejected.** ERDDAP reports errors in the body, sometimes with a 200. Content-type plus magic-byte sniffing is the check that actually works. |
 | "Retry on failure." | **Qualified.** Retry connection errors and 5xx; never retry a 4xx — a malformed variable list is a bug, and retrying it three times just makes it slower to diagnose. |
 | "We cannot design this without a server to test against." | **Rejected.** The QC layer and the query builder are the parts most likely to be wrong and neither needs a network. Recorded fixtures plus a fake server cover the rest. |
-| "If MR data comes over ERDDAP, treat it as just another feed." | **Rejected.** ERDDAP serves tables, not `.p` binaries, so it necessarily means already-converted data — and converted values cannot be recalibrated: `L = ln(R_T/R_0)` needs raw counts and the bridge constants. Forced §7 and its three tiers. |
-| "Fetch the raw fast channels too, then." | **Rejected on arithmetic.** 512 Hz x 8 channels x 72 days is ~2.5e10 samples. Not a tabledap request. |
+| "Fetch the MicroRider data over ERDDAP too." | **Considered and dropped** (§7). ERDDAP serves tables, not `.p` binaries, so it means already-converted data — and converted values cannot be recalibrated at all: `L = ln(R_T/R_0)` needs raw counts and the bridge constants. Recalibration and epsilon both become impossible, and 512 Hz x 8 channels x 72 days (~2.5e10 samples) is not a tabledap request regardless. |
 | "Use erddapy — it is the standard client." | **Rejected as a required dependency.** Neither it nor `requests` is installed, the fetch is six lines of stdlib `urllib`, and the three things urllib lacks (timeout, retry, pooling) are either trivial to add or irrelevant at tens-of-requests scale. Optional extra only. |
 | "Make `erddap-hotel` share code with `dinkum-hotel` now." | **Deferred.** They genuinely overlap, but #149 has not merged and refactoring across an open PR is how you get a painful rebase. Noted as a follow-up. |
 
