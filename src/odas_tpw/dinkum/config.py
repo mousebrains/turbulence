@@ -1,0 +1,303 @@
+# Aug-2026, Claude and Pat Welch, pat@mousebrains.com
+"""YAML configuration for the Dinkum -> hotel converter.
+
+Four sections: ``files`` (what to read, with what), ``time`` (the common time
+basis and its sanity range), ``projection`` (how sensors are put onto that
+basis), and ``sensors`` (what to extract). ``netcdf`` carries output metadata.
+
+``sensors`` has user-defined keys (the Slocum sensor names), so it is declared
+as a dynamic-key section and its inner structure is validated in
+:func:`normalize_sensors` instead of by the generic unknown-key check.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from odas_tpw.config_base import ConfigManager
+
+# Interpolation kinds accepted by projection.method and per-sensor method.
+# Deliberately the same vocabulary as odas_tpw.perturb.hotel, so a method name
+# means the same thing on both sides of the hotel file.
+INTERP_KINDS = frozenset(
+    {
+        "pchip",
+        "linear",
+        "nearest",
+        "previous",
+        "next",
+        "zero",
+        "slinear",
+        "quadratic",
+        "cubic",
+    }
+)
+
+# Per-sensor option keys. Mirrors perturb.hotel's _CHANNEL_OPTION_KEYS where the
+# meaning matches (name/scale/offset/units), and adds the ones that only make
+# sense while building (time_sensor, method, valid_min/max, max_gap).
+SENSOR_OPTION_KEYS = frozenset(
+    {
+        "name",
+        "time_sensor",
+        "method",
+        "scale",
+        "offset",
+        "units",
+        "long_name",
+        "valid_min",
+        "valid_max",
+        "max_gap",
+    }
+)
+
+DEFAULTS: dict[str, dict] = {
+    "files": {
+        # Directory the patterns are relative to. The <CONFIG_DIR> token
+        # resolves to the directory holding the YAML, as in perturb.
+        "root": "<CONFIG_DIR>",
+        # Globs, in order. Flight and science files are normally both listed:
+        # the flight file carries m_present_time / pitch / speed, the science
+        # file carries the CTD.
+        "patterns": ["*.[de]bd", "*.[de]cd"],
+        # Sensor-list cache directory. Slocum files reference their sensor
+        # list by hash; a file whose hash is not cached CANNOT be decoded and
+        # is silently skipped by both readers. Effectively required.
+        "cache": None,
+        "output": "<CONFIG_DIR>/hotel.nc",
+        "reader": "auto",  # auto | xarray-dbd | dbd2netcdf | netcdf
+        "skip_first_record": True,
+        "repair": False,
+    },
+    "time": {
+        # The common time basis every sensor is projected onto. Commonly
+        # m_present_time (flight computer), sci_m_present_time (science
+        # computer), or sci_ctd41cp_timestamp (arrival of the CTD's print).
+        "base": "sci_ctd41cp_timestamp",
+        # Validity window for ANY time sensor (the base and per-sensor
+        # overrides alike). Each accepts epoch seconds or an ISO-8601 date
+        # string. null falls back to: min 100 s, max now + 365 days.
+        "min_value": None,
+        "max_value": None,
+        # How to collapse samples sharing one timestamp. Slocum repeats the
+        # last CTD timestamp on rows the CTD did not refresh, so duplicates
+        # are routine and must go: the interpolators either raise (pchip) or
+        # produce infinite slopes (linear).
+        "dedupe": "mean",  # mean | first | last
+    },
+    "projection": {
+        "method": "linear",  # default; per-sensor `method` wins
+        # NaN the output wherever the bracketing source samples are further
+        # apart than this [s] — i.e. do not draw a straight line across a
+        # dropout and present it as data. null = no gap limit.
+        "max_gap": None,
+        # Outside a sensor's own first/last sample the value is NaN. perturb's
+        # hotel loader edge-holds at merge time; holding here too would bake a
+        # constant into the archive.
+        "extrapolate": False,
+    },
+    # Dynamic keys: Slocum sensor names -> options (see SENSOR_OPTION_KEYS).
+    "sensors": {},
+    "netcdf": {
+        "title": None,
+        "summary": None,
+        "institution": None,
+        "source": None,
+        "platform": None,
+        "comment": None,
+        "creator_name": None,
+        "creator_email": None,
+    },
+}
+
+_manager = ConfigManager(DEFAULTS, dynamic_key_sections=frozenset({"sensors"}))
+
+load_config = _manager.load_config
+validate_config = _manager.validate_config
+merge_config = _manager.merge_config
+
+
+def normalize_sensors(sensors_cfg: dict | None, time_base: str) -> dict[str, dict]:
+    """Validate and fill in the ``sensors`` block.
+
+    Each value may be ``None``/``{}`` (all defaults), a string (rename), or a
+    dict of :data:`SENSOR_OPTION_KEYS`. Returns source_name -> fully-specified
+    option dict with ``name`` and ``time_sensor`` always present.
+
+    Raises ``ValueError`` on an unknown option, a bad interpolation method, a
+    non-positive ``max_gap``, or an inverted ``valid_min``/``valid_max``.
+    """
+    if not sensors_cfg:
+        raise ValueError(
+            "sensors: is empty — list at least one Slocum sensor to extract. "
+            "Run `dinkum-hotel sensors <files>` to see what the files carry."
+        )
+    out: dict[str, dict] = {}
+    for src, val in sensors_cfg.items():
+        src = str(src)
+        if val is None or val == {}:
+            opts: dict[str, Any] = {}
+        elif isinstance(val, str):
+            opts = {"name": val}
+        elif isinstance(val, dict):
+            unknown = set(val) - SENSOR_OPTION_KEYS
+            if unknown:
+                raise ValueError(
+                    f"sensors[{src!r}]: unknown option(s) {sorted(unknown)}. "
+                    f"Valid: {sorted(SENSOR_OPTION_KEYS)}"
+                )
+            opts = dict(val)
+        else:
+            raise ValueError(
+                f"sensors[{src!r}]: must be a string, mapping, or null; got {type(val).__name__}"
+            )
+
+        method = opts.get("method")
+        if method is not None and method not in INTERP_KINDS:
+            raise ValueError(f"sensors[{src!r}].method={method!r}: not in {sorted(INTERP_KINDS)}")
+        gap = opts.get("max_gap")
+        if gap is not None and not (float(gap) > 0):
+            raise ValueError(f"sensors[{src!r}].max_gap={gap!r}: must be > 0 seconds")
+        vmin, vmax = opts.get("valid_min"), opts.get("valid_max")
+        if vmin is not None and vmax is not None and float(vmin) >= float(vmax):
+            raise ValueError(f"sensors[{src!r}]: valid_min ({vmin}) >= valid_max ({vmax})")
+
+        opts.setdefault("name", src)
+        opts.setdefault("time_sensor", time_base)
+        out[src] = opts
+    return out
+
+
+def required_sensor_names(sensors: dict[str, dict], time_base: str) -> list[str]:
+    """Every sensor the read must include: data sensors plus all time sensors.
+
+    Restricting the read to the data sensors alone would drop the time sensor
+    a channel is attributed to, which is unrecoverable later.
+    """
+    names = set(sensors) | {time_base}
+    names |= {str(o["time_sensor"]) for o in sensors.values()}
+    return sorted(names)
+
+
+_TEMPLATE = """\
+# dinkum-hotel configuration — Slocum Dinkum Binary Data -> perturb hotel file.
+#
+# Every sensor listed below is projected onto ONE common time basis
+# (time.base), and the result is written as a hotel NetCDF that
+# perturb's `hotel:` block reads directly. The output time variable keeps
+# the name of the base sensor, so the perturb side reads:
+#
+#     hotel:
+#       file: "hotel.nc"
+#       time_column: "sci_ctd41cp_timestamp"
+#       time_format: "epoch"
+#
+# Paths may use <CONFIG_DIR>, which resolves to this file's own directory.
+
+files:
+  root: "<CONFIG_DIR>"      # directory the patterns below are relative to
+  patterns:                 # globs, in order; flight and science both
+    - "*.[de]bd"            #   uncompressed dbd/ebd
+    - "*.[de]cd"            #   LZ4-compressed dcd/ecd
+  cache: null               # sensor-list cache directory. NOT optional in
+                            # practice: a Slocum file whose sensor-list hash
+                            # is not in the cache cannot be decoded and is
+                            # skipped, so a wrong/empty cache yields "decoded
+                            # 0 records".
+  output: "<CONFIG_DIR>/hotel.nc"
+  reader: "auto"            # auto | xarray-dbd | dbd2netcdf | netcdf
+                            # auto: NetCDF inputs -> netcdf; else xarray-dbd
+                            # if importable; else the dbd2netCDF binary.
+  skip_first_record: true   # the first record of a file is routinely partial
+  repair: false             # attempt recovery of corrupt records
+
+time:
+  # The common time basis. The three that matter on a Slocum:
+  #   m_present_time         flight computer clock (every flight record)
+  #   sci_m_present_time     science computer clock (every science record)
+  #   sci_ctd41cp_timestamp  when the CTD's print ARRIVED at the science
+  #                          computer — the right basis for CTD channels
+  base: "sci_ctd41cp_timestamp"
+
+  # Valid range for any time sensor. Each accepts epoch seconds or an
+  # ISO-8601 date; null falls back to 100 s and (now + 365 days).
+  # Pin both for a reproducible rerun — the now-relative default moves.
+  min_value: null           # e.g. 100  or  "2025-01-15T00:00:00Z"
+  max_value: null           # e.g.      "2025-04-01T00:00:00Z"
+
+  dedupe: "mean"            # mean | first | last — collapse samples sharing
+                            # one timestamp. Slocum repeats the last CTD
+                            # timestamp on rows the CTD did not refresh, and
+                            # duplicates make pchip raise / linear go infinite.
+
+projection:
+  method: "linear"          # default projection; per-sensor `method` wins.
+                            # linear | pchip | nearest | previous | next |
+                            # zero | slinear | quadratic | cubic
+                            # Use "previous" (zero-order hold) for flight
+                            # state / discrete flags, where interpolating
+                            # between states invents values that never held.
+  max_gap: null             # [s] NaN the output where the bracketing source
+                            # samples are farther apart than this, instead of
+                            # ruling a straight line across a dropout
+  extrapolate: false        # outside a sensor's own range -> NaN
+
+sensors:
+  # source_name:            # include with all defaults
+  # source_name: "new_name" # rename only
+  # source_name:            # full form
+  #   name: "new_name"      #   output variable name (default: same)
+  #   time_sensor: "..."    #   which clock stamps THIS sensor
+  #                         #   (default: time.base)
+  #   method: "previous"    #   projection override
+  #   scale: 10.0           #   value = raw * scale + offset
+  #   offset: 0.0
+  #   units: "dbar"         #   CF units for the output
+  #   long_name: "..."
+  #   valid_min: -5.0       #   values outside -> NaN BEFORE projecting
+  #   valid_max: 45.0
+  #   max_gap: 30.0         #   per-sensor gap limit [s]
+
+  sci_water_temp:
+    units: "degree_Celsius"
+    valid_min: -5.0
+    valid_max: 45.0
+  sci_water_cond:
+    scale: 10.0             # Slocum reports S/m; perturb/gsw want mS/cm
+    units: "mS/cm"
+    valid_min: 0.0
+    valid_max: 70.0
+  sci_water_pressure:
+    scale: 10.0             # Slocum reports bar; everything else wants dbar
+    units: "dbar"
+    valid_min: -2.0
+    valid_max: 2000.0
+
+  # Flight channels ride the flight clock, so name it explicitly. "previous"
+  # holds each commanded/state value until it actually changes.
+  # m_pitch:
+  #   units: "rad"
+  #   time_sensor: "m_present_time"
+  # m_speed:
+  #   name: "speed"
+  #   units: "m s-1"
+  #   time_sensor: "m_present_time"
+
+netcdf:
+  title: null
+  summary: null
+  institution: null
+  source: null
+  platform: null
+  comment: null
+  creator_name: null
+  creator_email: null
+"""
+
+
+def generate_template(path: str | Path) -> Path:
+    """Write a fully-commented template configuration file."""
+    path = Path(path)
+    path.write_text(_TEMPLATE)
+    return path

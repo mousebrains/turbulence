@@ -191,6 +191,26 @@ def sanitize_reference(
     return ReferenceSeries(time=t, value=v, source=source, pressure=p)
 
 
+def _to_epoch_seconds(values: np.ndarray) -> np.ndarray:
+    """Time values -> epoch seconds, accepting ``datetime64`` or a numeric epoch.
+
+    Both dialects turn up in practice: a raw converted ``ebd.nc`` carries the
+    Slocum timestamp as a float epoch, while ``dinkum-hotel`` writes its time
+    basis as ``datetime64[ns]``.  Casting the latter straight to float gives
+    ~1.7e18 (nanoseconds), which the sanitiser then correctly throws away as
+    out of range --- leaving "0 reference samples" and no obvious cause.
+
+    ``NaT`` maps to NaN rather than to its integer sentinel, which would
+    otherwise become a bogus ~-9.2e9 epoch and poison everything downstream.
+    """
+    arr = np.asarray(values)
+    if np.issubdtype(arr.dtype, np.datetime64):
+        ns = arr.astype("datetime64[ns]").astype(np.int64)
+        out = ns.astype(np.float64) / 1e9
+        return np.where(ns == np.iinfo(np.int64).min, np.nan, out)
+    return np.asarray(arr, dtype=np.float64)
+
+
 def load_hotel_reference(
     path: str | Path,
     *,
@@ -225,7 +245,7 @@ def load_hotel_reference(
                     f"{path}: variable {name!r} not found; "
                     f"available: {sorted(map(str, ds.variables))}"
                 )
-        t = np.asarray(ds[time_var].values, dtype=np.float64).ravel()
+        t = _to_epoch_seconds(ds[time_var].values).ravel()
         v = np.asarray(ds[value_var].values, dtype=np.float64).ravel()
         p = None
         if pressure_var and pressure_var in ds.variables:

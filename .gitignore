@@ -56,3 +56,6 @@ myout/
 results/
 !microstructure_sensors/shear_sensitivities.csv
 !microstructure_sensors/README.md
+
+# Local scratch for exploratory analysis (see scripts/ for the kept drivers)
+scratch/

@@ -285,6 +285,48 @@ def test_local_dTdz_sees_the_thermocline():
     assert np.nanmax(np.abs(fin)) / max(np.nanmedian(np.abs(fin)), 1e-9) > 2.0
 
 
+def test_datetime64_time_base_is_accepted():
+    """`dinkum-hotel` writes its time basis as datetime64; ebd.nc uses a float epoch.
+
+    Casting datetime64 straight to float yields ~1.7e18 nanoseconds, which the
+    sanitiser then correctly discards as out of range — leaving "0 reference
+    samples" with no obvious cause. Both dialects must load identically.
+    """
+    import tempfile
+    from pathlib import Path
+
+    import xarray as xr
+
+    epoch = np.arange(1.7e9, 1.7e9 + 10)
+    temp = np.linspace(18.0, 20.0, 10)
+    with tempfile.TemporaryDirectory() as d:
+        f_num = Path(d) / "epoch.nc"
+        xr.Dataset({
+            "sci_ctd41cp_timestamp": ("i", epoch),
+            "sci_water_temp": ("i", temp),
+        }).to_netcdf(f_num)
+        f_dt = Path(d) / "dt64.nc"
+        xr.Dataset({
+            "sci_ctd41cp_timestamp": (
+                "i", (epoch * 1e9).astype("datetime64[ns]")),
+            "sci_water_temp": ("i", temp),
+        }).to_netcdf(f_dt)
+        a = load_hotel_reference(f_num, pressure_var=None)
+        b = load_hotel_reference(f_dt, pressure_var=None)
+    assert a.time.size == 10 and b.time.size == 10
+    np.testing.assert_allclose(a.time, b.time, atol=1e-6)
+    np.testing.assert_allclose(a.value, b.value)
+
+
+def test_nat_does_not_become_a_bogus_epoch():
+    from odas_tpw.fp07cal.series import _to_epoch_seconds
+
+    v = np.array(["2024-01-01T00:00:00", "NaT"], dtype="datetime64[ns]")
+    out = _to_epoch_seconds(v)
+    assert np.isfinite(out[0]) and out[0] > 1.7e9
+    assert not np.isfinite(out[1])
+
+
 def test_hotel_pressure_scale_applied():
     """Slocum reports bar; a raw ebd.nc read must be able to convert to dbar."""
     import tempfile
