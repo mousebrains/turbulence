@@ -39,6 +39,13 @@ dependencies = [
 cal = [
     "pypdf>=4",
 ]
+# Reading Slocum Dinkum Binary Data files (dinkum-hotel). Without it, the
+# converter falls back to the dbd2netCDF binary if one is on PATH, or to
+# already-converted NetCDF input.
+dbd = [
+    "xarray-dbd>=0.1",
+    "lz4>=4",  # *.?c? compressed Slocum files
+]
 # Shell tab-completion for the argparse CLIs (rsi-tpw, perturb, perturb-plot,
 # perturb-diag). See docs/rsi-tpw/completion.md.
 completion = [
@@ -63,6 +70,8 @@ Changelog = "https://github.com/mousebrains/turbulence/blob/main/CHANGELOG.md"
 Issues = "https://github.com/mousebrains/turbulence/issues"
 
 [project.scripts]
+fp07-cal = "odas_tpw.fp07cal.cli:main"
+dinkum-hotel = "odas_tpw.dinkum.cli:main"
 rsi-tpw = "odas_tpw.rsi.cli:main"
 perturb = "odas_tpw.perturb.cli:main"
 perturb-plot = "odas_tpw.perturb.plot.cli:main"

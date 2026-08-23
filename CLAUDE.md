@@ -18,6 +18,8 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas
 - `processing/` — Instrument-agnostic profile processing (top_trim, bottom-crash, ct_align, mk_epsilon_mean, mk_chi_mean, mixing N²/dT/dz/Γ/K_T/K_ρ)
 - `perturb/` — Full campaign processing pipeline (trim, merge, calibrate, compute, bin)
 - `pyturb/` — Jesse's standalone analysis code (hosted here; `pyturb-cli` entry point)
+- `dinkum/` — Slocum Dinkum Binary Data (`*.dbd`/`*.ebd`, LZ4 `*.dcd`/`*.ecd`) → perturb hotel file (`dinkum-hotel` entry point). See `docs/dinkum_hotel.md`.
+- `fp07cal/` — FP07 in-situ calibration against a CTD (`fp07-cal` entry point). A **pre-pipeline** step: fits one Steinhart-Hart set per deployment and patches it into the `.p` files. See `docs/fp07cal/runbook.md`.
 
 ### Key Modules (rsi)
 
@@ -55,7 +57,72 @@ rsi-tpw chi VMP/*.p -o chi/                    # compute chi (Method 2)
 rsi-tpw chi VMP/*.p --epsilon-dir epsilon/ -o chi/  # chi with epsilon (Method 1)
 rsi-tpw pipeline VMP/*.p -o results/           # full pipeline
 rsi-tpw eps VMP/*.p --salinity 34.5 -o epsilon/  # custom salinity
+
+dinkum-hotel backends                          # which DBD readers are available
+dinkum-hotel sensors glider/*.ecd -C cache/    # what sensors do these files carry?
+dinkum-hotel init -o dinkum-hotel.yaml         # commented template config
+dinkum-hotel build -c dinkum-hotel.yaml        # Dinkum files -> hotel.nc
+
+fp07-cal demo                                  # exercise the chain on synthetic data
+fp07-cal init -o fp07-cal.yaml                 # commented template config
+fp07-cal coverage -c fp07-cal.yaml             # what CTD reference do we actually have?
+fp07-cal fit -c fp07-cal.yaml                  # coefficients + stability diagnostic
+fp07-cal patch -c fp07-cal.yaml                # write them into calibrated .p copies
 ```
+
+### FP07 in-situ calibration (`fp07-cal`)
+
+A **pre-pipeline** tool, run once per deployment against a CTD reference;
+perturb then reads the patched files with `fp07.calibrate: false` and needs no
+changes. Runbook: `docs/fp07cal/runbook.md`. Worked 72-day result:
+`docs/fp07cal/osu685_stability.md`. Design and adversarial review:
+`docs/fp07_insitu_calibration_PLAN.md`.
+
+Facts that are easy to get wrong:
+
+- The reference is read **directly from the CTD NetCDF on the CTD's own
+  clock**, never through `perturb/hotel.py`. How that merge treats gaps and
+  out-of-coverage samples is controlled by perturb's `hotel.max_gap` /
+  `extrapolate` settings (PR #150); a calibration must not depend on any such
+  configuration, so `fp07-cal` takes the file's **real samples only** and
+  invents nothing between them.
+- The thermistor is **decimated down onto real CTD samples**, not the CTD
+  interpolated up. That invents no reference, bandwidth-matches the regressor
+  (so `beta_1` is not attenuated by errors-in-variables), and makes a sparse
+  reference a non-event: no CTD sample, no pair.
+- **Lag is gated on peak sharpness, never on `r`.** A glider dive is a
+  monotonic ramp, and a shifted straight line is the same line plus a constant,
+  which every correlation removes: on real data raw pressure scored
+  `r = 1.000000` at *every* lag over ±30 s. Scores use high-passed series, and
+  a peak at the search boundary is refused.
+- **`beta_2 = 0` does not delete a quadratic term** — the config value is a
+  reciprocal, so zero means an infinite term and `convert_therm` raises
+  `ZeroDivisionError`. `beta_2 = 1e30` is bit-identical to omitting the key.
+- Polynomial order is chosen by **held-out** error split on temperature, not by
+  in-sample fit or a t-test: `beta_3` can carry a t-statistic of 10 while
+  making extrapolation four times worse.
+
+### Hotel files from Slocum gliders
+
+`dinkum-hotel` builds the hotel file that perturb's `hotel:` block consumes.
+Key facts (details in `docs/dinkum_hotel.md`):
+
+- A Slocum record carries only the sensors that reported that cycle, and there
+  are **three clocks**: `m_present_time` (flight), `sci_m_present_time`
+  (science), `sci_ctd41cp_timestamp` (arrival of the CTD print). Each sensor is
+  attributed to its own via `sensors.<name>.time_sensor`, then projected onto
+  the single `time.base`.
+- Timestamps out of the raw converters are **not monotonic** — Slocum repeats
+  the last CTD stamp on rows the CTD did not refresh and writes `0.0` for
+  never-set. Sanitizing (NaN / `< min_value` / `> max_value`, then dedupe) is
+  the reason this build step exists.
+- `time.min_value`/`max_value` take epoch seconds or an ISO-8601 date;
+  `null` falls back to 100 s and now + 365 days.
+- **Unit conversion happens once, in the builder** (`sensors.*.scale`: S/m →
+  mS/cm and bar → dbar are both `10.0`). The perturb side must not re-apply it.
+- The **sensor-list cache directory is effectively required**: a Slocum file
+  whose sensor-list hash is not cached cannot be decoded. The build refuses to
+  proceed on a partial decode, naming the skipped files.
 
 ### Python API
 

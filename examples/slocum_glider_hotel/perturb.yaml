@@ -35,7 +35,11 @@ gps:
   max_time_diff: 60       # warn when extrapolating > this [s] outside coverage
 
 hotel:
-  # Hotel file built from the Slocum EBD files. Requirements:
+  # Hotel file built from the Slocum EBD files by `dinkum-hotel build`
+  # (see examples/slocum_glider_hotel/dinkum-hotel.yaml). That builder is
+  # what enforces the requirements below and converts units, so the values
+  # arriving here are already dbar / mS/cm / degC on a clean time base.
+  # Requirements (satisfied by the builder; still true for a hand-built file):
   #   * NetCDF (.nc), CSV, or .mat — this example assumes NetCDF.
   #   * sci_ctd41cp_timestamp is the CTD sample clock, POSIX seconds, and must
   #     be STRICTLY INCREASING with no duplicate or zero/fill rows. Slocum EBD
@@ -58,7 +62,11 @@ hotel:
                           # seawater-property injectors require T, C and P to
                           # share the slow grid and silently skip otherwise
     sci_water_cond:
-      scale: 10.0         # Slocum reports S/m; gsw.SP_from_C wants mS/cm
+      # NO scale here: dinkum-hotel already converted S/m -> mS/cm when it
+      # built the file (see its sensors.sci_water_cond.scale). Re-applying it
+      # would multiply by 10 twice and put salinity into fantasy. Add
+      # `scale: 10.0` back ONLY for a hand-built hotel file still in raw
+      # Slocum units.
       units: "mS/cm"
       fast: false
     sci_water_pressure:
@@ -67,8 +75,8 @@ hotel:
       # difference between the two is the glider-vs-MR clock offset plus the
       # CTD-vs-MR mounting offset, which is worth watching. See ctd.variables
       # below, which puts it in the CTD product for exactly that check.
-      scale: 10.0         # Slocum reports bar; everything here wants dbar
-      units: "dbar"
+      units: "dbar"       # already bar -> dbar in the builder; see the
+                          # sci_water_cond note above before adding a scale
       fast: false         # SLOW on purpose — see the note under fast_channels
 
     # ---- optional glider flight channels ------------------------------------
@@ -124,6 +132,23 @@ profiles:
 fp07:
   # The glider CTD temperature is the in-situ reference for the FP07
   # Steinhart-Hart recalibration.
+  #
+  # PREFER THE PRE-PIPELINE ROUTE. `fp07-cal` (see fp07-cal.yaml beside this
+  # file) fits ONE coefficient set for the whole deployment and writes it into
+  # the .p files, then you run perturb over those with `calibrate: false`:
+  #
+  #     perturb trim -> fp07-cal fit -> fp07-cal patch -> perturb run
+  #
+  # It is better here for three reasons:
+  #   * the per-file fit below needs a reference in EVERY file, so on a glider
+  #     that ran CT on only some yos it silently leaves the rest on the nominal
+  #     coefficients — adjacent yos then carry different calibrations;
+  #   * worse, where the hotel merge has interpolated across a CT gap the
+  #     per-file fit regresses against a fabricated ramp and nothing notices;
+  #   * `fp07-cal` measures whether the calibration is stable in time and depth,
+  #     and reports the lag decomposition, rather than assuming.
+  #
+  # Set `calibrate: false` once the .p files are patched.
   calibrate: true
   order: 1                # a single glider deployment rarely spans the >8 degC
                           # needed to constrain an order-2 fit

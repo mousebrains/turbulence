@@ -1,0 +1,103 @@
+# fp07-cal — FP07 in-situ calibration for a MicroRider on a Slocum.
+#
+# A PRE-PIPELINE step. It runs once per deployment and hands perturb .p files
+# that already carry the right coefficients, so perturb itself needs no changes:
+#
+#   perturb trim  ->  fp07-cal fit  ->  fp07-cal patch  ->  perturb run
+#                                                           (fp07.calibrate: false)
+#
+# See docs/fp07cal/runbook.md for the full walkthrough, and
+# docs/fp07cal/osu685_stability.md for a worked result on a 72-day deployment.
+#
+# Paths may use <CONFIG_DIR>, which resolves to this file's own directory.
+
+files:
+  p_file_root: "<CONFIG_DIR>"      # MR .p files (trimmed, if you trim)
+  p_file_pattern: "**/*.p"
+  output_dir: "<CONFIG_DIR>/fp07cal"
+  max_fit_files: 100     # how many files to hold in memory for the lag+fit
+                         # stage, spread evenly across the deployment. Every
+                         # file is then processed in a streaming second pass.
+                         # A full deployment held at once is several GB.
+
+reference:
+  # Read STRAIGHT from the hotel NetCDF, on the CTD's own clock — real samples
+  # only, deliberately NOT through perturb's hotel merge. How that merge treats
+  # gaps is governed by perturb's hotel.max_gap / extrapolate settings (PR
+  # #150); a calibration must not depend on merge configuration, so this tool
+  # takes only what the CTD actually measured and invents nothing in between.
+  #
+  # Any NetCDF carrying the CTD on its own clock works: a hotel file, or a
+  # converted Slocum ebd.nc read directly (which is what was validated).
+  file: "<CONFIG_DIR>/hotel.nc"
+  time_var: "sci_ctd41cp_timestamp"
+  value_var: "sci_water_temp"
+  pressure_var: "sci_water_pressure"   # enables the clock-offset measurement
+  pressure_scale: 1.0    # A Slocum reports sci_water_pressure in BAR. Use 1.0
+                         # if the hotel file already applied the x10 when it was
+                         # built; use 10.0 when pointing straight at a raw
+                         # converted ebd.nc, which has not. Getting this wrong
+                         # does NOT affect the lags (they are correlation-based
+                         # and scale-invariant) but does corrupt the sensor
+                         # geometry term. Sanity check: pressure should read
+                         # ~1000 at 1000 m, not ~100.
+  valid_min: -5.0
+  valid_max: 45.0
+
+pairs:
+  max_gap: 30.0          # [s] Defines where the reference EXISTS. Not a
+                         # smoothing knob: CTD samples further apart than this
+                         # are separate coverage spans and nothing is
+                         # interpolated across the hole. Files that contribute
+                         # zero pairs are normal — they are still calibrated,
+                         # from the pooled fit.
+  kernel_width: null     # [s] boxcar; null = the CTD's median sample interval
+  kernel_tau: 2.7        # [s] single pole approximating the CTD's response.
+                         # 2.7 s is the SBE41cp response measured in situ on
+                         # osu685 (thermal lag minus clock offset — runbook.md).
+                         # A pole mismatch is not a delay, so the lag search
+                         # cannot remove it; too-fast a pole leaks a few mK
+                         # into a one-signed (climb-only) deployment.
+  min_speed: 0.05        # [m/s] below this the thermistor is not flushing
+  require_profile: true
+
+channels: ["T1", "T2"]
+
+lag:
+  max_lag: 20.0
+  step: 0.25
+  detrend_s: 30.0        # High-pass BEFORE scoring, and gate on peak SHARPNESS
+                         # rather than on r. A glider dive is a monotonic ramp,
+                         # and a shifted straight line is the same line plus a
+                         # constant, which every correlation removes: measured
+                         # on real data, raw pressure scored r = 1.000000 at
+                         # EVERY lag over +/-30 s. A high r is not evidence.
+                         # Cross-check 20/30/60 s — too short a window locks
+                         # onto a wrong lobe with a deceptively narrow peak.
+
+fit:
+  order: "auto"          # Picks the order by HELD-OUT error, splitting on
+                         # temperature (fit the warm half, predict the cold
+                         # half). In-sample fit improves monotonically with
+                         # order so it can only ever say "more"; what matters
+                         # is extrapolating onto profiles outside the fitted
+                         # range. On a 24 degC deployment this picks order 2
+                         # (halves the residual AND improves extrapolation
+                         # 2-5x); order 3 gained 0.013 mK in sample and made
+                         # extrapolation 4x worse. Over <8 degC it picks 1.
+  robust: true
+  geometry: true         # Fit the sensor mounting offset JOINTLY with the
+                         # coefficients. The FP07 and CTD sit at different
+                         # depths at the same instant, contributing dz*dT/dz to
+                         # the residual — which looks exactly like a
+                         # depth-dependent calibration. Estimating it after the
+                         # fact does not work: dT/dz correlates with T on a
+                         # monotone profile, so an ordinary fit absorbs it into
+                         # t_0 (25 cm injected came back as 0.4 cm).
+
+stability:
+  n_blocks: 12           # temporal blocks for the drift diagnostic. beta_1 is
+                         # fitted globally (it is a slope and needs the full
+                         # temperature range); only t_0 is re-fitted per block.
+  block_days: null       # set instead of n_blocks for a fixed cadence
+  min_profiles: 3        # profiles, not samples, are the independent unit
