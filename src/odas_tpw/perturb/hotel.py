@@ -44,21 +44,25 @@ default options. Otherwise only the source names listed are kept.
 Gaps
 ----
 ``hotel.max_gap`` and ``hotel.extrapolate`` (with per-channel overrides above)
-control what happens where the source has **no data**. Both default to the
-historical behaviour --- interpolate across any gap, hold the end values outside
-coverage --- so an existing config keeps producing the same numbers.
+control what happens where the source has **no data**.
 
-That default is dangerous and the merge now says so. On an instrument whose CTD
-ran on only some profiles, the merged channel is a smooth *fabricated* ramp
-between real samples hours apart, and every consumer (``ct``, ``ctd``,
-``stratification``, ``salinity: "measured"``, ``epsilon.T_source``) reads it as
-data. A warning naming the channel and the fabricated fraction is emitted
-whenever it happens, scaled to that channel's own median sample interval so it
-fires on real dropouts and not on sampling jitter.
+``max_gap`` is **required**. There is no safe default: the right limit is the
+sensor's own rate --- tens of seconds for a 1 Hz CTD, minutes for a flight-state
+variable --- and guessing wrong is silent in both directions. Omitting it raises.
+``extrapolate`` defaults to ``False``.
 
-Set ``max_gap`` to reject rather than invent. Note that without it, a builder
-that NaN-marks its own dropouts (``dinkum-hotel``'s ``projection.max_gap``) has
-that undone here --- the loader drops the NaN and interpolates across it anyway.
+The reason for the strictness: on an instrument whose CTD ran on only some
+profiles, an ungated merge produces a smooth *fabricated* ramp between real
+samples hours apart, and every consumer (``ct``, ``ctd``, ``stratification``,
+``salinity: "measured"``, ``epsilon.T_source``) reads it as data. It also
+silently undid gap control applied upstream: a builder that NaN-marks its own
+dropouts (``dinkum-hotel``'s ``projection.max_gap``) had that erased, because
+the loader drops non-finite samples and then interpolates across the hole.
+
+``max_gap: "unlimited"`` restores the old interpolate-across-anything behaviour
+for a channel or for the whole block --- deliberately, in writing --- and warns
+whenever it actually fabricates. That warning is scaled to the channel's own
+median sample interval, so it fires on real dropouts and not on sampling jitter.
 """
 
 import warnings
@@ -85,6 +89,12 @@ _CHANNEL_OPTION_KEYS = frozenset({
 # data.  Used only to decide when to WARN, so it needs no configuration and
 # scales itself to each channel's rate.
 _GAP_WARN_FACTOR = 10.0
+
+# The one value that opts out of the required gap limit.  A string rather than
+# ``null`` on purpose: ``merge_config`` drops nulls, so an explicit null is
+# indistinguishable from "not set" -- and the opt-out has to be something the
+# operator typed deliberately, not something they left blank.
+UNLIMITED = "unlimited"
 
 
 @dataclass
@@ -483,7 +493,7 @@ def _interp_one(
     kind: str,
     *,
     max_gap: float | None = None,
-    extrapolate: bool = True,
+    extrapolate: bool = False,
     stats: dict | None = None,
 ) -> np.ndarray:
     """Interpolate one channel onto ``target_t`` with the requested kind.
@@ -493,11 +503,14 @@ def _interp_one(
     hole.  ``extrapolate=False`` NaNs the output outside the source's own time
     range instead of holding the end values.
 
-    Both default to the historical behaviour --- interpolate across anything,
-    edge-hold outside --- because changing the numbers a config already
-    produces is not something this function should do silently.  What it does
-    do unconditionally is *measure* how much of the output was manufactured
-    and report it through ``stats``, so the caller can warn.
+    ``extrapolate`` defaults to False: an edge-held constant outside the
+    source's coverage correlates with nothing and is not a measurement.
+    ``max_gap=None`` leaves this function ungated --- the *requirement* is
+    enforced one level up in :func:`interpolate_hotel`, where the user's config
+    lives, so library callers keep a usable primitive.
+
+    Either way this function unconditionally *measures* how much of the output
+    was manufactured and reports it through ``stats``.
 
     Why this matters: on an instrument whose CTD ran on only some profiles, the
     merged channel is a smooth fabricated ramp between real samples hours
@@ -580,8 +593,8 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
     # Both default to the historical behaviour so an existing config keeps
     # producing the numbers it produced before; the warning above is what makes
     # the situation visible without changing them.
-    default_max_gap = hotel_cfg.get("max_gap")
-    default_extrapolate = bool(hotel_cfg.get("extrapolate", True))
+    default_max_gap = _resolve_max_gap(hotel_cfg.get("max_gap"), "hotel.max_gap")
+    default_extrapolate = bool(hotel_cfg.get("extrapolate", False))
     _, channels_opts = _normalize_channels_cfg(hotel_cfg.get("channels"))
 
     pf_start_offset = 0.0 if hotel_data.time_is_relative else pf.start_time.timestamp()
@@ -601,7 +614,11 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
         # gets nothing for that channel, same as a missing channel.
         if hotel_t.size < 2:
             continue
-        max_gap = opts.get("max_gap", default_max_gap)
+        max_gap = (
+            _resolve_max_gap(opts["max_gap"], f"hotel.channels[{src!r}].max_gap")
+            if "max_gap" in opts
+            else default_max_gap
+        )
         extrapolate = bool(opts.get("extrapolate", default_extrapolate))
         stats: dict = {}
         result[src] = _interp_one(
@@ -613,6 +630,39 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
         _warn_if_fabricated(src, stats, max_gap, extrapolate)
 
     return result
+
+
+def _resolve_max_gap(value, where: str) -> float | None:
+    """Validate a gap limit.  Unset is an error; ``"unlimited"`` opts out.
+
+    There is no defensible default. The right limit is the sensor's own rate --
+    tens of seconds for a 1 Hz CTD, minutes for a flight-state variable -- and
+    guessing it wrong in either direction is silent: too tight throws away good
+    data, too loose manufactures it. So the operator has to say.
+    """
+    if isinstance(value, str):
+        if value.strip().lower() == UNLIMITED:
+            return None
+        raise ValueError(
+            f"{where}={value!r}: expected a number of seconds or the string "
+            f"{UNLIMITED!r}"
+        )
+    if value is None:
+        raise ValueError(
+            f"{where} is required when hotel.enable is true. Where two "
+            f"bracketing source samples are farther apart than this, the merge "
+            f"NaNs the output instead of ruling a straight line across the "
+            f"hole. There is no safe default -- the right limit is the sensor's "
+            f"own sample rate (~30 for a 1 Hz CTD, minutes for a flight-state "
+            f"variable). Interpolating across an unbounded gap manufactures "
+            f"data that ct, ctd, stratification, salinity:\"measured\" and "
+            f"epsilon.T_source all read as measurement. To deliberately keep "
+            f"the old behaviour, set {where}: {UNLIMITED!r}."
+        )
+    gap = float(value)
+    if not np.isfinite(gap) or gap <= 0:
+        raise ValueError(f"{where}={value!r}: must be a positive number of seconds")
+    return gap
 
 
 def _warn_if_fabricated(
@@ -649,8 +699,8 @@ def _warn_if_fabricated(
         parts.append(f"{100.0 * n_out / n:.1f}% of samples {verb} outside coverage")
     hint = (
         ""
-        if (max_gap or not extrapolate)
-        else " — set hotel.max_gap / hotel.extrapolate to reject these instead"
+        if max_gap is not None
+        else f" — max_gap is {UNLIMITED!r} for this channel, so nothing is rejected"
     )
     warnings.warn(
         f"hotel channel {src!r}: " + "; ".join(parts) + hint,

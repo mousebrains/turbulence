@@ -2262,7 +2262,10 @@ class TestHotelSpeedInjection:
             channels={"m_speed": np.full(50, 0.35)},
             time_is_relative=True,
         )
-        hotel_cfg = {"channels": {"m_speed": "speed"}}
+        # max_gap is required; "unlimited" keeps this test on the pre-gating
+        # semantics it was written against (it is about speed provenance, not
+        # about gaps).
+        hotel_cfg = {"channels": {"m_speed": "speed"}, "max_gap": "unlimited"}
         (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
         output_dirs = {"profiles": tmp_path / "profiles"}
 

@@ -12,8 +12,10 @@ Worse, a builder that NaN-marked a dropout (``dinkum-hotel``'s
 interpolated across it anyway, so builder-side gap control produced
 byte-identical output.
 
-These tests pin both the new gating and --- just as important --- that the
-defaults still reproduce the old numbers exactly.
+``hotel.max_gap`` is now **required**: there is no safe default, because the
+right limit is the sensor's own rate.  ``hotel.extrapolate`` now defaults to
+False.  The old behaviour is still reachable --- deliberately, by typing
+``max_gap: "unlimited"`` --- so a historical result can be regenerated.
 """
 
 from datetime import UTC, datetime
@@ -45,19 +47,22 @@ def _sparse():
     return np.concatenate(t), np.concatenate(v)
 
 
-def test_default_still_fabricates_exactly_as_before():
-    """The knobs must not change what an existing config already produced."""
+def test_legacy_semantics_are_still_reachable():
+    """`max_gap: "unlimited"` + `extrapolate: True` reproduces the old numbers.
+
+    Kept so a historical result can still be regenerated deliberately.
+    """
     t, v = _sparse()
     mid = np.linspace(1500.0, 2100.0, 7)
-    out = _interp_one(t, v, mid, "linear")
-    assert np.all(np.isfinite(out))
-    # The historical values, to four places.
+    out = _interp_one(t, v, mid, "linear", max_gap=None, extrapolate=True)
     np.testing.assert_allclose(
         out, [19.1638, 19.2036, 19.2434, 19.2833, 19.3231, 19.3629, 19.4027],
         atol=1e-4,
     )
     for kind in ("pchip", "linear"):
-        assert np.all(np.isfinite(_interp_one(t, v, np.linspace(-100, 7500, 200), kind)))
+        assert np.all(np.isfinite(_interp_one(
+            t, v, np.linspace(-100, 7500, 200), kind,
+            max_gap=None, extrapolate=True)))
 
 
 def test_max_gap_nans_a_fabricated_span():
@@ -74,11 +79,11 @@ def test_max_gap_keeps_genuinely_sampled_points():
     assert out[0] == pytest.approx(18.10)
 
 
-def test_extrapolate_false_nans_outside_coverage():
+def test_extrapolation_is_off_by_default():
     t, v = _sparse()
     past = np.array([20000.0, 20600.0])
-    assert np.all(_interp_one(t, v, past, "linear") == v[-1])
-    assert np.all(np.isnan(_interp_one(t, v, past, "linear", extrapolate=False)))
+    assert np.all(np.isnan(_interp_one(t, v, past, "linear")))
+    assert np.all(_interp_one(t, v, past, "linear", extrapolate=True) == v[-1])
 
 
 def test_builder_side_nan_marking_now_survives_the_merge():
@@ -88,7 +93,7 @@ def test_builder_side_nan_marking_now_survives_the_merge():
     o = np.argsort(t)
     t, v = t[o], v[o]
     mid = np.linspace(1500.0, 2100.0, 7)
-    assert np.all(np.isfinite(_interp_one(t, v, mid, "linear")))       # old
+    assert np.all(np.isfinite(_interp_one(t, v, mid, "linear")))       # ungated
     assert np.all(np.isnan(_interp_one(t, v, mid, "linear", max_gap=30.0)))
 
 
@@ -125,7 +130,7 @@ def test_interpolate_hotel_warns_about_fabricated_samples():
     hd = HotelData(time=t, channels={"sci_water_temp": v}, time_is_relative=True)
     pf = _PF(np.linspace(0.0, 7260.0, 500))
     with pytest.warns(UserWarning, match="interpolated across gaps"):
-        interpolate_hotel(hd, pf, {})
+        interpolate_hotel(hd, pf, {"max_gap": "unlimited"})
 
 
 def test_interpolate_hotel_warns_about_edge_holding():
@@ -133,7 +138,7 @@ def test_interpolate_hotel_warns_about_edge_holding():
     hd = HotelData(time=t, channels={"a": v}, time_is_relative=True)
     pf = _PF(np.linspace(7300.0, 9000.0, 50))
     with pytest.warns(UserWarning, match="edge-held outside coverage"):
-        interpolate_hotel(hd, pf, {})
+        interpolate_hotel(hd, pf, {"max_gap": "unlimited", "extrapolate": True})
 
 
 def test_per_channel_max_gap_overrides_the_global():
@@ -142,7 +147,7 @@ def test_per_channel_max_gap_overrides_the_global():
     pf = _PF(np.array([1800.0, 1801.0]))
     out = interpolate_hotel(hd, pf, {
         "max_gap": 30.0,
-        "channels": {"a": {}, "b": {"max_gap": None}},
+        "channels": {"a": {}, "b": {"max_gap": "unlimited"}},
     })
     assert np.isnan(out["a"]).all()      # takes the global gate
     assert np.isfinite(out["b"]).all()   # opts out of it
@@ -153,7 +158,7 @@ def test_per_channel_extrapolate_overrides_the_global():
     hd = HotelData(time=t, channels={"a": v, "b": v}, time_is_relative=True)
     pf = _PF(np.array([20000.0]))
     out = interpolate_hotel(hd, pf, {
-        "extrapolate": False,
+        "max_gap": 30.0,
         "channels": {"a": {}, "b": {"extrapolate": True}},
     })
     assert np.isnan(out["a"]).all()
@@ -169,3 +174,39 @@ def test_max_gap_and_extrapolate_are_accepted_channel_options():
     )
     assert opts["x"]["max_gap"] == 30.0
     assert opts["x"]["extrapolate"] is False
+
+
+def test_max_gap_is_required():
+    """Omitting it is an error, not a default -- there is no safe default."""
+    t, v = _sparse()
+    hd = HotelData(time=t, channels={"a": v}, time_is_relative=True)
+    pf = _PF(np.array([10.0, 20.0]))
+    with pytest.raises(ValueError, match=r"hotel\.max_gap is required"):
+        interpolate_hotel(hd, pf, {})
+
+
+def test_max_gap_rejects_nonsense():
+    t, v = _sparse()
+    hd = HotelData(time=t, channels={"a": v}, time_is_relative=True)
+    pf = _PF(np.array([10.0]))
+    with pytest.raises(ValueError, match="expected a number of seconds"):
+        interpolate_hotel(hd, pf, {"max_gap": "sometimes"})
+    with pytest.raises(ValueError, match="positive number of seconds"):
+        interpolate_hotel(hd, pf, {"max_gap": -5})
+
+
+def test_unlimited_is_case_insensitive_and_opts_out():
+    t, v = _sparse()
+    hd = HotelData(time=t, channels={"a": v}, time_is_relative=True)
+    pf = _PF(np.array([1800.0]))
+    out = interpolate_hotel(hd, pf, {"max_gap": "UNLIMITED"})
+    assert np.isfinite(out["a"]).all()
+
+
+def test_per_channel_max_gap_is_validated_too():
+    t, v = _sparse()
+    hd = HotelData(time=t, channels={"a": v}, time_is_relative=True)
+    pf = _PF(np.array([10.0]))
+    with pytest.raises(ValueError, match=r"channels\['a'\].max_gap"):
+        interpolate_hotel(hd, pf, {"max_gap": 30.0,
+                                   "channels": {"a": {"max_gap": "no"}}})
