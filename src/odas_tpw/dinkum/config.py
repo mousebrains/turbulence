@@ -49,8 +49,16 @@ SENSOR_OPTION_KEYS = frozenset(
         "valid_min",
         "valid_max",
         "max_gap",
+        "dedupe",
     }
 )
+
+# Dedupe strategies accepted by time.dedupe and per-sensor dedupe.
+DEDUPE_METHODS = frozenset({"mean", "first", "last"})
+
+# Step-like projections: a duplicate-timestamp group must collapse to the
+# value that was actually in force, never to a mean the sensor never reported.
+_STATE_METHODS = frozenset({"previous", "next", "nearest", "zero"})
 
 DEFAULTS: dict[str, dict] = {
     "files": {
@@ -83,7 +91,9 @@ DEFAULTS: dict[str, dict] = {
         # How to collapse samples sharing one timestamp. Slocum repeats the
         # last CTD timestamp on rows the CTD did not refresh, so duplicates
         # are routine and must go: the interpolators either raise (pchip) or
-        # produce infinite slopes (linear).
+        # produce infinite slopes (linear). Per-sensor `dedupe` overrides;
+        # sensors projected with previous/next/nearest/zero default to
+        # "last" (the state actually in force), not the global value.
         "dedupe": "mean",  # mean | first | last
     },
     "projection": {
@@ -92,9 +102,10 @@ DEFAULTS: dict[str, dict] = {
         # apart than this [s] — i.e. do not draw a straight line across a
         # dropout and present it as data. null = no gap limit.
         "max_gap": None,
-        # Outside a sensor's own first/last sample the value is NaN. perturb's
-        # hotel loader edge-holds at merge time; holding here too would bake a
-        # constant into the archive.
+        # Outside a sensor's own first/last sample the value is NaN. Whether
+        # perturb holds or NaNs the edges at merge time is its own decision
+        # (hotel.max_gap / hotel.extrapolate; see #150); holding here too
+        # would bake a constant into the archive.
         "extrapolate": False,
     },
     # Dynamic keys: Slocum sensor names -> options (see SENSOR_OPTION_KEYS).
@@ -125,8 +136,16 @@ def normalize_sensors(sensors_cfg: dict | None, time_base: str) -> dict[str, dic
     dict of :data:`SENSOR_OPTION_KEYS`. Returns source_name -> fully-specified
     option dict with ``name`` and ``time_sensor`` always present.
 
+    Per-sensor ``max_gap: null`` means *inherit the global* — the key is
+    dropped so :func:`build_hotel` falls back to ``projection.max_gap``.
+    Per-sensor ``dedupe`` defaults to ``"last"`` for the step-like methods
+    (previous/next/nearest/zero) and to the global ``time.dedupe`` otherwise;
+    an explicit value always wins.
+
     Raises ``ValueError`` on an unknown option, a bad interpolation method, a
-    non-positive ``max_gap``, or an inverted ``valid_min``/``valid_max``.
+    bad dedupe, a non-positive ``max_gap``, an inverted
+    ``valid_min``/``valid_max``, or an output name that collides with
+    another sensor or with the time base.
     """
     if not sensors_cfg:
         raise ValueError(
@@ -156,9 +175,16 @@ def normalize_sensors(sensors_cfg: dict | None, time_base: str) -> dict[str, dic
         method = opts.get("method")
         if method is not None and method not in INTERP_KINDS:
             raise ValueError(f"sensors[{src!r}].method={method!r}: not in {sorted(INTERP_KINDS)}")
+        if "max_gap" in opts and opts["max_gap"] is None:
+            del opts["max_gap"]  # null -> inherit projection.max_gap
         gap = opts.get("max_gap")
         if gap is not None and not (float(gap) > 0):
             raise ValueError(f"sensors[{src!r}].max_gap={gap!r}: must be > 0 seconds")
+        dd = opts.get("dedupe")
+        if dd is not None and dd not in DEDUPE_METHODS:
+            raise ValueError(f"sensors[{src!r}].dedupe={dd!r}: not in {sorted(DEDUPE_METHODS)}")
+        if dd is None and method in _STATE_METHODS:
+            opts["dedupe"] = "last"
         vmin, vmax = opts.get("valid_min"), opts.get("valid_max")
         if vmin is not None and vmax is not None and float(vmin) >= float(vmax):
             raise ValueError(f"sensors[{src!r}]: valid_min ({vmin}) >= valid_max ({vmax})")
@@ -171,7 +197,9 @@ def normalize_sensors(sensors_cfg: dict | None, time_base: str) -> dict[str, dic
     # collision: build_hotel stores each result as data_vars[out_name], so the
     # later physical sensor silently overwrites the earlier one while the log
     # and the provenance still list both. Refuse rather than pick a winner.
-    by_out: dict[str, list[str]] = {}
+    # The time base is seeded in: it becomes the output's time coordinate, so
+    # a sensor named after it would collide inside xarray at write time.
+    by_out: dict[str, list[str]] = {time_base: [f"time.base={time_base!r}"]}
     for src, opts in out.items():
         by_out.setdefault(str(opts["name"]), []).append(src)
     collisions = {name: srcs for name, srcs in by_out.items() if len(srcs) > 1}
@@ -181,8 +209,9 @@ def normalize_sensors(sensors_cfg: dict | None, time_base: str) -> dict[str, dic
         )
         raise ValueError(
             f"sensors: two or more sensors resolve to the same output name "
-            f"({detail}). Each output variable can hold one sensor; give them "
-            f"distinct `name` values."
+            f"({detail}). Each output variable can hold one sensor, and the "
+            f"time base's name is the time coordinate; give them distinct "
+            f"`name` values."
         )
     return out
 
@@ -248,6 +277,8 @@ time:
                             # one timestamp. Slocum repeats the last CTD
                             # timestamp on rows the CTD did not refresh, and
                             # duplicates make pchip raise / linear go infinite.
+                            # Sensors projected with previous/next/nearest/
+                            # zero use "last" unless they say otherwise.
 
 projection:
   method: "linear"          # default projection; per-sensor `method` wins.
@@ -275,7 +306,9 @@ sensors:
   #   long_name: "..."
   #   valid_min: -5.0       #   values outside -> NaN BEFORE projecting
   #   valid_max: 45.0
-  #   max_gap: 30.0         #   per-sensor gap limit [s]
+  #   max_gap: 30.0         #   per-sensor gap limit [s] (null = global)
+  #   dedupe: "last"        #   mean | first | last (default: "last" for
+  #                         #   previous/next/nearest/zero, else time.dedupe)
 
   sci_water_temp:
     units: "degree_Celsius"

@@ -47,6 +47,8 @@ time:
                             # one timestamp. Slocum repeats the last CTD
                             # timestamp on rows the CTD did not refresh, and
                             # duplicates make pchip raise / linear go infinite.
+                            # Sensors projected with previous/next/nearest/
+                            # zero use "last" unless they say otherwise.
 
 projection:
   method: "linear"          # default projection; per-sensor `method` wins.
@@ -74,7 +76,9 @@ sensors:
   #   long_name: "..."
   #   valid_min: -5.0       #   values outside -> NaN BEFORE projecting
   #   valid_max: 45.0
-  #   max_gap: 30.0         #   per-sensor gap limit [s]
+  #   max_gap: 30.0         #   per-sensor gap limit [s] (null = global)
+  #   dedupe: "last"        #   mean | first | last (default: "last" for
+  #                         #   previous/next/nearest/zero, else time.dedupe)
 
   sci_water_temp:
     units: "degree_Celsius"

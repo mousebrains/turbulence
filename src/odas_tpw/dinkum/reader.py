@@ -18,9 +18,11 @@ external and neither is universally present:
 
 Both DBD backends need a **sensor-list cache directory**. Slocum files
 reference their sensor list by hash rather than carrying it, so a file whose
-hash is not in the cache cannot be decoded at all — the readers skip it, and a
-run over only-uncached files yields an empty dataset. :func:`load_dinkum`
-raises rather than returning that silently.
+hash is not in the cache cannot be decoded at all. Left to themselves both
+readers *skip* such a file and carry on, so a mission whose science files are
+uncached would quietly become a flight-only hotel file. :func:`load_dinkum`
+therefore compares the number of files actually decoded with the number
+requested and raises, naming the skipped files, on any shortfall.
 """
 
 from __future__ import annotations
@@ -111,22 +113,68 @@ def _drop_metadata_vars(ds: xr.Dataset, dim: str) -> xr.Dataset:
     return ds[keep]
 
 
-def _open_netcdf(paths: Sequence[Path]) -> xr.Dataset:
+def _decoded_file_count(ds: xr.Dataset) -> int | None:
+    """How many input files a backend actually decoded, if it says.
+
+    xarray-dbd records ``attrs["n_files"]``; dbd2netCDF writes one row of
+    ``hdr_*`` metadata per decoded file on its ``j`` dimension. ``None`` when
+    neither is present (hand-made NetCDF).
+    """
+    n = ds.attrs.get("n_files")
+    if n is not None:
+        return int(n)
+    if "j" in ds.sizes:
+        return int(ds.sizes["j"])
+    return None
+
+
+def _open_netcdf(paths: Sequence[Path]) -> tuple[xr.Dataset, int | None]:
+    """Open NetCDF inputs. Returns ``(dataset, n_files_decoded)``."""
     dss = []
+    n_decoded: int | None = 0
     for p in paths:
-        # decode_timedelta=False: Slocum carries sensors with duration-like
-        # units (m_tot_on_time, u_thruster_burst_freq) that xarray would
-        # otherwise decode to timedelta64, which then fails float coercion.
-        # decode_cf=False for the same reason on the time-like sensors — we do
-        # our own epoch handling and want the raw numbers.
-        ds = xr.open_dataset(p, decode_timedelta=False, decode_cf=False)
+        # mask_and_scale=True so that _FillValue / missing_value are honoured:
+        # dbd2netCDF writes a NaN fill only for float sensors and the dtype's
+        # default fill (-127, -32767, ...) for integer ones, which must not
+        # survive as data. decode_times/decode_timedelta=False because Slocum
+        # carries time-like (m_present_time) and duration-like
+        # (m_tot_on_time) units that xarray would otherwise turn into
+        # datetime64/timedelta64; we do our own epoch handling and want the
+        # raw numbers.
+        ds = xr.open_dataset(
+            p, mask_and_scale=True, decode_times=False, decode_timedelta=False
+        )
+        n_here = _decoded_file_count(ds)
+        n_decoded = None if (n_here is None or n_decoded is None) else n_decoded + n_here
         dim = _record_dim(ds)
         dss.append(_drop_metadata_vars(ds, dim).rename({dim: "record"}))
     if len(dss) == 1:
-        return dss[0]
+        return dss[0], n_decoded
     # join="outer": a sensor present in the science files but not the flight
     # files must survive the concat as NaN, not be dropped to the intersection.
-    return xr.concat(dss, dim="record", join="outer", combine_attrs="drop_conflicts")
+    return (
+        xr.concat(dss, dim="record", join="outer", combine_attrs="drop_conflicts"),
+        n_decoded,
+    )
+
+
+_CACHE_HINT = (
+    "The usual cause is a sensor-list cache miss: Slocum files reference "
+    "their sensor list by hash, and a file whose hash is not in the cache "
+    "directory cannot be decoded. Point files.cache at the cache directory "
+    "from this glider/mission."
+)
+
+
+def _skipped_files(requested: Sequence[Path], n_decoded: int, detail: str = "") -> RuntimeError:
+    """Build the error for *requested* files of which only *n_decoded* loaded."""
+    msg = (
+        f"Decoded {n_decoded} of {len(requested)} Dinkum file(s); the rest were "
+        f"skipped by the reader. " + _CACHE_HINT
+    )
+    if detail:
+        msg += f"\nReader said: {detail}"
+    return RuntimeError(msg)
 
 
 def _open_xarray_dbd(
@@ -136,23 +184,42 @@ def _open_xarray_dbd(
     skip_first_record: bool,
     repair: bool,
 ) -> xr.Dataset:
+    import warnings
+
     import xarray_dbd as xdbd
 
-    ds = xdbd.open_multi_dbd_dataset(
-        [str(p) for p in paths],
-        cache_dir=str(cache) if cache else None,
-        to_keep=to_keep,
-        skip_first_record=skip_first_record,
-        repair=repair,
-    )
+    # xarray-dbd reports a skipped file as a UserWarning, then carries on;
+    # capture them so the error can name the files it could not decode.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            ds = xdbd.open_multi_dbd_dataset(
+                [str(p) for p in paths],
+                cache_dir=str(cache) if cache else None,
+                to_keep=to_keep,
+                skip_first_record=skip_first_record,
+                repair=repair,
+            )
+        except ValueError as exc:
+            # "No valid data found in any files": every file was skipped.
+            raise _skipped_files(paths, 0, str(exc)) from exc
+    notes = "; ".join(str(w.message) for w in caught if "rror reading" in str(w.message))
+    for w in caught:
+        logger.warning("xarray-dbd: %s", w.message)
+    n_decoded = _decoded_file_count(ds)
+    if n_decoded is not None and n_decoded < len(paths):
+        raise _skipped_files(paths, n_decoded, notes)
     dim = _record_dim(ds)
-    return _drop_metadata_vars(ds, dim).rename({dim: "record"})
+    out = _drop_metadata_vars(ds, dim).rename({dim: "record"})
+    out.attrs["n_files"] = n_decoded if n_decoded is not None else len(paths)
+    return out
 
 
 def _open_dbd2netcdf(
     paths: Sequence[Path],
     cache: Path | None,
     to_keep: list[str] | None,
+    skip_first_record: bool,
     repair: bool,
 ) -> xr.Dataset:
     exe = shutil.which("dbd2netCDF")
@@ -162,9 +229,15 @@ def _open_dbd2netcdf(
     with tempfile.TemporaryDirectory(prefix="dinkum-hotel-") as tmp:
         tmpdir = Path(tmp)
         out_nc = tmpdir / "dinkum.nc"
-        cmd = [exe, "--output", str(out_nc)]
+        # --strict: an undecodable file (cache miss, corrupt) is an error,
+        # not a "skipping file" warning and a partial result.
+        cmd = [exe, "--strict", "--output", str(out_nc)]
         if cache:
             cmd += ["--cache", str(cache)]
+        if skip_first_record:
+            # -A skips the first record of EVERY file (-s keeps the first
+            # file's), matching xarray-dbd's skip_first_record.
+            cmd += ["--skipAll"]
         if repair:
             cmd += ["--repair"]
         if to_keep:
@@ -177,18 +250,27 @@ def _open_dbd2netcdf(
 
         logger.info("running %s on %d file(s)", Path(exe).name, len(paths))
         proc = subprocess.run(cmd, capture_output=True, text=True)
+        err = (proc.stderr or "").strip()
         if proc.returncode != 0:
-            raise RuntimeError(
-                f"dbd2netCDF failed (exit {proc.returncode}):\n"
-                f"{proc.stderr.strip() or proc.stdout.strip()}"
-            )
-        for line in (proc.stderr or "").splitlines():
+            msg = f"dbd2netCDF failed (exit {proc.returncode}):\n{err or proc.stdout.strip()}"
+            if "Known sensors do not include" in err or "skipping file" in err:
+                msg += "\n" + _CACHE_HINT
+            raise RuntimeError(msg)
+        skipped = [ln.strip() for ln in err.splitlines() if "skipping file" in ln]
+        for line in err.splitlines():
             if "warning" in line.lower():
                 logger.warning("dbd2netCDF: %s", line.strip())
         if not out_nc.exists():
             raise RuntimeError("dbd2netCDF produced no output file")
         # Materialize before the temp dir evaporates.
-        return _open_netcdf([out_nc]).load()
+        ds, n_decoded = _open_netcdf([out_nc])
+        ds = ds.load()
+        if n_decoded is None:
+            n_decoded = len(paths) - len(skipped)
+        if skipped or n_decoded < len(paths):
+            raise _skipped_files(paths, n_decoded, "; ".join(skipped))
+        ds.attrs["n_files"] = n_decoded
+        return ds
 
 
 def load_dinkum(
@@ -218,8 +300,10 @@ def load_dinkum(
         sensors *and* every time sensor: dropping a time sensor here makes
         the projection impossible later.
     skip_first_record : bool
-        Skip each file's first record. The first record after a mission
-        start is routinely partial; both readers default to skipping it.
+        Skip each file's first record (the first record of a file is
+        routinely partial). Passed as ``skip_first_record`` to xarray-dbd and
+        as ``-A``/``--skipAll`` to dbd2netCDF; neither reader skips it on
+        its own.
     repair : bool
         Attempt recovery of corrupted records rather than skipping them.
 
@@ -240,24 +324,28 @@ def load_dinkum(
     to_keep = sorted(set(sensors)) if sensors else None
     logger.info("reading %d Dinkum file(s) with backend %r", len(file_paths), resolved)
 
+    n_decoded: int | None
     if resolved == "netcdf":
-        ds = _open_netcdf(file_paths)
+        ds, n_decoded = _open_netcdf(file_paths)
+        if n_decoded is None:
+            n_decoded = len(file_paths)
     elif resolved == "xarray-dbd":
         ds = _open_xarray_dbd(file_paths, _as_path(cache), to_keep, skip_first_record, repair)
+        n_decoded = int(ds.attrs["n_files"])
     else:
-        ds = _open_dbd2netcdf(file_paths, _as_path(cache), to_keep, repair)
+        ds = _open_dbd2netcdf(file_paths, _as_path(cache), to_keep, skip_first_record, repair)
+        n_decoded = int(ds.attrs["n_files"])
 
     n = ds.sizes.get("record", 0)
     if n == 0:
         raise RuntimeError(
             f"Backend {resolved!r} decoded 0 records from {len(file_paths)} file(s). "
-            "The usual cause is a sensor-list cache miss: Slocum files reference "
-            "their sensor list by hash, and a file whose hash is not in the cache "
-            "directory is skipped entirely. Point files.cache at the cache "
-            "directory from this glider/mission."
+            + _CACHE_HINT
         )
+    ds.attrs.pop("n_files", None)
     ds.attrs["dinkum_reader"] = resolved
-    ds.attrs["dinkum_source_files"] = len(file_paths)
+    ds.attrs["dinkum_source_files"] = int(n_decoded)
+    ds.attrs["dinkum_requested_files"] = len(file_paths)
     logger.info("read %d records, %d sensors", n, len(ds.data_vars))
     return ds
 
