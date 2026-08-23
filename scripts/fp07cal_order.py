@@ -19,7 +19,7 @@ import numpy as np
 
 sys.path.insert(0, "/Users/pat/Desktop/turbulence/.claude/worktrees/fp07-insitu-cal/src")
 from odas_tpw.fp07cal import PairConfig, load_hotel_reference, load_probe_series
-from odas_tpw.fp07cal.fit import _design, _uncenter, fit_calibration
+from odas_tpw.fp07cal.fit import _design, _uncenter
 from odas_tpw.fp07cal.lag import temperature_lag
 from odas_tpw.fp07cal.logr import coeffs_to_config, temperature
 from odas_tpw.fp07cal.pairs import PairSet
@@ -66,7 +66,7 @@ def main() -> None:
     print(f"{len(probes)} files\n")
 
     for ch in ("T1", "T2"):
-        lr, ps = temperature_lag(probes, ref, ch, cfg=cfg, max_lag=20.0, step=0.5)
+        _lr, ps = temperature_lag(probes, ref, ch, cfg=cfg, max_lag=20.0, step=0.5)
         L, T = ps.L, ps.T_ref
         print(f"=== {ch}: {len(ps)} pairs, T {T.min():.2f}..{T.max():.2f} degC")
 
@@ -76,7 +76,8 @@ def main() -> None:
             rms = float(np.sqrt(np.mean((T - temperature(L, coeffs)) ** 2)))
             ce = coeffs_to_config(coeffs)
             tstat = abs(cu[-1]) / se_u[-1] if se_u[-1] > 0 else np.inf
-            gain = "" if prev_rms is None else f"  ({1e3*(prev_rms-rms):+.3f} mK vs order {order-1})"
+            gain = ("" if prev_rms is None else
+                    f"  ({1e3 * (prev_rms - rms):+.3f} mK vs order {order - 1})")
             print(f"  order {order}: rms {rms*1e3:7.3f} mK{gain}")
             print(f"     {'  '.join(f'{k}={v:.6g}' for k, v in ce.items())}")
             print(f"     top coefficient t-stat = {tstat:.1f}"
@@ -86,14 +87,15 @@ def main() -> None:
         # ---- out of sample: fit warm, predict cold, and vice versa ----------
         print("  out-of-sample (fit one half of the T range, predict the other):")
         mid = float(np.median(T))
-        for name, tr, te in (("fit WARM -> predict COLD", T >= mid, T < mid),
-                             ("fit COLD -> predict WARM", T < mid, T >= mid)):
+        for name, tr, te in (("fit WARM -> predict COLD", mid <= T, mid > T),
+                             ("fit COLD -> predict WARM", mid > T, mid <= T)):
             row = []
             for order in (1, 2, 3):
                 try:
                     coeffs, *_ = fit_with_errors(L[tr], T[tr], order)
                 except Exception:
-                    row.append(np.nan); continue
+                    row.append(np.nan)
+                    continue
                 pred = temperature(L[te], coeffs)
                 row.append(float(np.sqrt(np.nanmean((T[te] - pred) ** 2))))
             best = int(np.nanargmin(row)) + 1

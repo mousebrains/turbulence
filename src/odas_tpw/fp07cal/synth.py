@@ -76,10 +76,12 @@ def _water_temperature(P: np.ndarray, cfg: SynthConfig) -> np.ndarray:
     return cfg.T_deep + span * (1.0 - np.tanh(P / cfg.thermocline_dbar))
 
 
-def _pressure_track(cfg: SynthConfig) -> tuple[np.ndarray, np.ndarray, list[tuple[int, int]], np.ndarray]:
+def _pressure_track(
+    cfg: SynthConfig,
+) -> tuple[np.ndarray, np.ndarray, list[tuple[int, int]], np.ndarray]:
     """Triangle-wave yos.  Returns (t_rel, P, profile spans, yo index per sample)."""
     dt = 1.0 / cfg.fs
-    n_per = int(round(cfg.yo_seconds / dt))
+    n_per = round(cfg.yo_seconds / dt)
     half = n_per // 2
     t_rel: list[np.ndarray] = []
     P: list[np.ndarray] = []
@@ -108,7 +110,7 @@ def _pressure_track(cfg: SynthConfig) -> tuple[np.ndarray, np.ndarray, list[tupl
 def _invert_to_L(T_C: np.ndarray, coeffs: np.ndarray) -> np.ndarray:
     """Solve ``sum a_i L^i = 1/T_K`` for L (Newton, seeded from the linear term)."""
     target = 1.0 / (np.asarray(T_C, dtype=np.float64) + 273.15)
-    L = (target - coeffs[0]) / coeffs[1]
+    L = np.asarray((target - coeffs[0]) / coeffs[1], dtype=np.float64)
     if coeffs.size == 2:
         return L
     for _ in range(40):
@@ -122,7 +124,7 @@ def _invert_to_L(T_C: np.ndarray, coeffs: np.ndarray) -> np.ndarray:
         L = L - step
         if np.nanmax(np.abs(step)) < 1e-14:
             break
-    return L
+    return np.asarray(L, dtype=np.float64)
 
 
 def _L_to_counts(L: np.ndarray, bp: BridgeParams) -> np.ndarray:
@@ -206,10 +208,10 @@ def make_deployment(
     ref_T: list[float] = []
     ref_P: list[float] = []
     for k in range(0, cfg.n_yos, max(1, cfg.ct_every_n)):
-        m = np.flatnonzero(yo_of == k)
-        if m.size == 0:
+        sel = np.flatnonzero(yo_of == k)
+        if sel.size == 0:
             continue
-        t0, t1 = t_abs[m[0]], t_abs[m[-1]]
+        t0, t1 = t_abs[sel[0]], t_abs[sel[-1]]
         stamps = np.arange(t0 + cfg.ctd_delay + cfg.clock_offset, t1, ref_dt)
         # Value sampled at (stamp - clock_offset - ctd_delay) for T, and at
         # (stamp - clock_offset) for P: the clock shifts both, the response

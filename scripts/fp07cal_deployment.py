@@ -32,7 +32,7 @@ from odas_tpw.fp07cal.geometry import joint_fit, local_dTdz
 from odas_tpw.fp07cal.lag import pressure_offset, temperature_lag
 from odas_tpw.fp07cal.logr import temperature
 from odas_tpw.fp07cal.pairs import build_pairs
-from odas_tpw.fp07cal.stability import Block, SECONDS_PER_DAY, drift_fit
+from odas_tpw.fp07cal.stability import SECONDS_PER_DAY, Block, drift_fit
 
 D = "/Volumes/SeaChest/ARCTERX/2025/Interior/Gliders/osu685"
 CH = ("T1", "T2")
@@ -173,7 +173,8 @@ def main() -> None:
     for ch in CH:
         R = recs[ch]
         if len(R) < 10:
-            print(f"{ch}: only {len(R)} profiles"); continue
+            print(f"{ch}: only {len(R)} profiles")
+            continue
         t = np.array([r["t"] for r in R])
         a0 = np.array([r["a0"] for r in R])
         res = np.array([r["resid"] for r in R])
@@ -184,7 +185,8 @@ def main() -> None:
         m = model[ch]
         print(f"\n=== {ch}: {len(R)} profiles over {days.max():.1f} days")
         print(f"  per-profile residual: median {np.median(res):+.5f} K, "
-              f"sd {res.std():.5f} K, 5-95% {np.percentile(res,5):+.5f}..{np.percentile(res,95):+.5f}")
+              f"sd {res.std():.5f} K, 5-95% {np.percentile(res, 5):+.5f}.."
+              f"{np.percentile(res, 95):+.5f}")
 
         entry = {"n_profiles": len(R), "span_days": float(days.max()),
                  "lag_s": m["lag"], "dz_m": m["geo"].dz_m, "tau_s": m["geo"].tau_s,
@@ -265,7 +267,8 @@ def main() -> None:
                        "t": tt.tolist(), "v": vv.tolist()}
         np.savez_compressed(f"{OUT}/t1t2.npz", t=tt, v=vv)
 
-    json.dump(out, open(f"{OUT}/summary.json", "w"), indent=2, default=float)
+    with open(f"{OUT}/summary.json", "w") as fh:
+        json.dump(out, fh, indent=2, default=float)
     for ch in CH:
         if recs[ch]:
             np.savez_compressed(

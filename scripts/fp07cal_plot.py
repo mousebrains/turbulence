@@ -9,7 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "scratch/deployment"
-S = json.load(open(f"{OUT}/summary.json"))
+with open(f"{OUT}/summary.json") as _fh:
+    S = json.load(_fh)
 DAY = 86400.0
 
 
@@ -37,7 +38,7 @@ def main() -> None:
                    label="blocked offset")
         a.axhline(0, color="0.6", lw=0.8)
         a.set_xlabel("days since deployment start")
-        a.set_ylabel("reference − probe [mK]")
+        a.set_ylabel("reference - probe [mK]")
         drift = st.get("probe_drift_K_per_day", float("nan"))
         sig = "SIGNIFICANT" if st.get("significant") else "not significant"
         a.set_title(f"{ch}: probe drift {drift*1e3:+.3f} mK/day  "
@@ -70,7 +71,7 @@ def main() -> None:
             a.plot((vd[both] - vs[both]) * 1e3, cen[both], "-o", ms=4, color="tab:purple")
             a.axvline(0, color="0.6", lw=0.8)
             a.invert_yaxis()
-            a.set_xlabel("deep − shallow at matched depth [mK]")
+            a.set_xlabel("deep - shallow at matched depth [mK]")
             a.set_ylabel("pressure [dbar]")
             a.set_title(f"{ch}: a genuine DEPTH dependence cancels here;\n"
                         f"what survives tracks elapsed time", fontsize=9)
@@ -92,8 +93,8 @@ def main() -> None:
                label=f"{sl*1e3:+.3f} mK/day")
         a.axhline(0, color="0.6", lw=0.8)
         a.set_xlabel("days since deployment start")
-        a.set_ylabel("T1 − T2, demeaned [mK]")
-        a.set_title(f"T1 − T2 over {len(v)} profiles — reference-free, so it covers "
+        a.set_ylabel("T1 - T2, demeaned [mK]")
+        a.set_title(f"T1 - T2 over {len(v)} profiles — reference-free, so it covers "
                     f"every profile", fontsize=10)
         a.legend(fontsize=9)
         f2.tight_layout()

@@ -222,7 +222,7 @@ def select_order(
     T = np.asarray(pairs.T_ref, dtype=np.float64)
     scores: dict[int, dict] = {}
     mid = float(np.median(T))
-    folds = ((T >= mid, T < mid), (T < mid, T >= mid))
+    folds = ((mid <= T, mid > T), (mid > T, mid <= T))
 
     for order in candidates:
         errs = []

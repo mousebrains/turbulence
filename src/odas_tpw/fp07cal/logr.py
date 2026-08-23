@@ -152,7 +152,7 @@ def config_to_coeffs(cfg: dict) -> np.ndarray:
     out = [1.0 / t_0, 1.0 / beta_1]
     for key in ("beta_2", "beta_3"):
         val = cfg.get(key)
-        if val in (None, ""):
+        if val is None or val == "":
             break
         out.append(1.0 / float(val))
     return np.array(out, dtype=np.float64)

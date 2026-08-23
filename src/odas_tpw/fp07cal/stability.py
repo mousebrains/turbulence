@@ -163,7 +163,10 @@ def blocked_offsets(
             continue
 
         a0 = float(np.mean(per_prof))
-        se = float(np.std(per_prof, ddof=1) / np.sqrt(per_prof.size)) if per_prof.size > 1 else float("nan")
+        se = (
+            float(np.std(per_prof, ddof=1) / np.sqrt(per_prof.size))
+            if per_prof.size > 1 else float("nan")
+        )
 
         # Express as a temperature offset at the block's own median L, which is
         # the only interpretable form: K, not reciprocal kelvin.
@@ -220,11 +223,12 @@ def drift_fit(
     t, d, se = t[ok], d[ok], se[ok]
 
     days = (t - t.min()) / SECONDS_PER_DAY
-    w = 1.0 / np.maximum(se, np.nanmedian(se[np.isfinite(se)]) if np.any(np.isfinite(se)) else 1.0) ** 2
+    fallback = np.nanmedian(se[np.isfinite(se)]) if np.any(np.isfinite(se)) else 1.0
+    w = 1.0 / np.maximum(se, fallback) ** 2
     if not np.all(np.isfinite(w)):
         w = np.ones_like(d)
 
-    slope, intercept, slope_se = _wls(days, d, w)
+    slope, _intercept, slope_se = _wls(days, d, w)
     res.drift_K_per_day = slope
     res.drift_se_K_per_day = slope_se
     res.span_days = float(days.max() - days.min())
@@ -330,8 +334,10 @@ def t1_t2_series(
         "available": bool(t.size),
     }
     if t.size > 2:
-        days = (out["time"] - out["time"].min()) / SECONDS_PER_DAY
-        out["slope_K_per_day"] = float(np.polyfit(days, out["value"], 1)[0])
+        t_sorted = np.asarray(out["time"], dtype=np.float64)
+        v_sorted = np.asarray(out["value"], dtype=np.float64)
+        days = (t_sorted - t_sorted.min()) / SECONDS_PER_DAY
+        out["slope_K_per_day"] = float(np.polyfit(days, v_sorted, 1)[0])
     return out
 
 

@@ -124,10 +124,13 @@ def fit_text(
         "",
         "| quantity | value | what it means |",
         "|---|---|---|",
-        f"| lag correlation r | {fit.corr:.5f} | how well L tracks 1/T_ref; the lag was chosen to maximise this |",
-        f"| dive/climb split | {fit.dive_climb_split_K:+.5f} K | should be ~0; nonzero means unremoved lag |",
+        f"| lag correlation r | {fit.corr:.5f} | how well L tracks 1/T_ref; "
+        f"the lag was chosen to maximise this |",
+        f"| dive/climb split | {fit.dive_climb_split_K:+.5f} K | should be ~0; "
+        f"nonzero means unremoved lag |",
         f"| RMS residual | {fit.rms_K:.5f} K | least informative number here |",
-        f"| beta_1 EIV bracket | {lo:.2f} .. {hi:.2f} | true slope lies inside; wide = attenuated |",
+        f"| beta_1 EIV bracket | {lo:.2f} .. {hi:.2f} | true slope lies inside; "
+        f"wide = attenuated |",
         f"| condition number | {fit.condition:.3g} | of the centered design matrix |",
         f"| pairs used / dropped | {fit.n} / {fit.n_dropped} | robust rejection at 4 sigma |",
         f"| profiles | {pairs.n_profiles()} | the independent unit |",
@@ -180,11 +183,11 @@ def fit_text(
         if t1t2 is not None:
             verdict = corroborates(stab, t1t2)
             if verdict:
-                lines += ["", f"- **T1−T2 check:** {verdict}"]
+                lines += ["", f"- **T1-T2 check:** {verdict}"]
             elif not t1t2.get("available"):
                 lines += [
                     "",
-                    "- **T1−T2 check unavailable** (single thermistor). The blind "
+                    "- **T1-T2 check unavailable** (single thermistor). The blind "
                     "spot — drift on the yos with no CT — is uncovered, so treat "
                     "any drift conclusion as provisional.",
                 ]
@@ -277,7 +280,7 @@ def figure(
             xt = (t1t2["time"] - t0) / SECONDS_PER_DAY
             a2.plot(xt, t1t2["value"] - np.mean(t1t2["value"]), ".", ms=3,
                     color="tab:green", alpha=0.6)
-            a2.set_ylabel("T1 − T2 (demeaned) [K]", color="tab:green")
+            a2.set_ylabel("T1 - T2 (demeaned) [K]", color="tab:green")
     if not plotted:
         a.text(0.5, 0.5, "no stability blocks", ha="center", va="center",
                transform=a.transAxes)

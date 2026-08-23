@@ -60,13 +60,14 @@ def highpass(t: np.ndarray, x: np.ndarray, window_s: float) -> np.ndarray:
         return np.zeros_like(x)
     dt = float(np.median(np.diff(t)))
     if not np.isfinite(dt) or dt <= 0:
-        return x - np.mean(x)
-    n = max(3, int(round(window_s / dt)) | 1)
+        return np.asarray(x - np.mean(x), dtype=np.float64)
+    n = max(3, round(window_s / dt) | 1)
     if n >= x.size:
-        return x - np.mean(x)
+        return np.asarray(x - np.mean(x), dtype=np.float64)
     pad = n // 2
     xp = np.concatenate([np.full(pad, x[0]), x, np.full(pad, x[-1])])
-    return x - np.convolve(xp, np.ones(n) / n, mode="valid")[: x.size]
+    smooth = np.convolve(xp, np.ones(n) / n, mode="valid")[: x.size]
+    return np.asarray(x - smooth, dtype=np.float64)
 
 
 @dataclass

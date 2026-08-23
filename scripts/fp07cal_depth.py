@@ -46,9 +46,9 @@ def main() -> None:
         cen = 0.5 * (edges[:-1] + edges[1:])
         Pmax = d["Pmax"]
         deep = Pmax > 700
-        allm, npa, _ = binned(d, np.ones(Pmax.size, bool))
-        dm, npd, _ = binned(d, deep)
-        sm, nps, _ = binned(d, ~deep)
+        allm, _npa, _ = binned(d, np.ones(Pmax.size, bool))
+        dm, _npd, _ = binned(d, deep)
+        sm, _nps, _ = binned(d, ~deep)
 
         fin = np.isfinite(allm)
         print(f"=== {ch}: {Pmax.size} profiles ({deep.sum()} deep, {(~deep).sum()} shallow)")
@@ -104,7 +104,7 @@ def main() -> None:
     for a, t, xl in (
         (ax[0], "residual vs depth (all climbs)", "mean residual [mK]"),
         (ax[1], "split by climb depth", "mean residual [mK]"),
-        (ax[2], "deep − shallow at matched depth\n(depth dependence cancels)",
+        (ax[2], "deep - shallow at matched depth\n(depth dependence cancels)",
          "difference [mK]"),
     ):
         a.axvline(0, color="0.6", lw=0.8)

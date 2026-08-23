@@ -7,10 +7,13 @@ deployment synthesised from known coefficients, a known clock offset and a known
 drift.
 """
 
+import itertools
+
 import numpy as np
 import pytest
 
 from odas_tpw.fp07cal.fit import fit_calibration
+from odas_tpw.fp07cal.geometry import geometry_fit, local_dTdz
 from odas_tpw.fp07cal.lag import highpass, pressure_offset, temperature_lag
 from odas_tpw.fp07cal.logr import (
     BridgeParams,
@@ -21,7 +24,6 @@ from odas_tpw.fp07cal.logr import (
     temperature,
 )
 from odas_tpw.fp07cal.pairs import PairConfig, build_pairs_multi
-from odas_tpw.fp07cal.geometry import geometry_fit, local_dTdz
 from odas_tpw.fp07cal.series import (
     ReferenceSeries,
     load_hotel_reference,
@@ -107,7 +109,7 @@ def _deployment(**kw):
 def test_v1_dense_reference_recovers_coefficients():
     probes, ref, truth = _deployment(ct_every_n=1)
     pc = PairConfig(max_gap=30.0)
-    lr, pairs = temperature_lag(probes, ref, "T1", cfg=pc, max_lag=12.0, step=0.5)
+    _lr, pairs = temperature_lag(probes, ref, "T1", cfg=pc, max_lag=12.0, step=0.5)
     fit = fit_calibration(pairs, order=1)
     assert fit.config_equivalent["t_0"] == pytest.approx(truth["t_0"], abs=2e-3)
     assert fit.config_equivalent["beta_1"] == pytest.approx(truth["beta_1"], rel=2e-3)
@@ -407,7 +409,7 @@ def test_select_order_prefers_the_order_that_extrapolates():
     # In-sample error is monotone non-increasing in order — which is exactly
     # why it cannot be the selection criterion.
     ins = [scores[o]["in_sample_K"] for o in sorted(scores)]
-    assert all(b <= a * 1.0001 for a, b in zip(ins, ins[1:]))
+    assert all(b <= a * 1.0001 for a, b in itertools.pairwise(ins))
 
 
 def test_bridge_inverse_is_exact():

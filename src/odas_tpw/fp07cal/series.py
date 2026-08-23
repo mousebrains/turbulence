@@ -222,7 +222,8 @@ def load_hotel_reference(
         for name in (time_var, value_var):
             if name not in ds.variables:
                 raise KeyError(
-                    f"{path}: variable {name!r} not found; available: {sorted(ds.variables)}"
+                    f"{path}: variable {name!r} not found; "
+                    f"available: {sorted(map(str, ds.variables))}"
                 )
         t = np.asarray(ds[time_var].values, dtype=np.float64).ravel()
         v = np.asarray(ds[value_var].values, dtype=np.float64).ravel()
@@ -290,7 +291,10 @@ def load_probe_series(
         raw = np.asarray(pf.channels_raw[name], dtype=np.float64)
         if pf.is_fast(name):
             raw = raw[::ratio]
-        counts[name] = raw[:n] if raw.size >= n else np.pad(raw, (0, n - raw.size), constant_values=np.nan)
+        counts[name] = (
+            raw[:n] if raw.size >= n
+            else np.pad(raw, (0, n - raw.size), constant_values=np.nan)
+        )
         cfg = by_name[name]
         bridge[name] = BridgeParams.from_channel_config(cfg, name)
         factory[name] = config_to_coeffs(cfg)
