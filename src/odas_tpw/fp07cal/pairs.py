@@ -49,8 +49,16 @@ class PairConfig:
     kernel_width: float | None = None
     """[s] Boxcar width.  ``None`` -> the CTD's median sample interval."""
 
-    kernel_tau: float = 0.5
-    """[s] Single-pole time constant approximating the reference's response."""
+    kernel_tau: float = 2.7
+    """[s] Single-pole time constant approximating the reference's response.
+
+    Default 2.7 s: the SBE41cp response measured in situ on osu685 (thermal
+    lag minus clock offset — see ``docs/fp07cal/runbook.md``).  A pole
+    mismatch is not a delay, so the lag search cannot compensate for it: with
+    the pole too fast, a one-signed (climb-only or dive-only) deployment picks
+    up a systematic few-mK error that the dive/climb average would otherwise
+    cancel.  Configurable per deployment via ``pairs.kernel_tau``.
+    """
 
     min_speed: float = 0.05
     """[m/s] Below this the thermistor is not flushing.  Skipped if no speed."""

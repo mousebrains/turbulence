@@ -62,7 +62,12 @@ class GeometryFit:
 
     dz_se_m: float = float("nan")
     tau_s: float = float("nan")
-    """Residual timing error [s] left over after the applied lag."""
+    """Residual timing error [s] left over after the applied lag.
+
+    Sign convention: a positive ``tau_s`` means the applied lag was too LARGE
+    by that much --- the corrected total lag is ``lag - tau_s``, not
+    ``lag + tau_s``.
+    """
 
     tau_se_s: float = float("nan")
     n: int = 0
@@ -277,6 +282,12 @@ def joint_fit(
         if new_keep.sum() < order + 4 or np.array_equal(new_keep, keep):
             break
         keep = new_keep
+    else:
+        # Loop exhausted with `keep` updated but not refitted (N3): one more
+        # solve so the returned parameters describe the final keep set.
+        X = np.column_stack([_design(u[keep], order), extra[keep]])
+        cond = float(np.linalg.cond(X))
+        coef, *_ = np.linalg.lstsq(X, y[keep], rcond=None)
 
     coeffs = _uncenter(coef[: order + 1], center, scale)
     dz = float(coef[order + 1] / extra_scale[0])

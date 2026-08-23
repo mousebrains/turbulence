@@ -123,6 +123,13 @@ def fit_calibration(
         if new_keep.sum() < order + 2 or np.array_equal(new_keep, keep):
             break
         keep = new_keep
+    else:
+        # Loop exhausted with `keep` freshly updated but never refitted: the
+        # returned coefficients would describe the PREVIOUS keep set while n /
+        # rms_K describe the final one (N3). One last solve reconciles them.
+        X = _design(u[keep], order)
+        cond = float(np.linalg.cond(X))
+        coeffs_u, *_ = np.linalg.lstsq(X, y[keep], rcond=None)
 
     coeffs = _uncenter(coeffs_u, center, scale)
 
@@ -189,6 +196,7 @@ def select_order(
     *,
     candidates: tuple[int, ...] = (1, 2, 3),
     robust: bool = True,
+    use_geometry: bool = False,
 ) -> tuple[int, dict]:
     """Pick the polynomial order by **out-of-sample** error, not by in-sample fit.
 
@@ -198,10 +206,21 @@ def select_order(
     of it when a deployment-wide coefficient set is applied to profiles that
     went outside the temperature range it was fitted on.
 
-    So the split is by TEMPERATURE, not at random: fit the warm half, predict
-    the cold half, and vice versa.  A random split would leave both folds
+    So the split is by TEMPERATURE, not at random: fit the warm side, predict
+    the cold side, and vice versa.  A random split would leave both folds
     spanning the full range and would reward interpolation, which is not the
     failure mode of interest.
+
+    The split point is the middle of the temperature RANGE, not the median.
+    On a thermocline profile most samples sit in a fraction of a degree of
+    deep water, so a median split leaves one "half" spanning well under 1 K
+    --- and the held-out score is then dominated by extrapolating that sliver
+    across the other several K, which punishes every order into the ground
+    (a genuine cubic truth scored order 1 best under a median split).
+
+    Scoring uses the SAME estimator that will be shipped: when the production
+    fit is the joint geometry fit, so is each fold's (``use_geometry``),
+    otherwise the order chosen can be optimal for a model nobody runs.
 
     Measured on osu685 (24 degC of range, ~48k pairs):
 
@@ -221,21 +240,37 @@ def select_order(
     """
     T = np.asarray(pairs.T_ref, dtype=np.float64)
     scores: dict[int, dict] = {}
-    mid = float(np.median(T))
+    fin = T[np.isfinite(T)]
+    if fin.size == 0:
+        return min(candidates), {}
+    mid = 0.5 * (float(np.min(fin)) + float(np.max(fin)))
     folds = ((mid <= T, mid > T), (mid > T, mid <= T))
+
+    def _fit(sub: PairSet, order: int):
+        """The estimator actually shipped for this configuration."""
+        if use_geometry:
+            from odas_tpw.fp07cal.geometry import joint_fit
+
+            f, _geo = joint_fit(sub, order=order, robust=robust)
+            return f
+        return fit_calibration(sub, order=order, robust=robust)
 
     for order in candidates:
         errs = []
         try:
-            in_sample = fit_calibration(pairs, order=order, robust=robust).rms_K
+            in_sample = _fit(pairs, order).rms_K
         except Exception:
             continue
         for train, test in folds:
-            if int(train.sum()) < order + 3 or int(test.sum()) < 10:
+            if int(train.sum()) < order + 5 or int(test.sum()) < 10:
                 continue
             try:
                 sub = _subset(pairs, train)
-                f = fit_calibration(sub, order=order, robust=robust)
+                f = _fit(sub, order)
+                # Held-out prediction from the CALIBRATION part alone: the
+                # geometry terms are per-sample corrections carried separately
+                # and identically across orders, so they cancel in the
+                # comparison; what is being selected is the polynomial.
                 pred = f.apply(np.asarray(pairs.L, dtype=np.float64)[test])
                 errs.append(float(np.sqrt(np.nanmean((T[test] - pred) ** 2))))
             except Exception:
