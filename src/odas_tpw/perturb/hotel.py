@@ -472,18 +472,28 @@ def _load_mat(
 
 
 def _bridged_gap(hotel_t: np.ndarray, target_t: np.ndarray) -> np.ndarray:
-    """Width of the source gap each target sample falls inside.
+    """Width of the source gap each target sample is interpolated ACROSS.
 
-    Zero for targets outside the source range (those are extrapolation, handled
-    separately).  A target landing exactly on a source sample gets that
-    sample's neighbouring interval, which is the honest answer: it is only
-    interpolated to the extent its neighbours are far away.
+    Zero for targets outside the source range (extrapolation, handled
+    separately) and zero for a target that lands exactly ON a source sample:
+    that value is **measured**, not interpolated, so no gap was bridged to
+    obtain it.
+
+    The exact-match case is not academic.  ``searchsorted(side="left")`` returns
+    the index of the matching sample, so without the check the first real
+    sample after a dropout inherits the dropout's width and is thrown away by
+    ``max_gap`` --- discarding an observation to protect against interpolation
+    that never happened.  It also matters whenever the source and target share
+    a clock, where every target is an exact match and the gate would fire on
+    all of them.
     """
+    n = hotel_t.size
     idx = np.searchsorted(hotel_t, target_t, side="left")
     inside = (target_t >= hotel_t[0]) & (target_t <= hotel_t[-1])
-    lo = np.clip(idx - 1, 0, hotel_t.size - 1)
-    hi = np.clip(idx, 0, hotel_t.size - 1)
-    return np.where(inside, hotel_t[hi] - hotel_t[lo], 0.0)
+    lo = np.clip(idx - 1, 0, n - 1)
+    hi = np.clip(idx, 0, n - 1)
+    measured = hotel_t[hi] == target_t
+    return np.where(inside & ~measured, hotel_t[hi] - hotel_t[lo], 0.0)
 
 
 def _interp_one(
@@ -557,18 +567,28 @@ def _interp_one(
         else np.inf
     )
     notable = gap > warn_gap
+    gated = max_gap is not None and np.isfinite(max_gap) and max_gap > 0
+    rejected = (gap > max_gap) if gated else np.zeros_like(gap, dtype=bool)
 
     if stats is not None:
+        # Rejected and merely-notable are tracked apart, because they are
+        # different claims: one says data was thrown away, the other says data
+        # was manufactured. A warning that conflates them can state the
+        # opposite of what happened -- with max_gap above the warning
+        # threshold, notable gaps are interpolated across and kept.
         stats.update(
             n_target=int(target_t.size),
-            n_gap=int(np.count_nonzero(notable)),
+            n_notable=int(np.count_nonzero(notable & ~rejected)),
+            n_rejected=int(np.count_nonzero(rejected)),
             n_outside=int(np.count_nonzero(outside)),
             widest_gap=float(gap.max()) if gap.size else 0.0,
+            widest_kept=float(gap[~rejected].max()) if np.any(~rejected) else 0.0,
             median_dt=median_dt,
+            gated=bool(gated),
         )
 
-    if max_gap is not None and np.isfinite(max_gap) and max_gap > 0:
-        out[gap > max_gap] = np.nan
+    if gated:
+        out[rejected] = np.nan
     if not extrapolate:
         out[outside] = np.nan
     return out
@@ -668,44 +688,52 @@ def _resolve_max_gap(value, where: str) -> float | None:
 def _warn_if_fabricated(
     src: str, stats: dict, max_gap: float | None, extrapolate: bool
 ) -> None:
-    """Say how much of a merged channel was manufactured rather than measured.
+    """Say how much of a merged channel was manufactured, or thrown away.
 
     Unconditional, and scaled to the channel's own median sample interval, so
     it fires on a real dropout without needing to be configured and without
     nagging about ordinary sampling jitter.  Silence here is the failure mode
     that motivated it: a CTD that ran on only some profiles produced a smooth
     fabricated ramp that every downstream consumer read as data.
+
+    The two outcomes are reported separately and never conflated.  Saying
+    "NaN-ed" about samples that were in fact interpolated across and kept is
+    the same class of error the gate exists to prevent, one level up.
     """
     n = int(stats.get("n_target", 0))
     if not n:
         return
-    n_gap = int(stats.get("n_gap", 0))
+    n_notable = int(stats.get("n_notable", 0))
+    n_rejected = int(stats.get("n_rejected", 0))
     n_out = int(stats.get("n_outside", 0))
-    if not n_gap and not n_out:
+    if not (n_notable or n_rejected or n_out):
         return
 
+    med = stats.get("median_dt", float("nan"))
+    widest = stats.get("widest_gap", float("nan"))
+    widest_kept = stats.get("widest_kept", float("nan"))
     parts = []
-    if n_gap:
-        widest = stats.get("widest_gap", float("nan"))
-        med = stats.get("median_dt", float("nan"))
-        verb = "NaN-ed" if max_gap else "interpolated across"
+    if n_rejected:
         parts.append(
-            f"{100.0 * n_gap / n:.1f}% of samples {verb} gaps wider than "
-            f"{_GAP_WARN_FACTOR:g}x the median interval ({med:.3g} s); "
-            f"widest gap {widest:.4g} s"
+            f"{100.0 * n_rejected / n:.1f}% of samples NaN-ed for falling in a "
+            f"gap wider than max_gap={max_gap:g} s (widest {widest:.4g} s)"
+        )
+    if n_notable:
+        parts.append(
+            f"{100.0 * n_notable / n:.1f}% of samples interpolated across gaps "
+            f"wider than {_GAP_WARN_FACTOR:g}x the median interval "
+            f"({med:.3g} s), widest kept {widest_kept:.4g} s"
         )
     if n_out:
         verb = "NaN-ed" if not extrapolate else "edge-held"
         parts.append(f"{100.0 * n_out / n:.1f}% of samples {verb} outside coverage")
-    hint = (
-        ""
-        if max_gap is not None
-        else f" — max_gap is {UNLIMITED!r} for this channel, so nothing is rejected"
-    )
-    warnings.warn(
-        f"hotel channel {src!r}: " + "; ".join(parts) + hint,
-        stacklevel=3,
-    )
+
+    hint = ""
+    if n_notable and not stats.get("gated", False):
+        hint = " — set hotel.max_gap to reject these instead"
+    elif n_notable:
+        hint = f" — max_gap={max_gap:g} s is above that threshold, so they are kept"
+    warnings.warn(f"hotel channel {src!r}: " + "; ".join(parts) + hint, stacklevel=3)
 
 
 def merge_hotel_into_pfile(hotel_data: HotelData, pf, hotel_cfg: dict) -> None:

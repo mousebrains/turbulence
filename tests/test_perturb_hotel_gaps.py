@@ -23,7 +23,13 @@ from datetime import UTC, datetime
 import numpy as np
 import pytest
 
-from odas_tpw.perturb.hotel import HotelData, _interp_one, interpolate_hotel
+from odas_tpw.perturb.hotel import (
+    HotelData,
+    _bridged_gap,
+    _interp_one,
+    _warn_if_fabricated,
+    interpolate_hotel,
+)
 
 
 class _PF:
@@ -110,7 +116,8 @@ def test_gap_stats_are_reported():
     stats: dict = {}
     _interp_one(t, v, np.linspace(-50.0, 7400.0, 100), "linear", stats=stats)
     assert stats["n_outside"] > 0
-    assert stats["n_gap"] > 0
+    assert stats["n_notable"] > 0
+    assert stats["n_rejected"] == 0        # ungated: nothing was thrown away
     assert stats["median_dt"] == pytest.approx(1.0)
     assert stats["widest_gap"] > 3000.0
 
@@ -121,8 +128,58 @@ def test_dense_channel_reports_nothing_to_warn_about():
     v = np.sin(t / 60.0)
     stats: dict = {}
     _interp_one(t, v, np.linspace(0.0, 599.0, 500), "linear", stats=stats)
-    assert stats["n_gap"] == 0
+    assert stats["n_notable"] == 0
+    assert stats["n_rejected"] == 0
     assert stats["n_outside"] == 0
+
+
+# --- review findings on this PR -------------------------------------------
+def test_a_measured_sample_is_never_rejected_as_a_gap():
+    """A target landing exactly ON a source sample is data, not interpolation.
+
+    searchsorted(side="left") returns the index of the match, so without an
+    exact-match check the first real sample after a dropout inherits the
+    dropout's width and max_gap throws away an observation.
+    """
+    t = np.array([0.0, 1.0, 100.0])
+    v = np.array([10.0, 11.0, 20.0])
+    tgt = np.array([1.0, 100.0])
+    np.testing.assert_allclose(_bridged_gap(t, tgt), [0.0, 0.0])
+    out = _interp_one(t, v, tgt, "linear", max_gap=10.0)
+    np.testing.assert_allclose(out, [11.0, 20.0])
+
+
+def test_shared_clock_is_not_gated_at_all():
+    """If source and target share a clock, every target is a measured sample."""
+    t = np.concatenate([np.arange(0.0, 10.0), np.arange(3600.0, 3610.0)])
+    v = np.arange(t.size, dtype=float)
+    out = _interp_one(t, v, t.copy(), "linear", max_gap=30.0)
+    assert np.all(np.isfinite(out))
+    np.testing.assert_allclose(out, v)
+
+
+def test_warning_does_not_claim_rejection_that_did_not_happen():
+    """max_gap above the notable threshold keeps the data; the text must agree."""
+    t = np.array([0.0, 1.0, 2.0, 22.0, 23.0, 24.0])
+    v = np.arange(6.0)
+    stats: dict = {}
+    out = _interp_one(t, v, np.array([10.0]), "linear", max_gap=100.0, stats=stats)
+    assert np.all(np.isfinite(out))          # nothing was rejected
+    assert stats["n_rejected"] == 0
+    assert stats["n_notable"] == 1
+    with pytest.warns(UserWarning, match="interpolated across gaps"):
+        _warn_if_fabricated("x", stats, 100.0, False)
+
+
+def test_warning_does_claim_rejection_when_it_happens():
+    t = np.array([0.0, 1.0, 2.0, 22.0, 23.0, 24.0])
+    v = np.arange(6.0)
+    stats: dict = {}
+    out = _interp_one(t, v, np.array([10.0]), "linear", max_gap=5.0, stats=stats)
+    assert np.all(np.isnan(out))
+    assert stats["n_rejected"] == 1
+    with pytest.warns(UserWarning, match=r"NaN-ed for falling in a gap"):
+        _warn_if_fabricated("x", stats, 5.0, False)
 
 
 def test_interpolate_hotel_warns_about_fabricated_samples():
