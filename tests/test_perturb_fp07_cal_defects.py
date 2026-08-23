@@ -6,6 +6,7 @@ confident, wrong coefficients.  They are separate from the existing suite
 because that suite pins behaviour these fix.
 """
 
+import warnings
 from datetime import UTC, datetime
 
 import numpy as np
@@ -97,7 +98,7 @@ def test_fully_railed_channel_is_refused():
     base = 2.0 * np.sin(2.0 * np.pi * np.arange(n) / 128.0)
     # 30000 counts with this config puts |Z| at ~1.8, hard against the 0.6 rail.
     pf = _make(n=n, counts=30000.0 - 800.0 * base)
-    with pytest.warns(UserWarning):
+    with pytest.warns(UserWarning, match="bridge rail"):
         out = fp07_calibrate(pf, [(10, 480)])
     assert "T1" not in out["coefficients"]
 
@@ -206,3 +207,79 @@ def test_a_rejected_profile_reaches_neither_the_lag_nor_the_fit():
     assert seen["n"] <= 191, (
         f"the regression saw {seen['n']} samples -- the rejected profile leaked in"
     )
+
+
+# --- Review round 2: bandwidth matching on the default (pchip) path ---------
+def _pchip_reference(n: int, fs: float, seed: int = 7) -> tuple[np.ndarray, float]:
+    """A 1 Hz reference merged onto the grid with pchip, as perturb does."""
+    from scipy.interpolate import PchipInterpolator
+
+    rng = np.random.default_rng(seed)
+    knots_t = np.arange(0, n / fs + 1.0, 1.0)
+    T_ref = PchipInterpolator(knots_t, rng.standard_normal(knots_t.size))(
+        np.arange(n) / fs
+    )
+    return T_ref, 1.0
+
+
+def test_pchip_merged_reference_is_filtered_via_explicit_interval():
+    fs = 64.0
+    n = 1280
+    rng = np.random.default_rng(8)
+    fp07 = rng.standard_normal(n)
+    T_ref, dt = _pchip_reference(n, fs)
+    # Inference alone finds no knots in a pchip merge...
+    assert _reference_interval(T_ref, fs) == pytest.approx(1.0 / fs)
+    # ...but the explicit interval engages the filter at 0.5 Hz.
+    matched = _lowpass_filter(fp07, "SBE_T", fs, np.full(n, 0.5), [(0, n - 1)],
+                              T_ref=T_ref, reference_interval=dt)
+    assert np.var(matched) < 0.1 * np.var(fp07)
+
+
+def test_fallback_warns_when_interval_unknown_and_inference_fails():
+    fs = 64.0
+    n = 1280
+    fp07 = np.random.default_rng(9).standard_normal(n)
+    T_ref, _ = _pchip_reference(n, fs)
+    with pytest.warns(UserWarning, match="NOT low-pass filtered"):
+        out = _lowpass_filter(fp07, "SBE_T", fs, np.full(n, 0.5), [(0, n - 1)],
+                              T_ref=T_ref)
+    np.testing.assert_array_equal(out, fp07)
+
+
+def test_fp07_calibrate_passes_reference_interval_through():
+    """End to end: pchip reference + explicit interval -> no warning, filtered fit."""
+    n = 500
+    pf = _make(n=n)
+    pf.channels["SBE_T"] = pf.channels.pop("JAC_T")   # non-JAC -> bandwidth path
+    # Without the interval the fallback inference fails on this reference
+    # (no linear-merge knots) and says so.
+    with pytest.warns(UserWarning, match="NOT low-pass filtered"):
+        fp07_calibrate(pf, [(10, 480)], reference="SBE_T", order=1)
+    # With it, silence and a fit.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        out = fp07_calibrate(
+            pf, [(10, 480)], reference="SBE_T", order=1, reference_interval=1.0
+        )
+    assert "T1" in out["coefficients"]
+
+
+def test_reference_interval_survives_a_nan_run():
+    fs = 64.0
+    n = 64 * 200
+    rng = np.random.default_rng(10)
+    knots = np.arange(0, n + 1, 64, dtype=float)
+    T_ref = np.interp(np.arange(n), knots, rng.standard_normal(knots.size))
+    T_ref[3000:6000] = np.nan
+    assert _reference_interval(T_ref, fs) == pytest.approx(1.0, rel=0.2)
+
+
+def test_reference_interval_survives_a_single_spike():
+    fs = 64.0
+    n = 64 * 200
+    rng = np.random.default_rng(11)
+    knots = np.arange(0, n + 1, 64, dtype=float)
+    T_ref = np.interp(np.arange(n), knots, rng.standard_normal(knots.size))
+    T_ref[5000] += 5.0
+    assert _reference_interval(T_ref, fs) == pytest.approx(1.0, rel=0.2)

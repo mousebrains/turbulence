@@ -17,13 +17,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     is verified against — and a missing parameter is refused, not defaulted.
   - It computed a **lag correlation and never compared it to anything**. A
     reference fabricated by interpolating across a gap yielded a confident lag
-    at r ≈ 0.02 and was folded into the median. Profiles below `min_corr`
+    at r ≈ 0.02 and was folded into the median. Profiles below `fp07.min_corr`
     (default 0.5) are now dropped, and a channel with none above it keeps the
     factory calibration rather than being fitted against noise.
   - Its **non-JAC low-pass cutoff was `fs/3`** — ~21 Hz for a 1 Hz reference on
     a 64 Hz grid, i.e. no filtering at all, leaving the regressor carrying
     bandwidth the reference cannot see and attenuating the fitted `beta_1`. The
-    cutoff is now the reference's own Nyquist, inferred from the merged array.
+    cutoff is now the reference's own Nyquist. The hotel merge records each
+    channel's native sample interval (`pf.hotel_native_dt`) and the pipeline
+    passes it through, so this engages for every `hotel.interpolation` kind;
+    `fp07.reference_interval` overrides it. Inference from the merged array
+    (linear-merge knots, per finite run, robust threshold) remains only as a
+    fallback, and warns when it cannot tell and no filtering is applied.
   - It fitted a **raw Vandermonde in `L`**, badly conditioned over a narrow
     temperature range. The fit is now centred and scaled, and composed back
     exactly, so the emitted coefficients still reproduce in the reader.

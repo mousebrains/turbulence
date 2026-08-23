@@ -78,11 +78,17 @@ def _get_channel_config(pf: PFile, ch_name: str) -> dict:
 def _reference_interval(T_ref: np.ndarray, fs: float) -> float:
     """Effective sample interval [s] of a reference that has been interpolated up.
 
-    A 1 Hz CTD merged onto a 64 Hz grid is piecewise-linear with knots at its
-    *original* samples, so the second difference is impulsive there and ~0
-    between. Counting the knots recovers the true interval without needing it
-    configured, which matters because the FP07 must be filtered to the
-    reference's bandwidth --- not to the grid's.
+    A 1 Hz CTD merged **linearly** onto a 64 Hz grid is piecewise-linear with
+    knots at its *original* samples, so the second difference is impulsive
+    there and ~0 between. Counting the knots recovers the true interval.
+
+    This is a **fallback** only: a pchip or nearest merge leaves no such
+    structure, so the pipeline passes the reference's native interval
+    explicitly (``reference_interval``, recorded by the hotel merge). The
+    second difference is taken per contiguous finite run so a NaN hole does
+    not splice two unrelated samples into one giant jump, and the threshold
+    is a multiple of the median non-zero ``d2`` rather than a fraction of the
+    max, so a single spike cannot swamp the real knots.
 
     Returns ``1/fs`` when no such structure is found (an already-fast
     reference), which reduces to "do not filter".
@@ -91,12 +97,23 @@ def _reference_interval(T_ref: np.ndarray, fs: float) -> float:
     good = np.isfinite(x)
     if good.sum() < 8:
         return 1.0 / fs
-    d2 = np.abs(np.diff(x[good], n=2))
-    if not np.any(d2 > 0):
+    # Second difference per contiguous finite run, kept on the original index
+    # so knot spacing is measured in grid samples.
+    d2 = np.zeros(x.size)
+    edges = np.flatnonzero(np.diff(good.astype(np.int8)))
+    starts = np.concatenate(([0], edges + 1))
+    stops = np.concatenate((edges + 1, [x.size]))
+    for s0, s1 in zip(starts, stops, strict=True):
+        if good[s0] and s1 - s0 >= 3:
+            d2[s0 + 1 : s1 - 1] = np.abs(np.diff(x[s0:s1], n=2))
+    nz = d2[d2 > 0]
+    if nz.size == 0:
         return 1.0 / fs
-    # Knots stand orders of magnitude above the flat interior; a threshold on
-    # the max is robust to the interior being exactly zero.
-    knots = np.flatnonzero(d2 > 0.01 * np.max(d2))
+    # Interior of a linear segment is ~0 up to round-off, so the median of the
+    # non-zero d2 is either round-off (knots tower above it) or, for a fast
+    # reference, the noise level (nothing towers above it).
+    threshold = 20.0 * float(np.median(nz))
+    knots = np.flatnonzero(d2 > threshold)
     if knots.size < 3:
         return 1.0 / fs
     step = float(np.median(np.diff(knots)))
@@ -112,17 +129,26 @@ def _lowpass_filter(
     W: np.ndarray,
     profiles: list[tuple[int, int]],
     T_ref: np.ndarray | None = None,
+    reference_interval: float | None = None,
 ) -> np.ndarray:
     """Low-pass the FP07 to the reference's bandwidth.
 
     For a JAC: ``fc = 0.73*sqrt(mean_speed/0.62)``, the vendor relation.
 
-    Otherwise the cutoff is the reference's own Nyquist, inferred from the
-    merged array by :func:`_reference_interval`. The old code used ``fs/3``
-    here, which for a 1 Hz CTD on a 64 Hz grid is ~21 Hz --- no filtering at
-    all. Leaving that bandwidth in the regressor is textbook
-    errors-in-variables: it attenuates the fitted slope toward zero, and that
-    slope IS ``beta_1``.
+    Otherwise the cutoff is the reference's own Nyquist, ``0.5 /
+    reference_interval``. The interval comes from the caller when known (the
+    hotel merge records each channel's native sample spacing); otherwise it is
+    inferred from the merged array by :func:`_reference_interval`, which only
+    works for a linear merge. The old code used ``fs/3`` here, which for a
+    1 Hz CTD on a 64 Hz grid is ~21 Hz --- no filtering at all. Leaving that
+    bandwidth in the regressor is textbook errors-in-variables: it attenuates
+    the fitted slope toward zero, and that slope IS ``beta_1``.
+
+    The filter is causal (``lfilter``), so the output lags the input by the
+    filter's group delay (~0.125 s at fc = 0.5 Hz). Because the reference is
+    shifted against this *same* filtered series before the regression, the
+    calibration is unaffected; only the reported lag carries the bias (see
+    :func:`_calc_lag`).
     """
     if reference.upper().startswith("JAC"):
         count = 0
@@ -133,7 +159,23 @@ def _lowpass_filter(
         W_mean = W_sum / count if count > 0 else 0.3
         fc = 0.73 * np.sqrt(W_mean / 0.62)
     else:
-        interval = _reference_interval(T_ref, fs) if T_ref is not None else 1.0 / fs
+        if reference_interval is not None and np.isfinite(reference_interval) \
+                and reference_interval > 0:
+            interval = float(reference_interval)
+        elif T_ref is not None:
+            interval = _reference_interval(T_ref, fs)
+            if interval <= 1.0 / fs:
+                warnings.warn(
+                    f"{reference}: native sample interval unknown and could not "
+                    f"be inferred from the merged array (a pchip/nearest merge "
+                    f"leaves nothing to infer from); the FP07 is NOT low-pass "
+                    f"filtered to the reference bandwidth. Set "
+                    f"fp07.reference_interval or merge the reference with "
+                    f"interp: linear.",
+                    stacklevel=3,
+                )
+        else:
+            interval = 1.0 / fs
         fc = 0.5 / interval
         if interval <= 1.0 / fs:
             # Nothing to match: the reference is already at the grid rate.
@@ -156,6 +198,15 @@ def _calc_lag(
     Returns ``(lag_seconds, max_correlation)``. The caller must gate on the
     correlation: this returns the best lag in the searched window whether or
     not anything actually correlates.
+
+    Known bias: ``T_fp07`` arrives already passed through the causal
+    :func:`_lowpass_filter` while ``T_ref`` is not, so the probe carries the
+    filter's group delay (~0.125 s at fc = 0.5 Hz) and the lag is shifted
+    positive by that much; with ``must_be_negative`` a true lag in
+    (-0.125, 0] clamps to 0. The regression is immune (it aligns the
+    reference against the same filtered series), so only the *reported* lag
+    is affected. A zero-phase ``filtfilt`` would remove it but change every
+    stored lag; left as is and documented.
     """
     max_lag_samples = round(max_lag_seconds * fs)
 
@@ -236,6 +287,7 @@ def fp07_calibrate(
     max_lag_seconds: float = 10.0,
     must_be_negative: bool = True,
     min_corr: float = MIN_LAG_CORR,
+    reference_interval: float | None = None,
 ) -> dict:
     """Perform in-situ FP07 calibration.
 
@@ -258,6 +310,13 @@ def fp07_calibrate(
         contributes nothing --- neither to the median lag nor to the
         coefficient fit; a channel with none above it is left on the factory
         coefficients rather than fitted against noise.
+    reference_interval : float, optional
+        Native sample interval [s] of a non-JAC reference, used to set the
+        FP07 low-pass cutoff at the reference's Nyquist. The pipeline takes
+        it from ``pf.hotel_native_dt`` (recorded by the hotel merge) or the
+        ``fp07.reference_interval`` config key. ``None`` falls back to
+        inferring it from the merged array, which only works for a linear
+        merge and warns when it cannot.
 
     Returns
     -------
@@ -327,7 +386,8 @@ def fp07_calibrate(
         # on the filtered thermistor, since unfiltered high-frequency noise in
         # the regressor (errors-in-variables) attenuates the fitted slope.
         fp07_lp = _lowpass_filter(
-            raw_slow, reference, pf.fs_slow, W, profiles, T_ref=T_ref
+            raw_slow, reference, pf.fs_slow, W, profiles, T_ref=T_ref,
+            reference_interval=reference_interval,
         )
         L_fit_src, clipped = log_r(fp07_lp, bridge)
 
