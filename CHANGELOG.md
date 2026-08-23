@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **`perturb/fp07_cal.py` no longer emits confident, wrong coefficients.** Five
+  defects, each a way the per-file in-situ calibration could fit something that
+  was not a calibration:
+  - It carried its **own copy of `ln(R_T/R_0)`** whose defaults disagreed with
+    the reader's (`e_b` 0 vs 0.68, `g` 1 vs 6.0, `adc_fs` 5 vs 4.096), so a
+    config missing any of them produced coefficients that did not reproduce.
+    The bridge algebra now comes from `fp07cal.logr` — the same code the reader
+    is verified against — and a missing parameter is refused, not defaulted.
+  - It computed a **lag correlation and never compared it to anything**. A
+    reference fabricated by interpolating across a gap yielded a confident lag
+    at r ≈ 0.02 and was folded into the median. Profiles below `min_corr`
+    (default 0.5) are now dropped, and a channel with none above it keeps the
+    factory calibration rather than being fitted against noise.
+  - Its **non-JAC low-pass cutoff was `fs/3`** — ~21 Hz for a 1 Hz reference on
+    a 64 Hz grid, i.e. no filtering at all, leaving the regressor carrying
+    bandwidth the reference cannot see and attenuating the fitted `beta_1`. The
+    cutoff is now the reference's own Nyquist, inferred from the merged array.
+  - It fitted a **raw Vandermonde in `L`**, badly conditioned over a narrow
+    temperature range. The fit is now centred and scaled, and composed back
+    exactly, so the emitted coefficients still reproduce in the reader.
+  - **Clipped samples were regressed silently.** A sample on the ±0.6 bridge
+    rail carries a wrong `L` and looks ordinary downstream; they are now
+    excluded, and a channel more than 5% railed is refused outright.
+
+  Also removes the unreachable non-therm branch of `_compute_RT_R0`
+  (`_find_fp07_channels` only admits therm channels), which existed solely to
+  be covered and carried the default mismatch. The module docstring now says
+  plainly that this is a per-file calibration and points at the
+  deployment-scoped `fp07-cal` CLI for a sparse reference.
+
 ### Added
 - **RDL bad-buffer dropouts are now repaired or rejected in ε and χ.** v6.1+
   files substitute `-32753` for individual missing samples (TN-051 rev.

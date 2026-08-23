@@ -6,14 +6,28 @@ from pathlib import Path
 
 import numpy as np
 
+from odas_tpw.fp07cal.logr import BridgeParams, log_r
 from odas_tpw.perturb.fp07_cal import (
     _calc_lag,
-    _compute_RT_R0,
     _find_fp07_channels,
     _get_channel_config,
     _lowpass_filter,
     fp07_calibrate,
 )
+
+
+def _rt_r0(counts, ch_config, name="T1"):
+    """``ln(R_T/R_0)`` via the shared implementation ``fp07_cal`` now uses.
+
+    The module used to carry its own copy whose defaults disagreed with the
+    reader's; it now delegates to ``fp07cal.logr``, so these tests exercise the
+    same code path the calibration does.
+    """
+    L, _clipped = log_r(
+        np.asarray(counts, dtype=float),
+        BridgeParams.from_channel_config(ch_config, name),
+    )
+    return L
 
 
 class _PFileStub:
@@ -63,7 +77,7 @@ class TestComputeRTR0:
             "adc_bits": "16",
         }
         counts = np.array([30000.0, 32000.0, 34000.0])
-        result = _compute_RT_R0(counts, ch_config)
+        result = _rt_r0(counts, ch_config)
         assert result.shape == (3,)
         assert np.all(np.isfinite(result))
 
@@ -80,8 +94,8 @@ class TestComputeRTR0:
         }
         # Use values that produce different Z values within the +/-0.6
         # clip range (factor = 6.1e-5, so |counts| < ~9830)
-        low = _compute_RT_R0(np.array([2000.0]), ch_config)
-        high = _compute_RT_R0(np.array([8000.0]), ch_config)
+        low = _rt_r0(np.array([2000.0]), ch_config)
+        high = _rt_r0(np.array([8000.0]), ch_config)
         assert low[0] != high[0]
 
 
@@ -182,16 +196,33 @@ class TestLowpassFilter:
         # Filtered signal should be smoother (lower variance)
         assert np.var(result) < np.var(fp07)
 
-    def test_non_jac_reference(self):
-        """Non-JAC reference uses fs/3 cutoff and runs without error."""
+    def test_non_jac_reference_without_a_reference_array_does_not_filter(self):
+        """No reference array means no inferable bandwidth, so leave it alone.
+
+        The old code used fs/3 here, which for a 1 Hz reference on a 64 Hz grid
+        is ~21 Hz -- no filtering, but dressed up as if it were matched.
+        """
         fs = 64.0
         n = 1000
         fp07 = np.random.default_rng(42).standard_normal(n)
         W = np.full(n, 0.5)
-        profiles = [(0, n - 1)]
-        result = _lowpass_filter(fp07, "SBE_T", fs, W, profiles)
+        result = _lowpass_filter(fp07, "SBE_T", fs, W, [(0, n - 1)])
+        np.testing.assert_allclose(result, fp07)
+
+    def test_non_jac_reference_is_matched_to_the_reference_bandwidth(self):
+        """A 1 Hz reference on a 64 Hz grid must actually low-pass the FP07."""
+        fs = 64.0
+        n = 1280
+        rng = np.random.default_rng(42)
+        fp07 = rng.standard_normal(n)
+        # A 1 Hz reference interpolated onto the 64 Hz grid: piecewise linear
+        # with knots every 64 samples.
+        knots = np.arange(0, n + 1, 64, dtype=float)
+        T_ref = np.interp(np.arange(n), knots, rng.standard_normal(knots.size))
+        result = _lowpass_filter(fp07, "SBE_T", fs, np.full(n, 0.5),
+                                 [(0, n - 1)], T_ref=T_ref)
         assert result.shape == fp07.shape
-        assert np.var(result) < np.var(fp07)
+        assert np.var(result) < 0.5 * np.var(fp07)
 
 
 class TestFP07Calibrate:
@@ -249,7 +280,7 @@ class TestFP07Calibrate:
         }
 
         # Build raw counts that will produce reasonable RT_R0 values.
-        # _compute_RT_R0 does: Z = factor*(counts - a)/b, RT_R0 = ln((1-Z)/(1+Z))
+        # log_r does: Z = factor*(counts - a)/b, RT_R0 = ln((1-Z)/(1+Z))
         # factor = (5 / 2^16) * 2/(1*2.5) = 0.00006103515625
         # We want Z values near 0 to get RT_R0 near 0, so counts near 0.
         # Use counts that produce a monotonic RT_R0 correlated with T_ref.
@@ -260,7 +291,7 @@ class TestFP07Calibrate:
         target_inv_T = 1.0 / (T_ref + 273.15)
         # Approximate: RT_R0 ~ (target_inv_T - mean) / some scale
         rt_r0_approx = (target_inv_T - np.mean(target_inv_T)) * 500.0
-        # Invert _compute_RT_R0: RT_R0 = ln((1-Z)/(1+Z)) => Z = (1-exp(RT_R0))/(1+exp(RT_R0))
+        # Invert log_r: RT_R0 = ln((1-Z)/(1+Z)) => Z = (1-exp(RT_R0))/(1+exp(RT_R0))
         exp_rt = np.exp(rt_r0_approx)
         Z = (1.0 - exp_rt) / (1.0 + exp_rt)
         # Z = factor * counts => counts = Z / factor
