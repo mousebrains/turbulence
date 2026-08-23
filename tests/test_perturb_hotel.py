@@ -840,3 +840,26 @@ def test_interp_one_too_few_points_returns_nan():
     out = _interp_one(np.array([0.0, 1.0]), np.array([np.nan, np.nan]),
                       np.array([0.5]), "pchip")
     assert np.isnan(out).all()
+
+
+class TestHotelNativeInterval:
+    def test_merge_records_native_interval_per_channel(self, tmp_path):
+        from odas_tpw.perturb.hotel import _native_interval
+
+        nc_file = _make_nc(tmp_path / "hotel.nc")
+        hd = load_hotel(nc_file, time_format="seconds")
+        pf = _MockPFileWithInfo()
+        # max_gap is required since #150; this test is about the recorded
+        # native interval, not about gating, so it takes the legacy semantics.
+        merge_hotel_into_pfile(hd, pf, _cfg(fast_channels=["speed"]))
+        expected = _native_interval(hd.time)
+        assert np.isfinite(expected) and expected > 0
+        for name in ("speed", "pitch"):
+            assert pf.hotel_native_dt[name] == pytest.approx(expected)
+
+    def test_native_interval_ignores_nan_and_repeats(self):
+        from odas_tpw.perturb.hotel import _native_interval
+
+        t = np.array([0.0, 1.0, 1.0, np.nan, 2.0, 3.0, 3.0, 4.0])
+        assert _native_interval(t) == pytest.approx(1.0)
+        assert np.isnan(_native_interval(np.array([1.0])))

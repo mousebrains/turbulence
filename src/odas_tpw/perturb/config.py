@@ -82,6 +82,8 @@ DEFAULTS: dict[str, dict] = {
         "max_lag_seconds": 10,
         "reference": "JAC_T",
         "must_be_negative": True,
+        "min_corr": 0.5,
+        "reference_interval": None,
     },
     "ct": {
         "align": True,
@@ -851,6 +853,12 @@ fp07:
   max_lag_seconds: 10     # max cross-correlation lag [s]
   reference: "JAC_T"      # reference temperature channel
   must_be_negative: true  # expect negative lag (falling VMP)
+  min_corr: 0.5           # min |r| of the lag cross-correlation for a profile
+                          # to count; a channel with none above it keeps the
+                          # factory calibration
+  reference_interval: null  # native sample interval [s] of a non-JAC
+                          # reference (sets the FP07 low-pass to its Nyquist).
+                          # null = taken from the hotel merge, else inferred
 
 ct:
   align: true

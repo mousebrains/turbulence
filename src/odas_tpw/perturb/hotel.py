@@ -786,6 +786,22 @@ def _warn_if_fabricated(
     warnings.warn(f"hotel channel {src!r}: " + "; ".join(parts) + hint, stacklevel=3)
 
 
+def _native_interval(hotel_t: np.ndarray) -> float:
+    """Median sample interval [s] of a hotel channel's *own* time vector.
+
+    Recorded on the PFile so a consumer (``fp07_calibrate``) can match the
+    reference's real bandwidth instead of guessing it from the interpolated
+    array --- which is impossible for a pchip/nearest merge.
+    """
+    t = np.asarray(hotel_t, dtype=np.float64)
+    t = t[np.isfinite(t)]
+    if t.size < 2:
+        return float("nan")
+    dt = np.diff(np.sort(t))
+    dt = dt[dt > 0]
+    return float(np.median(dt)) if dt.size else float("nan")
+
+
 def merge_hotel_into_pfile(hotel_data: HotelData, pf, hotel_cfg: dict) -> None:
     """Interpolate hotel channels and register them on ``pf`` in-place.
 
@@ -843,6 +859,9 @@ def merge_hotel_into_pfile(hotel_data: HotelData, pf, hotel_cfg: dict) -> None:
         if scale != 1.0 or offset != 0.0:
             data = data * scale + offset
         pf.channels[out_name] = data
+        if not hasattr(pf, "hotel_native_dt"):
+            pf.hotel_native_dt = {}
+        pf.hotel_native_dt[out_name] = _native_interval(hotel_data.time_for(src))
 
         units = opts.get("units")
         if units is None:

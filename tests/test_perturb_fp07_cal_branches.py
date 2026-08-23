@@ -9,7 +9,6 @@ import numpy as np
 
 from odas_tpw.perturb.fp07_cal import (
     _calc_lag,
-    _compute_RT_R0,
     fp07_calibrate,
 )
 
@@ -44,44 +43,14 @@ class _PFileStub:
 
 
 # ---------------------------------------------------------------------------
-# _compute_RT_R0 — non-therm types branch (lines 68-69)
+# The non-therm branch of the old _compute_RT_R0 is gone. It was unreachable
+# from fp07_calibrate --- _find_fp07_channels only admits channels whose type
+# is therm/thermistor --- so it existed solely to be covered here, while
+# carrying the default mismatch (e_b defaulting to 0, g to 1, adc_fs to 5)
+# that made the fit's L disagree with the reader's. The bridge algebra now
+# comes from fp07cal.logr, which requires every parameter rather than
+# substituting a default.
 # ---------------------------------------------------------------------------
-
-
-class TestComputeRTR0NonTherm:
-    def test_non_therm_type(self):
-        """Voltage/raw type uses the else branch."""
-        counts = np.array([100.0, 200.0, 300.0])
-        ch_config = {
-            "type": "voltage",  # not "therm" / "thermistor"
-            "e_b": "2.5",
-            "a": "0",
-            "b": "1",
-            "g": "1",
-            "adc_fs": "5",
-            "adc_bits": "16",
-            "adc_zero": "0",
-        }
-        result = _compute_RT_R0(counts, ch_config)
-        assert result.shape == (3,)
-        assert np.all(np.isfinite(result))
-
-    def test_non_therm_with_zero_b(self):
-        """Non-therm with b*G*E_B == 0 → returns zeros."""
-        counts = np.array([100.0, 200.0])
-        ch_config = {
-            "type": "voltage",
-            "e_b": "2.5",
-            "a": "0",
-            "b": "0",  # zero — divides
-            "g": "1",
-            "adc_fs": "5",
-            "adc_bits": "16",
-            "adc_zero": "0",
-        }
-        result = _compute_RT_R0(counts, ch_config)
-        # When b == 0, the else branch returns zeros
-        assert np.all(result == 0.0) or np.allclose(result, 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -171,8 +140,13 @@ class TestFP07CalibrateSkips:
         """Profile shorter than 10 samples is skipped in lag computation (line 239)."""
         n_slow = 500
         rng = np.random.default_rng(0)
-        T1 = 10.0 + np.linspace(0, 1, n_slow) + rng.standard_normal(n_slow) * 0.01
-        JAC_T = T1 + 0.001 * rng.standard_normal(n_slow)
+        # Structure, not a ramp. _calc_lag correlates DIFFERENCES, and the
+        # derivative of a straight line is a constant -- after mean removal
+        # only independent noise is left and nothing correlates, so a ramp
+        # cannot establish a lag no matter how clean it is.
+        base = 2.0 * np.sin(2.0 * np.pi * np.arange(n_slow) / 128.0)
+        T1 = 10.0 + base + rng.standard_normal(n_slow) * 0.005
+        JAC_T = 10.0 + base + rng.standard_normal(n_slow) * 0.005
         pf = _PFileStub(
             channels={"T1": T1, "JAC_T": JAC_T, "P": np.linspace(0, 50, n_slow)},
             channel_info={
@@ -195,7 +169,17 @@ class TestFP07CalibrateSkips:
                     }
                 ]
             },
-            channels_raw={"T1": np.full(n_slow, 30000.0) + rng.standard_normal(n_slow) * 100},
+            # Two things this fixture has to get right, both of which the old
+            # code let slide:
+            #  * the counts must stay inside the bridge range. With this
+            #    config the scale factor is 6.1e-5, so |counts| must be under
+            #    ~9830 or Z rails at +/-0.6 and L goes constant. The previous
+            #    30000 was fully clipped -- the test was fitting a flat line.
+            #  * they must actually TRACK the reference, because the lag search
+            #    is now gated on correlation.
+            channels_raw={
+                "T1": 5000.0 - 800.0 * base + rng.standard_normal(n_slow) * 2
+            },
         )
         # First profile too short (5 samples), second is full length
         with np.errstate(all="ignore"):

@@ -1885,7 +1885,7 @@ def process_file(
     -------
     dict with output paths per stage.
     """
-    from odas_tpw.perturb.fp07_cal import fp07_calibrate
+    from odas_tpw.perturb.fp07_cal import MIN_LAG_CORR, fp07_calibrate
     from odas_tpw.perturb.qc_gate import apply_qc_to_dataset
     from odas_tpw.processing.chi_combine import mk_chi_mean
     from odas_tpw.processing.ct_align import ct_align
@@ -2254,6 +2254,13 @@ def process_file(
                     order=fp07_cfg.get("order", 2),
                     max_lag_seconds=fp07_cfg.get("max_lag_seconds", 10.0),
                     must_be_negative=fp07_cfg.get("must_be_negative", True),
+                    min_corr=fp07_cfg.get("min_corr", MIN_LAG_CORR),
+                    reference_interval=(
+                        fp07_cfg.get("reference_interval")
+                        or getattr(pf, "hotel_native_dt", {}).get(
+                            fp07_cfg.get("reference", "JAC_T")
+                        )
+                    ),
                 )
                 # Apply calibrated temperatures back to pf.channels —
                 # both the base channels (T1, T2) and the recalibrated
