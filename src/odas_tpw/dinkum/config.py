@@ -166,6 +166,24 @@ def normalize_sensors(sensors_cfg: dict | None, time_base: str) -> dict[str, dic
         opts.setdefault("name", src)
         opts.setdefault("time_sensor", time_base)
         out[src] = opts
+
+    # Two sensors resolving to one output name is not a rename, it is a
+    # collision: build_hotel stores each result as data_vars[out_name], so the
+    # later physical sensor silently overwrites the earlier one while the log
+    # and the provenance still list both. Refuse rather than pick a winner.
+    by_out: dict[str, list[str]] = {}
+    for src, opts in out.items():
+        by_out.setdefault(str(opts["name"]), []).append(src)
+    collisions = {name: srcs for name, srcs in by_out.items() if len(srcs) > 1}
+    if collisions:
+        detail = "; ".join(
+            f"{name!r} <- {sorted(srcs)}" for name, srcs in sorted(collisions.items())
+        )
+        raise ValueError(
+            f"sensors: two or more sensors resolve to the same output name "
+            f"({detail}). Each output variable can hold one sensor; give them "
+            f"distinct `name` values."
+        )
     return out
 
 

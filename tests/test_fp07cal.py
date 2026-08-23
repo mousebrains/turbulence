@@ -498,3 +498,74 @@ def test_bridge_inverse_is_exact():
     L = np.linspace(-0.30, 0.10, 200)
     back, _ = log_r(_L_to_counts(L, DEFAULT_BRIDGE), DEFAULT_BRIDGE)
     np.testing.assert_allclose(back, L, rtol=1e-10, atol=1e-12)
+
+
+# --- review findings on PR #149 -------------------------------------------
+def test_patch_validates_every_source_not_just_the_first():
+    """Checking one file while patching a list is not a check.
+
+    A mixed-instrument directory, or a probe swap that changed a bridge
+    constant partway through a deployment, would otherwise sail past the
+    instrument-SN and bridge-parameter gates and be written with coefficients
+    that cannot reproduce.
+    """
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from odas_tpw.fp07cal.patch import patch_deployment
+
+    record = {
+        "instrument_sn": "435",
+        "n_fit_files": 1,
+        "channels": {"T1": {
+            "config_equivalent": {"t_0": 286.65, "beta_1": 3051.45},
+            "bridge": {"a": -12.3}, "beta_key": "beta_1", "lag_trustworthy": True,
+        }},
+    }
+
+    def fake_config(sn, a):
+        return {"instrument_info": {"sn": sn},
+                "channels": [{"name": "T1", "a": a, "t_0": "289.301",
+                              "beta_1": "3143.55"}]}
+
+    import odas_tpw.fp07cal.patch as P
+    configs = {"first.p": fake_config("435", "-12.3"),
+               "second.p": fake_config("479", "-16.3")}
+    orig_read, orig_parse, orig_patched = P.read_config_text, P.parse_config, P.already_patched
+    P.read_config_text = lambda p: Path(p).name
+    P.parse_config = lambda name: configs[name]
+    P.already_patched = lambda p: False
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            recf = Path(d) / "rec.json"
+            recf.write_text(json.dumps(record))
+            srcs = [Path(d) / "first.p", Path(d) / "second.p"]
+            plan, _results = patch_deployment(recf, srcs, Path(d) / "out",
+                                             dry_run=True)
+    finally:
+        P.read_config_text, P.parse_config, P.already_patched = (
+            orig_read, orig_parse, orig_patched)
+
+    assert not plan.ok, "a mismatched second file must block the patch"
+    joined = " ".join(plan.errors)
+    assert "second.p" in joined
+    assert "instrument SN mismatch" in joined or "bridge parameter" in joined
+
+
+def test_dinkum_refuses_two_sensors_sharing_an_output_name():
+    """build_hotel stores data_vars[out_name]; a collision silently overwrites."""
+    from odas_tpw.dinkum.config import normalize_sensors
+
+    with pytest.raises(ValueError, match="same output name"):
+        normalize_sensors(
+            {"sci_water_temp": {"name": "T"}, "sci_water_cond": {"name": "T"}},
+            "sci_m_present_time",
+        )
+
+
+def test_dinkum_allows_distinct_output_names():
+    from odas_tpw.dinkum.config import normalize_sensors
+
+    out = normalize_sensors({"a": {"name": "x"}, "b": {}}, "t")
+    assert sorted(o["name"] for o in out.values()) == ["b", "x"]

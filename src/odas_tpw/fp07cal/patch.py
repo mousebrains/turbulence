@@ -260,7 +260,32 @@ def patch_deployment(
             f"pass nests banners and destroys the original-config block."
         )
 
+    # EVERY source is validated, not just the first. The instrument-SN and
+    # bridge-parameter checks are the whole safety story of this step, and
+    # checking one file while patching a list is not a check -- a
+    # mixed-instrument directory, or a probe swap that changed a bridge
+    # constant partway through a deployment, would sail past it and be written
+    # with coefficients that cannot reproduce.
     plan = build_edits(record, parse_config(read_config_text(srcs[0])), channels=channels)
+    for src in srcs[1:]:
+        try:
+            other = build_edits(record, parse_config(read_config_text(src)),
+                                channels=channels)
+        except Exception as exc:  # unreadable config -- refuse, do not skip
+            plan.errors.append(f"{Path(src).name}: cannot read config: {exc}")
+            continue
+        plan.errors.extend(f"{Path(src).name}: {e}" for e in other.errors)
+        # Warnings are per-file too, but they repeat across a deployment; keep
+        # one of each so the operator sees the kind without the volume.
+        for w in other.warnings:
+            tagged = f"{Path(src).name}: {w}"
+            if w not in plan.warnings and tagged not in plan.warnings:
+                plan.warnings.append(tagged)
+        if other.edits != plan.edits:
+            plan.errors.append(
+                f"{Path(src).name}: resolves to different edits than "
+                f"{Path(srcs[0]).name}; these files do not share one calibration"
+            )
     plan.warnings.extend(_time_range_warnings(record, srcs))
     if not plan.ok:
         return plan, []
