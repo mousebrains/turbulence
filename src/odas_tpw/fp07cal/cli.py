@@ -40,10 +40,11 @@ files:
                        # pass. Holding a full deployment at once is several GB.
 
 reference:
-  # Read STRAIGHT from the hotel NetCDF, on the CTD's own clock. Deliberately
-  # not through perturb's hotel merge, which interpolates across arbitrary gaps
-  # and edge-holds outside coverage -- on a glider sampling CT every n-th yo
-  # that would hand the fit a fabricated ramp over most of the record.
+  # Read STRAIGHT from the hotel NetCDF, on the CTD's own clock -- real
+  # samples only, never through perturb's hotel merge. How that merge treats
+  # gaps is governed by perturb's hotel.max_gap / extrapolate settings (PR
+  # #150); reading the file directly here guarantees the fit sees only what
+  # the CTD actually measured, whatever those settings say.
   file: "<CONFIG_DIR>/hotel.nc"
   time_var: "sci_ctd41cp_timestamp"
   value_var: "sci_water_temp"
@@ -60,11 +61,23 @@ pairs:
                        # NOT a smoothing knob -- it defines where the
                        # reference exists at all.
   kernel_width: null   # [s] boxcar; null = the CTD's median sample interval
-  kernel_tau: 0.5      # [s] single pole approximating the CTD's response
+  kernel_tau: 2.7      # [s] single pole approximating the CTD's response.
+                       # 2.7 s is the SBE41cp response measured in situ on
+                       # osu685 (thermal lag minus clock offset; runbook.md).
+                       # A pole mismatch is NOT a delay -- the lag search
+                       # cannot remove it, and it leaks a few mK into a
+                       # one-signed (climb-only) deployment.
   min_speed: 0.05      # [m/s] below this the thermistor is not flushing
   require_profile: true
 
 channels: ["T1", "T2"]
+
+profiles:
+  speed_var: "U_EM"    # channel used for the flushing gate; null to disable
+  W_min: 0.05          # [dbar/s] minimum |fall rate| — the GLIDER value; the
+                       # VMP-tuned 0.3 rejects every glide
+  P_min: 0.5           # [dbar] minimum pressure for a profile sample
+  min_duration: 60.0   # [s] shortest stretch counted as a profile
 
 lag:
   max_lag: 20.0
@@ -125,17 +138,50 @@ def _load_config(path: Path) -> dict:
     return cfg
 
 
-def _gather(cfg: dict):
-    files_cfg = cfg.get("files", {})
+def _gather_paths(cfg: dict) -> list[Path]:
+    """The input ``.p`` set, with anything under ``output_dir`` excluded.
+
+    ``patch`` writes ``output_dir/patched/*.p`` INSIDE the default config
+    layout, so a recursive glob would sweep the tool's own output back in as
+    input on the next run --- double-counting files in ``coverage`` and making
+    ``patch`` refuse its own products.
+    """
+    files_cfg = cfg.get("files", {}) or {}
     root = Path(files_cfg.get("p_file_root", "."))
     pattern = files_cfg.get("p_file_pattern", "**/*.p")
+    out_dir = Path(files_cfg.get("output_dir", "fp07cal")).resolve()
     paths = sorted(root.glob(pattern))
+    inside = [
+        q for q in paths
+        if out_dir == q.resolve() or out_dir in q.resolve().parents
+    ]
+    if inside:
+        print(
+            f"  NOTE ignoring {len(inside)} .p file(s) under the output_dir "
+            f"{out_dir} (e.g. {inside[0].name}) — the tool's own output is "
+            f"never an input",
+            file=sys.stderr,
+        )
+        skip = {q.resolve() for q in inside}
+        paths = [q for q in paths if q.resolve() not in skip]
     if not paths:
         raise SystemExit(f"no .p files matched {root}/{pattern}")
+    return paths
 
-    ref_cfg = cfg.get("reference", {})
-    ref = load_hotel_reference(
-        ref_cfg["file"],
+
+def _load_reference(cfg: dict):
+    """Load the CTD reference, failing with a message rather than a traceback."""
+    ref_cfg = cfg.get("reference")
+    if not isinstance(ref_cfg, dict) or not ref_cfg.get("file"):
+        raise ValueError(
+            "config has no `reference:` block with a `file:` entry — "
+            "`fp07-cal init` writes a commented template"
+        )
+    ref_path = Path(ref_cfg["file"])
+    if not ref_path.exists():
+        raise ValueError(f"reference file {ref_path} does not exist")
+    return load_hotel_reference(
+        ref_path,
         time_var=ref_cfg.get("time_var", "sci_ctd41cp_timestamp"),
         value_var=ref_cfg.get("value_var", "sci_water_temp"),
         pressure_var=ref_cfg.get("pressure_var", "sci_water_pressure"),
@@ -143,22 +189,38 @@ def _gather(cfg: dict):
         valid_min=float(ref_cfg.get("valid_min", -5.0)),
         valid_max=float(ref_cfg.get("valid_max", 45.0)),
     )
-    return paths, ref
 
 
-def _load_some(paths, limit: int):
-    """Load up to *limit* files, spread evenly across the deployment.
+def _profile_kwargs(cfg: dict) -> dict:
+    """The `profiles:` block -> load_probe_series keyword arguments (P7)."""
+    prof = cfg.get("profiles", {}) or {}
+    return {
+        "speed_var": prof.get("speed_var", "U_EM"),
+        "W_min": float(prof.get("W_min", 0.05)),
+        "P_min": float(prof.get("P_min", 0.5)),
+        "min_duration": float(prof.get("min_duration", 60.0)),
+    }
+
+
+def _load_some(paths, limit: int, prof_kw: dict | None = None):
+    """Load up to *limit* files, spread evenly across the whole deployment.
 
     Every ``.p`` load is guarded.  A real deployment is full of startup and
     surface fragments that carry a config record but no data --- osu685 had 429
     of them among 1226 files --- and an unguarded list comprehension turns the
     first one into a crash before any science happens.
     """
-    step = max(1, len(paths) // max(1, limit))
+    if len(paths) <= limit:
+        chosen = list(paths)
+    else:
+        # np.linspace over the INDEX so the sample covers the whole list;
+        # paths[::step][:limit] truncates and never sees the deployment's tail.
+        idx = np.unique(np.linspace(0, len(paths) - 1, max(1, limit)).round().astype(int))
+        chosen = [paths[i] for i in idx]
     out, skipped = [], 0
-    for path in paths[::step][:limit]:
+    for path in chosen:
         try:
-            probe = load_probe_series(path)
+            probe = load_probe_series(path, **(prof_kw or {}))
         except Exception as exc:
             skipped += 1
             print(f"    skip {Path(path).name}: {type(exc).__name__}: {exc}",
@@ -171,20 +233,27 @@ def _load_some(paths, limit: int):
     return out, skipped
 
 
-def _stream(paths):
+def _stream(paths, prof_kw: dict | None = None, failures: list | None = None):
     """Yield every loadable probe with a detected profile, one at a time.
 
     Streaming matters: holding 1225 files of 200k slow samples at once is
     several GB against a pair set of a few MB.  The fit needs a subsample; the
     per-profile statistics need every file but only one at a time.
+
+    Skips are never silent: each is appended to *failures* as
+    ``(name, reason)`` for the caller to report and count.
     """
     for path in paths:
         try:
-            probe = load_probe_series(path)
-        except Exception:
+            probe = load_probe_series(path, **(prof_kw or {}))
+        except Exception as exc:
+            if failures is not None:
+                failures.append((Path(path).name, f"{type(exc).__name__}: {exc}"))
             continue
         if probe.profiles:
             yield probe
+        elif failures is not None:
+            failures.append((Path(path).name, "no profiles detected"))
 
 
 def _pair_config(cfg: dict) -> PairConfig:
@@ -192,7 +261,7 @@ def _pair_config(cfg: dict) -> PairConfig:
     return PairConfig(
         max_gap=float(p.get("max_gap", 30.0)),
         kernel_width=p.get("kernel_width"),
-        kernel_tau=float(p.get("kernel_tau", 0.5)),
+        kernel_tau=float(p.get("kernel_tau", 2.7)),
         min_speed=float(p.get("min_speed", 0.05)),
         require_profile=bool(p.get("require_profile", True)),
         min_corr=float(p.get("min_corr", 0.7)),
@@ -263,7 +332,10 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
         order_cfg = fit_cfg.get("order", "auto")
         order_scores: dict = {}
         if order_cfg in (None, "auto"):
-            order, order_scores = select_order(pairs)
+            order, order_scores = select_order(
+                pairs, use_geometry=bool(fit_cfg.get("geometry", True)),
+                robust=bool(fit_cfg.get("robust", True)),
+            )
             print(f"  {ch} order: {order} chosen by held-out error — " + ", ".join(
                 f"order {o}: {v['held_out_K']*1e3:.1f} mK held-out "
                 f"({v['in_sample_K']*1e3:.1f} in-sample)"
@@ -309,7 +381,15 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
         results["channels"][ch] = {
             "lag_s": lag,
             "corr": r,
-            "thermal_lag_s": (lag - clock[0]) if np.isfinite(clock[0]) else None,
+            # lag - clock_offset is the CTD's own response ONLY when the
+            # clock offset is itself a resolved peak; a boundary/flat
+            # pressure_offset would otherwise be laundered into a "sensor
+            # response" number (N4).
+            "thermal_lag_s": (
+                (lag - clock[0])
+                if np.isfinite(clock[0]) and po.trustworthy()
+                else None
+            ),
             "n_pairs": len(pairs),
             "n_profiles": pairs.n_profiles(),
             "order": fit.order,
@@ -384,9 +464,14 @@ def _cmd_init(args) -> int:
 
 def _cmd_coverage(args) -> int:
     cfg = _load_config(Path(args.config))
-    paths, ref = _gather(cfg)
+    paths = _gather_paths(cfg)
+    try:
+        ref = _load_reference(cfg)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     limit = int(cfg.get("files", {}).get("max_fit_files", 100) or 100)
-    probes, skipped = _load_some(paths, limit)
+    probes, skipped = _load_some(paths, limit, _profile_kwargs(cfg))
     print(f"{len(paths)} .p file(s); sampled {len(probes)} with profiles "
           f"({skipped} skipped)")
     pc = _pair_config(cfg)
@@ -406,12 +491,17 @@ def _cmd_coverage(args) -> int:
 
 def _cmd_fit(args) -> int:
     cfg = _load_config(Path(args.config))
-    paths, ref = _gather(cfg)
+    paths = _gather_paths(cfg)
+    try:
+        ref = _load_reference(cfg)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     out_dir = Path(cfg.get("files", {}).get("output_dir", "fp07cal"))
     limit = int(cfg.get("files", {}).get("max_fit_files", 100) or 100)
     print(f"{len(paths)} .p file(s), {ref.time.size} reference samples")
     print(f"loading up to {limit} for the fit...")
-    probes, skipped = _load_some(paths, limit)
+    probes, skipped = _load_some(paths, limit, _profile_kwargs(cfg))
     if not probes:
         print("no file yielded a detected profile — check profiles/W_min and the "
               "reference time range", file=sys.stderr)
@@ -481,7 +571,8 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
 
     recs: dict[str, list] = {ch: [] for ch in model}
     n_files = 0
-    for probe in _stream(paths):
+    failures: list[tuple[str, str]] = []
+    for probe in _stream(paths, _profile_kwargs(cfg), failures):
         n_files += 1
         for ch, (coeffs, lag) in model.items():
             if ch not in probe.counts:
@@ -509,7 +600,19 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
                                  float(np.min(ps.T_ref[sel])),
                                  float(np.max(ps.T_ref[sel]))))
 
-    out: dict = {"n_files_streamed": n_files, "channels": {}}
+    if failures:
+        by_reason: dict[str, int] = {}
+        for _name, reason in failures:
+            by_reason[reason] = by_reason.get(reason, 0) + 1
+        print(f"  {len(failures)} of {len(paths)} file(s) skipped in the "
+              f"streaming pass:", file=sys.stderr)
+        for reason, n in sorted(by_reason.items(), key=lambda kv: -kv[1]):
+            print(f"    {n} x {reason}", file=sys.stderr)
+    out: dict = {
+        "n_files_streamed": n_files,
+        "n_files_failed": len(failures),
+        "channels": {},
+    }
     for ch, R in recs.items():
         if not R:
             out["channels"][ch] = {"n_profiles": 0, "note": "no profiles"}
@@ -534,8 +637,11 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
         if len(R) < 12:
             out["channels"][ch] = {**coverage, "note": "too few to block"}
             continue
-        nb = int(st_cfg.get("n_blocks", 12) or 12)
-        edges = np.linspace(t.min(), t.max(), nb + 1)
+        # Same blocking policy as run_calibration: block_days wins when set,
+        # else n_blocks (default 6, matching blocked_offsets).
+        from odas_tpw.fp07cal.stability import _block_edges
+        edges = _block_edges(t, st_cfg.get("n_blocks", 6), st_cfg.get("block_days"))
+        nb = edges.size - 1
         TK = float(np.median(Tm)) + 273.15
         blocks = []
         for b in range(nb):
@@ -576,7 +682,9 @@ def _cmd_patch(args) -> int:
     from odas_tpw.fp07cal.patch import patch_deployment
 
     cfg = _load_config(Path(args.config))
-    paths, _ref = _gather(cfg)
+    # Only the file list is needed here: patch edits configs, it never reads
+    # the hotel reference — a missing hotel.nc must not block patching.
+    paths = _gather_paths(cfg)
     files_cfg = cfg.get("files", {})
     out_root = Path(files_cfg.get("output_dir", "fp07cal"))
     record = Path(args.record) if args.record else out_root / "coefficients.json"
@@ -591,7 +699,7 @@ def _cmd_patch(args) -> int:
             channels=cfg.get("channels"),
             note=args.note, dry_run=args.dry_run,
         )
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         print(f"refusing to patch: {exc}", file=sys.stderr)
         return 1
 
