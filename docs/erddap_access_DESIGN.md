@@ -73,7 +73,9 @@ urllib.request.urlretrieve(url, RAW_PATH)
 5. **Stable-sort** by that timestamp, then **drop duplicates keeping the
    first**.
 6. **Write** a compressed NetCDF, appending to `history` / `processing_level`
-   rather than clobbering, via a temp file and atomic replace.
+   rather than clobbering, via a temp file and atomic replace. (ERDDAP has
+   already written a `history` line of its own into the served file — the full
+   request URL and the UTC fetch time — so "append" is the right verb.)
 
 The output is a strictly-increasing, sanitised CTD table. That is exactly the
 contract `perturb`'s `hotel:` block wants, and exactly what
@@ -119,8 +121,13 @@ format is chosen by file extension on the dataset ID: `.nc`, `.ncCF`, `.csv`,
 by optional constraints:
 
 ```
-…/tabledap/ru33-….nc?sci_water_temp,sci_ctd41cp_timestamp&time>=2021-10-01T00:00:00Z&time<=2021-10-08T00:00:00Z
+…/tabledap/ru33-….nc?sci_water_temp%2Csci_ctd41cp_timestamp&time%3E%3D2021-10-01T00%3A00%3A00Z&time%3C%3D2021-10-08T00%3A00%3A00Z
 ```
+
+The constraints are **percent-encoded**. A literal `>=` in the request target is
+rejected by Tomcat before ERDDAP sees it (`400`, an HTML "Invalid character
+found in the request target" page); the same query with `%3E%3D` returns `200
+text/csv`. Both probed against Rutgers' server.
 
 Things that matter for us:
 
@@ -131,11 +138,23 @@ Things that matter for us:
 - **`.das` / `.dds` are cheap metadata probes.** They answer "does this dataset
   exist, what variables does it have, what is its time range" without
   transferring data. That is how a `coverage`-style command should work.
-- **ERDDAP reports errors in the body, not always in the status code.** A
-  request for a non-existent variable can come back `404` with an HTML page, or
-  `200` with a plain-text `Error {...}` block. **A downloader that only checks
-  the HTTP status will happily write an HTML error page to `hotel.nc`.** The
-  notebook's `urlretrieve` does exactly this.
+- **ERDDAP errors are non-2xx, with the detail in a plain-text body.** Probed
+  live (ERDDAP 2.30.0 behind nginx/Tomcat):
+
+  | request | status | body |
+  |---|---|---|
+  | unknown variable | `400 text/plain` | `Error {code=400; message="Bad Request: Query error: Unrecognized variable=\"nosuchvar\"."}` |
+  | raw `&time>=…` (unencoded) | `400 text/html` | Tomcat "HTTP Status 400 – Bad Request" |
+  | unknown datasetID | `404 text/plain` | `Error {code=404; message="Not Found: Currently unknown datasetID=…"}` |
+  | **valid query, empty time window** | `404 text/plain` | `Error {code=404; message="Not Found: Your query produced no matching results. (time>=… is outside of the variable's actual_range: …)"}` |
+  | valid, encoded | `200 application/x-netcdf` | NetCDF, `Transfer-Encoding: chunked`, **no `Content-Length`** |
+
+  So `urlretrieve` *does* raise `HTTPError` on every error case above; the
+  magic-byte check in F1 is defensive, not the primary guard. Two consequences
+  that are not obvious: **an empty window is a 404, not a request bug** — the
+  fetcher must recognise "produced no matching results" and treat it as an
+  empty chunk (no retry, no failure; §8 F6/F8) — and **a truncated `.nc`
+  cannot be detected by length**, because there is none (§8 F3).
 - **Datasets are revised.** A `-raw-delayed` dataset gets reprocessed. The same
   URL a month later is not guaranteed to be the same bytes. This is the central
   reproducibility problem.
@@ -152,15 +171,20 @@ Let `hotel.file` accept an `https://` URL and have `load_hotel` fetch it.
 
 *For:* smallest diff; nothing new to learn.
 
-*Against:* it puts the network **inside the processing loop**. `process_file`
-runs per `.p` file, in a `ProcessPoolExecutor` — this would issue one fetch per
-worker per file. A run over 1200 files becomes 1200 requests, or needs a cache
-bolted on anyway. A dataset revised mid-run yields a run that used two different
-references. And the artifact that a result was computed from no longer exists
-anywhere.
+*Against:* not the fetch count — `load_hotel` runs **once, in the parent,
+before the pool** (`perturb/pipeline.py:3062-3070`) and the `HotelData` object
+is handed to every worker (`:3130`, `:3156`); `process_file` only calls
+`merge_hotel_into_pfile`. A URL here would be fetched once per run. The defect
+is the **skip-cache**: `_external_input_fingerprints` (`pipeline.py:352-366`)
+keys the hotel by path/size/mtime, and for a URL `Path(...).exists()` is False,
+so the fingerprint is the constant `{"missing": True}`. `_marker_is_current`
+would then keep *hitting* forever — a dataset revised on the server would never
+trigger reprocessing, and nothing would say so. And the artifact that a result
+was computed from no longer exists anywhere.
 
-**Rejected.** Not because fetching is hard, but because it destroys
-reproducibility and makes every downstream consumer inherit a network failure
+**Rejected.** Not because fetching is hard, but because the run's own
+change-detection is blind to the input, which destroys reproducibility in the
+quietest way possible, and every downstream consumer inherits a network failure
 mode.
 
 ### Option B — A fetch tool that writes the canonical artifact
@@ -177,7 +201,8 @@ network touches the pipeline exactly once, before it starts.
 
 ### Option C — B, plus a thin read-through cache
 
-As B, but the fetch is content-addressed by `(server, dataset, query)` and
+As B, but the fetch is content-addressed by `(server, dataset, query,
+date_modified)` — the last taken from a `.das` probe before each fetch — and
 cached under a directory, so re-running is free and an interactive user can
 point straight at a URL without thinking about it.
 
@@ -210,10 +235,24 @@ ERDDAP ──► erddap-hotel fetch ──► raw subset .nc  (cached, immutable
               perturb (hotel:) / fp07-cal (reference:) — unchanged
 ```
 
-`fetch` and `build` are split for the same reason `fp07-cal` splits `pairs`
+`fetch` and `build` are split for the same reason `fp07-cal` splits `coverage`
 from `fit`: the network step is slow and should happen once, while the QC step
 is the part that gets iterated on. A cached raw subset also means the QC rules
 can be revised and re-applied without re-downloading.
+
+The `build` half is **not** a third sanitiser. `dinkum/build.py` already
+exposes `resolve_time_bounds`, `time_validity`, `sanitize_time` (with its
+`_dedupe`) and `project_sensor` as pure numpy functions (`build.py:82-296`);
+they import standalone today with no change to #149. `erddap-hotel build`
+imports them. The only constraint that imposes is merge order: this lands
+after #149.
+
+**Output clock.** The served `time` axis is itself not unique — a 1-h sample
+carried repeated `00:02:24Z` stamps with NaN temperature — so deduplicating on
+`sci_ctd41cp_timestamp` alone does not yield a unique `time`, and vice versa.
+Exactly as `dinkum-hotel` does, each variable is attributed to its own clock
+(`time_sensor`) and projected with `project_sensor` onto a single declared
+`time.base`; for a CTD-only feed that base is `sci_ctd41cp_timestamp`.
 
 ### 5.2 Config
 
@@ -240,12 +279,16 @@ fetch:
   chunk_days: 7                 # split the window into requests this long.
                                 # Bounds each request, lets a partial failure
                                 # retry cheaply, and keeps cache entries small
-  constraints: []               # extra server-side clauses, verbatim
+  constraints: []               # extra server-side clauses, e.g. "distinct()";
+                                # percent-encoded by the builder, never by hand
+  format: "nc"                  # nc | ncCF -- what is downloaded; see 5.4
 
 qc:
   # See section 6. These are the rules the notebook applies, made explicit and
   # per-variable rather than blanket.
-  time_variable: "sci_ctd41cp_timestamp"   # the sort/dedupe key
+  time_base: "sci_ctd41cp_timestamp"       # the output clock, as dinkum's
+                                           # time.base; every variable is
+                                           # projected onto it
   drop_zero_as_fill: ["sci_ctd41cp_timestamp"]   # NOT every variable
   valid_range:
     sci_water_temp: [-5.0, 45.0]
@@ -271,26 +314,31 @@ a scale. That has bitten before.
 The output NetCDF must record enough to reconstruct itself:
 
 ```
-history:      2026-08-23T…Z: fetched <full URL> (3 chunks, 1.2M rows);
-              <the QC rules applied, with counts>
+history:      <ERDDAP's own lines, preserved verbatim: the upstream processing
+               chain, then "<UTC>: <full request URL>" per chunk>
+              2026-08-23T…Z: erddap-hotel build: <the QC rules applied, with counts>
 source:       ERDDAP tabledap <base_url>/<dataset_id>
-erddap_query: sci_ctd41cp_timestamp,sci_water_temp,…&time>=…&time<=…
-erddap_fetched_at: 2026-08-23T…Z
+erddap_date_modified: 2021-11-10T20:11:47Z   # from .das at fetch time
 erddap_das_checksum: <sha256 of the .das response at fetch time>
 ```
 
-The `.das` checksum is the cheap way to notice a dataset has been revised: it
-covers the metadata block, so a reprocessing that changes attributes or the
-time range shows up. `erddap-hotel verify` can re-fetch just the `.das` and
-tell you whether the dataset still matches what you built from — without
-downloading the data.
+ERDDAP already records the request URL and fetch time in `history` — verified
+on a served `.nc`, whose `history` ends `2026-08-23T19:…Z: https://…/tabledap/
+ru33-….nc?…` — so the builder does **not** duplicate that in its own
+attributes; it preserves the line and appends only QC provenance. The `.das`
+carries `date_modified` (here `"2021-11-10T20:11:47Z"`) for free; together with
+the `.das` sha256 it is the cheap way to notice a dataset has been revised, and
+both go into the cache key (§4 C). `erddap-hotel verify` re-fetches just the
+`.das` and tells you whether the dataset still matches what you built from —
+without downloading the data.
 
 ### 5.4 CLI
 
 ```bash
 erddap-hotel datasets -s <base_url>          # search/list dataset IDs
 erddap-hotel info -c erddap-hotel.yaml       # .das/.dds probe: variables,
-                                             # time range, row count estimate
+                                             # time range; row count from
+                                             # a .csv?time&<constraints>
 erddap-hotel fetch -c erddap-hotel.yaml      # populate the cache only
 erddap-hotel build -c erddap-hotel.yaml      # fetch (cached) + QC -> hotel.nc
 erddap-hotel verify -c erddap-hotel.yaml     # has the dataset changed?
@@ -298,6 +346,21 @@ erddap-hotel verify -c erddap-hotel.yaml     # has the dataset changed?
 
 `info` before `build` is the same discipline as `fp07-cal coverage` before
 `fit`: look at what you actually have before computing on it.
+
+Two details of the row count. `.dds` is a type schema (`Dataset { Sequence
+{…} }`) and `.das` has `actual_range` — neither carries a count, and
+`.ncHeader` returned a `500 unknown DataType == uint` on this dataset. The
+reliable count is `.csv?time&<constraints>`: lines minus the two header rows
+(a 1-day window: 88 730 lines, 88 728 rows, matching the `.nc` exactly).
+
+**`.nc` versus `.ncCF`.** `perturb/hotel.py::_load_netcdf` reads whatever
+`time_column` names, so either flavour works downstream. The default is `.nc`
+(flat `row` dimension, the shape the notebook and `load_hotel` both expect);
+the fetcher falls back to `.ncCF` for a chunk whose `.nc` fails to open
+(§8 F3). `&distinct()` as a server-side constraint removes exact-duplicate
+rows before download and is worth enabling by default; it halves the
+duplicate problem, it does not remove it (rows sharing a stamp but differing
+in a NaN are not duplicates to the server).
 
 ### 5.5 Dependencies
 
@@ -330,9 +393,9 @@ agree.
 | | **1.** notebook | **2.** `dinkum/build.py` | **3.** `fp07cal/series.py` |
 |---|---|---|---|
 | where | Rutgers, external | `sanitize_time`, `_dedupe`, `time_validity` | `sanitize_reference` |
-| bad values | `== 0.0` → NaN, **every variable** | per-sensor `valid_min`/`valid_max` | per-variable `valid_min`/`valid_max` |
+| bad values | `== 0.0` → NaN, **every variable** | per-sensor `valid_min`/`valid_max` | non-finite, then per-variable `valid_min`/`valid_max` |
 | bad times | drop NaN only | finite ∧ within `time.min_value`…`max_value` | finite ∧ `100 ≤ t ≤ 4e9` |
-| duplicates | keep **first** | `mean` \| `first` \| `last`, configurable | **mean**, not configurable |
+| duplicates | keep **first** | `mean` \| `first` \| `last`, one global `time.dedupe` | **mean**, not configurable |
 | ordering | stable sort | sort | stable sort |
 | reports what it dropped | yes, into `history` | yes, a stats tally | **no** |
 
@@ -351,11 +414,13 @@ shape** — per-variable ranges, configurable dedupe, and a rejection tally —
 because it is the most complete of the three and already has a config schema
 that expresses it.
 
-Longer term, three implementations is two too many. The natural convergence is
-a single `sanitize_table(ds, rules) -> (ds, stats)` that all of
-`dinkum-hotel`, `erddap-hotel` and `fp07cal` call, with `sanitize_reference`
-becoming a thin caller. Deliberately **not** proposed as part of this work: it
-is a refactor across #149 before it has merged.
+Concretely: `erddap-hotel` **imports** rule set 2 rather than copying its
+shape (§5.1) — `time_validity` for the clock, `sanitize_time` for the
+sort/dedupe/tally, `project_sensor` for the output base — and adds only what
+ERDDAP needs on top (`drop_zero_as_fill`, `_FillValue` masking). That keeps the
+count at three implementations rather than four. Longer term, three is still
+two too many; the natural convergence is `fp07cal.sanitize_reference` becoming
+a thin caller of the same functions. Not proposed here.
 
 **The `0.0`-as-fill rule is the dangerous one.** Applied to
 `sci_ctd41cp_timestamp` it is exactly right — `0.0` is the never-set sentinel.
@@ -372,10 +437,16 @@ CTD reported twice within a timestamp's resolution, the mean is the better
 estimate and dropping is a silent bias toward whichever row sorted first.
 
 **`mask_and_scale=False` deserves a note.** The notebook opens undecoded so QC
-sees stored values. That is right, but it also means a declared `_FillValue`
-(say `-9999`) is *not* masked — so the sanitiser must apply `_FillValue` itself
-rather than assuming xarray did. This is easy to miss precisely because the
-notebook's dataset uses `0.0` instead.
+sees stored values. That is right, but it also means a declared `_FillValue` is
+*not* masked — so the sanitiser must apply `_FillValue` itself rather than
+assuming xarray did. On this dataset that is not hypothetical: the `.das`
+declares `_FillValue 9.96921e+36` on every float variable, while
+`sci_ctd41cp_timestamp` has **no** `_FillValue` attribute at all, and the two
+conventions coexist in the same file. In a 1-day `.nc`, `sci_water_temp` has
+49 147 fill-stored rows and 8 literal zeros; `sci_ctd41cp_timestamp` has the
+same 49 147 NaN and 8 zeros. So the builder masks `_FillValue` where declared
+**and** applies `drop_zero_as_fill` where configured; neither subsumes the
+other.
 
 **Interaction with #150.** Once `hotel.max_gap` is required, a sparsely-sampled
 ERDDAP feed will produce NaN over its gaps rather than a fabricated ramp —
@@ -427,17 +498,18 @@ Ordered by how quietly they corrupt a result.
 
 | # | failure | why it is quiet | mitigation |
 |---|---|---|---|
-| F1 | ERDDAP returns an HTML/text error with a 200 | `urlretrieve` writes it to `hotel.nc`; the failure surfaces later as "not a valid NetCDF", or worse, not at all | check `Content-Type`, sniff the magic bytes (`CDF\x01` / `\x89HDF`), and refuse to cache a non-NetCDF response |
+| F1 | a non-NetCDF body lands in the cache | **not** the common case — every probed error was non-2xx and `urlretrieve` raises `HTTPError` (§3) — but a proxy/captive-portal page, or a future server, could answer 200 | catch `HTTPError` and surface ERDDAP's `Error {…}` message; then sniff the magic bytes (`CDF\x01` / `\x89HDF`) and **open with netCDF4** before caching; refuse anything that fails |
 | F2 | dataset revised between runs | same URL, different data, no error | `.das` checksum recorded at build; `verify` re-checks it |
-| F3 | partial/truncated response | a short file parses fine and is simply missing the tail | compare row count against the `.dds`/`info` estimate; record both |
+| F3 | partial/truncated response | `.nc` is served chunked with **no `Content-Length`**, so a TCP-level cut is invisible by length; one unreproduced probe saw a 200 `CDF\x01` body cut mid-header | open with netCDF4 after download; compare `row` against the line count of `.csv?time&<same constraints>`; on mismatch or open failure re-fetch, then fall back to `.ncCF` |
 | F4 | silent time-zone or epoch mismatch | ERDDAP `time` is seconds since 1970 UTC, but `sci_ctd41cp_timestamp` is a *separate* variable with its own units | never assume; read `units` from the response and convert explicitly |
 | F5 | requesting the whole dataset | works, slowly, until it does not | `chunk_days` and a required `time_min` for large datasets |
-| F6 | a variable is absent from the dataset | ERDDAP 404s the whole request | `info` first; name the missing variable |
+| F6 | a variable is absent from the dataset | ERDDAP `400`s the whole request (`Unrecognized variable=…`) | `info` first; name the missing variable |
+| F6b | a chunk's time window holds no rows | ERDDAP answers **`404` "Your query produced no matching results"** — the same status as a wrong dataset ID | match that message; treat as an empty chunk, log it, **do not retry and do not fail** — a gap in a deployment is data, not a bug |
 | F7 | server down mid-run | a batch job dies hours in | fetch is a separate step; the cache means `build` never needs the network |
-| F8 | rate limiting / throttling | intermittent, looks like a network error | bounded retries with backoff, on connection errors and 5xx **only** — never retry a 4xx, which is a request bug |
+| F8 | rate limiting / throttling | intermittent, looks like a network error | bounded retries with backoff, on connection errors, `429` and 5xx **only** — never retry a `400`/`404` (a request bug, or F6b's empty window) |
 
-F1 is the one I would fix first. It is the difference between "the run failed"
-and "the run succeeded against an HTML page".
+F3 is the one I would fix first: it is the one where the run succeeds and the
+file is simply shorter than it should be.
 
 ---
 
@@ -445,13 +517,18 @@ and "the run succeeded against an HTML page".
 
 We have no ERDDAP to test against, and the design should not need one.
 
-1. **Recorded fixtures.** Capture one real `.das`, one `.dds` and one small
-   `.nc` response from Rutgers' server *once*, commit them as test fixtures, and
-   serve them from a `http.server` on localhost in tests. This exercises the
-   real URL construction and the real parser against real bytes.
-2. **A fake server for the failure modes.** A tiny handler that can return: an
-   HTML error with a 200, a truncated body, a 429, a 500, a slow response. Each
-   of F1–F8 becomes a test.
+1. **Recorded fixtures.** Already captured from Rutgers' server on
+   2026-08-23: `ru33-20211001T1841-trajectory-raw-delayed` `.das` (38 kB), a
+   1-day `.nc` (2.5 MB, 88 728 rows) with its matching `.csv?time&…`, and the
+   four error bodies from the §3 table. Commit the `.das`, the error bodies and
+   a 1-h `.csv`; the 1-day `.nc` is too large for the tree and lives with the
+   opt-in live test. Serve them from a `http.server` on localhost in tests.
+   This exercises the real URL construction and the real parser against real
+   bytes.
+2. **A fake server for the failure modes.** A tiny handler that can return: a
+   `404 Error{…no matching results}`, a `400 Unrecognized variable`, a
+   chunked body cut mid-header, a 429, a 500, a slow response. Each of F1–F8
+   becomes a test.
 3. **Contract tests on the QC layer**, which needs no network at all — it takes
    an `xr.Dataset` and returns one. This is where most of the logic lives and
    all of it is testable today.
@@ -474,13 +551,14 @@ neither needs a server. Getting a test server is not on the critical path.
    the science/CTD feed matters now that MR data is out of scope, but the
    dataset naming convention decides how much of the config can be shared
    between deployments.
-3. **Should `erddap-hotel` and `dinkum-hotel` converge?** They differ only in
-   where the rows come from; the projection/QC/write half is nearly identical.
-   A shared `hotel_builder` core with two front ends is tempting but is a
-   refactor of #149's code before it has merged. Revisit after.
-4. **Cache invalidation policy.** Never (content-addressed, immutable), on a
-   TTL, or on `.das` change? Immutable plus an explicit `verify` is the
-   simplest thing that is honest.
+3. **Should `erddap-hotel` and `dinkum-hotel` converge further?** They share
+   the projection/QC functions from day one (§5.1). What they do not share is
+   the config schema and the NetCDF writer; a `hotel_builder` core with two
+   front ends is the natural next step once both have merged.
+4. **Cache invalidation policy.** Decided: the key includes `date_modified`
+   (and the `.das` sha256) from a probe before each fetch, so a server-side
+   reprocess misses the cache by construction. The cost is one small `.das`
+   request per `build`; `--offline` skips the probe and uses the last key.
 5. **Credentials.** Rutgers' server is public. If a future one is not, no token
    should ever live in a config file that gets committed — environment variable
    or a keychain, and never echoed into `history`.
@@ -493,16 +571,16 @@ Attacks on this design, and what changed.
 
 | attack | outcome |
 |---|---|
-| "Just let `hotel.file` take a URL — it is four lines." | **Rejected.** Puts the network inside `process_file`, which runs per file in a process pool: 1200 files, 1200 fetches, and a dataset revised mid-run gives one result computed against two references. Forced Option B. |
+| "Just let `hotel.file` take a URL — it is four lines." | **Rejected, for a different reason than first written.** The fetch would run once (`load_hotel` is called in the parent, `pipeline.py:3062`), not per file. The defect is that `_external_input_fingerprints` (`:352-366`) returns the constant `{"missing": True}` for a non-path, so the skip-cache hits forever and a revised dataset never reprocesses. Forced Option B. |
 | "Then cache it and the URL approach is fine." | **Partly accepted.** The cache is real and is in the design, but it does not fix reproducibility on its own — a cache can be cleared, and it does not record *what* was fetched. The artifact plus its `history` does. |
-| "The notebook works; just port it." | **Mostly accepted, with three changes.** Its blanket `0.0 → NaN` would destroy a genuine 0 °C sample; its `urlretrieve` will write an HTML error page to a `.nc` without noticing; and it fetches the entire dataset with no time constraint. |
+| "The notebook works; just port it." | **Mostly accepted, with three changes.** Its blanket `0.0 → NaN` would destroy a genuine 0 °C sample; it ignores the declared `_FillValue` that coexists with the zeros; and it fetches the entire dataset with no time constraint. |
 | "Dedupe by keeping the first, like the notebook." | **Rejected as the default.** The other two sanitisers in the tree use `mean`, and keeping the first is a silent bias toward sort order when two rows share a timestamp. Kept as an option. |
-| "Check the HTTP status and you are safe." | **Rejected.** ERDDAP reports errors in the body, sometimes with a 200. Content-type plus magic-byte sniffing is the check that actually works. |
-| "Retry on failure." | **Qualified.** Retry connection errors and 5xx; never retry a 4xx — a malformed variable list is a bug, and retrying it three times just makes it slower to diagnose. |
+| "Check the HTTP status and you are safe." | **Mostly accepted.** Every probed ERDDAP error was non-2xx and `urlretrieve` raises on it (§3). The status is the primary guard; magic bytes plus a netCDF4 open stay as defence against proxies and truncation, which the status cannot see (no `Content-Length`). |
+| "Retry on failure." | **Qualified.** Retry connection errors, 429 and 5xx; never retry a 400/404 — a malformed variable list is a bug, and an empty time window is a 404 that is not an error at all (F6b). |
 | "We cannot design this without a server to test against." | **Rejected.** The QC layer and the query builder are the parts most likely to be wrong and neither needs a network. Recorded fixtures plus a fake server cover the rest. |
 | "Fetch the MicroRider data over ERDDAP too." | **Considered and dropped** (§7). ERDDAP serves tables, not `.p` binaries, so it means already-converted data — and converted values cannot be recalibrated at all: `L = ln(R_T/R_0)` needs raw counts and the bridge constants. Recalibration and epsilon both become impossible, and 512 Hz x 8 channels x 72 days (~2.5e10 samples) is not a tabledap request regardless. |
 | "Use erddapy — it is the standard client." | **Rejected as a required dependency.** Neither it nor `requests` is installed, the fetch is six lines of stdlib `urllib`, and the three things urllib lacks (timeout, retry, pooling) are either trivial to add or irrelevant at tens-of-requests scale. Optional extra only. |
-| "Make `erddap-hotel` share code with `dinkum-hotel` now." | **Deferred.** They genuinely overlap, but #149 has not merged and refactoring across an open PR is how you get a painful rebase. Noted as a follow-up. |
+| "Make `erddap-hotel` share code with `dinkum-hotel` now." | **Accepted.** The overlap is importable today: `resolve_time_bounds`, `time_validity`, `sanitize_time`, `project_sensor` are pure numpy functions in `dinkum/build.py` and need no change to #149. The only constraint is merge order. Sharing the config schema and writer is the follow-up. |
 
 ---
 
@@ -510,14 +588,21 @@ Attacks on this design, and what changed.
 
 In order, each independently useful:
 
-1. **The QC layer** — takes an `xr.Dataset`, applies `drop_zero_as_fill` /
-   `valid_range` / sort / dedupe, returns a sanitised dataset with a `history`
-   entry. No network. Testable today, against the notebook's own output as a
-   golden case.
-2. **The query builder** — config → URL list, with `chunk_days`. Pure string
-   construction, testable by comparison.
-3. **The fetcher** — `urllib`, with the F1 response validation, retries, and the
-   content-addressed cache.
+1. **The QC layer** — takes an `xr.Dataset`, masks `_FillValue` and
+   `drop_zero_as_fill`, then calls `dinkum.build.time_validity` /
+   `sanitize_time` / `project_sensor` onto `time_base`, and returns a sanitised
+   dataset with a `history` entry. No network. Testable today against the
+   1-day fixture, with the notebook's own output as a golden case.
+2. **The query builder** — config → URL list, with `chunk_days`. Encoding rule:
+   the variable list and every constraint are passed through
+   `urllib.parse.quote(…, safe="")` — the notebook already does this for the
+   variables — so `>=` becomes `%3E%3D`, `,` becomes `%2C`, and `:` in the
+   timestamps becomes `%3A`; only the `?` and the joining `&` are literal. Pure
+   string construction, testable by comparison.
+3. **The fetcher** — `urllib`, with `HTTPError` mapped to ERDDAP's message,
+   the F6b empty-window case, the F1/F3 validation (magic bytes, netCDF4 open,
+   row count against `.csv?time`), retries, and the
+   `(server, dataset, query, date_modified)` cache.
 4. **`info` / `verify`** on `.das`/`.dds`.
 5. **`build`** wiring the above together, plus the example config and docs.
 
