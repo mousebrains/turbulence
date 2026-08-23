@@ -32,10 +32,10 @@ against an unpatched one.
 The two probes land ~1.1 K apart in `t_0`, as expected for different beads
 sharing one generic number.
 
-> **`beta_2` is present in the factory config**, so an order-1 emission would
-> leave a live quadratic term fighting new linear coefficients (plan A6). These
-> are order-2 fits, which sidesteps it — and the 24 °C range here easily
-> supports order 2, unlike the narrow-range case the plan defaults for.
+> **`beta_2` is present in the nominal config**, so an order-1 emission would
+> leave a live quadratic term fighting new linear coefficients (plan A6).
+> `fp07-cal patch` neutralises such a term with `1e30` rather than 0 — see the
+> runbook. Here order 2 is selected anyway; see below.
 
 ## Is `beta_2` worth fitting?
 
