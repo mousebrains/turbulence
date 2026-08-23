@@ -155,3 +155,54 @@ def test_jac_branch_is_unchanged():
     out = _lowpass_filter(fp07, "JAC_T", fs, np.full(n, 0.5), [(0, n - 1)])
     assert out.shape == fp07.shape
     assert np.var(out) < np.var(fp07)
+
+
+# --- review finding on PR #151 ---------------------------------------------
+def test_a_rejected_profile_reaches_neither_the_lag_nor_the_fit():
+    """"Contributes nothing" has to mean nothing.
+
+    min_corr used to exclude a profile only from the median lag; the
+    regression still iterated the original `profiles` list, so one accepted
+    profile laundered every rejected one into the coefficients and the rail
+    fraction.
+    """
+    import odas_tpw.perturb.fp07_cal as F
+
+    n = 400
+    rng = np.random.default_rng(0)
+    base = 2.0 * np.sin(2.0 * np.pi * np.arange(n) / 128.0)
+    # First profile: the probe tracks the reference. Second: the reference is a
+    # smooth fabricated ramp, exactly what interpolating across a gap produces.
+    T_ref = np.empty(n)
+    T_ref[:200] = 10.0 + base[:200] + rng.standard_normal(200) * 0.005
+    T_ref[200:] = 19.0 + np.linspace(0.0, 0.25, n - 200)
+    raw = 5000.0 - 800.0 * base + rng.standard_normal(n) * 2
+    pf = _PF(
+        channels={"T1": np.zeros(n), "JAC_T": T_ref, "P": np.linspace(0, 50, n)},
+        channels_raw={"T1": raw},
+        config={"channels": [dict(_CFG)]},
+        channel_info={"T1": {"type": "therm"}, "JAC_T": {"type": "jac_t"},
+                      "P": {"type": "pres"}},
+    )
+
+    seen: dict = {}
+    original = F._polyfit_centered
+
+    def spy(L, target, order):
+        seen["n"] = L.size
+        return original(L, target, order)
+
+    F._polyfit_centered = spy
+    try:
+        # No warning here: one profile IS accepted, so the channel is fitted.
+        out = F.fp07_calibrate(pf, [(5, 195), (205, 395)], order=1)
+    finally:
+        F._polyfit_centered = original
+
+    info = out["info"]["T1"]
+    assert info["n_profiles"] == 1
+    assert info["n_profiles_rejected"] == 1
+    # The accepted profile is 191 samples; both together would be 382.
+    assert seen["n"] <= 191, (
+        f"the regression saw {seen['n']} samples -- the rejected profile leaked in"
+    )

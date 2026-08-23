@@ -255,8 +255,9 @@ def fp07_calibrate(
         If True, only search negative lags (FP07 leads reference).
     min_corr : float
         Minimum |Pearson r| for a profile's lag to count. A profile below this
-        contributes nothing; a channel with none above it is left on the
-        factory coefficients rather than fitted against noise.
+        contributes nothing --- neither to the median lag nor to the
+        coefficient fit; a channel with none above it is left on the factory
+        coefficients rather than fitted against noise.
 
     Returns
     -------
@@ -330,9 +331,14 @@ def fp07_calibrate(
         )
         L_fit_src, clipped = log_r(fp07_lp, bridge)
 
-        # Per-profile lag computation
+        # Per-profile lag computation. The profiles that pass are kept, because
+        # they are also the only ones the regression may use: a profile whose
+        # reference does not track the probe is not evidence about the
+        # calibration, and letting it into the fit while excluding it from the
+        # median lag would be the worst of both.
         lags_list = []
         corrs_list = []
+        accepted: list[tuple[int, int]] = []
         n_rejected = 0
         for s, e in profiles:
             if e - s < 10:
@@ -355,6 +361,7 @@ def fp07_calibrate(
                 continue
             lags_list.append(lag)
             corrs_list.append(corr)
+            accepted.append((s, e))
 
         if len(lags_list) < MIN_LAG_PROFILES:
             warnings.warn(
@@ -375,11 +382,15 @@ def fp07_calibrate(
         # tail of the last profile (ODAS trims instead).
         T_ref_shifted = shift_edge_hold(T_ref, i_shift)
 
-        # Collect profile data for Steinhart-Hart fit
+        # Collect profile data for the Steinhart-Hart fit -- from the ACCEPTED
+        # profiles only. Iterating `profiles` here would let every profile the
+        # correlation gate just rejected bias the coefficients (and the rail
+        # fraction) anyway, so a single good profile would launder all the bad
+        # ones. "Contributes nothing" has to mean nothing.
         all_L = []
         all_T_ref = []
         all_clip = []
-        for s, e in profiles:
+        for s, e in accepted:
             all_L.append(L_fit_src[s : e + 1])
             all_T_ref.append(T_ref_shifted[s : e + 1])
             all_clip.append(clipped[s : e + 1])
