@@ -1648,8 +1648,18 @@ class TestProcessFile:
         output_dirs = {"profiles": tmp_path / "profiles", "diss": tmp_path / "diss"}
         hotel_data = MagicMock()
 
-        process_file(tmp_path / "test.p", config, None, output_dirs, hotel_data=hotel_data)
+        process_file(
+            tmp_path / "test.p", config, None, output_dirs,
+            hotel_data=hotel_data, hotel_cfg={"max_gap": 30.0},
+        )
         mock_hotel.assert_called_once()
+        # The merge records the resolved gap limit on channel_info so the
+        # per-profile writer can carry it downstream as an attr.
+        infos = {
+            c.args[0]: c.args[1]
+            for c in mock_pf.channel_info.__setitem__.call_args_list
+        }
+        assert infos["hotel_T"]["hotel_max_gap"] == 30.0
 
     @patch("odas_tpw.perturb.ctd.ctd_bin_file")
     @patch("odas_tpw.rsi.profile.get_profiles", return_value=[])
@@ -2262,7 +2272,10 @@ class TestHotelSpeedInjection:
             channels={"m_speed": np.full(50, 0.35)},
             time_is_relative=True,
         )
-        hotel_cfg = {"channels": {"m_speed": "speed"}}
+        # max_gap is required; "unlimited" keeps this test on the pre-gating
+        # semantics it was written against (it is about speed provenance, not
+        # about gaps).
+        hotel_cfg = {"channels": {"m_speed": "speed"}, "max_gap": "unlimited"}
         (tmp_path / "profiles").mkdir(parents=True, exist_ok=True)
         output_dirs = {"profiles": tmp_path / "profiles"}
 
@@ -3410,3 +3423,143 @@ class TestPipelineExitStatus:
         out = run_pipeline(config, p_files=[])
         assert isinstance(out, PipelineResult)
         assert out.ok
+
+
+class TestGapAwareRefill:
+    """The interp-refill must not re-fabricate a hole hotel.max_gap NaN-ed.
+
+    _fill_nonfinite_by_interp works in index space; given the sample times and
+    the merged channel's resolved max_gap it now leaves NaN any sample whose
+    bracketing finite neighbours are farther apart in time than the gate (and
+    edge samples farther than the gate from the nearest finite one).
+    """
+
+    def test_fill_ungated_is_unchanged(self):
+        from odas_tpw.perturb.pipeline import _fill_nonfinite_by_interp
+
+        arr = np.array([1.0, np.nan, 3.0, np.nan, np.nan])
+        out, n_interp, n_held = _fill_nonfinite_by_interp(arr)
+        np.testing.assert_allclose(out, [1.0, 2.0, 3.0, 3.0, 3.0])
+        assert (n_interp, n_held) == (1, 2)
+
+    def test_fill_preserves_wide_gap(self):
+        from odas_tpw.perturb.pipeline import _fill_nonfinite_by_interp
+
+        # Samples at 1 Hz except a 100 s hole between index 2 and 3.
+        t = np.array([0.0, 1.0, 2.0, 102.0, 103.0, 104.0])
+        arr = np.array([1.0, np.nan, 3.0, np.nan, 5.0, 6.0])
+        out, n_interp, n_held = _fill_nonfinite_by_interp(arr, t=t, max_gap=30.0)
+        assert np.isfinite(out[1])       # 1 s gap: filled
+        assert np.isnan(out[3])          # 100 s gap: stays NaN
+        assert (n_interp, n_held) == (1, 0)
+
+    def test_fill_preserves_far_edges(self):
+        from odas_tpw.perturb.pipeline import _fill_nonfinite_by_interp
+
+        t = np.array([0.0, 100.0, 101.0, 102.0, 202.0])
+        arr = np.array([np.nan, 2.0, np.nan, 4.0, np.nan])
+        out, n_interp, n_held = _fill_nonfinite_by_interp(arr, t=t, max_gap=30.0)
+        assert np.isnan(out[0]) and np.isnan(out[4])  # 100 s from nearest finite
+        assert np.isfinite(out[2])
+        assert (n_interp, n_held) == (1, 0)
+
+    def test_fill_near_edges_still_held(self):
+        from odas_tpw.perturb.pipeline import _fill_nonfinite_by_interp
+
+        t = np.array([0.0, 1.0, 2.0, 3.0])
+        arr = np.array([np.nan, 2.0, 3.0, np.nan])
+        out, n_interp, n_held = _fill_nonfinite_by_interp(arr, t=t, max_gap=30.0)
+        np.testing.assert_allclose(out, [2.0, 2.0, 3.0, 3.0])
+        assert (n_interp, n_held) == (0, 2)
+
+    def test_scrub_salinity_gated_gap_becomes_35(self, caplog):
+        t = np.arange(10.0)
+        t[5:] += 200.0  # 200 s hole between index 4 and 5
+        sal = np.linspace(32.0, 33.0, 10)
+        sal[4:7] = np.nan
+        with caplog.at_level(logging.WARNING):
+            out = _scrub_salinity(sal, "epsilon", "x", t=t, max_gap=30.0)
+        # Samples 4 and 6 are within 30 s of a finite neighbour pair? No:
+        # 4 brackets (3, 7) spanning >200 s; 5 and 6 likewise. All three
+        # fall back to the documented 35-PSU constant instead of a ramp.
+        np.testing.assert_allclose(out[4:7], 35.0)
+        assert np.isfinite(out).all()
+        assert "hotel gap wider than max_gap" in caplog.text
+
+    def test_profile_hotel_gap_reads_attr(self, tmp_path):
+        import xarray as xr
+
+        from odas_tpw.perturb.pipeline import _profile_hotel_gap
+
+        t = np.arange(5.0)
+        ds = xr.Dataset({
+            "t_slow": ("time_slow", t),
+            "salinity": ("time_slow", np.linspace(32, 33, 5)),
+        })
+        ds["salinity"].attrs["hotel_max_gap"] = 30.0
+        path = tmp_path / "prof.nc"
+        ds.to_netcdf(path)
+        got_t, got_gap = _profile_hotel_gap(path, "salinity")
+        np.testing.assert_allclose(got_t, t)
+        assert got_gap == 30.0
+        # Absent attr (max_gap: "unlimited") -> ungated
+        ds2 = xr.Dataset({
+            "t_slow": ("time_slow", t),
+            "salinity": ("time_slow", np.linspace(32, 33, 5)),
+        })
+        path2 = tmp_path / "prof2.nc"
+        ds2.to_netcdf(path2)
+        _, gap2 = _profile_hotel_gap(path2, "salinity")
+        assert gap2 is None
+        assert _profile_hotel_gap(path2, "nope") == (None, None)
+
+    def test_resolve_salinity_hotel_honours_gate_end_to_end(self, tmp_path, caplog):
+        """salinity:'hotel' + a gated hole -> 35 PSU there, not a ramp."""
+        import xarray as xr
+
+        t = np.arange(10.0)
+        t[5:] += 200.0
+        sal = np.linspace(32.0, 33.0, 10)
+        sal[4:7] = np.nan
+        ds = xr.Dataset({
+            "t_slow": ("time_slow", t),
+            "salinity": ("time_slow", sal),
+        })
+        ds["salinity"].attrs["hotel_max_gap"] = 30.0
+        path = tmp_path / "prof.nc"
+        ds.to_netcdf(path)
+        with caplog.at_level(logging.WARNING):
+            out = _resolve_salinity_cfg("hotel", path, "JAC_T", "JAC_C", "epsilon")
+        np.testing.assert_allclose(out[4:7], 35.0)
+        np.testing.assert_allclose(out[:4], sal[:4])
+        np.testing.assert_allclose(out[7:], sal[7:])
+
+    def test_slow_stratification_does_not_refabricate_gated_gap(self):
+        """The per-cast refill honours channel_info['hotel_max_gap']."""
+        from odas_tpw.perturb.pipeline import _compute_slow_stratification
+
+        n = 400
+        P = np.linspace(1.0, 50.0, n)
+        T = 20.0 - 0.1 * P
+        S = np.linspace(32.0, 34.0, n)
+        S[150:250] = np.nan  # the merge NaN-ed a wide hole
+        t_slow = np.arange(n) / 64.0
+        t_slow[200:] += 500.0  # the hole spans a 500 s dropout
+
+        class _StubPF:
+            pass
+
+        pf = _StubPF()
+        pf.channels = {"P": P, "JAC_T": T, "salinity": S}
+        pf.is_fast = lambda name: False
+        pf.t_slow = t_slow
+        pf.channel_info = {"salinity": {"hotel_max_gap": 30.0}}
+
+        N2, _dTdz, _sal_note = _compute_slow_stratification(
+            pf, [(0, n - 1)], "JAC_T", "JAC_C", 2.0, sal_source="hotel"
+        )
+        assert N2 is not None
+        # Without the gate the refill ruled a ramp across 150:250 and the
+        # windows there produced salinity-contaminated N2. Now those samples
+        # stay NaN going in; the products around the hole still exist.
+        assert np.isfinite(N2).any()

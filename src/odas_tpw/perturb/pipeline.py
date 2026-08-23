@@ -821,6 +821,8 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
     # finite hotel sample contributed).
     sal_arr = None
     hotel_raw = None
+    hotel_t = None
+    hotel_max_gap = None
     hv = None
     sal_note = None
     hotel_reason = None  # why a requested hotel channel was not used
@@ -858,6 +860,12 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
                 )
             else:
                 hotel_raw = raw  # scrubbed per cast in the loop below
+                # Honour the merge's gap gate when refilling (see
+                # _fill_nonfinite_by_interp); None = unlimited.
+                hotel_max_gap = pf.channel_info.get(hv, {}).get("hotel_max_gap")
+                t_cand = getattr(pf, "t_slow", None)
+                if t_cand is not None and len(t_cand) == n:
+                    hotel_t = np.asarray(t_cand, dtype=np.float64)
 
     # Conductivity fallback — gate the DERIVED salinity, not the channel's
     # mere presence: SP_from_C returns NaN samplewise on bad conductivity, so
@@ -921,7 +929,11 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
             # collapsed N2) in the samples adjacent to the boundary. A cast
             # slice with <2 finite samples falls back to conductivity/35.
             n_in_cast += e + 1 - s
-            filled = _fill_nonfinite_by_interp(hotel_raw[sl])
+            filled = _fill_nonfinite_by_interp(
+                hotel_raw[sl],
+                t=None if hotel_t is None else hotel_t[sl],
+                max_gap=hotel_max_gap,
+            )
             if filled is None:
                 n_fallback_casts += 1
                 if SP is not None:
@@ -1045,7 +1057,12 @@ def _window_stratification_for_profile(
                 hotel_reason = f"hotel channel {hv!r} length mismatch"
             else:
                 raw = prof[hv].values.astype(np.float64)
-                filled = _fill_nonfinite_by_interp(raw)
+                # Honour the merge's gap gate when refilling (hotel_max_gap
+                # attr written by extract_profiles; absent = unlimited).
+                _mg = prof[hv].attrs.get("hotel_max_gap")
+                filled = _fill_nonfinite_by_interp(
+                    raw, t=t_slow, max_gap=float(_mg) if _mg is not None else None
+                )
                 if filled is None:
                     n_finite = int(np.isfinite(raw).sum())
                     hotel_reason = (
@@ -1454,7 +1471,7 @@ def _profile_channel_salinity(prof_path, var_name: str):
         return arr
 
 
-def _fill_nonfinite_by_interp(arr):
+def _fill_nonfinite_by_interp(arr, t=None, max_gap=None):
     """Interp-fill non-finite samples over the finite ones; hold at the edges.
 
     Interior gaps are bridged by linear interpolation over the finite samples;
@@ -1463,12 +1480,21 @@ def _fill_nonfinite_by_interp(arr):
     median) fill: N2 is first-order in dS/dz, so a constant fill would insert
     a spurious salinity step at every fill boundary.
 
-    Returns ``(filled, n_interp, n_held)`` — the filled array (the *same*
+    ``t`` (sample times, same length as *arr*) and ``max_gap`` [s] make the
+    fill honour the hotel merge's gate: a non-finite sample whose bracketing
+    finite neighbours are farther apart in time than *max_gap* --- or an edge
+    sample farther than *max_gap* from the nearest finite one --- stays NaN
+    instead of being ruled across. Without this, the refill would fabricate in
+    index space exactly the ramp ``hotel.max_gap`` just refused to fabricate
+    in time. Both default to ``None`` (ungated) for callers with no gate.
+
+    Returns ``(filled, n_interp, n_held)`` --- the filled array (the *same*
     object when nothing needed filling) and the interior-interpolated /
-    edge-held sample counts — or ``None`` when fewer than two finite samples
-    exist: there is nothing to interpolate between, and a single sample would
-    constant-fill the whole array (the hotel merge's ``_interp_one`` uses the
-    same <2-finite convention).
+    edge-held sample counts (samples kept NaN by the gate are in neither) ---
+    or ``None`` when fewer than two finite samples exist: there is nothing to
+    interpolate between, and a single sample would constant-fill the whole
+    array (the hotel merge's ``_interp_one`` uses the same <2-finite
+    convention).
     """
     import numpy as np
 
@@ -1481,12 +1507,67 @@ def _fill_nonfinite_by_interp(arr):
     bad = ~finite
     first = int(np.argmax(finite))
     last = int(arr.size - 1 - np.argmax(finite[::-1]))
-    n_held = int(bad[:first].sum() + bad[last + 1 :].sum())
-    n_interp = int(bad.sum()) - n_held
     idx = np.arange(arr.size, dtype=np.float64)
     out = arr.copy()
     out[bad] = np.interp(idx[bad], idx[finite], arr[finite])
+
+    gated = (
+        t is not None
+        and max_gap is not None
+        and np.isfinite(max_gap)
+        and max_gap > 0
+    )
+    if gated:
+        t = np.asarray(t, dtype=np.float64)
+        if t.shape != arr.shape:
+            raise ValueError(
+                f"_fill_nonfinite_by_interp: t has shape {t.shape}, arr {arr.shape}"
+            )
+        fin_idx = np.flatnonzero(finite)
+        t_fin = t[fin_idx]
+        # For each bad sample: the finite neighbours on either side in index
+        # order (edge samples have only one), and the time span between them.
+        pos = np.searchsorted(fin_idx, np.flatnonzero(bad))  # insertion point
+        lo = np.clip(pos - 1, 0, fin_idx.size - 1)
+        hi = np.clip(pos, 0, fin_idx.size - 1)
+        t_bad = t[bad]
+        interior = (pos > 0) & (pos < fin_idx.size)
+        span = np.where(
+            interior,
+            t_fin[hi] - t_fin[lo],
+            np.minimum(np.abs(t_bad - t_fin[lo]), np.abs(t_bad - t_fin[hi])),
+        )
+        keep_nan = np.abs(span) > max_gap
+        if np.any(keep_nan):
+            bad_idx = np.flatnonzero(bad)[keep_nan]
+            out[bad_idx] = np.nan
+            bad = bad.copy()
+            bad[bad_idx] = False
+    n_held = int(bad[:first].sum() + bad[last + 1 :].sum())
+    n_interp = int(bad.sum()) - n_held
     return out, n_interp, n_held
+
+
+def _profile_hotel_gap(prof_path, var_name: str):
+    """``(t, max_gap)`` for gap-aware refilling of a merged hotel channel.
+
+    *t* is the profile's time vector on the channel's grid (epoch seconds) and
+    *max_gap* the ``hotel_max_gap`` attr the per-profile writer copied from
+    ``hotel.max_gap`` --- ``None`` when the channel is absent, on neither grid,
+    or was merged with ``max_gap: "unlimited"``.
+    """
+    import xarray as xr
+
+    with xr.open_dataset(prof_path, decode_times=False) as ds:
+        if var_name not in ds:
+            return None, None
+        n = ds[var_name].shape[0] if ds[var_name].ndim else 0
+        max_gap = ds[var_name].attrs.get("hotel_max_gap")
+        max_gap = float(max_gap) if max_gap is not None else None
+        for tname in ("t_slow", "t_fast"):
+            if tname in ds and ds[tname].size == n:
+                return _time_epoch_seconds(ds[tname]), max_gap
+        return None, max_gap
 
 
 def _fill_note_annotation(n_interp: int, n_held: int, n_total: int, per_cast: bool = False) -> str:
@@ -1510,28 +1591,34 @@ def _fill_note_annotation(n_interp: int, n_held: int, n_total: int, per_cast: bo
     return " (" + prefix + ", ".join(bits) + tail + ")"
 
 
-def _scrub_salinity(sal, label: str, src: str):
+def _scrub_salinity(sal, label: str, src: str, t=None, max_gap=None):
     """Fill non-finite viscosity salinity so epsilon/chi don't silently NaN out.
 
     Serves :func:`_resolve_salinity_cfg` — the epsilon/chi **viscosity** path.
-    Non-finite samples are reachable two ways. A hotel variable with fewer than
-    two finite source samples merges as an *all-NaN* channel (the hotel merge
-    itself never produces NaN outside the hotel file's time coverage — it
-    boundary-holds and bridges interior gaps). A *partially* NaN array comes
-    from ``"hotel:<var>"`` pointing at a derived profile variable (e.g. an SP
-    computed from bad conductivity samples), or from ``SP_from_C`` on bad
-    conductivity under ``salinity="measured"``. Feeding those to ``visc``
-    yields NaN viscosity and discards the whole (otherwise valid) epsilon/chi
-    estimate for that window.
+    Non-finite samples are reachable three ways. A hotel variable with fewer
+    than two finite source samples merges as an *all-NaN* channel. The hotel
+    merge NaNs samples inside a source gap wider than ``hotel.max_gap`` and,
+    unless ``hotel.extrapolate`` is set, outside the source's time coverage.
+    And a *partially* NaN array comes from ``"hotel:<var>"`` pointing at a
+    derived profile variable (e.g. an SP computed from bad conductivity
+    samples), or from ``SP_from_C`` on bad conductivity under
+    ``salinity="measured"``. Feeding those to ``visc`` yields NaN viscosity
+    and discards the whole (otherwise valid) epsilon/chi estimate for that
+    window.
 
     Gaps are filled by :func:`_fill_nonfinite_by_interp` (interpolation over
     the finite samples, nearest-finite hold at the edges — see there for why
-    never a constant fill) and warned about. With fewer than two finite
-    samples there is nothing to interpolate between, so return ``None`` and
-    the caller falls back to fixed 35 PSU — a single finite sample must not
-    constant-fill the whole profile (and thereby beat a fully valid
-    conductivity channel). Mirrors the temperature path, which already
-    substitutes 10 degC and warns.
+    never a constant fill) and warned about. With *t* and *max_gap* (the
+    merged channel's ``hotel_max_gap``) the fill will not rule across a gap
+    the merge gated; the samples it leaves NaN are set to fixed 35 PSU
+    instead — for viscosity a documented fallback constant is a few-percent
+    error, whereas a fabricated ramp is an unmarked one — and the count is
+    warned about. With fewer than two finite samples there is nothing to
+    interpolate between, so return ``None`` and the caller falls back to fixed
+    35 PSU — a single finite sample must not constant-fill the whole profile
+    (and thereby beat a fully valid conductivity channel). Mirrors the
+    temperature path, which substitutes 10 degC and warns for windows with no
+    finite sample.
 
     The stratification paths (:func:`_window_stratification_for_profile`,
     :func:`_compute_slow_stratification`) do NOT route through this scrub:
@@ -1553,7 +1640,7 @@ def _scrub_salinity(sal, label: str, src: str):
             "%s salinity from %s is entirely non-finite; using fixed 35 PSU", label, src
         )
         return None
-    filled = _fill_nonfinite_by_interp(sal)
+    filled = _fill_nonfinite_by_interp(sal, t=t, max_gap=max_gap)
     if filled is None:
         logger.warning(
             "%s salinity from %s has a single finite sample (non-finite otherwise; "
@@ -1563,6 +1650,21 @@ def _scrub_salinity(sal, label: str, src: str):
         )
         return None
     out, n_interp, n_held = filled
+    residual = ~np.isfinite(out)
+    n_residual = int(residual.sum())
+    if n_residual:
+        out = out.copy()
+        out[residual] = 35.0
+        logger.warning(
+            "%s salinity from %s: %d/%d sample(s) lie in a hotel gap wider than "
+            "max_gap=%g s (or outside coverage) and were not interpolated; using "
+            "fixed 35 PSU for those",
+            label,
+            src,
+            n_residual,
+            sal.size,
+            max_gap,
+        )
     logger.warning(
         "%s salinity from %s has %d/%d non-finite sample(s); filled by "
         "interpolation over the finite samples (%d interpolated, %d edge-held)",
@@ -1674,7 +1776,11 @@ def _resolve_salinity_cfg(value, prof_path, T_name: str, C_name: str, label: str
                 label,
                 src,
             )
-        return _scrub_salinity(sal, label, src)
+            return None
+        # The conductivity may itself be a merged hotel channel; SP_from_C is
+        # pointwise, so its NaNs align with C's and inherit C's gap gate.
+        t, max_gap = _profile_hotel_gap(prof_path, C_name)
+        return _scrub_salinity(sal, label, src, t=t, max_gap=max_gap)
     hotel_var = _hotel_salinity_var(value)
     if hotel_var is not None:
         sal = _profile_channel_salinity(prof_path, hotel_var)
@@ -1686,7 +1792,9 @@ def _resolve_salinity_cfg(value, prof_path, T_name: str, C_name: str, label: str
                 src,
                 hotel_var,
             )
-        return _scrub_salinity(sal, label, src)
+            return None
+        t, max_gap = _profile_hotel_gap(prof_path, hotel_var)
+        return _scrub_salinity(sal, label, src, t=t, max_gap=max_gap)
     raise ValueError(
         f"{label} salinity={value!r} is not recognised; expected null, a number, "
         "'measured', or 'hotel[:<var>]'"
@@ -3066,7 +3174,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
     hotel_cfg = merge_config("hotel", config.get("hotel"))
     hotel_data = None
     if hotel_cfg.get("enable", False) and hotel_cfg.get("file"):
-        from odas_tpw.perturb.hotel import load_hotel
+        from odas_tpw.perturb.hotel import load_hotel, resolve_gap_settings
 
         hotel_data = load_hotel(
             expand_config_dir(hotel_cfg["file"], cdir),
@@ -3074,6 +3182,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
             hotel_cfg.get("time_format", "auto"),
             hotel_cfg.get("channels", {}),
         )
+        # Validate max_gap / extrapolate once here: a missing max_gap would
+        # otherwise raise inside every worker, once per file.
+        resolve_gap_settings(hotel_cfg)
         logger.info("Loaded hotel file: %d channels", len(hotel_data.channels))
 
     def _instrument_key(p):

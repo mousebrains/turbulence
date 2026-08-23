@@ -184,8 +184,16 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
 
             all_times.append(l2.time[center_idx])
             all_pres.append(np.mean(l1.pres[s:e]))
+            # Average only the finite temperature samples, so a window that
+            # merely touches a NaN-ed hotel gap still carries a real
+            # temperature; an all-NaN window records NaN (the L4 stage falls
+            # back to 10 degC there, with a warning).
             if l1.temp.size > 0 and l1.temp.shape[0] == l1.n_time:
-                all_temp.append(np.mean(l1.temp[s:e]))
+                _tmp_seg = l1.temp[s:e]
+                _tmp_finite = np.isfinite(_tmp_seg)
+                all_temp.append(
+                    float(np.mean(_tmp_seg[_tmp_finite])) if _tmp_finite.any() else np.nan
+                )
             else:
                 all_temp.append(np.nan)
             # Average only the finite speed samples (a single NaN otherwise

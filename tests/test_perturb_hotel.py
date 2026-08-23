@@ -63,6 +63,19 @@ def _make_mat(path):
     return path
 
 
+# Every test below predates gap gating: it was written when the merge
+# interpolated across any gap and edge-held outside coverage. Both are now
+# opt-in, so those tests state the legacy semantics explicitly and keep testing
+# what they were written to test. The NEW defaults are covered in
+# tests/test_perturb_hotel_gaps.py.
+_LEGACY: dict = {"max_gap": "unlimited", "extrapolate": True}
+
+
+def _cfg(**kw) -> dict:
+    """A hotel config carrying the pre-gating semantics plus *kw*."""
+    return {**_LEGACY, **kw}
+
+
 class _MockPFile:
     """Minimal PFile-like object for interpolation tests."""
 
@@ -180,7 +193,7 @@ class TestTimeConversion:
         csv_file = _make_csv(tmp_path / "hotel.csv")
         hd = load_hotel(csv_file, time_format="seconds")
         pf = _MockPFile()
-        result = interpolate_hotel(hd, pf, {"fast_channels": ["speed"]})
+        result = interpolate_hotel(hd, pf, _cfg(fast_channels=["speed"]))
         assert "speed" in result
         assert len(result["speed"]) == len(pf.t_fast)
 
@@ -205,7 +218,7 @@ class TestTimeConversion:
 
         hd = load_hotel(csv_file, time_format="epoch")
         pf = _MockPFile(start_epoch=start_epoch)
-        result = interpolate_hotel(hd, pf, {"fast_channels": ["speed"]})
+        result = interpolate_hotel(hd, pf, _cfg(fast_channels=["speed"]))
         # At t_fast edges (0 and 4), should match boundary values
         np.testing.assert_allclose(result["speed"][0], 0.5, atol=0.01)
         np.testing.assert_allclose(result["speed"][-1], 0.9, atol=0.01)
@@ -265,7 +278,7 @@ class TestInterpolateHotel:
         hd = load_hotel(csv_file, time_format="seconds")
         pf = _MockPFile(n_fast=50, n_slow=5)
 
-        result = interpolate_hotel(hd, pf, {"fast_channels": ["speed"]})
+        result = interpolate_hotel(hd, pf, _cfg(fast_channels=["speed"]))
         assert result["speed"].shape == (50,)  # fast axis
         assert result["pitch"].shape == (5,)  # slow axis
 
@@ -278,6 +291,7 @@ class TestInterpolateHotel:
             hd,
             pf,
             {
+                **_LEGACY,
                 "fast_channels": ["speed"],
                 "interpolation": "pchip",
             },
@@ -295,6 +309,7 @@ class TestInterpolateHotel:
             hd,
             pf,
             {
+                **_LEGACY,
                 "fast_channels": ["speed"],
                 "interpolation": "linear",
             },
@@ -323,6 +338,7 @@ class TestInterpolateHotel:
             hd,
             pf,
             {
+                **_LEGACY,
                 "fast_channels": ["speed"],
                 "interpolation": "pchip",
             },
@@ -352,6 +368,7 @@ class TestInterpolateHotel:
             hd,
             pf,
             {
+                **_LEGACY,
                 "fast_channels": ["speed"],
                 "interpolation": "linear",
             },
@@ -366,7 +383,7 @@ class TestInterpolateHotel:
         hd = load_hotel(csv_file, time_format="seconds")
         pf = _MockPFile()
 
-        result = interpolate_hotel(hd, pf, {"fast_channels": []})
+        result = interpolate_hotel(hd, pf, _cfg(fast_channels=[]))
         # All channels should go to slow axis when none are in fast_channels
         for name, arr in result.items():
             assert arr.shape == pf.t_slow.shape
@@ -423,7 +440,7 @@ class TestMergeHotelIntoPFile:
         nc_file = _make_nc(tmp_path / "hotel.nc")
         hd = load_hotel(nc_file, time_format="seconds")
         pf = _MockPFileWithInfo()
-        merge_hotel_into_pfile(hd, pf, {"fast_channels": ["speed"]})
+        merge_hotel_into_pfile(hd, pf, _cfg(fast_channels=["speed"]))
         # Both channels appear in pf.channels and pf.channel_info; without
         # this, extract_profiles raises KeyError on the first hotel-only name.
         for name in ("speed", "pitch"):
@@ -435,7 +452,7 @@ class TestMergeHotelIntoPFile:
         nc_file = _make_nc(tmp_path / "hotel.nc")
         hd = load_hotel(nc_file, time_format="seconds")
         pf = _MockPFileWithInfo()
-        merge_hotel_into_pfile(hd, pf, {"fast_channels": ["speed"]})
+        merge_hotel_into_pfile(hd, pf, _cfg(fast_channels=["speed"]))
         assert "speed" in pf._fast_channels
         assert "pitch" not in pf._fast_channels
 
@@ -454,7 +471,7 @@ class TestMergeHotelIntoPFile:
         hd = load_hotel(nc_file, time_format="seconds")
         assert hd.units["speed"] == "m s-1"
         pf = _MockPFileWithInfo()
-        merge_hotel_into_pfile(hd, pf, {"fast_channels": []})
+        merge_hotel_into_pfile(hd, pf, _cfg(fast_channels=[]))
         assert pf.channel_info["speed"]["units"] == "m s-1"
 
     def test_fast_set_membership_overrides_existing(self, tmp_path):
@@ -469,7 +486,7 @@ class TestMergeHotelIntoPFile:
         merge_hotel_into_pfile(
             hd,
             pf,
-            {"fast_channels": ["speed"], "channels": {"speed": {"replace": True}}},
+            _cfg(fast_channels=["speed"], channels={"speed": {"replace": True}}),
         )
         assert "speed" in pf._fast_channels
         # And demoted-to-slow case:
@@ -477,7 +494,7 @@ class TestMergeHotelIntoPFile:
         pf2.channels["speed"] = np.zeros_like(pf2.t_slow)
         pf2._fast_channels.add("speed")
         merge_hotel_into_pfile(
-            hd, pf2, {"fast_channels": [], "channels": {"speed": {"replace": True}}}
+            hd, pf2, _cfg(fast_channels=[], channels={"speed": {"replace": True}})
         )
         assert "speed" not in pf2._fast_channels
 
@@ -494,7 +511,7 @@ class TestMergeHotelIntoPFile:
         pf = _MockPFileWithInfo()
         pf.channels["speed"] = np.zeros_like(pf.t_slow)  # native slow channel
         with pytest.raises(ValueError, match="would overwrite") as exc:
-            merge_hotel_into_pfile(hd, pf, {"fast_channels": ["speed"]})
+            merge_hotel_into_pfile(hd, pf, _cfg(fast_channels=["speed"]))
         # Grid mismatch between native (slow) and hotel (fast set) -> the error
         # must point at fast: false as well, else replace:true alone drops it.
         assert "fast: false" in str(exc.value)
@@ -509,7 +526,7 @@ class TestMergeHotelIntoPFile:
         pf.channels["speed"] = np.zeros_like(pf.t_fast)  # native fast channel
         pf._fast_channels.add("speed")
         with pytest.raises(ValueError, match="would overwrite") as exc:
-            merge_hotel_into_pfile(hd, pf, {"fast_channels": ["speed"]})
+            merge_hotel_into_pfile(hd, pf, _cfg(fast_channels=["speed"]))
         assert "fast:" not in str(exc.value)
 
 
@@ -526,8 +543,7 @@ class TestPerVariableSchema:
                         channels={"speed": "U"})
         pf = _MockPFileWithInfo()
         merge_hotel_into_pfile(hd, pf,
-                               {"channels": {"speed": "U"},
-                                "fast_channels": []})
+                               _cfg(channels={"speed": "U"}, fast_channels=[]))
         assert "U" in pf.channels
         assert "speed" not in pf.channels
 
@@ -538,8 +554,8 @@ class TestPerVariableSchema:
                         channels={"speed": {"name": "U"}})
         pf = _MockPFileWithInfo()
         merge_hotel_into_pfile(hd, pf,
-                               {"channels": {"speed": {"name": "U"}},
-                                "fast_channels": []})
+                               _cfg(channels={"speed": {"name": "U"}},
+                                    fast_channels=[]))
         assert "U" in pf.channels
 
     def test_scale_and_offset_applied(self, tmp_path):
@@ -551,8 +567,8 @@ class TestPerVariableSchema:
         pf = _MockPFileWithInfo()
         merge_hotel_into_pfile(
             hd, pf,
-            {"channels": {"pitch": {"scale": 10.0, "offset": 100.0}},
-             "fast_channels": [], "interpolation": "linear"},
+            _cfg(channels={"pitch": {"scale": 10.0, "offset": 100.0}},
+                 fast_channels=[], interpolation="linear"),
         )
         # On the slow grid t=0..4 covering source t=0..4, linear interp
         # gives pitch≈1..5 → after scale=10, offset=100 → ≈110..150.
@@ -566,7 +582,7 @@ class TestPerVariableSchema:
         pf = _MockPFileWithInfo()
         merge_hotel_into_pfile(
             hd, pf,
-            {"channels": {"pitch": {"units": "rad"}}, "fast_channels": []},
+            _cfg(channels={"pitch": {"units": "rad"}}, fast_channels=[]),
         )
         assert pf.channel_info["pitch"]["units"] == "rad"
 
@@ -578,9 +594,9 @@ class TestPerVariableSchema:
         pf = _MockPFileWithInfo()
         merge_hotel_into_pfile(
             hd, pf,
-            {"channels": {"speed": {"fast": False},
-                          "pitch": {"fast": True}},
-             "fast_channels": ["speed"]},
+            _cfg(channels={"speed": {"fast": False},
+                           "pitch": {"fast": True}},
+                 fast_channels=["speed"]),
         )
         # Per-variable ``fast`` wins over the global ``fast_channels`` list.
         assert "speed" not in pf._fast_channels
@@ -605,7 +621,7 @@ class TestPerVariableSchema:
         # and 10 at t=2.
         merge_hotel_into_pfile(
             hd, pf,
-            {"channels": {"x": {"interp": "nearest"}}, "fast_channels": []},
+            _cfg(channels={"x": {"interp": "nearest"}}, fast_channels=[]),
         )
         # Linear would give 5.0 at t=1; nearest gives 0.0 (closer to t=0).
         np.testing.assert_allclose(pf.channels["x"][1], 0.0)
@@ -629,7 +645,7 @@ class TestPerVariableSchema:
         hd = load_hotel(nc_file, time_format="seconds")
         pf = _MockPFileWithInfo()
         with pytest.raises(ValueError, match=r"hotel\.interpolation="):
-            interpolate_hotel(hd, pf, {"interpolation": "magic"})
+            interpolate_hotel(hd, pf, _cfg(interpolation="magic"))
 
     def test_null_value_includes_with_defaults(self, tmp_path):
         """``channels: {speed: ~}`` filters to speed only and uses defaults."""
@@ -716,6 +732,7 @@ class TestPerChannelTimeColumn:
         result = interpolate_hotel(
             hd, pf,
             {
+                **_LEGACY,
                 "channels": {
                     "P": {},
                     "q_drop": {"time_column": "time_flight", "interp": "nearest"},
@@ -787,9 +804,9 @@ class TestPerChannelTimeColumn:
         pf = _MockPFileWithInfo(n_slow=3, n_fast=12)
         out = interpolate_hotel(
             hd, pf,
-            {"channels": {"P": {},
-                          "event": {"time_column": "time_event", "interp": "nearest"}},
-             "fast_channels": [], "interpolation": "linear"},
+            _cfg(channels={"P": {},
+                           "event": {"time_column": "time_event", "interp": "nearest"}},
+                 fast_channels=[], interpolation="linear"),
         )
         assert "P" in out
         assert "event" not in out  # singleton skipped
@@ -832,7 +849,9 @@ class TestHotelNativeInterval:
         nc_file = _make_nc(tmp_path / "hotel.nc")
         hd = load_hotel(nc_file, time_format="seconds")
         pf = _MockPFileWithInfo()
-        merge_hotel_into_pfile(hd, pf, {"fast_channels": ["speed"]})
+        # max_gap is required since #150; this test is about the recorded
+        # native interval, not about gating, so it takes the legacy semantics.
+        merge_hotel_into_pfile(hd, pf, _cfg(fast_channels=["speed"]))
         expected = _native_interval(hd.time)
         assert np.isfinite(expected) and expected > 0
         for name in ("speed", "pitch"):

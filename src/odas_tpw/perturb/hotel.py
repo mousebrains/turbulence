@@ -19,6 +19,16 @@ The ``hotel.channels`` YAML block supports three forms per source name:
       pitch:
         name: "theta"        # rename target (default: same as source)
         interp: "nearest"    # override hotel.interpolation for this var
+        max_gap: 30.0        # [s] NaN the output where the two bracketing
+                             # SOURCE samples are farther apart than this,
+                             # instead of ruling a straight line across the
+                             # hole (default: hotel.max_gap, which is
+                             # REQUIRED -- a number or "unlimited"; a
+                             # per-channel null inherits it)
+        extrapolate: false   # NaN outside the source's own time range instead
+                             # of holding the end values (default:
+                             # hotel.extrapolate, itself false; a per-channel
+                             # null inherits it)
         scale: 0.0174533     # multiplicative factor (default 1.0)
         offset: 0.0          # additive offset (default 0.0)
         units: "rad"         # CF units string (default: source file's units)
@@ -32,8 +42,32 @@ The ``hotel.channels`` YAML block supports three forms per source name:
 
 If ``channels`` is empty or omitted, every source variable is loaded with
 default options. Otherwise only the source names listed are kept.
+
+Gaps
+----
+``hotel.max_gap`` and ``hotel.extrapolate`` (with per-channel overrides above)
+control what happens where the source has **no data**.
+
+``max_gap`` is **required**. There is no safe default: the right limit is the
+sensor's own rate --- tens of seconds for a 1 Hz CTD, minutes for a flight-state
+variable --- and guessing wrong is silent in both directions. Omitting it raises.
+``extrapolate`` defaults to ``False``.
+
+The reason for the strictness: on an instrument whose CTD ran on only some
+profiles, an ungated merge produces a smooth *fabricated* ramp between real
+samples hours apart, and every consumer (``ct``, ``ctd``, ``stratification``,
+``salinity: "measured"``, ``epsilon.T_source``) reads it as data. It also
+silently undid gap control applied upstream: a builder that NaN-marks its own
+dropouts (``dinkum-hotel``'s ``projection.max_gap``) had that erased, because
+the loader drops non-finite samples and then interpolates across the hole.
+
+``max_gap: "unlimited"`` restores the old interpolate-across-anything behaviour
+for a channel or for the whole block --- deliberately, in writing --- and warns
+whenever it actually fabricates. That warning is scaled to the channel's own
+median sample interval, so it fires on real dropouts and not on sampling jitter.
 """
 
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,7 +83,20 @@ _INTERP_KINDS = frozenset({
 
 _CHANNEL_OPTION_KEYS = frozenset({
     "name", "interp", "scale", "offset", "units", "fast", "time_column", "replace",
+    "max_gap", "extrapolate",
 })
+
+# A gap this many times the channel's own median sample interval is not normal
+# sampling jitter --- it is a dropout, and interpolating across it manufactures
+# data.  Used only to decide when to WARN, so it needs no configuration and
+# scales itself to each channel's rate.
+_GAP_WARN_FACTOR = 10.0
+
+# The one value that opts out of the required gap limit.  A string rather than
+# ``null`` on purpose: ``merge_config`` drops nulls, so an explicit null is
+# indistinguishable from "not set" -- and the opt-out has to be something the
+# operator typed deliberately, not something they left blank.
+UNLIMITED = "unlimited"
 
 
 @dataclass
@@ -426,41 +473,149 @@ def _load_mat(
                      units=units, time_is_relative=is_relative)
 
 
+# Relative tolerance for "the target lands ON a source sample" (see
+# _bridged_gap), scaled by max(1 s, median source interval).
+_MEASURED_TOL = 1e-6
+
+
+def _bridged_gap(hotel_t: np.ndarray, target_t: np.ndarray) -> np.ndarray:
+    """Width of the source gap each target sample is interpolated ACROSS.
+
+    Zero for targets outside the source range (extrapolation, handled
+    separately) and zero for a target that lands exactly ON a source sample:
+    that value is **measured**, not interpolated, so no gap was bridged to
+    obtain it.
+
+    The exact-match case is not academic.  ``searchsorted(side="left")`` returns
+    the index of the matching sample, so without the check the first real
+    sample after a dropout inherits the dropout's width and is thrown away by
+    ``max_gap`` --- discarding an observation to protect against interpolation
+    that never happened.  It also matters whenever the source and target share
+    a clock, where every target is an exact match and the gate would fire on
+    all of them.
+    """
+    n = hotel_t.size
+    idx = np.searchsorted(hotel_t, target_t, side="left")
+    inside = (target_t >= hotel_t[0]) & (target_t <= hotel_t[-1])
+    lo = np.clip(idx - 1, 0, n - 1)
+    hi = np.clip(idx, 0, n - 1)
+    # Float tolerance: target times are exact k/fs but hotel epochs shifted by
+    # the file start have ~1e-7 s resolution, so an exact match is luck. A
+    # target within a sliver of a source sample is that sample, not the gap.
+    dt = np.diff(hotel_t)
+    median_dt = float(np.median(dt)) if dt.size else 1.0
+    tol = _MEASURED_TOL * max(1.0, median_dt)
+    # Check both bracketing neighbours: a target a sliver AFTER a sample has
+    # ``hi`` pointing at the next one, so hi alone would miss the match.
+    measured = (np.abs(hotel_t[hi] - target_t) <= tol) | (
+        np.abs(hotel_t[lo] - target_t) <= tol
+    )
+    return np.where(inside & ~measured, hotel_t[hi] - hotel_t[lo], 0.0)
+
+
 def _interp_one(
     hotel_t: np.ndarray,
     data: np.ndarray,
     target_t: np.ndarray,
     kind: str,
+    *,
+    max_gap: float | None = None,
+    extrapolate: bool = False,
+    stats: dict | None = None,
 ) -> np.ndarray:
-    """Interpolate one channel onto ``target_t`` with the requested kind."""
+    """Interpolate one channel onto ``target_t`` with the requested kind.
+
+    ``max_gap`` [s] NaNs the output wherever the two bracketing source samples
+    are farther apart than that, instead of ruling a straight line across the
+    hole.  ``extrapolate=False`` NaNs the output outside the source's own time
+    range instead of holding the end values.
+
+    ``extrapolate`` defaults to False: an edge-held constant outside the
+    source's coverage correlates with nothing and is not a measurement.
+    ``max_gap=None`` leaves this function ungated --- the *requirement* is
+    enforced one level up in :func:`interpolate_hotel`, where the user's config
+    lives, so library callers keep a usable primitive.
+
+    Either way this function unconditionally *measures* how much of the output
+    was manufactured and reports it through ``stats``.
+
+    Why this matters: on an instrument whose CTD ran on only some profiles, the
+    merged channel is a smooth fabricated ramp between real samples hours
+    apart, and every consumer --- ``ct``, ``ctd``, ``stratification``,
+    ``salinity: "measured"``, ``epsilon.T_source`` --- reads it as if it were
+    data.
+    """
     from scipy.interpolate import PchipInterpolator, interp1d
 
+    target_t = np.asarray(target_t, dtype=np.float64)
     # Drop NaN samples (fill-valued gaps / NaT times): PchipInterpolator raises
-    # on a NaN in the data, and interp1d would propagate it. Interpolate across
-    # the gaps instead; with < 2 valid points there is nothing to interpolate.
+    # on a NaN in the data, and interp1d would propagate it. With < 2 valid
+    # points there is nothing to interpolate.
     finite = np.isfinite(hotel_t) & np.isfinite(data)
     if int(finite.sum()) < 2:
+        if stats is not None:
+            stats.update(n_target=int(target_t.size), n_gap=int(target_t.size),
+                         n_outside=0, widest_gap=float("inf"), median_dt=float("nan"))
         return np.full(np.shape(target_t), np.nan, dtype=np.float64)
-    if not finite.all():
-        hotel_t = np.asarray(hotel_t)[finite]
-        data = np.asarray(data)[finite]
+    hotel_t = np.asarray(hotel_t, dtype=np.float64)[finite]
+    data = np.asarray(data, dtype=np.float64)[finite]
+    # Sort: interp1d sorts internally, but the range / gap bookkeeping below
+    # reads hotel_t[0] and hotel_t[-1] directly, and PchipInterpolator requires
+    # increasing x. No loader sorts, and a CSV/NetCDF need not be in order.
+    if np.any(np.diff(hotel_t) < 0):
+        order = np.argsort(hotel_t, kind="stable")
+        hotel_t = hotel_t[order]
+        data = data[order]
 
     if kind == "pchip":
         interp = PchipInterpolator(hotel_t, data, extrapolate=False)
-        out = interp(target_t)
-        # Fill NaN edges with boundary values, matching the historical behavior.
+        out = np.asarray(interp(target_t), dtype=np.float64)
         mask = np.isnan(out)
         if np.any(mask):
-            below = target_t < hotel_t[0]
-            above = target_t > hotel_t[-1]
-            out[mask & below] = data[0]
-            out[mask & above] = data[-1]
-        return np.asarray(out, dtype=np.float64)
-    interp = interp1d(
-        hotel_t, data, kind=kind, bounds_error=False,
-        fill_value=(data[0], data[-1]),
+            out[mask & (target_t < hotel_t[0])] = data[0]
+            out[mask & (target_t > hotel_t[-1])] = data[-1]
+    else:
+        interp = interp1d(
+            hotel_t, data, kind=kind, bounds_error=False,
+            fill_value=(data[0], data[-1]),
+        )
+        out = np.asarray(interp(target_t), dtype=np.float64)
+
+    gap = _bridged_gap(hotel_t, target_t)
+    outside = (target_t < hotel_t[0]) | (target_t > hotel_t[-1])
+    dt = np.diff(hotel_t)
+    median_dt = float(np.median(dt)) if dt.size else float("nan")
+    warn_gap = (
+        _GAP_WARN_FACTOR * median_dt
+        if np.isfinite(median_dt) and median_dt > 0
+        else np.inf
     )
-    return np.asarray(interp(target_t), dtype=np.float64)
+    notable = gap > warn_gap
+    gated = max_gap is not None and np.isfinite(max_gap) and max_gap > 0
+    rejected = (gap > max_gap) if gated else np.zeros_like(gap, dtype=bool)
+
+    if stats is not None:
+        # Rejected and merely-notable are tracked apart, because they are
+        # different claims: one says data was thrown away, the other says data
+        # was manufactured. A warning that conflates them can state the
+        # opposite of what happened -- with max_gap above the warning
+        # threshold, notable gaps are interpolated across and kept.
+        stats.update(
+            n_target=int(target_t.size),
+            n_notable=int(np.count_nonzero(notable & ~rejected)),
+            n_rejected=int(np.count_nonzero(rejected)),
+            n_outside=int(np.count_nonzero(outside)),
+            widest_gap=float(gap.max()) if gap.size else 0.0,
+            widest_kept=float(gap[~rejected].max()) if np.any(~rejected) else 0.0,
+            median_dt=median_dt,
+            gated=bool(gated),
+        )
+
+    if gated:
+        out[rejected] = np.nan
+    if not extrapolate:
+        out[outside] = np.nan
+    return out
 
 
 def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, np.ndarray]:
@@ -479,6 +634,9 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
         raise ValueError(
             f"hotel.interpolation={default_kind!r}: not in {sorted(_INTERP_KINDS)}"
         )
+    # max_gap is required (a number or "unlimited") and extrapolate defaults to
+    # False; resolve_gap_settings validates both, globally and per channel.
+    gap_settings = resolve_gap_settings(hotel_cfg)
     _, channels_opts = _normalize_channels_cfg(hotel_cfg.get("channels"))
 
     pf_start_offset = 0.0 if hotel_data.time_is_relative else pf.start_time.timestamp()
@@ -498,9 +656,134 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
         # gets nothing for that channel, same as a missing channel.
         if hotel_t.size < 2:
             continue
-        result[src] = _interp_one(hotel_t, data, target_t, kind)
+        max_gap, extrapolate = gap_settings.get(src, gap_settings[None])
+        stats: dict = {}
+        result[src] = _interp_one(
+            hotel_t, data, target_t, kind,
+            max_gap=None if max_gap is None else float(max_gap),
+            extrapolate=extrapolate,
+            stats=stats,
+        )
+        _warn_if_fabricated(src, stats, max_gap, extrapolate)
 
     return result
+
+
+def resolve_gap_settings(hotel_cfg: dict) -> dict[str | None, tuple[float | None, bool]]:
+    """Validate ``max_gap`` / ``extrapolate`` once, globally and per channel.
+
+    Returns ``{source_name: (max_gap, extrapolate)}`` with the global defaults
+    under the key ``None``; ``max_gap`` is a float in seconds or ``None`` for
+    ``"unlimited"``.  A per-channel ``null`` (or an absent key) inherits the
+    global value for either setting.
+
+    Raises ``ValueError`` on a missing or malformed value.  Called at config
+    time by the pipeline so a bad config fails once, up front, rather than
+    once per file inside the worker pool.
+    """
+    default_max_gap = _resolve_max_gap(hotel_cfg.get("max_gap"), "hotel.max_gap")
+    default_extrapolate = bool(hotel_cfg.get("extrapolate") or False)
+    _, channels_opts = _normalize_channels_cfg(hotel_cfg.get("channels"))
+    out: dict[str | None, tuple[float | None, bool]] = {
+        None: (default_max_gap, default_extrapolate)
+    }
+    for src, opts in channels_opts.items():
+        max_gap = (
+            _resolve_max_gap(opts["max_gap"], f"hotel.channels[{src!r}].max_gap")
+            if opts.get("max_gap") is not None
+            else default_max_gap
+        )
+        extrapolate = (
+            bool(opts["extrapolate"])
+            if opts.get("extrapolate") is not None
+            else default_extrapolate
+        )
+        out[src] = (max_gap, extrapolate)
+    return out
+
+
+def _resolve_max_gap(value, where: str) -> float | None:
+    """Validate a gap limit.  Unset is an error; ``"unlimited"`` opts out.
+
+    There is no defensible default. The right limit is the sensor's own rate --
+    tens of seconds for a 1 Hz CTD, minutes for a flight-state variable -- and
+    guessing it wrong in either direction is silent: too tight throws away good
+    data, too loose manufactures it. So the operator has to say.
+    """
+    if isinstance(value, str):
+        if value.strip().lower() == UNLIMITED:
+            return None
+        raise ValueError(
+            f"{where}={value!r}: expected a number of seconds or the string "
+            f"{UNLIMITED!r}"
+        )
+    if value is None:
+        raise ValueError(
+            f"{where} is required when hotel.enable is true. Where two "
+            f"bracketing source samples are farther apart than this, the merge "
+            f"NaNs the output instead of ruling a straight line across the "
+            f"hole. There is no safe default -- the right limit is the sensor's "
+            f"own sample rate (~30 for a 1 Hz CTD, minutes for a flight-state "
+            f"variable). Interpolating across an unbounded gap manufactures "
+            f"data that ct, ctd, stratification, salinity:\"measured\" and "
+            f"epsilon.T_source all read as measurement. To deliberately keep "
+            f"the old behaviour, set {where}: {UNLIMITED!r}."
+        )
+    gap = float(value)
+    if not np.isfinite(gap) or gap <= 0:
+        raise ValueError(f"{where}={value!r}: must be a positive number of seconds")
+    return gap
+
+
+def _warn_if_fabricated(
+    src: str, stats: dict, max_gap: float | None, extrapolate: bool
+) -> None:
+    """Say how much of a merged channel was manufactured, or thrown away.
+
+    Unconditional, and scaled to the channel's own median sample interval, so
+    it fires on a real dropout without needing to be configured and without
+    nagging about ordinary sampling jitter.  Silence here is the failure mode
+    that motivated it: a CTD that ran on only some profiles produced a smooth
+    fabricated ramp that every downstream consumer read as data.
+
+    The two outcomes are reported separately and never conflated.  Saying
+    "NaN-ed" about samples that were in fact interpolated across and kept is
+    the same class of error the gate exists to prevent, one level up.
+    """
+    n = int(stats.get("n_target", 0))
+    if not n:
+        return
+    n_notable = int(stats.get("n_notable", 0))
+    n_rejected = int(stats.get("n_rejected", 0))
+    n_out = int(stats.get("n_outside", 0))
+    if not (n_notable or n_rejected or n_out):
+        return
+
+    med = stats.get("median_dt", float("nan"))
+    widest = stats.get("widest_gap", float("nan"))
+    widest_kept = stats.get("widest_kept", float("nan"))
+    parts = []
+    if n_rejected:
+        parts.append(
+            f"{100.0 * n_rejected / n:.1f}% of samples NaN-ed for falling in a "
+            f"gap wider than max_gap={max_gap:g} s (widest {widest:.4g} s)"
+        )
+    if n_notable:
+        parts.append(
+            f"{100.0 * n_notable / n:.1f}% of samples interpolated across gaps "
+            f"wider than {_GAP_WARN_FACTOR:g}x the median interval "
+            f"({med:.3g} s), widest kept {widest_kept:.4g} s"
+        )
+    if n_out:
+        verb = "NaN-ed" if not extrapolate else "edge-held"
+        parts.append(f"{100.0 * n_out / n:.1f}% of samples {verb} outside coverage")
+
+    hint = ""
+    if n_notable and not stats.get("gated", False):
+        hint = " — set hotel.max_gap to reject these instead"
+    elif n_notable:
+        hint = f" — max_gap={max_gap:g} s is above that threshold, so they are kept"
+    warnings.warn(f"hotel channel {src!r}: " + "; ".join(parts) + hint, stacklevel=3)
 
 
 def _native_interval(hotel_t: np.ndarray) -> float:
@@ -539,6 +822,7 @@ def merge_hotel_into_pfile(hotel_data: HotelData, pf, hotel_cfg: dict) -> None:
     fast_channels = set(hotel_cfg.get("fast_channels", ["speed", "P"]))
     _, channels_opts = _normalize_channels_cfg(hotel_cfg.get("channels"))
     interpolated = interpolate_hotel(hotel_data, pf, hotel_cfg)
+    gap_settings = resolve_gap_settings(hotel_cfg)  # validated above already
 
     # Snapshot the instrument's own channels so a hotel variable cannot silently
     # clobber one profile detection depends on (a hotel "P" would overwrite the
@@ -582,11 +866,19 @@ def merge_hotel_into_pfile(hotel_data: HotelData, pf, hotel_cfg: dict) -> None:
         units = opts.get("units")
         if units is None:
             units = hotel_data.units.get(src, "")
-        pf.channel_info[out_name] = {
+        info = {
             "units": units,
             "type": "hotel",
             "name": out_name,
         }
+        # Carry the gate downstream: the per-profile NetCDF writer copies this
+        # to a ``hotel_max_gap`` attr, so consumers that interp-fill NaN
+        # samples (stratification / viscosity salinity) can refuse to rule
+        # across the very hole the merge just NaN-ed.  None = unlimited.
+        max_gap, _ = gap_settings.get(src, gap_settings[None])
+        if max_gap is not None:
+            info["hotel_max_gap"] = float(max_gap)
+        pf.channel_info[out_name] = info
 
         is_fast = bool(opts["fast"]) if "fast" in opts else out_name in fast_channels
         if is_fast:

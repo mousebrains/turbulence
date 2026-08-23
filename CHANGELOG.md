@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+- **`hotel.max_gap` is now required, and `hotel.extrapolate` defaults to
+  `false`.** The hotel merge used to interpolate across arbitrary gaps and
+  edge-hold outside coverage, with no way to say otherwise. On an instrument
+  whose CTD ran on only some profiles that produces a smooth *fabricated* ramp
+  between real samples hours apart, and every consumer — `ct`, `ctd`,
+  `stratification`, `salinity: "measured"`, `epsilon.T_source` — reads it as
+  data. It also silently undid gap control applied upstream: a builder that
+  NaN-marks its own dropouts (`dinkum-hotel`'s `projection.max_gap`) had that
+  erased, because the loader drops non-finite samples and *then* interpolates
+  across the hole.
+
+  There is no safe default for the limit — the right value is the sensor's own
+  rate, tens of seconds for a 1 Hz CTD and minutes for a flight-state variable
+  — so omitting it now raises rather than guessing. Both settings accept
+  per-channel overrides.
+
+  **Migration:** add `max_gap: <seconds>` to your `hotel:` block (30 is a good
+  starting point for a 1 Hz CTD). To keep the old behaviour exactly — to
+  regenerate a historical result, say — write `max_gap: "unlimited"` and
+  `extrapolate: true`. Any channel that then bridges a gap wider than 10× its
+  own median sample interval warns, naming the channel and the fabricated
+  fraction.
+
+  The gate is honoured downstream, not just at the merge: the resolved
+  `max_gap` travels with each merged channel (a `hotel_max_gap` attr in the
+  per-profile NetCDFs), and the stratification / viscosity-salinity refills
+  that interp-fill non-finite samples refuse to rule across a wider hole
+  (viscosity falls back to fixed 35 PSU there, with a warning). Epsilon's
+  per-window temperature now averages the finite samples only, so a window
+  merely touching a NaN-ed gap keeps a real temperature; the 10 °C fallback
+  (still warned about) applies only to windows with no finite sample at all.
+  A missing `max_gap` fails once at config-load time, not once per file in
+  the worker pool.
+
 ### Fixed
 - **`perturb/fp07_cal.py` no longer emits confident, wrong coefficients.** Five
   defects, each a way the per-file in-situ calibration could fit something that

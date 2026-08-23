@@ -58,6 +58,16 @@ DEFAULTS: dict[str, dict] = {
         "channels": {},
         "fast_channels": ["speed", "P"],
         "interpolation": "pchip",
+        # REQUIRED when hotel.enable is true. None is not a default value here
+        # -- it is the "you have not said" state, and interpolate_hotel raises
+        # on it. Interpolating across an unbounded gap manufactures data that
+        # ct / ctd / stratification / salinity:"measured" / epsilon.T_source all
+        # read as measurement, so the limit has to be a decision, not a default.
+        # The opt-out is the explicit string "unlimited".
+        "max_gap": None,
+        # Flipped: an edge-held constant outside the source's coverage
+        # correlates with nothing and is not a measurement.
+        "extrapolate": False,
     },
     "profiles": {
         "P_min": 0.5,
@@ -423,6 +433,14 @@ class _PerturbConfigManager(ConfigManager):
                 raise ValueError(
                     f"{section}: diss_sec ({diss_s}) is shorter than fft_sec ({fft_s})"
                 )
+        # hotel.max_gap is required when the hotel merge is enabled; validate
+        # it (and every per-channel override) here so a missing value fails
+        # once at load time rather than once per file inside the worker pool.
+        hotel = config.get("hotel") or {}
+        if isinstance(hotel, dict) and hotel.get("enable", False):
+            from odas_tpw.perturb.hotel import resolve_gap_settings
+
+            resolve_gap_settings({**DEFAULTS["hotel"], **hotel})
 
 
 _mgr = _PerturbConfigManager(
@@ -799,6 +817,24 @@ hotel:
   interpolation: "pchip"  # default kind: pchip | linear | nearest |
                           # previous | next | zero | slinear | quadratic
                           # | cubic. Per-variable interp wins.
+  max_gap: null           # [s] REQUIRED when enable is true. Where the two
+                          # bracketing SOURCE samples are farther apart than
+                          # this, the output is NaN instead of a straight line
+                          # ruled across the hole.
+                          #
+                          # There is no safe default: the right limit is the
+                          # sensor's own rate (~30 s for a 1 Hz CTD, minutes for
+                          # a flight-state variable). Leaving it unset is an
+                          # error, because interpolating across an unbounded gap
+                          # manufactures data that ct, ctd, stratification,
+                          # salinity:"measured" and epsilon.T_source all read as
+                          # measurement.
+                          #
+                          # To deliberately keep the old interpolate-across-
+                          # anything behaviour, write the string "unlimited".
+                          # Per-variable max_gap wins.
+  extrapolate: false      # NaN outside the source's own time range rather than
+                          # holding the first/last value. Per-variable wins.
 
 profiles:
   P_min: 0.5              # minimum pressure [dbar]

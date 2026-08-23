@@ -21,12 +21,14 @@ def _write_nc(
     n_fast=1024,
     n_slow=128,
     temp_nan=False,
+    temp_nan_every=None,
 ) -> Path:
     """Build a minimal NC for get_diss.
 
     ``n_fast``/``n_slow`` can be enlarged so at least one dissipation window
     is produced; ``temp_nan`` fills the T1 channel with NaN to exercise the
-    non-finite window-temperature guard.
+    non-finite window-temperature guard. ``temp_nan_every=k`` NaNs every k-th
+    T1 sample instead (partial NaN: every window keeps finite samples).
     """
     fs_fast = 512.0
     fs_slow = 64.0
@@ -47,7 +49,12 @@ def _write_nc(
         p = ds.createVariable("P", "f8", ("time_slow",))
         p[:] = np.linspace(5.0, 50.0, n_slow)
         t1 = ds.createVariable("T1", "f8", ("time_slow",))
-        t1[:] = np.nan if temp_nan else np.linspace(20.0, 5.0, n_slow)
+        t1_data = np.linspace(20.0, 5.0, n_slow)
+        if temp_nan:
+            t1_data = np.full(n_slow, np.nan)
+        elif temp_nan_every:
+            t1_data[::temp_nan_every] = np.nan
+        t1[:] = t1_data
 
         if with_shear:
             sh1 = ds.createVariable("sh1", "f8", ("time_fast",))
@@ -151,3 +158,31 @@ class TestNanTemperatureGuard:
             "Non-finite window temperature" in str(w.message) for w in caught
         )
         assert any("fails plausibility QC" in str(w.message) for w in caught)
+
+    def test_partial_nan_temperature_uses_finite_samples(self, tmp_path):
+        """A window merely TOUCHING NaN temperature keeps a real temperature.
+
+        The per-window reduction is a mean over the finite samples only
+        (mirroring the speed reduction), so a gated hotel gap no longer turns
+        every window it grazes into the 10 degC fallback. The fallback (and
+        its warning) applies only when a window has no finite sample at all.
+        """
+        nc = _write_nc(
+            tmp_path / "partial_nan_temp.nc",
+            n_fast=8192,
+            n_slow=1024,
+            temp_nan_every=4,  # 25% NaN, but every window keeps finite samples
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            results = _compute_epsilon(nc, goodman=False, fft_length=512, temperature="T1")
+
+        assert results, "expected at least one dissipation dataset"
+        for ds in results:
+            assert np.all(np.isfinite(ds["epsilon"].values))
+        # Old code: np.mean over a window with any NaN -> NaN window -> the
+        # 10 degC substitution warning. New code: no window is all-NaN, so
+        # the warning must not fire.
+        assert not any(
+            "Non-finite window temperature" in str(w.message) for w in caught
+        )
