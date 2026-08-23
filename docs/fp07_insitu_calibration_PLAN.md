@@ -201,6 +201,24 @@ example config already sets `False`. And `shift_edge_hold` applied to a
 reference that is mostly edge-held filler is meaningless. Both are symptoms of
 a VMP-shaped design; the new estimator should not inherit either.
 
+### A12 — No correlation-quality gate on the lag. **New.**
+
+`_calc_lag` returns `(lag, corr)` and `fp07_calibrate` collects `corr` into
+`info["median_corr"]` — but **nothing ever thresholds it**. Measured against a
+fabricated mid-gap ramp (§3.1):
+
+```
+lag = -7.05 s,  corr = 0.021
+```
+
+A correlation of 0.02 is pure noise, and it is accepted as a confident lag and
+folded into the median. The one guard that exists (`norm <= 0` → NaN) only
+catches the *perfectly constant* reference.
+
+> **Requirement R9.** A minimum correlation, a maximum inter-profile lag
+> scatter, and a minimum contributing-profile count. Below any of them, the
+> channel abstains rather than emitting coefficients.
+
 ### A11 — No test data in the repo
 
 `VMP/` is absent from the current checkout. There is no glider `.p` file, no
@@ -209,7 +227,105 @@ only way to write a test that proves coefficient recovery.
 
 ---
 
-## 3. Design
+## 3. `.p` files with no hotel CT
+
+This is not an edge case — with CT on every *n*th yo it is the **majority** of
+the files. It deserves its own section.
+
+### 3.1 What happens today — three regimes, measured
+
+The reference channel essentially always *exists* after the hotel merge
+(`_interp_one` returns a full array whenever the hotel file has ≥2 finite
+samples anywhere), so `fp07_calibrate`'s "reference not found" path never
+fires. What varies is what that array *contains*. Measured against the real
+code:
+
+| File's position vs CT coverage | Merged reference | `_calc_lag` | Result |
+|---|---|---|---|
+| Entirely outside coverage | constant (edge-hold, e.g. `22.59`) | `(nan, nan)` — guard fires | **No calibration.** Factory coefficients, silently. |
+| Inside a CT gap | fabricated linear ramp (`19.16 → 19.40` across a 1 h hole) | `(-7.05 s, corr 0.021)` — **guard does not fire** | **Calibrated against fiction.** |
+| Real CT coverage | genuine | genuine | Genuine fit. |
+
+So a single deployment today would come out the far side with **three different
+calibration regimes distributed across adjacent yos**, and the only trace is a
+`channel_info["calibration"]` tag that nothing surfaces. That is a worse outcome
+than never calibrating at all, because the discontinuities are of order the
+correction itself.
+
+The gap-ramp row is A1 and A12 acting together: A1 invents the signal, A12
+declines to notice that nothing correlates with it.
+
+> Also confirmed empirically: marking the gap with NaN in the hotel file — what
+> `dinkum-hotel`'s `projection.max_gap` does — produces **byte-identical**
+> output from `_interp_one`. The builder-side gap control is entirely defeated
+> by the loader.
+
+### 3.2 What happens under this plan
+
+A file with no CT is a **non-event**:
+
+1. `fp07-cal pairs` emits zero pairs for it. Expected, not an error.
+2. `fp07-cal fit` pools pairs from the covered yos only — one coefficient set
+   for the deployment.
+3. `fp07-cal patch` writes that set into **every** `.p` file, covered or not.
+
+The uncovered yos get the calibration precisely because the coefficients
+describe *the probe*, not *the yo*. This is the payoff for separating fit from
+apply, and for the patch-the-file sink: there is no code path in which some
+files are calibrated and others are not.
+
+### 3.3 The sub-cases that do need handling
+
+**(a) File outside the fit's *time* range.** Not merely "no CT this yo" but
+outside `validity.time_start … time_end` — the science computer was off, or the
+`.ebd` set is incomplete. Patching it extrapolates in time.
+*Decision: patch anyway, warn loudly, and record the extrapolation in the
+provenance banner.* Leaving it on factory coefficients would re-create exactly
+the discontinuity §3.1 condemns. Consistency beats a false show of caution, as
+long as it is visible.
+
+**(b) File outside the fit's *temperature* range.** More insidious. The
+polynomial is constrained only over the T range the CT-covered yos happened to
+sample; an uncovered yo that went deeper and colder is extrapolated in the state
+variable.
+
+> **This is an independent and stronger argument for order 1** than the
+> conditioning argument in A3. A straight line in `L` extrapolates gracefully
+> and stays physically sensible (it *is* the two-parameter Steinhart–Hart
+> model, which is a good description of a glass-bead thermistor over ~10 °C).
+> An order-2 fit over a 3 °C range, extrapolated 2 °C beyond it, can go
+> anywhere. Combined with A3 and D5.5, order 1 is the default and order ≥2
+> requires the operator to have looked at the coverage report and chosen it.
+
+Report per-file how far outside the fitted range it went; NaN or flag beyond a
+configurable margin.
+
+**(c) Zero pairs across the whole deployment.** CT never on, or every pair
+gated out. **Hard error** with the rejection-reason histogram — never an empty
+coefficient file that a later step treats as "no correction needed".
+
+**(d) Too few pairs, or too narrow a T range.** Gated by R9. Note that the
+binding constraint here is **systematic, not random**: with an SBE41cp
+reference, a few thousand pairs over 3 °C pins the slope far tighter than the
+dive/climb asymmetry, residual thermal lag, and MR-vs-CTD mounting separation
+do. The report must therefore present a **systematic error budget**, not a
+formal standard error — a tight confidence interval on a biased fit is the most
+misleading thing this tool could print.
+
+### 3.4 The coverage manifest
+
+`fp07-cal coverage` (Phase 0) and `patch` both emit a per-file table — the
+operator's direct answer to "what happened to my files with no CT?":
+
+| file | n_pairs | CT coverage | in time range | T range vs fit | action |
+|---|---|---|---|---|---|
+| `…_0007.p` | 412 | 96% | yes | inside | patched (contributed) |
+| `…_0008.p` | 0 | 0% | yes | inside | patched (extrapolated in T? no) |
+| `…_0031.p` | 0 | 0% | **no** | −1.8 °C below | **patched, WARNED ×2** |
+
+---
+
+## 4. Design
 
 ### D1 — A pre-pipeline step, not a pipeline stage
 
@@ -410,13 +526,13 @@ only if the disk cost above turns out to be prohibitive.
 
 ---
 
-## 4. Phases
+## 5. Phases
 
 | # | Deliverable | Notes |
 |---|---|---|
 | 0 | `fp07-cal coverage` + fix A4 | Read-only. Tells us how many yos actually have CT, the gap structure, T range, dive/climb balance, clipping rate. **Do this before writing the estimator** — it may change the design. A4 is a standalone safety fix. |
 | 1 | Synthetic generator + `fp07-cal pairs` | Generator emits a `.p` + `hotel.nc` from known coefficients, known lag, known noise, with configurable reference sparsity. |
-| 2 | `fp07-cal fit` + diagnostics report | D4, D5. |
+| 2 | `fp07-cal fit` + diagnostics + **stability report** | D4, D5, D8 (§8). Cheap given the pairs/fit split; answers the drift question from this deployment's own data. |
 | 3 | Coefficient record + `fp07-cal patch` | D6, D7, A5, A6. Resolve the delete-key question. |
 | 4 | Worked example + docs | `examples/slocum_glider_hotel/fp07-cal.yaml`, the trim→fit→patch→run runbook, and `fp07.calibrate: false` in the example `perturb.yaml`. No perturb code change. |
 | 5 | **Transferability study** | The empirical answer to the generalizability question. See §6. |
@@ -426,7 +542,7 @@ exists (`config_patch`), and 4 is documentation.
 
 ---
 
-## 5. Validation
+## 6. Validation
 
 | # | Test |
 |---|---|
@@ -440,11 +556,14 @@ exists (`config_patch`), and 4 is documentation.
 | V8 | **VMP non-regression.** The existing dense-`JAC_T` path must be unchanged. Golden-compare against ODAS `cal_FP07_in_situ.m` if VMP data is restored. |
 | V9 | **Refusal.** Applying a record with a mismatched bridge parameter / SN / out-of-range T must raise, not warn. |
 | V10 | **No double-patch.** Running `fp07-cal patch` on an already-patched `.p` must refuse (D7). |
+| V12 | **No-CT files are still patched.** A synthetic set where only every 3rd file has CT: all files must come out patched with identical coefficients, and the no-CT files must contribute zero pairs (§3.2). |
+| V13 | **Gap-ramp rejection.** The measured §3.1 failure — a fabricated mid-gap ramp yielding `lag -7.05 s, corr 0.021` — must produce zero pairs and trip R9, not a fit. |
+| V14 | **Drift recovery.** Inject a known `t_0` ramp with `beta_1` fixed; the blocked estimator (D8) must recover the rate, and must report "no significant drift" on a drift-free control. |
 | V11 | **Pipeline is untouched.** `perturb run` over patched files with `fp07.calibrate: false` produces the calibrated temperatures with **zero** changes to `perturb/`. This is the test that proves "pre-pipeline" actually held. |
 
 ---
 
-## 6. On generalizability (Phase 5)
+## 7. Generalizability across probes and instruments (Phase 5)
 
 We should not guess. The record's keying (D6) makes the question *testable*,
 because every fit is labelled with what it was derived from. Once there are two
@@ -469,7 +588,124 @@ drift in behavior.
 
 ---
 
-## 7. Open questions
+## 8. Temporal stability of the coefficients
+
+Section 7 asks how far a coefficient set travels across *probes*. This one asks
+how far it travels across *time* — and it is the question the sparse-CT dataset
+is unusually well suited to answer, because CT-on-every-*n*th-yo gives a
+**time series of independent calibration opportunities spread across the whole
+deployment**. What looked like the central difficulty is also the opportunity.
+
+### 8.1 The two coefficients are not equally stable, and that is the design lever
+
+They have different physical origins:
+
+| | origin | expected behavior |
+|---|---|---|
+| `beta_1` | the bead's material B-value | intrinsic to the glass; expected **stable** |
+| `t_0` | probe `R_0` × bridge (`a`, `b`, `G`, `E_B`) electronics offset | expected to **drift**: aging, bridge offset, biofouling |
+
+They also have different *estimation* requirements, and the two facts point in
+opposite directions:
+
+- `beta_1` is a **slope** — it needs the widest possible temperature range, so
+  it wants **all the pairs, pooled over the whole deployment**.
+- `t_0` is an **offset** — it needs almost no temperature range at all, so it
+  can be estimated from **one block of yos at a time**.
+
+> **D8 — the stability estimator.** Fit `beta_1` **globally**, then fit `t_0`
+> **per temporal block** with `beta_1` held fixed. This separates the parameter
+> that needs range from the parameter that needs time resolution, and it is
+> strictly better than the naive "refit everything per block", where each
+> block's narrow T range makes `beta_1` wander wildly and drags `t_0` with it
+> through their strong covariance.
+
+This is nearly free: `pairs` and `fit` are already split (D1) so that one slow
+I/O pass feeds many fast fits. Blocked refitting is a loop over the fits.
+
+### 8.2 Per-file `t_0` is free — because we patch per file
+
+If `t_0` drift turns out to be real and resolvable, the pre-pipeline patch sink
+can express it at **no additional cost**: `fp07-cal patch` already writes one
+file at a time, so each `.p` file can receive `t_0` evaluated at its own
+midpoint time, with a single global `beta_1` throughout.
+
+A slowly-drifting calibration therefore costs nothing structurally. This is a
+second, unplanned payoff from the patch-the-file sink — it is not expressible
+at all in a single static coefficient record.
+
+Guard rails, because this is exactly the feature that would let us fit noise
+and call it science:
+
+- **Off by default.** Static `t_0` unless drift clears the gates below.
+- **Significance.** Block-to-block `t_0` variation must exceed its own
+  uncertainty, and the trend must survive a permutation test against
+  block-order shuffling.
+- **No extrapolation.** Hold `t_0` constant outside the CT-covered time span —
+  never continue the trend into files at either end (§3.3a).
+- **Corroboration required.** §8.4.
+- **Report both.** The static fit and the drifting fit, side by side, with the
+  temperature difference between them. If that difference is below the
+  systematic budget (§3.3d), take the static one.
+
+### 8.3 What the in-situ correction actually absorbs
+
+An honest caveat before believing any drift number. The in-situ fit absorbs
+*everything* between true water temperature and reported FP07 temperature:
+
+- genuine thermistor drift (what we want),
+- **the reference's own drift** — we measure FP07 *relative to* the SBE41cp,
+- unremoved lag, and the MR-vs-CTD mounting separation,
+- biofouling on either sensor.
+
+So "FP07 drift" is unattributable in principle with one reference. In practice
+the attribution is defensible in one direction only: Sea-Bird's quoted
+*temperature* stability for the SBE41/41CP is far better than any plausible
+FP07 drift, so charging the difference to the FP07 is reasonable. (Confirm the
+figure against the current spec sheet before it goes in a paper — and note this
+holds for temperature specifically; SBE conductivity drift is a different and
+much larger story, which is why the reference here is `sci_water_temp` and not
+a derived quantity.)
+
+The existence of `cal_FP07_in_situ.m` in Rockland's own ODAS library, framed as
+a per-deployment step, is itself an implicit vendor statement that they do not
+expect these coefficients to survive between deployments.
+
+### 8.4 Reference-free corroboration: the uncovered yos
+
+The blind spot in §8.1 is that it can only see drift **where CT was on**. Two
+checks cover the gaps, and neither needs a reference:
+
+1. **`T1 − T2` over the whole deployment** (D5.4). Continuous, reference-free,
+   and directly sensitive to differential probe drift. It is also a
+   *discriminator*: if `t_0` drift appears in the blocked fit **and** in
+   `T1 − T2`, it is probe-specific and real. If it appears in the blocked fit
+   but **not** in `T1 − T2`, then either both probes drifted together — which
+   points at the bridge electronics or the reference, not the beads — or the
+   apparent drift is an artifact of the CT-covered subset (§D5.5 selection
+   bias). Those demand different responses, and this is the only cheap way to
+   tell them apart.
+2. **Repeat-water-mass check.** Where the glider repeatedly samples the same
+   deep, weakly-varying isotherm, FP07-at-depth over time is a drift indicator
+   with no reference at all. Assumption-laden — it cannot separate sensor drift
+   from a genuine water-mass shift — so it is corroborating evidence only,
+   never primary.
+
+### 8.5 What this adds to the plan
+
+Phase 2 gains a **stability report** (blocked `t_0`, fixed `beta_1`, with the
+`T1 − T2` overlay). It is cheap given the `pairs`/`fit` split, and it answers
+the question with this deployment's own data rather than from priors.
+
+Concretely, the answer to "how stable are they?" should come back as a plot and
+three numbers: `d(t_0)/dt` in K/day with its uncertainty, the static-vs-drifting
+temperature difference, and whether `T1 − T2` corroborates. **Recommendation:
+build the diagnostic in Phase 2, but ship static coefficients until it says
+otherwise.**
+
+---
+
+## 9. Open questions
 
 1. **Delete-key support in `config_patch`** (A6) — add it, or forbid order
    downgrades? Adding deletion is small and honest; forbidding is smaller.
@@ -488,7 +724,13 @@ drift in behavior.
    is what licenses applying the calibration to the uncovered yos. With one
    probe we lose the best cross-check and the report must be correspondingly
    more cautious.
-6. **Disk budget for patched `.p` files** (D7) — how large is the deployment?
+6. **Block size for the stability estimator** (§8.1) — needs the Phase 0
+   coverage report first: it is set by how the CT-covered yos are actually
+   distributed in time, which we do not yet know.
+7. **Confirm the SBE41/41CP temperature stability figure** against the current
+   Sea-Bird spec sheet before any drift number is attributed to the FP07
+   (§8.3).
+8. **Disk budget for patched `.p` files** (D7) — how large is the deployment?
    If a full copy is unacceptable we would have to reconsider the in-pipeline
    apply that D7 currently rules out.
 
@@ -512,6 +754,10 @@ Two passes were made over the draft. Findings that **changed** the plan:
 | "One static calibration for the deployment." | **Kept, but conditionally.** Only licensed by the T1−T2 stability check (D5.4), which is the one diagnostic that covers the uncovered yos. |
 | "Apply the coefficients inside the pipeline via a new `fp07.mode`." | **Rejected** (user direction: pre-pipeline). It puts apply logic in a second place and leaves the raw files lying about their own calibration. Patched `.p` files instead (D7) — no perturb code change, and every reader benefits. |
 | "Patch first, then trim." | **Rejected.** Trim rewrites the file and its preservation of a patched config string is untested. Ordering (trim → fit → patch) makes the question moot. |
+| "A file with no CT reference is harmless — the code already guards for a missing reference." | **Rejected, and measured.** The reference is never *missing* after the hotel merge, only *fabricated*. The guard fires only for a perfectly constant reference; the gap-ramp case sails through at corr 0.021 (§3.1, A12). Forced R9 and §3. |
+| "Refit per temporal block to measure drift." | **Refined, not accepted as stated.** Each block's narrow T range makes `beta_1` wander and drag `t_0` with it through their covariance. Split into global `beta_1` + blocked `t_0` (D8). |
+| "Emit a drifting `t_0` since we patch per file anyway." | **Kept but gated off by default.** Free structurally (§8.2), and exactly the feature that would let us fit noise and call it drift. Requires significance, a permutation test, no extrapolation, and `T1 − T2` corroboration. |
+| "Measured drift is FP07 drift." | **Rejected as stated.** With one reference it is FP07 *relative to* the SBE41cp, and it also absorbs lag and mounting effects (§8.3). Attribution is defensible but must be stated, not assumed. |
 | "Patching is idempotent, just re-run it." | **Rejected.** A second patch would nest banners and destroy the "original config" block. Forced the refuse-if-already-patched check and V10. |
 
 Findings that did **not** change the plan but are recorded:
