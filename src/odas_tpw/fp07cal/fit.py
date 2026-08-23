@@ -184,6 +184,83 @@ def _beta1_bracket(L: np.ndarray, y: np.ndarray) -> tuple[float, float]:
     return (float(betas[0]), float(betas[1]))
 
 
+def select_order(
+    pairs: PairSet,
+    *,
+    candidates: tuple[int, ...] = (1, 2, 3),
+    robust: bool = True,
+) -> tuple[int, dict]:
+    """Pick the polynomial order by **out-of-sample** error, not by in-sample fit.
+
+    A higher order always fits the training data better, so an in-sample
+    criterion can only ever say "more".  The question that matters is whether
+    the extra term *extrapolates* better --- which is exactly what is being asked
+    of it when a deployment-wide coefficient set is applied to profiles that
+    went outside the temperature range it was fitted on.
+
+    So the split is by TEMPERATURE, not at random: fit the warm half, predict
+    the cold half, and vice versa.  A random split would leave both folds
+    spanning the full range and would reward interpolation, which is not the
+    failure mode of interest.
+
+    Measured on osu685 (24 degC of range, ~48k pairs):
+
+    ======  ==========  ===========================
+    order   in-sample   held-out (warm->cold)
+    ======  ==========  ===========================
+    1       22.3 mK     70.0 mK
+    2       10.7 mK     31.0 mK
+    3       10.7 mK     126.3 mK
+    ======  ==========  ===========================
+
+    ``beta_2`` is decisive --- it halves the in-sample residual and improves
+    extrapolation two- to five-fold.  ``beta_3`` gains 0.013 mK in sample while
+    making extrapolation four times worse, which is precisely the overfit this
+    test exists to catch (its t-statistic of 10 would have called it
+    "significant").
+    """
+    T = np.asarray(pairs.T_ref, dtype=np.float64)
+    scores: dict[int, dict] = {}
+    mid = float(np.median(T))
+    folds = ((T >= mid, T < mid), (T < mid, T >= mid))
+
+    for order in candidates:
+        errs = []
+        try:
+            in_sample = fit_calibration(pairs, order=order, robust=robust).rms_K
+        except Exception:
+            continue
+        for train, test in folds:
+            if int(train.sum()) < order + 3 or int(test.sum()) < 10:
+                continue
+            try:
+                sub = _subset(pairs, train)
+                f = fit_calibration(sub, order=order, robust=robust)
+                pred = f.apply(np.asarray(pairs.L, dtype=np.float64)[test])
+                errs.append(float(np.sqrt(np.nanmean((T[test] - pred) ** 2))))
+            except Exception:
+                continue
+        if errs:
+            scores[order] = {"held_out_K": float(np.mean(errs)),
+                             "in_sample_K": float(in_sample)}
+    if not scores:
+        return min(candidates), {}
+    best = min(scores, key=lambda o: scores[o]["held_out_K"])
+    return best, scores
+
+
+def _subset(pairs: PairSet, mask: np.ndarray) -> PairSet:
+    from dataclasses import replace as _replace
+
+    return _replace(
+        pairs,
+        time=pairs.time[mask], T_ref=pairs.T_ref[mask], L=pairs.L[mask],
+        pressure=pairs.pressure[mask], w=pairs.w[mask],
+        direction=pairs.direction[mask], profile_uid=pairs.profile_uid[mask],
+        file_label=pairs.file_label[mask],
+    )
+
+
 def residual_breakdown(pairs: PairSet, fit: FitResult, n_bins: int = 12) -> dict:
     """Residual structure vs pressure and vs time --- D5.2 and D5.3.
 

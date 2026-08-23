@@ -304,6 +304,112 @@ def test_hotel_pressure_scale_applied():
     assert scaled.pressure[0] == pytest.approx(100.0)
 
 
+def test_beta_2_zero_is_not_deletion_but_neutral_is():
+    """Setting beta_2=0 crashes the reader; only beta_2 -> infinity removes the term."""
+    from odas_tpw.fp07cal.patch import NEUTRAL
+    from odas_tpw.rsi.channels import convert_therm
+
+    base = {"a": "-12.3", "b": "0.99921", "g": "6.0", "e_b": "0.68280",
+            "adc_fs": "4.096", "adc_bits": "16", "t_0": "286.65", "beta_1": "3051.45"}
+    counts = np.array([-5000.0, 0.0, 5000.0])
+    absent, _ = convert_therm(counts, dict(base))
+
+    with pytest.raises(ZeroDivisionError):
+        convert_therm(counts, {**base, "beta_2": "0"})
+
+    neutral, _ = convert_therm(counts, {**base, "beta_2": NEUTRAL})
+    np.testing.assert_array_equal(neutral, absent)
+
+
+def test_patch_edits_neutralise_a_stale_higher_order_term():
+    from odas_tpw.fp07cal.patch import NEUTRAL, build_edits
+
+    record = {
+        "instrument_sn": "435",
+        "channels": {"T1": {
+            "config_equivalent": {"t_0": 286.65, "beta_1": 3051.45},
+            "bridge": {"a": -12.3, "b": 0.99921, "g": 6.0, "e_b": 0.6828,
+                       "adc_fs": 4.096, "adc_bits": 16.0},
+            "beta_key": "beta_1", "lag_trustworthy": True,
+        }},
+    }
+    config = {"instrument_info": {"sn": "435"}, "channels": [
+        {"name": "T1", "a": "-12.3", "b": "0.99921", "g": "6.0", "e_b": "0.68280",
+         "adc_fs": "4.096", "adc_bits": "16", "t_0": "289.301",
+         "beta_1": "3143.55", "beta_2": "2.5e5"},
+    ]}
+    plan = build_edits(record, config)
+    assert plan.ok
+    assert plan.edits["T1"]["beta_2"] == NEUTRAL
+    assert any("neutralising" in w for w in plan.warnings)
+
+
+def test_patch_refuses_a_bridge_mismatch():
+    from odas_tpw.fp07cal.patch import build_edits
+
+    record = {
+        "instrument_sn": "435",
+        "channels": {"T1": {
+            "config_equivalent": {"t_0": 286.65, "beta_1": 3051.45},
+            "bridge": {"a": -12.3, "b": 0.99921, "g": 6.0, "e_b": 0.6828,
+                       "adc_fs": 4.096, "adc_bits": 16.0},
+            "beta_key": "beta_1", "lag_trustworthy": True,
+        }},
+    }
+    config = {"instrument_info": {"sn": "435"}, "channels": [
+        {"name": "T1", "a": "-12.3", "b": "0.99921", "g": "3.0", "e_b": "0.68280",
+         "adc_fs": "4.096", "adc_bits": "16", "t_0": "289.301", "beta_1": "3143.55"},
+    ]}
+    plan = build_edits(record, config)
+    assert not plan.ok
+    assert any("bridge parameter g differs" in e for e in plan.errors)
+
+
+def test_patch_refuses_an_untrustworthy_lag():
+    from odas_tpw.fp07cal.patch import build_edits
+
+    record = {"instrument_sn": "435", "channels": {"T1": {
+        "config_equivalent": {"t_0": 286.65, "beta_1": 3051.45},
+        "bridge": {}, "beta_key": "beta_1", "lag_trustworthy": False}}}
+    config = {"instrument_info": {"sn": "435"},
+              "channels": [{"name": "T1", "t_0": "289.301", "beta_1": "3143.55"}]}
+    plan = build_edits(record, config)
+    assert not plan.ok
+    assert any("sharpness gate" in e for e in plan.errors)
+
+
+def test_patch_writes_to_the_live_beta_key():
+    """convert_therm checks `beta` first, so patching beta_1 there is a no-op."""
+    from odas_tpw.fp07cal.patch import build_edits
+
+    record = {"instrument_sn": "435", "channels": {"T1": {
+        "config_equivalent": {"t_0": 286.65, "beta_1": 3051.45},
+        "bridge": {}, "beta_key": "beta_1", "lag_trustworthy": True}}}
+    config = {"instrument_info": {"sn": "435"}, "channels": [
+        {"name": "T1", "t_0": "289.301", "beta": "3143.55", "beta_1": "9999"}]}
+    plan = build_edits(record, config)
+    assert "beta" in plan.edits["T1"]
+    assert "beta_1" not in plan.edits["T1"]
+
+
+def test_select_order_prefers_the_order_that_extrapolates():
+    """In-sample fit always improves with order; held-out is the real test."""
+    from odas_tpw.fp07cal.fit import select_order
+
+    probes, ref, _t = _deployment(ct_every_n=1)
+    _lr, pairs = temperature_lag(probes, ref, "T1", cfg=PairConfig(max_gap=30.0),
+                                 max_lag=8.0, step=1.0)
+    order, scores = select_order(pairs)
+    assert order in (1, 2, 3)
+    assert scores, "select_order must report its held-out errors"
+    # Whatever it picks must actually be the held-out minimum.
+    assert order == min(scores, key=lambda o: scores[o]["held_out_K"])
+    # In-sample error is monotone non-increasing in order — which is exactly
+    # why it cannot be the selection criterion.
+    ins = [scores[o]["in_sample_K"] for o in sorted(scores)]
+    assert all(b <= a * 1.0001 for a, b in zip(ins, ins[1:]))
+
+
 def test_bridge_inverse_is_exact():
     from odas_tpw.fp07cal.synth import _L_to_counts
 

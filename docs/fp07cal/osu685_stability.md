@@ -12,9 +12,13 @@ Reference: the glider's own SBE41cp, read directly from `PASS0/ebd.nc`.
 | **recording** | **climbs only — 0 dives.** Every file starts at 507–1016 dbar |
 | fit set | 95 files, 202,149 pairs, T range 3.61–27.57 °C |
 
-Both probes carry **generic** factory coefficients (`t_0 = 289.301`,
-`beta_1 = 3143.55`, `beta_2 = 2.5e5`) — identical on two physically different
-beads, which is the reason an in-situ calibration is wanted at all.
+Both probes carry the same **nominal** coefficients (`t_0 = 289.301`,
+`beta_1 = 3143.55`, `beta_2 = 2.5e5`). These are not a calibration of either
+probe — they are generic values, identical on two physically different beads.
+So the in-situ fit is not a *correction* to a factory calibration; it is the
+**only** calibration these probes have. Applying the nominal values instead
+costs **−2.66 K (T1) and −1.62 K (T2)**, measured by reading a patched file
+against an unpatched one.
 
 ## Coefficients
 
@@ -32,6 +36,30 @@ sharing one generic number.
 > leave a live quadratic term fighting new linear coefficients (plan A6). These
 > are order-2 fits, which sidesteps it — and the 24 °C range here easily
 > supports order 2, unlike the narrow-range case the plan defaults for.
+
+## Is `beta_2` worth fitting?
+
+Yes, decisively — and `beta_3` is actively harmful. Measured on 47.7k pairs
+spanning 24 °C, splitting the fit by **temperature** (fit the warm half,
+predict the cold half) rather than at random, because extrapolation onto
+profiles outside the fitted range is the failure mode that matters:
+
+| order | in-sample | held-out (warm→cold) | verdict |
+|---|---|---|---|
+| 1 | 22.3 mK | 70.0 mK | insufficient |
+| **2** | **10.7 mK** | **31.0 mK** | **best** |
+| 3 | 10.7 mK | 126.3 mK | overfit |
+
+`beta_2` halves the in-sample residual and improves extrapolation two- to
+five-fold; its coefficient carries a t-statistic of 417. `beta_3` gains
+0.013 mK in sample while making extrapolation **four times worse** — and its
+t-statistic is 10, which a significance test alone would have called
+"significant". That is precisely why the tool selects order by held-out error
+(`fit.order: "auto"`) and not by in-sample fit or by a t-test.
+
+Note this contradicts the plan's original order-1 default, which was reasoned
+for a narrow-range (<8 °C) glider deployment. With 24 °C of range the quadratic
+is essential. The rule is the range, not a fixed default.
 
 ## Lag
 

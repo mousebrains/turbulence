@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from odas_tpw.fp07cal.fit import fit_calibration
+from odas_tpw.fp07cal.fit import fit_calibration, select_order
 from odas_tpw.fp07cal.lag import pressure_offset, temperature_lag
 from odas_tpw.fp07cal.pairs import PairConfig, build_pairs_multi
 from odas_tpw.fp07cal.report import coverage_text, figure, fit_text
@@ -34,6 +34,10 @@ files:
   p_file_root: "<CONFIG_DIR>"
   p_file_pattern: "**/*.p"
   output_dir: "<CONFIG_DIR>/fp07cal"
+  max_fit_files: 100   # how many files to hold in memory for the lag+fit stage,
+                       # spread evenly across the deployment. The coefficients
+                       # are then applied to EVERY file in a streaming second
+                       # pass. Holding a full deployment at once is several GB.
 
 reference:
   # Read STRAIGHT from the hotel NetCDF, on the CTD's own clock. Deliberately
@@ -75,10 +79,15 @@ lag:
                        # that is too short locks onto a wrong lobe.
 
 fit:
-  order: 1             # 1 by default on purpose: a glider rarely spans the
-                       # >8 degC an order-2 fit needs, the Vandermonde is badly
-                       # conditioned over a narrow range, and a line
-                       # extrapolates gracefully onto yos that went outside it
+  order: "auto"        # "auto" picks the order by HELD-OUT error, splitting on
+                       # temperature (fit the warm half, predict the cold half).
+                       # In-sample fit always improves with order, so it can
+                       # only ever say "more"; what matters is extrapolation
+                       # onto profiles outside the fitted range. On osu685
+                       # (24 degC) order 2 halves the in-sample residual AND
+                       # improves extrapolation 2-5x, while order 3 gains
+                       # 0.013 mK in sample and makes extrapolation 4x WORSE.
+                       # Set an integer to force it.
   robust: true
   geometry: true       # Fit the sensor mounting offset JOINTLY with the
                        # coefficients. The FP07 and CTD sit at different depths
@@ -123,7 +132,6 @@ def _gather(cfg: dict):
     paths = sorted(root.glob(pattern))
     if not paths:
         raise SystemExit(f"no .p files matched {root}/{pattern}")
-    probes = [load_probe_series(p) for p in paths]
 
     ref_cfg = cfg.get("reference", {})
     ref = load_hotel_reference(
@@ -135,7 +143,48 @@ def _gather(cfg: dict):
         valid_min=float(ref_cfg.get("valid_min", -5.0)),
         valid_max=float(ref_cfg.get("valid_max", 45.0)),
     )
-    return probes, ref
+    return paths, ref
+
+
+def _load_some(paths, limit: int):
+    """Load up to *limit* files, spread evenly across the deployment.
+
+    Every ``.p`` load is guarded.  A real deployment is full of startup and
+    surface fragments that carry a config record but no data --- osu685 had 429
+    of them among 1226 files --- and an unguarded list comprehension turns the
+    first one into a crash before any science happens.
+    """
+    step = max(1, len(paths) // max(1, limit))
+    out, skipped = [], 0
+    for path in paths[::step][:limit]:
+        try:
+            probe = load_probe_series(path)
+        except Exception as exc:
+            skipped += 1
+            print(f"    skip {Path(path).name}: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            continue
+        if probe.profiles:
+            out.append(probe)
+        else:
+            skipped += 1
+    return out, skipped
+
+
+def _stream(paths):
+    """Yield every loadable probe with a detected profile, one at a time.
+
+    Streaming matters: holding 1225 files of 200k slow samples at once is
+    several GB against a pair set of a few MB.  The fit needs a subsample; the
+    per-profile statistics need every file but only one at a time.
+    """
+    for path in paths:
+        try:
+            probe = load_probe_series(path)
+        except Exception:
+            continue
+        if probe.profiles:
+            yield probe
 
 
 def _pair_config(cfg: dict) -> PairConfig:
@@ -151,7 +200,11 @@ def _pair_config(cfg: dict) -> PairConfig:
 
 
 def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool = True) -> dict:
-    """Lag -> pairs -> fit -> stability -> report, for each requested channel."""
+    """Lag -> pairs -> fit -> stability -> report, for each requested channel.
+
+    *probes* is an in-memory list (the fit subsample).  See :func:`_cmd_fit` for
+    the streaming pass that follows it.
+    """
     pc = _pair_config(cfg)
     lag_cfg = cfg.get("lag", {}) or {}
     fit_cfg = cfg.get("fit", {}) or {}
@@ -159,11 +212,27 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
     channels = cfg.get("channels") or sorted({c for p in probes for c in p.counts})
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    # A coefficient set is meaningless without the L-definition it was fitted
+    # against, so the bridge constants travel with it and the patch step
+    # refuses on any mismatch.
+    provenance = {
+        "instrument_sn": probes[0].instrument_sn if probes else "?",
+        "n_fit_files": len(probes),
+        "time_start": float(min(p.time[0] for p in probes)) if probes else None,
+        "time_end": float(max(p.time[-1] for p in probes)) if probes else None,
+        "reference": ref.source,
+    }
     po = pressure_offset(probes, ref)
     clock = (po.lag, po.score)
     print(f"  {po.summary()}")
     t1t2 = t1_t2_series(probes)
-    results: dict = {"clock_offset_s": clock[0], "clock_offset_r": clock[1], "channels": {}}
+    results: dict = {
+        "schema": "fp07-cal/1",
+        "clock_offset_s": clock[0],
+        "clock_offset_r": clock[1],
+        **provenance,
+        "channels": {},
+    }
 
     for ch in channels:
         if not any(ch in p.counts for p in probes):
@@ -182,13 +251,24 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             results["channels"][ch] = {"error": "zero pairs", "rejected": dict(pairs.rejected)}
             continue
 
+        order_cfg = fit_cfg.get("order", "auto")
+        order_scores: dict = {}
+        if order_cfg in (None, "auto"):
+            order, order_scores = select_order(pairs)
+            print(f"  {ch} order: {order} chosen by held-out error — " + ", ".join(
+                f"order {o}: {v['held_out_K']*1e3:.1f} mK held-out "
+                f"({v['in_sample_K']*1e3:.1f} in-sample)"
+                for o, v in sorted(order_scores.items())
+            ))
+        else:
+            order = int(order_cfg)
+
         geo = None
         if fit_cfg.get("geometry", True):
             from odas_tpw.fp07cal.geometry import joint_fit
 
             fit, geo = joint_fit(
-                pairs, order=int(fit_cfg.get("order", 1)),
-                robust=bool(fit_cfg.get("robust", True)),
+                pairs, order=order, robust=bool(fit_cfg.get("robust", True)),
             )
             print(f"  {ch} geometry: {geo.summary()}")
             if np.isfinite(geo.collinearity) and geo.collinearity > 0.8:
@@ -200,9 +280,7 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
                 )
         else:
             fit = fit_calibration(
-                pairs,
-                order=int(fit_cfg.get("order", 1)),
-                robust=bool(fit_cfg.get("robust", True)),
+                pairs, order=order, robust=bool(fit_cfg.get("robust", True)),
             )
         blocks = blocked_offsets(
             pairs, fit,
@@ -226,6 +304,7 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             "n_pairs": len(pairs),
             "n_profiles": pairs.n_profiles(),
             "order": fit.order,
+            "order_selection": {str(k): v for k, v in order_scores.items()},
             "coefficients": fit.coeffs.tolist(),
             "config_equivalent": fit.config_equivalent,
             "rms_K": fit.rms_K,
@@ -233,6 +312,18 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             "beta1_bracket": list(fit.beta1_bracket),
             "condition": fit.condition,
             "T_range": list(fit.T_range),
+            "bridge": next(
+                (p.bridge[ch].as_dict() for p in probes if ch in p.bridge), None
+            ),
+            "beta_key": next(
+                (p.beta_key.get(ch) for p in probes if ch in p.beta_key), "beta_1"
+            ),
+            "probe_sn": next(
+                (p.probe_sn.get(ch) for p in probes if ch in p.probe_sn), "?"
+            ),
+            "factory": next(
+                (p.factory[ch].tolist() for p in probes if ch in p.factory), None
+            ),
             "lag_trustworthy": lr.trustworthy(),
             "lag_dynamic_range": lr.dynamic_range,
             "lag_width_s": lr.width,
@@ -278,7 +369,11 @@ def _cmd_init(args) -> int:
 
 def _cmd_coverage(args) -> int:
     cfg = _load_config(Path(args.config))
-    probes, ref = _gather(cfg)
+    paths, ref = _gather(cfg)
+    limit = int(cfg.get("files", {}).get("max_fit_files", 100) or 100)
+    probes, skipped = _load_some(paths, limit)
+    print(f"{len(paths)} .p file(s); sampled {len(probes)} with profiles "
+          f"({skipped} skipped)")
     pc = _pair_config(cfg)
     channels = cfg.get("channels") or sorted({c for p in probes for c in p.counts})
     ch = next((c for c in channels if any(c in p.counts for p in probes)), None)
@@ -296,11 +391,163 @@ def _cmd_coverage(args) -> int:
 
 def _cmd_fit(args) -> int:
     cfg = _load_config(Path(args.config))
-    probes, ref = _gather(cfg)
+    paths, ref = _gather(cfg)
     out_dir = Path(cfg.get("files", {}).get("output_dir", "fp07cal"))
-    print(f"{len(probes)} file(s), {ref.time.size} reference samples")
-    run_calibration(probes, ref, cfg, out_dir, make_figure=not args.no_figure)
+    limit = int(cfg.get("files", {}).get("max_fit_files", 100) or 100)
+    print(f"{len(paths)} .p file(s), {ref.time.size} reference samples")
+    print(f"loading up to {limit} for the fit...")
+    probes, skipped = _load_some(paths, limit)
+    if not probes:
+        print("no file yielded a detected profile — check profiles/W_min and the "
+              "reference time range", file=sys.stderr)
+        return 1
+    print(f"fitting on {len(probes)} file(s) ({skipped} skipped)")
+    res = run_calibration(probes, ref, cfg, out_dir, make_figure=not args.no_figure)
+
+    if not args.no_stream and len(paths) > len(probes):
+        print(f"streaming all {len(paths)} files for per-profile statistics...")
+        res["per_profile"] = _stream_stats(paths, ref, cfg, res, out_dir)
+        (out_dir / "coefficients.json").write_text(
+            json.dumps(res, indent=2, default=float)
+        )
     print(f"wrote {out_dir}/")
+    return 0
+
+
+def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
+    """Second pass: apply the fitted coefficients to EVERY file.
+
+    Keeps only per-profile summaries.  The profile is the independent unit for
+    every statistic downstream, so collapsing to it loses nothing and takes the
+    memory from gigabytes to kilobytes.
+    """
+    from odas_tpw.fp07cal.logr import temperature
+    from odas_tpw.fp07cal.pairs import build_pairs
+    from odas_tpw.fp07cal.stability import SECONDS_PER_DAY, Block
+
+    pc = _pair_config(cfg)
+    st_cfg = cfg.get("stability", {}) or {}
+    model = {
+        ch: (np.asarray(e["coefficients"], dtype=float), float(e["lag_s"]))
+        for ch, e in res["channels"].items()
+        if "coefficients" in e
+    }
+    if not model:
+        return {}
+
+    recs: dict[str, list] = {ch: [] for ch in model}
+    n_files = 0
+    for probe in _stream(paths):
+        n_files += 1
+        for ch, (coeffs, lag) in model.items():
+            if ch not in probe.counts:
+                continue
+            ps = build_pairs(probe, ref, ch, lag=lag, cfg=pc)
+            if len(ps) < 100:
+                continue
+            y = 1.0 / (ps.T_ref + 273.15)
+            hi = np.zeros_like(ps.L)
+            for j, a in enumerate(coeffs):
+                if j:
+                    hi = hi + a * ps.L**j
+            a0 = y - hi
+            resid = ps.T_ref - temperature(ps.L, coeffs)
+            uid = np.asarray(ps.profile_uid, dtype=object)
+            for u in np.unique(uid):
+                sel = uid == u
+                good = np.isfinite(resid[sel])
+                if good.sum() < 100:
+                    continue
+                recs[ch].append((float(np.mean(ps.time[sel])),
+                                 float(np.mean(a0[sel][good])),
+                                 float(np.mean(resid[sel][good])),
+                                 float(np.median(ps.T_ref[sel]))))
+
+    out: dict = {"n_files_streamed": n_files, "channels": {}}
+    for ch, R in recs.items():
+        if len(R) < 12:
+            out["channels"][ch] = {"n_profiles": len(R), "note": "too few to block"}
+            continue
+        arr = np.array(R)
+        o = np.argsort(arr[:, 0])
+        t, a0, resid, Tm = arr[o, 0], arr[o, 1], arr[o, 2], arr[o, 3]
+        nb = int(st_cfg.get("n_blocks", 12) or 12)
+        edges = np.linspace(t.min(), t.max(), nb + 1)
+        TK = float(np.median(Tm)) + 273.15
+        blocks = []
+        for b in range(nb):
+            sel = (t >= edges[b]) & (t <= edges[b + 1] if b == nb - 1 else t < edges[b + 1])
+            if sel.sum() < int(st_cfg.get("min_profiles", 3)):
+                continue
+            v = a0[sel]
+            mean = float(np.mean(v))
+            se = float(np.std(v, ddof=1) / np.sqrt(v.size)) if v.size > 1 else float("nan")
+            blocks.append(Block(
+                t_mid=float(np.mean(t[sel])), t_start=float(edges[b]),
+                t_end=float(edges[b + 1]), n_pairs=0, n_profiles=int(v.size),
+                a0=mean, a0_se=se, t_0=1.0 / mean if mean else float("nan"),
+                dT_K=float(-(mean - np.mean(a0)) * TK**2),
+                dT_se_K=float(se * TK**2),
+            ))
+        stab = drift_fit(blocks)
+        stab.channel = ch
+        print(f"  {stab.summary()}")
+        out["channels"][ch] = {
+            "n_profiles": len(R),
+            "span_days": float((t.max() - t.min()) / SECONDS_PER_DAY),
+            "resid_median_K": float(np.median(resid)),
+            "resid_sd_K": float(np.std(resid)),
+            "probe_drift_K_per_day": stab.probe_drift_K_per_day,
+            "se_K_per_day": stab.drift_se_K_per_day,
+            "permutation_p": stab.permutation_p,
+            "significant": stab.significant,
+            "n_blocks": len(stab.blocks),
+        }
+        np.savez_compressed(out_dir / f"{ch}_profiles.npz",
+                            t=t, a0=a0, resid=resid, T=Tm)
+    return out
+
+
+def _cmd_patch(args) -> int:
+    """Write the fitted coefficients into copies of the .p files."""
+    from odas_tpw.fp07cal.patch import patch_deployment
+
+    cfg = _load_config(Path(args.config))
+    paths, _ref = _gather(cfg)
+    files_cfg = cfg.get("files", {})
+    out_root = Path(files_cfg.get("output_dir", "fp07cal"))
+    record = Path(args.record) if args.record else out_root / "coefficients.json"
+    if not record.exists():
+        print(f"{record} not found — run `fp07-cal fit` first", file=sys.stderr)
+        return 1
+    dst = Path(args.output) if args.output else out_root / "patched"
+
+    try:
+        plan, results = patch_deployment(
+            record, paths, dst,
+            channels=cfg.get("channels"),
+            note=args.note, dry_run=args.dry_run,
+        )
+    except ValueError as exc:
+        print(f"refusing to patch: {exc}", file=sys.stderr)
+        return 1
+
+    for w in plan.warnings:
+        print(f"  WARNING {w}", file=sys.stderr)
+    for e in plan.errors:
+        print(f"  ERROR   {e}", file=sys.stderr)
+    if not plan.ok:
+        print("no edits applied", file=sys.stderr)
+        return 1
+
+    print("edits per channel:")
+    for ch, kv in plan.edits.items():
+        print(f"  {ch}: " + "  ".join(f"{k}={v}" for k, v in kv.items()))
+    written = [d for _s, d, _c in results if d is not None]
+    print(f"{'would write' if args.dry_run else 'wrote'} {len(written)} "
+          f"patched file(s) to {dst}/")
+    if not args.dry_run and written:
+        print("Now run perturb over the PATCHED files with `fp07.calibrate: false`.")
     return 0
 
 
@@ -376,7 +623,21 @@ def main(argv: list[str] | None = None) -> int:
     q = sub.add_parser("fit", help="fit coefficients + stability diagnostic")
     q.add_argument("-c", "--config", required=True)
     q.add_argument("--no-figure", action="store_true")
+    q.add_argument("--no-stream", action="store_true",
+                   help="skip the all-files per-profile pass (fit subsample only)")
     q.set_defaults(func=_cmd_fit)
+
+    q = sub.add_parser(
+        "patch",
+        help="write fitted coefficients into copies of the .p files "
+             "(the pre-pipeline sink)",
+    )
+    q.add_argument("-c", "--config", required=True)
+    q.add_argument("--record", help="coefficients.json (default: output_dir/)")
+    q.add_argument("-o", "--output", help="destination dir (default: output_dir/patched)")
+    q.add_argument("--note", default="", help="note recorded in the provenance banner")
+    q.add_argument("--dry-run", action="store_true")
+    q.set_defaults(func=_cmd_patch)
 
     q = sub.add_parser("demo", help="run the whole chain on synthetic data")
     q.add_argument("-o", "--output", default="fp07cal_demo")
