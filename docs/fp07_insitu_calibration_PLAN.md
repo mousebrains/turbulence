@@ -705,6 +705,70 @@ otherwise.**
 
 ---
 
+## 8b. What a climb-only deployment costs (osu685, confirmed)
+
+The MicroRider on osu685 was powered at apogee and recorded the ascent only:
+every `.p` file starts at 507–1016 dbar and ends at the surface. **1225 files,
+zero dives.** That is not a quirk of profile detection — it is how the vehicle
+was flown, and it removes three things the plan had been leaning on.
+
+**1. The dive/climb residual split (D5.1) is unavailable.** It was the sharpest
+diagnostic for an unremoved lag, because a timing error displaces the two legs
+in opposite directions. With one leg there is nothing to compare.
+
+**2. `w` never changes sign, so the sensor-geometry decomposition does not
+separate.** The residual carries `dz·dT/dz + τ·w·dT/dz`; the two terms are told
+apart only by variation in `w`, and with `w` one-signed they stay ~0.92
+collinear. Measured on osu685: `dz = +79 cm` (T1) / `+82 cm` (T2) with a
+residual lag of ~2.5 s, but the **split between them is not trustworthy** — only
+the combination is. Dives would break this cleanly and cheaply.
+
+**3. Depth and elapsed-time-since-file-start are the same axis.** The glider
+always runs deep→shallow, so anything that grows through a file — thermistor
+settling, a clock ramp — is indistinguishable from a genuine depth dependence.
+
+> **The one lever that survives.** The glider alternated ~500 m and ~1000 m
+> climbs. At a matched depth the deep climbs have been running roughly twice as
+> long, so a genuine *depth* dependence cancels in `deep − shallow` while
+> anything tracking *elapsed time* does not. This is the only way to answer the
+> depth-stability question on this deployment, and it is why the analysis bins
+> the two populations separately rather than pooling them.
+
+### 8b.1 The lag, decomposed
+
+Two independent estimators agree to 0.01 s (time-domain on high-passed `L` vs
+`1/T_ref`: **+7.37 s**; `dT/dz` matched in depth space: **+7.36 s**), and both
+track a deliberately injected shift exactly.
+
+| term | value | how it was obtained |
+|---|---|---|
+| pressure offset (clock skew + geometric transit) | **+4.5 s** | high-passed P vs P |
+| total temperature lag | **+7.4 s** | two independent methods |
+| **CTD sensor response** | **+2.7 s** | the difference |
+
+T1 and T2 agree on the response to 0.05 s, which is a real cross-check: the two
+probes are independent but share the reference.
+
+The FP07 leads the CTD by ~1 m along the axis (build-dependent — an extended
+energy bay changes it) and sits ~17 cm above it perpendicular. **The
+longitudinal separation is not recoverable from timing on this deployment** —
+per-band offsets on a monotonic climb have a residual rms of 17–20 s, and `1/U`
+is 70–90% collinear with elapsed time; the fit returned −18.6 m or +9.3 m
+depending on the nuisance term. Nor does pitch separate the two geometric
+terms: climb pitch is nearly constant (−19° to −49°, clustered at −44°), giving
+`corr(sinθ, cosθ) = −0.964` and a three-term fit that returns −10 m.
+
+What *is* well measured is the combination, by three independent routes that
+agree:
+
+| route | result |
+|---|---|
+| joint calibration+geometry fit on the residual | 79–82 cm |
+| direct `P_ctd − P_mr` | 91 cm |
+| stated build at the observed 44° pitch: `1.0·sin44 + 0.17·cos44` | 81 cm |
+
+---
+
 ## 9. Open questions
 
 1. **Delete-key support in `config_patch`** (A6) — add it, or forbid order

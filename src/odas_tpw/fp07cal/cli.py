@@ -44,6 +44,10 @@ reference:
   time_var: "sci_ctd41cp_timestamp"
   value_var: "sci_water_temp"
   pressure_var: "sci_water_pressure"   # enables the clock-offset measurement
+  pressure_scale: 1.0  # a Slocum reports sci_water_pressure in BAR. A hotel
+                       # file from `dinkum-hotel` has already applied the x10,
+                       # so 1.0 is right there -- but set 10.0 when pointing
+                       # straight at a raw converted ebd.nc, which has not.
   valid_min: -5.0
   valid_max: 45.0
 
@@ -55,13 +59,20 @@ pairs:
   kernel_tau: 0.5      # [s] single pole approximating the CTD's response
   min_speed: 0.05      # [m/s] below this the thermistor is not flushing
   require_profile: true
-  min_corr: 0.7        # reject a lag whose |r| is below this
 
 channels: ["T1", "T2"]
 
 lag:
   max_lag: 20.0
   step: 0.25
+  detrend_s: 30.0      # High-pass BEFORE scoring, and gate on peak sharpness
+                       # rather than on r. A glider dive is a monotonic ramp,
+                       # and shifting a straight line in time returns the same
+                       # line plus a constant, which every correlation removes:
+                       # measured on real data, raw pressure scored r=1.000000
+                       # at EVERY lag over +/-30 s (dynamic range 2e-5). A high
+                       # r is not evidence. Cross-check 20/30/60 s -- a window
+                       # that is too short locks onto a wrong lobe.
 
 fit:
   order: 1             # 1 by default on purpose: a glider rarely spans the
@@ -69,6 +80,14 @@ fit:
                        # conditioned over a narrow range, and a line
                        # extrapolates gracefully onto yos that went outside it
   robust: true
+  geometry: true       # Fit the sensor mounting offset JOINTLY with the
+                       # coefficients. The FP07 and CTD sit at different depths
+                       # at the same instant, contributing dz*dT/dz to the
+                       # residual -- which looks exactly like a depth-dependent
+                       # calibration. Estimating it afterwards does not work:
+                       # dT/dz correlates with T on a monotone profile, so an
+                       # ordinary fit absorbs it into t_0 (25 cm injected came
+                       # back as 0.4 cm).
 
 stability:
   n_blocks: 6
@@ -112,6 +131,7 @@ def _gather(cfg: dict):
         time_var=ref_cfg.get("time_var", "sci_ctd41cp_timestamp"),
         value_var=ref_cfg.get("value_var", "sci_water_temp"),
         pressure_var=ref_cfg.get("pressure_var", "sci_water_pressure"),
+        pressure_scale=float(ref_cfg.get("pressure_scale", 1.0)),
         valid_min=float(ref_cfg.get("valid_min", -5.0)),
         valid_max=float(ref_cfg.get("valid_max", 45.0)),
     )
@@ -162,11 +182,28 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             results["channels"][ch] = {"error": "zero pairs", "rejected": dict(pairs.rejected)}
             continue
 
-        fit = fit_calibration(
-            pairs,
-            order=int(fit_cfg.get("order", 1)),
-            robust=bool(fit_cfg.get("robust", True)),
-        )
+        geo = None
+        if fit_cfg.get("geometry", True):
+            from odas_tpw.fp07cal.geometry import joint_fit
+
+            fit, geo = joint_fit(
+                pairs, order=int(fit_cfg.get("order", 1)),
+                robust=bool(fit_cfg.get("robust", True)),
+            )
+            print(f"  {ch} geometry: {geo.summary()}")
+            if np.isfinite(geo.collinearity) and geo.collinearity > 0.8:
+                print(
+                    f"      NOTE collinearity {geo.collinearity:.3f}: dz and the "
+                    f"residual lag are NOT separately resolved (vertical speed "
+                    f"one-signed — profiles in only one direction). Their "
+                    f"combination is measured; the split is not."
+                )
+        else:
+            fit = fit_calibration(
+                pairs,
+                order=int(fit_cfg.get("order", 1)),
+                robust=bool(fit_cfg.get("robust", True)),
+            )
         blocks = blocked_offsets(
             pairs, fit,
             n_blocks=st_cfg.get("n_blocks", 6),
@@ -200,6 +237,14 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             "lag_dynamic_range": lr.dynamic_range,
             "lag_width_s": lr.width,
             "clock_trustworthy": po.trustworthy(),
+            "geometry": None if geo is None else {
+                "dz_m": geo.dz_m, "dz_se_m": geo.dz_se_m,
+                "tau_s": geo.tau_s, "tau_se_s": geo.tau_se_s,
+                "collinearity": geo.collinearity,
+                "separately_resolved": bool(
+                    np.isfinite(geo.collinearity) and geo.collinearity <= 0.8
+                ),
+            },
             "stability": {
                 "probe_drift_K_per_day": stab.probe_drift_K_per_day,
                 "se_K_per_day": stab.drift_se_K_per_day,
