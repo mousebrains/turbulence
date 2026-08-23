@@ -111,6 +111,24 @@ hotel:
                           # conservative choice; "pchip" is shape-preserving
                           # but raises on duplicated timestamps.
 
+  max_gap: 30.0           # [s] Where the two bracketing CTD samples are farther
+                          # apart than this, NaN the output instead of ruling a
+                          # straight line across the hole.
+                          #
+                          # SET THIS. The default (null) interpolates across any
+                          # gap, so a CTD that ran on only some yos yields a
+                          # smooth FABRICATED ramp between real samples hours
+                          # apart -- and ct, ctd, stratification,
+                          # `salinity: "measured"` and epsilon.T_source all read
+                          # it as data. 30 s is ~30x the SBE41cp's 1 Hz interval:
+                          # loose enough for jitter, tight enough to reject a
+                          # dropout. The merge warns either way, naming the
+                          # channel and the fabricated fraction.
+
+  extrapolate: false      # NaN outside the CTD's own coverage rather than
+                          # holding the first/last value. An edge-held constant
+                          # correlates with nothing and is not a measurement.
+
 profiles:
   P_min: 0.5              # minimum pressure [dbar]
   W_min: null             # null = auto: 0.05 dbar/s for a glider (the

@@ -19,6 +19,14 @@ The ``hotel.channels`` YAML block supports three forms per source name:
       pitch:
         name: "theta"        # rename target (default: same as source)
         interp: "nearest"    # override hotel.interpolation for this var
+        max_gap: 30.0        # [s] NaN the output where the two bracketing
+                             # SOURCE samples are farther apart than this,
+                             # instead of ruling a straight line across the
+                             # hole (default: hotel.max_gap, itself null =
+                             # interpolate across anything)
+        extrapolate: false   # NaN outside the source's own time range instead
+                             # of holding the end values (default:
+                             # hotel.extrapolate, itself true)
         scale: 0.0174533     # multiplicative factor (default 1.0)
         offset: 0.0          # additive offset (default 0.0)
         units: "rad"         # CF units string (default: source file's units)
@@ -32,8 +40,28 @@ The ``hotel.channels`` YAML block supports three forms per source name:
 
 If ``channels`` is empty or omitted, every source variable is loaded with
 default options. Otherwise only the source names listed are kept.
+
+Gaps
+----
+``hotel.max_gap`` and ``hotel.extrapolate`` (with per-channel overrides above)
+control what happens where the source has **no data**. Both default to the
+historical behaviour --- interpolate across any gap, hold the end values outside
+coverage --- so an existing config keeps producing the same numbers.
+
+That default is dangerous and the merge now says so. On an instrument whose CTD
+ran on only some profiles, the merged channel is a smooth *fabricated* ramp
+between real samples hours apart, and every consumer (``ct``, ``ctd``,
+``stratification``, ``salinity: "measured"``, ``epsilon.T_source``) reads it as
+data. A warning naming the channel and the fabricated fraction is emitted
+whenever it happens, scaled to that channel's own median sample interval so it
+fires on real dropouts and not on sampling jitter.
+
+Set ``max_gap`` to reject rather than invent. Note that without it, a builder
+that NaN-marks its own dropouts (``dinkum-hotel``'s ``projection.max_gap``) has
+that undone here --- the loader drops the NaN and interpolates across it anyway.
 """
 
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,7 +77,14 @@ _INTERP_KINDS = frozenset({
 
 _CHANNEL_OPTION_KEYS = frozenset({
     "name", "interp", "scale", "offset", "units", "fast", "time_column", "replace",
+    "max_gap", "extrapolate",
 })
+
+# A gap this many times the channel's own median sample interval is not normal
+# sampling jitter --- it is a dropout, and interpolating across it manufactures
+# data.  Used only to decide when to WARN, so it needs no configuration and
+# scales itself to each channel's rate.
+_GAP_WARN_FACTOR = 10.0
 
 
 @dataclass
@@ -426,41 +461,104 @@ def _load_mat(
                      units=units, time_is_relative=is_relative)
 
 
+def _bridged_gap(hotel_t: np.ndarray, target_t: np.ndarray) -> np.ndarray:
+    """Width of the source gap each target sample falls inside.
+
+    Zero for targets outside the source range (those are extrapolation, handled
+    separately).  A target landing exactly on a source sample gets that
+    sample's neighbouring interval, which is the honest answer: it is only
+    interpolated to the extent its neighbours are far away.
+    """
+    idx = np.searchsorted(hotel_t, target_t, side="left")
+    inside = (target_t >= hotel_t[0]) & (target_t <= hotel_t[-1])
+    lo = np.clip(idx - 1, 0, hotel_t.size - 1)
+    hi = np.clip(idx, 0, hotel_t.size - 1)
+    return np.where(inside, hotel_t[hi] - hotel_t[lo], 0.0)
+
+
 def _interp_one(
     hotel_t: np.ndarray,
     data: np.ndarray,
     target_t: np.ndarray,
     kind: str,
+    *,
+    max_gap: float | None = None,
+    extrapolate: bool = True,
+    stats: dict | None = None,
 ) -> np.ndarray:
-    """Interpolate one channel onto ``target_t`` with the requested kind."""
+    """Interpolate one channel onto ``target_t`` with the requested kind.
+
+    ``max_gap`` [s] NaNs the output wherever the two bracketing source samples
+    are farther apart than that, instead of ruling a straight line across the
+    hole.  ``extrapolate=False`` NaNs the output outside the source's own time
+    range instead of holding the end values.
+
+    Both default to the historical behaviour --- interpolate across anything,
+    edge-hold outside --- because changing the numbers a config already
+    produces is not something this function should do silently.  What it does
+    do unconditionally is *measure* how much of the output was manufactured
+    and report it through ``stats``, so the caller can warn.
+
+    Why this matters: on an instrument whose CTD ran on only some profiles, the
+    merged channel is a smooth fabricated ramp between real samples hours
+    apart, and every consumer --- ``ct``, ``ctd``, ``stratification``,
+    ``salinity: "measured"``, ``epsilon.T_source`` --- reads it as if it were
+    data.
+    """
     from scipy.interpolate import PchipInterpolator, interp1d
 
+    target_t = np.asarray(target_t, dtype=np.float64)
     # Drop NaN samples (fill-valued gaps / NaT times): PchipInterpolator raises
-    # on a NaN in the data, and interp1d would propagate it. Interpolate across
-    # the gaps instead; with < 2 valid points there is nothing to interpolate.
+    # on a NaN in the data, and interp1d would propagate it. With < 2 valid
+    # points there is nothing to interpolate.
     finite = np.isfinite(hotel_t) & np.isfinite(data)
     if int(finite.sum()) < 2:
+        if stats is not None:
+            stats.update(n_target=int(target_t.size), n_gap=int(target_t.size),
+                         n_outside=0, widest_gap=float("inf"), median_dt=float("nan"))
         return np.full(np.shape(target_t), np.nan, dtype=np.float64)
-    if not finite.all():
-        hotel_t = np.asarray(hotel_t)[finite]
-        data = np.asarray(data)[finite]
+    hotel_t = np.asarray(hotel_t, dtype=np.float64)[finite]
+    data = np.asarray(data, dtype=np.float64)[finite]
 
     if kind == "pchip":
         interp = PchipInterpolator(hotel_t, data, extrapolate=False)
-        out = interp(target_t)
-        # Fill NaN edges with boundary values, matching the historical behavior.
+        out = np.asarray(interp(target_t), dtype=np.float64)
         mask = np.isnan(out)
         if np.any(mask):
-            below = target_t < hotel_t[0]
-            above = target_t > hotel_t[-1]
-            out[mask & below] = data[0]
-            out[mask & above] = data[-1]
-        return np.asarray(out, dtype=np.float64)
-    interp = interp1d(
-        hotel_t, data, kind=kind, bounds_error=False,
-        fill_value=(data[0], data[-1]),
+            out[mask & (target_t < hotel_t[0])] = data[0]
+            out[mask & (target_t > hotel_t[-1])] = data[-1]
+    else:
+        interp = interp1d(
+            hotel_t, data, kind=kind, bounds_error=False,
+            fill_value=(data[0], data[-1]),
+        )
+        out = np.asarray(interp(target_t), dtype=np.float64)
+
+    gap = _bridged_gap(hotel_t, target_t)
+    outside = (target_t < hotel_t[0]) | (target_t > hotel_t[-1])
+    dt = np.diff(hotel_t)
+    median_dt = float(np.median(dt)) if dt.size else float("nan")
+    warn_gap = (
+        _GAP_WARN_FACTOR * median_dt
+        if np.isfinite(median_dt) and median_dt > 0
+        else np.inf
     )
-    return np.asarray(interp(target_t), dtype=np.float64)
+    notable = gap > warn_gap
+
+    if stats is not None:
+        stats.update(
+            n_target=int(target_t.size),
+            n_gap=int(np.count_nonzero(notable)),
+            n_outside=int(np.count_nonzero(outside)),
+            widest_gap=float(gap.max()) if gap.size else 0.0,
+            median_dt=median_dt,
+        )
+
+    if max_gap is not None and np.isfinite(max_gap) and max_gap > 0:
+        out[gap > max_gap] = np.nan
+    if not extrapolate:
+        out[outside] = np.nan
+    return out
 
 
 def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, np.ndarray]:
@@ -479,6 +577,11 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
         raise ValueError(
             f"hotel.interpolation={default_kind!r}: not in {sorted(_INTERP_KINDS)}"
         )
+    # Both default to the historical behaviour so an existing config keeps
+    # producing the numbers it produced before; the warning above is what makes
+    # the situation visible without changing them.
+    default_max_gap = hotel_cfg.get("max_gap")
+    default_extrapolate = bool(hotel_cfg.get("extrapolate", True))
     _, channels_opts = _normalize_channels_cfg(hotel_cfg.get("channels"))
 
     pf_start_offset = 0.0 if hotel_data.time_is_relative else pf.start_time.timestamp()
@@ -498,9 +601,61 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
         # gets nothing for that channel, same as a missing channel.
         if hotel_t.size < 2:
             continue
-        result[src] = _interp_one(hotel_t, data, target_t, kind)
+        max_gap = opts.get("max_gap", default_max_gap)
+        extrapolate = bool(opts.get("extrapolate", default_extrapolate))
+        stats: dict = {}
+        result[src] = _interp_one(
+            hotel_t, data, target_t, kind,
+            max_gap=None if max_gap is None else float(max_gap),
+            extrapolate=extrapolate,
+            stats=stats,
+        )
+        _warn_if_fabricated(src, stats, max_gap, extrapolate)
 
     return result
+
+
+def _warn_if_fabricated(
+    src: str, stats: dict, max_gap: float | None, extrapolate: bool
+) -> None:
+    """Say how much of a merged channel was manufactured rather than measured.
+
+    Unconditional, and scaled to the channel's own median sample interval, so
+    it fires on a real dropout without needing to be configured and without
+    nagging about ordinary sampling jitter.  Silence here is the failure mode
+    that motivated it: a CTD that ran on only some profiles produced a smooth
+    fabricated ramp that every downstream consumer read as data.
+    """
+    n = int(stats.get("n_target", 0))
+    if not n:
+        return
+    n_gap = int(stats.get("n_gap", 0))
+    n_out = int(stats.get("n_outside", 0))
+    if not n_gap and not n_out:
+        return
+
+    parts = []
+    if n_gap:
+        widest = stats.get("widest_gap", float("nan"))
+        med = stats.get("median_dt", float("nan"))
+        verb = "NaN-ed" if max_gap else "interpolated across"
+        parts.append(
+            f"{100.0 * n_gap / n:.1f}% of samples {verb} gaps wider than "
+            f"{_GAP_WARN_FACTOR:g}x the median interval ({med:.3g} s); "
+            f"widest gap {widest:.4g} s"
+        )
+    if n_out:
+        verb = "NaN-ed" if not extrapolate else "edge-held"
+        parts.append(f"{100.0 * n_out / n:.1f}% of samples {verb} outside coverage")
+    hint = (
+        ""
+        if (max_gap or not extrapolate)
+        else " — set hotel.max_gap / hotel.extrapolate to reject these instead"
+    )
+    warnings.warn(
+        f"hotel channel {src!r}: " + "; ".join(parts) + hint,
+        stacklevel=3,
+    )
 
 
 def merge_hotel_into_pfile(hotel_data: HotelData, pf, hotel_cfg: dict) -> None:
