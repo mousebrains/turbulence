@@ -197,6 +197,7 @@ def load_hotel_reference(
     time_var: str = "sci_ctd41cp_timestamp",
     value_var: str = "sci_water_temp",
     pressure_var: str | None = "sci_water_pressure",
+    pressure_scale: float = 1.0,
     valid_min: float = -5.0,
     valid_max: float = 45.0,
 ) -> ReferenceSeries:
@@ -205,6 +206,15 @@ def load_hotel_reference(
     Deliberately bypasses ``perturb.hotel``: that path interpolates across gaps
     and edge-holds outside coverage (plan A1).  Here the file's own samples are
     all we take.
+
+    ``pressure_scale`` exists because a Slocum reports ``sci_water_pressure`` in
+    **bar**.  A hotel file built by ``dinkum-hotel`` has already applied the
+    factor of 10 (see its ``sensors.sci_water_pressure.scale``), so the default
+    of 1.0 is right for that path --- but reading a raw converted ``ebd.nc``
+    directly, as the calibration tooling can, it has not, and the pressure
+    arrives 10x small.  Lag estimates are correlation-based and so immune, but
+    anything that compares the reference's pressure to the instrument's in
+    physical units is not.  Pass 10.0 for raw Slocum units.
     """
     import xarray as xr
 
@@ -219,6 +229,8 @@ def load_hotel_reference(
         p = None
         if pressure_var and pressure_var in ds.variables:
             p = np.asarray(ds[pressure_var].values, dtype=np.float64).ravel()
+            if pressure_scale != 1.0:
+                p = p * pressure_scale
     return sanitize_reference(
         t, v, pressure=p, valid_min=valid_min, valid_max=valid_max,
         source=f"{Path(path).name}:{value_var}",

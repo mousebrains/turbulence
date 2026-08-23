@@ -79,14 +79,27 @@ class LagResult:
     width: float = float("nan")
     """Width [s] of the region within 1% of the peak's dynamic range."""
 
+    at_boundary: bool = False
+    """True when the peak sits at the edge of the searched range."""
+
     n_pairs: int = 0
     lags: np.ndarray = field(default_factory=lambda: np.empty(0))
     scores: np.ndarray = field(default_factory=lambda: np.empty(0))
     label: str = "?"
 
     def trustworthy(self, *, min_range: float = 0.10, max_width: float = 5.0) -> bool:
+        """A resolved peak: sharp, well above its surroundings, and interior.
+
+        The boundary test is not a nicety.  A score that is still climbing at
+        the edge of the search has no maximum inside it, and ``argmax`` then
+        returns the edge itself --- a number that looks like a measurement and
+        is only a statement about where the search stopped.  Measured in 150
+        dbar bands on osu685, unresolved bands piled up at exactly +/-25.00 s
+        (the search bound) and would otherwise have been averaged in as data.
+        """
         return bool(
             np.isfinite(self.lag)
+            and not self.at_boundary
             and np.isfinite(self.dynamic_range)
             and self.dynamic_range >= min_range
             and np.isfinite(self.width)
@@ -94,7 +107,12 @@ class LagResult:
         )
 
     def summary(self) -> str:
-        verdict = "ok" if self.trustworthy() else "NOT TRUSTWORTHY (flat peak)"
+        if self.trustworthy():
+            verdict = "ok"
+        elif self.at_boundary:
+            verdict = "NOT TRUSTWORTHY (peak at search boundary)"
+        else:
+            verdict = "NOT TRUSTWORTHY (flat peak)"
         return (
             f"{self.label}: lag {self.lag:+.2f} s, r={self.score:.6f}, "
             f"range={self.dynamic_range:.3g}, width={self.width:.1f} s — {verdict}"
@@ -119,9 +137,11 @@ def _summarize(lags: np.ndarray, scores: np.ndarray, label: str, n_pairs: int) -
         width = float(near.max() - near.min()) if near.size else 0.0
     else:
         width = float(lags.max() - lags.min())
+    finite = np.flatnonzero(np.isfinite(scores))
+    at_edge = bool(finite.size and (i <= finite[0] or i >= finite[-1]))
     return LagResult(
         lag=best, score=peak, dynamic_range=rng, width=width,
-        n_pairs=n_pairs, lags=lags, scores=scores, label=label,
+        at_boundary=at_edge, n_pairs=n_pairs, lags=lags, scores=scores, label=label,
     )
 
 

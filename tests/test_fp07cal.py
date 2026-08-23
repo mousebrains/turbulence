@@ -21,7 +21,12 @@ from odas_tpw.fp07cal.logr import (
     temperature,
 )
 from odas_tpw.fp07cal.pairs import PairConfig, build_pairs_multi
-from odas_tpw.fp07cal.series import ReferenceSeries, sanitize_reference
+from odas_tpw.fp07cal.geometry import geometry_fit, local_dTdz
+from odas_tpw.fp07cal.series import (
+    ReferenceSeries,
+    load_hotel_reference,
+    sanitize_reference,
+)
 from odas_tpw.fp07cal.stability import blocked_offsets, corroborates, drift_fit, t1_t2_series
 from odas_tpw.fp07cal.synth import DEFAULT_BRIDGE, SynthConfig, make_deployment
 
@@ -218,6 +223,85 @@ def test_fit_refuses_too_few_pairs():
                    L=np.array([-0.1, -0.11]), channel="T1")
     with pytest.raises(ValueError, match="too few"):
         fit_calibration(tiny, order=2)
+
+
+def test_boundary_peak_is_never_trustworthy():
+    """A score still climbing at the search edge has no maximum inside it."""
+    from odas_tpw.fp07cal.lag import LagResult
+
+    edge = LagResult(lag=25.0, score=0.9, dynamic_range=0.8, width=0.5,
+                     at_boundary=True)
+    assert not edge.trustworthy()
+    assert "boundary" in edge.summary()
+
+
+def test_joint_fit_recovers_an_injected_depth_offset():
+    """dz must be recovered AND kept out of t_0 — which needs a joint fit."""
+    from odas_tpw.fp07cal.geometry import joint_fit
+
+    probes, ref, truth = _deployment(ct_every_n=1)
+    _lr, pairs = temperature_lag(probes, ref, "T1", cfg=PairConfig(max_gap=30.0),
+                                 max_lag=10.0, step=1.0)
+    g = local_dTdz(pairs)
+    ok = np.isfinite(g)
+    assert ok.sum() > 100
+
+    dz = 0.25
+    pairs.T_ref = pairs.T_ref + np.where(ok, dz * g, 0.0)
+    fit, geo = joint_fit(pairs, order=1, dTdz=g)
+    assert geo.dz_m == pytest.approx(dz, abs=0.05)
+    # ...and the coefficients must come back clean rather than having eaten it.
+    assert fit.config_equivalent["beta_1"] == pytest.approx(truth["beta_1"], rel=5e-3)
+
+
+def test_two_step_geometry_is_absorbed_by_the_calibration():
+    """Why joint_fit exists: post-fit residuals badly underestimate dz."""
+    from odas_tpw.fp07cal.geometry import joint_fit
+
+    probes, ref, _t = _deployment(ct_every_n=1)
+    _lr, pairs = temperature_lag(probes, ref, "T1", cfg=PairConfig(max_gap=30.0),
+                                 max_lag=10.0, step=1.0)
+    g = local_dTdz(pairs)
+    dz = 0.25
+    pairs.T_ref = pairs.T_ref + np.where(np.isfinite(g), dz * g, 0.0)
+
+    two_step = geometry_fit(pairs, fit_calibration(pairs, order=1), dTdz=g)
+    _f, joint = joint_fit(pairs, order=1, dTdz=g)
+    assert abs(two_step.dz_m - dz) > abs(joint.dz_m - dz)
+
+
+def test_local_dTdz_sees_the_thermocline():
+    probes, ref, _t = _deployment(ct_every_n=1)
+    _lr, pairs = temperature_lag(probes, ref, "T1", cfg=PairConfig(max_gap=30.0),
+                                 max_lag=6.0, step=2.0)
+    g = local_dTdz(pairs)
+    fin = g[np.isfinite(g)]
+    assert fin.size > 100
+    # The synthetic column warms toward the surface, and the thermocline gives
+    # dT/dz a dynamic range -- which is the lever arm geometry_fit relies on.
+    assert np.nanmedian(fin) < 0
+    assert np.nanmax(np.abs(fin)) / max(np.nanmedian(np.abs(fin)), 1e-9) > 2.0
+
+
+def test_hotel_pressure_scale_applied():
+    """Slocum reports bar; a raw ebd.nc read must be able to convert to dbar."""
+    import tempfile
+    from pathlib import Path
+
+    import xarray as xr
+
+    ds = xr.Dataset({
+        "sci_ctd41cp_timestamp": ("i", np.arange(1.7e9, 1.7e9 + 10)),
+        "sci_water_temp": ("i", np.full(10, 20.0)),
+        "sci_water_pressure": ("i", np.full(10, 10.0)),
+    })
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "h.nc"
+        ds.to_netcdf(p)
+        raw = load_hotel_reference(p)
+        scaled = load_hotel_reference(p, pressure_scale=10.0)
+    assert raw.pressure[0] == pytest.approx(10.0)
+    assert scaled.pressure[0] == pytest.approx(100.0)
 
 
 def test_bridge_inverse_is_exact():

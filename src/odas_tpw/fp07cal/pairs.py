@@ -73,6 +73,14 @@ class PairSet:
     T_ref: np.ndarray = field(default_factory=lambda: np.empty(0))
     L: np.ndarray = field(default_factory=lambda: np.empty(0))
     pressure: np.ndarray = field(default_factory=lambda: np.empty(0))
+    w: np.ndarray = field(default_factory=lambda: np.empty(0))
+    """Vertical speed dP/dt [dbar/s] at the kernel centre.
+
+    Carried so that a residual proportional to dT/dz can be split into the
+    geometric sensor offset (dz) and a leftover timing error (tau*w) --- the two
+    are otherwise degenerate.  See :mod:`odas_tpw.fp07cal.geometry`.
+    """
+
     direction: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=np.int8))
     profile_uid: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=object))
     file_label: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=object))
@@ -106,6 +114,7 @@ class PairSet:
             T_ref=np.concatenate([self.T_ref, other.T_ref]),
             L=np.concatenate([self.L, other.L]),
             pressure=np.concatenate([self.pressure, other.pressure]),
+            w=np.concatenate([self.w, other.w]),
             direction=np.concatenate([self.direction, other.direction]),
             profile_uid=np.concatenate([self.profile_uid, other.profile_uid]),
             file_label=np.concatenate([self.file_label, other.file_label]),
@@ -216,6 +225,7 @@ def build_pairs(
         rejected["no_reference_coverage"] += 1
         return replace(empty, per_file={probe.label: 0})
 
+    w_probe = np.gradient(probe.pressure, probe.time)
     L_raw, clipped = log_r(probe.counts[channel], probe.bridge[channel])
     L_slow = _single_pole(L_raw, dt, cfg.kernel_tau)
 
@@ -272,6 +282,7 @@ def build_pairs(
         T_ref=T_ref_k[kk],
         L=L_k[kk],
         pressure=probe.pressure[j][kk],
+        w=w_probe[j][kk],
         direction=dirs,
         profile_uid=uid,
         file_label=np.array([probe.label] * kk.size, dtype=object),
