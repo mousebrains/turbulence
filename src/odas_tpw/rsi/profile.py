@@ -432,6 +432,10 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         # so it survives apply_schema; binning carries it to the combo.
         if info.get("calibration"):
             attrs["calibration"] = info["calibration"]
+        # Hotel merge gap limit [s] (perturb hotel.max_gap), so downstream
+        # interp-fills of a merged channel can honour the same gate.
+        if info.get("hotel_max_gap") is not None:
+            attrs["hotel_max_gap"] = float(info["hotel_max_gap"])
         # FP07 electronics coefficients for the chi path (#131 m8): embed
         # diff_gain plus exactly _extract_therm_cal's output for the base
         # thermistor (including 'b' — noise_thermchannel's eta consumes it)

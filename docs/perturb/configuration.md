@@ -94,6 +94,8 @@ Merged channels become plain instrument channels: they are written into the per-
 | `channels` | dict | `{}` | Column name mapping (hotel → output). Empty = load all |
 | `fast_channels` | list | `["speed", "P"]` | Channels interpolated onto the fast time axis |
 | `interpolation` | string | `"pchip"` | Interpolation method: `"pchip"` or `"linear"` |
+| `max_gap` | float or `"unlimited"` | — (**required**) | [s] NaN the merged channel where the two bracketing source samples are farther apart than this, instead of ruling a straight line across the hole. No default: the right limit is the sensor's own rate (~30 s for a 1 Hz CTD, minutes for a flight-state variable), so omitting it raises. `"unlimited"` deliberately keeps the old interpolate-across-anything behaviour. Per-channel override wins; a per-channel `null` inherits this value |
+| `extrapolate` | bool | `false` | Hold the first/last source value outside the source's own time range instead of NaN. Per-channel override wins; a per-channel `null` inherits this value |
 
 ---
 

@@ -283,15 +283,18 @@ def _compute_epsilon(
         spec_shear = np.full((n_sh, n_freq, n_spec), np.nan)
         spec_nasmyth = np.full((n_sh, n_freq, n_spec), np.nan)
 
-        # Defect: window temperature may be NaN (l3.temp can hold NaN when temp
-        # data is absent), and visc/visc35(NaN)->NaN propagates to all-NaN
-        # epsilon and Nasmyth spectra with no warning. Mirror the process_l4
-        # guard: substitute the 10 degC default for non-finite temperatures.
+        # Window temperature may be NaN (l3.temp is NaN when temp data is
+        # absent, or when every sample in the window fell in a NaN-ed hotel
+        # gap -- partial windows already average their finite samples in L3),
+        # and visc/visc35(NaN)->NaN propagates to all-NaN epsilon and Nasmyth
+        # spectra with no warning. Mirror the process_l4 guard: substitute the
+        # 10 degC default for the windows with no temperature at all.
         temp_win = np.asarray(l3.temp, dtype=np.float64)
         if not np.all(np.isfinite(temp_win)):
+            n_bad = int(np.count_nonzero(~np.isfinite(temp_win)))
             warnings.warn(
-                "Non-finite window temperature(s); using 10 degC for viscosity "
-                "in those windows",
+                f"Non-finite window temperature in {n_bad}/{temp_win.size} "
+                "window(s) (no finite sample); using 10 degC for viscosity there",
                 stacklevel=2,
             )
             temp_win = np.where(np.isfinite(temp_win), temp_win, 10.0)
