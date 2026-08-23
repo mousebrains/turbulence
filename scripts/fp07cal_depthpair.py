@@ -26,19 +26,32 @@ Depth-pairing is only as good as the CROSS-CALIBRATION of the two pressure
 sensors: a zero offset between them injects a depth error directly, where
 time-pairing was immune to it.  That offset is measured here too.
 """
+import argparse
 import glob
-import sys
+import os
 
 import numpy as np
 
-sys.path.insert(0, "/Users/pat/Desktop/turbulence/.claude/worktrees/fp07-insitu-cal/src")
 from odas_tpw.fp07cal import PairConfig, load_hotel_reference, load_probe_series, log_r
 from odas_tpw.fp07cal.fit import fit_calibration
 from odas_tpw.fp07cal.geometry import joint_fit, local_dTdz
 from odas_tpw.fp07cal.lag import temperature_lag
 from odas_tpw.fp07cal.pairs import PairSet, _single_pole
 
-D = "/Volumes/SeaChest/ARCTERX/2025/Interior/Gliders/osu685"
+D = None  # set in __main__ from _data_dir()
+
+
+def _data_dir() -> str:
+    """Deployment root (contains MR/*.p and PASS0/ebd.nc) from argv or $FP07CAL_DATA."""
+    ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    ap.add_argument("data_dir", nargs="?", default=os.environ.get("FP07CAL_DATA"),
+                    help="deployment root containing MR/*.p and PASS0/ebd.nc "
+                         "(default: $FP07CAL_DATA)")
+    a = ap.parse_args()
+    if not a.data_dir:
+        ap.error("give the deployment root as an argument or set FP07CAL_DATA")
+    return a.data_dir
+
 LAG_HINT = 7.4      # only used to find which CTD samples belong to a profile
 BIN_DBAR = 0.30     # ~ the depth the CTD integrates over at 0.3 dbar/s, 1 Hz
 
@@ -188,4 +201,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    D = _data_dir()
     main()

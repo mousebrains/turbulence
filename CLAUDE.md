@@ -81,11 +81,11 @@ changes. Runbook: `docs/fp07cal/runbook.md`. Worked 72-day result:
 Facts that are easy to get wrong:
 
 - The reference is read **directly from the CTD NetCDF on the CTD's own
-  clock**, never through `perturb/hotel.py`. That merge interpolates across
-  arbitrary gaps and edge-holds outside coverage, so on a CT that ran only some
-  yos it hands the fit a fabricated ramp. Confirmed empirically: NaN-marking a
-  gap produces **byte-identical** output from the perturb loader, so
-  `dinkum-hotel`'s `projection.max_gap` does not survive the merge.
+  clock**, never through `perturb/hotel.py`. How that merge treats gaps and
+  out-of-coverage samples is controlled by perturb's `hotel.max_gap` /
+  `extrapolate` settings (PR #150); a calibration must not depend on any such
+  configuration, so `fp07-cal` takes the file's **real samples only** and
+  invents nothing between them.
 - The thermistor is **decimated down onto real CTD samples**, not the CTD
   interpolated up. That invents no reference, bandwidth-matches the regressor
   (so `beta_1` is not attenuated by errors-in-variables), and makes a sparse
