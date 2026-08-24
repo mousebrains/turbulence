@@ -90,6 +90,42 @@ def test_sanitize_drops_slocum_junk_and_dedupes():
     assert np.all(np.diff(ref.time) > 0)
 
 
+def test_sanitize_reports_why_samples_were_dropped():
+    """A reference that mostly evaporates should say so, not just come back short."""
+    t = np.array([0.0, 1.7e9, 1.7e9, 1.7e9 + 1, 1.7e9 + 2, np.nan])
+    v = np.array([15.0, 20.0, 22.0, 21.0, 999.0, 18.0])
+    stats: dict = {}
+    ref = sanitize_reference(t, v, stats=stats)
+    assert stats == {
+        "n_total": 6,
+        "n_bad_time": 2,  # the 0.0 sentinel and the NaN
+        "n_bad_value": 1,  # 999 degC, on an otherwise fine stamp
+        "n_duplicate": 1,
+        "n_kept": 2,
+    }
+    assert stats["n_kept"] == ref.time.size
+
+
+@pytest.mark.parametrize(
+    ("method", "expected"), [("mean", 21.0), ("first", 20.0), ("last", 22.0)]
+)
+def test_sanitize_dedupe_method_is_selectable(method, expected):
+    """Same three rules as dinkum-hotel, because it is the same implementation."""
+    t = np.array([1.7e9, 1.7e9, 1.7e9 + 1])
+    v = np.array([20.0, 22.0, 30.0])
+    ref = sanitize_reference(t, v, dedupe=method)
+    assert ref.value[0] == pytest.approx(expected)
+
+
+def test_sanitize_accepts_iso8601_time_bounds():
+    """Inherited from resolve_time_bounds: a date is easier to reason about."""
+    t = np.array([1.4e9, 1.7e9, 1.9e9])  # 2014, 2023, 2030
+    v = np.full(3, 20.0)
+    ref = sanitize_reference(t, v, time_min="2020-01-01", time_max="2026-01-01")
+    assert ref.time.size == 1
+    assert ref.time[0] == pytest.approx(1.7e9)
+
+
 def test_valid_spans_do_not_bridge_gaps():
     """The every-n-th-yo case: no reference between spans, not a wide one."""
     t = np.concatenate([np.arange(0, 60.0), np.arange(3600.0, 3660.0)])

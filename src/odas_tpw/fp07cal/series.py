@@ -29,6 +29,7 @@ import re
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -134,34 +135,56 @@ def sanitize_reference(
     pressure: np.ndarray | None = None,
     valid_min: float = -5.0,
     valid_max: float = 45.0,
-    time_min: float = 100.0,
-    time_max: float | None = None,
+    time_min: Any = 100.0,
+    time_max: Any = None,
+    dedupe: str = "mean",
     source: str = "?",
+    stats: dict | None = None,
 ) -> ReferenceSeries:
     """Drop unusable reference samples and enforce a strictly increasing clock.
 
     Slocum repeats the last CTD timestamp on rows the CTD did not refresh and
     writes ``0.0`` where the field was never set, so duplicate and zero stamps
-    are normal, not exceptional.  Duplicates are collapsed to their mean rather
-    than dropped --- dropping would bias toward whichever row happened to sort
-    first.
+    are normal, not exceptional.
+
+    The rules themselves come from :mod:`odas_tpw.dinkum.build` --- the same
+    ``resolve_time_bounds`` / ``time_validity`` / ``dedupe_samples`` that
+    ``dinkum-hotel`` uses --- so "what counts as a bad timestamp" and "what a
+    repeated timestamp means" have **one** answer in this tree rather than one
+    per subpackage.  Two consequences of that convergence:
+
+    * ``time_min`` / ``time_max`` now accept an ISO-8601 date as well as epoch
+      seconds, because ``resolve_time_bounds`` does.
+    * ``dedupe`` is selectable (``mean`` | ``first`` | ``last``) instead of
+      hard-wired to the mean.  ``mean`` remains the default: dropping would
+      bias toward whichever row happened to sort first.
+
+    Pass *stats* to receive a rejection tally --- how many samples each rule
+    removed.  Silently discarding most of a reference is a thing the caller
+    should be able to notice.
     """
+    from odas_tpw.dinkum.build import (
+        dedupe_samples,
+        resolve_time_bounds,
+        time_validity,
+    )
+
     t = np.asarray(time, dtype=np.float64)
     v = np.asarray(value, dtype=np.float64)
     if t.shape != v.shape:
         raise ValueError(f"reference time {t.shape} and value {v.shape} differ in shape")
     p = None if pressure is None else np.asarray(pressure, dtype=np.float64)
 
-    if time_max is None:
-        time_max = 4.0e9  # ~2096; a stamp beyond this is a decode error, not a date
-    keep = (
-        np.isfinite(t)
-        & np.isfinite(v)
-        & (t >= time_min)
-        & (t <= time_max)
-        & (v >= valid_min)
-        & (v <= valid_max)
+    n_total = t.size
+    # 4.0e9 is ~2096; a stamp beyond that is a decode error, not a date.
+    lo, hi = resolve_time_bounds(
+        100.0 if time_min is None else time_min,
+        4.0e9 if time_max is None else time_max,
     )
+    ok_t = time_validity(t, lo, hi)
+    ok_v = np.isfinite(v) & (v >= valid_min) & (v <= valid_max)
+    keep = ok_t & ok_v
+
     t, v = t[keep], v[keep]
     if p is not None:
         p = p[keep]
@@ -171,27 +194,33 @@ def sanitize_reference(
     if p is not None:
         p = p[order]
 
+    n_valid = t.size
     if t.size:
-        uniq, inv = np.unique(t, return_inverse=True)
-        if uniq.size != t.size:
-            sums = np.zeros(uniq.size)
-            cnts = np.zeros(uniq.size)
-            np.add.at(sums, inv, v)
-            np.add.at(cnts, inv, 1.0)
-            v = sums / cnts
-            if p is not None:
-                # NaN-aware: `keep` filtered on time and value only, so a
-                # repeated stamp can pair a real pressure with a NaN one, and
-                # a plain sum would turn the whole group NaN — which highpass
-                # then smears over a full window of pressure_offset data.
-                fin = np.isfinite(p)
-                psums = np.zeros(uniq.size)
-                pcnts = np.zeros(uniq.size)
-                np.add.at(psums, inv[fin], p[fin])
-                np.add.at(pcnts, inv[fin], 1.0)
-                with np.errstate(invalid="ignore"):
-                    p = np.where(pcnts > 0, psums / np.maximum(pcnts, 1.0), np.nan)
-            t = uniq
+        t_dd, v = dedupe_samples(t, v, dedupe)
+        if p is not None and t_dd.size != t.size:
+            # NaN-aware, and deliberately not dedupe_samples: `keep` filtered on
+            # time and value, so a repeated stamp can pair a real pressure with
+            # a NaN one, and a plain group-mean would turn the whole group NaN
+            # -- which highpass then smears over a full window of
+            # pressure_offset data.
+            inv = np.searchsorted(t_dd, t)
+            fin = np.isfinite(p)
+            psums = np.zeros(t_dd.size)
+            pcnts = np.zeros(t_dd.size)
+            np.add.at(psums, inv[fin], p[fin])
+            np.add.at(pcnts, inv[fin], 1.0)
+            with np.errstate(invalid="ignore"):
+                p = np.where(pcnts > 0, psums / np.maximum(pcnts, 1.0), np.nan)
+        t = t_dd
+
+    if stats is not None:
+        stats.update(
+            n_total=int(n_total),
+            n_bad_time=int(np.count_nonzero(~ok_t)),
+            n_bad_value=int(np.count_nonzero(ok_t & ~ok_v)),
+            n_duplicate=int(n_valid - t.size),
+            n_kept=int(t.size),
+        )
 
     return ReferenceSeries(time=t, value=v, source=source, pressure=p)
 
