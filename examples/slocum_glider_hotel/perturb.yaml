@@ -2,7 +2,7 @@
 # hotel file built from the glider's EBD (science) files.
 #
 # The point of this config: the CTD used by every downstream computation is the
-# glider's own SBE41cp, merged in as hotel channels. Their SOURCE names
+# glider's own glider CTD, merged in as hotel channels. Their SOURCE names
 # (sci_water_temp / sci_water_cond) are carried through unchanged, so the three
 # places that name a T/C channel — ct, ctd, fp07 — are pointed at them instead
 # of the VMP's JAC_T / JAC_C. Nothing else in the pipeline names a CTD channel:
@@ -125,7 +125,7 @@ hotel:
                           #
                           # Omitting it is an error: there is no safe default,
                           # because the right limit is the sensor's own rate.
-                          # 30 s is ~30x the SBE41cp's 1 Hz interval -- loose
+                          # 30 s is ~30x the glider CTD's 1 Hz interval -- loose
                           # enough for jitter, tight enough to reject a dropout.
                           # Without it, a CTD that ran on only some yos yields a
                           # smooth FABRICATED ramp between real samples hours
@@ -178,14 +178,14 @@ fp07:
   reference: "sci_water_temp"
   must_be_negative: false # the VMP assumption (FP07 leads a hull-mounted JAC
                           # on a free fall) does not hold here: the lag is the
-                          # MR-vs-glider clock offset plus the SBE41cp response
+                          # MR-vs-glider clock offset plus the glider CTD response
                           # and can go either way, so search both signs
 
 ct:
   # T_name / C_name here are the pipeline-wide CTD channel names: they feed CT
   # alignment, background stratification (N2, dT/dz), the SP/SA/CT/sigma0/rho
   # injection onto the profile product, and every `salinity: "measured"`.
-  align: false            # the SBE41cp is PUMPED and T and C share one sample
+  align: false            # the glider CTD is PUMPED and T and C share one sample
                           # timestamp, so there is no C-vs-T lag to remove;
                           # running the alignment would fit interpolation noise
   T_name: "sci_water_temp"
@@ -247,7 +247,7 @@ ctd:
   # binned over the whole record (dive and climb), plus P from the MicroRider
   # and the derived SP/SA/CT/sigma0/rho/depth.
   enable: true
-  bin_width: 1.0          # [s] — matches the SBE41cp's ~1 Hz sampling; a
+  bin_width: 1.0          # [s] — matches the glider CTD's ~1 Hz sampling; a
                           # narrower bin just re-reports the interpolant
   T_name: "sci_water_temp"
   C_name: "sci_water_cond"
@@ -311,7 +311,7 @@ binning:
 
 netcdf:
   title: "Slocum glider MicroRider"
-  summary: "MicroRider turbulence with glider SBE41cp CTD merged via hotel file"
+  summary: "MicroRider turbulence with glider glider CTD CTD merged via hotel file"
   institution: "Oregon State University"
   creator_name: "CEOAS/Oregon State University"
   creator_email: "pat.welch@oregonstate.edu"

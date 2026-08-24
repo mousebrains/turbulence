@@ -13,7 +13,7 @@ own clock; see `docs/fp07cal/runbook.md`.
 ## 0. The problem
 
 A user has a MicroRider on a Slocum glider. The FP07 thermistors are to be
-calibrated in situ against the glider's SBE41cp, but **the CT was only sampled
+calibrated in situ against the glider's glider CTD, but **the CT was only sampled
 every *n*th yo**. We want to come out the far side with *coefficients* — numbers
 that can replace or amend the FP07 Steinhart–Hart coefficients in the `.p`
 config — rather than with a one-shot in-memory temperature array.
@@ -104,7 +104,7 @@ false comfort.
 
 `_lowpass_filter` (fp07_cal.py:83–110) branches on
 `reference.upper().startswith("JAC")`. For `sci_water_temp` it takes the else
-branch: `fc = fs_slow/3 ≈ 21 Hz`. That is *no* filtering relative to an SBE41cp
+branch: `fc = fs_slow/3 ≈ 21 Hz`. That is *no* filtering relative to an glider CTD
 with τ ≈ 0.5 s sampled at 1 Hz.
 
 The regressor `L` then carries ~20 Hz of bandwidth the reference does not have.
@@ -186,7 +186,7 @@ The measured FP07-vs-CTD lag is the sum of
 
 - the **MR-vs-glider clock offset** (constant-ish, possibly drifting, sign
   arbitrary), and
-- the **SBE41cp response + plumbing transit** (speed-dependent, always
+- the **glider CTD response + plumbing transit** (speed-dependent, always
   positive: the CTD lags the water).
 
 `fp07_calibrate` estimates one number for both. And with a 1 Hz reference,
@@ -309,7 +309,7 @@ gated out. **Hard error** with the rejection-reason histogram — never an empty
 coefficient file that a later step treats as "no correction needed".
 
 **(d) Too few pairs, or too narrow a T range.** Gated by R9. Note that the
-binding constraint here is **systematic, not random**: with an SBE41cp
+binding constraint here is **systematic, not random**: with an glider CTD
 reference, a few thousand pairs over 3 °C pins the slope far tighter than the
 dive/climb asymmetry, residual thermal lag, and MR-vs-CTD mounting separation
 do. The report must therefore present a **systematic error budget**, not a
@@ -394,7 +394,7 @@ This single change resolves three findings at once:
   reported uncertainty is not inflated by a 64× interpolation.
 
 The kernel needs a defensible shape. Start with a boxcar of width = median CTD
-sample interval, convolved with a single-pole τ for the SBE41cp thermistor;
+sample interval, convolved with a single-pole τ for the glider CTD thermistor;
 make both configurable and test sensitivity to them (see V4).
 
 ### D3 — Pair selection gates
@@ -471,7 +471,7 @@ validity:
   P_max: 195.0
 reference:
   source: "hotel.nc:sci_water_temp"
-  instrument: "SBE41cp"
+  instrument: "glider CTD"
   n_pairs: 18432
   n_profiles: 47
   n_profiles_total: 412     # <- the every-nth-yo ratio, stated plainly
@@ -658,7 +658,7 @@ An honest caveat before believing any drift number. The in-situ fit absorbs
 *everything* between true water temperature and reported FP07 temperature:
 
 - genuine thermistor drift (what we want),
-- **the reference's own drift** — we measure FP07 *relative to* the SBE41cp,
+- **the reference's own drift** — we measure FP07 *relative to* the glider CTD,
 - unremoved lag, and the MR-vs-CTD mounting separation,
 - biofouling on either sensor.
 
@@ -777,9 +777,9 @@ agree:
 
 1. **Delete-key support in `config_patch`** (A6) — add it, or forbid order
    downgrades? Adding deletion is small and honest; forbidding is smaller.
-2. **CTD kernel** — is the SBE41cp value in the `.ebd` an instantaneous sample
+2. **CTD kernel** — is the glider CTD value in the `.ebd` an instantaneous sample
    or an internal average? This sets the kernel in D2 and is worth confirming
-   against the SBE41cp manual rather than assuming.
+   against the glider CTD manual rather than assuming.
 3. **Where does `fp07-cal` live** — new `src/odas_tpw/fp07cal/` subpackage, or
    under `perturb/`? Leaning new subpackage: it is a pre-pipeline,
    deployment-scoped tool, whereas `perturb/` is per-file campaign processing.
@@ -825,7 +825,7 @@ Two passes were made over the draft. Findings that **changed** the plan:
 | "A file with no CT reference is harmless — the code already guards for a missing reference." | **Rejected, and measured.** The reference is never *missing* after the hotel merge, only *fabricated*. The guard fires only for a perfectly constant reference; the gap-ramp case sails through at corr 0.021 (§3.1, A12). Forced R9 and §3. |
 | "Refit per temporal block to measure drift." | **Refined, not accepted as stated.** Each block's narrow T range makes `beta_1` wander and drag `t_0` with it through their covariance. Split into global `beta_1` + blocked `t_0` (D8). |
 | "Emit a drifting `t_0` since we patch per file anyway." | **Kept but gated off by default.** Free structurally (§8.2), and exactly the feature that would let us fit noise and call it drift. Requires significance, a permutation test, no extrapolation, and `T1 − T2` corroboration. |
-| "Measured drift is FP07 drift." | **Rejected as stated.** With one reference it is FP07 *relative to* the SBE41cp, and it also absorbs lag and mounting effects (§8.3). Attribution is defensible but must be stated, not assumed. |
+| "Measured drift is FP07 drift." | **Rejected as stated.** With one reference it is FP07 *relative to* the glider CTD, and it also absorbs lag and mounting effects (§8.3). Attribution is defensible but must be stated, not assumed. |
 | "Patching is idempotent, just re-run it." | **Rejected.** A second patch would nest banners and destroy the "original config" block. Forced the refuse-if-already-patched check and V10. |
 
 Findings that did **not** change the plan but are recorded:

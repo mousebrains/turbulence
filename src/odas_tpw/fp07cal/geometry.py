@@ -10,7 +10,7 @@ water.  It contributes
 
     T_ref - T_probe  ~=  dz * dT/dz          [dz ~ 0.17 * cos(theta) m]
 
-which in a tropical thermocline at 0.2 K/m is ~0.03 K --- far above the SBE41cp's
+which in a tropical thermocline at 0.2 K/m is ~0.03 K --- far above the glider CTD's
 accuracy, and **strongly depth-dependent**, because dT/dz varies by a factor of
 tens between the thermocline and the deep water.  Read naively, that is exactly
 what "the calibration is depth-dependent" looks like.  It is geometry.

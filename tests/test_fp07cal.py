@@ -921,3 +921,37 @@ def test_dinkum_allows_distinct_output_names():
 
     out = normalize_sensors({"a": {"name": "x"}, "b": {}}, "t")
     assert sorted(o["name"] for o in out.values()) == ["b", "x"]
+
+
+# --- the pole is not the delay --------------------------------------------
+def test_pole_mismatch_is_not_absorbed_by_the_lag_search():
+    """A wrong kernel_tau cannot be compensated by shifting time.
+
+    A pole attenuates as well as delays, so a mismatched pole leaves residual
+    the lag search cannot remove. This is why the measured temperature-vs-
+    pressure delay (transit + response) must not be fed back in as the pole.
+    """
+    cfg = SynthConfig(n_yos=16, yo_seconds=1200, fs=8.0, files_per_deployment=3,
+                      ct_every_n=1, clock_offset=2.0, ctd_delay=1.0, ctd_tau=0.7)
+    probes, ref, _truth = make_deployment(cfg)
+
+    def rms_for(kernel_tau):
+        pc = PairConfig(max_gap=30.0, kernel_tau=kernel_tau)
+        _lr, pairs = temperature_lag(probes, ref, "T1", cfg=pc, max_lag=12.0, step=0.5)
+        return fit_calibration(pairs, order=1).rms_K
+
+    matched = rms_for(0.7)          # model == truth
+    over = rms_for(4.0)             # grossly over-filtered
+    assert over > matched, (
+        f"a 4 s pole against a 0.7 s CTD gave rms {over:.5f} K, no worse than "
+        f"the matched {matched:.5f} K -- the mismatch is being absorbed"
+    )
+
+
+def test_synth_truth_and_estimator_model_are_separable():
+    """The recovery tests must be able to specify a mismatch, not just match."""
+    matched = SynthConfig()
+    assert matched.ctd_tau == PairConfig().kernel_tau
+    # ...but nothing forces them equal.
+    mismatched = SynthConfig(ctd_tau=2.0)
+    assert mismatched.ctd_tau != PairConfig().kernel_tau
