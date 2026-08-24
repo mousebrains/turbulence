@@ -384,7 +384,7 @@ def build_hotel(
         if absent:
             raise KeyError(
                 f"Variable(s) not present in the supplied dataset: {absent}. "
-                f"It carries {sorted(ds.data_vars)[:20]}"
+                f"It carries {sorted(map(str, ds.data_vars))[:20]}"
                 f"{' ...' if len(ds.data_vars) > 20 else ''}"
             )
     else:

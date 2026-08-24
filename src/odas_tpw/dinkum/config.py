@@ -350,5 +350,9 @@ netcdf:
 def generate_template(path: str | Path) -> Path:
     """Write a fully-commented template configuration file."""
     path = Path(path)
-    path.write_text(_TEMPLATE)
+    # encoding is explicit: the default is the platform codepage, so on
+    # Windows a non-ASCII character (the template has an em dash) is written
+    # as cp1252 and load_config, which reads utf-8, then raises
+    # UnicodeDecodeError on a file we just generated.
+    path.write_text(_TEMPLATE, encoding="utf-8")
     return path
