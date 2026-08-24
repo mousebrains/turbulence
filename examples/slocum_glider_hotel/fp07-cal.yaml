@@ -53,7 +53,7 @@ pairs:
                          # from the pooled fit.
   kernel_width: null     # [s] boxcar; null = the CTD's median sample interval
   kernel_tau: 2.7        # [s] single pole approximating the CTD's response.
-                         # 2.7 s is the SBE41cp response measured in situ on
+                         # 2.7 s is the glider CTD response measured in situ on
                          # osu685 (thermal lag minus clock offset — runbook.md).
                          # A pole mismatch is not a delay, so the lag search
                          # cannot remove it; too-fast a pole leaks a few mK

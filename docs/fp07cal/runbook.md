@@ -1,7 +1,7 @@
 # `fp07-cal` runbook
 
 FP07 in-situ calibration for a MicroRider carried by a Slocum, against the
-glider's own SBE41cp. It is a **pre-pipeline** step: it runs once per
+glider's own glider CTD. It is a **pre-pipeline** step: it runs once per
 deployment and hands perturb `.p` files that already carry the right
 coefficients, so perturb itself needs no changes.
 

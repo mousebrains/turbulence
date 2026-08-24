@@ -1,7 +1,7 @@
 # FP07 in-situ calibration stability — osu685 (ARCTERX 2025 Interior)
 
 MicroRider MR1000RDL-EM SN 435 on a Slocum with an extended energy bay.
-Reference: the glider's own SBE41cp, read directly from `PASS0/ebd.nc`.
+Reference: the glider's own glider CTD, read directly from `PASS0/ebd.nc`.
 
 | | |
 |---|---|

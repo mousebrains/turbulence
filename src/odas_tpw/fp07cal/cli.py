@@ -61,8 +61,12 @@ pairs:
                        # NOT a smoothing knob -- it defines where the
                        # reference exists at all.
   kernel_width: null   # [s] boxcar; null = the CTD's median sample interval
-  kernel_tau: 2.7      # [s] single pole approximating the CTD's response.
-                       # 2.7 s is the SBE41cp response measured in situ on
+  kernel_tau: 0.7      # [s] single pole modelling the CTD thermistor's own
+                       # response. NOT the measured temperature-vs-pressure
+                       # delay (~2.7 s on osu685): that is dominated by
+                       # plumbing transit, a pure delay the lag search
+                       # already removes. Instrument-specific.
+                       # 2.7 s is the glider CTD response measured in situ on
                        # osu685 (thermal lag minus clock offset; runbook.md).
                        # A pole mismatch is NOT a delay -- the lag search
                        # cannot remove it, and it leaks a few mK into a
@@ -261,7 +265,7 @@ def _pair_config(cfg: dict) -> PairConfig:
     return PairConfig(
         max_gap=float(p.get("max_gap", 30.0)),
         kernel_width=p.get("kernel_width"),
-        kernel_tau=float(p.get("kernel_tau", 2.7)),
+        kernel_tau=float(p.get("kernel_tau", 0.7)),
         min_speed=float(p.get("min_speed", 0.05)),
         require_profile=bool(p.get("require_profile", True)),
         min_corr=float(p.get("min_corr", 0.7)),

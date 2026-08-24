@@ -28,7 +28,7 @@ samples-per-profile count and turn any wobble into a significant trend.  The
 
 Attribution
 -----------
-With one reference this measures the thermistor *relative to* the SBE41cp, and
+With one reference this measures the thermistor *relative to* the glider CTD, and
 it also absorbs unremoved lag and the mounting separation between the two
 sensors (plan section 8.3).  Charging the result to the FP07 is defensible
 because SBE temperature stability is far better than plausible FP07 drift, but

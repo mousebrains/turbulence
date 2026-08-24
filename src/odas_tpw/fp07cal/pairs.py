@@ -49,15 +49,33 @@ class PairConfig:
     kernel_width: float | None = None
     """[s] Boxcar width.  ``None`` -> the CTD's median sample interval."""
 
-    kernel_tau: float = 2.7
-    """[s] Single-pole time constant approximating the reference's response.
+    kernel_tau: float = 0.7
+    """[s] Single-pole time constant modelling the REFERENCE's response.
 
-    Default 2.7 s: the SBE41cp response measured in situ on osu685 (thermal
-    lag minus clock offset — see ``docs/fp07cal/runbook.md``).  A pole
-    mismatch is not a delay, so the lag search cannot compensate for it: with
-    the pole too fast, a one-signed (climb-only or dive-only) deployment picks
-    up a systematic few-mK error that the dive/climb average would otherwise
-    cancel.  Configurable per deployment via ``pairs.kernel_tau``.
+    This is a model applied to the FP07, not a stored measurement: it slows the
+    fast probe to the slow reference so the regression compares like with like.
+
+    **A pole is not a delay, and the two must not be conflated.** The measured
+    gap between a glider CTD's temperature and its own pressure --- ~2.7 s on
+    osu685 --- is dominated by *plumbing transit*, which is a pure delay: it
+    shifts without attenuating, and the lag search already removes it. Feeding
+    that number back in as a pole over-filters the probe and re-attenuates
+    ``beta_1``, which is the very thing this exists to protect.
+
+    0.7 s is the thermistor pole itself, from two independent estimates on
+    osu685 that bracket it (see ``docs/fp07cal/ctd_response_time.md``):
+
+    * sweeping this pole and refitting: minimum residual at 0.62--0.71 s, and
+      sharply worse above ~1.5 s;
+    * transfer-function roll-off on the CTD's own timestamps: 0.87 s, biased
+      high by the ~1 m sensor separation as expected.
+
+    Both agree with the 0.5--0.75 s inferred independently over hundreds of
+    millions of samples across many deployments.
+
+    It is instrument-specific --- set it per deployment. The residual criterion
+    constrains the UPPER bound far better than the lower: across 0.05--0.85 s
+    the fit residual moves only 0.4%, while at 2.7 s it is 25% worse.
     """
 
     min_speed: float = 0.05
