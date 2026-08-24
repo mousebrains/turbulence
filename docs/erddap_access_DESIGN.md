@@ -1,8 +1,9 @@
 # ERDDAP as a data source
 
-**Status:** design, not implemented.
-**Branch/worktree:** `design/erddap-access` @ `.claude/worktrees/erddap-design`
-**Date:** 2026-08-23
+**Status:** **implemented** as `src/odas_tpw/erddap/` (`erddap-hotel`).
+This document is kept as the record of *why* it is shaped as it is; where the
+build differed from the design, section 13 says so.
+**Date:** design 2026-08-23, implemented 2026-08-24
 **Reference implementation:** `ru33_microrider_preparation.ipynb` (Rutgers)
 
 ---
@@ -744,3 +745,67 @@ In order, each independently useful:
 
 Steps 1 and 2 are the bulk of the logic and can be written, tested and reviewed
 before anyone has ERDDAP access.
+
+
+---
+
+## 13. What the implementation changed
+
+Three things the design got wrong or left open, found by building it.
+
+### 13.1 The `.das` digest is not stable (section 10.4 was unbuildable as written)
+
+The cache key was to include "the `.das` sha256", so that a server-side
+reprocess misses the cache by construction.  It does not work, because **ERDDAP
+stamps the time you asked into the `.das`'s own `history` attribute**:
+
+```
+2026-08-24T02:09:43Z (local files)
+2026-08-24T02:09:43Z http://slocum-data.marine.rutgers.edu/erddap/tabledap/ru33-....das
+```
+
+Two fetches one second apart differ in exactly those two lines and nothing
+else, measured live.  Hashing the body verbatim would mean the cache **never**
+hits and `verify` reports CHANGED on an untouched dataset -- the opposite of
+what both features are for.
+
+`fetch.normalize_das` strips those lines before hashing.  They are
+distinguishable from the upstream provenance we *do* want in the digest:
+Rutgers' own lines read `<timestamp>Z: /path/to/script`, with a colon after the
+`Z`; ERDDAP's request log has no colon.  Regression-tested both ways -- stable
+across requests, still changing when `date_modified` does.
+
+### 13.2 `history` is lost by `combine_attrs="drop_conflicts"`
+
+Section 5.3 requires ERDDAP's own `history` be preserved verbatim.  Each
+chunk's `history` ends with *its own* request URL and fetch time, so they all
+conflict and `xr.concat(..., combine_attrs="drop_conflicts")` throws away every
+one of them.  The upstream chain -- Rutgers' `proc_deployment_trajectories_to_nc.py`
+line, which is the part with archival value -- vanished silently.  `_concat`
+now collects the histories before concatenating and re-attaches them
+deduplicated, in order.
+
+### 13.3 The builder became genuinely shared (section 10.3, sooner than planned)
+
+Listed as "the natural next step once both have merged".  It turned out to be
+the cheapest path: `dinkum.build.build_hotel` grew a `dataset=` parameter, and
+`erddap-hotel` hands it a fetched table instead of Dinkum files.  So sanitising,
+deduplication, projection, gap-blanking, the strictly-increasing-clock check and
+the provenance string are **one implementation**, not two that drift.  What
+remains ERDDAP's own is the fetch, the cache, and `_FillValue` masking.
+
+Section 6.5's count is now settled: two sanitisers in the tree
+(`dinkum/build.py` and `fp07cal/series.py`), and #154 converged the second onto
+the first's core, so it is really one set of rules with two entry points.
+
+### 13.4 Confirmed as designed
+
+- A 1-day window returns **88 728 rows**, matching the figure recorded in
+  section 5.4 exactly.
+- The `0.0` sentinel is row-wise: on a live 2-hour slice, 2383 of 4208 rows
+  carried a fill-value timestamp, and dropping on timestamp validity removed
+  every one of them.  No `drop_zero_as_fill` rule was needed.
+- Unit scaling lands once: the built file reads 44.4-44.9 mS/cm (not 4.4) and
+  0.1-16.6 dbar (not 1.66).
+- `refresh: incremental` with `overlap_chunks: 1` refetches only the tail:
+  a second run over two chunks reported "1 fetched, 1 cached".
