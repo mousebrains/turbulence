@@ -52,12 +52,22 @@ pairs:
                          # zero pairs are normal — they are still calibrated,
                          # from the pooled fit.
   kernel_width: null     # [s] boxcar; null = the CTD's median sample interval
-  kernel_tau: 2.7        # [s] single pole approximating the CTD's response.
-                         # 2.7 s is the glider CTD response measured in situ on
-                         # osu685 (thermal lag minus clock offset — runbook.md).
-                         # A pole mismatch is not a delay, so the lag search
-                         # cannot remove it; too-fast a pole leaks a few mK
-                         # into a one-signed (climb-only) deployment.
+  kernel_tau: 0.7        # [s] single pole modelling the CTD thermistor's OWN
+                         # response. Not the measured temperature-vs-pressure
+                         # delay (~2.7 s on osu685): that is dominated by
+                         # plumbing transit, which is a pure delay and which
+                         # the lag search already removes. A pole is not a
+                         # delay — the lag search cannot remove a pole
+                         # mismatch, and it leaks a few mK into a one-signed
+                         # (climb-only) deployment.
+                         #
+                         # A property of the CTD MODEL, not of the unit or the
+                         # deployment: 0.7 s for a Seabird GPCTD, consistent
+                         # with the 0.62–0.71 s measured on osu685. Look it up,
+                         # do not refit it per mission. Do check WHICH CTD the
+                         # glider carries: TWR's masterdata names SBE41CP for
+                         # both the unpumped CTDs and the GPCTD, and an
+                         # unpumped CTD is slower and flow-dependent.
   min_speed: 0.05        # [m/s] below this the thermistor is not flushing
   require_profile: true
 
