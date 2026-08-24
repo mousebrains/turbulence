@@ -42,6 +42,7 @@ SENSOR_OPTION_KEYS = frozenset(
         "name",
         "time_sensor",
         "method",
+        "transform",
         "scale",
         "offset",
         "units",
@@ -52,6 +53,21 @@ SENSOR_OPTION_KEYS = frozenset(
         "dedupe",
     }
 )
+
+# Non-linear per-sensor conversions, applied to the SOURCE samples before the
+# range check and before interpolation. `scale`/`offset` cannot express these,
+# and — unlike an affine map — they do not commute with interpolation, so they
+# cannot be deferred to the output the way scale/offset is.
+#
+# nmea_degrees
+#     Slocum reports every geographic coordinate in NMEA ``ddmm.mmmm``:
+#     ``m_lat = 2015.61159`` is 20 deg 15.61159 min = 20.260193 deg N, NOT
+#     20.1561 deg. There is no scale factor that converts it. Interpolating
+#     the raw form is also wrong: across a whole minute the raw value steps by
+#     40.02 (2059.99 -> 2100.01) where the true position moved 0.0003 deg, so
+#     any sample straddling the boundary would be ruled straight across a
+#     cliff. Convert first, then interpolate.
+TRANSFORMS = frozenset({"nmea_degrees"})
 
 # Dedupe strategies accepted by time.dedupe and per-sensor dedupe.
 DEDUPE_METHODS = frozenset({"mean", "first", "last"})
@@ -184,6 +200,11 @@ def normalize_sensors(sensors_cfg: dict | None, time_base: str) -> dict[str, dic
         method = opts.get("method")
         if method is not None and method not in INTERP_KINDS:
             raise ValueError(f"sensors[{src!r}].method={method!r}: not in {sorted(INTERP_KINDS)}")
+        xform = opts.get("transform")
+        if xform is not None and xform not in TRANSFORMS:
+            raise ValueError(
+                f"sensors[{src!r}].transform={xform!r}: not in {sorted(TRANSFORMS)}"
+            )
         if "max_gap" in opts and opts["max_gap"] is None:
             del opts["max_gap"]  # null -> inherit projection.max_gap
         gap = opts.get("max_gap")
@@ -309,12 +330,25 @@ sensors:
   #   time_sensor: "..."    #   which clock stamps THIS sensor
   #                         #   (default: time.base)
   #   method: "previous"    #   projection override
-  #   scale: 10.0           #   value = raw * scale + offset
+  #   transform: nmea_degrees
+  #                         #   non-linear conversion applied to the SOURCE
+  #                         #   samples, before the range check and before
+  #                         #   interpolation. Only "nmea_degrees" so far:
+  #                         #   Slocum ddmm.mmmm -> decimal degrees, which
+  #                         #   `scale` cannot express (m_lat 2015.61159 is
+  #                         #   20.260193 degN, not 20.1561) and which must
+  #                         #   NOT be interpolated in its raw form (the raw
+  #                         #   value steps 40.02 across a whole minute).
+  #                         #   Use it on m_lat/m_lon, m_gps_lat/m_gps_lon,
+  #                         #   c_wpt_lat/c_wpt_lon.
+  #   scale: 10.0           #   value = raw * scale + offset, applied to the
+  #                         #   OUTPUT (affine, so it commutes with interp)
   #   offset: 0.0
   #   units: "dbar"         #   CF units for the output
   #   long_name: "..."
-  #   valid_min: -5.0       #   values outside -> NaN BEFORE projecting
-  #   valid_max: 45.0
+  #   valid_min: -5.0       #   values outside -> NaN BEFORE projecting.
+  #   valid_max: 45.0       #   In TRANSFORMED units when `transform` is set,
+  #                         #   but before `scale`/`offset`.
   #   max_gap: 30.0         #   per-sensor gap limit [s] (null = global)
   #   dedupe: "last"        #   mean | first | last (default: "last" for
   #                         #   previous/next/nearest/zero, else time.dedupe)
@@ -336,6 +370,20 @@ sensors:
 
   # Flight channels ride the flight clock, so name it explicitly. "previous"
   # holds each commanded/state value until it actually changes.
+  # m_lat:
+  #   name: "lat"
+  #   time_sensor: "m_present_time"
+  #   transform: nmea_degrees   # ddmm.mmmm -> decimal degrees
+  #   units: "degrees_north"
+  #   valid_min: -90.0          # degrees: the range check sees the transform
+  #   valid_max: 90.0
+  # m_lon:
+  #   name: "lon"
+  #   time_sensor: "m_present_time"
+  #   transform: nmea_degrees
+  #   units: "degrees_east"
+  #   valid_min: -180.0
+  #   valid_max: 180.0
   # m_pitch:
   #   units: "rad"
   #   time_sensor: "m_present_time"

@@ -13,10 +13,18 @@ Pipeline, per :func:`build_hotel`:
    valid range, sorted, deduped, strictly increasing). Native sample times, not
    a resampled grid: gaps stay gaps.
 2. For each sensor: pair its finite values with its own time sensor's valid
-   stamps, drop out-of-range values, collapse duplicate timestamps, then
-   interpolate onto the output vector.
+   stamps, apply a non-linear ``transform`` if one is configured, drop
+   out-of-range values, collapse duplicate timestamps, then interpolate onto
+   the output vector.
 3. Apply ``scale``/``offset``, NaN across gaps wider than ``max_gap``, and
    write, with a provenance record of what each rule discarded.
+
+Where a conversion lands is not arbitrary. ``scale``/``offset`` is affine, so
+it commutes with interpolation and is applied on the output, once. A
+``transform`` is not affine, so it must run on the source samples: NMEA
+``ddmm.mmmm`` steps by 40.02 across a whole minute where the position moved
+0.0003 deg, and interpolating that raw form rules a straight line across a
+cliff that does not exist.
 """
 
 from __future__ import annotations
@@ -44,6 +52,29 @@ DEFAULT_MIN_TIME = 100.0
 DEFAULT_MAX_TIME_HORIZON_DAYS = 365.0
 
 _DEDUPE_METHODS = ("mean", "first", "last")  # same set as config.DEDUPE_METHODS
+
+
+def nmea_to_degrees(v: np.ndarray) -> np.ndarray:
+    """NMEA ``ddmm.mmmm`` -> signed decimal degrees.
+
+    Slocum reports every geographic coordinate this way: ``m_lat`` of
+    ``2015.61159`` means 20 deg 15.61159 min = 20.260193 deg. Dividing by 100
+    (the tempting "scale") would give 20.1561 deg — 11.5 km wrong at this
+    latitude, and the error swings between 0 and ~1.85 km per degree of
+    latitude, so it does not even look like a constant offset.
+
+    The sign rides on the whole value: -12949.49 is 129 deg 49.49 min WEST, so
+    the minutes are subtracted, not added. Taking ``abs`` first and reapplying
+    the sign is what makes the southern/western hemispheres come out right.
+    """
+    v = np.asarray(v, dtype=np.float64)
+    sign = np.sign(v)
+    a = np.abs(v)
+    deg = np.floor(a / 100.0)
+    return sign * (deg + (a - 100.0 * deg) / 60.0)
+
+
+_TRANSFORM_FUNCS = {"nmea_degrees": nmea_to_degrees}
 
 
 def _parse_time_bound(value: Any, label: str) -> float | None:
@@ -239,6 +270,7 @@ def project_sensor(
     dedupe: str = "mean",
     extrapolate: bool = False,
     max_gap: float | None = None,
+    transform: str | None = None,
     valid_min: float | None = None,
     valid_max: float | None = None,
     time_lo: float = DEFAULT_MIN_TIME,
@@ -250,9 +282,11 @@ def project_sensor(
     sensor and the sensor itself (same length, NaN where absent). Returns
     ``(values_on_dst_t, stats)``.
 
-    Order matters: the range check runs on the SOURCE samples, before
-    interpolation, so an out-of-range spike is removed rather than being
-    smeared into its neighbours.
+    Order matters, twice over. The ``transform`` runs first, on the source
+    samples, because it is non-linear and would otherwise be interpolated
+    across in its raw form. The range check runs next, still on the SOURCE
+    samples and so in transformed units, so an out-of-range spike is removed
+    rather than being smeared into its neighbours.
     """
     src_t = np.asarray(src_t, dtype=np.float64)
     src_v = np.asarray(src_v, dtype=np.float64)
@@ -269,6 +303,15 @@ def project_sensor(
 
     t = src_t[usable]
     v = src_v[usable]
+
+    if transform is not None:
+        try:
+            func = _TRANSFORM_FUNCS[transform]
+        except KeyError:  # pragma: no cover - normalize_sensors validates first
+            raise ValueError(
+                f"transform={transform!r}: not in {sorted(_TRANSFORM_FUNCS)}"
+            ) from None
+        v = func(v)
 
     n_out_of_range = 0
     if valid_min is not None or valid_max is not None:
@@ -298,6 +341,7 @@ def project_sensor(
         "n_source": int(t.size),
         "n_gap_blanked": n_blanked,
         "n_finite_out": int(np.sum(np.isfinite(out))),
+        "transform": transform,
     }
     return out, stats
 
@@ -477,6 +521,7 @@ def build_hotel(
             dedupe=sensor_dedupe,
             extrapolate=extrapolate,
             max_gap=None if gap is None else float(gap),
+            transform=opts.get("transform"),
             valid_min=opts.get("valid_min"),
             valid_max=opts.get("valid_max"),
             time_lo=lo,
@@ -519,10 +564,18 @@ def build_hotel(
         }
         if opts.get("long_name"):
             attrs["long_name"] = str(opts["long_name"])
+        raw_units = ds[src].attrs.get("units", "raw") or "raw"
+        xform = opts.get("transform")
+        if xform:
+            attrs["transform"] = str(xform)
+        conversions = []
+        if xform:
+            conversions.append(f"{xform}({src})")
         if scale != 1.0 or offset != 0.0:
+            conversions.append(f"value = {xform or src} * {scale:g} + {offset:g}")
+        if conversions:
             attrs["comment"] = (
-                f"value = {src} * {scale:g} + {offset:g} "
-                f"(units converted from {ds[src].attrs.get('units', 'raw') or 'raw'})"
+                "; ".join(conversions) + f" (units converted from {raw_units})"
             )
         for key in ("valid_min", "valid_max"):
             if opts.get(key) is not None:
@@ -535,6 +588,7 @@ def build_hotel(
             f"{src}->{out_name} on {time_sensor}: {stats['n_source']} samples, "
             f"{stats['n_bad_time']} bad-time, {stats['n_out_of_range']} out-of-range, "
             f"{stats['n_duplicate']} duplicate, {stats['n_gap_blanked']} gap-blanked"
+            + (f", transform={xform}" if xform else "")
         )
 
     # The time coordinate keeps the BASE SENSOR'S NAME, so the perturb side can

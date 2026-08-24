@@ -15,6 +15,7 @@ import xarray as xr
 from odas_tpw.dinkum.build import (
     DEFAULT_MIN_TIME,
     build_hotel,
+    nmea_to_degrees,
     project_sensor,
     resolve_time_bounds,
     sanitize_time,
@@ -700,3 +701,155 @@ def test_generated_template_is_readable_back(tmp_path):
     assert path.read_bytes().decode("utf-8")  # the failure mode, directly
     cfg = load_config(path)
     assert "time" in cfg and "sensors" in cfg
+
+
+# ------------------------------------------------------------- NMEA transform
+
+
+def test_nmea_to_degrees_matches_hand_worked_values():
+    """ddmm.mmmm, both hemispheres, including the value that motivated it."""
+    got = nmea_to_degrees(np.array([2015.61159, -12949.49159, 0.0, 5930.0, -3015.0]))
+    want = np.array(
+        [
+            20.0 + 15.61159 / 60.0,
+            -(129.0 + 49.49159 / 60.0),
+            0.0,
+            59.0 + 30.0 / 60.0,
+            -(30.0 + 15.0 / 60.0),
+        ]
+    )
+    assert np.allclose(got, want, atol=1e-12)
+
+
+def test_nmea_to_degrees_is_not_a_scale_factor():
+    """The whole reason `scale: 0.01` cannot stand in for the transform.
+
+    At osu684's latitude the two differ by ~11.6 km, and the discrepancy is a
+    sawtooth in latitude rather than a constant, so it cannot be absorbed by an
+    offset either.
+    """
+    raw = np.array([2015.61159, 2059.99, 2100.01])
+    assert not np.allclose(nmea_to_degrees(raw), raw / 100.0, atol=1e-3)
+    err = nmea_to_degrees(raw) - raw / 100.0
+    assert np.ptp(err) > 0.1  # a sawtooth, not a constant offset
+
+
+def test_nmea_to_degrees_preserves_nan():
+    out = nmea_to_degrees(np.array([2015.5, np.nan]))
+    assert np.isnan(out[1]) and np.isclose(out[0], 20.0 + 15.5 / 60.0)
+
+
+def test_project_sensor_transform_runs_before_interpolation():
+    """A minute rollover must not be interpolated in its raw ddmm.mmmm form.
+
+    Raw, 2059.9994 -> 2100.0006 is a 40.0012 step where the position moved
+    2e-5 deg. Interpolating the raw form puts the midpoint at raw 2080.0,
+    which converts to 21.3333 deg -- 0.333 deg, ~37 km, off the truth of
+    21.0000 deg.
+    """
+    src_t = np.array([0.0, 2.0]) + T0
+    src_v = np.array([2059.9994, 2100.0006])
+    dst_t = np.array([0.0, 1.0, 2.0]) + T0
+
+    out, stats = project_sensor(src_t, src_v, dst_t, transform="nmea_degrees")
+    truth = nmea_to_degrees(src_v)
+    assert np.isclose(out[1], 0.5 * (truth[0] + truth[1]), atol=1e-9)
+    assert stats["transform"] == "nmea_degrees"
+
+    wrong = nmea_to_degrees(np.interp(dst_t, src_t, src_v))
+    assert abs(wrong[1] - out[1]) > 0.3  # the error the ordering prevents
+
+
+def test_project_sensor_range_check_sees_transformed_units():
+    """valid_min/valid_max are in degrees, not in raw ddmm.mmmm.
+
+    A raw latitude of 2015.6 is 20.26 degN -- inside [-90, 90] after the
+    transform but far outside it before. Checking the raw value would discard
+    every sample.
+    """
+    src_t = T0 + np.arange(3.0)
+    src_v = np.array([2015.6, 2015.7, 2015.8])
+    out, stats = project_sensor(
+        src_t, src_v, src_t, transform="nmea_degrees", valid_min=-90.0, valid_max=90.0
+    )
+    assert stats["n_out_of_range"] == 0
+    assert stats["n_source"] == 3
+    assert np.all(np.isfinite(out))
+
+
+def test_project_sensor_rejects_unknown_transform():
+    t = T0 + np.arange(3.0)
+    with pytest.raises(ValueError, match="transform"):
+        project_sensor(t, np.arange(3.0), t, transform="bogus")
+
+
+def test_normalize_sensors_rejects_unknown_transform():
+    with pytest.raises(ValueError, match="transform"):
+        normalize_sensors({"m_lat": {"transform": "mercator"}}, "t")
+
+
+def test_normalize_sensors_accepts_nmea_transform():
+    out = normalize_sensors({"m_lat": {"transform": "nmea_degrees"}}, "t")
+    assert out["m_lat"]["transform"] == "nmea_degrees"
+
+
+def test_build_hotel_applies_transform_and_records_it(tmp_path):
+    """End-to-end: a NMEA latitude comes out in degrees, with provenance.
+
+    Built standalone rather than on the shared fixture so the flight rows the
+    coordinate rides on are unambiguous.
+    """
+    n = 200
+    path = tmp_path / "nmea.nc"
+    t = T0 + np.arange(n) * 0.5
+    lat_raw = 2015.0 + np.linspace(0.0, 44.0, n)  # 20d15' -> 20d59'
+    lon_raw = -(12949.0 + np.linspace(0.0, 10.0, n))  # 129d49'W -> 129d59'W
+    with nc.Dataset(path, "w") as ds:
+        ds.createDimension("i", n)
+        for name, data, units in (
+            ("m_present_time", t, "timestamp"),
+            ("m_lat", lat_raw, "lat"),
+            ("m_lon", lon_raw, "lon"),
+        ):
+            var = ds.createVariable(name, "f8", ("i",), fill_value=np.nan)
+            var[:] = data
+            var.units = units
+
+    cfg = {
+        "files": {
+            "root": str(tmp_path),
+            "patterns": [path.name],
+            "output": str(tmp_path / "hotel.nc"),
+            "reader": "netcdf",
+        },
+        "time": {"base": "m_present_time", "min_value": 100},
+        "projection": {"method": "linear"},
+        "sensors": {
+            "m_lat": {
+                "name": "lat",
+                "transform": "nmea_degrees",
+                "units": "degrees_north",
+                "valid_min": -90.0,
+                "valid_max": 90.0,
+            },
+            "m_lon": {
+                "name": "lon",
+                "transform": "nmea_degrees",
+                "units": "degrees_east",
+                "valid_min": -180.0,
+                "valid_max": 180.0,
+            },
+        },
+    }
+    out = build_hotel(cfg)
+    with xr.open_dataset(out) as ds:
+        lat = np.asarray(ds["lat"].values)
+        lon = np.asarray(ds["lon"].values)
+        assert np.allclose(lat, nmea_to_degrees(lat_raw), atol=1e-9)
+        assert np.allclose(lon, nmea_to_degrees(lon_raw), atol=1e-9)
+        # Sanity: inside the plausible box for this deployment, which the
+        # untransformed value (20.15 degN, -129.49 degE) is not.
+        assert lat.min() > 20.2 and lat.max() < 21.0
+        assert lon.min() > -130.0 and lon.max() < -129.8
+        assert ds["lat"].attrs["transform"] == "nmea_degrees"
+        assert "nmea_degrees(m_lat)" in ds["lat"].attrs["comment"]

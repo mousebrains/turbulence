@@ -146,6 +146,44 @@ The hotel file is then correct and self-describing, so the perturb side must
 salinity into fantasy. The shipped `perturb.yaml` carries no `scale:` on these
 channels for exactly this reason.
 
+### Coordinates need `transform`, not `scale`
+
+Slocum reports **every** geographic coordinate in NMEA `ddmm.mmmm`.
+`m_lat = 2015.61159` is 20° 15.61159′ = **20.260193 °N** — not 20.1561.
+No scale factor converts it:
+
+| Sensor | Raw | `scale: 0.01` | `transform: nmea_degrees` | Error |
+|---|---|---|---|---|
+| `m_lat` | `2015.61159` | 20.1561 | **20.260193** | 11.6 km |
+| `m_lon` | `-12949.49159` | −129.4949 | **−129.824860** | 34 km |
+
+and the discrepancy is a sawtooth in the minutes field, so an `offset` cannot
+absorb it either. Set `transform: nmea_degrees` on `m_lat`/`m_lon`,
+`m_gps_lat`/`m_gps_lon`, `c_wpt_lat`/`c_wpt_lon`:
+
+```yaml
+sensors:
+  m_lat:
+    name: "lat"
+    time_sensor: "m_present_time"
+    transform: nmea_degrees
+    units: "degrees_north"
+    valid_min: -90.0          # degrees — the check sees the TRANSFORMED value
+    valid_max: 90.0
+```
+
+Where the conversion happens is not a detail. `scale`/`offset` is affine, so it
+commutes with interpolation and is applied once, on the output. A `transform`
+is **not** affine and runs on the *source* samples, before the range check and
+before projection — because the raw form steps by 40.02 across a whole minute
+(`2059.9994` → `2100.0006`) where the vehicle moved 2 × 10⁻⁵ °. Interpolating
+that raw form and converting afterwards puts the midpoint at 21.3333 ° instead
+of 21.0000 °: a 37 km error manufactured once per minute of latitude.
+
+Because the transform runs first, `valid_min`/`valid_max` are expressed in the
+**transformed** units (degrees), and `scale`/`offset` — if you also set one —
+applies afterwards to the output.
+
 ## Provenance
 
 Every build records what it discarded, so a surprising hotel file can be
