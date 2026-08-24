@@ -65,12 +65,19 @@ pairs:
                        # response. NOT the measured temperature-vs-pressure
                        # delay (~2.7 s on osu685): that is dominated by
                        # plumbing transit, a pure delay the lag search
-                       # already removes. Instrument-specific.
-                       # 2.7 s is the glider CTD response measured in situ on
-                       # osu685 (thermal lag minus clock offset; runbook.md).
+                       # already removes.
+                       #
                        # A pole mismatch is NOT a delay -- the lag search
                        # cannot remove it, and it leaks a few mK into a
                        # one-signed (climb-only) deployment.
+                       #
+                       # This is a property of the CTD MODEL, not of the unit
+                       # or the deployment: 0.7 s for a Seabird GPCTD. Look it
+                       # up; do not refit it per mission. What does need
+                       # checking is WHICH CTD the glider carries -- TWR's
+                       # masterdata names SBE41CP for both the unpumped CTDs
+                       # and the GPCTD, and an unpumped CTD is slower and
+                       # flow-dependent.
   min_speed: 0.05      # [m/s] below this the thermistor is not flushing
   require_profile: true
 

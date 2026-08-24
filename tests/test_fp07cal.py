@@ -81,6 +81,40 @@ def test_clipped_samples_are_flagged():
 
 
 # ------------------------------------------------------------------ reference
+# ------------------------------------------------- shipped example configs
+def test_shipped_fp07_cal_example_matches_the_code_defaults():
+    """The example must not silently pin a value the code has since corrected.
+
+    #153 changed ``kernel_tau`` from the measured 2.7 s delay to the 0.7 s
+    thermistor pole, but ``examples/slocum_glider_hotel/fp07-cal.yaml`` kept
+    2.7 -- and because an explicit key OVERRIDES the default, anyone starting
+    from the example got the corrected-away value straight back. Nothing
+    caught it, because no test loaded that file.
+    """
+    import yaml
+
+    from odas_tpw.fp07cal.cli import _pair_config
+
+    example = (
+        Path(__file__).resolve().parents[1]
+        / "examples/slocum_glider_hotel/fp07-cal.yaml"
+    )
+    if not example.exists():
+        pytest.skip("example config not present")
+    cfg = yaml.safe_load(example.read_text())
+
+    from_example = _pair_config(cfg)
+    defaults = _pair_config({})
+    # max_gap is deliberately restated in the example (it is the one knob a
+    # user must think about); everything else it sets has to agree with the
+    # code, or the example is pinning a stale value.
+    for name in ("kernel_tau", "min_speed", "min_corr", "require_profile"):
+        assert getattr(from_example, name) == getattr(defaults, name), (
+            f"example fp07-cal.yaml pins {name}={getattr(from_example, name)!r} "
+            f"but the code default is now {getattr(defaults, name)!r}"
+        )
+
+
 def test_sanitize_drops_slocum_junk_and_dedupes():
     t = np.array([0.0, 1.7e9, 1.7e9, 1.7e9 + 1, 1.7e9 + 2, np.nan])
     v = np.array([15.0, 20.0, 22.0, 21.0, 999.0, 18.0])

@@ -101,14 +101,56 @@ different masterdata names. Practically that means a config keyed on
 `sci_ctd41cp_timestamp` will simply not find its variable on an RBR glider,
 which is a loud config failure rather than a silent wrong answer.
 
-Since the response time is instrument-specific, `kernel_tau` is a per-deployment
-setting with 0.7 s as a starting point, not a constant.
+## `kernel_tau` is a property of the CTD model, not of the deployment
+
+The response time belongs to the **sensor design** --- geometry, glass bead,
+flow past it --- not to the individual unit or the mission. Across a large body
+of GPCTD data (hundreds of millions of samples, PW) the value is close to
+instrument-independent, and the 0.62--0.71 s measured here on osu685 sits
+squarely in it.
+
+So `kernel_tau` is a constant to be *looked up* per CTD model, not a knob to be
+refitted per deployment. 0.7 s for a Seabird GPCTD. Refit it only if you have
+reason to believe the sensor is not what you think it is.
+
+What *does* need checking per deployment is **which CTD the glider carries**,
+and that is not free: TWR's masterdata uses `SBE41CP` for both the older
+unpumped CTDs and the pumped GPCTD, so the sensor name alone does not
+distinguish them (see above). An unpumped CTD's response is slower and
+flow-dependent, and 0.7 s does not transfer to it.
+
+## The asymmetry that makes this work
+
+Worth stating plainly, because the two halves of the calibration behave in
+opposite ways:
+
+| | FP07 (the thing being calibrated) | GPCTD (the thing calibrating it) |
+|---|---|---|
+| coefficients | **sensor-specific** --- must be fit per probe | model-consistent |
+| what it reports | needs the in-situ fit to be trusted | units agree closely with each other |
+| response time | --- | ~0.7 s, near enough constant |
+
+On osu685 both FP07 probes shipped with *identical* factory nominal
+coefficients, and the in-situ fit was worth -2.66 K and -1.62 K on them
+respectively --- two probes, one nominal, two very different truths. That is
+what "sensor-specific" means here, and why the fit is per channel and never
+transferred.
+
+The reference is the other way round. GPCTDs agree closely enough with each
+other, in both what they report and how fast they report it, that the reference
+can be taken as given rather than itself calibrated per unit. If it were not
+so, this method would not work: a reference carrying its own per-unit offset
+would simply transfer that offset into the FP07 coefficients, and the fit would
+look every bit as clean while being wrong by the reference's error.
+
+So: refit the FP07 for every probe. Look up the GPCTD's numbers once.
 
 ## Still to do
 
-Confirm on Rutgers' **bidirectional** data. Dives make `w` change sign, which
-separates the pole from the spatial decorrelation that limits Method B here,
-and enables the dive/climb hysteresis criterion that a climb-only deployment
-cannot provide.
+Nothing blocking. The Rutgers bidirectional data would still be a *useful*
+check --- dives make `w` change sign, which separates the pole from the spatial
+decorrelation that limits Method B here, and enables the dive/climb hysteresis
+criterion a climb-only deployment cannot provide --- but it is a confirmation
+of a known constant, not a measurement the pipeline is waiting on.
 
 Reproduce with `scripts/fp07cal_ctd_tau.py`.
