@@ -72,6 +72,7 @@ Issues = "https://github.com/mousebrains/turbulence/issues"
 [project.scripts]
 fp07-cal = "odas_tpw.fp07cal.cli:main"
 dinkum-hotel = "odas_tpw.dinkum.cli:main"
+erddap-hotel = "odas_tpw.erddap.cli:main"
 rsi-tpw = "odas_tpw.rsi.cli:main"
 perturb = "odas_tpw.perturb.cli:main"
 perturb-plot = "odas_tpw.perturb.plot.cli:main"

@@ -19,6 +19,7 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas
 - `perturb/` — Full campaign processing pipeline (trim, merge, calibrate, compute, bin)
 - `pyturb/` — Jesse's standalone analysis code (hosted here; `pyturb-cli` entry point)
 - `dinkum/` — Slocum Dinkum Binary Data (`*.dbd`/`*.ebd`, LZ4 `*.dcd`/`*.ecd`) → perturb hotel file (`dinkum-hotel` entry point). See `docs/dinkum_hotel.md`.
+- `erddap/` — ERDDAP `tabledap` → perturb hotel file (`erddap-hotel` entry point). The remote twin of `dinkum/`: same artifact, different source. See `docs/erddap_access_DESIGN.md` and `docs/rutgers_erddap_workflow.md`.
 - `fp07cal/` — FP07 in-situ calibration against a CTD (`fp07-cal` entry point). A **pre-pipeline** step: fits one Steinhart-Hart set per deployment and patches it into the `.p` files. See `docs/fp07cal/runbook.md`.
 
 ### Key Modules (rsi)
@@ -62,6 +63,12 @@ dinkum-hotel backends                          # which DBD readers are available
 dinkum-hotel sensors glider/*.ecd -C cache/    # what sensors do these files carry?
 dinkum-hotel init -o dinkum-hotel.yaml         # commented template config
 dinkum-hotel build -c dinkum-hotel.yaml        # Dinkum files -> hotel.nc
+
+erddap-hotel init -o erddap-hotel.yaml         # commented template config
+erddap-hotel info -c erddap-hotel.yaml         # variables, units, coverage
+erddap-hotel fetch -c erddap-hotel.yaml --dry-run   # print the URLs only
+erddap-hotel build -c erddap-hotel.yaml        # ERDDAP -> hotel.nc
+erddap-hotel verify -c erddap-hotel.yaml       # has the dataset changed?
 
 fp07-cal demo                                  # exercise the chain on synthetic data
 fp07-cal init -o fp07-cal.yaml                 # commented template config
@@ -123,6 +130,37 @@ Key facts (details in `docs/dinkum_hotel.md`):
 - The **sensor-list cache directory is effectively required**: a Slocum file
   whose sensor-list hash is not cached cannot be decoded. The build refuses to
   proceed on a partial decode, naming the skipped files.
+
+### Hotel files from ERDDAP
+
+`erddap-hotel` is the remote twin of `dinkum-hotel`, for a CTD published on an
+ERDDAP server rather than sitting on disk. Full workflow:
+`docs/rutgers_erddap_workflow.md`. Facts that are easy to get wrong:
+
+- **perturb never sees a URL.** A URL in `hotel.file` would leave the
+  skip-cache with a constant fingerprint (`{"missing": True}`), so a run that
+  fetched genuinely new data would look unchanged and skip the work. The
+  builder writes a file; a file gets a real size and mtime.
+- **The QC is not a third implementation.** `build_hotel` in `dinkum/build.py`
+  takes a `dataset=` argument, so both front ends share the sanitising,
+  projection, gap-blanking and provenance. Only the fetch, the cache and
+  `_FillValue` masking are ERDDAP's own.
+- **ERDDAP's `time` axis is not the CTD's clock.** On Rutgers raw trajectory
+  datasets it has `long_name "m_present_time"` — the flight computer. Build on
+  `sci_ctd41cp_timestamp`.
+- **`_FillValue` (9.96921e+36) is not masked on read**; it arrives as an
+  ordinary finite float. `qc.valid_range` is what catches it.
+- **Unit conversion happens in the builder, once**: `S m-1` → mS/cm and `bar`
+  → dbar are both `scale: 10.0`. The perturb side must not re-apply it.
+- **The `.das` digest must be normalised before hashing.** ERDDAP stamps the
+  time *you asked* into the `.das`'s own `history`, so a verbatim hash changes
+  every request — the cache would never hit and `verify` would always report
+  CHANGED. See `fetch.normalize_das` and design §13.1.
+- A **404 can mean "no rows in this window"**, which is not an error — the same
+  status a wrong dataset ID gives. Only the message distinguishes them.
+- Use **`-trajectory-raw-delayed`**, not `-profile-sci-*`: the sci product
+  renames every variable, adds derived fields, exposes no QC flags, and if it
+  has gap-filled then `hotel.max_gap` is defeated at source.
 
 ### Python API
 

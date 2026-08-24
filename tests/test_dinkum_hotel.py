@@ -682,3 +682,21 @@ class TestDbd2netcdfBackend:
         # On this file the GPS only reported in the (skipped) first record,
         # so every remaining row is fill -> NaN.
         assert np.isnan(gps).all()
+
+
+def test_generated_template_is_readable_back(tmp_path):
+    """`dinkum-hotel init` must not emit a file `build` then cannot decode.
+
+    The template carries an em dash, and `write_text` without an explicit
+    encoding uses the PLATFORM codepage -- cp1252 on Windows, which writes it
+    as byte 0x97. `load_config` correctly pins utf-8 on read, so the pair
+    failed on Windows only: init produced a file the very next command choked
+    on. Caught by the equivalent erddap test; this is the guard that was
+    missing here.
+    """
+    from odas_tpw.dinkum.config import generate_template, load_config
+
+    path = generate_template(tmp_path / "dinkum-hotel.yaml")
+    assert path.read_bytes().decode("utf-8")  # the failure mode, directly
+    cfg = load_config(path)
+    assert "time" in cfg and "sensors" in cfg

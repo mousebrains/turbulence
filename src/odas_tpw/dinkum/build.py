@@ -329,6 +329,8 @@ def build_hotel(
     config_dir: Path | None = None,
     output: str | Path | None = None,
     now: float | None = None,
+    dataset: xr.Dataset | None = None,
+    source_attrs: dict | None = None,
 ) -> Path:
     """Build a hotel NetCDF from Dinkum files per *config*.
 
@@ -343,6 +345,18 @@ def build_hotel(
     now : float, optional
         Epoch seconds used for the *now + 365 days* fallback ceiling. Pass it
         to make a run reproducible.
+    dataset : xr.Dataset, optional
+        An already-loaded table to build from, INSTEAD of reading Dinkum files.
+        This is what makes the function a shared core rather than a Dinkum
+        detail: ``erddap-hotel`` fetches rows from a tabledap server and hands
+        them here, so both front ends get the same sanitising, projection,
+        gap-blanking and provenance instead of growing separate copies (see
+        docs/erddap_access_DESIGN.md section 10.3). When given, ``files.root``
+        / ``patterns`` / ``cache`` / ``reader`` are not consulted at all.
+    source_attrs : dict, optional
+        Global attributes describing where *dataset* came from, used in place
+        of the ``dinkum_source_*`` / ``dinkum_reader`` triple. Only meaningful
+        alongside *dataset*.
 
     Returns
     -------
@@ -362,24 +376,35 @@ def build_hotel(
     extrapolate = bool(proj_cfg.get("extrapolate", False))
     default_gap = proj_cfg.get("max_gap")
 
-    paths = _resolve_paths(files_cfg, config_dir)
     wanted = required_sensor_names(sensors, time_base)
-    ds = load_dinkum(
-        paths,
-        backend=str(files_cfg.get("reader", "auto")),
-        cache=expand_config_dir(files_cfg.get("cache"), _cd(config_dir)),
-        sensors=wanted,
-        skip_first_record=bool(files_cfg.get("skip_first_record", True)),
-        repair=bool(files_cfg.get("repair", False)),
-    )
-
-    absent = [n for n in wanted if n not in ds.data_vars]
-    if absent:
-        raise KeyError(
-            f"Sensor(s) not present in the input files: {absent}. "
-            f"Run `dinkum-hotel sensors <files>` to list what they carry "
-            f"(the files read here have {len(ds.data_vars)} sensors)."
+    if dataset is not None:
+        paths = []
+        ds = dataset
+        absent = [n for n in wanted if n not in ds.data_vars]
+        if absent:
+            raise KeyError(
+                f"Variable(s) not present in the supplied dataset: {absent}. "
+                f"It carries {sorted(map(str, ds.data_vars))[:20]}"
+                f"{' ...' if len(ds.data_vars) > 20 else ''}"
+            )
+    else:
+        paths = _resolve_paths(files_cfg, config_dir)
+        ds = load_dinkum(
+            paths,
+            backend=str(files_cfg.get("reader", "auto")),
+            cache=expand_config_dir(files_cfg.get("cache"), _cd(config_dir)),
+            sensors=wanted,
+            skip_first_record=bool(files_cfg.get("skip_first_record", True)),
+            repair=bool(files_cfg.get("repair", False)),
         )
+
+        absent = [n for n in wanted if n not in ds.data_vars]
+        if absent:
+            raise KeyError(
+                f"Sensor(s) not present in the input files: {absent}. "
+                f"Run `dinkum-hotel sensors <files>` to list what they carry "
+                f"(the files read here have {len(ds.data_vars)} sensors)."
+            )
 
     def _col(name: str) -> np.ndarray:
         return np.asarray(ds[name].values, dtype=np.float64)
@@ -516,10 +541,16 @@ def build_hotel(
             "dinkum_time_dedupe": dedupe,
             "dinkum_projection_method": default_method,
             "dinkum_extrapolate": str(extrapolate),
-            "dinkum_source_file_count": len(paths),
-            "dinkum_source_files": ", ".join(p.name for p in paths[:50])
-            + (" ..." if len(paths) > 50 else ""),
-            "dinkum_reader": ds.attrs.get("dinkum_reader", "unknown"),
+            **(
+                source_attrs
+                if dataset is not None and source_attrs
+                else {
+                    "dinkum_source_file_count": len(paths),
+                    "dinkum_source_files": ", ".join(p.name for p in paths[:50])
+                    + (" ..." if len(paths) > 50 else ""),
+                    "dinkum_reader": ds.attrs.get("dinkum_reader", "unknown"),
+                }
+            ),
             "dinkum_time_base_records": base_stats["n_total"],
             "dinkum_time_base_rejected_nonfinite": base_stats["n_nan"],
             "dinkum_time_base_rejected_range": base_stats["n_out_of_range"],

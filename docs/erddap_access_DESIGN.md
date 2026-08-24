@@ -1,8 +1,9 @@
 # ERDDAP as a data source
 
-**Status:** design, not implemented.
-**Branch/worktree:** `design/erddap-access` @ `.claude/worktrees/erddap-design`
-**Date:** 2026-08-23
+**Status:** **implemented** as `src/odas_tpw/erddap/` (`erddap-hotel`).
+This document is kept as the record of *why* it is shaped as it is; where the
+build differed from the design, section 13 says so.
+**Date:** design 2026-08-23, implemented 2026-08-24
 **Reference implementation:** `ru33_microrider_preparation.ipynb` (Rutgers)
 
 ---
@@ -744,3 +745,118 @@ In order, each independently useful:
 
 Steps 1 and 2 are the bulk of the logic and can be written, tested and reviewed
 before anyone has ERDDAP access.
+
+
+---
+
+## 13. What the implementation changed
+
+Three things the design got wrong or left open, found by building it.
+
+### 13.1 The `.das` digest is not stable (section 10.4 was unbuildable as written)
+
+The cache key was to include "the `.das` sha256", so that a server-side
+reprocess misses the cache by construction.  It does not work, because **ERDDAP
+stamps the time you asked into the `.das`'s own `history` attribute**:
+
+```
+2026-08-24T02:09:43Z (local files)
+2026-08-24T02:09:43Z http://slocum-data.marine.rutgers.edu/erddap/tabledap/ru33-....das
+```
+
+Two fetches one second apart differ in exactly those two lines and nothing
+else, measured live.  Hashing the body verbatim would mean the cache **never**
+hits and `verify` reports CHANGED on an untouched dataset -- the opposite of
+what both features are for.
+
+`fetch.normalize_das` strips those lines before hashing.  They are
+distinguishable from the upstream provenance we *do* want in the digest:
+Rutgers' own lines read `<timestamp>Z: /path/to/script`, with a colon after the
+`Z`; ERDDAP's request log has no colon.  Regression-tested both ways -- stable
+across requests, still changing when `date_modified` does.
+
+### 13.2 `history` is lost by `combine_attrs="drop_conflicts"`
+
+Section 5.3 requires ERDDAP's own `history` be preserved verbatim.  Each
+chunk's `history` ends with *its own* request URL and fetch time, so they all
+conflict and `xr.concat(..., combine_attrs="drop_conflicts")` throws away every
+one of them.  The upstream chain -- Rutgers' `proc_deployment_trajectories_to_nc.py`
+line, which is the part with archival value -- vanished silently.  `_concat`
+now collects the histories before concatenating and re-attaches them
+deduplicated, in order.
+
+### 13.3 The builder became genuinely shared (section 10.3, sooner than planned)
+
+Listed as "the natural next step once both have merged".  It turned out to be
+the cheapest path: `dinkum.build.build_hotel` grew a `dataset=` parameter, and
+`erddap-hotel` hands it a fetched table instead of Dinkum files.  So sanitising,
+deduplication, projection, gap-blanking, the strictly-increasing-clock check and
+the provenance string are **one implementation**, not two that drift.  What
+remains ERDDAP's own is the fetch, the cache, and `_FillValue` masking.
+
+Section 6.5's count is now settled: two sanitisers in the tree
+(`dinkum/build.py` and `fp07cal/series.py`), and #154 converged the second onto
+the first's core, so it is really one set of rules with two entry points.
+
+### 13.4 The notebook's golden case, reproduced exactly — and one real
+difference
+
+Section 12.1 proposed testing the QC layer "with the notebook's own output as a
+golden case". Done, and it is a stronger check than expected: the notebook's
+stored outputs record every intermediate count, and we hit all of them by a
+**different route** — timestamp validity with both bounds, and no blanket zero
+rule:
+
+| | notebook | ours |
+|---|---|---|
+| rows in | 868 427 | 868 427 |
+| dropped, unusable timestamp | 521 869 | 521 330 NaN + 539 out-of-range |
+| duplicates | 40 | 40 |
+| **rows out** | **346 518** | **346 518** |
+| time range | 1633113400.37739 .. 1634738980.72214 | identical |
+
+That is the strongest available evidence that dropping the blanket
+`0.0 -> NaN` costs nothing: the timestamp rule alone accounts for every row the
+notebook removes.
+
+**But the row count hides a real difference, and it goes the other way.**
+Across the full deployment, **33 rows carry `sci_water_pressure == 0.0` on a
+perfectly good timestamp**. They are not sentinels — their neighbours read
+0.002–0.013 bar, i.e. **2–13 cm of water**. The glider is at the surface and
+the sensor is right. The notebook's blanket rule NaNs all 33; we keep them. No
+row disappears either way, so the golden count is identical while the data is
+not.
+
+This is the failure §6.3 predicted, found on Rutgers' own reference dataset
+rather than a hypothetical polar deployment — and it is a *stronger* case than
+the one the design argued, because a glider at the surface is not an edge case.
+It also corrects a generalisation: on osu685 the sentinel was purely row-wise
+(789 pressure zeros, 789 with unusable timestamps, 0 missed). On ru33 it is
+not. "Drop rows on timestamp validity" remains right; "the zeros are always
+row-wise" was true of one deployment, not of the format.
+
+`tests/data/erddap_ru33_slice.nc` (130 kB, 5000 real contiguous rows) carries
+one of these surface samples, a 0.0 timestamp and 2724 NaN timestamps, with
+exact expected tallies. The full golden case runs under `ERDDAP_LIVE=1`.
+
+### 13.5 `--offline` could never find an online cache
+
+The cache key includes the `.das` digest; `--offline` cannot compute one and
+substituted the literal string `"offline"`, so it looked under a key no online
+run ever wrote — every lookup missed while the data sat in the directory.
+§10.4 had already specified the fix ("`--offline` skips the probe and uses the
+last key"); only half of it was built. An online probe now records the digest
+in a sidecar. The original test had seeded the cache under the same wrong key,
+so it agreed with the bug rather than checking for it.
+
+### 13.6 Confirmed as designed
+
+- A 1-day window returns **88 728 rows**, matching the figure recorded in
+  section 5.4 exactly.
+- The `0.0` sentinel is row-wise: on a live 2-hour slice, 2383 of 4208 rows
+  carried a fill-value timestamp, and dropping on timestamp validity removed
+  every one of them.  No `drop_zero_as_fill` rule was needed.
+- Unit scaling lands once: the built file reads 44.4-44.9 mS/cm (not 4.4) and
+  0.1-16.6 dbar (not 1.66).
+- `refresh: incremental` with `overlap_chunks: 1` refetches only the tail:
+  a second run over two chunks reported "1 fetched, 1 cached".
