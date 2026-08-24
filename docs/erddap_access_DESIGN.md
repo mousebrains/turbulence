@@ -299,6 +299,55 @@ size/mtime — and a run that fetched new data produces a *different* fingerprin
 which correctly invalidates the per-file markers and reprocesses. That is the
 behaviour you want and it comes for free from the artifact being a file.
 
+### 5.1c Which dataset: `-trajectory-raw-delayed`
+
+**Decided.** The calibration is a *statistical* process — a fit pooled over
+millions of pairs, robust to individual bad samples — and it has been validated
+end to end against the raw product on osu685. Adopting a QC'd product would
+substitute someone else's rejection criteria for the ones this pipeline
+measures and documents, and would invalidate that validation.
+
+Rutgers publish up to four datasets per deployment (live probe of
+`slocum-data.marine.rutgers.edu`, e.g. `ru33-20250903T1642`):
+
+```
+<glider>-<YYYYMMDDTHHMM>-trajectory-raw-delayed    <- use this
+<glider>-<YYYYMMDDTHHMM>-trajectory-raw-rt
+<glider>-<YYYYMMDDTHHMM>-profile-sci-delayed
+<glider>-<YYYYMMDDTHHMM>-profile-sci-rt
+```
+
+The two products are not interchangeable, and not a config one-liner apart:
+
+| | `-trajectory-raw-delayed` | `-profile-sci-delayed` |
+|---|---|---|
+| variables | **74** | 46 |
+| temperature | `sci_water_temp` | `temperature` |
+| conductivity | `sci_water_cond` | `conductivity` |
+| CTD clock | `sci_ctd41cp_timestamp` | `ctd41cp_timestamp` |
+| derived fields | none | `potential_temperature`, … |
+| QC flags | — | **none visible** |
+
+Three things follow. The sci product **renames** every variable this pipeline
+names, so switching is not a one-line edit. It carries **derived** fields, so it
+is a product rather than a filtered observation. And it exposes **no QARTOD or
+flag variables** — whatever QC it applied is baked in, neither inspectable nor
+reversible.
+
+There is also a compounding risk specific to this pipeline: if a QC'd product
+has already gap-filled or interpolated, `hotel.max_gap` (#150) is **defeated at
+source** — the gaps it exists to refuse are no longer visible as gaps. That is
+the same failure the `_interp_one` work removed one layer down.
+
+**`-rt` vs `-delayed` is a different axis, and it constrains §5.1b.** During a
+mission only `-rt` exists (the telemetered subset); `-delayed` appears after
+recovery, at full resolution, under a *different dataset ID*. So delayed is a
+**replacement, not a continuation** — an incremental refresh must never splice
+across that boundary. `dataset_id` is pinned; moving from `-rt` to `-delayed` is
+a fresh build. The builder should notice the case: if `refresh: incremental` is
+set on an `-rt` dataset and a `-delayed` sibling now exists, say so rather than
+continuing to append telemetered data.
+
 ### 5.2 Config
 
 ```yaml
@@ -306,6 +355,11 @@ server:
   base_url: "https://slocum-data.marine.rutgers.edu/erddap"
   protocol: "tabledap"          # tabledap | griddap
   dataset_id: "ru33-20211001T1841-trajectory-raw-delayed"
+                            # -trajectory-raw-delayed, not -profile-sci-*: see
+                            # 5.1c. The sci product renames every variable
+                            # below, carries derived fields, and exposes no QC
+                            # flags -- and if it has gap-filled, hotel.max_gap
+                            # is defeated at source.
   timeout_s: 120
   retries: 3                    # on connection error / 5xx only, never on 4xx
   cache: "<CONFIG_DIR>/erddap_cache"
@@ -628,9 +682,7 @@ neither needs a server. Getting a test server is not on the critical path.
 
 ## 10. Open questions
 
-1. **Which dataset variant?** `-raw-delayed` versus a QC'd/science product. The
-   raw one is what the notebook uses and what the Slocum-native path expects,
-   but it is also the one most likely to be reprocessed.
+1. ~~Which dataset variant?~~ **Decided: `-trajectory-raw-delayed`.** See §5.1c.
 2. **Which glider datasets does Rutgers publish, and under what IDs?** Only
    the science/CTD feed matters now that MR data is out of scope, but the
    dataset naming convention decides how much of the config can be shared
