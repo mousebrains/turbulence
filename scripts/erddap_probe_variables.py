@@ -11,7 +11,7 @@ def variables(ds):
             txt = r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return f"HTTPError {e.code} ({e.headers.get_content_type()})"
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return f"{type(e).__name__}: {str(e)[:80]}"
     return re.findall(r"^\s+\w+\s+(\w+);", txt, re.M)
 

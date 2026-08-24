@@ -12,7 +12,7 @@ def search(term):
             d = json.load(r)
     except urllib.error.HTTPError as e:
         return f"HTTPError {e.code} {e.headers.get_content_type()}"
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return f"{type(e).__name__}: {str(e)[:100]}"
     tbl = d["table"]
     i = tbl["columnNames"].index("Dataset ID")
