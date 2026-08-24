@@ -1099,3 +1099,34 @@ def test_non_overlapping_reference_and_p_files_are_flagged():
     assert "do not overlap" in _overlap_warning([_P(1.738e9, 1.744e9)], ref)
     assert _overlap_warning([_P(1.6335e9, 1.6338e9)], ref) == ""
     assert _overlap_warning([], ref) == ""
+
+
+def test_files_exclude_drops_named_p_files(tmp_path):
+    """A deployment usually has a file the glider never finished writing.
+
+    `patch` is all-or-nothing by design -- a half-patched deployment is worse
+    than an unpatched one -- so one 0-byte file blocked all 1228. Naming it
+    beats a tolerate-N-failures counter: a NEW bad file still stops the run.
+    """
+    from odas_tpw.fp07cal.cli import _gather_paths
+
+    for name in ("good_0001.p", "good_0002.p", "junk_0647.p"):
+        (tmp_path / name).write_bytes(b"x")
+    cfg = {
+        "files": {
+            "p_file_root": str(tmp_path),
+            "p_file_pattern": "*.p",
+            "output_dir": str(tmp_path / "out"),
+            "exclude": ["junk_0647.p"],
+        }
+    }
+    assert {p.name for p in _gather_paths(cfg)} == {"good_0001.p", "good_0002.p"}
+
+
+def test_files_exclude_absent_is_a_no_op(tmp_path):
+    from odas_tpw.fp07cal.cli import _gather_paths
+
+    (tmp_path / "a.p").write_bytes(b"x")
+    cfg = {"files": {"p_file_root": str(tmp_path), "p_file_pattern": "*.p",
+                     "output_dir": str(tmp_path / "out")}}
+    assert len(_gather_paths(cfg)) == 1

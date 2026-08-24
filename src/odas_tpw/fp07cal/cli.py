@@ -160,6 +160,7 @@ def _gather_paths(cfg: dict) -> list[Path]:
     files_cfg = cfg.get("files", {}) or {}
     root = Path(files_cfg.get("p_file_root", "."))
     pattern = files_cfg.get("p_file_pattern", "**/*.p")
+    excluded = [str(x) for x in (files_cfg.get("exclude") or [])]
     out_dir = Path(files_cfg.get("output_dir", "fp07cal")).resolve()
     # glob_paths, not root.glob: `**` in pathlib does not traverse a
     # symlinked directory, which is how a deployment kept on an external
@@ -167,6 +168,18 @@ def _gather_paths(cfg: dict) -> list[Path]:
     from odas_tpw.perturb.discover import glob_paths
 
     paths = sorted(glob_paths(root, pattern))
+    if excluded:
+        # Same escape hatch as dinkum-hotel's files.exclude, and for the same
+        # reason: a deployment usually has one or two files the glider never
+        # finished writing, and `patch` is all-or-nothing by design.
+        drop = {q for pat in excluded for q in glob_paths(root, pat)}
+        if drop:
+            paths = [q for q in paths if q not in drop]
+            print(
+                f"  files.exclude removed {len(drop)} file(s): "
+                + ", ".join(sorted(q.name for q in list(drop)[:5]))
+                + (" ..." if len(drop) > 5 else "")
+            )
     inside = [
         q for q in paths
         if out_dir == q.resolve() or out_dir in q.resolve().parents
@@ -796,9 +809,19 @@ def _cmd_patch(args) -> int:
     print("edits per channel:")
     for ch, kv in plan.edits.items():
         print(f"  {ch}: " + "  ".join(f"{k}={v}" for k, v in kv.items()))
-    written = [d for _s, d, _c in results if d is not None]
-    print(f"{'would write' if args.dry_run else 'wrote'} {len(written)} "
-          f"patched file(s) to {dst}/")
+    if args.dry_run:
+        # patch_files returns dst=None for a dry run AND for a no-op, so
+        # counting non-None destinations reported "would write 0" on every
+        # dry run, whatever it was about to do. Count the files that actually
+        # have changes instead -- which also distinguishes "nothing to do,
+        # they already carry these coefficients" from "0 because dry run".
+        would = [s for s, _d, changes in results if changes]
+        print(f"would write {len(would)} patched file(s) to {dst}/")
+        if not would and results:
+            print("  (no file needs a change: they already carry these coefficients)")
+    else:
+        written = [d for _s, d, _c in results if d is not None]
+        print(f"wrote {len(written)} patched file(s) to {dst}/")
     if not args.dry_run and written:
         print("Now run perturb over the PATCHED files with `fp07.calibrate: false`.")
     return 0
