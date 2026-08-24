@@ -597,3 +597,118 @@ def test_offline_reuses_the_digest_the_cache_was_populated_under(tmp_path):
 
 def test_recall_is_none_before_anything_is_cached(tmp_path):
     assert recall_das_sha(tmp_path / "cache", "d-raw") is None
+
+
+# ------------------------------------------------ recorded Rutgers fixture
+# 5000 contiguous rows captured from ru33-20211001T1841-trajectory-raw-delayed
+# on 2026-08-24. Real bytes, not a model of what the server sends: it carries
+# NaN timestamps, a 0.0 timestamp, and a genuine surface pressure of 0.0.
+FIXTURE = REPO_ROOT / "tests/data/erddap_ru33_slice.nc"
+_VARS = [
+    "sci_ctd41cp_timestamp",
+    "sci_water_cond",
+    "sci_water_pressure",
+    "sci_water_temp",
+]
+
+
+def _fixture() -> xr.Dataset:
+    if not FIXTURE.exists():
+        pytest.skip("recorded ERDDAP fixture not present")
+    return xr.open_dataset(FIXTURE, decode_times=False, mask_and_scale=False)
+
+
+def test_recorded_slice_sanitises_to_the_measured_counts():
+    """Exact tally on real bytes, so a rule change cannot drift unnoticed."""
+    from odas_tpw.dinkum.build import resolve_time_bounds, sanitize_time
+
+    ds = _fixture()
+    mask_fill_values(ds, _VARS)
+    lo, hi = resolve_time_bounds("2021-09-01", "2021-12-01")
+    times, stats = sanitize_time(
+        np.asarray(ds["sci_ctd41cp_timestamp"].values, dtype=np.float64), lo, hi, "mean"
+    )
+    assert stats == {
+        "n_total": 5000,
+        "n_nan": 2724,
+        "n_out_of_range": 1,  # the single 0.0 timestamp, below the lower bound
+        "n_duplicate": 0,
+        "n_kept": 2275,
+    }
+    assert np.all(np.diff(times) > 0)
+
+
+def test_fill_masking_on_real_bytes_leaves_the_clock_alone():
+    """The CTD's own stamp is NaN where it did not report, never a fill value."""
+    ds = _fixture()
+    stats = mask_fill_values(ds, _VARS)
+    assert stats["sci_ctd41cp_timestamp"]["fill_masked"] == 0
+    for name in _VARS[1:]:
+        assert stats[name]["fill_masked"] == 2724
+
+
+def test_a_real_surface_pressure_of_zero_survives():
+    """Why `drop_zero_as_fill` is empty by default, on Rutgers' own data.
+
+    Across the full ru33 deployment, 33 rows carry `sci_water_pressure == 0.0`
+    on a perfectly good timestamp. They are not sentinels: their neighbours
+    read 0.002-0.013 bar, i.e. 2-13 cm of water. The glider is at the surface
+    and the sensor is right.
+
+    The Rutgers notebook's blanket `0.0 -> NaN` deletes all 33. We keep them,
+    and the row count is identical either way -- which is exactly why this
+    needs its own test: the golden row count hides the difference.
+    """
+    ds = _fixture()
+    t = np.asarray(ds["sci_ctd41cp_timestamp"].values, dtype=np.float64)
+    good = np.isfinite(t) & (t > 1.6e9)
+
+    mask_fill_values(ds, _VARS)  # default: no zero rule
+    p = np.asarray(ds["sci_water_pressure"].values, dtype=np.float64)
+    assert np.count_nonzero((p == 0.0) & good) == 1, "the real surface sample was deleted"
+
+    # Opting in removes it -- available, and off for a reason. Two go: the
+    # real surface sample, and one on the row whose timestamp is the 0.0
+    # sentinel (which the timestamp rule discards anyway, so only the first
+    # is a loss).
+    ds2 = _fixture()
+    stats = mask_fill_values(ds2, _VARS, drop_zero=["sci_water_pressure"])
+    assert stats["sci_water_pressure"]["zero_masked"] == 2
+    p2 = np.asarray(ds2["sci_water_pressure"].values, dtype=np.float64)
+    assert np.count_nonzero((p2 == 0.0) & good) == 0, "the real sample should now be gone"
+
+
+@pytest.mark.skipif(
+    not __import__("os").environ.get("ERDDAP_LIVE"),
+    reason="set ERDDAP_LIVE=1 to hit the real server",
+)
+def test_live_full_deployment_matches_the_notebook():  # pragma: no cover
+    """Golden case: the Rutgers notebook's own published answer.
+
+    Its stored outputs record 868,427 rows in and 346,518 out, over
+    1633113400.37739 .. 1634738980.72214. We reach the same numbers by a
+    different route -- timestamp validity with both bounds, and no blanket
+    zero rule -- which is the strongest available evidence that dropping the
+    blanket rule costs nothing.
+    """
+    import urllib.request
+
+    from odas_tpw.dinkum.build import resolve_time_bounds, sanitize_time
+    from odas_tpw.erddap.query import tabledap_url
+
+    url = tabledap_url(
+        "https://slocum-data.marine.rutgers.edu/erddap",
+        "ru33-20211001T1841-trajectory-raw-delayed",
+        _VARS,
+    )
+    path, _ = urllib.request.urlretrieve(url)
+    ds = xr.open_dataset(path, decode_times=False, mask_and_scale=False)
+    assert ds.sizes["row"] == 868_427
+    mask_fill_values(ds, _VARS)
+    lo, hi = resolve_time_bounds("2021-09-01", "2021-12-01")
+    times, stats = sanitize_time(
+        np.asarray(ds["sci_ctd41cp_timestamp"].values, dtype=np.float64), lo, hi, "mean"
+    )
+    assert stats["n_kept"] == 346_518
+    assert times[0] == pytest.approx(1633113400.37739)
+    assert times[-1] == pytest.approx(1634738980.72214)

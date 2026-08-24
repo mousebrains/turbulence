@@ -798,7 +798,58 @@ Section 6.5's count is now settled: two sanitisers in the tree
 (`dinkum/build.py` and `fp07cal/series.py`), and #154 converged the second onto
 the first's core, so it is really one set of rules with two entry points.
 
-### 13.4 Confirmed as designed
+### 13.4 The notebook's golden case, reproduced exactly — and one real
+difference
+
+Section 12.1 proposed testing the QC layer "with the notebook's own output as a
+golden case". Done, and it is a stronger check than expected: the notebook's
+stored outputs record every intermediate count, and we hit all of them by a
+**different route** — timestamp validity with both bounds, and no blanket zero
+rule:
+
+| | notebook | ours |
+|---|---|---|
+| rows in | 868 427 | 868 427 |
+| dropped, unusable timestamp | 521 869 | 521 330 NaN + 539 out-of-range |
+| duplicates | 40 | 40 |
+| **rows out** | **346 518** | **346 518** |
+| time range | 1633113400.37739 .. 1634738980.72214 | identical |
+
+That is the strongest available evidence that dropping the blanket
+`0.0 -> NaN` costs nothing: the timestamp rule alone accounts for every row the
+notebook removes.
+
+**But the row count hides a real difference, and it goes the other way.**
+Across the full deployment, **33 rows carry `sci_water_pressure == 0.0` on a
+perfectly good timestamp**. They are not sentinels — their neighbours read
+0.002–0.013 bar, i.e. **2–13 cm of water**. The glider is at the surface and
+the sensor is right. The notebook's blanket rule NaNs all 33; we keep them. No
+row disappears either way, so the golden count is identical while the data is
+not.
+
+This is the failure §6.3 predicted, found on Rutgers' own reference dataset
+rather than a hypothetical polar deployment — and it is a *stronger* case than
+the one the design argued, because a glider at the surface is not an edge case.
+It also corrects a generalisation: on osu685 the sentinel was purely row-wise
+(789 pressure zeros, 789 with unusable timestamps, 0 missed). On ru33 it is
+not. "Drop rows on timestamp validity" remains right; "the zeros are always
+row-wise" was true of one deployment, not of the format.
+
+`tests/data/erddap_ru33_slice.nc` (130 kB, 5000 real contiguous rows) carries
+one of these surface samples, a 0.0 timestamp and 2724 NaN timestamps, with
+exact expected tallies. The full golden case runs under `ERDDAP_LIVE=1`.
+
+### 13.5 `--offline` could never find an online cache
+
+The cache key includes the `.das` digest; `--offline` cannot compute one and
+substituted the literal string `"offline"`, so it looked under a key no online
+run ever wrote — every lookup missed while the data sat in the directory.
+§10.4 had already specified the fix ("`--offline` skips the probe and uses the
+last key"); only half of it was built. An online probe now records the digest
+in a sidecar. The original test had seeded the cache under the same wrong key,
+so it agreed with the bug rather than checking for it.
+
+### 13.6 Confirmed as designed
 
 - A 1-day window returns **88 728 rows**, matching the figure recorded in
   section 5.4 exactly.
