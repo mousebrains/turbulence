@@ -1,0 +1,162 @@
+# erddap-hotel — build a perturb hotel file from a Rutgers Slocum deployment
+# served over ERDDAP, instead of from local Dinkum (EBD) files.
+#
+# This is the ERDDAP twin of examples/slocum_glider_hotel/dinkum-hotel.yaml. It
+# produces the same artifact — a hotel.nc on one clean, strictly increasing
+# clock, already in the units perturb expects — so everything downstream
+# (perturb.erddap.yaml beside this file, and fp07-cal) is identical to the
+# local-file case.
+#
+#     erddap-hotel info   -c erddap-hotel.yaml   # look before you download
+#     erddap-hotel fetch  -c erddap-hotel.yaml   # populate the cache only
+#     erddap-hotel build  -c erddap-hotel.yaml   # fetch (cached) + QC -> hotel.nc
+#     erddap-hotel verify -c erddap-hotel.yaml   # has the dataset changed?
+#
+# Every value below that describes the Rutgers server was read off a live probe
+# of slocum-data.marine.rutgers.edu, not assumed. Where that matters it is
+# called out inline.
+
+server:
+  base_url: "https://slocum-data.marine.rutgers.edu/erddap"
+  protocol: "tabledap"
+  dataset_id: "ru33-20211001T1841-trajectory-raw-delayed"
+  # -trajectory-raw-delayed, NOT -profile-sci-*. Rutgers publish up to four
+  # datasets per deployment:
+  #
+  #     <glider>-<YYYYMMDDTHHMM>-trajectory-raw-delayed   <- this one
+  #     <glider>-<YYYYMMDDTHHMM>-trajectory-raw-rt
+  #     <glider>-<YYYYMMDDTHHMM>-profile-sci-delayed
+  #     <glider>-<YYYYMMDDTHHMM>-profile-sci-rt
+  #
+  # The sci product is not a config one-liner away. It RENAMES every variable
+  # named below (sci_water_temp -> temperature, sci_water_cond -> conductivity,
+  # sci_ctd41cp_timestamp -> ctd41cp_timestamp), adds derived fields
+  # (potential_temperature), and exposes no QARTOD or flag variables — whatever
+  # QC it applied is baked in, neither inspectable nor reversible. And if a QC'd
+  # product has already gap-filled, perturb's hotel.max_gap is defeated at
+  # source: the gaps it exists to refuse are no longer visible as gaps.
+  #
+  # The FP07 calibration is a statistical fit pooled over millions of pairs and
+  # robust to individual bad samples, and it was validated end to end against
+  # the raw product. Raw is the right input.
+  #
+  # -rt vs -delayed is a DIFFERENT axis. During a mission only -rt exists (the
+  # telemetered subset); -delayed appears after recovery, at full resolution,
+  # under a different dataset_id. Delayed is a replacement, not a continuation
+  # — an incremental refresh must never splice across that boundary. Moving
+  # from -rt to -delayed means a fresh build, not an append.
+  timeout_s: 120
+  retries: 3                 # connection errors and 5xx only, never a 4xx
+  cache: "<CONFIG_DIR>/erddap_cache"
+
+fetch:
+  variables:                 # pushed to the server: nothing not listed is
+    - sci_ctd41cp_timestamp  # downloaded. The raw trajectory dataset carries
+    - sci_water_temp         # 74 variables; these four are what perturb and
+    - sci_water_cond         # fp07-cal actually read.
+    - sci_water_pressure
+    # Add here if you want them as hotel channels or in the CTD product:
+    #   - sci_oxy4_oxygen
+    #   - m_present_time     # only if you also merge flight-clock channels
+
+  time_variable: "time"      # the variable the SERVER-SIDE constraint applies
+                             # to. This is not the clock you build on — see the
+                             # qc.time_base warning below.
+  time_min: "2021-10-01T00:00:00Z"
+  time_max: null             # null = to the end of the dataset
+  chunk_days: 7              # split the window into requests this long: bounds
+                             # each request, lets a partial failure retry
+                             # cheaply, keeps cache entries small
+  constraints:
+    - "distinct()"           # server-side exact-duplicate removal. Worth
+                             # having — it halves the duplicate problem before
+                             # download. It does not solve it: rows sharing a
+                             # timestamp but differing in a NaN are not
+                             # duplicates to the server, so qc below still runs.
+  format: "nc"               # nc | ncCF. Both work downstream; nc is the flat
+                             # `row` layout perturb's loader expects.
+
+  refresh: "incremental"     # never | incremental | always
+  # A mission IN PROGRESS is appended to, so the default picks up whatever
+  # landed since the last run rather than re-fetching months of trajectory —
+  # seconds instead of minutes. Use "never" for a finished deployment you are
+  # reprocessing, and "always" after a dataset is known to have been
+  # reprocessed upstream (erddap-hotel verify will tell you which).
+  overlap_chunks: 1          # refetch this much of the tail on an incremental
+                             # run: a -raw-delayed dataset can REVISE recent
+                             # rows, not only extend them. Where the refetched
+                             # overlap disagrees the new values win and the
+                             # disagreement is recorded in history. A lot of
+                             # disagreement means the dataset was reprocessed,
+                             # and "always" is the honest response.
+
+qc:
+  time_base: "sci_ctd41cp_timestamp"
+  # ******************* the most consequential line in this file ***************
+  # ERDDAP's own `time` axis on this dataset has long_name "m_present_time" —
+  # it is the FLIGHT computer's clock, not the CTD's. Building on it smears
+  # every T/C sample by the science-to-flight latency, which is the same order
+  # as the CTD's own response time.
+  #
+  # What that does and does not cost: the FP07 Steinhart-Hart fit puts the
+  # reference temperature on the RESPONSE side, so timing scatter inflates its
+  # residuals without biasing the coefficients — the calibration survives a
+  # smeared clock, it just gets noisier. Anything resolving sub-second
+  # structure does not survive it. Use the CTD clock; there is no reason not to.
+  #
+  # Each variable is attributed to its own clock and projected onto this one
+  # base, exactly as dinkum-hotel does — the same code, in fact.
+  # ****************************************************************************
+
+  time_min: "2021-10-01T00:00:00Z"   # epoch seconds or an ISO-8601 date
+  time_max: "2021-12-01T00:00:00Z"
+  # Bounds on the TIME variable do most of the real work. Measured over
+  # 5,407,129 rows: every 0.0 "the CTD did not sample this cycle" sentinel sits
+  # on a row whose timestamp is ALSO unusable, so a row-wise drop removes them
+  # all — provided BOTH bounds are set. Two rows carried a timestamp of
+  # 1.19e+103, which only an upper bound catches. After the drop, zero 0.0
+  # values remained.
+  dedupe: "mean"             # mean | first | last, for rows sharing a stamp
+
+  drop_zero_as_fill: []
+  # Per-variable "0.0 means not sampled". Deliberately EMPTY. On the measured
+  # data it removes nothing the timestamp bounds have not, and applied blanket
+  # — as the Rutgers notebook does — it would delete a real 0 degC sample on a
+  # polar deployment. Switch a variable on only after showing this dataset
+  # needs it.
+
+  valid_range:
+    # These mirror the valid_min/valid_max the server declares in its .das.
+    # They matter for a reason easy to miss: _FillValue on all three of these
+    # variables is 9.96921e+36 and it is NOT masked on read — it arrives as an
+    # ordinary finite float. Any bound at all catches it; these are the
+    # declared ones.
+    sci_water_temp:     [-5.0, 40.0]     # degrees_C
+    sci_water_cond:     [0.0, 10.0]      # S m-1 — i.e. BEFORE the scale below
+    sci_water_pressure: [0.0, 2000.0]    # bar   — i.e. BEFORE the scale below
+
+sensors:
+  # UNIT CONVERSION HAPPENS HERE, ONCE. The perturb side must not re-apply it.
+  # This is the most dangerous knob in the pair of configs: scaling in both
+  # places multiplies by ten twice and puts salinity into fantasy.
+  sci_water_temp:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "degree_Celsius"
+    scale: 1.0
+  sci_water_cond:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "mS/cm"
+    scale: 10.0              # served as "S m-1" (confirmed in the .das)
+  sci_water_pressure:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "dbar"
+    scale: 10.0              # served as "bar" (confirmed in the .das)
+
+time:
+  base: "sci_ctd41cp_timestamp"
+  max_gap: 30.0              # [s] ~30x the CTD's 1 Hz interval: loose enough
+                             # for jitter, tight enough to refuse a dropout
+  extrapolate: false
+
+output:
+  file: "<CONFIG_DIR>/hotel.nc"
