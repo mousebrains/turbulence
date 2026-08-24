@@ -161,7 +161,12 @@ def _gather_paths(cfg: dict) -> list[Path]:
     root = Path(files_cfg.get("p_file_root", "."))
     pattern = files_cfg.get("p_file_pattern", "**/*.p")
     out_dir = Path(files_cfg.get("output_dir", "fp07cal")).resolve()
-    paths = sorted(root.glob(pattern))
+    # glob_paths, not root.glob: `**` in pathlib does not traverse a
+    # symlinked directory, which is how a deployment kept on an external
+    # volume is normally wired in.
+    from odas_tpw.perturb.discover import glob_paths
+
+    paths = sorted(glob_paths(root, pattern))
     inside = [
         q for q in paths
         if out_dir == q.resolve() or out_dir in q.resolve().parents
@@ -184,6 +189,19 @@ def _load_reference(cfg: dict):
     """Load the CTD reference, failing with a message rather than a traceback."""
     ref_cfg = cfg.get("reference")
     if not isinstance(ref_cfg, dict) or not ref_cfg.get("file"):
+        # perturb's config uses the same `files.p_file_root` /
+        # `p_file_pattern` keys, so pointing fp07-cal at one gets far enough
+        # to look plausible and then fails on a missing section. Name it.
+        perturb_only = {"epsilon", "chi", "binning", "hotel", "profiles", "speed"} & set(cfg)
+        if perturb_only:
+            raise ValueError(
+                "this looks like a perturb config, not an fp07-cal one (it has "
+                f"{sorted(perturb_only)} and no `reference:`). fp07-cal needs its "
+                "own file: `fp07-cal init -o fp07-cal.yaml`, or copy "
+                "examples/slocum_glider_hotel/fp07-cal.yaml. Point its "
+                "`reference.file` at the hotel file and its `files.p_file_root` "
+                "at the TRIMMED .p files."
+            )
         raise ValueError(
             "config has no `reference:` block with a `file:` entry — "
             "`fp07-cal init` writes a commented template"
@@ -473,6 +491,52 @@ def _cmd_init(args) -> int:
     return 0
 
 
+def _overlap_warning(probes, ref) -> str:
+    """Do the .p files and the reference cover the same time at all?
+
+    A reference paired with the wrong deployment produces zero pairs, and
+    every stage downstream reports that as "sparse coverage" rather than as
+    the mistake it is. Caught in the wild: an osu685 MicroRider (Jan-Apr 2025)
+    pointed at a hotel file built from ru33 (Oct 2021). `coverage` cheerfully
+    reported a 42.5% duty cycle -- which was true of the reference on its own,
+    and irrelevant.
+
+    Returns "" when they overlap, or a multi-line warning naming both spans.
+    """
+    import datetime as dt
+
+    import numpy as np
+
+    starts, ends = [], []
+    for probe in probes:
+        t = getattr(probe, "time", None)
+        if t is None or not len(t):
+            continue
+        finite = np.asarray(t, dtype=np.float64)
+        finite = finite[np.isfinite(finite)]
+        if finite.size:
+            starts.append(float(finite.min()))
+            ends.append(float(finite.max()))
+    if not starts or ref.time.size == 0:
+        return ""
+    p_lo, p_hi = min(starts), max(ends)
+    r_lo, r_hi = float(ref.time[0]), float(ref.time[-1])
+    if p_lo <= r_hi and r_lo <= p_hi:
+        return ""
+
+    def iso(x: float) -> str:
+        return dt.datetime.fromtimestamp(x, dt.UTC).isoformat(timespec="seconds")
+
+    gap_days = (r_lo - p_hi if r_lo > p_hi else p_lo - r_hi) / 86400.0
+    return (
+        "WARNING: the .p files and the reference do not overlap in time.\n"
+        f"  .p files : {iso(p_lo)} .. {iso(p_hi)}\n"
+        f"  reference: {iso(r_lo)} .. {iso(r_hi)}\n"
+        f"  they are {gap_days:.0f} days apart, so the fit will find zero pairs.\n"
+        "  Check that reference.file is the hotel file for THIS deployment."
+    )
+
+
 def _cmd_coverage(args) -> int:
     cfg = _load_config(Path(args.config))
     paths = _gather_paths(cfg)
@@ -492,7 +556,14 @@ def _cmd_coverage(args) -> int:
     if ch:
         pairs = build_pairs_multi(probes, ref, ch, lag=0.0, cfg=pc)
         per_file = pairs.per_file
+    overlap = _overlap_warning(probes, ref)
+    if overlap:
+        print(overlap, file=sys.stderr)
     text = coverage_text(ref.coverage_report(pc.max_gap), per_file, pc.max_gap)
+    if overlap:
+        text = f"> **{overlap.splitlines()[0]}**\n>\n> " + "\n> ".join(
+            overlap.splitlines()[1:]
+        ) + "\n\n" + text
     out_dir = Path(cfg.get("files", {}).get("output_dir", "fp07cal"))
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "coverage.md").write_text(text)
