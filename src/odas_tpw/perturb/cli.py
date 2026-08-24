@@ -213,7 +213,11 @@ def _cmd_trim(args: argparse.Namespace) -> None:
     if jobs == 0:
         jobs = os.cpu_count() or 1
 
-    results = run_trim(config, jobs=jobs)
+    # Pass the positional FILE arguments through: the parser advertises them
+    # for `trim` exactly as for `run`, and dropping them here made
+    # `perturb trim -c cfg some/file.p` silently operate on the whole
+    # configured root instead of the file asked for.
+    results = run_trim(config, _glob_p_files(args.files), jobs=jobs)
     print(f"Trim complete: {len(results)} files ready (see log for breakdown)")
 
 
@@ -620,3 +624,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     handler(args)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
