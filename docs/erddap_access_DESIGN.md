@@ -208,6 +208,14 @@ point straight at a URL without thinking about it.
 
 ### Recommendation: **Option B, with C's caching as the fetch layer.**
 
+**Chosen.** A URL in `hotel.file` was considered as a convenience shorthand
+(fetch → QC → cache → use the cached file) and rejected in favour of the
+explicit `erddap-hotel` step. Running the builder before perturb is one extra
+command, it is cheap on an incremental refresh (5.1b), and it keeps exactly one
+thing true that the shorthand muddies: **perturb only ever reads a file.** That
+is what makes the skip-cache fingerprint work, what lets `fp07-cal` and perturb
+read the same bytes, and what leaves a reproducible artifact behind.
+
 The deciding argument is not convenience. It is that **a processing result must
 be reproducible from artifacts that exist locally.** ERDDAP datasets are
 revised; servers go down; a `-raw-delayed` dataset by construction becomes a
@@ -254,6 +262,43 @@ Exactly as `dinkum-hotel` does, each variable is attributed to its own clock
 (`time_sensor`) and projected with `project_sensor` onto a single declared
 `time.base`; for a CTD-only feed that base is `sci_ctd41cp_timestamp`.
 
+### 5.1b Refresh: a live deployment grows
+
+The cache is not simply "fetch once, keep forever". An ERDDAP dataset for a
+mission **in progress is appended to**, and the operator will reasonably want
+each run to pick up whatever landed since the last one. That is a different
+motion from a dataset being *revised*, and the design must distinguish them:
+
+| `refresh` | behaviour | for |
+|---|---|---|
+| `never` | use the cached artifact; fetch only if absent | a finished deployment, reprocessing an old result |
+| `incremental` (default) | fetch only `time >` the newest cached sample, append, re-sanitise the join | **an active mission** — the common case |
+| `always` | discard the cache and refetch the whole window | after a dataset is known to have been reprocessed |
+
+`incremental` is cheap: one small request per run rather than the whole
+trajectory, which is the difference between a few seconds and a few minutes on
+a multi-month dataset.
+
+Two things it has to get right, and they are the reason it is a design item and
+not an implementation detail:
+
+- **Re-sanitise across the join.** The newest cached sample and the first new
+  one are adjacent in the output but were never sanitised together. Duplicates
+  and non-monotonicity live exactly there. Sanitise the joined series, not the
+  two halves separately.
+- **The tail may be revised, not just extended.** A `-raw-delayed` dataset can
+  rewrite recent rows. So `incremental` refetches with a small **overlap**
+  (default: one chunk) and prefers the newly fetched values where they differ,
+  recording in `history` when the overlap disagreed. If it disagrees a lot, the
+  dataset was reprocessed and `refresh: always` is the honest response --
+  reported, not silently patched over.
+
+This also disposes of the skip-cache problem that killed Option A. perturb never
+sees a URL, only a local file, so `_external_input_fingerprints` gets a real
+size/mtime — and a run that fetched new data produces a *different* fingerprint,
+which correctly invalidates the per-file markers and reprocesses. That is the
+behaviour you want and it comes for free from the artifact being a file.
+
 ### 5.2 Config
 
 ```yaml
@@ -283,18 +328,39 @@ fetch:
                                 # percent-encoded by the builder, never by hand
   format: "nc"                  # nc | ncCF -- what is downloaded; see 5.4
 
+  refresh: "incremental"   # never | incremental | always. See 5.1b: an active
+                           # mission's dataset is APPENDED to, so the default
+                           # picks up what landed since the last run rather
+                           # than re-fetching the whole trajectory.
+  overlap_chunks: 1        # refetch this much of the tail on an incremental
+                           # run: a -raw-delayed dataset can revise recent rows,
+                           # not just extend them.
+
 qc:
   # See section 6. These are the rules the notebook applies, made explicit and
   # per-variable rather than blanket.
   time_base: "sci_ctd41cp_timestamp"       # the output clock, as dinkum's
                                            # time.base; every variable is
                                            # projected onto it
-  drop_zero_as_fill: ["sci_ctd41cp_timestamp"]   # NOT every variable
+  # Bounds on the TIME variable do the real work. Measured on osu685: every
+  # 0.0 "not sampled" sentinel sits on a row whose timestamp is also unusable,
+  # so a row-wise drop removes them all -- provided BOTH bounds are set (two
+  # rows carried a timestamp of 1.19e+103, which only an upper bound catches).
+  time_min: "2021-10-01T00:00:00Z"
+  time_max: "2021-12-01T00:00:00Z"
+  drop_zero_as_fill: []    # per-variable "0.0 means not sampled". Deliberately
+                           # EMPTY: on osu685 it removes nothing the timestamp
+                           # bounds have not, and applied blanket (as the
+                           # notebook does) it would delete a real 0 degC
+                           # sample on a polar deployment. Switch on only for a
+                           # dataset shown to need it.
   valid_range:
     sci_water_temp: [-5.0, 45.0]
     sci_water_cond: [0.0, 70.0]
     sci_water_pressure: [-2.0, 12000.0]
-  dedupe: "mean"                # mean | first | last -- matches dinkum-hotel
+  dedupe: "mean"           # mean | first | last -- matches dinkum-hotel and
+                           # fp07cal. The notebook keeps the first, which is a
+                           # silent bias toward sort order.
   require_increasing: true
 
 output:
@@ -383,78 +449,96 @@ only if `datasets`-style discovery turns out to be wanted.
 
 ---
 
-## 6. QC: three sanitisers, three different answers
+## 6. Sanitisation: what it does, and where it comes from
 
-This is the part most likely to cause quiet damage. Once #149 merges, the tree
-contains **three independent implementations of "clean up a Slocum CTD table"**,
-plus a fourth thing that silently drops data without being one. They do not
-agree.
+Sanitisation is not a garnish on the fetch — it **is** the work. The fetch is
+six lines of `urllib`; everything that makes the result usable happens after it.
 
-| | **1.** notebook | **2.** `dinkum/build.py` | **3.** `fp07cal/series.py` |
+### 6.1 Why it cannot be skipped
+
+Raw tabledap rows put through the hotel merge unchanged, measured:
+
+```
+raw       [nan, nan, 20.1, 20.15, 20.25, 20.275, 20.3, 10.15, 0.0]
+                                                       ^^^^^  ^^^
+sanitised [nan, nan, 20.1, 20.15, 20.25, 20.275, 20.3,   nan, nan]
+```
+
+That trailing **0.0 °C** is a "CTD did not sample this cycle" sentinel read as a
+real temperature, and **10.15 °C** is a linear interpolation onto it — a
+fabricated mid-water reading. This is on `interpolation: linear`, which the
+shipped glider example uses. On `pchip` a duplicate timestamp raises
+`ValueError: x must be strictly increasing` instead — loud, but by luck rather
+than design.
+
+`load_hotel` performs **no** sanitisation; the code says so at `hotel.py:564`
+("No loader sorts"). Whatever cleans the data has to do it before the merge.
+
+### 6.2 It already exists — in `dinkum`
+
+Now that #149 has merged, `dinkum/build.py` carries a tested implementation of
+exactly this, and `erddap-hotel` should **import it rather than write a fourth**:
+
+| function | does |
+|---|---|
+| `resolve_time_bounds` | epoch seconds or ISO-8601 → `(lo, hi)` |
+| `time_validity(t, lo, hi)` | finite ∧ within bounds |
+| `sanitize_time(t, lo, hi, dedupe)` | the above, sorted, deduped, **plus a rejection tally** |
+| `_dedupe(t, v, method)` | `mean` \| `first` \| `last` |
+| `project_sensor` | valid-range masking, scaling, projection, `max_gap` |
+
+The rejection tally matters: it is what lets the build say how much it threw
+away and why, which the notebook does in prose and `fp07cal.sanitize_reference`
+does not do at all.
+
+### 6.3 The `0.0` sentinel: measured, and simpler than expected
+
+The notebook replaces `0.0` with NaN across **every** variable. I was going to
+recommend restricting that to the timestamp, on the grounds that a blanket rule
+destroys a genuine 0 °C reading. Measuring it on osu685's 5,407,129 rows shows
+something better — **the rule is not needed at all**:
+
+| variable | rows `== 0.0` | of those, timestamp also unusable | missed by a row-wise drop |
 |---|---|---|---|
-| where | Rutgers, external | `sanitize_time`, `_dedupe`, `time_validity` | `sanitize_reference` |
-| bad values | `== 0.0` → NaN, **every variable** | per-sensor `valid_min`/`valid_max` | non-finite, then per-variable `valid_min`/`valid_max` |
-| bad times | drop NaN only | finite ∧ within `time.min_value`…`max_value` | finite ∧ `100 ≤ t ≤ 4e9` |
-| duplicates | keep **first** | `mean` \| `first` \| `last`, one global `time.dedupe` | **mean**, not configurable |
-| ordering | stable sort | sort | stable sort |
-| reports what it dropped | yes, into `history` | yes, a stats tally | **no** |
+| `sci_water_temp` | 790 | 790 | **0** |
+| `sci_water_pressure` | 789 | 789 | **0** |
+| `sci_water_cond` | 791 | 789 | 2 |
 
-And the fourth:
+The sentinel is **row-wise**: when the CTD did not sample, the timestamp is
+unusable too. The two conductivity exceptions carry timestamps of
+`1.19e+103` — garbage that a lower bound alone misses but an **upper** bound
+catches. After dropping rows on timestamp validity with both bounds, **zero**
+`0.0` values remain in any of the three variables.
 
-**4. `perturb/hotel.py::_interp_one`** — not a sanitiser, but it drops every
-non-finite sample and then interpolates across the hole, which un-does whatever
-the three above decided to mark bad. That is what PR #150 gates behind
-`max_gap`; before it, a builder that carefully NaN-marked a dropout produced
-byte-identical output to one that did not.
+So:
 
-### What to do about it
+- **Drop rows on timestamp validity, with both bounds set.** That is
+  `time_validity(t, lo, hi)`, already written.
+- **Do not adopt the blanket `0.0 → NaN`.** On this dataset it removes nothing
+  the timestamp rule has not already removed, and on a polar deployment it
+  would delete real 0 °C water.
+- **Keep a per-variable zero rule available but off**, for a dataset that turns
+  out not to behave this way. It is one config key; the evidence just says do
+  not switch it on by default.
+- **`valid_range` does not substitute for this.** 0.0 °C is inside any sane
+  temperature range, so a range check would never have caught these.
 
-Short term, for this design: **the ERDDAP builder should use rule set 2's
-shape** — per-variable ranges, configurable dedupe, and a rejection tally —
-because it is the most complete of the three and already has a config schema
-that expresses it.
+### 6.4 Duplicates
 
-Concretely: `erddap-hotel` **imports** rule set 2 rather than copying its
-shape (§5.1) — `time_validity` for the clock, `sanitize_time` for the
-sort/dedupe/tally, `project_sensor` for the output base — and adds only what
-ERDDAP needs on top (`drop_zero_as_fill`, `_FillValue` masking). That keeps the
-count at three implementations rather than four. Longer term, three is still
-two too many; the natural convergence is `fp07cal.sanitize_reference` becoming
-a thin caller of the same functions. Not proposed here.
+Default `mean`, matching `dinkum-hotel` and `fp07cal.sanitize_reference`. The
+notebook keeps the first, which is a silent bias toward sort order when two rows
+share a timestamp; if the CTD really reported twice within one stamp, the mean
+is the better estimate. `first`/`last` stay available.
 
-**The `0.0`-as-fill rule is the dangerous one.** Applied to
-`sci_ctd41cp_timestamp` it is exactly right — `0.0` is the never-set sentinel.
-Applied to `sci_water_temp` it silently destroys a genuine 0 °C reading, and to
-`sci_water_pressure` a genuine surface sample. For a mid-latitude glider that
-may never bite; on a polar deployment it certainly would. **The design should
-apply the zero-sentinel rule only to the variables where it is a sentinel
-(`drop_zero_as_fill`), and use `valid_range` for everything else** — which is
-what the other two implementations already do.
+### 6.5 The sanitisers still disagree
 
-**Duplicate handling should default to `mean`**, matching the other two.
-Keeping the first is defensible only if duplicates are exact repeats; if the
-CTD reported twice within a timestamp's resolution, the mean is the better
-estimate and dropping is a silent bias toward whichever row sorted first.
-
-**`mask_and_scale=False` deserves a note.** The notebook opens undecoded so QC
-sees stored values. That is right, but it also means a declared `_FillValue` is
-*not* masked — so the sanitiser must apply `_FillValue` itself rather than
-assuming xarray did. On this dataset that is not hypothetical: the `.das`
-declares `_FillValue 9.96921e+36` on every float variable, while
-`sci_ctd41cp_timestamp` has **no** `_FillValue` attribute at all, and the two
-conventions coexist in the same file. In a 1-day `.nc`, `sci_water_temp` has
-49 147 fill-stored rows and 8 literal zeros; `sci_ctd41cp_timestamp` has the
-same 49 147 NaN and 8 zeros. So the builder masks `_FillValue` where declared
-**and** applies `drop_zero_as_fill` where configured; neither subsumes the
-other.
-
-**Interaction with #150.** Once `hotel.max_gap` is required, a sparsely-sampled
-ERDDAP feed will produce NaN over its gaps rather than a fabricated ramp —
-which is correct, and means the ERDDAP path inherits that protection for free.
-The builder should *not* also gap-fill; its job is to deliver real samples and
-let the merge decide.
-
----
+Even after reuse, the tree has three implementations with different rules —
+`dinkum/build.py`, `fp07cal/series.py::sanitize_reference`, and the notebook —
+plus `perturb/hotel.py::_interp_one`, which is not a sanitiser but drops
+non-finite samples and (before #150's gate) interpolated across the hole,
+undoing whatever the others decided. `erddap-hotel` importing `dinkum`'s takes
+it from three to two. Converging `sanitize_reference` onto the same core is the
+obvious follow-up and is deliberately not bundled here.
 
 ## 7. Decided: the MicroRider data does not come over ERDDAP
 
