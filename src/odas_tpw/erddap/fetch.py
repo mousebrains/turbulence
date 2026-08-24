@@ -22,6 +22,7 @@ section 8):
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import hashlib
 import logging
 import re
@@ -36,6 +37,7 @@ __all__ = [
     "EmptyWindow",
     "ErddapError",
     "cache_path",
+    "das_coverage",
     "das_fingerprint",
     "fetch_bytes",
     "fetch_to_file",
@@ -253,6 +255,34 @@ def recall_das_sha(cache_dir: Path, dataset_id: str) -> str | None:
         return path.read_text(encoding="utf-8").strip() or None
     except OSError:
         return None
+
+
+def das_coverage(das: str) -> tuple[float | None, float | None]:
+    """``(start, end)`` epoch seconds from the dataset's declared coverage.
+
+    ERDDAP publishes ``time_coverage_start`` / ``time_coverage_end`` in the
+    ``.das``, which is fetched anyway on every build. Using them to clamp the
+    request window is the difference between three requests and two hundred
+    and fifty six: a config saying "from 2021-10-01 to now" over a deployment
+    that ended in 2021 otherwise plans five years of empty weeks, and each
+    empty week still costs a row-count round trip.
+    """
+    out: list[float | None] = []
+    for key in ("time_coverage_start", "time_coverage_end"):
+        m = re.search(rf'{key}\s+"([^"]+)"', das)
+        if not m:
+            out.append(None)
+            continue
+        try:
+            text = m.group(1).strip().replace("Z", "+00:00")
+            parsed = dt.datetime.fromisoformat(text)
+        except ValueError:
+            out.append(None)
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.UTC)
+        out.append(parsed.timestamp())
+    return out[0], out[1]
 
 
 def cache_path(cache_dir: Path, dataset_id: str, url: str, das_sha: str) -> Path:

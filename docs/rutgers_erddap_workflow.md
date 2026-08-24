@@ -199,6 +199,8 @@ not, because it changes the calibration underneath already-processed profiles.
 |---|---|
 | `400 Unrecognized variable=…` | a typo in `fetch.variables`. Run `erddap-hotel info`. |
 | `no data in N window(s)` | `fetch.time_min`/`time_max` miss the deployment. `info` prints its real coverage. |
+| the build seems to hang before any chunk lands | it is issuing row-count requests. Each one downloads the window's rows as CSV, so a 7-day window on a busy dataset is ~400 000 lines. The window is clamped to the dataset's declared coverage, so this should be a handful of requests -- if it is not, check `--dry-run`, which prints the clamped plan. |
+| `row count mismatch … probably truncated` | should not happen; the count query projects the same columns as the data request. If it recurs the download really is being cut. |
 | salinity absurd | the ×10 applied twice — a `scale` on **both** the builder and the perturb side. It belongs only in the builder. |
 | `verify` always says CHANGED | should not happen; the `.das` digest ignores ERDDAP's per-request stamps. If it recurs, the dataset really is being reprocessed. |
 | every channel NaN after the merge | `hotel.time_column` naming a clock the file does not carry, or `max_gap` shorter than the CTD's real sampling interval. |

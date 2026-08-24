@@ -48,13 +48,26 @@ def _cd(config_dir: Path | None) -> str | None:
     return None if config_dir is None else str(config_dir)
 
 
-def plan_requests(config: dict, *, now: float | None = None) -> list[dict[str, Any]]:
+def plan_requests(
+    config: dict,
+    *,
+    now: float | None = None,
+    coverage: tuple[float | None, float | None] | None = None,
+) -> list[dict[str, Any]]:
     """Config -> the list of requests a build would issue.
 
     Returns one dict per chunk with ``url``, ``count_url`` and the window, so
     ``fetch --dry-run`` can print exactly what would be asked for without any
     I/O.  This is the piece most likely to be silently wrong, and it is
     testable by string comparison.
+
+    *coverage* is the dataset's declared ``(start, end)`` from its ``.das``.
+    Pass it and the window is clamped to what the dataset actually holds.
+    That matters more than it sounds: with ``time_max: null`` meaning "to
+    now", a finished 2021 deployment planned 256 weekly windows out to the
+    present day, 253 of them empty -- and an empty window still costs a
+    row-count request, which on this dataset downloads a 400 000-line CSV.
+    Clamped, the same config plans three.
     """
     server = merge_config("server", config.get("server"))
     f = merge_config("fetch", config.get("fetch"))
@@ -70,6 +83,21 @@ def plan_requests(config: dict, *, now: float | None = None) -> list[dict[str, A
         )
     if hi is None:
         hi = float(now if now is not None else dt.datetime.now(dt.UTC).timestamp())
+
+    if coverage is not None:
+        cov_lo, cov_hi = coverage
+        if cov_lo is not None and cov_lo > lo:
+            logger.info("clamping start to the dataset's coverage: %s", iso(cov_lo))
+            lo = cov_lo
+        if cov_hi is not None and cov_hi < hi:
+            logger.info("clamping end to the dataset's coverage: %s", iso(cov_hi))
+            hi = cov_hi
+        if not (hi > lo):
+            raise ValueError(
+                f"the requested window does not overlap the dataset's coverage "
+                f"({iso(cov_lo) if cov_lo else '?'} .. {iso(cov_hi) if cov_hi else '?'}). "
+                "Check fetch.time_min / fetch.time_max, or run `erddap-hotel info`."
+            )
 
     windows = chunk_windows(lo, hi, float(f.get("chunk_days") or 7.0))
     variables = list(f.get("variables") or [])
@@ -96,6 +124,7 @@ def plan_requests(config: dict, *, now: float | None = None) -> list[dict[str, A
                 "count_url": count_url(
                     server["base_url"],
                     server["dataset_id"],
+                    variables,
                     time_variable=tvar,
                     window=win,
                     last_window=last,
@@ -210,14 +239,16 @@ def fetch_chunks(
                 f"{server['dataset_id']}. Run `erddap-hotel fetch` online once first."
             )
         das_sha = recalled
+        coverage = None  # no .das to read it from; the cache keys still match
         logger.info("offline: using the cached dataset revision das=%s", das_sha[:12])
     else:
         das = _fetch.probe_das(server["base_url"], server["dataset_id"], timeout=timeout)
         das_sha, modified = _fetch.das_fingerprint(das)
         logger.info("dataset date_modified=%s das=%s", modified or "?", das_sha[:12])
         _fetch.remember_das_sha(cache_dir, server["dataset_id"], das_sha)
+        coverage = _fetch.das_coverage(das)
 
-    plan = plan_requests(config, now=now)
+    plan = plan_requests(config, now=now, coverage=coverage)
     refresh = str(f.get("refresh", "incremental"))
     overlap = int(f.get("overlap_chunks", 1))
     n = len(plan)

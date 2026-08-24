@@ -63,7 +63,15 @@ fetch:
                              # to. This is not the clock you build on — see the
                              # qc.time_base warning below.
   time_min: "2021-10-01T00:00:00Z"
-  time_max: null             # null = to the end of the dataset
+  time_max: null             # null = to the end of the dataset. The window is
+                             # CLAMPED to the dataset's declared
+                             # time_coverage_start/end (read from the .das the
+                             # build fetches anyway), so "null" on a finished
+                             # deployment means "to the last real sample", not
+                             # "to today". Without that clamp this config
+                             # planned 256 weekly windows out to the present,
+                             # 253 of them empty -- and an empty window still
+                             # costs a row-count request.
   chunk_days: 7              # split the window into requests this long: bounds
                              # each request, lets a partial failure retry
                              # cheaply, keeps cache entries small

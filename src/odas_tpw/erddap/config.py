@@ -260,7 +260,10 @@ fetch:
                          # Not necessarily the clock you build on — see
                          # qc.time_base.
   time_min: "2024-01-01T00:00:00Z"   # required: without it the whole dataset
-  time_max: null                     # is requested. null max = up to now.
+  time_max: null                     # is requested. null = to the end of the
+                         # dataset -- the window is clamped to the declared
+                         # time_coverage_start/end, so this does not plan
+                         # empty weeks out to today.
   chunk_days: 7          # one request per window: bounds each request, lets a
                          # partial failure retry cheaply, keeps cache entries small
   constraints:

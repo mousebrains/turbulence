@@ -102,24 +102,32 @@ def dds_url(base_url: str, dataset_id: str) -> str:
 def count_url(
     base_url: str,
     dataset_id: str,
+    variables: list[str],
     *,
     time_variable: str = "time",
     window: tuple[float, float] | None = None,
     last_window: bool = False,
     constraints: list[str] | None = None,
 ) -> str:
-    """A one-column ``.csv`` used only to count rows.
+    """A ``.csv`` of the SAME projection, used only to count rows.
 
     Neither ``.dds`` (a type schema) nor ``.das`` (attributes) carries a row
     count, and ``.ncHeader`` 500s on this dataset, so counting means asking for
-    one column and counting lines.  Used to detect a truncated ``.nc``: the
-    body is served chunked with no ``Content-Length``, so a TCP-level cut is
+    the rows and counting lines.  Used to detect a truncated ``.nc``: the body
+    is served chunked with no ``Content-Length``, so a TCP-level cut is
     invisible by length alone.
+
+    **The variable list must match the data request exactly.**  Server-side
+    clauses can depend on the projection: ``distinct()`` dedupes over the
+    *selected columns*, so counting a one-column ``time`` projection of a
+    four-variable request reported 438 777 rows against the ``.nc``'s 189 286
+    and the truncation guard cried wolf on a perfectly good download.  Same
+    columns, same count.
     """
     return tabledap_url(
         base_url,
         dataset_id,
-        [time_variable],
+        variables,
         fmt="csv",
         time_variable=time_variable,
         window=window,

@@ -53,6 +53,11 @@ def _load(args: argparse.Namespace) -> tuple[dict, Path]:
     path = Path(args.config)
     if not path.exists():
         raise SystemExit(f"config not found: {path}\nRun `erddap-hotel init` to write a template.")
+    # resolve(): <CONFIG_DIR> must be the directory holding the YAML, which is
+    # what the docs promise. A bare `-c erddap-hotel.yaml` otherwise gives a
+    # parent of ".", so the output lands relative to the CWD and the "Wrote
+    # hotel.nc" line does not say where.
+    path = path.resolve()
     return load_config(path), path.parent
 
 
@@ -136,7 +141,27 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
     config, config_dir = _load(args)
     validate(config)
     if args.dry_run:
-        plan = plan_requests(config)
+        # Probe the .das (one small request) so the plan printed here is the
+        # plan `build` will actually run. Without it dry-run reports the
+        # unclamped window -- 256 requests where the build issues 3 -- which
+        # is worse than useless.
+        coverage = None
+        if not args.offline:
+            from odas_tpw.erddap.config import merge_config
+            from odas_tpw.erddap.fetch import das_coverage, probe_das
+
+            server = merge_config("server", config.get("server"))
+            try:
+                coverage = das_coverage(
+                    probe_das(
+                        server["base_url"],
+                        server["dataset_id"],
+                        timeout=float(server["timeout_s"]),
+                    )
+                )
+            except Exception as exc:  # a dry run must not hard-fail on a probe
+                print(f"note: could not probe coverage ({exc}); showing the unclamped plan")
+        plan = plan_requests(config, coverage=coverage)
         print(f"{len(plan)} request(s):")
         for req in plan:
             print(f"\n# {req['start']} .. {req['end']}\n{req['url']}")
@@ -155,7 +180,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
 
     config, config_dir = _load(args)
     out = build(config, config_dir=config_dir, output=args.output, offline=args.offline)
-    print(f"Wrote {out}")
+    print(f"Wrote {Path(out).resolve()}")
     return 0
 
 
