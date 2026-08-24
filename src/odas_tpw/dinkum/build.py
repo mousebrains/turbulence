@@ -110,8 +110,15 @@ def time_validity(t: np.ndarray, lo: float, hi: float) -> np.ndarray:
     return ok
 
 
-def _dedupe(t: np.ndarray, v: np.ndarray, method: str) -> tuple[np.ndarray, np.ndarray]:
-    """Collapse samples sharing a timestamp. Input must be sorted by ``t``."""
+def dedupe_samples(
+    t: np.ndarray, v: np.ndarray, method: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Collapse samples sharing a timestamp. Input must be sorted by ``t``.
+
+    Public because ``fp07cal`` uses it too: one implementation of "what does a
+    repeated timestamp mean" rather than one per subpackage that quietly
+    disagree.
+    """
     if t.size == 0:
         return t, v
     uniq, start_idx, counts = np.unique(t, return_index=True, return_counts=True)
@@ -146,7 +153,7 @@ def sanitize_time(
     n_valid = kept.size
     # np.unique sorts and dedupes in one pass; the output grid carries no
     # values, so the dedupe method is irrelevant here (all duplicates are the
-    # same number). It matters for sensor values, in _dedupe.
+    # same number). It matters for sensor values, in dedupe_samples.
     times = np.unique(kept)
     stats = {
         "n_total": n_total,
@@ -273,7 +280,7 @@ def project_sensor(
     order = np.argsort(t, kind="stable")
     t, v = t[order], v[order]
     n_before_dedupe = t.size
-    t, v = _dedupe(t, v, dedupe)
+    t, v = dedupe_samples(t, v, dedupe)
     n_duplicate = int(n_before_dedupe - t.size)
 
     out = _interp(t, v, dst_t, method, extrapolate)
