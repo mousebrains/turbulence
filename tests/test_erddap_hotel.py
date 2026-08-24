@@ -35,6 +35,8 @@ from odas_tpw.erddap.fetch import (
     das_fingerprint,
     fetch_bytes,
     normalize_das,
+    recall_das_sha,
+    remember_das_sha,
 )
 from odas_tpw.erddap.query import chunk_windows, iso, tabledap_url
 
@@ -526,8 +528,15 @@ def test_build_offline_produces_a_hotel_file(tmp_path):
     )
     ds.attrs["history"] = "2021-11-10T20:11:47Z: upstream proc.py"
 
+    # Seed the cache the way an ONLINE run does: under a real .das digest,
+    # with the sidecar recording it. Seeding under whatever key offline happens
+    # to use would make this test agree with a bug rather than check for one --
+    # which is exactly what it did before, when offline substituted the literal
+    # string "offline" into the key and so could never find an online cache.
+    das_sha = "0123456789abcdef" * 4
+    remember_das_sha(tmp_path / "cache", "d-raw", das_sha)
     plan = plan_requests(cfg)
-    dest = cache_path(tmp_path / "cache", "d-raw", plan[0]["url"], "offline")
+    dest = cache_path(tmp_path / "cache", "d-raw", plan[0]["url"], das_sha)
     dest.parent.mkdir(parents=True, exist_ok=True)
     ds.to_netcdf(dest)
 
@@ -553,5 +562,38 @@ def test_build_offline_refuses_when_a_chunk_is_not_cached(tmp_path):
         fetch={"refresh": "never"},
         output={"file": str(tmp_path / "hotel.nc")},
     )
+    remember_das_sha(tmp_path / "cache", "d-raw", "deadbeef" * 8)
     with pytest.raises(ErddapError, match="not cached"):
         build(cfg, now=T0, offline=True)
+
+
+def test_build_offline_says_so_when_the_cache_was_never_populated(tmp_path):
+    """Distinct from 'this chunk is missing': there is nothing here at all."""
+    cfg = _cfg(
+        server={"cache": str(tmp_path / "cache")},
+        output={"file": str(tmp_path / "hotel.nc")},
+    )
+    with pytest.raises(ErddapError, match="never been populated"):
+        build(cfg, now=T0, offline=True)
+
+
+def test_offline_reuses_the_digest_the_cache_was_populated_under(tmp_path):
+    """The bug this guards: offline could never find an online-filled cache.
+
+    The cache key includes the .das digest. Offline cannot compute one, and
+    substituting a placeholder means looking under a key no online run ever
+    wrote -- every lookup missed while the data sat right there. Verified
+    against the live server before the fix.
+    """
+    sha = "a" * 64
+    remember_das_sha(tmp_path / "cache", "d-raw", sha)
+    assert recall_das_sha(tmp_path / "cache", "d-raw") == sha
+    # The path offline resolves must be the one an online run wrote.
+    url = "https://e.org/erddap/tabledap/d-raw.nc?time"
+    assert cache_path(tmp_path / "cache", "d-raw", url, sha) == cache_path(
+        tmp_path / "cache", "d-raw", url, recall_das_sha(tmp_path / "cache", "d-raw")
+    )
+
+
+def test_recall_is_none_before_anything_is_cached(tmp_path):
+    assert recall_das_sha(tmp_path / "cache", "d-raw") is None

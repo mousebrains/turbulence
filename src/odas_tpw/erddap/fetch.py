@@ -41,6 +41,8 @@ __all__ = [
     "fetch_to_file",
     "normalize_das",
     "probe_das",
+    "recall_das_sha",
+    "remember_das_sha",
 ]
 
 # CDF\x01 / CDF\x02 = classic NetCDF; \x89HDF = NetCDF-4 (HDF5). A proxy login
@@ -226,6 +228,31 @@ def das_fingerprint(das: str) -> tuple[str, str | None]:
     digest = hashlib.sha256(normalize_das(das).encode("utf-8")).hexdigest()
     m = re.search(r'date_modified\s+"([^"]+)"', das)
     return digest, (m.group(1) if m else None)
+
+
+def _sha_sidecar(cache_dir: Path, dataset_id: str) -> Path:
+    return Path(cache_dir) / dataset_id / "last_das_sha.txt"
+
+
+def remember_das_sha(cache_dir: Path, dataset_id: str, das_sha: str) -> None:
+    """Record the digest a cache directory was last populated under.
+
+    Without this, ``--offline`` cannot find anything: the cache key includes
+    the ``.das`` digest, and offline has no way to compute one, so it would
+    look under a key no online run ever wrote.
+    """
+    path = _sha_sidecar(cache_dir, dataset_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(das_sha, encoding="utf-8")
+
+
+def recall_das_sha(cache_dir: Path, dataset_id: str) -> str | None:
+    """The digest the cache was last populated under, or None if never."""
+    path = _sha_sidecar(cache_dir, dataset_id)
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
 
 
 def cache_path(cache_dir: Path, dataset_id: str, url: str, das_sha: str) -> Path:

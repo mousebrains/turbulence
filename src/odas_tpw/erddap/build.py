@@ -198,11 +198,24 @@ def fetch_chunks(
     cache_dir = Path(expand_config_dir(str(server["cache"]), _cd(config_dir)))
 
     if offline:
-        das_sha, modified = "offline", None
+        # The cache key includes the .das digest, and offline cannot compute
+        # one. Reuse the digest the cache was last populated under; inventing
+        # a placeholder would look under a key no online run ever wrote, so
+        # every lookup would miss while the data sat right there.
+        modified = None
+        recalled = _fetch.recall_das_sha(cache_dir, server["dataset_id"])
+        if recalled is None:
+            raise _fetch.ErddapError(
+                f"--offline, but {cache_dir} has never been populated for "
+                f"{server['dataset_id']}. Run `erddap-hotel fetch` online once first."
+            )
+        das_sha = recalled
+        logger.info("offline: using the cached dataset revision das=%s", das_sha[:12])
     else:
         das = _fetch.probe_das(server["base_url"], server["dataset_id"], timeout=timeout)
         das_sha, modified = _fetch.das_fingerprint(das)
         logger.info("dataset date_modified=%s das=%s", modified or "?", das_sha[:12])
+        _fetch.remember_das_sha(cache_dir, server["dataset_id"], das_sha)
 
     plan = plan_requests(config, now=now)
     refresh = str(f.get("refresh", "incremental"))
