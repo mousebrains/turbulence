@@ -853,3 +853,47 @@ def test_build_hotel_applies_transform_and_records_it(tmp_path):
         assert lon.min() > -130.0 and lon.max() < -129.8
         assert ds["lat"].attrs["transform"] == "nmea_degrees"
         assert "nmea_degrees(m_lat)" in ds["lat"].attrs["comment"]
+
+
+# ------------------------------------------------- reader sensor subsetting
+
+
+def test_open_netcdf_subsets_lazily(tmp_path):
+    """`to_keep` selects variables; names absent from a file are ignored.
+
+    A sensor legitimately lives in the flight files and not the science
+    files, so an unknown name must not be an error.
+    """
+    from odas_tpw.dinkum.reader import _open_netcdf
+
+    path = tmp_path / "wide.nc"
+    n = 50
+    with nc.Dataset(path, "w") as ds:
+        ds.createDimension("i", n)
+        for name in ("m_present_time", "m_lat", "m_junk_a", "m_junk_b"):
+            var = ds.createVariable(name, "f8", ("i",), fill_value=np.nan)
+            var[:] = np.arange(n, dtype=float)
+
+    full, _ = _open_netcdf([path])
+    assert set(full.data_vars) == {"m_present_time", "m_lat", "m_junk_a", "m_junk_b"}
+
+    thin, _ = _open_netcdf([path], ["m_present_time", "m_lat", "not_in_this_file"])
+    assert set(thin.data_vars) == {"m_present_time", "m_lat"}
+    assert thin.sizes["record"] == n
+
+
+def test_load_dinkum_netcdf_honours_sensors(tmp_path):
+    """The `sensors=` argument reaches the netcdf backend, not just the DBD ones."""
+    path = tmp_path / "wide.nc"
+    n = 20
+    with nc.Dataset(path, "w") as ds:
+        ds.createDimension("i", n)
+        for name in ("m_present_time", "m_lat", "m_ballast_pumped"):
+            var = ds.createVariable(name, "f8", ("i",), fill_value=np.nan)
+            var[:] = np.arange(n, dtype=float)
+
+    out = load_dinkum([path], backend="netcdf", sensors=["m_present_time", "m_lat"])
+    assert set(out.data_vars) == {"m_present_time", "m_lat"}
+    # sensors=None still means everything -- what `dinkum-hotel sensors` needs.
+    every = load_dinkum([path], backend="netcdf")
+    assert "m_ballast_pumped" in every.data_vars

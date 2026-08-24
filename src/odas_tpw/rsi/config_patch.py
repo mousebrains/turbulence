@@ -573,6 +573,32 @@ def read_config_text(path: str | Path) -> str:
         return cfg.decode("latin-1")
 
 
+def _has_no_data_record(src: str | Path) -> bool:
+    """True when the file's first record fills it — a config record and nothing else.
+
+    The same condition :func:`write_patched_pfile` refuses on, evaluated cheaply
+    (one 128-byte header read plus a stat) so a whole batch can be screened
+    before any output is written. Anything it cannot parse returns ``False``, so
+    the real diagnosis stays with the write path rather than being pre-empted by
+    a guess here.
+    """
+    src = Path(src)
+    try:
+        with open(src, "rb") as f:
+            head = f.read(HEADER_BYTES)
+        if len(head) < HEADER_BYTES:
+            return False
+        endian = _detect_endian(head, src)
+        words = struct.unpack(f"{endian}{HEADER_WORDS}H", head)
+        header_size = words[_H["header_size"]]
+        config_size = words[_H["config_size"]]
+        if header_size < HEADER_BYTES:
+            return False
+        return bool((header_size + config_size) >= src.stat().st_size)
+    except (ValueError, struct.error, OSError):
+        return False
+
+
 def write_patched_pfile(src: str | Path, dst: str | Path, new_config_text: str) -> Path:
     """Write *dst* = *src* with its embedded config replaced by *new_config_text*.
 
@@ -778,9 +804,40 @@ def patch_files(
             f"in {out_dir}: {detail}; patch them separately into distinct --out directories"
         )
 
+    # PRE-FLIGHT: find the sources that carry no data record, BEFORE writing
+    # anything. write_patched_pfile raises on such a file, and the write loop
+    # below is not transactional, so without this a deployment aborts partway
+    # and leaves a half-populated output directory that looks like a finished
+    # one. Found on osu684: 27 of 255 MicroRider files were exactly 9110 bytes
+    # -- a config record and nothing else, which is what the MR writes when a
+    # recording is started and stopped without acquiring. The run died on the
+    # 9th file with 8 patched copies on disk.
+    #
+    # They are SKIPPED rather than refused: unlike a config mismatch (where
+    # all-or-nothing protects the provenance), a file with no data record has
+    # nothing to lose and nothing downstream will read it. The count is
+    # returned and printed so the skip is never silent.
+    empty: list[Path] = []
+    for src in srcs:
+        src = Path(src)
+        try:
+            if _has_no_data_record(src):
+                empty.append(src)
+        except OSError:
+            pass  # a genuinely unreadable file is diagnosed by the write path
+    if empty:
+        print(
+            f"skipping {len(empty)} source file(s) that hold a config record and "
+            f"no data (e.g. {empty[0].name}); nothing downstream reads them"
+        )
+    skip = {p.resolve() for p in empty}
+
     results: list[tuple[Path, Path | None, list[Change]]] = []
     for src in srcs:
         src = Path(src)
+        if src.resolve() in skip:
+            results.append((src, None, []))
+            continue
         dst = out_dir / src.name
         if dst.resolve() == src.resolve():
             raise ValueError(

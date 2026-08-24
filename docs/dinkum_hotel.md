@@ -184,6 +184,32 @@ Because the transform runs first, `valid_min`/`valid_max` are expressed in the
 **transformed** units (degrees), and `scale`/`offset` — if you also set one —
 applies afterwards to the output.
 
+### `valid_min`/`valid_max` are in SOURCE units, not `units:`
+
+The range check runs on the source samples, before interpolation (so a spike is
+removed rather than smeared) and therefore **before `scale`**. So the bounds are
+in the sensor's raw units — post-`transform`, pre-`scale` — even though the
+neighbouring `units:` key names the *output* unit:
+
+```yaml
+  sci_water_cond:
+    scale: 10.0             # S/m -> mS/cm
+    units: "mS/cm"          # the OUTPUT unit
+    valid_min: 0.0          # ... but these are S/m
+    valid_max: 7.0          #     7 S/m = 70 mS/cm.  `70` here would be
+                            #     700 mS/cm and would never reject anything.
+  sci_water_pressure:
+    scale: 10.0             # bar -> dbar
+    units: "dbar"
+    valid_max: 200.0        # bar = 2000 dbar
+```
+
+This ordering is deliberate: `erddap-hotel` fills these from the server's
+declared `valid_min`/`valid_max` attributes, which are in the served units. The
+cost is that a bound written in output units is not an error — it is a check
+that silently never fires. After a build, confirm each `qc_valid_*` attribute
+against the variable's actual range.
+
 ## Provenance
 
 Every build records what it discarded, so a surprising hotel file can be
