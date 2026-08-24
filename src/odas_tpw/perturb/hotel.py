@@ -83,7 +83,7 @@ _INTERP_KINDS = frozenset({
 
 _CHANNEL_OPTION_KEYS = frozenset({
     "name", "interp", "scale", "offset", "units", "fast", "time_column", "replace",
-    "max_gap", "extrapolate",
+    "max_gap", "extrapolate", "time_offset",
 })
 
 # A gap this many times the channel's own median sample interval is not normal
@@ -640,6 +640,7 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
     _, channels_opts = _normalize_channels_cfg(hotel_cfg.get("channels"))
 
     pf_start_offset = 0.0 if hotel_data.time_is_relative else pf.start_time.timestamp()
+    default_time_offset = float(hotel_cfg.get("time_offset", 0.0) or 0.0)
 
     result: dict[str, np.ndarray] = {}
     for src, data in hotel_data.channels.items():
@@ -650,7 +651,18 @@ def interpolate_hotel(hotel_data: HotelData, pf, hotel_cfg: dict) -> dict[str, n
             target_t = pf.t_fast if opts["fast"] else pf.t_slow
         else:
             target_t = pf.t_fast if out_name in fast_channels else pf.t_slow
-        hotel_t = hotel_data.time_for(src) - pf_start_offset
+        # time_offset [s] is ADDED to the hotel timestamps to put them on the
+        # instrument's clock. Two computers that were never synchronised is the
+        # normal case, not the exception: a MicroRider takes its time from the
+        # science computer once, at file open, and then free-runs. On osu684
+        # the offset measured +5.06 s, which at a 0.27 dbar/s climb puts every
+        # merged CTD sample 1.4 dbar from where it was actually taken --- a
+        # depth misregistration bigger than the 1 m bin the result lands in.
+        # `fp07-cal fit` measures it (clock_offset_s in coefficients.json) from
+        # pressure against pressure, with no thermal physics involved, so it is
+        # available before any of this runs.
+        time_offset = float(opts.get("time_offset", default_time_offset) or 0.0)
+        hotel_t = hotel_data.time_for(src) - pf_start_offset + time_offset
         # Sparse time grids (e.g. one-row-per-event modem listings) can have
         # a single sample, which interpolators won't accept. Skip — caller
         # gets nothing for that channel, same as a missing channel.

@@ -863,3 +863,64 @@ class TestHotelNativeInterval:
         t = np.array([0.0, 1.0, 1.0, np.nan, 2.0, 3.0, 3.0, 4.0])
         assert _native_interval(t) == pytest.approx(1.0)
         assert np.isnan(_native_interval(np.array([1.0])))
+
+
+class TestTimeOffset:
+    """`hotel.time_offset` puts the hotel file's clock onto the instrument's.
+
+    A MicroRider takes its time from the science computer once, at file open,
+    and then free-runs, so two unsynchronised clocks is the normal case. On
+    osu684 the measured offset was +5.06 s, which at a 0.27 dbar/s climb puts
+    every merged CTD sample 1.4 dbar away from where it was taken.
+    """
+
+    def _hotel(self):
+        """A ramp, so a time shift is directly readable as a value shift."""
+        return HotelData(
+            time=np.arange(0.0, 11.0),      # relative seconds
+            channels={"ramp": np.arange(0.0, 11.0)},
+            time_is_relative=True,
+        )
+
+    def _interp(self, offset):
+        pf = _MockPFile()
+        pf.t_slow = np.array([2.0, 4.0, 6.0])
+        cfg = _cfg(fast_channels=[])
+        if offset is not None:
+            cfg["time_offset"] = offset
+        return interpolate_hotel(self._hotel(), pf, cfg)["ramp"]
+
+    def test_zero_offset_is_the_identity(self):
+        np.testing.assert_allclose(self._interp(None), [2.0, 4.0, 6.0])
+        np.testing.assert_allclose(self._interp(0.0), [2.0, 4.0, 6.0])
+
+    def test_positive_offset_shifts_hotel_times_later(self):
+        # Every hotel sample is restamped 1 s later, so the value the
+        # instrument sees at t is the one the hotel had at t-1.
+        np.testing.assert_allclose(self._interp(1.0), [1.0, 3.0, 5.0])
+
+    def test_negative_offset_shifts_hotel_times_earlier(self):
+        np.testing.assert_allclose(self._interp(-1.0), [3.0, 5.0, 7.0])
+
+    def test_per_channel_offset_overrides_the_global(self):
+        hd = HotelData(
+            time=np.arange(0.0, 11.0),
+            channels={"a": np.arange(0.0, 11.0), "b": np.arange(0.0, 11.0)},
+            time_is_relative=True,
+        )
+        pf = _MockPFile()
+        pf.t_slow = np.array([4.0])
+        cfg = _cfg(fast_channels=[], time_offset=1.0,
+                   channels={"a": {}, "b": {"time_offset": -1.0}})
+        out = interpolate_hotel(hd, pf, cfg)
+        np.testing.assert_allclose(out["a"], [3.0])   # global +1
+        np.testing.assert_allclose(out["b"], [5.0])   # per-channel -1
+
+    def test_unknown_channel_option_still_rejected(self):
+        """The new key must not open the door to arbitrary ones."""
+        pf = _MockPFile()
+        with pytest.raises(ValueError, match="unknown options"):
+            interpolate_hotel(
+                self._hotel(), pf,
+                _cfg(fast_channels=[], channels={"ramp": {"time_offsett": 1.0}}),
+            )
