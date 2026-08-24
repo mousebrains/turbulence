@@ -166,12 +166,37 @@ _CACHE_HINT = (
 )
 
 
-def _skipped_files(requested: Sequence[Path], n_decoded: int, detail: str = "") -> RuntimeError:
-    """Build the error for *requested* files of which only *n_decoded* loaded."""
+_CORRUPT_MARKERS = ("empty or invalid header", "invalid header", "truncated")
+
+
+def _skipped_files(
+    requested: Sequence[Path], n_decoded: int, detail: str = "", max_skipped: int = 0
+) -> RuntimeError:
+    """Build the error for *requested* files of which only *n_decoded* loaded.
+
+    A cache miss and a corrupt file need different advice, and blaming the
+    cache for a bad header sends the reader looking in the wrong place. Seen
+    on osu685: one file of 1576 held 18 kB of garbage where the ASCII header
+    belongs (and was dated 1979), and the message told the user to check their
+    cache directory, which was fine.
+    """
+    n_missing = len(requested) - n_decoded
+    corrupt = any(m in detail.lower() for m in _CORRUPT_MARKERS)
+    _ = max_skipped
     msg = (
-        f"Decoded {n_decoded} of {len(requested)} Dinkum file(s); the rest were "
-        f"skipped by the reader. " + _CACHE_HINT
+        f"Decoded {n_decoded} of {len(requested)} Dinkum file(s); "
+        f"{n_missing} skipped by the reader. "
     )
+    if corrupt:
+        msg += (
+            "At least one is CORRUPT rather than uncached -- the reader could not "
+            "read its header at all. A single bad file among many is usually a "
+            "failed flash read or transfer, not a configuration problem: check "
+            "the file's size and date, and if it is junk, exclude it "
+            "(files.exclude) or raise files.max_skipped to tolerate it."
+        )
+    else:
+        msg += _CACHE_HINT
     if detail:
         msg += f"\nReader said: {detail}"
     return RuntimeError(msg)
@@ -183,6 +208,7 @@ def _open_xarray_dbd(
     to_keep: list[str] | None,
     skip_first_record: bool,
     repair: bool,
+    max_skipped: int = 0,
 ) -> xr.Dataset:
     import warnings
 
@@ -207,8 +233,13 @@ def _open_xarray_dbd(
     for w in caught:
         logger.warning("xarray-dbd: %s", w.message)
     n_decoded = _decoded_file_count(ds)
+    if n_decoded is not None and (len(paths) - n_decoded) > max_skipped:
+        raise _skipped_files(paths, n_decoded, notes, max_skipped)
     if n_decoded is not None and n_decoded < len(paths):
-        raise _skipped_files(paths, n_decoded, notes)
+        logger.warning(
+            "tolerating %d undecodable file(s) (files.max_skipped=%d): %s",
+            len(paths) - n_decoded, max_skipped, notes or "no detail",
+        )
     dim = _record_dim(ds)
     out = _drop_metadata_vars(ds, dim).rename({dim: "record"})
     out.attrs["n_files"] = n_decoded if n_decoded is not None else len(paths)
@@ -221,6 +252,7 @@ def _open_dbd2netcdf(
     to_keep: list[str] | None,
     skip_first_record: bool,
     repair: bool,
+    max_skipped: int = 0,
 ) -> xr.Dataset:
     exe = shutil.which("dbd2netCDF")
     if exe is None:  # pragma: no cover - guarded by resolve_backend
@@ -267,8 +299,13 @@ def _open_dbd2netcdf(
         ds = ds.load()
         if n_decoded is None:
             n_decoded = len(paths) - len(skipped)
+        if (len(paths) - n_decoded) > max_skipped or (skipped and not max_skipped):
+            raise _skipped_files(paths, n_decoded, "; ".join(skipped), max_skipped)
         if skipped or n_decoded < len(paths):
-            raise _skipped_files(paths, n_decoded, "; ".join(skipped))
+            logger.warning(
+                "tolerating %d undecodable file(s) (files.max_skipped=%d): %s",
+                len(paths) - n_decoded, max_skipped, "; ".join(skipped) or "no detail",
+            )
         ds.attrs["n_files"] = n_decoded
         return ds
 
@@ -281,6 +318,7 @@ def load_dinkum(
     sensors: Sequence[str] | None = None,
     skip_first_record: bool = True,
     repair: bool = False,
+    max_skipped: int = 0,
 ) -> xr.Dataset:
     """Read Dinkum files into one Dataset on a ``record`` dimension.
 

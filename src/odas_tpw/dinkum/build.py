@@ -32,6 +32,7 @@ import xarray as xr
 from odas_tpw.dinkum.config import merge_config, normalize_sensors, required_sensor_names
 from odas_tpw.dinkum.reader import load_dinkum
 from odas_tpw.perturb.config import expand_config_dir
+from odas_tpw.perturb.discover import glob_paths
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +311,10 @@ def _resolve_paths(files_cfg: dict, config_dir: Path | None) -> list[Path]:
     found: list[Path] = []
     seen: set[Path] = set()
     for pat in patterns:
-        for p in sorted(root.glob(str(pat))):
+        # glob_paths, not root.glob: pathlib's `**` does not traverse a
+        # symlinked directory, which is how a deployment on an external
+        # volume is normally wired in.
+        for p in sorted(glob_paths(root, str(pat))):
             rp = p.resolve()
             if p.is_file() and rp not in seen:
                 seen.add(rp)
@@ -320,6 +324,21 @@ def _resolve_paths(files_cfg: dict, config_dir: Path | None) -> list[Path]:
             f"No Dinkum files matched {patterns} under {root}. Check files.root "
             f"and files.patterns (compressed Slocum files end .dcd/.ecd, not .dbd/.ebd)."
         )
+    excluded = [str(x) for x in (files_cfg.get("exclude") or [])]
+    if excluded:
+        drop: set[Path] = set()
+        for pattern in excluded:
+            drop.update(glob_paths(root, pattern))
+        if drop:
+            before = len(found)
+            found = [p for p in found if p not in drop]
+            logger.info(
+                "files.exclude removed %d of %d file(s): %s",
+                before - len(found),
+                before,
+                ", ".join(sorted(p.name for p in list(drop)[:5]))
+                + (" ..." if len(drop) > 5 else ""),
+            )
     return found
 
 
@@ -396,6 +415,7 @@ def build_hotel(
             sensors=wanted,
             skip_first_record=bool(files_cfg.get("skip_first_record", True)),
             repair=bool(files_cfg.get("repair", False)),
+            max_skipped=int(files_cfg.get("max_skipped", 0) or 0),
         )
 
         absent = [n for n in wanted if n not in ds.data_vars]

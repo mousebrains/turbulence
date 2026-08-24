@@ -77,6 +77,15 @@ DEFAULTS: dict[str, dict] = {
         "reader": "auto",  # auto | xarray-dbd | dbd2netcdf | netcdf
         "skip_first_record": True,
         "repair": False,
+        # Glob patterns (relative to root) to leave out. A deployment usually
+        # has one or two files the glider never finished writing.
+        "exclude": [],
+        # How many files the reader may fail to decode before the build gives
+        # up. 0 is the right default -- a cache miss silently drops a whole
+        # mission segment, and a short hotel file looks exactly like a
+        # complete one. Raise it only for files you have LOOKED AT and know
+        # are junk.
+        "max_skipped": 0,
     },
     "time": {
         # The common time basis every sensor is projected onto. Commonly
