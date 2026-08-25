@@ -1,0 +1,860 @@
+<title>The Glider Speed Problem</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,400;0,500;0,600;1,6..72,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --ground:#FAFAF7; --surface:#FFFFFF; --sunk:#F2F3EF;
+    --ink:#161B1F; --muted:#5C666C; --faint:#838D91;
+    --rule:#E1E3DD; --rule-hi:#C9CDC5;
+    --accent:#14636E; --accent-s:#E4EEEF;
+    --warn:#9E3B26; --warn-s:#F7ECE8;
+    --ok:#3F6B44; --ok-s:#E8F0E8;
+    --shadow:0 1px 2px rgba(22,27,31,.05),0 8px 24px -16px rgba(22,27,31,.18);
+    --measure:68ch;
+    --s1:.35rem; --s2:.7rem; --s3:1.1rem; --s4:1.8rem; --s5:2.8rem; --s6:4.4rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:#0E1316; --surface:#141B1F; --sunk:#101619;
+      --ink:#E4E9E7; --muted:#98A3A7; --faint:#737E82;
+      --rule:#232D32; --rule-hi:#33403F;
+      --accent:#63BCC6; --accent-s:#12262A;
+      --warn:#E5866B; --warn-s:#2A1813;
+      --ok:#8FBF92; --ok-s:#16231A;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0E1316; --surface:#141B1F; --sunk:#101619;
+    --ink:#E4E9E7; --muted:#98A3A7; --faint:#737E82;
+    --rule:#232D32; --rule-hi:#33403F;
+    --accent:#63BCC6; --accent-s:#12262A;
+    --warn:#E5866B; --warn-s:#2A1813;
+    --ok:#8FBF92; --ok-s:#16231A;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.7);
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  body{background:var(--ground);color:var(--ink);
+    font-family:"Newsreader",Georgia,serif;font-size:17px;line-height:1.62;
+    font-optical-sizing:auto;-webkit-font-smoothing:antialiased;
+    margin:0;padding:0 var(--s3) var(--s6)}
+  .wrap{max-width:78rem;margin:0 auto}
+
+  header.mast{border-bottom:1px solid var(--rule-hi);padding:var(--s6) 0 var(--s4);
+    margin-bottom:var(--s5)}
+  .eyebrow{font-family:"IBM Plex Mono",monospace;font-size:.68rem;font-weight:500;
+    letter-spacing:.17em;text-transform:uppercase;color:var(--accent);margin:0 0 var(--s3)}
+  h1{font-size:clamp(2.1rem,5.4vw,3.6rem);font-weight:500;line-height:1.06;
+    letter-spacing:-.022em;text-wrap:balance;margin:0 0 var(--s3);max-width:18ch}
+  .standfirst{font-size:1.2rem;color:var(--muted);max-width:58ch;margin:0 0 var(--s4);
+    font-weight:300}
+  .identity{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:var(--s3) var(--s4);border-top:1px solid var(--rule);padding-top:var(--s3)}
+  .identity div{display:flex;flex-direction:column;gap:2px}
+  .idk{font-family:"IBM Plex Mono",monospace;font-size:.63rem;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--faint)}
+  .idv{font-family:"IBM Plex Mono",monospace;font-size:.86rem;color:var(--ink);
+    font-variant-numeric:tabular-nums}
+
+  section{margin-bottom:var(--s6);scroll-margin-top:var(--s3)}
+  .sec-head{display:grid;grid-template-columns:3.2rem 1fr;gap:var(--s3);
+    align-items:baseline;border-top:2px solid var(--ink);padding-top:var(--s2);
+    margin-bottom:var(--s4)}
+  .sec-no{font-family:"IBM Plex Mono",monospace;font-size:.95rem;font-weight:600;
+    color:var(--accent);font-variant-numeric:tabular-nums}
+  h2{font-size:clamp(1.5rem,3vw,2.05rem);font-weight:500;letter-spacing:-.017em;
+    line-height:1.16;margin:0;text-wrap:balance}
+  h3{font-size:1.16rem;font-weight:600;letter-spacing:-.008em;
+    margin:var(--s4) 0 var(--s2);max-width:var(--measure)}
+
+  p,ul,ol{max-width:var(--measure)}
+  p{margin:0 0 var(--s3)}
+  ul,ol{margin:0 0 var(--s3);padding-left:1.25rem}
+  li{margin-bottom:var(--s2)}
+  li::marker{color:var(--faint)}
+  a{color:var(--accent);text-underline-offset:2px}
+  a:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:2px}
+  strong{font-weight:600}
+  em.term{font-style:italic;color:var(--muted)}
+  code{font-family:"IBM Plex Mono",monospace;font-size:.845em}
+  p code,li code,td code,th code{background:var(--sunk);border:1px solid var(--rule);
+    border-radius:3px;padding:.08em .34em}
+  pre{font-family:"IBM Plex Mono",monospace;font-size:.8rem;line-height:1.62;
+    background:var(--sunk);border:1px solid var(--rule);border-left:3px solid var(--rule-hi);
+    border-radius:4px;padding:var(--s3);overflow-x:auto;margin:0 0 var(--s3);max-width:100%}
+  pre code{background:none;border:0;padding:0;font-size:1em}
+
+  .trap,.note,.good{border-left:3px solid var(--warn);background:var(--warn-s);
+    padding:var(--s3) var(--s3) var(--s2);margin:0 0 var(--s3);
+    max-width:var(--measure);border-radius:0 4px 4px 0}
+  .note{border-left-color:var(--accent);background:var(--accent-s)}
+  .good{border-left-color:var(--ok);background:var(--ok-s)}
+  .trap>:last-child,.note>:last-child,.good>:last-child{margin-bottom:0}
+  .lbl{display:block;font-family:"IBM Plex Mono",monospace;font-size:.63rem;
+    letter-spacing:.14em;text-transform:uppercase;color:var(--warn);
+    margin-bottom:var(--s1);font-weight:600}
+  .note .lbl{color:var(--accent)} .good .lbl{color:var(--ok)}
+
+  .tw{overflow-x:auto;margin:0 0 var(--s4);border-radius:4px}
+  table{border-collapse:collapse;width:100%;min-width:32rem;
+    font-family:"IBM Plex Mono",monospace;font-size:.78rem;
+    font-variant-numeric:tabular-nums}
+  caption{text-align:left;color:var(--muted);font-family:"Newsreader",Georgia,serif;
+    font-size:.95rem;padding-bottom:var(--s2);font-style:italic}
+  th,td{text-align:left;padding:.52rem .8rem;border-bottom:1px solid var(--rule);
+    vertical-align:top}
+  thead th{font-size:.64rem;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--faint);font-weight:600;border-bottom:1px solid var(--rule-hi);
+    white-space:nowrap}
+  tbody tr:last-child td{border-bottom:0}
+  td.num,th.num{text-align:right}
+  .bad{color:var(--warn);font-weight:600}
+  .okc{color:var(--ok);font-weight:600}
+  .big{color:var(--accent);font-weight:600}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));
+    gap:var(--s2);margin:0 0 var(--s4)}
+  .stat{background:var(--surface);border:1px solid var(--rule);border-radius:5px;
+    padding:var(--s3);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:3px}
+  .stat .v{font-family:"IBM Plex Mono",monospace;font-size:1.45rem;font-weight:500;
+    color:var(--accent);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  .stat .v.w{color:var(--warn)} .stat .v.g{color:var(--ok)}
+  .stat .k{font-family:"IBM Plex Mono",monospace;font-size:.62rem;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--faint)}
+  .stat .d{font-size:.88rem;color:var(--muted);line-height:1.4}
+
+  figure{margin:0 0 var(--s4)}
+  .figbox{background:var(--surface);border:1px solid var(--rule);border-radius:5px;
+    padding:var(--s3);overflow-x:auto;box-shadow:var(--shadow)}
+  figure svg{display:block;width:100%;min-width:34rem;height:auto;color:var(--ink)}
+  figcaption{color:var(--muted);font-size:.92rem;font-style:italic;margin-top:var(--s2);
+    max-width:var(--measure)}
+  .sb{fill:var(--surface);stroke:var(--rule-hi);stroke-width:1.2}
+  .st{fill:var(--ink);font-family:"IBM Plex Mono",monospace;font-size:12px}
+  .ss{fill:var(--faint);font-family:"IBM Plex Mono",monospace;font-size:9.5px}
+  .sl{stroke:var(--rule-hi);stroke-width:1.4;fill:none}
+  .sa{stroke:var(--accent);stroke-width:1.8;fill:none}
+  .sw{stroke:var(--warn);stroke-width:1.8;fill:none}
+  .ta{fill:var(--accent);font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:600}
+  .tw2{fill:var(--warn);font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:600}
+
+  .toc{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s3);
+    font-family:"IBM Plex Mono",monospace;font-size:.74rem;margin-top:var(--s3)}
+  .toc a{color:var(--muted);text-decoration:none}
+  .toc a:hover{color:var(--accent);text-decoration:underline}
+  .toc a .n{color:var(--accent)}
+  footer{border-top:1px solid var(--rule-hi);padding-top:var(--s3);color:var(--faint);
+    font-size:.85rem;font-family:"IBM Plex Mono",monospace;max-width:var(--measure)}
+  hr.soft{border:0;border-top:1px solid var(--rule);margin:var(--s4) 0;max-width:var(--measure)}
+  @media (max-width:620px){body{font-size:16px}.sec-head{grid-template-columns:2.2rem 1fr;gap:var(--s2)}}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Instrument note · MicroRider on Slocum · Aug 2026</p>
+  <h1>The glider speed problem</h1>
+  <p class="standfirst">
+    On six of seven deployments, taking the EM flowmeter at face value requires a
+    <em>negative</em> angle of attack — which a wing cannot have. Seven years of
+    data, five flowmeters, and four failed explanations later, here is what is
+    established, what is excluded, and the one bench measurement that would end it.
+  </p>
+  <div class="identity">
+    <div><span class="idk">Deployments</span><span class="idv">7 · 2021–2026</span></div>
+    <div><span class="idk">MicroRiders</span><span class="idv">MR410 · 433 · 435</span></div>
+    <div><span class="idk">EM units</span><span class="idv">042 044 046 051 066 079</span></div>
+    <div><span class="idk">Status</span><span class="idv">unresolved</span></div>
+    <div><span class="idk">Next step</span><span class="idv">two-tank bench zero</span></div>
+  </div>
+  <nav class="toc" aria-label="Sections">
+    <a href="#s1"><span class="n">1</span> The geometry</a>
+    <a href="#s2"><span class="n">2</span> What we see</a>
+    <a href="#s3"><span class="n">3</span> Four dead ends</a>
+    <a href="#s4"><span class="n">4</span> What is solid</a>
+    <a href="#s5"><span class="n">5</span> The degeneracy</a>
+    <a href="#s6"><span class="n">6</span> Filtering</a>
+    <a href="#s7"><span class="n">7</span> The bench test</a>
+    <a href="#s8"><span class="n">8</span> Analysis plan</a>
+  </nav>
+</header>
+
+<!-- ============================================================== 1 -->
+<section id="s1">
+  <div class="sec-head"><span class="sec-no">01</span><h2>The geometry, settled</h2></div>
+
+  <p>
+    Let <strong>θ</strong> be the elevation of the vehicle's long axis from
+    horizontal, <strong>γ</strong> the same for the velocity vector, and
+    <strong>α</strong> the angle of attack — all magnitudes. The relation is
+  </p>
+
+  <figure>
+    <div class="figbox">
+      <svg viewBox="0 0 900 300" role="img"
+           aria-label="On a climb the nose sits below the flight path and on a dive above it, but in both cases the glide angle gamma equals pitch theta plus a positive angle of attack alpha.">
+        <defs>
+          <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- CLIMB -->
+        <text class="st" x="30" y="30">CLIMB — net buoyancy UP</text>
+        <line class="sl" x1="40" y1="200" x2="330" y2="200"/>
+        <text class="ss" x="40" y="215">horizontal</text>
+        <g color="var(--accent)">
+          <line class="sa" marker-end="url(#a1)" x1="60" y1="200" x2="290" y2="90"/>
+        </g>
+        <text class="ta" x="296" y="88">velocity, γ</text>
+        <g color="var(--warn)">
+          <line class="sw" marker-end="url(#a1)" x1="60" y1="200" x2="300" y2="130"/>
+        </g>
+        <text class="tw2" x="306" y="130">vehicle axis, θ</text>
+        <path class="sl" d="M 130 200 A 70 70 0 0 0 118 168" />
+        <text class="ss" x="134" y="182">θ</text>
+        <path class="sl" d="M 175 200 A 115 115 0 0 0 158 148" />
+        <text class="ss" x="180" y="160">γ</text>
+        <text class="ss" x="330" y="108">nose BELOW the path</text>
+        <text class="ss" x="330" y="122">flow from above the chord</text>
+        <text class="st" x="330" y="146">γ = θ + α</text>
+
+        <!-- DIVE -->
+        <text class="st" x="500" y="30">DIVE — net buoyancy DOWN</text>
+        <line class="sl" x1="510" y1="100" x2="800" y2="100"/>
+        <text class="ss" x="510" y="92">horizontal</text>
+        <g color="var(--accent)">
+          <line class="sa" marker-end="url(#a1)" x1="530" y1="100" x2="760" y2="210"/>
+        </g>
+        <text class="ta" x="766" y="214">velocity, γ</text>
+        <g color="var(--warn)">
+          <line class="sw" marker-end="url(#a1)" x1="530" y1="100" x2="770" y2="170"/>
+        </g>
+        <text class="tw2" x="776" y="170">vehicle axis, θ</text>
+        <path class="sl" d="M 600 100 A 70 70 0 0 1 588 132" />
+        <text class="ss" x="604" y="126">θ</text>
+        <path class="sl" d="M 645 100 A 115 115 0 0 1 628 152" />
+        <text class="ss" x="650" y="146">γ</text>
+        <text class="ss" x="520" y="240">nose ABOVE the path · flow from below the chord</text>
+        <text class="st" x="520" y="264">γ = θ + α  — the SAME sign</text>
+
+        <text class="ss" x="30" y="285">The glide path is steeper than the attitude on BOTH legs. α > 0 always.</text>
+      </svg>
+    </div>
+    <figcaption>
+      Worked from the force balance, not intuition. On a climb the wing must supply
+      the forward thrust that cancels drag, and the only perpendicular direction
+      with a forward component is <em>downward</em> — so the flow arrives from above
+      the chord and the nose sits below the path. The intuitive "wing always meets
+      the flow from below" is true on a dive and false on a climb.
+    </figcaption>
+  </figure>
+
+  <p>
+    So <code>U = |W| / sin(θ + α)</code> with <strong>α positive</strong>, which is
+    what ODAS and <code>perturb</code> implement. Confirmed independently on RU33,
+    the only vehicle that records both legs: at the same |θ| its dive and climb
+    give α = +6.48° and +6.04°, agreeing to <strong>0.36 ± 0.26°</strong>. Under the
+    wrong convention they would have differed by 2α ≈ 13°, which is 50σ away.
+  </p>
+
+  <div class="note">
+    <span class="lbl">The one-line consequence</span>
+    <p>
+      Since α ≥ 0, the ratio <code>excess = U_EM·sin θ / |W|</code> can
+      <strong>never exceed 1</strong>. It is a model-free upper bound. Any
+      deployment with excess &gt; 1 has a discrepancy that no admissible angle of
+      attack can absorb.
+    </p>
+  </div>
+</section>
+
+<!-- ============================================================== 2 -->
+<section id="s2">
+  <div class="sec-head"><span class="sec-no">02</span><h2>What we actually see</h2></div>
+
+  <p>
+    All rows on a matched footprint — θ 43–46°, 150–600 dbar, steady climbs, RDL
+    bad buffers dropped. RU33 flies at 25.7° and is shown separately.
+  </p>
+
+  <div class="tw">
+    <table>
+      <caption>Six of seven need a negative angle of attack</caption>
+      <thead><tr>
+        <th>Deployment</th><th>MR</th><th>EM</th><th>EM cal</th>
+        <th class="num">roll</th><th class="num">θ</th>
+        <th class="num">excess</th><th class="num">α at face value</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>RU33 2021</td><td>410</td><td>042</td><td>2021-01-19</td><td class="num">−1°</td><td class="num">25.7°</td><td class="num okc">0.819</td><td class="num okc">+6.28°</td></tr>
+        <tr><td>osu685 2023</td><td>435</td><td>046</td><td>2021-09-10</td><td class="num">5.5°</td><td class="num">43.3°</td><td class="num bad">1.0320</td><td class="num bad">−1.65°</td></tr>
+        <tr><td>osu684 2025</td><td>433</td><td>051</td><td>2023-02-10</td><td class="num">12.7°</td><td class="num">44.6°</td><td class="num bad">1.1146</td><td class="num bad">−5.55°</td></tr>
+        <tr><td>osu685 2025</td><td>435</td><td>066</td><td>2023-08-18</td><td class="num">8.6°</td><td class="num">44.7°</td><td class="num bad">1.0430</td><td class="num bad">−2.29°</td></tr>
+        <tr><td>sl684 2026</td><td>433</td><td><strong>079</strong></td><td>2024-10-16</td><td class="num">−0.6°</td><td class="num">44.9°</td><td class="num okc">0.9671</td><td class="num okc">+1.97°</td></tr>
+        <tr><td>sl685 2026</td><td>435</td><td>066</td><td>2023-08-18</td><td class="num">−1.1°</td><td class="num">44.7°</td><td class="num bad">1.0434</td><td class="num bad">−2.31°</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    For scale: ε carries the through-water speed with roughly <strong>U⁻⁴</strong>
+    leverage. That exponent is measured, not assumed — on osu684 the two speed arms
+    differ by 1.76× in ε at a speed ratio of 0.866, i.e. U<sup>−3.9</sup>. A 10%
+    speed error is a 40% ε error.
+  </p>
+
+  <div class="stats">
+    <div class="stat"><span class="k">Reference α</span><span class="v">3 – 4.5°</span><span class="d">Lucas' model 3°; Tanaka &amp; Welch 4.5°</span></div>
+    <div class="stat"><span class="k">RU33 in situ</span><span class="v g">+5.0°</span><span class="d">[+3.0, +7.4], no EM offset assumed</span></div>
+    <div class="stat"><span class="k">ε leverage</span><span class="v w">U⁻³·⁹</span><span class="d">measured; a 10% speed error is 40% in ε</span></div>
+  </div>
+</section>
+
+<!-- ============================================================== 3 -->
+<section id="s3">
+  <div class="sec-head"><span class="sec-no">03</span><h2>Four dead ends</h2></div>
+
+  <p>
+    Each of these looked convincing at the time. All four are recorded here so
+    nobody re-runs them.
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Hypothesis</th><th>How it died</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Local flow acceleration</strong> around the vehicle body</td>
+          <td>Refuted by geometry. The EM head is at the front of the MR, the MR sits on top of the glider, and the sensor tips are <em>ahead of the glider's nose</em>. A body accelerates flow alongside itself, not ahead of its stagnation point — ahead of a nose the flow is if anything <em>decelerated</em>, biasing U_EM low. Wrong sign.</td>
+        </tr>
+        <tr>
+          <td><strong>A nominal 2023 EM slope</strong></td>
+          <td>SN 044 and 046 were calibrated the <em>same day</em> and differ by 2.27%, so JAC does issue per-unit slopes. SN 042 is a 12.8%-low outlier, so anchoring a rescale to it was the error. Rescaling to the cluster mean — where the units already sit — moves α by 0.02°.</td>
+        </tr>
+        <tr>
+          <td><strong>Roll</strong> (the gliders fly 0–13° of it)</td>
+          <td>MR435 + EM 066 gives excess 1.0430 (2025) and 1.0434 (2026) — 0.04% apart across a year and a <strong>10° roll change</strong>. Within osu685 the roll trend even runs <em>opposite</em> to the between-deployment one, the signature of a confound with depth.</td>
+        </tr>
+        <tr>
+          <td><strong>The on-deck reading is the zero</strong></td>
+          <td>It rank-ordered perfectly with the needed correction (ρ = +1.00, n = 4) and EM 066's year-on-year drift matched to 0.8 mm/s — but a proper regression with an adequate speed lever puts the intercept at <strong>zero</strong>, not at the deck value. Retracted; see §5.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="trap">
+    <span class="lbl">Why the deck reading cannot be the whole zero anyway</span>
+    <p>
+      A Faraday flowmeter measures an EMF induced in a <strong>conducting</strong>
+      fluid. In air the electrodes see an open circuit, so you read the amplifier's
+      input offset into a near-infinite source impedance. In water you additionally
+      get the <strong>electrochemical half-cell potential</strong> between the two
+      electrodes — the classic EM zero-drift term, the one that grows with fouling,
+      and the one air cannot show.
+    </p>
+  </div>
+</section>
+
+<!-- ============================================================== 4 -->
+<section id="s4">
+  <div class="sec-head"><span class="sec-no">04</span><h2>What is solid</h2></div>
+
+  <h3>The effect is a reproducible property of the EM unit</h3>
+
+  <p>
+    Both gliders changed roll dramatically between 2025 and 2026. Only one changed
+    its flowmeter. The excess followed the flowmeter.
+  </p>
+
+  <div class="tw">
+    <table>
+      <caption>Compared at matched speed, not just matched attitude</caption>
+      <thead><tr><th>&nbsp;</th><th>roll change</th><th>EM change</th><th class="num">excess</th></tr></thead>
+      <tbody>
+        <tr><td>MR435 2025 → 2026</td><td>8.6° → −1.1°</td><td><strong>none</strong> (066 both)</td><td class="num okc">1.052 → 1.057&nbsp;&nbsp;(0.5%)</td></tr>
+        <tr><td>MR433 2025 → 2026</td><td>12.7° → −0.6°</td><td><strong>051 → 079</strong></td><td class="num bad">1.110 → 1.020&nbsp;&nbsp;(9%)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="good">
+    <span class="lbl">The reproducibility is remarkable in its own right</span>
+    <p>
+      MR435 with EM 066 repeats to <strong>0.5% in every speed bin</strong>, a year
+      apart, on a glider whose roll changed by 10°. Whatever this effect is, it is
+      stable, repeatable, and tied to the instrument — not to the water, the
+      ballast, or the season.
+    </p>
+  </div>
+
+  <h3>The five EM units</h3>
+
+  <div class="tw">
+    <table>
+      <caption><code>U = a + b·counts</code>. Slopes cluster within 2.27%; SN 042 sits 12.8% low.</caption>
+      <thead><tr><th>EM SN</th><th>Cal date</th><th>MR</th><th class="num">slope <code>b</code></th><th class="num">intercept <code>a</code></th></tr></thead>
+      <tbody>
+        <tr><td>042</td><td>2021-01-19</td><td>410</td><td class="num bad">0.01007420</td><td class="num">−26.62292</td></tr>
+        <tr><td>044</td><td>2021-09-10</td><td>433</td><td class="num">0.01142906</td><td class="num">−24.72106</td></tr>
+        <tr><td>046</td><td>2021-09-10</td><td>435</td><td class="num">0.01168864</td><td class="num">−26.48646</td></tr>
+        <tr><td>051</td><td>2023-02-10</td><td>433</td><td class="num">0.01155078</td><td class="num">−25.15760</td></tr>
+        <tr><td>066</td><td>2023-08-18</td><td>435</td><td class="num">0.01155158</td><td class="num">−26.59174</td></tr>
+        <tr><td>079</td><td>2024-10-16</td><td>433</td><td class="num">0.01145417</td><td class="num">−27.74201</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============================================================== 5 -->
+<section id="s5">
+  <div class="sec-head"><span class="sec-no">05</span><h2>Why the field data cannot settle it</h2></div>
+
+  <p>
+    Write the model with a sensor offset <em>c</em>. In steady glide at fixed θ,
+  </p>
+<pre><code>sin(θ + α) = |W| / (U_EM − c)        rearranged:      U_EM = [1/sin(θ+α)]·|W| + c</code></pre>
+  <p>
+    — a <strong>straight line through the origin</strong> if the sensor is
+    unbiased. So a regression of U_EM on |W| returns both unknowns: the slope
+    carries α, the intercept <em>is</em> the offset. No angle of attack need be
+    assumed. The lever is the range of speeds the glider flies at fixed pitch,
+    which exists because buoyancy changes with depth.
+  </p>
+
+  <p>That is the right test. It does not converge:</p>
+
+  <div class="tw">
+    <table>
+      <caption>Everything below has the thruster, sign and steadiness filters of §6 applied</caption>
+      <thead><tr>
+        <th>Deployment</th><th class="num">\|W\| lever</th><th class="num">intercept [m/s]</th>
+        <th class="num">α (free)</th><th class="num">α (forced through 0)</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>MR433 2025</td><td class="num bad">1.4×</td><td class="num">+0.093 ± 0.008</td><td class="num bad">+11.6°</td><td class="num">−5.9°</td></tr>
+        <tr><td>MR435 2025</td><td class="num bad">1.3×</td><td class="num">+0.116 ± 0.009</td><td class="num bad">+19.7°</td><td class="num">−2.6°</td></tr>
+        <tr><td>MR433 2026</td><td class="num">5.2×</td><td class="num">−0.020 ± 0.010</td><td class="num">−3.5°</td><td class="num big">+0.38°</td></tr>
+        <tr><td>MR435 2026</td><td class="num">2.8×</td><td class="num">+0.001 ± 0.015</td><td class="num">−2.5°</td><td class="num big">−2.65°</td></tr>
+        <tr><td>RU33 2021</td><td class="num bad">1.4×</td><td class="num">+0.031 ± 0.010</td><td class="num bad">+10.2°</td><td class="num">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    The large positive intercepts come only from the short levers, which extrapolate
+    2.5–4× beyond their data. With an adequate lever the intercept is consistent with
+    <strong>zero</strong>. And the slope and intercept trade off, so α swings 3.8° on
+    MR433 2026 depending on whether an intercept is allowed — while that intercept is
+    only 1.6σ from zero.
+  </p>
+
+  <div class="note">
+    <span class="lbl">A useful diagnostic, though</span>
+    <p>
+      The <strong>through-origin</strong> estimate is rock-stable — it moves by
+      0.3° on MR433 and 0.02° on MR435 as the |W| floor is swept from 0.05 to
+      0.15 m/s — while the free-intercept fit swings wildly. The data cannot
+      support two parameters. Use the constrained estimator and report the offset
+      as unknown, rather than fitting one and believing it.
+    </p>
+  </div>
+
+  <h3>RU33: both legs, and why they still cannot settle it</h3>
+
+  <p>
+    Two legs at <em>different</em> pitch give two equations in (α, c) with no AOA
+    assumed. RU33 is the only vehicle that records both, and it returns
+    <strong>c = −0.010 m/s [−0.030, +0.011]</strong> — consistent with zero — and
+    <strong>α = +5.0° [+3.0, +7.4]</strong>, bracketing both reference values.
+  </p>
+
+  <div class="trap">
+    <span class="lbl">Do not rely on that number</span>
+    <p>
+      RU33 flies its dives and climbs at <strong>approximately the same pitch and
+      the same speed</strong>, which is exactly the condition under which the
+      two-leg solve has no lever. The entire signal is a
+      <strong>0.50°</strong> difference in |θ| between climb (25.475°) and dive
+      (25.975°) — and an inclinometer <em>zero</em> bias shifts |θ| oppositely on
+      the two legs, mimicking precisely that. At ±0.5° estimated mounting
+      tolerance, the lever and the error are the same size.
+    </p>
+    <p>
+      So the RU33 result is <em>consistent</em> with a zero offset and a physical
+      α, but it does not measure either. Both legs is not the lever people assume
+      it is — <strong>a spread in |θ| is</strong>, and flying both legs at the same
+      attitude provides none.
+    </p>
+  </div>
+
+  <p>
+    What the two legs <em>do</em> establish is that the flight itself is
+    symmetric: W/U is 0.522 on the climb and 0.534 on the dive, so the glide angle
+    is the same within 0.8°, and the per-leg α agree to 0.36 ± 0.26°. The legs
+    differ in absolute speed (U_EM 0.326 vs 0.275 m/s) — normal for a glider
+    trimmed with different buoyancy each way — but not in geometry. That symmetry
+    is what validates the §1 sign convention; it is not a second constraint on the
+    offset.
+  </p>
+</section>
+
+<!-- ============================================================== 6 -->
+<section id="s6">
+  <div class="sec-head"><span class="sec-no">06</span><h2>Filtering the training set</h2></div>
+
+  <p>Non-negotiable, in the order they matter. Together they discard ~63% of the in-band 2026 data.</p>
+
+  <ol>
+    <li>
+      <strong>Thruster off, and <em>known</em> off</strong> (<code>m_thruster_current == 0</code>).
+      Powered flight is not a glide and breaks the force balance the whole method
+      rests on. Two traps: the sensor reports only every ~56 s, so give it its own
+      large <code>max_gap</code> (7200 s) or the zero-order hold gets blanked and the
+      state is lost; and an <em>unknown</em> period must be discarded, not assumed off.
+    </li>
+    <li>
+      <strong>Sign consistency</strong> — nose-up <em>and</em> rising, or nose-down
+      <em>and</em> sinking. A vehicle pitched up while sinking is stalled. Inside a
+      θ 43–46° band this is already satisfied: the stalls live at low |pitch|, near
+      the inflections.
+    </li>
+    <li>
+      <strong>A |W| floor, swept not chosen.</strong> The low-|W| tail is both where
+      the intercept lever lives <em>and</em> where marginal flight lives. Sweeping it
+      exposes the trade-off; picking one value hides it.
+    </li>
+    <li>
+      <strong>Steadiness</strong> — rolling sd of θ &lt; 2° and of W &lt; 0.02 over
+      60 s. The derivation assumes equilibrium, so acceleration must be excluded
+      rather than averaged over.
+    </li>
+  </ol>
+
+  <div class="trap">
+    <span class="lbl">Also correct, and one-signed</span>
+    <p>
+      <code>dP/dt</code> is dbar/s, but the flight model needs m/s. One dbar is
+      <code>10⁴/(ρg)</code> metres — 0.9955 m at the surface, ~0.991 m at 500 m. So
+      W in m/s is <strong>0.5–1.0% smaller</strong>, which raises the excess by the
+      same fraction and makes the discrepancy slightly <em>worse</em>.
+    </p>
+  </div>
+</section>
+
+<!-- ============================================================== 7 -->
+<section id="s7">
+  <div class="sec-head"><span class="sec-no">07</span><h2>The bench test that ends this</h2></div>
+
+  <p>
+    Every in-situ lever available is between 1.3× and 5×. Two tanks give a lever of
+    <strong>~100×</strong>. That is why the bench can settle what seven deployments
+    could not.
+  </p>
+
+  <h3>The model</h3>
+<pre><code>c(σ) = A + B/σ
+
+  A   amplifier input offset, plus electrode asymmetry that does not scale
+  B/σ bias current × source impedance;  Z_source ∝ 1/σ</code></pre>
+
+  <p>
+    Two measurements, two unknowns — exactly determined. Seawater is ~4–5 S/m,
+    freshwater ~0.05 S/m. Freshwater is not merely a second point: it is a
+    <strong>~100× amplifier for the bias-current term</strong>. If B matters at all,
+    fresh water will show it unmistakably. If fresh ≈ salt, then A dominates, there
+    is no σ-scaling to do, and a single seawater zero is the entire answer — which
+    is itself worth knowing.
+  </p>
+
+  <h3>The rig</h3>
+
+  <p>
+    A <strong>horizontal, fully insulated box</strong> with the MicroRider lying in
+    cradles, and only its cable through the lid. Horizontal is the important part:
+    it puts the sensing axis <em>perpendicular</em> to the buoyant plume that the
+    MR's own 0.5–1 W of dissipation drives along its body.
+  </p>
+
+  <div class="tw">
+    <table>
+      <caption>Clearance is the only physical constraint, and it is generous. MR is ~1 m long, 11 cm dia.</caption>
+      <thead><tr><th>Box (L × W × H, m)</th><th class="num">litres</th><th class="num">end / side</th>
+        <th class="num">Z_source shift</th><th class="num">τ</th><th class="num">1 W over 16 h</th></tr></thead>
+      <tbody>
+        <tr><td>1.50 × 0.45 × 0.45</td><td class="num">304</td><td class="num">25 / 17 cm</td><td class="num">1.5%</td><td class="num">21 d</td><td class="num">45 mK</td></tr>
+        <tr><td><strong>1.20 × 0.30 × 0.30</strong></td><td class="num"><strong>108</strong></td><td class="num">10 / 9.5 cm</td><td class="num okc">2.6%</td><td class="num">15 d</td><td class="num">127 mK</td></tr>
+        <tr><td>1.15 × 0.25 × 0.25</td><td class="num">72</td><td class="num">7 / 7 cm</td><td class="num bad">3.6%</td><td class="num">12 d</td><td class="num">191 mK</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    <strong>~108 L is the sweet spot</strong> — every boundary effect under 3%, a
+    third of the water and salt of the larger box, and far easier to fill and
+    empty. Below that the clearance starts eating the margin the box exists to
+    provide.
+  </p>
+
+  <ul>
+    <li><strong>Raise the cradles so the MR is centred vertically.</strong> Resting
+      it low makes the floor the closest boundary at a few cm — 5% instead of 1.5%,
+      giving back threefold the margin the box was built for.</li>
+    <li><strong>Non-metallic throughout</strong>, and no metal fittings near the head.</li>
+    <li><strong>A sealed thermistor at mid-box</strong>, ~50 cm from the head. Unlike
+      a conductivity cell it drives no current through the water — which was the real
+      objection to leaving a CTD logging beside a sensor whose zero you are measuring
+      at the millimetre-per-second level.</li>
+  </ul>
+
+  <div class="good">
+    <span class="lbl">Horizontal is what tames the plume</span>
+    <p>
+      1 W of self-heating drives free convection at ~5 mm/s along the body — 5–25% of
+      the offsets in question if it ran along the sensing axis, as it would with the
+      MR hung vertically. Horizontal, the EM sees only the return limb of the
+      circulation, slower by roughly (plume thickness / box cross-section):
+      <strong>0.2–0.4 mm/s, about 1%</strong>.
+    </p>
+  </div>
+
+  <h3>Build UP from fresh — do not dilute down from seawater</h3>
+
+  <p>
+    Start with tap water and add artificial sea salt in doubling steps. One disposal
+    event instead of five, no seawater to transport inland, and the
+    <strong>highest-leverage point is measured first</strong>, with the cleanest
+    electrodes.
+  </p>
+
+  <div class="tw">
+    <table>
+      <caption>108 L box; triple the salt for 304 L. One 4 kg bucket covers the series.</caption>
+      <thead><tr><th class="num">night</th><th class="num">S</th><th class="num">σ (S/m)</th>
+        <th class="num">salt to add</th><th class="num">cumulative</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td class="num">tap</td><td class="num big">0.043</td><td class="num">—</td><td class="num">—</td></tr>
+        <tr><td class="num">2</td><td class="num">2.19</td><td class="num">0.403</td><td class="num">0.21 kg</td><td class="num">0.24 kg</td></tr>
+        <tr><td class="num">3</td><td class="num">4.38</td><td class="num">0.767</td><td class="num">0.24 kg</td><td class="num">0.47 kg</td></tr>
+        <tr><td class="num">4</td><td class="num">8.75</td><td class="num">1.460</td><td class="num">0.47 kg</td><td class="num">0.94 kg</td></tr>
+        <tr><td class="num">5</td><td class="num">17.50</td><td class="num">2.782</td><td class="num">0.94 kg</td><td class="num">1.89 kg</td></tr>
+        <tr><td class="num">6</td><td class="num">35.00</td><td class="num big">5.300</td><td class="num">1.89 kg</td><td class="num">3.78 kg</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    Lever in 1/σ: <strong>132×</strong>, unchanged from a dilution series. Use an
+    aquarium sea salt (Instant Ocean or similar), not NaCl — those mixes reproduce
+    the major ion ratios (Na, Cl, Mg, SO₄, Ca, K), which is what preserves the
+    electrode-chemistry argument. Since σ is measured each night, the mix does not
+    need to hit S = 35 precisely: you measure what you made.
+  </p>
+
+  <h3>Each night</h3>
+  <ol>
+    <li><strong>Add the salt, stir thoroughly, let it settle.</strong> With τ ≈ 15
+      days, whatever stratification you seal in stays — mixing is the only chance to
+      make it uniform.</li>
+    <li><strong>Conductivity and temperature before and after</strong>, not
+      continuously. σ should <em>rise</em> over the soak by a calculable amount
+      (0.05–0.25% depending on box size and power) as the MR's own heat accumulates
+      — a prediction to check, not a constancy to assume. Log the MR's current draw
+      so the figure can be computed rather than bracketed.</li>
+    <li><strong>Soak ~16 h.</strong> ~100 case time constants; every thermal and
+      electrochemical transient long dead, and the whole record usable.</li>
+    <li><strong>Reverse the MR end-for-end once</strong> during the series. Any
+      residual axial circulation reverses relative to the sensing axis; a true
+      electronic zero does not. Two minutes with cradles, and it turns "the
+      convection is probably down at 1%" into a measurement.</li>
+    <li><strong>Sweep the wall clearance once</strong> — centred, then offset. Same
+      logic. Do it in the tap-water box, where source impedance is ~100× higher and
+      any boundary sensitivity is at its most pronounced.</li>
+    <li><strong>Bench every unit you can reach</strong>, and repeat before
+      <em>and</em> after a deployment. The deployments differ by flowmeter, not by
+      vehicle, so a table of zeros keyed by EM serial is what turns this into a
+      correction — and a before/after pair is the direct test of fouling.</li>
+  </ol>
+
+  <div class="note">
+    <span class="lbl">Incl_T is a case thermometer, and here that is enough</span>
+    <p>
+      The inclinometer sits inside the pressure case. Against the glider CTD it
+      <strong>lags the water by ~6.5 min</strong> (median 390 s over 21 profiles) and
+      spans only 67% of its range — useless across a 50-minute glider profile. But
+      16 h is ~120 time constants, so in the box it tracks the water essentially
+      perfectly. <strong>Incl_T − T_water is then a direct readout of the MR's
+      self-heating</strong> (a constant 12–24 mK). If that difference drifts, the
+      electronics duty-cycled — and the plume pulsed with it.
+    </p>
+  </div>
+
+  <div class="good">
+    <span class="lbl">Two construction facts that settle earlier worries</span>
+    <p>
+      <strong>316 stainless main body.</strong> A series conduction path is set by
+      its worst conductor: at k = 16 the fin decay length is 2.7 cm, so 30 cm of
+      immersion is ~11 e-foldings and room-temperature swings reach the head not at
+      all. Anodized aluminium alone would have been 9.7 cm and let ~134 mK through
+      for a 3 °C room excursion.
+    </p>
+    <p>
+      <strong>Electrodes sealed in a stainless housing.</strong> No drying-out or
+      re-wetting concern between steps. And because nearly all EM flowmeters use AC
+      excitation with synchronous detection, static half-cell potentials are largely
+      rejected — which leaves the amplifier offset and the impedance-dependent term,
+      i.e. exactly <code>A + B/σ</code>. Worth confirming the excitation really is AC,
+      and at what frequency.
+    </p>
+  </div>
+
+  <h3>How far from the tank walls?</h3>
+
+  <p>
+    Two different ranges matter, and only the second one governs a zero measurement.
+  </p>
+
+  <p>
+    <strong>The flow-sensing volume is small.</strong> A probe-type EM sensor
+    weights the surrounding flow with a dipole-like function falling as roughly
+    <code>r⁻³</code>, so the effective sampling volume is on the order of one to two
+    head diameters. For a <em>flow</em> calibration that is what sets the clearance.
+  </p>
+
+  <p>
+    <strong>The zero is governed by something with longer reach: source
+    impedance.</strong> With no flow there is no EMF to distort, so the sensing
+    volume is irrelevant. What a boundary changes is the electrical path between
+    the electrodes — and the bias-current offset is <code>I_b × Z_source</code>,
+    the very term the two-tank test is trying to isolate. So:
+  </p>
+
+  <ul>
+    <li><strong>Use a non-metallic tank.</strong> A conducting wall shunts the
+      electrode field and drops Z_source sharply; an insulating wall constrains the
+      return paths and raises it. Metal is much the worse of the two, and steel
+      tanks, rebar and immersed fittings all count.</li>
+    <li><strong>Treat the free surface and the bottom as boundaries too.</strong>
+      Air is an insulator; so is most tank lining.</li>
+    <li><strong>Aim for ≥10 head diameters of clearance</strong> in every direction
+      as a starting point — the usual EM-current-meter rule of thumb.</li>
+  </ul>
+
+  <div class="good">
+    <span class="lbl">Better than a rule of thumb: sweep it</span>
+    <p>
+      Record the zero at several distances — centred, half way out, and close to a
+      wall. If the reading does not change over the range the tank allows, the
+      clearance is adequate and you have <em>measured</em> that rather than assumed
+      it. If it does change, you have found the scale that matters and can correct
+      or move. It costs about ten minutes and converts an unknown into a bound.
+    </p>
+    <p>
+      Do the sweep in <strong>seawater</strong>, where Z_source is lowest and the
+      wall effect should be weakest, <em>and</em> in <strong>freshwater</strong>,
+      where Z_source is ~100× higher and any boundary sensitivity will be at its
+      most pronounced. If the freshwater zero is wall-dependent, that alone would
+      explain why a fresh-tank number cannot simply be scaled.
+    </p>
+  </div>
+
+  <p>
+    The AEM1G's actual head geometry, electrode spacing and field extent are not in
+    any documentation we hold — <strong>worth asking JAC or Rockland directly</strong>,
+    along with the input impedance and bias current of the front end, which is what
+    sets <code>B</code> in the model above.
+  </p>
+
+  <div class="note">
+    <span class="lbl">What the scaling can and cannot do</span>
+    <p>
+      The bias-current term should scale cleanly as 1/σ. The
+      <strong>electrochemical</strong> term will not — different ions, different
+      half-cell potentials, so freshwater electrode chemistry is not seawater
+      chemistry rescaled. Treat the salt-tank reading as the primary operational
+      number and the fresh-tank reading as the diagnostic that says how much of it
+      is bias current.
+    </p>
+  </div>
+
+  <h3>Targets to test — not values to match</h3>
+  <p>
+    The field fits imply roughly <strong>+0.05 m/s (EM 051)</strong>,
+    <strong>+0.02 to +0.03 (EM 066)</strong> and <strong>near zero (EM 079)</strong>.
+    Those come from analyses since retracted, so they are hypotheses for the bench
+    to confirm or kill, not numbers to reproduce.
+  </p>
+</section>
+
+<!-- ============================================================== 8 -->
+<section id="s8">
+  <div class="sec-head"><span class="sec-no">08</span><h2>Analysing the observations</h2></div>
+
+  <h3>The two-tank fit</h3>
+  <p>
+    With σ measured at each tank, solve <code>c(σ) = A + B/σ</code> directly. Report
+    A and B with uncertainties, then predict c at in-situ σ for each deployment and
+    re-run the excess table in §2. <strong>The success criterion is stated in
+    advance: every deployment should give α &gt; 0.</strong> If any stays negative,
+    the offset is not the whole story and this note needs another section.
+  </p>
+
+  <h3>The σ-dependence in the field is currently untestable</h3>
+  <p>
+    Within the analysis band, conductivity spans only 1.08× (34.2–37.0 mS/cm) and is
+    collinear with depth. The measured correlation runs <em>opposite</em> to the
+    bias-current prediction, but with an 8% lever that is the depth trend in
+    disguise, not a refutation. Only the tanks can separate it.
+  </p>
+
+  <h3>Still worth doing on the vehicles</h3>
+  <ul>
+    <li>
+      <strong>Record the MicroRider on a subset of dives — but only where the
+      dive pitch DIFFERS from the climb pitch.</strong> Both legs at the same
+      attitude buys nothing (see RU33 above); the lever is spread in |θ|, not the
+      leg. On the OSU gliders that spread already exists in normal operation — they
+      dive at ~25° and climb at ~45° — so it is simply not being recorded. Monte Carlo says
+      <strong>10% of yos is enough</strong>: α to ±0.13°, against ±0.4° on
+      osu685-as-flown and ±2.3° on osu684. Past 25% the returns vanish.
+    </li>
+    <li>
+      <strong>The deeper reason is falsifiability.</strong> With one attitude the
+      model <em>cannot fail</em> — two unknowns, one constraint, so some (α, c)
+      always fits and residual structure stays invisible. Two attitudes leave a
+      spare degree of freedom, and the model becomes testable.
+    </li>
+    <li>
+      <strong>Ask Rockland what formula the MR firmware uses</strong> to turn its
+      2-axis tilt sensor into <code>Incl_X</code>/<code>Incl_Y</code>. An
+      <code>atan2(a_x, a_z)</code> form is roll-dependent, an <code>asin(a_x)</code>
+      form is not. <code>|Incl_Y| − |m_pitch|</code> grows with roll on two
+      independent instruments, far beyond sensor accuracy (±0.3°) or assembly
+      tolerance (±0.5°) — and it also matters for the RU33 both-legs result above.
+    </li>
+  </ul>
+
+  <hr class="soft">
+
+  <h3>Until then</h3>
+  <p>
+    Run <strong>both</strong> speed arms — <code>em</code> and
+    <code>flight</code> — and report the ratio as the uncertainty rather than
+    picking one silently. On osu684 that ratio is 1.76× in ε; on RU33, where the EM
+    is self-consistent with a physical α, it is 0.91×. Do <strong>not</strong> apply
+    a single "U_EM is X% high" correction across deployments: the units differ from
+    each other, and the absolute level is unknown.
+  </p>
+</section>
+
+<footer>
+  MicroRider on Slocum · RU33 · osu684/sl684 · osu685/sl685 · 2021–2026<br>
+  Analysis with microstructure-tpw. Deployment runbook and per-deployment
+  workflow notes are separate documents.
+</footer>
+
+</div>

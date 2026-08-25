@@ -146,6 +146,70 @@ The hotel file is then correct and self-describing, so the perturb side must
 salinity into fantasy. The shipped `perturb.yaml` carries no `scale:` on these
 channels for exactly this reason.
 
+### Coordinates need `transform`, not `scale`
+
+Slocum reports **every** geographic coordinate in NMEA `ddmm.mmmm`.
+`m_lat = 2015.61159` is 20° 15.61159′ = **20.260193 °N** — not 20.1561.
+No scale factor converts it:
+
+| Sensor | Raw | `scale: 0.01` | `transform: nmea_degrees` | Error |
+|---|---|---|---|---|
+| `m_lat` | `2015.61159` | 20.1561 | **20.260193** | 11.6 km |
+| `m_lon` | `-12949.49159` | −129.4949 | **−129.824860** | 34 km |
+
+and the discrepancy is a sawtooth in the minutes field, so an `offset` cannot
+absorb it either. Set `transform: nmea_degrees` on `m_lat`/`m_lon`,
+`m_gps_lat`/`m_gps_lon`, `c_wpt_lat`/`c_wpt_lon`:
+
+```yaml
+sensors:
+  m_lat:
+    name: "lat"
+    time_sensor: "m_present_time"
+    transform: nmea_degrees
+    units: "degrees_north"
+    valid_min: -90.0          # degrees — the check sees the TRANSFORMED value
+    valid_max: 90.0
+```
+
+Where the conversion happens is not a detail. `scale`/`offset` is affine, so it
+commutes with interpolation and is applied once, on the output. A `transform`
+is **not** affine and runs on the *source* samples, before the range check and
+before projection — because the raw form steps by 40.02 across a whole minute
+(`2059.9994` → `2100.0006`) where the vehicle moved 2 × 10⁻⁵ °. Interpolating
+that raw form and converting afterwards puts the midpoint at 21.3333 ° instead
+of 21.0000 °: a 37 km error manufactured once per minute of latitude.
+
+Because the transform runs first, `valid_min`/`valid_max` are expressed in the
+**transformed** units (degrees), and `scale`/`offset` — if you also set one —
+applies afterwards to the output.
+
+### `valid_min`/`valid_max` are in SOURCE units, not `units:`
+
+The range check runs on the source samples, before interpolation (so a spike is
+removed rather than smeared) and therefore **before `scale`**. So the bounds are
+in the sensor's raw units — post-`transform`, pre-`scale` — even though the
+neighbouring `units:` key names the *output* unit:
+
+```yaml
+  sci_water_cond:
+    scale: 10.0             # S/m -> mS/cm
+    units: "mS/cm"          # the OUTPUT unit
+    valid_min: 0.0          # ... but these are S/m
+    valid_max: 7.0          #     7 S/m = 70 mS/cm.  `70` here would be
+                            #     700 mS/cm and would never reject anything.
+  sci_water_pressure:
+    scale: 10.0             # bar -> dbar
+    units: "dbar"
+    valid_max: 200.0        # bar = 2000 dbar
+```
+
+This ordering is deliberate: `erddap-hotel` fills these from the server's
+declared `valid_min`/`valid_max` attributes, which are in the served units. The
+cost is that a bound written in output units is not an error — it is a check
+that silently never fires. After a build, confirm each `qc_valid_*` attribute
+against the variable's actual range.
+
 ## Provenance
 
 Every build records what it discarded, so a surprising hotel file can be

@@ -797,3 +797,63 @@ class TestCLI:
         with pytest.raises(SystemExit) as e:
             main()
         assert e.value.code == 1
+
+
+class TestBatchSkipsDatalessSources:
+    """A config-record-only .p must not abort a batch mid-write.
+
+    Found on osu684: 27 of 255 MicroRider files were exactly 9110 bytes -- a
+    config record and no data, which is what the MR writes when a recording is
+    started and stopped without acquiring. `patch_files` writes in a loop and is
+    not transactional, so the run died on the 9th file having already written 8
+    patched copies. A half-populated output directory is indistinguishable from
+    a finished one.
+    """
+
+    def _spec(self):
+        return cp.EditSpec(
+            note="t", author="test",
+            channels={"T1": {"t_0": "285.0"}},
+        )
+
+    def _make(self, tmp_path, name, *, data):
+        cfg = (
+            "[root]\r\nrate = 512\r\n"
+            "[channel]\r\nname = T1\r\ntype = therm\r\nt_0 = 289.301\r\n"
+        )
+        return _synth(tmp_path / name, "<", cfg, data=data)
+
+    def test_dataless_file_is_detected(self, tmp_path):
+        good = self._make(tmp_path, "good.p", data=b"\x01\x02\x03\x04")
+        empty = self._make(tmp_path, "empty.p", data=b"")
+        assert cp._has_no_data_record(good) is False
+        assert cp._has_no_data_record(empty) is True
+
+    def test_batch_skips_it_and_writes_every_other_file(self, tmp_path):
+        srcs = [
+            self._make(tmp_path, "a.p", data=b"\x01\x02\x03\x04"),
+            self._make(tmp_path, "b.p", data=b""),          # the killer
+            self._make(tmp_path, "c.p", data=b"\x05\x06\x07\x08"),
+        ]
+        out = tmp_path / "out"
+        results = cp.patch_files(srcs, out, self._spec(), batch_cal=True)
+
+        written = {s.name: d for s, d, _c in results if d is not None}
+        assert set(written) == {"a.p", "c.p"}, "the dataless file must be skipped"
+        # The whole batch completed: c.p comes AFTER the bad file, and is the
+        # file the pre-refactor code never reached.
+        assert (out / "c.p").exists()
+        assert not (out / "b.p").exists()
+        assert len(results) == 3  # skipped files still appear, with dst None
+
+    def test_dry_run_does_not_count_the_dataless_file(self, tmp_path):
+        srcs = [
+            self._make(tmp_path, "a.p", data=b"\x01\x02\x03\x04"),
+            self._make(tmp_path, "b.p", data=b""),
+        ]
+        results = cp.patch_files(srcs, tmp_path / "out", self._spec(),
+                                 dry_run=True, batch_cal=True)
+        would = [s for s, _d, changes in results if changes]
+        assert [p.name for p in would] == ["a.p"], (
+            "a dry run must promise only what a real run would write"
+        )

@@ -379,7 +379,15 @@ def patch_deployment(
             other = build_edits(record, parse_config(read_config_text(src)),
                                 channels=channels)
         except Exception as exc:  # unreadable config -- refuse, do not skip
-            plan.errors.append(f"{Path(src).name}: cannot read config: {exc}")
+            # All-or-nothing is deliberate: a deployment half-patched is worse
+            # than one not patched. But a file that cannot be READ at all
+            # (0 bytes, a failed flash write) carries no data to lose, so say
+            # how to drop it rather than leaving the user stuck.
+            plan.errors.append(
+                f"{Path(src).name}: cannot read config: {exc} "
+                f"— if this file is junk (check its size and date), list it "
+                f"under files.exclude and re-run"
+            )
             continue
         plan.errors.extend(f"{Path(src).name}: {e}" for e in other.errors)
         # Warnings are per-file too, but they repeat across a deployment; keep

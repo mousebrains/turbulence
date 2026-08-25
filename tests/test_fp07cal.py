@@ -1025,3 +1025,108 @@ def test_synth_truth_and_estimator_model_are_separable():
     # ...but nothing forces them equal.
     mismatched = SynthConfig(ctd_tau=2.0)
     assert mismatched.ctd_tau != PairConfig().kernel_tau
+
+
+# ---------------------------------------------- discovery and wrong configs
+def test_find_p_files_follows_a_symlinked_directory(tmp_path):
+    """`Path.glob` does not traverse a symlink with `**`, and says nothing.
+
+    A deployment kept on an external volume is normally symlinked in
+    (`MR -> /Volumes/.../osu685/MR`). Under the default `**/*.p` that matched
+    zero files while `ls MR/*.p` showed 1228, and the only output was
+    "no .p files matched".
+    """
+    from odas_tpw.perturb.discover import find_p_files
+
+    real = tmp_path / "elsewhere"
+    real.mkdir()
+    (real / "a.p").write_bytes(b"x")
+    (real / "b.p").write_bytes(b"x")
+    root = tmp_path / "deployment"
+    root.mkdir()
+    (root / "MR").symlink_to(real, target_is_directory=True)
+
+    found = find_p_files(root, "**/*.p")
+    assert {p.name for p in found} == {"a.p", "b.p"}
+    # A plain (non-recursive) pattern through the link worked before and must
+    # keep working.
+    assert len(find_p_files(root, "MR/*.p")) == 2
+
+
+def test_find_p_files_still_filters_what_it_always_did(tmp_path):
+    from odas_tpw.perturb.discover import find_p_files
+
+    (tmp_path / "keep.p").write_bytes(b"x")
+    (tmp_path / ".hidden.p").write_bytes(b"x")
+    (tmp_path / "thing_original.p").write_bytes(b"x")
+    (tmp_path / "notap.q").write_bytes(b"x")
+    assert {p.name for p in find_p_files(tmp_path)} == {"keep.p"}
+
+
+def test_a_perturb_config_handed_to_fp07_cal_is_named_as_such():
+    """The two configs share `files.p_file_root`, so the mix-up gets far
+    enough to look plausible before failing on a missing section."""
+    from odas_tpw.fp07cal.cli import _load_reference
+
+    with pytest.raises(ValueError, match="looks like a perturb config"):
+        _load_reference({"files": {}, "epsilon": {}, "chi": {}, "hotel": {}})
+
+
+def test_a_config_merely_missing_reference_gets_the_plain_message():
+    from odas_tpw.fp07cal.cli import _load_reference
+
+    with pytest.raises(ValueError, match="no `reference:` block"):
+        _load_reference({"files": {}})
+
+
+def test_non_overlapping_reference_and_p_files_are_flagged():
+    """Zero pairs reported as 'sparse coverage' hides a wrong reference file.
+
+    Caught in the wild: an osu685 MicroRider (2025) against a hotel file built
+    from ru33 (2021). Coverage reported a 42.5% duty cycle, which was true of
+    the reference alone and irrelevant.
+    """
+    from odas_tpw.fp07cal.cli import _overlap_warning
+    from odas_tpw.fp07cal.series import ReferenceSeries
+
+    class _P:
+        def __init__(self, lo, hi):
+            self.time = np.array([lo, hi])
+
+    ref = ReferenceSeries(
+        time=np.array([1.633e9, 1.634e9]), value=np.array([20.0, 21.0])
+    )
+    assert "do not overlap" in _overlap_warning([_P(1.738e9, 1.744e9)], ref)
+    assert _overlap_warning([_P(1.6335e9, 1.6338e9)], ref) == ""
+    assert _overlap_warning([], ref) == ""
+
+
+def test_files_exclude_drops_named_p_files(tmp_path):
+    """A deployment usually has a file the glider never finished writing.
+
+    `patch` is all-or-nothing by design -- a half-patched deployment is worse
+    than an unpatched one -- so one 0-byte file blocked all 1228. Naming it
+    beats a tolerate-N-failures counter: a NEW bad file still stops the run.
+    """
+    from odas_tpw.fp07cal.cli import _gather_paths
+
+    for name in ("good_0001.p", "good_0002.p", "junk_0647.p"):
+        (tmp_path / name).write_bytes(b"x")
+    cfg = {
+        "files": {
+            "p_file_root": str(tmp_path),
+            "p_file_pattern": "*.p",
+            "output_dir": str(tmp_path / "out"),
+            "exclude": ["junk_0647.p"],
+        }
+    }
+    assert {p.name for p in _gather_paths(cfg)} == {"good_0001.p", "good_0002.p"}
+
+
+def test_files_exclude_absent_is_a_no_op(tmp_path):
+    from odas_tpw.fp07cal.cli import _gather_paths
+
+    (tmp_path / "a.p").write_bytes(b"x")
+    cfg = {"files": {"p_file_root": str(tmp_path), "p_file_pattern": "*.p",
+                     "output_dir": str(tmp_path / "out")}}
+    assert len(_gather_paths(cfg)) == 1

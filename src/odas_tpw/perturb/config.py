@@ -68,6 +68,20 @@ DEFAULTS: dict[str, dict] = {
         # Flipped: an edge-held constant outside the source's coverage
         # correlates with nothing and is not a measurement.
         "extrapolate": False,
+        # [s] ADDED to the hotel file's timestamps to put them on the
+        # instrument's clock. A MicroRider takes its time from the science
+        # computer once, at file open, and then free-runs, so two
+        # unsynchronised clocks is the normal case. `fp07-cal fit` measures the
+        # offset from pressure against pressure (clock_offset_s in
+        # coefficients.json) with no thermal physics involved.
+        #
+        # SIGN: clock_offset_s is positive when the hotel timestamps run AHEAD
+        # of the instrument's, so set time_offset = -clock_offset_s.
+        # 0.0 means "the two clocks agree", which is an assertion, not a
+        # default to leave unexamined: on osu684 the offset was +5.06 s, and at
+        # a 0.27 dbar/s climb that puts every merged CTD sample 1.4 dbar from
+        # where it was taken.
+        "time_offset": 0.0,
     },
     "profiles": {
         "P_min": 0.5,

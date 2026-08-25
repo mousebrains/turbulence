@@ -27,7 +27,7 @@ def find_p_files(root: str | Path, pattern: str = "**/*.p") -> list[Path]:
     """
     root = Path(root)
     results = []
-    for p in root.glob(pattern):
+    for p in glob_paths(root, pattern):
         if not p.is_file():
             continue
         if p.suffix.lower() != ".p":
@@ -38,3 +38,25 @@ def find_p_files(root: str | Path, pattern: str = "**/*.p") -> list[Path]:
             continue
         results.append(p)
     return sorted(results)
+
+
+def glob_paths(root: Path, pattern: str) -> list[Path]:
+    """``root``/``pattern`` -> paths, **following symlinked directories**.
+
+    ``Path.glob`` does not traverse a symlinked directory with ``**``, and it
+    says nothing when it declines to: a deployment whose data is symlinked in
+    (``MR -> /Volumes/.../osu685/MR``, which is how a big dataset is normally
+    kept off the local disk) matched zero files under the default
+    ``**/*.p`` while ``ls MR/*.p`` showed 1228. The stdlib ``glob`` module
+    does follow them, and matches what a shell would do -- which is what
+    someone writing a glob into a config expects.
+
+    Python 3.13 added ``Path.glob(..., recurse_symlinks=True)``, but 3.12 is
+    still supported here, so use ``glob`` for both.
+    """
+    import glob as globmod
+
+    return [
+        Path(root) / rel
+        for rel in globmod.glob(pattern, root_dir=str(root), recursive=True)
+    ]

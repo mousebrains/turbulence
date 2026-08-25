@@ -712,3 +712,93 @@ def test_live_full_deployment_matches_the_notebook():  # pragma: no cover
     assert stats["n_kept"] == 346_518
     assert times[0] == pytest.approx(1633113400.37739)
     assert times[-1] == pytest.approx(1634738980.72214)
+
+
+# ------------------------------------------- clamping to declared coverage
+_COVERAGE_DAS = (
+    'Attributes {\n  NC_GLOBAL {\n'
+    '    String time_coverage_start "2021-10-01T18:41:12Z";\n'
+    '    String time_coverage_end "2021-10-20T14:11:40Z";\n  }\n}\n'
+)
+
+
+def test_das_coverage_is_parsed():
+    from odas_tpw.erddap.fetch import das_coverage
+
+    lo, hi = das_coverage(_COVERAGE_DAS)
+    assert iso(lo) == "2021-10-01T18:41:12Z"
+    assert iso(hi) == "2021-10-20T14:11:40Z"
+
+
+def test_das_coverage_is_none_when_undeclared():
+    from odas_tpw.erddap.fetch import das_coverage
+
+    assert das_coverage("Attributes {\n}\n") == (None, None)
+
+
+def test_plan_is_clamped_to_what_the_dataset_actually_holds():
+    """`time_max: null` means "to now", which over a finished deployment
+    planned 256 weekly windows into the present day -- 253 of them empty, and
+    an empty window still costs a row-count request that downloads a
+    400,000-line CSV. The .das already says where the data stops."""
+    from odas_tpw.erddap.fetch import das_coverage
+
+    cfg = _cfg()
+    cfg["fetch"]["time_min"] = "2021-10-01T00:00:00Z"
+    cfg["fetch"]["time_max"] = None  # -> now
+    cfg["fetch"]["chunk_days"] = 7  # as the shipped example ships it
+    unclamped = plan_requests(cfg, now=1782000000.0)  # ~2026
+    clamped = plan_requests(cfg, now=1782000000.0, coverage=das_coverage(_COVERAGE_DAS))
+    assert len(unclamped) > 200
+    assert len(clamped) == 3
+    assert clamped[0]["start"] == "2021-10-01T18:41:12Z"
+    assert clamped[-1]["end"] == "2021-10-20T14:11:40Z"
+
+
+def test_clamping_never_widens_a_deliberately_narrow_window():
+    from odas_tpw.erddap.fetch import das_coverage
+
+    cfg = _cfg()
+    cfg["fetch"]["time_min"] = "2021-10-05T00:00:00Z"
+    cfg["fetch"]["time_max"] = "2021-10-07T00:00:00Z"
+    plan = plan_requests(cfg, coverage=das_coverage(_COVERAGE_DAS))
+    assert plan[0]["start"] == "2021-10-05T00:00:00Z"
+    assert plan[-1]["end"] == "2021-10-07T00:00:00Z"
+
+
+def test_a_window_outside_the_coverage_is_refused_with_the_range():
+    from odas_tpw.erddap.fetch import das_coverage
+
+    cfg = _cfg()
+    cfg["fetch"]["time_min"] = "2023-01-01T00:00:00Z"
+    cfg["fetch"]["time_max"] = "2023-02-01T00:00:00Z"
+    with pytest.raises(ValueError, match="does not overlap"):
+        plan_requests(cfg, coverage=das_coverage(_COVERAGE_DAS))
+
+
+# ------------------------------------- the count query must match the data
+def test_count_url_projects_the_same_columns_as_the_data_request():
+    """The truncation guard compares a .csv row count against the .nc's.
+
+    Server-side clauses can depend on the projection: `distinct()` dedupes
+    over the SELECTED columns. Counting a one-column `time` projection of a
+    four-variable request reported 438,777 rows against the .nc's 189,286 --
+    verified live -- and the guard rejected a perfectly good download.
+    """
+    from odas_tpw.erddap.query import count_url
+
+    variables = ["sci_ctd41cp_timestamp", "sci_water_temp"]
+    data = tabledap_url(
+        "https://e.org", "d", variables, window=(T0, T0 + 60), constraints=["distinct()"]
+    )
+    count = count_url(
+        "https://e.org", "d", variables, window=(T0, T0 + 60), constraints=["distinct()"]
+    )
+    # Identical but for the format: same columns, same constraints, same window.
+    assert count == data.replace(".nc?", ".csv?")
+
+
+def test_plan_requests_count_url_carries_the_full_variable_list():
+    plan = plan_requests(_cfg())
+    for name in _cfg()["fetch"]["variables"]:
+        assert name in plan[0]["count_url"]

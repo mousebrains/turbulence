@@ -1,6 +1,8 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Tests for perturb.cli — subcommand argument parsing and init."""
 
+import argparse
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -349,3 +351,43 @@ class TestCmdCtd:
             main(["ctd", "/nonexistent_xyz/*.p"])
         called_config = mock_rp.call_args[0][0]
         assert called_config["ctd"]["enable"] is True
+
+
+def test_trim_passes_its_positional_files_through(monkeypatch, tmp_path):
+    """`perturb trim -c cfg one/file.p` must trim THAT file.
+
+    The parser advertises `FILE ...` for trim exactly as for run, but the
+    handler called run_trim(config, jobs=jobs) and dropped them -- so the
+    command silently operated on the whole configured root instead.
+    """
+    from odas_tpw.perturb import cli
+
+    target = tmp_path / "AIOP2_SL685_0100.p"
+    target.write_bytes(b"x")
+    seen = {}
+
+    def _fake_run_trim(config, p_files=None, *, jobs=1, errors=None):
+        seen["p_files"] = p_files
+        return []
+
+    monkeypatch.setattr("odas_tpw.perturb.pipeline.run_trim", _fake_run_trim)
+    monkeypatch.setattr(cli, "_load_and_merge", lambda _c: {"files": {}, "parallel": {}})
+    monkeypatch.setattr(cli, "_install_logging", lambda *a, **k: tmp_path / "log")
+
+    args = argparse.Namespace(
+        config=None, p_file_root=None, output=None, jobs=1,
+        files=[str(target)], stdout=False, log_level="INFO",
+    )
+    cli._cmd_trim(args)
+    assert seen["p_files"] == [target]
+
+
+def test_cli_module_is_runnable_with_dash_m():
+    """`python -m odas_tpw.perturb.cli` imported the module and exited 0 with
+    no output, which reads exactly like "it ran and found nothing"."""
+    source = (
+        Path(cli_module_path := __import__(
+            "odas_tpw.perturb.cli", fromlist=["x"]
+        ).__file__)
+    ).read_text()
+    assert '__name__ == "__main__"' in source, cli_module_path

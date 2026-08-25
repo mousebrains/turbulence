@@ -1,0 +1,75 @@
+# dinkum-hotel — RU33 glider CTD -> hotel file for the MR tree.
+#
+#   dinkum-hotel build -c Rutgers/dinkum-hotel.yaml
+#
+# Input is already a NetCDF (Rutgers' delayed-mode QC'd trajectory subset), not
+# Dinkum binary, so `reader: netcdf` is used. It still goes through this tool
+# rather than straight into perturb, for three reasons:
+#   * the time base needs the same sanitising as any Slocum record (non-finite,
+#     out-of-range, duplicate timestamps);
+#   * the unit conversions belong in ONE place, here, not repeated in the
+#     perturb and fp07-cal configs where they would drift apart;
+#   * it produces the same artifact as every other deployment, so the perturb
+#     side is identical whether the CTD came from Dinkum files or from ERDDAP.
+#
+# Coverage: 2021-10-01 18:36 -> 2021-10-20 14:09 UTC, 346 518 samples.
+# The MR tree (2021-10-11 18:20 -> 2021-10-12 09:54) sits well inside it.
+
+files:
+  root: "<CONFIG_DIR>/Glider"
+  patterns:
+    - "ru33-*-nb-qc.nc"
+  exclude: []
+  cache: null                 # not needed: NetCDF carries its own variable list
+  output: "<CONFIG_DIR>/hotel.nc"
+  reader: "netcdf"
+  skip_first_record: false    # not a Dinkum file; there is no partial first record
+  max_skipped: 0
+
+time:
+  # The CTD's own print-arrival clock, exactly as on the OSU gliders.
+  base: "sci_ctd41cp_timestamp"
+  # Pinned rather than null: the null ceiling is "now + 365 days" and moves
+  # between runs. RU33 deployment 20211001T1841.
+  min_value: "2021-09-01T00:00:00Z"
+  max_value: "2021-11-01T00:00:00Z"
+  dedupe: "mean"
+
+projection:
+  method: "linear"
+  # The CTD prints at ~1 Hz while pumped. 30 s blanks the surface intervals
+  # rather than ruling a straight line across them.
+  max_gap: 30.0
+  extrapolate: false
+
+sensors:
+  # Source names kept unchanged: perturb's ct/ctd/fp07 blocks name them.
+  # valid_min/valid_max are in SOURCE units, checked BEFORE `scale`.
+  sci_water_temp:
+    units: "degree_Celsius"
+    valid_min: 0.0            # degC; observed 11.2-22.0 on the NJ shelf
+    valid_max: 35.0
+  sci_water_cond:
+    scale: 10.0               # S/m -> mS/cm
+    units: "mS/cm"
+    valid_min: 1.0            # S/m. Observed 3.58-4.97; 1.0 rejects a
+    valid_max: 7.0            # pump-off / never-set 0.0 without touching data.
+  sci_water_pressure:
+    scale: 10.0               # bar -> dbar
+    units: "dbar"
+    valid_min: -0.2           # bar. Observed -0.005 .. 4.970 bar (0-49.7 dbar);
+    valid_max: 20.0           # 20 bar is generous for 40 m of shelf water.
+
+netcdf:
+  title: "RU33 glider CTD hotel file (Oct 2021, MicroRider MR410)"
+  summary: >
+    Pumped CTD (temperature, conductivity, pressure) from Rutgers Slocum glider
+    RU33, deployment 20211001T1841, on the CTD's own print-arrival clock.
+    Built from the delayed-mode QC'd trajectory subset supplied by Rutgers.
+    Consumed by fp07-cal as the in-situ temperature reference and by perturb's
+    hotel merge for the MicroRider MR410 turbulence processing.
+  institution: "Rutgers University"
+  source: "ru33-20211001T1841-trajectory-raw-delayed-subset-nb-qc.nc"
+  platform: "Slocum glider RU33"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"

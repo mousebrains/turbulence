@@ -128,8 +128,17 @@ def _decoded_file_count(ds: xr.Dataset) -> int | None:
     return None
 
 
-def _open_netcdf(paths: Sequence[Path]) -> tuple[xr.Dataset, int | None]:
-    """Open NetCDF inputs. Returns ``(dataset, n_files_decoded)``."""
+def _open_netcdf(
+    paths: Sequence[Path], to_keep: Sequence[str] | None = None
+) -> tuple[xr.Dataset, int | None]:
+    """Open NetCDF inputs. Returns ``(dataset, n_files_decoded)``.
+
+    *to_keep* subsets the variables **lazily**, before anything is read off
+    disk, so a full Slocum sensor list (~2000 wide) never has to be
+    materialized to get at the dozen sensors the hotel file wants. Names not
+    present are ignored: a sensor can legitimately be in the flight files and
+    absent from the science files.
+    """
     dss = []
     n_decoded: int | None = 0
     for p in paths:
@@ -147,7 +156,11 @@ def _open_netcdf(paths: Sequence[Path]) -> tuple[xr.Dataset, int | None]:
         n_here = _decoded_file_count(ds)
         n_decoded = None if (n_here is None or n_decoded is None) else n_decoded + n_here
         dim = _record_dim(ds)
-        dss.append(_drop_metadata_vars(ds, dim).rename({dim: "record"}))
+        sub = _drop_metadata_vars(ds, dim)
+        if to_keep is not None:
+            keep = [v for v in to_keep if v in sub.data_vars]
+            sub = sub[keep]
+        dss.append(sub.rename({dim: "record"}))
     if len(dss) == 1:
         return dss[0], n_decoded
     # join="outer": a sensor present in the science files but not the flight
@@ -166,12 +179,37 @@ _CACHE_HINT = (
 )
 
 
-def _skipped_files(requested: Sequence[Path], n_decoded: int, detail: str = "") -> RuntimeError:
-    """Build the error for *requested* files of which only *n_decoded* loaded."""
+_CORRUPT_MARKERS = ("empty or invalid header", "invalid header", "truncated")
+
+
+def _skipped_files(
+    requested: Sequence[Path], n_decoded: int, detail: str = "", max_skipped: int = 0
+) -> RuntimeError:
+    """Build the error for *requested* files of which only *n_decoded* loaded.
+
+    A cache miss and a corrupt file need different advice, and blaming the
+    cache for a bad header sends the reader looking in the wrong place. Seen
+    on osu685: one file of 1576 held 18 kB of garbage where the ASCII header
+    belongs (and was dated 1979), and the message told the user to check their
+    cache directory, which was fine.
+    """
+    n_missing = len(requested) - n_decoded
+    corrupt = any(m in detail.lower() for m in _CORRUPT_MARKERS)
+    _ = max_skipped
     msg = (
-        f"Decoded {n_decoded} of {len(requested)} Dinkum file(s); the rest were "
-        f"skipped by the reader. " + _CACHE_HINT
+        f"Decoded {n_decoded} of {len(requested)} Dinkum file(s); "
+        f"{n_missing} skipped by the reader. "
     )
+    if corrupt:
+        msg += (
+            "At least one is CORRUPT rather than uncached -- the reader could not "
+            "read its header at all. A single bad file among many is usually a "
+            "failed flash read or transfer, not a configuration problem: check "
+            "the file's size and date, and if it is junk, exclude it "
+            "(files.exclude) or raise files.max_skipped to tolerate it."
+        )
+    else:
+        msg += _CACHE_HINT
     if detail:
         msg += f"\nReader said: {detail}"
     return RuntimeError(msg)
@@ -183,6 +221,7 @@ def _open_xarray_dbd(
     to_keep: list[str] | None,
     skip_first_record: bool,
     repair: bool,
+    max_skipped: int = 0,
 ) -> xr.Dataset:
     import warnings
 
@@ -207,8 +246,13 @@ def _open_xarray_dbd(
     for w in caught:
         logger.warning("xarray-dbd: %s", w.message)
     n_decoded = _decoded_file_count(ds)
+    if n_decoded is not None and (len(paths) - n_decoded) > max_skipped:
+        raise _skipped_files(paths, n_decoded, notes, max_skipped)
     if n_decoded is not None and n_decoded < len(paths):
-        raise _skipped_files(paths, n_decoded, notes)
+        logger.warning(
+            "tolerating %d undecodable file(s) (files.max_skipped=%d): %s",
+            len(paths) - n_decoded, max_skipped, notes or "no detail",
+        )
     dim = _record_dim(ds)
     out = _drop_metadata_vars(ds, dim).rename({dim: "record"})
     out.attrs["n_files"] = n_decoded if n_decoded is not None else len(paths)
@@ -221,6 +265,7 @@ def _open_dbd2netcdf(
     to_keep: list[str] | None,
     skip_first_record: bool,
     repair: bool,
+    max_skipped: int = 0,
 ) -> xr.Dataset:
     exe = shutil.which("dbd2netCDF")
     if exe is None:  # pragma: no cover - guarded by resolve_backend
@@ -240,12 +285,26 @@ def _open_dbd2netcdf(
             cmd += ["--skipAll"]
         if repair:
             cmd += ["--repair"]
-        if to_keep:
-            # -k takes a file of sensor names to emit; trimming here keeps the
-            # temporary NetCDF small (a full Slocum sensor list is ~2000 wide).
-            sensor_file = tmpdir / "sensors.txt"
-            sensor_file.write_text("\n".join(to_keep) + "\n")
-            cmd += ["--sensorOutput", str(sensor_file)]
+        # NOTE: dbd2netCDF's own sensor filter (--sensorOutput) is NOT used.
+        # In 1.7.5 it indexes the kept-sensor array with the FILE's sensor
+        # index instead of mapping file index -> kept index, so any record
+        # mentioning a sensor whose file index is >= len(kept) aborts the run:
+        #
+        #   $ printf 'sci_water_temp\n' > s.txt
+        #   $ dbd2netCDF --strict --cache c --sensorOutput s.txt -o x.nc f.ebd
+        #   error: Sensor 'sci_badd_error' has out-of-range index 1,
+        #          not in [0, 1). The sensor cache and the data file disagree
+        #          on the sensor list.
+        #
+        # The bound always equals the number of sensors kept, and passing the
+        # file's COMPLETE sensor list succeeds — which is what identifies it as
+        # an indexing bug rather than a genuine cache/file disagreement. The
+        # misleading "cache and data file disagree" text sent us to the cache
+        # first; it was fine.
+        #
+        # So decode every sensor and subset lazily on the way back in
+        # (_open_netcdf's to_keep), which costs temp-file bytes on disk but
+        # never materializes the wide array in memory.
         cmd += [str(p) for p in paths]
 
         logger.info("running %s on %d file(s)", Path(exe).name, len(paths))
@@ -262,13 +321,18 @@ def _open_dbd2netcdf(
                 logger.warning("dbd2netCDF: %s", line.strip())
         if not out_nc.exists():
             raise RuntimeError("dbd2netCDF produced no output file")
-        # Materialize before the temp dir evaporates.
-        ds, n_decoded = _open_netcdf([out_nc])
+        # Subset lazily, then materialize before the temp dir evaporates.
+        ds, n_decoded = _open_netcdf([out_nc], to_keep)
         ds = ds.load()
         if n_decoded is None:
             n_decoded = len(paths) - len(skipped)
+        if (len(paths) - n_decoded) > max_skipped or (skipped and not max_skipped):
+            raise _skipped_files(paths, n_decoded, "; ".join(skipped), max_skipped)
         if skipped or n_decoded < len(paths):
-            raise _skipped_files(paths, n_decoded, "; ".join(skipped))
+            logger.warning(
+                "tolerating %d undecodable file(s) (files.max_skipped=%d): %s",
+                len(paths) - n_decoded, max_skipped, "; ".join(skipped) or "no detail",
+            )
         ds.attrs["n_files"] = n_decoded
         return ds
 
@@ -281,6 +345,7 @@ def load_dinkum(
     sensors: Sequence[str] | None = None,
     skip_first_record: bool = True,
     repair: bool = False,
+    max_skipped: int = 0,
 ) -> xr.Dataset:
     """Read Dinkum files into one Dataset on a ``record`` dimension.
 
@@ -326,7 +391,7 @@ def load_dinkum(
 
     n_decoded: int | None
     if resolved == "netcdf":
-        ds, n_decoded = _open_netcdf(file_paths)
+        ds, n_decoded = _open_netcdf(file_paths, to_keep)
         if n_decoded is None:
             n_decoded = len(file_paths)
     elif resolved == "xarray-dbd":
