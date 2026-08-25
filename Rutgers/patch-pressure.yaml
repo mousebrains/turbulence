@@ -1,0 +1,40 @@
+# rsi-tpw patch-config — remove the MicroRider pressure ZERO offset.
+#
+#   rsi-tpw patch-config Rutgers/fp07cal/patched/*.p \
+#       --edits Rutgers/patch-pressure.yaml --out Rutgers/MR_final/ --batch-cal
+#
+# MEASURED, not assumed. Regressing MR pressure against the glider's delayed-
+# mode QC'd CTD over the whole MR record, using only MR samples within 3 s of a
+# real CTD sample (interpolating across the CTD's pumped-off gaps was what made
+# an earlier attempt read -6.27 dbar at r = 0.94):
+#
+#     MR_P = 1.00254 * CTD_P - 5.548      n = 27 640,  r = 0.999864
+#     residual sd 0.203 dbar, MAD 0.113 dbar
+#
+# Two things that make it a ZERO error rather than anything else:
+#   * the scale is unity to +0.25%, which independently confirms the earlier
+#     coef2 fix (1.5879e8 -> 1.5879e-8) is right;
+#   * the difference is CONSTANT with depth -- -5.551, -5.498, -5.501, -5.502,
+#     -5.516, -5.518, -5.525, -5.493 dbar across 5 dbar bins from 0 to 45.
+#     A geometry or scale error would trend; this does not.
+#
+# So: coef0 = -7.4 + 5.548 = -1.852.
+#
+# PROVENANCE, from the file's own comment on that line:
+#     coef0 = -7.4 ;offset reading to zero.  -0.70(coef0) - 6.7(p.ch. reading)= -7.4
+# so -7.4 is Rockland's sensor coefficient (-0.70) plus a -6.7 dbar bench
+# reading taken to zero it at the surface. The zero has since drifted by
+# +5.55 dbar: the equivalent bench term at deployment time was -1.15, not -6.7.
+# Strain-gauge zero drift is ordinary; this is a re-zeroing against the CTD,
+# not a claim that the original calibration was wrong.
+#
+# It does NOT affect dP/dt, so speed, profile detection and the angle-of-attack
+# work are all unchanged. What it fixes is absolute depth -- 5.5 m in a 40 m
+# water column, i.e. 14%, which would otherwise corrupt every depth bin.
+
+note: "Pressure zero offset -5.548 dbar measured against RU33's delayed-mode QC'd CTD (n=27640, r=0.999864, constant with depth); coef0 -7.4 -> -1.852"
+author: "Pat Welch"
+
+channels:
+  P:
+    coef0: "-1.852"

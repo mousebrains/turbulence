@@ -1,0 +1,170 @@
+# GENERATED from perturb.yaml — the flight-model COMPARISON arm.
+# Only speed.method (em -> flight, aoa_deg 6.2) and output_root differ.
+# perturb — MicroRider MR410 on Rutgers RU33, 2021-10-11/12 (the MR/ tree).
+#
+#   perturb run -c Rutgers/perturb.yaml
+#
+# The flight-model comparison arm differs in ONE block; generate it with:
+#   sed -e 's/method: "em"/method: "flight"/' \
+#       -e 's|MR_results|MR_results_flight|' \
+#       Rutgers/perturb.yaml > Rutgers/perturb-flight.yaml
+#   # then uncomment aoa_deg/min_pitch_deg in the speed block
+#
+# INPUT is Rutgers/MR_final/ — the .p files after BOTH patches:
+#   1. fp07-cal patch : in-situ Steinhart-Hart (see fp07-cal.yaml)
+#   2. patch-config   : pressure zero, coef0 -7.4 -> -1.852 (see patch-pressure.yaml)
+# The un-patched originals are in MR/original/, the intermediates in MR/ and
+# fp07cal/patched/.
+#
+# Settings carried over from the earlier dat_0377 run (dat_0377/perturb.yaml)
+# because their justification still holds — above all fft_sec: 2.0, which was
+# measured on this platform, not guessed. See that file's header for the
+# twin-run numbers.
+
+files:
+  p_file_root: "<CONFIG_DIR>/MR_final"
+  p_file_pattern: "*.p"
+  output_root: "<CONFIG_DIR>/MR_results_flight"
+  trim: false            # perturb trim finds nothing to do on these
+  merge: false           # each file is ~2.1 h of continuous yos, not a split record
+
+# ---------------------------------------------------------------------------
+# Glider CTD, from the delayed-mode QC'd trajectory subset via dinkum-hotel.
+# ---------------------------------------------------------------------------
+hotel:
+  enable: true
+  file: "<CONFIG_DIR>/hotel.nc"
+  time_column: "sci_ctd41cp_timestamp"
+  time_format: "epoch"
+  # -1.45 s = -(fp07-cal clock_offset_s). clock_offset_s is POSITIVE when the
+  # hotel timestamps run AHEAD of the instrument's, and time_offset is ADDED to
+  # them, so the sign flips. Measured from CTD pressure against MR pressure, no
+  # thermal physics involved. Much smaller than osu684's +5.06 s.
+  time_offset: -1.45
+  max_gap: 30.0          # the CTD prints ~0.5 Hz while pumped and stops between
+                         # yos; do not rule a line across a surface interval
+  extrapolate: false
+  interpolation: "pchip"
+  channels:
+    sci_water_temp:
+      units: "degree_Celsius"
+      fast: false        # MUST land on the slow grid: the stratification and
+                         # seawater-property injectors need T, C and P together
+    sci_water_cond:
+      units: "mS/cm"     # NO scale: dinkum-hotel already did S/m -> mS/cm
+      fast: false
+  fast_channels: []
+
+# Position. hotel.nc carries no lat/lon (the Rutgers NetCDF is CTD-only), so it
+# comes from the CSV that the earlier run used; it covers 2021-09-16 -> 10-20
+# and holds 13 605 rows inside this MR window (38.811-38.880 N, -73.978 to
+# -73.888 E, i.e. the New Jersey shelf).
+gps:
+  source: "csv"
+  file: "<CONFIG_DIR>/dat_0377/RU33_glider_data_for_zissou.csv"
+  time_col: "datetime"
+  lat_col: "latitude"
+  lon_col: "longitude"
+  max_time_diff: 600
+
+# ---------------------------------------------------------------------------
+# Slow, shallow, BOTH-LEG glider profiling.
+# ---------------------------------------------------------------------------
+profiles:
+  # 2.0 dbar, not the old 0.5: the pressure zero is now corrected, so 0.5 dbar
+  # really means 0.5 m (it used to mean 6 m) and would sit in the wave-worked
+  # surface layer.
+  P_min: 2.0
+  W_min: 0.05            # RU33 flies |W| ~ 0.15 dbar/s; the batch default of
+                         # 0.3 would reject every leg
+  direction: "glide"     # BOTH legs. This is the whole point of RU33: unlike
+                         # the OSU gliders, which run the MR on climbs only, it
+                         # records dives and climbs, ~50/50.
+  min_duration: 60.0     # real legs here are 150-260 s; 60 s drops inflection
+                         # fragments without touching a genuine half-cycle
+
+fp07:
+  calibrate: false       # MR_final/*.p ALREADY carry the in-situ coefficients
+
+ct:
+  align: false           # no JAC CT on this MicroRider; the glider's pumped CT
+                         # is merged in, already aligned on its own clock
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+# ---------------------------------------------------------------------------
+# Through-water speed. THE ONE BLOCK THAT DIFFERS between the two arms.
+# ---------------------------------------------------------------------------
+speed:
+  # "em" is the primary product here. Unlike the OSU deployments, RU33's EM
+  # reading is self-consistent with a PHYSICAL angle of attack: taking it at
+  # face value gives alpha = +6.2 +/- 1.0 deg, and the dive and climb agree to
+  # 0.36 +/- 0.26 deg at the same |pitch|. Nothing needs correcting.
+  method: "flight"
+  aoa_deg: 6.2
+  min_pitch_deg: 5.0
+  # For the comparison arm, switch to:
+  #   method: "flight"
+  #   aoa_deg: 6.2         # MEASURED on this deployment (192 profiles), not the
+  #                        # ODAS default of 3. Note it is a leg-average of a
+  #                        # quantity still settling: alpha rises ~1 deg/100 s
+  #                        # through each leg, so no single value is exact.
+  #   min_pitch_deg: 5.0
+  speed_cutout: 0.05
+  tau: null              # null -> the slocum_glider default (3.0 s)
+
+# ---------------------------------------------------------------------------
+# Dissipation. fft_sec 2.0 is EMPIRICAL for this platform -- see the header of
+# dat_0377/perturb.yaml for the twin-run measurement (+11-18% recovery at
+# eps~1e-8). Salinity now comes from the real merged CTD (T and C), not from
+# the CSV's precomputed salinity column.
+# ---------------------------------------------------------------------------
+epsilon:
+  fft_sec: 2.0
+  salinity: "measured"   # from ct.T_name / ct.C_name above
+
+chi:
+  enable: true
+  use_epsilon: false     # Method 2: shear epsilon is vibration-contaminated on
+                         # a glider, so it is a poor seed for the kB fit
+  fft_sec: 2.0
+  salinity: "measured"
+  mixing: true           # N2 / dTdz / K_T / Gamma / K_rho on the chi grid
+
+stratification:
+  enable: true
+  salinity: "measured"
+  window: 2.0
+
+ctd:
+  enable: true           # the glider's pumped CT is merged, so seawater
+                         # properties (SP/SA/CT/sigma0/rho) are available
+
+bottom:
+  enable: false          # a commanded glider does not bottom-crash like a
+                         # free-falling VMP -- though note it reaches 39 m in
+                         # ~40 m of water, so re-check if profiles end abruptly
+top_trim:
+  enable: false          # no prop-wash on a glider
+
+binning:
+  width: 0.5             # 0.5 m over a 0-39 m column = ~78 bins
+
+netcdf:
+  title: "RU33 Slocum glider MicroRider MR410 turbulence (Oct 2021)"
+  summary: >
+    Turbulent kinetic energy dissipation (epsilon) and thermal variance
+    dissipation (chi) from a Rockland MicroRider MR1000EM SN 410 on Rutgers
+    Slocum glider RU33, New Jersey shelf, 2021-10-11/12. FP07 thermistors
+    calibrated in situ against the glider's pumped CTD; MicroRider pressure
+    re-zeroed against the same CTD. Both dive and climb legs are processed.
+  institution: "Rutgers University / Oregon State University"
+  platform: "RU33 Slocum glider"
+  instrument: "Rockland MicroRider MR1000EM SN 410"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"
+  geospatial_vertical_positive: "down"
+  Conventions: "CF-1.13, ACDD-1.3"
+
+parallel:
+  jobs: 0

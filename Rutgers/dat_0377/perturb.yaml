@@ -1,0 +1,128 @@
+# perturb configuration — Rutgers RU33 Slocum glider MicroRider
+# Instrument: MR1000EM SN410 (fast FP07 thermistors T1/T2, shear sh1/sh2, EM
+# flowmeter U_EM; NO onboard JAC conductivity/temperature).
+# Data:  dat_0377.p  +  RU33_glider_data_for_zissou.csv (glider CTD hotel feed:
+#        datetime[epoch s], temperature, salinity, latitude, longitude).
+#
+# Glider-specific choices (differ from a free-falling VMP):
+#   * profiles.W_min lowered to 0.05 dbar/s — a glider's vertical rate never
+#     reaches the VMP-tuned batch default of 0.3, so every cast would be rejected.
+#   * direction "glide" (both down and up legs).
+#   * speed from the EM flowmeter (U_EM), not |dP/dt|.
+#   * salinity for viscosity AND N2 comes from the merged glider CTD ("hotel"),
+#     since there is no onboard conductivity.
+#   * temperature reference is T1 (no JAC_T); no CT sensor to align; no CTD
+#     product; no bottom-crash detection.
+#   * chi seeded by a pure spectral fit (Method 2) — shear epsilon is
+#     vibration-contaminated on a glider.
+#
+# NOTE: dat_0377.p must be the pressure-patched copy (coef2 1.5879e8 -> 1.5879e-8)
+# and carry vehicle=slocum_glider; the file in this directory already is.
+
+files:
+  p_file_root: "<CONFIG_DIR>"
+  p_file_pattern: "*.p"
+  output_root: "<CONFIG_DIR>/VMP_results"
+
+# ---------------------------------------------------------------------------
+# External glider telemetry, merged onto the .p time grid by absolute time.
+# The .p start (2021-10-17) sits inside the CSV span (2021-09-16..10-20).
+# ---------------------------------------------------------------------------
+hotel:
+  enable: true
+  file: "<CONFIG_DIR>/RU33_glider_data_for_zissou.csv"
+  time_column: "datetime"   # epoch seconds
+  time_format: "auto"       # auto-detects epoch (median ~1.63e9); or set "epoch"
+
+# Position from the same glider CSV (epoch-second time), for maps/sections and
+# TEOS-10 absolute salinity. Small effect on N2, but correct and cheap.
+gps:
+  source: "csv"
+  file: "<CONFIG_DIR>/RU33_glider_data_for_zissou.csv"
+  time_col: "datetime"
+  lat_col: "latitude"
+  lon_col: "longitude"
+
+# ---------------------------------------------------------------------------
+# Slow, glider-style profiling.
+# ---------------------------------------------------------------------------
+profiles:
+  P_min: 0.5
+  W_min: 0.05             # dbar/s — REQUIRED: batch default 0.3 rejects gliders
+  direction: "glide"      # catch both down and up legs
+  min_duration: 7.0
+
+# Through-water speed from the EM flowmeter channel present in this file.
+# Alternative: method "flight" (inviscid model from pressure + inclinometers).
+speed:
+  method: "em"            # uses U_EM
+  # tau: null -> auto 3.0 s from vehicle=slocum_glider
+
+# ---------------------------------------------------------------------------
+# This MicroRider has no JAC CT sensor. Use the FP07 (T1) as the temperature
+# for stratification; there is nothing to CT-align.
+# ---------------------------------------------------------------------------
+ct:
+  align: false
+  T_name: "T1"            # no JAC_T on this instrument
+
+# No trustworthy onboard reference temperature for in-situ FP07 recalibration,
+# so use the factory Steinhart-Hart coefficients embedded in the .p config.
+# To instead calibrate against the glider CTD temperature, set:
+#   calibrate: true, reference: "temperature", must_be_negative: false
+# (a glider's sensor lag is not a simple fall) — verify the lag sign first.
+fp07:
+  calibrate: false
+
+# ---------------------------------------------------------------------------
+# Dissipation. Salinity for viscosity comes from the merged glider CTD.
+#
+# fft_sec 2.0 (not the 1.0 default): this glider is slow (U_EM ~0.20 m/s), so a
+# 1.0-s FFT spans only ~0.20 m -> lowest resolved wavenumber k_l ~5 cpm, which
+# under-resolves the shear-spectrum peak over most of the observed epsilon range
+# and biases epsilon low. 2.0 s -> ~0.40 m span, k_l ~2.5 cpm. A twin run on
+# dat_0377.p (diss window pinned at 8 s to isolate the FFT span) measured the
+# recovery: +11-18% at eps~1e-8, +5-9% at 1e-7, converging to parity above 1e-6;
+# systematic (MAD_log10 ~0.04). Because diss_sec (null = 4*fft = 8 s here) is
+# unchanged, this costs no vertical resolution -- only FFT sub-segments per
+# window (N_f 15 -> 7, still the ATOMIX Faroe value). The 2.3-m MR+glider body
+# raises the eddy-advection ceiling to fft_sec <= ~11.6 s, so 2.0 s is well
+# inside it. Do NOT drop below 1.0 s (worsens the bias); 2.5 s buys little more
+# and thins N_f to ~5. See docs/perturb/dissipation_length.md.
+# ---------------------------------------------------------------------------
+epsilon:
+  fft_sec: 2.0            # ~0.40 m span at U~0.20 m/s (see header note above)
+  salinity: "hotel"       # practical salinity from the hotel "salinity" channel
+
+chi:
+  enable: true
+  use_epsilon: false      # Method 2 (spectral fit): shear epsilon is
+                          # vibration-contaminated on a glider
+  fft_sec: 2.0            # match epsilon (same slow-platform span argument)
+  salinity: "hotel"
+  mixing: true            # N2/dTdz/K_T/Gamma/K_rho on the chi grid
+
+# Background N2 / dT/dz — same glider-CTD salinity as the viscosity above.
+stratification:
+  enable: true
+  salinity: "hotel"
+  window: 2.0
+
+# ---------------------------------------------------------------------------
+# Products/steps that don't apply to this instrument.
+# ---------------------------------------------------------------------------
+ctd:
+  enable: false           # no onboard conductivity -> no CTD product
+
+bottom:
+  enable: false           # gliders don't bottom-crash like a free-falling VMP
+
+# Shallow cast (a few to ~15 dbar): finer depth bins.
+binning:
+  width: 0.5
+
+netcdf:
+  title: "RU33 Slocum glider MicroRider (SN410) turbulence"
+  institution: "Rutgers University / Oregon State University"
+  platform: "RU33 Slocum glider"
+  instrument: "Rockland MicroRider MR1000EM SN410"

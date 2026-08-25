@@ -1,0 +1,99 @@
+# fp07-cal — in-situ FP07 calibration for MR410 on Rutgers RU33, Oct 2021.
+#
+#   fp07-cal coverage -c Rutgers/fp07-cal.yaml
+#   fp07-cal fit      -c Rutgers/fp07-cal.yaml
+#   fp07-cal patch    -c Rutgers/fp07-cal.yaml
+#
+# WHY IT IS NEEDED. T1 and T2 carry identical nominal Steinhart-Hart values
+# (beta_1 = 3143.55, beta_2 = 2.5e5, t_0 = 289.301), a blank cal_date, and
+# `sn = "T"` -- a placeholder, not a serial number. Two physically different
+# glass beads cannot share a calibration. Same pathology as osu684 (worth
+# +4.45 K and +8.15 K there) and osu685.
+#
+# WHAT IS DIFFERENT HERE, AND IT MATTERS. The MicroRider record is ONE NIGHT
+# (2021-10-11 18:20 -> 2021-10-12 09:54, 14.8 h recorded), and the CTD spans
+# only 16.2-21.0 degC over that window -- a 4.77 K lever arm, against 24 K on
+# osu685 and 21 K on osu684. Consequences:
+#   * `fit.order: auto` will almost certainly choose order 1. Over <8 degC the
+#     held-out test cannot justify a quadratic, and forcing one would fit noise.
+#   * beta_1 (a SLOPE) is weakly constrained by 4.77 K of range; t_0 (an
+#     OFFSET) is well constrained. Expect the fit to be mostly an offset
+#     correction, and read the beta_1 EIV bracket in the report accordingly.
+#   * The coefficients are valid over 16-21 degC and MUST NOT be extrapolated.
+#     RU33's full 18-day record spans 10.8 K; these coefficients describe less
+#     than half of it.
+
+files:
+  p_file_root: "<CONFIG_DIR>/MR"
+  p_file_pattern: "*.p"        # the 7 patched files; originals are in MR/original/
+  output_dir: "<CONFIG_DIR>/fp07cal"
+  max_fit_files: 100           # only 7 exist; everything is held at once
+
+reference:
+  # The hotel file built by dinkum-hotel from Rutgers' delayed-mode QC'd
+  # trajectory subset. Read on the CTD's own clock -- real samples only, never
+  # through perturb's hotel merge, so the calibration cannot depend on how a
+  # downstream merge is configured.
+  file: "<CONFIG_DIR>/hotel.nc"
+  time_var: "sci_ctd41cp_timestamp"
+  value_var: "sci_water_temp"
+  pressure_var: "sci_water_pressure"
+  # 1.0, NOT 10.0: dinkum-hotel already applied bar -> dbar when it built
+  # hotel.nc. Sanity check: the CTD reads 0.11-43.10 dbar over the MR window,
+  # which is right for ~40 m of New Jersey shelf.
+  pressure_scale: 1.0
+  valid_min: 0.0
+  valid_max: 35.0
+
+pairs:
+  max_gap: 30.0
+  kernel_width: null
+  # 0.7 s, the pumped-Seabird figure. ASSUMED here: RU33's glider config files
+  # were not supplied, so unlike osu684 (whose proglets.dat names a "CTD41CP
+  # Continuous Profile Unit", i.e. pumped) this cannot be verified from the
+  # data at hand. The sensor name sci_ctd41cp is not proof -- TWR's masterdata
+  # uses it for unpumped CTDs too, and an unpumped cell is slower and
+  # flow-dependent. Worth confirming with Rutgers.
+  kernel_tau: 0.7
+  min_speed: 0.05              # RU33 flies 0.15-0.35 m/s; well clear
+  require_profile: true
+
+channels: ["T1", "T2"]
+
+lag:
+  max_lag: 20.0
+  step: 0.25
+  # 60 s, NOT the usual 30. RU33 flies a shallow, WELL-MIXED autumn shelf: the
+  # top 25 dbar is isothermal to ~0.1 K and all the vertical structure sits in
+  # the bottom 15 dbar. A 15-30 s high-pass therefore discards the signal and
+  # keeps noise, and the sharpness gate correctly REFUSED the result:
+  #
+  #   detrend_s   lag       peak range   width    gate
+  #      15 s   +6.98 s       0.062      0.5 s   NOT TRUSTWORTHY
+  #      20 s   +7.00 s       0.070      0.5 s   NOT TRUSTWORTHY
+  #      30 s   +6.95 s       0.085      1.0 s   NOT TRUSTWORTHY
+  #      60 s   +6.77 s       0.139      2.0 s   ok
+  #     120 s   +6.74 s       0.143      2.5 s   ok
+  #
+  # This is a legitimate setting, not tuning until the gate passes: the LAG
+  # ITSELF is stable at 6.74-7.00 s across every window (0.26 s spread). Only
+  # the confidence in it changes, and it improves for a stated physical reason
+  # -- the window finally admits the band the signal is actually in. The
+  # runbook's warning is the mirror image of this (too SHORT a window locking
+  # onto a wrong lobe with a deceptively NARROW peak); here too short a window
+  # gives a flat one.
+  detrend_s: 60.0
+
+fit:
+  order: "auto"                # expect 1 -- see the header
+  robust: true
+  geometry: true               # NOTE: the MR pressure carries a ~6 dbar zero
+                               # offset relative to the CTD (MR reads -6 dbar at
+                               # the surface, CTD reads 0.11). Pairing is by
+                               # TIME, so that does not corrupt the pairs, but
+                               # check the fitted dz for contamination.
+
+stability:
+  n_blocks: 4                  # 14.8 h is not a drift experiment; 4 blocks is
+  block_days: null             # enough to see a step, not enough for a trend
+  min_profiles: 3

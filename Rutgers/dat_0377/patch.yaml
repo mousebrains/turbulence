@@ -1,0 +1,98 @@
+# rsi-tpw patch-config edit spec  (generated from dat_0377.p)
+#
+# HOW TO USE:
+#   1. Change the values you want.  QUOTE every value, e.g.  sens: "0.0812"
+#   2. Delete every line you are NOT changing (only real edits are applied).
+#   3. rsi-tpw patch-config dat_0377.p --edits THIS.yaml --out patched/
+#
+# Your original file is never modified.  If nothing actually changes, no
+# file is written.
+
+note: "Depth was way off and it looks like P:coef2 had e+8 instead of e-8"
+author: "Pat Welch"
+
+instrument_info:
+  vehicle: "slocum_glider"   # the field that actually affects processing
+  # model: "MR1000EM"
+
+# cruise_info:
+#   operator: "Teledyne Webb"
+#   project: ""
+#   ship: ""
+#   leg: ""
+
+channels:   # per-channel calibration (usually one instrument at a time)
+#   T1:
+#     sn: "T"
+#     cal_date: ""
+#     adc_fs: "4.096"
+#     adc_bits: "16"
+#     a: "-5.6"
+#     b: "0.99953"
+#     g: "6.0"
+#     e_b: "0.68270"
+#     beta_1: "3143.55"
+#     beta_2: "2.5e5"
+#     t_0: "289.301"
+#   T1_dT1:
+#     diff_gain: "0.937"
+#   T2:
+#     sn: "T"
+#     cal_date: ""
+#     adc_fs: "4.096"
+#     adc_bits: "16"
+#     a: "-6.9"
+#     b: "0.99921"
+#     g: "6.0"
+#     e_b: "0.68270"
+#     beta_1: "3143.55"
+#     beta_2: "2.5e5"
+#     t_0: "289.301"
+#   T2_dT2:
+#     diff_gain: "0.908"
+#   sh1:
+#     sens: "0.0700"
+#     sn: "M"
+#     cal_date: ""
+#     adc_fs: "4.096"
+#     adc_bits: "16"
+#     diff_gain: "0.962"
+#   sh2:
+#     sens: "0.0700"
+#     sn: "M"
+#     cal_date: ""
+#     adc_fs: "4.096"
+#     adc_bits: "16"
+#     diff_gain: "0.952"
+  P:
+#     cal_date: "2021-03-26"
+#     coef0: "-7.4"
+#     coef1: "0.065478"
+    coef2: "1.5879e-8"
+#   P_dP:
+#     diff_gain: "21.05"
+#   PV:
+#     coef0: "4.096"
+#     coef1: "1.25e-4"
+#   EMC_Cur:
+#     adc_fs: "4.096"
+#     adc_bits: "16"
+#   V_Bat:
+#     g: "0.1"
+#     adc_fs: "4.096"
+#     adc_bits: "16"
+#   Incl_Y:
+#     coef0: "0"
+#     coef1: "0.025"
+#   Incl_X:
+#     coef0: "0"
+#     coef1: "-0.025"
+#   Incl_T:
+#     coef0: "624"
+#     coef1: "-0.47"
+#   U_EM:
+#     sn: "042"
+#     cal_date: "2021-01-19"
+#     a: "-26.62292"
+#     b: "0.01007420"
+
