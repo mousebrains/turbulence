@@ -820,7 +820,7 @@ def _cmd_sensors(args: argparse.Namespace) -> None:
     """Inventory microstructure sensors across a tree of .p files."""
     from odas_tpw.rsi.sensor_inventory import resolve_kinds, run
 
-    kinds = resolve_kinds(args.shear, args.fp07, args.want_all)
+    kinds = resolve_kinds(args.shear, args.fp07, args.em, args.want_all)
     code = run(
         [Path(p) for p in args.paths],
         kinds,
@@ -1681,11 +1681,12 @@ def _add_sensors_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument("--shear", action="store_true", help="Inventory shear probes")
     p.add_argument("--fp07", action="store_true", help="Inventory FP07 thermistors")
+    p.add_argument("--em", action="store_true", help="Inventory AEM1-G EM speed sensors")
     p.add_argument(
         "--all",
         dest="want_all",
         action="store_true",
-        help="Inventory every sensor kind (shear + fp07; the default if none is given)",
+        help="Inventory every sensor kind (shear + fp07 + em; the default if none is given)",
     )
     p.add_argument(
         "--csv",

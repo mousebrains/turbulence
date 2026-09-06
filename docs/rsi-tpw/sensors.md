@@ -7,10 +7,38 @@ INI config block are read (never the data records), so the scan is fast over
 large trees.
 
 ```bash
-rsi-tpw sensors VMP/                      # inventory shear + FP07 (default)
+rsi-tpw sensors VMP/                      # every kind: shear + FP07 + EM (default)
 rsi-tpw sensors VMP/ --shear --compact    # one line per shear probe
+rsi-tpw sensors MR/ --em                  # AEM1-G EM speed sensors only
 rsi-tpw sensors VMP/ --csv probes.csv     # per-(file,channel) table
 ```
+
+## Sensor kinds
+
+| flag | kind | tracked parameters |
+|---|---|---|
+| `--shear` | shear probe | `adc_fs`, `adc_bits`, `diff_gain`, `sens`, `cal_date` |
+| `--fp07` | FP07 thermistor | `adc_fs`, `adc_bits`, `a`, `b`, `g`, `e_b`, `beta_1`, `beta_2`, `t_0`, `cal_date` |
+| `--em` | JFE AEM1-G EM speed sensor (`U_EM`) | `a`, `b`, `cal_date` |
+
+The EM belongs here for the same reason the shear probes do: `a` and `b` set the
+through-water speed, and dissipation goes as **U⁻⁴**, so a coefficient that
+changes mid-deployment — or a unit swapped without the config following it —
+moves every ε downstream. Scanning both osu685 MicroRider trees at once reports
+it plainly: the same glider (`slocum_glider` SN 435) carried **EM 046 in 2023
+and EM 066 in 2025**.
+
+Only `aem1g_d` is matched, which was checked against every MicroRider tree to
+hand rather than assumed. The neighboring `EM_Cur` / `EMC_Cur` channel is a
+plain `voltage` current monitor carrying no calibration, so it is deliberately
+not counted as a sensor use.
+
+**AppleDouble sidecars are skipped.** macOS writes `._name.p` next to `name.p`
+on filesystems without native fork support — which is every SMB share the
+campaign data lives on — and they glob as `.p` files. They are a few hundred
+bytes of AppleDouble, so each one would otherwise be reported as a spurious
+`invalid header_size=0` error. One Bank Seaspider tree globs 224 files, of which
+216 are real.
 
 ## Checking shear sensitivities against calibration sheets — `--cal-dir`
 

@@ -96,6 +96,23 @@ SENSOR_KINDS: dict[str, SensorKind] = {
         types=frozenset({"therm"}),
         params=("adc_fs", "adc_bits", "a", "b", "g", "e_b", "beta_1", "beta_2", "t_0", "cal_date"),
     ),
+    # The JFE AEM1-G electromagnetic speed sensor, on a MicroRider's ``U_EM``.
+    # It belongs in this inventory for the same reason the shear probes do: its
+    # ``a``/``b`` set the through-water speed, and epsilon goes as U^-4, so a
+    # coefficient changing mid-deployment -- or a unit swapped without the
+    # config following it -- moves every dissipation estimate downstream.
+    #
+    # ``aem1g_d`` is the only type string observed, and it was checked rather
+    # than assumed: every MicroRider tree to hand (osu684/osu685 in 2023 and
+    # 2025, and both Bank Seaspider units) carries exactly this on ``U_EM``.
+    # The companion ``EM_Cur``/``EMC_Cur`` channel is a plain ``voltage``
+    # current monitor with no calibration of its own, so it is not a sensor use.
+    "em": SensorKind(
+        key="em",
+        label="AEM1-G EM speed sensor",
+        types=frozenset({"aem1g_d"}),
+        params=("a", "b", "cal_date"),
+    ),
 }
 
 # Pre-emphasized derivative channels (T1_dT1, P_dP, ...) share a base channel's
@@ -105,19 +122,23 @@ SENSOR_KINDS: dict[str, SensorKind] = {
 _PREEMPH_RE = re.compile(r"^(\w+)_d\1$")
 
 
-def resolve_kinds(shear: bool = False, fp07: bool = False, want_all: bool = False) -> list[str]:
-    """Map the --shear/--fp07/--all flags to an ordered list of kind keys.
+def resolve_kinds(
+    shear: bool = False, fp07: bool = False, em: bool = False, want_all: bool = False
+) -> list[str]:
+    """Map the --shear/--fp07/--em/--all flags to an ordered list of kind keys.
 
     With nothing selected (or --all), every registered kind is returned so the
     tool inventories everything by default.
     """
-    if want_all or not (shear or fp07):
+    if want_all or not (shear or fp07 or em):
         return list(SENSOR_KINDS)
     kinds = []
     if shear:
         kinds.append("shear")
     if fp07:
         kinds.append("fp07")
+    if em:
+        kinds.append("em")
     return kinds
 
 
@@ -378,11 +399,25 @@ def collect_uses(
 # ---------------------------------------------------------------------------
 
 
+def _is_appledouble(p: Path) -> bool:
+    """macOS resource-fork sidecar: ``._name.p`` beside ``name.p``.
+
+    Written by macOS onto filesystems with no native fork support -- which is
+    every SMB share the campaign data lives on -- and they glob as ``.p`` files.
+    They are a few hundred bytes of AppleDouble, so the reader rejects them with
+    "invalid header_size=0" and each one becomes a spurious error in the report.
+    One Bank Seaspider tree globs 224 files of which 216 are real.
+    """
+    return p.name.startswith("._")
+
+
 def _collect_from(p: Path, found: set[Path]) -> None:
     """Add every .p/.P file at or under *p* (a directory or a single file)."""
     if p.is_dir():
         for pat in ("*.p", "*.P"):
-            found.update(q for q in p.rglob(pat) if q.is_file())
+            found.update(
+                q for q in p.rglob(pat) if q.is_file() and not _is_appledouble(q)
+            )
     elif p.is_file():
         found.add(p)
 
@@ -400,7 +435,8 @@ def iter_pfiles(paths: list[Path]) -> list[Path]:
         if p.exists():
             _collect_from(p, found)
             continue
-        matches = globmod.glob(str(p), recursive=True)
+        matches = [g for g in globmod.glob(str(p), recursive=True)
+                   if not _is_appledouble(Path(g))]
         if not matches:
             print(f"warning: {p} matched no files or directories; skipping", file=sys.stderr)
             continue
@@ -692,6 +728,7 @@ def build_arg_parser(prog: str = "sensor_inventory") -> argparse.ArgumentParser:
     )
     ap.add_argument("--shear", action="store_true", help="Inventory shear probes")
     ap.add_argument("--fp07", action="store_true", help="Inventory FP07 thermistors")
+    ap.add_argument("--em", action="store_true", help="Inventory AEM1-G EM speed sensors")
     ap.add_argument(
         "--all",
         dest="want_all",
@@ -753,7 +790,7 @@ def build_arg_parser(prog: str = "sensor_inventory") -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    kinds = resolve_kinds(args.shear, args.fp07, args.want_all)
+    kinds = resolve_kinds(args.shear, args.fp07, args.em, args.want_all)
     return run(
         args.paths,
         kinds,
