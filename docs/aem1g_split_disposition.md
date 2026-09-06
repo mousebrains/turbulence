@@ -142,8 +142,8 @@ against a stated version rather than against whatever `main` happens to be.
 
 ## 5. Order of operations
 
-1. Land `clocksync` here (package, tests, runbook, entry point, a CLAUDE.md
-   subpackage entry). Tag the release.
+1. ~~Land `clocksync` here (package, tests, runbook, entry point, a CLAUDE.md
+   subpackage entry).~~ **Done** — see the `mr-clocksync` PR. Tag the release.
 2. Fix AEM1-G's `[raw]` URL and pin it to that tag.
 3. Commit `out/clock_offsets.csv` to `AEM1-G/results/`.
 4. Move `docs/em_insitu_calibration_PLAN.md` to AEM1-G; delete it here.

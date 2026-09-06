@@ -21,6 +21,7 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas
 - `dinkum/` — Slocum Dinkum Binary Data (`*.dbd`/`*.ebd`, LZ4 `*.dcd`/`*.ecd`) → perturb hotel file (`dinkum-hotel` entry point). See `docs/dinkum_hotel.md`.
 - `erddap/` — ERDDAP `tabledap` → perturb hotel file (`erddap-hotel` entry point). The remote twin of `dinkum/`: same artifact, different source. See `docs/erddap_access_DESIGN.md` and `docs/rutgers_erddap_workflow.md`.
 - `fp07cal/` — FP07 in-situ calibration against a CTD (`fp07-cal` entry point). A **pre-pipeline** step: fits one Steinhart-Hart set per deployment and patches it into the `.p` files. See `docs/fp07cal/runbook.md`.
+- `clocksync/` — per-file instrument clock offset and rate against a trusted reference pressure record, from the surface-wave band (`mr-clocksync` entry point). A **pre-pipeline** step for a MicroRider, whose clock jumps between `.p` files. See `docs/clocksync/runbook.md`.
 
 ### Key Modules (rsi)
 
@@ -75,6 +76,12 @@ fp07-cal init -o fp07-cal.yaml                 # commented template config
 fp07-cal coverage -c fp07-cal.yaml             # what CTD reference do we actually have?
 fp07-cal fit -c fp07-cal.yaml                  # coefficients + stability diagnostic
 fp07-cal patch -c fp07-cal.yaml                # write them into calibrated .p copies
+
+mr-clocksync init    -o clocksync.yaml         # commented template config
+mr-clocksync probe   -c clocksync.yaml         # is there a wave to sync on? RUN THIS FIRST
+mr-clocksync extract -c clocksync.yaml         # .p trees -> npz cache (slow, resumable)
+mr-clocksync solve   -c clocksync.yaml         # -> clock_offsets.csv + clock_report.txt
+mr-clocksync report  -c clocksync.yaml         # re-print the report from a solved run
 ```
 
 ### FP07 in-situ calibration (`fp07-cal`)
@@ -161,6 +168,44 @@ ERDDAP server rather than sitting on disk. Full workflow:
 - Use **`-trajectory-raw-delayed`**, not `-profile-sci-*`: the sci product
   renames every variable, adds derived fields, exposes no QC flags, and if it
   has gap-filled then `hotel.max_gap` is defeated at source.
+
+### Clock synchronization for a MicroRider (`mr-clocksync`)
+
+A **pre-pipeline** step. An MR clock jumps between `.p` files and runs at the
+wrong rate, so a single per-deployment offset is wrong by construction. When the
+MR is deployed alongside an instrument whose clock is trusted, a shared
+surface-wave signal in pressure recovers the offset and drift **per file** to a
+few tens of milliseconds. Its output feeds perturb's `hotel.time_offset`
+(sign convention in `perturb/config.py`). Runbook: `docs/clocksync/runbook.md`.
+
+Facts that are easy to get wrong:
+
+- **`max_lag` is the setting that wastes your afternoon.** Start at 900 s and
+  narrow afterwards. On Bank Seaspider the MR clocks were **43 to 149 s** out; a
+  60 s search solved 6 of 40 files, a 900 s search solved 40 of 40. A peak
+  landing on the search boundary is **refused** — no answer rather than a wrong
+  one.
+- **Never gate on `r`.** A tide is a ramp, and a shifted straight line is the
+  same line plus a constant, so raw pressure scores `r = 1.000000` at *every*
+  lag. Everything is band-passed first and gated on peak **sharpness**, on
+  in-band amplitude, and on coherence.
+- **The 5 mm amplitude gate is not optional.** Band-passing a window that holds
+  only tide leaves numerical ringing that is *identical* in both records —
+  coherence 1.00, a sharp peak, and a confident lag derived from filter
+  transients. `probe` reports the real in-band amplitude first (94–130 mm on
+  Bank Seaspider); single-digit millimeters means stop.
+- **`sigma` is a real error bar**, from the cross-spectral coherence, not the
+  scatter of the windows. It is deliberately **not** inflated by reduced χ²:
+  a clock that did something non-linear inside a file is reported and flagged
+  (χ² > 10), not buried in a wider error bar.
+- **Header word 9 is integer milliseconds.** ODAS MATLAB's `Milli` is
+  *fractional seconds* despite the name (`d.Milli = y(6) - d.Second`). Reading
+  one as the other is a factor-of-1000 error in exactly the sub-second term this
+  package measures.
+- **The reference is never resampled onto the target's questionable clock** —
+  the target is interpolated onto the reference's grid, the same convention as
+  `fp07cal`. `extract` is the only slow step (~12 min for 431 files / 67 GB) and
+  is resumable; each `.p` becomes a ~700 kB `.npz`.
 
 ### Python API
 
