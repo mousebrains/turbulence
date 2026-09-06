@@ -10,6 +10,26 @@ the lever is the range of speeds flown at fixed pitch, and that is only 1.3x to
 5x. A fresh/salt tank series gives a lever of ~130x in 1/sigma, which is why the
 bench can settle what the deployments could not.
 
+HOW BIG. Pinning alpha at 4.5 deg (Tanaka + Welch) turns the degeneracy into a
+number. Across the three EM units that were actually tracking -- 051, 066 and
+046 -- every one reads HIGH, by +44 to +61 mm/s (380-530 counts, 17-23% of the
+a coefficient). Decomposed:
+
+    common bias  52 mm/s, SAME SIGN on all three
+    unit scatter  8 mm/s sd -- which is JFE's own a reproducibility (9.4 mm/s)
+
+So the scatter is ordinary manufacturing spread and the bias is not. Nothing
+here needs alpha = 4.5 to be exactly right: requiring only alpha >= 0, which a
+climbing wing must satisfy, still demands +11 to +41 mm/s.
+
+WHY THE UNITS CAN STILL BE IN SPEC. The JFE AEM1-G datasheet (indexed in
+../AEM1-G/docs/datasheets/README.md) gives range 0-500 cm/s and accuracy
++/-0.5 cm/s or +/-2%RD. A CONSTANT 47 mm/s zero error is 0.94% of reading at 5 m/s -- inside
++/-2%RD -- and only breaches the spec below ~2.4 m/s. We fly at 20-50 cm/s, the
+bottom 4-10% of the calibrated span, where the same error is 12-17% of reading.
+A unit can therefore pass its acceptance test and still be unusable for us,
+which is the whole argument for measuring the zero ourselves.
+
 THE MODEL. The Faraday EMF is conductivity-independent -- that is the virtue of
 an EM meter -- but the ZERO is not:
 
@@ -60,17 +80,31 @@ from pathlib import Path
 
 import numpy as np
 
-# Matched footprint from the deployment analysis: theta 43-46 deg, 150-600 dbar,
-# steady climbs, thruster off. (name, EM SN, theta_deg, |W| dbar/s, U_EM m/s)
+# Per-LEG medians from steady climbs (second half of each leg, so alpha has
+# settled), inside a +/-1.5 deg pitch band. These SUPERSEDE an earlier sample-
+# level table whose footprint was not matched leg to leg.
+# (name, EM SN, theta_deg, |W| m/s, U_EM m/s, n_legs)
+#
+# osu684-2025 is split at the wing failure (2025-02-06 05:57:17Z): roll went
+# 12.4 -> 21.0 deg and climb pitch 43.6 -> 37.3, so pre and post are different
+# aircraft and must not be pooled.
 DEPLOYMENTS = [
-    ("RU33 2021", "042", 25.7, 0.159, 0.301),
-    ("osu685 2023", "046", 43.3, 0.425, 0.641),
-    ("osu684 2025", "051", 44.6, 0.238, 0.377),
-    ("osu685 2025", "066", 44.7, 0.306, 0.455),
-    ("sl684 2026", "079", 44.9, 0.181, 0.244),
-    ("sl685 2026", "066", 44.7, 0.239, 0.360),
+    ("RU33 2021", "042", 25.7, 0.158, 0.301, 0),      # not yet re-reduced per leg
+    ("osu685 2023 d0-17", "046", 38.2, 0.319, 0.528, 107),
+    ("osu684 2025 pre", "051", 42.5, 0.174, 0.274, 42),
+    ("osu684 2025 post", "051", 37.3, 0.228, 0.380, 48),
+    ("osu685 2025", "066", 42.5, 0.234, 0.366, 726),
+    ("sl684 2026", "079", 44.9, 0.180, 0.244, 0),     # not yet re-reduced per leg
+    ("sl685 2026", "066", 44.7, 0.238, 0.360, 0),     # not yet re-reduced per leg
 ]
-DBAR_TO_M = 1.0e4 / (1027.0 * 9.80)
+# EM 044 (osu684 2023) is DELIBERATELY ABSENT: it sat at ~2727 counts whatever
+# the vehicle did, and 126 of its 128 legs report U_EM < |W|, which is
+# impossible. That unit was not tracking, and it is a failure, not a zero error.
+#
+# EM 046 fell apart during 2023 as well -- the leg-median count leaves the
+# physical range at day 18 and reaches 45 758 (5.08 m/s) by day 23 -- so only
+# days 0-17 are used. The cut is on TIME, taken from the count trend, so it
+# does not select on U_EM itself.
 
 
 def read_can(paths: list[Path]) -> dict:
@@ -219,10 +253,10 @@ def main() -> None:
     print(f"\n{'='*78}\nApplied to the deployments — success criterion is alpha > 0 everywhere\n")
     print(f"{'deployment':>14s} {'EM':>4s} {'sigma':>6s} {'c pred':>9s} "
           f"{'alpha before':>13s} {'alpha after':>12s}")
-    for name, em, th, W, U in DEPLOYMENTS:
+    for name, em, th, W, U, nleg in DEPLOYMENTS:
         s_situ = 4.4          # representative in-situ conductivity [S/m]
         c = A + B / s_situ
-        Wm = W * DBAR_TO_M
+        Wm = W               # already m/s in this table, NOT dbar/s
         a0 = np.degrees(np.arcsin(np.clip(Wm / U, -1, 1))) - th
         a1 = np.degrees(np.arcsin(np.clip(Wm / (U - c), -1, 1))) - th
         flag = "" if a1 > 0 else "   <-- STILL NEGATIVE"
