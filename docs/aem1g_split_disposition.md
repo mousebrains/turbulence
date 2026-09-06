@@ -85,7 +85,7 @@ becomes reproducible rather than merely re-runnable.
 | `scripts/em_bench_zero.py` (modified, +45/−11) | tracked | **commit here** | The EM zero bench protocol is this repo's — a soak-test plan for units we fly, not an analysis of the mooring. The diff re-reduces the deployment table per leg, excludes EM 044 as not-tracking, cuts EM 046 to days 0–17, and adds the datasheet spec argument. |
 | `microstructure_sensors/AEM1-G_datasheet_JFE_2018-06.pdf` | 1 file | **moved to AEM1-G** (Pat, 2026-09-06) | This row first read "commit here", on the grounds that it is the spec for a sensor we fly. Overruled: it belongs with the work that uses it. It landed under AEM1-G's own PDF policy — the file gitignored, a tracked `docs/datasheets/README.md` carrying every number — so no third-party PDF enters a repository headed for public. The `.gitignore` exception here was reverted and three pointers repointed (`em_bench_zero.py`, `papers/current-meters/README.md`, and this row). |
 | `papers/current-meters/README.md` + the `papers/README.md` diff | ~20 lines | **commit here** | `papers/` tracks READMEs only — 9 tracked files, 0 PDFs — and is this repo's bibliography. EM current-meter calibration is real literature (the whole Aubrey–Trowbridge / Guza exchange), useful beyond one paper. The four PDFs stay gitignored here and are duplicated in `AEM1-G/docs/references/`; that duplication is untracked local bytes and costs nothing. |
-| `docs/em_insitu_calibration_PLAN.md` | 961 lines | **move to AEM1-G, delete here** | It is the plan for AEM1-G's dataset. Superseded by `AEM1-G/docs/findings/01`–`08`, but it is the only record of what was committed to *before* the results existed — the β confound, the self-wake trap, the success criteria. That is pre-registration evidence and belongs with the manuscript. AEM1-G has no copy. |
+| `docs/em_insitu_calibration_PLAN.md` | 961 lines | **DONE** — now `AEM1-G/docs/preregistration/2026-08-25_em_insitu_calibration_plan.md` | It is the plan for AEM1-G's dataset. Superseded by `AEM1-G/docs/findings/01`–`08`, but it is the only record of what was committed to *before* the results existed — the β confound, the self-wake trap, the success criteria. That is pre-registration evidence and belongs with the manuscript. AEM1-G has no copy. |
 | `scripts/em_glider_scratch/` | 91 MB, 75 files | **salvage two files, then delete** | §3.1 |
 
 ### 3.1 The scratch directory
@@ -184,8 +184,12 @@ against a stated version rather than against whatever `main` happens to be.
 1. ~~Land `clocksync` here (package, tests, runbook, entry point, a CLAUDE.md
    subpackage entry).~~ **Done** — see the `mr-clocksync` PR. Tag the release.
 2. Fix AEM1-G's `[raw]` URL and pin it to that tag.
-3. Commit `out/clock_offsets.csv` to `AEM1-G/results/`.
-4. Move `docs/em_insitu_calibration_PLAN.md` to AEM1-G; delete it here.
+3. ~~Commit `out/clock_offsets.csv` to `AEM1-G/results/`.~~ **Done** — and
+   `config.clock_offsets()` prefers the tracked copy, so the reproduction path
+   no longer needs the volume mounted.
+4. ~~Move `docs/em_insitu_calibration_PLAN.md` to AEM1-G; delete it here.~~
+   **Done** — filed as pre-registration, with a preamble naming the two places
+   the results did not match the plan.
 5. Commit the four keepers here: `em_bench_zero.py`, the datasheet plus its
    `.gitignore` exception, `papers/current-meters/README.md` and the
    `papers/README.md` diff.
