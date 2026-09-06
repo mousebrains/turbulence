@@ -78,6 +78,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   deployment-scoped `fp07-cal` CLI for a sparse reference.
 
 ### Added
+- **`mr-clocksync`: per-file clock offset and rate for a MicroRider, from the
+  surface-wave band.** An MR clock jumps between `.p` files and runs at the
+  wrong rate, so a single per-deployment offset is wrong by construction. Given
+  a reference pressure record on a trusted clock — a MATLAB, NetCDF or `.p`
+  source, so that the trusted clock can itself be *chained and verified*
+  (CTD → ADCP → MR → MR) — the shared surface-wave signal recovers
+  `offset + rate * (t - t0)` for each file, with a real error bar. On the
+  ARCTERX-2023 Bank Seaspider mooring the MR clocks were 43–149 s out and drifted
+  ~33 s/day; all 40 files solved to a median σ of 22 ms.
+
+  Four subcommands: `probe` (is there a wave at all — always run it first),
+  `extract` (`.p` trees to a resumable `.npz` cache, the only slow step),
+  `solve` (`clock_offsets.csv` + `clock_report.txt`) and `report`. The output
+  feeds perturb's `hotel.time_offset`.
+
+  The estimator is a band-passed cross-correlation *envelope* peak refined by
+  cross-spectral phase slope, not `xcorr`-and-`argmax`: the envelope picks the
+  right side lobe of a narrowband swell, the zero-phase filter contributes no
+  group delay of its own to the quantity being measured, and the phase slope
+  gives sub-sample precision plus a coherence-derived σ. Gates are on peak
+  sharpness, in-band amplitude and coherence — **never** on `r`, which a tidal
+  ramp drives to 1.000000 at every lag. A peak on the search boundary is
+  refused rather than reported.
 - **RDL bad-buffer dropouts are now repaired or rejected in ε and χ.** v6.1+
   files substitute `-32753` for individual missing samples (TN-051 rev.
   2026-01-12 §3.2); `PFile` already detected them, but the affected samples
