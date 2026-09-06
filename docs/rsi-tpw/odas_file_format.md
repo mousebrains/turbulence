@@ -223,11 +223,23 @@ file states a requested rate anyway — the config carries no rate or frequency
 key at all (`[root]` holds only `prefix`), so the requested rate lives in the
 RDL OS settings, outside the data file.
 
-## The documented 38.4 MHz clock is wrong — OPEN, report to Rockland
+## The documented 38.4 MHz clock is wrong — RESOLVED: it is 24 MHz
 
-Independent of the above, and still worth reporting. TN-051 note 5 states a
-38.4 MHz data acquisition clock. A header-only scan of 5360 v6+ files finds
-exactly **four** distinct reported clock values, none consistent with it:
+**Rockland has confirmed 24 MHz is the correct base clock for these devices**
+(via Pat, 2026-08-26). That closes the one ambiguity our own files could not
+settle, and it confirms the analysis below: TN-051 note 5's 38.4 MHz figure is
+wrong, and the note should be corrected.
+
+The evidence that follows was written before the confirmation and is kept as
+the derivation. Its one open end was that the data could not separate 24 from
+48 MHz — every count being even is consistent with either. With 24 MHz
+confirmed, the counts are 5859, 5208, 4688 and 2604, all integers, so the
+whole archive is consistent with a single 24 MHz base and no prescaler need be
+invoked.
+
+TN-051 note 5 states a 38.4 MHz data acquisition clock. A header-only scan of
+5360 v6+ files finds exactly **four** distinct reported clock values, none
+consistent with it:
 
 | f_clock | cols | fs_fast | files | versions | 48 MHz count | back-calc err | 38.4 MHz count |
 |---|---|---|---|---|---|---|---|
@@ -249,8 +261,20 @@ multiple of 5, and none of these are.
 A search over 19 candidate bases leaves only **24, 48, 72 and 96 MHz** viable
 — integer multiples of 24 MHz; 38.4 and 40 MHz are excluded. The data cannot
 distinguish 24 from 48 MHz (all four counts are even, which either favors
-24 MHz or indicates a divide-by-2 prescaler), so the defensible claim is *a
-multiple of 24 MHz, and definitely not 38.4*. Do not hard-code 38.4 MHz.
+24 MHz or indicates a divide-by-2 prescaler), so the defensible claim *from
+the files alone* is a multiple of 24 MHz, and definitely not 38.4.
+
+**Rockland has since confirmed the base is 24 MHz** for these devices, which
+resolves the 24-vs-48 ambiguity in favour of the simpler reading: no
+prescaler, and the four counts are 5859, 5208, 4688 and 2604. Do not
+hard-code 38.4 MHz.
+
+A practical consequence, met while patching MicroRider clocks: the fractional
+part of the header clock is in **thousandths of a Hz**
+(`f_clock = clock_hz + clock_frac/1000`), not /65536. Both the derived `fs`
+and the exact-divisor property confirm it — 9216 + 590/1000 = 9216.590 =
+24 MHz / 2604, whereas the /65536 reading gives 9216.009, which is not a
+divisor of anything and contradicts the `fs_slow` the readers produce.
 
 This is a documentation-accuracy issue only: we read the frequency from words
 21/22 and never use a base clock, so nothing in our processing depends on it.
