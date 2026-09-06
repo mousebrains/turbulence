@@ -95,29 +95,68 @@ already superseded or regenerable:
 
 - `glider-speed-problem.html` — **byte-identical** to the tracked
   `docs/glider_speed_problem.html`. Pure duplicate.
-- The analysis scripts (`em_answer.py`, `em_table.py`, `em_zero_vs_scale.py`,
-  `em_legs.py`, `em_offset_solve.py`, `clean_fit.py`, `origin_fit.py`,
-  `excess_*.py`, `ru33_*.py`, `aoa_histogram_ru33.py`) are the drafts whose
-  finished forms are `AEM1-G/scripts/{glider_aoa_check,glider_legs,`
-  `glider_steadiness,aoa_histogram,slope_vs_zero,epsilon_factors}.py`.
-- `emdata/*.npz` (72 MB) and `legs_*.npy` are extracts, regenerable from the
-  raw `.p` and hotel files by `em_extract.py`.
+- The offset-analysis scripts (`em_answer.py`, `em_zero_vs_scale.py`,
+  `em_zero_fit.py`, `em_offset_solve.py`, `clean_fit.py`, `origin_fit.py`,
+  `excess_*.py`) are the drafts whose finished forms are
+  `AEM1-G/scripts/{glider_aoa_check,slope_vs_zero,epsilon_factors}.py`.
 - `sync/` (19 MB) is a `clocksync` trial run on a subset; the real run's output
-  is in the SeaChest workspace.
+  is in the SeaChest workspace. `sig_mr_probe.py` is its hand-rolled precursor,
+  superseded by `mr-clocksync probe`.
+- `glider-speed-problem.html` is **byte-identical** to the tracked
+  `docs/glider_speed_problem.html`.
 
-Two files to deal with before `rm -rf`:
+### The audit, 2026-09-06 — and a correction
 
-1. **`slocum-mr-runbook.html`** ("Slocum MicroRider Runbook") — not landed
-   anywhere. Check it against `docs/MICRORIDER_GUIDE_PLAN.md` and
-   `examples/slocum_glider_hotel/` (both landed in PR #157); if it says
-   anything those do not, land it in `docs/`, otherwise delete.
-2. **`ru33_coefficient_swap.py`** — establishes that RU33 flew EM 042 with the
-   *bare-sensor* certificate rather than the installed-on-MicroRider sheet, the
-   opposite choice from the OSU gliders. Its own header says it needs the
-   turbulence venv *and* AEM1-G on the path, so by the §1 corollary it belongs
-   in AEM1-G. Confirm the finding is already captured in
-   `AEM1-G/src/aem1g/factory_transform.py` (it references RU33); if it is, the
-   script is redundant.
+An earlier revision of this section said the scratch held two files worth
+salvaging and that `em_legs.py` was superseded. **Both claims were wrong, and
+acting on them would have destroyed data.** Reading every script against both
+trees found this dependency chain, whose two producers existed *only* here
+while all four consumers are **tracked in AEM1-G**:
+
+```
+.p trees --em_extract.py--> emdata/*.npz --em_legs.py--> legs_*.npy
+                                  |                          |
+              glider_legs.py, glider_steadiness.py    aoa_histogram.py,
+                                                      glider_aoa_check.py
+```
+
+All four consumers defaulted their `LEGS` root to the absolute path of this
+scratch directory. `glider_legs.py` supersedes `em_legs.py`'s *method* — an
+explicit settle window instead of "the second half" — but not its *artifact*.
+
+**Resolved** (AEM1-G PR #4): both producers moved to
+`AEM1-G/scripts/{glider_extract,glider_legs_reduce}.py`, paths routed through
+`aem1g.config` (`GLIDER`, `glider_tree()`, `GLIDER_DEPS`), and the eight
+products copied to `/Volumes/SeaChest/ARCTERX/Glider EM analysis/`. Verified by
+regenerating all four `legs_*.npy` byte-identically. **Deleting the scratch is
+now safe.**
+
+Still open:
+
+1. **`em_inventory.py` / `em_table.py`** — not analysis, a *tool*.
+   `rsi-tpw sensors` (`rsi/sensor_inventory.py`) registers exactly two
+   `SENSOR_KINDS`, shear and fp07; the **EM flowmeter is not covered**, and the
+   registry comment invites new kinds. AEM1-G's `factory_cal.py` does not
+   substitute: it transcribes the paper certificates, a different source from
+   the `.p` config the instrument actually ran with. Worth folding in as an
+   `em` kind (`serial`, `cal_date`, `a`, `b`) rather than kept as a script;
+   `em_table.py`'s reusable idea is *sampling* spread-out files, since a full
+   scan is ~15 min over 3000 files on a network volume.
+2. **`slocum-mr-runbook.html`** ("Slocum MicroRider Runbook") — 9 sections
+   walking the full chain on real data, including the wing failure and open
+   questions. PR #157 landed the *configuration*
+   (`examples/slocum_glider_hotel/`, `docs/dinkum_hotel.md`) but not the
+   narrative, and `docs/MICRORIDER_GUIDE_PLAN.md` is still only a **plan** for
+   exactly this guide. Closest thing to a draft of it.
+3. **`ru33_coefficient_swap.py`**, `ru33_alpha_error.py`, `ru33_depth.py`,
+   `aoa_histogram_ru33.py` — cross-repo (they import `aem1g`), so AEM1-G by the
+   §1 corollary if kept at all. `ru33_coefficient_swap.py` establishes that RU33
+   flew EM 042 on its *bare-sensor* certificate rather than the
+   installed-on-MicroRider sheet — the opposite choice from the OSU gliders.
+   Check whether `AEM1-G/src/aem1g/factory_transform.py` already captures it.
+
+**Done:** `will_dives_work.py` landed as `scripts/will_dives_work.py` with its
+forecast pre-registered in `docs/glider_dive_geometry_forecast.md`.
 
 ---
 
