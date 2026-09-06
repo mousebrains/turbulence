@@ -39,7 +39,20 @@ def test_resolve_kinds_default_is_all():
 def test_resolve_kinds_individual_and_combined():
     assert si.resolve_kinds(shear=True) == ["shear"]
     assert si.resolve_kinds(fp07=True) == ["fp07"]
+    assert si.resolve_kinds(em=True) == ["em"]
     assert si.resolve_kinds(shear=True, fp07=True) == ["shear", "fp07"]
+    assert si.resolve_kinds(shear=True, em=True) == ["shear", "em"]
+
+
+def test_resolve_kinds_positional_order_is_shear_fp07_em_all():
+    """Both CLI call sites pass these positionally.
+
+    Adding ``em`` before ``want_all`` means a call that still passes
+    ``(shear, fp07, want_all)`` silently binds want_all to em -- which reads as
+    "inventory only the EM" instead of "inventory everything". Pin the order.
+    """
+    assert si.resolve_kinds(False, False, False, True) == list(si.SENSOR_KINDS)
+    assert si.resolve_kinds(False, False, True, False) == ["em"]
 
 
 def test_resolve_kinds_all_overrides_individual():
@@ -97,6 +110,48 @@ def test_scan_file_mr_glider():
     assert u0.vehicle == "slocum_glider"
     assert u0.platform_sn == "435"
     assert u0.start_time is not None
+
+
+def test_scan_file_em_on_mr_glider():
+    """The AEM1-G is inventoried from the same real fixture as the shear/FP07.
+
+    Values are the ones the file actually carries; ``a``/``b`` are what the
+    through-water speed rests on, and epsilon goes as U^-4, so a silent change
+    here moves every dissipation estimate downstream.
+    """
+    uses = si.scan_file(MR_FIXTURE, si.resolve_kinds(em=True))
+    assert len(uses) == 1
+    u = uses[0]
+    assert u.kind == "em"
+    assert u.sensor_sn == "066"
+    assert u.channel == "U_EM"
+    assert u.params == {"a": "-2.659174e1", "b": "1.155158e-2",
+                        "cal_date": "2023-08-18"}
+    assert u.vehicle == "slocum_glider"
+
+
+def test_em_current_monitor_is_not_a_sensor_use():
+    """``EM_Cur``/``EMC_Cur`` is a plain voltage channel, not the EM sensor.
+
+    It sits next to ``U_EM`` in every MicroRider config and carries no
+    calibration, so counting it would invent a second, coefficient-less EM.
+    """
+    uses = si.scan_file(MR_FIXTURE, si.resolve_kinds(want_all=True))
+    assert not [u for u in uses if u.channel.upper().endswith("_CUR")]
+
+
+def test_appledouble_sidecars_are_not_collected(tmp_path):
+    """macOS writes ``._name.p`` onto SMB shares and they glob as .p files.
+
+    They are AppleDouble headers, so the reader rejects each one and it lands
+    in the report as a spurious error. One real Bank Seaspider tree globs 224
+    files of which 216 are .p records.
+    """
+    (tmp_path / "real.p").write_bytes(b"\x00" * 16)
+    (tmp_path / "._real.p").write_bytes(b"\x00" * 16)
+    (tmp_path / "._other.P").write_bytes(b"\x00" * 16)
+    found = si.iter_pfiles([tmp_path])
+    assert [f.name for f in found] == ["real.p"]
 
 
 # ---------------------------------------------------------------------------
