@@ -17,10 +17,11 @@ analyses (epsilon, chi, mixing efficiency, overturns, isotropy). The PDFs are
 | [overturns-thorpe/](overturns-thorpe/README.md) | 5 | Thorpe-scale overturn analysis: the sort, the Thorpe–Ozmidov link, overturn-validity tests, and the Thorpe-scale ε biases. |
 | [stratified-turbulence-anisotropy/](stratified-turbulence-anisotropy/README.md) | 6 | Isotropy criteria and the structure of stratified turbulence — the backdrop for the VMP two-probe isotropy investigation. |
 | [gliders-and-platforms/](gliders-and-platforms/README.md) | 3 | MicroRider-on-glider / AUV platform processing — precedent for the deep-MR window and noise-floor choices. |
+| [current-meters/](current-meters/README.md) | 4 | Calibration and dynamic response of EM current meters — the Aubrey–Trowbridge / Guza dispute over gain error, and the colocated-pressure method behind the AEM1-G in-situ calibration. |
 | [rockland-technical-notes/](rockland-technical-notes/README.md) | 30 | Rockland Scientific vendor Technical Notes: the `.p`/ODAS file format, count→physical-unit conversion, the ε recipe, shear/thermistor noise floors, FP07 calibration, and field/deployment technique for the VMP and MicroRider. |
 
-53 peer-reviewed papers across the seven subject groups, plus 30 Rockland
-technical notes in the eighth (`rockland-technical-notes/`).
+57 peer-reviewed papers across the eight subject groups, plus 30 Rockland
+technical notes in the ninth (`rockland-technical-notes/`).
 
 ## Cited in the repository docs, no local PDF yet
 
@@ -41,6 +42,14 @@ were the last gap, now filed under `chi-thermal/`.
   **†** in that group's README). Three notes that are journal-paper reprints
   (TN-002, TN-015, TN-016) are filed as the papers, not as notes — TN-016 =
   Rehmann & Hwang (2005) is the one new paper this brought in.
+- `current-meters/` opened 2026-08-26 for the AEM1-G in-situ calibration work.
+  Velocity-sensor calibration is a separate literature from the microstructure
+  groups here — largely nearshore, largely 1980s — and the group holds the complete
+  Aubrey--Trowbridge / Guza exchange -- the WHOI-84-20 laboratory report, the
+  1985 paper, the 1988 comment and the 1988 reply -- with four named gaps
+  remaining in its own README, of which Dibble & Sollitt (1981) matters most. Aubrey, Spencer & Trowbridge
+  (1984), WHOI Tech. Rep. 84-20, *Dynamic response of electromagnetic current
+  meters*, is the one worth chasing first.
 - OCR text layers were added locally to three legacy AMS scans — Osborn (1980)
   and Oakey (1982) in `mixing-efficiency/`, Galbraith & Kelley (1996) in
   `overturns-thorpe/` — and to Nash (1999) and Mudge & Lueck (1994) in
