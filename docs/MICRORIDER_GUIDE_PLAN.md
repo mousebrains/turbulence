@@ -1,6 +1,17 @@
 # MicroRider End-to-End User Guide — Build Plan
 
 **Status:** planning (prep for the microrider work session).
+
+> **There is a worked draft of most of this**:
+> [`slocum_microrider_runbook.html`](slocum_microrider_runbook.html) — "Processing
+> note · ARCTERX-2025 · TN441b · rev. 2", recovered from a scratch directory on
+> 2026-09-06. It walks the real chain end to end on real data: reconnaissance,
+> glider → hotel file, trim, the FP07 calibration that is not optional, speed,
+> the perturb run, the wing failure, and open questions. It is a *processing
+> note*, not the standalone guide this plan describes — it assumes the reader is
+> us — but the chapters below should be written from it rather than from
+> scratch, and the "Speed" and "Open questions" sections record what did **not**
+> resolve, which a guide written forward would quietly omit.
 **Goal:** a standalone, reproducible walkthrough that takes *someone other than Pat*
 from raw MicroRider `.p` files all the way to publication figures, using this
 repo's tools. Includes commands, explanatory text, and graphics.

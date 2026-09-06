@@ -1,0 +1,1020 @@
+<title>Slocum MicroRider Runbook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,400;0,500;0,600;1,6..72,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  /* ---- tokens: complete light palette on bare :root ------------------- */
+  :root {
+    --ground:   #FAFAF7;
+    --surface:  #FFFFFF;
+    --sunk:     #F2F3EF;
+    --ink:      #161B1F;
+    --muted:    #5C666C;
+    --faint:    #838D91;
+    --rule:     #E1E3DD;
+    --rule-hi:  #C9CDC5;
+    --accent:   #14636E;
+    --accent-s: #E4EEEF;
+    --warn:     #9E3B26;
+    --warn-s:   #F7ECE8;
+    --shadow:   0 1px 2px rgba(22,27,31,.05), 0 8px 24px -16px rgba(22,27,31,.18);
+
+    --measure: 68ch;
+    --s1: .35rem; --s2: .7rem; --s3: 1.1rem; --s4: 1.8rem;
+    --s5: 2.8rem; --s6: 4.4rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:   #0E1316;
+      --surface:  #141B1F;
+      --sunk:     #101619;
+      --ink:      #E4E9E7;
+      --muted:    #98A3A7;
+      --faint:    #737E82;
+      --rule:     #232D32;
+      --rule-hi:  #33403F;
+      --accent:   #63BCC6;
+      --accent-s: #12262A;
+      --warn:     #E5866B;
+      --warn-s:   #2A1813;
+      --shadow:   0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:   #0E1316;
+    --surface:  #141B1F;
+    --sunk:     #101619;
+    --ink:      #E4E9E7;
+    --muted:    #98A3A7;
+    --faint:    #737E82;
+    --rule:     #232D32;
+    --rule-hi:  #33403F;
+    --accent:   #63BCC6;
+    --accent-s: #12262A;
+    --warn:     #E5866B;
+    --warn-s:   #2A1813;
+    --shadow:   0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.7);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Newsreader", Georgia, "Times New Roman", serif;
+    font-size: 17px;
+    line-height: 1.62;
+    font-optical-sizing: auto;
+    -webkit-font-smoothing: antialiased;
+    margin: 0;
+    padding: 0 var(--s3) var(--s6);
+  }
+
+  .wrap { max-width: 78rem; margin: 0 auto; }
+
+  /* ---- masthead -------------------------------------------------------- */
+  header.mast {
+    border-bottom: 1px solid var(--rule-hi);
+    padding: var(--s6) 0 var(--s4);
+    margin-bottom: var(--s5);
+  }
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .68rem; font-weight: 500;
+    letter-spacing: .17em; text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 var(--s3);
+  }
+  h1 {
+    font-size: clamp(2.1rem, 5.4vw, 3.6rem);
+    font-weight: 500; line-height: 1.06;
+    letter-spacing: -.022em;
+    text-wrap: balance;
+    margin: 0 0 var(--s3);
+    max-width: 20ch;
+  }
+  .standfirst {
+    font-size: 1.2rem; color: var(--muted);
+    max-width: 56ch; margin: 0 0 var(--s4);
+    font-weight: 300;
+  }
+
+  .identity {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: var(--s3) var(--s4);
+    border-top: 1px solid var(--rule);
+    padding-top: var(--s3);
+  }
+  .identity div { display: flex; flex-direction: column; gap: 2px; }
+  .identity dt, .idk {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .63rem; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .idv {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .86rem; color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- sections -------------------------------------------------------- */
+  section { margin-bottom: var(--s6); scroll-margin-top: var(--s3); }
+
+  .sec-head {
+    display: grid; grid-template-columns: 3.2rem 1fr;
+    gap: var(--s3); align-items: baseline;
+    border-top: 2px solid var(--ink);
+    padding-top: var(--s2);
+    margin-bottom: var(--s4);
+  }
+  .sec-no {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .95rem; font-weight: 600; color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  h2 {
+    font-size: clamp(1.5rem, 3vw, 2.05rem);
+    font-weight: 500; letter-spacing: -.017em; line-height: 1.16;
+    margin: 0; text-wrap: balance;
+  }
+  h3 {
+    font-size: 1.16rem; font-weight: 600; letter-spacing: -.008em;
+    margin: var(--s4) 0 var(--s2); max-width: var(--measure);
+  }
+
+  p, ul, ol { max-width: var(--measure); }
+  p { margin: 0 0 var(--s3); }
+  ul, ol { margin: 0 0 var(--s3); padding-left: 1.25rem; }
+  li { margin-bottom: var(--s2); }
+  li::marker { color: var(--faint); }
+
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px;
+  }
+
+  strong { font-weight: 600; }
+  em.term { font-style: italic; color: var(--muted); }
+
+  code, .mono {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .845em;
+  }
+  p code, li code, td code, th code {
+    background: var(--sunk);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: .08em .34em;
+  }
+
+  pre {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .8rem; line-height: 1.62;
+    background: var(--sunk);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--rule-hi);
+    border-radius: 4px;
+    padding: var(--s3) var(--s3);
+    overflow-x: auto;
+    margin: 0 0 var(--s3);
+    max-width: 100%;
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: 1em; }
+
+  /* ---- callouts -------------------------------------------------------- */
+  .trap, .note {
+    border-left: 3px solid var(--warn);
+    background: var(--warn-s);
+    padding: var(--s3) var(--s3) var(--s2);
+    margin: 0 0 var(--s3);
+    max-width: var(--measure);
+    border-radius: 0 4px 4px 0;
+  }
+  .note { border-left-color: var(--accent); background: var(--accent-s); }
+  .trap > :last-child, .note > :last-child { margin-bottom: 0; }
+  .trap-label {
+    display: block;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .63rem; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--warn); margin-bottom: var(--s1); font-weight: 600;
+  }
+  .note .trap-label { color: var(--accent); }
+
+  /* ---- tables ---------------------------------------------------------- */
+  .tw { overflow-x: auto; margin: 0 0 var(--s4); border-radius: 4px; }
+  table {
+    border-collapse: collapse; width: 100%; min-width: 30rem;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .78rem; font-variant-numeric: tabular-nums;
+  }
+  caption {
+    text-align: left; color: var(--muted);
+    font-family: "Newsreader", Georgia, serif; font-size: .95rem;
+    padding-bottom: var(--s2); font-style: italic;
+  }
+  th, td {
+    text-align: left; padding: .52rem .8rem;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  thead th {
+    font-size: .64rem; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--faint); font-weight: 600;
+    border-bottom: 1px solid var(--rule-hi);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; }
+  .big { color: var(--accent); font-weight: 600; }
+  .bad { color: var(--warn); font-weight: 600; }
+
+  /* ---- stat strip ------------------------------------------------------ */
+  .stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: var(--s2); margin: 0 0 var(--s4);
+  }
+  .stat {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 5px; padding: var(--s3);
+    box-shadow: var(--shadow);
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .stat .v {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 1.5rem; font-weight: 500; color: var(--accent);
+    font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+  }
+  .stat .v.warnv { color: var(--warn); }
+  .stat .k {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .62rem; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--faint);
+  }
+  .stat .d { font-size: .88rem; color: var(--muted); line-height: 1.4; }
+
+  /* ---- figure ---------------------------------------------------------- */
+  figure { margin: 0 0 var(--s4); }
+  .figbox {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 5px; padding: var(--s3);
+    overflow-x: auto; box-shadow: var(--shadow);
+  }
+  figure svg { display: block; width: 100%; min-width: 40rem; height: auto; color: var(--ink); }
+  figcaption {
+    color: var(--muted); font-size: .92rem; font-style: italic;
+    margin-top: var(--s2); max-width: var(--measure);
+  }
+  .svg-box { fill: var(--surface); stroke: var(--rule-hi); stroke-width: 1.2; }
+  .svg-box-a { fill: var(--accent-s); stroke: var(--accent); stroke-width: 1.4; }
+  .svg-t { fill: var(--ink); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
+  .svg-s { fill: var(--faint); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 9.5px; }
+  .svg-l { fill: var(--muted); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 9.5px; }
+  .svg-w { fill: var(--warn); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 10px; font-weight: 600; }
+  .svg-line { stroke: var(--rule-hi); stroke-width: 1.4; fill: none; }
+  .svg-line-a { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .svg-line-w { stroke: var(--warn); stroke-width: 1.6; fill: none; }
+  .svg-dash { stroke-dasharray: 4 3; }
+
+  /* ---- misc ------------------------------------------------------------ */
+  hr.soft { border: 0; border-top: 1px solid var(--rule); margin: var(--s4) 0; max-width: var(--measure); }
+
+  .toc {
+    display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3);
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .74rem; margin-top: var(--s3);
+  }
+  .toc a { color: var(--muted); text-decoration: none; }
+  .toc a:hover { color: var(--accent); text-decoration: underline; }
+  .toc a .n { color: var(--accent); }
+
+  footer {
+    border-top: 1px solid var(--rule-hi); padding-top: var(--s3);
+    color: var(--faint); font-size: .85rem;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    max-width: var(--measure);
+  }
+
+  @media (max-width: 620px) {
+    body { font-size: 16px; }
+    .sec-head { grid-template-columns: 2.2rem 1fr; gap: var(--s2); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Processing note · ARCTERX-2025 · TN441b · rev. 2</p>
+  <h1>Slocum&nbsp;+ MicroRider: a processing runbook</h1>
+  <p class="standfirst">
+    Two vehicles, three clocks, no shared calibration. What it takes to turn a
+    glider-borne MicroRider into ε and χ — worked end to end on osu684/MR433,
+    then cross-checked against 89 healthy days of osu685/MR435, which overturned
+    two of the conclusions.
+  </p>
+
+  <div class="identity">
+    <div><span class="idk">Instrument</span><span class="idv">MR1000RDL-EM SN&nbsp;433</span></div>
+    <div><span class="idk">Platform</span><span class="idv">Slocum G3 osu684</span></div>
+    <div><span class="idk">Deployment</span><span class="idv">2025-02-04 → 02-10</span></div>
+    <div><span class="idk">Region</span><span class="idv">20.3°N 129.9°E</span></div>
+    <div><span class="idk">Raw files</span><span class="idv">255 .p · 284 dinkum</span></div>
+    <div><span class="idk">Profiles</span><span class="idv">138 (85 + 53)</span></div>
+    <div><span class="idk">Cross-check</span><span class="idv">osu685 · 89 d · MR435</span></div>
+  </div>
+
+  <nav class="toc" aria-label="Sections">
+    <a href="#s0"><span class="n">0</span> The problem</a>
+    <a href="#s1"><span class="n">1</span> Reconnaissance</a>
+    <a href="#s2"><span class="n">2</span> Hotel files</a>
+    <a href="#s3"><span class="n">3</span> Trim</a>
+    <a href="#s4"><span class="n">4</span> FP07 calibration</a>
+    <a href="#s5"><span class="n">5</span> Speed</a>
+    <a href="#s6"><span class="n">6</span> Perturb run</a>
+    <a href="#s7"><span class="n">7</span> Wing failure</a>
+    <a href="#s8"><span class="n">8</span> Open questions</a>
+  </nav>
+</header>
+
+<!-- ================================================================= 0 -->
+<section id="s0">
+  <div class="sec-head"><span class="sec-no">00</span><h2>The shape of the problem</h2></div>
+
+  <p>
+    The MicroRider measures shear and temperature gradient at 512&nbsp;Hz and knows
+    nothing about salinity, position, or its own through-water speed. The glider
+    knows all three, at 1&nbsp;Hz, on a different clock. Everything below exists to
+    join them without inventing data at the seam.
+  </p>
+
+  <p>There are <strong>three clocks</strong>, and they matter:</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Time sensor</th><th>Stamps</th><th>Rate</th><th>Used as the base for</th></tr></thead>
+      <tbody>
+        <tr><td><code>m_present_time</code></td><td>flight computer cycle</td><td class="num">~1 Hz</td><td>attitude, position, <code>flight.nc</code></td></tr>
+        <tr><td><code>sci_m_present_time</code></td><td>science computer cycle</td><td class="num">~1 Hz</td><td>— (not used here)</td></tr>
+        <tr><td><code>sci_ctd41cp_timestamp</code></td><td>arrival of the CTD's print</td><td class="num">~0.9 Hz</td><td>CTD channels, <code>hotel.nc</code></td></tr>
+        <tr><td>MicroRider internal</td><td>free-running after file open</td><td class="num">512 / 64 Hz</td><td>everything downstream</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <figure>
+    <div class="figbox">
+      <svg viewBox="0 0 980 440" role="img"
+           aria-label="Data flow: glider flight and science files feed two dinkum-hotel builds producing flight.nc and hotel.nc; MicroRider .p files pass through perturb trim to fp07-cal, which uses hotel.nc as its temperature reference and writes patched .p files; hotel.nc and the patched files feed perturb run, with a minus 5.06 second clock offset applied on the hotel merge.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- sources -->
+        <rect class="svg-box" x="16" y="40" width="152" height="46" rx="4"/>
+        <text class="svg-t" x="92" y="60" text-anchor="middle">flt/*.d[bc]d</text>
+        <text class="svg-s" x="92" y="75" text-anchor="middle">142 flight segments</text>
+
+        <rect class="svg-box" x="16" y="116" width="152" height="46" rx="4"/>
+        <text class="svg-t" x="92" y="136" text-anchor="middle">sci/*.ebd</text>
+        <text class="svg-s" x="92" y="151" text-anchor="middle">142 science segments</text>
+
+        <rect class="svg-box" x="16" y="300" width="152" height="46" rx="4"/>
+        <text class="svg-t" x="92" y="320" text-anchor="middle">microrider/*.p</text>
+        <text class="svg-s" x="92" y="335" text-anchor="middle">255 files, 1.67 GB</text>
+
+        <!-- builders -->
+        <rect class="svg-box-a" x="250" y="78" width="164" height="46" rx="4"/>
+        <text class="svg-t" x="332" y="98" text-anchor="middle">dinkum-hotel</text>
+        <text class="svg-s" x="332" y="113" text-anchor="middle">two builds, two bases</text>
+
+        <rect class="svg-box-a" x="250" y="300" width="164" height="46" rx="4"/>
+        <text class="svg-t" x="332" y="320" text-anchor="middle">perturb trim</text>
+        <text class="svg-s" x="332" y="335" text-anchor="middle">0 trimmed, 255 ok</text>
+
+        <!-- intermediates -->
+        <rect class="svg-box" x="474" y="34" width="142" height="46" rx="4"/>
+        <text class="svg-t" x="545" y="54" text-anchor="middle">flight.nc</text>
+        <text class="svg-s" x="545" y="69" text-anchor="middle">attitude, 1 Hz</text>
+
+        <rect class="svg-box" x="474" y="122" width="142" height="46" rx="4"/>
+        <text class="svg-t" x="545" y="142" text-anchor="middle">hotel.nc</text>
+        <text class="svg-s" x="545" y="157" text-anchor="middle">CTD + position</text>
+
+        <rect class="svg-box-a" x="474" y="300" width="142" height="46" rx="4"/>
+        <text class="svg-t" x="545" y="320" text-anchor="middle">fp07-cal</text>
+        <text class="svg-s" x="545" y="335" text-anchor="middle">fit → patch</text>
+
+        <rect class="svg-box" x="668" y="300" width="142" height="46" rx="4"/>
+        <text class="svg-t" x="739" y="320" text-anchor="middle">patched *.p</text>
+        <text class="svg-s" x="739" y="335" text-anchor="middle">228 of 255</text>
+
+        <!-- run + products -->
+        <rect class="svg-box-a" x="806" y="128" width="158" height="48" rx="4"/>
+        <text class="svg-t" x="885" y="148" text-anchor="middle">perturb run</text>
+        <text class="svg-s" x="885" y="163" text-anchor="middle">4 runs (§5, §6)</text>
+
+        <rect class="svg-box" x="806" y="212" width="158" height="52" rx="4"/>
+        <text class="svg-t" x="885" y="232" text-anchor="middle">ε · χ · K_ρ · Γ</text>
+        <text class="svg-s" x="885" y="247" text-anchor="middle">138 profiles, 1 m bins</text>
+
+        <!-- arrows -->
+        <g color="var(--rule-hi)">
+          <polyline class="svg-line" marker-end="url(#ar)" points="168,63 210,63 210,92 250,92"/>
+          <polyline class="svg-line" marker-end="url(#ar)" points="168,139 210,139 210,110 250,110"/>
+          <polyline class="svg-line" marker-end="url(#ar)" points="414,92 444,92 444,57 474,57"/>
+          <polyline class="svg-line" marker-end="url(#ar)" points="414,110 444,110 444,145 474,145"/>
+          <polyline class="svg-line" marker-end="url(#ar)" points="168,323 250,323"/>
+          <polyline class="svg-line" marker-end="url(#ar)" points="414,323 474,323"/>
+          <polyline class="svg-line" marker-end="url(#ar)" points="616,323 668,323"/>
+          <polyline class="svg-line" marker-end="url(#ar)" points="739,300 739,278 885,278 885,264"/>
+          <polyline class="svg-line" marker-end="url(#ar)" points="885,176 885,212"/>
+        </g>
+
+        <!-- reference arrow: hotel.nc -> fp07-cal -->
+        <g color="var(--accent)">
+          <polyline class="svg-line-a" marker-end="url(#ar)" points="545,168 545,300"/>
+        </g>
+        <text class="svg-l" x="554" y="212">T reference,</text>
+        <text class="svg-l" x="554" y="224">CTD's own clock</text>
+        <text class="svg-l" x="554" y="236">(real samples only)</text>
+
+        <!-- hotel merge arrow with the offset -->
+        <g color="var(--warn)">
+          <polyline class="svg-line-w" marker-end="url(#ar)" points="616,145 700,145 700,152 806,152"/>
+        </g>
+        <text class="svg-w" x="702" y="138">hotel merge</text>
+        <text class="svg-w" x="702" y="126">−5.06 s offset</text>
+
+        <!-- attitude informs the speed model -->
+        <g color="var(--rule-hi)">
+          <polyline class="svg-line svg-dash" marker-end="url(#ar)" points="616,57 760,57 760,134 806,134"/>
+        </g>
+        <text class="svg-l" x="624" y="48">attitude → aoa_deg (§5)</text>
+
+        <text class="svg-s" x="16" y="392">solid = data      dashed = a parameter, decided by the analyst</text>
+        <text class="svg-s" x="16" y="408">teal = calibration reference      orange = the hop that needs a clock correction</text>
+      </svg>
+    </div>
+    <figcaption>
+      The chain, and the two places where the join is not automatic: fp07-cal
+      reads the CTD on its <em>own</em> clock (never through perturb's merge, so a
+      calibration cannot depend on merge configuration), and the hotel merge into
+      the MicroRider needs an explicit −5.06 s clock offset.
+    </figcaption>
+  </figure>
+</section>
+
+<!-- ================================================================= 1 -->
+<section id="s1">
+  <div class="sec-head"><span class="sec-no">01</span><h2>Reconnaissance before configuration</h2></div>
+
+  <p>
+    Never write a config against the deployment narrative. Three commands settle
+    what is actually on disk:
+  </p>
+
+<pre><code>rsi-tpw sensors microrider/                    # probe serials and coefficients, per epoch
+dinkum-hotel sensors sci/01300000.ecd -C cache # what the glider actually carries
+python recon_pfiles.py microrider -o recon.csv # per-file P / U_EM / tilt</code></pre>
+
+  <p>What that found on osu684 — none of which was in the deployment notes:</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Finding</th><th>Consequence</th></tr></thead>
+      <tbody>
+        <tr><td>Files 0001–0004 never leave 0.13–0.19 dbar</td><td>Dry-deck tests in Guam, five days early. Real data starts 2025-02-04 00:42.</td></tr>
+        <tr><td>Shear probes change at file 0003<br><span class="svg-s">M2499/M2500 → M3036/M3037</span></td><td>The bench files are a different instrument configuration.</td></tr>
+        <tr><td>27 of 255 <code>.p</code> files are exactly 9110 bytes</td><td>A config record and no data — the MR started and stopped without acquiring.</td></tr>
+        <tr><td>109 of 255 files never exceed 5 dbar</td><td>Surface intervals. They yield no profiles, and that is correct.</td></tr>
+        <tr><td>T2809 and T2810 carry <em>identical</em> Steinhart-Hart coefficients</td><td>Nominal values, not calibrations. §4 is mandatory.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="trap-label">The generalisable lesson</span>
+    <p>A deployment's file list is a <strong>hypothesis</strong>. Pressure, probe serial
+    and file size test it in seconds, and every one of the five rows above changes
+    a configuration decision downstream.</p>
+  </div>
+</section>
+
+<!-- ================================================================= 2 -->
+<section id="s2">
+  <div class="sec-head"><span class="sec-no">02</span><h2>Glider → hotel file</h2></div>
+
+  <p>
+    Two builds, because <code>dinkum-hotel</code> writes <strong>one</strong> time
+    dimension and the two uses want different bases:
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Output</th><th><code>time.base</code></th><th>For</th></tr></thead>
+      <tbody>
+        <tr><td><code>hotel.nc</code></td><td><code>sci_ctd41cp_timestamp</code></td><td>perturb's hotel merge; fp07-cal's reference</td></tr>
+        <tr><td><code>flight.nc</code></td><td><code>m_present_time</code></td><td>attitude / AOA diagnostics at native 1 Hz</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    Do <em>not</em> fold the flight channels into <code>hotel.nc</code>. The CTD clock
+    stops between yos and while the CTD is unpumped, so projecting attitude onto it
+    discards exactly the surface intervals and inflections the diagnosis needs.
+  </p>
+
+  <h3>Five traps, all of which bit</h3>
+
+  <div class="trap">
+    <span class="trap-label">Trap 1 — the .ebd / .ecd duplicate</span>
+    <p>
+      The glider wrote only LZ4 <code>*.ecd</code>; SFMC then expanded each to a
+      <code>*.ebd</code> and left both. <code>sci/</code> holds 142 unique segments in
+      280 files. The default patterns read 138 of them <strong>twice</strong>. Every CTD
+      sample arrives as an exact duplicate timestamp, <code>time.dedupe: mean</code>
+      collapses them silently, and the hotel file looks perfect while every
+      sample-count and duty-cycle diagnostic reads double.
+    </p>
+<pre><code>patterns: ["flt/*.dbd", "flt/*.dcd", "sci/*.ebd"]   # .ebd is the superset</code></pre>
+  </div>
+
+  <div class="trap">
+    <span class="trap-label">Trap 2 — NMEA coordinates</span>
+    <p>
+      Slocum reports every coordinate as <code>ddmm.mmmm</code>.
+      <code>m_lat = 2015.61159</code> is 20°15.61159′ = <strong>20.260193 °N</strong>,
+      not 20.1561. No scale factor converts it, and the raw form must not be
+      interpolated — it steps 40.02 across a whole minute. Use
+      <code>transform: nmea_degrees</code>, which runs on the source samples before
+      projection.
+    </p>
+    <p>
+      <em class="term">Validation that this is right:</em> the Guam bench files land at
+      13.433 °N, 144.660 °E — Guam — and the deployment at 20.3 °N, 129.9 °E.
+    </p>
+  </div>
+
+  <div class="trap">
+    <span class="trap-label">Trap 3 — valid_min/max are in SOURCE units</span>
+    <p>
+      The range check runs before <code>scale</code>, even though the neighbouring
+      <code>units:</code> names the output unit. Conductivity bounds are S/m; pressure
+      bounds are bar. A bound written in output units is not an error — it is a check
+      that silently never fires.
+    </p>
+  </div>
+
+  <div class="trap">
+    <span class="trap-label">Trap 4 — sentinels sit inside oceanographic ranges</span>
+    <p>
+      Slocum writes exactly <code>0.0</code> for "never set". A
+      <code>valid_min: -2.0</code> on temperature let three such samples through, each
+      of which would have produced a nonsense salinity. The coldest real water here
+      is 5.03 °C, so <code>valid_min: 1.0</code> removes the sentinel and nothing else.
+    </p>
+  </div>
+
+  <div class="trap">
+    <span class="trap-label">Trap 5 — corrupt files exist</span>
+    <p>
+      Two science segments hold garbage where the ASCII header belongs —
+      <code>dUZUUUUUUU</code> instead of <code>dbd_label:</code> — in <strong>both</strong>
+      the <code>.ecd</code> and its <code>.ebd</code> expansion, which is what rules out a
+      bad decompression. A known TWR firmware corruption bug. Name them in
+      <code>files.exclude</code>; do not raise <code>max_skipped</code>, which would also
+      swallow the next new one.
+    </p>
+  </div>
+
+  <div class="note">
+    <span class="trap-label">Backend</span>
+    <p>
+      <code>xarray-dbd</code>, pinned. <code>dbd2netCDF</code> 1.7.5 refuses the mixed
+      flight+science list, and its <code>--sensorOutput</code> filter is broken
+      independently: it indexes the kept-sensor array with the <em>file's</em> sensor
+      index, so any record naming a sensor beyond the kept count aborts the run —
+      while blaming the sensor cache, which is fine.
+    </p>
+  </div>
+</section>
+
+<!-- ================================================================= 3 -->
+<section id="s3">
+  <div class="sec-head"><span class="sec-no">03</span><h2>Trim</h2></div>
+<pre><code>perturb trim -o proc/results --p-file-root microrider "microrider/*.p"</code></pre>
+  <p>
+    255 files, <strong>0 trimmed</strong>, all "referenced original in place". A
+    MicroRider shut down cleanly rarely leaves a partial record; the step is cheap
+    insurance, and when it does nothing the raw directory <em>is</em> the trimmed input.
+  </p>
+</section>
+
+<!-- ================================================================= 4 -->
+<section id="s4">
+  <div class="sec-head"><span class="sec-no">04</span><h2>The FP07 calibration that is not optional</h2></div>
+
+  <p>
+    Both thermistors carried Rockland's nominal coefficients — <code>beta_1 = 3143.55</code>,
+    <code>beta_2 = 2.5e5</code>, <code>t_0 = 289.301</code> — <strong>identical on both
+    probes</strong>, with a blank <code>cal_date</code>. Two different glass beads cannot
+    share a calibration.
+  </p>
+
+  <div class="stats">
+    <div class="stat"><span class="k">T1 · SN T2809</span><span class="v warnv">+4.45 K</span><span class="d">error the factory coefficients carried</span></div>
+    <div class="stat"><span class="k">T2 · SN T2810</span><span class="v warnv">+8.15 K</span><span class="d">…and 3.7 K of disagreement between the two probes</span></div>
+    <div class="stat"><span class="k">In-situ residual</span><span class="v">5.2 / 6.7 mK</span><span class="d">RMS, order 2, over 5.04–26.15 °C</span></div>
+  </div>
+
+  <p>
+    This is normal, not an anomaly — stock FP07 specs have been seen 30 K out. The
+    in-situ fit against the glider's pumped SBE-41CP is the <em>only</em> calibration
+    these probes will ever have.
+  </p>
+
+  <h3>Diagnostics that matter more than the RMS</h3>
+  <ul>
+    <li><strong>Lag gate passed</strong> (peak width 0.8 s). The gate is on peak
+      <em>sharpness</em>, never on <code>r</code>: a glider dive is a monotonic ramp, and a
+      shifted straight line is the same line plus a constant, so raw correlation sits
+      near 1.0 at <em>every</em> lag.</li>
+    <li><strong>Order 2, chosen by held-out error</strong> — not in-sample fit. Order 1
+      gives 50.8 mK held out, order 2 gives 17.9 mK, order 3 gives 21.2 mK: order 3
+      fits better in sample and extrapolates worse.</li>
+    <li><strong>Clock offset +5.06 s</strong>, from CTD pressure against MR pressure —
+      no thermal physics involved. This number is needed again in §6.</li>
+    <li><strong>Geometry collinearity 0.889 — fires.</strong> <code>dz</code> (75.7 cm) and
+      the residual lag are not separately resolved, because this deployment profiles
+      in one direction only. Their combination is measured; the split is not.</li>
+    <li><strong>Drift not significant</strong>: −1.8 ± 0.8 mK/day over 4.3 d, p = 0.084.</li>
+  </ul>
+
+  <p><code>patch</code> wrote <strong>228 of 255</strong> files; the other 27 are the data-less
+  ones, skipped and counted.</p>
+</section>
+
+<!-- ================================================================= 5 -->
+<section id="s5">
+  <div class="sec-head"><span class="sec-no">05</span><h2>Speed — the hard part, and the one thing that did not resolve</h2></div>
+
+  <p>
+    ε carries the through-water speed with <strong>~U⁻⁴ leverage</strong>, so this matters
+    more than anything else in the chain. That exponent was not assumed here — it was
+    measured: the two speed arms differ by a factor 1.76 in ε at a speed ratio of
+    0.866, i.e. U<sup>−3.9</sup>.
+  </p>
+
+  <h3>The geometry, worked from the force balance</h3>
+
+  <p>
+    Let θ = elevation of the vehicle axis from horizontal, γ = the same for the
+    velocity vector, α = angle of attack (all magnitudes).
+  </p>
+
+  <p>
+    <strong>Climb.</strong> Net buoyancy acts up. Along the path, <em>B</em>&nbsp;sin&nbsp;γ = <em>D</em>.
+    Perpendicular, the balance needs a force of <em>B</em>&nbsp;cos&nbsp;γ pointing
+    <strong>down-and-forward</strong> — the wing must supply the forward thrust that
+    cancels drag's backward component, and on a climb the only perpendicular direction
+    with a forward component is the downward one. A wing makes a downward-perpendicular
+    force when flow arrives from <em>above</em> its chord, i.e. when the nose sits
+    <strong>below</strong> the flight path. So γ&nbsp;=&nbsp;θ&nbsp;+&nbsp;α.
+  </p>
+
+  <p>
+    <strong>Dive.</strong> Mirror image: buoyancy down, perpendicular force up-and-forward,
+    flow from below the chord, nose above the path — and again γ&nbsp;=&nbsp;θ&nbsp;+&nbsp;α.
+  </p>
+
+  <div class="note">
+    <span class="trap-label">Why this is worth stating</span>
+    <p>
+      The glide path is steeper than the attitude on <strong>both</strong> legs, so
+      <code>U = |W| / sin(|pitch| + aoa_deg)</code> is correct as written with
+      <code>aoa_deg</code> positive. The intuitive answer — "the wing always meets the flow
+      from below" — is true on a dive and false on a climb, and it produces a spurious
+      dive/climb sign flip that fits the climb data almost as well. That wrong version
+      returned a confident α = 1.9° ± 0.2°.
+    </p>
+  </div>
+
+  <h3>Why α could not be measured — and why that is structural</h3>
+
+  <p>
+    Because α and a U_EM scale error <em>b</em> enter with the <strong>same</strong> sign
+    everywhere, <code>sin(θ + α) = b · |W| / U_EM</code> is one equation in two unknowns.
+    They separate only through the <em>curvature</em> of sin() across a <strong>spread</strong>
+    of θ.
+  </p>
+
+  <p>
+    The MicroRider runs on <strong>climbs only, by design</strong> — 208 of 208 sampled
+    osu685 in-water files are climbs, and osu684 is 98.5% climbs. So no dive leg exists
+    on either deployment, and this is a property of the measurement configuration rather
+    than bad luck on two missions.
+  </p>
+
+  <div class="note">
+    <span class="trap-label">And recording both legs would not, by itself, fix it</span>
+    <p>
+      With γ = θ + α on <em>both</em> legs, α enters identically each way. What separates
+      α from <em>b</em> is spread in |θ|, nothing else. The Rutgers file has both legs —
+      but flies them at 22° and 24°, and is correspondingly uninformative about the pair.
+    </p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <caption>Conditioning of the joint (α, b) fit</caption>
+      <thead><tr><th>Era</th><th class="num">θ spread (5–95 pct)</th><th class="num">corr(α, b)</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td>pre-failure</td><td class="num">36.5 – 58.6°</td><td class="num">0.976</td><td>weakly identified</td></tr>
+        <tr><td>post-failure</td><td class="num">35.8 – 39.4°</td><td class="num bad">0.999</td><td class="bad">degenerate — fit returns α = −33°</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>What <em>is</em> established</h3>
+
+  <div class="trap">
+    <span class="trap-label">Corrected after the osu685 cross-check</span>
+    <p>
+      Two claims in the first version of this note have been <strong>withdrawn</strong>.
+      They are kept visible rather than quietly edited out, because both were
+      plausible and both were wrong.
+    </p>
+  </div>
+
+  <ul>
+    <li>
+      <strong>U_EM reads high</strong> relative to any physically admissible
+      flight model. At θ = 43–46°, 150–600 dbar, steady glide,
+      <code>U_EM·sin θ / |W|</code> = <strong>1.116</strong> — and since
+      γ = θ + α with α ≥ 0, that ratio can never exceed 1. On osu685's identical
+      footprint it is <strong>1.044</strong>, so this is neither an osu684
+      artifact nor a consequence of the wing failure. <em class="term">This
+      survives.</em>
+    </li>
+    <li>
+      <strong>WITHDRAWN — the mechanism is not local flow acceleration.</strong>
+      The EM head is at the front of the MicroRider, the MR sits on top of the
+      glider, and the sensor tips are <em>ahead of the glider's nose</em>. A body
+      accelerates flow alongside itself, not ahead of its stagnation point; ahead
+      of a nose the flow is if anything <em>decelerated</em>, which would bias
+      U_EM low — the wrong sign.
+    </li>
+    <li>
+      <strong>WITHDRAWN — "8–19% high" over-attributed the effect to one unit.</strong>
+      The absolute correction is degenerate with α. What <em>is</em> well
+      determined is the difference <em>between</em> units: at matched attitude,
+      depth and flight state the two OSU EM units disagree by
+      <strong>7.0%</strong>.
+    </li>
+    <li>
+      <strong>The glider's own <code>m_speed</code> is unusable</strong>: it
+      reports <em>less</em> than the measured vertical rate (0.219 vs
+      0.238 m/s). The flight computer's model is untuned for a
+      MicroRider-carrying vehicle.
+    </li>
+  </ul>
+
+  <h3>The EM calibration: tested, and rejected</h3>
+
+  <p>
+    A hypothesis stood here briefly: that the 2023-calibrated units carried a
+    <em>nominal</em> slope, because SN 051 and SN 066 agree to 0.007% despite
+    calibrations six months apart. Pulling the 2023-era coefficients killed it.
+  </p>
+
+  <div class="tw">
+    <table>
+      <caption>All five JAC AEM1G-D units, <code>U = a + b·counts</code></caption>
+      <thead><tr><th>EM SN</th><th>cal date</th><th>MR</th><th>deployment</th><th class="num">slope <code>b</code></th><th class="num">intercept <code>a</code></th></tr></thead>
+      <tbody>
+        <tr><td>042</td><td>2021-01-19</td><td>410</td><td>Rutgers RU33</td><td class="num bad">0.01007420</td><td class="num">−26.62292</td></tr>
+        <tr><td>044</td><td>2021-09-10</td><td>433</td><td>ARCTERX-2023</td><td class="num">0.01142906</td><td class="num">−24.72106</td></tr>
+        <tr><td>046</td><td>2021-09-10</td><td>435</td><td>ARCTERX-2023</td><td class="num">0.01168864</td><td class="num">−26.48646</td></tr>
+        <tr><td>051</td><td>2023-02-10</td><td>433</td><td>osu684</td><td class="num">1.155078e-2</td><td class="num">−25.15760</td></tr>
+        <tr><td>066</td><td>2023-08-18</td><td>435</td><td>osu685</td><td class="num">1.155158e-2</td><td class="num">−26.59174</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <ul>
+    <li><strong>JAC does issue per-unit slopes.</strong> SN 044 and SN 046 were
+      calibrated on the <em>same day</em> and differ by 2.27%. That is the
+      natural spread.</li>
+    <li><strong>SN 042 was the wrong anchor.</strong> Four of five cluster within
+      2.27%; SN 042 sits 12.8% below. Rescaling the OSU units to that cluster
+      mean — where they already sit — moves α by <strong>0.02°</strong>.</li>
+  </ul>
+
+  <div class="note">
+    <span class="trap-label">The decisive test: swap the EM, keep everything else</span>
+    <p>
+      MR 435 flew EM SN 046 in 2023 and EM SN 066 in 2025 — the units were
+      physically replaced after the nose cones flooded. Same MicroRider, same
+      glider, matched footprint (150–600 dbar, θ 43–46°, climbs):
+      <strong>excess 1.032 (2023) vs 1.043 (2025)</strong>. The discrepancy
+      survives an EM swap. <strong>It is not the flowmeter.</strong>
+    </p>
+  </div>
+
+  <p>
+    <strong>Roll is excluded too.</strong> Across deployments the excess rises
+    with roll (+0.0118 per degree), which looks compelling — but <em>within</em>
+    osu685, at fixed pitch and depth, it <em>falls</em> with roll (−0.0087 per
+    degree). Opposite signs between and within is the signature of a lurking
+    variable, and the roll bins covary with depth (229 → 493 dbar), which is the
+    depth trend already known. Roll is a passenger.
+  </p>
+
+  <p>
+    So: the effect is real, reproduces across two instruments and two seasons,
+    is stable over 89 days, and is <strong>not</strong> explained by the EM
+    calibration, by roll, by non-equilibrium flight, by the dbar/s → m/s
+    conversion, or by attitude bias. <em class="term">No mechanism currently
+    survives.</em> That is where it rests.
+  </p>
+
+  <h3>What was done instead</h3>
+
+  <p>Both arms were run, so the disagreement is documented rather than assumed:</p>
+
+  <div class="tw">
+    <table>
+      <caption>Same files, same config, one difference: <code>speed.method</code></caption>
+      <thead><tr><th>Era</th><th class="num">speed flight/em</th><th class="num">ε ratio</th><th class="num">ε IQR</th><th class="num">χ ratio</th></tr></thead>
+      <tbody>
+        <tr><td>pre-failure</td><td class="num">0.866</td><td class="num big">1.76</td><td class="num">1.56 – 2.05</td><td class="num">1.42</td></tr>
+        <tr><td>post-failure</td><td class="num">0.961</td><td class="num big">1.28</td><td class="num">1.06 – 1.47</td><td class="num">1.16</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="trap">
+    <span class="trap-label">Read this before using the numbers</span>
+    <p>
+      <code>aoa_deg: 3.0</code> (the ODAS Slocum default) is an <strong>assumption</strong>
+      in these outputs, not a result. Sensitivity: dU/U = −cot(θ+α)·dα = −2.05 %/deg at
+      θ = 37°. The factor-1.76 spread between the two arms <em>is</em> the honest
+      uncertainty on ε from this unresolved question.
+    </p>
+  </div>
+</section>
+
+<!-- ================================================================= 6 -->
+<section id="s6">
+  <div class="sec-head"><span class="sec-no">06</span><h2>The perturb run</h2></div>
+
+  <p>
+    Four runs: {pre, post wing failure} × {flight, em}. One
+    <code>perturb-base.yaml</code> is the source of truth and <code>make_runs.py</code>
+    derives the four, so the ~180 shared lines cannot drift apart.
+  </p>
+
+<pre><code>files:  {trim: false, merge: false}   # merge would glue unrelated climbs together
+profiles:
+  direction: "up"        # the MR records CLIMBS: 1.12M steady in-water samples
+                         # on climbs vs 16.7k on dives (98.5% / 1.5%)
+hotel:
+  time_offset: -5.06     # = -(fp07-cal clock_offset_s)
+fp07: {calibrate: false} # the .p files already carry the in-situ coefficients
+ct:   {align: false}     # the MR has no CT cell; the glider's is merged in
+chi:  {use_epsilon: false}  # Method 2 — MR shear picks up vehicle vibration</code></pre>
+
+  <div class="trap">
+    <span class="trap-label">The clock-offset sign</span>
+    <p>
+      <code>clock_offset_s</code> is <strong>positive when the hotel timestamps run ahead</strong>
+      of the instrument's, and <code>hotel.time_offset</code> is <strong>added</strong> to them —
+      so <code>time_offset = −clock_offset_s</code>. Leaving it at 0 misregisters every merged
+      CTD sample by 1.4 dbar at this deployment's 0.27 dbar/s climb rate, which is larger
+      than the 1 m bin it lands in.
+    </p>
+  </div>
+
+  <h3>Attitude conventions — verified, not assumed</h3>
+  <p>Over 1.31 M in-water samples against the glider's own inclinometer:</p>
+<pre><code>Incl_Y = -0.975 · m_pitch + 1.45°   r = -0.989   → a CLIMB is NEGATIVE Incl_Y
+Incl_X = +0.861 · m_roll  - 2.53°   r = +0.961</code></pre>
+  <p>
+    so the QC pitch window is negative, and <code>pitch_positive: "nose_down"</code> —
+    sign <em>agreement</em> between Incl_Y and dP/dt is the healthy pairing.
+  </p>
+
+  <div class="note">
+    <span class="trap-label">QC gates are sized to the vehicle, not to a default</span>
+    <p>
+      This glider was badly ballasted from deployment: Incl_X ≈ 12° before the wing
+      failure, ≈ 22–23° after. The usual <code>roll abs_max: 10</code> would have rejected
+      the <em>entire</em> deployment. 30° is used, which flags only excursions beyond the
+      post-failure steady state.
+    </p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <caption>Products, flight-model arm</caption>
+      <thead><tr><th>&nbsp;</th><th class="num">pre-failure</th><th class="num">post-failure</th></tr></thead>
+      <tbody>
+        <tr><td>profiles</td><td class="num">85</td><td class="num">53</td></tr>
+        <tr><td>span</td><td class="num">02-04 00:43 → 02-06 05:54</td><td class="num">02-06 07:13 → 02-10 02:43</td></tr>
+        <tr><td>depth coverage</td><td class="num">6 – 502 dbar</td><td class="num">6 – 746 dbar</td></tr>
+        <tr><td>ε finite</td><td class="num">25.7 %</td><td class="num">52.7 %</td></tr>
+        <tr><td>χ finite</td><td class="num">30.4 %</td><td class="num">60.9 %</td></tr>
+        <tr><td>QC-flagged</td><td class="num">6.5 %</td><td class="num">16.9 %</td></tr>
+        <tr><td>median K_ρ</td><td class="num">8.7 × 10⁻⁷</td><td class="num">3.8 × 10⁻⁷</td></tr>
+        <tr><td>median Γ</td><td class="num">0.60</td><td class="num">0.61</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    QC flags concentrate at the inflections: the dominant bitfield value is 112 — all
+    three rules at once — which is exactly what a level, turning, sign-changing vehicle
+    should produce.
+  </p>
+</section>
+
+<!-- ================================================================= 7 -->
+<section id="s7">
+  <div class="sec-head"><span class="sec-no">07</span><h2>The wing failure</h2></div>
+
+  <div class="stats">
+    <div class="stat"><span class="k">Located to</span><span class="v">05:57:17</span><span class="d">UTC, 2025-02-06, at 50 m on a climb</span></div>
+    <div class="stat"><span class="k">Roll step</span><span class="v warnv">17° → 25°</span><span class="d">inside one minute; settles at 29–31°</span></div>
+    <div class="stat"><span class="k">Climb pitch</span><span class="v">43° → 37°</span><span class="d">same minute</span></div>
+  </div>
+
+  <p>
+    It is not a drift; it is a step. And the roll increase is <strong>climb-only</strong> —
+    dives stay at 14–18° either side of it — which is diagnostic of a lift-surface
+    change rather than a ballast shift.
+  </p>
+
+  <div class="trap">
+    <span class="trap-label">Do not over-read the pre/post difference</span>
+    <p>
+      Median ε falls by a factor 0.27 across the failure (flight-model arm). The vehicle
+      changed <em>and</em> the deployment moved — from 500 m yos in one water mass to 750 m
+      yos elsewhere. Water and platform changed together and are <strong>not separable</strong>
+      from this dataset.
+    </p>
+  </div>
+</section>
+
+<!-- ================================================================= 8 -->
+<section id="s8">
+  <div class="sec-head"><span class="sec-no">08</span><h2>Open questions</h2></div>
+
+  <ol>
+    <li>
+      <strong>Run the MicroRider on a subset of DIVES.</strong> This is the whole
+      recommendation, and it needs no unusual flight at all: osu685's glider already
+      dives at |pitch| = 25.0° (5–95 pct 23.1–27.0) and climbs at 45.5° (32.5–49.1).
+      That 20° separation, in <em>normal operation</em>, is ample to make the joint
+      (α, EM-scale) fit identifiable. The spread already exists — it is simply not being
+      recorded. Cost: MR power and storage on some dives. Payoff: the dominant term in
+      the ε error budget, plus an in-situ EM calibration.
+    </li>
+    <li>
+      <strong>The roll-dependent attitude disagreement.</strong>
+      <code>|Incl_Y| − |m_pitch|</code> goes from −1.28° to −3.54° across the wing failure,
+      tracking roll. That is far too large to be sensor accuracy (TrueNorth Revolution:
+      ±0.2° precision, ±0.3° accuracy) or assembly tolerance (~±0.5°). The useful
+      question for Rockland is <strong>what formula the MR firmware uses to convert its
+      2-axis tilt sensor into <code>Incl_X</code>/<code>Incl_Y</code></strong> — an
+      <code>atan2(a_x, a_z)</code> form is roll-dependent, an <code>asin(a_x)</code> form is
+      not. More diagnostic than the accuracy spec.
+    </li>
+    <li>
+      <strong>The depth structure of the discrepancy.</strong> On osu685 the excess falls
+      monotonically from 1.12 at 55 m to 0.98 at 1000 m. Over a climb, pressure, speed
+      (×1.5), temperature (21 → 5.5 °C) and — because the hull compresses differently
+      from seawater, moving the centre of buoyancy — the trim and hence α all change
+      together. Four candidate mechanisms are collinear along a glider profile and cannot
+      be decomposed. Local acceleration is excluded (0.5% across the full range).
+    </li>
+    <li>
+      <strong>Γ ≈ 0.6</strong> against the canonical 0.2. Worth checking whether it survives
+      the χ-side QC and whether it is depth-structured.
+    </li>
+  </ol>
+</section>
+
+<footer>
+  osu684 / MR433 · ARCTERX-2025 (TN441b) · processed with microstructure-tpw<br>
+  Configs, scripts and results: <code>proc/</code> — see <code>WORKFLOW.md</code> for the
+  reproduce-from-scratch command sequence.
+</footer>
+
+</div>
