@@ -165,6 +165,7 @@ def _compute_chi(
     ``temperature``/``conductivity`` are ignored for loading.
     """
     from odas_tpw.chi.chi import _spectrum_func
+    from odas_tpw.chi.fp07 import default_tau_model
     from odas_tpw.chi.l2_chi import process_l2_chi
     from odas_tpw.chi.l3_chi import process_l3_chi
     from odas_tpw.chi.l4_chi import process_l4_chi_epsilon, process_l4_chi_fit
@@ -357,6 +358,18 @@ def _compute_chi(
             interp_frac=l3_chi.interp_fraction,
         )
         ds.attrs.update(data["metadata"])
+        # Per-thermistor FP07 time-constant multipliers, recorded per channel so
+        # a chi file is traceable to the tau that produced it without the
+        # config. A different tau IS a different chi, and the values are
+        # deployment-specific fits rather than anything derivable from the .p
+        # file, so without this the number is unrecoverable from the product.
+        # Only written when a scale was actually applied, so an untouched file
+        # carries no misleading "1.0".
+        if tau_scales is not None:
+            for name, scale in zip(therm_names, tau_scales, strict=True):
+                if scale != 1.0:
+                    ds.attrs[f"fp07_tau_scale_{name}"] = float(scale)
+            ds.attrs["fp07_tau_model"] = default_tau_model(fp07_model)
         ds.attrs["history"] = f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
         start_time = data["metadata"].get("start_time", "")
         t_units = f"seconds since {start_time}" if start_time else "seconds"
