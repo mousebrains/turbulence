@@ -273,6 +273,7 @@ def process_l4_chi_epsilon(
             W,
             spectrum_model,
             kappa_T,
+            l3_chi.dof_spec,
         )
         return chi_val, epsilon_val, kB_val, K_max_val, fom_val, K_max_ratio_val, var_res_val
 
@@ -320,6 +321,7 @@ def process_l4_chi_fit(
                     W,
                     spectrum_model,
                     kappa_T,
+                    l3_chi.dof_spec,
                 )
             )
         else:
@@ -355,6 +357,7 @@ def process_l4_chi_fit(
                 W,
                 spectrum_model,
                 kappa_T,
+                l3_chi.dof_spec,
             )
             kB_prev = result.kB
             for _ in range(2):
@@ -373,6 +376,7 @@ def process_l4_chi_fit(
                     W,
                     spectrum_model,
                     kappa_T,
+                    l3_chi.dof_spec,
                 )
                 if (
                     np.isfinite(result.kB)
