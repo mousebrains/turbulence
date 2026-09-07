@@ -1,5 +1,5 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
-"""Medium-batch branch tests — scor160/l2, despike, pyturb/_profind."""
+"""Medium-batch branch tests — scor160/l2, despike."""
 
 from __future__ import annotations
 
@@ -125,54 +125,3 @@ class TestDespikeBoundary:
 
 
 # ---------------------------------------------------------------------------
-# pyturb/_profind.py — high-frequency cutoff clamp + no maxima/minima paths
-# ---------------------------------------------------------------------------
-
-
-class TestProfindEdges:
-    def test_smoothing_tau_too_small_clamps_fc(self):
-        """Tiny smoothing_tau with low fs → f_c >= nyquist → clamps to nyquist*0.9."""
-        from odas_tpw.pyturb._profind import find_profiles_peaks
-
-        # smoothing_tau=0.1 → f_c = 0.68/0.1 = 6.8 Hz, nyquist=2.0 → f_c clamped
-        fs = 4.0
-        n = 600
-        t = np.arange(n) / fs
-        pressure = 50.0 * np.abs(np.sin(np.pi * t / 60.0))
-        profiles = find_profiles_peaks(
-            pressure, fs, direction="down",
-            peaks_height=10.0, peaks_distance=20, peaks_prominence=10.0,
-            smoothing_tau=0.1,
-        )
-        # Should still complete without error
-        assert isinstance(profiles, list)
-
-    def test_no_profiles_with_minima_only(self):
-        """Pressure with negative-going local minima but no rising peaks."""
-        from odas_tpw.pyturb._profind import find_profiles_peaks
-
-        # Monotonically decreasing pressure → maxima will be at start only
-        # which won't satisfy peaks_height
-        pressure = np.linspace(50.0, 0.0, 600)
-        profiles = find_profiles_peaks(
-            pressure, 64.0, peaks_height=100.0, peaks_distance=20,
-            peaks_prominence=10.0,
-        )
-        assert profiles == []
-
-    def test_min_pressure_filters_short_drop(self):
-        """Profile with insufficient pressure drop is filtered out."""
-        from odas_tpw.pyturb._profind import find_profiles_peaks
-
-        fs = 64.0
-        n = int(60 * fs)
-        t = np.arange(n) / fs
-        # Small-amplitude pressure swing
-        pressure = 30.0 * np.abs(np.sin(2 * np.pi * t / 60.0))
-        # min_pressure=100 is bigger than the actual swing → should drop the profile
-        profiles = find_profiles_peaks(
-            pressure, fs, direction="down",
-            peaks_height=10.0, peaks_distance=100, peaks_prominence=5.0,
-            min_pressure=100.0,
-        )
-        assert profiles == []

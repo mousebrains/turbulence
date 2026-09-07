@@ -17,7 +17,6 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas
 - `scor160/` — ATOMIX shear-probe benchmark processing (L1–L4), shared physics/spectral modules
 - `processing/` — Instrument-agnostic profile processing (top_trim, bottom-crash, ct_align, mk_epsilon_mean, mk_chi_mean, mixing N²/dT/dz/Γ/K_T/K_ρ)
 - `perturb/` — Full campaign processing pipeline (trim, merge, calibrate, compute, bin)
-- `pyturb/` — Jesse's standalone analysis code (hosted here; `pyturb-cli` entry point)
 - `dinkum/` — Slocum Dinkum Binary Data (`*.dbd`/`*.ebd`, LZ4 `*.dcd`/`*.ecd`) → perturb hotel file (`dinkum-hotel` entry point). See `docs/dinkum_hotel.md`.
 - `erddap/` — ERDDAP `tabledap` → perturb hotel file (`erddap-hotel` entry point). The remote twin of `dinkum/`: same artifact, different source. See `docs/erddap_access_DESIGN.md` and `docs/rutgers_erddap_workflow.md`.
 - `fp07cal/` — FP07 in-situ calibration against a CTD (`fp07-cal` entry point). A **pre-pipeline** step: fits one Steinhart-Hart set per deployment and patches it into the `.p` files. See `docs/fp07cal/runbook.md`.

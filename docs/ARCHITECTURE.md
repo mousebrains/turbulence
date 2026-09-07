@@ -19,8 +19,6 @@ Two further subpackages sit alongside the hierarchy:
 - `odas_tpw.processing` — instrument-agnostic profile-processing helpers
   (top trim, bottom-crash, CT alignment, multi-probe epsilon combining),
   used by `perturb`.
-- `odas_tpw.pyturb` — third-party code (oceancascades/pyturb, maintained by
-  its upstream author) hosted in-repo; not refactored here.
 
 ---
 
