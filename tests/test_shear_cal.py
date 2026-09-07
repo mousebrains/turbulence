@@ -101,6 +101,79 @@ S(0) =0.1115
 """
 
 
+# The OLDEST layout (2020 and earlier). "Serial Number, SN :" and
+# "Sensitivity [Volts / (m/s)^2] :" are drawn as graphics that pypdf drops
+# entirely, so only their VALUES survive, glued onto the first extracted line.
+# Verbatim pypdf output from M2244_2020_03_10.pdf.
+M2244_OLDEST_TEXT = """M2244 0.0678
+Operator : S. Yasuda Probe PN : Capacitance (nF) : 1.000
+Calibration Date : 2020-03-10 Resistance (GOhm) : >200
+Recommended re-calibration : 2021-03-10 Pressure Rating : 600 Bar
+Calibration Temperature : 19.5 C
+Amplifier type : Charge
+Shear Probe Calibration Report
+"""
+
+
+def test_parse_oldest_layout_bare_serial_and_sens_on_first_line():
+    """2020-era layout: the labels are graphics; only the values survive."""
+    s = sc.parse_sheet_text(M2244_OLDEST_TEXT, source="M2244_2020_03_10.pdf")
+    assert s.sn == "M2244"
+    assert s.sensitivity == pytest.approx(0.0678)
+    assert s.cal_date == date(2020, 3, 10)
+    assert s.recal_due == date(2021, 3, 10)
+    assert s.pressure_test_date is None  # this era prints none
+
+
+def test_oldest_layout_fallback_never_overrides_a_labelled_sheet():
+    """It is a FALLBACK. A labelled sheet whose first line happens to look like
+    a bare serial + number must still take its labelled values."""
+    text = "M9999 0.1234\n" + M2863_MID_TEXT
+    s = sc.parse_sheet_text(text, source="M2863.pdf")
+    assert s.sn == "M2863"
+    assert s.sensitivity == pytest.approx(0.1115)
+
+
+def test_oldest_layout_fallback_ignores_an_unrelated_first_line():
+    """Every later layout opens with the Rockland letterhead, which must not
+    be mistaken for a serial/sensitivity pair."""
+    text = "Rockland Scientific International Inc.\nProbe SN: M2481\nsens: 0.0944 V\n"
+    s = sc.parse_sheet_text(text, source="M2481.pdf")
+    assert s.sn == "M2481"
+    assert s.sensitivity == pytest.approx(0.0944)
+
+
+def test_oldest_layout_survives_a_page_2_probe_sn_caption():
+    """The page-2 plot caption fills `sn` from a LATER page.
+
+    Real sheets carry "...ProbeSN:M2244U=0.703m/s..." on the data page, which
+    _SN_RE matches (see its comment), and extract_pdf_text concatenates every
+    page. A fallback gated on BOTH sn and sens being None would therefore never
+    fire on such a sheet: sn would be set, sens would stay None, and
+    load_cal_dir would drop the sheet as unparseable — reporting the probe as
+    having no calibration at all, which is the very failure this layout support
+    exists to prevent.
+    """
+    text = M2244_OLDEST_TEXT + "ProbeSN:M2244U=0.703m/s\n"
+    s = sc.parse_sheet_text(text, source="M2244_2020_03_10.pdf")
+    assert s.sn == "M2244"
+    assert s.sensitivity == pytest.approx(0.0678)
+    assert s.is_usable()
+
+
+@pytest.mark.parametrize("bad", ["0", "0.0", "-0.07"])
+def test_oldest_layout_sensitivity_is_subject_to_the_positivity_guard(bad):
+    """A fallback value must face the same sanity check as a labelled one.
+
+    With the fallback applied after the guards, "M2244 0" yielded
+    sensitivity=0.0 and is_usable() True — seeding a zero calibration point and
+    a divide-by-zero downstream.
+    """
+    s = sc.parse_sheet_text(f"M2244 {bad}\nCalibration Date : 2020-03-10\n", source="x.pdf")
+    assert s.sensitivity is None
+    assert not s.is_usable()
+
+
 def test_parse_old_layout_bare_sens_and_wrapped_previous():
     """2021-2023 layout: ``sens:`` label, previous cal as prose over two lines."""
     s = sc.parse_sheet_text(M2479_OLD_TEXT, source="M2479_2022_6_20.pdf")

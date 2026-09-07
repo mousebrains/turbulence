@@ -19,6 +19,15 @@ One row per (probe, calibration). Columns:
 | `pressure_test_date` | the sheet's pressure-test date; applies to the sheet's own calibration only (empty for previous-calibration and `manual` rows) |
 | `notes` | provenance/caveats; `previous-calibration entry on this sheet` marks the sheet's own history row |
 
+**The registry is a record, not a control surface.** `rsi-tpw sensors
+--cal-dir` builds its timelines by re-parsing the PDFs; nothing in the package
+reads this CSV back into a timeline (`_read_registry` serves only
+`update_sensitivity_csv`). So a `notes` caveat — e.g. the `DATE DOUBTFUL` flag
+on M2245's 2023-06-07 row — is guidance for a human reading the registry, and
+does **not** suppress that point in the staleness or mismatch check. If a
+doubtful point ever governs a real observation, exclude it from the PDF
+directory rather than relying on the note.
+
 Update workflow: drop new Rockland PDFs into this directory and run
 
 ```bash
@@ -56,9 +65,25 @@ only in how the current sensitivity and the previous calibration are labeled:
 
 | era | current sensitivity | previous calibration |
 |---|---|---|
+| 2020 and earlier | *(unlabelled)* — see below | none printed |
 | through mid-2023 | `sens: 0.0720 V` | prose, wrapped: `Previous calibration on 2021-11-10 with` / `sensitivity 0.0655` |
 | mid-2023 | `Sensitivity (sens): 0.1115 V` | — |
 | 2024-06 onward | `Sensitivity (sens or S): 0.0777 V` | `Previous Calibration Date:` + `Previous Sensitivity:` |
+
+On the **2020-and-earlier** sheets the `Serial Number, SN :` and
+`Sensitivity [Volts / (m/s)²] :` labels are drawn as graphics, so `pypdf` drops
+them and only their *values* survive, glued onto the first extracted line:
+
+```
+M2244 0.0678
+Operator : S. Yasuda  Probe PN : ...
+Calibration Date : 2020-03-10 ...
+```
+
+The parser reads that first line as a fallback — only after the labelled
+patterns have found nothing, so a properly labelled sheet can never be
+overridden. Every later layout opens with the Rockland letterhead instead, so
+there is no ambiguity. These sheets print no pressure-test date.
 
 Filename dates are not authoritative — several sheets are named for a date
 other than the calibration date they carry (e.g. `M2475_2021_11_12.pdf` records
