@@ -120,7 +120,16 @@ class PipelineResult:
     The two buckets carry that distinction:
 
     *stage_errors* — a product the config asked for was NOT written (a combo or
-    a merge that raised).  The run did not deliver, so the CLI exits non-zero.
+    a merge that raised, or a per-profile stage that produced an EMPTY product
+    directory while profiles existed).  The run did not deliver, so the CLI
+    exits non-zero.
+
+    That second case matters because the two buckets are not as separable as
+    they look: a fault that hits every profile identically arrives as N file
+    errors, one per profile, and absorbing each one individually turned a
+    total product loss into a clean exit (issue #184).  Past some point
+    "absorbed per file" stops being true of the run as a whole, and the
+    all-or-nothing point is where that is unambiguous.
 
     *file_errors* — a single input or profile failed and the pipeline absorbed
     it (a startup fragment with no data records, one profile whose fit blew up).
@@ -3421,6 +3430,56 @@ def _format_elapsed(seconds: float) -> str:
     return f"{seconds:.1f}s"
 
 
+def _empty_product_stage_errors(
+    output_dirs: dict[str, Path],
+    prof_ncs: list[Path],
+    stage_ncs: dict[str, list[Path]],
+    *,
+    n_file_errors: int,
+) -> list[str]:
+    """Stage errors for per-profile products that came out completely empty.
+
+    `stage_errors` already means "a product the config asked for was NOT
+    written" -- but only a stage that raised as a whole ever recorded one.  A
+    fault that hits every profile identically is absorbed one profile at a
+    time, so the run wrote an empty ``chi_NN/``, reported "N file error(s)",
+    and exited 0.  That is how a ``_compute_chi()`` TypeError silently cost
+    1330 profiles of chi on ARCTERX-2022 (issue #184): the exit status said the
+    run had succeeded.
+
+    Gated on *prof_ncs*: zero profiles is a legitimate outcome -- a corpus of
+    nothing but deck files -- and a downstream stage having nothing to do is
+    then correct rather than a failure.
+
+    Counted from the product DIRECTORIES, never from the per-file result
+    lists: on an incremental re-run every file is served from cache and returns
+    no paths while the products sit complete on disk.  What was written to the
+    directory is what "the product exists" means.
+
+    ``ctd`` is deliberately not covered -- it derives from the ``.p`` file
+    rather than from profiles, so *prof_ncs* is not its precondition and it
+    would need a gate of its own.
+    """
+    if not prof_ncs:
+        return []
+    errors = []
+    for stage, ncs in stage_ncs.items():
+        if stage not in output_dirs or ncs:
+            continue
+        hint = (
+            f"{n_file_errors} file error(s) were reported"
+            if n_file_errors
+            else "no file errors were reported, so the stage produced nothing "
+            "without failing"
+        )
+        errors.append(
+            f"{stage}: {len(prof_ncs)} profile(s) exist but "
+            f"{output_dirs[stage].name}/ holds no .nc files; {hint}. "
+            f"See the run log."
+        )
+    return errors
+
+
 def _file_errors(name: str, result: Any) -> list[str]:
     """Per-file failures recorded by :func:`process_file`, prefixed with *name*.
 
@@ -3864,6 +3923,13 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                 merge_config("binning", binning_cfg),
                 upstream=_upstream_for("chi_binned", config),
             )
+
+    outcome.stage_errors += _empty_product_stage_errors(
+        output_dirs,
+        prof_ncs,
+        {"diss": diss_ncs, "chi": chi_ncs},
+        n_file_errors=len(outcome.file_errors),
+    )
 
     # Stages run sequentially because each one now drives a per-profile
     # ``ProcessPoolExecutor`` of size *jobs*.  Running the 3 stages
