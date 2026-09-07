@@ -13,9 +13,16 @@ would have prevented.
 ## 1. Bench test before AND after every deployment
 
 **Do:** record a short (~2–5 min) static bench file with Rockland's test probes
-installed, immediately before and immediately after the deployment. Keep the
-files with the cruise data, named so they are obviously bench runs, and record
-their names in the cruise log.
+installed, immediately before and immediately after the deployment. Use the
+**deployment's config** so the channel layout and `diff_gain` are right — the
+probe `SN` and `sens` are essentially unused for a bench run, and a common
+template value across channels is actually convenient, since it cancels in a
+channel-to-channel comparison.
+
+**Name and log them so they are identifiable WITHOUT reading the data.** A
+convention such as `bench_pre_YYYYMMDD` / `bench_post_YYYYMMDD`, plus a line in
+the cruise log, costs nothing and matters more than it looks: see the warning
+below.
 
 **Why it works.** The test probes are diagnostic by construction:
 
@@ -35,6 +42,27 @@ damaged on cast 3 is indistinguishable from one that arrived wrong.
 
 **What it does NOT do:** it cannot check `diff_gain` (an open circuit carries no
 signal — see §2) and it can never give `sens`.
+
+> **Do not identify a bench file by its readings.** It is tempting to find bench
+> runs by testing "FP07 sits at `T_0`, shear near zero". That test is CIRCULAR:
+> a bench run exists to catch bad electronics, so on a faulty instrument the
+> readings will NOT be nominal — and the check would reject exactly the file you
+> most need to find. Identify bench runs by NAME and LOG ENTRY; treat the
+> readings as the result, never the identifier.
+>
+> What the readings mean once you have the file:
+>
+> | | FP07 | shear |
+> |---|---|---|
+> | healthy, test probes fitted | `T_0` (the test resistance is R₀, so ln(R/R₀)=0) | ~0 with small real noise (SN 428: 3.6e-4) |
+> | open circuit | the rail (SN 428: −17.087 °C) | ~0 with real noise |
+> | dead / railed acquisition | the rail, **zero variance** | a large constant, **zero variance** |
+>
+> Variance is the discriminator between an open circuit and a dead record, not
+> the value. SN 428's `dat_0001.p` has n_unique = 1 on *every* channel
+> (`Ax`/`Ay` at −32752, the ODAS `sp_char` comms-integrity value; `V_Bat`
+> −20.47 V) — a dead acquisition that a value-based test would have filed as a
+> bench run.
 
 > **ARCTERX-2022.** SN 194's two probes differ by ~50% in noise floor
 > (10⁻⁹·²⁷ vs 10⁻⁹·¹⁰). Probe or channel? **Permanently unanswerable.** We
@@ -68,9 +96,24 @@ probe sensitivities are not. A gain measurement made years later is still good
 evidence about the deployment (absent a hardware rebuild), whereas a probe
 recalibration years later says almost nothing about it (§4).
 
-**It can also replace the swap in §3.** Knowing the true channel gains `a`, `b`
-turns an already-measured probe-pair ratio directly into the probe ratio `p/q`,
-with no field procedure at all.
+**Relationship to the swap (§3).** Both answer the same question — channel or
+probe? — and they are complements, not alternatives:
+
+| | swap (§3) | bench gain (§2) |
+|---|---|---|
+| where | in the field, mid-deployment | on the bench, at servicing |
+| needs | nothing but hands and discipline | a calibrated source injected at the channel input |
+| signal | the ocean | a known voltage |
+| yields | the RATIOS `a/b` and `p/q` — **which** is at fault | the ABSOLUTE channel gains `a`, `b` |
+
+Bench gain is strictly the more informative: it is the only one of the two that
+produces a number you could actually apply, and combined with an
+already-measured in-water pair ratio it gives `p/q` with no field procedure at
+all. The swap is the zero-equipment version that infers attribution from ratios.
+
+Neither recovers the absolute level — `sens` still needs hydrodynamic
+calibration. **Do both:** the swap is free, the two are independent, and their
+agreement is itself a check.
 
 > **ARCTERX-2022.** SN 194 carries `diff_gain = 0.98` on *both* shear channels —
 > a 2-dp approximation never replaced with measured values. Independently
