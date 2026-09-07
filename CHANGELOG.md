@@ -77,6 +77,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   plainly that this is a per-file calibration and points at the
   deployment-scoped `fp07-cal` CLI for a sparse reference.
 
+### Changed
+- **`instruments.<SN>.*` is now hashed only into the stages that consume it.**
+  `fp07_tau_scale` is read solely by the chi computation, but the whole
+  `instruments` block versioned the **diss** directory, so setting a τ forced a
+  full epsilon recompute that could not change a single value — verified
+  bit-identical over 34 820 `epsilon`/`FM`/`fom`/`var_resolved` values on
+  ARCTERX-2022. It now versions chi only; `exclude_shear_probes`, which reaches
+  diss directly and chi transitively through Method 1's `epsilonMean`, still
+  versions both. An instrument whose settings are all irrelevant to a stage is
+  dropped from that stage's hash entirely, so a config carrying only a chi-side
+  knob hashes identically to one with no `instruments` at all.
+
+  **Effect on existing outputs:** a config that set `fp07_tau_scale` will now
+  resolve to the diss directory it would have used *without* it — reusing that
+  output instead of the one the old hash minted. The two are bit-identical, so
+  this reuses work rather than discarding it. Configs using only
+  `exclude_shear_probes` are unaffected.
+
+- **The applied FP07 τ multipliers are recorded on the chi product** as
+  `fp07_tau_scale_<channel>` plus `fp07_tau_model`. They are deployment-specific
+  fits, not derivable from the `.p` file, so without this the number behind a
+  chi file was unrecoverable from the product alone. Written only for probes
+  actually scaled, so an untouched file carries no misleading `1.0`.
+
 ### Added
 - **`epsilon.spectral_qc`: the ATOMIX-style per-probe cut epsilon was missing.**
   `chi.spectral_qc` has shipped and defaulted `true` for some time; epsilon had

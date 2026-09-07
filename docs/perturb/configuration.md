@@ -420,6 +420,17 @@ to the CTD product, which spans the whole up/down trajectory.
 
 Overrides keyed by serial-number identifier, matched against the parent directory of each `.p` file (e.g. `ARCTERX/VMP/SN465` → `SN465`). Default: `{}` (no overrides).
 
+**Each key versions only the stages it reaches.** The block feeds the stage
+signature so a change re-versions the affected output, but `fp07_tau_scale` is
+consumed only by the chi computation, so it versions **chi** and not **diss** —
+setting it does not force an epsilon recompute that could not change a value
+(verified bit-identical over 34 820 `epsilon`/`FM`/`fom`/`var_resolved` values).
+`exclude_shear_probes` reaches diss directly and chi transitively through
+Method 1's `epsilonMean`, so it versions both. An instrument whose settings are
+all irrelevant to a stage is dropped from that stage's hash entirely, so a
+config carrying only a chi-side knob hashes identically to one with no
+`instruments` at all.
+
 | Inner key | Type | Description |
 |-----------|------|-------------|
 | `exclude_shear_probes` | list of strings | Probe names (e.g. `["sh2"]`) to suppress for this instrument. The named probe is NaN'd before `mk_epsilon_mean`, so it is excluded from the multi-probe `epsilonMean` and from chi Method 1 (which uses `epsilonMean`) |
@@ -461,6 +472,11 @@ easy to under-rate.
 
 Fitting one τ per bead collapsed both units to 1.03x with the quartile spread
 falling from 1.47x/1.37x to 1.13x/1.11x.
+
+The applied multipliers are recorded on the chi product as
+`fp07_tau_scale_<channel>` (only for probes actually scaled, so an untouched
+file carries no misleading `1.0`) alongside `fp07_tau_model`, so a chi file is
+traceable to the τ that produced it without the config.
 
 The value is a **multiplier on the model**, not an absolute τ, so the model's
 speed dependence survives — a scale factor on `τ(U)` is what the data

@@ -339,6 +339,19 @@ _DYNAMIC_KEY_SECTIONS = frozenset({"instruments"})
 
 _INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes", "fp07_tau_scale"})
 
+# Which `instruments.<SN>.*` keys actually reach each stage. The block is hashed
+# into a stage's signature so a change re-versions its output -- but not every
+# key touches every stage. `fp07_tau_scale` is consumed only by the chi
+# computation, so letting it version the DISS directory forces a full epsilon
+# recompute that cannot change a single value (verified bit-identical over
+# 34820 epsilon / FM / fom / var_resolved values on ARCTERX-2022).
+# `exclude_shear_probes` does reach diss, and reaches chi transitively through
+# Method 1's epsilonMean, so it belongs to both.
+_INSTRUMENT_KEYS_BY_STAGE: dict[str, frozenset[str]] = {
+    "diss": frozenset({"exclude_shear_probes"}),
+    "chi": frozenset({"exclude_shear_probes", "fp07_tau_scale"}),
+}
+
 # Numeric dependencies whose version can change ε/χ/N² outputs even with no
 # change to our own source — folded into the engine fingerprint so a dep
 # upgrade also invalidates cached results.
@@ -712,8 +725,18 @@ _STAGE_SECTION: dict[str, str] = {
 STAGES: frozenset[str] = frozenset(_STAGE_SECTION)
 
 
-def canonical_instruments_for_hash(instruments: dict | None) -> dict[str, Any]:
-    """Normalize set-like instrument settings before hashing."""
+def canonical_instruments_for_hash(
+    instruments: dict | None, keys: frozenset[str] | None = None
+) -> dict[str, Any]:
+    """Normalize set-like instrument settings before hashing.
+
+    *keys* restricts the projection to the inner keys a given stage actually
+    consumes (see :data:`_INSTRUMENT_KEYS_BY_STAGE`). An instrument whose
+    settings are ALL irrelevant to that stage is dropped entirely rather than
+    left as an empty mapping, so a config carrying only a chi-side knob hashes
+    identically to one carrying no ``instruments`` at all -- which is what makes
+    the existing diss output reusable instead of needlessly re-versioned.
+    """
     normalized: dict[str, Any] = {}
     # Sort by str(key): instrument serials mix int (unquoted `465:`) and str keys.
     for key, settings in sorted((instruments or {}).items(), key=lambda kv: str(kv[0])):
@@ -721,6 +744,10 @@ def canonical_instruments_for_hash(instruments: dict | None) -> dict[str, Any]:
             normalized[str(key)] = settings
             continue
         item = dict(settings)
+        if keys is not None:
+            item = {k: v for k, v in item.items() if k in keys}
+            if not item:
+                continue
         excludes = item.get("exclude_shear_probes")
         if isinstance(excludes, list):
             item["exclude_shear_probes"] = sorted(str(probe) for probe in excludes)
@@ -757,7 +784,13 @@ def upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
     ctd_p = merge_config("ctd", config.get("ctd"))
     netcdf_p = merge_config("netcdf", config.get("netcdf"))
     strat_p = merge_config("stratification", config.get("stratification"))
-    instruments_p = canonical_instruments_for_hash(config.get("instruments"))
+    instruments_raw = config.get("instruments")
+    instruments_diss = canonical_instruments_for_hash(
+        instruments_raw, _INSTRUMENT_KEYS_BY_STAGE["diss"]
+    )
+    instruments_chi = canonical_instruments_for_hash(
+        instruments_raw, _INSTRUMENT_KEYS_BY_STAGE["chi"]
+    )
 
     profile_upstream = [
         ("files", files_p),
@@ -774,8 +807,10 @@ def upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
         ("stratification", strat_p),
     ]
     profile_chain = [*profile_upstream, ("profiles", profiles_p)]
-    diss_chain = [*profile_chain, ("instruments", instruments_p)]
-    chi_chain = [*diss_chain, ("epsilon", eps_p)]
+    diss_chain = [*profile_chain, ("instruments", instruments_diss)]
+    # chi re-states `instruments` with the chi-side keys included, so changing
+    # fp07_tau_scale re-versions chi WITHOUT re-versioning diss.
+    chi_chain = [*profile_chain, ("instruments", instruments_chi), ("epsilon", eps_p)]
     # CTD salinity/density come from CT-aligned conductivity (depends on ct.* and
     # the detected profiles) — so ct and profiles must be hashed. The CTD product
     # does NOT carry the background N2/dT/dz (those are profile-only), so

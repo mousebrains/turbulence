@@ -8,6 +8,8 @@ the two probes -- 1.77x on ARCTERX-2022 SN194 and 0.72x on SN428, in opposite
 directions. These tests pin the knob that lets each bead carry its own tau.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -184,3 +186,47 @@ class TestPerturbConfigSurface:
         a = canonical_instruments_for_hash({"S": {"fp07_tau_scale": {"T1": 0.3}}})
         b = canonical_instruments_for_hash({"S": {"fp07_tau_scale": {"T1": 0.4}}})
         assert a != b
+
+
+class TestTauProvenanceOnTheProduct:
+    """A chi file must be traceable to the tau that produced it.
+
+    The multipliers are deployment-specific fits, not anything derivable from
+    the .p file, so without this attribute the number is unrecoverable from the
+    product alone -- and "a different tau is different chi".
+    """
+
+    @pytest.mark.skipif(
+        not Path("/Volumes/SeaChest/ARCTERX/2022/Interior/VMP/Data/SN194").is_dir(),
+        reason="needs the ARCTERX-2022 corpus",
+    )
+    def test_applied_scales_are_written_and_absent_when_unused(self):
+        from odas_tpw.rsi.chi_io import _compute_chi
+
+        src = "/Volumes/SeaChest/ARCTERX/2022/Interior/VMP/Data/SN194/ARC1A032.P"
+        kw = dict(fft_length=512, diss_length=2048, spectrum_model="kraichnan")
+
+        with_tau = _compute_chi(src, fp07_tau_scale={"T1": 0.30, "T2": 0.75}, **kw)
+        a = with_tau[0].attrs
+        assert a["fp07_tau_scale_T1_dT1"] == pytest.approx(0.30)
+        assert a["fp07_tau_scale_T2_dT2"] == pytest.approx(0.75)
+        assert a["fp07_tau_model"] == "lueck"
+
+        plain = _compute_chi(src, **kw)
+        assert not [k for k in plain[0].attrs if k.startswith("fp07_tau_scale_")]
+        assert "fp07_tau_model" not in plain[0].attrs
+
+    @pytest.mark.skipif(
+        not Path("/Volumes/SeaChest/ARCTERX/2022/Interior/VMP/Data/SN194").is_dir(),
+        reason="needs the ARCTERX-2022 corpus",
+    )
+    def test_an_unscaled_probe_records_no_misleading_one(self):
+        from odas_tpw.rsi.chi_io import _compute_chi
+
+        src = "/Volumes/SeaChest/ARCTERX/2022/Interior/VMP/Data/SN194/ARC1A032.P"
+        out = _compute_chi(
+            src, fp07_tau_scale={"T1": 0.30}, fft_length=512, diss_length=2048
+        )
+        a = out[0].attrs
+        assert "fp07_tau_scale_T1_dT1" in a
+        assert "fp07_tau_scale_T2_dT2" not in a
