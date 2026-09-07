@@ -831,6 +831,9 @@ def _cmd_sensors(args: argparse.Namespace) -> None:
         cal_tol=args.cal_tol,
         cal_max_age_months=args.cal_max_age_months,
         cal_strict=args.cal_strict,
+        diff_gain=args.diff_gain,
+        diff_gain_csv=Path(args.diff_gain_csv) if args.diff_gain_csv else None,
+        diff_gain_strict=args.diff_gain_strict,
     )
     if code != 0:
         sys.exit(code)
@@ -1682,6 +1685,25 @@ def _add_sensors_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--shear", action="store_true", help="Inventory shear probes")
     p.add_argument("--fp07", action="store_true", help="Inventory FP07 thermistors")
     p.add_argument("--em", action="store_true", help="Inventory AEM1-G EM speed sensors")
+    p.add_argument(
+        "--diff-gain",
+        action="store_true",
+        help="Audit pre-emphasis differential gains per INSTRUMENT (not per probe). "
+        "epsilon goes as (diff_gain*sens)^-2 and chi as diff_gain^-2, so this has "
+        "the same leverage as the shear sensitivity. Flags a gain far from the fleet "
+        "median for its channel, and reports changes over time (expected when an "
+        "instrument's electronics are rebuilt).",
+    )
+    p.add_argument(
+        "--diff-gain-csv",
+        metavar="PATH",
+        help="Write the per-(file,channel) differential-gain table here",
+    )
+    p.add_argument(
+        "--diff-gain-strict",
+        action="store_true",
+        help="Exit 4 when the differential-gain audit flags an outlier",
+    )
     p.add_argument(
         "--all",
         dest="want_all",

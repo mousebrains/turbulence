@@ -40,6 +40,91 @@ bytes of AppleDouble, so each one would otherwise be reported as a spurious
 `invalid header_size=0` error. One Bank Seaspider tree globs 224 files, of which
 216 are real.
 
+## Auditing differential gains — `--diff-gain`
+
+`diff_gain` is the pre-emphasis differential gain of the **instrument's own
+amplifier chain**, not a property of the probe screwed into it. That makes it
+invisible to the sensor inventory above, in two separate ways: the inventory is
+keyed on *sensor* serial, so a shear `diff_gain` gets attributed to whichever
+probe happened to be installed; and it deliberately drops the `X_dX`
+pre-emphasized channels (`T1_dT1`, `T2_dT2`, `P_dP`) because they are the same
+physical sensor as their base channel — so the thermistor and pressure gains are
+never reported at all.
+
+The stakes are the shear sensitivity's. The conversion is
+
+```
+shear = (adc_fs / 2^adc_bits * counts + offset) / (2*sqrt(2)*diff_gain*sens)
+```
+
+so **ε goes as `(diff_gain·sens)⁻²` and χ as `diff_gain⁻²`** — a 2% gain error is
+4% in both, and an order-of-magnitude error is two orders of magnitude in ε.
+
+```bash
+rsi-tpw sensors --diff-gain VMP/                       # audit
+rsi-tpw sensors --diff-gain --diff-gain-csv gains.csv VMP/
+rsi-tpw sensors --diff-gain --diff-gain-strict VMP/    # exit 4 on an outlier
+```
+
+### Outliers
+
+A gain more than **2× from the fleet median for the same channel name** is
+flagged, and a gain **≤ 0** is reported outright as invalid — it divides the
+shear conversion by zero or flips its sign, and needs no fleet median to be
+wrong. The comparison is relative rather than against a hardcoded band because
+the plausible range differs by channel class — the differentiator channels sit
+near 1, `P_dP` near 20 — and hardcoding either would be a guess.
+
+The median takes **one vote per instrument, not per file**, so a campaign with a
+thousand files from one unit cannot drag the fleet. Files carrying no
+`instrument_info` are excluded from the vote entirely rather than merged into a
+fabricated instrument.
+
+The gate is **per channel**, not per scan: a channel only one or two units carry
+cannot be checked even in a large scan. Those are listed under `NOT CHECKED`, so
+"no outliers" is never a false all-clear.
+
+This exists because of a real miss. On ARCTERX-2023 one VMP carried
+`diff_gain = 0.09` on **both** shear channels where its three siblings in the
+same cruise carried 0.92–0.99 — which inflates its ε by roughly 110× — and
+nothing in the processing chain noticed:
+
+```
+  SN   132 vmp-250-IR       sh1        0.09  vs fleet median 0.941  (0.10x)
+  SN   132 vmp-250-IR       sh2        0.09  vs fleet median 0.922  (0.10x)
+```
+
+### Changes over time are reported, not flagged
+
+Gains follow the **electronics**, so they legitimately change when an instrument
+is rebuilt. The original VMPs (SN < 400) were Persistor CF2 builds; several have
+since been upgraded to RDL hardware, and the gains changed with the boards. That
+is informative, not an error, so it is shown as a dated transition:
+
+```
+SN 142  model vmp-250
+    sh1        CHANGED over time:
+          0.96   2019-05-28 → 2019-05-30   (12 file(s))
+         0.953   2021-06-22 → 2021-07-01   (58 file(s))
+      (gains follow the electronics; a change is expected when an instrument is rebuilt)
+```
+
+Grouping is on the **serial number alone**, and that is load-bearing: a real
+rebuild changes the `model` string too (SN 142 became `VMP250IR_RDL`, SN 479
+`VMP250IR_RT`), so keying on `(SN, model)` would split the instrument in two and
+suppress exactly the transition this is meant to surface. The models seen are
+printed alongside as `model vmp-250 → VMP250IR`.
+
+The `model` string can also **lag** the hardware — SN 142's 2021 files still read
+`vmp-250` while already carrying its RDL gains — which is a second reason not to
+treat it as a hardware key.
+
+### Exit codes
+
+`--diff-gain-strict` returns **4** when the audit flags an outlier — distinct
+from `--cal-strict`'s 3 and from 1 (scan failed), so a script can tell the three
+apart.
+
 ## Checking shear sensitivities against calibration sheets — `--cal-dir`
 
 Rockland ships a **Shear Probe Calibration Report** (a PDF) with each probe,
