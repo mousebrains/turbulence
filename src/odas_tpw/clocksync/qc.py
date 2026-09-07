@@ -23,6 +23,12 @@ import numpy as np
 
 from odas_tpw.clocksync.fit import FileFit
 
+# Absolute floor [s] on the continuity scale. A deployment whose offsets are
+# identical to the last bit still cannot resolve a slip below the timing
+# resolution the method claims, and dividing by a scale of zero would flag
+# arithmetic noise. 1 ms is below the few-tens-of-ms this package reports.
+_SCALE_FLOOR_S = 1e-3
+
 
 def _mad(x: np.ndarray) -> float:
     x = np.asarray(x, dtype=np.float64)
@@ -57,10 +63,25 @@ def check_continuity(
         [np.median(off[max(0, i - half) : i + half + 1]) for i in range(off.size)]
     )
     resid = off - trend
-    scale = _mad(resid)
-    if not np.isfinite(scale) or scale <= 0:
-        scale = float(np.std(resid)) or 1e-9
-    for f, r in zip(ok, resid, strict=True):
+
+    # The scale each residual is judged against EXCLUDES that residual, and is
+    # floored by the fits' own measurement uncertainty.
+    #
+    # With ten otherwise-identical offsets and one slip, MAD is exactly zero and
+    # the old fallback was np.std(resid) -- computed over the outlier itself.
+    # For residuals [A, 0, ..., 0] that ratio is N/sqrt(N-1), which is 3.33 at
+    # N=10 REGARDLESS OF A: a 10 s slip and a 10,000 s slip were both silently
+    # unflagged under a 5-sigma threshold (issue #180 F18). An indeterminate
+    # scale is not evidence of continuity.
+    sigmas = np.array([f.offset_sigma for f in ok], dtype=np.float64)
+    finite_sigma = sigmas[np.isfinite(sigmas) & (sigmas > 0)]
+    sigma_floor = float(np.median(finite_sigma)) if finite_sigma.size else 0.0
+    for i, (f, r) in enumerate(zip(ok, resid, strict=True)):
+        loo = np.delete(resid, i)  # leave-one-out: the point cannot absolve itself
+        scale = _mad(loo)
+        if not np.isfinite(scale) or scale <= 0:
+            scale = float(np.std(loo))
+        scale = max(scale, sigma_floor, _SCALE_FLOOR_S)
         if abs(r) <= n_sigma * scale:
             continue
         msg = (

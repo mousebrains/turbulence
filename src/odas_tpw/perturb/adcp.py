@@ -73,7 +73,12 @@ class WindowShear(NamedTuple):
     """Per-query shear-squared estimates from :func:`window_shear`."""
 
     S2: np.ndarray  # shear squared [s^-2]; NaN where unresolvable
-    n_ens: np.ndarray  # ensembles averaged per query (int)
+    n_ens: np.ndarray  # ensembles in the time window per query (int)
+    # Ensembles that actually SUPPORTED the estimate: the scarcer of the two
+    # bracketing adjacent-cell pairs, counting only ensembles in which both
+    # cells and both depths were finite. Differs from n_ens wherever the cell
+    # mask varies ping to ping, and is the honest N behind each S2 (#180 F10).
+    n_support: np.ndarray = np.zeros(0, dtype=np.intp)
 
 
 def read_codas(
@@ -181,6 +186,47 @@ def _nanmean_axis0(a: np.ndarray) -> np.ndarray:
         return np.where(cnt > 0, tot / np.where(cnt > 0, cnt, 1), np.nan)
 
 
+def _common_support_shear(
+    u: np.ndarray, v: np.ndarray, z: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Ensemble-averaged adjacent-cell shear on COMMON support.
+
+    Averaging each cell over whatever ensembles happened to report it, then
+    differencing adjacent cells, subtracts two means built from DIFFERENT
+    ensembles: temporal (e.g. barotropic) variability then rectifies into
+    apparent vertical shear. With true fields ``[0,0,0]`` then ``[1,1,1]`` at
+    10/20/30 m -- zero vertical shear at both times -- and observed masks
+    ``[0,0,NaN]`` and ``[NaN,1,1]``, the per-cell means came out ``[0,0.5,1]``
+    and the result was S^2 = 0.0025 s^-2 out of nothing (issue #180 F10).
+
+    Here each adjacent PAIR is averaged only over the ensembles in which both
+    cells (and both depths) are finite, so a first difference is never taken
+    between two different ensembles. Averaging still happens BEFORE
+    differencing, which is what suppresses uncorrelated per-ping noise; only
+    the support changes.
+
+    Returns ``(S2, z_mid, n_support)`` with the per-pair ensemble count.
+    """
+    ok = np.isfinite(u) & np.isfinite(v) & np.isfinite(z)
+    pair_ok = ok[:, :-1] & ok[:, 1:]  # (n_ens, n_cell - 1)
+    n_support = pair_ok.sum(axis=0)
+
+    def _pair_mean(arr: np.ndarray, lo: bool) -> np.ndarray:
+        sel = arr[:, :-1] if lo else arr[:, 1:]
+        tot = np.where(pair_ok, sel, 0.0).sum(axis=0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.where(n_support > 0, tot / np.maximum(n_support, 1), np.nan)
+
+    du = _pair_mean(u, False) - _pair_mean(u, True)
+    dv = _pair_mean(v, False) - _pair_mean(v, True)
+    z_lo, z_hi = _pair_mean(z, True), _pair_mean(z, False)
+    dz = z_hi - z_lo
+    z_mid = 0.5 * (z_hi + z_lo)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s2 = np.where((dz > 0) & (n_support > 0), (du**2 + dv**2) / dz**2, np.nan)
+    return s2, z_mid, n_support
+
+
 def window_shear(
     adcp: AdcpData,
     times: npt.ArrayLike,
@@ -228,6 +274,7 @@ def window_shear(
     n = q_times.size
     s2_out = np.full(n, np.nan)
     n_ens = np.zeros(n, dtype=np.intp)
+    n_support = np.zeros(n, dtype=np.intp)
 
     if max_gap is None:
         cell_dz = np.diff(adcp.depth, axis=-1)
@@ -247,12 +294,12 @@ def window_shear(
         if hi <= lo:
             continue
         n_ens[i] = hi - lo
-        # NaN-aware per-cell ensemble means. A cell present in only some
-        # ensembles still contributes — the mask varies ping to ping.
-        u_bar = _nanmean_axis0(adcp.u[lo:hi])
-        v_bar = _nanmean_axis0(adcp.v[lo:hi])
-        z_bar = _nanmean_axis0(adcp.depth[lo:hi])
-        s2, z_mid = shear_squared(u_bar, v_bar, z_bar)
+        # Ensemble means on COMMON support per adjacent cell pair: a cell
+        # present in only some ensembles must not be differenced against a
+        # neighbour present in different ones (#180 F10).
+        s2, z_mid, support = _common_support_shear(
+            adcp.u[lo:hi], adcp.v[lo:hi], adcp.depth[lo:hi]
+        )
         good = np.isfinite(s2) & np.isfinite(z_mid)
         if not np.any(good):
             continue
@@ -270,5 +317,9 @@ def window_shear(
             continue  # bracketing estimates straddle a masked gap
         frac = (q_depths[i] - zg[k - 1]) / (zg[k] - zg[k - 1])
         s2_out[i] = sg[k - 1] + frac * (sg[k] - sg[k - 1])
+        # The scarcer of the two bracketing pairs: how many ensembles actually
+        # supported this estimate, so a yield drop is attributable rather than
+        # mysterious (#180 F10 red team).
+        n_support[i] = int(min(support[good][k - 1], support[good][k]))
 
-    return WindowShear(S2=s2_out, n_ens=n_ens)
+    return WindowShear(S2=s2_out, n_ens=n_ens, n_support=n_support)

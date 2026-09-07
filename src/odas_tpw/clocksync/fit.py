@@ -109,18 +109,41 @@ def window_pairs(
 
     n = round(window * fs)
     stride = max(1, round(step * fs))
+    max_gap_samples = max(1, int(np.floor(max_gap * fs)))
     for i in range(0, max(0, r.t.size - n + 1), stride):
         a, b = r.p[i : i + n], tg.p[i : i + n]
         ok = np.isfinite(a) & np.isfinite(b)
         if ok.sum() < min_fill * n:
             continue
         if not ok.all():
-            # A short interior hole, already under the max_gap limit; bridge it
-            # so the FFT has something continuous, and only because the window
-            # is at least min_fill real data.
+            # The aggregate min_fill test does NOT imply every remaining hole is
+            # short: a single 100 s hole in a 900 s window is 11% missing, well
+            # inside a 0.8 fill, and the old comment asserting "already under
+            # the max_gap limit" was simply false -- the window was interpolated
+            # straight across it and passed on for lag and uncertainty
+            # estimation with a fabricated segment nothing identified
+            # (issue #180 F17). Check the longest CONSECUTIVE run explicitly.
+            if _longest_gap(ok) > max_gap_samples:
+                continue
+            # Short interior holes only; bridge them so the FFT has something
+            # continuous, and only because the window is mostly real data.
             a = np.interp(np.arange(n), np.flatnonzero(ok), a[ok])
             b = np.interp(np.arange(n), np.flatnonzero(ok), b[ok])
         yield float(r.t[i] + 0.5 * window), a, b
+
+
+def _longest_gap(ok: np.ndarray) -> int:
+    """Longest run of consecutive False in *ok* [samples]."""
+    if ok.all():
+        return 0
+    # Run-length over the inverted mask via the indices of the True entries.
+    idx = np.flatnonzero(ok)
+    if idx.size == 0:
+        return int(ok.size)
+    interior = int(np.max(np.diff(idx)) - 1) if idx.size > 1 else 0
+    lead = int(idx[0])
+    trail = int(ok.size - 1 - idx[-1])
+    return max(interior, lead, trail)
 
 
 def fit_file(
