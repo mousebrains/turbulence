@@ -62,12 +62,73 @@ def test_no_config_key_leaks_into_the_splat(section, exclude, func):
     )
 
 
+# Arguments each call site passes EXPLICITLY, alongside the splat. A splatted
+# key of the same name is not a TypeError about an unexpected argument -- it is
+# "got multiple values for keyword argument", raised in the same place with the
+# same silent-empty-product result. `salinity` is in both exclusion lists for
+# exactly this reason; `temperature` is one plausible config key away from it
+# (`epsilon.T_source` already resolves into `temperature=`).
+#
+# `fp07_tau_scale` is a different hazard: the chi splat has it INSERTED from
+# `instruments:`, so a `chi.fp07_tau_scale` key would not raise at all -- one
+# value would silently overwrite the other. Disjointness covers both.
+_EXPLICIT_KWARGS = {
+    "epsilon": frozenset({"salinity", "temperature", "_pre_loaded"}),
+    "chi": frozenset(
+        {"epsilon_ds", "salinity", "temperature", "_pre_loaded", "fp07_tau_scale"}
+    ),
+}
+
+
 @pytest.mark.parametrize(
     ("section", "exclude"),
     [("epsilon", _EPSILON_KWARG_EXCLUDE), ("chi", _CHI_KWARG_EXCLUDE)],
 )
-def test_exclusion_list_has_no_dead_entries(section, exclude):
-    """A stale exclusion hides a key the callee would now accept."""
+def test_splat_never_collides_with_an_explicit_argument(section, exclude):
+    collide = sorted(_splatted(section, exclude) & _EXPLICIT_KWARGS[section])
+    assert not collide, (
+        f"{section}: config key(s) {collide} are splatted into the compute "
+        f"call, which ALSO passes them explicitly. That is "
+        f"'got multiple values for keyword argument' on every profile -- the "
+        f"same silently empty product as an unexpected argument. Resolve the "
+        f"config value and pass it once, the way `salinity` is handled."
+    )
+
+
+@pytest.mark.parametrize(
+    ("section", "exclude", "func"),
+    [
+        ("epsilon", _EPSILON_KWARG_EXCLUDE, _compute_epsilon),
+        ("chi", _CHI_KWARG_EXCLUDE, _compute_chi),
+    ],
+)
+def test_exclusion_list_does_not_swallow_an_accepted_key(section, exclude, func):
+    """A stale exclusion hides a key the callee would now accept.
+
+    If the compute function grows a parameter that the exclusion list still
+    strips, the callee falls back to its own default and the user's configured
+    value is silently ignored -- no error, no empty product, just a setting
+    that does nothing.
+
+    `salinity` is the one legitimate case: it is stripped raw and re-passed
+    explicitly after `_resolve_salinity_cfg` turns "measured"/"hotel" into an
+    array the callee can use.
+    """
+    swallowed = sorted((set(exclude) & _accepted(func)) - {"salinity"})
+    assert not swallowed, (
+        f"{section}: {swallowed} are stripped by the exclusion list but ARE "
+        f"parameters of {func.__name__}(). The configured value never reaches "
+        f"it and nothing reports that. Either drop them from the exclusion "
+        f"list or, like `salinity`, resolve and pass them explicitly."
+    )
+
+
+@pytest.mark.parametrize(
+    ("section", "exclude"),
+    [("epsilon", _EPSILON_KWARG_EXCLUDE), ("chi", _CHI_KWARG_EXCLUDE)],
+)
+def test_exclusion_list_names_only_real_config_keys(section, exclude):
+    """A typo'd exclusion silently excludes nothing."""
     known = set(DEFAULTS[section]) | {"fft_length", "diss_length", "overlap"}
     dead = sorted(set(exclude) - known)
     assert not dead, f"{section}: exclusion list names unknown key(s) {dead}"
