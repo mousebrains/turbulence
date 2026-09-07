@@ -149,6 +149,20 @@ DEFAULTS: dict[str, dict] = {
         # stages). null = "auto" QC chain; a channel
         # name; or a number = constant reference
         # temperature [degC].
+        "spectral_qc": False,  # ATOMIX-style FM + var_resolved cut on
+        # per-probe epsilon. Default FALSE while chi.spectral_qc
+        # defaults True — a deliberate, documented asymmetry:
+        # enabling it moves ~20% of probe-windows and it is not
+        # yet validated against the ATOMIX benchmark.
+        "FM_max": 1.15,  # bit 1. The MAD-based FM, NOT the
+        # variance-ratio `fom` that fom_max thresholds.
+        "var_resolved_min": 0.5,  # bit 16, method == 0 only
+        "pair_policy": "keep_both",  # keep_both | drop_high | flag_only
+        # Two-probe windows only; >=3 probes stay with
+        # mk_epsilon_mean's symmetric outlier rule.
+        "pair_limit": 2.7718585822512662,  # 1.96*sqrt(2); the FULL
+        # coefficient of mean(sigma_ln), matching
+        # scor160.l4.DEFAULT_DISS_RATIO_LIMIT exactly
         "fom_max": None,  # null = no FOM cut. e.g. 2.0 NaNs each
         # per-probe (e_N, epsilon[probe,:]) cell
         # whose figure-of-merit fom[probe,seg]
@@ -974,6 +988,49 @@ epsilon:
                           # failure warns but proceeds); a number = constant
                           # reference temperature [degC] (like ODAS
                           # constant_temp)
+  spectral_qc: false      # ATOMIX-style per-probe cut. Default FALSE, while
+                          # chi.spectral_qc defaults TRUE -- a deliberate,
+                          # documented asymmetry: enabling this moves ~20% of
+                          # probe-windows and it is not yet validated against
+                          # the ATOMIX benchmark. Implements bits 1 and 16 of
+                          # scor160.l4._compute_flags and NOTHING else; bits 2
+                          # and 8 (despike fraction/passes) need diagnostics the
+                          # diss product does not carry. Hence `spectral_qc`,
+                          # not `atomix_qc` -- it cannot be the full set.
+                          # When no probe survives a window, the window is
+                          # DROPPED (NaN), matching rsi's _compute_epsi_final
+                          # rather than chi.spectral_qc's never-drop fallback:
+                          # a finite-but-wrong epsilon rescales Method-1 chi
+                          # ~linearly while the chi fom stays ~1, so nothing
+                          # downstream could reject it.
+  FM_max: 1.15            # bit 1. The MAD-based FM -- NOT the variance-ratio
+                          # `fom` that fom_max below thresholds. Different
+                          # statistics, only weakly related.
+  var_resolved_min: 0.5   # bit 16, applied to method == 0 ONLY. The gate is
+                          # not optional: an ISR fit never integrates the
+                          # dissipation range, so a low resolved fraction is
+                          # expected rather than diagnostic, and ATOMIX exempts
+                          # it. Ungated on one real corpus this rejected 3.51%
+                          # instead of 0.18%. With no `method` variable the
+                          # criterion is skipped, not guessed.
+  pair_policy: keep_both  # bit 4, TWO-PROBE windows only. mk_epsilon_mean's
+                          # outlier rule needs >= 3 probes -- with two, neither
+                          # is identifiable as the outlier and always dropping
+                          # the maximum biases epsilonMean low -- so it declines
+                          # to act and ATOMIX bit 4 does. Both are defensible,
+                          # so the choice is exposed:
+                          #   keep_both  : perturb's behaviour (default)
+                          #   drop_high  : ATOMIX's -- keeps the MINIMUM, which
+                          #                makes a low junk probe authoritative
+                          #   flag_only  : count it, mask nothing
+                          # >= 3 probes stay with mk_epsilon_mean, so two rules
+                          # never contest the same window.
+  pair_limit: 2.7718585822512662
+                          # The FULL coefficient of mean(sigma_ln) -- i.e.
+                          # 1.96*sqrt(2), identical to scor160's
+                          # DEFAULT_DISS_RATIO_LIMIT, so a value can be moved
+                          # between the two unchanged. (mk_epsilon_mean spells
+                          # the same threshold as 1.96*sqrt(2)*mu_sigma.)
   fom_max: null           # null = NO spectral-fit QC on epsilon. IMPORTANT: unlike
                           # the rsi run_pipeline path (which applies the full ATOMIX
                           # flag set -- FM>1.15, var_resolved<0.5, despike limits --

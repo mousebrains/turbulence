@@ -196,8 +196,79 @@ Note that perturb and `rsi-tpw` use different spectral defaults (perturb: `fft_s
 | `salinity` | float \| `"measured"` \| `"hotel"` \| `null` | `null` | Salinity [PSU] for viscosity. `null` = fixed 35; a number = that fixed value; `"measured"` = per-profile from C/T/P (TEOS-10, needs conductivity); `"hotel"` (or `"hotel:<var>"`) = a [hotel](#hotel--hotel-file-external-telemetry)-injected salinity channel (default variable `salinity`) — for gliders/MicroRiders without onboard conductivity |
 | `epsilon_minimum` | float | `1e-13` | Floor: values below this are set to NaN |
 | `T_source` | string \| float \| `null` | `null` | Reference temperature for seawater properties (viscosity for ε; viscosity and κ_T for χ — one knob serves both stages). `null`/`"auto"` = first plausible of `T1`, `T2`, …, `T`, `JAC_T` (implausible channels — railed, drifting, mostly non-finite — are skipped with a warning; QC evaluates in-water samples, P > 0.5 dbar, when pressure is available); a channel name (e.g. `"T2"`, `"JAC_T"`, or a hotel temperature channel) = use that channel (a QC failure warns but proceeds); a number = constant reference temperature [°C] (ODAS `constant_temp` parity). The resolved source is recorded in the diss/chi products as `temperature_source`/`temperature_qc` attributes. |
-| `fom_max` | float | `null` | Per-probe figure-of-merit cut (null = no cut). E.g. `2.0` NaNs each per-probe cell (`e_N`, `epsilon[probe,:]`) whose `fom[probe,seg]` >= `fom_max`, applied **before** `mk_epsilon_mean` so bad probes drop out of the geometric mean individually |
+| `spectral_qc` | bool | `false` | ATOMIX-style per-probe cut (bits 1 and 16 only — see below). Default `false` while `chi.spectral_qc` defaults `true`; deliberate, documented asymmetry |
+| `FM_max` | float | `1.15` | Bit 1: cut where `FM > FM_max`. The **MAD-based `FM`**, not the variance-ratio `fom` |
+| `var_resolved_min` | float | `0.5` | Bit 16: cut where `var_resolved < min` **and `method == 0`**. Skipped entirely when no `method` variable exists |
+| `pair_policy` | string | `"keep_both"` | Bit 4, windows with **exactly two finite probes**: `keep_both` \| `drop_high` \| `flag_only` |
+| `pair_limit` | float | `2.7718…` | Full coefficient of mean(σ_ln); equals `scor160.l4.DEFAULT_DISS_RATIO_LIMIT` (1.96·√2) exactly, so a value moves between the two settings unchanged |
+| `fom_max` | float | `null` | Per-probe figure-of-merit cut (null = no cut). E.g. `2.0` NaNs each per-probe cell (`e_N`, `epsilon[probe,:]`) whose `fom[probe,seg]` >= `fom_max`, applied **before** `mk_epsilon_mean` so bad probes drop out of the geometric mean individually. **Caveat:** on a corpus containing ISR estimates a low value cuts them *as a class* — the variance-ratio `fom` compares observed variance against a model integral an ISR fit never uses, so a poor ratio there is expected, not diagnostic. On ARCTERX-2022 every window with `fom >= 1.15` was an ISR estimate. Prefer `spectral_qc` |
 | `diagnostics` | bool | `false` | Include diagnostic variables |
+
+
+#### `epsilon.spectral_qc` — what it does and does not implement
+
+`scor160.l4._compute_flags` (the rsi path) has five criteria. perturb's diss
+product carries the inputs for two of them:
+
+| bit | criterion | here |
+|---|---|---|
+| 1 | `FM > limit` | **implemented** (`FM_max`) |
+| 2 | despike fraction > limit | not implementable — no `despike_fraction` in the product |
+| 4 | inter-probe consistency | `pair_policy`, two-probe windows only (see below) |
+| 8 | despike passes > limit | not implementable — no `despike_passes` |
+| 16 | `var_resolved < limit`, `method == 0` only | **implemented** (`var_resolved_min`) |
+
+That is why it is called `spectral_qc`, mirroring the shipped
+`chi.spectral_qc`, and **not** `atomix_qc`: it cannot be the full flag set, and
+naming it after the standard would claim a conformance it does not have.
+
+**The `method` gate on bit 16 is not optional.** An ISR fit never integrates the
+dissipation range, so a low resolved fraction is expected rather than
+diagnostic, and ATOMIX exempts those estimates. Ungated on ARCTERX-2022 the
+criterion rejects 3.51% of probe-windows instead of 0.18%. If the dataset has no
+`method` variable the criterion is **skipped with a warning**, never guessed.
+
+**Failing every probe drops the window.** With no clean probe the window becomes
+NaN, matching rsi's `_compute_epsi_final` and deliberately unlike
+`chi.spectral_qc`, which falls back to all probes. The reason is the Method-1
+coupling: a finite-but-wrong epsilon rescales chi roughly linearly while the chi
+`fom` stays ≈1, so nothing downstream can reject it, whereas NaN self-excludes.
+
+#### `epsilon.pair_policy` — the two-probe case the other rules decline
+
+`mk_epsilon_mean`'s outlier rule needs `n_probes >= 3`. With two probes neither
+is identifiable as the outlier, and always dropping the maximum would
+systematically retain the lower probe and bias `epsilonMean` low, so it keeps
+both. ATOMIX bit 4 *does* act on a pair, and keeps the minimum. Both positions
+are defensible, so the choice is exposed rather than made:
+
+- **`keep_both`** (default) — perturb's existing behaviour, bit-identical.
+- **`drop_high`** — ATOMIX's action. Opt in knowing it makes a low junk probe
+  authoritative: on a three-probe fixture that costs a factor of 50.
+- **`flag_only`** — count the disagreement, mask nothing.
+
+Windows with three or more **finite** probes are left to `mk_epsilon_mean`, so
+the two rules are exhaustive and never contest the same window. The gate is on
+the per-window finite count, not the instrument's probe count: `mk_epsilon_mean`
+declines `finite_count > 2`, so a three-probe instrument with one probe NaN in a
+window falls into exactly the same gap as a two-probe one. The threshold and σ_ln come from
+`processing.probe_consistency`, shared with the cross-probe consistency log, so
+the gate and the diagnostic always describe the same statistic.
+
+`tests/test_interprobe_consistency_forms.py` pins both rules and their
+disagreement. On ARCTERX-2022, 6.40% of epsilon windows exceed the threshold, so
+the policy is not academic.
+
+#### Provenance
+
+An applied `spectral_qc` writes onto the diss product: `spectral_qc_applied`,
+`spectral_qc_FM_max`, `spectral_qc_var_resolved_min`, `spectral_qc_pair_policy`,
+`spectral_qc_pair_limit`, the per-criterion counts `spectral_qc_n_cut_FM` /
+`_n_cut_var_resolved` / `_n_cut_pair`, and `spectral_qc_rejected_fraction`
+(over finite cells). The cut is **not** epsilon-neutral — on ARCTERX-2022 it
+rejects ~20% of probe-windows, 47% of the top epsilon decile, and shifts the
+median epsilon by 1.14× — so the size of it belongs in the file, not only in
+this document.
 
 ---
 
