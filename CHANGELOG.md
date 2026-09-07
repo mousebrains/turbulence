@@ -41,6 +41,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A missing `max_gap` fails once at config-load time, not once per file in
   the worker pool.
 
+### Changed
+- **A perturb stage that produced an EMPTY product now fails the run.**
+  `stage_errors` has always meant "a product the config asked for was not
+  written", but only a stage that raised *as a whole* ever recorded one. A
+  fault that hits every profile identically arrives as N file errors, absorbed
+  one at a time — so the run created an empty `chi_NN/`, reported
+  `0 stage failure(s)` and `N file error(s)`, and exited **0**. That is how the
+  `_compute_chi()` regression below cost 1330 profiles of chi on ARCTERX-2022
+  while reporting success.
+
+  `run_pipeline` now records a stage error when a per-profile stage the config
+  enabled holds no `.nc` files **while profiles exist**. Two things that make
+  it safe rather than noisy:
+
+  - **Gated on profiles existing.** Zero profiles is a legitimate outcome — a
+    corpus of nothing but deck files — and diss/chi then having nothing to do
+    is correct, not a failure.
+  - **Counted from the product directory, never from the per-file results.**
+    On an incremental re-run every file is served from cache and returns no
+    paths while the products sit complete on disk; counting results would fail
+    every cached re-run. The directory is what "the product exists" means.
+
+  The message distinguishes empty-with-file-errors (something failed on every
+  profile) from empty-with-none (the stage produced nothing without failing) —
+  different bugs. `ctd` is not covered: it derives from the `.p` file rather
+  than from profiles, so it needs a gate of its own.
+
+  This is the class of failure, not the one instance: any per-profile
+  exception — a missing therm channel, a bad speed source — reproduced the
+  same silent-empty-product before this.
+
 ### Fixed
 - **perturb `chi` produced nothing at all, on every profile.** `chi.mixing_use_qc_fallback`
   was added as a config key but not to the list that filters the `chi:` section
