@@ -185,6 +185,99 @@ def _prune_orphan_profile_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
     return pruned
 
 
+def _stack_like(ds, var: str, n_probe: int):
+    """``var`` as (n_probe, n_time) from a 2-D probe variable, else ``None``."""
+    import numpy as np
+
+    if var not in ds:
+        return None
+    da = ds[var]
+    if "probe" in da.dims and ds.sizes.get("probe", 0) == n_probe:
+        return np.vstack(
+            [np.asarray(da.isel(probe=i).values, dtype=np.float64) for i in range(n_probe)]
+        )
+    return None
+
+
+def _annotate_probe_pairs(ds, *, quantity: str, floor: float, context: str) -> None:
+    """Cross-probe consistency diagnostic on a perturb per-profile dataset (#167).
+
+    The rsi path has run this since #131 (``rsi/dissipation.py``,
+    ``rsi/chi_io.py``); perturb computed nothing, so a persistent probe-pair
+    disagreement was invisible in the batch product that most analysis reads.
+
+    Called AFTER the FM cut, the floor and the QC drop, so the metric describes
+    the data that actually ships. That placement is the documented difference
+    from the rsi call site, which runs over all finite windows at the dataset
+    build -- the two can differ slightly for the same data.
+
+    **Windows where both probes sit at the floor are excluded**, and that is not
+    automatic: ``mk_epsilon_mean`` / ``mk_chi_mean`` floor on an internal copy
+    and write back only the combined mean and sigma, so the per-probe ``e_i`` /
+    ``chi_i`` variables still carry their sub-floor values. Left in, two probes
+    resting on the noise floor contribute the ratio of two arbitrary sub-floor
+    numbers -- agreement that means nothing, or disagreement that is not real.
+    Re-applying the floor here drops them via ``probe_pair_stats``'s
+    finite-and-positive test.
+    """
+    import numpy as np
+
+    from odas_tpw.processing.probe_consistency import (
+        annotate_probe_consistency,
+        lueck_ln_sigma,
+    )
+
+    is_chi = quantity == "chi"
+    stem = "chi_" if is_chi else "e_"
+    names = sorted(
+        (
+            str(k)
+            for k in ds.data_vars
+            if str(k).startswith(stem) and str(k)[len(stem) :].isdigit()
+        ),
+        key=lambda s: int(s[len(stem) :]),
+    )
+    if len(names) < 2:
+        return
+    vals = np.vstack([np.asarray(ds[n].values, dtype=np.float64) for n in names])
+    with np.errstate(invalid="ignore"):
+        vals[vals <= floor] = np.nan
+    if not np.isfinite(vals).any():
+        return
+
+    # sigma_ln needs a dissipation rate for the Kolmogorov length: epsilon
+    # itself, or the per-probe epsilon_T on the chi side (mirrors mk_chi_mean).
+    eps_for_sigma = vals
+    if is_chi:
+        stacked = _stack_like(ds, "epsilon_T", len(names))
+        if stacked is not None:
+            eps_for_sigma = stacked
+
+    n_time = vals.shape[1]
+    speed = np.asarray(ds["speed"].values, dtype=np.float64) if "speed" in ds else np.ones(n_time)
+    nu = np.asarray(ds["nu"].values, dtype=np.float64) if "nu" in ds else np.full(n_time, 1e-6)
+    try:
+        diss_length = float(
+            ds["diss_length"].values if "diss_length" in ds else ds.attrs["diss_length"]
+        )
+        fs = float(ds["fs_fast"].values if "fs_fast" in ds else ds.attrs["fs_fast"])
+    except (KeyError, TypeError, ValueError):
+        return
+
+    sigma_ln = lueck_ln_sigma(
+        eps_for_sigma, nu, speed, diss_length, fs, _stack_like(ds, "var_resolved", len(names))
+    )
+    annotate_probe_consistency(
+        ds,
+        vals,
+        sigma_ln,
+        names,
+        quantity=quantity,
+        attr_prefix="chi_" if is_chi else "",
+        context=context,
+    )
+
+
 def _write_binned_or_clear(ds: "xr.Dataset", out_dir: Path, manifest: str | None = None) -> None:
     """Write *ds* to ``out_dir/binned.nc``, or remove a stale one if *ds* is empty.
 
@@ -775,6 +868,63 @@ def _time_epoch_seconds(da) -> Any:
     return vals.astype(np.float64)
 
 
+#: Plausible range for a seawater reference temperature, deg C (issue #166).
+#: The seawater freezing point at 35 PSU is about -1.9 C and the warmest open
+#: surface water is about 36 C, so this is wide enough that no real ocean sample
+#: is rejected. It exists to catch a DEAD sensor, not to QC oceanography.
+REFERENCE_T_MIN = -2.5
+REFERENCE_T_MAX = 40.0
+
+
+def _gate_reference_temperature(T, T_name: str, file_label: str):
+    """NaN reference-temperature samples that are not physically possible (#166).
+
+    A railed thermistor is the motivating case: across the CasperWest corpus
+    ``T1`` sat at ~58.46 C for every sample, and because the reference
+    temperature feeds BOTH ``gsw.SP_from_C`` and ``sorted_stratification`` it
+    corrupted salinity, viscosity and N2 together -- epsilon came out ~5.3x low
+    **with green QC**, because nothing downstream asks whether the temperature
+    was possible. Late ARCTERX-2023 MR685 files carry the same rail.
+
+    Bad samples are NaN'd rather than the profile rejected, so an isolated spike
+    costs one sample; a fully railed channel then leaves too few finite salinity
+    samples and the existing fall-through to fixed 35 PSU takes over. That is
+    why this never raises.
+
+    Warns once per profile, naming the observed range -- "fewer than two finite
+    salinity samples" downstream does not tell anyone their sensor is dead.
+    """
+    import numpy as np
+
+    arr = np.asarray(T, dtype=np.float64)
+    finite = np.isfinite(arr)
+    if not finite.any():
+        return arr
+    bad = finite & ((arr < REFERENCE_T_MIN) | (arr > REFERENCE_T_MAX))
+    n_bad = int(np.count_nonzero(bad))
+    if not n_bad:
+        return arr
+    lo, hi = float(np.min(arr[bad])), float(np.max(arr[bad]))
+    out = arr.copy()
+    out[bad] = np.nan
+    logger.warning(
+        "%s: %s has %d of %d finite sample(s) outside the plausible seawater "
+        "range [%.1f, %.1f] C (offending values span %.4g to %.4g); those "
+        "samples are discarded. The reference temperature feeds salinity, "
+        "viscosity and N2, so a railed sensor biases epsilon and the mixing "
+        "products without tripping any other QC (issue #166).",
+        file_label,
+        T_name,
+        n_bad,
+        int(np.count_nonzero(finite)),
+        REFERENCE_T_MIN,
+        REFERENCE_T_MAX,
+        lo,
+        hi,
+    )
+    return out
+
+
 def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_source=None):
     """Per-cast sorted N2/dT/dz on the full slow grid (NaN outside casts).
 
@@ -806,7 +956,7 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
     if P is None or T is None:
         return None, None, None
     P = np.asarray(P, dtype=np.float64)
-    T = np.asarray(T, dtype=np.float64)
+    T = _gate_reference_temperature(T, T_name, Path(str(getattr(pf, "filepath", "?"))).name)
     C = pf.channels.get(C_name)
     # Only usable if conductivity is a slow channel aligned with P/T; a fast C
     # would be silently misaligned by the slow-index slice below.
@@ -1021,7 +1171,9 @@ def _window_stratification_for_profile(
             return None
         t_slow = _time_epoch_seconds(prof["t_slow"])
         P = prof["P"].values.astype(np.float64)
-        T = prof[T_name].values.astype(np.float64)
+        T = _gate_reference_temperature(
+            prof[T_name].values.astype(np.float64), T_name, file_label
+        )
         lat = float(prof["lat"].values) if "lat" in prof else np.nan
         lon = float(prof["lon"].values) if "lon" in prof else np.nan
         lat = 0.0 if not np.isfinite(lat) else lat
@@ -2425,6 +2577,12 @@ def process_file(
                                 ],
                                 drop_action=qc_drop_action,
                             )
+                        _annotate_probe_pairs(
+                            ds,
+                            quantity="epsilon",
+                            floor=float(eps_cfg.get("epsilon_minimum", 1e-13)),
+                            context=f"{p_path.name} {Path(prof_path).name}",
+                        )
                         _copy_profile_scalars(prof_path, ds, prof_scalars_cache)
                         if strat_enabled:
                             _attach_window_stratification(
@@ -2564,6 +2722,12 @@ def process_file(
                                     ],
                                     drop_action=qc_drop_action,
                                 )
+                            _annotate_probe_pairs(
+                                chi_ds,
+                                quantity="chi",
+                                floor=float(chi_cfg.get("chi_minimum", 1e-13)),
+                                context=f"{p_path.name} {Path(prof_path).name}",
+                            )
                             # Derived mixing quantities (Gamma, K_T, K_rho);
                             # N2 salinity per stratification.salinity (own
                             # C/T/P by default, or fixed/hotel-injected)
