@@ -101,7 +101,78 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   chi file was unrecoverable from the product alone. Written only for probes
   actually scaled, so an untouched file carries no misleading `1.0`.
 
+### Removed
+- **The `pyturb` compatibility layer (`src/odas_tpw/pyturb/`, `pyturb-cli`).**
+  A re-implementation of Jesse Cusack's standalone
+  [pyturb](https://github.com/oceancascades/pyturb) on top of our readers,
+  hosted here so results could be compared. Nobody was using it, upstream has
+  moved on, and it carried the last two open findings from the issue #180
+  review (F11, F12) — for code on a path no product depends on.
+
+  Removed with its tests, its `docs/pyturb/` comparison report, and the
+  `scripts/compare_pyturb.py` / `scripts/generate_comparison_md.py` pair that
+  shelled out to the deleted entry point. The *ideas* worth keeping were ported
+  into `rsi/` instead (see Added, above).
+
+  `docs/perturb/pyturb_comparison.md` stays: it compares upstream pyturb against
+  our main `rsi`/`perturb`/`scor160` packages, which is a live question.
+
+  **Migration:** none for pipeline users — `rsi-tpw`, `perturb` and `scor160-tpw`
+  are untouched. Anyone invoking `pyturb-cli` should use upstream pyturb
+  directly, or `rsi-tpw eps`.
+
 ### Added
+- **Plausible-range checks on shear calibration coefficients.** The strict
+  parse from issue #180 (F06) fails closed on a coefficient that is not a
+  number, but it cannot see one that parses cleanly and is still impossible.
+  The canonical case is the un-filled `sens = 1.0` placeholder: it converted
+  without a murmur and scaled epsilon by roughly 200x. `sens` outside
+  [0.03, 0.15] V*s/m now warns.
+
+  The bounds are checked against our own corpus rather than adopted from the
+  vendor sheet: over **15 998 channel-configs** (ARCTERX, SUNRISE, RIOT,
+  CASPER, Taiwan, ASTRAL, Keck, goflow) `sens` spans 0.041-0.123, so the window
+  brackets every probe we have deployed and fires on none of them.
+
+  `diff_gain` gets a deliberately much wider bound ([0.01, 10]), because that
+  distribution turned out to be **bimodal**: 2236 of 15 998 rows sit at
+  0.090-0.099 across VMP **132, 330 and 429**. SN 132's 0.09 (issue #178) is
+  therefore not a lone outlier, and a tight band would flag a seventh of every
+  shear channel we own — an alarm nobody would keep. Telling a real low-gain
+  differentiator from a transcription error needs that instrument's own
+  history, which is what `rsi-tpw sensors --diff-gain` is for.
+
+  These **warn and continue**, never substitute: the value parsed, so it may be
+  real hardware we have not met, and only the operator can tell. Same principle
+  as F06 one level out — never fabricate a coefficient, never hide the one you
+  were given. Concept and the sensitivity bounds from Jesse Cusack's
+  [pyturb](https://github.com/oceancascades/pyturb).
+
+- **`cal_<key>` provenance attributes on every converted L1 variable.** An L1
+  file is read years later without the config that produced it, and a shear
+  record is meaningless without the `sens` and `diff_gain` that scaled it.
+  `SHEAR` now carries `cal_sens = [0.1075, 0.113]` and
+  `cal_diff_gain = [0.954, 0.933]`, as arrays parallel to `sensor_names` so
+  probe 0's coefficient stays with probe 0. An audit can now answer "which
+  sensitivity is baked into this epsilon?" from the product, rather than by
+  re-deriving it from a `.p` file that `fp07-cal` or `patch-config` may since
+  have rewritten.
+
+  Recorded **by observation**: `channels.CalRecorder` notes which keys each
+  converter actually reads, so the attributes cannot drift from the conversion
+  the way a hand-maintained per-type table would. Keys probed but absent are
+  not recorded (`convert_poly` walking `coef0..coef9` is a loop exit, not
+  provenance), and a pass-through converter that consumes no coefficients
+  honestly publishes none.
+
+  The prefix is required: this covers every variable, and `TEMP_CTD`'s JAC
+  coefficients are literally named `a`-`f`. The older bare-name therm attrs on
+  *per-profile* files (#131 m8, read by `chi_io`) are unchanged — that
+  mechanism is confined to gradient channels where the names do not clash.
+
+  Numerically inert: the sample-exact `v6_golden_converted.npz` regression
+  passes unchanged. See
+  [docs/rsi-tpw/calibration_provenance.md](docs/rsi-tpw/calibration_provenance.md).
 - **`rsi-tpw sensors --diff-gain`: a differential-gain audit keyed by
   INSTRUMENT.** `diff_gain` belongs to an instrument's amplifier chain, not to
   the probe screwed into it, which made it invisible to the sensor inventory in

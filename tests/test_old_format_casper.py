@@ -355,8 +355,10 @@ type = accel
 
     def test_pfile_piezo_counts_and_adapter_vib(self, tmp_path):
         pf = PFile(self._make_vib_file(tmp_path, real_accel=False))
-        assert pf.channel_info["Ax"] == {"units": "counts", "type": "piezo"}
-        assert pf.channel_info["Ay"] == {"units": "counts", "type": "piezo"}
+        info_ax = pf.channel_info["Ax"]
+        assert (info_ax["units"], info_ax["type"]) == ("counts", "piezo")
+        info_ay = pf.channel_info["Ay"]
+        assert (info_ay["units"], info_ay["type"]) == ("counts", "piezo")
 
         l1 = pfile_to_l1data(pf, speed=0.5)
         assert l1.vib_type == "VIB"
@@ -373,8 +375,10 @@ type = accel
         (Goodman must keep every coherent reference), name-sorted, with the
         ACC label because a true accelerometer is present."""
         pf = PFile(self._make_vib_file(tmp_path, real_accel=True))
-        assert pf.channel_info["Ax"] == {"units": "counts", "type": "piezo"}
-        assert pf.channel_info["Ay"] == {"units": "m_s-2", "type": "accel"}
+        info_ax = pf.channel_info["Ax"]
+        assert (info_ax["units"], info_ax["type"]) == ("counts", "piezo")
+        info_ay = pf.channel_info["Ay"]
+        assert (info_ay["units"], info_ay["type"]) == ("m_s-2", "accel")
 
         l1 = pfile_to_l1data(pf, speed=0.5)
         assert l1.vib_type == "ACC"

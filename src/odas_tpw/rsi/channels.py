@@ -19,6 +19,76 @@ def _safe_float(s: Any, default: float = 0.0) -> float:
         return default
 
 
+# --- Calibration provenance ----------------------------------------------
+
+# Structural config keys that a converter reads but that are not calibration
+# coefficients: ``name`` (error messages and the range check) and ``units``
+# (convert_poly's declared output unit).  Everything else a converter reads and
+# that parses as a finite number is provenance.
+#
+# Both are normally non-numeric, so ``float()`` would reject them anyway — but
+# that is an accident of their usual values, not a rule.  A channel named "2"
+# is legal in an RSI config and would otherwise be recorded as a coefficient
+# called "name".  Listing only the keys that are actually read keeps the set
+# honest: a longer speculative list looks like protection while testing as
+# dead code.
+_NON_CAL_KEYS = frozenset({"name", "units"})
+
+
+class CalRecorder(dict[str, Any]):
+    """A channel-config dict that remembers which keys a converter read.
+
+    Provenance by observation rather than by a hand-maintained table: the
+    recorded set is, by construction, exactly the keys the converter consulted
+    and found, so it cannot drift out of step with the conversion the way a
+    parallel "coefficients for sensor type X" list would.  Add a coefficient
+    to a converter and it documents itself; stop reading one and the attribute
+    disappears on its own.
+
+    Keys probed but *absent* are not recorded.  :func:`convert_poly` walks
+    ``coef0``..``coef9`` to find the end of the polynomial, and a missing
+    ``coef7`` is not provenance — it is the loop's exit condition.
+
+    The idea is Jesse Cusack's (pyturb writes the coefficients it used onto
+    each variable); the recording is ours, because our converters take the
+    config as a plain dict and we would rather not maintain the mapping twice.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._used: set[str] = set()
+
+    def __getitem__(self, key: str) -> Any:
+        value = super().__getitem__(key)  # raises before recording if absent
+        self._used.add(key)
+        return value
+
+    def get(self, key: str, default: Any = None) -> Any:  # type: ignore[override]
+        if dict.__contains__(self, key):
+            self._used.add(key)
+        return dict.get(self, key, default)
+
+    def __contains__(self, key: object) -> bool:
+        present = super().__contains__(key)
+        if present and isinstance(key, str):
+            self._used.add(key)
+        return present
+
+    def calibration(self) -> dict[str, float]:
+        """The numeric coefficients this conversion actually consumed."""
+        out: dict[str, float] = {}
+        for key in sorted(self._used):
+            if key in _NON_CAL_KEYS:
+                continue
+            try:
+                value = float(dict.__getitem__(self, key))
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(value):
+                out[key] = value
+        return out
+
+
 def _require_float(params: dict[str, Any], key: str, default: float, sensor: str) -> float:
     """Like _safe_float, but warn loudly when a sensor-specific calibration
     coefficient is missing from the channel config.
@@ -263,6 +333,73 @@ def convert_therm(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     return 1.0 / inv_T - 273.15, "deg_C"
 
 
+# --- Plausible-range checks on calibration coefficients -------------------
+#
+# _parse_finite_float fails closed on a value that cannot be a number at all.
+# It cannot catch a value that parses cleanly, is finite and positive, and is
+# still physically impossible — the un-filled ``sens = 1.0`` placeholder being
+# the canonical case: it converts without complaint and scales epsilon by
+# sens^-2, roughly 200x on a real probe.  The idea (and the shear-sensitivity
+# bounds) come from Jesse Cusack's pyturb ``_pfile/convert.py``.
+#
+# Bounds are checked against our own corpus rather than adopted on faith.  The
+# shear inventory (15998 channel-configs across ARCTERX, SUNRISE, RIOT, CASPER,
+# Taiwan, ASTRAL, Keck and goflow; /Volumes/SeaChest/Shear Inventory/
+# shear_sensors.csv, read 2026-09-07) gives:
+#
+#   sens       min 0.041   max 0.123   median 0.1041   67 distinct values
+#   diff_gain  min 0.09    max 1.01    median 0.941    28 distinct values
+#
+# so [0.03, 0.15] V*s/m brackets every real probe we have ever deployed with
+# ~35% margin at the low end and ~22% at the high end, and fires on none of
+# them.
+_SHEAR_SENS_MIN = 0.03
+_SHEAR_SENS_MAX = 0.15
+
+# diff_gain deliberately gets a much wider bound.  The corpus is BIMODAL: 2236
+# of 15998 rows (14%) sit at 0.090-0.099 (VMP SNs 132, 330 and 429) and the
+# remaining 13762 at 0.905-1.01.  A tight band around the upper mode would
+# flag a seventh of every shear channel we own, and an alarm that fires on a
+# seventh of the corpus is an alarm that gets muted.  Telling "0.09 is this
+# instrument's real differentiator" from "0.09 is a typo" needs an
+# instrument-keyed comparison against that instrument's own history, which is
+# what ``rsi-tpw sensors --diff-gain`` (odas_tpw.rsi.diff_gain) exists to do;
+# issue #178 for SN 132 specifically.  The bound here is only a floor/ceiling
+# for a value that cannot be a differentiator gain at all — it clears the
+# observed extremes by roughly a factor of 9 on each side.
+_SHEAR_DIFF_GAIN_MIN = 0.01
+_SHEAR_DIFF_GAIN_MAX = 10.0
+
+
+def _check_plausible_range(
+    value: float,
+    key: str,
+    sensor: str,
+    lo: float,
+    hi: float,
+    units: str,
+    name: str,
+) -> None:
+    """Warn when a well-formed calibration coefficient is outside its range.
+
+    Deliberately a warning, not an error.  The value parsed, so it may be a
+    real coefficient for hardware we have not seen; refusing to convert would
+    make an unfamiliar-but-valid instrument unreadable.  A warning is
+    recoverable, an exception is not, and the operator is the one who can tell
+    the two cases apart.
+    """
+    if lo <= value <= hi:
+        return
+    warnings.warn(
+        f"{sensor} channel {name}: calibration coefficient '{key}'={value:g} is "
+        f"outside the plausible range [{lo:g}, {hi:g}] {units}. The value parsed "
+        "cleanly, so it is used as-is and physical units follow from it — but "
+        "check the instrument config: an un-filled placeholder or a "
+        "mis-transcribed coefficient looks exactly like this.",
+        stacklevel=3,
+    )
+
+
 def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """Shear probe: raw counts to velocity shear [s⁻¹].
 
@@ -279,6 +416,15 @@ def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     # silently became 1.0 rescaled shear variance by (diff_gain)^2 with no
     # warning — 123x on a real 0.09 probe (issue #180 F06).
     diff_gain = _require_finite_float(params, "diff_gain", 1.0, "shear", positive=True)
+    _check_plausible_range(
+        diff_gain,
+        "diff_gain",
+        "shear",
+        _SHEAR_DIFF_GAIN_MIN,
+        _SHEAR_DIFF_GAIN_MAX,
+        "(dimensionless)",
+        str(params.get("name", "?")),
+    )
     # Strict parse: a present-but-unparseable sens (stray comma, typo) must
     # not fall through _safe_float's default — that silently fabricates
     # sens=1.0 and scales epsilon by sens^-2 (~125x on real probes).
@@ -305,6 +451,15 @@ def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
             "re-translate with 'rsi-tpw v1to6 --sens' or add "
             "'sh1_sens:'/'sh2_sens:' keys to the setup file (issue #141)."
         )
+    _check_plausible_range(
+        sens,
+        "sens",
+        "shear",
+        _SHEAR_SENS_MIN,
+        _SHEAR_SENS_MAX,
+        "V*s/m",
+        str(params.get("name", "?")),
+    )
     adc_zero = _optional_finite_float(params, "adc_zero", 0.0, "shear")
     sig_zero = _optional_finite_float(params, "sig_zero", 0.0, "shear")
     phys = (adc_fs / 2**adc_bits) * data + (adc_zero - sig_zero)

@@ -225,7 +225,12 @@ def test_mag_units_udunits_parseable():
     from odas_tpw.rsi.convert import _l1_variable_specs
 
     n = 4
-    pf = types.SimpleNamespace(channels={"Mx": np.zeros(n)}, is_fast=lambda _name: False)
+    pf = types.SimpleNamespace(
+        channels={"Mx": np.zeros(n)},
+        is_fast=lambda _name: False,
+        # _l1_variable_specs reads channel_info to attach cal_<key> provenance.
+        channel_info={"Mx": {"units": "uT", "type": "magn", "cal": {}}},
+    )
     ch = {
         "shear": [],
         "vib": [],
