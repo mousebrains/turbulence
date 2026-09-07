@@ -566,15 +566,36 @@ def _variance_method(
     # Final integration limit
     K_limit_log = min(K_limit_log, np.log10(K_95), np.log10(K_AA))
     K_limit_log = min(max(K_limit_log, np.log10(K_LIMIT_MIN)), np.log10(K_LIMIT_MAX))
+    # K_AA is a HARD ceiling, applied last.  The K_LIMIT_MIN clip above (and the
+    # minimum-bin fallbacks below) can raise the limit back above the anti-alias
+    # wavenumber, readmitting untrusted bins into the variance integral: with
+    # K_AA = 2 cpm, corrupting only the excluded band 2 < k <= 7 moved epsilon
+    # 7.3x while the variance-ratio fom IMPROVED, 0.987 -> 0.998 (issue #180
+    # F13).  Unreachable at the default f_AA = 98 Hz, which needs W > 12.6 m/s
+    # to put K_AA below 7 cpm, but f_AA is user-settable in both rsi and perturb.
+    K_limit_log = min(K_limit_log, np.log10(K_AA))
 
     # K is monotone nondecreasing — searchsorted gives the count.  The
     # implicit Range is ``np.arange(n_var)``; we use ``[:n_var]`` slicing
     # below to avoid building the index array (slicing returns a view).
     n_var = int(np.searchsorted(K, 10**K_limit_log, side="right"))
+    n_trusted = int(np.searchsorted(K, K_AA, side="right"))
     if n_var > 0 and K[n_var - 1] < K_LIMIT_MIN:
         n_var = min(n_var + 1, n_freq)
     if n_var < 3:
         n_var = min(3, n_freq)
+    if n_var > n_trusted:
+        # Fewer than three trusted bins exist: refuse rather than integrate past
+        # the anti-alias filter, where the spectrum is the filter's roll-off and
+        # not the flow's.
+        warnings.warn(
+            f"anti-alias limit K_AA={K_AA:.3g} cpm leaves only {n_trusted} trusted "
+            "wavenumber bin(s) (need 3): the variance-method epsilon is a "
+            "non-estimate for this window (the ISR estimate, if selected, is "
+            "unaffected). Check f_AA against the profiling speed.",
+            stacklevel=3,
+        )
+        return float("nan"), float("nan"), 0
 
     e_3 = ISOTROPY_FACTOR * nu * np.trapezoid(spec_safe[:n_var], K[:n_var])
     e_3 = max(e_3, EPSILON_FLOOR)

@@ -420,7 +420,13 @@ def test_hotel_pressure_scale_applied():
 
 
 def test_beta_2_zero_is_not_deletion_but_neutral_is():
-    """Setting beta_2=0 crashes the reader; only beta_2 -> infinity removes the term."""
+    """Setting beta_2=0 is rejected by the reader; only beta_2 -> infinity removes
+    the term.
+
+    Pre-#180 this surfaced as a bare ``ZeroDivisionError`` out of an arithmetic
+    expression. The reader now names the coefficient and says what to do
+    instead; the contract (zero is NOT deletion) is unchanged.
+    """
     from odas_tpw.fp07cal.patch import NEUTRAL
     from odas_tpw.rsi.channels import convert_therm
 
@@ -429,8 +435,14 @@ def test_beta_2_zero_is_not_deletion_but_neutral_is():
     counts = np.array([-5000.0, 0.0, 5000.0])
     absent, _ = convert_therm(counts, dict(base))
 
-    with pytest.raises(ZeroDivisionError):
+    with pytest.raises(ValueError, match=r"beta_2.*reciprocal"):
         convert_therm(counts, {**base, "beta_2": "0"})
+
+    # A NEGATIVE beta_2 is a legitimate calibration -- the Steinhart-Hart
+    # higher-order coefficient is often negative and coeffs_to_config emits
+    # 1/c for a fitted c of either sign -- so it must NOT be rejected.
+    signed, _ = convert_therm(counts, {**base, "beta_2": "-2.5e5"})
+    assert np.all(np.isfinite(signed))
 
     neutral, _ = convert_therm(counts, {**base, "beta_2": NEUTRAL})
     np.testing.assert_array_equal(neutral, absent)
