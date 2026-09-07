@@ -202,6 +202,12 @@ DEFAULTS: dict[str, dict] = {
         # chi_final. Never drops a window (falls
         # back to all probes when none pass). Set
         # false to publish unfiltered chiMean.
+        "mixing_use_qc_fallback": False,  # May windows kept ONLY by that
+        # fallback (chiQCFallback == 1: no probe
+        # passed) feed K_T/Gamma/K_rho? They are
+        # always reported in chiMean; true restores
+        # the pre-#180 behaviour of also building
+        # mixing coefficients from them.
         "fom_max": None,  # null = no FOM cut. An OPTIONAL, more
         # aggressive HARD per-probe pre-cut (can NaN a
         # whole window); independent of spectral_qc.
@@ -1107,6 +1113,17 @@ chi:
                           # number = that fixed S; "measured" = per-profile
                           # from JAC_C/JAC_T/P (TEOS-10); "hotel" (or
                           # "hotel:<var>") = a hotel-injected salinity channel
+  mixing_use_qc_fallback: false
+                          # May a window kept ONLY by chi's soft spectral-QC
+                          # fallback (chiQCFallback == 1 -- NO probe inside the
+                          # fom band with enough K_max_ratio) feed K_T / Gamma /
+                          # K_rho?  false (default) still reports chiMean for
+                          # those windows but leaves the mixing coefficients
+                          # NaN: a diffusivity built from a chi that failed
+                          # every spectral test is a finite number with no
+                          # evidence behind it, and before issue #180 F04
+                          # nothing downstream could tell it apart.  true
+                          # restores the old behaviour.
   mixing: true            # derived mixing quantities (N2, dTdz, K_T, Gamma,
                           # K_rho) on the chi grid; N2 salinity follows the
                           # stratification.salinity setting

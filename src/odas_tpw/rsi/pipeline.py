@@ -21,7 +21,7 @@ from odas_tpw.chi.l4_chi import (
     _CHI_FOM_LIMIT,
     _CHI_K_MAX_RATIO_MIN,
     L4ChiData,
-    _compute_chi_final,
+    chi_final_and_fallback,
     process_l4_chi_epsilon,
     process_l4_chi_fit,
 )
@@ -55,6 +55,7 @@ def _qc_chi_final(
     k_max_ratio: np.ndarray,
     fom_limit: float = _CHI_FOM_LIMIT,
     k_max_ratio_min: float = _CHI_K_MAX_RATIO_MIN,
+    use_qc_fallback: bool = False,
 ) -> np.ndarray:
     """Per-window geometric-mean chi over probes that pass spectral QC.
 
@@ -65,8 +66,18 @@ def _qc_chi_final(
     identically; this wrapper is retained for the two-sided-band QC contract it
     documents and tests. All inputs are ``(n_probe, n_window)``; returns
     ``(n_window,)``.
+
+    ``use_qc_fallback`` (default False) governs the windows in which NO probe
+    passed. The reported chi keeps them — never lose a window — but the MIXING
+    products do not: K_T = chi/(2 dT/dz^2) built from a chi that failed every
+    spectral test is a finite number with no evidence behind it, and nothing
+    downstream could tell it apart (issue #180 F04). Set True to restore the
+    pre-#180 behaviour.
     """
-    return _compute_chi_final(chi, fom, k_max_ratio, fom_limit, k_max_ratio_min)
+    res = chi_final_and_fallback(chi, fom, k_max_ratio, fom_limit, k_max_ratio_min)
+    if use_qc_fallback:
+        return res.chi_final
+    return np.where(res.qc_fallback, np.nan, res.chi_final)
 
 
 def _epsilon_hp_cut(fs_fast: float, fft_length: int, override: float | None) -> float:
@@ -1041,6 +1052,30 @@ def _write_l4_chi(
                 {
                     "units": "K2 s-1",
                     "long_name": "thermal variance dissipation rate (best estimate)",
+                },
+            ),
+            "chi_qc_fallback": (
+                ["time"],
+                (
+                    np.zeros(l4_chi.n_spectra, dtype=np.int8)
+                    if l4_chi.chi_qc_fallback is None
+                    else l4_chi.chi_qc_fallback.astype(np.int8)
+                ),
+                {
+                    "units": "1",
+                    "long_name": "chi_final came from the soft-QC fallback",
+                    "flag_values": np.array([0, 1], dtype=np.int8),
+                    "flag_meanings": "at_least_one_probe_passed no_probe_passed",
+                    "comment": (
+                        "1 where NO probe passed the two-sided fom band with "
+                        "K_max_ratio >= 0.5, so chi_final is the geometric mean of "
+                        "probes that all failed spectral QC. The value is reported "
+                        "(no window is lost) but it is EXCLUDED from K_T / Gamma / "
+                        "K_rho by default: a mixing coefficient built from a chi "
+                        "that failed every test is a finite number with no evidence "
+                        "behind it. Before issue #180 F04 these windows were "
+                        "indistinguishable from passing ones."
+                    ),
                 },
             ),
             "epsilon_T": (

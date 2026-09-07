@@ -172,8 +172,25 @@ def compute_speed_for_pfile(
                 f"the {speed_cutout:g} m/s speed_cutout floor as "
                 "through-water speed."
             )
-        return _slow_to_fast(U_em_slow, t_fast, t_slow, fs_fast, fs_slow,
-                             tau=tau, speed_min=speed_cutout), W_slow, "em"
+        frac, gap = _coverage(U_em_slow, t_slow)
+        max_gap = float(cfg.get("max_gap_s", _SPEED_MAX_GAP_S))
+        if frac < _EM_MIN_FINITE_FRACTION or gap > max_gap:
+            raise ValueError(
+                f"speed.method='em': U_EM covers {100 * frac:.1f}% of the record "
+                f"(need >= {100 * _EM_MIN_FINITE_FRACTION:.0f}%) with a largest "
+                f"interior gap of {gap:.1f} s (limit {max_gap:g} s). Interpolating "
+                "across that would fabricate a measured speed and publish it with "
+                "provenance 'em'; epsilon has ~U^4 leverage. Use speed.method="
+                "'flight'/'pressure', or raise speed.max_gap_s deliberately."
+            )
+        speed_fast = _slow_to_fast(
+            U_em_slow, t_fast, t_slow, fs_fast, fs_slow, tau=tau, speed_min=speed_cutout
+        )
+        # Provenance carries the imputation ONLY when there is some: a complete
+        # record still reads exactly "em", so the common case and every
+        # `speed_source == "em"` consumer are untouched, while a record that was
+        # partly interpolated says so durably in the product attrs.
+        return speed_fast, W_slow, _measured_provenance("em", frac, gap, fs_slow)
 
     if method == "flight":
         aoa_deg = float(cfg.get("aoa_deg", 3.0))
@@ -207,20 +224,43 @@ def compute_speed_for_pfile(
                 f"refusing to publish the {speed_cutout:g} m/s speed_cutout "
                 "floor as through-water speed."
             )
-        return _slow_to_fast(speed_slow, t_fast, t_slow, fs_fast, fs_slow,
-                             tau=tau, speed_min=speed_cutout), W_slow, "flight"
+        # Gap ceiling but deliberately NO coverage fraction: the flight model
+        # legitimately NaNs every sample below min_pitch_deg, so a real glider
+        # cast is full of short inflection holes and a fraction test would
+        # false-reject it. A hole longer than max_gap_s is a different animal --
+        # the vehicle was not gliding, and interpolating across it invents a
+        # through-water speed that epsilon then uses to the fourth power.
+        frac, gap = _coverage(speed_slow, t_slow)
+        max_gap = float(cfg.get("max_gap_s", _SPEED_MAX_GAP_S))
+        if gap > max_gap:
+            raise ValueError(
+                f"speed.method='flight': the flight model has a {gap:.1f} s "
+                f"interior gap (limit {max_gap:g} s; coverage {100 * frac:.1f}%). "
+                "Interpolating across it would fabricate through-water speed for "
+                "a stretch the model could not resolve. Lower min_pitch_deg, use "
+                "speed.method='pressure', or raise speed.max_gap_s deliberately."
+            )
+        speed_fast = _slow_to_fast(
+            speed_slow, t_fast, t_slow, fs_fast, fs_slow, tau=tau, speed_min=speed_cutout
+        )
+        return speed_fast, W_slow, _measured_provenance("flight", frac, gap, fs_slow)
 
     if method == "hotel":
         hotel_var = str(cfg.get("hotel_var") or "speed")
         speed_fast = _hotel_speed_fast(
-            pf, hotel_var, t_fast, t_slow, fs_fast, fs_slow,
-            tau=tau, speed_min=speed_cutout,
+            pf,
+            hotel_var,
+            t_fast,
+            t_slow,
+            fs_fast,
+            fs_slow,
+            tau=tau,
+            speed_min=speed_cutout,
         )
         return speed_fast, W_slow, f"hotel:{hotel_var}"
 
     raise ValueError(
-        f"Unknown speed.method={method!r}. "
-        "Expected: pressure | em | flight | constant | hotel."
+        f"Unknown speed.method={method!r}. Expected: pressure | em | flight | constant | hotel."
     )
 
 
@@ -256,6 +296,50 @@ def _slow_to_fast(
 # not data: _slow_to_fast would silently fill an all-NaN channel with the
 # speed_cutout floor, and epsilon has ~U^4 leverage on speed (#131 M10 / F6).
 _HOTEL_MIN_FINITE_FRACTION = 0.5
+
+# The same rule for a MEASURED electromagnetic flowmeter: "any finite sample"
+# let 1 of 400 slow samples produce 1600 of 1600 finite fast samples, all at the
+# one surviving value, with provenance still reading "em" (issue #180 F07).
+# _slow_to_fast interpolates interior holes and extends the endpoints with the
+# first/last finite value, so a single sample IS a whole record.
+_EM_MIN_FINITE_FRACTION = 0.5
+
+# Largest interior hole [s] that may be interpolated across before the record is
+# refused, for BOTH measured routes. The flight model legitimately NaNs every
+# sample below min_pitch_deg at each dive/climb inflection, so it gets the gap
+# ceiling but NOT the coverage fraction (a fraction would false-reject real
+# casts); a flowmeter or flight-model dropout longer than this is fabricated
+# speed, not an inflection.
+_SPEED_MAX_GAP_S = 60.0
+
+
+def _measured_provenance(method: str, frac: float, gap: float, fs_slow: float) -> str:
+    """``method`` alone when nothing was imputed, else ``method(cov=..,gap=..s)``.
+
+    Keeps the exact historical token for a complete record — every
+    ``speed_source == "em"`` consumer and attribute keeps working — and records
+    the imputation durably in the product exactly when there is some.
+    """
+    one_sample = 1.5 / fs_slow if fs_slow > 0 else 0.0
+    if frac >= 1.0 and gap <= one_sample:
+        return method
+    return f"{method}(cov={frac:.3f},gap={gap:.1f}s)"
+
+
+def _coverage(arr: np.ndarray, t: np.ndarray) -> tuple[float, float]:
+    """(finite fraction, longest interior non-finite run [s]) of a slow series.
+
+    "Interior" excludes leading/trailing runs, which are extrapolation rather
+    than interpolation and are reported separately by the caller's fraction.
+    """
+    finite = np.isfinite(arr)
+    frac = float(finite.mean()) if finite.size else 0.0
+    idx = np.flatnonzero(finite)
+    if idx.size < 2:
+        return frac, float("inf") if idx.size == 0 else 0.0
+    gaps = np.diff(t[idx])
+    # A gap of one sample interval is no gap at all.
+    return frac, float(np.max(gaps, initial=0.0))
 
 
 def _hotel_speed_fast(
@@ -395,10 +479,12 @@ def _flight_model_slow(
     mountings vary, and percentiles keep brief outlier spikes from
     masquerading as the high-amplitude flight axis.
     """
-    iX = np.asarray(pf.channels.get("Incl_X"), dtype=np.float64) \
-        if "Incl_X" in pf.channels else None
-    iY = np.asarray(pf.channels.get("Incl_Y"), dtype=np.float64) \
-        if "Incl_Y" in pf.channels else None
+    iX = (
+        np.asarray(pf.channels.get("Incl_X"), dtype=np.float64) if "Incl_X" in pf.channels else None
+    )
+    iY = (
+        np.asarray(pf.channels.get("Incl_Y"), dtype=np.float64) if "Incl_Y" in pf.channels else None
+    )
     if iX is None or iY is None:
         raise ValueError(
             "speed.method='flight' needs Incl_X and Incl_Y channels in the "

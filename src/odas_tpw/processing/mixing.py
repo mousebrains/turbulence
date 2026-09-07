@@ -106,6 +106,13 @@ DEFAULT_MIN_DP = 0.2
 # Default background vertical window [dbar] for profile/CTD stratification.
 DEFAULT_STRAT_WINDOW = 2.0
 
+# Hard ceiling [s] on the AUTOMATIC epsilon<->chi pairing tolerance. Epsilon and
+# chi windows sit seconds apart by construction (a 4096-sample dissipation
+# window at 512 Hz is 8 s), so a pairing wider than this is not "the nearest
+# estimate" but a different piece of water. Only the max_dt=None default is
+# capped -- an explicit max_dt is the caller's declared choice (#180 F05).
+MAX_PAIR_DT = 120.0
+
 
 class StratificationResult(NamedTuple):
     """Per-window background stratification."""
@@ -598,6 +605,21 @@ def pair_nearest(
     dst_t = np.asarray(dst_times, dtype=np.float64)
 
     out = np.full(len(dst_t), np.nan)
+    # The tolerance describes the SOURCE SAMPLING GEOMETRY, so it comes from the
+    # full time base BEFORE the finite filter below. Taking the median spacing of
+    # the SURVIVING estimates let QC gaps redefine the cadence: with sources
+    # every 1 s from 0..1000 but only t=0 and t=1000 finite, the median spacing
+    # became 1000 s and a query at t=500 paired to an estimate 500 s away
+    # (issue #180 F05). It is also capped, so a source series that is sparse by
+    # construction cannot pair across an arbitrary span.
+    if max_dt is None:
+        # Defect (audit): a zero/negative median spacing (duplicate or
+        # clamped source times) would collapse the tolerance to <= 0 and
+        # silently drop every pairing that is not an exact time match;
+        # fall back to a usable positive floor instead.
+        med = float(np.median(np.diff(np.sort(src_t)))) if len(src_t) > 1 else 0.0
+        max_dt = min(med if med > 0 else 30.0, MAX_PAIR_DT)
+
     # Only finite source estimates are candidates: a NaN (QC-rejected) epsilon
     # window must not shadow a valid epsilon at an adjacent window within max_dt
     # (else Gamma/K_rho are silently dropped while K_T survives).
@@ -607,13 +629,6 @@ def pair_nearest(
         src_v = src_v[finite]
     if len(src_t) == 0:
         return out
-    if max_dt is None:
-        # Defect (audit): a zero/negative median spacing (duplicate or
-        # clamped source times) would collapse the tolerance to <= 0 and
-        # silently drop every pairing that is not an exact time match;
-        # fall back to a usable positive floor instead.
-        med = float(np.median(np.diff(np.sort(src_t)))) if len(src_t) > 1 else 0.0
-        max_dt = med if med > 0 else 30.0
     order = np.argsort(src_t)
     st = src_t[order]
     sv = src_v[order]

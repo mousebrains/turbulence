@@ -16,7 +16,7 @@ import warnings
 
 import numpy as np
 
-from odas_tpw.scor160.io import L3Data, L4Data
+from odas_tpw.scor160.io import BAD_MAX_INTERP_FRACTION, L3Data, L4Data
 from odas_tpw.scor160.nasmyth import LUECK_A, X_95, nasmyth_grid
 from odas_tpw.scor160.ocean import visc, visc35
 
@@ -103,6 +103,7 @@ def process_l4(
     despike_fraction_limit: float = DEFAULT_DESPIKE_FRACTION_LIMIT,
     despike_passes_limit: int = DEFAULT_DESPIKE_PASSES_LIMIT,
     diss_ratio_limit: float = DEFAULT_DISS_RATIO_LIMIT,
+    mask_bad_buffers: bool = True,
 ) -> L4Data:
     """Compute L4 dissipation estimates from L3 wavenumber spectra.
 
@@ -242,6 +243,32 @@ def process_l4(
             var_resolved[i, j] = var_res
             FM[i, j] = fm
 
+    # RDL bad-buffer dropouts (TN-051 s3.2) on a channel this probe depends on.
+    # L3 carries the provenance but process_l4 used to ignore it entirely, while
+    # BOTH sibling routes -- rsi/dissipation.py and chi/l4_chi.py -- enforce it:
+    # a window with 50% of its samples interpolated produced epsi_flags = 0 and a
+    # finite epsilon, because repaired samples are finite and FFT finiteness
+    # cannot see the declared 5% ceiling (issue #180 F01). Same constant, same
+    # rule, same warning as the other two, so one L3 object cannot mean different
+    # things depending on which L4 you call.
+    bad_frac_out = np.zeros((n_shear, n_spec))
+    interp_frac_out = np.zeros((n_shear, n_spec))
+    if l3.bad_fraction.shape == (n_shear, n_spec):
+        bad_frac_out = np.asarray(l3.bad_fraction, dtype=np.float64)
+        if l3.interp_fraction.shape == (n_shear, n_spec):
+            interp_frac_out = np.asarray(l3.interp_fraction, dtype=np.float64)
+        if mask_bad_buffers:
+            hit = (bad_frac_out > 0) | (interp_frac_out > BAD_MAX_INTERP_FRACTION)
+            if hit.any():
+                epsi[hit] = np.nan
+                warnings.warn(
+                    f"{int(hit.sum())} of {n_shear * n_spec} epsilon estimate(s) "
+                    "rejected: RDL bad-buffer gaps too long to interpolate, or "
+                    f"more than {100 * BAD_MAX_INTERP_FRACTION:.0f}% of the window "
+                    "interpolated",
+                    stacklevel=2,
+                )
+
     # Expected sigma_ln per probe/window (Lueck 2022a variance model)
     # for the inter-probe consistency flag.
     sigma_ln = None
@@ -283,6 +310,8 @@ def process_l4(
         var_resolved=var_resolved,
         FM=FM,
         despike_fraction=(l3.despike_fraction.copy() if l3.despike_fraction.size > 0 else None),
+        bad_fraction=bad_frac_out,
+        interp_fraction=interp_frac_out,
     )
 
 
@@ -815,6 +844,12 @@ def _compute_flags(
           (matching the benchmark, which leaves ISR estimates with
           var_resolved ~ 0.1 unflagged)
       255 = invalid estimate
+
+    ORDER MATTERS.  Bits 1, 2, 8 and 16 are independent per-probe tests and are
+    computed FIRST; the inter-probe ratio test (bit 4) then draws its reference
+    minimum only from probes that passed all of them.  The bits themselves are
+    additive and order-free — the ordering exists solely so the ratio test can
+    see the others (issue #180 F02).
     """
     flags = np.zeros_like(epsi, dtype=np.float64)
     flags[fom > fom_limit] += 1
@@ -822,15 +857,6 @@ def _compute_flags(
     if despike_fraction is not None and despike_fraction.shape == epsi.shape:
         with np.errstate(invalid="ignore"):
             flags[despike_fraction > despike_fraction_limit] += 2
-
-    if sigma_ln is not None and epsi.shape[0] > 1:
-        with np.errstate(invalid="ignore", divide="ignore"):
-            epsi_pos = np.where(np.isfinite(epsi) & (epsi > 0), epsi, np.nan)
-            e_min = np.nanmin(epsi_pos, axis=0)  # (n_spec,)
-            ln_ratio = np.log(epsi_pos / e_min[np.newaxis, :])
-            mu_sigma = np.nanmean(np.where(np.isfinite(epsi_pos), sigma_ln, np.nan), axis=0)
-            inconsistent = ln_ratio > diss_ratio_limit * mu_sigma[np.newaxis, :]
-        flags[inconsistent] += 4
 
     if despike_passes is not None:
         passes = np.asarray(despike_passes)
@@ -846,6 +872,42 @@ def _compute_flags(
     if method is not None:
         under_resolved &= method == 0
     flags[under_resolved] += 16
+
+    if sigma_ln is not None and epsi.shape[0] > 1:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            epsi_pos = np.where(np.isfinite(epsi) & (epsi > 0), epsi, np.nan)
+            # The reference minimum comes from probes that have not ALREADY
+            # failed an independent test.  Taking it over every finite estimate
+            # let a probe rejected for poor FOM set the yardstick and flag the
+            # good one: epsilon [1e-12, 1e-7] with FOM [10, 0.5] returned flags
+            # [1, 4] and a NaN combined value, dropping a window whose second
+            # probe had no failure of its own (issue #180 F02). Lueck et al.
+            # (2024) s3.4.5 excludes poor-FOM probes from the dissipation-ratio
+            # test for exactly this reason.
+            #
+            # NB the ATOMIX reference files do not settle the convention: they
+            # disagree with each other. MSS_Baltic window 37 flags the
+            # FOM-PASSING probe against a FOM-failing minimum (and flags the
+            # minimum too, which this package never does), while epsifish does
+            # not. The choice therefore rests on the paper and on the principle
+            # that a probe already declared untrustworthy must not be the
+            # reference; it does not affect benchmark parity, which compares
+            # epsilon, not flags.
+            eligible = epsi_pos.copy()
+            already_failed = flags > 0
+            if already_failed.any():
+                candidates = np.where(already_failed, np.nan, epsi_pos)
+                # Degrade, never switch off: a window in which EVERY probe has
+                # already failed keeps the old all-finite candidate set, so the
+                # ratio test still reports which of them are mutually
+                # inconsistent instead of vanishing.
+                keep_old = ~np.any(np.isfinite(candidates), axis=0)
+                eligible = np.where(keep_old[np.newaxis, :], epsi_pos, candidates)
+            e_min = np.nanmin(eligible, axis=0)  # (n_spec,)
+            ln_ratio = np.log(epsi_pos / e_min[np.newaxis, :])
+            mu_sigma = np.nanmean(np.where(np.isfinite(epsi_pos), sigma_ln, np.nan), axis=0)
+            inconsistent = ln_ratio > diss_ratio_limit * mu_sigma[np.newaxis, :]
+        flags[inconsistent] += 4
     flags[~np.isfinite(epsi)] = 255
     return flags
 

@@ -501,15 +501,30 @@ class TestQcChiFinal:
         out = _qc_chi_final(chi, fom, kmr)
         assert out[0] == pytest.approx(np.sqrt(1e-8 * 1e-6))
 
-    def test_fallback_when_no_probe_passes(self):
-        """No window is silently lost: fall back to the all-finite-probe mean."""
+    def test_all_fail_window_is_excluded_from_mixing(self):
+        """A window in which NO probe passed does not feed K_T / Gamma.
+
+        The soft-QC fallback still forms a value -- ``chi_final`` keeps it and
+        ``chi_qc_fallback`` marks it -- but a mixing coefficient built from a chi
+        that failed every spectral test is a finite number with nothing behind
+        it, and before issue #180 F04 nothing downstream could tell (chi
+        [1e-7, 4e-7] with fom [100, 100] and K_max_ratio [0.01, 0.01] returned a
+        clean-looking 2e-7). Pass ``use_qc_fallback=True`` for the old behaviour.
+        """
+        from odas_tpw.chi.l4_chi import chi_final_and_fallback
         from odas_tpw.rsi.pipeline import _qc_chi_final
 
         chi = np.array([[1e-8], [1e-6]])
         fom = np.array([[5.0], [5.0]])  # both fail fom
         kmr = np.array([[0.8], [0.8]])
-        out = _qc_chi_final(chi, fom, kmr)
-        assert out[0] == pytest.approx(np.sqrt(1e-8 * 1e-6))
+        assert not np.isfinite(_qc_chi_final(chi, fom, kmr)[0])
+        # The value itself is not lost -- it is reported and flagged.
+        res = chi_final_and_fallback(chi, fom, kmr)
+        assert res.chi_final[0] == pytest.approx(np.sqrt(1e-8 * 1e-6))
+        assert bool(res.qc_fallback[0])
+        # ...and the escape hatch restores the pre-#180 mixing input.
+        old = _qc_chi_final(chi, fom, kmr, use_qc_fallback=True)
+        assert old[0] == pytest.approx(np.sqrt(1e-8 * 1e-6))
 
     def test_nan_chi_window_stays_nan(self):
         """A window with no finite chi>0 stays NaN (no spurious estimate)."""
