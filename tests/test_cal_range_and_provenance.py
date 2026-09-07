@@ -75,14 +75,19 @@ class TestShearRangeCheck:
         msgs = _warnings_from({"name": "sh1", "diff_gain": "0.98", "sens": sens})
         assert not [m for m in msgs if "plausible range" in m]
 
-    def test_sn132_low_diff_gain_is_silent(self):
-        """0.09 is real hardware on VMP 132/330/429, not a typo — do not warn.
+    def test_low_band_diff_gain_is_silent(self):
+        """A sub-0.1 differentiator gain is real hardware — do not warn.
 
-        The corpus is bimodal: 2236 of 15998 rows sit at 0.090-0.099 across
-        three instruments.  Deciding whether a given 0.09 is that instrument's
-        real differentiator or a transcription error needs its own history,
-        which is ``rsi-tpw sensors --diff-gain``'s job (issue #178), not a
-        static range.
+        2236 of 15998 rows sit at 0.090-0.099, and the SAMPLING RATE separates
+        them: every 1024 Hz instrument is low, every 512 Hz one is high.  The
+        same-model comparison isolates it — MR1000RDL-EM reads 0.927/0.941 on
+        the 512 Hz gliders SN 433/435 and 0.099/0.094 on the 1024 Hz SN 429.
+        This converter sees only the channel config, never the rate, so it
+        cannot bound on it.
+
+        Emphatically NOT a verdict on SN 132 (issue #178) — the one instrument
+        the rate does not explain, at 511.95 Hz against siblings at 0.937-0.99.
+        That case needs an instrument-keyed comparison, not a static range.
         """
         msgs = _warnings_from({"name": "sh1", "diff_gain": "0.09", "sens": "0.0678"})
         assert not [m for m in msgs if "plausible range" in m]

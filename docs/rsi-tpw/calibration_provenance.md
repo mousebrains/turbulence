@@ -57,18 +57,46 @@ probe we have ever deployed with ~35 % margin below and ~22 % above, and fire on
 The `diff_gain` distribution is **bimodal**, and this is the finding that shaped
 the design:
 
-| band | rows | share | instruments |
-|---|---|---|---|
-| 0.090 – 0.099 | 2 236 | 14 % | VMP **132**, **330**, **429** |
-| 0.905 – 1.01 | 13 762 | 86 % | everything else |
+| band | rows | share | instruments | `fs_fast` |
+|---|---|---|---|---|
+| 0.090 – 0.099 | 2 236 | 14 % | SN **330**, **429** | **1024 Hz** |
+| 0.09 | 434 | 3 % | SN **132** | 512 Hz |
+| 0.905 – 1.01 | 13 762 | 86 % | 13 instruments | 512 Hz |
 
-SN 132's `diff_gain = 0.09` (issue #178) is therefore **not a lone outlier** —
-two other instruments sit in the same decade. A tight band around the upper mode
-would flag a seventh of every shear channel we own, and *an alarm that fires on
-a seventh of the corpus is an alarm that gets muted*.
+The low band is a **real population, not corruption**, and what separates it is
+the **sampling rate**: every 1024 Hz instrument in the corpus is low-band, every
+512 Hz instrument is high-band. SN 330 and 429 are high-energy/tidal builds,
+where less pre-emphasis gain (and more bandwidth) is exactly what an energetic
+flow calls for.
+
+The comparison that isolates the rate from everything correlated with it is
+**same-model**:
+
+| model | `fs_fast` | `diff_gain` |
+|---|---|---|
+| `MR1000RDL-EM` | 512 Hz | SN 433: 0.927, SN 435: 0.941 |
+| `MR1000RDL-EM` | **1024 Hz** | SN 429: 0.099 / 0.094 |
+
+Identical hardware model, ~10× apart. Note the ~10× gain step is *not* the 2×
+rate step, so the rate **marks** a different differentiator build rather than
+scaling it; vehicle class is confounded with the rate and is not the driver.
+
+A tight band around the upper mode would therefore flag a seventh of every shear
+channel we own, and *an alarm that fires on a seventh of the corpus is an alarm
+that gets muted*. `convert_shear` also sees only the **channel** config — not
+the rate, not the vehicle — so it could not apply a class-aware bound even if
+that were desirable.
+
+> **This is not a verdict on SN 132 — if anything the opposite.** It is the one
+> instrument the sampling-rate explanation does *not* cover: 511.95 Hz on a
+> 10-column `vmp-250-IR`, the same sampling configuration as SN 412, 465 and 479
+> at 0.937–0.99. Its `0.09 / 0.09` is also *identical* across channels, where
+> all 13 high-band instruments and low-band SN 429 differ between theirs. See
+> issue #178; the range check deliberately takes no position.
 
 Distinguishing "0.09 is this instrument's real differentiator" from "0.09 is a
-transcription error" needs that instrument's own history, not a static window.
+transcription error" needs that instrument's own history and class, not a static
+window.
 That is exactly what the [`rsi-tpw sensors --diff-gain` audit](sensors.md)
 (`odas_tpw.rsi.diff_gain`, PR #177) does — it is instrument-keyed and compares across time, and it is the
 right tool for this question. The bound here is deliberately only a floor and

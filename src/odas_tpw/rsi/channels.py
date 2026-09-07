@@ -365,16 +365,29 @@ _SHEAR_SENS_MIN = 0.03
 _SHEAR_SENS_MAX = 0.15
 
 # diff_gain deliberately gets a much wider bound.  The corpus is BIMODAL: 2236
-# of 15998 rows (14%) sit at 0.090-0.099 (VMP SNs 132, 330 and 429) and the
-# remaining 13762 at 0.905-1.01.  A tight band around the upper mode would
+# of 15998 rows (14%) sit at 0.090-0.099 and the remaining 13762 at 0.905-1.01,
+# and the low band is a real population rather than corruption.  What separates
+# them is the SAMPLING RATE: every 1024 Hz instrument is low (MR 330, 429 —
+# high-energy/tidal builds), every 512 Hz instrument is high (13 of them).  The
+# comparison that isolates it is same-model: MR1000RDL-EM reads 0.927/0.941 on
+# the 512 Hz gliders SN 433/435 and 0.099/0.094 on the 1024 Hz SN 429.
+#
+# The ~10x gain step is NOT the 2x rate step, so the rate marks a different
+# differentiator build, not a scaling law; vehicle class is confounded with it
+# and is not the driver.  Either way a tight band around the upper mode would
 # flag a seventh of every shear channel we own, and an alarm that fires on a
-# seventh of the corpus is an alarm that gets muted.  Telling "0.09 is this
-# instrument's real differentiator" from "0.09 is a typo" needs an
-# instrument-keyed comparison against that instrument's own history, which is
-# what ``rsi-tpw sensors --diff-gain`` (odas_tpw.rsi.diff_gain) exists to do;
-# issue #178 for SN 132 specifically.  The bound here is only a floor/ceiling
-# for a value that cannot be a differentiator gain at all — it clears the
-# observed extremes by roughly a factor of 9 on each side.
+# seventh of the corpus is an alarm that gets muted.  This converter sees only
+# the CHANNEL config — not the rate, not the vehicle — so it could not apply a
+# class-aware bound even if we wanted one.
+#
+# Telling "0.09 is this instrument's real differentiator" from "0.09 is a typo"
+# therefore needs an instrument-keyed comparison, which is what ``rsi-tpw
+# sensors --diff-gain`` (odas_tpw.rsi.diff_gain) exists to do.  SN 132 is the
+# one instrument the rate does NOT explain: 511.95 Hz on a 10-column
+# vmp-250-IR, the same sampling configuration as SN 412/465/479 at 0.937-0.99
+# (issue #178).  The bound here is only a floor/ceiling for a value that cannot
+# be a differentiator gain at all — it clears the observed extremes by roughly
+# a factor of 9 on each side.
 _SHEAR_DIFF_GAIN_MIN = 0.01
 _SHEAR_DIFF_GAIN_MAX = 10.0
 

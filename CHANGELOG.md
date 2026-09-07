@@ -135,18 +135,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   brackets every probe we have deployed and fires on none of them.
 
   `diff_gain` gets a deliberately much wider bound ([0.01, 10]), because that
-  distribution turned out to be **bimodal**: 2236 of 15 998 rows sit at
-  0.090-0.099 across VMP **132, 330 and 429**. SN 132's 0.09 (issue #178) is
-  therefore not a lone outlier, and a tight band would flag a seventh of every
-  shear channel we own — an alarm nobody would keep. Telling a real low-gain
-  differentiator from a transcription error needs that instrument's own
-  history, which is what `rsi-tpw sensors --diff-gain` is for.
+  distribution turned out to be **bimodal** — and measuring *why* changed the
+  design. 2236 of 15 998 rows sit at 0.090-0.099, and the separator is the
+  **sampling rate**: every 1024 Hz instrument in the corpus is low-band, every
+  512 Hz one is high-band. The same-model comparison isolates it —
+  `MR1000RDL-EM` reads 0.927/0.941 on the 512 Hz gliders SN 433/435 and
+  0.099/0.094 on the 1024 Hz SN 429 (a high-energy/tidal build). The ~10x gain
+  step is not the 2x rate step, so the rate marks a different differentiator
+  build rather than scaling it.
 
-  These **warn and continue**, never substitute: the value parsed, so it may be
-  real hardware we have not met, and only the operator can tell. Same principle
-  as F06 one level out — never fabricate a coefficient, never hide the one you
-  were given. Concept and the sensitivity bounds from Jesse Cusack's
-  [pyturb](https://github.com/oceancascades/pyturb).
+  So a tight band would flag a seventh of every shear channel we own, an alarm
+  nobody would keep; and `convert_shear` sees only the channel config — not the
+  rate, not the vehicle — so it could not bound on it anyway.
+
+  This takes no position on SN 132 (issue #178), which is the one instrument
+  the rate does *not* explain: 511.95 Hz on a 10-column `vmp-250-IR`, the same
+  sampling configuration as SN 412/465/479 at 0.937-0.99, and 0.09/0.09
+  identical across channels where all 13 high-band instruments and low-band
+  SN 429 differ between theirs. Telling a real low-gain differentiator from a
+  transcription error needs an instrument-keyed comparison, which is what
+  `rsi-tpw sensors --diff-gain` is for.
 
 - **`cal_<key>` provenance attributes on every converted L1 variable.** An L1
   file is read years later without the config that produced it, and a shear
