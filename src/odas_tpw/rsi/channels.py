@@ -75,7 +75,15 @@ class CalRecorder(dict[str, Any]):
         return present
 
     def calibration(self) -> dict[str, float]:
-        """The numeric coefficients this conversion actually consumed."""
+        """The numeric coefficients this conversion took FROM THE CONFIG.
+
+        Not every number that entered the arithmetic: a key the config omits,
+        where the converter falls back to a documented default (``adc_fs``,
+        ``adc_bits``), is absent here.  That is the more useful of the two
+        readings — it separates what the instrument declared from what we
+        assumed on its behalf — but it does mean "no ``cal_adc_fs``" reads as
+        "the config was silent", not "no ADC scaling was applied".
+        """
         out: dict[str, float] = {}
         for key in sorted(self._used):
             if key in _NON_CAL_KEYS:

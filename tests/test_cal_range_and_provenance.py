@@ -144,6 +144,20 @@ class TestCalRecorder:
         assert params["coef0"] == "1.0"  # record the read
         assert params.calibration()["coef0"] == pytest.approx(1.0)
 
+    def test_defaulted_coefficient_is_not_recorded(self):
+        """A key the config omits is absent, even though the default was used.
+
+        ``cal_*`` records what the INSTRUMENT declared, not every number that
+        entered the arithmetic — so a missing ``cal_adc_fs`` reads as "the
+        config was silent", not "no ADC scaling was applied".  Pinned because
+        it is a design boundary, not an accident.
+        """
+        params = CalRecorder({"name": "sh1", "sens": "0.0678", "diff_gain": "0.98"})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            convert_shear(DATA, params)  # adc_fs/adc_bits fall back to defaults
+        assert set(params.calibration()) == {"sens", "diff_gain"}
+
     def test_behaves_as_a_plain_dict(self):
         """Converters must not need to know they were handed a recorder."""
         params = CalRecorder({"a": "1", "b": "2"})
@@ -206,6 +220,43 @@ class TestProvenanceOnRealFile:
 
     def test_supplementary_channels_carry_provenance(self, l1):
         np.testing.assert_allclose(l1["V_Bat"]["cal_g"], 0.1)
+
+    def test_ragged_stack_is_nan_filled_and_survives_netcdf(self, tmp_path):
+        """A coefficient only one probe carries must not shorten the array.
+
+        Dropping it, or emitting a length-1 array against two sensor_names,
+        would silently re-attribute probe 1's value to probe 0.  NaN fill is
+        only useful if it round-trips, so write and read it back.
+        """
+        import types
+
+        import netCDF4
+
+        from odas_tpw.rsi.convert import _cal_attrs
+
+        pf = types.SimpleNamespace(
+            channel_info={
+                "sh1": {"cal": {"sens": 0.1075, "diff_gain": 0.954}},
+                "sh2": {"cal": {"sens": 0.113}},  # no diff_gain
+            }
+        )
+
+        attrs = _cal_attrs(pf, ["sh1", "sh2"])
+        np.testing.assert_allclose(attrs["cal_sens"], [0.1075, 0.113])
+        assert len(attrs["cal_diff_gain"]) == 2
+        assert attrs["cal_diff_gain"][0] == pytest.approx(0.954)
+        assert np.isnan(attrs["cal_diff_gain"][1])
+
+        path = tmp_path / "ragged.nc"
+        with netCDF4.Dataset(str(path), "w", format="NETCDF4") as ds:
+            ds.createDimension("N", 2)
+            var = ds.createVariable("SHEAR", "f8", ("N",))
+            for key, val in attrs.items():
+                setattr(var, key, val)
+        with netCDF4.Dataset(str(path)) as ds:
+            got = ds.variables["SHEAR"].getncattr("cal_diff_gain")
+        assert got[0] == pytest.approx(0.954)
+        assert np.isnan(got[1])
 
     def test_pass_through_channel_claims_nothing(self, l1):
         """VIB is a counts pass-through here — no coefficients, so no attrs.

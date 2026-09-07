@@ -140,6 +140,18 @@ An empty `cal` is a real answer, not a gap: `convert_piezo` reads only `a_0`, so
 a `VIB` channel on an instrument that does not set it carries no `cal_*` attrs
 because the conversion consumed no coefficients.
 
+### What `cal_*` does *not* record
+
+Coefficients **taken from the config** — not every number that entered the
+arithmetic. Where a config omits a key and the converter falls back to a
+documented default (`adc_fs = 4.096`, `adc_bits = 16`), no `cal_` attribute
+appears.
+
+That is the more useful of the two readings: it separates what the instrument
+declared from what we assumed on its behalf. But read it correctly — a missing
+`cal_adc_fs` means *"the config was silent"*, not *"no ADC scaling was
+applied"*.
+
 ### Why the `cal_` prefix, when per-profile files use bare names
 
 Per-profile NetCDFs written by `profile.extract_profiles` (#131 m8) already

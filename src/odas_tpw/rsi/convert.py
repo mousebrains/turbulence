@@ -121,7 +121,7 @@ def _classify_channels(pf: "PFile") -> dict:
 
 
 def _cal_attrs(pf: "PFile", names: list[str]) -> dict:
-    """``cal_<key>`` attributes: the coefficients that produced this variable.
+    """``cal_<key>``: the coefficients this variable's config supplied.
 
     A converted L1 file is routinely read years later, on a different machine,
     without the instrument config that produced it — and a shear record is
@@ -136,6 +136,10 @@ def _cal_attrs(pf: "PFile", names: list[str]) -> dict:
     only some probes in the stack carry is filled with NaN for the others
     rather than dropped: a short or re-ordered array would silently
     mis-attribute a coefficient to the wrong probe.
+
+    A coefficient the config omitted — where the converter applied a documented
+    default — is NOT listed; see
+    :meth:`~odas_tpw.rsi.channels.CalRecorder.calibration`.
     """
     cals = [pf.channel_info[n].get("cal", {}) for n in names]
     if not cals:
