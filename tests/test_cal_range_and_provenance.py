@@ -92,7 +92,17 @@ class TestShearRangeCheck:
         msgs = _warnings_from({"name": "sh1", "diff_gain": "0.09", "sens": "0.0678"})
         assert not [m for m in msgs if "plausible range" in m]
 
-    @pytest.mark.parametrize("diff_gain", ["0.0009", "50"])
+    def test_unseen_2048hz_rung_does_not_warn(self):
+        """Rockland's 512/1024/2048 Hz builds step the gain by 10x each.
+
+        We own none of the 2048 Hz units, so ~0.0095 appears nowhere in the
+        corpus — which is exactly why a floor fitted to the observed data
+        (0.01) would have flagged every channel of the first one we read.
+        """
+        msgs = _warnings_from({"name": "sh1", "diff_gain": "0.0095", "sens": "0.0678"})
+        assert not [m for m in msgs if "plausible range" in m]
+
+    @pytest.mark.parametrize("diff_gain", ["0.00009", "50"])
     def test_impossible_diff_gain_is_flagged(self, diff_gain):
         """The wide bound still catches a value that is no gain at all."""
         msgs = _warnings_from({"name": "sh1", "diff_gain": diff_gain, "sens": "0.0678"})
@@ -102,6 +112,10 @@ class TestShearRangeCheck:
         """Guard the constants themselves against a careless edit."""
         assert _SHEAR_SENS_MIN < 0.041 and _SHEAR_SENS_MAX > 0.123
         assert _SHEAR_DIFF_GAIN_MIN < 0.09 and _SHEAR_DIFF_GAIN_MAX > 1.01
+        # The floor must also clear Rockland's 2048 Hz rung (~0.0095), which we
+        # do not own yet — otherwise the check fires on correct hardware the
+        # day one arrives.
+        assert _SHEAR_DIFF_GAIN_MIN < 0.0095
 
 
 class TestCalRecorder:

@@ -134,27 +134,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   CASPER, Taiwan, ASTRAL, Keck, goflow) `sens` spans 0.041-0.123, so the window
   brackets every probe we have deployed and fires on none of them.
 
-  `diff_gain` gets a deliberately much wider bound ([0.01, 10]), because that
+  `diff_gain` gets a deliberately much wider bound ([0.001, 10]), because that
   distribution turned out to be **bimodal** — and measuring *why* changed the
-  design. 2236 of 15 998 rows sit at 0.090-0.099, and the separator is the
-  **sampling rate**: every 1024 Hz instrument in the corpus is low-band, every
-  512 Hz one is high-band. The same-model comparison isolates it —
-  `MR1000RDL-EM` reads 0.927/0.941 on the 512 Hz gliders SN 433/435 and
-  0.099/0.094 on the 1024 Hz SN 429 (a high-energy/tidal build). The ~10x gain
-  step is not the 2x rate step, so the rate marks a different differentiator
-  build rather than scaling it.
+  design. The low band is one rung of a Rockland design ladder: for
+  higher-energy environments they double the sampling frequency (more of the
+  Nasmyth spectrum) and drop the differential gain 10x to avoid saturating the
+  differentiator — 512 Hz/~0.95, 1024 Hz/~0.095, 2048 Hz/~0.0095. The
+  same-model comparison isolates it: `MR1000RDL-EM` reads 0.927/0.941 on the
+  512 Hz gliders SN 433/435 and 0.099/0.094 on the 1024 Hz SN 429.
 
-  So a tight band would flag a seventh of every shear channel we own, an alarm
-  nobody would keep; and `convert_shear` sees only the channel config — not the
-  rate, not the vehicle — so it could not bound on it anyway.
+  So a tight band would flag a seventh of every shear channel we own; and
+  `convert_shear` sees only the channel config, never the rate, so it cannot
+  pick the right rung itself.
 
-  This takes no position on SN 132 (issue #178), which is the one instrument
-  the rate does *not* explain: 511.95 Hz on a 10-column `vmp-250-IR`, the same
-  sampling configuration as SN 412/465/479 at 0.937-0.99, and 0.09/0.09
-  identical across channels where all 13 high-band instruments and low-band
-  SN 429 differ between theirs. Telling a real low-gain differentiator from a
-  transcription error needs an instrument-keyed comparison, which is what
-  `rsi-tpw sensors --diff-gain` is for.
+  **The floor is 0.001, not the 0.01 the data alone suggests.** We own no
+  2048 Hz instruments, so ~0.0095 appears nowhere in the corpus — and a floor
+  fitted to what we happen to have would have warned on every channel of the
+  first one we read. Absence from our files is not evidence of non-existence.
+
+  This takes no position on SN 132 (issue #178) — if anything the ladder points
+  the other way. Over all 217 of its files, unanimously `fs_fast` = 511.9454 Hz
+  on a 10-column `vmp-250-IR`, so it belongs on the ~0.95 rung with
+  SN 412/465/479; yet it carries 0.09, the 1024 Hz rung's value, identically on
+  both channels where every measured pair differs. Separating a real low-gain
+  differentiator from a transcription error needs an instrument-keyed
+  comparison, which is what `rsi-tpw sensors --diff-gain` is for.
 
 - **`cal_<key>` provenance attributes on every converted L1 variable.** An L1
   file is read years later without the config that produced it, and a shear

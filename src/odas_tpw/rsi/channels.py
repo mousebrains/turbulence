@@ -365,30 +365,42 @@ _SHEAR_SENS_MIN = 0.03
 _SHEAR_SENS_MAX = 0.15
 
 # diff_gain deliberately gets a much wider bound.  The corpus is BIMODAL: 2236
-# of 15998 rows (14%) sit at 0.090-0.099 and the remaining 13762 at 0.905-1.01,
-# and the low band is a real population rather than corruption.  What separates
-# them is the SAMPLING RATE: every 1024 Hz instrument is low (MR 330, 429 —
-# high-energy/tidal builds), every 512 Hz instrument is high (13 of them).  The
-# comparison that isolates it is same-model: MR1000RDL-EM reads 0.927/0.941 on
-# the 512 Hz gliders SN 433/435 and 0.099/0.094 on the 1024 Hz SN 429.
+# of 15998 rows (14%) sit at 0.090-0.099 and the remaining 13762 at 0.905-1.01.
+# That is not corruption — it is one rung of a deliberate Rockland design
+# ladder.  To work in higher-energy environments they DOUBLE the sampling
+# frequency (capturing more of the Nasmyth spectrum) and DROP the differential
+# gain by a factor of ten to keep the differentiator out of saturation:
 #
-# The ~10x gain step is NOT the 2x rate step, so the rate marks a different
-# differentiator build, not a scaling law; vehicle class is confounded with it
-# and is not the driver.  Either way a tight band around the upper mode would
-# flag a seventh of every shear channel we own, and an alarm that fires on a
-# seventh of the corpus is an alarm that gets muted.  This converter sees only
-# the CHANNEL config — not the rate, not the vehicle — so it could not apply a
-# class-aware bound even if we wanted one.
+#     fs_fast    diff_gain    in our corpus
+#      512 Hz      ~0.95      13 instruments (0.905-1.01)
+#     1024 Hz      ~0.095     MR 330, 429 (tidal builds)
+#     2048 Hz      ~0.0095    exists at Rockland; none in our portfolio
+#
+# (Design rationale from Pat Welch, who works directly with Rockland; the rate
+# and gain columns are measured from our own file headers and configs.)
+#
+# The same-model comparison isolates it from vehicle and model: MR1000RDL-EM
+# reads 0.927/0.941 on the 512 Hz gliders SN 433/435 and 0.099/0.094 on the
+# 1024 Hz SN 429.  So a tight band around the upper mode would flag a seventh
+# of every shear channel we own, and an alarm that fires on a seventh of the
+# corpus is an alarm that gets muted.  This converter sees only the CHANNEL
+# config — not the rate — so it cannot select the right rung itself.
+#
+# The floor sits below the 2048 Hz rung ON PURPOSE.  0.01 would have been the
+# obvious choice from the observed data alone, and it would warn on every
+# channel of the first 2048 Hz instrument we ever read (~0.0095) — a check that
+# fires on correct hardware the day it arrives.  0.001 clears that rung by ~9x,
+# the same margin the ceiling gives the top one.
 #
 # Telling "0.09 is this instrument's real differentiator" from "0.09 is a typo"
-# therefore needs an instrument-keyed comparison, which is what ``rsi-tpw
-# sensors --diff-gain`` (odas_tpw.rsi.diff_gain) exists to do.  SN 132 is the
-# one instrument the rate does NOT explain: 511.95 Hz on a 10-column
-# vmp-250-IR, the same sampling configuration as SN 412/465/479 at 0.937-0.99
-# (issue #178).  The bound here is only a floor/ceiling for a value that cannot
-# be a differentiator gain at all — it clears the observed extremes by roughly
-# a factor of 9 on each side.
-_SHEAR_DIFF_GAIN_MIN = 0.01
+# needs an instrument-keyed comparison, which is what ``rsi-tpw sensors
+# --diff-gain`` (odas_tpw.rsi.diff_gain) exists to do.  SN 132 is the one
+# instrument the ladder does NOT explain: 511.9454 Hz on a 10-column
+# vmp-250-IR (unanimous over all 217 of its files), so it belongs on the ~0.95
+# rung with SN 412/465/479 — yet it carries 0.09, the 1024 Hz rung's value, and
+# carries it identically on both channels where every measured pair differs.
+# See issue #178.
+_SHEAR_DIFF_GAIN_MIN = 0.001
 _SHEAR_DIFF_GAIN_MAX = 10.0
 
 

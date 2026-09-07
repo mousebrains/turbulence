@@ -54,20 +54,21 @@ probe we have ever deployed with ~35 % margin below and ~22 % above, and fire on
 
 ### Why `diff_gain` gets a much wider bound
 
-The `diff_gain` distribution is **bimodal**, and this is the finding that shaped
-the design:
+The `diff_gain` distribution is **bimodal**, and measuring *why* is what shaped
+the design. The low band is not corruption — it is one rung of a deliberate
+Rockland design ladder. To work in higher-energy environments they **double the
+sampling frequency**, capturing more of the Nasmyth spectrum, and **drop the
+differential gain by a factor of ten** to keep the differentiator out of
+saturation:
 
-| band | rows | share | instruments | `fs_fast` |
-|---|---|---|---|---|
-| 0.090 – 0.099 | 2 236 | 14 % | SN **330**, **429** | **1024 Hz** |
-| 0.09 | 434 | 3 % | SN **132** | 512 Hz |
-| 0.905 – 1.01 | 13 762 | 86 % | 13 instruments | 512 Hz |
+| `fs_fast` | `diff_gain` | in our corpus |
+|---|---|---|
+| 512 Hz | ~0.95 | 13 instruments, 0.905 – 1.01 (13 762 rows) |
+| **1024 Hz** | **~0.095** | MR **330**, **429** — tidal builds (2 236 rows) |
+| 2048 Hz | ~0.0095 | exists at Rockland; **none in our portfolio** |
 
-The low band is a **real population, not corruption**, and what separates it is
-the **sampling rate**: every 1024 Hz instrument in the corpus is low-band, every
-512 Hz instrument is high-band. SN 330 and 429 are high-energy/tidal builds,
-where less pre-emphasis gain (and more bandwidth) is exactly what an energetic
-flow calls for.
+*(Design rationale from Pat Welch, who works directly with Rockland; the rate
+and gain columns are measured from our own file headers and configs.)*
 
 The comparison that isolates the rate from everything correlated with it is
 **same-model**:
@@ -77,22 +78,36 @@ The comparison that isolates the rate from everything correlated with it is
 | `MR1000RDL-EM` | 512 Hz | SN 433: 0.927, SN 435: 0.941 |
 | `MR1000RDL-EM` | **1024 Hz** | SN 429: 0.099 / 0.094 |
 
-Identical hardware model, ~10× apart. Note the ~10× gain step is *not* the 2×
-rate step, so the rate **marks** a different differentiator build rather than
-scaling it; vehicle class is confounded with the rate and is not the driver.
+Identical hardware model, one rung apart.
 
-A tight band around the upper mode would therefore flag a seventh of every shear
+A tight band around the upper rung would therefore flag a seventh of every shear
 channel we own, and *an alarm that fires on a seventh of the corpus is an alarm
-that gets muted*. `convert_shear` also sees only the **channel** config — not
-the rate, not the vehicle — so it could not apply a class-aware bound even if
-that were desirable.
+that gets muted*. `convert_shear` also sees only the **channel** config — never
+the sampling rate — so it cannot select the right rung itself.
 
-> **This is not a verdict on SN 132 — if anything the opposite.** It is the one
-> instrument the sampling-rate explanation does *not* cover: 511.95 Hz on a
-> 10-column `vmp-250-IR`, the same sampling configuration as SN 412, 465 and 479
-> at 0.937–0.99. Its `0.09 / 0.09` is also *identical* across channels, where
-> all 13 high-band instruments and low-band SN 429 differ between theirs. See
-> issue #178; the range check deliberately takes no position.
+### The floor clears a rung we do not own
+
+```python
+_SHEAR_DIFF_GAIN_MIN = 0.001   # not 0.01
+_SHEAR_DIFF_GAIN_MAX = 10.0
+```
+
+`0.01` is what the observed data alone would suggest — it clears the corpus
+minimum of 0.09 by 9×. It is also **wrong**: the 2048 Hz rung sits at ~0.0095,
+so the first such instrument we ever read would warn on every channel. A check
+that fires on correct hardware the day it arrives is worse than no check.
+`0.001` clears that rung by the same ~9× margin the ceiling gives the top one.
+
+This is the one place the corpus is not the last word: absence of a
+configuration from our files is not evidence it does not exist.
+
+> **Not a verdict on SN 132 — the ladder points the other way.** Measured over
+> all 217 of its files, unanimously: `f_clock` 5119.454 Hz, 8×10 matrix,
+> **`fs_fast` = 511.9454 Hz**, model `vmp-250-IR`. It therefore belongs on the
+> ~0.95 rung with SN 412, 465 and 479 — yet it carries **0.09**, the 1024 Hz
+> rung's value, and carries it *identically* on both channels where every
+> measured pair in the corpus differs. See issue #178; the range check
+> deliberately takes no position.
 
 Distinguishing "0.09 is this instrument's real differentiator" from "0.09 is a
 transcription error" needs that instrument's own history and class, not a static
