@@ -615,6 +615,9 @@ def run(
     cal_tol: float = 0.00005,
     cal_max_age_months: int = 12,  # shear_cal.DEFAULT_CAL_MAX_AGE_MONTHS (lazy import)
     cal_strict: bool = False,
+    diff_gain: bool = False,
+    diff_gain_csv: Path | None = None,
+    diff_gain_strict: bool = False,
 ) -> int:
     """Scan *paths* for the requested sensor *kinds* and print a summary.
 
@@ -622,7 +625,8 @@ def run(
     target / every file failed to parse / ``cal_strict`` without ``cal_dir``,
     3 = ``cal_strict`` and the calibration check found sensitivity mismatches
     outside ``cal_tol`` (distinct so scripts can tell "cal mismatch" from
-    "scan failed").
+    "scan failed"), 4 = ``diff_gain_strict`` and the differential-gain audit
+    found an outlier.
     """
     out = stream if stream is not None else sys.stdout
 
@@ -633,6 +637,20 @@ def run(
         return 1
     if cal_strict and cal_dir is None:
         print("Error: --cal-strict requires --cal-dir", file=sys.stderr)
+        return 1
+    # Same fail-fast convention as --csv above: a typo'd path must not cost the
+    # user a multi-minute tree scan before it errors.
+    if diff_gain_csv is not None and (
+        diff_gain_csv.is_dir() or not diff_gain_csv.parent.is_dir()
+    ):
+        print(f"Error: cannot write CSV to {diff_gain_csv}", file=sys.stderr)
+        return 1
+    # A --diff-gain-strict CI gate that silently never runs would pass forever.
+    if (diff_gain_strict or diff_gain_csv is not None) and not diff_gain:
+        print(
+            "Error: --diff-gain-strict / --diff-gain-csv require --diff-gain",
+            file=sys.stderr,
+        )
         return 1
     if cal_dir is not None and not cal_dir.is_dir():
         print(f"Error: --cal-dir {cal_dir} is not a directory", file=sys.stderr)
@@ -645,6 +663,18 @@ def run(
         )
 
     files = iter_pfiles(paths)
+
+    # --diff-gain re-reads every file's header + config, which the sensor pass
+    # has already done. Over an SMB-hosted campaign tree that doubles wall time
+    # for data already in hand, so memoize the reader across both passes.
+    _read_cache: dict[Path, tuple[dict, dict]] = {}
+
+    def _cached_read(path: Path) -> tuple[dict, dict]:
+        hit = _read_cache.get(path)
+        if hit is None:
+            hit = _read_header_and_config(path)
+            _read_cache[path] = hit
+        return hit
     if not files:
         print("No .p files found.", file=sys.stderr)
         return 1
@@ -702,10 +732,31 @@ def run(
     # Non-zero when the scan wholly failed (files present, all errored) — so a
     # script can distinguish "nothing worked" from "found no sensors" — or,
     # with --cal-strict, code 3 when the calibration check found mismatches.
+    # Differential-gain audit. Keyed on the INSTRUMENT, not the sensor, so it
+    # is a separate pass rather than another SensorKind: the sensor inventory
+    # drops the X_dX pre-emphasized channels (they are the same physical
+    # sensor as their base) and attributes a shear diff_gain to whichever probe
+    # was installed, neither of which suits a property of the amplifier chain.
+    n_gain_outliers = 0
+    if diff_gain:
+        from odas_tpw.rsi import diff_gain as dg_mod
+
+        report, n_gain_outliers, csv_written = dg_mod.run(
+            files, _cached_read, diff_gain_csv
+        )
+        print("", file=out)
+        print(report, end="", file=out)
+        # Only claim the write when it happened: run() skips the CSV when there
+        # is nothing to write, and downgrades an OSError into the report.
+        if csv_written:
+            print(f"Wrote the per-channel gain table to {diff_gain_csv}", file=out)
+
     if errors and not uses:
         return 1
     if cal_strict and cal_mismatch:
         return 3
+    if diff_gain_strict and n_gain_outliers:
+        return 4
     return 0
 
 
@@ -740,6 +791,26 @@ def build_arg_parser(prog: str = "sensor_inventory") -> argparse.ArgumentParser:
         type=Path,
         metavar="PATH",
         help="Write a per-(file,channel) CSV table (overwritten if it exists)",
+    )
+    ap.add_argument(
+        "--diff-gain",
+        action="store_true",
+        help="Audit pre-emphasis differential gains per INSTRUMENT (not per probe). "
+        "epsilon goes as (diff_gain*sens)^-2 and chi as diff_gain^-2, so this has "
+        "the same leverage as the shear sensitivity. Flags a gain far from the "
+        "fleet median for its channel, and reports changes over time (expected "
+        "when an instrument's electronics are rebuilt).",
+    )
+    ap.add_argument(
+        "--diff-gain-csv",
+        type=Path,
+        metavar="PATH",
+        help="Write the per-(file,channel) differential-gain table here",
+    )
+    ap.add_argument(
+        "--diff-gain-strict",
+        action="store_true",
+        help="Exit 4 when the differential-gain audit flags an outlier",
     )
     ap.add_argument(
         "-v",
@@ -801,6 +872,9 @@ def main(argv: list[str] | None = None) -> int:
         cal_tol=args.cal_tol,
         cal_max_age_months=args.cal_max_age_months,
         cal_strict=args.cal_strict,
+        diff_gain=args.diff_gain,
+        diff_gain_csv=args.diff_gain_csv,
+        diff_gain_strict=args.diff_gain_strict,
     )
 
 

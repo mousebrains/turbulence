@@ -102,6 +102,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   actually scaled, so an untouched file carries no misleading `1.0`.
 
 ### Added
+- **`rsi-tpw sensors --diff-gain`: a differential-gain audit keyed by
+  INSTRUMENT.** `diff_gain` belongs to an instrument's amplifier chain, not to
+  the probe screwed into it, which made it invisible to the sensor inventory in
+  two ways: that tool is keyed on *sensor* serial, so a shear `diff_gain` was
+  attributed to whichever probe was installed, and it deliberately drops the
+  `X_dX` pre-emphasized channels (`T1_dT1`, `P_dP`) as the same physical sensor
+  as their base — so the thermistor and pressure gains were never reported at
+  all.
+
+  The leverage is the shear sensitivity's: shear goes as
+  `1/(diff_gain*sens)`, so **epsilon goes as `(diff_gain*sens)^-2` and chi as
+  `diff_gain^-2`**. A 2% gain error is 4% in both.
+
+  It exists because of a real miss. On ARCTERX-2023 one VMP carried
+  `diff_gain = 0.09` on *both* shear channels where its three siblings in the
+  same cruise carried 0.92-0.99 — inflating its epsilon by roughly 110x — and
+  nothing in the chain noticed. The audit now flags it automatically.
+
+  Outliers are called out relative to the **fleet median for the same channel
+  name** (>2x), not against a hardcoded band: the plausible range differs by
+  channel class (differentiator channels near 1, `P_dP` near 20) and hardcoding
+  either would be a guess. The median takes one vote per *instrument*, not per
+  file, so a thousand files from one unit cannot drag it, and flagging needs at
+  least three instruments rather than inventing an outlier from a sample of one.
+
+  Changes over time are **reported with dates, not flagged**: gains follow the
+  electronics, so a Persistor CF2 VMP upgraded to RDL hardware legitimately
+  changes them. (The `model` string can lag the hardware — SN 142's 2021 files
+  still read `vmp-250` while already carrying its RDL gains.)
+
+  `--diff-gain-csv` writes the per-(file, channel) table; `--diff-gain-strict`
+  exits **4** on an outlier, distinct from `--cal-strict`'s 3.
+
 - **`epsilon.spectral_qc`: the ATOMIX-style per-probe cut epsilon was missing.**
   `chi.spectral_qc` has shipped and defaulted `true` for some time; epsilon had
   only `fom_max`, which thresholds a *different statistic*. This adds bits 1
