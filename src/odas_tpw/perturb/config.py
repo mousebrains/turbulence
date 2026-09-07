@@ -364,7 +364,7 @@ _INSTRUMENT_KEYS_BY_STAGE: dict[str, frozenset[str]] = {
 _ENGINE_DEPS = ("numpy", "scipy", "gsw", "netCDF4", "xarray", "pandas")
 # Subpackages that cannot affect processing numerics; excluded from the source
 # hash so editing plots/standalone tools doesn't invalidate cached science.
-_FINGERPRINT_EXCLUDE = ("perturb/plot/", "pyturb/")
+_FINGERPRINT_EXCLUDE = ("perturb/plot/",)
 _ENGINE_OVERRIDE_ENV = "ODAS_TPW_ENGINE_FINGERPRINT"
 
 
@@ -375,7 +375,7 @@ def engine_fingerprint() -> str:
     Folded into every stage signature so a change that could alter outputs
     yields new ``{stage}_NN`` dirs (recompute) while an unchanged engine reuses
     them — making "outputs already exist in this dir" a *safe* cache signal.
-    Covers our own ``.py`` source (excluding plot/pyturb) plus the installed
+    Covers our own ``.py`` source (excluding plot/) plus the installed
     versions of the distribution and key numeric deps.
 
     Override with ``$ODAS_TPW_ENGINE_FINGERPRINT`` to pin the value — to force

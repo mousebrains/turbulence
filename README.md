@@ -26,7 +26,6 @@ The package is organized into six subpackages under `odas_tpw`:
 - **scor160** — ATOMIX shear-probe benchmark processing and shared physics modules
 - **perturb** — Full campaign processing pipeline (trim, merge, calibrate, compute, bin)
 - **processing** — Instrument-agnostic profile processing (top trim, bottom-crash, CT alignment, multi-probe epsilon combining)
-- **pyturb** — Third-party code ([oceancascades/pyturb](https://github.com/oceancascades/pyturb)) hosted in-repo; maintained upstream, not refactored here
 
 ## Installation
 
@@ -39,7 +38,7 @@ See [docs/installation.md](docs/installation.md) for more options.
 
 ## Quick Start
 
-Several CLIs ship with the package (`rsi-tpw`, `perturb`, `perturb-plot`, `perturb-diag`, `scor160-tpw`, `pyturb-cli`); the two primary ones, for different workflows:
+Several CLIs ship with the package (`rsi-tpw`, `perturb`, `perturb-plot`, `perturb-diag`, `scor160-tpw`); the two primary ones, for different workflows:
 
 - **`rsi-tpw`** — single-file or short batch processing on the command line.
 - **`perturb`** — full campaign pipeline driven by a YAML config file
@@ -131,6 +130,7 @@ See [docs/perturb/pipeline.md](docs/perturb/pipeline.md) for the full stage list
 | [Python API](docs/rsi-tpw/python_api.md) | Using microstructure-tpw from Python code |
 | [Output Directories](docs/rsi-tpw/output_directories.md) | Sequential hash-tracked output scheme |
 | [Vectorization](docs/rsi-tpw/vectorization.md) | Vectorized compute internals |
+| [Calibration Provenance](docs/rsi-tpw/calibration_provenance.md) | Plausible-range checks on calibration coefficients, and the `cal_*` attrs on L1 variables |
 | [Bench Test](docs/rsi-tpw/bench.md) | Pre-deployment bench check (`bench`): quick_bench figures + auto checklist |
 | [Tab-completion](docs/rsi-tpw/completion.md) | Optional shell `<TAB>` completion for the CLIs (argcomplete) |
 

@@ -101,7 +101,90 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   chi file was unrecoverable from the product alone. Written only for probes
   actually scaled, so an untouched file carries no misleading `1.0`.
 
+### Removed
+- **The `pyturb` compatibility layer (`src/odas_tpw/pyturb/`, `pyturb-cli`).**
+  A re-implementation of Jesse Cusack's standalone
+  [pyturb](https://github.com/oceancascades/pyturb) on top of our readers,
+  hosted here so results could be compared. Nobody was using it, upstream has
+  moved on, and it carried the last two open findings from the issue #180
+  review (F11, F12) — for code on a path no product depends on.
+
+  Removed with its tests, its `docs/pyturb/` comparison report, and the
+  `scripts/compare_pyturb.py` / `scripts/generate_comparison_md.py` pair that
+  shelled out to the deleted entry point. The *ideas* worth keeping were ported
+  into `rsi/` instead (see Added, above).
+
+  `docs/perturb/pyturb_comparison.md` stays: it compares upstream pyturb against
+  our main `rsi`/`perturb`/`scor160` packages, which is a live question.
+
+  **Migration:** none for pipeline users — `rsi-tpw`, `perturb` and `scor160-tpw`
+  are untouched. Anyone invoking `pyturb-cli` should use upstream pyturb
+  directly, or `rsi-tpw eps`.
+
 ### Added
+- **Plausible-range checks on shear calibration coefficients.** The strict
+  parse from issue #180 (F06) fails closed on a coefficient that is not a
+  number, but it cannot see one that parses cleanly and is still impossible.
+  The canonical case is the un-filled `sens = 1.0` placeholder: it converted
+  without a murmur and scaled epsilon by roughly 200x. `sens` outside
+  [0.03, 0.15] V*s/m now warns.
+
+  The bounds are checked against our own corpus rather than adopted from the
+  vendor sheet: over **15 998 channel-configs** (ARCTERX, SUNRISE, RIOT,
+  CASPER, Taiwan, ASTRAL, Keck, goflow) `sens` spans 0.041-0.123, so the window
+  brackets every probe we have deployed and fires on none of them.
+
+  `diff_gain` gets a deliberately much wider bound ([0.001, 10]), because that
+  distribution turned out to be **bimodal** — and measuring *why* changed the
+  design. The low band is one rung of a Rockland design ladder: for
+  higher-energy environments they double the sampling frequency (more of the
+  Nasmyth spectrum) and drop the differential gain 10x to avoid saturating the
+  differentiator — 512 Hz/~0.95, 1024 Hz/~0.095, 2048 Hz/~0.0095. The
+  same-model comparison isolates it: `MR1000RDL-EM` reads 0.927/0.941 on the
+  512 Hz gliders SN 433/435 and 0.099/0.094 on the 1024 Hz SN 429.
+
+  So a tight band would flag a seventh of every shear channel we own; and
+  `convert_shear` sees only the channel config, never the rate, so it cannot
+  pick the right rung itself.
+
+  **The floor is 0.001, not the 0.01 the data alone suggests.** We own no
+  2048 Hz instruments, so ~0.0095 appears nowhere in the corpus — and a floor
+  fitted to what we happen to have would have warned on every channel of the
+  first one we read. Absence from our files is not evidence of non-existence.
+
+  This takes no position on SN 132 (issue #178) — if anything the ladder points
+  the other way. Over all 217 of its files, unanimously `fs_fast` = 511.9454 Hz
+  on a 10-column `vmp-250-IR`, so it belongs on the ~0.95 rung with
+  SN 412/465/479; yet it carries 0.09, the 1024 Hz rung's value, identically on
+  both channels where every measured pair differs. Separating a real low-gain
+  differentiator from a transcription error needs an instrument-keyed
+  comparison, which is what `rsi-tpw sensors --diff-gain` is for.
+
+- **`cal_<key>` provenance attributes on every converted L1 variable.** An L1
+  file is read years later without the config that produced it, and a shear
+  record is meaningless without the `sens` and `diff_gain` that scaled it.
+  `SHEAR` now carries `cal_sens = [0.1075, 0.113]` and
+  `cal_diff_gain = [0.954, 0.933]`, as arrays parallel to `sensor_names` so
+  probe 0's coefficient stays with probe 0. An audit can now answer "which
+  sensitivity is baked into this epsilon?" from the product, rather than by
+  re-deriving it from a `.p` file that `fp07-cal` or `patch-config` may since
+  have rewritten.
+
+  Recorded **by observation**: `channels.CalRecorder` notes which keys each
+  converter actually reads, so the attributes cannot drift from the conversion
+  the way a hand-maintained per-type table would. Keys probed but absent are
+  not recorded (`convert_poly` walking `coef0..coef9` is a loop exit, not
+  provenance), and a pass-through converter that consumes no coefficients
+  honestly publishes none.
+
+  The prefix is required: this covers every variable, and `TEMP_CTD`'s JAC
+  coefficients are literally named `a`-`f`. The older bare-name therm attrs on
+  *per-profile* files (#131 m8, read by `chi_io`) are unchanged — that
+  mechanism is confined to gradient channels where the names do not clash.
+
+  Numerically inert: the sample-exact `v6_golden_converted.npz` regression
+  passes unchanged. See
+  [docs/rsi-tpw/calibration_provenance.md](docs/rsi-tpw/calibration_provenance.md).
 - **`rsi-tpw sensors --diff-gain`: a differential-gain audit keyed by
   INSTRUMENT.** `diff_gain` belongs to an instrument's amplifier chain, not to
   the probe screwed into it, which made it invisible to the sensor inventory in

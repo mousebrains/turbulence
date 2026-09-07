@@ -120,6 +120,40 @@ def _classify_channels(pf: "PFile") -> dict:
     }
 
 
+def _cal_attrs(pf: "PFile", names: list[str]) -> dict:
+    """``cal_<key>``: the coefficients this variable's config supplied.
+
+    A converted L1 file is routinely read years later, on a different machine,
+    without the instrument config that produced it — and a shear record is
+    meaningless without the ``sens`` and ``diff_gain`` that scaled it.  Writing
+    the coefficients onto the variable makes the file self-describing, and lets
+    an audit answer "which sensitivity is baked into this epsilon?" from the
+    product rather than by re-deriving it from a ``.p`` file that may since have
+    been re-patched.  (Concept from Jesse Cusack's pyturb.)
+
+    For a stacked variable the value is an array parallel to ``sensor_names``,
+    so probe 0's coefficient stays attached to probe 0.  A coefficient that
+    only some probes in the stack carry is filled with NaN for the others
+    rather than dropped: a short or re-ordered array would silently
+    mis-attribute a coefficient to the wrong probe.
+
+    A coefficient the config omitted — where the converter applied a documented
+    default — is NOT listed; see
+    :meth:`~odas_tpw.rsi.channels.CalRecorder.calibration`.
+    """
+    cals = [pf.channel_info[n].get("cal", {}) for n in names]
+    if not cals:
+        return {}
+    keys = sorted(set().union(*(set(c) for c in cals)))
+    attrs: dict = {}
+    for key in keys:
+        values = [c.get(key, np.nan) for c in cals]
+        attrs[f"cal_{key}"] = (
+            float(values[0]) if len(values) == 1 else np.array(values, dtype="f8")
+        )
+    return attrs
+
+
 def _create_l1_variables(group, specs, complevel=4):
     """Write a list of variable specs to a NetCDF group.
 
@@ -406,6 +440,36 @@ def _l1_variable_specs(
             dim = ("TIME",) if pf.is_fast(ch_name) else ("TIME_SLOW",)
             specs.append((var_name, "f8", dim, pf.channels[ch_name], attrs))
 
+    # Calibration provenance, applied at one site rather than in each of the
+    # fifteen specs above.  Stacked variables already declare their source
+    # channels in ``sensor_names``; the single-channel ones are named here.
+    sources: dict[str, list[str]] = {
+        "SHEAR": shear_names,
+        "VIB": vib_names,
+        "ACC": acc_names,
+        "MAG": mag_names,
+        "GRADT": gradt_names,
+        "TEMP": gradt_names,
+        "COND_CTD": cond_ctd_names[:1],
+    }
+    for var_name_, ch_name_ in (
+        ("TEMP_CTD", temp_ctd_name),
+        ("PITCH", pitch_name),
+        ("ROLL", roll_name),
+        ("CHLA", chla_name),
+        ("TURB", turb_name),
+        ("DOXY", doxy_name),
+        ("DOXY_TEMP", doxy_temp_name),
+        ("PRES", "P" if "P" in pf.channels else None),
+        ("PRES_SLOW", "P" if "P" in pf.channels else None),
+    ):
+        if ch_name_ is not None:
+            sources[var_name_] = [ch_name_]
+    specs = [
+        (name, dtype, dims, data, {**attrs, **_cal_attrs(pf, sources.get(name, []))})
+        for name, dtype, dims, data, attrs in specs
+    ]
+
     return specs
 
 
@@ -562,6 +626,8 @@ def p_to_L1(
         v.units = canonicalize_units(info["units"])
         v.sensor_type = info["type"]
         v.long_name = name
+        for cal_key, cal_val in info.get("cal", {}).items():
+            v.setncattr(f"cal_{cal_key}", float(cal_val))
 
     # Group attributes
     L1.time_reference_year = float(ref_year)

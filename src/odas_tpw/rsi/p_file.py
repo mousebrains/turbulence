@@ -18,7 +18,7 @@ from typing import Any, BinaryIO
 
 import numpy as np
 
-from odas_tpw.rsi.channels import CONVERTERS
+from odas_tpw.rsi.channels import CONVERTERS, CalRecorder
 from odas_tpw.rsi.deconvolve import deconvolve
 
 # ---------------------------------------------------------------------------
@@ -564,7 +564,9 @@ class PFile:
         the pre-emphasized signal), and 'P_dP' holds the deconvolved
         slow pressure.  (ODAS renames these to 'T1_fast'/'P_slow'.)
     channel_info : dict[str, dict]
-        Per-channel metadata: 'type', 'units', and config parameters.
+        Per-channel metadata: 'type', 'units', and 'cal' — the calibration
+        coefficients the converter actually consumed (empty for channels left
+        in raw counts).
     config : dict
         Parsed INI configuration (see :func:`parse_config`).
     config_str : str
@@ -1078,7 +1080,10 @@ class PFile:
         for ch_name in list(self.channels_raw.keys()):
             info = ch_config.get(ch_name, {})
             ch_type = info.get("type", "raw").strip().lower()
-            convert_info = dict(info)
+            # CalRecorder, not a plain dict: it notes which coefficients the
+            # converter actually reads, so channel_info can carry exactly the
+            # calibration that produced these samples (see channels.CalRecorder).
+            convert_info = CalRecorder(info)
 
             # When deconvolution is skipped, a pre-emphasized channel
             # (X_dX, e.g. T1_dT1 / P_dP) keeps its own sparse config, which
@@ -1090,19 +1095,23 @@ class PFile:
             # deconvolve=False want the raw pre-emphasized counts.
             if not self._deconvolve and re.match(r"^(\w+)_d\1$", ch_name):
                 self.channels[ch_name] = self.channels_raw[ch_name]
-                self.channel_info[ch_name] = {"units": "counts", "type": ch_type}
+                self.channel_info[ch_name] = {"units": "counts", "type": ch_type, "cal": {}}
                 continue
 
             converter = CONVERTERS.get(ch_type)
             if converter is None:
                 warnings.warn(f"No converter for type '{ch_type}' (channel {ch_name})")
                 self.channels[ch_name] = self.channels_raw[ch_name]
-                self.channel_info[ch_name] = {"units": "counts", "type": ch_type}
+                self.channel_info[ch_name] = {"units": "counts", "type": ch_type, "cal": {}}
                 continue
 
             phys, units = converter(self.channels_raw[ch_name], convert_info)
             self.channels[ch_name] = phys
-            self.channel_info[ch_name] = {"units": units, "type": ch_type}
+            self.channel_info[ch_name] = {
+                "units": units,
+                "type": ch_type,
+                "cal": convert_info.calibration(),
+            }
             # Shear (sh1/sh2) carries the ODAS intermediate that still needs
             # the /speed^2 fall-rate normalization to become physical shear.
             # ``units`` stays UDUNITS-valid "s-1"; flag the pre-normalization
