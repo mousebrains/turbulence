@@ -370,3 +370,104 @@ def test_chi_dof_spec_builder_values():
     assert _build_chi_ds(n_v=99).attrs["dof_spec"] == pytest.approx(DOF_NUTTALL * 1)
     # Back-compat default (n_v omitted) is the no-Goodman value.
     assert _build_chi_ds().attrs["dof_spec"] == pytest.approx(DOF_NUTTALL * num_ffts)
+
+
+# ---------------------------------------------------------------------------
+# perturb wiring (issue #167)
+# ---------------------------------------------------------------------------
+
+
+def _perturb_ds(e1, e2, *, n=None):
+    """A minimal perturb-shaped per-profile diss dataset."""
+    n = len(e1) if n is None else n
+    return xr.Dataset(
+        {
+            "e_1": ("time", np.asarray(e1, dtype=float)),
+            "e_2": ("time", np.asarray(e2, dtype=float)),
+            "speed": ("time", np.full(n, 0.7)),
+            "nu": ("time", np.full(n, 1.0e-6)),
+        },
+        coords={"time": np.arange(n)},
+        attrs={"diss_length": 512.0, "fs_fast": 512.0},
+    )
+
+
+def test_perturb_annotates_probe_pairs():
+    """perturb wires the diagnostic that only the rsi path used to run."""
+    from odas_tpw.perturb.pipeline import _annotate_probe_pairs
+
+    rng = np.random.default_rng(3)
+    e1 = 1e-7 * np.exp(rng.normal(0, 0.05, 60))
+    ds = _perturb_ds(e1, e1 * 2.0)
+    _annotate_probe_pairs(ds, quantity="epsilon", floor=1e-13, context="unit")
+
+    assert ds.attrs["probe_ratio_pairs"] == "e_1/e_2"
+    assert ds.attrs["n_ratio_windows"] == [60]
+    assert ds.attrs["probe_ratio_median"][0] == pytest.approx(0.5, rel=1e-9)
+
+
+def test_perturb_excludes_windows_with_both_probes_at_the_floor():
+    """The #167 requirement, and it is NOT automatic.
+
+    ``mk_epsilon_mean`` floors on an internal copy and writes back only the
+    combined mean, so ``e_1``/``e_2`` still hold sub-floor values when the
+    diagnostic runs. Two probes resting on the noise floor would otherwise
+    contribute the ratio of two arbitrary sub-floor numbers.
+    """
+    from odas_tpw.perturb.pipeline import _annotate_probe_pairs
+
+    good = np.full(30, 1e-7)
+    # 20 windows where BOTH probes sit below the floor, at a wild 1000x ratio
+    # that would swamp the median if it were counted.
+    sub1, sub2 = np.full(20, 1e-16), np.full(20, 1e-19)
+    ds = _perturb_ds(np.r_[good, sub1], np.r_[good, sub2])
+
+    _annotate_probe_pairs(ds, quantity="epsilon", floor=1e-13, context="unit")
+
+    assert ds.attrs["n_ratio_windows"] == [30], "both-at-floor windows were counted"
+    assert ds.attrs["probe_ratio_median"][0] == pytest.approx(1.0, rel=1e-9)
+
+
+def test_perturb_keeps_a_window_when_only_one_probe_is_at_the_floor():
+    """One probe at the floor is a real disagreement, not a floor artifact.
+
+    It drops out anyway because the pair needs both finite -- but it must not
+    be conflated with the both-at-floor case, so pin the count.
+    """
+    from odas_tpw.perturb.pipeline import _annotate_probe_pairs
+
+    ds = _perturb_ds(np.r_[np.full(30, 1e-7), np.full(5, 1e-16)],
+                     np.r_[np.full(30, 1e-7), np.full(5, 1e-7)])
+    _annotate_probe_pairs(ds, quantity="epsilon", floor=1e-13, context="unit")
+    assert ds.attrs["n_ratio_windows"] == [30]
+
+
+def test_perturb_single_probe_writes_nothing():
+    from odas_tpw.perturb.pipeline import _annotate_probe_pairs
+
+    ds = _perturb_ds(np.full(20, 1e-7), np.full(20, 1e-7))
+    del ds["e_2"]
+    _annotate_probe_pairs(ds, quantity="epsilon", floor=1e-13, context="unit")
+    assert "probe_ratio_pairs" not in ds.attrs
+
+
+def test_perturb_chi_uses_the_chi_prefix(caplog):
+    from odas_tpw.perturb.pipeline import _annotate_probe_pairs
+
+    n = 40
+    ds = xr.Dataset(
+        {
+            "chi_1": ("time", np.full(n, 1e-8)),
+            "chi_2": ("time", np.full(n, 4e-8)),
+            "speed": ("time", np.full(n, 0.7)),
+            "nu": ("time", np.full(n, 1.0e-6)),
+        },
+        coords={"time": np.arange(n)},
+        attrs={"diss_length": 512.0, "fs_fast": 512.0},
+    )
+    with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+        _annotate_probe_pairs(ds, quantity="chi", floor=1e-13, context="unit")
+    assert ds.attrs["chi_probe_ratio_pairs"] == "chi_1/chi_2"
+    assert ds.attrs["chi_probe_ratio_median"][0] == pytest.approx(0.25, rel=1e-9)
+    # 4x is past PROBE_RATIO_MAX, so the practical tier must fire and say "chi".
+    assert "inter-probe chi disagreement" in caplog.text

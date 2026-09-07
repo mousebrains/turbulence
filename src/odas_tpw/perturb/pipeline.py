@@ -185,6 +185,99 @@ def _prune_orphan_profile_ncs(stage_dir: Path, valid_stems: set[str]) -> int:
     return pruned
 
 
+def _stack_like(ds, var: str, n_probe: int):
+    """``var`` as (n_probe, n_time) from a 2-D probe variable, else ``None``."""
+    import numpy as np
+
+    if var not in ds:
+        return None
+    da = ds[var]
+    if "probe" in da.dims and ds.sizes.get("probe", 0) == n_probe:
+        return np.vstack(
+            [np.asarray(da.isel(probe=i).values, dtype=np.float64) for i in range(n_probe)]
+        )
+    return None
+
+
+def _annotate_probe_pairs(ds, *, quantity: str, floor: float, context: str) -> None:
+    """Cross-probe consistency diagnostic on a perturb per-profile dataset (#167).
+
+    The rsi path has run this since #131 (``rsi/dissipation.py``,
+    ``rsi/chi_io.py``); perturb computed nothing, so a persistent probe-pair
+    disagreement was invisible in the batch product that most analysis reads.
+
+    Called AFTER the FM cut, the floor and the QC drop, so the metric describes
+    the data that actually ships. That placement is the documented difference
+    from the rsi call site, which runs over all finite windows at the dataset
+    build -- the two can differ slightly for the same data.
+
+    **Windows where both probes sit at the floor are excluded**, and that is not
+    automatic: ``mk_epsilon_mean`` / ``mk_chi_mean`` floor on an internal copy
+    and write back only the combined mean and sigma, so the per-probe ``e_i`` /
+    ``chi_i`` variables still carry their sub-floor values. Left in, two probes
+    resting on the noise floor contribute the ratio of two arbitrary sub-floor
+    numbers -- agreement that means nothing, or disagreement that is not real.
+    Re-applying the floor here drops them via ``probe_pair_stats``'s
+    finite-and-positive test.
+    """
+    import numpy as np
+
+    from odas_tpw.processing.probe_consistency import (
+        annotate_probe_consistency,
+        lueck_ln_sigma,
+    )
+
+    is_chi = quantity == "chi"
+    stem = "chi_" if is_chi else "e_"
+    names = sorted(
+        (
+            str(k)
+            for k in ds.data_vars
+            if str(k).startswith(stem) and str(k)[len(stem) :].isdigit()
+        ),
+        key=lambda s: int(s[len(stem) :]),
+    )
+    if len(names) < 2:
+        return
+    vals = np.vstack([np.asarray(ds[n].values, dtype=np.float64) for n in names])
+    with np.errstate(invalid="ignore"):
+        vals[vals <= floor] = np.nan
+    if not np.isfinite(vals).any():
+        return
+
+    # sigma_ln needs a dissipation rate for the Kolmogorov length: epsilon
+    # itself, or the per-probe epsilon_T on the chi side (mirrors mk_chi_mean).
+    eps_for_sigma = vals
+    if is_chi:
+        stacked = _stack_like(ds, "epsilon_T", len(names))
+        if stacked is not None:
+            eps_for_sigma = stacked
+
+    n_time = vals.shape[1]
+    speed = np.asarray(ds["speed"].values, dtype=np.float64) if "speed" in ds else np.ones(n_time)
+    nu = np.asarray(ds["nu"].values, dtype=np.float64) if "nu" in ds else np.full(n_time, 1e-6)
+    try:
+        diss_length = float(
+            ds["diss_length"].values if "diss_length" in ds else ds.attrs["diss_length"]
+        )
+        fs = float(ds["fs_fast"].values if "fs_fast" in ds else ds.attrs["fs_fast"])
+    except (KeyError, TypeError, ValueError):
+        return
+
+    sigma_ln = lueck_ln_sigma(
+        eps_for_sigma, nu, speed, diss_length, fs, _stack_like(ds, "var_resolved", len(names))
+    )
+    annotate_probe_consistency(
+        ds,
+        vals,
+        sigma_ln,
+        names,
+        quantity=quantity,
+        attr_prefix="chi_" if is_chi else "",
+        context=context,
+    )
+
+
 def _write_binned_or_clear(ds: "xr.Dataset", out_dir: Path, manifest: str | None = None) -> None:
     """Write *ds* to ``out_dir/binned.nc``, or remove a stale one if *ds* is empty.
 
@@ -2425,6 +2518,12 @@ def process_file(
                                 ],
                                 drop_action=qc_drop_action,
                             )
+                        _annotate_probe_pairs(
+                            ds,
+                            quantity="epsilon",
+                            floor=float(eps_cfg.get("epsilon_minimum", 1e-13)),
+                            context=f"{p_path.name} {Path(prof_path).name}",
+                        )
                         _copy_profile_scalars(prof_path, ds, prof_scalars_cache)
                         if strat_enabled:
                             _attach_window_stratification(
@@ -2564,6 +2663,12 @@ def process_file(
                                     ],
                                     drop_action=qc_drop_action,
                                 )
+                            _annotate_probe_pairs(
+                                chi_ds,
+                                quantity="chi",
+                                floor=float(chi_cfg.get("chi_minimum", 1e-13)),
+                                context=f"{p_path.name} {Path(prof_path).name}",
+                            )
                             # Derived mixing quantities (Gamma, K_T, K_rho);
                             # N2 salinity per stratification.salinity (own
                             # C/T/P by default, or fixed/hotel-injected)
