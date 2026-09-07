@@ -868,6 +868,63 @@ def _time_epoch_seconds(da) -> Any:
     return vals.astype(np.float64)
 
 
+#: Plausible range for a seawater reference temperature, deg C (issue #166).
+#: The seawater freezing point at 35 PSU is about -1.9 C and the warmest open
+#: surface water is about 36 C, so this is wide enough that no real ocean sample
+#: is rejected. It exists to catch a DEAD sensor, not to QC oceanography.
+REFERENCE_T_MIN = -2.5
+REFERENCE_T_MAX = 40.0
+
+
+def _gate_reference_temperature(T, T_name: str, file_label: str):
+    """NaN reference-temperature samples that are not physically possible (#166).
+
+    A railed thermistor is the motivating case: across the CasperWest corpus
+    ``T1`` sat at ~58.46 C for every sample, and because the reference
+    temperature feeds BOTH ``gsw.SP_from_C`` and ``sorted_stratification`` it
+    corrupted salinity, viscosity and N2 together -- epsilon came out ~5.3x low
+    **with green QC**, because nothing downstream asks whether the temperature
+    was possible. Late ARCTERX-2023 MR685 files carry the same rail.
+
+    Bad samples are NaN'd rather than the profile rejected, so an isolated spike
+    costs one sample; a fully railed channel then leaves too few finite salinity
+    samples and the existing fall-through to fixed 35 PSU takes over. That is
+    why this never raises.
+
+    Warns once per profile, naming the observed range -- "fewer than two finite
+    salinity samples" downstream does not tell anyone their sensor is dead.
+    """
+    import numpy as np
+
+    arr = np.asarray(T, dtype=np.float64)
+    finite = np.isfinite(arr)
+    if not finite.any():
+        return arr
+    bad = finite & ((arr < REFERENCE_T_MIN) | (arr > REFERENCE_T_MAX))
+    n_bad = int(np.count_nonzero(bad))
+    if not n_bad:
+        return arr
+    lo, hi = float(np.min(arr[bad])), float(np.max(arr[bad]))
+    out = arr.copy()
+    out[bad] = np.nan
+    logger.warning(
+        "%s: %s has %d of %d finite sample(s) outside the plausible seawater "
+        "range [%.1f, %.1f] C (offending values span %.4g to %.4g); those "
+        "samples are discarded. The reference temperature feeds salinity, "
+        "viscosity and N2, so a railed sensor biases epsilon and the mixing "
+        "products without tripping any other QC (issue #166).",
+        file_label,
+        T_name,
+        n_bad,
+        int(np.count_nonzero(finite)),
+        REFERENCE_T_MIN,
+        REFERENCE_T_MAX,
+        lo,
+        hi,
+    )
+    return out
+
+
 def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_source=None):
     """Per-cast sorted N2/dT/dz on the full slow grid (NaN outside casts).
 
@@ -899,7 +956,7 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
     if P is None or T is None:
         return None, None, None
     P = np.asarray(P, dtype=np.float64)
-    T = np.asarray(T, dtype=np.float64)
+    T = _gate_reference_temperature(T, T_name, Path(str(getattr(pf, "filepath", "?"))).name)
     C = pf.channels.get(C_name)
     # Only usable if conductivity is a slow channel aligned with P/T; a fast C
     # would be silently misaligned by the slow-index slice below.
@@ -1114,7 +1171,9 @@ def _window_stratification_for_profile(
             return None
         t_slow = _time_epoch_seconds(prof["t_slow"])
         P = prof["P"].values.astype(np.float64)
-        T = prof[T_name].values.astype(np.float64)
+        T = _gate_reference_temperature(
+            prof[T_name].values.astype(np.float64), T_name, file_label
+        )
         lat = float(prof["lat"].values) if "lat" in prof else np.nan
         lon = float(prof["lon"].values) if "lon" in prof else np.nan
         lat = 0.0 if not np.isfinite(lat) else lat

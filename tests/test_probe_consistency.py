@@ -471,3 +471,64 @@ def test_perturb_chi_uses_the_chi_prefix(caplog):
     assert ds.attrs["chi_probe_ratio_median"][0] == pytest.approx(0.25, rel=1e-9)
     # 4x is past PROBE_RATIO_MAX, so the practical tier must fire and say "chi".
     assert "inter-probe chi disagreement" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# reference-temperature plausibility gate (issue #166)
+# ---------------------------------------------------------------------------
+
+
+def test_reference_t_gate_passes_real_ocean_temperatures():
+    """The gate must never reject water that exists."""
+    from odas_tpw.perturb.pipeline import _gate_reference_temperature
+
+    T = np.array([-1.9, 0.0, 4.0, 15.0, 28.5, 35.9])
+    out = _gate_reference_temperature(T, "JAC_T", "f.p")
+    np.testing.assert_array_equal(out, T)
+
+
+def test_reference_t_gate_nans_a_railed_sensor(caplog):
+    """The CasperWest failure: T1 railed at 58.46 C corpus-wide.
+
+    It fed both SP_from_C and sorted_stratification, so epsilon came out
+    ~5.3x low with green QC. The gate must discard it and say why.
+    """
+    from odas_tpw.perturb.pipeline import _gate_reference_temperature
+
+    T = np.full(50, 58.46)
+    with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+        out = _gate_reference_temperature(T, "T1", "CAS_080.P")
+    assert np.isnan(out).all()
+    assert "58.46" in caplog.text
+    assert "T1" in caplog.text and "CAS_080.P" in caplog.text
+
+
+def test_reference_t_gate_keeps_good_samples_and_drops_spikes(caplog):
+    """An isolated spike costs one sample, not the profile."""
+    from odas_tpw.perturb.pipeline import _gate_reference_temperature
+
+    T = np.array([12.0, 12.1, 999.0, 12.2, -273.15, 12.3])
+    with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+        out = _gate_reference_temperature(T, "JAC_T", "f.p")
+    assert np.isnan(out[[2, 4]]).all()
+    np.testing.assert_array_equal(out[[0, 1, 3, 5]], T[[0, 1, 3, 5]])
+    assert "2 of 6" in caplog.text
+
+
+def test_reference_t_gate_does_not_mutate_its_input():
+    """The caller's array is reused; gating must not corrupt it in place."""
+    from odas_tpw.perturb.pipeline import _gate_reference_temperature
+
+    T = np.array([12.0, 999.0])
+    out = _gate_reference_temperature(T, "JAC_T", "f.p")
+    assert np.isnan(out[1]) and T[1] == 999.0
+
+
+def test_reference_t_gate_tolerates_all_nan_and_stays_quiet(caplog):
+    from odas_tpw.perturb.pipeline import _gate_reference_temperature
+
+    T = np.full(5, np.nan)
+    with caplog.at_level(logging.WARNING, logger="odas_tpw.perturb.pipeline"):
+        out = _gate_reference_temperature(T, "JAC_T", "f.p")
+    assert np.isnan(out).all()
+    assert caplog.text == ""
