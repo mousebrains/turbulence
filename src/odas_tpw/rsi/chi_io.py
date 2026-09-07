@@ -17,6 +17,7 @@ import functools
 import logging
 import re
 import warnings
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -53,6 +54,50 @@ _DEFAULT_DIFF_GAIN = 0.94
 THERM_CAL_ATTR_KEYS = ("e_b", "b", "gain", "beta_1", "beta_2", "adc_fs", "adc_bits", "T_0")
 
 
+def resolve_tau_scales(
+    therm_names: list[str], tau_scale: Mapping[str, float] | None
+) -> list[float] | None:
+    """Map a ``{channel: multiplier}`` mapping onto the gradient-channel order.
+
+    Accepts either the bead name (``"T1"``) or the gradient channel name
+    (``"T1_dT1"``); ``"T1"`` matches ``"T1_dT1"`` because that is how the
+    channel is labelled in a .p config and on a calibration sheet, while the
+    gradient channel is what chi actually consumes.
+
+    Returns ``None`` for an empty/absent mapping so the caller can pass it
+    straight through as "no scaling".
+
+    Raises
+    ------
+    ValueError
+        If a key matches no channel, or matches more than one. Silently
+        ignoring an unmatched key would leave a probe uncorrected while the
+        config claimed otherwise, and chi goes as the square of the response
+        error -- there is no downstream symptom that would reveal it.
+    """
+    if not tau_scale:
+        return None
+    scales = [1.0] * len(therm_names)
+    for key, value in tau_scale.items():
+        hits = [
+            i
+            for i, name in enumerate(therm_names)
+            if name == key or name.startswith(f"{key}_")
+        ]
+        if len(hits) != 1:
+            raise ValueError(
+                f"fp07_tau_scale key {key!r} matched {len(hits)} of the "
+                f"thermistor channels {therm_names}; expected exactly one"
+            )
+        v = float(value)
+        if not np.isfinite(v) or v <= 0:
+            raise ValueError(
+                f"fp07_tau_scale[{key!r}] must be finite and > 0, got {value!r}"
+            )
+        scales[hits[0]] = v
+    return scales
+
+
 def _compute_chi(
     source: PFile | str | Path,
     epsilon_ds: xr.Dataset | None = None,
@@ -74,6 +119,7 @@ def _compute_chi(
     conductivity: str = "auto",
     vehicle: str | None = None,
     mask_bad_buffers: bool = True,
+    fp07_tau_scale: Mapping[str, float] | None = None,
     _pre_loaded: dict[str, Any] | None = None,
 ) -> list[xr.Dataset]:
     """Compute chi from temperature gradient spectra (internal, no deprecation warning).
@@ -94,6 +140,13 @@ def _compute_chi(
     practical salinity from the resolved C/T pair and pressure (TEOS-10),
     falling back to ``None`` (visc35) with a warning when no conductivity
     channel exists.
+
+    ``fp07_tau_scale`` maps a thermistor channel name to a multiplier on its
+    FP07 time constant, e.g. ``{"T1": 0.30, "T2": 0.75}``. Either the bead name
+    (``T1``) or the gradient channel name (``T1_dT1``) is accepted. Unmatched
+    keys raise rather than being ignored -- a typo that silently left a probe
+    uncorrected would bias chi by the square of the response error with no
+    visible symptom. ``None`` (default) leaves every probe on the tau model.
 
     ``mask_bad_buffers`` (default True) rejects a chi estimate whose window
     carries an RDL bad-buffer gap (TN-051 s3.2) too long to interpolate on a
@@ -164,6 +217,7 @@ def _compute_chi(
     n_therm = len(therm_names)
     diff_gains = data.get("diff_gains", [_DEFAULT_DIFF_GAIN] * n_therm)
     therm_cal = data.get("therm_cal", [{}] * n_therm)
+    tau_scales = resolve_tau_scales(therm_names, fp07_tau_scale)
 
     if n_therm == 0:
         raise ValueError("No thermistor gradient channels found")
@@ -252,6 +306,7 @@ def _compute_chi(
             fp07_model=fp07_model,
             salinity=sal_prof,
             therm_cal=therm_cal,
+            tau_scale=tau_scales,
         )
 
         if l3_chi.n_spectra == 0:

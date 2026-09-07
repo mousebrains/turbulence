@@ -78,6 +78,93 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   deployment-scoped `fp07-cal` CLI for a sparse reference.
 
 ### Added
+- **`epsilon.spectral_qc`: the ATOMIX-style per-probe cut epsilon was missing.**
+  `chi.spectral_qc` has shipped and defaulted `true` for some time; epsilon had
+  only `fom_max`, which thresholds a *different statistic*. This adds bits 1
+  (`FM > FM_max`) and 16 (`var_resolved < min`, **`method == 0` only**) of
+  `scor160.l4._compute_flags`, applied per-probe before `mk_epsilon_mean` so a
+  failing probe leaves the geometric mean individually.
+
+  Named `spectral_qc`, not `atomix_qc`, because it **cannot** be the full flag
+  set: bits 2 and 8 need despike diagnostics the perturb diss product does not
+  carry. Claiming conformance we do not have would be worse than the gap.
+
+  Three things that are easy to get wrong and are pinned by tests:
+  - **The `method` gate on bit 16 is not optional.** An ISR fit never
+    integrates the dissipation range, so a low resolved fraction is expected
+    rather than diagnostic, and ATOMIX exempts it. Ungated on ARCTERX-2022 the
+    criterion rejects 3.51% of probe-windows instead of 0.18%. With no `method`
+    variable the criterion is skipped with a warning, never guessed.
+  - **`FM` is not `fom`.** ATOMIX's 1.15 was written for the MAD-based `FM`;
+    `fom_max` thresholds the variance-ratio `fom`. They are only weakly related
+    (r ~ -0.35 on ARCTERX-2022). Relatedly, `fom_max`'s docs now carry the
+    warning that on a corpus with ISR estimates a low value cuts them *as a
+    class* — on ARCTERX-2022 every window with `fom >= 1.15` was an ISR fit.
+  - **A window where no probe survives is dropped (NaN), not backfilled** —
+    matching rsi's `_compute_epsi_final` and deliberately unlike
+    `chi.spectral_qc`. A finite-but-wrong epsilon rescales Method-1 chi roughly
+    linearly while the chi `fom` stays ~1, so nothing downstream can reject it.
+
+  Provenance is written onto the diss product (`spectral_qc_*`), including
+  `spectral_qc_rejected_fraction`. Note `spectral_qc_n_pair_windows_flagged`
+  counts *windows* while the other two counts are *(probe, segment) cells*, and
+  under `flag_only` it records a flag rather than a cut.
+
+  Default **`false`** while `chi.spectral_qc` defaults `true` — a deliberate,
+  documented asymmetry. On ARCTERX-2022 enabling it cuts 19.99% of
+  probe-windows (bit 1 19.92%, bit 16 0.18%), removes 47% of the top epsilon
+  decile and shifts the median epsilon by 1.14x. That is a reshaping of the
+  distribution, not a tidy-up, so it is opt-in and the size of the cut is
+  written into the product (`spectral_qc_*` attributes, including
+  `spectral_qc_rejected_fraction`) rather than left in the documentation.
+
+- **`epsilon.pair_policy`: the two-probe case both existing rules decline.**
+  `mk_epsilon_mean`'s outlier rule needs `n_probes >= 3` — with two probes
+  neither is identifiable as the outlier, and always dropping the maximum would
+  bias `epsilonMean` low — so on a 2-probe VMP, the common configuration, there
+  was no inter-probe consistency check at all. ATOMIX bit 4 *does* act on a
+  pair, and keeps the minimum. Both are defensible, so the choice is exposed:
+  `keep_both` (default, bit-identical to today), `drop_high` (ATOMIX's action,
+  which makes a low junk probe authoritative — a factor of 50 on the test
+  fixture), or `flag_only`. Windows with >= 3 probes stay with
+  `mk_epsilon_mean`, so two rules never contest the same window. Threshold and
+  sigma_ln come from `processing.probe_consistency`, shared with the
+  cross-probe consistency log added in #174, so gate and diagnostic always
+  describe the same statistic. On ARCTERX-2022, 6.40% of windows exceed the
+  threshold, so the policy is not academic.
+
+- **`instruments.<SN>.fp07_tau_scale`: a per-thermistor FP07 time constant.**
+  `tau` previously came from a single model (`fp07_tau`: `lueck` for
+  `single_pole`, `goto` for `double_pole`) and was shared by every thermistor
+  on an instrument. Two beads on one probe head can have materially different
+  response, and that assumption biases them apart: on ARCTERX-2022 the two
+  FP07s disagreed on chi by 1.77x (SN 194) and 0.72x (SN 428) — in opposite
+  directions, persistently, over 1330 profiles.
+
+  The disagreement is a **response** problem, not a flat gain error, and the
+  diagnostic is that it varies with `K_max_ratio` (`K_max/kB`): SN 194 ran
+  2.27 → 1.54 and SN 428 0.59 → 0.80 across quartiles, both converging toward
+  1 as more of the Batchelor rolloff is resolved rather than extrapolated. A
+  flat gain error would be quartile-independent. Fitting one tau per bead
+  collapsed both units to 1.03x, with the quartile spread falling from
+  1.47x/1.37x to 1.13x/1.11x.
+
+  The config value multiplies the tau *model* rather than replacing it, so the
+  model's speed dependence survives — a scale factor on `tau(U)` is what the
+  data actually constrain. Keys take the bead name (`T1`) or the gradient
+  channel (`T1_dT1`); an unmatched key raises rather than being ignored,
+  because a silently-uncorrected probe would bias chi by the square of the
+  response error with no downstream symptom. Omitted, every probe stays on the
+  model and results are bit-identical to before.
+
+  Internally `L3ChiData.tau0` and `.H2` are now emitted per thermistor —
+  `(N_GRADT, N_SPECTRA)` and `(N_GRADT, N_SPECTRA, N_FREQ)`. The previous
+  shared-across-probes layout is still accepted on input; read either through
+  the new `L3ChiData.tau0_for(ci, j)` / `.H2_for(ci, j)` accessors rather than
+  indexing directly. Note `fom` cannot arbitrate between two beads (it was
+  ~1.000 for both on both units), and fitting tau makes the beads agree with
+  each other without establishing the absolute chi level. See
+  `docs/perturb/configuration.md`.
 - **`mr-clocksync`: per-file clock offset and rate for a MicroRider, from the
   surface-wave band.** An MR clock jumps between `.p` files and runs at the
   wrong rate, so a single per-deployment offset is wrong by construction. Given

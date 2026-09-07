@@ -779,6 +779,275 @@ def _adjust_profile_bounds(
     return adjusted
 
 
+def _mask_probe_cells(ds, bad) -> int:
+    """NaN the (probe, segment) cells marked in *bad*; return how many.
+
+    Shared by every per-probe cut so they mask exactly the same variable set:
+    the 2-D value arrays AND the 1-D ``e_N`` / ``chi_N`` companions that
+    ``mk_epsilon_mean`` / ``mk_chi_mean`` prefer. Masking one but not the other
+    would let a cut probe reappear in the combined mean.
+
+    Per-probe METADATA (``fom``, ``FM``, ``K_max``, ``var_resolved``, ``kB``,
+    ``method``) is deliberately left intact — it is what makes a dropped cell
+    auditable after the fact.
+    """
+    import numpy as np
+
+    if not bad.any():
+        return 0
+    n_probe = bad.shape[0]
+    for v in ("epsilon", "chi", "epsilon_T"):
+        if v in ds.data_vars and ds[v].shape == bad.shape:
+            arr = ds[v].values.copy()
+            arr[bad] = np.nan
+            ds[v].values[...] = arr
+    for i in range(n_probe):
+        for prefix in ("e_", "chi_"):
+            name = f"{prefix}{i + 1}"
+            if name in ds.data_vars:
+                arr = ds[name].values.copy()
+                arr[bad[i, :]] = np.nan
+                ds[name].values[...] = arr
+    return int(bad.sum())
+
+
+PAIR_POLICIES = ("keep_both", "drop_high", "flag_only")
+
+
+def _apply_spectral_qc(
+    ds,
+    file_label: str,
+    *,
+    FM_max: float,
+    var_resolved_min: float,
+    pair_policy: str,
+    pair_limit: float,
+    epsilon_minimum: float = 0.0,
+) -> dict:
+    """ATOMIX-style spectral QC on a perturb per-profile diss dataset.
+
+    Implements the two bits of ``scor160.l4._compute_flags`` that the perturb
+    diss product carries the inputs for, and NOTHING ELSE -- which is why this
+    is named ``spectral_qc`` (mirroring the shipped ``chi.spectral_qc``) rather
+    than ``atomix_qc``:
+
+      bit 1   ``FM > FM_max``.  FM, the MAD-based statistic, is what ATOMIX's
+              1.15 was written for -- NOT the variance-ratio ``fom`` that
+              ``fom_max`` thresholds. The two are different statistics and are
+              only weakly related (r ~ -0.35 on ARCTERX-2022).
+      bit 16  ``var_resolved < var_resolved_min`` **AND ``method == 0``**.
+              The method gate is not optional: an ISR fit never integrates the
+              dissipation range, so a low resolved fraction is expected rather
+              than diagnostic, and ATOMIX exempts it. Ungated on ARCTERX-2022
+              this rejects 3.51% instead of 0.18% -- a 19x error.
+
+    NOT implemented, because the diss product carries no despike diagnostics:
+    bit 2 (despike fraction) and bit 8 (despike passes).
+
+    Bit 4 (inter-probe consistency) is handled separately by *pair_policy*,
+    below, because perturb and ATOMIX genuinely disagree about it.
+
+    Parameters
+    ----------
+    pair_policy : str
+        What to do when a window with EXACTLY TWO FINITE probes disagrees by
+        more than ``pair_limit * mean(sigma_ln)``.
+
+        ``pair_limit`` is the FULL coefficient, defaulting to
+        ``scor160.l4.DEFAULT_DISS_RATIO_LIMIT`` (= 1.96*sqrt(2) ~ 2.772) so a
+        value can be moved between the two settings unchanged. Spelling the
+        same physical threshold ``1.96`` here and ``2.772`` there would be a
+        silent factor of sqrt(2) for anyone copying one into the other.
+
+        ``mk_epsilon_mean`` declines to act on a pair (its outlier rule needs
+        ``n_probes >= 3``: with two probes neither is identifiable as the
+        outlier, and always dropping the maximum would systematically retain
+        the lower probe and bias epsilonMean low). ATOMIX bit 4 does act, and
+        keeps the minimum. Both are defensible; the choice is exposed rather
+        than made here.
+
+        ``keep_both``  -- perturb's existing behaviour, bit-identical (default)
+        ``drop_high``  -- ATOMIX bit 4's action. Opt in knowing it makes a low
+                          junk probe authoritative: on a 3-probe fixture that
+                          costs a factor of 50.
+        ``flag_only``  -- mask nothing; record the count and let the consumer
+                          decide.
+
+        Windows with three or more probes are left to ``mk_epsilon_mean``'s
+        symmetric rule, so two rules never contest the same window.
+
+    Returns
+    -------
+    dict
+        Provenance for the product: thresholds, the counts each criterion cut,
+        and the rejected fraction. Written onto ``ds.attrs`` by the caller so a
+        downstream reader can see the cut and its size without re-deriving it.
+    """
+    import warnings
+
+    import numpy as np
+
+    from odas_tpw.processing.probe_consistency import lueck_ln_sigma
+
+    if pair_policy not in PAIR_POLICIES:
+        raise ValueError(
+            f"epsilon.pair_policy must be one of {list(PAIR_POLICIES)}, got {pair_policy!r}"
+        )
+
+    info: dict = {
+        # Set to "true" only once the criteria have actually run: a dataset
+        # with no epsilon/probe returns early, and a reader checking this
+        # attribute must be able to tell "cut nothing" from "never ran".
+        "spectral_qc_applied": "false",
+        "spectral_qc_FM_max": float(FM_max),
+        "spectral_qc_var_resolved_min": float(var_resolved_min),
+        "spectral_qc_pair_policy": pair_policy,
+        "spectral_qc_pair_limit": float(pair_limit),
+        "spectral_qc_n_cut_FM": 0,
+        "spectral_qc_n_cut_var_resolved": 0,
+        # Windows, not (probe, segment) cells -- the other two counts are
+        # cells. Under flag_only nothing is cut at all, hence "flagged".
+        "spectral_qc_n_pair_windows_flagged": 0,
+        "spectral_qc_rejected_fraction": 0.0,
+    }
+    if "epsilon" not in ds or "probe" not in ds.dims:
+        return info
+    info["spectral_qc_applied"] = "true"
+
+    eps = np.asarray(ds["epsilon"].values, dtype=np.float64)
+    n_probe, n_time = eps.shape
+    # Apply the SAME floor the other two rules use. mk_epsilon_mean floors on
+    # an internal copy and _annotate_probe_pairs re-applies it explicitly; a
+    # pair rule that treated a sub-floor probe as real would compare the ratio
+    # of two arbitrary noise values and could drop the one good probe.
+    finite = np.isfinite(eps) & (eps > epsilon_minimum)
+    n_finite = int(finite.sum())
+
+    bad = np.zeros_like(eps, dtype=bool)
+
+    # bit 1 -- FM. Absent on an older diss product: skip rather than guess.
+    if "FM" in ds and ds["FM"].shape == eps.shape:
+        FM = np.asarray(ds["FM"].values, dtype=np.float64)
+        b = np.isfinite(FM) & (FM_max < FM)
+        info["spectral_qc_n_cut_FM"] = int((b & finite).sum())
+        bad |= b
+
+    # bit 16 -- var_resolved, variance-method estimates only.
+    if "var_resolved" in ds and ds["var_resolved"].shape == eps.shape:
+        vr = np.asarray(ds["var_resolved"].values, dtype=np.float64)
+        b = np.isfinite(vr) & (vr < var_resolved_min)
+        if "method" in ds and ds["method"].shape == eps.shape:
+            b &= np.asarray(ds["method"].values) == 0
+        else:
+            # No method variable: refuse to apply an ISR-inappropriate cut
+            # blind. Silently ungating it is exactly the 19x error above.
+            logger.warning(
+                "%s: spectral_qc skipping the var_resolved criterion — no "
+                "`method` variable, and applying it to ISR estimates would "
+                "reject them for a property they are expected to have",
+                file_label,
+            )
+            b = np.zeros_like(b)
+        info["spectral_qc_n_cut_var_resolved"] = int((b & finite).sum())
+        bad |= b
+
+    # bit 4 -- pair policy, on windows with EXACTLY TWO FINITE probes.
+    #
+    # Gating on finite count rather than on n_probe is deliberate. What
+    # mk_epsilon_mean actually declines is `finite_count > 2`, so a 3-probe
+    # instrument with one probe NaN in a given window falls into the same gap
+    # as a 2-probe instrument -- and gating on n_probe == 2 would leave that
+    # window unchecked by both rules. Partitioning on the finite count makes
+    # the two rules exhaustive and non-overlapping.
+    if pair_policy != "keep_both":
+        # Count what SURVIVES bits 1 and 16, not what arrived. The partition
+        # against mk_epsilon_mean is on the surviving count (it declines
+        # `finite_count > 2`), so a 3-probe window that loses one probe to the
+        # FM cut becomes a pair here and must be checked -- and a 2-probe
+        # window that already lost one to FM must NOT be, or the pair rule
+        # would drop the only probe left.
+        surviving = finite & ~bad
+        both = surviving.sum(axis=0) == 2
+        # Sampling rate: variable, then attribute, then REFUSE. A wrong rate
+        # scales L_hat and so sigma_ln and the pair threshold, and
+        # _annotate_probe_pairs already returns rather than guessing -- so do
+        # not silently assume 512 Hz for a 1-2 kHz coastal unit.
+        if "fs_fast" in ds:
+            fs = float(np.asarray(ds["fs_fast"].values).ravel()[0])
+        elif "fs_fast" in ds.attrs:
+            fs = float(ds.attrs["fs_fast"])
+        else:
+            fs = None
+            if both.any():
+                logger.warning(
+                    "%s: spectral_qc skipping the pair criterion - no fs_fast, "
+                    "and guessing the sampling rate would mis-scale sigma_ln",
+                    file_label,
+                )
+        if both.any() and fs is not None:
+            speed = (
+                np.asarray(ds["speed"].values, dtype=np.float64)
+                if "speed" in ds
+                else np.ones(n_time)
+            )
+            nu = (
+                np.asarray(ds["nu"].values, dtype=np.float64)
+                if "nu" in ds
+                else np.full(n_time, 1e-6)
+            )
+            diss_length = float(
+                ds["diss_length"].values
+                if "diss_length" in ds
+                else ds.attrs.get("diss_length", 512.0)
+            )
+            sigma = lueck_ln_sigma(
+                eps, nu, speed, diss_length, fs, _stack_like(ds, "var_resolved", n_probe)
+            )
+            # Compare only the finite probes of each window: on a 3-probe
+            # instrument the NaN'd one must not drag the mean sigma or the
+            # ratio.
+            eps_f = np.where(surviving, eps, np.nan)
+            sig_f = np.where(surviving, sigma, np.nan)
+            # errstate covers FP flags, not numpy's "Mean of empty slice" /
+            # "All-NaN slice encountered" RuntimeWarnings, and a window with no
+            # surviving probe is routine near the surface. Same treatment as
+            # chi/l3_chi.py (#57/#60).
+            with (
+                np.errstate(invalid="ignore", divide="ignore"),
+                warnings.catch_warnings(),
+            ):
+                warnings.simplefilter("ignore", RuntimeWarning)
+                thr = pair_limit * np.nanmean(sig_f, axis=0)
+                ln_ratio = np.log(np.nanmax(eps_f, axis=0)) - np.log(
+                    np.nanmin(eps_f, axis=0)
+                )
+            over = both & np.isfinite(thr) & np.isfinite(ln_ratio) & (ln_ratio > thr)
+            info["spectral_qc_n_pair_windows_flagged"] = int(over.sum())
+            if pair_policy == "drop_high":
+                # -inf on the non-finite entries so argmax always lands on a
+                # real probe (nanargmax would raise on an all-NaN column).
+                hi = np.argmax(np.where(surviving, eps, -np.inf), axis=0)
+                pair_bad = np.zeros_like(bad)
+                pair_bad[hi[over], np.where(over)[0]] = True
+                bad |= pair_bad
+            # flag_only: counted above, nothing masked.
+
+    n_bad = _mask_probe_cells(ds, bad & finite)
+    info["spectral_qc_rejected_fraction"] = float(n_bad / n_finite) if n_finite else 0.0
+    logger.info(
+        "%s: spectral_qc cut %d of %d finite (probe,segment) cells "
+        "(FM %d cells, var_resolved %d cells, pair %d windows, policy=%s)",
+        file_label,
+        n_bad,
+        n_finite,
+        info["spectral_qc_n_cut_FM"],
+        info["spectral_qc_n_cut_var_resolved"],
+        info["spectral_qc_n_pair_windows_flagged"],
+        pair_policy,
+    )
+    return info
+
+
 def _apply_fom_cut(ds, fom_max: float, file_label: str, two_sided: bool = False) -> int:
     """NaN per-probe per-segment values where the fom fails its cut.
 
@@ -818,24 +1087,7 @@ def _apply_fom_cut(ds, fom_max: float, file_label: str, two_sided: bool = False)
         bad = bad | (np.isfinite(fom) & (fom <= 1.0 / fom_max))
     if not bad.any():
         return 0
-    n_bad = int(bad.sum())
-    n_probe = bad.shape[0]
-
-    # 2-D (probe, time) value vars
-    for v in ("epsilon", "chi", "epsilon_T"):
-        if v in ds.data_vars and ds[v].shape == fom.shape:
-            arr = ds[v].values.copy()
-            arr[bad] = np.nan
-            ds[v].values[...] = arr
-
-    # 1-D companions used by mk_*_mean
-    for i in range(n_probe):
-        for prefix in ("e_", "chi_"):
-            name = f"{prefix}{i + 1}"
-            if name in ds.data_vars:
-                arr = ds[name].values.copy()
-                arr[bad[i, :]] = np.nan
-                ds[name].values[...] = arr
+    n_bad = _mask_probe_cells(ds, bad)
 
     logger.info(
         "%s: fom_max=%g cut %d (probe,segment) cells",
@@ -2548,6 +2800,18 @@ def process_file(
                                 "fom_max",
                                 "diagnostics",
                                 "salinity",
+                                # spectral_qc and its parameters are applied
+                                # to the RESULT below, not by _compute_epsilon.
+                                # Leaving them in the splat is a TypeError that
+                                # the per-profile handler turns into "every
+                                # profile errored, diss/ empty" rather than a
+                                # traceback. The chi splat strips its own
+                                # spectral_qc for the same reason.
+                                "spectral_qc",
+                                "FM_max",
+                                "var_resolved_min",
+                                "pair_policy",
+                                "pair_limit",
                             )
                         },
                         salinity=eps_sal,
@@ -2555,11 +2819,44 @@ def process_file(
                         _pre_loaded=pre_loaded,
                     )
                     eps_fom_max = eps_cfg.get("fom_max")
+                    eps_spectral_qc = bool(eps_cfg.get("spectral_qc", False))
                     for ds in diss_results:
                         if excluded_probes:
                             _nan_excluded_probes(ds, excluded_probes, p_path.name)
                         if eps_fom_max is not None:
                             _apply_fom_cut(ds, float(eps_fom_max), p_path.name)
+                        if eps_spectral_qc:
+                            # Before mk_epsilon_mean, like the fom cut, so a
+                            # failing probe drops out of the geometric mean
+                            # individually instead of spoiling the window. When
+                            # NO probe survives, mk_epsilon_mean's nanmean of an
+                            # all-NaN row yields NaN -- the window is dropped,
+                            # matching rsi's _compute_epsi_final rather than
+                            # chi.spectral_qc's never-drop fallback. Deliberate:
+                            # a finite-but-wrong epsilon rescales Method-1 chi
+                            # ~linearly while the chi fom stays ~1, so the chi
+                            # cut cannot reject it, whereas NaN self-excludes.
+                            from odas_tpw.scor160.l4 import (
+                                DEFAULT_DISS_RATIO_LIMIT,
+                            )
+
+                            ds.attrs.update(
+                                _apply_spectral_qc(
+                                    ds,
+                                    p_path.name,
+                                    FM_max=float(eps_cfg.get("FM_max", 1.15)),
+                                    var_resolved_min=float(
+                                        eps_cfg.get("var_resolved_min", 0.5)
+                                    ),
+                                    pair_policy=str(eps_cfg.get("pair_policy", "keep_both")),
+                                    pair_limit=float(
+                                        eps_cfg.get("pair_limit", DEFAULT_DISS_RATIO_LIMIT)
+                                    ),
+                                    epsilon_minimum=float(
+                                        eps_cfg.get("epsilon_minimum", 1e-13)
+                                    ),
+                                )
+                            )
                         ds = mk_epsilon_mean(ds, eps_cfg.get("epsilon_minimum", 1e-13))
                         if qc_enabled:
                             n_probe = int(ds["probe"].size) if "probe" in ds.dims else 2
@@ -2632,6 +2929,13 @@ def process_file(
                     "salinity",
                 )
             }
+            # Per-instrument FP07 time-constant multipliers. Lives under
+            # `instruments:` rather than `chi:` because it is a property of the
+            # BEADS on one physical unit, not of the processing: a config
+            # covering a mixed fleet must be able to give each serial its own.
+            tau_scale_cfg = instrument_cfg.get("fp07_tau_scale") or {}
+            if tau_scale_cfg:
+                chi_kwargs["fp07_tau_scale"] = dict(tau_scale_cfg)
             # Soft spectral-QC thresholds for mk_chi_mean — the SAME limits the rsi
             # pipeline's chi_final uses, so both pipelines filter chiMean/K_T/Gamma
             # identically (issue #104 U3-C2).
