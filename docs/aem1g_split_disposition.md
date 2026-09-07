@@ -183,17 +183,31 @@ against a stated version rather than against whatever `main` happens to be.
 
 1. ~~Land `clocksync` here (package, tests, runbook, entry point, a CLAUDE.md
    subpackage entry).~~ **Done** — see the `mr-clocksync` PR. Tag the release.
-2. Fix AEM1-G's `[raw]` URL and pin it to that tag.
+2. ~~Fix AEM1-G's `[raw]` URL and pin it to that tag.~~ **Done** — AEM1-G PR #2.
+   It was *two* bugs: the repository named did not exist, and the requirement
+   was named for the import package (`odas_tpw`) rather than the distribution
+   (`microstructure-tpw`), which pip rejects as an inconsistent name even
+   against the right URL. Pinned to a commit, not a tag — turbulence has no
+   tag newer than `v0.3.0`, which predates `mr-clocksync`.
 3. ~~Commit `out/clock_offsets.csv` to `AEM1-G/results/`.~~ **Done** — and
    `config.clock_offsets()` prefers the tracked copy, so the reproduction path
    no longer needs the volume mounted.
 4. ~~Move `docs/em_insitu_calibration_PLAN.md` to AEM1-G; delete it here.~~
    **Done** — filed as pre-registration, with a preamble naming the two places
    the results did not match the plan.
-5. Commit the four keepers here: `em_bench_zero.py`, the datasheet plus its
-   `.gitignore` exception, `papers/current-meters/README.md` and the
-   `papers/README.md` diff.
-6. Resolve the two salvage files, then delete `scripts/em_glider_scratch/`.
+5. ~~Commit the four keepers here.~~ **Done** — PR #161, with one change of
+   plan: the datasheet did *not* stay. It moved to AEM1-G under that
+   repository's own PDF policy (file gitignored, a tracked
+   `docs/datasheets/README.md` carrying every number), so no third-party PDF
+   enters a repository headed for public. Its `.gitignore` exception here was
+   reverted and three pointers repointed.
+6. ~~Resolve the two salvage files, then delete `scripts/em_glider_scratch/`.~~
+   **Done** — and it was far more than two files; see the audit in §3.1. All 28
+   entries were dispositioned, both producers and the four RU33 scripts moved
+   to AEM1-G, `em_inventory.py` became `rsi-tpw sensors --em`, and the
+   products were **copied** to `/Volumes/SeaChest/ARCTERX/Glider EM analysis/`
+   before the 91 MB directory was removed. AEM1-G's consumers were re-run
+   afterwards to prove nothing broke.
 
 ---
 
