@@ -120,9 +120,10 @@ fp07:
   so a file carrying it needs that key patched. The tool detects this and
   writes to whichever key the reader will actually use.
 - **Never set `beta_2 = 0` to remove a quadratic term.** The config value is a
-  *reciprocal*, so zero means an infinitely large term and the reader raises
-  `ZeroDivisionError`. The tool writes `1e30`, which is bit-identical to
-  omitting the key.
+  *reciprocal*, so zero means an infinitely large term and the reader refuses
+  the channel with a `ValueError` naming the coefficient (before issue #180 it
+  was a bare `ZeroDivisionError`). The tool writes `1e30`, which is
+  bit-identical to omitting the key.
 - **Record some dives if you can.** Climb-only costs you the dive/climb residual
   split, leaves the sensor-geometry decomposition unresolved, and confounds
   depth with elapsed-time-since-file-start.

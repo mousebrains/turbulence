@@ -53,19 +53,39 @@ def _bin_std(values: np.ndarray, coords: np.ndarray, bin_edges: np.ndarray) -> n
 
     Equivalent to a per-bin ``np.nanstd`` loop, but avoids the
     O(n_bins * n_samples) mask broadcast.
+
+    Two-pass and CENTERED: the first pass accumulates the per-bin mean, the
+    second the squared deviations from it.  The single-pass ``E[x^2] - E[x]^2``
+    this replaced subtracted two nearly equal large numbers, and clipping the
+    negative result to zero hid the cancellation without restoring the lost
+    precision (and did nothing about positive roundoff).  On
+    ``1000 + linspace(-1e-5, 1e-5, 1000)`` — ordinary float64 values — it
+    returned 1.079e-5 against a true 5.779e-6, 86.7% high (issue #180 F14).
+    The error scales with the coordinate's offset-to-spread ratio, so it is
+    worst for epoch-time-like inputs.
     """
     n_bins = len(bin_edges) - 1
     idx, in_range = _bin_indices(coords, bin_edges)
     finite = in_range & np.isfinite(values)
     idx_f = idx[finite]
     vals_f = values[finite]
+    if vals_f.size == 0:
+        return np.full(n_bins, np.nan)
+    # Pre-shift by the global mean before the grouped sums. bincount accumulates
+    # sequentially (no pairwise compensation), so summing 500 samples of size
+    # 1.7e9 leaves a mean error ~1e-6 that re-enters the variance as its square.
+    # Shifting first keeps every accumulated magnitude near the spread, not near
+    # the offset, and is exact for the variance (which is shift-invariant).
+    shift = float(np.mean(vals_f))
+    centered = vals_f - shift
     counts = np.bincount(idx_f, minlength=n_bins)
-    sums = np.bincount(idx_f, weights=vals_f, minlength=n_bins)
-    sums_sq = np.bincount(idx_f, weights=vals_f * vals_f, minlength=n_bins)
+    sums = np.bincount(idx_f, weights=centered, minlength=n_bins)
     with np.errstate(invalid="ignore", divide="ignore"):
         means = np.where(counts > 0, sums / np.maximum(counts, 1), 0.0)
-        var = sums_sq / np.maximum(counts, 1) - means * means
-        var = np.maximum(var, 0.0)  # cancellation safety
+        dev = centered - means[idx_f]
+        sums_dev2 = np.bincount(idx_f, weights=dev * dev, minlength=n_bins)
+        var = sums_dev2 / np.maximum(counts, 1)
+        var = np.maximum(var, 0.0)  # exact zero variance can land at -0.0
         std = np.where(counts > 1, np.sqrt(var), np.nan)
     return std
 
@@ -288,12 +308,16 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
     try:
         ds.set_auto_maskandscale(True)  # CF decode; _decoded fills masked -> NaN
 
-        depth_var = next(
-            (n for n in _DEPTH_CANDIDATES if n in ds.variables), None
-        )
+        depth_var = next((n for n in _DEPTH_CANDIDATES if n in ds.variables), None)
         if depth_var is None:
             return None
         depth = _decoded(ds.variables[depth_var])
+        # The observation axis, by NAME. Matching on length alone binned any
+        # 1-D variable that happened to be as long as the depth vector --
+        # `calibration_coeff(coefficient)` of length 3 was averaged into depth
+        # bins alongside `depth(time)` of length 3 (issue #180 F15).
+        depth_dims = ds.variables[depth_var].dimensions
+        obs_dim = depth_dims[0] if len(depth_dims) == 1 else None
 
         scalars: dict[str, float] = {}
         scalar_attrs: dict[str, dict] = {}
@@ -332,6 +356,12 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
                 continue
             shape = var.shape
             if len(shape) != 1 or shape[0] != n_depth:
+                continue
+            # Same length is not the same axis (#180 F15). When the depth
+            # variable is 1-D we know the observation dimension by name and
+            # require it; a depth variable with no single dimension (shouldn't
+            # happen for these products) falls back to the length test.
+            if obs_dim is not None and var.dimensions[0] != obs_dim:
                 continue
             # Skip CF coordinate variables (e.g. ``probe`` on the ``probe``
             # dim) — netCDF4 lists them alongside data vars, while xarray

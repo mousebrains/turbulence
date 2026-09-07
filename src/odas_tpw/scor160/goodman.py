@@ -88,8 +88,17 @@ def _bias_correction(n_samples: int, nfft: int, n_accel: int) -> float:
 
     Factor 1.02 accounts for effective degrees-of-freedom reduction
     from overlapping FFT segments (Goodman 2006, ODAS TN-061).
+
+    The segment count comes from :func:`odas_tpw.scor160.spectral.n_segments`,
+    the same function ``csd_matrix`` uses, rather than the old
+    ``2 * n_samples // nfft - 1``.  The two agree for every even ``nfft``
+    (verified exhaustively) and disagree for odd ``nfft``, where the old form
+    over-counted and under-corrected — 1.515 instead of 2.041 at nfft=63,
+    N=126 with one accelerometer (issue #180 F16).
     """
-    fft_segments = 2 * n_samples // nfft - 1
+    from odas_tpw.scor160.spectral import n_segments
+
+    fft_segments = n_segments(n_samples, nfft)
     if fft_segments <= 1.02 * n_accel:
         import warnings
 

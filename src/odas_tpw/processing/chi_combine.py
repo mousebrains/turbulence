@@ -145,6 +145,7 @@ def mk_chi_mean(
     # pass/fail together and the fallback keeps both) — the QC only re-weights
     # windows where the probes genuinely disagree in fit quality.
     qc_comment: str | None = None
+    qc_fallback = np.zeros(n_time, dtype=bool)
     if fom_limit is not None and k_max_ratio_min is not None:
         n_probe = chi.shape[1]
         fom = _stack_probe_var(ds, "fom", n_probe)
@@ -164,6 +165,10 @@ def mk_chi_mean(
             any_pass = np.any(passes & finite_chi, axis=1)
             drop = (~passes) & finite_chi & any_pass[:, np.newaxis]
             chi[drop] = np.nan
+            # A window kept ONLY by the fallback is now marked. It used to be
+            # indistinguishable from a window every probe passed, and perturb
+            # feeds chiMean straight into K_T / Gamma (issue #180 F04).
+            qc_fallback = (~any_pass) & np.any(finite_chi, axis=1)
             qc_comment = (
                 f"soft spectral QC applied: probes preferred inside fom band "
                 f"[{1.0 / fom_limit:.4g}, {fom_limit:.4g}] with K_max_ratio >= "
@@ -295,6 +300,24 @@ def mk_chi_mean(
         mu_sigma,
         dims=["time"],
         attrs=sigma_attrs,
+    )
+    ds["chiQCFallback"] = xr.DataArray(
+        qc_fallback.astype(np.int8),
+        dims=["time"],
+        attrs={
+            "units": "1",
+            "long_name": "chiMean came from the soft-QC fallback",
+            "flag_values": np.array([0, 1], dtype=np.int8),
+            "flag_meanings": "at_least_one_probe_passed no_probe_passed",
+            "comment": (
+                "1 where NO probe passed the two-sided fom band with sufficient "
+                "K_max_ratio, so chiMean is the geometric mean of probes that all "
+                "failed spectral QC. The value is reported (no window is dropped) "
+                "but it carries no spectral evidence: exclude it before building "
+                "K_T / Gamma / K_rho. Companion to the rsi product's "
+                "'chi_qc_fallback' (issue #180 F04)."
+            ),
+        },
     )
 
     return ds

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import numpy as np
 
@@ -52,6 +53,10 @@ class L4ChiData:
     K_max_ratio: np.ndarray  # (N_GRADT, N_SPECTRA)
     var_resolved: np.ndarray  # (N_GRADT, N_SPECTRA) Batchelor V_f (#104 U4-F1)
     method: str  # "epsilon" or "fit"
+    # (N_SPECTRA,) bool — True where NO probe passed the fom band / K_max_ratio
+    # floor and ``chi_final`` is the soft-QC fallback geometric mean of failed
+    # probes. Never silently mixed with a passing window again (#180 F04).
+    chi_qc_fallback: np.ndarray | None = None
 
     @property
     def n_spectra(self) -> int:
@@ -177,7 +182,20 @@ def _process_l4_chi(
             eps_out[contaminated] = np.nan
             var_resolved_out[contaminated] = np.nan
 
-    chi_final = _compute_chi_final(chi_out, fom_out, K_max_ratio_out)
+    chi_res = chi_final_and_fallback(chi_out, fom_out, K_max_ratio_out)
+    chi_final = chi_res.chi_final
+    n_fallback = int(chi_res.qc_fallback.sum())
+    if n_fallback:
+        logger.warning(
+            "%d chi window(s) kept by the soft-QC fallback: NO probe passed the "
+            "fom band [%.3g, %.3g] with K_max_ratio >= %.3g. They are reported "
+            "and flagged in chi_qc_fallback, and are excluded from K_T / Gamma "
+            "by default (#180 F04)",
+            n_fallback,
+            1.0 / _CHI_FOM_LIMIT,
+            _CHI_FOM_LIMIT,
+            _CHI_K_MAX_RATIO_MIN,
+        )
 
     return L4ChiData(
         time=l3_chi.time.copy(),
@@ -193,6 +211,7 @@ def _process_l4_chi(
         K_max_ratio=K_max_ratio_out,
         var_resolved=var_resolved_out,
         method=method_name,
+        chi_qc_fallback=chi_res.qc_fallback,
     )
 
 
@@ -254,6 +273,7 @@ def process_l4_chi_epsilon(
             W,
             spectrum_model,
             kappa_T,
+            l3_chi.dof_spec,
         )
         return chi_val, epsilon_val, kB_val, K_max_val, fom_val, K_max_ratio_val, var_res_val
 
@@ -288,20 +308,21 @@ def process_l4_chi_fit(
 
     def _chi_fit_func(_j, _ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff):
         if fit_method == "iterative":
-            (
-                kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val, var_res_val
-            ) = _iterative_fit(
-                spec_obs,
-                K,
-                nu,
-                noise_K,
-                H2,
-                tau0,
-                _h2,
-                f_AA_eff,
-                W,
-                spectrum_model,
-                kappa_T,
+            (kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val, var_res_val) = (
+                _iterative_fit(
+                    spec_obs,
+                    K,
+                    nu,
+                    noise_K,
+                    H2,
+                    tau0,
+                    _h2,
+                    f_AA_eff,
+                    W,
+                    spectrum_model,
+                    kappa_T,
+                    l3_chi.dof_spec,
+                )
             )
         else:
             mask = (K > 0) & (f_AA_eff / W >= K)
@@ -324,25 +345,52 @@ def process_l4_chi_fit(
             # inflated to compensate (a ~22% high kB -> ~2.2x high epsilon).
             # Mirrors _iterative_fit's convergence loop. (M-6)
             result = _mle_fit_kB(
-                spec_obs, K, chi_obs, nu, noise_K, H2, tau0, _h2,
-                f_AA_eff, W, spectrum_model, kappa_T,
+                spec_obs,
+                K,
+                chi_obs,
+                nu,
+                noise_K,
+                H2,
+                tau0,
+                _h2,
+                f_AA_eff,
+                W,
+                spectrum_model,
+                kappa_T,
+                l3_chi.dof_spec,
             )
             kB_prev = result.kB
             for _ in range(2):
                 if not (np.isfinite(result.kB) and np.isfinite(result.chi) and result.chi > 0):
                     break
                 result = _mle_fit_kB(
-                    spec_obs, K, result.chi, nu, noise_K, H2, tau0, _h2,
-                    f_AA_eff, W, spectrum_model, kappa_T,
+                    spec_obs,
+                    K,
+                    result.chi,
+                    nu,
+                    noise_K,
+                    H2,
+                    tau0,
+                    _h2,
+                    f_AA_eff,
+                    W,
+                    spectrum_model,
+                    kappa_T,
+                    l3_chi.dof_spec,
                 )
                 if (
-                    np.isfinite(result.kB) and np.isfinite(kB_prev) and kB_prev > 0
+                    np.isfinite(result.kB)
+                    and np.isfinite(kB_prev)
+                    and kB_prev > 0
                     and abs(result.kB - kB_prev) / kB_prev < 0.01
                 ):
                     break
                 kB_prev = result.kB
             kB_val, chi_val, eps_val, K_max_val = (
-                result.kB, result.chi, result.epsilon, result.K_max
+                result.kB,
+                result.chi,
+                result.epsilon,
+                result.K_max,
             )
             fom_val, K_max_ratio_val = result.fom, result.K_max_ratio
             var_res_val = result.var_resolved
@@ -397,24 +445,53 @@ def _compute_chi_final(
     clear the cache if you change them.  The raw per-probe ``chi`` array is
     retained separately for traceability.  (2026-07-03 review; 2026-07 #104.)
     """
+    return chi_final_and_fallback(chi, fom, k_max_ratio, fom_limit, k_max_ratio_min).chi_final
+
+
+class ChiFinalResult(NamedTuple):
+    """Combined chi plus the per-window flag saying how it was formed."""
+
+    chi_final: np.ndarray  # (n_window,)
+    qc_fallback: np.ndarray  # (n_window,) bool — True where NO probe passed QC
+
+
+def chi_final_and_fallback(
+    chi: np.ndarray,
+    fom: np.ndarray | None = None,
+    k_max_ratio: np.ndarray | None = None,
+    fom_limit: float = _CHI_FOM_LIMIT,
+    k_max_ratio_min: float = _CHI_K_MAX_RATIO_MIN,
+) -> ChiFinalResult:
+    """:func:`_compute_chi_final`, plus the flag that says it fell back.
+
+    The soft-QC fallback is deliberate — a window is never lost — but before
+    issue #180 F04 it was also INVISIBLE: chi [1e-7, 4e-7] with fom [100, 100]
+    and K_max_ratio [0.01, 0.01] returned a finite 2e-7 that no consumer could
+    distinguish from a value every probe had passed, and the rsi pipeline fed
+    exactly that to K_T / Gamma. ``qc_fallback`` marks those windows so a
+    consumer can exclude them; the value itself is unchanged and still reported.
+    """
     _n_gradt, n_spec = chi.shape
     chi_final = np.full(n_spec, np.nan)
+    fallback = np.zeros(n_spec, dtype=bool)
     valid = np.isfinite(chi) & (chi > 0)
     if fom is not None and k_max_ratio is not None:
-        passes = (
-            valid
-            & np.isfinite(fom)
-            & (fom <= fom_limit)
-            & (fom >= 1.0 / fom_limit)
-            & np.isfinite(k_max_ratio)
-            & (k_max_ratio >= k_max_ratio_min)
-        )
+        with np.errstate(invalid="ignore"):
+            passes = (
+                valid
+                & np.isfinite(fom)
+                & (fom <= fom_limit)
+                & (fom >= 1.0 / fom_limit)
+                & np.isfinite(k_max_ratio)
+                & (k_max_ratio >= k_max_ratio_min)
+            )
     else:
         passes = valid
     for j in range(n_spec):
         good = passes[:, j]
         if not good.any():
             good = valid[:, j]  # fall back to all finite probes; never lose a window
+            fallback[j] = bool(good.any())
         if good.any():
             chi_final[j] = np.exp(np.mean(np.log(chi[good, j])))
-    return chi_final
+    return ChiFinalResult(chi_final, fallback)

@@ -1611,6 +1611,7 @@ def _add_mixing_quantities(
     file_label: str = "",
     epsilon_provenance: str = "",
     sal_source=None,
+    use_chi_qc_fallback: bool = False,
 ):
     """Append stratification and (when available) mixing quantities to chi.
 
@@ -1685,7 +1686,24 @@ def _add_mixing_quantities(
         eps_on_chi = pair_nearest(
             _time_epoch_seconds(diss_ds["t"]), diss_ds["epsilonMean"].values, chi_t
         )
-        mix = mixing_coefficients(eps_on_chi, chi_ds["chiMean"].values, N2, dTdz)
+        # Windows kept only by chi's soft-QC fallback (NO probe inside the fom
+        # band with sufficient K_max_ratio) are reported in chiMean but do NOT
+        # feed the mixing coefficients: K_T = chi/(2 dT/dz^2) from a chi that
+        # failed every spectral test is a finite number with no evidence behind
+        # it, and before issue #180 F04 nothing downstream could tell.
+        # `chi.mixing_use_qc_fallback: true` restores the old behaviour.
+        chi_for_mix = np.asarray(chi_ds["chiMean"].values, dtype=np.float64).copy()
+        if "chiQCFallback" in chi_ds and not use_chi_qc_fallback:
+            fb = np.asarray(chi_ds["chiQCFallback"].values).astype(bool)
+            n_fb = int(fb.sum())
+            if n_fb:
+                chi_for_mix[fb] = np.nan
+                logger.info(
+                    "mixing: %d chi window(s) excluded (chiQCFallback=1, no probe "
+                    "passed spectral QC); chiMean itself is unchanged",
+                    n_fb,
+                )
+        mix = mixing_coefficients(eps_on_chi, chi_for_mix, N2, dTdz)
         var_specs.update(
             {
                 # The exact epsilon that entered Gamma/K_rho, stored for
@@ -3069,6 +3087,9 @@ def process_file(
                                         file_label=Path(prof_path).name,
                                         epsilon_provenance=eps_prov,
                                         sal_source=strat_cfg.get("salinity"),
+                                        use_chi_qc_fallback=bool(
+                                            chi_cfg.get("mixing_use_qc_fallback", False)
+                                        ),
                                     )
                                 finally:
                                     if mix_eps is not diss_ds:

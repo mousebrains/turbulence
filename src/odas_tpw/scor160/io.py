@@ -242,6 +242,12 @@ class L4Data:
     var_resolved: np.ndarray  # (N_SHEAR, N_SPECTRA), fraction of variance resolved
     FM: np.ndarray | None = None  # (N_SHEAR, N_SPECTRA), Lueck (2022) MAD-based FM statistic
     despike_fraction: np.ndarray | None = None  # (N_SHEAR, N_SPECTRA), per-window
+    # RDL bad-buffer provenance, carried through from L3Data so the REASON a
+    # window was rejected survives to the product.  Without them a masked window
+    # is indistinguishable (flag 255 = "invalid estimate") from one whose
+    # spectrum was simply unusable (issue #180 F01).
+    bad_fraction: np.ndarray | None = None  # (N_SHEAR, N_SPECTRA)
+    interp_fraction: np.ndarray | None = None  # (N_SHEAR, N_SPECTRA)
 
     @property
     def n_spectra(self) -> int:

@@ -42,6 +42,28 @@ def _get_window(nfft: int) -> np.ndarray:
     return _window_cache[nfft]
 
 
+def n_segments(n_samples: int, nfft: int, overlap: int | None = None) -> int:
+    """Number of FFT segments :func:`csd_matrix` will actually average.
+
+    The single definition of the segment count, so a consumer that needs it
+    (Goodman's bias correction, an effective-DOF estimate) cannot drift from
+    what the estimator did.  ``overlap`` defaults to ``nfft // 2``.
+
+    Goodman previously spelled this ``2 * n_samples // nfft - 1``, which is
+    exactly right for every EVEN ``nfft`` (both reduce to
+    ``floor(2N/nfft) - 1``; verified exhaustively for nfft = 2..4096) and wrong
+    for odd ``nfft``, where the half-overlap step is ``nfft - nfft//2`` rather
+    than ``nfft/2``.  At nfft=63, N=126 the true count is 2 and the old formula
+    claimed 3, inflating the correction from 2.041 to 1.515 (issue #180 F16).
+    """
+    if overlap is None:
+        overlap = nfft // 2
+    step = nfft - overlap
+    if step <= 0:
+        return 0
+    return max(0, (n_samples - overlap) // step)
+
+
 def _detrend_segment(seg: np.ndarray, method: str, ramp: np.ndarray) -> np.ndarray:
     """Detrend a single FFT segment.
 
@@ -223,7 +245,7 @@ def csd_matrix(
 
     n_freq = nfft // 2 + 1
     step = nfft - overlap
-    n_seg = (x.shape[0] - overlap) // step
+    n_seg = n_segments(x.shape[0], nfft, overlap)
     ramp = np.arange(nfft, dtype=np.float64)
 
     if auto:
@@ -239,7 +261,8 @@ def csd_matrix(
         Cxy /= n_seg
         Cxy /= nfft * rate / 2
         Cxy[0] /= 2
-        Cxy[-1] /= 2
+        if nfft % 2 == 0:
+            Cxy[-1] /= 2  # Nyquist only exists for even nfft -- see _fold_endpoints
         F = np.arange(n_freq) * rate / nfft
         return CSDResult(Cxy, F, None, None)
 
@@ -269,9 +292,14 @@ def csd_matrix(
         arr /= norm
         # DC (f=0) and Nyquist bins are not doubled when folding to a one-sided
         # spectrum (they have no negative-frequency twin), so halve them back
-        # (#76; matches csd_matrix_odas.m's one-sided normalization).
+        # (#76; matches csd_matrix_odas.m's one-sided normalization).  An ODD
+        # nfft has NO Nyquist bin -- its last one-sided bin does have a negative
+        # -frequency twin -- so halving it there under-reports that bin by 2x
+        # (issue #180 F16; measured against scipy.signal.welch with the same
+        # window/overlap/detrend: ratio 0.5 at nfft = 63 and 255, 1.0 at 64).
         arr[0] /= 2
-        arr[-1] /= 2
+        if nfft % 2 == 0:
+            arr[-1] /= 2
     F = np.arange(n_freq) * rate / nfft
     return CSDResult(Cxy, F, Cxx, Cyy)
 
@@ -404,7 +432,7 @@ def csd_matrix_batch(
 
     # --- Segment extraction ------------------------------------------------
     # Segment start indices within each window
-    n_seg = (diss_length - overlap) // step
+    n_seg = n_segments(diss_length, nfft, overlap)
     if n_seg < 1:
         raise ValueError(
             f"diss_length ({diss_length}) too short for nfft={nfft}, overlap={overlap}"
@@ -446,7 +474,8 @@ def csd_matrix_batch(
         Cxy /= n_seg
         Cxy /= norm
         Cxy[:, 0, :, :] /= 2
-        Cxy[:, -1, :, :] /= 2
+        if nfft % 2 == 0:
+            Cxy[:, -1, :, :] /= 2  # no Nyquist bin when nfft is odd (#180 F16)
         F = np.arange(n_freq) * rate / nfft
         return CSDResult(Cxy, F, None, None)
 
@@ -476,7 +505,8 @@ def csd_matrix_batch(
     for arr in (Cxx, Cyy, Cxy):
         arr /= n_seg * norm
         arr[:, 0, :, :] /= 2
-        arr[:, -1, :, :] /= 2
+        if nfft % 2 == 0:
+            arr[:, -1, :, :] /= 2  # no Nyquist bin when nfft is odd (#180 F16)
 
     F = np.arange(n_freq) * rate / nfft
     return CSDResult(Cxy, F, Cxx, Cyy)

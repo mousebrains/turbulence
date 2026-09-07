@@ -107,6 +107,14 @@ def bin_by_depth(
     else:
         p_min, p_max = pres_range
 
+    # A constant pressure that lands exactly on a bin edge (e.g. a single 10.0
+    # dbar sample at bin_size=1) gives floor(min) == ceil(max), an edge vector of
+    # ONE element, zero bins, and every supplied value silently discarded
+    # (issue #180 F21). Guarantee one interval so degenerate-but-finite data is
+    # binned instead of vanishing.
+    if p_max <= p_min:
+        p_max = p_min + bin_size
+
     bin_edges = np.arange(p_min, p_max + bin_size, bin_size)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
     n_bins = len(bin_centers)

@@ -199,6 +199,31 @@ def _batchelor_resolved_fraction(
 # ---------------------------------------------------------------------------
 
 
+def _band_slice(valid: np.ndarray) -> slice:
+    """The CONTIGUOUS index band spanned by a selection mask.
+
+    ``_valid_wavenumber_mask`` returns a possibly non-contiguous mask, and
+    ``np.trapezoid(y[mask], K[mask])`` integrates the SUBSET GRID: every excluded
+    interval is bridged with a straight line between its neighbours, so
+    unobserved area is counted as measured. Three isolated excess bins at
+    k = 1, 80, 160 integrate to 53x their true area on the original grid; on the
+    repo's own VMP corpus (29 files, 2944 probe-windows) 28.8% of selected bands
+    have an interior hole, 5.50% of windows were inflated by more than 5% and
+    1.19% by more than 50%, worst case 3.79x (issue #180 F03).
+
+    Integrating over ``[first, last]`` on the ORIGINAL grid keeps the true bin
+    weights, and it is also what the rest of the estimator already assumes:
+    ``_variance_correction`` and ``_batchelor_resolved_fraction`` both treat
+    ``[K_min, K_max]`` as a CONTINUOUS interval, so a subset-grid integral
+    contradicts its own correction factor. Sub-threshold bins inside the band
+    contribute their own (small, noise-clipped) excess rather than a bridge.
+    """
+    idx = np.flatnonzero(valid)
+    if idx.size == 0:
+        return slice(0, 0)
+    return slice(int(idx[0]), int(idx[-1]) + 1)
+
+
 def _valid_wavenumber_mask(
     spec_obs: np.ndarray,
     noise: np.ndarray,
@@ -236,25 +261,64 @@ def _valid_wavenumber_mask(
     return mask
 
 
+# Window-level detection floor. A FIXED "3 bins above 2x noise" ignores how many
+# bins were searched and how tight each one is: with 7 overlapping FFTs the
+# per-bin chi^2 scatter alone puts several hundred bins over 2x the mean, so
+# 554/1000 pure-noise windows produced a finite chi -- 393 of them inside the
+# two-sided FOM band, which cannot catch it because the model amplitude is
+# fitted to the same observations (issue #180 F03). These scale the floor with
+# the searched bandwidth and the window's own degrees of freedom.
+#
+# HONEST LIMIT: Welch bins from 50%-overlapped segments are CORRELATED, so the
+# binomial tail below understates the true spread of the null count. The
+# inflation factor is a deliberate allowance for that, not a derivation, and the
+# achieved false-positive rate is MEASURED by a Monte-Carlo regression rather
+# than asserted. This is a calibrated floor, not the full window-level null test
+# the review asks for.
+_DETECT_Z = 3.0  # one-sided normal margin on the null count
+_DETECT_CORR_INFLATION = 2.0  # variance allowance for overlapped-Welch correlation
+
+
+def detection_floor(n_bins: int, dof: float, min_points: int = 3) -> int:
+    """Bins that must clear 2x noise before a window counts as a detection.
+
+    ``dof`` is the spectral degrees of freedom per bin (this package's
+    convention: ``1.9 * (num_ffts - n_vib_removed)``).  ``dof <= 0`` means
+    "unknown" and returns ``min_points`` — exactly the pre-#180 behaviour, so an
+    older product or a direct call is never made stricter by accident.
+    """
+    if not (dof and dof > 0) or n_bins <= 0:
+        return min_points
+    from scipy.stats import chi2
+
+    p = float(chi2.sf(2.0 * dof, dof))  # P(bin > 2x its mean) under noise only
+    mu = n_bins * p
+    sd = np.sqrt(max(mu * (1.0 - p), 0.0) * _DETECT_CORR_INFLATION)
+    return max(min_points, int(np.ceil(mu + _DETECT_Z * sd)))
+
+
 def _below_detection(
     spec_obs: np.ndarray,
     noise: np.ndarray,
     K: np.ndarray,
     K_AA: float,
     min_points: int = 3,
+    dof: float = 0.0,
 ) -> bool:
     """True when a window is a non-detection.
 
-    Fewer than ``min_points`` bins clear 2x the noise floor within the resolved
-    band ``(0, K_AA]`` — the strict ``above_noise`` criterion of
+    Fewer than :func:`detection_floor` bins clear 2x the noise floor within the
+    resolved band ``(0, K_AA]`` — the strict ``above_noise`` criterion of
     :func:`_valid_wavenumber_mask` *without* its whole-band fallback.  Used to
     reject noise-only windows before any chi path (the known-epsilon integral or
     an MLE Batchelor fit) can shape a curve to the noise floor and emit a
     spurious finite chi whose figure of merit (model fitted to obs) sits near 1.
     Defined once so all three chi paths share the identical detection limit.
     """
-    above_noise = (spec_obs > 2.0 * noise) & (K > 0) & (K <= K_AA)
-    return int(np.sum(above_noise)) < min_points
+    in_band = (K > 0) & (K <= K_AA)
+    above_noise = (spec_obs > 2.0 * noise) & in_band
+    need = detection_floor(int(np.sum(in_band)), dof, min_points)
+    return int(np.sum(above_noise)) < need
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +339,7 @@ def _chi_from_epsilon(
     speed: float,
     spectrum_model: str,
     kappa_T: float = KAPPA_T,
+    dof: float = 0.0,
 ) -> ChiEpsilonResult:
     """Compute chi for one probe in one window, given epsilon (Method 1).
 
@@ -334,7 +399,7 @@ def _chi_from_epsilon(
     # fom ~= 1 for the noise floor itself).  Reject such windows as non-detections
     # here, at the source, so they become NaN and drop out of chiMean rather than
     # biasing its low tail and the derived mixing products.  (2026-07-03 review.)
-    if _below_detection(spec_obs, noise_K, K, K_AA):
+    if _below_detection(spec_obs, noise_K, K, K_AA, dof=dof):
         warnings.warn(
             "No thermal signal above the FP07 noise floor; chi is a non-detection",
             stacklevel=2,
@@ -346,8 +411,12 @@ def _chi_from_epsilon(
         warnings.warn("Too few valid wavenumber points for chi integration", stacklevel=2)
         return ChiEpsilonResult(np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan)
 
-    valid_idx = np.where(valid)[0]
-    K_max = K[valid_idx[-1]]
+    # Integrate the CONTIGUOUS band the selection spans, on the original grid --
+    # never the subset grid, which bridges every excluded interval (see
+    # _band_slice, issue #180 F03).
+    band = _band_slice(valid)
+    K_band = K[band]
+    K_max = float(K_band[-1])
 
     # Chi amplitude from the noise-subtracted resolved temperature-gradient
     # variance, with kB fixed from epsilon.  This is the linear-space
@@ -365,31 +434,32 @@ def _chi_from_epsilon(
     # Monte-Carlo bias test (test_chi) pins the ~1% high/moderate-SNR bias; the
     # residual near-detection-floor overshoot is a pre-existing property of the
     # above-2x-noise band selection, not of this estimator.  (issue #104 U3-C1.)
-    s = spec_obs[valid]
-    nv = noise_K[valid]
+    s = spec_obs[band]
+    nv = noise_K[band]
 
     # Raw in-band variance (NO noise subtraction) — retained only for the figure
     # of merit below (matching the historical fom numerator).  The chi estimate
     # uses the noise-subtracted variance instead; do not conflate the two.
-    obs_var = np.trapezoid(s, K[valid])
+    obs_var = np.trapezoid(s, K_band)
     if obs_var <= 0:
         warnings.warn("Observed variance <= 0; chi is a non-detection", stacklevel=2)
         return ChiEpsilonResult(np.nan, kB, K_max, np.zeros_like(K), np.nan, np.nan)
 
-    # V_resolved spans the SAME measured band [K[valid][0], K_max] that the
-    # observed integral covers (K_min set accordingly), mirroring the Method-2
-    # path so the unresolved-variance correction is not double-counted.
-    K_min = float(K[valid][0])
+    # V_resolved spans the SAME measured band [K_min, K_max] that the observed
+    # integral covers, mirroring the Method-2 path so the unresolved-variance
+    # correction is not double-counted.
+    K_min = float(K_band[0])
     correction = _variance_correction(kB, K_max, speed, tau0, _h2, grad_func, K_min=K_min)
-    chi_var = np.trapezoid(np.maximum(s - nv, 0.0), K[valid])
+    chi_var = np.trapezoid(np.maximum(s - nv, 0.0), K_band)
     chi = 6.0 * kappa_T * chi_var * (correction if np.isfinite(correction) else 1.0)
 
     # Compute fitted Batchelor spectrum for output
     spec_batch = grad_func(K, kB, chi)
 
-    # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise)
-    if np.sum(valid) >= 3 and np.isfinite(chi):
-        mod_v = np.trapezoid(spec_batch[valid] * H2[valid] + noise_K[valid], K[valid])
+    # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise) over
+    # the same contiguous band as obs_var, so numerator and denominator agree.
+    if K_band.size >= 3 and np.isfinite(chi):
+        mod_v = np.trapezoid(spec_batch[band] * H2[band] + noise_K[band], K_band)
         fom = obs_var / mod_v if mod_v > 0 else np.nan
     else:
         fom = np.nan
@@ -478,6 +548,7 @@ def _mle_fit_kB(
     speed: float,
     spectrum_model: str,
     kappa_T: float = KAPPA_T,
+    dof: float = 0.0,
 ) -> ChiFitResult:
     """Maximum-likelihood fit for Batchelor wavenumber kB (Ruddick et al. 2000).
 
@@ -508,7 +579,7 @@ def _mle_fit_kB(
     # Signal-presence gate (mirrors Method 1): reject a noise-only window before
     # the MLE fits a Batchelor curve to noise and returns a spurious finite
     # chi/kB.  (2026-07-03 adversarial review of the Method-1 gate.)
-    if _below_detection(spec_obs, noise_K, K, f_AA / speed):
+    if _below_detection(spec_obs, noise_K, K, f_AA / speed, dof=dof):
         warnings.warn(
             "No thermal signal above the FP07 noise floor; chi is a non-detection",
             stacklevel=2,
@@ -554,8 +625,15 @@ def _mle_fit_kB(
         grad_func,
         K_min=K_fit_low,
     )
+    # The kB LIKELIHOOD above is a sum over selected bins and is unaffected by
+    # mask gaps, but every INTEGRAL below runs on the contiguous band on the
+    # original grid: trapezoid over the subset grid bridges each excluded
+    # interval (see _band_slice, issue #180 F03). The band's endpoints are the
+    # same K_fit_low / K_max_fit the correction already assumes.
+    band = _band_slice(fit_mask)
+    K_band = K[band]
     if np.isfinite(correction):
-        obs_var = np.trapezoid(np.maximum(spec_obs[fit_mask] - noise_K[fit_mask], 0), K[fit_mask])
+        obs_var = np.trapezoid(np.maximum(spec_obs[band] - noise_K[band], 0), K_band)
         chi = 6 * kappa_T * obs_var * correction
     else:
         chi = chi_obs
@@ -564,10 +642,9 @@ def _mle_fit_kB(
     spec_batch = grad_func(K, kB_best, chi)
 
     # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise)
-    fit_idx = np.where(fit_mask)[0]
-    if np.isfinite(chi) and len(fit_idx) >= 3:
-        mod_v = np.trapezoid(spec_batch[fit_idx] * H2[fit_idx] + noise_K[fit_idx], K_fit)
-        obs_v = np.trapezoid(spec_obs[fit_idx], K_fit)
+    if np.isfinite(chi) and K_band.size >= 3:
+        mod_v = np.trapezoid(spec_batch[band] * H2[band] + noise_K[band], K_band)
+        obs_v = np.trapezoid(spec_obs[band], K_band)
         fom = obs_v / mod_v if mod_v > 0 else np.nan
     else:
         fom = np.nan
@@ -594,6 +671,7 @@ def _iterative_fit(
     speed: float,
     spectrum_model: str,
     kappa_T: float = KAPPA_T,
+    dof: float = 0.0,
 ) -> ChiFitResult:
     """Iterative MLE fitting (Peterson & Fer 2014, Method 2).
 
@@ -644,7 +722,7 @@ def _iterative_fit(
     # band_has_signal check (spec_obs > 1x noise), emits a spurious finite
     # chi/kB. Reject at the source -> NaN, dropping it from chiMean rather than
     # biasing the low tail.  (2026-07-03 adversarial review of the Method-1 gate.)
-    if _below_detection(spec_obs, noise_K, K, K_AA):
+    if _below_detection(spec_obs, noise_K, K, K_AA, dof=dof):
         warnings.warn(
             "No thermal signal above the FP07 noise floor; chi is a non-detection",
             stacklevel=2,
@@ -660,14 +738,20 @@ def _iterative_fit(
 
     k_u = K[valid_idx[-1]]
 
-    # Initial chi estimate
+    # Initial chi estimate, integrated over the CONTIGUOUS band the selection
+    # spans (see _band_slice, #180 F03): the subset grid bridges every excluded
+    # interval. mask_refined / mask_final below are range conditions on a
+    # monotone K, hence already contiguous, and are left alone.
     mask_init = valid & (spec_obs > noise_K)
     if np.sum(mask_init) < 3:
         mask_init = valid
+    band_init = _band_slice(mask_init)
     chi_obs = (
         6
         * kappa_T
-        * np.trapezoid(np.maximum(spec_obs[mask_init] - noise_K[mask_init], 0), K[mask_init])
+        * np.trapezoid(
+            np.maximum(spec_obs[band_init] - noise_K[band_init], 0), K[band_init]
+        )
     )
 
     if chi_obs <= 0:
@@ -794,11 +878,13 @@ def _iterative_fit(
     # fallback): those affect only this diagnostic FOM, never chi/kB (#48).
     if np.isfinite(kB_best) and np.isfinite(chi):
         valid_fom = (spec_obs > 2 * noise_K) & (K > 0) & (k_u >= K)
-        if np.sum(valid_fom) >= 3:
-            obs_v = np.trapezoid(spec_obs[valid_fom], K[valid_fom])
+        band_fom = _band_slice(valid_fom)
+        K_fom = K[band_fom]
+        if K_fom.size >= 3:
+            obs_v = np.trapezoid(spec_obs[band_fom], K_fom)
             mod_v = np.trapezoid(
-                spec_batch[valid_fom] * H2[valid_fom] + noise_K[valid_fom],
-                K[valid_fom],
+                spec_batch[band_fom] * H2[band_fom] + noise_K[band_fom],
+                K_fom,
             )
             fom = obs_v / mod_v if mod_v > 0 else np.nan
         else:

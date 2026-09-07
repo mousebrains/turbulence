@@ -80,12 +80,98 @@ class GeometryFit:
     explained_K: float = float("nan")
     """RMS of the fitted geometry+lag term: how much of the depth structure it is."""
 
-    def summary(self) -> str:
+    dz_se_cluster_m: float = float("nan")
+    """``dz`` standard error with PROFILES as the independent unit.
+
+    ``dz_se_m`` above is the conditional IID-pair error: it divides by
+    ``n_pairs - n_params`` and treats every sample within a profile as new
+    information.  It is not an instrument uncertainty.  Repeating each
+    observation 100 times while keeping the same six profile ids left dz at
+    0.173288846 m but shrank ``dz_se_m`` 0.00579 -> 0.000577 m and
+    ``tau_se_s`` 0.01196 -> 0.00119 s, on data carrying no new information at
+    all (issue #180 F09).  These cluster-robust (sandwich) errors group the
+    residual by ``profile_uid``, which is the unit that repeats.
+
+    QUOTE THESE, not the IID pair errors -- but read ``n_clusters`` first: a
+    sandwich estimator with a handful of clusters is itself noisy, and
+    :attr:`cluster_warning` says when that applies.
+    """
+
+    tau_se_cluster_s: float = float("nan")
+    """``tau`` standard error with profiles as the independent unit."""
+
+    n_clusters: int = 0
+    """Profiles contributing to the cluster-robust covariance."""
+
+    cluster_warning: str = ""
+    """Non-empty when ``n_clusters`` is too small for the sandwich to be quoted."""
+
+    rank_deficient: bool = False
+    """True when the FULL scaled design (calibration + geometry) is rank-deficient.
+
+    The geometry ``collinearity`` below only asks whether dz and tau are
+    separated FROM EACH OTHER; it says nothing about their degeneracy with the
+    calibration polynomial.  A gradient of ``-1e-6*(T+273.15)**2`` makes the
+    geometry regressor constant and therefore aliased with the intercept: the
+    fit returned condition 3.8e30 with geometry correlation 4.7e-17 -- which
+    passes a "separately resolved" test based on that correlation alone -- and
+    a calibration error of 6.5e33 K with dz = 3448 +/- 0.68 m (issue #180 F20).
+    """
+
+    smallest_singular_value: float = float("nan")
+    """Smallest singular value of the full scaled design (rank diagnostic)."""
+
+    def separately_resolved(self, max_collinearity: float = 0.8) -> bool:
+        """dz and tau resolved from each other AND from the calibration.
+
+        The CLI predicate used to test only ``collinearity``, which a design
+        aliased with the intercept passes trivially.
+        """
         return (
-            f"dz = {self.dz_m*100:+.1f} +/- {self.dz_se_m*100:.1f} cm, "
-            f"residual lag = {self.tau_s:+.3f} +/- {self.tau_se_s:.3f} s "
-            f"(n={self.n}, explains {self.explained_K:.4f} K rms)"
+            bool(np.isfinite(self.collinearity))
+            and self.collinearity <= max_collinearity
+            and not self.rank_deficient
         )
+
+    def summary(self) -> str:
+        se_dz = self.dz_se_cluster_m if np.isfinite(self.dz_se_cluster_m) else self.dz_se_m
+        se_tau = self.tau_se_cluster_s if np.isfinite(self.tau_se_cluster_s) else self.tau_se_s
+        note = f" [{self.cluster_warning}]" if self.cluster_warning else ""
+        return (
+            f"dz = {self.dz_m*100:+.1f} +/- {se_dz*100:.1f} cm, "
+            f"residual lag = {self.tau_s:+.3f} +/- {se_tau:.3f} s "
+            f"(n={self.n}, {self.n_clusters} profiles, "
+            f"explains {self.explained_K:.4f} K rms){note}"
+        )
+
+
+# Below this many profiles a cluster-robust sandwich is itself too noisy to
+# quote as an uncertainty: with a handful of clusters the meat matrix is a sum
+# of a handful of outer products and the resulting SE has few degrees of freedom
+# of its own. Reported anyway, with a warning attached (#180 F09 red team).
+MIN_CLUSTERS_FOR_SANDWICH = 10
+
+
+def _cluster_cov(X: np.ndarray, resid: np.ndarray, groups: np.ndarray) -> np.ndarray | None:
+    """Cluster-robust (sandwich) covariance of the least-squares coefficients.
+
+    ``(X'X)^-1 (sum_g X_g' u_g u_g' X_g) (X'X)^-1`` with a finite-sample
+    correction, grouping by ``groups``.  Profiles are the unit that repeats;
+    samples inside one are not independent replicates of the geometry.
+    """
+    n, k = X.shape
+    uniq, inv = np.unique(groups, return_inverse=True)
+    n_g = uniq.size
+    if n_g < 2 or n <= k:
+        return None
+    xtx_inv = np.linalg.pinv(X.T @ X)
+    meat = np.zeros((k, k))
+    for gi in range(n_g):
+        m = inv == gi
+        sg = X[m].T @ resid[m]
+        meat += np.outer(sg, sg)
+    dfc = (n_g / (n_g - 1.0)) * ((n - 1.0) / (n - k))
+    return np.asarray(dfc * (xtx_inv @ meat @ xtx_inv))
 
 
 def local_dTdz(
@@ -303,6 +389,31 @@ def joint_fit(
     cov = float(r @ r) / dof * np.linalg.pinv(X.T @ X)
     se = np.sqrt(np.diag(cov))
 
+    # Rank-revealing SVD on the FULL scaled design. `cond` above is recorded but
+    # never gated, and the geometry `collinearity` only asks whether dz and tau
+    # are separated from EACH OTHER -- a geometry column aliased with the
+    # calibration intercept passes it at 4.7e-17 while the fit returns a 6.5e33 K
+    # calibration error (issue #180 F20).
+    sv = np.linalg.svd(X, compute_uv=False)
+    smallest_sv = float(sv[-1]) if sv.size else float("nan")
+    rank = int(np.linalg.matrix_rank(X))
+    rank_deficient = rank < X.shape[1]
+
+    # Cluster-robust covariance with PROFILES as the independent unit (#180 F09).
+    uid_keep = np.asarray(pairs.profile_uid, dtype=object)[keep]
+    cov_cl = _cluster_cov(X, r, uid_keep)
+    n_clusters = int(np.unique(uid_keep).size)
+    if cov_cl is not None:
+        se_cl = np.sqrt(np.clip(np.diag(cov_cl), 0.0, None))
+    else:
+        se_cl = np.full(X.shape[1], np.nan)
+    cluster_warning = ""
+    if n_clusters < MIN_CLUSTERS_FOR_SANDWICH:
+        cluster_warning = (
+            f"only {n_clusters} profile(s): the cluster-robust SE is itself "
+            f"noisy below {MIN_CLUSTERS_FOR_SANDWICH} clusters"
+        )
+
     d = np.asarray(pairs.direction)
     split = float("nan")
     if np.any(d[keep] > 0) and np.any(d[keep] < 0):
@@ -331,6 +442,12 @@ def joint_fit(
         else (float("nan"), float("nan")),
         w_range=(float(np.min(w_all[keep])), float(np.max(w_all[keep]))),
         explained_K=float(np.sqrt(np.mean((dz * gk + tau * w_all[keep] * gk) ** 2))),
+        dz_se_cluster_m=float(se_cl[order + 1] / extra_scale[0]),
+        tau_se_cluster_s=float(se_cl[order + 2] / extra_scale[1]),
+        n_clusters=n_clusters,
+        cluster_warning=cluster_warning,
+        rank_deficient=rank_deficient,
+        smallest_singular_value=smallest_sv,
     )
     c = np.corrcoef(extra[keep][:, 0], extra[keep][:, 1])[0, 1]
     geo.collinearity = float(abs(c)) if np.isfinite(c) else float("nan")

@@ -38,6 +38,103 @@ def _require_float(params: dict[str, Any], key: str, default: float, sensor: str
     return _safe_float(params[key], default)
 
 
+def _parse_finite_float(
+    raw: Any,
+    params: dict[str, Any],
+    key: str,
+    default: float,
+    sensor: str,
+    positive: bool,
+    nonzero: bool = False,
+) -> float:
+    """Parse a PRESENT calibration coefficient, or raise.
+
+    ``_safe_float`` swallows a parse failure and returns the caller's generic
+    default, so a present-but-malformed coefficient is indistinguishable from a
+    real calibration.  A stray decimal comma (``diff_gain = 0,09``) silently
+    replaced 0.09 with 1.0, scaling shear by 0.09x and shear VARIANCE — hence
+    epsilon before its iterative correction — by 0.0081x, with no warning at all
+    (issue #180 F06).  Someone wrote a value here; we cannot honour it, so we
+    refuse rather than invent one.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{sensor} channel {params.get('name', '?')}: calibration coefficient "
+            f"'{key}' is present but unparseable ({raw!r}); refusing to substitute "
+            f"the default {default} and fabricate physical units. Fix the value in "
+            "the instrument config (a decimal comma is the usual cause), or remove "
+            "the key entirely to accept the documented default."
+        ) from None
+    if not np.isfinite(value) or (positive and value <= 0) or (nonzero and value == 0):
+        if positive:
+            need = "a finite positive number"
+        elif nonzero:
+            need = "a finite non-zero number"
+        else:
+            need = "a finite number"
+        extra = ""
+        if nonzero and value == 0:
+            # The Steinhart-Hart betas are RECIPROCALS: zero is an infinite
+            # term, not a deleted one. 1e30 is bit-identical to omitting the key.
+            extra = (
+                f" ('{key}' is a reciprocal coefficient: zero means an INFINITE "
+                "term, not a deleted one — use 1e30, or remove the key)"
+            )
+        raise ValueError(
+            f"{sensor} channel {params.get('name', '?')}: calibration coefficient "
+            f"'{key}' is {raw!r}; must be {need}{extra}. Refusing to fabricate "
+            "physical units."
+        )
+    return value
+
+
+def _require_finite_float(
+    params: dict[str, Any],
+    key: str,
+    default: float,
+    sensor: str,
+    *,
+    positive: bool = False,
+    nonzero: bool = False,
+) -> float:
+    """Strict :func:`_require_float`: missing warns, malformed raises.
+
+    Missing stays a warning — legacy corpora genuinely omit keys and the
+    caller's default is the documented fallback.  See :func:`_parse_finite_float`
+    for why present-but-wrong must not be defaulted.
+    """
+    if key not in params or params.get(key) in (None, ""):
+        warnings.warn(
+            f"{sensor}: calibration coefficient '{key}' missing from channel "
+            f"config; using default {default} — physical units are suspect",
+            stacklevel=3,
+        )
+        return default
+    return _parse_finite_float(params[key], params, key, default, sensor, positive, nonzero)
+
+
+def _optional_finite_float(
+    params: dict[str, Any],
+    key: str,
+    default: float,
+    sensor: str,
+    *,
+    positive: bool = False,
+    nonzero: bool = False,
+) -> float:
+    """Strict parse for a key with a universal default (ADC scaling, offsets).
+
+    Absent is silent — ``adc_fs``/``adc_bits`` carry instrument-independent
+    defaults and warning on every channel that omits them would be noise.
+    Present-but-malformed still raises: these scale every converted sample.
+    """
+    if key not in params or params.get(key) in (None, ""):
+        return default
+    return _parse_finite_float(params[key], params, key, default, sensor, positive, nonzero)
+
+
 def _adis_14bit(data: np.ndarray) -> np.ndarray:
     """Extract 14-bit data from ADIS16209 inclinometer words.
 
@@ -114,27 +211,33 @@ def convert_therm(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     Uses coefficients T_0, beta_1 (and optional beta_2, beta_3) from the
     channel config.  Matches ODAS ``convert_odas.m`` therm path.
     """
-    a = _safe_float(params.get("a", "0"))
-    b = _safe_float(params.get("b", "1"))
-    adc_fs = _safe_float(params.get("adc_fs", "4.096"))
-    adc_bits = _safe_float(params.get("adc_bits", "16"))
+    a = _optional_finite_float(params, "a", 0.0, "therm")
+    b = _optional_finite_float(params, "b", 1.0, "therm", nonzero=True)
+    adc_fs = _optional_finite_float(params, "adc_fs", 4.096, "therm", positive=True)
+    adc_bits = _optional_finite_float(params, "adc_bits", 16.0, "therm", positive=True)
     # g (gain) and e_b (bridge excitation) scale the bridge resistance and thus
     # temperature directly — warn if the config omits them rather than silently
     # using a default that may not match the instrument (as t_0 already does).
-    G = _require_float(params, "g", 6.0, "therm")
-    E_B = _require_float(params, "e_b", 0.68, "therm")
-    T_0 = _require_float(params, "t_0", 289.0, "therm")
+    # Strict on a present-but-malformed value: every one of these divides or
+    # scales the Steinhart-Hart result (issue #180 F06).
+    G = _require_finite_float(params, "g", 6.0, "therm", positive=True)
+    E_B = _require_finite_float(params, "e_b", 0.68, "therm", positive=True)
+    T_0 = _require_finite_float(params, "t_0", 289.0, "therm", positive=True)
     # `beta` and `beta_1` are mutually exclusive alternatives for the linear
     # Steinhart-Hart term (beta = legacy single-coeff form, beta_1 = newer
     # multi-coeff form; beta_2/beta_3 are additive higher-order terms applied
     # regardless). ODAS convert_odas.m:501-507 checks `beta` FIRST; match that
     # precedence rather than preferring beta_1 (#4).
     if "beta" in params:
-        beta_1 = _safe_float(params["beta"], 3000.0)
+        beta_1 = _parse_finite_float(
+            params["beta"], params, "beta", 3000.0, "therm", False, nonzero=True
+        )
     elif "beta_1" in params:
-        beta_1 = _safe_float(params["beta_1"], 3000.0)
+        beta_1 = _parse_finite_float(
+            params["beta_1"], params, "beta_1", 3000.0, "therm", False, nonzero=True
+        )
     else:
-        beta_1 = _require_float(params, "beta_1", 3000.0, "therm")
+        beta_1 = _require_finite_float(params, "beta_1", 3000.0, "therm", nonzero=True)
     beta_2 = params.get("beta_2")
 
     Z = ((data - a) / b) * (adc_fs / 2**adc_bits) * 2 / (G * E_B)
@@ -143,11 +246,20 @@ def convert_therm(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     log_R = np.log(R_ratio)
 
     inv_T = 1.0 / T_0 + (1.0 / beta_1) * log_R
-    if beta_2 is not None:
-        inv_T += (1.0 / _safe_float(beta_2)) * log_R**2
+    # beta_2/beta_3 are RECIPROCALS in the Steinhart-Hart sum, so a malformed
+    # value defaulting to 0.0 raised ZeroDivisionError from inside an arithmetic
+    # expression rather than naming the bad coefficient. The documented way to
+    # omit a term is a huge value (1e30), not zero — see CLAUDE.md.
+    if beta_2 not in (None, ""):
+        inv_T += (
+            1.0 / _parse_finite_float(beta_2, params, "beta_2", 1e30, "therm", False, nonzero=True)
+        ) * log_R**2
         beta_3 = params.get("beta_3")
-        if beta_3 is not None:
-            inv_T += (1.0 / _safe_float(beta_3)) * log_R**3
+        if beta_3 not in (None, ""):
+            inv_T += (
+                1.0
+                / _parse_finite_float(beta_3, params, "beta_3", 1e30, "therm", False, nonzero=True)
+            ) * log_R**3
     return 1.0 / inv_T - 273.15, "deg_C"
 
 
@@ -161,9 +273,12 @@ def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     plausible-looking shear that scales epsilon by sens⁻², and legacy v1
     corpora genuinely lack sens in their setup files (issue #141).
     """
-    adc_fs = _safe_float(params.get("adc_fs", "4.096"))
-    adc_bits = _safe_float(params.get("adc_bits", "16"))
-    diff_gain = _require_float(params, "diff_gain", 1.0, "shear")
+    adc_fs = _optional_finite_float(params, "adc_fs", 4.096, "shear", positive=True)
+    adc_bits = _optional_finite_float(params, "adc_bits", 16.0, "shear", positive=True)
+    # Strict: diff_gain divides the shear amplitude, so a malformed value that
+    # silently became 1.0 rescaled shear variance by (diff_gain)^2 with no
+    # warning — 123x on a real 0.09 probe (issue #180 F06).
+    diff_gain = _require_finite_float(params, "diff_gain", 1.0, "shear", positive=True)
     # Strict parse: a present-but-unparseable sens (stray comma, typo) must
     # not fall through _safe_float's default — that silently fabricates
     # sens=1.0 and scales epsilon by sens^-2 (~125x on real probes).
@@ -190,8 +305,8 @@ def convert_shear(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
             "re-translate with 'rsi-tpw v1to6 --sens' or add "
             "'sh1_sens:'/'sh2_sens:' keys to the setup file (issue #141)."
         )
-    adc_zero = _safe_float(params.get("adc_zero", "0"))
-    sig_zero = _safe_float(params.get("sig_zero", "0"))
+    adc_zero = _optional_finite_float(params, "adc_zero", 0.0, "shear")
+    sig_zero = _optional_finite_float(params, "sig_zero", 0.0, "shear")
     phys = (adc_fs / 2**adc_bits) * data + (adc_zero - sig_zero)
     phys = phys / (2 * np.sqrt(2) * diff_gain * sens)
     # NB: this is the ODAS intermediate — still MISSING the /speed^2 fall-rate

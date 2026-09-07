@@ -27,7 +27,12 @@ from odas_tpw.scor160.goodman import clean_shear_spec_batch
 from odas_tpw.scor160.io import BAD_DROPPED, BAD_INTERPOLATED, L3Params
 from odas_tpw.scor160.ocean import kappa_T as kappa_T_TSP
 from odas_tpw.scor160.ocean import visc, visc35
-from odas_tpw.scor160.spectral import csd_matrix_batch
+from odas_tpw.scor160.spectral import csd_matrix_batch, n_segments
+
+# Nuttall (1971) DOF factor for cosine-windowed overlapped FFTs. Duplicated from
+# rsi.dissipation.DOF_NUTTALL rather than imported: odas_tpw.rsi depends on
+# odas_tpw.chi, not the other way round.
+_DOF_NUTTALL = 1.9
 
 
 @dataclass
@@ -78,6 +83,13 @@ class L3ChiData:
 
     diff_gains: list[float] = field(default_factory=list)
     fp07_model: str = "single_pole"
+    # Spectral degrees of freedom per wavenumber bin, this package's convention
+    # (rsi.dissipation.DOF_NUTTALL * effective segments, minus the vibration
+    # signals Goodman removed). Feeds the bandwidth/DOF-aware non-detection
+    # floor in chi.detection_floor: a FIXED "3 bins above 2x noise" ignores how
+    # many bins were searched and how tight each one is (issue #180 F03).
+    # 0.0 means "unknown" and keeps the pre-#180 fixed floor.
+    dof_spec: float = 0.0
     # Per-window fractions of RDL bad-buffer samples, from L2ChiData.bad_mask:
     # bad_fraction counts BAD_DROPPED (rejects the window), interp_fraction
     # counts BAD_INTERPOLATED (rejects it only above MAX_INTERP_FRACTION).
@@ -393,6 +405,14 @@ def process_l3_chi(
     bl_corrections = [_bilinear_correction(F_const, dg, fs) for dg in diff_gains]
 
     do_goodman = params.goodman and l2_chi.n_vib > 0
+    # Spectral DOF per bin, same convention as rsi.dissipation/chi_io: the
+    # Nuttall factor times the segments actually averaged, minus the vibration
+    # signals Goodman removed (Lueck 2022b). n_segments() is the estimator's own
+    # count, so this cannot drift from what csd_matrix_batch did (#180 F16).
+    _n_seg = n_segments(diss_length, nfft)
+    _n_v = l2_chi.n_vib if do_goodman else 0
+    dof_spec = _DOF_NUTTALL * max(_n_seg - _n_v, 1)
+
     sections = np.unique(l2_chi.section_number)
     sections = sections[sections > 0]
 
@@ -479,4 +499,5 @@ def process_l3_chi(
         interp_fraction=(
             np.column_stack(acc.interp_frac) if acc.interp_frac else np.zeros((0, 0))
         ),
+        dof_spec=dof_spec,
     )

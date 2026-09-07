@@ -39,6 +39,7 @@ for.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -46,6 +47,9 @@ from odas_tpw.fp07cal.fit import FitResult
 from odas_tpw.fp07cal.logr import log_r, temperature
 from odas_tpw.fp07cal.pairs import PairSet
 from odas_tpw.fp07cal.series import ProbeSeries
+
+if TYPE_CHECKING:  # geometry imports stability's PairSet siblings; keep it lazy
+    from odas_tpw.fp07cal.geometry import GeometryFit
 
 SECONDS_PER_DAY = 86400.0
 
@@ -130,8 +134,27 @@ def blocked_offsets(
     n_blocks: int | None = 6,
     block_days: float | None = None,
     min_profiles: int = 3,
+    geo: GeometryFit | None = None,
+    dTdz: np.ndarray | None = None,
 ) -> list[Block]:
-    """Per-block ``t_0`` with the global higher-order terms held fixed."""
+    """Per-block ``t_0`` with the global higher-order terms held fixed.
+
+    ``geo`` is the geometry fitted alongside the calibration by
+    :func:`odas_tpw.fp07cal.geometry.joint_fit`.  PASS IT whenever the
+    calibration was fitted with geometry enabled.  The joint fit removes
+    ``dz*g + tau*w*g`` as a nuisance effect, but this stage used to re-expose
+    the ORIGINAL reference temperature to a calibration polynomial that no
+    longer contains it, so any change in gradient exposure across the
+    deployment reappeared as a change in the fitted intercept -- i.e. as bead
+    drift.  On a synthetic stable bead with a fixed dz = 0.17 m, ZERO true
+    drift and a gradient that grows with date, the joint fit recovered
+    dz = 0.1700186 m at 1.01e-5 K RMS while this stage then reported
+    +3.46e-4 K/day with permutation p = 0.005 and ``significant = True``
+    (issue #180 F08).
+
+    ``dTdz`` is the same gradient array handed to the joint fit; ``None``
+    recomputes it with :func:`geometry.local_dTdz`.
+    """
     keep = fit.kept if fit.kept.size == len(pairs) else np.ones(len(pairs), dtype=bool)
     t = np.asarray(pairs.time, dtype=np.float64)[keep]
     L = np.asarray(pairs.L, dtype=np.float64)[keep]
@@ -139,6 +162,19 @@ def blocked_offsets(
     uid = np.asarray(pairs.profile_uid, dtype=object)[keep]
     if t.size == 0:
         return []
+
+    if geo is not None and np.isfinite(geo.dz_m):
+        # Subtract the fitted nuisance geometry from the reference BEFORE
+        # blocking, so the blocks see the temperature the bead's own depth
+        # actually sampled -- the same quantity the joint fit calibrated against.
+        from odas_tpw.fp07cal.geometry import local_dTdz
+
+        g_all = local_dTdz(pairs) if dTdz is None else np.asarray(dTdz, dtype=np.float64)
+        g = np.asarray(g_all, dtype=np.float64)[keep]
+        w = np.asarray(pairs.w, dtype=np.float64)[keep]
+        tau = geo.tau_s if np.isfinite(geo.tau_s) else 0.0
+        corr = np.where(np.isfinite(g) & np.isfinite(w), geo.dz_m * g + tau * w * g, 0.0)
+        T = T - corr
 
     y = 1.0 / (T + 273.15)
     a0_pair = y - _higher_terms(L, fit.coeffs)
@@ -346,45 +382,74 @@ def t1_t2_series(
     return out
 
 
-def corroborates(stab: StabilityResult, t1t2: dict, *, tol: float = 0.5) -> str | None:
-    """Does ``T1 - T2`` back up the blocked drift?  ``None`` when undecidable.
+def corroborates(
+    stab: StabilityResult,
+    t1t2: dict,
+    *,
+    tol: float = 0.5,
+    channel_a: str = "T1",
+    channel_b: str = "T2",
+) -> str | None:
+    """Does the differential back up the blocked drift?  ``None`` when undecidable.
 
-    Compared in **probe-drift space**, not correction space --- ``T1 - T2``
-    measures how fast the probe is wandering, whereas
+    Compared in **probe-drift space**, not correction space --- the differential
+    measures how fast a probe is wandering, whereas
     :attr:`StabilityResult.drift_K_per_day` is the correction and carries the
     opposite sign.  Comparing the two raw would invert every verdict.
+
+    CHANNEL-AWARE.  :func:`t1_t2_series` always forms ``channel_a - channel_b``
+    (T1 - T2), which tracks a T1 drift POSITIVELY and a T2 drift NEGATIVELY.
+    Comparing the same differential sign for either channel therefore inverted
+    the verdict for the second probe: a T2 that really drifts +0.001 K/day
+    against a fixed T1 gives a T1-T2 slope of -0.001, which is exactly the
+    corroborating sign, and the function reported "opposes in sign ...
+    unexplained -- do not apply a drift model" (issue #180 F19). The
+    differential is negated for ``channel_b`` so both channels are read in their
+    own probe-drift space.
+
+    Note this identifies neither probe on its own: a differential says the two
+    moved relative to each other, and attributing that to one of them assumes
+    the other (and the reference) held still.
 
     The three outcomes are genuinely different problems:
 
     * agreement in sign --- probe-specific drift, the drift model is licensed;
-    * ``T1 - T2`` flat against a significant blocked drift --- both probes moved
-      together, which is not a bead story: suspect the bridge, the reference,
-      or selection bias in which yos carried CT;
+    * the differential flat against a significant blocked drift --- both probes
+      moved together, which is not a bead story: suspect the bridge, the
+      reference, or selection bias in which yos carried CT;
     * opposition in sign --- unexplained, and no drift should be applied.
     """
     if not t1t2.get("available") or not np.isfinite(t1t2.get("slope_K_per_day", np.nan)):
         return None
     a = stab.probe_drift_K_per_day
     b = float(t1t2["slope_K_per_day"])
+    if stab.channel == channel_b:
+        b = -b  # the differential tracks channel_b's drift with the opposite sign
+    elif stab.channel not in (channel_a, "", "?"):
+        return (
+            f"channel {stab.channel!r} is not part of the {channel_a}-{channel_b} "
+            "differential: nothing to corroborate"
+        )
     if not np.isfinite(a):
         return None
     if not stab.significant:
         return (
-            f"blocked drift not significant; T1-T2 slope {b:+.2e} K/day "
+            f"blocked drift not significant; {channel_a}-{channel_b} slope "
+            f"{b:+.2e} K/day (in {stab.channel or channel_a} probe-drift sign) "
             f"(nothing to corroborate)"
         )
     if abs(b) < tol * abs(a):
         return (
-            f"T1-T2 is flat ({b:+.2e} K/day) against a significant probe drift "
+            f"{channel_a}-{channel_b} is flat ({b:+.2e} K/day) against a significant probe drift "
             f"({a:+.2e} K/day): both probes moved together — suspect the bridge, "
             f"the reference, or CT-coverage selection bias, NOT the bead"
         )
     if np.sign(a) == np.sign(b):
         return (
-            f"T1-T2 agrees in sign ({b:+.2e} vs probe drift {a:+.2e} K/day): "
+            f"{channel_a}-{channel_b} agrees in sign ({b:+.2e} vs probe drift {a:+.2e} K/day): "
             f"probe-specific drift"
         )
     return (
-        f"T1-T2 opposes in sign ({b:+.2e} vs probe drift {a:+.2e} K/day): "
+        f"{channel_a}-{channel_b} opposes in sign ({b:+.2e} vs probe drift {a:+.2e} K/day): "
         f"unexplained — do not apply a drift model"
     )

@@ -23,6 +23,15 @@ from odas_tpw.fp07cal.report import coverage_text, figure, fit_text
 from odas_tpw.fp07cal.series import load_hotel_reference, load_probe_series
 from odas_tpw.fp07cal.stability import blocked_offsets, drift_fit, t1_t2_series
 
+# Hard export gate [K]: the largest error the fitted calibration may make
+# predicting its OWN reference over the fitted range. A working FP07 in-situ
+# calibration lands near 1e-2 K rms (osu685: 4 mK), so 1 K is orders of
+# magnitude clear of any healthy fit and only catches a design that is not
+# identified at all -- the intercept-aliased case returned 6.5e33 K with
+# nothing rejecting it (issue #180 F20). Keyed on a PHYSICAL failure rather
+# than a condition number, which a healthy but badly scaled design could cross.
+MAX_PREDICTION_ERROR_K = 1.0
+
 TEMPLATE = """\
 # fp07-cal — FP07 in-situ calibration (a PRE-PIPELINE step)
 #
@@ -401,15 +410,60 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
                     f"one-signed — profiles in only one direction). Their "
                     f"combination is measured; the split is not."
                 )
+            if geo.rank_deficient:
+                print(
+                    f"      NOTE the FULL design is RANK-DEFICIENT (smallest "
+                    f"singular value {geo.smallest_singular_value:.3e}): a "
+                    f"geometry term is aliased with the calibration polynomial, "
+                    f"so dz/tau are not identified even though their mutual "
+                    f"correlation looks fine.",
+                    file=sys.stderr,
+                )
         else:
             fit = fit_calibration(
                 pairs, order=order, robust=bool(fit_cfg.get("robust", True)),
             )
+        # geo=... is load-bearing: without it the fitted dz/tau nuisance is
+        # re-exposed to the blocks and a changing gradient across the deployment
+        # is reported as bead drift (issue #180 F08).
+        # HARD export gate: a fit that cannot reproduce its own reference over
+        # the fitted range is not a calibration, whatever its condition number
+        # says. Keyed on a PHYSICAL prediction failure rather than a
+        # conditioning threshold, which a healthy but badly scaled design could
+        # cross: a geometry column aliased with the intercept returned dz = 3448
+        # +/- 0.68 m and a 6.5e33 K calibration error with nothing rejecting it
+        # (issue #180 F20).
+        max_pred_err = float("nan")
+        if pairs.L.size and fit.coeffs.size:
+            with np.errstate(over="ignore", invalid="ignore"):
+                pred_err = np.abs(fit.apply(pairs.L) - pairs.T_ref)
+            finite_err = pred_err[np.isfinite(pred_err)]
+            max_pred_err = float(finite_err.max()) if finite_err.size else float("inf")
+        if not np.isfinite(max_pred_err) or max_pred_err > MAX_PREDICTION_ERROR_K:
+            print(
+                f"  {ch}: REFUSED — the fit mispredicts its own reference by up "
+                f"to {max_pred_err:.3g} K over the fitted range (limit "
+                f"{MAX_PREDICTION_ERROR_K:g} K). The design is not identified; "
+                f"no coefficients are exported for this channel.",
+                file=sys.stderr,
+            )
+            results["channels"][ch] = {
+                "error": "unidentifiable fit",
+                "max_prediction_error_K": max_pred_err,
+                "condition": fit.condition,
+                "rank_deficient": bool(geo.rank_deficient) if geo is not None else None,
+                "smallest_singular_value": (
+                    geo.smallest_singular_value if geo is not None else None
+                ),
+            }
+            continue
+
         blocks = blocked_offsets(
             pairs, fit,
             n_blocks=st_cfg.get("n_blocks", 6),
             block_days=st_cfg.get("block_days"),
             min_profiles=int(st_cfg.get("min_profiles", 3)),
+            geo=geo,
         )
         stab = drift_fit(blocks)
         stab.channel = ch
@@ -469,9 +523,17 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
                 "dz_m": geo.dz_m, "dz_se_m": geo.dz_se_m,
                 "tau_s": geo.tau_s, "tau_se_s": geo.tau_se_s,
                 "collinearity": geo.collinearity,
-                "separately_resolved": bool(
-                    np.isfinite(geo.collinearity) and geo.collinearity <= 0.8
-                ),
+                # Resolved from EACH OTHER *and* from the calibration
+                # polynomial: the old predicate tested only the dz/tau
+                # correlation, which an intercept-aliased design passes at
+                # 4.7e-17 (issue #180 F20).
+                "separately_resolved": bool(geo.separately_resolved()),
+                "rank_deficient": bool(geo.rank_deficient),
+                "smallest_singular_value": geo.smallest_singular_value,
+                "dz_se_cluster_m": geo.dz_se_cluster_m,
+                "tau_se_cluster_s": geo.tau_se_cluster_s,
+                "n_profiles_clustered": geo.n_clusters,
+                "cluster_warning": geo.cluster_warning,
             },
             "stability": {
                 "probe_drift_K_per_day": stab.probe_drift_K_per_day,

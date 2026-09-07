@@ -110,8 +110,10 @@ Facts that are easy to get wrong:
   `r = 1.000000` at *every* lag over ±30 s. Scores use high-passed series, and
   a peak at the search boundary is refused.
 - **`beta_2 = 0` does not delete a quadratic term** — the config value is a
-  reciprocal, so zero means an infinite term and `convert_therm` raises
-  `ZeroDivisionError`. `beta_2 = 1e30` is bit-identical to omitting the key.
+  reciprocal, so zero means an infinite term and `convert_therm` rejects it with
+  a named `ValueError` (it raised a bare `ZeroDivisionError` before issue #180).
+  `beta_2 = 1e30` is bit-identical to omitting the key. A *negative* `beta_2` is
+  legitimate and is accepted.
 - Polynomial order is chosen by **held-out** error split on temperature, not by
   in-sample fit or a t-test: `beta_3` can carry a t-statistic of 10 while
   making extrapolation four times worse.
