@@ -37,10 +37,19 @@ damaged on cast 3 is indistinguishable from one that arrived wrong.
 signal — see §2) and it can never give `sens`.
 
 > **ARCTERX-2022.** SN 194's two probes differ by ~50% in noise floor
-> (10⁻⁹·²⁷ vs 10⁻⁹·¹⁰). Probe or channel? Unanswerable — SN 194 has no bench
-> run. SN 428 does (`dat_0021.p`), and it settled the equivalent question there
-> in one line: ~8% channel noise difference against a 23% ε offset, proving that
-> instrument's problem was gain, not noise.
+> (10⁻⁹·²⁷ vs 10⁻⁹·¹⁰). Probe or channel? **Permanently unanswerable.** We
+> searched ARCTERX-2023-Interior and all of SUNRISE — 2069 `.p` files, 185 of
+> them SN 194, every one short enough to be a bench run opened and tested — and
+> **no SN 194 bench run exists anywhere**. The four files that looked promising
+> were 3–54 s deck recordings whose FP07s sat at 25–30 °C rather than the test
+> probe's ~16 °C, and whose shear std was 10⁻¹ rather than an open circuit's
+> 10⁻⁴.
+>
+> SN 428 *does* have one (`dat_0021.p`, 101 s), and it settled the equivalent
+> question there in a single line: ~8% channel noise difference against a 23% ε
+> offset, proving that instrument's problem was gain, not noise. One 2-minute
+> recording, four years earlier, is the whole difference between a question
+> answered and a question closed.
 
 ---
 
