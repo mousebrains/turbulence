@@ -42,6 +42,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the worker pool.
 
 ### Fixed
+- **perturb `chi` produced nothing at all, on every profile.** `chi.mixing_use_qc_fallback`
+  was added as a config key but not to the list that filters the `chi:` section
+  before it is splatted into `_compute_chi(**kwargs)`, so every profile raised
+  `TypeError: _compute_chi() got an unexpected keyword argument`. The
+  per-profile handler logs that and continues, so the run reported "N file
+  errors", wrote an **empty** `chi_NN/` directory, and still exited reporting
+  stage success — on ARCTERX-2022 that is 1330 profiles and zero chi files.
+
+  Both splat filters (epsilon's and chi's) are now module-level constants
+  (`_EPSILON_KWARG_EXCLUDE`, `_CHI_KWARG_EXCLUDE`) and
+  `tests/test_kwarg_splat_guard.py` asserts that what survives them is a subset
+  of the callee's real signature, for both stages. The failure mode is silent
+  product loss rather than a traceback, so it needs a test rather than care.
+  Epsilon was checked and was not leaking.
 - **`perturb/fp07_cal.py` no longer emits confident, wrong coefficients.** Five
   defects, each a way the per-file in-situ calibration could fit something that
   was not a calibration:

@@ -37,6 +37,46 @@ from odas_tpw.perturb.logging_setup import (
 
 logger = logging.getLogger(__name__)
 
+# Config keys that must NOT reach _compute_epsilon / _compute_chi.
+#
+# Both calls splat their config section as keyword arguments, so a key the
+# callee does not accept is a TypeError -- which the per-profile handler turns
+# into "every profile errored, diss/ or chi/ empty" rather than a traceback.
+# That is a silent product loss, so the lists live here and
+# tests/test_kwarg_splat_guard.py asserts that what survives them is a subset
+# of the callee's real signature. A key is excluded because it is consumed
+# somewhere else: applied to the RESULT (fom_max, spectral_qc and its
+# parameters, pair_policy), resolved to a different argument first (salinity,
+# T_source), or read by a different stage entirely (mixing*, enable).
+#
+# The window durations (fft_sec/diss_sec/overlap_sec) are not listed: they are
+# stripped upstream by resolve_window_config, which converts them to sample
+# counts.
+_EPSILON_KWARG_EXCLUDE = (
+    "epsilon_minimum",
+    "T_source",
+    "fom_max",
+    "diagnostics",
+    "salinity",
+    "spectral_qc",
+    "FM_max",
+    "var_resolved_min",
+    "pair_policy",
+    "pair_limit",
+)
+
+_CHI_KWARG_EXCLUDE = (
+    "enable",
+    "chi_minimum",
+    "spectral_qc",
+    "diagnostics",
+    "use_epsilon",
+    "fom_max",
+    "mixing",
+    "mixing_use_qc_fallback",
+    "salinity",
+)
+
 _SUMMARY_WIDTH = 200
 _SUMMARY_MAX_LINES = 10
 
@@ -2811,26 +2851,7 @@ def process_file(
                         **{
                             k: v
                             for k, v in eps_cfg.items()
-                            if k
-                            not in (
-                                "epsilon_minimum",
-                                "T_source",
-                                "fom_max",
-                                "diagnostics",
-                                "salinity",
-                                # spectral_qc and its parameters are applied
-                                # to the RESULT below, not by _compute_epsilon.
-                                # Leaving them in the splat is a TypeError that
-                                # the per-profile handler turns into "every
-                                # profile errored, diss/ empty" rather than a
-                                # traceback. The chi splat strips its own
-                                # spectral_qc for the same reason.
-                                "spectral_qc",
-                                "FM_max",
-                                "var_resolved_min",
-                                "pair_policy",
-                                "pair_limit",
-                            )
+                            if k not in _EPSILON_KWARG_EXCLUDE
                         },
                         salinity=eps_sal,
                         temperature=t_src,
@@ -2933,19 +2954,7 @@ def process_file(
             chi_fom_max = chi_cfg.get("fom_max")
             chi_spectral_qc = bool(chi_cfg.get("spectral_qc", True))
             chi_kwargs = {
-                k: v
-                for k, v in chi_cfg.items()
-                if k
-                not in (
-                    "enable",
-                    "chi_minimum",
-                    "spectral_qc",
-                    "diagnostics",
-                    "use_epsilon",
-                    "fom_max",
-                    "mixing",
-                    "salinity",
-                )
+                k: v for k, v in chi_cfg.items() if k not in _CHI_KWARG_EXCLUDE
             }
             # Per-instrument FP07 time-constant multipliers. Lives under
             # `instruments:` rather than `chi:` because it is a property of the
