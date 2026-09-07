@@ -298,7 +298,64 @@ reviewer knows which commits can change a published number.
 
 ---
 
-## 4. What this does not close
+## 4. Measured outcomes
+
+Every claim below is a number this branch produced, not a prediction. The
+reviewer's reproducer was re-run unmodified against the fixed tree; the two
+transcripts (before / after) are in the PR body.
+
+### 4.1 The counterexamples, before and after
+
+| Finding | Before | After |
+| --- | --- | --- |
+| F01 | flags 0, epsilon 1.327e-7 on a 50%-interpolated window | flags 255, NaN, and `interp_fraction = 0.5` published |
+| F02 | flags [1, 4], combined NaN | flags [1, 0], combined 1e-7 |
+| F03a | 554/1000 noise-only windows finite, 355 inside the FOM band | **4/1000**, 2 inside the band |
+| F03b | 28.8% of real bands bridged; 5.33% of windows >5% high | integral bounded above by the true area; see §4.2 |
+| F04 | 2e-7 indistinguishable from a passing window | 2e-7 **plus** `qc_fallback = True`, excluded from mixing |
+| F05 | paired to an estimate 500 s away | NaN |
+| F06 | shear x0.09, variance x0.0081, zero warnings | `ValueError` naming `diff_gain` |
+| F07 | 1600/1600 finite samples from 1 of 400 | refused, with the coverage in the message |
+| F08 | +3.458e-4 K/day, p=0.005, on ZERO true drift | **-3.741e-8 K/day** (9200x smaller) |
+| F09 | dz SE 0.00579 -> 0.000577 m on duplicated data | clustered SE 0.005302 -> 0.005289 m |
+| F10 | S2 = 0.0025 s^-2 from zero true shear | **0.0**, with `n_support` exported |
+| F13 | epsilon 1.02e-9 -> 7.44e-9 from the excluded band | refused (too few trusted bins) |
+| F14 | 1.0790e-5 against a true 5.7793e-6 | 5.779279084263729e-06 |
+| F15 | `calibration_coeff` binned as depth | not binned |
+| F16 | last bin 0.5x scipy at odd nfft; correction 1.515 vs 2.041 | 1.000000 at every nfft; 2.040816 |
+| F17 | one window, entirely finite across a 100 s hole | zero windows |
+| F18 | 0 flags for a 10 s AND a 10,000 s slip | 1 flag each |
+| F19 | "opposes in sign ... do not apply a drift model" | "agrees in sign: probe-specific drift" |
+| F20 | `separately_resolved = True` at a 6.5e33 K calibration error | rank-deficient, not resolved, export refused |
+| F21 | `depth_bin: 0` | `depth_bin: 1` |
+
+### 4.2 What C1 does to real chi
+
+Measured on the repo's whole `VMP/` corpus (ARCTERX Wake SN 479, 29 files,
+2944 probe-windows), Method 1 with epsilon held fixed so only the integration
+band differs:
+
+```
+non-contiguous selected band: 847 (28.8%)
+chi_new / chi_old: median 1.000000  MAD 0.00e+00
+   p01 0.6308   p05 0.9414   p10 0.9954   p50 1.0000   p90 1.0000
+   min 0.2637   max 1.0000
+windows changed >5%: 157 (5.33%);  >50%: 11 (0.37%)
+```
+
+The ratio is bounded **above** by 1.0 — the change can only remove over-count,
+which is what a bridged integral produces. The typical window does not move at
+all; the tail was real. This is one instrument on one campaign, and the rate
+will differ with SNR regime.
+
+### 4.3 What C2 costs in power
+
+The DOF-aware detection floor rises from 3 to 17 of the 196 in-band bins on this
+corpus, and rejects **zero** of 2944 real probe-windows while cutting the
+noise-only false-positive rate from 554/1000 to 4/1000. Size falls by two orders
+of magnitude at no measured cost in power on this data.
+
+## 5. What this does not close
 
 Honest residue, so the next reviewer does not have to rediscover it:
 
@@ -316,3 +373,9 @@ Honest residue, so the next reviewer does not have to rediscover it:
    quantifies the C1 delta on the repo corpus only. Campaign-level impact
    remains unmeasured.
 5. **F11 / F12 remain open** in `pyturb/`, pending the owner.
+6. **`significant` is not a magnitude statement.** After F08 the geometry-aware
+   drift on the zero-drift control is -3.7e-8 K/day — physically nil, 9200x
+   smaller than before — but the permutation test still returns p = 0.016,
+   because a consistent 2e-6 K end-to-end trend is detectable against a 1e-5 K
+   residual. The p-value answers "is there any trend", not "is it big enough to
+   matter". Read `drift_K_per_day` alongside it.
