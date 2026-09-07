@@ -18,7 +18,9 @@ M1504,2016-06-06,0.0824,V/(m^2 s^-2),sheet,M1504_2022_1_5.pdf,,,previous-calibra
 M1504,2022-01-04,0.0767,V/(m^2 s^-2),sheet,M1504_2022_1_5.pdf,2023-01-04,2016-05-31,
 M2090,2019-07-02,0.0884,V/(m^2 s^-2),sheet,M2090_2022_1_5.pdf,,,previous-calibration entry on this sheet
 M2090,2022-01-04,0.0967,V/(m^2 s^-2),sheet,M2090_2022_1_5.pdf,2023-01-04,2019-06-17,
-M2245,2023-06-07,0.0682,V/(m^2 s^-2),sheet,M2245_2026_04_28.pdf,,,previous-calibration entry on this sheet
+M2244,2020-03-10,0.0678,V/(m^2 s^-2),sheet,M2244_2020_03_10.pdf,2021-03-10,,
+M2245,2020-03-12,0.0682,V/(m^2 s^-2),sheet,M2245_2020_03_12.pdf,2021-03-12,,
+M2245,2023-06-07,0.0682,V/(m^2 s^-2),sheet,M2245_2026_04_28.pdf,,,"previous-calibration entry on this sheet; DATE DOUBTFUL - the owner has no record of any calibration between 2020-03-12 and 2026-04-28, and the value is bit-identical to the 2020-03-12 sheet, so this is likely Rockland re-quoting the 2020 calibration under a wrong date rather than a real 2023 measurement. Queried with Rockland 2026-09. Do NOT treat as an independent post-2020 point."
 M2245,2026-04-28,0.1007,V/(m^2 s^-2),sheet,M2245_2026_04_28.pdf,2027-04-28,2020-03-30,
 M2475,2021-11-09,0.072,V/(m^2 s^-2),sheet,M2475_2021_11_12.pdf,2022-11-09,2021-11-03,
 M2476,2021-11-09,0.0884,V/(m^2 s^-2),sheet,M2476_2021_11_12.pdf,2022-11-09,2021-11-03,

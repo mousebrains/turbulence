@@ -85,6 +85,15 @@ _SN_RE = re.compile(r"Probe\s*SN\s*:?\s*([A-Za-z]{0,3}\d+(?:-\w+)?)", re.I)
 # the old sheets' "sensitivity 0.0655" previous-calibration line cannot match.
 _SENS_RE = re.compile(r"(?:Sensitivity\s*\(sens(?:\s*or\s*S)?\)|^sens)\s*:?\s*" + _NUM, re.I | re.M)
 _PREV_SENS_RE = re.compile(r"Previous\s+Sensitivity\s*:?\s*" + _NUM, re.I)
+# The OLDEST layout (2020 and earlier) prints "Serial Number, SN :" and
+# "Sensitivity [Volts / (m/s)^2] :" as graphics that pypdf drops entirely,
+# leaving only their VALUES glued onto the first extracted line:
+#     "M2244 0.0678"
+# Every later layout starts with the Rockland letterhead instead, so this is
+# unambiguous -- but it is still applied only as a FALLBACK, after the labelled
+# patterns have had their chance, so it can never override a labelled sheet.
+# Anchored end-to-end: a bare serial and one number, nothing else on the line.
+_BARE_HEAD_RE = re.compile(r"^([A-Za-z]{1,3}\d+(?:-\w+)?)\s+" + _NUM + r"$")
 # Older sheets state the previous calibration as free-form prose that pypdf
 # splits across two lines: "Previous calibration on 2021-11-10 with\nsensitivity
 # 0.0655".  Matched against the WHOLE text (not per line) because of that wrap;
@@ -192,6 +201,7 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
     recal_due: date | None = None
     pt_date: date | None = None
     in_pt_section = False  # a "Pressure Test(ing)" line has been seen
+    first_line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -258,6 +268,27 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
         if m:
             prev_cal_date = _parse_date_parts(m.group(1), m.group(2), m.group(3))
             prev_sens = float(m.group(4))
+
+    # Oldest-layout fallback, applied BEFORE the sanity guards below so a
+    # fallback-derived value is subject to the same positivity check as a
+    # labelled one. See _BARE_HEAD_RE.
+    #
+    # The two fields are filled INDEPENDENTLY, not gated on both being None.
+    # Coupling them breaks on a real sheet: the page-2 plot caption
+    # "...ProbeSN:M2244U=0.703m/s..." matches _SN_RE (see its comment), and
+    # extract_pdf_text concatenates every page — so on a 2020-era sheet that
+    # carries that caption, `sn` fills from page 2, a coupled guard never fires,
+    # `sens` stays None, and load_cal_dir drops the sheet as unparseable. The
+    # probe would then report as having no calibration at all. Filling each
+    # field only when it is still missing keeps the "never override a labelled
+    # sheet" property per field, which is what that property actually means.
+    if sn is None or sens is None:
+        m = _BARE_HEAD_RE.match(first_line)
+        if m:
+            if sn is None:
+                sn = m.group(1).upper()
+            if sens is None:
+                sens = float(m.group(2))
 
     # A physically-valid sensitivity is positive; treat 0/negative (a misparse or
     # a corrupt sheet) as missing so it can't seed a bogus timeline point or a
