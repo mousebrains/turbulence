@@ -59,7 +59,35 @@ signal — see §2) and it can never give `sens`.
 > | dead / railed acquisition | the rail, **zero variance** | a large constant, **zero variance** |
 >
 > Variance is the discriminator between an open circuit and a dead record, not
-> the value. SN 428's `dat_0001.p` has n_unique = 1 on *every* channel
+> the value.
+>
+> **A metric that works when provenance does not.** Names and logs are routinely
+> unreliable, so `scripts/detect_bench_runs.py` classifies from the data alone,
+> without assuming the readings are correct:
+>
+> - **FP07 — constancy, at least one channel.** `std(T)` over the record, with a
+>   30 s minimum so a short file is not "constant" by brevity. Nearness to `T_0`
+>   is reported as corroboration, never as a gate, and only ONE thermistor need
+>   be constant — the other may be open or dead. A constant thermistor far from
+>   `T_0` is still a bench run, flagged as suspect electronics.
+> - **Shear — `std` in ADC COUNTS**, which is unit-free and comparable across
+>   instruments:
+>
+>       counts = std_physical x (2*sqrt(2) * diff_gain * sens) / (adc_fs / 2^bits)
+>
+>   An open circuit sits at the quantisation floor, ~1.1 counts (sub-LSB dither).
+>   Exactly 0 counts is dead, not open.
+>
+> Measured separation on labelled files:
+>
+> | | shear [counts] | FP07 std [°C] |
+> |---|---|---|
+> | bench, test probes | **1.06 – 1.14** (10–12 codes) | 2e-5 – 6e-5 |
+> | dead / railed | 0.00 (1 code) | 3.6e-15 |
+> | real probes, on deck | 48 – 148 | 0.08 – 0.39 |
+> | in water | 4550 – 19700 | 1.5 – 2.0 |
+>
+> A ~50x margin separates an open circuit from the nearest connected case. SN 428's `dat_0001.p` has n_unique = 1 on *every* channel
 > (`Ax`/`Ay` at −32752, the ODAS `sp_char` comms-integrity value; `V_Bat`
 > −20.47 V) — a dead acquisition that a value-based test would have filed as a
 > bench run.
