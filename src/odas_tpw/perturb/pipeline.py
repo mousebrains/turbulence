@@ -2632,6 +2632,13 @@ def process_file(
                     "salinity",
                 )
             }
+            # Per-instrument FP07 time-constant multipliers. Lives under
+            # `instruments:` rather than `chi:` because it is a property of the
+            # BEADS on one physical unit, not of the processing: a config
+            # covering a mixed fleet must be able to give each serial its own.
+            tau_scale_cfg = instrument_cfg.get("fp07_tau_scale") or {}
+            if tau_scale_cfg:
+                chi_kwargs["fp07_tau_scale"] = dict(tau_scale_cfg)
             # Soft spectral-QC thresholds for mk_chi_mean — the SAME limits the rsi
             # pipeline's chi_final uses, so both pipelines filter chiMean/K_T/Gamma
             # identically (issue #104 U3-C2).

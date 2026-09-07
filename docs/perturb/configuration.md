@@ -352,12 +352,66 @@ Overrides keyed by serial-number identifier, matched against the parent director
 | Inner key | Type | Description |
 |-----------|------|-------------|
 | `exclude_shear_probes` | list of strings | Probe names (e.g. `["sh2"]`) to suppress for this instrument. The named probe is NaN'd before `mk_epsilon_mean`, so it is excluded from the multi-probe `epsilonMean` and from chi Method 1 (which uses `epsilonMean`) |
+| `fp07_tau_scale` | dict | Per-thermistor multiplier on the FP07 time constant, e.g. `{T1: 0.30, T2: 0.75}`. Keys accept the bead name (`T1`) or the gradient channel (`T1_dT1`); values must be finite and > 0. Default `{}` = every probe on the tau model, bit-identical to before |
 
 ```yaml
 instruments:
   SN465:
     exclude_shear_probes: ["sh2"]
+  SN194:
+    fp07_tau_scale: {T1: 0.30, T2: 0.75}
 ```
+
+#### `fp07_tau_scale` — when two beads do not agree
+
+Chi is computed by fitting a Batchelor/Kraichnan spectrum, attenuated by the
+FP07 transfer function `|H(f)|² = 1/(1 + (2πf·τ)²)`, to the observed gradient
+spectrum. Until now `τ` came from a single model
+([`fp07_tau`](../../src/odas_tpw/chi/fp07.py) — `lueck` for `single_pole`,
+`goto` for `double_pole`) and was shared by every thermistor on the
+instrument. Two beads on one probe head can have materially different
+response, and that assumption then biases them apart.
+
+The symptom is a **large, persistent chi disagreement between the two
+thermistors that varies with `K_max_ratio`** (= `K_max/kB`, how much of the
+Batchelor rolloff is resolved rather than extrapolated). On ARCTERX-2022:
+
+| unit | `chi(T1)/chi(T2)` | across `K_max/kB` quartiles |
+|---|---|---|
+| SN 194 | 1.77x | 2.27 → 1.83 → 1.67 → 1.54 |
+| SN 428 | 0.72x | 0.59 → 0.71 → 0.77 → 0.80 |
+
+Both trend toward 1 as more of the spectrum is resolved. That slope is the
+diagnostic: a **flat gain** error (wrong `diff_gain`, bridge gain, `E_B`) is
+`K_max_ratio`-independent, whereas a **response** error is amplified exactly
+where the extrapolation carries the most weight. Note also that chi goes as the
+gradient *squared*, so a 1.77x chi ratio is only a 1.33x response difference —
+easy to under-rate.
+
+Fitting one τ per bead collapsed both units to 1.03x with the quartile spread
+falling from 1.47x/1.37x to 1.13x/1.11x.
+
+The value is a **multiplier on the model**, not an absolute τ, so the model's
+speed dependence survives — a scale factor on `τ(U)` is what the data
+constrain. A typo'd probe name **raises** rather than being ignored: a
+silently-uncorrected probe would bias chi by the square of the response error
+with no downstream symptom.
+
+Caveats before reaching for it:
+
+- **`fom` will not tell you which bead to trust.** On ARCTERX-2022 it was
+  ~1.000 for *both* beads on both units — the fit is formally excellent for
+  each, they simply fit to chi values a factor apart. `chi.fom_max` is blind
+  to this.
+- **It makes the beads agree with each other; it does not make either
+  right.** Anchor the absolute level separately — e.g. restrict to
+  `K_max_ratio > 1.2`, where extrapolation is smallest, and test the
+  Osborn-Cox balance against the shear-probe epsilon.
+- **Fit it per method.** The τ that unifies the beads under Method 1
+  (`use_epsilon: true`, kB fixed by the shear epsilon) is not identical to the
+  Method 2 value, because the two methods weight the spectrum differently.
+- **Check it is stable in time.** A τ that drifts over a deployment is
+  fouling or damage, not a probe constant, and a single value is then wrong.
 
 ---
 

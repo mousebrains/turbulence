@@ -12,6 +12,7 @@ manager, and re-exports the methods as module-level functions.
 import functools
 import hashlib
 import importlib.metadata
+import math
 import os
 import warnings
 from pathlib import Path
@@ -322,7 +323,7 @@ _HASH_EXCLUDE_KEYS = frozenset({"diagnostics", "force", "force_trim", "config_di
 # inner-schema validation happens in a wrapper below.
 _DYNAMIC_KEY_SECTIONS = frozenset({"instruments"})
 
-_INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes"})
+_INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes", "fp07_tau_scale"})
 
 # Numeric dependencies whose version can change ε/χ/N² outputs even with no
 # change to our own source — folded into the engine fingerprint so a dep
@@ -482,6 +483,28 @@ def _validate_instruments(instruments: dict) -> None:
                 f"instruments.{sn}.exclude_shear_probes: must be a list of strings, "
                 f"got {excludes!r}"
             )
+        tau_scale = settings.get("fp07_tau_scale", {})
+        if not isinstance(tau_scale, dict):
+            raise ValueError(
+                f"instruments.{sn}.fp07_tau_scale: must be a mapping of "
+                f"thermistor name -> multiplier, got {tau_scale!r}"
+            )
+        for probe, value in tau_scale.items():
+            if not isinstance(probe, str):
+                raise ValueError(
+                    f"instruments.{sn}.fp07_tau_scale: keys must be thermistor "
+                    f"names (strings), got {probe!r}"
+                )
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(
+                    f"instruments.{sn}.fp07_tau_scale.{probe}: must be a number, "
+                    f"got {value!r}"
+                )
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(
+                    f"instruments.{sn}.fp07_tau_scale.{probe}: must be finite and "
+                    f"> 0, got {value!r}"
+                )
 
 
 CONFIG_DIR_TOKEN = "<CONFIG_DIR>"
@@ -687,6 +710,13 @@ def canonical_instruments_for_hash(instruments: dict | None) -> dict[str, Any]:
         excludes = item.get("exclude_shear_probes")
         if isinstance(excludes, list):
             item["exclude_shear_probes"] = sorted(str(probe) for probe in excludes)
+        # Key order must not change the hash, but the VALUES must: a different
+        # tau is different chi, so it has to land in a new stage directory.
+        tau_scale = item.get("fp07_tau_scale")
+        if isinstance(tau_scale, dict):
+            item["fp07_tau_scale"] = {
+                str(k): float(v) for k, v in sorted(tau_scale.items(), key=lambda kv: str(kv[0]))
+            }
         normalized[str(key)] = item
     return normalized
 
@@ -1128,11 +1158,26 @@ parallel:
 # whose amplifier or sensor is known to be bad — the named probe is NaN'd
 # out before mk_epsilon_mean, so it is excluded from the multi-probe
 # epsilonMean and from chi Method 1 (which uses epsilonMean).
+#
+# fp07_tau_scale multiplies the FP07 time constant per thermistor. tau is
+# otherwise a single model (fp07_tau: 'lueck' for single_pole, 'goto' for
+# double_pole) shared by every bead on the instrument, and two beads on one
+# probe head can genuinely differ. The symptom is a persistent chi
+# disagreement between T1 and T2 that VARIES with K_max_ratio (K_max/kB) and
+# trends toward 1 as more of the Batchelor rolloff is resolved -- a flat gain
+# error would be K_max_ratio-independent. Keys take the bead name (T1) or the
+# gradient channel (T1_dT1); an unmatched key raises rather than being
+# ignored. The value scales the MODEL, so its speed dependence survives.
+# Caveat: this makes the two beads agree with each other, not with the truth --
+# anchor the absolute level separately (e.g. where K_max_ratio > 1.2), and note
+# fom cannot tell you which bead to trust (it can sit at ~1.000 for both).
 instruments: {}
 # Example:
 # instruments:
 #   SN465:
 #     exclude_shear_probes: ["sh2"]
+#   SN194:
+#     fp07_tau_scale: {T1: 0.30, T2: 0.75}
 """
 
 

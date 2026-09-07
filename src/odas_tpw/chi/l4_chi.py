@@ -105,10 +105,12 @@ def _process_l4_chi(
         W = l3_chi.pspd_rel[j]
         nu = l3_chi.nu[j]
         kappa_T = float(l3_chi.kappa_T[j])
-        tau0 = l3_chi.tau0[j]
-        H2 = l3_chi.H2[j]
-
         for ci in range(n_gradt):
+            # tau/H2 are per THERMISTOR: two beads on one instrument can have
+            # different response, so these must be read inside the ci loop.
+            # The accessors also take the legacy shared-across-probes layout.
+            tau0 = l3_chi.tau0_for(ci, j)
+            H2 = l3_chi.H2_for(ci, j)
             spec_obs = l3_chi.gradt_spec[ci, :, j]
             noise_K = l3_chi.noise_spec[ci, :, j]
 

@@ -78,6 +78,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   deployment-scoped `fp07-cal` CLI for a sparse reference.
 
 ### Added
+- **`instruments.<SN>.fp07_tau_scale`: a per-thermistor FP07 time constant.**
+  `tau` previously came from a single model (`fp07_tau`: `lueck` for
+  `single_pole`, `goto` for `double_pole`) and was shared by every thermistor
+  on an instrument. Two beads on one probe head can have materially different
+  response, and that assumption biases them apart: on ARCTERX-2022 the two
+  FP07s disagreed on chi by 1.77x (SN 194) and 0.72x (SN 428) — in opposite
+  directions, persistently, over 1330 profiles.
+
+  The disagreement is a **response** problem, not a flat gain error, and the
+  diagnostic is that it varies with `K_max_ratio` (`K_max/kB`): SN 194 ran
+  2.27 → 1.54 and SN 428 0.59 → 0.80 across quartiles, both converging toward
+  1 as more of the Batchelor rolloff is resolved rather than extrapolated. A
+  flat gain error would be quartile-independent. Fitting one tau per bead
+  collapsed both units to 1.03x, with the quartile spread falling from
+  1.47x/1.37x to 1.13x/1.11x.
+
+  The config value multiplies the tau *model* rather than replacing it, so the
+  model's speed dependence survives — a scale factor on `tau(U)` is what the
+  data actually constrain. Keys take the bead name (`T1`) or the gradient
+  channel (`T1_dT1`); an unmatched key raises rather than being ignored,
+  because a silently-uncorrected probe would bias chi by the square of the
+  response error with no downstream symptom. Omitted, every probe stays on the
+  model and results are bit-identical to before.
+
+  Internally `L3ChiData.tau0` and `.H2` are now emitted per thermistor —
+  `(N_GRADT, N_SPECTRA)` and `(N_GRADT, N_SPECTRA, N_FREQ)`. The previous
+  shared-across-probes layout is still accepted on input; read either through
+  the new `L3ChiData.tau0_for(ci, j)` / `.H2_for(ci, j)` accessors rather than
+  indexing directly. Note `fom` cannot arbitrate between two beads (it was
+  ~1.000 for both on both units), and fitting tau makes the beads agree with
+  each other without establishing the absolute chi level. See
+  `docs/perturb/configuration.md`.
 - **`mr-clocksync`: per-file clock offset and rate for a MicroRider, from the
   surface-wave band.** An MR clock jumps between `.p` files and runs at the
   wrong rate, so a single per-deployment offset is wrong by construction. Given

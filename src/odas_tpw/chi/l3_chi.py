@@ -10,6 +10,7 @@ Reads cleaned temperature gradient and HP-filtered vibration from L2ChiData.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -65,8 +66,15 @@ class L3ChiData:
     freq: np.ndarray  # (N_FREQ,), frequency vector [Hz]
     gradt_spec: np.ndarray  # (N_GRADT, N_WAVENUMBER, N_SPECTRA)
     noise_spec: np.ndarray  # (N_GRADT, N_WAVENUMBER, N_SPECTRA)
-    H2: np.ndarray  # (N_SPECTRA, N_FREQ), FP07 transfer function
-    tau0: np.ndarray  # (N_SPECTRA,), FP07 time constant
+    # FP07 response. Since per-probe time constants were introduced these are
+    # emitted PER THERMISTOR -- H2 (N_GRADT, N_SPECTRA, N_FREQ) and tau0
+    # (N_GRADT, N_SPECTRA) -- because two beads on one instrument can have
+    # materially different response (ARCTERX-2022 SN194: 3.1 vs 7.7 ms).
+    # The older shared-across-probes layout, H2 (N_SPECTRA, N_FREQ) and tau0
+    # (N_SPECTRA,), is still accepted on input; read both through
+    # :meth:`H2_for` / :meth:`tau0_for` rather than indexing directly.
+    H2: np.ndarray
+    tau0: np.ndarray
 
     diff_gains: list[float] = field(default_factory=list)
     fp07_model: str = "single_pole"
@@ -76,6 +84,24 @@ class L3ChiData:
     # Both (N_GRADT, N_SPECTRA); empty when no mask was supplied.
     bad_fraction: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
     interp_fraction: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
+
+    def tau0_for(self, ci: int, j: int) -> float:
+        """FP07 time constant for thermistor *ci*, window *j* [s].
+
+        Accepts both the per-probe ``(N_GRADT, N_SPECTRA)`` layout and the
+        legacy shared ``(N_SPECTRA,)`` one, so an ``L3ChiData`` built by older
+        code (or by a test) keeps working.
+        """
+        return float(self.tau0[ci, j] if self.tau0.ndim == 2 else self.tau0[j])
+
+    def H2_for(self, ci: int, j: int) -> np.ndarray:
+        """FP07 transfer function |H|^2 for thermistor *ci*, window *j*.
+
+        Accepts the per-probe ``(N_GRADT, N_SPECTRA, N_FREQ)`` layout and the
+        legacy shared ``(N_SPECTRA, N_FREQ)`` one. See :meth:`tau0_for`.
+        """
+        row = self.H2[ci, j] if self.H2.ndim == 3 else self.H2[j]
+        return np.asarray(row)
 
     @property
     def n_spectra(self) -> int:
@@ -110,6 +136,7 @@ def _process_section_chi(
     salinity: float | np.ndarray | None,
     diff_gains: list[float],
     therm_cal: list[dict] | None,
+    tau_scales: np.ndarray,
     acc: _SectionResult,
 ) -> None:
     """Process a single section, appending results to *acc*."""
@@ -225,10 +252,17 @@ def _process_section_chi(
             * bl_corrections[ci][np.newaxis, :]
         )
 
-    # FP07 transfer function
+    # FP07 transfer function, one time constant per thermistor.
+    # tau_scale multiplies the tau MODEL rather than replacing it, so the
+    # model's speed dependence is preserved -- which is what is actually
+    # measurable from the data (a scale factor on tau(U), not an absolute tau).
     tau_model = default_tau_model(fp07_model)
-    tau0_all = fp07_tau_batch(speed_means, model=tau_model)
-    H2_all = fp07_transfer_batch(F_const, tau0_all, model=fp07_model)
+    tau0_base = fp07_tau_batch(speed_means, model=tau_model)
+    tau0_all = np.empty((n_temp, n_windows), dtype=np.float64)
+    H2_all = np.empty((n_temp, n_windows, n_freq), dtype=np.float64)
+    for ci in range(n_temp):
+        tau0_all[ci] = tau0_base * tau_scales[ci]
+        H2_all[ci] = fp07_transfer_batch(F_const, tau0_all[ci], model=fp07_model)
 
     # Noise spectra
     noise_all = np.empty((n_temp, n_windows, n_freq))
@@ -258,8 +292,8 @@ def _process_section_chi(
         acc.nu.append(nu_all[w])
         acc.kappa_T.append(kappa_T_all[w])
         acc.kcyc.append(K_all[:, w])
-        acc.H2.append(H2_all[w])
-        acc.tau0.append(tau0_all[w])
+        acc.H2.append(H2_all[:, w, :])      # (n_temp, n_freq)
+        acc.tau0.append(tau0_all[:, w])      # (n_temp,)
         acc.gradt_spec.append(clean_spectra[w].T)
         acc.noise_spec.append(noise_all[:, w, :])
         # Fractions of this window hit by RDL bad-buffer dropouts on a channel
@@ -280,6 +314,7 @@ def process_l3_chi(
     fp07_model: str = "single_pole",
     salinity: float | np.ndarray | None = None,
     therm_cal: list[dict] | None = None,
+    tau_scale: Sequence[float] | None = None,
 ) -> L3ChiData:
     """Compute L3 temperature gradient spectra from L2ChiData.
 
@@ -296,10 +331,28 @@ def process_l3_chi(
         Practical salinity for viscosity.
     therm_cal : list of dict, optional
         Per-thermistor calibration for noise model.
+    tau_scale : sequence of float, optional
+        Per-thermistor multiplier on the FP07 time constant from the selected
+        tau model, one entry per gradient channel. ``None`` (the default) is
+        all ones and reproduces the previous behaviour exactly.
+
+        Two beads on one instrument can have materially different response,
+        which biases chi by more than the bead-to-bead scatter suggests: chi
+        goes as the gradient SQUARED, and where the Batchelor rolloff is only
+        partly resolved the assumed tau drives the extrapolation. On
+        ARCTERX-2022 the two FP07s disagreed by 1.77x (SN194) and 0.72x
+        (SN428), and a per-bead tau collapsed both to 1.03x. It multiplies the
+        model rather than replacing it so the model's speed dependence
+        survives -- a scale factor on tau(U) is what the data constrain.
 
     Returns
     -------
     L3ChiData
+
+    Raises
+    ------
+    ValueError
+        If ``tau_scale`` has the wrong length or a non-positive entry.
     """
     fs = params.fs_fast
     nfft = params.fft_length
@@ -311,6 +364,21 @@ def process_l3_chi(
     n_freq = nfft // 2 + 1
     n_temp = l2_chi.n_temp
     diff_gains = l2_chi.diff_gains
+
+    # Per-thermistor tau multiplier. Validate loudly: a silently-dropped or
+    # mis-ordered scale would bias chi by the square of the response error,
+    # and nothing downstream could tell.
+    if tau_scale is None:
+        scales = np.ones(n_temp, dtype=np.float64)
+    else:
+        scales = np.asarray(tau_scale, dtype=np.float64)
+        if scales.shape != (n_temp,):
+            raise ValueError(
+                f"tau_scale must have one entry per gradient channel "
+                f"({n_temp}), got {scales.shape}"
+            )
+        if not np.all(np.isfinite(scales)) or np.any(scales <= 0):
+            raise ValueError(f"tau_scale entries must be finite and > 0, got {tau_scale!r}")
 
     # Frequency vector (constant)
     F_const = np.arange(n_freq) * fs / nfft
@@ -348,6 +416,7 @@ def process_l3_chi(
             salinity,
             diff_gains,
             therm_cal,
+            scales,
             acc,
         )
 
@@ -364,8 +433,8 @@ def process_l3_chi(
             freq=F_const,
             gradt_spec=np.zeros((n_temp, n_freq, 0)),
             noise_spec=np.zeros((n_temp, n_freq, 0)),
-            H2=np.zeros((0, n_freq)),
-            tau0=np.array([]),
+            H2=np.zeros((n_temp, 0, n_freq)),
+            tau0=np.zeros((n_temp, 0)),
             diff_gains=diff_gains,
             fp07_model=fp07_model,
             bad_fraction=np.zeros((0, 0)),
@@ -380,10 +449,10 @@ def process_l3_chi(
     section_out = np.array(acc.section)
     nu_out = np.array(acc.nu)
     kappa_T_out = np.array(acc.kappa_T)
-    tau0_out = np.array(acc.tau0)
+    tau0_out = np.stack(acc.tau0, axis=-1)  # (n_temp, n_spec)
 
     kcyc_out = np.column_stack(acc.kcyc)  # (n_freq, n_spec)
-    H2_out = np.stack(acc.H2, axis=0)  # (n_spec, n_freq)
+    H2_out = np.stack(acc.H2, axis=1)  # (n_temp, n_spec, n_freq)
 
     gradt_spec_out = np.stack(acc.gradt_spec, axis=-1)  # (n_temp, n_freq, n_spec)
     noise_spec_out = np.stack(acc.noise_spec, axis=-1)  # (n_temp, n_freq, n_spec)
