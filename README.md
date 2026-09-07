@@ -132,6 +132,7 @@ See [docs/perturb/pipeline.md](docs/perturb/pipeline.md) for the full stage list
 | [Vectorization](docs/rsi-tpw/vectorization.md) | Vectorized compute internals |
 | [Calibration Provenance](docs/rsi-tpw/calibration_provenance.md) | Plausible-range checks on calibration coefficients, and the `cal_*` attrs on L1 variables |
 | [Bench Test](docs/rsi-tpw/bench.md) | Pre-deployment bench check (`bench`): quick_bench figures + auto checklist |
+| [Deployment Procedures](docs/deployment_procedures.md) | Field procedures that keep the data analysable: pre/post bench runs, probe/channel swaps, calibration bracketing, config hygiene |
 | [Tab-completion](docs/rsi-tpw/completion.md) | Optional shell `<TAB>` completion for the CLIs (argcomplete) |
 
 ### perturb (batch pipeline)
