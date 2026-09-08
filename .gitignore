@@ -55,6 +55,8 @@ examples/*/tpw/
 myout/
 results/
 !microstructure_sensors/shear_sensitivities.csv
+!microstructure_sensors/sensor_deployments.csv
+!microstructure_sensors/sheet_requests.md
 !microstructure_sensors/README.md
 
 # Local scratch for exploratory analysis (see scripts/ for the kept drivers)

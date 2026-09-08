@@ -3,6 +3,25 @@
 Rockland calibration sheets (PDF, gitignored — large/vendor files) and the
 tracked **shear-probe sensitivity registry** `shear_sensitivities.csv`.
 
+## sensor_deployments.csv
+
+Which sensor was fitted where, and when — one row per (sensor, campaign,
+instrument, channel) with first/last use, file count and the configured value,
+read from the instruments' own `.p` configs. Covers CASPER 2015/2017, ASTRAL
+2023 and ARCTERX 2022/2025: 21 distinct FP07 beads and 17 shear probes.
+
+This is the prerequisite for any per-bead calibration history, since a probe
+moves between channels and instruments between cruises — see issue #189 (FP07
+calibration sheets of our own). Rebuild by scanning a campaign's `.p` configs.
+
+## sheet_requests.md
+
+Sensors found in deployment data for which **no sheet is held here** — the
+standing batch request to Rockland. Regenerate/extend it by scanning a
+campaign's `.p` configs and differencing against the PDFs in this directory.
+As of 2026-09-07 it covers CASPER and ASTRAL: 16 shear probes and 12 FP07
+thermistors (we hold no thermistor sheets at all).
+
 ## shear_sensitivities.csv
 
 One row per (probe, calibration). Columns:

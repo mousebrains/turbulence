@@ -1,4 +1,5 @@
 serial,cal_date,sens,units,source,sheet,recal_due,pressure_test_date,notes
+M1194,2016-04-07,0.0793,V/(m^2 s^-2),sheet,M1194_2016_04_07.pdf,,,"VMP-250IR SN 194 build package (OSU); sheet PDF distributed as M1194_2_2016_04_07.pdf. No recal-due or pressure-test date on this 2016-vintage form. Fitted probe identity is INFERRED: the CASPER-West .p configs carry RSI template placeholders M1000/M1001, and M1194 is independently shown to have been on the MicroRider that cruise - see CASPER/CasperWest/VMP/calibration/README.md"
 M1254,2021-04-27,0.0739,V/(m^2 s^-2),sheet,M1254_2026_04_28.pdf,,,previous-calibration entry on this sheet
 M1254,2026-04-28,0.0847,V/(m^2 s^-2),sheet,M1254_2026_04_28.pdf,2027-04-28,2015-01-30,
 M1458,2016-04-25,0.0696,V/(m^2 s^-2),manual,,,,provided by Pat Welch 2026-07-16 from Rockland records (earliest of three Rockland calibrations for M1458)
@@ -7,6 +8,7 @@ M1458,2026-06-19,0.0777,V/(m^2 s^-2),sheet,M1458_2026_06_19.pdf,2027-06-19,2016-
 M1465,2016-04-26,0.0645,V/(m^2 s^-2),sheet,M1465_2022_6_20.pdf,,,previous-calibration entry on this sheet
 M1465,2022-06-20,0.0633,V/(m^2 s^-2),sheet,M1465_2022_6_20.pdf,2023-06-20,2016-04-14,
 M1465,2023-10-13,0.0668,V/(m^2 s^-2),sheet,M1465_2023_10_13.pdf,2024-08-08,2016-04-19,
+M1491,2016-05-19,0.0709,V/(m^2 s^-2),sheet,M1491_2016_05_19.pdf,,,"VMP-250IR SN 194 build package (OSU). No recal-due or pressure-test date on this 2016-vintage form. Calibrated two days AFTER the instrument setup.cfg was written, which is why the config sens fields were never updated to it"
 M1496,2021-06-03,0.0649,V/(m^2 s^-2),sheet,M1496_2022_6_20.pdf,,,previous-calibration entry on this sheet
 M1496,2022-06-20,0.0595,V/(m^2 s^-2),sheet,M1496_2022_6_20.pdf,2023-06-20,2016-05-31,
 M1496,2023-10-13,0.0575,V/(m^2 s^-2),sheet,M1496_2023_10_13.pdf,2024-08-08,2016-05-31,
