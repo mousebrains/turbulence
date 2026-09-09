@@ -8,6 +8,11 @@ differencing against the PDFs here.
 Intended to be sent as **one batch**, not piecemeal. Add to it as other
 campaigns are inventoried; the ARCTERX corpora are already well covered.
 
+**Updated 2026-09-08 with the Taiwan corpora** (`/Volumes/SeaChest/Taiwan`,
+377 `.p` files). No *new* serials — Taiwan's four shear probes were all already
+on this list — but it moves two deployment windows earlier and adds decisive
+evidence to note 1. See note 4.
+
 **29 distinct sensors found.** 17 shear probes, of which only M1194 has a
 sheet — so **16 shear sheets are requested below**. The 12 FP07 thermistors are
 not requestable at all (see below).
@@ -22,8 +27,8 @@ what a sheet would confirm or correct.
 
 | serial | instrument | deployment window | configured sens | why we want it |
 |---|---|---|---|---|
-| **M1000** | VMP-250IR SN 194 | 2017-09-28 → 10-25 | 0.0716 | **highest priority** — see note 1 |
-| **M1001** | VMP-250IR SN 194 | 2017-09-28 → 10-25 | 0.0705 | **highest priority** — see note 1 |
+| **M1000** | VMP-250 SN **142**, then VMP-250IR SN 194 | **2017-02-22 → 02-26**, 2017-09-28 → 10-25 | 0.0716 | **highest priority** — see notes 1, 4 |
+| **M1001** | VMP-250 SN **142**, then VMP-250IR SN 194 | **2017-02-22 → 02-26**, 2017-09-28 → 10-25 | 0.0705 | **highest priority** — see notes 1, 4 |
 | M1021 | VMP250IR-DL3 SN 92 | 2023-06-17 → 06-19 | 0.0658 | note 2 |
 | M1038 | VMP250IR-DL3 SN 92 | 2023-06-20 → 06-21 | 0.0539 | note 2 |
 | M1196 | VMP250IR-DL3 SN 92 | 2023-06-22 | 0.0584 | note 2, and see note 3 |
@@ -35,8 +40,8 @@ what a sheet would confirm or correct.
 | M1247 | MR_1000_LP SN 134 | 2015-07-27 → 10-14 | 0.0960 | MicroRider, CASPER-East |
 | M1249 | MR_1000_LP SN 134 | 2015-07-27 → 10-22 | 0.0748 | MicroRider, CASPER-East |
 | M1253 | MR_1000_LP SN 134 | 2015-10-14 → 10-22 | 0.0622 | MicroRider, CASPER-East |
-| M1344 | MR_1000_LP SN 134 | 2015-10-23 → 2017-10-23 | 0.0655 | MicroRider, CASPER-East/West |
-| M1371 | MR_1000_LP SN 134 | 2015-10-23 → 2017-10-23 | 0.0855 | MicroRider, CASPER-East/West |
+| M1344 | MR_1000_LP SN 134 | 2015-10-23 → 2017-10-23 | 0.0655 | MicroRider, CASPER-East/West **and Taiwan 2017** (2017-02-16 → 02-28) |
+| M1371 | MR_1000_LP SN 134 | 2015-10-23 → 2017-10-23 | 0.0855 | MicroRider, CASPER-East/West **and Taiwan 2017** (2017-02-16 → 02-28) |
 | M1493 | MR_1000_LP SN 134 | 2017-08-26 → 10-25 | 0.0805 | MicroRider on glider *doug*, CASPER-West |
 
 Held for comparison: **M1194** (2016-04-07, 0.0793) — MicroRider sh1 on
@@ -65,6 +70,18 @@ how stable such a record is over time — is tracked in its own issue; see
 
 ## Notes
 
+**0 — A QUESTION, not a sheet request: were these serials ever issued?**
+For **M1000, M1001, T1000 and T1001**, the useful ask is not a calibration
+sheet but whether Rockland has any record of those serial numbers existing. A
+"no such probe" answer settles the CASPER-West provenance question outright,
+and it works for the thermistors too even though FP07 sheets are not produced.
+
+Note this cannot be settled from our own data. Both shear probes and FP07
+thermistors are **removable and move between instruments**, so the fact that
+`T1000`/`T1001` appear on VMP SN 194 in 2017 (CASPER-West) and on SN 142 in
+2019 (SUNRISE) is equally consistent with a real pair being moved as with a
+template value being left in place twice.
+
 **1 — M1000 / M1001 (CASPER-West VMP SN 194) are the most valuable request.**
 This instrument's `setup.cfg` was written by RSI on 2015-12-17 and modified
 2016-05-17 "with coefficients"; its `cruise_info` still reads the template's
@@ -91,3 +108,41 @@ One row per (probe, calibration) in `shear_sensitivities.csv`, with the PDF
 dropped in this directory under `<SERIAL>_<YYYY>_<MM>_<DD>.pdf`. If Rockland
 supplies a value without a sheet, use `source = manual` and say in `notes`
 where it came from and when (see the M1458 2016-04-25 row for the pattern).
+
+---
+
+**4 — Taiwan 2017 moves M1000/M1001 seven months earlier, and sharpens note 1.**
+
+Taiwan 2017 (`Taiwan17/vmp/raw`, VMP-250 **SN 142**, 2017-02-22 → 02-26) carries
+**M1000 sens 0.0716 and M1001 sens 0.0705** — the same serials and the same
+sensitivities later seen on VMP-250IR SN 194 at CASPER-West. So this is now the
+**earliest recorded use** of both serials, and they sit on a *different*
+instrument. Two readings, and a sheet still separates them:
+
+- they are real probes that moved between two OSU VMPs during 2017; or
+- the same populated `setup.cfg` was copied from one instrument to the other,
+  carrying placeholder serials with it.
+
+Two pieces of evidence found in the Taiwan tree bear on which:
+
+- **RSI's own example config is now in hand** — `Taiwan13/.../VMP_002/SETUP.CFG`,
+  shipped by RSI 2013-01-23 (`boat = Titanic v2.0`, `captain = Lucky Jim`). Its
+  placeholder sensitivities are **sh1 0.0709, sh2 0.0705**. So **M1001's 0.0705
+  is EXACTLY the RSI template value**, while M1000's 0.0716 is not. That is
+  mildly bad news for M1001 specifically and should be said plainly when asking.
+- **0.0716 / 0.0705 also appears in 2013**, on VMP **SN 002** (Taiwan 2013,
+  `TAI_013_027`–`070`, a Lou St. Laurent instrument) — recovered from the
+  cruise's MATLAB output, since the v1 setup file records no shear channel at
+  all. **No serial is recorded there**, so it cannot be tied to M1000/M1001, but
+  the pair predates both 2017 deployments by four years.
+
+Recommended ask for these two, unchanged in spirit from note 0 but now better
+supported: *"do serials M1000 and M1001 exist in your records, and if so what
+were their sensitivities and calibration dates?"* A "no such probe" answer is
+as decisive as a sheet, and would now invalidate **three** deployments
+(Taiwan 2017 SN 142, CASPER-West SN 194, SUNRISE 2019 SN 142), not one.
+
+**Taiwan adds no new requestable serials.** Taiwan 2013 has none to add:
+VMP SN 002's v1 setup file defines no shear channel, and the glider MicroRider
+**SN 046** (Lou St. Laurent's, not OSU's) records no probe serials and carries
+round nominal sensitivities (0.0700 on 73 files, 0.0800 on 4).
