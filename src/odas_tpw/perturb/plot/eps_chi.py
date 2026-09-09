@@ -284,7 +284,13 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
                         "Required unless --config is given.")
     resolve.add_resolve_args(p)
     p.add_argument("--out", default=None,
-                   help="output figure path (default: <root>/eps_chi_pcolor.png)")
+                   help="output figure PATH (default: <root>/eps_chi_pcolor.png). "
+                        "Use --out-dir to name a directory instead, as the "
+                        "depth-vs-x subcommands do.")
+    p.add_argument("--out-dir", default=None,
+                   help="write eps_chi_pcolor.png into this DIRECTORY. Same "
+                        "spelling and meaning as the other subcommands; "
+                        "mutually exclusive with --out.")
     p.add_argument("--title", default=None,
                    help="title prefix (default: basename of --root)")
     p.add_argument("--eps-vmin", type=float, default=None,
@@ -299,6 +305,16 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
                    help="override 1%% quantile of chi/eps")
     p.add_argument("--gam-vmax", type=float, default=None,
                    help="override 99%% quantile of chi/eps")
+    p.add_argument("--sections", default=None,
+                   help="sections YAML: restrict the plot to the casts inside "
+                        "the section time window(s). Unlike the depth-vs-x "
+                        "subcommands this only CHOPS the cast axis -- eps-chi's "
+                        "x-axis is cast number, so a section's xaxis: method is "
+                        "ignored. Default: every cast under --root.")
+    p.add_argument("--select", action="append", default=None, metavar="NAME",
+                   help="plot only the named section(s) from --sections, by "
+                        "their 'name:' in the YAML (repeatable, or "
+                        "comma-separated). Default: every section in the file.")
     p.add_argument("--gap-seconds", type=float, default=600,
                    help="split casts when gap exceeds this (default 10 min; "
                         "gliders typically want a larger value, e.g. 14400)")
@@ -309,6 +325,44 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
                    help="ignore qc_drop_* and plot raw values "
                         "(only useful with drop_action: flag_only)")
     sections.add_output_arguments(p, title=False)  # --figsize/--dpi (--title above)
+
+
+def _apply_sections(args, t_eps, eps, chi, eps_qc, chi_qc):
+    """Chop the cast axis to the --sections windows. Returns the arrays plus a
+    label for the title (empty when no --sections was given).
+
+    Applied AFTER chi has been aligned onto the eps cast axis, so one mask is
+    valid for every array. A section with no casts is a hard error rather than
+    an empty panel: silently plotting nothing looks like missing data.
+    """
+    if not getattr(args, "sections", None):
+        if getattr(args, "select", None):
+            raise SystemExit("--select only applies together with --sections")
+        return t_eps, eps, chi, eps_qc, chi_qc, ""
+    wanted = sections.load_sections(args.sections)
+    if args.select:
+        wanted = sections.select_sections(wanted, args.select)
+    keep = np.zeros(t_eps.shape, dtype=bool)
+    for sec in wanted:
+        m = np.ones(t_eps.shape, dtype=bool)
+        if sec.start is not None:
+            m &= t_eps >= sec.start
+        if sec.stop is not None:
+            m &= t_eps <= sec.stop
+        keep |= m
+    if not keep.any():
+        names = ", ".join(s.name for s in wanted)
+        raise SystemExit(
+            f"no casts fall inside section(s) {names}: "
+            f"data spans {t_eps.min()} .. {t_eps.max()}"
+        )
+    def sub(a):
+        return None if a is None else a[:, keep]
+
+    print(f"sections: kept {int(keep.sum())} of {keep.size} casts "
+          f"({', '.join(s.name for s in wanted)})")
+    return t_eps[keep], sub(eps), sub(chi), sub(eps_qc), sub(chi_qc), \
+        " " + ",".join(s.name for s in wanted)
 
 
 def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
@@ -386,6 +440,10 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
             f"{len(t_eps)} eps); aligned chi onto eps axis "
             f"({n_unmatched} eps slots have no chi)"
         )
+
+    t_eps, eps, chi, eps_qc, chi_qc, sect_label = _apply_sections(
+        args, t_eps, eps, chi, eps_qc, chi_qc
+    )
 
     if args.apply_qc:
         n_eps_dropped = 0
@@ -483,6 +541,7 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
         method_phrase = r"$\varepsilon$-fixed $k_B$"
     qc_phrase = "QC applied" if args.apply_qc else "raw, no QC"
     title = args.title or os.path.basename(os.path.normpath(args.root))
+    title += sect_label   # names the --select'ed section(s); "" without --sections
     fig.suptitle(
         f"{title}   —   {lengths}   —   "
         rf"$\chi$: {spectrum} spectrum, {method_phrase}, FP07 {fp07}"
@@ -517,7 +576,13 @@ def run(args: argparse.Namespace) -> str:
     # before the figure is handed back doesn't orphan it in pyplot's registry.
     with sections.close_new_figs_on_error():
         (_stem, fig), = build_figures(args)  # one figure; fully consumed here
-    out = args.out or os.path.join(args.root, "eps_chi_pcolor.png")
+    if args.out and getattr(args, "out_dir", None):
+        raise SystemExit("--out and --out-dir are mutually exclusive")
+    if getattr(args, "out_dir", None):
+        os.makedirs(args.out_dir, exist_ok=True)
+        out = os.path.join(args.out_dir, "eps_chi_pcolor.png")
+    else:
+        out = args.out or os.path.join(args.root, "eps_chi_pcolor.png")
     fig.savefig(out, dpi=sections.fig_dpi(args))
     plt.close(fig)
     print(f"Wrote {out}")
