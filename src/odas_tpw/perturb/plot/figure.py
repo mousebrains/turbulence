@@ -293,15 +293,20 @@ def _apply_section(args: argparse.Namespace, preset: str, figure: dict, sections
 
     Returns True when the figure still has sections to render, False when the
     global ``--select`` leaves this figure with none (the caller then skips it).
-    ``eps-chi`` has no x-axis, so sections do not apply: the global ``--select``
-    is a no-op and a per-figure ``section:`` is rejected.
+    ``eps-chi`` has no x-axis, so a per-figure ``section:`` is rejected here and
+    the global ``--select`` is a no-op *for this driver*. Note the ``eps-chi``
+    SUBCOMMAND does accept ``--sections``/``--select`` (they chop its cast axis
+    rather than setting an x-axis); wiring that through this driver is a
+    separate change.
     """
     section = figure.get("section")
     if preset == "eps-chi":
         if section is not None:
             raise SpecError(
-                f"figure {figure.get('name')!r}: preset 'eps-chi' has no x-axis; "
-                f"'section' is not allowed."
+                f"figure {figure.get('name')!r}: preset 'eps-chi' has no x-axis, "
+                f"so a per-figure 'section' is not supported here. (The "
+                f"'perturb-plot eps-chi' subcommand does take --sections, which "
+                f"chops its cast axis.)"
             )
         return True  # global --select does not apply to a section-less preset
     if sections_file is not None:
