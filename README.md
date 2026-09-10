@@ -185,15 +185,42 @@ python -m pytest tests/test_epsilon.py    # epsilon pipeline tests only
 
 This project was developed in collaboration with [Claude Code](https://claude.ai/code).
 
+## Validation and known limitations
+
+**Epsilon** is validated against the [ATOMIX shear-probe
+benchmark](https://doi.org/10.1038/s41597-024-03323-y) (Fer et al. 2024) —
+1416 spectra from six benchmark records spanning 10⁻¹⁰ to 10⁻³ W/kg, with a
+log10 bias below 0.09, log10 RMSD of 0.008–0.096, and 100% of estimates within
+half a decade of the published reference.
+
+**Chi** has no equivalent benchmark and its absolute level is *not* anchored:
+report it as a relative field with a systematic of order **1.5×**. Note also
+that a chi `fom` near 1.0 does not mean the spectral fit is good — it is an
+integrated ratio, and cancellation across the band hides a factor-of-two
+structured residual.
+
+Before trusting an absolute level on your own data, audit the calibration
+constants (`rsi-tpw sensors --cal-dir`, `--diff-gain`): they, not the
+estimator, are usually the dominant uncertainty.
+
+Full detail, and suggested wording for a manuscript, in
+[docs/validation_and_limitations.md](docs/validation_and_limitations.md).
+
 ## Citation
 
 If you use this software in published work, please cite it. Citation metadata
 lives in [`CITATION.cff`](CITATION.cff) — GitHub renders a **"Cite this
 repository"** button from it (BibTeX/APA export). Each tagged release is
-archived on Zenodo with a DOI. Cite the **concept (all-versions) DOI**
-[`10.5281/zenodo.21366142`](https://doi.org/10.5281/zenodo.21366142) so the
-reference always resolves to the latest release; the v0.3.0 version DOI is
-[`10.5281/zenodo.21366143`](https://doi.org/10.5281/zenodo.21366143).
+archived on Zenodo with a DOI.
+
+Cite the **version DOI** of the release that produced your numbers — the
+concept DOI resolves to whatever release is newest, which is not what you ran.
+Version DOIs are listed in `CITATION.cff`; v0.3.0 is
+[`10.5281/zenodo.21366143`](https://doi.org/10.5281/zenodo.21366143). The
+**concept (all-versions) DOI**
+[`10.5281/zenodo.21366142`](https://doi.org/10.5281/zenodo.21366142) is the
+right one to cite when referring to the software in general rather than to a
+specific result.
 
 ## License
 

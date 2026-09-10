@@ -55,7 +55,45 @@ Results are compared at each level against the benchmark reference data.
 scor160-tpw l1-l2 /path/to/benchmark/*.nc      # L1 -> computed L2
 scor160-tpw l3-l4 /path/to/benchmark/*.nc      # reference L3 -> computed L4
 scor160-tpw l1-l4 /path/to/benchmark/*.nc      # full pipeline L1 -> L4
+
+# Regenerate the whole L3->L4 comparison report and its plots:
+python scripts/compare_atomix.py --data-dir AtomixData --output-dir AtomixData
 ```
+
+The benchmark NetCDFs are not in the repository (about 375 MB); download
+them from the DOIs in the table above, or run `compare_atomix.py --download`
+to open the landing pages.
+
+### Re-verification at v0.4.0
+
+The L3 -> L4 comparison below was re-run at the v0.4.0 release commit
+(2026-09-10) over all six benchmark variants, 1416 spectra pooled across
+probes. Every dataset passes, and the numbers reproduce the per-probe
+tables in this document:
+
+| Dataset | Spectra | log10 bias | log10 RMSD | r | Within 0.5 decade |
+|---------|---------|-----------|-----------|-----|------------------|
+| Faroe Bank Channel (VMP2000) | 684 | +0.009 | 0.012 | 1.000 | 100% |
+| Haro Strait (VMP250) | 64 | +0.009 | 0.025 | 0.999 | 100% |
+| Haro Strait, constant speed | 64 | +0.007 | 0.023 | 0.999 | 100% |
+| Rockall Trough (Epsilometer) | 362 | +0.089 | 0.096 | 0.999 | 100% |
+| Baltic Sea (MSS90-L) | 122 | +0.006 | 0.008 | 1.000 | 100% |
+| Minas Passage (MR1000) | 120 | +0.031 | 0.031 | 1.000 | 100% |
+
+What this does and does not establish. It measures **agreement with the
+ATOMIX reference L4**, which is a community consensus product, not
+independent ground truth -- so a bias shared with the reference would not
+show up here. It exercises the **epsilon estimation step only** (L3 -> L4),
+starting from the benchmark's own cleaned spectra; the L1 -> L2 and
+L1 -> L4 tables further down cover the rest of the chain. The two VMP250
+entries rest on 64 spectra each, so their third digit is not meaningful.
+The Rockall Trough +20% bias is real and has identified causes -- see
+Discrepancy Analysis.
+
+A smaller committed fixture (`tests/data/atomix/VMP250_HaroStrait_L3L4.nc`)
+keeps a subset of this comparison running in CI as
+`tests/test_atomix_l3l4_gate.py`, so a regression in epsilon estimation
+fails a pull request without needing the full 375 MB corpus.
 
 ## ODAS-Processed Datasets
 
