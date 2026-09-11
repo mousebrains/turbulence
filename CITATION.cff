@@ -12,8 +12,8 @@ authors:
     given-names: Pat
     email: pat@mousebrains.com
     orcid: "https://orcid.org/0000-0002-3483-982X"
-version: 0.3.0
-date-released: 2026-07-14
+version: 0.4.0
+date-released: 2026-09-10
 license: GPL-3.0-or-later
 repository-code: "https://github.com/mousebrains/turbulence"
 url: "https://github.com/mousebrains/turbulence"
@@ -27,6 +27,11 @@ keywords:
   - MicroRider
 # Concept (all-versions) DOI — always resolves to the latest release:
 doi: 10.5281/zenodo.21366142
+# Version DOIs, added one release behind. Zenodo mints a version DOI only
+# when the GitHub Release fires, and its GitHub integration cannot reserve one
+# beforehand (zenodo-rdm#831), so a tagged commit can never name its own DOI.
+# The concept DOI above plus `version:` identifies a release unambiguously;
+# the version DOI is added in the following commit.
 identifiers:
   - type: doi
     value: 10.5281/zenodo.21366143

@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-10
+
+### Added
+- **`docs/validation_and_limitations.md`** — one place to point a reviewer or
+  a co-author at. States what the epsilon estimator was validated against
+  (ATOMIX, 1416 spectra, re-run at this release commit), what that check does
+  *not* cover (agreement with a consensus reference is not agreement with
+  truth; the calibration constants, not the estimator, usually dominate), and
+  why chi must be reported as a **relative** field with an absolute systematic
+  of order **1.5x** (#179) rather than at the ±25% its tuned cross-probe
+  spread suggests. Also records that a chi `fom` of 1.001 sits on top of a
+  factor-of-two structured spectral residual (#191), so `fom` alone is not
+  evidence of a good fit. Includes suggested manuscript wording.
+- **`docs/atomix_benchmark.md`: a re-verification table stamped with the
+  release commit.** The benchmark numbers previously carried no provenance,
+  and the generated report in the (untracked) `AtomixData/` tree had drifted
+  four months behind the code. The comparison is now re-run at release and
+  the command to regenerate it is written down next to the result.
+
 ### Changed (BREAKING)
 - **`hotel.max_gap` is now required, and `hotel.extrapolate` defaults to
   `false`.** The hotel merge used to interpolate across arbitrary gaps and
@@ -1105,3 +1124,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - MATLAB implementation of chi calculation
 - CI pipeline: ruff linting, mypy type checking, pytest on Python 3.12/3.13
 - Mathematical documentation for epsilon and chi algorithms
+
+[Unreleased]: https://github.com/mousebrains/turbulence/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/mousebrains/turbulence/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/mousebrains/turbulence/releases/tag/v0.3.0
