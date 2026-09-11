@@ -215,8 +215,8 @@ archived on Zenodo with a DOI.
 
 Cite the **version DOI** of the release that produced your numbers — the
 concept DOI resolves to whatever release is newest, which is not what you ran.
-Version DOIs are listed in `CITATION.cff`; v0.3.0 is
-[`10.5281/zenodo.21366143`](https://doi.org/10.5281/zenodo.21366143). The
+Version DOIs are listed in `CITATION.cff`; v0.4.0 is
+[`10.5281/zenodo.22699141`](https://doi.org/10.5281/zenodo.22699141). The
 **concept (all-versions) DOI**
 [`10.5281/zenodo.21366142`](https://doi.org/10.5281/zenodo.21366142) is the
 right one to cite when referring to the software in general rather than to a

@@ -34,5 +34,8 @@ doi: 10.5281/zenodo.21366142
 # the version DOI is added in the following commit.
 identifiers:
   - type: doi
+    value: 10.5281/zenodo.22699141
+    description: Version DOI for v0.4.0
+  - type: doi
     value: 10.5281/zenodo.21366143
     description: Version DOI for v0.3.0

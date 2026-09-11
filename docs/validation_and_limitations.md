@@ -111,7 +111,7 @@ Adapt as needed; the substance is the three claims -- what produced the
 numbers, what epsilon was validated against, and what chi's systematic is.
 
 > Dissipation rates were computed with `microstructure-tpw` v0.4.0
-> (Welch, 2026; DOI 10.5281/zenodo.XXXXXXX). The epsilon estimator was
+> (Welch, 2026; DOI 10.5281/zenodo.22699141). The epsilon estimator was
 > validated against the ATOMIX shear-probe benchmark datasets (Fer et al.,
 > 2024): over 1416 spectra from six benchmark records spanning 10^-10 to
 > 10^-3 W kg^-1, agreement with the published L4 dissipation has a log10

@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **The v0.4.0 version DOI** (`10.5281/zenodo.22699141`) in `CITATION.cff`,
+  the README and the suggested manuscript wording. It lands one commit behind
+  the tag by necessity: Zenodo mints a version DOI only when the GitHub Release
+  fires, and its GitHub integration cannot reserve one beforehand
+  (zenodo-rdm#831).
+
 ## [0.4.0] - 2026-09-10
 
 ### Added
