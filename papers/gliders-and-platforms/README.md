@@ -1,15 +1,69 @@
 # gliders-and-platforms
 
-MicroRider-on-glider / AUV platform processing — the published precedent for the
-deep-MicroRider window, noise-floor, and telemetry choices (the deferred MR
-phase of this work).
+MicroRider-on-glider / AUV platform processing, and the through-water speed that
+feeds it. ε from shear goes as a high power of that speed, so this group covers
+both the published precedent for the deep-MicroRider window, noise-floor, and
+telemetry choices and the literature behind `speed.method` in `rsi/speed.py`:
+the steady-glide flight model, the angle of attack, and the documented
+over-read of the AEM1-G `U_EM` flowmeter.
+
+## Flight models, angle of attack, and the `U_EM` scale factor
+
+| Paper | File | Why it matters |
+|---|---|---|
+| Merckelbach, Smeed & Griffiths (2010), "Vertical water velocities from underwater gliders," *JTECH* **27**, 547–563. [doi:10.1175/2009JTECHO710.1](https://doi.org/10.1175/2009JTECHO710.1) | `Merckelbach_2010_Vertical_Velocities_Gliders.pdf` | The steady-state Slocum flight model that `rsi/speed.py::_flight_model_slow` cites, and the base model every other paper here calibrates or extends. It has three calibration parameters (parasite drag coefficient, glider volume, hull compressibility), fitted by minimizing the variance of the derived vertical water velocity. Its angle of attack is signed and flips on the climb; `speed.py` works in magnitudes, with glide angle = \|pitch\| + AOA on both legs. |
+| Merckelbach, Berger, Krahmann, Dengler & Carpenter (2019), "A dynamic flight model for Slocum gliders and implications for turbulence microstructure measurements," *JTECH* **36**, 281–296. [doi:10.1175/JTECH-D-18-0168.1](https://doi.org/10.1175/JTECH-D-18-0168.1) | `Merckelbach_2019_Dynamic_Flight_Model_Slocum.pdf` | **The first published `U_EM` scale factor.** Calibrates the flight model in situ against a DVL (glider COMET) and against an AEM1-G on a MicroRider (glider IFM03, Peru, 2017). The vertical velocity from U_EMC and pitch was "consistently larger in magnitude than the measured depth rate", so U_EMC was scaled by **0.93**. That factor used the AOA from the steady-state model with COMET's coefficients, so it holds only as far as that AOA does. Rockland found "a similar scaling factor" on a SeaExplorer carrying an ADCP (Lueck 2018, pers. comm.). Also: the EM reads the body-axis component, U = U_EMC / cos α (eq. 13); JFE calibrated the sensor by towing it "mounted to a MicroRider hull"; calibrated a = 7.5 rad⁻¹, C_D1 = 10.5 rad⁻², C_D0 = 0.136–0.147 (S = 0.1 m²). The calibrated model removes a ~1 cm s⁻¹ speed bias, "roughly a factor of 1.2" in ε. **Not to be confused with the 0.83** applied to COMET's *pitch and roll*, which came from a tilt sensor that had leaked electrolyte. Data: [doi:10.5281/zenodo.2270123](https://doi.org/10.5281/zenodo.2270123); code (`gliderflight`): [doi:10.5281/zenodo.2222694](https://doi.org/10.5281/zenodo.2222694). |
+| Tanaka, Hasegawa, Okunishi, Yasuda & Welch (2022), "In situ calibration of underwater glider flight model using acoustic Doppler current profilers," *JTECH* **39**, 1331–1352. [doi:10.1175/JTECH-D-21-0074.1](https://doi.org/10.1175/JTECH-D-21-0074.1) | `Tanaka_2022_Glider_Flight_Model_ADCP_Calibration.pdf` | **The `U_EM` over-read measured against an ADCP, and the published statement that one attitude cannot separate it from the AOA.** The Doppler profiler's nearest bin gives the AOA directly: a mean of −4.4° at −23.7° pitch on Slocum descents at 0.28 m s⁻¹. Lift and drag coefficients are fitted to that pitch–AOA relation: Slocum C_D0 = 0.18, C_D1 = 5.92 rad⁻², a = 5.4 rad⁻¹; SeaExplorer (a first) C_D0 = 0.19, C_D1 = 5.0 rad⁻², a = 4.0 rad⁻¹. Using the 2010 (2019) coefficients instead shifts ε by 7% (17%) on average. **Appendix E is the part to read.** v_ADCP/v_EM peaks at **0.85** on the Slocum (AEM1-GA on a MicroRider) and **0.90** on the SeaExplorer. The 2019 recipe (match sin(θ+α)/cos α to w/v_EM using modeled AOA) gives **0.90** on the same Slocum descents, so a factor from that recipe absorbs the AOA model's error. The paper says AOA "is highly sensitive to the scaling factor", and that coefficients and scale factor "cannot be determined uniquely without having another source of velocity measurement". The MR data give ~0.91 on ascent against ~0.85 on descent, for reasons "not identified yet". It closes by asking for a tow-tank calibration with the EM still attached to the MR/glider. |
+| Merckelbach & Carpenter (2021), "Ocean glider flight in the presence of surface waves," *JTECH* **38**, 1265–1275. [doi:10.1175/JTECH-D-20-0206.1](https://doi.org/10.1175/JTECH-D-20-0206.1) | `Merckelbach_Carpenter_2021_Glider_Flight_Surface_Waves.pdf` | Extends the flight model to surface waves. Wave-induced relative velocity costs ε "generally less than 10%" near the surface. In the **shallow-water wave regime**, though, the wave pressure perturbation corrupts the glider's measured pressure, and with it the dP/dt that `speed.method: flight` and `pressure` both rest on. |
+| Todd, Rudnick, Sherman, Owens & George (2017), "Absolute velocity estimates from autonomous underwater gliders equipped with Doppler current profilers," *JTECH* **34**, 309–333. [doi:10.1175/JTECH-D-16-0156.1](https://doi.org/10.1175/JTECH-D-16-0156.1) | `Todd_2017_Glider_Doppler_Profiler_Absolute_Velocity.pdf` | Spray gliders with 1-MHz Nortek AD2CPs. The relative velocity nearest the glider yields dive-dependent flight parameters, tracking the AOA as biofouling builds over months-long missions. This is the ADCP-AOA route Tanaka et al. use, and it is the independent velocity that breaks the AOA / `U_EM`-scale degeneracy. |
+| Eichhorn, Aragon, Shardt & Roarty (2020), "Modeling for the performance of navigation, control and data post-processing of underwater gliders," *Appl. Ocean Res.* **101**, 102191. [doi:10.1016/j.apor.2020.102191](https://doi.org/10.1016/j.apor.2020.102191) | `Eichhorn_2020_Glider_Flight_Model_Comparison.pdf` | Puts published Slocum lift/drag models side by side, Cooney's (below) among them, and gives a method for detecting the AOA from logged glider data. Useful for seeing how far the models disagree before choosing `aoa_deg`. |
+| Cooney (2011), "Angle of Attack and Slocum Vehicle Model," Teledyne Webb Research working document, 1 March 2011, 7 pp., shipped with the Slocum software release 8.6 documentation (`doco/how-it-works/angle_of_attack.pdf`). No DOI. | `Cooney_2011_TWR_Slocum_Angle_of_Attack.pdf` | The vendor's own AOA model: Hoerner lift and drag, a quasi-steady force balance iterated for α, and a polynomial "universal equation" for AOA in pitch and depth rate. Its figure 5 covers pitches of 5–45° at depth rates of 0.10–0.45 m s⁻¹, falling to roughly 1–2° near 45° (read off the figure). The "Experimental Performance" section reads "TBW", so it is model output throughout. |
+
+### What these mean for `speed.method`
+
+- **The published EM-on-MicroRider over-reads are 7–15%** (factors 0.85–0.93,
+  plus Rockland's unpublished SeaExplorer case). The flight-vs-`U_EM`
+  cross-check in `_flight_model_slow` warns only outside a median ratio of
+  [0.8, 1.25], so it is silent on exactly the documented bias.
+- **A scale factor derived from pressure and pitch is only as good as the AOA
+  assumed.** At fixed pitch, sin(θ + α) = b·\|W\|/U_EM is one equation in two
+  unknowns. Tanaka's Appendix E is the published form of that degeneracy, and
+  their 0.85 (direct, against the ADCP) versus 0.90 (via the 2019 AOA) on the
+  same descents shows its size. Only an independent velocity (ADCP/DVL) or a
+  spread of pitch angles separates them.
+- **Both papers fit a gain only.** A zero offset c would instead give a factor
+  1 − c/U that differs between legs flown at different speeds. Whether Tanaka's
+  unexplained descent/ascent split is that signature is an open hypothesis in
+  the AEM1-G work, not a published result.
+- **The steady-glide AOA falls with pitch**, so the `aoa_deg: 3.0` default
+  cannot be right at every attitude. Solving
+  a·α·tan(θ + α) = C_D0 + C_D1·α² with Tanaka's Slocum coefficients comes
+  within 0.2° of their measurement (4.25° against 4.4° at 23.7°) and gives 3.2° at 30°, 2.2° at 40° and
+  1.9° at 45°. The 2019 coefficients give 1.8–2.0°, 1.2–1.3° and 1.0–1.1° at
+  the same pitches. The only directly measured Slocum AOA in this group is
+  Tanaka's, at 23.7°; anything at steeper pitch is model extrapolation.
+
+## MicroRider on gliders and AUVs
 
 | Paper | File | Why it matters |
 |---|---|---|
 | Fer, Peterson & Ullgren (2014), "Microstructure measurements from an underwater glider in the turbulent Faroe Bank Channel overflow," *JTECH* **31**, 1128–1150. [doi:10.1175/JTECH-D-13-00221.1](https://doi.org/10.1175/JTECH-D-13-00221.1) | `Fer_2014_Glider_Microstructure_FBC.pdf` | MicroRider-on-glider processing choices; the dataset behind Lueck 2022's low-ε validation. |
 | Scheifele, Waterman, Merckelbach & Carpenter (2018), "Measuring the dissipation rate of turbulent kinetic energy in strongly stratified, low-energy environments: A case study from the Arctic Ocean," *JGR Oceans* **123**, 5459–5480. [doi:10.1029/2017JC013731](https://doi.org/10.1029/2017JC013731) | `Scheifele_2018_LowEnergy_Dissipation_Arctic.pdf` | MicroRider-on-glider at ε → 1e-12: the closest published precedent for our deep-MR window/noise-floor choices. |
 | Shapiro, Ferris, Kassis, Lueck, Merrifield & St. Laurent (2026), "Near real-time processing and telemetry of turbulent dissipation rate estimates by autonomous underwater gliders," *JTECH*. [doi:10.1175/JTECH-D-25-0058.1](https://doi.org/10.1175/JTECH-D-25-0058.1) | `Shapiro_2025_Glider_Realtime_Dissipation.pdf` | Recent glider/MR-class processing decisions (window choices under power/telemetry constraints). |
+| Palmer, Stephenson, Inall, Balfour, Düsterhus & Green (2015), "Turbulence and mixing by internal waves in the Celtic Sea determined from ocean glider microstructure measurements," *J. Mar. Syst.* **144**, 57–69. [doi:10.1016/j.jmarsys.2014.11.005](https://doi.org/10.1016/j.jmarsys.2014.11.005) | `Palmer_2015_Celtic_Sea_Glider_Microstructure.pdf` | A shear MicroRider on a Slocum fitted with a NOC probe guard. Speed comes from the 2010 flight model with the sign error Fer et al. (2014) identified corrected; it gives α = −3.40 ± 0.16° down and +2.71 ± 0.13° up, and C_D0 = 0.2066 with the guard fitted. That drag coefficient belongs to this platform configuration and does not transfer to another. |
+| Schultze, Merckelbach & Carpenter (2017), "Turbulence and mixing in a shallow shelf sea from underwater gliders," *JGR Oceans* **122**, 9092–9109. [doi:10.1002/2017JC012872](https://doi.org/10.1002/2017JC012872) | `Schultze_2017_Shelf_Sea_Glider_Turbulence.pdf` | 29 days of MicroRider-on-Slocum data in a 40 m shelf sea, with speed from the 2010 flight model. States that ignoring the AOA overestimates glider speed by 2–4 cm s⁻¹, about 10%. |
+| St. Laurent & Merrifield (2017), "Measurements of near-surface turbulence and mixing from autonomous ocean gliders," *Oceanography* **30**(2), 116–125. [doi:10.5670/oceanog.2017.231](https://doi.org/10.5670/oceanog.2017.231) | `StLaurent_Merrifield_2017_NearSurface_Glider_Turbulence.pdf` | Overview of MicroRider-on-Slocum practice. Calls platform speed "the most sensitive issue" (ε ~ V⁴), uses V = W/sin γ with α = 3° assumed, and quotes Fer et al. (2014) for 2° < α < 4° in stable flight. |
+| Scheifele, Waterman & Carpenter (2021), "Turbulence and mixing in the Arctic Ocean's Amundsen Gulf," *JPO* **51**, 169–186. [doi:10.1175/JPO-D-20-0057.1](https://doi.org/10.1175/JPO-D-20-0057.1) | `Scheifele_2021_Amundsen_Gulf_Glider_Turbulence.pdf` | Companion to Scheifele 2018: 348 glider profiles of shear and temperature microstructure, with a median ε of 2.3 × 10⁻¹¹ W kg⁻¹. Science use of the low-energy processing choices. |
+| Kolås, Mo-Bjørkelund & Fer (2022), "Technical note: Turbulence measurements from a light autonomous underwater vehicle," *Ocean Sci.* **18**, 389–400. [doi:10.5194/os-18-389-2022](https://doi.org/10.5194/os-18-389-2022) | `Kolas_2022_Turbulence_Light_AUV.pdf` | A MicroRider on a propeller-driven light AUV. Speed is taken from a Nortek DVL1000 (typically 1.1 m s⁻¹), and the AOA stayed under 3° on level transects. The non-glider speed route, and the attitude/roll screening that goes with it. |
+| Valcarcel, Stevens, O'Callaghan & Suanda (2025), "Overlapping turbulent boundary layers in an energetic coastal sea," *Ocean Sci.* **21**, 965–987. [doi:10.5194/os-21-965-2025](https://doi.org/10.5194/os-21-965-2025) | `Valcarcel_2025_Cook_Strait_Glider_EM_Speed.pdf` | A Slocum with a MicroRider-1000EM whose AEM1-G speed (mean 0.34 ± 0.04 m s⁻¹) was used **directly** as U, at the datasheet accuracy and with no scale factor, although it cites Merckelbach et al. (2019). Speeds below 0.20 m s⁻¹ were rejected. A published case where the documented over-read was not applied. |
+| Kokoszka et al. (2025, *ESSD* discussion preprint), "Advancing Turbulence Essential Ocean Variable: A reference glider-based microstructure dataset from the western Mediterranean." [doi:10.5194/essd-2025-451](https://doi.org/10.5194/essd-2025-451) | `Kokoszka_2025_Glider_Microstructure_Reference_Dataset_preprint.pdf` | A reference MicroRider-glider dataset with a Rockland co-author. Speed and AOA come from the 2019 flight model, and a QC flag (128) fires when the AOA falls outside **1.5–4.5°**. A concrete, citable AOA acceptance band. |
 
-A fourth glider chi paper, Peterson & Fer (2014), is filed under
-`chi-thermal/` because its primary role here is the temperature-microstructure
-chi estimator and FP07 response.
+Cross-references:
+
+- Peterson & Fer (2014) is filed under `chi-thermal/` because its primary role
+  here is the temperature-microstructure chi estimator and FP07 response.
+- Wolk, Lueck & St. Laurent (2009), the first MicroRider on a glider, is held as
+  its Rockland reissue, **TN-022**, in
+  [`../rockland-technical-notes/`](../rockland-technical-notes/README.md).
+- The EM flowmeter itself (gain, zero, conductivity, nearby boundaries) is in
+  [`../current-meters/`](../current-meters/README.md).

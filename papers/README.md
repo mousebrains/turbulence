@@ -11,17 +11,18 @@ analyses (epsilon, chi, mixing efficiency, overturns, isotropy). The PDFs are
 | Group | Papers | Scope |
 |---|---|---|
 | [spectra-and-sensor-response/](spectra-and-sensor-response/README.md) | 9 | Spectral-estimation foundations (Welch, DSP) and thermistor / shear-probe frequency response — the transfer functions behind FP07 and shear corrections. |
-| [epsilon-shear/](epsilon-shear/README.md) | 9 | TKE dissipation (ε) from shear probes: ATOMIX best practices and benchmark, the Lueck (2022) statistics, Goodman coherent-noise removal, and cross-method comparisons. |
+| [epsilon-shear/](epsilon-shear/README.md) | 10 | TKE dissipation (ε) from shear probes: ATOMIX best practices and benchmark, the Lueck (2022) statistics, Goodman coherent-noise removal, cross-method comparisons, and the moored-instrument precedent. |
 | [chi-thermal/](chi-thermal/README.md) | 7 | Thermal-variance dissipation (χ): the Batchelor (1959) origin papers, Batchelor / Kraichnan spectrum fitting, MLE estimation, and temperature-microstructure methods. |
 | [mixing-efficiency/](mixing-efficiency/README.md) | 14 | Mixing efficiency Γ and the gamma-scaling chain (Lewin Fig. 5): Osborn / Osborn–Cox, Re_b and R_OT parameterizations, and Γ observations. |
 | [overturns-thorpe/](overturns-thorpe/README.md) | 5 | Thorpe-scale overturn analysis: the sort, the Thorpe–Ozmidov link, overturn-validity tests, and the Thorpe-scale ε biases. |
 | [stratified-turbulence-anisotropy/](stratified-turbulence-anisotropy/README.md) | 6 | Isotropy criteria and the structure of stratified turbulence — the backdrop for the VMP two-probe isotropy investigation. |
-| [gliders-and-platforms/](gliders-and-platforms/README.md) | 3 | MicroRider-on-glider / AUV platform processing — precedent for the deep-MR window and noise-floor choices. |
-| [current-meters/](current-meters/README.md) | 4 | Calibration and dynamic response of EM current meters — the Aubrey–Trowbridge / Guza dispute over gain error, and the colocated-pressure method behind the AEM1-G in-situ calibration. |
+| [gliders-and-platforms/](gliders-and-platforms/README.md) | 17 | MicroRider-on-glider / AUV platform processing and the through-water speed behind `speed.method`: the Slocum flight models, angle of attack, and the published `U_EM` scale factors (Merckelbach et al. 2019; Tanaka et al. 2022). |
+| [current-meters/](current-meters/README.md) | 18 | Calibration and dynamic response of EM current meters: the Aubrey–Trowbridge / Guza dispute over gain error, and the flowmeter physics of gain, zero and conductivity behind the `em_bench_zero.py` bench test. |
 | [rockland-technical-notes/](rockland-technical-notes/README.md) | 30 | Rockland Scientific vendor Technical Notes: the `.p`/ODAS file format, count→physical-unit conversion, the ε recipe, shear/thermistor noise floors, FP07 calibration, and field/deployment technique for the VMP and MicroRider. |
 
-57 peer-reviewed papers across the eight subject groups, plus 30 Rockland
-technical notes in the ninth (`rockland-technical-notes/`).
+86 references across the eight subject groups, mostly peer-reviewed papers plus
+a few reports, a patent, a handbook chapter, a preprint and a vendor working
+note, and 30 Rockland technical notes in the ninth (`rockland-technical-notes/`).
 
 ## Cited in the repository docs, no local PDF yet
 
@@ -47,9 +48,26 @@ were the last gap, now filed under `chi-thermal/`.
   groups here — largely nearshore, largely 1980s — and the group holds the complete
   Aubrey--Trowbridge / Guza exchange -- the WHOI-84-20 laboratory report, the
   1985 paper, the 1988 comment and the 1988 reply -- with four named gaps
-  remaining in its own README, of which Dibble & Sollitt (1981) matters most. Aubrey, Spencer & Trowbridge
-  (1984), WHOI Tech. Rep. 84-20, *Dynamic response of electromagnetic current
-  meters*, is the one worth chasing first.
+  remaining in its own README, of which Dibble & Sollitt (1981) matters most.
+- `gliders-and-platforms/` and `current-meters/` extended 2026-09-15 from the
+  AEM1-G repository's reference library (`../AEM1-G/docs/references/`), by the
+  split rule in `docs/aem1g_split_disposition.md`: a paper comes here if the
+  next deployment would need it with the AEM1-G paper abandoned. 29 PDFs came
+  over: 14 on glider flight models, angle of attack and MicroRider-on-glider
+  practice; 14 on EM flowmeter gain, zero and conductivity; and Lueck et al.
+  (1997) into `epsilon-shear/`. Ten more were already here under other
+  filenames or as TN-022. Left in AEM1-G as manuscript context only: Seaglider
+  and Spray navigation (Eriksen 2001, Frajka-Williams 2011, Rudnick 2018,
+  Bennett 2021), glider hydrodynamics without in-situ data (Graver 2005,
+  Jenkins 2003, Williams 2008, Park 2016), glider ADCP, navigation and review
+  papers (Woithe 2011, Thurnherr 2015, de Fommervault 2019, Rudnick 2016),
+  glider chi and Thorpe work without a MicroRider (Sheehan 2023, Leadbitter
+  2022, Fer 2024 dataset summary), and EM papers that serve the manuscript's
+  history and framing rather than the handling of a `U_EM` record (Shercliff
+  1954, McCullough 1979, Beardsley 1981, Clay & Longworth 1986, Onishi & Otobe
+  2006, Woodward 1978 proceedings, Chen 2023, Zhang 2025, Matos 2026). The PDFs
+  here are the same bytes as there, under this library's naming (Kolås et al.
+  2022 was filed there as `Fer_etal_2022_…`).
 - OCR text layers were added locally to three legacy AMS scans — Osborn (1980)
   and Oakey (1982) in `mixing-efficiency/`, Galbraith & Kelley (1996) in
   `overturns-thorpe/` — and to Nash (1999) and Mudge & Lueck (1994) in
