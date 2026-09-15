@@ -493,185 +493,201 @@ does not depend on gain vs zero) goes before Phase 1.
 
 ## 7. Intermittent EM data: a validity mask, and an EM-anchored flight model
 
-*Added 2026-09-15 at Pat's request. Independent of the gain-vs-zero question
-except where noted.*
+*Added 2026-09-15 at Pat's request, then corrected the same day by a skeptical
+review that re-ran the numbers on ~45 files. The first version of §7.1
+misdescribed files 200, 281, 300, 500 and 600. The key reversals were
+re-verified before this text was written, and are marked **(corrected)**.*
 
 ### 7.0 The problem
 
-On some deployments U_EM is sane for a while, then wildly insane, then sane
-again. The ask has three parts:
-1. find the good stretches;
-2. use them to refine a flight model;
-3. use that model for speed where the EM is invalid.
+On some deployments U_EM is sane for a while, then wildly insane. The ask has
+three parts: find the good stretches, use them to refine a flight model, and use
+that model for speed where the EM is invalid.
 
 The motivating case is ARCTERX-2023 Interior, osu685:
-- **Location:** `/Volumes/SeaChest/ARCTERX/2023/Interior/MR685/`, 640 `.p`
-  files, 15 GB.
-- **EM:** `U_EM` type `aem1g_d`, sn `046`, cal 2021-09-10.
-- **Glider hotel:** `.mat` and SFMC data are under `glider/`.
-- **Directory README:** "The flooding caused problems with the EM sensor
+- **Data.** `/Volumes/SeaChest/ARCTERX/2023/Interior/MR685/`: 640 `.p`
+  files, 15 GB, running **2023-06-06 (file 100) to 2023-08-08 (file 640)**.
+- **EM.** `U_EM` is type `aem1g_d`, sn `046`, cal 2021-09-10. Glider hotel
+  `.mat` and SFMC data are under `glider/`.
+- **Directory README.** "The flooding caused problems with the EM sensor
   starting in A685_0622.p". Header buffer-status words were zeroed from
-  `A685_0626` on.
-- **Unquantified:** Pat has not yet mapped the sane and insane periods.
+  `A685_0626`.
+- **Not yet mapped.** Pat has not yet mapped the sane and insane periods.
 
-### 7.1 Reconnaissance: 14 files, 2026-09-15 (a sample, not a characterization)
+### 7.1 Reconnaissance (a sample, not a characterization)
 
-Stats are per file, on the slow channel. r = W / (U_EM·sin θ) is the median over
-P > 5 dbar and \|pitch\| > 15°. It is about 1.0 for a correct U_EM at these
-attitudes: sin(θ+α)/sin θ ≈ 1.02–1.05 at 40° pitch with α of 1–2°, times the
-EM's own over-read. Counts are recovered exactly from U = a/100 + (b/100)·count.
+**How the numbers were made.** 14 files were sampled first; the review then
+loaded ~45. Stats are on the slow channel. x = W/sin θ with W from a linear fit
+to P over 60 s windows of steady climb. r = x/U_EM, which is about 1.0 for a
+correct U_EM at these attitudes. Counts are recovered exactly from
+U = a/100 + (b/100)·count. Rows marked *(review)* are the reviewer's numbers
+and were not re-run here.
 
-| File | Pitch | U_EM p5 / p50 / p95 [m/s] | r | Signature |
-|---|---|---|---|---|
-| 100 | −40.1 | 0.396 / 0.594 / 0.661 | 0.98 | clean reference; no anomalous counts |
-| 200 | −40.1 | 0.312 / 0.424 / 0.458 | **1.34** | clean counts, plausible magnitude, but **37% out of line with file 100 at the same pitch** |
-| 217 | −41.0 | 2.247 / 5.379 / 7.395 | 0.11 | pegged; 7.395 m/s is count 65535, full scale |
-| 233 | −40.7 | 1.384 / 1.926 / 2.855 | 0.32 | high and noisy |
-| 273 | −39.9 | 1.320 / 3.110 / 4.994 | 0.17 | high and noisy |
-| 281 | −39.7 | 0.432 / 0.713 / 0.831 | **0.83** | plausible magnitude, ~19% high against file 100 |
-| 300 | −39.7 | 0.434 / 0.743 / 0.803 | **0.82** | same |
-| 337 | −40.6 | 1.467 / 5.114 / 7.395 | 0.10 | pegged |
-| 401 | −38.7 | 0.003 / 0.003 / 0.003 | 169 | stuck: 96.8% of samples at count 2295, and 3% ≥ 16384 |
-| 425 | −39.4 | −0.037 constant | 15.6 | stuck |
-| 500 | −38.9 | −0.265 / −0.210 / 0.785 | 1.88 | counts 468 (17%), 0 (16%) and 287 (11%); a 323 s constant run |
-| 600 | −38.4 | −0.265 / 0.547 / 0.656 | 1.04 | **median looks clean, but 42% of samples sit at counts 7 or 0, interleaved sample by sample with valid ~7350** |
-| 622 | −29.6 | 0.053 / 0.747 / 7.395 | 0.68 | flooding onset; 37% > 1.5 m/s; sd(ΔU) 0.09 |
-| 633 | −21.3 | 3.567 constant | 0.11 | stuck at count ≈ 32783 |
+| File (date) | Pitch | U_EM p5 / p50 / p95 [m/s] | What it is |
+|---|---|---|---|
+| 60, 100 (06-06), 130 | ~−40 | 0.40 / 0.59 / 0.66 (100) | **clean.** Per-minute fit U_EM = 0.97·x + 0.028, corr 0.988 (100). r 0.974–0.983 across the three *(review)*. Longest constant count run 0.6 s. |
+| 160–210, e.g. 200 (06-17) | −40.1 | 0.31 / 0.42 / 0.46 (200) | **(corrected) compressed response, not an offset.** Counts are clean and the magnitude is plausible, but U_EM barely follows speed: U_EM = 0.30·x + 0.25, corr 0.73. r runs from 1.51 (P > 700) to 1.16 (P < 300). Files 160, 195 and 198–210 look the same *(review)*, and file 190 reads 1.53 m/s *(review)*. The "clean 0025–0209" of the August coarse scan is wrong from 160 at the latest. |
+| 217, 337 | ~−41 | median 5.1–5.4, p95 7.395 | pegged; 7.395 m/s is count 65535, full scale |
+| 233, 273 | ~−40 | median 1.9–3.1 | high and noisy |
+| 281, 300 | −39.7 | median 0.71–0.74 | **(corrected) decorrelated, not "19% high".** Corr 0.83–0.84, and the per-file affine fits disagree (1.15·x + 0.03 against 0.95·x + 0.17) *(review)*. |
+| 401, 425 | ~−39 | 0.003 constant; −0.037 constant | stuck: 96.8% of 401 at count 2295 |
+| 500 | −38.9 | −0.265 / −0.210 / 0.785 | **(corrected) contiguous rail blocks** at counts 0, 32, 287 and 468, each lasting 271–518 s *(review)* |
+| 600 (08-04) | −38.4 | −0.265 / 0.547 / 0.656 | **(corrected) not interleaved.** Three contiguous blocks: count 0 for 311 s (1014 → 917 dbar), valid for 1809 s (917 → 225 dbar), count 7 for 1016 s (225 dbar → surface). The median is the valid middle. Entry to each rail is a sub-second ramp (62 → 22 → 7) *(review)*. |
+| 621 | 26–37 | clean counts | flooding onset, earlier than the README says: U_EM climbs 0.62 → 1.21 while x falls 0.59 → 0.25 *(review)* |
+| 622 | −29.6 | 0.053 / 0.747 / 7.395 | 37% > 1.5 m/s, noisy |
+| 633 | −21.3 | 3.567 constant (count 32784) | stuck; flooding era through 640 (08-08) |
 
-`EMC_Cur`, the coil-current monitor, swings about ±0.7 in every file from 100 to
-622, including every pegged and stuck one. It collapses to −0.10…−0.04 only in
-633.
+`EMC_Cur` is the 15 Hz square-wave coil drive: harmonics at 15, 45 and 75 Hz,
+with per-minute p95 − p5 of 1.33–1.36 *(review)*. It is normal through every
+failure before the flooding. It rises from 1.36 to 1.43 across 622 and has
+collapsed by 629 *(review)*. Every `EMC_Cur` failure in this sample is already
+stuck in the counts.
 
-**What follows from this sample:**
-1. **Per-file statistics misclassify.** File 600's median and r both look sane,
-   with 42% garbage underneath. The mask must be per sample or per short
-   window.
-2. **Magnitude bounds miss "plausible but wrong".** Files 200, 281 and 300
-   pass any speed-band test. A kinematic consistency test catches them. That
-   test needs r to be *stable*, not *correct*, so the unresolved k/c/α question
-   does not block it.
-3. **`EMC_Cur` is independent of kinematics but narrow.** It catches loss of
-   coil drive (633), not the earlier failures, where the coil kept running.
-4. **Digital-count signatures are exact and cheap:** count 0, full scale,
-   counts ≥ 16384 (AEM1-G's leg gate, 1.65 m/s with these coefficients), and
-   constant runs. Healthy files 100 and 200 never hold a count for more than
-   ~1 s.
-5. **The fallback's hardest case is its main case.** The flooding-era files fly
-   at −29.6° and −21.3° against ~−40° before. The periods that most need a
-   fallback are flown outside the attitude any sane period trained on.
-6. **An earlier record was wrong.** A coarse scan of every 8th file
-   (2026-08-11, judged against an assumed 0.05–0.8 m/s band) called files
-   0025–0209 "clean" and 0441–0625 "mostly clean". Files 200, 500 and 600
-   contradict both. Why file 200 disagrees with file 100 is unresolved: the
-   evidence is one file, strong kinematically, and unconfirmed.
+**What follows:**
+1. **Failures come in contiguous blocks, from sub-second to multi-week.** They
+   show up as rail blocks of minutes inside a file, whole stuck files, and
+   degraded stretches spanning files 160–210. Rails are entered through
+   sub-second ramps that are neither count 0 nor long runs. A per-file median
+   misclassifies: file 600's is its valid middle. So the mask is per sample,
+   with its edges dilated.
+2. **"Plausible but wrong" is a response failure, not an offset.** File 200 is
+   compressed (s ≈ 0.3); files 281 and 300 are decorrelated. A magnitude band
+   cannot see either, and neither can a ratio mode. What sees them is a per-leg
+   affine regression of U_EM on x: its slope, correlation and residual scatter.
+   Each climb spans CV(x) ≈ 0.13–0.17 *(review)*, its own speed lever. On clean
+   file 100 that regression gives s 0.97, corr 0.99.
+3. **The ratio r is not invariant to pitch or speed** *(review)*, so a
+   deployment-wide r_ref cannot be the test.
+   - **Pitch.** With D4 α(θ), sin(θ+α)/sin θ is 1.028, 1.060, 1.092, 1.155 and
+     1.303 at 40°, 30°, 25°, 20° and 15° (MEA19, C_D0 0.15). A perfect EM at the
+     flooding era's 17–30° would be flagged.
+   - **Inclinometer bias.** A 1° error moves r by 2.1% at 40° and 6.5% at 15°.
+   - **Offset.** An offset makes r speed-dependent: clean file 100 goes from
+     0.953 to 0.987 as x goes from 0.41 to 0.65.
+   - **Mode lock.** The degraded state fills most count-clean files in
+     160–210, so a "robust mode" can lock onto it.
+4. **`EMC_Cur` corroborates but is narrow.** It catches only coil-drive loss.
+   It must be two-sided, since it also rises across 622.
+5. **The main case is a long gap at the training attitude, not pitch
+   extrapolation** *(corrected)*. Invalid behavior appears from file 160
+   (mid-June). Files 217–590, most of the ~7 weeks to early August, are
+   **largely unsampled**, so whether valid stretches hide there is unknown. The
+   flooding era (files 621–640, 08-06 to 08-08) is days long, at 17–30° pitch.
+6. **The serial-framing hypothesis is weakened.** Contiguous rails entered
+   through sub-second ramps look more like a signal driven to a rail inside the
+   sensor's electronics than garbled RS-232 frames. That is reasoning, with
+   moderate confidence. The question for Rockland stands.
 
 ### 7.2 Design
 
-**M1. A validity mask per slow sample, from three independent tests, with
-hysteresis.**
+**M1. A validity mask per slow sample, with dilation and human overrides.**
 
-- **T1 — digital.** Flag a sample when any of these holds:
-  - count 0;
-  - count ≥ 16384, or full scale;
-  - a constant-count run longer than N s. N is set from clean records;
-    ~1 s is the healthy maximum seen.
-
-  Counts come from inverting `convert_aem1g_d` with the file's own a and b.
-- **T2 — hardware.** Windowed `EMC_Cur` p95 − p5 below a fraction of its
-  deployment median means the coil drive is lost.
-- **T3 — kinematic.** Over steady-flight windows (\|θ\| > 15°, P > 5 dbar,
-  settled after inflections), compute log r.
-  - Valid when \|log r − log r_ref\| ≤ δ. r_ref is the deployment's robust mode
-    over T1/T2-valid windows, and δ is the MAD-scaled spread of r in clean
-    stretches.
-  - A deliberately wide absolute sanity band applies on top, r ∈ [0.7, 1.4].
-  - r_ref absorbs k, c and α, so T3 detects *changes*, not calibration.
-  - Where T3 is undefined (inflections, unsteady flight), the sample inherits
-    from its neighbors rather than failing.
+- **T1 — digital.** Flag count 0, counts ≥ 16384 (1.65 m/s here; AEM1-G's leg
+  gate), full scale, and constant-count runs longer than N s. Healthy files
+  never exceed 0.6 s; N is set from clean records.
+  - **Dilate** every flagged block by ≥ 2 s plus the support of the slow→fast
+    Butterworth, so rail-entry ramps are masked too.
+- **T2 — hardware, corroboration only.** Windowed `EMC_Cur` amplitude outside
+  a **two-sided** band around its deployment median.
+- **T3 — kinematic response, per leg.**
+  - **Regression.** For each steady climb or dive, regress U_EM on
+    x = W / sin(θ + α(θ)), using D4's α(θ) so pitch dependence is modeled rather
+    than absorbed.
+  - **Test.** A leg is valid when its slope s, correlation and robust residual
+    scatter lie inside bands taken from a **reference set** of legs.
+  - **Reference set.** Seeded by human-confirmed clean files (e.g. 60–130 on
+    osu685-2023), never by a deployment-wide mode, which can lock onto a
+    degraded state. The record states what the reference was.
+  - **Localization.** Minute windows within a leg locate where a response
+    failure starts. Legs too short or too uniform in x to regress inherit from
+    their neighbors and are marked "untested", not "valid".
+  - **Consequence** *(corrected)*: 7A therefore needs D4 unless a deployment
+    flies a single attitude.
 - **Combining.** A sample is invalid if any test fails. Minimum episode
-  durations (morphological open/close) suppress flicker.
-- **Overrides.** A human-editable list of `[start, end, valid|invalid, note]`
-  intervals is applied last. Pat will map periods by eye, and that judgement
-  must be able to win.
-- **Output.** A mask record per deployment, listing intervals with the test
-  that fired, plus a timeline report built for exactly that by-eye review.
-- **Home.** `em-cal validity` (D5 tool). The scan is resumable with a
-  per-file npz of windowed stats. 640 files take more than 10 minutes, so it
-  checkpoints and survives the session.
+  durations suppress flicker. Human intervals `[start, end, valid|invalid,
+  note]` apply last.
+- **Output.** A mask record, with the test that fired for each interval, plus
+  a timeline report meant for Pat's by-eye mapping. The report shows depth and
+  x distributions of valid and invalid samples side by side, because a mask that
+  preferentially removes slow or shallow water biases whatever is trained on
+  what remains *(review: in files 590–620 the valid samples sit at median 490–540
+  dbar, x ≈ 0.6; the invalid ones at 105–150 dbar, x ≈ 0.4)*.
+- **Home.** `em-cal validity` in the D5 tool: a resumable scan with a per-file
+  npz of window stats, checkpointed (640 files is well over 10 min).
 
-**M2. An EM-anchored flight model.** Fit on valid, steady windows; predict
-where the mask is invalid.
+**M2. An EM-anchored flight model — an affine anchor, not a gain.**
 
-- **Form.** U_fm = g · W / sin(θ + α(θ)). α(θ) is D4's steady-state curve with
-  pinned (preset, C_D0), and g is fitted to U_EM on valid windows. That U_EM is
-  corrected per D1 if a correction is configured; the fit records which.
-- **g is an anchor, not physics.** It absorbs the EM's calibration *and* any
-  error in α(θ), so the fallback agrees with the EM arm at the pitches it was
-  trained on. At fixed θ, g and C_D0 (or a constant effective α) are
-  degenerate; they differ only when predicting at a *different* θ. The same
-  degeneracy runs through this whole plan. It does not matter for gap-filling
-  at the training attitude, and it is everything for pitch extrapolation.
-- **An effective negative angle stays out of `aoa_deg`.** An uncorrected U_EM
-  that over-reads fits a negative effective angle (AEM1-G reports α = −2.63° on
-  osu685-2023 with the MicroRider coefficients). That is why the scale lives in
-  g and α(θ) stays physical and ≥ 0. `aoa_deg`'s validation does not change.
+- **Form** *(corrected)*. U_fm = s_a·x + c_a with x = W / sin(θ + α(θ)),
+  fitted to (corrected, per D1) U_EM on valid legs.
+  - A gain-only anchor is misspecified. With file 100's s ≈ 0.96,
+    c ≈ +0.035, a gain trained at x = 0.6 is −3% in U at x = 0.4 and −10% at
+    x = 0.2 (×1.5 in ε). Late flooding-era files fly at x ≈ 0.16–0.32
+    *(review)*.
+- **The fit carries its own degeneracies, and the record says so.**
+  - c_a depends on the α curve: +0.028, +0.036 and +0.053 m/s at α = 0°, 1.35°
+    and 4.5° *(review)*.
+  - Within a climb, pitch and speed are collinear (corr 0.958, n = 46
+    *(review)*), so they are one lever, not two.
+  - Gap-filling at the trained (θ, x) is insensitive to both; extrapolation is
+    not.
+- **Trained domain.** The record stores both the θ range and the x range.
+  Predictions outside either are flagged as extrapolation, with a sensitivity
+  band across D4 presets and across an affine vs gain anchor.
+- **Effective negative angle.** Nothing lands in `aoa_deg`. The EM's
+  calibration lives in (s_a, c_a); α(θ) stays physical and ≥ 0.
 - **Time dependence.**
-  - g is fitted in windows (per N valid legs or per day) and interpolated
-    across invalid gaps.
-  - A gap longer than a limit is flagged, and so is one-sided extrapolation
-    past the last valid window. osu685-2023's flooding era is exactly the
-    one-sided case.
-  - A trim or regime change detected in roll or pitch (osu684's wing failure:
-    roll 17 → 25°, climb pitch 43 → 37° within a minute) stops g carrying
-    across without a flag.
-- **Pitch domain.** The record stores the θ range g was trained on.
-  Predictions outside it are flagged, with a sensitivity band across the D4
-  presets. For scale: at 21° pitch, Tanaka's and Merckelbach's (C_D0 0.147)
-  curves differ by ~2° in α, about 7% in U and ~×1.3 in ε.
-- **Inputs.** Only the MicroRider's own pressure and inclinometers, so it runs
-  from the `.p` alone. A buoyancy-driven dynamic model (MEA19, using the glider
-  hotel's oil volume) would help near inflections and after a mass change. It
-  is a later option, not a prerequisite.
+  - (s_a, c_a) are fitted in windows and reported as a time series with
+    uncertainty, so slow drift (fouling, EM 040-style) is visible and tracked
+    rather than silently absorbed. Abrupt changes are left to T3.
+  - Interpolation across gaps is flagged beyond a length limit and for
+    one-sided extrapolation.
+  - A detected trim or regime change (osu684's wing failure: roll 17 → 25°,
+    climb pitch 43 → 37° within a minute) stops a window carrying across without
+    a flag.
+- **Inputs.** Only the MicroRider's pressure and inclinometers. A
+  buoyancy-driven dynamic model is a later option.
 
 **M3. `speed.method: em_flight`.**
 
-- **Speed.** Corrected U_EM where the mask is valid, the M2 model where it is
-  not, with the same slow→fast treatment as the existing methods.
-- **Per-sample source flag.** A `speed_flag` channel (uint8) goes into the
-  profile NetCDF: 1 = EM; 2 = EM-anchored flight inside the trained θ range and
-  gap limit; 3 = flight, extrapolated in θ or time; 0 = cutout.
-- **Provenance.** The fraction of each flag per ε/χ segment is written, along
-  with the mask and fit record sha256s and the g used (D7).
-- **QC.** perturb's existing `qc.epsilon_drop_from` / `chi_drop_from` bitfield
-  machinery is reused, so a user can drop segments on flag 3 without new QC
-  code.
-- **Errors.** The em correction keys are valid here, so Phase 1.4's error
-  lists `em_flight` as a U_EM-taking method.
+- **Speed.** Corrected U_EM where the mask is valid; U_fm where it is not.
+- **Switches.** At each EM↔model switch, blend over a short window and mark ε
+  and χ segments that contain a switch. The size of the step the Butterworth
+  would otherwise smear across is unmeasured.
+- **Per-sample flag.** A `speed_flag` channel (uint8): 1 = EM; 2 = model inside
+  the trained (θ, x) domain and gap limit; 3 = model extrapolated; 0 = cutout.
+- **Per-segment provenance.** The fraction of each flag, record sha256s, and
+  the (s_a, c_a) used (D7).
+- **QC.** Reuse `qc.epsilon_drop_from` / `chi_drop_from` to drop flag-3
+  segments.
+- **Errors.** Phase 1.4's error lists `em_flight` as a U_EM-taking method.
 
 ### 7.3 Validation, criteria stated before running
 
 | # | Test | Data | Criterion |
 |---|---|---|---|
-| H1 | **Hold-out gap filling:** mask synthetic blocks inside valid stretches, train on the rest, predict the block | valid stretches of osu685-2023, osu685-2025 and sl685-2026 | For each gap length L ∈ {10 min, 1 h, 6 h, 1 d, 3 d}, report the median and 84th-percentile \|ΔU/U\| and the implied ε factor. **Usable for gaps ≤ L if the 84th percentile ≤ 5%** (≈ ×1.2 in ε) — threshold for Pat to confirm. |
-| H2 | **Pitch extrapolation** | needs valid EM at two attitudes: the dive-recording deployment (V4). osu685-2023 **cannot** test it (its off-attitude period is EM-invalid) | Train at one attitude, predict the other, and report \|ΔU/U\|. Until H2 runs, flag 3 carries no accuracy claim. |
-| H3 | **Mask null and injection** | clean records (osu685-2025, sl685-2026), plus the same records with injected signatures: 40% count-0 interleave, pegged, stuck, a +20% step, a −27% step (file 200's size) | False-invalid ≤ 1% of clean steady samples. ≥ 99% of injected T1/T2-type failures flagged. Steps ≥ 15% flagged within one T3 window. Thresholds for Pat to confirm. |
-| H4 | **Against Pat's by-eye map** of osu685-2023 | once Pat has quantified it | Every disagreement listed individually, not summarized. |
-| H5 | **ε arms** — a measurement | osu685-2023 | {em masked → NaN, em_flight, flight only}: ε ratios over valid periods (checks M2 at the training attitude) and the spread across D4 presets over invalid periods (no truth there). |
+| H1a | **Long real gap at the training attitude** — the main case *(review)* | osu685-2023: train on valid legs in files ≤ 150 (June), predict the valid windows of 590–620 (early August, ~7 weeks later) | Report the median signed ΔU/U, p84 and p95 of \|ΔU/U\|, and E[(U_fm/U)^−3.9] (the mean ε factor). Pass if the \|median signed\| ≤ 2% and p84 ≤ 5%; thresholds for Pat to confirm. Late r (0.977–0.998) already sits near early (0.974–0.983), which is encouraging but not the test. |
+| H1b | **Synthetic gaps, hold-out by whole file** | valid files of osu685-2023, osu685-2025, sl685-2026 | Whole files held out, with a buffer at least as long as the anchor window, never blocks inside a training leg *(review: autocorrelated leakage)*. Same statistics per gap length (1 file, 6 h, 1 d, 3 d, 1 wk). |
+| H2 | **Pitch and speed extrapolation** | needs valid EM at two attitudes: the dive-recording deployment (V4). osu685-2023 cannot test it. | Train at one (θ, x) region, predict the other. Until run, flag 3 carries no accuracy claim. |
+| H3 | **Mask null and injection with the failures actually seen** *(review)* | clean records, and the same records with injected rail blocks entered through sub-second ramps, stuck files, a compressed response (s ≈ 0.3, corr ≈ 0.7), decorrelation (corr ≈ 0.8), and a 621-style divergence ramp | False-invalid ≤ 1% of clean steady samples. ≥ 99% of rail and stuck samples flagged, including ramps. Compressed and decorrelated legs flagged at the leg level. Thresholds for Pat to confirm. |
+| H4 | **Mask bias** | every record the mask runs on | Depth and x distributions of valid vs invalid samples, with a statement of what a model trained on the valid set can and cannot predict. A measurement. |
+| H5 | **Against Pat's by-eye map** of osu685-2023 | once mapped | Every disagreement listed individually. |
+| H6 | **ε arms** — a measurement | osu685-2023 | {em masked → NaN, em_flight, flight only}: ε ratios over valid periods, and the spread across presets and anchor forms over invalid periods. |
 
 ### 7.4 Sequencing, and what stays open
 
-- **7A — mask, scan and timeline report.** Depends on neither gain vs zero nor
-  D4, and it serves Pat's own mapping of sane and insane periods directly. It
-  could precede Phase 1 (§6).
-- **7B — EM-anchored fit.** Needs D4's solver (Phase 2). It needs D1 only to
-  say which U_EM it anchors to.
+- **7A — mask, scan, timeline report.** Independent of gain vs zero. It needs
+  D4 for T3's α(θ) *(corrected)*, though a single-attitude record can run with
+  a constant α meanwhile. It directly serves Pat's mapping, and could precede
+  Phase 1 (§6).
+- **7B — the affine anchor.** Needs D4, and D1 only to say which U_EM it
+  anchors to.
 - **7C — `em_flight`.** After 7A, 7B and Phase 1.
-- **Open: what broke the EM before the flooding?** Files 217–600 fail with the
-  coil still driven, so the fault is downstream of the coil. `aem1g_d` is the
-  digital RS-232 output (`channels.py:719`). Interleaved garbage counts (0, 7,
-  287, 468) are consistent with serial framing or telemetry errors rather than
-  a sensing fault — *a hypothesis, unverified*. Ask Rockland whether it is a
-  known RDL/EM symptom.
-- **Open: common cause?** MR684 on the same cruise (`MR684/`, 135 files)
-  should be scanned. If its EM shows the same episodes, that points at firmware
-  or telemetry, not the unit.
+- **Open: what drives the failures.** Files 160–600 fail with the coil still
+  driven, in two modes: response failures (compressed, decorrelated) and rail
+  blocks with ramps. The mechanism is unknown; see §7.1 item 6. Ask Rockland.
+- **Open: common cause?** Scan MR684 (`MR684/`, 135 files) from the same
+  cruise. Matching episodes would point at firmware or telemetry, not at
+  the unit.
+- **Open: is anything valid in 217–590?** That ~7-week span is largely
+  unsampled. The first 7A scan answers it, and decides whether H1a's gap is
+  real.
