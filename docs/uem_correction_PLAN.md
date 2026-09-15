@@ -578,6 +578,56 @@ stuck in the counts.
    sensor's electronics than garbled RS-232 frames. That is reasoning, with
    moderate confidence. The question for Rockland stands.
 
+### 7.1b Follow-up the same day: testing a soft-body fouling hypothesis
+
+**Hypothesis (Pat).** Something soft — a jellyfish — covered the rounded EM
+head. The pointed FP07 and shear probes would pierce such a body rather than be
+covered, which would explain why only the EM is affected. Surfacing usually
+shakes such bodies off the MicroRider's nose.
+
+**Method.** A per-minute scan of files 95–230 and 581–640, plus every 10th file
+in 240–580. The glider dbd gives 851 surfacings (depth < 2 m), median 3.0 h
+apart and 10.7 min long, so nearly every recorded climb ends at the surface.
+
+**Classification.**
+- **Rail/stuck:** count 0, counts ≥ 16384, or a constant-count run > 5 s.
+- **Clean reference:** files 95–150, U_EM = 0.977·x + 0.026, residual
+  σ = 13.6 mm/s.
+- **Response-bad:** residual > 54 mm/s. False-flag rate on the reference
+  files: 0.2%.
+- **Settling:** the first 5 minutes of each climb and P > 950 dbar are
+  excluded (climb-start acceleration otherwise masquerades as episodes).
+
+**What it predicts and what the data say:**
+
+| Prediction if the EM were covered | Observed | Verdict |
+|---|---|---|
+| A covered sensor still reads water, with noise | Rail windows have within-minute std **1.3 × 10⁻¹⁵ m/s** (n = 3375), against 0.011 m/s in clean water | Rails are an electronics or data-path state, not a physical reading. Not explained by a covering. |
+| Episodes end at a surfacing | Response-bad dominates **files 159–178 across 19 consecutive logged surfacings**, and 194–205 across 12. From file 159 (mid-June) no densely sampled file is clean again until the mixed files near 580 (every-10th sampling in between). | Hard to reconcile with "usually flushed at surfacing". It would need a body that survives dozens of surfacings, or re-fouling on nearly every climb. |
+| No dependence on depth | Late mixed files 581–622: rails in **95%** of windows above 200 dbar and **81%** below 900 dbar, **0%** between 300 and 900 dbar (96–98% clean). The switch sits at 916 ± 8 dbar (deep recovery, n = 36) and 218 ± 14 dbar (shallow onset, n = 32), MAD-scaled. Files that begin above 900 dbar (596, 605, 614 start at ~795) have no deep rail. Clean June files show no depth dependence. | **Excludes a covering for the late period.** Nothing soft leaves at 900 dbar and returns at 220 dbar on ~40 consecutive climbs. |
+| Other sensors unaffected | FP07 T1 goes wild in files 619–621 (49–58 °C readings), the same days as the flooding the directory README records. A matched shear/accelerometer comparison of response-bad vs clean windows was too sparse to read (n = 18–26 per speed bin). | The late failure is not EM-only. The early-period comparison remains untested. |
+
+**Reading, with confidence levels:**
+- **Rails and the late depth-banded failures** point at something electrical
+  whose state depends on depth. That fits a progressive leak or water ingress
+  ending in the recorded flooding (moderate confidence).
+  - Pressure and temperature co-vary here and are **not yet separated**.
+    Separating them needs isotherm heave between climbs compared against the
+    transition scatter. T1's absolute calibration is also unreliable (factory
+    FP07 coefficients).
+- **The early response-failure period (159–213)** is the only part a covering
+  could still explain. Its persistence through surfacings argues against it
+  (low-to-moderate confidence), and it may instead be an early stage of the
+  same ingress. Unresolved.
+- **Consequence for M1/M2.** On this deployment the valid EM in the mixed
+  period exists only between ~300 and ~900 dbar. An anchor trained there is
+  applied, every climb, to the surface layer and the deep layer. That is a
+  depth and speed extrapolation, and exactly the case §7.2's trained-domain
+  flags must catch.
+- **Reproducibility.** The scan took ~2 min on a warm cache; its scripts and
+  per-file CSVs are session scratch and must be re-created in 7A, not relied
+  on.
+
 ### 7.2 Design
 
 **M1. A validity mask per slow sample, with dilation and human overrides.**
