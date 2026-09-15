@@ -8,6 +8,10 @@ differencing against the PDFs here.
 Intended to be sent as **one batch**, not piecemeal. Add to it as other
 campaigns are inventoried; the ARCTERX corpora are already well covered.
 
+**Status: REQUESTED.** Pat asked Rockland for these sheets on 2026-09-15 and
+expects them that week. File what comes back as described under *How to file
+what comes back*, then mark each row here as received.
+
 **Updated 2026-09-08 with the Taiwan corpora** (`/Volumes/SeaChest/Taiwan`,
 377 `.p` files). No *new* serials — Taiwan's four shear probes were all already
 on this list — but it moves two deployment windows earlier and adds decisive
@@ -70,27 +74,29 @@ how stable such a record is over time — is tracked in its own issue; see
 
 ## Notes
 
-**0 — A QUESTION, not a sheet request: were these serials ever issued?**
-For **M1000, M1001, T1000 and T1001**, the useful ask is not a calibration
-sheet but whether Rockland has any record of those serial numbers existing. A
-"no such probe" answer settles the CASPER-West provenance question outright,
-and it works for the thermistors too even though FP07 sheets are not produced.
+**0 — WITHDRAWN (2026-09-15): "were these serials ever issued?"**
+An earlier version of this note asked Rockland whether **M1000, M1001, T1000
+and T1001** existed at all, on the premise that a round X1000/X1001 numbering
+looked like RSI template text. **That premise is wrong.** Rockland shear-probe
+serials `M\d+` and FP07 serials `T\d+` are valid from **M1 / T1** onwards, and
+1000 is not a special number (Pat, 2026-09-15). The serial numbering is no
+evidence of anything; these four are ordinary serials, and the sheets for the
+shear probes are simply requested like the others.
 
-Note this cannot be settled from our own data. Both shear probes and FP07
-thermistors are **removable and move between instruments**, so the fact that
-`T1000`/`T1001` appear on VMP SN 194 in 2017 (CASPER-West) and on SN 142 in
-2019 (SUNRISE) is equally consistent with a real pair being moved as with a
-template value being left in place twice.
+Separately, and still true: both shear probes and FP07 thermistors are
+**removable and move between instruments**, so a serial seen on two
+instruments (e.g. `T1000`/`T1001` on VMP SN 194 in 2017 and on SN 142 in 2019)
+is a probe being moved, the normal case.
 
 **1 — M1000 / M1001 (CASPER-West VMP SN 194) are the most valuable request.**
 This instrument's `setup.cfg` was written by RSI on 2015-12-17 and modified
 2016-05-17 "with coefficients"; its `cruise_info` still reads the template's
-`operator = Dr. ?`, and its FP07 coefficients are the generic nominal set. So
-we cannot tell whether `M1000 / M1001` are the real probes fitted in 2017 or
-RSI example values left in place — and the two readings differ in what the
-absolute epsilon scale means for a 247-file, 2097-profile dataset. A sheet for
-either serial settles it outright. **If Rockland has no record of M1000 or
-M1001 ever existing, that is equally decisive** and worth reporting back.
+`operator = Dr. ?`, and its FP07 coefficients are the generic nominal set, so
+parts of that config were demonstrably never edited. What the data cannot
+tell us is whether the configured **sensitivities** 0.0716 / 0.0705 are the
+probes' calibrated values — and that decides the absolute epsilon scale for a
+247-file, 2097-profile dataset. A sheet for either serial settles it.
+(The serial numbers themselves are not in question — see note 0.)
 
 **2 — the ASTRAL 2023 probes look anomalously insensitive.** Six of the eight
 sit at 0.0410–0.0596, against a fleet range of 0.058–0.113 across every other
@@ -113,34 +119,35 @@ where it came from and when (see the M1458 2016-04-25 row for the pattern).
 
 **4 — Taiwan 2017 moves M1000/M1001 seven months earlier, and sharpens note 1.**
 
-Taiwan 2017 (`Taiwan17/vmp/raw`, VMP-250 **SN 142**, 2017-02-22 → 02-26) carries
+Taiwan 2017 (`Taiwan17/vmp/raw/casts/SN142/` — the raw tree was reorganized
+2026-09-15 and the originals now sit under `raw/{casts,bottom_crasher,bench,ctd_rosette}/SN142/`;
+VMP-250 **SN 142**, 2017-02-22 → 02-26) carries
 **M1000 sens 0.0716 and M1001 sens 0.0705** — the same serials and the same
 sensitivities later seen on VMP-250IR SN 194 at CASPER-West. So this is now the
 **earliest recorded use** of both serials, and they sit on a *different*
 instrument. Two readings, and a sheet still separates them:
 
-- they are real probes that moved between two OSU VMPs during 2017; or
-- the same populated `setup.cfg` was copied from one instrument to the other,
-  carrying placeholder serials with it.
+- they are the fitted probes, moved between two OSU VMPs during 2017 (probes
+  are removable, so this is the ordinary case); or
+- the same `setup.cfg` was copied from one instrument to the other without its
+  probe fields being updated.
 
-Two pieces of evidence found in the Taiwan tree bear on which:
+Two pieces of evidence found in the Taiwan tree bear on the sensitivities
+(not on the serials — see note 0):
 
 - **RSI's own example config is now in hand** — `Taiwan13/.../VMP_002/SETUP.CFG`,
   shipped by RSI 2013-01-23 (`boat = Titanic v2.0`, `captain = Lucky Jim`). Its
-  placeholder sensitivities are **sh1 0.0709, sh2 0.0705**. So **M1001's 0.0705
-  is EXACTLY the RSI template value**, while M1000's 0.0716 is not. That is
-  mildly bad news for M1001 specifically and should be said plainly when asking.
+  example sensitivities are **sh1 0.0709, sh2 0.0705**. So **M1001's 0.0705
+  equals the RSI example value**, while M1000's 0.0716 does not. A coincidence
+  to four digits is possible; the sheet will say.
 - **0.0716 / 0.0705 also appears in 2013**, on VMP **SN 002** (Taiwan 2013,
   `TAI_013_027`–`070`, a Lou St. Laurent instrument) — recovered from the
   cruise's MATLAB output, since the v1 setup file records no shear channel at
   all. **No serial is recorded there**, so it cannot be tied to M1000/M1001, but
   the pair predates both 2017 deployments by four years.
 
-Recommended ask for these two, unchanged in spirit from note 0 but now better
-supported: *"do serials M1000 and M1001 exist in your records, and if so what
-were their sensitivities and calibration dates?"* A "no such probe" answer is
-as decisive as a sheet, and would now invalidate **three** deployments
-(Taiwan 2017 SN 142, CASPER-West SN 194, SUNRISE 2019 SN 142), not one.
+Ask for these two: *"what were the sensitivities and calibration dates of
+M1000 and M1001?"* — the same sheet request as every other probe.
 
 **Taiwan adds no new requestable serials.** Taiwan 2013 has none to add:
 VMP SN 002's v1 setup file defines no shear channel, and the glider MicroRider
