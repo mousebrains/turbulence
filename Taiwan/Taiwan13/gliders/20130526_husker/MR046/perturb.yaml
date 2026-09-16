@@ -1,0 +1,159 @@
+# Perturb configuration — MicroRider MR1000-LP SN 046 on Slocum glider husker,
+# Taiwan 2013 (RR1306 leg 3, South China Sea).
+#
+#   perturb run -c perturb.yaml -j 8
+#
+# ---------------------------------------------------------------------------
+# READ FIRST
+# * This MR carried NO EM flowmeter. Speed comes from a Merckelbach flight
+#   model built in ../flight/ -- see ../flight/README.md for the model, its
+#   calibration and its limitations (no independent speed reference, so the
+#   ABSOLUTE speed scale is unvalidated; epsilon ~ U^-4).
+# * The hotel file is ALREADY on the MicroRider's clock, so time_offset is 0.
+#   The MR clock ran -2.1 s (May 1-3) and -14.3 s +0.373 s/day (May 17-26)
+#   against the glider; a single scalar could not express that.
+# * These files need the named-stanza config reader: main at or after 29f3ea9
+#   (PR #196, merged 2026-09-16). v0.4.0 and earlier build ZERO channels
+#   from them.
+# * Probes carry NO serial numbers and round nominal sensitivities
+#   (sh1 0.0700 / sh2 0.0700, diff_gain 0.97 / 0.95), so absolute epsilon
+#   rides on a placeholder. MR046 is not OSU's instrument.
+# * T1 DIES PART WAY THROUGH: it reads a constant -16.701 C (bridge rail) in
+#   at least FSB_030 and FSB_057, while it is alive in FSA_013 and FSB_010.
+#   chi_1 is invalid wherever that is true, and chiMean (a geometric mean of
+#   the two beads) is contaminated there. perturb has no per-thermistor
+#   exclusion, so use chi[probe=T2_dT2] on those profiles. The per-file logs
+#   record which files the in-situ FP07 fit refused.
+# ---------------------------------------------------------------------------
+
+files:
+  p_file_root: "<CONFIG_DIR>/DATA"
+  p_file_pattern: "*.P"     # 77 files; uppercase, and Python's glob is
+                            # case-sensitive. KTA_001-004 and FSA_001 are
+                            # bench/setup files and yield no profiles.
+  output_root: "<CONFIG_DIR>/Processed"
+  trim: false               # nothing to trim: these are continuous records
+  merge: false
+
+hotel:
+  enable: true
+  file: "<CONFIG_DIR>/../flight/husker_flight_hotel.nc"
+  time_column: "time"       # ALREADY the MicroRider clock (see above)
+  time_format: "epoch"
+  time_offset: 0.0
+  max_gap: 30.0             # [s] the glider CTD prints ~0.5 Hz; 30 s refuses
+                            # to bridge a surfacing or a science-computer gap
+  extrapolate: false
+  interpolation: "pchip"
+  channels:
+    speed:
+      fast: true            # the shear/chi path wants speed on the fast grid
+    sci_water_temp:
+      units: "degree_Celsius"
+      fast: false           # slow grid: ct / stratification / salinity read it
+    sci_water_cond:
+      units: "mS/cm"        # already mS/cm in the hotel file: NO scale here
+      fast: false
+  fast_channels: ["speed"]
+
+gps:
+  source: "netcdf"          # drift-corrected track from ../hotel/hotel.nc
+  file: "<CONFIG_DIR>/../hotel/hotel.nc"
+  time_col: "sci_ctd41cp_timestamp"
+  lat_col: "lat"
+  lon_col: "lon"
+  max_time_diff: 600        # the track is on the GLIDER clock, up to 14 s from
+                            # the MR clock -- ~4 m at 0.3 m/s, irrelevant here
+
+profiles:
+  P_min: 2.0
+  W_min: 0.05               # a glider climbs/dives at ~0.13 dbar/s
+  direction: "glide"        # BOTH legs
+  min_duration: 60.0
+  diagnostics: false
+
+fp07:
+  calibrate: true           # the config's FP07 coefficients are wrong: raw T2
+                            # reads 21-39 C. Fitted per FILE against the glider
+                            # CTD, which prints ~0.5 Hz in every in-water file.
+  order: 2
+  reference: "sci_water_temp"
+  max_lag_seconds: 10
+  must_be_negative: false   # a glider climbs as well as dives, so the sign of
+                            # the thermistor-vs-CTD lag is not fixed
+  min_corr: 0.5
+
+ct:
+  align: false              # the glider CTD is PUMPED and T/C share a sample;
+                            # aligning them would fit interpolation noise
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+speed:
+  method: "hotel"           # the flight model, ../flight/husker_flight_hotel.nc
+  hotel_var: "speed"
+  speed_cutout: 0.05
+
+epsilon:
+  fft_sec: 2.0              # 2 s x ~0.3 m/s = 0.6 m, inside the vehicle length;
+                            # same choice as Rutgers/perturb-flight.yaml. Low
+                            # epsilon will not resolve the spectral peak at this
+                            # speed -- a platform limit, not a setting.
+  salinity: "measured"      # from ct.T_name / ct.C_name (the glider CTD)
+  T_source: "sci_water_temp"
+  fom_max: null
+  diagnostics: false
+
+chi:
+  enable: true
+  use_epsilon: false        # Method 2: glider shear is vibration-contaminated,
+                            # so shear epsilon is a poor seed for the kB fit
+  fft_sec: 2.0
+  spectrum_model: "kraichnan"
+  salinity: "measured"
+  mixing: true
+  fom_max: null
+
+stratification:
+  enable: true
+  salinity: "measured"
+  window: 2.0
+
+ctd:
+  enable: true              # builds a CTD product from the merged glider CT
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+bottom:
+  enable: false             # a commanded glider does not bottom-crash
+top_trim:
+  enable: false             # no prop wash on a glider
+
+binning:
+  method: "depth"
+  width: 1.0
+
+qc:
+  enable: true
+  drop_action: "nan"
+
+netcdf:
+  title: "Taiwan 2013 MicroRider MR046 turbulence (glider husker)"
+  summary: >
+    Turbulent kinetic energy dissipation (epsilon) and thermal variance
+    dissipation (chi) from a Rockland MicroRider MR1000-LP SN 046 on Slocum
+    glider husker, South China Sea, 2013-05. Through-water speed from a
+    Merckelbach flight model calibrated against the glider's depth rate
+    (../flight/); FP07 thermistors calibrated in situ against the glider CTD.
+    Shear-probe sensitivities are RSI nominal placeholders: epsilon's absolute
+    scale is unverified.
+  institution: "Oregon State University"
+  platform: "Slocum glider husker"
+  instrument: "Rockland MicroRider MR1000-LP SN 046"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"
+  geospatial_vertical_positive: "down"
+  Conventions: "CF-1.13, ACDD-1.3"
+
+parallel:
+  jobs: 8

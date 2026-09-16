@@ -1,0 +1,72 @@
+# Flight-model inputs for glider husker (MicroRider MR046), Taiwan 2013.
+#
+#   dinkum-hotel build -c dinkum-flight.yaml       -> flight_inputs.nc
+#
+# NOT the perturb hotel file. ../hotel/hotel.nc is on the CTD clock and lacks
+# roll, ballast and battery position. This file is on the FLIGHT computer's
+# clock (m_present_time, ~4.4 s), so every flight sensor lands on its own
+# samples exactly; the CTD is projected onto it from its own clock. It feeds
+# make_flight_speed.py (Merckelbach flight model), which writes the hotel file
+# perturb reads. Same files, exclusions and time bounds as ../hotel/ -- see
+# ../hotel/README.md for why each is there.
+files:
+  root: ".."
+  patterns:                 # UPPERCASE extensions are load-bearing (DOS 8.3 names)
+    - "Leg3_Husker_MB/LOGS/*.DBD"
+    - "Leg3_Husker_MB/SENTLOGS/*.DBD"
+    - "Leg3_Husker_SB/LOGS/*.EBD"
+    - "Leg3_Husker_SB/SENTLOGS/*.EBD"
+  exclude:                  # zero-byte segments on both computers
+    - "Leg3_Husker_MB/LOGS/00120000.DBD"
+    - "Leg3_Husker_MB/LOGS/00180000.DBD"
+    - "Leg3_Husker_SB/LOGS/00120000.EBD"
+    - "Leg3_Husker_SB/LOGS/00180000.EBD"
+  cache: "../hotel/cache"   # shared with ../hotel (2013 files are self-describing); paths below are relative to THIS file
+  output: "flight_inputs.nc"
+  reader: "auto"
+  skip_first_record: true
+  repair: false
+
+time:
+  base: "m_present_time"    # flight computer clock
+  min_value: "2013-04-30T00:00:00Z"   # drops 2012-09 leftovers in LOGS
+  max_value: "2013-05-27T00:00:00Z"
+  dedupe: "last"
+
+projection:
+  method: "linear"
+  max_gap: 120              # [s]
+  extrapolate: false
+
+sensors:
+  m_pressure:       {units: "bar"}     # flight pressure sensor; the model's depth rate
+  m_depth:          {units: "m", valid_min: -2.0, valid_max: 1200.0}
+  m_pitch:          {units: "rad"}     # Slocum sign: negative = nose down
+  m_roll:           {units: "rad"}
+  m_heading:        {units: "rad"}
+  m_ballast_pumped: {units: "cm3"}     # MEASURED buoyancy change (200 m pump glider)
+  c_ballast_pumped: {units: "cm3", method: "previous"}   # commanded state
+  m_battpos:        {units: "in"}
+  m_fin:            {units: "rad"}
+  m_speed:          {units: "m s-1"}   # the glider's own estimate, for comparison only
+  m_vehicle_temp:   {units: "degree_Celsius"}
+  sci_water_temp:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "degree_Celsius"
+    valid_min: -5.0
+    valid_max: 45.0
+  sci_water_cond:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "S m-1"          # left in Slocum units here; the flight script converts
+    valid_min: 0.0
+    valid_max: 7.0
+  sci_water_pressure:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "bar"
+    valid_min: -0.2
+    valid_max: 200.0
+
+netcdf:
+  title: "Glider husker flight-model inputs (flight clock), Taiwan 2013"
+  source: "Slocum Dinkum DBD/EBD, Leg3_Husker_MB + Leg3_Husker_SB"
+  platform: "Slocum glider husker"

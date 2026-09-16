@@ -1,0 +1,101 @@
+# Hotel file for MicroRider MR046 processing — glider "husker", Taiwan 2013.
+#
+#   dinkum-hotel build -c dinkum-hotel.yaml
+#
+# Feeds perturb's `hotel:` block for the MR .p files in ../MR046/DATA/.
+files:
+  root: ".."
+  # UPPERCASE extensions are load-bearing. These are 2013 DOS-era 8.3 names
+  # (00210000.DBD); SeaChest is a case-insensitive SMB mount but Python's glob
+  # is not, so a lowercase "*.dbd" pattern matches NOTHING here.
+  patterns:
+    - "Leg3_Husker_MB/LOGS/*.DBD"
+    - "Leg3_Husker_MB/SENTLOGS/*.DBD"
+    - "Leg3_Husker_SB/LOGS/*.EBD"
+    - "Leg3_Husker_SB/SENTLOGS/*.EBD"
+  # Segments 00120000 and 00180000 are ZERO BYTES on both computers and in
+  # every file type (DBD/MBD/SBD, EBD/NBD/TBD) -- the glider opened them and
+  # wrote nothing. Named explicitly rather than raising files.max_skipped, so
+  # that a NEW undecodable file still fails the build loudly.
+  exclude:
+    - "Leg3_Husker_MB/LOGS/00120000.DBD"
+    - "Leg3_Husker_MB/LOGS/00180000.DBD"
+    - "Leg3_Husker_SB/LOGS/00120000.EBD"
+    - "Leg3_Husker_SB/LOGS/00180000.EBD"
+  cache: "cache"            # 2013 Dinkum files are self-describing, so this
+                            # starts empty and is populated as files are read;
+                            # the glider's own STATE/CACHE is empty by design.
+  output: "hotel.nc"
+  reader: "auto"
+  skip_first_record: true
+  repair: false
+
+time:
+  base: "sci_ctd41cp_timestamp"   # the CTD's OWN clock, not m_present_time
+  # The file system was not cleaned before deployment: LOGS retains segments
+  # from 2012-09 (Massachusetts and an earlier SCS visit). Bounding the window
+  # drops them. Verified separable: the fixes form two chronological runs with
+  # no interleaving and a 227.5-day gap.
+  min_value: "2013-04-30T00:00:00Z"
+  max_value: "2013-05-27T00:00:00Z"
+  dedupe: "mean"
+
+projection:
+  method: "linear"
+  max_gap: 120              # [s] do not bridge a gap longer than this
+  extrapolate: false
+
+sensors:
+  # --- CTD, science computer, on the CTD's own clock -----------------------
+  sci_water_temp:
+    units: "degree_Celsius"
+    valid_min: -5.0
+    valid_max: 45.0
+  sci_water_cond:
+    scale: 10.0             # Slocum S/m -> mS/cm. Applied ONCE, here.
+    units: "mS/cm"
+    valid_min: 0.0
+    valid_max: 70.0
+  sci_water_pressure:
+    scale: 10.0             # Slocum bar -> dbar. Applied ONCE, here.
+    units: "dbar"
+    valid_min: -2.0
+    valid_max: 2000.0
+
+  # --- flight computer, on m_present_time ---------------------------------
+  # m_lat/m_lon ARE dead-reckoned on this 2013 flight computer (verified: 380
+  # distinct m_lat against 4 GPS fixes; 352 distinct while deeper than 10 m).
+  # They are carried here RAW, in Slocum ddmm.mmmm. The drift-corrected
+  # decimal-degree track is added by make_corrected_track.py as lat/lon.
+  m_lat:
+    time_sensor: "m_present_time"
+    units: "ddmm.mmmm"
+  m_lon:
+    time_sensor: "m_present_time"
+    units: "dddmm.mmmm"
+  m_gps_lat:
+    time_sensor: "m_present_time"
+    units: "ddmm.mmmm"
+  m_gps_lon:
+    time_sensor: "m_present_time"
+    units: "dddmm.mmmm"
+  m_depth:
+    time_sensor: "m_present_time"
+    units: "m"
+    valid_min: -2.0
+    valid_max: 1200.0
+  m_pitch:
+    time_sensor: "m_present_time"
+    units: "rad"
+  m_water_vx:
+    time_sensor: "m_present_time"
+    units: "m s-1"
+  m_water_vy:
+    time_sensor: "m_present_time"
+    units: "m s-1"
+
+netcdf:
+  title: "Glider husker hotel file for MicroRider MR046, Taiwan 2013"
+  source: "Slocum Dinkum DBD/EBD, Leg3_Husker_MB + Leg3_Husker_SB"
+  platform: "Slocum glider husker"
+  institution: "WHOI (Lou St. Laurent) - preliminary attribution"
