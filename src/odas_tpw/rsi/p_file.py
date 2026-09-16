@@ -292,6 +292,45 @@ def _advance_record0_timestamp(first_record: bytes, endian: str, start_record: i
 # ---------------------------------------------------------------------------
 
 
+# Stanzas that parse_config reserves for non-channel content.
+_NON_CHANNEL_SECTIONS = frozenset({"root", "matrix", "instrument_info", "cruise_info"})
+
+
+def is_channel_section(section: str, keys: dict[str, Any]) -> bool:
+    """Whether a config stanza describes a channel (setupstr.m parity).
+
+    Modern configs put every channel in a ``[channel]`` stanza. Older ones --
+    RSI's 2012 MicroRider template, e.g. MR1000-LP SN 046 (Taiwan 2013) -- give
+    each channel its own named stanza (``[pitch]``, ``[shear1]``,
+    ``[therm1]``, ...). ``setupstr.m`` never looks at the stanza name: it finds
+    channels by their ``id`` (or the ``id_even``/``id_odd`` pair,
+    setupstr.m:411-455) and converts those that carry ``name`` and ``type``
+    (setupstr.m:457-460; read_odas.m and odas_p2mat.m likewise). A named stanza
+    with all of those is therefore a channel too. ``[channel]`` stanzas are
+    always channels, as before; a missing name/type on one is reported where
+    the channel is converted.
+
+    The keys must be NON-EMPTY: setupstr.m's assignment pattern ``(.+?)``
+    never matches ``id =`` with no value, so ODAS does not see such a key.
+    The reserved stanzas (root, matrix, instrument_info, cruise_info) are
+    never channels -- stricter than ODAS, which excludes no stanza name, but no
+    real config puts id+name+type in one of them.
+
+    *section* is the normalized stanza name (lower-case, whitespace folded to
+    ``_``); *keys* maps its lower-cased keys to their value strings.
+    """
+    if section == "channel":
+        return True
+    if section in _NON_CHANNEL_SECTIONS:
+        return False
+
+    def present(key: str) -> bool:
+        return str(keys.get(key, "")).strip() != ""
+
+    has_id = present("id") or (present("id_even") and present("id_odd"))
+    return has_id and present("name") and present("type")
+
+
 def parse_config(config_str: str) -> dict[str, Any]:
     """Parse the INI-style configuration string embedded in the P file.
 
@@ -304,7 +343,12 @@ def parse_config(config_str: str) -> dict[str, Any]:
     -------
     dict with keys:
       'matrix': list of lists (the address matrix rows)
-      'channels': list of dicts, one per [channel] section
+      'channels': list of dicts, one per channel stanza in file order --
+          every [channel] section, plus any named section that
+          carries id + name + type (see :func:`is_channel_section`).
+          Read channels from HERE: a named channel stanza is also kept under
+          its own section name as raw text, but that copy does not receive
+          corrections such as the accel->piezo rewrite below.
       'instrument_info': dict
       'cruise_info': dict
       'root': dict
@@ -335,7 +379,11 @@ def parse_config(config_str: str) -> dict[str, Any]:
         cleaned.append(line.strip())
 
     current_section = "root"
-    current_channel: dict[str, str] | None = None
+    current_keys: dict[str, str] | None = None
+    # One (section, keys) entry per section OCCURRENCE, in file order, so the
+    # channel list can be decided once every key of a stanza is known (a named
+    # section's id may follow its name) and duplicate names stay separate.
+    occurrences: list[tuple[str, dict[str, str]]] = []
 
     for line in cleaned:
         if not line:
@@ -344,27 +392,27 @@ def parse_config(config_str: str) -> dict[str, Any]:
         m = re.match(r"^\[(.+)\]$", line)
         if m:
             current_section = "_".join(m.group(1).strip().lower().split())
-            if current_section == "channel":
-                current_channel = {}
-                result["channels"].append(current_channel)
+            if current_section == "matrix":
+                current_keys = None
             else:
-                current_channel = None
-                # Keep unknown sections (setupstr.m keeps every section)
-                # instead of dropping their keys. 'matrix' and 'channels'
-                # already hold lists — a section by either name must not
-                # clobber them, so only absent names get a fresh dict (the
-                # assignment branch below drops keys for non-dict targets).
-                if current_section not in result:
-                    result[current_section] = {}
+                current_keys = {}
+                occurrences.append((current_section, current_keys))
+            # Keep unknown sections (setupstr.m keeps every section) instead
+            # of dropping their keys. 'matrix' and 'channels' already hold
+            # lists — a section by either name must not clobber them, so only
+            # absent names get a fresh dict (the assignment branch below drops
+            # keys for non-dict targets).
+            if current_section != "channel" and current_section not in result:
+                result[current_section] = {}
             continue
 
         m = re.match(r"^(.+?)\s*=\s*(.*)$", line)
         if m:
             key = m.group(1).strip().lower()
             val = m.group(2).strip()
-            if current_section == "channel" and current_channel is not None:
-                current_channel[key] = val
-            elif current_section == "matrix":
+            if current_keys is not None:
+                current_keys[key] = val
+            if current_section == "matrix":
                 if key.startswith("row"):
                     # A corrupt/garbled config (e.g. partially overwritten
                     # record 0) otherwise raises a bare "invalid literal for
@@ -373,8 +421,16 @@ def parse_config(config_str: str) -> dict[str, Any]:
                         result["matrix"].append([int(x) for x in val.split()])
                     except ValueError as exc:
                         raise ValueError(f"malformed matrix row {key!r}: {val!r}") from exc
-            elif current_section in result and isinstance(result[current_section], dict):
+            elif (
+                current_section != "channel"
+                and current_section in result
+                and isinstance(result[current_section], dict)
+            ):
                 result[current_section][key] = val
+
+    result["channels"] = [
+        keys for section, keys in occurrences if is_channel_section(section, keys)
+    ]
 
     # setupstr.m:478-495 parity: configuration files made before type 'piezo'
     # existed declare piezo sensors as type=accel with coef0=0 and coef1=1
