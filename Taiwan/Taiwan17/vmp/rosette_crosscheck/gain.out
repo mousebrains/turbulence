@@ -1,0 +1,13 @@
+reference: SBE secondary vs primary
+  t190C - t090C                  n=248 Tbar=19.48C  a=  -1.2 mK [  -2.0,  -0.2]  b=+0.02 dbar [+0.00,+0.03]  gain s= +0.22 mK/K [ -0.07, +0.51]  -> chi x1.0004 [0.9999,1.0010]
+A  JAC_T vs SBE, whole downcast
+  JAC_T - t090C                  n=246 Tbar=19.53C  a=  -3.7 mK [  -8.9,  +1.2]  b=+0.92 dbar [+0.78,+1.05]  gain s= +3.77 mK/K [ +2.50, +5.28]  -> chi x1.0076 [1.0050,1.0106]
+C  fp07_calibrate over the whole downcast (order 2), vs SBE
+  T1 (C) - t090C                 n=246 Tbar=19.53C  a=  -9.4 mK [ -14.9,  -4.4]  b=+1.03 dbar [+0.89,+1.16]  gain s= +4.59 mK/K [ +3.25, +6.12]  -> chi x1.0092 [1.0065,1.0123]
+  T1 (C) - JAC_T                 n=246 Tbar=19.53C  a=  -5.7 mK [  -7.6,  -4.1]  b=+0.11 dbar [+0.07,+0.15]  gain s= +0.82 mK/K [ +0.50, +1.21]  -> chi x1.0016 [1.0010,1.0024]
+  T2 (C) - t090C                 n=246 Tbar=19.53C  a= -10.0 mK [ -15.2,  -5.0]  b=+1.02 dbar [+0.88,+1.15]  gain s= +4.65 mK/K [ +3.33, +6.17]  -> chi x1.0093 [1.0067,1.0124]
+  T2 (C) - JAC_T                 n=246 Tbar=19.53C  a=  -6.3 mK [  -8.1,  -4.8]  b=+0.11 dbar [+0.07,+0.14]  gain s= +0.88 mK/K [ +0.62, +1.19]  -> chi x1.0018 [1.0012,1.0024]
+B  pipeline output, its 102.7-248.7 dbar profile, vs SBE
+  T1 (B) - t090C                 n=146 Tbar=17.40C  a= -12.2 mK [ -19.0,  -7.2]  b=+1.17 dbar [+0.96,+1.33]  gain s= +5.25 mK/K [ +2.21, +8.06]  -> chi x1.0105 [1.0044,1.0162]
+  T2 (B) - t090C                 n=146 Tbar=17.40C  a= -12.7 mK [ -19.0,  -7.8]  b=+1.17 dbar [+0.95,+1.32]  gain s= +5.31 mK/K [ +2.47, +8.06]  -> chi x1.0106 [1.0049,1.0162]
+  JAC_T (B) - t090C              n=146 Tbar=17.40C  a=  -4.8 mK [ -11.1,  +0.9]  b=+1.07 dbar [+0.87,+1.26]  gain s= +4.79 mK/K [ +1.98, +7.39]  -> chi x1.0096 [1.0040,1.0148]

@@ -1,0 +1,47 @@
+SBE cast: 252 bins, 1-252 dbar, T 13.735-23.657 C
+
+DAT_166 downcast: slow idx 14363-42758, 2.0-249.8 dbar, 444 s; CT-align lag 0.09374400367945215
+
+REFERENCE SELF-CONSISTENCY (SBE secondary - primary)
+  t190C - t090C                      n=248  raw median    -1.20 mK (MAD   1.33) | weak-gradient n= 55 median    -0.50 (MAD  0.74) | fit a=   -1.02 mK, b= +0.02 dbar, resid MAD  1.17
+  c1 - c0                            n=248  raw median    +1.22 uS/cm (MAD   1.04) | weak-gradient n=114 median    +1.35 (MAD  0.57) | fit a=   +2.81 uS/cm, b= +0.04 dbar, resid MAD  1.47
+
+A  JAC vs SBE primary   [all downcast samples]
+  VMP samples per bin: median 77, min 0
+  JAC_T - t090C                      n=246  raw median   -21.38 mK (MAD  32.46) | weak-gradient n= 55 median    +2.09 (MAD  2.31) | fit a=   -1.41 mK, b= +0.97 dbar, resid MAD 12.85
+  JAC_T - t190C                      n=246  raw median   -20.85 mK (MAD  32.71) | weak-gradient n= 54 median    +2.58 (MAD  1.97) | fit a=   +0.28 mK, b= +0.97 dbar, resid MAD 12.78
+  JAC_C - c0                         n=246  raw median    -2.01 uS/cm (MAD  25.51) | weak-gradient n=112 median   +12.74 (MAD  6.37) | fit a=  +13.94 uS/cm, b= +0.94 dbar, resid MAD 14.25
+  SP(JAC) - SP(SBE)                  n=246  raw median   +14.07 mPSU (MAD   7.09) | weak-gradient n=240 median   +14.07 (MAD  6.99) | fit a=  +14.14 mPSU, b= +0.66 dbar, resid MAD  6.18
+  JAC_T - t090C, 5-100 dbar          n= 95  raw median    -4.54 mK (MAD  12.05) | weak-gradient n= 43 median    +2.12 (MAD  1.82) | fit a=   +0.58 mK, b= +0.61 dbar, resid MAD  4.56
+  JAC_T - t090C, 100-252 dbar        n=151  raw median   -35.26 mK (MAD  39.74) | weak-gradient n= 12 median    +0.64 (MAD  8.72) | fit a=   -4.54 mK, b= +1.07 dbar, resid MAD 17.12
+
+A  JAC vs SBE primary   [downcast, W > 0.2 dbar/s]
+  VMP samples per bin: median 76, min 0
+  JAC_T - t090C                      n=246  raw median   -21.98 mK (MAD  33.46) | weak-gradient n= 55 median    +2.12 (MAD  2.35) | fit a=   -1.42 mK, b= +0.97 dbar, resid MAD 12.48
+  JAC_T - t190C                      n=246  raw median   -21.31 mK (MAD  33.80) | weak-gradient n= 54 median    +2.55 (MAD  1.68) | fit a=   +0.23 mK, b= +0.97 dbar, resid MAD 12.28
+  JAC_C - c0                         n=246  raw median    -2.15 uS/cm (MAD  25.75) | weak-gradient n=112 median   +12.66 (MAD  6.70) | fit a=  +13.91 uS/cm, b= +0.94 dbar, resid MAD 13.96
+  SP(JAC) - SP(SBE)                  n=246  raw median   +14.00 mPSU (MAD   7.09) | weak-gradient n=240 median   +14.00 (MAD  6.92) | fit a=  +14.11 mPSU, b= +0.65 dbar, resid MAD  5.98
+  JAC_T - t090C, 5-100 dbar          n= 95  raw median    -4.54 mK (MAD  12.27) | weak-gradient n= 43 median    +2.16 (MAD  2.11) | fit a=   +0.53 mK, b= +0.61 dbar, resid MAD  4.77
+  JAC_T - t090C, 100-252 dbar        n=151  raw median   -35.26 mK (MAD  39.74) | weak-gradient n= 12 median    +0.64 (MAD  8.72) | fit a=   -4.50 mK, b= +1.07 dbar, resid MAD 17.13
+
+B  pipeline T1/T2 (perturb run, fit over its one detected profile) vs SBE primary
+  profile range 102.7-248.7 dbar; SBE T there 13.821-20.632 C
+  T1 (pipeline) - t090C              n=146  raw median   -42.89 mK (MAD  45.87) | weak-gradient n= 12 median    -1.26 (MAD  9.73) | fit a=  -11.30 mK, b= +1.19 dbar, resid MAD 23.38
+  T2 (pipeline) - t090C              n=146  raw median   -43.42 mK (MAD  44.53) | weak-gradient n= 12 median    -2.36 (MAD 10.83) | fit a=  -11.77 mK, b= +1.19 dbar, resid MAD 23.96
+  JAC_T (pipeline) - t090C           n=146  raw median   -35.21 mK (MAD  39.58) | weak-gradient n= 12 median    +0.64 (MAD  8.72) | fit a=   -4.01 mK, b= +1.09 dbar, resid MAD 16.41
+
+C  fp07_calibrate refit over the WHOLE downcast (same function, Taiwan17 settings) vs SBE primary
+  order 2: lag info {'lags': {'T1': -0.07812000306621013, 'T2': -0.07812000306621013}}
+  T1 order 2 - t090C                 n=246  raw median   -29.37 mK (MAD  43.04) | weak-gradient n= 55 median    +1.09 (MAD  2.18) | fit a=   -6.56 mK, b= +1.10 dbar, resid MAD 16.28
+  T1 order 2 - JAC_T (own fit)       n=246  raw median    -7.15 mK (MAD   7.48) | weak-gradient n= 55 median    -0.88 (MAD  1.77) | fit a=   -5.15 mK, b= +0.13 dbar, resid MAD  4.09
+  T2 order 2 - t090C                 n=246  raw median   -30.28 mK (MAD  42.93) | weak-gradient n= 55 median    +0.84 (MAD  2.80) | fit a=   -7.14 mK, b= +1.09 dbar, resid MAD 16.39
+  T2 order 2 - JAC_T (own fit)       n=246  raw median    -7.56 mK (MAD   7.83) | weak-gradient n= 55 median    -1.77 (MAD  2.04) | fit a=   -5.73 mK, b= +0.12 dbar, resid MAD  4.73
+  order 1: lag info {'lags': {'T1': -0.07812000306621013, 'T2': -0.07812000306621013}}
+  T1 order 1 - t090C                 n=246  raw median   -33.49 mK (MAD  45.75) | weak-gradient n= 55 median    +3.91 (MAD  2.68) | fit a=   -7.22 mK, b= +1.11 dbar, resid MAD 15.79
+  T1 order 1 - JAC_T (own fit)       n=246  raw median    -9.68 mK (MAD  10.85) | weak-gradient n= 55 median    +1.90 (MAD  2.06) | fit a=   -5.81 mK, b= +0.14 dbar, resid MAD  8.96
+  T2 order 1 - t090C                 n=246  raw median   -34.47 mK (MAD  46.63) | weak-gradient n= 55 median    +3.89 (MAD  3.10) | fit a=   -7.93 mK, b= +1.11 dbar, resid MAD 16.49
+  T2 order 1 - JAC_T (own fit)       n=246  raw median   -11.04 mK (MAD  12.25) | weak-gradient n= 55 median    +1.71 (MAD  2.85) | fit a=   -6.52 mK, b= +0.13 dbar, resid MAD  9.50
+
+Factory coefficients, for scale:
+  T1 factory - t090C: median +1.867 C
+  T2 factory - t090C: median +3.589 C

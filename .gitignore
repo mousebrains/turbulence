@@ -1,6 +1,8 @@
 # Data files (large)
 MR/
-VMP/
+# Anchored to the root: git matches ignore patterns case-insensitively on
+# macOS (core.ignorecase), so a bare VMP/ also swallowed Taiwan/Taiwan17/vmp/.
+/VMP/
 AtomixData
 bench_tests/
 bench/
