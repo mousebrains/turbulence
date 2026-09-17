@@ -1,0 +1,65 @@
+# Flight-model inputs for glider doug (MicroRider MR SN 134), Taiwan 2017 (SK-II).
+#
+#   dinkum-hotel build -c dinkum-flight.yaml       -> flight_inputs.nc
+#
+# Same recipe as Taiwan13/gliders/20130526_husker/flight/ (see its README.md):
+# base on the FLIGHT computer's clock so every flight sensor lands on its own
+# samples; the CTD is projected from its own clock. Feeds make_flight_speed.py.
+#
+# Source: ../../20170216_doug_Taiwan/ (post-recovery flight + science logs),
+# added to SeaChest 2026-09-15. Paths below are relative to THIS file.
+files:
+  root: "../../20170216_doug_Taiwan"
+  patterns:                 # lowercase extensions on these 2017 files
+    - "post-recovery/flight/logs/*.dbd"
+    - "post-recovery/science/logs/*.ebd"
+  cache: "cache"            # a COPY of ../../20170216_doug_Taiwan/cache, so a build
+                            # never writes into the source tree
+  output: "flight_inputs.nc"
+  reader: "auto"
+  skip_first_record: true
+  repair: false
+
+time:
+  base: "m_present_time"
+  min_value: "2017-02-15T00:00:00Z"
+  max_value: "2017-03-01T00:00:00Z"
+  dedupe: "last"
+
+projection:
+  method: "linear"
+  max_gap: 120              # [s]
+  extrapolate: false
+
+sensors:
+  m_pressure:       {units: "bar"}
+  m_depth:          {units: "m", valid_min: -2.0, valid_max: 1200.0}
+  m_pitch:          {units: "rad"}
+  m_roll:           {units: "rad"}
+  m_heading:        {units: "rad"}
+  m_ballast_pumped: {units: "cm3"}     # MEASURED buoyancy change (200 m pump glider, +-233 cc)
+  c_ballast_pumped: {units: "cm3", method: "previous"}
+  m_battpos:        {units: "in"}
+  m_fin:            {units: "rad"}
+  m_speed:          {units: "m s-1"}
+  m_vehicle_temp:   {units: "degree_Celsius"}
+  sci_water_temp:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "degree_Celsius"
+    valid_min: -5.0
+    valid_max: 45.0
+  sci_water_cond:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "S m-1"
+    valid_min: 0.0
+    valid_max: 7.0
+  sci_water_pressure:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "bar"
+    valid_min: -0.2
+    valid_max: 200.0
+
+netcdf:
+  title: "Glider doug flight-model inputs (flight clock), Taiwan 2017"
+  source: "Slocum Dinkum dbd/ebd, 20170216_doug_Taiwan/post-recovery"
+  platform: "Slocum glider doug"

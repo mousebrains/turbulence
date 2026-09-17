@@ -1,0 +1,68 @@
+# Plotting sections for MicroRider SN 134 on glider doug, Taiwan 2017 — 530 profiles.
+#
+# ONE SECTION PER UTC DAY, time axis. The glider does not fly clean
+# transects here (daily straightness 0.30-0.91, headings reversing), so a
+# distance axis would be meaningless; and `perturb sections --gap` gives one
+# 7-day block because a glider's yos have no gaps. ~60 casts per day reads well.
+
+sections:
+  # 35 cast(s)
+  - name: 20170219
+    start: "2017-02-19T11:54:27Z"
+    stop:  "2017-02-20T00:20:06Z"
+    xaxis:
+      method: time
+  # 55 cast(s)
+  - name: 20170220
+    start: "2017-02-20T00:14:14Z"
+    stop:  "2017-02-21T00:20:46Z"
+    xaxis:
+      method: time
+  # 74 cast(s)
+  - name: 20170221
+    start: "2017-02-21T00:07:31Z"
+    stop:  "2017-02-22T00:20:49Z"
+    xaxis:
+      method: time
+  # 37 cast(s)
+  - name: 20170222
+    start: "2017-02-22T00:05:47Z"
+    stop:  "2017-02-23T00:19:42Z"
+    xaxis:
+      method: time
+  # 64 cast(s)
+  - name: 20170223
+    start: "2017-02-23T00:03:38Z"
+    stop:  "2017-02-24T00:26:21Z"
+    xaxis:
+      method: time
+  # 64 cast(s)
+  - name: 20170224
+    start: "2017-02-24T00:04:34Z"
+    stop:  "2017-02-25T00:19:41Z"
+    xaxis:
+      method: time
+  # 64 cast(s)
+  - name: 20170225
+    start: "2017-02-25T00:05:44Z"
+    stop:  "2017-02-26T00:26:55Z"
+    xaxis:
+      method: time
+  # 64 cast(s)
+  - name: 20170226
+    start: "2017-02-26T00:40:23Z"
+    stop:  "2017-02-27T00:24:45Z"
+    xaxis:
+      method: time
+  # 55 cast(s)
+  - name: 20170227
+    start: "2017-02-27T00:11:45Z"
+    stop:  "2017-02-28T00:19:55Z"
+    xaxis:
+      method: time
+  # 18 cast(s)
+  - name: 20170228
+    start: "2017-02-28T00:15:16Z"
+    stop:  "2017-02-28T07:18:00Z"
+    xaxis:
+      method: time
