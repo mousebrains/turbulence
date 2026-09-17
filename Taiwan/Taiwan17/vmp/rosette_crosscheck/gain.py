@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Offset, vertical offset and GAIN with 10-dbar block-bootstrap 95% intervals.
 
     dX = a + b * dRef/dp + s * (Tref - Tbar)

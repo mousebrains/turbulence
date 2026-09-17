@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Minimal reader for the Nortek Aquadopp HR profiler file TAI102.PRF (Taiwan 2013).
 
 Structures verified against the file itself (not assumed):

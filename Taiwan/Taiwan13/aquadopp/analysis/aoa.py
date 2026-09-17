@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Angle of attack from the Aquadopp HR beams, anchored on MEASURED pressure.
 
 The wrap branch is chosen with a prior built only from quantities the Aquadopp

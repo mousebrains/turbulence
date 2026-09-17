@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Aquadopp-measured speed and angle of attack vs the Merckelbach flight model, glider jane.
 
 The Aquadopp values come from `../aqd/aoa.py`: beam velocities unwrapped with a

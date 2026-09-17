@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Undo the Aquadopp's own ENU rotation -> XYZ -> beam, and look for HR wrapping.
 
 The file stores velocities in ENU (user config CoordSystem = 0): the instrument

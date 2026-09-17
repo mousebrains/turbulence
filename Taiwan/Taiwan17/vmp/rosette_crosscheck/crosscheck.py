@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """VMP SN142 thermistors vs the ship SBE 911plus, rosette cast RR1704_10 / DAT_166.
 
 The SBE file is 1-dbar bin-averaged with no time column, so everything is
