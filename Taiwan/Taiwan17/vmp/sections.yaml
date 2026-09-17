@@ -1,0 +1,38 @@
+# Plotting sections for Taiwan 2017 (SK-II) VMP SN 142 — 100 profiles.
+#
+# Rebuilt 2026-09-15 for the reorganized tree (only raw/casts/SN142 is
+# processed). Windows come from `perturb sections --gap 1h` (30 s pad); the
+# grouping and x-axes were then set from the GPS track in Processed/combo_00:
+#
+#   DAT_159   3 casts, 0.3 km, 2017-02-23 00:54Z  -> station cluster, time axis
+#   DAT_160   3 casts, 0.7 km, 2017-02-23 05:29Z  -> station cluster, time axis
+#   DAT_162-172  94 casts on ONE straight line, heading 34 deg, along-track
+#             0 -> 91.3 km, cross-track within 0.7 km, no heading reversals.
+#             The cast log (process_kipp.m) calls it "line to R2N". `--gap 1h`
+#             splits it into four pieces (at 28.4-32.5, 39.1-44.3 and
+#             62.0-71.7 km) only because of time gaps -- the first is the
+#             DAT_166 ship-CTD calibration cast -- so it is kept as one section.
+#
+# The two stations are ~38 km apart across the line's axis; they are not part
+# of it.
+
+sections:
+  - name: station_0223a
+    start: "2017-02-23T00:54:15Z"
+    stop:  "2017-02-23T01:08:32Z"
+    # 3 casts, DAT_159, spanning 0.3 km
+    xaxis:
+      method: time
+  - name: station_0223b
+    start: "2017-02-23T05:28:52Z"
+    stop:  "2017-02-23T05:50:18Z"
+    # 3 casts, DAT_160, spanning 0.7 km
+    xaxis:
+      method: time
+  - name: line_R2N
+    start: "2017-02-25T19:49:20Z"
+    stop:  "2017-02-26T20:24:01Z"
+    # 94 casts, DAT_162-172, 91.3 km along heading 34 deg, straightness 0.999
+    xaxis:
+      method: signed_distance
+      units: km

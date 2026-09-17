@@ -1,0 +1,146 @@
+# Perturb configuration — MicroRider SN 134 on Slocum glider doug,
+# Taiwan 2017 (SK-II, R/V Roger Revelle RR1704), Luzon Strait.
+#
+#   perturb run -c perturb.yaml -j 8
+#
+# ---------------------------------------------------------------------------
+# READ FIRST
+# * This MR carried NO EM flowmeter. Speed comes from a Merckelbach flight
+#   model built in flight/ -- see flight/README.md (and the Taiwan13 husker
+#   README it points to) for the model, its calibration and its limitations.
+#   There is no independent speed reference, so the ABSOLUTE speed scale is
+#   unvalidated and epsilon ~ U^-4.
+# * THE MICRORIDER CLOCK RAN 9 min 21 s FAST (L = -561.2 s, drifting
+#   -0.444 s/day). Both flight/doug_flight_hotel.nc and flight/gps.nc are
+#   written ALREADY ON THE MR CLOCK, so time_offset is 0 and the GPS match is
+#   right. Do not point this config at a file on the glider clock.
+# * Probes: sh1 M1344 0.0655 / sh2 M1371 0.0855, FP07 T865/T866 -- but this
+#   MR's config was NEVER EDITED between 2015-10 and 2017-10 (509 files across
+#   CASPER-East, Taiwan 2017 and CASPER-West), so the serials carry no weight
+#   and the sensitivities are whatever was last set. Absolute epsilon is
+#   unverified. See /Volumes/SeaChest/MICROSTRUCTURE_INVENTORY.md.
+# * CAS_001-004, 030, 031, 078-080 are deck/startup records (0.3-1.3 dbar) and
+#   yield no profiles. The science mission starts 2017-02-19 11:43Z.
+# ---------------------------------------------------------------------------
+
+files:
+  p_file_root: "<CONFIG_DIR>/microrider"
+  p_file_pattern: "*.P"     # 80 files; uppercase (Python's glob is case-sensitive)
+  output_root: "<CONFIG_DIR>/Processed"
+  trim: false
+  merge: false
+
+hotel:
+  enable: true
+  file: "<CONFIG_DIR>/flight/doug_flight_hotel.nc"
+  time_column: "time"       # ALREADY the MicroRider clock
+  time_format: "epoch"
+  time_offset: 0.0
+  max_gap: 30.0             # [s] the glider CTD prints ~1 Hz
+  extrapolate: false
+  interpolation: "pchip"
+  channels:
+    speed:
+      fast: true
+    sci_water_temp:
+      units: "degree_Celsius"
+      fast: false
+    sci_water_cond:
+      units: "mS/cm"        # already mS/cm in the hotel file: NO scale here
+      fast: false
+  fast_channels: ["speed"]
+
+gps:
+  source: "netcdf"
+  file: "<CONFIG_DIR>/flight/gps.nc"   # drift-corrected DR track, MR clock
+  time_col: "time"
+  lat_col: "lat"
+  lon_col: "lon"
+  max_time_diff: 600
+
+profiles:
+  P_min: 2.0
+  W_min: 0.05
+  direction: "glide"        # BOTH legs
+  min_duration: 60.0
+  diagnostics: false
+
+fp07:
+  calibrate: true           # fitted per FILE against the glider CTD
+  order: 2
+  reference: "sci_water_temp"
+  max_lag_seconds: 10
+  must_be_negative: false   # a glider climbs as well as dives
+  min_corr: 0.5
+
+ct:
+  align: false              # the glider CTD is pumped; T and C share a sample
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+speed:
+  method: "hotel"
+  hotel_var: "speed"
+  speed_cutout: 0.05
+
+epsilon:
+  fft_sec: 2.0              # 2 s x ~0.3 m/s = 0.6 m, inside the vehicle length
+  salinity: "measured"
+  T_source: "sci_water_temp"
+  fom_max: null
+  diagnostics: false
+
+chi:
+  enable: true
+  use_epsilon: false        # Method 2: glider shear is vibration-contaminated
+  fft_sec: 2.0
+  spectrum_model: "kraichnan"
+  salinity: "measured"
+  mixing: true
+  fom_max: null
+
+stratification:
+  enable: true
+  salinity: "measured"
+  window: 2.0
+
+ctd:
+  enable: true
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+bottom:
+  enable: false
+top_trim:
+  enable: false
+
+binning:
+  method: "depth"
+  width: 1.0
+
+qc:
+  enable: true
+  drop_action: "nan"
+
+netcdf:
+  title: "Taiwan 2017 (SK-II) MicroRider SN 134 turbulence (glider doug)"
+  summary: >
+    Turbulent kinetic energy dissipation (epsilon) and thermal variance
+    dissipation (chi) from a Rockland MicroRider SN 134 on Slocum glider doug,
+    Luzon Strait, February 2017, during R/V Roger Revelle cruise RR1704
+    (project SK-II). Through-water speed from a Merckelbach flight model
+    calibrated against the glider's depth rate (flight/); FP07 thermistors
+    calibrated in situ against the glider CTD; times corrected for a 9.4-minute
+    MicroRider clock offset. Shear-probe sensitivities come from a config that
+    was never edited between 2015 and 2017: epsilon's absolute scale is
+    unverified.
+  institution: "Oregon State University"
+  platform: "Slocum glider doug"
+  instrument: "Rockland MicroRider SN 134"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"
+  geospatial_vertical_positive: "down"
+  Conventions: "CF-1.13, ACDD-1.3"
+
+parallel:
+  jobs: 8
