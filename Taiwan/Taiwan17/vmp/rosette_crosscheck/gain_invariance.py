@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Is the JAC_T-vs-SBE gain real, or aliased from a depth-varying vertical offset?"""
 import copy
 import numpy as np
