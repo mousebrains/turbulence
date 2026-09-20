@@ -190,29 +190,70 @@ every day, within-day MAD 0.12–0.32 dex. That is the signature of a systematic
 offset, not ocean variability, and unlike ε it does not straddle 1. It is also
 the right order to explain Γ: 0.165 (VMP) vs 0.030 (MR), a factor 5.5.
 
-**Do not attribute this to the FP07 yet.** The two χ estimates are not
-commensurable:
+**Resolved 2026-09-20: the FP07 beads were degraded. It is not the processing.**
 
-| | VMP | MR |
+Every processing explanation was tested and eliminated. Runs live beside the
+shipped `chi_00` as generations `chi_01`..`chi_05` (changing `chi.*` re-versions
+only the chi stage, so each reuses `profiles_00`/`diss_00`).
+
+| candidate | test | result |
 |---|---|---|
-| chi method | **1** (ε-seeded k_B) | **2** (spectral fit) |
-| `chi.fft_sec` | 1.0 s | 2.0 s |
-| speed | 0.761 m/s | 0.305 m/s |
+| chi method 1 vs 2 | `chi_01`, `use_epsilon: true` | closes **1.26×** (9.72 → 7.69) |
+| window 2 s → 1 s | `chi_04`, `fft_sec: 1.0` | **0.78× — makes it worse** |
+| FP07 tau | `chi_03`, `fp07_tau_scale: 2` | d(log χ)/d(log s) = **0.76**; closing the gap needs **s = 14.7, tau = 266 ms**. A bead is 10–20 ms. **Falsified.** |
+| mean dT/dz | co-located 65–130 m | ratio **1.00** (MAD 0.07); T_mean agrees to 0.06 °C. **Falsified.** |
+| gradient diff_gain | config audit | MR 0.95/0.95 vs VMP 0.96/0.93. **Falsified.** |
+| Batchelor fit + noise model | band-integrated `spec_gradT − spec_noise` | see below. **Falsified.** |
+| Goodman | `chi_05`, `goodman: false` | χ ×**0.992**, variance ×1.016. **Falsified.** |
 
-Method, window length and the frequency→wavenumber mapping all differ, and the
-last of those is exactly where the FP07 response correction bites. **The next
-step is to make one side match the other** — re-run the MR with
-`use_epsilon: true`, or the VMP with Method 2 — and repeat this comparison.
-`scripts/compare_chi_methods.py` exists for this. Until then the 9.7× is a
-well-posed question, not a measurement of the MicroRider.
+Matching method *and* window together returns to 9.8× — the two nearly cancel.
 
-If it survives that test, the suspect is `fp07_tau_scale` (measured at 1.66×
-on ARCTERX, and χ biased low is what an underestimated FP07 time constant
-produces).
+**The gap is in the measured signal.** Integrating the observed,
+noise-subtracted gradient spectrum over the identical **2–100 cpm** band,
+co-located in 65–130 m: VMP **1.03e-3** vs MR **1.11e-4** K²/m², a ratio of
+**9.28** against a fitted χ ratio of 9.8. The raw integral reproduces the whole
+gap, so nothing in the fitting is responsible. The MicroRider's thermistor
+records ~**3×** less gradient amplitude (√9.28) in the same water.
+
+**And the same MicroRider was healthy eight months earlier**, at essentially
+identical stratification:
+
+| | χ | Γ | N² |
+|---|---|---|---|
+| Taiwan17 doug, Feb 2017 | 3.07e-9 | **0.12** | 6.98e-5 |
+| **CASPER-West doug, Oct 2017** | **4.21e-10** | **0.030** | 7.00e-5 |
+| CASPER-West VMP 194, Oct 2017 | 1.38e-8 | 0.165 | 1.14e-4 |
+
+**Reading (hypothesis, consistent with every measurement above):** the FP07
+beads on this deployment were **attenuating**, not merely slow. A fouled or
+cracked bead loses microscale amplitude at a roughly frequency-independent
+factor while still reporting the mean temperature correctly. That explains,
+together, why the slow T channel agrees (T_mean 0.06 °C, dT/dz 1.00) while the
+microscale variance is 9.3× low; why a tau correction cannot reach it (tau
+changes the rolloff *shape*, not a flat gain); why the Method-1/2 tau fit on
+this instrument never converges (k_B,fit/k_B,ε sits at 0.50–0.84 across
+tau 5–50 ms and never crosses 1, while the VMP's crosses cleanly at
+s = 1.40/2.10); and why **T1 on the same instrument railed outright** on
+2017-10-03 — the same failure, further along.
+
+**Consequence: CASPER-West MicroRider χ, Γ, K_T and K_ρ are LOW by roughly an
+order of magnitude and must not be used as absolute values.** ε is unaffected
+(shear probes, agreeing to 6%, and the co-located ε test is consistent).
+Relative structure in χ — vertical and temporal patterns — is probably still
+informative, since the attenuation looks multiplicative, but that is untested.
 
 ## Still open
 
-- Make the χ comparison commensurable (above). This is the single most
-  valuable remaining piece.
+- **Confirm the bead-attenuation reading** on an instrument where the beads
+  are known-good, and check whether the attenuation is really flat in
+  wavenumber (fit a constant gain alongside tau, which the single-pole model
+  cannot currently express).
+- Cross-deployment FP07 tau as a **bead-health diagnostic** (Pat's suggestion):
+  tau should not move until the glass fails. 12 beads recur with different
+  shear probes; **T1592** is the best (5 shear pairs, 2019–2026) but its legs
+  are unprocessed. Start with the control — **ARCTERX-2022 Interior vs Wake**,
+  same beads T1592/T2005, same shear M2244/M2245, three weeks apart, both
+  already processed. Note χ moves only as s^0.76, so tau is now a health
+  check, not a scale correction.
 - The 2015 Aquadopp on glider `bob` — a speed-scale check for this fleet.
 - The +3.5 s glider-CTD print lag, measured and left uncorrected.
