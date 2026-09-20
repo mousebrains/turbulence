@@ -150,4 +150,4 @@ netcdf:
   Conventions: "CF-1.13, ACDD-1.3"
 
 parallel:
-  jobs: 8
+  jobs: 2
