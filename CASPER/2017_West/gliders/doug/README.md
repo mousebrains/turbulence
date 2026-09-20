@@ -138,12 +138,81 @@ angle of attack ~1.6° too small on dives. Not applied, by decision
 (post-recovery). perturb refused them rather than publish the 0.05 m/s
 `speed_cutout` floor as a through-water speed. That is the correct outcome.
 
-## Not yet done
+## The VMP intercomparison — done 2026-09-20
 
-**The VMP co-location.** VMP-250IR SN 194 profiled this same cruise
-(`../../../vmp/`, 247 files, 2017-09-28 → 10-25) while doug flew. That is a
-far better ε cross-check than Taiwan's 24–59 km separation, and it is the
-open question this deployment can actually answer. It needs the VMP rebuilt
-into `vmp/analysis/VMP_results/` first, and it must carry the VMP's own
-caveats: that instrument's sh2 has a depth-windowed fault from 10-09 and fails
-outright on 10-24.
+VMP-250IR SN 194 was rebuilt (`../../../vmp/analysis/VMP_results/`, 2,097
+profiles from 247 files, 2 errors — the two known empty files). **The ship's
+stations were deliberately set up to overlap the MicroRider's virtual
+mooring** (Pat), and the geometry confirms it: the ship came within 0.58–2.4 km
+of the mooring on **five separate days**.
+
+The two platforms were otherwise **not** co-located — the MR held a
+4.7 × 7.9 km box offshore for 24 days while the VMP worked a station grid at a
+median 26 km away — so this is a close-approach comparison, restricted to
+pairs within a stated distance and time, not a bulk one.
+
+Tool: `colocate_vmp.py` (paired statistic: median over depth bins of
+log₁₀(VMP/MR) within a pair, then over pairs).
+
+### ε — consistent, and it bounds gross error
+
+≤ 5 km, ≤ 3 h, by depth band:
+
+| band | n pairs | VMP ε | MR ε | VMP/MR | MAD |
+|---|---|---|---|---|---|
+| 2.5–35 m | 2,416 | 1.94e-8 | 6.76e-8 | 0.42 | 0.48 dex |
+| 35–65 m | 2,370 | 2.96e-9 | 3.98e-9 | 0.88 | 0.47 dex |
+| **65–130 m** | **2,353** | **1.19e-9** | **8.26e-10** | **1.75** | **0.37 dex** |
+
+65–130 m is the band to read: it is below the VMP's sh2 fault window and the
+VMP's own probes agree there. The ratio is **stable against both thresholds** —
+1.19/1.38/1.29 at ±1/3/6 h, and 1.46/1.38/1.14/1.17 at 2/5/10/20 km — so it is
+not set by temporal or spatial aliasing.
+
+**But there is no stable offset.** Day by day in that band the ratio runs
+**0.26 to 4.10** across 16 days, with tight *within*-day scatter (MAD
+0.22–0.45 dex). A real instrumental offset would repeat; this does not. So the
+comparison says:
+
+- **No gross error.** A factor-10 scale error — what a wrong `diff_gain` rung
+  would give — is excluded. Given that ε rests here on a shear sensitivity
+  patched retrospectively in 2018, that is worth having.
+- **It cannot resolve a factor of ~2.** Real ε patchiness between a moored
+  sampling and a snapshot cast, even 1 km apart, is larger than the question.
+
+### χ — a 9.7× gap that is NOT yet attributable to the instruments
+
+Same pairs, 65–130 m, VMP `chiMean` vs MR `chi_2` (T1 railed, excluded),
+excluding 10-24/25 where the VMP probes fail outright:
+
+**VMP/MR = 9.72, and all 16 days lie between 3.30 and 18.54** — same sign
+every day, within-day MAD 0.12–0.32 dex. That is the signature of a systematic
+offset, not ocean variability, and unlike ε it does not straddle 1. It is also
+the right order to explain Γ: 0.165 (VMP) vs 0.030 (MR), a factor 5.5.
+
+**Do not attribute this to the FP07 yet.** The two χ estimates are not
+commensurable:
+
+| | VMP | MR |
+|---|---|---|
+| chi method | **1** (ε-seeded k_B) | **2** (spectral fit) |
+| `chi.fft_sec` | 1.0 s | 2.0 s |
+| speed | 0.761 m/s | 0.305 m/s |
+
+Method, window length and the frequency→wavenumber mapping all differ, and the
+last of those is exactly where the FP07 response correction bites. **The next
+step is to make one side match the other** — re-run the MR with
+`use_epsilon: true`, or the VMP with Method 2 — and repeat this comparison.
+`scripts/compare_chi_methods.py` exists for this. Until then the 9.7× is a
+well-posed question, not a measurement of the MicroRider.
+
+If it survives that test, the suspect is `fp07_tau_scale` (measured at 1.66×
+on ARCTERX, and χ biased low is what an underestimated FP07 time constant
+produces).
+
+## Still open
+
+- Make the χ comparison commensurable (above). This is the single most
+  valuable remaining piece.
+- The 2015 Aquadopp on glider `bob` — a speed-scale check for this fleet.
+- The +3.5 s glider-CTD print lag, measured and left uncorrected.
