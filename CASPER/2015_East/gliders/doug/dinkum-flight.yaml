@@ -1,0 +1,83 @@
+# Flight-model inputs for glider doug (MicroRider SN 134), CASPER-East 2015.
+#
+#   dinkum-hotel build -c dinkum-flight.yaml       -> flight_inputs.nc
+#
+# Same recipe as the CASPER-West 2017 twin one directory tree over, and as
+# Taiwan17/gliders/doug/flight/ before it: base on the FLIGHT computer's clock
+# so every flight sensor lands on its own samples, and project the CTD from
+# its own clock (sci_ctd41cp_timestamp).
+#
+# doug is a 200 m pump Slocum: m_ballast_pumped is MEASURED (+-233 cc
+# commanded), m_de_oil_vol is absent. Verified in these files, not assumed.
+#
+# SIX ZERO-BYTE FILES exist in this tree, all of segment 00850000 (the glider
+# opened them and wrote nothing). They are excluded by name rather than
+# tolerated with max_skipped, so a NEW unreadable file still fails the build.
+#
+# Paths are relative to THIS file.
+files:
+  root: ".."
+  patterns:                 # lowercase extensions on these files
+    - "post-recovery/flight/logs/*.dbd"
+    - "post-recovery/science/logs/*.ebd"
+  exclude:
+    - "post-recovery/flight/logs/00850000.dbd"
+    - "post-recovery/science/logs/00850000.ebd"
+  cache: "cache"            # a COPY of ../cache, so a build never writes into
+                            # the source tree
+  output: "flight_inputs.nc"
+  reader: "auto"
+  skip_first_record: true
+  repair: false
+
+time:
+  base: "m_present_time"
+  min_value: "2015-10-08T00:00:00Z"   # deployment 10-11 19:28 .. 11-05 15:38
+  max_value: "2015-11-08T00:00:00Z"
+  dedupe: "last"
+
+projection:
+  method: "linear"
+  max_gap: 120              # [s]
+  extrapolate: false
+
+sensors:
+  m_pressure:       {units: "bar"}
+  m_depth:          {units: "m", valid_min: -2.0, valid_max: 1200.0}
+  m_pitch:          {units: "rad"}
+  m_roll:           {units: "rad"}
+  m_heading:        {units: "rad"}
+  m_ballast_pumped: {units: "cm3"}     # MEASURED buoyancy change
+  c_ballast_pumped: {units: "cm3", method: "previous"}
+  m_battpos:        {units: "in"}
+  m_fin:            {units: "rad"}
+  m_speed:          {units: "m s-1"}
+  m_vehicle_temp:   {units: "degree_Celsius"}
+  # valid_min/max are NOT cosmetic here: Slocum writes 69696969 for "no fix",
+  # which nmea_degrees happily turns into 696970.15 deg rather than a NaN.
+  m_gps_lat:        {transform: nmea_degrees, units: "degrees_north", method: "previous", valid_min: -90.0,  valid_max: 90.0}
+  m_gps_lon:        {transform: nmea_degrees, units: "degrees_east",  method: "previous", valid_min: -180.0, valid_max: 180.0}
+  m_lat:            {transform: nmea_degrees, units: "degrees_north", valid_min: -90.0,  valid_max: 90.0}
+  m_lon:            {transform: nmea_degrees, units: "degrees_east",  valid_min: -180.0, valid_max: 180.0}
+  m_water_vx:       {units: "m s-1", method: "previous"}
+  m_water_vy:       {units: "m s-1", method: "previous"}
+  sci_water_temp:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "degree_Celsius"
+    valid_min: -5.0
+    valid_max: 45.0
+  sci_water_cond:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "S m-1"
+    valid_min: 0.0
+    valid_max: 7.0
+  sci_water_pressure:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "bar"
+    valid_min: -0.2
+    valid_max: 200.0
+
+netcdf:
+  title: "Glider doug flight-model inputs (flight clock), CASPER-East 2015"
+  source: "Slocum Dinkum dbd/ebd, 20151011_doug_CASPER/post-recovery"
+  platform: "Slocum glider doug"
