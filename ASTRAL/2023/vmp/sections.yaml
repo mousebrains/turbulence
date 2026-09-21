@@ -1,0 +1,132 @@
+# Plotting sections — ASTRAL 2023 (VMP250IR-DL3 SN 92, Arabian Sea)
+#
+# Consumed by perturb-plot via --sections, e.g.
+#   perturb-plot scalar --root <VMP>/Processed --sections <VMP>/sections.yaml \
+#       --out-dir figs/ --var JAC_T --var SP --var sigma0
+#
+# ONE SECTION = ONE DEPLOYMENT (.p file). No geometric splitting is needed:
+# every deployment is a short, STRAIGHT westward drift — net displacement
+# equals path length for all 13, bearings 251–280°, 1–3 h, 1.5–6.5 km — and
+# consecutive deployments are 9–22 h apart. There are no heading reversals to
+# cut on, which is what ARCTERX needed.
+#
+# WHY xaxis = signed_distance, measured FROM THE MIDPOINT. Every deployment is
+# a single-direction drift, so the along-track coordinate is unambiguous:
+# `signed_distance_axis` fits the principal axis by total least squares THROUGH
+# THE CENTROID and reports distance from it, earliest sample negative. Sections
+# run 1.5–6.5 km, so values span roughly ±0.8 to ±3.3 km.
+#
+# Two consequences of every section running the SAME way (bearings 251–280°):
+# the sign convention is consistent between sections — negative is always the
+# eastern, earlier end — and the axes are directly comparable in extent and
+# orientation. They are NOT comparable in absolute position: each section's
+# origin is its OWN midpoint, so x = 0 is a different place in each.
+#
+# `time` remains defensible: these are drift stations at 0.9–2.9 km/h, so the
+# displacement is partly incidental advection. Each comment carries the hours,
+# bearing and net distance to support switching back.
+#
+# EACH SECTION IS ALSO ONE PROBE CONFIGURATION, named below. That matters: the
+# shear probes were changed six times, and D10's sh1 (M1196) is UNUSABLE — its
+# implied true sensitivity is below the entire fleet range. See
+# calibration/README.md.
+#
+# Regenerate with make_sections.py rather than hand-editing.
+
+sections:
+
+  # ---- whole programme ----------------------------------------------------
+  - name: full_timeseries
+    xaxis: {method: time}
+
+
+  # 10 casts, 1.0 h, 2.9 km on bearing 270 deg, to 150 dbar
+  # probes: sh1 M1021, sh2 M1516
+  - name: D02_M1021_M1516
+    start: "2023-06-17T15:06:38Z"
+    stop:  "2023-06-17T16:13:18Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 12 casts, 1.3 h, 1.6 km on bearing 266 deg, to 220 dbar
+  # probes: sh1 M1021, sh2 M1516
+  - name: D03_M1021_M1516
+    start: "2023-06-18T14:45:11Z"
+    stop:  "2023-06-18T16:08:13Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 12 casts, 1.4 h, 1.7 km on bearing 251 deg, to 208 dbar
+  # probes: sh1 M1021, sh2 M1516
+  - name: D04_M1021_M1516
+    start: "2023-06-18T23:44:43Z"
+    stop:  "2023-06-19T01:11:43Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 11 casts, 1.4 h, 1.7 km on bearing 280 deg, to 219 dbar
+  # probes: sh1 M1021, sh2 M1264
+  - name: D05_M1021_M1264
+    start: "2023-06-19T14:37:13Z"
+    stop:  "2023-06-19T16:04:16Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 10 casts, 1.2 h, 1.5 km on bearing 264 deg, to 202 dbar
+  # probes: sh1 M1038, sh2 M1264
+  - name: D06_M1038_M1264
+    start: "2023-06-20T12:54:52Z"
+    stop:  "2023-06-20T14:12:44Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 12 casts, 1.3 h, 1.5 km on bearing 269 deg, to 210 dbar
+  # probes: sh1 M1038, sh2 M1264
+  - name: D07_M1038_M1264
+    start: "2023-06-20T23:29:01Z"
+    stop:  "2023-06-21T00:52:54Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 20 casts, 3.1 h, 2.9 km on bearing 277 deg, to 267 dbar
+  # probes: sh1 M1038, sh2 M1848
+  - name: D08_M1038_M1848
+    start: "2023-06-21T11:27:17Z"
+    stop:  "2023-06-21T14:35:31Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 17 casts, 2.9 h, 3.7 km on bearing 279 deg, to 252 dbar
+  # probes: sh1 M1268, sh2 M1848
+  - name: D09_M1268_M1848
+    start: "2023-06-21T22:38:54Z"
+    stop:  "2023-06-22T01:38:54Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 15 casts, 2.8 h, 6.4 km on bearing 258 deg, to 250 dbar
+  # probes: sh1 M1196, sh2 M1848  ** sh1 UNUSABLE (see calibration/README.md) **
+  - name: D10_M1196_M1848
+    start: "2023-06-22T12:10:20Z"
+    stop:  "2023-06-22T15:02:35Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 16 casts, 3.0 h, 6.5 km on bearing 272 deg, to 246 dbar
+  # probes: sh1 M1252, sh2 M1848
+  - name: D11_M1252_M1848
+    start: "2023-06-22T22:34:07Z"
+    stop:  "2023-06-23T01:40:42Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 18 casts, 3.1 h, 6.1 km on bearing 264 deg, to 248 dbar
+  # probes: sh1 M1252, sh2 M1848
+  - name: D12_M1252_M1848
+    start: "2023-06-23T11:28:23Z"
+    stop:  "2023-06-23T14:37:47Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 16 casts, 3.0 h, 5.6 km on bearing 270 deg, to 248 dbar
+  # probes: sh1 M1252, sh2 M1848
+  - name: D13_M1252_M1848
+    start: "2023-06-23T22:55:26Z"
+    stop:  "2023-06-24T01:59:58Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 14 casts, 2.5 h, 4.3 km on bearing 261 deg, to 250 dbar
+  # probes: sh1 M1252, sh2 M1848
+  - name: D14_M1252_M1848
+    start: "2023-06-24T11:26:35Z"
+    stop:  "2023-06-24T14:02:48Z"
+    xaxis: {method: signed_distance, units: km}

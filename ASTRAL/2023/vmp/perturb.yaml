@@ -1,0 +1,199 @@
+# ASTRAL 2023 -- VMP processing (VMP250IR-DL3 SN 92, Arabian Sea, 17-24 June 2023)
+#
+# NOT our deployment: this config was written from the files themselves, not
+# from operator knowledge. Everything below was measured on ASTRAL data rather
+# than inherited from another cruise; where a value came out different from our
+# ARCTERX configs the comment says so.
+#
+# READ FIRST -- two facts that bound what these products can support:
+#
+#   1. NO CALIBRATION SHEETS EXIST for any shear probe. All 8 (M1021, M1038,
+#      M1196, M1252, M1264, M1268, M1516, M1848) are absent from the sheet
+#      collection and from anywhere under /Volumes/SeaChest/ASTRAL. Their
+#      configured sensitivities are corroborated by nothing, and epsilon goes
+#      as sens^-2.
+#   2. THE PROBES WERE CHANGED SIX TIMES IN EIGHT DAYS (see the table below),
+#      and the configured sens spans 0.0410-0.0689, a 1.68x range = 2.8x in
+#      epsilon. So an unverified sensitivity is not a constant offset here; it
+#      changes between deployments.
+#
+#      deployment   sh1              sh2
+#      D2-D4        M1021  0.0658    M1516  0.0596
+#      D5           M1021  0.0658    M1264  0.0410
+#      D6-D7        M1038  0.0539    M1264  0.0410
+#      D8           M1038  0.0539    M1848  0.0689
+#      D9           M1268  0.0418    M1848  0.0689
+#      D10          M1196  0.0584    M1848  0.0689
+#      D11-D14      M1252  0.0427    M1848  0.0689
+#
+#      Treat epsilon LEVELS as provisional, and be wary of comparing across a
+#      probe change. Relative structure within one deployment is unaffected.
+
+files:
+  # Reorganized 2026-09-20: the raw .p used to sit in this same directory.
+  # They are now ../raw/ and this tree is vmp/analysis/.
+  p_file_root: "<CONFIG_DIR>/../raw"
+  p_file_pattern: "*.p"     # a single instrument, all files in this directory.
+                            # NOTE: perturb's `instruments:` block keys on the
+                            # PARENT DIRECTORY, so if per-instrument settings
+                            # (e.g. fp07_tau_scale) are ever needed the files
+                            # must first be moved into an SN-named subdirectory.
+  output_root: "<CONFIG_DIR>/VMP_results"
+  trim: true                # several files end in a partial record ("file size
+                            # is not an integer number of records")
+  merge: false              # each D<n> is a separate deployment hours apart;
+                            # no size-limit rollovers (all 13 sizes distinct,
+                            # no repeated value = no cap was hit)
+
+gps:
+  # Built by GPS/make_gps.py from the ship's gps.mat (a MATLAB v7.3 TABLE:
+  # t in epoch MILLISECONDS, lat, lon at 1 Hz). 1,360,758 fixes -> 22,700
+  # one-minute medians, 2023-06-09 10:43 .. 06-25 05:03, which brackets every
+  # deployment. lat 11.60-14.34 N, lon 66.41-72.13 E (Arabian Sea).
+  source: "netcdf"
+  file: "<CONFIG_DIR>/../../gps/gps.nc"
+  time_col: "t"
+  lat_col: "lat"
+  lon_col: "lon"
+  max_time_diff: 60
+
+hotel:
+  enable: false             # ship met exists but is from a DIFFERENT CRUISE --
+                            # Data/ship/met holds R/V Revelle RR2202 (ARCTERX
+                            # 2022 Interior, March 2022) files, misfiled here.
+
+profiles:
+  P_min: 0.5
+  W_min: 0.3                # dbar/s. MEASURED descent is 0.72-0.75 dbar/s,
+                            # slower than ARCTERX's ~1.0, so do not raise this.
+  direction: "down"
+  min_duration: 7.0
+  diagnostics: false
+
+fp07:
+  calibrate: true           # MANDATORY: both thermistors (T1030, T1305) carry
+                            # the generic nominal coefficients (beta_1 3143.55,
+                            # T_0 289.301), and raw T1 reads ~2 K above JAC_T.
+
+  # 2, NOT 1 -- the opposite of our ARCTERX configs, and measured here.
+  # ASTRAL's per-cast JAC_T span is 9-15 K with 100% of casts above the 8 K
+  # threshold (ARCTERX was 3.4-7.5 K with most casts below), so a quadratic
+  # term should be identifiable. VERIFIED by A/B on D2 + D14, 24 profiles,
+  # RMS(T - JAC_T) median:
+  #     order 2:  T1 26.7 mK   T2 28.3 mK
+  #     order 1:  T1 30.0 mK   T2 31.9 mK
+  # Order 2 wins in 100% of profiles (median 3.9 mK better, ~13%). The
+  # discriminator against ARCTERX is the per-cast temperature span, which is
+  # what makes the quadratic identifiable here and not there.
+  order: 2
+
+  max_lag_seconds: 10
+  reference: "JAC_T"
+  must_be_negative: true
+  min_corr: 0.5
+
+ct:
+  align: true
+  T_name: "JAC_T"
+  C_name: "JAC_C"
+
+bottom:
+  enable: false
+
+top_trim:
+  enable: true
+  dz: 0.5
+  min_depth: 1.0
+  max_depth: 25.0
+  quantile: 0.6
+  noise_factor: 2.0
+
+epsilon:
+  fft_sec: 1.0
+  diss_sec: null
+  overlap_sec: null
+  goodman: true
+  f_AA: 98.0
+  f_limit: null
+  fit_order: 3
+  despike_thresh: 8
+  despike_smooth: 0.5
+  salinity: "measured"      # in-water JAC_C is clean (42.7-58.8 mS/cm)
+  epsilon_minimum: 1.0e-13
+  T_source: "JAC_T"         # deliberate: "auto" resolves to T1, which is only
+                            # right if the FP07 fit succeeded, and a failed fit
+                            # is swallowed with a warning
+  fom_max: null             # thresholds the variance-ratio fom, not the
+                            # Lueck-2022 FM; on a corpus with ISR estimates a
+                            # low value cuts them as a class
+
+chi:
+  enable: true
+  fft_sec: 1.0
+  diss_sec: null
+  overlap_sec: null
+  fp07_model: "single_pole"
+  goodman: true
+  f_AA: 98.0
+  use_epsilon: true         # Method 1; healthy dual shear probes
+  fit_method: "iterative"
+  spectrum_model: "kraichnan"
+  salinity: "measured"
+  mixing: true
+  chi_minimum: 1.0e-13
+  fom_max: null
+
+ctd:
+  enable: true
+  bin_width: 0.5
+  T_name: "JAC_T"
+  C_name: "JAC_C"
+  variables: null
+  method: "mean"
+
+speed:
+  method: "pressure"
+  tau: null
+  speed_cutout: 0.05
+
+qc:
+  enable: true
+  drop_action: "nan"
+  epsilon_drop_from: []
+  chi_drop_from: []
+
+binning:
+  method: "depth"
+  width: 1.0
+  aggregation: "mean"
+
+stratification:
+  enable: true
+  window: 2.0
+  salinity: null
+
+netcdf:
+  title: "ASTRAL 2023 — VMP turbulence profiles (VMP250IR-DL3 SN 92)"
+  summary: >
+    Turbulent kinetic energy dissipation (epsilon) and thermal variance
+    dissipation (chi) profiles from a Rockland Scientific VMP250IR-DL3
+    (SN 92) during the ASTRAL 2023 field programme in the Arabian Sea
+    (11.6–14.3 N, 66.4–72.1 E), 17–24 June 2023. Thirteen deployments
+    (D2–D14) of repeated casts to 150–267 dbar. NOTE: no calibration sheet
+    exists for any of the eight shear probes used, and the probes were
+    changed six times during the programme; dissipation LEVELS are
+    provisional.
+  institution: "Oregon State University"
+  project: "ASTRAL"
+  program: "ASTRAL"
+  instrument: "Rockland Scientific VMP250IR-DL3 (SN 92)"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"
+  creator_institution: "Oregon State University"
+  source: "Rockland Scientific ODAS .p files, processed with microstructure-tpw perturb"
+  geospatial_vertical_positive: "down"
+  standard_name_vocabulary: "CF Standard Name Table v89"
+  Conventions: "CF-1.13, ACDD-1.3"
+
+parallel:
+  jobs: 4
