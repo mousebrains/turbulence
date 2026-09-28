@@ -81,6 +81,7 @@ def extract_profiles(
     output_stem: str | None = None,
     max_repair_gap_s: float = _MAX_REPAIR_GAP_S,
     extra_attrs: dict[str, Any] | None = None,
+    bottom_depths: list[float] | None = None,
     **profile_kwargs: Any,
 ) -> list[Path] | tuple[list[Path], list[dict[str, float]]]:
     """Extract profiles from a PFile or full-record NetCDF.
@@ -296,6 +297,23 @@ def extract_profiles(
             lon_var.axis = "X"
             scalars["lat"] = lat_val
             scalars["lon"] = lon_val
+
+        # Seabed datum for this profile, from the bottom stage. This is the
+        # DETECTED seabed, NOT the trim point: the two differ by exactly
+        # `bottom.height`, and `altitude` binning means height above the
+        # seabed. NaN where no bottom was detected, so downstream can tell
+        # "no seabed here" from "seabed at 0 m".
+        if bottom_depths is not None and (pi - 1) < len(bottom_depths):
+            bd_val = float(bottom_depths[pi - 1])
+            bd_var = ds.createVariable("bottom_depth", "f8", ())
+            bd_var[...] = bd_val
+            bd_var.units = "dbar"
+            bd_var.long_name = "detected seabed depth for this profile"
+            bd_var.comment = (
+                "From perturb's bottom stage, BEFORE the bottom.height back-off. "
+                "Height above bottom = bottom_depth - depth."
+            )
+            scalars["bottom_depth"] = bd_val
 
         n_fast = e_fast - s_fast
         n_slow = s_slow_end - s_slow

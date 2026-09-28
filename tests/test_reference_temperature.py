@@ -845,16 +845,21 @@ class TestRunPipelineConstantTemperatureQC:
 
 
 def _tracked_perturb_configs() -> list[Path]:
-    """Tracked perturb YAML configs shipped in the repo (examples/, ARCTERX/).
+    """Tracked perturb YAML configs shipped in the repo (all under examples/).
 
     Uses ``git ls-files`` so untracked local configs (e.g. scratch campaign
     dirs) are excluded; returns [] outside a git checkout.
+
+    Since the per-campaign recipe trees moved under ``examples/`` this sweeps
+    every shipped campaign config, not just the two hand-listed ones -- which
+    immediately caught ``examples/Rutgers/dat_0377/perturb.yaml`` stranded
+    without the then-new required ``hotel.max_gap``.
     """
     import subprocess
 
     try:
         out = subprocess.run(
-            ["git", "ls-files", "--", "examples/", "ARCTERX/"],
+            ["git", "ls-files", "--", "examples/"],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
@@ -879,7 +884,7 @@ class TestShippedConfigsValidate:
         if not configs:
             pytest.skip("not a git checkout (no tracked configs found)")
         names = {p.relative_to(REPO_ROOT).as_posix() for p in configs}
-        assert "ARCTERX/perturb.yaml" in names
+        assert "examples/ARCTERX/perturb.yaml" in names
         assert "examples/arcterx_2025_interior/perturb.yaml" in names
 
     @pytest.mark.parametrize(

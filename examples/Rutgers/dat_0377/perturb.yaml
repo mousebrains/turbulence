@@ -33,6 +33,11 @@ hotel:
   file: "<CONFIG_DIR>/RU33_glider_data_for_zissou.csv"
   time_column: "datetime"   # epoch seconds
   time_format: "auto"       # auto-detects epoch (median ~1.63e9); or set "epoch"
+  max_gap: 30.0             # same RU33 CTD as ../perturb.yaml: it prints ~0.5 Hz
+                            # while pumped and stops between, so 30 s is the
+                            # sensor's own rate. Required since the key lost its
+                            # default -- without it the merge rules a straight
+                            # line across a pump-off hole of any length.
 
 # Position from the same glider CSV (epoch-second time), for maps/sections and
 # TEOS-10 absolute salinity. Small effect on N2, but correct and cheap.

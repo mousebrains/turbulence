@@ -5,6 +5,7 @@ Reference: Code/bin_by_real.m, Code/profile2binned.m, Code/diss2binned.m,
            Code/chi2binned.m
 """
 
+import functools
 import logging
 import re
 from concurrent.futures import ProcessPoolExecutor
@@ -16,6 +17,41 @@ import xarray as xr
 from odas_tpw.perturb.logging_setup import stage_log
 
 logger = logging.getLogger(__name__)
+
+#: Binning methods whose product is VERTICAL — a ``(bin, profile)`` grid.
+#: ``altitude`` is depth-like in every *structural* respect (same gluing, same
+#: ``featureType``, same profile handling) and differs only in which coordinate
+#: each sample is assigned to.
+#:
+#: This set exists because testing ``method == "depth"`` instead of membership
+#: here is a silent-wrong-answer defect, not a crash: every such test routes
+#: ``altitude`` down the TIME branch. It did exactly that at four sites —
+#: profiles were binned by *time*, combos were glued lengthwise, they gained a
+#: spurious ``time: 1`` dimension and ``featureType="trajectory"``, and one
+#: profile was dropped. The turbulence products were right, so nothing failed
+#: loudly; on the campaign's largest deployment the time path then tried to
+#: concatenate 7924 datasets and died with a bare SIGSEGV, which is the only
+#: reason it was noticed at all. Add a vertical method HERE, never by widening
+#: an equality test.
+VERTICAL_BIN_METHODS = frozenset({"depth", "altitude"})
+#: Every accepted ``binning.method``. Validated at config load so a typo fails
+#: loudly instead of silently selecting time binning.
+BIN_METHODS = VERTICAL_BIN_METHODS | {"time"}
+
+
+def coordinate_for_method(method: str) -> str:
+    """The per-sample coordinate that a vertical binning *method* bins on.
+
+    One mapping, used by every call site, so ``altitude`` cannot be handled in
+    one place and forgotten in another.
+    """
+    if method not in VERTICAL_BIN_METHODS:
+        raise ValueError(
+            f"{method!r} is not a vertical binning method; "
+            f"expected one of {sorted(VERTICAL_BIN_METHODS)}"
+        )
+    return "altitude" if method == "altitude" else "depth"
+
 
 # Per-profile NetCDFs are named ``<pfile_stem>_prof###.nc`` by
 # :func:`odas_tpw.rsi.profile.extract_profiles`.  The binning step's
@@ -207,7 +243,11 @@ def _time_to_seconds(values: np.ndarray) -> np.ndarray:
     return seconds
 
 
-_SCALAR_NAMES = ("lat", "lon", "stime", "etime")
+# "bottom_depth" rides this path so a binned/combo product carries the
+# seabed datum each profile was measured against -- without it, altitude
+# binning has nothing to reference and depth bins cannot be converted
+# after the fact (the seabed moves 13 m between casts on one SUNRISE leg).
+_SCALAR_NAMES = ("lat", "lon", "stime", "etime", "bottom_depth")
 
 
 _DEPTH_CANDIDATES = ("depth", "P", "P_mean")
@@ -304,7 +344,13 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
     """
     import netCDF4 as nc
 
-    ds = nc.Dataset(str(profile_file), "r")
+    from odas_tpw.perturb.atomic_io import retry_transient_io
+
+    # The open is the single funnel for every profile READ in this module (scan
+    # and compute both route through here), and it is where the SeaChest SMB
+    # transient actually fires: both file-level failures in the 2026-09-23/24
+    # three-analysis run raised here, in the binning scan, not on a write.
+    ds = retry_transient_io(nc.Dataset, str(profile_file), "r", what=str(profile_file))
     try:
         ds.set_auto_maskandscale(True)  # CF decode; _decoded fills masked -> NaN
 
@@ -442,11 +488,58 @@ def _bin_snapshot(snapshot: dict, bin_edges: np.ndarray, agg, diagnostics: bool)
     return out
 
 
+class MissingSeabedDatum(ValueError):
+    """Raised when altitude binning is asked for but no seabed datum exists."""
+
+
+def _coordinate_from_snapshot(snapshot: dict, coordinate: str) -> np.ndarray:
+    """The coordinate to bin on: depth, or height above the seabed.
+
+    ``altitude`` is NOT a relabelling of the depth axis. Within one SUNRISE
+    leg the seabed moves from 21.5 to 34.5 m (p10-p90), so a fixed depth bin
+    sits 12 m above the bed in one cast and 1 m above it in the next; binning
+    in depth and converting afterwards averages across completely different
+    heights and smears the boundary layer away. The conversion has to happen
+    BEFORE the bin assignment, which is what this does.
+
+    The datum is ``bottom_depth`` -- the DETECTED seabed, written per profile
+    by the bottom stage before the ``bottom.height`` back-off. A file without
+    it cannot be altitude-binned, and guessing from the deepest sample would
+    be wrong by ``height`` plus the detector's own offset, so this refuses.
+    """
+    depth = np.asarray(snapshot["depth"], dtype=np.float64)
+    if coordinate == "depth":
+        return depth
+    if coordinate != "altitude":
+        raise ValueError(f"unknown binning coordinate {coordinate!r}")
+    scalars = snapshot.get("scalars", {})
+    if "bottom_depth" not in scalars:
+        # The product predates the datum. Refuse rather than guess: the
+        # deepest retained sample sits bottom.height above the seabed, not on
+        # it, so a guess would be wrong by a fixed, invisible offset.
+        raise MissingSeabedDatum(
+            "altitude binning needs the per-profile `bottom_depth` scalar, "
+            "which this file does not carry. Enable [bottom] and rebuild -- "
+            "the datum is written at profile-extraction time and cannot be "
+            "recovered afterwards."
+        )
+    bd = scalars["bottom_depth"]
+    if bd is None or not np.isfinite(bd):
+        # A real cast that never reached the seabed (too short to tell, or the
+        # detector declined). It HAS no altitude, so it contributes nothing:
+        # all-NaN falls outside every bin and the profile's column comes out
+        # empty. Aborting the run instead would let one 3 m cast kill a
+        # 78-file deployment.
+        return np.full(np.shape(depth), np.nan, dtype=np.float64)
+    return float(bd) - np.asarray(depth, dtype=np.float64)
+
+
 def _bin_one_profile(
     profile_file: Path,
     bin_edges: np.ndarray,
     agg,
     diagnostics: bool,
+    coordinate: str = "depth",
 ) -> dict:
     """Open + bin a single profile NetCDF onto *bin_edges*.
 
@@ -457,6 +550,8 @@ def _bin_one_profile(
     snap = _load_profile_snapshot(profile_file)
     if snap is None:
         return {"vars": {}, "stds": {}, "scalars": {}, "scalar_attrs": {}, "var_attrs": {}}
+    snap = dict(snap)
+    snap["depth"] = _coordinate_from_snapshot(snap, coordinate)
     return _bin_snapshot(snap, bin_edges, agg, diagnostics)
 
 
@@ -465,12 +560,14 @@ def _bin_one_profile(
 # Python pickle small: just file path + small numpy array + tiny config.
 
 
-def _bin_scan_worker(profile_file: Path) -> tuple[float, float] | None:
-    """Worker: read just enough of the file to report (min, max) depth."""
+def _bin_scan_worker(
+    profile_file: Path, coordinate: str = "depth"
+) -> tuple[float, float] | None:
+    """Worker: read just enough of the file to report the (min, max) coordinate."""
     snap = _load_profile_snapshot(profile_file)
     if snap is None:
         return None
-    d = snap["depth"]
+    d = _coordinate_from_snapshot(snap, coordinate)
     d = d[np.isfinite(d)]
     if d.size == 0:
         return None
@@ -479,8 +576,10 @@ def _bin_scan_worker(profile_file: Path) -> tuple[float, float] | None:
 
 def _bin_compute_worker(args: tuple) -> dict:
     """Worker: load snapshot + bin onto pre-computed *bin_edges*."""
-    profile_file, bin_edges, aggregation, diagnostics = args
-    return _bin_one_profile(profile_file, bin_edges, _get_agg_func(aggregation), diagnostics)
+    profile_file, bin_edges, aggregation, diagnostics, coordinate = args
+    return _bin_one_profile(
+        profile_file, bin_edges, _get_agg_func(aggregation), diagnostics, coordinate
+    )
 
 
 def bin_by_depth(
@@ -490,6 +589,7 @@ def bin_by_depth(
     diagnostics: bool = False,
     log_dir: Path | None = None,
     jobs: int = 1,
+    coordinate: str = "depth",
 ) -> xr.Dataset:
     """Bin per-profile NetCDFs by depth into 2D (bin x profile).
 
@@ -535,11 +635,12 @@ def bin_by_depth(
     n_profiles = len(profile_files)
 
     # ---- Phase 1: scan depth ranges -------------------------------------
+    scan = functools.partial(_bin_scan_worker, coordinate=coordinate)
     if jobs > 1 and n_profiles > 1:
         with ProcessPoolExecutor(max_workers=jobs) as exe:
-            ranges = list(exe.map(_bin_scan_worker, profile_files))
+            ranges = list(exe.map(scan, profile_files))
     else:
-        ranges = [_bin_scan_worker(f) for f in profile_files]
+        ranges = [scan(f) for f in profile_files]
 
     g_min = np.inf
     g_max = -np.inf
@@ -567,19 +668,21 @@ def bin_by_depth(
 
     # ---- Phase 2: load + bin --------------------------------------------
     if jobs > 1 and n_profiles > 1:
-        args_iter = ((f, bin_edges, aggregation, diagnostics) for f in profile_files)
+        args_iter = (
+            (f, bin_edges, aggregation, diagnostics, coordinate) for f in profile_files
+        )
         with ProcessPoolExecutor(max_workers=jobs) as exe:
             results = list(exe.map(_bin_compute_worker, args_iter))
     else:
-        results = [_bin_one_profile(f, bin_edges, agg, diagnostics) for f in profile_files]
+        results = [
+            _bin_one_profile(f, bin_edges, agg, diagnostics, coordinate)
+            for f in profile_files
+        ]
 
     result_vars: dict = {}
-    profile_scalars = {
-        "lat": np.full(n_profiles, np.nan),
-        "lon": np.full(n_profiles, np.nan),
-        "stime": np.full(n_profiles, np.nan),
-        "etime": np.full(n_profiles, np.nan),
-    }
+    # Keyed off _SCALAR_NAMES, not a hand-written list: a scalar added there
+    # (bottom_depth) would otherwise KeyError on the first profile carrying it.
+    profile_scalars = {n: np.full(n_profiles, np.nan) for n in _SCALAR_NAMES}
     profile_scalar_attrs: dict[str, dict] = {}
     # Curated data-var attrs (e.g. the FP07 in-situ calibration tag) from the
     # first profile that carries them; concat keeps the first anyway.
@@ -635,13 +738,30 @@ def bin_by_depth(
         if np.any(np.isfinite(sarr)):
             data_vars[sname] = (["profile"], sarr, profile_scalar_attrs.get(sname, {}))
 
-    return xr.Dataset(
+    ds_out = xr.Dataset(
         data_vars,
         coords={
             "bin": bin_centers,
             "profile": np.arange(n_profiles),
         },
     )
+    # Name the vertical coordinate so a consumer cannot mistake one for the
+    # other: they run in OPPOSITE directions (depth increases downward,
+    # altitude upward) and a plot that inverts the wrong one is silently
+    # upside down.
+    ds_out["bin"].attrs.update(
+        {
+            "units": "m",
+            "positive": "down" if coordinate == "depth" else "up",
+            "long_name": (
+                "depth bin center"
+                if coordinate == "depth"
+                else "height above seabed, bin center"
+            ),
+            "coordinate_kind": coordinate,
+        }
+    )
+    return ds_out
 
 
 def bin_by_time(
@@ -767,10 +887,16 @@ def bin_diss(
 
     Handles per-probe (e_1, e_2) and combined (epsilonMean) variables.
     """
-    if method == "time":
+    if method not in VERTICAL_BIN_METHODS:
         return bin_by_time(diss_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
     return bin_by_depth(
-        diss_files, bin_width, aggregation, diagnostics, log_dir=log_dir, jobs=jobs
+        diss_files,
+        bin_width,
+        aggregation,
+        diagnostics,
+        log_dir=log_dir,
+        jobs=jobs,
+        coordinate=coordinate_for_method(method),
     )
 
 
@@ -784,8 +910,14 @@ def bin_chi(
     jobs: int = 1,
 ) -> xr.Dataset:
     """Bin chi estimates by depth or time."""
-    if method == "time":
+    if method not in VERTICAL_BIN_METHODS:
         return bin_by_time(chi_files, bin_width, aggregation, diagnostics, log_dir=log_dir)
     return bin_by_depth(
-        chi_files, bin_width, aggregation, diagnostics, log_dir=log_dir, jobs=jobs
+        chi_files,
+        bin_width,
+        aggregation,
+        diagnostics,
+        log_dir=log_dir,
+        jobs=jobs,
+        coordinate=coordinate_for_method(method),
     )

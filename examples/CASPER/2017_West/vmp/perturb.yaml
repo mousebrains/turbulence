@@ -1,0 +1,324 @@
+# CASPER-West -- VMP processing (R/V Sally Ride SR1715, 28 Sep - 25 Oct 2017)
+#
+# ONE instrument: Rockland VMP-250IR SN 194 -- the same physical unit that later
+# flew ARCTERX-2022 Interior and Wake. 247 .p files, 6.1 GB, off Point Mugu /
+# Santa Barbara Channel, CA (~33.2-34.1 N, 118.4-119.6 W).
+#
+# PROVENANCE WARNING, read before trusting any absolute number:
+# every .p file's embedded config is the RSI factory template with only the
+# INSTRUMENT-dependent half filled in. Confirmed against
+# TPW/vmp/VMP_250/setup.cfg, whose own header says
+# "Created by RSI, 2015-12-17 / Modified by Dave Cronkrite, 2016-05-17 with
+# coefficients / Made for OSU".
+#   * populated and traceable: a/b/G/E_B per thermistor channel, the pressure
+#     polynomial, the JAC CT coefficients, every diff_gain -- all match the
+#     factory certificate TPW/vmp/VMP_250/'P049R02 ASTP-LP_130_2016-03-31.pdf'.
+#   * NOT populated: every SENSOR-dependent field. Shear probe serials read
+#     M1000 / M1001 and thermistor serials T1000 / T1001 -- RSI template
+#     placeholders -- with blank cal_date, and the FP07 coefficients are the
+#     generic nominal set (beta_1 3143.55, beta_2 2.5e5, T_0 289.301).
+# Consequences: the FP07 temperature is several K wrong until calibrated in
+# situ (handled below), and the shear sensitivities are NOT known to belong to
+# the probes that were fitted. See calibration/README.md.
+#
+# TWO RESULTS THAT CHANGE HOW THESE PRODUCTS SHOULD BE QUOTED
+# (both measured on this config's own output; details in calibration/README.md)
+#
+#  1. THE SHEAR PROBES ARE UNIDENTIFIED, but there is NO evidence of a scale
+#     error. The config reads sh1 = M1000 / 0.0716 and sh2 = M1001 / 0.0705.
+#     We hold sheets for M1194 and M1491 -- but M1194 was on the MicroRider
+#     this cruise (its config: sh1 M1194 sens 0.0793, matching the sheet
+#     exactly), so neither sheet describes a VMP probe. An earlier version of
+#     this file claimed a "~+/-25% systematic" from substituting those sheets;
+#     that is WITHDRAWN. The two channels agree to 0.951 (MAD x1.21, n=1607)
+#     as configured. We hold no sheet for M1000 or M1001, so the sensitivities
+#     cannot be verified -- but nothing indicates they are wrong. Note a pair
+#     ratio constrains only the RELATIVE sensitivity; a common error cancels.
+#     Full evidence, both ways, in calibration/README.md.
+#
+#  2. sh2 DEVELOPS A PRESSURE-RELATED FAULT -- bad in a DEPTH WINDOW, good
+#     above and below it. Diagnosed from per-probe absolute levels, not the
+#     ratio: at 40-60 m from era A to D, e_1 holds at -8.77 -> -8.55 (log10
+#     W/kg) while e_2 climbs -8.67 -> -7.27. e_1 decays smoothly with depth
+#     throughout; e_2 plateaus in the upper 60 m and bumps at 45-50 m.
+#     e_2/e_1 by depth, eras C and D:  ~1.0 at 0-35 m, 8.9-18.1 at 35-55 m,
+#     1.01-1.02 at 65-130 m. Binned on height above each cast's own end it is
+#     FLAT (0.92-1.05), so it is absolute depth, not cast geometry.
+#     On 10-24 the probe fails outright: 0.37-0.82 at every depth.
+#
+#     WHAT TO USE:
+#       09-28..10-08  epsilonMean is sound at all depths.
+#       10-09..10-23  use e_1 ALONE above ~65 m; epsilonMean (the GEOMETRIC
+#                     mean) is biased high by up to 4.25x in the 35-65 m
+#                     window. Below 65 m epsilonMean is fine.
+#       10-24..10-25  use e_1 ALONE at all depths; epsilonMean ~35% low.
+#     The QC gate drops 0.0% of this -- sh2's Lueck FM peaks near 0.92, under
+#     the 1.15 reject threshold -- so do NOT rely on qc_drop_epsilon.
+#     `exclude_shear_probes` is per instrument, not per depth window, so this
+#     cannot be expressed here; e_1 and e_2 are kept in every product for it.
+#
+#  3. THE CHI FAILURE IS SEPARATE AND IS A THERMISTOR PROBLEM. chi T1/T2 breaks
+#     on 10-23 (0.98 -> 2.22), a day before the shear pair, and is structurally
+#     independent: with chi.use_epsilon: true BOTH thermistors take kB from the
+#     same epsilonMean, so a shear fault cancels from their ratio. It is also
+#     depth-INdependent (era D: 2.72, 2.26, 2.24, 2.23, 1.90, 1.97 from 0-20 to
+#     130-200 m), i.e. a relative response/gain difference between the beads.
+#     No fp07_tau_scale has been fitted for this cruise; ARCTERX needed one for
+#     exactly this signature. See calibration/README.md and repo issue #189.
+
+files:
+  # Reorganized 2026-09-19: this tree was CasperWest/VMP and the raw files
+  # were CasperWest/Data/vmp/raw. They are now vmp/analysis and vmp/data.
+  p_file_root: "<CONFIG_DIR>/../data"
+
+  # The raw tree is the cruise distribution copy, now sorted by instrument
+  # serial (see ../data/raw/README.md). It is read in place and never modified;
+  # all 250 .P files were verified against the 2017 manifest before and after
+  # that move, 250/250 matching.
+  #
+  #   SN194/  <- this config's 247 files
+  #   SN142/  <- 3 files, DELIBERATELY EXCLUDED. All three are bench runs with
+  #              Rockland TEST PROBES fitted (thermistor pinned at 16.167 C on a
+  #              3000 ohm resistor, shear at 1.02 ADC counts = open circuit) and
+  #              none of them profiled -- pressure is flat at ~6 dbar throughout.
+  #              That unit also has no JAC CT, so fp07.calibrate, T_source and
+  #              salinity: measured all have nothing to work from. Widening the
+  #              glob to SN*/ would add three files that yield zero profiles and
+  #              a stack of avoidable warnings.
+  #
+  # "*.P" not "*.p": every file here is stored upper-case, and Python's glob
+  # matches the pattern case-sensitively even though this SMB mount is itself
+  # case-insensitive (sn142 and SN142 are the same directory on it).
+  p_file_pattern: "raw/SN194/*.P"
+  output_root: "<CONFIG_DIR>/VMP_results"
+
+  trim: true
+
+  # false. The files are NOT a size-limited chain: they are separate station
+  # occupations, each holding several yo-yo casts, started and stopped by the
+  # operator (see ../data/VMP_log_CASPER_West.xlsx). Consecutive files are
+  # minutes to hours apart.
+  merge: false
+
+gps:
+  # R/V Sally Ride MET 'Corrected' 1 Hz stream -> one-minute medians, built by
+  # GPS/make_gps.py: 2,499,076 fixes -> 41,652 minutes, 2017-09-26 20:25 ..
+  # 10-25 18:36, which brackets all 247 inputs. The three GPS receivers agree
+  # to a fixed 3.6-4.1 m antenna baseline with ~5.8 m MAD scatter, and the MET
+  # record clock sits exactly +1.0 s from the receivers' own fix time over all
+  # 2.5 M records (p1 = p99 = +1.0 s), so there is no clock drift to correct.
+  source: "netcdf"
+  file: "<CONFIG_DIR>/GPS/gps.nc"
+  time_col: "t"
+  lat_col: "lat"
+  lon_col: "lon"
+  max_time_diff: 60
+
+hotel:
+  enable: false           # the ship CTD was never cast (Data/data/ctd holds
+                          # deck tests only); the VMP's own JAC CT is the
+                          # in-situ reference.
+
+profiles:
+  P_min: 0.5
+  W_min: 0.3              # dbar/s; measured descent is ~0.72 dbar/s
+  direction: "down"       # free-falling VMP; Incl_Y sits at +90 (nose down)
+  min_duration: 7.0
+  diagnostics: false
+
+fp07:
+  # MANDATORY -- the beads carry nominal coefficients (see header). Raw T1/T2
+  # sit +0.8 / -0.6 K off JAC_T on a spot check of DAT_100.
+  calibrate: true
+  # 2, MEASURED on this cruise (12 files spread 09-30..10-25, 94 profiles).
+  # The per-profile JAC_T span here is 9.07 K median (p05 3.4, p95 11.5) --
+  # far wider than ARCTERX-2022's 3.4-7.5 K, which is why that effort's
+  # order 1 does NOT carry over. In-sample RMS cannot choose an order (an
+  # extra free parameter can only reduce it), so two held-out tests were run:
+  #
+  #  LEAVE-ONE-PROFILE-OUT (fit the file's other profiles, predict this one --
+  #  the regime perturb actually operates in, since it fits per file and
+  #  applies to that same file), RMS(T - JAC_T) median over 92 held-out
+  #  profiles:
+  #      order 1:  T1 8.6 mK   T2 9.2 mK
+  #      order 2:  T1 6.0 mK   T2 6.3 mK      <- ~30% better
+  #      order 3:  T1 5.9 mK   T2 6.2 mK      (no further gain)
+  #  p90 and max are IDENTICAL across all three orders (18 and 54 mK), so the
+  #  tail is set by something other than polynomial order.
+  #
+  #  TEMPERATURE SPLIT (fit the warm half, predict the cold half -- pure
+  #  extrapolation, harsher than the real regime), median over 12 files:
+  #      order 1:  30.8 mK, and stable: worst file 41 mK
+  #      order 2:  25.9 mK, but BIMODAL: 5.7 mK at best, 105 mK at worst
+  #      order 3:  666 mK -- catastrophic, disqualified outright
+  #
+  # So order 3 is rejected on extrapolation, and order 2 is taken because the
+  # pipeline interpolates rather than extrapolates. The caveat that comes with
+  # it: any profile the lag gate REJECTS still receives these coefficients, and
+  # if it sits outside the fitted span order 2 will do worse there than order 1
+  # would have.
+  order: 2
+  max_lag_seconds: 10
+  reference: "JAC_T"
+  must_be_negative: true
+  min_corr: 0.5
+
+ct:
+  align: true
+  T_name: "JAC_T"
+  C_name: "JAC_C"
+
+bottom:
+  enable: false
+
+top_trim:
+  enable: true
+  dz: 0.5
+  min_depth: 1.0
+  max_depth: 25.0
+  quantile: 0.6
+  noise_factor: 2.0
+
+epsilon:
+  fft_sec: 1.0
+  diss_sec: null
+  overlap_sec: null
+  goodman: true
+  f_AA: 98.0
+  f_limit: null
+  fit_order: 3
+  despike_thresh: 8
+  despike_smooth: 0.5
+  salinity: "measured"
+  epsilon_minimum: 1.0e-13
+  T_source: "JAC_T"       # deliberate, not "auto": auto resolves to T1, which
+                          # is only right if the FP07 fit succeeded, and a
+                          # failed fit is swallowed with a warning.
+  fom_max: null
+
+chi:
+  enable: true
+  fft_sec: 1.0
+  diss_sec: null
+  overlap_sec: null
+  fp07_model: "single_pole"
+  goodman: true
+  f_AA: 98.0
+  use_epsilon: true
+  fit_method: "iterative"
+  spectrum_model: "kraichnan"
+  salinity: "measured"
+  mixing: true
+  chi_minimum: 1.0e-13
+  fom_max: null
+
+ctd:
+  enable: true
+  bin_width: 0.5
+  T_name: "JAC_T"
+  C_name: "JAC_C"
+  variables: null
+  method: "mean"
+
+speed:
+  method: "pressure"
+  tau: null
+  speed_cutout: 0.05
+
+qc:
+  enable: true
+  drop_action: "nan"
+  epsilon_drop_from: []
+  chi_drop_from: []
+
+binning:
+  method: "depth"
+  width: 1.0
+  aggregation: "mean"
+
+stratification:
+  enable: true
+  window: 2.0
+  salinity: null
+
+netcdf:
+  title: "CASPER-West — VMP turbulence profiles (R/V Sally Ride SR1715)"
+  summary: >
+    Turbulent kinetic energy dissipation (epsilon) and thermal variance
+    dissipation (chi) profiles from a Rockland Scientific VMP-250IR (SN 194)
+    during the CASPER-West field campaign aboard R/V Sally Ride, 28 September
+    to 25 October 2017, off Point Mugu and in the Santa Barbara Channel,
+    California. Casts are repeated yo-yos to 60-190 dbar at fixed stations
+    (R02, R10, R16, R18, R42, F01, F04, F09).
+  institution: "Oregon State University"
+  project: "CASPER-West"
+  program: "CASPER"
+  platform: "R/V Sally Ride"
+  instrument: "Rockland Scientific VMP-250IR SN 194"
+  # The embedded config's `operator = Dr. ?` is RSI template text, not a
+  # record. The cruise was run by Kipp Shearman and others (OSU);
+  # TPW/vmp/kipp/ holds his 2017 processing scripts.
+  acknowledgement: "VMP operations by Kipp Shearman and others, Oregon State University"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"
+  creator_institution: "Oregon State University"
+  source: "Rockland Scientific ODAS .p files, processed with microstructure-tpw perturb"
+  geospatial_vertical_positive: "down"
+  standard_name_vocabulary: "CF Standard Name Table v89"
+  Conventions: "CF-1.13, ACDD-1.3"
+
+parallel:
+  jobs: 4
+
+instruments: {}
+  # NOTHING IS SET FOR SN194, DELIBERATELY, DELIBERATELY. Both entries this cruise needs are
+  # blocked on repo issue #190 (windowed probe exclusion); the interim
+  # instruction is in README.md and calibration/README.md -- use e_1.
+  #
+  # WHAT WE WANT, once #190 lands. sh2 has a pressure-related fault: a depth
+  # window in which it is bad, good above and below, and then an outright
+  # failure at the end. That is two entries -- a depth range over a date
+  # range, then a complete exclusion:
+  #
+  #   exclude:
+  #     - probe: sh2
+  #       P_min: 30
+  #       P_max: 70
+  #       start: "2017-10-09T00:00:00Z"
+  #       stop:  "2017-10-24T00:00:00Z"
+  #       reason: "pressure-related fault; e_2/e_1 reaches 15-18x in-window
+  #                while 65-130 m stays at 1.01-1.02"
+  #     - probe: sh2
+  #       start: "2017-10-24T00:00:00Z"
+  #       reason: "probe failed outright; e_2/e_1 = 0.37-0.82 at every depth"
+  #
+  # The 30-70 dbar box is deliberately conservative: the window MOVES, sitting
+  # at 35-55 m in 10-16..10-22 and 45-65 m on 10-23. Narrower per-era entries
+  # would recover a little more good data.
+  #
+  # `exclude_shear_probes: ["sh2"]` (the key that exists today) would work but
+  # is all-or-nothing: it would discard the first two clean weeks AND every
+  # depth below 65 m, which is most of the channel's usable data.
+
+  # fp07_tau_scale: NOT SET, and that is the measured answer, not an omission.
+  # Fitting the identifiable quantity -- the RATIO tau(T1)/tau(T2), since a
+  # common scale is nearly unconstrained -- gives:
+  #     whole cruise  1.00   (chi_1/chi_2 already 1.025x at default tau)
+  #     09-28..10-08  0.95   (offset 1.050x -> 1.006x)
+  #     10-09..10-15  1.25   (1.293x -> 1.025x)
+  #     10-16..10-22  1.05   (1.049x -> 1.003x)
+  #     10-23         0.40   (2.123x -> 1.127x)
+  #     10-24..10-25  0.40   (2.277x -> 1.032x)
+  # So ~1.0 is right for the 88% of the cruise that is clean, and the late
+  # break needs 0.40 -- which a per-instrument CONSTANT cannot express, the
+  # same limitation as the sh2 window above. Setting a single value would
+  # damage the good part to partly fix the bad part. Fit with fit_fp07_tau.py.
+  #
+  # NOTE ON THE FIT ITSELF (issue #189): an inter-probe comparison identifies
+  # ONLY the ratio tau(T1)/tau(T2). Scanning a COMMON scale s1=s2 moves the
+  # objective monotonically with no minimum, so a two-parameter fit runs to
+  # whatever bound it is given. The absolute must come from physics: the
+  # Amphenol FP07 datasheet gives 7 ms "plunge into water" and Lueck's model is
+  # 10 ms at 1 m/s (= s 1.0 here), so s < ~0.7 is UNPHYSICAL -- a bead only gets
+  # slower (fouling), never faster than manufactured. This matters because
+  # absolute chi is ~linear in s: 0.60x at s=0.5, 1.48x at s=1.5, 2.0x at s=2.0.

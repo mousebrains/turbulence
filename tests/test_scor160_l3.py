@@ -2,9 +2,10 @@
 """Unit tests for L2→L3 spectral processing."""
 
 import numpy as np
+import pytest
 
 from odas_tpw.scor160.io import L1Data, L2Data, L3Data, L3Params
-from odas_tpw.scor160.l3 import process_l3
+from odas_tpw.scor160.l3 import _section_groups, process_l3
 
 
 def _make_l1_l2(
@@ -203,3 +204,91 @@ class TestProcessL3NoVib:
         l3 = process_l3(l2, l1, params)
         # Without vibration, clean == raw
         np.testing.assert_array_equal(l3.sh_spec, l3.sh_spec_clean)
+
+
+class TestSectionGroups:
+    """Window layout: top-anchored (historical) vs bottom-anchored (BBL)."""
+
+
+    def test_top_anchor_is_the_historical_layout(self):
+        g = _section_groups(1.0, 0, 5000, 1024, 512, anchor="top")
+        assert len(g) == 1
+        _, starts, dl = g[0]
+        assert dl == 1024
+        assert starts[0] == 0
+        expected = (5000 - 1024) // 512 + 1
+        assert len(starts) == expected
+        assert np.array_equal(starts, np.arange(expected) * 512)
+
+    def test_top_anchor_discards_the_bottom_remainder(self):
+        _, starts, dl = _section_groups(1.0, 0, 5000, 1024, 512, anchor="top")[0]
+        assert starts[-1] + dl < 5000  # the whole point
+
+    def test_bottom_anchor_pins_the_deepest_edge_to_sec_end(self):
+        _, starts, dl = _section_groups(1.0, 0, 5000, 1024, 512, anchor="bottom")[0]
+        assert starts[-1] + dl == 5000
+
+    def test_bottom_anchor_moves_the_remainder_to_the_top(self):
+        _, starts, _ = _section_groups(1.0, 0, 5000, 1024, 512, anchor="bottom")[0]
+        assert starts[0] > 0
+
+    def test_both_anchors_give_the_same_window_count(self):
+        top = _section_groups(1.0, 0, 5000, 1024, 512, anchor="top")[0][1]
+        bot = _section_groups(1.0, 0, 5000, 1024, 512, anchor="bottom")[0][1]
+        assert len(top) == len(bot)
+
+    def test_bbl_group_is_shorter_and_deepest(self):
+        g = _section_groups(
+            1.0, 0, 5000, 1024, 512,
+            anchor="bottom", bbl_diss_length=512, bbl_step=256, bbl_extent=1536,
+        )
+        assert len(g) == 2
+        (_, bbl_starts, bbl_len), (_, nrm_starts, nrm_len) = g
+        assert bbl_len == 512 and nrm_len == 1024
+        assert bbl_starts[-1] + bbl_len == 5000       # pinned to the seabed
+        assert nrm_starts[-1] + nrm_len <= bbl_starts[0]  # no straddling
+
+    def test_bbl_windows_put_the_deepest_centre_closer_to_the_seabed(self):
+        """The reason for the whole feature."""
+        plain = _section_groups(1.0, 0, 5000, 1024, 512, anchor="bottom")[0]
+        bbl = _section_groups(
+            1.0, 0, 5000, 1024, 512,
+            anchor="bottom", bbl_diss_length=512, bbl_step=256, bbl_extent=1536,
+        )[0]
+        centre_plain = plain[1][-1] + plain[2] // 2
+        centre_bbl = bbl[1][-1] + bbl[2] // 2
+        assert centre_bbl > centre_plain
+        assert 5000 - centre_bbl == pytest.approx(256, abs=1)
+
+    def test_bbl_extent_shorter_than_one_window_yields_no_bbl_group(self):
+        g = _section_groups(
+            1.0, 0, 5000, 1024, 512,
+            anchor="bottom", bbl_diss_length=512, bbl_step=256, bbl_extent=100,
+        )
+        assert all(dl == 1024 for _, _, dl in g)
+
+    def test_section_shorter_than_window_yields_nothing(self):
+        assert _section_groups(1.0, 0, 500, 1024, 512, anchor="top") == []
+        assert _section_groups(1.0, 0, 500, 1024, 512, anchor="bottom") == []
+
+    def test_short_section_still_gets_a_bbl_window(self):
+        """A cast too short for a full window is not necessarily too short for
+        a BBL window -- that is the case bottom-up work most cares about."""
+        g = _section_groups(
+            1.0, 0, 700, 1024, 512,
+            anchor="bottom", bbl_diss_length=512, bbl_step=256, bbl_extent=700,
+        )
+        assert len(g) == 1 and g[0][2] == 512
+        assert g[0][1][-1] + 512 == 700
+
+    def test_unknown_anchor_rejected(self):
+        with pytest.raises(ValueError, match="anchor"):
+            _section_groups(1.0, 0, 5000, 1024, 512, anchor="sideways")
+
+    def test_windows_stay_inside_the_section(self):
+        for kw in ({"anchor": "top"}, {"anchor": "bottom"},
+                   {"anchor": "bottom", "bbl_diss_length": 512,
+                    "bbl_step": 256, "bbl_extent": 1536}):
+            for _, starts, dl in _section_groups(1.0, 100, 5100, 1024, 512, **kw):
+                assert starts.min() >= 100
+                assert starts.max() + dl <= 5100

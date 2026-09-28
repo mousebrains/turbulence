@@ -107,12 +107,36 @@ DEFAULTS: dict[str, dict] = {
     },
     "bottom": {
         "enable": False,
+        # "vibration" = the historical binned-vibration detector.
+        # "fallrate"  = the depth at which free fall ends, from the pressure
+        #               record. Measured on SUNRISE 2022 Point Sur (134
+        #               descents) the vibration detector reported the bottom a
+        #               median 1.28 m above where the instrument actually
+        #               stopped; fall-rate put it at 0.086 m, a 14.9x gain, and
+        #               fired on 100% of descents against 97%.
+        # "both"      = fall-rate for the datum, vibration as a cross-check.
+        "method": "vibration",
         "depth_window": 4.0,
         "depth_minimum": 10.0,
         "speed_factor": 0.3,
         "median_factor": 1.0,
         "vibration_frequency": 16,
         "vibration_factor": 4.0,
+        # Was silently unsettable before 2026-09-22: absent from these
+        # defaults, merge_config dropped it with no error and no effect, so the
+        # one parameter that actually gates detection could not be tuned while
+        # the three that do nothing at least warned.
+        "proximity_bins": 2,
+        # Clearance ABOVE the detected bottom for the deepest analysis window.
+        # 0.15 m clears the deceleration (free fall ends a median 0.086-0.109 m
+        # above the stop, p90 0.13 m, on two ships) and keeps the retained
+        # record entirely PRE-IMPACT, so a silty seabed's resuspension cloud
+        # does not yet exist in it. It need not include the probe-to-crasher
+        # offset: the crasher ring leads the shear probes by 6-8 inches, so the
+        # deepest pre-impact sample already sits that far above the seabed.
+        "height": 0.15,
+        "fallrate_fraction": 0.9,
+        "fallrate_smooth_s": 0.05,
     },
     "top_trim": {
         "enable": False,
@@ -121,6 +145,34 @@ DEFAULTS: dict[str, dict] = {
         "max_depth": 50.0,
         "quantile": 0.6,
         "noise_factor": 2.0,
+        # The fall-rate residual is ON by default: Ax/Ay on a Rockland VMP
+        # are piezo VIBRATION sensors, blind to prop wash, and on their own
+        # they trim to ~3 m while two decades of wash epsilon survive.
+        # "max" goes with it -- under a median the two blind channels
+        # outvote the one that can see. Only affects configs that already
+        # set top_trim.enable.
+        "combine": "max",
+        "use_fall_rate_residual": True,
+        "residual_smooth_m": 6.0,
+        # Inclinometer voter, OFF by default. In a tow-yo the VMP is launched
+        # nearly parallel to the surface and pitches down as it falls, so the
+        # shear probes see a mean CROSS-FLOW until it is vertical and epsilon
+        # (~ shear^2/U^4) is meaningless, not merely contaminated. Measured on
+        # SUNRISE 2021 Walton Smith SN 194, 773 descents: Incl_Y starts at a
+        # median 20.2 deg and reaches vertical at 3.9 m, but anywhere in
+        # 2.7-5.7 m -- so a flat floor cannot do this job and a per-cast test
+        # can. Default OFF because it is VMP-SPECIFIC: it relies on Incl_Y
+        # being +90 = nose down, which is a VMP convention and NOT a
+        # MicroRider one (there Incl_Y is roughly pitch).
+        "use_inclinometer": False,
+        "incl_channel": "Incl_Y",
+        "incl_threshold_deg": 85.0,
+        "incl_relax_deg": 5.0,
+        "incl_hold_m": 1.0,
+        # Reaching vertical is not the same as the flow having settled:
+        # epsilon is still 6.7x interior at the vertical depth, 2.2x one metre
+        # below, 1.2x two metres below.
+        "incl_margin_m": 2.0,
     },
     "epsilon": {
         # Durations (seconds) are the primary interface — instruments sample
@@ -135,6 +187,24 @@ DEFAULTS: dict[str, dict] = {
         "fft_length": None,
         "diss_length": None,
         "overlap": None,
+        # Window layout. "top" is the historical behaviour: windows start at
+        # the top of the section and march down, so the bottom remainder is
+        # DISCARDED -- which on a profiler that crashes into the seabed throws
+        # away the boundary layer. "bottom" pins the deepest window's lower
+        # edge to the end of the section and marches up.
+        "anchor": "top",
+        # A shorter dissipation window for the near-bottom zone. Epsilon is
+        # attributed to a window's CENTRE, so halving the window halves the
+        # distance from the seabed to the deepest estimate. Costs DOF: with
+        # fft_sec 0.5 s, a 2.0 s window averages 7 FFTs and a 1.0 s window 3.
+        # Only the DISSIPATION length may differ -- fft_length is shared,
+        # because one product carries one wavenumber axis.
+        "bbl_diss_sec": None,  # None = no separate BBL windows
+        "bbl_overlap_sec": None,  # None = half the BBL window
+        "bbl_extent_sec": None,  # how far above the seabed they apply
+        "bbl_diss_length": None,
+        "bbl_overlap": None,
+        "bbl_extent": None,
         "goodman": True,
         "f_AA": 98.0,
         "f_limit": None,
@@ -251,6 +321,13 @@ DEFAULTS: dict[str, dict] = {
         "rules": {},
     },
     "binning": {
+        # depth | time | altitude.  "altitude" bins on HEIGHT ABOVE THE SEABED
+        # using each profile's `bottom_depth` datum. It is NOT a relabelling of
+        # the depth axis: within one SUNRISE leg the seabed moves from 21.5 to
+        # 34.5 m (p10-p90), so a fixed depth bin sits 12 m above the bed in one
+        # cast and 1 m above it in the next. The conversion must happen before
+        # the bin assignment or the boundary layer is averaged away. Requires
+        # [bottom] enabled, since the datum is written at profile extraction.
         "method": "depth",
         "width": 1.0,
         "aggregation": "mean",
@@ -423,6 +500,9 @@ _WINDOW_KEY_PAIRS = (
     ("fft_length", "fft_sec"),
     ("diss_length", "diss_sec"),
     ("overlap", "overlap_sec"),
+    ("bbl_diss_length", "bbl_diss_sec"),
+    ("bbl_overlap", "bbl_overlap_sec"),
+    ("bbl_extent", "bbl_extent_sec"),
 )
 
 _WINDOW_SECTIONS = ("epsilon", "chi")
@@ -447,6 +527,16 @@ class _PerturbConfigManager(ConfigManager):
                     mapping[sec_key] is None or mapping.get(samples_key) is not None
                 ):
                     del mapping[sec_key]
+            # Same rule for the bottom-up layout keys: a config that does not
+            # use them must keep the canonical form -- and therefore the
+            # stage-directory signature -- it had before they existed, so that
+            # adding the feature does not silently re-version every campaign's
+            # products. A config that DOES set one changes the hash, as it must.
+            if mapping.get("anchor") == "top":
+                mapping.pop("anchor", None)
+            if mapping.get("bbl_diss_length") is None:
+                for k in ("bbl_diss_length", "bbl_overlap", "bbl_extent"):
+                    mapping.pop(k, None)
         return mapping
 
     def validate_config(self, config: dict) -> None:
@@ -457,6 +547,20 @@ class _PerturbConfigManager(ConfigManager):
         created, rather than aborting mid-run inside per-file processing.
         """
         super().validate_config(config)
+        # binning.method is routed by membership tests, and every one of them
+        # falls back to TIME binning. An unrecognised value therefore produces a
+        # complete, writable, silently wrong product rather than an error, so it
+        # has to be rejected here at load time.
+        # Imported lazily: binning pulls numpy/xarray, and building the CLI
+        # parser must not (tests/test_perturb_mk_sections.py pins that).
+        from odas_tpw.perturb.binning import BIN_METHODS
+
+        bin_method = (config.get("binning") or {}).get("method", "depth")
+        if bin_method not in BIN_METHODS:
+            raise ValueError(
+                f"binning.method: expected one of {sorted(BIN_METHODS)}, "
+                f"got {bin_method!r}"
+            )
         for section in _WINDOW_SECTIONS:
             params = config.get(section) or {}
             for _, sec_key in _WINDOW_KEY_PAIRS:
@@ -663,7 +767,19 @@ def resolve_window_config(cfg: dict, fs: float, *, section: str = "epsilon") -> 
     def even(x: float) -> int:
         return max(2, 2 * round(x / 2.0))
 
-    out = {k: v for k, v in cfg.items() if k not in ("fft_sec", "diss_sec", "overlap_sec")}
+    out = {
+        k: v
+        for k, v in cfg.items()
+        if k
+        not in (
+            "fft_sec",
+            "diss_sec",
+            "overlap_sec",
+            "bbl_diss_sec",
+            "bbl_overlap_sec",
+            "bbl_extent_sec",
+        )
+    }
     fft = cfg.get("fft_length")
     if fft is None:
         fft = even(fs * (seconds("fft_sec") or 1.0))
@@ -693,6 +809,57 @@ def resolve_window_config(cfg: dict, fs: float, *, section: str = "epsilon") -> 
         out["overlap"] = overlap
     out["fft_length"] = fft
     out["diss_length"] = diss
+
+    # Near-bottom windows. Resolved the same way, then checked against the
+    # main window: a BBL window LONGER than the ordinary one would defeat the
+    # purpose, and one shorter than the FFT cannot be transformed at all.
+    bbl = cfg.get("bbl_diss_length")
+    if bbl is None:
+        bbl_sec = seconds("bbl_diss_sec")
+        bbl = even(fs * bbl_sec) if bbl_sec is not None else None
+    if bbl is not None:
+        bbl = int(bbl)
+        if bbl < fft:
+            raise ValueError(
+                f"{section}: BBL window ({bbl} samples) is shorter than the "
+                f"FFT segment ({fft} samples)"
+            )
+        if bbl > diss:
+            raise ValueError(
+                f"{section}: BBL window ({bbl} samples) is longer than the "
+                f"ordinary dissipation window ({diss} samples); the BBL window "
+                "exists to buy vertical resolution near the seabed, so it must "
+                "be shorter"
+            )
+        out["bbl_diss_length"] = bbl
+
+        bbl_ov = cfg.get("bbl_overlap")
+        if bbl_ov is None:
+            ov_sec = seconds("bbl_overlap_sec")
+            bbl_ov = even(fs * ov_sec) if ov_sec is not None else bbl // 2
+        bbl_ov = int(bbl_ov)
+        if bbl_ov >= bbl:
+            raise ValueError(
+                f"{section}: BBL overlap ({bbl_ov} samples) must be smaller "
+                f"than the BBL window ({bbl} samples)"
+            )
+        out["bbl_overlap"] = bbl_ov
+
+        ext = cfg.get("bbl_extent")
+        if ext is None:
+            ext_sec = seconds("bbl_extent_sec")
+            ext = even(fs * ext_sec) if ext_sec is not None else bbl
+        ext = int(ext)
+        if ext < bbl:
+            raise ValueError(
+                f"{section}: BBL extent ({ext} samples) is shorter than one "
+                f"BBL window ({bbl} samples), so no BBL window would fit"
+            )
+        out["bbl_extent"] = ext
+    else:
+        out.pop("bbl_diss_length", None)
+        out.pop("bbl_overlap", None)
+        out.pop("bbl_extent", None)
     return out
 
 
@@ -964,14 +1131,34 @@ ct:
   T_name: "JAC_T"         # temperature channel for alignment
   C_name: "JAC_C"         # conductivity channel for alignment
 
+# binning.method: altitude bins on height above the seabed instead of depth --
+# the right vertical coordinate for bottom-boundary-layer work, and it needs
+# [bottom] enabled so each profile carries a `bottom_depth` datum.
+
 bottom:
   enable: false
+  # vibration | fallrate | both.  "fallrate" takes the bottom from the collapse
+  # of the fall rate in the pressure record instead of binned vibration std.
+  # On SUNRISE 2022 Point Sur (134 descents) the vibration detector put the
+  # bottom a median 1.28 m ABOVE where the instrument actually stopped, because
+  # it reports the MEAN depth of a depth_window-wide bin; fall-rate put it at
+  # 0.086 m and fired on 100% of descents against 97%.
+  method: vibration
   depth_window: 4.0       # depth window for crash detection [m]
   depth_minimum: 10.0     # minimum depth to search [m]
   speed_factor: 0.3       # UNUSED (reserved; tuning has no effect)
   median_factor: 1.0      # UNUSED (reserved; tuning has no effect)
   vibration_frequency: 16 # UNUSED (reserved; tuning has no effect)
   vibration_factor: 4.0   # vibration std dev acceptance factor
+  proximity_bins: 2       # accept a crash only this many bins from the deepest
+  height: 0.15            # clearance ABOVE the detected bottom [m]; keeps the
+                          # retained record pre-impact and above the
+                          # deceleration (free fall ends ~0.09-0.11 m up)
+  fallrate_fraction: 0.9  # fraction of terminal fall rate = end of free fall.
+                          # Do NOT raise toward 1.0: at 0.98-0.99 ordinary
+                          # fall-rate variability crosses it metres too high.
+  fallrate_smooth_s: 0.05 # boxcar before differencing [s]; NOT a free
+                          # parameter -- a wider one inflates the answer
 
 top_trim:
   enable: false
@@ -982,6 +1169,19 @@ top_trim:
   noise_factor: 2.0       # std > noise_factor*background == still in prop wash
 
 epsilon:
+  # anchor: top | bottom.  "top" starts the first window at the top of the
+  # section and marches down, DISCARDING the bottom remainder -- on a profiler
+  # that crashes into the seabed that is the boundary layer. "bottom" pins the
+  # deepest window's lower edge to the end of the section and marches up.
+  anchor: top
+  # A shorter dissipation window for the near-bottom zone. Epsilon belongs to a
+  # window's CENTRE, so halving the window halves the distance from the seabed
+  # to the deepest estimate. Only the DISSIPATION length may differ -- one
+  # product carries one wavenumber axis, so fft_length is shared. The cost is
+  # DOF: with fft_sec 0.5, a 2.0 s window averages 7 FFTs, a 1.0 s window 3.
+  bbl_diss_sec: null      # null = no separate near-bottom windows
+  bbl_overlap_sec: null   # null = half the BBL window
+  bbl_extent_sec: null    # how far above the seabed the short windows apply
   # Windows are specified as DURATIONS (seconds) and converted per instrument
   # via its sampling rate (standard VMP-250: 512 Hz; coastal units: 1-2 kHz),
   # so one config serves a mixed fleet. Choosing fft_sec is a sandwich

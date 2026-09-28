@@ -158,6 +158,13 @@ class L3Params:
     HP_cut: float  # high-pass cutoff frequency [Hz]
     fs_fast: float  # fast sampling rate [Hz]
     goodman: bool  # whether Goodman cleaning was applied
+    # Window layout. The defaults reproduce the historical top-anchored layout
+    # bit-for-bit, which the ATOMIX benchmark is pinned to; a benchmark read
+    # that supplies none of these is unaffected.
+    anchor: str = "top"  # "top" (historical) or "bottom" (BBL work)
+    bbl_diss_length: int | None = None  # shorter window near the seabed [samples]
+    bbl_overlap: int = 0  # overlap between those [samples]
+    bbl_extent: int | None = None  # how far above the seabed they apply [samples]
 
 
 @dataclass

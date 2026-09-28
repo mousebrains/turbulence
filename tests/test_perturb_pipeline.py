@@ -2766,6 +2766,200 @@ class TestAdjustProfileBounds:
         )
         assert len(out) == 1
 
+    def _make_short_cast_pf(self, span_m):
+        """A single descent of `span_m` dbar at ~1 dbar/s, SUNRISE-like."""
+        n_slow = 1400
+        ratio = 8
+        rng = np.random.default_rng(3)
+        P = np.linspace(0.2, span_m, n_slow)
+        pf = MagicMock()
+        pf.fs_slow = 64.0
+        pf.fs_fast = 512.0
+        pf.t_slow = np.arange(n_slow) / 64.0
+        pf.t_fast = np.arange(n_slow * ratio) / 512.0
+        pf.channels = {
+            "P": P,
+            "Ax": rng.standard_normal(n_slow * ratio),
+            "Ay": rng.standard_normal(n_slow * ratio),
+        }
+        pf.is_fast = lambda ch: ch in ("Ax", "Ay")
+        return pf, n_slow
+
+    def test_residual_window_too_long_for_cast_warns(self, caplog):
+        """A residual window that is a large fraction of the cast is flagged.
+
+        Measured on SUNRISE: the 6 m default on an ~20 m cast lets the
+        movmean baseline absorb the prop wash, dropping the peak residual
+        ratio from 6.1x to 2.3x and reading two vessel-years as wash-free.
+        Silent under-trimming is the failure mode, so the caller must warn.
+        """
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, n_slow = self._make_short_cast_pf(span_m=20.0)
+        cfg = {
+            "enable": True,
+            "use_fall_rate_residual": True,
+            "residual_smooth_m": 6.0,  # 30% of a 20 m cast
+            "max_depth": 18.0,
+        }
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.pipeline"):
+            _adjust_profile_bounds([(0, n_slow - 1)], pf, cfg, {"enable": False}, "short.p")
+        assert "residual_smooth_m" in caplog.text
+        assert "under-trim" in caplog.text
+
+    def test_residual_window_ok_for_long_cast_silent(self, caplog):
+        """The same 6 m window on an ASTRAL-length cast must NOT warn."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, n_slow = self._make_short_cast_pf(span_m=200.0)
+        cfg = {
+            "enable": True,
+            "use_fall_rate_residual": True,
+            "residual_smooth_m": 6.0,  # 3% of a 200 m cast
+            "max_depth": 80.0,
+        }
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.pipeline"):
+            _adjust_profile_bounds([(0, n_slow - 1)], pf, cfg, {"enable": False}, "long.p")
+        assert "residual_smooth_m" not in caplog.text
+
+    def test_residual_window_warning_emitted_once_per_file(self, caplog):
+        """Many profiles in one file produce one warning, not one each."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, n_slow = self._make_short_cast_pf(span_m=20.0)
+        cfg = {
+            "enable": True,
+            "use_fall_rate_residual": True,
+            "residual_smooth_m": 6.0,
+            "max_depth": 18.0,
+        }
+        third = n_slow // 3
+        profiles = [(0, third - 1), (third, 2 * third - 1), (2 * third, n_slow - 1)]
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.pipeline"):
+            _adjust_profile_bounds(profiles, pf, cfg, {"enable": False}, "short.p")
+        assert caplog.text.count("residual_smooth_m") == 1
+
+    def _make_towyo_pf(self, vertical_at=4.0, span_m=22.0, start_deg=20.0):
+        """A tow-yo VMP cast: launched near-horizontal, pitching down."""
+        n_slow = 1400
+        ratio = 8
+        rng = np.random.default_rng(5)
+        P = np.linspace(0.1, span_m, n_slow)
+        frac = np.clip(P / vertical_at, 0.0, 1.0)
+        incl = start_deg + (85.0 - start_deg) * frac
+        incl[vertical_at < P] = 88.0
+        pf = MagicMock()
+        pf.fs_slow = 64.0
+        pf.fs_fast = 512.0
+        pf.t_slow = np.arange(n_slow) / 64.0
+        pf.t_fast = np.arange(n_slow * ratio) / 512.0
+        pf.channels = {
+            "P": P,
+            "Incl_Y": incl,
+            "Ax": rng.standard_normal(n_slow * ratio),
+            "Ay": rng.standard_normal(n_slow * ratio),
+        }
+        pf.is_fast = lambda ch: ch in ("Ax", "Ay")
+        return pf, n_slow
+
+    def test_inclinometer_voter_deepens_the_trim(self):
+        """A tow-yo cast is trimmed to the vertical depth plus the margin."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, n_slow = self._make_towyo_pf(vertical_at=4.0)
+        P = pf.channels["P"]
+        base = {"enable": True, "use_fall_rate_residual": False, "max_depth": 18.0}
+        off = _adjust_profile_bounds([(0, n_slow - 1)], pf, base, {"enable": False}, "t.p")
+        on_cfg = dict(base, use_inclinometer=True, incl_margin_m=2.0)
+        on = _adjust_profile_bounds([(0, n_slow - 1)], pf, on_cfg, {"enable": False}, "t.p")
+        assert float(P[on[0][0]]) > float(P[off[0][0]])
+        assert float(P[on[0][0]]) == pytest.approx(6.0, abs=0.3)
+
+    def test_inclinometer_voter_tracks_the_cast(self):
+        """The per-cast answer follows the cast — the reason a flat floor
+        cannot do this job (SUNRISE spread was 2.7-5.7 m)."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        cfg = {"enable": True, "use_fall_rate_residual": False, "max_depth": 18.0,
+               "use_inclinometer": True, "incl_margin_m": 2.0}
+        got = []
+        for vz in (2.7, 5.7):
+            pf, n_slow = self._make_towyo_pf(vertical_at=vz)
+            out = _adjust_profile_bounds([(0, n_slow - 1)], pf, cfg, {"enable": False}, "t.p")
+            got.append(float(pf.channels["P"][out[0][0]]))
+        assert got[1] - got[0] == pytest.approx(3.0, abs=0.5)
+
+    def test_inclinometer_voter_off_by_default(self):
+        """Default config must not change existing campaigns."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, n_slow = self._make_towyo_pf(vertical_at=4.0)
+        cfg = {"enable": True, "use_fall_rate_residual": False, "max_depth": 18.0}
+        out = _adjust_profile_bounds([(0, n_slow - 1)], pf, cfg, {"enable": False}, "t.p")
+        assert float(pf.channels["P"][out[0][0]]) < 5.0
+
+    def test_inclinometer_missing_channel_warns_and_continues(self, caplog):
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, n_slow = self._make_towyo_pf()
+        del pf.channels["Incl_Y"]
+        cfg = {"enable": True, "use_fall_rate_residual": False, "use_inclinometer": True}
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.pipeline"):
+            out = _adjust_profile_bounds([(0, n_slow - 1)], pf, cfg, {"enable": False}, "t.p")
+        assert "Incl_Y" in caplog.text and "absent" in caplog.text
+        assert len(out) == 1
+
+    def test_inclinometer_rate_mismatch_warns_and_deactivates(self, caplog):
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, n_slow = self._make_towyo_pf()
+        pf.channels["Incl_Y"] = pf.channels["Incl_Y"][:100]
+        cfg = {"enable": True, "use_fall_rate_residual": False, "use_inclinometer": True}
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.pipeline"):
+            _adjust_profile_bounds([(0, n_slow - 1)], pf, cfg, {"enable": False}, "t.p")
+        assert "same rate" in caplog.text
+
+    def test_frozen_inclinometer_is_reported_not_silent(self, caplog):
+        """VMP SN 412 froze Incl_Y within each cast in SUNRISE 2021/2022.
+        Frozen ABOVE the threshold is the dangerous case: it mimics 'already
+        vertical', so the voter abstains and the cast keeps its worthless
+        first metres. That must be reported."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, n_slow = self._make_towyo_pf()
+        pf.channels["Incl_Y"] = np.full(n_slow, 89.0)
+        cfg = {"enable": True, "use_fall_rate_residual": False, "use_inclinometer": True}
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.pipeline"):
+            _adjust_profile_bounds([(0, n_slow - 1)], pf, cfg, {"enable": False}, "sn412.p")
+        assert "frozen" in caplog.text
+        assert "did not come vertical" not in caplog.text   # not misfiled
+
+    def test_frozen_low_reported_as_frozen_not_never_vertical(self, caplog):
+        """A frozen channel must be diagnosed as frozen even when its value
+        is below threshold, so the operator looks at the sensor rather than
+        at the deployment."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, n_slow = self._make_towyo_pf()
+        pf.channels["Incl_Y"] = np.full(n_slow, 20.0)
+        cfg = {"enable": True, "use_fall_rate_residual": False, "use_inclinometer": True}
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.pipeline"):
+            _adjust_profile_bounds([(0, n_slow - 1)], pf, cfg, {"enable": False}, "sn412.p")
+        assert "frozen" in caplog.text
+        assert "did not come vertical" not in caplog.text
+
+    def test_never_vertical_profiles_are_reported(self, caplog):
+        """A cast that never comes vertical has no usable shear epsilon; it
+        must be named, not silently kept."""
+        from odas_tpw.perturb.pipeline import _adjust_profile_bounds
+
+        pf, n_slow = self._make_towyo_pf()
+        pf.channels["Incl_Y"] = np.linspace(10.0, 40.0, n_slow)
+        cfg = {"enable": True, "use_fall_rate_residual": False, "use_inclinometer": True}
+        with caplog.at_level("WARNING", logger="odas_tpw.perturb.pipeline"):
+            _adjust_profile_bounds([(0, n_slow - 1)], pf, cfg, {"enable": False}, "t.p")
+        assert "did not come vertical" in caplog.text
+
     def test_top_trim_exception_logged_and_swallowed(self, caplog):
         from odas_tpw.perturb.pipeline import _adjust_profile_bounds
 

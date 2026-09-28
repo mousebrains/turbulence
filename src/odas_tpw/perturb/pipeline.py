@@ -652,6 +652,21 @@ def _scalars_to_dataarrays(scalars: dict[str, float]) -> dict:
         if name in scalars:
             arr = xr.DataArray(np.float64(scalars[name]), attrs=_LATLON_SCALAR_ATTRS[name])
             out[name] = arr
+    if "bottom_depth" in scalars:
+        # Rides the same per-profile scalar path as lat/lon so `altitude`
+        # binning can reach the seabed datum from a diss/chi file, which
+        # otherwise carries no record of where the seabed was.
+        out["bottom_depth"] = xr.DataArray(
+            np.float64(scalars["bottom_depth"]),
+            attrs={
+                "units": "dbar",
+                "long_name": "detected seabed depth for this profile",
+                "comment": (
+                    "BEFORE the bottom.height back-off. "
+                    "Height above bottom = bottom_depth - depth."
+                ),
+            },
+        )
     return out
 
 
@@ -698,6 +713,7 @@ def _adjust_profile_bounds(
     top_trim_cfg: dict,
     bottom_cfg: dict,
     file_label: str,
+    bottom_depths: list[float] | None = None,
 ) -> list[tuple[int, int]]:
     """Push each profile's start forward (top_trim) and/or end backward (bottom).
 
@@ -737,15 +753,82 @@ def _adjust_profile_bounds(
         elif len(P_fast) < len(pf.t_fast):
             P_fast = np.concatenate([P_fast, np.full(len(pf.t_fast) - len(P_fast), P_fast[-1])])
 
-    top_kwargs = {k: v for k, v in top_trim_cfg.items() if k != "enable"}
-    bottom_kwargs = {k: v for k, v in bottom_cfg.items() if k != "enable"}
+    _CALLER_ONLY_TOP = {
+        "enable",
+        "use_fall_rate_residual",
+        "residual_smooth_m",
+        "use_inclinometer",
+        "incl_channel",
+        "incl_threshold_deg",
+        "incl_relax_deg",
+        "incl_hold_m",
+        "incl_margin_m",
+    }
+    top_kwargs = {k: v for k, v in top_trim_cfg.items() if k not in _CALLER_ONLY_TOP}
+    # Keys consumed here rather than by detect_bottom_crash.
+    _CALLER_ONLY_BOTTOM = {"enable", "method", "height", "fallrate_fraction",
+                           "fallrate_smooth_s"}
+    bottom_kwargs = {k: v for k, v in bottom_cfg.items() if k not in _CALLER_ONLY_BOTTOM}
+    bottom_method = str(bottom_cfg.get("method", "vibration"))
+    bottom_height = float(bottom_cfg.get("height", 0.0) or 0.0)
+    fallrate_kwargs = {
+        "fraction": float(bottom_cfg.get("fallrate_fraction", 0.9)),
+        "smooth_s": float(bottom_cfg.get("fallrate_smooth_s", 0.05)),
+    }
+    if bottom_method not in ("vibration", "fallrate", "both"):
+        raise ValueError(
+            f"bottom.method must be 'vibration', 'fallrate' or 'both', "
+            f"got {bottom_method!r}"
+        )
 
     if do_top:
-        from odas_tpw.processing.top_trim import compute_trim_depth
+        from odas_tpw.processing.top_trim import (
+            attitude_trim_depth,
+            compute_trim_depth,
+            inclinometer_is_usable,
+        )
     if do_bottom:
-        from odas_tpw.processing.bottom import detect_bottom_crash
+        from odas_tpw.processing.bottom import (
+            bottom_anchor_depth,
+            detect_bottom_crash,
+            detect_bottom_fallrate,
+        )
+
+    use_incl = bool(top_trim_cfg.get("use_inclinometer", False))
+    incl_name = str(top_trim_cfg.get("incl_channel", "Incl_Y"))
+    incl_all = None
+    if do_top and use_incl:
+        raw = pf.channels.get(incl_name)
+        if raw is None:
+            logger.warning(
+                "%s: top_trim.use_inclinometer is set but channel %r is absent; "
+                "the attitude voter is inactive for this file.",
+                file_label,
+                incl_name,
+            )
+        else:
+            incl_all = np.asarray(raw, dtype=float)
+            # The voter reads attitude at the SLOW rate alongside P_slow. A
+            # fast-rate inclinometer would still work, but every VMP we have
+            # carries it slow, and mixing rates here would silently misalign
+            # it with the profile bounds.
+            if incl_all.size != P_slow.size:
+                logger.warning(
+                    "%s: %s has %d samples against %d for P_slow; the attitude "
+                    "voter needs them on the same rate and is inactive.",
+                    file_label,
+                    incl_name,
+                    incl_all.size,
+                    P_slow.size,
+                )
+                incl_all = None
 
     adjusted: list[tuple[int, int]] = []
+    # One warning per file, not per profile, when the residual window is too
+    # long for these casts (see the check at its use below).
+    warned_smooth_span = False
+    n_never_vertical = 0
+    n_incl_frozen = 0
     for pi, (s_slow, e_slow) in enumerate(profiles, 1):
         new_s = s_slow
         new_e = e_slow
@@ -755,20 +838,121 @@ def _adjust_profile_bounds(
 
         if do_top:
             try:
-                # Use only the accelerometers (Ax, Ay) to find the prop-wash /
-                # instrument-startup exit. On ARCTERX VMP data the accelerometers
-                # are the only channels that settle at the true exit (~2-6 m): the
-                # shear probes (sh1/sh2), inclinometers, and fall rate all stay
-                # "elevated" deep because they respond to *ocean* turbulence the
-                # instrument falls through, dragging the trim to 30-50 m. The
-                # accelerometers capture the mechanical entry transient, which
-                # ocean turbulence does not reproduce. (VMP only; MRs are trimmed
-                # by a separate operation.)
+                # Ax/Ay are piezo VIBRATION sensors, not accelerometers, and
+                # there is no Az. They see the body ringing, which damps out
+                # within ~5 m, so they are blind to prop wash -- an advected
+                # flow perturbation reaching far deeper. Measured on ASTRAL
+                # 2023 (ratio to the 40-60 m background): Ax/Ay std peaks at
+                # 1.44x and is flat below 5 m; the high-passed FALL-RATE
+                # RESIDUAL peaks at 44x and decays over ~30 m. On Ax/Ay alone
+                # the trim lands at a median 3 dbar and leaves two decades of
+                # prop-wash epsilon in the product.
+                #
+                # So the residual votes too. It is the residual about a smooth
+                # descent, NOT the raw fall rate: raw fall rate stays elevated
+                # at depth through ocean turbulence, the high-passed residual
+                # does not. Heterogeneous voters require combine="max" -- under
+                # a median the two blind vibration channels outvote it.
+                # (VMP only; MRs are trimmed by a separate operation.)
                 fast_channels: dict = {}
                 for name in ("Ax", "Ay"):
                     if name in pf.channels and pf.is_fast(name):
                         fast_channels[name] = pf.channels[name][s_fast:e_fast]
+                if top_trim_cfg.get("use_fall_rate_residual", False):
+                    # MUST be computed at the SLOW rate. P_fast is
+                    # np.repeat(P_slow, ratio) -- a step function -- so
+                    # differentiating it at fast rate yields a comb of spikes,
+                    # not a fall rate. Compute the residual on P_slow, then
+                    # repeat to fast rate the same way P_fast is built.
+                    P_seg_slow = np.asarray(P_slow[s_slow : e_slow + 1], dtype=float)
+                    if P_seg_slow.size > 16:
+                        dt_s = 1.0 / float(pf.fs_slow)
+                        w = np.gradient(P_seg_slow, dt_s)
+                        # The smoothing window is specified in DEPTH, not time:
+                        # prop wash is a depth structure, and fleet fall rates
+                        # span 0.76-1.60 dbar/s, so a fixed-time window changes
+                        # what the detector is sensitive to from one instrument
+                        # to the next. (An 8 s window spans 6.3 m on ASTRAL and
+                        # 12.8 m on Taiwan13, which high-passed the wash away
+                        # there and produced a false "no wash" reading.)
+                        smooth_m = float(top_trim_cfg.get("residual_smooth_m", 6.0))
+                        # Fixing the units to meters removed the fall-rate
+                        # dependence but NOT the cast-length dependence. The
+                        # residual is w - movmean(w, window), so once the
+                        # window is a large fraction of the cast the "smooth
+                        # descent" baseline absorbs the wash itself and the
+                        # residual loses the signal it exists to detect.
+                        # Measured on SUNRISE (18-24 m casts, ~20 s): the 6.0 m
+                        # default drops the peak residual ratio from 6.1x at a
+                        # 2 m window to 2.3x, and two of five vessel-years read
+                        # as having NO prop wash at all. Warn rather than
+                        # silently under-trim; the caller must shorten the
+                        # window (~10% of cast span worked on ASTRAL and
+                        # SUNRISE both).
+                        span_m = float(np.nanmax(P_seg_slow) - np.nanmin(P_seg_slow))
+                        if span_m > 0 and smooth_m > 0.3 * span_m and not warned_smooth_span:
+                            warned_smooth_span = True
+                            logger.warning(
+                                "%s: top_trim residual_smooth_m=%.1f m is %.0f%% of a "
+                                "%.1f m cast; the window absorbs the wash and the "
+                                "detector will under-trim. Shorten it to ~%.1f m.",
+                                file_label,
+                                smooth_m,
+                                100.0 * smooth_m / span_m,
+                                span_m,
+                                max(0.5, 0.1 * span_m),
+                            )
+                        w_in = w[(P_seg_slow > 5.0) & (w > 0.05)]
+                        fall = float(np.median(w_in)) if w_in.size else 0.75
+                        k = max(3, round((smooth_m / max(fall, 0.05)) / dt_s))
+                        if k < P_seg_slow.size:
+                            ker = np.ones(k) / k
+                            res = w - np.convolve(w, ker, mode="same")
+                            res_fast = np.repeat(res, ratio)
+                            n = len(depth_seg)
+                            if len(res_fast) >= n:
+                                fast_channels["W_residual"] = res_fast[:n]
+                            else:
+                                fast_channels["W_residual"] = np.concatenate(
+                                    [res_fast, np.full(n - len(res_fast), res_fast[-1])]
+                                )
                 trim_depth = compute_trim_depth(depth_seg, fast_channels, **top_kwargs)
+
+                if incl_all is not None:
+                    # A tow-yo VMP is launched near-horizontal and pitches
+                    # down as it falls; until it is vertical the shear probes
+                    # see a mean cross-flow, so epsilon ~ shear^2/U^4 is
+                    # meaningless there. This is an ATTITUDE test on the
+                    # inclinometer's absolute value, not a variance test, so
+                    # unlike the residual voter it needs no scaling against
+                    # cast length. Combined with "max": the cast is usable
+                    # only where BOTH the motion has settled and the
+                    # instrument is vertical.
+                    a_depth = attitude_trim_depth(
+                        np.asarray(P_slow[s_slow : e_slow + 1], dtype=float),
+                        incl_all[s_slow : e_slow + 1],
+                        threshold_deg=float(top_trim_cfg.get("incl_threshold_deg", 85.0)),
+                        relax_deg=float(top_trim_cfg.get("incl_relax_deg", 5.0)),
+                        hold_m=float(top_trim_cfg.get("incl_hold_m", 1.0)),
+                        margin_m=float(top_trim_cfg.get("incl_margin_m", 2.0)),
+                    )
+                    if a_depth is None:
+                        y_seg = incl_all[s_slow : e_slow + 1]
+                        y_ok = y_seg[np.isfinite(y_seg)]
+                        thr = float(top_trim_cfg.get("incl_threshold_deg", 85.0))
+                        # None has three meanings and they are not equivalent:
+                        # "started vertical" is fine, but "frozen channel" and
+                        # "never got vertical" are failures that must not pass
+                        # silently. VMP SN 412 froze Incl_Y within each cast in
+                        # SUNRISE 2021 and 2022 while still varying BETWEEN
+                        # casts, so only a per-cast test catches it.
+                        if not inclinometer_is_usable(y_seg):
+                            n_incl_frozen += 1
+                        elif y_ok.size and y_ok[0] < thr and not np.any(y_ok >= thr):
+                            n_never_vertical += 1
+                    elif trim_depth is None or a_depth > trim_depth:
+                        trim_depth = a_depth
+
                 if trim_depth is not None and len(depth_seg) > 0:
                     # Find first slow index where pressure exceeds trim_depth.
                     P_seg = P_slow[s_slow : e_slow + 1]
@@ -788,6 +972,7 @@ def _adjust_profile_bounds(
             except Exception as exc:
                 logger.warning("%s prof%d top_trim failed: %s", file_label, pi, exc)
 
+        detected_bottom = None
         if do_bottom:
             try:
                 # Build the vibration-channels dict from whatever fast accel/gyro
@@ -799,31 +984,110 @@ def _adjust_profile_bounds(
                     ch = pf.channels.get(name)
                     if ch is not None and pf.is_fast(name):
                         vibration[name] = ch[s_fast:e_fast]
-                if vibration:
-                    bottom_depth = detect_bottom_crash(
+                bottom_depth = None
+                vib_depth = None
+                if vibration and bottom_method in ("vibration", "both"):
+                    vib_depth = detect_bottom_crash(
                         depth_seg,
                         vibration,
                         pf.fs_fast,
                         **bottom_kwargs,
                     )
-                    if bottom_depth is not None:
-                        P_seg = P_slow[new_s : e_slow + 1]
-                        below = np.where(P_seg >= bottom_depth)[0]
-                        if len(below) > 0:
-                            candidate = new_s + int(below[0]) - 1
-                            if candidate > new_s:
-                                new_e = candidate
-                                logger.info(
-                                    "%s prof%d: bottom pushed end %.2f -> %.2f dbar",
-                                    file_label,
-                                    pi,
-                                    float(P_slow[e_slow]),
-                                    float(P_slow[new_e]),
-                                )
+                if bottom_method in ("fallrate", "both"):
+                    # The SLOW pressure record, not an interpolation of it onto
+                    # the fast grid: interpolation cannot add information and
+                    # the differencing below is what sets the resolution.
+                    bottom_depth = detect_bottom_fallrate(
+                        P_slow[new_s : e_slow + 1],
+                        pf.fs_slow,
+                        **fallrate_kwargs,
+                    )
+                    if bottom_method == "both" and (
+                        bottom_depth is not None and vib_depth is not None
+                    ):
+                        # Cross-check only. The vibration detector reports the
+                        # MEAN depth of a depth_window-wide bin, so it sits
+                        # systematically ABOVE the kinematic stop (median 1.28 m
+                        # on SUNRISE 2022 Point Sur); a disagreement larger than
+                        # a bin means something other than bin resolution.
+                        gap = float(bottom_depth - vib_depth)
+                        if abs(gap) > float(bottom_cfg.get("depth_window", 4.0)):
+                            logger.warning(
+                                "%s prof%d: bottom detectors disagree by %.2f m "
+                                "(fall-rate %.2f, vibration %.2f); using "
+                                "fall-rate",
+                                file_label, pi, gap, bottom_depth, vib_depth,
+                            )
+                else:
+                    bottom_depth = vib_depth
+                # Record the DETECTED seabed, before the height back-off:
+                # `altitude` means height above the seabed, not above the trim
+                # point, and the two differ by exactly `bottom.height`.
+                detected_bottom = bottom_depth
+                if bottom_depth is not None:
+                    # Back off by `height` so the deepest retained sample is
+                    # above the deceleration and predates the impact.
+                    bottom_depth = bottom_anchor_depth(bottom_depth, bottom_height)
+                if bottom_depth is not None:
+                    P_seg = P_slow[new_s : e_slow + 1]
+                    below = np.where(P_seg >= bottom_depth)[0]
+                    if len(below) > 0:
+                        candidate = new_s + int(below[0]) - 1
+                        if candidate > new_s:
+                            new_e = candidate
+                            logger.info(
+                                "%s prof%d: bottom pushed end %.2f -> %.2f dbar",
+                                file_label,
+                                pi,
+                                float(P_slow[e_slow]),
+                                float(P_slow[new_e]),
+                            )
             except Exception as exc:
                 logger.warning("%s prof%d bottom failed: %s", file_label, pi, exc)
+                detected_bottom = None
+
+        if bottom_depths is not None:
+            # One entry per profile, aligned with `adjusted`. NaN where the
+            # bottom was not detected (or the stage is off) so downstream can
+            # tell "no seabed here" from "seabed at 0 m".
+            bottom_depths.append(
+                float(detected_bottom) if detected_bottom is not None else float("nan")
+            )
 
         adjusted.append((new_s, new_e))
+
+    if n_incl_frozen:
+        # Not cosmetic: a frozen channel reading above the threshold would
+        # otherwise look like "already vertical" and the cast would keep its
+        # meaningless first metres. VMP SN 412 did exactly this throughout
+        # SUNRISE 2021 and 2022 -- frozen within each cast, varying between
+        # casts, so a whole-file health test passes it.
+        logger.warning(
+            "%s: %s did not move within %d of %d profiles -- the channel is "
+            "frozen for those casts, so the attitude voter abstained and their "
+            "first metres are NOT trimmed on attitude. Check the inclinometer "
+            "for this instrument before trusting near-surface epsilon.",
+            file_label,
+            incl_name,
+            n_incl_frozen,
+            len(profiles),
+        )
+
+    if n_never_vertical:
+        # Not a nuisance warning: on these profiles the instrument never came
+        # vertical, so the shear probes saw a mean cross-flow for the whole
+        # cast and the epsilon reported from them is meaningless rather than
+        # merely contaminated. The attitude voter cannot trim them -- there is
+        # no clean part to keep -- so say so and let the operator drop them.
+        logger.warning(
+            "%s: %d of %d profiles never reached %.0f deg on %s -- the instrument "
+            "did not come vertical, so their shear-derived epsilon is not usable.",
+            file_label,
+            n_never_vertical,
+            len(profiles),
+            float(top_trim_cfg.get("incl_threshold_deg", 85.0)),
+            incl_name,
+        )
 
     return adjusted
 
@@ -2707,12 +2971,14 @@ def process_file(
     # extract_profiles write.  These all conceptually feed profiles_NN/.
     with stage_log(output_dirs.get("profiles"), log_basename):
         # Adjust profile bounds (top-trim removes prop-wash, bottom detects seafloor crash)
+        profile_bottom_depths: list[float] = []
         profiles = _adjust_profile_bounds(
             profiles,
             pf,
             config.get("top_trim", {}),
             config.get("bottom", {}),
             p_path.name,
+            bottom_depths=profile_bottom_depths,
         )
 
         # FP07 calibration
@@ -2771,6 +3037,7 @@ def process_file(
                     return_scalars=True,
                     output_stem=output_stem,
                     extra_attrs=speed_attrs,
+                    bottom_depths=profile_bottom_depths,
                 )
                 result["profiles"] = [str(p) for p in prof_paths]
                 prof_scalars_cache = {str(p): s for p, s in zip(prof_paths, prof_scalars)}
@@ -3861,7 +4128,14 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
     aggregation = binning_cfg.get("aggregation", "mean")
     diagnostics = binning_cfg.get("diagnostics", False)
 
-    from odas_tpw.perturb.binning import bin_by_depth, bin_by_time, bin_chi, bin_diss
+    from odas_tpw.perturb.binning import (
+        VERTICAL_BIN_METHODS,
+        bin_by_depth,
+        bin_by_time,
+        bin_chi,
+        bin_diss,
+        coordinate_for_method,
+    )
 
     prof_binned_dir: Path | None = None
     diss_binned_dir: Path | None = None
@@ -3944,7 +4218,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
             logger.info("Binning profiles... up to date (skipped)")
         else:
             logger.info("Binning profiles...")
-            if bin_method == "depth":
+            if bin_method in VERTICAL_BIN_METHODS:
                 ds = bin_by_depth(
                     prof_ncs,
                     bin_width,
@@ -3952,6 +4226,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                     diagnostics,
                     log_dir=prof_binned_dir,
                     jobs=jobs,
+                    coordinate=coordinate_for_method(bin_method),
                 )
             else:
                 ds = bin_by_time(
