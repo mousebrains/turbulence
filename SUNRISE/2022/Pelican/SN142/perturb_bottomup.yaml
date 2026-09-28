@@ -1,0 +1,208 @@
+# SUNRISE 2022 - Pelican, VMP-250 SN 142, Gulf of Mexico shelf.
+#
+# 57 files. Probes: sh1 M2381 0.0691 / sh2 M2382 0.0670, T2132/T2133
+#
+# Ran simultaneously with SN412 on the same ship (VMPs swapped so one could
+  # charge) - this is SN412's healthy companion for the floor transfer.
+#
+# == BOTTOM-UP (anchor: bottom) ==============================================
+# Companion to perturb_topdown.yaml. Same data, same sections.yaml, same
+# probes -- only the window layout and the bottom datum differ. Products ->
+# VMP_results_bbl/.
+#
+# WHY. The deepest window's lower edge is pinned to the end of the section and
+# the windows march UP, so the discarded remainder lands at the TOP (already
+# trimmed) instead of in the bottom boundary layer. Near the seabed a SHORTER
+# dissipation window (bbl_diss_sec) buys vertical resolution: epsilon belongs
+# to a window's CENTRE, so halving the window halves the distance from the bed
+# to the deepest estimate. Only diss length may differ -- fft_length is shared
+# because one product carries one wavenumber axis. Cost is DOF: 2.0 s averages
+# 7 FFTs, 1.0 s averages 3, so BBL spectra are noisier.
+#
+# BOTTOM DATUM. method: fallrate takes the bottom from the collapse of the
+# fall rate in the pressure record (~1.5 cm/sample) instead of vibration std
+# binned on a 4 m grid. Measured on 134 SR2S_004 descents the vibration
+# detector sat a median 1.28 m ABOVE where the VMP actually stopped; fall-rate
+# sits at 0.086 m and fires on 100% of descents against 97%.
+#
+# height: 0.15 m of clearance keeps the retained record PRE-IMPACT (free fall
+# ends 0.09-0.11 m above the stop, p90 0.13) so a silty seabed's resuspension
+# cloud is not in it. It need not include the bottom-crasher offset: the ring
+# leads the shear probes by 6-8 inches, so the deepest pre-impact sample is
+# already that far above the bed.
+#
+# MEASURED GAIN (SR2S_004, 135 profiles): deepest window centre 21.47 ->
+# 22.93 dbar, +1.86 m recovered, 16 -> 19 windows per profile, and epsilon
+# rises monotonically 6.6e-9 (2-3 m) -> 9.0e-8 (0-0.5 m) with an implied u*
+# constant at 1.8-2.6 mm/s.
+#
+# TRIM. Set from CONTAMINATED EPSILON, not a motion proxy: generation _00 of
+# 2021 WaltonSmith SN194 was run with top_trim off and epsilon falls 3200x in
+# the single metre between 2 and 3 m, reaching interior by 6 m. The cause is
+# INSTRUMENT ATTITUDE - a tow-yo VMP is launched nearly parallel to the
+# surface, the reel brake is released, and until it is vertical the shear
+# probes see a MEAN CROSS-FLOW, so epsilon ~ shear^2/U^4 is meaningless there.
+# Incl_Y reaches 85 deg at a median 3.9 m but anywhere in 2.7-5.7 m, which is
+# why this is a per-cast voter and not a flat floor.
+#
+# residual_smooth_m = 2.0 is ~10% of this deployment's 22 m cast. The
+# perturb DEFAULT of 6.0 is tuned on ASTRAL's minutes-long casts and ERASES
+# the wash on a short one (peak ratio 6.1x at a 2 m window, 2.3x at 6 m).
+# Full detail: ../../../../VMP_README.md.
+
+files:
+  p_file_root: "<CONFIG_DIR>/../../SN142"
+  p_file_pattern: "*.p"     # this directory is uniform; the TREE is mixed case
+  output_root: "<CONFIG_DIR>/VMP_results_bbl"
+  trim: true
+  merge: false
+
+gps:
+  source: "netcdf"
+  file: "<CONFIG_DIR>/../../../GPS/gps.nc"
+  time_col: "time"
+  lat_col: "lat"
+  lon_col: "lon"
+  max_time_diff: 60
+
+hotel:
+  enable: false
+
+profiles:
+  P_min: 0.5
+  W_min: 0.3
+  direction: "down"
+  min_duration: 5.0
+  diagnostics: false
+
+bottom:
+  method: "fallrate"       # NOT the 4 m vibration bin; see header
+  height: 0.15             # clearance above the detected bottom [m]
+  enable: true              # these casts CRASH INTO THE BOTTOM
+  depth_window: 4.0
+  depth_minimum: 10.0
+  speed_factor: 0.3
+  median_factor: 1.0
+  vibration_frequency: 16
+  vibration_factor: 4.0
+
+top_trim:
+  enable: true
+  dz: 0.5
+  min_depth: 1.0
+  max_depth: 18.0
+  quantile: 0.6
+  noise_factor: 1.5         # 2.0 under-trims here; the wash is weaker than the Revelle's
+  use_fall_rate_residual: true
+  residual_smooth_m: 2.0
+  use_inclinometer: true    # VMP-only: +90 deg = nose down is a VMP convention
+  incl_threshold_deg: 85.0
+  incl_margin_m: 2.0
+  combine: "max"
+
+fp07:
+  calibrate: true           # MANDATORY in 2021 (embedded beta_1 is garbage) and
+                            # harmless elsewhere; all 471 files carry a CT.
+  order: 1                  # NOT ASTRAL's 2: that was justified on a 9-15 K
+                            # per-cast span. Revisit with a HELD-OUT error split,
+                            # never a t-test.
+  max_lag_seconds: 10
+  reference: "JAC_T"
+  must_be_negative: true
+  min_corr: 0.5
+
+ct:
+  align: true
+  T_name: "JAC_T"
+  C_name: "JAC_C"
+
+speed:
+  method: "pressure"
+  tau: null
+  speed_cutout: 0.05
+
+epsilon:
+  anchor: "bottom"         # deepest window pinned to the seabed
+  bbl_diss_sec: 1.0        # shorter window near the bed (3 FFTs, not 7)
+  bbl_overlap_sec: null    # null = half the BBL window
+  bbl_extent_sec: 3.0      # ~3 m at ~1 m/s: the observed BBL depth range
+  fft_sec: 0.5
+  diss_sec: 2.0
+  overlap_sec: null
+  goodman: true
+  f_AA: 98.0
+  f_limit: null
+  fit_order: 3
+  despike_thresh: 8
+  despike_smooth: 0.5
+  salinity: "measured"
+  epsilon_minimum: 1.0e-13
+  T_source: "JAC_T"
+  fom_max: null
+
+chi:
+  enable: true
+  fft_sec: 0.5
+  diss_sec: 2.0
+  overlap_sec: null
+  fp07_model: "single_pole"
+  goodman: true
+  f_AA: 98.0
+  use_epsilon: true
+  fit_method: "iterative"
+  spectrum_model: "kraichnan"
+  salinity: "measured"
+  mixing: true
+  chi_minimum: 1.0e-13
+  fom_max: null
+  # EXPECT WEAK CHI: SUNRISE is energetic (kB ~165 cpm) so K_max/kB medians run
+  # ~0.49 and the Batchelor rolloff is never resolved. Not a processing fault.
+
+ctd:
+  enable: true
+  bin_width: 0.5
+  T_name: "JAC_T"
+  C_name: "JAC_C"
+  variables: null
+  method: "mean"
+
+qc:
+  enable: true
+  drop_action: "nan"
+  epsilon_drop_from: []
+  chi_drop_from: []
+
+binning:
+  method: "depth"
+  width: 1.0
+  aggregation: "mean"
+
+stratification:
+  enable: true
+  window: 2.0
+  salinity: null
+
+netcdf:
+  title: "SUNRISE 2022 - VMP turbulence, Pelican (VMP-250 SN 142)"
+  summary: >
+    Turbulent kinetic energy dissipation (epsilon) and thermal variance
+    dissipation (chi) from a Rockland Scientific VMP-250 (SN 142) aboard
+    Pelican on the Gulf of Mexico shelf during SUNRISE 2022. Repeated
+    shallow tow-yo casts that terminate on the bottom. The first metres of
+    each cast are trimmed on instrument ATTITUDE (Incl_Y) as well as on
+    motion, because the VMP is launched near-horizontal and its shear probes
+    see a mean cross-flow until it comes vertical.
+  institution: "Oregon State University"
+  project: "SUNRISE"
+  program: "SUNRISE"
+  instrument: "Rockland Scientific VMP-250 (SN 142)"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"
+  creator_institution: "Oregon State University"
+  source: "Rockland Scientific ODAS .p files, processed with microstructure-tpw perturb"
+  geospatial_vertical_positive: "down"
+  standard_name_vocabulary: "CF Standard Name Table v89"
+  Conventions: "CF-1.13, ACDD-1.3"
+
+parallel:
+  jobs: 3                   # SeaChest is SMB; 8 has produced HDF read failures
