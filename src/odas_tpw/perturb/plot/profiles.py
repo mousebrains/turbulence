@@ -31,6 +31,7 @@ import argparse
 import contextlib
 import locale
 import os
+import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -329,18 +330,52 @@ def _merge_source_dirs(
             # alignment), so the two combos must share the same grid by *value*,
             # not merely the same counts -- otherwise extra data would be placed
             # on the primary's axes and silently mis-joined.
-            if (extra.sizes.get("bin") != ds.sizes.get("bin")
-                    or extra.sizes.get("profile") != ds.sizes.get("profile")):
+            if extra.sizes.get("profile") != ds.sizes.get("profile"):
                 raise SystemExit(
                     f"{prefix} grid {dict(extra.sizes)} != {product.dir_prefix} "
                     f"{dict(ds.sizes)}; cannot merge mixing sources")
-            if "bin" in ds.coords and "bin" in extra.coords and not np.allclose(
-                    np.asarray(ds["bin"].values, dtype=float),
-                    np.asarray(extra["bin"].values, dtype=float),
-                    rtol=0.0, atol=1e-6):
+            # The two products can legitimately span different RANGES: a
+            # bottom-anchored epsilon with a 1.0 s BBL window reaches lower than
+            # chi's 2.0 s window, so diss carries near-bed bins chi does not.
+            # That is a difference in extent, not in grid, and refusing it left
+            # `mixing` broken on every bottom-up product.
+            #
+            # Reindexing onto the primary's bins is EXACT when the two share a
+            # lattice -- values land on their own bin and absent bins become
+            # NaN, no interpolation. When the lattices are OFFSET (which happens
+            # if the two were anchored differently, so their ranges start at
+            # incommensurate points) nothing matches and we still refuse,
+            # because the positional assignment below would mis-place every
+            # value.
+            if "bin" in ds.coords and "bin" in extra.coords:
+                b_ds = np.asarray(ds["bin"].values, dtype=float)
+                b_ex = np.asarray(extra["bin"].values, dtype=float)
+                if b_ds.shape != b_ex.shape or not np.allclose(
+                    b_ds, b_ex, rtol=0.0, atol=1e-6
+                ):
+                    n_common = np.isclose(
+                        b_ds[:, None], b_ex[None, :], rtol=0.0, atol=1e-6
+                    ).any(axis=1).sum()
+                    if n_common < 2:
+                        raise SystemExit(
+                            f"{prefix} bins do not lie on the same grid as "
+                            f"{product.dir_prefix} (only {n_common} of "
+                            f"{b_ds.size} match); cannot merge mixing sources. "
+                            "This usually means the two were anchored "
+                            "differently -- check epsilon.anchor vs chi.anchor."
+                        )
+                    extra = extra.reindex(bin=ds["bin"], method=None)
+                    warnings.warn(
+                        f"{prefix} reindexed onto {product.dir_prefix} bins: "
+                        f"{int(n_common)} of {b_ds.size} shared (same grid, "
+                        "different extent -- the non-shared bins are NaN)",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+            elif extra.sizes.get("bin") != ds.sizes.get("bin"):
                 raise SystemExit(
-                    f"{prefix} depth bins differ from {product.dir_prefix}; "
-                    "cannot merge mixing sources")
+                    f"{prefix} grid {dict(extra.sizes)} != {product.dir_prefix} "
+                    f"{dict(ds.sizes)}; cannot merge mixing sources")
             # stime is epoch seconds (~1.7e9), where np.allclose's default
             # rtol=1e-5 spans ~4.8 h -- far too loose to detect different casts.
             # Compare with a 1 s absolute tolerance (and no relative term).

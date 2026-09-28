@@ -564,27 +564,58 @@ def _write_grid_combo(tmp_path: Path, prefix: str, var: str,
     ds.to_netcdf(tmp_path / f"{prefix}_00" / "combo.nc")
 
 
-def test_merge_source_dirs_rejects_mismatched_grid(tmp_path: Path):
-    """A diss combo on a different (bin, profile) grid is a hard error, not a
-    silent mis-join."""
+def test_merge_source_dirs_merges_shorter_extent_on_a_shared_grid(tmp_path: Path):
+    """A diss combo covering FEWER bins on the SAME lattice is merged, not
+    rejected.
+
+    This was a hard error, and that was the bug: epsilon with a 1.0 s BBL
+    window reaches lower than chi's 2.0 s window, so diss legitimately carries
+    near-bed bins chi does not, and `mixing` was broken on every bottom-up
+    product because of it. The no-silent-mis-join guarantee is preserved by
+    reindexing on bin VALUE -- each value lands on its own bin and the rest
+    become NaN.
+    """
     import xarray as xr
 
     _write_product(tmp_path, "chi_combo", {"chi_1": (np.ones((10, 6)), {"units": "K2 s-1"})})
-    # diss combo with a different bin count.
+    # Same lattice (arange + 0.5), shorter extent: a strict subset.
     _write_product(tmp_path, "diss_combo",
                    {"e_1": (np.ones((8, 6)), {"units": "W/kg"})}, n_bin=8)
     ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
     args = argparse.Namespace(root=str(tmp_path), config=None)
     try:
+        out = profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+        assert "e_1" in out.data_vars, "the shorter product should have merged"
+        assert out.sizes["bin"] == 10, "the primary's axis must be kept"
+        vals = np.asarray(out["e_1"].values)
+        assert np.isfinite(vals[:8, :]).all(), "shared bins keep their values"
+        assert np.isnan(vals[8:, :]).all(), "bins diss never had must be NaN"
+    finally:
+        ds.close()
+
+
+def test_merge_source_dirs_still_rejects_a_profile_mismatch(tmp_path: Path):
+    """Only the BIN axis was relaxed. A different profile count is still a hard
+    error -- those are not the same casts."""
+    import xarray as xr
+
+    _write_product(tmp_path, "chi_combo", {"chi_1": (np.ones((10, 6)), {"units": "K2 s-1"})})
+    _write_product(tmp_path, "diss_combo", {"e_1": (np.ones((10, 6)), {"units": "W/kg"})})
+    ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
+    args = argparse.Namespace(root=str(tmp_path), config=None)
+    try:
+        # primary carries 4 casts, the product on disk carries 6
+        trimmed = ds.isel(profile=slice(0, 4))
         with pytest.raises(SystemExit, match="cannot merge mixing sources"):
-            profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
+            profiles._merge_source_dirs(trimmed, profiles.PRODUCTS["mixing"], args)
     finally:
         ds.close()
 
 
 def test_merge_source_dirs_rejects_mismatched_bins(tmp_path: Path):
-    """Same bin COUNT but different bin centers must raise -- the positional
-    merge would otherwise place diss data at the chi depths (silent mis-join)."""
+    """Same bin COUNT but INCOMMENSURATE centers must raise -- the positional
+    merge would otherwise place diss data at the chi depths (silent mis-join).
+    Unlike a shorter extent on a shared lattice, nothing here can be aligned."""
     import xarray as xr
 
     _write_product(tmp_path, "chi_combo", {"chi_1": (np.ones((10, 6)), {"units": "K2 s-1"})})
@@ -593,7 +624,7 @@ def test_merge_source_dirs_rejects_mismatched_bins(tmp_path: Path):
     ds = xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc", decode_times=False)
     args = argparse.Namespace(root=str(tmp_path), config=None)
     try:
-        with pytest.raises(SystemExit, match="depth bins differ"):
+        with pytest.raises(SystemExit, match="do not lie on the same grid"):
             profiles._merge_source_dirs(ds, profiles.PRODUCTS["mixing"], args)
     finally:
         ds.close()
@@ -1272,3 +1303,73 @@ class TestDivergingLogAnchor:
             assert len(cbar.ax.lines) == 0
         finally:
             plt.close("all")
+
+
+# --- mixing merges products of different EXTENT on a shared grid -------------
+
+
+class TestMixingGridAlignment:
+    """`mixing` needs diss_combo and chi_combo together, and the merge is
+    POSITIONAL, so it used to demand identical bin axes. That broke mixing on
+    every bottom-up product: epsilon with a 1.0 s BBL window reaches lower than
+    chi's 2.0 s window, so diss legitimately carries near-bed bins chi does not
+    (measured: diss 95 bins [0.62..24.12] against chi 94 [0.88..24.12]).
+
+    Different EXTENT on a shared lattice is alignable exactly. Genuinely
+    incommensurate axes are not, and must still refuse -- a positional join
+    would mis-place every value.
+    """
+
+    @staticmethod
+    def _combo(bins, seed=0):
+        import numpy as np
+        import xarray as xr
+
+        rng = np.random.default_rng(seed)
+        nb, npf = len(bins), 4
+        return xr.Dataset(
+            {"v": (("bin", "profile"), rng.random((nb, npf)))},
+            coords={"bin": np.asarray(bins, float),
+                    "profile": np.arange(npf)},
+        )
+
+    def test_shared_lattice_different_extent_reindexes_exactly(self):
+        """The overlapping bins must keep their OWN values -- not be shifted by
+        one, which is what a positional join would do."""
+        import numpy as np
+
+        a = self._combo([0.62, 0.87, 1.12, 1.37], seed=1)   # diss: reaches lower
+        b = self._combo([0.87, 1.12, 1.37], seed=2)         # chi
+        out = b.reindex(bin=a["bin"], method=None)
+        assert out.sizes["bin"] == 4
+        # the three shared bins carry b's original values, in place
+        np.testing.assert_allclose(
+            out["v"].values[1:, :], b["v"].values, rtol=0, atol=0
+        )
+        # the bin b never had is NaN, not a shifted neighbour
+        assert np.isnan(out["v"].values[0, :]).all()
+
+    def test_incommensurate_axes_share_nothing(self):
+        """Half-a-bin offset: no bin matches, so the merge must refuse rather
+        than silently mis-join."""
+        import numpy as np
+
+        a = np.array([0.62, 0.87, 1.12])
+        b = np.array([0.745, 0.995, 1.245])          # offset by half a bin
+        n_common = np.isclose(a[:, None], b[None, :], rtol=0.0, atol=1e-6).any(axis=1).sum()
+        assert n_common == 0
+
+    def test_merge_guard_accepts_extent_and_refuses_offset(self):
+        """The guard's own arithmetic, on the two real cases."""
+        import numpy as np
+
+        def n_common(a, b):
+            a, b = np.asarray(a, float), np.asarray(b, float)
+            return int(np.isclose(a[:, None], b[None, :], rtol=0.0, atol=1e-6)
+                       .any(axis=1).sum())
+
+        # real SUNRISE 2021/Pelican/SN194 axes (hab_dense)
+        diss = np.arange(0.62, 0.62 + 95 * 0.25, 0.25)[:95]
+        chi = np.arange(0.87, 0.87 + 94 * 0.25, 0.25)[:94]
+        assert n_common(diss, chi) >= 2          # alignable -> merge proceeds
+        assert n_common(diss, diss + 0.125) < 2  # offset   -> refuse
