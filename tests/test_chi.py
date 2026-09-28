@@ -2399,10 +2399,10 @@ class TestChiAnchor:
         from odas_tpw.chi import l3_chi
 
         src = inspect.getsource(l3_chi)
-        assert "section_groups(" in src
+        assert "window_groups(" in src
         assert "np.arange(n_windows) * diss_step" not in src, (
             "l3_chi is laying windows out itself again instead of using "
-            "scor160.l3.section_groups"
+            "scor160.l3.window_groups"
         )
 
     def test_top_anchor_is_the_historical_layout(self):
@@ -2447,3 +2447,69 @@ class TestChiAnchor:
             "chi", {"anchor": "bottom", "fft_length": 512}
         )
         assert view_b["anchor"] == "bottom"
+
+
+class TestChiBBLWindows:
+    """chi now takes the full epsilon anchoring option set, including a shorter
+    near-bed window. That was blocked on L3ChiData.dof_spec being a SCALAR: a
+    BBL group averages fewer FFT segments, and the value gates l4_chi's
+    non-detection floor, so one file-wide DOF would mis-gate exactly the
+    near-bed estimates the BBL analysis exists to measure."""
+
+    def test_config_accepts_the_same_keys_as_epsilon(self):
+        from odas_tpw.perturb.config import DEFAULTS, _mgr
+
+        eps_keys = {k for k in DEFAULTS["epsilon"] if k == "anchor" or k.startswith("bbl_")}
+        chi_keys = {k for k in DEFAULTS["chi"] if k == "anchor" or k.startswith("bbl_")}
+        assert eps_keys == chi_keys, "chi must offer the same layout options as epsilon"
+        _mgr.validate_config(
+            {"chi": {"anchor": "bottom", "bbl_diss_sec": 1.0, "bbl_extent_sec": 3.0}}
+        )
+
+    def test_bbl_keys_resolve_for_chi(self):
+        from odas_tpw.perturb.config import merge_config, resolve_window_config
+
+        r = resolve_window_config(
+            merge_config("chi", {"fft_sec": 0.5, "diss_sec": 2.0,
+                                 "bbl_diss_sec": 1.0, "bbl_extent_sec": 3.0}),
+            512.0, section="chi")
+        assert r["bbl_diss_length"] == 512
+        assert r["bbl_overlap"] == 256      # null -> half the BBL window
+        assert r["bbl_extent"] == 1536
+
+    def test_window_groups_yields_two_lengths_for_chi_params(self):
+        import numpy as np
+
+        from odas_tpw.scor160.io import L3Params
+        from odas_tpw.scor160.l3 import window_groups
+
+        p = L3Params(fft_length=256, diss_length=2048, overlap=1024, HP_cut=0.25,
+                     fs_fast=512.0, goodman=False, anchor="bottom",
+                     bbl_diss_length=512, bbl_overlap=256, bbl_extent=1536)
+        groups = window_groups(np.ones(20000), p)
+        lengths = {int(g[2]) for g in groups}
+        assert lengths == {512, 2048}, "a BBL group and a regular group"
+
+    def test_dof_differs_between_the_two_window_lengths(self):
+        """The whole reason dof_spec had to become per-window."""
+        from odas_tpw.scor160.spectral import n_segments
+
+        assert n_segments(512, 256) != n_segments(2048, 256)
+
+    def test_dof_at_indexes_per_window_and_tolerates_legacy_scalars(self):
+        import numpy as np
+
+        from odas_tpw.chi.l4_chi import _dof_at
+
+        class _L3:
+            pass
+
+        obj = _L3()
+        obj.dof_spec = np.array([3.0, 7.0, 11.0])
+        assert _dof_at(obj, 0) == 3.0
+        assert _dof_at(obj, 2) == 11.0
+        obj.dof_spec = 9.5                      # legacy scalar -> broadcast
+        assert _dof_at(obj, 0) == 9.5
+        assert _dof_at(obj, 5) == 9.5
+        obj.dof_spec = np.zeros(0)              # unknown -> pre-#180 fixed floor
+        assert _dof_at(obj, 0) == 0.0

@@ -110,6 +110,9 @@ def _compute_chi(
     direction: str = "auto",
     W_min: float | None = None,
     fp07_model: str = "single_pole",
+    bbl_diss_length: int | None = None,
+    bbl_overlap: int | None = None,
+    bbl_extent: int | None = None,
     anchor: str = "top",
     goodman: bool = True,
     f_AA: float = 98.0,
@@ -275,6 +278,12 @@ def _compute_chi(
         # boundary layer. Without it a top-anchored 2.0 s window leaves chi's
         # deepest centre ~1.2 m above the bed and the BBL has no chi at all.
         anchor=anchor,
+        # A shorter window near the bed, exactly as on the shear side: epsilon
+        # belongs to a window's CENTRE, so halving the window halves the
+        # distance from the bed to the deepest estimate.
+        bbl_diss_length=bbl_diss_length,
+        bbl_overlap=bbl_overlap or 0,
+        bbl_extent=bbl_extent,
     )
 
     grad_func, _ = _spectrum_func(spectrum_model)
@@ -433,6 +442,9 @@ def get_chi(
     speed: float | None = None,
     direction: str = "down",
     fp07_model: str = "single_pole",
+    bbl_diss_length: int | None = None,
+    bbl_overlap: int | None = None,
+    bbl_extent: int | None = None,
     anchor: str = "top",
     goodman: bool = True,
     f_AA: float = 98.0,
@@ -517,6 +529,9 @@ def get_chi(
         fp07_model=fp07_model,
         goodman=goodman,
         anchor=anchor,
+        bbl_diss_length=bbl_diss_length,
+        bbl_overlap=bbl_overlap,
+        bbl_extent=bbl_extent,
         f_AA=f_AA,
         fit_method=fit_method,
         spectrum_model=spectrum_model,

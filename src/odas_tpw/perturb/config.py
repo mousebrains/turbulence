@@ -251,10 +251,18 @@ DEFAULTS: dict[str, dict] = {
         # BBL epsilon and NO BBL chi (measured on SUNRISE 2021/Pelican/SN194:
         # chi occupancy 0.0% at 0.62 m and 0.4% at 0.88 m against epsilon's
         # 95.7%). Gamma and K_T inherit that hole.
-        # NOTE there are deliberately no bbl_* twins here: a shorter near-bed
-        # window makes the spectral DOF differ per window, and L3ChiData's
-        # dof_spec is a SCALAR that gates l4_chi's detection test.
         "anchor": "top",
+        # The bbl_* twins mirror [epsilon] exactly. They became possible once
+        # L3ChiData.dof_spec was made PER WINDOW: a shorter near-bed window
+        # averages fewer FFT segments, and that value gates l4_chi's
+        # non-detection floor, so a single file-wide DOF would mis-gate exactly
+        # the near-bed estimates the BBL analysis exists to measure.
+        "bbl_diss_sec": None,
+        "bbl_overlap_sec": None,
+        "bbl_extent_sec": None,
+        "bbl_diss_length": None,
+        "bbl_overlap": None,
+        "bbl_extent": None,
         "fft_sec": 1.0,
         "diss_sec": None,
         "overlap_sec": None,
