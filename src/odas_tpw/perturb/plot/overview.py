@@ -423,12 +423,21 @@ def _build_overview_figure(
         ax.set_axisbelow(False)  # grid over the mesh so it reads on any colormap
         ax.grid(True, color="0.4", linewidth=0.4, alpha=0.5)
     ax_chi.tick_params(labelbottom=False)  # x labels live only on the context row
+    # Depth and height-above-bottom run in OPPOSITE directions, so read the
+    # label and axis sense from the bin coordinate instead of assuming depth: a
+    # bottom-up product on an inverted "Depth" axis puts the seabed at the TOP
+    # and still looks plausible. Taken from whichever product opened.
+    _binned = next((d for d in (stages.get("diss_combo"), stages.get("chi_combo"),
+                                stages.get("combo"))
+                    if d is not None and "bin" in d.coords), None)
+    y_label, y_invert = layout.vertical_axis(
+        _binned["bin"].attrs if _binned is not None else None)
     for ax in (ax_eps, ax_chi, bottom_axes[0]):
-        ax.set_ylabel("Depth (m)")  # left column of every row
+        ax.set_ylabel(y_label)  # left column of every row
 
-    # Shared inverted depth axis (0 m at top). The two subfigure groups share y
-    # only within themselves, so pin the range on one axis of each group;
-    # set_ylim(z, 0) inverts without a separate invert_yaxis() call.
+    # The two subfigure groups share y only within themselves, so pin the range
+    # on one axis of each group; set_ylim(hi, 0) inverts without a separate
+    # invert_yaxis() call, and set_ylim(0, hi) leaves it upward for altitude.
     if args.p_max is not None:
         z_top = float(args.p_max)
     else:
@@ -437,7 +446,7 @@ def _build_overview_figure(
     x_los = [e.x_lo for e in extents if np.isfinite(e.x_lo)]
     x_his = [e.x_hi for e in extents if np.isfinite(e.x_hi)]
     for ax in (ax_eps, bottom_axes[0]):  # one per shared-axis group
-        ax.set_ylim(z_top, 0.0)
+        ax.set_ylim(*((z_top, 0.0) if y_invert else (0.0, z_top)))
         if x_los and x_his:
             ax.set_xlim(min(x_los), max(x_his))
 

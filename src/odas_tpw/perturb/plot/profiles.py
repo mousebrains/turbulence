@@ -403,7 +403,13 @@ def _build_profiles_figure(
         return None
     col = finite[np.argsort(x[finite])]   # finite profiles, sorted by x
     xs = x[col]
-    depth = np.asarray(dss["bin"].values, dtype=float)  # depth, m
+    depth = np.asarray(dss["bin"].values, dtype=float)  # depth OR height, m
+    # Depth and height-above-bottom run in OPPOSITE directions, so the label and
+    # the axis sense are read from the bin coordinate rather than assumed. A
+    # bottom-up product plotted on an inverted "Depth" axis puts the seabed at
+    # the TOP and still looks entirely plausible, which is the failure this
+    # prevents.
+    y_label, y_invert = layout.vertical_axis(dss["bin"].attrs)
 
     # Diagnostic pseudo-variables (shear/vibration/T_dT variance) are computed
     # at plot time from the raw per-profile files, matched by stime.
@@ -469,7 +475,7 @@ def _build_profiles_figure(
             ax.text(0.5, 0.5, f"no valid {name}", transform=ax.transAxes,
                     ha="center", va="center")
             if ax in left_set:  # only the left column carries the shared y label
-                ax.set_ylabel("Depth (m)")
+                ax.set_ylabel(y_label)
             continue
         valid_rows |= np.any(np.isfinite(z), axis=1)
         cmap = getattr(cmocean.cm, cmap_name).copy()
@@ -479,24 +485,32 @@ def _build_profiles_figure(
                             reverse_cbar=name in _REVERSE_CBAR,
                             cbar_center=_DIVERGING_LOG.get(name))
         if ax in left_set:
-            ax.set_ylabel("Depth (m)")
+            ax.set_ylabel(y_label)
 
     for ax in axes:
         # Grid over the color mesh (axisbelow False) so it reads on any colormap.
         ax.set_axisbelow(False)
         ax.grid(True, color="0.4", linewidth=0.4, alpha=0.5)
 
-    axes[0].invert_yaxis()  # 0 m at top (shared across panels)
+    if y_invert:
+        axes[0].invert_yaxis()  # depth: 0 m at top (shared across panels)
     if args.p_max is not None:
-        # Explicit depth clip wins over the data-driven fit.
-        axes[0].set_ylim(float(args.p_max), 0.0)
+        # Explicit clip wins over the data-driven fit. On an altitude axis
+        # p_max is the greatest HEIGHT to show, so it is the top, not the
+        # bottom.
+        axes[0].set_ylim(*((float(args.p_max), 0.0) if y_invert
+                           else (0.0, float(args.p_max))))
     elif valid_rows.any():
-        # Fit the depth axis to where there is valid data rather than spanning
-        # the whole combo's bin grid (which pads the section with empty gray
-        # below its deepest sample). Pad half a bin so edge cells aren't clipped.
+        # Fit the axis to where there is valid data rather than spanning the
+        # whole combo's bin grid (which pads the section with empty gray beyond
+        # its deepest sample). Pad half a bin so edge cells aren't clipped.
         dv = depth[valid_rows]
         pad = 0.5 * float(np.median(np.diff(depth))) if depth.size > 1 else 0.0
-        axes[0].set_ylim(float(dv.max()) + pad, max(float(dv.min()) - pad, 0.0))
+        lo, hi = float(dv.min()) - pad, float(dv.max()) + pad
+        if y_invert:
+            axes[0].set_ylim(hi, max(lo, 0.0))     # deep at the bottom
+        else:
+            axes[0].set_ylim(max(lo, 0.0), hi)     # seabed at the bottom
 
     for ax in col_bottom:
         ax.set_xlabel(xa.label)

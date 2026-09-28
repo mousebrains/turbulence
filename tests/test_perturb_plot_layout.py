@@ -355,3 +355,48 @@ class TestLatestStageDir:
 
     def test_missing_returns_none(self, tmp_path):
         assert layout.latest_stage_dir(str(tmp_path), "diss") is None
+
+
+# --- no plot module may hardcode the vertical axis ---------------------------
+
+
+def test_no_plot_module_hardcodes_the_depth_label():
+    """Every vertical axis must come from layout.vertical_axis().
+
+    This is a structural guard, not a style rule. Depth and height-above-bottom
+    run in OPPOSITE directions, so a module that hardcodes "Depth (m)" and
+    invert_yaxis() renders a bottom-up product with the SEABED AT THE TOP --
+    and it still looks plausible, so nothing catches it downstream. That is
+    exactly what happened: vertical_axis() was added and wired into scalar.py
+    and eps_chi.py, while profiles.py (which backs the epsilon/chi/profiles/
+    mixing subcommands) and overview.py kept the hardcoded pair.
+    """
+    import re
+    from pathlib import Path
+
+    plot_dir = Path(__file__).resolve().parents[1] / "src" / "odas_tpw" / "perturb" / "plot"
+    offenders = []
+    for py in sorted(plot_dir.glob("*.py")):
+        if py.name == "layout.py":   # the one place the strings legitimately live
+            continue
+        text = py.read_text()
+        for m in re.finditer(r'set_ylabel\(\s*["\']Depth', text):
+            line = text[: m.start()].count("\n") + 1
+            offenders.append(f"{py.name}:{line}")
+    assert not offenders, (
+        "these modules hardcode the vertical axis instead of using "
+        "layout.vertical_axis(bin_attrs): " + "; ".join(offenders)
+    )
+
+
+def test_vertical_axis_directions_are_opposite():
+    """The whole point: the two coordinates invert differently."""
+    from odas_tpw.perturb.plot import layout
+
+    d_label, d_invert = layout.vertical_axis({"coordinate_kind": "depth"})
+    a_label, a_invert = layout.vertical_axis({"coordinate_kind": "altitude"})
+    assert d_invert is True and a_invert is False
+    assert d_label != a_label
+    # A product predating the attribute is treated as depth (historical behaviour)
+    assert layout.vertical_axis(None) == (d_label, True)
+    assert layout.vertical_axis({}) == (d_label, True)
