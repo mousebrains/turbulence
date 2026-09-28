@@ -25,6 +25,7 @@ from odas_tpw.chi.fp07 import (
 from odas_tpw.chi.l2_chi import L2ChiData
 from odas_tpw.scor160.goodman import clean_shear_spec_batch
 from odas_tpw.scor160.io import BAD_DROPPED, BAD_INTERPOLATED, L3Params
+from odas_tpw.scor160.l3 import section_groups
 from odas_tpw.scor160.ocean import kappa_T as kappa_T_TSP
 from odas_tpw.scor160.ocean import visc, visc35
 from odas_tpw.scor160.spectral import csd_matrix_batch, n_segments
@@ -150,22 +151,35 @@ def _process_section_chi(
     therm_cal: list[dict] | None,
     tau_scales: np.ndarray,
     acc: _SectionResult,
+    anchor: str = "top",
 ) -> None:
-    """Process a single section, appending results to *acc*."""
+    """Process a single section, appending results to *acc*.
+
+    Window layout comes from :func:`odas_tpw.scor160.l3.section_groups`, the
+    SAME helper the shear path uses, so chi and epsilon cannot drift apart on
+    where their windows sit. ``anchor="top"`` reproduces the historical layout
+    exactly.
+    """
     mask = l2_chi.section_number == sec_id
     idx = np.where(mask)[0]
     if len(idx) < diss_length:
         return
 
-    sec_start = idx[0]
-    sec_end = idx[-1] + 1
-    sec_len = sec_end - sec_start
-
-    n_windows = (sec_len - diss_length) // diss_step + 1
+    groups = section_groups(
+        sec_id, int(idx[0]), int(idx[-1]) + 1, diss_length, diss_step, anchor=anchor
+    )
+    if not groups:
+        return
+    # bbl_diss_length is not passed, so this is always a single group of uniform
+    # diss_length. That is deliberate: a shorter near-bed window would make the
+    # spectral DOF differ per window, and L3ChiData.dof_spec is a SCALAR that
+    # gates the detection test in l4_chi. Variable-length chi windows therefore
+    # need dof_spec made per-window first.
+    starts = groups[0][1]
+    n_windows = len(starts)
     if n_windows < 1:
         return
 
-    starts = sec_start + np.arange(n_windows) * diss_step
     indices = starts[:, np.newaxis] + np.arange(diss_length)[np.newaxis, :]
 
     gradt_windows = np.stack(
@@ -438,6 +452,7 @@ def process_l3_chi(
             therm_cal,
             scales,
             acc,
+            anchor=params.anchor,
         )
 
     if not acc.times:

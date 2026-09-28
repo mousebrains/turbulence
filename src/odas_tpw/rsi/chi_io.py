@@ -110,6 +110,7 @@ def _compute_chi(
     direction: str = "auto",
     W_min: float | None = None,
     fp07_model: str = "single_pole",
+    anchor: str = "top",
     goodman: bool = True,
     f_AA: float = 98.0,
     fit_method: str = "iterative",
@@ -269,6 +270,11 @@ def _compute_chi(
         HP_cut=0.25,
         fs_fast=fs_fast,
         goodman=goodman,
+        # "bottom" pins the deepest window's lower edge to the end of the
+        # section so the discarded remainder lands at the TOP, not in the
+        # boundary layer. Without it a top-anchored 2.0 s window leaves chi's
+        # deepest centre ~1.2 m above the bed and the BBL has no chi at all.
+        anchor=anchor,
     )
 
     grad_func, _ = _spectrum_func(spectrum_model)
@@ -427,6 +433,7 @@ def get_chi(
     speed: float | None = None,
     direction: str = "down",
     fp07_model: str = "single_pole",
+    anchor: str = "top",
     goodman: bool = True,
     f_AA: float = 98.0,
     fit_method: str = "iterative",
@@ -509,6 +516,7 @@ def get_chi(
         direction=direction,
         fp07_model=fp07_model,
         goodman=goodman,
+        anchor=anchor,
         f_AA=f_AA,
         fit_method=fit_method,
         spectrum_model=spectrum_model,

@@ -72,7 +72,7 @@ def _apply_macoun_lueck(kcyc: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def _section_groups(
+def section_groups(
     sec_id: float,
     sec_start: int,
     sec_end: int,
@@ -152,6 +152,11 @@ def _section_groups(
     return groups
 
 
+#: Backwards-compatible alias. The window layout is now shared with the chi
+#: path (``chi/l3_chi.py``), so it is public; the private name predates that.
+_section_groups = section_groups
+
+
 def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     """Compute L3 wavenumber spectra from L2 cleaned time series.
 
@@ -202,7 +207,7 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
         if len(idx) == 0:
             continue
         groups.extend(
-            _section_groups(
+            section_groups(
                 sec_id,
                 int(idx[0]),
                 int(idx[-1]) + 1,
