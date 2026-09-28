@@ -411,18 +411,31 @@ class TestWindowDurationResolution:
 
 
 class TestBottomUpLayoutKeys:
-    """anchor/bbl_* are EPSILON-only: chi runs its own L3 path (chi_io builds
-    its own L3Params for chi.l3_chi.process_l3_chi) and would ignore them.
-    Unknown-key validation already catches that, which is why no extra guard
-    exists here -- this test pins that it keeps catching it."""
+    """`anchor` is accepted in BOTH sections; `bbl_*` remains epsilon-only.
 
-    def test_chi_anchor_is_refused_as_an_unknown_key(self):
+    It was originally epsilon-only because chi runs its own L3 path. That was
+    the bug, not the design: with chi left top-anchored while epsilon was
+    bottom-anchored, a 2.0 s window put chi's deepest centre ~1.2 m above the
+    seabed, so a bottom-up product had a proper BBL epsilon and NO BBL chi
+    (SUNRISE 2021/Pelican/SN194: chi occupancy 0.0% at 0.62 m, 0.4% at 0.88 m,
+    against epsilon's 95.7%), and Gamma and K_T inherited the hole. chi.l3_chi
+    now lays its windows out with the same scor160.l3.section_groups helper.
+
+    `bbl_*` is still refused for chi, and that IS deliberate: a shorter near-bed
+    window averages fewer FFT segments, so the spectral DOF would differ per
+    window -- and L3ChiData.dof_spec is a SCALAR gating l4_chi's detection test.
+    Accepting bbl_* for chi requires making dof_spec per-window first.
+    """
+
+    def test_chi_anchor_is_accepted(self):
         from odas_tpw.perturb import config as C
 
-        with pytest.raises(ValueError, match=r"Unknown key\(s\) in \[chi\]"):
-            C._mgr.validate_config({"chi": {"anchor": "bottom"}})
+        C._mgr.validate_config({"chi": {"anchor": "bottom"}})
+        C._mgr.validate_config({"chi": {"anchor": "top"}})
 
-    def test_chi_bbl_key_is_refused_as_an_unknown_key(self):
+    def test_chi_bbl_key_is_still_refused(self):
+        """Refused ON PURPOSE -- see the class docstring. If this ever starts
+        passing, dof_spec must have been made per-window."""
         from odas_tpw.perturb import config as C
 
         with pytest.raises(ValueError, match=r"Unknown key\(s\) in \[chi\]"):

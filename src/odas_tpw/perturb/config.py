@@ -244,6 +244,17 @@ DEFAULTS: dict[str, dict] = {
     "chi": {
         "enable": False,
         # Same duration-first interface as [epsilon] above.
+        # anchor: top | bottom, same meaning as [epsilon]. Chi needs its OWN
+        # key because the two are laid out independently: with chi left at
+        # "top" while epsilon is "bottom", a 2.0 s window puts chi's deepest
+        # centre ~1.2 m above the seabed, so a bottom-up product has a proper
+        # BBL epsilon and NO BBL chi (measured on SUNRISE 2021/Pelican/SN194:
+        # chi occupancy 0.0% at 0.62 m and 0.4% at 0.88 m against epsilon's
+        # 95.7%). Gamma and K_T inherit that hole.
+        # NOTE there are deliberately no bbl_* twins here: a shorter near-bed
+        # window makes the spectral DOF differ per window, and L3ChiData's
+        # dof_spec is a SCALAR that gates l4_chi's detection test.
+        "anchor": "top",
         "fft_sec": 1.0,
         "diss_sec": None,
         "overlap_sec": None,

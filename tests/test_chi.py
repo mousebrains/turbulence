@@ -2379,3 +2379,71 @@ class TestEpsilonDsToL4DataAllNaN:
         # The all-NaN window stays NaN (the fallback is all-NaN there too).
         assert np.isnan(l4.epsi_final[2])
         assert np.isfinite(l4.epsi_final[0])
+
+
+# --- chi window anchoring ----------------------------------------------------
+#
+# The bottom-up work originally reached the SHEAR path only. Chi kept a
+# top-anchored layout, so on a bottom-anchored product a 2.0 s window left
+# chi's deepest centre ~1.2 m above the seabed: measured on SUNRISE
+# 2021/Pelican/SN194, chi occupancy was 0.0% at 0.62 m and 0.4% at 0.88 m
+# against epsilon's 95.7%. Gamma and K_T inherit that hole.
+
+
+class TestChiAnchor:
+    def test_chi_shares_the_shear_path_window_layout(self):
+        """Not a second implementation: l3_chi must call the same helper, or
+        the two paths can silently drift apart on where windows sit."""
+        import inspect
+
+        from odas_tpw.chi import l3_chi
+
+        src = inspect.getsource(l3_chi)
+        assert "section_groups(" in src
+        assert "np.arange(n_windows) * diss_step" not in src, (
+            "l3_chi is laying windows out itself again instead of using "
+            "scor160.l3.section_groups"
+        )
+
+    def test_top_anchor_is_the_historical_layout(self):
+        """anchor='top' must be bit-identical to the pre-feature behaviour:
+        first window at sec_start, marching down on diss_step."""
+        import numpy as np
+
+        from odas_tpw.scor160.l3 import section_groups
+
+        _, starts, dl = section_groups(1.0, 0, 5000, 1024, 512, anchor="top")[0]
+        assert dl == 1024
+        n = (5000 - 1024) // 512 + 1
+        np.testing.assert_array_equal(starts, np.arange(n) * 512)
+
+    def test_bottom_anchor_reaches_the_section_end(self):
+        from odas_tpw.scor160.l3 import section_groups
+
+        _, starts, dl = section_groups(1.0, 0, 5000, 1024, 512, anchor="bottom")[0]
+        assert starts.max() + dl == 5000, "deepest window must end AT the seabed"
+
+    def test_bottom_anchor_keeps_one_uniform_window_length(self):
+        """Chi passes no bbl_diss_length on purpose: a shorter near-bed window
+        makes the spectral DOF differ per window, and L3ChiData.dof_spec is a
+        SCALAR feeding l4_chi's detection gate. If this ever returns >1 group,
+        dof_spec must become per-window first."""
+        from odas_tpw.scor160.l3 import section_groups
+
+        groups = section_groups(1.0, 0, 5000, 1024, 512, anchor="bottom")
+        assert len(groups) == 1
+        assert len({int(g[2]) for g in groups}) == 1
+
+    def test_chi_config_accepts_anchor_and_hides_it_when_inert(self):
+        """A config that does not set it must keep the canonical form -- and so
+        the stage-directory signature -- it had before the key existed."""
+        from odas_tpw.perturb.config import _mgr
+
+        _mgr.validate_config({"chi": {"anchor": "bottom"}})
+        _mgr.validate_config({"chi": {"anchor": "top"}})
+        view = _mgr._section_view_postprocess("chi", {"anchor": "top", "fft_length": 512})
+        assert "anchor" not in view
+        view_b = _mgr._section_view_postprocess(
+            "chi", {"anchor": "bottom", "fft_length": 512}
+        )
+        assert view_b["anchor"] == "bottom"
