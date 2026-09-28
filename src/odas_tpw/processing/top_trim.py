@@ -14,10 +14,35 @@ median (fully robust to one bad channel only for three or more voters; the
 VMP caller feeds two accelerometers, where median == mean).
 
 The instrument-specific question of which channels to feed lives in the
-caller. They must reflect the *instrument's* state, not the ocean: on a
-VMP the accelerometers settle at the true prop-wash exit, whereas shear
-probes, inclinometers, and fall rate stay elevated through deep ocean
-turbulence and would over-trim.
+caller, and it is not a free choice -- a channel that is *physically blind*
+to the contamination cannot detect it, however well it behaves.
+
+On a Rockland VMP, ``Ax``/``Ay`` are piezo VIBRATION sensors (for Goodman
+coherent-noise removal), not accelerometers, and there is no ``Az``. They
+measure the body ringing, which damps out within ~5 m, so they are blind to
+prop wash -- an advected FLOW perturbation that persists far deeper. Measured
+on ASTRAL 2023 (4 deployments, ratio to the 40-60 m background): Ax/Ay std
+peaks at 1.44x and is flat below 5 m, while the high-passed FALL-RATE
+RESIDUAL peaks at 44x and decays over ~30 m. Feeding only Ax/Ay trims to a
+median of 3 dbar and leaves two decades of prop-wash epsilon in the product.
+
+The fall-rate residual is the right proxy for prop wash. Note this is the
+*residual* about a smooth descent, not the raw fall rate: raw fall rate does
+stay elevated at depth through ocean turbulence (which is why it was
+previously excluded), but the high-passed residual settles to a flat
+background.
+
+THE SMOOTHING WINDOW IS NOT A FREE PARAMETER. The residual is
+``w - movmean(w, window)``, so the window sets the high-pass corner and is
+only meaningful *relative to the cast length*. Once it is a large fraction of
+the cast, the "smooth descent" baseline absorbs the wash and the residual
+loses the signal. Measured on SUNRISE (18-24 m casts, ~20 s) the peak residual
+ratio falls from 6.1x at a 2 m window to 2.3x at 6 m, and two of five
+vessel-years read as having *no prop wash at all* at the 6 m default -- while
+at 2 m the wash is plainly there in every one. Roughly 10% of the cast span
+worked on both ASTRAL (long casts) and SUNRISE (short). A peak ratio near 1.0
+is evidence about the window until the short-window case has been checked; the
+caller warns when the configured window exceeds 30% of the cast span.
 
 Reference: Code/trim_top_profiles.m (85 lines)
 """
@@ -86,6 +111,200 @@ def _surface_run_end(elevated: np.ndarray, max_gap: int) -> int | None:
     return last
 
 
+def inclinometer_is_usable(
+    incl_segment: npt.ArrayLike,
+    *,
+    min_range_deg: float = 0.5,
+    valid_range: tuple[float, float] = (-95.0, 95.0),
+    min_finite_fraction: float = 0.5,
+) -> bool:
+    """Is this inclinometer reporting *during this cast*? Check PER PROFILE.
+
+    A dead channel is not a harmless abstention for
+    :func:`attitude_trim_depth`. **A channel frozen at or above the vertical
+    threshold mimics "already vertical"**, so the voter returns None, the
+    caller reads that as "no attitude transient to trim", and a tow-yo cast
+    whose first metres are physically meaningless passes through untrimmed.
+    That failure must not be silent.
+
+    **Why this takes ONE CAST and not the whole file.** VMP SN 412 developed
+    exactly this fault in SUNRISE 2021 and 2022 (both Incl_X and Incl_Y). The
+    value is **frozen within each descent** — median within-cast range 0.0
+    deg, against 64-78 deg on the healthy SN 142 and SN 194 — yet it *changes
+    between* casts, so over the whole file it spans 6.3 to 90.0 deg across
+    3033 distinct values. A file-level range test therefore passes SN 412 as
+    healthy and then hands the voter a frozen angle on every cast. The
+    discriminator only exists within a cast.
+
+    A live sensor always dithers, so a genuinely vertical cast on working
+    hardware still moves more than a few tenths of a degree; a frozen one
+    reports bit-identical samples.
+
+    Deliberately NOT tested here: whether the values are *physically
+    sensible* beyond the range check. A miscalibrated but moving sensor
+    passes, because this answers "is the hardware reporting?", not "do I
+    believe the numbers".
+
+    Parameters
+    ----------
+    incl_segment : array_like
+        One profile's worth of the inclinometer channel [degrees].
+    min_range_deg : float
+        Minimum peak-to-peak excursion within the cast for the channel to
+        count as reporting. Frozen channels give ~0; healthy ones on a tow-yo
+        give tens of degrees, and even a steady vertical cast dithers.
+    valid_range : tuple of float
+        Physically admissible bounds [degrees]. The sensor is capped at
+        +/-90; the default allows margin for a calibration offset.
+    min_finite_fraction : float
+        Minimum fraction of samples that must be finite.
+
+    Returns
+    -------
+    bool
+        True when the channel looks alive for this cast and should be
+        trusted by :func:`attitude_trim_depth`.
+    """
+    a = np.asarray(incl_segment, dtype=np.float64).ravel()
+    if a.size == 0:
+        return False
+    finite = np.isfinite(a)
+    if finite.sum() < max(2, int(min_finite_fraction * a.size)):
+        return False
+    a = a[finite]
+    lo, hi = valid_range
+    if not (lo <= float(np.median(a)) <= hi):
+        return False
+    return bool(np.ptp(a) >= min_range_deg)
+
+
+def attitude_trim_depth(
+    depth: npt.ArrayLike,
+    incl_y: npt.ArrayLike,
+    *,
+    threshold_deg: float = 85.0,
+    relax_deg: float = 5.0,
+    hold_m: float = 1.0,
+    margin_m: float = 2.0,
+    min_range_deg: float = 0.5,
+) -> float | None:
+    """Depth below which a tow-yo VMP has come vertical, or None.
+
+    This is a *different kind of voter* from :func:`compute_trim_depth`. That
+    one asks whether a channel's VARIANCE is still elevated. This one reads
+    the inclinometer's ABSOLUTE VALUE — the instrument's attitude — and is
+    therefore immune to the cast-length / window-scaling problem that afflicts
+    the fall-rate residual (see the module docstring). There is nothing to
+    tune against record length.
+
+    Why it exists. In a tow-yo the VMP is launched nearly parallel to the
+    surface, the reel brake is released, and it pitches down as it falls
+    (Pat, 2026-09-20). Until it is vertical the shear probes see a MEAN
+    CROSS-FLOW rather than turbulence, and since epsilon ~ shear^2 / U^4 the
+    reported dissipation is meaningless, not merely contaminated. Measured on
+    SUNRISE 2021 Walton Smith SN 194 (773 descents): Incl_Y starts at a median
+    of 20.2 deg (i.e. ~70 deg off vertical) with 56 deg of roll, and reaches
+    85 deg at a median of 3.9 m but anywhere in 2.7-5.7 m. Epsilon there runs
+    4.5e5 x the interior at 1 m and 6.2e4 x at 2 m -- consistent with the
+    geometry, since at 38 deg off vertical the mean cross-flow is U*sin(38)
+    ~ 0.46 m/s against turbulent fluctuations of order 1e-3 m/s.
+
+    Because the vertical depth varies by ~3 m between casts of one
+    deployment, a flat floor necessarily over-trims the quick drops and
+    under-trims the slow ones. This voter gives the per-cast answer.
+
+    **VMP-specific.** On a Rockland VMP ``Incl_Y`` is capped at 90 deg with
+    +90 = pointing straight down, so a vertically falling VMP reads ~+90. On
+    a MicroRider ``Incl_Y`` is approximately pitch and this reading does not
+    apply; the caller must not feed one in. The value is used literally and
+    is deliberately not passed through ``abs()``, so a genuinely inverted
+    instrument fails the test rather than being hidden.
+
+    If the instrument is ALREADY vertical at the first valid sample there is
+    no attitude transient and the function returns None, so a conventional
+    carefully-lowered cast is untouched and pays no ``margin_m``.
+
+    Parameters
+    ----------
+    depth : array_like
+        Depth (positive downward) [m], same rate as ``incl_y``.
+    incl_y : array_like
+        Inclinometer Y [degrees]; +90 = vertical, nose down.
+    threshold_deg : float
+        Attitude at or above which the instrument counts as vertical.
+    relax_deg : float
+        The attitude may dip this far below ``threshold_deg`` during the
+        hold without restarting the search, absorbing inclinometer noise.
+    hold_m : float
+        The attitude must stay above ``threshold_deg - relax_deg`` over this
+        much further descent, so a momentary swing through vertical while
+        still tumbling does not end the search early.
+    margin_m : float
+        Added below the vertical depth. Reaching vertical is not the same as
+        the flow having settled: measured on SUNRISE, epsilon is still 6.7x
+        the interior at the vertical depth and 2.2x one metre below it, but
+        1.2x two metres below. Hence the default of 2 m.
+    min_range_deg : float
+        Passed to :func:`inclinometer_is_usable`. A channel that does not
+        move this much within the cast is frozen and the function abstains,
+        rather than mistaking a stuck-high reading for "already vertical".
+
+    Returns
+    -------
+    float or None
+        Depth [m] below which the cast is usable on attitude grounds, or
+        None when the instrument started vertical (nothing to trim), never
+        reached ``threshold_deg``, or the channel was frozen for this cast.
+        The caller is expected to distinguish those — the last two are
+        failures and must be reported, not silently kept. Use
+        :func:`inclinometer_is_usable` to separate them.
+
+    Raises
+    ------
+    ValueError
+        If ``hold_m`` or ``margin_m`` is negative, or ``relax_deg`` < 0.
+    """
+    if hold_m < 0:
+        raise ValueError(f"hold_m must be >= 0, got {hold_m}")
+    if margin_m < 0:
+        raise ValueError(f"margin_m must be >= 0, got {margin_m}")
+    if relax_deg < 0:
+        raise ValueError(f"relax_deg must be >= 0, got {relax_deg}")
+
+    z = np.asarray(depth, dtype=np.float64)
+    y = np.asarray(incl_y, dtype=np.float64)
+    if z.shape != y.shape or z.size == 0:
+        return None
+    ok = np.isfinite(z) & np.isfinite(y)
+    if int(ok.sum()) < 2:
+        return None
+    z, y = z[ok], y[ok]
+
+    # A frozen channel must never reach the "already vertical" shortcut
+    # below: SN 412's Incl_Y holds one value for a whole cast, and if that
+    # value happens to sit above threshold_deg the shortcut would report a
+    # clean vertical cast on a sensor that is not reporting at all. Checked
+    # here as well as in the caller so the function cannot be misused.
+    if not inclinometer_is_usable(y, min_range_deg=min_range_deg):
+        return None
+
+    # Already vertical at the start: no attitude transient to trim.
+    if y[0] >= threshold_deg:
+        return None
+
+    floor_deg = threshold_deg - relax_deg
+    cand = np.flatnonzero(y >= threshold_deg)
+    for i in cand:
+        # The hold runs over DEPTH, not samples, so it does not depend on the
+        # sampling rate or on how fast this particular cast is falling.
+        window = (z >= z[i]) & (z <= z[i] + hold_m)
+        if not np.any(window):
+            continue
+        if np.all(y[window] >= floor_deg):
+            return float(z[i] + margin_m)
+    return None
+
+
 def compute_trim_depth(
     depth_fast: npt.ArrayLike,
     channels: dict[str, np.ndarray],
@@ -96,6 +315,7 @@ def compute_trim_depth(
     quantile: float = 0.6,
     noise_factor: float = 2.0,
     max_gap: int = 3,
+    combine: str = "median",
 ) -> float | None:
     """Compute the trim depth for a single profile.
 
@@ -125,9 +345,17 @@ def compute_trim_depth(
 
     The caller chooses which channels best mark the instrument's settling.
     On VMP data the accelerometers are the right choice: they capture the
-    mechanical entry transient. Shear probes, inclinometers, and fall rate
-    respond to the *ocean* turbulence the instrument falls through, so their
-    per-bin std stays elevated at depth and would over-trim.
+    mechanical entry transient. Shear probes, inclinometers, and raw fall
+    rate respond to the *ocean* turbulence the instrument falls through, so
+    their per-bin std stays elevated at depth and would over-trim. Two
+    channels are exceptions and are handled elsewhere rather than here: the
+    high-passed fall-rate *residual*, which does settle (see the module
+    docstring, and mind its window scaling), and the inclinometer's
+    *absolute value*, which is not a variance question at all --
+    :func:`attitude_trim_depth` reads it directly to find where a tow-yo VMP
+    has come vertical. "Do not feed the inclinometer here" and "use the
+    inclinometer there" are both correct; they use different properties of
+    the same channel.
 
     Parameters
     ----------
@@ -156,6 +384,20 @@ def compute_trim_depth(
         Maximum run of quiet bins bridged within the surface-attached
         prop-wash run, and the maximum offset of the first elevated bin
         from the surface for the run to count as surface-attached [bins].
+    combine : {"median", "max"}
+        How to combine the per-channel exits.
+
+        ``"median"`` (default) suits REDUNDANT channels measuring the same
+        mechanism, where a disagreeing channel is a fault to be outvoted.
+
+        ``"max"`` -- deepest exit wins -- is required when the channels
+        measure DIFFERENT mechanisms with different reach. A channel that is
+        blind to the contamination (VMP vibration sensors against prop wash)
+        reports a shallow exit that is *correct for what it measures* and
+        would, under a median, outvote the channel that can actually see the
+        contamination. Two blind channels plus one sensitive one median to
+        the blind answer. Use ``"max"`` whenever the channel set is
+        heterogeneous, and accept that it trims conservatively.
         Must be >= 0; ``>= 1`` preserves the audit-#66 momentary-lull
         tolerance. At the default ``dz=0.5`` m, ``max_gap=3`` bridges lulls
         up to ~1.5 m.
@@ -177,6 +419,8 @@ def compute_trim_depth(
         raise ValueError(f"noise_factor must be > 1, got {noise_factor}")
     if max_gap < 0:
         raise ValueError(f"max_gap must be >= 0, got {max_gap}")
+    if combine not in ("median", "max"):
+        raise ValueError(f"combine must be 'median' or 'max', got {combine!r}")
     depth = np.asarray(depth_fast, dtype=np.float64)
     bin_edges = np.arange(min_depth - dz / 2, max_depth + dz, dz)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
@@ -232,10 +476,11 @@ def compute_trim_depth(
         exits.append(bin_centers[exit_idx])
 
     if exits:
-        # Median exit across the channels that detected prop wash: robust to a
-        # single misbehaving channel (a `max` lets one bad channel drag the
-        # trim arbitrarily deep).
-        trim = float(np.median(exits))
+        # Combine the per-channel exits. median: robust to one misbehaving
+        # channel among redundant ones. max: required for a heterogeneous set,
+        # where a channel blind to the contamination would otherwise outvote
+        # the one that sees it (see `combine` in the docstring).
+        trim = float(np.median(exits)) if combine == "median" else float(np.max(exits))
         # A never-settled cast (the surface run reaches the deepest populated
         # bin) yields an exit bin center in the empty tail of the search range,
         # deeper than every real sample; the caller's ``P >= trim_depth`` would

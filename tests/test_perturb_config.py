@@ -3,6 +3,8 @@
 
 import json
 
+import pytest
+
 from odas_tpw.perturb.config import (
     DEFAULTS,
     canonicalize,
@@ -300,7 +302,19 @@ class TestWindowDurationResolution:
         old_eps = {
             k: v
             for k, v in C.DEFAULTS["epsilon"].items()
-            if k not in ("fft_sec", "diss_sec", "overlap_sec")
+            if k
+            not in (
+                "fft_sec",
+                "diss_sec",
+                "overlap_sec",
+                "bbl_diss_sec",
+                "bbl_overlap_sec",
+                "bbl_extent_sec",
+                "anchor",
+                "bbl_diss_length",
+                "bbl_overlap",
+                "bbl_extent",
+            )
         }
         old_eps["fft_length"] = 256
         old_mgr = ConfigManager(
@@ -394,3 +408,45 @@ class TestWindowDurationResolution:
 
         r = resolve_window_config(merge_config("chi", None), 1024.0, section="chi")
         assert (r["fft_length"], r["diss_length"]) == (1024, 4096)
+
+
+class TestBottomUpLayoutKeys:
+    """anchor/bbl_* are EPSILON-only: chi runs its own L3 path (chi_io builds
+    its own L3Params for chi.l3_chi.process_l3_chi) and would ignore them.
+    Unknown-key validation already catches that, which is why no extra guard
+    exists here -- this test pins that it keeps catching it."""
+
+    def test_chi_anchor_is_refused_as_an_unknown_key(self):
+        from odas_tpw.perturb import config as C
+
+        with pytest.raises(ValueError, match=r"Unknown key\(s\) in \[chi\]"):
+            C._mgr.validate_config({"chi": {"anchor": "bottom"}})
+
+    def test_chi_bbl_key_is_refused_as_an_unknown_key(self):
+        from odas_tpw.perturb import config as C
+
+        with pytest.raises(ValueError, match=r"Unknown key\(s\) in \[chi\]"):
+            C._mgr.validate_config({"chi": {"bbl_diss_sec": 1.0}})
+
+    def test_epsilon_anchor_is_accepted(self):
+        from odas_tpw.perturb import config as C
+
+        C._mgr.validate_config({"epsilon": {"anchor": "bottom", "bbl_diss_sec": 1.0}})
+
+
+def test_binning_method_typo_is_rejected_at_load():
+    """An unrecognised binning.method must FAIL, not silently select time
+    binning. Every routing site falls through to time, so a typo produced a
+    complete, writable, wrong product with no error anywhere."""
+    import pytest
+
+    from odas_tpw.perturb.config import _mgr as mgr
+    for bad in ("altitiude", "Altitude", "height", ""):
+        with pytest.raises(ValueError, match=r"binning\.method"):
+            mgr.validate_config({"binning": {"method": bad}})
+
+
+def test_binning_method_accepts_the_three_real_methods():
+    from odas_tpw.perturb.config import _mgr as mgr
+    for good in ("depth", "time", "altitude"):
+        mgr.validate_config({"binning": {"method": good}})

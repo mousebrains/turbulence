@@ -42,6 +42,19 @@ def canonicalize_units(units: str) -> str:
 # Schema definitions — maps variable names to CF attributes
 # ---------------------------------------------------------------------------
 
+#: Attributes for a `bin` coordinate that holds HEIGHT ABOVE THE SEABED
+#: rather than depth. Kept separate from COMBO_SCHEMA["bin"] because the two
+#: differ in `positive` — they run in opposite directions, and a consumer that
+#: reads `positive: down` off an altitude axis plots it upside down while
+#: still looking plausible.
+ALTITUDE_BIN_ATTRS: dict = {
+    "units": "m",
+    "standard_name": "height_above_sea_floor",
+    "long_name": "height above seabed, bin center",
+    "positive": "up",
+    "axis": "Z",
+}
+
 COMBO_SCHEMA: dict[str, dict] = {
     "bin": {
         "units": "m",
@@ -49,6 +62,11 @@ COMBO_SCHEMA: dict[str, dict] = {
         "long_name": "depth bin center",
         "positive": "down",
         "axis": "Z",
+    },
+    "bottom_depth": {
+        "units": "dbar",
+        "standard_name": "sea_floor_depth_below_sea_surface",
+        "long_name": "detected seabed depth for this profile",
     },
     "profile": {
         "long_name": "profile index",
@@ -513,6 +531,11 @@ def apply_schema(ds: xr.Dataset, schema: dict[str, dict]) -> xr.Dataset:
     for vname in [str(v) for v in ds.data_vars] + [str(c) for c in ds.coords]:
         if vname in schema:
             attrs = schema[vname]
+            # The binner stamps `coordinate_kind` on the vertical coordinate.
+            # Honour it: applying the depth schema to an altitude axis would
+            # relabel it `positive: down`, which is exactly backwards.
+            if vname == "bin" and ds[vname].attrs.get("coordinate_kind") == "altitude":
+                attrs = {**attrs, **ALTITUDE_BIN_ATTRS}
             for key, val in attrs.items():
                 if key != "nc_name":
                     ds[vname].attrs[key] = val

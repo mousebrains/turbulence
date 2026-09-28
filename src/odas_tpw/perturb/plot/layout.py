@@ -401,3 +401,27 @@ def draw_cbar_anchor(cbar, value: float) -> None:
         frac = 1.0 - frac
     cbar.ax.plot([0, 1], [frac, frac], color="0.15", linewidth=0.8,
                  transform=cbar.ax.transAxes)
+
+
+def vertical_axis(bin_attrs: dict | None) -> tuple[str, bool]:
+    """``(label, invert)`` for the vertical axis of a binned product.
+
+    Read from the ``bin`` coordinate's own attributes rather than assumed,
+    because depth and altitude run in OPPOSITE directions: depth increases
+    downward and is plotted inverted, height above the seabed increases upward
+    and must NOT be. A plot that inverts the wrong one is silently upside down
+    and still looks plausible, which is the failure this exists to prevent.
+
+    A product written before the coordinate was labelled carries no
+    ``coordinate_kind`` and is treated as depth -- the historical behaviour.
+    """
+    attrs = bin_attrs or {}
+    kind = str(attrs.get("coordinate_kind", "depth"))
+    if kind == "altitude":
+        return ("Height above bottom (m)", False)
+    if kind not in ("depth", ""):
+        raise ValueError(
+            f"unknown vertical coordinate_kind {kind!r} on the bin coordinate; "
+            "expected 'depth' or 'altitude'"
+        )
+    return ("Depth (m)", True)
