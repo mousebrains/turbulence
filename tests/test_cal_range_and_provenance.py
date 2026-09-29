@@ -85,9 +85,10 @@ class TestShearRangeCheck:
         This converter sees only the channel config, never the rate, so it
         cannot bound on it.
 
-        Emphatically NOT a verdict on SN 132 (issue #178) — the one instrument
-        the rate does not explain, at 511.95 Hz against siblings at 0.937-0.99.
-        That case needs an instrument-keyed comparison, not a static range.
+        SN 132 (issue #178) is the cautionary case: it samples at 511.95 Hz,
+        where its siblings sit at 0.937-0.99, yet its 0.09 was measured to be
+        on the right rung (a 2021 tidal re-conversion left its analog chain on
+        the 1024 Hz rung).  Warning on it would have been a false alarm.
         """
         msgs = _warnings_from({"name": "sh1", "diff_gain": "0.09", "sens": "0.0678"})
         assert not [m for m in msgs if "plausible range" in m]

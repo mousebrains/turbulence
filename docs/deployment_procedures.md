@@ -29,8 +29,10 @@ below.
 - the **shear test probe is electrically an OPEN CIRCUIT**, so the amplifier
   sees no piezo and the recording is *pure electronics noise with zero probe
   contribution*;
-- the **FP07 test probe is a fixed resistance corresponding to ~16 °C**, so a
-  bench trace should sit pinned at a constant ~16 °C.
+- the **FP07 test probe is a fixed resistance equal to the bridge's R₀**, so a
+  bench trace sits pinned at the config's **`T_0`** — ~16 °C with Rockland's
+  nominal coefficients, but whatever `T_0` the file carries otherwise (SN 132's
+  ARCTERX-2023 configs pin its test probes at 7.87 / 14.26 °C).
 
 **What it buys.** Subtracting bench noise from the in-water noise floor
 separates *channel* noise from *probe + vibration* noise. That is the only way
@@ -40,8 +42,22 @@ to answer "is this probe noisy, or is that channel noisy?".
 run bounds what changed *during* the cruise. Without it, a probe that was
 damaged on cast 3 is indistinguishable from one that arrived wrong.
 
-**What it does NOT do:** it cannot check `diff_gain` (an open circuit carries no
-signal — see §2) and it can never give `sens`.
+**It also estimates `diff_gain` — a model-dependent check, not a
+calibration.** An open circuit carries no *signal*, but the channel's electronics
+*noise* passes through the differentiator, so the open-circuit shear spectrum
+(raw counts²/Hz) measures the differentiator gain against Rockland's noise model
+(`odas_tpw.rsi.shear_noise.noise_shearchannel`, a port of ODAS
+`noise_shearchannel.m`, in which `diff_gain` is R3·C2). A standard 512 Hz channel
+(~0.95) climbs from ~3e-3 at 2–10 Hz to a ~1e-2 hump at 60–90 Hz before the
+anti-alias roll-off; a channel on the 1024 Hz rung (~0.095) is flat at the
+sampler floor, ~1e-3. Fitting the model's amplitude recovers the configured gain
+on SN 409 to ~1% (0.93–0.96 against 0.949) and on SN 465 to +3–14% (against
+0.988), and it settled SN 132 (issue #178). The 60–90 Hz hump measures
+op-amp noise × gain, so its absolute value is only as good as the assumed
+components; the 2–10 Hz plateau above the post-anti-alias floor (200–240 Hz) is
+mostly set by the 1 GΩ feedback resistor's Johnson noise instead, and is the more
+component-robust number. For a number to apply, the signal-injection measurement
+(§2) is still the model-free one — and no bench can ever give `sens`.
 
 > **Do not identify a bench file by its readings.** It is tempting to find bench
 > runs by testing "FP07 sits at `T_0`, shear near zero". That test is CIRCULAR:
@@ -75,8 +91,10 @@ signal — see §2) and it can never give `sens`.
 >
 >       counts = std_physical x (2*sqrt(2) * diff_gain * sens) / (adc_fs / 2^bits)
 >
->   An open circuit sits at the quantisation floor, ~1.1 counts (sub-LSB dither).
->   Exactly 0 counts is dead, not open.
+>   An open circuit sits near the quantisation floor, ~1.1 counts on a standard
+>   512 Hz channel — and ~0.55 on SN 132, whose differentiator is on the
+>   1024 Hz rung, so only the sampler floor remains. Exactly 0 counts is dead,
+>   not open.
 >
 > Measured separation on labelled files:
 >

@@ -105,7 +105,11 @@ class TestCollection:
 
 class TestOutlierDetection:
     def test_catches_an_order_of_magnitude_error(self):
-        """The SN132 case: 0.09 where the fleet sits near 0.93."""
+        """The SN132 shape: 0.09 where the fleet sits near 0.93.
+
+        Flagging it is right even though SN132's 0.09 proved genuine (#178):
+        an outlier is a question to resolve by measurement, not a verdict.
+        """
         t = _fleet(**{"409": {"sh1": "0.09", "sh2": "0.09"}})
         uses, _ = collect_gains(list(t), _reader(t))
         got = outliers(uses)

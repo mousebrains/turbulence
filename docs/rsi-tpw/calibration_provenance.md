@@ -101,13 +101,28 @@ that fires on correct hardware the day it arrives is worse than no check.
 This is the one place the corpus is not the last word: absence of a
 configuration from our files is not evidence it does not exist.
 
-> **Not a verdict on SN 132 — the ladder points the other way.** Measured over
-> all 217 of its files, unanimously: `f_clock` 5119.454 Hz, 8×10 matrix,
-> **`fs_fast` = 511.9454 Hz**, model `vmp-250-IR`. It therefore belongs on the
-> ~0.95 rung with SN 412, 465 and 479 — yet it carries **0.09**, the 1024 Hz
-> rung's value, and carries it *identically* on both channels where every
-> measured pair in the corpus differs. See issue #178; the range check
-> deliberately takes no position.
+> **SN 132: the sampling rate is not the gain** (issue #178, resolved
+> 2026-09-29). Over all 217 of its files SN 132 samples at **511.9454 Hz**
+> (`f_clock` 5119.454 Hz, 8×10 matrix, `vmp-250-IR`), yet carries **0.09** — the
+> 1024 Hz rung's value — identically on both channels. That looked like a setup
+> file inherited from a 1 kHz build. It is the reverse: Rockland converted SN 132
+> to a 1024 Hz tidal instrument in 2021 and back to 512 Hz afterwards, and its
+> analog chain evidently stayed on the tidal rung. Two independent measurements
+> agree:
+>
+> - its **open-circuit bench noise** has no differentiator hump — the noise-model
+>   fit gives 0.10–0.13, where the same fit recovers SN 409's 0.949 to ~1%
+>   (method: [deployment procedures §1](../deployment_procedures.md));
+> - its **epsilon computed with 0.09 matches SN 465's** in near-simultaneous
+>   casts from two boats working the center of German Channel (SN 132 on Ocean
+>   Hunter III, SN 465 on the Kemedukl; 0.4–4.9 km apart): 1.2× over all 72
+>   profile pairs, and 0.9× for the 24 pairs within 1.5 km away from logged
+>   fronts (95% CI ~0.7–1.5). A true 0.94 would have put it at 109×.
+>
+> So on a re-converted instrument a 512 Hz rate does **not** prove a ~0.95 gain
+> — one more reason this range check must not key on the rate. Whether the true
+> value is 0.09 or nearer the bench fit's ~0.12 (a ~1.8× epsilon question)
+> awaits Rockland's board-specific noise curve.
 
 Distinguishing "0.09 is this instrument's real differentiator" from "0.09 is a
 transcription error" needs that instrument's own history and class, not a static
