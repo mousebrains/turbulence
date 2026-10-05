@@ -11,19 +11,20 @@ analyses (epsilon, chi, mixing efficiency, overturns, isotropy). The PDFs are
 | Group | Papers | Scope |
 |---|---|---|
 | [spectra-and-sensor-response/](spectra-and-sensor-response/README.md) | 9 | Spectral-estimation foundations (Welch, DSP) and thermistor / shear-probe frequency response — the transfer functions behind FP07 and shear corrections. |
-| [epsilon-shear/](epsilon-shear/README.md) | 10 | TKE dissipation (ε) from shear probes: ATOMIX best practices and benchmark, the Lueck (2022) statistics, Goodman coherent-noise removal, cross-method comparisons, and the moored-instrument precedent. |
+| [epsilon-shear/](epsilon-shear/README.md) | 11 | TKE dissipation (ε) from shear probes: ATOMIX best practices and benchmark, the Lueck (2022) statistics, Goodman coherent-noise removal, cross-method comparisons, and the moored-instrument precedent. |
 | [chi-thermal/](chi-thermal/README.md) | 7 | Thermal-variance dissipation (χ): the Batchelor (1959) origin papers, Batchelor / Kraichnan spectrum fitting, MLE estimation, and temperature-microstructure methods. |
-| [mixing-efficiency/](mixing-efficiency/README.md) | 14 | Mixing efficiency Γ and the gamma-scaling chain (Lewin Fig. 5): Osborn / Osborn–Cox, Re_b and R_OT parameterizations, and Γ observations. |
+| [mixing-efficiency/](mixing-efficiency/README.md) | 15 | Mixing efficiency Γ and the gamma-scaling chain (Lewin Fig. 5): Osborn / Osborn–Cox, Re_b and R_OT parameterizations, and Γ observations. |
 | [overturns-thorpe/](overturns-thorpe/README.md) | 5 | Thorpe-scale overturn analysis: the sort, the Thorpe–Ozmidov link, overturn-validity tests, and the Thorpe-scale ε biases. |
 | [stratified-turbulence-anisotropy/](stratified-turbulence-anisotropy/README.md) | 6 | Isotropy criteria and the structure of stratified turbulence — the backdrop for the VMP two-probe isotropy investigation. |
 | [gliders-and-platforms/](gliders-and-platforms/README.md) | 17 | MicroRider-on-glider / AUV platform processing and the through-water speed behind `speed.method`: the Slocum flight models, angle of attack, and the published `U_EM` scale factors (Merckelbach et al. 2019; Tanaka et al. 2022). |
 | [current-meters/](current-meters/README.md) | 18 | Calibration and dynamic response of EM current meters: the Aubrey–Trowbridge / Guza dispute over gain error, and the flowmeter physics of gain, zero and conductivity behind the `em_bench_zero.py` bench test. |
 | [topographic-wakes/](topographic-wakes/README.md) | 1 | Turbulence, dissipation and mixing in headland, island and seamount wakes and their Rossby/Froude scaling — context for the Palau (Peleliu tip, Hydrographer Bank) wake analyses. |
+| [bottom-boundary-layers/](bottom-boundary-layers/README.md) | 1 | Bottom-boundary-layer turbulence over rough beds and reefs — stress, drag, the log layer — the context for the moored crest measurements on Hydrographer Bank. |
 | [rockland-technical-notes/](rockland-technical-notes/README.md) | 30 | Rockland Scientific vendor Technical Notes: the `.p`/ODAS file format, count→physical-unit conversion, the ε recipe, shear/thermistor noise floors, FP07 calibration, and field/deployment technique for the VMP and MicroRider. |
 
-87 references across the nine subject groups, mostly peer-reviewed papers plus
+90 references across the ten subject groups, mostly peer-reviewed papers plus
 a few reports, a patent, a handbook chapter, a preprint and a vendor working
-note, and 30 Rockland technical notes in the tenth (`rockland-technical-notes/`).
+note, and 30 Rockland technical notes in the eleventh (`rockland-technical-notes/`).
 
 ## Cited in the repository docs, no local PDF yet
 
@@ -46,6 +47,10 @@ were the last gap, now filed under `chi-thermal/`.
   Rehmann & Hwang (2005) is the one new paper this brought in.
 - `topographic-wakes/` opened 2026-10-05 with Chor & Wenegrat (2025), for the
   Palau headland- and bank-wake analyses (Hydrographer-Analysis notes 12-13).
+- 2026-10-05: the loose top-level PDFs were filed. Bluteau (2025, *L&O Methods*)
+  went to `epsilon-shear/`, Li et al. (2023) to `mixing-efficiency/`, and Reidenbach
+  et al. (2006) opened `bottom-boundary-layers/`. A fourth, a second download of
+  Lueck (2022) Part II, was a duplicate of the copy already in `epsilon-shear/`.
 - `current-meters/` opened 2026-08-26 for the AEM1-G in-situ calibration work.
   Velocity-sensor calibration is a separate literature from the microstructure
   groups here — largely nearshore, largely 1980s — and the group holds the complete
