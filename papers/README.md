@@ -18,11 +18,12 @@ analyses (epsilon, chi, mixing efficiency, overturns, isotropy). The PDFs are
 | [stratified-turbulence-anisotropy/](stratified-turbulence-anisotropy/README.md) | 6 | Isotropy criteria and the structure of stratified turbulence — the backdrop for the VMP two-probe isotropy investigation. |
 | [gliders-and-platforms/](gliders-and-platforms/README.md) | 17 | MicroRider-on-glider / AUV platform processing and the through-water speed behind `speed.method`: the Slocum flight models, angle of attack, and the published `U_EM` scale factors (Merckelbach et al. 2019; Tanaka et al. 2022). |
 | [current-meters/](current-meters/README.md) | 18 | Calibration and dynamic response of EM current meters: the Aubrey–Trowbridge / Guza dispute over gain error, and the flowmeter physics of gain, zero and conductivity behind the `em_bench_zero.py` bench test. |
+| [topographic-wakes/](topographic-wakes/README.md) | 1 | Turbulence, dissipation and mixing in headland, island and seamount wakes and their Rossby/Froude scaling — context for the Palau (Peleliu tip, Hydrographer Bank) wake analyses. |
 | [rockland-technical-notes/](rockland-technical-notes/README.md) | 30 | Rockland Scientific vendor Technical Notes: the `.p`/ODAS file format, count→physical-unit conversion, the ε recipe, shear/thermistor noise floors, FP07 calibration, and field/deployment technique for the VMP and MicroRider. |
 
-86 references across the eight subject groups, mostly peer-reviewed papers plus
+87 references across the nine subject groups, mostly peer-reviewed papers plus
 a few reports, a patent, a handbook chapter, a preprint and a vendor working
-note, and 30 Rockland technical notes in the ninth (`rockland-technical-notes/`).
+note, and 30 Rockland technical notes in the tenth (`rockland-technical-notes/`).
 
 ## Cited in the repository docs, no local PDF yet
 
@@ -43,6 +44,8 @@ were the last gap, now filed under `chi-thermal/`.
   **†** in that group's README). Three notes that are journal-paper reprints
   (TN-002, TN-015, TN-016) are filed as the papers, not as notes — TN-016 =
   Rehmann & Hwang (2005) is the one new paper this brought in.
+- `topographic-wakes/` opened 2026-10-05 with Chor & Wenegrat (2025), for the
+  Palau headland- and bank-wake analyses (Hydrographer-Analysis notes 12-13).
 - `current-meters/` opened 2026-08-26 for the AEM1-G in-situ calibration work.
   Velocity-sensor calibration is a separate literature from the microstructure
   groups here — largely nearshore, largely 1980s — and the group holds the complete
