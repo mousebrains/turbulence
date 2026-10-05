@@ -11,20 +11,26 @@ analyses (epsilon, chi, mixing efficiency, overturns, isotropy). The PDFs are
 | Group | Papers | Scope |
 |---|---|---|
 | [spectra-and-sensor-response/](spectra-and-sensor-response/README.md) | 9 | Spectral-estimation foundations (Welch, DSP) and thermistor / shear-probe frequency response — the transfer functions behind FP07 and shear corrections. |
-| [epsilon-shear/](epsilon-shear/README.md) | 11 | TKE dissipation (ε) from shear probes: ATOMIX best practices and benchmark, the Lueck (2022) statistics, Goodman coherent-noise removal, cross-method comparisons, and the moored-instrument precedent. |
+| [epsilon-shear/](epsilon-shear/README.md) | 15 | TKE dissipation (ε) from shear probes: ATOMIX best practices and benchmark, the Lueck (2022) statistics, Goodman coherent-noise removal, cross-method comparisons, and the moored-instrument precedent. |
 | [chi-thermal/](chi-thermal/README.md) | 7 | Thermal-variance dissipation (χ): the Batchelor (1959) origin papers, Batchelor / Kraichnan spectrum fitting, MLE estimation, and temperature-microstructure methods. |
 | [mixing-efficiency/](mixing-efficiency/README.md) | 15 | Mixing efficiency Γ and the gamma-scaling chain (Lewin Fig. 5): Osborn / Osborn–Cox, Re_b and R_OT parameterizations, and Γ observations. |
 | [overturns-thorpe/](overturns-thorpe/README.md) | 5 | Thorpe-scale overturn analysis: the sort, the Thorpe–Ozmidov link, overturn-validity tests, and the Thorpe-scale ε biases. |
 | [stratified-turbulence-anisotropy/](stratified-turbulence-anisotropy/README.md) | 6 | Isotropy criteria and the structure of stratified turbulence — the backdrop for the VMP two-probe isotropy investigation. |
 | [gliders-and-platforms/](gliders-and-platforms/README.md) | 17 | MicroRider-on-glider / AUV platform processing and the through-water speed behind `speed.method`: the Slocum flight models, angle of attack, and the published `U_EM` scale factors (Merckelbach et al. 2019; Tanaka et al. 2022). |
 | [current-meters/](current-meters/README.md) | 18 | Calibration and dynamic response of EM current meters: the Aubrey–Trowbridge / Guza dispute over gain error, and the flowmeter physics of gain, zero and conductivity behind the `em_bench_zero.py` bench test. |
-| [topographic-wakes/](topographic-wakes/README.md) | 1 | Turbulence, dissipation and mixing in headland, island and seamount wakes and their Rossby/Froude scaling — context for the Palau (Peleliu tip, Hydrographer Bank) wake analyses. |
-| [bottom-boundary-layers/](bottom-boundary-layers/README.md) | 1 | Bottom-boundary-layer turbulence over rough beds and reefs — stress, drag, the log layer — the context for the moored crest measurements on Hydrographer Bank. |
+| [topographic-wakes/](topographic-wakes/README.md) | 14 | Turbulence, dissipation and mixing in headland, island and seamount wakes and their Rossby/Froude scaling — context for the Palau (Peleliu tip, Hydrographer Bank) wake analyses. |
+| [bottom-boundary-layers/](bottom-boundary-layers/README.md) | 3 | Bottom-boundary-layer turbulence over rough beds and reefs — stress, drag, the log layer — the context for the moored crest measurements on Hydrographer Bank. |
+| [drifters-and-mapping/](drifters-and-mapping/README.md) | 9 | Drifter-cluster kinematics and objective mapping — for the tip-vortex drifters and the T/S and current maps. |
+| [infragravity-and-swell/](infragravity-and-swell/README.md) | 17 | Infragravity waves, swell and reef/island wave dynamics — for the bank's standing infragravity modes and Mawar swell. |
+| [internal-bores-and-intrusions/](internal-bores-and-intrusions/README.md) | 5 | Internal bores and cold intrusions onto reefs and banks — for the cold-water lifts onto the Hydrographer Bank crest. |
+| [palau-fleat/](palau-fleat/README.md) | 18 | Palau and the FLEAT program: regional circulation, island wakes, eddies and turbulence around Palau — the setting of the Hydrographer Bank work. |
+| [remote-sensing-currents/](remote-sensing-currents/README.md) | 7 | X-band radar and wave-glider current retrieval and validation — for the Angaur radar and glider ADCPs. |
+| [typhoons-and-upper-ocean/](typhoons-and-upper-ocean/README.md) | 5 | Tropical cyclones and the upper ocean, near and far — for Typhoon Mawar's remote effects at Palau. |
 | [rockland-technical-notes/](rockland-technical-notes/README.md) | 30 | Rockland Scientific vendor Technical Notes: the `.p`/ODAS file format, count→physical-unit conversion, the ε recipe, shear/thermistor noise floors, FP07 calibration, and field/deployment technique for the VMP and MicroRider. |
 
-90 references across the ten subject groups, mostly peer-reviewed papers plus
+170 references across the sixteen subject groups, mostly peer-reviewed papers plus
 a few reports, a patent, a handbook chapter, a preprint and a vendor working
-note, and 30 Rockland technical notes in the eleventh (`rockland-technical-notes/`).
+note, and 30 Rockland technical notes in the seventeenth (`rockland-technical-notes/`).
 
 ## Cited in the repository docs, no local PDF yet
 
@@ -45,6 +51,7 @@ were the last gap, now filed under `chi-thermal/`.
   **†** in that group's README). Three notes that are journal-paper reprints
   (TN-002, TN-015, TN-016) are filed as the papers, not as notes — TN-016 =
   Rehmann & Hwang (2005) is the one new paper this brought in.
+- 2026-10-05 literature search for the Hydrographer Bank / Palau white paper: 80 open-access PDFs filed (bottom-boundary-layers 2, drifters-and-mapping 9, epsilon-shear 4, infragravity-and-swell 17, internal-bores-and-intrusions 5, palau-fleat 18, remote-sensing-currents 7, topographic-wakes 13, typhoons-and-upper-ocean 5), from the papers the white paper cites plus a search of each topic. Each PDF was checked (a PDF; the title on its first pages; DOI and title confirmed at Crossref). The 'Why it matters' notes were drafted during the search; check them before citing. Papers found but with no legitimate open copy are listed with DOIs in `papers/TO_FETCH.md` (local, untracked).
 - `topographic-wakes/` opened 2026-10-05 with Chor & Wenegrat (2025), for the
   Palau headland- and bank-wake analyses (Hydrographer-Analysis notes 12-13).
 - 2026-10-05: the loose top-level PDFs were filed. Bluteau (2025, *L&O Methods*)
