@@ -13,6 +13,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fires, and its GitHub integration cannot reserve one beforehand
   (zenodo-rdm#831).
 
+### Fixed
+- **`cutp` / `extract_pfile_segment` stamped segments early.** For
+  `start_record > 0` it advanced the record-0 header clock by the nominal
+  config `recsize` (1.0 s) per record, but a record lasts `data_words /
+  f_clock` on the sampling clock that `PFile` puts every sample on: 1.0001067 s
+  for a VMP-250 with 5120-word records at 5119.454 Hz. The error grows with
+  the cut point: 53 ms after 500 records, 0.45 s after 4215 (found splitting a
+  2023 Hydrographer Bank VMP file at a probe failure). The advance now uses
+  the true duration and falls back to `recsize`, with a warning, only when the
+  header carries no clock. Segment sample times now match the source within
+  the header's 1 ms resolution.
+
 ## [0.4.0] - 2026-09-10
 
 ### Added
