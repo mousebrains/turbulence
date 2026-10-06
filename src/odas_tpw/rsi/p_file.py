@@ -146,11 +146,12 @@ def extract_pfile_segment(
     ``n_records`` complete data records starting at the 0-based
     ``start_record`` index. The output is a parseable P-file segment with the
     original calibration metadata preserved. For ``start_record > 0`` the
-    record-0 header timestamp is advanced by ``start_record`` record
-    durations (config ``recsize``, default 1.0 s) so a reader's derived
-    absolute start time matches the copied data; all other header fields are
-    copied verbatim. The header record count is not authoritative because
-    local readers derive the count from file size.
+    record-0 header timestamp is advanced by ``start_record`` TRUE record
+    durations (the record's scans at the sampling clock, ``data_words /
+    f_clock``; see :func:`_record_duration_s`) so a reader's derived absolute
+    sample times match the copied data; all other header fields are copied
+    verbatim. The header record count is not authoritative because local
+    readers derive the count from file size.
     """
     source = Path(source)
     dest = Path(dest)
@@ -226,34 +227,46 @@ def extract_pfile_segment(
     return dest
 
 
+def _record_duration_s(header: dict) -> float | None:
+    """True duration of one data record from the header's sampling clock.
+
+    A record holds ``data_words = (record_size - header_size) / 2`` words,
+    i.e. ``data_words / n_cols`` scans of the address matrix, and
+    :class:`PFile` places scans at ``fs_fast = f_clock / n_cols``. So a record
+    spans ``data_words / f_clock`` seconds on the same time base the reader
+    uses for every sample. That is NOT the nominal config ``recsize``: a
+    VMP-250 at ``f_clock`` 5119.454 Hz with 5120-word records runs
+    1.0001067 s per record, so advancing by a nominal 1.0 s put a segment cut
+    at record 4215 0.45 s early. Returns None when the header carries no
+    usable clock or record geometry.
+    """
+    f_clock = float(header["clock_hz"]) + float(header["clock_frac"]) / 1000
+    data_words = (int(header["record_size"]) - int(header["header_size"])) // 2
+    if f_clock <= 0 or data_words <= 0:
+        return None
+    return data_words / f_clock
+
+
 def _advance_record0_timestamp(first_record: bytes, endian: str, start_record: int) -> bytes:
     """Advance record 0's header timestamp by ``start_record`` record durations.
 
     The record-0 header timestamp marks the END of record 0 (odas_p2mat.m:
-    ``t_start = filetime - recsize``), so a segment cut starting at data
-    record ``start_record`` must carry that timestamp forward by
-    ``start_record x recsize`` for a reader's derived absolute start time to
-    match the copied data. The record duration is derived the same way
-    :class:`PFile` does it: ``[root]`` ``recsize`` / ``recordDuration`` from
-    the embedded config, defaulting to 1.0 s. Datetime arithmetic carries
-    milliseconds across minute/hour/day boundaries; the timezone word is left
-    untouched (the offset does not move the clock between zones). When the
-    header date is not a valid calendar date (e.g. a startup file's year-0
-    clock), the record is returned unchanged with a warning — such files
-    carry no meaningful absolute time to preserve.
+    ``t_start = filetime - recsize``); :class:`PFile` subtracts the nominal
+    ``recsize`` from it in both the source and the segment, so that term
+    cancels. Data record ``start_record`` then begins ``start_record`` TRUE
+    record durations (:func:`_record_duration_s`) after data record 0 on the
+    reader's sample clock, and the segment's timestamp is carried forward by
+    exactly that, rounded to the header's millisecond resolution. Only when
+    the header has no usable clock does it fall back, with a warning, to the
+    nominal ``[root]`` ``recsize`` / ``recordDuration`` (default 1.0 s).
+    Datetime arithmetic carries milliseconds across minute/hour/day
+    boundaries; the timezone word is left untouched (the offset does not move
+    the clock between zones). When the header date is not a valid calendar
+    date (e.g. a startup file's year-0 clock), the record is returned
+    unchanged with a warning — such files carry no meaningful absolute time
+    to preserve.
     """
     header = _parse_header(first_record[:HEADER_BYTES], endian)
-    header_size = int(header["header_size"])
-    config_size = int(header["config_size"])
-    config_str = first_record[header_size : header_size + config_size].decode(
-        "ascii", errors="replace"
-    )
-    root_cfg = parse_config(config_str).get("root", {})
-    _recsize_raw = root_cfg.get("recsize", root_cfg.get("recordduration"))
-    try:
-        recsize = float(_recsize_raw) if _recsize_raw is not None else 1.0
-    except (TypeError, ValueError):
-        recsize = 1.0
 
     try:
         stamp = datetime(
@@ -272,7 +285,25 @@ def _advance_record0_timestamp(first_record: bytes, endian: str, start_record: i
         )
         return first_record
 
-    stamp += timedelta(milliseconds=round(start_record * recsize * 1000))
+    duration = _record_duration_s(header)
+    if duration is None:
+        header_size = int(header["header_size"])
+        config_size = int(header["config_size"])
+        config_str = first_record[header_size : header_size + config_size].decode(
+            "ascii", errors="replace"
+        )
+        root_cfg = parse_config(config_str).get("root", {})
+        _recsize_raw = root_cfg.get("recsize", root_cfg.get("recordduration"))
+        try:
+            duration = float(_recsize_raw) if _recsize_raw is not None else 1.0
+        except (TypeError, ValueError):
+            duration = 1.0
+        warnings.warn(
+            "header has no usable sampling clock or record geometry; advancing "
+            f"the segment's timestamp by the nominal recsize ({duration} s per record)"
+        )
+
+    stamp += timedelta(milliseconds=round(start_record * duration * 1000))
     out = bytearray(first_record)
     for name, value in (
         ("year", stamp.year),
