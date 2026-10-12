@@ -276,10 +276,10 @@ def _compute_chi(
         # "bottom" pins the deepest window's lower edge to the end of the
         # section so the discarded remainder lands at the TOP, not in the
         # boundary layer. Without it a top-anchored 2.0 s window leaves chi's
-        # deepest centre ~1.2 m above the bed and the BBL has no chi at all.
+        # deepest center ~1.2 m above the bed and the BBL has no chi at all.
         anchor=anchor,
         # A shorter window near the bed, exactly as on the shear side: epsilon
-        # belongs to a window's CENTRE, so halving the window halves the
+        # belongs to a window's CENTER, so halving the window halves the
         # distance from the bed to the deepest estimate.
         bbl_diss_length=bbl_diss_length,
         bbl_overlap=bbl_overlap or 0,

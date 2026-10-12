@@ -353,6 +353,27 @@ def _merge_source_dirs(
                 if b_ds.shape != b_ex.shape or not np.allclose(
                     b_ds, b_ex, rtol=0.0, atol=1e-6
                 ):
+                    # A shared lattice needs the same SPACING as well as shared
+                    # values: 0.75 m chi bins share every third center with
+                    # 0.25 m diss bins, and reindexing would put fine-bin
+                    # values on coarse bins. binning.chi_width and
+                    # binning.diss_width are separate keys, so this happens.
+                    d_ds = np.diff(b_ds)
+                    d_ex = np.diff(b_ex)
+                    if (
+                        d_ds.size
+                        and d_ex.size
+                        and not np.isclose(
+                            np.median(d_ds), np.median(d_ex), rtol=0.0, atol=1e-6
+                        )
+                    ):
+                        raise SystemExit(
+                            f"{prefix} bins are {np.median(d_ex):g} apart but "
+                            f"{product.dir_prefix} bins are {np.median(d_ds):g}; "
+                            "cannot merge mixing sources binned at different "
+                            "widths -- check binning.diss_width vs "
+                            "binning.chi_width."
+                        )
                     n_common = np.isclose(
                         b_ds[:, None], b_ex[None, :], rtol=0.0, atol=1e-6
                     ).any(axis=1).sum()
@@ -364,7 +385,12 @@ def _merge_source_dirs(
                             "This usually means the two were anchored "
                             "differently -- check epsilon.anchor vs chi.anchor."
                         )
-                    extra = extra.reindex(bin=ds["bin"], method=None)
+                    # Match with the same tolerance n_common used: an exact
+                    # label match would silently leave float-rounded centers
+                    # (e.g. 0.1 m bins from different d_min) as NaN.
+                    extra = extra.reindex(
+                        bin=ds["bin"].values, method="nearest", tolerance=1e-6
+                    )
                     warnings.warn(
                         f"{prefix} reindexed onto {product.dir_prefix} bins: "
                         f"{int(n_common)} of {b_ds.size} shared (same grid, "

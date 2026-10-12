@@ -1321,55 +1321,71 @@ class TestMixingGridAlignment:
     """
 
     @staticmethod
-    def _combo(bins, seed=0):
-        import numpy as np
+    def _write(tmp_path, prefix, var, bins, seed):
+        """A combo with caller-controlled bin centers and DISTINCT values, so a
+        shifted or mis-binned join is visible."""
         import xarray as xr
 
-        rng = np.random.default_rng(seed)
-        nb, npf = len(bins), 4
-        return xr.Dataset(
-            {"v": (("bin", "profile"), rng.random((nb, npf)))},
-            coords={"bin": np.asarray(bins, float),
-                    "profile": np.arange(npf)},
+        bins = np.asarray(bins, dtype=float)
+        vals = np.random.default_rng(seed).random((bins.size, len(_STIME)))
+        ds = xr.Dataset(
+            {var: (("bin", "profile"), vals)},
+            coords={"bin": ("bin", bins),
+                    "profile": ("profile", np.arange(len(_STIME), dtype=np.int32))},
         )
+        ds["stime"] = (("profile",), _STIME, {"units": "seconds since 1970-01-01"})
+        (tmp_path / f"{prefix}_00").mkdir(parents=True, exist_ok=True)
+        ds.to_netcdf(tmp_path / f"{prefix}_00" / "combo.nc")
+        return vals
 
-    def test_shared_lattice_different_extent_reindexes_exactly(self):
-        """The overlapping bins must keep their OWN values -- not be shifted by
-        one, which is what a positional join would do."""
-        import numpy as np
+    @staticmethod
+    def _merge(tmp_path):
+        import xarray as xr
 
-        a = self._combo([0.62, 0.87, 1.12, 1.37], seed=1)   # diss: reaches lower
-        b = self._combo([0.87, 1.12, 1.37], seed=2)         # chi
-        out = b.reindex(bin=a["bin"], method=None)
-        assert out.sizes["bin"] == 4
-        # the three shared bins carry b's original values, in place
-        np.testing.assert_allclose(
-            out["v"].values[1:, :], b["v"].values, rtol=0, atol=0
-        )
-        # the bin b never had is NaN, not a shifted neighbour
-        assert np.isnan(out["v"].values[0, :]).all()
+        args = argparse.Namespace(root=str(tmp_path), config=None)
+        with xr.open_dataset(tmp_path / "chi_combo_00" / "combo.nc",
+                             decode_times=False) as ds:
+            return profiles._merge_source_dirs(
+                ds.load(), profiles.PRODUCTS["mixing"], args)
 
-    def test_incommensurate_axes_share_nothing(self):
-        """Half-a-bin offset: no bin matches, so the merge must refuse rather
-        than silently mis-join."""
-        import numpy as np
+    def test_shared_lattice_keeps_each_bins_own_values(self, tmp_path: Path):
+        """Real SUNRISE 2021/Pelican/SN194 (hab_dense) extents: diss reaches one
+        bin lower than chi. Every shared bin must carry ITS OWN diss value --
+        not a neighbor's, which is what a positional join would give -- and
+        chi's bins that diss lacks must be NaN."""
+        chi_bins = 0.87 + 0.25 * np.arange(94)
+        diss_bins = 0.62 + 0.25 * np.arange(95)
+        self._write(tmp_path, "chi_combo", "chi_1", chi_bins, seed=1)
+        e = self._write(tmp_path, "diss_combo", "e_1", diss_bins, seed=2)
+        with pytest.warns(UserWarning, match="94 of 94 shared"):
+            out = self._merge(tmp_path)
+        np.testing.assert_array_equal(out["e_1"].values, e[1:, :])
 
-        a = np.array([0.62, 0.87, 1.12])
-        b = np.array([0.745, 0.995, 1.245])          # offset by half a bin
-        n_common = np.isclose(a[:, None], b[None, :], rtol=0.0, atol=1e-6).any(axis=1).sum()
-        assert n_common == 0
+    def test_different_bin_widths_are_refused(self, tmp_path: Path):
+        """0.75 m chi bins share every third center with 0.25 m diss bins.
+        binning.chi_width and binning.diss_width are separate keys, so this
+        is reachable; reindexing would put fine-bin values on coarse bins."""
+        self._write(tmp_path, "chi_combo", "chi_1", 0.375 + 0.75 * np.arange(10), 1)
+        self._write(tmp_path, "diss_combo", "e_1", 0.125 + 0.25 * np.arange(30), 2)
+        with pytest.raises(SystemExit, match="different widths"):
+            self._merge(tmp_path)
 
-    def test_merge_guard_accepts_extent_and_refuses_offset(self):
-        """The guard's own arithmetic, on the two real cases."""
-        import numpy as np
+    def test_float_rounded_centers_are_all_filled(self, tmp_path: Path):
+        """0.1 m bins from different d_min agree only to rounding (0.35 against
+        0.05 + 3*0.1). Every bin the guard counts as shared must be filled --
+        an exact-label reindex left a third of them NaN with no notice."""
+        chi_bins = 0.35 + 0.1 * np.arange(35)
+        diss_bins = 0.05 + 0.1 * np.arange(38)
+        self._write(tmp_path, "chi_combo", "chi_1", chi_bins, seed=1)
+        e = self._write(tmp_path, "diss_combo", "e_1", diss_bins, seed=2)
+        with pytest.warns(UserWarning, match="35 of 35 shared"):
+            out = self._merge(tmp_path)
+        np.testing.assert_array_equal(out["e_1"].values, e[3:, :])
 
-        def n_common(a, b):
-            a, b = np.asarray(a, float), np.asarray(b, float)
-            return int(np.isclose(a[:, None], b[None, :], rtol=0.0, atol=1e-6)
-                       .any(axis=1).sum())
-
-        # real SUNRISE 2021/Pelican/SN194 axes (hab_dense)
-        diss = np.arange(0.62, 0.62 + 95 * 0.25, 0.25)[:95]
-        chi = np.arange(0.87, 0.87 + 94 * 0.25, 0.25)[:94]
-        assert n_common(diss, chi) >= 2          # alignable -> merge proceeds
-        assert n_common(diss, diss + 0.125) < 2  # offset   -> refuse
+    def test_half_bin_offset_is_refused(self, tmp_path: Path):
+        """Same width, lattices offset by half a bin (anchored differently):
+        nothing matches, so the merge must refuse rather than mis-join."""
+        self._write(tmp_path, "chi_combo", "chi_1", 0.745 + 0.25 * np.arange(10), 1)
+        self._write(tmp_path, "diss_combo", "e_1", 0.62 + 0.25 * np.arange(10), 2)
+        with pytest.raises(SystemExit, match="do not lie on the same grid"):
+            self._merge(tmp_path)

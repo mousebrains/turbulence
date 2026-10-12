@@ -407,7 +407,7 @@ class TestBottomUpLayoutKeys:
 
     They were epsilon-only because chi runs its own L3 path, and that was the
     bug rather than the design: with chi left top-anchored while epsilon was
-    bottom-anchored, a 2.0 s window put chi's deepest centre ~1.2 m above the
+    bottom-anchored, a 2.0 s window put chi's deepest center ~1.2 m above the
     seabed, so a bottom-up product had a proper BBL epsilon and NO BBL chi
     (SUNRISE 2021/Pelican/SN194: chi occupancy 0.0% at 0.62 m, 0.4% at 0.88 m,
     against epsilon's 95.7%), and Gamma and K_T inherited the hole.
@@ -464,3 +464,55 @@ def test_binning_method_accepts_the_three_real_methods():
     from odas_tpw.perturb.config import _mgr as mgr
     for good in ("depth", "time", "altitude"):
         mgr.validate_config({"binning": {"method": good}})
+
+
+class TestBottomUpLayoutValidation:
+    """The layout keys are checked when the config is LOADED.
+
+    Without these checks a bad anchor raised once per profile at run time, a
+    BBL window under two FFT segments passed window resolution only to fail
+    inside csd_matrix_batch (leaving an empty stage directory), and bbl_* under
+    anchor: top was silently ignored.
+    """
+
+    @pytest.mark.parametrize("section", ["epsilon", "chi"])
+    def test_unknown_anchor_is_refused(self, section):
+        with pytest.raises(ValueError, match=r"anchor: expected 'top' or 'bottom'"):
+            validate_config({section: {"anchor": "Bottom"}})
+
+    @pytest.mark.parametrize("section", ["epsilon", "chi"])
+    def test_bbl_window_under_two_ffts_is_refused(self, section):
+        with pytest.raises(ValueError, match="two FFT"):
+            validate_config(
+                {section: {"anchor": "bottom", "fft_sec": 0.5, "bbl_diss_sec": 0.75}}
+            )
+        # exactly two segments is the floor the SUNRISE recipes sit on
+        validate_config({section: {"anchor": "bottom", "fft_sec": 0.5, "bbl_diss_sec": 1.0}})
+
+    def test_bbl_window_under_two_ffts_is_refused_in_samples(self):
+        from odas_tpw.perturb.config import merge_config, resolve_window_config
+
+        cfg = merge_config(
+            "chi", {"anchor": "bottom", "fft_length": 256, "bbl_diss_length": 384}
+        )
+        with pytest.raises(ValueError, match="two FFT segments"):
+            resolve_window_config(cfg, 512.0, section="chi")
+
+    @pytest.mark.parametrize("section", ["epsilon", "chi"])
+    def test_bbl_under_a_top_anchor_warns(self, section):
+        with pytest.warns(UserWarning, match="only with anchor: bottom"):
+            validate_config({section: {"bbl_diss_sec": 1.0}})
+
+    @pytest.mark.parametrize("section", ["epsilon", "chi"])
+    def test_governing_bbl_sample_key_reaches_the_hash(self, section):
+        """bbl_overlap in samples beside a bbl_diss_sec window governs the
+        layout, so changing it must change the stage hash; it used to be
+        dropped whenever bbl_diss_length was None."""
+        from odas_tpw.perturb.config import merge_config
+
+        def h(**extra):
+            base = {"anchor": "bottom", "fft_sec": 0.5, "bbl_diss_sec": 1.0}
+            return compute_hash(section, merge_config(section, {**base, **extra}))
+
+        assert h(bbl_overlap=128) != h(bbl_overlap=384)
+        assert h() == h(bbl_overlap=None), "an inert key must not move the hash"

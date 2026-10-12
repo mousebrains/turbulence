@@ -176,8 +176,10 @@ def window_groups(
     as the number of averaged FFT segments and hence the spectral DOF.
     """
     diss_step = max(params.diss_length - params.overlap, 1)
+    # Not clamped: a zero step falls back to half a BBL window in
+    # section_groups, as process_l3 did before this helper existed.
     bbl_step = (
-        max(params.bbl_diss_length - params.bbl_overlap, 1)
+        params.bbl_diss_length - params.bbl_overlap
         if params.bbl_diss_length
         else None
     )

@@ -2385,7 +2385,7 @@ class TestEpsilonDsToL4DataAllNaN:
 #
 # The bottom-up work originally reached the SHEAR path only. Chi kept a
 # top-anchored layout, so on a bottom-anchored product a 2.0 s window left
-# chi's deepest centre ~1.2 m above the seabed: measured on SUNRISE
+# chi's deepest center ~1.2 m above the seabed: measured on SUNRISE
 # 2021/Pelican/SN194, chi occupancy was 0.0% at 0.62 m and 0.4% at 0.88 m
 # against epsilon's 95.7%. Gamma and K_T inherit that hole.
 
@@ -2406,7 +2406,7 @@ class TestChiAnchor:
         )
 
     def test_top_anchor_is_the_historical_layout(self):
-        """anchor='top' must be bit-identical to the pre-feature behaviour:
+        """anchor='top' must be bit-identical to the pre-feature behavior:
         first window at sec_start, marching down on diss_step."""
         import numpy as np
 
@@ -2424,10 +2424,10 @@ class TestChiAnchor:
         assert starts.max() + dl == 5000, "deepest window must end AT the seabed"
 
     def test_bottom_anchor_keeps_one_uniform_window_length(self):
-        """Chi passes no bbl_diss_length on purpose: a shorter near-bed window
-        makes the spectral DOF differ per window, and L3ChiData.dof_spec is a
-        SCALAR feeding l4_chi's detection gate. If this ever returns >1 group,
-        dof_spec must become per-window first."""
+        """Without bbl_diss_length a bottom-anchored section is ONE group of one
+        window length. With it there are two, and dof_spec is per window (see
+        the process_l3_chi BBL test), because a shorter window averages fewer
+        FFT segments and the DOF feeds l4_chi's detection gate."""
         from odas_tpw.scor160.l3 import section_groups
 
         groups = section_groups(1.0, 0, 5000, 1024, 512, anchor="bottom")
@@ -2489,6 +2489,51 @@ class TestChiBBLWindows:
         groups = window_groups(np.ones(20000), p)
         lengths = {int(g[2]) for g in groups}
         assert lengths == {512, 2048}, "a BBL group and a regular group"
+
+    def test_process_l3_chi_carries_one_dof_per_window(self):
+        """End to end through process_l3_chi: with BBL windows a section is two
+        groups, dof_spec has one entry per window, the near-bed windows carry
+        the SMALLER value, and the two values are in the ratio of their FFT
+        segment counts (the DOF the CSD actually averaged)."""
+        from odas_tpw.chi.l2_chi import L2ChiData
+        from odas_tpw.chi.l3_chi import process_l3_chi
+        from odas_tpw.scor160.io import L3Params
+        from odas_tpw.scor160.l3 import window_groups
+        from odas_tpw.scor160.spectral import n_segments
+
+        fs, n = 512.0, 6000
+        rng = np.random.RandomState(0)
+        l2 = L2ChiData(
+            time=np.arange(n) / fs,
+            pres=np.linspace(1.0, 20.0, n),
+            temp=np.full(n, 12.0),
+            temp_fast=rng.randn(1, n) * 0.01 + 12.0,
+            gradt=rng.randn(1, n) * 1e-3,
+            vib=np.zeros((1, n)),
+            pspd_rel=np.full(n, 0.6),
+            section_number=np.ones(n),
+            diff_gains=[0.94],
+            fs_fast=fs,
+        )
+        params = L3Params(
+            fft_length=256, diss_length=2048, overlap=1024, HP_cut=0.25,
+            fs_fast=fs, goodman=False, anchor="bottom",
+            bbl_diss_length=512, bbl_overlap=256, bbl_extent=1536,
+        )
+        groups = window_groups(l2.section_number, params)
+        n_bbl = sum(len(g[1]) for g in groups if g[2] == 512)
+        n_main = sum(len(g[1]) for g in groups if g[2] == 2048)
+        assert n_bbl > 0 and n_main > 0
+
+        l3 = process_l3_chi(l2, params, salinity=34.5)
+        dof = np.atleast_1d(np.asarray(l3.dof_spec, dtype=float))
+        assert dof.size == l3.time.size == n_bbl + n_main
+
+        lo, hi = np.unique(dof)
+        assert np.sum(dof == lo) == n_bbl and np.sum(dof == hi) == n_main
+        # the low-DOF windows are the deepest ones (latest in the section)
+        assert l3.time[dof == lo].min() > l3.time[dof == hi].max() - 2048 / fs
+        assert hi / lo == pytest.approx(n_segments(2048, 256) / n_segments(512, 256))
 
     def test_dof_differs_between_the_two_window_lengths(self):
         """The whole reason dof_spec had to become per-window."""

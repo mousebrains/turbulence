@@ -247,7 +247,7 @@ DEFAULTS: dict[str, dict] = {
         # anchor: top | bottom, same meaning as [epsilon]. Chi needs its OWN
         # key because the two are laid out independently: with chi left at
         # "top" while epsilon is "bottom", a 2.0 s window puts chi's deepest
-        # centre ~1.2 m above the seabed, so a bottom-up product has a proper
+        # center ~1.2 m above the seabed, so a bottom-up product has a proper
         # BBL epsilon and NO BBL chi (measured on SUNRISE 2021/Pelican/SN194:
         # chi occupancy 0.0% at 0.62 m and 0.4% at 0.88 m against epsilon's
         # 95.7%). Gamma and K_T inherit that hole.
@@ -553,9 +553,14 @@ class _PerturbConfigManager(ConfigManager):
             # products. A config that DOES set one changes the hash, as it must.
             if mapping.get("anchor") == "top":
                 mapping.pop("anchor", None)
+            # Only an inert (None) sample key may be dropped. Popping all three
+            # whenever bbl_diss_length was None also dropped a GOVERNING
+            # bbl_overlap/bbl_extent beside a bbl_diss_sec window, so changing
+            # it left the hash -- and the cached product -- unchanged.
             if mapping.get("bbl_diss_length") is None:
                 for k in ("bbl_diss_length", "bbl_overlap", "bbl_extent"):
-                    mapping.pop(k, None)
+                    if mapping.get(k) is None:
+                        mapping.pop(k, None)
         return mapping
 
     def validate_config(self, config: dict) -> None:
@@ -603,6 +608,36 @@ class _PerturbConfigManager(ConfigManager):
             ):
                 raise ValueError(
                     f"{section}: diss_sec ({diss_s}) is shorter than fft_sec ({fft_s})"
+                )
+            # The window layout is validated here too: section_groups would
+            # otherwise raise on a bad anchor once per profile, and a BBL window
+            # under two FFT segments passes resolve_window_config only to fail
+            # inside csd_matrix_batch, leaving an empty stage directory.
+            anchor = params.get("anchor", "top")
+            if anchor not in ("top", "bottom"):
+                raise ValueError(
+                    f"{section}.anchor: expected 'top' or 'bottom', got {anchor!r}"
+                )
+            bbl_s = params.get("bbl_diss_sec")
+            if (
+                isinstance(fft_s, (int, float))
+                and isinstance(bbl_s, (int, float))
+                and bbl_s < 2 * fft_s
+            ):
+                raise ValueError(
+                    f"{section}: bbl_diss_sec ({bbl_s}) must hold at least two FFT "
+                    f"segments (2 x fft_sec = {2 * fft_s})"
+                )
+            uses_bbl = (
+                params.get("bbl_diss_sec") is not None
+                or params.get("bbl_diss_length") is not None
+            )
+            if uses_bbl and anchor != "bottom":
+                warnings.warn(
+                    f"{section}: bbl_* keys take effect only with anchor: bottom; "
+                    "they are ignored with anchor: top",
+                    UserWarning,
+                    stacklevel=2,
                 )
         # hotel.max_gap is required when the hotel merge is enabled; validate
         # it (and every per-channel override) here so a missing value fails
@@ -838,10 +873,11 @@ def resolve_window_config(cfg: dict, fs: float, *, section: str = "epsilon") -> 
         bbl = even(fs * bbl_sec) if bbl_sec is not None else None
     if bbl is not None:
         bbl = int(bbl)
-        if bbl < fft:
+        if bbl < 2 * fft:
             raise ValueError(
-                f"{section}: BBL window ({bbl} samples) is shorter than the "
-                f"FFT segment ({fft} samples)"
+                f"{section}: BBL window ({bbl} samples) must hold at least two "
+                f"FFT segments ({2 * fft} samples); csd_matrix_batch refuses "
+                "anything shorter"
             )
         if bbl > diss:
             raise ValueError(
@@ -1317,6 +1353,11 @@ chi:
   fft_length: null        # EXPERT override [samples]; wins over fft_sec
   diss_length: null       # EXPERT override [samples]; wins over diss_sec
   overlap: null           # EXPERT override [samples]; wins over overlap_sec
+  anchor: top             # top | bottom, as epsilon.anchor. chi lays out its
+                          # own windows, so a bottom-up product needs BOTH set
+  bbl_diss_sec: null      # near-bottom windows, as epsilon.bbl_*; each must
+  bbl_overlap_sec: null   # hold two FFT segments, and they take effect only
+  bbl_extent_sec: null    # with anchor: bottom
   fp07_model: "single_pole"  # FP07 transfer function model
   goodman: true           # Goodman coherent noise removal
   f_AA: 98.0              # anti-aliasing filter cutoff [Hz]
