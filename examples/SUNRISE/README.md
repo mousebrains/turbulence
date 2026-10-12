@@ -72,9 +72,15 @@ so one could charge), verified against SN 412's own working casts to within
 
 * **2021 embedded FP07 `beta_1` is garbage** (down to -230,435; negative is
   impossible). Harmless only because `fp07.calibrate: true` refits in situ.
-* **Nine shear probes have no calibration sheet**: M1277, M1344, M1371,
-  M1701, M1702, M2375, M2381, M2382, M289. Six others match their sheet
-  exactly. Epsilon goes as sens^-2.
+* **Every shear probe now has a calibration sheet** (the last nine, M1277,
+  M1344, M1371, M1701, M1702, M2375, M2381, M2382 and M289, arrived
+  2026-10-12; see `microstructure_sensors/`). All configured values match the
+  sheet in effect, with two exceptions. **M289 on SN 194, 2022 Point Sur, sh2**
+  is configured 0.0725 (its 2016-04-11 sheet), but Rockland recalibrated it
+  to **0.0794 on 2021-04-27**. If that is right, sh2 epsilon there is 1.20×
+  high. **M2382 on SN 412, 2021 Pelican, sh2** carries 0.0691 (M2381's value)
+  on some files instead of its own 0.0670. Several matches are stale: the
+  2019 probes' calibrations were 23–37 months old. Epsilon goes as sens^-2.
 * **SN 142's probe pair disagrees** (ratios 0.4-1.8 within one deployment,
   inconsistent in direction) — the same pathology seen in the isotropy work.
 * **Chi is weakly constrained by construction**: SUNRISE is energetic

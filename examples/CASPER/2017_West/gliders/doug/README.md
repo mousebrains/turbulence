@@ -77,11 +77,21 @@ would put sh1 **47 % high** and sh2 **11 % low**. Verified across all 188 files
 of both sets, not sampled.
 
 The corrected copies were patched 2018-02-18 to **sh1 M1194 @ 0.0793, sh2
-M1493 @ 0.0805, T1057/T179**, plus a pressure `coef2 = 7.119e-8`. M1194 @
-0.0793 is sheet-exact. But this MR's config was untouched from 2015-10-23 to
-2017-10-23 (509 files across three deployments), so the patch is a
-**retrospective paper record**: it supports the probe *set* and cannot show it
-held for all 188 files.
+M1493 @ 0.0805, T1057/T179**, plus a pressure `coef2 = 7.119e-8`. But this
+MR's config was untouched from 2015-10-23 to 2017-10-23 (509 files across
+three deployments), so the patch is a **retrospective paper record** and
+cannot show the set held for all 188 files.
+
+**M1194 @ 0.0793 matches a sheet, but probably the wrong probe's** (sheets
+received 2026-10-12; `microstructure_sensors/README.md`, *Known bad sheets*).
+Two probes were probably printed as M1194. The 0.0793 sheet (2016-04-07) was
+in VMP SN 194's build package, and sits between M1194 sheets reading 0.0549
+(2016-03-14) and 0.0551 (2016-04-18), a +44% jump and back in 11 days. That
+other M1194 was recalibrated by Rockland to **0.0591 on 2017-08-24**, two days
+before this MR's first 2017 file. If that probe flew, sh1 ε is
+**1.80× low**. Against it: sh1/sh2 = 0.939 as configured (above), which a
+sh1-only error of that size would break unless M1493 had drifted the same way.
+Unresolved.
 
 ## The clock: 58.5 minutes fast, and it stepped
 

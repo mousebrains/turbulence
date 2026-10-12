@@ -70,28 +70,36 @@ DEFAULT_CAL_MAX_AGE_MONTHS = 12
 _NUM = r"([0-9]*\.?[0-9]+)"
 _DATE = r"(\d{4})[/_.-](\d{1,2})[/_.-](\d{1,2})"
 
-# "Probe SN: M1458".  The capture is a letter-prefix + digits, plus an optional
-# hyphenated suffix (e.g. "M1254-2") — but NOT a bare trailing letter, so the
-# glued page-2 plot caption "...ProbeSN:M1254U=0.703m/s..." yields M1254, not
-# M1254U (the fall-rate variable U must not become part of the serial).
-_SN_RE = re.compile(r"Probe\s*SN\s*:?\s*([A-Za-z]{0,3}\d+(?:-\w+)?)", re.I)
-# The current sensitivity, across the three Rockland sheet layouts seen so far:
-#   "Sensitivity (sens or S): 0.0777 V"  (2024-06 onward)
-#   "Sensitivity (sens): 0.1115 V"       (mid-2023)
-#   "sens: 0.0720 V"                     (through mid-2023)
+# "Probe SN: M1458", or "Probe serial # M1021" on the 2019-and-earlier tabular
+# layout.  The capture is a letter-prefix + digits, plus an optional
+# hyphenated suffix (e.g. "M1254-2", and the real "M1196-B") — but NOT a bare
+# trailing letter, so the glued page-2 plot caption
+# "...ProbeSN:M1254U=0.703m/s..." yields M1254, not M1254U (the fall-rate
+# variable U must not become part of the serial).
+_SN_RE = re.compile(r"Probe\s*(?:SN|serial\s*#)\s*:?\s*([A-Za-z]{0,3}\d+(?:-\w+)?)", re.I)
+# The current sensitivity, on every Rockland sheet layout that labels it:
+#   "Sensitivity (sens or S): 0.0777 V"         (2024-06 onward)
+#   "Sensitivity (sens): 0.1115 V"              (mid-2023)
+#   "sens: 0.0720 V"                            (through mid-2023)
+#   "Sensitivity (Volts/(m/s)^2)= 0.0805"       (2019 and earlier, tabular)
+# (The 2020 layout's label is a graphic; see _BARE_HEAD_RE.)
 # The label is pinned so this never picks up "Previous Sensitivity:" or the
 # "S(0) = ..." regression line.  The bare-``sens`` alternative is anchored at
 # line start (the caller matches per stripped line) and requires the colon, so
 # the old sheets' "sensitivity 0.0655" previous-calibration line cannot match.
-_SENS_RE = re.compile(r"(?:Sensitivity\s*\(sens(?:\s*or\s*S)?\)|^sens)\s*:?\s*" + _NUM, re.I | re.M)
+_SENS_RE = re.compile(
+    r"(?:Sensitivity\s*\(sens(?:\s*or\s*S)?\)|^sens"
+    r"|Sensitivity\s*\(Volts\s*/\s*\(m/s\)\s*\^?\s*2\)\s*=)\s*:?\s*" + _NUM,
+    re.I | re.M,
+)
 _PREV_SENS_RE = re.compile(r"Previous\s+Sensitivity\s*:?\s*" + _NUM, re.I)
-# The OLDEST layout (2020 and earlier) prints "Serial Number, SN :" and
+# The 2020 layout prints "Serial Number, SN :" and
 # "Sensitivity [Volts / (m/s)^2] :" as graphics that pypdf drops entirely,
 # leaving only their VALUES glued onto the first extracted line:
 #     "M2244 0.0678"
-# Every later layout starts with the Rockland letterhead instead, so this is
-# unambiguous -- but it is still applied only as a FALLBACK, after the labelled
-# patterns have had their chance, so it can never override a labelled sheet.
+# Every other layout starts with a letterhead or title line instead, so this
+# is unambiguous -- but it is still applied only as a FALLBACK, after the labeled
+# patterns have had their chance, so it can never override a labeled sheet.
 # Anchored end-to-end: a bare serial and one number, nothing else on the line.
 _BARE_HEAD_RE = re.compile(r"^([A-Za-z]{1,3}\d+(?:-\w+)?)\s+" + _NUM + r"$")
 # Older sheets state the previous calibration as free-form prose that pypdf
@@ -123,6 +131,18 @@ _FNAME_RE = re.compile(r"([A-Za-z]?\d[\w-]*?)[_-](\d{4})[_-](\d{1,2})[_-](\d{1,2
 _PT_DATE_RE = re.compile(r"pressure\s*test\s*date\s*:?\s*" + _DATE, re.I)
 _PT_SECTION_RE = re.compile(r"pressure\s*test", re.I)
 _PT_BARE_DATE_RE = re.compile(r"^date\s*:?\s*" + _DATE, re.I)
+# The 2019-and-earlier TABULAR layout (RGL Consulting's form, carried on by
+# Rockland through 2019; page 1 is the head-angle/voltage table).  Its
+# calibration date shares a line with the serial and carries no "Calibration"
+# label:
+#     "Date 2013-08-08 Probe serial # M1021"
+# The date is written by hand, in whatever format the operator typed:
+# "2013-08-08", "2019_03_29", "14 Oct 2004" and "01-Mar-13" all occur.
+# Requiring "Probe serial" on the same line keeps this from ever matching the
+# 2026 layout's bare pressure-test "Date:" line.
+_TABULAR_DATE_RE = re.compile(r"^Date\s+(.+?)\s+Probe\s+serial\b", re.I)
+_DMY_NAMED_RE = re.compile(r"^(\d{1,2})[\s-]+([A-Za-z]{3,9})\.?[\s-]+(\d{4}|\d{2})$")
+_MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_abbr) if m}
 
 
 def _parse_date_parts(y: str, m: str, d: str) -> date | None:
@@ -130,6 +150,26 @@ def _parse_date_parts(y: str, m: str, d: str) -> date | None:
         return date(int(y), int(m), int(d))
     except ValueError:
         return None
+
+
+def _parse_loose_date(s: str) -> date | None:
+    """A hand-typed tabular-sheet date: ``YYYY-MM-DD`` (any of ``-_/.``), or a
+    named month, ``14 Oct 2004`` / ``01-Mar-13``.  A two-digit year is read as
+    20YY below 70 and 19YY otherwise.  Anything else is ``None``."""
+    s = s.strip()
+    m = _DATE_RE.fullmatch(s)
+    if m:
+        return _parse_date_parts(m.group(1), m.group(2), m.group(3))
+    m = _DMY_NAMED_RE.match(s)
+    if m is None:
+        return None
+    month = _MONTHS.get(m.group(2)[:3].lower())
+    if month is None:
+        return None
+    year = int(m.group(3))
+    if len(m.group(3)) == 2:
+        year += 2000 if year < 70 else 1900
+    return _parse_date_parts(str(year), str(month), m.group(1))
 
 
 @dataclass
@@ -259,19 +299,34 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
             m = _DATE_RE.search(line)
             if m:
                 cal_date = _parse_date_parts(m.group(1), m.group(2), m.group(3))
+        elif cal_date is None:
+            m = _TABULAR_DATE_RE.match(line)
+            if m:
+                cal_date = _parse_loose_date(m.group(1))
 
     # Old-layout previous calibration: prose that wraps across lines, so it is
     # matched against the whole text only when the labeled (newer) form above
     # yielded nothing — a sheet never carries both.
+    #
+    # The 2019-and-earlier tabular layout has no previous-calibration field at
+    # all; some sheets mention one in a free-text "NOTE:" typed by the operator
+    # ("re-calibration, previous S=0.0791 on 2016-11-16", "Previous Sens.
+    # 0.0805", ...).  Those are deliberately NOT parsed: many are undated, some
+    # are cumulative lists that pypdf wraps onto the next line (M1133
+    # 2016-10-12: "previous sensitivity s=0.0603 ,\n0.0596,0.0579"), one is a
+    # stale copy (M289 2016-04-11 cites 0.0524, skipping 2013-12-09's 0.0717)
+    # and one dates its "previous" to its own calibration day (M1264
+    # 2018-03-20).  Every dated value they state that is correct is also the
+    # CURRENT value of a sheet on file.
     if prev_sens is None and prev_cal_date is None:
         m = _PREV_OLD_RE.search(text)
         if m:
             prev_cal_date = _parse_date_parts(m.group(1), m.group(2), m.group(3))
             prev_sens = float(m.group(4))
 
-    # Oldest-layout fallback, applied BEFORE the sanity guards below so a
+    # 2020-layout fallback, applied BEFORE the sanity guards below so a
     # fallback-derived value is subject to the same positivity check as a
-    # labelled one. See _BARE_HEAD_RE.
+    # labeled one. See _BARE_HEAD_RE.
     #
     # The two fields are filled INDEPENDENTLY, not gated on both being None.
     # Coupling them breaks on a real sheet: the page-2 plot caption
@@ -280,7 +335,7 @@ def parse_sheet_text(text: str, source: str = "") -> CalSheet:
     # carries that caption, `sn` fills from page 2, a coupled guard never fires,
     # `sens` stays None, and load_cal_dir drops the sheet as unparseable. The
     # probe would then report as having no calibration at all. Filling each
-    # field only when it is still missing keeps the "never override a labelled
+    # field only when it is still missing keeps the "never override a labeled
     # sheet" property per field, which is what that property actually means.
     if sn is None or sens is None:
         m = _BARE_HEAD_RE.match(first_line)

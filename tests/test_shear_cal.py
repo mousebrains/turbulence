@@ -74,10 +74,11 @@ def test_parse_sheet_without_previous():
     assert [(p.date, p.sensitivity) for p in s.points()] == [(date(2024, 7, 9), 0.1189)]
 
 
-# Rockland has issued three sheet layouts.  The two below predate the
-# "Sensitivity (sens or S):" wording of M1458_TEXT and appear throughout the
-# 2021-2023 sheets; text is as pypdf actually extracts it, including the
-# previous calibration wrapping onto a second line in the oldest layout.
+# Five sheet layouts are held (the earliest is RGL Consulting's).  The two
+# below predate the "Sensitivity (sens or S):" wording of M1458_TEXT and
+# appear throughout the 2021-2023 sheets; text is as pypdf actually extracts
+# it, including the previous calibration wrapping onto a second line in the
+# earlier of them.
 M2479_OLD_TEXT = """
 Shear Probe Calibration Report
 Probe SN: M2479
@@ -101,11 +102,11 @@ S(0) =0.1115
 """
 
 
-# The OLDEST layout (2020 and earlier). "Serial Number, SN :" and
+# The 2020 layout. "Serial Number, SN :" and
 # "Sensitivity [Volts / (m/s)^2] :" are drawn as graphics that pypdf drops
 # entirely, so only their VALUES survive, glued onto the first extracted line.
 # Verbatim pypdf output from M2244_2020_03_10.pdf.
-M2244_OLDEST_TEXT = """M2244 0.0678
+M2244_2020_TEXT = """M2244 0.0678
 Operator : S. Yasuda Probe PN : Capacitance (nF) : 1.000
 Calibration Date : 2020-03-10 Resistance (GOhm) : >200
 Recommended re-calibration : 2021-03-10 Pressure Rating : 600 Bar
@@ -115,9 +116,9 @@ Shear Probe Calibration Report
 """
 
 
-def test_parse_oldest_layout_bare_serial_and_sens_on_first_line():
+def test_parse_layout_2020_bare_serial_and_sens_on_first_line():
     """2020-era layout: the labels are graphics; only the values survive."""
-    s = sc.parse_sheet_text(M2244_OLDEST_TEXT, source="M2244_2020_03_10.pdf")
+    s = sc.parse_sheet_text(M2244_2020_TEXT, source="M2244_2020_03_10.pdf")
     assert s.sn == "M2244"
     assert s.sensitivity == pytest.approx(0.0678)
     assert s.cal_date == date(2020, 3, 10)
@@ -125,17 +126,17 @@ def test_parse_oldest_layout_bare_serial_and_sens_on_first_line():
     assert s.pressure_test_date is None  # this era prints none
 
 
-def test_oldest_layout_fallback_never_overrides_a_labelled_sheet():
-    """It is a FALLBACK. A labelled sheet whose first line happens to look like
-    a bare serial + number must still take its labelled values."""
+def test_layout_2020_fallback_never_overrides_a_labeled_sheet():
+    """It is a FALLBACK. A labeled sheet whose first line happens to look like
+    a bare serial + number must still take its labeled values."""
     text = "M9999 0.1234\n" + M2863_MID_TEXT
     s = sc.parse_sheet_text(text, source="M2863.pdf")
     assert s.sn == "M2863"
     assert s.sensitivity == pytest.approx(0.1115)
 
 
-def test_oldest_layout_fallback_ignores_an_unrelated_first_line():
-    """Every later layout opens with the Rockland letterhead, which must not
+def test_layout_2020_fallback_ignores_an_unrelated_first_line():
+    """Every other layout opens with a letterhead or title, which must not
     be mistaken for a serial/sensitivity pair."""
     text = "Rockland Scientific International Inc.\nProbe SN: M2481\nsens: 0.0944 V\n"
     s = sc.parse_sheet_text(text, source="M2481.pdf")
@@ -143,7 +144,7 @@ def test_oldest_layout_fallback_ignores_an_unrelated_first_line():
     assert s.sensitivity == pytest.approx(0.0944)
 
 
-def test_oldest_layout_survives_a_page_2_probe_sn_caption():
+def test_layout_2020_survives_a_page_2_probe_sn_caption():
     """The page-2 plot caption fills `sn` from a LATER page.
 
     Real sheets carry "...ProbeSN:M2244U=0.703m/s..." on the data page, which
@@ -154,7 +155,7 @@ def test_oldest_layout_survives_a_page_2_probe_sn_caption():
     having no calibration at all, which is the very failure this layout support
     exists to prevent.
     """
-    text = M2244_OLDEST_TEXT + "ProbeSN:M2244U=0.703m/s\n"
+    text = M2244_2020_TEXT + "ProbeSN:M2244U=0.703m/s\n"
     s = sc.parse_sheet_text(text, source="M2244_2020_03_10.pdf")
     assert s.sn == "M2244"
     assert s.sensitivity == pytest.approx(0.0678)
@@ -162,8 +163,8 @@ def test_oldest_layout_survives_a_page_2_probe_sn_caption():
 
 
 @pytest.mark.parametrize("bad", ["0", "0.0", "-0.07"])
-def test_oldest_layout_sensitivity_is_subject_to_the_positivity_guard(bad):
-    """A fallback value must face the same sanity check as a labelled one.
+def test_layout_2020_sensitivity_is_subject_to_the_positivity_guard(bad):
+    """A fallback value must face the same sanity check as a labeled one.
 
     With the fallback applied after the guards, "M2244 0" yielded
     sensitivity=0.0 and is_usable() True — seeding a zero calibration point and
@@ -172,6 +173,90 @@ def test_oldest_layout_sensitivity_is_subject_to_the_positivity_guard(bad):
     s = sc.parse_sheet_text(f"M2244 {bad}\nCalibration Date : 2020-03-10\n", source="x.pdf")
     assert s.sensitivity is None
     assert not s.is_usable()
+
+
+# The 2019-and-earlier TABULAR layout (RGL Consulting's form, used by Rockland
+# through 2019; page 1 is the head-angle table).  Verbatim pypdf output from
+# M1021_2019_03_29.pdf, table rows and plot axis labels omitted.  The previous
+# calibration exists only as the operator's free-text NOTE.
+M1021_TABULAR_TEXT = """520 Dupplin Road, Victoria BC. V8Z1C1
+Date 2019-03-29 Probe serial # M1021
+Temperature (deg C) 19.6 Probe type 3/8"
+Operator S. Yasuda Capacitance (nF) 1.058 Start time 10:18
+Rotation rate (Hz) 1 Resistance (G-Ohms) >200 End time 10:43
+Low pass filter (Hz) 5 Time const (s) Soak time (hrs) 1
+High pass filter (Hz) NA Pressure time (hrs) 1
+Total Gain 1 Sensitivity (Volts/(m/s)^2)= 0.0658 Pressure (psi) 8000
+Amplifier Type Charge
+Amp. Capacitance(nF) 1.5
+Head Angle Sin(2*A) Vflow Vno flow Vprb hflow U Yraw Yfit Yfit-Yraw Slope
+[cm) [deg] [mV rms] [mV rms] [V rms] [cm of h20] [m/s] [V/U*U] [V/U*U] [1/1000] [V/m^2/s^2]
+Shear Probe Calibration Report
+Rockland Scientific International Inc.
+Phone: (250) 370-1688 Fax: (250) 370-0234
+NOTE:  re-calibration,  previous S=0.0791 on 2016-11-16
+"""
+
+
+def test_parse_tabular_layout():
+    """2019-and-earlier layout: "Probe serial #" and "Sensitivity (Volts/(m/s)^2)=",
+    with the calibration date on the serial's line and no recal or pressure-test date."""
+    s = sc.parse_sheet_text(M1021_TABULAR_TEXT, source="M1021_2019_03_29.pdf")
+    assert s.sn == "M1021"
+    assert s.sensitivity == pytest.approx(0.0658)
+    assert s.cal_date == date(2019, 3, 29)
+    assert s.recal_due is None
+    assert s.pressure_test_date is None
+    assert s.is_usable()
+
+
+def test_tabular_note_previous_is_not_parsed():
+    """The NOTE's "previous S=0.0791 on 2016-11-16" is operator free text, often
+    stale on the real sheets; it must yield no previous point and must not
+    displace the current sensitivity."""
+    s = sc.parse_sheet_text(M1021_TABULAR_TEXT)
+    assert s.prev_sensitivity is None
+    assert s.prev_cal_date is None
+    assert [(p.date, p.sensitivity) for p in s.points()] == [(date(2019, 3, 29), 0.0658)]
+
+
+@pytest.mark.parametrize(
+    "typed,expected",
+    [
+        ("2013-08-08", date(2013, 8, 8)),
+        ("2019_03_29", date(2019, 3, 29)),  # M1516_2019_03_29.pdf
+        ("14 Oct 2004", date(2004, 10, 14)),  # M289_2004_10_14.pdf (RGL Consulting)
+        ("01-Mar-13", date(2013, 3, 1)),  # M289_2013_03_01.pdf
+        ("01-Mar-98", date(1998, 3, 1)),  # two-digit year >= 70 -> 19YY
+        ("14 October 2004", date(2004, 10, 14)),  # full month name
+        ("14 Oct. 2004", date(2004, 10, 14)),  # abbreviation with a period
+    ],
+)
+def test_parse_tabular_hand_typed_dates(typed, expected):
+    text = M1021_TABULAR_TEXT.replace("Date 2019-03-29 ", f"Date {typed} ")
+    assert sc.parse_sheet_text(text).cal_date == expected
+
+
+@pytest.mark.parametrize("typed", ["sometime", "32 Oct 2004", "14 Foo 2004", "2019-13-01"])
+def test_parse_tabular_unreadable_date_is_none(typed):
+    text = M1021_TABULAR_TEXT.replace("Date 2019-03-29 ", f"Date {typed} ")
+    s = sc.parse_sheet_text(text)
+    assert s.cal_date is None
+    assert not s.is_usable()
+
+
+def test_parse_tabular_keeps_a_letter_suffixed_serial():
+    """M1196_2016_04_07.pdf prints "M1196-B": a different probe from M1196, and
+    the suffix must survive (the filename's M1196 is only a fallback)."""
+    text = M1021_TABULAR_TEXT.replace("Probe serial # M1021", "Probe serial # M1196-B")
+    assert sc.parse_sheet_text(text).sn == "M1196-B"
+
+
+def test_tabular_date_needs_the_serial_on_its_line():
+    """A bare "Date ..." line is the tabular calibration date only when it also
+    carries "Probe serial"; anything else must leave cal_date unset."""
+    text = "Probe serial # M1021\nDate 2019-03-29\nSensitivity (Volts/(m/s)^2)= 0.0658\n"
+    assert sc.parse_sheet_text(text).cal_date is None
 
 
 def test_parse_old_layout_bare_sens_and_wrapped_previous():
@@ -815,6 +900,18 @@ class TestUpdateSensitivityCsv:
         s2 = sc.update_sensitivity_csv(d)
         assert s2.added == 0 and s2.unchanged == 2 and s2.backfilled == 0
         assert self._read(d / "shear_sensitivities.csv") == rows
+
+    def test_tabular_sheet_registers_one_row(self, tmp_path, monkeypatch):
+        # A 2019-and-earlier sheet supplies only its own point: no recal-due,
+        # no pressure test, and no row from the NOTE's "previous".
+        d = self._dir(tmp_path, ["M1021_2019_03_29.pdf"])
+        _fake_sheets(monkeypatch, {"M1021_2019_03_29.pdf": M1021_TABULAR_TEXT})
+        stats = sc.update_sensitivity_csv(d)
+        assert stats.sheets_parsed == 1 and stats.sheets_failed == 0
+        rows = self._read(d / "shear_sensitivities.csv")
+        assert [(r["serial"], r["cal_date"], r["sens"], r["recal_due"]) for r in rows] == [
+            ("M1021", "2019-03-29", "0.0658", "")
+        ]
 
     def test_pressure_test_date_on_current_entry_only(self, tmp_path, monkeypatch):
         # The sheet's pressure test describes its CURRENT calibration; the

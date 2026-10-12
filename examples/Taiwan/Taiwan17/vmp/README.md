@@ -46,7 +46,8 @@ The cast log's claims were each checked against the data.
   (0.953/0.957 on shear, i.e. ~1% in ε).
 - **Probes:** sh1 **M1000** 0.0716, sh2 **M1001** 0.0705, FP07 **T1000**/**T1001**
   with Rockland's generic nominal coefficients (β₁ 3143.55). **No calibration
-  sheet exists for any of them**; the identity question is in
+  sheet exists for any of them**, and Rockland has **no record of M1000 or
+  M1001** (2026-10); the identity question is in
   `~/tpw/turbulence/microstructure_sensors/sheet_requests.md` (note 4). The
   absolute ε scale therefore rests on unverified sensitivities.
 - **FP07 in-situ calibration is per `.p` FILE**, pooled over that file's
