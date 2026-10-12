@@ -7,11 +7,12 @@
 #
 # READ FIRST -- two facts that bound what these products can support:
 #
-#   1. NO CALIBRATION SHEETS EXIST for any shear probe. All 8 (M1021, M1038,
-#      M1196, M1252, M1264, M1268, M1516, M1848) are absent from the sheet
-#      collection and from anywhere under /Volumes/SeaChest/ASTRAL. Their
-#      configured sensitivities are corroborated by nothing, and epsilon goes
-#      as sens^-2.
+#   1. THE SHEAR CALIBRATIONS ARE 4 YEARS STALE. Sheets for all 8 probes
+#      (M1021, M1038, M1196, M1252, M1264, M1268, M1516, M1848) arrived
+#      2026-10-12 (microstructure_sensors/). Every configured sensitivity
+#      equals its probe's 2019-03 sheet exactly, so the configs are faithful,
+#      but those calibrations were 50-51 months old at the cruise. Nothing
+#      verifies the 2023 values, and epsilon goes as sens^-2.
 #   2. THE PROBES WERE CHANGED SIX TIMES IN EIGHT DAYS (see the table below),
 #      and the configured sens spans 0.0410-0.0689, a 1.68x range = 2.8x in
 #      epsilon. So an unverified sensitivity is not a constant offset here; it
@@ -179,10 +180,10 @@ netcdf:
     dissipation (chi) profiles from a Rockland Scientific VMP250IR-DL3
     (SN 92) during the ASTRAL 2023 field programme in the Arabian Sea
     (11.6–14.3 N, 66.4–72.1 E), 17–24 June 2023. Thirteen deployments
-    (D2–D14) of repeated casts to 150–267 dbar. NOTE: no calibration sheet
-    exists for any of the eight shear probes used, and the probes were
-    changed six times during the programme; dissipation LEVELS are
-    provisional.
+    (D2–D14) of repeated casts to 150–267 dbar. NOTE: the eight shear
+    probes' most recent calibrations were 50–51 months old at the cruise,
+    and the probes were changed six times during the programme; dissipation
+    LEVELS are provisional.
   institution: "Oregon State University"
   project: "ASTRAL"
   program: "ASTRAL"

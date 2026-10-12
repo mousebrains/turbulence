@@ -1,29 +1,102 @@
 serial,cal_date,sens,units,source,sheet,recal_due,pressure_test_date,notes
-M1194,2016-04-07,0.0793,V/(m^2 s^-2),sheet,M1194_2016_04_07.pdf,,,"VMP-250IR SN 194 build package (OSU); sheet PDF distributed as M1194_2_2016_04_07.pdf. No recal-due or pressure-test date on this 2016-vintage form. Not the VMP's fitted probe at CASPER-West: that VMP's .p configs name M1000/M1001 (ordinary serials; sheets requested 2026-09-15), and M1194 is independently shown to have been on the MicroRider that cruise - see CASPER/CasperWest/VMP/calibration/README.md"
-M1254,2021-04-27,0.0739,V/(m^2 s^-2),sheet,M1254_2026_04_28.pdf,,,previous-calibration entry on this sheet
+M1021,2013-08-08,0.0805,V/(m^2 s^-2),sheet,M1021_2013_08_08.pdf,,,
+M1021,2016-11-16,0.0791,V/(m^2 s^-2),sheet,M1021_2016_11_16.pdf,,,
+M1021,2019-03-29,0.0658,V/(m^2 s^-2),sheet,M1021_2019_03_29.pdf,,,
+M1038,2013-08-30,0.0864,V/(m^2 s^-2),sheet,M1038_2013_08_30.pdf,,,
+M1038,2019-03-29,0.0539,V/(m^2 s^-2),sheet,M1038_2019_03_29.pdf,,,
+M1133,2014-04-04,0.0756,V/(m^2 s^-2),sheet,M1133_2014_04_04.pdf,,,
+M1133,2015-10-07,0.0603,V/(m^2 s^-2),sheet,M1133_2015_10_07.pdf,,,
+M1133,2015-11-03,0.0596,V/(m^2 s^-2),sheet,M1133_2015_11_03.pdf,,,
+M1133,2016-07-05,0.0579,V/(m^2 s^-2),sheet,M1133_2016_07_05.pdf,,,
+M1133,2016-10-12,0.0478,V/(m^2 s^-2),sheet,M1133_2016_10_12.pdf,,,
+M1133,2018-06-25,0.0451,V/(m^2 s^-2),sheet,M1133_2018_06_25.pdf,,,
+M1133,2019-04-05,0.0459,V/(m^2 s^-2),sheet,M1133_2019_04_05.pdf,,,
+M1133,2021-03-18,0.0457,V/(m^2 s^-2),sheet,M1133_2021_3_18.pdf,2022-03-18,2014-03-18,
+M1133,2024-04-09,0.0477,V/(m^2 s^-2),sheet,M1133_2024_04_09.pdf,2024-10-13,2014-03-18,
+M1194,2014-09-15,0.0691,V/(m^2 s^-2),sheet,M1194_2014_09_15.pdf,,,
+M1194,2016-03-14,0.0549,V/(m^2 s^-2),sheet,M1194_2016_03_14.pdf,,,
+M1194,2016-04-07,0.0793,V/(m^2 s^-2),sheet,M1194_2016_04_07.pdf,,,"VMP-250IR SN 194 build package (OSU); sheet PDF distributed as M1194_2_2016_04_07.pdf. No recal-due or pressure-test date on this 2016-vintage form. Not the VMP's fitted probe at CASPER-West: that VMP's .p configs name M1000/M1001, of which Rockland has no record (2026-10), and M1194 is independently shown to have been on the MicroRider that cruise - see CASPER/CasperWest/VMP/calibration/README.md. PROBABLY NOT THE SAME PHYSICAL PROBE as the rest of M1194's history: M1194 read 0.0549 on 2016-03-14 and 0.0551 on 2016-04-18, so 0.0793 is a +44% jump and back within 11 days; the 2016-04-18 sheet's NOTE cites 2016-03-14 as its previous calibration, skipping this one; and its capacitance (1.087 nF vs 0.846-0.941 on M1194's five other sheets) points the same way, though capacitance alone varies 10-19% within single probes here. Still keyed M1194 as printed, so M1194's timeline probably mixes two probes: from 2017-08-24 it governs at 0.0591, which flags the CASPER-West MR config (0.0793) as +34%"
+M1194,2016-04-18,0.0551,V/(m^2 s^-2),sheet,M1194_2016_04_18.pdf,,,
+M1194,2017-08-24,0.0591,V/(m^2 s^-2),sheet,M1194_2017_08_24.pdf,,,
+M1194,2026-03-10,0.0591,V/(m^2 s^-2),sheet,M1194_2026_06_22.pdf,,,"previous-calibration entry on this sheet; DATE WRONG - no calibration on that date: the value is bit-identical to the 2017-08-24 sheet, which is the real previous calibration. Wrong previous-date defect - see README, Known bad sheets"
+M1194,2026-06-22,0.052,V/(m^2 s^-2),sheet,M1194_2026_06_22.pdf,2027-06-22,2014-09-08,
+M1196,2014-09-15,0.0636,V/(m^2 s^-2),sheet,M1196_2014_09_15.pdf,,,
+M1196,2016-11-16,0.0575,V/(m^2 s^-2),sheet,M1196_2016_11_16.pdf,,,
+M1196,2018-03-20,0.0571,V/(m^2 s^-2),sheet,M1196_2018_03_20.pdf,,,
+M1196,2019-03-18,0.0584,V/(m^2 s^-2),sheet,M1196_2019_03_18.pdf,,,
+M1196-B,2016-04-07,0.0637,V/(m^2 s^-2),sheet,M1196_2016_04_07.pdf,,,"sheet prints serial M1196-B; the file is named M1196_2016_04_07.pdf. Calibrated the same day as M1194's out-of-family 2016-04-07 sheet. Its sensitivity (0.0637) and capacitance (1.090 nF vs 1.194-1.228 on M1196's four sheets) are within M1196's normal range, so the case that it is a different probe rests mainly on the printed suffix"
+M1201,2014-12-17,0.074,V/(m^2 s^-2),sheet,M1201_2014_12_17.pdf,,,
+M1201,2015-03-10,0.0696,V/(m^2 s^-2),sheet,M1201_2015_03_10.pdf,,,
+M1201,2016-02-07,0.0667,V/(m^2 s^-2),sheet,M1201_2016_02_07.pdf,,,
+M1201,2018-02-28,0.0646,V/(m^2 s^-2),sheet,M1201_2018_02_28.pdf,,,
+M1201,2018-09-27,0.0663,V/(m^2 s^-2),sheet,M1201_2018_09_27.pdf,,,
+M1201,2021-03-18,0.0708,V/(m^2 s^-2),sheet,M1201_2021_3_18.pdf,2022-03-18,2014-09-09,
+M1201,2024-04-09,0.0752,V/(m^2 s^-2),sheet,M1201_2024_04_09.pdf,2024-10-13,2014-09-09,
+M1201,2025-02-07,0.0771,V/(m^2 s^-2),sheet,M1201_2025_02_07.pdf,2026-02-07,2014-09-09,
+M1218,2014-12-15,0.0797,V/(m^2 s^-2),sheet,M1218_2014_12_15.pdf,,,
+M1247,2015-02-05,0.096,V/(m^2 s^-2),sheet,M1247_2015_02_05.pdf,,,
+M1249,2015-02-06,0.0748,V/(m^2 s^-2),sheet,M1249_2015_02_06.pdf,,,
+M1252,2015-02-06,0.0568,V/(m^2 s^-2),sheet,M1252_2015_02_06.pdf,,,
+M1252,2016-09-07,0.0455,V/(m^2 s^-2),sheet,M1252_2016_09_07.pdf,,,
+M1252,2018-03-20,0.0438,V/(m^2 s^-2),sheet,M1252_2018_03_20.pdf,,,
+M1252,2018-03-27,0.0443,V/(m^2 s^-2),sheet,M1252_2018_03_27.pdf,,,
+M1252,2019-03-18,0.0427,V/(m^2 s^-2),sheet,M1252_2019_03_18.pdf,,,
+M1253,2015-02-06,0.0622,V/(m^2 s^-2),sheet,M1253_2015_02_06.pdf,,,
+M1254,2015-02-06,0.0802,V/(m^2 s^-2),sheet,M1254_2015_02_06.pdf,,,
+M1254,2015-02-06,0.082,V/(m^2 s^-2),sheet,M1254_2021_4_27.pdf,,,"previous-calibration entry on this sheet; TRANSCRIPTION ERROR - the sheet prints 0.0820, a digit transposition of 0.0802: M1254's own 2015-02-06 sheet prints 0.0802, and its angle table refits to 0.0801. Kept so the conflict stays visible; rsi-tpw sensors keeps 0.0802 (the first sheet in name order)"
+M1254,2021-04-27,0.0739,V/(m^2 s^-2),sheet,M1254_2021_4_27.pdf,2022-04-27,2015-01-30,
 M1254,2026-04-28,0.0847,V/(m^2 s^-2),sheet,M1254_2026_04_28.pdf,2027-04-28,2015-01-30,
-M1458,2016-04-25,0.0696,V/(m^2 s^-2),manual,,,,provided by Pat Welch 2026-07-16 from Rockland records (earliest of three Rockland calibrations for M1458)
+M1264,2015-04-15,0.0555,V/(m^2 s^-2),sheet,M1264_2015_04_15.pdf,,,
+M1264,2016-09-07,0.0402,V/(m^2 s^-2),sheet,M1264_2016_09_07.pdf,,,
+M1264,2018-03-20,0.0413,V/(m^2 s^-2),sheet,M1264_2018_03_20.pdf,,,
+M1264,2019-03-18,0.041,V/(m^2 s^-2),sheet,M1264_2019_03_18.pdf,,,
+M1268,2015-04-16,0.0541,V/(m^2 s^-2),sheet,M1268_2015_04_16.pdf,,,
+M1268,2016-09-07,0.0427,V/(m^2 s^-2),sheet,M1268_2016_09_07.pdf,,,
+M1268,2018-03-15,0.0412,V/(m^2 s^-2),sheet,M1268_2018_03_15.pdf,,,
+M1268,2019-03-18,0.0418,V/(m^2 s^-2),sheet,M1268_2019_03_18.pdf,,,
+M1277,2015-04-30,0.0683,V/(m^2 s^-2),sheet,M1277_2015_04_30.pdf,,,
+M1277,2016-04-12,0.0617,V/(m^2 s^-2),sheet,M1277_2016_04_12.pdf,,,
+M1344,2015-08-11,0.0655,V/(m^2 s^-2),sheet,M1344_2015_08_11.pdf,,,
+M1344,2016-04-11,0.0615,V/(m^2 s^-2),sheet,M1344_2016_04_11.pdf,,,
+M1371,2015-09-03,0.0855,V/(m^2 s^-2),sheet,M1371_2015_09_03.pdf,,,
+M1371,2016-04-11,0.0729,V/(m^2 s^-2),sheet,M1371_2016_04_11.pdf,,,
+M1371,2021-04-28,0.0748,V/(m^2 s^-2),sheet,M1371_2021_4_28.pdf,2022-04-28,2015-09-02,
+M1458,2016-04-25,0.0696,V/(m^2 s^-2),sheet,M1458_2016_04_25.pdf,,,first entered by hand 2026-07-16 from Rockland records (earliest of three Rockland calibrations for M1458); the sheet itself arrived 2026-10-12 and agrees
 M1458,2021-04-27,0.0679,V/(m^2 s^-2),sheet,M1458_2026_06_19.pdf,,,previous-calibration entry on this sheet
 M1458,2026-06-19,0.0777,V/(m^2 s^-2),sheet,M1458_2026_06_19.pdf,2027-06-19,2016-04-19,
-M1465,2016-04-26,0.0645,V/(m^2 s^-2),sheet,M1465_2022_6_20.pdf,,,previous-calibration entry on this sheet
+M1465,2016-04-26,0.0645,V/(m^2 s^-2),sheet,M1465_2016_04_26.pdf,,,
 M1465,2022-06-20,0.0633,V/(m^2 s^-2),sheet,M1465_2022_6_20.pdf,2023-06-20,2016-04-14,
 M1465,2023-10-13,0.0668,V/(m^2 s^-2),sheet,M1465_2023_10_13.pdf,2024-08-08,2016-04-19,
 M1491,2016-05-19,0.0709,V/(m^2 s^-2),sheet,M1491_2016_05_19.pdf,,,"VMP-250IR SN 194 build package (OSU). No recal-due or pressure-test date on this 2016-vintage form. Calibrated two days AFTER the instrument setup.cfg was written, which is why the config sens fields were never updated to it"
-M1496,2021-06-03,0.0649,V/(m^2 s^-2),sheet,M1496_2022_6_20.pdf,,,previous-calibration entry on this sheet
+M1493,2016-05-19,0.0805,V/(m^2 s^-2),sheet,M1493_2016_05_19.pdf,,,
+M1496,2016-06-03,0.0649,V/(m^2 s^-2),sheet,M1496_2016_06_03.pdf,,,
+M1496,2021-06-03,0.0649,V/(m^2 s^-2),sheet,M1496_2022_6_20.pdf,,,"previous-calibration entry on this sheet; DATE PROBABLY WRONG - bit-identical to M1496_2016_06_03.pdf (0.0649), same day and month five years earlier: likely a mistyped year. Wrong previous-date defect - see README, Known bad sheets"
 M1496,2022-06-20,0.0595,V/(m^2 s^-2),sheet,M1496_2022_6_20.pdf,2023-06-20,2016-05-31,
 M1496,2023-10-13,0.0575,V/(m^2 s^-2),sheet,M1496_2023_10_13.pdf,2024-08-08,2016-05-31,
+M1496,2024-08-29,0.0575,V/(m^2 s^-2),sheet,M1496_2024_08_29.pdf,2024-10-13,2016-05-31,
 M1497,2016-06-06,0.0868,V/(m^2 s^-2),sheet,M1497_2022_1_5.pdf,,,previous-calibration entry on this sheet
 M1497,2022-01-04,0.0801,V/(m^2 s^-2),sheet,M1497_2022_1_5.pdf,2023-01-04,2016-05-31,
 M1501,2016-06-06,0.0763,V/(m^2 s^-2),sheet,M1501_2022_1_5.pdf,,,previous-calibration entry on this sheet
 M1501,2022-01-04,0.0737,V/(m^2 s^-2),sheet,M1501_2022_1_5.pdf,2023-01-04,2016-05-31,
-M1504,2016-06-06,0.0824,V/(m^2 s^-2),sheet,M1504_2022_1_5.pdf,,,previous-calibration entry on this sheet
+M1504,2016-06-06,0.0824,V/(m^2 s^-2),sheet,M1504_2016_06_06.pdf,,,
 M1504,2022-01-04,0.0767,V/(m^2 s^-2),sheet,M1504_2022_1_5.pdf,2023-01-04,2016-05-31,
+M1516,2016-06-13,0.0748,V/(m^2 s^-2),sheet,M1516_2016_06_13.pdf,,,
+M1516,2018-03-09,0.0592,V/(m^2 s^-2),sheet,M1516_2018_03_09.pdf,,,
+M1516,2019-03-29,0.0596,V/(m^2 s^-2),sheet,M1516_2019_03_29.pdf,,,
+M1701,2017-06-19,0.08,V/(m^2 s^-2),sheet,M1701_2017_06_19.pdf,,,
+M1702,2017-06-20,0.0927,V/(m^2 s^-2),sheet,M1702_2017_06_20.pdf,,,
+M1702,2021-04-28,0.0848,V/(m^2 s^-2),sheet,M1702_2021_4_28.pdf,2022-04-28,2017-06-09,
+M1848,2018-03-23,0.0673,V/(m^2 s^-2),sheet,M1848_2018_03_23.pdf,,,
+M1848,2019-03-18,0.0689,V/(m^2 s^-2),sheet,M1848_2019_03_18.pdf,,,
 M2090,2019-07-02,0.0884,V/(m^2 s^-2),sheet,M2090_2022_1_5.pdf,,,previous-calibration entry on this sheet
 M2090,2022-01-04,0.0967,V/(m^2 s^-2),sheet,M2090_2022_1_5.pdf,2023-01-04,2019-06-17,
 M2244,2020-03-10,0.0678,V/(m^2 s^-2),sheet,M2244_2020_03_10.pdf,2021-03-10,,
 M2245,2020-03-12,0.0682,V/(m^2 s^-2),sheet,M2245_2020_03_12.pdf,2021-03-12,,
-M2245,2023-06-07,0.0682,V/(m^2 s^-2),sheet,M2245_2026_04_28.pdf,,,"previous-calibration entry on this sheet; DATE DOUBTFUL - the owner has no record of any calibration between 2020-03-12 and 2026-04-28, and the value is bit-identical to the 2020-03-12 sheet, so this is likely Rockland re-quoting the 2020 calibration under a wrong date rather than a real 2023 measurement. Queried with Rockland 2026-09. Do NOT treat as an independent post-2020 point."
+M2245,2023-06-07,0.0682,V/(m^2 s^-2),sheet,M2245_2026_04_28.pdf,,,"previous-calibration entry on this sheet; DATE WRONG (upgraded from DATE DOUBTFUL 2026-10-12) - the value is bit-identical to the 2020-03-12 sheet and the owner has no record of a calibration in between. Every 2026-04-28 sheet as first issued prints this same 2023-06-07 previous date: on M3036/M3037 it predates the probe, and for M1254 Rockland regenerated the sheet on 2026-07-03 with it corrected to 2021-04-27. Do NOT treat as an independent post-2020 point. Wrong previous-date defect - see README, Known bad sheets"
 M2245,2026-04-28,0.1007,V/(m^2 s^-2),sheet,M2245_2026_04_28.pdf,2027-04-28,2020-03-30,
+M2375,2021-03-01,0.0952,V/(m^2 s^-2),sheet,M2375_2021_3_1.pdf,2022-03-01,2021-02-18,
+M2381,2021-03-16,0.0691,V/(m^2 s^-2),sheet,M2381_2021_3_16.pdf,2022-03-16,2021-03-08,
+M2382,2021-03-16,0.067,V/(m^2 s^-2),sheet,M2382_2021_3_16.pdf,2022-03-16,2021-03-08,
 M2475,2021-11-09,0.072,V/(m^2 s^-2),sheet,M2475_2021_11_12.pdf,2022-11-09,2021-11-03,
 M2476,2021-11-09,0.0884,V/(m^2 s^-2),sheet,M2476_2021_11_12.pdf,2022-11-09,2021-11-03,
 M2477,2021-11-09,0.0795,V/(m^2 s^-2),sheet,M2477_2021_11_12.pdf,2022-11-09,2021-11-03,
@@ -70,10 +143,12 @@ M2743,2023-04-21,0.0613,V/(m^2 s^-2),sheet,M2743_2023_4_21.pdf,2024-04-21,2023-0
 M2744,2023-04-21,0.06,V/(m^2 s^-2),sheet,M2744_2023_4_21.pdf,2024-04-21,2023-04-18,
 M2745,2023-04-21,0.0744,V/(m^2 s^-2),sheet,M2745_2023_4_21.pdf,2024-04-21,2023-04-18,
 M2746,2023-04-21,0.0607,V/(m^2 s^-2),sheet,M2746_2023_4_21.pdf,2024-04-21,2023-04-18,
+M2772,2023-05-16,0.0725,V/(m^2 s^-2),sheet,M2772_2023_5_16.pdf,2024-05-16,2023-05-02,
 M2772,2023-06-07,0.0705,V/(m^2 s^-2),sheet,M2772_2023_6_7.pdf,2024-06-07,2023-05-02,
 M2780,2023-06-07,0.0654,V/(m^2 s^-2),sheet,M2780_2023_6_7.pdf,2024-06-07,2023-05-02,
 M2786,2023-06-07,0.0714,V/(m^2 s^-2),sheet,M2786_2023_6_7.pdf,2024-06-07,2023-05-08,
 M2787,2023-06-07,0.0684,V/(m^2 s^-2),sheet,M2787_2023_6_7.pdf,2024-06-07,2023-05-08,
+M2803,2023-05-29,0.0625,V/(m^2 s^-2),sheet,M2803_2023_5_29.pdf,2024-05-29,2023-05-11,
 M2803,2023-06-07,0.0615,V/(m^2 s^-2),sheet,M2803_2023_6_7.pdf,2024-06-07,2023-05-11,
 M2808,2023-06-15,0.0746,V/(m^2 s^-2),sheet,M2808_2023_6_15.pdf,2024-06-15,2023-05-30,
 M2809,2023-06-12,0.0717,V/(m^2 s^-2),sheet,M2809_2023_6_12.pdf,2024-06-12,2023-05-30,
@@ -92,12 +167,21 @@ M2864,2023-09-22,0.1092,V/(m^2 s^-2),sheet,M2864_2023_09_22.pdf,2024-09-21,2023-
 M2864,2026-05-25,0.1174,V/(m^2 s^-2),sheet,M2864_2026_05_25.pdf,2027-05-25,2023-07-20,
 M2870,2023-08-30,0.064,V/(m^2 s^-2),sheet,M2870_2023_08_30.pdf,2024-08-29,2023-08-15,
 M2870,2024-04-30,0.0639,V/(m^2 s^-2),sheet,M2870_2024_04_30.pdf,2025-04-30,2023-08-15,
+M289,2004-10-14,0.0817,V/(m^2 s^-2),sheet,M289_2004_10_14.pdf,,,
+M289,2013-03-01,0.0524,V/(m^2 s^-2),sheet,M289_2013_03_01.pdf,,,
+M289,2013-12-09,0.0717,V/(m^2 s^-2),sheet,M289_2013_12_09.pdf,,,
+M289,2016-04-11,0.0725,V/(m^2 s^-2),sheet,M289_2016_04_11.pdf,,,
+M289,2021-04-27,0.0794,V/(m^2 s^-2),sheet,M289_2021_4_27.pdf,2022-04-27,2004-10-12,
 M2934,2024-02-01,0.1157,V/(m^2 s^-2),sheet,M2934_2024_02_08.pdf,,,previous-calibration entry on this sheet
 M2934,2024-02-08,0.1022,V/(m^2 s^-2),sheet,M2934_2024_02_08.pdf,2025-02-07,2024-01-25,
+M3036,2023-06-07,0.1223,V/(m^2 s^-2),sheet,M3036_2026_04_28.pdf,,,"previous-calibration entry on this sheet; DATE IMPOSSIBLE - 13 months before this probe's pressure test (2024-07-05) and first calibration (2024-07-09); the value is bit-identical to the 2024-07-15 sheet, the real previous calibration. Wrong previous-date defect - see README, Known bad sheets"
 M3036,2024-07-09,0.1259,V/(m^2 s^-2),sheet,M3036_2024_07_15.pdf,,,previous-calibration entry on this sheet
 M3036,2024-07-15,0.1223,V/(m^2 s^-2),sheet,M3036_2024_07_15.pdf,2025-07-15,2024-07-05,
+M3036,2026-04-28,0.1151,V/(m^2 s^-2),sheet,M3036_2026_04_28.pdf,2027-04-28,2024-07-05,
+M3037,2023-06-07,0.0952,V/(m^2 s^-2),sheet,M3037_2026_04_28.pdf,,,"previous-calibration entry on this sheet; DATE IMPOSSIBLE - 13 months before this probe's pressure test (2024-07-05) and first calibration (2024-07-09); the value is bit-identical to the 2024-07-15 sheet, the real previous calibration. Wrong previous-date defect - see README, Known bad sheets"
 M3037,2024-07-09,0.1093,V/(m^2 s^-2),sheet,M3037_2024_07_15.pdf,,,previous-calibration entry on this sheet
 M3037,2024-07-15,0.0952,V/(m^2 s^-2),sheet,M3037_2024_07_15.pdf,2025-07-15,2024-07-05,
+M3037,2026-04-28,0.0815,V/(m^2 s^-2),sheet,M3037_2026_04_28.pdf,2027-04-28,2024-07-05,
 M3038,2024-07-09,0.1093,V/(m^2 s^-2),sheet,M3038_2024_07_09.pdf,2025-07-09,2024-07-05,
 M3038,2024-07-09,0.1189,V/(m^2 s^-2),sheet,M3038_2024_07_15.pdf,,,"SUSPECT — contradicts M3038's own 2024-07-09 sheet (0.1093). M3038_2024_07_15.pdf is character-identical to M3039_2024_07_15.pdf apart from the serial, so this attests M3039's history not M3038's; do not use"
 M3038,2024-07-15,0.1041,V/(m^2 s^-2),sheet,M3038_2024_07_15.pdf,2025-07-15,2024-07-05,"SUSPECT — M3038_2024_07_15.pdf is character-identical to M3039_2024_07_15.pdf apart from the serial (same sens, c, capacitance, temperature, DC offset and data page); likely M3039's report mis-issued under M3038; confirm with Rockland before use"

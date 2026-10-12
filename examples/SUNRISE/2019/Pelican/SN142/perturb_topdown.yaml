@@ -4,7 +4,8 @@
 #
 # Deep casts (67 m), unlike the rest of SUNRISE. Thermistor serials T1000/T1001
   # look like placeholders but are NOT evidence of that (see the probe note in
-  # ../../../../VMP_README.md); no sheet exists for either shear probe.
+  # ../../../../VMP_README.md). Both shear probes match their 2016-04 sheets
+  # (M1344 0.0615, M1277 0.0617; received 2026-10-12), 37 months old at use.
 #
 # == TOP-DOWN (anchor: top) ==================================================
 # Windows start at the top of each section and march DOWN, so the remainder

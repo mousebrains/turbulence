@@ -76,10 +76,13 @@ is a geometric mean of one good probe and one bad one and is ~2.4× low.
 `exclude_shear_probes` is per-INSTRUMENT, not per-file, so removing it needs a
 separate run or a post-hoc mask on D10.
 
-**No calibration sheet exists for any of the 8 probes** — not in the
-collection, not under ASTRAL, nowhere on SeaChest by filename. So the absolute
-ε scale rests on configured sensitivities that the data show to be wrong by
-10–49 % (and 2.4× for M1196).
+**Sheets for all 8 probes arrived 2026-10-12** (`microstructure_sensors/`):
+every configured sensitivity equals its probe's **2019-03** sheet exactly, so
+the configs are faithful, but those calibrations were **50–51 months old** at
+the cruise. So the absolute ε scale rests on 4-year-old sensitivities that the
+data show to be wrong by 10–49 % (and 2.4× for M1196). M1196's 2019 sheet
+(0.0584) is in line with its own 2014–2018 history, which supports damage
+rather than a config error.
 
 ## FP07 tau — both beads converge
 

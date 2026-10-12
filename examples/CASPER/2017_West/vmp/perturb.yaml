@@ -14,8 +14,8 @@
 #     polynomial, the JAC CT coefficients, every diff_gain -- all match the
 #     factory certificate TPW/vmp/VMP_250/'P049R02 ASTP-LP_130_2016-03-31.pdf'.
 #   * NOT populated: every SENSOR-dependent field. Shear probe serials read
-#     M1000 / M1001 and thermistor serials T1000 / T1001 -- RSI template
-#     placeholders -- with blank cal_date, and the FP07 coefficients are the
+#     M1000 / M1001 -- of which Rockland has NO RECORD (2026-10) -- and
+#     thermistor serials T1000 / T1001, with blank cal_date, and the FP07 coefficients are the
 #     generic nominal set (beta_1 3143.55, beta_2 2.5e5, T_0 289.301).
 # Consequences: the FP07 temperature is several K wrong until calibrated in
 # situ (handled below), and the shear sensitivities are NOT known to belong to
@@ -30,10 +30,15 @@
 #     this cruise (its config: sh1 M1194 sens 0.0793, matching the sheet
 #     exactly), so neither sheet describes a VMP probe. An earlier version of
 #     this file claimed a "~+/-25% systematic" from substituting those sheets;
-#     that is WITHDRAWN. The two channels agree to 0.951 (MAD x1.21, n=1607)
-#     as configured. We hold no sheet for M1000 or M1001, so the sensitivities
-#     cannot be verified -- but nothing indicates they are wrong. Note a pair
-#     ratio constrains only the RELATIVE sensitivity; a common error cancels.
+#     that is WITHDRAWN. REOPENED IN PART 2026-10-12: the 0.0793 "M1194"
+#     sheet (from THIS VMP's build package) is probably a different physical
+#     probe from the M1194 Rockland recalibrated on 2017-08-24, so which M1194
+#     flew on the MR is open again -- see microstructure_sensors/README.md.
+#     The two channels agree to 0.951 (MAD x1.21, n=1607) as configured.
+#     Rockland has no record of M1000 or M1001 (2026-10), so the
+#     sensitivities cannot be verified -- but nothing indicates they are
+#     wrong. Note a pair ratio constrains only the RELATIVE sensitivity; a
+#     common error cancels.
 #     Full evidence, both ways, in calibration/README.md.
 #
 #  2. sh2 DEVELOPS A PRESSURE-RELATED FAULT -- bad in a DEPTH WINDOW, good

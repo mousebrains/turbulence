@@ -82,7 +82,8 @@ went wrong.
   `raw/casts/SN*/*.P` is the selection.
 - **The shear-probe pair disagrees by ~24% in ε** (e₁/e₂ ≈ 0.76 wherever the
   signal is resolved), and which probe is wrong cannot be determined: there is
-  no calibration sheet for either probe.
+  no calibration sheet for either probe, and Rockland has no record of either
+  serial (M1000/M1001, 2026-10).
 - **The FP07s carry Rockland's generic nominal coefficients**, so
   `fp07.calibrate` must stay true. They are calibrated in situ against JAC_T,
   per `.p` file, at order 2.

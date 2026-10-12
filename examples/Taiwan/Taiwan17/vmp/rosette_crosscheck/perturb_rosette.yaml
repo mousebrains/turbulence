@@ -11,7 +11,8 @@
 # See README.md here for what every raw file is and why.
 #
 # Probes: sh1 M1000 sens 0.0716 · sh2 M1001 sens 0.0705 (diff_gain 0.96/0.97,
-#         2-dp nominal). NO calibration sheet for either probe.
+#         2-dp nominal). NO calibration sheet for either probe, and
+#         Rockland has no record of either serial (2026-10).
 #         FP07 T1 T1000 · T2 T1001, beta_1 = 3143.55 (Rockland generic nominal,
 #         so fp07.calibrate MUST stay true).
 # Also carries a JAC CT (JAC_T/JAC_C), which is what fp07/ct reference below.

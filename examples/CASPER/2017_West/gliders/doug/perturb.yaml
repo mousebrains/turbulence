@@ -15,8 +15,10 @@
 # * PROBE IDENTITY IS A RETROSPECTIVE ASSERTION. This MR's config was never
 #   edited between 2015-10-23 and 2017-10-23 (509 files across CASPER-East,
 #   Taiwan 2017 and CASPER-West), so the 2018 patch is somebody's paper record,
-#   not a contemporaneous one. M1194 @ 0.0793 is sheet-exact, which supports
-#   the SET but says nothing about whether it held for all 188 files.
+#   not a contemporaneous one. M1194 @ 0.0793 matches a 2016-04-07 sheet
+#   that is probably a DIFFERENT physical probe from the M1194 Rockland
+#   recalibrated to 0.0591 on 2017-08-24 (see README.md), and nothing shows
+#   the set held for all 188 files.
 #   Absolute epsilon is unverified.
 # * NO EM FLOWMETER. Speed comes from a Merckelbach flight model calibrated
 #   against the glider's depth rate -- see README.md. No independent speed

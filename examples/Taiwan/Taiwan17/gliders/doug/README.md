@@ -85,7 +85,10 @@ and do not treat `epsilonMean` as calibrated.
   2015-10 and 2017-10** — 509 files across CASPER-East, Taiwan 2017 and
   CASPER-West carry the same text, and CASPER-West's patched copies name
   different probes. So the sensitivities are whatever was last set, and
-  absolute ε is unverified. See `/Volumes/SeaChest/MICROSTRUCTURE_INVENTORY.md`.
+  absolute ε is unverified. Sheets received 2026-10-12 sharpen this: 0.0655 /
+  0.0855 are M1344's and M1371's **2015** values, and Rockland recalibrated
+  both on **2016-04-11 to 0.0615 / 0.0729**. If those two probes really flew
+  here, ε is low by 1.13× (sh1) and 1.38× (sh2). See `/Volumes/SeaChest/MICROSTRUCTURE_INVENTORY.md`.
 - **ε at this speed cannot resolve the spectral peak at low ε**: 2 s FFT ×
   0.28 m/s = 0.56 m, so the lowest resolved wavenumber is ~1.8 cpm. A platform
   limit, not a setting.
