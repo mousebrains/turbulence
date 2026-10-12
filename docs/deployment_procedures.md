@@ -52,7 +52,7 @@ calibration.** An open circuit carries no *signal*, but the channel's electronic
 anti-alias roll-off; a channel on the 1024 Hz rung (~0.095) is flat at the
 sampler floor, ~1e-3. Fitting the model's amplitude recovers the configured gain
 on SN 409 to ~1% (0.93–0.96 against 0.949) and on SN 465 to +3–14% (against
-0.988), and it settled SN 132 (issue #178). The 60–90 Hz hump measures
+0.988), and it put SN 132 on the 1024 Hz rung (issue #178). The 60–90 Hz hump measures
 op-amp noise × gain, so its absolute value is only as good as the assumed
 components; the 2–10 Hz plateau above the post-anti-alias floor (200–240 Hz) is
 mostly set by the 1 GΩ feedback resistor's Johnson noise instead, and is the more
@@ -91,10 +91,10 @@ component-robust number. For a number to apply, the signal-injection measurement
 >
 >       counts = std_physical x (2*sqrt(2) * diff_gain * sens) / (adc_fs / 2^bits)
 >
->   An open circuit sits near the quantisation floor, ~1.1 counts on a standard
->   512 Hz channel — and ~0.55 on SN 132, whose differentiator is on the
->   1024 Hz rung, so only the sampler floor remains. Exactly 0 counts is dead,
->   not open.
+>   An open circuit reads ~1.1 counts on a standard 512 Hz channel (electronics
+>   noise lifted by the differentiator) and ~0.55 on SN 132, whose
+>   differentiator is on the 1024 Hz rung, so only the sampler floor remains.
+>   Exactly 0 counts is dead, not open.
 >
 > Measured separation on labelled files:
 >

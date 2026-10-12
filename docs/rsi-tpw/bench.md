@@ -111,7 +111,7 @@ investigation. Always compare against the instrument's ASTP calibration report.
 "rising to ~10⁻² near 100 Hz" criterion describes a 512 Hz build: the
 differentiator (`diff_gain` ~0.95) lifts the electronics noise into a hump at
 60–90 Hz. A channel on the 1024 Hz rung (~0.095) stays flat at the sampler floor,
-~10⁻³ counts²·Hz⁻¹, and fails that REVIEW line even when it is healthy. That is
+~10⁻³ counts²·Hz⁻¹, and does not match that REVIEW line even when it is healthy. That is
 how VMP SN 132 was found to carry a tidal-rung differentiator while sampling at
 512 Hz (issue #178). Fitting `odas_tpw.rsi.shear_noise.noise_shearchannel` to
 the open-circuit spectrum estimates the gain; see

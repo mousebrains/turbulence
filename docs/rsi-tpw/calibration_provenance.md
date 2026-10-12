@@ -64,8 +64,12 @@ saturation:
 | `fs_fast` | `diff_gain` | in our corpus |
 |---|---|---|
 | 512 Hz | ~0.95 | 13 instruments, 0.905 – 1.01 (13 762 rows) |
-| **1024 Hz** | **~0.095** | MR **330**, **429** — tidal builds (2 236 rows) |
+| **1024 Hz** | **~0.095** | MR **330**, **429** — tidal builds (1 802 rows) |
 | 2048 Hz | ~0.0095 | exists at Rockland; **none in our portfolio** |
+
+The low band's other 434 rows are VMP **SN 132**, which samples at 512 Hz with a
+differentiator on the 1024 Hz rung (below), so the rate does not pick the rung
+for every instrument.
 
 *(Design rationale from Pat Welch, who works directly with Rockland; the rate
 and gain columns are measured from our own file headers and configs.)*
@@ -101,8 +105,8 @@ that fires on correct hardware the day it arrives is worse than no check.
 This is the one place the corpus is not the last word: absence of a
 configuration from our files is not evidence it does not exist.
 
-> **SN 132: the sampling rate is not the gain** (issue #178, resolved
-> 2026-09-29). Over all 217 of its files SN 132 samples at **511.9454 Hz**
+> **SN 132: the sampling rate is not the gain** (issue #178; rung
+> settled 2026-09-29, fine value open). Over all 217 of its files SN 132 samples at **511.9454 Hz**
 > (`f_clock` 5119.454 Hz, 8×10 matrix, `vmp-250-IR`), yet carries **0.09** — the
 > 1024 Hz rung's value — identically on both channels. That looked like a setup
 > file inherited from a 1 kHz build. It is the reverse: Rockland converted SN 132
@@ -111,7 +115,8 @@ configuration from our files is not evidence it does not exist.
 > agree:
 >
 > - its **open-circuit bench noise** has no differentiator hump — the noise-model
->   fit gives 0.10–0.13, where the same fit recovers SN 409's 0.949 to ~1%
+>   fit gives 0.10–0.13, where the same fit reads SN 409's 0.949 within 2% and
+>   SN 465's 0.988 3–14% high
 >   (method: [deployment procedures §1](../deployment_procedures.md));
 > - its **epsilon computed with 0.09 matches SN 465's** in near-simultaneous
 >   casts from two boats working the center of German Channel (SN 132 on Ocean
@@ -128,12 +133,13 @@ Distinguishing "0.09 is this instrument's real differentiator" from "0.09 is a
 transcription error" needs that instrument's own history and class, not a static
 window.
 That is exactly what the [`rsi-tpw sensors --diff-gain` audit](sensors.md)
-(`odas_tpw.rsi.diff_gain`, PR #177) does — it is instrument-keyed and compares across time, and it is the
-right tool for this question. The bound here is deliberately only a floor and
+(`odas_tpw.rsi.diff_gain`, PR #177) does — it is instrument-keyed and compares across time, so it
+raises the question. Only a measurement answers it: SN 132's 0.09 is exactly the
+outlier that audit flags, and it is on the right rung. The bound here is deliberately only a floor and
 ceiling for a value that cannot be a differentiator gain **at all**:
 
 ```python
-_SHEAR_DIFF_GAIN_MIN = 0.01   # ~9x below the observed minimum
+_SHEAR_DIFF_GAIN_MIN = 0.001  # clears the 2048 Hz rung (~0.0095) by ~9x
 _SHEAR_DIFF_GAIN_MAX = 10.0   # ~10x above the observed maximum
 ```
 

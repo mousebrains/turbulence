@@ -7,9 +7,11 @@ inventory cannot report it usefully: it is keyed on sensor serial, and it drops
 the `X_dX` pre-emphasized channels because they are the same physical sensor as
 their base. Hence a separate, instrument-keyed pass.
 
-The case that motivated it: one ARCTERX-2023 VMP carried `diff_gain = 0.09` on
-both shear channels where its three siblings in the same cruise carried
-0.92-0.99, which would inflate its epsilon by ~110x. Nothing noticed.
+The case that motivated it: one ARCTERX-2023 VMP (SN 132) carried
+`diff_gain = 0.09` on both shear channels where its three siblings in the same
+cruise carried 0.92-0.99. Had that been a slip for ~0.9 it would inflate its
+epsilon by ~110x, and nothing in the chain would have noticed. Measurement later
+put it on the right rung (#178), but the flag was the right question to raise.
 """
 
 from datetime import datetime
@@ -107,7 +109,7 @@ class TestOutlierDetection:
     def test_catches_an_order_of_magnitude_error(self):
         """The SN132 shape: 0.09 where the fleet sits near 0.93.
 
-        Flagging it is right even though SN132's 0.09 proved genuine (#178):
+        Flagging it is right even though SN132's 0.09 is on the right rung (#178):
         an outlier is a question to resolve by measurement, not a verdict.
         """
         t = _fleet(**{"409": {"sh1": "0.09", "sh2": "0.09"}})
