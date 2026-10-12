@@ -428,7 +428,8 @@ configuration system.
   probes." *Scientific Data*, 11, 518.
   doi:[10.1038/s41597-024-03323-y](https://doi.org/10.1038/s41597-024-03323-y)
 
-- Bluteau, C. E., Wain, D., Mullarney, J. C., & Stevens, C. L. (2025).
+- Bluteau, C. E., Wain, D. J., Mullarney, J. C., & Stevens, C. L. (2026).
   "Best practices for estimating turbulent dissipation from oceanic
-  single-point velocity timeseries observations." *EGUsphere* (preprint).
-  doi:[10.5194/egusphere-2025-4433](https://doi.org/10.5194/egusphere-2025-4433)
+  single-point velocity timeseries observations." *Ocean Science*, 22,
+  893–921.
+  doi:[10.5194/os-22-893-2026](https://doi.org/10.5194/os-22-893-2026)
