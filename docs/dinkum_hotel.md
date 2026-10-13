@@ -189,7 +189,7 @@ applies afterwards to the output.
 The range check runs on the source samples, before interpolation (so a spike is
 removed rather than smeared) and therefore **before `scale`**. So the bounds are
 in the sensor's raw units — post-`transform`, pre-`scale` — even though the
-neighbouring `units:` key names the *output* unit:
+neighboring `units:` key names the *output* unit:
 
 ```yaml
   sci_water_cond:

@@ -116,6 +116,14 @@ Facts that are easy to get wrong:
 - Polynomial order is chosen by **held-out** error split on temperature, not by
   in-sample fit or a t-test: `beta_3` can carry a t-statistic of 10 while
   making extrapolation four times worse.
+- **perturb refuses its own per-file fit against a hotel reference** unless
+  `fp07.allow_hotel_reference: true`. A file the glider CTD did not cover
+  keeps the factory coefficients while its neighbors are fitted: Taiwan13
+  husker left T1 on factory coefficients in 40 of 58 files. Sparseness alone is
+  not the problem. Once gaps split profiles and the low-pass started at rest,
+  a 4.5 s CTD fitted all 12 files of Tanaka 2015-11-13, within 0.6% of
+  `fp07-cal` in gradient gain. Whatever is left on factory coefficients is
+  named in the run summary's `notice:` lines and logged whole at WARNING.
 
 ### Hotel files from Slocum gliders
 

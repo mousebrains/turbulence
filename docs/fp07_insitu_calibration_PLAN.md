@@ -405,7 +405,7 @@ A CTD sample contributes a pair only if all hold:
 |---|---|
 | Inside a detected profile (dive or climb) | Excludes surface/apogee loiter |
 | Speed ≥ threshold | FP07 flushing fails at low flow |
-| CTD sample spacing to both neighbours ≤ `max_gap` | The kernel must not span a dropout |
+| CTD sample spacing to both neighbors ≤ `max_gap` | The kernel must not span a dropout |
 | No clipped `Z` in the kernel window (A7) | |
 | `|dT/dt|` above a floor, *or* explicitly kept | Isothermal water constrains the slope not at all but does constrain the offset — keep it, but track the two populations separately |
 | FP07 and CTD finite over the whole kernel | |

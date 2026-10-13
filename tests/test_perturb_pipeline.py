@@ -3624,7 +3624,7 @@ class TestGapAwareRefill:
 
     _fill_nonfinite_by_interp works in index space; given the sample times and
     the merged channel's resolved max_gap it now leaves NaN any sample whose
-    bracketing finite neighbours are farther apart in time than the gate (and
+    bracketing finite neighbors are farther apart in time than the gate (and
     edge samples farther than the gate from the nearest finite one).
     """
 
@@ -3673,7 +3673,7 @@ class TestGapAwareRefill:
         sal[4:7] = np.nan
         with caplog.at_level(logging.WARNING):
             out = _scrub_salinity(sal, "epsilon", "x", t=t, max_gap=30.0)
-        # Samples 4 and 6 are within 30 s of a finite neighbour pair? No:
+        # Samples 4 and 6 are within 30 s of a finite neighbor pair? No:
         # 4 brackets (3, 7) spanning >200 s; 5 and 6 likewise. All three
         # fall back to the documented 35-PSU constant instead of a ramp.
         np.testing.assert_allclose(out[4:7], 35.0)

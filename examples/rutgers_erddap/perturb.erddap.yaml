@@ -192,7 +192,10 @@ fp07:
   # response is slower and flow-dependent. RBR CTDs are identifiable in the
   # masterdata values.
   #
-  # Set `calibrate: false` once the .p files are patched.
+  # Set `calibrate: false` once the .p files are patched. Until then perturb
+  # refuses to start, because this reference is a hotel channel. To fit per
+  # file meanwhile, add `allow_hotel_reference: true` and read the FP07
+  # notice in the run summary.
   calibrate: true
   order: 1                # a single glider deployment rarely spans the >8 degC
                           # needed to constrain an order-2 fit

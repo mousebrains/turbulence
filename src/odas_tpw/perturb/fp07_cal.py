@@ -17,10 +17,12 @@ This is a **per-file** calibration: it needs a usable reference inside every
 ``.p`` file it is asked to calibrate. That is fine for a VMP with a hull-mounted
 JAC sampling continuously alongside the FP07.
 
-It is the wrong tool when the reference is **sparse** --- a glider whose CTD ran
-on only some yos, say. Files with no reference silently keep the factory
-coefficients while their neighbours get fitted ones, so adjacent profiles end up
-on different calibrations. For that case use the deployment-scoped
+It is the wrong tool when the reference has poor **coverage** --- a glider whose
+CTD ran on only some yos, say. Files with no usable reference keep the factory
+coefficients while their neighbors get fitted ones, so adjacent profiles end up
+on different calibrations. The run summary names them (``_fp07_notices`` in
+:mod:`odas_tpw.perturb.pipeline`), and a hotel-file reference is refused unless
+``fp07.allow_hotel_reference`` is set. For that case use the deployment-scoped
 ``fp07-cal`` CLI (:mod:`odas_tpw.fp07cal`), which pools every real reference
 sample across the whole deployment, fits once, and patches the result into the
 ``.p`` files before the pipeline runs.
@@ -36,7 +38,7 @@ import re
 import warnings
 
 import numpy as np
-from scipy.signal import butter, correlate, lfilter
+from scipy.signal import butter, correlate, lfilter, lfilter_zi
 
 from odas_tpw.fp07cal.logr import BridgeParams, log_r
 from odas_tpw.processing.ct_align import shift_edge_hold
@@ -183,7 +185,20 @@ def _lowpass_filter(
 
     fc = min(fc, fs / 2.0 * 0.99)
     b, a = butter(1, fc / (fs / 2.0))
-    return np.asarray(lfilter(b, a, fp07))
+    # Start the filter at rest on the first sample. From lfilter's default zero
+    # state the output climbs from 0 to the counts' level (thousands) with time
+    # constant 1/(2 pi fc): seconds for a sparse reference. A profile starting
+    # at the top of the file -- every glider file that begins mid-dive -- then
+    # scored that ramp instead of the ocean: a synthetic probe tracking its
+    # reference exactly scored |r| = 0.09 at a 3.5 s lag, against 0.999 at 0 s
+    # with the ramp skipped.
+    # A NaN propagates through lfilter whatever the start state, so a leading
+    # one leaves the output all NaN, exactly as before; raw counts carry none.
+    x = np.asarray(fp07, dtype=np.float64)
+    if x.size == 0:
+        return x
+    out, _ = lfilter(b, a, x, zi=lfilter_zi(b, a) * x[0])
+    return np.asarray(out)
 
 
 def _calc_lag(
@@ -250,6 +265,36 @@ def _calc_lag(
         return lags_search[idx] / fs, corr_search[idx]
     idx = int(np.argmax(np.abs(corr)))
     return lags[idx] / fs, corr[idx]
+
+
+def _lag_segments(
+    T_ref: np.ndarray, fp07: np.ndarray, s: int, e: int, min_len: int
+) -> list[tuple[int, int]]:
+    """The stretches of profile ``[s, e]`` on which a lag can be scored.
+
+    A profile with no non-finite sample is returned whole, so a clean profile
+    is scored exactly as before.  Otherwise it is split at every non-finite
+    sample of either series, and each finite run of at least *min_len* samples
+    becomes its own segment.
+
+    Before this, one NaN anywhere in a profile -- a hotel gap wider than
+    ``hotel.max_gap``, blanked by the merge -- propagated through
+    :func:`_calc_lag`'s IIR filter, and the whole profile abstained: counted
+    neither as accepted nor as rejected, and so invisible in the warning.
+
+    *min_len* applies only to pieces of a split profile.  A piece shorter than
+    twice the lag search window lets the extreme searched lags overlap by
+    almost nothing, so its correlation peak can rest on a few samples.
+    """
+    good = np.isfinite(T_ref[s : e + 1]) & np.isfinite(fp07[s : e + 1])
+    if good.all():
+        return [(s, e)]
+    edges = np.flatnonzero(np.diff(np.concatenate(([0], good.astype(np.int8), [0]))))
+    return [
+        (s + int(a), s + int(b) - 1)
+        for a, b in zip(edges[::2], edges[1::2], strict=True)
+        if b - a >= min_len
+    ]
 
 
 def _polyfit_centered(
@@ -331,19 +376,27 @@ def fp07_calibrate(
         lags : dict mapping channel name -> lag in seconds
         coefficients : dict mapping channel name -> Steinhart-Hart coefficients
         info : dict of per-channel calibration stats
+        factory : dict mapping channel name -> why it KEPT the factory
+            coefficients (the lag gate, the bridge rail, too few samples).
+            Every FP07 channel the fit considered lands in exactly one of
+            ``coefficients`` and ``factory``, so a caller can report what
+            happened instead of finding out from a warning.
     """
     empty: dict = {
-        "channels": {}, "fast_channels": {}, "lags": {}, "coefficients": {}, "info": {}
+        "channels": {}, "fast_channels": {}, "lags": {}, "coefficients": {}, "info": {},
+        "factory": {},
     }
+    fp07_names = _find_fp07_channels(pf)
     if reference not in pf.channels:
         warnings.warn(f"Reference channel {reference!r} not found", stacklevel=2)
+        empty["factory"] = dict.fromkeys(
+            fp07_names, f"reference channel {reference!r} not found"
+        )
         return empty
-
-    T_ref = pf.channels[reference]
-    fp07_names = _find_fp07_channels(pf)
     if not fp07_names:
         warnings.warn("No FP07 channels found", stacklevel=2)
         return empty
+    T_ref = pf.channels[reference]
 
     # Get fall rate for low-pass filter cutoff
     from odas_tpw.rsi.profile import _smooth_fall_rate
@@ -357,13 +410,16 @@ def fp07_calibrate(
         "lags": {},
         "coefficients": {},
         "info": {},
+        "factory": {},
     }
 
     for ch_name in fp07_names:
         ch_config = _get_channel_config(pf, ch_name)
         if not ch_config:
+            result["factory"][ch_name] = "no channel config"
             continue
         if ch_name not in pf.channels_raw:
+            result["factory"][ch_name] = "no raw data"
             continue
 
         # One shared implementation of L, and a hard error on a missing bridge
@@ -373,6 +429,7 @@ def fp07_calibrate(
             bridge = BridgeParams.from_channel_config(ch_config, ch_name)
         except ValueError as exc:
             warnings.warn(f"{ch_name}: {exc}", stacklevel=2)
+            result["factory"][ch_name] = f"bridge parameters: {exc}"
             continue
 
         raw_slow = pf.channels_raw[ch_name]
@@ -400,36 +457,49 @@ def fp07_calibrate(
         corrs_list = []
         accepted: list[tuple[int, int]] = []
         n_rejected = 0
+        n_unscored = 0
+        min_piece = max(11, 2 * round(max_lag_seconds * pf.fs_slow))
         for s, e in profiles:
             if e - s < 10:
                 continue
-            lag, corr = _calc_lag(
-                T_ref[s : e + 1],
-                fp07_lp[s : e + 1],
-                pf.fs_slow,
-                max_lag_seconds=max_lag_seconds,
-                must_be_negative=must_be_negative,
-            )
-            # _calc_lag returns NaN for a flatlined / non-finite segment; drop
-            # it so it cannot poison the median.
-            if not np.isfinite(lag) or not np.isfinite(corr):
-                continue
-            # ...and drop a profile whose "best" lag correlates with nothing.
-            # Without this a fabricated reference is fitted at r ~ 0.02.
-            if abs(corr) < min_corr:
-                n_rejected += 1
-                continue
-            lags_list.append(lag)
-            corrs_list.append(corr)
-            accepted.append((s, e))
+            segments = _lag_segments(T_ref, fp07_lp, s, e, min_piece)
+            if not segments:
+                n_unscored += 1  # gaps leave no stretch long enough to score
+            for s_seg, e_seg in segments:
+                lag, corr = _calc_lag(
+                    T_ref[s_seg : e_seg + 1],
+                    fp07_lp[s_seg : e_seg + 1],
+                    pf.fs_slow,
+                    max_lag_seconds=max_lag_seconds,
+                    must_be_negative=must_be_negative,
+                )
+                # _calc_lag returns NaN for a flatlined segment; drop it so it
+                # cannot poison the median, but count it.
+                if not np.isfinite(lag) or not np.isfinite(corr):
+                    n_unscored += 1
+                    continue
+                # ...and drop a segment whose "best" lag correlates with nothing.
+                # Without this a fabricated reference is fitted at r ~ 0.02.
+                if abs(corr) < min_corr:
+                    n_rejected += 1
+                    continue
+                lags_list.append(lag)
+                corrs_list.append(corr)
+                accepted.append((s_seg, e_seg))
 
         if len(lags_list) < MIN_LAG_PROFILES:
             warnings.warn(
-                f"{ch_name}: no profile reached the lag correlation gate "
-                f"(|r| >= {min_corr:g}; {n_rejected} rejected). Leaving the "
-                f"factory calibration in place rather than fitting against a "
+                f"{ch_name}: no profile segment reached the lag correlation gate "
+                f"(|r| >= {min_corr:g}; {n_rejected} rejected, {n_unscored} "
+                f"could not be scored: flat, or gaps leave no stretch of "
+                f"{min_piece / pf.fs_slow:.0f} s). Leaving the factory "
+                f"calibration in place rather than fitting against a "
                 f"reference that does not track it.",
                 stacklevel=2,
+            )
+            result["factory"][ch_name] = (
+                f"no profile segment reached the lag gate ({n_rejected} rejected, "
+                f"{n_unscored} unscored)"
             )
             continue
 
@@ -470,11 +540,15 @@ def fp07_calibrate(
                 f"range and the calibration is not trustworthy. Skipping.",
                 stacklevel=2,
             )
+            result["factory"][ch_name] = (
+                f"{100.0 * n_clipped / L_fit.size:.1f}% of fit samples on the bridge rail"
+            )
             continue
         L_fit = L_fit[valid]
         T_ref_fit = T_ref_fit[valid]
 
         if len(L_fit) < order + 1:
+            result["factory"][ch_name] = f"{len(L_fit)} usable samples for an order-{order} fit"
             continue
 
         # ODAS warns when the in-situ temperature range is small: a
@@ -494,6 +568,7 @@ def fp07_calibrate(
             coeffs, cond = _polyfit_centered(L_fit, target, order)
         except ValueError as exc:
             warnings.warn(f"{ch_name}: {exc}", stacklevel=2)
+            result["factory"][ch_name] = str(exc)
             continue
         result["coefficients"][ch_name] = coeffs
 
@@ -523,12 +598,17 @@ def fp07_calibrate(
             n_dx = len(pf.t_fast) if pf.is_fast(dx_name) else len(pf.t_slow)
             result["fast_channels"][dx_name] = _apply_cal(pf.channels_raw[dx_name][:n_dx])
 
+        # The n_profiles* counts are of scored SEGMENTS: a profile split at a
+        # reference gap counts once per piece (a gap-free profile, every VMP
+        # cast, is one segment). n_profiles_unscored also counts a profile
+        # whose gaps left no piece long enough to score.
         result["info"][ch_name] = {
             "median_lag": median_lag,
             "lag_std": float(np.std(lags_list)),
             "median_corr": float(np.median(corrs_list)),
             "n_profiles": len(lags_list),
             "n_profiles_rejected": n_rejected,
+            "n_profiles_unscored": n_unscored,
             "n_clipped": n_clipped,
             "condition_number": cond,
             "T_range": T_range,

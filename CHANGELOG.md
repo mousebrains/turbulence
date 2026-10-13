@@ -44,6 +44,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the long window's value for the near-bed windows.
 
 ### Fixed
+- **perturb's in-pipeline FP07 fit no longer gives up on a glider file for
+  reasons unrelated to the data.** On Tanaka 2015-11-13 (Slocum, CTD every
+  4.5 s) it calibrated 3 of 12 files. It now calibrates all 12, and each fit
+  agrees with the deployment-pooled `fp07-cal` fit to within 0.6% in gradient
+  gain (median 0.9999) and 8 mK. Two defects caused it, as re-running with
+  each fix reverted in turn shows. Without the first fix, 3 of 12 files are
+  fitted; without the second, 11 (T1) and 10 (T2):
+  - One NaN in a profile's reference (a hotel gap blanked by `max_gap`)
+    passed through the lag filter and silenced the WHOLE profile, counted
+    neither as accepted nor as rejected. A profile is now split at its gaps,
+    and each finite stretch of at least twice the lag window is scored. A
+    profile with no gap is scored exactly as before.
+  - The low-pass started from zero, so its output climbed from 0 to the
+    thermistor's counts (thousands) over seconds. A profile starting at the top
+    of a file, as every glider file that begins mid-dive does, scored that
+    ramp. A synthetic probe tracking its reference exactly scored |r| = 0.09.
+    The filter now starts at rest on the first sample.
+  - **This second fix also changes VMP output, slightly, on a file that
+    starts mid-cast.** Of the 29 repo SN 479 files, 26 are bit-identical to
+    before. In the other three (0004, 0018, 0029, starting at 128, 82 and
+    134 dbar) the first profile begins at sample 0, its lag score rises from
+    |r| 0.10-0.32 to 0.93-0.97, and it now enters the fit: one more profile,
+    at most 0.56 mK change in temperature, and no change in lag. With the
+    start-up fix alone reverted, all 29 are bit-identical, so the gap split
+    changes nothing on gap-free profiles.
 - **`perturb-plot mixing` failed on every bottom-up product.** It merges
   `diss_combo` and `chi_combo` by position and demanded identical bin axes, but
   near the bed epsilon's 1.0 s BBL window reaches bins chi's 2.0 s window does
@@ -65,6 +90,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the header's 1 ms resolution.
 
 ### Changed
+- **An in-pipeline FP07 fit against a HOTEL reference is refused unless
+  `fp07.allow_hotel_reference: true`.** That fit is per `.p` file, so a file
+  the glider CTD did not cover keeps the factory coefficients while its
+  neighbors are fitted. In our own products, Taiwan13 husker carries T1
+  on factory coefficients in 40 of 58 files. perturb now stops before any
+  stage and names both ways forward: `fp07-cal` first (one calibration for
+  the deployment), or the switch. The switch is excluded from the output-
+  directory hash. The eight shipped glider recipes set it, so they run as
+  before.
+- **The run summary names every FP07 channel that kept the factory
+  coefficients**, per channel, with the file count and the most common kind of
+  reason, then the files. That used to be one warning per file in the worker
+  logs. A new `notices` list on `PipelineResult` carries it; notices neither
+  fail the run nor block the cache. The summary clips each line, so the notices
+  are also logged whole, at WARNING. They cover the files processed in that
+  run: a cached re-run reports none. `fp07_calibrate` returns a `factory` map
+  giving the reason for every channel it did not fit. Its `n_profiles*` counts
+  are now of scored segments (one per gap-free profile, so unchanged on a
+  VMP).
 - **SN 132's `diff_gain = 0.09` is on the right rung (issue #178, still open
   on the fine value).** This supersedes two 0.4.0 notes below: that "the
   ladder points the other way", and the `--diff-gain` entry's "real miss ...

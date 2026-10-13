@@ -23,7 +23,7 @@ TWO-STAGE CUT.
   2. Within a run, positions are projected onto that RUN's own principal axis
      (per-run, not survey-wide: in 2022 the line groups sit in different places
      and orientations) and split into MONOTONIC LEGS. A leg shorter than
-     ``MIN_LEG_KM`` along-axis is merged into its neighbour, which is what
+     ``MIN_LEG_KM`` along-axis is merged into its neighbor, which is what
      keeps GPS jitter and the slow wander of a tow-yo from manufacturing turns.
 
 Why not ``perturb mk-sections``: the built-in cuts on a gap only, so on this

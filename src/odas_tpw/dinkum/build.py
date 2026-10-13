@@ -245,7 +245,7 @@ def _apply_max_gap(
         if np.any(too_wide):
             target = np.flatnonzero(inside)[too_wide]
             # An output time that coincides EXACTLY with a source sample is
-            # measured, not interpolated, so a wide neighbouring gap must not
+            # measured, not interpolated, so a wide neighboring gap must not
             # blank it. This is the common case rather than a corner: every
             # sensor riding the base clock lands on the output times exactly,
             # so without this a max_gap would NaN the real sample on each side
@@ -286,7 +286,7 @@ def project_sensor(
     samples, because it is non-linear and would otherwise be interpolated
     across in its raw form. The range check runs next, still on the SOURCE
     samples and so in transformed units, so an out-of-range spike is removed
-    rather than being smeared into its neighbours.
+    rather than being smeared into its neighbors.
     """
     src_t = np.asarray(src_t, dtype=np.float64)
     src_v = np.asarray(src_v, dtype=np.float64)
