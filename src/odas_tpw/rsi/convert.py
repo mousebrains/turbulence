@@ -66,9 +66,15 @@ def _classify_channels(pf: "PFile") -> dict:
     gradt_names = sorted(
         n for n in pf.channels if pf.channel_info[n]["type"] == "therm" and pf.is_fast(n)
     )
-    cond_ctd_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "jac_c")
+    # jac_* is the JFE Advantech readout, rsijac_* RSI's own JAC-CT board; both
+    # are the CTD's conductivity and temperature.
+    cond_ctd_names = sorted(
+        n for n in pf.channels if pf.channel_info[n]["type"] in ("jac_c", "rsijac_c")
+    )
 
-    temp_ctd_name = next((n for n in pf.channels if pf.channel_info[n]["type"] == "jac_t"), None)
+    temp_ctd_name = next(
+        (n for n in pf.channels if pf.channel_info[n]["type"] in ("jac_t", "rsijac_t")), None
+    )
     pitch_name = roll_name = None
     for n in pf.channels:
         if pf.channel_info[n]["type"] == "inclxy":

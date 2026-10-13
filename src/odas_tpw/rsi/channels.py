@@ -5,6 +5,7 @@ Channel conversion functions: raw counts -> physical units.
 Ported from the ODAS MATLAB Library convert_odas.m.
 """
 
+import re
 import warnings
 from typing import Any
 
@@ -88,10 +89,16 @@ class CalRecorder(dict[str, Any]):
         for key in sorted(self._used):
             if key in _NON_CAL_KEYS:
                 continue
+            raw = dict.__getitem__(self, key)
             try:
-                value = float(dict.__getitem__(self, key))
+                value = float(raw)
             except (TypeError, ValueError):
-                continue
+                # RSI writes some coefficients as arithmetic ODAS evals
+                # ("2^28", "10.88/100"); record what they evaluate to.
+                try:
+                    value = _config_number(raw, key=key)
+                except ValueError:
+                    continue
             if np.isfinite(value):
                 out[key] = value
         return out
@@ -627,6 +634,181 @@ def convert_jac_t(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray,
     return np.polyval([f, e, d_coef, c, b, a], d), "deg_C"
 
 
+_NUMBER_RE = re.compile(r"(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
+_MAX_EXPR_LEN = 200
+
+
+def _config_number(
+    s: Any, default: float | None = None, *, key: str = "value", channel: str = "?"
+) -> float:
+    """A config value that ODAS ``eval``s, such as ``2^28`` or ``10.88/100``.
+
+    ODAS ``convert_odas.m`` passes every parameter string through MATLAB
+    ``eval``, so RSI writes some coefficients as arithmetic.  ``float()`` cannot
+    read those, and ``_safe_float`` would silently return 0.
+
+    A small parser with MATLAB's rules, not ``eval``: decimal numbers (with an
+    optional exponent), parentheses, ``+ - * /`` and ``^`` for power.  As in
+    MATLAB, ``^`` binds tighter than a unary sign (``-2^2`` is -4), is
+    LEFT-associative (``2^3^2`` is 64) and may take a signed exponent
+    (``2^-3``).  Anything else -- names, ``Inf``, hex, underscores, Python's
+    ``**`` -- is refused, as is a result that is not finite.  Every failure
+    is a ``ValueError`` naming *channel* and *key*.  ``default`` applies only
+    when *s* is absent; with no default an absent value is an error.
+    """
+    where = f"{channel}: {key}"
+    if s is None or (isinstance(s, str) and not s.strip()):
+        if default is None:
+            raise ValueError(f"{where} is required and missing from the channel config")
+        return default
+    if isinstance(s, (int, float)) and not isinstance(s, bool):
+        value = float(s)
+    else:
+        text = str(s).replace(" ", "").replace("\t", "")
+        if len(text) > _MAX_EXPR_LEN:
+            raise ValueError(f"{where} = {s!r} is too long to be a coefficient")
+        pos = 0
+
+        def fail() -> ValueError:
+            return ValueError(f"{where} = {s!r} is not a numeric expression")
+
+        def peek() -> str:
+            return text[pos] if pos < len(text) else ""
+
+        def primary() -> float:
+            nonlocal pos
+            if peek() == "(":
+                pos += 1
+                v = expr()
+                if peek() != ")":
+                    raise fail()
+                pos += 1
+                return v
+            m = _NUMBER_RE.match(text, pos)
+            if m is None:
+                raise fail()
+            pos = m.end()
+            return float(m.group())
+
+        def signed() -> float:
+            # A unary sign applies to the whole power: -2^2 = -(2^2).
+            nonlocal pos
+            sign = 1.0
+            while peek() in "+-" and peek():
+                if peek() == "-":
+                    sign = -sign
+                pos += 1
+            return sign * power()
+
+        def power() -> float:
+            nonlocal pos
+            v = primary()
+            while peek() == "^":
+                pos += 1
+                exp_sign = 1.0
+                while peek() in "+-" and peek():
+                    if peek() == "-":
+                        exp_sign = -exp_sign
+                    pos += 1
+                v = v ** (exp_sign * primary())  # left-associative, as MATLAB
+            return v
+
+        def term() -> float:
+            nonlocal pos
+            v = signed()
+            while peek() in "*/" and peek():
+                op = peek()
+                pos += 1
+                rhs = signed()
+                v = v * rhs if op == "*" else v / rhs
+            return v
+
+        def expr() -> float:
+            nonlocal pos
+            v = term()
+            while peek() in "+-" and peek():
+                op = peek()
+                pos += 1
+                rhs = term()
+                v = v + rhs if op == "+" else v - rhs
+            return v
+
+        try:
+            value = expr()
+        except (ZeroDivisionError, OverflowError, RecursionError) as exc:
+            raise ValueError(f"{where} = {s!r} does not evaluate to a finite number") from exc
+        if pos != len(text):
+            raise fail()
+        if isinstance(value, complex):
+            raise ValueError(f"{where} = {s!r} is complex")
+    if not np.isfinite(value):
+        raise ValueError(f"{where} = {s!r} does not evaluate to a finite number")
+    return float(value)
+
+
+def _nonzero(value: float, key: str, channel: str) -> float:
+    """A divisor: zero would give inf or a ZeroDivisionError downstream."""
+    if value == 0.0:
+        raise ValueError(f"{channel}: {key} = 0 is a divisor and cannot be zero")
+    return value
+
+
+def convert_rsijac_c(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
+    """RSI's JAC-CT board, conductivity: Q3.28 fixed point → mS/cm.
+
+    Matches ODAS ``convert_odas.m`` ``odas_rsijac_c_internal`` (WID, 2017-05):
+    ``counts = input / division_factor``, then ``b * counts + a``, then
+    ``(counts * gain - y_offset) / cell_constant`` [S/m], times 10.  The defaults
+    are ODAS's; ``cell_constant`` has none and is required.  Distinct from
+    ``jac_c``, the JFE Advantech readout, which packs a current/voltage pair.
+    Unlike ODAS, a zero or non-finite coefficient raises instead of yielding inf.
+    """
+    ch = str(params.get("name", "?"))
+
+    def num(key: str, default: float | None = None) -> float:
+        return _config_number(params.get(key), default, key=key, channel=ch)
+
+    df = _nonzero(num("division_factor", 2.0**28), "division_factor", ch)
+    gain = num("gain", 10.88 / 100)
+    offset = num("y_offset", 2.86e-7)
+    a = num("a", 0.0)
+    b = num("b", 1.0)
+    cell = _nonzero(num("cell_constant"), "cell_constant", ch)
+    counts = b * (np.asarray(data, dtype=np.float64) / df) + a
+    return (counts * gain - offset) / cell * 10.0, "mS_cm-1"
+
+
+def convert_rsijac_t(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
+    """RSI's JAC-CT board, temperature: Q3.28 fixed point → °C.
+
+    Matches ODAS ``convert_odas.m`` ``odas_rsijac_t_internal``: ``counts =
+    input / division_factor``, ``b * counts + a``, then the cubic
+    Steinhart-Hart form ``1/T = 1/T_0 + ln(c)/beta_1 + ln(c)^2/beta_2 +
+    ln(c)^3/beta_3``.  ODAS reads ``division_factor`` (default 2^28) and
+    ignores the ``scale_factor`` key RSI's SeaExplorer configs carry; so does
+    this.  A non-positive count has no logarithm and becomes NaN.  ``T_0`` and
+    the three betas are required and must be non-zero (each is a divisor);
+    ODAS would return -273.15 C or inf instead.
+    """
+    ch = str(params.get("name", "?"))
+
+    def num(key: str, default: float | None = None) -> float:
+        return _config_number(params.get(key), default, key=key, channel=ch)
+
+    df = _nonzero(num("division_factor", 2.0**28), "division_factor", ch)
+    a = num("a", 0.0)
+    b = num("b", 1.0)
+    t0 = _nonzero(num("t_0"), "t_0", ch)
+    b1 = _nonzero(num("beta_1"), "beta_1", ch)
+    b2 = _nonzero(num("beta_2"), "beta_2", ch)
+    b3 = _nonzero(num("beta_3"), "beta_3", ch)
+    counts = b * (np.asarray(data, dtype=np.float64) / df) + a
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lc = np.log(np.where(counts > 0, counts, np.nan))
+        kelvin = 1.0 / (1.0 / t0 + lc / b1 + lc**2 / b2 + lc**3 / b3)
+    return kelvin - 273.15, "deg_C"
+
+
 def convert_raw(data: np.ndarray, params: dict[str, Any]) -> tuple[np.ndarray, str]:
     """Passthrough: return raw counts unchanged."""
     return data, "counts"
@@ -753,6 +935,8 @@ CONVERTERS = {
     "inclt": convert_inclt,
     "jac_c": convert_jac_c,
     "jac_t": convert_jac_t,
+    "rsijac_c": convert_rsijac_c,
+    "rsijac_t": convert_rsijac_t,
     "sbt": convert_sbt,
     "sbc": convert_sbc,
     "raw": convert_raw,

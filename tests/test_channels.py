@@ -835,3 +835,201 @@ class TestConvertMagn:
 
         assert CONVERTERS["accel"] is convert_accel
         assert CONVERTERS["magn"] is convert_magn
+
+
+# RSI's JAC-CT board on the MicroRider MR-SE SN 240 (SeaExplorer SEA025, 2017).
+# Coefficients are that file's config, verbatim; the expected values are ODAS
+# v4.5.1 convert_odas.m on the same counts (computed in MATLAB, 2026-10-13).
+_RSIJAC_C_PARAMS = {
+    "type": "rsijac_c",
+    "division_factor": "2^28",
+    "cell_constant": "2.692219e-2",
+    "gain": "10.88/100",
+    "y_offset": "2.87e-7",
+    "a": "0",
+    "b": "1",
+}
+_RSIJAC_T_PARAMS = {
+    "type": "rsijac_t",
+    "scale_factor": "2^28",
+    "t_0": "288.4393",
+    "beta_1": "3905.963",
+    "beta_2": "3.115573e5",
+    "beta_3": "1.265211e7",
+}
+
+
+class TestConfigNumber:
+    """ODAS evals config values; RSI writes some as arithmetic. MATLAB's rules."""
+
+    def test_matlab_arithmetic(self):
+        from odas_tpw.rsi.channels import _config_number
+
+        assert _config_number("2^28") == 2.0**28
+        assert _config_number("10.88/100") == pytest.approx(0.1088, rel=1e-15)
+        assert _config_number(" -2.87e-7 ") == -2.87e-7
+        assert _config_number("(1+2)*3") == 9.0
+        assert _config_number("1e-3") == 1e-3
+        assert _config_number("3.0e5") == 3.0e5
+        assert _config_number(".5") == 0.5
+
+    def test_matlab_power_rules(self):
+        from odas_tpw.rsi.channels import _config_number
+
+        assert _config_number("-2^2") == -4.0  # ^ binds tighter than unary minus
+        assert _config_number("2^3^2") == 64.0  # left-associative, as MATLAB
+        assert _config_number("2^-3") == 0.125  # signed exponent
+        assert _config_number("2*-3") == -6.0
+
+    def test_default_only_when_absent(self):
+        from odas_tpw.rsi.channels import _config_number
+
+        assert _config_number(None, 5.0) == 5.0
+        assert _config_number("", 5.0) == 5.0
+        assert _config_number("0", 5.0) == 0.0
+        with pytest.raises(ValueError, match=r"JAC_T: t_0 is required and missing"):
+            _config_number(None, key="t_0", channel="JAC_T")
+
+    def test_rejects_anything_but_arithmetic(self):
+        from odas_tpw.rsi.channels import _config_number
+
+        for bad in ("__import__('os')", "a + 1", "2 ** 28", "1e5)", "[1]", "0x10", "1_000",
+                    "True", "Inf", "NaN", "pi", "2^", "((1)"):
+            with pytest.raises(ValueError, match="not a numeric expression"):
+                _config_number(bad, 1.0, key="k", channel="JAC_C")
+
+    def test_non_finite_results_are_value_errors(self):
+        from odas_tpw.rsi.channels import _config_number
+
+        for bad in ("1/0", "0^-1", "10^400", "(-8)^(1/3)", "(" * 150 + "1" + ")" * 150):
+            with pytest.raises(ValueError):
+                _config_number(bad, 1.0)
+
+
+class TestConvertRsijac:
+    def test_temperature_matches_odas(self):
+        from odas_tpw.rsi.channels import convert_rsijac_t
+
+        counts = np.array([175842112.0, 268435456.0, 447612843.0])
+        result, units = convert_rsijac_t(counts, _RSIJAC_T_PARAMS)
+        assert units == "deg_C"
+        np.testing.assert_allclose(
+            result, [24.5399056830441, 15.2893, 4.72883771486283], rtol=0, atol=1e-11
+        )
+
+    def test_unit_count_is_t0(self):
+        # ln(1) = 0, so a count equal to the division factor reads T_0.
+        from odas_tpw.rsi.channels import convert_rsijac_t
+
+        result, _ = convert_rsijac_t(np.array([2.0**28]), _RSIJAC_T_PARAMS)
+        assert result[0] == pytest.approx(288.4393 - 273.15, abs=1e-12)
+
+    def test_reads_division_factor_not_scale_factor(self):
+        # ODAS ignores scale_factor; a different value there must change nothing.
+        from odas_tpw.rsi.channels import convert_rsijac_t
+
+        counts = np.array([175842112.0])
+        base, _ = convert_rsijac_t(counts, _RSIJAC_T_PARAMS)
+        other, _ = convert_rsijac_t(counts, {**_RSIJAC_T_PARAMS, "scale_factor": "2^20"})
+        np.testing.assert_array_equal(base, other)
+
+    def test_nonpositive_count_is_nan(self):
+        from odas_tpw.rsi.channels import convert_rsijac_t
+
+        result, _ = convert_rsijac_t(np.array([0.0, -5.0]), _RSIJAC_T_PARAMS)
+        assert np.all(np.isnan(result))
+
+    def test_conductivity_matches_odas(self):
+        from odas_tpw.rsi.channels import convert_rsijac_c
+
+        counts = np.array([346350063.0, 268435456.0, 217810216.0])
+        result, units = convert_rsijac_c(counts, _RSIJAC_C_PARAMS)
+        assert units == "mS_cm-1"
+        np.testing.assert_allclose(
+            result, [52.1426398880382, 40.4126532796923, 32.7910607425665], rtol=0, atol=1e-11
+        )
+
+    def test_conductivity_needs_cell_constant(self):
+        from odas_tpw.rsi.channels import convert_rsijac_c
+
+        params = {k: v for k, v in _RSIJAC_C_PARAMS.items() if k != "cell_constant"}
+        with pytest.raises(ValueError, match="cell_constant is required"):
+            convert_rsijac_c(np.array([2.0**28]), params)
+
+    # Non-trivial a, b and division_factor, with gain and y_offset OMITTED so
+    # ODAS's defaults apply. Expected values: ODAS v4.5.1 convert_odas.m on a
+    # config string with exactly these stanzas (MATLAB, 2026-10-13). These pin
+    # the order of operations (b*x + a after the division) and both defaults.
+    def test_conductivity_polynomial_and_defaults_match_odas(self):
+        from odas_tpw.rsi.channels import convert_rsijac_c
+
+        params = {"name": "JAC_C", "division_factor": "2^27", "cell_constant": "2.7e-2",
+                  "a": "0.01", "b": "1.002"}
+        counts = np.array([346350063.0, 268435456.0, 217810216.0])
+        result, _ = convert_rsijac_c(counts, params)
+        np.testing.assert_allclose(
+            result, [104.595784594346, 81.1566348148148, 65.9269798287512], rtol=0, atol=1e-10
+        )
+
+    def test_temperature_polynomial_matches_odas(self):
+        from odas_tpw.rsi.channels import convert_rsijac_t
+
+        params = {"name": "JAC_T", "division_factor": "2^27", "t_0": "288.4393",
+                  "beta_1": "3905.963", "beta_2": "3.115573e5", "beta_3": "1.265211e7",
+                  "a": "-0.003", "b": "0.998"}
+        counts = np.array([175842112.0, 268435456.0, 447612843.0])
+        result, _ = convert_rsijac_t(counts, params)
+        np.testing.assert_allclose(
+            result, [9.71797099107766, 1.19484829557075, -8.55265411850701], rtol=0, atol=1e-10
+        )
+
+    @pytest.mark.parametrize("key", ["t_0", "beta_1", "beta_2", "beta_3", "division_factor"])
+    def test_temperature_zero_divisor_is_refused(self, key):
+        from odas_tpw.rsi.channels import convert_rsijac_t
+
+        params = {**_RSIJAC_T_PARAMS, "name": "JAC_T", key: "0"}
+        with pytest.raises(ValueError, match=rf"JAC_T: {key} = 0 is a divisor"):
+            convert_rsijac_t(np.array([2.0**28]), params)
+
+    @pytest.mark.parametrize("key", ["cell_constant", "division_factor"])
+    def test_conductivity_zero_divisor_is_refused(self, key):
+        from odas_tpw.rsi.channels import convert_rsijac_c
+
+        params = {**_RSIJAC_C_PARAMS, "name": "JAC_C", key: "0"}
+        with pytest.raises(ValueError, match=rf"JAC_C: {key} = 0 is a divisor"):
+            convert_rsijac_c(np.array([2.0**28]), params)
+
+    def test_expression_coefficients_reach_provenance(self):
+        # CalRecorder used float() and silently dropped "2^28" and "10.88/100".
+        from odas_tpw.rsi.channels import CalRecorder, convert_rsijac_c
+
+        rec = CalRecorder({**_RSIJAC_C_PARAMS, "name": "JAC_C"})
+        convert_rsijac_c(np.array([2.0**28]), rec)
+        cal = rec.calibration()
+        assert cal["division_factor"] == 2.0**28
+        assert cal["gain"] == pytest.approx(0.1088, rel=1e-15)
+        assert cal["cell_constant"] == 2.692219e-2
+
+    def test_rsi_tpw_nc_files_them_as_the_ctd(self):
+        # convert._classify_channels used to know only jac_c/jac_t, so these
+        # were written as supplementary channels and COND/TEMP_CTD came out empty.
+        from odas_tpw.rsi.convert import _classify_channels
+
+        class StubPF:
+            def __init__(self):
+                self.channels = {"JAC_C": object(), "JAC_T": object()}
+                self.channel_info = {"JAC_C": {"type": "rsijac_c"}, "JAC_T": {"type": "rsijac_t"}}
+
+            def is_fast(self, name):
+                return False
+
+        ch = _classify_channels(StubPF())
+        assert ch["cond_ctd"] == ["JAC_C"]
+        assert ch["temp_ctd"] == "JAC_T"
+        assert "JAC_C" not in ch["supplementary"] and "JAC_T" not in ch["supplementary"]
+
+    def test_registered_in_converters(self):
+        from odas_tpw.rsi.channels import convert_rsijac_c, convert_rsijac_t
+
+        assert CONVERTERS["rsijac_c"] is convert_rsijac_c
+        assert CONVERTERS["rsijac_t"] is convert_rsijac_t

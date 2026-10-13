@@ -7,6 +7,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Converters for RSI's own JAC-CT board, `rsijac_t` and `rsijac_c`.** ODAS
+  has had them since 2017 (`convert_odas.m`, WID); this package did not, so a
+  MicroRider carrying that board kept `JAC_T` and `JAC_C` in raw Q3.28 counts
+  (~3e8) under a "No converter for type" warning. perturb runs on, so every
+  salinity, density and N² it then derives is garbage. Found on the MR-SE
+  SN 240 of SeaExplorer SEA025 (Tanaka et al. 2022). The port matches ODAS
+  v4.5.1 on every one of the file's 577,344 samples (to 6e-14), and JAC_T
+  sits within 9 mK (median) of the FP07.
+  - RSI writes some of these coefficients as arithmetic (`2^28`,
+    `10.88/100`), which ODAS `eval`s and `float()` cannot read. A new
+    `_config_number` parses them with MATLAB's rules: `^` binds tighter than
+    a unary sign and is left-associative (`2^3^2` is 64). Names, `Inf`, hex,
+    `**` and non-finite results are refused with a `ValueError` naming the
+    channel and key.
+  - Like ODAS, `rsijac_t` reads `division_factor` (default 2^28) and ignores
+    the `scale_factor` key RSI's SeaExplorer configs carry.
+  - Unlike ODAS, a zero divisor (`T_0`, a beta, `cell_constant`,
+    `division_factor`) raises instead of returning −273.15 °C or inf.
+  - Expression-valued coefficients now reach the `cal_*` provenance; `float()`
+    dropped them there.
+  - `rsi-tpw nc` files the new types as the CTD (`COND_CTD`/`TEMP_CTD`), not
+    as supplementary channels, and `rsi-tpw bench` range-checks `rsijac_t`
+    like `jac_t`.
 - **The v0.4.0 version DOI** (`10.5281/zenodo.22699141`) in `CITATION.cff`,
   the README and the suggested manuscript wording. It lands one commit behind
   the tag by necessity: Zenodo mints a version DOI only when the GitHub Release
