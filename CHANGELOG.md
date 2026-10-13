@@ -12,8 +12,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the tag by necessity: Zenodo mints a version DOI only when the GitHub Release
   fires, and its GitHub integration cannot reserve one beforehand
   (zenodo-rdm#831).
+- **chi takes epsilon's window layout: `anchor` and the `bbl_*` keys under
+  `[chi]`.** chi laid out its own windows, always top-anchored, and refused
+  these keys, so a bottom-up product had bottom-anchored epsilon and top-down
+  chi. Its deepest window center then sat ~1.2 m above the bed: on SUNRISE
+  2021/Pelican/SN194, chi occupancy was 0.0% at 0.62 m against epsilon's 95.7%,
+  and Gamma and K_T had no near-bed values. Both paths now take their layout
+  from one helper, `scor160.l3.window_groups`. `L3ChiData.dof_spec` is per
+  window, because a shorter BBL window averages fewer FFT segments and the DOF
+  gates chi's non-detection floor. The defaults (`anchor: top`, no BBL windows)
+  are bit-identical to before: 167 variables in 11 epsilon, chi and pipeline
+  outputs from `ARCTERX_Thompson_2025_SN479_0006.p` match exactly. The
+  canonical config is unchanged too: with the engine fingerprint pinned, all
+  308 stage hashes of the 28 example recipes that load on 0.4.0 match. (The
+  fingerprint itself re-versions products, as it does for any engine change.)
+  The 18 SUNRISE bottom-up recipes under `examples/` now set the chi keys
+  their products were built with.
+
+  The layout is now checked when the config loads, in both sections: an
+  `anchor` other than `top`/`bottom` and a BBL window shorter than two FFT
+  segments are refused (both used to fail per profile at run time, the second
+  inside `csd_matrix_batch`, leaving an empty stage directory), and `bbl_*`
+  under `anchor: top`, which is ignored, now warns. A `bbl_overlap` or
+  `bbl_extent` given in samples beside a `bbl_diss_sec` window now reaches the
+  stage hash; it used to be dropped, so changing it reused a stale product.
+
+  **Known limitation, shared with epsilon's BBL windows since #203:** products
+  still carry ONE `diss_length` and `dof_spec` per file, so the consumers that
+  read them treat a BBL window as a full-length one. The N2/dTdz half-window
+  behind Gamma and K_T, chi's `chiLnSigma`, and epsilon's `num_ffts` all use
+  the long window's value for the near-bed windows.
 
 ### Fixed
+- **`perturb-plot mixing` failed on every bottom-up product.** It merges
+  `diss_combo` and `chi_combo` by position and demanded identical bin axes, but
+  near the bed epsilon's 1.0 s BBL window reaches bins chi's 2.0 s window does
+  not (SUNRISE 2021/Pelican/SN194: 29 bins against 28). The merge now
+  reindexes onto the primary product's bins by value, which is exact on a
+  shared lattice and leaves the missing bins NaN. It warns on every reindex,
+  and refuses when the two are binned at different widths
+  (`binning.diss_width` vs `binning.chi_width`), when fewer than two bins
+  match, or when the cast counts differ. Existing products need no rebuild.
 - **`cutp` / `extract_pfile_segment` stamped segments early.** For
   `start_record > 0` it advanced the record-0 header clock by the nominal
   config `recsize` (1.0 s) per record, but a record lasts `data_words /

@@ -142,6 +142,16 @@ epsilon:
   fom_max: null
 
 chi:
+  # chi laid out like epsilon. chi runs its OWN L3 path, so anchor/bbl_* do not
+  # reach it unless set here: with epsilon bottom-anchored and chi left
+  # top-down, a 2.0 s window leaves chi's deepest center ~1.2 m above the bed
+  # (measured occupancy 0.0% at 0.62 m vs epsilon's 95.7%) and Gamma/K_T
+  # inherit the hole. bbl_diss_sec 1.0 is the FLOOR here -- a window must hold
+  # two FFT segments and fft_sec is 0.5.
+  anchor: "bottom"
+  bbl_diss_sec: 1.0
+  bbl_overlap_sec: null
+  bbl_extent_sec: 3.0
   enable: true
   fft_sec: 0.5
   diss_sec: 2.0

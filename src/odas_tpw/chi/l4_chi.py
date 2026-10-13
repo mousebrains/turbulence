@@ -69,6 +69,25 @@ class L4ChiData:
         return int(self.chi.shape[0])
 
 
+def _dof_at(l3_chi, j: int) -> float:
+    """Spectral DOF for window *j*.
+
+    dof_spec is PER WINDOW: with a BBL group the near-bed windows are shorter
+    and average fewer FFT segments, so a single value would mis-gate the
+    non-detection floor for exactly those estimates. A scalar or an empty array
+    is accepted for callers that predate the change.
+    """
+    import numpy as np
+
+    dof = getattr(l3_chi, "dof_spec", 0.0)
+    arr = np.atleast_1d(np.asarray(dof, dtype=float))
+    if arr.size == 0:
+        return 0.0
+    if arr.size == 1:
+        return float(arr[0])
+    return float(arr[j]) if 0 <= j < arr.size else 0.0
+
+
 def _process_l4_chi(
     l3_chi: L3ChiData,
     chi_func,
@@ -273,7 +292,7 @@ def process_l4_chi_epsilon(
             W,
             spectrum_model,
             kappa_T,
-            l3_chi.dof_spec,
+            _dof_at(l3_chi, j),
         )
         return chi_val, epsilon_val, kB_val, K_max_val, fom_val, K_max_ratio_val, var_res_val
 
@@ -306,7 +325,7 @@ def process_l4_chi_fit(
     L4ChiData
     """
 
-    def _chi_fit_func(_j, _ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff):
+    def _chi_fit_func(j, _ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff):
         if fit_method == "iterative":
             (kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val, var_res_val) = (
                 _iterative_fit(
@@ -321,7 +340,7 @@ def process_l4_chi_fit(
                     W,
                     spectrum_model,
                     kappa_T,
-                    l3_chi.dof_spec,
+                    _dof_at(l3_chi, j),
                 )
             )
         else:
@@ -357,7 +376,7 @@ def process_l4_chi_fit(
                 W,
                 spectrum_model,
                 kappa_T,
-                l3_chi.dof_spec,
+                _dof_at(l3_chi, j),
             )
             kB_prev = result.kB
             for _ in range(2):
@@ -376,7 +395,7 @@ def process_l4_chi_fit(
                     W,
                     spectrum_model,
                     kappa_T,
-                    l3_chi.dof_spec,
+                    _dof_at(l3_chi, j),
                 )
                 if (
                     np.isfinite(result.kB)

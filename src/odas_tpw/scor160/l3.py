@@ -72,7 +72,7 @@ def _apply_macoun_lueck(kcyc: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def _section_groups(
+def section_groups(
     sec_id: float,
     sec_start: int,
     sec_end: int,
@@ -152,6 +152,60 @@ def _section_groups(
     return groups
 
 
+#: Backwards-compatible alias. The window layout is now shared with the chi
+#: path (``chi/l3_chi.py``), so it is public; the private name predates that.
+_section_groups = section_groups
+
+
+def window_groups(
+    section_number: np.ndarray, params: L3Params
+) -> list[tuple[float, np.ndarray, int]]:
+    """Every window group for every section, derived from *params*.
+
+    The single place where an :class:`L3Params` becomes a window layout. Both
+    L3 paths call it -- the shear path in this module and the chi path in
+    ``chi/l3_chi.py`` -- because they are two pipelines that look like one, and
+    the last time they each did their own layout the bottom anchor reached only
+    the shear side: chi kept marching down from the top of every section, so a
+    "bottom-up" product had bottom-anchored epsilon and top-down chi, with no
+    chi at all in the bottom ~1.2 m.
+
+    Returns ``(sec_id, starts, diss_length)`` per group. With ``bbl_diss_length``
+    set a section yields TWO groups of different length, so callers must treat
+    ``diss_length`` as per-group -- notably for anything derived from it, such
+    as the number of averaged FFT segments and hence the spectral DOF.
+    """
+    diss_step = max(params.diss_length - params.overlap, 1)
+    # Not clamped: a zero step falls back to half a BBL window in
+    # section_groups, as process_l3 did before this helper existed.
+    bbl_step = (
+        params.bbl_diss_length - params.bbl_overlap
+        if params.bbl_diss_length
+        else None
+    )
+    sections = np.unique(section_number)
+    sections = sections[sections > 0]
+    groups: list[tuple[float, np.ndarray, int]] = []
+    for sec_id in sections:
+        idx = np.where(section_number == sec_id)[0]
+        if len(idx) == 0:
+            continue
+        groups.extend(
+            section_groups(
+                sec_id,
+                int(idx[0]),
+                int(idx[-1]) + 1,
+                params.diss_length,
+                diss_step,
+                anchor=params.anchor,
+                bbl_diss_length=params.bbl_diss_length,
+                bbl_step=bbl_step,
+                bbl_extent=params.bbl_extent,
+            )
+        )
+    return groups
+
+
 def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     """Compute L3 wavenumber spectra from L2 cleaned time series.
 
@@ -170,9 +224,8 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     """
     fs = params.fs_fast
     nfft = params.fft_length
-    diss_length = params.diss_length
-    diss_overlap = params.overlap
-    diss_step = diss_length - diss_overlap
+    # Window length and step are per-GROUP now (a BBL group is shorter) and
+    # come from window_groups() below, with the rest of the layout.
     n_freq = nfft // 2 + 1
 
     n_shear = l2.shear.shape[0]
@@ -192,32 +245,7 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     all_bad_frac = []
     all_interp_frac = []
 
-    sections = np.unique(l2.section_number)
-    sections = sections[sections > 0]
-
-    groups: list[tuple[float, np.ndarray, int]] = []
-    for sec_id in sections:
-        mask = l2.section_number == sec_id
-        idx = np.where(mask)[0]
-        if len(idx) == 0:
-            continue
-        groups.extend(
-            _section_groups(
-                sec_id,
-                int(idx[0]),
-                int(idx[-1]) + 1,
-                diss_length,
-                diss_step,
-                anchor=params.anchor,
-                bbl_diss_length=params.bbl_diss_length,
-                bbl_step=(
-                    params.bbl_diss_length - params.bbl_overlap
-                    if params.bbl_diss_length
-                    else None
-                ),
-                bbl_extent=params.bbl_extent,
-            )
-        )
+    groups = window_groups(l2.section_number, params)
 
     for sec_id, starts, diss_length_g in groups:
         n_windows = len(starts)

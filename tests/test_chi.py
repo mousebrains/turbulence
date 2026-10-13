@@ -2379,3 +2379,182 @@ class TestEpsilonDsToL4DataAllNaN:
         # The all-NaN window stays NaN (the fallback is all-NaN there too).
         assert np.isnan(l4.epsi_final[2])
         assert np.isfinite(l4.epsi_final[0])
+
+
+# --- chi window anchoring ----------------------------------------------------
+#
+# The bottom-up work originally reached the SHEAR path only. Chi kept a
+# top-anchored layout, so on a bottom-anchored product a 2.0 s window left
+# chi's deepest center ~1.2 m above the seabed: measured on SUNRISE
+# 2021/Pelican/SN194, chi occupancy was 0.0% at 0.62 m and 0.4% at 0.88 m
+# against epsilon's 95.7%. Gamma and K_T inherit that hole.
+
+
+class TestChiAnchor:
+    def test_chi_shares_the_shear_path_window_layout(self):
+        """Not a second implementation: l3_chi must call the same helper, or
+        the two paths can silently drift apart on where windows sit."""
+        import inspect
+
+        from odas_tpw.chi import l3_chi
+
+        src = inspect.getsource(l3_chi)
+        assert "window_groups(" in src
+        assert "np.arange(n_windows) * diss_step" not in src, (
+            "l3_chi is laying windows out itself again instead of using "
+            "scor160.l3.window_groups"
+        )
+
+    def test_top_anchor_is_the_historical_layout(self):
+        """anchor='top' must be bit-identical to the pre-feature behavior:
+        first window at sec_start, marching down on diss_step."""
+        import numpy as np
+
+        from odas_tpw.scor160.l3 import section_groups
+
+        _, starts, dl = section_groups(1.0, 0, 5000, 1024, 512, anchor="top")[0]
+        assert dl == 1024
+        n = (5000 - 1024) // 512 + 1
+        np.testing.assert_array_equal(starts, np.arange(n) * 512)
+
+    def test_bottom_anchor_reaches_the_section_end(self):
+        from odas_tpw.scor160.l3 import section_groups
+
+        _, starts, dl = section_groups(1.0, 0, 5000, 1024, 512, anchor="bottom")[0]
+        assert starts.max() + dl == 5000, "deepest window must end AT the seabed"
+
+    def test_bottom_anchor_keeps_one_uniform_window_length(self):
+        """Without bbl_diss_length a bottom-anchored section is ONE group of one
+        window length. With it there are two, and dof_spec is per window (see
+        the process_l3_chi BBL test), because a shorter window averages fewer
+        FFT segments and the DOF feeds l4_chi's detection gate."""
+        from odas_tpw.scor160.l3 import section_groups
+
+        groups = section_groups(1.0, 0, 5000, 1024, 512, anchor="bottom")
+        assert len(groups) == 1
+        assert len({int(g[2]) for g in groups}) == 1
+
+    def test_chi_config_accepts_anchor_and_hides_it_when_inert(self):
+        """A config that does not set it must keep the canonical form -- and so
+        the stage-directory signature -- it had before the key existed."""
+        from odas_tpw.perturb.config import _mgr
+
+        _mgr.validate_config({"chi": {"anchor": "bottom"}})
+        _mgr.validate_config({"chi": {"anchor": "top"}})
+        view = _mgr._section_view_postprocess("chi", {"anchor": "top", "fft_length": 512})
+        assert "anchor" not in view
+        view_b = _mgr._section_view_postprocess(
+            "chi", {"anchor": "bottom", "fft_length": 512}
+        )
+        assert view_b["anchor"] == "bottom"
+
+
+class TestChiBBLWindows:
+    """chi now takes the full epsilon anchoring option set, including a shorter
+    near-bed window. That was blocked on L3ChiData.dof_spec being a SCALAR: a
+    BBL group averages fewer FFT segments, and the value gates l4_chi's
+    non-detection floor, so one file-wide DOF would mis-gate exactly the
+    near-bed estimates the BBL analysis exists to measure."""
+
+    def test_config_accepts_the_same_keys_as_epsilon(self):
+        from odas_tpw.perturb.config import DEFAULTS, _mgr
+
+        eps_keys = {k for k in DEFAULTS["epsilon"] if k == "anchor" or k.startswith("bbl_")}
+        chi_keys = {k for k in DEFAULTS["chi"] if k == "anchor" or k.startswith("bbl_")}
+        assert eps_keys == chi_keys, "chi must offer the same layout options as epsilon"
+        _mgr.validate_config(
+            {"chi": {"anchor": "bottom", "bbl_diss_sec": 1.0, "bbl_extent_sec": 3.0}}
+        )
+
+    def test_bbl_keys_resolve_for_chi(self):
+        from odas_tpw.perturb.config import merge_config, resolve_window_config
+
+        r = resolve_window_config(
+            merge_config("chi", {"fft_sec": 0.5, "diss_sec": 2.0,
+                                 "bbl_diss_sec": 1.0, "bbl_extent_sec": 3.0}),
+            512.0, section="chi")
+        assert r["bbl_diss_length"] == 512
+        assert r["bbl_overlap"] == 256      # null -> half the BBL window
+        assert r["bbl_extent"] == 1536
+
+    def test_window_groups_yields_two_lengths_for_chi_params(self):
+        import numpy as np
+
+        from odas_tpw.scor160.io import L3Params
+        from odas_tpw.scor160.l3 import window_groups
+
+        p = L3Params(fft_length=256, diss_length=2048, overlap=1024, HP_cut=0.25,
+                     fs_fast=512.0, goodman=False, anchor="bottom",
+                     bbl_diss_length=512, bbl_overlap=256, bbl_extent=1536)
+        groups = window_groups(np.ones(20000), p)
+        lengths = {int(g[2]) for g in groups}
+        assert lengths == {512, 2048}, "a BBL group and a regular group"
+
+    def test_process_l3_chi_carries_one_dof_per_window(self):
+        """End to end through process_l3_chi: with BBL windows a section is two
+        groups, dof_spec has one entry per window, the near-bed windows carry
+        the SMALLER value, and the two values are in the ratio of their FFT
+        segment counts (the DOF the CSD actually averaged)."""
+        from odas_tpw.chi.l2_chi import L2ChiData
+        from odas_tpw.chi.l3_chi import process_l3_chi
+        from odas_tpw.scor160.io import L3Params
+        from odas_tpw.scor160.l3 import window_groups
+        from odas_tpw.scor160.spectral import n_segments
+
+        fs, n = 512.0, 6000
+        rng = np.random.RandomState(0)
+        l2 = L2ChiData(
+            time=np.arange(n) / fs,
+            pres=np.linspace(1.0, 20.0, n),
+            temp=np.full(n, 12.0),
+            temp_fast=rng.randn(1, n) * 0.01 + 12.0,
+            gradt=rng.randn(1, n) * 1e-3,
+            vib=np.zeros((1, n)),
+            pspd_rel=np.full(n, 0.6),
+            section_number=np.ones(n),
+            diff_gains=[0.94],
+            fs_fast=fs,
+        )
+        params = L3Params(
+            fft_length=256, diss_length=2048, overlap=1024, HP_cut=0.25,
+            fs_fast=fs, goodman=False, anchor="bottom",
+            bbl_diss_length=512, bbl_overlap=256, bbl_extent=1536,
+        )
+        groups = window_groups(l2.section_number, params)
+        n_bbl = sum(len(g[1]) for g in groups if g[2] == 512)
+        n_main = sum(len(g[1]) for g in groups if g[2] == 2048)
+        assert n_bbl > 0 and n_main > 0
+
+        l3 = process_l3_chi(l2, params, salinity=34.5)
+        dof = np.atleast_1d(np.asarray(l3.dof_spec, dtype=float))
+        assert dof.size == l3.time.size == n_bbl + n_main
+
+        lo, hi = np.unique(dof)
+        assert np.sum(dof == lo) == n_bbl and np.sum(dof == hi) == n_main
+        # the low-DOF windows are the deepest ones (latest in the section)
+        assert l3.time[dof == lo].min() > l3.time[dof == hi].max() - 2048 / fs
+        assert hi / lo == pytest.approx(n_segments(2048, 256) / n_segments(512, 256))
+
+    def test_dof_differs_between_the_two_window_lengths(self):
+        """The whole reason dof_spec had to become per-window."""
+        from odas_tpw.scor160.spectral import n_segments
+
+        assert n_segments(512, 256) != n_segments(2048, 256)
+
+    def test_dof_at_indexes_per_window_and_tolerates_legacy_scalars(self):
+        import numpy as np
+
+        from odas_tpw.chi.l4_chi import _dof_at
+
+        class _L3:
+            pass
+
+        obj = _L3()
+        obj.dof_spec = np.array([3.0, 7.0, 11.0])
+        assert _dof_at(obj, 0) == 3.0
+        assert _dof_at(obj, 2) == 11.0
+        obj.dof_spec = 9.5                      # legacy scalar -> broadcast
+        assert _dof_at(obj, 0) == 9.5
+        assert _dof_at(obj, 5) == 9.5
+        obj.dof_spec = np.zeros(0)              # unknown -> pre-#180 fixed floor
+        assert _dof_at(obj, 0) == 0.0

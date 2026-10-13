@@ -163,6 +163,23 @@ epsilon:
   fom_max: null
 
 chi:
+  # == FULL BOTTOM-UP: chi laid out like epsilon =============================
+  # Without these, chi keeps the historical TOP-down layout even inside a
+  # bottom-up product, and a 2.0 s window leaves its deepest center ~1.2 m above
+  # the seabed. Measured on 2021/Pelican/SN194 before the fix: chi occupancy
+  # 0.0% at 0.62 m and 0.4% at 0.88 m against epsilon's 95.7%, and a flat ~23%
+  # above -- flat rather than striped because each cast's top-anchored comb
+  # lands at a different offset relative to the bed. Gamma and K_T inherit the
+  # hole, so the BBL had no mixing product at all.
+  #
+  # bbl_diss_sec 1.0 is at the FLOOR: a dissipation window must hold at least
+  # two FFT segments, and fft_sec is 0.5. Do not lower it without lowering
+  # fft_sec too -- csd_matrix_batch then raises about diss_length without ever
+  # mentioning the BBL window.
+  anchor: "bottom"
+  bbl_diss_sec: 1.0
+  bbl_overlap_sec: null    # null = half the BBL window
+  bbl_extent_sec: 3.0
   enable: true
   fft_sec: 0.5
   diss_sec: 2.0
