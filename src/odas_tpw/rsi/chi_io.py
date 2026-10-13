@@ -26,6 +26,7 @@ import numpy as np
 import numpy.typing as npt
 import xarray as xr
 
+from odas_tpw.rsi.channels import _is_infinity, config_number
 from odas_tpw.rsi.dissipation import DOF_NUTTALL
 
 if TYPE_CHECKING:
@@ -1036,12 +1037,21 @@ def _extract_therm_cal(ch_cfg: dict[str, Any]) -> dict[str, float]:
     Config keys are lowercase (parse_config lowercases all keys); 'g' and
     't_0' are renamed to the 'gain'/'T_0' parameter names expected by
     noise_thermchannel.
+
+    Values are read by :func:`~odas_tpw.rsi.channels.config_number`, the
+    converters' own parser, so the noise model and ``convert_therm`` cannot
+    disagree about an arithmetic coefficient (``t_0 = 273.15+16``).  The
+    linear term follows ``convert_therm``'s precedence (legacy ``beta`` before
+    ``beta_1``), and ``beta_2 = Inf`` is no quadratic term, as there.
     """
     cal = {}
-    for key in ("e_b", "b", "g", "beta_1", "beta_2", "adc_fs", "adc_bits", "t_0"):
+    name = str(ch_cfg.get("name", "?"))
+    beta_key = "beta" if ch_cfg.get("beta") not in (None, "") else "beta_1"
+    for key in ("e_b", "b", "g", beta_key, "beta_2", "adc_fs", "adc_bits", "t_0"):
         val = ch_cfg.get(key)
-        if val is not None:
-            cal[key] = float(val)
+        if val in (None, "") or (key == "beta_2" and _is_infinity(val)):
+            continue
+        cal["beta_1" if key == "beta" else key] = config_number(val, key=key, channel=name)
     # Map config keys to noise_thermchannel parameter names
     if "g" in cal:
         cal["gain"] = cal.pop("g")
@@ -1065,7 +1075,9 @@ def _therm_gradient_config(config: dict[str, Any], name: str) -> tuple[float, di
         (ch for ch in config["channels"] if ch.get("name") == name),
         {},
     )
-    diff_gain = float(ch_cfg.get("diff_gain", _DEFAULT_DIFF_GAIN))
+    diff_gain = config_number(
+        ch_cfg.get("diff_gain"), _DEFAULT_DIFF_GAIN, key="diff_gain", channel=name
+    )
     m = re.match(r"^(\w+)_d\1$", name)
     base_name = m.group(1) if m else name
     base_cfg: dict = next(

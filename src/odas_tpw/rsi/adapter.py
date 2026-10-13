@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from odas_tpw.rsi.channels import config_number
 from odas_tpw.rsi.helpers import (
     AC_PATTERN,
     DT_PATTERN,
@@ -245,7 +246,9 @@ def pfile_to_l1data(
                 (ch for ch in pf.config["channels"] if ch.get("name") == name),
                 {},
             )
-            diff_gains.append(float(ch_cfg.get("diff_gain", "0.94")))
+            diff_gains.append(
+                config_number(ch_cfg.get("diff_gain"), 0.94, key="diff_gain", channel=name)
+            )
 
     # Fallback to T channels
     if not temp_fast_list:
@@ -296,9 +299,11 @@ def pfile_to_l1data(
             "speed_names": speed_names,
             "speed_tau": speed_tau,
             "diff_gains": {
-                str(ch.get("name")): float(ch.get("diff_gain", 0.94))
+                str(ch.get("name")): config_number(
+                    ch.get("diff_gain"), key="diff_gain", channel=str(ch.get("name"))
+                )
                 for ch in (pf.config.get("channels") or [])
-                if ch.get("name") and ch.get("diff_gain") is not None
+                if ch.get("name") and ch.get("diff_gain") not in (None, "")
             },
         }
         if shear_names:

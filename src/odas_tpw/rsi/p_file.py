@@ -18,7 +18,7 @@ from typing import Any, BinaryIO
 
 import numpy as np
 
-from odas_tpw.rsi.channels import CONVERTERS, CalRecorder
+from odas_tpw.rsi.channels import CONVERTERS, CalRecorder, config_number
 from odas_tpw.rsi.deconvolve import deconvolve
 
 # ---------------------------------------------------------------------------
@@ -1124,6 +1124,9 @@ class PFile:
         # by combining the slow-rate channel X with its pre-emphasized
         # fast-rate counterpart X_dX to produce a high-resolution signal.
         # This matches ODAS odas_p2mat.m lines 516-570.
+        # X_dX channels converted with their base channel's stanza: the base
+        # conversion already warned about anything in it.
+        self._borrowed_stanzas: set[str] = set()
         if self._deconvolve:
             self._apply_deconvolution(ch_config)
 
@@ -1192,7 +1195,14 @@ class PFile:
                 self.channel_info[ch_name] = {"units": "counts", "type": ch_type, "cal": {}}
                 continue
 
-            phys, units = converter(self.channels_raw[ch_name], convert_info)
+            if ch_name in self._borrowed_stanzas:
+                # T1_dT1 re-reads T1's coefficients; T1's own conversion has
+                # already warned about an arithmetic one, under its own name.
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message=r".* is arithmetic; ")
+                    phys, units = converter(self.channels_raw[ch_name], convert_info)
+            else:
+                phys, units = converter(self.channels_raw[ch_name], convert_info)
             self.channels[ch_name] = phys
             self.channel_info[ch_name] = {
                 "units": units,
@@ -1428,7 +1438,23 @@ class PFile:
             if dX_name not in self.channels_raw:
                 continue
 
-            diff_gain_val = float(info["diff_gain"])
+            # The converters' parser, so a shear-style arithmetic diff_gain
+            # reads the same here. (ODAS deconvolve.m uses str2double, which
+            # turns arithmetic into NaN: a deliberate deviation.) This is the
+            # one read of a pre-emphasis diff_gain per file -- no converter
+            # sees the key -- so it is the one that warns on arithmetic. A
+            # blank value is refused, not taken as absent: undeconvolved
+            # counts are not a fallback.
+            diff_gain_val = config_number(
+                info["diff_gain"], key="diff_gain", channel=dX_name, warn_arithmetic=True
+            )
+            if diff_gain_val <= 0:
+                # The deconvolution filter's corner is 1/(2 pi diff_gain); a
+                # non-positive gain failed deep in scipy, naming nothing.
+                raise ValueError(
+                    f"{dX_name}: diff_gain = {info['diff_gain']!r} must be positive; "
+                    "it is the pre-emphasis time constant [s]."
+                )
             X_dX_raw = self.channels_raw[dX_name]
 
             # Sampling rate of the pre-emphasized channel, derived from the
@@ -1487,6 +1513,7 @@ class PFile:
                 base_info = dict(ch_config[base_name])
                 base_info.pop("diff_gain", None)
                 ch_config[dX_name] = {**base_info, "name": dX_name}
+                self._borrowed_stanzas.add(dX_name)
                 if is_dX_fast:
                     self._fast_channels.add(dX_name)
                     self._slow_channels.discard(dX_name)

@@ -46,6 +46,8 @@ from datetime import date as _Date  # for annotations inside classes with a `dat
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
 
+from odas_tpw.rsi.channels import config_number
+
 if TYPE_CHECKING:  # avoid a runtime import cycle (sensor_inventory imports us lazily)
     from odas_tpw.rsi.sensor_inventory import SensorUse
 
@@ -633,11 +635,11 @@ class CheckSummary:
 
 
 def _to_float(raw: str) -> float | None:
+    """A configured ``sens`` read as the shear converter reads it, else None."""
     try:
-        f = float(raw)
-    except (TypeError, ValueError):
+        return config_number(raw, key="sens")
+    except ValueError:
         return None
-    return f if f == f and f not in (float("inf"), float("-inf")) else None
 
 
 def check_uses(

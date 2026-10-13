@@ -19,6 +19,7 @@ import numpy as np
 import numpy.typing as npt
 
 from odas_tpw.rsi.bad_buffer import SPEED_INPUT_CHANNELS
+from odas_tpw.rsi.channels import config_number
 
 if TYPE_CHECKING:
     import xarray as xr
@@ -616,9 +617,11 @@ def _channels_from_pfile(
     if bad:
         out["bad_masks"] = bad
         out["diff_gain_by_name"] = {
-            str(ch.get("name")): float(ch.get("diff_gain", 0.94))
+            str(ch.get("name")): config_number(
+                ch.get("diff_gain"), key="diff_gain", channel=str(ch.get("name"))
+            )
             for ch in (pf.config.get("channels") or [])
-            if ch.get("name") and ch.get("diff_gain") is not None
+            if ch.get("name") and ch.get("diff_gain") not in (None, "")
         }
         _repair_short_gaps(out, bad)
     return out

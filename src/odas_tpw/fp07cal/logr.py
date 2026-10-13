@@ -22,6 +22,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from odas_tpw.rsi.channels import _is_infinity, config_number
+
 # ODAS ``convert_odas.m`` clips the bridge output to +/-0.6 before forming the
 # resistance ratio; |Z| approaching 1 means the sample is outside the bridge's
 # range and ln((1-Z)/(1+Z)) diverges.  We reproduce the clip so ``L`` matches
@@ -61,8 +63,10 @@ class BridgeParams:
                 f"Patch the config first (rsi-tpw patch)."
             )
         try:
-            vals = {k: float(cfg[k]) for k in _REQUIRED}
-        except (TypeError, ValueError) as exc:
+            # The reader's parser (convert_therm), so an arithmetic value means
+            # the same number in the fit as in the product.
+            vals = {k: config_number(cfg[k], key=k, channel=channel) for k in _REQUIRED}
+        except ValueError as exc:
             raise ValueError(f"channel {channel!r}: non-numeric bridge parameter: {exc}") from exc
         if vals["b"] == 0:
             raise ValueError(f"channel {channel!r}: bridge parameter b == 0")
@@ -143,18 +147,20 @@ def config_to_coeffs(cfg: dict) -> np.ndarray:
     Mirrors ``convert_therm``'s key precedence: the legacy ``beta`` is checked
     BEFORE ``beta_1``, so a config carrying both is read the way the reader
     reads it (finding A5 --- patching ``beta_1`` on such a file is a no-op).
+
+    Values go through the reader's parser.  ``beta_2``/``beta_3 = Inf`` is a
+    zero term, as in ODAS and ``convert_therm`` (1/Inf = 0).
     """
-    t_0 = float(cfg["t_0"])
-    if "beta" in cfg and cfg["beta"] not in (None, ""):
-        beta_1 = float(cfg["beta"])
-    else:
-        beta_1 = float(cfg["beta_1"])
+    name = str(cfg.get("name", "?"))
+    t_0 = config_number(cfg["t_0"], key="t_0", channel=name)
+    key1 = "beta" if "beta" in cfg and cfg["beta"] not in (None, "") else "beta_1"
+    beta_1 = config_number(cfg[key1], key=key1, channel=name)
     out = [1.0 / t_0, 1.0 / beta_1]
     for key in ("beta_2", "beta_3"):
         val = cfg.get(key)
         if val is None or val == "":
             break
-        out.append(1.0 / float(val))
+        out.append(0.0 if _is_infinity(val) else 1.0 / config_number(val, key=key, channel=name))
     return np.array(out, dtype=np.float64)
 
 

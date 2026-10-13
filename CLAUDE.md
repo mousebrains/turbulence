@@ -25,7 +25,7 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas
 ### Key Modules (rsi)
 
 - `p_file.py` — `PFile` class: reads Rockland `.p` binary files, parses headers, demultiplexes address matrix, converts to physical units. `parse_config()` parses the embedded INI config string.
-- `channels.py` — Conversion functions (raw counts → physical units) for each sensor type. `CONVERTERS` dict maps type names to functions.
+- `channels.py` — Conversion functions (raw counts → physical units) for each sensor type. `CONVERTERS` dict maps type names to functions. `config_number()` is the **one** parser for a channel coefficient: ODAS `eval`s them, so `2^28` is a legal value. Never `float()` one; arithmetic outside JAC-CT warns, because in the configs of 19k real `.p` files it has only ever been a typo.
 - `convert.py` — `p_to_netcdf()` and `convert_all()` for writing NetCDF4 output.
 - `profile.py` — Profile detection and per-profile NetCDF extraction.
 - `dissipation.py` — Core epsilon calculation with multi-source input, QC metrics (fom, K_max_ratio).
@@ -111,8 +111,9 @@ Facts that are easy to get wrong:
 - **`beta_2 = 0` does not delete a quadratic term** — the config value is a
   reciprocal, so zero means an infinite term and `convert_therm` rejects it with
   a named `ValueError` (it raised a bare `ZeroDivisionError` before issue #180).
-  `beta_2 = 1e30` is bit-identical to omitting the key. A *negative* `beta_2` is
-  legitimate and is accepted.
+  `beta_2 = 1e30` is bit-identical to omitting the key, and so is `beta_2 = Inf`
+  (ODAS: 1/Inf = 0; Rockland's Zissou tutorial file writes it). A *negative*
+  `beta_2` is legitimate and is accepted.
 - Polynomial order is chosen by **held-out** error split on temperature, not by
   in-sample fit or a t-test: `beta_3` can carry a t-statistic of 10 while
   making extrapolation four times worse.

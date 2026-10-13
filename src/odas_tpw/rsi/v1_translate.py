@@ -42,6 +42,7 @@ from typing import Any
 
 import numpy as np
 
+from odas_tpw.rsi.channels import config_number
 from odas_tpw.rsi.setup_v1 import discover_setup_candidates, load_setup_file
 
 __all__ = ["synthesize_ini", "translate_v1_bytes", "translate_v1_to_v6"]
@@ -185,7 +186,9 @@ def _cross_check_candidates(
         other_p = _pressure_coeffs(cfg)
         if chosen_p is not None and other_p is not None:
             try:
-                if [float(c) for c in chosen_p] != [float(c) for c in other_p]:
+                if [config_number(c, key="coef") for c in chosen_p] != [
+                    config_number(c, key="coef") for c in other_p
+                ]:
                     disagreements.append("pressure polynomial")
             except ValueError:
                 disagreements.append("pressure polynomial")
