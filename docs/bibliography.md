@@ -100,8 +100,14 @@ See also [Best Practices](best_practices.md) and
 - **Vachon, P., & Lueck, R. G. (1984).** A small combined
   temperature-conductivity probe. *Proceedings of the 1984 STD
   Conference and Workshop*, San Diego, Marine Technology Society.
-  Establishes the speed dependence of the FP07 thermistor response
-  time used here and by Peterson & Fer (2014).
+  The `U^(-1/2)` speed scaling of the thermistor response, as Rockland
+  cites it (ODAS `quick_look.m`: double pole, `f_3dB = 25*sqrt(U)` Hz).
+  Peterson & Fer (2014) use Gregg & Meagher's `U^(-0.32)` instead.
+
+- **Hill, K. D. (1987).** Observations on the velocity scaling of
+  thermistor dynamic response functions. *Rev. Sci. Instrum.*, 58,
+  1235--1238. [doi:10.1063/1.1139444](https://doi.org/10.1063/1.1139444)
+  Reports a speed exponent of -0.5 (as cited by Goto et al. 2016).
 
 ## Coherent noise removal
 
