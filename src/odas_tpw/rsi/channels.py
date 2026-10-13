@@ -373,7 +373,7 @@ _SHEAR_SENS_MAX = 0.15
 #
 #     fs_fast    diff_gain    in our corpus
 #      512 Hz      ~0.95      13 instruments (0.905-1.01)
-#     1024 Hz      ~0.095     MR 330, 429 (tidal builds)
+#     1024 Hz      ~0.095     MR 330, 429 (tidal builds); VMP 132 at 512 Hz
 #     2048 Hz      ~0.0095    exists at Rockland; none in our portfolio
 #
 # (Design rationale from Pat Welch, who works directly with Rockland; the rate
@@ -394,12 +394,13 @@ _SHEAR_SENS_MAX = 0.15
 #
 # Telling "0.09 is this instrument's real differentiator" from "0.09 is a typo"
 # needs an instrument-keyed comparison, which is what ``rsi-tpw sensors
-# --diff-gain`` (odas_tpw.rsi.diff_gain) exists to do.  SN 132 is the one
-# instrument the ladder does NOT explain: 511.9454 Hz on a 10-column
-# vmp-250-IR (unanimous over all 217 of its files), so it belongs on the ~0.95
-# rung with SN 412/465/479 — yet it carries 0.09, the 1024 Hz rung's value, and
-# carries it identically on both channels where every measured pair differs.
-# See issue #178.
+# --diff-gain`` (odas_tpw.rsi.diff_gain) exists to do — and in the end only a
+# measurement settles it.  SN 132 shows why the rate cannot select the rung
+# either: it samples at 511.9454 Hz yet 0.09 is on the RIGHT rung.  It
+# was converted to a 1024 Hz tidal build in 2021 and back, and its analog chain
+# evidently stayed on the tidal rung (bench-noise fit 0.10-0.13; epsilon with
+# 0.09 matches SN 465's, cast nearby from a second boat, at ~0.9-1.2x, 95% CIs
+# within ~0.7-1.7x).  0.09 versus ~0.12 is still open.  See issue #178.
 _SHEAR_DIFF_GAIN_MIN = 0.001
 _SHEAR_DIFF_GAIN_MAX = 10.0
 

@@ -45,10 +45,14 @@ cover the rest of the chain, is in [atomix_benchmark.md](atomix_benchmark.md).
   benchmark's declared shear-probe sensitivities. On your own data the
   dominant epsilon uncertainty is almost always the calibration constants,
   not the estimator -- `sens` enters as `sens^-2`, and `diff_gain` likewise.
-  A single transcribed digit is a factor of 100 (see
-  [issue #178](https://github.com/mousebrains/turbulence/issues/178), where a
-  stale `diff_gain` would inflate epsilon ~110x). Audit them with
-  `rsi-tpw sensors --cal-dir` and `--diff-gain` before believing a level.
+  A decimal slip in `diff_gain` is a factor of 100:
+  [issue #178](https://github.com/mousebrains/turbulence/issues/178) turned on
+  exactly that question -- a 0.09 that looked like a slip for ~0.9 (109x in
+  epsilon), and that measurement put on the right rung. SN 132 epsilon still
+  carries a ~1.8x scale uncertainty (0.09 or the bench fit's ~0.12, open in
+  #178). Audit them with
+  `rsi-tpw sensors --cal-dir` and `--diff-gain` before believing a level, and
+  resolve an outlier by measurement, not by the fleet's consensus.
 - **The two VMP250 entries rest on 64 spectra each.** Their third digit is
   not meaningful.
 - **Speed is an input, not a validated output.** Epsilon scales steeply with
