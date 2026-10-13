@@ -1,0 +1,180 @@
+{
+  "schema": "fp07-cal/1",
+  "clock_offset_s": 3.5475489457292277,
+  "clock_offset_r": 0.1345443615744298,
+  "instrument_sn": "?",
+  "n_fit_files": 12,
+  "time_start": 1447429286.0,
+  "time_end": 1447539142.7617927,
+  "reference": "flight_inputs.nc:sci_water_temp",
+  "channels": {
+    "T1": {
+      "lag_s": 4.736956884487176,
+      "corr": 0.9386240488883582,
+      "thermal_lag_s": 1.1894079387579484,
+      "n_pairs": 20337,
+      "n_profiles": 33,
+      "order": 2,
+      "order_selection": {
+        "1": {
+          "held_out_K": 0.09954325270222703,
+          "in_sample_K": 0.011265816745637825
+        },
+        "2": {
+          "held_out_K": 0.04736591108384704,
+          "in_sample_K": 0.003519073920385566
+        },
+        "3": {
+          "held_out_K": 0.08796581696587605,
+          "in_sample_K": 0.0035356958798710134
+        }
+      },
+      "coefficients": [
+        0.0035669801185551904,
+        0.00033512149523594277,
+        3.6780545680079726e-06
+      ],
+      "config_equivalent": {
+        "t_0": 280.349193649291,
+        "beta_1": 2983.9924153356637,
+        "beta_2": 271882.8613088245
+      },
+      "rms_K": 0.003519073920385566,
+      "dive_climb_split_K": -0.0009846978265457664,
+      "beta1_bracket": [
+        NaN,
+        NaN
+      ],
+      "condition": 9.26984013783871,
+      "T_range": [
+        4.471799850463867,
+        24.395353894096157
+      ],
+      "bridge": {
+        "a": -16.85,
+        "b": 0.9988,
+        "g": 6.0,
+        "e_b": 0.68206,
+        "adc_fs": 4.096,
+        "adc_bits": 16.0
+      },
+      "beta_key": "beta",
+      "probe_sn": "(no SN)",
+      "probe_sn_trusted": false,
+      "factory": [
+        0.003458412588621823,
+        0.00031811168901401283
+      ],
+      "lag_trustworthy": true,
+      "lag_dynamic_range": 0.9334088081225604,
+      "lag_width_s": 0.75,
+      "clock_trustworthy": true,
+      "geometry": {
+        "dz_m": 0.00918178088892338,
+        "dz_se_m": 0.0014561149349735841,
+        "tau_s": 0.3432056976197573,
+        "tau_se_s": 0.006867794463184951,
+        "collinearity": 0.05923453947318218,
+        "separately_resolved": true,
+        "rank_deficient": false,
+        "smallest_singular_value": 27.218370784380237,
+        "dz_se_cluster_m": 0.014471939485610165,
+        "tau_se_cluster_s": 0.07872876416699627,
+        "n_profiles_clustered": 27,
+        "cluster_warning": ""
+      },
+      "stability": {
+        "probe_drift_K_per_day": NaN,
+        "se_K_per_day": NaN,
+        "permutation_p": NaN,
+        "significant": false,
+        "n_blocks": 3,
+        "reason": "only 3 usable block(s); need 4"
+      }
+    },
+    "T2": {
+      "lag_s": 4.7713126435368824,
+      "corr": 0.9378640369567505,
+      "thermal_lag_s": 1.2237636978076547,
+      "n_pairs": 20336,
+      "n_profiles": 33,
+      "order": 2,
+      "order_selection": {
+        "1": {
+          "held_out_K": 0.08884004193639755,
+          "in_sample_K": 0.009573621585136265
+        },
+        "2": {
+          "held_out_K": 0.04580120897522167,
+          "in_sample_K": 0.002600185922206245
+        },
+        "3": {
+          "held_out_K": 0.09867697229114877,
+          "in_sample_K": 0.002607395401527302
+        }
+      },
+      "coefficients": [
+        0.0035796229400098857,
+        0.0003365263676681063,
+        3.31871637779996e-06
+      ],
+      "config_equivalent": {
+        "t_0": 279.3590321547214,
+        "beta_1": 2971.535356736842,
+        "beta_2": 301321.32010115276
+      },
+      "rms_K": 0.002600185922206245,
+      "dive_climb_split_K": -0.0003246648468073674,
+      "beta1_bracket": [
+        NaN,
+        NaN
+      ],
+      "condition": 9.573169500476805,
+      "T_range": [
+        4.471799850463867,
+        24.395353894096157
+      ],
+      "bridge": {
+        "a": -12.35,
+        "b": 0.9989,
+        "g": 6.0,
+        "e_b": 0.68233,
+        "adc_fs": 4.096,
+        "adc_bits": 16.0
+      },
+      "beta_key": "beta",
+      "probe_sn": "(no SN)",
+      "probe_sn_trusted": false,
+      "factory": [
+        0.003458412588621823,
+        0.00031811168901401283
+      ],
+      "lag_trustworthy": true,
+      "lag_dynamic_range": 0.9327758012442362,
+      "lag_width_s": 0.75,
+      "clock_trustworthy": true,
+      "geometry": {
+        "dz_m": -0.012124680149225495,
+        "dz_se_m": 0.0011210695928725704,
+        "tau_s": 0.030369377076672,
+        "tau_se_s": 0.005255123918353493,
+        "collinearity": 0.06370868195233671,
+        "separately_resolved": true,
+        "rank_deficient": false,
+        "smallest_singular_value": 26.93224500894352,
+        "dz_se_cluster_m": 0.008601771551526118,
+        "tau_se_cluster_s": 0.06162775516819824,
+        "n_profiles_clustered": 27,
+        "cluster_warning": ""
+      },
+      "stability": {
+        "probe_drift_K_per_day": NaN,
+        "se_K_per_day": NaN,
+        "permutation_p": NaN,
+        "significant": false,
+        "n_blocks": 3,
+        "reason": "only 3 usable block(s); need 4"
+      }
+    }
+  }
+}

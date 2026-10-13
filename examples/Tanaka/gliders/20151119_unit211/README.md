@@ -10,7 +10,7 @@ which these files do not use).
 | | status |
 |---|---|
 | epsilon | **sh2 only** -- sh1 is dead (below). Climbs usable; dives marginal (slow) |
-| chi | both thermistors, NOMINAL calibration (~3-4% high, below), consistent (chi1/chi2 = 0.86 paired) |
+| chi | both thermistors on TWO calibrations: perturb's per-file in-situ fit in 3 of 19 profiles (file 1504029), NOMINAL in the other 16 (~3-4% high, below); chi1/chi2 = 0.86 paired |
 | clock | solved, 6 files, 0.89 s RMS |
 | speed | flight model with DEFAULT lift and Cd1 -- untested for this glider |
 
@@ -42,29 +42,30 @@ noise only) against ~320 on sh2; its epsilon sits at 1e-13 .. 1e-11 W/kg and
 fails the FM test on 100% of windows. `perturb.yaml` excludes it under
 `instruments: microrider:` (keyed on the directory name, as perturb requires).
 
-## FP07: the in-pipeline calibration did not run, and that costs ~3-4% in chi
+## FP07: two calibrations in the products, and ~3-4% in chi on one of them
 
-`fp07.calibrate: true` was refused on most files ("no profile reached the lag
-correlation gate"), so chi uses the 2011 NOMINAL Steinhart coefficients.
-The thermistors themselves are healthy -- r = 0.9999 with the glider CTD --
-but read a near-constant **+8.8 C (T1) and +9.8 C (T2) high**.
+`fp07.calibrate: true` fitted the thermistors per file in 1 of 11 files
+(1504029: 3 of 19 profiles). The other 10 files (16 profiles) kept the 2011
+NOMINAL Steinhart coefficients ("no profile reached the lag correlation
+gate"). **CORRECTED 2026-10-13:** this README first said chi was nominal
+throughout, and its explanation was copied from 2015-11-13: it cited that
+deployment's file 1504003. The products' `calibration` tags give the counts
+above. The thermistors are healthy, but on nominal coefficients they read a
+near-constant **+8.8 C (T1) and +9.8 C (T2) high**.
 
-Why the gate failed (VERIFIED by instrumenting `_calc_lag` on 1504003):
-- the long dive profile's reference holds 64 s of NaN where the hotel merge
-  blanked a gap wider than `max_gap`, and one NaN makes `_calc_lag` abstain
-  for the WHOLE profile (counted as neither accepted nor rejected);
-- the other profiles score |r| 0.11-0.63 on the derivative cross-correlation
-  against a 4.6 s glider CTD interpolated to 64 Hz, with two lags on the
-  +-10 s search boundary.
+Why the gate failed: same MR, probes, glider and CTD as 2015-11-13. See that
+README. There, re-running with each fix reverted showed two causes, both fixed
+on branch `fix/fp07-cal-hotel-reference` (PR #214):
+- a gap in the reference silenced the whole profile;
+- the low-pass started from zero.
 
-What it costs (VERIFIED, 1 Hz regression of CTD on nominal FP07 over
-5-21 C, best lag, six files): dT_ctd/dT_nominal = 0.980-0.987, so chi is
-**3-4% HIGH** (chi scales as the square). An offset alone leaves gradients
-untouched. (An earlier estimate in this session of 10-15% was wrong.)
+With both fixed, all 12 files of that deployment fit and match the pooled
+`fp07-cal` fit. Not re-run for this deployment.
 
-The fix is the pre-pipeline `fp07-cal` tool, which decimates the thermistor
-onto the CTD's own samples and gates lag on peak sharpness rather than r --
-not done here.
+What it costs: on 2015-11-13, a 1 Hz regression and an independent `fp07-cal`
+fit both put the nominal gradient gain at 0.98-0.99, so chi on the nominal
+profiles is **~3-4% HIGH** (chi scales as the square). Not measured on this
+deployment: `fp07-cal` has not been run here.
 
 ## Recipe (run from this directory)
 
