@@ -73,6 +73,8 @@ fp07:
   max_lag_seconds: 10
   must_be_negative: false
   min_corr: 0.5
+  allow_hotel_reference: true  # keeps the run startable. No working FP07 here
+                            # (README) and chi is off, so nothing depends on it.
 
 ct:
   align: false

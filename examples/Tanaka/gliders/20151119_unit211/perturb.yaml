@@ -69,6 +69,8 @@ fp07:
   max_lag_seconds: 10
   must_be_negative: false
   min_corr: 0.5
+  allow_hotel_reference: true  # the per-file fit, on purpose. Same MR, probes and
+                            # CTD as 2015-11-13; not re-run since PR #214 (README).
 
 ct:
   align: false
