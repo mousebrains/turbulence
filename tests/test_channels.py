@@ -1,11 +1,16 @@
 # Mar-2026, Claude and Pat Welch, pat@mousebrains.com
 """Tests for channel conversion functions."""
 
+import re
+import warnings
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from odas_tpw.rsi.channels import (
     CONVERTERS,
+    convert_accel,
     convert_aem1g_a,
     convert_aem1g_d,
     convert_alec_emc,
@@ -15,9 +20,12 @@ from odas_tpw.rsi.channels import (
     convert_inclxy,
     convert_jac_c,
     convert_jac_t,
+    convert_magn,
     convert_piezo,
     convert_poly,
     convert_raw,
+    convert_sbc,
+    convert_sbt,
     convert_shear,
     convert_therm,
     convert_voltage,
@@ -110,33 +118,6 @@ class TestConvertPoly:
         phys, units = convert_poly(data, {})
         np.testing.assert_array_equal(phys, data)
         assert units == "counts"
-
-
-class TestSafeFloat:
-    def test_invalid_string(self):
-        from odas_tpw.rsi.channels import _safe_float
-
-        assert _safe_float("invalid") == 0.0
-
-    def test_invalid_string_custom_default(self):
-        from odas_tpw.rsi.channels import _safe_float
-
-        assert _safe_float("invalid", default=42.0) == 42.0
-
-    def test_none(self):
-        from odas_tpw.rsi.channels import _safe_float
-
-        assert _safe_float(None) == 0.0
-
-    def test_none_custom_default(self):
-        from odas_tpw.rsi.channels import _safe_float
-
-        assert _safe_float(None, default=-1.0) == -1.0
-
-    def test_valid_string(self):
-        from odas_tpw.rsi.channels import _safe_float
-
-        assert _safe_float("3.14") == 3.14
 
 
 class TestConvertThermBeta3:
@@ -863,47 +844,493 @@ class TestConfigNumber:
     """ODAS evals config values; RSI writes some as arithmetic. MATLAB's rules."""
 
     def test_matlab_arithmetic(self):
-        from odas_tpw.rsi.channels import _config_number
+        from odas_tpw.rsi.channels import config_number
 
-        assert _config_number("2^28") == 2.0**28
-        assert _config_number("10.88/100") == pytest.approx(0.1088, rel=1e-15)
-        assert _config_number(" -2.87e-7 ") == -2.87e-7
-        assert _config_number("(1+2)*3") == 9.0
-        assert _config_number("1e-3") == 1e-3
-        assert _config_number("3.0e5") == 3.0e5
-        assert _config_number(".5") == 0.5
+        assert config_number("2^28") == 2.0**28
+        assert config_number("10.88/100") == pytest.approx(0.1088, rel=1e-15)
+        assert config_number(" -2.87e-7 ") == -2.87e-7
+        assert config_number("(1+2)*3") == 9.0
+        assert config_number("1e-3") == 1e-3
+        assert config_number("3.0e5") == 3.0e5
+        assert config_number(".5") == 0.5
 
     def test_matlab_power_rules(self):
-        from odas_tpw.rsi.channels import _config_number
+        from odas_tpw.rsi.channels import config_number
 
-        assert _config_number("-2^2") == -4.0  # ^ binds tighter than unary minus
-        assert _config_number("2^3^2") == 64.0  # left-associative, as MATLAB
-        assert _config_number("2^-3") == 0.125  # signed exponent
-        assert _config_number("2*-3") == -6.0
+        assert config_number("-2^2") == -4.0  # ^ binds tighter than unary minus
+        assert config_number("2^3^2") == 64.0  # left-associative, as MATLAB
+        assert config_number("2^-3") == 0.125  # signed exponent
+        assert config_number("2*-3") == -6.0
 
     def test_default_only_when_absent(self):
-        from odas_tpw.rsi.channels import _config_number
+        from odas_tpw.rsi.channels import config_number
 
-        assert _config_number(None, 5.0) == 5.0
-        assert _config_number("", 5.0) == 5.0
-        assert _config_number("0", 5.0) == 0.0
+        assert config_number(None, 5.0) == 5.0
+        assert config_number("", 5.0) == 5.0
+        assert config_number("0", 5.0) == 0.0
         with pytest.raises(ValueError, match=r"JAC_T: t_0 is required and missing"):
-            _config_number(None, key="t_0", channel="JAC_T")
+            config_number(None, key="t_0", channel="JAC_T")
 
     def test_rejects_anything_but_arithmetic(self):
-        from odas_tpw.rsi.channels import _config_number
+        from odas_tpw.rsi.channels import config_number
 
         for bad in ("__import__('os')", "a + 1", "2 ** 28", "1e5)", "[1]", "0x10", "1_000",
-                    "True", "Inf", "NaN", "pi", "2^", "((1)"):
+                    "True", "INF", "NaNa", "pi", "2^", "((1)", "0,09"):
             with pytest.raises(ValueError, match="not a numeric expression"):
-                _config_number(bad, 1.0, key="k", channel="JAC_C")
+                config_number(bad, 1.0, key="k", channel="JAC_C")
 
     def test_non_finite_results_are_value_errors(self):
-        from odas_tpw.rsi.channels import _config_number
+        from odas_tpw.rsi.channels import ConfigNumberNotFinite, config_number
 
         for bad in ("1/0", "0^-1", "10^400", "(-8)^(1/3)", "(" * 150 + "1" + ")" * 150):
             with pytest.raises(ValueError):
-                _config_number(bad, 1.0)
+                config_number(bad, 1.0)
+        # MATLAB's NaN/Inf are expressions; their values are what is refused,
+        # with a type that tells them apart from a malformed value.
+        for bad in ("NaN", "nan", "Inf", "-inf", "1/0", "10^400", "Inf-Inf"):
+            with pytest.raises(ConfigNumberNotFinite):
+                config_number(bad, 1.0)
+        with pytest.raises(ValueError) as info:
+            config_number("0,09", 1.0)
+        assert not isinstance(info.value, ConfigNumberNotFinite)
+
+
+    def test_whitespace_around_operators_not_inside_operands(self):
+        """MATLAB refuses ``1 2``; deleting the space would read it as 12."""
+        from odas_tpw.rsi.channels import config_number
+
+        assert config_number("2 ^ 28") == 2.0**28
+        assert config_number(" 10.88 / 100\t") == config_number("10.88/100")
+        assert config_number("- 5") == -5.0
+        for bad in ("1 2", "2 .5", "1e 5", "0.0 767"):
+            with pytest.raises(ValueError, match="not a numeric expression"):
+                config_number(bad, key="sens", channel="sh1")
+
+
+# Every converter's numeric coefficients, with representative values.  Each key
+# is read through config_number: arithmetic is evaluated as ODAS evaluates it,
+# and a present-but-malformed value raises instead of becoming the default.
+_THERM = {"t_0": "289", "beta_1": "3000", "beta_2": "5e5", "beta_3": "1e7", "g": "6",
+          "e_b": "0.68", "a": "1", "b": "1.001", "adc_fs": "4.096", "adc_bits": "16"}
+_COEFFICIENT_CASES = [
+    (convert_therm, _THERM, [1000.0, -2000.0]),
+    (convert_shear, {"sens": "0.1", "diff_gain": "0.94", "adc_fs": "4.096",
+                     "adc_bits": "16", "adc_zero": "0.01", "sig_zero": "0.002"}, [1000.0]),
+    (convert_poly, {"coef0": "1.5", "coef1": "0.25", "coef2": "1e-4"}, [10.0, 2000.0]),
+    (convert_voltage, {"adc_fs": "4.096", "adc_bits": "16", "g": "2", "adc_zero": "0.1"},
+     [1000.0]),
+    (convert_piezo, {"a_0": "12"}, [100.0]),
+    (convert_accel, {"adc_zero": "0.1", "adc_fs": "4.096", "adc_bits": "16",
+                     "sig_zero": "0.05", "coef0": "0.2", "coef1": "0.5"}, [1000.0]),
+    (convert_magn, {"coef0": "3", "coef1": "0.7"}, [100.0]),
+    (convert_inclxy, {"coef0": "0.5", "coef1": "0.025"}, [100.0]),
+    (convert_inclt, {"coef0": "624", "coef1": "-0.47"}, [100.0]),
+    (convert_jac_c, {"a": "0.1", "b": "30", "c": "-2"}, [3.0 * 2**16 + 5]),
+    (convert_jac_t, {"a": "-5", "b": "1e-3", "c": "1e-8", "d": "1e-12", "e": "1e-17",
+                     "f": "1e-22"}, [20000.0]),
+    (convert_sbt, {"coef0": "4.4e-3", "coef1": "6.4e-4", "coef2": "2.3e-5",
+                   "coef3": "2.2e-6", "coef4": "1000", "coef5": "24e6", "coef6": "128"},
+     [614400.0]),
+    (convert_sbc, {"coef0": "-4", "coef1": "4.9", "coef2": "-1e-3", "coef3": "2e-4",
+                   "coef4": "1e-6", "coef5": "24e6", "coef6": "128"}, [384000.0]),
+    (convert_aem1g_a, {"adc_fs": "4.096", "adc_bits": "16", "adc_zero": "2.048",
+                       "a": "-150", "b": "75", "bias": "0.01"}, [1000.0]),
+    (convert_aem1g_d, {"a": "-150", "b": "0.02"}, [1000.0]),
+    (convert_alec_emc, {"coef0": "0.1", "coef1": "0.002"}, [1000.0]),
+]
+_COEFFICIENT_KEYS = [
+    pytest.param(conv, params, data, key, id=f"{conv.__name__}-{key}")
+    for conv, params, data in _COEFFICIENT_CASES
+    for key in params
+]
+
+
+class TestEveryCoefficientReadsLikeOdas:
+    """No converter reads arithmetic, or a malformed value, as its default.
+
+    ``_safe_float`` used to turn ``2^28`` -- or ``0,5`` -- into 0 or the
+    caller's default without a word, in thirteen converters.
+    """
+
+    @pytest.mark.parametrize(("conv", "params", "data", "key"), _COEFFICIENT_KEYS)
+    def test_arithmetic_is_evaluated(self, conv, params, data, key):
+        # Two values, so the test cannot pass by an old fallback default
+        # happening to equal the table's value (voltage adc_bits = 16 did).
+        for x in (float(params[key]), 1.25 * float(params[key])):
+            expr = f"{2 * x!r}/2"  # exact: doubling and halving are lossless
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")  # the arithmetic warning; tested below
+                plain, units = conv(np.array(data), {**params, key: repr(x)})
+                evaluated, units2 = conv(np.array(data), {**params, key: expr})
+            np.testing.assert_array_equal(evaluated, plain)
+            assert units2 == units
+
+    @pytest.mark.parametrize(("conv", "params", "data", "key"), _COEFFICIENT_KEYS)
+    def test_malformed_value_raises_naming_the_key(self, conv, params, data, key):
+        # Quoted or as "<channel>: <key> =": a bare \ba\b matched the article
+        # "a" in the message's own advice.
+        with pytest.raises(ValueError, match=rf"'{key}'|: {key} = "):
+            conv(np.array(data), {**params, key: "0,5"})
+
+    def test_every_numeric_converter_is_covered(self):
+        """A converter added later must join the table (raw/gnd/aroft read no
+        coefficients; rsijac has its own ODAS golden tests)."""
+        covered = {conv for conv, _, _ in _COEFFICIENT_CASES}
+        exempt = {"raw", "gnd", "aroft_o2", "aroft_t", "rsijac_c", "rsijac_t", "jac_emc"}
+        missing = {t for t, f in CONVERTERS.items() if f not in covered and t not in exempt}
+        assert not missing
+
+    def test_absent_keys_keep_their_defaults(self):
+        """Only present values changed: absent ones default exactly as before."""
+        assert convert_inclt(np.array([0.0]), {})[0][0] == 624.0
+        assert convert_piezo(np.array([7.0]), {})[0][0] == 7.0
+        np.testing.assert_array_equal(
+            convert_alec_emc(np.array([2.0]), {})[0], np.array([2.0])
+        )
+
+
+class TestOneParserForEveryReader:
+    """Readers outside the converters parse the same keys the same way."""
+
+    def test_chi_thermistor_calibration_evaluates_arithmetic(self):
+        from odas_tpw.rsi.channels import config_number
+        from odas_tpw.rsi.chi_io import _extract_therm_cal
+
+        cal = _extract_therm_cal({"name": "T1", "t_0": "273.15+16", "beta_1": "3000",
+                                  "g": "6", "e_b": "0.68", "b": ""})
+        assert cal["T_0"] == config_number("273.15+16")
+        assert "b" not in cal  # empty is absent, as in the converters
+        with pytest.raises(ValueError, match=r"T1: beta_1"):
+            _extract_therm_cal({"name": "T1", "beta_1": "3,000"})
+
+    def test_chi_noise_model_and_converter_read_t0_identically(self):
+        """Before, convert_therm refused ``t_0 = 273.15+16`` while the chi path
+        crashed on it; neither can now read it differently from the other."""
+        from odas_tpw.rsi.chi_io import _extract_therm_cal
+
+        params = {**_THERM, "t_0": "273.15+16"}
+        plain = convert_therm(np.array([1000.0]), {**_THERM, "t_0": repr(273.15 + 16)})[0]
+        np.testing.assert_array_equal(convert_therm(np.array([1000.0]), params)[0], plain)
+        assert _extract_therm_cal(params)["T_0"] == 273.15 + 16
+
+    def test_gradient_diff_gain(self):
+        from odas_tpw.rsi.chi_io import _therm_gradient_config
+
+        cfg = {"channels": [{"name": "T1_dT1", "diff_gain": "0.94*1"},
+                            {"name": "T1", "t_0": "289"}]}
+        diff_gain, cal = _therm_gradient_config(cfg, "T1_dT1")
+        assert diff_gain == 0.94
+        assert cal["T_0"] == 289.0
+
+    def test_shear_sheet_check_reads_sens_like_the_converter(self):
+        from odas_tpw.rsi.shear_cal import _to_float
+
+        assert _to_float("0.0767") == 0.0767
+        assert _to_float("7.67/100") == 7.67 / 100
+        for bad in ("", "nan", "inf", "0,0767", None):
+            assert _to_float(bad) is None
+
+
+class TestConfigNumberEdges:
+    """Corners the adversarial review of the parser found."""
+
+    def test_matlab_precedence_of_a_signed_exponent(self):
+        """Checked in MATLAB on 2026-10-13: a sign after ``^`` takes only the
+        next operand, and ``^`` stays left-associative across it."""
+        from odas_tpw.rsi.channels import config_number
+
+        assert config_number("2^-3^2") == 0.015625  # (2^-3)^2, not 2^-(3^2)
+        assert config_number("2^-3^-2") == 64.0
+        assert config_number("2^+3^2") == 64.0
+        assert config_number("2*-3^2") == -18.0
+
+    def test_space_inside_an_exponent_is_refused(self):
+        from odas_tpw.rsi.channels import config_number
+
+        for bad in ("1e -5", "1e- 5", "1e+ 5", "1E -5", "2.5e +3"):
+            with pytest.raises(ValueError, match="not a numeric expression"):
+                config_number(bad, key="sens", channel="sh1")
+        assert config_number("1e-5 - 1") == 1e-5 - 1  # a space around an operator is fine
+
+    def test_numeric_types_keep_their_exact_value(self):
+        from odas_tpw.rsi.channels import ConfigNumberNotFinite, config_number
+
+        assert config_number(np.float32(0.1)) == float(np.float32(0.1))  # not str() = 0.1
+        assert config_number(np.int64(16)) == 16.0
+        with pytest.raises(ConfigNumberNotFinite):
+            config_number(10**400)
+        for flag in (True, np.bool_(False)):  # a flag is not a coefficient
+            with pytest.raises(ValueError):
+                config_number(flag)
+
+    def test_non_finite_type_reaches_the_converters_caller(self):
+        from odas_tpw.rsi.channels import ConfigNumberNotFinite
+
+        with pytest.raises(ConfigNumberNotFinite, match="'g'"):
+            convert_therm(np.array([1000.0]), {**_THERM, "g": "NaN"})
+
+    def test_blank_is_absent(self):
+        """``key =`` with nothing after it parses to ''; it is treated as absent."""
+        from odas_tpw.rsi.channels import config_number
+
+        assert config_number("  ", 0.94) == 0.94
+        with pytest.raises(ValueError, match="required and missing"):
+            config_number("", key="diff_gain", channel="T1_dT1")
+
+    def test_blank_legacy_beta_is_absent(self):
+        """As in chi's noise model and fp07cal: a blank ``beta`` defers to beta_1."""
+        data = np.array([1000.0])
+        np.testing.assert_array_equal(
+            convert_therm(data, {**_THERM, "beta": ""})[0], convert_therm(data, _THERM)[0]
+        )
+
+    def test_blank_poly_coefficient_is_refused(self):
+        """ODAS evals '' to [] and drops the term, shifting every higher order
+        down one; neither 0 nor a shift is safe to guess."""
+        with pytest.raises(ValueError, match="'coef1' is present but empty"):
+            convert_poly(np.array([1.0]), {"name": "P", "coef0": "1", "coef1": "", "coef2": "3"})
+
+    def test_blank_required_coefficient_warns_like_a_missing_one(self):
+        blank = {**_THERM, "g": ""}
+        absent = {k: v for k, v in _THERM.items() if k != "g"}
+        with pytest.warns(UserWarning, match="'g' missing"):
+            a = convert_therm(np.array([1000.0]), blank)[0]
+        with pytest.warns(UserWarning, match="'g' missing"):
+            b = convert_therm(np.array([1000.0]), absent)[0]
+        np.testing.assert_array_equal(a, b)
+
+
+class TestArithmeticWarns:
+    """The only arithmetic outside JAC-CT in 19,064 real configs is a typo."""
+
+    def test_typo_shaped_coefficient_warns_with_its_value(self):
+        params = {**_THERM, "name": "T1", "beta_1": "3-1315.08"}  # SUNRISE 2021 SN 412
+        with pytest.warns(UserWarning, match=r"T1: beta_1 = '3-1315.08' is arithmetic.*-1312\.08"):
+            convert_therm(np.array([1000.0]), params)
+
+    def test_plain_numbers_do_not_warn(self):
+        params = {**_THERM, "name": "T1", "beta_1": " +3.0e3 ", "t_0": "289.", "b": ".9991"}
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            convert_therm(np.array([1000.0]), params)
+
+    def test_jac_ct_arithmetic_is_rsis_own_and_silent(self):
+        from odas_tpw.rsi.channels import convert_rsijac_c
+
+        params = {"name": "JAC_C", "division_factor": "2^28", "gain": "10.88/100",
+                  "cell_constant": "1/10"}
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            convert_rsijac_c(np.array([3.0e8]), params)
+
+
+class TestBetaInfinity:
+    """``beta_2 = Inf`` (Rockland's Zissou tutorial VMP_024.p) is no term, as in ODAS."""
+
+    def test_converter_reads_inf_as_omitted(self):
+        with_inf = {**_THERM, "beta_2": "Inf"}
+        with_inf.pop("beta_3")
+        omitted = {k: v for k, v in with_inf.items() if k != "beta_2"}
+        data = np.array([1000.0, -2000.0])
+        np.testing.assert_array_equal(
+            convert_therm(data, with_inf)[0], convert_therm(data, omitted)[0]
+        )
+
+    def test_inf_beta_2_still_applies_beta_3(self):
+        """ODAS nests beta_3 under beta_2's isfield, not under its value:
+        beta_2 = Inf is the same as 1e30 (no quadratic term), beta_3 kept."""
+        data = np.array([1000.0, -2000.0])
+        np.testing.assert_array_equal(
+            convert_therm(data, {**_THERM, "beta_2": "Inf"})[0],
+            convert_therm(data, {**_THERM, "beta_2": "1e30"})[0],
+        )
+        no_cubic = convert_therm(data, {**_THERM, "beta_2": "Inf", "beta_3": "inf"})[0]
+        assert not np.array_equal(convert_therm(data, {**_THERM, "beta_2": "Inf"})[0], no_cubic)
+
+    def test_negative_infinity_is_no_term_and_nan_is_refused(self):
+        data = np.array([1000.0])
+        np.testing.assert_array_equal(
+            convert_therm(data, {**_THERM, "beta_2": "-Inf"})[0],
+            convert_therm(data, {**_THERM, "beta_2": "Inf"})[0],
+        )
+        with pytest.raises(ValueError, match="beta_2"):
+            convert_therm(data, {**_THERM, "beta_2": "NaN"})
+
+    def test_noise_model_and_fp07cal_agree(self):
+        from odas_tpw.fp07cal.logr import config_to_coeffs
+        from odas_tpw.rsi.chi_io import _extract_therm_cal
+
+        cfg = {**_THERM, "name": "T1", "beta_2": "Inf"}
+        assert "beta_2" not in _extract_therm_cal(cfg)
+        coeffs = config_to_coeffs(cfg)
+        assert coeffs[2] == 0.0 and coeffs[3] == 1.0 / 1e7
+
+
+class TestEveryOtherReader:
+    """Readers outside rsi/channels.py, each tested on its own so that
+    reverting any one of them to ``float()`` fails a test."""
+
+    def test_fp07cal_bridge_and_coefficients(self):
+        from odas_tpw.fp07cal.logr import BridgeParams, config_to_coeffs
+
+        cfg = {**_THERM, "name": "T1", "adc_bits": "2^4", "t_0": "273.15+16"}
+        assert BridgeParams.from_channel_config(cfg, "T1").adc_bits == 16
+        assert config_to_coeffs(cfg)[0] == 1.0 / (273.15 + 16)
+        with pytest.raises(ValueError, match="non-numeric bridge parameter"):
+            BridgeParams.from_channel_config({**cfg, "g": "6,0"}, "T1")
+
+    def test_fp07cal_noise_model_honors_legacy_beta(self):
+        """convert_therm reads ``beta`` before ``beta_1``; so must chi's noise model."""
+        from odas_tpw.rsi.chi_io import _extract_therm_cal
+
+        assert _extract_therm_cal({**_THERM, "beta": "3100"})["beta_1"] == 3100.0
+
+    def test_sensor_inventory_compares_coefficients_by_value(self):
+        from odas_tpw.rsi.sensor_inventory import _norm
+
+        assert _norm("diff_gain", "94/100") == _norm("diff_gain", "0.94")
+        assert _norm("adc_bits", "2^4") == 16
+        assert _norm("sens", "nan") == "nan"  # non-finite keeps its text
+        # A date is not arithmetic: 2019-06-26 and 2019-07-25 both "equal" 1987.
+        assert _norm("cal_date", "2019-06-26") != _norm("cal_date", "2019-07-25")
+
+    def test_diff_gain_audit(self):
+        from odas_tpw.rsi.diff_gain import collect_gains
+
+        cfg = {"instrument_info": {"sn": "479"},
+               "channels": [{"name": "sh1", "diff_gain": "94/100"}]}
+        uses, errors = collect_gains([Path("x.p")], lambda p: ({}, cfg))
+        assert not errors and uses[0].diff_gain == 0.94
+
+
+def _patched_copy(src, dst, channel, key, value):
+    """*src* with ``key`` of the [channel] section named *channel* set to *value*."""
+    from odas_tpw.rsi.config_patch import read_config_text, write_patched_pfile
+
+    blocks = re.split(r"(?m)^(?=\[)", read_config_text(src))
+    hits = 0
+    for i, b in enumerate(blocks):
+        if re.search(rf"(?m)^name\s*=\s*{re.escape(channel)}\s*$", b):
+            blocks[i], n = re.subn(rf"(?m)^({key}\s*=\s*)\S+", rf"\g<1>{value}", b)
+            hits += n
+    assert hits == 1, (channel, key, hits)
+    return write_patched_pfile(src, dst, "".join(blocks))
+
+
+@pytest.fixture
+def arithmetic_diff_gain_copy(sample_p_file, tmp_path):
+    """SN479_0006.p with every ``diff_gain`` rewritten as exact arithmetic."""
+    from odas_tpw.rsi.config_patch import read_config_text, write_patched_pfile
+
+    def double_half(m):
+        return f"{m.group(1)}{2 * float(m.group(2))!r}/2"
+
+    text, n = re.subn(
+        r"(?m)^(diff_gain\s*=\s*)([0-9.]+)", double_half, read_config_text(sample_p_file)
+    )
+    assert n == 5  # sh1, sh2, T1_dT1, T2_dT2, P_dP
+    return write_patched_pfile(sample_p_file, tmp_path / "arithmetic.p", text)
+
+
+class TestArithmeticDiffGainEndToEnd:
+    """A real file whose every diff_gain is arithmetic reads identically."""
+
+    def test_deconvolution(self, sample_p_file, arithmetic_diff_gain_copy):
+        from odas_tpw.rsi.p_file import PFile
+
+        a, b = PFile(sample_p_file), PFile(arithmetic_diff_gain_copy)
+        assert set(a.channels) == set(b.channels)
+        for name in a.channels:
+            np.testing.assert_array_equal(b.channels[name], a.channels[name], err_msg=name)
+
+    def test_l1_adapter(self, sample_p_file, arithmetic_diff_gain_copy):
+        from odas_tpw.rsi.adapter import pfile_to_l1data
+        from odas_tpw.rsi.p_file import PFile
+
+        a = pfile_to_l1data(PFile(sample_p_file), speed=0.6)
+        b = pfile_to_l1data(PFile(arithmetic_diff_gain_copy), speed=0.6)
+        assert b.diff_gains == a.diff_gains and len(a.diff_gains) == 2
+
+    def test_bad_buffer_repair_gains(self, sample_p_file, arithmetic_diff_gain_copy, monkeypatch):
+        from odas_tpw.rsi import bad_buffer
+        from odas_tpw.rsi.helpers import load_channels
+        from odas_tpw.rsi.p_file import PFile
+
+        # The file has no RDL dropouts; a clean mask is enough to reach the
+        # diff_gain read on the repair path.
+        monkeypatch.setattr(
+            bad_buffer, "sample_masks",
+            lambda report, n_fast, n_slow, **kw: {"sh1": np.zeros(n_fast, dtype=np.int8)},
+        )
+        a = load_channels(PFile(sample_p_file))["diff_gain_by_name"]
+        b = load_channels(PFile(arithmetic_diff_gain_copy))["diff_gain_by_name"]
+        assert b == a and len(a) == 5
+
+    def test_adapter_bad_buffer_gains(self, sample_p_file, arithmetic_diff_gain_copy,
+                                      monkeypatch):
+        """The adapter's second diff_gain read, on its bad-buffer path."""
+        from odas_tpw.rsi import bad_buffer
+        from odas_tpw.rsi.adapter import pfile_to_l1data
+        from odas_tpw.rsi.p_file import PFile
+
+        seen = []
+
+        def spy(**kw):
+            seen.append(dict(kw["diff_gains"]))
+            return np.zeros((len(kw["probe_names"]), len(kw["t_fast"])), dtype=bool), {}
+
+        monkeypatch.setattr(
+            bad_buffer, "sample_masks",
+            lambda report, n_fast, n_slow, **kw: {"sh1": np.zeros(n_fast, dtype=np.int8)},
+        )
+        monkeypatch.setattr(bad_buffer, "probe_masks", spy)
+        pfile_to_l1data(PFile(sample_p_file), speed=0.6)
+        pfile_to_l1data(PFile(arithmetic_diff_gain_copy), speed=0.6)
+        assert seen and seen[-1] == seen[0] and len(seen[0]) == 5
+
+    def test_pre_emphasis_gain_warns_once_under_its_own_name(self, arithmetic_diff_gain_copy):
+        """No converter reads a T1_dT1 diff_gain; deconvolution's read warns."""
+        from odas_tpw.rsi.p_file import PFile
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            PFile(arithmetic_diff_gain_copy)
+        hits = [x for x in w if str(x.message).startswith("T1_dT1: diff_gain")]
+        assert len(hits) == 1
+        assert hits[0].filename.endswith("p_file.py")  # the caller, not the parser
+
+    @pytest.mark.parametrize("value", ["0", "-0.954", "0.9-12"])
+    def test_non_positive_pre_emphasis_gain_names_the_channel(self, sample_p_file, tmp_path,
+                                                              value):
+        from odas_tpw.rsi.p_file import PFile
+
+        bad = _patched_copy(sample_p_file, tmp_path / "bad.p", "T1_dT1", "diff_gain", value)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match=r"T1_dT1: diff_gain = .* must be positive"):
+                PFile(bad)
+
+    def test_one_arithmetic_coefficient_warns_once(self, sample_p_file, tmp_path):
+        """T1_dT1 is converted with T1's stanza; only T1's conversion warns."""
+        from odas_tpw.rsi.p_file import PFile
+
+        bad = _patched_copy(sample_p_file, tmp_path / "beta.p", "T1", "beta_1", "3000+100")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            PFile(bad)
+        hits = [str(x.message) for x in w if "is arithmetic" in str(x.message)]
+        assert len(hits) == 1 and hits[0].startswith("T1: beta_1 = '3000+100'")
+
+    def test_viewer(self, sample_p_file, arithmetic_diff_gain_copy):
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from odas_tpw.rsi.mixing_look import MixingLookViewer
+        from odas_tpw.rsi.p_file import PFile
+
+        a = MixingLookViewer(PFile(sample_p_file), fft_length=256, f_AA=98.0)
+        b = MixingLookViewer(PFile(arithmetic_diff_gain_copy), fft_length=256, f_AA=98.0)
+        assert b.diff_gains == a.diff_gains and len(a.diff_gains) == 2
 
 
 class TestConvertRsijac:

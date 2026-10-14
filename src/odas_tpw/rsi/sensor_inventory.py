@@ -50,6 +50,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TextIO
 
+from odas_tpw.rsi.channels import config_number
 from odas_tpw.rsi.p_file import (
     HEADER_BYTES,
     _detect_endian,
@@ -310,16 +311,21 @@ def _norm(key: str, value: str):
     string too — otherwise two identical "nan" values would compare unequal
     (a false CHANGED) and two different overflowing values ("1e400"/"1e999",
     both inf) would merge (a false constant).
+
+    Coefficients are read by the converters' parser, so ``94/100`` and ``0.94``
+    are one value.  ``cal_date`` is not a coefficient and must not meet that
+    parser: ``2019-06-26`` is valid arithmetic (1987), and every ISO date of
+    the same arithmetic value would merge.
     """
     if value == "":
         return ""
+    if key == "cal_date":
+        return value
     try:
-        f = float(value)
-    except ValueError:
+        f = config_number(value, key=key)
+    except ValueError:  # includes non-finite (ConfigNumberNotFinite)
         return value
-    if not math.isfinite(f):
-        return value
-    # int() only after the finite check, so int(float("inf")) can't raise
+    # config_number returns only finite values, so int() can't raise
     # OverflowError here (this runs in build_inventory, which has no guard).
     return int(f) if key == "adc_bits" else f
 

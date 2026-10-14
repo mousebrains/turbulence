@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.widgets import Button
 
+from odas_tpw.rsi.channels import config_number
 from odas_tpw.rsi.helpers import (
     AC_PATTERN,
     DT_PATTERN,
@@ -443,7 +444,9 @@ class ProfileViewer:
         self.diff_gains = []
         for name, _ in self.therm_fast:
             ch_cfg: dict = next((ch for ch in pf.config["channels"] if ch.get("name") == name), {})
-            self.diff_gains.append(float(ch_cfg.get("diff_gain", "0.94")))
+            self.diff_gains.append(
+                config_number(ch_cfg.get("diff_gain"), 0.94, key="diff_gain", channel=name)
+            )
 
         # All temperature channels for temperature panel (T1, T2, JAC_T)
         self.temp_channels = []

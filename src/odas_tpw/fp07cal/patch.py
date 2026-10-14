@@ -42,6 +42,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from odas_tpw.rsi.channels import config_number
 from odas_tpw.rsi.config_patch import (
     EditSpec,
     patch_files,
@@ -159,8 +160,10 @@ def build_edits(record: dict, config: dict, *, channels: list[str] | None = None
                 errors.append(f"{ch}: file config has no bridge parameter {key!r}")
                 continue
             try:
-                same = abs(float(have) - float(want)) <= 1e-9 * max(1.0, abs(float(want)))
-            except (TypeError, ValueError):
+                h = config_number(have, key=key, channel=ch)
+                w = config_number(want, key=key, channel=ch)
+                same = abs(h - w) <= 1e-9 * max(1.0, abs(w))
+            except ValueError:
                 same = False
             if not same:
                 errors.append(

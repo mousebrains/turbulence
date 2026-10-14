@@ -37,10 +37,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   sits within 9 mK (median) of the FP07.
   - RSI writes some of these coefficients as arithmetic (`2^28`,
     `10.88/100`), which ODAS `eval`s and `float()` cannot read. A new
-    `_config_number` parses them with MATLAB's rules: `^` binds tighter than
-    a unary sign and is left-associative (`2^3^2` is 64). Names, `Inf`, hex,
+    `config_number` parses them with MATLAB's rules: `^` binds tighter than
+    a unary sign and is left-associative (`2^3^2` is 64). Other names, hex,
     `**` and non-finite results are refused with a `ValueError` naming the
-    channel and key.
+    channel and key. Every other reader of a channel coefficient now uses it
+    too (see Fixed).
   - Like ODAS, `rsijac_t` reads `division_factor` (default 2^28) and ignores
     the `scale_factor` key RSI's SeaExplorer configs carry.
   - Unlike ODAS, a zero divisor (`T_0`, a beta, `cell_constant`,
@@ -134,6 +135,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     at most 0.56 mK change in temperature, and no change in lag. With the
     start-up fix alone reverted, all 29 are bit-identical, so the gap split
     changes nothing on gap-free profiles.
+- **A channel coefficient written as arithmetic, or mistyped, no longer
+  becomes a default without a word.** ODAS `eval`s every channel parameter,
+  so `coef1 = 1/400` is a legal config. Fourteen converters (poly, voltage,
+  piezo, accel, magn, inclxy, inclt, jac_c, jac_t, sbt, sbc, aem1g_a,
+  aem1g_d, alec_emc) read it, or a decimal comma such as `0,5`, as 0 or their generic
+  default. Every reader of a channel coefficient now goes through one parser,
+  `config_number`: the converters and their `cal_*` provenance, the chi noise
+  model's thermistor calibration, deconvolution's `diff_gain` (in six
+  places), `fp07cal`'s bridge parameters, coefficients and patch check, the
+  shear-sheet check, the `diff_gain` and sensor inventories, and the v1 setup
+  cross-check. Previously they could read the same value three different
+  ways. (Defaults for an absent key still differ where they always did:
+  `t_0` is 289.0 K in `convert_therm`, 289.3 K in the noise model, and
+  required by `fp07cal`.)
+  - Arithmetic is evaluated with MATLAB's rules, including a signed exponent
+    (`2^-3^2` is (2^-3)^2 = 0.015625, checked in MATLAB).
+  - **Arithmetic outside JAC-CT warns**, naming the channel, key and value,
+    once per file. In the configs of 19,064 real `.p` files (about 4,400
+    distinct; local copies and SeaChest) the only arithmetic value not
+    written by RSI is a typo (below); ODAS evaluates it without a word. The
+    JAC-CT converters, where RSI writes `2^28` on purpose, stay silent.
+  - A present value that is malformed, NaN or infinite raises a `ValueError`
+    naming the channel and key. `ConfigNumberNotFinite` tells NaN/Inf from a
+    malformed value, and now reaches callers of the converters too (except
+    for shear `sens`, which keeps its own message pointing at `patch-config`).
+  - An absent key behaves exactly as before. A blank one (`key =`) is
+    treated as absent, with two exceptions that are refused: a blank
+    polynomial coefficient, because ODAS drops the term and shifts every
+    higher order down one, and a blank pre-emphasis `diff_gain` (`T1_dT1`,
+    `P_dP`), because undeconvolved counts are no fallback.
+  - A non-positive pre-emphasis `diff_gain` is refused, naming the channel.
+    It used to fail inside scipy ("filter critical frequencies must be
+    greater than 0") or with a bare `ZeroDivisionError`.
+  - `beta_2`/`beta_3 = Inf` is no term, as in ODAS (1/Inf = 0). Rockland's own
+    Zissou tutorial file (`VMP_024.p`) writes `beta_2 = Inf`; it was
+    unreadable before.
+  - A zero divisor (`g` for voltage, `coef1` for accel and magn), a
+    non-positive Sea-Bird frequency term, and a non-positive AEM1-G `adc_fs`
+    or `adc_bits` now raise instead of yielding inf, NaN or a fabricated
+    speed. No real config trips any of these.
+  - Whitespace inside an operand (`1 2`, `1e -5`) is refused, as MATLAB
+    refuses it. The JAC-CT parser had deleted it and read 12.
+  - A numpy float keeps its exact value rather than being re-read from its
+    `str()`. A boolean is refused rather than read as 1 or 0.
+  - Deliberate deviation: ODAS `deconvolve.m` reads `diff_gain` with
+    `str2double`, which turns arithmetic into NaN; here it gets the same value
+    the shear converter does. Root-section values (`recsize`) stay plain
+    numbers, as in ODAS, and the sensor inventory compares `cal_date` as text
+    (`2019-06-26` is valid arithmetic).
+  - Checked against every `.p` config on SeaChest: 1,981 distinct configs in
+    13,923 files, each channel converted by the old and new code. Output is
+    bit-identical except in two places. The 64 JAC-CT files now convert
+    (above). **One SUNRISE 2021 file now loads that did not:** Pelican SN 412
+    `SR1P2_0003`, whose T1 (probe T2132) has `beta_1 = 3-1315.08`.
+    It was refused before, so no SN 412 product contains it; it now reads
+    -1312.08 (with the warning above), the same kind of garbage negative
+    `beta_1` its 2021 siblings carry as plain numbers. The next SN 412
+    rebuild picks it up. Its recipe sets `fp07.calibrate: true`, so a
+    successful per-file fit replaces the coefficients; if the fit fails for
+    this file, the garbage value reaches the product.
 - **`perturb-plot mixing` failed on every bottom-up product.** It merges
   `diss_combo` and `chi_combo` by position and demanded identical bin axes, but
   near the bed epsilon's 1.0 s BBL window reaches bins chi's 2.0 s window does

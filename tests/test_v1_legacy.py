@@ -543,6 +543,19 @@ class TestTranslator:
         with pytest.warns(UserWarning, match="setup_wrong.cfg disagrees with setup.txt"):
             translate_v1_bytes(v1_dir / "SYN_001.p")
 
+    def test_cross_candidate_compares_coefficients_by_value(self, v1_dir):
+        """The same polynomial written as arithmetic is not a disagreement."""
+        (v1_dir / "setup_same.cfg").write_text(
+            "[matrix]\nrow1 = 255 16 8 5\nrow2 = 10 17 8 5\nrow3 = 4 0 8 5\n"
+            "row4 = 4 0 8 5\n"
+            "[channel]\nid = 10\nname = P\ntype = poly\ncoef0 = 8.92/2\n"
+            "coef1 = 0.099988/2\ncoef2 = 2.682e-8/2\n"
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            translate_v1_bytes(v1_dir / "SYN_001.p")
+        assert not [w for w in caught if "disagrees" in str(w.message)]
+
     def test_record0_nonzero_padding_warns(self, v1_dir):
         src = v1_dir / "SYN_001.p"
         raw = bytearray(src.read_bytes())
