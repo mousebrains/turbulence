@@ -125,6 +125,9 @@ Controls calibration of FP07 thermistors against a reference sensor.
 | `max_lag_seconds` | float | `10` | Max cross-correlation lag [seconds] |
 | `reference` | string | `"JAC_T"` | Reference temperature channel name |
 | `must_be_negative` | bool | `true` | Restrict lag to negative values (FP07 leads reference) |
+| `min_corr` | float | `0.5` | Minimum \|r\| of a profile segment's lag cross-correlation for it to count; a channel with none above it keeps the factory calibration |
+| `reference_interval` | float | `null` | Native sample interval [s] of a non-JAC reference; sets the FP07 low-pass to its Nyquist. `null` = taken from the hotel merge, else inferred |
+| `allow_hotel_reference` | bool | `false` | A reference that comes from the hotel file (a glider CTD) is refused unless this is true. The fit is per `.p` file, so a file the reference does not cover keeps the factory coefficients while its neighbors are fitted; the run summary's FP07 notice lists them. Prefer [`fp07-cal`](../fp07cal/runbook.md) (one calibration per deployment, then `calibrate: false`). Not part of the output-directory hash |
 
 ---
 

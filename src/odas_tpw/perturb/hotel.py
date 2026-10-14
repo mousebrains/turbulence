@@ -505,7 +505,7 @@ def _bridged_gap(hotel_t: np.ndarray, target_t: np.ndarray) -> np.ndarray:
     dt = np.diff(hotel_t)
     median_dt = float(np.median(dt)) if dt.size else 1.0
     tol = _MEASURED_TOL * max(1.0, median_dt)
-    # Check both bracketing neighbours: a target a sliver AFTER a sample has
+    # Check both bracketing neighbors: a target a sliver AFTER a sample has
     # ``hi`` pointing at the next one, so hi alone would miss the match.
     measured = (np.abs(hotel_t[hi] - target_t) <= tol) | (
         np.abs(hotel_t[lo] - target_t) <= tol

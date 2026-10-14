@@ -170,7 +170,10 @@ fp07:
   #   * `fp07-cal` measures whether the calibration is stable in time and depth,
   #     and reports the lag decomposition, rather than assuming.
   #
-  # Set `calibrate: false` once the .p files are patched.
+  # Set `calibrate: false` once the .p files are patched. Until then perturb
+  # refuses to start, because this reference is a hotel channel. To fit per
+  # file meanwhile, add `allow_hotel_reference: true` and read the FP07
+  # notice in the run summary.
   calibrate: true
   order: 1                # a single glider deployment rarely spans the >8 degC
                           # needed to constrain an order-2 fit

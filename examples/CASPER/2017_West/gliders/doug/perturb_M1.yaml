@@ -83,6 +83,11 @@ fp07:
   max_lag_seconds: 10
   must_be_negative: false   # a glider climbs as well as dives
   min_corr: 0.5
+  allow_hotel_reference: true  # the per-file fit, on purpose. Measured in this
+                            # deployment's products (2026-10-13): T2 fitted in
+                            # all 181 files, T1 in 29. T1 rails from CPW_037,
+                            # so the gate refuses it there, as it should; use
+                            # chi from T2.
 
 ct:
   align: false              # the glider CTD is pumped; T and C share a sample

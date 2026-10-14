@@ -69,6 +69,9 @@ fp07:
   max_lag_seconds: 10
   must_be_negative: false
   min_corr: 0.5
+  allow_hotel_reference: true  # the per-file fit, on purpose. With PR #214's
+                            # fixes it fits all 12 files and matches the pooled
+                            # fp07-cal fit (README, 2026-10-13).
 
 ct:
   align: false

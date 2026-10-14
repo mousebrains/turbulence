@@ -108,7 +108,7 @@ gates:
 
 continuity:
   # A clock drifts; it does not teleport.  A file whose offset jumps away from
-  # its neighbours is usually a cycle slip, not a clock.
+  # its neighbors is usually a cycle slip, not a clock.
   n_sigma: 5.0
   window: 9               # files in the running median
   wave_period: null       # e.g. 8.3 -- lets a slip be NAMED as N wave periods

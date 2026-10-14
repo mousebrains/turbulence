@@ -204,7 +204,7 @@ def _band_slice(valid: np.ndarray) -> slice:
 
     ``_valid_wavenumber_mask`` returns a possibly non-contiguous mask, and
     ``np.trapezoid(y[mask], K[mask])`` integrates the SUBSET GRID: every excluded
-    interval is bridged with a straight line between its neighbours, so
+    interval is bridged with a straight line between its neighbors, so
     unobserved area is counted as measured. Three isolated excess bins at
     k = 1, 80, 160 integrate to 53x their true area on the original grid; on the
     repo's own VMP corpus (29 files, 2944 probe-windows) 28.8% of selected bands

@@ -17,7 +17,7 @@ datenum -- read as seconds it lands in the year 55406.
 Output mirrors the ARCTERX gps.nc layout (t/lat/lon on an `index` dimension,
 t as int minutes since a reference) so the same `gps:` config block shape works.
 
-The neighbouring `mat2nc.py` is an earlier, unfinished attempt (it prints and
+The neighboring `mat2nc.py` is an earlier, unfinished attempt (it prints and
 writes nothing); it is left untouched.
 """
 from pathlib import Path

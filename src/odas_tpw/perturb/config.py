@@ -99,6 +99,7 @@ DEFAULTS: dict[str, dict] = {
         "must_be_negative": True,
         "min_corr": 0.5,
         "reference_interval": None,
+        "allow_hotel_reference": False,
     },
     "ct": {
         "align": True,
@@ -435,7 +436,12 @@ DEFAULTS: dict[str, dict] = {
 # dirs: ``diagnostics`` (extra plots), and the cache-bypass flags ``force`` /
 # ``force_trim`` (they re-run work into the SAME dirs, so they cannot change the
 # dir identity or --force would defeat itself by recomputing into fresh dirs).
-_HASH_EXCLUDE_KEYS = frozenset({"diagnostics", "force", "force_trim", "config_dir"})
+# ``fp07.allow_hotel_reference`` only decides whether a run may START; a run it
+# allows writes exactly what it wrote before the key existed, so hashing it
+# would re-version every product of every deployment for nothing.
+_HASH_EXCLUDE_KEYS = frozenset(
+    {"diagnostics", "force", "force_trim", "config_dir", "allow_hotel_reference"}
+)
 
 # Sections whose inner keys are user-defined (e.g. instrument serials).
 # ConfigManager skips strict unknown-key validation for these; per-section
@@ -1253,6 +1259,13 @@ fp07:
   reference_interval: null  # native sample interval [s] of a non-JAC
                           # reference (sets the FP07 low-pass to its Nyquist).
                           # null = taken from the hotel merge, else inferred
+  allow_hotel_reference: false  # a reference from the HOTEL file (a glider
+                          # CTD) is refused unless this is true. This fit is
+                          # per .p FILE: a file the CTD did not cover keeps the
+                          # factory coefficients while its neighbors are
+                          # fitted. `fp07-cal` (deployment-pooled, pre-pipeline,
+                          # then calibrate: false) avoids that; with true, read
+                          # the run summary's FP07 notice.
 
 ct:
   align: true

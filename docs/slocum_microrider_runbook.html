@@ -565,7 +565,7 @@ python recon_pfiles.py microrider -o recon.csv # per-file P / U_EM / tilt</code>
   <div class="trap">
     <span class="trap-label">Trap 3 — valid_min/max are in SOURCE units</span>
     <p>
-      The range check runs before <code>scale</code>, even though the neighbouring
+      The range check runs before <code>scale</code>, even though the neighboring
       <code>units:</code> names the output unit. Conductivity bounds are S/m; pressure
       bounds are bar. A bound written in output units is not an error — it is a check
       that silently never fires.

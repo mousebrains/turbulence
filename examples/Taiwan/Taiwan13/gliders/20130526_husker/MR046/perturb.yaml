@@ -82,6 +82,12 @@ fp07:
   must_be_negative: false   # a glider climbs as well as dives, so the sign of
                             # the thermistor-vs-CTD lag is not fixed
   min_corr: 0.5
+  allow_hotel_reference: true  # the per-file fit, on purpose. Measured in this
+                            # deployment's products (2026-10-13): T2 fitted in
+                            # 487 of 495 profiles, but T1 in only 184 (18 of 58
+                            # files); the other 40 files keep T1's FACTORY
+                            # coefficients. Not examined; fp07-cal would put
+                            # the whole deployment on one calibration.
 
 ct:
   align: false              # the glider CTD is PUMPED and T/C share a sample;

@@ -488,7 +488,7 @@ def estimate_lag(
 
 
 def _parabolic_peak(scores: list[tuple[float, float]], peak: float, step: float) -> float | None:
-    """Vertex of the parabola through the peak sample and its two neighbours."""
+    """Vertex of the parabola through the peak sample and its two neighbors."""
     by_lag = dict(scores)
     y0 = by_lag.get(round(peak - step, 6))
     y1 = by_lag.get(peak)

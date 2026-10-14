@@ -651,7 +651,7 @@ def test_a_real_surface_pressure_of_zero_survives():
     """Why `drop_zero_as_fill` is empty by default, on Rutgers' own data.
 
     Across the full ru33 deployment, 33 rows carry `sci_water_pressure == 0.0`
-    on a perfectly good timestamp. They are not sentinels: their neighbours
+    on a perfectly good timestamp. They are not sentinels: their neighbors
     read 0.002-0.013 bar, i.e. 2-13 cm of water. The glider is at the surface
     and the sensor is right.
 
