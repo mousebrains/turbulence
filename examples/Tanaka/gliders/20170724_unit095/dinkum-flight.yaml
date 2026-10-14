@@ -1,0 +1,79 @@
+# Flight-model inputs for Slocum G2 unit095 (MicroRider SN 247 + AEM1-G EM 010),
+# Oyashio, 2017-07-24 .. 2017-08-30 -- the Slocum of Tanaka et al. (2022, JTECH).
+#
+#   dinkum-hotel build -c dinkum-flight.yaml       -> flight_inputs.nc
+#
+# Same recipe as CASPER/2017_West/gliders/20170929_doug_CASPER/analysis/: base on
+# the FLIGHT computer's clock so every flight sensor lands on its own samples,
+# and project the CTD from the science clock (see sci_water_temp below).
+#
+# unit095 is a 1000 m G2: buoyancy is the oil volume m_de_oil_vol (-260 ml
+# pumped in on descent, per the paper), NOT m_ballast_pumped (which reads 0).
+#
+# Paths are relative to THIS file.
+files:
+  root: ".."
+  patterns:
+    - "post-recovery/glider/*.dbd"
+    - "post-recovery/glider/*.ebd"
+  cache: "cache"            # built from the files' own sensor lists; never
+                            # written into the source tree
+  output: "flight_inputs.nc"
+  reader: "auto"
+  skip_first_record: true
+  repair: false
+
+time:
+  base: "m_present_time"
+  min_value: "2017-07-20T00:00:00Z"
+  max_value: "2017-09-05T00:00:00Z"
+  dedupe: "last"
+
+projection:
+  method: "linear"
+  max_gap: 120              # [s]
+  extrapolate: false
+
+sensors:
+  m_pressure:       {units: "bar"}
+  m_depth:          {units: "m", valid_min: -2.0, valid_max: 1200.0}
+  m_pitch:          {units: "rad"}
+  m_roll:           {units: "rad"}
+  m_heading:        {units: "rad"}
+  m_de_oil_vol:     {units: "cm3"}     # MEASURED buoyancy-engine oil volume
+  c_de_oil_vol:     {units: "cm3", method: "previous"}
+  m_battpos:        {units: "in"}
+  m_fin:            {units: "rad"}
+  m_vehicle_temp:   {units: "degree_Celsius"}
+  m_gps_lat:        {transform: nmea_degrees, units: "degrees_north", method: "previous", valid_min: -90.0,  valid_max: 90.0}
+  m_gps_lon:        {transform: nmea_degrees, units: "degrees_east",  method: "previous", valid_min: -180.0, valid_max: 180.0}
+  m_lat:            {transform: nmea_degrees, units: "degrees_north", valid_min: -90.0,  valid_max: 90.0}
+  m_lon:            {transform: nmea_degrees, units: "degrees_east",  valid_min: -180.0, valid_max: 180.0}
+  m_water_vx:       {units: "m s-1", method: "previous"}
+  m_water_vy:       {units: "m s-1", method: "previous"}
+  # This glider's CTD is a Neil Brown unpumped cell (sci_nbctd_*). Its own
+  # timestamp, sci_nbctd_timestamp, is NEVER populated (0 in every record), so
+  # the CTD is projected from the science computer's sci_m_present_time --
+  # the time the sample was logged, not taken. Rows where the CTD did not
+  # sample read exactly 0 in T, C and P; the valid_min gates reject them
+  # (Oyashio water is > 0.5 C and > 2 S/m everywhere in 0-1000 m).
+  sci_water_temp:
+    time_sensor: "sci_m_present_time"
+    units: "degree_Celsius"
+    valid_min: 0.5
+    valid_max: 35.0
+  sci_water_cond:
+    time_sensor: "sci_m_present_time"
+    units: "S m-1"
+    valid_min: 2.0
+    valid_max: 7.0
+  sci_water_pressure:
+    time_sensor: "sci_m_present_time"
+    units: "bar"
+    valid_min: 0.001
+    valid_max: 120.0
+
+netcdf:
+  title: "Glider unit095 flight-model inputs (flight clock), Oyashio 2017"
+  source: "Slocum Dinkum dbd/ebd, Tanaka/gliders/20170724_unit095/post-recovery/glider"
+  platform: "Slocum G2 glider unit095"

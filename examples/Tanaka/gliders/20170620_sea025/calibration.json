@@ -1,0 +1,28 @@
+{
+  "steady_global": {
+    "Cd0": 0.1838860391486327,
+    "Vg": 0.06203077190262653,
+    "epsilon": 5.426395398763342e-10,
+    "n_samples": 19760
+  },
+  "settings": {
+    "mg_kg": 63.45,
+    "ah": 0.0,
+    "aw": 4.0,
+    "Cd1": 5.0,
+    "S": 0.14,
+    "depth_window_m": [
+      50.0,
+      650.0
+    ],
+    "pitch_min_deg": 15.0,
+    "oil_tolerance_ml": 10.0,
+    "rho0": 1027.5566436574188,
+    "source": "Tanaka et al. 2022 Sect. 3.2 a, Cd1, S, m"
+  },
+  "paper": {
+    "Cd0": 0.19,
+    "Vg_L": 62.0,
+    "epsilon": 5.3e-10
+  }
+}
