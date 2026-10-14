@@ -125,6 +125,9 @@ Controls calibration of FP07 thermistors against a reference sensor.
 | `max_lag_seconds` | float | `10` | Max cross-correlation lag [seconds] |
 | `reference` | string | `"JAC_T"` | Reference temperature channel name |
 | `must_be_negative` | bool | `true` | Restrict lag to negative values (FP07 leads reference) |
+| `min_corr` | float | `0.5` | Minimum \|r\| of a profile segment's lag cross-correlation for it to count; a channel with none above it keeps the factory calibration |
+| `reference_interval` | float | `null` | Native sample interval [s] of a non-JAC reference; sets the FP07 low-pass to its Nyquist. `null` = taken from the hotel merge, else inferred |
+| `allow_hotel_reference` | bool | `false` | A reference that comes from the hotel file (a glider CTD) is refused unless this is true. The fit is per `.p` file, so a file the reference does not cover keeps the factory coefficients while its neighbors are fitted; the run summary's FP07 notice lists them. Prefer [`fp07-cal`](../fp07cal/runbook.md) (one calibration per deployment, then `calibrate: false`). Not part of the output-directory hash |
 
 ---
 
@@ -435,6 +438,7 @@ config carrying only a chi-side knob hashes identically to one with no
 |-----------|------|-------------|
 | `exclude_shear_probes` | list of strings | Probe names (e.g. `["sh2"]`) to suppress for this instrument. The named probe is NaN'd before `mk_epsilon_mean`, so it is excluded from the multi-probe `epsilonMean` and from chi Method 1 (which uses `epsilonMean`) |
 | `fp07_tau_scale` | dict | Per-thermistor multiplier on the FP07 time constant, e.g. `{T1: 0.30, T2: 0.75}`. Keys accept the bead name (`T1`) or the gradient channel (`T1_dT1`); values must be finite and > 0. Default `{}` = every probe on the tau model, bit-identical to before |
+| `fp07_response` | path or list of paths | Measured per-bead response corrections from `fp07-pair fit` (`<CONFIG_DIR>/...` or relative to the working directory, like other paths). Hashed by content; versions chi only. **Mutually exclusive with `fp07_tau_scale`.** See [`fp07_response`](#fp07_response--a-measured-per-bead-correction) below |
 
 ```yaml
 instruments:
@@ -499,6 +503,37 @@ Caveats before reaching for it:
   Method 2 value, because the two methods weight the spectrum differently.
 - **Check it is stable in time.** A τ that drifts over a deployment is
   fouling or damage, not a probe constant, and a single value is then wrong.
+
+#### `fp07_response` — a measured per-bead correction
+
+`fp07_tau_scale` is one number per bead, fitted so integrated chi agrees. It
+cannot follow a shape difference, and it absorbs any flat gain between the
+beads into the response. `fp07_response` measures each bead's response
+relative to its partner from the ratio of their gradient spectra (no
+turbulence model involved), segmented in time, and checks every file against
+it before applying it:
+
+```yaml
+instruments:
+  SN194:
+    fp07_response:
+      - <CONFIG_DIR>/fp07pair/fp07pair_SN194_T1592-T2005_20220321T0359Z.nc
+      - <CONFIG_DIR>/fp07pair/fp07pair_SN194_T1592-T2005_20220328T2114Z.nc
+```
+
+On the ARCTERX-2022 SN 194 / SN 428 example above, it took the
+`K_max_ratio` quartile spread of `ln(chi2/chi1)` from -0.37 / +0.24 to
+-0.04 / +0.03 (190-profile subset, Method 1) and more than halved the
+per-window scatter. The pair's geometric-mean chi stays on the tau model, and the
+residual ratio sits at the flat gain `ln G`, which is not a response and is
+not removed.
+
+- A file that matches no listed correction is an **error**. List every file
+  the fit wrote for the instrument, including any `*_notapplied.nc` records,
+  which cover the spans of refused segments.
+- The chi product records `fp07_response_applied`, `fp07_response_reason`
+  and the factor itself (`fp07_response_f`, `fp07_response_ln_e`).
+- Workflow, report fields and caveats: [`docs/fp07pair/runbook.md`](../fp07pair/runbook.md).
 
 ---
 

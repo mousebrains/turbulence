@@ -7,6 +7,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Per-bead FP07 response equalization: `fp07-pair` and
+  `instruments.<dir>.fp07_response`.** Two FP07 beads on one probe head
+  respond differently, and chi gave both the same model response, so their chi
+  disagreed by a factor that trends with `K_max_ratio`. `fp07-pair fit`
+  measures each bead's response relative to its partner from the median ratio
+  of their gradient spectra (no turbulence model), segmented in time where the
+  pair changed, and writes one correction per segment. chi divides each bead's
+  observed and noise spectra by its factor, weighted by the bin's S/N, so the
+  pair's average stays on the tau model and only the disagreement is removed.
+  On ARCTERX-2022 SN 194 / SN 428 (Method 1, 190 profiles) the `K_max_ratio`
+  quartile spread of `ln(chi2/chi1)` fell from -0.37 / +0.24 to -0.04 / +0.03,
+  the per-window scatter fell from 0.28 / 0.19 to 0.11 / 0.10 (MAD-sd), and
+  the ratio landed on the pair's flat gain; the geometric-mean chi moved < 1%. Every
+  file is checked against its correction (a mid-band disagreement > 0.3 in ln
+  turns it off for that file), a file matching no correction is an error, and
+  each chi product records what was applied and why not. Hashed by content:
+  chi, chi_binned and chi_combo re-version, epsilon does not. Mutually
+  exclusive with `fp07_tau_scale`. `rsi-tpw chi --fp07-response`. Runbook:
+  `docs/fp07pair/runbook.md`; design record and acceptance:
+  `docs/fp07_pair_response_PLAN.md`.
 - **Converters for RSI's own JAC-CT board, `rsijac_t` and `rsijac_c`.** ODAS
   has had them since 2017 (`convert_odas.m`, WID); this package did not, so a
   MicroRider carrying that board kept `JAC_T` and `JAC_C` in raw Q3.28 counts
@@ -68,6 +88,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the long window's value for the near-bed windows.
 
 ### Fixed
+- **The `goto` FP07 time constant left out Goto et al.'s speed factor.** Goto
+  et al. (2016, sections 2d and 3c) use `tau = tau0 * W^-0.32` with
+  `tau0 = 3 ms`; the code used a fixed 3 ms, which is 13% short at their own
+  0.64 m/s and 2.1x short at 0.1 m/s. It pairs with `fp07_model: double_pole`,
+  which no shipped recipe selects. Chi from a user-run `double_pole` changes
+  (tau +15% at 0.65 m/s), and `perturb-diag` now redraws an old `double_pole`
+  product's FP07 response with the new tau, not the one its fit used.
+  - The `lueck` model (`tau = 10 ms * W^-0.5`, single pole, the default) was
+    credited to Lueck et al. (1977), which contains no such formula. Their
+    0.15-mm beads barely depended on speed, measured at 0.5 and 1.25 m/s. The
+    `-1/2` exponent is Vachon & Lueck's (1984) and Hill's (1987); the 10 ms
+    has no source we have found. The docstrings, `docs/chi_mathematics.md`
+    and the bibliography now say so. The model itself is unchanged, but
+    note what that means: it sets the FP07 correction in nearly every chi
+    product. `fp07_tau_scale` is an optional per-thermistor multiplier
+    (default 1, never fitted by the code), and the only shipped recipe that
+    sets it is a sensitivity variant (CASPER-West `perturb_M1_tau2.yaml`).
+    Changing the model would move every chi product.
+  - Corrected while there: Peterson & Fer's `-0.32` is Gregg & Meagher's
+    (1980), not Vachon & Lueck's, and ODAS `quick_look.m` implements Vachon &
+    Lueck as a double pole with `f_3dB = 25*sqrt(W)` Hz, a response 1.6x
+    faster than the `lueck` single pole.
+- **perturb's in-pipeline FP07 fit no longer gives up on a glider file for
+  reasons unrelated to the data.** On Tanaka 2015-11-13 (Slocum, CTD every
+  4.5 s) it calibrated 3 of 12 files. It now calibrates all 12, and each fit
+  agrees with the deployment-pooled `fp07-cal` fit to within 0.6% in gradient
+  gain (median 0.9999) and 8 mK. Two defects caused it, as re-running with
+  each fix reverted in turn shows. Without the first fix, 3 of 12 files are
+  fitted; without the second, 11 (T1) and 10 (T2):
+  - One NaN in a profile's reference (a hotel gap blanked by `max_gap`)
+    passed through the lag filter and silenced the WHOLE profile, counted
+    neither as accepted nor as rejected. A profile is now split at its gaps,
+    and each finite stretch of at least twice the lag window is scored. A
+    profile with no gap is scored exactly as before.
+  - The low-pass started from zero, so its output climbed from 0 to the
+    thermistor's counts (thousands) over seconds. A profile starting at the top
+    of a file, as every glider file that begins mid-dive does, scored that
+    ramp. A synthetic probe tracking its reference exactly scored |r| = 0.09.
+    The filter now starts at rest on the first sample.
+  - **This second fix also changes VMP output, slightly, on a file that
+    starts mid-cast.** Of the 29 repo SN 479 files, 26 are bit-identical to
+    before. In the other three (0004, 0018, 0029, starting at 128, 82 and
+    134 dbar) the first profile begins at sample 0, its lag score rises from
+    |r| 0.10-0.32 to 0.93-0.97, and it now enters the fit: one more profile,
+    at most 0.56 mK change in temperature, and no change in lag. With the
+    start-up fix alone reverted, all 29 are bit-identical, so the gap split
+    changes nothing on gap-free profiles.
 - **A channel coefficient written as arithmetic, or mistyped, no longer
   becomes a default without a word.** ODAS `eval`s every channel parameter,
   so `coef1 = 1/400` is a legal config. Fourteen converters (poly, voltage,
@@ -149,6 +216,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the header's 1 ms resolution.
 
 ### Changed
+- **An in-pipeline FP07 fit against a HOTEL reference is refused unless
+  `fp07.allow_hotel_reference: true`.** That fit is per `.p` file, so a file
+  the glider CTD did not cover keeps the factory coefficients while its
+  neighbors are fitted. In our own products, Taiwan13 husker carries T1
+  on factory coefficients in 40 of 58 files. perturb now stops before any
+  stage and names both ways forward: `fp07-cal` first (one calibration for
+  the deployment), or the switch. The switch is excluded from the output-
+  directory hash. The eight shipped glider recipes set it, so they run as
+  before.
+- **The run summary names every FP07 channel that kept the factory
+  coefficients**, per channel, with the file count and the most common kind of
+  reason, then the files. That used to be one warning per file in the worker
+  logs. A new `notices` list on `PipelineResult` carries it; notices neither
+  fail the run nor block the cache. The summary clips each line, so the notices
+  are also logged whole, at WARNING. They cover the files processed in that
+  run: a cached re-run reports none. `fp07_calibrate` returns a `factory` map
+  giving the reason for every channel it did not fit. Its `n_profiles*` counts
+  are now of scored segments (one per gap-free profile, so unchanged on a
+  VMP).
 - **SN 132's `diff_gain = 0.09` is on the right rung (issue #178, still open
   on the fine value).** This supersedes two 0.4.0 notes below: that "the
   ladder points the other way", and the `--diff-gain` entry's "real miss ...

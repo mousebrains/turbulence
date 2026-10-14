@@ -38,6 +38,7 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas
 - `chi.py` — Chi (thermal variance dissipation) calculation, Methods 1 and 2, QC metrics.
 - `batchelor.py` — Batchelor and Kraichnan temperature gradient spectra.
 - `fp07.py` — FP07 thermistor transfer function and electronics noise model.
+- `fp07_pair.py` — per-bead FP07 response equalization (`ResponseCorrection`, estimator, guard); CLI in `fp07_pair_cli.py`.
 
 ### Key Modules (scor160)
 
@@ -81,6 +82,9 @@ mr-clocksync probe   -c clocksync.yaml         # is there a wave to sync on? RUN
 mr-clocksync extract -c clocksync.yaml         # .p trees -> npz cache (slow, resumable)
 mr-clocksync solve   -c clocksync.yaml         # -> clock_offsets.csv + clock_report.txt
 mr-clocksync report  -c clocksync.yaml         # re-print the report from a solved run
+
+fp07-pair fit 'results/chi_00/*.nc' -o fp07pair/   # per-bead response corrections + report
+fp07-pair show fp07pair/*.nc                       # what a correction contains
 ```
 
 ### FP07 in-situ calibration (`fp07-cal`)
@@ -117,6 +121,14 @@ Facts that are easy to get wrong:
 - Polynomial order is chosen by **held-out** error split on temperature, not by
   in-sample fit or a t-test: `beta_3` can carry a t-statistic of 10 while
   making extrapolation four times worse.
+- **perturb refuses its own per-file fit against a hotel reference** unless
+  `fp07.allow_hotel_reference: true`. A file the glider CTD did not cover
+  keeps the factory coefficients while its neighbors are fitted: Taiwan13
+  husker left T1 on factory coefficients in 40 of 58 files. Sparseness alone is
+  not the problem. Once gaps split profiles and the low-pass started at rest,
+  a 4.5 s CTD fitted all 12 files of Tanaka 2015-11-13, within 0.6% of
+  `fp07-cal` in gradient gain. Whatever is left on factory coefficients is
+  named in the run summary's `notice:` lines and logged whole at WARNING.
 
 ### Hotel files from Slocum gliders
 
@@ -209,6 +221,41 @@ Facts that are easy to get wrong:
   `fp07cal`. `extract` is the only slow step (~12 min for 431 files / 67 GB) and
   is resumable; each `.p` becomes a ~700 kB `.npz`.
 
+### Per-bead FP07 response (`fp07-pair`)
+
+Measures each FP07 bead's response RELATIVE to its partner from the median
+ratio of their gradient spectra, per time segment; perturb applies it via
+`instruments.<dir>.fp07_response` (rsi-tpw: `chi --fp07-response`). Runbook:
+`docs/fp07pair/runbook.md`; design + acceptance: `docs/fp07_pair_response_PLAN.md`.
+
+Facts that are easy to get wrong:
+
+- **The data is divided, not the model multiplied.** Method 1 and iterative
+  Method 2 apply the response through a MODEL-weighted resolved-variance
+  correction, so multiplying the model by e over-applies a relative
+  correction wherever the spectrum is redder than the model (it left most of
+  the K_max_ratio trend on ARCTERX-2022). Dividing S and N by e is exact for
+  the pair whatever the spectral shape.
+- **Only where the signal dominates**: ln e is weighted by the bin's smoothed
+  S/N (full at >= 10, none below 2). Scaling noise-floor bins by 1/e inflated
+  the slow bead's chi on the osu684 glider's low-S/N windows.
+- **It never sets the absolute level and never removes ln G.** The pair's
+  geometric mean stays on the tau model; the residual ln(chi2/chi1) is the
+  flat gain at ~1 Hz (calibration / diff_gain), by design.
+- **Mutually exclusive with `fp07_tau_scale`** (refused at config load).
+  Dropping ARCTERX-2022's production tau scales moves absolute chi by their
+  geometric mean (~1.4x for SN194).
+- **No match is an error.** Refused segments get a `*_notapplied.nc` record
+  so their files run uncorrected and say why; list every file the fit wrote.
+- **Matching includes the instrument** (`fp07_pair.pair_identity`, from the
+  config string on both sides). A placeholder bead serial (`T`, as on SN479)
+  falls back to time but never across instruments; an unreadable config is an
+  error, never a wildcard.
+- **Segments split only between different `start_time`s**: every profile cut
+  from one `.p` carries the file's start, which is also the chi-time match key.
+- The `instruments:` key is still the raw directory name (`patched` for
+  fp07-cal output), and an unmatched key is still silently ignored by perturb.
+
 ### Python API
 
 ```python
@@ -250,6 +297,16 @@ python -m pytest tests/test_p_file.py::test_header  # single test
 - **FP07**: Fast-response glass-bead thermistor. Has a known frequency response rolloff that must be corrected.
 - **P file format** (RSI TN-051, rev. 2026-01-12): binary records with 128-byte headers (64 uint16 words). Record 0 = header + ASCII config string. Records 1..N = header + multiplexed int16 data. Endian flag at header word 64 (0=unknown, 1=little, 2=big). Versions 6.0–6.3 differ in timekeeping and bad-buffer handling — see `docs/rsi-tpw/odas_file_format.md`. `fs_fast` from words 21/22 is correct as read (511.9454 Hz on a 10-column VMP is the by-design rate, confirmed against ODAS MATLAB output); the §2.4.3 count-by-one bug affects **per-record synthesized timestamps**, which we never read. The note's 38.4 MHz clock figure is wrong: **Rockland confirmed 24 MHz** (2026-08-26), matching our files, where every rate is an exact integer divisor of 24 MHz. The header clock is `f_clock = clock_hz + clock_frac/1000` — thousandths of a Hz, **not** /65536 (e.g. 9216 + 590/1000 = 9216.590 = 24 MHz/2604, giving `fs_fast` = clock/n_cols and `fs_slow` = `fs_fast`/n_rows).
 - **fom (figure of merit)**: Ratio of observed to model variance in the spectral fit range; values near 1.0 indicate a good fit. For **epsilon** the model is the **Nasmyth** spectrum (observed/Nasmyth variance ratio; see `scor160/l4.py`). For **chi** the model is the **Batchelor/Kraichnan** spectrum convolved with the FP07 transfer function plus the noise floor (`chi/chi.py`). (Distinct from the Lueck-2022 `FM` reject statistic on the epsilon side.)
+- **FP07 time constant (`chi/fp07.py: fp07_tau`)**: `goto` = 3 ms·W^−0.32,
+  double pole (Goto et al. 2016 §2d, §3c; it was a fixed 3 ms until 2026-10).
+  `lueck` = 10 ms·W^−0.5, single pole, the default: the name is historical,
+  Lueck et al. (1977) has no such formula, and the 10 ms is unsourced. The
+  −½ exponent is Vachon & Lueck (1984) / Hill (1987); −0.32 is Gregg & Meagher
+  (1980). That unsourced 10 ms sets the FP07 correction in nearly every chi
+  product: `fp07_tau_scale` is an optional multiplier (default 1, nothing
+  fits it), set only by a CASPER-West sensitivity variant. Compare models by
+  3-dB frequency, not τ: a double pole rolls off sooner than a single pole
+  with the same τ.
 - **K_max_ratio**: K_max/K_95 (epsilon) or K_max/kB (chi). Values < 0.5 mean most variance is extrapolated.
 - **Inclinometers**: on a VMP, `Incl_Y` is capped at 90° with **+90° = pointing
   straight down** (so a falling VMP reads Incl_Y ≈ +90). On an MR, `Incl_Y` is

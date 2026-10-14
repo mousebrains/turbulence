@@ -143,10 +143,17 @@ class PipelineResult:
     re-reports; and a stage that failed left no output, so ``_output_is_current``
     can never skip it. A repeat run therefore reproduces the same status rather
     than laundering a failure into a clean exit.
+
+    *notices* — the run delivered, but did something the operator must know
+    about and would otherwise learn only from a worker log: today, FP07
+    channels that kept the FACTORY coefficients because the in-situ fit could
+    not run. Printed in the summary; they neither fail the run nor block the
+    cache, because nothing a re-run does would change them.
     """
 
     file_errors: list[str] = field(default_factory=list)
     stage_errors: list[str] = field(default_factory=list)
+    notices: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -162,14 +169,16 @@ class PipelineResult:
         is in the run log, which the CLI names alongside this.
         """
         if not self.stage_errors and not self.file_errors:
-            return "Pipeline complete: no errors."
-        head = (
-            f"Pipeline complete with {len(self.stage_errors)} stage failure(s) "
-            f"and {len(self.file_errors)} file error(s)."
-        )
+            head = "Pipeline complete: no errors."
+        else:
+            head = (
+                f"Pipeline complete with {len(self.stage_errors)} stage failure(s) "
+                f"and {len(self.file_errors)} file error(s)."
+            )
         lines = [head]
         lines += _summary_lines("STAGE FAILED", self.stage_errors)
         lines += _summary_lines("file error:  ", self.file_errors)
+        lines += _summary_lines("notice", self.notices)
         return "\n".join(lines)
 
 
@@ -2217,7 +2226,7 @@ def _fill_nonfinite_by_interp(arr, t=None, max_gap=None):
 
     ``t`` (sample times, same length as *arr*) and ``max_gap`` [s] make the
     fill honour the hotel merge's gate: a non-finite sample whose bracketing
-    finite neighbours are farther apart in time than *max_gap* --- or an edge
+    finite neighbors are farther apart in time than *max_gap* --- or an edge
     sample farther than *max_gap* from the nearest finite one --- stays NaN
     instead of being ruled across. Without this, the refill would fabricate in
     index space exactly the ramp ``hotel.max_gap`` just refused to fabricate
@@ -2260,7 +2269,7 @@ def _fill_nonfinite_by_interp(arr, t=None, max_gap=None):
             )
         fin_idx = np.flatnonzero(finite)
         t_fin = t[fin_idx]
-        # For each bad sample: the finite neighbours on either side in index
+        # For each bad sample: the finite neighbors on either side in index
         # order (edge samples have only one), and the time span between them.
         pos = np.searchsorted(fin_idx, np.flatnonzero(bad))  # insertion point
         lo = np.clip(pos - 1, 0, fin_idx.size - 1)
@@ -3020,8 +3029,15 @@ def process_file(
                 for ch_name, cal_data in cal_result.get("fast_channels", {}).items():
                     pf.channels[ch_name] = cal_data
                     pf.channel_info.setdefault(ch_name, {})["calibration"] = cal_tag
+                # Hand the outcome to the parent: from a spawned worker, the
+                # returned dict is the only channel that reaches the run summary.
+                result["fp07"] = {
+                    "fitted": sorted(cal_result.get("coefficients", {})),
+                    "factory": dict(cal_result.get("factory", {})),
+                }
             except Exception as exc:
                 logger.warning("FP07 cal failed for %s: %s", p_path.name, exc)
+                result["fp07"] = {"fitted": [], "factory": {"all": f"calibration raised: {exc}"}}
 
         # Write per-profile NetCDFs
         from odas_tpw.rsi.profile import extract_profiles
@@ -3239,6 +3255,14 @@ def process_file(
             tau_scale_cfg = instrument_cfg.get("fp07_tau_scale") or {}
             if tau_scale_cfg:
                 chi_kwargs["fp07_tau_scale"] = dict(tau_scale_cfg)
+            # Measured per-bead response corrections (fp07-pair). Paths were made
+            # absolute and checked at config load; chi refuses a file that no
+            # correction matches rather than mixing in an uncorrected product.
+            response_cfg = instrument_cfg.get("fp07_response")
+            if response_cfg:
+                is_one = isinstance(response_cfg, (str, os.PathLike))
+                items = [response_cfg] if is_one else response_cfg
+                chi_kwargs["fp07_response"] = [str(x) for x in items]
             # Soft spectral-QC thresholds for mk_chi_mean — the SAME limits the rsi
             # pipeline's chi_final uses, so both pipelines filter chiMean/K_T/Gamma
             # identically (issue #104 U3-C2).
@@ -3842,6 +3866,119 @@ def _process_file_timed(*args, cachekey: str | None = None, **kwargs) -> dict:
     return result
 
 
+def _hotel_reference_refusal(config: dict, hotel_cfg: dict, hotel_data: Any) -> str | None:
+    """Why an in-pipeline FP07 fit against a HOTEL channel must not start, or None.
+
+    The in-pipeline fit (:mod:`odas_tpw.perturb.fp07_cal`) is per ``.p`` file.
+    Against a reference inside the file -- a VMP's JAC -- every file has one.
+    Against a hotel channel, typically a glider CTD, a file the CTD did not
+    cover (CT off on some yos, a long gap) keeps the FACTORY coefficients while
+    its neighbors are fitted, and the deployment ends up on two calibrations.
+
+    A sparse reference is not itself the problem. On Tanaka 2015-11-13 (CTD
+    every 4.5 s) the per-file fit calibrated 3 of 12 files until a gap stopped
+    silencing whole profiles and the low-pass stopped starting from zero; it
+    now calibrates all 12, within 0.6% in gradient gain (3 mK median) of the
+    deployment-pooled ``fp07-cal`` fit. Coverage still is: in our own
+    products, Taiwan17 doug fitted 70 of 72 files, but Taiwan13 husker left T1
+    on factory coefficients in 40 of 58.
+
+    Hence a refusal by default, not a ban: ``fp07.allow_hotel_reference:
+    true`` keeps the per-file fit, and the run summary then reports every file
+    that kept factory coefficients (:func:`_fp07_notices`). ``fp07-cal`` puts a
+    deployment on one calibration whatever the coverage.
+
+    The channel names are the hotel merge's own (``hotel.channels.<src>.name``,
+    else the source name), so the answer is the same whether or not the config
+    lists the channels.
+    """
+    # The raw section, as process_file reads it: merge_config drops an explicit
+    # null, so `calibrate: null` would be refused here yet skipped there.
+    fp07_cfg = config.get("fp07") or {}
+    if not fp07_cfg.get("calibrate", True) or hotel_data is None:
+        return None
+    if fp07_cfg.get("allow_hotel_reference", False):
+        return None
+    from odas_tpw.perturb.hotel import _normalize_channels_cfg
+
+    _, opts = _normalize_channels_cfg(hotel_cfg.get("channels"))
+    names = {opts.get(src, {}).get("name", src) for src in hotel_data.channels}
+    reference = fp07_cfg.get("reference", "JAC_T")
+    if reference not in names:
+        return None
+    return (
+        f"fp07.reference {reference!r} comes from the hotel file, and fp07.calibrate "
+        "is true. That fit runs per .p FILE, so a file the hotel reference does "
+        "not cover keeps the FACTORY coefficients while its neighbors are "
+        "fitted. Either calibrate the whole deployment with `fp07-cal` first and "
+        "set fp07.calibrate: false (docs/fp07cal/runbook.md), or set "
+        "fp07.allow_hotel_reference: true to fit per file and read the run "
+        "summary's FP07 notice."
+    )
+
+
+_REASON_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _reason_kind(why: str) -> str:
+    """A factory-coefficient reason with its per-file numbers taken out.
+
+    The numbers are what differs between files with the same cause: "(3
+    rejected, 1 unscored)", but also "37.5% of fit samples on the bridge rail"
+    and "40 usable samples for an order-2 fit", which lead with theirs.
+    Grouping on the raw text split one cause into a reason per file, and the
+    notice then named a minority cause as the most common one.
+    """
+    return _REASON_NUMBER_RE.sub("N", str(why).split(" (")[0])
+
+
+def _fp07_notices(outcomes: dict[str, dict]) -> list[str]:
+    """Run-summary lines for FP07 channels that kept the factory coefficients.
+
+    *outcomes* maps a processed file to its ``{"fitted": [...], "factory":
+    {channel: reason}}``. Nothing is said when every channel of every file was
+    fitted. Otherwise each channel gets two lines: how many files kept factory
+    coefficients against how many were fitted, with the most common kind of
+    reason, and then the files. A deployment on two calibrations is worth
+    knowing about even when no file failed. The summary clips each line; the
+    run log carries them whole (:func:`run_pipeline`). Covers the files
+    processed in THIS run; cached files were reported by the run that made
+    them.
+
+    The key ``"all"`` is ``process_file``'s: the calibration raised before any
+    channel was tried.
+    """
+    from collections import Counter
+
+    fitted: Counter[str] = Counter()
+    factory: dict[str, list[str]] = {}
+    reasons: dict[str, Counter[str]] = {}
+    for name, out in sorted(outcomes.items()):
+        for ch in out.get("fitted", []):
+            fitted[ch] += 1
+        for ch, why in out.get("factory", {}).items():
+            factory.setdefault(ch, []).append(name)
+            reasons.setdefault(ch, Counter())[_reason_kind(why)] += 1
+    lines = []
+    for ch in sorted(factory):
+        files = factory[ch]
+        why, n_why = reasons[ch].most_common(1)[0]
+        if ch == "all":
+            head = (
+                f"FP07: in-situ calibration RAISED in {len(files)} file(s), which "
+                f"kept FACTORY coefficients on every thermistor. Most common "
+                f"error ({n_why} of {len(files)}): {why}."
+            )
+        else:
+            head = (
+                f"FP07 {ch}: FACTORY coefficients kept in {len(files)} file(s), "
+                f"in-situ fit in {fitted[ch]} (this run). Most common reason "
+                f"({n_why} of {len(files)}): {why}."
+            )
+        lines += [head, f"FP07 {'' if ch == 'all' else ch + ' '}files: {', '.join(files)}"]
+    return lines
+
+
 def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineResult:
     """Run the full pipeline: discover -> trim -> merge -> process -> bin -> combo.
 
@@ -3887,6 +4024,28 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
     jobs = parallel_cfg.get("jobs", 1)
     if jobs == 0:
         jobs = os.cpu_count() or 1
+
+    # Hotel data -- loaded before any stage runs, so a configuration it makes
+    # invalid is refused before trimming starts rather than after.
+    cdir = config_dir_of(config)
+    hotel_cfg = merge_config("hotel", config.get("hotel"))
+    hotel_data = None
+    if hotel_cfg.get("enable", False) and hotel_cfg.get("file"):
+        from odas_tpw.perturb.hotel import load_hotel, resolve_gap_settings
+
+        hotel_data = load_hotel(
+            expand_config_dir(hotel_cfg["file"], cdir),
+            hotel_cfg.get("time_column", "time"),
+            hotel_cfg.get("time_format", "auto"),
+            hotel_cfg.get("channels", {}),
+        )
+        # Validate max_gap / extrapolate once here: a missing max_gap would
+        # otherwise raise inside every worker, once per file.
+        resolve_gap_settings(hotel_cfg)
+        logger.info("Loaded hotel file: %d channels", len(hotel_data.channels))
+    refusal = _hotel_reference_refusal(config, hotel_cfg, hotel_data)
+    if refusal:
+        raise ValueError(refusal)
 
     # Trim
     if files_cfg.get("trim", True):
@@ -3988,28 +4147,10 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
     output_root = _configured_output_root(config)
 
     # GPS provider (resolve any <CONFIG_DIR> in gps.file before it hits disk)
-    cdir = config_dir_of(config)
     gps_cfg = merge_config("gps", config.get("gps"))
     if gps_cfg.get("file"):
         gps_cfg = {**gps_cfg, "file": expand_config_dir(gps_cfg["file"], cdir)}
     gps = create_gps(gps_cfg)
-
-    # Hotel data
-    hotel_cfg = merge_config("hotel", config.get("hotel"))
-    hotel_data = None
-    if hotel_cfg.get("enable", False) and hotel_cfg.get("file"):
-        from odas_tpw.perturb.hotel import load_hotel, resolve_gap_settings
-
-        hotel_data = load_hotel(
-            expand_config_dir(hotel_cfg["file"], cdir),
-            hotel_cfg.get("time_column", "time"),
-            hotel_cfg.get("time_format", "auto"),
-            hotel_cfg.get("channels", {}),
-        )
-        # Validate max_gap / extrapolate once here: a missing max_gap would
-        # otherwise raise inside every worker, once per file.
-        resolve_gap_settings(hotel_cfg)
-        logger.info("Loaded hotel file: %d channels", len(hotel_data.channels))
 
     def _instrument_key(p):
         return instrument_key_by_path.get(p.resolve(), p.parent.name)
@@ -4061,6 +4202,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
     else:
         logger.info("Processing %d files (jobs=%d)...", len(to_process), jobs)
 
+    fp07_outcomes: dict[str, dict] = {}
     if jobs == 1:
         for p_path, cachekey in to_process:
             logger.info("Processing %s...", p_path.name)
@@ -4077,6 +4219,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
             )
             logger.info("%s", _done_message(p_path.name, result))
             outcome.file_errors += _file_errors(p_path.name, result)
+            if isinstance(result, dict) and "fp07" in result:
+                fp07_outcomes[p_path.name] = result["fp07"]
     else:
         # Spawn workers each get a per-pid log file inside <output_root>/logs/
         # so multi-process runs are diagnosable.  ``run_stamp`` is the parent
@@ -4109,12 +4253,21 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                     result = future.result()
                     logger.info("%s", _done_message(p.name, result))
                     outcome.file_errors += _file_errors(p.name, result)
+                    if isinstance(result, dict) and "fp07" in result:
+                        fp07_outcomes[p.name] = result["fp07"]
                 except Exception as exc:
                     # The worker died rather than returning a result, so its own
                     # `errors` list never made it back; record the future's
                     # exception in its place.
                     logger.error("processing %s: %s", p.name, exc)
                     outcome.file_errors.append(f"{p.name}: {exc}")
+
+    outcome.notices += _fp07_notices(fp07_outcomes)
+    # Whole and at WARNING: the summary clips each line (a file list is longer
+    # than that) and is logged at INFO on a run with no errors, which
+    # `--log-level warning` would hide.
+    for line in outcome.notices:
+        logger.warning("%s", line)
 
     # Binning — three independent stages (profiles / diss / chi) that
     # share no data, so we run them concurrently on a thread pool.  Each
