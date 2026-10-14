@@ -103,6 +103,10 @@ class L3ChiData:
     # Both (N_GRADT, N_SPECTRA); empty when no mask was supplied.
     bad_fraction: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
     interp_fraction: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
+    # Per-probe measured response factors (chi.fp07_pair.apply_to_l3): None or
+    # a callable (F, W) -> e. l4_chi divides the probe's observed and noise
+    # spectra by it; H2 and everything stored here stay on the default model.
+    response_factor: list = field(default_factory=list)
 
     def tau0_for(self, ci: int, j: int) -> float:
         """FP07 time constant for thermistor *ci*, window *j* [s].

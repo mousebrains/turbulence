@@ -190,13 +190,17 @@ Accounts for both the glass bead thermal mass and the thermal boundary layer:
 
 ### Speed-dependent time constant
 
-The FP07 time constant depends on the flow speed past the sensor, which controls the thermal boundary layer thickness. The `W^(-1/2)` speed scaling was established by Vachon & Lueck (1984, *Proc. 1984 STD Conference and Workshop*, Marine Technology Society); [Peterson & Fer (2014)](https://doi.org/10.1016/j.mio.2014.05.002) fitted a slightly weaker exponent for their glider data:
+The FP07 time constant depends on the flow speed past the sensor, which controls the thermal boundary layer thickness. Two exponents are in use. `W^(-1/2)` is Vachon & Lueck's (1984, *Proc. 1984 STD Conference and Workshop*, Marine Technology Society), as Rockland cites it, and [Hill's (1987)](https://doi.org/10.1063/1.1139444), as Goto et al. cite it. `W^(-0.32)` is [Gregg & Meagher's (1980)](https://doi.org/10.1029/JC085iC05p02779): the 3-dB frequency of 0.4-mm glass rods scaled as `U^(1/3)` over 0.08-3.8 m/s. Peterson & Fer and Goto et al. both adopt it.
 
-| Model | Formula | Reference |
-|-------|---------|-----------|
-| Lueck | `tau_0 = 0.01 * (1/W)^0.5` | [Lueck et al. 1977](https://doi.org/10.1016/0146-6291(77)90565-3) |
-| Peterson | `tau_0 = 0.012 * W^(-0.32)` | [Peterson & Fer 2014](https://doi.org/10.1016/j.mio.2014.05.002) |
-| Goto | `tau_0 = 0.003` (fixed) | [Goto et al. 2016](https://doi.org/10.1175/JTECH-D-15-0220.1) |
+| Model | Formula | Pole | Reference |
+|-------|---------|------|-----------|
+| Lueck | `tau_0 = 0.01 * W^(-0.5)` | single | none found for the 10 ms (see below) |
+| Peterson | `tau_0 = 0.012 * W^(-0.32)` | single | [Peterson & Fer 2014](https://doi.org/10.1016/j.mio.2014.05.002) |
+| Goto | `tau_0 = 0.003 * W^(-0.32)` | double | [Goto et al. 2016](https://doi.org/10.1175/JTECH-D-15-0220.1), sections 2d and 3c |
+
+The `lueck` name is historical. [Lueck et al. (1977)](https://doi.org/10.1016/0146-6291(77)90565-3) measured 0.15-mm beads whose response was "not very dependent on water speed" at 0.5 and 1.25 m/s. At 1.25 m/s the 3-dB point was 13-15 Hz for a paralene-coated bead and 11-13 Hz for a glass-coated one (single-pole `tau` about 11-14 ms). `U^(-1/2)` appears there only as one candidate boundary-layer scaling. ODAS `quick_look.m` builds the Vachon & Lueck law as a *double* pole with `f_3dB = 25*sqrt(W)` Hz; the `lueck` single pole puts it at `15.9*sqrt(W)` Hz, a response 1.6x slower. (Compare 3-dB points, not taus: a double pole with a given `tau` rolls off sooner than a single pole with the same `tau`.) Nothing in the pipeline fits the prefactor. perturb's `fp07_tau_scale` is an optional per-thermistor multiplier (default 1), and the only shipped recipe that sets it is a sensitivity variant, so the unsourced 10 ms sets the FP07 correction in nearly every chi product.
+
+The Goto model once omitted the `W^(-0.32)` and used a fixed 3 ms: 13% short at Goto's own 0.64 m/s, 2.1x short at 0.1 m/s. No shipped recipe uses `double_pole`.
 
 ([`fp07.py: fp07_tau`](../src/odas_tpw/chi/fp07.py))
 
@@ -651,6 +655,7 @@ These are the `rsi-tpw` defaults ([`rsi/chi_io.py`](../src/odas_tpw/rsi/chi_io.p
 - Gregg, M.C. and T.B. Meagher, 1980: [The dynamic response of glass rod thermistors.](https://doi.org/10.1029/JC085iC05p02779) *J. Geophys. Res.*, **85**, 2779-2786.
 - Goto, Y., I. Yasuda, and M. Nagasawa, 2016: [Turbulence estimation using fast-response thermistors attached to a free-fall vertical microstructure profiler.](https://doi.org/10.1175/JTECH-D-15-0220.1) *J. Atmos. Oceanic Technol.*, **33**(10), 2065-2078.
 - Vachon, P. and R.G. Lueck, 1984: A small combined temperature-conductivity probe. *Proceedings of the 1984 STD Conference and Workshop*, San Diego, Marine Technology Society.
+- Hill, K.D., 1987: [Observations on the velocity scaling of thermistor dynamic response functions.](https://doi.org/10.1063/1.1139444) *Rev. Sci. Instrum.*, **58**, 1235-1238.
 - Nash, J.D., T.B. Caldwell, M.J. Zelman, and J.N. Moum, 1999: [A thermocouple probe for high-speed temperature measurement in the ocean.](https://doi.org/10.1175/1520-0426(1999)016%3C1474:ATPFHS%3E2.0.CO;2) *J. Atmos. Oceanic Technol.*, **16**, 1474-1482.
 
 ### Noise model

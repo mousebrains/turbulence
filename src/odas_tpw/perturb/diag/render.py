@@ -294,15 +294,26 @@ def _geomean_over_probes(x: np.ndarray) -> np.ndarray:
         return np.asarray(np.exp(np.nanmean(np.log(pos), axis=0)))
 
 
-def _fp07_h2(K: np.ndarray, speed: float, attrs: dict) -> np.ndarray:
+def _fp07_h2(
+    K: np.ndarray, speed: float, attrs: dict, probe: str | None = None,
+    response: tuple[np.ndarray, np.ndarray] | None = None,
+    obs: np.ndarray | None = None, noise: np.ndarray | None = None,
+) -> np.ndarray:
     """FP07 response |H|^2 on the wavenumber grid, or all-ones when unavailable.
 
-    Reconstructs the double-sided response the chi fit divides out: frequency
+    Reconstructs the response the chi fit divided out, for one probe: frequency
     ``f = K*speed`` (Hz), the speed-dependent ``tau`` paired with the stored
     ``fp07_model`` (single_pole -> Lueck, double_pole -> Goto; see
-    :func:`odas_tpw.chi.fp07.default_tau_model`), then the single- or double-pole
-    ``|H|^2``.  ``spec_batch`` is stored *without* this rolloff, so the model
-    that matches the raw observed spectrum is ``spec_batch*|H|^2 + spec_noise``.
+    :func:`odas_tpw.chi.fp07.default_tau_model`) times the probe's
+    ``fp07_tau_scale_<probe>`` when the product records one, then the single-
+    or double-pole ``|H|^2``, times an applied fp07-pair correction e
+    (*response* = (f at W_ref, ln e) for this probe) when the product carries
+    one. ``spec_batch`` is stored *without* this rolloff, so the model that
+    matches the raw observed spectrum is ``spec_batch*|H|^2 + spec_noise``.
+    (chi divided the raw spectrum and noise by e and fitted the default model;
+    multiplying back gives this same curve against the stored raw data.) chi
+    weights ln e by each bin's S/N (``fp07_pair.signal_weighted``); pass the
+    window's *obs* and *noise* spectra to reproduce that exactly.
     """
     from odas_tpw.chi.fp07 import (
         default_tau_model,
@@ -314,10 +325,27 @@ def _fp07_h2(K: np.ndarray, speed: float, attrs: dict) -> np.ndarray:
     model = str(attrs.get("fp07_model", "")) if attrs else ""
     if not model or not np.isfinite(speed) or speed <= 0:
         return np.ones_like(K)
-    tau0 = float(fp07_tau(float(speed), default_tau_model(model)))
+    tau_model = default_tau_model(model)
+    scale = float(attrs.get(f"fp07_tau_scale_{probe}", 1.0)) if probe else 1.0
+    tau0 = float(fp07_tau(float(speed), tau_model)) * scale
     f = np.asarray(K, dtype=float) * float(speed)
     tf = fp07_double_pole if model == "double_pole" else fp07_transfer
-    return np.asarray(tf(f, tau0), dtype=float)
+    h2 = np.asarray(tf(f, tau0), dtype=float)
+    if response is not None and int(attrs.get("fp07_response_applied", 0)):
+        from odas_tpw.chi.fp07_pair import reduced_frequency
+
+        f_ref, ln_e = response
+        w_ref = float(attrs.get("fp07_response_W_ref", speed))
+        x = reduced_frequency(f, float(speed), w_ref, str(attrs.get("fp07_response_tau_model",
+                                                                     tau_model)))
+        lx = np.log10(np.clip(x, f_ref[0], f_ref[-1]))
+        e = np.exp(np.interp(lx, np.log10(f_ref), ln_e))
+        if obs is not None and noise is not None:
+            from odas_tpw.chi.fp07_pair import signal_weighted
+
+            e = signal_weighted(e, obs, noise)
+        h2 = h2 * e
+    return h2
 
 
 def draw_chi_spectra(ax, cell: Cell) -> None:
@@ -341,11 +369,18 @@ def draw_chi_spectra(ax, cell: Cell) -> None:
                 ha="center", va="center")
         return
 
-    h2 = _fp07_h2(K, float(cf.speed[w]), cf.attrs)
     for p in range(cf.n_probe):
         c = _PROBE_COLORS[p % len(_PROBE_COLORS)]
+        probe = cf.probes[p] if p < len(cf.probes) else None
+        resp = (
+            (cf.response_f, cf.response_ln_e[p])
+            if cf.response_f is not None and cf.response_ln_e is not None
+            else None
+        )
         obs = cf.spec_gradT[p, :, w]
         noise = cf.spec_noise[p, :, w]
+        h2 = _fp07_h2(K, float(cf.speed[w]), cf.attrs, probe=probe, response=resp,
+                      obs=obs, noise=noise)
         model = cf.spec_batch[p, :, w] * h2 + noise
         og = kgood & np.isfinite(obs) & (obs > 0)
         if og.any():
