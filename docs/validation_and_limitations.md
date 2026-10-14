@@ -79,6 +79,13 @@ tau and the same `diff_gain`, so the pair spread is now tight *because it was
 tuned*, and the pair spread is no longer a valid estimator of chi's systematic
 error. Reading +-25% off it would be wrong.
 
+The same applies to `fp07_response` ([runbook](fp07pair/runbook.md)), the
+measured per-bead correction: it removes the response part of the pair
+disagreement by construction and leaves the pair's geometric mean on the
+default tau model. It deliberately keeps the flat gain `ln G` (SN 194 -0.14,
+SN 428 +0.09), so the residual pair ratio says something about calibration,
+nothing about the absolute response.
+
 Report an absolute systematic of order **1.5x**.
 
 ### `fom` near 1.0 does not mean the spectral fit is good
