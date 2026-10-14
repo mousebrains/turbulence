@@ -343,6 +343,12 @@ class ChiProfileFile:
     K_T: np.ndarray | None = None      # thermal diffusivity (Osborn-Cox), m^2/s
     K_rho: np.ndarray | None = None    # diapycnal diffusivity (Osborn), m^2/s
     Gamma: np.ndarray | None = None    # mixing coefficient (Oakey), dimensionless
+    # The FP07 response the chi fit actually used, beyond the model: probe
+    # channel names (to read the per-probe fp07_tau_scale_<name> attrs) and an
+    # applied fp07-pair correction (f at W_ref, ln e per probe).
+    probes: tuple[str, ...] = ()
+    response_f: np.ndarray | None = None       # (n_f,) Hz at fp07_response_W_ref
+    response_ln_e: np.ndarray | None = None    # (probe, n_f)
 
 
 def load_chi_profile_file(path: str) -> ChiProfileFile:
@@ -384,7 +390,17 @@ def load_chi_profile_file(path: str) -> ChiProfileFile:
             K_T=opt("K_T"),
             K_rho=opt("K_rho"),
             Gamma=opt("Gamma"),
+            probes=_probe_names(ds),
+            response_f=opt("fp07_response_f"),
+            response_ln_e=opt("fp07_response_ln_e"),
         )
+
+
+def _probe_names(ds: xr.Dataset) -> tuple[str, ...]:
+    if "probe" not in ds.variables:
+        return ()
+    vals = ds["probe"].values
+    return tuple(v.decode() if isinstance(v, bytes) else str(v) for v in vals)
 
 
 @dataclass

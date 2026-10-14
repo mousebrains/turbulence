@@ -1,0 +1,67 @@
+# Flight-model inputs for Slocum unit211 (MicroRider MR1000-LP SN 058), 20151119_unit211, near 32.3 N 133.2 E.
+#
+#   dinkum-hotel build -c dinkum-flight.yaml       -> flight_inputs.nc
+#
+# Same recipe as CASPER/2017_West/gliders/20170929_doug_CASPER/analysis/: base on
+# the flight clock, project the Sea-Bird CTD from its own clock
+# (sci_ctd41cp_timestamp, populated on this glider -- unlike unit095's Neil
+# Brown cell in 2017). unit211 is a 1000 m glider: buoyancy is m_de_oil_vol.
+#
+# The cache is a COPY of ../../cache (Pat's 2016 sensor-list cache), so a build
+# never writes into the source tree. Paths are relative to THIS file.
+files:
+  root: ".."
+  patterns:
+    - "post-recovery/glider/*.dbd"
+    - "post-recovery/glider/*.ebd"
+  cache: "cache"
+  output: "flight_inputs.nc"
+  reader: "auto"
+  skip_first_record: true
+  repair: false
+
+time:
+  base: "m_present_time"
+  min_value: "2015-11-18T00:00:00Z"
+  max_value: "2015-11-22T00:00:00Z"
+  dedupe: "last"
+
+projection:
+  method: "linear"
+  max_gap: 120              # [s]
+  extrapolate: false
+
+sensors:
+  m_pressure:       {units: "bar"}
+  m_depth:          {units: "m", valid_min: -2.0, valid_max: 1200.0}
+  m_pitch:          {units: "rad"}
+  m_roll:           {units: "rad"}
+  m_heading:        {units: "rad"}
+  m_de_oil_vol:     {units: "cm3"}
+  c_de_oil_vol:     {units: "cm3", method: "previous"}
+  m_battpos:        {units: "in"}
+  m_fin:            {units: "rad"}
+  m_gps_lat:        {transform: nmea_degrees, units: "degrees_north", method: "previous", valid_min: -90.0,  valid_max: 90.0}
+  m_gps_lon:        {transform: nmea_degrees, units: "degrees_east",  method: "previous", valid_min: -180.0, valid_max: 180.0}
+  m_lat:            {transform: nmea_degrees, units: "degrees_north", valid_min: -90.0,  valid_max: 90.0}
+  m_lon:            {transform: nmea_degrees, units: "degrees_east",  valid_min: -180.0, valid_max: 180.0}
+  sci_water_temp:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "degree_Celsius"
+    valid_min: 0.5
+    valid_max: 35.0
+  sci_water_cond:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "S m-1"
+    valid_min: 2.0
+    valid_max: 7.0
+  sci_water_pressure:
+    time_sensor: "sci_ctd41cp_timestamp"
+    units: "bar"
+    valid_min: -0.2
+    valid_max: 120.0
+
+netcdf:
+  title: "Glider unit211 flight-model inputs (flight clock), 20151119_unit211"
+  source: "Slocum Dinkum dbd/ebd, Tanaka/gliders/20151119_unit211/post-recovery/glider"
+  platform: "Slocum glider unit211"

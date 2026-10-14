@@ -7,6 +7,13 @@ Lueck, R.G., O. Hertzman, and T.R. Osborn, 1977: The spectral response of
     thermistors. Deep-Sea Res., 24, 951-970.
 Gregg, M.C. and T.B. Meagher, 1980: The dynamic response of glass rod
     thermistors. J. Geophys. Res., 85, 2779-2786.
+Vachon, P. and R.G. Lueck, 1984: A small combined temperature-conductivity
+    probe. Proc. 1984 STD Conf. and Workshop, Marine Technology Society.
+Hill, K.D., 1987: Observations on the velocity scaling of thermistor dynamic
+    response functions. Rev. Sci. Instrum., 58, 1235-1238.
+Goto, Y., I. Yasuda, and M. Nagasawa, 2016: Turbulence estimation using
+    fast-response thermistors attached to a free-fall vertical microstructure
+    profiler. J. Atmos. Oceanic Technol., 33, 2065-2078.
 Peterson, A.K. and I. Fer, 2014: Dissipation measurements using temperature
     microstructure from an underwater glider. Methods in Oceanography, 10, 44-69.
 RSI Technical Note 040: Noise in Temperature Gradient Measurements.
@@ -73,8 +80,8 @@ def fp07_double_pole(f: npt.ArrayLike, tau0: float) -> np.ndarray:
 def default_tau_model(fp07_model: str) -> str:
     """Auto-select FP07 tau model based on transfer function model.
 
-    ``double_pole`` pairs with 'goto' (fixed tau = 3 ms, Goto et al.
-    2016); ``single_pole`` pairs with 'lueck' (speed-dependent).  Note
+    ``double_pole`` pairs with 'goto' (tau = 3 ms * W^-0.32, Goto et al.
+    2016); ``single_pole`` pairs with 'lueck' (10 ms * W^-0.5).  Note
     that Peterson & Fer (2014) used a SINGLE-pole response,
     H^2(f) = (1 + (f/fc)^2)^-1, with a speed-dependent cut-off, so
     reproducing them means the ``single_pole`` transfer with the
@@ -100,13 +107,33 @@ def fp07_tau(speed: npt.ArrayLike, model: str = "lueck") -> np.ndarray | float:
     speed : float or array_like
         Profiling speed [m/s].
     model : str
-        'lueck'    : tau = 0.01 * (1.0/speed)^0.5 (Lueck et al. 1977)
-        'peterson' : tau = 0.012 * speed^(-0.32) — the speed-dependent
-            response adopted by Peterson & Fer (2014,
-            doi:10.1016/j.mio.2014.05.002), in the tradition of
-            Vachon & Lueck (1984) and Gregg & Meagher (1980)
-        'goto'     : tau = 0.003, speed-independent (Goto et al. 2016,
-            doi:10.1175/JTECH-D-15-0220.1, for their double-pole model)
+        'lueck'    : tau = 0.01 * speed^(-0.5), for the single pole.  The
+            name is historical and the 10 ms has no source we have found.
+            The -1/2 exponent is Vachon & Lueck's (1984), as Rockland
+            cites it, and Hill's (1987), as Goto et al. (2016) cite it.
+            But ODAS ``quick_look.m`` builds that law as a DOUBLE pole with
+            f_3dB = 25 * sqrt(speed) Hz; this single pole puts f_3dB at
+            15.9 * sqrt(speed) Hz, a response 1.6x slower.  (Compare the
+            3-dB points, not the taus: a double pole with a given tau
+            rolls off sooner than a single pole with the same tau.)
+            Lueck et al. (1977) found 0.15-mm beads "not very dependent
+            on water speed" at 0.5 and 1.25 m/s; U^-1/2 appears there only
+            as one candidate boundary-layer scaling.  Nothing fits the
+            prefactor (perturb's ``fp07_tau_scale`` is an optional
+            multiplier, default 1), so the 10 ms sets the FP07 correction
+            in nearly every chi product, and a change to it would move
+            them all.
+        'peterson' : tau = 0.012 * speed^(-0.32), single pole: Peterson &
+            Fer (2014, doi:10.1016/j.mio.2014.05.002), whose -0.32 is Gregg
+            & Meagher's (1980) U^1/3 scaling of the 3-dB frequency (cited
+            in their text as "1995"; their reference list has only 1980).
+        'goto'     : tau = 0.003 * speed^(-0.32), double pole (Goto et al.
+            2016, doi:10.1175/JTECH-D-15-0220.1, section 2d: tau = tau0 W^g
+            with g = -0.32; section 3c: tau0 = 3 ms best of 2, 3, 4 ms).  Their fit used
+            a VMP at 0.6-0.7 m/s, so the exponent itself was adopted, not
+            tested.  A version of this code omitted the W^-0.32 and used a
+            fixed 3 ms, which is 13% short at 0.64 m/s and 2.1x short at
+            0.1 m/s.
 
     Notes
     -----
@@ -136,7 +163,7 @@ def fp07_tau(speed: npt.ArrayLike, model: str = "lueck") -> np.ndarray | float:
     elif model == "peterson":
         result = 0.012 * speed ** (-0.32)
     elif model == "goto":
-        result = np.full_like(speed, 0.003) if speed.ndim > 0 else 0.003
+        result = 0.003 * speed ** (-0.32)
     else:
         raise ValueError(f"Unknown FP07 tau model: {model!r}")
     return float(result) if is_scalar else result

@@ -3255,6 +3255,14 @@ def process_file(
             tau_scale_cfg = instrument_cfg.get("fp07_tau_scale") or {}
             if tau_scale_cfg:
                 chi_kwargs["fp07_tau_scale"] = dict(tau_scale_cfg)
+            # Measured per-bead response corrections (fp07-pair). Paths were made
+            # absolute and checked at config load; chi refuses a file that no
+            # correction matches rather than mixing in an uncorrected product.
+            response_cfg = instrument_cfg.get("fp07_response")
+            if response_cfg:
+                is_one = isinstance(response_cfg, (str, os.PathLike))
+                items = [response_cfg] if is_one else response_cfg
+                chi_kwargs["fp07_response"] = [str(x) for x in items]
             # Soft spectral-QC thresholds for mk_chi_mean — the SAME limits the rsi
             # pipeline's chi_final uses, so both pipelines filter chiMean/K_T/Gamma
             # identically (issue #104 U3-C2).

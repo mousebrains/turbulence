@@ -21,6 +21,7 @@ from odas_tpw.chi.chi import (
     _mle_fit_kB,
 )
 from odas_tpw.chi.fp07 import fp07_double_pole, fp07_transfer
+from odas_tpw.chi.fp07_pair import signal_weighted
 from odas_tpw.chi.l3_chi import L3ChiData
 from odas_tpw.scor160.io import BAD_MAX_INTERP_FRACTION as MAX_INTERP_FRACTION
 from odas_tpw.scor160.io import L4Data
@@ -137,6 +138,18 @@ def _process_l4_chi(
             H2 = l3_chi.H2_for(ci, j)
             spec_obs = l3_chi.gradt_spec[ci, :, j]
             noise_K = l3_chi.noise_spec[ci, :, j]
+            # A measured per-probe response factor (fp07_pair) equalizes the
+            # DATA onto the default model's response. Dividing S and N alike
+            # rescales each bin's S = B*H2*e + N to S/e = B*H2 + N/e, so the
+            # fit and the band selection are unchanged in kind; H2 and _h2
+            # stay on the model (see chi.fp07_pair for why not the model
+            # side). The factor is applied only where the bin is signal-
+            # dominated (fp07_pair.signal_weighted).
+            fac = l3_chi.response_factor[ci] if ci < len(l3_chi.response_factor) else None
+            if fac is not None:
+                e = signal_weighted(fac(l3_chi.freq, W), spec_obs, noise_K)
+                spec_obs = spec_obs / e
+                noise_K = noise_K / e
 
             result = chi_func(
                 j, ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff

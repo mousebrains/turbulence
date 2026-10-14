@@ -472,7 +472,7 @@ def evaluate_checklist(stats: BenchStats) -> list[CheckItem]:
 def _evaluate_ctclu(stats: BenchStats) -> list[CheckItem]:
     sec = "CT/CLTU"
     items: list[CheckItem] = []
-    jt = next((cs for cs in stats.channels.values() if cs.ctype == "jac_t"), None)
+    jt = next((cs for cs in stats.channels.values() if cs.ctype in ("jac_t", "rsijac_t")), None)
     _add_range(items, sec, "JAC_T range", jt, _JAC_T_RANGE)
     for name, limit in (("Turbidity", _TURB_RANGE), ("Chlorophyll", _CHLA_RANGE)):
         _add_range(items, sec, f"{name} range", stats.get(name), limit)
@@ -599,7 +599,7 @@ def _ts_range_limit(name: str, ctype: str) -> float | None:
         return _SH_RANGE
     if ctype == "ucond":
         return _C1_RANGE
-    if ctype == "jac_t":
+    if ctype in ("jac_t", "rsijac_t"):
         return _JAC_T_RANGE
     return {
         "P": _P_RANGE,

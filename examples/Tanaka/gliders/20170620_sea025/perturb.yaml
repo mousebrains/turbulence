@@ -1,0 +1,141 @@
+# Perturb configuration -- MicroRider MR-SE SN 240 on SeaExplorer SEA025,
+# mission 24, Kuroshio off southeast Japan, 2017-06-20 .. 06-26. The
+# SeaExplorer of Tanaka et al. (2022, JTECH, doi:10.1175/JTECH-D-21-0074.1).
+#
+#   PYTHONPATH=<repo>/src perturb run -c perturb.yaml
+#
+# ---------------------------------------------------------------------------
+# READ FIRST (details in README.md)
+# * NEEDS THE rsijac CONVERTERS (branch feat/rsijac-ct). This MR's CT sensor
+#   is RSI's own JAC-CT board, config types rsijac_t / rsijac_c; without them
+#   JAC_T and JAC_C stay in raw Q3.28 counts (~3e8) and every salinity,
+#   density and N2 is garbage.
+# * The JAC CT is the CTD here: the SeaExplorer payload carried none. FP07 T1
+#   (one thermistor, T1415) is calibrated per FILE against JAC_T.
+# * Speed is a STEADY-STATE flight model with the paper's SeaExplorer lift and
+#   induced drag (a = 4.0, Cd1 = 5.0, S = 0.14 m2, m = 63.45 kg), Cd0/Vg/eps
+#   fitted to the navigation depth rate (make_flight_speed.py), which
+#   reproduces the paper's 0.19 / 62.0 L / 5.3e-10. The EM channel is U_EMC;
+#   it reads 1/0.92 (dives) and 1/0.93 (climbs) of the model speed, against the
+#   paper's single factor 0.90 -- see README.md. It is NOT used.
+# * sea025_flight_hotel.nc is ALREADY ON THE MR CLOCK (nav = MR + 4.7 s,
+#   no drift, mr_clock_model.json), so time_offset is 0. 20 s cadence.
+# * Shear probes M1585 @ 0.0690, M1586 @ 0.0638: no sheet in
+#   microstructure_sensors/; the config header says RSI wrote NOMINAL values
+#   (2017-03-30), later patched (2017-06-07/06-27/2021-02-06). Unverified.
+# ---------------------------------------------------------------------------
+
+files:
+  p_file_root: "<CONFIG_DIR>/../post-recovery/microrider"
+  p_file_pattern: "DAT_*.P"   # 64 files, DAT_124 .. DAT_187
+  output_root: "<CONFIG_DIR>/Processed"
+  trim: false
+  merge: false
+
+hotel:
+  enable: true
+  file: "<CONFIG_DIR>/sea025_flight_hotel.nc"
+  time_column: "time"         # ALREADY the MicroRider clock
+  time_format: "epoch"
+  time_offset: 0.0
+  max_gap: 45.0               # [s] the navigation records every 20 s
+  extrapolate: false
+  interpolation: "pchip"
+  channels:
+    speed:
+      fast: true
+  fast_channels: ["speed"]
+
+gps:
+  source: "netcdf"
+  file: "<CONFIG_DIR>/sea025_flight_hotel.nc"
+  time_col: "time"
+  lat_col: "lat"
+  lon_col: "lon"
+  max_time_diff: 600
+
+profiles:
+  P_min: 2.0
+  W_min: 0.05
+  direction: "glide"          # BOTH legs
+  min_duration: 60.0
+  diagnostics: false
+
+fp07:
+  calibrate: true
+  order: 2
+  reference: "JAC_T"
+  max_lag_seconds: 10
+  must_be_negative: false
+  min_corr: 0.5
+
+ct:
+  align: true
+  T_name: "JAC_T"
+  C_name: "JAC_C"
+
+speed:
+  method: "hotel"
+  hotel_var: "speed"
+  speed_cutout: 0.05
+
+epsilon:
+  fft_sec: 2.0
+  salinity: "measured"
+  T_source: "JAC_T"
+  fom_max: null
+  diagnostics: false
+
+chi:
+  enable: true
+  use_epsilon: false
+  fft_sec: 2.0
+  spectrum_model: "kraichnan"
+  salinity: "measured"
+  mixing: true
+  fom_max: null
+
+stratification:
+  enable: true
+  salinity: "measured"
+  window: 2.0
+
+ctd:
+  enable: true
+  T_name: "JAC_T"
+  C_name: "JAC_C"
+
+bottom:
+  enable: false
+top_trim:
+  enable: false
+
+binning:
+  method: "depth"
+  width: 1.0
+
+qc:
+  enable: true
+  drop_action: "nan"
+
+netcdf:
+  title: "MicroRider SN 240 turbulence on SeaExplorer SEA025, Kuroshio 2017"
+  summary: >
+    Turbulent kinetic energy dissipation (epsilon) and thermal variance
+    dissipation (chi) from a Rockland MicroRider MR-SE SN 240 on Alseamar
+    SeaExplorer SEA025 along the Kuroshio southeast of Japan, 20-26 June 2017
+    (the SeaExplorer of Tanaka et al. 2022). Through-water speed from a
+    steady-state flight model with the paper's ADCP-derived lift and
+    induced-drag coefficients, calibrated against the depth rate; temperature
+    and conductivity from the MicroRider's RSI JAC-CT; FP07 calibrated in situ
+    against it; times on the MicroRider clock.
+  institution: "Oregon State University"
+  platform: "Alseamar SeaExplorer SEA025"
+  instrument: "Rockland MicroRider MR-SE SN 240"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"
+  geospatial_vertical_positive: "down"
+  Conventions: "CF-1.13, ACDD-1.3"
+
+parallel:
+  jobs: 2

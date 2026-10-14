@@ -426,6 +426,9 @@ DEFAULTS: dict[str, dict] = {
     # Per-instrument overrides keyed by serial-number identifier (matched
     # against the parent directory of each .p file). Allowed inner keys:
     #   exclude_shear_probes : list[str]  (e.g. ["sh1"] or ["sh2"])
+    #   fp07_tau_scale       : {probe: multiplier}
+    #   fp07_response        : path | [paths] from `fp07-pair fit`
+    #                          (mutually exclusive with fp07_tau_scale)
     "instruments": {},
 }
 
@@ -445,7 +448,7 @@ _HASH_EXCLUDE_KEYS = frozenset(
 # inner-schema validation happens in a wrapper below.
 _DYNAMIC_KEY_SECTIONS = frozenset({"instruments"})
 
-_INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes", "fp07_tau_scale"})
+_INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes", "fp07_tau_scale", "fp07_response"})
 
 # Which `instruments.<SN>.*` keys actually reach each stage. The block is hashed
 # into a stage's signature so a change re-versions its output -- but not every
@@ -457,7 +460,7 @@ _INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes", "fp07_tau_scale"})
 # Method 1's epsilonMean, so it belongs to both.
 _INSTRUMENT_KEYS_BY_STAGE: dict[str, frozenset[str]] = {
     "diss": frozenset({"exclude_shear_probes"}),
-    "chi": frozenset({"exclude_shear_probes", "fp07_tau_scale"}),
+    "chi": frozenset({"exclude_shear_probes", "fp07_tau_scale", "fp07_response"}),
 }
 
 # Numeric dependencies whose version can change ε/χ/N² outputs even with no
@@ -702,6 +705,26 @@ def _validate_instruments(instruments: dict) -> None:
                     f"instruments.{sn}.fp07_tau_scale.{probe}: must be finite and "
                     f"> 0, got {value!r}"
                 )
+        response = settings.get("fp07_response")
+        if response is not None:
+            items = [response] if isinstance(response, (str, os.PathLike)) else response
+            if (
+                not isinstance(items, list)
+                or not items
+                or not all(isinstance(x, (str, os.PathLike)) for x in items)
+            ):
+                raise ValueError(
+                    f"instruments.{sn}.fp07_response: must be a path or a non-empty list "
+                    f"of paths to fp07-pair corrections, got {response!r}"
+                )
+            if tau_scale:
+                raise ValueError(
+                    f"instruments.{sn}: fp07_response and fp07_tau_scale are mutually "
+                    "exclusive. The correction is measured relative to the bead pair, so "
+                    "stacking it on a tau scale corrects the relative part twice (on "
+                    "ARCTERX-2022 SN194 it would invert the T1/T2 disagreement). Remove "
+                    "fp07_tau_scale, and expect chi to move by its geometric mean."
+                )
 
 
 CONFIG_DIR_TOKEN = "<CONFIG_DIR>"
@@ -756,7 +779,49 @@ def _load_config_with_instruments_check(path: str | Path) -> dict[str, dict]:
     # resolve), so it is left untouched.
     if config:
         config.setdefault("files", {})["config_dir"] = str(Path(path).resolve().parent)
+        _resolve_fp07_response(config)
     return config
+
+
+def _resolve_fp07_response(config: dict) -> None:
+    """Make every ``instruments.<SN>.fp07_response`` path absolute, and check each file.
+
+    Like every other perturb path: ``<CONFIG_DIR>/...`` resolves against the
+    config's own directory (so a config and its corrections move together),
+    and a relative path without the token against the working directory. Each
+    file is opened now -- a missing or hand-edited correction fails at load,
+    not in a worker halfway through a run.
+    """
+    from odas_tpw.chi.fp07_pair import ResponseCorrection
+
+    cdir = config_dir_of(config)
+    for sn, settings in (config.get("instruments") or {}).items():
+        if not isinstance(settings, dict) or settings.get("fp07_response") is None:
+            continue
+        raw = settings["fp07_response"]
+        items = [raw] if isinstance(raw, (str, os.PathLike)) else list(raw)
+        resolved = []
+        for item in items:
+            path = Path(str(expand_config_dir(item, cdir)))
+            if not path.exists():
+                raise ValueError(f"instruments.{sn}.fp07_response: {path} does not exist")
+            ResponseCorrection.from_netcdf(path)
+            resolved.append(str(path.resolve()))
+        settings["fp07_response"] = resolved
+
+
+_DIGEST_CACHE: dict[tuple[str, int, int], str] = {}
+
+
+def _fp07_response_digest(path: str) -> str:
+    """Semantic digest of a correction file, cached by (path, size, mtime)."""
+    from odas_tpw.chi.fp07_pair import ResponseCorrection
+
+    st = os.stat(path)
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if key not in _DIGEST_CACHE:
+        _DIGEST_CACHE[key] = ResponseCorrection.from_netcdf(path).digest()
+    return _DIGEST_CACHE[key]
 
 
 def _validate_config_with_instruments_check(config: dict[str, dict]) -> None:
@@ -992,6 +1057,14 @@ def canonical_instruments_for_hash(
             item["fp07_tau_scale"] = {
                 str(k): float(v) for k, v in sorted(tau_scale.items(), key=lambda kv: str(kv[0]))
             }
+        # A correction is hashed by its CONTENT, never its path: moving or
+        # re-timestamping the file leaves chi where it is; refitting it to
+        # different numbers re-versions chi (and chi_binned/chi_combo, which
+        # embed the chi chain) but not epsilon.
+        response = item.get("fp07_response")
+        if response is not None:
+            paths = [response] if isinstance(response, (str, os.PathLike)) else list(response)
+            item["fp07_response"] = sorted(_fp07_response_digest(str(p)) for p in paths)
         normalized[str(key)] = item
     return normalized
 
@@ -1553,6 +1626,12 @@ parallel:
 # Caveat: this makes the two beads agree with each other, not with the truth --
 # anchor the absolute level separately (e.g. where K_max_ratio > 1.2), and note
 # fom cannot tell you which bead to trust (it can sit at ~1.000 for both).
+#
+# fp07_response is the measured alternative to fp07_tau_scale (never both on
+# one instrument): `fp07-pair fit 'results/chi_00/*.nc' -o fp07pair/` measures
+# each bead's response relative to its partner per time segment; list EVERY
+# file it writes (including *_notapplied.nc). A file matching none is an error.
+# See docs/fp07pair/runbook.md.
 instruments: {}
 # Example:
 # instruments:
@@ -1560,6 +1639,9 @@ instruments: {}
 #     exclude_shear_probes: ["sh2"]
 #   SN194:
 #     fp07_tau_scale: {T1: 0.30, T2: 0.75}
+#   SN428:
+#     fp07_response:
+#       - <CONFIG_DIR>/fp07pair/fp07pair_SN428_T2232-T2234_20220322T1450Z.nc
 """
 
 
