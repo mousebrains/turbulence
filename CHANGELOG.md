@@ -64,6 +64,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the long window's value for the near-bed windows.
 
 ### Fixed
+- **The `goto` FP07 time constant left out Goto et al.'s speed factor.** Goto
+  et al. (2016, sections 2d and 3c) use `tau = tau0 * W^-0.32` with
+  `tau0 = 3 ms`; the code used a fixed 3 ms, which is 13% short at their own
+  0.64 m/s and 2.1x short at 0.1 m/s. It pairs with `fp07_model: double_pole`,
+  which no shipped recipe selects. Chi from a user-run `double_pole` changes
+  (tau +15% at 0.65 m/s), and `perturb-diag` now redraws an old `double_pole`
+  product's FP07 response with the new tau, not the one its fit used.
+  - The `lueck` model (`tau = 10 ms * W^-0.5`, single pole, the default) was
+    credited to Lueck et al. (1977), which contains no such formula. Their
+    0.15-mm beads barely depended on speed, measured at 0.5 and 1.25 m/s. The
+    `-1/2` exponent is Vachon & Lueck's (1984) and Hill's (1987); the 10 ms
+    has no source we have found. The docstrings, `docs/chi_mathematics.md`
+    and the bibliography now say so. The model itself is unchanged, but
+    note what that means: it sets the FP07 correction in nearly every chi
+    product. `fp07_tau_scale` is an optional per-thermistor multiplier
+    (default 1, never fitted by the code), and the only shipped recipe that
+    sets it is a sensitivity variant (CASPER-West `perturb_M1_tau2.yaml`).
+    Changing the model would move every chi product.
+  - Corrected while there: Peterson & Fer's `-0.32` is Gregg & Meagher's
+    (1980), not Vachon & Lueck's, and ODAS `quick_look.m` implements Vachon &
+    Lueck as a double pole with `f_3dB = 25*sqrt(W)` Hz, a response 1.6x
+    faster than the `lueck` single pole.
 - **`perturb-plot mixing` failed on every bottom-up product.** It merges
   `diss_combo` and `chi_combo` by position and demanded identical bin axes, but
   near the bed epsilon's 1.0 s BBL window reaches bins chi's 2.0 s window does

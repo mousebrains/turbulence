@@ -242,13 +242,16 @@ class TestFP07Tau:
         np.testing.assert_allclose(tau, 0.012, rtol=1e-10)
 
     def test_goto(self):
+        """Goto et al. (2016) sections 2d, 3c: tau = tau0 * W^-0.32, tau0 = 3 ms.
+        It was once a fixed 3 ms, 13% short at their own 0.64 m/s."""
         from odas_tpw.chi.fp07 import fp07_tau
 
-        tau = fp07_tau(1.0, model="goto")
-        assert tau == 0.003
-        # goto model is speed-independent
-        tau2 = fp07_tau(0.5, model="goto")
-        assert tau2 == 0.003
+        assert fp07_tau(1.0, model="goto") == 0.003
+        np.testing.assert_allclose(fp07_tau(0.64, model="goto"), 0.003 * 0.64**-0.32)
+        np.testing.assert_allclose(
+            fp07_tau(np.array([0.1, 0.64]), model="goto"), 0.003 * np.array([0.1, 0.64]) ** -0.32
+        )
+        assert fp07_tau(0.1, model="goto") / 0.003 > 2.0  # 2.09x at 0.1 m/s
 
     def test_unknown_raises(self):
         from odas_tpw.chi.fp07 import fp07_tau
