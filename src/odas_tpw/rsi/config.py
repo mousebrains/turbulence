@@ -63,10 +63,22 @@ DEFAULTS: dict[str, dict] = {
         "salinity": None,
         "temperature": "auto",
         "conductivity": "auto",
+        # Measured per-bead FP07 corrections (fp07-pair fit). The CLI hashes
+        # their CONTENT digests here; unset, the key is dropped from the
+        # canonical view so every existing chi hash is unchanged.
+        "fp07_response": None,
     },
 }
 
-_mgr = ConfigManager(DEFAULTS)
+
+class _RsiConfigManager(ConfigManager):
+    def _section_view_postprocess(self, section: str, mapping: dict) -> dict:
+        if section == "chi" and mapping.get("fp07_response") is None:
+            return {k: v for k, v in mapping.items() if k != "fp07_response"}
+        return mapping
+
+
+_mgr = _RsiConfigManager(DEFAULTS)
 
 # Re-export manager methods as module-level functions
 load_config = _mgr.load_config
@@ -149,6 +161,9 @@ chi:
                         # constant reference temperature [degC]
   conductivity: auto    # conductivity channel for salinity "measured"
                         # (auto = JAC_C when present)
+  fp07_response: null   # per-bead FP07 corrections from `fp07-pair fit` (a
+                        # list of files; rsi-tpw chi only -- pipeline refuses
+                        # it). See docs/fp07pair/runbook.md
 """
 
 

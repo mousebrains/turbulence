@@ -7,6 +7,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Per-bead FP07 response equalization: `fp07-pair` and
+  `instruments.<dir>.fp07_response`.** Two FP07 beads on one probe head
+  respond differently, and chi gave both the same model response, so their chi
+  disagreed by a factor that trends with `K_max_ratio`. `fp07-pair fit`
+  measures each bead's response relative to its partner from the median ratio
+  of their gradient spectra (no turbulence model), segmented in time where the
+  pair changed, and writes one correction per segment. chi divides each bead's
+  observed and noise spectra by its factor, weighted by the bin's S/N, so the
+  pair's average stays on the tau model and only the disagreement is removed.
+  On ARCTERX-2022 SN 194 / SN 428 (Method 1, 190 profiles) the `K_max_ratio`
+  quartile spread of `ln(chi2/chi1)` fell from -0.37 / +0.24 to -0.04 / +0.03,
+  the per-window scatter fell from 0.28 / 0.19 to 0.11 / 0.10 (MAD-sd), and
+  the ratio landed on the pair's flat gain; the geometric-mean chi moved < 1%. Every
+  file is checked against its correction (a mid-band disagreement > 0.3 in ln
+  turns it off for that file), a file matching no correction is an error, and
+  each chi product records what was applied and why not. Hashed by content:
+  chi, chi_binned and chi_combo re-version, epsilon does not. Mutually
+  exclusive with `fp07_tau_scale`. `rsi-tpw chi --fp07-response`. Runbook:
+  `docs/fp07pair/runbook.md`; design record and acceptance:
+  `docs/fp07_pair_response_PLAN.md`.
 - **The v0.4.0 version DOI** (`10.5281/zenodo.22699141`) in `CITATION.cff`,
   the README and the suggested manuscript wording. It lands one commit behind
   the tag by necessity: Zenodo mints a version DOI only when the GitHub Release

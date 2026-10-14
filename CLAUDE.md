@@ -38,6 +38,7 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas
 - `chi.py` — Chi (thermal variance dissipation) calculation, Methods 1 and 2, QC metrics.
 - `batchelor.py` — Batchelor and Kraichnan temperature gradient spectra.
 - `fp07.py` — FP07 thermistor transfer function and electronics noise model.
+- `fp07_pair.py` — per-bead FP07 response equalization (`ResponseCorrection`, estimator, guard); CLI in `fp07_pair_cli.py`.
 
 ### Key Modules (scor160)
 
@@ -81,6 +82,9 @@ mr-clocksync probe   -c clocksync.yaml         # is there a wave to sync on? RUN
 mr-clocksync extract -c clocksync.yaml         # .p trees -> npz cache (slow, resumable)
 mr-clocksync solve   -c clocksync.yaml         # -> clock_offsets.csv + clock_report.txt
 mr-clocksync report  -c clocksync.yaml         # re-print the report from a solved run
+
+fp07-pair fit 'results/chi_00/*.nc' -o fp07pair/   # per-bead response corrections + report
+fp07-pair show fp07pair/*.nc                       # what a correction contains
 ```
 
 ### FP07 in-situ calibration (`fp07-cal`)
@@ -207,6 +211,41 @@ Facts that are easy to get wrong:
   the target is interpolated onto the reference's grid, the same convention as
   `fp07cal`. `extract` is the only slow step (~12 min for 431 files / 67 GB) and
   is resumable; each `.p` becomes a ~700 kB `.npz`.
+
+### Per-bead FP07 response (`fp07-pair`)
+
+Measures each FP07 bead's response RELATIVE to its partner from the median
+ratio of their gradient spectra, per time segment; perturb applies it via
+`instruments.<dir>.fp07_response` (rsi-tpw: `chi --fp07-response`). Runbook:
+`docs/fp07pair/runbook.md`; design + acceptance: `docs/fp07_pair_response_PLAN.md`.
+
+Facts that are easy to get wrong:
+
+- **The data is divided, not the model multiplied.** Method 1 and iterative
+  Method 2 apply the response through a MODEL-weighted resolved-variance
+  correction, so multiplying the model by e over-applies a relative
+  correction wherever the spectrum is redder than the model (it left most of
+  the K_max_ratio trend on ARCTERX-2022). Dividing S and N by e is exact for
+  the pair whatever the spectral shape.
+- **Only where the signal dominates**: ln e is weighted by the bin's smoothed
+  S/N (full at >= 10, none below 2). Scaling noise-floor bins by 1/e inflated
+  the slow bead's chi on the osu684 glider's low-S/N windows.
+- **It never sets the absolute level and never removes ln G.** The pair's
+  geometric mean stays on the tau model; the residual ln(chi2/chi1) is the
+  flat gain at ~1 Hz (calibration / diff_gain), by design.
+- **Mutually exclusive with `fp07_tau_scale`** (refused at config load).
+  Dropping ARCTERX-2022's production tau scales moves absolute chi by their
+  geometric mean (~1.4x for SN194).
+- **No match is an error.** Refused segments get a `*_notapplied.nc` record
+  so their files run uncorrected and say why; list every file the fit wrote.
+- **Matching includes the instrument** (`fp07_pair.pair_identity`, from the
+  config string on both sides). A placeholder bead serial (`T`, as on SN479)
+  falls back to time but never across instruments; an unreadable config is an
+  error, never a wildcard.
+- **Segments split only between different `start_time`s**: every profile cut
+  from one `.p` carries the file's start, which is also the chi-time match key.
+- The `instruments:` key is still the raw directory name (`patched` for
+  fp07-cal output), and an unmatched key is still silently ignored by perturb.
 
 ### Python API
 
