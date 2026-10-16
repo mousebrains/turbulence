@@ -142,12 +142,12 @@ _DIVERGING_LOG: dict[str, float] = {"Gamma": 0.2}
 # (var_label) for the profile-product scalars. Mathtext renders the sub/
 # superscripts and the dT/dz fraction; the degree sign stays outside mathtext
 # as a literal Unicode char. Note dTdz is a *conservative*-temperature (theta)
-# gradient (processing.mixing._stable_window), Thorpe-sorted over the background
-# window -- the label keeps the familiar dT/dz form.
+# gradient (processing.mixing._stable_window), sorted per stratification.sort
+# over the background window -- the label keeps the familiar dT/dz form.
 _CBAR_LABEL: dict[str, str] = {
     "T1": r"$T_1$ (°C)",
     "T2": r"$T_2$ (°C)",
-    "N2": r"$N^2$ (s$^{-2}$) (Thorpe-sorted)",
+    "N2": r"$N^2$ (s$^{-2}$)",
     "dTdz": r"$\frac{dT}{dz}$ (°C m$^{-1}$) (+ downwards)",
     "JAC_T": "JAC_T (°C)",
     "JAC_C": "JAC_C (mS/cm)",

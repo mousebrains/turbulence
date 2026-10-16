@@ -70,10 +70,16 @@ class TestSortedStratification:
         # within the mean-then-convert vs convert-then-mean difference.
         t, P, T = _make_profile()
         win_times = np.array([30.0, 60.0, 90.0])
-        res_s = sorted_stratification(win_times, 4.0, t, P, T, S=S_CONST)
+        res_s = sorted_stratification(win_times, 4.0, t, P, T, S=S_CONST, sort="density")
         res_w = window_stratification(win_times, 4.0, t, P, T, S=S_CONST)
         np.testing.assert_allclose(res_s.dTdz, res_w.dTdz, rtol=1e-7)
         np.testing.assert_allclose(res_s.N2, res_w.N2, rtol=0.02)
+        # The default temperature sort is the identity too; its dT/dz uses CT at
+        # the window's median absolute salinity, which drops SA_from_SP's small
+        # pressure dependence (~4e-6 relative here).
+        res_t = sorted_stratification(win_times, 4.0, t, P, T, S=S_CONST)
+        np.testing.assert_allclose(res_t.dTdz, res_w.dTdz, rtol=1e-5)
+        np.testing.assert_allclose(res_t.N2, res_s.N2, rtol=1e-10)
 
     def test_recovers_linear_gradient(self):
         t, P, T = _make_profile()
@@ -91,13 +97,19 @@ class TestSortedStratification:
         depth = -gsw.z_from_p(P, 0.0)
         T = T0 + 0.05 * depth  # temperature increases downward -> unstable
         res_w = window_stratification(np.array([60.0]), 8.0, t, P, T, S=S_CONST)
-        res_s = sorted_stratification(np.array([60.0]), 8.0, t, P, T, S=S_CONST)
-        # The raw profile is unstable; sorting restores a stable column.
+        res_s = sorted_stratification(np.array([60.0]), 8.0, t, P, T, S=S_CONST, sort="density")
+        # The raw profile is unstable; the density sort restores a stable column.
         assert res_w.N2[0] < 0
         assert res_s.N2[0] > 0
         # ...and the stable temperature gradient is cooling-downward.
         assert res_w.dTdz[0] > 0
         assert res_s.dTdz[0] < 0
+        # The (default) temperature sort follows the trend of a fit over five
+        # windows, and here the whole column is warm-under-cold: it keeps the
+        # measured order, so N² stays negative (Osborn masks such windows).
+        res_t = sorted_stratification(np.array([60.0]), 8.0, t, P, T, S=S_CONST)
+        assert res_t.N2[0] < 0
+        assert res_t.dTdz[0] > 0
 
 
 class TestProfileStratification:
@@ -124,7 +136,7 @@ class TestProfileStratification:
         _, P, _ = _make_profile()
         depth = -gsw.z_from_p(P, 0.0)
         T = T0 + 0.05 * depth  # temperature increases downward -> unstable
-        _, N2, _ = profile_stratification(P, T, S=S_CONST, window=4.0)
+        _, N2, _ = profile_stratification(P, T, S=S_CONST, window=4.0, sort="density")
         assert np.isfinite(N2).any()
         assert np.all(N2[np.isfinite(N2)] > 0)
 

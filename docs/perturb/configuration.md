@@ -396,18 +396,81 @@ See [CF Conventions](https://cfconventions.org/) and [ACDD](https://wiki.esipfed
 ### `stratification` — Background N²/dT/dz
 
 Background buoyancy frequency (`N2`) and temperature gradient (`dTdz`), computed
-with the Thorpe-sorted (adiabatically leveled) method and written to the
-profile and dissipation products independent of epsilon/chi (the chi
-product's `N2`/`dTdz` are governed by `chi.mixing`). The profile product uses
-the configurable background `window`; the diss product uses its own dissipation
-window. These are **profile-only** (down-cast) quantities and are **not** written
-to the CTD product, which spans the whole up/down trajectory.
+per window after reordering the window's parcels (`sort`; by default by
+conservative temperature) and written to the profile and
+dissipation products independent of epsilon/chi (the chi product's `N2`/`dTdz`
+are governed by `chi.mixing`). The profile product uses the configurable
+background `window`; the diss product uses its own dissipation window. These
+are **profile-only** (down-cast) quantities and are **not** written to the CTD
+product, which spans the whole up/down trajectory. Each variable's
+`stratification` attribute records the sort and the dT/dz source, and its
+`comment` the details.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enable` | bool | `true` | Write `N2`/`dTdz` to the profile and diss products (not the CTD product) |
 | `window` | float | `2.0` | Background vertical window [dbar] for the profile product |
+| `sort` | `"temperature"` \| `"density"` \| `"none"` | `"temperature"` | How each window's parcels are reordered before its gradients are taken. `temperature` (the default since 2026-10; `density` before, see [the default changed](#the-default-changed-in-2026-10)): by conservative temperature (at the window's median salinity), monotonic along the trend of a fit over five windows; where that fit has an extremum inside the window, a gradient under 1e-4 K/m, or a change across the window under twice the scatter about it, the measured order is kept (a sort would order noise). Immune to salinity noise in dT/dz, but its N² still carries the salinity, and it removes real density-compensated inversions. `density`: Thorpe-sorted to static stability (adiabatic leveling). `none`: as measured. See [salinity noise](#salinity-noise-and-the-sort) |
+| `dTdz_source` | `"ct"` \| `"fp07"` | `"ct"` | `ct`: the `ct.T_name` channel. `fp07`: the FP07 thermistors (in-situ calibrated when `fp07.calibrate` ran), slow-rate, temperature-sorted (unsorted with `sort: none`), mean of the per-probe slopes. A probe that does not track `ct.T_name` (slope outside 0.5-2 or r < 0.9 over the casts) is dropped and named; with none usable, dT/dz falls back to `ct.T_name`, and the comment, the log and the run summary say so. `N2` stays on the CT pair |
 | `salinity` | float \| `"measured"` \| `"hotel"` \| `null` | `null` | Salinity source for `N2`. `null` = the profile's own conductivity via TEOS-10 (else 35 PSU); a number = that fixed PSU; `"measured"` = C/T/P (TEOS-10); `"hotel"` (or `"hotel:<var>"`) = a [hotel](#hotel--hotel-file-external-telemetry)-injected salinity channel (default variable `salinity`). Use `"hotel"` for gliders/MicroRiders with no onboard conductivity but an external CTD feed |
+
+#### Salinity noise and the sort
+
+A salinity whose noise is large against its gradient scrambles the density
+order: the sorted temperature profile comes out flatter than the measured one
+(dT/dz low) and the sorted density profile steeper (N² high), so `K_T` and
+`Gamma` come out high. With a measured or hotel salinity, under any `sort`,
+the diss and chi `N2` carry `sort_kappa`, the median over windows of the
+density-sorted over the temperature-sorted dT/dz (also per 50-dbar band, as
+`sort_kappa_worst_band`). Under the default temperature sort the products'
+dT/dz is spared, but a low κ still says the salinity is noisy (or the water
+density-compensated), and N², `Gamma` and `K_rho` carry that salinity. Only windows whose measured-order gradient is at least
+1e-3 K/m vote, so mixed layers stay out. A warning fires below 0.8 over the
+cast, or below 0.6 in the worst band (the lowest of several noisy band medians
+runs low by chance, so a band gets a stricter threshold). The profile product
+records the median in its `N2` comment, and the run summary lists the files.
+
+On stored products from the (unpumped) JAC CTDs of VMP-250s (2026-10,
+30-40 casts per campaign), the chi-window dT/dz was 0.70-0.97 of the
+temperature-sorted value (shorter windows worse), putting `K_T` 1.06-2.0x high;
+the chi-window κ over the cast ran 0.80-0.97 by campaign, and the warning fired
+on 0-3 of 30 casts where `K_T` is 1.06-1.18x high and on 13-20 of 30 where it is
+about 2x high. On an unpumped SBE4 (VMP-5500) κ was 0.46-0.52.
+`sort: temperature` or `dTdz_source: fp07` fixes dT/dz; N² needs a better
+salinity (a fixed value, or a hotel channel built from a T-S relation).
+
+#### The default changed in 2026-10
+
+`sort` defaulted to `density` until 2026-10 and now defaults to `temperature`,
+because a temperature sensor is a steadier observation than a salinity derived
+from a conductivity cell (the evidence is above). Every code release changes the
+engine fingerprint in each stage signature, so a rerun after upgrading
+recomputes products whatever `sort` says. The canonical form matters where the
+fingerprint does not: with `$ODAS_TPW_ENGINE_FINGERPRINT` pinned, and when the
+plot tools resolve a stage directory. There, a config that leaves `sort` unset
+(or `null`) resolves to `temperature` and gets a new signature, so it never
+picks up a density-sorted product; `sort: density` keeps the old one.
+
+What changes in the products. N²: each parcel keeps its own salinity, so N² is
+not forced positive the way a density sort forces it. On SN479_0006 (ARCTERX
+2025, 263 windows of 2 dbar), 9% of windows had N² ≤ 0 under the temperature
+sort, 0% under the density sort and 13% unsorted, and the negative windows sit
+throughout the thermocline, not only in mixed layers. They are the noise tail
+of an estimate that is unbiased in the mean: at 60-400 dbar the mean 2-dbar N²
+was within 10% of a 10-20-dbar unsorted fit (and of a temperature-only N²),
+while the density sort's ran 1.3x high (and 10-47x high on casts whose
+conductivity was not aligned to the temperature). Downstream, `Gamma` and
+`K_rho` are masked where N² is below the 1e-9 s⁻² floor, which drops that tail; average
+N² over a bin before forming ratios if that matters. Chi windows are longer and
+were barely affected (1 of 99 on the same cast). The effect on
+existing campaigns, from the fleet comparison above: chi-window dT/dz steeper by
+up to 1/0.70, so `K_T` lower by about 2x on the 2-s-window campaigns and by a
+factor 1.06-1.18 on the 4-s ones; profile-scale N² goes from 1.12-1.48x the
+unsorted value to 0.95-1.08x, so `Gamma`, which falls with both, drops further.
+`sort_kappa` is still reported (above). Where the water column holds real
+density-compensated inversions (a salinity-stabilized temperature inversion is
+kept, since the sort follows the local temperature trend; a compensated
+intrusion smaller than five windows is not), set `sort: density`.
 
 ---
 

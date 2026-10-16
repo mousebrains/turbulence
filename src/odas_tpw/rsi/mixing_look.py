@@ -8,9 +8,10 @@ Osborn-Cox heat diffusivity K_T, the measured Osborn mixing coefficient
 Γ = N²χ / (2ε(dT/dz)²), and the Osborn diapycnal diffusivity K_rho.
 
 Where ``diss_look`` shows only the dimensional χ/ε ratio, this viewer
-computes the *proper* Γ by Thorpe-sorting each window to a stable profile
-(removing overturns) for the background N² and dT/dz, exactly as the
-``perturb``/``rsi`` pipelines do in their mixing step.
+computes the *proper* Γ from each window's background N² and dT/dz, after
+sorting its parcels with the default sort of
+``processing.mixing.sorted_stratification`` -- the ``perturb``/``rsi``
+pipelines' default too.
 
 Layout (2 rows x 4 columns):
   Row 0 (profile panels, pressure y-axis linked):
@@ -236,7 +237,7 @@ class MixingLookViewer(ProfileViewer):
             diss_length=self.diss_length,
         )
 
-        # Background stratification on the Thorpe-sorted slow profile, then the
+        # Background stratification on the sorted slow profile, then the
         # mixing coefficients on the same window grid.
         t_win = self._window_center_times(sel_fast)
         assert len(t_win) == len(P), "window-time grid drifted from compute_windowed_diss"
@@ -297,7 +298,7 @@ class MixingLookViewer(ProfileViewer):
         ax.set_xscale("log")
         ax.set_xlabel("N² [s⁻²]")
         ax.set_ylabel("Pressure [dbar]")
-        ax.set_title("N² (Thorpe-sorted)", fontsize=9)
+        ax.set_title("N² (sorted)", fontsize=9)
         ax.grid(True, alpha=0.3, which="both")
 
     def _draw_dtdz(self, ax):
@@ -454,7 +455,7 @@ def mixing_look(
     Displays the background stratification (N², dT/dz) and the derived
     diapycnal-mixing quantities (K_T, Γ, K_rho), computed exactly as the
     pipeline does: per-window epsilon and chi with the background N²/dT/dz
-    from a Thorpe-sorted (overturn-removed) profile.
+    from each window's sorted parcels.
 
     Parameters
     ----------

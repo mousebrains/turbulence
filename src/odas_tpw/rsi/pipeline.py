@@ -677,6 +677,9 @@ def _process_profile(
     if chi_primary is not None and chi_primary.n_spectra > 0 and l1.temp.size == l1.n_time:
         try:
             from odas_tpw.processing.mixing import (
+                DEFAULT_SORT,
+                kappa_summary,
+                kappa_warning,
                 mixing_coefficients,
                 pair_nearest,
                 sorted_stratification,
@@ -692,7 +695,25 @@ def _process_profile(
                 l1.pres,
                 l1.temp,
                 S=chi_salinity,
+                sort=DEFAULT_SORT,
             )
+            # Does the salinity scramble the density order? Only defined for a
+            # per-sample salinity: with a constant one the two orders coincide.
+            kappa_attrs: dict[str, float] = {}
+            if chi_salinity is not None and np.ndim(np.asarray(chi_salinity)) > 0:
+                summ = kappa_summary(
+                    strat.dTdz_rho,
+                    strat.dTdz_T,
+                    np.interp(chi_primary.time, l1.time, l1.pres, left=np.nan, right=np.nan),
+                )
+                if np.isfinite(summ.overall):
+                    kappa_attrs["sort_kappa"] = summ.overall
+                if np.isfinite(summ.worst_P):
+                    kappa_attrs["sort_kappa_worst_band"] = summ.worst
+                    kappa_attrs["sort_kappa_worst_band_P"] = summ.worst_P
+                msg = kappa_warning(summ, "chi-window stratification", DEFAULT_SORT)
+                if msg:
+                    logger.warning(msg)
             # Pair epsilon from the nearest shear window when available; with no
             # shear epsilon K_T = chi/(2 dT/dz^2) stays valid while Gamma/K_rho
             # fall to NaN (bug_003). The else is defensive: run_pipeline returns
@@ -729,9 +750,12 @@ def _process_profile(
                         "long_name": "buoyancy frequency squared (window scale)",
                         "comment": (
                             "TEOS-10 (gsw.Nsquared) between the shallow- and "
-                            "deep-half means of each chi window after Thorpe-"
-                            f"sorting to a stable profile (overturns removed); {sal_note}."
+                            "deep-half means of each chi window after sorting "
+                            "its parcels by conservative temperature; each keeps "
+                            "its own salinity, so N2 is not forced positive "
+                            f"(salinity noise makes some windows negative); {sal_note}."
                         ),
+                        **kappa_attrs,
                     },
                 ),
                 "dTdz": (
@@ -740,8 +764,10 @@ def _process_profile(
                         "units": "K m-1",
                         "long_name": "background temperature gradient (positive down)",
                         "comment": (
-                            "Least-squares slope of the Thorpe-sorted in-situ "
-                            "temperature vs depth over each chi window."
+                            "Least-squares slope of the temperature-sorted "
+                            "conservative temperature vs depth over each chi "
+                            "window (along the trend of a fit over five "
+                            "windows; as measured where that is unresolved)."
                         ),
                     },
                 ),

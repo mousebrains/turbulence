@@ -450,6 +450,9 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         # so it survives apply_schema; binning carries it to the combo.
         if info.get("calibration"):
             attrs["calibration"] = info["calibration"]
+        # Background-stratification provenance (sort; dT/dz source) on N2/dTdz.
+        if info.get("stratification"):
+            attrs["stratification"] = info["stratification"]
         # Hotel merge gap limit [s] (perturb hotel.max_gap), so downstream
         # interp-fills of a merged channel can honour the same gate.
         if info.get("hotel_max_gap") is not None:

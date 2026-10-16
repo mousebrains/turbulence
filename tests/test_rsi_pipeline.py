@@ -121,6 +121,10 @@ class TestRunPipelineChiMethods:
             # without Method-1 chi-from-epsilon.
             assert "N2" in ds
             assert "dTdz" in ds
+            # Measured JAC salinity: the sort-agreement diagnostic sits on N2,
+            # as in perturb (SN479's JAC salinity gives ~0.75).
+            assert 0.0 < ds["N2"].attrs["sort_kappa"] < 1.2
+            assert "sort_kappa" not in ds["dTdz"].attrs
 
     def test_chi_epsilon_method(self, sample_p, tmp_path):
         """compute_chi_epsilon=True produces L4_chi_epsilon.nc per profile."""
