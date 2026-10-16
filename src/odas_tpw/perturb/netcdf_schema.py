@@ -306,7 +306,8 @@ COMBO_SCHEMA: dict[str, dict] = {
         "long_name": "mean in-situ temperature within FFT window",
         "units_metadata": "temperature: on_scale",
     },
-    # Background stratification (Thorpe-sorted). The averaging scale differs by
+    # Background stratification. The averaging scale and the parcel order
+    # (stratification.sort) differ by
     # product (a pressure window for the profile product, the processing window
     # for diss); each product NetCDF carries the precise scale in its variable
     # comment, so the schema long_name stays scale-neutral. Profile-only (not on
@@ -315,7 +316,7 @@ COMBO_SCHEMA: dict[str, dict] = {
         "nc_name": "N2",
         "units": "s-2",
         "standard_name": "square_of_brunt_vaisala_frequency_in_sea_water",
-        "long_name": "buoyancy frequency squared (Thorpe-sorted)",
+        "long_name": "buoyancy frequency squared (background)",
     },
     "dTdz": {
         "nc_name": "dTdz",

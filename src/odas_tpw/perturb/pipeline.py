@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     import xarray as xr
 
 from odas_tpw.perturb.config import (
+    DEFAULTS,
     config_dir_of,
     expand_config_dir,
     merge_config,
@@ -36,6 +37,9 @@ from odas_tpw.perturb.logging_setup import (
 )
 
 logger = logging.getLogger(__name__)
+
+# stratification.sort when the config leaves it unset (processing.mixing.DEFAULT_SORT).
+_DEFAULT_SORT: str = DEFAULTS["stratification"]["sort"]
 
 # Config keys that must NOT reach _compute_epsilon / _compute_chi.
 #
@@ -1499,7 +1503,9 @@ def _gate_reference_temperature(T, T_name: str, file_label: str):
     return out
 
 
-def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_source=None):
+def _compute_slow_stratification(
+    pf, profiles, T_name, C_name, window, sal_source=None, sort=_DEFAULT_SORT, diag=None
+):
     """Per-cast sorted N2/dT/dz on the full slow grid (NaN outside casts).
 
     Computes background stratification once per detected cast with
@@ -1519,11 +1525,17 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
     cast slice — with fewer than two finite samples falls back to
     conductivity/35 PSU with the reason noted. Position defaults to 0/0 (a
     <0.3% gravity and negligible salinity-anomaly effect on N2).
+
+    *sort* is ``stratification.sort`` (see ``processing.mixing.SORT_MODES``).
+    *diag*, when a dict, receives ``"kappas"`` (a ``KappaSummary`` per cast with
+    a per-sample salinity, under any sort) and
+    ``"S_full"`` (the practical salinity used on the slow grid, NaN outside
+    casts), which the FP07 dT/dz path reuses.
     """
     import gsw
     import numpy as np
 
-    from odas_tpw.processing.mixing import profile_stratification
+    from odas_tpw.processing.mixing import kappa_summary, profile_stratification_full
 
     P = pf.channels.get("P")
     T = pf.channels.get(T_name)
@@ -1638,6 +1650,8 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
 
     N2_full = np.full(n, np.nan)
     dTdz_full = np.full(n, np.nan)
+    S_full = np.full(n, np.nan)
+    kappas: list[Any] = []
     n_interp = n_held = n_in_cast = n_fallback_casts = 0
     for s, e in profiles:
         sl = slice(s, e + 1)
@@ -1668,7 +1682,13 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
                 n_held += n_h
         elif SP is not None:
             S_c = SP[sl]
-        target_P, N2, dTdz = profile_stratification(P_c, T_c, S=S_c, window=window)
+        res = profile_stratification_full(P_c, T_c, S=S_c, window=window, sort=sort)
+        target_P, N2, dTdz = res.target_P, res.N2, res.dTdz
+        # kappa needs a salinity that varies sample to sample; a fixed one
+        # makes the density and temperature orders coincide.
+        if S_c is not None and sal_arr is None:
+            kappas.append(kappa_summary(res.dTdz_rho, res.dTdz_T, res.target_P))
+        S_full[sl] = 35.0 if S_c is None else S_c
         good = np.isfinite(N2)
         if good.sum() >= 2:
             N2_full[sl] = np.interp(P_c, target_P[good], N2[good])
@@ -1698,11 +1718,356 @@ def _compute_slow_stratification(pf, profiles, T_name, C_name, window, sal_sourc
                 if n_fallback_casts
                 else "",
             )
+    if diag is not None:
+        diag["kappas"] = kappas
+        diag["S_full"] = S_full
     return N2_full, dTdz_full, sal_note
 
 
+#: Wording for each ``stratification.sort`` in the N2 comments.
+_SORT_PHRASE = {
+    "density": "Thorpe-sorted to a stable profile (overturns removed)",
+    "temperature": (
+        "sorted by conservative temperature along the trend of a fit over five "
+        "windows, in measured order where that trend is unresolved; each parcel "
+        "keeps its own salinity, so N2 is not forced positive (salinity noise "
+        "makes some windows negative)"
+    ),
+    "none": "in measured order (unsorted; N2 can be negative)",
+}
+_TSORT_PHRASE = (
+    "temperature-sorted (along the trend of a fit over five windows; as measured "
+    "where that trend is unresolved)"
+)
+
+
+def _fp07_sort(sort: str) -> str:
+    """The order an FP07 gradient uses: a density order needs a co-registered S."""
+    return "none" if sort == "none" else "temperature"
+
+
+def _boxcar_nan(x, n: int):
+    """Centered running mean over *n* samples that skips NaN (NaN where none finite)."""
+    import numpy as np
+
+    x = np.asarray(x, dtype=np.float64)
+    n = min(int(n), len(x))
+    n -= 1 - n % 2  # odd, so the mean is centered on its sample
+    if n <= 1:
+        return x
+    finite = np.isfinite(x)
+    kernel = np.ones(n)
+    num = np.convolve(np.where(finite, x, 0.0), kernel, mode="same")
+    den = np.convolve(finite.astype(np.float64), kernel, mode="same")
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = num / den
+    out[den == 0] = np.nan
+    return out
+
+
+def _fp07_to_slow(values, t_src, t_slow, fs_ratio: float):
+    """An FP07 series on the slow grid.
+
+    A fast channel is box-car averaged over one slow interval and interpolated
+    onto *t_slow*: sorting a noisy 512 Hz series would bias a weak gradient
+    steep, and both stratification products then use the same slow grid as P. A
+    series already on *t_slow* (same length) is returned as is.
+    """
+    import numpy as np
+
+    v = np.asarray(values, dtype=np.float64)
+    t_slow = np.asarray(t_slow, dtype=np.float64)
+    if len(v) == len(t_slow):
+        return v
+    t_src = np.asarray(t_src, dtype=np.float64)
+    sm = _boxcar_nan(v, max(1, round(fs_ratio)))
+    ok = np.isfinite(sm) & np.isfinite(t_src)
+    if ok.sum() < 2:
+        return np.full(len(t_slow), np.nan)
+    out = np.interp(t_slow, t_src[ok], sm[ok], left=np.nan, right=np.nan)
+    return out
+
+
+def _fp07_note(probes: list[tuple[str, str]], sort: str, scale: str) -> str:
+    """dTdz comment for an FP07-sourced gradient."""
+    which = ", ".join(f"{name} ({cal})" for name, cal in probes)
+    order = "unsorted" if sort == "none" else _TSORT_PHRASE
+    return (
+        f"Least-squares slope of {order} conservative temperature vs depth over "
+        f"each {scale}, from the FP07 thermistor(s) {which}: slow-rate (box-car "
+        "averaged where the channel is fast), one median salinity per window for "
+        "the conservative-temperature conversion, mean of the per-probe slopes. "
+        "N2 is from the CT pair."
+    )
+
+
+def _ct_dtdz_note(T_name: str, sort: str, scale: str) -> str:
+    """dTdz comment for a CT-sourced gradient."""
+    order = {
+        "density": "density-sorted (Thorpe)",
+        "temperature": _TSORT_PHRASE,
+        "none": "unsorted",
+    }[sort]
+    return (
+        f"Least-squares slope of the {order} conservative temperature ({T_name}) vs "
+        f"depth over each {scale}."
+    )
+
+
+def _fp07_dead(x, ref, mask) -> str | None:
+    """Why an FP07 series cannot give a background gradient, or None if it can.
+
+    *mask* selects the in-cast samples. A bead can be dead and still in range: a
+    Rockland test plug reads a constant (the config's T_0), whose slope of zero
+    would halve a two-probe mean and put K_T 4x high. So, over the casts:
+
+    - at least half the samples finite;
+    - against the reference temperature *ref* (``ct.T_name``), when it has 100
+      finite overlapping samples spanning at least 0.05 K: a regression slope
+      within [0.5, 2] and a correlation of at least 0.9 -- loose enough for an
+      uncalibrated bead and a lagged reference;
+    - without one: a range of at least 0.01 K.
+    """
+    import numpy as np
+
+    xs = x[mask]
+    if xs.size == 0 or np.isfinite(xs).mean() < 0.5:
+        return "mostly non-finite in the casts"
+    if ref is not None:
+        rs = ref[mask]
+        ok = np.isfinite(xs) & np.isfinite(rs)
+        if ok.sum() >= 100 and np.ptp(rs[ok]) >= 0.05:
+            slope = float(np.polyfit(rs[ok], xs[ok], 1)[0])
+            corr = float(np.corrcoef(rs[ok], xs[ok])[0, 1])
+            if not (0.5 <= slope <= 2.0 and corr >= 0.9):
+                return f"does not track the reference (slope {slope:.2f}, r {corr:.2f})"
+            return None
+    if np.ptp(xs[np.isfinite(xs)]) < 0.01:
+        return "flat (range under 0.01 K)"
+    return None
+
+
+def _slow_fp07_gradient(pf, profiles, window: float, sort: str, S_full, file_label: str, ref):
+    """Per-cast FP07 dT/dz on the full slow grid.
+
+    The FP07 analog of the dTdz half of :func:`_compute_slow_stratification`,
+    on the same casts, after the FP07 calibration. Returns ``(dTdz_full, info)``
+    with *info* ``{"probes": [(name, calibration tag)], "dropped": {name:
+    reason}}``, or ``(None, reason)`` when no FP07 channel yields a gradient.
+    *ref* is the reference temperature on the slow grid for :func:`_fp07_dead`.
+    """
+    import numpy as np
+
+    from odas_tpw.perturb.fp07_cal import _find_fp07_channels
+    from odas_tpw.processing.mixing import profile_temperature_gradient
+
+    P = pf.channels.get("P")
+    if P is None:
+        return None, "no P channel"
+    P = np.asarray(P, dtype=np.float64)
+    n = len(P)
+    names = _find_fp07_channels(pf)
+    if not names:
+        return None, "no FP07 channel"
+    t_slow = getattr(pf, "t_slow", None)
+    t_fast = getattr(pf, "t_fast", None)
+    ratio = float(pf.fs_fast) / float(pf.fs_slow)
+    in_cast = np.zeros(n, dtype=bool)
+    for s, e in profiles:
+        in_cast[s : e + 1] = True
+    dropped: dict[str, str] = {}
+    series = []
+    for name in names:
+        # Gate rails BEFORE any box-car: averaging smears a 58 C rail sample into
+        # an in-range spike the gate would pass.
+        x = _gate_reference_temperature(
+            np.asarray(pf.channels[name], dtype=np.float64), name, file_label
+        )
+        if len(x) != n:
+            if t_slow is None or t_fast is None or len(x) != len(t_fast):
+                dropped[name] = "on neither the slow nor the fast grid"
+                continue
+            x = _fp07_to_slow(x, t_fast, t_slow, ratio)
+        why = _fp07_dead(x, ref, in_cast)
+        if why:
+            dropped[name] = why
+            continue
+        series.append((name, x))
+    if not series:
+        detail = "; ".join(f"{k} {v}" for k, v in dropped.items())
+        return None, f"no usable FP07 channel ({detail or 'none found'})"
+
+    fsort = _fp07_sort(sort)
+    per_probe = {name: np.full(n, np.nan) for name, _ in series}
+    for s, e in profiles:
+        sl = slice(s, e + 1)
+        P_c = P[sl]
+        S_c = None if S_full is None else S_full[sl]
+        for name, x in series:
+            tp, d = profile_temperature_gradient(P_c, x[sl], S=S_c, window=window, sort=fsort)
+            good = np.isfinite(d)
+            if good.sum() >= 2:
+                per_probe[name][sl] = np.interp(P_c, tp[good], d[good])
+    used = [name for name, arr in per_probe.items() if np.isfinite(arr).any()]
+    for name in per_probe:
+        if name not in used:
+            dropped[name] = "yielded no gradient"
+    if not used:
+        return None, "no FP07 channel yielded a gradient"
+    stack = np.vstack([per_probe[name] for name in used])
+    with np.errstate(invalid="ignore"), _suppress_mean_of_empty():
+        dTdz_full = np.nanmean(stack, axis=0)
+    probes = [
+        (name, pf.channel_info.get(name, {}).get("calibration") or "embedded coefficients")
+        for name in used
+    ]
+    return dTdz_full, {"probes": probes, "dropped": dropped}
+
+
+def _kappa_report(summaries, label: str, sort: str) -> tuple[str, dict | None]:
+    """Comment fragment and run-notice record from per-cast KappaSummary values."""
+    import numpy as np
+
+    from odas_tpw.processing.mixing import kappa_is_low, kappa_warning
+
+    rows = [k for k in summaries if np.isfinite(k.overall) or np.isfinite(k.worst)]
+    if not rows:
+        return "", None
+    lows = [k for k in rows if kappa_is_low(k)]
+    med = float(np.nanmedian([k.overall for k in rows]))
+    worst = min(lows or rows, key=lambda k: np.nanmin([k.worst, k.overall]))
+    note = (
+        f" sort_kappa (density- over temperature-sorted dT/dz; 1 = salinity leaves "
+        f"the temperature order alone): median {med:.2f} over {len(rows)} cast(s), "
+        f"{len(lows)} flagged (below 0.8 over the cast or 0.6 in a 50-dbar band)."
+    )
+    record = None
+    if lows:
+        msg = kappa_warning(worst, f"{label} ({len(lows)} of {len(rows)} casts below)", sort)
+        if msg:
+            logger.warning(msg)
+        record = {
+            "n_low": len(lows),
+            "n": len(rows),
+            "worst": float(np.nanmin([worst.worst, worst.overall])),
+            "worst_P": float(worst.worst_P),
+        }
+    return note, record
+
+
+def _inject_slow_stratification(pf, profiles, strat_cfg, ct_cfg, file_label: str) -> dict:
+    """Compute the profile product's N2/dTdz and inject them as slow channels.
+
+    Returns the run-notice record for this file (``kappa`` and/or
+    ``fp07_fallback`` keys; empty when there is nothing to say). Never raises:
+    a failure logs a warning and leaves the channels out, as before.
+    """
+    out: dict[str, Any] = {}
+    sort = strat_cfg.get("sort") or _DEFAULT_SORT
+    src = strat_cfg.get("dTdz_source") or "ct"
+    T_name = ct_cfg.get("T_name", "JAC_T")
+    C_name = ct_cfg.get("C_name", "JAC_C")
+    diag: dict[str, Any] = {}
+    try:
+        win = float(strat_cfg.get("window", 2.0))
+        N2_full, dTdz_full, sal_note = _compute_slow_stratification(
+            pf, profiles, T_name, C_name, win, strat_cfg.get("salinity"), sort=sort, diag=diag
+        )
+    except Exception as exc:
+        logger.warning("stratification failed for %s: %s", file_label, exc)
+        return out
+    if N2_full is None:
+        return out
+    scale = f"{win:g}-dbar pressure window"
+    dtdz_comment = _ct_dtdz_note(T_name, sort, scale)
+    source = f"ct ({T_name})"
+    dtdz_order = sort  # the order the written dT/dz actually used (kappa wording)
+    if src == "fp07":
+        ref = pf.channels.get(T_name)
+        if ref is not None:
+            ref = _gate_reference_temperature(ref, T_name, file_label)
+            if len(ref) != len(N2_full):
+                ref = None
+        try:
+            fp, info = _slow_fp07_gradient(
+                pf, profiles, win, sort, diag.get("S_full"), file_label, ref
+            )
+        except Exception as exc:
+            fp, info = None, f"the FP07 gradient raised {exc!r}"
+        if fp is None:
+            logger.warning(
+                "%s: stratification.dTdz_source is fp07, but %s; the profile-product "
+                "dT/dz falls back to %s",
+                file_label,
+                info,
+                T_name,
+            )
+            dtdz_comment += f" FP07 source requested, but {info}: fell back to {T_name}."
+            source = f"ct ({T_name}; fp07 fallback)"
+            out["fp07_fallback"] = str(info)
+        else:
+            dTdz_full = fp
+            dtdz_order = _fp07_sort(sort)
+            dtdz_comment = _fp07_note(info["probes"], sort, scale)
+            source = "fp07 (" + ", ".join(name for name, _ in info["probes"]) + ")"
+            if info["dropped"]:
+                dropped = "; ".join(f"{k} {v}" for k, v in info["dropped"].items())
+                logger.warning("%s: FP07 dT/dz dropped %s", file_label, dropped)
+                dtdz_comment += f" Dropped: {dropped}."
+                out["fp07_dropped"] = dict(info["dropped"])
+    kappa_note, kappa_rec = _kappa_report(
+        diag.get("kappas", []), f"{file_label} profile-product stratification", dtdz_order
+    )
+    if kappa_rec:
+        out["kappa"] = kappa_rec
+    prov = f"sort={sort}; dTdz_source={source}"
+    pf.channels["N2"] = N2_full
+    pf.channel_info["N2"] = {
+        "units": "s-2",
+        "type": "derived",
+        "name": "N2",
+        "long_name": f"buoyancy frequency squared (background, {win:g}-dbar window)",
+        "comment": (
+            f"TEOS-10 N2 over a {scale}, {_SORT_PHRASE[sort]}; {sal_note}. "
+            "Background (profile) scale -- distinct from the dissipation/chi-window "
+            f"N2 in the diss/chi products.{kappa_note}"
+        ),
+        "stratification": prov,
+    }
+    pf.channels["dTdz"] = dTdz_full
+    pf.channel_info["dTdz"] = {
+        "units": "K m-1",
+        "type": "derived",
+        "name": "dTdz",
+        "long_name": f"background temperature gradient (positive down, {win:g}-dbar window)",
+        "comment": dtdz_comment,
+        "stratification": prov,
+    }
+    return out
+
+
+@contextlib.contextmanager
+def _suppress_mean_of_empty():
+    """Silence numpy's 'Mean of empty slice' for all-NaN columns (they stay NaN)."""
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
+        yield
+
+
 def _window_stratification_for_profile(
-    prof_path, win_t, half_w, T_name: str, C_name: str, file_label: str, sal_source=None
+    prof_path,
+    win_t,
+    half_w,
+    T_name: str,
+    C_name: str,
+    file_label: str,
+    sal_source=None,
+    sort: str = _DEFAULT_SORT,
+    dTdz_source: str = "ct",
+    diag: dict | None = None,
+    scale_name: str = "dissipation",
 ):
     """Sorted N2/dTdz at window times *win_t* from a profile's CTD channels.
 
@@ -1719,12 +2084,21 @@ def _window_stratification_for_profile(
     evaluating stratification at its own window scale (the diss path passes
     diss_length_seconds/2, the chi path 0.5*chi diss_length/fs), so the two
     coincide only when their diss_length/fft_length settings match.
+
+    *sort* and *dTdz_source* are ``stratification.sort`` / ``.dTdz_source``.
+    With ``dTdz_source="fp07"`` dTdz comes from the profile's FP07 channels
+    (:func:`_window_fp07_gradient`); if none is usable, or that path raises, it
+    falls back to *T_name* with the reason recorded -- a stratification problem
+    must never cost the caller its epsilon or chi product. *diag*, when a dict,
+    receives ``"dTdz_comment"``, ``"stratification"`` (a short provenance
+    string), ``"kappa"`` (a ``KappaSummary`` or None) and, on a fallback,
+    ``"fp07_fallback"`` / ``"fp07_dropped"``.
     """
     import gsw
     import numpy as np
     import xarray as xr
 
-    from odas_tpw.processing.mixing import sorted_stratification
+    from odas_tpw.processing.mixing import kappa_summary, sorted_stratification
 
     try:
         prof = xr.open_dataset(prof_path, decode_times=False)
@@ -1874,54 +2248,238 @@ def _window_stratification_for_profile(
                     f"salinity assumed 35 PSU ({missing}); N2 reflects temperature "
                     "stratification only"
                 )
-    strat = sorted_stratification(win_t, half_w, t_slow, P, T, S=S, lat=lat, lon=lon)
-    return strat.N2, strat.dTdz, sal_note
+        fp07_series: Any = None
+        if dTdz_source == "fp07":
+            try:
+                fp07_series = _profile_fp07_series(prof, t_slow, file_label)
+            except Exception as exc:
+                fp07_series = f"reading the FP07 channels raised {exc!r}"
+    strat = sorted_stratification(win_t, half_w, t_slow, P, T, S=S, lat=lat, lon=lon, sort=sort)
+    dTdz = strat.dTdz
+    scale = f"{scale_name} window"
+    if diag is not None:
+        diag["dTdz_comment"] = _ct_dtdz_note(T_name, sort, scale)
+        diag["stratification"] = f"sort={sort}; dTdz_source=ct ({T_name})"
+        diag["kappa"] = None
+        # kappa needs a per-sample salinity: a fixed one makes the orders coincide.
+        if S is not None and np.ndim(S) > 0 and not (
+            isinstance(sal_source, (int, float)) and not isinstance(sal_source, bool)
+        ):
+            P_win = np.interp(win_t, t_slow, P, left=np.nan, right=np.nan)
+            diag["kappa"] = kappa_summary(strat.dTdz_rho, strat.dTdz_T, P_win)
+    if dTdz_source == "fp07":
+        try:
+            fp, info = _window_fp07_gradient(
+                fp07_series, win_t, half_w, t_slow, P, T, S, lat, lon, sort
+            )
+        except Exception as exc:
+            fp, info = None, f"the FP07 gradient raised {exc!r}"
+        if fp is None:
+            logger.warning(
+                "%s: stratification.dTdz_source is fp07, but %s; dT/dz falls back to %s",
+                file_label,
+                info,
+                T_name,
+            )
+            if diag is not None:
+                diag["dTdz_comment"] += (
+                    f" FP07 source requested, but {info}: fell back to {T_name}."
+                )
+                diag["stratification"] = f"sort={sort}; dTdz_source=ct ({T_name}; fp07 fallback)"
+                diag["fp07_fallback"] = str(info)
+        else:
+            dTdz = fp
+            if diag is not None:
+                diag["dTdz_order"] = _fp07_sort(sort)
+                diag["dTdz_comment"] = _fp07_note(info["probes"], sort, scale)
+                diag["stratification"] = (
+                    f"sort={sort}; dTdz_source=fp07 ("
+                    + ", ".join(name for name, _ in info["probes"])
+                    + ")"
+                )
+                if info["dropped"]:
+                    dropped = "; ".join(f"{k} {v}" for k, v in info["dropped"].items())
+                    logger.warning("%s: FP07 dT/dz dropped %s", file_label, dropped)
+                    diag["dTdz_comment"] += f" Dropped: {dropped}."
+                    diag["fp07_dropped"] = dict(info["dropped"])
+    return strat.N2, dTdz, sal_note
+
+
+def _profile_fp07_series(prof, t_slow, file_label: str):
+    """The FP07 channels of a profile NetCDF on its slow grid.
+
+    Returns a list of ``(name, values, calibration tag)``, or a reason string
+    when there are none. A channel is an FP07 when its name is ``T<n>`` and its
+    ``sensor_type`` is a thermistor -- the test ``fp07_cal`` uses -- and it may
+    sit on ``time_slow`` (SN479, ARCTERX) or ``time_fast``.
+    """
+    import numpy as np
+
+    out = []
+    t_fast = _time_epoch_seconds(prof["t_fast"]) if "t_fast" in prof else None
+    fs_ratio = float(prof.attrs.get("fs_fast", 512.0)) / float(prof.attrs.get("fs_slow", 64.0))
+    for name in sorted(prof.data_vars):
+        if not re.fullmatch(r"T\d+", str(name)):
+            continue
+        var = prof[name]
+        if var.attrs.get("sensor_type") not in ("therm", "thermistor") or var.ndim != 1:
+            continue
+        # Gate rails before the box-car (see _slow_fp07_gradient).
+        x = _gate_reference_temperature(var.values.astype(np.float64), str(name), file_label)
+        if var.dims[0] == "time_fast" and t_fast is not None and len(x) == len(t_fast):
+            x = _fp07_to_slow(x, t_fast, t_slow, fs_ratio)
+        elif len(x) != len(t_slow):
+            continue
+        out.append((str(name), x, var.attrs.get("calibration") or "embedded coefficients"))
+    return out if out else "no FP07 channel in the profile"
+
+
+def _window_fp07_gradient(series, win_t, half_w, t_slow, P, T_ref, S, lat, lon, sort):
+    """FP07 dT/dz at window times, or ``(None, reason)``.
+
+    *series* is :func:`_profile_fp07_series`'s result. Each probe passes
+    :func:`_fp07_dead` against *T_ref* over the profile, gives
+    ``window_temperature_gradient`` with the profile's salinity *S*, and the
+    surviving probes' slopes are averaged per window.
+    """
+    import numpy as np
+
+    from odas_tpw.processing.mixing import window_temperature_gradient
+
+    if isinstance(series, str) or not series:
+        return None, series or "no FP07 channel in the profile"
+    T_ref = np.asarray(T_ref, dtype=np.float64)
+    mask = np.ones(len(t_slow), dtype=bool)
+    dropped: dict[str, str] = {}
+    slopes, probes = [], []
+    for name, x, cal in series:
+        why = _fp07_dead(x, T_ref if len(T_ref) == len(x) else None, mask)
+        if why:
+            dropped[name] = why
+            continue
+        d = window_temperature_gradient(
+            win_t, half_w, t_slow, P, x, S=S, lat=lat, lon=lon, sort=_fp07_sort(sort)
+        )
+        if not np.isfinite(d).any():
+            dropped[name] = "yielded no gradient"
+            continue
+        slopes.append(d)
+        probes.append((name, cal))
+    if not slopes:
+        detail = "; ".join(f"{k} {v}" for k, v in dropped.items())
+        return None, f"no usable FP07 channel ({detail})"
+    with np.errstate(invalid="ignore"), _suppress_mean_of_empty():
+        dTdz = np.nanmean(np.vstack(slopes), axis=0)
+    return dTdz, {"probes": probes, "dropped": dropped}
 
 
 def _attach_window_stratification(
-    ds, prof_path, half_w, T_name, C_name, file_label, scale_name, sal_source=None
+    ds,
+    prof_path,
+    half_w,
+    T_name,
+    C_name,
+    file_label,
+    scale_name,
+    sal_source=None,
+    sort: str = _DEFAULT_SORT,
+    dTdz_source: str = "ct",
+    notices: list | None = None,
 ):
     """Attach sorted N2/dTdz to a window-grid dataset (e.g. diss). No-op on failure.
 
     *half_w* is the window half-width [s]; *scale_name* names the window in the
-    variable comments (e.g. "dissipation"). *sal_source* is forwarded to
-    :func:`_window_stratification_for_profile` to select the salinity source.
+    variable comments (e.g. "dissipation"). *sal_source*, *sort* and
+    *dTdz_source* are forwarded to :func:`_window_stratification_for_profile`.
+    *notices*, when a list, receives this profile's run-notice record (see
+    :func:`_window_strat_notice`).
     """
     import xarray as xr
 
     if "t" not in ds:
         return
+    diag: dict[str, Any] = {}
     out = _window_stratification_for_profile(
-        prof_path, _time_epoch_seconds(ds["t"]), half_w, T_name, C_name, file_label, sal_source
+        prof_path,
+        _time_epoch_seconds(ds["t"]),
+        half_w,
+        T_name,
+        C_name,
+        file_label,
+        sal_source,
+        sort=sort,
+        dTdz_source=dTdz_source,
+        diag=diag,
+        scale_name=scale_name,
     )
     if out is None:
         return
     N2, dTdz, sal_note = out
-    ds["N2"] = xr.DataArray(
-        N2,
-        dims=["time"],
-        attrs={
-            "units": "s-2",
-            "long_name": "buoyancy frequency squared (window scale)",
-            "comment": (
-                "TEOS-10 (gsw.Nsquared) between the shallow- and deep-half means "
-                f"of each {scale_name} window after Thorpe-sorting to a stable "
-                f"profile (overturns removed); {sal_note}."
-            ),
-        },
-    )
-    ds["dTdz"] = xr.DataArray(
-        dTdz,
-        dims=["time"],
-        attrs={
-            "units": "K m-1",
-            "long_name": "background temperature gradient (positive down)",
-            "comment": (
-                "Least-squares slope of the Thorpe-sorted in-situ temperature vs "
-                f"depth over each {scale_name} window."
-            ),
-        },
-    )
+    n2_attrs, dtdz_attrs = _window_strat_attrs(diag, sort, scale_name, sal_note)
+    ds["N2"] = xr.DataArray(N2, dims=["time"], attrs=n2_attrs)
+    ds["dTdz"] = xr.DataArray(dTdz, dims=["time"], attrs=dtdz_attrs)
+    rec = _window_strat_notice(diag, f"{file_label} {scale_name}", sort)
+    if rec and notices is not None:
+        notices.append(rec)
+
+
+def _window_strat_attrs(diag: dict, sort: str, scale_name: str, sal_note: str):
+    """``(N2 attrs, dTdz attrs)`` for a window product from the diag record."""
+    import numpy as np
+
+    n2_attrs: dict[str, Any] = {
+        "units": "s-2",
+        "long_name": "buoyancy frequency squared (window scale)",
+        "comment": (
+            "TEOS-10 (gsw.Nsquared) between the shallow- and deep-half means "
+            f"of each {scale_name} window, {_SORT_PHRASE[sort]}; {sal_note}."
+        ),
+    }
+    dtdz_attrs: dict[str, Any] = {
+        "units": "K m-1",
+        "long_name": "background temperature gradient (positive down)",
+        "comment": diag.get("dTdz_comment", ""),
+    }
+    if diag.get("stratification"):
+        n2_attrs["stratification"] = diag["stratification"]
+        dtdz_attrs["stratification"] = diag["stratification"]
+    kappa = diag.get("kappa")
+    if kappa is not None and np.isfinite(kappa.overall):
+        n2_attrs["sort_kappa"] = float(kappa.overall)
+        if np.isfinite(kappa.worst_P):
+            n2_attrs["sort_kappa_worst_band"] = float(kappa.worst)
+            n2_attrs["sort_kappa_worst_band_P"] = float(kappa.worst_P)
+        n2_attrs["comment"] += (
+            " sort_kappa: median density- over temperature-sorted dT/dz (1 = salinity "
+            "leaves the temperature order alone; below 0.8 salinity scrambles the "
+            "density order, by noise or compensated structure)."
+        )
+    return n2_attrs, dtdz_attrs
+
+
+def _window_strat_notice(diag: dict, label: str, sort: str) -> dict | None:
+    """Log the kappa warning and return a run-notice record, or None.
+
+    The warning is worded for the order the written dT/dz used: an FP07
+    gradient is temperature-sorted even under ``sort: density``.
+    """
+    from odas_tpw.processing.mixing import kappa_warning
+
+    rec: dict[str, Any] = {}
+    kappa = diag.get("kappa")
+    if kappa is not None:
+        msg = kappa_warning(kappa, label, diag.get("dTdz_order", sort))
+        if msg:
+            logger.warning(msg)
+            rec["kappa"] = float(min(kappa.worst, kappa.overall))
+    if diag.get("fp07_fallback"):
+        rec["fp07_fallback"] = diag["fp07_fallback"]
+    if diag.get("fp07_dropped"):
+        rec["fp07_dropped"] = diag["fp07_dropped"]
+    if not rec:
+        return None
+    rec["where"] = label
+    return rec
 
 
 def _add_mixing_quantities(
@@ -1934,11 +2492,14 @@ def _add_mixing_quantities(
     epsilon_provenance: str = "",
     sal_source=None,
     use_chi_qc_fallback: bool = False,
+    sort: str = _DEFAULT_SORT,
+    dTdz_source: str = "ct",
+    notices: list | None = None,
 ):
     """Append stratification and (when available) mixing quantities to chi.
 
-    Always computes window-scale N2 and dT/dz from the profile's slow P/T via
-    the Thorpe-sorted (adiabatically leveled) method, with the salinity chosen
+    Always computes window-scale N2 and dT/dz from the profile's slow P/T,
+    reordered per *sort* (``stratification.sort``), with the salinity chosen
     by *sal_source* — a fixed value, a hotel-injected channel, or (the default)
     practical salinity from the profile's own C/T/P via TEOS-10 when the
     conductivity channel exists and yields finite salinity, else 35 PSU; see
@@ -1970,38 +2531,29 @@ def _add_mixing_quantities(
         logger.info("mixing quantities skipped for %s: no chi time/window attrs", file_label)
         return chi_ds
 
+    diag: dict[str, Any] = {}
     strat_out = _window_stratification_for_profile(
-        prof_path, chi_t, half_w, T_name, C_name, file_label, sal_source
+        prof_path,
+        chi_t,
+        half_w,
+        T_name,
+        C_name,
+        file_label,
+        sal_source,
+        sort=sort,
+        dTdz_source=dTdz_source,
+        diag=diag,
+        scale_name="chi",
     )
     if strat_out is None:
         return chi_ds
     N2, dTdz, sal_note = strat_out
+    n2_attrs, dtdz_attrs = _window_strat_attrs(diag, sort, "chi", sal_note)
+    rec = _window_strat_notice(diag, f"{file_label} chi", sort)
+    if rec and notices is not None:
+        notices.append(rec)
 
-    var_specs = {
-        "N2": (
-            N2,
-            {
-                "units": "s-2",
-                "long_name": "buoyancy frequency squared (window scale)",
-                "comment": (
-                    "TEOS-10 (gsw.Nsquared) between the shallow- and deep-half "
-                    "means of each chi window after Thorpe-sorting to a stable "
-                    f"profile (overturns removed); {sal_note}."
-                ),
-            },
-        ),
-        "dTdz": (
-            dTdz,
-            {
-                "units": "K m-1",
-                "long_name": "background temperature gradient (positive down)",
-                "comment": (
-                    "Least-squares slope of the Thorpe-sorted in-situ "
-                    "temperature vs depth over each chi window."
-                ),
-            },
-        ),
-    }
+    var_specs = {"N2": (N2, n2_attrs), "dTdz": (dTdz, dtdz_attrs)}
 
     # K_T / Gamma / K_rho need epsilon and/or chi; only add them when available.
     if have_mix:
@@ -2489,6 +3041,27 @@ def _normalize_config_salinity(config: dict) -> None:
             )
 
 
+def _validate_stratification_options(config: dict) -> None:
+    """Reject an unknown ``stratification.sort`` / ``dTdz_source``, per file.
+
+    ``load_config`` validates these at load; a config built in code skips it,
+    and an unknown value would otherwise fail inside the diss stage (costing
+    epsilon) or be swallowed by the profile path's warning.
+    """
+    from odas_tpw.perturb.config import DTDZ_SOURCES
+    from odas_tpw.processing.mixing import SORT_MODES
+
+    strat = merge_config("stratification", config.get("stratification"))
+    sort = strat.get("sort") or _DEFAULT_SORT
+    if sort not in SORT_MODES:
+        raise ValueError(f"stratification.sort: expected one of {list(SORT_MODES)}, got {sort!r}")
+    src = strat.get("dTdz_source") or "ct"
+    if src not in DTDZ_SOURCES:
+        raise ValueError(
+            f"stratification.dTdz_source: expected one of {list(DTDZ_SOURCES)}, got {src!r}"
+        )
+
+
 def _resolve_salinity_cfg(value, prof_path, T_name: str, C_name: str, label: str):
     """Resolve a ``salinity`` config value to a scalar / per-slow-sample array / None.
 
@@ -2648,6 +3221,7 @@ def process_file(
     # Validate/normalize salinity settings once, up front, so a bad value fails
     # loudly here rather than silently (bool -> 1 PSU) or once per profile.
     _normalize_config_salinity(config)
+    _validate_stratification_options(config)
 
     try:
         pf = PFile(p_path)
@@ -2887,55 +3461,6 @@ def process_file(
                 except Exception as exc:
                     logger.warning("CT align failed for %s: %s", p_path.name, exc)
 
-    # ---- Background stratification (N2, dT/dz) on the slow grid ----
-    # Injected as slow pf channels once, before the CTD and profile forks, so
-    # extract_profiles writes them into every per-profile NetCDF and
-    # ctd_bin_file bins them into the CTD product — all independent of eps/chi.
-    strat_cfg = merge_config("stratification", config.get("stratification"))
-    if profiles and bool(strat_cfg.get("enable", True)):
-        try:
-            N2_full, dTdz_full, sal_note = _compute_slow_stratification(
-                pf,
-                profiles,
-                ct_cfg.get("T_name", "JAC_T"),
-                ct_cfg.get("C_name", "JAC_C"),
-                float(strat_cfg.get("window", 2.0)),
-                strat_cfg.get("salinity"),
-            )
-            if N2_full is not None:
-                win = float(strat_cfg.get("window", 2.0))
-                pf.channels["N2"] = N2_full
-                pf.channel_info["N2"] = {
-                    "units": "s-2",
-                    "type": "derived",
-                    "name": "N2",
-                    "long_name": (
-                        f"buoyancy frequency squared (background, {win:g}-dbar Thorpe-sorted)"
-                    ),
-                    "comment": (
-                        f"TEOS-10 N2 over a {win:g}-dbar pressure window, "
-                        f"Thorpe-sorted to a stable profile; {sal_note}. "
-                        "Background (profile/CTD) scale — distinct from the "
-                        "dissipation/chi-window N2 in the diss/chi products."
-                    ),
-                }
-                pf.channels["dTdz"] = dTdz_full
-                pf.channel_info["dTdz"] = {
-                    "units": "K m-1",
-                    "type": "derived",
-                    "name": "dTdz",
-                    "long_name": (
-                        "background temperature gradient (positive down, "
-                        f"{win:g}-dbar Thorpe-sorted)"
-                    ),
-                    "comment": (
-                        "Least-squares slope of the Thorpe-sorted in-situ "
-                        f"temperature vs depth over a {win:g}-dbar pressure window."
-                    ),
-                }
-        except Exception as exc:
-            logger.warning("stratification failed for %s: %s", p_path.name, exc)
-
     # ---- CTD fork (full file, both up and down) ----
     ctd_cfg = config.get("ctd", {})
     if ctd_cfg.get("enable", True) and "ctd" in output_dirs:
@@ -2981,6 +3506,7 @@ def process_file(
     with stage_log(output_dirs.get("profiles"), log_basename):
         # Adjust profile bounds (top-trim removes prop-wash, bottom detects seafloor crash)
         profile_bottom_depths: list[float] = []
+        detected_profiles = list(profiles)  # background stratification uses these
         profiles = _adjust_profile_bounds(
             profiles,
             pf,
@@ -3038,6 +3564,21 @@ def process_file(
             except Exception as exc:
                 logger.warning("FP07 cal failed for %s: %s", p_path.name, exc)
                 result["fp07"] = {"fitted": [], "factory": {"all": f"calibration raised: {exc}"}}
+
+        # ---- Background stratification (N2, dT/dz) on the slow grid ----
+        # Injected as slow pf channels so extract_profiles writes them into every
+        # per-profile NetCDF, independent of eps/chi. Not on the CTD product
+        # (profile-only; ctd.py drops them). Computed AFTER the FP07 calibration,
+        # so an FP07 source (dTdz_source: fp07, or ct.T_name naming an FP07
+        # channel) reads calibrated temperatures, and on the DETECTED casts
+        # (before the top-trim/bottom adjustment), as it always has.
+        strat_cfg = merge_config("stratification", config.get("stratification"))
+        if bool(strat_cfg.get("enable", True)):
+            strat_out = _inject_slow_stratification(
+                pf, detected_profiles, strat_cfg, ct_cfg, p_path.name
+            )
+            if strat_out:
+                result.setdefault("stratification", {})["profile"] = strat_out
 
         # Write per-profile NetCDFs
         from odas_tpw.rsi.profile import extract_profiles
@@ -3105,6 +3646,10 @@ def process_file(
     qc_chi_drop_from = list(qc_cfg.get("chi_drop_from") or [])
     strat_cfg = merge_config("stratification", config.get("stratification"))
     strat_enabled = bool(strat_cfg.get("enable", True))
+    # Per-profile stratification notices (kappa, FP07 fallbacks) for the run
+    # summary; attached to the result below whether or not any stage fails.
+    strat_notices: list[dict] = []
+    result.setdefault("stratification", {})["windows"] = strat_notices
     ct_T_name = ct_cfg.get("T_name", "JAC_T")
     ct_C_name = ct_cfg.get("C_name", "JAC_C")
     # resolve_window_config guarantees concrete integer diss_length values.
@@ -3222,6 +3767,9 @@ def process_file(
                                 p_path.name,
                                 "dissipation",
                                 strat_cfg.get("salinity"),
+                                sort=strat_cfg.get("sort") or _DEFAULT_SORT,
+                                dTdz_source=strat_cfg.get("dTdz_source") or "ct",
+                                notices=strat_notices,
                             )
                         out_name = Path(prof_path).name
                         out_path = output_dirs["diss"] / out_name
@@ -3399,6 +3947,9 @@ def process_file(
                                         use_chi_qc_fallback=bool(
                                             chi_cfg.get("mixing_use_qc_fallback", False)
                                         ),
+                                        sort=strat_cfg.get("sort") or _DEFAULT_SORT,
+                                        dTdz_source=strat_cfg.get("dTdz_source") or "ct",
+                                        notices=strat_notices,
                                     )
                                 finally:
                                     if mix_eps is not diss_ds:
@@ -3979,6 +4530,72 @@ def _fp07_notices(outcomes: dict[str, dict]) -> list[str]:
     return lines
 
 
+def _stratification_notices(outcomes: dict[str, dict], sort: str = _DEFAULT_SORT) -> list[str]:
+    """Run-summary lines for the background stratification.
+
+    *outcomes* maps a processed file to its ``result["stratification"]``:
+    ``{"profile": {...}, "windows": [{...}, ...]}`` from
+    :func:`_inject_slow_stratification` and :func:`_window_strat_notice`; *sort*
+    is the order the run's dT/dz uses (``stratification.sort``, or the FP07's
+    under ``dTdz_source: fp07``). One
+    line for low sort_kappa (salinity scrambling the density order), one for FP07
+    dT/dz fallbacks to the CT, one for dropped FP07 probes; nothing when all is
+    quiet. Per-profile warnings are in the worker logs, which a clean run
+    summary would otherwise hide.
+    """
+    kappa_files: dict[str, float] = {}
+    fallback_files: dict[str, str] = {}
+    dropped: dict[str, set[str]] = {}
+    for name, out in sorted(outcomes.items()):
+        prof = out.get("profile") or {}
+        recs = [prof, *(out.get("windows") or [])]
+        lows = [r["kappa"]["worst"] if isinstance(r.get("kappa"), dict) else r["kappa"]
+                for r in recs if r.get("kappa") is not None]
+        if lows:
+            kappa_files[name] = min(lows)
+        fb = [r["fp07_fallback"] for r in recs if r.get("fp07_fallback")]
+        if fb:
+            fallback_files[name] = fb[0]
+        for r in recs:
+            for ch in (r.get("fp07_dropped") or {}):
+                dropped.setdefault(ch, set()).add(name)
+    lines = []
+    if kappa_files:
+        worst = min(kappa_files.values())
+        head = (
+            f"Stratification: salinity scrambles the density order in "
+            f"{len(kappa_files)} file(s) (sort_kappa below 0.8 over a cast or 0.6 in a "
+            f"50-dbar band; lowest {worst:.2f}): "
+        )
+        if sort == "density":
+            body = (
+                "dT/dz is biased low and N2 high there, so K_T and Gamma high, unless "
+                "the water is density-compensated. stratification.sort: temperature or "
+                "dTdz_source: fp07 fixes dT/dz; N2 needs a better salinity. Files: "
+            )
+        else:
+            order = "temperature-sorted" if sort == "temperature" else "in measured order"
+            body = (
+                f"dT/dz ({order}) is spared, but N2 carries the salinity, and "
+                "Gamma and K_rho with it; if it is noise rather than "
+                "density-compensated water, N2 needs a better salinity. Files: "
+            )
+        lines.append(head + body + ", ".join(sorted(kappa_files)))
+    if fallback_files:
+        why = next(iter(fallback_files.values()))
+        lines.append(
+            f"Stratification: dTdz_source fp07 fell back to the CT temperature in "
+            f"{len(fallback_files)} file(s) (e.g. {why}). Files: "
+            + ", ".join(sorted(fallback_files))
+        )
+    for ch in sorted(dropped):
+        lines.append(
+            f"Stratification: FP07 {ch} dropped from dT/dz in {len(dropped[ch])} file(s): "
+            + ", ".join(sorted(dropped[ch]))
+        )
+    return lines
+
+
 def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineResult:
     """Run the full pipeline: discover -> trim -> merge -> process -> bin -> combo.
 
@@ -4203,6 +4820,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
         logger.info("Processing %d files (jobs=%d)...", len(to_process), jobs)
 
     fp07_outcomes: dict[str, dict] = {}
+    strat_outcomes: dict[str, dict] = {}
     if jobs == 1:
         for p_path, cachekey in to_process:
             logger.info("Processing %s...", p_path.name)
@@ -4221,6 +4839,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
             outcome.file_errors += _file_errors(p_path.name, result)
             if isinstance(result, dict) and "fp07" in result:
                 fp07_outcomes[p_path.name] = result["fp07"]
+            if isinstance(result, dict) and result.get("stratification"):
+                strat_outcomes[p_path.name] = result["stratification"]
     else:
         # Spawn workers each get a per-pid log file inside <output_root>/logs/
         # so multi-process runs are diagnosable.  ``run_stamp`` is the parent
@@ -4255,6 +4875,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                     outcome.file_errors += _file_errors(p.name, result)
                     if isinstance(result, dict) and "fp07" in result:
                         fp07_outcomes[p.name] = result["fp07"]
+                    if isinstance(result, dict) and result.get("stratification"):
+                        strat_outcomes[p.name] = result["stratification"]
                 except Exception as exc:
                     # The worker died rather than returning a result, so its own
                     # `errors` list never made it back; record the future's
@@ -4263,6 +4885,11 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                     outcome.file_errors.append(f"{p.name}: {exc}")
 
     outcome.notices += _fp07_notices(fp07_outcomes)
+    run_strat = merge_config("stratification", config.get("stratification"))
+    run_sort = run_strat.get("sort") or _DEFAULT_SORT
+    if (run_strat.get("dTdz_source") or "ct") == "fp07":
+        run_sort = _fp07_sort(run_sort)
+    outcome.notices += _stratification_notices(strat_outcomes, run_sort)
     # Whole and at WARNING: the summary clips each line (a file list is longer
     # than that) and is logged at INFO on a run with no errors, which
     # `--log-level warning` would hide.

@@ -408,8 +408,8 @@ DEFAULTS: dict[str, dict] = {
         "history": None,
     },
     # Background stratification (N2, dT/dz) written to the diss and profile
-    # products, independent of epsilon/chi. Computed with the Thorpe-sorted
-    # (adiabatically leveled) method. diss uses its dissipation window; the
+    # products, independent of epsilon/chi. Computed from each window's parcels
+    # after reordering them (``sort``). diss uses its dissipation window; the
     # profile product uses the configurable ``window`` below. NOT written to the
     # CTD product (profile-only; the CTD spans the whole up/down trajectory).
     "stratification": {
@@ -419,6 +419,12 @@ DEFAULTS: dict[str, dict] = {
         "salinity": None,  # N2 salinity source: null = conductivity (else 35),
         # a number = fixed PSU, "measured" = C/T/P (TEOS-10),
         # "hotel"/"hotel:<var>" = a hotel-injected salinity channel
+        "sort": "temperature",  # parcel order within each window:
+        # "temperature" (conservative temperature alone; immune to salinity
+        # noise; the default since 2026-10), "density" (Thorpe-sorted; the
+        # default before), or "none" (as measured)
+        "dTdz_source": "ct",  # "ct" = ct.T_name; "fp07" = the FP07
+        # thermistors (mean of per-probe slopes; N2 stays on the CT pair)
     },
     "parallel": {
         "jobs": 1,
@@ -535,6 +541,9 @@ _WINDOW_KEY_PAIRS = (
 
 _WINDOW_SECTIONS = ("epsilon", "chi")
 
+# stratification.dTdz_source values (validated at load).
+DTDZ_SOURCES = ("ct", "fp07")
+
 
 class _PerturbConfigManager(ConfigManager):
     """ConfigManager with perturb's window-duration key semantics.
@@ -549,6 +558,21 @@ class _PerturbConfigManager(ConfigManager):
     """
 
     def _section_view_postprocess(self, section: str, mapping: dict) -> dict:
+        if section == "stratification":
+            # A key is dropped only when it selects what the code did before the
+            # key existed, so those configs keep their canonical form (and
+            # stage signature) and their products stay valid. That is
+            # sort: density, NOT the current default: products made before the
+            # default became "temperature" are density-sorted, so a config that
+            # leaves sort unset (or null) must hash differently from them and be
+            # reprocessed. dTdz_source: ct is both the old behavior and the
+            # default.
+            if mapping.get("sort") is None:
+                mapping["sort"] = DEFAULTS["stratification"]["sort"]
+            if mapping["sort"] == "density":
+                mapping.pop("sort")
+            if mapping.get("dTdz_source") in ("ct", None):
+                mapping.pop("dTdz_source", None)
         if section in _WINDOW_SECTIONS:
             for samples_key, sec_key in _WINDOW_KEY_PAIRS:
                 if sec_key in mapping and (
@@ -647,6 +671,23 @@ class _PerturbConfigManager(ConfigManager):
                     "they are ignored with anchor: top",
                     UserWarning,
                     stacklevel=2,
+                )
+        # stratification.sort / dTdz_source pick a code path by membership, so a
+        # typo would otherwise fall through to a default silently.
+        strat = config.get("stratification") or {}
+        if isinstance(strat, dict):
+            from odas_tpw.processing.mixing import SORT_MODES
+
+            sort = strat.get("sort")
+            if sort is not None and sort not in SORT_MODES:
+                raise ValueError(
+                    f"stratification.sort: expected one of {list(SORT_MODES)}, got {sort!r}"
+                )
+            src = strat.get("dTdz_source", "ct")
+            if src is not None and src not in DTDZ_SOURCES:
+                raise ValueError(
+                    f"stratification.dTdz_source: expected one of {list(DTDZ_SOURCES)}, "
+                    f"got {src!r}"
                 )
         # hotel.max_gap is required when the hotel merge is enabled; validate
         # it (and every per-channel override) here so a missing value fails
@@ -1595,7 +1636,7 @@ netcdf:
   history: null            # auto-filled with processing log
 
 stratification:
-  enable: true            # write N2 and dT/dz (Thorpe-sorted) to the diss and
+  enable: true            # write N2 and dT/dz (background) to the diss and
                           # profile products, independent of eps/chi. Not on the
                           # CTD product (profile-only; CTD spans up+down).
   window: 2.0             # background vertical window [dbar] for the profile
@@ -1604,6 +1645,25 @@ stratification:
                           # (else 35 PSU); a number = that fixed PSU; "measured"
                           # = C/T/P (TEOS-10); "hotel" (or "hotel:<var>") = a
                           # hotel-injected salinity channel (default "salinity")
+  sort: temperature       # how each window's parcels are reordered before its
+                          # gradients are taken. temperature (the default since
+                          # 2026-10) = conservative temperature alone, monotonic
+                          # along the trend of a fit over five windows (as
+                          # measured where that is unresolved): immune to
+                          # salinity noise, which scrambles a density sort (dT/dz
+                          # low, N2 high), but it also removes real
+                          # density-compensated inversions. density =
+                          # Thorpe-sorted to static stability (adiabatic
+                          # leveling; the default before). none = as measured.
+                          # With a per-sample salinity, N2 carries sort_kappa
+                          # (density- over temperature-sorted dT/dz) and a
+                          # warning fires below 0.8.
+  dTdz_source: ct         # ct = ct.T_name. fp07 = the FP07 thermistors (in-situ
+                          # calibrated when fp07.calibrate ran), slow-rate,
+                          # temperature-sorted (or unsorted with sort: none), mean
+                          # of per-probe slopes. The bead that measured chi then
+                          # sets the gradient chi is normalized by, so a bead gain
+                          # error cancels in K_T and Gamma. N2 stays on the CT pair.
 
 parallel:
   jobs: 1

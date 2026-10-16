@@ -311,7 +311,13 @@ def _decoded(var) -> np.ndarray:
 # from the FIRST binned file), so in the normal homogeneous case (every source
 # QC'd identically) they survive, but a heterogeneous run whose first-sorted
 # source lacks the flags would drop them combo-wide. (#104 U5-3.)
-_PRESERVE_DATAVAR_ATTRS: frozenset[str] = frozenset({"calibration", "flag_meanings", "flag_masks"})
+#
+# stratification is the N2/dTdz provenance ("sort=...; dTdz_source=..."). With the
+# same first-file caveat: a profile whose FP07 dT/dz fell back to the CT says so
+# in its own file and in the run summary, not in the combo.
+_PRESERVE_DATAVAR_ATTRS: frozenset[str] = frozenset(
+    {"calibration", "flag_meanings", "flag_masks", "stratification"}
+)
 
 
 def _load_profile_snapshot(profile_file: Path) -> dict | None:

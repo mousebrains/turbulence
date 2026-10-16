@@ -809,7 +809,7 @@ def test_cbar_label_overrides(tmp_path: Path):
                   for ax in fig.axes if getattr(ax, "_colorbar", None) is not None}
         assert labels == {
             r"$T_1$ (°C)", r"$T_2$ (°C)",
-            r"$N^2$ (s$^{-2}$) (Thorpe-sorted)",
+            r"$N^2$ (s$^{-2}$)",  # sort-neutral: stratification.sort picks the order
             r"$\frac{dT}{dz}$ (°C m$^{-1}$) (+ downwards)",
         }
     finally:
