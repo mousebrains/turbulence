@@ -67,6 +67,23 @@ class TestEngineFingerprint:
         assert h_old != h_new          # code-aware dirs (recompute on code change)
         assert sig_old == sig_new      # plotting matches regardless of code version
 
+    @pytest.mark.parametrize(
+        ("name", "hashed"), [("_version_info.py", False), ("mixing.py", True)]
+    )
+    def test_version_module_is_not_hashed(self, monkeypatch, name, hashed):
+        """Editing the --version code must not recompute every campaign."""
+        monkeypatch.delenv("ODAS_TPW_ENGINE_FINGERPRINT", raising=False)
+        cfg.engine_fingerprint.cache_clear()
+        before = cfg.engine_fingerprint()
+        real = Path.read_bytes
+
+        def _edited(self):
+            return b"# edited\n" if self.name == name else real(self)
+
+        monkeypatch.setattr(Path, "read_bytes", _edited)
+        cfg.engine_fingerprint.cache_clear()
+        assert (cfg.engine_fingerprint() != before) is hashed
+
 
 # ---------------------------------------------------------------------------
 # Part B — per-file cache key + markers

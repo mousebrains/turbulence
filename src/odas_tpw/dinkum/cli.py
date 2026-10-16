@@ -22,6 +22,8 @@ import logging
 import sys
 from pathlib import Path
 
+from odas_tpw._version_info import add_version_argument
+
 logger = logging.getLogger(__name__)
 
 
@@ -115,6 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="dinkum-hotel",
         description="Build perturb hotel files from Slocum Dinkum Binary Data files",
     )
+    add_version_argument(parser)
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_init = sub.add_parser("init", help="write a template config file")

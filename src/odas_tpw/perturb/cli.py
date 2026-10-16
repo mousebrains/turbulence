@@ -25,6 +25,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from odas_tpw._version_info import add_version_argument
+
 if TYPE_CHECKING:  # heavy module — imported lazily inside the handlers
     from odas_tpw.perturb.pipeline import PipelineResult
 
@@ -509,6 +511,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="perturb",
         description="Batch processing pipeline for Rockland VMP/MicroRider data.",
     )
+    add_version_argument(parser)
     sub = parser.add_subparsers(dest="command", help="subcommand")
 
     # init

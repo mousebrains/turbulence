@@ -32,7 +32,7 @@ rsi-tpw <subcommand> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--version` | Show version and exit |
+| `--version` | Print the release and git commit, then exit. See [Which version am I running?](../installation.md#which-version-am-i-running) |
 | `-c`, `--config YAML` | Configuration file. See [configuration.md](configuration.md) |
 
 ## `rsi-tpw info`

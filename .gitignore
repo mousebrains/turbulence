@@ -37,6 +37,8 @@ papers/**
 __pycache__/
 *.py[cod]
 *.egg-info/
+# written by the release workflow only (src/odas_tpw/_version_info.py)
+src/odas_tpw/_build.json
 *.egg
 dist/
 build/

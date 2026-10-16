@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
+from odas_tpw._version_info import add_version_argument
 from odas_tpw.fp07cal.fit import fit_calibration, select_order
 from odas_tpw.fp07cal.lag import pressure_offset, temperature_lag
 from odas_tpw.fp07cal.pairs import PairConfig, build_pairs_multi
@@ -947,6 +948,7 @@ def main(argv: list[str] | None = None) -> int:
         "Fits one Steinhart-Hart coefficient set per deployment from whatever "
         "yos carried a CTD reference, and reports whether it is stable in time.",
     )
+    add_version_argument(p)
     sub = p.add_subparsers(dest="command", required=True)
 
     q = sub.add_parser("init", help="write a commented template config")

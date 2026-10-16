@@ -86,6 +86,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   read them treat a BBL window as a full-length one. The N2/dTdz half-window
   behind Gamma and K_T, chi's `chiLnSigma`, and epsilon's `num_ffts` all use
   the long window's value for the near-bed windows.
+- **`--version` on every command, with the git commit.** `rsi-tpw`,
+  `perturb`, `perturb-plot`, `perturb-diag`, `scor160-tpw`, `fp07-cal`,
+  `fp07-pair`, `mr-clocksync`, `dinkum-hotel` and `erddap-hotel` all print one
+  line for a bug report, e.g. `perturb 0.4.0 (git v0.4.0-28-g5f6572b9a1e8)`.
+  The release number alone did not identify the code, because `pyproject.toml`
+  keeps the last release's number for every commit after it. The commit comes
+  from the checkout the package was imported from (editable installs and
+  `PYTHONPATH` worktrees, with `uncommitted changes` when a file under
+  `src/odas_tpw/` or `pyproject.toml` differs), else from pip's record of a
+  `git+` install, else from a stamp the release workflow now writes into the
+  PyPI wheel (`0.4.0 (release, git ...)`). The workflow also refuses a tag that
+  does not match `project.version`. Anything it cannot establish prints
+  `commit unknown` with the reason, so a wheel built elsewhere is never taken
+  for the release. The editable install in the main checkout reported 0.3.1
+  from metadata frozen at install time; the release is now read from the
+  source tree's `pyproject.toml`. A test walks `[project.scripts]`, so a new
+  command without `--version` fails CI. Like any code change this one moves
+  perturb's engine fingerprint, so a campaign's next run recomputes; later
+  edits to the version code will not (`_version_info.py` is excluded from the
+  hash). See `docs/installation.md`.
 
 ### Fixed
 - **The `goto` FP07 time constant left out Goto et al.'s speed factor.** Goto
