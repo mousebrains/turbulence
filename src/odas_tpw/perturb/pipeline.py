@@ -4433,9 +4433,12 @@ def _hotel_reference_refusal(config: dict, hotel_cfg: dict, hotel_data: Any) -> 
     every 4.5 s) the per-file fit calibrated 3 of 12 files until a gap stopped
     silencing whole profiles and the low-pass stopped starting from zero; it
     now calibrates all 12, within 0.6% in gradient gain (3 mK median) of the
-    deployment-pooled ``fp07-cal`` fit. Coverage still is: in our own
-    products, Taiwan17 doug fitted 70 of 72 files, but Taiwan13 husker left T1
-    on factory coefficients in 40 of 58.
+    deployment-pooled ``fp07-cal`` fit. Coverage can still be, though no
+    product of ours shows it yet: Taiwan17 doug now fits both beads in all 72
+    files (70 before the gap fix), and every file where Taiwan13 husker keeps
+    factory coefficients (T1 in 39 of 58) is a correct refusal -- 38 are a dead
+    bead, constant from FSB_020 on, and FSA_010 is 5-25 dbar casts with under
+    10 mK of temperature variation.
 
     Hence a refusal by default, not a ban: ``fp07.allow_hotel_reference:
     true`` keeps the per-file fit, and the run summary then reports every file

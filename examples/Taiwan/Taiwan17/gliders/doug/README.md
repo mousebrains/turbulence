@@ -2,7 +2,9 @@
 
 Microstructure from the MicroRider carried by Slocum glider `doug` during
 R/V Roger Revelle cruise RR1704 (project SK-II), Luzon Strait. **530 profiles
-from 72 of 80 files**, 2017-02-19 – 02-28, processed 2026-09-15.
+from 72 of 80 files**, 2017-02-19 – 02-28, reprocessed 2026-10-16 on `main`
+98b4206. It replaces the 2026-09-15 set; see
+[What changed](#what-changed-from-the-2026-09-15-set).
 
 | | |
 |---|---|
@@ -30,7 +32,9 @@ from 72 of 80 files**, 2017-02-19 – 02-28, processed 2026-09-15.
   clock, so `time_offset: 0`. Uncorrected, every merged CTD sample would have
   landed tens of meters from where the MR was.
 - **FP07**: fitted in situ per file against the glider CTD (the config's
-  coefficients are stale — see below).
+  coefficients are stale — see below), **both beads in all 72 files**. That CTD
+  reaches perturb through the hotel file, a reference perturb refuses by
+  default since #214, so this config sets `fp07.allow_hotel_reference: true`.
 - **chi by spectral fit** (Method 2), because glider shear is
   vibration-contaminated and makes a poor seed for k_B.
 - **8 files produced nothing, correctly**: CAS_001–004, 030, 031, 079, 080 are
@@ -42,12 +46,34 @@ from 72 of 80 files**, 2017-02-19 – 02-28, processed 2026-09-15.
 | | median | spread (MAD) | n |
 |---|---|---|---|
 | ε (paired) | 2.3e-9 W/kg | 1.31 dex | 88,806 |
-| χ | 3.1e-9 K²/s | 1.25 dex | 88,215 |
-| N² | 7.0e-5 s⁻² | 0.61 dex | 88,806 |
-| Γ | 0.12 | 0.59 dex | 84,456 |
-| K_ρ | 7.5e-6 m²/s | 1.50 dex | 88,805 |
+| χ | 3.2e-9 K²/s | 1.22 dex | 87,878 |
+| N² (> 0 only) | 8.7e-5 s⁻² | 0.55 dex | 75,929 |
+| Γ | 0.096 | 0.58 dex | 75,282 |
+| K_ρ | 5.6e-6 m²/s | 1.48 dex | 79,224 |
+| K_T | 3.8e-6 m²/s | 1.74 dex | 85,214 |
 
-**The thermistors agree**: pooled χ(T1)/χ(T2) = **0.982** over 148,981 windows,
+Median and MAD (×1.4826) of log10 over the bins of `chi_combo_00/combo.nc`
+holding a finite, positive value. **14.5% of bins have N² ≤ 0** under the
+temperature sort, and the N² row leaves them out. Γ and K_ρ are masked per
+window where N² < N2_min and only then binned.
+
+## What changed from the 2026-09-15 set
+
+- **ε: bit-identical.**
+- **χ +1.8% per bin (median), concentrated near the noise floor — #215.** The
+  raw config writes the legacy key `beta = 3143.55` (no `beta_1`); before
+  #215 chi's FP07 noise model ignored it and used 3000. New/old runs from
+  +13.5% in the weakest χ decile to +0.2% in the strongest, the same
+  signature as Taiwan 2013's MR046, where #215 was bisected.
+- **FP07 — #214.** CAS_006 and CAS_078 now have both beads fitted rather
+  than factory coefficients.
+- **N², Γ, K_ρ, K_T — #219, the temperature sort by default.** Wherever
+  temperature and density order agree the bin is unchanged (per-bin medians
+  1.000); the 14.5% of bins where salinity reorders density now carry
+  N² ≤ 0, and the run notice names 10 files where it scrambles the order.
+
+**The thermistors agree**: pooled χ(T1)/χ(T2) = **0.987** over 147,617 windows
+(0.982 in the 2026-09-15 set),
 so both beads are healthy — unlike Taiwan 2013's MR046, whose T1 died mid-deployment.
 
 ## ⚠️ The shear probes disagree by ~3×
@@ -68,7 +94,9 @@ profiled the same days, 20–150 dbar:
 | 2017-02-26 | ~59 km | 5.36e-9 | 6.50e-9 | 1.55e-9 | 2.83e-9 |
 
 Here **sh1 is the channel that tracks the VMP** (within 1.2–1.5×), while sh2
-reads 3–5× low and the shipped `epsilonMean` ~2× low. **This is a bound on
+reads 3–5× low and the shipped `epsilonMean` ~2× low. (The VMP column is
+from the 2026-09-15 VMP set; on the reprocessed VMP the same day medians move
+by ≤ 4%, from its regridded windows.) **This is a bound on
 gross error, not a validation**: the platforms are 24–59 km apart in different
 water and ε varies by decades spatially.
 
@@ -99,5 +127,5 @@ and do not treat `epsilonMean` as calibrated.
 
 ```bash
 cd /Volumes/SeaChest/Taiwan/Taiwan17/gliders/doug
-perturb run -c perturb.yaml -j 8        # ~40 min; this MR's config needs no reader fix
+perturb run -c perturb.yaml -j 8        # ~8 min; these files were made on main 98b4206
 ```

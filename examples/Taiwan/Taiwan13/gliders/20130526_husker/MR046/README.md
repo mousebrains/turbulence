@@ -2,7 +2,8 @@
 
 Microstructure from the MicroRider carried by Slocum glider `husker` during
 RR1306 leg 3, South China Sea. **495 profiles from 58 of 77 files**,
-2013-05-02 05:55Z – 05-26 07:32Z, processed 2026-09-15.
+2013-05-02 05:55Z – 05-26 07:32Z, reprocessed 2026-10-16 on `main` 98b4206.
+It replaces the 2026-09-15 set; see [What changed](#what-changed-from-the-2026-09-15-set).
 
 | | |
 |---|---|
@@ -17,8 +18,8 @@ RR1306 leg 3, South China Sea. **495 profiles from 58 of 77 files**,
 These files use RSI's 2012 config dialect, one named stanza per channel
 (`[pitch]`, `[shear1]`, `[therm1]`, …). **v0.4.0 and every earlier release
 build zero channels from them.** The fix is PR #196, merged to `main` on
-2026-09-16 as **29f3ea9**. These products were made from its branch commit
-89f6f79, whose `src/` is identical to 29f3ea9's.
+2026-09-16 as **29f3ea9**. These products were made on `main` at **98b4206**;
+every file names that code in its `software_version` attribute and `history`.
 
 ## What was done
 
@@ -34,11 +35,21 @@ build zero channels from them.** The fix is PR #196, merged to `main` on
 - **Clock**: the hotel file is already on the MR clock (the MR ran −2.1 s in
   May 1–3 and −14.3 s drifting +0.37 s/day in May 17–26).
 - **FP07**: the config's coefficients are wrong (raw T2 reads 21–39 °C), so
-  both beads are fitted **in situ per file** against the glider CTD. It works:
-  calibrated T1/T2 span 17.2–27.7 °C against the CTD's 17.3–27.7 °C.
+  both beads are fitted **in situ per file** against the glider CTD. That CTD
+  reaches perturb through the hotel file, a reference perturb refuses by
+  default since #214, so this config sets `fp07.allow_hotel_reference: true`.
+  Where a bead is alive it works: in FSB_010's first profile calibrated T1/T2
+  span 17.25/17.23–27.70 °C against the CTD's 17.28–27.72 °C. **T2 is fitted in
+  57 of 58 files, T1 in 19.** T1 keeps factory coefficients from FSB_021 on
+  because it is dead there (below), and **both beads keep them in FSA_010**,
+  where no profile segment passed the lag gate: treat χ from FSA_010's 4
+  profiles as unreliable. The run log's `notice:` lines list every such file.
 - **chi by spectral fit** (Method 2), because glider shear is
-  vibration-contaminated and makes a poor seed for k_B. K_max/k_B median 2.04,
-  so the Batchelor rolloff is resolved.
+  vibration-contaminated and makes a poor seed for k_B. K_max/k_B median
+  **1.78** over the 166,378 windows with a finite χ (T1 3.2, T2 1.5; T2's 25th
+  percentile is 1.11), so the Batchelor rolloff is resolved in most windows.
+  The 2.04 this README quoted for the 2026-09-15 set came from a few-file
+  smoke test, not the full set.
 - **19 files produced nothing, correctly**: KTA_001–004 and FSA_001–009 (bench
   and 2013-05-01, before the glider's science record starts 05-02 04:45Z),
   FSB_001–005 and FSB_026. perturb refused them rather than publish the
@@ -49,10 +60,37 @@ build zero channels from them.** The fix is PR #196, merged to `main` on
 | | median | spread (MAD) | n |
 |---|---|---|---|
 | ε (paired) | 1.7e-9 W/kg | 0.99 dex | 76,213 |
-| χ | 7.8e-9 K²/s | 1.03 dex | 70,939 |
-| N² | 1.4e-4 s⁻² | 0.59 dex | 76,213 |
-| Γ | 0.274 | 0.62 dex | 50,497 |
-| K_ρ | 2.9e-6 m²/s | 1.20 dex | 76,119 |
+| χ | 8.2e-9 K²/s | 1.04 dex | 70,599 |
+| N² (> 0 only) | 1.6e-4 s⁻² | 0.54 dex | 67,352 |
+| Γ | 0.222 | 0.63 dex | 42,873 |
+| K_ρ | 2.35e-6 m²/s | 1.18 dex | 69,760 |
+| K_T | 6.1e-6 m²/s | 1.52 dex | 49,150 |
+
+Median and MAD (×1.4826) of log10 over the bins of `chi_combo_00/combo.nc`
+holding a finite, positive value. **11.6% of the 76,213 bins have N² ≤ 0**
+under the temperature sort (#219), and the N² row leaves them out, which is
+why its median sits above the old 1.4e-4. Over all 76,213 bins the median
+N² went from 1.36e-4 to 1.30e-4. Γ and K_ρ are masked per *window* where
+N² < N2_min and only then binned, so a bin whose N² is ≤ 0 can still carry
+them from its stable windows (2,485 bins do for K_ρ).
+
+## What changed from the 2026-09-15 set
+
+FSB_010 was re-run under every commit between the two sets; the oldest and
+newest reproduced the old and new products exactly, so each change is pinned
+to one PR.
+
+- **ε: identical.**
+- **χ ×1.04 per bin (median) — #215, a bug fix.** This 2012 config writes
+  the legacy key `beta` (3143.55). Before #215, chi's FP07 noise model
+  ignored it and used a default of 3000. The effect concentrates near the
+  noise floor: about +10% for the weakest χ, nothing for the strongest.
+- **N², Γ, K_ρ, K_T — #219, the temperature sort by default.** Under the
+  old density sort, salinity noise propped up N² in weakly stratified bins;
+  the run log flags 9 files where salinity scrambles the density order. The
+  bins that lost Γ had low N² and high old Γ (median 0.39).
+- **FP07 fits — #214.** FSB_006 (both beads) and FSB_058 (T2) are now fitted
+  rather than left on factory coefficients; χ moved by ±1%.
 
 ## ⚠️ Two instrument faults — read before using ε or χ
 
@@ -122,5 +160,5 @@ why this is documented rather than configured away.
 
 ```bash
 cd /Volumes/SeaChest/Taiwan/Taiwan13/gliders/20130526_husker/MR046
-perturb run -c perturb.yaml -j 8   # ~35 min; needs microstructure-tpw main >= 29f3ea9
+perturb run -c perturb.yaml -j 8   # ~7 min; these files were made on main 98b4206
 ```
