@@ -2,8 +2,10 @@
 
 OSU's Rockland **VMP-250 SN 142** on R/V Roger Revelle cruise **RR1704**
 (project SK-II), Luzon Strait / northeastern South China Sea, **22–26 Feb
-2017**. 18 raw `.P` files; **12 are profiling casts → 100 profiles**, processed
-with `microstructure-tpw` main `7736082` (v0.4.0) on 2026-09-15.
+2017**. 18 raw `.P` files; **12 are profiling casts → 100 profiles**,
+reprocessed with `microstructure-tpw` main `98b4206` on 2026-10-16. It replaces
+the 2026-09-15 set made on `7736082`; see
+[What changed](#what-changed-from-the-2026-09-15-set).
 
 Reorganized 2026-09-15 — see `../README.md`, `../REORG_MANIFEST.csv` and
 `/Volumes/SeaChest/REORG_PLAN_Taiwan17.md` for the evidence behind every
@@ -63,16 +65,50 @@ The cast log's claims were each checked against the data.
 
 | | median | spread (MAD) | n |
 |---|---|---|---|
-| ε (paired) | 4.8e-9 W/kg | 0.97 dex | 18,894 |
-| χ | 1.5e-8 K²/s | 1.09 dex | 18,894 |
-| N² | 1.0e-4 s⁻² | 0.27 dex | 18,894 |
-| Γ | 0.33 | 0.54 dex | 13,881 |
-| K_ρ | 7.4e-6 m²/s | 1.01 dex | 18,884 |
+| ε (paired) | 4.3e-9 W/kg | 0.92 dex | 18,271 |
+| χ | 1.4e-8 K²/s | 1.06 dex | 18,271 |
+| N² (> 0 only) | 8.5e-5 s⁻² | 0.48 dex | 16,883 |
+| Γ | 0.163 | 0.41 dex | 14,542 |
+| K_ρ | 9.1e-6 m²/s | 0.98 dex | 16,956 |
+| K_T | 6.0e-6 m²/s | 1.17 dex | 15,118 |
+
+Median and MAD (×1.4826) of log10 over the bins of `chi_combo_00/combo.nc`
+holding a finite, positive value. **7.6% of bins have N² ≤ 0** under the
+temperature sort, and the N² row leaves them out. perturb's run notice flags
+**all 12 cast files**: salinity scrambles the density order (sort_kappa down
+to −0.92), so dT/dz (temperature-sorted) is sound, but N² carries the JAC's
+salinity, and Γ and K_ρ with it.
 
 Water depth under the casts (ship multibeam, `../ship_data/met/met.mat` field
 `MB`) is **1,500–3,000 m**, shoaling toward the NE end of the line; casts reach
 ~120–220 m, so **every cast ends ≥ 1,150 m above the seafloor** — no bottom
 boundary layer and no bottom strikes. `bottom.enable` stays false.
+
+## What changed from the 2026-09-15 set
+
+Two causes, separated by a third run: current code with the 2026-09-15 trim.
+
+- **The trim, on purpose (2026-09-20).** Ax/Ay are vibration sensors and do
+  not see prop wash; the fall-rate residual does, so `top_trim` now votes
+  with it (`combine: "max"`, `max_depth: 80`). The Revelle's wash reaches
+  ~25 m. The shallowest finite bin moved from **2.5 to 10.0 m** (median over
+  profiles), which removed the wash-inflated top and is why the ε and χ
+  medians fell 10% and 7%. Below the new top nothing changed systematically: per-bin
+  new/old median is 1.000 for every quantity. Individual bins scatter
+  ±0.14 dex (10th–90th percentile) only because the window grid now starts
+  1.37 windows later, so each bin averages different 1-s windows.
+  Probe-pair flags dropped from 72 profiles to 65.
+- **The code: #219, the temperature sort by default.** With the old trim on
+  current code, ε, χ₁ and χ₂ are **bit-identical** (this config gives
+  `beta_1`, so #215 does not apply). The mixing quantities are not: per-bin
+  N² ×0.77, |dT/dz| ×1.18, **Γ ×0.55**, K_ρ ×1.33, K_T ×0.64. The density
+  sort had ordered the JAC's salinity noise into a stable profile, which
+  props up N² and flattens dT/dz; this is the JAC-fleet bias #219 measured.
+- **The 2026-09-20 run is not in this history.** The edit that changed the
+  trim also deleted everything after `top_trim:` in `perturb.yaml`, so that
+  run (`*_01`) had no chi and ran on default epsilon, speed, QC and netcdf
+  settings. `perturb.yaml` was restored on 2026-10-16 from the 2026-09-17
+  copy in `rosette_crosscheck/`; see its History block.
 
 ## Known issues
 
@@ -86,7 +122,7 @@ boundary layer and no bottom strikes. `bottom.enable` stays false.
    **It also trends with depth:** within one ε decade the ratio falls 0.81
    (0–40 dbar) → 0.69 (160–250 dbar), opposite to what a floor would do.
    Pressure and temperature cannot be separated here.
-   perturb flags 72 profiles for this (`Processed/diss_00/*.log`, not the run log).
+   perturb flags 65 profiles for this (`Processed/diss_00/*.log`, not the run log).
 2. **Single-cast excursions:** DAT_160 profile 1 (e₁/e₂ 1.80), DAT_165 profiles
    1–2 (1.46, 0.36), DAT_169 profile 6 (1.53), each measured below 30 dbar.
    Cause not established (debris on a probe is one possibility, unverified);
@@ -107,7 +143,7 @@ boundary layer and no bottom strikes. `bottom.enable` stays false.
 
 ```bash
 cd /Volumes/SeaChest/Taiwan/Taiwan17/vmp
-perturb run -c perturb.yaml -j 8        # ~75 s; writes Processed/{stage}_NN
+perturb run -c perturb.yaml -j 8        # ~70 s; writes Processed/{stage}_NN
 perturb-plot overview --config perturb.yaml --sections sections.yaml --out-dir figs/
 ```
 

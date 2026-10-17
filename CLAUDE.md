@@ -123,12 +123,15 @@ Facts that are easy to get wrong:
   making extrapolation four times worse.
 - **perturb refuses its own per-file fit against a hotel reference** unless
   `fp07.allow_hotel_reference: true`. A file the glider CTD did not cover
-  keeps the factory coefficients while its neighbors are fitted: Taiwan13
-  husker left T1 on factory coefficients in 40 of 58 files. Sparseness alone is
-  not the problem. Once gaps split profiles and the low-pass started at rest,
-  a 4.5 s CTD fitted all 12 files of Tanaka 2015-11-13, within 0.6% of
-  `fp07-cal` in gradient gain. Whatever is left on factory coefficients is
-  named in the run summary's `notice:` lines and logged whole at WARNING.
+  keeps the factory coefficients while its neighbors are fitted, putting one
+  deployment on two calibrations. No product of ours shows that yet: Taiwan13
+  husker's T1 is on factory coefficients in 39 of 58 files, but 38 are a dead
+  bead (constant from FSB_020 on) and FSA_010 has no temperature range to fit,
+  both correct refusals. Sparseness alone is not the problem. Once gaps split
+  profiles and the low-pass started at rest, a 4.5 s CTD fitted all 12 files of
+  Tanaka 2015-11-13, within 0.6% of `fp07-cal` in gradient gain. Whatever is
+  left on factory coefficients is named in the run summary's `notice:` lines
+  and logged whole at WARNING.
 
 ### Hotel files from Slocum gliders
 
