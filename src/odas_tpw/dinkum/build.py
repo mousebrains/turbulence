@@ -37,6 +37,7 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
+from odas_tpw._version_info import stamp_provenance
 from odas_tpw.dinkum.config import merge_config, normalize_sensors, required_sensor_names
 from odas_tpw.dinkum.reader import load_dinkum
 from odas_tpw.perturb.config import expand_config_dir
@@ -394,6 +395,7 @@ def build_hotel(
     now: float | None = None,
     dataset: xr.Dataset | None = None,
     source_attrs: dict | None = None,
+    history_step: str = "dinkum-hotel build",
 ) -> Path:
     """Build a hotel NetCDF from Dinkum files per *config*.
 
@@ -420,6 +422,9 @@ def build_hotel(
         Global attributes describing where *dataset* came from, used in place
         of the ``dinkum_source_*`` / ``dinkum_reader`` triple. Only meaningful
         alongside *dataset*.
+    history_step : str
+        This build's ``history`` line, appended to any history in
+        *source_attrs* with the code that ran it.
 
     Returns
     -------
@@ -646,6 +651,7 @@ def build_hotel(
     # CF-1.13 §2.5.1 forbids _FillValue on coordinates; xarray adds one to
     # float coords by default. Mirrors perturb's ctd/combo writers.
     encoding = {time_base: {"_FillValue": None}}
+    stamp_provenance(out_ds.attrs, history_step)
     out_ds.to_netcdf(out_path, encoding=encoding)
     logger.info("wrote %s: %d times x %d channels", out_path, times.size, len(data_vars))
     return out_path

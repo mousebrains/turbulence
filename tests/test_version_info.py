@@ -12,6 +12,7 @@ import argparse
 import importlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -64,7 +65,7 @@ def test_version_is_computed_only_when_asked(monkeypatch):
 
 def test_version_line_is_not_wrapped(monkeypatch, capsys):
     """argparse's own version action reflows text at the terminal width."""
-    long = "0.4.0 (git v0.4.0-57-g5f6572b4a1c2, uncommitted changes); installed metadata says 0.3.1"
+    long = "0.4.0 (git v0.4.0-57-g5f6572b4a1c2, uncommitted changes, installed metadata says 0.3.1)"
     monkeypatch.setattr(vi, "version_string", lambda: long)
     monkeypatch.setenv("COLUMNS", "20")
     parser = argparse.ArgumentParser(prog="x")
@@ -203,6 +204,37 @@ def test_uncommitted_changes_are_scoped_to_the_package(tree, relpath, content, s
 
 
 @needs_git
+def test_uncommitted_changes_carry_a_source_digest(tree):
+    """'uncommitted changes' alone cannot tell two modified trees apart."""
+    pkg = tree / "src" / "odas_tpw"
+    assert vi.version_info().source_digest is None  # clean: the commit says it all
+    (pkg / "__init__.py").write_text("x = 2\n")
+    first = vi.version_info()
+    assert re.fullmatch(r"[0-9a-f]{12}", first.source_digest or "")
+    assert f"uncommitted changes, source {first.source_digest})" in str(first)
+    (pkg / "__init__.py").write_text("x = 3\n")
+    assert vi.version_info().source_digest != first.source_digest
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        vi.VersionInfo("1.0", "a" * 40, "v1.0-3-gaaaaaaaaaaaa", True, "git",
+                       metadata_release="0.9", source_digest="b" * 12),
+        vi.VersionInfo("1.0", "a" * 40, None, None, "git"),
+        vi.VersionInfo("1.0", "a" * 40, source="pip-vcs", metadata_release="0.9"),
+        vi.VersionInfo("1.0", "a" * 40, source="release"),
+        vi.VersionInfo("1.0", source="local-build", detail="file:///x", metadata_release="0.9"),
+        vi.VersionInfo("1.0", source="unknown", detail="not a release build"),
+        vi.VersionInfo("unknown", source="unknown"),
+    ],
+)
+def test_version_text_has_no_semicolon(info):
+    """`rsi-tpw v1to6` writes it into an INI value, where ';' is a comment."""
+    assert ";" not in str(info) and "\n" not in str(info)
+
+
+@needs_git
 def test_inherited_git_dir_does_not_redirect(tree, tmp_path, monkeypatch):
     """A caller's GIT_DIR (inside a git hook, say) must not name another repo."""
     other = tmp_path / "other"
@@ -259,7 +291,7 @@ def test_stale_editable_metadata_is_named(tree, monkeypatch):
     monkeypatch.setattr(vi, "_distribution", lambda: _FakeDist("0.3.1", record, tree))
     text = vi.version_string()
     assert text.startswith("9.8.7 (git ")
-    assert text.endswith("; installed metadata says 0.3.1")
+    assert text.endswith(", installed metadata says 0.3.1)")
 
 
 @needs_git
@@ -280,7 +312,7 @@ def test_uncommitted_pyproject_bump_is_flagged(tree):
     _write_pyproject(tree, "9.9.0")
     info = vi.version_info()
     assert (info.release, info.dirty) == ("9.9.0", True)
-    assert str(info).endswith(", uncommitted changes)")
+    assert ", uncommitted changes, source " in str(info)
 
 
 @needs_git
@@ -449,7 +481,7 @@ def test_editable_install_without_git(tmp_path, monkeypatch):
     url = root.resolve().as_uri()
     _install(monkeypatch, {"url": url, "dir_info": {"editable": True}}, tmp_path / "elsewhere")
     assert vi.version_string() == (
-        f"2.0 (built from {url}, commit unknown); installed metadata says 1.2.3"
+        f"2.0 (built from {url}, commit unknown, installed metadata says 1.2.3)"
     )
 
 

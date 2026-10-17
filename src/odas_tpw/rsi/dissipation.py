@@ -23,7 +23,6 @@ Lueck, R.G., and 27 coauthors, 2024: Best practices recommendations for
 """
 
 import warnings
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +33,7 @@ import xarray as xr
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
 
+from odas_tpw._version_info import stamp_provenance
 from odas_tpw.rsi.helpers import _build_l1data_from_channels, load_channels, prepare_profiles
 from odas_tpw.scor160.io import BAD_MAX_INTERP_FRACTION as MAX_INTERP_FRACTION
 from odas_tpw.scor160.l4 import (
@@ -418,7 +418,7 @@ def _compute_epsilon(
             fit_order=fit_order,
         )
         ds.attrs.update(data["metadata"])
-        ds.attrs["history"] = f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
+        stamp_provenance(ds.attrs, "epsilon")
         start_time = data["metadata"].get("start_time", "")
         t_units = f"seconds since {start_time}" if start_time else "seconds"
         ds.coords["t"].attrs.update(

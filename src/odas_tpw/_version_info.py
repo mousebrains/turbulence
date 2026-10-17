@@ -21,6 +21,10 @@ Where the commit comes from, in order:
    publishes to PyPI. A wheel without it was built somewhere else, from any
    commit, and is not called a release.
 
+Products and logs record the same string (:func:`software_version`,
+:func:`stamp_provenance`), so a bad file names the code that made it rather
+than whatever ``--version`` says later.
+
 Anything less certain says "commit unknown" rather than guess. The release is
 read from the source tree's ``pyproject.toml`` when there is one, because an
 editable install's metadata is frozen at install time (one read 0.3.1 against
@@ -30,13 +34,17 @@ a ``pyproject.toml`` of 0.4.0).
 from __future__ import annotations
 
 import argparse
+import functools
+import hashlib
 import importlib.machinery
 import json
 import os
 import re
 import subprocess
 import tomllib
+from collections.abc import Iterable, Mapping, MutableMapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from importlib import metadata
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -97,6 +105,9 @@ class VersionInfo:
         Where a local build came from, or why the commit is unknown.
     metadata_release : str or None
         The installed metadata's version when it disagrees with ``release``.
+    source_digest : str or None
+        With uncommitted changes, a hash of the package's ``.py`` files, so
+        two stamps from a modified tree can at least be told apart.
     """
 
     release: str
@@ -106,6 +117,7 @@ class VersionInfo:
     source: str = "unknown"
     detail: str | None = None
     metadata_release: str | None = None
+    source_digest: str | None = None
 
     def __str__(self) -> str:
         notes: list[str] = []
@@ -117,16 +129,17 @@ class VersionInfo:
                 notes.append("uncommitted changes unknown")
             elif self.source == "git" and self.dirty:
                 notes.append("uncommitted changes")
+                if self.source_digest:
+                    notes.append(f"source {self.source_digest}")
         elif self.source == "local-build":
             notes.append(f"built from {self.detail}, commit unknown")
         elif self.source == "unknown":
             notes.append(f"{self.detail}, commit unknown" if self.detail else "commit unknown")
-        text = self.release
-        if notes:
-            text += f" ({', '.join(notes)})"
         if self.metadata_release:
-            text += f"; installed metadata says {self.metadata_release}"
-        return text
+            notes.append(f"installed metadata says {self.metadata_release}")
+        # No ';' anywhere: `rsi-tpw v1to6` writes this into an INI value,
+        # where a ';' starts a comment and is refused.
+        return f"{self.release} ({', '.join(notes)})" if notes else self.release
 
 
 def _package_root() -> Path:
@@ -209,6 +222,19 @@ def _git_state(
     hidden = _ignored_code(pkg_root)
     dirty = None if status is None or hidden is None else bool(status) or hidden
     return (commit, describe or None, dirty), None
+
+
+def _source_digest(pkg_root: Path) -> str | None:
+    """sha256 over every ``.py`` file under *pkg_root* (path and content)."""
+    h = hashlib.sha256()
+    try:
+        for py in sorted(pkg_root.rglob("*.py")):
+            h.update(py.relative_to(pkg_root).as_posix().encode())
+            h.update(b"\0")
+            h.update(hashlib.sha256(py.read_bytes()).digest())
+    except OSError:
+        return None
+    return h.hexdigest()[:_ABBREV]
 
 
 def _ignored_code(pkg_root: Path) -> bool | None:
@@ -329,7 +355,13 @@ def version_info() -> VersionInfo:
     if state is not None:
         commit, describe, dirty = state
         return VersionInfo(
-            release, commit, describe, dirty, source="git", metadata_release=stale
+            release,
+            commit,
+            describe,
+            dirty,
+            source="git",
+            metadata_release=stale,
+            source_digest=_source_digest(pkg_root) if dirty else None,
         )
     if refusal is not None:
         return VersionInfo(release, source="unknown", detail=refusal, metadata_release=stale)
@@ -375,8 +407,91 @@ def version_info() -> VersionInfo:
 
 def version_string() -> str:
     """One line for ``--version`` and bug reports, e.g.
-    ``0.4.0 (git v0.4.0-57-g5f6572b4a1c2, uncommitted changes)``."""
+    ``0.4.0 (git v0.4.0-57-g5f6572b4a1c2, uncommitted changes, source 1c0e...)``."""
     return str(version_info())
+
+
+# ---------------------------------------------------------------------------
+# Products and logs
+# ---------------------------------------------------------------------------
+
+SOFTWARE_ATTR = "software_version"
+"""Global attribute naming the code that wrote a product."""
+
+
+@functools.cache
+def running_version() -> str:
+    """:func:`version_string`, computed once per process and never raising.
+
+    For stamping products and logs: git runs once per process, not once per
+    file, and no product write may fail because the version could not be found.
+    """
+    try:
+        text = version_string()
+    except Exception as exc:  # whatever went wrong, the product matters more
+        text = f"unknown (version lookup failed: {type(exc).__name__})"
+    # One line of ASCII: a path in the detail may be neither, and the string
+    # goes into netCDF attributes and a .p file's latin-1 config banner.
+    text = "".join(" " if ord(c) < 0x20 else c for c in text)
+    return text.encode("ascii", "backslashreplace").decode("ascii")
+
+
+def software_version() -> str:
+    """``microstructure-tpw 0.4.0 (git ...)``, a product's ``software_version``."""
+    return f"{DIST_NAME} {running_version()}"
+
+
+def history_line(what: str) -> str:
+    """One CF ``history`` entry: ``<UTC time>: <what> by <software_version>``."""
+    when = datetime.now(UTC).isoformat(timespec="seconds")
+    return f"{when}: {what} by {software_version()}"
+
+
+def provenance_attrs(what: str, prior_history: object = None) -> dict[str, str]:
+    """Global attributes recording which code wrote a product.
+
+    ``history`` is *prior_history* (the input's, for a product derived from one
+    file) with this step appended: CF's audit trail, oldest first.
+    """
+    lines = []
+    if isinstance(prior_history, str) and prior_history.strip():
+        lines.append(prior_history.rstrip())
+    lines.append(history_line(what))
+    return {SOFTWARE_ATTR: software_version(), "history": "\n".join(lines)}
+
+
+def stamp_provenance(
+    attrs: MutableMapping[str, Any], what: str, *, inherit: bool = True
+) -> None:
+    """Set ``software_version`` and append a ``history`` line in *attrs*.
+
+    ``inherit=False`` first drops any history carried in from an input: for a
+    product aggregated from many files, the first file's lineage would
+    misdescribe the rest.
+    """
+    attrs.update(provenance_attrs(what, attrs.get("history") if inherit else None))
+
+
+INPUTS_ATTR = "input_software_versions"
+"""Global attribute of an aggregate: the codes that wrote its inputs."""
+
+
+def input_versions(input_attrs: Iterable[Mapping[str, Any]]) -> str:
+    """The distinct codes behind an aggregate's inputs, one per line.
+
+    *input_attrs* are the inputs' global attributes. Their own
+    ``input_software_versions`` are folded in, so a combo lists every code
+    that touched its data, not only the one that binned it. Binned and combo
+    files are rebuilt from cached per-file products, which another code state
+    may have written: a pinned engine fingerprint, or an edit only to code the
+    fingerprint excludes. An unstamped input counts as "(none recorded)".
+    """
+    seen: set[str] = set()
+    for attrs in input_attrs:
+        sv = attrs.get(SOFTWARE_ATTR)
+        seen.add(str(sv) if sv else "(none recorded)")
+        seen.update(x.strip() for x in str(attrs.get(INPUTS_ATTR) or "").splitlines() if x.strip())
+    return "\n".join(sorted(seen))
 
 
 class _VersionAction(argparse.Action):

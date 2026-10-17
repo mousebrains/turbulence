@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from odas_tpw._version_info import running_version
 from odas_tpw.rsi.p_file import (
     _H,
     HEADER_BYTES,
@@ -51,13 +52,6 @@ from odas_tpw.rsi.p_file import (
     parse_config,
     raise_if_v1_layout,
 )
-
-try:  # package version for the provenance banner
-    from importlib.metadata import version as _pkg_version
-
-    _VERSION = _pkg_version("microstructure-tpw")
-except Exception:  # pragma: no cover - fallback only when metadata is unavailable
-    _VERSION = "unknown"
 
 # Matches RSI patch_setupstr.m so RSI's -revert can still recover the original.
 CONFIG_MARKER = "; ### Original Configuration String Below ###"
@@ -535,7 +529,7 @@ def _build_banner(when: str, author: str, note: str, source_label: str, eol: str
     bar = "; " + "=" * 70 + eol
     lines = [
         bar,
-        f"; PATCHED {when} by {author} -- {TOOL_NAME} {_VERSION}".rstrip() + eol,
+        f"; PATCHED {when} by {author} -- {TOOL_NAME} {running_version()}".rstrip() + eol,
     ]
     if source_label:
         lines.append(f"; source: {source_label}{eol}")

@@ -231,6 +231,24 @@ class TestVersionDispatch:
         for name, want in _expected_channels(n_cycles).items():
             np.testing.assert_allclose(pf.channels[name], want, rtol=0, atol=1e-9, err_msg=name)
 
+    def test_version_text_never_breaks_the_translation(self, v1_dir, monkeypatch):
+        """The translator is an INI value, which refuses ';' (a comment): a
+        stale editable install once put '; installed metadata says ...' there,
+        and every v1 read would have failed."""
+        from odas_tpw.rsi import v1_translate
+
+        monkeypatch.setattr(
+            v1_translate,
+            "software_version",
+            lambda: "microstructure-tpw 0.4.0 (running from /a;b, commit unknown); x",
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pf = PFile(v1_dir / "SYN_001.p")
+        assert pf.translated_from_v1 is True
+        assert pf.v1_provenance["translator"].startswith("microstructure-tpw 0.4.0")
+        assert ";" not in pf.v1_provenance["translator"]
+
     def test_v1_decimate_to_slow_warns(self, v1_dir):
         """T1 occupies 2 slow slots/cycle; the k-occurrence path warns (F3)."""
         with pytest.warns(UserWarning, match="'T1' .*appears 2x per scan"):

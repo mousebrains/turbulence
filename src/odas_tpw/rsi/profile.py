@@ -9,7 +9,6 @@ re-exports them for backward compatibility and adds RSI-specific I/O
 
 import logging
 import os
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
@@ -17,6 +16,8 @@ import numpy as np
 
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
+
+from odas_tpw._version_info import provenance_attrs
 
 # Re-export from scor160 — canonical implementations live there
 from odas_tpw.scor160.profile import get_profiles, smooth_fall_rate
@@ -249,7 +250,11 @@ def extract_profiles(
         ds.profile_P_end = float(P_slow[e_slow])
         ds.profile_duration_s = float((e_slow - s_slow) / fs_slow)
         ds.profile_mean_speed = float(np.mean(np.abs(W[s_slow:s_slow_end])))
-        ds.history = f"Profile {pi} extracted on {datetime.now(UTC).isoformat()}"
+        # Which code wrote this profile, after the source's own history.
+        for key, val in provenance_attrs(
+            f"profile {pi} extracted", getattr(ds, "history", None)
+        ).items():
+            ds.setncattr(key, val)
 
         # Per-profile scalar coordinate variables (CF §9 profile featureType).
         # Keep these on the slow-rate timeline; gps must be in seconds since

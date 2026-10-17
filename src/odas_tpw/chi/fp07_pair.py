@@ -52,6 +52,8 @@ from typing import Any
 
 import numpy as np
 
+from odas_tpw._version_info import stamp_provenance
+
 # Frequency bands on the REDUCED axis (frequency at the reference speed).
 MID_BAND = (15.0, 30.0)  # Hz: the per-file timeline and the chi-time guard
 REF_BAND_MAX = 4.0  # Hz: the reference (normalization) level comes from below this
@@ -239,6 +241,7 @@ class ResponseCorrection:
             "convention": "|H_i|^2 = |H_model|^2 * e_i; geomean anchor: e_1*e_2 = 1",
             **{f"prov_{k}": str(v) for k, v in self.provenance.items()},
         })
+        stamp_provenance(ds.attrs, "fp07-pair fit")
         path = Path(path)
         ds.to_netcdf(path)
         return path

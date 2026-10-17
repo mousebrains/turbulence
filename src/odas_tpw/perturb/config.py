@@ -474,8 +474,9 @@ _INSTRUMENT_KEYS_BY_STAGE: dict[str, frozenset[str]] = {
 # upgrade also invalidates cached results.
 _ENGINE_DEPS = ("numpy", "scipy", "gsw", "netCDF4", "xarray", "pandas")
 # Code that cannot affect processing numerics; excluded from the source hash so
-# editing plots, standalone tools or the --version text doesn't invalidate
-# cached science.
+# editing plots, standalone tools or the --version and provenance-stamp code
+# doesn't invalidate cached science. The flip side: a fix to the stamps
+# themselves reaches existing products only on a run with --force.
 _FINGERPRINT_EXCLUDE = ("perturb/plot/", "_version_info.py")
 _ENGINE_OVERRIDE_ENV = "ODAS_TPW_ENGINE_FINGERPRINT"
 

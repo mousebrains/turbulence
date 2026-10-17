@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import xarray as xr
 
+from odas_tpw._version_info import provenance_attrs
 from odas_tpw.perturb.config import (
     DEFAULTS,
     config_dir_of,
@@ -358,6 +359,8 @@ def _write_binned_or_clear(ds: "xr.Dataset", out_dir: Path, manifest: str | None
     if ds.data_vars:
         if manifest is not None:
             ds = ds.assign_attrs(_input_manifest=manifest)
+        # A fresh history: the first input's would misdescribe the rest.
+        ds = ds.assign_attrs(provenance_attrs("binning"))
         # Atomic write: to a temp file in the same dir, then os.replace into
         # place. A direct ds.to_netcdf(out) interrupted mid-payload (ENOSPC /
         # SMB drop / Ctrl-C) leaves a truncated binned.nc whose _input_manifest

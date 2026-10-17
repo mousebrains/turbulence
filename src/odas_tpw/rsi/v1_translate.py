@@ -42,6 +42,7 @@ from typing import Any
 
 import numpy as np
 
+from odas_tpw._version_info import software_version
 from odas_tpw.rsi.channels import config_number
 from odas_tpw.rsi.setup_v1 import discover_setup_candidates, load_setup_file
 
@@ -364,7 +365,6 @@ def translate_v1_bytes(
     _check_setup_against_header(cfg, header, f_clock, src.name, chosen.name)
 
     setup_md5 = hashlib.md5(chosen.read_bytes()).hexdigest()
-    from odas_tpw.rsi import __version__ as _pkg_version
     from odas_tpw.rsi.p_file import V1_PROVENANCE_KEYS
 
     provenance = {
@@ -373,7 +373,9 @@ def translate_v1_bytes(
         "setup_file_source": str(chosen),
         "setup_file_md5": setup_md5,
         "sens_source": sens_source,
-        "translator": f"microstructure-tpw {_pkg_version} rsi-tpw v1to6",
+        # synthesize_ini refuses a ';' (an INI comment); the version text
+        # carries none, but a path in it could.
+        "translator": f"{software_version()} rsi-tpw v1to6".replace(";", ","),
         "translated_on": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
     # Keep the writer and the reader-side contract (PFile.v1_provenance,
