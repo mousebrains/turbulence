@@ -19,7 +19,7 @@
 #   populated: it is projected from the science clock (dinkum-flight.yaml).
 # * unit095_flight_hotel.nc is ALREADY ON THE MR CLOCK (L = -6.0 s at
 #   2017-08-03, -0.81 s/day; mr_clock_model.json), so time_offset is 0.
-# * NO WORKING FP07 -- chi is OFF (see chi:). Epsilon only.
+# * NO FP07 WORKING PAST 07-25 -- chi is OFF (see chi:). Epsilon only.
 # * Shear probes M1672 @ 0.0837, M1673 @ 0.0799 and the thermistors: no sheet
 #   in microstructure_sensors/. Absolute epsilon rests on the embedded config.
 # ---------------------------------------------------------------------------
@@ -73,8 +73,9 @@ fp07:
   max_lag_seconds: 10
   must_be_negative: false
   min_corr: 0.5
-  allow_hotel_reference: true  # keeps the run startable. No working FP07 here
-                            # (README) and chi is off, so nothing depends on it.
+  allow_hotel_reference: true  # keeps the run startable. T1 works only in the
+                            # first 3 files (README) and chi is off, so nothing
+                            # depends on it.
 
 ct:
   align: false
@@ -93,13 +94,14 @@ epsilon:
   fom_max: null
   diagnostics: false
 
-# CHI IS OFF: MR SN 247 HAS NO WORKING FP07. T2 is pinned at 16.136 C (the
-# config's T_0: an open circuit or dummy); T1 is railed at -17 C, wanders
-# 17-27 C tracking pressure not temperature (Spearman with the CTD 0.24), and
-# sits on the +57.6 C rail from ~DAT_120 on. fp07.calibrate failed the lag gate
-# on all 157 files for both. The first run's chi products are kept, renamed
-# Processed/INVALID_chi_*_no_working_FP07/. Epsilon is unaffected (viscosity
-# from the glider CTD).
+# CHI IS OFF: MR SN 247 HAS NO FP07 WORKING PAST 07-25. T2 is pinned at
+# 16.136 C (the config's T_0: an open circuit or dummy). T1 tracks the CTD to
+# 4-10 mK in DAT_023-025 (6 profiles, to 07-25 ~04 UTC); from DAT_026 it is off,
+# railed at -17 C, wanders 17-27 C tracking pressure not temperature (Spearman
+# with the CTD 0.24), and sits on the +57.6 C rail from ~DAT_120 on. The
+# per-file fit (2026-10-17) fits T1 in DAT_023-026, 028 and 048 -- the last
+# three on a broken bead -- and refuses T2 everywhere. Epsilon is unaffected
+# (viscosity from the glider CTD).
 chi:
   enable: false
   use_epsilon: false

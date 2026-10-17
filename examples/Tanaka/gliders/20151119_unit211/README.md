@@ -1,32 +1,46 @@
 # MicroRider SN 058 on Slocum unit211 -- 20151119_unit211
 
 One of T. Tanaka's pre-paper glider deployments: 32.3 N 133.2 E, off Shikoku, 2015-11-19 04:50 .. 11-20 04:51
-UTC, dives to ~1000 m, 11 MicroRider files. Processed 2026-10-13 with
-microstructure-tpw (branch `feat/rsijac-ct`, main 0f65101 plus the JAC-CT converters,
-which these files do not use).
+UTC, dives to ~1000 m, 11 MicroRider files. **Reprocessed 2026-10-17 on main
+98b4206** (`microstructure-tpw 0.4.0 (git v0.4.0-29-g98b42062069c)`, stamped
+in every product); first processed 2026-10-13.
 
 ## Verdict
 
 | | status |
 |---|---|
 | epsilon | **sh2 only** -- sh1 is dead (below). Climbs usable; dives marginal (slow) |
-| chi | both thermistors on TWO calibrations: perturb's per-file in-situ fit in 3 of 19 profiles (file 1504029), NOMINAL in the other 16 (~3-4% high, below); chi1/chi2 = 0.86 paired |
+| chi | both thermistors fitted in situ per file in **all 11 files (19 of 19 profiles)**, one calibration; chi1/chi2 = 1.02 paired |
 | clock | solved, 6 files, 0.89 s RMS |
 | speed | flight model with DEFAULT lift and Cd1 -- untested for this glider |
 
-## Products -- `Processed/`, generation **_01** (generation _00 averaged the dead probe in)
+## Products -- `Processed/`, generation **_00**
 
-19 (7 dives, 12 climbs) profiles, 1-m bins.
+19 profiles (7 dives, 12 climbs), 1-m bins. Median, MAD of log10 (dex), and n
+over finite positive bins:
 
-- dives: U 0.148 m/s, epsilon 7.9e-10 W/kg (sh2, MAD 0.48 dex), FM > 1.15 in 20%
-- climbs: U 0.364 m/s, epsilon 1.5e-9 W/kg (MAD 0.32 dex), FM > 1.15 in 54%
-- chi: 3.0e-9 K2/s (MAD 0.44 dex); chi1/chi2 = 0.86 paired
-- Gamma 0.22 (MAD 0.55 dex), K_rho 1.5e-5 m2/s, N2 2.3e-5 s-2
+| | all | dives | climbs |
+|---|---|---|---|
+| U (m/s) | 0.276 | 0.169 | 0.378 |
+| epsilon (sh2), W/kg | 1.3e-9 (0.55, 8,928) | 1.0e-9 (0.70, 4,507) | 1.4e-9 (0.41, 4,421) |
+| chi, K2/s | 3.1e-9 (0.70, 8,281) | 3.7e-9 (0.46, 4,077) | 1.9e-9 (0.95, 4,204) |
+| N2 (> 0), s-2 | 3.3e-5 (0.67, 7,245) | 2.8e-5 | 4.2e-5 |
+| Gamma | 0.17 (0.75, 6,711) | 0.27 | 0.071 |
+| K_rho, m2/s | 9.7e-6 (0.94, 7,662) | 9.8e-6 | 9.5e-6 |
+| K_T, m2/s | 1.8e-5 (1.84, 7,943) | 2.0e-5 | 1.5e-5 |
 
-The climb/dive epsilon ratio (2-3x in the same water) and the 50% FM failure
-rate on climbs are **unexplained**; vibration on the faster climbs is one
-hypothesis, untested. Treat absolute epsilon as uncalibrated in any case: no
-sheet exists in `microstructure_sensors/` for M1369 or M887.
+N2 <= 0 in 18.3% of bins: the temperature sort (#219) no longer forces it
+positive, and salinity scrambles the density order in 7 of 11 files (run
+notice). Gamma and K_rho are masked where N2 < N2_min.
+
+**The legs disagree, in opposite directions, and it is unexplained.** In the
+same 1-m bins (median over dive profiles / median over climb profiles, then
+the median over 522-871 bins): epsilon 0.69, chi **2.2**, Gamma **3.2**, while
+N2 is 1.01. The same pattern, stronger, is on 2015-11-13 (that README). A speed
+error moves epsilon and chi the same way, so it cannot do it alone. The 50% FM
+failure rate on climbs is also unexplained; vibration on the faster climbs is
+one hypothesis, untested. Treat absolute epsilon as uncalibrated in any case:
+no sheet exists in `microstructure_sensors/` for M1369 or M887.
 
 ## Instrument
 
@@ -42,30 +56,57 @@ noise only) against ~320 on sh2; its epsilon sits at 1e-13 .. 1e-11 W/kg and
 fails the FM test on 100% of windows. `perturb.yaml` excludes it under
 `instruments: microrider:` (keyed on the directory name, as perturb requires).
 
-## FP07: two calibrations in the products, and ~3-4% in chi on one of them
+## FP07: one calibration, fitted per file
 
-`fp07.calibrate: true` fitted the thermistors per file in 1 of 11 files
-(1504029: 3 of 19 profiles). The other 10 files (16 profiles) kept the 2011
-NOMINAL Steinhart coefficients ("no profile reached the lag correlation
-gate"). **CORRECTED 2026-10-13:** this README first said chi was nominal
-throughout, and its explanation was copied from 2015-11-13: it cited that
-deployment's file 1504003. The products' `calibration` tags give the counts
-above. The thermistors are healthy, but on nominal coefficients they read a
-near-constant **+8.8 C (T1) and +9.8 C (T2) high**.
+`fp07.calibrate: true` with `fp07.allow_hotel_reference: true` fits both
+thermistors per file against the glider CTD (`sci_water_temp`), and it now does
+so in all 11 files. The thermistors are healthy; on the 2011 nominal
+coefficients they read a near-constant **+8.8 C (T1) and +9.8 C (T2) high**.
+Fitted, the median T - CTD per profile is within 15 mK on 15 of 19 profiles.
+On the other four, all partial climbs from depth (ending at 360-470 m), the
+FP07 reads 0.10-0.18 C warmer than the CTD, and the nominal set shows the same
+excess on the same segments, so it is in the data, not the fit (the cause,
+perhaps a leg-dependent lag, is untested). `fp07-cal` has not been run
+on this deployment; on 2015-11-13 (same MR, probes, glider and CTD) the
+per-file fits matched it to a gradient gain ratio of 0.9999.
 
-Why the gate failed: same MR, probes, glider and CTD as 2015-11-13. See that
-README. There, re-running with each fix reverted showed two causes, both fixed
-on branch `fix/fp07-cal-hotel-reference` (PR #214):
-- a gap in the reference silenced the whole profile;
-- the low-pass started from zero.
+### The 2026-10-13 set: two calibrations
 
-With both fixed, all 12 files of that deployment fit and match the pooled
-`fp07-cal` fit. Not re-run for this deployment.
+That set fitted the thermistors in only 1 of 11 files (1504029: 3 of 19
+profiles) and left the other 10 (16 profiles) on nominal coefficients ("no
+profile reached the lag correlation gate"). The causes, found on 2015-11-13
+and fixed in PR #214: a gap in the reference silenced the whole profile, and
+the low-pass started from zero.
 
-What it costs: on 2015-11-13, a 1 Hz regression and an independent `fp07-cal`
-fit both put the nominal gradient gain at 0.98-0.99, so chi on the nominal
-profiles is **~3-4% HIGH** (chi scales as the square). Not measured on this
-deployment: `fp07-cal` has not been run here.
+**CORRECTED 2026-10-17.** This README said chi on the nominal profiles was
+~3-4% high. Their gradient gain against the new fit is indeed 0.978-0.992 (on
+14 of the 16; 1.01-1.07 on the two 1504022 profiles, which span only 1 C), but
+the legacy-`beta` bug (#215: the noise model on beta = 3000, not this config's
+3143.55) pulled chi down by about as much, and per profile the two cancel
+(median 0.998 T1, 1.002 T2). The one fitted file was the worse one: 1504029's
+old fit read 0.15-0.57 C off the CTD on its full-depth profiles, with
+gradients 10-17% too shallow, and its chi was 1.4-1.6x too low.
+
+## What changed from the 2026-10-13 set
+
+Old generation `_01` against new `_00`, the same 19 profiles, 1-m bins.
+- **epsilon: bit-identical** (8,928 bins).
+- **chi: paired median ratio 1.011** (chiMean, 8,281 bins). The 16 formerly
+  nominal profiles: per profile 0.981-1.275 (median 0.998 T1, 1.002 T2). The 3
+  formerly fitted (1504029): 1.02-1.75, median 1.41 (T1) and 1.52 (T2).
+  Attributed by a one-file bisect on 1504023 and 1504029: commit b1270b5
+  reproduces the old products bit-for-bit; #214 moves chi by x0.94-0.96 on
+  1504023 and x1.29-1.60 on 1504029; #215 then adds +4 to +9%; #219 leaves chi
+  alone.
+- **N2, Gamma, K_rho, K_T** (#219, temperature sort): where N2 is positive in
+  both sets it is unchanged (paired ratio 1.000), but 18.3% of bins now have
+  N2 <= 0 (0.2% before), and Gamma and K_rho are masked there. Medians: N2
+  2.3e-5 -> 3.3e-5, Gamma 0.22 -> 0.17, K_rho 1.5e-5 -> 9.7e-6, K_T
+  2.4e-5 -> 1.8e-5. In the same depth bins, N2 dive/climb went from 1.58 to
+  1.01.
+- chi1/chi2 (median over profiles of each profile's median log ratio): 1.01
+  -> 1.02 (MAD 0.13 dex, 19 profiles). This README previously quoted 0.86, by a
+  method not recorded.
 
 ## Recipe (run from this directory)
 
@@ -84,7 +125,8 @@ deployment: `fp07-cal` has not been run here.
    (already on the MR clock). gliderflight 1.2.1, default lift/Cd1, mass 60 kg
    nominal; global steady fit Cd0 0.233, Vg 58.71 L, compressibility
    6.70e-10 Pa-1; per-day dynamic Cd0 0.235, 0.227.
-4. `PYTHONPATH=<repo>/src perturb run -c perturb.yaml`.
+4. `perturb run -c perturb.yaml -j 8` (~1.5 min; these files were made on main
+   98b4206).
 
 ## The slow dives
 

@@ -13,10 +13,13 @@ products. Each script resolves its inputs relative to its own location
 
 | deployment | platform | microstructure | speed | notes |
 |---|---|---|---|---|
-| `20170724_unit095` | Slocum G2, Oyashio, to 1000 m | MR SN 247 + AEM1-G EM | dynamic flight model with the paper's lift and C_D1 | ε only: **no working FP07** on this MR. The model's along-glider speed matches the paper's DVL on descents to a median ratio of 0.997 |
-| `20170620_sea025` | SeaExplorer, Kuroshio, to 700 m | MR-SE SN 240, RSI JAC-CT, EM `U_EMC` | steady-state model with the paper's SeaExplorer coefficients | **needs the `rsijac_t`/`rsijac_c` converters** |
-| `20151113_unit211` | Slocum, 29.4 N 127.7 E | MR1000-LP SN 058 | flight model, default lift | **sh1 dead**, excluded |
-| `20151119_unit211` | Slocum, 32.3 N 133.2 E | MR1000-LP SN 058 | flight model, default lift | **sh1 dead**, excluded |
+| `20170724_unit095` | Slocum G2, Oyashio, to 1000 m | MR SN 247 + AEM1-G EM | dynamic flight model with the paper's lift and C_D1 | ε; χ from T1 in its three working files only (`perturb_chi_T1.yaml`): T2 never worked and T1 broke from DAT_026. The model's along-glider speed matches the paper's DVL on descents to a median ratio of 0.997 |
+| `20170620_sea025` | SeaExplorer, Kuroshio, to 700 m | MR-SE SN 240, RSI JAC-CT, EM `U_EMC` | steady-state model with the paper's SeaExplorer coefficients | needs the `rsijac_t`/`rsijac_c` converters (in main since b1270b5, #213) |
+| `20151113_unit211` | Slocum, 29.4 N 127.7 E | MR1000-LP SN 058 | flight model, default lift | **sh1 dead**, excluded; FP07 fitted per file in all 12 files |
+| `20151119_unit211` | Slocum, 32.3 N 133.2 E | MR1000-LP SN 058 | flight model, default lift | **sh1 dead**, excluded; FP07 fitted per file in all 11 files |
+
+All four were reprocessed on main 98b4206 on 2026-10-17; each README's "What
+changed" section gives the differences from the 2026-10-13 products.
 
 The steps are the same as for the CASPER and Taiwan gliders: decode the glider
 (`dinkum-hotel`, or `make_nav.py` for the SeaExplorer), solve the MicroRider

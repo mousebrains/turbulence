@@ -3,7 +3,9 @@
 Microstructure from the Rockland MicroRider carried by Slocum glider `doug`
 during the CASPER-West field program (R/V *Sally Ride* **SR1715**), off Point
 Mugu / Santa Cruz Island, California. **1,416 profiles from 181 of 188 files**,
-2017-09-29 18:34 → 2017-10-23 15:43, 2.5–192.5 m, processed 2026-09-20.
+2017-09-29 18:34 → 2017-10-23 15:43, 2.5–192.5 m. **Reprocessed 2026-10-17 on
+main 98b4206** (`microstructure-tpw 0.4.0 (git v0.4.0-29-g98b42062069c)`,
+stamped in every product); first processed 2026-09-20.
 
 Recipe copied from `Taiwan17/gliders/doug/` — the **same glider and the same
 MicroRider**, eight months earlier.
@@ -20,20 +22,25 @@ MicroRider**, eight months earlier.
 
 ## Results (1-m bins, 1,416 profiles)
 
-| | median | spread (MAD) | n |
+Median, MAD of log10 (×1.4826, dex), and n over finite positive bins:
+
+| | median | MAD | n |
 |---|---|---|---|
-| ε (paired) | 1.65e-9 W/kg | 0.91 dex | 246,946 |
-| χ (paired) | 4.2e-10 K²/s | 0.65 dex | 240,807 |
-| N² | 7.0e-5 s⁻² | 0.37 dex | 246,946 |
-| Γ | **0.030** | 0.65 dex | 207,505 |
-| K_ρ | 5.5e-6 m²/s | 0.93 dex | 246,943 |
-| K_T | 5.6e-7 m²/s | 0.93 dex | 211,571 |
+| ε (paired) | 1.65e-9 W/kg | 1.34 | 246,946 |
+| χ (`chiMean`) | 4.3e-10 K²/s | 0.90 | 241,355 |
+| N² (> 0) | 7.6e-5 s⁻² | 0.56 | 214,083 |
+| Γ | **0.025** | 0.99 | 190,203 |
+| K_ρ | 4.4e-6 m²/s | 1.37 | 221,620 |
+| K_T | 4.6e-7 m²/s | 1.27 | 217,961 |
+
+N² ≤ 0 in 13.3% of bins: stratification is temperature-sorted (#219) and no
+longer forced positive. Γ and K_ρ are masked there.
 
 Through-water speed 0.305 m/s (5–95%: 0.202–0.398). `qc_drop_epsilon` is
 0.0000 — nothing was dropped by the QC gate, which as at the VMP is a
 statement about the gate, not a clean bill of health.
 
-**Γ = 0.030 is low** — four times below Taiwan17 doug's 0.12 and well under
+**Γ = 0.025 is low** — four times below Taiwan17 doug's 0.096 and well under
 the canonical 0.2. Read it against the known χ-scale problem on FP07s
 (`fp07_tau_scale` was measured at 1.66× on ARCTERX), and against the
 thermistor disagreement below. It is not evidence about mixing efficiency
@@ -198,13 +205,21 @@ excluding 10-24/25 where the VMP probes fail outright:
 **VMP/MR = 9.72, and all 16 days lie between 3.30 and 18.54** — same sign
 every day, within-day MAD 0.12–0.32 dex. That is the signature of a systematic
 offset, not ocean variability, and unlike ε it does not straddle 1. It is also
-the right order to explain Γ: 0.165 (VMP) vs 0.030 (MR), a factor 5.5.
+the right order to explain Γ: 0.165 (VMP) vs 0.030 (MR), a factor 5.5 (0.117
+vs 0.025, a factor 4.8, on the 2026-10-17 rerun).
+
+**On the rerun (expected, not recomputed):** the VMP's χ at 65–130 m is
+unchanged (a current-code run with the old trim matches the old products to
+0.0007 dex, and the new trim only removes near-surface bins), while the MR's
+χ rises ×1.02–1.07 per profile from #215, so the gap is ~9.5×.
 
 **Resolved 2026-09-20: the FP07 beads were degraded. It is not the processing.**
 
 Every processing explanation was tested and eliminated. Runs live beside the
-shipped `chi_00` as generations `chi_01`..`chi_05` (changing `chi.*` re-versions
-only the chi stage, so each reuses `profiles_00`/`diss_00`).
+shipped `chi_00` as generations `chi_01`..`chi_05` of the 2026-09-20 set
+(changing `chi.*` re-versions only the chi stage, so each reuses
+`profiles_00`/`diss_00`). They were not rerun on 98b4206; the
+`perturb_M1*.yaml` recipes regenerate them.
 
 | candidate | test | result |
 |---|---|---|
@@ -234,6 +249,11 @@ identical stratification:
 | **CASPER-West doug, Oct 2017** | **4.21e-10** | **0.030** | 7.00e-5 |
 | CASPER-West VMP 194, Oct 2017 | 1.38e-8 | 0.165 | 1.14e-4 |
 
+(2026-09-20 products. On the 98b4206 rerun, with N² over N² > 0 bins: Taiwan17
+doug χ 3.2e-9, Γ 0.096, N² 8.7e-5; CASPER-West doug 4.3e-10, 0.025, 7.6e-5;
+VMP 194 1.06e-8, 0.117, 1.12e-4. The VMP's χ median falls with its deeper
+trim, not with the code. The ordering and the conclusion are unchanged.)
+
 **Reading (hypothesis, consistent with every measurement above):** the FP07
 beads on this deployment were **attenuating**, not merely slow. A fouled or
 cracked bead loses microscale amplitude at a roughly frequency-independent
@@ -251,6 +271,25 @@ order of magnitude and must not be used as absolute values.** ε is unaffected
 (shear probes, agreeing to 6%, and the co-located ε test is consistent).
 Relative structure in χ — vertical and temporal patterns — is probably still
 informative, since the attenuation looks multiplicative, but that is untested.
+
+## What changed from the 2026-09-20 set
+
+The same 1,416 profiles from the same 181 files; the same 7 refusals. ~20 min.
+- **ε: bit-identical** (246,946 bins).
+- **χ: ×1.023** (paired median, `chiMean`; T2 ×1.024). A one-file bisect on
+  CPW_034 (8 profiles) over the main commits since the old run that touch
+  the code (c66d366, fb5af5c, 5d1edee, 0f65101, b1270b5, 53787f0, cc5107d):
+  c66d366 reproduces the old products bit-for-bit, and nothing moves until #214
+  (53787f0), whose refit of T2 changes χ by ×0.994–0.996. #215 (cc5107d) then
+  moves it ×1.02–1.07 per profile, and 0–20% of windows by more than 0.1 dex:
+  before #215 the FP07 noise model ignored this config's legacy `beta` and
+  used 3000. #219 and #220 leave χ alone. The T2 calibration itself barely
+  moved (gradient gain new/old 0.998–1.001 on a 24-profile sample).
+- **N², Γ, K_ρ, K_T** (#219, temperature sort): where N² is positive in both
+  sets it is unchanged (paired ratio 1.000), but 13.3% of bins now have
+  N² ≤ 0 (0% before), and Γ and K_ρ are masked there. Medians: Γ 0.030 →
+  0.025, K_ρ 5.5e-6 → 4.4e-6, K_T 5.6e-7 → 4.6e-7.
+- T1 is still fitted in 29 of 181 files (it rails from CPW_037), T2 in all.
 
 ## Still open
 

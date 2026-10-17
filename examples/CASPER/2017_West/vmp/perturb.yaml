@@ -70,6 +70,15 @@
 #     130-200 m), i.e. a relative response/gain difference between the beads.
 #     No fp07_tau_scale has been fitted for this cruise; ARCTERX needed one for
 #     exactly this signature. See calibration/README.md and repo issue #189.
+#
+# RESTORED 2026-10-17. A 2026-09-21 edit of top_trim used a DOTALL regex that
+# deleted every section after it (epsilon, chi, ctd, speed, qc, binning,
+# stratification, netcdf, instruments) from the SeaChest copy, so generations
+# _01-_03 of VMP_results ran on defaults and made no chi. The sections are
+# restored verbatim from this recipe, which matches the resolved parameters
+# the 2026-09-20 chi_00 run recorded, key for key. Kept from after that run:
+# the fall-rate-residual trim (top_trim, 2026-09-20) and the 6 dbar floor
+# (profiles.P_min, 2026-09-21, Pat).
 
 files:
   # Reorganized 2026-09-19: this tree was CasperWest/VMP and the raw files
@@ -125,7 +134,40 @@ hotel:
                           # in-situ reference.
 
 profiles:
-  P_min: 0.5
+  # HARD FLOOR AT 8 dbar, 2026-09-21. The per-cast detector alone left this
+  # deployment UNDER-TRIMMED on 900 of 2097 profiles (42.9%), which retained
+  # data shallower than 8 dbar. For those profiles epsilon at 4-8 dbar is a
+  # median 25.2x THEIR OWN 15-30 dbar value (p90 1487x) -- a per-profile
+  # comparison, so spatial and temporal variability cannot explain it.
+  #
+  # Found by the ship-wind assessment (analysis/wind_assessment.py), which is
+  # independent of every motion proxy: wind-forced turbulence correlates with
+  # wind speed, ship-injected turbulence does not. corr(log U, log eps) is
+  # LOWEST (0.11) exactly where epsilon is most anomalous (4-6 dbar, 744x
+  # law-of-the-wall) and peaks at 8-12 dbar (0.24) where wind forcing should
+  # dominate. Method and caveats: docs/top_trim_and_validation.md.
+  #
+  # 8 dbar also covers the attitude transient: this VMP is launched
+  # near-horizontal (Incl_Y median 57.5 deg at descent start) and reaches
+  # vertical at a median 3.80 m, p90 5.66 -- so z_vert p90 + the standard 2 m
+  # settling margin is 7.66. The inclinometer voter is NOT enabled here
+  # because at this floor it would almost never bind (it needs z_vert > 6 m,
+  # which is beyond p90); the floor subsumes it for this deployment.
+  #
+  # NOTE top_trim.min_depth is NOT a floor -- it is the top of the detector's
+  # SEARCH window, and the elevated run is anchored to it. The floor has to be
+  # imposed here, where P_min masks samples.
+  #
+  # 6.0, NOT 8.0 (2026-09-21, second iteration). P_min does not merely mask
+  # samples below itself -- it moves where PROFILE DETECTION starts, so
+  # top_trim's search window then runs on an already-truncated segment and
+  # trims FURTHER from there. Floor and detector COMPOUND. At P_min 8.0 the
+  # effective median trim came out at 12.50 dbar, 4.5 m deeper than intended,
+  # which emptied the 8-12 dbar band -- and that band carries the STRONGEST
+  # wind correlation (0.29 at 10-12), i.e. genuinely wind-forced mixing. The
+  # wind test says the contamination is gone by 8 dbar, so those extra meters
+  # bought nothing measurable and cost the best-correlated data.
+  P_min: 6.0
   W_min: 0.3              # dbar/s; measured descent is ~0.72 dbar/s
   direction: "down"       # free-falling VMP; Incl_Y sits at +90 (nose down)
   min_duration: 7.0
@@ -180,9 +222,16 @@ top_trim:
   enable: true
   dz: 0.5
   min_depth: 1.0
-  max_depth: 25.0
+  max_depth: 50.0
   quantile: 0.6
   noise_factor: 2.0
+  # 2026-09-20: Ax/Ay are piezo VIBRATION sensors, blind to prop wash. The
+  # fall-rate residual sees it. Heterogeneous voters -> combine "max".
+  # max_depth must keep the wash a MINORITY of the search range (quantile 0.6
+  # => wash < 40% of it) or the background lands inside the wash.
+  use_fall_rate_residual: true
+  residual_smooth_m: 6.0
+  combine: "max"
 
 epsilon:
   fft_sec: 1.0
