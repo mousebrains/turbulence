@@ -14,6 +14,10 @@ glider `doug`, both times.
 | `2017_West/gliders/doug/` | **CASPER-West**, R/V *Sally Ride* SR1715, off Point Mugu CA, Sep–Oct 2017. |
 | `2017_West/vmp/` | VMP-250IR SN 194, the same cruise as CASPER-West |
 
+All three were reprocessed on main 98b4206 on 2026-10-17; each README says what
+changed. The VMP's SeaChest config had been truncated on 2026-09-21 and is
+restored from `2017_West/vmp/perturb.yaml` (see its header).
+
 The recipe is the one proven on this same glider and MicroRider at
 `Taiwan/Taiwan17/gliders/doug/`; read that README and Taiwan13's husker
 `flight/README.md` for the flight model itself.

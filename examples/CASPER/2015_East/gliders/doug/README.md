@@ -3,7 +3,9 @@
 Microstructure from the Rockland MicroRider carried by Slocum glider `doug`
 during CASPER-East (R/V *Atlantic Explorer*), on the 50 m shelf off Duck,
 North Carolina. **4,653 profiles from 137 of 173 files**, 2015-10-12 13:13 →
-2015-11-05 18:22, 2.5–45.5 m, processed 2026-09-20.
+2015-11-05 18:22, 2.5–45.5 m. **Reprocessed 2026-10-17 on main 98b4206**
+(`microstructure-tpw 0.4.0 (git v0.4.0-29-g98b42062069c)`, stamped in every
+product); first processed 2026-09-20.
 
 Twin of `../../../../2017_West/gliders/20170929_doug_CASPER/analysis/` — same
 glider, same MicroRider, same recipe. Read that README too; this one records
@@ -19,17 +21,23 @@ what is different, and **χ is the product here, not ε.**
 | clock | solved, 3 blocks, 0.29–0.30 s RMS, independently confirmed |
 | speed | flight model, α consistent with two other deployments |
 
-## Results (1-m bins, 4,652 profiles)
+## Results (1-m bins, 4,653 profiles)
 
-| | median | spread (MAD) | n |
+Median, MAD of log10 (×1.4826, dex), and n over finite positive bins:
+
+| | median | MAD | n |
 |---|---|---|---|
-| χ (paired) | 9.7e-9 K²/s | 0.76 dex | 137,321 |
-| χ(T1) | 8.5e-9 | 0.76 dex | 134,199 |
-| χ(T2) | 1.07e-8 | 0.74 dex | 132,954 |
-| N² | 6.5e-5 s⁻² | 0.63 dex | 141,405 |
-| speed | 0.313 m/s | 0.046 | 141,405 |
-| ~~ε (paired)~~ | ~~5.8e-8 W/kg~~ | 0.76 dex | 141,405 |
+| χ (`chiMean`) | 1.0e-8 K²/s | 1.11 | 136,562 |
+| χ(T1) | 8.8e-9 | 1.12 | 133,185 |
+| χ(T2) | 1.1e-8 | 1.09 | 132,045 |
+| N² (> 0) | 9.2e-5 s⁻² | 0.86 | 117,440 |
+| speed | 0.313 m/s | | 141,437 |
+| ~~ε (paired)~~ | ~~5.8e-8 W/kg~~ | 1.13 | 141,437 |
 | ~~Γ~~, ~~K_ρ~~, ~~K_T~~ | *derived from ε — inherit its problem* | | |
+
+N² ≤ 0 in 17.0% of bins: stratification is temperature-sorted (#219) and no
+longer forced positive, and salinity scrambles the density order in 51 files
+(run notice).
 
 This shelf is **~35× more energetic than CASPER-West** on the ε median, which
 is expected for 50 m of tidally and wind-mixed water off the Outer Banks — but
@@ -148,7 +156,27 @@ glider sat on the surface — 0.43 dbar for a 49-minute record, against 33–39
 dbar either side), `CAS_170` (header dated 2016-08-08) and `DAT_001`–`003`
 (bench). All correct refusals.
 
+## What changed from the 2026-09-20 set
+
+The same 4,653 profiles from the same 137 files; the 36 refusals are the same.
+- **ε: bit-identical** (141,405 bins).
+- **χ: ×1.022** (paired median, `chiMean`, 136,524 bins; T1 ×1.021, T2 ×1.022).
+  Not bisected here. On the 2017 twin (same MicroRider, same config key
+  `beta = 3143.55`) a one-file bisect puts it on #215, which put the FP07 noise
+  model on beta = 3000 before (+2–7%), with #214's refit at ×0.995.
+  χ(T1)/χ(T2) is unchanged (0.847 → 0.848, median over profiles of each
+  profile's median log ratio).
+- **N², Γ, K_ρ, K_T** (#219, temperature sort): where N² is positive in both
+  sets it is unchanged (paired ratio 1.000), but 17.0% of bins now have
+  N² ≤ 0 (0% before), and Γ and K_ρ are masked there.
+- The old combo held 4,652 profiles against 4,653 profile files: that run died
+  in binning and its combo was made by a separate `perturb combo` run. Not
+  investigated; the new combo has all 4,653.
+
 ## A note on running this again
+
+The 2026-10-17 rerun completed cleanly at `-j 8` (~41 min). The earlier
+setting, and why:
 
 `parallel.jobs` is **2**, not 8. At 8 the binning stage died with
 `NetCDF: HDF error` on a profile file — which was **not** corrupt: the same
