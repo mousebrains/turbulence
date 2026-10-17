@@ -23,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 
+from odas_tpw._version_info import add_version_argument
 from odas_tpw.chi import fp07_pair as P
 
 
@@ -88,6 +89,7 @@ def _show(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="fp07-pair", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_version_argument(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
     f = sub.add_parser("fit", help="estimate corrections from chi products")
     f.add_argument("chi", nargs="+", help="chi product NetCDFs or glob patterns")

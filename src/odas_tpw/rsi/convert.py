@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
 import numpy as np
 
+from odas_tpw._version_info import provenance_attrs
+
 logger = logging.getLogger(__name__)
 
 # Minimum profiling speed to avoid singularity [m/s]
@@ -557,7 +559,8 @@ def p_to_L1(
     ds.project = pf.config["cruise_info"].get("project", "")
     ds.start_time = pf.start_time.isoformat()
     ds.source_file = pf.filepath.name
-    ds.history = f"L1 converted from {pf.filepath.name} on {datetime.now(UTC).isoformat()}"
+    for key, val in provenance_attrs(f"L1 converted from {pf.filepath.name}").items():
+        ds.setncattr(key, val)
     ds.configuration_string = pf.config_str
     # v1->v6 translation provenance (issue #141): complete key set (incl.
     # setup_file_md5 / sens_source, the sens^-2 audit trail) for both the

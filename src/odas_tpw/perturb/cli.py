@@ -25,6 +25,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from odas_tpw._version_info import add_version_argument, software_version, stamp_provenance
+
 if TYPE_CHECKING:  # heavy module — imported lazily inside the handlers
     from odas_tpw.perturb.pipeline import PipelineResult
 
@@ -67,6 +69,18 @@ def _install_logging(args: argparse.Namespace, config: dict[str, Any]) -> Path:
     log_path = log_dir / f"run_{current_run_stamp()}.log"
     level = getattr(logging, args.log_level.upper(), logging.INFO)
     setup_root_logging(log_path, level=level, stdout=args.stdout)
+    # First line of every run log, at any --log-level: the code this run is,
+    # in the words its products' software_version uses. emit(), not log():
+    # the run log's handler would drop an INFO record under WARNING.
+    record = logging.LogRecord(
+        "odas_tpw.perturb", logging.INFO, __file__, 0, "%s", (software_version(),), None
+    )
+    for handler in logging.getLogger().handlers:
+        if (
+            isinstance(handler, logging.FileHandler)
+            and handler.baseFilename == os.path.abspath(log_path)
+        ):
+            handler.emit(record)
     return log_path
 
 
@@ -312,6 +326,7 @@ def _cmd_bin(args: argparse.Namespace) -> None:
                     prof_ncs, bin_width, aggregation, diagnostics, log_dir=prof_binned_dir
                 )
             if ds.data_vars:
+                stamp_provenance(ds.attrs, "binning", inherit=False)
                 ds.to_netcdf(prof_binned_dir / "binned.nc")
 
     # Bin diss
@@ -333,6 +348,7 @@ def _cmd_bin(args: argparse.Namespace) -> None:
                 diss_ncs, diss_width, diss_agg, bin_method, diagnostics, log_dir=diss_binned_dir
             )
             if ds.data_vars:
+                stamp_provenance(ds.attrs, "binning", inherit=False)
                 ds.to_netcdf(diss_binned_dir / "binned.nc")
 
     # Bin chi
@@ -358,6 +374,7 @@ def _cmd_bin(args: argparse.Namespace) -> None:
                 chi_ncs, chi_width, chi_agg, bin_method, diagnostics, log_dir=chi_binned_dir
             )
             if ds.data_vars:
+                stamp_provenance(ds.attrs, "binning", inherit=False)
                 ds.to_netcdf(chi_binned_dir / "binned.nc")
 
     print("Binning complete.")
@@ -509,6 +526,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="perturb",
         description="Batch processing pipeline for Rockland VMP/MicroRider data.",
     )
+    add_version_argument(parser)
     sub = parser.add_subparsers(dest="command", help="subcommand")
 
     # init

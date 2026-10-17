@@ -553,6 +553,14 @@ def test_build_offline_produces_a_hotel_file(tmp_path):
         assert got["sci_water_cond"].attrs["units"] == "mS/cm"
         assert "upstream proc.py" in got.attrs["history"]
         assert "erddap-hotel build" in got.attrs["history"]
+        # ...and, last, which code built it (shared with dinkum-hotel)
+        from odas_tpw._version_info import software_version
+
+        lines = got.attrs["history"].splitlines()
+        assert len(lines) == 2, "one line for the build, not one per layer"
+        assert ": erddap-hotel build: 1 chunk(s)" in lines[1]
+        assert lines[1].endswith(f" by {software_version()}")
+        assert got.attrs["software_version"] == software_version()
         assert got.attrs["erddap_dataset_id"] == "d-raw"
 
 

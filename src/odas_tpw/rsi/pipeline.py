@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import logging
 import warnings
-from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import xarray as xr
 
+from odas_tpw._version_info import stamp_provenance
 from odas_tpw.chi.l2_chi import L2ChiParams, process_l2_chi
 from odas_tpw.chi.l3_chi import process_l3_chi
 from odas_tpw.chi.l4_chi import (
@@ -510,6 +510,7 @@ def _pipeline_one_file(
     if all_binned:
         combined = combine_profiles(all_binned, profile_metadata)
         combined_path = pfile_dir / "L6_combined.nc"
+        stamp_provenance(combined.attrs, "combining profiles (L6)", inherit=False)
         combined.to_netcdf(combined_path)
         logger.info(f"Combined: {combined_path}")
 
@@ -872,6 +873,7 @@ def _process_profile(
         binned.attrs["source_file"] = p_path.name
         binned.attrs["bin_size"] = bin_size
 
+        stamp_provenance(binned.attrs, "binning (L5)", inherit=False)
         binned.to_netcdf(prof_dir / "L5_binned.nc")
 
     # Write per-level NetCDF
@@ -1030,7 +1032,6 @@ def _write_l4_epsilon(
         attrs={
             "Conventions": "CF-1.13, ACDD-1.3",
             "source_file": str(pf.filepath.name),
-            "history": f"Pipeline on {datetime.now(UTC).isoformat()}",
         },
     )
     if temperature_source is not None:
@@ -1041,6 +1042,7 @@ def _write_l4_epsilon(
         # Complete v1->v6 translation provenance (issue #141): the
         # setup-file md5 + sens source audit the sens^-2 epsilon scaling.
         ds.attrs.update({k: str(v) for k, v in provenance.items()})
+    stamp_provenance(ds.attrs, "epsilon (L4)")
     ds.to_netcdf(path)
 
 
@@ -1177,7 +1179,6 @@ def _write_l4_chi(
         attrs={
             "Conventions": "CF-1.13, ACDD-1.3",
             "method": l4_chi.method,
-            "history": f"Pipeline on {datetime.now(UTC).isoformat()}",
         },
     )
     if temperature_source is not None:
@@ -1190,4 +1191,5 @@ def _write_l4_chi(
     if extra_vars:
         for name, (arr, attrs) in extra_vars.items():
             ds[name] = xr.DataArray(arr, dims=["time"], attrs=attrs)
+    stamp_provenance(ds.attrs, "chi (L4)")
     ds.to_netcdf(path)

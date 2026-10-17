@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from odas_tpw._version_info import INPUTS_ATTR, SOFTWARE_ATTR, input_versions
 from odas_tpw.perturb.logging_setup import stage_log
 
 logger = logging.getLogger(__name__)
@@ -436,6 +437,8 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
                          if a in _PRESERVE_DATAVAR_ATTRS}
             if preserved:
                 var_attrs[str(vname)] = preserved
+        # Which code wrote this input, for the aggregate's INPUTS_ATTR.
+        provenance = {a: ds.getncattr(a) for a in (SOFTWARE_ATTR, INPUTS_ATTR) if a in ds.ncattrs()}
     finally:
         ds.close()
 
@@ -445,6 +448,7 @@ def _load_profile_snapshot(profile_file: Path) -> dict | None:
         "scalars": scalars,
         "scalar_attrs": scalar_attrs,
         "var_attrs": var_attrs,
+        "provenance": provenance,
     }
 
 
@@ -462,6 +466,7 @@ def _bin_snapshot(snapshot: dict, bin_edges: np.ndarray, agg, diagnostics: bool)
         "scalars": snapshot["scalars"],
         "scalar_attrs": snapshot["scalar_attrs"],
         "var_attrs": snapshot.get("var_attrs", {}),
+        "provenance": snapshot.get("provenance", {}),
     }
     depth = snapshot["depth"]
     for vname, arr in snapshot["vars"].items():
@@ -767,6 +772,9 @@ def bin_by_depth(
             "coordinate_kind": coordinate,
         }
     )
+    ds_out.attrs[INPUTS_ATTR] = input_versions(
+        res.get("provenance", {}) for res in results if res["vars"] or res["scalars"]
+    )
     return ds_out
 
 
@@ -799,10 +807,12 @@ def bin_by_time(
             "produced for time binning; only the binned means are written"
         )
     all_binned = []
+    inputs: list[dict] = []  # the contributing files' provenance attributes
 
     for f in profile_files:
         with stage_log(log_dir, _source_stem(f)):
             with xr.open_dataset(f) as ds:
+                provenance = {a: ds.attrs[a] for a in (SOFTWARE_ATTR, INPUTS_ATTR) if a in ds.attrs}
                 # Use the time coordinate
                 for time_name in ("t_slow", "t_fast", "time"):
                     if time_name in ds:
@@ -874,10 +884,13 @@ def bin_by_time(
                     coords={"time": binned_data["time"]},
                 )
                 all_binned.append(bds)
+                inputs.append(provenance)
 
     if not all_binned:
         return xr.Dataset()
-    return xr.concat(all_binned, dim="time")
+    out = xr.concat(all_binned, dim="time")
+    out.attrs[INPUTS_ATTR] = input_versions(inputs)
+    return out
 
 
 def bin_diss(

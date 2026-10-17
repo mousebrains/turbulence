@@ -1986,13 +1986,13 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    from odas_tpw.rsi import __version__
+    from odas_tpw._version_info import add_version_argument
 
     parser = argparse.ArgumentParser(
         prog="rsi-tpw",
         description="microstructure-tpw: Read Rockland Scientific .P files and convert to NetCDF.",
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    add_version_argument(parser)
     parser.add_argument(
         "-c",
         "--config",

@@ -711,6 +711,7 @@ def _channels_from_nc(
         "start_time",
         "speed_method",
         "speed_source",
+        "history",  # the lineage the diss/chi product appends to
         *V1_PROVENANCE_KEYS,
     ):
         if hasattr(ds, attr):

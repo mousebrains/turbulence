@@ -26,6 +26,7 @@ import numpy as np
 import numpy.typing as npt
 import xarray as xr
 
+from odas_tpw._version_info import stamp_provenance
 from odas_tpw.rsi.channels import _is_infinity, config_number
 from odas_tpw.rsi.dissipation import DOF_NUTTALL
 
@@ -441,7 +442,7 @@ def _compute_chi(
             ds.attrs["fp07_tau_model"] = default_tau_model(fp07_model)
             for vname, (dims, values, vattrs) in pair_vars.items():
                 ds[vname] = (dims, values, vattrs)
-        ds.attrs["history"] = f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
+        stamp_provenance(ds.attrs, "chi")
         start_time = data["metadata"].get("start_time", "")
         t_units = f"seconds since {start_time}" if start_time else "seconds"
         ds.coords["t"].attrs.update(

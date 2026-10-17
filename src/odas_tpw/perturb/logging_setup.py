@@ -162,6 +162,10 @@ def init_worker_logging(log_dir: Path, run_stamp: str) -> Path:
     # must be enabled here too — see the comment there.
     logging.captureWarnings(True)
 
+    # A spawned worker imports the code afresh, so it says which code that is.
+    from odas_tpw._version_info import software_version
+
+    logging.getLogger(__name__).info("worker %d: %s", os.getpid(), software_version())
     return log_file
 
 

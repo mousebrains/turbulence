@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from odas_tpw._version_info import INPUTS_ATTR, input_versions, stamp_provenance
 from odas_tpw.perturb.binning import VERTICAL_BIN_METHODS
 from odas_tpw.perturb.netcdf_schema import GLOBAL_ATTRS, apply_schema
 
@@ -105,6 +106,7 @@ def make_combo(
     # we re-write — so for binned files (which we always re-encode) it is
     # cleaner to keep numeric times throughout.
     datasets = [xr.open_dataset(f, decode_times=False) for f in nc_files]
+    inputs = input_versions(ds.attrs for ds in datasets)
 
     try:
         combo = (
@@ -191,12 +193,16 @@ def make_combo(
             attrs={"cf_role": "trajectory_id", "long_name": "trajectory identifier"},
         )
     combo.attrs["date_created"] = datetime.now(UTC).isoformat()
-    combo.attrs["history"] = f"Created by perturb on {datetime.now(UTC).isoformat()}"
+    combo.attrs.pop("history", None)  # the first input's: it misdescribes the rest
 
     if netcdf_attrs:
         for k, v in netcdf_attrs.items():
             if v is not None:
                 combo.attrs[k] = v
+    # After the configured attributes, so a configured history is kept and
+    # this step appended to it.
+    stamp_provenance(combo.attrs, "combo")
+    combo.attrs[INPUTS_ATTR] = inputs
 
     # Auto-fill geospatial/temporal attributes
     has_lat = "lat" in combo and np.any(np.isfinite(combo["lat"].values))

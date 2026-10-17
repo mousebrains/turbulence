@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
+from odas_tpw._version_info import add_version_argument, history_line
 from odas_tpw.clocksync.config import load_config, resolve, write_template
 from odas_tpw.clocksync.extract import extract_tree, load_cached
 from odas_tpw.clocksync.fit import fit_file
@@ -165,7 +166,7 @@ def cmd_solve(args) -> int:
     outdir.mkdir(parents=True, exist_ok=True)
     csv_path = write_csv(outdir / "clock_offsets.csv", fits)
     report = text_report(fits, summaries)
-    (outdir / "clock_report.txt").write_text(report)
+    (outdir / "clock_report.txt").write_text(f"{history_line('mr-clocksync solve')}\n{report}")
     print(report)
     print(f"\nwrote {csv_path}")
     print(f"wrote {outdir / 'clock_report.txt'}")
@@ -192,6 +193,7 @@ def cmd_report(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="mr-clocksync", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_version_argument(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("init", help="write a commented config template")

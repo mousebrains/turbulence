@@ -86,6 +86,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   read them treat a BBL window as a full-length one. The N2/dTdz half-window
   behind Gamma and K_T, chi's `chiLnSigma`, and epsilon's `num_ffts` all use
   the long window's value for the near-bed windows.
+- **`--version` on every command, with the git commit.** `rsi-tpw`,
+  `perturb`, `perturb-plot`, `perturb-diag`, `scor160-tpw`, `fp07-cal`,
+  `fp07-pair`, `mr-clocksync`, `dinkum-hotel` and `erddap-hotel` all print one
+  line for a bug report, e.g. `perturb 0.4.0 (git v0.4.0-28-g5f6572b9a1e8)`.
+  The release number alone did not identify the code, because `pyproject.toml`
+  keeps the last release's number for every commit after it. The commit comes
+  from the checkout the package was imported from (editable installs and
+  `PYTHONPATH` worktrees, with `uncommitted changes` and a hash of the
+  package's `.py` files when a file under `src/odas_tpw/` or
+  `pyproject.toml` differs), else from pip's record of a
+  `git+` install, else from a stamp the release workflow now writes into the
+  PyPI wheel (`0.4.0 (release, git ...)`). The workflow also refuses a tag that
+  does not match `project.version`. Anything it cannot establish prints
+  `commit unknown` with the reason, so a wheel built elsewhere is never taken
+  for the release. The editable install in the main checkout reported 0.3.1
+  from metadata frozen at install time; the release is now read from the
+  source tree's `pyproject.toml`. A test walks `[project.scripts]`, so a new
+  command without `--version` fails CI. Like any code change this one moves
+  perturb's engine fingerprint, so a campaign's next run recomputes; later
+  edits to the version code will not (`_version_info.py` is excluded from the
+  hash). See `docs/installation.md`.
+- **Products name the code that made them.** `--version` names the code
+  installed now; a product made last month needs the code that wrote it. Every
+  NetCDF product (perturb profiles, diss, chi, CTD, binned and combo; rsi-tpw
+  L1, profiles, epsilon, chi, L4-L6; hotel files; `fp07-pair` corrections) now
+  carries a `software_version` attribute and a `history` line
+  `<UTC time>: <step> by microstructure-tpw <version>`, appended to the history
+  of the single input it came from (binned and combo files start fresh, keeping
+  a `history` configured in `netcdf:`, and list every code that wrote their
+  inputs in `input_software_versions`, since they are rebuilt from cached
+  products another code state may have made). It replaces the old `Computed with
+  microstructure-tpw on ...`, `Pipeline on ...`, `Created by perturb on ...`,
+  `L1 converted from ... on ...` and `Profile N extracted on ...` lines, which
+  named no version. perturb's run and worker logs, the `patch-config` /
+  `fp07-cal patch` banner, `v1to6`'s `translator` (both of which recorded the
+  stale installed-metadata version), `fp07-cal`'s `coefficients.json` and
+  `mr-clocksync`'s report record it too. A test walks the source for NetCDF
+  writers that do not stamp.
 
 ### Fixed
 - **The `goto` FP07 time constant left out Goto et al.'s speed factor.** Goto

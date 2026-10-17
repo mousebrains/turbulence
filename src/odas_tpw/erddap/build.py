@@ -365,27 +365,23 @@ def build(
     )
 
     upstream_history = str(ds.attrs.get("history", "")).strip()
-    stamp = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
     masked = "; ".join(
         f"{k}: {v['fill_masked']} fill"
         + (f", {v['zero_masked']} zero" if v["zero_masked"] else "")
         for k, v in fill_stats.items()
         if v["fill_masked"] or v["zero_masked"]
     )
-    history = "\n".join(
-        x
-        for x in (
-            upstream_history,
-            f"{stamp}: erddap-hotel build: {len(paths)} chunk(s) "
-            f"({meta['chunks_fetched']} fetched, {meta['chunks_cached']} cached, "
-            f"{meta['chunks_empty']} empty); masked {masked or 'nothing'}",
-        )
-        if x
+    # One history line for the build, which build_hotel appends to the
+    # upstream history together with the code that ran it.
+    step = (
+        f"erddap-hotel build: {len(paths)} chunk(s) "
+        f"({meta['chunks_fetched']} fetched, {meta['chunks_cached']} cached, "
+        f"{meta['chunks_empty']} empty); masked {masked or 'nothing'}"
     )
 
     source_attrs = {
         "source": f"ERDDAP {server['protocol']} {server['base_url']}/{server['dataset_id']}",
-        "history": history,
+        "history": upstream_history,
         "erddap_base_url": str(server["base_url"]),
         "erddap_dataset_id": str(server["dataset_id"]),
         "erddap_das_checksum": meta["das_sha256"],
@@ -406,6 +402,7 @@ def build(
         now=now,
         dataset=ds,
         source_attrs=source_attrs,
+        history_step=step,
     )
 
 

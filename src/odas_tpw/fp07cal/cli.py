@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
+from odas_tpw._version_info import add_version_argument, software_version
 from odas_tpw.fp07cal.fit import fit_calibration, select_order
 from odas_tpw.fp07cal.lag import pressure_offset, temperature_lag
 from odas_tpw.fp07cal.pairs import PairConfig, build_pairs_multi
@@ -357,6 +358,7 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
     t1t2 = t1_t2_series(probes)
     results: dict = {
         "schema": "fp07-cal/1",
+        "software_version": software_version(),
         "clock_offset_s": clock[0],
         "clock_offset_r": clock[1],
         **provenance,
@@ -947,6 +949,7 @@ def main(argv: list[str] | None = None) -> int:
         "Fits one Steinhart-Hart coefficient set per deployment from whatever "
         "yos carried a CTD reference, and reports whether it is stable in time.",
     )
+    add_version_argument(p)
     sub = p.add_subparsers(dest="command", required=True)
 
     q = sub.add_parser("init", help="write a commented template config")
