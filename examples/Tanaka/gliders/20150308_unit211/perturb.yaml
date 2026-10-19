@@ -1,0 +1,146 @@
+# Perturb configuration -- MicroRider MR1000-LP SN 058 on Slocum glider unit211,
+# 20150308_unit211, off Hokkaido near 42.5 N 145.1 E (Oyashio), 2015-03-08 .. 03-14.
+# One of Tanaka's pre-paper deployments; the MR files arrived 2026-10-18.
+#
+#   perturb run -c perturb.yaml
+#
+# ---------------------------------------------------------------------------
+# READ FIRST (details in README.md)
+# * SN 058 is Yasuda's MR (config header: "File made for Yasuda MR1000-LP SN058,
+#   2011-12-19"). Probes sh1 **M881** @ 0.0772, sh2 M887 @ 0.0583 -- NO calibration
+#   sheet for either in microstructure_sensors/, so absolute epsilon rests on
+#   the embedded config values, unverified. FP07 coefficients are nominal (they
+#   read +8.8 / +9.8 C high, as in Nov 2015), so fp07.calibrate fits them per
+#   FILE against the glider CTD.
+# * sh1 here is M881, NOT the dead M1369 of the November 2015 deployments: raw
+#   sh1 has 87-134 counts of standard deviation in water (sh2 71-101), so both
+#   probes are used and nothing is excluded.
+# * NO EM FLOWMETER. Speed from a Merckelbach flight model with gliderflight's
+#   DEFAULT lift and Cd1 (no measurement for this glider); epsilon ~ U^-4.
+# * unit211_flight_hotel.nc is written ALREADY ON THE MR CLOCK (L ~ -0.3..+3.8 s,
+#   37 of 37 files solved, mr_clock_model.json), so time_offset is 0.
+# * Oyashio water reaches 0.18 C: dinkum-flight.yaml gates sci_water_temp at
+#   -2.5 C, not the 0.5 C of the November recipes.
+# ---------------------------------------------------------------------------
+
+files:
+  p_file_root: "<CONFIG_DIR>/../post-recovery/microrider"
+  p_file_pattern: "*.P"     # 37 files, uppercase
+  output_root: "<CONFIG_DIR>/Processed"
+  trim: false
+  merge: false
+
+hotel:
+  enable: true
+  file: "<CONFIG_DIR>/unit211_flight_hotel.nc"
+  time_column: "time"       # ALREADY the MicroRider clock
+  time_format: "epoch"
+  time_offset: 0.0
+  max_gap: 30.0
+  extrapolate: false
+  interpolation: "pchip"
+  channels:
+    speed:
+      fast: true
+    sci_water_temp:
+      units: "degree_Celsius"
+      fast: false
+    sci_water_cond:
+      units: "mS/cm"        # already mS/cm in the hotel file: NO scale here
+      fast: false
+  fast_channels: ["speed"]
+
+gps:
+  source: "netcdf"
+  file: "<CONFIG_DIR>/unit211_flight_hotel.nc"   # dead-reckoned m_lat/m_lon, MR clock
+  time_col: "time"
+  lat_col: "lat"
+  lon_col: "lon"
+  max_time_diff: 600
+
+profiles:
+  P_min: 2.0
+  W_min: 0.03               # as for Nov 2015 (whose dives sank at only 0.06-0.08 dbar/s)
+  direction: "glide"        # BOTH legs
+  min_duration: 60.0
+  diagnostics: false
+
+fp07:
+  calibrate: true
+  order: 2
+  reference: "sci_water_temp"
+  max_lag_seconds: 10
+  must_be_negative: false
+  min_corr: 0.5
+  allow_hotel_reference: true  # the per-file fit, on purpose, as for Nov 2015,
+                            # where it fitted all 12 files and matched the pooled
+                            # fp07-cal fit (that README, 2026-10-13).
+
+ct:
+  align: false
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+speed:
+  method: "hotel"
+  hotel_var: "speed"
+  speed_cutout: 0.05
+
+epsilon:
+  fft_sec: 2.0
+  salinity: "measured"
+  T_source: "sci_water_temp"
+  fom_max: null
+  diagnostics: false
+
+chi:
+  enable: true
+  use_epsilon: false
+  fft_sec: 2.0
+  spectrum_model: "kraichnan"
+  salinity: "measured"
+  mixing: true
+  fom_max: null
+
+stratification:
+  enable: true
+  salinity: "measured"
+  window: 2.0
+
+ctd:
+  enable: true
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+bottom:
+  enable: false
+top_trim:
+  enable: false
+
+binning:
+  method: "depth"
+  width: 1.0
+
+qc:
+  enable: true
+  drop_action: "nan"
+
+netcdf:
+  title: "MicroRider SN 058 turbulence on Slocum unit211, 20150308_unit211"
+  summary: >
+    Turbulent kinetic energy dissipation (epsilon) and thermal variance
+    dissipation (chi) from Rockland MicroRider MR1000-LP SN 058 on Slocum glider
+    unit211 off Hokkaido near 42.5 N 145.1 E (Oyashio), March 2015 (T. Tanaka's deployments). Through-water
+    speed from a Merckelbach flight model with default lift and induced-drag
+    coefficients, calibrated against the depth rate; FP07 thermistors calibrated
+    in situ against the glider CTD; times on the MicroRider clock.
+  institution: "Oregon State University"
+  platform: "Slocum glider unit211"
+  instrument: "Rockland MicroRider MR1000-LP SN 058"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"
+  geospatial_vertical_positive: "down"
+  Conventions: "CF-1.13, ACDD-1.3"
+
+parallel:
+  jobs: 2
