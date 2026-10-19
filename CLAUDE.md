@@ -24,7 +24,7 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas
 
 ### Key Modules (rsi)
 
-- `p_file.py` — `PFile` class: reads Rockland `.p` binary files, parses headers, demultiplexes address matrix, converts to physical units. `parse_config()` parses the embedded INI config string.
+- `p_file.py` — `PFile` class: reads Rockland `.p` binary files, parses headers, demultiplexes address matrix, converts to physical units. `parse_config()` parses the embedded INI config string. A **mis-framed** file (one record of the wrong length) is repaired slot by slot or refused (`framing=`) instead of mis-assembled, unless its data headers carry no signature at all. The framing signature must not include the header version, which ODAS `patch_setupstr` rewrites in record 0 only (94 of 308 sampled SeaChest files).
 - `channels.py` — Conversion functions (raw counts → physical units) for each sensor type. `CONVERTERS` dict maps type names to functions. `config_number()` is the **one** parser for a channel coefficient: ODAS `eval`s them, so `2^28` is a legal value. Never `float()` one; arithmetic outside JAC-CT warns, because in the configs of 19k real `.p` files it has only ever been a typo.
 - `convert.py` — `p_to_netcdf()` and `convert_all()` for writing NetCDF4 output.
 - `profile.py` — Profile detection and per-profile NetCDF extraction.

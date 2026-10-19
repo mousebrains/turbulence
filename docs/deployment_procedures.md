@@ -284,11 +284,14 @@ The cast sheet is the only place some of this can live. Record:
 repaired, and when a file is set aside as bad, write down *why*.
 
 > **ARCTERX-2022.** `ARC1A046.P` was set aside as junk for bad buffers. It holds
-> **5 good casts to 204 dbar** whose ε distribution is indistinguishable from the
-> known-good cast, and it was recovered four years later only because the
-> original had been kept. Note also that the vendor's *repair* of that file
-> discarded a quarter of it, including the deepest cast — so the original beat
-> the repaired copy.
+> **5 good casts to ~207 dbar** whose ε distribution is indistinguishable from
+> the known-good cast, and it was recovered four years later only because the
+> original had been kept. The vendor's *repair* of that file discarded a
+> quarter of it, including the deepest cast — so the original beat the
+> repaired copy. The "bad buffers" turned out not to be bad buffers at all:
+> one short record (#13) had mis-framed the rest of the file for every
+> fixed-size reader (see [odas_file_format.md](rsi-tpw/odas_file_format.md),
+> "Record framing").
 
 ---
 
