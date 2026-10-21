@@ -20,8 +20,9 @@ Tanaka's 2022 deployment (no EM, no measured lift). Copied from
     (ah = 3.8, aw from AR = 7 and Omega = 45 deg, Cd1 from aw), as for every
     other fleet glider without a direct measurement (CASPER, Taiwan). Tanaka
     et al. (2022) showed these misfit unit095's measured pitch-AOA relation by
-    up to 1.3 deg; whether they misfit unit211 is UNTESTED. No DVL was
-    delivered for this mission; the 2015-11-13 one has one (47 pd0 files).
+    up to 1.3 deg; whether they misfit unit211 is UNTESTED. The DVL's 27
+    pd0 files (../post-recovery/glider/vb*.pd0) arrived after this
+    calibration (2026-10-20) and are not used here; they could test it.
   * Mass 60 kg NOMINAL (unknown for unit211); only mg - rho*Vg is identifiable.
   * A three-day mission: Cd0 and Vg per UTC day with the 30-min pad.
 

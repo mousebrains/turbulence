@@ -212,8 +212,9 @@ diagnostic run; nothing was applied.
 
 - A calibration sheet, or Rockland's record, for M1368 and M2256. It is the
   only way to settle the 2.5x.
-- Whether the default lift misfits unit211. No DVL was delivered for this
-  mission.
+- Whether the default lift misfits unit211. The DVL's 27 PD0 files arrived
+  after this run (2026-10-20, `../post-recovery/glider/vb*.pd0`). They could
+  test it, as the paper's DVL did on unit095. Not done yet.
 - PFile could detect mis-framing (a header signature at each record
   boundary) and refuse or resynchronize, instead of warning and mis-assembling.
   ODAS `read_odas` would mis-assemble these files the same way: it reads the
