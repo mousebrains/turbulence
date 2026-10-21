@@ -1,8 +1,10 @@
 # ASTRAL 2023 — VMP-250IR-DL3 SN 92, Arabian Sea
 
 **183 profiles from 13 deployments (D2–D14), no errors.** 2023-06-17 15:08 →
-06-24 13:55, 11.77–12.26 N / 66.58–67.80 E, casts to 263 m. Rebuilt and
-reorganized 2026-09-20; the earlier `Processed/` had been deleted.
+06-24 13:55, 11.77–12.26 N / 66.58–67.80 E, casts to 263 m. **Reprocessed
+2026-10-17 on main 98b4206** (`microstructure-tpw 0.4.0 (git
+v0.4.0-29-g98b42062069c)`, stamped in every product); rebuilt and reorganized
+2026-09-20, when the earlier `Processed/` had been deleted.
 
 **This is not our deployment** — everything below was measured from the files,
 not taken from a cruise document.
@@ -11,7 +13,7 @@ not taken from a cruise document.
 ASTRAL/2023/
   vmp/raw/                 13 astral_VMP_D*.p   (they used to sit in the analysis dir)
   vmp/analysis/            perturb.yaml, calibration/, sections.yaml, this README
-    VMP_results/           profiles / diss / chi / ctd (+ _binned, _combo), generation _00
+    VMP_results/           profiles / diss / chi / ctd (+ _binned, _combo), generation _00 (2026-10-17)
   gps/                     gps.mat (v7.3 HDF5 table), gps.nc, make_gps.py
   FOREIGN_RR2202_met/      NOT ASTRAL -- see below
   REORG_MANIFEST.csv       every move of the 2026-09-20 reorganization
@@ -19,14 +21,35 @@ ASTRAL/2023/
 
 ## Results (1-m bins, 183 profiles)
 
-| | median | spread (MAD) | n |
+Median, MAD of log10 (×1.4826, dex), and n over finite positive bins:
+
+| | median | MAD | n |
 |---|---|---|---|
-| ε | 2.31e-9 W/kg | 0.25 dex | 24,435 |
-| χ | 7.50e-9 K²/s | 0.61 dex | 24,435 |
-| N² | 1.21e-4 s⁻² | 0.28 dex | 24,435 |
-| Γ | 0.080 | 0.40 dex | 20,189 |
-| K_ρ | 3.81e-6 m²/s | 0.36 dex | 24,412 |
-| K_T | 1.06e-6 m²/s | 0.53 dex | 20,928 |
+| ε | 2.20e-9 W/kg | 0.34 | 23,443 |
+| χ | 6.92e-9 K²/s | 0.91 | 23,443 |
+| N² (> 0) | 1.23e-4 s⁻² | 0.42 | 22,289 |
+| Γ | 0.060 | 0.57 | 20,088 |
+| K_ρ | 3.87e-6 m²/s | 0.55 | 22,281 |
+| K_T | 8.9e-7 m²/s | 0.74 | 20,822 |
+
+N² ≤ 0 in 4.9% of bins: stratification is temperature-sorted (#219) and no
+longer forced positive; salinity scrambles the density order in 6 of 13 files
+(run notice). Γ and K_ρ are masked where N² < N2_min. The shallowest data sit
+at a median 12.5 m: the 2026-09-20 trim (fall-rate residual voter,
+`max_depth: 80`, no floor) is described in `perturb.yaml`.
+
+### What changed from the 2026-09-20 set
+
+The old set held six generations, `_00`-`_05`, from the 09-20 trim tests; this
+README described `_00` (the accelerometer-only trim, median 3.0 dbar), but the
+config's trim is `_05`'s. Against `_05`, the same 183 profiles:
+- **ε and χ: bit-identical** (23,443 bins). The configs carry `beta_1`, and
+  χ is Method 1, so #215 does not touch them.
+- **Stratification** (#219, temperature sort), paired ratios new/old: N² 0.95,
+  |dT/dz| 1.05, Γ 0.86 (median 0.081 → 0.060), K_ρ 1.05, K_T 0.90. N² ≤ 0 in
+  4.9% of bins (0% before).
+- The table above previously gave `_00`'s numbers (ε 2.31e-9, χ 7.50e-9, Γ
+  0.080, with the MAD unscaled); the difference from `_05` is the trim.
 
 Fall rate 0.792 m/s (0.615–0.851 over all 183 profiles).
 
@@ -110,7 +133,7 @@ dbar/s) and unexplained. It is explained, and it is nothing:
   a median over all in-water samples just reflects which occupied more time.
   D14 is 47 % descending / 52 % ascending → −0.317. **D13 is the same**
   (47/53 → −0.310), and was never flagged.
-- **Within detected profiles**, D14's fall rate is **0.783 m/s**, dead centre
+- **Within detected profiles**, D14's fall rate is **0.783 m/s**, dead center
   of the 0.770–0.824 range across all 13 deployments.
 
 The right diagnostic is the fall rate inside the detected profiles, not over

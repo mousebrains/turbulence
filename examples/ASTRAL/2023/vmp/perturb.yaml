@@ -64,6 +64,33 @@ hotel:
                             # 2022 Interior, March 2022) files, misfiled here.
 
 profiles:
+  # HARD PROP-WASH FLOOR, 2026-09-20. The Revelle's z-drives put a variable
+  # amount of wash under the VMP, and even "clean" water has passed under the
+  # hull (Pat), so there is no uncontaminated shallow water regardless of
+  # wash geometry. Measured here against the RR2306 wind (../../met/):
+  #   z       eps/(u*^3/kz)   corr(log U, log eps)
+  #   4.5 m        252            -0.26     <- ship, not ocean
+  #   8.5 m         20            -0.08
+  #  10.5 m        2.7            +0.03
+  #  22-35 m    0.7-1.5     +0.46 to +0.63   <- genuinely wind-forced
+  # The excess is uncorrelated with wind above ~20 m and the wall scaling only
+  # holds below ~22 m. Per-cast wash depth (eps-knee) is 3.5-29.5 m, IQR
+  # 13.5-25.5 -- a factor 4.4, which is the z-drive variability. 25 dbar covers
+  # the 75th percentile and costs 9.7% of windows (176/183 casts survive).
+  #
+  # NOTE top_trim.min_depth is NOT a floor -- it is the top of the algorithm's
+  # SEARCH window, and the elevated run is anchored to it. Raising it to 20
+  # would find nothing at 20 m, abstain, return None and trim NOTHING.
+  # The floor has to be imposed here, where P_min masks samples.
+  #
+  # Generation _00 retains the lightly-trimmed set (accelerometer top_trim
+  # only, median 3.0 dbar) for anyone who wants the surface layer knowingly:
+  # wave breaking genuinely elevates eps 1-2 decades there, so this floor
+  # discards real physics along with the wash.
+  # FLOOR DROPPED 2026-09-20. Wash depth tracks thruster usage (Pat), so it
+  # can vary between stations WITHIN a cruise; a flat floor would over-trim the
+  # quiet ones and under-trim the active ones. The per-cast detector handles
+  # that, and a floor does not.
   P_min: 0.5
   W_min: 0.3                # dbar/s. MEASURED descent is 0.72-0.75 dbar/s,
                             # slower than ARCTERX's ~1.0, so do not raise this.
@@ -105,9 +132,19 @@ top_trim:
   enable: true
   dz: 0.5
   min_depth: 1.0
-  max_depth: 25.0
+  # 80, not 25. The background is the `quantile` of the per-bin stds, so the
+  # wash must be a MINORITY of the search range or the background lands inside
+  # it and nothing reads as elevated. With quantile 0.6 the wash must span
+  # < 40% of the range; it reaches ~30 m here, so the range must exceed ~75 m.
+  max_depth: 80.0
   quantile: 0.6
   noise_factor: 2.0
+  # Ax/Ay are VIBRATION sensors, blind to prop wash (flat below 5 m). The
+  # fall-rate residual sees it to ~30 m. Heterogeneous voters -> "max", or the
+  # two blind channels outvote the one that can see.
+  use_fall_rate_residual: true
+  residual_smooth_m: 6.0
+  combine: "max"
 
 epsilon:
   fft_sec: 1.0
@@ -178,11 +215,11 @@ netcdf:
   summary: >
     Turbulent kinetic energy dissipation (epsilon) and thermal variance
     dissipation (chi) profiles from a Rockland Scientific VMP250IR-DL3
-    (SN 92) during the ASTRAL 2023 field programme in the Arabian Sea
+    (SN 92) during the ASTRAL 2023 field program in the Arabian Sea
     (11.6–14.3 N, 66.4–72.1 E), 17–24 June 2023. Thirteen deployments
     (D2–D14) of repeated casts to 150–267 dbar. NOTE: the eight shear
     probes' most recent calibrations were 50–51 months old at the cruise,
-    and the probes were changed six times during the programme; dissipation
+    and the probes were changed six times during the program; dissipation
     LEVELS are provisional.
   institution: "Oregon State University"
   project: "ASTRAL"

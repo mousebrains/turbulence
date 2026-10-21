@@ -112,4 +112,32 @@ the remaining per-sample scatter (~37% in ε) is real, and is what the
 within-leg settling drift (~1°/100 s) looks like downstream.
 
 Γ ≈ 0.56 here and ≈ 0.60 on osu684 — both well above the canonical 0.2, on
-unrelated platforms. Worth a look.
+unrelated platforms. Worth a look. **Most of it was the density sort** (below):
+reprocessed, Γ here is 0.24.
+
+## Reprocessed 2026-10-17 on main 98b4206
+
+All three product sets were rebuilt with `microstructure-tpw 0.4.0 (git
+v0.4.0-29-g98b42062069c)`, stamped in every product. Same 199 profiles (and
+dat_0377's 2), same bins.
+
+| | `em` arm | `flight` arm |
+|---|---|---|
+| ε | 2.15 × 10⁻⁷ W/kg, **unchanged** | 2.34 × 10⁻⁷, unchanged |
+| χ | 1.21 × 10⁻⁶ K²/s, paired ratio 1.000 | 1.24 × 10⁻⁶, 1.000 |
+| N² (> 0 bins) | 5.1 × 10⁻⁵ s⁻² | 5.1 × 10⁻⁵ |
+| K_ρ | 7.1 × 10⁻⁴ m²/s | 8.1 × 10⁻⁴ |
+| Γ | **0.241** | **0.218** |
+
+(medians over 0.5 m bins.) Only the temperature sort (#219) moves anything.
+In this nearly isothermal shelf the density sort was steering dT/dz: the
+temperature-sorted |dT/dz| is ×1.40 the old one, so K_T halves (×0.51) and Γ
+with it (paired ×0.52). The price is that N² is no longer forced positive:
+**N² ≤ 0 in 40% of bins** (0% before), where Γ and K_ρ are masked. In water
+this well mixed N² is mostly sign noise, so treat Γ and K_ρ here as poorly
+constrained either way.
+
+`dat_0377` gained `hotel.max_gap: 30` (the key lost its default; see its
+config). Its χ moved +5% and ε +0.1% over its two profiles; the hotel merge
+now blanks pump-off gaps instead of drawing a line across them, which is the
+likeliest cause (not bisected).
