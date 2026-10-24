@@ -204,9 +204,10 @@ def _process_l4_chi(
         n_bad = int(contaminated.sum())
         if n_bad:
             logger.warning(
-                "%d chi window(s) dropped: RDL bad-buffer gap too long to "
-                "interpolate, or more than %.0f%% of the window interpolated "
-                "(TN-051 s3.2), on a channel the thermistor depends on",
+                "%d chi window(s) dropped: bad-buffer gap (RDL marker, TN-051 "
+                "s3.2, or a record rebuilt after mis-framing) too long to "
+                "interpolate, or more than %.0f%% of the window interpolated, "
+                "on a channel the thermistor depends on",
                 n_bad,
                 100 * MAX_INTERP_FRACTION,
             )

@@ -7,6 +7,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`PFile` refuses or repairs a mis-framed `.p` file instead of
+  mis-assembling it.** Every reader, ODAS included, cuts a v6 file at a fixed
+  record size, so one record of the wrong length puts every later header in
+  the data and vice versa. MicroRider SN 156 (2022) wrote 28 of 29 files that
+  way (one record of 33-98 matrices instead of 64); PFile returned channels
+  mis-assembled under three misleading warnings, and ODAS 4.5.1 flags ~98% of
+  the records as bad buffers and then stops in `patch_odas`. Each record's
+  header must now repeat record 0's sizes, clock and matrix shape (not the
+  version, which ODAS `patch_setupstr` rewrites in record 0 only -- 94 of 308
+  sampled SeaChest files differ there). On a mismatch, `framing="repair"`
+  (default) places every intact record at its own slot by record number,
+  rebuilds the damaged slots by interpolation and reports them as bad-buffer
+  spans on every channel, so epsilon/chi drop the windows they touch
+  (`PFile.framing_report`); it refuses when the damage cannot be placed in
+  time, and `framing="refuse"` always refuses. Correctly framed files take the
+  unchanged fast path. On the 28 real files, every kept sample equals a copy
+  re-framed independently (which ODAS reads the same way), and the 3-73
+  lead-in records that copy dropped are kept. **One production file had it
+  too:** VMP SN 194's `ARC1A046.P` (ARCTERX-2022 Wake), set aside during the
+  cruise for "bad buffers" that were this misread. Its products used the
+  mis-framed read (1/64 of every channel's samples were header words, and
+  everything after record #13 was 0.48 s early) and need a rerun. Each rebuilt
+  record costs about 70 s of epsilon/chi: the P_dP span is dilated by three
+  deconvolution time constants. See `docs/rsi-tpw/odas_file_format.md`,
+  "Record framing".
+
+### Fixed
+- **The v6.1 bad-buffer sentinel scan read the header version from record 0**,
+  which ODAS `patch_setupstr` rewrites as v6.0 while leaving the data records
+  as they were. It skipped the scan on such files (e.g. the ARCTERX-2023
+  Seaspider MR429 set; impact unverified -- three of those files checked
+  carry no sentinel runs). It now reads the data records' version.
 - **Per-bead FP07 response equalization: `fp07-pair` and
   `instruments.<dir>.fp07_response`.** Two FP07 beads on one probe head
   respond differently, and chi gave both the same model response, so their chi

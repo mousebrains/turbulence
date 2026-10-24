@@ -527,6 +527,84 @@ def _mask_runs(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return starts, ends - starts
 
 
+# --- Record framing ---------------------------------------------------------
+# Every reader of a v6 file (this one, ODAS read_odas.m) cuts the data at a
+# fixed record size: a data record is a header_size-byte header followed by a
+# whole number of address-matrix cycles. A record holding the wrong number of
+# words breaks that for everything after it -- each later header is read as
+# data and vice versa, and the channels come out mis-assembled under three
+# warnings (bad-buffer flags on most records, record-number "gaps", a
+# non-integer record count). MicroRider SN 156 (2022, v6.0 headers) wrote 28
+# of 29 files that way: one record of 33, 67, 70, 93 or 98 cycles instead of
+# 64, in data records #4-#17 (#74 in a deck record). VMP SN 194's ARC1A046
+# (ARCTERX-2022, v6.0) is the same: record #13 of 33 cycles. ODAS does not
+# resynchronize either: its check_bad_buffers flags ~98% of such a file's
+# records and patch_odas then fails on the non-integer record count.
+#
+# Header words that are fixed for the whole file. A data record's header must
+# repeat record 0's value in every one of them, so a data block passes this
+# seven-word test only by coincidence. The header VERSION is deliberately not
+# one of them: ODAS patch_setupstr.m rewrites record 0 with version 0x0600 and
+# copies the data records verbatim, so a patched v6.1/v6.3 (or converted v1)
+# file legitimately differs there. Nor is the file number, which a merge of
+# several files changes from one segment to the next.
+FRAMING_SIGNATURE = (
+    "header_size",
+    "record_size",
+    "clock_hz",
+    "clock_frac",
+    "fast_cols",
+    "slow_cols",
+    "n_rows",
+)
+
+# Repair is refused when more than this fraction of the record slots would
+# have to be rebuilt: past it the file is mostly damage, not data.
+MAX_FRAMING_FILL_FRACTION = 0.5
+
+FRAMING_POLICIES = ("repair", "refuse")
+
+# Largest forward step (in records) across which a backward jump of the uint16
+# record counter is read as a wrap at 65536 rather than as a reset.
+MAX_WRAP_STEP = 1024
+
+
+def _signature_starts(words: np.ndarray, first_word: int, header: dict) -> np.ndarray:
+    """Word offsets >= *first_word* where a header carrying *header*'s
+    :data:`FRAMING_SIGNATURE` starts. *words* is the whole file as uint16 in
+    file byte order."""
+    n = words.size - HEADER_WORDS + 1
+    if n <= first_word:
+        return np.empty(0, dtype=np.int64)
+    hit = np.ones(n - first_word, dtype=bool)
+    for name in FRAMING_SIGNATURE:
+        idx = _H[name]
+        hit &= words[first_word + idx : n + idx] == header[name]
+    return np.flatnonzero(hit) + first_word
+
+
+def _merge_bad_entries(a: dict | None, b: dict) -> dict:
+    """Union of two confirmed bad-buffer entries for one channel (same
+    addresses and rate): spans merged where they overlap or touch."""
+    if a is None:
+        return b
+    spans = sorted([*a["spans"], *b["spans"]])
+    merged: list[list[int]] = []
+    for start, n in spans:
+        if merged and start <= merged[-1][0] + merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], start + n - merged[-1][0])
+        else:
+            merged.append([start, n])
+    lengths = [n for _, n in merged]
+    return {
+        **a,
+        "n_runs": len(merged),
+        "n_samples": int(sum(lengths)),
+        "longest_run": int(max(lengths)),
+        "spans": [(int(s), int(n)) for s, n in merged],
+    }
+
+
 def _validate_matrix(
     rows: list[list[int]], n_rows: int, n_cols: int, source: str | Path
 ) -> np.ndarray:
@@ -679,13 +757,31 @@ class PFile:
         Provenance of the external setup file used for the v1 translation
         (None for v6+ sources).
     bad_buffer_report : dict
-        v6.1+ RDL bad-buffer findings (TN-051 section 3.2), empty for a clean
-        or pre-6.1 file. ``{'confirmed': {channel: {...}}, 'isolated':
-        {channel: n}}``; see :meth:`_check_bad_buffer_markers`. The affected
-        samples are reported, never modified — each confirmed entry's
+        v6.1+ RDL bad-buffer findings (TN-051 section 3.2) and record slots
+        rebuilt by a framing repair; empty for a clean file.
+        ``{'confirmed': {channel: {...}}, 'isolated': {channel: n}}``; see
+        :meth:`_check_bad_buffer_markers`. The affected samples are reported,
+        never modified — each confirmed entry's
         ``spans`` are ``(start, length)`` pairs into that channel's own
         extracted samples, which :mod:`odas_tpw.rsi.bad_buffer` turns into
-        per-consumer epsilon/chi masks.
+        per-consumer epsilon/chi masks. Record slots rebuilt by a framing
+        repair are reported here too, for every channel.
+    framing_report : dict
+        Empty for a correctly framed file. When records of the wrong length
+        broke the fixed-size framing and *framing* was ``"repair"``: the
+        irregular records found, the record slots rebuilt, their total
+        duration and any trailing records dropped; see
+        :meth:`_repair_framing`.
+
+    Parameters
+    ----------
+    framing : {"repair", "refuse"}
+        What to do with a mis-framed file, one in which a record of the wrong
+        length makes fixed-size reading mis-assemble everything after it.
+        ``"repair"`` (default) locates every record by its header, keeps each
+        intact one at its own time, rebuilds the damaged slots by
+        interpolation and reports them as bad buffers; it still raises when
+        the damage cannot be placed in time. ``"refuse"`` always raises.
     """
 
     def __init__(
@@ -694,7 +790,11 @@ class PFile:
         *,
         deconvolve: bool = True,
         setup_file: str | Path | None = None,
+        framing: str = "repair",
     ) -> None:
+        if framing not in FRAMING_POLICIES:
+            raise ValueError(f"framing must be one of {FRAMING_POLICIES}, not {framing!r}")
+        self._framing = framing
         self.filepath = Path(filepath)
         # deconvolve=False leaves the pre-emphasized channels (T1_dT1, P_dP, …)
         # and their bases (T1, P, …) as the raw counts read from the file,
@@ -719,6 +819,10 @@ class PFile:
         # Populated by _check_bad_buffer_markers during the v6 parse; set here
         # too so the attribute exists even on the paths that return early.
         self.bad_buffer_report: dict[str, Any] = {}
+        # Populated by _repair_framing (empty for a correctly framed file);
+        # _framing_hits marks, in raw_flat's shape, the samples it rebuilt.
+        self.framing_report: dict[str, Any] = {}
+        self._framing_hits: np.ndarray | None = None
         self._read()
 
     def _read(self):
@@ -881,14 +985,6 @@ class PFile:
         n_records = (file_size - first_record_size) // record_size
         if n_records < 1:
             raise ValueError(f"{self.filepath.name} contains no data records")
-        if (file_size - first_record_size) % record_size != 0:
-            # read_odas.m:184-187 warns in this case; a partial record
-            # usually means a truncated download or interrupted DAQ.
-            warnings.warn(
-                f"{self.filepath.name}: file size is not an integer number "
-                f"of records; trailing partial record ignored",
-                stacklevel=2,
-            )
 
         data_words = (record_size - header_size) // 2
         # Scan-geometry guard: data_words must be a positive multiple of
@@ -936,6 +1032,18 @@ class PFile:
         else:
             f.seek(first_record_size)
             records = np.fromfile(f, dtype=record_dtype, count=n_records)
+        if not self._framing_ok(records):
+            # Rebuilt slot by slot; replaces the warning below.
+            records = self._repair_framing(f, record_dtype, first_record_size, file_size)
+            n_records = records.shape[0]
+        elif (file_size - first_record_size) % record_size != 0:
+            # read_odas.m:184-187 warns in this case; a partial record
+            # usually means a truncated download or interrupted DAQ.
+            warnings.warn(
+                f"{self.filepath.name}: file size is not an integer number "
+                f"of records; trailing partial record ignored",
+                stacklevel=2,
+            )
         scans_per_record = data_words // self.n_cols
         total_scans = n_records * scans_per_record
         raw_flat = records["data"].reshape(total_scans, self.n_cols)
@@ -1221,6 +1329,243 @@ class PFile:
                     "epsilon/chi path (physical velocity shear, s-1, only after)"
                 )
 
+    def _framing_ok(self, records: np.ndarray) -> bool:
+        """True when every data record read at the fixed record size starts
+        with a header carrying record 0's :data:`FRAMING_SIGNATURE`.
+
+        A correctly framed file always passes (every Tanaka, SUNRISE, CASPER,
+        ARCTERX ... file checked does), so the fast path below is unchanged.
+        The trailing partial record, which the fixed-size read never reaches,
+        is not tested here and stays the ordinary warning.
+
+        A file whose records carry no header signature anywhere (headers
+        never written -- all zero) cannot be checked and passes, as it always
+        has. If none sits at the fixed stride but some exist elsewhere, the
+        file is mis-framed from its first record.
+        """
+        hdr = records["hdr"]
+        ok = np.ones(hdr.shape[0], dtype=bool)
+        for name in FRAMING_SIGNATURE:
+            ok &= hdr[:, _H[name]] == self.header[name]
+        if ok.all():
+            return True
+        if not ok.any():
+            words = np.frombuffer(records.tobytes(), dtype=records.dtype["hdr"].base)
+            if _signature_starts(words, 0, self.header).size == 0:
+                return True
+        # A damaged HEADER in a well-framed file is not mis-framing: the
+        # records either side still sit at the fixed stride and their numbers
+        # step by exactly two across it. Read it at the fixed size, as before.
+        bad = np.flatnonzero(~ok)
+        num = hdr[:, _H["record_number"]].astype(np.int64)
+        isolated = all(
+            (i == 0 or ok[i - 1])
+            and (i == ok.size - 1 or ok[i + 1])
+            and (i == 0 or i == ok.size - 1 or num[i + 1] - num[i - 1] == 2)
+            for i in bad
+        )
+        if isolated:
+            warnings.warn(
+                f"{self.filepath.name}: header of data record(s) "
+                f"{', '.join(str(int(i) + 1) for i in bad)} damaged; the records "
+                "around it are at the fixed size, so the file is read as framed",
+                stacklevel=3,
+            )
+            return True
+        if self._framing == "refuse":
+            raise ValueError(
+                f"{self.filepath.name}: mis-framed: {int((~ok).sum())} of "
+                f"{hdr.shape[0]} data records do not start with a record header "
+                "at the fixed record size, first at data record "
+                f"{int(np.flatnonzero(~ok)[0]) + 1}; a fixed-size read would "
+                "mis-assemble everything after it. Refused (framing='refuse'); "
+                "framing='repair' rebuilds the damaged record slots"
+            )
+        return False
+
+    def _repair_framing(
+        self, f: BinaryIO, record_dtype: np.dtype, first_record_size: int, file_size: int
+    ) -> np.ndarray:
+        """Rebuild a mis-framed file's data records, one slot per record.
+
+        Each record is found by its header (:data:`FRAMING_SIGNATURE`), not by
+        position. One whose next header follows at exactly the record size is
+        intact and goes, byte for byte, into the slot its record number gives,
+        counted from the first data record (slot 0, the convention every sample
+        time rests on). Slots
+        left empty -- an irregular record (too short, too long, junk words) or
+        a record whose header was lost -- are rebuilt by linear interpolation
+        of each address-matrix cell's raw counts between the neighbouring
+        intact records, and reported, for every channel, as bad-buffer spans
+        (:attr:`bad_buffer_report`), so the epsilon/chi masks of
+        :mod:`odas_tpw.rsi.bad_buffer` drop the windows they touch -- about
+        70 s of epsilon/chi per rebuilt record, because a P_dP span is
+        dilated forward by three deconvolution time constants. The
+        interpolation keeps the deconvolution filters free of a step; the
+        consumers that read :attr:`bad_buffer_report` (epsilon, chi) never use
+        it as data, but those that do not (``rsi-tpw nc``, fp07-cal,
+        mr-clocksync, perturb's speed, hotel and CTD steps) see the
+        interpolated counts across those slots.
+
+        This differs from ODAS on purpose. odas_p2mat's patch_odas /
+        fix_bad_buffers also interpolate whole bad records, but they find
+        them through the word-16 flag at the FIXED record size, so on a
+        mis-framed file they flag nearly every record (and patch_odas then
+        stops on the non-integer record count).
+
+        Raises ValueError -- refuses -- when the damage cannot be placed in
+        time: damage before the first data-record header, no intact record,
+        record numbers that do not increase (header word 2; a uint16 wrap,
+        a small forward step modulo 65536, is unwrapped), or more than
+        :data:`MAX_FRAMING_FILL_FRACTION` of the slots to rebuild. Records
+        after the last intact one (a trailing partial record) are dropped,
+        as the fixed-size read drops a partial record.
+        """
+        name = self.filepath.name
+        header_words = self.header["header_size"] // 2
+        record_words = self.header["record_size"] // 2
+        data_words = record_words - header_words
+        dtype = record_dtype["data"].base
+        udtype = record_dtype["hdr"].base
+        n_words = (file_size - first_record_size) // 2
+        if isinstance(f, io.BytesIO):
+            words = np.frombuffer(
+                f.getbuffer(), dtype=udtype, count=n_words, offset=first_record_size
+            )
+        else:
+            f.seek(first_record_size)
+            words = np.fromfile(f, dtype=udtype, count=n_words)
+
+        # Headers cannot overlap: a candidate inside an accepted header is a
+        # coincidence in its words, not a record.
+        starts: list[int] = []
+        for s in _signature_starts(words, 0, self.header):
+            if not starts or s >= starts[-1] + header_words:
+                starts.append(int(s))
+        if not starts:
+            raise ValueError(f"{name}: mis-framed, and no record header was found after record 0")
+        at = np.asarray(starts, dtype=np.int64)
+        length = np.diff(np.append(at, words.size))
+        intact = length == record_words
+        # The last record may be followed by a remnant too short to hold a
+        # header (a cut at the fixed size, or a truncated download): it is
+        # still whole, and only the remnant is the trailing partial record.
+        excess = length[-1] - record_words
+        if 0 < excess < header_words:
+            intact[-1] = True
+
+        if at[0] != 0:
+            raise ValueError(
+                f"{name}: mis-framed before its first data-record header, so "
+                "the records cannot be placed in time; refused"
+            )
+        # Record numbers are TRUSTED for placement; nothing else can place a
+        # record. The header times cannot arbitrate: the RDL stamps records
+        # when it writes them, in bursts (v6.1 VMP: 12-22 ms apart with 134 s
+        # jumps). A uint16 wrap is a SMALL forward step modulo 65536; any
+        # other backward step (a merge splice, a corrupt number) is refused.
+        numbers = words[at + _H["record_number"]].astype(np.int64)
+        steps = np.diff(numbers)
+        wrap = (steps < 0) & (steps + 65536 <= MAX_WRAP_STEP)
+        numbers[1:] += 65536 * np.cumsum(wrap)
+        if np.any(np.diff(numbers) <= 0):
+            raise ValueError(
+                f"{name}: mis-framed, and its record numbers (header word 2) "
+                "do not increase, so the intact records cannot be placed in "
+                "time; refused"
+            )
+        if not intact.any():
+            raise ValueError(f"{name}: mis-framed, and no data record is intact; refused")
+        # Slot 0 is the first data record, whatever its number: a segment cut
+        # from a longer file (cutp, extract_pfile_segment) keeps the source's
+        # record numbers and advances record 0's time instead.
+        slot = numbers - numbers[0]
+        last = int(np.flatnonzero(intact)[-1])
+        n_slots = int(slot[last]) + 1
+        rebuilt = np.ones(n_slots, dtype=bool)
+        rebuilt[slot[intact]] = False
+        if rebuilt.mean() > MAX_FRAMING_FILL_FRACTION:
+            raise ValueError(
+                f"{name}: mis-framed in {int(rebuilt.sum())} of {n_slots} record "
+                f"slots (> {MAX_FRAMING_FILL_FRACTION:.0%}); refused rather than "
+                "rebuilt"
+            )
+
+        flat = np.zeros((n_slots, record_words), dtype=udtype)
+        for i in np.flatnonzero(intact):
+            flat[slot[i]] = words[at[i] : at[i] + record_words]
+        # A rebuilt slot takes the nearest earlier intact header (else the
+        # first one), renumbered; no other header word is ever read per record.
+        donors = np.maximum.accumulate(np.where(~rebuilt, np.arange(n_slots), -1))
+        donors[donors < 0] = int(np.flatnonzero(~rebuilt)[0])
+        fill = np.flatnonzero(rebuilt)
+        flat[fill, :header_words] = flat[donors[fill], :header_words]
+        for word in ("record_number", "n_records_written"):
+            flat[fill, _H[word]] = (fill + numbers[0]) % 65536
+
+        # Per address-matrix cell, in matrix order: a fast channel's column and
+        # a slow channel's single cell are each interpolated along their own
+        # samples. Done on a contiguous copy (the data columns of `flat` are a
+        # strided view) and written back.
+        cells = self.n_rows * self.n_cols
+        per_record = data_words // cells
+        m = flat[:, header_words:].view(dtype).reshape(n_slots * per_record, cells)
+        bad = np.repeat(rebuilt, per_record)
+        x_bad, x_good = np.flatnonzero(bad), np.flatnonzero(~bad)
+        for c in range(cells):
+            y = m[x_good, c].astype(np.float64)
+            m[x_bad, c] = np.clip(np.rint(np.interp(x_bad, x_good, y)), -32768, 32767)
+        flat[:, header_words:] = m.reshape(n_slots, data_words).view(udtype)
+
+        scans_per_record = data_words // self.n_cols
+        self._framing_hits = np.repeat(rebuilt, scans_per_record)
+        record_s = data_words / (self.header["clock_hz"] + self.header["clock_frac"] / 1000)
+        irregular = [
+            {"record_number": int(numbers[i]), "words": int(length[i])}
+            for i in range(last + 1)
+            if not intact[i]
+        ]
+        missing = sorted(
+            set(range(int(numbers[0]), int(numbers[0]) + n_slots))
+            - set(int(n) for n in numbers[: last + 1])
+        )
+        runs = _mask_runs(rebuilt)
+        trailing_words = int(words.size - (at[last] + record_words))
+        self.framing_report = {
+            "policy": "repair",
+            "irregular_records": irregular,
+            "missing_record_numbers": missing,
+            "rebuilt_slots": [(int(a), int(b)) for a, b in zip(*runs)],
+            "rebuilt_seconds": float(rebuilt.sum() * record_s),
+            # Headers found after the last intact record, and every word after
+            # its end: the trailing partial record(s), dropped.
+            "trailing_records_dropped": len(starts) - 1 - last,
+            "trailing_words_dropped": trailing_words,
+        }
+        parts = []
+        if irregular:
+            parts.append(
+                "irregular record(s) "
+                + ", ".join(
+                    f"#{r['record_number']} ({r['words']} words, not {record_words})"
+                    for r in irregular
+                )
+            )
+        if missing:
+            parts.append(f"header lost for #{', #'.join(map(str, missing))}")
+        if trailing_words:
+            parts.append(f"{trailing_words} trailing word(s) after the last intact record")
+        warnings.warn(
+            f"{name}: mis-framed ({'; '.join(parts)}): a fixed-size read would "
+            "mis-assemble everything after the first damage. Repaired: every "
+            f"intact record kept at its own time; {int(rebuilt.sum())} record "
+            f"slot(s) ({rebuilt.sum() * record_s:.2f} s) rebuilt by interpolation "
+            "and reported as bad buffers, trailing words dropped -- see "
+            "PFile.framing_report",
+            stacklevel=2,
+        )
+        return flat.view(record_dtype).reshape(n_slots)
+
     def _warn_on_dropped_records(self) -> None:
         """Report records missing from the file, using header word 2.
 
@@ -1285,16 +1630,78 @@ class PFile:
         decision — the report's ``spans`` carry ``(start, length)`` into the
         channel's own extracted samples so a caller can mask them directly.
         :mod:`odas_tpw.rsi.bad_buffer` turns them into the epsilon/chi masks.
+
+        Record slots rebuilt by :meth:`_repair_framing` are reported here
+        too, on every channel and in any header version; the warning stays
+        the markers' own (the repair issued its own).
         """
         self.bad_buffer_report = {}
+        # The data records' own version: ODAS patch_setupstr rewrites record 0
+        # as v6.0 and leaves the data records as they were (see
+        # FRAMING_SIGNATURE), which would otherwise switch this scan off.
         version = self.header["header_version"]
-        if (version >> 8, version & 0xFF) < (6, 1):
-            return  # v6.0 and older use the word-16 / channel-255 mechanism
-
-        hits = raw_flat == BAD_BUFFER_SENTINEL
-        if not hits.any():
+        hdrs = getattr(self, "_record_headers", None)
+        if (
+            hdrs is not None
+            and hdrs.shape[0]
+            and int(hdrs[0, _H["header_size"]]) == self.header["header_size"]
+        ):
+            version = int(hdrs[0, _H["header_version"]])
+        markers = None
+        # v6.0 and older use the word-16 / channel-255 mechanism instead.
+        if (version >> 8, version & 0xFF) >= (6, 1):
+            hits = raw_flat == BAD_BUFFER_SENTINEL
+            if hits.any():
+                markers = hits
+        rebuilt = None
+        if self._framing_hits is not None:
+            rebuilt = np.broadcast_to(self._framing_hits[:, None], raw_flat.shape)
+        if markers is None and rebuilt is None:
             return
 
+        if markers is not None:
+            confirmed, isolated = self._bad_buffer_spans(markers, matrix_count, ch_config)
+            if confirmed:
+                detail = "; ".join(
+                    f"{name}: {d['n_samples']} samples in {d['n_runs']} run(s), "
+                    f"longest {d['longest_run']}"
+                    for name, d in sorted(confirmed.items())
+                )
+                extra = ""
+                if isolated:
+                    extra = (
+                        f" ({sum(isolated.values())} further isolated hit(s) on "
+                        f"{', '.join(sorted(isolated))} are consistent with ordinary "
+                        "data and were not counted)"
+                    )
+                warnings.warn(
+                    f"{self.filepath.name}: RDL bad-buffer markers "
+                    f"({BAD_BUFFER_SENTINEL}, TN-051 s3.2) replace missing or "
+                    f"erroneous data on {detail}{extra}; these samples are not "
+                    "measurements — see PFile.bad_buffer_report",
+                    stacklevel=2,
+                )
+        if rebuilt is not None:
+            # Every rebuilt sample is confirmed, however short the run (a
+            # record with few matrices gives a slow channel few samples).
+            rebuilt_conf, _ = self._bad_buffer_spans(rebuilt, matrix_count, ch_config, min_run=1)
+            if markers is None:
+                confirmed, isolated = rebuilt_conf, {}
+            else:
+                for ch, found in rebuilt_conf.items():
+                    confirmed[ch] = _merge_bad_entries(confirmed.get(ch), found)
+        self.bad_buffer_report = {"confirmed": confirmed, "isolated": isolated}
+
+    def _bad_buffer_spans(
+        self,
+        hits: np.ndarray,
+        matrix_count: int,
+        ch_config: dict,
+        min_run: int = BAD_BUFFER_MIN_RUN,
+    ) -> tuple[dict[str, dict], dict[str, int]]:
+        """Per-channel ``(confirmed, isolated)`` runs of *hits*, a boolean
+        array shaped like the multiplexed block; see
+        :meth:`_check_bad_buffer_markers` for the conventions."""
         id_to_name: dict[int, str] = {}
         for ch_name, info in ch_config.items():
             for ch_id in info["ids"]:
@@ -1350,7 +1757,7 @@ class PFile:
             runs = np.concatenate(all_lengths)
             if runs.size == 0:
                 continue
-            long_runs = runs[runs >= BAD_BUFFER_MIN_RUN]
+            long_runs = runs[runs >= min_run]
             if long_runs.size:
                 # Positions index the channel's own extracted samples, so a
                 # caller can mask directly (odas_tpw.rsi.bad_buffer does).
@@ -1360,7 +1767,7 @@ class PFile:
                 starts, lengths = _mask_runs(
                     extracted if extracted is not None else np.zeros(0, dtype=bool)
                 )
-                keep = lengths >= BAD_BUFFER_MIN_RUN
+                keep = lengths >= min_run
                 confirmed[name] = {
                     "address": addrs[0],
                     "addresses": list(addrs),
@@ -1377,31 +1784,10 @@ class PFile:
                     "rate": rate,
                     "spans": [(int(s), int(n)) for s, n in zip(starts[keep], lengths[keep])],
                 }
-            n_short = int(runs[runs < BAD_BUFFER_MIN_RUN].sum())
+            n_short = int(runs[runs < min_run].sum())
             if n_short:
                 isolated[name] = n_short
-
-        self.bad_buffer_report = {"confirmed": confirmed, "isolated": isolated}
-        if confirmed:
-            detail = "; ".join(
-                f"{name}: {d['n_samples']} samples in {d['n_runs']} run(s), "
-                f"longest {d['longest_run']}"
-                for name, d in sorted(confirmed.items())
-            )
-            extra = ""
-            if isolated:
-                extra = (
-                    f" ({sum(isolated.values())} further isolated hit(s) on "
-                    f"{', '.join(sorted(isolated))} are consistent with ordinary "
-                    "data and were not counted)"
-                )
-            warnings.warn(
-                f"{self.filepath.name}: RDL bad-buffer markers "
-                f"({BAD_BUFFER_SENTINEL}, TN-051 s3.2) replace missing or "
-                f"erroneous data on {detail}{extra}; these samples are not "
-                "measurements — see PFile.bad_buffer_report",
-                stacklevel=2,
-            )
+        return confirmed, isolated
 
     def _apply_deconvolution(self, ch_config: dict) -> None:
         """Deconvolve pre-emphasized channels to produce high-resolution data.

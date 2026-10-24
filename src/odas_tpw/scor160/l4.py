@@ -263,7 +263,8 @@ def process_l4(
                 epsi[hit] = np.nan
                 warnings.warn(
                     f"{int(hit.sum())} of {n_shear * n_spec} epsilon estimate(s) "
-                    "rejected: RDL bad-buffer gaps too long to interpolate, or "
+                    "rejected: bad-buffer gaps (RDL markers or records rebuilt "
+                    "after mis-framing) too long to interpolate, or "
                     f"more than {100 * BAD_MAX_INTERP_FRACTION:.0f}% of the window "
                     "interpolated",
                     stacklevel=2,
