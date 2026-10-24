@@ -41,10 +41,15 @@ sensors:
   c_de_oil_vol:     {units: "cm3", method: "previous"}
   m_battpos:        {units: "in"}
   m_fin:            {units: "rad"}
-  m_gps_lat:        {transform: nmea_degrees, units: "degrees_north", method: "previous", valid_min: -90.0,  valid_max: 90.0}
-  m_gps_lon:        {transform: nmea_degrees, units: "degrees_east",  method: "previous", valid_min: -180.0, valid_max: 180.0}
-  m_lat:            {transform: nmea_degrees, units: "degrees_north", valid_min: -90.0,  valid_max: 90.0}
-  m_lon:            {transform: nmea_degrees, units: "degrees_east",  valid_min: -180.0, valid_max: 180.0}
+  # Positions: at one surfacing (2015-11-14 12:48-12:58Z) the glider wrote
+  # EXACT ZEROS into m_lat/m_lon (21 rows) and m_gps_lat/m_gps_lon (30), and
+  # 0.0 passes a +-90/+-180 range check. Interpolated through, (0, 0) put one
+  # profile at 25.3 N 110.1 E, 1,798 km away (products before 2026-10-19).
+  # This glider is in the N and E hemispheres, so the floors are 1 degree.
+  m_gps_lat:        {transform: nmea_degrees, units: "degrees_north", method: "previous", valid_min: 1.0, valid_max: 90.0}
+  m_gps_lon:        {transform: nmea_degrees, units: "degrees_east",  method: "previous", valid_min: 1.0, valid_max: 180.0}
+  m_lat:            {transform: nmea_degrees, units: "degrees_north", valid_min: 1.0, valid_max: 90.0}
+  m_lon:            {transform: nmea_degrees, units: "degrees_east",  valid_min: 1.0, valid_max: 180.0}
   sci_water_temp:
     time_sensor: "sci_ctd41cp_timestamp"
     units: "degree_Celsius"
