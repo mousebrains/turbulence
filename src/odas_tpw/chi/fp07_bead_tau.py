@@ -353,8 +353,10 @@ def fit_files(files: list[P._FileRatio], grid: np.ndarray, *, band: tuple[float,
     r20 = ln_ratio.get(20.0, np.nan)
     lo20, hi20 = ratio_ci.get(20.0, (np.nan, np.nan))
     hw = 0.5 * (hi20 - lo20)
-    if not (np.isfinite(r20) and np.isfinite(hw)):
+    if not np.isfinite(r20):
         reasons.append("no ratio at 20 Hz")
+    elif not np.isfinite(hw):
+        reasons.append("no bootstrap interval for the 20 Hz ratio")
     elif abs(r20) < max(DIFFER_SIGMAS * hw, DIFFER_MIN):
         reasons.append(f"beads not distinguishable: |ln R'(20 Hz)| = {abs(r20):.3f} < "
                        f"max({DIFFER_SIGMAS:g} x {hw:.3f}, {DIFFER_MIN:g})")

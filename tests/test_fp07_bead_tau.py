@@ -14,7 +14,6 @@ import csv
 import io
 import json
 import os
-import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -494,9 +493,26 @@ def test_a_response_renders_in_both_views():
 
 
 # --------------------------------------------- recording a response as text
+def _strip_responses(text):
+    """The sheet without its `response:` blocks (as `registry response` writes them)."""
+    out, skip = [], False
+    for ln in text.splitlines(keepends=True):
+        if ln.rstrip("\r\n") == "    response:":
+            skip = True
+            continue
+        if skip and ln.startswith("      "):
+            continue
+        skip = False
+        out.append(ln)
+    return "".join(out)
+
+
 def _sheet_copy(tmp_path):
+    """The repository sheet as it was before any response was recorded."""
     dst = tmp_path / reg.YAML_NAME
-    shutil.copy(SHEET, dst)
+    dst.write_text(_strip_responses(SHEET.read_text(encoding="utf-8")), encoding="utf-8",
+                   newline="\n")
+    assert all(c.response is None for c in reg.load(dst).calibrations)
     reg.write_views(dst)
     return dst
 
