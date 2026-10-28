@@ -486,6 +486,20 @@ intrusion smaller than five windows is not), set `sort: density`.
 
 Overrides keyed by serial-number identifier, matched against the parent directory of each `.p` file (e.g. `ARCTERX/VMP/SN465` → `SN465`). Default: `{}` (no overrides).
 
+**The key is the raw directory name, and it must match exactly.** It is not the
+serial number from the file's config: `.p` files in `VMP/` take the key `VMP`,
+and fp07-cal output in `patched/` takes `patched`. Two checks keep a mismatch
+from passing silently:
+
+- **A key must be a string.** YAML loads `465:` as an integer and
+  `2017-10-24:` as a date, neither of which can ever equal a directory name,
+  so the config is refused at load with a message to quote it (`'465':`).
+- **A key that matches no input file of the run is reported** at run start (at
+  WARNING) and as a `notice:` line in the run summary, whichever settings it
+  holds: its settings were not applied anywhere. It is a notice, not an error,
+  because a shared config may carry keys for instruments a given run does not
+  include.
+
 **Each key versions only the stages it reaches.** The block feeds the stage
 signature so a change re-versions the affected output, but `fp07_tau_scale` is
 consumed only by the chi computation, so it versions **chi** and not **diss** —
@@ -594,10 +608,11 @@ instruments:
   stage directory.
 - **The run summary** gets one `notice:` line per entry with the windows it
   masked in the files processed by that run, worded as a warning when it
-  masked none (a wrong year, a depth in meters where dbar was meant). It also
-  names an instrument key carrying `exclude` that matches no input file, and
-  a thermistor entry that was not applied because chi did not run (its probe
-  name was then not checked either).
+  masked none (a wrong year, a depth in meters where dbar was meant), and a
+  thermistor entry that was not applied because chi did not run (its probe
+  name was then not checked either). An instrument key that matches no input
+  file is reported once for all its settings (see
+  [`instruments`](#instruments--per-instrument-overrides) above).
 - **Versioning.** Diss (and `diss_binned`, `diss_combo`) hashes only the shear
   entries; chi (and `chi_binned`, `chi_combo`) hashes every entry, since a
   shear entry reaches it through `epsilonMean`. Each entry keeps its number in

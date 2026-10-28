@@ -842,19 +842,14 @@ class TestNotices:
         )
         assert "masked NO windows" in line and "dbar" in line
 
-    def test_an_unmatched_instrument_key_is_named(self):
-        """The known trap: an instruments key matching no directory is otherwise silent."""
-        (line,) = _probe_exclusion_notices(
+    def test_an_unmatched_instrument_key_is_left_to_the_general_notice(self):
+        """The known trap is reported for every setting by _instrument_key_notices
+        (tests/test_instrument_key_matching.py), so not twice here."""
+        assert _probe_exclusion_notices(
             {"sn194": {"exclude": CASPER}, "SN479": {"fp07_tau_scale": {"T1": 1.1}}},
             {"SN194"},
             {},
-        )
-        assert "instruments.sn194 has 2 exclude entries" in line and "SN194" in line
-
-    def test_an_unquoted_numeric_key_is_named(self):
-        """`465:` loads as an int, which process_file's string lookup never matches."""
-        (line,) = _probe_exclusion_notices({465: {"exclude": CASPER[:1]}}, {"465"}, {})
-        assert "loaded as the number 465; quote it" in line
+        ) == []
 
     def test_entries_sort_by_number_not_text(self):
         l10 = "instruments.SN194.exclude entry 10 (probe 'sh2')"
