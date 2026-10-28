@@ -76,6 +76,9 @@ fp07-cal init -o fp07-cal.yaml                 # commented template config
 fp07-cal coverage -c fp07-cal.yaml             # what CTD reference do we actually have?
 fp07-cal fit -c fp07-cal.yaml                  # coefficients + stability diagnostic
 fp07-cal patch -c fp07-cal.yaml                # write them into calibrated .p copies
+fp07-cal registry render                       # regenerate microstructure_sensors/fp07_calibrations.{md,csv}
+fp07-cal registry check                        # validate the sheet's YAML; exit 1 if invalid or a view is stale
+fp07-cal registry show T1592                   # one bead's calibration history and its prior
 
 mr-clocksync init    -o clocksync.yaml         # commented template config
 mr-clocksync probe   -c clocksync.yaml         # is there a wave to sync on? RUN THIS FIRST
@@ -93,7 +96,11 @@ A **pre-pipeline** tool, run once per deployment against a CTD reference;
 perturb then reads the patched files with `fp07.calibrate: false` and needs no
 changes. Runbook: `docs/fp07cal/runbook.md`. Worked 72-day result:
 `docs/fp07cal/osu685_stability.md`. Design and adversarial review:
-`docs/fp07_insitu_calibration_PLAN.md`.
+`docs/fp07_insitu_calibration_PLAN.md`. Fitted calibrations are kept per bead in
+`microstructure_sensors/fp07_calibrations.yaml`, the single hand-edited source; the `.md` sheet and
+`.csv` are generated from it (`fp07-cal registry render`; a test fails when they are stale). A bead's
+prior for a fresh deployment comes from its widest-range calibration not flagged short, fast-descent or
+episode.
 
 Facts that are easy to get wrong:
 
