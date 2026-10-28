@@ -91,6 +91,7 @@ An entry may carry the bead's FP07 time constant, measured by `fp07-pair tau` fr
 | response flag | meaning |
 |---|---|
 | `amplitude` | Flat gain between the beads beyond a factor 2: an amplitude-loss signature (a failing bead). Never a tau measurement. |
+| `dead-bead` | One bead's gradient spectrum was identically zero (a dead or railed channel) through whole chi files of the span: a failing bead. Those files were left out, and the pair is never a tau measurement; `reason` names the bead and the files. |
 | `outlier` | The 20 Hz power ratio is beyond the fleet spread (\|ln\| > 0.9): possibly a failing bead, or one far slower than its partner. |
 | `noise-model` | In its quietest windows one bead's observed spectrum at 60-100 Hz is more than 1.5x off its noise model, which biases tau. |
 | `drift` | This bead's two time halves differ by more than twice their combined 1-sigma (16-84%) uncertainty: it changed within the deployment (fouling, aging). |

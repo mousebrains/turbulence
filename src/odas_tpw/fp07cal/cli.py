@@ -1201,7 +1201,8 @@ def _cmd_registry_response(args) -> int:
             raise RegistryError(f"{args.bead} has no entry for {args.deployment!r} in {path}")
         block = response_from_record(record, hits[0], notes=args.notes or "")
         text = add_response(path, args.bead, args.deployment, block, dry_run=args.dry_run)
-    except (RegistryError, KeyError, TypeError, IndexError) as exc:
+    except (RegistryError, KeyError, TypeError, IndexError, ValueError, AttributeError,
+            OverflowError) as exc:
         print(f"refusing: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     print(text, end="")

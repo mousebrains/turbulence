@@ -167,6 +167,11 @@ RESPONSE_FLAGS: dict[str, str] = {
         "Flat gain between the beads beyond a factor 2: an amplitude-loss signature (a "
         "failing bead). Never a tau measurement."
     ),
+    "dead-bead": (
+        "One bead's gradient spectrum was identically zero (a dead or railed channel) through "
+        "whole chi files of the span: a failing bead. Those files were left out, and the pair "
+        "is never a tau measurement; `reason` names the bead and the files."
+    ),
     "outlier": (
         "The 20 Hz power ratio is beyond the fleet spread (|ln| > 0.9): possibly a failing "
         "bead, or one far slower than its partner."
@@ -313,6 +318,7 @@ class Response:
     first: datetime
     last: datetime
     n_chi_files: int
+    n_recordings: int  # distinct .p start times: the bootstrap resampled these
     n_windows: int
     W_ref_m_s: float
     speed_scaling: str
@@ -349,7 +355,8 @@ class Response:
         return {
             "method": self.method, "partner": self.partner,
             "first": _iso(self.first), "last": _iso(self.last),
-            "n_chi_files": self.n_chi_files, "n_windows": self.n_windows,
+            "n_chi_files": self.n_chi_files, "n_recordings": self.n_recordings,
+            "n_windows": self.n_windows,
             "W_ref_m_s": self.W_ref_m_s, "speed_scaling": self.speed_scaling,
             "band_Hz": list(self.band_Hz), "identified": self.identified,
             "tau_ms": self.tau_ms,
@@ -1035,7 +1042,8 @@ def _parse_calibration(raw: object, i: int, methods: dict[str, str]) -> Calibrat
     )
 
 
-_RESPONSE_KEYS = ("method", "partner", "first", "last", "n_chi_files", "n_windows", "W_ref_m_s",
+_RESPONSE_KEYS = ("method", "partner", "first", "last", "n_chi_files", "n_recordings", "n_windows",
+                  "W_ref_m_s",
                   "speed_scaling", "band_Hz", "identified", "tau_ms", "tau_ms_16_84", "halves",
                   "power_ratio", "power_ratio_16_84", "software_version")
 _RESPONSE_OPTIONAL = ("flags", "reason", "notes")
@@ -1083,6 +1091,9 @@ def _parse_response(raw: object, w: str, bead: str, first: datetime,
             f"({_iso(first)} .. {_iso(last)})"
         )
     n_files = _int(m["n_chi_files"], f"{w}.n_chi_files", minimum=1)
+    n_rec = _int(m["n_recordings"], f"{w}.n_recordings", minimum=1)
+    if n_rec > n_files:
+        raise RegistryError(f"{w}.n_recordings: {n_rec} recordings in {n_files} chi files")
     n_windows = _int(m["n_windows"], f"{w}.n_windows", minimum=n_files)
     W_ref = _num(m["W_ref_m_s"], f"{w}.W_ref_m_s", positive=True)
     if not 0.02 <= W_ref <= 5.0:
@@ -1161,14 +1172,15 @@ def _parse_response(raw: object, w: str, bead: str, first: datetime,
             raise RegistryError(f"{w}.flags: unknown flag {f!r}; known: {sorted(RESPONSE_FLAGS)}")
     if len(set(flags_raw)) != len(flags_raw):
         raise RegistryError(f"{w}.flags: repeated flag")
-    if "amplitude" in flags_raw and identified:
-        raise RegistryError(f"{w}: flagged amplitude (a failing bead) yet identified; bead "
-                            f"attenuation is not a time constant")
+    for f in ("amplitude", "dead-bead"):
+        if f in flags_raw and identified:
+            raise RegistryError(f"{w}: flagged {f} (a failing bead) yet identified; a failing "
+                                f"bead's response is not a time constant")
     if "drift" in flags_raw and (halves is None or any(h.tau_ms is None for h in halves)):
         raise RegistryError(f"{w}: flagged drift without a tau in both halves")
     notes = m.get("notes")
     return Response(
-        method=method, partner=partner, first=r0, last=r1, n_chi_files=n_files,
+        method=method, partner=partner, first=r0, last=r1, n_chi_files=n_files, n_recordings=n_rec,
         n_windows=n_windows, W_ref_m_s=W_ref, speed_scaling=scaling, band_Hz=band,
         identified=identified, tau_ms=tau, tau_ms_16_84=tau_ci, halves=halves,
         power_ratio=ratio, power_ratio_16_84=ratio_ci,
@@ -1398,8 +1410,8 @@ def _check_responses(cals: list[Calibration]) -> None:
             q = o.response
             if q is None or q.partner != c.bead or (q.first, q.last) != (r.first, r.last):
                 continue
-            same = ("method", "n_chi_files", "n_windows", "W_ref_m_s", "speed_scaling",
-                    "band_Hz", "identified")
+            same = ("method", "n_chi_files", "n_recordings", "n_windows", "W_ref_m_s",
+                    "speed_scaling", "band_Hz", "identified")
             diff = [k for k in same if getattr(q, k) != getattr(r, k)]
             if diff:
                 raise RegistryError(f"{w}: the same measurement on {o.bead} / {o.deployment} "
@@ -1703,7 +1715,7 @@ CSV_COLUMNS = (
     "T_min_degC", "T_max_degC", "flags", "software_version", "notes",
     # The FP07 response (`response:`); tau_1mps_ms is DERIVED (speed_scaling), not stored.
     "response_method", "response_partner", "response_first", "response_last",
-    "response_n_chi_files", "response_n_windows", "response_W_ref_m_s",
+    "response_n_chi_files", "response_n_recordings", "response_n_windows", "response_W_ref_m_s",
     "response_speed_scaling", "response_band_lo_Hz", "response_band_hi_Hz",
     "response_identified", "response_tau_ms", "response_tau_lo_ms", "response_tau_hi_ms",
     "response_tau_1mps_ms",
@@ -1724,7 +1736,8 @@ def _response_row(r: Response | None) -> dict[str, Any]:
     row: dict[str, Any] = {
         "response_method": r.method, "response_partner": r.partner,
         "response_first": _iso(r.first), "response_last": _iso(r.last),
-        "response_n_chi_files": r.n_chi_files, "response_n_windows": r.n_windows,
+        "response_n_chi_files": r.n_chi_files, "response_n_recordings": r.n_recordings,
+        "response_n_windows": r.n_windows,
         "response_W_ref_m_s": r.W_ref_m_s, "response_speed_scaling": r.speed_scaling,
         "response_band_lo_Hz": r.band_Hz[0], "response_band_hi_Hz": r.band_Hz[1],
         "response_identified": r.identified, "response_tau_ms": r.tau_ms,
@@ -2096,7 +2109,7 @@ def _response_section(h: list[Calibration]) -> list[str]:
       "[the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:")
     P("")
     P("| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | "
-      "halves [ms] | power vs partner, 10 / 20 Hz | chi files / windows | flags |")
+      "halves [ms] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |")
     P("|---|---|---|---|---|---|---|---|---|---|")
     for i, c in rows:
         r = c.response
@@ -2113,7 +2126,8 @@ def _response_section(h: list[Calibration]) -> list[str]:
                            for f0 in RESPONSE_RATIO_F)
         flags = ", ".join(f"`{f}`" for f in r.flags) or "—"
         P(f"| {i} | {r.partner} | {r.W_ref_m_s:.3f} | {r.band_Hz[0]:g}-{r.band_Hz[1]:g} | {tau} | "
-          f"{t1} | {halves} | {ratio} | {r.n_chi_files} / {r.n_windows} | {flags} |")
+          f"{t1} | {halves} | {ratio} | {r.n_recordings} / {r.n_chi_files} / {r.n_windows} | "
+          f"{flags} |")
     return out
 
 
@@ -2712,6 +2726,11 @@ def _r(x: float | None, nd: int) -> float | None:
     return None if x is None else round(float(x), nd)
 
 
+def _sig(x: float, n: int = 5) -> float:
+    """*x* to *n* significant figures."""
+    return float(f"{x:.{n}g}")
+
+
 def response_from_record(record: dict, cal: Calibration, *, notes: str = "") -> dict[str, Any]:
     """The ``response:`` block, in the YAML's structure, for *cal*'s bead from a record.
 
@@ -2724,6 +2743,9 @@ def response_from_record(record: dict, cal: Calibration, *, notes: str = "") -> 
     """
     import re as _re
 
+    if not isinstance(record, dict):
+        raise AddError(f"not an `fp07-pair tau` record (a JSON {type(record).__name__}, "
+                       f"not an object)")
     if record.get("format") != RESPONSE_FORMAT:
         raise AddError(f"not an `fp07-pair tau` record (format {record.get('format')!r}, "
                        f"expected {RESPONSE_FORMAT!r})")
@@ -2761,9 +2783,10 @@ def response_from_record(record: dict, cal: Calibration, *, notes: str = "") -> 
         if v is None or ci is None or None in ci:
             return None, None
         lo, hi = sorted((sign * ci[0], sign * ci[1]))
-        # 4 decimals: both beads' ratios must multiply to 1 within 2e-3 (the loader's check)
-        return (_r(math.exp(sign * v), 4),
-                [_r(math.exp(lo), 4), _r(math.exp(hi), 4)])  # type: ignore[list-item]
+        # 5 significant figures: both beads' ratios must multiply to 1 within 2e-3 (the
+        # loader's check) however small the ratio, and an interval stays positive.
+        return (_sig(math.exp(sign * v)),
+                [_sig(math.exp(lo)), _sig(math.exp(hi))])
 
     t, tci = tau(a)
     block: dict[str, Any] = {
@@ -2772,6 +2795,7 @@ def response_from_record(record: dict, cal: Calibration, *, notes: str = "") -> 
         "first": a["first"],
         "last": a["last"],
         "n_chi_files": int(a["n_files"]),
+        "n_recordings": int(a["n_recordings"]),
         "n_windows": int(a["n_windows"]),
         "W_ref_m_s": _r(record["W_ref_m_s"], 3),
         "speed_scaling": str(record["speed_scaling"]),
@@ -2819,7 +2843,7 @@ def response_yaml(block: dict[str, Any], indent: int = 4) -> str:
         out.append(f"{p2}{k}: {_scalar(block[k])}")
     out.append(f"{p2}first: {_scalar(block['first'], quote=True)}")
     out.append(f"{p2}last: {_scalar(block['last'], quote=True)}")
-    for k in ("n_chi_files", "n_windows", "W_ref_m_s", "speed_scaling"):
+    for k in ("n_chi_files", "n_recordings", "n_windows", "W_ref_m_s", "speed_scaling"):
         out.append(f"{p2}{k}: {_scalar(block[k])}")
     out.append(f"{p2}band_Hz: {pair(block['band_Hz'])}")
     out.append(f"{p2}identified: {_scalar(block['identified'])}")

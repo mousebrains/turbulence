@@ -60,19 +60,27 @@ def write_source(path, sn1, sn2, inst=194):
 
 def write_files(d, *, taus, n_files=120, n_win=60, W_med=0.95, kB_med=70.0, snr=300.0,
                 noise_true=(1.0, 1.0), gain2=1.1, poles=1, rng, taus2=None, per_start=10,
-                df=1.0):
+                df=1.0, rec_sd=0.0):
     """Synthetic products; *taus2* (if given) applies to the second half of the files.
 
     *df* is the FFT resolution [Hz]: 1 as on ARCTERX-2022, 2 as on SUNRISE.
+    *rec_sd* makes recordings (the *per_start* files sharing a start time)
+    differ: each draws its own speed offset and its own noise-model error on
+    each probe, lognormal with this sd, shared by its files, so its profiles are
+    not independent draws.
     """
     F = np.arange(0, int(128 / df) + 1) * df  # shadows the module grid on purpose
     src = write_source(Path(d) / "src.nc", "T1592", "T2005")
     paths = []
+    rec: dict = {}
     for i in range(n_files):
         t1, t2 = taus2 if (taus2 is not None and i >= n_files // 2) else taus
+        r = rec.setdefault(i // per_start, np.exp(rng.normal(0, rec_sd, 3)) if rec_sd
+                           else np.ones(3))
+        nt = (noise_true[0] * r[1], noise_true[1] * r[2])  # this recording's noise / model
         S = np.zeros((2, F.size, n_win))
         N = np.zeros_like(S)
-        W = W_med * np.exp(rng.normal(0, 0.05, n_win))
+        W = W_med * r[0] * np.exp(rng.normal(0, 0.05, n_win))
         for j in range(n_win):
             kB = np.exp(rng.normal(np.log(kB_med), 0.6))
             x = np.maximum(F / W[j] / kB, 1e-6)
@@ -80,8 +88,8 @@ def write_files(d, *, taus, n_files=120, n_win=60, W_med=0.95, kB_med=70.0, snr=
             lvl = np.exp(rng.normal(0, 1.2))
             nz = np.full(F.size, np.max(g) / snr) * np.exp(rng.normal(0, 1.0))
             s = (W[j] / W_med) ** -0.5
-            a = lvl * g * h2(F, t1 * s, poles) + noise_true[0] * nz
-            b = gain2 * lvl * g * h2(F, t2 * s, poles) + noise_true[1] * nz
+            a = lvl * g * h2(F, t1 * s, poles) + nt[0] * nz
+            b = gain2 * lvl * g * h2(F, t2 * s, poles) + nt[1] * nz
             S[0, :, j] = a * rng.chisquare(DOF, F.size) / DOF
             S[1, :, j] = b * rng.chisquare(DOF, F.size) / DOF
             N[:, :, j] = nz  # the MODEL, which the true noise may not equal
@@ -121,6 +129,8 @@ CASES = [
     ("13/19.5, noise 0.67x model on T1, S/N 60", dict(taus=(0.013, 0.0195), snr=60.0,
                                                        noise_true=(0.67, 1.0))),
     ("13/19.5, low S/N 20", dict(taus=(0.013, 0.0195), snr=20.0)),
+    ("13/19.5, recordings differ (speed, noise model; sd 0.3)",
+     dict(taus=(0.013, 0.0195), rec_sd=0.3)),
     ("13/19.5, 2 Hz FFT bins (SUNRISE-like)", dict(taus=(0.013, 0.0195), df=2.0, n_win=15)),
     ("13/19.5, 4 files", dict(taus=(0.013, 0.0195), n_files=4, per_start=1)),
     ("13/19.5, 8 files", dict(taus=(0.013, 0.0195), n_files=8, per_start=1)),

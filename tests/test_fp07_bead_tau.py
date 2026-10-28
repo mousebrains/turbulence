@@ -44,8 +44,12 @@ def _source(path, sn1="T1592", sn2="T2005", inst=194):
     return str(path)
 
 
-def _chi(path, source, t0, taus, rng, *, n_win=40, W_med=0.95, gain2=1.1, snr=300.0):
-    """One synthetic chi product: single-pole beads *taus* [s] at W_med, tau ~ W^-1/2."""
+def _chi(path, source, t0, taus, rng, *, n_win=40, W_med=0.95, gain2=1.1, snr=300.0,
+         dead2=False):
+    """One synthetic chi product: single-pole beads *taus* [s] at W_med, tau ~ W^-1/2.
+
+    *dead2*: probe 2's spectrum identically zero (a dead or railed channel).
+    """
     import netCDF4
 
     W = W_med * np.exp(rng.normal(0, 0.05, n_win))
@@ -59,6 +63,8 @@ def _chi(path, source, t0, taus, rng, *, n_win=40, W_med=0.95, gain2=1.1, snr=30
     for k, (tau, gain) in enumerate(((taus[0], 1.0), (taus[1], gain2))):
         h = 1 / (1 + (2 * np.pi * F[:, None] * tau * s[None, :]) ** 2)
         S[k] = (gain * g * h + nz) * rng.chisquare(9.5, (F.size, n_win)) / 9.5
+    if dead2:
+        S[1] = 0.0
     with netCDF4.Dataset(path, "w") as ds:
         ds.createDimension("probe", 2)
         ds.createDimension("freq", F.size)
@@ -110,9 +116,12 @@ def test_split_halves_never_splits_a_shared_start_time():
 
 def test_noise_check_reads_the_quietest_windows():
     rng = np.random.default_rng(1)
-    quiet = rng.uniform(1, 100, (2, 500))  # S/N over 1-10 Hz per window
-    high = np.where(quiet < 12, 1.0, 5.0)  # signal left at 60-100 Hz except in quiet windows
-    high[1] *= np.where(quiet[1] < 12, 1.6, 1.0)  # probe 2's model 1.6x too low
+    quiet = rng.uniform(10, 100, (2, 500))  # S/N over 1-10 Hz per window
+    high = np.where(quiet < 25, 1.0, 5.0)  # signal left at 60-100 Hz except in quiet windows
+    high[1] *= np.where(quiet[1] < 25, 1.6, 1.0)  # probe 2's model 1.6x too low
+    # dead windows (zero spectrum) are not "quiet": they must not drag the check to 0
+    quiet = np.concatenate([quiet, np.zeros((2, 100))], axis=1)
+    high = np.concatenate([high, np.zeros((2, 100))], axis=1)
     obs = B._noise_check(quiet, high)
     assert obs[0] == pytest.approx(1.0) and obs[1] == pytest.approx(1.6)
     assert B._noise_check(quiet[:, :5], high[:, :5]) == [None, None]  # too few windows
@@ -120,7 +129,8 @@ def test_noise_check_reads_the_quietest_windows():
 
 def test_drift_is_a_two_sigma_test_in_ln_tau():
     def fit(t1, ci):
-        return B.TauFit(first=0, last=1, n_files=20, n_windows=100, identified=True, reasons=(),
+        return B.TauFit(first=0, last=1, n_files=20, n_recordings=10, n_windows=100,
+                        identified=True, reasons=(),
                         tau=(t1, 0.02), tau_fit=(t1, 0.02), tau_ci=(ci, (0.019, 0.021)),
                         ln_G_fit=0, ln_G=0, rms=0, fit_band=(1, 25), n_bins=25,
                         ln_ratio={}, ln_ratio_ci={}, n_boot=10, n_boot_ok=10)
@@ -165,11 +175,71 @@ def test_a_failing_bead_is_not_a_time_constant(tmp_path):
     assert any("amplitude-loss" in r for r in pt.all.reasons)
 
 
+def test_a_dead_bead_is_left_out_flagged_and_refused(tmp_path):
+    # SUNRISE 2021 Pelican: T2's spectrum was identically zero through the last
+    # file before that bead was replaced. Those files carry no ratio, and the
+    # pair is no tau measurement.
+    good = _deploy(tmp_path, (0.013, 0.0195), n=30, n_win=50)
+    src = _source(tmp_path / "src_dead.nc")
+    rng = np.random.default_rng(4)
+    dead = [_chi(tmp_path / f"d{i}.nc", src, T0 + 30 * 86400, (0.013, 0.0195), rng, dead2=True)
+            for i in range(3)]
+    (pt,) = B.measure(good + dead, instrument="194", first=T0 - 10, last=T0 + 1e8,
+                      n_boot=20).pairs
+    assert "dead-bead" in pt.flags and pt.dead_files == ([], ["d0.nc", "d1.nc", "d2.nc"])
+    assert pt.all.n_files == 30 and not pt.all.identified and pt.all.tau is None
+    assert any("T2005 (T2_dT2) dead in 3 chi file(s)" in r for r in pt.all.reasons)
+    # the dead files came last: only the second half is refused for them
+    h1, h2 = pt.halves
+    assert any("dead in 3" in r for r in h2.reasons) and not h2.identified
+    assert not any("dead in" in r for r in h1.reasons)
+    assert pt.to_dict()["dead_files"] == [[], ["d0.nc", "d1.nc", "d2.nc"]]
+    assert np.isfinite(pt.all.ln_ratio[20.0])  # the ratio of the files kept is still recorded
+    # the same products without the dead files identify the pair
+    (ok,) = B.measure(good, instrument="194", first=T0 - 10, last=T0 + 1e8, n_boot=20).pairs
+    assert ok.all.identified and "dead-bead" not in ok.flags
+
+
 def test_too_few_files_is_refused(tmp_path):
     res = _measure(_deploy(tmp_path, (0.013, 0.0195), n=6, per_start=1, n_win=80))
     (pt,) = res.pairs
     assert not pt.all.identified
     assert any("chi files <" in r for r in pt.all.reasons)
+
+
+def test_too_few_recordings_is_refused(tmp_path):
+    # 24 profiles cut from 3 .p files are 3 recordings: the bootstrap resamples
+    # recordings, and 3 say little however many profiles they hold
+    (pt,) = _measure(_deploy(tmp_path, (0.013, 0.0195), n=24, per_start=8)).pairs
+    assert pt.all.n_recordings == 3 and not pt.all.identified
+    assert any("3 recordings" in r for r in pt.all.reasons)
+
+
+def test_instrument_serials_are_compared_as_numbers(tmp_path):
+    src = _source(tmp_path / "s0194.nc", inst="0194")
+    rng = np.random.default_rng(2)
+    paths = [_chi(tmp_path / f"z{i}.nc", src, T0 + 3600 * i, (0.013, 0.0195), rng)
+             for i in range(3)]
+    for inst in ("194", "SN194", "sn 0194"):
+        (pt,) = B.measure(paths, instrument=inst, first=T0 - 1, last=T0 + 1e6, n_boot=2).pairs
+        assert pt.instrument == "SN194"
+    assert B.canonical_instrument("MR046") == "SNMR046"  # not a number: compared as text
+    assert B.measure(paths, instrument="MR046", first=T0 - 1, last=T0 + 1e6).pairs == []
+
+
+def test_fit_points_never_bridge_a_hole_in_the_band():
+    grid = P._grid(100.0)
+    curve = np.where((grid >= 1) & (grid <= 12), 0.1, np.nan)
+    curve[np.argmin(abs(grid - 24.0))] = 0.3  # one lone bin far beyond a 12 Hz hole
+    fx = B.fit_points((1.0, 25.0))
+    y = B._curve_at(curve, grid, fx)
+    assert np.isfinite(y[(fx >= 2) & (fx <= 11)]).all()
+    assert np.isnan(y[(fx >= 13) & (fx <= 23)]).all()  # inside the hole: not measured
+    # 2 Hz FFT bins (SUNRISE) are bridged
+    sparse = np.full(grid.size, np.nan)
+    for f0 in np.arange(2.0, 26.0, 2.0):
+        sparse[np.argmin(abs(grid - f0))] = 0.0
+    assert np.isfinite(B._curve_at(sparse, grid, np.arange(3.0, 24.0))).all()
 
 
 def test_span_and_instrument_select_the_files(tmp_path):
@@ -261,7 +331,8 @@ def _resp(**over):
     r = {
         "method": "pair-ratio-sp", "partner": "T200",
         "first": "2024-01-02T00:00:00Z", "last": "2024-01-09T00:00:00Z",
-        "n_chi_files": 40, "n_windows": 2000, "W_ref_m_s": 0.95, "speed_scaling": "lueck",
+        "n_chi_files": 40, "n_recordings": 8, "n_windows": 2000, "W_ref_m_s": 0.95,
+        "speed_scaling": "lueck",
         "band_Hz": [1.0, 25.0], "identified": True, "tau_ms": 13.0, "tau_ms_16_84": [12.0, 14.0],
         "halves": {
             "first": {"first": "2024-01-02T00:00:00Z", "last": "2024-01-05T00:00:00Z",
@@ -337,7 +408,9 @@ def test_a_response_with_its_partner_reads_the_same_from_both_sides():
     ({"power_ratio": {10: 1.1, 20: None}}, reg.RegistryError, "together"),
     ({"flags": ["drifting"]}, reg.RegistryError, "unknown flag"),
     ({"flags": ["amplitude"]}, reg.RegistryError, "failing bead"),
+    ({"flags": ["dead-bead"]}, reg.RegistryError, "failing bead"),
     ({"n_windows": 10}, reg.RegistryError, ">= 40"),
+    ({"n_recordings": 41}, reg.RegistryError, "recordings in 40"),
 ])
 def test_the_response_loader_is_strict(over, err, match):
     with pytest.raises(err, match=match):
@@ -469,7 +542,7 @@ def test_registry_response_refuses_the_wrong_entry(tmp_path):
 
 def test_registry_response_keeps_crlf_and_mode(tmp_path):
     sheet = _sheet_copy(tmp_path)
-    sheet.write_bytes(sheet.read_bytes().replace(b"\n", b"\r\n"))
+    sheet.write_bytes(sheet.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
     if os.name == "posix":
         sheet.chmod(0o640)
     rec, _ = _real_record(tmp_path)
@@ -514,3 +587,8 @@ def test_registry_response_cli_dry_run_and_show(tmp_path, capsys):
     assert "FP07 response vs T2005" in capsys.readouterr().out
     assert fp07cal_main(["registry", "response", str(js), "--bead", "T1592", "--deployment",
                          "No Such Cruise", "-r", str(sheet)]) == 1
+    bad = tmp_path / "list.json"
+    bad.write_text("[1, 2]", encoding="utf-8")
+    assert fp07cal_main(["registry", "response", str(bad), "--bead", "T2005", "--deployment",
+                         "ARCTERX-2022 Interior", "-r", str(sheet)]) == 1
+    assert "not an `fp07-pair tau` record" in capsys.readouterr().err

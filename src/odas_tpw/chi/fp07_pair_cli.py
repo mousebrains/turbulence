@@ -86,6 +86,7 @@ def _tau(args: argparse.Namespace) -> int:
     beads = [b.strip() for b in args.beads.split(",") if b.strip()] if args.beads else None
     res = B.measure(paths, instrument=args.instrument, first=first, last=last, beads=beads,
                     band=band, n_boot=args.n_boot, min_files=args.min_files,
+                    min_recordings=args.min_recordings,
                     rng_seed=args.seed)
     written = []
     for pt in res.pairs:
@@ -156,6 +157,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="fit band in Hz of reduced frequency (default: 1 25)")
     t.add_argument("--n-boot", type=int, default=200, help="file-bootstrap replicates")
     t.add_argument("--min-files", type=int, default=B.MIN_FILES)
+    t.add_argument("--min-recordings", type=int, default=B.MIN_RECORDINGS,
+                   help="distinct start times (.p files) the bootstrap resamples")
     t.add_argument("--seed", type=int, default=0)
     t.set_defaults(func=_tau)
     s = sub.add_parser("show", help="print what a correction contains")
