@@ -2695,6 +2695,116 @@ def _nan_excluded_probes(ds, excluded_probes: list[str], file_label: str) -> Non
             ds[e_name].values[:] = np.nan
 
 
+def _tally_exclusions(totals: dict[str, dict], counts: dict[str, dict]) -> None:
+    """Add one profile's :func:`_apply_probe_exclusions` counts into *totals*."""
+    for label, c in counts.items():
+        tot = totals.setdefault(label, {**c, "n_windows": 0, "n_total": 0})
+        tot["n_windows"] += c["n_windows"]
+        tot["n_total"] += c["n_total"]
+
+
+def _window_epoch_seconds(ds) -> Any:
+    """Per-window time of a diss/chi dataset in epoch seconds, or None.
+
+    ``None`` when ``t`` is absent or carries no absolute reference (plain
+    "seconds", written for a file with no start time): a time bound cannot be
+    tested against it, and guessing an origin would move the window.
+    """
+    import numpy as np
+
+    if "t" not in ds.variables:
+        return None
+    da = ds["t"]
+    if not np.issubdtype(da.dtype, np.datetime64) and " since " not in str(
+        da.attrs.get("units", "")
+    ):
+        return None
+    return _time_epoch_seconds(da)
+
+
+def _apply_probe_exclusions(ds, exclusions: list, product: str, file_label: str) -> dict:
+    """Mask the windows of each ``instruments.<key>.exclude`` entry (issue #190).
+
+    The masking is the one ``exclude_shear_probes`` applies to its probe,
+    restricted to the windows inside the entry's bounds: the probe's own
+    estimates are set NaN there by :func:`_mask_probe_cells` (``epsilon`` and
+    ``e_N`` in the diss product; ``chi``, ``chi_N`` and ``epsilon_T`` in chi),
+    BEFORE ``mk_epsilon_mean`` / ``mk_chi_mean``, so the probe leaves
+    ``epsilonMean`` / ``chiMean`` there and chi Method 1 inherits a shear
+    exclusion through ``epsilonMean``. Per-probe metadata (``fom``, ``FM``,
+    ``K_max``, the spectra) is kept, as by every per-probe cut: it is what
+    showed the fault, and what confirms the exclusion was right.
+
+    Bounds are tested against the window's own ``P_mean`` (mean pressure over
+    the window) and ``t`` (its center time). *product* is ``"diss"`` or
+    ``"chi"``; entries naming the other product's probes are skipped. Every
+    entry for this product is recorded in ``ds.attrs`` as
+    ``probe_exclusion_<entry>_*`` with the windows it masked, zero included.
+
+    The probe is looked up only where the entry's window selects at least one
+    of this product's windows. Probes are removable: an entry for a probe that
+    was taken off the instrument later in the deployment must not fail every
+    profile after it, while a typo still fails each profile the entry reaches.
+
+    Raises ``ValueError`` -- before masking anything -- when an entry selects
+    windows of a product that lacks its probe, or bounds pressure or time the
+    product lacks. Returns ``{entry label: {"instrument", "entry", "product",
+    "n_windows", "n_total"}}`` for the run summary.
+    """
+    import numpy as np
+
+    mine = [e for e in exclusions if e.product == product]
+    if not mine:
+        return {}
+    probe_names = [str(p) for p in ds["probe"].values] if "probe" in ds.coords else []
+    n_time = int(ds.sizes.get("time", 0))
+    P = ds["P_mean"].values if "P_mean" in ds else None
+    bounds_time = any(e.start is not None or e.stop is not None for e in mine)
+    t = _window_epoch_seconds(ds) if bounds_time else None
+    planned = []
+    for e in mine:
+        inside = e.window_mask(n_time, P=P, t=t, product=product)
+        idx = e.probe_index(probe_names, product) if inside.any() else None
+        planned.append((e, idx, inside))
+    counts: dict[str, dict] = {}
+    for e, idx, inside in planned:
+        n = 0
+        if idx is not None:
+            bad = np.zeros((len(probe_names), n_time), dtype=bool)
+            bad[idx] = inside
+            n = _mask_probe_cells(ds, bad)
+        ds.attrs.update(e.provenance_attrs(n))
+        counts[e.label] = {
+            "instrument": e.instrument,
+            "entry": e.entry,
+            "product": product,
+            "n_windows": n,
+            "n_total": n_time,
+        }
+        if n:
+            logger.info(
+                "%s: %s masked %d of %d windows (%s)", file_label, e.label, n, n_time, e.reason
+            )
+    return counts
+
+
+def _record_inherited_exclusions(chi_ds, exclusions: list, diss_counts: dict[str, dict]) -> None:
+    """Record on a chi file the shear entries masked in its profile's diss product.
+
+    A shear entry never touches the chi product's own probes, but it changes
+    the file through ``epsilonMean``: chi Method 1's kB, ``epsilon_paired``,
+    ``K_rho`` and ``Gamma``. So every chi file also carries those entries,
+    under their own numbers, marked as masked in diss and counting that
+    profile's masked diss windows (*diss_counts*, the profile's
+    :func:`_apply_probe_exclusions` return), so no product a mask changed is
+    silent about it.
+    """
+    for e in exclusions:
+        if e.product == "diss":
+            n = diss_counts.get(e.label, {}).get("n_windows", 0)
+            chi_ds.attrs.update(e.provenance_attrs(n, inherited=True))
+
+
 def _profile_practical_salinity(prof_path, T_name: str, C_name: str):
     """Slow-time practical salinity for a profile NetCDF, or None.
 
@@ -3627,6 +3737,18 @@ def process_file(
     inst_lookup = instrument_key if instrument_key is not None else p_path.parent.name
     instrument_cfg = config.get("instruments", {}).get(inst_lookup, {})
     excluded_probes = list(instrument_cfg.get("exclude_shear_probes", []))
+    # Windowed exclusions (issue #190), validated again here because process_file
+    # can be handed a config that never went through load_config.
+    from odas_tpw.perturb.probe_exclusion import parse_exclusions
+
+    exclusions = parse_exclusions(inst_lookup, instrument_cfg.get("exclude"))
+    # Windows each entry masked, summed over this file's profiles, for the run
+    # summary. In the result only when exclusions are configured.
+    exclusion_counts: dict[str, dict] = {}
+    if exclusions:
+        result["probe_exclusions"] = exclusion_counts
+    # Per profile: the shear entries' diss counts, recorded again on its chi file.
+    diss_exclusions: dict[str, dict[str, dict]] = {}
     chi_cfg = merge_config("chi", config.get("chi"))
     chi_enabled = bool(chi_cfg.get("enable", False)) and "chi" in output_dirs
     if chi_enabled:
@@ -3702,6 +3824,14 @@ def process_file(
                     for ds in diss_results:
                         if excluded_probes:
                             _nan_excluded_probes(ds, excluded_probes, p_path.name)
+                        if exclusions:
+                            prof_counts = _apply_probe_exclusions(
+                                ds, exclusions, "diss", Path(prof_path).name
+                            )
+                            _tally_exclusions(exclusion_counts, prof_counts)
+                            _tally_exclusions(
+                                diss_exclusions.setdefault(prof_path, {}), prof_counts
+                            )
                         if eps_fom_max is not None:
                             _apply_fom_cut(ds, float(eps_fom_max), p_path.name)
                         if eps_spectral_qc:
@@ -3866,6 +3996,20 @@ def process_file(
                             _pre_loaded=pre_loaded,
                         )
                         for chi_ds in chi_results:
+                            # Thermistor entries, at the same point as the diss
+                            # side: before the fom cut and mk_chi_mean. Shear
+                            # entries are recorded too: they reach this file
+                            # through epsilonMean.
+                            if exclusions:
+                                _tally_exclusions(
+                                    exclusion_counts,
+                                    _apply_probe_exclusions(
+                                        chi_ds, exclusions, "chi", Path(prof_path).name
+                                    ),
+                                )
+                                _record_inherited_exclusions(
+                                    chi_ds, exclusions, diss_exclusions.get(prof_path, {})
+                                )
                             if chi_fom_max is not None:
                                 _apply_fom_cut(
                                     chi_ds,
@@ -4536,6 +4680,77 @@ def _fp07_notices(outcomes: dict[str, dict]) -> list[str]:
     return lines
 
 
+def _probe_exclusion_notices(
+    instruments: dict | None,
+    instrument_keys: set[str],
+    outcomes: dict[str, dict],
+    *,
+    chi_ran: bool = True,
+) -> list[str]:
+    """Run-summary lines for ``instruments.<key>.exclude`` (issue #190).
+
+    An entry declares data bad, so the summary says what each one removed: the
+    windows it masked in the files processed in THIS run (cached files were
+    reported by the run that made them). Three ways an entry silently does
+    nothing get their own wording: its instrument key matches no input file of
+    the run (the key is the raw directory name, and an unmatched key is
+    otherwise ignored), it masked no window at all (a wrong year, a depth in
+    meters where dbar was meant), or it names a thermistor and chi did not run
+    (*chi_ran* false), so it was never even checked. *outcomes* maps a
+    processed file to its ``result["probe_exclusions"]``; *instrument_keys* are
+    the keys of every input file, processed or skipped.
+    """
+    lines = []
+    for sn, settings in sorted((instruments or {}).items(), key=lambda kv: str(kv[0])):
+        if not isinstance(settings, dict) or not settings.get("exclude"):
+            continue
+        # The lookup process_file makes: a directory name is a string, so an
+        # unquoted numeric key (`465:` loads as an int) never matches either.
+        if sn not in instrument_keys:
+            hint = (
+                f" It loaded as the number {sn}; quote it ('{sn}')."
+                if str(sn) in instrument_keys
+                else ""
+            )
+            lines.append(
+                f"Probe exclusion: instruments.{sn} has {len(settings['exclude'])} exclude "
+                f"entr{'y' if len(settings['exclude']) == 1 else 'ies'}, but no input file "
+                f"of this run has that instrument key (keys: {', '.join(sorted(instrument_keys))})"
+                ", so nothing was excluded for it. The key is the raw directory name of "
+                f"each .p file.{hint}"
+            )
+        elif not chi_ran:
+            # Never evaluated, so not even its probe name was checked.
+            from odas_tpw.perturb.probe_exclusion import parse_exclusions
+
+            for e in parse_exclusions(sn, settings["exclude"]):
+                if e.product == "chi":
+                    lines.append(
+                        f"Probe exclusion: {e.label} was NOT applied: chi did not run, "
+                        "so there was no chi product to mask (and its probe was not checked)."
+                    )
+    totals: dict[str, dict] = {}
+    n_files: dict[str, int] = {}
+    for _name, counts in sorted(outcomes.items()):
+        _tally_exclusions(totals, counts)
+        for label in counts:
+            n_files[label] = n_files.get(label, 0) + 1
+    for label in sorted(totals, key=lambda k: (totals[k]["instrument"], totals[k]["entry"])):
+        c = totals[label]
+        where = f"{c['product']} windows in {n_files[label]} file(s) this run"
+        if c["n_windows"]:
+            lines.append(
+                f"Probe exclusion: {label} masked {c['n_windows']} of {c['n_total']} {where}."
+            )
+        else:
+            lines.append(
+                f"Probe exclusion: {label} masked NO windows ({c['n_total']} {where}). "
+                "If that is unexpected, check its bounds: P_min/P_max are dbar, "
+                "start/stop are UTC."
+            )
+    return lines
+
+
 def _stratification_notices(outcomes: dict[str, dict], sort: str = _DEFAULT_SORT) -> list[str]:
     """Run-summary lines for the background stratification.
 
@@ -4827,6 +5042,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
 
     fp07_outcomes: dict[str, dict] = {}
     strat_outcomes: dict[str, dict] = {}
+    exclusion_outcomes: dict[str, dict] = {}
     if jobs == 1:
         for p_path, cachekey in to_process:
             logger.info("Processing %s...", p_path.name)
@@ -4847,6 +5063,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                 fp07_outcomes[p_path.name] = result["fp07"]
             if isinstance(result, dict) and result.get("stratification"):
                 strat_outcomes[p_path.name] = result["stratification"]
+            if isinstance(result, dict) and "probe_exclusions" in result:
+                exclusion_outcomes[p_path.name] = result["probe_exclusions"]
     else:
         # Spawn workers each get a per-pid log file inside <output_root>/logs/
         # so multi-process runs are diagnosable.  ``run_stamp`` is the parent
@@ -4883,6 +5101,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                         fp07_outcomes[p.name] = result["fp07"]
                     if isinstance(result, dict) and result.get("stratification"):
                         strat_outcomes[p.name] = result["stratification"]
+                    if isinstance(result, dict) and "probe_exclusions" in result:
+                        exclusion_outcomes[p.name] = result["probe_exclusions"]
                 except Exception as exc:
                     # The worker died rather than returning a result, so its own
                     # `errors` list never made it back; record the future's
@@ -4896,6 +5116,14 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
     if (run_strat.get("dTdz_source") or "ct") == "fp07":
         run_sort = _fp07_sort(run_sort)
     outcome.notices += _stratification_notices(strat_outcomes, run_sort)
+    outcome.notices += _probe_exclusion_notices(
+        config.get("instruments"),
+        {_instrument_key(p) for p in p_files},
+        exclusion_outcomes,
+        # The condition process_file runs chi on.
+        chi_ran=bool(merge_config("chi", config.get("chi")).get("enable", False))
+        and "chi" in output_dirs,
+    )
     # Whole and at WARNING: the summary clips each line (a file list is longer
     # than that) and is logged at INFO on a run with no errors, which
     # `--log-level warning` would hide.

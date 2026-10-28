@@ -52,9 +52,9 @@ Each `.p` file is processed through several sub-stages:
 
 9. **Profile extraction** — Writes the per-profile NetCDF files (with the aligned/calibrated channels and the stratification fields).
 
-10. **Dissipation (epsilon)** — Computes TKE dissipation rate per profile via `rsi.dissipation._compute_epsilon`, which drives the scor160 epsilon estimator (`scor160.l4._estimate_epsilon`). Combines multi-probe estimates via `mk_epsilon_mean` (geometric mean with 95% CI filtering).
+10. **Dissipation (epsilon)** — Computes TKE dissipation rate per profile via `rsi.dissipation._compute_epsilon`, which drives the scor160 epsilon estimator (`scor160.l4._estimate_epsilon`). Combines multi-probe estimates via `mk_epsilon_mean` (geometric mean with 95% CI filtering). Probes named by `instruments.<key>.exclude_shear_probes`, and shear entries of `instruments.<key>.exclude` inside their pressure/time windows, are masked first.
 
-11. **Chi** (optional) — Computes thermal variance dissipation rate per profile via `rsi.chi_io._compute_chi`. By default (`chi.use_epsilon: true`) the combined epsilon seeds the calculation (Method 1); set `chi.use_epsilon: false` for Method 2 spectral fitting.
+11. **Chi** (optional) — Computes thermal variance dissipation rate per profile via `rsi.chi_io._compute_chi`. By default (`chi.use_epsilon: true`) the combined epsilon seeds the calculation (Method 1); set `chi.use_epsilon: false` for Method 2 spectral fitting. Thermistor entries of `instruments.<key>.exclude` are masked before `mk_chi_mean`.
 
 ### Stage 4: Bin
 

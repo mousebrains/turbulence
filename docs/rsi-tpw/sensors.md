@@ -95,8 +95,8 @@ its three siblings in the same cruise carried 0.92–0.99. Had it been a slip fo
 ```
 
 It was not a slip. Measurement (issue #178) put SN 132's differentiator on the
-1024 Hz rung after a 2021 tidal re-conversion, so 0.09 is right to within the
-0.09-versus-~0.12 question still open there. An outlier is a question for a
+1024 Hz rung after a 2021 tidal re-conversion, and Rockland has since confirmed
+0.09: the tidal build's 1/10 gain was never changed back. An outlier is a question for a
 measurement to answer, not a verdict.
 
 ### Changes over time are reported, not flagged

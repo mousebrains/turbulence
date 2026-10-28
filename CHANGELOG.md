@@ -39,6 +39,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `chi.l4_chi._process_l4_chi` must now return 8 values. Code that unpacks
   either result positionally now raises `ValueError: too many values to
   unpack`; bind by attribute (`res.chi`, `res.fom`, ...) instead.
+- **`instruments.<key>.exclude`: one probe masked over a pressure and/or time
+  window** (issue #190). A shear probe with a pressure-related fault is bad
+  inside a depth window and fine above and below it; `exclude_shear_probes`
+  could only drop it for the whole deployment, and could not name a
+  thermistor at all. On CASPER-West 2017 SN 194, sh2 read 15-18x high in a
+  20 m window (from 10-16) while 65-130 m stayed at 1.01-1.02, biasing
+  `epsilonMean` up to 4.25x, and no QC dropped any of it. Each entry is
+  `{probe, P_min, P_max, start, stop, reason}`: `P_min <= P_mean < P_max`
+  [dbar] and `start <= t < stop` [ISO-8601, UTC], tested against each window's
+  own stored `P_mean` and center time, with an omitted bound unbounded and
+  `reason` required. The masking is exactly `exclude_shear_probes`'s,
+  restricted to the window: the probe's own estimates are set NaN before
+  `mk_epsilon_mean` / `mk_chi_mean` (`epsilon`/`e_N` for `sh<N>`;
+  `chi`/`chi_N`/`epsilon_T` for `T<N>`), so a shear entry reaches
+  `epsilonMean`, chi Method 1, `epsilon_paired`, `K_rho` and `Gamma`, a
+  thermistor entry `chiMean`, `chiLnSigma`, `K_T` and `Gamma` (never
+  epsilon), and per-probe metadata is kept. A malformed entry fails at config
+  load naming the instrument and entry; a probe the data does not carry fails
+  each profile where the entry's window selects a window, naming it (an
+  entry for a probe removed later in the deployment does not fail the
+  profiles after it). Every per-profile file an entry changed records it
+  (`probe_exclusion_<n>_*`, with the windows masked; a chi file also records
+  the shear entries it inherits through `epsilonMean`), and the run summary
+  reports what each entry masked, including none, an instrument key carrying
+  `exclude` that matches no input file, and a thermistor entry not applied
+  because chi did not run. A shear entry versions diss and chi, a thermistor
+  entry chi only. Products of a config without `exclude` are unchanged.
+  `exclude_shear_probes` is unchanged. See `docs/perturb/configuration.md`.
 - **`PFile` refuses or repairs a mis-framed `.p` file instead of
   mis-assembling it.** Every reader, ODAS included, cuts a v6 file at a fixed
   record size, so one record of the wrong length puts every later header in
@@ -66,6 +94,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   "Record framing".
 
 ### Fixed
+- **One Goodman vibration stack for every entry point (#168).** The adapter
+  (`rsi-tpw pipeline`) chose the channels Goodman cleans shear against by
+  sensor type, while `load_channels` (`rsi-tpw eps`/`chi`, perturb) and the
+  quick-look viewers chose them by name (`^A[xyz]$`), and `nc_to_l1data` took
+  a `p_to_L1` file's ACC alone. A piezo named anything else was therefore in
+  one stack and not another. Rockland's own Zissou tutorial file `VMP_024.p`
+  names its piezos `apx`/`apy`. On it, `rsi-tpw eps` and perturb's epsilon
+  stage refused every profile ("No accelerometer channels found (required for
+  Goodman)"), while chi and the viewers ran with no Goodman cleaning at all.
+  Every route now uses `apx`/`apy`, so chi on such files changes (+8% median
+  on that file's first profile). Next to a channel named Ax, such a piezo was dropped
+  without a word. `select_vibration_channels` is now the one rule:
+  every fast piezo whatever its name, plus the non-piezo channels named
+  `^A[xyz]$`. **`load_channels(accel_pattern=...)` now names accelerometers
+  only and can no longer exclude a piezo.** A piezo on a slow column is left
+  out with a warning and a logged WARNING; the adapter used to crash on one
+  in `np.stack`. No change on any instrument we fly (all piezo-only, named
+  Ax/Ay): bit-identical on four VMP SN479 files through every route.
 - **The v6.1 bad-buffer sentinel scan read the header version from record 0**,
   which ODAS `patch_setupstr` rewrites as v6.0 while leaving the data records
   as they were. It skipped the scan on such files (e.g. the ARCTERX-2023
@@ -337,18 +383,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   giving the reason for every channel it did not fit. Its `n_profiles*` counts
   are now of scored segments (one per gap-free profile, so unchanged on a
   VMP).
-- **SN 132's `diff_gain = 0.09` is on the right rung (issue #178, still open
-  on the fine value).** This supersedes two 0.4.0 notes below: that "the
+- **SN 132's `diff_gain = 0.09` is correct (issue #178, confirmed by
+  Rockland).** This supersedes two 0.4.0 notes below: that "the
   ladder points the other way", and the `--diff-gain` entry's "real miss ...
   inflating its epsilon by roughly 110x". A 512 Hz sampling rate did not imply
   a ~0.95 gain: Rockland converted SN 132 to a 1024 Hz tidal build in 2021, and
-  its analog chain evidently stayed on that rung when it went back to 512 Hz.
+  its analog chain stayed on that rung when it went back to 512 Hz.
   Open-circuit bench noise fits 0.10–0.13 (the same fit reads SN 409's 0.949
   within 2% and SN 465's 0.988 3–14% high), and epsilon computed with 0.09
   matches SN 465's, cast near-simultaneously from a second boat in German
   Channel, at ~0.9–1.2× (95% CIs within ~0.7–1.7×), not the 109× a 0.94 gain
-  would give. Whether the value is 0.09 or nearer the bench fit's ~0.12 is
-  still open, so SN 132 epsilon carries a ~1.8× scale uncertainty.
+  would give. Rockland has since confirmed 0.09: the tidal build's 1/10 gain
+  was never changed back, so SN 132 epsilon needs no gain correction and
+  carries no extra gain uncertainty.
   `docs/deployment_procedures.md` no longer says a bench run cannot check
   `diff_gain` — the open-circuit noise spectrum estimates it against
   `noise_shearchannel` — and a test probe is documented as reading the config's
