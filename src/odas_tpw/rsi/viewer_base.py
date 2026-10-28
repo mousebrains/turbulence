@@ -15,10 +15,10 @@ from matplotlib.widgets import Button
 
 from odas_tpw.rsi.channels import config_number
 from odas_tpw.rsi.helpers import (
-    AC_PATTERN,
     DT_PATTERN,
     SH_PATTERN,
     T_PATTERN,
+    pfile_vibration_channels,
     resolve_temperature_channel,
 )
 from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
@@ -429,10 +429,11 @@ class ProfileViewer:
             [(n, pf.channels[n]) for n in pf._fast_channels if SH_PATTERN.match(n)],
             key=lambda x: x[0],
         )
-        self.accel = sorted(
-            [(n, pf.channels[n]) for n in pf._fast_channels if AC_PATTERN.match(n)],
-            key=lambda x: x[0],
-        )
+        # The Goodman vibration stack, by the rule the epsilon paths share
+        # (#168). stacklevel 4: a warning lands on whoever built the viewer
+        # (through a subclass __init__).
+        vib_names, _ = pfile_vibration_channels(pf, stacklevel=4)
+        self.accel = [(n, pf.channels[n]) for n in vib_names]
         self.therm_slow = sorted(
             [(n, pf.channels[n]) for n in pf._slow_channels if T_PATTERN.match(n)],
             key=lambda x: x[0],

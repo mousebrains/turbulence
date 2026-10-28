@@ -62,6 +62,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   "Record framing".
 
 ### Fixed
+- **One Goodman vibration stack for every entry point (#168).** The adapter
+  (`rsi-tpw pipeline`) chose the channels Goodman cleans shear against by
+  sensor type, while `load_channels` (`rsi-tpw eps`/`chi`, perturb) and the
+  quick-look viewers chose them by name (`^A[xyz]$`), and `nc_to_l1data` took
+  a `p_to_L1` file's ACC alone. A piezo named anything else was therefore in
+  one stack and not another. Rockland's own Zissou tutorial file `VMP_024.p`
+  names its piezos `apx`/`apy`. On it, `rsi-tpw eps` and perturb's epsilon
+  stage refused every profile ("No accelerometer channels found (required for
+  Goodman)"), while chi and the viewers ran with no Goodman cleaning at all.
+  Every route now uses `apx`/`apy`, so chi on such files changes (+8% median
+  on that file's first profile). Next to a channel named Ax, such a piezo was dropped
+  without a word. `select_vibration_channels` is now the one rule:
+  every fast piezo whatever its name, plus the non-piezo channels named
+  `^A[xyz]$`. **`load_channels(accel_pattern=...)` now names accelerometers
+  only and can no longer exclude a piezo.** A piezo on a slow column is left
+  out with a warning and a logged WARNING; the adapter used to crash on one
+  in `np.stack`. No change on any instrument we fly (all piezo-only, named
+  Ax/Ay): bit-identical on four VMP SN479 files through every route.
 - **The v6.1 bad-buffer sentinel scan read the header version from record 0**,
   which ODAS `patch_setupstr` rewrites as v6.0 while leaving the data records
   as they were. It skipped the scan on such files (e.g. the ARCTERX-2023
