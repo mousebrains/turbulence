@@ -744,6 +744,12 @@ class PFile:
         Fast sampling rate [Hz] (typically ~512 Hz).
     fs_slow : float
         Slow sampling rate [Hz] (typically ~64 Hz).
+    samples_per_record : int
+        Fast-channel samples per data record, from the header's record
+        geometry (512 on a VMP). Fast sample ``i`` lies in data record
+        ``i // samples_per_record``, also after a framing repair, which
+        rebuilds one whole slot per record. Not ``recsize * fs_fast``:
+        ``fs_fast`` is not an integer (511.9454 Hz on a VMP-250).
     start_time : datetime
         Recording start time (UTC).
     header : dict
@@ -1047,6 +1053,9 @@ class PFile:
         scans_per_record = data_words // self.n_cols
         total_scans = n_records * scans_per_record
         raw_flat = records["data"].reshape(total_scans, self.n_cols)
+        # A fast channel takes one sample per scan, so this is also its
+        # samples per record (whole matrices per record, checked above).
+        self.samples_per_record = int(scans_per_record)
 
         self.channels_raw = {}
         self.channels = {}

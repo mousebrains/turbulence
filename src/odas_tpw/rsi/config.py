@@ -45,6 +45,9 @@ DEFAULTS: dict[str, dict] = {
         # dropped from the canonical view, so every existing epsilon hash is
         # unchanged; any other value re-versions the output.
         "despike_half_width": 0.04,
+        # Subtract shear interference locked to the .p data record
+        # (rsi.record_locked). Dropped from the canonical view while false.
+        "record_locked_shear": False,
         "salinity": None,
         "temperature": "auto",
         "conductivity": "auto",
@@ -79,22 +82,23 @@ class _RsiConfigManager(ConfigManager):
     def _section_view_postprocess(self, section: str, mapping: dict) -> dict:
         if section == "chi" and mapping.get("fp07_response") is None:
             return {k: v for k, v in mapping.items() if k != "fp07_response"}
-        if section == "epsilon" and mapping.get("despike_half_width") == 0.04:
-            return {k: v for k, v in mapping.items() if k != "despike_half_width"}
+        if section == "epsilon":
+            # At the values that reproduce the code from before each key
+            # existed, the key is left out, so those hashes are unchanged.
+            inert = {"despike_half_width": 0.04, "record_locked_shear": False}
+            return {k: v for k, v in mapping.items() if k not in inert or v != inert[k]}
         return mapping
 
     def validate_config(self, config: dict) -> None:
-        """Unknown sections/keys, plus the despike half-width's range.
+        """Unknown sections/keys, plus the epsilon despike/record-locked values.
 
         Checked at load time so a bad value fails once, before the output
         directory is created, rather than once per file inside the workers.
         """
         super().validate_config(config)
-        eps = config.get("epsilon") or {}
-        if eps.get("despike_half_width") is not None:
-            from odas_tpw.rsi.dissipation import validate_despike_half_width
+        from odas_tpw.rsi.dissipation import validate_epsilon_options
 
-            validate_despike_half_width(eps["despike_half_width"])
+        validate_epsilon_options(config.get("epsilon") or {})
 
 
 _mgr = _RsiConfigManager(DEFAULTS)
@@ -151,6 +155,12 @@ epsilon:
   despike_half_width: 0.04  # despike removal half-width [s]: blanks half of it
                         # before each spike and all of it after (0.04 = ~60 ms
                         # per spike, 0.01 = ~14 ms); in (0, 0.5]
+  record_locked_shear: false  # subtract shear interference that sits at fixed
+                        # positions in every .p data record (an electrical
+                        # pulse the despiker misses below its threshold);
+                        # corrects only samples where the per-profile record
+                        # mean is significant. Needs a .p file or a profile
+                        # NetCDF from rsi-tpw prof
   salinity: null        # PSU value, or "measured" (JAC/selected C+T) (null = 35, fixed S)
   temperature: auto     # reference temperature for viscosity: auto = first
                         # plausible of T1..Tn, T, JAC_T; a channel name (QC

@@ -13,11 +13,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   after (`N = round(hw * fs)`), so 0.04 s replaces ~60 ms per spike and 0.01 s
   ~14 ms. A VMP-5500 from an outside user carries a ~16 ms electrical pulse on
   both shear channels; injected at 20x the record rms into clean VMP shear,
-  it biased epsilon by -0.05 dex at 0.04 s, -0.01 at 0.02 s and +0.02 at
-  0.01 s (median over windows). A pulse below `despike_thresh` is never
+  it biased epsilon by -0.05 dex at 0.04 s, -0.01 to -0.02 at 0.02 s and
+  +0.02 to +0.05 at 0.01 s (median over windows; two pulse shapes and host
+  files). A pulse below `despike_thresh` is never
   detected, at any half-width. Validated at load to (0, 0.5] s; at 0.04 the
   key is left out of the stage signatures, so existing outputs keep their
   hashes. No CLI flag, like the other despike keys.
+- **`epsilon.record_locked_shear` (rsi-tpw and perturb; off by default)**:
+  removes shear interference locked to the `.p` data record. That VMP-5500
+  carries two ~16 ms pulses at fixed samples (6 and 81-82 of 512) of every
+  record on both shear channels, each with an undershoot and a slow recovery;
+  its accelerometers carry it only weakly, so Goodman cannot remove it, and
+  the despiker caught it in every record in only 21 of 88 cast-channels
+  (replacing < 1% of the shear in 36). Per profile and channel, the mean of
+  the high-passed shear over quiet complete records (rms <= 3x the median)
+  decides where -- samples >= 5 standard errors from its median, grown
+  through >= 2, dilated 2 -- and each record's leave-one-out mean over the 16
+  records on either side decides what is subtracted there, repeated (up to 3
+  passes) while anything stays significant. That mean is taken with the
+  high-pass at 1/10 of the L2 cut, because it is subtracted before L2's own
+  high-pass (at the L2 cut it left H(1 - H) of the pulse at its low
+  harmonics: at 1 Hz, perturb `fft_sec: 0.5`, the median bias of a 20x
+  synthetic pulse was +0.031 dex, now +0.014). The local mean is needed
+  because the interference is not stationary: on those casts it drifts
+  several-fold within a cast, and one whole-profile mean left 1.5-75 standard
+  errors of it in an eighth of a cast (median over eighths), the local mean
+  2-6 fitted out of sample. Every other sample is left bit-identical, and
+  nothing is corrected on clean shear (no sample of 924 VMP-250
+  profile-channels reached 5 standard errors). A sample's place in its record
+  is its index modulo the new `PFile.samples_per_record`, never time
+  (`fs_fast` was 512.03 Hz). In synthetic pulses injected into clean VMP-250
+  shear at 2/5/20x the record rms, drifting 6x with 5% jitter, the median
+  epsilon bias went from +0.05/+0.10/-0.06 dex to +0.002/+0.003/+0.012 (90th
+  percentile of |bias| 0.01/0.02/0.11). On the 44 real casts: detected in all
+  88 cast-channels; the record-locked SNR at the corrected samples fell from a
+  median 67 to 1.1 (no sample above 5.0 left); the despiked fraction from 2.3%
+  to 0.19%; epsilon moved -0.05 dex (median of cast-channel medians; range
+  -0.51 to +0.09: down where the pulse sat below the despike threshold, up
+  where the despiker had been cutting it out); the sh1/sh2 disagreement fell
+  in 27 of 44 casts (median |log10 ratio| 0.20 to 0.18). What a mean cannot
+  remove is measured, not hidden: `record_locked_<channel>_phase_power_ratio`
+  (and `_loud`, over the turbulent records the detection never sees) is the
+  power left at the corrected samples over that at the others, ~1 when
+  nothing is left; it exceeded 1.2 in 9 of 88 cast-channels (27 over loud
+  records, up to 4.8), mostly where the pulse was strong, and those windows
+  stay biased high. A slow tail below significance at every sample is left
+  too, and still shows at the ~1 Hz fundamental. Per-profile NetCDFs, and
+  `rsi-tpw nc` files, now always carry `samples_per_record_fast` and
+  `record_offset_fast` (global attrs, data unchanged), so perturb's diss stage
+  and `rsi-tpw eps` on a profile NetCDF can use it; a source without them is
+  refused when it is on. The diss products also carry
+  `record_locked_<channel>_records/_samples/_peak/_snr/_peak_range`. The
+  estimate is per profile, so the corrected samples follow the profile bounds
+  (rsi-tpw and perturb's top-trimmed profiles differ). True re-versions diss,
+  chi and their binned/combo stages, not profiles. `rsi-tpw pipeline` refuses
+  it, and a `despike_half_width` other than 0.04, rather than ignore them. See
+  `odas_tpw.rsi.record_locked`.
 - **`perturb-diag`: temperature, delta-T, conductivity and fall-rate panels,
   and a raw row for casts with no product file** (issue #210). The raw
   diagnostics row (`--diag`, the default) now leads with T1/T2 against the CT

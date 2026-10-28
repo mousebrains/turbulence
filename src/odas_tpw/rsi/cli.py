@@ -682,6 +682,15 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         sys.exit(2)
+    # The pipeline despikes on its own path too, with the half-width fixed at
+    # 0.04 s and no record-locked removal: refuse rather than ignore them.
+    if eps_merged.get("record_locked_shear") or eps_merged.get("despike_half_width", 0.04) != 0.04:
+        print(
+            "Error: rsi-tpw pipeline does not apply [epsilon] record_locked_shear or "
+            "a despike_half_width other than 0.04. Use `rsi-tpw eps` or perturb.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     # --salinity measured maps to None: run_pipeline already auto-prefers
     # measured JAC C/T salinity (rsi/pipeline._resolve_salinity); the string

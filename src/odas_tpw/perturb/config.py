@@ -217,6 +217,12 @@ DEFAULTS: dict[str, dict] = {
         # DESPIKE_HALF_WIDTH). At the 0.04 default it is dropped from the
         # canonical view, so existing signatures are unchanged.
         "despike_half_width": 0.04,
+        # Subtract shear interference locked to the .p data record
+        # (rsi.record_locked), per profile, in the diss stage. Dropped from the
+        # canonical view while false; true re-versions diss and, through
+        # Method 1's epsilon, chi -- but not profiles, whose data it leaves
+        # alone.
+        "record_locked_shear": False,
         "salinity": None,
         "epsilon_minimum": 1e-13,
         "T_source": None,  # reference temperature for seawater
@@ -616,9 +622,12 @@ class _PerturbConfigManager(ConfigManager):
                 for k in ("bbl_diss_length", "bbl_overlap", "bbl_extent"):
                     if mapping.get(k) is None:
                         mapping.pop(k, None)
-        if section == "epsilon" and mapping.get("despike_half_width") == 0.04:
-            # The value the code hard-wired before the key existed.
-            mapping.pop("despike_half_width")
+        if section == "epsilon":
+            # At the values that reproduce the code from before each key
+            # existed (0.04 was hard-wired), the key is left out.
+            for key, inert in (("despike_half_width", 0.04), ("record_locked_shear", False)):
+                if key in mapping and mapping[key] == inert:
+                    del mapping[key]
         return mapping
 
     def validate_config(self, config: dict) -> None:
@@ -697,11 +706,9 @@ class _PerturbConfigManager(ConfigManager):
                     UserWarning,
                     stacklevel=2,
                 )
-        eps = config.get("epsilon") or {}
-        if eps.get("despike_half_width") is not None:
-            from odas_tpw.rsi.dissipation import validate_despike_half_width
+        from odas_tpw.rsi.dissipation import validate_epsilon_options
 
-            validate_despike_half_width(eps["despike_half_width"])
+        validate_epsilon_options(config.get("epsilon") or {})
         # stratification.sort / dTdz_source pick a code path by membership, so a
         # typo would otherwise fall through to a default silently.
         strat = config.get("stratification") or {}
@@ -1470,6 +1477,15 @@ epsilon:
                           # spike and all of it after, so 0.04 replaces ~60 ms
                           # per spike and 0.01 ~14 ms. Narrow it for a narrow
                           # electrical pulse; a probe strike needs the default.
+  record_locked_shear: false  # subtract shear interference at fixed positions
+                          # in every .p data record (electrical pickup the
+                          # despiker misses below despike_thresh). Per profile,
+                          # at the samples where the quiet-record mean of the
+                          # high-passed shear is >= 5 standard errors, each
+                          # record's local (+-16 record) mean is subtracted;
+                          # nothing on clean shear. Re-versions diss and chi,
+                          # not profiles.
+                          # See the record_locked_* attrs on the diss files.
   salinity: null          # viscosity salinity: null = fixed 35; a number =
                           # that fixed PSU; "measured" = per-profile from
                           # C/T/P (TEOS-10, needs conductivity); "hotel" (or

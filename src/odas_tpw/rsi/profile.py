@@ -250,6 +250,15 @@ def extract_profiles(
         ds.profile_P_end = float(P_slow[e_slow])
         ds.profile_duration_s = float((e_slow - s_slow) / fs_slow)
         ds.profile_mean_speed = float(np.mean(np.abs(W[s_slow:s_slow_end])))
+        # Where this profile's first fast sample sits in its .p data record:
+        # what record-locked shear removal needs, and what a profile cut out
+        # of the file otherwise loses (time is no substitute: fs_fast is not
+        # samples_per_record over the nominal record duration).
+        framing = data.get("record_framing")
+        if framing is not None:
+            offset0, spr = framing
+            ds.samples_per_record_fast = int(spr)
+            ds.record_offset_fast = int((offset0 + s_fast) % spr)
         # Which code wrote this profile, after the source's own history.
         for key, val in provenance_attrs(
             f"profile {pi} extracted", getattr(ds, "history", None)
@@ -534,12 +543,14 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         if m.size == len(arr):
             bad_masks[name] = m
 
+    spr = getattr(pf, "samples_per_record", None)
     return {
         "P": pf.channels["P"],
         "fs_fast": pf.fs_fast,
         "fs_slow": pf.fs_slow,
         "t_fast": pf.t_fast,
         "t_slow": pf.t_slow,
+        "record_framing": (0, int(spr)) if isinstance(spr, (int, np.integer)) else None,
         "bad_masks": bad_masks,
         "t_fast_units": f"seconds since {pf.start_time.isoformat()}",
         "t_slow_units": f"seconds since {pf.start_time.isoformat()}",
@@ -769,6 +780,15 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
 
     vehicle = vehicle_from_nc_attrs(global_attrs)
 
+    # A source written by extract_profiles carries its record framing. Taken
+    # out of the attrs copied to each profile, which gets its own offset.
+    record_framing = None
+    if "samples_per_record_fast" in global_attrs and "record_offset_fast" in global_attrs:
+        record_framing = (
+            int(global_attrs.pop("record_offset_fast")),
+            int(global_attrs.pop("samples_per_record_fast")),
+        )
+
     return {
         "P": P.astype(np.float64),
         "fs_fast": fs_fast,
@@ -777,6 +797,7 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
         "t_slow": t_slow,
         "t_fast_units": t_fast_units,
         "t_slow_units": t_slow_units,
+        "record_framing": record_framing,
         "channels": channels,
         "global_attrs": global_attrs,
         "stem": stem,
