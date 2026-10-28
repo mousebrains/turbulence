@@ -175,6 +175,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   "Record framing".
 
 ### Fixed
+- **`fp07-cal fit` reported gradient changes as bead drift in its streaming
+  pass.** The per-profile statistics that give a deployment's drift compared
+  each profile with the raw CTD temperature, although the calibration was
+  fitted with the sensor-geometry term (`dz·dT/dz + τ·w·dT/dz`) removed, so a
+  change in stratification over the deployment read as drift. This is the
+  issue #180 F08 defect, which had been fixed only in `blocked_offsets`. On
+  osu685 (ARCTERX-2025) it had made a bead with no measurable drift read
+  +0.049 mK/day (+3.1 mK over 66 days, *p* = 0.02); fixed, it reads +0.022 ±
+  0.015 mK/day (*p* = 0.18), and the other bead +0.075 rather than +0.103
+  mK/day. `docs/fp07cal/osu685_stability.md` is corrected. Fitted
+  coefficients are unchanged.
 - **`rsi-tpw prof` on an `rsi-tpw nc` (ATOMIX L1) file now gives usable
   profiles (#235).** It copied only the L1 file's 1-D variables, under their
   ATOMIX names, so every profile lacked the shear, vibration and FP07

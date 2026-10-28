@@ -75,31 +75,43 @@ injected shift exactly:
 The two probes agree on the response to 0.04 s — a genuine cross-check, since
 they are independent sensors sharing one reference.
 
-## Temporal stability — small, real, and independently confirmed
+## Temporal stability — T2 drifts a little, T1 does not
+
+> **Corrected 2026-10-28.** The first version of this table reported T1 drifting
+> +0.049 mK/day (+3.1 mK over 66 days) and T2 +0.103 mK/day. Those came from
+> `fp07-cal fit`'s streaming pass, which compared each profile with the raw CTD
+> although the calibration had been fitted with the geometry term (`dz·dT/dz +
+> τ·w·dT/dz`, about 0.7 m here) removed. The changing stratification over the
+> deployment then read as drift — the issue #180 F08 defect, which had been
+> fixed only in `blocked_offsets`. With the streaming pass fixed, T1's drift is
+> not distinguishable from zero. Rerun on the same files and config.
 
 | | T1 | T2 |
 |---|---|---|
-| drift | +0.049 mK/day | +0.103 mK/day |
-| over 66 days | **+3.1 mK** | **+6.5 mK** |
-| permutation *p* (24 blocks) | 0.021 | 0.001 |
-| Theil–Sen (robust) | +0.041 mK/day | +0.106 mK/day |
-| dropping first+last block | +0.042 mK/day | +0.096 mK/day |
+| drift (24 blocks) | +0.022 ± 0.015 mK/day | +0.075 ± 0.020 mK/day |
+| over 66 days | **+1.4 mK** (not significant) | **+4.9 mK** |
+| permutation *p* (6 / 12 / 24 blocks) | 0.33 / 0.43 / 0.18 | 0.14 / 0.024 / 0.004 |
+| Theil–Sen (robust, 24 blocks) | +0.016 mK/day | +0.075 mK/day |
+| dropping first+last block | +0.005 mK/day | +0.055 mK/day |
 
-Robust to the estimator and to endpoint removal. T1 is borderline (*p* = 0.13 /
-0.067 / 0.021 at 6 / 12 / 24 blocks); T2 is solid.
+T1 shows no drift at any block count. T2's is robust to the estimator and to
+endpoint removal, though the coarse 6-block split cannot resolve it.
 
 **The independent check works.** `T1 − T2` needs no CTD at all, so it is
-available on every profile:
+available on every profile, and no geometry term enters it:
 
 ```
-predicted from the two per-probe drifts:  -0.054 mK/day
-observed T1 - T2 (reference-free):        -0.046 mK/day     85% agreement
+predicted from the two per-probe drifts:  -0.053 mK/day
+observed T1 - T2 (reference-free):        -0.046 mK/day     87% agreement
 ```
 
-Two probes drifting at measurably different rates, and their *difference*
-predicted from CTD-referenced fits matches the CTD-free differential. That is
-the corroboration the plan's D5.4 was designed to provide, and it says the
-drift is **probe-specific and real**, not an artifact of the reference.
+The two probes drift at different rates, and their *difference* predicted from
+CTD-referenced fits matches the CTD-free differential. That is the
+corroboration the plan's D5.4 was designed to provide: the differential drift
+is **probe-specific and real**, not an artifact of the reference. (The
+correction above barely moved the predicted difference, from −0.054 to −0.053
+mK/day: both beads sit about 0.7 m from the CTD, so the artifact was nearly
+common to both. A drift common to both beads cannot be tested this way.)
 
 ## Depth stability — flat below the thermocline
 
@@ -143,8 +155,8 @@ mounting, so the difference is their own response times leaking into `dz`.
 ## Bottom line
 
 **A single static coefficient set is good to ~5 mK over this deployment in both
-time and depth** — drift is 3–7 mK over 66 days, and depth structure below the
-thermocline is under 0.5 mK. Both are far inside what turbulence work needs, and
+time and depth** — T1 does not drift measurably and T2 drifts about 5 mK over
+66 days, and depth structure below the thermocline is under 0.5 mK. Both are far inside what turbulence work needs, and
 both are smaller than the per-profile residual scatter (sd ≈ 4 mK), so the drift
 is only visible in aggregate over hundreds of profiles.
 

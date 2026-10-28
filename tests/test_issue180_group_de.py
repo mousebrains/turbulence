@@ -80,6 +80,55 @@ class TestF08GeometryIsNotDrift:
         b = blocked_offsets(pairs, fit, geo=None)
         assert [x.a0 for x in a] == [x.a0 for x in b]
 
+    def test_streaming_pass_removes_the_geometry_too(self, tmp_path, monkeypatch):
+        """`fp07-cal fit`'s streaming pass is where the deployment drift is
+        reported. It kept comparing each profile with the RAW reference after
+        F08 was fixed in blocked_offsets, so the same changing gradient came
+        back as drift there; on osu685 (2025) it made a flat bead read
+        +0.049 mK/day (+3 mK over 66 days)."""
+        import odas_tpw.fp07cal.cli as cli
+        import odas_tpw.fp07cal.geometry as geometry
+        import odas_tpw.fp07cal.pairs as pairs_mod
+
+        pairs, g = _stable_bead_pairs()
+        fit, geo = joint_fit(pairs, dTdz=g, robust=False)
+        uid = np.asarray(pairs.profile_uid)
+        fields = ("time", "L", "T_ref", "pressure", "w", "direction",
+                  "profile_uid", "file_label")
+        by_profile = {
+            int(u): (replace(pairs, **{k: getattr(pairs, k)[uid == u] for k in fields}),
+                     g[uid == u])
+            for u in np.unique(uid)
+        }
+
+        class _Probe:  # one "file" per profile; only .counts is consulted
+            def __init__(self, u):
+                self.u, self.counts = u, {"T1": None}
+
+        current = {}
+
+        def fake_build_pairs(probe, ref, ch, lag, cfg):
+            current["g"] = by_profile[probe.u][1]
+            return by_profile[probe.u][0]
+
+        monkeypatch.setattr(cli, "_stream",
+                            lambda paths, kw, failures: (_Probe(u) for u in by_profile))
+        monkeypatch.setattr(pairs_mod, "build_pairs", fake_build_pairs)
+        monkeypatch.setattr(geometry, "local_dTdz", lambda ps: current["g"])
+
+        def drift(res):
+            out = cli._stream_stats([], None, {"stability": {"n_blocks": 6}}, res, tmp_path)
+            return out["channels"]["T1"]["probe_drift_K_per_day"]
+
+        entry = {"coefficients": fit.coeffs.tolist(), "lag_s": 0.0,
+                 "T_range": [-50.0, 50.0]}
+        with_geo = drift({"channels": {"T1": {**entry, "geometry": {
+            "dz_m": geo.dz_m, "tau_s": geo.tau_s}}}})
+        blind = drift({"channels": {"T1": {**entry, "geometry": None}}})
+        assert abs(blind) > 1e-4                       # the defect, reproduced
+        assert abs(with_geo) < abs(blind) / 20
+        assert abs(with_geo) < 1e-5
+
 
 def _geometry_pairs(seed: int = 20260907, n: int = 600):
     rng = np.random.default_rng(seed)

@@ -714,6 +714,7 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
     every statistic downstream, so collapsing to it loses nothing and takes the
     memory from gigabytes to kilobytes.
     """
+    from odas_tpw.fp07cal.geometry import local_dTdz
     from odas_tpw.fp07cal.logr import temperature
     from odas_tpw.fp07cal.pairs import build_pairs
     from odas_tpw.fp07cal.stability import SECONDS_PER_DAY, Block
@@ -727,6 +728,19 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
     }
     if not model:
         return {}
+    # The fitted nuisance geometry, per channel. The calibration was fitted
+    # against T_ref - (dz*g + tau*w*g), so each profile has to be compared with
+    # that same quantity: compared with the raw reference, a gradient exposure
+    # that changes over the deployment shows up as a changing intercept, i.e.
+    # as bead drift -- the issue #180 F08 defect, fixed in blocked_offsets but
+    # not here. On osu685 (2025) it manufactured +3 mK of drift on a flat bead.
+    geometry: dict[str, tuple[float, float]] = {}
+    for ch, e in res["channels"].items():
+        g = e.get("geometry") or {}
+        dz = float(g.get("dz_m", np.nan))
+        if np.isfinite(dz):
+            tau = float(g.get("tau_s", np.nan))
+            geometry[ch] = (dz, tau if np.isfinite(tau) else 0.0)
 
     recs: dict[str, list] = {ch: [] for ch in model}
     n_files = 0
@@ -739,13 +753,21 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
             ps = build_pairs(probe, ref, ch, lag=lag, cfg=pc)
             if len(ps) < 100:
                 continue
-            y = 1.0 / (ps.T_ref + 273.15)
+            T_cal = np.asarray(ps.T_ref, dtype=np.float64)
+            if ch in geometry:
+                dz, tau = geometry[ch]
+                g = local_dTdz(ps)
+                w = np.asarray(ps.w, dtype=np.float64)
+                T_cal = T_cal - np.where(
+                    np.isfinite(g) & np.isfinite(w), dz * g + tau * w * g, 0.0
+                )
+            y = 1.0 / (T_cal + 273.15)
             hi = np.zeros_like(ps.L)
             for j, a in enumerate(coeffs):
                 if j:
                     hi = hi + a * ps.L**j
             a0 = y - hi
-            resid = ps.T_ref - temperature(ps.L, coeffs)
+            resid = T_cal - temperature(ps.L, coeffs)
             uid = np.asarray(ps.profile_uid, dtype=object)
             for u in np.unique(uid):
                 sel = uid == u
