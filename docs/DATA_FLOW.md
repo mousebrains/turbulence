@@ -71,7 +71,8 @@ smoothing.
 - Despike shear channels (Rockland iterative method: flag points where the
   rectified high-passed signal exceeds its low-passed envelope by a ratio
   threshold, default 8; `despike_smooth` is the envelope low-pass cutoff
-  in Hz, default 0.5)
+  in Hz, default 0.5; `despike_half_width` sets how much is replaced around
+  each spike, default 0.04 s = ~60 ms)
 - Section selection (minimum speed, depth, duration)
 
 ---

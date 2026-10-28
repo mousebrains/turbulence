@@ -559,6 +559,11 @@ def p_to_L1(
     ds.project = pf.config["cruise_info"].get("project", "")
     ds.start_time = pf.start_time.isoformat()
     ds.source_file = pf.filepath.name
+    # The .p record framing, carried on to every profile rsi-tpw prof cuts from
+    # this file (record-locked shear removal needs it; see rsi.record_locked).
+    # The whole file is written, so its first fast sample opens a record.
+    ds.samples_per_record_fast = int(pf.samples_per_record)
+    ds.record_offset_fast = 0
     for key, val in provenance_attrs(f"L1 converted from {pf.filepath.name}").items():
         ds.setncattr(key, val)
     ds.configuration_string = pf.config_str

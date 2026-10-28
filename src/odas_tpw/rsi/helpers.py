@@ -63,6 +63,13 @@ class ChannelsDict(TypedDict, total=False):
     # odas_tpw.rsi.bad_buffer, which turns these into per-probe window masks.
     bad_masks: dict[str, np.ndarray]
     diff_gain_by_name: dict[str, float]
+    # (record_offset, samples_per_record): fast sample k of this source sits
+    # at position (record_offset + k) % samples_per_record of its .p data
+    # record. From PFile.samples_per_record (offset 0), or from the
+    # record_offset_fast / samples_per_record_fast attrs extract_profiles
+    # writes. Absent when the source does not say; record-locked shear
+    # removal (rsi.record_locked) then refuses rather than guess.
+    record_framing: tuple[int, int]
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +720,10 @@ def _channels_from_pfile(
     for name in ("U_EM", "Incl_X", "Incl_Y"):
         if name in pf.channels and _len_is(pf.channels[name], n_slow):
             out[name] = pf.channels[name]
+    # getattr: duck-typed PFile shims predate the attribute.
+    spr = getattr(pf, "samples_per_record", None)
+    if isinstance(spr, (int, np.integer)) and spr > 0:
+        out["record_framing"] = (0, int(spr))
     # Carry through the perturb-injected speed channel(s) if present.
     if "speed_fast" in pf.channels:
         out["speed_fast"] = pf.channels["speed_fast"]
@@ -852,6 +863,11 @@ def _channels_from_nc(
         }
     )
 
+    # Record framing written by extract_profiles (see ChannelsDict).
+    record_framing = None
+    if hasattr(ds, "samples_per_record_fast") and hasattr(ds, "record_offset_fast"):
+        record_framing = (int(ds.record_offset_fast), int(ds.samples_per_record_fast))
+
     speed_fast = None
     W_slow = None
     if "speed_fast" in ds.variables:
@@ -919,6 +935,8 @@ def _channels_from_nc(
         out["speed_fast"] = speed_fast
     if W_slow is not None:
         out["W_slow"] = W_slow
+    if record_framing is not None:
+        out["record_framing"] = record_framing
     return out
 
 

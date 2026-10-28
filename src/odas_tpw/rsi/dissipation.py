@@ -24,7 +24,7 @@ Lueck, R.G., and 27 coauthors, 2024: Best practices recommendations for
 
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -65,6 +65,56 @@ MACOUN_LUECK_DENOM = 48  # [cpm]
 # Anti-aliasing safety margin (ODAS convention)
 F_AA_MARGIN = 0.9
 
+# Shear despike removal half-width [s]. ODAS despike.m's default is
+# N = 0.04*fs samples, and scor160/despike.py (like despike.m) blanks N//2
+# samples BEFORE each detected spike and 2*(N//2) AFTER it, so the 0.04 s
+# default replaces ~60 ms around a spike (31 samples at 512 Hz) and 0.01 s
+# ~14 ms (7 samples). Configurable because a narrow electrical pulse needs
+# less than a probe strike: a ~16 ms pulse injected at 20x the record rms into
+# clean VMP-250 shear biased epsilon by -0.05 dex at 0.04 s, -0.01 to -0.02 at
+# 0.02 s and +0.02 to +0.05 at 0.01 s (median over windows; two pulse shapes
+# and host files). A pulse below despike_thresh is never detected, so no
+# half-width helps it (record_locked_shear does). The bound keeps the value in
+# seconds (L2Params reads a value >= 1 as samples); 0.5 s already blanks 0.75 s
+# per spike, most of a 1 s FFT segment.
+DESPIKE_HALF_WIDTH = 0.04
+DESPIKE_HALF_WIDTH_MAX = 0.5
+
+
+def validate_despike_half_width(value: Any) -> float:
+    """Return the shear despike half-width [s] as a float, or raise ValueError."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+        raise ValueError(f"despike_half_width: expected a number of seconds, got {value!r}")
+    half_width = float(value)
+    # The chained comparison is False for NaN, so NaN is refused too.
+    if not 0.0 < half_width <= DESPIKE_HALF_WIDTH_MAX:
+        raise ValueError(
+            f"despike_half_width: must be in (0, {DESPIKE_HALF_WIDTH_MAX:g}] seconds, "
+            f"got {value!r}"
+        )
+    return half_width
+
+
+def validate_record_locked_shear(value: Any) -> bool:
+    """Return ``record_locked_shear`` as a bool, or raise ValueError.
+
+    Strict, because a truthy string ("false") must not switch it on.
+    """
+    if not isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"record_locked_shear: expected true or false, got {value!r}")
+    return bool(value)
+
+
+def validate_epsilon_options(section: Any) -> None:
+    """Load-time check of the epsilon keys only ``_compute_epsilon`` reads.
+
+    Shared by the rsi-tpw and perturb config loaders; ``None`` (unset) passes.
+    """
+    if section.get("despike_half_width") is not None:
+        validate_despike_half_width(section["despike_half_width"])
+    if section.get("record_locked_shear") is not None:
+        validate_record_locked_shear(section["record_locked_shear"])
+
 
 # ---------------------------------------------------------------------------
 # Core dissipation calculation
@@ -91,6 +141,8 @@ def _compute_epsilon(
     fit_order: int = 3,
     despike_thresh: float = 8,
     despike_smooth: float = 0.5,
+    despike_half_width: float = DESPIKE_HALF_WIDTH,
+    record_locked_shear: bool = False,
     salinity: npt.ArrayLike | None = None,
     temperature: str | float = "auto",
     conductivity: str = "auto",
@@ -117,6 +169,23 @@ def _compute_epsilon(
     string ``"measured"``: practical salinity is computed from the resolved
     C/T pair and pressure (TEOS-10), falling back to ``None`` (visc35) with
     a warning when no conductivity channel exists.
+
+    ``despike_half_width`` [s] is the shear despiker's removal half-width
+    (see :data:`DESPIKE_HALF_WIDTH`): 0.04 s replaces ~60 ms around each
+    detected spike, 0.01 s ~14 ms. Accelerometers are not despiked.
+
+    ``record_locked_shear`` (default False) subtracts, profile by profile and
+    before the high-pass and despike, each shear channel's waveform locked to
+    the ``.p`` data record, at the samples where its profile mean is
+    significant: electrical interference at fixed positions in every record,
+    which the despiker misses below its threshold
+    (:mod:`odas_tpw.rsi.record_locked`). It needs
+    the source's record framing: a ``.p`` file, or a per-profile NetCDF from
+    :func:`~odas_tpw.rsi.profile.extract_profiles`; any other source raises.
+    Each product records per channel the quiet records used, the samples per
+    record corrected, the waveform's peak and its SNR
+    (``record_locked_<channel>_*`` attributes). False leaves every number
+    exactly as before.
 
     ``mask_bad_buffers`` (default True) rejects an epsilon estimate whose
     window carries an RDL bad-buffer gap (TN-051 s3.2) too long to interpolate
@@ -146,6 +215,8 @@ def _compute_epsilon(
         f_limit = np.inf
     # Fail fast (before any file access); prepare_profiles re-validates.
     _validate_speed_selection(speed, speed_method)
+    despike_half_width = validate_despike_half_width(despike_half_width)
+    record_locked_shear = validate_record_locked_shear(record_locked_shear)
 
     # Validate the salinity form BEFORE any file access so a bad string fails
     # fast; "measured" itself is resolved after the channels are loaded.
@@ -223,7 +294,7 @@ def _compute_epsilon(
     # are already detected by prepare_profiles
     l2_params = L2Params(
         HP_cut=hp_cut,
-        despike_sh=np.array([despike_thresh, despike_smooth, 0.04]),
+        despike_sh=np.array([despike_thresh, despike_smooth, despike_half_width]),
         despike_A=np.array([np.inf, 0.5, 0.04]),
         profile_min_W=0.05,
         profile_min_P=0.0,
@@ -243,16 +314,53 @@ def _compute_epsilon(
         bbl_extent=bbl_extent,
     )
 
+    # Record-locked interference is subtracted from a COPY of each shear
+    # channel, profile by profile; the caller's arrays (perturb shares the
+    # _pre_loaded dict with chi) are never written through.
+    l1_source: dict[str, Any] = cast(dict[str, Any], data)
+    framing = None
+    if record_locked_shear:
+        framing = data.get("record_framing")
+        if framing is None:
+            raise ValueError(
+                "record_locked_shear needs the .p data-record framing of the "
+                f"source ({data['metadata'].get('source', '')}), which carries no "
+                "samples_per_record_fast / record_offset_fast attributes. NetCDFs "
+                "written before those attributes existed lack them: run on the .p "
+                "file, or re-extract the profiles (rsi-tpw prof, perturb) from the "
+                ".p, or from an rsi-tpw nc file, with this version"
+            )
+        l1_source = {
+            **data,
+            "shear": [(name, np.array(arr, dtype=np.float64)) for name, arr in data["shear"]],
+        }
+
     results: list[xr.Dataset] = []
-    for s_slow, e_slow in profiles_slow:
+    for i_prof, (s_slow, e_slow) in enumerate(profiles_slow, 1):
         s_fast = s_slow * ratio
         e_fast = min((e_slow + 1) * ratio, len(t_fast))
 
         sal_prof = sal_fast[s_fast:e_fast] if isinstance(sal_fast, np.ndarray) else sal_fast
 
+        record_locked_attrs: dict[str, Any] = {}
+        if framing is not None:
+            from odas_tpw.rsi.record_locked import remove_from_profile
+
+            src_name = Path(str(data["metadata"].get("source", ""))).name
+            record_locked_attrs = remove_from_profile(
+                data,
+                l1_source["shear"],
+                s_fast,
+                e_fast,
+                framing=framing,
+                fs=fs_fast,
+                hp_cut=hp_cut,
+                context=f"{src_name} profile {i_prof}",
+            )
+
         # Build L1Data (shear normalized by speed^2)
         l1 = _build_l1data_from_channels(
-            data,
+            l1_source,
             s_fast,
             e_fast,
             speed_fast,
@@ -419,6 +527,7 @@ def _compute_epsilon(
             fit_order=fit_order,
         )
         ds.attrs.update(data["metadata"])
+        ds.attrs.update(record_locked_attrs)
         stamp_provenance(ds.attrs, "epsilon")
         start_time = data["metadata"].get("start_time", "")
         t_units = f"seconds since {start_time}" if start_time else "seconds"
