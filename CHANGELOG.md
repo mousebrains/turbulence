@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`epsilon.despike_half_width` (rsi-tpw and perturb)**: the shear
+  despiker's removal half-width [s], hard-wired at 0.04 s until now. The
+  despiker replaces `N//2` samples before each detected spike and `2(N//2)`
+  after (`N = round(hw * fs)`), so 0.04 s replaces ~60 ms per spike and 0.01 s
+  ~14 ms. A VMP-5500 from an outside user carries a ~16 ms electrical pulse on
+  both shear channels; injected at 20x the record rms into clean VMP shear,
+  it biased epsilon by -0.05 dex at 0.04 s, -0.01 at 0.02 s and +0.02 at
+  0.01 s (median over windows). A pulse below `despike_thresh` is never
+  detected, at any half-width. Validated at load to (0, 0.5] s; at 0.04 the
+  key is left out of the stage signatures, so existing outputs keep their
+  hashes. No CLI flag, like the other despike keys.
 - **`perturb-diag`: temperature, delta-T, conductivity and fall-rate panels,
   and a raw row for casts with no product file** (issue #210). The raw
   diagnostics row (`--diag`, the default) now leads with T1/T2 against the CT

@@ -65,6 +65,33 @@ MACOUN_LUECK_DENOM = 48  # [cpm]
 # Anti-aliasing safety margin (ODAS convention)
 F_AA_MARGIN = 0.9
 
+# Shear despike removal half-width [s]. ODAS despike.m's default is
+# N = 0.04*fs samples, and scor160/despike.py (like despike.m) blanks N//2
+# samples BEFORE each detected spike and 2*(N//2) AFTER it, so the 0.04 s
+# default replaces ~60 ms around a spike (31 samples at 512 Hz) and 0.01 s
+# ~14 ms (7 samples). Configurable because a narrow
+# electrical pulse needs less than a probe strike: the ~16 ms interference
+# pulse of a VMP-5500, injected at 20x the record rms into clean VMP shear,
+# biased epsilon by -0.05 dex at 0.04 s and +0.02 dex at 0.01 s (median over
+# windows). The bound keeps the value in seconds (L2Params reads a value >= 1
+# as samples); 0.5 s already blanks 0.75 s per spike, most of a 1 s FFT segment.
+DESPIKE_HALF_WIDTH = 0.04
+DESPIKE_HALF_WIDTH_MAX = 0.5
+
+
+def validate_despike_half_width(value: Any) -> float:
+    """Return the shear despike half-width [s] as a float, or raise ValueError."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+        raise ValueError(f"despike_half_width: expected a number of seconds, got {value!r}")
+    half_width = float(value)
+    # The chained comparison is False for NaN, so NaN is refused too.
+    if not 0.0 < half_width <= DESPIKE_HALF_WIDTH_MAX:
+        raise ValueError(
+            f"despike_half_width: must be in (0, {DESPIKE_HALF_WIDTH_MAX:g}] seconds, "
+            f"got {value!r}"
+        )
+    return half_width
+
 
 # ---------------------------------------------------------------------------
 # Core dissipation calculation
@@ -91,6 +118,7 @@ def _compute_epsilon(
     fit_order: int = 3,
     despike_thresh: float = 8,
     despike_smooth: float = 0.5,
+    despike_half_width: float = DESPIKE_HALF_WIDTH,
     salinity: npt.ArrayLike | None = None,
     temperature: str | float = "auto",
     conductivity: str = "auto",
@@ -117,6 +145,10 @@ def _compute_epsilon(
     string ``"measured"``: practical salinity is computed from the resolved
     C/T pair and pressure (TEOS-10), falling back to ``None`` (visc35) with
     a warning when no conductivity channel exists.
+
+    ``despike_half_width`` [s] is the shear despiker's removal half-width
+    (see :data:`DESPIKE_HALF_WIDTH`): 0.04 s replaces ~60 ms around each
+    detected spike, 0.01 s ~14 ms. Accelerometers are not despiked.
 
     ``mask_bad_buffers`` (default True) rejects an epsilon estimate whose
     window carries an RDL bad-buffer gap (TN-051 s3.2) too long to interpolate
@@ -146,6 +178,7 @@ def _compute_epsilon(
         f_limit = np.inf
     # Fail fast (before any file access); prepare_profiles re-validates.
     _validate_speed_selection(speed, speed_method)
+    despike_half_width = validate_despike_half_width(despike_half_width)
 
     # Validate the salinity form BEFORE any file access so a bad string fails
     # fast; "measured" itself is resolved after the channels are loaded.
@@ -223,7 +256,7 @@ def _compute_epsilon(
     # are already detected by prepare_profiles
     l2_params = L2Params(
         HP_cut=hp_cut,
-        despike_sh=np.array([despike_thresh, despike_smooth, 0.04]),
+        despike_sh=np.array([despike_thresh, despike_smooth, despike_half_width]),
         despike_A=np.array([np.inf, 0.5, 0.04]),
         profile_min_W=0.05,
         profile_min_P=0.0,

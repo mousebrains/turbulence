@@ -213,6 +213,10 @@ DEFAULTS: dict[str, dict] = {
         "fit_order": 3,
         "despike_thresh": 8,
         "despike_smooth": 0.5,
+        # Shear despike removal half-width [s] (rsi.dissipation
+        # DESPIKE_HALF_WIDTH). At the 0.04 default it is dropped from the
+        # canonical view, so existing signatures are unchanged.
+        "despike_half_width": 0.04,
         "salinity": None,
         "epsilon_minimum": 1e-13,
         "T_source": None,  # reference temperature for seawater
@@ -612,6 +616,9 @@ class _PerturbConfigManager(ConfigManager):
                 for k in ("bbl_diss_length", "bbl_overlap", "bbl_extent"):
                     if mapping.get(k) is None:
                         mapping.pop(k, None)
+        if section == "epsilon" and mapping.get("despike_half_width") == 0.04:
+            # The value the code hard-wired before the key existed.
+            mapping.pop("despike_half_width")
         return mapping
 
     def validate_config(self, config: dict) -> None:
@@ -690,6 +697,11 @@ class _PerturbConfigManager(ConfigManager):
                     UserWarning,
                     stacklevel=2,
                 )
+        eps = config.get("epsilon") or {}
+        if eps.get("despike_half_width") is not None:
+            from odas_tpw.rsi.dissipation import validate_despike_half_width
+
+            validate_despike_half_width(eps["despike_half_width"])
         # stratification.sort / dTdz_source pick a code path by membership, so a
         # typo would otherwise fall through to a default silently.
         strat = config.get("stratification") or {}
@@ -1453,6 +1465,11 @@ epsilon:
   fit_order: 3            # polynomial fit order for Nasmyth integration
   despike_thresh: 8       # despike threshold (rectified-HP / LP-envelope ratio, not MAD)
   despike_smooth: 0.5     # despike envelope low-pass cutoff [Hz]
+  despike_half_width: 0.04  # despike removal half-width [s], in (0, 0.5]: the
+                          # despiker blanks half of it before each detected
+                          # spike and all of it after, so 0.04 replaces ~60 ms
+                          # per spike and 0.01 ~14 ms. Narrow it for a narrow
+                          # electrical pulse; a probe strike needs the default.
   salinity: null          # viscosity salinity: null = fixed 35; a number =
                           # that fixed PSU; "measured" = per-profile from
                           # C/T/P (TEOS-10, needs conductivity); "hotel" (or

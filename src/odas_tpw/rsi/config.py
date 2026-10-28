@@ -41,6 +41,10 @@ DEFAULTS: dict[str, dict] = {
         "fit_order": 3,
         "despike_thresh": 8,
         "despike_smooth": 0.5,
+        # Shear despike removal half-width [s]. At the 0.04 default the key is
+        # dropped from the canonical view, so every existing epsilon hash is
+        # unchanged; any other value re-versions the output.
+        "despike_half_width": 0.04,
         "salinity": None,
         "temperature": "auto",
         "conductivity": "auto",
@@ -75,7 +79,22 @@ class _RsiConfigManager(ConfigManager):
     def _section_view_postprocess(self, section: str, mapping: dict) -> dict:
         if section == "chi" and mapping.get("fp07_response") is None:
             return {k: v for k, v in mapping.items() if k != "fp07_response"}
+        if section == "epsilon" and mapping.get("despike_half_width") == 0.04:
+            return {k: v for k, v in mapping.items() if k != "despike_half_width"}
         return mapping
+
+    def validate_config(self, config: dict) -> None:
+        """Unknown sections/keys, plus the despike half-width's range.
+
+        Checked at load time so a bad value fails once, before the output
+        directory is created, rather than once per file inside the workers.
+        """
+        super().validate_config(config)
+        eps = config.get("epsilon") or {}
+        if eps.get("despike_half_width") is not None:
+            from odas_tpw.rsi.dissipation import validate_despike_half_width
+
+            validate_despike_half_width(eps["despike_half_width"])
 
 
 _mgr = _RsiConfigManager(DEFAULTS)
@@ -129,6 +148,9 @@ epsilon:
   fit_order: 3          # polynomial fit order for Nasmyth integration
   despike_thresh: 8     # despike threshold (rectified-HP / LP-envelope ratio, not MAD)
   despike_smooth: 0.5   # despike envelope low-pass cutoff [Hz]
+  despike_half_width: 0.04  # despike removal half-width [s]: blanks half of it
+                        # before each spike and all of it after (0.04 = ~60 ms
+                        # per spike, 0.01 = ~14 ms); in (0, 0.5]
   salinity: null        # PSU value, or "measured" (JAC/selected C+T) (null = 35, fixed S)
   temperature: auto     # reference temperature for viscosity: auto = first
                         # plausible of T1..Tn, T, JAC_T; a channel name (QC

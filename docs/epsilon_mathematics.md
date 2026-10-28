@@ -627,6 +627,7 @@ Valid for 0 <= T <= 20 degrees C. Typical values: ~1.3e-6 m^2/s at 10 degrees C,
 | `fit_order` | 3 | Polynomial order for spectral minimum |
 | `despike_thresh` | 8 | Spike detection threshold (ratio) |
 | `despike_smooth` | 0.5 | Despike envelope smoothing frequency [Hz] |
+| `despike_half_width` | 0.04 | Despike removal half-width [s]: `N = round(0.04 fs)`; `N//2` samples are replaced before each spike and `2(N//2)` after |
 | `e_isr_threshold` | `1.5e-5` | Epsilon threshold for ISR method [W/kg] |
 | `isr_margin` | 1.6 | Empirical margin on the method-switch threshold (Section 7) |
 | `X_ISR` | 0.01 | ISR fit upper limit as fraction of `k_s` (Section 8) |

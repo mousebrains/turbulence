@@ -311,6 +311,7 @@ class TestWindowDurationResolution:
                 "bbl_diss_length",
                 "bbl_overlap",
                 "bbl_extent",
+                "despike_half_width",
             )
         }
         old_eps["fft_length"] = 256

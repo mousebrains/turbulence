@@ -66,6 +66,7 @@ Controls computation of the turbulent kinetic energy dissipation rate (epsilon) 
 | `fit_order` | int | `3` | Polynomial order for the log-log fit used to determine the upper integration limit in the Nasmyth spectrum fitting. |
 | `despike_thresh` | float | `8` | Spike detection threshold. Ratio of the instantaneous rectified high-pass signal to its smoothed envelope. Higher values are less aggressive. |
 | `despike_smooth` | float | `0.5` | Low-pass cutoff frequency [Hz] for the spike detection envelope smoother. |
+| `despike_half_width` | float | `0.04` | Shear spike removal half-width [s], in (0, 0.5]. The despiker replaces half of it before each detected spike and all of it after (a spike's tail rings longer than its lead), so `0.04` (the ODAS default) replaces ~60 ms per spike (31 samples at 512 Hz) and `0.01` ~14 ms (7 samples). A narrow electrical pulse needs less than a probe strike: for a ~16 ms pulse injected at 20× the record rms into clean shear, `0.04` biased epsilon by −0.05 dex and `0.01` by +0.02 (median over windows). No half-width helps a pulse below `despike_thresh`, which is never detected. The accelerometers are not despiked. |
 | `salinity` | float \| `"measured"` | `null` | Salinity for computing kinematic viscosity via TEOS-10 (gsw): a fixed PSU value, or `"measured"` = per-sample practical salinity from the resolved conductivity/temperature channels and pressure (falls back to fixed S with a warning when no conductivity exists). If `null`, uses a simplified viscosity formula assuming S = 35. |
 | `temperature` | string \| float | `"auto"` | Reference-temperature source for viscosity and `T_mean`. `"auto"` = first plausible of `T1`..`Tn`, `T`, `JAC_T` — implausible channels (railed, drifting, mostly non-finite) are skipped with a warning, and QC evaluates in-water samples (P > 0.5 dbar) when pressure is available; a channel name is honored even when it fails QC (with a warning); a number = constant reference temperature [°C] (ODAS `constant_temp` parity). Recorded in the products as `temperature_source`/`temperature_qc`. (ODAS divergence, deliberate: ODAS uses T1 with no plausibility check and silently substitutes 10 °C when temperature is missing; here a file with no plausible reference temperature errors instead of publishing wrong-viscosity products.) |
 | `conductivity` | string | `"auto"` | Conductivity channel behind `salinity: "measured"`. `"auto"` = `JAC_C` when present (no error otherwise); an explicit name must exist as a slow channel. Recorded as `conductivity_source`. |
@@ -131,6 +132,9 @@ epsilon:
   fit_order: 3          # polynomial fit order for Nasmyth integration
   despike_thresh: 8     # despike threshold: ratio of rectified HP signal to its LP envelope
   despike_smooth: 0.5   # despike envelope low-pass cutoff [Hz]
+  despike_half_width: 0.04  # despike removal half-width [s]: blanks half of it
+                        # before each spike and all of it after (0.04 = ~60 ms
+                        # per spike, 0.01 = ~14 ms); in (0, 0.5]
   salinity: null        # PSU value, or "measured" (JAC/selected C+T) (null = 35, fixed S)
   temperature: auto     # reference temperature for viscosity: auto = first
                         # plausible of T1..Tn, T, JAC_T; a channel name (QC
