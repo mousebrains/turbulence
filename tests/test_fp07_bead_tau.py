@@ -152,6 +152,9 @@ def test_a_ratio_shift_between_halves_is_model_free():
     assert B.ratio_shifted(half(np.log(1.23), 0.02), half(np.log(0.81), 0.04))
     assert not B.ratio_shifted(half(0.20, 0.05), half(0.25, 0.05))
     assert not B.ratio_shifted(half(0.20, 0.05), half(np.nan, 0.05))
+    few = half(np.log(0.81), 0.04)
+    few.n_recordings = 3  # too few to test against
+    assert not B.ratio_shifted(half(np.log(1.23), 0.02), few)
 
 
 # ------------------------------------------------------- the estimator

@@ -392,8 +392,15 @@ def drifted(a: TauFit, b: TauFit, c: int) -> bool:
     return abs(math.log(b.tau[c] / a.tau[c])) > DRIFT_SIGMAS * math.hypot(*s)
 
 
-def ratio_shifted(a: TauFit, b: TauFit, f0: float = 20.0) -> bool:
-    """Did the pair's power ratio at *f0* change between halves *a* and *b*? (model-free)"""
+def ratio_shifted(a: TauFit, b: TauFit, f0: float = 20.0,
+                  min_recordings: int = MIN_RECORDINGS) -> bool:
+    """Did the pair's power ratio at *f0* change between halves *a* and *b*? (model-free)
+
+    Only halves with enough recordings are compared: an interval resampled from
+    two or three recordings is too narrow to test against.
+    """
+    if min(a.n_recordings, b.n_recordings) < min_recordings:
+        return False
     r = [h.ln_ratio.get(f0, np.nan) for h in (a, b)]
     s = [0.5 * (h.ln_ratio_ci[f0][1] - h.ln_ratio_ci[f0][0]) for h in (a, b)]
     if not np.all(np.isfinite([*r, *s])):
@@ -703,7 +710,7 @@ def measure(paths: Sequence[str], *, instrument: str, first: float, last: float,
                 drift[c] = drifted(halves[0], halves[1], c)
         if any(drift):
             flags.append("drift")
-        if halves is not None and ratio_shifted(*halves):
+        if halves is not None and ratio_shifted(*halves, min_recordings=min_recordings):
             flags.append("ratio-shift")
         pt = PairTau(
             instrument=inst, channels=chans, serials=sers, tau_model=tau_model, W_ref=W_ref,
