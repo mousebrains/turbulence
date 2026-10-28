@@ -47,6 +47,9 @@ class ChiEpsilonResult(NamedTuple):
     # the Lueck (2022) eq (18) L_hat*V_f^0.75 truncation in chiLnSigma. Trailing
     # default so failure-path constructions need not supply it. (#104 U4-F1.)
     var_resolved: float = np.nan
+    # Spread of log10(observed/model) across the fom band [dex]: the SHAPE
+    # diagnostic fom cannot be (see _shape_mad, issue #191). NaN wherever fom is.
+    mad_shape: float = np.nan
 
 
 class ChiFitResult(NamedTuple):
@@ -60,6 +63,7 @@ class ChiFitResult(NamedTuple):
     fom: float
     K_max_ratio: float
     var_resolved: float = np.nan  # Batchelor V_f; see ChiEpsilonResult.
+    mad_shape: float = np.nan  # shape statistic [dex]; see ChiEpsilonResult.
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +196,80 @@ def _batchelor_resolved_fraction(
         return np.nan
     V_resolved = np.trapezoid(spec_fine[mask], K_fine[mask])
     return float(np.clip(V_resolved / V_total, 0.0, 1.0))
+
+
+def _shape_mad(spec_obs: np.ndarray, spec_model: np.ndarray, min_points: int = 3) -> float:
+    """Spread of ``log10(observed / model)`` across the fit band [dex].
+
+    ``mad_shape = mean_k |r_k - median(r)|`` with ``r_k = log10(obs_k / model_k)``,
+    where ``model`` is the same attenuated model the figure of merit uses
+    (Batchelor/Kraichnan x FP07 ``|H|^2`` + noise) and the bins are the same
+    bins ``fom`` integrates over.
+
+    ``fom`` is an INTEGRATED variance ratio, so a mid-band deficit cancels
+    against excesses at the band ends: on CASPER-West a model wrong by ~2x
+    bin-by-bin scored fom = 1.001 (issue #191). This is the per-bin view that
+    cannot cancel.
+
+    It is the epsilon side's ``mad`` (``scor160.l4``: ``mean |log10(obs/Nasmyth)|``)
+    with one change: the deviation is taken about the window's own MEDIAN log
+    ratio instead of about 0. The median minimizes a mean absolute deviation,
+    so this is the epsilon-style ``mad`` after the best constant rescaling of
+    the model -- the part of the misfit that no choice of level can remove. It
+    is therefore a diagnostic of SHAPE, not of level (level is ``fom``'s job).
+    Centering also absorbs the bias of a log spectral estimate: a chi-squared
+    estimate with ``d`` degrees of freedom has its median, and the mean of its
+    log, BELOW its mean (``E[ln X] = psi(d/2) - ln(d/2)``), which about 0 would
+    read as misfit.
+
+    A perfect model does not give 0. Spectral scatter alone floors it at the
+    mean absolute deviation of ``log10(chi2_d / d)`` about its median
+    (:func:`mad_shape_floor`): 0.214, 0.166, 0.138, 0.115 dex for d = 6, 9.5,
+    13.3, 19. ``d`` is the window's OWN spectral DOF -- a BBL window averages
+    fewer FFT segments than the file's ``dof_spec`` attribute assumes, so its
+    floor is higher. Adjacent Welch bins are correlated, which leaves that
+    expectation alone but widens the scatter of the statistic between windows.
+    With few bins it reads low (one term of ``|r - median|`` is always 0 for
+    odd n).
+
+    Bins with a non-finite or non-positive ratio are dropped (the epsilon
+    ``mad`` likewise drops ``ratio <= 0``); fewer than *min_points* usable bins,
+    the same 3-bin floor ``fom`` requires, returns NaN. A diagnostic only:
+    nothing gates on it.
+    """
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.asarray(spec_obs, dtype=np.float64) / np.asarray(spec_model, dtype=np.float64)
+    ratio = ratio[np.isfinite(ratio) & (ratio > 0)]
+    if ratio.size < min_points:
+        return np.nan
+    r = np.log10(ratio)
+    return float(np.mean(np.abs(r - np.median(r))))
+
+
+def mad_shape_floor(dof: float) -> float:
+    """``mad_shape`` of a PERFECT model with ``dof`` spectral degrees of freedom [dex].
+
+    ``E|log10(X) - median(log10 X)|`` for ``X ~ chi2_dof / dof``: what chi-squared
+    scatter alone gives in a band of many bins. Evaluate it at the window's own
+    DOF, ``1.9 * (n_segments - n_v)`` (``n_v`` = vibration signals Goodman
+    removed). A chi product's ``dof_spec`` attribute is that value for its
+    ``diss_length``; near-bed windows laid out with ``bbl_diss_length`` average
+    fewer segments, so their floor is higher than ``mad_shape_floor(dof_spec)``.
+    """
+    from scipy import integrate, stats
+
+    if not (dof > 0 and np.isfinite(dof)):
+        return np.nan
+    dist = stats.chi2(dof, scale=1.0 / dof)
+    med = float(dist.median())
+    m = np.log10(med)
+
+    def integrand(x: float) -> float:
+        return abs(np.log10(x) - m) * float(dist.pdf(x))
+
+    lo = integrate.quad(integrand, 0.0, med, limit=200)[0]
+    hi = integrate.quad(integrand, med, np.inf, limit=200)[0]
+    return float(lo + hi)
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +453,8 @@ def _chi_from_epsilon(
     Returns
     -------
     ChiEpsilonResult
-        Named tuple: (chi, kB, K_max, spec_batch, fom, K_max_ratio, var_resolved).
+        Named tuple: (chi, kB, K_max, spec_batch, fom, K_max_ratio, var_resolved,
+        mad_shape).
     """
     grad_func, _q = _spectrum_func(spectrum_model)
     # Bind kappa_T into the spectrum shape so every grad_func(...) call here and
@@ -458,9 +537,14 @@ def _chi_from_epsilon(
 
     # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise) over
     # the same contiguous band as obs_var, so numerator and denominator agree.
+    # mad_shape compares the same two spectra bin by bin (see _shape_mad).
+    mad_shape = np.nan
     if K_band.size >= 3 and np.isfinite(chi):
-        mod_v = np.trapezoid(spec_batch[band] * H2[band] + noise_K[band], K_band)
+        model_band = spec_batch[band] * H2[band] + noise_K[band]
+        mod_v = np.trapezoid(model_band, K_band)
         fom = obs_var / mod_v if mod_v > 0 else np.nan
+        if np.isfinite(fom):
+            mad_shape = _shape_mad(s, model_band)
     else:
         fom = np.nan
 
@@ -470,7 +554,9 @@ def _chi_from_epsilon(
     # correction/integral use — feeds the eq (18) chiLnSigma truncation (U4-F1).
     var_resolved_val = _batchelor_resolved_fraction(kB, K_max, grad_func, K_min=K_min)
 
-    return ChiEpsilonResult(chi, kB, K_max, spec_batch, fom, K_max_ratio_val, var_resolved_val)
+    return ChiEpsilonResult(
+        chi, kB, K_max, spec_batch, fom, K_max_ratio_val, var_resolved_val, mad_shape
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -571,7 +657,8 @@ def _mle_fit_kB(
     Returns
     -------
     ChiFitResult
-        Named tuple: (kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio, var_resolved).
+        Named tuple: (kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio,
+        var_resolved, mad_shape).
     """
     grad_func, _q = _spectrum_func(spectrum_model)
     grad_func = functools.partial(grad_func, kappa_T=kappa_T)
@@ -641,11 +728,16 @@ def _mle_fit_kB(
     # Fitted spectrum for output
     spec_batch = grad_func(K, kB_best, chi)
 
-    # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise)
+    # Figure of merit: observed vs attenuated model (Batchelor * H2 + noise);
+    # mad_shape compares the same two spectra bin by bin (see _shape_mad).
+    mad_shape = np.nan
     if np.isfinite(chi) and K_band.size >= 3:
-        mod_v = np.trapezoid(spec_batch[band] * H2[band] + noise_K[band], K_band)
+        model_band = spec_batch[band] * H2[band] + noise_K[band]
+        mod_v = np.trapezoid(model_band, K_band)
         obs_v = np.trapezoid(spec_obs[band], K_band)
         fom = obs_v / mod_v if mod_v > 0 else np.nan
+        if np.isfinite(fom):
+            mad_shape = _shape_mad(spec_obs[band], model_band)
     else:
         fom = np.nan
 
@@ -655,7 +747,15 @@ def _mle_fit_kB(
     )
 
     return ChiFitResult(
-        kB_best, chi, epsilon, K_max_fit, spec_batch, fom, K_max_ratio_val, var_resolved_val
+        kB_best,
+        chi,
+        epsilon,
+        K_max_fit,
+        spec_batch,
+        fom,
+        K_max_ratio_val,
+        var_resolved_val,
+        mad_shape,
     )
 
 
@@ -708,7 +808,8 @@ def _iterative_fit(
     Returns
     -------
     ChiFitResult
-        Named tuple: (kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio, var_resolved).
+        Named tuple: (kB, chi, epsilon, K_max, spec_batch, fom, K_max_ratio,
+        var_resolved, mad_shape).
     """
     grad_func, _q = _spectrum_func(spectrum_model)
     grad_func = functools.partial(grad_func, kappa_T=kappa_T)
@@ -876,17 +977,19 @@ def _iterative_fit(
     # toward 1.0. This band is intentionally NOT identical to Method 1 / the MLE
     # path (which use _valid_wavenumber_mask with a K_AA bound and a min-points
     # fallback): those affect only this diagnostic FOM, never chi/kB (#48).
+    # mad_shape compares the same two spectra bin by bin (see _shape_mad).
+    mad_shape = np.nan
     if np.isfinite(kB_best) and np.isfinite(chi):
         valid_fom = (spec_obs > 2 * noise_K) & (K > 0) & (k_u >= K)
         band_fom = _band_slice(valid_fom)
         K_fom = K[band_fom]
         if K_fom.size >= 3:
             obs_v = np.trapezoid(spec_obs[band_fom], K_fom)
-            mod_v = np.trapezoid(
-                spec_batch[band_fom] * H2[band_fom] + noise_K[band_fom],
-                K_fom,
-            )
+            model_fom = spec_batch[band_fom] * H2[band_fom] + noise_K[band_fom]
+            mod_v = np.trapezoid(model_fom, K_fom)
             fom = obs_v / mod_v if mod_v > 0 else np.nan
+            if np.isfinite(fom):
+                mad_shape = _shape_mad(spec_obs[band_fom], model_fom)
         else:
             fom = np.nan
     else:
@@ -895,7 +998,7 @@ def _iterative_fit(
     K_max_ratio_val = k_u / kB_best if np.isfinite(kB_best) and kB_best > 0 else np.nan
 
     return ChiFitResult(
-        kB_best, chi, epsilon, k_u, spec_batch, fom, K_max_ratio_val, var_resolved_val
+        kB_best, chi, epsilon, k_u, spec_batch, fom, K_max_ratio_val, var_resolved_val, mad_shape
     )
 
 

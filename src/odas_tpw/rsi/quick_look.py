@@ -150,7 +150,8 @@ def _compute_chi_spectra(
             # Pre-compute noise/H2 for _mle_fit_kB
             _tau0 = float(fp07_tau(mean_speed))
             _noise_K_i, _ = _gradT_noise(F, mean_T, mean_speed, fs=fs_fast, diff_gain=dg_i)
-            kB_best, chi_val, _, _, spec_raw, _, _, _ = _mle_fit_kB(
+            # Bind by attribute so a new trailing ChiFitResult field cannot shift these.
+            mle = _mle_fit_kB(
                 grad,
                 K,
                 chi_obs,
@@ -164,6 +165,7 @@ def _compute_chi_spectra(
                 spectrum_model,
                 kappa_T_ql,
             )
+            kB_best, chi_val, spec_raw = mle.kB, mle.chi, mle.spec_batch
             spec_mle = spec_raw * H2 if np.isfinite(chi_val) else np.full(n_freq, np.nan)
             methods_results["M2-MLE"].append((spec_mle, chi_val, kB_best))
         else:

@@ -384,7 +384,8 @@ def compute_chi_window(
             eps_ci = eps_for_m1
             if np.isfinite(eps_ci) and eps_ci > 0:
                 # ChiEpsilonResult (chi, kB, K_max, spec_batch, fom,
-                # K_max_ratio, var_resolved). Bind by attribute to stay swap-proof.
+                # K_max_ratio, var_resolved, mad_shape). Bind by attribute to
+                # stay swap-proof.
                 er = _chi_from_epsilon(
                     spec_obs,
                     K,
@@ -410,10 +411,10 @@ def compute_chi_window(
                 model_specs.append(np.zeros(n_freq))
                 model_specs_raw.append(np.zeros(n_freq))
         else:
-            # Method 2: iterative fit. _iterative_fit returns an 8-field
+            # Method 2: iterative fit. _iterative_fit returns a 9-field
             # ChiFitResult (kB, chi, epsilon, K_max, spec_batch, fom,
-            # K_max_ratio, var_resolved) -- distinct from Method 1's 7-field
-            # ChiEpsilonResult. Bind by attribute, not positional unpacking:
+            # K_max_ratio, var_resolved, mad_shape) -- distinct from Method 1's
+            # 8-field ChiEpsilonResult. Bind by attribute, not positional unpacking:
             # the old `_, chi_val, kB, ...` discarded the real kB and stored
             # epsilon under the kB name (the swap audit #33 predicted).
             fit = _iterative_fit(
