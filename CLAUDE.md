@@ -304,10 +304,12 @@ python -m pytest tests/test_p_file.py::test_header  # single test
 - **fom (figure of merit)**: Ratio of observed to model variance in the spectral fit range; values near 1.0 indicate a good fit. For **epsilon** the model is the **Nasmyth** spectrum (observed/Nasmyth variance ratio; see `scor160/l4.py`). For **chi** the model is the **Batchelor/Kraichnan** spectrum convolved with the FP07 transfer function plus the noise floor (`chi/chi.py`). (Distinct from the Lueck-2022 `FM` reject statistic on the epsilon side.)
 - **FP07 time constant (`chi/fp07.py: fp07_tau`)**: `goto` = 3 ms·W^−0.32,
   double pole (Goto et al. 2016 §2d, §3c; it was a fixed 3 ms until 2026-10).
-  `lueck` = 10 ms·W^−0.5, single pole, the default: the name is historical,
-  Lueck et al. (1977) has no such formula, and the 10 ms is unsourced. The
+  `lueck` = 10 ms·W^−0.5, single pole, the default. The 10 ms is Sommer et al.
+  (2013, Lueck a co-author; doi:10.1175/JTECH-D-12-00272.1), but there as a
+  speed-INDEPENDENT DOUBLE pole (f_half-power 10.2 Hz; they rejected W-scaling),
+  so the repo's form is not theirs. Lueck et al. (1977) has no such formula. The
   −½ exponent is Vachon & Lueck (1984) / Hill (1987); −0.32 is Gregg & Meagher
-  (1980). That unsourced 10 ms sets the FP07 correction in nearly every chi
+  (1980). That 10 ms prefactor sets the FP07 correction in nearly every chi
   product: `fp07_tau_scale` is an optional multiplier (default 1, nothing
   fits it), set only by a CASPER-West sensitivity variant. Compare models by
   3-dB frequency, not τ: a double pole rolls off sooner than a single pole

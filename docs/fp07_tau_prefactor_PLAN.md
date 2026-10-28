@@ -171,6 +171,14 @@ differ, #189); the fleet answer is the distribution across beads.
 
 ## 8. Literature (survey 2026-10-13)
 
+> **Corrected 2026-10-28.** The 10 ms *is* published: Sommer et al. (2013),
+> doi:10.1175/JTECH-D-12-00272.1, with Rolf Lueck a co-author, found tau = 10 ms
+> for the FP07 as a speed-independent **double** pole (half-power 10.2 Hz, Lake
+> Kivu, 0.19-0.89 m/s), and rejected velocity scaling. What still holds below: no
+> source gives the repo's **single pole x W^-1/2** form, so the hypothesis
+> sharpens to Sommer's number combined with the Vachon & Lueck exponent and the
+> wrong pole count.
+
 **No source gives single pole, tau = 10 ms * W^-1/2.** It entered the repo in
 commit 2dbf6da (2026-03-08, the original chi port, co-authored with an AI
 model) credited to Lueck et al. 1977, together with the fixed-3-ms `goto`.
@@ -283,6 +291,10 @@ datasets whose beads differ strongly (ARCTERX-22 ratios 0.40 / 1.67).
 
 
 ## Source of the 10 ms, and the SBE7 (2026-10-13, later)
+
+> **Superseded 2026-10-28:** the 10 ms is Sommer et al. (2013), which Rolf Lueck
+> co-authored (as a speed-independent double pole; see the note in section 8).
+> The paragraph below is kept as the record of what was believed on 2026-10-13.
 
 Pat confirms the 10 ms did NOT come from Rolf Lueck: it came out of an earlier
 AI model. He has not found published measurements he trusts, and the
