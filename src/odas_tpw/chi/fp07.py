@@ -108,7 +108,10 @@ def fp07_tau(speed: npt.ArrayLike, model: str = "lueck") -> np.ndarray | float:
         Profiling speed [m/s].
     model : str
         'lueck'    : tau = 0.01 * speed^(-0.5), for the single pole.  The
-            name is historical and the 10 ms has no source we have found.
+            10 ms is Sommer et al. (2013, JTECH 30, 1907; Lueck a co-author),
+            but there it is a speed-independent DOUBLE pole (f_half-power
+            10.2 Hz at 0.19-0.89 m/s; they rejected velocity scaling), so
+            this single pole with W^-1/2 is not their model.
             The -1/2 exponent is Vachon & Lueck's (1984), as Rockland
             cites it, and Hill's (1987), as Goto et al. (2016) cite it.
             But ODAS ``quick_look.m`` builds that law as a DOUBLE pole with

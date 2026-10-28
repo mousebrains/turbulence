@@ -385,8 +385,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - The `lueck` model (`tau = 10 ms * W^-0.5`, single pole, the default) was
     credited to Lueck et al. (1977), which contains no such formula. Their
     0.15-mm beads barely depended on speed, measured at 0.5 and 1.25 m/s. The
-    `-1/2` exponent is Vachon & Lueck's (1984) and Hill's (1987); the 10 ms
-    has no source we have found. The docstrings, `docs/chi_mathematics.md`
+    `-1/2` exponent is Vachon & Lueck's (1984) and Hill's (1987). The 10 ms
+    is Sommer et al. (2013, Lueck a co-author), where it is a
+    speed-independent double pole, not this single pole x `W^-1/2`
+    (corrected 2026-10-28; an earlier version of this entry said the 10 ms
+    had no source). The docstrings, `docs/chi_mathematics.md`
     and the bibliography now say so. The model itself is unchanged, but
     note what that means: it sets the FP07 correction in nearly every chi
     product. `fp07_tau_scale` is an optional per-thermistor multiplier
