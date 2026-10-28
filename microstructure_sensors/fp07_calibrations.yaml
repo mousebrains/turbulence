@@ -62,11 +62,13 @@
 #     model-free.
 #   * tau_ms is at W_ref_m_s, the pair's median speed; speed_scaling (the chi tau model,
 #     lueck: tau ~ W^-1/2) maps other speeds onto it. tau at 1 m/s is DERIVED from these
-#     when rendered, never stored. Intervals are 16-84% from a bootstrap over chi files.
-#   * identified: false (matched beads, a failing bead, too little data; `reason` says
-#     which) means tau_ms is null; the ratios are still recorded. halves: the first and
-#     second time halves, each with its own tau (null when the half alone identifies
-#     none), because a bead can slow within a deployment.
+#     when rendered, never stored. Intervals are 16-84% from a bootstrap over whole
+#     recordings (n_recordings: the .p files; their profiles are not independent), and
+#     they are sampling intervals only: the estimator and band move the level by more.
+#   * identified: false (matched beads, a failing or dead bead, too little data; `reason`
+#     says which) means tau_ms is null; the ratios are still recorded. halves: the first
+#     and second time halves, each with its own tau (null when the half alone identifies
+#     none) and its 20 Hz power ratio, because a bead can change within a deployment.
 #   * partner is the other bead of the pair; when both beads' entries record the same
 #     measurement, the loader checks they agree (reciprocal ratios, same counts).
 #   Nothing in chi processing reads these values yet.
@@ -188,6 +190,38 @@ calibrations:
     notes: >-
       Median fall rate 1.28 dbar/s through strong gradients. The six block offsets span
       10.4 mK, against 1-3 mK on the quieter deployments.
+    response:
+      method: pair-ratio-sp
+      partner: T1593
+      first: "2019-06-02T18:39:10Z"
+      last: "2019-06-08T16:23:49Z"
+      n_chi_files: 2419
+      n_recordings: 43
+      n_windows: 88299
+      W_ref_m_s: 1.288
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: true
+      tau_ms: 10.67
+      tau_ms_16_84: [9.32, 11.27]
+      halves:
+        first:
+          first: "2019-06-02T18:39:10Z"
+          last: "2019-06-05T21:15:43Z"
+          n_chi_files: 1222
+          tau_ms: 9.58
+          tau_ms_16_84: [8.62, 12.06]
+          power_ratio_20Hz: 1.5675
+        second:
+          first: "2019-06-05T22:41:21Z"
+          last: "2019-06-08T16:23:49Z"
+          n_chi_files: 1197
+          tau_ms: 11.54
+          tau_ms_16_84: [10.61, 13.73]
+          power_ratio_20Hz: 1.4028
+      power_ratio: {10: 1.2338, 20: 1.4666}
+      power_ratio_16_84: {10: [1.1743, 1.2547], 20: [1.3957, 1.5166]}
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-51-g32901f45495c)"
 
   - bead: T1593
     deployment: SUNRISE 2019 Pelican
@@ -229,6 +263,38 @@ calibrations:
     notes: >-
       Median fall rate 1.28 dbar/s through strong gradients. The six block offsets span
       10.7 mK.
+    response:
+      method: pair-ratio-sp
+      partner: T1592
+      first: "2019-06-02T18:39:10Z"
+      last: "2019-06-08T16:23:49Z"
+      n_chi_files: 2419
+      n_recordings: 43
+      n_windows: 88299
+      W_ref_m_s: 1.288
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: true
+      tau_ms: 14.21
+      tau_ms_16_84: [12.73, 14.9]
+      halves:
+        first:
+          first: "2019-06-02T18:39:10Z"
+          last: "2019-06-05T21:15:43Z"
+          n_chi_files: 1222
+          tau_ms: 13.4
+          tau_ms_16_84: [12.56, 16.22]
+          power_ratio_20Hz: 0.63796
+        second:
+          first: "2019-06-05T22:41:21Z"
+          last: "2019-06-08T16:23:49Z"
+          n_chi_files: 1197
+          tau_ms: 14.68
+          tau_ms_16_84: [13.68, 17.04]
+          power_ratio_20Hz: 0.71286
+      power_ratio: {10: 0.81049, 20: 0.68187}
+      power_ratio_16_84: {10: [0.797, 0.85155], 20: [0.65939, 0.71647]}
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-51-g32901f45495c)"
 
   - bead: T1592
     deployment: SUNRISE 2021 Pelican
@@ -271,6 +337,44 @@ calibrations:
       All 16 Pelican files. T2 was changed from T1593 to T2005 on 2021-06-29; T1 fits
       split at that change agree with this one to 0.1 mK at 27-28 degC. The range is
       only 2.8 K, so the shape is weakly constrained.
+    response:
+      method: pair-ratio-sp
+      partner: T2005
+      first: "2021-06-29T18:17:47Z"
+      last: "2021-07-01T17:19:17Z"
+      n_chi_files: 819
+      n_recordings: 5
+      n_windows: 9134
+      W_ref_m_s: 1.024
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: true
+      tau_ms: 15.24
+      tau_ms_16_84: [14.23, 16.09]
+      halves:
+        first:
+          first: "2021-06-29T18:17:47Z"
+          last: "2021-06-30T04:31:07Z"
+          n_chi_files: 357
+          tau_ms: null
+          tau_ms_16_84: null
+          power_ratio_20Hz: 1.7874
+        second:
+          first: "2021-06-30T14:10:10Z"
+          last: "2021-07-01T17:19:17Z"
+          n_chi_files: 462
+          tau_ms: null
+          tau_ms_16_84: null
+          power_ratio_20Hz: 1.6425
+      power_ratio: {10: 1.4326, 20: 1.7151}
+      power_ratio_16_84: {10: [1.4084, 1.4459], 20: [1.6678, 1.7498]}
+      flags: [noise-model]
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-52-g7098aa1b1efd)"
+      notes: >-
+        Measured against T2005, which replaced T1593 on T2 on 2021-06-29 (the last 5
+        recordings); against T1593 the pair is refused (T1593 dead in SR1P_516, see its
+        entry). From the swap on, both probes' observed high-frequency floor is 0.2-0.5x
+        their noise model, against ~1 before it (noise-model).
 
   - bead: T1593
     deployment: SUNRISE 2021 Pelican
@@ -313,6 +417,50 @@ calibrations:
       The 12 files before T2 was changed to T2005. The range is only 2.8 K, so the shape
       is weakly constrained. At the same L this curve reads +9.5 to +17.1 mK against the
       bead's 2019 curve over their common 26.56-29.40 degC (+16.0 at 27, +13.3 at 28).
+    response:
+      method: pair-ratio-sp
+      partner: T1592
+      first: "2021-06-22T01:39:05Z"
+      last: "2021-06-28T01:05:33Z"
+      n_chi_files: 1538
+      n_recordings: 11
+      n_windows: 22868
+      W_ref_m_s: 1.04
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: false
+      tau_ms: null
+      tau_ms_16_84: null
+      halves:
+        first:
+          first: "2021-06-22T01:39:05Z"
+          last: "2021-06-25T02:30:40Z"
+          n_chi_files: 767
+          tau_ms: null
+          tau_ms_16_84: null
+          power_ratio_20Hz: 0.94025
+        second:
+          first: "2021-06-25T09:25:24Z"
+          last: "2021-06-28T01:05:33Z"
+          n_chi_files: 771
+          tau_ms: null
+          tau_ms_16_84: null
+          power_ratio_20Hz: 0.71459
+      power_ratio: {10: 0.92527, 20: 0.81963}
+      power_ratio_16_84: {10: [0.85582, 0.9477], 20: [0.75537, 0.87668]}
+      flags: [dead-bead]
+      reason: >-
+        beads not distinguishable: |ln R'(20 Hz)| = 0.199 < max(3 x 0.074, 0.15); tau1
+        interval 4.3-14.0 ms spans x3.27 > x1.5; tau2 interval 5.8-17.1 ms spans x2.92 >
+        x1.5; bead T1593 (T2_dT2) dead in 144 chi file(s) (SR1P_516_prof001.nc ..
+        SR1P_516_prof144.nc; spectrum identically zero over 1-10 Hz), which were left
+        out: a failing bead's response is not a time constant
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-52-g7098aa1b1efd)"
+      notes: >-
+        T1593 was dead (gradient spectrum identically zero) through all 144 profiles of
+        SR1P_516, the last file before it was replaced on T2; those are left out. Before
+        that, the pair's 20 Hz power ratio went from matched (first half) to T1593
+        losing high-frequency power (second half): a failing bead.
 
   - bead: T2005
     deployment: SUNRISE 2021 Pelican
@@ -354,6 +502,42 @@ calibrations:
     notes: >-
       The 4 files after T2 was changed from T1593: 243 descents over 0.9 K. Only 2
       blocks, so no block scatter.
+    response:
+      method: pair-ratio-sp
+      partner: T1592
+      first: "2021-06-29T18:17:47Z"
+      last: "2021-07-01T17:19:17Z"
+      n_chi_files: 819
+      n_recordings: 5
+      n_windows: 9134
+      W_ref_m_s: 1.024
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: true
+      tau_ms: 21.84
+      tau_ms_16_84: [20.48, 22.92]
+      halves:
+        first:
+          first: "2021-06-29T18:17:47Z"
+          last: "2021-06-30T04:31:07Z"
+          n_chi_files: 357
+          tau_ms: null
+          tau_ms_16_84: null
+          power_ratio_20Hz: 0.55948
+        second:
+          first: "2021-06-30T14:10:10Z"
+          last: "2021-07-01T17:19:17Z"
+          n_chi_files: 462
+          tau_ms: null
+          tau_ms_16_84: null
+          power_ratio_20Hz: 0.60884
+      power_ratio: {10: 0.69805, 20: 0.58307}
+      power_ratio_16_84: {10: [0.69163, 0.71002], 20: [0.57148, 0.59959]}
+      flags: [noise-model]
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-52-g7098aa1b1efd)"
+      notes: >-
+        From the T2 swap on, both probes' observed high-frequency floor is 0.2-0.5x
+        their noise model (noise-model).
 
   - bead: T1592
     deployment: SUNRISE 2021 WaltonSmith
@@ -394,6 +578,42 @@ calibrations:
     flags: [lag-gate-overridden]
     notes: >-
       The range is only 1.9 K, so the shape is weakly constrained.
+    response:
+      method: pair-ratio-sp
+      partner: T2005
+      first: "2021-07-02T01:27:15Z"
+      last: "2021-07-08T00:02:52Z"
+      n_chi_files: 5552
+      n_recordings: 38
+      n_windows: 78371
+      W_ref_m_s: 1.035
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: true
+      tau_ms: 17.51
+      tau_ms_16_84: [15.86, 18.89]
+      halves:
+        first:
+          first: "2021-07-02T01:27:15Z"
+          last: "2021-07-04T22:03:40Z"
+          n_chi_files: 2782
+          tau_ms: 19.33
+          tau_ms_16_84: [17.07, 21.92]
+          power_ratio_20Hz: 1.4479
+        second:
+          first: "2021-07-05T01:23:25Z"
+          last: "2021-07-08T00:02:52Z"
+          n_chi_files: 2770
+          tau_ms: 16.35
+          tau_ms_16_84: [14.97, 17.56]
+          power_ratio_20Hz: 1.6421
+      power_ratio: {10: 1.3456, 20: 1.5567}
+      power_ratio_16_84: {10: [1.3253, 1.3558], 20: [1.5088, 1.5782]}
+      flags: [noise-model, ratio-shift]
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-51-g32901f45495c)"
+      notes: >-
+        Both probes' observed high-frequency floor is 0.3-0.4x their noise model
+        (noise-model), as on the Pelican after the T2 swap.
 
   - bead: T2005
     deployment: SUNRISE 2021 WaltonSmith
@@ -436,6 +656,41 @@ calibrations:
     notes: >-
       The range is only 1.9 K. Order 2 beat order 1 by 0.09 mK of held-out error and
       gives a negative beta_2, so do not extrapolate this shape.
+    response:
+      method: pair-ratio-sp
+      partner: T1592
+      first: "2021-07-02T01:27:15Z"
+      last: "2021-07-08T00:02:52Z"
+      n_chi_files: 5552
+      n_recordings: 38
+      n_windows: 78371
+      W_ref_m_s: 1.035
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: true
+      tau_ms: 23.15
+      tau_ms_16_84: [20.82, 24.89]
+      halves:
+        first:
+          first: "2021-07-02T01:27:15Z"
+          last: "2021-07-04T22:03:40Z"
+          n_chi_files: 2782
+          tau_ms: 24.66
+          tau_ms_16_84: [21.9, 27.62]
+          power_ratio_20Hz: 0.69068
+        second:
+          first: "2021-07-05T01:23:25Z"
+          last: "2021-07-08T00:02:52Z"
+          n_chi_files: 2770
+          tau_ms: 22.33
+          tau_ms_16_84: [20.64, 23.66]
+          power_ratio_20Hz: 0.60897
+      power_ratio: {10: 0.74315, 20: 0.64239}
+      power_ratio_16_84: {10: [0.73755, 0.75455], 20: [0.63363, 0.66277]}
+      flags: [noise-model, ratio-shift]
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-51-g32901f45495c)"
+      notes: >-
+        Noise model 2-3x above the observed floor on both probes (noise-model).
 
   - bead: T1592
     deployment: SUNRISE 2022 PointSur
@@ -479,6 +734,43 @@ calibrations:
       bottom-layer front, which the robust fit had already discarded. Refitted with the
       gate at 10 K and a +/-0.5 s lag search. Median fall rate 0.96 dbar/s through
       strong gradients; the six block offsets span 9.8 mK.
+    response:
+      method: pair-ratio-sp
+      partner: T2005
+      first: "2022-06-18T12:54:11Z"
+      last: "2022-07-05T17:51:09Z"
+      n_chi_files: 7557
+      n_recordings: 76
+      n_windows: 182555
+      W_ref_m_s: 0.97
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: true
+      tau_ms: 12.81
+      tau_ms_16_84: [12.32, 13.41]
+      halves:
+        first:
+          first: "2022-06-18T12:54:11Z"
+          last: "2022-06-26T00:35:18Z"
+          n_chi_files: 3669
+          tau_ms: 11.29
+          tau_ms_16_84: [10.28, 11.71]
+          power_ratio_20Hz: 0.48252
+        second:
+          first: "2022-06-26T05:11:21Z"
+          last: "2022-07-05T17:51:09Z"
+          n_chi_files: 3888
+          tau_ms: 14.38
+          tau_ms_16_84: [13.49, 15.51]
+          power_ratio_20Hz: 0.32773
+      power_ratio: {10: 0.70189, 20: 0.40743}
+      power_ratio_16_84: {10: [0.68219, 0.71843], 20: [0.38597, 0.42872]}
+      flags: [noise-model, drift, ratio-shift]
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-51-g32901f45495c)"
+      notes: >-
+        T2's quiet-window floor is 1.5x its noise model at 60-100 Hz and up to 23x at
+        150-250 Hz, T1's about 1: excess high-frequency content on T2, which makes T2005
+        look fast. Treat T2005's value here as suspect (see its entry).
 
   - bead: T2005
     deployment: SUNRISE 2022 PointSur
@@ -522,6 +814,44 @@ calibrations:
       fp07-cal's 1 K export gate refused both channels over one 4 K event at a
       bottom-layer front, which the robust fit had already discarded. Refitted with the
       gate at 10 K and a +/-0.5 s lag search. Median fall rate 0.96 dbar/s.
+    response:
+      method: pair-ratio-sp
+      partner: T1592
+      first: "2022-06-18T12:54:11Z"
+      last: "2022-07-05T17:51:09Z"
+      n_chi_files: 7557
+      n_recordings: 76
+      n_windows: 182555
+      W_ref_m_s: 0.97
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: true
+      tau_ms: 4.88
+      tau_ms_16_84: [4.61, 5.29]
+      halves:
+        first:
+          first: "2022-06-18T12:54:11Z"
+          last: "2022-06-26T00:35:18Z"
+          n_chi_files: 3669
+          tau_ms: 5.01
+          tau_ms_16_84: [4.08, 5.41]
+          power_ratio_20Hz: 2.0724
+        second:
+          first: "2022-06-26T05:11:21Z"
+          last: "2022-07-05T17:51:09Z"
+          n_chi_files: 3888
+          tau_ms: 4.43
+          tau_ms_16_84: [4.03, 4.7]
+          power_ratio_20Hz: 3.0513
+      power_ratio: {10: 1.4247, 20: 2.4544}
+      power_ratio_16_84: {10: [1.3919, 1.4659], 20: [2.3325, 2.5909]}
+      flags: [noise-model, ratio-shift]
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-51-g32901f45495c)"
+      notes: >-
+        SUSPECT: 4-5 ms here against 22-25 ms in 2021 and March 2022, with the pair's 20
+        Hz ratio reversed. T2's quiet-window floor is 1.5x its noise model at 60-100 Hz
+        and up to 23x at 150-250 Hz (T1 about 1): most likely contamination on the T2
+        channel, not a faster bead (unverified).
 
   - bead: T1592
     deployment: ARCTERX-2022 Interior
@@ -564,6 +894,43 @@ calibrations:
     flags: [lag-gate-overridden]
     notes: >-
       The baseline for the cross-deployment comparisons in issue #189.
+    response:
+      method: pair-ratio-sp
+      partner: T2005
+      first: "2022-03-21T04:59:26Z"
+      last: "2022-03-30T14:51:40Z"
+      n_chi_files: 536
+      n_recordings: 30
+      n_windows: 37212
+      W_ref_m_s: 0.946
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: true
+      tau_ms: 16.72
+      tau_ms_16_84: [15.89, 17.67]
+      halves:
+        first:
+          first: "2022-03-21T04:59:26Z"
+          last: "2022-03-28T06:08:28Z"
+          n_chi_files: 255
+          tau_ms: 14.77
+          tau_ms_16_84: [14.34, 15.23]
+          power_ratio_20Hz: 2.1314
+        second:
+          first: "2022-03-28T07:23:50Z"
+          last: "2022-03-30T14:51:40Z"
+          n_chi_files: 281
+          tau_ms: 20.34
+          tau_ms_16_84: [19.62, 21.9]
+          power_ratio_20Hz: 1.7996
+      power_ratio: {10: 1.6117, 20: 2.0002}
+      power_ratio_16_84: {10: [1.5995, 1.6486], 20: [1.9484, 2.0691]}
+      flags: [drift, ratio-shift]
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-51-g32901f45495c)"
+      notes: >-
+        The acceptance case: on the same chi_00 products the analysis-era first pass
+        (spectral sums) gave 13.0/19.5 ms and its median-of-log fit 17.4/25.6
+        (docs/fp07pair/runbook.md section 6).
 
   - bead: T2005
     deployment: ARCTERX-2022 Interior
@@ -606,6 +973,41 @@ calibrations:
     flags: [lag-gate-overridden]
     notes: >-
       Order 3 beat order 2 by 0.01 mK of held-out error, a tie.
+    response:
+      method: pair-ratio-sp
+      partner: T1592
+      first: "2022-03-21T04:59:26Z"
+      last: "2022-03-30T14:51:40Z"
+      n_chi_files: 536
+      n_recordings: 30
+      n_windows: 37212
+      W_ref_m_s: 0.946
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: true
+      tau_ms: 24.85
+      tau_ms_16_84: [23.97, 25.72]
+      halves:
+        first:
+          first: "2022-03-21T04:59:26Z"
+          last: "2022-03-28T06:08:28Z"
+          n_chi_files: 255
+          tau_ms: 22.97
+          tau_ms_16_84: [22.4, 23.5]
+          power_ratio_20Hz: 0.46917
+        second:
+          first: "2022-03-28T07:23:50Z"
+          last: "2022-03-30T14:51:40Z"
+          n_chi_files: 281
+          tau_ms: 28.06
+          tau_ms_16_84: [27.38, 29.91]
+          power_ratio_20Hz: 0.55569
+      power_ratio: {10: 0.62046, 20: 0.49995}
+      power_ratio_16_84: {10: [0.60657, 0.62519], 20: [0.4833, 0.51324]}
+      flags: [drift, ratio-shift]
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-51-g32901f45495c)"
+      notes: >-
+        The acceptance case (see T1592's entry).
 
   - bead: T1592
     deployment: ARCTERX-2022 Wake
@@ -647,6 +1049,31 @@ calibrations:
     flags: [lag-gate-overridden, short]
     notes: >-
       Only 2 files (36 descents) carried this bead. 2 blocks, so no block scatter.
+    response:
+      method: pair-ratio-sp
+      partner: T2005
+      first: "2022-04-07T07:44:31Z"
+      last: "2022-04-07T07:44:31Z"
+      n_chi_files: 31
+      n_recordings: 1
+      n_windows: 3191
+      W_ref_m_s: 0.935
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: false
+      tau_ms: null
+      tau_ms_16_84: null
+      halves: null
+      power_ratio: {10: 1.6032, 20: 1.9854}
+      power_ratio_16_84: {10: null, 20: null}
+      reason: >-
+        1 recordings (distinct start times) < 5; no bootstrap interval for the 20 Hz
+        ratio; 0 of 200 bootstrap replicates fitted; tau1: no interval; tau2: no
+        interval
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-53-gf4102b098ee5)"
+      notes: >-
+        ARC1A044 only: the products of ARC1A046.P were made before the mis-framing fix
+        (bdd0a4d) and are left out. One recording, so no interval and no tau.
 
   - bead: T2005
     deployment: ARCTERX-2022 Wake
@@ -690,6 +1117,30 @@ calibrations:
     notes: >-
       Only 2 files (36 descents); order 3 from 36 descents. 2 blocks, so no block
       scatter.
+    response:
+      method: pair-ratio-sp
+      partner: T1592
+      first: "2022-04-07T07:44:31Z"
+      last: "2022-04-07T07:44:31Z"
+      n_chi_files: 31
+      n_recordings: 1
+      n_windows: 3191
+      W_ref_m_s: 0.935
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: false
+      tau_ms: null
+      tau_ms_16_84: null
+      halves: null
+      power_ratio: {10: 0.62375, 20: 0.50368}
+      power_ratio_16_84: {10: null, 20: null}
+      reason: >-
+        1 recordings (distinct start times) < 5; no bootstrap interval for the 20 Hz
+        ratio; 0 of 200 bootstrap replicates fitted; tau1: no interval; tau2: no
+        interval
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-53-gf4102b098ee5)"
+      notes: >-
+        ARC1A044 only (ARC1A046.P's products predate the mis-framing fix).
 
   - bead: T1592
     deployment: ARCTERX-2025 Interior
@@ -736,6 +1187,42 @@ calibrations:
       +3 dbar within 0.1 s, both FP07s ramping together). At the same L this curve reads
       -8.3 to -10.8 mK (mean -9.1) against the bead's ARCTERX-2022 Interior curve over
       19.85-25.26 degC, a nearly flat shift.
+    response:
+      method: pair-ratio-sp
+      partner: T2007
+      first: "2025-02-11T20:56:43Z"
+      last: "2025-02-17T18:03:17Z"
+      n_chi_files: 110
+      n_recordings: 3
+      n_windows: 16004
+      W_ref_m_s: 1.077
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: false
+      tau_ms: null
+      tau_ms_16_84: null
+      halves:
+        first:
+          first: "2025-02-11T20:56:43Z"
+          last: "2025-02-11T20:56:43Z"
+          n_chi_files: 38
+          tau_ms: null
+          tau_ms_16_84: null
+          power_ratio_20Hz: 0.47434
+        second:
+          first: "2025-02-14T17:09:22Z"
+          last: "2025-02-17T18:03:17Z"
+          n_chi_files: 72
+          tau_ms: null
+          tau_ms_16_84: null
+          power_ratio_20Hz: 0.45724
+      power_ratio: {10: 0.74172, 20: 0.46843}
+      power_ratio_16_84: {10: [0.73729, 0.75631], 20: [0.45285, 0.47168]}
+      reason: >-
+        3 recordings (distinct start times) < 5
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-53-gf4102b098ee5)"
+      notes: >-
+        Only 3 recordings (chi_01 products).
 
   - bead: T2007
     deployment: ARCTERX-2025 Interior
@@ -779,6 +1266,42 @@ calibrations:
       Fitted alongside T1592 (on T2) from the same 3 SN142 files, with the same
       reference blanking (+/-3 s around one instrument-wide transient, AIOP2_VMP142_0002
       at 21:14:22Z).
+    response:
+      method: pair-ratio-sp
+      partner: T1592
+      first: "2025-02-11T20:56:43Z"
+      last: "2025-02-17T18:03:17Z"
+      n_chi_files: 110
+      n_recordings: 3
+      n_windows: 16004
+      W_ref_m_s: 1.077
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: false
+      tau_ms: null
+      tau_ms_16_84: null
+      halves:
+        first:
+          first: "2025-02-11T20:56:43Z"
+          last: "2025-02-11T20:56:43Z"
+          n_chi_files: 38
+          tau_ms: null
+          tau_ms_16_84: null
+          power_ratio_20Hz: 2.1082
+        second:
+          first: "2025-02-14T17:09:22Z"
+          last: "2025-02-17T18:03:17Z"
+          n_chi_files: 72
+          tau_ms: null
+          tau_ms_16_84: null
+          power_ratio_20Hz: 2.187
+      power_ratio: {10: 1.3482, 20: 2.1348}
+      power_ratio_16_84: {10: [1.3222, 1.3563], 20: [2.1201, 2.2082]}
+      reason: >-
+        3 recordings (distinct start times) < 5
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-53-gf4102b098ee5)"
+      notes: >-
+        Only 3 recordings (chi_01 products).
 
   - bead: T2811
     deployment: ARCTERX-2025 Interior
@@ -825,6 +1348,46 @@ calibrations:
       fitted geometry removed: +0.022 +/- 0.015 mK/day (p = 0.18), not significant. This
       record is the rerun after the streaming-pass fix (#237); its coefficients are
       bit-identical to the fit by committed code (git v0.4.0-44-g5f7f1112353e).
+    response:
+      method: pair-ratio-sp
+      partner: T2813
+      first: "2025-02-04T07:42:26Z"
+      last: "2025-04-10T14:35:16Z"
+      n_chi_files: 786
+      n_recordings: 786
+      n_windows: 864191
+      W_ref_m_s: 0.441
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: false
+      tau_ms: null
+      tau_ms_16_84: null
+      halves:
+        first:
+          first: "2025-02-04T07:42:26Z"
+          last: "2025-03-09T04:33:54Z"
+          n_chi_files: 393
+          tau_ms: 20.77
+          tau_ms_16_84: [18.38, 22.37]
+          power_ratio_20Hz: 0.81517
+        second:
+          first: "2025-03-09T07:30:28Z"
+          last: "2025-04-10T14:35:16Z"
+          n_chi_files: 393
+          tau_ms: 15.2
+          tau_ms_16_84: [12.17, 16.98]
+          power_ratio_20Hz: 1.2359
+      power_ratio: {10: 0.94384, 20: 0.91635}
+      power_ratio_16_84: {10: [0.92214, 0.95733], 20: [0.88841, 0.93171]}
+      flags: [ratio-shift]
+      reason: >-
+        beads not distinguishable: |ln R'(20 Hz)| = 0.087 < max(3 x 0.024, 0.15); tau1
+        interval 12.5-20.9 ms spans x1.68 > x1.5; tau2 interval 11.7-19.8 ms spans x1.69
+        > x1.5
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-51-g32901f45495c)"
+      notes: >-
+        Speed from U_EM (proc/results/em). The pair's 20 Hz power ratio changed between
+        the halves (ratio-shift): over the whole deployment the beads look matched.
 
   - bead: T2813
     deployment: ARCTERX-2025 Interior
@@ -873,6 +1436,45 @@ calibrations:
       66 days. Order 3 beat order 2 by 1.4 mK of held-out error. This record is the
       rerun after the streaming-pass fix (#237); its coefficients are bit-identical to
       the fit by committed code (git v0.4.0-44-g5f7f1112353e).
+    response:
+      method: pair-ratio-sp
+      partner: T2811
+      first: "2025-02-04T07:42:26Z"
+      last: "2025-04-10T14:35:16Z"
+      n_chi_files: 786
+      n_recordings: 786
+      n_windows: 864191
+      W_ref_m_s: 0.441
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: false
+      tau_ms: null
+      tau_ms_16_84: null
+      halves:
+        first:
+          first: "2025-02-04T07:42:26Z"
+          last: "2025-03-09T04:33:54Z"
+          n_chi_files: 393
+          tau_ms: 18.49
+          tau_ms_16_84: [16.24, 20.02]
+          power_ratio_20Hz: 1.2267
+        second:
+          first: "2025-03-09T07:30:28Z"
+          last: "2025-04-10T14:35:16Z"
+          n_chi_files: 393
+          tau_ms: 17.44
+          tau_ms_16_84: [14.19, 19.29]
+          power_ratio_20Hz: 0.80912
+      power_ratio: {10: 1.0595, 20: 1.0913}
+      power_ratio_16_84: {10: [1.0446, 1.0844], 20: [1.0733, 1.1256]}
+      flags: [ratio-shift]
+      reason: >-
+        beads not distinguishable: |ln R'(20 Hz)| = 0.087 < max(3 x 0.024, 0.15); tau1
+        interval 12.5-20.9 ms spans x1.68 > x1.5; tau2 interval 11.7-19.8 ms spans x1.69
+        > x1.5
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-51-g32901f45495c)"
+      notes: >-
+        Speed from U_EM (proc/results/em); see T2811's entry.
 
   - bead: T2809
     deployment: ARCTERX-2025 Interior
@@ -918,6 +1520,43 @@ calibrations:
     notes: >-
       Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit
       includes the climbs after it. Only 3 blocks, too few to test for drift.
+    response:
+      method: pair-ratio-sp
+      partner: T2810
+      first: "2025-02-04T01:06:01Z"
+      last: "2025-02-10T01:11:29Z"
+      n_chi_files: 136
+      n_recordings: 117
+      n_windows: 79769
+      W_ref_m_s: 0.384
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: true
+      tau_ms: 9.55
+      tau_ms_16_84: [7.45, 11.06]
+      halves:
+        first:
+          first: "2025-02-04T01:06:01Z"
+          last: "2025-02-05T17:57:38Z"
+          n_chi_files: 69
+          tau_ms: 7.19
+          tau_ms_16_84: [6.43, 9.08]
+          power_ratio_20Hz: 1.4147
+        second:
+          first: "2025-02-05T19:49:38Z"
+          last: "2025-02-10T01:11:29Z"
+          n_chi_files: 67
+          tau_ms: null
+          tau_ms_16_84: null
+          power_ratio_20Hz: 1.3431
+      power_ratio: {10: 1.1635, 20: 1.3802}
+      power_ratio_16_84: {10: [1.1043, 1.1943], 20: [1.2771, 1.4076]}
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-51-g32901f45495c)"
+      notes: >-
+        Speed from the glider flight model (the proc/ pre- and post-wing-failure
+        'flight' runs together); U_EM read 4-15% higher (flight/EM speed 0.87 before the
+        wing failure, 0.96 after; proc/WORKFLOW.md), which would move W_ref, not tau at
+        W_ref.
 
   - bead: T2810
     deployment: ARCTERX-2025 Interior
@@ -964,6 +1603,43 @@ calibrations:
       Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit
       includes the climbs after it. T2 read +20 to +27 mK from about 4.5 h before the
       failure; that episode is inside the fit and inflates the block scatter.
+    response:
+      method: pair-ratio-sp
+      partner: T2809
+      first: "2025-02-04T01:06:01Z"
+      last: "2025-02-10T01:11:29Z"
+      n_chi_files: 136
+      n_recordings: 117
+      n_windows: 79769
+      W_ref_m_s: 0.384
+      speed_scaling: lueck
+      band_Hz: [1.0, 25.0]
+      identified: true
+      tau_ms: 11.73
+      tau_ms_16_84: [9.63, 13.58]
+      halves:
+        first:
+          first: "2025-02-04T01:06:01Z"
+          last: "2025-02-05T17:57:38Z"
+          n_chi_files: 69
+          tau_ms: 9.57
+          tau_ms_16_84: [8.87, 11.4]
+          power_ratio_20Hz: 0.70685
+        second:
+          first: "2025-02-05T19:49:38Z"
+          last: "2025-02-10T01:11:29Z"
+          n_chi_files: 67
+          tau_ms: null
+          tau_ms_16_84: null
+          power_ratio_20Hz: 0.74456
+      power_ratio: {10: 0.85948, 20: 0.72452}
+      power_ratio_16_84: {10: [0.83729, 0.90557], 20: [0.71044, 0.78303]}
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-51-g32901f45495c)"
+      notes: >-
+        Speed from the glider flight model (the proc/ pre- and post-wing-failure
+        'flight' runs together); U_EM read 4-15% higher (flight/EM speed 0.87 before the
+        wing failure, 0.96 after; proc/WORKFLOW.md), which would move W_ref, not tau at
+        W_ref.
 
   - bead: T2244
     deployment: ARCTERX-2023 Interior

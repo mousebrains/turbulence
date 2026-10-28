@@ -262,6 +262,21 @@ prior itself, because its shape was not fitted over its own range. The
 field-by-field mapping is in `microstructure_sensors/README.md`. Commit the
 three sheet files together; never edit the `.md` or `.csv` by hand.
 
+An entry can also carry the bead's FP07 time constant, measured from the same
+deployment's chi products with `fp07-pair tau` over the entry's own span
+(`docs/fp07pair/runbook.md` §6) and recorded on both beads of the pair:
+
+```bash
+fp07-cal registry response fp07tau/fp07tau_SN194_T1592-T2005_20220321T0459Z.json \
+    --bead T1592 --deployment "ARCTERX-2022 Interior" --dry-run
+```
+
+It inserts a `response:` block at the end of that entry, as text, and refuses a
+record of another instrument or channel, a measurement outside the entry's
+span, and an entry that already has one. It is a single-pole-equivalent tau
+whose absolute level nothing anchors; the sheet's header and the generated
+`.md` say what it does and does not mean.
+
 The sheet also prints a bead's prior directly, for a deployment with no
 reference at all:
 

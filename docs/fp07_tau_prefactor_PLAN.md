@@ -4,7 +4,10 @@ Status: CLOSED 2026-10-13. Decision (Pat): **keep the `lueck` default
 (10 ms * W^-1/2)** until a more significant result; the fleet's single-pole-
 equivalent median is 12 ms, and the absolute level is not identifiable in
 situ. The per-bead correction the conclusions point to was built:
-`fp07-pair` / `instruments.<dir>.fp07_response` (PR #217). No lab measurement
+`fp07-pair` / `instruments.<dir>.fp07_response` (PR #217). Section 7's other
+branch ("per-bead tau goes into the #189 registry") was built 2026-10-28:
+`fp07-pair tau` measures each bead's single-pole-equivalent tau and the FP07
+calibration sheet carries it (`docs/fp07pair/runbook.md` §6). No lab measurement
 will be made, and the SBE7 route is closed (Starbuck is the only deployment
 with one, and its channel is unusable). Sections are kept in the order they
 were written; later sections supersede earlier ones where they differ (the
@@ -377,6 +380,21 @@ fits are equally good (pole form undetermined) and give 3-dB points ~30-40% lowe
 | ARCTERX-22 Wake SN428 | 0.97 | 57,461 | 13.0 [11.2-14.7] | 9.3 [7.7-10.7] | 12.2 / 17.1 | 15.7 |
 | ARCTERX-22 Wake SN194 | 0.94 | 3,682 | not identifiable (6.1 / 9.3) | | | |
 | ARCTERX-25 Wake SN479 | 1.07 | 22,393 | not identifiable — beads matched (6.4 / 5.4) | | | |
+
+> **Superseded 2026-10-28 (`fp07-pair tau`, issue #189).** These first-pass
+> values come from spectral SUMS (`ratio.collect`/`analyse`), which the section
+> "Robust estimator" below found not robust. Rerun on the same ARCTERX-22
+> Interior chi_00 products, that code reproduces the SN194 row exactly
+> (13.0 [11.9-14.0] / 19.5 [17.8-20.9], halves 10.8/17.7 and 16.1/22.0), so the
+> products have not changed. The median-of-log estimator on the same files gives
+> 17.4 [17.1-17.6] / 25.6 [25.2-25.9] ms (`analyze_cache.py` `b25_p1`) and the
+> production tool 16.7 [15.9-17.7] / 24.8 [24.0-25.7] ms (halves 14.8/23.0 then
+> 20.3/28.1), the values the FP07 calibration sheet records. The tau ratio
+> (1.47-1.50) and the slowing between halves agree across all three; the
+> absolute level does not, by up to 1.3x. That is the estimator dependence of the
+> absolute level, not a change in the beads. The "Robust estimator" section's
+> 16.3/23.5 (1-25 Hz) could not be reproduced exactly (17.4/25.6 here; its
+> cache no longer exists).
 
 - The four ARCTERX-22 beads read 9-20 ms at ~1 m/s: SLOWER than lueck
   (10 ms), and ~2x slower than the published FP07 values.
