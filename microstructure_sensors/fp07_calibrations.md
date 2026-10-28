@@ -74,6 +74,27 @@ A `t_0`-only refit (the shape held fixed from the prior) removes the first term 
 | `glider-ctd` | fp07-cal fit against the Slocum's own CTD (sci_water_temp on sci_ctd41cp_timestamp), real samples only, pooled over up to 100-160 files spread across the deployment. A 0.7 s single pole for the CTD's thermistor; lag searched over +/-20 s after a 30 s high-pass and gated on peak sharpness; robust fit with the sensor-geometry term (dz*dT/dz + tau*w*dT/dz) fitted jointly. In every glider fit here dz and tau are collinear (0.86-0.94), so only their combination is resolved. |
 | `vmp-own-jac` | fp07-cal's run_calibration (the engine of `fp07-cal fit`) pooled over every VMP descent of the deployment (P >= 3 dbar, fall rate >= 0.3 dbar/s, >= 20 s) against the instrument's own JAC CT temperature (JAC_T): every 8th slow sample, none interpolated, blanked over bad buffers plus 2 s, and +/-3 s around any sample more than 1 K from its 0.5 s running median (this fired once, on SN142 in ARCTERX-2025 Interior). The reference pole is a single pole at the JAC's vendor response for the median fall rate. Lag searched over +/-1 s after a 10 s high-pass; robust fit; the sensor-geometry term off, because the 2021 descents span about 22 dbar, too short for it. |
 
+### FP07 time constant (`response`)
+
+An entry may carry the bead's FP07 time constant, measured by `fp07-pair tau` from the deployment's chi products and recorded with `fp07-cal registry response` (`docs/fp07pair/runbook.md`). It is a property of the bead, carried with the bead's calibration (the PI's decision, 2026-10-28).
+
+**What the number is.** Each bead's single-pole-equivalent time constant over 1-25 Hz: a single pole, |H|^2 = 1/(1 + (2 pi f tau)^2), fitted to each bead of a pair from the ratio of their gradient spectra, at the pair's median speed `W_ref`. Two beads on one probe head see the same microstructure, so the ratio needs no turbulence model. **The pole form is not determined**: a double pole fits the ratio as well and puts the 3-dB point 30-40% lower. **The absolute level is family- and band-dependent** (on ARCTERX-2022 SN194 the same products give 17/25 ms fitted over 1-25 Hz and 11/17 ms over 1-60 Hz, and spectral sums over 1-26 Hz gave 13/20) **and no external reference anchors it**: the in-situ anchor failed its synthetic check (`docs/fp07_tau_prefactor_PLAN.md`). The electronics contribute negligibly: the anti-alias filters sit near 110 Hz, far above the band, so this is the bead's tau. **The ratio is the robust part**, recorded model-free as this bead's power response over its partner's at 10 and 20 Hz, relative to the reference band (the lowest well-sampled bins below 4 Hz). The time halves show a bead that changed within a deployment.
+
+**Identified or not.** Matched beads give a flat ratio and no tau, and a failing bead loses amplitude, which is not a time constant. A pair is identified only when the beads differ beyond bootstrap noise at 20 Hz, each tau's 16-84% interval is bounded and spans at most a factor 1.5, the flat gain is below a factor 2, and there are enough chi files and frequency bins (the full rule is in the runbook). Otherwise tau is blank and only the power ratios are recorded.
+
+**At 1 m/s** the table shows tau scaled from `W_ref` under the entry's `speed_scaling` (`lueck`: tau ~ W^-1/2). That column is derived, never stored. For comparison, the `lueck` default chi uses is 10 ms at 1 m/s; across the fleet beads scatter by a factor ~1.9 (geometric 1 sd) about a median of ~12 ms, which is why tau is carried per bead. Nothing in chi processing reads these values yet.
+
+| method | what it does |
+|---|---|
+| `pair-ratio-sp` | `fp07-pair tau`: one single pole per bead fitted to the median over windows of ln(S2/S1), the bead pair's gradient-spectrum ratio from the deployment's chi products (built as `fp07-pair fit` builds it), read every 1 Hz across `band_Hz` of reduced frequency (frequency at the pair's median speed `W_ref_m_s`, windows at other speeds mapped by `speed_scaling`), with 16-84% intervals from a bootstrap over chi files. The flat gain between the beads is a free parameter. |
+
+| response flag | meaning |
+|---|---|
+| `amplitude` | Flat gain between the beads beyond a factor 2: an amplitude-loss signature (a failing bead). Never a tau measurement. |
+| `outlier` | The 20 Hz power ratio is beyond the fleet spread (\|ln\| > 0.9): possibly a failing bead, or one far slower than its partner. |
+| `noise-model` | In its quietest windows one bead's observed spectrum at 60-100 Hz is more than 1.5x off its noise model, which biases tau. |
+| `drift` | This bead's two time halves differ by more than twice their combined 1-sigma (16-84%) uncertainty: it changed within the deployment (fouling, aging). |
+
 ## Beads
 
 | bead | where | calibrations | first | last |

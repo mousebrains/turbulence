@@ -150,6 +150,40 @@ ORDER_CHOICES: dict[str, str] = {
     ),
 }
 
+# The FP07 response block (`response:`), measured by `fp07-pair tau`
+# (odas_tpw.chi.fp07_bead_tau) from the entry's bead and its partner.
+RESPONSE_METHODS: dict[str, str] = {
+    "pair-ratio-sp": (
+        "`fp07-pair tau`: one single pole per bead fitted to the median over windows of "
+        "ln(S2/S1), the bead pair's gradient-spectrum ratio from the deployment's chi "
+        "products (built as `fp07-pair fit` builds it), read every 1 Hz across `band_Hz` of "
+        "reduced frequency (frequency at the pair's median speed `W_ref_m_s`, windows at other "
+        "speeds mapped by `speed_scaling`), with 16-84% intervals from a bootstrap over chi "
+        "files. The flat gain between the beads is a free parameter."
+    ),
+}
+RESPONSE_FLAGS: dict[str, str] = {
+    "amplitude": (
+        "Flat gain between the beads beyond a factor 2: an amplitude-loss signature (a "
+        "failing bead). Never a tau measurement."
+    ),
+    "outlier": (
+        "The 20 Hz power ratio is beyond the fleet spread (|ln| > 0.9): possibly a failing "
+        "bead, or one far slower than its partner."
+    ),
+    "noise-model": (
+        "In its quietest windows one bead's observed spectrum at 60-100 Hz is more than 1.5x "
+        "off its noise model, which biases tau."
+    ),
+    "drift": (
+        "This bead's two time halves differ by more than twice their combined 1-sigma "
+        "(16-84%) uncertainty: it changed within the deployment (fouling, aging)."
+    ),
+}
+RESPONSE_RATIO_F = (10, 20)  # Hz: the model-free power ratios recorded
+# fp07_bead_tau.TAU_BOUNDS, in ms: a tau at a bound is the fit's limit, not a value.
+RESPONSE_TAU_MS = (0.5, 200.0)
+
 PRIOR_RULE = (
     "The coefficients, shape and t_0 alike, come from the bead's widest-range "
     "unflagged calibration: the widest fitted temperature range among calibrations "
@@ -256,6 +290,83 @@ class Uncertainty:
 
 
 @dataclass(frozen=True)
+class ResponseHalf:
+    """One time half of a response measurement."""
+
+    first: datetime
+    last: datetime
+    n_chi_files: int
+    tau_ms: float | None  # None when the half alone does not identify it
+    tau_ms_16_84: tuple[float, float] | None
+
+
+@dataclass(frozen=True)
+class Response:
+    """The bead's FP07 time constant as measured from its pair (`response:`).
+
+    Everything here was MEASURED (``fp07-pair tau``); :attr:`tau_1mps_ms` is
+    derived under :attr:`speed_scaling` and never stored.
+    """
+
+    method: str
+    partner: str
+    first: datetime
+    last: datetime
+    n_chi_files: int
+    n_windows: int
+    W_ref_m_s: float
+    speed_scaling: str
+    band_Hz: tuple[float, float]
+    identified: bool
+    tau_ms: float | None
+    tau_ms_16_84: tuple[float, float] | None
+    halves: tuple[ResponseHalf, ResponseHalf] | None
+    power_ratio: dict[int, float | None]  # this bead's power response / its partner's
+    power_ratio_16_84: dict[int, tuple[float, float] | None]
+    flags: tuple[str, ...]
+    software_version: str
+    reason: str | None = None
+    notes: str = ""
+
+    def scale_to(self, W: float) -> float:
+        """tau(W)/tau(W_ref) under :attr:`speed_scaling`."""
+        from odas_tpw.chi.fp07 import fp07_tau
+
+        return float(fp07_tau(W, model=self.speed_scaling)) / float(
+            fp07_tau(self.W_ref_m_s, model=self.speed_scaling))
+
+    @property
+    def tau_1mps_ms(self) -> float | None:
+        """tau at 1 m/s, DERIVED from the measured tau at W_ref under the speed scaling."""
+        return None if self.tau_ms is None else self.tau_ms * self.scale_to(1.0)
+
+    def to_dict(self) -> dict[str, Any]:
+        def half(h: ResponseHalf) -> dict[str, Any]:
+            return {"first": _iso(h.first), "last": _iso(h.last), "n_chi_files": h.n_chi_files,
+                    "tau_ms": h.tau_ms,
+                    "tau_ms_16_84": None if h.tau_ms_16_84 is None else list(h.tau_ms_16_84)}
+
+        return {
+            "method": self.method, "partner": self.partner,
+            "first": _iso(self.first), "last": _iso(self.last),
+            "n_chi_files": self.n_chi_files, "n_windows": self.n_windows,
+            "W_ref_m_s": self.W_ref_m_s, "speed_scaling": self.speed_scaling,
+            "band_Hz": list(self.band_Hz), "identified": self.identified,
+            "tau_ms": self.tau_ms,
+            "tau_ms_16_84": None if self.tau_ms_16_84 is None else list(self.tau_ms_16_84),
+            "tau_1mps_ms_derived": self.tau_1mps_ms,
+            "halves": None if self.halves is None else
+            {"first": half(self.halves[0]), "second": half(self.halves[1])},
+            "power_ratio": dict(self.power_ratio),
+            "power_ratio_16_84": {k: None if v is None else list(v)
+                                  for k, v in self.power_ratio_16_84.items()},
+            "flags": list(self.flags), "software_version": self.software_version,
+            **({"reason": self.reason} if self.reason else {}),
+            **({"notes": self.notes} if self.notes else {}),
+        }
+
+
+@dataclass(frozen=True)
 class Calibration:
     """One bead x one deployment fit."""
 
@@ -272,6 +383,7 @@ class Calibration:
     valid_T: tuple[float, float]
     flags: tuple[str, ...]
     notes: str
+    response: Response | None = None  # the bead's measured FP07 time constant
 
     @property
     def key(self) -> tuple[str, str]:
@@ -358,6 +470,8 @@ class Calibration:
             out["reference"]["note"] = self.reference.note
         if self.fit.shape_from is not None:
             out["fit"]["shape_from"] = self.fit.shape_from
+        if self.response is not None:
+            out["response"] = self.response.to_dict()
         return out
 
 
@@ -752,6 +866,7 @@ def parse(data: object, *, source: Path | None = None) -> Registry:
     _check_unique(cals)
     _check_occupancy(cals)
     _check_shape_sources(cals)
+    _check_responses(cals)
     return Registry(
         schema=SCHEMA,
         transfer=transfer,
@@ -796,7 +911,7 @@ def _parse_methods(raw: object) -> dict[str, str]:
 
 _ENTRY_KEYS = ("bead", "deployment", "instrument", "first", "last", "reference", "fit",
                "coefficients", "bridge", "uncertainty", "valid_T_degC")
-_ENTRY_OPTIONAL = ("flags", "notes")
+_ENTRY_OPTIONAL = ("flags", "notes", "response")
 
 
 def _parse_calibration(raw: object, i: int, methods: dict[str, str]) -> Calibration:
@@ -900,6 +1015,8 @@ def _parse_calibration(raw: object, i: int, methods: dict[str, str]) -> Calibrat
 
     notes = m.get("notes")
     notes = "" if notes is None else _str(notes, f"{w}.notes")
+    response = (None if m.get("response") is None
+                else _parse_response(m["response"], f"{w}.response", bead, first, last))
     return Calibration(
         bead=bead,
         deployment=deployment,
@@ -914,6 +1031,151 @@ def _parse_calibration(raw: object, i: int, methods: dict[str, str]) -> Calibrat
         valid_T=(lo, hi),
         flags=flags,
         notes=" ".join(notes.split()),
+        response=response,
+    )
+
+
+_RESPONSE_KEYS = ("method", "partner", "first", "last", "n_chi_files", "n_windows", "W_ref_m_s",
+                  "speed_scaling", "band_Hz", "identified", "tau_ms", "tau_ms_16_84", "halves",
+                  "power_ratio", "power_ratio_16_84", "software_version")
+_RESPONSE_OPTIONAL = ("flags", "reason", "notes")
+_HALF_KEYS = ("first", "last", "n_chi_files", "tau_ms", "tau_ms_16_84")
+
+
+def _tau_pair(v: object, ci: object, w: str) -> tuple[float | None, tuple[float, float] | None]:
+    """A tau [ms] and its 16-84% interval: both null, or both inside the fit bounds."""
+    if v is None or ci is None:
+        if v is not None or ci is not None:
+            raise RegistryError(f"{w}: tau_ms and tau_ms_16_84 are null together or not at all")
+        return None, None
+    tau = _num(v, f"{w}.tau_ms", positive=True)
+    lo, hi = _pair(ci, f"{w}.tau_ms_16_84")
+    for x, what in ((tau, "tau_ms"), (lo, "tau_ms_16_84"), (hi, "tau_ms_16_84")):
+        if not RESPONSE_TAU_MS[0] < x < RESPONSE_TAU_MS[1]:
+            raise PlausibilityError(
+                f"{w}.{what} = {x:g} ms is not inside the fit's bounds "
+                f"{RESPONSE_TAU_MS[0]:g}-{RESPONSE_TAU_MS[1]:g} ms (a bound is a limit, not a "
+                f"value); tau is in MILLISECONDS"
+            )
+    return tau, (lo, hi)
+
+
+def _parse_response(raw: object, w: str, bead: str, first: datetime,
+                    last: datetime) -> Response:
+    from odas_tpw.chi.fp07 import fp07_tau
+
+    m = _mapping(raw, w, _RESPONSE_KEYS, _RESPONSE_OPTIONAL)
+    method = _str(m["method"], f"{w}.method")
+    if method not in RESPONSE_METHODS:
+        raise RegistryError(f"{w}.method: {method!r} is not one of {sorted(RESPONSE_METHODS)}")
+    partner = m["partner"]
+    if not is_bead_serial(partner):
+        raise SerialPatternError(f"{w}.partner: {partner!r} is not a bead serial T<number>")
+    if partner == bead:
+        raise RegistryError(f"{w}.partner: a bead is not its own partner")
+    r0 = _datetime(m["first"], f"{w}.first")
+    r1 = _datetime(m["last"], f"{w}.last")
+    if r0 > r1:
+        raise DateOrderError(f"{w}: first {_iso(r0)} is after last {_iso(r1)}")
+    if r0 < first or r1 > last:
+        raise DateOrderError(
+            f"{w}: the measurement ({_iso(r0)} .. {_iso(r1)}) is not inside the entry's span "
+            f"({_iso(first)} .. {_iso(last)})"
+        )
+    n_files = _int(m["n_chi_files"], f"{w}.n_chi_files", minimum=1)
+    n_windows = _int(m["n_windows"], f"{w}.n_windows", minimum=n_files)
+    W_ref = _num(m["W_ref_m_s"], f"{w}.W_ref_m_s", positive=True)
+    if not 0.02 <= W_ref <= 5.0:
+        raise PlausibilityError(f"{w}.W_ref_m_s = {W_ref:g} is not a profiling speed in m/s")
+    scaling = _str(m["speed_scaling"], f"{w}.speed_scaling")
+    try:
+        fp07_tau(1.0, model=scaling)
+    except ValueError as exc:
+        raise RegistryError(f"{w}.speed_scaling: {exc}") from exc
+    band = _pair(m["band_Hz"], f"{w}.band_Hz")
+    if not 0 < band[0] < band[1]:
+        raise RegistryError(f"{w}.band_Hz: {list(band)} is not a positive band")
+    identified = _bool(m["identified"], f"{w}.identified")
+    tau, tau_ci = _tau_pair(m["tau_ms"], m["tau_ms_16_84"], w)
+    if identified != (tau is not None):
+        raise RegistryError(
+            f"{w}: identified is {str(identified).lower()} but tau_ms is "
+            f"{'null' if tau is None else tau}; an unidentified pair records no tau"
+        )
+    reason = _opt_str(m.get("reason"), f"{w}.reason")
+    if not identified and reason is None:
+        raise MissingKeyError(f"{w}: not identified; say why in `reason` (fp07-pair tau's verdict)")
+    if identified and reason is not None:
+        raise RegistryError(f"{w}.reason is for an unidentified measurement")
+
+    halves: tuple[ResponseHalf, ResponseHalf] | None = None
+    if m["halves"] is not None:
+        hm = _mapping(m["halves"], f"{w}.halves", ("first", "second"))
+        hs = []
+        for k in ("first", "second"):
+            wk = f"{w}.halves.{k}"
+            h = _mapping(hm[k], wk, _HALF_KEYS)
+            h0, h1 = _datetime(h["first"], f"{wk}.first"), _datetime(h["last"], f"{wk}.last")
+            if h0 > h1:
+                raise DateOrderError(f"{wk}: first {_iso(h0)} is after last {_iso(h1)}")
+            ht, hci = _tau_pair(h["tau_ms"], h["tau_ms_16_84"], wk)
+            hs.append(ResponseHalf(h0, h1, _int(h["n_chi_files"], f"{wk}.n_chi_files", minimum=1),
+                                   ht, hci))
+        a, b = hs
+        if a.first != r0 or b.last != r1 or not a.last < b.first:
+            raise DateOrderError(
+                f"{w}.halves: must split {_iso(r0)} .. {_iso(r1)} in time order, between "
+                f"different file times (the first half ends before the second begins)"
+            )
+        if a.n_chi_files + b.n_chi_files != n_files:
+            raise RegistryError(f"{w}.halves: {a.n_chi_files} + {b.n_chi_files} chi files is not "
+                                f"n_chi_files {n_files}")
+        halves = (a, b)
+
+    for key in ("power_ratio", "power_ratio_16_84"):
+        rm = m[key]
+        if not isinstance(rm, dict) or set(rm) != set(RESPONSE_RATIO_F) or any(
+                isinstance(k, bool) for k in rm):
+            raise UnknownKeyError(f"{w}.{key}: expected the frequencies "
+                                  f"{list(RESPONSE_RATIO_F)} [Hz] as keys, got {rm!r}")
+    ratio: dict[int, float | None] = {}
+    ratio_ci: dict[int, tuple[float, float] | None] = {}
+    for f0 in RESPONSE_RATIO_F:
+        v, ci = m["power_ratio"][f0], m["power_ratio_16_84"][f0]
+        if (v is None) != (ci is None):
+            raise RegistryError(f"{w}: power_ratio and its interval at {f0} Hz are null together "
+                                f"or not at all")
+        ratio[f0] = None if v is None else _num(v, f"{w}.power_ratio.{f0}", positive=True)
+        pair = None if ci is None else _pair(ci, f"{w}.power_ratio_16_84.{f0}")
+        if pair is not None and pair[0] <= 0:
+            raise RegistryError(f"{w}.power_ratio_16_84.{f0}: a power ratio is positive")
+        ratio_ci[f0] = pair
+    if identified and ratio[20] is None:
+        raise RegistryError(f"{w}: identified, yet no 20 Hz power ratio was measured")
+
+    flags_raw = m.get("flags") or []
+    if not isinstance(flags_raw, list):
+        raise RegistryError(f"{w}.flags: expected a list")
+    for f in flags_raw:
+        if f not in RESPONSE_FLAGS:
+            raise RegistryError(f"{w}.flags: unknown flag {f!r}; known: {sorted(RESPONSE_FLAGS)}")
+    if len(set(flags_raw)) != len(flags_raw):
+        raise RegistryError(f"{w}.flags: repeated flag")
+    if "amplitude" in flags_raw and identified:
+        raise RegistryError(f"{w}: flagged amplitude (a failing bead) yet identified; bead "
+                            f"attenuation is not a time constant")
+    if "drift" in flags_raw and (halves is None or any(h.tau_ms is None for h in halves)):
+        raise RegistryError(f"{w}: flagged drift without a tau in both halves")
+    notes = m.get("notes")
+    return Response(
+        method=method, partner=partner, first=r0, last=r1, n_chi_files=n_files,
+        n_windows=n_windows, W_ref_m_s=W_ref, speed_scaling=scaling, band_Hz=band,
+        identified=identified, tau_ms=tau, tau_ms_16_84=tau_ci, halves=halves,
+        power_ratio=ratio, power_ratio_16_84=ratio_ci,
+        flags=tuple(f for f in RESPONSE_FLAGS if f in flags_raw),
+        software_version=_str(m["software_version"], f"{w}.software_version"),
+        reason=None if reason is None else " ".join(reason.split()),
+        notes="" if notes is None else " ".join(_str(notes, f"{w}.notes").split()),
     )
 
 
@@ -1109,6 +1371,53 @@ def _check_shape_sources(cals: list[Calibration]) -> None:
             raise OrderMismatchError(
                 f"{w}: the beta terms {mine} are not those of {src.deployment} {theirs}"
             )
+
+
+def _check_responses(cals: list[Calibration]) -> None:
+    """A response's partner is on the same instrument, and one measurement reads the same twice.
+
+    Wherever the sheet holds the partner during the measurement, it must be
+    on this entry's instrument (the other channel follows from the occupancy
+    check). When the partner's entry records the same measurement (same span,
+    partner this bead), its counts, speed, band and method must be equal, its
+    power ratios the reciprocal of these, and its halves split at the same times.
+    """
+    for c in cals:
+        r = c.response
+        if r is None:
+            continue
+        w = f"{c.bead} / {c.deployment}: response"
+        for o in cals:
+            if o.bead != r.partner or o.last < r.first or o.first > r.last:
+                continue
+            if o.instrument.serial != c.instrument.serial:
+                raise DateOrderError(
+                    f"{w}: partner {r.partner} was on {o.instrument.label()} ({o.deployment}) "
+                    f"during the measurement, not on SN {c.instrument.serial}"
+                )
+            q = o.response
+            if q is None or q.partner != c.bead or (q.first, q.last) != (r.first, r.last):
+                continue
+            same = ("method", "n_chi_files", "n_windows", "W_ref_m_s", "speed_scaling",
+                    "band_Hz", "identified")
+            diff = [k for k in same if getattr(q, k) != getattr(r, k)]
+            if diff:
+                raise RegistryError(f"{w}: the same measurement on {o.bead} / {o.deployment} "
+                                    f"differs in {diff}")
+            for f0 in RESPONSE_RATIO_F:
+                a, b = r.power_ratio[f0], q.power_ratio[f0]
+                if (a is None) != (b is None) or (
+                        a is not None and b is not None and abs(math.log(a * b)) > 2e-3):
+                    raise RegistryError(
+                        f"{w}: the power ratio at {f0} Hz ({a}) is not the reciprocal of "
+                        f"{o.bead}'s ({b}) from the same measurement"
+                    )
+            if (r.halves is None) != (q.halves is None) or (
+                    r.halves is not None and q.halves is not None and any(
+                        (x.first, x.last, x.n_chi_files) != (y.first, y.last, y.n_chi_files)
+                        for x, y in zip(r.halves, q.halves, strict=True))):
+                raise RegistryError(f"{w}: the halves differ from {o.bead}'s record of the "
+                                    f"same measurement")
 
 
 def _check_occupancy(cals: list[Calibration]) -> None:
@@ -1392,7 +1701,55 @@ CSV_COLUMNS = (
     "a", "b", "g", "e_b", "adc_fs", "adc_bits",
     "fit_rms_mK", "rms_all_mK", "held_out_mK", "block_sd_mK", "n_blocks",
     "T_min_degC", "T_max_degC", "flags", "software_version", "notes",
+    # The FP07 response (`response:`); tau_1mps_ms is DERIVED (speed_scaling), not stored.
+    "response_method", "response_partner", "response_first", "response_last",
+    "response_n_chi_files", "response_n_windows", "response_W_ref_m_s",
+    "response_speed_scaling", "response_band_lo_Hz", "response_band_hi_Hz",
+    "response_identified", "response_tau_ms", "response_tau_lo_ms", "response_tau_hi_ms",
+    "response_tau_1mps_ms",
+    "response_half1_last", "response_half1_n_chi_files", "response_half1_tau_ms",
+    "response_half1_tau_lo_ms", "response_half1_tau_hi_ms",
+    "response_half2_first", "response_half2_n_chi_files", "response_half2_tau_ms",
+    "response_half2_tau_lo_ms", "response_half2_tau_hi_ms",
+    "response_power_ratio_10Hz", "response_power_ratio_10Hz_lo", "response_power_ratio_10Hz_hi",
+    "response_power_ratio_20Hz", "response_power_ratio_20Hz_lo", "response_power_ratio_20Hz_hi",
+    "response_flags", "response_reason", "response_software_version", "response_notes",
 )
+
+
+def _response_row(r: Response | None) -> dict[str, Any]:
+    if r is None:
+        return {k: None for k in CSV_COLUMNS if k.startswith("response_")}
+    h = r.halves
+    row: dict[str, Any] = {
+        "response_method": r.method, "response_partner": r.partner,
+        "response_first": _iso(r.first), "response_last": _iso(r.last),
+        "response_n_chi_files": r.n_chi_files, "response_n_windows": r.n_windows,
+        "response_W_ref_m_s": r.W_ref_m_s, "response_speed_scaling": r.speed_scaling,
+        "response_band_lo_Hz": r.band_Hz[0], "response_band_hi_Hz": r.band_Hz[1],
+        "response_identified": r.identified, "response_tau_ms": r.tau_ms,
+        "response_tau_lo_ms": None if r.tau_ms_16_84 is None else r.tau_ms_16_84[0],
+        "response_tau_hi_ms": None if r.tau_ms_16_84 is None else r.tau_ms_16_84[1],
+        "response_tau_1mps_ms": None if r.tau_1mps_ms is None else round(r.tau_1mps_ms, 2),
+        "response_flags": ";".join(r.flags), "response_reason": r.reason,
+        "response_software_version": r.software_version, "response_notes": r.notes or None,
+    }
+    for k, half in ((1, h[0] if h else None), (2, h[1] if h else None)):
+        p = f"response_half{k}_"
+        row[p + ("last" if k == 1 else "first")] = (
+            None if half is None else _iso(half.last if k == 1 else half.first))
+        row[p + "n_chi_files"] = None if half is None else half.n_chi_files
+        row[p + "tau_ms"] = None if half is None else half.tau_ms
+        ci = None if half is None else half.tau_ms_16_84
+        row[p + "tau_lo_ms"] = None if ci is None else ci[0]
+        row[p + "tau_hi_ms"] = None if ci is None else ci[1]
+    for f0 in RESPONSE_RATIO_F:
+        p = f"response_power_ratio_{f0}Hz"
+        rci = r.power_ratio_16_84[f0]
+        row[p] = r.power_ratio[f0]
+        row[p + "_lo"] = None if rci is None else rci[0]
+        row[p + "_hi"] = None if rci is None else rci[1]
+    return row
 
 
 def _cell(v: object) -> str:
@@ -1463,6 +1820,7 @@ def render_csv(reg: Registry) -> str:
             "flags": ";".join(c.flags),
             "software_version": c.fit.software_version,
             "notes": c.notes,
+            **_response_row(c.response),
         }
         w.writerow([_cell(row[k]) for k in CSV_COLUMNS])
     return buf.getvalue()
@@ -1652,6 +2010,7 @@ def render_markdown(reg: Registry) -> str:
     for k in sorted(reg.methods):
         P(f"| `{k}` | {_md(reg.methods[k])} |")
     P("")
+    out.extend(_response_how_to_read())
     P("## Beads")
     P("")
     P("| bead | where | calibrations | first | last |")
@@ -1663,6 +2022,99 @@ def render_markdown(reg: Registry) -> str:
     for b in beads:
         out.extend(_bead_section(reg, b))
     return "\n".join(out) + "\n"
+
+
+RESPONSE_SEMANTICS = (
+    "**What the number is.** Each bead's single-pole-equivalent time constant over "
+    "1-25 Hz: a single pole, |H|^2 = 1/(1 + (2 pi f tau)^2), fitted to each bead of a pair "
+    "from the ratio of their gradient spectra, at the pair's median speed `W_ref`. Two "
+    "beads on one probe head see the same microstructure, so the ratio needs no turbulence "
+    "model. **The pole form is not determined**: a double pole fits the ratio as well and "
+    "puts the 3-dB point 30-40% lower. **The absolute level is family- and band-dependent** "
+    "(on ARCTERX-2022 SN194 the same products give 17/25 ms fitted over 1-25 Hz and 11/17 ms "
+    "over 1-60 Hz, and spectral sums over 1-26 Hz gave 13/20) **and no external reference "
+    "anchors it**: the in-situ anchor failed its synthetic check "
+    "(`docs/fp07_tau_prefactor_PLAN.md`). The electronics contribute negligibly: the "
+    "anti-alias filters sit near 110 Hz, far above the band, so this is the bead's tau. "
+    "**The ratio is the robust part**, recorded model-free as this bead's power response "
+    "over its partner's at 10 and 20 Hz, relative to the reference band (the lowest "
+    "well-sampled bins below 4 Hz). The time halves show a bead that changed within a "
+    "deployment."
+)
+
+
+def _response_how_to_read() -> list[str]:
+    out: list[str] = []
+    P = out.append
+    P("### FP07 time constant (`response`)")
+    P("")
+    P("An entry may carry the bead's FP07 time constant, measured by `fp07-pair tau` from "
+      "the deployment's chi products and recorded with `fp07-cal registry response` "
+      "(`docs/fp07pair/runbook.md`). It is a property of the bead, carried with the "
+      "bead's calibration (the PI's decision, 2026-10-28).")
+    P("")
+    P(RESPONSE_SEMANTICS)
+    P("")
+    P("**Identified or not.** Matched beads give a flat ratio and no tau, and a failing "
+      "bead loses amplitude, which is not a time constant. A pair is identified only when "
+      "the beads differ beyond bootstrap noise at 20 Hz, each tau's 16-84% interval is "
+      "bounded and spans at most a factor 1.5, the flat gain is below a factor 2, and "
+      "there are enough chi files and frequency bins (the full rule is in the runbook). "
+      "Otherwise tau is blank and only the power ratios are recorded.")
+    P("")
+    P("**At 1 m/s** the table shows tau scaled from `W_ref` under the entry's "
+      "`speed_scaling` (`lueck`: tau ~ W^-1/2). That column is derived, never stored. For "
+      "comparison, the `lueck` default chi uses is 10 ms at 1 m/s; across the fleet beads "
+      "scatter by a factor ~1.9 (geometric 1 sd) about a median of ~12 ms, which is why "
+      "tau is carried per bead. Nothing in chi processing reads these values yet.")
+    P("")
+    P("| method | what it does |")
+    P("|---|---|")
+    for k, v in RESPONSE_METHODS.items():
+        P(f"| `{k}` | {_md(v)} |")
+    P("")
+    P("| response flag | meaning |")
+    P("|---|---|")
+    for k, v in RESPONSE_FLAGS.items():
+        P(f"| `{k}` | {_md(v)} |")
+    P("")
+    return out
+
+
+def _ci(ci: tuple[float, float] | None, fmt: str = ".1f") -> str:
+    return "" if ci is None else f" ({ci[0]:{fmt}}-{ci[1]:{fmt}})"
+
+
+def _response_section(h: list[Calibration]) -> list[str]:
+    rows = [(i, c) for i, c in enumerate(h, start=1) if c.response is not None]
+    if not rows:
+        return []
+    out: list[str] = []
+    P = out.append
+    P("")
+    P("FP07 time constant, single-pole equivalent over the band (see "
+      "[the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:")
+    P("")
+    P("| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | "
+      "halves [ms] | power vs partner, 10 / 20 Hz | chi files / windows | flags |")
+    P("|---|---|---|---|---|---|---|---|---|---|")
+    for i, c in rows:
+        r = c.response
+        assert r is not None
+        tau = ("not identified" if r.tau_ms is None
+               else f"**{r.tau_ms:.1f}**{_ci(r.tau_ms_16_84)}")
+        t1 = "—" if r.tau_1mps_ms is None else f"{r.tau_1mps_ms:.1f} ({r.speed_scaling})"
+        if r.halves is None:
+            halves = "—"
+        else:
+            halves = " → ".join("—" if x.tau_ms is None else f"{x.tau_ms:.1f}{_ci(x.tau_ms_16_84)}"
+                                for x in r.halves)
+        ratio = " / ".join("—" if r.power_ratio[f0] is None else f"{r.power_ratio[f0]:.2f}"
+                           for f0 in RESPONSE_RATIO_F)
+        flags = ", ".join(f"`{f}`" for f in r.flags) or "—"
+        P(f"| {i} | {r.partner} | {r.W_ref_m_s:.3f} | {r.band_Hz[0]:g}-{r.band_Hz[1]:g} | {tau} | "
+          f"{t1} | {halves} | {ratio} | {r.n_chi_files} / {r.n_windows} | {flags} |")
+    return out
 
 
 def _bead_section(reg: Registry, bead: str) -> list[str]:
@@ -1704,9 +2156,11 @@ def _bead_section(reg: Registry, bead: str) -> list[str]:
         P(f"| {i} | {c.coefficients['t_0']:.6f} | {_beta(c, 'beta_1')} | {_beta(c, 'beta_2')} | "
           f"{_beta(c, 'beta_3')} | {_g(br['a'])} | {_g(br['b'])} | {_g(br['g'])} | "
           f"{_g(br['e_b'])} | {_g(br['adc_fs'])} | {int(br['adc_bits'])} |")
+    out.extend(_response_section(h))
     notes = [(i, c) for i, c in enumerate(h, start=1)
              if c.notes or c.reference.note or c.fit.geometry or c.fit.shape_from
-             or c.uncertainty.rms_all_mK is not None]
+             or c.uncertainty.rms_all_mK is not None
+             or (c.response is not None and (c.response.reason or c.response.notes))]
     if notes:
         P("")
         P("Notes:")
@@ -1727,6 +2181,10 @@ def _bead_section(reg: Registry, bead: str) -> list[str]:
                 parts.append(c.notes)
             if c.reference.note:
                 parts.append(f"Reference: {c.reference.note}")
+            if c.response is not None and c.response.reason:
+                parts.append(f"FP07 time constant not identified: {c.response.reason}.")
+            if c.response is not None and c.response.notes:
+                parts.append(f"FP07 time constant: {c.response.notes}")
             P(f"{i}. **{_md(c.deployment)}**: " + " ".join(parts))
     P("")
     out.extend(_prior_section(reg.prior_for(bead)))
@@ -2187,10 +2645,6 @@ def add_entry(path: str | Path, entry: dict[str, Any], *, dry_run: bool = False)
 
 
 def _add(p: Path, entry: dict[str, Any], *, dry_run: bool) -> str:
-    import os
-    import stat
-    import tempfile
-
     from ruamel.yaml import YAML
 
     raw = p.read_bytes().decode("utf-8")
@@ -2224,6 +2678,17 @@ def _add(p: Path, entry: dict[str, Any], *, dry_run: bool) -> str:
     loads(new, source=p)  # the strict loader, over the whole sheet with the entry in it
     if dry_run:
         return block
+    _replace_text(p, new, crlf)
+    write_views(p)
+    return block
+
+
+def _replace_text(p: Path, new: str, crlf: bool) -> None:
+    """Write *new* (LF) over *p* atomically, with the file's line endings and mode."""
+    import os
+    import stat
+    import tempfile
+
     if crlf:
         new = new.replace("\n", "\r\n")
     mode = stat.S_IMODE(os.stat(p).st_mode)
@@ -2236,5 +2701,254 @@ def _add(p: Path, entry: dict[str, Any], *, dry_run: bool) -> str:
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
-    write_views(p)
+
+
+# ------------------------------------------------- recording a response
+RESPONSE_FORMAT = "fp07-bead-tau/1"
+"""The ``format`` of an ``fp07-pair tau`` record."""
+
+
+def _r(x: float | None, nd: int) -> float | None:
+    return None if x is None else round(float(x), nd)
+
+
+def response_from_record(record: dict, cal: Calibration, *, notes: str = "") -> dict[str, Any]:
+    """The ``response:`` block, in the YAML's structure, for *cal*'s bead from a record.
+
+    *record* is a JSON record written by ``fp07-pair tau``. Refuses
+    (:class:`AddError`) a record of another instrument, one that does not hold
+    the bead on the entry's channel, a placeholder partner, and a measurement
+    outside the entry's span. Taus become this bead's (ms, 0.01 ms); the power
+    ratios this bead's response over its partner's (the record's ln(S2/S1) is
+    turned round for the bead on the first channel).
+    """
+    import re as _re
+
+    if record.get("format") != RESPONSE_FORMAT:
+        raise AddError(f"not an `fp07-pair tau` record (format {record.get('format')!r}, "
+                       f"expected {RESPONSE_FORMAT!r})")
+    method = record.get("method")
+    if method not in RESPONSE_METHODS:
+        raise AddError(f"method {method!r} is not one of {sorted(RESPONSE_METHODS)}")
+    inst = str(record.get("instrument", ""))
+    serial = _target_serial(inst.removeprefix("SN"))
+    if serial != cal.instrument.serial:
+        raise AddError(f"the record is of {inst}, the entry of SN {cal.instrument.serial}")
+    serials = [str(s) for s in record["serials"]]
+    if cal.bead not in serials:
+        raise AddError(f"the record's beads are {serials}, not {cal.bead}")
+    c = serials.index(cal.bead)
+    chan = _re.sub(r"_d\w+$", "", str(record["channels"][c]))
+    if chan != cal.instrument.channel:
+        raise AddError(f"{cal.bead} is on {chan} in the record but {cal.instrument.channel} in "
+                       f"the entry")
+    partner = serials[1 - c]
+    if not is_bead_serial(partner):
+        raise AddError(f"the partner's serial {partner!r} is a placeholder; a tau from a pair "
+                       f"whose other bead is unknown cannot be recorded")
+    a = record["all"]
+    sign = 1.0 if c == 1 else -1.0  # ln(S2/S1) -> ln(this bead / partner)
+
+    def tau(f: dict) -> tuple[float | None, list[float] | None]:
+        if not f["identified"]:
+            return None, None
+        lo, hi = f["tau_16_84_s"][c]
+        return _r(f["tau_s"][c] * 1e3, 2), [_r(lo * 1e3, 2), _r(hi * 1e3, 2)]  # type: ignore[list-item]
+
+    def ratio(f0: int) -> tuple[float | None, list[float] | None]:
+        v = a["ln_ratio"].get(f"{f0:g}")
+        ci = a["ln_ratio_16_84"].get(f"{f0:g}")
+        if v is None or ci is None or None in ci:
+            return None, None
+        lo, hi = sorted((sign * ci[0], sign * ci[1]))
+        # 4 decimals: both beads' ratios must multiply to 1 within 2e-3 (the loader's check)
+        return (_r(math.exp(sign * v), 4),
+                [_r(math.exp(lo), 4), _r(math.exp(hi), 4)])  # type: ignore[list-item]
+
+    t, tci = tau(a)
+    block: dict[str, Any] = {
+        "method": method,
+        "partner": partner,
+        "first": a["first"],
+        "last": a["last"],
+        "n_chi_files": int(a["n_files"]),
+        "n_windows": int(a["n_windows"]),
+        "W_ref_m_s": _r(record["W_ref_m_s"], 3),
+        "speed_scaling": str(record["speed_scaling"]),
+        "band_Hz": [float(x) for x in record["band_Hz"]],
+        "identified": bool(a["identified"]),
+        "tau_ms": t,
+        "tau_ms_16_84": tci,
+    }
+    halves = record.get("halves")
+    if halves:
+        hd = {}
+        for k, h in zip(("first", "second"), halves, strict=True):
+            ht, hci = tau(h)
+            hd[k] = {"first": h["first"], "last": h["last"], "n_chi_files": int(h["n_files"]),
+                     "tau_ms": ht, "tau_ms_16_84": hci}
+        block["halves"] = hd
+    else:
+        block["halves"] = None
+    pr = {f0: ratio(f0) for f0 in RESPONSE_RATIO_F}
+    block["power_ratio"] = {f0: v for f0, (v, _ci) in pr.items()}
+    block["power_ratio_16_84"] = {f0: ci for f0, (_v, ci) in pr.items()}
+    flags = [f for f in record.get("flags", []) if f in RESPONSE_FLAGS and f != "drift"]
+    if record.get("drift", [False, False])[c]:
+        flags.append("drift")
+    if flags:
+        block["flags"] = [f for f in RESPONSE_FLAGS if f in flags]
+    if not a["identified"]:
+        block["reason"] = "; ".join(a["reasons"]) or "not identified"
+    block["software_version"] = str(record.get("software_version") or "unknown")
+    if notes.strip():
+        block["notes"] = " ".join(notes.split())
     return block
+
+
+def response_yaml(block: dict[str, Any], indent: int = 4) -> str:
+    """The ``response:`` block as text in the sheet's layout; *indent* is its key's column."""
+    pad = " " * indent
+
+    def pair(v: list | None) -> str:
+        return "null" if v is None else f"[{_scalar(v[0])}, {_scalar(v[1])}]"
+
+    out = [f"{pad}response:"]
+    p2 = pad + "  "
+    for k in ("method", "partner"):
+        out.append(f"{p2}{k}: {_scalar(block[k])}")
+    out.append(f"{p2}first: {_scalar(block['first'], quote=True)}")
+    out.append(f"{p2}last: {_scalar(block['last'], quote=True)}")
+    for k in ("n_chi_files", "n_windows", "W_ref_m_s", "speed_scaling"):
+        out.append(f"{p2}{k}: {_scalar(block[k])}")
+    out.append(f"{p2}band_Hz: {pair(block['band_Hz'])}")
+    out.append(f"{p2}identified: {_scalar(block['identified'])}")
+    out.append(f"{p2}tau_ms: {_scalar(block['tau_ms'])}")
+    out.append(f"{p2}tau_ms_16_84: {pair(block['tau_ms_16_84'])}")
+    if block["halves"] is None:
+        out.append(f"{p2}halves: null")
+    else:
+        out.append(f"{p2}halves:")
+        for k in ("first", "second"):
+            h = block["halves"][k]
+            out.append(f"{p2}  {k}:")
+            out.append(f"{p2}    first: {_scalar(h['first'], quote=True)}")
+            out.append(f"{p2}    last: {_scalar(h['last'], quote=True)}")
+            out.append(f"{p2}    n_chi_files: {_scalar(h['n_chi_files'])}")
+            out.append(f"{p2}    tau_ms: {_scalar(h['tau_ms'])}")
+            out.append(f"{p2}    tau_ms_16_84: {pair(h['tau_ms_16_84'])}")
+    out.append(f"{p2}power_ratio: {{"
+               + ", ".join(f"{k}: {_scalar(v)}" for k, v in block["power_ratio"].items()) + "}")
+    out.append(f"{p2}power_ratio_16_84: {{"
+               + ", ".join(f"{k}: {pair(v)}" for k, v in block["power_ratio_16_84"].items())
+               + "}")
+    if block.get("flags"):
+        out.append(f"{p2}flags: [" + ", ".join(block["flags"]) + "]")
+    if block.get("reason"):
+        out += _folded("reason", block["reason"], indent + 2)
+    out.append(f"{p2}software_version: {_scalar(block['software_version'], quote=True)}")
+    if block.get("notes"):
+        out += _folded("notes", block["notes"], indent + 2)
+    return "\n".join(out) + "\n"
+
+
+def _entry_spans(lines: list[str]) -> list[tuple[int, int, int]]:
+    """``(start, end, item indent)`` of each ``calibrations:`` item, *end* exclusive.
+
+    An item runs to the next item at its indent, the next column-0 key, or the
+    end; blank lines and column-0 comments at its end belong to what follows.
+    """
+    starts = [i for i, ln in enumerate(lines) if _CALS_KEY.fullmatch(ln.rstrip("\n"))]
+    if len(starts) != 1:
+        raise AddError("the sheet has no block-style `calibrations:` key at column 0")
+    s0 = starts[0]
+    end = len(lines)
+    for i in range(s0 + 1, len(lines)):
+        if _TOP_KEY.match(lines[i]):
+            end = i
+            break
+    items = [(i, len(m.group(1))) for i in range(s0 + 1, end) if (m := _ITEM.match(lines[i]))]
+    if not items:
+        return []
+    indent = items[0][1]
+    heads = [i for i, ind in items if ind == indent]
+    spans = []
+    for a, b in zip(heads, [*heads[1:], end], strict=True):
+        e = b
+        while e > a + 1 and (not lines[e - 1].strip() or lines[e - 1].startswith("#")):
+            e -= 1
+        spans.append((a, e, indent))
+    return spans
+
+
+def add_response(path: str | Path, bead: str, deployment: str, block: dict[str, Any], *,
+                 dry_run: bool = False) -> str:
+    """Insert *block* as the ``response:`` of entry (*bead*, *deployment*), as text.
+
+    Like :func:`add_entry`: the sheet is never re-dumped. The block is inserted
+    at the end of that entry's text, every other byte is kept (line endings
+    and mode too), the whole new sheet must pass the strict loader, and it must
+    parse to the old sheet with exactly this block added to exactly this
+    entry. An entry that already has a response is refused (edit the YAML by
+    hand to replace one). Holds the sheet's lock for the read-modify-write.
+    Returns the inserted text; with *dry_run* nothing is written or locked.
+    """
+    p = Path(path)
+    if dry_run:
+        return _add_response(p, bead, deployment, block, dry_run=True)
+    with _locked(p):
+        return _add_response(p, bead, deployment, block, dry_run=False)
+
+
+def _add_response(p: Path, bead: str, deployment: str, block: dict[str, Any], *,
+                  dry_run: bool) -> str:
+    from ruamel.yaml import YAML
+
+    raw = p.read_bytes().decode("utf-8")
+    crlf = "\r\n" in raw
+    text = raw.replace("\r\n", "\n")
+    loads(text, source=p)  # the sheet must be valid before it is touched
+    old = YAML(typ="safe", pure=True).load(text)
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    target = (bead, _norm_label(deployment))
+    hits = []
+    for a, e, ind in _entry_spans(lines):
+        item = YAML(typ="safe", pure=True).load(_dedent("".join(lines[a:e]), ind))
+        if (isinstance(item, list) and len(item) == 1 and isinstance(item[0], dict)
+                and (item[0].get("bead"), _norm_label(str(item[0].get("deployment", ""))))
+                == target):
+            hits.append((a, e, ind, item[0]))
+    if len(hits) != 1:
+        raise AddError(f"{p} has {len(hits)} entries {bead} / {deployment}; expected one")
+    a, e, ind, entry = hits[0]
+    if "response" in entry:
+        raise DuplicateEntryError(
+            f"{bead} / {deployment} already has a response. To replace it, edit the YAML "
+            f"by hand."
+        )
+    text_block = response_yaml(block, ind + 2)
+    back = YAML(typ="safe", pure=True).load(_dedent(text_block, ind + 2))
+    if back != {"response": block}:
+        raise AddError(f"the response does not read back as written (a quoting defect):\n"
+                       f"{text_block}")
+    new = "".join(lines[:e]) + text_block + "".join(lines[e:])
+    for item in old["calibrations"]:
+        if (item.get("bead"), _norm_label(str(item.get("deployment", "")))) == target:
+            item["response"] = block
+    if YAML(typ="safe", pure=True).load(new) != old:
+        raise AddError("inserting the response changed more of the sheet than that entry")
+    loads(new, source=p)  # the strict loader, over the whole sheet with the response in it
+    if dry_run:
+        return text_block
+    _replace_text(p, new, crlf)
+    write_views(p)
+    return text_block
+
+
+def _dedent(text: str, n: int) -> str:
+    """*text* shifted left by *n* columns; a line not indented that far (a column-0
+    comment, a blank) is kept as it is."""
+    return "".join(ln[n:] if ln.strip() and ln[:n].strip() == "" else ln
+                   for ln in text.splitlines(keepends=True))

@@ -1126,6 +1126,8 @@ def _cmd_registry_show(args) -> int:
               f"{c.valid_T[0]:.2f}-{c.valid_T[1]:.2f} degC | rms {u.fit_rms_mK:.1f}, "
               f"held-out {u.held_out_mK:.1f}, block SD {block} mK"
               + (f" | {', '.join(c.flags)}" if c.flags else ""))
+        if c.response is not None:
+            print("     " + _response_line(c.response))
     s = prior.source
     why = ("its widest-range calibration (NONE IS UNFLAGGED)" if prior.fallback
            else "the widest-range unflagged calibration"
@@ -1149,6 +1151,65 @@ def _cmd_registry_show(args) -> int:
     print("  Pasting into a .p config: remove any legacy `beta` key (ODAS and the reader use "
           "it before beta_1, so a pasted beta_1 would be silently ignored), and set a beta "
           "term this fit lacks but the config carries to 1e30, never 0.")
+    return 0
+
+
+def _response_line(r) -> str:
+    """One line describing a calibration's FP07 response block."""
+    def ci(v) -> str:
+        return "" if v is None else f" [{v[0]:.1f}-{v[1]:.1f}]"
+
+    head = (f"FP07 response vs {r.partner}, W_ref {r.W_ref_m_s:.3f} m/s, "
+            f"{r.band_Hz[0]:g}-{r.band_Hz[1]:g} Hz: ")
+    if r.tau_ms is None:
+        head += f"tau NOT identified ({r.reason})"
+    else:
+        head += (f"single-pole-equivalent tau {r.tau_ms:.1f}{ci(r.tau_ms_16_84)} ms "
+                 f"({r.tau_1mps_ms:.1f} ms at 1 m/s under {r.speed_scaling}, derived)")
+    if r.halves is not None:
+        head += "; halves " + " -> ".join(
+            "-" if h.tau_ms is None else f"{h.tau_ms:.1f}{ci(h.tau_ms_16_84)}" for h in r.halves)
+    head += "; power vs partner " + ", ".join(
+        f"{'-' if v is None else f'{v:.2f}'} @{f0} Hz" for f0, v in r.power_ratio.items())
+    head += f"; {r.n_chi_files} chi files" + (f"; flags {', '.join(r.flags)}" if r.flags else "")
+    return head
+
+
+def _cmd_registry_response(args) -> int:
+    """Record an `fp07-pair tau` measurement as an entry's FP07 response."""
+    from odas_tpw.fp07cal.registry import (
+        RegistryError,
+        add_response,
+        default_path,
+        load,
+        response_from_record,
+    )
+
+    path = Path(args.registry) if args.registry else default_path()
+    rec_path = Path(args.record)
+    try:
+        record = json.loads(rec_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"refusing: {rec_path}: {exc}", file=sys.stderr)
+        return 1
+    try:
+        reg = load(path)
+        hits = [c for c in reg.history(args.bead)
+                if " ".join(c.deployment.split()).casefold()
+                == " ".join(args.deployment.split()).casefold()]
+        if not hits:
+            raise RegistryError(f"{args.bead} has no entry for {args.deployment!r} in {path}")
+        block = response_from_record(record, hits[0], notes=args.notes or "")
+        text = add_response(path, args.bead, args.deployment, block, dry_run=args.dry_run)
+    except (RegistryError, KeyError, TypeError, IndexError) as exc:
+        print(f"refusing: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    print(text, end="")
+    if args.dry_run:
+        print(f"(dry run: valid against {path}; nothing written)")
+    else:
+        print(f"added the FP07 response to {args.bead} / {args.deployment} in {path}; views "
+              f"re-rendered")
     return 0
 
 
@@ -1327,6 +1388,22 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--dry-run", action="store_true", help="validate and print; write nothing")
     r.add_argument("-r", "--registry", help=reg_help)
     r.set_defaults(func=_cmd_registry_add)
+    r = rsub.add_parser(
+        "response",
+        help="record an `fp07-pair tau` measurement as an entry's FP07 time constant",
+        description="Insert a `response:` block, built from an `fp07-pair tau` JSON record, "
+        "into one existing bead x deployment entry (existing text and comments untouched), "
+        "validate the whole sheet, and re-render its views. Refuses a record of another "
+        "instrument or channel, a measurement outside the entry's span, and an entry that "
+        "already has a response.",
+    )
+    r.add_argument("record", help="fp07tau_*.json written by `fp07-pair tau`")
+    r.add_argument("--bead", required=True, help="the entry's bead, e.g. T1592")
+    r.add_argument("--deployment", required=True, help="the entry's deployment label")
+    r.add_argument("--notes", help="anything a later reader needs about this measurement")
+    r.add_argument("--dry-run", action="store_true", help="validate and print; write nothing")
+    r.add_argument("-r", "--registry", help=reg_help)
+    r.set_defaults(func=_cmd_registry_response)
 
     args = p.parse_args(argv)
     return int(args.func(args))

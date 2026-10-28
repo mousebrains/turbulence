@@ -635,6 +635,15 @@ def _segments(t: np.ndarray, y: np.ndarray, min_len: int, min_jump: float) -> li
     return sorted(out)
 
 
+def reference_bins(ok: np.ndarray, grid: np.ndarray) -> np.ndarray:
+    """The reference (normalization) bins: the lowest four usable below REF_BAND_MAX.
+
+    Shared with :mod:`odas_tpw.chi.fp07_bead_tau`, so its ratios are referenced
+    to exactly the level ``fp07-pair fit`` reports as ``ln G``.
+    """
+    return np.flatnonzero(ok & (grid <= REF_BAND_MAX))[:4]
+
+
 def _weighted_median(vals: np.ndarray, w: np.ndarray) -> float:
     m = np.isfinite(vals) & (w > 0)
     if not m.any():
@@ -778,7 +787,7 @@ def estimate(paths: Sequence[str], *, anchor: str = "geomean", min_files: int = 
                 refuse("too few usable frequency bins")
                 continue
             # Reference: the lowest well-sampled bins below REF_BAND_MAX.
-            ref_bins = np.flatnonzero(ok & (grid <= REF_BAND_MAX))[:4]
+            ref_bins = reference_bins(ok, grid)
             if ref_bins.size == 0:
                 refuse(f"no usable bins below {REF_BAND_MAX} Hz for the reference")
                 continue

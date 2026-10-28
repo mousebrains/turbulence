@@ -3,6 +3,9 @@
 
     fp07-pair fit 'results/chi_00/*.nc' -o fp07pair/   # one .nc per bead pair and segment
     fp07-pair show fp07pair/*.nc                       # what a correction contains
+    fp07-pair tau 'results/chi_00/*.nc' --instrument 194 \
+        --first 2022-03-21T04:59:26Z --last 2022-03-30T18:45:16Z -o fp07tau/
+                                                       # each bead's tau, for the FP07 sheet
 
 Then list the files under the instrument in perturb's config::
 
@@ -24,6 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from odas_tpw._version_info import add_version_argument
+from odas_tpw.chi import fp07_bead_tau as B
 from odas_tpw.chi import fp07_pair as P
 
 
@@ -65,6 +69,37 @@ def _fit(args: argparse.Namespace) -> int:
     return 0 if any(c.applies for c in res.corrections) else 1
 
 
+def _tau(args: argparse.Namespace) -> int:
+    paths: list[str] = []
+    for pat in args.chi:
+        hits = sorted(glob.glob(pat))
+        paths.extend(hits if hits else [pat])
+    try:
+        first, last = B.parse_time(args.first), B.parse_time(args.last)
+    except ValueError as exc:
+        print(f"bad --first/--last: {exc}", file=sys.stderr)
+        return 2
+    if not first <= last:
+        print(f"--first {args.first} is after --last {args.last}", file=sys.stderr)
+        return 2
+    band = (float(args.band[0]), float(args.band[1]))
+    beads = [b.strip() for b in args.beads.split(",") if b.strip()] if args.beads else None
+    res = B.measure(paths, instrument=args.instrument, first=first, last=last, beads=beads,
+                    band=band, n_boot=args.n_boot, min_files=args.min_files,
+                    rng_seed=args.seed)
+    written = []
+    for pt in res.pairs:
+        js, _txt = B.write_record(pt, args.output)
+        written.append(str(js))
+    print("\n".join(res.report))
+    if written:
+        print("\nrecords (fp07-cal registry response <record> --bead ... --deployment ...):")
+        print("\n".join(f"  {w}" for w in written))
+        return 0
+    print("no bead pair on that instrument in that span", file=sys.stderr)
+    return 1
+
+
 def _show(args: argparse.Namespace) -> int:
     for p in args.files:
         c = P.ResponseCorrection.from_netcdf(p)
@@ -103,6 +138,26 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("--allow-amplitude", action="store_true",
                    help="write corrections even for pairs whose flat gain exceeds ln 2")
     f.set_defaults(func=_fit)
+    t = sub.add_parser(
+        "tau", help="each bead's single-pole-equivalent tau over an explicit time span",
+        description="Fit a single pole to each bead of a pair from the median ln(S2/S1) "
+        "over 1-25 Hz of reduced frequency, with file-bootstrap intervals, the model-free "
+        "power ratio at 10 and 20 Hz, and the same for each time half. Writes one JSON "
+        "record (and a text report) per bead pair, for `fp07-cal registry response`. "
+        "Matched beads give no tau, only ratios (see docs/fp07pair/runbook.md).")
+    t.add_argument("chi", nargs="+", help="chi product NetCDFs or glob patterns")
+    t.add_argument("--instrument", required=True, help="instrument serial, e.g. 194")
+    t.add_argument("--first", required=True,
+                   help="span start, ISO-8601 UTC (a file belongs if its start_time does)")
+    t.add_argument("--last", required=True, help="span end, ISO-8601 UTC")
+    t.add_argument("--beads", help="comma-separated bead serials the pair must hold")
+    t.add_argument("-o", "--output", required=True, help="output directory")
+    t.add_argument("--band", nargs=2, type=float, default=list(B.FIT_BAND), metavar=("LO", "HI"),
+                   help="fit band in Hz of reduced frequency (default: 1 25)")
+    t.add_argument("--n-boot", type=int, default=200, help="file-bootstrap replicates")
+    t.add_argument("--min-files", type=int, default=B.MIN_FILES)
+    t.add_argument("--seed", type=int, default=0)
+    t.set_defaults(func=_tau)
     s = sub.add_parser("show", help="print what a correction contains")
     s.add_argument("files", nargs="+")
     s.set_defaults(func=_show)

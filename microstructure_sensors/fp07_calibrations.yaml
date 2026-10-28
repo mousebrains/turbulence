@@ -43,6 +43,33 @@
 # entry for the chosen order. With order_choice fixed it may be omitted.
 # valid_T_degC: the reference temperature range the fit covered.
 # Dates are UTC. reference.cal_age_years is derived (first - cal_date), not stored.
+#
+# response (optional): the bead's FP07 time constant, a property of the BEAD carried
+# with its calibration (PI decision 2026-10-28). Measured by `fp07-pair tau` from the
+# deployment's chi products and inserted by `fp07-cal registry response`; never typed.
+#   * It is a SINGLE-POLE-EQUIVALENT tau over band_Hz (1-25 Hz): one single pole per
+#     bead fitted to the median over windows of ln(S2/S1), the bead pair's gradient-
+#     spectrum ratio, which needs no turbulence model. The POLE FORM IS NOT DETERMINED:
+#     a double pole fits as well and moves the 3-dB point 30-40% lower.
+#   * The ABSOLUTE LEVEL is family- and band-dependent and is NOT ANCHORED by any
+#     external reference: the in-situ anchor failed its synthetic check
+#     (docs/fp07_tau_prefactor_PLAN.md). Compare beads with it; do not treat it as a
+#     lab measurement.
+#   * The electronics contribute negligibly (the PI's reasoning: they are much faster
+#     than the bead; the anti-alias filters sit near 110 Hz, far above the band).
+#   * THE RATIO IS THE ROBUST PART: power_ratio is this bead's power response over its
+#     partner's at 10 and 20 Hz, relative to the reference band (lowest bins < 4 Hz),
+#     model-free.
+#   * tau_ms is at W_ref_m_s, the pair's median speed; speed_scaling (the chi tau model,
+#     lueck: tau ~ W^-1/2) maps other speeds onto it. tau at 1 m/s is DERIVED from these
+#     when rendered, never stored. Intervals are 16-84% from a bootstrap over chi files.
+#   * identified: false (matched beads, a failing bead, too little data; `reason` says
+#     which) means tau_ms is null; the ratios are still recorded. halves: the first and
+#     second time halves, each with its own tau (null when the half alone identifies
+#     none), because a bead can slow within a deployment.
+#   * partner is the other bead of the pair; when both beads' entries record the same
+#     measurement, the loader checks they agree (reciprocal ratios, same counts).
+#   Nothing in chi processing reads these values yet.
 
 schema: fp07-calibrations/1
 

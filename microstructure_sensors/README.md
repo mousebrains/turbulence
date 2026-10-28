@@ -96,6 +96,7 @@ fp07-cal registry check           # validate the YAML; exit 1 if invalid or a vi
 fp07-cal registry show T1592      # one bead's history and its prior
 fp07-cal registry show T1592 --instrument 194 --channel T1 --as-of 2023-01-01 --json
 fp07-cal registry add fp07cal/coefficients.json --channel T1 --deployment "..." ...  # record a fit
+fp07-cal registry response fp07tau/fp07tau_*.json --bead T1592 --deployment "..."  # record its tau
 ```
 
 `check` and a test (`tests/test_fp07_registry.py`) both fail when a committed
@@ -197,6 +198,47 @@ Where each field comes from, per channel:
 anything a later reader needs: what was screened, episodes, gates overridden.
 Commit all three files together. An entry added by hand instead needs
 `fp07-cal registry render`, then `check`.
+
+### The FP07 time constant (`response:`)
+
+An entry may carry the bead's FP07 time constant. It is a property of the
+bead, carried with its calibration (PI decision, 2026-10-28: the electronics are
+much faster than the bead). It is measured, never typed:
+
+```bash
+fp07-pair tau 'VMP_results/chi_00/*.nc' --instrument 194 \
+    --first 2022-03-21T04:59:26Z --last 2022-03-30T18:45:16Z -o fp07tau/
+fp07-cal registry response fp07tau/fp07tau_SN194_T1592-T2005_20220321T0459Z.json \
+    --bead T1592 --deployment "ARCTERX-2022 Interior" --dry-run
+```
+
+Use the entry's own `first` and `last` (`registry show <bead> --json`), so the
+measurement describes the same stretch of the same bead pair as the
+calibration. Record it on both beads of the pair: the loader then checks that
+the two blocks agree (reciprocal ratios, same counts and halves). `registry
+response` inserts the block as text at the end of the entry, like `add`, and
+refuses an entry that already has one, a record of another instrument or
+channel, a placeholder partner, and a measurement outside the entry's span.
+What the number means, and does not, is in the sheet's header comment and in
+`fp07_calibrations.md` ("FP07 time constant"); the method and the rule that
+decides whether a pair identifies a tau at all are in
+`docs/fp07pair/runbook.md` §6.
+
+| YAML (`response.`) | from the `fp07-pair tau` record |
+|---|---|
+| `method`, `speed_scaling`, `band_Hz`, `software_version` | `method`, `speed_scaling` (the products' tau model), `band_Hz`, `software_version` |
+| `partner` | the other bead of `serials` (a placeholder is refused) |
+| `first`, `last`, `n_chi_files`, `n_windows` | `all.first`, `all.last` (first and last chi file `start_time`), `all.n_files`, `all.n_windows` |
+| `W_ref_m_s` | `W_ref_m_s`, the median speed of the pair's windows (3 decimals) |
+| `identified`, `reason` | `all.identified`; `all.reasons` joined, when not identified |
+| `tau_ms`, `tau_ms_16_84` | `all.tau_s`, `all.tau_16_84_s` for this bead's channel, x 1000 (0.01 ms); null when not identified |
+| `halves.first`, `halves.second` | `halves[0]`, `halves[1]`, the same fields; null when every file shares one start time |
+| `power_ratio`, `power_ratio_16_84` | `exp(all.ln_ratio)` at 10 and 20 Hz, turned round for the bead on the first channel, so it is always this bead's power response over its partner's |
+| `flags` | the record's `amplitude`, `outlier`, `noise-model`, and `drift` when this bead's `drift` is set |
+| `notes` | `--notes` |
+
+Tau at 1 m/s is derived from `tau_ms`, `W_ref_m_s` and `speed_scaling` when
+the views are rendered, and is never stored.
 
 ### The prior
 
