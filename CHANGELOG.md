@@ -7,6 +7,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`perturb-diag`: temperature, delta-T, conductivity and fall-rate panels,
+  and a raw row for casts with no product file** (issue #210). The raw
+  diagnostics row (`--diag`, the default) now leads with T1/T2 against the CT
+  temperature, FP07 minus CT (on a robust x-range, so a few surface spikes
+  cannot flatten a millikelvin offset), the CT conductivity, and W_slow with
+  the speed used for epsilon, ahead of the inclinometer, accelerometer, shear
+  and temperature-gradient panels. The CT is the first of these (temperature,
+  conductivity) pairs the cast's file holds: the run's own
+  `ct.T_name`/`ct.C_name` (read from the profiles directory's signature), then
+  JAC_T/JAC_C, a glider's hotel `sci_water_temp`/`sci_water_cond`, and
+  SBT1/SBC1. The conductivity comes from the same CT as the temperature when
+  the file has it. A `ct.T_name` naming an FP07 channel (T1/T2) or the TEOS-10
+  `CT` is never used; those runs fall back to the platform pairs, and the
+  legends name whichever channel is plotted. Each channel is read on the clock
+  its own dimension names, and a panel whose channels a cast lacks reads
+  "n/a". A cast with a profiles file but no usable diss (or chi) file now
+  draws this row, with the spectra panel naming the missing file, instead of
+  a bare "no per-profile file" placeholder; in `perturb-diag mixing` a cast
+  with no usable chi file still shows its shear spectrum on a K_rho click.
+- **chi `mad_shape`: a spectral SHAPE statistic beside `fom` (issue #191).**
+  `fom` integrates observed and model variance over the fit band, so a
+  mid-band deficit cancels against excesses at the band ends; on Method 1 and
+  the MLE fit, whose chi is that band integral, it is pinned near 1 by
+  construction. Every chi product that carries `fom` (`rsi-tpw chi`, the rsi
+  pipeline's `L4_chi_*`, perturb's per-profile `chi_NN`) now also carries
+  `mad_shape(probe, time)`: `mean |r - median(r)|` in dex, with
+  `r = log10(observed/model)` per bin over the same bins and against the same
+  model (Batchelor/Kraichnan x FP07 `|H|^2` + noise) as `fom`. It is the
+  epsilon `mad` taken about the window's own median instead of 0, so neither a
+  constant level error nor the chi-squared bias of a log estimate (median
+  below mean) counts. A perfect fit sits at a spectral-scatter floor (0.166
+  dex at the usual 9.5 degrees of freedom), not 0;
+  `odas_tpw.chi.chi.mad_shape_floor(dof)` gives it for any window. Use the
+  window's own DOF: near-bed windows laid out with `bbl_diss_length` average
+  fewer FFT segments than the file's `dof_spec` attribute assumes, so their
+  floor is higher. On the CASPER-West windows of the issue
+  (`K_max_ratio > 1.2`, `fom` 0.985-1.002) it reads 0.27 (p10 0.19, p90 0.43)
+  against a Welch-noise null of 0.16, and the top third carries the #191
+  residual coherently (+1.5 dex at k/kB = 0.02, -0.35 to -0.44 at 0.27-0.61).
+  A diagnostic only: no gate and no config key, and the binned and combo
+  products carry neither it nor `fom`. Every pre-existing variable is
+  bit-identical (rsi-tpw `eps`/`chi` Methods 1, 2, MLE, Batchelor, `pipeline`,
+  and a perturb run, on SN479 0006 and 0008). See `docs/chi_mathematics.md`
+  §9. The §8 note that the Ruddick et al. (2000) MAD was "available for
+  post-processing" was wrong -- it was never computed; it is the linear-ratio
+  cousin of `mad_shape`, and its `2*sqrt(2/d)` limit does not apply here.
+  **API change:** `chi.chi.ChiEpsilonResult` grows from 7 to 8 fields and
+  `ChiFitResult` from 8 to 9 (`mad_shape`, last), and a `chi_func` passed to
+  `chi.l4_chi._process_l4_chi` must now return 8 values. Code that unpacks
+  either result positionally now raises `ValueError: too many values to
+  unpack`; bind by attribute (`res.chi`, `res.fom`, ...) instead.
 - **`instruments.<key>.exclude`: one probe masked over a pressure and/or time
   window** (issue #190). A shear probe with a pressure-related fault is bad
   inside a depth window and fine above and below it; `exclude_shear_probes`
@@ -74,6 +125,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `exclude`-only notice added with `instruments.<key>.exclude`. None of the
   repo's example recipes was affected: the five with an `instruments:` block
   use quoted keys matching their input directories.
+- **One Goodman vibration stack for every entry point (#168).** The adapter
+  (`rsi-tpw pipeline`) chose the channels Goodman cleans shear against by
+  sensor type, while `load_channels` (`rsi-tpw eps`/`chi`, perturb) and the
+  quick-look viewers chose them by name (`^A[xyz]$`), and `nc_to_l1data` took
+  a `p_to_L1` file's ACC alone. A piezo named anything else was therefore in
+  one stack and not another. Rockland's own Zissou tutorial file `VMP_024.p`
+  names its piezos `apx`/`apy`. On it, `rsi-tpw eps` and perturb's epsilon
+  stage refused every profile ("No accelerometer channels found (required for
+  Goodman)"), while chi and the viewers ran with no Goodman cleaning at all.
+  Every route now uses `apx`/`apy`, so chi on such files changes (+8% median
+  on that file's first profile). Next to a channel named Ax, such a piezo was dropped
+  without a word. `select_vibration_channels` is now the one rule:
+  every fast piezo whatever its name, plus the non-piezo channels named
+  `^A[xyz]$`. **`load_channels(accel_pattern=...)` now names accelerometers
+  only and can no longer exclude a piezo.** A piezo on a slow column is left
+  out with a warning and a logged WARNING; the adapter used to crash on one
+  in `np.stack`. No change on any instrument we fly (all piezo-only, named
+  Ax/Ay): bit-identical on four VMP SN479 files through every route.
 - **The v6.1 bad-buffer sentinel scan read the header version from record 0**,
   which ODAS `patch_setupstr` rewrites as v6.0 while leaving the data records
   as they were. It skipped the scan on such files (e.g. the ARCTERX-2023
@@ -345,18 +414,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   giving the reason for every channel it did not fit. Its `n_profiles*` counts
   are now of scored segments (one per gap-free profile, so unchanged on a
   VMP).
-- **SN 132's `diff_gain = 0.09` is on the right rung (issue #178, still open
-  on the fine value).** This supersedes two 0.4.0 notes below: that "the
+- **SN 132's `diff_gain = 0.09` is correct (issue #178, confirmed by
+  Rockland).** This supersedes two 0.4.0 notes below: that "the
   ladder points the other way", and the `--diff-gain` entry's "real miss ...
   inflating its epsilon by roughly 110x". A 512 Hz sampling rate did not imply
   a ~0.95 gain: Rockland converted SN 132 to a 1024 Hz tidal build in 2021, and
-  its analog chain evidently stayed on that rung when it went back to 512 Hz.
+  its analog chain stayed on that rung when it went back to 512 Hz.
   Open-circuit bench noise fits 0.10–0.13 (the same fit reads SN 409's 0.949
   within 2% and SN 465's 0.988 3–14% high), and epsilon computed with 0.09
   matches SN 465's, cast near-simultaneously from a second boat in German
   Channel, at ~0.9–1.2× (95% CIs within ~0.7–1.7×), not the 109× a 0.94 gain
-  would give. Whether the value is 0.09 or nearer the bench fit's ~0.12 is
-  still open, so SN 132 epsilon carries a ~1.8× scale uncertainty.
+  would give. Rockland has since confirmed 0.09: the tidal build's 1/10 gain
+  was never changed back, so SN 132 epsilon needs no gain correction and
+  carries no extra gain uncertainty.
   `docs/deployment_procedures.md` no longer says a bench run cannot check
   `diff_gain` — the open-circuit noise spectrum estimates it against
   `noise_shearchannel` — and a test probe is documented as reading the config's

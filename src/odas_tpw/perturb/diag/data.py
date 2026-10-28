@@ -17,7 +17,7 @@ import glob
 import os
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import numpy as np
@@ -181,56 +181,130 @@ def _p_to_depth(P: np.ndarray, lat: float) -> np.ndarray:
 
 
 # Raw diagnostic channels read from the per-profile *profiles* file for the
-# drill-down's instrument-diagnostics row.  Fast channels (piezo shear /
-# vibration / pre-emphasized temperature-gradient, ~512 Hz) get an HP+despike
-# "processed" overlay; slow channels (inclinometer, ~64 Hz) are shown raw.
-_FAST_DIAG_CHANNELS = ("Ax", "Ay", "sh1", "sh2", "T1_dT1", "T2_dT2")
-_SLOW_DIAG_CHANNELS = ("Incl_X", "Incl_Y")
+# drill-down's instrument-diagnostics row.  The microstructure channels (piezo
+# shear / vibration / pre-emphasized temperature-gradient, ~512 Hz) get an
+# HP+despike "processed" overlay; everything else is shown as recorded: speed,
+# inclinometer, FP07 temperatures and fall rate.  Each is read on whichever
+# clock its own dimension says (time_fast / time_slow), never assumed.
+_HP_DIAG_CHANNELS = ("Ax", "Ay", "sh1", "sh2", "T1_dT1", "T2_dT2")
+_DIAG_CHANNELS = (
+    *_HP_DIAG_CHANNELS, "speed_fast", "Incl_X", "Incl_Y", "T1", "T2", "W_slow",
+)
+
+# The CT reference for the temperature, delta-T and conductivity panels, loaded
+# under these role keys.  Its channel names depend on the platform, so each CT
+# source is a (temperature, conductivity) pair, tried in order: the run's own
+# ct.T_name/ct.C_name (see ct_reference_families), then these.
+T_REF = "T_ref"
+C_REF = "C_ref"
+_CT_REF_DEFAULTS: tuple[tuple[str | None, str | None], ...] = (
+    ("JAC_T", "JAC_C"),                    # JFE CT on a VMP or MicroRider
+    ("sci_water_temp", "sci_water_cond"),  # a Slocum's CTD, via the hotel file
+    ("SBT1", "SBC1"),                      # Sea-Bird CT (VMP-5500/6000 class)
+)
+# Never a CT reference, even when ct.T_name names one: delta-T measures the
+# FP07s against the CT (T1 - T1 is no check; a CT-less MicroRider run may set
+# ct.T_name: T1), and CT is TEOS-10 conservative temperature, derived from the
+# in-situ reference rather than measured, which every profiles file carries.
+_NOT_A_CT_REFERENCE = ("T1", "T2", "CT")
+
+# Derived series: key -> (minuend, subtrahend), computed on the minuend's clock
+# (the subtrahend interpolated onto it when the clocks differ).  FP07 minus CT,
+# so an FP07 offset or lag against the CT shows at a glance.
+_DERIVED_DIAG_SERIES: dict[str, tuple[str, str]] = {
+    "dT1_ref": ("T1", T_REF),
+    "dT2_ref": ("T2", T_REF),
+}
+
+
+def _usable_ct_name(name: object) -> str | None:
+    """*name* if it can be a CT reference channel, else None."""
+    if isinstance(name, str) and name and name not in _NOT_A_CT_REFERENCE:
+        return name
+    return None
+
+
+def ct_reference_families(
+    profiles_dir: str | None,
+) -> tuple[tuple[str | None, str | None], ...]:
+    """The CT sources to try, in order, as (temperature, conductivity) names.
+
+    The profiles directory's ``.params_sha256_*`` signature records the
+    ``ct.T_name``/``ct.C_name`` the run actually used (``sci_water_temp`` on the
+    osu684 glider run, ``JAC_T`` on a VMP), so that pair comes first; the
+    platform pairs follow, for an unsigned or unreadable directory or a name the
+    file lacks.  A configured name in :data:`_NOT_A_CT_REFERENCE` is dropped
+    (None), so a run with ``ct.T_name: T1`` still falls back to a JAC_T,
+    sci_water_temp or SBT1 the file carries; the legend names whichever is used.
+    """
+    from pathlib import Path
+
+    from odas_tpw.perturb.resolve import _read_signature
+
+    try:
+        sig = _read_signature(Path(profiles_dir)) if profiles_dir else None
+    except OSError:  # e.g. an SMB listing error; the defaults still apply
+        sig = None
+    ct = (sig or {}).get("ct")
+    ct = ct if isinstance(ct, dict) else {}
+    configured = (_usable_ct_name(ct.get("T_name")), _usable_ct_name(ct.get("C_name")))
+    pairs = (configured, *_CT_REF_DEFAULTS) if any(configured) else _CT_REF_DEFAULTS
+    return tuple(dict.fromkeys(pairs))
 
 
 @dataclass
 class RawProfile:
     """Raw diagnostic channels for one profile, aligned to depth.
 
-    ``raw`` holds each channel on its native clock.  For the *fast* channels,
-    ``hp`` is the high-pass-filtered signal (spikes intact) and ``proc`` is that
-    same signal after despiking — the epsilon path's cleanup.  A drill-down
-    overlays ``hp`` (faint) under ``proc`` (colored): both are zero-mean and
-    in-band, so the panel scales to the microstructure signal (not a channel's
-    DC offset / temperature ramp), and the gap between them is exactly what
-    despike removed.  Slow channels (inclinometer) carry only ``raw``.
-    ``is_fast`` records each channel's clock so a renderer can pick
-    ``depth_fast`` vs ``depth_slow``.  All dicts are empty when the file lacks
-    the pressure/time coordinates needed to place the signals in depth (the
-    drill-down then shows "no raw data").
+    ``raw`` holds each channel on its native clock.  For the microstructure
+    channels, ``hp`` is the high-pass-filtered signal (spikes intact) and
+    ``proc`` is that same signal after despiking — the epsilon path's cleanup.
+    A drill-down overlays ``hp`` (faint) under ``proc`` (colored): both are
+    zero-mean and in-band, so the panel scales to the microstructure signal (not
+    a channel's DC offset / temperature ramp), and the gap between them is
+    exactly what despike removed.  The other channels carry only ``raw``.  The
+    CT reference is stored under the role keys :data:`T_REF`/:data:`C_REF`, with
+    ``names`` giving the channel each one is, and the derived series (FP07 minus
+    CT) under their own keys.  ``is_fast`` records each series' clock so a
+    renderer can pick ``depth_fast`` vs ``depth_slow``.  All dicts are empty
+    when the file lacks the pressure/time coordinates needed to place the
+    signals in depth (the drill-down then shows "no raw data").
     """
 
     path: str
     depth_fast: np.ndarray     # (time_fast,) m, positive down
     depth_slow: np.ndarray     # (time_slow,) m, positive down
     raw: dict[str, np.ndarray]   # name -> signal on its native clock
-    hp: dict[str, np.ndarray]    # name -> high-pass filtered (fast channels only)
-    proc: dict[str, np.ndarray]  # name -> HP + despiked (fast channels only)
+    hp: dict[str, np.ndarray]    # name -> high-pass filtered (HP channels only)
+    proc: dict[str, np.ndarray]  # name -> HP + despiked (HP channels only)
     is_fast: dict[str, bool]     # name -> True (fast clock) / False (slow)
+    names: dict[str, str] = field(default_factory=dict)  # role -> channel name
 
 
 def load_raw_profile(
     path: str,
     *,
+    ct_families: tuple[tuple[str | None, str | None], ...] | None = None,
     hp_cut: float = 1.0,
     despike_thresh: float = 8.0,
     despike_smooth: float = 0.5,
 ) -> RawProfile:
-    """Load raw inclinometer/accel/shear/temp-gradient channels from *path*.
+    """Load the raw diagnostic channels and the CT reference from *path*.
 
-    Fast channels are HP-filtered then despiked (``scor160`` helpers — the same
-    preprocessing the ``perturb-plot`` variance diagnostics use) to give the
-    ``proc`` overlay.  Missing channels are skipped; a file without
-    ``P``/``t_fast``/``t_slow`` (or one that fails to open) yields an empty
-    :class:`RawProfile` rather than raising, so one bad file cannot break the
-    inspector.
+    Each channel is placed on the clock its own dimension names, so a T1
+    written at the fast rate is drawn on the fast depth, not dropped.  The
+    microstructure channels on the fast clock are HP-filtered then despiked
+    (``scor160`` helpers — the same preprocessing the ``perturb-plot`` variance
+    diagnostics use) to give the ``proc`` overlay.  The CT temperature is the
+    first of *ct_families* (default: the platform pairs) whose temperature the
+    file holds; the conductivity comes from that same CT when the file has it,
+    else from the first other pair that does.  Missing channels are skipped; a
+    file without ``P``/``t_fast``/``t_slow`` (or one that fails to open) yields
+    an empty :class:`RawProfile` rather than raising, so one bad file cannot
+    break the inspector.
     """
     empty = RawProfile(path, np.array([]), np.array([]), {}, {}, {}, {})
+    families = ct_families if ct_families is not None else _CT_REF_DEFAULTS
     try:
         with _NETCDF_LOCK, xr.open_dataset(path, decode_times=False) as ds:
             if not {"P", "t_fast", "t_slow"}.issubset(ds.variables):
@@ -239,22 +313,69 @@ def load_raw_profile(
             t_fast = np.asarray(ds["t_fast"].values, dtype=float)
             t_slow = np.asarray(ds["t_slow"].values, dtype=float)
             P = np.asarray(ds["P"].values, dtype=float)
+            fast_dims, slow_dims = ds["t_fast"].dims, ds["t_slow"].dims
+
+            def series(ch: str | None) -> tuple[np.ndarray, bool] | None:
+                """*ch* and whether it is on the fast clock, or None if absent.
+
+                The clock is the variable's own dimension; only a variable on
+                neither clock's dimension falls back to matching a length.
+                """
+                if ch is None or ch not in ds.variables:
+                    return None
+                var = ds[ch]
+                sig = np.asarray(var.values, dtype=float).ravel()
+                if var.dims == fast_dims:
+                    fast = True
+                elif var.dims == slow_dims:
+                    fast = False
+                elif sig.size in (t_fast.size, t_slow.size):
+                    fast = sig.size == t_fast.size
+                else:
+                    return None
+                n = t_fast.size if fast else t_slow.size
+                return (sig, fast) if sig.size == n else None
+
             raw: dict[str, np.ndarray] = {}
             is_fast: dict[str, bool] = {}
-            for ch in _FAST_DIAG_CHANNELS:
-                if ch in ds.variables:
-                    sig = np.asarray(ds[ch].values, dtype=float).ravel()
-                    if sig.size == t_fast.size:
-                        raw[ch] = sig
-                        is_fast[ch] = True
-            for ch in _SLOW_DIAG_CHANNELS:
-                if ch in ds.variables:
-                    sig = np.asarray(ds[ch].values, dtype=float).ravel()
-                    if sig.size == t_slow.size:
-                        raw[ch] = sig
-                        is_fast[ch] = False
+            names: dict[str, str] = {}
+            for ch in _DIAG_CHANNELS:
+                got = series(ch)
+                if got is not None:
+                    raw[ch], is_fast[ch] = got
+
+            def take(role: str, ch: str | None) -> bool:
+                """Load *ch* as the CT *role*; False when the file lacks it."""
+                got = series(ch)
+                if got is None or ch is None:
+                    return False
+                raw[role], is_fast[role] = got
+                names[role] = ch
+                return True
+
+            chosen = None
+            for i, (t, _c) in enumerate(families):
+                if take(T_REF, t):
+                    chosen = i
+                    break
+            # Conductivity from the same CT as the temperature where possible.
+            c_order = list(families)
+            if chosen is not None:
+                c_order.insert(0, c_order.pop(chosen))
+            for _t, c in c_order:
+                if take(C_REF, c):
+                    break
     except (OSError, ValueError, RuntimeError):
         return empty
+
+    for key, (a, b) in _DERIVED_DIAG_SERIES.items():
+        if a in raw and b in raw:
+            yb = raw[b]
+            if is_fast[a] != is_fast[b]:
+                t_a, t_b = (t_fast, t_slow) if is_fast[a] else (t_slow, t_fast)
+                yb = np.interp(t_a, t_b, yb)
+            raw[key] = raw[a] - yb
+            is_fast[key] = is_fast[a]
 
     depth_slow = _p_to_depth(P, lat)
     depth_fast = _p_to_depth(np.interp(t_fast, t_slow, P), lat)
@@ -267,14 +388,15 @@ def load_raw_profile(
         from odas_tpw.scor160.l2 import _hp_filter
 
         fs = 1.0 / dt
-        for ch, sig in raw.items():
-            if is_fast[ch] and sig.size >= 16:
+        for ch in _HP_DIAG_CHANNELS:
+            sig = raw.get(ch)
+            if sig is not None and is_fast[ch] and sig.size >= 16:
                 hp_sig = _hp_filter(sig, fs, hp_cut)
                 hp[ch] = hp_sig
                 proc[ch] = despike(
                     hp_sig, fs, thresh=despike_thresh, smooth=despike_smooth,
                 ).y
-    return RawProfile(path, depth_fast, depth_slow, raw, hp, proc, is_fast)
+    return RawProfile(path, depth_fast, depth_slow, raw, hp, proc, is_fast, names)
 
 
 def load_profile_file(path: str) -> ProfileFile:
@@ -416,6 +538,12 @@ class Cell:
     ``profiles_dir``; it is ``None`` otherwise (or when no profiles file matched
     this cast).  ``field`` is the overview variable the selection came from, so a
     renderer can adapt (the mixing drill-down keys its spectra off it).
+
+    A *no-product* cell has ``profile=None``: the cast has no usable file of the
+    inspector's primary product, which is when its raw channels matter most.
+    ``note`` then says why (e.g. "no diss_00 file for this cast") and ``depth``
+    is the clicked bin depth, which stands in for the missing window's depth
+    band.  For mixing, ``profiles["eps"]`` may still hold the cast's diss file.
     """
 
     profile: Any
@@ -423,6 +551,27 @@ class Cell:
     raw: RawProfile | None = None
     profiles: dict[str, Any] | None = None
     field: str | None = None
+    depth: float | None = None
+    note: str | None = None
+
+
+def _no_product_cell(
+    raw: RawProfile | None, depth: float, note: str, *, eps: Any = None
+) -> Cell | None:
+    """A :class:`Cell` without its primary product file, or None with nothing.
+
+    It carries the cast's raw channels and, for mixing, its diss file *eps*;
+    None only when neither matched.  A profiles file that matched but holds no
+    usable channels still makes a cell: its panels then say "no raw data",
+    which beats a bare placeholder.
+    """
+    if raw is None and eps is None:
+        return None
+    profiles = {"eps": eps, "chi": None} if eps is not None else None
+    return Cell(
+        profile=None, window=-1, raw=raw, profiles=profiles,
+        depth=float(depth), note=note,
+    )
 
 
 def _read_stime(path: str) -> float | None:
@@ -507,7 +656,45 @@ class _StimeIndex:
         return None
 
 
-class EpsilonCellSource:
+def _stage_name(directory: str) -> str:
+    """``diss_00`` from ``.../diss_00/`` — names the missing product in a note."""
+    return os.path.basename(os.path.normpath(directory))
+
+
+class _RawLookup:
+    """The raw-profiles half of a cell source: ``stime`` index, cache, CT names.
+
+    Shared by :class:`EpsilonCellSource` and :class:`MixingCellSource`.  The CT
+    reference names are read from the profiles directory's signature on the
+    first load (not at construction, which must not touch the directory).
+    """
+
+    _raw: _StimeIndex | None
+
+    def _init_raw(self, profiles_dir: str | None, tol: float) -> None:
+        self._raw = _StimeIndex(profiles_dir, tol) if profiles_dir else None
+        self._raw_dir = profiles_dir
+        self._raw_cache: dict[str, RawProfile] = {}
+        self._ct_families: tuple[tuple[str | None, str | None], ...] | None = None
+
+    def load_raw(self, path: str) -> RawProfile:
+        rp = self._raw_cache.get(path)
+        if rp is None:
+            if self._ct_families is None:
+                self._ct_families = ct_reference_families(self._raw_dir)
+            rp = load_raw_profile(path, ct_families=self._ct_families)
+            self._raw_cache[path] = rp
+        return rp
+
+    def raw_for(self, stime_epoch: float) -> RawProfile | None:
+        """The cast's raw channels, or None (no profiles dir, or no match)."""
+        if self._raw is None:
+            return None
+        rpath = self._raw.path_for(stime_epoch)
+        return None if rpath is None else self.load_raw(rpath)
+
+
+class EpsilonCellSource(_RawLookup):
     """Map overview ``(stime, bin)`` cells to a per-profile file + window.
 
     Files are located by matching the combo's per-profile ``stime`` (float epoch
@@ -515,7 +702,9 @@ class EpsilonCellSource:
     seconds, and cached once loaded.  The window is the one whose depth is
     nearest the clicked bin.  When *profiles_dir* is given, the same ``stime``
     match against the per-profile *profiles* files supplies each cell's raw
-    diagnostic channels (inclinometer / accel / shear / temp-gradient).
+    diagnostic channels (CT temperature / conductivity, fall rate,
+    inclinometer, accel, shear, temp-gradient) — and a raw-only cell when the
+    cast has no usable per-profile product file.
 
     Both directory indexes are built lazily (see :class:`_StimeIndex`): opening
     the inspector no longer scans the per-profile directories; the first
@@ -528,10 +717,10 @@ class EpsilonCellSource:
     ) -> None:
         self._tol = float(tol)
         self._diss = _StimeIndex(diss_dir, self._tol)
-        self._raw = _StimeIndex(profiles_dir, self._tol) if profiles_dir else None
+        self._stage = _stage_name(diss_dir)
+        self._init_raw(profiles_dir, self._tol)
         self._loader = loader
         self._cache: dict[str, Any] = {}
-        self._raw_cache: dict[str, RawProfile] = {}
 
     def load(self, path: str) -> Any:
         pf = self._cache.get(path)
@@ -539,13 +728,6 @@ class EpsilonCellSource:
             pf = self._loader(path)
             self._cache[path] = pf
         return pf
-
-    def load_raw(self, path: str) -> RawProfile:
-        rp = self._raw_cache.get(path)
-        if rp is None:
-            rp = load_raw_profile(path)
-            self._raw_cache[path] = rp
-        return rp
 
     def prewarm(self) -> None:
         """Build the directory ``stime`` indexes now.
@@ -560,26 +742,30 @@ class EpsilonCellSource:
             self._raw.ensure()
 
     def cell(self, stime_epoch: float, bin_depth: float) -> Cell | None:
-        """Resolve one overview cell, or None if no per-profile file matches."""
+        """Resolve one overview cell.
+
+        Without a matching per-profile file (or one with no finite window
+        depth) the cell is raw-only when the cast's profiles file matched, and
+        None when it did not either.
+        """
         path = self._diss.path_for(stime_epoch)
         if path is None:
-            return None
+            return _no_product_cell(
+                self.raw_for(stime_epoch), bin_depth,
+                f"no {self._stage} file for this cast",
+            )
         pf = self.load(path)
-        if pf.depth.size == 0:
-            return None
         # Nearest window by depth; ignore NaN depths (failed windows).
-        d = pf.depth.copy()
-        finite = np.isfinite(d)
-        if not finite.any():
-            return None
-        d[~finite] = np.inf
-        window = int(np.argmin(np.abs(d - bin_depth)))
-        raw = None
-        if self._raw is not None:
-            rpath = self._raw.path_for(stime_epoch)
-            if rpath is not None:
-                raw = self.load_raw(rpath)
-        return Cell(profile=pf, window=window, raw=raw)
+        window = nearest_window(pf.depth, bin_depth)
+        if window is None:
+            return _no_product_cell(
+                self.raw_for(stime_epoch), bin_depth,
+                f"no finite window in {os.path.basename(path)}",
+            )
+        return Cell(
+            profile=pf, window=window, raw=self.raw_for(stime_epoch),
+            depth=float(bin_depth),
+        )
 
 
 def nearest_window(depth: np.ndarray, target: float) -> int | None:
@@ -599,7 +785,7 @@ class CellSource(Protocol):
     def prewarm(self) -> None: ...
 
 
-class MixingCellSource:
+class MixingCellSource(_RawLookup):
     """Map overview ``(stime, bin)`` cells to a chi profile + a matching diss one.
 
     Mixing draws on two products: the chi file supplies the temperature-gradient
@@ -609,6 +795,8 @@ class MixingCellSource:
     file is primary: it fixes the depth grid and the selected window; the diss
     file is matched by ``stime`` and attached under ``cell.profiles['eps']`` so
     the adaptive spectra renderer can pick the window nearest the same depth.
+    Without a usable chi file the cell is raw-only, as for
+    :class:`EpsilonCellSource`.
     """
 
     def __init__(
@@ -617,11 +805,11 @@ class MixingCellSource:
     ) -> None:
         self._tol = float(tol)
         self._chi = _StimeIndex(chi_dir, self._tol)
+        self._chi_stage = _stage_name(chi_dir)
         self._diss = _StimeIndex(diss_dir, self._tol)
-        self._raw = _StimeIndex(profiles_dir, self._tol) if profiles_dir else None
+        self._init_raw(profiles_dir, self._tol)
         self._chi_cache: dict[str, ChiProfileFile] = {}
         self._diss_cache: dict[str, ProfileFile] = {}
-        self._raw_cache: dict[str, RawProfile] = {}
 
     def load_chi(self, path: str) -> ChiProfileFile:
         cf = self._chi_cache.get(path)
@@ -637,13 +825,6 @@ class MixingCellSource:
             self._diss_cache[path] = pf
         return pf
 
-    def load_raw(self, path: str) -> RawProfile:
-        rp = self._raw_cache.get(path)
-        if rp is None:
-            rp = load_raw_profile(path)
-            self._raw_cache[path] = rp
-        return rp
-
     def prewarm(self) -> None:
         """Build all directory ``stime`` indexes now (background-thread safe)."""
         self._chi.ensure()
@@ -652,27 +833,32 @@ class MixingCellSource:
             self._raw.ensure()
 
     def cell(self, stime_epoch: float, bin_depth: float) -> Cell | None:
-        """Resolve a mixing cell (chi primary + diss + raw), or None."""
-        chi_path = self._chi.path_for(stime_epoch)
-        if chi_path is None:
-            return None
-        chi_pf = self.load_chi(chi_path)
-        window = nearest_window(chi_pf.depth, bin_depth)
-        if window is None:
-            return None
+        """Resolve a mixing cell (chi primary + diss + raw).
 
+        Without a usable chi file the cell has no primary product but keeps the
+        diss file (so a K_rho click still shows the shear spectrum) and the raw
+        row; it is None only when neither of those matched either.
+        """
         diss_pf = None
         diss_path = self._diss.path_for(stime_epoch)
         if diss_path is not None:
             diss_pf = self.load_diss(diss_path)
 
-        raw = None
-        if self._raw is not None:
-            rpath = self._raw.path_for(stime_epoch)
-            if rpath is not None:
-                raw = self.load_raw(rpath)
+        chi_path = self._chi.path_for(stime_epoch)
+        if chi_path is None:
+            return _no_product_cell(
+                self.raw_for(stime_epoch), bin_depth,
+                f"no {self._chi_stage} file for this cast", eps=diss_pf,
+            )
+        chi_pf = self.load_chi(chi_path)
+        window = nearest_window(chi_pf.depth, bin_depth)
+        if window is None:
+            return _no_product_cell(
+                self.raw_for(stime_epoch), bin_depth,
+                f"no finite window in {os.path.basename(chi_path)}", eps=diss_pf,
+            )
 
         return Cell(
-            profile=chi_pf, window=window, raw=raw,
-            profiles={"eps": diss_pf, "chi": chi_pf},
+            profile=chi_pf, window=window, raw=self.raw_for(stime_epoch),
+            profiles={"eps": diss_pf, "chi": chi_pf}, depth=float(bin_depth),
         )

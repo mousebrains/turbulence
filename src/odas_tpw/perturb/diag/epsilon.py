@@ -5,8 +5,9 @@ Overview: pcolor of the combined mean and per-probe epsilon over cast x depth.
 Click a cell (or arrow-key around) to drill into that dissipation estimate's
 shear wavenumber spectra (with Nasmyth fits and K_max), the profile's
 dissipation diagnostics, and — from the profiles product — a row of raw
-instrument diagnostics (inclinometer, accelerometer, shear probe, temperature
-gradient) vs depth.
+diagnostics vs depth (FP07 and CT temperature, FP07 minus CT, conductivity,
+fall rate, inclinometer, accelerometer, shear probe, temperature gradient).  A
+cast with a profiles file but no diss file still draws that row.
 """
 
 from __future__ import annotations

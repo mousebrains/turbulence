@@ -1138,6 +1138,27 @@ def _write_l4_chi(
                     "long_name": "figure of merit",
                 },
             ),
+            "mad_shape": (
+                ["probe", "time"],
+                (
+                    np.full_like(l4_chi.fom, np.nan)
+                    if l4_chi.mad_shape is None
+                    else l4_chi.mad_shape
+                ),
+                {
+                    "units": "1",
+                    "long_name": "spread of log10(observed/model) across the chi fit band",
+                    "comment": (
+                        "mean_k |r_k - median(r)| in dex, r_k = log10(observed/model), "
+                        "over the bins and model fom uses. SHAPE, not level: a perfect "
+                        "fit sits at the spectral-scatter floor, ~0.17 / 0.14 / 0.11 dex "
+                        "for 9.5 / 13.3 / 19 degrees of freedom, not 0; evaluate it at "
+                        "the window's own dof with odas_tpw.chi.chi.mad_shape_floor (a "
+                        "shorter BBL window has fewer). See odas_tpw.chi.chi._shape_mad "
+                        "and issue #191. Not a QC gate."
+                    ),
+                },
+            ),
             "K_max_ratio": (
                 ["probe", "time"],
                 l4_chi.K_max_ratio,

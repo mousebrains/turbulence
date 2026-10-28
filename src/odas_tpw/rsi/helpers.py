@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 import warnings
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
@@ -33,6 +33,8 @@ class ChannelsDict(TypedDict, total=False):
     """Type for the dict returned by :func:`load_channels`."""
 
     shear: list[tuple[str, np.ndarray]]
+    # The Goodman vibration stack (select_vibration_channels): piezo sensors
+    # as well as accelerometers, whatever the key's name suggests.
     accel: list[tuple[str, np.ndarray]]
     P: np.ndarray
     T: np.ndarray
@@ -413,7 +415,10 @@ def load_channels(
     shear_pattern : str
         Regex pattern matching shear channel names.
     accel_pattern : str
-        Regex pattern matching accelerometer channel names.
+        Regex naming the true (non-piezo) accelerometer channels. It does not
+        select piezo sensors: every piezo-typed fast channel is in the
+        vibration stack whatever its name, so no pattern can drop one (see
+        :func:`select_vibration_channels`, the rule the adapter shares).
     pressure_name : str
         Name of the pressure channel.
     temperature_name : str or float
@@ -430,7 +435,9 @@ def load_channels(
     -------
     dict with keys:
         shear : list of (name, ndarray) — shear probe signals
-        accel : list of (name, ndarray) — accelerometer signals
+        accel : list of (name, ndarray) — the Goodman vibration stack,
+            piezo sensors and accelerometers alike
+            (:func:`select_vibration_channels`)
         channel_types : dict — sensor type per accel channel name (.p:
             pf.channel_info; nc: the sensor_type variable attr), so the
             L1 builder can label piezo-typed channels "VIB"
@@ -527,6 +534,118 @@ def pfile_channel_types(pf: PFile) -> dict[str, str]:
     return {n: (pf.channel_info.get(n) or {}).get("type", "") for n in pf.channels}
 
 
+# ---------------------------------------------------------------------------
+# Goodman vibration stack (issue #168). ONE rule for every entry point: the
+# adapter (pfile_to_l1data, and nc_to_l1data on a p_to_L1 file), load_channels
+# (.p and per-profile NetCDF) and the quick-look viewers used to assemble it
+# separately, and on mixed piezo + accelerometer hardware they cleaned shear
+# against different bases.
+# ---------------------------------------------------------------------------
+
+
+def vibration_label(names: Collection[str], types: Mapping[str, str]) -> str:
+    """``L1Data.vib_type`` for a vibration stack.
+
+    ``"NONE"`` for an empty stack, ``"VIB"`` when every channel is
+    piezo-typed, ``"ACC"`` when any true accelerometer is present (or a
+    channel's type is unknown: the historical label). Label-only downstream:
+    Goodman treats ACC and VIB alike.
+    """
+    if not names:
+        return "NONE"
+    return "VIB" if all(types.get(n) == "piezo" for n in names) else "ACC"
+
+
+def select_vibration_channels(
+    types: Mapping[str, str],
+    fast_names: Collection[str],
+    accel_pattern: str | re.Pattern[str] = AC_PATTERN,
+    *,
+    context: str = "",
+    stacklevel: int = 2,
+) -> tuple[list[str], str]:
+    """The vibration channels Goodman cleans shear against: ``(names, vib_type)``.
+
+    The stack is the UNION, name-sorted, of
+
+    - every piezo-typed fast channel, whatever its name. RSI names piezo
+      sensors Ax/Ay on MRs and modern VMPs, and parse_config's accel -> piezo
+      rewrite (setupstr.m parity) makes CASPER-era accel(0,1) configs piezo
+      too, but a piezo named otherwise is still a vibration reference;
+    - every fast channel matching *accel_pattern* that is not piezo-typed:
+      the true DC-response accelerometers (``type = accel`` with a real
+      calibration). A channel whose type is unknown falls under this name
+      rule, which is how a source that carries no types behaves.
+
+    On mixed hardware, dropping either kind would cost Goodman coherent-noise
+    removal a vibration reference. *accel_pattern* therefore names the
+    accelerometers only: a caller can widen or narrow it, but no pattern can
+    drop a piezo. A piezo-typed channel that is not on the fast rate cannot be
+    stacked with the shear probes; it is left out with a warning and a logged
+    WARNING (perturb's worker logs keep the latter), never silently.
+
+    Parameters
+    ----------
+    types : mapping
+        Channel name -> sensor type for every channel of the source, fast and
+        slow (:func:`pfile_channel_types`, or the ``sensor_type`` attrs of a
+        per-profile NetCDF).
+    fast_names : collection of str
+        The fast-rate channel names.
+    accel_pattern : str or compiled regex
+        Names of the true accelerometers; default ``^A[xyz]$``.
+    context : str
+        Prefix for the warning (normally the file name).
+    stacklevel : int
+        As for :func:`warnings.warn`: 2 attributes the warning to whoever
+        called this function. An entry point passes its own depth so the
+        warning lands on the code that called the entry point.
+
+    Returns
+    -------
+    names : list of str
+        The stack's channel names, sorted.
+    vib_type : str
+        Its :func:`vibration_label`.
+    """
+    accel_re = re.compile(accel_pattern)
+    fast = set(fast_names)
+    piezo = {n for n, t in types.items() if t == "piezo"}
+    slow_piezo = sorted(piezo - fast)
+    if slow_piezo:
+        msg = (
+            f"{context + ': ' if context else ''}piezo channel(s) {slow_piezo} are "
+            "not fast-rate channels; left out of the Goodman vibration stack"
+        )
+        logger.warning(msg)
+        warnings.warn(msg, stacklevel=stacklevel)
+    accel = {n for n in fast if n not in piezo and accel_re.match(n)}
+    names = sorted((piezo & fast) | accel)
+    return names, vibration_label(names, types)
+
+
+def pfile_vibration_channels(
+    pf: PFile,
+    accel_pattern: str | re.Pattern[str] = AC_PATTERN,
+    *,
+    stacklevel: int = 2,
+) -> tuple[list[str], str]:
+    """:func:`select_vibration_channels` for a PFile (or a duck-typed shim).
+
+    *stacklevel* is relative to this function's caller, as for
+    :func:`warnings.warn`.
+    """
+    # getattr: duck-typed PFile shims (tests, perturb) may carry no filepath.
+    filepath = getattr(pf, "filepath", None)
+    return select_vibration_channels(
+        pfile_channel_types(pf),
+        pf._fast_channels,
+        accel_pattern,
+        context=Path(filepath).name if filepath is not None else "",
+        stacklevel=stacklevel + 1,
+    )
+
+
 def _channels_from_pfile(
     pf: PFile,
     sh_pat: str,
@@ -538,15 +657,14 @@ def _channels_from_pfile(
     from odas_tpw.rsi.p_file import instrument_sn
 
     sh_re = re.compile(sh_pat) if sh_pat != SH_PATTERN.pattern else SH_PATTERN
-    ac_re = re.compile(ac_pat) if ac_pat != AC_PATTERN.pattern else AC_PATTERN
     shear = sorted(
         [(n, pf.channels[n]) for n in pf._fast_channels if sh_re.match(n)],
         key=lambda x: x[0],
     )
-    accel = sorted(
-        [(n, pf.channels[n]) for n in pf._fast_channels if ac_re.match(n)],
-        key=lambda x: x[0],
-    )
+    # The Goodman vibration stack, by the rule the adapter shares (#168).
+    # stacklevel 4: a warning lands on the caller of load_channels.
+    vib_names, _ = pfile_vibration_channels(pf, ac_pat, stacklevel=4)
+    accel = [(n, pf.channels[n]) for n in vib_names]
     n_slow = len(pf.t_slow)
     P = pf.channels[p_name]
     T, t_source, t_qc = _resolve_reference_temperature(
@@ -647,7 +765,6 @@ def _channels_from_nc(
 
     ds = nc.Dataset(str(nc_path), "r")
     sh_re = re.compile(sh_pat) if sh_pat != SH_PATTERN.pattern else SH_PATTERN
-    ac_re = re.compile(ac_pat) if ac_pat != AC_PATTERN.pattern else AC_PATTERN
 
     fs_fast = float(ds.fs_fast)
     fs_slow = float(ds.fs_slow)
@@ -680,20 +797,28 @@ def _channels_from_nc(
             if stype:
                 resolve_types[vname] = str(stype)
 
+    # sensor_type attr written by extract_profiles, on every channel variable:
+    # the vibration stack is chosen by the rule the .p route and the adapter
+    # share (#168), and the types let the L1 builder label piezo sensors
+    # "VIB" (see ChannelsDict). A file written without them has type "" and
+    # falls back to the name rule.
     shear = []
-    accel = []
-    channel_types: dict[str, str] = {}
+    fast_names: list[str] = []
+    var_types: dict[str, str] = {}
     for vname in sorted(ds.variables.keys()):
         var = ds.variables[vname]
+        if var.dimensions in (("time_fast",), ("time_slow",)):
+            var_types[vname] = str(getattr(var, "sensor_type", ""))
         if var.dimensions == ("time_fast",):
+            fast_names.append(vname)
             if sh_re.match(vname):
                 shear.append((vname, _nc_filled(var)))
-            elif ac_re.match(vname):
-                # Union of PR #137 (masked -> NaN) and PR #138 (type label).
-                accel.append((vname, _nc_filled(var)))
-                # sensor_type attr written by extract_profiles; lets the L1
-                # builder label piezo sensors "VIB" (see ChannelsDict).
-                channel_types[vname] = str(getattr(var, "sensor_type", ""))
+    # stacklevel 4: a warning lands on the caller of load_channels.
+    vib_names, _ = select_vibration_channels(
+        var_types, fast_names, ac_pat, context=nc_path.name, stacklevel=4
+    )
+    accel = [(n, _nc_filled(ds.variables[n])) for n in vib_names]
+    channel_types = {n: var_types[n] for n in vib_names}
 
     metadata = {"source": str(nc_path)}
     from odas_tpw.rsi.p_file import V1_PROVENANCE_KEYS
@@ -1199,21 +1324,17 @@ def _build_l1data_from_channels(
     # Vibration/accelerometer
     if accel_arrays:
         vib = np.stack([arr[s_fast:e_fast] for arr in accel_arrays], axis=0)
-        # Piezo-typed channels are uncalibrated vibration sensors, not linear
-        # accelerometers: label them "VIB", mirroring the adapter's piezo ->
-        # "VIB" convention (#131 W5-ii, W3 review F5). Types come from
-        # load_channels (channel_types); dicts without them (older callers,
-        # synthetic tests) keep the historical "ACC". Label-only: no numeric
-        # consumer branches on vib_type (Goodman treats ACC and VIB alike).
-        types = data.get("channel_types") or {}
-        accel_names = [name for name, _ in data["accel"]]
-        if accel_names and all(types.get(name) == "piezo" for name in accel_names):
-            vib_type = "VIB"
-        else:
-            vib_type = "ACC"
     else:
         vib = np.zeros((0, n), dtype=np.float64)
-        vib_type = "NONE"
+    # Piezo-typed channels are uncalibrated vibration sensors, not linear
+    # accelerometers: an all-piezo stack is "VIB", by the label the adapter
+    # uses (#131 W5-ii, W3 review F5; vibration_label). Types come from
+    # load_channels (channel_types); dicts without them (older callers,
+    # synthetic tests) keep the historical "ACC". Label-only: no numeric
+    # consumer branches on vib_type (Goodman treats ACC and VIB alike).
+    vib_type = vibration_label(
+        [name for name, _ in data["accel"]], data.get("channel_types") or {}
+    )
 
     # Optional fast temperature
     if therm_list:

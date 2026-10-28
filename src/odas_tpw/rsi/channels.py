@@ -571,9 +571,10 @@ _SHEAR_SENS_MAX = 0.15
 # measurement settles it.  SN 132 shows why the rate cannot select the rung
 # either: it samples at 511.9454 Hz yet 0.09 is on the RIGHT rung.  It
 # was converted to a 1024 Hz tidal build in 2021 and back, and its analog chain
-# evidently stayed on the tidal rung (bench-noise fit 0.10-0.13; epsilon with
-# 0.09 matches SN 465's, cast nearby from a second boat, at ~0.9-1.2x, 95% CIs
-# within ~0.7-1.7x).  0.09 versus ~0.12 is still open.  See issue #178.
+# stayed on the tidal rung (bench-noise fit 0.10-0.13; epsilon with 0.09
+# matches SN 465's, cast nearby from a second boat, at ~0.9-1.2x, 95% CIs
+# within ~0.7-1.7x).  Rockland has since confirmed 0.09: the tidal build's 1/10
+# gain was never changed back.  See issue #178.
 _SHEAR_DIFF_GAIN_MIN = 0.001
 _SHEAR_DIFF_GAIN_MAX = 10.0
 
