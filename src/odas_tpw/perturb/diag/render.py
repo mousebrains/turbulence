@@ -11,7 +11,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from odas_tpw.perturb.diag.data import Cell, ProfileFile, nearest_window
+from odas_tpw.perturb.diag.data import (
+    C_REF,
+    T_REF,
+    Cell,
+    ProfileFile,
+    nearest_window,
+)
 from odas_tpw.perturb.plot import layout
 
 # Per-probe colors, matching the rsi ProfileViewer palette.
@@ -173,15 +179,36 @@ def draw_diss_strip(axes, cell: Cell) -> tuple[float, float]:
     return 0.0, 1.0
 
 
-# Raw instrument-diagnostics panels (vs depth): (xlabel, [(channel, color,
-# legend label), ...]).  Fast channels overlay the HP+despiked signal on a
-# faint raw trace; the slow inclinometer is shown de-meaned.  Grouped to match
-# the epsilon path's sensors: platform attitude, vibration, shear, temp gradient.
-_DIAG_PANELS: list[tuple[str, list[tuple[str, str, str]]]] = [
-    ("Incl (° dev.)", [("Incl_X", "C0", "X"), ("Incl_Y", "C1", "Y")]),
-    ("Accel (counts)", [("Ax", "C0", "Ax"), ("Ay", "C1", "Ay")]),
-    (r"Shear (s$^{-1}$)", [("sh1", "C0", "sh1"), ("sh2", "C1", "sh2")]),
-    ("Temp grad", [("T1_dT1", "C0", "dT1"), ("T2_dT2", "C1", "dT2")]),
+# Raw instrument-diagnostics panels (vs depth): (xlabel, style, [(series,
+# color, legend label), ...]).  A series is a key of RawProfile.raw: a channel,
+# a CT-reference role (T_REF/C_REF: e.g. JAC_T/JAC_C or SBT1/SBC1 on a VMP, the
+# hotel's sci_water_temp/cond on a glider) or a derived series (dT1_ref = T1 -
+# T_REF).  "{T_ref}"/"{C_ref}" in a label become the channel the role resolved
+# to, so the legend always names the reference actually plotted.
+# Styles: "abs" plots the values as recorded; "delta" too, but on an x-range
+# from the 0.5-99.5 percentiles (zero included) — on an ARCTERX-2023 VMP cast,
+# 98% of T1 - JAC_T lay within -0.04..+0.006 K while a few surface samples
+# autoscaled the axis to +/-0.2 K, flattening the offset the panel is for;
+# "demean" subtracts the median (the inclinometer, so X and Y share a scale;
+# median in the legend); "hp" overlays the HP+despiked signal on a faint HP
+# trace (the microstructure channels).  Grouped as: water (T, FP07 - CT, C),
+# flight (fall rate, attitude), and the epsilon path's sensors (vibration,
+# shear, temp gradient).
+_DIAG_PANELS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
+    ("T (°C)", "abs",
+     [("T1", "C0", "T1"), ("T2", "C1", "T2"), (T_REF, "k", "{T_ref}")]),
+    (r"$\delta$T (°C)", "delta",
+     [("dT1_ref", "C0", "T1 - {T_ref}"), ("dT2_ref", "C1", "T2 - {T_ref}")]),
+    # mS/cm: the unit the pipeline's salinity (gsw.SP_from_C) requires of C.
+    (r"C (mS cm$^{-1}$)", "abs", [(C_REF, "C2", "{C_ref}")]),
+    # W_slow is the smoothed dP/dt in dbar/s, signed (negative on a glider
+    # climb, whatever its long_name's "|dP/dt|" says); speed_fast is in m/s.
+    (r"W (dbar s$^{-1}$), speed (m s$^{-1}$)", "abs",
+     [("W_slow", "C0", "W"), ("speed_fast", "C1", "speed")]),
+    ("Incl (° dev.)", "demean", [("Incl_X", "C0", "X"), ("Incl_Y", "C1", "Y")]),
+    ("Accel (counts)", "hp", [("Ax", "C0", "Ax"), ("Ay", "C1", "Ay")]),
+    (r"Shear (s$^{-1}$)", "hp", [("sh1", "C0", "sh1"), ("sh2", "C1", "sh2")]),
+    ("Temp grad", "hp", [("T1_dT1", "C0", "dT1"), ("T2_dT2", "C1", "dT2")]),
 ]
 
 DIAG_PANEL_COUNT = len(_DIAG_PANELS)
@@ -225,50 +252,74 @@ def _envelope(y: np.ndarray, depth: np.ndarray, maxn: int = 4000):
     return y[idx], depth[idx]
 
 
-def draw_diag_strip(axes, cell: Cell) -> None:
-    """Raw inclinometer/accel/shear/temp-gradient vs depth for the cell's cast.
+def _fill_label(label: str, names: dict[str, str]) -> str:
+    """Replace each ``{role}`` in *label* with the channel that role resolved to."""
+    for role, name in names.items():
+        label = label.replace("{" + role + "}", name)
+    return label
 
-    Fast channels overlay the high-pass-filtered signal (faint grey, min/max
-    decimated so spikes survive) under the HP+despiked signal — the epsilon
-    path's cleanup — in colour; both are zero-mean and in-band, so the panel
-    scales to the microstructure signal (not a channel's DC offset / temperature
-    ramp) and the grey-to-colour gap is exactly what despike removed.  The slow
-    inclinometer is de-meaned so its two components share a scale (median tilt in
-    the legend).  Every trace is clipped to the profile's dissipation depth span,
-    so the row lines up with the strip's shared inverted y-axis and drops
-    surface/turnaround transients.  The grey band marks the selected window.
-    Redraws all panels in place on each cell selection.
+
+def draw_diag_strip(axes, cell: Cell) -> None:
+    """Raw scalar and instrument diagnostics vs depth for the cell's cast.
+
+    Panels (see :data:`_DIAG_PANELS`): temperature (T1/T2 and the CT), FP07
+    minus CT, conductivity, fall rate and speed, inclinometer, accelerometer,
+    shear and temperature gradient.  The microstructure channels overlay the
+    high-pass-filtered signal (faint gray, min/max decimated so spikes survive)
+    under the HP+despiked signal — the epsilon path's cleanup — in color; both
+    are zero-mean and in-band, so the panel scales to the microstructure signal
+    (not a channel's DC offset / temperature ramp) and the gray-to-color gap is
+    exactly what despike removed.  The inclinometer is de-meaned so its two
+    components share a scale (median tilt in the legend).  The scalar panels
+    show values as recorded, delta-T on a robust x-range (its 0.5-99.5
+    percentiles, zero included; a trace beyond it runs off the panel).  Every
+    trace is clipped to the profile's window depth span, so the row lines up
+    with the strip's shared inverted y-axis and drops surface/turnaround
+    transients; a raw-only cell (no product file) shows the whole cast.  The
+    gray band marks the selected window (a raw-only cell's clicked bin,
+    +/-0.5 m).  A panel with none of its series reads "n/a".  Redraws all
+    panels in place on each cell selection.
     """
     rp = cell.raw
     pf, w = cell.profile, cell.window
-    lo, hi = band_extent(pf, w)
-
-    fin = pf.depth[np.isfinite(pf.depth)]
-    if fin.size:
-        d0, d1 = float(fin.min()), float(fin.max())
-        margin = 0.05 * (d1 - d0) + 1.0
-        clip_lo, clip_hi = d0 - margin, d1 + margin
+    clip_lo, clip_hi = -np.inf, np.inf
+    if pf is not None:
+        lo, hi = band_extent(pf, w)
+        fin = pf.depth[np.isfinite(pf.depth)]
+        if fin.size:
+            d0, d1 = float(fin.min()), float(fin.max())
+            margin = 0.05 * (d1 - d0) + 1.0
+            clip_lo, clip_hi = d0 - margin, d1 + margin
+    elif cell.depth is not None:
+        lo, hi = cell.depth - 0.5, cell.depth + 0.5
     else:
-        clip_lo, clip_hi = -np.inf, np.inf
+        lo = hi = np.nan
 
-    for ax, (xlabel, traces) in zip(axes, _DIAG_PANELS):
+    for ax, (xlabel, style, traces) in zip(axes, _DIAG_PANELS):
         ax.clear()
         drew = False
+        shown: list[np.ndarray] = []  # "delta" values, for the robust x-range
         for ch, color, label in traces:
             if rp is None or ch not in rp.raw:
                 continue
             fast = rp.is_fast[ch]
             depth = rp.depth_fast if fast else rp.depth_slow
             sel = np.isfinite(depth) & (depth >= clip_lo) & (depth <= clip_hi)
-            if not sel.any():
-                continue
+            if not sel.any() or not np.isfinite(rp.raw[ch][sel]).any():
+                continue  # e.g. a hotel CT blanked over this whole cast
             depth_s = depth[sel]
-            if fast and ch in rp.proc:  # HP (faint) under HP+despike (colored)
+            label = _fill_label(label, rp.names)
+            if style == "hp" and ch in rp.proc:  # HP (faint) under HP+despike
                 yy, dd = _envelope(rp.hp[ch][sel], depth_s)
                 ax.plot(yy, dd, "-", color="0.75", lw=0.3, alpha=0.7, zorder=1)
                 py, pdd = _stride(rp.proc[ch][sel], depth_s)
                 ax.plot(py, pdd, "-", color=color, lw=0.7, label=label, zorder=2)
-            else:  # slow inclinometer (or a fast channel too short to filter)
+            elif style in ("abs", "delta"):  # as recorded; stride keeps NaN gaps
+                yy, dd = _stride(rp.raw[ch][sel], depth_s)
+                ax.plot(yy, dd, "-", color=color, lw=0.8, label=label, zorder=2)
+                if style == "delta":
+                    shown.append(rp.raw[ch][sel])
+            else:  # inclinometer (or an HP channel too short to filter)
                 raw_s = rp.raw[ch][sel]
                 med = np.nanmedian(raw_s)
                 raw_dm = raw_s - (med if np.isfinite(med) else 0.0)
@@ -276,14 +327,62 @@ def draw_diag_strip(axes, cell: Cell) -> None:
                 yy, dd = _stride(raw_dm, depth_s)
                 ax.plot(yy, dd, "-", color=color, lw=0.8, label=lab, zorder=2)
             drew = True
+        if shown:
+            q_lo, q_hi = np.nanpercentile(np.concatenate(shown), [0.5, 99.5])
+            x0, x1 = min(float(q_lo), 0.0), max(float(q_hi), 0.0)
+            pad = 0.1 * (x1 - x0) or 1e-3
+            ax.set_xlim(x0 - pad, x1 + pad)
         if drew:
             ax.legend(fontsize=6, loc="best")
         else:
-            msg = "no raw data" if rp is not None else "no profiles file"
+            if rp is None:
+                msg = "no profiles file"
+            elif not rp.raw:
+                msg = "no raw data"
+            else:
+                msg = "n/a"  # the cast lacks this panel's channels
             ax.text(0.5, 0.5, msg, transform=ax.transAxes, ha="center",
-                    va="center", fontsize=8)
+                    va="center", fontsize=8, color="0.5")
+            ax.set_xticks([])  # no data: the default 0-1 ticks would mislead
         ax.set_xlabel(xlabel)
-        ax.axhspan(lo, hi, color="0.5", alpha=0.25, zorder=0)
+        if np.isfinite(lo):
+            ax.axhspan(lo, hi, color="0.5", alpha=0.25, zorder=0)
+        ax.grid(True, alpha=0.3)
+    if len(axes):
+        axes[0].set_ylabel("Depth (m)")  # clear() dropped the one _build set
+
+
+def draw_no_product(ax_spec, strip_axes, cell: Cell) -> None:
+    """The spectra panel and product strip of a cell without its product file.
+
+    The spectra panel says why there is nothing to fit (``cell.note``) and the
+    product-strip panels read "n/a"; the raw row is drawn as usual by
+    :func:`draw_diag_strip`.  A mixing cell that kept its diss file still shows
+    the shear spectrum for a K_rho click (K_rho needs epsilon, not chi), at the
+    window nearest the clicked depth, with the note above its title.
+    """
+    eps = (cell.profiles or {}).get("eps")
+    w = (
+        nearest_window(eps.depth, cell.depth)
+        if eps is not None and cell.depth is not None else None
+    )
+    note = cell.note or "no product file"
+    if w is not None and (cell.field or "").lower().startswith("k_rho"):
+        draw_eps_spectra(ax_spec, Cell(profile=eps, window=w))
+        ax_spec.set_title(f"{note}\n{ax_spec.get_title()}", fontsize=8)
+    else:
+        lines = [note]
+        if cell.raw is not None:
+            src = cell.raw.path.rsplit("/", 1)[-1]
+            lines.append(f"raw channels below, from\n{src}")
+        if w is not None:
+            lines.append("click K_rho for the shear spectrum")
+        _spectra_msg(ax_spec, "\n\n".join(lines))
+    for ax in strip_axes:
+        ax.clear()
+        ax.text(0.5, 0.5, "n/a", transform=ax.transAxes, ha="center",
+                va="center", fontsize=8, color="0.5")
+        ax.set_xticks([])
         ax.grid(True, alpha=0.3)
 
 
