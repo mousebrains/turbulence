@@ -79,6 +79,7 @@ fp07-cal patch -c fp07-cal.yaml                # write them into calibrated .p c
 fp07-cal registry render                       # regenerate microstructure_sensors/fp07_calibrations.{md,csv}
 fp07-cal registry check                        # validate the sheet's YAML; exit 1 if invalid or a view is stale
 fp07-cal registry show T1592                   # one bead's calibration history and its prior
+fp07-cal registry add fp07cal/coefficients.json --channel T1 --deployment "..." ...  # record a fit in the sheet
 
 mr-clocksync init    -o clocksync.yaml         # commented template config
 mr-clocksync probe   -c clocksync.yaml         # is there a wave to sync on? RUN THIS FIRST
@@ -100,7 +101,12 @@ changes. Runbook: `docs/fp07cal/runbook.md`. Worked 72-day result:
 `microstructure_sensors/fp07_calibrations.yaml`, the single hand-edited source; the `.md` sheet and
 `.csv` are generated from it (`fp07-cal registry render`; a test fails when they are stale). A bead's
 prior for a fresh deployment comes from its widest-range calibration not flagged short, fast-descent or
-episode.
+episode. With a `fit.prior` block, `fp07-cal fit` also fits `t_0` alone with the prior's shape held fixed
+and keeps it unless the full fit is clearly better on held-out error (> 5%), and always over < 5 K of
+range or when no full order is a plausible curve for the bead (dT/dL within 10% of the prior's). It
+flags a result outside the prior's uncertainty over their common range (runbook §5). Without the
+block its output is byte-identical.
+`fp07-cal registry add` records a fit by inserting text, never re-dumping the hand-edited YAML.
 
 Facts that are easy to get wrong:
 

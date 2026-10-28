@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from odas_tpw.fp07cal.fit import FitResult
+from odas_tpw.fp07cal.fit import higher_terms as _higher_terms
 from odas_tpw.fp07cal.logr import log_r, temperature
 from odas_tpw.fp07cal.pairs import PairSet
 from odas_tpw.fp07cal.series import ProbeSeries
@@ -106,16 +107,6 @@ class StabilityResult:
             f"({-self.total_drift_K:+.4f} K end-to-end), p={self.permutation_p:.3f} "
             f"— {verdict}"
         )
-
-
-def _higher_terms(L: np.ndarray, coeffs: np.ndarray) -> np.ndarray:
-    """``sum_{i>=1} a_i L^i`` — everything except the offset we are re-fitting."""
-    out = np.zeros_like(L, dtype=np.float64)
-    for i, a in enumerate(coeffs):
-        if i == 0:
-            continue
-        out = out + a * L**i
-    return out
 
 
 def _block_edges(t: np.ndarray, n_blocks: int | None, block_days: float | None) -> np.ndarray:

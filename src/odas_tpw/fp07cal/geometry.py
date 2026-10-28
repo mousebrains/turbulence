@@ -287,8 +287,13 @@ def joint_fit(
     robust: bool = True,
     robust_sigma: float = 4.0,
     robust_iters: int = 3,
+    fixed_terms: dict[str, float] | None = None,
 ) -> tuple[FitResult, GeometryFit]:
     """Fit the calibration AND the geometry together.
+
+    *fixed_terms* (``{beta_1, ...}``, e.g. a bead's prior) holds the shape
+    fixed: the unknowns are then ``t_0``, ``dz`` and ``tau``, solved the same
+    way, and *order* is the shape's.
 
     Estimating the geometry from post-fit residuals systematically
     **underestimates** it: on a monotone profile ``dT/dz`` is correlated with
@@ -311,8 +316,22 @@ def joint_fit(
     perpendicular sensor offset, and any residual timing error, with none of
     them able to steal another's signal.
     """
-    from odas_tpw.fp07cal.fit import _design, _uncenter
+    from odas_tpw.fp07cal.fit import (
+        _BETA_KEYS,
+        _design,
+        _uncenter,
+        fixed_shape_poly,
+        higher_terms,
+    )
     from odas_tpw.fp07cal.logr import temperature as _temperature
+
+    shape = None if fixed_terms is None else fixed_shape_poly(fixed_terms)
+    if shape is not None:
+        order = shape.size - 1
+    # Fitted polynomial coefficients (all of them, or only the offset), and the
+    # degree of the design that fits them.
+    n_poly = order + 1 if shape is None else 1
+    d_order = order if shape is None else 0
 
     g_all = local_dTdz(pairs) if dTdz is None else np.asarray(dTdz, dtype=np.float64)
     L_all = np.asarray(pairs.L, dtype=np.float64)
@@ -322,7 +341,7 @@ def joint_fit(
     usable = (
         np.isfinite(L_all) & np.isfinite(T_all) & np.isfinite(g_all) & np.isfinite(w_all)
     )
-    if int(usable.sum()) < order + 4:
+    if int(usable.sum()) < n_poly + 3:
         raise ValueError(
             f"{pairs.channel}: {int(usable.sum())} usable pairs is too few for a "
             f"joint order-{order} + geometry fit"
@@ -333,10 +352,14 @@ def joint_fit(
     g_eff = np.where(np.abs(g_all) >= min_abs_dTdz, g_all, 0.0)
 
     y = 1.0 / (T_all + 273.15)
+    if shape is not None:
+        y = y - higher_terms(L_all, shape)
     T_K2 = (T_all + 273.15) ** 2
     center = float(np.mean(L_all[usable]))
     scale = float(np.std(L_all[usable]))
-    if not np.isfinite(scale) or scale == 0:
+    if shape is not None:
+        center, scale = 0.0, 1.0  # the offset column is ones whatever L's spread
+    elif not np.isfinite(scale) or scale == 0:
         raise ValueError(f"{pairs.channel}: L has zero spread; nothing to fit")
     u = (L_all - center) / scale
 
@@ -350,40 +373,44 @@ def joint_fit(
     ])
     extra = extra_raw / extra_scale
     keep = usable.copy()
-    coef = np.zeros(order + 3)
+    coef = np.zeros(n_poly + 2)
     cond = float("nan")
     for _ in range(robust_iters if robust else 1):
-        X = np.column_stack([_design(u[keep], order), extra[keep]])
+        X = np.column_stack([_design(u[keep], d_order), extra[keep]])
         cond = float(np.linalg.cond(X))
         coef, *_ = np.linalg.lstsq(X, y[keep], rcond=None)
         if not robust:
             break
-        full = np.column_stack([_design(u, order), extra])
+        full = np.column_stack([_design(u, d_order), extra])
         resid = y - full @ coef
         mad = float(np.median(np.abs(resid[keep] - np.median(resid[keep]))))
         sigma = 1.4826 * mad
         if sigma <= 0 or not np.isfinite(sigma):
             break
         new_keep = usable & (np.abs(resid) <= robust_sigma * sigma)
-        if new_keep.sum() < order + 4 or np.array_equal(new_keep, keep):
+        if new_keep.sum() < n_poly + 3 or np.array_equal(new_keep, keep):
             break
         keep = new_keep
     else:
         # Loop exhausted with `keep` updated but not refitted (N3): one more
         # solve so the returned parameters describe the final keep set.
-        X = np.column_stack([_design(u[keep], order), extra[keep]])
+        X = np.column_stack([_design(u[keep], d_order), extra[keep]])
         cond = float(np.linalg.cond(X))
         coef, *_ = np.linalg.lstsq(X, y[keep], rcond=None)
 
-    coeffs = _uncenter(coef[: order + 1], center, scale)
-    dz = float(coef[order + 1] / extra_scale[0])
-    tau = float(coef[order + 2] / extra_scale[1])
+    if shape is None:
+        coeffs = _uncenter(coef[:n_poly], center, scale)
+    else:
+        coeffs = shape.copy()
+        coeffs[0] = float(coef[0])
+    dz = float(coef[n_poly] / extra_scale[0])
+    tau = float(coef[n_poly + 1] / extra_scale[1])
 
     T_pred = _temperature(L_all, coeffs) + dz * g_eff + tau * w_all * g_eff
     resid_K = T_all - T_pred
     rms = float(np.sqrt(np.nanmean(resid_K[keep] ** 2)))
 
-    X = np.column_stack([_design(u[keep], order), extra[keep]])
+    X = np.column_stack([_design(u[keep], d_order), extra[keep]])
     dof = max(1, int(keep.sum()) - X.shape[1])
     r = y[keep] - X @ coef
     cov = float(r @ r) / dof * np.linalg.pinv(X.T @ X)
@@ -429,21 +456,24 @@ def joint_fit(
         L_range=(float(np.min(L_all[usable])), float(np.max(L_all[usable]))),
         dive_climb_split_K=split, channel=pairs.channel, lag=pairs.lag,
         corr=pairs.corr, kept=keep,
+        fixed_terms=None if fixed_terms is None else {
+            k: float(fixed_terms[k]) for k in _BETA_KEYS if k in fixed_terms
+        },
     )
 
     gk = g_eff[keep]
     nz = np.abs(gk) > 0
     geo = GeometryFit(
         dz_m=dz, tau_s=tau,
-        dz_se_m=float(se[order + 1] / extra_scale[0]),
-        tau_se_s=float(se[order + 2] / extra_scale[1]),
+        dz_se_m=float(se[n_poly] / extra_scale[0]),
+        tau_se_s=float(se[n_poly + 1] / extra_scale[1]),
         n=int(nz.sum()), rms_K=rms,
         dTdz_range=(float(np.min(gk[nz])), float(np.max(gk[nz]))) if nz.any()
         else (float("nan"), float("nan")),
         w_range=(float(np.min(w_all[keep])), float(np.max(w_all[keep]))),
         explained_K=float(np.sqrt(np.mean((dz * gk + tau * w_all[keep] * gk) ** 2))),
-        dz_se_cluster_m=float(se_cl[order + 1] / extra_scale[0]),
-        tau_se_cluster_s=float(se_cl[order + 2] / extra_scale[1]),
+        dz_se_cluster_m=float(se_cl[n_poly] / extra_scale[0]),
+        tau_se_cluster_s=float(se_cl[n_poly + 1] / extra_scale[1]),
         n_clusters=n_clusters,
         cluster_warning=cluster_warning,
         rank_deficient=rank_deficient,
