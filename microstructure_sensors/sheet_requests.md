@@ -68,6 +68,14 @@ physical probe from the M1194 that Rockland recalibrated to 0.0591 on
 no bead-level calibration exists to be sent. Recorded here so the question is
 not re-opened every time a campaign is inventoried.
 
+*Added 2026-10-26.* Rockland does issue each FP07 a *production report*,
+eight of which are now filed here (README, *FP07 production reports*). Each
+report says "This probe is uncalibrated", so the line above stands. A report
+gives the bead's resistance at one temperature, which is enough to check bead
+identity in situ. Whether Rockland kept reports for the older beads below is
+unknown (unverified). If it did, they would be worth asking for on identity
+grounds only.
+
 The 12 distinct FP07s in these corpora (T179, T865, T866, T987, T988, T990,
 T991, T1000, T1001, T1030, T1057, T1305) therefore have no traceable
 calibration of any kind. Four of them carry Rockland's generic nominal set
