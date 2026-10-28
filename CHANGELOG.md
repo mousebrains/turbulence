@@ -333,18 +333,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   giving the reason for every channel it did not fit. Its `n_profiles*` counts
   are now of scored segments (one per gap-free profile, so unchanged on a
   VMP).
-- **SN 132's `diff_gain = 0.09` is on the right rung (issue #178, still open
-  on the fine value).** This supersedes two 0.4.0 notes below: that "the
+- **SN 132's `diff_gain = 0.09` is correct (issue #178, confirmed by
+  Rockland).** This supersedes two 0.4.0 notes below: that "the
   ladder points the other way", and the `--diff-gain` entry's "real miss ...
   inflating its epsilon by roughly 110x". A 512 Hz sampling rate did not imply
   a ~0.95 gain: Rockland converted SN 132 to a 1024 Hz tidal build in 2021, and
-  its analog chain evidently stayed on that rung when it went back to 512 Hz.
+  its analog chain stayed on that rung when it went back to 512 Hz.
   Open-circuit bench noise fits 0.10–0.13 (the same fit reads SN 409's 0.949
   within 2% and SN 465's 0.988 3–14% high), and epsilon computed with 0.09
   matches SN 465's, cast near-simultaneously from a second boat in German
   Channel, at ~0.9–1.2× (95% CIs within ~0.7–1.7×), not the 109× a 0.94 gain
-  would give. Whether the value is 0.09 or nearer the bench fit's ~0.12 is
-  still open, so SN 132 epsilon carries a ~1.8× scale uncertainty.
+  would give. Rockland has since confirmed 0.09: the tidal build's 1/10 gain
+  was never changed back, so SN 132 epsilon needs no gain correction and
+  carries no extra gain uncertainty.
   `docs/deployment_procedures.md` no longer says a bench run cannot check
   `diff_gain` — the open-circuit noise spectrum estimates it against
   `noise_shearchannel` — and a test probe is documented as reading the config's
