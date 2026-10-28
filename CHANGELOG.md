@@ -113,6 +113,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   "Record framing".
 
 ### Fixed
+- **An `instruments:` key that matches no input file is no longer silent.**
+  perturb looks a file's per-instrument settings up by the raw directory name
+  of its `.p` file, and a key that matched none was ignored without a word, so
+  `exclude_shear_probes`, `fp07_tau_scale` and `fp07_response` could simply
+  not be applied. A key YAML loads as a non-string (`465:` is an int,
+  `2017-10-24:` a date), which can never match, is now refused at config load
+  with a message to quote it. A string key that matches no input file of the
+  run is logged at WARNING at run start and listed in the run summary's
+  `notice:` lines, whichever settings it holds. This replaces the
+  `exclude`-only notice added with `instruments.<key>.exclude`. None of the
+  repo's example recipes was affected: the five with an `instruments:` block
+  use quoted keys matching their input directories.
 - **One Goodman vibration stack for every entry point (#168).** The adapter
   (`rsi-tpw pipeline`) chose the channels Goodman cleans shear against by
   sensor type, while `load_channels` (`rsi-tpw eps`/`chi`, perturb) and the

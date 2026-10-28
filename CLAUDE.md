@@ -257,7 +257,9 @@ Facts that are easy to get wrong:
 - **Segments split only between different `start_time`s**: every profile cut
   from one `.p` carries the file's start, which is also the chi-time match key.
 - The `instruments:` key is still the raw directory name (`patched` for
-  fp07-cal output), and an unmatched key is still silently ignored by perturb.
+  fp07-cal output). An unmatched key is no longer silent: a non-string key
+  (`465:`) is refused at load, and a key matching no input file is a run-start
+  WARNING and a summary `notice:` line. It is still a notice, not an error.
 
 ### Python API
 

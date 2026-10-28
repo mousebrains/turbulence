@@ -4680,6 +4680,39 @@ def _fp07_notices(outcomes: dict[str, dict]) -> list[str]:
     return lines
 
 
+def _instrument_key_notices(instruments: dict | None, instrument_keys: set[str]) -> list[str]:
+    """Run-summary lines for ``instruments`` keys that match no input file.
+
+    process_file looks a file's settings up by its raw directory name, so a key
+    naming anything else -- a serial when the files sit in ``VMP/``, a
+    lower-case spelling -- is ignored without a word, whichever settings it
+    holds (``exclude_shear_probes``, ``fp07_tau_scale``, ``fp07_response``,
+    ``exclude``). Reported, not refused: a shared config legitimately carries
+    keys for instruments a run does not include. *instrument_keys* are the keys
+    of every input file of the run, processed or skipped.
+    """
+    lines = []
+    for sn, settings in sorted((instruments or {}).items(), key=lambda kv: str(kv[0])):
+        if sn in instrument_keys:
+            continue
+        has = isinstance(settings, dict) and settings
+        what = ", ".join(sorted(settings)) if has else "no settings"
+        # Unreachable through load_config, which refuses a non-string key, but
+        # a config built in code goes straight to run_pipeline.
+        hint = (
+            f" It is not a string ({type(sn).__name__}); quote it ('{sn}')."
+            if not isinstance(sn, str) and str(sn) in instrument_keys
+            else ""
+        )
+        lines.append(
+            f"Instrument key: instruments.{sn} ({what}) matches no input file of this run "
+            f"(instrument keys: {', '.join(sorted(instrument_keys)) or 'none'}), so its "
+            f"settings were NOT applied. The key is the raw directory name of each .p "
+            f"file.{hint}"
+        )
+    return lines
+
+
 def _probe_exclusion_notices(
     instruments: dict | None,
     instrument_keys: set[str],
@@ -4691,12 +4724,12 @@ def _probe_exclusion_notices(
 
     An entry declares data bad, so the summary says what each one removed: the
     windows it masked in the files processed in THIS run (cached files were
-    reported by the run that made them). Three ways an entry silently does
-    nothing get their own wording: its instrument key matches no input file of
-    the run (the key is the raw directory name, and an unmatched key is
-    otherwise ignored), it masked no window at all (a wrong year, a depth in
-    meters where dbar was meant), or it names a thermistor and chi did not run
-    (*chi_ran* false), so it was never even checked. *outcomes* maps a
+    reported by the run that made them). Two ways an entry silently does
+    nothing get their own wording: it masked no window at all (a wrong year, a
+    depth in meters where dbar was meant), or it names a thermistor and chi did
+    not run (*chi_ran* false), so it was never even checked. A key that matches
+    no input file at all is reported for every setting by
+    :func:`_instrument_key_notices`, so it is skipped here. *outcomes* maps a
     processed file to its ``result["probe_exclusions"]``; *instrument_keys* are
     the keys of every input file, processed or skipped.
     """
@@ -4704,22 +4737,9 @@ def _probe_exclusion_notices(
     for sn, settings in sorted((instruments or {}).items(), key=lambda kv: str(kv[0])):
         if not isinstance(settings, dict) or not settings.get("exclude"):
             continue
-        # The lookup process_file makes: a directory name is a string, so an
-        # unquoted numeric key (`465:` loads as an int) never matches either.
         if sn not in instrument_keys:
-            hint = (
-                f" It loaded as the number {sn}; quote it ('{sn}')."
-                if str(sn) in instrument_keys
-                else ""
-            )
-            lines.append(
-                f"Probe exclusion: instruments.{sn} has {len(settings['exclude'])} exclude "
-                f"entr{'y' if len(settings['exclude']) == 1 else 'ies'}, but no input file "
-                f"of this run has that instrument key (keys: {', '.join(sorted(instrument_keys))})"
-                ", so nothing was excluded for it. The key is the raw directory name of "
-                f"each .p file.{hint}"
-            )
-        elif not chi_ran:
+            continue  # reported by _instrument_key_notices
+        if not chi_ran:
             # Never evaluated, so not even its probe name was checked.
             from odas_tpw.perturb.probe_exclusion import parse_exclusions
 
@@ -4993,6 +5013,14 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
     def _instrument_key(p):
         return instrument_key_by_path.get(p.resolve(), p.parent.name)
 
+    # Before any work, so a long run does not finish before the operator learns
+    # that a key's settings were never applied. Joins the summary at the end.
+    key_notices = _instrument_key_notices(
+        config.get("instruments"), {_instrument_key(p) for p in p_files}
+    )
+    for line in key_notices:
+        logger.warning("%s", line)
+
     def _output_stem(p):
         return output_stem_by_path.get(p.resolve(), _source_output_stem(p, current_root))
 
@@ -5129,6 +5157,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
     # `--log-level warning` would hide.
     for line in outcome.notices:
         logger.warning("%s", line)
+    outcome.notices[:0] = key_notices  # already logged at run start
 
     # Binning — three independent stages (profiles / diss / chi) that
     # share no data, so we run them concurrently on a thread pool.  Each

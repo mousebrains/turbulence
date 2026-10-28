@@ -728,6 +728,15 @@ _mgr = _PerturbConfigManager(
 def _validate_instruments(instruments: dict) -> None:
     """Validate the inner structure of the dynamic ``instruments`` section."""
     for sn, settings in instruments.items():
+        # process_file looks a file's settings up by its raw directory name, a
+        # string, so a key YAML loads as anything else -- `465:` is an int,
+        # `2017-10-24:` a date -- can never match and would be ignored silently.
+        if not isinstance(sn, str):
+            raise ValueError(
+                f"instruments: key {sn!r} loaded as {type(sn).__name__}, so it can never "
+                f"match an instrument key, which is the raw directory name of the .p "
+                f"files (a string); quote it ('{sn}')"
+            )
         if not isinstance(settings, dict):
             raise ValueError(f"instruments.{sn}: must be a mapping, got {type(settings).__name__}")
         unknown = set(settings) - _INSTRUMENT_VALID_KEYS
