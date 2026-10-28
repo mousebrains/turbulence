@@ -90,7 +90,7 @@ def _write_sheet(path: Path, *entries) -> Path:
     y.default_flow_style = False
     buf = io.StringIO()
     y.dump(data, buf)
-    path.write_text("# a hand comment that must survive\n" + buf.getvalue())
+    path.write_text("# a hand comment that must survive\n" + buf.getvalue(), encoding="utf-8")
     reg.load(path)
     return path
 
@@ -224,7 +224,7 @@ def test_narrow_range_the_prior_shape_wins_and_recovers_t0(narrow, sheet, tmp_pa
     assert p["qc"]["verdict"] == "ok"
     assert p["t_0_sigma_mK"] == 15 and not p["electronics_differ"]
     assert p["sheet_sha256"] == hashlib.sha256(sheet.read_bytes()).hexdigest()
-    md = (tmp_path / "o" / "T1_report.md").read_text()
+    md = (tmp_path / "o" / "T1_report.md").read_text(encoding="utf-8")
     assert "## Prior (`fit.prior`)" in md and "**(chosen)**" in md
     assert "Prefer order 1" not in md  # the shape was not fitted over 2 K
     assert "held fixed" in md
@@ -256,7 +256,7 @@ def test_a_wrong_bead_is_flagged(narrow, sheet, tmp_path, capsys):
     assert abs(p["delta_vs_prior_mK"]) > 1000
     assert "bead swap" in p["qc"]["message"]
     assert "WARNING" in capsys.readouterr().err
-    md = (tmp_path / "o" / "T1_report.md").read_text()
+    md = (tmp_path / "o" / "T1_report.md").read_text(encoding="utf-8")
     assert "## ⚠ Warnings" in md and "QC: FLAGGED" in md
 
 
@@ -319,7 +319,7 @@ def test_no_prior_block_writes_no_prior_record(narrow, tmp_path):
     probes, ref, _ = narrow
     c = _run(probes, ref, tmp_path / "o")["channels"]["T1"]
     assert "prior" not in c
-    assert "## Prior" not in (tmp_path / "o" / "T1_report.md").read_text()
+    assert "## Prior" not in (tmp_path / "o" / "T1_report.md").read_text(encoding="utf-8")
 
 
 def test_placeholder_or_inconsistent_serials_are_refused(sheet, tmp_path):
@@ -371,7 +371,9 @@ def test_prior_config_values():
 
 def test_config_dir_resolves_in_the_prior_block(tmp_path):
     cfg_path = tmp_path / "fp07-cal.yaml"
-    cfg_path.write_text("fit:\n  prior:\n    sheet: \"<CONFIG_DIR>/sheet.yaml\"\n")
+    cfg_path.write_text(
+        "fit:\n  prior:\n    sheet: \"<CONFIG_DIR>/sheet.yaml\"\n", encoding="utf-8"
+    )
     cfg = _load_config(cfg_path)
     assert cfg["fit"]["prior"]["sheet"] == f"{tmp_path.resolve()}/sheet.yaml"
 
@@ -399,11 +401,13 @@ def test_template_prior_block_parses_when_uncommented():
 
 def test_fit_command_refuses_a_bad_prior_block_before_loading(tmp_path, capsys):
     cfg = tmp_path / "c.yaml"
-    cfg.write_text(f"files: {{p_file_root: '{tmp_path}'}}\nfit:\n  prior: {{mode: auto}}\n")
+    cfg.write_text(
+        f"files: {{p_file_root: '{tmp_path}'}}\nfit:\n  prior: {{mode: auto}}\n", encoding="utf-8"
+    )
     assert fp07cal_main(["fit", "-c", str(cfg)]) == 1
     assert "sheet is required" in capsys.readouterr().err
     cfg.write_text(f"files: {{p_file_root: '{tmp_path}'}}\n"
-                   f"fit:\n  prior: {{sheet: '{tmp_path}/missing.yaml'}}\n")
+                   f"fit:\n  prior: {{sheet: '{tmp_path}/missing.yaml'}}\n", encoding="utf-8")
     assert fp07cal_main(["fit", "-c", str(cfg)]) == 1
     assert "does not exist" in capsys.readouterr().err
 
@@ -489,9 +493,9 @@ def _add_args(record, sheet, *extra, deployment="Narrow 2023"):
 
 
 def test_registry_add_appends_a_valid_entry(fitted, sheet, capsys):
-    before = sheet.read_text()
+    before = sheet.read_text(encoding="utf-8")
     assert fp07cal_main(_add_args(fitted, sheet, "--notes", "A synthetic: test, #1.")) == 0
-    after = sheet.read_text()
+    after = sheet.read_text(encoding="utf-8")
     # Every existing line kept, in order. This sheet was dumped with sorted keys,
     # so `calibrations:` is not last and the entry goes inside it, not at the end.
     diff = list(difflib.ndiff(before.splitlines(), after.splitlines()))
@@ -499,7 +503,7 @@ def test_registry_add_appends_a_valid_entry(fitted, sheet, capsys):
     assert "# a hand comment that must survive" in after
     s = reg.load(sheet)
     c = next(c for c in s.calibrations if c.deployment == "Narrow 2023")
-    rec = json.loads(fitted.read_text())["channels"]["T1"]
+    rec = json.loads(fitted.read_text(encoding="utf-8"))["channels"]["T1"]
     assert c.coefficients == rec["config_equivalent"]
     assert c.fit.order_choice == "prior" and c.fit.shape_from == "Prior 2022"
     assert c.uncertainty.held_out_mK == pytest.approx(
@@ -513,28 +517,29 @@ def test_registry_add_appends_a_valid_entry(fitted, sheet, capsys):
 
 
 def test_registry_add_dry_run_writes_nothing(fitted, sheet, capsys):
-    before = sheet.read_text()
+    before = sheet.read_text(encoding="utf-8")
     assert fp07cal_main(_add_args(fitted, sheet, "--dry-run")) == 0
-    assert sheet.read_text() == before
+    assert sheet.read_text(encoding="utf-8") == before
     out = capsys.readouterr().out
     assert "order_choice: prior" in out and "shape_from: Prior 2022" in out
 
 
 def test_registry_add_refusals(fitted, sheet, tmp_path, capsys):
-    rec = json.loads(fitted.read_text())
+    rec = json.loads(fitted.read_text(encoding="utf-8"))
     # QC-flagged fit: refused unless allowed
     flagged = copy.deepcopy(rec)
     flagged["channels"]["T1"]["prior"]["qc"]["verdict"] = "flag"
     p = tmp_path / "flagged" / "coefficients.json"
     p.parent.mkdir()
-    p.write_text(json.dumps(flagged))
-    (p.parent / "T1_report.md").write_text((fitted.parent / "T1_report.md").read_text())
+    p.write_text(json.dumps(flagged), encoding="utf-8")
+    report = (fitted.parent / "T1_report.md").read_text(encoding="utf-8")
+    (p.parent / "T1_report.md").write_text(report, encoding="utf-8")
     assert fp07cal_main(_add_args(p, sheet)) == 1
     assert "flagged" in capsys.readouterr().err
     # untrusted lag: refused without the flag
     lag = copy.deepcopy(rec)
     lag["channels"]["T1"]["lag_trustworthy"] = False
-    p.write_text(json.dumps(lag))
+    p.write_text(json.dumps(lag), encoding="utf-8")
     assert fp07cal_main(_add_args(p, sheet)) == 1
     assert "lag-gate-overridden" in capsys.readouterr().err
     assert fp07cal_main(_add_args(p, sheet, "--flag", "lag-gate-overridden", "--dry-run")) == 0
@@ -576,11 +581,11 @@ def test_registry_add_to_the_repository_sheet_appends_at_the_end(narrow, tmp_pat
     sheet = tmp_path / reg.YAML_NAME
     shutil.copy(SHEET, sheet)
     reg.write_views(sheet)
-    before = sheet.read_text()
+    before = sheet.read_text(encoding="utf-8")
     args = _add_args(tmp_path / "fit" / "coefficients.json", sheet, deployment="Synthetic 2023")
     args[args.index("--method") + 1] = "vmp-own-jac"
     assert fp07cal_main(args) == 0
-    after = sheet.read_text()
+    after = sheet.read_text(encoding="utf-8")
     assert after.startswith(before)  # appended: every existing byte kept, comments too
     block = after[len(before):]
     assert block.startswith("\n  - bead: T100\n    deployment: Synthetic 2023\n")
@@ -769,7 +774,7 @@ def test_mode_offset_failure_is_a_channel_refusal_not_a_crash(narrow, sheet, tmp
 def test_registry_add_records_the_rms_over_all_pairs(fitted, sheet):
     assert fp07cal_main(_add_args(fitted, sheet)) == 0
     c = next(c for c in reg.load(sheet).calibrations if c.deployment == "Narrow 2023")
-    rec = json.loads(fitted.read_text())["channels"]["T1"]["prior"]
+    rec = json.loads(fitted.read_text(encoding="utf-8"))["channels"]["T1"]["prior"]
     assert c.uncertainty.rms_all_mK == pytest.approx(
         rec["candidates"]["prior shape"]["rms_all_K"] * 1e3, abs=0.005)
     bad = _entry()
@@ -779,7 +784,7 @@ def test_registry_add_records_the_rms_over_all_pairs(fitted, sheet):
 
 
 def test_registry_add_keeps_mode_line_endings_and_trailing_comments(fitted, sheet):
-    text = sheet.read_text()
+    text = sheet.read_text(encoding="utf-8")
     # The fixture's sheet was dumped with sorted keys: calibrations comes first.
     marker = "\nmethods:"
     assert marker in text
@@ -799,7 +804,7 @@ def test_registry_add_keeps_mode_line_endings_and_trailing_comments(fitted, shee
 
 def _full_fit_record(fitted, tmp_path):
     """The fixture's record turned into an order-1 full fit (no borrowed shape)."""
-    rec = json.loads(fitted.read_text())
+    rec = json.loads(fitted.read_text(encoding="utf-8"))
     ch = rec["channels"]["T1"]
     ch["prior"]["chosen_kind"] = "full"
     ch["prior"]["choice"] = "order 1"
@@ -808,18 +813,19 @@ def _full_fit_record(fitted, tmp_path):
     ch["order_selection"] = {"1": {"held_out_K": 0.004, "in_sample_K": 0.003}}
     alt = tmp_path / "alt" / "coefficients.json"
     alt.parent.mkdir()
-    alt.write_text(json.dumps(rec))
-    (alt.parent / "T1_report.md").write_text((fitted.parent / "T1_report.md").read_text())
+    alt.write_text(json.dumps(rec), encoding="utf-8")
+    report = (fitted.parent / "T1_report.md").read_text(encoding="utf-8")
+    (alt.parent / "T1_report.md").write_text(report, encoding="utf-8")
     return alt
 
 
 def test_registry_add_into_an_empty_calibrations_list(fitted, tmp_path):
     sheet = tmp_path / "empty" / reg.YAML_NAME
     sheet.parent.mkdir()
-    src = _write_sheet(tmp_path / "src.yaml", _entry()).read_text()
+    src = _write_sheet(tmp_path / "src.yaml", _entry()).read_text(encoding="utf-8")
     head = src[:src.index("calibrations:")]
     tail = src[src.index("\nmethods:"):]
-    sheet.write_text(head + "calibrations: []" + tail)
+    sheet.write_text(head + "calibrations: []" + tail, encoding="utf-8")
     assert fp07cal_main(_add_args(_full_fit_record(fitted, tmp_path), sheet)) == 0
     assert [c.deployment for c in reg.load(sheet).calibrations] == ["Narrow 2023"]
 
@@ -828,9 +834,10 @@ def test_concurrent_adds_do_not_lose_an_entry(fitted, sheet, tmp_path):
     from concurrent.futures import ThreadPoolExecutor
 
     alt = _full_fit_record(fitted, tmp_path)
-    rec = json.loads(alt.read_text())
+    rec = json.loads(alt.read_text(encoding="utf-8"))
     del rec["channels"]["T1"]["prior"]  # four other beads, not the one the prior was for
-    blocks = reg.block_offsets_from_report((alt.parent / "T1_report.md").read_text())
+    report = (alt.parent / "T1_report.md").read_text(encoding="utf-8")
+    blocks = reg.block_offsets_from_report(report)
     entries = [
         reg.entry_from_record(
             rec, "T1", deployment=f"Narrow 2023 part {k}", instrument_model="vmp-250",

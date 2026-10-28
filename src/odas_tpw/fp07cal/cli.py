@@ -188,7 +188,7 @@ def _load_config(path: Path) -> dict:
     from ruamel.yaml import YAML
 
     yaml = YAML(typ="safe")
-    with open(path) as fh:
+    with open(path, encoding="utf-8") as fh:
         cfg = yaml.load(fh) or {}
     d = path.parent.resolve()
     for section in cfg.values():
@@ -546,7 +546,7 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
 
         md = fit_text(pairs, fit, clock_offset=clock, stab=stab, t1t2=t1t2,
                       min_corr=pc.min_corr, prior=prior_rec)
-        (out_dir / f"{ch}_report.md").write_text(md)
+        (out_dir / f"{ch}_report.md").write_text(md, encoding="utf-8")
         if make_figure:
             figure(pairs, fit, stab=stab, t1t2=t1t2, path=out_dir / f"{ch}_diagnostics.png")
 
@@ -630,7 +630,9 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             f"split={fit.dive_climb_split_K:+.4f}K"
         )
 
-    (out_dir / "coefficients.json").write_text(json.dumps(results, indent=2, default=float))
+    (out_dir / "coefficients.json").write_text(
+        json.dumps(results, indent=2, default=float), encoding="utf-8"
+    )
     return results
 
 
@@ -639,7 +641,7 @@ def _cmd_init(args) -> int:
     if out.exists() and not args.force:
         print(f"{out} exists; use --force", file=sys.stderr)
         return 1
-    out.write_text(TEMPLATE)
+    out.write_text(TEMPLATE, encoding="utf-8")
     print(f"wrote {out}")
     return 0
 
@@ -719,7 +721,7 @@ def _cmd_coverage(args) -> int:
         ) + "\n\n" + text
     out_dir = Path(cfg.get("files", {}).get("output_dir", "fp07cal"))
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "coverage.md").write_text(text)
+    (out_dir / "coverage.md").write_text(text, encoding="utf-8")
     print(text)
     return 0
 
@@ -761,7 +763,7 @@ def _cmd_fit(args) -> int:
         res["per_profile"] = _stream_stats(paths, ref, cfg, res, out_dir)
         _record_validity(res)
         (out_dir / "coefficients.json").write_text(
-            json.dumps(res, indent=2, default=float)
+            json.dumps(res, indent=2, default=float), encoding="utf-8"
         )
     print(f"wrote {out_dir}/")
     return 0
@@ -1167,7 +1169,7 @@ def _cmd_registry_add(args) -> int:
     path = Path(args.registry) if args.registry else default_path()
     rec_path = Path(args.record)
     try:
-        record = json.loads(rec_path.read_text())
+        record = json.loads(rec_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         print(f"refusing: {rec_path}: {exc}", file=sys.stderr)
         return 1

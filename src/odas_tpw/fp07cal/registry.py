@@ -2093,13 +2093,27 @@ def _insertion_point(lines: list[str]) -> tuple[int, int]:
 
 @contextlib.contextmanager
 def _locked(path: Path):
-    """An exclusive lock on a sidecar ``.<name>.lock`` (none where ``fcntl`` is missing)."""
-    try:
-        import fcntl
-    except ImportError:  # pragma: no cover - not POSIX
-        yield
-        return
-    with open(path.parent / f".{path.name}.lock", "a") as fh:
+    """An exclusive lock on a sidecar ``.<name>.lock`` (``fcntl``; ``msvcrt`` on Windows)."""
+    with open(path.parent / f".{path.name}.lock", "a+", encoding="utf-8") as fh:
+        try:
+            import fcntl
+        except ImportError:  # Windows: lock the file's first byte, waiting for it
+            import msvcrt
+            import time
+
+            fh.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
+                    break
+                except OSError:
+                    time.sleep(0.02)
+            try:
+                yield
+            finally:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+            return
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         try:
             yield
