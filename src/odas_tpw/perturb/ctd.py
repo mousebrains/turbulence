@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from odas_tpw._version_info import stamp_provenance
 from odas_tpw.perturb.atomic_io import atomic_to_netcdf
 from odas_tpw.perturb.binning import _bin_indices
 from odas_tpw.perturb.gps import GPSProvider
@@ -420,5 +421,6 @@ def ctd_bin_file(
     # Atomic temp+replace: a mid-write SMB/network drop on SeaChest would
     # otherwise leave a readable partial ctd/*.nc that the manifest locks in on
     # a clean retry (identical source .p key -> skip). (#104 U5-2.)
+    stamp_provenance(ds.attrs, "CTD time binning")
     atomic_to_netcdf(ds, out_path, encoding=encoding)
     return out_path

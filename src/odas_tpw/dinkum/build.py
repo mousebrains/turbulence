@@ -37,6 +37,7 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
+from odas_tpw._version_info import stamp_provenance
 from odas_tpw.dinkum.config import merge_config, normalize_sensors, required_sensor_names
 from odas_tpw.dinkum.reader import load_dinkum
 from odas_tpw.perturb.config import expand_config_dir
@@ -245,7 +246,7 @@ def _apply_max_gap(
         if np.any(too_wide):
             target = np.flatnonzero(inside)[too_wide]
             # An output time that coincides EXACTLY with a source sample is
-            # measured, not interpolated, so a wide neighbouring gap must not
+            # measured, not interpolated, so a wide neighboring gap must not
             # blank it. This is the common case rather than a corner: every
             # sensor riding the base clock lands on the output times exactly,
             # so without this a max_gap would NaN the real sample on each side
@@ -286,7 +287,7 @@ def project_sensor(
     samples, because it is non-linear and would otherwise be interpolated
     across in its raw form. The range check runs next, still on the SOURCE
     samples and so in transformed units, so an out-of-range spike is removed
-    rather than being smeared into its neighbours.
+    rather than being smeared into its neighbors.
     """
     src_t = np.asarray(src_t, dtype=np.float64)
     src_v = np.asarray(src_v, dtype=np.float64)
@@ -394,6 +395,7 @@ def build_hotel(
     now: float | None = None,
     dataset: xr.Dataset | None = None,
     source_attrs: dict | None = None,
+    history_step: str = "dinkum-hotel build",
 ) -> Path:
     """Build a hotel NetCDF from Dinkum files per *config*.
 
@@ -420,6 +422,9 @@ def build_hotel(
         Global attributes describing where *dataset* came from, used in place
         of the ``dinkum_source_*`` / ``dinkum_reader`` triple. Only meaningful
         alongside *dataset*.
+    history_step : str
+        This build's ``history`` line, appended to any history in
+        *source_attrs* with the code that ran it.
 
     Returns
     -------
@@ -646,6 +651,7 @@ def build_hotel(
     # CF-1.13 §2.5.1 forbids _FillValue on coordinates; xarray adds one to
     # float coords by default. Mirrors perturb's ctd/combo writers.
     encoding = {time_base: {"_FillValue": None}}
+    stamp_provenance(out_ds.attrs, history_step)
     out_ds.to_netcdf(out_path, encoding=encoding)
     logger.info("wrote %s: %d times x %d channels", out_path, times.size, len(data_vars))
     return out_path

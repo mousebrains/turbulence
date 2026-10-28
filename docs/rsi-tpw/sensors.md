@@ -84,15 +84,20 @@ The gate is **per channel**, not per scan: a channel only one or two units carry
 cannot be checked even in a large scan. Those are listed under `NOT CHECKED`, so
 "no outliers" is never a false all-clear.
 
-This exists because of a real miss. On ARCTERX-2023 one VMP carried
-`diff_gain = 0.09` on **both** shear channels where its three siblings in the
-same cruise carried 0.92–0.99 — which inflates its ε by roughly 110× — and
-nothing in the processing chain noticed:
+This exists because of a case nothing in the processing chain noticed. On
+ARCTERX-2023 one VMP carried `diff_gain = 0.09` on **both** shear channels where
+its three siblings in the same cruise carried 0.92–0.99. Had it been a slip for
+~0.9, its ε would be ~110× too high:
 
 ```
   SN   132 vmp-250-IR       sh1        0.09  vs fleet median 0.941  (0.10x)
   SN   132 vmp-250-IR       sh2        0.09  vs fleet median 0.922  (0.10x)
 ```
+
+It was not a slip. Measurement (issue #178) put SN 132's differentiator on the
+1024 Hz rung after a 2021 tidal re-conversion, so 0.09 is right to within the
+0.09-versus-~0.12 question still open there. An outlier is a question for a
+measurement to answer, not a verdict.
 
 ### Changes over time are reported, not flagged
 

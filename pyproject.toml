@@ -71,6 +71,7 @@ Issues = "https://github.com/mousebrains/turbulence/issues"
 
 [project.scripts]
 fp07-cal = "odas_tpw.fp07cal.cli:main"
+fp07-pair = "odas_tpw.chi.fp07_pair_cli:main"
 mr-clocksync = "odas_tpw.clocksync.cli:main"
 dinkum-hotel = "odas_tpw.dinkum.cli:main"
 erddap-hotel = "odas_tpw.erddap.cli:main"
@@ -85,6 +86,9 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "odas_tpw.perturb.plot" = ["presets/*.yaml"]
+# The release workflow's commit stamp (src/odas_tpw/_version_info.py); absent,
+# and so not shipped, in any other build.
+"odas_tpw" = ["_build.json"]
 
 [tool.ruff]
 line-length = 100

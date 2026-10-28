@@ -492,6 +492,28 @@ def test_patch_refuses_a_bridge_mismatch():
     assert any("bridge parameter g differs" in e for e in plan.errors)
 
 
+
+def test_patch_reads_bridge_arithmetic_like_the_reader():
+    """A bridge parameter written as arithmetic is the reader's number, not a
+    mismatch: the patch check parses with ``config_number`` too."""
+    from odas_tpw.fp07cal.patch import build_edits
+
+    record = {
+        "instrument_sn": "435",
+        "channels": {"T1": {
+            "config_equivalent": {"t_0": 286.65, "beta_1": 3051.45},
+            "bridge": {"a": -12.3, "b": 0.99921, "g": 6.0, "e_b": 0.6828,
+                       "adc_fs": 4.096, "adc_bits": 16.0},
+            "beta_key": "beta_1", "lag_trustworthy": True,
+        }},
+    }
+    config = {"instrument_info": {"sn": "435"}, "channels": [
+        {"name": "T1", "a": "-12.3", "b": "0.99921", "g": "12/2", "e_b": "0.68280",
+         "adc_fs": "4.096", "adc_bits": "2^4", "t_0": "289.301", "beta_1": "3143.55"},
+    ]}
+    plan = build_edits(record, config)
+    assert plan.ok, plan.errors
+
 def test_patch_refuses_an_untrustworthy_lag():
     from odas_tpw.fp07cal.patch import build_edits
 

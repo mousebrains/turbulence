@@ -22,6 +22,9 @@ below.
 | 6.3 | RDL OS 4.17+ | Read; nothing outstanding |
 | 6.4 | not yet public | Reads as-is — no record-layout change |
 
+Every version: a record of the wrong length is repaired or refused, never
+mis-assembled; see [Record framing](#record-framing-a-record-of-the-wrong-length).
+
 Dispatch is on `major >= 6`, so 6.4 reads without a code change. Per Rockland
 (via Pat, who co-drove these changes), **6.4 changes no record layout**: it adds
 a subtle timing correction and **an explicit flag for stitching files
@@ -185,6 +188,79 @@ a run short.
 Verified as a null test on the SN479 set: because every dropout there is on
 `DO_T`, which feeds nothing, ε, χ, `fom` and `epsilon_T` come out **bit-identical**
 to the pre-masking code across 29 profiles.
+
+## Record framing: a record of the wrong length
+
+Every reader cuts a v6 file at a **fixed record size**: record 0 (header +
+config) and then data records of `header_size` + a whole number of address
+matrix cycles. That holds for this one, ODAS `read_odas.m` (it reshapes the data
+block, lines 182-193 and 314) and `check_bad_buffers.m`/`patch_odas.m`. If ONE
+record holds the wrong number of words, everything after it is mis-framed: each
+later header is read as data and vice versa.
+
+MicroRider SN 156 (2022, v6.0 headers) did this in 28 of 29 files. Each holds
+one record of 33, 67, 70, 93 or 98 matrices instead of 64, in data records
+#4-#17 (#74 in one deck record), sometimes with the next record's header lost
+and/or a few junk words; 0.47-0.95 s of samples are missing. VMP SN 194's
+`ARC1A046.P` (ARCTERX-2022 Wake, v6.0) is the same: record #13 holds 33
+matrices. A sweep of the last three fixed-stride headers of all 9,358 `.p`
+files on SeaChest (which catches damage anywhere but the last three records)
+found those 29 and no others. Read at the fixed size, the file came out
+mis-assembled under three warnings that look like other problems: bad-buffer
+flags on ~90% of records (data read as header word 16), record-number "gaps",
+and a non-integer record count. One file's P ran from -42.8 to -22.1 dbar.
+ODAS 4.5.1 does no better: `check_bad_buffers` flags ~98% of such a file's
+records as bad buffers and `patch_odas` then stops on the non-integer record
+count (on a damaged file whose length happened to be whole records, it would
+go on to "patch" them). ARC1A046 had been set aside during the cruise for
+those "bad buffers", and ODAS's repair of it truncated a quarter of the file.
+Our products of it, made before this change, used the mis-framed read: 1/64
+of every channel's samples were header words, and everything after #13 was
+0.48 s early. They need a rerun.
+
+**`PFile` now checks framing** (`framing="repair"`, the default):
+
+- Every data record read at the fixed size must start with a header repeating
+  record 0's header size, record size, clock and matrix shape (seven words).
+  The header **version** is not compared: ODAS `patch_setupstr.m` rewrites
+  record 0 as v6.0 and copies the data records verbatim, and 94 of 308 sampled
+  SeaChest files (ARCTERX, SUNRISE, Taiwan13, Rutgers, Rockland-2025) differ
+  from their data headers there and nowhere else (the v6.1 sentinel scan
+  therefore reads the version from the data records too). Over those 308, the
+  33 files in the repo and 282 Tanaka files, the seven words fail only on the
+  damaged files. A file that never writes data headers (all zero) cannot be
+  checked and passes as before, and so does one damaged header between two
+  correctly placed records (read at the fixed size, with a warning).
+- On a mis-framed file, each record is found by its header instead and goes,
+  byte for byte, into the slot its record number gives (counted from the
+  first data record, so a `cutp` segment numbered from 121 works). A slot with
+  no intact record is **rebuilt** by linear interpolation of each matrix
+  cell's raw counts (it keeps the deconvolution filters free of a step; it is
+  never used as data) and reported, on every channel, as a bad-buffer span,
+  so `odas_tpw.rsi.bad_buffer` drops the epsilon/chi windows it touches:
+  about 70 s per rebuilt record, because a span on `P_dP` is dilated forward
+  by three deconvolution time constants (20.6 s on SN 156). Consumers that do
+  not read the report (`rsi-tpw nc`, fp07-cal, mr-clocksync, perturb's speed,
+  hotel and CTD steps) see the interpolated counts across the slot.
+  `PFile.framing_report` lists the irregular records, lost headers, rebuilt
+  slots and their duration, and the trailing words dropped; one warning
+  replaces the three misleading ones. A whole record followed by a remnant
+  shorter than a header is kept, as the fixed-size read keeps it.
+- Record numbers are **trusted** for placement: nothing else can place a
+  record. Header times cannot arbitrate, because the RDL stamps records when
+  it writes them, in bursts (v6.1 VMP: 12-22 ms apart, with 134 s jumps). A
+  uint16 wrap is a small forward step modulo 65536; any other backward step
+  is refused.
+- It **refuses** (raises `ValueError`) when the damage cannot be placed in
+  time: damage before the first data-record header, record numbers that do
+  not increase, no intact record, or more than half the slots to rebuild.
+  `framing="refuse"` refuses every mis-framed file.
+
+Validated on the 28 damaged SN 156 files against copies re-framed by a
+separate script (`examples/Tanaka/gliders/20220224_unit211/reframe_p.py`, PR
+#223; it drops the lead-in, and ODAS reads its output identically): every
+kept sample is identical and the start agrees to 0.5 ms, and the repair keeps
+the 3-73 lead-in records the copies dropped.
 
 ## Sampling rate and the §2.4.3 count-by-one error — RESOLVED
 

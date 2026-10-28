@@ -78,16 +78,18 @@ class TestShearRangeCheck:
     def test_low_band_diff_gain_is_silent(self):
         """A sub-0.1 differentiator gain is real hardware — do not warn.
 
-        2236 of 15998 rows sit at 0.090-0.099, and the SAMPLING RATE separates
-        them: every 1024 Hz instrument is low, every 512 Hz one is high.  The
+        2236 of 15998 rows sit at 0.090-0.099, and the SAMPLING RATE almost
+        separates them: every 1024 Hz instrument is low, and every 512 Hz one
+        is high except SN 132 (below).  The
         same-model comparison isolates it — MR1000RDL-EM reads 0.927/0.941 on
         the 512 Hz gliders SN 433/435 and 0.099/0.094 on the 1024 Hz SN 429.
         This converter sees only the channel config, never the rate, so it
         cannot bound on it.
 
-        Emphatically NOT a verdict on SN 132 (issue #178) — the one instrument
-        the rate does not explain, at 511.95 Hz against siblings at 0.937-0.99.
-        That case needs an instrument-keyed comparison, not a static range.
+        SN 132 (issue #178) is the cautionary case: it samples at 511.95 Hz,
+        where its siblings sit at 0.937-0.99, yet its 0.09 was measured to be
+        on the right rung (a 2021 tidal re-conversion evidently left its analog
+        chain on the 1024 Hz rung).  Warning on it would have been a false alarm.
         """
         msgs = _warnings_from({"name": "sh1", "diff_gain": "0.09", "sens": "0.0678"})
         assert not [m for m in msgs if "plausible range" in m]

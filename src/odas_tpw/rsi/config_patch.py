@@ -42,21 +42,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from odas_tpw._version_info import running_version
 from odas_tpw.rsi.p_file import (
     _H,
     HEADER_BYTES,
     HEADER_WORDS,
     _detect_endian,
+    is_channel_section,
     parse_config,
     raise_if_v1_layout,
 )
-
-try:  # package version for the provenance banner
-    from importlib.metadata import version as _pkg_version
-
-    _VERSION = _pkg_version("microstructure-tpw")
-except Exception:  # pragma: no cover - fallback only when metadata is unavailable
-    _VERSION = "unknown"
 
 # Matches RSI patch_setupstr.m so RSI's -revert can still recover the original.
 CONFIG_MARKER = "; ### Original Configuration String Below ###"
@@ -252,7 +247,8 @@ def _detect_eol(text: str) -> str:
 def _parse_blocks(raw_lines: list[str]) -> list[dict[str, Any]]:
     """Walk lines exactly as parse_config does, recording per-stanza key locations.
 
-    Each block is ``{"section", "name", "keys", "header_idx", "last_key_idx"}``
+    Each block is ``{"section", "name", "keys", "header_idx", "last_key_idx",
+    "is_channel"}``
     where ``keys`` maps a lower-cased key to ``(line_index, original_key, value)``.
     Commented lines (including ones that mention ``[matrix]`` in prose) strip to
     empty and are skipped, so they never create a phantom section or key.
@@ -291,8 +287,16 @@ def _parse_blocks(raw_lines: list[str]) -> list[dict[str, Any]]:
             kl = orig.lower()
             cur["keys"][kl] = (i, orig, val)
             cur["last_key_idx"] = i
-            if cur["section"] == "channel" and kl == RESERVED_KEY:
-                cur["name"] = val
+    # Decide channel stanzas with the same rule parse_config uses, once every
+    # key of a stanza is known, so an old named-stanza config ([shear1] ...)
+    # is addressable by channel name exactly as PFile sees it.
+    for blk in blocks:
+        values = {k: v[2] for k, v in blk["keys"].items()}
+        blk["is_channel"] = blk["section"] != "root" and is_channel_section(
+            blk["section"], values
+        )
+        if blk["is_channel"] and RESERVED_KEY in blk["keys"]:
+            blk["name"] = blk["keys"][RESERVED_KEY][2]
     return blocks
 
 
@@ -390,7 +394,7 @@ def edit_config_text(
     sect_keys: dict[str, dict[str, Any]] = {}
     chan_by_name: dict[str, list[dict[str, Any]]] = {}
     for b in blocks:
-        if b["section"] == "channel":
+        if b["is_channel"]:
             if b["name"] is not None:
                 chan_by_name.setdefault(b["name"], []).append(b)
         else:
@@ -525,7 +529,7 @@ def _build_banner(when: str, author: str, note: str, source_label: str, eol: str
     bar = "; " + "=" * 70 + eol
     lines = [
         bar,
-        f"; PATCHED {when} by {author} -- {TOOL_NAME} {_VERSION}".rstrip() + eol,
+        f"; PATCHED {when} by {author} -- {TOOL_NAME} {running_version()}".rstrip() + eol,
     ]
     if source_label:
         lines.append(f"; source: {source_label}{eol}")

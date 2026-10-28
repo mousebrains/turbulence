@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
 import numpy as np
 
+from odas_tpw._version_info import provenance_attrs
+
 logger = logging.getLogger(__name__)
 
 # Minimum profiling speed to avoid singularity [m/s]
@@ -66,9 +68,15 @@ def _classify_channels(pf: "PFile") -> dict:
     gradt_names = sorted(
         n for n in pf.channels if pf.channel_info[n]["type"] == "therm" and pf.is_fast(n)
     )
-    cond_ctd_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "jac_c")
+    # jac_* is the JFE Advantech readout, rsijac_* RSI's own JAC-CT board; both
+    # are the CTD's conductivity and temperature.
+    cond_ctd_names = sorted(
+        n for n in pf.channels if pf.channel_info[n]["type"] in ("jac_c", "rsijac_c")
+    )
 
-    temp_ctd_name = next((n for n in pf.channels if pf.channel_info[n]["type"] == "jac_t"), None)
+    temp_ctd_name = next(
+        (n for n in pf.channels if pf.channel_info[n]["type"] in ("jac_t", "rsijac_t")), None
+    )
     pitch_name = roll_name = None
     for n in pf.channels:
         if pf.channel_info[n]["type"] == "inclxy":
@@ -551,7 +559,8 @@ def p_to_L1(
     ds.project = pf.config["cruise_info"].get("project", "")
     ds.start_time = pf.start_time.isoformat()
     ds.source_file = pf.filepath.name
-    ds.history = f"L1 converted from {pf.filepath.name} on {datetime.now(UTC).isoformat()}"
+    for key, val in provenance_attrs(f"L1 converted from {pf.filepath.name}").items():
+        ds.setncattr(key, val)
     ds.configuration_string = pf.config_str
     # v1->v6 translation provenance (issue #141): complete key set (incl.
     # setup_file_md5 / sens_source, the sens^-2 audit trail) for both the

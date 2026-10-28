@@ -12,13 +12,30 @@ import pytest
 from odas_tpw.rsi.p_file import _H, HEADER_WORDS, PFile, extract_pfile_segment
 
 SAMPLE_FILE = Path(__file__).parent / "data" / "SN479_0006.p"
+_STAMP = ("year", "month", "day", "hour", "minute", "second", "millisecond")
 
 
-def _write_synthetic_pfile(path, *, n_records: int = 6, record_size: int = 160):
-    """Write a minimal P-file-like byte stream for cutp tests."""
+def _write_synthetic_pfile(
+    path,
+    *,
+    n_records: int = 6,
+    record_size: int = 160,
+    stamp: tuple[int, ...] | None = None,
+    clock: tuple[int, int] = (0, 0),
+    config: bytes = b"[instrument_info]\nmodel=test\n",
+):
+    """Write a minimal P-file-like byte stream for cutp tests.
+
+    *stamp* is (year, month, day, hour, minute, second, millisecond) for the
+    record-0 header (default all zero: a startup clock); *clock* is the
+    header's (clock_hz, clock_frac) pair.
+    """
     header_size = 128
-    config = b"[instrument_info]\nmodel=test\n"
     words = [0] * HEADER_WORDS
+    if stamp is not None:
+        for name, value in zip(_STAMP, stamp):
+            words[_H[name]] = value
+    words[_H["clock_hz"]], words[_H["clock_frac"]] = clock
     words[_H["config_size"]] = len(config)
     words[_H["header_size"]] = header_size
     words[_H["record_size"]] = record_size
@@ -95,15 +112,26 @@ def test_extract_pfile_segment_from_fixture_opens_as_pfile(tmp_path):
     assert len(pf._record_headers) == 3
 
 
+def _true_record_duration(pf: PFile) -> float:
+    """Record duration on the reader's own sample clock: scans per record / fs_fast."""
+    data_words = (pf.header["record_size"] - pf.header["header_size"]) // 2
+    return (data_words // pf.n_cols) / pf.fs_fast
+
+
+def _advanced(start, seconds):
+    """start + seconds, rounded to the header's millisecond resolution."""
+    return start + timedelta(milliseconds=round(seconds * 1000))
+
+
 def test_extract_pfile_segment_nonzero_start_advances_timestamp(tmp_path):
-    """A segment cut at start_record N carries absolute time N records forward."""
+    """A segment cut at start_record N carries absolute time N TRUE records forward."""
     if not SAMPLE_FILE.exists():
         pytest.skip("Test data not available")
 
     src = PFile(SAMPLE_FILE)
     dest = extract_pfile_segment(SAMPLE_FILE, tmp_path / "segment.p", start_record=5, n_records=2)
     seg = PFile(dest)
-    assert seg.start_time == src.start_time + timedelta(seconds=5 * src.recsize)
+    assert seg.start_time == _advanced(src.start_time, 5 * _true_record_duration(src))
 
     # Only the timestamp words (year..millisecond, words 3-9) may differ in
     # record 0; everything else — including the config — is copied verbatim.
@@ -123,9 +151,70 @@ def test_extract_pfile_segment_timestamp_crosses_minute_boundary(tmp_path):
     src = PFile(SAMPLE_FILE)
     dest = extract_pfile_segment(SAMPLE_FILE, tmp_path / "segment.p", start_record=61, n_records=1)
     seg = PFile(dest)
-    expected = src.start_time + timedelta(seconds=61 * src.recsize)
+    expected = _advanced(src.start_time, 61 * _true_record_duration(src))
     assert seg.start_time == expected
     assert seg.start_time.minute != src.start_time.minute  # boundary actually crossed
+
+
+def test_extract_pfile_segment_sample_times_match_source(tmp_path):
+    """Each copied sample keeps its absolute time on the reader's clock.
+
+    The fixture's clock (5119.454 Hz, 5120-word records) makes a record
+    1.0001067 s, not the nominal recsize of 1.0 s: after 500 records the
+    nominal advance is 53 ms early, far beyond the header's 1 ms resolution.
+    """
+    if not SAMPLE_FILE.exists():
+        pytest.skip("Test data not available")
+
+    src = PFile(SAMPLE_FILE)
+    start = 500
+    dest = extract_pfile_segment(
+        SAMPLE_FILE, tmp_path / "segment.p", start_record=start, n_records=3
+    )
+    seg = PFile(dest)
+    per_record = len(src.t_fast) // len(src._record_headers)
+    k = start * per_record
+    t_src = src.start_time + timedelta(seconds=float(src.t_fast[k]))
+    t_seg = seg.start_time + timedelta(seconds=float(seg.t_fast[0]))
+    assert abs((t_seg - t_src).total_seconds()) <= 0.0005
+    nominal = src.start_time + timedelta(seconds=start * src.recsize)
+    assert abs((t_seg - nominal).total_seconds()) > 0.05  # the old, nominal advance
+
+
+def test_extract_pfile_segment_no_clock_falls_back_to_recsize(tmp_path):
+    """A header with no sampling clock advances by the nominal recsize, with a warning."""
+    first_record, records = _write_synthetic_pfile(
+        tmp_path / "source.p",
+        n_records=6,
+        stamp=(2023, 5, 18, 11, 13, 44, 461),
+        config=b"[root]\nrecsize = 2.0\n",
+    )
+
+    with pytest.warns(UserWarning, match="nominal recsize"):
+        dest = extract_pfile_segment(
+            tmp_path / "source.p", tmp_path / "segment.p", start_record=3, n_records=1
+        )
+    hdr = struct.unpack("<64H", dest.read_bytes()[:128])
+    got = tuple(hdr[_H[n]] for n in _STAMP)
+    assert got == (2023, 5, 18, 11, 13, 50, 461)
+    assert dest.read_bytes()[len(first_record) :] == records[3]
+
+
+def test_extract_pfile_segment_synthetic_clock_advance(tmp_path):
+    """16-word records at a 16.5 Hz clock last 16 / 16.5 s: 4 records = 3.879 s."""
+    _write_synthetic_pfile(
+        tmp_path / "source.p",
+        n_records=6,
+        record_size=128 + 32,
+        stamp=(2023, 5, 18, 11, 13, 44, 461),
+        clock=(16, 500),
+    )
+    dest = extract_pfile_segment(
+        tmp_path / "source.p", tmp_path / "segment.p", start_record=4, n_records=1
+    )
+    hdr = struct.unpack("<64H", dest.read_bytes()[:128])
+    got = tuple(hdr[_H[n]] for n in _STAMP)
+    assert got == (2023, 5, 18, 11, 13, 48, 340)  # 44.461 + 4 * 16 / 16.5 = 48.3399
 
 
 def test_extract_pfile_segment_invalid_header_date_left_unchanged(tmp_path):

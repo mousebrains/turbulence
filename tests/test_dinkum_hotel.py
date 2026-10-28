@@ -131,7 +131,7 @@ def test_project_sensor_dedupe_methods(method, expected):
 
 
 def test_project_sensor_range_check_precedes_interpolation():
-    # An out-of-range spike must be removed, not smeared into its neighbours.
+    # An out-of-range spike must be removed, not smeared into its neighbors.
     t = T0 + np.arange(5.0)
     v = np.array([10.0, 11.0, -999.0, 13.0, 14.0])
     out, _ = project_sensor(t, v, t, valid_min=-5, valid_max=100, time_lo=100, time_hi=2e9)
@@ -173,7 +173,7 @@ def test_project_sensor_length_mismatch_raises():
 def test_max_gap_blanks_interpolated_but_keeps_exact_samples():
     # The regression that matters: a sensor riding the base clock lands on
     # every output time exactly. Those are measurements, and a wide
-    # neighbouring gap must not NaN them.
+    # neighboring gap must not NaN them.
     t = T0 + np.array([0.0, 1.0, 2.0, 50.0, 51.0])
     v = np.arange(5.0)
     out, stats = project_sensor(t, v, t, max_gap=10.0, time_lo=100, time_hi=2e9)

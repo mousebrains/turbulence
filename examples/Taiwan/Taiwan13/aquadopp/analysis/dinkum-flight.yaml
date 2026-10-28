@@ -1,0 +1,25 @@
+files:
+  root: "<CONFIG_DIR>/../../gliders/20130427_jane_tn"
+  patterns: ["post-recovery/flight/logs/*.dbd", "post-recovery/science/logs/*.ebd"]
+  cache: "cache"
+  output: "flight_inputs.nc"
+  reader: "auto"
+  skip_first_record: true
+time:
+  base: "m_present_time"
+  min_value: "2013-04-27T00:00:00Z"
+  max_value: "2013-05-05T00:00:00Z"
+  dedupe: "last"
+projection: {method: "linear", max_gap: 120, extrapolate: false}
+sensors:
+  m_pressure:       {units: "bar"}
+  m_depth:          {units: "m", valid_min: -2.0, valid_max: 1200.0}
+  m_pitch:          {units: "rad"}
+  m_roll:           {units: "rad"}
+  m_ballast_pumped: {units: "cm3"}
+  c_ballast_pumped: {units: "cm3", method: "previous"}
+  m_battpos:        {units: "in"}
+  sci_water_temp:     {time_sensor: "sci_ctd41cp_timestamp", units: "degree_Celsius", valid_min: -5.0, valid_max: 45.0}
+  sci_water_cond:     {time_sensor: "sci_ctd41cp_timestamp", units: "S m-1", valid_min: 0.0, valid_max: 7.0}
+  sci_water_pressure: {time_sensor: "sci_ctd41cp_timestamp", units: "bar", valid_min: -0.2, valid_max: 200.0}
+netcdf: {title: "Glider jane flight-model inputs (flight clock), Taiwan 2013", platform: "Slocum glider jane"}

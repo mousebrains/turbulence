@@ -7,11 +7,320 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`PFile` refuses or repairs a mis-framed `.p` file instead of
+  mis-assembling it.** Every reader, ODAS included, cuts a v6 file at a fixed
+  record size, so one record of the wrong length puts every later header in
+  the data and vice versa. MicroRider SN 156 (2022) wrote 28 of 29 files that
+  way (one record of 33-98 matrices instead of 64); PFile returned channels
+  mis-assembled under three misleading warnings, and ODAS 4.5.1 flags ~98% of
+  the records as bad buffers and then stops in `patch_odas`. Each record's
+  header must now repeat record 0's sizes, clock and matrix shape (not the
+  version, which ODAS `patch_setupstr` rewrites in record 0 only -- 94 of 308
+  sampled SeaChest files differ there). On a mismatch, `framing="repair"`
+  (default) places every intact record at its own slot by record number,
+  rebuilds the damaged slots by interpolation and reports them as bad-buffer
+  spans on every channel, so epsilon/chi drop the windows they touch
+  (`PFile.framing_report`); it refuses when the damage cannot be placed in
+  time, and `framing="refuse"` always refuses. Correctly framed files take the
+  unchanged fast path. On the 28 real files, every kept sample equals a copy
+  re-framed independently (which ODAS reads the same way), and the 3-73
+  lead-in records that copy dropped are kept. **One production file had it
+  too:** VMP SN 194's `ARC1A046.P` (ARCTERX-2022 Wake), set aside during the
+  cruise for "bad buffers" that were this misread. Its products used the
+  mis-framed read (1/64 of every channel's samples were header words, and
+  everything after record #13 was 0.48 s early) and need a rerun. Each rebuilt
+  record costs about 70 s of epsilon/chi: the P_dP span is dilated by three
+  deconvolution time constants. See `docs/rsi-tpw/odas_file_format.md`,
+  "Record framing".
+
+### Fixed
+- **The v6.1 bad-buffer sentinel scan read the header version from record 0**,
+  which ODAS `patch_setupstr` rewrites as v6.0 while leaving the data records
+  as they were. It skipped the scan on such files (e.g. the ARCTERX-2023
+  Seaspider MR429 set; impact unverified -- three of those files checked
+  carry no sentinel runs). It now reads the data records' version.
+- **Per-bead FP07 response equalization: `fp07-pair` and
+  `instruments.<dir>.fp07_response`.** Two FP07 beads on one probe head
+  respond differently, and chi gave both the same model response, so their chi
+  disagreed by a factor that trends with `K_max_ratio`. `fp07-pair fit`
+  measures each bead's response relative to its partner from the median ratio
+  of their gradient spectra (no turbulence model), segmented in time where the
+  pair changed, and writes one correction per segment. chi divides each bead's
+  observed and noise spectra by its factor, weighted by the bin's S/N, so the
+  pair's average stays on the tau model and only the disagreement is removed.
+  On ARCTERX-2022 SN 194 / SN 428 (Method 1, 190 profiles) the `K_max_ratio`
+  quartile spread of `ln(chi2/chi1)` fell from -0.37 / +0.24 to -0.04 / +0.03,
+  the per-window scatter fell from 0.28 / 0.19 to 0.11 / 0.10 (MAD-sd), and
+  the ratio landed on the pair's flat gain; the geometric-mean chi moved < 1%. Every
+  file is checked against its correction (a mid-band disagreement > 0.3 in ln
+  turns it off for that file), a file matching no correction is an error, and
+  each chi product records what was applied and why not. Hashed by content:
+  chi, chi_binned and chi_combo re-version, epsilon does not. Mutually
+  exclusive with `fp07_tau_scale`. `rsi-tpw chi --fp07-response`. Runbook:
+  `docs/fp07pair/runbook.md`; design record and acceptance:
+  `docs/fp07_pair_response_PLAN.md`.
+- **Converters for RSI's own JAC-CT board, `rsijac_t` and `rsijac_c`.** ODAS
+  has had them since 2017 (`convert_odas.m`, WID); this package did not, so a
+  MicroRider carrying that board kept `JAC_T` and `JAC_C` in raw Q3.28 counts
+  (~3e8) under a "No converter for type" warning. perturb runs on, so every
+  salinity, density and N² it then derives is garbage. Found on the MR-SE
+  SN 240 of SeaExplorer SEA025 (Tanaka et al. 2022). The port matches ODAS
+  v4.5.1 on every one of the file's 577,344 samples (to 6e-14), and JAC_T
+  sits within 9 mK (median) of the FP07.
+  - RSI writes some of these coefficients as arithmetic (`2^28`,
+    `10.88/100`), which ODAS `eval`s and `float()` cannot read. A new
+    `config_number` parses them with MATLAB's rules: `^` binds tighter than
+    a unary sign and is left-associative (`2^3^2` is 64). Other names, hex,
+    `**` and non-finite results are refused with a `ValueError` naming the
+    channel and key. Every other reader of a channel coefficient now uses it
+    too (see Fixed).
+  - Like ODAS, `rsijac_t` reads `division_factor` (default 2^28) and ignores
+    the `scale_factor` key RSI's SeaExplorer configs carry.
+  - Unlike ODAS, a zero divisor (`T_0`, a beta, `cell_constant`,
+    `division_factor`) raises instead of returning −273.15 °C or inf.
+  - Expression-valued coefficients now reach the `cal_*` provenance; `float()`
+    dropped them there.
+  - `rsi-tpw nc` files the new types as the CTD (`COND_CTD`/`TEMP_CTD`), not
+    as supplementary channels, and `rsi-tpw bench` range-checks `rsijac_t`
+    like `jac_t`.
 - **The v0.4.0 version DOI** (`10.5281/zenodo.22699141`) in `CITATION.cff`,
   the README and the suggested manuscript wording. It lands one commit behind
   the tag by necessity: Zenodo mints a version DOI only when the GitHub Release
   fires, and its GitHub integration cannot reserve one beforehand
   (zenodo-rdm#831).
+- **chi takes epsilon's window layout: `anchor` and the `bbl_*` keys under
+  `[chi]`.** chi laid out its own windows, always top-anchored, and refused
+  these keys, so a bottom-up product had bottom-anchored epsilon and top-down
+  chi. Its deepest window center then sat ~1.2 m above the bed: on SUNRISE
+  2021/Pelican/SN194, chi occupancy was 0.0% at 0.62 m against epsilon's 95.7%,
+  and Gamma and K_T had no near-bed values. Both paths now take their layout
+  from one helper, `scor160.l3.window_groups`. `L3ChiData.dof_spec` is per
+  window, because a shorter BBL window averages fewer FFT segments and the DOF
+  gates chi's non-detection floor. The defaults (`anchor: top`, no BBL windows)
+  are bit-identical to before: 167 variables in 11 epsilon, chi and pipeline
+  outputs from `ARCTERX_Thompson_2025_SN479_0006.p` match exactly. The
+  canonical config is unchanged too: with the engine fingerprint pinned, all
+  308 stage hashes of the 28 example recipes that load on 0.4.0 match. (The
+  fingerprint itself re-versions products, as it does for any engine change.)
+  The 18 SUNRISE bottom-up recipes under `examples/` now set the chi keys
+  their products were built with.
+
+  The layout is now checked when the config loads, in both sections: an
+  `anchor` other than `top`/`bottom` and a BBL window shorter than two FFT
+  segments are refused (both used to fail per profile at run time, the second
+  inside `csd_matrix_batch`, leaving an empty stage directory), and `bbl_*`
+  under `anchor: top`, which is ignored, now warns. A `bbl_overlap` or
+  `bbl_extent` given in samples beside a `bbl_diss_sec` window now reaches the
+  stage hash; it used to be dropped, so changing it reused a stale product.
+
+  **Known limitation, shared with epsilon's BBL windows since #203:** products
+  still carry ONE `diss_length` and `dof_spec` per file, so the consumers that
+  read them treat a BBL window as a full-length one. The N2/dTdz half-window
+  behind Gamma and K_T, chi's `chiLnSigma`, and epsilon's `num_ffts` all use
+  the long window's value for the near-bed windows.
+- **`--version` on every command, with the git commit.** `rsi-tpw`,
+  `perturb`, `perturb-plot`, `perturb-diag`, `scor160-tpw`, `fp07-cal`,
+  `fp07-pair`, `mr-clocksync`, `dinkum-hotel` and `erddap-hotel` all print one
+  line for a bug report, e.g. `perturb 0.4.0 (git v0.4.0-28-g5f6572b9a1e8)`.
+  The release number alone did not identify the code, because `pyproject.toml`
+  keeps the last release's number for every commit after it. The commit comes
+  from the checkout the package was imported from (editable installs and
+  `PYTHONPATH` worktrees, with `uncommitted changes` and a hash of the
+  package's `.py` files when a file under `src/odas_tpw/` or
+  `pyproject.toml` differs), else from pip's record of a
+  `git+` install, else from a stamp the release workflow now writes into the
+  PyPI wheel (`0.4.0 (release, git ...)`). The workflow also refuses a tag that
+  does not match `project.version`. Anything it cannot establish prints
+  `commit unknown` with the reason, so a wheel built elsewhere is never taken
+  for the release. The editable install in the main checkout reported 0.3.1
+  from metadata frozen at install time; the release is now read from the
+  source tree's `pyproject.toml`. A test walks `[project.scripts]`, so a new
+  command without `--version` fails CI. Like any code change this one moves
+  perturb's engine fingerprint, so a campaign's next run recomputes; later
+  edits to the version code will not (`_version_info.py` is excluded from the
+  hash). See `docs/installation.md`.
+- **Products name the code that made them.** `--version` names the code
+  installed now; a product made last month needs the code that wrote it. Every
+  NetCDF product (perturb profiles, diss, chi, CTD, binned and combo; rsi-tpw
+  L1, profiles, epsilon, chi, L4-L6; hotel files; `fp07-pair` corrections) now
+  carries a `software_version` attribute and a `history` line
+  `<UTC time>: <step> by microstructure-tpw <version>`, appended to the history
+  of the single input it came from (binned and combo files start fresh, keeping
+  a `history` configured in `netcdf:`, and list every code that wrote their
+  inputs in `input_software_versions`, since they are rebuilt from cached
+  products another code state may have made). It replaces the old `Computed with
+  microstructure-tpw on ...`, `Pipeline on ...`, `Created by perturb on ...`,
+  `L1 converted from ... on ...` and `Profile N extracted on ...` lines, which
+  named no version. perturb's run and worker logs, the `patch-config` /
+  `fp07-cal patch` banner, `v1to6`'s `translator` (both of which recorded the
+  stale installed-metadata version), `fp07-cal`'s `coefficients.json` and
+  `mr-clocksync`'s report record it too. A test walks the source for NetCDF
+  writers that do not stamp.
+
+### Fixed
+- **The `goto` FP07 time constant left out Goto et al.'s speed factor.** Goto
+  et al. (2016, sections 2d and 3c) use `tau = tau0 * W^-0.32` with
+  `tau0 = 3 ms`; the code used a fixed 3 ms, which is 13% short at their own
+  0.64 m/s and 2.1x short at 0.1 m/s. It pairs with `fp07_model: double_pole`,
+  which no shipped recipe selects. Chi from a user-run `double_pole` changes
+  (tau +15% at 0.65 m/s), and `perturb-diag` now redraws an old `double_pole`
+  product's FP07 response with the new tau, not the one its fit used.
+  - The `lueck` model (`tau = 10 ms * W^-0.5`, single pole, the default) was
+    credited to Lueck et al. (1977), which contains no such formula. Their
+    0.15-mm beads barely depended on speed, measured at 0.5 and 1.25 m/s. The
+    `-1/2` exponent is Vachon & Lueck's (1984) and Hill's (1987); the 10 ms
+    has no source we have found. The docstrings, `docs/chi_mathematics.md`
+    and the bibliography now say so. The model itself is unchanged, but
+    note what that means: it sets the FP07 correction in nearly every chi
+    product. `fp07_tau_scale` is an optional per-thermistor multiplier
+    (default 1, never fitted by the code), and the only shipped recipe that
+    sets it is a sensitivity variant (CASPER-West `perturb_M1_tau2.yaml`).
+    Changing the model would move every chi product.
+  - Corrected while there: Peterson & Fer's `-0.32` is Gregg & Meagher's
+    (1980), not Vachon & Lueck's, and ODAS `quick_look.m` implements Vachon &
+    Lueck as a double pole with `f_3dB = 25*sqrt(W)` Hz, a response 1.6x
+    faster than the `lueck` single pole.
+- **perturb's in-pipeline FP07 fit no longer gives up on a glider file for
+  reasons unrelated to the data.** On Tanaka 2015-11-13 (Slocum, CTD every
+  4.5 s) it calibrated 3 of 12 files. It now calibrates all 12, and each fit
+  agrees with the deployment-pooled `fp07-cal` fit to within 0.6% in gradient
+  gain (median 0.9999) and 8 mK. Two defects caused it, as re-running with
+  each fix reverted in turn shows. Without the first fix, 3 of 12 files are
+  fitted; without the second, 11 (T1) and 10 (T2):
+  - One NaN in a profile's reference (a hotel gap blanked by `max_gap`)
+    passed through the lag filter and silenced the WHOLE profile, counted
+    neither as accepted nor as rejected. A profile is now split at its gaps,
+    and each finite stretch of at least twice the lag window is scored. A
+    profile with no gap is scored exactly as before.
+  - The low-pass started from zero, so its output climbed from 0 to the
+    thermistor's counts (thousands) over seconds. A profile starting at the top
+    of a file, as every glider file that begins mid-dive does, scored that
+    ramp. A synthetic probe tracking its reference exactly scored |r| = 0.09.
+    The filter now starts at rest on the first sample.
+  - **This second fix also changes VMP output, slightly, on a file that
+    starts mid-cast.** Of the 29 repo SN 479 files, 26 are bit-identical to
+    before. In the other three (0004, 0018, 0029, starting at 128, 82 and
+    134 dbar) the first profile begins at sample 0, its lag score rises from
+    |r| 0.10-0.32 to 0.93-0.97, and it now enters the fit: one more profile,
+    at most 0.56 mK change in temperature, and no change in lag. With the
+    start-up fix alone reverted, all 29 are bit-identical, so the gap split
+    changes nothing on gap-free profiles.
+- **A channel coefficient written as arithmetic, or mistyped, no longer
+  becomes a default without a word.** ODAS `eval`s every channel parameter,
+  so `coef1 = 1/400` is a legal config. Fourteen converters (poly, voltage,
+  piezo, accel, magn, inclxy, inclt, jac_c, jac_t, sbt, sbc, aem1g_a,
+  aem1g_d, alec_emc) read it, or a decimal comma such as `0,5`, as 0 or their generic
+  default. Every reader of a channel coefficient now goes through one parser,
+  `config_number`: the converters and their `cal_*` provenance, the chi noise
+  model's thermistor calibration, deconvolution's `diff_gain` (in six
+  places), `fp07cal`'s bridge parameters, coefficients and patch check, the
+  shear-sheet check, the `diff_gain` and sensor inventories, and the v1 setup
+  cross-check. Previously they could read the same value three different
+  ways. (Defaults for an absent key still differ where they always did:
+  `t_0` is 289.0 K in `convert_therm`, 289.3 K in the noise model, and
+  required by `fp07cal`.)
+  - Arithmetic is evaluated with MATLAB's rules, including a signed exponent
+    (`2^-3^2` is (2^-3)^2 = 0.015625, checked in MATLAB).
+  - **Arithmetic outside JAC-CT warns**, naming the channel, key and value,
+    once per file. In the configs of 19,064 real `.p` files (about 4,400
+    distinct; local copies and SeaChest) the only arithmetic value not
+    written by RSI is a typo (below); ODAS evaluates it without a word. The
+    JAC-CT converters, where RSI writes `2^28` on purpose, stay silent.
+  - A present value that is malformed, NaN or infinite raises a `ValueError`
+    naming the channel and key. `ConfigNumberNotFinite` tells NaN/Inf from a
+    malformed value, and now reaches callers of the converters too (except
+    for shear `sens`, which keeps its own message pointing at `patch-config`).
+  - An absent key behaves exactly as before. A blank one (`key =`) is
+    treated as absent, with two exceptions that are refused: a blank
+    polynomial coefficient, because ODAS drops the term and shifts every
+    higher order down one, and a blank pre-emphasis `diff_gain` (`T1_dT1`,
+    `P_dP`), because undeconvolved counts are no fallback.
+  - A non-positive pre-emphasis `diff_gain` is refused, naming the channel.
+    It used to fail inside scipy ("filter critical frequencies must be
+    greater than 0") or with a bare `ZeroDivisionError`.
+  - `beta_2`/`beta_3 = Inf` is no term, as in ODAS (1/Inf = 0). Rockland's own
+    Zissou tutorial file (`VMP_024.p`) writes `beta_2 = Inf`; it was
+    unreadable before.
+  - A zero divisor (`g` for voltage, `coef1` for accel and magn), a
+    non-positive Sea-Bird frequency term, and a non-positive AEM1-G `adc_fs`
+    or `adc_bits` now raise instead of yielding inf, NaN or a fabricated
+    speed. No real config trips any of these.
+  - Whitespace inside an operand (`1 2`, `1e -5`) is refused, as MATLAB
+    refuses it. The JAC-CT parser had deleted it and read 12.
+  - A numpy float keeps its exact value rather than being re-read from its
+    `str()`. A boolean is refused rather than read as 1 or 0.
+  - Deliberate deviation: ODAS `deconvolve.m` reads `diff_gain` with
+    `str2double`, which turns arithmetic into NaN; here it gets the same value
+    the shear converter does. Root-section values (`recsize`) stay plain
+    numbers, as in ODAS, and the sensor inventory compares `cal_date` as text
+    (`2019-06-26` is valid arithmetic).
+  - Checked against every `.p` config on SeaChest: 1,981 distinct configs in
+    13,923 files, each channel converted by the old and new code. Output is
+    bit-identical except in two places. The 64 JAC-CT files now convert
+    (above). **One SUNRISE 2021 file now loads that did not:** Pelican SN 412
+    `SR1P2_0003`, whose T1 (probe T2132) has `beta_1 = 3-1315.08`.
+    It was refused before, so no SN 412 product contains it; it now reads
+    -1312.08 (with the warning above), the same kind of garbage negative
+    `beta_1` its 2021 siblings carry as plain numbers. The next SN 412
+    rebuild picks it up. Its recipe sets `fp07.calibrate: true`, so a
+    successful per-file fit replaces the coefficients; if the fit fails for
+    this file, the garbage value reaches the product.
+- **`perturb-plot mixing` failed on every bottom-up product.** It merges
+  `diss_combo` and `chi_combo` by position and demanded identical bin axes, but
+  near the bed epsilon's 1.0 s BBL window reaches bins chi's 2.0 s window does
+  not (SUNRISE 2021/Pelican/SN194: 29 bins against 28). The merge now
+  reindexes onto the primary product's bins by value, which is exact on a
+  shared lattice and leaves the missing bins NaN. It warns on every reindex,
+  and refuses when the two are binned at different widths
+  (`binning.diss_width` vs `binning.chi_width`), when fewer than two bins
+  match, or when the cast counts differ. Existing products need no rebuild.
+- **`cutp` / `extract_pfile_segment` stamped segments early.** For
+  `start_record > 0` it advanced the record-0 header clock by the nominal
+  config `recsize` (1.0 s) per record, but a record lasts `data_words /
+  f_clock` on the sampling clock that `PFile` puts every sample on: 1.0001067 s
+  for a VMP-250 with 5120-word records at 5119.454 Hz. The error grows with
+  the cut point: 53 ms after 500 records, 0.45 s after 4215 (found splitting a
+  2023 Hydrographer Bank VMP file at a probe failure). The advance now uses
+  the true duration and falls back to `recsize`, with a warning, only when the
+  header carries no clock. Segment sample times now match the source within
+  the header's 1 ms resolution.
+
+### Changed
+- **An in-pipeline FP07 fit against a HOTEL reference is refused unless
+  `fp07.allow_hotel_reference: true`.** That fit is per `.p` file, so a file
+  the glider CTD did not cover keeps the factory coefficients while its
+  neighbors are fitted. In our own products, Taiwan13 husker carries T1
+  on factory coefficients in 40 of 58 files. perturb now stops before any
+  stage and names both ways forward: `fp07-cal` first (one calibration for
+  the deployment), or the switch. The switch is excluded from the output-
+  directory hash. The eight shipped glider recipes set it, so they run as
+  before.
+- **The run summary names every FP07 channel that kept the factory
+  coefficients**, per channel, with the file count and the most common kind of
+  reason, then the files. That used to be one warning per file in the worker
+  logs. A new `notices` list on `PipelineResult` carries it; notices neither
+  fail the run nor block the cache. The summary clips each line, so the notices
+  are also logged whole, at WARNING. They cover the files processed in that
+  run: a cached re-run reports none. `fp07_calibrate` returns a `factory` map
+  giving the reason for every channel it did not fit. Its `n_profiles*` counts
+  are now of scored segments (one per gap-free profile, so unchanged on a
+  VMP).
+- **SN 132's `diff_gain = 0.09` is on the right rung (issue #178, still open
+  on the fine value).** This supersedes two 0.4.0 notes below: that "the
+  ladder points the other way", and the `--diff-gain` entry's "real miss ...
+  inflating its epsilon by roughly 110x". A 512 Hz sampling rate did not imply
+  a ~0.95 gain: Rockland converted SN 132 to a 1024 Hz tidal build in 2021, and
+  its analog chain evidently stayed on that rung when it went back to 512 Hz.
+  Open-circuit bench noise fits 0.10–0.13 (the same fit reads SN 409's 0.949
+  within 2% and SN 465's 0.988 3–14% high), and epsilon computed with 0.09
+  matches SN 465's, cast near-simultaneously from a second boat in German
+  Channel, at ~0.9–1.2× (95% CIs within ~0.7–1.7×), not the 109× a 0.94 gain
+  would give. Whether the value is 0.09 or nearer the bench fit's ~0.12 is
+  still open, so SN 132 epsilon carries a ~1.8× scale uncertainty.
+  `docs/deployment_procedures.md` no longer says a bench run cannot check
+  `diff_gain` — the open-circuit noise spectrum estimates it against
+  `noise_shearchannel` — and a test probe is documented as reading the config's
+  `T_0`, which is ~16 °C only with nominal coefficients.
 
 ## [0.4.0] - 2026-09-10
 

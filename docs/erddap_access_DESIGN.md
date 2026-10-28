@@ -821,7 +821,7 @@ notebook removes.
 
 **But the row count hides a real difference, and it goes the other way.**
 Across the full deployment, **33 rows carry `sci_water_pressure == 0.0` on a
-perfectly good timestamp**. They are not sentinels — their neighbours read
+perfectly good timestamp**. They are not sentinels — their neighbors read
 0.002–0.013 bar, i.e. **2–13 cm of water**. The glider is at the surface and
 the sensor is right. The notebook's blanket rule NaNs all 33; we keep them. No
 row disappears either way, so the golden count is identical while the data is

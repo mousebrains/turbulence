@@ -99,6 +99,7 @@ DEFAULTS: dict[str, dict] = {
         "must_be_negative": True,
         "min_corr": 0.5,
         "reference_interval": None,
+        "allow_hotel_reference": False,
     },
     "ct": {
         "align": True,
@@ -107,12 +108,36 @@ DEFAULTS: dict[str, dict] = {
     },
     "bottom": {
         "enable": False,
+        # "vibration" = the historical binned-vibration detector.
+        # "fallrate"  = the depth at which free fall ends, from the pressure
+        #               record. Measured on SUNRISE 2022 Point Sur (134
+        #               descents) the vibration detector reported the bottom a
+        #               median 1.28 m above where the instrument actually
+        #               stopped; fall-rate put it at 0.086 m, a 14.9x gain, and
+        #               fired on 100% of descents against 97%.
+        # "both"      = fall-rate for the datum, vibration as a cross-check.
+        "method": "vibration",
         "depth_window": 4.0,
         "depth_minimum": 10.0,
         "speed_factor": 0.3,
         "median_factor": 1.0,
         "vibration_frequency": 16,
         "vibration_factor": 4.0,
+        # Was silently unsettable before 2026-09-22: absent from these
+        # defaults, merge_config dropped it with no error and no effect, so the
+        # one parameter that actually gates detection could not be tuned while
+        # the three that do nothing at least warned.
+        "proximity_bins": 2,
+        # Clearance ABOVE the detected bottom for the deepest analysis window.
+        # 0.15 m clears the deceleration (free fall ends a median 0.086-0.109 m
+        # above the stop, p90 0.13 m, on two ships) and keeps the retained
+        # record entirely PRE-IMPACT, so a silty seabed's resuspension cloud
+        # does not yet exist in it. It need not include the probe-to-crasher
+        # offset: the crasher ring leads the shear probes by 6-8 inches, so the
+        # deepest pre-impact sample already sits that far above the seabed.
+        "height": 0.15,
+        "fallrate_fraction": 0.9,
+        "fallrate_smooth_s": 0.05,
     },
     "top_trim": {
         "enable": False,
@@ -121,6 +146,34 @@ DEFAULTS: dict[str, dict] = {
         "max_depth": 50.0,
         "quantile": 0.6,
         "noise_factor": 2.0,
+        # The fall-rate residual is ON by default: Ax/Ay on a Rockland VMP
+        # are piezo VIBRATION sensors, blind to prop wash, and on their own
+        # they trim to ~3 m while two decades of wash epsilon survive.
+        # "max" goes with it -- under a median the two blind channels
+        # outvote the one that can see. Only affects configs that already
+        # set top_trim.enable.
+        "combine": "max",
+        "use_fall_rate_residual": True,
+        "residual_smooth_m": 6.0,
+        # Inclinometer voter, OFF by default. In a tow-yo the VMP is launched
+        # nearly parallel to the surface and pitches down as it falls, so the
+        # shear probes see a mean CROSS-FLOW until it is vertical and epsilon
+        # (~ shear^2/U^4) is meaningless, not merely contaminated. Measured on
+        # SUNRISE 2021 Walton Smith SN 194, 773 descents: Incl_Y starts at a
+        # median 20.2 deg and reaches vertical at 3.9 m, but anywhere in
+        # 2.7-5.7 m -- so a flat floor cannot do this job and a per-cast test
+        # can. Default OFF because it is VMP-SPECIFIC: it relies on Incl_Y
+        # being +90 = nose down, which is a VMP convention and NOT a
+        # MicroRider one (there Incl_Y is roughly pitch).
+        "use_inclinometer": False,
+        "incl_channel": "Incl_Y",
+        "incl_threshold_deg": 85.0,
+        "incl_relax_deg": 5.0,
+        "incl_hold_m": 1.0,
+        # Reaching vertical is not the same as the flow having settled:
+        # epsilon is still 6.7x interior at the vertical depth, 2.2x one metre
+        # below, 1.2x two metres below.
+        "incl_margin_m": 2.0,
     },
     "epsilon": {
         # Durations (seconds) are the primary interface — instruments sample
@@ -135,6 +188,24 @@ DEFAULTS: dict[str, dict] = {
         "fft_length": None,
         "diss_length": None,
         "overlap": None,
+        # Window layout. "top" is the historical behaviour: windows start at
+        # the top of the section and march down, so the bottom remainder is
+        # DISCARDED -- which on a profiler that crashes into the seabed throws
+        # away the boundary layer. "bottom" pins the deepest window's lower
+        # edge to the end of the section and marches up.
+        "anchor": "top",
+        # A shorter dissipation window for the near-bottom zone. Epsilon is
+        # attributed to a window's CENTRE, so halving the window halves the
+        # distance from the seabed to the deepest estimate. Costs DOF: with
+        # fft_sec 0.5 s, a 2.0 s window averages 7 FFTs and a 1.0 s window 3.
+        # Only the DISSIPATION length may differ -- fft_length is shared,
+        # because one product carries one wavenumber axis.
+        "bbl_diss_sec": None,  # None = no separate BBL windows
+        "bbl_overlap_sec": None,  # None = half the BBL window
+        "bbl_extent_sec": None,  # how far above the seabed they apply
+        "bbl_diss_length": None,
+        "bbl_overlap": None,
+        "bbl_extent": None,
         "goodman": True,
         "f_AA": 98.0,
         "f_limit": None,
@@ -174,6 +245,25 @@ DEFAULTS: dict[str, dict] = {
     "chi": {
         "enable": False,
         # Same duration-first interface as [epsilon] above.
+        # anchor: top | bottom, same meaning as [epsilon]. Chi needs its OWN
+        # key because the two are laid out independently: with chi left at
+        # "top" while epsilon is "bottom", a 2.0 s window puts chi's deepest
+        # center ~1.2 m above the seabed, so a bottom-up product has a proper
+        # BBL epsilon and NO BBL chi (measured on SUNRISE 2021/Pelican/SN194:
+        # chi occupancy 0.0% at 0.62 m and 0.4% at 0.88 m against epsilon's
+        # 95.7%). Gamma and K_T inherit that hole.
+        "anchor": "top",
+        # The bbl_* twins mirror [epsilon] exactly. They became possible once
+        # L3ChiData.dof_spec was made PER WINDOW: a shorter near-bed window
+        # averages fewer FFT segments, and that value gates l4_chi's
+        # non-detection floor, so a single file-wide DOF would mis-gate exactly
+        # the near-bed estimates the BBL analysis exists to measure.
+        "bbl_diss_sec": None,
+        "bbl_overlap_sec": None,
+        "bbl_extent_sec": None,
+        "bbl_diss_length": None,
+        "bbl_overlap": None,
+        "bbl_extent": None,
         "fft_sec": 1.0,
         "diss_sec": None,
         "overlap_sec": None,
@@ -251,6 +341,13 @@ DEFAULTS: dict[str, dict] = {
         "rules": {},
     },
     "binning": {
+        # depth | time | altitude.  "altitude" bins on HEIGHT ABOVE THE SEABED
+        # using each profile's `bottom_depth` datum. It is NOT a relabelling of
+        # the depth axis: within one SUNRISE leg the seabed moves from 21.5 to
+        # 34.5 m (p10-p90), so a fixed depth bin sits 12 m above the bed in one
+        # cast and 1 m above it in the next. The conversion must happen before
+        # the bin assignment or the boundary layer is averaged away. Requires
+        # [bottom] enabled, since the datum is written at profile extraction.
         "method": "depth",
         "width": 1.0,
         "aggregation": "mean",
@@ -311,8 +408,8 @@ DEFAULTS: dict[str, dict] = {
         "history": None,
     },
     # Background stratification (N2, dT/dz) written to the diss and profile
-    # products, independent of epsilon/chi. Computed with the Thorpe-sorted
-    # (adiabatically leveled) method. diss uses its dissipation window; the
+    # products, independent of epsilon/chi. Computed from each window's parcels
+    # after reordering them (``sort``). diss uses its dissipation window; the
     # profile product uses the configurable ``window`` below. NOT written to the
     # CTD product (profile-only; the CTD spans the whole up/down trajectory).
     "stratification": {
@@ -322,6 +419,12 @@ DEFAULTS: dict[str, dict] = {
         "salinity": None,  # N2 salinity source: null = conductivity (else 35),
         # a number = fixed PSU, "measured" = C/T/P (TEOS-10),
         # "hotel"/"hotel:<var>" = a hotel-injected salinity channel
+        "sort": "temperature",  # parcel order within each window:
+        # "temperature" (conservative temperature alone; immune to salinity
+        # noise; the default since 2026-10), "density" (Thorpe-sorted; the
+        # default before), or "none" (as measured)
+        "dTdz_source": "ct",  # "ct" = ct.T_name; "fp07" = the FP07
+        # thermistors (mean of per-probe slopes; N2 stays on the CT pair)
     },
     "parallel": {
         "jobs": 1,
@@ -329,6 +432,9 @@ DEFAULTS: dict[str, dict] = {
     # Per-instrument overrides keyed by serial-number identifier (matched
     # against the parent directory of each .p file). Allowed inner keys:
     #   exclude_shear_probes : list[str]  (e.g. ["sh1"] or ["sh2"])
+    #   fp07_tau_scale       : {probe: multiplier}
+    #   fp07_response        : path | [paths] from `fp07-pair fit`
+    #                          (mutually exclusive with fp07_tau_scale)
     "instruments": {},
 }
 
@@ -336,14 +442,19 @@ DEFAULTS: dict[str, dict] = {
 # dirs: ``diagnostics`` (extra plots), and the cache-bypass flags ``force`` /
 # ``force_trim`` (they re-run work into the SAME dirs, so they cannot change the
 # dir identity or --force would defeat itself by recomputing into fresh dirs).
-_HASH_EXCLUDE_KEYS = frozenset({"diagnostics", "force", "force_trim", "config_dir"})
+# ``fp07.allow_hotel_reference`` only decides whether a run may START; a run it
+# allows writes exactly what it wrote before the key existed, so hashing it
+# would re-version every product of every deployment for nothing.
+_HASH_EXCLUDE_KEYS = frozenset(
+    {"diagnostics", "force", "force_trim", "config_dir", "allow_hotel_reference"}
+)
 
 # Sections whose inner keys are user-defined (e.g. instrument serials).
 # ConfigManager skips strict unknown-key validation for these; per-section
 # inner-schema validation happens in a wrapper below.
 _DYNAMIC_KEY_SECTIONS = frozenset({"instruments"})
 
-_INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes", "fp07_tau_scale"})
+_INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes", "fp07_tau_scale", "fp07_response"})
 
 # Which `instruments.<SN>.*` keys actually reach each stage. The block is hashed
 # into a stage's signature so a change re-versions its output -- but not every
@@ -355,16 +466,18 @@ _INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes", "fp07_tau_scale"})
 # Method 1's epsilonMean, so it belongs to both.
 _INSTRUMENT_KEYS_BY_STAGE: dict[str, frozenset[str]] = {
     "diss": frozenset({"exclude_shear_probes"}),
-    "chi": frozenset({"exclude_shear_probes", "fp07_tau_scale"}),
+    "chi": frozenset({"exclude_shear_probes", "fp07_tau_scale", "fp07_response"}),
 }
 
 # Numeric dependencies whose version can change ε/χ/N² outputs even with no
 # change to our own source — folded into the engine fingerprint so a dep
 # upgrade also invalidates cached results.
 _ENGINE_DEPS = ("numpy", "scipy", "gsw", "netCDF4", "xarray", "pandas")
-# Subpackages that cannot affect processing numerics; excluded from the source
-# hash so editing plots/standalone tools doesn't invalidate cached science.
-_FINGERPRINT_EXCLUDE = ("perturb/plot/",)
+# Code that cannot affect processing numerics; excluded from the source hash so
+# editing plots, standalone tools or the --version and provenance-stamp code
+# doesn't invalidate cached science. The flip side: a fix to the stamps
+# themselves reaches existing products only on a run with --force.
+_FINGERPRINT_EXCLUDE = ("perturb/plot/", "_version_info.py")
 _ENGINE_OVERRIDE_ENV = "ODAS_TPW_ENGINE_FINGERPRINT"
 
 
@@ -423,9 +536,15 @@ _WINDOW_KEY_PAIRS = (
     ("fft_length", "fft_sec"),
     ("diss_length", "diss_sec"),
     ("overlap", "overlap_sec"),
+    ("bbl_diss_length", "bbl_diss_sec"),
+    ("bbl_overlap", "bbl_overlap_sec"),
+    ("bbl_extent", "bbl_extent_sec"),
 )
 
 _WINDOW_SECTIONS = ("epsilon", "chi")
+
+# stratification.dTdz_source values (validated at load).
+DTDZ_SOURCES = ("ct", "fp07")
 
 
 class _PerturbConfigManager(ConfigManager):
@@ -441,12 +560,42 @@ class _PerturbConfigManager(ConfigManager):
     """
 
     def _section_view_postprocess(self, section: str, mapping: dict) -> dict:
+        if section == "stratification":
+            # A key is dropped only when it selects what the code did before the
+            # key existed, so those configs keep their canonical form (and
+            # stage signature) and their products stay valid. That is
+            # sort: density, NOT the current default: products made before the
+            # default became "temperature" are density-sorted, so a config that
+            # leaves sort unset (or null) must hash differently from them and be
+            # reprocessed. dTdz_source: ct is both the old behavior and the
+            # default.
+            if mapping.get("sort") is None:
+                mapping["sort"] = DEFAULTS["stratification"]["sort"]
+            if mapping["sort"] == "density":
+                mapping.pop("sort")
+            if mapping.get("dTdz_source") in ("ct", None):
+                mapping.pop("dTdz_source", None)
         if section in _WINDOW_SECTIONS:
             for samples_key, sec_key in _WINDOW_KEY_PAIRS:
                 if sec_key in mapping and (
                     mapping[sec_key] is None or mapping.get(samples_key) is not None
                 ):
                     del mapping[sec_key]
+            # Same rule for the bottom-up layout keys: a config that does not
+            # use them must keep the canonical form -- and therefore the
+            # stage-directory signature -- it had before they existed, so that
+            # adding the feature does not silently re-version every campaign's
+            # products. A config that DOES set one changes the hash, as it must.
+            if mapping.get("anchor") == "top":
+                mapping.pop("anchor", None)
+            # Only an inert (None) sample key may be dropped. Popping all three
+            # whenever bbl_diss_length was None also dropped a GOVERNING
+            # bbl_overlap/bbl_extent beside a bbl_diss_sec window, so changing
+            # it left the hash -- and the cached product -- unchanged.
+            if mapping.get("bbl_diss_length") is None:
+                for k in ("bbl_diss_length", "bbl_overlap", "bbl_extent"):
+                    if mapping.get(k) is None:
+                        mapping.pop(k, None)
         return mapping
 
     def validate_config(self, config: dict) -> None:
@@ -457,6 +606,20 @@ class _PerturbConfigManager(ConfigManager):
         created, rather than aborting mid-run inside per-file processing.
         """
         super().validate_config(config)
+        # binning.method is routed by membership tests, and every one of them
+        # falls back to TIME binning. An unrecognised value therefore produces a
+        # complete, writable, silently wrong product rather than an error, so it
+        # has to be rejected here at load time.
+        # Imported lazily: binning pulls numpy/xarray, and building the CLI
+        # parser must not (tests/test_perturb_mk_sections.py pins that).
+        from odas_tpw.perturb.binning import BIN_METHODS
+
+        bin_method = (config.get("binning") or {}).get("method", "depth")
+        if bin_method not in BIN_METHODS:
+            raise ValueError(
+                f"binning.method: expected one of {sorted(BIN_METHODS)}, "
+                f"got {bin_method!r}"
+            )
         for section in _WINDOW_SECTIONS:
             params = config.get(section) or {}
             for _, sec_key in _WINDOW_KEY_PAIRS:
@@ -480,6 +643,53 @@ class _PerturbConfigManager(ConfigManager):
             ):
                 raise ValueError(
                     f"{section}: diss_sec ({diss_s}) is shorter than fft_sec ({fft_s})"
+                )
+            # The window layout is validated here too: section_groups would
+            # otherwise raise on a bad anchor once per profile, and a BBL window
+            # under two FFT segments passes resolve_window_config only to fail
+            # inside csd_matrix_batch, leaving an empty stage directory.
+            anchor = params.get("anchor", "top")
+            if anchor not in ("top", "bottom"):
+                raise ValueError(
+                    f"{section}.anchor: expected 'top' or 'bottom', got {anchor!r}"
+                )
+            bbl_s = params.get("bbl_diss_sec")
+            if (
+                isinstance(fft_s, (int, float))
+                and isinstance(bbl_s, (int, float))
+                and bbl_s < 2 * fft_s
+            ):
+                raise ValueError(
+                    f"{section}: bbl_diss_sec ({bbl_s}) must hold at least two FFT "
+                    f"segments (2 x fft_sec = {2 * fft_s})"
+                )
+            uses_bbl = (
+                params.get("bbl_diss_sec") is not None
+                or params.get("bbl_diss_length") is not None
+            )
+            if uses_bbl and anchor != "bottom":
+                warnings.warn(
+                    f"{section}: bbl_* keys take effect only with anchor: bottom; "
+                    "they are ignored with anchor: top",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        # stratification.sort / dTdz_source pick a code path by membership, so a
+        # typo would otherwise fall through to a default silently.
+        strat = config.get("stratification") or {}
+        if isinstance(strat, dict):
+            from odas_tpw.processing.mixing import SORT_MODES
+
+            sort = strat.get("sort")
+            if sort is not None and sort not in SORT_MODES:
+                raise ValueError(
+                    f"stratification.sort: expected one of {list(SORT_MODES)}, got {sort!r}"
+                )
+            src = strat.get("dTdz_source", "ct")
+            if src is not None and src not in DTDZ_SOURCES:
+                raise ValueError(
+                    f"stratification.dTdz_source: expected one of {list(DTDZ_SOURCES)}, "
+                    f"got {src!r}"
                 )
         # hotel.max_gap is required when the hotel merge is enabled; validate
         # it (and every per-channel override) here so a missing value fails
@@ -538,6 +748,26 @@ def _validate_instruments(instruments: dict) -> None:
                     f"instruments.{sn}.fp07_tau_scale.{probe}: must be finite and "
                     f"> 0, got {value!r}"
                 )
+        response = settings.get("fp07_response")
+        if response is not None:
+            items = [response] if isinstance(response, (str, os.PathLike)) else response
+            if (
+                not isinstance(items, list)
+                or not items
+                or not all(isinstance(x, (str, os.PathLike)) for x in items)
+            ):
+                raise ValueError(
+                    f"instruments.{sn}.fp07_response: must be a path or a non-empty list "
+                    f"of paths to fp07-pair corrections, got {response!r}"
+                )
+            if tau_scale:
+                raise ValueError(
+                    f"instruments.{sn}: fp07_response and fp07_tau_scale are mutually "
+                    "exclusive. The correction is measured relative to the bead pair, so "
+                    "stacking it on a tau scale corrects the relative part twice (on "
+                    "ARCTERX-2022 SN194 it would invert the T1/T2 disagreement). Remove "
+                    "fp07_tau_scale, and expect chi to move by its geometric mean."
+                )
 
 
 CONFIG_DIR_TOKEN = "<CONFIG_DIR>"
@@ -592,7 +822,49 @@ def _load_config_with_instruments_check(path: str | Path) -> dict[str, dict]:
     # resolve), so it is left untouched.
     if config:
         config.setdefault("files", {})["config_dir"] = str(Path(path).resolve().parent)
+        _resolve_fp07_response(config)
     return config
+
+
+def _resolve_fp07_response(config: dict) -> None:
+    """Make every ``instruments.<SN>.fp07_response`` path absolute, and check each file.
+
+    Like every other perturb path: ``<CONFIG_DIR>/...`` resolves against the
+    config's own directory (so a config and its corrections move together),
+    and a relative path without the token against the working directory. Each
+    file is opened now -- a missing or hand-edited correction fails at load,
+    not in a worker halfway through a run.
+    """
+    from odas_tpw.chi.fp07_pair import ResponseCorrection
+
+    cdir = config_dir_of(config)
+    for sn, settings in (config.get("instruments") or {}).items():
+        if not isinstance(settings, dict) or settings.get("fp07_response") is None:
+            continue
+        raw = settings["fp07_response"]
+        items = [raw] if isinstance(raw, (str, os.PathLike)) else list(raw)
+        resolved = []
+        for item in items:
+            path = Path(str(expand_config_dir(item, cdir)))
+            if not path.exists():
+                raise ValueError(f"instruments.{sn}.fp07_response: {path} does not exist")
+            ResponseCorrection.from_netcdf(path)
+            resolved.append(str(path.resolve()))
+        settings["fp07_response"] = resolved
+
+
+_DIGEST_CACHE: dict[tuple[str, int, int], str] = {}
+
+
+def _fp07_response_digest(path: str) -> str:
+    """Semantic digest of a correction file, cached by (path, size, mtime)."""
+    from odas_tpw.chi.fp07_pair import ResponseCorrection
+
+    st = os.stat(path)
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if key not in _DIGEST_CACHE:
+        _DIGEST_CACHE[key] = ResponseCorrection.from_netcdf(path).digest()
+    return _DIGEST_CACHE[key]
 
 
 def _validate_config_with_instruments_check(config: dict[str, dict]) -> None:
@@ -663,7 +935,19 @@ def resolve_window_config(cfg: dict, fs: float, *, section: str = "epsilon") -> 
     def even(x: float) -> int:
         return max(2, 2 * round(x / 2.0))
 
-    out = {k: v for k, v in cfg.items() if k not in ("fft_sec", "diss_sec", "overlap_sec")}
+    out = {
+        k: v
+        for k, v in cfg.items()
+        if k
+        not in (
+            "fft_sec",
+            "diss_sec",
+            "overlap_sec",
+            "bbl_diss_sec",
+            "bbl_overlap_sec",
+            "bbl_extent_sec",
+        )
+    }
     fft = cfg.get("fft_length")
     if fft is None:
         fft = even(fs * (seconds("fft_sec") or 1.0))
@@ -693,6 +977,58 @@ def resolve_window_config(cfg: dict, fs: float, *, section: str = "epsilon") -> 
         out["overlap"] = overlap
     out["fft_length"] = fft
     out["diss_length"] = diss
+
+    # Near-bottom windows. Resolved the same way, then checked against the
+    # main window: a BBL window LONGER than the ordinary one would defeat the
+    # purpose, and one shorter than the FFT cannot be transformed at all.
+    bbl = cfg.get("bbl_diss_length")
+    if bbl is None:
+        bbl_sec = seconds("bbl_diss_sec")
+        bbl = even(fs * bbl_sec) if bbl_sec is not None else None
+    if bbl is not None:
+        bbl = int(bbl)
+        if bbl < 2 * fft:
+            raise ValueError(
+                f"{section}: BBL window ({bbl} samples) must hold at least two "
+                f"FFT segments ({2 * fft} samples); csd_matrix_batch refuses "
+                "anything shorter"
+            )
+        if bbl > diss:
+            raise ValueError(
+                f"{section}: BBL window ({bbl} samples) is longer than the "
+                f"ordinary dissipation window ({diss} samples); the BBL window "
+                "exists to buy vertical resolution near the seabed, so it must "
+                "be shorter"
+            )
+        out["bbl_diss_length"] = bbl
+
+        bbl_ov = cfg.get("bbl_overlap")
+        if bbl_ov is None:
+            ov_sec = seconds("bbl_overlap_sec")
+            bbl_ov = even(fs * ov_sec) if ov_sec is not None else bbl // 2
+        bbl_ov = int(bbl_ov)
+        if bbl_ov >= bbl:
+            raise ValueError(
+                f"{section}: BBL overlap ({bbl_ov} samples) must be smaller "
+                f"than the BBL window ({bbl} samples)"
+            )
+        out["bbl_overlap"] = bbl_ov
+
+        ext = cfg.get("bbl_extent")
+        if ext is None:
+            ext_sec = seconds("bbl_extent_sec")
+            ext = even(fs * ext_sec) if ext_sec is not None else bbl
+        ext = int(ext)
+        if ext < bbl:
+            raise ValueError(
+                f"{section}: BBL extent ({ext} samples) is shorter than one "
+                f"BBL window ({bbl} samples), so no BBL window would fit"
+            )
+        out["bbl_extent"] = ext
+    else:
+        out.pop("bbl_diss_length", None)
+        out.pop("bbl_overlap", None)
+        out.pop("bbl_extent", None)
     return out
 
 
@@ -764,6 +1100,14 @@ def canonical_instruments_for_hash(
             item["fp07_tau_scale"] = {
                 str(k): float(v) for k, v in sorted(tau_scale.items(), key=lambda kv: str(kv[0]))
             }
+        # A correction is hashed by its CONTENT, never its path: moving or
+        # re-timestamping the file leaves chi where it is; refitting it to
+        # different numbers re-versions chi (and chi_binned/chi_combo, which
+        # embed the chi chain) but not epsilon.
+        response = item.get("fp07_response")
+        if response is not None:
+            paths = [response] if isinstance(response, (str, os.PathLike)) else list(response)
+            item["fp07_response"] = sorted(_fp07_response_digest(str(p)) for p in paths)
         normalized[str(key)] = item
     return normalized
 
@@ -958,20 +1302,47 @@ fp07:
   reference_interval: null  # native sample interval [s] of a non-JAC
                           # reference (sets the FP07 low-pass to its Nyquist).
                           # null = taken from the hotel merge, else inferred
+  allow_hotel_reference: false  # a reference from the HOTEL file (a glider
+                          # CTD) is refused unless this is true. This fit is
+                          # per .p FILE: a file the CTD did not cover keeps the
+                          # factory coefficients while its neighbors are
+                          # fitted. `fp07-cal` (deployment-pooled, pre-pipeline,
+                          # then calibrate: false) avoids that; with true, read
+                          # the run summary's FP07 notice.
 
 ct:
   align: true
   T_name: "JAC_T"         # temperature channel for alignment
   C_name: "JAC_C"         # conductivity channel for alignment
 
+# binning.method: altitude bins on height above the seabed instead of depth --
+# the right vertical coordinate for bottom-boundary-layer work, and it needs
+# [bottom] enabled so each profile carries a `bottom_depth` datum.
+
 bottom:
   enable: false
+  # vibration | fallrate | both.  "fallrate" takes the bottom from the collapse
+  # of the fall rate in the pressure record instead of binned vibration std.
+  # On SUNRISE 2022 Point Sur (134 descents) the vibration detector put the
+  # bottom a median 1.28 m ABOVE where the instrument actually stopped, because
+  # it reports the MEAN depth of a depth_window-wide bin; fall-rate put it at
+  # 0.086 m and fired on 100% of descents against 97%.
+  method: vibration
   depth_window: 4.0       # depth window for crash detection [m]
   depth_minimum: 10.0     # minimum depth to search [m]
   speed_factor: 0.3       # UNUSED (reserved; tuning has no effect)
   median_factor: 1.0      # UNUSED (reserved; tuning has no effect)
   vibration_frequency: 16 # UNUSED (reserved; tuning has no effect)
   vibration_factor: 4.0   # vibration std dev acceptance factor
+  proximity_bins: 2       # accept a crash only this many bins from the deepest
+  height: 0.15            # clearance ABOVE the detected bottom [m]; keeps the
+                          # retained record pre-impact and above the
+                          # deceleration (free fall ends ~0.09-0.11 m up)
+  fallrate_fraction: 0.9  # fraction of terminal fall rate = end of free fall.
+                          # Do NOT raise toward 1.0: at 0.98-0.99 ordinary
+                          # fall-rate variability crosses it metres too high.
+  fallrate_smooth_s: 0.05 # boxcar before differencing [s]; NOT a free
+                          # parameter -- a wider one inflates the answer
 
 top_trim:
   enable: false
@@ -982,6 +1353,19 @@ top_trim:
   noise_factor: 2.0       # std > noise_factor*background == still in prop wash
 
 epsilon:
+  # anchor: top | bottom.  "top" starts the first window at the top of the
+  # section and marches down, DISCARDING the bottom remainder -- on a profiler
+  # that crashes into the seabed that is the boundary layer. "bottom" pins the
+  # deepest window's lower edge to the end of the section and marches up.
+  anchor: top
+  # A shorter dissipation window for the near-bottom zone. Epsilon belongs to a
+  # window's CENTRE, so halving the window halves the distance from the seabed
+  # to the deepest estimate. Only the DISSIPATION length may differ -- one
+  # product carries one wavenumber axis, so fft_length is shared. The cost is
+  # DOF: with fft_sec 0.5, a 2.0 s window averages 7 FFTs, a 1.0 s window 3.
+  bbl_diss_sec: null      # null = no separate near-bottom windows
+  bbl_overlap_sec: null   # null = half the BBL window
+  bbl_extent_sec: null    # how far above the seabed the short windows apply
   # Windows are specified as DURATIONS (seconds) and converted per instrument
   # via its sampling rate (standard VMP-250: 512 Hz; coastal units: 1-2 kHz),
   # so one config serves a mixed fleet. Choosing fft_sec is a sandwich
@@ -1098,6 +1482,11 @@ chi:
   fft_length: null        # EXPERT override [samples]; wins over fft_sec
   diss_length: null       # EXPERT override [samples]; wins over diss_sec
   overlap: null           # EXPERT override [samples]; wins over overlap_sec
+  anchor: top             # top | bottom, as epsilon.anchor. chi lays out its
+                          # own windows, so a bottom-up product needs BOTH set
+  bbl_diss_sec: null      # near-bottom windows, as epsilon.bbl_*; each must
+  bbl_overlap_sec: null   # hold two FFT segments, and they take effect only
+  bbl_extent_sec: null    # with anchor: bottom
   fp07_model: "single_pole"  # FP07 transfer function model
   goodman: true           # Goodman coherent noise removal
   f_AA: 98.0              # anti-aliasing filter cutoff [Hz]
@@ -1249,7 +1638,7 @@ netcdf:
   history: null            # auto-filled with processing log
 
 stratification:
-  enable: true            # write N2 and dT/dz (Thorpe-sorted) to the diss and
+  enable: true            # write N2 and dT/dz (background) to the diss and
                           # profile products, independent of eps/chi. Not on the
                           # CTD product (profile-only; CTD spans up+down).
   window: 2.0             # background vertical window [dbar] for the profile
@@ -1258,6 +1647,25 @@ stratification:
                           # (else 35 PSU); a number = that fixed PSU; "measured"
                           # = C/T/P (TEOS-10); "hotel" (or "hotel:<var>") = a
                           # hotel-injected salinity channel (default "salinity")
+  sort: temperature       # how each window's parcels are reordered before its
+                          # gradients are taken. temperature (the default since
+                          # 2026-10) = conservative temperature alone, monotonic
+                          # along the trend of a fit over five windows (as
+                          # measured where that is unresolved): immune to
+                          # salinity noise, which scrambles a density sort (dT/dz
+                          # low, N2 high), but it also removes real
+                          # density-compensated inversions. density =
+                          # Thorpe-sorted to static stability (adiabatic
+                          # leveling; the default before). none = as measured.
+                          # With a per-sample salinity, N2 carries sort_kappa
+                          # (density- over temperature-sorted dT/dz) and a
+                          # warning fires below 0.8.
+  dTdz_source: ct         # ct = ct.T_name. fp07 = the FP07 thermistors (in-situ
+                          # calibrated when fp07.calibrate ran), slow-rate,
+                          # temperature-sorted (or unsorted with sort: none), mean
+                          # of per-probe slopes. The bead that measured chi then
+                          # sets the gradient chi is normalized by, so a bead gain
+                          # error cancels in K_T and Gamma. N2 stays on the CT pair.
 
 parallel:
   jobs: 1
@@ -1280,6 +1688,12 @@ parallel:
 # Caveat: this makes the two beads agree with each other, not with the truth --
 # anchor the absolute level separately (e.g. where K_max_ratio > 1.2), and note
 # fom cannot tell you which bead to trust (it can sit at ~1.000 for both).
+#
+# fp07_response is the measured alternative to fp07_tau_scale (never both on
+# one instrument): `fp07-pair fit 'results/chi_00/*.nc' -o fp07pair/` measures
+# each bead's response relative to its partner per time segment; list EVERY
+# file it writes (including *_notapplied.nc). A file matching none is an error.
+# See docs/fp07pair/runbook.md.
 instruments: {}
 # Example:
 # instruments:
@@ -1287,6 +1701,9 @@ instruments: {}
 #     exclude_shear_probes: ["sh2"]
 #   SN194:
 #     fp07_tau_scale: {T1: 0.30, T2: 0.75}
+#   SN428:
+#     fp07_response:
+#       - <CONFIG_DIR>/fp07pair/fp07pair_SN428_T2232-T2234_20220322T1450Z.nc
 """
 
 

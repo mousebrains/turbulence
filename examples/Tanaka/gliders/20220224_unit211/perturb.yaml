@@ -1,0 +1,149 @@
+# Perturb configuration -- MicroRider MR1000-LP SN 156 on Slocum glider unit211,
+# 20220224_unit211, W of Okinawa near 25.7 N 127.0 E, 2022-02-24 .. 02-27.
+# Tanaka's 2022 deployment; the data arrived 2026-10-18.
+#
+#   perturb run -c perturb.yaml
+#
+# ---------------------------------------------------------------------------
+# READ FIRST (details in README.md)
+# * THE RAW .P FILES ARE MIS-FRAMED: 28 of 29 lose 0.47-0.95 s of samples in
+#   one record within their first 3-17 s (75 s in the deck file 211_025), and a
+#   fixed-size reader mis-assembles everything after it. perturb reads the
+#   RE-FRAMED copies written by reframe_p.py (the lead-in dropped, record 0's
+#   time advanced to match; reframed/reframe_manifest.csv), never the originals.
+# * SN 156 ("File made for MR1000-LP SN156, 2015-09-30"; [instrument_info]
+#   vehicle slocum_glider). Probes sh1 M1368 @ 0.0634, sh2 M2256 @ 0.0636, FP07
+#   T1023 and T2166, every cal_date blank -- NO calibration sheet in
+#   microstructure_sensors/, so absolute epsilon rests on the config values,
+#   unverified. M1368 is NOT SN 058's dead M1369. Both shear probes are alive
+#   (raw sd 82-100 and 120-150 counts in water). FP07 beta is the nominal
+#   3143.55 (T1 reads +5.2 C high, T2 1.6-1.9 C low), so fp07.calibrate fits
+#   them per FILE against the glider CTD.
+# * NO EM FLOWMETER. Speed from a Merckelbach flight model with gliderflight's
+#   DEFAULT lift and Cd1 (no measurement for this glider); epsilon ~ U^-4.
+# * unit211_flight_hotel.nc is written ALREADY ON THE MR CLOCK (L +3.3 -> -1.3 s
+#   over the three days, 20 of 29 files solved, the rest under 30 min in water;
+#   mr_clock_model.json), so time_offset is 0.
+# ---------------------------------------------------------------------------
+
+files:
+  p_file_root: "<CONFIG_DIR>/reframed/microrider"   # NOT ../post-recovery (see READ FIRST)
+  p_file_pattern: "*.P"     # 29 files, uppercase
+  output_root: "<CONFIG_DIR>/Processed"
+  trim: false
+  merge: false
+
+hotel:
+  enable: true
+  file: "<CONFIG_DIR>/unit211_flight_hotel.nc"
+  time_column: "time"       # ALREADY the MicroRider clock
+  time_format: "epoch"
+  time_offset: 0.0
+  max_gap: 30.0
+  extrapolate: false
+  interpolation: "pchip"
+  channels:
+    speed:
+      fast: true
+    sci_water_temp:
+      units: "degree_Celsius"
+      fast: false
+    sci_water_cond:
+      units: "mS/cm"        # already mS/cm in the hotel file: NO scale here
+      fast: false
+  fast_channels: ["speed"]
+
+gps:
+  source: "netcdf"
+  file: "<CONFIG_DIR>/unit211_flight_hotel.nc"   # dead-reckoned m_lat/m_lon, MR clock
+  time_col: "time"
+  lat_col: "lat"
+  lon_col: "lon"
+  max_time_diff: 600
+
+profiles:
+  P_min: 2.0
+  W_min: 0.03               # as for the 2015 unit211 deployments
+  direction: "glide"        # BOTH legs
+  min_duration: 60.0
+  diagnostics: false
+
+fp07:
+  calibrate: true
+  order: 2
+  reference: "sci_water_temp"
+  max_lag_seconds: 10
+  must_be_negative: false
+  min_corr: 0.5
+  allow_hotel_reference: true  # the per-file fit, on purpose, as for the 2015
+                            # unit211 deployments (the glider's Sea-Bird CTD).
+
+ct:
+  align: false
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+speed:
+  method: "hotel"
+  hotel_var: "speed"
+  speed_cutout: 0.05
+
+epsilon:
+  fft_sec: 2.0
+  salinity: "measured"
+  T_source: "sci_water_temp"
+  fom_max: null
+  diagnostics: false
+
+chi:
+  enable: true
+  use_epsilon: false
+  fft_sec: 2.0
+  spectrum_model: "kraichnan"
+  salinity: "measured"
+  mixing: true
+  fom_max: null
+
+stratification:
+  enable: true
+  salinity: "measured"
+  window: 2.0
+
+ctd:
+  enable: true
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+bottom:
+  enable: false
+top_trim:
+  enable: false
+
+binning:
+  method: "depth"
+  width: 1.0
+
+qc:
+  enable: true
+  drop_action: "nan"
+
+netcdf:
+  title: "MicroRider SN 156 turbulence on Slocum unit211, 20220224_unit211"
+  summary: >
+    Turbulent kinetic energy dissipation (epsilon) and thermal variance
+    dissipation (chi) from Rockland MicroRider MR1000-LP SN 156 on Slocum glider
+    unit211 west of Okinawa near 25.7 N 127.0 E, February 2022 (T. Tanaka's deployments). Through-water
+    speed from a Merckelbach flight model with default lift and induced-drag
+    coefficients, calibrated against the depth rate; FP07 thermistors calibrated
+    in situ against the glider CTD; times on the MicroRider clock. The raw .P
+    files were re-framed first (reframe_p.py).
+  institution: "Oregon State University"
+  platform: "Slocum glider unit211"
+  instrument: "Rockland MicroRider MR1000-LP SN 156"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"
+  geospatial_vertical_positive: "down"
+  Conventions: "CF-1.13, ACDD-1.3"
+
+parallel:
+  jobs: 2

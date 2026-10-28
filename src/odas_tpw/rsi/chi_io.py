@@ -17,7 +17,7 @@ import functools
 import logging
 import re
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,6 +26,8 @@ import numpy as np
 import numpy.typing as npt
 import xarray as xr
 
+from odas_tpw._version_info import stamp_provenance
+from odas_tpw.rsi.channels import _is_infinity, config_number
 from odas_tpw.rsi.dissipation import DOF_NUTTALL
 
 if TYPE_CHECKING:
@@ -110,6 +112,10 @@ def _compute_chi(
     direction: str = "auto",
     W_min: float | None = None,
     fp07_model: str = "single_pole",
+    bbl_diss_length: int | None = None,
+    bbl_overlap: int | None = None,
+    bbl_extent: int | None = None,
+    anchor: str = "top",
     goodman: bool = True,
     f_AA: float = 98.0,
     fit_method: str = "iterative",
@@ -120,6 +126,7 @@ def _compute_chi(
     vehicle: str | None = None,
     mask_bad_buffers: bool = True,
     fp07_tau_scale: Mapping[str, float] | None = None,
+    fp07_response: Sequence[Any] | None = None,
     _pre_loaded: dict[str, Any] | None = None,
 ) -> list[xr.Dataset]:
     """Compute chi from temperature gradient spectra (internal, no deprecation warning).
@@ -147,6 +154,19 @@ def _compute_chi(
     keys raise rather than being ignored -- a typo that silently left a probe
     uncorrected would bias chi by the square of the response error with no
     visible symptom. ``None`` (default) leaves every probe on the tau model.
+
+    ``fp07_response`` is a list of measured per-bead response corrections
+    (:class:`odas_tpw.chi.fp07_pair.ResponseCorrection` or paths to them, from
+    ``fp07-pair fit``). The one matching this file's channels, bead serials
+    and start time equalizes each probe's spectra onto the tau model's
+    response (geometric-mean anchor: the pair's average stays the tau model).
+    No match is an ERROR, never a silent uncorrected product (a refused
+    segment's span is covered by a not-applied record instead); a file whose
+    own mid-band ratio disagrees with its correction by more than
+    ``fp07_pair.GUARD_MAX`` is computed WITHOUT it and says so in its
+    attributes. Mutually exclusive with ``fp07_tau_scale``:
+    the correction is measured relative to the pair, so stacking it on a
+    tau scale would correct the relative part twice.
 
     ``mask_bad_buffers`` (default True) rejects a chi estimate whose window
     carries an RDL bad-buffer gap (TN-051 s3.2) too long to interpolate on a
@@ -223,6 +243,12 @@ def _compute_chi(
     if n_therm == 0:
         raise ValueError("No thermistor gradient channels found")
 
+    pair_corr = None
+    if fp07_response:
+        pair_corr = _select_pair_correction(
+            fp07_response, fp07_tau_scale, data, source, therm_names
+        )
+
     fs_fast = data["fs_fast"]
     if vehicle is None:
         vehicle = data.get("vehicle", "")
@@ -269,11 +295,23 @@ def _compute_chi(
         HP_cut=0.25,
         fs_fast=fs_fast,
         goodman=goodman,
+        # "bottom" pins the deepest window's lower edge to the end of the
+        # section so the discarded remainder lands at the TOP, not in the
+        # boundary layer. Without it a top-anchored 2.0 s window leaves chi's
+        # deepest center ~1.2 m above the bed and the BBL has no chi at all.
+        anchor=anchor,
+        # A shorter window near the bed, exactly as on the shear side: epsilon
+        # belongs to a window's CENTER, so halving the window halves the
+        # distance from the bed to the deepest estimate.
+        bbl_diss_length=bbl_diss_length,
+        bbl_overlap=bbl_overlap or 0,
+        bbl_extent=bbl_extent,
     )
 
     grad_func, _ = _spectrum_func(spectrum_model)
 
     results: list[xr.Dataset] = []
+    sections: list[tuple[Any, Any]] = []  # (l2_chi, l3_chi) per profile with spectra
     for s_slow, e_slow in profiles_slow:
         s_fast = s_slow * ratio
         e_fast = min((e_slow + 1) * ratio, len(t_fast))
@@ -312,7 +350,36 @@ def _compute_chi(
 
         if l3_chi.n_spectra == 0:
             continue
+        sections.append((l2_chi, l3_chi))
 
+    # A measured per-bead correction is checked against the WHOLE file's own
+    # ratio before it is applied (a probe swap or drift since the correction
+    # was fitted shows up here), then applied to every section.
+    pair_attrs: dict[str, Any] = {}
+    pair_vars: dict[str, Any] = {}
+    if pair_corr is not None:
+        from odas_tpw.chi import fp07_pair
+
+        fname = Path(str(data["metadata"].get("source", ""))).name
+        if not pair_corr.applies:
+            # A refused segment's record: matched on purpose, applied never.
+            ok, delta, reason = False, float("nan"), f"refused at fit: {pair_corr.reason}"
+            logger.info("%s: fp07_response not applied (%s)", fname, reason)
+        else:
+            lr, x = fp07_pair.file_log_ratios([sec[1] for sec in sections], pair_corr,
+                                              therm_names)
+            ok, delta = fp07_pair.guard(pair_corr, lr, x) if lr.size else (True, float("nan"))
+            reason = "" if ok else (
+                f"guard: the file's mid-band ln ratio differs from its correction by "
+                f"{delta:+.2f} (limit {fp07_pair.GUARD_MAX:.2f}) -- a swapped or drifted pair")
+            if ok:
+                for _l2c, l3c in sections:
+                    fp07_pair.apply_to_l3(l3c, pair_corr, therm_names)
+            else:
+                logger.warning("%s: fp07_response NOT applied: %s", fname, reason)
+        pair_attrs, pair_vars = _pair_provenance(pair_corr, ok, delta, therm_names, reason)
+
+    for l2_chi, l3_chi in sections:
         # L4_chi: chi estimation
         if epsilon_ds is not None:
             l4_diss = _epsilon_ds_to_l4data(epsilon_ds)
@@ -370,7 +437,12 @@ def _compute_chi(
                 if scale != 1.0:
                     ds.attrs[f"fp07_tau_scale_{name}"] = float(scale)
             ds.attrs["fp07_tau_model"] = default_tau_model(fp07_model)
-        ds.attrs["history"] = f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
+        if pair_attrs:
+            ds.attrs.update(pair_attrs)
+            ds.attrs["fp07_tau_model"] = default_tau_model(fp07_model)
+            for vname, (dims, values, vattrs) in pair_vars.items():
+                ds[vname] = (dims, values, vattrs)
+        stamp_provenance(ds.attrs, "chi")
         start_time = data["metadata"].get("start_time", "")
         t_units = f"seconds since {start_time}" if start_time else "seconds"
         ds.coords["t"].attrs.update(
@@ -427,6 +499,10 @@ def get_chi(
     speed: float | None = None,
     direction: str = "down",
     fp07_model: str = "single_pole",
+    bbl_diss_length: int | None = None,
+    bbl_overlap: int | None = None,
+    bbl_extent: int | None = None,
+    anchor: str = "top",
     goodman: bool = True,
     f_AA: float = 98.0,
     fit_method: str = "iterative",
@@ -509,6 +585,10 @@ def get_chi(
         direction=direction,
         fp07_model=fp07_model,
         goodman=goodman,
+        anchor=anchor,
+        bbl_diss_length=bbl_diss_length,
+        bbl_overlap=bbl_overlap,
+        bbl_extent=bbl_extent,
         f_AA=f_AA,
         fit_method=fit_method,
         spectrum_model=spectrum_model,
@@ -1013,12 +1093,21 @@ def _extract_therm_cal(ch_cfg: dict[str, Any]) -> dict[str, float]:
     Config keys are lowercase (parse_config lowercases all keys); 'g' and
     't_0' are renamed to the 'gain'/'T_0' parameter names expected by
     noise_thermchannel.
+
+    Values are read by :func:`~odas_tpw.rsi.channels.config_number`, the
+    converters' own parser, so the noise model and ``convert_therm`` cannot
+    disagree about an arithmetic coefficient (``t_0 = 273.15+16``).  The
+    linear term follows ``convert_therm``'s precedence (legacy ``beta`` before
+    ``beta_1``), and ``beta_2 = Inf`` is no quadratic term, as there.
     """
     cal = {}
-    for key in ("e_b", "b", "g", "beta_1", "beta_2", "adc_fs", "adc_bits", "t_0"):
+    name = str(ch_cfg.get("name", "?"))
+    beta_key = "beta" if ch_cfg.get("beta") not in (None, "") else "beta_1"
+    for key in ("e_b", "b", "g", beta_key, "beta_2", "adc_fs", "adc_bits", "t_0"):
         val = ch_cfg.get(key)
-        if val is not None:
-            cal[key] = float(val)
+        if val in (None, "") or (key == "beta_2" and _is_infinity(val)):
+            continue
+        cal["beta_1" if key == "beta" else key] = config_number(val, key=key, channel=name)
     # Map config keys to noise_thermchannel parameter names
     if "g" in cal:
         cal["gain"] = cal.pop("g")
@@ -1042,7 +1131,9 @@ def _therm_gradient_config(config: dict[str, Any], name: str) -> tuple[float, di
         (ch for ch in config["channels"] if ch.get("name") == name),
         {},
     )
-    diff_gain = float(ch_cfg.get("diff_gain", _DEFAULT_DIFF_GAIN))
+    diff_gain = config_number(
+        ch_cfg.get("diff_gain"), _DEFAULT_DIFF_GAIN, key="diff_gain", channel=name
+    )
     m = re.match(r"^(\w+)_d\1$", name)
     base_name = m.group(1) if m else name
     base_cfg: dict = next(
@@ -1050,6 +1141,108 @@ def _therm_gradient_config(config: dict[str, Any], name: str) -> tuple[float, di
         {},
     )
     return diff_gain, _extract_therm_cal(base_cfg)
+
+
+def _pair_identity(source: Any, therm_names: list[str]) -> tuple[str, list[str]]:
+    """(instrument, bead serials) of this file, by fp07_pair's one definition.
+
+    Read from the .p header (no data records) or the NetCDF's
+    configuration_string. Raises when it cannot be read: with fp07_response
+    configured, an unidentified file must not match a correction by time alone.
+    """
+    from odas_tpw.chi.fp07_pair import config_from_source, pair_identity
+    from odas_tpw.rsi.p_file import PFile
+
+    if isinstance(source, PFile):
+        return pair_identity(source.config, therm_names)
+    return pair_identity(config_from_source(source), therm_names)
+
+
+def _select_pair_correction(
+    fp07_response: Sequence[Any],
+    fp07_tau_scale: Mapping[str, float] | None,
+    data: dict[str, Any],
+    source: Any,
+    therm_names: list[str],
+) -> Any:
+    """The fp07_response correction for this file, or raise."""
+    from odas_tpw.chi import fp07_pair
+
+    if fp07_tau_scale:
+        raise ValueError(
+            "fp07_response and fp07_tau_scale are mutually exclusive: the correction "
+            "is measured relative to the bead pair, so applying it on top of a tau "
+            "scale corrects the relative part twice"
+        )
+    corrections = fp07_pair.load_corrections(list(fp07_response))
+    try:
+        instrument, serials = _pair_identity(source, therm_names)
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"fp07_response is configured but this file's instrument and beads cannot be "
+            f"identified: {exc}"
+        ) from exc
+    start = str(data["metadata"].get("start_time", ""))
+    if not start:
+        raise ValueError("fp07_response needs the file's start_time to match a correction")
+    t0 = datetime.fromisoformat(start.replace("Z", "+00:00")).timestamp()
+    corr, why = fp07_pair.select(corrections, instrument, therm_names, serials, t0)
+    if corr is None:
+        raise ValueError(
+            f"fp07_response is configured but no correction matches {instrument} channels "
+            f"{therm_names} (beads {serials}) at {start}: " + "; ".join(why)
+        )
+    return corr
+
+
+def _pair_provenance(
+    corr: Any, applied: bool, delta: float, therm_names: list[str], reason: str = ""
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Attributes and small variables recording the correction in the product.
+
+    The factor itself is stored (f_ref, ln_e per probe, W_ref, f_hi), so a chi
+    file reproduces its response without the correction file.
+    """
+    attrs: dict[str, Any] = {
+        "fp07_response_applied": int(applied),
+        "fp07_response_digest": corr.digest(),
+        "fp07_response_instrument": corr.instrument,
+        "fp07_response_serials": "/".join(corr.serials),
+        "fp07_response_channels": "/".join(corr.channels),
+        "fp07_response_span": f"{fp07_pair_iso(corr.t_start)}..{fp07_pair_iso(corr.t_end)}",
+        "fp07_response_W_ref": corr.W_ref,
+        "fp07_response_band": f"{corr.f_lo:.3f}-{corr.f_hi:.3f} Hz",
+        "fp07_response_anchor": corr.anchor,
+        "fp07_response_tau_model": corr.tau_model,
+        "fp07_response_guard_delta": float(delta),
+    }
+    if not applied:
+        attrs["fp07_response_reason"] = reason
+        return attrs, {}
+    ln_e = np.zeros((len(therm_names), corr.f_ref.size))
+    for k, ch in enumerate(corr.channels):
+        ln_e[therm_names.index(ch)] = corr.ln_e[k]
+    variables = {
+        "fp07_response_f": (
+            ("fp07_response_freq",),
+            np.asarray(corr.f_ref),
+            {"units": "Hz", "long_name": "FP07 response correction frequency at W_ref"},
+        ),
+        "fp07_response_ln_e": (
+            ("probe", "fp07_response_freq"),
+            ln_e,
+            {"long_name": "ln of each probe's response relative to the FP07 model",
+             "comment": "|H_i|^2 = |H_model|^2 * e_i; chi divided each probe's observed and "
+                        "noise spectra by e_i, with ln e_i weighted by the bin's S/N "
+                        "(fp07_pair.signal_weighted; spec_gradT/spec_noise here are raw). "
+                        "Applied at speed W by f -> f*tau(W)/tau(W_ref); held outside the band"},
+        ),
+    }
+    return attrs, variables
+
+
+def fp07_pair_iso(t: float) -> str:
+    return datetime.fromtimestamp(float(t), UTC).isoformat(timespec="seconds")
 
 
 def _load_therm_channels(

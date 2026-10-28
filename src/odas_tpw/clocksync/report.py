@@ -108,7 +108,7 @@ def apply_corrections(fits: list[FileFit], t: np.ndarray) -> np.ndarray:
     """Corrected epoch times for samples *t*, using each sample's own file fit.
 
     Samples outside every solved file come back NaN rather than being pushed
-    through the nearest neighbour's model: an unsolved file is unsolved, and
+    through the nearest neighbor's model: an unsolved file is unsolved, and
     extrapolating a clock across a jump it was never fitted over would invent
     exactly the error this package removes.
     """

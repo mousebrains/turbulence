@@ -1,7 +1,7 @@
 # Aug-2026, Claude and Pat Welch, pat@mousebrains.com
 """Cross-file checks --- the ones a per-file fit cannot make about itself.
 
-A per-file solve is blind to its neighbours, and that is where the remaining
+A per-file solve is blind to its neighbors, and that is where the remaining
 failure mode lives: a cycle slip, or a lag locked onto the wrong side lobe,
 produces a perfectly self-consistent file fit with a small sigma that happens
 to be one wave period away from the truth.  Nothing inside that file objects.
@@ -9,7 +9,7 @@ to be one wave period away from the truth.  Nothing inside that file objects.
 The check that catches it is physical: **a clock drifts, it does not teleport.**
 Between two consecutive files the offset may step (the MR clock is known to
 jump at file boundaries) but the steps should be small and the sequence should
-have structure.  A single file sitting a whole wave period off its neighbours
+have structure.  A single file sitting a whole wave period off its neighbors
 is an estimator artefact, not a clock.
 
 Everything here is robust --- median and MAD, never mean and sd.  A handful of
@@ -42,7 +42,7 @@ def check_continuity(
     window: int = 9,
     wave_period: float | None = None,
 ) -> list[FileFit]:
-    """Flag files whose offset departs from the local trend of their neighbours.
+    """Flag files whose offset departs from the local trend of their neighbors.
 
     ``window`` is the number of files in the running median (odd).  The flag is
     advisory --- it is written into ``fit.flags`` and never silently drops a

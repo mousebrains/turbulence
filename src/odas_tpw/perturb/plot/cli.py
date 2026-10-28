@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 
+from odas_tpw._version_info import add_version_argument
 from odas_tpw.perturb.plot import (
     eps_chi,
     figure,
@@ -89,6 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="perturb-plot",
         description="Aggregated-output plotting for perturb runs.",
     )
+    add_version_argument(parser)
     sub = parser.add_subparsers(dest="command", required=True, metavar="subcommand")
     for name, (descr, add_args, _run) in _SUBCOMMANDS.items():
         sp = sub.add_parser(name, help=descr, description=descr)

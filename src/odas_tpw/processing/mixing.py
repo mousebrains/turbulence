@@ -113,12 +113,87 @@ DEFAULT_STRAT_WINDOW = 2.0
 # capped -- an explicit max_dt is the caller's declared choice (#180 F05).
 MAX_PAIR_DT = 120.0
 
+# How a window's parcels are reordered before its gradients are taken (see
+# _stable_window). "density" is the adiabatic leveling the module did until
+# 2026-10; "temperature" orders by conservative temperature alone (the
+# sorted-scalar background of Winters & D'Asaro 1996, which is what chi works
+# against); "none" keeps the measured order.
+SORT_MODES = ("density", "temperature", "none")
+
+# The default is "temperature" (since 2026-10; "density" before). A temperature
+# sensor is a steadier observation than a salinity derived from a conductivity
+# cell, and the salinity's noise scrambles a density order. On stored VMP-250
+# products with unpumped JAC CTDs, the density-sorted chi-window dT/dz was
+# 0.70-0.97 of the temperature-sorted value across five campaigns (K_T 1.06-2x
+# high; 2-s windows worst) and N2 1.12-1.48x the unsorted value; on an unpumped
+# SBE4 the ratio was 0.28-0.46.
+DEFAULT_SORT = "temperature"
+
+# Sort-agreement diagnostic (sort_kappa). Whatever the product's sort, kappa is
+# the median over windows of dTdz(density order) / dTdz(temperature order), both
+# from the per-sample conservative temperature. A
+# temperature-monotonic order gives the steepest least-squares slope of any
+# ordering, so kappa < 1 means salinity is reordering the parcels: salinity noise
+# (unpumped or mismatched T/C sensors) or density-compensated structure. Below
+# KAPPA_WARN a density-sorted background gradient -- and K_T, which goes as its
+# inverse square -- is off by more than 1/0.8^2 = 1.56x; under the other sorts
+# dT/dz is spared, but N2 carries the same salinity. Windows whose temperature-sorted
+# |dT/dz| is under KAPPA_MIN_DTDZ [K/m] are too weakly stratified to vote, and
+# fewer than KAPPA_MIN_WINDOWS voting windows leave kappa undefined (NaN).
+# On stored products from the (unpumped) JAC CTDs of VMP-250s (2-dbar windows, 2026-10) the
+# per-campaign median kappa ran 0.67-0.88; on an unpumped SBE4 0.28-0.46.
+KAPPA_WARN = 0.8
+KAPPA_MIN_DTDZ = 1e-3
+KAPPA_MIN_WINDOWS = 5
+# A window votes only where its MEASURED-order gradient is resolved: the
+# temperature-sorted slope cannot be the gate, because sorting noise inflates it
+# (a 4e-4 K/m mixed-layer window sorts to ~5e-3), and mixed layers would vote.
+# A salinity failure can be confined to part of a cast, so kappa is also taken
+# per KAPPA_BAND_DBAR band (with at least KAPPA_BAND_MIN_WINDOWS voting windows).
+# The worst of several noisy band medians is biased low, so a band warns only
+# below KAPPA_BAND_WARN. Calibrated on stored products (2026-10, 30 casts each,
+# chi windows): warnings on 0-3 of 30 casts where stored K_T is 1.06-1.18x high
+# (ASTRAL, CASPER-West, ARCTERX-2023 Wake; 4-s windows) and 13-20 of 30 where
+# it is ~2x high (ARCTERX-2025 Interior, Taiwan17; 2-s windows); the band rule
+# alone at 0.8 warned on 11-29 of 30 everywhere.
+KAPPA_BAND_DBAR = 50.0
+KAPPA_BAND_MIN_WINDOWS = 10
+KAPPA_BAND_WARN = 0.6
+
+# Temperature-sort direction (see _trend_direction): a quadratic fit over a span
+# TSORT_TREND_SPAN times the window, centered on it. Where its gradient at the
+# window center is below TSORT_MIN_TREND [K/m] -- the K_T well-mixed floor --
+# or its extremum falls inside the window, the measured order is kept.
+TSORT_TREND_SPAN = 5.0
+TSORT_MIN_TREND = DEFAULT_DTDZ_MIN
+# ...and where the fitted temperature change across the window is under
+# TSORT_SNR times the scatter about the fit (MAD-based sigma over the span):
+# there a full sort would order noise and inflate the gradient (on ASTRAL's
+# weak-gradient windows, median |dT/dz| 4.4e-4 K/m unsorted, ~5e-3 sorted).
+TSORT_SNR = 2.0
+
 
 class StratificationResult(NamedTuple):
     """Per-window background stratification."""
 
     N2: np.ndarray  # buoyancy frequency squared [s^-2]
     dTdz: np.ndarray  # background conservative-temperature (θ) gradient vs depth [K/m]
+    # The per-sample CT gradient with the parcels in temperature order and in
+    # density order, for the sort_kappa diagnostic. Computed under every sort
+    # when the salinity is per-sample; NaN otherwise, and where the window is
+    # too weakly stratified to vote.
+    dTdz_T: np.ndarray
+    dTdz_rho: np.ndarray
+
+
+class ProfileStratification(NamedTuple):
+    """Per-target-pressure background stratification for one cast."""
+
+    target_P: np.ndarray  # window-center pressures [dbar]
+    N2: np.ndarray  # [s^-2]
+    dTdz: np.ndarray  # [K/m vs depth, positive down]
+    dTdz_T: np.ndarray  # temperature-order dT/dz for sort_kappa (NaN when not voting)
+    dTdz_rho: np.ndarray  # density-order dT/dz for sort_kappa (NaN when not voting)
 
 
 class MixingResult(NamedTuple):
@@ -256,7 +331,9 @@ def window_stratification(
         n2_val, _ = gsw.Nsquared(SA, CT, p_pair, lat)
         N2[j] = float(n2_val[0])
 
-    return StratificationResult(N2=N2, dTdz=dTdz)
+    return StratificationResult(
+        N2=N2, dTdz=dTdz, dTdz_T=np.full(n_win, np.nan), dTdz_rho=np.full(n_win, np.nan)
+    )
 
 
 def sorted_stratification(
@@ -270,34 +347,46 @@ def sorted_stratification(
     lon: float = 0.0,
     min_samples: int = 4,
     min_dp: float = DEFAULT_MIN_DP,
+    sort: str = DEFAULT_SORT,
 ) -> StratificationResult:
-    """Background N² and dT/dz per window from the adiabatically sorted profile.
+    """Background N² and dT/dz per window from a sorted profile.
 
     Like :func:`window_stratification`, but within each window the parcels are
-    Thorpe-sorted to a statically stable ordering (densest deepest) before
-    differencing. Sorting removes density inversions / overturns so the
-    gradients reflect the *background* stratification rather than the
-    instantaneous (possibly unstable) profile — the adiabatic-leveling idea
-    applied window-by-window:
+    reordered before differencing, so the gradients reflect the *background*
+    stratification rather than the instantaneous profile with its overturns:
 
-    - The window's (SA, CT, p) are formed via TEOS-10 and ranked by potential
-      density (``gsw.sigma0``); the i-th densest parcel is assigned to the
-      i-th deepest pressure, giving the stable reference profile.
+    - The window's (SA, CT, p) are formed via TEOS-10 and put in the order
+      *sort* picks (:data:`SORT_MODES`; see :func:`_stable_window`): by
+      conservative temperature alone (``"temperature"``, the default
+      :data:`DEFAULT_SORT`), by potential density (``"density"``, ``gsw.sigma0``,
+      the i-th densest parcel at the i-th deepest pressure: Thorpe-sorted to
+      static stability), or as measured (``"none"``).
     - ``N2`` is ``gsw.Nsquared`` between the shallow- and deep-half means of
-      that stable profile. After sorting it is ≥ 0 for ordinary stratification,
-      but can be slightly negative in strongly density-compensated water:
-      ``gsw.Nsquared`` averages SA and CT separately and re-evaluates the
-      nonlinear equation of state, which (via cabbeling) is not guaranteed
-      monotone under the potential-density (sigma0) sort. Such windows are
-      treated as effectively unstratified by the downstream Osborn scaling.
-    - ``dTdz`` is the least-squares slope of the stably-sorted
-      *conservative* temperature (θ) against depth (positive down); see
+      the reordered profile. Under the density sort it is ≥ 0 for ordinary
+      stratification, but can be slightly negative in strongly
+      density-compensated water: ``gsw.Nsquared`` averages SA and CT separately
+      and re-evaluates the nonlinear equation of state, which (via cabbeling) is
+      not guaranteed monotone under the sigma0 sort. Under the other sorts
+      nothing orders the density, so N² is negative wherever the reordered
+      half-means are unstable (salinity noise, density-compensated structure,
+      an overturn left in measured order). Such windows are treated as
+      effectively unstratified by the downstream Osborn scaling.
+    - ``dTdz`` is the least-squares slope of the reordered *conservative*
+      temperature (θ) against depth (positive down); see
       :func:`window_stratification` for why conservative, not in-situ.
 
-    Parameters and return value match :func:`window_stratification`; NaN is
-    returned for windows with fewer than *min_samples* valid samples or a
-    pressure span below *min_dp*.
+    A salinity whose noise is large against its gradient scrambles the density
+    order; ``"temperature"`` is immune to that in dT/dz, but its N² still
+    carries the salinity, and it also removes real density-compensated
+    inversions.
+
+    Parameters match :func:`window_stratification`, and NaN is returned for
+    windows with fewer than *min_samples* valid samples or a pressure span below
+    *min_dp*. With a per-sample salinity, the result's ``dTdz_rho`` and
+    ``dTdz_T`` carry the density- and temperature-order gradients for
+    :func:`sort_kappa`, whatever *sort* is.
     """
+    _check_sort(sort)
     win_times = np.asarray(win_times, dtype=np.float64)
     t = np.asarray(t, dtype=np.float64)
     P = np.asarray(P, dtype=np.float64)
@@ -313,8 +402,22 @@ def sorted_stratification(
 
     N2 = np.full(n_win, np.nan)
     dTdz = np.full(n_win, np.nan)
+    dTdz_T = np.full(n_win, np.nan)
+    dTdz_rho = np.full(n_win, np.nan)
 
     depth = -gsw.z_from_p(P, lat)
+    # Conservative temperature over the whole series, for the temperature-sort
+    # direction only (_trend_direction looks beyond the window). Each window's
+    # own SA/CT are still formed from its samples below, so the density path's
+    # arithmetic is unchanged.
+    # kappa needs a salinity that varies sample to sample: with a constant one
+    # the density and temperature orders coincide.
+    want_kappa = S_arr is not None
+    CT_all = None
+    if sort == "temperature" or want_kappa:
+        S_all = S_arr if S_arr is not None else np.full(len(P), S_const)
+        CT_all = gsw.CT_from_t(gsw.SA_from_SP(S_all, P, lon, lat), T, P)
+    ext_half = TSORT_TREND_SPAN * win_half_width
 
     for j, tau in enumerate(win_times):
         sel = np.abs(t - tau) <= win_half_width
@@ -335,45 +438,154 @@ def sorted_stratification(
         if np.ptp(Pw) < min_dp:
             continue
 
+        direction = 0
+        if CT_all is not None:
+            ext = np.abs(t - tau) <= ext_half
+            direction = _trend_direction(depth[ext], CT_all[ext], float(zw.min()), float(zw.max()))
+
         Sw_vals = Sw if Sw is not None else np.full(len(Pw), S_const)
         SA = gsw.SA_from_SP(Sw_vals, Pw, lon, lat)
         CT = gsw.CT_from_t(SA, Tw, Pw)
         sigma = gsw.sigma0(SA, CT)
-        N2[j], dTdz[j] = _stable_window(Pw, zw, Tw, SA, CT, sigma, lat, min_dp)
+        N2[j], dTdz[j], dTdz_rho[j], dTdz_T[j] = _stable_window(
+            Pw, zw, Tw, SA, CT, sigma, lat, min_dp, sort=sort, direction=direction,
+            want_kappa=want_kappa,
+        )
 
-    return StratificationResult(N2=N2, dTdz=dTdz)
+    return StratificationResult(N2=N2, dTdz=dTdz, dTdz_T=dTdz_T, dTdz_rho=dTdz_rho)
 
 
-def _stable_window(Pw, zw, Tw, SAw, CTw, sigmaw, lat, min_dp):
-    """N² and dT/dz for one window's samples, Thorpe-sorted to stability.
+def _check_sort(sort: str, allowed: tuple[str, ...] = SORT_MODES) -> None:
+    """Raise ValueError unless *sort* is one of *allowed*."""
+    if sort not in allowed:
+        raise ValueError(f"sort={sort!r}: expected one of {list(allowed)}")
 
-    Reconstructs the statically stable reference profile (the k-th shallowest
-    position holds the k-th least-dense parcel), then returns ``(N2, dTdz)``:
-    N² from ``gsw.Nsquared`` between the shallow/deep-half means of the stable
-    profile (NaN if the half-mean pressure separation is below ``min_dp/2``),
-    and dT/dz as the least-squares slope of the stably-sorted *conservative*
-    temperature (θ) vs depth. Inputs must be finite with length ≥ 2.
+
+def _slope(z: np.ndarray, x: np.ndarray) -> float:
+    """Least-squares slope of *x* against *z*."""
+    return float(np.polyfit(z, x, 1)[0])
+
+
+def _trend_direction(z_ext: np.ndarray, ct_ext: np.ndarray, z_lo: float, z_hi: float) -> int:
+    """Which way a temperature sort runs across the window ``[z_lo, z_hi]``.
+
+    +1 where conservative temperature rises with depth, -1 where it falls, and 0
+    -- keep the measured order -- where that is not resolved. Decided from a
+    quadratic fit over a span :data:`TSORT_TREND_SPAN` times the window
+    (*z_ext*, *ct_ext*), not from the window itself, for two reasons:
+
+    - an overturn larger than about half the window reverses the window's own
+      trend, and sorting along it would keep the overturn unstable;
+    - at a temperature extremum there is no monotonic background, and any sort
+      would invent a gradient of the window's temperature range. The vertex of
+      the quadratic marks the extremum: inside the window, the result is 0.
+
+    Also 0 where the fitted gradient at the window center is below
+    :data:`TSORT_MIN_TREND`, where the fitted change across the window is below
+    :data:`TSORT_SNR` times the scatter about the fit (a sort would order noise),
+    or where there are fewer than six finite samples. 0 is always safe: the
+    measured order is immune to salinity and invents nothing.
     """
+    ok = np.isfinite(z_ext) & np.isfinite(ct_ext)
+    if int(np.count_nonzero(ok)) < 6:
+        return 0
+    zc = 0.5 * (z_lo + z_hi)
+    zz = z_ext[ok] - zc
+    if np.ptp(zz) <= 0:
+        return 0
+    coef = np.polyfit(zz, ct_ext[ok], 2)
+    c2, c1 = coef[0], coef[1]
+    if c2 != 0.0:
+        vertex = -c1 / (2.0 * c2)
+        if z_lo - zc <= vertex <= z_hi - zc:
+            return 0
+    if not abs(c1) >= TSORT_MIN_TREND:
+        return 0
+    resid = ct_ext[ok] - np.polyval(coef, zz)
+    sigma = 1.4826 * float(np.median(np.abs(resid - np.median(resid))))
+    if abs(c1) * (z_hi - z_lo) < TSORT_SNR * sigma:
+        return 0
+    return 1 if c1 > 0 else -1
+
+
+def _temperature_order(ct_key: np.ndarray, direction: int, pos_order: np.ndarray) -> np.ndarray:
+    """Parcel order for a temperature sort of one window.
+
+    The k-th shallowest position gets the k-th coldest parcel for *direction*
+    +1, the k-th warmest for -1, and the measured order (*pos_order*) for 0
+    (see :func:`_trend_direction`).
+    """
+    if direction == 0:
+        return pos_order
+    ascending = np.argsort(ct_key, kind="stable")
+    return ascending if direction > 0 else ascending[::-1]
+
+
+def _stable_window(
+    Pw, zw, Tw, SAw, CTw, sigmaw, lat, min_dp, sort=DEFAULT_SORT, direction=0, want_kappa=True
+):
+    """N², dT/dz, and the two sort_kappa gradients for one window's samples.
+
+    Reconstructs a reference profile in which the k-th shallowest position holds
+    the k-th parcel of the chosen order:
+
+    - ``"density"``: least dense first (Thorpe-sorted to static stability);
+    - ``"temperature"``: by conservative temperature, the way *direction* says
+      (:func:`_temperature_order`; 0 keeps the measured order);
+    - ``"none"``: the measured order.
+
+    Returns ``(N2, dTdz, dTdz_rho, dTdz_T)``: N² from ``gsw.Nsquared`` between
+    the shallow/deep-half means of the reference profile's (SA, CT) (NaN if the
+    half-mean pressure separation is below ``min_dp/2``), dT/dz as the
+    least-squares slope of its *conservative* temperature (θ) vs depth, and the
+    two sort_kappa gradients.
+
+    The temperature order is keyed on CT formed with the window's median SA, so
+    salinity noise cannot reorder it (dCT/dSA is about -0.01 to -0.03 K per
+    g/kg at fixed in-situ temperature, so a 0.5 g/kg spike moves a parcel's CT
+    by 5-15 mK). Under ``"temperature"`` that same CT gives dT/dz. With
+    *want_kappa*, the last two values are the slopes of the per-sample CT in
+    density order and in temperature order, whatever *sort* is, so
+    :func:`sort_kappa` compares the two orders on the same values and gives the
+    same kappa under every sort. They are NaN otherwise, and also where the
+    measured-order slope is under :data:`KAPPA_MIN_DTDZ` (such a window does not
+    vote). Inputs must be finite with length ≥ 2.
+    """
+    _check_sort(sort)
     pos_order = np.argsort(Pw, kind="stable")
-    den_order = np.argsort(sigmaw, kind="stable")
     p_stable = Pw[pos_order]
     z_stable = zw[pos_order]
-    SA_stable = SAw[den_order]
-    CT_stable = CTw[den_order]
-
+    den_order = np.argsort(sigmaw, kind="stable")
+    ct_key = gsw.CT_from_t(np.full(len(Pw), np.median(SAw)), Tw, Pw)
+    t_order = _temperature_order(ct_key, direction, pos_order)
+    dTdz_rho = dTdz_T = np.nan
+    if want_kappa and abs(_slope(z_stable, CTw[pos_order])) >= KAPPA_MIN_DTDZ:
+        dTdz_rho = _slope(z_stable, CTw[den_order])
+        dTdz_T = _slope(z_stable, CTw[t_order])
     # Fit the conservative-temperature gradient (not in-situ T): the adiabatic
     # lapse rate is a reversible gradient that produces no thermal variance, so
     # the Osborn-Cox K_T/Gamma denominator must use dCT/dz (audit r1-1).
-    dTdz = float(np.polyfit(z_stable, CT_stable, 1)[0])
+    if sort == "density":
+        SA_stable = SAw[den_order]
+        CT_stable = CTw[den_order]
+        dTdz = _slope(z_stable, CT_stable)
+    elif sort == "temperature":
+        SA_stable = SAw[t_order]
+        CT_stable = CTw[t_order]
+        dTdz = _slope(z_stable, ct_key[t_order])
+    else:  # "none"
+        SA_stable = SAw[pos_order]
+        CT_stable = CTw[pos_order]
+        dTdz = _slope(z_stable, CT_stable)
 
     half = len(p_stable) // 2
     p_pair = np.array([np.mean(p_stable[:half]), np.mean(p_stable[half:])])
     if p_pair[1] - p_pair[0] < min_dp / 2:
-        return np.nan, dTdz
+        return np.nan, dTdz, dTdz_rho, dTdz_T
     sa_pair = np.array([np.mean(SA_stable[:half]), np.mean(SA_stable[half:])])
     ct_pair = np.array([np.mean(CT_stable[:half]), np.mean(CT_stable[half:])])
     n2_val, _ = gsw.Nsquared(sa_pair, ct_pair, p_pair, lat)
-    return float(n2_val[0]), dTdz
+    return float(n2_val[0]), dTdz, dTdz_rho, dTdz_T
 
 
 def profile_stratification(
@@ -385,15 +597,35 @@ def profile_stratification(
     window: float = DEFAULT_STRAT_WINDOW,
     min_samples: int = 4,
     min_dp: float = DEFAULT_MIN_DP,
+    sort: str = DEFAULT_SORT,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(target_P, N2, dTdz)`` of :func:`profile_stratification_full`."""
+    res = profile_stratification_full(
+        P, T, S, lat=lat, lon=lon, window=window, min_samples=min_samples, min_dp=min_dp,
+        sort=sort,
+    )
+    return res.target_P, res.N2, res.dTdz
+
+
+def profile_stratification_full(
+    P: npt.ArrayLike,
+    T: npt.ArrayLike,
+    S: float | npt.ArrayLike | None = None,
+    lat: float = 0.0,
+    lon: float = 0.0,
+    window: float = DEFAULT_STRAT_WINDOW,
+    min_samples: int = 4,
+    min_dp: float = DEFAULT_MIN_DP,
+    sort: str = DEFAULT_SORT,
+) -> ProfileStratification:
     """Sorted N²/dT/dz vs pressure for one cast, on a coarse depth grid.
 
     The background (profile- and CTD-product) analog of
     :func:`sorted_stratification`: instead of dissipation-window *times*, it
     evaluates at target pressures spaced by ``window/2`` over the cast's
     pressure range. Within each ``±window/2`` pressure window the samples are
-    Thorpe-sorted and differenced by the same :func:`_stable_window` method, so
-    the two paths report consistent stratification.
+    sorted and differenced by the same :func:`_stable_window` method, so the two
+    paths report consistent stratification.
 
     Evaluating on the coarse target grid (rather than every slow sample) keeps
     the cost to ~``range/window`` windows per cast; callers interpolate onto
@@ -412,14 +644,18 @@ def profile_stratification(
         Background vertical window [dbar].
     min_samples, min_dp : int, float
         A window with fewer samples or a smaller pressure span yields NaN.
+    sort : str
+        Parcel order, as in :func:`sorted_stratification`.
 
     Returns
     -------
-    (target_P, N2, dTdz) : tuple of ndarray
-        Target pressures [dbar] and the per-target N² [s^-2] and dT/dz
-        [K/m vs depth]. ``target_P`` is empty when the cast has too few
-        valid samples.
+    ProfileStratification
+        Target pressures [dbar], the per-target N² [s^-2] and dT/dz [K/m vs
+        depth], and the temperature- and density-order dT/dz for
+        :func:`sort_kappa` (NaN without a per-sample salinity). All empty when
+        the cast has too few valid samples.
     """
+    _check_sort(sort)
     # Explicit ndarray locals (not reassignments of the ArrayLike params) so
     # mypy keeps the concrete type through .min()/.max(), indexing, and the
     # scalar subtraction below.
@@ -440,7 +676,7 @@ def profile_stratification(
     S_arr = S_arr[good] if S_arr is not None else None
     empty = np.empty(0, dtype=np.float64)
     if len(P_arr) < min_samples or np.ptp(P_arr) < min_dp:
-        return empty, empty, empty
+        return ProfileStratification(empty, empty, empty, empty, empty)
 
     S_vals = S_arr if S_arr is not None else np.full(len(P_arr), S_const)
     SA = gsw.SA_from_SP(S_vals, P_arr, lon, lat)
@@ -448,15 +684,14 @@ def profile_stratification(
     sigma = gsw.sigma0(SA, CT)
     depth = -gsw.z_from_p(P_arr, lat)
 
+    target_P = _profile_targets(P_arr, window, min_dp)
     half_w = window / 2.0
-    step = max(half_w, min_dp)
-    p_lo, p_hi = float(P_arr.min()), float(P_arr.max())
-    # p_lo < p_hi (ptp >= min_dp guard above) and step > 0, so arange always
-    # yields >= 1 target.
-    target_P = np.arange(p_lo, p_hi + step, step)
-
+    ext_half = TSORT_TREND_SPAN * half_w
+    want_kappa = S_arr is not None  # see sorted_stratification
     N2 = np.full(len(target_P), np.nan)
     dTdz = np.full(len(target_P), np.nan)
+    dTdz_T = np.full(len(target_P), np.nan)
+    dTdz_rho = np.full(len(target_P), np.nan)
     for k, pt in enumerate(target_P):
         sel = np.abs(P_arr - pt) <= half_w
         if np.sum(sel) < min_samples:
@@ -464,11 +699,295 @@ def profile_stratification(
         Pw = P_arr[sel]
         if np.ptp(Pw) < min_dp:
             continue
-        N2[k], dTdz[k] = _stable_window(
-            Pw, depth[sel], T_arr[sel], SA[sel], CT[sel], sigma[sel], lat, min_dp
+        zw = depth[sel]
+        direction = 0
+        if sort == "temperature" or want_kappa:
+            ext = np.abs(P_arr - pt) <= ext_half
+            direction = _trend_direction(depth[ext], CT[ext], float(zw.min()), float(zw.max()))
+        N2[k], dTdz[k], dTdz_rho[k], dTdz_T[k] = _stable_window(
+            Pw, zw, T_arr[sel], SA[sel], CT[sel], sigma[sel], lat, min_dp,
+            sort=sort, direction=direction, want_kappa=want_kappa,
         )
 
-    return target_P, N2, dTdz
+    return ProfileStratification(target_P, N2, dTdz, dTdz_T, dTdz_rho)
+
+
+def _profile_targets(P_arr: np.ndarray, window: float, min_dp: float) -> np.ndarray:
+    """Window-center pressures for :func:`profile_stratification_full` and twins.
+
+    Spaced by ``max(window/2, min_dp)`` from the shallowest to past the deepest
+    finite sample. The caller has checked ``ptp(P_arr) >= min_dp``, so with a
+    positive step this always yields at least one target.
+    """
+    step = max(window / 2.0, min_dp)
+    p_lo, p_hi = float(P_arr.min()), float(P_arr.max())
+    return np.arange(p_lo, p_hi + step, step)
+
+
+def _window_salinity(S_win: np.ndarray | None, S_fallback: float) -> float:
+    """One practical salinity for a window: the median of its finite samples.
+
+    Falls back to *S_fallback* when the window holds none. Used to convert a
+    temperature that has no co-registered salinity (an FP07) to conservative
+    temperature, so salinity noise cannot reach the gradient (see
+    :func:`_stable_window` for the size of that effect).
+    """
+    if S_win is not None:
+        finite = S_win[np.isfinite(S_win)]
+        if finite.size:
+            return float(np.median(finite))
+    return S_fallback
+
+
+def _gradient_window(Pw, zw, Tw, S_scalar, lat, lon, sort, direction):
+    """Least-squares dCT/dz of one window, temperature-sorted or as measured."""
+    SA = gsw.SA_from_SP(np.full(len(Pw), S_scalar), Pw, lon, lat)
+    CT = gsw.CT_from_t(SA, Tw, Pw)
+    pos_order = np.argsort(Pw, kind="stable")
+    order = _temperature_order(CT, direction, pos_order) if sort == "temperature" else pos_order
+    return _slope(zw[pos_order], CT[order])
+
+
+def _salinity_inputs(S, n: int) -> tuple[np.ndarray | None, float]:
+    """``(per-sample array or None, fallback scalar)`` from a salinity argument."""
+    if S is None:
+        return None, 35.0
+    if np.ndim(S) == 0:
+        return None, float(S)
+    S_arr = np.asarray(S, dtype=np.float64)
+    if S_arr.shape != (n,):
+        raise ValueError(f"S has shape {S_arr.shape}; expected a scalar or shape ({n},)")
+    finite = S_arr[np.isfinite(S_arr)]
+    return S_arr, (float(np.median(finite)) if finite.size else 35.0)
+
+
+def _fallback_ct(P_arr, T_arr, S_fallback, lat, lon):
+    """CT of a whole temperature series at one salinity (trend direction only)."""
+    SA = gsw.SA_from_SP(np.full(len(P_arr), S_fallback), P_arr, lon, lat)
+    return gsw.CT_from_t(SA, T_arr, P_arr)
+
+
+def window_temperature_gradient(
+    win_times: npt.ArrayLike,
+    win_half_width: float,
+    t: npt.ArrayLike,
+    P: npt.ArrayLike,
+    T: npt.ArrayLike,
+    S: float | npt.ArrayLike | None = None,
+    lat: float = 0.0,
+    lon: float = 0.0,
+    sort: str = "temperature",
+    min_samples: int = 4,
+    min_dp: float = DEFAULT_MIN_DP,
+) -> np.ndarray:
+    """Background dCT/dz per window from a temperature alone (e.g. an FP07).
+
+    The temperature-only twin of :func:`sorted_stratification`, for a sensor with
+    no co-registered salinity. Conservative temperature is formed with one
+    salinity per window (:func:`_window_salinity`; *S* may be a scalar, a
+    per-sample array on *t*, or None for 35 PSU), so salinity noise cannot enter
+    the gradient. *sort* is ``"temperature"`` (direction from
+    :func:`_trend_direction`) or ``"none"``; a density order is not defined
+    without a co-registered salinity.
+
+    Returns dT/dz [K/m vs depth, positive down] per window; NaN where the window
+    has fewer than *min_samples* finite samples or a pressure span below
+    *min_dp*.
+    """
+    _check_sort(sort, ("temperature", "none"))
+    win_t = np.asarray(win_times, dtype=np.float64)
+    t_arr = np.asarray(t, dtype=np.float64)
+    P_arr = np.asarray(P, dtype=np.float64)
+    T_arr = np.asarray(T, dtype=np.float64)
+    S_arr, S_fallback = _salinity_inputs(S, len(P_arr))
+    depth = -gsw.z_from_p(P_arr, lat)
+    finite = np.isfinite(P_arr) & np.isfinite(T_arr)
+    CT_all = _fallback_ct(P_arr, T_arr, S_fallback, lat, lon) if sort == "temperature" else None
+    ext_half = TSORT_TREND_SPAN * win_half_width
+    dTdz = np.full(len(win_t), np.nan)
+    for j, tau in enumerate(win_t):
+        sel = (np.abs(t_arr - tau) <= win_half_width) & finite
+        if np.sum(sel) < min_samples or np.ptp(P_arr[sel]) < min_dp:
+            continue
+        zw = depth[sel]
+        direction = 0
+        if CT_all is not None:
+            ext = (np.abs(t_arr - tau) <= ext_half) & finite
+            direction = _trend_direction(depth[ext], CT_all[ext], float(zw.min()), float(zw.max()))
+        S_w = _window_salinity(S_arr[sel] if S_arr is not None else None, S_fallback)
+        dTdz[j] = _gradient_window(P_arr[sel], zw, T_arr[sel], S_w, lat, lon, sort, direction)
+    return dTdz
+
+
+def profile_temperature_gradient(
+    P: npt.ArrayLike,
+    T: npt.ArrayLike,
+    S: float | npt.ArrayLike | None = None,
+    lat: float = 0.0,
+    lon: float = 0.0,
+    window: float = DEFAULT_STRAT_WINDOW,
+    sort: str = "temperature",
+    min_samples: int = 4,
+    min_dp: float = DEFAULT_MIN_DP,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(target_P, dTdz)`` for one cast from a temperature alone (e.g. an FP07).
+
+    The temperature-only twin of :func:`profile_stratification_full`, with the
+    salinity and *sort* handling of :func:`window_temperature_gradient`. The
+    target pressures follow the same rule as the N² path but from this
+    temperature's own finite samples, so the two grids can differ; callers
+    interpolate each onto their own grid.
+    """
+    _check_sort(sort, ("temperature", "none"))
+    P_arr = np.asarray(P, dtype=np.float64)
+    T_arr = np.asarray(T, dtype=np.float64)
+    S_arr, S_fallback = _salinity_inputs(S, len(P_arr))
+    good = np.isfinite(P_arr) & np.isfinite(T_arr)
+    P_arr, T_arr = P_arr[good], T_arr[good]
+    S_arr = S_arr[good] if S_arr is not None else None
+    empty = np.empty(0, dtype=np.float64)
+    if len(P_arr) < min_samples or np.ptp(P_arr) < min_dp:
+        return empty, empty
+    depth = -gsw.z_from_p(P_arr, lat)
+    CT_all = _fallback_ct(P_arr, T_arr, S_fallback, lat, lon) if sort == "temperature" else None
+    target_P = _profile_targets(P_arr, window, min_dp)
+    half_w = window / 2.0
+    ext_half = TSORT_TREND_SPAN * half_w
+    dTdz = np.full(len(target_P), np.nan)
+    for k, pt in enumerate(target_P):
+        sel = np.abs(P_arr - pt) <= half_w
+        if np.sum(sel) < min_samples or np.ptp(P_arr[sel]) < min_dp:
+            continue
+        zw = depth[sel]
+        direction = 0
+        if CT_all is not None:
+            ext = np.abs(P_arr - pt) <= ext_half
+            direction = _trend_direction(depth[ext], CT_all[ext], float(zw.min()), float(zw.max()))
+        S_w = _window_salinity(S_arr[sel] if S_arr is not None else None, S_fallback)
+        dTdz[k] = _gradient_window(P_arr[sel], zw, T_arr[sel], S_w, lat, lon, sort, direction)
+    return target_P, dTdz
+
+
+class KappaSummary(NamedTuple):
+    """:func:`sort_kappa` over a whole cast and in its worst depth band."""
+
+    overall: float  # NaN when undefined
+    worst: float  # lowest band kappa (= overall when no band qualifies)
+    worst_P: float  # center pressure of that band [dbar]; NaN when none
+
+
+def sort_kappa(
+    dTdz_rho: npt.ArrayLike,
+    dTdz_T: npt.ArrayLike,
+    min_abs: float = KAPPA_MIN_DTDZ,
+    min_windows: int = KAPPA_MIN_WINDOWS,
+) -> float:
+    """Median of density-order over temperature-order dT/dz (see KAPPA_WARN).
+
+    Takes a stratification result's ``dTdz_rho`` and ``dTdz_T``, over windows
+    where both are finite and ``|dTdz_T| >= min_abs``; the stratification
+    functions already leave them NaN where the measured-order gradient is under
+    :data:`KAPPA_MIN_DTDZ`, which is the gate that keeps mixed layers from
+    voting. NaN when fewer than *min_windows* windows qualify. ~1 means salinity
+    leaves the temperature order alone; well below 1 means it scrambles it.
+    """
+    d = np.asarray(dTdz_rho, dtype=np.float64)
+    d_T = np.asarray(dTdz_T, dtype=np.float64)
+    ok = np.isfinite(d) & np.isfinite(d_T) & (np.abs(d_T) >= min_abs)
+    if int(np.count_nonzero(ok)) < min_windows:
+        return float("nan")
+    return float(np.median(d[ok] / d_T[ok]))
+
+
+def kappa_summary(
+    dTdz_rho: npt.ArrayLike,
+    dTdz_T: npt.ArrayLike,
+    P_win: npt.ArrayLike,
+    band: float = KAPPA_BAND_DBAR,
+    band_min_windows: int = KAPPA_BAND_MIN_WINDOWS,
+) -> KappaSummary:
+    """:func:`sort_kappa` for the whole set of windows and per depth band.
+
+    A salinity failure can be confined to part of a cast (on the motivating
+    VMP-5500 casts it was worst at 150-250 dbar of 1000), where a cast-wide
+    median would dilute it. Bands are *band* dbar wide from 0; a band votes
+    with at least *band_min_windows* qualifying windows.
+    """
+    d = np.asarray(dTdz_rho, dtype=np.float64)
+    d_T = np.asarray(dTdz_T, dtype=np.float64)
+    pw = np.asarray(P_win, dtype=np.float64)
+    overall = sort_kappa(d, d_T)
+    worst_band: tuple[float, float] | None = None
+    finite_p = np.flatnonzero(np.isfinite(pw))
+    band_idx = np.maximum(np.floor(pw[finite_p] / band).astype(int), 0)  # P < 0 -> top band
+    for b in np.unique(band_idx):
+        members = finite_p[band_idx == b]
+        k = sort_kappa(d[members], d_T[members], min_windows=band_min_windows)
+        if np.isfinite(k) and (worst_band is None or k < worst_band[0]):
+            worst_band = (k, (b + 0.5) * band)
+    worst, worst_P = worst_band if worst_band is not None else (overall, float("nan"))
+    return KappaSummary(overall, worst, worst_P)
+
+
+def kappa_is_low(summary: KappaSummary) -> bool:
+    """True when the cast's kappa is below KAPPA_WARN or a band's below KAPPA_BAND_WARN."""
+    over = np.isfinite(summary.overall) and summary.overall < KAPPA_WARN
+    band = (
+        np.isfinite(summary.worst_P)
+        and np.isfinite(summary.worst)
+        and summary.worst < KAPPA_BAND_WARN
+    )
+    return bool(over or band)
+
+
+def kappa_warning(summary: KappaSummary, label: str, sort: str = DEFAULT_SORT) -> str | None:
+    """Warning text when :func:`kappa_is_low`, else None.
+
+    *sort* is the order the product's dT/dz used (an FP07 gradient is
+    temperature-sorted even under ``stratification.sort: density``): kappa is the
+    same under every sort, but only a density-sorted dT/dz is the one it says is
+    biased.
+    """
+    _check_sort(sort)
+    if not kappa_is_low(summary):
+        return None
+    band_is_low = (
+        np.isfinite(summary.worst_P)
+        and summary.worst < KAPPA_BAND_WARN
+        and not (np.isfinite(summary.overall) and summary.overall <= summary.worst)
+    )
+    if band_is_low:
+        low = summary.worst
+        lo_p = summary.worst_P - KAPPA_BAND_DBAR / 2
+        where = (
+            f" in the {lo_p:g}-{lo_p + KAPPA_BAND_DBAR:g} dbar band "
+            f"({summary.overall:.2f} over the cast); a band warns below "
+            f"{KAPPA_BAND_WARN:g}"
+        )
+    else:
+        low = summary.overall
+        where = f" over the cast; warning below {KAPPA_WARN:g}"
+    cause = (
+        "Salinity is reordering the parcels: salinity noise (an unpumped or "
+        "T/C-mismatched conductivity cell) or density-compensated structure."
+    )
+    if sort == "density":
+        return (
+            f"{label}: the density-sorted dT/dz is {low:.2f} of the "
+            f"temperature-sorted value{where}. {cause} If it is noise, dT/dz "
+            "is biased low and N2 high, so K_T and Gamma are biased high. "
+            "stratification.sort: temperature (or dTdz_source: fp07) fixes dT/dz; N2 "
+            "still carries the salinity, so for N2 use a fixed salinity or one from a "
+            "T-S relation."
+        )
+    order = "temperature-sorted" if sort == "temperature" else "in measured order"
+    return (
+        f"{label}: a density-sorted dT/dz would be {low:.2f} of the "
+        f"temperature-sorted value{where}. {cause} dT/dz here is {order}, so the "
+        "salinity does not reorder it, but N2 carries the salinity, and Gamma and "
+        "K_rho with it. If it is noise, use a fixed salinity or one from a T-S "
+        "relation for N2."
+    )
 
 
 def mixing_coefficients(

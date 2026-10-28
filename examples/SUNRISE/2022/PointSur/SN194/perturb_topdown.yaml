@@ -1,0 +1,192 @@
+# SUNRISE 2022 - PointSur, VMP-250 SN 194, Gulf of Mexico shelf.
+#
+# 78 files. Probes: sh1 M2375 0.0952 / sh2 M289 0.0725, T1592/T2005
+#
+# Casts to 34 m, deeper than the 2021/2022 Pelican legs, so the residual window
+  # and search range scale up with them.
+#
+# == TOP-DOWN (anchor: top) ==================================================
+# Windows start at the top of each section and march DOWN, so the remainder
+# falls at the BOTTOM and is discarded. Products -> VMP_results/.
+# Its companion is perturb_bottomup.yaml, which anchors at the seabed instead;
+# the two trees are meant to be compared. BOTH share sections.yaml.
+#
+# TRIM. Set from CONTAMINATED EPSILON, not a motion proxy: generation _00 of
+# 2021 WaltonSmith SN194 was run with top_trim off and epsilon falls 3200x in
+# the single metre between 2 and 3 m, reaching interior by 6 m. The cause is
+# INSTRUMENT ATTITUDE - a tow-yo VMP is launched nearly parallel to the
+# surface, the reel brake is released, and until it is vertical the shear
+# probes see a MEAN CROSS-FLOW, so epsilon ~ shear^2/U^4 is meaningless there.
+# Incl_Y reaches 85 deg at a median 3.9 m but anywhere in 2.7-5.7 m, which is
+# why this is a per-cast voter and not a flat floor.
+#
+# residual_smooth_m = 3.0 is ~10% of this deployment's 34 m cast. The
+# perturb DEFAULT of 6.0 is tuned on ASTRAL's minutes-long casts and ERASES
+# the wash on a short one (peak ratio 6.1x at a 2 m window, 2.3x at 6 m).
+# Full detail: ../../../../VMP_README.md.
+
+files:
+  p_file_root: "<CONFIG_DIR>/../../SN194"
+  # EXACTLY three characters after the prefix, which drops "SR2S_083 2.P" and
+  # nothing else (77 of 78 files match). That file is a SECOND COPY of
+  # SR2S_083: the data records are byte-identical (same md5), and the only
+  # difference is the embedded config -- the " 2" file carries the FP07 in-situ
+  # patch (fitted Steinhart-Hart, 3112.76/3121.35) while the plain-named file
+  # carries the factory nominals (3143.55 on BOTH channels, which is the tell).
+  # Processing both counted 342 casts twice, 4.3% of this deployment.
+  #
+  # Dropping the PATCHED copy loses nothing, and that is measured rather than
+  # assumed: with fp07.calibrate: true perturb refits every file against JAC_T,
+  # and the two twins gave chi within 1.000112 (n=15008 windows, log10-MAD 5e-5)
+  # and BIT-IDENTICAL epsilon. The clean name is kept because a space in a
+  # filename already leaked into the products once, as SR2S_083_2_prof###.nc.
+  p_file_pattern: "SR2S_???.P"
+  output_root: "<CONFIG_DIR>/VMP_results"
+  trim: true
+  merge: false
+
+gps:
+  source: "netcdf"
+  file: "<CONFIG_DIR>/../../../GPS/gps.nc"
+  time_col: "time"
+  lat_col: "lat"
+  lon_col: "lon"
+  max_time_diff: 60
+
+hotel:
+  enable: false
+
+profiles:
+  P_min: 0.5
+  W_min: 0.3
+  direction: "down"
+  min_duration: 5.0
+  diagnostics: false
+
+bottom:
+  enable: true              # these casts CRASH INTO THE BOTTOM
+  depth_window: 4.0
+  depth_minimum: 10.0
+  speed_factor: 0.3
+  median_factor: 1.0
+  vibration_frequency: 16
+  vibration_factor: 4.0
+
+top_trim:
+  enable: true
+  dz: 0.5
+  min_depth: 1.0
+  max_depth: 25.0
+  quantile: 0.6
+  noise_factor: 1.5         # 2.0 under-trims here; the wash is weaker than the Revelle's
+  use_fall_rate_residual: true
+  residual_smooth_m: 3.0
+  use_inclinometer: true    # VMP-only: +90 deg = nose down is a VMP convention
+  incl_threshold_deg: 85.0
+  incl_margin_m: 2.0
+  combine: "max"
+
+fp07:
+  calibrate: true           # MANDATORY in 2021 (embedded beta_1 is garbage) and
+                            # harmless elsewhere; all 471 files carry a CT.
+  order: 1                  # NOT ASTRAL's 2: that was justified on a 9-15 K
+                            # per-cast span. Revisit with a HELD-OUT error split,
+                            # never a t-test.
+  max_lag_seconds: 10
+  reference: "JAC_T"
+  must_be_negative: true
+  min_corr: 0.5
+
+ct:
+  align: true
+  T_name: "JAC_T"
+  C_name: "JAC_C"
+
+speed:
+  method: "pressure"
+  tau: null
+  speed_cutout: 0.05
+
+epsilon:
+  anchor: "top"            # explicit; inert values are stripped from the
+                           # signature, so VMP_results keeps its hash
+  fft_sec: 0.5
+  diss_sec: 2.0
+  overlap_sec: null
+  goodman: true
+  f_AA: 98.0
+  f_limit: null
+  fit_order: 3
+  despike_thresh: 8
+  despike_smooth: 0.5
+  salinity: "measured"
+  epsilon_minimum: 1.0e-13
+  T_source: "JAC_T"
+  fom_max: null
+
+chi:
+  enable: true
+  fft_sec: 0.5
+  diss_sec: 2.0
+  overlap_sec: null
+  fp07_model: "single_pole"
+  goodman: true
+  f_AA: 98.0
+  use_epsilon: true
+  fit_method: "iterative"
+  spectrum_model: "kraichnan"
+  salinity: "measured"
+  mixing: true
+  chi_minimum: 1.0e-13
+  fom_max: null
+  # EXPECT WEAK CHI: SUNRISE is energetic (kB ~165 cpm) so K_max/kB medians run
+  # ~0.49 and the Batchelor rolloff is never resolved. Not a processing fault.
+
+ctd:
+  enable: true
+  bin_width: 0.5
+  T_name: "JAC_T"
+  C_name: "JAC_C"
+  variables: null
+  method: "mean"
+
+qc:
+  enable: true
+  drop_action: "nan"
+  epsilon_drop_from: []
+  chi_drop_from: []
+
+binning:
+  method: "depth"
+  width: 1.0
+  aggregation: "mean"
+
+stratification:
+  enable: true
+  window: 2.0
+  salinity: null
+
+netcdf:
+  title: "SUNRISE 2022 - VMP turbulence, PointSur (VMP-250 SN 194)"
+  summary: >
+    Turbulent kinetic energy dissipation (epsilon) and thermal variance
+    dissipation (chi) from a Rockland Scientific VMP-250 (SN 194) aboard
+    PointSur on the Gulf of Mexico shelf during SUNRISE 2022. Repeated
+    shallow tow-yo casts that terminate on the bottom. The first metres of
+    each cast are trimmed on instrument ATTITUDE (Incl_Y) as well as on
+    motion, because the VMP is launched near-horizontal and its shear probes
+    see a mean cross-flow until it comes vertical.
+  institution: "Oregon State University"
+  project: "SUNRISE"
+  program: "SUNRISE"
+  instrument: "Rockland Scientific VMP-250 (SN 194)"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"
+  creator_institution: "Oregon State University"
+  source: "Rockland Scientific ODAS .p files, processed with microstructure-tpw perturb"
+  geospatial_vertical_positive: "down"
+  standard_name_vocabulary: "CF Standard Name Table v89"
+  Conventions: "CF-1.13, ACDD-1.3"
+
+parallel:
+  jobs: 3                   # SeaChest is SMB; 8 has produced HDF read failures

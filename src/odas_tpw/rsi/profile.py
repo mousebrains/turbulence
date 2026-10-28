@@ -9,7 +9,6 @@ re-exports them for backward compatibility and adds RSI-specific I/O
 
 import logging
 import os
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
@@ -17,6 +16,8 @@ import numpy as np
 
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
+
+from odas_tpw._version_info import provenance_attrs
 
 # Re-export from scor160 — canonical implementations live there
 from odas_tpw.scor160.profile import get_profiles, smooth_fall_rate
@@ -81,6 +82,7 @@ def extract_profiles(
     output_stem: str | None = None,
     max_repair_gap_s: float = _MAX_REPAIR_GAP_S,
     extra_attrs: dict[str, Any] | None = None,
+    bottom_depths: list[float] | None = None,
     **profile_kwargs: Any,
 ) -> list[Path] | tuple[list[Path], list[dict[str, float]]]:
     """Extract profiles from a PFile or full-record NetCDF.
@@ -248,7 +250,11 @@ def extract_profiles(
         ds.profile_P_end = float(P_slow[e_slow])
         ds.profile_duration_s = float((e_slow - s_slow) / fs_slow)
         ds.profile_mean_speed = float(np.mean(np.abs(W[s_slow:s_slow_end])))
-        ds.history = f"Profile {pi} extracted on {datetime.now(UTC).isoformat()}"
+        # Which code wrote this profile, after the source's own history.
+        for key, val in provenance_attrs(
+            f"profile {pi} extracted", getattr(ds, "history", None)
+        ).items():
+            ds.setncattr(key, val)
 
         # Per-profile scalar coordinate variables (CF §9 profile featureType).
         # Keep these on the slow-rate timeline; gps must be in seconds since
@@ -296,6 +302,23 @@ def extract_profiles(
             lon_var.axis = "X"
             scalars["lat"] = lat_val
             scalars["lon"] = lon_val
+
+        # Seabed datum for this profile, from the bottom stage. This is the
+        # DETECTED seabed, NOT the trim point: the two differ by exactly
+        # `bottom.height`, and `altitude` binning means height above the
+        # seabed. NaN where no bottom was detected, so downstream can tell
+        # "no seabed here" from "seabed at 0 m".
+        if bottom_depths is not None and (pi - 1) < len(bottom_depths):
+            bd_val = float(bottom_depths[pi - 1])
+            bd_var = ds.createVariable("bottom_depth", "f8", ())
+            bd_var[...] = bd_val
+            bd_var.units = "dbar"
+            bd_var.long_name = "detected seabed depth for this profile"
+            bd_var.comment = (
+                "From perturb's bottom stage, BEFORE the bottom.height back-off. "
+                "Height above bottom = bottom_depth - depth."
+            )
+            scalars["bottom_depth"] = bd_val
 
         n_fast = e_fast - s_fast
         n_slow = s_slow_end - s_slow
@@ -432,6 +455,9 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         # so it survives apply_schema; binning carries it to the combo.
         if info.get("calibration"):
             attrs["calibration"] = info["calibration"]
+        # Background-stratification provenance (sort; dT/dz source) on N2/dTdz.
+        if info.get("stratification"):
+            attrs["stratification"] = info["stratification"]
         # Hotel merge gap limit [s] (perturb hotel.max_gap), so downstream
         # interp-fills of a merged channel can honour the same gate.
         if info.get("hotel_max_gap") is not None:

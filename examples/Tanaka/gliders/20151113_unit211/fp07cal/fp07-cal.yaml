@@ -1,0 +1,39 @@
+# Feasibility trial only: does fp07-cal fit SN 058's FP07s against unit211's
+# 4.5-s CTD where perturb's in-pipeline calibration refused? FIT ONLY: nothing patched.
+files:
+  p_file_root: "<CONFIG_DIR>/../../post-recovery/microrider"
+  p_file_pattern: "*.P"
+  output_dir: "<CONFIG_DIR>/out"
+  max_fit_files: 100
+reference:
+  file: "<CONFIG_DIR>/../flight_inputs.nc"
+  time_var: "m_present_time"      # flight clock; sci clock offset is absorbed by the lag
+  value_var: "sci_water_temp"
+  pressure_var: "sci_water_pressure"
+  pressure_scale: 1.0             # dinkum-hotel already applied bar -> dbar
+  valid_min: -5.0
+  valid_max: 45.0
+pairs:
+  max_gap: 30.0
+  kernel_width: null
+  kernel_tau: 0.7                 # NOT verified for this CTD (SBE41CP, unpumped?) -- trial
+  min_speed: 0.05
+  require_profile: true
+channels: ["T1", "T2"]
+profiles:
+  speed_var: null                 # no EM on MR SN 058
+  W_min: 0.03                     # dives are only 0.06-0.08 dbar/s
+  P_min: 0.5
+  min_duration: 60.0
+lag:
+  max_lag: 20.0
+  step: 0.25
+  detrend_s: 30.0
+fit:
+  order: "auto"
+  robust: true
+  geometry: true
+stability:
+  n_blocks: 3
+  block_days: null
+  min_profiles: 3

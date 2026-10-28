@@ -26,6 +26,10 @@ def _load_epsilon(diss_combo_path: str):
     with xr.open_dataset(diss_combo_path) as ds:
         eps = ds["epsilonMean"].transpose("bin", "profile").values
         depth = ds["bin"].values
+        # The vertical coordinate's OWN attrs: depth and altitude run in
+        # opposite directions, so the renderer must read which this is rather
+        # than assume depth (layout.vertical_axis).
+        bin_attrs = dict(ds["bin"].attrs)
         times = ds["stime"].values
         # qc_drop_epsilon is float64 with NaN where no samples fell;
         # non-zero values flag bins to drop when --apply-qc is on.
@@ -33,7 +37,7 @@ def _load_epsilon(diss_combo_path: str):
             qc = ds["qc_drop_epsilon"].transpose("bin", "profile").values
         else:
             qc = None
-    return times, depth, eps, qc
+    return times, depth, eps, qc, bin_attrs
 
 
 def _load_chi_from_combo(chi_combo_path: str, chi_attrs_dir: str | None):
@@ -393,7 +397,8 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
     chi_combo_dir = resolve.resolve_for_args(args, "chi_combo", optional=True)
     chi_dir = resolve.resolve_for_args(args, "chi", optional=True)
 
-    t_eps, depth, eps, eps_qc = _load_epsilon(diss_combo)
+    t_eps, depth, eps, eps_qc, bin_attrs = _load_epsilon(diss_combo)
+    _y_label, _y_invert = layout.vertical_axis(bin_attrs)
 
     if chi_combo_dir is not None:
         chi_combo_path = os.path.join(chi_combo_dir, "combo.nc")
@@ -509,7 +514,7 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
         else:
             ax.text(0.5, 0.5, f"no finite {short} data", ha="center", va="center",
                     transform=ax.transAxes)
-        ax.set_ylabel("Depth (m)")
+        ax.set_ylabel(_y_label)
     ax_g.set_xlabel("Cast number  (cluster start time, UTC)")
 
     eps_attrs = _per_profile_attrs(diss_attrs_dir)
@@ -548,7 +553,8 @@ def build_figures(args: argparse.Namespace) -> Iterator[tuple[str, Any]]:
         f"   —   {qc_phrase}"
     )
 
-    ax_e.invert_yaxis()
+    if _y_invert:
+        ax_e.invert_yaxis()
 
     # Lock x-limits to the cast layout so raw and QC plots are
     # directly comparable -- matplotlib otherwise auto-scales to the

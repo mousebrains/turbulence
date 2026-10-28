@@ -3,6 +3,8 @@
 
 import json
 
+import pytest
+
 from odas_tpw.perturb.config import (
     DEFAULTS,
     canonicalize,
@@ -110,19 +112,16 @@ class TestInstrumentsSection:
         )
 
     def test_unknown_inner_key_rejected(self):
-        import pytest
 
         with pytest.raises(ValueError, match="Unknown key"):
             validate_config({"instruments": {"SN465": {"oops": True}}})
 
     def test_non_dict_value_rejected(self):
-        import pytest
 
         with pytest.raises(ValueError, match="must be a mapping"):
             validate_config({"instruments": {"SN465": ["sh2"]}})
 
     def test_exclude_shear_probes_must_be_list_of_strings(self):
-        import pytest
 
         with pytest.raises(ValueError, match="list of strings"):
             validate_config({"instruments": {"SN465": {"exclude_shear_probes": "sh2"}}})
@@ -300,7 +299,19 @@ class TestWindowDurationResolution:
         old_eps = {
             k: v
             for k, v in C.DEFAULTS["epsilon"].items()
-            if k not in ("fft_sec", "diss_sec", "overlap_sec")
+            if k
+            not in (
+                "fft_sec",
+                "diss_sec",
+                "overlap_sec",
+                "bbl_diss_sec",
+                "bbl_overlap_sec",
+                "bbl_extent_sec",
+                "anchor",
+                "bbl_diss_length",
+                "bbl_overlap",
+                "bbl_extent",
+            )
         }
         old_eps["fft_length"] = 256
         old_mgr = ConfigManager(
@@ -328,7 +339,6 @@ class TestWindowDurationResolution:
         assert not {"fft_sec", "diss_sec", "overlap_sec"} & set(r)
 
     def test_nonpositive_durations_rejected(self):
-        import pytest
 
         from odas_tpw.perturb.config import merge_config, resolve_window_config
 
@@ -337,7 +347,6 @@ class TestWindowDurationResolution:
                 resolve_window_config(merge_config("epsilon", {"fft_sec": bad}), 512.0)
 
     def test_overlap_must_be_smaller_than_window(self):
-        import pytest
 
         from odas_tpw.perturb.config import merge_config, resolve_window_config
 
@@ -347,7 +356,6 @@ class TestWindowDurationResolution:
 
     def test_load_time_validation_of_durations(self, tmp_path):
         # A sign typo must fail at config LOAD, before any processing.
-        import pytest
 
         from odas_tpw.perturb.config import load_config
 
@@ -373,7 +381,6 @@ class TestWindowDurationResolution:
         assert r2["fft_length"] % 2 == 0
 
     def test_diss_shorter_than_fft_rejected(self):
-        import pytest
 
         from odas_tpw.perturb.config import merge_config, resolve_window_config
 
@@ -382,7 +389,6 @@ class TestWindowDurationResolution:
             resolve_window_config(merged, 512.0)
 
     def test_bad_sampling_rate_rejected(self):
-        import pytest
 
         from odas_tpw.perturb.config import merge_config, resolve_window_config
 
@@ -394,3 +400,119 @@ class TestWindowDurationResolution:
 
         r = resolve_window_config(merge_config("chi", None), 1024.0, section="chi")
         assert (r["fft_length"], r["diss_length"]) == (1024, 4096)
+
+
+class TestBottomUpLayoutKeys:
+    """`anchor` and `bbl_*` are accepted in BOTH [epsilon] and [chi].
+
+    They were epsilon-only because chi runs its own L3 path, and that was the
+    bug rather than the design: with chi left top-anchored while epsilon was
+    bottom-anchored, a 2.0 s window put chi's deepest center ~1.2 m above the
+    seabed, so a bottom-up product had a proper BBL epsilon and NO BBL chi
+    (SUNRISE 2021/Pelican/SN194: chi occupancy 0.0% at 0.62 m, 0.4% at 0.88 m,
+    against epsilon's 95.7%), and Gamma and K_T inherited the hole.
+
+    `bbl_*` was additionally blocked on L3ChiData.dof_spec being a SCALAR: a
+    shorter near-bed window averages fewer FFT segments, and that value gates
+    l4_chi's non-detection floor. dof_spec is now per window, so both sections
+    take the full option set, and both L3 paths lay their windows out with the
+    one scor160.l3.window_groups helper.
+    """
+
+    def test_chi_anchor_is_accepted(self):
+        from odas_tpw.perturb import config as C
+
+        C._mgr.validate_config({"chi": {"anchor": "bottom"}})
+        C._mgr.validate_config({"chi": {"anchor": "top"}})
+
+    def test_chi_bbl_keys_are_accepted(self):
+        from odas_tpw.perturb import config as C
+
+        C._mgr.validate_config(
+            {"chi": {"bbl_diss_sec": 1.0, "bbl_overlap_sec": 0.5,
+                     "bbl_extent_sec": 3.0}}
+        )
+
+    def test_both_sections_offer_the_same_layout_options(self):
+        """The invariant that was violated: whatever epsilon can do to its
+        window layout, chi must be able to do too."""
+        from odas_tpw.perturb.config import DEFAULTS
+
+        def layout_keys(sec):
+            return {k for k in DEFAULTS[sec] if k == "anchor" or k.startswith("bbl_")}
+
+        assert layout_keys("epsilon") == layout_keys("chi")
+
+    def test_epsilon_anchor_is_accepted(self):
+        from odas_tpw.perturb import config as C
+
+        C._mgr.validate_config({"epsilon": {"anchor": "bottom", "bbl_diss_sec": 1.0}})
+
+
+def test_binning_method_typo_is_rejected_at_load():
+    """An unrecognised binning.method must FAIL, not silently select time
+    binning. Every routing site falls through to time, so a typo produced a
+    complete, writable, wrong product with no error anywhere."""
+
+    from odas_tpw.perturb.config import _mgr as mgr
+    for bad in ("altitiude", "Altitude", "height", ""):
+        with pytest.raises(ValueError, match=r"binning\.method"):
+            mgr.validate_config({"binning": {"method": bad}})
+
+
+def test_binning_method_accepts_the_three_real_methods():
+    from odas_tpw.perturb.config import _mgr as mgr
+    for good in ("depth", "time", "altitude"):
+        mgr.validate_config({"binning": {"method": good}})
+
+
+class TestBottomUpLayoutValidation:
+    """The layout keys are checked when the config is LOADED.
+
+    Without these checks a bad anchor raised once per profile at run time, a
+    BBL window under two FFT segments passed window resolution only to fail
+    inside csd_matrix_batch (leaving an empty stage directory), and bbl_* under
+    anchor: top was silently ignored.
+    """
+
+    @pytest.mark.parametrize("section", ["epsilon", "chi"])
+    def test_unknown_anchor_is_refused(self, section):
+        with pytest.raises(ValueError, match=r"anchor: expected 'top' or 'bottom'"):
+            validate_config({section: {"anchor": "Bottom"}})
+
+    @pytest.mark.parametrize("section", ["epsilon", "chi"])
+    def test_bbl_window_under_two_ffts_is_refused(self, section):
+        with pytest.raises(ValueError, match="two FFT"):
+            validate_config(
+                {section: {"anchor": "bottom", "fft_sec": 0.5, "bbl_diss_sec": 0.75}}
+            )
+        # exactly two segments is the floor the SUNRISE recipes sit on
+        validate_config({section: {"anchor": "bottom", "fft_sec": 0.5, "bbl_diss_sec": 1.0}})
+
+    def test_bbl_window_under_two_ffts_is_refused_in_samples(self):
+        from odas_tpw.perturb.config import merge_config, resolve_window_config
+
+        cfg = merge_config(
+            "chi", {"anchor": "bottom", "fft_length": 256, "bbl_diss_length": 384}
+        )
+        with pytest.raises(ValueError, match="two FFT segments"):
+            resolve_window_config(cfg, 512.0, section="chi")
+
+    @pytest.mark.parametrize("section", ["epsilon", "chi"])
+    def test_bbl_under_a_top_anchor_warns(self, section):
+        with pytest.warns(UserWarning, match="only with anchor: bottom"):
+            validate_config({section: {"bbl_diss_sec": 1.0}})
+
+    @pytest.mark.parametrize("section", ["epsilon", "chi"])
+    def test_governing_bbl_sample_key_reaches_the_hash(self, section):
+        """bbl_overlap in samples beside a bbl_diss_sec window governs the
+        layout, so changing it must change the stage hash; it used to be
+        dropped whenever bbl_diss_length was None."""
+        from odas_tpw.perturb.config import merge_config
+
+        def h(**extra):
+            base = {"anchor": "bottom", "fft_sec": 0.5, "bbl_diss_sec": 1.0}
+            return compute_hash(section, merge_config(section, {**base, **extra}))
+
+        assert h(bbl_overlap=128) != h(bbl_overlap=384)
+        assert h() == h(bbl_overlap=None), "an inert key must not move the hash"

@@ -18,7 +18,7 @@ from typing import Any, BinaryIO
 
 import numpy as np
 
-from odas_tpw.rsi.channels import CONVERTERS, CalRecorder
+from odas_tpw.rsi.channels import CONVERTERS, CalRecorder, config_number
 from odas_tpw.rsi.deconvolve import deconvolve
 
 # ---------------------------------------------------------------------------
@@ -146,11 +146,12 @@ def extract_pfile_segment(
     ``n_records`` complete data records starting at the 0-based
     ``start_record`` index. The output is a parseable P-file segment with the
     original calibration metadata preserved. For ``start_record > 0`` the
-    record-0 header timestamp is advanced by ``start_record`` record
-    durations (config ``recsize``, default 1.0 s) so a reader's derived
-    absolute start time matches the copied data; all other header fields are
-    copied verbatim. The header record count is not authoritative because
-    local readers derive the count from file size.
+    record-0 header timestamp is advanced by ``start_record`` TRUE record
+    durations (the record's scans at the sampling clock, ``data_words /
+    f_clock``; see :func:`_record_duration_s`) so a reader's derived absolute
+    sample times match the copied data; all other header fields are copied
+    verbatim. The header record count is not authoritative because local
+    readers derive the count from file size.
     """
     source = Path(source)
     dest = Path(dest)
@@ -226,34 +227,46 @@ def extract_pfile_segment(
     return dest
 
 
+def _record_duration_s(header: dict) -> float | None:
+    """True duration of one data record from the header's sampling clock.
+
+    A record holds ``data_words = (record_size - header_size) / 2`` words,
+    i.e. ``data_words / n_cols`` scans of the address matrix, and
+    :class:`PFile` places scans at ``fs_fast = f_clock / n_cols``. So a record
+    spans ``data_words / f_clock`` seconds on the same time base the reader
+    uses for every sample. That is NOT the nominal config ``recsize``: a
+    VMP-250 at ``f_clock`` 5119.454 Hz with 5120-word records runs
+    1.0001067 s per record, so advancing by a nominal 1.0 s put a segment cut
+    at record 4215 0.45 s early. Returns None when the header carries no
+    usable clock or record geometry.
+    """
+    f_clock = float(header["clock_hz"]) + float(header["clock_frac"]) / 1000
+    data_words = (int(header["record_size"]) - int(header["header_size"])) // 2
+    if f_clock <= 0 or data_words <= 0:
+        return None
+    return data_words / f_clock
+
+
 def _advance_record0_timestamp(first_record: bytes, endian: str, start_record: int) -> bytes:
     """Advance record 0's header timestamp by ``start_record`` record durations.
 
     The record-0 header timestamp marks the END of record 0 (odas_p2mat.m:
-    ``t_start = filetime - recsize``), so a segment cut starting at data
-    record ``start_record`` must carry that timestamp forward by
-    ``start_record x recsize`` for a reader's derived absolute start time to
-    match the copied data. The record duration is derived the same way
-    :class:`PFile` does it: ``[root]`` ``recsize`` / ``recordDuration`` from
-    the embedded config, defaulting to 1.0 s. Datetime arithmetic carries
-    milliseconds across minute/hour/day boundaries; the timezone word is left
-    untouched (the offset does not move the clock between zones). When the
-    header date is not a valid calendar date (e.g. a startup file's year-0
-    clock), the record is returned unchanged with a warning — such files
-    carry no meaningful absolute time to preserve.
+    ``t_start = filetime - recsize``); :class:`PFile` subtracts the nominal
+    ``recsize`` from it in both the source and the segment, so that term
+    cancels. Data record ``start_record`` then begins ``start_record`` TRUE
+    record durations (:func:`_record_duration_s`) after data record 0 on the
+    reader's sample clock, and the segment's timestamp is carried forward by
+    exactly that, rounded to the header's millisecond resolution. Only when
+    the header has no usable clock does it fall back, with a warning, to the
+    nominal ``[root]`` ``recsize`` / ``recordDuration`` (default 1.0 s).
+    Datetime arithmetic carries milliseconds across minute/hour/day
+    boundaries; the timezone word is left untouched (the offset does not move
+    the clock between zones). When the header date is not a valid calendar
+    date (e.g. a startup file's year-0 clock), the record is returned
+    unchanged with a warning — such files carry no meaningful absolute time
+    to preserve.
     """
     header = _parse_header(first_record[:HEADER_BYTES], endian)
-    header_size = int(header["header_size"])
-    config_size = int(header["config_size"])
-    config_str = first_record[header_size : header_size + config_size].decode(
-        "ascii", errors="replace"
-    )
-    root_cfg = parse_config(config_str).get("root", {})
-    _recsize_raw = root_cfg.get("recsize", root_cfg.get("recordduration"))
-    try:
-        recsize = float(_recsize_raw) if _recsize_raw is not None else 1.0
-    except (TypeError, ValueError):
-        recsize = 1.0
 
     try:
         stamp = datetime(
@@ -272,7 +285,25 @@ def _advance_record0_timestamp(first_record: bytes, endian: str, start_record: i
         )
         return first_record
 
-    stamp += timedelta(milliseconds=round(start_record * recsize * 1000))
+    duration = _record_duration_s(header)
+    if duration is None:
+        header_size = int(header["header_size"])
+        config_size = int(header["config_size"])
+        config_str = first_record[header_size : header_size + config_size].decode(
+            "ascii", errors="replace"
+        )
+        root_cfg = parse_config(config_str).get("root", {})
+        _recsize_raw = root_cfg.get("recsize", root_cfg.get("recordduration"))
+        try:
+            duration = float(_recsize_raw) if _recsize_raw is not None else 1.0
+        except (TypeError, ValueError):
+            duration = 1.0
+        warnings.warn(
+            "header has no usable sampling clock or record geometry; advancing "
+            f"the segment's timestamp by the nominal recsize ({duration} s per record)"
+        )
+
+    stamp += timedelta(milliseconds=round(start_record * duration * 1000))
     out = bytearray(first_record)
     for name, value in (
         ("year", stamp.year),
@@ -292,6 +323,45 @@ def _advance_record0_timestamp(first_record: bytes, endian: str, start_record: i
 # ---------------------------------------------------------------------------
 
 
+# Stanzas that parse_config reserves for non-channel content.
+_NON_CHANNEL_SECTIONS = frozenset({"root", "matrix", "instrument_info", "cruise_info"})
+
+
+def is_channel_section(section: str, keys: dict[str, Any]) -> bool:
+    """Whether a config stanza describes a channel (setupstr.m parity).
+
+    Modern configs put every channel in a ``[channel]`` stanza. Older ones --
+    RSI's 2012 MicroRider template, e.g. MR1000-LP SN 046 (Taiwan 2013) -- give
+    each channel its own named stanza (``[pitch]``, ``[shear1]``,
+    ``[therm1]``, ...). ``setupstr.m`` never looks at the stanza name: it finds
+    channels by their ``id`` (or the ``id_even``/``id_odd`` pair,
+    setupstr.m:411-455) and converts those that carry ``name`` and ``type``
+    (setupstr.m:457-460; read_odas.m and odas_p2mat.m likewise). A named stanza
+    with all of those is therefore a channel too. ``[channel]`` stanzas are
+    always channels, as before; a missing name/type on one is reported where
+    the channel is converted.
+
+    The keys must be NON-EMPTY: setupstr.m's assignment pattern ``(.+?)``
+    never matches ``id =`` with no value, so ODAS does not see such a key.
+    The reserved stanzas (root, matrix, instrument_info, cruise_info) are
+    never channels -- stricter than ODAS, which excludes no stanza name, but no
+    real config puts id+name+type in one of them.
+
+    *section* is the normalized stanza name (lower-case, whitespace folded to
+    ``_``); *keys* maps its lower-cased keys to their value strings.
+    """
+    if section == "channel":
+        return True
+    if section in _NON_CHANNEL_SECTIONS:
+        return False
+
+    def present(key: str) -> bool:
+        return str(keys.get(key, "")).strip() != ""
+
+    has_id = present("id") or (present("id_even") and present("id_odd"))
+    return has_id and present("name") and present("type")
+
+
 def parse_config(config_str: str) -> dict[str, Any]:
     """Parse the INI-style configuration string embedded in the P file.
 
@@ -304,7 +374,12 @@ def parse_config(config_str: str) -> dict[str, Any]:
     -------
     dict with keys:
       'matrix': list of lists (the address matrix rows)
-      'channels': list of dicts, one per [channel] section
+      'channels': list of dicts, one per channel stanza in file order --
+          every [channel] section, plus any named section that
+          carries id + name + type (see :func:`is_channel_section`).
+          Read channels from HERE: a named channel stanza is also kept under
+          its own section name as raw text, but that copy does not receive
+          corrections such as the accel->piezo rewrite below.
       'instrument_info': dict
       'cruise_info': dict
       'root': dict
@@ -335,7 +410,11 @@ def parse_config(config_str: str) -> dict[str, Any]:
         cleaned.append(line.strip())
 
     current_section = "root"
-    current_channel: dict[str, str] | None = None
+    current_keys: dict[str, str] | None = None
+    # One (section, keys) entry per section OCCURRENCE, in file order, so the
+    # channel list can be decided once every key of a stanza is known (a named
+    # section's id may follow its name) and duplicate names stay separate.
+    occurrences: list[tuple[str, dict[str, str]]] = []
 
     for line in cleaned:
         if not line:
@@ -344,27 +423,27 @@ def parse_config(config_str: str) -> dict[str, Any]:
         m = re.match(r"^\[(.+)\]$", line)
         if m:
             current_section = "_".join(m.group(1).strip().lower().split())
-            if current_section == "channel":
-                current_channel = {}
-                result["channels"].append(current_channel)
+            if current_section == "matrix":
+                current_keys = None
             else:
-                current_channel = None
-                # Keep unknown sections (setupstr.m keeps every section)
-                # instead of dropping their keys. 'matrix' and 'channels'
-                # already hold lists — a section by either name must not
-                # clobber them, so only absent names get a fresh dict (the
-                # assignment branch below drops keys for non-dict targets).
-                if current_section not in result:
-                    result[current_section] = {}
+                current_keys = {}
+                occurrences.append((current_section, current_keys))
+            # Keep unknown sections (setupstr.m keeps every section) instead
+            # of dropping their keys. 'matrix' and 'channels' already hold
+            # lists — a section by either name must not clobber them, so only
+            # absent names get a fresh dict (the assignment branch below drops
+            # keys for non-dict targets).
+            if current_section != "channel" and current_section not in result:
+                result[current_section] = {}
             continue
 
         m = re.match(r"^(.+?)\s*=\s*(.*)$", line)
         if m:
             key = m.group(1).strip().lower()
             val = m.group(2).strip()
-            if current_section == "channel" and current_channel is not None:
-                current_channel[key] = val
-            elif current_section == "matrix":
+            if current_keys is not None:
+                current_keys[key] = val
+            if current_section == "matrix":
                 if key.startswith("row"):
                     # A corrupt/garbled config (e.g. partially overwritten
                     # record 0) otherwise raises a bare "invalid literal for
@@ -373,8 +452,16 @@ def parse_config(config_str: str) -> dict[str, Any]:
                         result["matrix"].append([int(x) for x in val.split()])
                     except ValueError as exc:
                         raise ValueError(f"malformed matrix row {key!r}: {val!r}") from exc
-            elif current_section in result and isinstance(result[current_section], dict):
+            elif (
+                current_section != "channel"
+                and current_section in result
+                and isinstance(result[current_section], dict)
+            ):
                 result[current_section][key] = val
+
+    result["channels"] = [
+        keys for section, keys in occurrences if is_channel_section(section, keys)
+    ]
 
     # setupstr.m:478-495 parity: configuration files made before type 'piezo'
     # existed declare piezo sensors as type=accel with coef0=0 and coef1=1
@@ -438,6 +525,84 @@ def _mask_runs(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     if mask[-1]:
         ends = np.concatenate((ends, [mask.size]))
     return starts, ends - starts
+
+
+# --- Record framing ---------------------------------------------------------
+# Every reader of a v6 file (this one, ODAS read_odas.m) cuts the data at a
+# fixed record size: a data record is a header_size-byte header followed by a
+# whole number of address-matrix cycles. A record holding the wrong number of
+# words breaks that for everything after it -- each later header is read as
+# data and vice versa, and the channels come out mis-assembled under three
+# warnings (bad-buffer flags on most records, record-number "gaps", a
+# non-integer record count). MicroRider SN 156 (2022, v6.0 headers) wrote 28
+# of 29 files that way: one record of 33, 67, 70, 93 or 98 cycles instead of
+# 64, in data records #4-#17 (#74 in a deck record). VMP SN 194's ARC1A046
+# (ARCTERX-2022, v6.0) is the same: record #13 of 33 cycles. ODAS does not
+# resynchronize either: its check_bad_buffers flags ~98% of such a file's
+# records and patch_odas then fails on the non-integer record count.
+#
+# Header words that are fixed for the whole file. A data record's header must
+# repeat record 0's value in every one of them, so a data block passes this
+# seven-word test only by coincidence. The header VERSION is deliberately not
+# one of them: ODAS patch_setupstr.m rewrites record 0 with version 0x0600 and
+# copies the data records verbatim, so a patched v6.1/v6.3 (or converted v1)
+# file legitimately differs there. Nor is the file number, which a merge of
+# several files changes from one segment to the next.
+FRAMING_SIGNATURE = (
+    "header_size",
+    "record_size",
+    "clock_hz",
+    "clock_frac",
+    "fast_cols",
+    "slow_cols",
+    "n_rows",
+)
+
+# Repair is refused when more than this fraction of the record slots would
+# have to be rebuilt: past it the file is mostly damage, not data.
+MAX_FRAMING_FILL_FRACTION = 0.5
+
+FRAMING_POLICIES = ("repair", "refuse")
+
+# Largest forward step (in records) across which a backward jump of the uint16
+# record counter is read as a wrap at 65536 rather than as a reset.
+MAX_WRAP_STEP = 1024
+
+
+def _signature_starts(words: np.ndarray, first_word: int, header: dict) -> np.ndarray:
+    """Word offsets >= *first_word* where a header carrying *header*'s
+    :data:`FRAMING_SIGNATURE` starts. *words* is the whole file as uint16 in
+    file byte order."""
+    n = words.size - HEADER_WORDS + 1
+    if n <= first_word:
+        return np.empty(0, dtype=np.int64)
+    hit = np.ones(n - first_word, dtype=bool)
+    for name in FRAMING_SIGNATURE:
+        idx = _H[name]
+        hit &= words[first_word + idx : n + idx] == header[name]
+    return np.flatnonzero(hit) + first_word
+
+
+def _merge_bad_entries(a: dict | None, b: dict) -> dict:
+    """Union of two confirmed bad-buffer entries for one channel (same
+    addresses and rate): spans merged where they overlap or touch."""
+    if a is None:
+        return b
+    spans = sorted([*a["spans"], *b["spans"]])
+    merged: list[list[int]] = []
+    for start, n in spans:
+        if merged and start <= merged[-1][0] + merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], start + n - merged[-1][0])
+        else:
+            merged.append([start, n])
+    lengths = [n for _, n in merged]
+    return {
+        **a,
+        "n_runs": len(merged),
+        "n_samples": int(sum(lengths)),
+        "longest_run": int(max(lengths)),
+        "spans": [(int(s), int(n)) for s, n in merged],
+    }
 
 
 def _validate_matrix(
@@ -592,13 +757,31 @@ class PFile:
         Provenance of the external setup file used for the v1 translation
         (None for v6+ sources).
     bad_buffer_report : dict
-        v6.1+ RDL bad-buffer findings (TN-051 section 3.2), empty for a clean
-        or pre-6.1 file. ``{'confirmed': {channel: {...}}, 'isolated':
-        {channel: n}}``; see :meth:`_check_bad_buffer_markers`. The affected
-        samples are reported, never modified — each confirmed entry's
+        v6.1+ RDL bad-buffer findings (TN-051 section 3.2) and record slots
+        rebuilt by a framing repair; empty for a clean file.
+        ``{'confirmed': {channel: {...}}, 'isolated': {channel: n}}``; see
+        :meth:`_check_bad_buffer_markers`. The affected samples are reported,
+        never modified — each confirmed entry's
         ``spans`` are ``(start, length)`` pairs into that channel's own
         extracted samples, which :mod:`odas_tpw.rsi.bad_buffer` turns into
-        per-consumer epsilon/chi masks.
+        per-consumer epsilon/chi masks. Record slots rebuilt by a framing
+        repair are reported here too, for every channel.
+    framing_report : dict
+        Empty for a correctly framed file. When records of the wrong length
+        broke the fixed-size framing and *framing* was ``"repair"``: the
+        irregular records found, the record slots rebuilt, their total
+        duration and any trailing records dropped; see
+        :meth:`_repair_framing`.
+
+    Parameters
+    ----------
+    framing : {"repair", "refuse"}
+        What to do with a mis-framed file, one in which a record of the wrong
+        length makes fixed-size reading mis-assemble everything after it.
+        ``"repair"`` (default) locates every record by its header, keeps each
+        intact one at its own time, rebuilds the damaged slots by
+        interpolation and reports them as bad buffers; it still raises when
+        the damage cannot be placed in time. ``"refuse"`` always raises.
     """
 
     def __init__(
@@ -607,7 +790,11 @@ class PFile:
         *,
         deconvolve: bool = True,
         setup_file: str | Path | None = None,
+        framing: str = "repair",
     ) -> None:
+        if framing not in FRAMING_POLICIES:
+            raise ValueError(f"framing must be one of {FRAMING_POLICIES}, not {framing!r}")
+        self._framing = framing
         self.filepath = Path(filepath)
         # deconvolve=False leaves the pre-emphasized channels (T1_dT1, P_dP, …)
         # and their bases (T1, P, …) as the raw counts read from the file,
@@ -632,6 +819,10 @@ class PFile:
         # Populated by _check_bad_buffer_markers during the v6 parse; set here
         # too so the attribute exists even on the paths that return early.
         self.bad_buffer_report: dict[str, Any] = {}
+        # Populated by _repair_framing (empty for a correctly framed file);
+        # _framing_hits marks, in raw_flat's shape, the samples it rebuilt.
+        self.framing_report: dict[str, Any] = {}
+        self._framing_hits: np.ndarray | None = None
         self._read()
 
     def _read(self):
@@ -794,14 +985,6 @@ class PFile:
         n_records = (file_size - first_record_size) // record_size
         if n_records < 1:
             raise ValueError(f"{self.filepath.name} contains no data records")
-        if (file_size - first_record_size) % record_size != 0:
-            # read_odas.m:184-187 warns in this case; a partial record
-            # usually means a truncated download or interrupted DAQ.
-            warnings.warn(
-                f"{self.filepath.name}: file size is not an integer number "
-                f"of records; trailing partial record ignored",
-                stacklevel=2,
-            )
 
         data_words = (record_size - header_size) // 2
         # Scan-geometry guard: data_words must be a positive multiple of
@@ -849,6 +1032,18 @@ class PFile:
         else:
             f.seek(first_record_size)
             records = np.fromfile(f, dtype=record_dtype, count=n_records)
+        if not self._framing_ok(records):
+            # Rebuilt slot by slot; replaces the warning below.
+            records = self._repair_framing(f, record_dtype, first_record_size, file_size)
+            n_records = records.shape[0]
+        elif (file_size - first_record_size) % record_size != 0:
+            # read_odas.m:184-187 warns in this case; a partial record
+            # usually means a truncated download or interrupted DAQ.
+            warnings.warn(
+                f"{self.filepath.name}: file size is not an integer number "
+                f"of records; trailing partial record ignored",
+                stacklevel=2,
+            )
         scans_per_record = data_words // self.n_cols
         total_scans = n_records * scans_per_record
         raw_flat = records["data"].reshape(total_scans, self.n_cols)
@@ -1037,6 +1232,9 @@ class PFile:
         # by combining the slow-rate channel X with its pre-emphasized
         # fast-rate counterpart X_dX to produce a high-resolution signal.
         # This matches ODAS odas_p2mat.m lines 516-570.
+        # X_dX channels converted with their base channel's stanza: the base
+        # conversion already warned about anything in it.
+        self._borrowed_stanzas: set[str] = set()
         if self._deconvolve:
             self._apply_deconvolution(ch_config)
 
@@ -1105,7 +1303,14 @@ class PFile:
                 self.channel_info[ch_name] = {"units": "counts", "type": ch_type, "cal": {}}
                 continue
 
-            phys, units = converter(self.channels_raw[ch_name], convert_info)
+            if ch_name in self._borrowed_stanzas:
+                # T1_dT1 re-reads T1's coefficients; T1's own conversion has
+                # already warned about an arithmetic one, under its own name.
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message=r".* is arithmetic; ")
+                    phys, units = converter(self.channels_raw[ch_name], convert_info)
+            else:
+                phys, units = converter(self.channels_raw[ch_name], convert_info)
             self.channels[ch_name] = phys
             self.channel_info[ch_name] = {
                 "units": units,
@@ -1123,6 +1328,243 @@ class PFile:
                     "/speed^2 fall-rate normalization applied downstream in the "
                     "epsilon/chi path (physical velocity shear, s-1, only after)"
                 )
+
+    def _framing_ok(self, records: np.ndarray) -> bool:
+        """True when every data record read at the fixed record size starts
+        with a header carrying record 0's :data:`FRAMING_SIGNATURE`.
+
+        A correctly framed file always passes (every Tanaka, SUNRISE, CASPER,
+        ARCTERX ... file checked does), so the fast path below is unchanged.
+        The trailing partial record, which the fixed-size read never reaches,
+        is not tested here and stays the ordinary warning.
+
+        A file whose records carry no header signature anywhere (headers
+        never written -- all zero) cannot be checked and passes, as it always
+        has. If none sits at the fixed stride but some exist elsewhere, the
+        file is mis-framed from its first record.
+        """
+        hdr = records["hdr"]
+        ok = np.ones(hdr.shape[0], dtype=bool)
+        for name in FRAMING_SIGNATURE:
+            ok &= hdr[:, _H[name]] == self.header[name]
+        if ok.all():
+            return True
+        if not ok.any():
+            words = np.frombuffer(records.tobytes(), dtype=records.dtype["hdr"].base)
+            if _signature_starts(words, 0, self.header).size == 0:
+                return True
+        # A damaged HEADER in a well-framed file is not mis-framing: the
+        # records either side still sit at the fixed stride and their numbers
+        # step by exactly two across it. Read it at the fixed size, as before.
+        bad = np.flatnonzero(~ok)
+        num = hdr[:, _H["record_number"]].astype(np.int64)
+        isolated = all(
+            (i == 0 or ok[i - 1])
+            and (i == ok.size - 1 or ok[i + 1])
+            and (i == 0 or i == ok.size - 1 or num[i + 1] - num[i - 1] == 2)
+            for i in bad
+        )
+        if isolated:
+            warnings.warn(
+                f"{self.filepath.name}: header of data record(s) "
+                f"{', '.join(str(int(i) + 1) for i in bad)} damaged; the records "
+                "around it are at the fixed size, so the file is read as framed",
+                stacklevel=3,
+            )
+            return True
+        if self._framing == "refuse":
+            raise ValueError(
+                f"{self.filepath.name}: mis-framed: {int((~ok).sum())} of "
+                f"{hdr.shape[0]} data records do not start with a record header "
+                "at the fixed record size, first at data record "
+                f"{int(np.flatnonzero(~ok)[0]) + 1}; a fixed-size read would "
+                "mis-assemble everything after it. Refused (framing='refuse'); "
+                "framing='repair' rebuilds the damaged record slots"
+            )
+        return False
+
+    def _repair_framing(
+        self, f: BinaryIO, record_dtype: np.dtype, first_record_size: int, file_size: int
+    ) -> np.ndarray:
+        """Rebuild a mis-framed file's data records, one slot per record.
+
+        Each record is found by its header (:data:`FRAMING_SIGNATURE`), not by
+        position. One whose next header follows at exactly the record size is
+        intact and goes, byte for byte, into the slot its record number gives,
+        counted from the first data record (slot 0, the convention every sample
+        time rests on). Slots
+        left empty -- an irregular record (too short, too long, junk words) or
+        a record whose header was lost -- are rebuilt by linear interpolation
+        of each address-matrix cell's raw counts between the neighbouring
+        intact records, and reported, for every channel, as bad-buffer spans
+        (:attr:`bad_buffer_report`), so the epsilon/chi masks of
+        :mod:`odas_tpw.rsi.bad_buffer` drop the windows they touch -- about
+        70 s of epsilon/chi per rebuilt record, because a P_dP span is
+        dilated forward by three deconvolution time constants. The
+        interpolation keeps the deconvolution filters free of a step; the
+        consumers that read :attr:`bad_buffer_report` (epsilon, chi) never use
+        it as data, but those that do not (``rsi-tpw nc``, fp07-cal,
+        mr-clocksync, perturb's speed, hotel and CTD steps) see the
+        interpolated counts across those slots.
+
+        This differs from ODAS on purpose. odas_p2mat's patch_odas /
+        fix_bad_buffers also interpolate whole bad records, but they find
+        them through the word-16 flag at the FIXED record size, so on a
+        mis-framed file they flag nearly every record (and patch_odas then
+        stops on the non-integer record count).
+
+        Raises ValueError -- refuses -- when the damage cannot be placed in
+        time: damage before the first data-record header, no intact record,
+        record numbers that do not increase (header word 2; a uint16 wrap,
+        a small forward step modulo 65536, is unwrapped), or more than
+        :data:`MAX_FRAMING_FILL_FRACTION` of the slots to rebuild. Records
+        after the last intact one (a trailing partial record) are dropped,
+        as the fixed-size read drops a partial record.
+        """
+        name = self.filepath.name
+        header_words = self.header["header_size"] // 2
+        record_words = self.header["record_size"] // 2
+        data_words = record_words - header_words
+        dtype = record_dtype["data"].base
+        udtype = record_dtype["hdr"].base
+        n_words = (file_size - first_record_size) // 2
+        if isinstance(f, io.BytesIO):
+            words = np.frombuffer(
+                f.getbuffer(), dtype=udtype, count=n_words, offset=first_record_size
+            )
+        else:
+            f.seek(first_record_size)
+            words = np.fromfile(f, dtype=udtype, count=n_words)
+
+        # Headers cannot overlap: a candidate inside an accepted header is a
+        # coincidence in its words, not a record.
+        starts: list[int] = []
+        for s in _signature_starts(words, 0, self.header):
+            if not starts or s >= starts[-1] + header_words:
+                starts.append(int(s))
+        if not starts:
+            raise ValueError(f"{name}: mis-framed, and no record header was found after record 0")
+        at = np.asarray(starts, dtype=np.int64)
+        length = np.diff(np.append(at, words.size))
+        intact = length == record_words
+        # The last record may be followed by a remnant too short to hold a
+        # header (a cut at the fixed size, or a truncated download): it is
+        # still whole, and only the remnant is the trailing partial record.
+        excess = length[-1] - record_words
+        if 0 < excess < header_words:
+            intact[-1] = True
+
+        if at[0] != 0:
+            raise ValueError(
+                f"{name}: mis-framed before its first data-record header, so "
+                "the records cannot be placed in time; refused"
+            )
+        # Record numbers are TRUSTED for placement; nothing else can place a
+        # record. The header times cannot arbitrate: the RDL stamps records
+        # when it writes them, in bursts (v6.1 VMP: 12-22 ms apart with 134 s
+        # jumps). A uint16 wrap is a SMALL forward step modulo 65536; any
+        # other backward step (a merge splice, a corrupt number) is refused.
+        numbers = words[at + _H["record_number"]].astype(np.int64)
+        steps = np.diff(numbers)
+        wrap = (steps < 0) & (steps + 65536 <= MAX_WRAP_STEP)
+        numbers[1:] += 65536 * np.cumsum(wrap)
+        if np.any(np.diff(numbers) <= 0):
+            raise ValueError(
+                f"{name}: mis-framed, and its record numbers (header word 2) "
+                "do not increase, so the intact records cannot be placed in "
+                "time; refused"
+            )
+        if not intact.any():
+            raise ValueError(f"{name}: mis-framed, and no data record is intact; refused")
+        # Slot 0 is the first data record, whatever its number: a segment cut
+        # from a longer file (cutp, extract_pfile_segment) keeps the source's
+        # record numbers and advances record 0's time instead.
+        slot = numbers - numbers[0]
+        last = int(np.flatnonzero(intact)[-1])
+        n_slots = int(slot[last]) + 1
+        rebuilt = np.ones(n_slots, dtype=bool)
+        rebuilt[slot[intact]] = False
+        if rebuilt.mean() > MAX_FRAMING_FILL_FRACTION:
+            raise ValueError(
+                f"{name}: mis-framed in {int(rebuilt.sum())} of {n_slots} record "
+                f"slots (> {MAX_FRAMING_FILL_FRACTION:.0%}); refused rather than "
+                "rebuilt"
+            )
+
+        flat = np.zeros((n_slots, record_words), dtype=udtype)
+        for i in np.flatnonzero(intact):
+            flat[slot[i]] = words[at[i] : at[i] + record_words]
+        # A rebuilt slot takes the nearest earlier intact header (else the
+        # first one), renumbered; no other header word is ever read per record.
+        donors = np.maximum.accumulate(np.where(~rebuilt, np.arange(n_slots), -1))
+        donors[donors < 0] = int(np.flatnonzero(~rebuilt)[0])
+        fill = np.flatnonzero(rebuilt)
+        flat[fill, :header_words] = flat[donors[fill], :header_words]
+        for word in ("record_number", "n_records_written"):
+            flat[fill, _H[word]] = (fill + numbers[0]) % 65536
+
+        # Per address-matrix cell, in matrix order: a fast channel's column and
+        # a slow channel's single cell are each interpolated along their own
+        # samples. Done on a contiguous copy (the data columns of `flat` are a
+        # strided view) and written back.
+        cells = self.n_rows * self.n_cols
+        per_record = data_words // cells
+        m = flat[:, header_words:].view(dtype).reshape(n_slots * per_record, cells)
+        bad = np.repeat(rebuilt, per_record)
+        x_bad, x_good = np.flatnonzero(bad), np.flatnonzero(~bad)
+        for c in range(cells):
+            y = m[x_good, c].astype(np.float64)
+            m[x_bad, c] = np.clip(np.rint(np.interp(x_bad, x_good, y)), -32768, 32767)
+        flat[:, header_words:] = m.reshape(n_slots, data_words).view(udtype)
+
+        scans_per_record = data_words // self.n_cols
+        self._framing_hits = np.repeat(rebuilt, scans_per_record)
+        record_s = data_words / (self.header["clock_hz"] + self.header["clock_frac"] / 1000)
+        irregular = [
+            {"record_number": int(numbers[i]), "words": int(length[i])}
+            for i in range(last + 1)
+            if not intact[i]
+        ]
+        missing = sorted(
+            set(range(int(numbers[0]), int(numbers[0]) + n_slots))
+            - set(int(n) for n in numbers[: last + 1])
+        )
+        runs = _mask_runs(rebuilt)
+        trailing_words = int(words.size - (at[last] + record_words))
+        self.framing_report = {
+            "policy": "repair",
+            "irregular_records": irregular,
+            "missing_record_numbers": missing,
+            "rebuilt_slots": [(int(a), int(b)) for a, b in zip(*runs)],
+            "rebuilt_seconds": float(rebuilt.sum() * record_s),
+            # Headers found after the last intact record, and every word after
+            # its end: the trailing partial record(s), dropped.
+            "trailing_records_dropped": len(starts) - 1 - last,
+            "trailing_words_dropped": trailing_words,
+        }
+        parts = []
+        if irregular:
+            parts.append(
+                "irregular record(s) "
+                + ", ".join(
+                    f"#{r['record_number']} ({r['words']} words, not {record_words})"
+                    for r in irregular
+                )
+            )
+        if missing:
+            parts.append(f"header lost for #{', #'.join(map(str, missing))}")
+        if trailing_words:
+            parts.append(f"{trailing_words} trailing word(s) after the last intact record")
+        warnings.warn(
+            f"{name}: mis-framed ({'; '.join(parts)}): a fixed-size read would "
+            "mis-assemble everything after the first damage. Repaired: every "
+            f"intact record kept at its own time; {int(rebuilt.sum())} record "
+            f"slot(s) ({rebuilt.sum() * record_s:.2f} s) rebuilt by interpolation "
+            "and reported as bad buffers, trailing words dropped -- see "
+            "PFile.framing_report",
+            stacklevel=2,
+        )
+        return flat.view(record_dtype).reshape(n_slots)
 
     def _warn_on_dropped_records(self) -> None:
         """Report records missing from the file, using header word 2.
@@ -1188,16 +1630,78 @@ class PFile:
         decision — the report's ``spans`` carry ``(start, length)`` into the
         channel's own extracted samples so a caller can mask them directly.
         :mod:`odas_tpw.rsi.bad_buffer` turns them into the epsilon/chi masks.
+
+        Record slots rebuilt by :meth:`_repair_framing` are reported here
+        too, on every channel and in any header version; the warning stays
+        the markers' own (the repair issued its own).
         """
         self.bad_buffer_report = {}
+        # The data records' own version: ODAS patch_setupstr rewrites record 0
+        # as v6.0 and leaves the data records as they were (see
+        # FRAMING_SIGNATURE), which would otherwise switch this scan off.
         version = self.header["header_version"]
-        if (version >> 8, version & 0xFF) < (6, 1):
-            return  # v6.0 and older use the word-16 / channel-255 mechanism
-
-        hits = raw_flat == BAD_BUFFER_SENTINEL
-        if not hits.any():
+        hdrs = getattr(self, "_record_headers", None)
+        if (
+            hdrs is not None
+            and hdrs.shape[0]
+            and int(hdrs[0, _H["header_size"]]) == self.header["header_size"]
+        ):
+            version = int(hdrs[0, _H["header_version"]])
+        markers = None
+        # v6.0 and older use the word-16 / channel-255 mechanism instead.
+        if (version >> 8, version & 0xFF) >= (6, 1):
+            hits = raw_flat == BAD_BUFFER_SENTINEL
+            if hits.any():
+                markers = hits
+        rebuilt = None
+        if self._framing_hits is not None:
+            rebuilt = np.broadcast_to(self._framing_hits[:, None], raw_flat.shape)
+        if markers is None and rebuilt is None:
             return
 
+        if markers is not None:
+            confirmed, isolated = self._bad_buffer_spans(markers, matrix_count, ch_config)
+            if confirmed:
+                detail = "; ".join(
+                    f"{name}: {d['n_samples']} samples in {d['n_runs']} run(s), "
+                    f"longest {d['longest_run']}"
+                    for name, d in sorted(confirmed.items())
+                )
+                extra = ""
+                if isolated:
+                    extra = (
+                        f" ({sum(isolated.values())} further isolated hit(s) on "
+                        f"{', '.join(sorted(isolated))} are consistent with ordinary "
+                        "data and were not counted)"
+                    )
+                warnings.warn(
+                    f"{self.filepath.name}: RDL bad-buffer markers "
+                    f"({BAD_BUFFER_SENTINEL}, TN-051 s3.2) replace missing or "
+                    f"erroneous data on {detail}{extra}; these samples are not "
+                    "measurements — see PFile.bad_buffer_report",
+                    stacklevel=2,
+                )
+        if rebuilt is not None:
+            # Every rebuilt sample is confirmed, however short the run (a
+            # record with few matrices gives a slow channel few samples).
+            rebuilt_conf, _ = self._bad_buffer_spans(rebuilt, matrix_count, ch_config, min_run=1)
+            if markers is None:
+                confirmed, isolated = rebuilt_conf, {}
+            else:
+                for ch, found in rebuilt_conf.items():
+                    confirmed[ch] = _merge_bad_entries(confirmed.get(ch), found)
+        self.bad_buffer_report = {"confirmed": confirmed, "isolated": isolated}
+
+    def _bad_buffer_spans(
+        self,
+        hits: np.ndarray,
+        matrix_count: int,
+        ch_config: dict,
+        min_run: int = BAD_BUFFER_MIN_RUN,
+    ) -> tuple[dict[str, dict], dict[str, int]]:
+        """Per-channel ``(confirmed, isolated)`` runs of *hits*, a boolean
+        array shaped like the multiplexed block; see
+        :meth:`_check_bad_buffer_markers` for the conventions."""
         id_to_name: dict[int, str] = {}
         for ch_name, info in ch_config.items():
             for ch_id in info["ids"]:
@@ -1253,7 +1757,7 @@ class PFile:
             runs = np.concatenate(all_lengths)
             if runs.size == 0:
                 continue
-            long_runs = runs[runs >= BAD_BUFFER_MIN_RUN]
+            long_runs = runs[runs >= min_run]
             if long_runs.size:
                 # Positions index the channel's own extracted samples, so a
                 # caller can mask directly (odas_tpw.rsi.bad_buffer does).
@@ -1263,7 +1767,7 @@ class PFile:
                 starts, lengths = _mask_runs(
                     extracted if extracted is not None else np.zeros(0, dtype=bool)
                 )
-                keep = lengths >= BAD_BUFFER_MIN_RUN
+                keep = lengths >= min_run
                 confirmed[name] = {
                     "address": addrs[0],
                     "addresses": list(addrs),
@@ -1280,31 +1784,10 @@ class PFile:
                     "rate": rate,
                     "spans": [(int(s), int(n)) for s, n in zip(starts[keep], lengths[keep])],
                 }
-            n_short = int(runs[runs < BAD_BUFFER_MIN_RUN].sum())
+            n_short = int(runs[runs < min_run].sum())
             if n_short:
                 isolated[name] = n_short
-
-        self.bad_buffer_report = {"confirmed": confirmed, "isolated": isolated}
-        if confirmed:
-            detail = "; ".join(
-                f"{name}: {d['n_samples']} samples in {d['n_runs']} run(s), "
-                f"longest {d['longest_run']}"
-                for name, d in sorted(confirmed.items())
-            )
-            extra = ""
-            if isolated:
-                extra = (
-                    f" ({sum(isolated.values())} further isolated hit(s) on "
-                    f"{', '.join(sorted(isolated))} are consistent with ordinary "
-                    "data and were not counted)"
-                )
-            warnings.warn(
-                f"{self.filepath.name}: RDL bad-buffer markers "
-                f"({BAD_BUFFER_SENTINEL}, TN-051 s3.2) replace missing or "
-                f"erroneous data on {detail}{extra}; these samples are not "
-                "measurements — see PFile.bad_buffer_report",
-                stacklevel=2,
-            )
+        return confirmed, isolated
 
     def _apply_deconvolution(self, ch_config: dict) -> None:
         """Deconvolve pre-emphasized channels to produce high-resolution data.
@@ -1341,7 +1824,23 @@ class PFile:
             if dX_name not in self.channels_raw:
                 continue
 
-            diff_gain_val = float(info["diff_gain"])
+            # The converters' parser, so a shear-style arithmetic diff_gain
+            # reads the same here. (ODAS deconvolve.m uses str2double, which
+            # turns arithmetic into NaN: a deliberate deviation.) This is the
+            # one read of a pre-emphasis diff_gain per file -- no converter
+            # sees the key -- so it is the one that warns on arithmetic. A
+            # blank value is refused, not taken as absent: undeconvolved
+            # counts are not a fallback.
+            diff_gain_val = config_number(
+                info["diff_gain"], key="diff_gain", channel=dX_name, warn_arithmetic=True
+            )
+            if diff_gain_val <= 0:
+                # The deconvolution filter's corner is 1/(2 pi diff_gain); a
+                # non-positive gain failed deep in scipy, naming nothing.
+                raise ValueError(
+                    f"{dX_name}: diff_gain = {info['diff_gain']!r} must be positive; "
+                    "it is the pre-emphasis time constant [s]."
+                )
             X_dX_raw = self.channels_raw[dX_name]
 
             # Sampling rate of the pre-emphasized channel, derived from the
@@ -1400,6 +1899,7 @@ class PFile:
                 base_info = dict(ch_config[base_name])
                 base_info.pop("diff_gain", None)
                 ch_config[dX_name] = {**base_info, "name": dX_name}
+                self._borrowed_stanzas.add(dX_name)
                 if is_dX_fast:
                     self._fast_channels.add(dX_name)
                     self._slow_channels.discard(dX_name)

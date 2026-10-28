@@ -30,6 +30,8 @@ import re
 import sys
 from pathlib import Path
 
+from odas_tpw._version_info import add_version_argument
+
 logger = logging.getLogger(__name__)
 
 
@@ -230,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
             "perturb never sees a URL."
         ),
     )
+    add_version_argument(parser)
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_init = sub.add_parser("init", help="write a template config file")

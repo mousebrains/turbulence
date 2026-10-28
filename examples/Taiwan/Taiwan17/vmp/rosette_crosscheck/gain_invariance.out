@@ -1,0 +1,18 @@
+JAC_T - SBE
+  1. single b (as before)                              n=246 gain +3.77 mK/K [+2.40,+5.22]  resid MAD 15.78 mK
+  2. separate b above/below 100 dbar                   n=246 gain +2.11 mK/K [+0.99,+3.31]  resid MAD 10.41 mK
+  3. b = b0 + tau*W (lag x descent rate)               n=246 gain +2.71 mK/K [+1.51,+4.04]  resid MAD 12.61 mK
+  4. piecewise b AND lag term                          n=246 gain +1.75 mK/K [+0.57,+2.98]  resid MAD 10.78 mK
+     weak gradient |dT/dp|<0.005: T span 15.61-23.66 C
+  5. no b, weak-gradient bins only (<0.005 K/dbar)     n= 55 gain +0.39 mK/K [-179.20,+0.75]  resid MAD  2.43 mK
+     weak gradient |dT/dp|<0.01: T span 15.59-23.66 C
+  5. no b, weak-gradient bins only (<0.01 K/dbar)      n= 71 gain +1.08 mK/K [-0.18,+2.11]  resid MAD  3.15 mK
+T1 (fit over whole cast) - SBE
+  1. single b (as before)                              n=246 gain +4.59 mK/K [+3.23,+6.13]  resid MAD 16.28 mK
+  2. separate b above/below 100 dbar                   n=246 gain +3.03 mK/K [+1.88,+4.23]  resid MAD 16.26 mK
+  3. b = b0 + tau*W (lag x descent rate)               n=246 gain +3.35 mK/K [+2.09,+4.95]  resid MAD 17.43 mK
+  4. piecewise b AND lag term                          n=246 gain +2.56 mK/K [+1.21,+3.93]  resid MAD 15.22 mK
+     weak gradient |dT/dp|<0.005: T span 15.61-23.66 C
+  5. no b, weak-gradient bins only (<0.005 K/dbar)     n= 55 gain +0.88 mK/K [-0.21,+77.89]  resid MAD  2.74 mK
+     weak gradient |dT/dp|<0.01: T span 15.59-23.66 C
+  5. no b, weak-gradient bins only (<0.01 K/dbar)      n= 71 gain +1.73 mK/K [+0.16,+3.74]  resid MAD  2.98 mK

@@ -296,7 +296,7 @@ def window_shear(
         n_ens[i] = hi - lo
         # Ensemble means on COMMON support per adjacent cell pair: a cell
         # present in only some ensembles must not be differenced against a
-        # neighbour present in different ones (#180 F10).
+        # neighbor present in different ones (#180 F10).
         s2, z_mid, support = _common_support_shear(
             adcp.u[lo:hi], adcp.v[lo:hi], adcp.depth[lo:hi]
         )

@@ -1,0 +1,69 @@
+# Plotting sections for MR046 on glider husker, Taiwan 2013 — 495 profiles.
+#
+# ONE SECTION PER UTC DAY, time axis. The glider does not fly clean
+# transects here (daily straightness 0.30-0.91, headings reversing), so a
+# distance axis would be meaningless; and `perturb sections --gap` gives one
+# 7-day block because a glider's yos have no gaps. ~60 casts per day reads well.
+
+sections:
+  # 39 cast(s)
+  - name: 20130502
+    start: "2013-05-02T05:54:02Z"
+    stop:  "2013-05-02T14:14:54Z"
+    xaxis:
+      method: time
+  # 53 cast(s)
+  - name: 20130519
+    start: "2013-05-19T05:32:21Z"
+    stop:  "2013-05-20T00:19:59Z"
+    xaxis:
+      method: time
+  # 62 cast(s)
+  - name: 20130520
+    start: "2013-05-20T00:06:46Z"
+    stop:  "2013-05-21T00:18:57Z"
+    xaxis:
+      method: time
+  # 65 cast(s)
+  - name: 20130521
+    start: "2013-05-21T00:17:34Z"
+    stop:  "2013-05-22T00:08:14Z"
+    xaxis:
+      method: time
+  # 65 cast(s)
+  - name: 20130522
+    start: "2013-05-22T00:02:58Z"
+    stop:  "2013-05-23T00:14:30Z"
+    xaxis:
+      method: time
+  # 64 cast(s)
+  - name: 20130523
+    start: "2013-05-23T00:07:02Z"
+    stop:  "2013-05-24T00:19:23Z"
+    xaxis:
+      method: time
+  # 61 cast(s)
+  - name: 20130524
+    start: "2013-05-24T00:13:31Z"
+    stop:  "2013-05-25T00:11:58Z"
+    xaxis:
+      method: time
+  # 65 cast(s)
+  - name: 20130525
+    start: "2013-05-25T00:02:19Z"
+    stop:  "2013-05-26T00:20:24Z"
+    xaxis:
+      method: time
+  # 21 cast(s)
+  - name: 20130526
+    start: "2013-05-26T00:04:14Z"
+    stop:  "2013-05-26T08:02:24Z"
+    xaxis:
+      method: time
+
+  # Pat's addition
+  - name: tail0
+    start: "2013-05-19T05:32:21Z"
+    stop:  "2013-05-26T08:02:24Z"
+    xaxis:
+      method: time

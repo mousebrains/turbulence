@@ -14,6 +14,8 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from odas_tpw._version_info import INPUTS_ATTR, input_versions, stamp_provenance
+from odas_tpw.perturb.binning import VERTICAL_BIN_METHODS
 from odas_tpw.perturb.netcdf_schema import GLOBAL_ATTRS, apply_schema
 
 
@@ -104,9 +106,14 @@ def make_combo(
     # we re-write — so for binned files (which we always re-encode) it is
     # cleaner to keep numeric times throughout.
     datasets = [xr.open_dataset(f, decode_times=False) for f in nc_files]
+    inputs = input_versions(ds.attrs for ds in datasets)
 
     try:
-        combo = _glue_widthwise(datasets) if method == "depth" else _glue_lengthwise(datasets)
+        combo = (
+            _glue_widthwise(datasets)
+            if method in VERTICAL_BIN_METHODS
+            else _glue_lengthwise(datasets)
+        )
         # Materialize before closing the source handles below: the concat is
         # lazy, so a later operation (or to_netcdf) would otherwise re-read the
         # closed files via xarray's caching layer -- brittle and needless I/O.
@@ -117,10 +124,11 @@ def make_combo(
         for ds in datasets:
             ds.close()
 
-    # Chronologically sort the depth-combo profiles so time_coverage_start /
-    # end agree with stime[0] / stime[-1].  ACDD's checker compares these
-    # explicitly and raises a "Date time mismatch" warning otherwise.
-    if method == "depth" and "profile" in combo.dims:
+    # Chronologically sort the VERTICAL-combo profiles (depth or altitude) so
+    # time_coverage_start / end agree with stime[0] / stime[-1].  ACDD's checker
+    # compares these explicitly and raises a "Date time mismatch" warning
+    # otherwise.
+    if method in VERTICAL_BIN_METHODS and "profile" in combo.dims:
         if "stime" in combo:
             sk = combo["stime"].values
             order = np.argsort(np.where(np.isfinite(sk), sk, np.inf))
@@ -169,9 +177,12 @@ def make_combo(
     # that legitimately differs by combo style (depth ⇒ ``profile``,
     # time ⇒ ``timeSeries``), so resolve it after copying the defaults.
     combo.attrs.update(GLOBAL_ATTRS)
-    # CF §9 featureType: depth combos are profile sets; CTD time combos are
-    # along a moving ship track, which CF calls ``trajectory``.
-    combo.attrs["featureType"] = "profile" if method == "depth" else "trajectory"
+    # CF §9 featureType: vertical combos (depth or altitude) are profile sets;
+    # CTD time combos are along a moving ship track, which CF calls
+    # ``trajectory``.
+    combo.attrs["featureType"] = (
+        "profile" if method in VERTICAL_BIN_METHODS else "trajectory"
+    )
     # CF §9.4: a trajectory-featured dataset must carry an instance variable
     # with ``cf_role="trajectory_id"``.  For our single-platform CTD combos
     # a scalar is sufficient.
@@ -182,12 +193,16 @@ def make_combo(
             attrs={"cf_role": "trajectory_id", "long_name": "trajectory identifier"},
         )
     combo.attrs["date_created"] = datetime.now(UTC).isoformat()
-    combo.attrs["history"] = f"Created by perturb on {datetime.now(UTC).isoformat()}"
+    combo.attrs.pop("history", None)  # the first input's: it misdescribes the rest
 
     if netcdf_attrs:
         for k, v in netcdf_attrs.items():
             if v is not None:
                 combo.attrs[k] = v
+    # After the configured attributes, so a configured history is kept and
+    # this step appended to it.
+    stamp_provenance(combo.attrs, "combo")
+    combo.attrs[INPUTS_ATTR] = inputs
 
     # Auto-fill geospatial/temporal attributes
     has_lat = "lat" in combo and np.any(np.isfinite(combo["lat"].values))

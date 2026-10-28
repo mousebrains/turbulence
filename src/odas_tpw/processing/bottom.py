@@ -213,3 +213,151 @@ def detect_bottom_crash(
             break
 
     return None
+
+
+def detect_bottom_fallrate(
+    depth_slow: npt.ArrayLike,
+    fs_slow: float,
+    *,
+    fraction: float = 0.9,
+    min_terminal: float = 0.2,
+    smooth_s: float = 0.05,
+    min_span: float = 8.0,
+) -> float | None:
+    """Bottom from the FALL-RATE COLLAPSE, not from vibration.
+
+    Returns the deepest depth at which the instrument was still falling at
+    ``fraction`` of its terminal rate — the end of free fall. Above it the
+    profiler is in undisturbed descent; below it, it is decelerating into the
+    seabed and the shear is meaningless (``epsilon ~ shear**2 / U**4``, so a
+    collapsing ``U`` inflates epsilon violently — the bottom mirror of the
+    launch-attitude transient at the surface).
+
+    WHY THIS EXISTS. :func:`detect_bottom_crash` bins vibration std on a
+    ``depth_window``-wide grid and returns the flagged bin's MEAN depth, so its
+    resolution is about half a bin. Measured against this function on SUNRISE
+    2022 Point Sur (134 descents, one file), it reported the bottom a median
+    **1.27 m above** the depth at which the instrument actually stopped
+    (p10-90 0.34-1.65 m). Pressure at ``fs_slow`` resolves ~1.5 cm per sample,
+    which is the resolution a bottom-boundary-layer analysis needs. This is the
+    fall-rate confirmation that ``detect_bottom_crash``'s ``speed_factor``
+    documents but has never implemented.
+
+    Parameters
+    ----------
+    depth_slow : array_like
+        Depth (positive down) at the SLOW rate — the pressure record, not an
+        interpolation of it onto the fast grid. [m or dbar]
+    fs_slow : float
+        Slow sampling rate [Hz].
+    fraction : float
+        Fraction of terminal fall rate defining the end of free fall.
+        Default 0.9. **Do not raise this toward 1.0**: measured on two ships,
+        the 0.90 and 0.95 thresholds are tight (p10-90 spans of 0.03 m and
+        0.04 m), but at 0.98-0.99 the p90 blows out to 2-4 m because ordinary
+        fall-rate variability from stratification and turbulence crosses the
+        threshold far above the seabed.
+    min_terminal : float
+        A descent must exceed this rate to be considered falling [units/s].
+    smooth_s : float
+        Boxcar applied to depth before differencing [s]. **This is not a free
+        parameter.** The deceleration length it measures converges to 0.082 m
+        for smoothing below ~0.06 s and is then inflated by the smoother
+        itself: 0.094 m at 0.125 s, 0.130 m at 0.25 s, 0.222 m at 0.50 s.
+        Keep it well under the answer you are trying to measure.
+    min_span : float
+        A descent shorter than this is ignored [same units as depth].
+
+    Returns
+    -------
+    float or None
+        Depth of the end of free fall, or None if no usable descent.
+
+    Notes
+    -----
+    The caller still owes a clearance above this depth before the data are
+    clean — see the ``height`` idea in :func:`bottom_anchor_depth`.
+    """
+    depth = np.asarray(depth_slow, dtype=np.float64)
+    if depth.size < 8 or not np.any(np.isfinite(depth)):
+        return None
+    if not np.isfinite(fs_slow) or fs_slow <= 0:
+        return None
+    if not (0.0 < fraction < 1.0):
+        raise ValueError(f"fraction must be in (0, 1), got {fraction!r}")
+
+    n = max(round(smooth_s * fs_slow), 1)
+    smoothed = depth if n < 2 else np.convolve(depth, np.ones(n) / n, mode="same")
+    t = np.arange(depth.size, dtype=np.float64) / fs_slow
+    with np.errstate(invalid="ignore"):
+        w = np.gradient(smoothed, t)
+
+    falling = np.isfinite(w) & (w > min_terminal)
+    if not falling.any():
+        return None
+
+    # Longest contiguous falling run is the descent.
+    d = np.diff(falling.astype(np.int8))
+    starts = np.flatnonzero(d == 1) + 1
+    ends = np.flatnonzero(d == -1) + 1
+    if falling[0]:
+        starts = np.concatenate(([0], starts))
+    if falling[-1]:
+        ends = np.concatenate((ends, [falling.size]))
+    if starts.size == 0:
+        return None
+    best = int(np.argmax(ends - starts))
+    s, e = int(starts[best]), int(ends[best])
+
+    d_seg, w_seg = depth[s:e], w[s:e]
+    finite = np.isfinite(d_seg)
+    if finite.sum() < 8:
+        return None
+    if float(np.nanmax(d_seg) - np.nanmin(d_seg)) < min_span:
+        return None
+
+    # Terminal rate from the middle half — the ends are the launch transient
+    # and the crash, neither of which is terminal.
+    mid = slice(d_seg.size // 4, 3 * d_seg.size // 4)
+    w_term = float(np.nanmedian(w_seg[mid]))
+    if not np.isfinite(w_term) or w_term <= 0:
+        return None
+
+    ok = np.flatnonzero(np.isfinite(w_seg) & (w_seg >= fraction * w_term))
+    if ok.size == 0:
+        return None
+    return float(d_seg[ok[-1]])
+
+
+def bottom_anchor_depth(bottom_depth: float | None, height: float) -> float | None:
+    """The depth the deepest analysis window is anchored at: ``bottom - height``.
+
+    ``height`` is clearance ABOVE the detected bottom, in the same units as
+    ``bottom_depth``, and it buys two different things at once:
+
+    * **Deceleration clearance.** Measured on SUNRISE, free fall ends a median
+      0.086 m (Point Sur) to 0.109 m (Walton Smith) above the stop, p90 0.13 m.
+      A height of 0.15 m clears it on well over 90% of casts.
+    * **Pre-impact data only.** At 0.15 m and ~1 m/s the last retained sample
+      predates the crash by ~0.15 s, so the resuspension cloud a silty seabed
+      throws up does not exist yet in the retained record.
+
+    It does NOT need to include the probe-to-crasher-tip offset. A bottom
+    crasher's ring leads the shear probes by 6-8 inches, so at the deepest
+    pre-impact sample the probes are ALREADY ~0.15-0.20 m above the seabed.
+    With ``height = 0.15`` the probes sit roughly 0.30-0.35 m above the
+    sediment interface.
+
+    The detected bottom is not the sediment-water interface: over silt the
+    ring must penetrate before anything is detectable, so the datum is biased
+    deep by an unmeasured penetration depth. The deceleration is abrupt
+    (terminal to half speed in ~0.03 m), which bounds that penetration as
+    small, but it is not zero.
+    """
+    if bottom_depth is None or not np.isfinite(bottom_depth):
+        return None
+    if not np.isfinite(height):
+        raise ValueError(f"height must be finite, got {height!r}")
+    if height < 0:
+        raise ValueError(f"height must be >= 0, got {height!r}")
+    return float(bottom_depth) - float(height)

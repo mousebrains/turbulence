@@ -1,6 +1,8 @@
 # Data files (large)
 MR/
-VMP/
+# Anchored to the root: git matches ignore patterns case-insensitively on
+# macOS (core.ignorecase), so a bare VMP/ also swallowed Taiwan/Taiwan17/vmp/.
+/VMP/
 AtomixData
 bench_tests/
 bench/
@@ -10,8 +12,11 @@ benchmarks/
 microstructure_sensors/*
 
 # Per-cruise data directories — only the YAML config is tracked.
-ARCTERX/*
-!ARCTERX/perturb.yaml
+# Paths are ANCHORED to examples/, so moving a campaign tree moves its ignore
+# rule with it. A bare `ARCTERX/*` here would stop matching the moment the
+# directory moved, silently unignoring 74 GB.
+examples/ARCTERX/*
+!examples/ARCTERX/perturb.yaml
 
 # Local ARCTERX 2023 Wake workspace (inputs and generated products).
 ARCTERX-2023-Wake/
@@ -32,6 +37,8 @@ papers/**
 __pycache__/
 *.py[cod]
 *.egg-info/
+# written by the release workflow only (src/odas_tpw/_version_info.py)
+src/odas_tpw/_build.json
 *.egg
 dist/
 build/
@@ -64,11 +71,11 @@ scratch/
 
 # Rutgers RU33 MicroRider workspace — only the configs and the README are
 # tracked; the .p files, hotel.nc and results are not (about 1 GB).
-Rutgers/*
-!Rutgers/*.yaml
-!Rutgers/README.md
+examples/Rutgers/*
+!examples/Rutgers/*.yaml
+!examples/Rutgers/README.md
 # An ignored DIRECTORY is never descended into, so the earlier single-file
 # run's configs need their directory unignored before its *.yaml can be.
-!Rutgers/dat_0377/
-Rutgers/dat_0377/*
-!Rutgers/dat_0377/*.yaml
+!examples/Rutgers/dat_0377/
+examples/Rutgers/dat_0377/*
+!examples/Rutgers/dat_0377/*.yaml

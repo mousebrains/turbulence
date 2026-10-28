@@ -52,7 +52,7 @@ chi window grid:
 | Variable | Definition | Units |
 |----------|------------|-------|
 | `N2` | TEOS-10 buoyancy frequency squared between the shallow- and deep-half means of each window | s$^{-2}$ |
-| `dTdz` | Least-squares background temperature gradient vs depth | K m$^{-1}$ |
+| `dTdz` | Least-squares background conservative-temperature gradient vs depth (`stratification.sort`, `.dTdz_source`) | K m$^{-1}$ |
 | `K_T` | Osborn–Cox heat diffusivity $\chi/(2(\partial\overline{T}/\partial z)^2)$ | m$^2$ s$^{-1}$ |
 | `Gamma` | Measured mixing coefficient (Oakey 1982) | 1 |
 | `K_rho` | Osborn diffusivity $0.2\,\varepsilon/N^2$ with the canonical constant | m$^2$ s$^{-1}$ |
@@ -88,6 +88,22 @@ canonically and rarely exceeds $\sim 1$–$2$, so values of tens to hundreds —
 produced when a near-zero shear $\varepsilon$ lands in the denominator — are
 artifacts). Gating each on its own ceiling keeps a legitimately large `K_T` in
 low-$N^2$ water instead of discarding it with `K_rho`.
+
+Which background gradient: $\chi$ is the dissipation of *temperature*
+variance, and the gradient it works against is that of the sorted temperature
+field ([Winters & D'Asaro 1996](https://doi.org/10.1017/S0022112096000717);
+the χpod processing sorts temperature the same way). Sorting temperature by
+density is the same thing only when density and temperature orders coincide;
+a noisy salinity breaks that, which is why `stratification.sort` defaults to
+`temperature` (since 2026-10; `density` before, which flattened dT/dz on our
+own unpumped-CTD products; see the `stratification` section of the
+[configuration reference](perturb/configuration.md)). With
+`stratification.dTdz_source: fp07` the gradient comes from the bead that
+measured $\chi$, so a static calibration gain error $g$ enters $\chi$ as $g^2$
+and $(\partial\overline{T}/\partial z)^2$ as $g^2$, and cancels in `K_T` and
+`Gamma`: exactly per probe, and to first order in the probe-gain difference
+for `chiMean`, which can drop a probe in a window. A dynamic error (a wrong
+`diff_gain`, bead attenuation) changes $\chi$ alone and does not cancel.
 
 Two caveats for interpretation:
 

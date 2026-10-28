@@ -99,6 +99,9 @@ Record the outcome here rather than editing the forecast.
 - `scripts/em_bench_zero.py` — the bench soak that attacks the same degeneracy
   from the other side, by varying conductivity instead of pitch.
 - `docs/glider_speed_problem.html` — the statement of the speed problem.
+- `docs/aquadopp_flight_model_validation.html` — an Aquadopp HR on a 2013
+  Slocum measuring α directly: 4.55° on dives against the flight model's 2.91°,
+  with the wrap-branch and mounting-systematic tests that make that survive.
 - `../AEM1-G/scripts/glider_aoa_check.py` and `aoa_histogram.py` — the α
   analysis on the climbs-only records, which is what this forecast says is
   limited to ±0.4°.

@@ -493,7 +493,10 @@ def _sweep_profile(
 
         # Matched-scale N2 for the Ri_g numerator: Thorpe-sorted background
         # over ~the ADCP differencing span, converted to a time half-width
-        # via the cast's median fall speed.
+        # via the cast's median fall speed. sort="density" is pinned so this
+        # figure's Ri_g keeps the numbers it had before the library default
+        # became the temperature sort (2026-10). Neither is the paper's N2,
+        # which is temperature-only (see the module docstring).
         if args.adcp and args.ri_n2_span > 0 and "JAC_T" in slow:
             w_med = float(np.nanmedian(speed))
             if np.isfinite(w_med) and w_med > 0:
@@ -506,6 +509,7 @@ def _sweep_profile(
                     S=slow.get("SP"),
                     lat=lat,
                     lon=lon,
+                    sort="density",
                 )
                 n2_ri = strat.N2
     else:

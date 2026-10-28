@@ -21,6 +21,7 @@ from odas_tpw.chi.chi import (
     _mle_fit_kB,
 )
 from odas_tpw.chi.fp07 import fp07_double_pole, fp07_transfer
+from odas_tpw.chi.fp07_pair import signal_weighted
 from odas_tpw.chi.l3_chi import L3ChiData
 from odas_tpw.scor160.io import BAD_MAX_INTERP_FRACTION as MAX_INTERP_FRACTION
 from odas_tpw.scor160.io import L4Data
@@ -67,6 +68,25 @@ class L4ChiData:
     def n_gradt(self) -> int:
         """Number of temperature gradient channels."""
         return int(self.chi.shape[0])
+
+
+def _dof_at(l3_chi, j: int) -> float:
+    """Spectral DOF for window *j*.
+
+    dof_spec is PER WINDOW: with a BBL group the near-bed windows are shorter
+    and average fewer FFT segments, so a single value would mis-gate the
+    non-detection floor for exactly those estimates. A scalar or an empty array
+    is accepted for callers that predate the change.
+    """
+    import numpy as np
+
+    dof = getattr(l3_chi, "dof_spec", 0.0)
+    arr = np.atleast_1d(np.asarray(dof, dtype=float))
+    if arr.size == 0:
+        return 0.0
+    if arr.size == 1:
+        return float(arr[0])
+    return float(arr[j]) if 0 <= j < arr.size else 0.0
 
 
 def _process_l4_chi(
@@ -118,6 +138,18 @@ def _process_l4_chi(
             H2 = l3_chi.H2_for(ci, j)
             spec_obs = l3_chi.gradt_spec[ci, :, j]
             noise_K = l3_chi.noise_spec[ci, :, j]
+            # A measured per-probe response factor (fp07_pair) equalizes the
+            # DATA onto the default model's response. Dividing S and N alike
+            # rescales each bin's S = B*H2*e + N to S/e = B*H2 + N/e, so the
+            # fit and the band selection are unchanged in kind; H2 and _h2
+            # stay on the model (see chi.fp07_pair for why not the model
+            # side). The factor is applied only where the bin is signal-
+            # dominated (fp07_pair.signal_weighted).
+            fac = l3_chi.response_factor[ci] if ci < len(l3_chi.response_factor) else None
+            if fac is not None:
+                e = signal_weighted(fac(l3_chi.freq, W), spec_obs, noise_K)
+                spec_obs = spec_obs / e
+                noise_K = noise_K / e
 
             result = chi_func(
                 j, ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff
@@ -172,9 +204,10 @@ def _process_l4_chi(
         n_bad = int(contaminated.sum())
         if n_bad:
             logger.warning(
-                "%d chi window(s) dropped: RDL bad-buffer gap too long to "
-                "interpolate, or more than %.0f%% of the window interpolated "
-                "(TN-051 s3.2), on a channel the thermistor depends on",
+                "%d chi window(s) dropped: bad-buffer gap (RDL marker, TN-051 "
+                "s3.2, or a record rebuilt after mis-framing) too long to "
+                "interpolate, or more than %.0f%% of the window interpolated, "
+                "on a channel the thermistor depends on",
                 n_bad,
                 100 * MAX_INTERP_FRACTION,
             )
@@ -273,7 +306,7 @@ def process_l4_chi_epsilon(
             W,
             spectrum_model,
             kappa_T,
-            l3_chi.dof_spec,
+            _dof_at(l3_chi, j),
         )
         return chi_val, epsilon_val, kB_val, K_max_val, fom_val, K_max_ratio_val, var_res_val
 
@@ -306,7 +339,7 @@ def process_l4_chi_fit(
     L4ChiData
     """
 
-    def _chi_fit_func(_j, _ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff):
+    def _chi_fit_func(j, _ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff):
         if fit_method == "iterative":
             (kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val, var_res_val) = (
                 _iterative_fit(
@@ -321,7 +354,7 @@ def process_l4_chi_fit(
                     W,
                     spectrum_model,
                     kappa_T,
-                    l3_chi.dof_spec,
+                    _dof_at(l3_chi, j),
                 )
             )
         else:
@@ -357,7 +390,7 @@ def process_l4_chi_fit(
                 W,
                 spectrum_model,
                 kappa_T,
-                l3_chi.dof_spec,
+                _dof_at(l3_chi, j),
             )
             kB_prev = result.kB
             for _ in range(2):
@@ -376,7 +409,7 @@ def process_l4_chi_fit(
                     W,
                     spectrum_model,
                     kappa_T,
-                    l3_chi.dof_spec,
+                    _dof_at(l3_chi, j),
                 )
                 if (
                     np.isfinite(result.kB)

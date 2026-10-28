@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from odas_tpw.perturb import binning
 from odas_tpw.perturb.binning import (
     _bin_array,
     bin_by_depth,
@@ -12,6 +13,7 @@ from odas_tpw.perturb.binning import (
     bin_chi,
     bin_diss,
 )
+from odas_tpw.perturb.plot import layout
 
 
 class TestBinArray:
@@ -697,3 +699,150 @@ class TestBinByTimeEdges:
             bin_by_time([tmp_path / "allnan.nc"], bin_width=1.0, diagnostics=True)
         assert "no finite times" in caplog.text
         assert "allnan.nc" in caplog.text
+
+
+class TestAltitudeCoordinate:
+    """Binning on height above the seabed.
+
+    `altitude` is NOT a relabelling of the depth axis: within one SUNRISE leg
+    the seabed moves from 21.5 to 34.5 m (p10-p90), so a fixed depth bin sits
+    12 m above the bed in one cast and 1 m above it in the next. The
+    conversion must precede the bin assignment, which is what these pin.
+    """
+
+    def _snap(self, depth, bottom=None):
+        scalars = {} if bottom is None else {"bottom_depth": bottom}
+        return {"depth": np.asarray(depth, float), "scalars": scalars}
+
+    def test_depth_is_passed_through_unchanged(self):
+        s = self._snap([1.0, 2.0, 3.0], bottom=20.0)
+        out = binning._coordinate_from_snapshot(s, "depth")
+        assert np.array_equal(out, [1.0, 2.0, 3.0])
+
+    def test_altitude_is_height_above_the_seabed(self):
+        s = self._snap([18.0, 19.0, 20.0], bottom=20.0)
+        out = binning._coordinate_from_snapshot(s, "altitude")
+        assert np.allclose(out, [2.0, 1.0, 0.0])
+
+    def test_altitude_runs_opposite_to_depth(self):
+        s = self._snap([10.0, 15.0], bottom=20.0)
+        d = binning._coordinate_from_snapshot(s, "depth")
+        a = binning._coordinate_from_snapshot(s, "altitude")
+        assert (d[1] > d[0]) and (a[1] < a[0])
+
+    def test_two_casts_with_different_seabeds_share_an_altitude_frame(self):
+        """The whole point: the same HEIGHT from two different DEPTHS."""
+        shallow = binning._coordinate_from_snapshot(self._snap([20.0], 21.0), "altitude")
+        deep = binning._coordinate_from_snapshot(self._snap([33.0], 34.0), "altitude")
+        assert shallow[0] == pytest.approx(deep[0]) == pytest.approx(1.0)
+
+    def test_missing_datum_refuses_rather_than_guessing(self):
+        s = self._snap([1.0, 2.0])
+        with pytest.raises(binning.MissingSeabedDatum, match="bottom_depth"):
+            binning._coordinate_from_snapshot(s, "altitude")
+
+    def test_nan_datum_yields_no_altitude_rather_than_aborting(self):
+        """A cast that never reached the seabed contributes nothing. Raising
+        here would let one 3 m cast kill a 78-file deployment."""
+        s = self._snap([1.0, 2.0], bottom=float("nan"))
+        out = binning._coordinate_from_snapshot(s, "altitude")
+        assert out.shape == (2,) and np.all(np.isnan(out))
+
+    def test_absent_datum_still_refuses(self):
+        """Distinct from NaN: the product predates the feature."""
+        with pytest.raises(binning.MissingSeabedDatum, match="rebuild"):
+            binning._coordinate_from_snapshot(self._snap([1.0, 2.0]), "altitude")
+
+    def test_unknown_coordinate_rejected(self):
+        with pytest.raises(ValueError, match="coordinate"):
+            binning._coordinate_from_snapshot(self._snap([1.0], 2.0), "sideways")
+
+    def test_bottom_depth_is_a_carried_scalar(self):
+        assert "bottom_depth" in binning._SCALAR_NAMES
+
+
+class TestVerticalAxisLabelling:
+    def test_depth_is_inverted(self):
+        label, invert = layout.vertical_axis({"coordinate_kind": "depth"})
+        assert invert is True and "Depth" in label
+
+    def test_altitude_is_not_inverted(self):
+        label, invert = layout.vertical_axis({"coordinate_kind": "altitude"})
+        assert invert is False and "above bottom" in label
+
+    def test_missing_attrs_defaults_to_depth(self):
+        """A product written before the coordinate was labelled."""
+        assert layout.vertical_axis(None) == ("Depth (m)", True)
+        assert layout.vertical_axis({}) == ("Depth (m)", True)
+
+    def test_unknown_kind_is_refused_not_guessed(self):
+        with pytest.raises(ValueError, match="coordinate_kind"):
+            layout.vertical_axis({"coordinate_kind": "sideways"})
+
+
+# --- altitude must be routed as a VERTICAL method, never as time -------------
+#
+# Regression for the defect that made the SUNRISE hab tree wrong in silence:
+# every routing site tested ``method == "depth"`` and fell through to the TIME
+# branch for "altitude". Products were complete and writable but time-binned,
+# glued lengthwise, carrying featureType "trajectory" — and on the largest
+# deployment the time path died with a bare SIGSEGV.
+
+
+def test_altitude_is_a_vertical_bin_method():
+    from odas_tpw.perturb.binning import BIN_METHODS, VERTICAL_BIN_METHODS
+
+    assert "altitude" in VERTICAL_BIN_METHODS
+    assert "depth" in VERTICAL_BIN_METHODS
+    assert "time" not in VERTICAL_BIN_METHODS
+    assert set(BIN_METHODS) == {"depth", "altitude", "time"}
+
+
+def test_coordinate_for_method_maps_both_vertical_methods():
+    from odas_tpw.perturb.binning import coordinate_for_method
+
+    assert coordinate_for_method("depth") == "depth"
+    assert coordinate_for_method("altitude") == "altitude"
+
+
+def test_coordinate_for_method_refuses_time_and_typos():
+    import pytest
+
+    from odas_tpw.perturb.binning import coordinate_for_method
+
+    for bad in ("time", "altitiude", "Altitude", ""):
+        with pytest.raises(ValueError, match="not a vertical binning method"):
+            coordinate_for_method(bad)
+
+
+def test_bin_diss_routes_altitude_to_the_altitude_coordinate(monkeypatch):
+    """bin_diss/bin_chi must reach bin_by_depth with coordinate='altitude' --
+    NOT bin_by_time. Asserted on the actual kwarg, because the failure mode is
+    a silently different product, not an exception."""
+    from pathlib import Path
+
+    from odas_tpw.perturb import binning
+
+    seen = {}
+
+    def fake_depth(files, *a, **kw):
+        seen["coordinate"] = kw.get("coordinate")
+        return xr.Dataset()
+
+    def fake_time(*a, **kw):
+        seen["coordinate"] = "TIME-BRANCH"
+        return xr.Dataset()
+
+    monkeypatch.setattr(binning, "bin_by_depth", fake_depth)
+    monkeypatch.setattr(binning, "bin_by_time", fake_time)
+
+    for fn in (binning.bin_diss, binning.bin_chi):
+        seen.clear()
+        fn([Path("x.nc")], 0.25, "mean", "altitude")
+        assert seen["coordinate"] == "altitude"
+        seen.clear()
+        fn([Path("x.nc")], 0.25, "mean", "depth")
+        assert seen["coordinate"] == "depth"
+        seen.clear()
+        fn([Path("x.nc")], 0.25, "mean", "time")
+        assert seen["coordinate"] == "TIME-BRANCH"

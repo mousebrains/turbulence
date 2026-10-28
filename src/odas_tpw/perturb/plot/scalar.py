@@ -190,6 +190,10 @@ def _build_section_figure(
     lat = dss["lat"].values if "lat" in dss else np.full(dss.sizes["time"], np.nan)
     lon = dss["lon"].values if "lon" in dss else np.full(dss.sizes["time"], np.nan)
     depth = dss["depth"].values
+    # The CTD combo carries a plain `depth` variable with no
+    # coordinate_kind, so this is always the depth axis. Altitude
+    # for CTD scalars would need the seabed datum in the ctd combo.
+    _y_label, _y_invert = layout.vertical_axis(None)
     xa = xaxis.compute(sec.method, lat, lon, dss["time"].values, sec.params)
 
     panel_vars = [v for v in variables if v in dss.data_vars]
@@ -234,7 +238,7 @@ def _build_section_figure(
             ax.text(0.5, 0.5, f"no valid {name}", transform=ax.transAxes,
                     ha="center", va="center")
             if is_left:
-                ax.set_ylabel("Depth (m)")
+                ax.set_ylabel(_y_label)
             continue
         # Per-variable --clim wins; else the global --vmin/--vmax (only set for
         # a single-variable plot, enforced in run()); else auto 1/99 percentile.
@@ -269,7 +273,7 @@ def _build_section_figure(
         if name in _CBAR_MIN_AT_TOP:
             cbar.ax.invert_yaxis()  # min at top, max at bottom (mirrors depth)
         if is_left:
-            ax.set_ylabel("Depth (m)")
+            ax.set_ylabel(_y_label)
 
     for ax in axes:
         # Draw the grid over the color mesh (axisbelow False), a thin muted
@@ -277,7 +281,8 @@ def _build_section_figure(
         ax.set_axisbelow(False)
         ax.grid(True, color="0.4", linewidth=0.4, alpha=0.5)
 
-    axes[0].invert_yaxis()  # sharey: inverts every panel's depth axis
+    if _y_invert:
+        axes[0].invert_yaxis()  # sharey: inverts every panel's depth axis
     axes[0].set_xlim(x_edges[0], x_edges[-1])
 
     # The x label/formatter goes on the bottom-most panel of each column

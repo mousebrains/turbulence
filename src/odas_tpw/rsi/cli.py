@@ -565,6 +565,32 @@ def _cmd_eps(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _chi_response_params(
+    merged: dict[str, Any], cli_responses: list[str]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(kwargs, hash params) with fp07_response resolved and hashed by content.
+
+    The command line overrides a ``[chi] fp07_response`` in the config file.
+    Relative paths resolve against the working directory. The hash carries
+    the corrections' content digests, so a corrected run never shares a chi_NN
+    with an uncorrected one or with a different correction, and moving a
+    correction file does not re-version.
+    """
+    merged = dict(merged)
+    from_file = merged.pop("fp07_response", None)
+    raw = list(cli_responses) or (
+        [from_file] if isinstance(from_file, str) else list(from_file or [])
+    )
+    hash_params = dict(merged)
+    if raw:
+        from odas_tpw.chi.fp07_pair import load_corrections
+
+        paths = [str(Path(r).resolve()) for r in raw]
+        hash_params["fp07_response"] = sorted(c.digest() for c in load_corrections(paths))
+        merged["fp07_response"] = paths
+    return merged, hash_params
+
+
 def _cmd_chi(args: argparse.Namespace) -> None:
     """Compute chi (thermal variance dissipation rate) from any pipeline stage."""
     from odas_tpw.rsi.chi_io import _compute_chi_one, compute_chi_file
@@ -573,7 +599,10 @@ def _cmd_chi(args: argparse.Namespace) -> None:
 
     merged = _merge_for_section(args, "chi")
     _exit_on_bad_speed_selection(merged)
-    output_dir = _setup_output_dir(args, "chi", "chi", merged)
+    merged, hash_params = _chi_response_params(
+        merged, getattr(args, "fp07_response", None) or []
+    )
+    output_dir = _setup_output_dir(args, "chi", "chi", hash_params)
     print(f"Output directory: {output_dir}")
 
     # Load epsilon datasets if Method 1
@@ -646,6 +675,13 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
     # Gather parameters from CLI/config
     eps_merged = _merge_for_section(args, "epsilon_pipeline")
     chi_merged = _merge_for_section(args, "chi_pipeline")
+    if chi_merged.get("fp07_response"):
+        print(
+            "Error: rsi-tpw pipeline does not apply fp07_response (it computes chi on "
+            "its own path). Use `rsi-tpw chi --fp07-response` or perturb.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     # --salinity measured maps to None: run_pipeline already auto-prefers
     # measured JAC C/T salinity (rsi/pipeline._resolve_salinity); the string
@@ -943,8 +979,9 @@ def _add_cutp_parser(subparsers: argparse._SubParsersAction) -> None:
             "Create a valid .p file containing a contiguous range of complete "
             "data records. This is a byte-level debugging utility, not a "
             "pressure- or profile-aware scientific extraction. For --start "
-            "N>0 the record-0 header timestamp is advanced by N record "
-            "durations so absolute time matches the copied data; the rest of "
+            "N>0 the record-0 header timestamp is advanced by N true record "
+            "durations (record words / sampling clock, not the nominal "
+            "recsize) so absolute time matches the copied data; the rest of "
             "the header and config are copied unchanged."
         ),
     )
@@ -1317,6 +1354,15 @@ def _add_chi_parser(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         choices=["single_pole", "double_pole"],
         help="FP07 transfer function model (default: single_pole)",
+    )
+    p.add_argument(
+        "--fp07-response",
+        action="append",
+        metavar="FILE",
+        default=None,
+        help="Measured per-bead FP07 response correction from 'fp07-pair fit' "
+        "(repeatable). The one matching each file's beads and time is applied; "
+        "a file no correction matches is refused.",
     )
     p.add_argument(
         "--epsilon-dir",
@@ -1940,13 +1986,13 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    from odas_tpw.rsi import __version__
+    from odas_tpw._version_info import add_version_argument
 
     parser = argparse.ArgumentParser(
         prog="rsi-tpw",
         description="microstructure-tpw: Read Rockland Scientific .P files and convert to NetCDF.",
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    add_version_argument(parser)
     parser.add_argument(
         "-c",
         "--config",

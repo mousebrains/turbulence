@@ -216,7 +216,7 @@ class TestF05PairingTolerance:
         assert np.all(np.isfinite(out))
 
     def test_gap_does_not_shadow_an_adjacent_valid_estimate(self):
-        """The behaviour this replaced must survive: a NaN neighbour is skipped."""
+        """The behavior this replaced must survive: a NaN neighbor is skipped."""
         src_t = np.arange(0.0, 40.0, 8.0)
         src_v = np.array([1e-7, np.nan, 3e-7, 4e-7, 5e-7])
         out = pair_nearest(src_t, src_v, np.array([8.0]))

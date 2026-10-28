@@ -1,0 +1,1620 @@
+# Plotting sections — CASPER-West VMP-250IR SN 194 (R/V Sally Ride SR1715)
+#
+# Consumed by perturb-plot via --sections, e.g.
+#   perturb-plot scalar --root Processed --sections sections.yaml \
+#       --out-dir figs/ --var JAC_T --var SP --select R02_20171012T0530
+#
+# ONE SECTION = ONE STATION OCCUPATION: a slow tow-yo at a station, cut on
+# station identity plus a 30 min gap. Casts within a tow-yo are ~6 min
+# apart and transits are >= 50 min, so the cut is unambiguous.
+#
+# Station identity comes from Data/vmp/VMP_log_CASPER_West.xlsx.
+# Regenerate with make_sections.py rather than hand-editing.
+
+sections:
+
+  # ---- whole programme ---------------------------------------------------
+  - name: full_timeseries
+    xaxis: {method: time}
+
+  # ---- one per station, all occupations, time axis ------------------------
+  # 164 casts in 26 occupations, 09-29 .. 10-23
+  - name: station_F01
+    start: "2017-09-29T18:18:01Z"
+    stop:  "2017-10-23T13:41:40Z"
+    xaxis: {method: time}
+
+  # 85 casts in 14 occupations, 10-03 .. 10-04
+  - name: station_F04
+    start: "2017-10-03T15:49:41Z"
+    stop:  "2017-10-04T14:50:15Z"
+    xaxis: {method: time}
+
+  # 314 casts in 47 occupations, 09-30 .. 10-23
+  - name: station_F09
+    start: "2017-09-30T20:14:22Z"
+    stop:  "2017-10-23T11:50:20Z"
+    xaxis: {method: time}
+
+  # 805 casts in 45 occupations, 10-01 .. 10-23
+  - name: station_R02
+    start: "2017-10-01T03:18:38Z"
+    stop:  "2017-10-23T07:22:51Z"
+    xaxis: {method: time}
+
+  # 19 casts in 2 occupations, 10-09 .. 10-25
+  - name: station_R06
+    start: "2017-10-09T04:44:07Z"
+    stop:  "2017-10-25T04:50:19Z"
+    xaxis: {method: time}
+
+  # 296 casts in 45 occupations, 09-30 .. 10-25
+  - name: station_R10
+    start: "2017-09-30T17:47:47Z"
+    stop:  "2017-10-25T06:54:36Z"
+    xaxis: {method: time}
+
+  # 270 casts in 24 occupations, 09-30 .. 10-25
+  - name: station_R16
+    start: "2017-09-30T15:50:02Z"
+    stop:  "2017-10-25T02:14:17Z"
+    xaxis: {method: time}
+
+  # 73 casts in 11 occupations, 10-06 .. 10-17
+  - name: station_R18
+    start: "2017-10-06T02:44:27Z"
+    stop:  "2017-10-17T05:21:09Z"
+    xaxis: {method: time}
+
+  # 21 casts in 3 occupations, 10-06 .. 10-16
+  - name: station_R30
+    start: "2017-10-06T00:06:32Z"
+    stop:  "2017-10-16T04:04:35Z"
+    xaxis: {method: time}
+
+  # 33 casts in 6 occupations, 10-05 .. 10-17
+  - name: station_R42
+    start: "2017-10-05T21:11:40Z"
+    stop:  "2017-10-17T09:46:43Z"
+    xaxis: {method: time}
+
+  # ---- individual tow-yos -------------------------------------------------
+  # 8 casts, 0.46 h, 1.31 km on bearing 280 deg (straightness 1.00), to 90 dbar
+  #   DAT_015
+  - name: UNLOGGED_20170928T2227
+    start: "2017-09-28T22:27:45Z"
+    stop:  "2017-09-28T22:55:11Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 3 casts, 0.21 h, 0.19 km on bearing 260 deg (straightness 1.00), to 126 dbar
+  #   DAT_016
+  - name: F01_20170929T1818
+    start: "2017-09-29T18:18:01Z"
+    stop:  "2017-09-29T18:30:28Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 3 casts, 0.23 h, 0.24 km on bearing 264 deg (straightness 1.00), to 159 dbar
+  #   DAT_017
+  - name: F01_20170929T2048
+    start: "2017-09-29T20:48:11Z"
+    stop:  "2017-09-29T21:01:47Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 10 casts, 0.33 h, 0.31 km on bearing 247 deg (straightness 1.00), to 40 dbar
+  #   DAT_019
+  - name: R16_20170930T1550
+    start: "2017-09-30T15:50:02Z"
+    stop:  "2017-09-30T16:09:58Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 0.70 h, 0.65 km on bearing 240 deg (straightness 1.00), to 127 dbar
+  #   DAT_020
+  - name: R10_20170930T1747
+    start: "2017-09-30T17:47:47Z"
+    stop:  "2017-09-30T18:30:00Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.48 h, 0.69 km on bearing 255 deg (straightness 1.00), to 134 dbar
+  #   DAT_021
+  - name: F09_20170930T2014
+    start: "2017-09-30T20:14:22Z"
+    stop:  "2017-09-30T20:43:01Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.48 h, 0.88 km on bearing 240 deg (straightness 1.00), to 131 dbar
+  #   DAT_022
+  - name: R16_20171001T0004
+    start: "2017-10-01T00:04:24Z"
+    stop:  "2017-10-01T00:32:59Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 13 casts, 0.77 h, 0.28 km on bearing 246 deg (straightness 0.31), to 45 dbar
+  #   DAT_023
+  - name: R02_20171001T0318
+    start: "2017-10-01T03:18:38Z"
+    stop:  "2017-10-01T04:04:46Z"
+    xaxis: {method: time}   # too curved for a distance axis
+
+  # 4 casts, 0.48 h, 0.70 km on bearing 78 deg (straightness 1.00), to 132 dbar
+  #   DAT_025
+  - name: F09_20171001T0733
+    start: "2017-10-01T07:33:10Z"
+    stop:  "2017-10-01T08:02:03Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.59 h, 0.88 km on bearing 31 deg (straightness 1.00), to 149 dbar
+  #   DAT_026
+  - name: R16_20171001T1046
+    start: "2017-10-01T10:46:56Z"
+    stop:  "2017-10-01T11:22:07Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 11 casts, 0.46 h, 0.67 km on bearing 335 deg (straightness 1.00), to 46 dbar
+  #   DAT_027
+  - name: R02_20171001T1331
+    start: "2017-10-01T13:31:20Z"
+    stop:  "2017-10-01T13:59:14Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 20 casts, 0.60 h, 1.08 km on bearing 360 deg (straightness 1.00), to 47 dbar
+  #   DAT_028
+  - name: R02_20171001T1522
+    start: "2017-10-01T15:22:31Z"
+    stop:  "2017-10-01T15:58:22Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.50 h, 0.92 km on bearing 100 deg (straightness 1.00), to 174 dbar
+  #   DAT_029
+  - name: R10_20171001T1749
+    start: "2017-10-01T17:49:25Z"
+    stop:  "2017-10-01T18:19:17Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.61 h, 1.10 km on bearing 106 deg (straightness 0.99), to 139 dbar
+  #   DAT_030
+  - name: F09_20171001T2014
+    start: "2017-10-01T20:14:01Z"
+    stop:  "2017-10-01T20:50:21Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.59 h, 0.91 km on bearing 280 deg (straightness 1.00), to 138 dbar
+  #   DAT_031
+  - name: R16_20171002T0037
+    start: "2017-10-02T00:37:38Z"
+    stop:  "2017-10-02T01:13:00Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 20 casts, 0.65 h, 1.44 km on bearing 305 deg (straightness 1.00), to 47 dbar
+  #   DAT_032
+  - name: R02_20171002T0314
+    start: "2017-10-02T03:14:00Z"
+    stop:  "2017-10-02T03:52:56Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.57 h, 1.05 km on bearing 266 deg (straightness 1.00), to 136 dbar
+  #   DAT_033
+  - name: R10_20171002T0527
+    start: "2017-10-02T05:27:25Z"
+    stop:  "2017-10-02T06:01:24Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.53 h, 0.69 km on bearing 131 deg (straightness 1.00), to 138 dbar
+  #   DAT_034
+  - name: F09_20171002T0724
+    start: "2017-10-02T07:24:31Z"
+    stop:  "2017-10-02T07:56:35Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.59 h, 0.47 km on bearing 82 deg (straightness 0.99), to 155 dbar
+  #   DAT_035
+  - name: R16_20171002T1041
+    start: "2017-10-02T10:41:33Z"
+    stop:  "2017-10-02T11:16:58Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 17 casts, 0.62 h, 1.35 km on bearing 327 deg (straightness 1.00), to 49 dbar
+  #   DAT_036
+  - name: R02_20171002T1322
+    start: "2017-10-02T13:22:58Z"
+    stop:  "2017-10-02T14:00:27Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 11 casts, 0.54 h, 0.99 km on bearing 125 deg (straightness 1.00), to 91 dbar
+  #   DAT_037
+  - name: R02_20171002T1512
+    start: "2017-10-02T15:12:36Z"
+    stop:  "2017-10-02T15:44:46Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.58 h, 1.06 km on bearing 275 deg (straightness 1.00), to 140 dbar
+  #   DAT_038
+  - name: R10_20171002T1741
+    start: "2017-10-02T17:41:20Z"
+    stop:  "2017-10-02T18:15:51Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 0.80 h, 0.99 km on bearing 270 deg (straightness 1.00), to 149 dbar
+  #   DAT_039
+  - name: F09_20171002T2035
+    start: "2017-10-02T20:35:29Z"
+    stop:  "2017-10-02T21:23:20Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.74 h, 1.35 km on bearing 285 deg (straightness 1.00), to 138 dbar
+  #   DAT_041
+  - name: R16_20171003T0026
+    start: "2017-10-03T00:26:20Z"
+    stop:  "2017-10-03T01:10:39Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 11 casts, 0.53 h, 0.97 km on bearing 337 deg (straightness 1.00), to 69 dbar
+  #   DAT_042
+  - name: R02_20171003T0319
+    start: "2017-10-03T03:19:48Z"
+    stop:  "2017-10-03T03:51:34Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.64 h, 1.20 km on bearing 333 deg (straightness 1.00), to 137 dbar
+  #   DAT_043
+  - name: R10_20171003T0526
+    start: "2017-10-03T05:26:36Z"
+    stop:  "2017-10-03T06:05:17Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.56 h, 0.69 km on bearing 175 deg (straightness 1.00), to 139 dbar
+  #   DAT_044
+  - name: F09_20171003T0730
+    start: "2017-10-03T07:30:27Z"
+    stop:  "2017-10-03T08:03:49Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.57 h, 0.43 km on bearing 153 deg (straightness 0.99), to 140 dbar
+  #   DAT_045
+  - name: R16_20171003T1045
+    start: "2017-10-03T10:45:42Z"
+    stop:  "2017-10-03T11:20:05Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.97 h, 1.80 km on bearing 167 deg (straightness 1.00), to 165 dbar
+  #   DAT_046
+  - name: F04_20171003T1549
+    start: "2017-10-03T15:49:41Z"
+    stop:  "2017-10-03T16:47:49Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.75 h, 1.38 km on bearing 183 deg (straightness 1.00), to 156 dbar
+  #   DAT_047
+  - name: F04_20171003T1755
+    start: "2017-10-03T17:55:56Z"
+    stop:  "2017-10-03T18:40:56Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.62 h, 0.72 km on bearing 162 deg (straightness 0.98), to 170 dbar
+  #   DAT_048
+  - name: F04_20171003T1935
+    start: "2017-10-03T19:35:35Z"
+    stop:  "2017-10-03T20:13:00Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.61 h, 0.57 km on bearing 234 deg (straightness 1.00), to 178 dbar
+  #   DAT_049
+  - name: F04_20171003T2105
+    start: "2017-10-03T21:05:21Z"
+    stop:  "2017-10-03T21:41:56Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.62 h, 1.18 km on bearing 183 deg (straightness 1.00), to 160 dbar
+  #   DAT_050
+  - name: F04_20171003T2229
+    start: "2017-10-03T22:29:41Z"
+    stop:  "2017-10-03T23:07:03Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.66 h, 1.42 km on bearing 205 deg (straightness 1.00), to 157 dbar
+  #   DAT_052
+  - name: F04_20171004T0004
+    start: "2017-10-04T00:04:01Z"
+    stop:  "2017-10-04T00:43:48Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.63 h, 1.64 km on bearing 295 deg (straightness 1.00), to 157 dbar
+  #   DAT_053
+  - name: F04_20171004T0305
+    start: "2017-10-04T03:05:14Z"
+    stop:  "2017-10-04T03:43:06Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.57 h, 1.06 km on bearing 50 deg (straightness 1.00), to 156 dbar
+  #   DAT_053
+  - name: F04_20171004T0420
+    start: "2017-10-04T04:20:57Z"
+    stop:  "2017-10-04T04:55:08Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.62 h, 0.96 km on bearing 63 deg (straightness 0.95), to 161 dbar
+  #   DAT_054
+  - name: F04_20171004T0722
+    start: "2017-10-04T07:22:25Z"
+    stop:  "2017-10-04T07:59:37Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.52 h, 0.79 km on bearing 98 deg (straightness 0.98), to 160 dbar
+  #   DAT_056
+  - name: F04_20171004T0952
+    start: "2017-10-04T09:52:32Z"
+    stop:  "2017-10-04T10:23:26Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.54 h, 1.08 km on bearing 79 deg (straightness 1.00), to 159 dbar
+  #   DAT_057
+  - name: F04_20171004T1057
+    start: "2017-10-04T10:57:06Z"
+    stop:  "2017-10-04T11:29:19Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 4 casts, 0.44 h, 0.83 km on bearing 61 deg (straightness 1.00), to 165 dbar
+  #   DAT_058
+  - name: F04_20171004T1211
+    start: "2017-10-04T12:11:50Z"
+    stop:  "2017-10-04T12:37:59Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 11 casts, 1.56 h, 1.14 km on bearing 332 deg (straightness 0.32), to 168 dbar
+  #   DAT_059, DAT_060
+  - name: F04_20171004T1316
+    start: "2017-10-04T13:16:45Z"
+    stop:  "2017-10-04T14:50:15Z"
+    xaxis: {method: time}   # too curved for a distance axis
+
+  # 7 casts, 0.61 h, 0.77 km on bearing 297 deg (straightness 0.91), to 142 dbar
+  #   DAT_062
+  - name: F09_20171004T1851
+    start: "2017-10-04T18:51:43Z"
+    stop:  "2017-10-04T19:28:14Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.61 h, 0.37 km on bearing 270 deg (straightness 0.99), to 147 dbar
+  #   DAT_063
+  - name: F01_20171004T2115
+    start: "2017-10-04T21:15:08Z"
+    stop:  "2017-10-04T21:51:48Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.57 h, 1.56 km on bearing 310 deg (straightness 1.00), to 134 dbar
+  #   DAT_065
+  - name: R16_20171005T0210
+    start: "2017-10-05T02:10:18Z"
+    stop:  "2017-10-05T02:44:13Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 13 casts, 0.62 h, 0.66 km on bearing 345 deg (straightness 0.97), to 75 dbar
+  #   DAT_067
+  - name: R02_20171005T0501
+    start: "2017-10-05T05:01:45Z"
+    stop:  "2017-10-05T05:38:46Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.66 h, 1.25 km on bearing 311 deg (straightness 0.99), to 137 dbar
+  #   DAT_068
+  - name: R10_20171005T0658
+    start: "2017-10-05T06:58:21Z"
+    stop:  "2017-10-05T07:38:03Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.70 h, 1.45 km on bearing 346 deg (straightness 1.00), to 138 dbar
+  #   DAT_069
+  - name: F09_20171005T0859
+    start: "2017-10-05T08:59:36Z"
+    stop:  "2017-10-05T09:41:19Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.54 h, 0.55 km on bearing 103 deg (straightness 1.00), to 138 dbar
+  #   DAT_071
+  - name: R16_20171005T1221
+    start: "2017-10-05T12:21:41Z"
+    stop:  "2017-10-05T12:53:52Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.49 h, 0.91 km on bearing 272 deg (straightness 0.99), to 138 dbar
+  #   DAT_072
+  - name: R42_20171005T2111
+    start: "2017-10-05T21:11:40Z"
+    stop:  "2017-10-05T21:40:56Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.56 h, 0.67 km on bearing 272 deg (straightness 0.99), to 141 dbar
+  #   DAT_073
+  - name: R30_20171006T0006
+    start: "2017-10-06T00:06:32Z"
+    stop:  "2017-10-06T00:40:04Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.49 h, 1.65 km on bearing 264 deg (straightness 1.00), to 132 dbar
+  #   DAT_074
+  - name: R18_20171006T0244
+    start: "2017-10-06T02:44:27Z"
+    stop:  "2017-10-06T03:13:37Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 4 casts, 0.19 h, 0.51 km on bearing 299 deg (straightness 0.99), to 134 dbar
+  #   DAT_075
+  - name: R10_20171006T0439
+    start: "2017-10-06T04:39:29Z"
+    stop:  "2017-10-06T04:51:03Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 11 casts, 0.59 h, 0.60 km on bearing 348 deg (straightness 0.99), to 72 dbar
+  #   DAT_076
+  - name: R02_20171006T0639
+    start: "2017-10-06T06:39:18Z"
+    stop:  "2017-10-06T07:14:56Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.44 h, 0.64 km on bearing 76 deg (straightness 1.00), to 137 dbar
+  #   DAT_077
+  - name: R18_20171006T0953
+    start: "2017-10-06T09:53:32Z"
+    stop:  "2017-10-06T10:19:51Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.43 h, 0.68 km on bearing 57 deg (straightness 1.00), to 182 dbar
+  #   DAT_080
+  - name: R30_20171006T1729
+    start: "2017-10-06T17:29:04Z"
+    stop:  "2017-10-06T17:55:02Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.54 h, 0.30 km on bearing 232 deg (straightness 0.99), to 147 dbar
+  #   DAT_081
+  - name: R18_20171006T2019
+    start: "2017-10-06T20:19:40Z"
+    stop:  "2017-10-06T20:51:53Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 0.63 h, 0.85 km on bearing 329 deg (straightness 1.00), to 143 dbar
+  #   DAT_082
+  - name: R10_20171006T2247
+    start: "2017-10-06T22:47:45Z"
+    stop:  "2017-10-06T23:25:34Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.19 h, 0.23 km on bearing 287 deg (straightness 0.98), to 43 dbar
+  #   DAT_083
+  - name: R02_20171007T0124
+    start: "2017-10-07T01:24:59Z"
+    stop:  "2017-10-07T01:36:17Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.65 h, 1.88 km on bearing 311 deg (straightness 1.00), to 138 dbar
+  #   DAT_084
+  - name: R18_20171007T0409
+    start: "2017-10-07T04:09:16Z"
+    stop:  "2017-10-07T04:47:59Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.67 h, 1.81 km on bearing 299 deg (straightness 1.00), to 136 dbar
+  #   DAT_085
+  - name: R42_20171007T0820
+    start: "2017-10-07T08:20:17Z"
+    stop:  "2017-10-07T09:00:38Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.56 h, 1.13 km on bearing 8 deg (straightness 1.00), to 136 dbar
+  #   DAT_086
+  - name: R18_20171007T1229
+    start: "2017-10-07T12:29:11Z"
+    stop:  "2017-10-07T13:02:36Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 18 casts, 0.63 h, 1.38 km on bearing 44 deg (straightness 1.00), to 41 dbar
+  #   DAT_087
+  - name: R02_20171007T1606
+    start: "2017-10-07T16:06:21Z"
+    stop:  "2017-10-07T16:43:56Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 0.77 h, 0.44 km on bearing 133 deg (straightness 0.97), to 141 dbar
+  #   DAT_088
+  - name: R18_20171007T1951
+    start: "2017-10-07T19:51:03Z"
+    stop:  "2017-10-07T20:37:03Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.52 h, 0.39 km on bearing 278 deg (straightness 0.99), to 140 dbar
+  #   DAT_089
+  - name: R42_20171008T0027
+    start: "2017-10-08T00:27:58Z"
+    stop:  "2017-10-08T00:58:57Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.54 h, 1.69 km on bearing 296 deg (straightness 1.00), to 134 dbar
+  #   DAT_092
+  - name: R18_20171008T0451
+    start: "2017-10-08T04:51:30Z"
+    stop:  "2017-10-08T05:24:11Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 13 casts, 0.65 h, 0.76 km on bearing 304 deg (straightness 1.00), to 91 dbar
+  #   DAT_093
+  - name: R02_20171008T0755
+    start: "2017-10-08T07:55:33Z"
+    stop:  "2017-10-08T08:34:27Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.53 h, 0.74 km on bearing 93 deg (straightness 1.00), to 138 dbar
+  #   DAT_094
+  - name: R18_20171008T1113
+    start: "2017-10-08T11:13:05Z"
+    stop:  "2017-10-08T11:44:59Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.53 h, 0.50 km on bearing 96 deg (straightness 0.99), to 154 dbar
+  #   DAT_095
+  - name: R42_20171008T1548
+    start: "2017-10-08T15:48:30Z"
+    stop:  "2017-10-08T16:20:23Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.74 h, 0.83 km on bearing 154 deg (straightness 1.00), to 139 dbar
+  #   DAT_096
+  - name: R16_20171008T2032
+    start: "2017-10-08T20:32:56Z"
+    stop:  "2017-10-08T21:17:25Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.64 h, 0.34 km on bearing 261 deg (straightness 0.92), to 142 dbar
+  #   DAT_097
+  - name: F01_20171008T2317
+    start: "2017-10-08T23:17:50Z"
+    stop:  "2017-10-08T23:56:21Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.51 h, 0.47 km on bearing 13 deg (straightness 0.99), to 140 dbar
+  #   DAT_098
+  - name: F09_20171009T0118
+    start: "2017-10-09T01:18:13Z"
+    stop:  "2017-10-09T01:48:56Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.53 h, 1.33 km on bearing 297 deg (straightness 1.00), to 138 dbar
+  #   DAT_099
+  - name: R10_20171009T0318
+    start: "2017-10-09T03:18:26Z"
+    stop:  "2017-10-09T03:50:19Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.61 h, 1.11 km on bearing 310 deg (straightness 1.00), to 139 dbar
+  #   DAT_100
+  - name: R06_20171009T0444
+    start: "2017-10-09T04:44:07Z"
+    stop:  "2017-10-09T05:20:34Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 17 casts, 0.68 h, 1.14 km on bearing 352 deg (straightness 1.00), to 72 dbar
+  #   DAT_101
+  - name: R02_20171009T0612
+    start: "2017-10-09T06:12:23Z"
+    stop:  "2017-10-09T06:53:14Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 17 casts, 0.75 h, 0.64 km on bearing 11 deg (straightness 0.65), to 56 dbar
+  #   DAT_102
+  - name: R02_20171009T0821
+    start: "2017-10-09T08:21:10Z"
+    stop:  "2017-10-09T09:06:21Z"
+    xaxis: {method: time}   # too curved for a distance axis
+
+  # 23 casts, 0.72 h, 0.57 km on bearing 104 deg (straightness 0.97), to 50 dbar
+  #   DAT_103
+  - name: R02_20171009T1016
+    start: "2017-10-09T10:16:24Z"
+    stop:  "2017-10-09T10:59:35Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 23 casts, 0.73 h, 0.71 km on bearing 94 deg (straightness 0.99), to 49 dbar
+  #   DAT_104
+  - name: R02_20171009T1225
+    start: "2017-10-09T12:25:05Z"
+    stop:  "2017-10-09T13:08:42Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 13 casts, 0.56 h, 0.79 km on bearing 100 deg (straightness 0.99), to 72 dbar
+  #   DAT_105
+  - name: R02_20171009T1545
+    start: "2017-10-09T15:45:17Z"
+    stop:  "2017-10-09T16:18:56Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 13 casts, 0.61 h, 0.81 km on bearing 116 deg (straightness 0.98), to 94 dbar
+  #   DAT_106
+  - name: R02_20171009T1709
+    start: "2017-10-09T17:09:54Z"
+    stop:  "2017-10-09T17:46:40Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 17 casts, 0.66 h, 1.05 km on bearing 115 deg (straightness 0.99), to 93 dbar
+  #   DAT_107
+  - name: R02_20171009T1907
+    start: "2017-10-09T19:07:56Z"
+    stop:  "2017-10-09T19:47:46Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 17 casts, 0.74 h, 0.97 km on bearing 184 deg (straightness 0.99), to 72 dbar
+  #   DAT_108
+  - name: R02_20171009T2113
+    start: "2017-10-09T21:13:46Z"
+    stop:  "2017-10-09T21:57:53Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.60 h, 0.86 km on bearing 243 deg (straightness 0.95), to 141 dbar
+  #   DAT_109
+  - name: R10_20171009T2346
+    start: "2017-10-09T23:46:41Z"
+    stop:  "2017-10-10T00:22:35Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.54 h, 0.85 km on bearing 251 deg (straightness 0.99), to 140 dbar
+  #   DAT_110
+  - name: F09_20171010T0215
+    start: "2017-10-10T02:15:46Z"
+    stop:  "2017-10-10T02:48:21Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.57 h, 0.93 km on bearing 275 deg (straightness 1.00), to 142 dbar
+  #   DAT_111
+  - name: F01_20171010T0409
+    start: "2017-10-10T04:09:56Z"
+    stop:  "2017-10-10T04:43:53Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.74 h, 1.90 km on bearing 244 deg (straightness 1.00), to 139 dbar
+  #   DAT_112
+  - name: F09_20171010T0615
+    start: "2017-10-10T06:15:04Z"
+    stop:  "2017-10-10T06:59:14Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.69 h, 1.40 km on bearing 213 deg (straightness 1.00), to 137 dbar
+  #   DAT_113
+  - name: R10_20171010T0812
+    start: "2017-10-10T08:12:29Z"
+    stop:  "2017-10-10T08:54:01Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 16 casts, 0.60 h, 0.81 km on bearing 131 deg (straightness 0.99), to 63 dbar
+  #   DAT_114
+  - name: R02_20171010T1018
+    start: "2017-10-10T10:18:34Z"
+    stop:  "2017-10-10T10:54:30Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.64 h, 1.01 km on bearing 230 deg (straightness 1.00), to 141 dbar
+  #   DAT_115
+  - name: R10_20171010T1216
+    start: "2017-10-10T12:16:46Z"
+    stop:  "2017-10-10T12:55:17Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.77 h, 1.18 km on bearing 141 deg (straightness 1.00), to 140 dbar
+  #   DAT_116
+  - name: F09_20171010T1413
+    start: "2017-10-10T14:13:33Z"
+    stop:  "2017-10-10T14:59:38Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.54 h, 1.37 km on bearing 293 deg (straightness 1.00), to 140 dbar
+  #   DAT_117
+  - name: F01_20171010T1801
+    start: "2017-10-10T18:01:34Z"
+    stop:  "2017-10-10T18:33:42Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.67 h, 1.40 km on bearing 341 deg (straightness 1.00), to 139 dbar
+  #   DAT_124
+  - name: F01_20171011T1144
+    start: "2017-10-11T11:44:40Z"
+    stop:  "2017-10-11T12:24:42Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.42 h, 0.25 km on bearing 281 deg (straightness 0.87), to 141 dbar
+  #   DAT_125
+  - name: F01_20171011T2331
+    start: "2017-10-11T23:31:01Z"
+    stop:  "2017-10-11T23:56:20Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.53 h, 0.30 km on bearing 305 deg (straightness 0.98), to 141 dbar
+  #   DAT_126
+  - name: F09_20171012T0137
+    start: "2017-10-12T01:37:23Z"
+    stop:  "2017-10-12T02:09:29Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.53 h, 0.74 km on bearing 302 deg (straightness 1.00), to 142 dbar
+  #   DAT_127
+  - name: R10_20171012T0315
+    start: "2017-10-12T03:15:51Z"
+    stop:  "2017-10-12T03:47:25Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 13 casts, 0.66 h, 1.00 km on bearing 29 deg (straightness 0.98), to 91 dbar
+  #   DAT_128
+  - name: R02_20171012T0509
+    start: "2017-10-12T05:09:13Z"
+    stop:  "2017-10-12T05:48:36Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.61 h, 1.51 km on bearing 199 deg (straightness 1.00), to 137 dbar
+  #   DAT_129
+  - name: R10_20171012T0711
+    start: "2017-10-12T07:11:35Z"
+    stop:  "2017-10-12T07:48:03Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.61 h, 0.55 km on bearing 147 deg (straightness 0.96), to 140 dbar
+  #   DAT_130
+  - name: F09_20171012T0916
+    start: "2017-10-12T09:16:27Z"
+    stop:  "2017-10-12T09:53:16Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.66 h, 0.72 km on bearing 85 deg (straightness 0.99), to 147 dbar
+  #   DAT_131
+  - name: F01_20171012T1116
+    start: "2017-10-12T11:16:13Z"
+    stop:  "2017-10-12T11:55:45Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.59 h, 1.21 km on bearing 118 deg (straightness 1.00), to 136 dbar
+  #   DAT_132
+  - name: F09_20171012T1314
+    start: "2017-10-12T13:14:36Z"
+    stop:  "2017-10-12T13:49:53Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 4 casts, 0.36 h, 0.75 km on bearing 240 deg (straightness 1.00), to 137 dbar
+  #   DAT_133
+  - name: R10_20171012T1602
+    start: "2017-10-12T16:02:08Z"
+    stop:  "2017-10-12T16:23:56Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 0.71 h, 0.74 km on bearing 270 deg (straightness 0.94), to 146 dbar
+  #   DAT_134
+  - name: R10_20171012T1945
+    start: "2017-10-12T19:45:56Z"
+    stop:  "2017-10-12T20:28:49Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.60 h, 0.46 km on bearing 239 deg (straightness 0.88), to 146 dbar
+  #   DAT_135
+  - name: F09_20171012T2213
+    start: "2017-10-12T22:13:31Z"
+    stop:  "2017-10-12T22:49:44Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.55 h, 1.04 km on bearing 253 deg (straightness 0.99), to 141 dbar
+  #   DAT_137
+  - name: F09_20171013T0347
+    start: "2017-10-13T03:47:50Z"
+    stop:  "2017-10-13T04:20:41Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.67 h, 1.61 km on bearing 269 deg (straightness 1.00), to 139 dbar
+  #   DAT_138
+  - name: R10_20171013T0540
+    start: "2017-10-13T05:40:33Z"
+    stop:  "2017-10-13T06:20:35Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 11 casts, 0.33 h, 0.76 km on bearing 125 deg (straightness 1.00), to 54 dbar
+  #   DAT_139
+  - name: R02_20171013T0748
+    start: "2017-10-13T07:48:25Z"
+    stop:  "2017-10-13T08:08:12Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.63 h, 0.83 km on bearing 113 deg (straightness 1.00), to 140 dbar
+  #   DAT_140
+  - name: F09_20171013T0940
+    start: "2017-10-13T09:40:18Z"
+    stop:  "2017-10-13T10:17:51Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.65 h, 0.88 km on bearing 89 deg (straightness 0.96), to 136 dbar
+  #   DAT_141
+  - name: R10_20171013T1343
+    start: "2017-10-13T13:43:23Z"
+    stop:  "2017-10-13T14:22:33Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 17 casts, 0.75 h, 1.73 km on bearing 39 deg (straightness 1.00), to 68 dbar
+  #   DAT_142
+  - name: R02_20171013T1611
+    start: "2017-10-13T16:11:13Z"
+    stop:  "2017-10-13T16:55:57Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.42 h, 0.65 km on bearing 299 deg (straightness 1.00), to 141 dbar
+  #   DAT_143
+  - name: F01_20171014T0126
+    start: "2017-10-14T01:26:09Z"
+    stop:  "2017-10-14T01:51:37Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.56 h, 1.13 km on bearing 215 deg (straightness 1.00), to 136 dbar
+  #   DAT_144
+  - name: F09_20171014T0312
+    start: "2017-10-14T03:12:16Z"
+    stop:  "2017-10-14T03:46:02Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.70 h, 1.25 km on bearing 184 deg (straightness 1.00), to 137 dbar
+  #   DAT_145
+  - name: F01_20171014T0512
+    start: "2017-10-14T05:12:36Z"
+    stop:  "2017-10-14T05:54:28Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.63 h, 0.83 km on bearing 119 deg (straightness 1.00), to 141 dbar
+  #   DAT_146
+  - name: F09_20171014T0715
+    start: "2017-10-14T07:15:10Z"
+    stop:  "2017-10-14T07:52:46Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.62 h, 0.39 km on bearing 106 deg (straightness 0.99), to 144 dbar
+  #   DAT_147
+  - name: R10_20171014T0906
+    start: "2017-10-14T09:06:18Z"
+    stop:  "2017-10-14T09:43:43Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 19 casts, 0.64 h, 0.83 km on bearing 75 deg (straightness 1.00), to 138 dbar
+  #   DAT_148
+  - name: R02_20171014T1119
+    start: "2017-10-14T11:19:07Z"
+    stop:  "2017-10-14T11:57:35Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 28 casts, 1.86 h, 0.58 km on bearing 3 deg (straightness 0.17), to 137 dbar
+  #   DAT_149
+  - name: R02_20171014T1235
+    start: "2017-10-14T12:35:00Z"
+    stop:  "2017-10-14T14:26:54Z"
+    xaxis: {method: time}   # too curved for a distance axis
+
+  # 16 casts, 0.57 h, 0.91 km on bearing 8 deg (straightness 1.00), to 67 dbar
+  #   DAT_150
+  - name: R02_20171014T1533
+    start: "2017-10-14T15:33:46Z"
+    stop:  "2017-10-14T16:08:07Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 12 casts, 0.43 h, 0.78 km on bearing 53 deg (straightness 1.00), to 57 dbar
+  #   DAT_151
+  - name: R02_20171014T1648
+    start: "2017-10-14T16:48:24Z"
+    stop:  "2017-10-14T17:14:25Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 13 casts, 0.42 h, 0.78 km on bearing 185 deg (straightness 1.00), to 67 dbar
+  #   DAT_152
+  - name: R02_20171014T1815
+    start: "2017-10-14T18:15:19Z"
+    stop:  "2017-10-14T18:40:30Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 24 casts, 0.78 h, 1.12 km on bearing 188 deg (straightness 1.00), to 76 dbar
+  #   DAT_155
+  - name: R02_20171014T1949
+    start: "2017-10-14T19:49:49Z"
+    stop:  "2017-10-14T20:36:30Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.61 h, 1.01 km on bearing 276 deg (straightness 1.00), to 241 dbar
+  #   DAT_156
+  - name: R10_20171014T2240
+    start: "2017-10-14T22:40:09Z"
+    stop:  "2017-10-14T23:16:39Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 4 casts, 0.29 h, 0.41 km on bearing 325 deg (straightness 1.00), to 142 dbar
+  #   DAT_157
+  - name: F09_20171015T0105
+    start: "2017-10-15T01:05:19Z"
+    stop:  "2017-10-15T01:22:54Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.66 h, 1.41 km on bearing 323 deg (straightness 1.00), to 140 dbar
+  #   DAT_158
+  - name: F01_20171015T0240
+    start: "2017-10-15T02:40:33Z"
+    stop:  "2017-10-15T03:19:52Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.63 h, 0.96 km on bearing 295 deg (straightness 0.99), to 147 dbar
+  #   DAT_159
+  - name: F09_20171015T0437
+    start: "2017-10-15T04:37:11Z"
+    stop:  "2017-10-15T05:15:00Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.65 h, 0.69 km on bearing 171 deg (straightness 0.99), to 142 dbar
+  #   DAT_161
+  - name: F01_20171015T0637
+    start: "2017-10-15T06:37:22Z"
+    stop:  "2017-10-15T07:16:39Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.62 h, 0.35 km on bearing 159 deg (straightness 1.00), to 143 dbar
+  #   DAT_162
+  - name: F09_20171015T0838
+    start: "2017-10-15T08:38:13Z"
+    stop:  "2017-10-15T09:15:40Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.64 h, 0.53 km on bearing 90 deg (straightness 1.00), to 144 dbar
+  #   DAT_163
+  - name: R10_20171015T1036
+    start: "2017-10-15T10:36:50Z"
+    stop:  "2017-10-15T11:15:31Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 19 casts, 0.81 h, 1.14 km on bearing 186 deg (straightness 1.00), to 84 dbar
+  #   DAT_164
+  - name: R02_20171015T1245
+    start: "2017-10-15T12:45:47Z"
+    stop:  "2017-10-15T13:34:26Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 13 casts, 0.51 h, 0.67 km on bearing 82 deg (straightness 1.00), to 82 dbar
+  #   DAT_165
+  - name: R02_20171015T1411
+    start: "2017-10-15T14:11:29Z"
+    stop:  "2017-10-15T14:42:19Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 18 casts, 0.33 h, 0.43 km on bearing 58 deg (straightness 1.00), to 37 dbar
+  #   DAT_166
+  - name: R02_20171015T1532
+    start: "2017-10-15T15:32:23Z"
+    stop:  "2017-10-15T15:52:26Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.44 h, 0.63 km on bearing 295 deg (straightness 0.99), to 162 dbar
+  #   DAT_168
+  - name: R10_20171015T1817
+    start: "2017-10-15T18:17:27Z"
+    stop:  "2017-10-15T18:44:00Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.76 h, 1.07 km on bearing 264 deg (straightness 1.00), to 143 dbar
+  #   DAT_169
+  - name: R18_20171015T2040
+    start: "2017-10-15T20:40:00Z"
+    stop:  "2017-10-15T21:25:43Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 3 casts, 0.21 h, 0.41 km on bearing 273 deg (straightness 1.00), to 139 dbar
+  #   DAT_170
+  - name: R42_20171016T0122
+    start: "2017-10-16T01:22:41Z"
+    stop:  "2017-10-16T01:35:16Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.76 h, 1.61 km on bearing 314 deg (straightness 1.00), to 141 dbar
+  #   DAT_171
+  - name: R30_20171016T0318
+    start: "2017-10-16T03:18:55Z"
+    stop:  "2017-10-16T04:04:35Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.54 h, 0.97 km on bearing 335 deg (straightness 1.00), to 142 dbar
+  #   DAT_172
+  - name: R18_20171016T0556
+    start: "2017-10-16T05:56:07Z"
+    stop:  "2017-10-16T06:28:47Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.65 h, 1.37 km on bearing 351 deg (straightness 1.00), to 140 dbar
+  #   DAT_173
+  - name: R10_20171016T0751
+    start: "2017-10-16T07:51:51Z"
+    stop:  "2017-10-16T08:30:40Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 25 casts, 0.76 h, 1.27 km on bearing 341 deg (straightness 0.96), to 49 dbar
+  #   DAT_174
+  - name: R02_20171016T0950
+    start: "2017-10-16T09:50:01Z"
+    stop:  "2017-10-16T10:35:44Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.42 h, 1.11 km on bearing 303 deg (straightness 1.00), to 139 dbar
+  #   DAT_175
+  - name: R10_20171016T1209
+    start: "2017-10-16T12:09:29Z"
+    stop:  "2017-10-16T12:34:38Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.69 h, 2.05 km on bearing 351 deg (straightness 1.00), to 138 dbar
+  #   DAT_176
+  - name: F09_20171016T1349
+    start: "2017-10-16T13:49:55Z"
+    stop:  "2017-10-16T14:31:32Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.73 h, 1.33 km on bearing 320 deg (straightness 1.00), to 148 dbar
+  #   DAT_177
+  - name: F01_20171016T1714
+    start: "2017-10-16T17:14:08Z"
+    stop:  "2017-10-16T17:57:52Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.73 h, 0.96 km on bearing 302 deg (straightness 0.99), to 145 dbar
+  #   DAT_178
+  - name: F09_20171016T1947
+    start: "2017-10-16T19:47:21Z"
+    stop:  "2017-10-16T20:31:00Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.57 h, 1.43 km on bearing 276 deg (straightness 0.99), to 145 dbar
+  #   DAT_179
+  - name: R10_20171016T2215
+    start: "2017-10-16T22:15:28Z"
+    stop:  "2017-10-16T22:49:52Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 37 casts, 0.96 h, 1.87 km on bearing 295 deg (straightness 0.99), to 104 dbar
+  #   DAT_180
+  - name: R02_20171017T0030
+    start: "2017-10-17T00:30:50Z"
+    stop:  "2017-10-17T01:28:26Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.53 h, 1.06 km on bearing 333 deg (straightness 0.98), to 142 dbar
+  #   DAT_181
+  - name: R10_20171017T0259
+    start: "2017-10-17T02:59:26Z"
+    stop:  "2017-10-17T03:31:25Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.54 h, 1.08 km on bearing 343 deg (straightness 1.00), to 142 dbar
+  #   DAT_182
+  - name: R18_20171017T0448
+    start: "2017-10-17T04:48:43Z"
+    stop:  "2017-10-17T05:21:09Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.57 h, 1.28 km on bearing 299 deg (straightness 1.00), to 141 dbar
+  #   DAT_183
+  - name: R42_20171017T0912
+    start: "2017-10-17T09:12:47Z"
+    stop:  "2017-10-17T09:46:43Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.63 h, 1.38 km on bearing 304 deg (straightness 1.00), to 142 dbar
+  #   CPW_002
+  - name: R16_20171017T1341
+    start: "2017-10-17T13:41:53Z"
+    stop:  "2017-10-17T14:19:24Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.60 h, 1.23 km on bearing 327 deg (straightness 1.00), to 142 dbar
+  #   CPW_003
+  - name: R10_20171017T1645
+    start: "2017-10-17T16:45:14Z"
+    stop:  "2017-10-17T17:21:10Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 0.82 h, 0.75 km on bearing 309 deg (straightness 0.92), to 146 dbar
+  #   CPW_004
+  - name: F09_20171017T1904
+    start: "2017-10-17T19:04:17Z"
+    stop:  "2017-10-17T19:53:28Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.59 h, 0.59 km on bearing 289 deg (straightness 0.78), to 189 dbar
+  #   CPW_006
+  - name: F01_20171017T2131
+    start: "2017-10-17T21:31:59Z"
+    stop:  "2017-10-17T22:07:33Z"
+    xaxis: {method: time}   # too curved for a distance axis
+
+  # 10 casts, 1.14 h, 1.95 km on bearing 326 deg (straightness 0.88), to 149 dbar
+  #   CPW_007
+  - name: F09_20171017T2343
+    start: "2017-10-17T23:43:49Z"
+    stop:  "2017-10-18T00:52:06Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.73 h, 1.77 km on bearing 357 deg (straightness 0.98), to 143 dbar
+  #   CPW_008
+  - name: R10_20171018T0206
+    start: "2017-10-18T02:06:03Z"
+    stop:  "2017-10-18T02:49:50Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 17 casts, 0.71 h, 1.53 km on bearing 2 deg (straightness 0.99), to 103 dbar
+  #   CPW_009
+  - name: R02_20171018T0409
+    start: "2017-10-18T04:09:21Z"
+    stop:  "2017-10-18T04:51:52Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.54 h, 1.11 km on bearing 336 deg (straightness 1.00), to 144 dbar
+  #   CPW_010
+  - name: R10_20171018T0651
+    start: "2017-10-18T06:51:00Z"
+    stop:  "2017-10-18T07:23:20Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.64 h, 0.95 km on bearing 307 deg (straightness 0.84), to 149 dbar
+  #   CPW_011
+  - name: F09_20171018T0840
+    start: "2017-10-18T08:40:11Z"
+    stop:  "2017-10-18T09:18:37Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.63 h, 1.03 km on bearing 10 deg (straightness 0.99), to 146 dbar
+  #   CPW_012
+  - name: F01_20171018T1040
+    start: "2017-10-18T10:40:12Z"
+    stop:  "2017-10-18T11:18:18Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.57 h, 1.29 km on bearing 7 deg (straightness 1.00), to 149 dbar
+  #   CPW_013
+  - name: F09_20171018T1244
+    start: "2017-10-18T12:44:35Z"
+    stop:  "2017-10-18T13:18:48Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.81 h, 1.93 km on bearing 25 deg (straightness 1.00), to 144 dbar
+  #   CPW_014
+  - name: R10_20171018T1433
+    start: "2017-10-18T14:33:35Z"
+    stop:  "2017-10-18T15:22:18Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.66 h, 1.15 km on bearing 358 deg (straightness 0.99), to 188 dbar
+  #   CPW_015
+  - name: F09_20171018T1710
+    start: "2017-10-18T17:10:47Z"
+    stop:  "2017-10-18T17:50:36Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.35 h, 0.19 km on bearing 269 deg (straightness 0.93), to 148 dbar
+  #   CPW_016
+  - name: F01_20171018T2000
+    start: "2017-10-18T20:00:45Z"
+    stop:  "2017-10-18T20:21:59Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.85 h, 1.44 km on bearing 338 deg (straightness 1.00), to 146 dbar
+  #   CPW_017
+  - name: F09_20171018T2224
+    start: "2017-10-18T22:24:00Z"
+    stop:  "2017-10-18T23:15:03Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 10 casts, 1.03 h, 2.16 km on bearing 304 deg (straightness 1.00), to 148 dbar
+  #   CPW_018
+  - name: R10_20171019T0039
+    start: "2017-10-19T00:39:06Z"
+    stop:  "2017-10-19T01:40:43Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 13 casts, 0.63 h, 0.94 km on bearing 333 deg (straightness 0.98), to 75 dbar
+  #   CPW_019
+  - name: R02_20171019T0315
+    start: "2017-10-19T03:15:31Z"
+    stop:  "2017-10-19T03:53:19Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.59 h, 1.57 km on bearing 348 deg (straightness 1.00), to 143 dbar
+  #   CPW_020
+  - name: R10_20171019T0540
+    start: "2017-10-19T05:40:37Z"
+    stop:  "2017-10-19T06:15:59Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.55 h, 1.21 km on bearing 325 deg (straightness 1.00), to 147 dbar
+  #   CPW_021
+  - name: F09_20171019T0739
+    start: "2017-10-19T07:39:31Z"
+    stop:  "2017-10-19T08:12:13Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.55 h, 0.60 km on bearing 319 deg (straightness 0.69), to 158 dbar
+  #   CPW_022
+  - name: F01_20171019T0944
+    start: "2017-10-19T09:44:12Z"
+    stop:  "2017-10-19T10:16:58Z"
+    xaxis: {method: time}   # too curved for a distance axis
+
+  # 6 casts, 0.56 h, 1.30 km on bearing 347 deg (straightness 1.00), to 146 dbar
+  #   CPW_023
+  - name: F09_20171019T1148
+    start: "2017-10-19T11:48:39Z"
+    stop:  "2017-10-19T12:22:33Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.73 h, 1.70 km on bearing 319 deg (straightness 1.00), to 145 dbar
+  #   CPW_024
+  - name: R10_20171019T1338
+    start: "2017-10-19T13:38:02Z"
+    stop:  "2017-10-19T14:22:08Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.43 h, 1.37 km on bearing 325 deg (straightness 1.00), to 142 dbar
+  #   CPW_025
+  - name: F09_20171019T1624
+    start: "2017-10-19T16:24:46Z"
+    stop:  "2017-10-19T16:50:33Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.84 h, 2.08 km on bearing 319 deg (straightness 0.99), to 147 dbar
+  #   CPW_026
+  - name: F01_20171019T1834
+    start: "2017-10-19T18:34:05Z"
+    stop:  "2017-10-19T19:24:41Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.67 h, 0.98 km on bearing 230 deg (straightness 0.99), to 148 dbar
+  #   CPW_027
+  - name: F09_20171019T2211
+    start: "2017-10-19T22:11:12Z"
+    stop:  "2017-10-19T22:51:18Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 1.18 h, 2.25 km on bearing 288 deg (straightness 0.83), to 146 dbar
+  #   CPW_028
+  - name: R10_20171020T0011
+    start: "2017-10-20T00:11:27Z"
+    stop:  "2017-10-20T01:22:01Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 32 casts, 0.71 h, 0.97 km on bearing 270 deg (straightness 0.91), to 36 dbar
+  #   CPW_030
+  - name: R02_20171020T0243
+    start: "2017-10-20T02:43:05Z"
+    stop:  "2017-10-20T03:25:30Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.64 h, 1.07 km on bearing 314 deg (straightness 0.98), to 149 dbar
+  #   CPW_031
+  - name: R10_20171020T0510
+    start: "2017-10-20T05:10:51Z"
+    stop:  "2017-10-20T05:49:11Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.61 h, 0.47 km on bearing 296 deg (straightness 0.85), to 157 dbar
+  #   CPW_032
+  - name: F09_20171020T0708
+    start: "2017-10-20T07:08:50Z"
+    stop:  "2017-10-20T07:45:28Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.55 h, 0.68 km on bearing 253 deg (straightness 0.99), to 151 dbar
+  #   CPW_033
+  - name: F01_20171020T0909
+    start: "2017-10-20T09:09:07Z"
+    stop:  "2017-10-20T09:42:18Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.41 h, 0.27 km on bearing 287 deg (straightness 0.98), to 158 dbar
+  #   CPW_034
+  - name: F09_20171020T1122
+    start: "2017-10-20T11:22:42Z"
+    stop:  "2017-10-20T11:47:01Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.47 h, 0.85 km on bearing 300 deg (straightness 1.00), to 150 dbar
+  #   CPW_035
+  - name: R10_20171020T1320
+    start: "2017-10-20T13:20:52Z"
+    stop:  "2017-10-20T13:49:22Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.63 h, 1.46 km on bearing 321 deg (straightness 1.00), to 149 dbar
+  #   CPW_037
+  - name: R10_20171020T1714
+    start: "2017-10-20T17:14:44Z"
+    stop:  "2017-10-20T17:52:49Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.80 h, 1.17 km on bearing 299 deg (straightness 0.99), to 194 dbar
+  #   CPW_038
+  - name: F09_20171020T1932
+    start: "2017-10-20T19:32:19Z"
+    stop:  "2017-10-20T20:20:19Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 0.94 h, 1.01 km on bearing 277 deg (straightness 0.95), to 152 dbar
+  #   CPW_039
+  - name: F01_20171020T2151
+    start: "2017-10-20T21:51:07Z"
+    stop:  "2017-10-20T22:47:25Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 0.86 h, 1.50 km on bearing 269 deg (straightness 0.99), to 150 dbar
+  #   CPW_040
+  - name: F09_20171021T0015
+    start: "2017-10-21T00:15:09Z"
+    stop:  "2017-10-21T01:06:57Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 30 casts, 0.89 h, 1.42 km on bearing 316 deg (straightness 0.98), to 45 dbar
+  #   CPW_041
+  - name: R02_20171021T0331
+    start: "2017-10-21T03:31:18Z"
+    stop:  "2017-10-21T04:24:54Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 5 casts, 0.49 h, 1.21 km on bearing 333 deg (straightness 1.00), to 140 dbar
+  #   CPW_042
+  - name: R10_20171021T0620
+    start: "2017-10-21T06:20:32Z"
+    stop:  "2017-10-21T06:49:56Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.53 h, 0.86 km on bearing 306 deg (straightness 1.00), to 145 dbar
+  #   CPW_043
+  - name: F09_20171021T0815
+    start: "2017-10-21T08:15:57Z"
+    stop:  "2017-10-21T08:47:45Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.53 h, 1.15 km on bearing 14 deg (straightness 1.00), to 142 dbar
+  #   CPW_044
+  - name: F09_20171021T1115
+    start: "2017-10-21T11:15:12Z"
+    stop:  "2017-10-21T11:46:47Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.66 h, 1.65 km on bearing 325 deg (straightness 1.00), to 137 dbar
+  #   CPW_045
+  - name: R10_20171021T1309
+    start: "2017-10-21T13:09:01Z"
+    stop:  "2017-10-21T13:48:55Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 21 casts, 0.62 h, 1.63 km on bearing 344 deg (straightness 1.00), to 43 dbar
+  #   CPW_046
+  - name: R02_20171021T1534
+    start: "2017-10-21T15:34:57Z"
+    stop:  "2017-10-21T16:12:22Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 0.83 h, 0.45 km on bearing 318 deg (straightness 0.89), to 183 dbar
+  #   CPW_049
+  - name: R10_20171021T1900
+    start: "2017-10-21T19:00:30Z"
+    stop:  "2017-10-21T19:50:09Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.55 h, 0.43 km on bearing 282 deg (straightness 0.99), to 145 dbar
+  #   CPW_050
+  - name: F09_20171021T2150
+    start: "2017-10-21T21:50:07Z"
+    stop:  "2017-10-21T22:23:10Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.92 h, 1.15 km on bearing 293 deg (straightness 0.74), to 144 dbar
+  #   CPW_051
+  - name: F01_20171022T0000
+    start: "2017-10-22T00:00:27Z"
+    stop:  "2017-10-22T00:55:47Z"
+    xaxis: {method: time}   # too curved for a distance axis
+
+  # 6 casts, 0.56 h, 0.99 km on bearing 295 deg (straightness 1.00), to 149 dbar
+  #   CPW_052
+  - name: F09_20171022T0218
+    start: "2017-10-22T02:18:09Z"
+    stop:  "2017-10-22T02:51:34Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.69 h, 1.97 km on bearing 275 deg (straightness 1.00), to 141 dbar
+  #   CPW_053
+  - name: F01_20171022T0402
+    start: "2017-10-22T04:02:14Z"
+    stop:  "2017-10-22T04:43:30Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.66 h, 1.50 km on bearing 320 deg (straightness 1.00), to 142 dbar
+  #   CPW_054
+  - name: F09_20171022T0608
+    start: "2017-10-22T06:08:03Z"
+    stop:  "2017-10-22T06:47:22Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.53 h, 1.09 km on bearing 324 deg (straightness 1.00), to 141 dbar
+  #   CPW_055
+  - name: R10_20171022T0815
+    start: "2017-10-22T08:15:48Z"
+    stop:  "2017-10-22T08:47:22Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 28 casts, 0.72 h, 0.71 km on bearing 335 deg (straightness 0.98), to 46 dbar
+  #   CPW_056
+  - name: R02_20171022T1032
+    start: "2017-10-22T10:32:14Z"
+    stop:  "2017-10-22T11:15:40Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 24 casts, 0.66 h, 1.14 km on bearing 337 deg (straightness 1.00), to 55 dbar
+  #   CPW_057
+  - name: R02_20171022T1220
+    start: "2017-10-22T12:20:45Z"
+    stop:  "2017-10-22T13:00:35Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 30 casts, 0.67 h, 1.49 km on bearing 313 deg (straightness 1.00), to 98 dbar
+  #   CPW_058
+  - name: R02_20171022T1532
+    start: "2017-10-22T15:32:15Z"
+    stop:  "2017-10-22T16:12:10Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.69 h, 0.43 km on bearing 352 deg (straightness 0.88), to 153 dbar
+  #   CPW_060
+  - name: R10_20171022T1904
+    start: "2017-10-22T19:04:16Z"
+    stop:  "2017-10-22T19:45:57Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.81 h, 1.13 km on bearing 257 deg (straightness 0.99), to 142 dbar
+  #   CPW_061
+  - name: F09_20171022T2131
+    start: "2017-10-22T21:31:43Z"
+    stop:  "2017-10-22T22:20:01Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 8 casts, 0.75 h, 0.90 km on bearing 233 deg (straightness 0.98), to 144 dbar
+  #   CPW_062
+  - name: F01_20171023T0004
+    start: "2017-10-23T00:04:29Z"
+    stop:  "2017-10-23T00:49:31Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.56 h, 1.21 km on bearing 292 deg (straightness 1.00), to 141 dbar
+  #   CPW_063
+  - name: F09_20171023T0244
+    start: "2017-10-23T02:44:56Z"
+    stop:  "2017-10-23T03:18:32Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.63 h, 1.11 km on bearing 312 deg (straightness 1.00), to 144 dbar
+  #   CPW_064
+  - name: R10_20171023T0441
+    start: "2017-10-23T04:41:59Z"
+    stop:  "2017-10-23T05:19:40Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 21 casts, 0.63 h, 0.84 km on bearing 19 deg (straightness 0.98), to 74 dbar
+  #   CPW_065
+  - name: R02_20171023T0645
+    start: "2017-10-23T06:45:09Z"
+    stop:  "2017-10-23T07:22:51Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.51 h, 0.67 km on bearing 307 deg (straightness 0.99), to 145 dbar
+  #   CPW_066
+  - name: R10_20171023T0917
+    start: "2017-10-23T09:17:02Z"
+    stop:  "2017-10-23T09:47:44Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 7 casts, 0.61 h, 1.12 km on bearing 327 deg (straightness 1.00), to 142 dbar
+  #   CPW_067
+  - name: F09_20171023T1113
+    start: "2017-10-23T11:13:53Z"
+    stop:  "2017-10-23T11:50:20Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 6 casts, 0.55 h, 1.28 km on bearing 359 deg (straightness 1.00), to 157 dbar
+  #   CPW_068
+  - name: F01_20171023T1308
+    start: "2017-10-23T13:08:57Z"
+    stop:  "2017-10-23T13:41:40Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 0.84 h, 0.81 km on bearing 302 deg (straightness 0.97), to 142 dbar
+  #   CPW_069
+  - name: R16_20171023T2157
+    start: "2017-10-23T21:57:39Z"
+    stop:  "2017-10-23T22:48:17Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 23 casts, 0.70 h, 1.64 km on bearing 309 deg (straightness 1.00), to 55 dbar
+  #   CPW_070
+  - name: R16_20171024T0311
+    start: "2017-10-24T03:11:03Z"
+    stop:  "2017-10-24T03:53:05Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 22 casts, 0.66 h, 1.52 km on bearing 303 deg (straightness 1.00), to 57 dbar
+  #   CPW_071
+  - name: R16_20171024T0454
+    start: "2017-10-24T04:54:30Z"
+    stop:  "2017-10-24T05:33:56Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 18 casts, 0.68 h, 0.81 km on bearing 17 deg (straightness 0.98), to 73 dbar
+  #   CPW_072
+  - name: R16_20171024T0655
+    start: "2017-10-24T06:55:33Z"
+    stop:  "2017-10-24T07:36:34Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 19 casts, 0.65 h, 0.79 km on bearing 50 deg (straightness 0.99), to 47 dbar
+  #   CPW_073
+  - name: R16_20171024T0921
+    start: "2017-10-24T09:21:52Z"
+    stop:  "2017-10-24T10:00:37Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 12 casts, 0.65 h, 0.97 km on bearing 24 deg (straightness 0.97), to 129 dbar
+  #   CPW_074
+  - name: R16_20171024T1200
+    start: "2017-10-24T12:00:20Z"
+    stop:  "2017-10-24T12:39:35Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 18 casts, 0.66 h, 1.09 km on bearing 24 deg (straightness 0.99), to 84 dbar
+  #   CPW_075
+  - name: R16_20171024T1517
+    start: "2017-10-24T15:17:32Z"
+    stop:  "2017-10-24T15:56:56Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 14 casts, 1.86 h, 2.95 km on bearing 14 deg (straightness 0.91), to 144 dbar
+  #   CPW_077, CPW_078
+  - name: R16_20171024T1747
+    start: "2017-10-24T17:47:48Z"
+    stop:  "2017-10-24T19:39:38Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 4 casts, 0.37 h, 1.01 km on bearing 13 deg (straightness 1.00), to 137 dbar
+  #   CPW_078
+  - name: R16_20171024T2039
+    start: "2017-10-24T20:39:22Z"
+    stop:  "2017-10-24T21:01:35Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 0.96 h, 1.91 km on bearing 19 deg (straightness 0.99), to 156 dbar
+  #   CPW_079
+  - name: R16_20171024T2147
+    start: "2017-10-24T21:47:16Z"
+    stop:  "2017-10-24T22:44:56Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 0.67 h, 0.79 km on bearing 13 deg (straightness 0.76), to 139 dbar
+  #   CPW_080
+  - name: R16_20171024T2339
+    start: "2017-10-24T23:39:44Z"
+    stop:  "2017-10-25T00:19:43Z"
+    xaxis: {method: time}   # too curved for a distance axis
+
+  # 36 casts, 0.64 h, 1.32 km on bearing 317 deg (straightness 1.00), to 33 dbar
+  #   CPW_081
+  - name: R16_20171025T0135
+    start: "2017-10-25T01:35:54Z"
+    stop:  "2017-10-25T02:14:17Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 11 casts, 1.59 h, 6.25 km on bearing 161 deg (straightness 1.00), to 128 dbar
+  #   CPW_082
+  - name: R06_20171025T0315
+    start: "2017-10-25T03:15:05Z"
+    stop:  "2017-10-25T04:50:19Z"
+    xaxis: {method: signed_distance, units: km}
+
+  # 9 casts, 1.09 h, 3.81 km on bearing 163 deg (straightness 1.00), to 132 dbar
+  #   CPW_083
+  - name: UNLOGGED_20171025T0520
+    start: "2017-10-25T05:20:35Z"
+    stop:  "2017-10-25T06:26:13Z"
+    xaxis: {method: signed_distance, units: km}

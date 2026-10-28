@@ -1,0 +1,151 @@
+# Perturb configuration -- MicroRider MR1000-LP SN 058 on Slocum glider unit211,
+# 20151113_unit211, near 29.4 N 127.7 E (East China Sea). One of Tanaka's pre-paper deployments.
+#
+#   perturb run -c perturb.yaml
+#
+# ---------------------------------------------------------------------------
+# READ FIRST (details in README.md)
+# * SN 058 is Yasuda's MR (config header: "File made for Yasuda MR1000-LP SN058,
+#   2011-12-19"). Probes sh1 M1369 @ 0.0576, sh2 M887 @ 0.0583 -- NO calibration
+#   sheet for either in microstructure_sensors/, so absolute epsilon rests on
+#   the embedded config values, unverified. FP07 coefficients are nominal, so
+#   fp07.calibrate fits them per FILE against the glider CTD.
+# * sh1 M1369 IS DEAD (see instruments: below) -- epsilon is sh2 alone.
+# * NO EM FLOWMETER. Speed from a Merckelbach flight model with gliderflight's
+#   DEFAULT lift and Cd1 (no measurement for this glider); epsilon ~ U^-4.
+# * DIVES ARE SLOW: 0.06-0.08 dbar/s measured, U ~0.12-0.15 m/s through the
+#   water, against ~0.38 m/s on climbs. Shear-probe epsilon on the dives is
+#   marginal; the climbs are the usable legs.
+# * unit211_flight_hotel.nc is written ALREADY ON THE MR CLOCK (L ~ +1..+3 s,
+#   mr_clock_model.json), so time_offset is 0.
+# ---------------------------------------------------------------------------
+
+files:
+  p_file_root: "<CONFIG_DIR>/../post-recovery/microrider"
+  p_file_pattern: "*.P"     # 12 files, uppercase
+  output_root: "<CONFIG_DIR>/Processed"
+  trim: false
+  merge: false
+
+hotel:
+  enable: true
+  file: "<CONFIG_DIR>/unit211_flight_hotel.nc"
+  time_column: "time"       # ALREADY the MicroRider clock
+  time_format: "epoch"
+  time_offset: 0.0
+  max_gap: 30.0
+  extrapolate: false
+  interpolation: "pchip"
+  channels:
+    speed:
+      fast: true
+    sci_water_temp:
+      units: "degree_Celsius"
+      fast: false
+    sci_water_cond:
+      units: "mS/cm"        # already mS/cm in the hotel file: NO scale here
+      fast: false
+  fast_channels: ["speed"]
+
+gps:
+  source: "netcdf"
+  file: "<CONFIG_DIR>/unit211_flight_hotel.nc"   # dead-reckoned m_lat/m_lon, MR clock
+  time_col: "time"
+  lat_col: "lat"
+  lon_col: "lon"
+  max_time_diff: 600
+
+profiles:
+  P_min: 2.0
+  W_min: 0.03               # the dives sink at ~0.06-0.08 dbar/s
+  direction: "glide"        # BOTH legs
+  min_duration: 60.0
+  diagnostics: false
+
+fp07:
+  calibrate: true
+  order: 2
+  reference: "sci_water_temp"
+  max_lag_seconds: 10
+  must_be_negative: false
+  min_corr: 0.5
+  allow_hotel_reference: true  # the per-file fit, on purpose. With PR #214's
+                            # fixes it fits all 12 files and matches the pooled
+                            # fp07-cal fit (README, 2026-10-13).
+
+ct:
+  align: false
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+speed:
+  method: "hotel"
+  hotel_var: "speed"
+  speed_cutout: 0.05
+
+epsilon:
+  fft_sec: 2.0
+  salinity: "measured"
+  T_source: "sci_water_temp"
+  fom_max: null
+  diagnostics: false
+
+chi:
+  enable: true
+  use_epsilon: false
+  fft_sec: 2.0
+  spectrum_model: "kraichnan"
+  salinity: "measured"
+  mixing: true
+  fom_max: null
+
+stratification:
+  enable: true
+  salinity: "measured"
+  window: 2.0
+
+ctd:
+  enable: true
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+bottom:
+  enable: false
+top_trim:
+  enable: false
+
+binning:
+  method: "depth"
+  width: 1.0
+
+qc:
+  enable: true
+  drop_action: "nan"
+
+netcdf:
+  title: "MicroRider SN 058 turbulence on Slocum unit211, 20151113_unit211"
+  summary: >
+    Turbulent kinetic energy dissipation (epsilon) and thermal variance
+    dissipation (chi) from Rockland MicroRider MR1000-LP SN 058 on Slocum glider
+    unit211 near 29.4 N 127.7 E (East China Sea), November 2015 (T. Tanaka's deployments). Through-water
+    speed from a Merckelbach flight model with default lift and induced-drag
+    coefficients, calibrated against the depth rate; FP07 thermistors calibrated
+    in situ against the glider CTD; times on the MicroRider clock.
+  institution: "Oregon State University"
+  platform: "Slocum glider unit211"
+  instrument: "Rockland MicroRider MR1000-LP SN 058"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"
+  geospatial_vertical_positive: "down"
+  Conventions: "CF-1.13, ACDD-1.3"
+
+# sh1 (M1369) IS DEAD in both 2015 deployments: raw sh1 has a standard
+# deviation of ~3 counts (electronics noise only) against ~320 on sh2, its
+# epsilon sits at 1e-13..1e-11 W/kg and FM > 1.15 on 100% of windows. Keyed on
+# the DIRECTORY NAME of the .P files (an unmatched key is silently ignored).
+instruments:
+  microrider:
+    exclude_shear_probes: ["sh1"]
+
+parallel:
+  jobs: 2

@@ -31,6 +31,7 @@ import argparse
 import contextlib
 import locale
 import os
+import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -141,12 +142,12 @@ _DIVERGING_LOG: dict[str, float] = {"Gamma": 0.2}
 # (var_label) for the profile-product scalars. Mathtext renders the sub/
 # superscripts and the dT/dz fraction; the degree sign stays outside mathtext
 # as a literal Unicode char. Note dTdz is a *conservative*-temperature (theta)
-# gradient (processing.mixing._stable_window), Thorpe-sorted over the background
-# window -- the label keeps the familiar dT/dz form.
+# gradient (processing.mixing._stable_window), sorted per stratification.sort
+# over the background window -- the label keeps the familiar dT/dz form.
 _CBAR_LABEL: dict[str, str] = {
     "T1": r"$T_1$ (°C)",
     "T2": r"$T_2$ (°C)",
-    "N2": r"$N^2$ (s$^{-2}$) (Thorpe-sorted)",
+    "N2": r"$N^2$ (s$^{-2}$)",
     "dTdz": r"$\frac{dT}{dz}$ (°C m$^{-1}$) (+ downwards)",
     "JAC_T": "JAC_T (°C)",
     "JAC_C": "JAC_C (mS/cm)",
@@ -329,18 +330,78 @@ def _merge_source_dirs(
             # alignment), so the two combos must share the same grid by *value*,
             # not merely the same counts -- otherwise extra data would be placed
             # on the primary's axes and silently mis-joined.
-            if (extra.sizes.get("bin") != ds.sizes.get("bin")
-                    or extra.sizes.get("profile") != ds.sizes.get("profile")):
+            if extra.sizes.get("profile") != ds.sizes.get("profile"):
                 raise SystemExit(
                     f"{prefix} grid {dict(extra.sizes)} != {product.dir_prefix} "
                     f"{dict(ds.sizes)}; cannot merge mixing sources")
-            if "bin" in ds.coords and "bin" in extra.coords and not np.allclose(
-                    np.asarray(ds["bin"].values, dtype=float),
-                    np.asarray(extra["bin"].values, dtype=float),
-                    rtol=0.0, atol=1e-6):
+            # The two products can legitimately span different RANGES: a
+            # bottom-anchored epsilon with a 1.0 s BBL window reaches lower than
+            # chi's 2.0 s window, so diss carries near-bed bins chi does not.
+            # That is a difference in extent, not in grid, and refusing it left
+            # `mixing` broken on every bottom-up product.
+            #
+            # Reindexing onto the primary's bins is EXACT when the two share a
+            # lattice -- values land on their own bin and absent bins become
+            # NaN, no interpolation. When the lattices are OFFSET (which happens
+            # if the two were anchored differently, so their ranges start at
+            # incommensurate points) nothing matches and we still refuse,
+            # because the positional assignment below would mis-place every
+            # value.
+            if "bin" in ds.coords and "bin" in extra.coords:
+                b_ds = np.asarray(ds["bin"].values, dtype=float)
+                b_ex = np.asarray(extra["bin"].values, dtype=float)
+                if b_ds.shape != b_ex.shape or not np.allclose(
+                    b_ds, b_ex, rtol=0.0, atol=1e-6
+                ):
+                    # A shared lattice needs the same SPACING as well as shared
+                    # values: 0.75 m chi bins share every third center with
+                    # 0.25 m diss bins, and reindexing would put fine-bin
+                    # values on coarse bins. binning.chi_width and
+                    # binning.diss_width are separate keys, so this happens.
+                    d_ds = np.diff(b_ds)
+                    d_ex = np.diff(b_ex)
+                    if (
+                        d_ds.size
+                        and d_ex.size
+                        and not np.isclose(
+                            np.median(d_ds), np.median(d_ex), rtol=0.0, atol=1e-6
+                        )
+                    ):
+                        raise SystemExit(
+                            f"{prefix} bins are {np.median(d_ex):g} apart but "
+                            f"{product.dir_prefix} bins are {np.median(d_ds):g}; "
+                            "cannot merge mixing sources binned at different "
+                            "widths -- check binning.diss_width vs "
+                            "binning.chi_width."
+                        )
+                    n_common = np.isclose(
+                        b_ds[:, None], b_ex[None, :], rtol=0.0, atol=1e-6
+                    ).any(axis=1).sum()
+                    if n_common < 2:
+                        raise SystemExit(
+                            f"{prefix} bins do not lie on the same grid as "
+                            f"{product.dir_prefix} (only {n_common} of "
+                            f"{b_ds.size} match); cannot merge mixing sources. "
+                            "This usually means the two were anchored "
+                            "differently -- check epsilon.anchor vs chi.anchor."
+                        )
+                    # Match with the same tolerance n_common used: an exact
+                    # label match would silently leave float-rounded centers
+                    # (e.g. 0.1 m bins from different d_min) as NaN.
+                    extra = extra.reindex(
+                        bin=ds["bin"].values, method="nearest", tolerance=1e-6
+                    )
+                    warnings.warn(
+                        f"{prefix} reindexed onto {product.dir_prefix} bins: "
+                        f"{int(n_common)} of {b_ds.size} shared (same grid, "
+                        "different extent -- the non-shared bins are NaN)",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+            elif extra.sizes.get("bin") != ds.sizes.get("bin"):
                 raise SystemExit(
-                    f"{prefix} depth bins differ from {product.dir_prefix}; "
-                    "cannot merge mixing sources")
+                    f"{prefix} grid {dict(extra.sizes)} != {product.dir_prefix} "
+                    f"{dict(ds.sizes)}; cannot merge mixing sources")
             # stime is epoch seconds (~1.7e9), where np.allclose's default
             # rtol=1e-5 spans ~4.8 h -- far too loose to detect different casts.
             # Compare with a 1 s absolute tolerance (and no relative term).
@@ -403,7 +464,13 @@ def _build_profiles_figure(
         return None
     col = finite[np.argsort(x[finite])]   # finite profiles, sorted by x
     xs = x[col]
-    depth = np.asarray(dss["bin"].values, dtype=float)  # depth, m
+    depth = np.asarray(dss["bin"].values, dtype=float)  # depth OR height, m
+    # Depth and height-above-bottom run in OPPOSITE directions, so the label and
+    # the axis sense are read from the bin coordinate rather than assumed. A
+    # bottom-up product plotted on an inverted "Depth" axis puts the seabed at
+    # the TOP and still looks entirely plausible, which is the failure this
+    # prevents.
+    y_label, y_invert = layout.vertical_axis(dss["bin"].attrs)
 
     # Diagnostic pseudo-variables (shear/vibration/T_dT variance) are computed
     # at plot time from the raw per-profile files, matched by stime.
@@ -469,7 +536,7 @@ def _build_profiles_figure(
             ax.text(0.5, 0.5, f"no valid {name}", transform=ax.transAxes,
                     ha="center", va="center")
             if ax in left_set:  # only the left column carries the shared y label
-                ax.set_ylabel("Depth (m)")
+                ax.set_ylabel(y_label)
             continue
         valid_rows |= np.any(np.isfinite(z), axis=1)
         cmap = getattr(cmocean.cm, cmap_name).copy()
@@ -479,24 +546,32 @@ def _build_profiles_figure(
                             reverse_cbar=name in _REVERSE_CBAR,
                             cbar_center=_DIVERGING_LOG.get(name))
         if ax in left_set:
-            ax.set_ylabel("Depth (m)")
+            ax.set_ylabel(y_label)
 
     for ax in axes:
         # Grid over the color mesh (axisbelow False) so it reads on any colormap.
         ax.set_axisbelow(False)
         ax.grid(True, color="0.4", linewidth=0.4, alpha=0.5)
 
-    axes[0].invert_yaxis()  # 0 m at top (shared across panels)
+    if y_invert:
+        axes[0].invert_yaxis()  # depth: 0 m at top (shared across panels)
     if args.p_max is not None:
-        # Explicit depth clip wins over the data-driven fit.
-        axes[0].set_ylim(float(args.p_max), 0.0)
+        # Explicit clip wins over the data-driven fit. On an altitude axis
+        # p_max is the greatest HEIGHT to show, so it is the top, not the
+        # bottom.
+        axes[0].set_ylim(*((float(args.p_max), 0.0) if y_invert
+                           else (0.0, float(args.p_max))))
     elif valid_rows.any():
-        # Fit the depth axis to where there is valid data rather than spanning
-        # the whole combo's bin grid (which pads the section with empty gray
-        # below its deepest sample). Pad half a bin so edge cells aren't clipped.
+        # Fit the axis to where there is valid data rather than spanning the
+        # whole combo's bin grid (which pads the section with empty gray beyond
+        # its deepest sample). Pad half a bin so edge cells aren't clipped.
         dv = depth[valid_rows]
         pad = 0.5 * float(np.median(np.diff(depth))) if depth.size > 1 else 0.0
-        axes[0].set_ylim(float(dv.max()) + pad, max(float(dv.min()) - pad, 0.0))
+        lo, hi = float(dv.min()) - pad, float(dv.max()) + pad
+        if y_invert:
+            axes[0].set_ylim(hi, max(lo, 0.0))     # deep at the bottom
+        else:
+            axes[0].set_ylim(max(lo, 0.0), hi)     # seabed at the bottom
 
     for ax in col_bottom:
         ax.set_xlabel(xa.label)

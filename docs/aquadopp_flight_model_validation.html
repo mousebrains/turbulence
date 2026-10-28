@@ -1,0 +1,377 @@
+<title>The Aquadopp Check</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,400;0,500;0,600;1,6..72,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --ground:#FAFAF7; --surface:#FFFFFF; --sunk:#F2F3EF;
+    --ink:#161B1F; --muted:#5C666C; --faint:#838D91;
+    --rule:#E1E3DD; --rule-hi:#C9CDC5;
+    --accent:#14636E; --accent-s:#E4EEEF;
+    --warn:#9E3B26; --warn-s:#F7ECE8;
+    --ok:#3F6B44; --ok-s:#E8F0E8;
+    --meas:#0B7FA8; --model:#A85B12;
+    --shadow:0 1px 2px rgba(22,27,31,.05),0 8px 24px -16px rgba(22,27,31,.18);
+    --measure:68ch;
+    --s1:.35rem; --s2:.7rem; --s3:1.1rem; --s4:1.8rem; --s5:2.8rem; --s6:4.4rem;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ground:#0E1316; --surface:#141B1F; --sunk:#101619;
+      --ink:#E4E9E7; --muted:#98A3A7; --faint:#737E82;
+      --rule:#232D32; --rule-hi:#33403F;
+      --accent:#63BCC6; --accent-s:#12262A;
+      --warn:#E5866B; --warn-s:#2A1813;
+      --ok:#8FBF92; --ok-s:#16231A;
+      --meas:#1F9FC9; --model:#BE7C2A;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0E1316; --surface:#141B1F; --sunk:#101619;
+    --ink:#E4E9E7; --muted:#98A3A7; --faint:#737E82;
+    --rule:#232D32; --rule-hi:#33403F;
+    --accent:#63BCC6; --accent-s:#12262A;
+    --warn:#E5866B; --warn-s:#2A1813;
+    --ok:#8FBF92; --ok-s:#16231A;
+    --meas:#1F9FC9; --model:#BE7C2A;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.7);
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  body{background:var(--ground);color:var(--ink);
+    font-family:"Newsreader",Georgia,serif;font-size:17px;line-height:1.62;
+    font-optical-sizing:auto;-webkit-font-smoothing:antialiased;
+    margin:0;padding-inline:var(--s3);padding-block:0 var(--s6)}
+  .wrap{max-width:74rem;margin:0 auto}
+  header.mast{border-bottom:1px solid var(--rule-hi);padding-block:var(--s6) var(--s4);margin-bottom:var(--s5)}
+  .eyebrow{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.7rem;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--accent);margin:0 0 var(--s3)}
+  h1{font-size:clamp(2.1rem,5.4vw,3.5rem);line-height:1.04;font-weight:500;margin:0;
+    letter-spacing:-.021em;text-wrap:balance;max-width:20ch}
+  .standfirst{max-width:var(--measure);color:var(--muted);font-size:1.16rem;margin:var(--s3) 0 0}
+  .standfirst strong{color:var(--ink);font-weight:500}
+  .identity{display:grid;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));gap:var(--s3) var(--s4);
+    margin-top:var(--s5);padding-top:var(--s3);border-top:1px solid var(--rule)}
+  .idk{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.64rem;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--faint);margin:0 0 var(--s1)}
+  .idv{font-size:1rem;margin:0;font-variant-numeric:tabular-nums}
+  main{display:flex;flex-direction:column;gap:var(--s6)}
+  section{scroll-margin-top:var(--s4)}
+  .sec-head{display:flex;gap:var(--s3);align-items:baseline;margin:0 0 var(--s3);
+    padding-bottom:var(--s2);border-bottom:1px solid var(--rule)}
+  .sec-no{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.72rem;color:var(--accent);
+    letter-spacing:.1em;padding-top:.35rem}
+  .sec-head h2{font-size:1.5rem;font-weight:500;margin:0;letter-spacing:-.012em;text-wrap:balance}
+  p{max-width:var(--measure);margin:0 0 var(--s3)}
+  p:last-child{margin-bottom:0}
+  .lede{font-size:1.07rem}
+  code,.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.86em}
+  code{background:var(--sunk);padding:.08em .34em;border-radius:3px}
+  .fig{margin:var(--s4) 0;background:var(--surface);border:1px solid var(--rule);
+    border-radius:4px;box-shadow:var(--shadow);overflow:hidden}
+  .fig figcaption{padding:var(--s3);border-top:1px solid var(--rule);color:var(--muted);
+    font-size:.92rem;background:var(--sunk)}
+  .tbox{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:.93rem;min-width:34rem}
+  caption{text-align:left;padding:var(--s3) var(--s3) var(--s2);color:var(--muted);font-size:.92rem}
+  th,td{padding:.5rem var(--s3);text-align:right;border-bottom:1px solid var(--rule);
+    font-variant-numeric:tabular-nums}
+  th:first-child,td:first-child{text-align:left;font-variant-numeric:normal}
+  thead th{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.66rem;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--faint);font-weight:500;border-bottom:1px solid var(--rule-hi)}
+  tbody tr:last-child td{border-bottom:none}
+  thead th .sw{vertical-align:middle;margin-right:.1rem}
+  .callout{border-left:2px solid var(--accent);background:var(--accent-s);padding:var(--s3) var(--s3) var(--s3) var(--s4);
+    margin:var(--s4) 0;border-radius:0 4px 4px 0}
+  .callout.warn{border-left-color:var(--warn);background:var(--warn-s)}
+  .callout.ok{border-left-color:var(--ok);background:var(--ok-s)}
+  .callout p{max-width:none}
+  .ct{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.66rem;letter-spacing:.11em;
+    text-transform:uppercase;color:var(--muted);margin:0 0 var(--s1)}
+  .legend{display:flex;gap:var(--s4);flex-wrap:wrap;padding:var(--s3) var(--s3) 0}
+  .lg{display:flex;align-items:center;gap:.45rem;font-size:.86rem;color:var(--muted)}
+  .sw{width:16px;height:3px;border-radius:2px;display:inline-block}
+  .steps{list-style:none;counter-reset:st;padding:0;margin:0;display:flex;flex-direction:column;gap:var(--s3);
+    max-width:var(--measure)}
+  .steps li{counter-increment:st;position:relative;padding-left:2.1rem}
+  .steps li::before{content:counter(st);position:absolute;left:0;top:.1em;
+    font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.72rem;color:var(--accent);
+    border:1px solid var(--rule-hi);border-radius:50%;width:1.5rem;height:1.5rem;
+    display:grid;place-items:center}
+  .files{display:grid;gap:var(--s2);max-width:var(--measure);margin:var(--s3) 0 0}
+  .files div{display:grid;grid-template-columns:14rem 1fr;gap:var(--s3);
+    padding-bottom:var(--s2);border-bottom:1px solid var(--rule);font-size:.93rem}
+  .files span:first-child{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.8rem;color:var(--accent)}
+  .files span:last-child{color:var(--muted)}
+  pre{background:var(--sunk);border:1px solid var(--rule);border-radius:4px;padding:var(--s3);
+    overflow-x:auto;font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.78rem;line-height:1.55;
+    margin:var(--s3) 0;max-width:var(--measure)}
+  footer{margin-top:var(--s6);padding-top:var(--s3);border-top:1px solid var(--rule-hi);
+    color:var(--faint);font-size:.88rem}
+  footer a{color:var(--accent)}
+  svg text{font-family:"IBM Plex Mono",ui-monospace,monospace}
+  .chart{display:block;width:100%;height:auto;min-width:30rem;max-width:54rem;margin-inline:auto}
+  @media (max-width:560px){
+    .files div{grid-template-columns:1fr;gap:var(--s1)}
+  }
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <p class="eyebrow">Instrument note · Aquadopp HR on Slocum <em>jane</em> · Sep 2026</p>
+    <h1>The Aquadopp Check</h1>
+    <p class="standfirst">Both Taiwan MicroRiders flew without an EM flowmeter, so their speed comes from a
+      flight model that <strong>never sees a measured speed anywhere in its calibration</strong>. A 2 MHz
+      Aquadopp HR profiler that flew on the sister glider <em>jane</em> in 2013 measures the flow past the
+      hull directly. It says the model's angle of attack is <strong>about 1.6° too small on dives</strong> —
+      which makes its speed ~5–6% too high and any ε built on it ~20–25% too low. Climbs agree to 0.3%.</p>
+    <div class="identity">
+      <div><p class="idk">Instrument</p><p class="idv">AQD 8396 · head ASP 5444</p></div>
+      <div><p class="idk">Record</p><p class="idv">438,201 pings @ 1 Hz</p></div>
+      <div><p class="idk">Span</p><p class="idv">2013-04-29 → 05-04</p></div>
+      <div><p class="idk">Platform</p><p class="idv">glider <em>jane</em> (inferred)</p></div>
+      <div><p class="idk">Status</p><p class="idv">not applied</p></div>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <div class="sec-head"><span class="sec-no">01</span><h2>Which glider carried it, and on whose clock</h2></div>
+      <p class="lede">The file names no platform. <em>jane</em> is identified by overlap: the Aquadopp record
+        (2013-04-29 05:00Z → 05-04 06:43Z) sits inside the deployment
+        <code>gliders/20130427_jane_tn</code> (04-28 09:45 → 05-04 05:10), and no other 2013 glider record
+        overlaps it. Matching the two pressure series settles both the platform and the clock:</p>
+      <pre>glider_time = aqd_time + 38.0 s   (37.0 → 39.0 s over the record)
+glider_P    = 0.600 + 1.0125 · aqd_P   dbar
+
+residual 0.184 dbar · sharpness 117 · 385,489 in-water samples</pre>
+      <p>The offset is estimated the same way as a MicroRider clock: fit the glider's pressure, interpolated
+        at <code>aqd_time + L</code>, against the Aquadopp's own, and minimize the residual. A yo is a
+        sawtooth, so the minimum is sharp rather than the flat valley a monotonic ramp would give.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="sec-no">02</span><h2>What the file says about itself</h2></div>
+      <p>Two record fields decide whether the numbers mean anything, and both were read from the file rather
+        than assumed.</p>
+      <div class="callout warn">
+        <p class="ct">The ten-times trap</p>
+        <p>The status byte (0x62 on every record) carries the <strong>velocity scaling in bit 1</strong>:
+          set means <strong>0.1 mm/s, not mm/s</strong>. Read as mm/s, every velocity is ten times too big —
+          and still looks superficially plausible, which is what makes it dangerous. Bit 0, clear here, says
+          the head looks <strong>up</strong>. The same byte is the only place either fact appears.</p>
+      </div>
+      <p>The beam-to-XYZ transformation matrix sits at <code>hdSystem + 8</code> in the head record — found by
+        scanning the block for the classic Nortek three-beam form rather than trusting an offset from memory:</p>
+      <pre>[[ 1.5774  -0.7891  -0.7891 ]
+ [ 0.0000  -1.3662   1.3662 ]
+ [ 0.3677   0.3677   0.3677 ]]</pre>
+      <p>The user configuration gives 29 bins, 1 s sampling, 3 beams, and coordinate system 0 — <strong>ENU</strong>.
+        That last one matters: the instrument has already rotated the velocities with its own compass and tilt,
+        so the wrapping lives underneath a rotation that has to be undone first.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="sec-no">03</span><h2>The wrapping problem, and why range cannot fix it</h2></div>
+      <p class="lede">Beam velocities saturate at <strong>±0.1285 m/s</strong> — the HR ambiguity velocity —
+        while the glider flies at about 0.3 m/s. Every beam wraps once or twice.</p>
+      <p>The obvious remedy fails. All 29 cells span only ~0.9 m and see nearly the same velocity, so they
+        wrap <em>together</em>: there is no discontinuity in range to unwrap against. Time works instead. Each
+        dive begins at an inflection where the glider's speed passes through zero, and turbulent fluctuations
+        (centimeters per second) are far below the ambiguity, so the phase can be tracked forward.</p>
+      <p>A blind time-unwrap still slips — tried first, it put three of eight segments on the wrong branch
+        (0.72 m/s at 17° of attack; 0.095 m/s at 55°). So the branch is chosen by a prior instead, built from
+        quantities the two instruments <em>measure</em>:</p>
+      <ol class="steps">
+        <li>Take the glider's depth rate <code>dh/dt</code> and pitch, and form
+          <code>U = |dh/dt| / sin(|pitch| + α)</code> with α starting at zero.</li>
+        <li>Predict the three beam velocities from that, and pick the nearest branch:
+          <code>b = b_meas + 2·V<sub>a</sub>·round((b_pred − b_meas) / 2·V<sub>a</sub>)</code>.</li>
+        <li>Let the data set the velocity vector within ±V<sub>a</sub>, recompute α, and iterate.</li>
+      </ol>
+      <div class="callout">
+        <p class="ct">Why this is not circular</p>
+        <p>The prior contains <strong>no flight model</strong> — only a measured depth rate and a measured
+          pitch. It has to be right to about 0.14 m/s to pick the correct branch, and it is anchored to a
+          measurement, so it cannot manufacture the answer. Tested directly: shifting the prior's pitch by
+          ±1° leaves the recovered α unchanged to 0.01°.</p>
+      </div>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="sec-no">04</span><h2>What it measures</h2></div>
+      <p>Compared against the same Merckelbach recipe used for the two MicroRider gliders, applied to
+        <em>jane</em> — <code>gliderflight</code> 1.2.1, per-day drag and volume calibrated against the depth
+        rate — over 326,280 matched samples (186,854 diving, 139,426 climbing):</p>
+      <figure class="fig">
+        <div class="tbox">
+          <table>
+            <caption>Aquadopp versus flight model, medians over matched samples.</caption>
+            <thead><tr><th>leg</th>
+              <th><span class="sw" style="background:var(--meas)"></span> U Aquadopp</th>
+              <th><span class="sw" style="background:var(--model)"></span> U model</th><th>ratio</th>
+              <th><span class="sw" style="background:var(--meas)"></span> |α| Aquadopp</th>
+              <th><span class="sw" style="background:var(--model)"></span> |α| model</th><th>difference</th></tr></thead>
+            <tbody>
+              <tr><td>dive</td><td>0.257 m/s</td><td>0.274 m/s</td><td>1.065</td><td>4.55°</td><td>2.91°</td><td>−1.64°</td></tr>
+              <tr><td>climb</td><td>0.346 m/s</td><td>0.359 m/s</td><td>1.037</td><td>2.99°</td><td>2.90°</td><td>−0.09°</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <figcaption>The model's speed is high on both legs, and its angle of attack is short by 1.6° on dives.
+          Because ε ∝ U<sup>−3.9</sup>, a 5% speed error is ~20–25% in ε.</figcaption>
+      </figure>
+      <figure class="fig">
+        <div class="legend">
+          <span class="lg"><span class="sw" style="background:var(--meas)"></span>Aquadopp, measured</span>
+          <span class="lg"><span class="sw" style="background:var(--model)"></span>flight model</span>
+        </div>
+        <div class="tbox">
+          <svg viewBox="0 0 640 282" class="chart" role="img"
+               aria-label="Angle of attack against pitch: measured values fall from 4.34 to 3.07 degrees, model values from 3.19 to 2.57 degrees.">
+            <g stroke="currentColor" opacity=".18" stroke-width="1">
+              <line x1="110" y1="40" x2="600" y2="40"/><line x1="110" y1="98" x2="600" y2="98"/>
+              <line x1="110" y1="156" x2="600" y2="156"/><line x1="110" y1="214" x2="600" y2="214"/>
+            </g>
+            <g stroke="currentColor" opacity=".3" stroke-width="1">
+              <line x1="110" y1="214" x2="110" y2="221"/><line x1="247" y1="214" x2="247" y2="221"/>
+              <line x1="350" y1="214" x2="350" y2="221"/><line x1="453" y1="214" x2="453" y2="221"/>
+              <line x1="590" y1="214" x2="590" y2="221"/>
+            </g>
+            <g fill="currentColor" opacity=".62" font-size="12.5" text-anchor="end">
+              <text x="100" y="44">5.0°</text><text x="100" y="102">4.0°</text>
+              <text x="100" y="160">3.0°</text><text x="100" y="218">2.0°</text>
+            </g>
+            <g fill="currentColor" opacity=".62" font-size="12.5" text-anchor="middle">
+              <text x="110" y="238">18</text><text x="247" y="238">22</text><text x="350" y="238">25</text>
+              <text x="453" y="238">28</text><text x="590" y="238">32</text>
+              <text x="350" y="266" opacity=".85">glider pitch magnitude, degrees (bin edges)</text>
+            </g>
+            <polyline points="179,78 299,79 401,99 522,152" fill="none" stroke="var(--meas)" stroke-width="2"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+            <polyline points="179,145 299,154 401,172 522,181" fill="none" stroke="var(--model)" stroke-width="2"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+            <g stroke="var(--surface)" stroke-width="2">
+              <circle cx="179" cy="78" r="4.5" fill="var(--meas)"/><circle cx="299" cy="79" r="4.5" fill="var(--meas)"/>
+              <circle cx="401" cy="99" r="4.5" fill="var(--meas)"/><circle cx="522" cy="152" r="4.5" fill="var(--meas)"/>
+              <circle cx="179" cy="145" r="4.5" fill="var(--model)"/><circle cx="299" cy="154" r="4.5" fill="var(--model)"/>
+              <circle cx="401" cy="172" r="4.5" fill="var(--model)"/><circle cx="522" cy="181" r="4.5" fill="var(--model)"/>
+            </g>
+            <g font-size="12.5" font-weight="500">
+              <text x="179" y="66" fill="var(--meas)" text-anchor="middle">4.34</text>
+              <text x="522" y="139" fill="var(--meas)" text-anchor="middle">3.07</text>
+              <text x="179" y="164" fill="var(--model)" text-anchor="middle">3.19</text>
+              <text x="522" y="200" fill="var(--model)" text-anchor="middle">2.57</text>
+            </g>
+          </svg>
+        </div>
+        <figcaption>Both fall with pitch, as a steady-glide model requires — the measured curve simply sits
+          above the modeled one everywhere. Bin populations: 7,718 · 176,858 · 134,515 · 7,022 samples.</figcaption>
+      </figure>
+      <div class="callout ok">
+        <p class="ct">Corroboration from the literature</p>
+        <p>The measured dive value, 4.3–4.6° at 22–25° of pitch, sits on top of <strong>Tanaka et al. (2022)'s
+          ADCP-measured Slocum angle of attack, −4.4° at −23.7° pitch</strong> — the only directly measured
+          Slocum value in print. <code>gliderflight</code>'s uncalibrated lift/drag defaults give 2.5–3°.</p>
+      </div>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="sec-no">05</span><h2>What was varied, and what moved</h2></div>
+      <figure class="fig">
+        <div class="tbox">
+          <table>
+            <caption>Every setting in the chain, varied one at a time. Dives are stable; climbs are not as stable.</caption>
+            <thead><tr><th>case</th><th>U dive</th><th>|α| dive</th><th>U climb</th><th>|α| climb</th></tr></thead>
+            <tbody>
+              <tr><td>baseline</td><td>0.251</td><td>4.55°</td><td>0.349</td><td>2.99°</td></tr>
+              <tr><td>start α = +6°</td><td>0.251</td><td>4.55°</td><td>0.347</td><td>3.02°</td></tr>
+              <tr><td>start α = −6°</td><td>0.251</td><td>4.55°</td><td>0.373</td><td>3.71°</td></tr>
+              <tr><td>V<sub>a</sub> = 0.1275 / 0.1295</td><td>0.251</td><td>4.55°</td><td>0.346 / 0.352</td><td>2.90 / 3.09°</td></tr>
+              <tr><td>cells 8–20 (far) / 2–10 (near)</td><td>0.251 / 0.252</td><td>4.20 / 5.09°</td><td>0.350</td><td>3.33 / 2.43°</td></tr>
+              <tr><td>correlation &gt; 65</td><td>0.246</td><td>4.54°</td><td>0.349</td><td>2.98°</td></tr>
+              <tr><td>prior pitch ±1°</td><td>0.251–0.252</td><td>4.55°</td><td>0.347–0.353</td><td>2.99°</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <figcaption>Speeds here are from the Aquadopp alone, before matching to the model's samples, so they
+          differ slightly from the comparison table above.</figcaption>
+      </figure>
+      <p>Two things to take from it. <strong>The prior does not drive the answer</strong> — perturbing its
+        pitch leaves α untouched. And <strong>the climb branch is the weak one</strong>: started from −6°, the
+        climb lands on a different wrap and reports 0.373 m/s. The dive number is the one to trust, which is
+        also the leg where the discrepancy lives.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="sec-no">06</span><h2>Systematics — including one that looks alarming and cancels</h2></div>
+      <p>α is sensitive one-for-one to <strong>how the instrument is bolted to the hull</strong>: perturbing
+        the attitude used in the un-rotation by 1° moves α by 1°. So the two tilt records were compared
+        directly, over 371,804 samples:</p>
+      <pre>aqd_pitch − glider_pitch = −0.42 − 0.032·pitch − 0.032·roll
+aqd_roll  − glider_roll  = +2.56 + 0.035·pitch − 0.226·roll
+
+pitch fit: corr 0.9991 · residual MAD 0.43° · n = 371,804</pre>
+      <p>The dominant term is <strong>proportional to pitch</strong> — a 3.2% gain difference, which at ±25°
+        is ∓0.8° and flips sign between dive and climb. That is a sensor gain, not a mounting tilt: a tilt
+        would be a constant. The constant part, the actual alignment, is only ~0.2–0.4°.</p>
+      <div class="callout ok">
+        <p class="ct">And the gain does not propagate</p>
+        <p>The instrument rotated into ENU using its own attitude, and the analysis un-rotates with the same
+          numbers, so a gain error <strong>cancels exactly</strong>. It would matter only if the glider's
+          attitude were substituted for the instrument's. The obvious geometric alternative is excluded too:
+          a yaw misalignment large enough to explain 3.2% (14.6°) would put a −0.25·pitch term in the roll
+          difference, and the measured slope is +0.035.</p>
+      </div>
+      <p>What remains: <strong>±0.4°</strong> from mounting alignment and <strong>±0.5°</strong> from flow
+        distortion near the hull — visible in the table above as α falling from 5.09° in the nearest cells to
+        4.20° in the far ones. Both are smaller than the 1.6° dive discrepancy, which is why it survives.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="sec-no">07</span><h2>What this licenses, and what it does not</h2></div>
+      <div class="callout warn">
+        <p class="ct">Not applied to anything</p>
+        <p>This is <em>jane</em>, 2013-04-29 → 05-04 — <strong>not</strong> husker (MicroRider MR046, May 2013)
+          and not doug (2017). Same glider class, same mission pattern, comparable speed and pitch, but
+          carrying the correction across is an assumption, not a measurement. The MicroRider products ship
+          with their modeled speed unchanged, and both flight READMEs point here.</p>
+      </div>
+      <p>Three further limits. The dive/climb asymmetry in the measured α (4.55° against 2.99°) may be real —
+        a Slocum trims differently on the two legs — or a residual wrap-branch effect on climbs; this does not
+        resolve it. Nothing here validates the <em>absolute</em> speed scale of the MicroRider products; it
+        bounds one term, the angle of attack, that the flight model otherwise guesses. And turbulence from the
+        Aquadopp itself was not attempted: at ε = 10<sup>−8</sup> W/kg the velocity difference across 0.5 m is
+        ~3 mm/s against ~0.1 m/s of single-ping noise, so only very energetic water would register — an
+        estimate, not a tested threshold.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="sec-no">08</span><h2>Reproducing it</h2></div>
+      <p>Everything lives beside the data, in
+        <code>/Volumes/SeaChest/Taiwan/Taiwan13/aquadopp/analysis/</code>.</p>
+      <div class="files">
+        <div><span>read_prf.py</span><span>Nortek reader. Record layout verified against the file; scaling and orientation from the status byte.</span></div>
+        <div><span>beams.py</span><span>Undoes the instrument's ENU rotation → XYZ → beam.</span></div>
+        <div><span>aoa.py</span><span>Pressure-anchored unwrapping; solves speed and angle of attack.</span></div>
+        <div><span>dinkum-flight.yaml</span><span>Flight-model inputs for <em>jane</em>, on the flight computer's clock.</span></div>
+        <div><span>make_flight_speed_jane.py</span><span>The same Merckelbach recipe used for the MicroRider gliders.</span></div>
+        <div><span>compare.py</span><span>Measured against modeled — the tables above.</span></div>
+      </div>
+      <pre>dinkum-hotel build -c dinkum-flight.yaml     # jane flight inputs
+uv run make_flight_speed_jane.py calibrate  # ~20 min, resumable
+uv run make_flight_speed_jane.py run
+python compare.py                           # Aquadopp vs model</pre>
+    </section>
+  </main>
+
+  <footer>
+    <p>Companion to <em>The Glider Speed Problem</em> (<code>docs/glider_speed_problem.html</code>), which sets
+      the geometry: γ = θ + α, with α positive on both legs. Flight model:
+      Merckelbach, Smeed &amp; Griffiths (2010), <a href="https://doi.org/10.1175/2009JTECHO710.1">10.1175/2009JTECHO710.1</a>;
+      Merckelbach et al. (2019), <a href="https://doi.org/10.1175/JTECH-D-18-0168.1">10.1175/JTECH-D-18-0168.1</a>;
+      implementation <code>gliderflight</code> 1.2.1, <a href="https://doi.org/10.5281/zenodo.2222694">10.5281/zenodo.2222694</a>.
+      Measured Slocum angle of attack: Tanaka et al. (2022), <a href="https://doi.org/10.1175/JTECH-D-21-0074.1">10.1175/JTECH-D-21-0074.1</a>.
+      Deployment products: <code>Taiwan13/gliders/20130526_husker/</code> and <code>Taiwan17/gliders/doug/</code>.</p>
+  </footer>
+</div>

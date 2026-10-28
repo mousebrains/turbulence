@@ -41,13 +41,14 @@ alongside the gains instead.
 
 from __future__ import annotations
 
-import math
 import statistics
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+
+from odas_tpw.rsi.channels import ConfigNumberNotFinite, config_number
 
 # A value this far from the corpus median for the same channel is called out.
 # Wide on purpose: real fleet spread is a few percent, and the failure this
@@ -144,16 +145,17 @@ def collect_gains(
             name = str(ch.get("name", "?")).strip()
             if raw is None or name == "?":
                 continue
+            # The shear converter's parser: arithmetic is evaluated as ODAS
+            # evaluates it, and a non-finite gain is refused -- one would
+            # poison every median it entered (statistics.median propagates
+            # NaN), silently disabling outlier detection fleet-wide.
             try:
-                val = float(str(raw).strip())
-            except (TypeError, ValueError):
-                errors.append((p, f"{name}: unparseable diff_gain {raw!r}"))
-                continue
-            # A non-finite gain parses fine but poisons every median it enters
-            # (statistics.median propagates NaN), which would silently disable
-            # outlier detection for that channel across the whole fleet.
-            if not math.isfinite(val):
+                val = config_number(raw, key="diff_gain", channel=name)
+            except ConfigNumberNotFinite:
                 errors.append((p, f"{name}: non-finite diff_gain {raw!r}"))
+                continue
+            except ValueError:
+                errors.append((p, f"{name}: unparseable diff_gain {raw!r}"))
                 continue
             uses.append(GainUse(p, sn, model, vehicle, name, val, str(raw).strip(), when))
     return uses, errors

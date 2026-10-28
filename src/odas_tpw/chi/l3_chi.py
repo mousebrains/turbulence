@@ -25,6 +25,7 @@ from odas_tpw.chi.fp07 import (
 from odas_tpw.chi.l2_chi import L2ChiData
 from odas_tpw.scor160.goodman import clean_shear_spec_batch
 from odas_tpw.scor160.io import BAD_DROPPED, BAD_INTERPOLATED, L3Params
+from odas_tpw.scor160.l3 import window_groups
 from odas_tpw.scor160.ocean import kappa_T as kappa_T_TSP
 from odas_tpw.scor160.ocean import visc, visc35
 from odas_tpw.scor160.spectral import csd_matrix_batch, n_segments
@@ -53,6 +54,9 @@ class _SectionResult:
     kappa_T: list = field(default_factory=list)
     bad_frac: list = field(default_factory=list)
     interp_frac: list = field(default_factory=list)
+    # Per-window spectral DOF. A list, not a scalar, because a BBL group's
+    # shorter window averages fewer FFT segments than the regular group's.
+    dof: list = field(default_factory=list)
 
 
 @dataclass
@@ -88,14 +92,21 @@ class L3ChiData:
     # signals Goodman removed). Feeds the bandwidth/DOF-aware non-detection
     # floor in chi.detection_floor: a FIXED "3 bins above 2x noise" ignores how
     # many bins were searched and how tight each one is (issue #180 F03).
-    # 0.0 means "unknown" and keeps the pre-#180 fixed floor.
-    dof_spec: float = 0.0
+    # PER WINDOW (N_SPECTRA,), because a BBL group's shorter window averages
+    # fewer FFT segments than the regular group's. 0.0 means "unknown" and
+    # keeps the pre-#180 fixed floor; a scalar is broadcast on read for callers
+    # that still construct one.
+    dof_spec: np.ndarray = field(default_factory=lambda: np.zeros(0))
     # Per-window fractions of RDL bad-buffer samples, from L2ChiData.bad_mask:
     # bad_fraction counts BAD_DROPPED (rejects the window), interp_fraction
     # counts BAD_INTERPOLATED (rejects it only above MAX_INTERP_FRACTION).
     # Both (N_GRADT, N_SPECTRA); empty when no mask was supplied.
     bad_fraction: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
     interp_fraction: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
+    # Per-probe measured response factors (chi.fp07_pair.apply_to_l3): None or
+    # a callable (F, W) -> e. l4_chi divides the probe's observed and noise
+    # spectra by it; H2 and everything stored here stay on the default model.
+    response_factor: list = field(default_factory=list)
 
     def tau0_for(self, ci: int, j: int) -> float:
         """FP07 time constant for thermistor *ci*, window *j* [s].
@@ -133,9 +144,10 @@ class L3ChiData:
 
 def _process_section_chi(
     l2_chi: L2ChiData,
-    sec_id: int,
+    sec_id: float,
+    starts: np.ndarray,
     diss_length: int,
-    diss_step: int,
+    dof_win: float,
     nfft: int,
     fs: float,
     n_temp: int,
@@ -151,21 +163,18 @@ def _process_section_chi(
     tau_scales: np.ndarray,
     acc: _SectionResult,
 ) -> None:
-    """Process a single section, appending results to *acc*."""
-    mask = l2_chi.section_number == sec_id
-    idx = np.where(mask)[0]
-    if len(idx) < diss_length:
-        return
+    """Process ONE window group, appending results to *acc*.
 
-    sec_start = idx[0]
-    sec_end = idx[-1] + 1
-    sec_len = sec_end - sec_start
-
-    n_windows = (sec_len - diss_length) // diss_step + 1
+    A group is ``(sec_id, starts, diss_length)`` from
+    :func:`odas_tpw.scor160.l3.window_groups`, the SAME helper the shear path
+    uses, so chi and epsilon cannot drift apart on where their windows sit. With
+    ``bbl_diss_length`` set a section yields two groups of DIFFERENT length, so
+    *diss_length* and *dof_win* are per-group, not per-file.
+    """
+    n_windows = len(starts)
     if n_windows < 1:
         return
 
-    starts = sec_start + np.arange(n_windows) * diss_step
     indices = starts[:, np.newaxis] + np.arange(diss_length)[np.newaxis, :]
 
     gradt_windows = np.stack(
@@ -301,6 +310,7 @@ def _process_section_chi(
         acc.temp.append(T_means[w])
         acc.speed.append(speed_means[w])
         acc.section.append(sec_id)
+        acc.dof.append(dof_win)
         acc.nu.append(nu_all[w])
         acc.kappa_T.append(kappa_T_all[w])
         acc.kcyc.append(K_all[:, w])
@@ -368,11 +378,8 @@ def process_l3_chi(
     """
     fs = params.fs_fast
     nfft = params.fft_length
-    diss_length = params.diss_length
-    diss_overlap = params.overlap
-    # Clamp to >= 1: overlap == diss_length would make diss_step 0 and the
-    # n_windows division below raise ZeroDivisionError.
-    diss_step = max(diss_length - diss_overlap, 1)
+    # Window LENGTH and STEP are per-group now and come from
+    # scor160.l3.window_groups, together with the rest of the layout.
     n_freq = nfft // 2 + 1
     n_temp = l2_chi.n_temp
     diff_gains = l2_chi.diff_gains
@@ -405,25 +412,33 @@ def process_l3_chi(
     bl_corrections = [_bilinear_correction(F_const, dg, fs) for dg in diff_gains]
 
     do_goodman = params.goodman and l2_chi.n_vib > 0
-    # Spectral DOF per bin, same convention as rsi.dissipation/chi_io: the
-    # Nuttall factor times the segments actually averaged, minus the vibration
-    # signals Goodman removed (Lueck 2022b). n_segments() is the estimator's own
-    # count, so this cannot drift from what csd_matrix_batch did (#180 F16).
-    _n_seg = n_segments(diss_length, nfft)
     _n_v = l2_chi.n_vib if do_goodman else 0
-    dof_spec = _DOF_NUTTALL * max(_n_seg - _n_v, 1)
 
-    sections = np.unique(l2_chi.section_number)
-    sections = sections[sections > 0]
+    def _dof_for(group_diss_length: int) -> float:
+        """Spectral DOF per bin for a group of this window length.
+
+        Same convention as rsi.dissipation/chi_io: the Nuttall factor times the
+        segments actually averaged, minus the vibration signals Goodman removed
+        (Lueck 2022b). n_segments() is the estimator's own count, so this cannot
+        drift from what csd_matrix_batch did (#180 F16).
+
+        PER GROUP, not per file: a BBL group's shorter window averages fewer
+        segments, and this value gates the non-detection floor in l4_chi. Using
+        the long window's DOF for a short window would mis-gate exactly the
+        near-bed estimates the BBL analysis exists to measure.
+        """
+        return _DOF_NUTTALL * max(n_segments(group_diss_length, nfft) - _n_v, 1)
 
     acc = _SectionResult()
 
-    for sec_id in sections:
+    # One layout helper for both L3 paths -- see scor160.l3.window_groups.
+    for sec_id, starts, group_diss_length in window_groups(l2_chi.section_number, params):
         _process_section_chi(
             l2_chi,
             sec_id,
-            diss_length,
-            diss_step,
+            starts,
+            group_diss_length,
+            _dof_for(group_diss_length),
             nfft,
             fs,
             n_temp,
@@ -467,6 +482,7 @@ def process_l3_chi(
     temp_out = np.array(acc.temp)
     speed_out = np.array(acc.speed)
     section_out = np.array(acc.section)
+    dof_out = np.array(acc.dof, dtype=float)
     nu_out = np.array(acc.nu)
     kappa_T_out = np.array(acc.kappa_T)
     tau0_out = np.stack(acc.tau0, axis=-1)  # (n_temp, n_spec)
@@ -499,5 +515,5 @@ def process_l3_chi(
         interp_fraction=(
             np.column_stack(acc.interp_frac) if acc.interp_frac else np.zeros((0, 0))
         ),
-        dof_spec=dof_spec,
+        dof_spec=dof_out,
     )

@@ -7,7 +7,11 @@ from typing import ClassVar
 import numpy as np
 import pytest
 
-from odas_tpw.processing.bottom import detect_bottom_crash
+from odas_tpw.processing.bottom import (
+    bottom_anchor_depth,
+    detect_bottom_crash,
+    detect_bottom_fallrate,
+)
 
 
 class TestDetectBottomCrash:
@@ -242,3 +246,98 @@ class TestUnwiredKnobWarnings:
     def test_non_default_knob_warns(self, kwargs, needle):
         with pytest.warns(UserWarning, match=needle):
             detect_bottom_crash(self.depth, self.channels, fs=64.0, **kwargs)
+
+
+def _descent(fs=64.0, w=1.0, z0=0.5, z_stop=20.0, tail_s=2.0, decel_m=0.08):
+    """A free fall at `w` to `z_stop`, decelerating over the last `decel_m`."""
+    t_fall = (z_stop - decel_m - z0) / w
+    t1 = np.arange(0.0, t_fall, 1.0 / fs)
+    d1 = z0 + w * t1
+    # linear ramp of speed to zero over decel_m
+    n2 = max(round(decel_m / w * fs), 2)
+    frac = np.linspace(1.0, 0.0, n2)
+    d2 = d1[-1] + np.cumsum(frac * w / fs)
+    d3 = np.full(int(tail_s * fs), d2[-1])
+    return np.concatenate([d1, d2, d3])
+
+
+class TestDetectBottomFallrate:
+    def test_finds_end_of_free_fall(self):
+        fs = 64.0
+        d = _descent(fs=fs, z_stop=20.0, decel_m=0.08)
+        z = detect_bottom_fallrate(d, fs)
+        assert z is not None
+        # end of free fall is ~decel_m above the stop, within a couple samples
+        assert 19.85 < z < 20.0
+
+    def test_fires_where_vibration_has_no_spike(self):
+        """No accel channel at all, yet the bottom is found — the point of it."""
+        z = detect_bottom_fallrate(_descent(), 64.0)
+        assert z is not None
+
+    def test_no_descent_returns_none(self):
+        assert detect_bottom_fallrate(np.full(600, 7.0), 64.0) is None
+
+    def test_too_short_returns_none(self):
+        assert detect_bottom_fallrate(np.array([1.0, 2.0, 3.0]), 64.0) is None
+
+    def test_all_nan_returns_none(self):
+        assert detect_bottom_fallrate(np.full(600, np.nan), 64.0) is None
+
+    def test_span_below_min_returns_none(self):
+        d = _descent(z_stop=4.0)
+        assert detect_bottom_fallrate(d, 64.0, min_span=8.0) is None
+
+    def test_bad_fs_returns_none(self):
+        assert detect_bottom_fallrate(_descent(), 0.0) is None
+        assert detect_bottom_fallrate(_descent(), np.nan) is None
+
+    def test_fraction_must_be_open_unit_interval(self):
+        for bad in (0.0, 1.0, -0.5, 1.5):
+            with pytest.raises(ValueError, match="fraction"):
+                detect_bottom_fallrate(_descent(), 64.0, fraction=bad)
+
+    def test_lower_fraction_sits_deeper(self):
+        """Monotonicity: a laxer threshold is crossed closer to the stop."""
+        d = _descent(decel_m=0.4)
+        z90 = detect_bottom_fallrate(d, 64.0, fraction=0.9)
+        z50 = detect_bottom_fallrate(d, 64.0, fraction=0.5)
+        assert z50 > z90
+
+    def test_smoothing_inflates_the_answer(self):
+        """The measured deceleration length grows with the smoother — the
+        reason smooth_s is documented as not a free parameter."""
+        d = _descent(decel_m=0.08, z_stop=20.0)
+        z_sharp = detect_bottom_fallrate(d, 64.0, smooth_s=0.0)
+        z_smooth = detect_bottom_fallrate(d, 64.0, smooth_s=0.5)
+        assert z_smooth < z_sharp  # smoothing pushes the answer shallower
+
+    def test_picks_longest_descent_of_several(self):
+        fs = 64.0
+        short = _descent(fs=fs, z_stop=12.0, tail_s=1.0)
+        long_ = _descent(fs=fs, z_stop=40.0, tail_s=1.0)
+        d = np.concatenate([short, np.full(int(2 * fs), 0.3), long_])
+        z = detect_bottom_fallrate(d, fs)
+        assert z is not None and z > 35.0
+
+
+class TestBottomAnchorDepth:
+    def test_subtracts_height(self):
+        assert bottom_anchor_depth(20.0, 0.15) == pytest.approx(19.85)
+
+    def test_zero_height_is_the_bottom(self):
+        assert bottom_anchor_depth(20.0, 0.0) == pytest.approx(20.0)
+
+    def test_none_passes_through(self):
+        assert bottom_anchor_depth(None, 0.15) is None
+
+    def test_nan_bottom_passes_through(self):
+        assert bottom_anchor_depth(np.nan, 0.15) is None
+
+    def test_negative_height_rejected(self):
+        with pytest.raises(ValueError, match="height"):
+            bottom_anchor_depth(20.0, -0.1)
+
+    def test_nonfinite_height_rejected(self):
+        with pytest.raises(ValueError, match="height"):
+            bottom_anchor_depth(20.0, np.nan)

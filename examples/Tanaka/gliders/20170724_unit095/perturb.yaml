@@ -1,0 +1,156 @@
+# Perturb configuration -- MicroRider SN 247 (+ AEM1-G EM 010) on Slocum G2
+# unit095, Oyashio east of Japan, 2017-07-24 .. 08-14. The Slocum of Tanaka et
+# al. (2022, JTECH, doi:10.1175/JTECH-D-21-0074.1).
+#
+#   perturb run -c perturb.yaml
+#
+# ---------------------------------------------------------------------------
+# READ FIRST (details in README.md)
+# * Speed is the Merckelbach DYNAMIC flight model with the paper's lift and
+#   induced drag, measured on this glider with its DVL (a = 5.4 rad^-1,
+#   Cd1 = 5.92 rad^-2), Cd0 and Vg fitted per UTC day to the depth rate
+#   (make_flight_speed.py). Cd0 0.188-0.198 over 22 days; Vg 68.22 L and hull
+#   compressibility 4.76e-10 reproduce the paper's 68.2 L / 4.5e-10. Dive U
+#   0.280 m/s (the paper's ADCP: 0.28).
+# * U_EM IS NOT USED. It reads model/EM = 0.839 on dives, 0.887 on climbs
+#   (the paper: 0.85 against the ADCP on descents). See README.md for the
+#   gain-vs-zero question this raises.
+# * The glider CTD is a Neil Brown UNPUMPED cell whose own timestamp is never
+#   populated: it is projected from the science clock (dinkum-flight.yaml).
+# * unit095_flight_hotel.nc is ALREADY ON THE MR CLOCK (L = -6.0 s at
+#   2017-08-03, -0.81 s/day; mr_clock_model.json), so time_offset is 0.
+# * NO FP07 WORKING PAST 07-25 -- chi is OFF (see chi:). Epsilon only.
+# * Shear probes M1672 @ 0.0837, M1673 @ 0.0799 and the thermistors: no sheet
+#   in microstructure_sensors/. Absolute epsilon rests on the embedded config.
+# ---------------------------------------------------------------------------
+
+files:
+  p_file_root: "<CONFIG_DIR>/../post-recovery/microrider"
+  p_file_pattern: "DAT_*.P" # 158 files, DAT_023 .. DAT_180
+  output_root: "<CONFIG_DIR>/Processed"
+  trim: false
+  merge: false
+
+hotel:
+  enable: true
+  file: "<CONFIG_DIR>/unit095_flight_hotel.nc"
+  time_column: "time"       # ALREADY the MicroRider clock
+  time_format: "epoch"
+  time_offset: 0.0
+  max_gap: 30.0
+  extrapolate: false
+  interpolation: "pchip"
+  channels:
+    speed:
+      fast: true
+    sci_water_temp:
+      units: "degree_Celsius"
+      fast: false
+    sci_water_cond:
+      units: "mS/cm"        # already mS/cm in the hotel file: NO scale here
+      fast: false
+  fast_channels: ["speed"]
+
+gps:
+  source: "netcdf"
+  file: "<CONFIG_DIR>/unit095_flight_hotel.nc"   # dead-reckoned m_lat/m_lon, MR clock
+  time_col: "time"
+  lat_col: "lat"
+  lon_col: "lon"
+  max_time_diff: 600
+
+profiles:
+  P_min: 2.0
+  W_min: 0.05
+  direction: "glide"        # BOTH legs
+  min_duration: 60.0
+  diagnostics: false
+
+fp07:
+  calibrate: true
+  order: 2
+  reference: "sci_water_temp"
+  max_lag_seconds: 10
+  must_be_negative: false
+  min_corr: 0.5
+  allow_hotel_reference: true  # keeps the run startable. T1 works only in the
+                            # first 3 files (README) and chi is off, so nothing
+                            # depends on it.
+
+ct:
+  align: false
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+speed:
+  method: "hotel"
+  hotel_var: "speed"
+  speed_cutout: 0.05
+
+epsilon:
+  fft_sec: 2.0
+  salinity: "measured"
+  T_source: "sci_water_temp"
+  fom_max: null
+  diagnostics: false
+
+# CHI IS OFF: MR SN 247 HAS NO FP07 WORKING PAST 07-25. T2 is pinned at
+# 16.136 C (the config's T_0: an open circuit or dummy). T1 tracks the CTD to
+# 4-10 mK in DAT_023-025 (6 profiles, to 07-25 ~04 UTC); from DAT_026 it is off,
+# railed at -17 C, wanders 17-27 C tracking pressure not temperature (Spearman
+# with the CTD 0.24), and sits on the +57.6 C rail from ~DAT_120 on. The
+# per-file fit (2026-10-17) fits T1 in DAT_023-026, 028 and 048 -- the last
+# three on a broken bead -- and refuses T2 everywhere. Epsilon is unaffected
+# (viscosity from the glider CTD).
+chi:
+  enable: false
+  use_epsilon: false
+  fft_sec: 2.0
+  spectrum_model: "kraichnan"
+  salinity: "measured"
+  mixing: true
+  fom_max: null
+
+stratification:
+  enable: true
+  salinity: "measured"
+  window: 2.0
+
+ctd:
+  enable: true
+  T_name: "sci_water_temp"
+  C_name: "sci_water_cond"
+
+bottom:
+  enable: false
+top_trim:
+  enable: false
+
+binning:
+  method: "depth"
+  width: 1.0
+
+qc:
+  enable: true
+  drop_action: "nan"
+
+netcdf:
+  title: "MicroRider SN 247 turbulence on Slocum unit095, Oyashio 2017"
+  summary: >
+    Turbulent kinetic energy dissipation (epsilon) and thermal variance
+    dissipation (chi) from a Rockland MicroRider SN 247 on Slocum G2 glider
+    unit095 across the Oyashio east of Japan, 24 July - 14 August 2017 (the
+    Slocum of Tanaka et al. 2022). Through-water speed from a dynamic flight
+    model with the paper's ADCP-derived lift and induced-drag coefficients,
+    calibrated daily against the depth rate; FP07 thermistors calibrated in
+    situ against the glider CTD; times on the MicroRider clock.
+  institution: "Oregon State University"
+  platform: "Slocum G2 glider unit095"
+  instrument: "Rockland MicroRider SN 247"
+  creator_name: "Pat Welch"
+  creator_email: "pat@mousebrains.com"
+  geospatial_vertical_positive: "down"
+  Conventions: "CF-1.13, ACDD-1.3"
+
+parallel:
+  jobs: 2

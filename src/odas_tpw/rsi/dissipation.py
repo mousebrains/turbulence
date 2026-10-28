@@ -23,7 +23,6 @@ Lueck, R.G., and 27 coauthors, 2024: Best practices recommendations for
 """
 
 import warnings
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +33,7 @@ import xarray as xr
 if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
 
+from odas_tpw._version_info import stamp_provenance
 from odas_tpw.rsi.helpers import _build_l1data_from_channels, load_channels, prepare_profiles
 from odas_tpw.scor160.io import BAD_MAX_INTERP_FRACTION as MAX_INTERP_FRACTION
 from odas_tpw.scor160.l4 import (
@@ -76,6 +76,10 @@ def _compute_epsilon(
     fft_length: int = 1024,
     diss_length: int | None = None,
     overlap: int | None = None,
+    anchor: str = "top",
+    bbl_diss_length: int | None = None,
+    bbl_overlap: int | None = None,
+    bbl_extent: int | None = None,
     speed: float | None = None,
     speed_method: str | None = None,
     aoa_deg: float = 3.0,
@@ -233,6 +237,10 @@ def _compute_epsilon(
         HP_cut=hp_cut,
         fs_fast=fs_fast,
         goodman=goodman,
+        anchor=anchor,
+        bbl_diss_length=bbl_diss_length,
+        bbl_overlap=bbl_overlap if bbl_overlap is not None else 0,
+        bbl_extent=bbl_extent,
     )
 
     results: list[xr.Dataset] = []
@@ -367,7 +375,8 @@ def _compute_epsilon(
                     epsilon[hit] = np.nan
                     warnings.warn(
                         f"{int(hit.sum())} of {n_sh * n_spec} epsilon estimate(s) "
-                        "rejected: RDL bad-buffer gaps too long to interpolate, or "
+                        "rejected: bad-buffer gaps (RDL markers or records rebuilt "
+                        "after mis-framing) too long to interpolate, or "
                         f"more than {100 * MAX_INTERP_FRACTION:.0f}% of the window "
                         "interpolated "
                         f"({data['metadata'].get('bad_buffer_channels', '')})",
@@ -410,7 +419,7 @@ def _compute_epsilon(
             fit_order=fit_order,
         )
         ds.attrs.update(data["metadata"])
-        ds.attrs["history"] = f"Computed with microstructure-tpw on {datetime.now(UTC).isoformat()}"
+        stamp_provenance(ds.attrs, "epsilon")
         start_time = data["metadata"].get("start_time", "")
         t_units = f"seconds since {start_time}" if start_time else "seconds"
         ds.coords["t"].attrs.update(
@@ -457,6 +466,10 @@ def get_diss(
     fft_length: int = 1024,
     diss_length: int | None = None,
     overlap: int | None = None,
+    anchor: str = "top",
+    bbl_diss_length: int | None = None,
+    bbl_overlap: int | None = None,
+    bbl_extent: int | None = None,
     speed: float | None = None,
     direction: str = "down",
     goodman: bool = True,
@@ -523,6 +536,10 @@ def get_diss(
         fft_length=fft_length,
         diss_length=diss_length,
         overlap=overlap,
+        anchor=anchor,
+        bbl_diss_length=bbl_diss_length,
+        bbl_overlap=bbl_overlap,
+        bbl_extent=bbl_extent,
         speed=speed,
         direction=direction,
         goodman=goodman,

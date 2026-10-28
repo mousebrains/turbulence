@@ -16,6 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
+from odas_tpw._version_info import add_version_argument
+
 
 def main(argv: list[str] | None = None) -> None:
     """CLI entry point for scor160-tpw."""
@@ -23,6 +25,7 @@ def main(argv: list[str] | None = None) -> None:
         prog="scor160-tpw",
         description="SCOR/ATOMIX benchmark dataset processing",
     )
+    add_version_argument(parser)
     sub = parser.add_subparsers(dest="command", required=True)
 
     # --- l1-l2 ---

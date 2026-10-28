@@ -72,6 +72,140 @@ def _apply_macoun_lueck(kcyc: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
+def section_groups(
+    sec_id: float,
+    sec_start: int,
+    sec_end: int,
+    diss_length: int,
+    diss_step: int,
+    *,
+    anchor: str = "top",
+    bbl_diss_length: int | None = None,
+    bbl_step: int | None = None,
+    bbl_extent: int | None = None,
+) -> list[tuple[float, np.ndarray, int]]:
+    """Window start indices for one section, as ``(sec_id, starts, diss_length)``.
+
+    ``anchor="top"`` reproduces the historical layout exactly: the first window
+    begins at ``sec_start`` and they march down on ``diss_step``, so the
+    ``(sec_len - diss_length) % diss_step`` samples at the BOTTOM are discarded.
+    For a profiler that crashes into the seabed that is precisely the bottom
+    boundary layer: measured on SUNRISE 2022 Point Sur the deepest window's
+    CENTRE sat a median 1.40 m above the deepest retained sample.
+
+    ``anchor="bottom"`` instead pins the deepest window's lower edge to
+    ``sec_end`` and marches UP, so the remainder lands at the top of the
+    section -- where ``top_trim`` has already removed the contaminated water
+    and what is left is well-resolved interior.
+
+    ``bbl_*`` adds a near-bottom group of SHORTER dissipation windows, which is
+    what buys vertical resolution in the boundary layer: a window's epsilon is
+    attributed to its centre, so halving ``diss_length`` halves the distance
+    from the seabed to the deepest estimate. Only ``diss_length`` may differ
+    between groups -- ``fft_length`` is shared, because ``L3Data.sh_spec`` is
+    ``(N_SHEAR, N_WAVENUMBER, N_SPECTRA)`` and a second FFT length would need a
+    second, incompatible wavenumber axis. The price of a shorter window is DOF:
+    at ``fft_length = 256`` a 1024-sample window averages 7 FFTs and a
+    512-sample window only 3, so BBL spectra are noisier and their fits looser.
+    That is a deliberate trade, not an oversight.
+    """
+    sec_len = sec_end - sec_start
+    shortest = bbl_diss_length if (anchor == "bottom" and bbl_diss_length) else diss_length
+    if sec_len < shortest:
+        return []
+
+    if anchor == "top":
+        n = (sec_len - diss_length) // diss_step + 1
+        if n < 1:
+            return []
+        return [(sec_id, sec_start + np.arange(n) * diss_step, diss_length)]
+
+    if anchor != "bottom":
+        raise ValueError(f"anchor must be 'top' or 'bottom', got {anchor!r}")
+
+    groups: list[tuple[float, np.ndarray, int]] = []
+    boundary = sec_end
+
+    if bbl_diss_length and bbl_extent:
+        step = bbl_step if bbl_step else max(bbl_diss_length // 2, 1)
+        zone_top = max(sec_end - bbl_extent, sec_start)
+        starts: list[int] = []
+        s = sec_end - bbl_diss_length
+        while s >= zone_top and s >= sec_start:
+            starts.append(s)
+            s -= step
+        if starts:
+            groups.append((sec_id, np.array(sorted(starts)), bbl_diss_length))
+            # The normal windows sit entirely ABOVE the BBL zone, so no long
+            # window straddles the boundary layer and the interior and reports
+            # the average of the two as a single number.
+            boundary = min(starts)
+
+    starts_n: list[int] = []
+    s = boundary - diss_length
+    while s >= sec_start:
+        starts_n.append(s)
+        s -= diss_step
+    if starts_n:
+        groups.append((sec_id, np.array(sorted(starts_n)), diss_length))
+
+    return groups
+
+
+#: Backwards-compatible alias. The window layout is now shared with the chi
+#: path (``chi/l3_chi.py``), so it is public; the private name predates that.
+_section_groups = section_groups
+
+
+def window_groups(
+    section_number: np.ndarray, params: L3Params
+) -> list[tuple[float, np.ndarray, int]]:
+    """Every window group for every section, derived from *params*.
+
+    The single place where an :class:`L3Params` becomes a window layout. Both
+    L3 paths call it -- the shear path in this module and the chi path in
+    ``chi/l3_chi.py`` -- because they are two pipelines that look like one, and
+    the last time they each did their own layout the bottom anchor reached only
+    the shear side: chi kept marching down from the top of every section, so a
+    "bottom-up" product had bottom-anchored epsilon and top-down chi, with no
+    chi at all in the bottom ~1.2 m.
+
+    Returns ``(sec_id, starts, diss_length)`` per group. With ``bbl_diss_length``
+    set a section yields TWO groups of different length, so callers must treat
+    ``diss_length`` as per-group -- notably for anything derived from it, such
+    as the number of averaged FFT segments and hence the spectral DOF.
+    """
+    diss_step = max(params.diss_length - params.overlap, 1)
+    # Not clamped: a zero step falls back to half a BBL window in
+    # section_groups, as process_l3 did before this helper existed.
+    bbl_step = (
+        params.bbl_diss_length - params.bbl_overlap
+        if params.bbl_diss_length
+        else None
+    )
+    sections = np.unique(section_number)
+    sections = sections[sections > 0]
+    groups: list[tuple[float, np.ndarray, int]] = []
+    for sec_id in sections:
+        idx = np.where(section_number == sec_id)[0]
+        if len(idx) == 0:
+            continue
+        groups.extend(
+            section_groups(
+                sec_id,
+                int(idx[0]),
+                int(idx[-1]) + 1,
+                params.diss_length,
+                diss_step,
+                anchor=params.anchor,
+                bbl_diss_length=params.bbl_diss_length,
+                bbl_step=bbl_step,
+                bbl_extent=params.bbl_extent,
+            )
+        )
+    return groups
+
+
 def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     """Compute L3 wavenumber spectra from L2 cleaned time series.
 
@@ -90,9 +224,8 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     """
     fs = params.fs_fast
     nfft = params.fft_length
-    diss_length = params.diss_length
-    diss_overlap = params.overlap
-    diss_step = diss_length - diss_overlap
+    # Window length and step are per-GROUP now (a BBL group is shorter) and
+    # come from window_groups() below, with the rest of the layout.
     n_freq = nfft // 2 + 1
 
     n_shear = l2.shear.shape[0]
@@ -112,31 +245,18 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
     all_bad_frac = []
     all_interp_frac = []
 
-    sections = np.unique(l2.section_number)
-    sections = sections[sections > 0]
+    groups = window_groups(l2.section_number, params)
 
-    for sec_id in sections:
-        mask = l2.section_number == sec_id
-        idx = np.where(mask)[0]
-        if len(idx) < diss_length:
-            continue
-
-        sec_start = idx[0]
-        sec_end = idx[-1] + 1
-        sec_len = sec_end - sec_start
-
-        # Window start positions within the section
-        n_windows = (sec_len - diss_length) // diss_step + 1
+    for sec_id, starts, diss_length_g in groups:
+        n_windows = len(starts)
         if n_windows < 1:
             continue
 
-        starts = sec_start + np.arange(n_windows) * diss_step
-
-        # Build windowed arrays: (n_windows, diss_length, n_channels)
+        # Build windowed arrays: (n_windows, diss_length_g, n_channels)
         shear_windows, vib_windows = _build_window_arrays(
             l2,
             starts,
-            diss_length,
+            diss_length_g,
             n_shear,
             n_vib,
             params.goodman,
@@ -179,8 +299,8 @@ def process_l3(l2: L2Data, l1: L1Data, params: L3Params) -> L3Data:
         # Per-window mean values
         for w in range(n_windows):
             s = starts[w]
-            e = s + diss_length
-            center_idx = s + diss_length // 2
+            e = s + diss_length_g
+            center_idx = s + diss_length_g // 2
 
             all_times.append(l2.time[center_idx])
             all_pres.append(np.mean(l1.pres[s:e]))

@@ -1,0 +1,38 @@
+{
+  "definition": "glider_time = MR_time + lag_s; perturb hotel.time_offset would be -lag_s",
+  "blocks": {
+    "2015-10-12..2015-10-14": {
+      "n_files": 26,
+      "t_ref_epoch": 1444718577.75,
+      "lag_at_ref_s": -63.99365614356389,
+      "drift_s_per_day": -0.19154997275459149,
+      "residual_rms_s": 0.2893780668002706,
+      "t_min_epoch": 1444662247.5,
+      "t_max_epoch": 1444796035.5,
+      "sel_lo_epoch": null,
+      "sel_hi_epoch": 1445126400.0
+    },
+    "2015-10-23..2015-10-28": {
+      "n_files": 35,
+      "t_ref_epoch": 1445835016.5,
+      "lag_at_ref_s": 8.204585767774454,
+      "drift_s_per_day": -0.5200754745778254,
+      "residual_rms_s": 0.29690351094496586,
+      "t_min_epoch": 1445640372.0,
+      "t_max_epoch": 1446029682.0,
+      "sel_lo_epoch": 1445126400.0,
+      "sel_hi_epoch": 1446035400.0
+    },
+    "2015-10-28..2015-11-05": {
+      "n_files": 65,
+      "t_ref_epoch": 1446386300.5,
+      "lag_at_ref_s": -7.595315406278691,
+      "drift_s_per_day": -0.49824552435956093,
+      "residual_rms_s": 0.3048296401658102,
+      "t_min_epoch": 1446040373.5,
+      "t_max_epoch": 1446742978.5,
+      "sel_lo_epoch": 1446035400.0,
+      "sel_hi_epoch": null
+    }
+  }
+}
