@@ -81,6 +81,9 @@ ds = xr.open_dataset(chi_paths[0])
 ds["chi"]             # thermal dissipation rate [K²/s]
 ds["spec_gradT"]      # temperature gradient spectra
 ds["spec_batch"]      # fitted Batchelor spectra
+ds["fom"]             # observed/model variance ratio over the fit band (level)
+ds["mad_shape"]       # spread of log10(observed/model) across it [dex] (shape);
+                      # floor ~0.17 at 9.5 dof for a perfect fit, not 0
 
 # Method 2: chi without epsilon (spectral fitting; defaults are
 # fit_method="iterative" (Peterson & Fer 2014) with

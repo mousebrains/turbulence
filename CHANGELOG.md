@@ -7,6 +7,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **chi `mad_shape`: a spectral SHAPE statistic beside `fom` (issue #191).**
+  `fom` integrates observed and model variance over the fit band, so a
+  mid-band deficit cancels against excesses at the band ends; on Method 1 and
+  the MLE fit, whose chi is that band integral, it is pinned near 1 by
+  construction. Every chi product that carries `fom` (`rsi-tpw chi`, the rsi
+  pipeline's `L4_chi_*`, perturb's per-profile `chi_NN`) now also carries
+  `mad_shape(probe, time)`: `mean |r - median(r)|` in dex, with
+  `r = log10(observed/model)` per bin over the same bins and against the same
+  model (Batchelor/Kraichnan x FP07 `|H|^2` + noise) as `fom`. It is the
+  epsilon `mad` taken about the window's own median instead of 0, so neither a
+  constant level error nor the chi-squared bias of a log estimate (median
+  below mean) counts. A perfect fit sits at a spectral-scatter floor (0.166
+  dex at the usual 9.5 degrees of freedom), not 0;
+  `odas_tpw.chi.chi.mad_shape_floor(dof)` gives it for any window. Use the
+  window's own DOF: near-bed windows laid out with `bbl_diss_length` average
+  fewer FFT segments than the file's `dof_spec` attribute assumes, so their
+  floor is higher. On the CASPER-West windows of the issue
+  (`K_max_ratio > 1.2`, `fom` 0.985-1.002) it reads 0.27 (p10 0.19, p90 0.43)
+  against a Welch-noise null of 0.16, and the top third carries the #191
+  residual coherently (+1.5 dex at k/kB = 0.02, -0.35 to -0.44 at 0.27-0.61).
+  A diagnostic only: no gate and no config key, and the binned and combo
+  products carry neither it nor `fom`. Every pre-existing variable is
+  bit-identical (rsi-tpw `eps`/`chi` Methods 1, 2, MLE, Batchelor, `pipeline`,
+  and a perturb run, on SN479 0006 and 0008). See `docs/chi_mathematics.md`
+  §9. The §8 note that the Ruddick et al. (2000) MAD was "available for
+  post-processing" was wrong -- it was never computed; it is the linear-ratio
+  cousin of `mad_shape`, and its `2*sqrt(2/d)` limit does not apply here.
+  **API change:** `chi.chi.ChiEpsilonResult` grows from 7 to 8 fields and
+  `ChiFitResult` from 8 to 9 (`mad_shape`, last), and a `chi_func` passed to
+  `chi.l4_chi._process_l4_chi` must now return 8 values. Code that unpacks
+  either result positionally now raises `ValueError: too many values to
+  unpack`; bind by attribute (`res.chi`, `res.fom`, ...) instead.
 - **`PFile` refuses or repairs a mis-framed `.p` file instead of
   mis-assembling it.** Every reader, ODAS included, cuts a v6 file at a fixed
   record size, so one record of the wrong length puts every later header in

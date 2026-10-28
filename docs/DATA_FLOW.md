@@ -185,6 +185,7 @@ estimating χ and the Batchelor wavenumber (MLE or iterative method).
 | kB | (probe, time) | Batchelor wavenumber |
 | K_max | (probe, time) | Upper integration wavenumber |
 | fom | (probe, time) | Figure of merit |
+| mad_shape | (probe, time) | Spread of log10(observed/model) across the fom band [dex]; a shape diagnostic, not a gate |
 | K_max_ratio | (probe, time) | K_max / kB ratio |
 | var_resolved | (probe, time) | Batchelor gradient-variance resolved fraction (chi-side V_f; feeds the eq (18) chiLnSigma truncation, no FP07 &#124;H&#124;²) |
 | sea_water_pressure | (time,) | Mean pressure per window |

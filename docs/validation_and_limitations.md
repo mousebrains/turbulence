@@ -100,7 +100,12 @@ so it is not a noise-subtraction artifact. **`fom` for those exact windows is
 1.001** (p10 0.987, p90 1.002).
 [Issue #191](https://github.com/mousebrains/turbulence/issues/191) has the
 per-band numbers. Do not use `fom` alone as evidence that a chi spectrum was
-well fit.
+well fit. Every per-profile chi product now also carries `mad_shape`, the
+per-bin spread of `log10(observed/model)` over the same band, which cannot
+cancel. A perfect fit sits at a spectral-scatter floor (0.166 dex at 9.5
+degrees of freedom), not at 0; on those CASPER-West windows it reads a median
+of 0.27 against a noise null of 0.16. See
+[chi_mathematics.md](chi_mathematics.md#spectral-shape-mad_shape).
 
 ### What chi is good for
 

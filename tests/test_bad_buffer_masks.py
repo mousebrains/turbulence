@@ -821,7 +821,7 @@ class TestChiMasking:
         l3.bad_fraction[:, 1] = 0.01  # window 1 unrepairable on every probe
 
         def chi_func(j, ci, *_args, **_kw):
-            return (1e-8, 1e-9, 50.0, 40.0, 1.0, 0.9, 0.95)
+            return (1e-8, 1e-9, 50.0, 40.0, 1.0, 0.9, 0.95, 0.2)
 
         out = _process_l4_chi(l3, chi_func, "epsilon", 98.0)
         assert np.all(np.isnan(out.chi[:, 1]))
@@ -860,7 +860,7 @@ class TestChiMasking:
         l3.interp_fraction[0, 1] = BAD_MAX_INTERP_FRACTION * 2  # too much
 
         def chi_func(j, ci, *_args, **_kw):
-            return (1e-8, 1e-9, 50.0, 40.0, 1.0, 0.9, 0.95)
+            return (1e-8, 1e-9, 50.0, 40.0, 1.0, 0.9, 0.95, 0.2)
 
         out = _process_l4_chi(l3, chi_func, "epsilon", 98.0)
         assert np.isfinite(out.chi[0, 0]), "a lightly repaired window is usable"

@@ -440,7 +440,7 @@ class TestChiFromEpsilon:
         # Pre-compute noise for new signature
         noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
 
-        chi_est, _kB_est, _K_max, _, _fom, _K_max_ratio, _var_res = _chi_from_epsilon(
+        chi_est, _kB_est, _K_max, _, _fom, _K_max_ratio, _var_res, _shape = _chi_from_epsilon(
             spec_obs,
             K,
             eps_true,
@@ -673,7 +673,7 @@ class TestMLEFit:
         noise_K, _ = gradT_noise(F, 10.0, speed, fs=fs, diff_gain=0.94)
         spec_obs = np.maximum(batchelor_grad(K, kB_true, chi_true) * H2 + noise_K, 1e-20)
 
-        kB_fit, chi_fit, eps_fit, _K_max, _, _fom, _K_max_ratio, _var_res = _mle_fit_kB(
+        kB_fit, chi_fit, eps_fit, _K_max, _, _fom, _K_max_ratio, _var_res, _shape = _mle_fit_kB(
             spec_obs,
             K,
             chi_true,
