@@ -288,6 +288,16 @@ rsi-tpw chi VMP/*.p --spectrum-model batchelor -o chi/
 | `--temperature NAME\|degC` | Reference temperature for viscosity/κ_T: a channel name, a fixed value [°C], or `auto` = first plausible of `T1`..`Tn`, `T`, `JAC_T` (default: auto; same semantics as `eps`) |
 | `--conductivity NAME` | Conductivity channel for `--salinity measured` (default: auto = `JAC_C` when present) |
 
+The output NetCDF carries two spectral-fit diagnostics per probe and window:
+
+- `fom` — observed over model variance, *integrated* over the fit band; near
+  1.0 is a good LEVEL. A mid-band deficit can cancel against excesses at the
+  band ends, so it says little about shape (issue #191).
+- `mad_shape` — `mean |r - median(r)|` with `r = log10(observed/model)` per
+  bin over the same band [dex]. A SHAPE diagnostic that cannot cancel; a
+  perfect fit sits at a spectral-scatter floor (0.166 dex at 9.5 degrees of
+  freedom), not 0. See [chi_mathematics.md](../chi_mathematics.md#spectral-shape-mad_shape).
+
 ## `rsi-tpw pipeline`
 
 Run the full processing pipeline from raw `.p` files through epsilon and chi.

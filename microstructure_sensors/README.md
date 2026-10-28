@@ -3,20 +3,72 @@
 Rockland calibration sheets (PDF, gitignored — large/vendor files) and the
 tracked **shear-probe sensitivity registry** `shear_sensitivities.csv`.
 
-Holdings as of 2026-10-12: **190 shear-probe sheets for 106 serials**, dated
-2004-10-14 to 2026-06-22. (`JAC_CT_SN023.pdf` is a CT certificate, not a shear
-sheet, and is skipped by the parser.) The 2026-10-12 batch ("OSU Shear
-Calibration Certificates", 129 PDFs, 84 of them new here) added most of the
-pre-2020 history, including the ASTRAL and CASPER MicroRider probes requested
-in `sheet_requests.md`. Some early calibrations are still known only as a later
-sheet's "previous" entry (M1497 and M1501 2016-06-06, M2090 2019-07-02).
+Holdings as of 2026-10-26: **200 shear-probe sheets for 116 serials**, dated
+2004-10-14 to 2026-06-22, plus eight FP07 production reports (below).
+(`JAC_CT_SN023.pdf` is a CT certificate, not a shear sheet, and is skipped by
+the parser.) The 2026-10-12 batch ("OSU Shear Calibration Certificates", 129
+PDFs, 84 of them new here) added most of the pre-2020 history, including the
+ASTRAL and CASPER MicroRider probes requested in `sheet_requests.md`. Some
+early calibrations are still known only as a later sheet's "previous" entry
+(M1497 and M1501 2016-06-06, M2090 2019-07-02).
+
+The 2026-10-26 batch came from an outside group's 2026 VMP deployments. It
+added **10 shear sheets for 10 new serials**: M2662 (2023-04-12), M3244
+(2025-04-29) and M3456–M3459 and M3461–M3464 (all 2026-04-07). None of them
+prints a previous calibration. All ten were pressure-tested 12–141 days before
+calibration, which complies with the timing rule below. None shares a
+fingerprint (`c`, capacitance, calibration temperature, DC offset) with any
+of the 130 sheets that print those. The same check re-finds the known
+M3038/M3039 pair.
+
+### FP07 production reports (`T*.pdf`)
+
+Rockland issues each FP07 a one-page *FP07 Temperature Probe Production
+Report*. **It is not a calibration.** It states "This probe is uncalibrated"
+and recommends an in-situ fit. It records the serial, part number, the bead's
+resistance at one temperature, and its pressure-test and dip-test dates. Eight
+are held: T3298, T3299, T3301–T3304, T3306 and T3308, issued 2026-03-13,
+pressure-tested 2026-01-09. Their resistances are 2.163–2.499 kΩ at 19.6 °C.
+`cal-csv` and `sensors --cal-dir` skip them, since they carry no
+sensitivity.
+
+That single resistance is still useful for **bead identity**. When two beads
+share the same nominal Steinhart-Hart set, inverting each channel's
+temperature gives ln(R/R₀). Their difference at one instant, taken where the
+water is near the report temperature, is then ln(R_T2/R_T1), which can be
+compared with the reports. On one instrument this matched the configured pair
+(T3304/T3303) to 0.0004 (about 0.01 K). It also identified an unrecorded T2
+swap to T3301, which the operator later confirmed.
 
 ## sensor_deployments.csv
 
 Which sensor was fitted where, and when — one row per (sensor, campaign,
 instrument, channel) with first/last use, file count and the configured value,
-read from the instruments' own `.p` configs. Covers CASPER 2015/2017, ASTRAL
-2023 and ARCTERX 2022/2025: 21 distinct FP07 beads and 17 shear probes.
+read from the instruments' own `.p` configs. Covers CASPER 2015/2017, Taiwan
+2017, SUNRISE 2019/2021/2022, ASTRAL 2023, ARCTERX 2022/2025, Tanaka's
+glider deployments 2015–2022 and an outside user's 2026 VMPs: 30 distinct FP07
+beads (plus the placeholder serial `T`) and 51 shear probes.
+
+The Tanaka rows (added 2026-10-18) take the deployment folder under
+`/Volumes/SeaChest/Tanaka/gliders/` as their campaign. Their configured FP07
+value is `beta_1`, or `beta` where a config has no `beta_1`. MicroRider SN058's FP07s (2015) have no rows, because its
+configs record no thermistor serial.
+
+The "Outside user 2026" rows were added 2026-10-26 and describe an outside
+group's two VMPs, called A (a VMP-5500) and B (a VMP-250IR) here. They depart
+from the configs in two places:
+
+- **A's T2 is attributed by bead, not by config.** Every config says T3304.
+  The rows give T3304 through the 2026-08-22 file and T3301 from the next one.
+  The beads were identified from the production reports' resistances (*FP07
+  production reports* above), and the operator confirmed the swap. T2 was
+  failing on the file before 2026-08-22's and broken on 2026-08-22's; those
+  two files are counted under T3304, which is an assumption.
+- **A bench-test file is left out.**
+
+B's FP07s stay as the placeholder `T`. The resistance evidence makes T2
+very likely T3308. T1 is T3306 or T3302, and the evidence cannot separate
+them. (T2 drifted +1.4% in resistance during the deployment.)
 
 This is the prerequisite for any per-bead calibration history, since a probe
 moves between channels and instruments between cruises — see issue #189 (FP07
@@ -28,7 +80,8 @@ Sensors found in deployment data for which **no sheet is held here** — the
 standing batch request to Rockland. Regenerate/extend it by scanning a
 campaign's `.p` configs and differencing against the PDFs in this directory.
 As of 2026-09-07 it covers CASPER and ASTRAL: 16 shear probes and 12 FP07
-thermistors (we hold no thermistor sheets at all). Fourteen of the sixteen
+thermistors (we hold no thermistor sheets for those; the only FP07 documents
+here are the 2026 production reports above). Fourteen of the sixteen
 shear sheets arrived 2026-10-12; Rockland has **no record of M1000 or M1001**.
 
 ## shear_sensitivities.csv
@@ -69,7 +122,8 @@ preserved; a sheet's own entry upgrades a previous-calibration attestation of
 the same point; conflicting sensitivities for the same probe+date are kept
 side by side and reported. The command exits 1 whenever any conflict exists
 or any PDF fails to parse, so in this directory it always does (the M1254 and
-M3038 conflicts below, and the non-shear `JAC_CT_SN023.pdf`). Add `manual`
+M3038 conflicts below, the non-shear `JAC_CT_SN023.pdf`, and the eight FP07
+production reports). Add `manual`
 rows by hand with a
 provenance note in `notes`. A row must have exactly nine comma-separated
 fields, so quote any value containing a comma (`"a, b"`) — an unquoted one is

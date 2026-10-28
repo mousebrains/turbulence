@@ -58,6 +58,11 @@ class L4ChiData:
     # floor and ``chi_final`` is the soft-QC fallback geometric mean of failed
     # probes. Never silently mixed with a passing window again (#180 F04).
     chi_qc_fallback: np.ndarray | None = None
+    # (N_GRADT, N_SPECTRA) spread of log10(observed/model) across the fom band
+    # [dex] -- the SHAPE diagnostic fom cannot be (chi._shape_mad, issue #191).
+    # A diagnostic only: nothing gates on it. None only from a caller that
+    # built the dataclass itself.
+    mad_shape: np.ndarray | None = None
 
     @property
     def n_spectra(self) -> int:
@@ -105,7 +110,7 @@ def _process_l4_chi(
     chi_func : callable
         ``chi_func(j, ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2,
         f_AA_eff)`` returns ``(chi_val, eps_val, kB_val, K_max_val, fom_val,
-        K_max_ratio_val, var_resolved_val)`` or None to skip.
+        K_max_ratio_val, var_resolved_val, mad_shape_val)`` or None to skip.
     method_name : str
         "epsilon" or "fit".
     f_AA : float
@@ -124,6 +129,7 @@ def _process_l4_chi(
     fom_out = np.full((n_gradt, n_spec), np.nan)
     K_max_ratio_out = np.full((n_gradt, n_spec), np.nan)
     var_resolved_out = np.full((n_gradt, n_spec), np.nan)
+    mad_shape_out = np.full((n_gradt, n_spec), np.nan)
 
     for j in range(n_spec):
         K = l3_chi.kcyc[:, j]
@@ -157,14 +163,16 @@ def _process_l4_chi(
             if result is None:
                 continue
 
-            chi_val, eps_val, kB_val, K_max_val, fom_val, K_max_ratio_val, var_res_val = result
-            chi_out[ci, j] = chi_val
-            eps_out[ci, j] = eps_val
-            kB_out[ci, j] = kB_val
-            K_max_out[ci, j] = K_max_val
-            fom_out[ci, j] = fom_val
-            K_max_ratio_out[ci, j] = K_max_ratio_val
-            var_resolved_out[ci, j] = var_res_val
+            (
+                chi_out[ci, j],
+                eps_out[ci, j],
+                kB_out[ci, j],
+                K_max_out[ci, j],
+                fom_out[ci, j],
+                K_max_ratio_out[ci, j],
+                var_resolved_out[ci, j],
+                mad_shape_out[ci, j],
+            ) = result
 
     # U3-C3: drop Method-2 windows whose fitted kB reaches past the anti-alias
     # band (kB > _CHI_KB_KAA_MAX * K_AA). Applied BEFORE _compute_chi_final so
@@ -245,6 +253,7 @@ def _process_l4_chi(
         var_resolved=var_resolved_out,
         method=method_name,
         chi_qc_fallback=chi_res.qc_fallback,
+        mad_shape=mad_shape_out,
     )
 
 
@@ -293,7 +302,7 @@ def process_l4_chi_epsilon(
             epsilon_val = np.nan
         if not np.isfinite(epsilon_val) or epsilon_val <= 0:
             return None
-        chi_val, kB_val, K_max_val, _, fom_val, K_max_ratio_val, var_res_val = _chi_from_epsilon(
+        er = _chi_from_epsilon(
             spec_obs,
             K,
             epsilon_val,
@@ -308,7 +317,16 @@ def process_l4_chi_epsilon(
             kappa_T,
             _dof_at(l3_chi, j),
         )
-        return chi_val, epsilon_val, kB_val, K_max_val, fom_val, K_max_ratio_val, var_res_val
+        return (
+            er.chi,
+            epsilon_val,
+            er.kB,
+            er.K_max,
+            er.fom,
+            er.K_max_ratio,
+            er.var_resolved,
+            er.mad_shape,
+        )
 
     return _process_l4_chi(l3_chi, _chi_eps_func, "epsilon", f_AA, mask_bad_buffers)
 
@@ -341,21 +359,19 @@ def process_l4_chi_fit(
 
     def _chi_fit_func(j, _ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff):
         if fit_method == "iterative":
-            (kB_val, chi_val, eps_val, K_max_val, _, fom_val, K_max_ratio_val, var_res_val) = (
-                _iterative_fit(
-                    spec_obs,
-                    K,
-                    nu,
-                    noise_K,
-                    H2,
-                    tau0,
-                    _h2,
-                    f_AA_eff,
-                    W,
-                    spectrum_model,
-                    kappa_T,
-                    _dof_at(l3_chi, j),
-                )
+            result = _iterative_fit(
+                spec_obs,
+                K,
+                nu,
+                noise_K,
+                H2,
+                tau0,
+                _h2,
+                f_AA_eff,
+                W,
+                spectrum_model,
+                kappa_T,
+                _dof_at(l3_chi, j),
             )
         else:
             mask = (K > 0) & (f_AA_eff / W >= K)
@@ -419,15 +435,16 @@ def process_l4_chi_fit(
                 ):
                     break
                 kB_prev = result.kB
-            kB_val, chi_val, eps_val, K_max_val = (
-                result.kB,
-                result.chi,
-                result.epsilon,
-                result.K_max,
-            )
-            fom_val, K_max_ratio_val = result.fom, result.K_max_ratio
-            var_res_val = result.var_resolved
-        return chi_val, eps_val, kB_val, K_max_val, fom_val, K_max_ratio_val, var_res_val
+        return (
+            result.chi,
+            result.epsilon,
+            result.kB,
+            result.K_max,
+            result.fom,
+            result.K_max_ratio,
+            result.var_resolved,
+            result.mad_shape,
+        )
 
     return _process_l4_chi(l3_chi, _chi_fit_func, "fit", f_AA, mask_bad_buffers)
 

@@ -103,6 +103,26 @@ def test_fully_railed_channel_is_refused():
     assert "T1" not in out["coefficients"]
 
 
+# --- #198: a dead bead inside the bridge range -----------------------------
+@pytest.mark.parametrize("jitter", [0.0, 1.0], ids=["constant", "one-count-jitter"])
+def test_dead_thermistor_inside_the_bridge_range_is_refused(jitter):
+    """Issue #198: Taiwan13 husker's T1 died at a constant from FSB_020 on, and
+    the fit regressed the constant into a plausible series that chi then used.
+    The rail guard cannot see it -- 5000 counts sit well inside the bridge
+    range -- so the lag gate has to: a flat probe tracks nothing. An exact
+    constant leaves every segment unscored; one count of jitter is scored and
+    rejected on |r|, and with that gate disabled it is fitted into a plausible
+    ~10.5 degC series, which is the defect."""
+    n = 500
+    counts = 5000.0 + jitter * np.random.default_rng(7).integers(-1, 2, n)
+    pf = _make(n=n, counts=counts)
+    with pytest.warns(UserWarning, match="lag correlation gate"):
+        out = fp07_calibrate(pf, [(10, 480)])
+    assert "T1" not in out["coefficients"]
+    assert "T1" not in out["channels"]
+    assert "lag gate" in out["factory"]["T1"]
+
+
 # --- A3: conditioning ------------------------------------------------------
 def test_centered_fit_is_well_conditioned_and_exact():
     """Centering must improve conditioning without changing the curve."""

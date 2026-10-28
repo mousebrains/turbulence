@@ -13,14 +13,16 @@ import numpy as np
 
 from odas_tpw.rsi.channels import config_number
 from odas_tpw.rsi.helpers import (
-    AC_PATTERN,
     DT_PATTERN,
     SH_PATTERN,
     T_PATTERN,
+    pfile_vibration_channels,
     reference_temperature_qc,
     resolve_conductivity_channel,
     resolve_temperature_channel,
+    select_vibration_channels,
     temperature_candidates,
+    vibration_label,
 )
 from odas_tpw.rsi.helpers import (
     pfile_channel_types as _pf_types,
@@ -205,32 +207,19 @@ def pfile_to_l1data(
     else:
         shear = np.zeros((0, len(t_fast)), dtype=np.float64)
 
-    # Vibration / accelerometer channels. Piezo-typed channels count even
-    # when named Ax/Ay — RSI names piezo sensors that way on MRs and modern
-    # VMPs, and parse_config's accel→piezo rewrite (setupstr.m parity) makes
-    # CASPER-era accel(0,1) configs piezo too. Only true DC-response
-    # accelerometers (type=accel with a real calibration) are ACC. The
-    # vibration stack is the UNION of both kinds (name-sorted, de-duplicated):
-    # on mixed hardware, dropping the piezo channels would cost Goodman
-    # coherent-noise removal a vibration reference. vib_type is label-only
+    # Vibration / accelerometer channels: the UNION of every piezo-typed
+    # channel and the true accelerometers, by the one rule load_channels
+    # shares (select_vibration_channels, #168). vib_type is label-only
     # downstream — "ACC" when any true accelerometer is present, "VIB" for
-    # an all-piezo stack.
-    acc_names = sorted(
-        n
-        for n in pf._fast_channels
-        if AC_PATTERN.match(n) and pf.channel_info[n]["type"] != "piezo"
-    )
-    piezo_names = sorted(n for n in pf.channels if pf.channel_info[n]["type"] == "piezo")
-    vib_names = sorted(set(acc_names) | set(piezo_names))
+    # an all-piezo stack. stacklevel 3: a warning lands on our caller.
+    vib_names, vib_type = pfile_vibration_channels(pf, stacklevel=3)
     if vib_names:
         vib = np.stack(
             [pf.channels[n][s_fast:e_fast] for n in vib_names],
             axis=0,
         )
-        vib_type = "ACC" if acc_names else "VIB"
     else:
         vib = np.zeros((0, len(t_fast)), dtype=np.float64)
-        vib_type = "NONE"
 
     # Fast thermistor temperature (for chi)
     temp_fast_list: list[np.ndarray] = []
@@ -338,6 +327,44 @@ def pfile_to_l1data(
     )
 
 
+def _l1_nc_vibration(g) -> tuple[list[np.ndarray], str]:
+    """Goodman vibration stack of an L1_converted group: ``(rows, vib_type)``.
+
+    ``p_to_L1`` files the sensors by ROLE with their ``sensor_names``: ``VIB``
+    every piezo, ``ACC`` every accelerometer, whatever its name. The stack is
+    then chosen by the rule every other entry point uses
+    (:func:`~odas_tpw.rsi.helpers.select_vibration_channels`), so a mixed
+    instrument keeps its piezos. A file without usable ``sensor_names`` (a
+    hand-built or benchmark L1) cannot be put through the name rule; it keeps
+    every row, VIB first, so no piezo is dropped there either.
+    """
+    blocks: list[tuple[np.ndarray, list[str] | None, str]] = []
+    for var_name, role in (("VIB", "piezo"), ("ACC", "accel")):
+        if var_name not in g.variables:
+            continue
+        var = g.variables[var_name]
+        rows = np.asarray(var[:], dtype=np.float64)
+        listed = [s.strip() for s in str(getattr(var, "sensor_names", "")).split(",")]
+        listed = [s for s in listed if s]
+        blocks.append((rows, listed if len(listed) == rows.shape[0] else None, role))
+
+    named = [(rows, names, role) for rows, names, role in blocks if names is not None]
+    if blocks and len(named) == len(blocks):
+        by_name: dict[str, np.ndarray] = {}
+        types: dict[str, str] = {}
+        for rows, names, role in named:
+            for name, row in zip(names, rows, strict=True):
+                by_name[name] = row
+                types[name] = role
+        # Everything p_to_L1 stacks on TIME is fast-rate by construction.
+        vib_names, vib_type = select_vibration_channels(types, by_name)
+        return [by_name[n] for n in vib_names], vib_type
+
+    all_rows = [row for rows, _, _ in blocks for row in rows]
+    roles = {f"{role}{i}": role for rows, _, role in blocks for i in range(len(rows))}
+    return all_rows, vibration_label(list(roles), roles)
+
+
 def nc_to_l1data(nc_path: str | Path) -> L1Data:
     """Read a per-profile L1_converted NetCDF into L1Data.
 
@@ -381,16 +408,10 @@ def nc_to_l1data(nc_path: str | Path) -> L1Data:
         else:
             shear = np.zeros((0, len(time)), dtype=np.float64)
 
-        # Vibration / Accelerometer
-        if "ACC" in g.variables:
-            vib = np.asarray(g.variables["ACC"][:], dtype=np.float64)
-            vib_type = "ACC"
-        elif "VIB" in g.variables:
-            vib = np.asarray(g.variables["VIB"][:], dtype=np.float64)
-            vib_type = "VIB"
-        else:
-            vib = np.zeros((0, len(time)), dtype=np.float64)
-            vib_type = "NONE"
+        # Vibration / Accelerometer: the stack every other entry point builds
+        # (#168), not ACC alone whenever it exists.
+        vib_rows, vib_type = _l1_nc_vibration(g)
+        vib = np.stack(vib_rows) if vib_rows else np.zeros((0, len(time)), dtype=np.float64)
 
         # Speed
         pspd_rel = np.array([])

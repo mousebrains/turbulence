@@ -785,6 +785,8 @@ def _build_chi_ds_from_pipeline(
         kB_out=l4_chi.kB,
         K_max_out=l4_chi.K_max,
         fom_out=l4_chi.fom,
+        # getattr: an L4ChiData-like object from before mad_shape still builds.
+        mad_shape_out=getattr(l4_chi, "mad_shape", None),
         K_max_ratio_out=l4_chi.K_max_ratio,
         var_resolved_out=l4_chi.var_resolved,
         speed_out=l3_chi.pspd_rel,
@@ -853,9 +855,21 @@ def _build_chi_dataset(
     fit_method: str,
     f_AA: float,
     chi_method: str = "epsilon",
+    mad_shape_out: np.ndarray | None = None,
 ) -> xr.Dataset:
-    """Build an xarray Dataset from chi estimation output arrays."""
+    """Build an xarray Dataset from chi estimation output arrays.
+
+    ``mad_shape_out`` defaults to all-NaN (same shape as ``fom_out``) for a
+    caller with no shape statistic to report.
+    """
     from odas_tpw.rsi.helpers import _build_result_dataset
+
+    if mad_shape_out is None:
+        mad_shape_out = np.full(np.shape(fom_out), np.nan)
+    elif np.shape(mad_shape_out) != np.shape(fom_out):
+        raise ValueError(
+            f"mad_shape shape {np.shape(mad_shape_out)} != fom shape {np.shape(fom_out)}"
+        )
 
     variables = [
         (
@@ -906,6 +920,33 @@ def _build_chi_dataset(
                     "range; values near 1.0 indicate a good fit. NOT the MAD-based "
                     "ATOMIX/Rockland FM statistic (Lueck 2022), for which a good "
                     "fit sits near ~0.7-0.8 (NOT 0) and the recommended QC limit is ~1.15."
+                ),
+            },
+        ),
+        (
+            "mad_shape",
+            ["probe", "time"],
+            mad_shape_out,
+            {
+                "units": "1",
+                "long_name": "spread of log10(observed/model) across the chi fit band",
+                "comment": (
+                    "mean_k |r_k - median(r)| in dex, r_k = log10(observed / model) per "
+                    "wavenumber bin, over the same bins and the same model as fom "
+                    "(Batchelor/Kraichnan x FP07 |H|^2 + noise). A diagnostic of SHAPE, "
+                    "not of level: centering on the window's own median log ratio "
+                    "removes any constant offset (that is fom's job) and the bias of a "
+                    "chi-squared spectral estimate, whose median and mean log sit below "
+                    "its mean. fom is an integral, so a model wrong by ~2x bin by bin "
+                    "can still give fom ~1 (issue #191); this cannot cancel. A perfect "
+                    "fit is NOT 0: spectral scatter floors it at ~0.17 / 0.14 / 0.11 dex "
+                    "for 9.5 / 13.3 / 19 degrees of freedom "
+                    "(odas_tpw.chi.chi.mad_shape_floor). Use the WINDOW's dof: the "
+                    "dof_spec attribute is for diss_length, and near-bed windows laid "
+                    "out with bbl_diss_length average fewer FFT segments, so their "
+                    "floor is higher (dof = 1.9 * (2 * bbl_diss_length // fft_length "
+                    "- 1 - n_v), n_v = Goodman-removed signals). The epsilon product's "
+                    "mad is the same statistic taken about 0. Not a QC gate."
                 ),
             },
         ),

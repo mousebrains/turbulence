@@ -48,9 +48,9 @@ cover the rest of the chain, is in [atomix_benchmark.md](atomix_benchmark.md).
   A decimal slip in `diff_gain` is a factor of 100:
   [issue #178](https://github.com/mousebrains/turbulence/issues/178) turned on
   exactly that question -- a 0.09 that looked like a slip for ~0.9 (109x in
-  epsilon), and that measurement put on the right rung. SN 132 epsilon still
-  carries a ~1.8x scale uncertainty (0.09 or the bench fit's ~0.12, open in
-  #178). Audit them with
+  epsilon), and that measurement put on the right rung; Rockland has since
+  confirmed 0.09 (the tidal build's 1/10 gain was never changed back). Audit
+  them with
   `rsi-tpw sensors --cal-dir` and `--diff-gain` before believing a level, and
   resolve an outlier by measurement, not by the fleet's consensus.
 - **The two VMP250 entries rest on 64 spectra each.** Their third digit is
@@ -100,7 +100,12 @@ so it is not a noise-subtraction artifact. **`fom` for those exact windows is
 1.001** (p10 0.987, p90 1.002).
 [Issue #191](https://github.com/mousebrains/turbulence/issues/191) has the
 per-band numbers. Do not use `fom` alone as evidence that a chi spectrum was
-well fit.
+well fit. Every per-profile chi product now also carries `mad_shape`, the
+per-bin spread of `log10(observed/model)` over the same band, which cannot
+cancel. A perfect fit sits at a spectral-scatter floor (0.166 dex at 9.5
+degrees of freedom), not at 0; on those CASPER-West windows it reads a median
+of 0.27 against a noise null of 0.16. See
+[chi_mathematics.md](chi_mathematics.md#spectral-shape-mad_shape).
 
 ### What chi is good for
 

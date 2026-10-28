@@ -489,13 +489,13 @@ The following checks (not yet enforced as hard filters in the code, but availabl
 
 - At least 6 wavenumber points in the fit range
 - The model-based correction should not dominate the observed variance: the variance restored by the correction should not exceed the directly observed band-limited variance (correction factor `V_total / V_resolved <~ 2`; Peterson & Fer express this as `chi_low + chi_high <= chi_obs` for their additive out-of-band tail corrections)
-- Mean absolute deviation `MAD < 2 * sqrt(2/d)` where `d` is the spectral degrees of freedom (goodness of fit)
+- Mean absolute deviation `MAD < 2 * sqrt(2/d)` where `d` is the spectral degrees of freedom (goodness of fit). This is the [Ruddick et al. (2000)](https://doi.org/10.1175/1520-0426(2000)017%3C1541:MLSFTB%3E2.0.CO;2) MAD of the *linear* ratio `Phi_obs/Phi_th` about its mean, and it is **not** computed. What the products store is its log10 analog `mad_shape` ([Section 9](#spectral-shape-mad_shape)), whose perfect-fit floor is tabulated there; `2 * sqrt(2/d)` does not apply to it
 - For FP07 thermistors: `epsilon <= ~2e-7 W/kg` for reliable estimates (at higher dissipation rates the Batchelor rolloff moves beyond the sensor's resolved bandwidth)
 
 
 ## 9. Quality Control Metrics
 
-All three chi methods report the same two QC metrics ([`chi.py`](../src/odas_tpw/chi/chi.py)):
+All three chi methods report the same QC metrics ([`chi.py`](../src/odas_tpw/chi/chi.py)):
 
 ### Figure of merit (fom)
 
@@ -508,6 +508,42 @@ fom = integral Phi_obs(k) dk  /  integral [ Phi_model(k; kB, chi) * |H(k)|^2 + P
 The denominator is the fitted Batchelor/Kraichnan spectrum convolved with the FP07 transfer function plus the electronics noise floor — i.e., what the sensor *should* observe given the fitted (chi, kB). Values near 1.0 indicate a good fit; values far from 1.0 indicate the model does not explain the observed variance.
 
 Note: this is a simple variance ratio, **not** the MAD-based FM statistic of Lueck (2022a,b) used for the ATOMIX shear-probe QC (see [epsilon_mathematics.md](epsilon_mathematics.md#10-quality-control-metrics)).
+
+Because it is an *integral*, a mid-band deficit cancels against excesses at the band ends, so `fom ~ 1` does not mean the model has the right shape. On CASPER-West a model wrong by roughly a factor of two bin by bin scored `fom = 1.001` ([issue #191](https://github.com/mousebrains/turbulence/issues/191)); on Method 1 and the MLE fit, whose chi *is* the noise-subtracted band integral, `fom` is pinned near 1 by construction: only the clipping of bins below the noise model moves it (p10-p90 0.999-1.000 on ARCTERX-2025 SN479, 0.987-1.002 on the well-resolved CASPER-West windows). The iterative fit integrates chi over a different band from its `fom`, so its `fom` does vary. Read it with `mad_shape`.
+
+### Spectral shape (`mad_shape`)
+
+The per-bin view of the same comparison, over the **same bins** and against the **same model** as `fom` ([`chi._shape_mad`](../src/odas_tpw/chi/chi.py)):
+
+```
+r_k       = log10( Phi_obs(k) / [ Phi_model(k; kB, chi) * |H(k)|^2 + Phi_noise(k) ] )
+mad_shape = mean_k | r_k - median_k(r) |                                   [dex]
+```
+
+It is the epsilon side's `mad` (`mean |log10(obs/Nasmyth)|`, see [epsilon_mathematics.md](epsilon_mathematics.md#10-quality-control-metrics)) with one change: the deviation is taken about the window's own **median** log ratio instead of about zero. The median minimizes a mean absolute deviation, so `mad_shape` is the epsilon-style `mad` after the best constant rescaling of the model: the part of the misfit that no choice of level can remove. It is a diagnostic of **shape, not level**; level is what `fom` reports. Centering also absorbs the bias of a log spectral estimate. A chi-squared estimate with `d` degrees of freedom has its median, and the mean of its log, *below* its mean (`E[ln X] = psi(d/2) - ln(d/2)`, i.e. -0.047 dex at `d = 9.5`), which a statistic taken about zero would count as misfit.
+
+A perfect fit is **not** 0. Spectral scatter alone floors `mad_shape` at the mean absolute deviation of `log10(chi2_d / d)` about its median, with `d` the window's spectral degrees of freedom ([`chi.mad_shape_floor(d)`](../src/odas_tpw/chi/chi.py)):
+
+| `d` | 6 | 9.5 | 13.3 | 19 | 26.6 |
+|---|---|---|---|---|---|
+| floor [dex] | 0.214 | 0.166 | 0.138 | 0.115 | 0.096 |
+
+(approximately `sqrt(2/pi) * sqrt(2/d) / ln 10` for large `d`, about 4% low at `d = 9.5`). Adjacent Welch bins are correlated, which leaves that expectation alone but widens the window-to-window scatter, and a band of only a few bins reads low.
+
+**Use the window's own `d`, not the file's.** A chi product carries one `dof_spec` attribute, `1.9 * (2 * diss_length // fft_length - 1 - n_v)` with `n_v` the vibration signals Goodman removed, and it describes the `diss_length` windows only. With `bbl_diss_length` set, the near-bed windows average fewer FFT segments, so their `d = 1.9 * (2 * bbl_diss_length // fft_length - 1 - n_v)` is lower and their floor higher; against the file's floor they would read as misfit that is only scatter. (`n_v` is `2 * diss_length // fft_length - 1 - dof_spec / 1.9`.) The products record one window length per file, the same limitation `chiLnSigma` has, so which windows are near-bed has to come from the run's `bbl_extent`. Half the band 2x high and half 2x low reads exactly `log10 2 = 0.30` dex on its own, and `fom` can miss it entirely.
+
+Every bin of the band counts equally on the *linear* wavenumber grid, so most of the weight lies in the upper part of the band; an excess confined to the lowest few bins moves `mad_shape` less than it looks on a log-k plot. Bins with a non-finite or non-positive ratio are dropped (as on the epsilon side), and `mad_shape` is NaN wherever `fom` is. It is a **diagnostic only**: nothing in `chi_final`, `chiMean`, `K_T` or `Gamma` reads it, and there is no config key for it.
+
+Why not the Ruddick et al. (2000) MAD of Section 8? It is centered too, but on the *linear* ratio, so it scales with the level (a model 2x low doubles it) and an excess counts far more than the equal deficit in log (a ratio of 4 deviates by 3, a ratio of 1/4 by 0.75). `mad_shape` keeps the epsilon side's log10 form and units instead.
+
+On real data the structure is pervasive rather than confined to a few bad windows, so `mad_shape` grades the misfit continuously; it has no natural threshold. Numbers below are per probe, with a Welch-noise null (Hann, 50% overlap, `d = 9.5`) for comparison:
+
+| dataset (Method 1, Kraichnan) | windows | `fom` p10-p90 | `mad_shape` median (p10-p90) | null mean (p99) |
+|---|---|---|---|---|
+| ARCTERX-2025 Wake SN479, repo `VMP/` (28 files) | 22 393 / probe | 0.999-1.000 | T1 0.230 (0.189-0.309), T2 0.225 (0.184-0.306) | 0.163 (0.189) |
+| CASPER-West SN194, `K_max_ratio > 1.2` (348 of 2311 production profile files) | 4023 / 4859 | 0.985-1.002 | T1 0.270 (0.192-0.422), T2 0.275 (0.196-0.438) | 0.161 (0.202) |
+
+Of the CASPER-West windows above with `fom` in [0.98, 1.02], 87% exceed the null's p99. Their top third by `mad_shape` carries the issue #191 residual coherently: median `r - median(r)` of +1.5 dex at `k/kB = 0.02`, -0.35 to -0.44 between 0.27 and 0.61 and +0.3 at 1.3, with a lag-8 residual autocorrelation of 0.26 against -0.03 for the null, i.e. smooth structure rather than scatter. The CASPER-West values were rebuilt from the stored spectra of products that predate the variable; the same rebuild reproduces the stored `mad_shape` exactly (44 786 SN479 windows).
 
 ### K_max ratio
 

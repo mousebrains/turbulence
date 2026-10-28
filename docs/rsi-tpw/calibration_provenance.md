@@ -105,14 +105,13 @@ that fires on correct hardware the day it arrives is worse than no check.
 This is the one place the corpus is not the last word: absence of a
 configuration from our files is not evidence it does not exist.
 
-> **SN 132: the sampling rate is not the gain** (issue #178; rung
-> settled 2026-09-29, fine value open). Over all 217 of its files SN 132 samples at **511.9454 Hz**
+> **SN 132: the sampling rate is not the gain** (issue #178;
+> settled 2026-09-29, since confirmed by Rockland). Over all 217 of its files SN 132 samples at **511.9454 Hz**
 > (`f_clock` 5119.454 Hz, 8×10 matrix, `vmp-250-IR`), yet carries **0.09** — the
 > 1024 Hz rung's value — identically on both channels. That looked like a setup
 > file inherited from a 1 kHz build. It is the reverse: Rockland converted SN 132
 > to a 1024 Hz tidal instrument in 2021 and back to 512 Hz afterwards, and its
-> analog chain evidently stayed on the tidal rung. Two independent measurements
-> agree:
+> analog chain stayed on the tidal rung. Two independent measurements agree:
 >
 > - its **open-circuit bench noise** has no differentiator hump — the noise-model
 >   fit gives 0.10–0.13, where the same fit reads SN 409's 0.949 within 2% and
@@ -125,9 +124,9 @@ configuration from our files is not evidence it does not exist.
 >   fronts (95% CI ~0.7–1.5). A true 0.94 would have put it at 109×.
 >
 > So on a re-converted instrument a 512 Hz rate does **not** prove a ~0.95 gain
-> — one more reason this range check must not key on the rate. Whether the true
-> value is 0.09 or nearer the bench fit's ~0.12 (a ~1.8× epsilon question)
-> awaits Rockland's board-specific noise curve.
+> — one more reason this range check must not key on the rate. Rockland has
+> since confirmed 0.09 itself: the tidal build's 1/10 gain was never changed
+> back, which also settles the bench fit's ~0.12 in favor of 0.09.
 
 Distinguishing "0.09 is this instrument's real differentiator" from "0.09 is a
 transcription error" needs that instrument's own history and class, not a static

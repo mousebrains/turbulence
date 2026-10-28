@@ -492,14 +492,16 @@ consumed only by the chi computation, so it versions **chi** and not **diss** �
 setting it does not force an epsilon recompute that could not change a value
 (verified bit-identical over 34 820 `epsilon`/`FM`/`fom`/`var_resolved` values).
 `exclude_shear_probes` reaches diss directly and chi transitively through
-Method 1's `epsilonMean`, so it versions both. An instrument whose settings are
-all irrelevant to a stage is dropped from that stage's hash entirely, so a
-config carrying only a chi-side knob hashes identically to one with no
-`instruments` at all.
+Method 1's `epsilonMean`, so it versions both. `exclude` is split entry by
+entry: a shear entry versions both, a thermistor entry versions chi only. An
+instrument whose settings are all irrelevant to a stage is dropped from that
+stage's hash entirely, so a config carrying only a chi-side knob hashes
+identically to one with no `instruments` at all.
 
 | Inner key | Type | Description |
 |-----------|------|-------------|
-| `exclude_shear_probes` | list of strings | Probe names (e.g. `["sh2"]`) to suppress for this instrument. The named probe is NaN'd before `mk_epsilon_mean`, so it is excluded from the multi-probe `epsilonMean` and from chi Method 1 (which uses `epsilonMean`) |
+| `exclude_shear_probes` | list of strings | Probe names (e.g. `["sh2"]`) to suppress for this instrument. The named probe is NaN'd before `mk_epsilon_mean`, so it is excluded from the multi-probe `epsilonMean` and from chi Method 1 (which uses `epsilonMean`). Whole deployment only; an unknown name is warned about and ignored |
+| `exclude` | list of mappings | One probe (shear **or** thermistor) masked over a pressure and/or time window, the same way. Each entry is `{probe, P_min, P_max, start, stop, reason}`. An unknown probe is an error wherever the entry selects a window. See [`exclude`](#exclude--a-probe-bad-over-a-depth-or-time-window) below |
 | `fp07_tau_scale` | dict | Per-thermistor multiplier on the FP07 time constant, e.g. `{T1: 0.30, T2: 0.75}`. Keys accept the bead name (`T1`) or the gradient channel (`T1_dT1`); values must be finite and > 0. Default `{}` = every probe on the tau model, bit-identical to before |
 | `fp07_response` | path or list of paths | Measured per-bead response corrections from `fp07-pair fit` (`<CONFIG_DIR>/...` or relative to the working directory, like other paths). Hashed by content; versions chi only. **Mutually exclusive with `fp07_tau_scale`.** See [`fp07_response`](#fp07_response--a-measured-per-bead-correction) below |
 
@@ -510,6 +512,101 @@ instruments:
   SN194:
     fp07_tau_scale: {T1: 0.30, T2: 0.75}
 ```
+
+#### `exclude` — a probe bad over a depth or time window
+
+A shear probe can develop a **pressure-related fault**: bad inside a depth
+window, fine above and below it. `exclude_shear_probes` can only drop it for
+the whole deployment. CASPER-West 2017, VMP-250IR SN 194, is the case that
+needed this: `e_2/e_1` reached 15-18x in a 20 m window from 10-16 while
+65-130 m stayed at 1.01-1.02, then on 10-24 the probe failed at every depth.
+`epsilonMean` was biased up to 4.25x in the window, and **no QC caught any of
+it** (sh2's Lueck `FM` peaked near 0.92, under the ATOMIX 1.15 reject threshold).
+That is what a declarative exclusion is for:
+
+```yaml
+instruments:
+  SN194:
+    exclude:
+      # sh2 develops a pressure-related fault; bad in a window, good below it
+      - probe: sh2
+        P_min: 30            # dbar, inclusive; omit for no lower bound
+        P_max: 70            # dbar, exclusive; omit for no upper bound
+        start: "2017-10-09T00:00:00Z"    # inclusive; omit for no start bound
+        stop:  "2017-10-24T00:00:00Z"    # exclusive; omit for no stop bound
+        reason: "pressure-related fault, window opens ~10-09"
+      # ...then it fails outright at every depth
+      - probe: sh2
+        start: "2017-10-24T00:00:00Z"
+        reason: "probe failed; e_2/e_1 = 0.37-0.82 at all depths"
+```
+
+| Key | Required | Meaning |
+|-----|----------|---------|
+| `probe` | yes | A shear probe (`sh1`, `sh2`, ...) or a thermistor (`T1`, `T2`, ...; the gradient-channel spelling `T1_dT1` also works, as for `fp07_tau_scale`, and is treated as `T1` everywhere) |
+| `reason` | yes | Why. Written into the product next to the windows it masked |
+| `P_min`, `P_max` | no | Pressure window `P_min <= P_mean < P_max` [dbar] |
+| `start`, `stop` | no | Time window `start <= t < stop`, ISO-8601 (`"2017-10-09T00:00:00Z"`, or a bare date). A time without a zone is UTC |
+
+- **A window is masked when every bound the entry gives holds**; an omitted
+  bound is unbounded, so an entry with no bounds is the whole deployment.
+  Entries are independent (their union is masked), so a window that moves can
+  be several entries.
+- **What is tested** is what the product stores for each estimation window:
+  `P_mean` (mean pressure over the window) and `t` (its center time). A
+  window with a NaN `P_mean` cannot be placed and is not masked by a pressure
+  bound.
+- **The masking is exactly `exclude_shear_probes`'s, restricted to the
+  window.** The probe's own estimates are set NaN there before
+  `mk_epsilon_mean` / `mk_chi_mean`: `epsilon` and `e_N` for a shear probe,
+  `chi`, `chi_N` and `epsilon_T` for a thermistor. So a shear entry removes the
+  probe from `epsilonMean`, and through it changes chi Method 1 (every
+  thermistor's kB, so `chi`, `chiMean`, ...), `epsilon_paired`, `K_rho` and
+  `Gamma`. A thermistor entry removes the bead from `chiMean` and
+  `chiLnSigma`, and so changes `K_T` and `Gamma`; it never touches epsilon.
+  Outside the window the probe is untouched. Per-probe metadata (`fom`, `FM`,
+  `K_max`, the spectra) is kept, as by every per-probe cut, since it is what
+  showed the fault.
+- **Validation at load:** an unknown key, a missing `probe` or `reason`, a
+  probe name that is neither `sh<N>` nor `T<N>`, `P_min >= P_max`,
+  `start >= stop`, or a time that is not ISO-8601 is an error naming the
+  instrument and the entry (`instruments.SN194.exclude entry 2 (probe 'sh2')`).
+- **At run time** a probe the instrument's data does not carry is an error,
+  naming it, like an unmatched `fp07_tau_scale` key -- but only for a profile
+  in which the entry's window selects at least one window. Probes are
+  removable: an entry for a probe that was taken off the instrument after its
+  window (sh2 above, had it been pulled on 10-24) must not fail every later
+  profile, while a typo still fails each profile the entry reaches. A
+  thermistor entry is checked only when chi runs.
+- **Recorded in every product it changed.** Each entry is written to the
+  global attributes of the per-profile files it reaches as
+  `probe_exclusion_<n>_probe`, `_reason`, the bounds it gives (`_P_min`,
+  `_P_max`, `_start`, `_stop`; an absent one is unbounded), `_masked_in`
+  (`diss` or `chi`, the product whose probe it masks) and `_n_windows`, the
+  number of that product's windows it masked in the profile (zero included).
+  `<n>` is the entry's 1-based position in the list. A shear entry is
+  recorded on the diss file and again on the chi file, where `_masked_in` is
+  `diss` and a `_comment` says it reaches the file through `epsilonMean`; a
+  thermistor entry is recorded on the chi file only. The binned and combo
+  products carry no per-profile attributes; the entries that reach them are
+  recorded in their stage directory's `.params_sha256_*` signature file (the
+  canonical config the directory was made from), as in every diss and chi
+  stage directory.
+- **The run summary** gets one `notice:` line per entry with the windows it
+  masked in the files processed by that run, worded as a warning when it
+  masked none (a wrong year, a depth in meters where dbar was meant). It also
+  names an instrument key carrying `exclude` that matches no input file, and
+  a thermistor entry that was not applied because chi did not run (its probe
+  name was then not checked either).
+- **Versioning.** Diss (and `diss_binned`, `diss_combo`) hashes only the shear
+  entries; chi (and `chi_binned`, `chi_combo`) hashes every entry, since a
+  shear entry reaches it through `epsilonMean`. Each entry keeps its number in
+  the hash, because the number names its attributes, so a thermistor-only
+  entry leaves the epsilon output reusable but removing an entry ahead of a
+  shear entry does not. Values are normalized (`30` = `30.0`, a quoted
+  timestamp = an unquoted one, `T1_dT1` = `T1`); `reason` is hashed because it
+  is written into the products. An empty list hashes as absent. `exclude` and
+  `exclude_shear_probes` can be combined.
 
 #### `fp07_tau_scale` — when two beads do not agree
 
