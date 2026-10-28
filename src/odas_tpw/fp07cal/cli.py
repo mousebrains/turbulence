@@ -5,6 +5,8 @@ Runs before perturb, once per deployment.  ``coverage`` answers "what reference
 do I actually have?", ``fit`` produces coefficients plus the diagnostics that
 say whether to believe them, and ``demo`` runs the whole thing on a synthetic
 deployment with known answers so the machinery can be exercised without data.
+``registry`` keeps the per-bead calibration sheet
+(``microstructure_sensors/fp07_calibrations.yaml``, see :mod:`.registry`).
 """
 
 from __future__ import annotations
@@ -964,6 +966,104 @@ def _cmd_demo(args) -> int:
     return 0
 
 
+def _cmd_registry_render(args) -> int:
+    """Regenerate the sheet's .md and .csv views from its YAML."""
+    from odas_tpw.fp07cal.registry import RegistryError, default_path, write_views
+
+    path = Path(args.registry) if args.registry else default_path()
+    try:
+        changed = write_views(path)
+    except RegistryError as exc:
+        print(f"invalid: {exc}", file=sys.stderr)
+        return 1
+    for dst in changed:
+        print(f"wrote {dst}")
+    if not changed:
+        print(f"{path.with_suffix('.md').name} and {path.with_suffix('.csv').name} "
+              f"are already current")
+    return 0
+
+
+def _cmd_registry_check(args) -> int:
+    """Validate the YAML; exit 1 if it is invalid or either view is stale."""
+    from odas_tpw.fp07cal.registry import (
+        RENDER_HINT,
+        RegistryError,
+        default_path,
+        load,
+        stale_views,
+    )
+
+    path = Path(args.registry) if args.registry else default_path()
+    try:
+        reg = load(path)
+        stale = stale_views(path)
+    except RegistryError as exc:
+        print(f"invalid: {exc}", file=sys.stderr)
+        return 1
+    for dst in stale:
+        what = "is missing" if not dst.exists() else f"differs from what {path.name} renders"
+        print(f"stale: {dst} {what}; {RENDER_HINT}", file=sys.stderr)
+    if stale:
+        return 1
+    print(f"ok: {len(reg.calibrations)} calibrations of {len(reg.beads())} beads in "
+          f"{path}; both views current")
+    return 0
+
+
+def _cmd_registry_show(args) -> int:
+    """One bead's calibrations and its prior for a fresh deployment."""
+    from odas_tpw.fp07cal.registry import RegistryError, default_path, load
+
+    path = Path(args.registry) if args.registry else default_path()
+    try:
+        reg = load(path)
+        history = reg.history(args.serial)
+        prior = reg.prior_for(args.serial, instrument=args.instrument,
+                              channel=args.channel, as_of=args.as_of)
+    except RegistryError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"bead": args.serial,
+                          "calibrations": [c.to_dict() for c in history],
+                          "prior": prior.to_dict()}, indent=2))
+        return 0
+    print(f"{args.serial}: {len(history)} calibration(s) in {path}")
+    for i, c in enumerate(history, start=1):
+        u = c.uncertainty
+        block = "-" if u.block_sd_mK is None else f"{u.block_sd_mK:.1f}"
+        print(f"  {i}. {c.deployment} | {c.instrument.label()} | "
+              f"{c.first.date()} .. {c.last.date()} | order {c.fit.order} | "
+              f"{c.valid_T[0]:.2f}-{c.valid_T[1]:.2f} degC | rms {u.fit_rms_mK:.1f}, "
+              f"held-out {u.held_out_mK:.1f}, block SD {block} mK"
+              + (f" | {', '.join(c.flags)}" if c.flags else ""))
+    s = prior.source
+    why = ("its widest-range calibration (NONE IS UNFLAGGED)" if prior.fallback
+           else "the widest-range unflagged calibration"
+           + (" on the target" if prior.target is not None and not prior.cross_instrument
+              else ""))
+    print()
+    print(f"Prior: from {s.deployment} ({s.instrument.label()}, {s.first.date()} .. "
+          f"{s.last.date()}), {why}; order {prior.order}")
+    print("  config lines (full precision):")
+    for line in prior.config_lines():
+        print(f"    {line}")
+    print(f"  t_0 ±{prior.t_0_uncertainty_mK:.0f} mK"
+          + (" (cross-instrument term included)" if prior.cross_instrument else "")
+          + f"; shape ±{prior.shape_mK:.1f} mK over "
+          f"{prior.shape_span_K[0]:g}-{prior.shape_span_K[1]:g} K; fitted "
+          f"{prior.valid_T[0]:.2f}-{prior.valid_T[1]:.2f} degC")
+    print("  bridge (the L these coefficients belong to): "
+          + " ".join(f"{k}={v:g}" for k, v in prior.bridge.items()))
+    for note in prior.notes:
+        print(f"  - {note}")
+    print("  Pasting into a .p config: remove any legacy `beta` key (ODAS and the reader use "
+          "it before beta_1, so a pasted beta_1 would be silently ignored), and set a beta "
+          "term this fit lacks but the config carries to 1e30, never 0.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="fp07-cal",
@@ -1013,6 +1113,33 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--blocks", type=int, default=6)
     q.add_argument("--no-figure", action="store_true")
     q.set_defaults(func=_cmd_demo)
+
+    q = sub.add_parser(
+        "registry",
+        help="the FP07 calibration sheet (microstructure_sensors/fp07_calibrations.yaml)",
+        description="The FP07 calibration sheet. fp07_calibrations.yaml is the single "
+        "source of truth; its .md and .csv views are generated from it and must never be "
+        "edited by hand.",
+    )
+    rsub = q.add_subparsers(dest="registry_command", required=True)
+    reg_help = "path to fp07_calibrations.yaml (default: the repository's)"
+    r = rsub.add_parser("render", help="regenerate the .md and .csv views from the YAML")
+    r.add_argument("-r", "--registry", help=reg_help)
+    r.set_defaults(func=_cmd_registry_render)
+    r = rsub.add_parser(
+        "check", help="validate the YAML; exit 1 if it is invalid or a view is stale",
+    )
+    r.add_argument("-r", "--registry", help=reg_help)
+    r.set_defaults(func=_cmd_registry_check)
+    r = rsub.add_parser("show", help="one bead's calibrations and its prior")
+    r.add_argument("serial", help="bead serial, e.g. T1592")
+    r.add_argument("-r", "--registry", help=reg_help)
+    r.add_argument("--instrument", help="target instrument serial, e.g. 194")
+    r.add_argument("--channel", help="target channel, e.g. T1 (with --instrument)")
+    r.add_argument("--as-of", help="use only calibrations that had ended by this date "
+                   "(YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ)")
+    r.add_argument("--json", action="store_true", help="machine-readable output")
+    r.set_defaults(func=_cmd_registry_show)
 
     args = p.parse_args(argv)
     return int(args.func(args))

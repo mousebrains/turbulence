@@ -65,6 +65,9 @@ results/
 !microstructure_sensors/sensor_deployments.csv
 !microstructure_sensors/sheet_requests.md
 !microstructure_sensors/README.md
+!microstructure_sensors/fp07_calibrations.yaml
+!microstructure_sensors/fp07_calibrations.md
+!microstructure_sensors/fp07_calibrations.csv
 
 # Local scratch for exploratory analysis (see scripts/ for the kept drivers)
 scratch/

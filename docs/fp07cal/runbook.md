@@ -111,6 +111,39 @@ fp07:
   calibrate: false      # the files already carry the in-situ coefficients
 ```
 
+## 6. Record the fit in the calibration sheet
+
+`coefficients.json` lives with the deployment's processing. The bead's history
+lives in `microstructure_sensors/fp07_calibrations.yaml`, the sheet of in-situ
+calibrations per FP07 bead. Add one entry per channel: one bead in one
+deployment. The field-by-field mapping from `coefficients.json` and
+`<ch>_report.md` is in `microstructure_sensors/README.md`. Then:
+
+```bash
+fp07-cal registry render     # regenerate fp07_calibrations.md and .csv
+fp07-cal registry check      # validate; exit 1 if invalid or a view is stale
+```
+
+Commit all three files together; never edit the `.md` or `.csv` by hand. A
+deployment fit that lands further from the bead's history than the sheet's
+carried-over offset is worth a look before it is recorded. The usual causes are
+a reference problem, an unrecorded bead swap, a failing bead, or a wrong serial
+in the config (issue #189).
+
+The same sheet supplies a **prior** for a deployment that cannot be fitted in
+full (too little reference, or too narrow a temperature range for the shape):
+
+```bash
+fp07-cal registry show T2811 --instrument 435 --channel T1
+```
+
+This prints the coefficients of the bead's widest-range unflagged calibration as
+config lines, with their uncertainties and how far the most recent calibration
+sits from them. The rule and the uncertainty sizes, with their evidence, are in
+`microstructure_sensors/fp07_calibrations.md`. When pasting the lines into a
+`.p` config, remove any legacy `beta` key from that channel: the reader uses
+`beta` before `beta_1`.
+
 ## Gotchas worth knowing
 
 - **The factory coefficients may be nominal.** On osu685 both probes carried

@@ -7,6 +7,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **FP07 calibration sheet (`fp07-cal registry`)**:
+  `microstructure_sensors/fp07_calibrations.yaml` records the in-situ
+  calibrations of individual FP07 beads. An entry is one bead in one deployment:
+  the instrument, serial, channel and dates; the reference thermometer with
+  its serial and calibration date; the fit settings and software version; the
+  coefficients in `.p` config form (`t_0`, `beta_1..n`); the six bridge
+  constants that define L; and the fit's rms, held-out error, block scatter
+  and fitted range, in mK and °C. It is the single source of truth.
+  `fp07_calibrations.md` (one section per bead, readable without this code)
+  and `fp07_calibrations.csv` (one row per fit) are generated from it by
+  `fp07-cal registry render`. `fp07-cal registry check` (exit 1) and a test
+  fail when either view is stale. The loader refuses unknown or missing keys,
+  bad serials, dates out of order, a bead or channel in two places at once, an
+  order that disagrees with its `beta` terms or held-out errors, duplicate
+  entries, and coefficients that cannot describe an FP07 over the stated range
+  (`t_0` not in kelvin, `beta_1` <= 0, |L| beyond the bridge clip, T not
+  falling with L). Each defect has its own error class.
+  `Registry.prior_for` (and `fp07-cal registry show <serial>`) gives a prior
+  for a fresh deployment. Its source is the bead's widest-range calibration
+  not flagged `short`, `fast-descent` or `episode`, preferring the target
+  instrument and channel. It carries the sheet's transfer uncertainties from
+  the cross-deployment comparisons in issue #189 (sizes and evidence are in the
+  generated sheet), and reports how far the most recent calibration sits from
+  it. It returns what a `t_0`-only refit would need, but that refit is not
+  built yet. Seeded with 23 pooled fits of 12 beads: T1592, T1593 and T2005 on
+  VMP SN194 from SUNRISE 2019-2022 and ARCTERX-2022; T1592 and T2007 on VMP
+  SN142 in ARCTERX-2025; and eight MicroRider beads on two Slocums from
+  ARCTERX-2023 and 2025 Interior.
 - **`epsilon.despike_half_width` (rsi-tpw and perturb)**: the shear
   despiker's removal half-width [s], hard-wired at 0.04 s until now. The
   despiker replaces `N//2` samples before each detected spike and `2(N//2)`
