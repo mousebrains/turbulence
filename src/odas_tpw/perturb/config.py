@@ -78,7 +78,9 @@ DEFAULTS: dict[str, dict] = {
         # coefficients.json) with no thermal physics involved.
         #
         # SIGN: clock_offset_s is positive when the hotel timestamps run AHEAD
-        # of the instrument's, so set time_offset = -clock_offset_s.
+        # of the instrument's, so set time_offset = -clock_offset_s. Only a
+        # MEASURED one: a record whose clock_source says the 0 was asserted
+        # (fp07-cal's reference.same_clock: true) measured nothing.
         # 0.0 means "the two clocks agree", which is an assertion, not a
         # default to leave unexamined: on osu684 the offset was +5.06 s, and at
         # a 0.27 dbar/s climb that puts every merged CTD sample 1.4 dbar from

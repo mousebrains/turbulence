@@ -219,6 +219,55 @@ def local_dTdz(
     return out
 
 
+MIN_GEOMETRY_PAIRS = 50
+"""Fewest pairs with a reference gradient for the geometry term to be fitted at all.
+
+The same floor :func:`geometry_fit` applies.  Below it the joint fit would
+calibrate on that handful alone (it leaves out every pair with no gradient),
+or raise outright when there is none.
+"""
+
+
+def geometry_unavailable(
+    pairs: PairSet, dTdz: np.ndarray | None = None, *, bin_dbar: float = 10.0
+) -> str:
+    """Why the geometry term cannot be fitted on these pairs, or ``""`` when it can.
+
+    :func:`local_dTdz` needs a profile spanning ``3 * bin_dbar`` (30 dbar) to
+    form a gradient at all.  A deployment of short descents has none: SUNRISE
+    2021 profiles reach ~22 dbar, and ``joint_fit`` then raised ``ValueError``
+    and stopped the run (issue #238).  The caller fits without the term and
+    says so instead.
+    """
+    if not len(pairs):
+        return "no pairs"
+    g = local_dTdz(pairs, bin_dbar=bin_dbar) if dTdz is None else np.asarray(dTdz, float)
+    usable = (
+        np.isfinite(np.asarray(pairs.L, dtype=np.float64))
+        & np.isfinite(np.asarray(pairs.T_ref, dtype=np.float64))
+        & np.isfinite(g)
+        & np.isfinite(np.asarray(pairs.w, dtype=np.float64))
+    )
+    n = int(usable.sum())
+    if n >= MIN_GEOMETRY_PAIRS:
+        return ""
+    P = np.asarray(pairs.pressure, dtype=np.float64)
+    _u, inv = np.unique(np.asarray(pairs.profile_uid, dtype=object), return_inverse=True)
+    lo = np.full(_u.size, np.inf)
+    hi = np.full(_u.size, -np.inf)
+    fin = np.isfinite(P)
+    np.minimum.at(lo, inv[fin], P[fin])
+    np.maximum.at(hi, inv[fin], P[fin])
+    spans = hi - lo
+    spans = spans[np.isfinite(spans)]
+    widest = f"{float(spans.max()):.1f} dbar" if spans.size else "unknown"
+    return (
+        f"only {n} of {len(pairs)} pairs have a reference dT/dz (at least "
+        f"{MIN_GEOMETRY_PAIRS} needed). The gradient needs a profile spanning "
+        f"{3 * bin_dbar:g} dbar, and the widest profile here spans {widest}"
+    )
+
+
 def geometry_fit(
     pairs: PairSet,
     fit: FitResult,
@@ -452,10 +501,12 @@ def joint_fit(
         coeffs=coeffs, order=order, n=int(keep.sum()),
         n_dropped=int(usable.sum() - keep.sum()), center=center, scale=scale,
         condition=cond, rms_K=rms, residual_K=resid_K,
-        T_range=(float(np.min(T_all[usable])), float(np.max(T_all[usable]))),
-        L_range=(float(np.min(L_all[usable])), float(np.max(L_all[usable]))),
+        # Over the pairs the fit KEPT, not every usable one: a rejected outlier
+        # is not part of the range the calibration covers (issue #238 review).
+        T_range=(float(np.min(T_all[keep])), float(np.max(T_all[keep]))),
+        L_range=(float(np.min(L_all[keep])), float(np.max(L_all[keep]))),
         dive_climb_split_K=split, channel=pairs.channel, lag=pairs.lag,
-        corr=pairs.corr, kept=keep,
+        corr=pairs.corr, kept=keep, outlier=usable & ~keep,
         fixed_terms=None if fixed_terms is None else {
             k: float(fixed_terms[k]) for k in _BETA_KEYS if k in fixed_terms
         },

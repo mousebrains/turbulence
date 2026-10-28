@@ -312,6 +312,7 @@ def load_probe_series(
     W_min: float = 0.05,
     P_min: float = 0.5,
     min_duration: float = 60.0,
+    direction: str = "glide",
 ) -> ProbeSeries:
     """Build a :class:`ProbeSeries` from a ``.p`` file on the SLOW grid.
 
@@ -319,6 +320,10 @@ def load_probe_series(
     the fast channels carry three decades of bandwidth the CTD cannot see, and
     averaging them into the reference's sampling kernel (see ``pairs``) is what
     makes the regression bandwidth-matched instead of attenuated (plan A2).
+
+    *direction* is passed to the profile detector: ``glide`` (both legs, a
+    glider yo) or ``down`` (a VMP, whose hauled-in ascent puts the sensors in
+    the body's wake) or ``up``.
     """
     from odas_tpw.rsi.p_file import PFile
 
@@ -375,7 +380,7 @@ def load_probe_series(
                 (int(a), int(b))
                 for a, b in get_profiles(
                     P, W, float(pf.fs_slow), P_min=P_min, W_min=W_min,
-                    direction="glide", min_duration=min_duration,
+                    direction=direction, min_duration=min_duration,
                 )
             ]
         except Exception as exc:

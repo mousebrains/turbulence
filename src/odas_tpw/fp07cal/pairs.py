@@ -115,6 +115,12 @@ class PairSet:
     corr: float = float("nan")
     rejected: Counter = field(default_factory=Counter)
     per_file: dict = field(default_factory=dict)
+    gaps: dict = field(default_factory=dict)
+    """Thermistor gaps, per file that had any: ``{label: {n_gaps, n_nonfinite, n_settling}}``.
+
+    Samples, not pairs: the pairs a gap cost are counted under
+    ``rejected["thermistor_gap"]``.  Empty for a file with no non-finite count.
+    """
 
     def __len__(self) -> int:
         return int(self.time.size)
@@ -135,6 +141,8 @@ class PairSet:
         rej.update(other.rejected)
         merged = dict(self.per_file)
         merged.update(other.per_file)
+        gaps = dict(self.gaps)
+        gaps.update(other.gaps)
         return PairSet(
             time=np.concatenate([self.time, other.time]),
             T_ref=np.concatenate([self.T_ref, other.T_ref]),
@@ -149,10 +157,28 @@ class PairSet:
             corr=self.corr,
             rejected=rej,
             per_file=merged,
+            gaps=gaps,
         )
 
 
-def _single_pole(x: np.ndarray, dt: float, tau: float) -> np.ndarray:
+SETTLE_TAUS = 5.0
+"""Time constants blanked after the single pole restarts at a gap.
+
+The restart assumes the input sat at its first value before the gap, so the
+output leads the properly slowed signal by about ``tau * dx/dt`` and that
+error decays as ``exp(-t/tau)``: after 5 tau it is below 1% of the initial
+mismatch (on a VMP thermocline, ~10 mK becomes ~0.07 mK)."""
+
+
+def _finite_runs(finite: np.ndarray) -> list[tuple[int, int]]:
+    """Half-open ``[start, end)`` index runs where *finite* is True."""
+    d = np.diff(np.concatenate(([0], finite.astype(np.int8), [0])))
+    return list(zip(np.flatnonzero(d == 1).tolist(), np.flatnonzero(d == -1).tolist()))
+
+
+def _single_pole(
+    x: np.ndarray, dt: float, tau: float, *, stats: dict | None = None
+) -> np.ndarray:
     """Causal one-pole low-pass --- the reference's response, applied to the probe.
 
     Causal on purpose: the CTD genuinely lags the water, so slowing the
@@ -165,20 +191,52 @@ def _single_pole(x: np.ndarray, dt: float, tau: float) -> np.ndarray:
     which on ``L`` (order -0.1) is a large excursion --- it would put a
     fabricated cold spike at the head of every file and drag any pair built
     there.  The transient is silent: the values are finite and smooth.
+
+    **NaN-aware.**  A recursive filter carries a non-finite input through every
+    later output, so one bad count used to turn the rest of the file to NaN and
+    silently lose every pair after it (issue #238).  Non-finite samples stay
+    non-finite, nothing is interpolated across them (no CTD sample, no pair;
+    no thermistor sample, no filter output), and the filter restarts at steady
+    state on the first finite sample after each gap.  Unlike the head of the
+    file, a gap can fall mid-profile, where the steady-state assumption is
+    wrong by ``tau * dx/dt``, so the first :data:`SETTLE_TAUS` time constants
+    after each restart are blanked as well.  *stats*, when given, receives
+    ``n_gaps``, ``n_nonfinite`` and ``n_settling`` (samples blanked by the
+    restart).  An all-finite input takes exactly the old path, bit for bit.
     """
     x = np.asarray(x, dtype=np.float64)
+    finite = np.isfinite(x)
+    all_finite = bool(finite.all())
+    if stats is not None:
+        stats.update(
+            n_gaps=0 if all_finite else len(_finite_runs(~finite)),
+            n_nonfinite=int(x.size - np.count_nonzero(finite)),
+            n_settling=0,
+        )
     if tau <= 0 or not np.isfinite(tau) or x.size == 0:
         return x
     alpha = dt / (tau + dt)
     from scipy.signal import lfilter
 
     b, a = [alpha], [1.0, -(1.0 - alpha)]
-    seed = x[0] if np.isfinite(x[0]) else np.nanmean(x)
-    if not np.isfinite(seed):
-        seed = 0.0
-    zi = np.array([(1.0 - alpha) * seed])
-    y, _ = lfilter(b, a, x, zi=zi)
-    return np.asarray(y)
+    if all_finite:
+        zi = np.array([(1.0 - alpha) * x[0]])
+        y, _ = lfilter(b, a, x, zi=zi)
+        return np.asarray(y)
+
+    y = np.full(x.size, np.nan)
+    n_settle = int(np.ceil(SETTLE_TAUS * tau / dt)) if dt > 0 else 0
+    blanked = 0
+    for s, e in _finite_runs(finite):
+        seg, _ = lfilter(b, a, x[s:e], zi=np.array([(1.0 - alpha) * x[s]]))
+        y[s:e] = seg
+        if s > 0:  # a restart after a gap, not the head of the record
+            k = min(e, s + n_settle)
+            y[s:k] = np.nan
+            blanked += k - s
+    if stats is not None:
+        stats["n_settling"] = int(blanked)
+    return y
 
 
 def _boxcar_at(
@@ -234,6 +292,8 @@ class PreparedProbe:
     w: np.ndarray
     pid: np.ndarray
     dt: float
+    gaps: dict = field(default_factory=dict)
+    """``{n_gaps, n_nonfinite, n_settling}`` when the counts had a gap, else empty."""
 
 
 def prepare_probe(probe: ProbeSeries, channel: str, cfg: PairConfig) -> PreparedProbe | None:
@@ -242,13 +302,16 @@ def prepare_probe(probe: ProbeSeries, channel: str, cfg: PairConfig) -> Prepared
         return None
     dt = 1.0 / probe.fs
     L_raw, clipped = log_r(probe.counts[channel], probe.bridge[channel])
+    gaps: dict = {}
+    L_slow = _single_pole(L_raw, dt, cfg.kernel_tau, stats=gaps)
     return PreparedProbe(
         channel=channel,
-        L_slow=_single_pole(L_raw, dt, cfg.kernel_tau),
+        L_slow=L_slow,
         clipped=clipped,
         w=np.gradient(probe.pressure, probe.time),
         pid=probe.profile_id(),
         dt=dt,
+        gaps=gaps if gaps.get("n_nonfinite") else {},
     )
 
 
@@ -304,16 +367,29 @@ def build_pairs(
     w_probe = prepared.w
     clipped = prepared.clipped
     L_slow = prepared.L_slow
+    gaps = {probe.label: dict(prepared.gaps)} if prepared.gaps else {}
 
     centers = ref.time[k] - lag
     L_k, n_k = _boxcar_at(probe.time, L_slow, centers, width)
     # A clipped sample anywhere in the window poisons the average (A7).
     clip_frac, _ = _boxcar_at(probe.time, clipped.astype(np.float64), centers, width)
 
-    keep = np.isfinite(L_k)
-    rejected["kernel_all_nan"] += int(np.sum(~keep))
-
+    finite_k = np.isfinite(L_k)
     thin = n_k < cfg.min_kernel_samples
+    keep = np.ones(centers.size, dtype=bool)
+    if gaps:
+        # A kernel the thermistor gap (or the filter's restart) touches at all
+        # is a pair the gap cost: its mean would be over a different, shorter
+        # window than every other pair's (one such pair was off by 9.2 mK).
+        # Counted under its own reason, so the loss is visible rather than
+        # folded into the generic all-NaN count.
+        holed, _ = _boxcar_at(probe.time, np.isnan(L_slow).astype(np.float64), centers, width)
+        gap = np.nan_to_num(holed, nan=0.0) > 0.0
+        rejected["thermistor_gap"] += int(np.sum(gap))
+        keep &= ~gap
+    rejected["kernel_all_nan"] += int(np.sum(~finite_k & keep))
+    keep &= finite_k
+
     rejected["kernel_too_few_samples"] += int(np.sum(thin & keep))
     keep &= ~thin
 
@@ -343,7 +419,7 @@ def build_pairs(
     keep &= ~bad_ref
 
     if not np.any(keep):
-        return replace(empty, per_file={probe.label: 0})
+        return replace(empty, per_file={probe.label: 0}, gaps=gaps)
 
     kk = np.flatnonzero(keep)
     dirs = np.array(
@@ -366,6 +442,7 @@ def build_pairs(
         lag=lag,
         rejected=rejected,
         per_file={probe.label: int(kk.size)},
+        gaps=gaps,
     )
 
 
