@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from odas_tpw.config_base import ConfigManager
+from odas_tpw.perturb.probe_exclusion import parse_exclusions
 
 # ---------------------------------------------------------------------------
 # Canonical defaults — one dict per processing section
@@ -432,6 +433,9 @@ DEFAULTS: dict[str, dict] = {
     # Per-instrument overrides keyed by serial-number identifier (matched
     # against the parent directory of each .p file). Allowed inner keys:
     #   exclude_shear_probes : list[str]  (e.g. ["sh1"] or ["sh2"])
+    #   exclude              : [{probe, P_min, P_max, start, stop, reason}]
+    #                          one probe masked over a pressure/time window
+    #                          (perturb/probe_exclusion.py, issue #190)
     #   fp07_tau_scale       : {probe: multiplier}
     #   fp07_response        : path | [paths] from `fp07-pair fit`
     #                          (mutually exclusive with fp07_tau_scale)
@@ -454,7 +458,9 @@ _HASH_EXCLUDE_KEYS = frozenset(
 # inner-schema validation happens in a wrapper below.
 _DYNAMIC_KEY_SECTIONS = frozenset({"instruments"})
 
-_INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes", "fp07_tau_scale", "fp07_response"})
+_INSTRUMENT_VALID_KEYS = frozenset(
+    {"exclude_shear_probes", "exclude", "fp07_tau_scale", "fp07_response"}
+)
 
 # Which `instruments.<SN>.*` keys actually reach each stage. The block is hashed
 # into a stage's signature so a change re-versions its output -- but not every
@@ -463,10 +469,20 @@ _INSTRUMENT_VALID_KEYS = frozenset({"exclude_shear_probes", "fp07_tau_scale", "f
 # recompute that cannot change a single value (verified bit-identical over
 # 34820 epsilon / FM / fom / var_resolved values on ARCTERX-2022).
 # `exclude_shear_probes` does reach diss, and reaches chi transitively through
-# Method 1's epsilonMean, so it belongs to both.
+# Method 1's epsilonMean, so it belongs to both. So does `exclude`, but only
+# entry by entry (_EXCLUDE_PRODUCTS_BY_STAGE).
 _INSTRUMENT_KEYS_BY_STAGE: dict[str, frozenset[str]] = {
-    "diss": frozenset({"exclude_shear_probes"}),
-    "chi": frozenset({"exclude_shear_probes", "fp07_tau_scale", "fp07_response"}),
+    "diss": frozenset({"exclude_shear_probes", "exclude"}),
+    "chi": frozenset({"exclude_shear_probes", "exclude", "fp07_tau_scale", "fp07_response"}),
+}
+
+# Which `exclude` entries reach each stage, by the product their probe is masked
+# in. A shear entry masks diss, and reaches chi through epsilonMean (Method 1,
+# epsilon_paired, K_rho, Gamma; every chi file records it). A thermistor entry
+# masks chi only and cannot change a diss byte, so it does not version diss.
+_EXCLUDE_PRODUCTS_BY_STAGE: dict[str, frozenset[str]] = {
+    "diss": frozenset({"diss"}),
+    "chi": frozenset({"diss", "chi"}),
 }
 
 # Numeric dependencies whose version can change ε/χ/N² outputs even with no
@@ -726,6 +742,10 @@ def _validate_instruments(instruments: dict) -> None:
                 f"instruments.{sn}.exclude_shear_probes: must be a list of strings, "
                 f"got {excludes!r}"
             )
+        # Windowed exclusions: every entry is checked here, at load, so a typo
+        # fails before any stage directory exists. Whether each probe is on
+        # the instrument can only be known from its data, at run time.
+        parse_exclusions(sn, settings.get("exclude"))
         tau_scale = settings.get("fp07_tau_scale", {})
         if not isinstance(tau_scale, dict):
             raise ValueError(
@@ -1068,7 +1088,9 @@ STAGES: frozenset[str] = frozenset(_STAGE_SECTION)
 
 
 def canonical_instruments_for_hash(
-    instruments: dict | None, keys: frozenset[str] | None = None
+    instruments: dict | None,
+    keys: frozenset[str] | None = None,
+    exclude_products: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Normalize set-like instrument settings before hashing.
 
@@ -1078,6 +1100,10 @@ def canonical_instruments_for_hash(
     left as an empty mapping, so a config carrying only a chi-side knob hashes
     identically to one carrying no ``instruments`` at all -- which is what makes
     the existing diss output reusable instead of needlessly re-versioned.
+
+    *exclude_products* does the same inside ``exclude``: only the entries whose
+    probe is masked in one of those products are kept (see
+    :data:`_EXCLUDE_PRODUCTS_BY_STAGE`), each with its original entry number.
     """
     normalized: dict[str, Any] = {}
     # Sort by str(key): instrument serials mix int (unquoted `465:`) and str keys.
@@ -1093,6 +1119,24 @@ def canonical_instruments_for_hash(
         excludes = item.get("exclude_shear_probes")
         if isinstance(excludes, list):
             item["exclude_shear_probes"] = sorted(str(probe) for probe in excludes)
+        # Values normalized (30 == 30.0; quoted == unquoted timestamp; T1_dT1
+        # == T1) and each entry carries its number, which names its attributes
+        # in the product. reason stays in: it is written into the product too.
+        if "exclude" in item:
+            canon = [
+                e.hash_form()
+                for e in parse_exclusions(key, item["exclude"])
+                if exclude_products is None or e.product in exclude_products
+            ]
+            if canon:
+                item["exclude"] = canon
+            else:
+                # `exclude: []` (or null), or entries this stage cannot see,
+                # change nothing here: hash it as absent, so the existing output
+                # is reused instead of re-versioned.
+                del item["exclude"]
+                if keys is not None and not item:
+                    continue
         # Key order must not change the hash, but the VALUES must: a different
         # tau is different chi, so it has to land in a new stage directory.
         tau_scale = item.get("fp07_tau_scale")
@@ -1136,10 +1180,14 @@ def upstream_for(stage: str, config: dict) -> list[tuple[str, dict]]:
     strat_p = merge_config("stratification", config.get("stratification"))
     instruments_raw = config.get("instruments")
     instruments_diss = canonical_instruments_for_hash(
-        instruments_raw, _INSTRUMENT_KEYS_BY_STAGE["diss"]
+        instruments_raw,
+        _INSTRUMENT_KEYS_BY_STAGE["diss"],
+        _EXCLUDE_PRODUCTS_BY_STAGE["diss"],
     )
     instruments_chi = canonical_instruments_for_hash(
-        instruments_raw, _INSTRUMENT_KEYS_BY_STAGE["chi"]
+        instruments_raw,
+        _INSTRUMENT_KEYS_BY_STAGE["chi"],
+        _EXCLUDE_PRODUCTS_BY_STAGE["chi"],
     )
 
     profile_upstream = [
@@ -1676,6 +1724,17 @@ parallel:
 # out before mk_epsilon_mean, so it is excluded from the multi-probe
 # epsilonMean and from chi Method 1 (which uses epsilonMean).
 #
+# exclude does the same to ONE probe -- a shear probe (sh1, sh2) or a
+# thermistor (T1, T2) -- over a window: masked where P_min <= P_mean < P_max
+# [dbar] and start <= t < stop [ISO-8601, UTC], each window's own stored
+# P_mean and center time. An omitted bound is unbounded (no bounds = the whole
+# deployment); reason is required and is written into the product with the
+# number of windows masked. A shear entry reaches epsilonMean, chi Method 1,
+# epsilon_paired, K_rho and Gamma; a thermistor entry reaches chiMean,
+# chiLnSigma, K_T and Gamma, never epsilon. A probe the data does not carry is
+# an error wherever the entry's window selects a window; the run summary
+# reports what each entry masked.
+#
 # fp07_tau_scale multiplies the FP07 time constant per thermistor. tau is
 # otherwise a single model (fp07_tau: 'lueck' for single_pole, 'goto' for
 # double_pole) shared by every bead on the instrument, and two beads on one
@@ -1701,6 +1760,16 @@ instruments: {}
 #     exclude_shear_probes: ["sh2"]
 #   SN194:
 #     fp07_tau_scale: {T1: 0.30, T2: 0.75}
+#     exclude:
+#       - probe: sh2       # pressure-related fault: bad in a depth window
+#         P_min: 30        # dbar, inclusive
+#         P_max: 70        # dbar, exclusive
+#         start: "2017-10-09T00:00:00Z"   # inclusive
+#         stop: "2017-10-24T00:00:00Z"    # exclusive
+#         reason: "pressure-related fault, window opens ~10-09"
+#       - probe: sh2       # ...then fails outright at every depth
+#         start: "2017-10-24T00:00:00Z"
+#         reason: "probe failed; e_2/e_1 = 0.37-0.82 at all depths"
 #   SN428:
 #     fp07_response:
 #       - <CONFIG_DIR>/fp07pair/fp07pair_SN428_T2232-T2234_20220322T1450Z.nc

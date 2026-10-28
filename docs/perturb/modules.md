@@ -17,6 +17,7 @@ The `perturb` package (`src/odas_tpw/perturb/`) provides batch processing on top
 | `seawater.py` | Full seawater property chain via gsw/TEOS-10 (SP, SA, CT, sigma0, rho, depth) |
 | `ctd.py` | CTD time-binning with GPS interpolation and seawater properties |
 | `qc_gate.py` | Per-segment QC gate — flag/NaN epsilon/chi from hotel bitfield channels |
+| `probe_exclusion.py` | `instruments.<key>.exclude`: validation and per-window masks for one probe excluded over a pressure/time window |
 | `qc_rules.py` | Declarative internal QC rules synthesizing uint8 flag channels |
 | `binning.py` | Depth and time binning of per-profile NetCDFs |
 | `combo.py` | Combined NetCDF assembly with CF/ACDD attributes |

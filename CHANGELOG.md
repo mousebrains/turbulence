@@ -7,6 +7,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`instruments.<key>.exclude`: one probe masked over a pressure and/or time
+  window** (issue #190). A shear probe with a pressure-related fault is bad
+  inside a depth window and fine above and below it; `exclude_shear_probes`
+  could only drop it for the whole deployment, and could not name a
+  thermistor at all. On CASPER-West 2017 SN 194, sh2 read 15-18x high in a
+  20 m window (from 10-16) while 65-130 m stayed at 1.01-1.02, biasing
+  `epsilonMean` up to 4.25x, and no QC dropped any of it. Each entry is
+  `{probe, P_min, P_max, start, stop, reason}`: `P_min <= P_mean < P_max`
+  [dbar] and `start <= t < stop` [ISO-8601, UTC], tested against each window's
+  own stored `P_mean` and center time, with an omitted bound unbounded and
+  `reason` required. The masking is exactly `exclude_shear_probes`'s,
+  restricted to the window: the probe's own estimates are set NaN before
+  `mk_epsilon_mean` / `mk_chi_mean` (`epsilon`/`e_N` for `sh<N>`;
+  `chi`/`chi_N`/`epsilon_T` for `T<N>`), so a shear entry reaches
+  `epsilonMean`, chi Method 1, `epsilon_paired`, `K_rho` and `Gamma`, a
+  thermistor entry `chiMean`, `chiLnSigma`, `K_T` and `Gamma` (never
+  epsilon), and per-probe metadata is kept. A malformed entry fails at config
+  load naming the instrument and entry; a probe the data does not carry fails
+  each profile where the entry's window selects a window, naming it (an
+  entry for a probe removed later in the deployment does not fail the
+  profiles after it). Every per-profile file an entry changed records it
+  (`probe_exclusion_<n>_*`, with the windows masked; a chi file also records
+  the shear entries it inherits through `epsilonMean`), and the run summary
+  reports what each entry masked, including none, an instrument key carrying
+  `exclude` that matches no input file, and a thermistor entry not applied
+  because chi did not run. A shear entry versions diss and chi, a thermistor
+  entry chi only. Products of a config without `exclude` are unchanged.
+  `exclude_shear_probes` is unchanged. See `docs/perturb/configuration.md`.
 - **`PFile` refuses or repairs a mis-framed `.p` file instead of
   mis-assembling it.** Every reader, ODAS included, cuts a v6 file at a fixed
   record size, so one record of the wrong length puts every later header in
