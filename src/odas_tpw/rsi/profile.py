@@ -9,6 +9,9 @@ re-exports them for backward compatibility and adds RSI-specific I/O
 
 import logging
 import os
+import re
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
@@ -23,6 +26,11 @@ from odas_tpw._version_info import provenance_attrs
 from odas_tpw.scor160.profile import get_profiles, smooth_fall_rate
 
 logger = logging.getLogger(__name__)
+
+# Largest departure [s] of an L1 file's decimal-day time axis from the uniform
+# grid n/fs it was written from that is still float64 rounding of the days:
+# ~1e-10 s early in a year, ~1e-8 s at its end, against one fast sample of ~2 ms.
+_GRID_SNAP_TOL_S = 1e-6
 
 # Default longest slow-pressure gap [s] still treated as an isolated fill and
 # linearly repaired. Longer non-finite spans are interpolated only so the
@@ -90,7 +98,9 @@ def extract_profiles(
     Parameters
     ----------
     source : PFile, str, or Path
-        A PFile object, path to .p file, or path to full-record .nc file.
+        A PFile object, path to .p file, or path to full-record .nc file. The
+        profiles of an ATOMIX L1 file (``rsi-tpw nc``) carry the channels,
+        names and attributes of profiles cut from its ``.p`` file.
     output_dir : Path
         Directory for per-profile NetCDF files.
     profiles : list of (start, end) tuples, optional
@@ -433,8 +443,17 @@ def _load_source(source: "PFile | str | Path") -> dict[str, Any]:
         raise ValueError(f"Unsupported file type: {source.suffix}")
 
 
-def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
-    """Extract data dict from a PFile."""
+def _channel_attrs(
+    ch_name: str, dim: str, info: Mapping[str, Any], config: dict[str, Any] | None
+) -> dict[str, Any]:
+    """A channel's variable attributes in a per-profile NetCDF.
+
+    *info* is its ``PFile.channel_info`` entry (or the same shape, from
+    :func:`~odas_tpw.rsi.convert.l1_native_channels`), *config* the parsed
+    instrument configuration, or None when the source embeds none: then no
+    FP07 electronics coefficients are written, and chi falls back to its
+    defaults with a warning rather than reading defaults as coefficients.
+    """
     # Lazy imports: chi_io pulls xarray; helpers is only needed for the
     # channel-name patterns. Keeps profile.py light at module-load time.
     from odas_tpw.rsi.chi_io import (
@@ -443,63 +462,71 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
         _therm_gradient_config,
     )
     from odas_tpw.rsi.helpers import DT_PATTERN, T_PATTERN
+
+    # Honor a richer long_name/comment when the producer supplied one
+    # (e.g. injected derived channels like N2/dTdz); otherwise fall back to
+    # the bare channel name. The canonical schema still wins where it has an
+    # opinion for known variables.
+    attrs: dict[str, Any] = {
+        "units": info["units"],
+        "sensor_type": info["type"],
+        "long_name": info.get("long_name", ch_name),
+    }
+    if info.get("comment"):
+        attrs["comment"] = info["comment"]
+    # Provenance (e.g. the in-situ FP07 calibration tag). Not a schema key,
+    # so it survives apply_schema; binning carries it to the combo.
+    if info.get("calibration"):
+        attrs["calibration"] = info["calibration"]
+    # Background-stratification provenance (sort; dT/dz source) on N2/dTdz.
+    if info.get("stratification"):
+        attrs["stratification"] = info["stratification"]
+    # Hotel merge gap limit [s] (perturb hotel.max_gap), so downstream
+    # interp-fills of a merged channel can honour the same gate.
+    if info.get("hotel_max_gap") is not None:
+        attrs["hotel_max_gap"] = float(info["hotel_max_gap"])
+    if config is None:
+        return attrs
+    # FP07 electronics coefficients for the chi path (#131 m8): embed
+    # diff_gain plus exactly _extract_therm_cal's output for the base
+    # thermistor (including 'b' — noise_thermchannel's eta consumes it)
+    # as float attrs on each pre-emphasized gradient channel, so chi
+    # computed from a per-profile NetCDF uses the instrument's real
+    # coefficients instead of generic defaults (SN479: diff_gain=0.912,
+    # b=0.99861 vs the 0.94/1.0 fallbacks). NOTE: these attrs carry the
+    # FACTORY calibration from the embedded config string; perturb's fp07
+    # in-situ calibration may have rewritten the channel DATA in
+    # pf.channels before this write. That is intended — the attrs
+    # describe the electronics (noise floor, bilinear differentiator
+    # gain), and factory coefficients still beat generic defaults.
+    if dim == "time_fast" and DT_PATTERN.match(ch_name):
+        diff_gain, therm_cal = _therm_gradient_config(config, ch_name)
+        attrs["diff_gain"] = diff_gain
+        attrs.update(therm_cal)
+    elif dim == "time_fast" and T_PATTERN.match(ch_name):
+        # Plain fast T channel (no pre-emphasis): mirror the chi_io .p
+        # branch's first-difference fallback exactly — diff_gain fixed at
+        # the generic default, calibration from the channel's OWN config
+        # section — so an instrument with no T*_dT* channels round-trips
+        # through the per-profile NetCDF without a spurious "predates
+        # their introduction" warning (W5-ii review F1).
+        ch_cfg: dict = next(
+            (ch for ch in config["channels"] if ch.get("name") == ch_name),
+            {},
+        )
+        attrs["diff_gain"] = _DEFAULT_DIFF_GAIN
+        attrs.update(_extract_therm_cal(ch_cfg))
+    return attrs
+
+
+def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
+    """Extract data dict from a PFile."""
     from odas_tpw.rsi.p_file import instrument_sn
 
     channels = []
     for ch_name, ch_data in pf.channels.items():
         dim = "time_fast" if pf.is_fast(ch_name) else "time_slow"
-        info = pf.channel_info[ch_name]
-        # Honor a richer long_name/comment when the producer supplied one
-        # (e.g. injected derived channels like N2/dTdz); otherwise fall back to
-        # the bare channel name. The canonical schema still wins where it has an
-        # opinion for known variables.
-        attrs: dict[str, Any] = {
-            "units": info["units"],
-            "sensor_type": info["type"],
-            "long_name": info.get("long_name", ch_name),
-        }
-        if info.get("comment"):
-            attrs["comment"] = info["comment"]
-        # Provenance (e.g. the in-situ FP07 calibration tag). Not a schema key,
-        # so it survives apply_schema; binning carries it to the combo.
-        if info.get("calibration"):
-            attrs["calibration"] = info["calibration"]
-        # Background-stratification provenance (sort; dT/dz source) on N2/dTdz.
-        if info.get("stratification"):
-            attrs["stratification"] = info["stratification"]
-        # Hotel merge gap limit [s] (perturb hotel.max_gap), so downstream
-        # interp-fills of a merged channel can honour the same gate.
-        if info.get("hotel_max_gap") is not None:
-            attrs["hotel_max_gap"] = float(info["hotel_max_gap"])
-        # FP07 electronics coefficients for the chi path (#131 m8): embed
-        # diff_gain plus exactly _extract_therm_cal's output for the base
-        # thermistor (including 'b' — noise_thermchannel's eta consumes it)
-        # as float attrs on each pre-emphasized gradient channel, so chi
-        # computed from a per-profile NetCDF uses the instrument's real
-        # coefficients instead of generic defaults (SN479: diff_gain=0.912,
-        # b=0.99861 vs the 0.94/1.0 fallbacks). NOTE: these attrs carry the
-        # FACTORY calibration from the embedded config string; perturb's fp07
-        # in-situ calibration may have rewritten the channel DATA in
-        # pf.channels before this write. That is intended — the attrs
-        # describe the electronics (noise floor, bilinear differentiator
-        # gain), and factory coefficients still beat generic defaults.
-        if dim == "time_fast" and DT_PATTERN.match(ch_name):
-            diff_gain, therm_cal = _therm_gradient_config(pf.config, ch_name)
-            attrs["diff_gain"] = diff_gain
-            attrs.update(therm_cal)
-        elif dim == "time_fast" and T_PATTERN.match(ch_name):
-            # Plain fast T channel (no pre-emphasis): mirror the chi_io .p
-            # branch's first-difference fallback exactly — diff_gain fixed at
-            # the generic default, calibration from the channel's OWN config
-            # section — so an instrument with no T*_dT* channels round-trips
-            # through the per-profile NetCDF without a spurious "predates
-            # their introduction" warning (W5-ii review F1).
-            ch_cfg: dict = next(
-                (ch for ch in pf.config["channels"] if ch.get("name") == ch_name),
-                {},
-            )
-            attrs["diff_gain"] = _DEFAULT_DIFF_GAIN
-            attrs.update(_extract_therm_cal(ch_cfg))
+        attrs = _channel_attrs(ch_name, dim, pf.channel_info[ch_name], pf.config)
         channels.append((ch_name, ch_data, dim, attrs))
 
     global_attrs = {
@@ -520,28 +547,11 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
     for key, val in (getattr(pf, "v1_provenance", None) or {}).items():
         global_attrs[key] = str(val)
 
-    # RDL bad-buffer dropouts, re-expressed on each channel's OWN written axis
-    # so the per-profile writer can slice them exactly like the data. Needed
-    # because detection runs pre-deconvolution, which can move a channel
-    # between the two axes, so the detection axis and the written axis are not
-    # always the same one.
-    from odas_tpw.rsi.bad_buffer import expand_to_fast, sample_masks
+    # RDL bad-buffer dropouts, on each channel's OWN written axis, so the
+    # per-profile writer can slice them exactly like the data.
+    from odas_tpw.rsi.bad_buffer import channel_masks
 
-    bad_masks: dict[str, np.ndarray] = {}
-    for name, m in sample_masks(
-        getattr(pf, "bad_buffer_report", {}),
-        len(pf.t_fast),
-        len(pf.t_slow),
-        fs_fast=pf.fs_fast,
-        fs_slow=pf.fs_slow,
-    ).items():
-        arr = pf.channels.get(name)
-        if arr is None:
-            continue
-        if len(arr) == len(pf.t_fast) and m.size == len(pf.t_slow):
-            m = expand_to_fast(m, pf.t_slow, pf.t_fast)
-        if m.size == len(arr):
-            bad_masks[name] = m
+    bad_masks = channel_masks(pf)
 
     spr = getattr(pf, "samples_per_record", None)
     return {
@@ -647,7 +657,13 @@ def _repair_nans(
 
 
 def _load_from_nc(nc_path: Path) -> dict[str, Any]:
-    """Extract data dict from a full-record NetCDF file."""
+    """Extract data dict from a full-record NetCDF file.
+
+    An ATOMIX L1 file (``rsi-tpw nc``) gives the channels a ``.p`` file gives,
+    by :func:`~odas_tpw.rsi.convert.l1_native_channels`, on the exact sample
+    grid and with the same time anchor; any other layout gives its 1-D
+    variables as they are named.
+    """
     import netCDF4 as nc
 
     # Defect (audit io-hazard): the Dataset must be closed on every exit path,
@@ -731,47 +747,88 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
         else:
             raise ValueError("No pressure variable found in NetCDF file")
 
-        # Channels — scan both root and L1_converted group
+        # If time is in days, convert to seconds for consistency
+        time_origin = None
+        if "day" in t_fast_units.lower():
+            # nanmin reference (not [0]): a _FillValue->NaN at index 0 of the TIME
+            # axis would otherwise poison the whole converted vector.
+            time_origin = (t_fast_units, float(np.nanmin(t_fast)))
+            t_fast = (t_fast - np.nanmin(t_fast)) * 86400.0
+            t_slow = (t_slow - np.nanmin(t_slow)) * 86400.0
+            t_fast_units = "seconds"
+            t_slow_units = "seconds"
+
         channels = []
-        _seen = set()
+        start_epoch_s = None
+        bad_masks: dict[str, np.ndarray] = {}
+        if "t_fast" not in ds.variables and "L1_converted" in ds.groups:
+            # An ATOMIX L1 file (rsi-tpw nc): its channels are restored under
+            # their native names, so profiles cut from it carry what profiles
+            # cut from the .p do (#235).
+            from odas_tpw.rsi.convert import l1_native_channels
+            from odas_tpw.rsi.p_file import parse_config
 
-        def _scan_vars(source, time_dim_fast, time_dim_slow):
-            for vname in source.variables:
-                if vname in _seen or vname in ("t_fast", "t_slow", "TIME", "TIME_SLOW"):
-                    continue
-                var = source.variables[vname]
-                dims = var.dimensions
-                if len(dims) != 1:
-                    continue
-                dim = dims[0]
-                if dim == time_dim_fast:
-                    mapped_dim = "time_fast"
-                elif dim == time_dim_slow:
-                    mapped_dim = "time_slow"
-                else:
-                    continue
-                attrs = {}
-                for a in var.ncattrs():
-                    attrs[a] = getattr(var, a)
-                channels.append((vname, _nc_filled(var), mapped_dim, attrs))
-                _seen.add(vname)
+            config_str = global_attrs.get("configuration_string")
+            config = parse_config(config_str) if isinstance(config_str, str) else None
+            if config is not None:
+                # The .p route's name for the model (the L1 file calls it source).
+                model = config["instrument_info"].get("model", "")
+                global_attrs.setdefault("instrument_model", model)
+            # p_to_L1 wrote TIME as decimal days of the uniform grid n/fs; the
+            # exact grid is what PFile, and the speed SHEAR was divided by, use.
+            t_fast = _snap_to_grid(t_fast, fs_fast)
+            t_slow = _snap_to_grid(t_slow, fs_slow)
+            anchor = _l1_time_anchor(time_origin, global_attrs.get("start_time"), stem)
+            if anchor is not None:
+                t_fast_units = t_slow_units = f"seconds since {anchor[0]}"
+                start_epoch_s = anchor[1]
+            group = ds.groups["L1_converted"]
+            restored = l1_native_channels(
+                group,
+                config,
+                t_fast,
+                t_slow,
+                fs_fast,
+                fs_slow,
+                context=stem,
+                software_version=global_attrs.get("software_version"),
+            )
+            for name, (data, fast, info) in restored.items():
+                dim = "time_fast" if fast else "time_slow"
+                channels.append((name, data, dim, _channel_attrs(name, dim, info, config)))
+            bad_masks = _l1_bad_masks(group, restored, nc_path, global_attrs)
+        else:
+            # Channels — scan both root and L1_converted group
+            _seen = set()
 
-        # Scan root-level variables (old format)
-        _scan_vars(ds, "time_fast", "time_slow")
-        # Scan L1_converted group (new ATOMIX format)
-        if "L1_converted" in ds.groups:
-            _scan_vars(ds.groups["L1_converted"], "TIME", "TIME_SLOW")
+            def _scan_vars(source, time_dim_fast, time_dim_slow):
+                for vname in source.variables:
+                    if vname in _seen or vname in ("t_fast", "t_slow", "TIME", "TIME_SLOW"):
+                        continue
+                    var = source.variables[vname]
+                    dims = var.dimensions
+                    if len(dims) != 1:
+                        continue
+                    dim = dims[0]
+                    if dim == time_dim_fast:
+                        mapped_dim = "time_fast"
+                    elif dim == time_dim_slow:
+                        mapped_dim = "time_slow"
+                    else:
+                        continue
+                    attrs = {}
+                    for a in var.ncattrs():
+                        attrs[a] = getattr(var, a)
+                    channels.append((vname, _nc_filled(var), mapped_dim, attrs))
+                    _seen.add(vname)
+
+            # Scan root-level variables (old format)
+            _scan_vars(ds, "time_fast", "time_slow")
+            # Scan L1_converted group (new ATOMIX format)
+            if "L1_converted" in ds.groups:
+                _scan_vars(ds.groups["L1_converted"], "TIME", "TIME_SLOW")
     finally:
         ds.close()
-
-    # If time is in days, convert to seconds for consistency
-    if "day" in t_fast_units.lower():
-        # nanmin reference (not [0]): a _FillValue->NaN at index 0 of the TIME
-        # axis would otherwise poison the whole converted vector.
-        t_fast = (t_fast - np.nanmin(t_fast)) * 86400.0
-        t_slow = (t_slow - np.nanmin(t_slow)) * 86400.0
-        t_fast_units = "seconds"
-        t_slow_units = "seconds"
 
     # Vehicle: explicit vehicle attr, then platform_type (what p_to_L1
     # writes), then a model-string heuristic — shared with the eps/chi NC
@@ -797,12 +854,116 @@ def _load_from_nc(nc_path: Path) -> dict[str, Any]:
         "t_slow": t_slow,
         "t_fast_units": t_fast_units,
         "t_slow_units": t_slow_units,
+        "start_epoch_s": start_epoch_s,
         "record_framing": record_framing,
+        "bad_masks": bad_masks,
         "channels": channels,
         "global_attrs": global_attrs,
         "stem": stem,
         "vehicle": vehicle,
     }
+
+
+def _l1_bad_masks(
+    group: Any,
+    restored: Mapping[str, tuple[np.ndarray, bool, dict[str, Any]]],
+    nc_path: Path,
+    global_attrs: dict[str, Any],
+) -> dict[str, np.ndarray]:
+    """The RDL bad-buffer masks an L1 file records, per restored channel.
+
+    A file written before p_to_L1 recorded them cannot say whether its source
+    had any: its profiles get :data:`~odas_tpw.rsi.bad_buffer.UNKNOWN_ATTR`
+    (added to *global_attrs*), which turns epsilon's and chi's bad-buffer
+    fractions to NaN, never the 0 that would read as clean.
+    """
+    from odas_tpw.rsi.bad_buffer import (
+        L1_SPANS_ATTR,
+        UNKNOWN_ATTR,
+        decode_channel_spans,
+        decode_spans,
+    )
+
+    if L1_SPANS_ATTR not in group.ncattrs():
+        note = (
+            f"{nc_path.name} was written by an rsi-tpw nc that did not record RDL "
+            "bad-buffer spans, so any dropouts in its source are unmasked and "
+            "bad_buffer_fraction is unknown (NaN)"
+        )
+        logger.warning("%s; re-run rsi-tpw nc on the .p file to record them", note)
+        global_attrs[UNKNOWN_ATTR] = note
+        return {}
+    masks: dict[str, np.ndarray] = {}
+    for name, spans in decode_channel_spans(group.getncattr(L1_SPANS_ATTR)).items():
+        if name in restored:
+            mask = decode_spans(spans, len(restored[name][0]))
+            if mask.any():
+                masks[name] = mask
+        else:
+            logger.warning(
+                "%s: bad-buffer spans of %s are recorded but the channel is not "
+                "restored; its dropouts are unmasked",
+                nc_path.name,
+                name,
+            )
+    return masks
+
+
+def _snap_to_grid(t: np.ndarray, fs: float) -> np.ndarray:
+    """*t* [s from the first sample] as the grid ``arange(n) / fs`` it rounds.
+
+    Returned unchanged unless every sample is within :data:`_GRID_SNAP_TOL_S`
+    of the grid: a record with a gap or a different rate is not a grid.
+    """
+    grid = np.arange(t.size) / fs
+    if t.size and np.all(np.abs(t - grid) <= _GRID_SNAP_TOL_S):
+        return grid
+    return t
+
+
+def _l1_time_anchor(
+    time_origin: tuple[str, float] | None, start_time: object, stem: str
+) -> tuple[str, float] | None:
+    """``(ISO time, epoch seconds)`` of an L1 file's first sample, or None.
+
+    *time_origin* is ``(TIME units, first TIME value)``; None, or units other
+    than ``days since <ISO time>``, and the file cannot say. ``start_time`` is
+    taken, verbatim, when it agrees with that to 1 ms, as it does in every file
+    p_to_L1 writes, so the profiles' times match the .p route's to the bit;
+    otherwise the samples' own time is, with a warning.
+    """
+    if time_origin is None:
+        return None
+    units, t0_days = time_origin
+    m = re.fullmatch(r"\s*days\s+since\s+(\S+)\s*", units, flags=re.IGNORECASE)
+    if m is None:
+        return None
+    try:
+        ref = datetime.fromisoformat(m.group(1))
+    except ValueError:
+        return None
+    if ref.tzinfo is None:
+        ref = ref.replace(tzinfo=UTC)
+    first = ref + timedelta(days=t0_days)
+    if isinstance(start_time, str):
+        try:
+            st = datetime.fromisoformat(start_time)
+        except ValueError:
+            st = None
+        if st is not None:
+            if st.tzinfo is None:
+                st = st.replace(tzinfo=UTC)
+            if abs((st - first).total_seconds()) <= 1e-3:
+                return start_time, st.timestamp()
+            logger.warning(
+                "%s: start_time %s is %.3f s from the first sample's time %s; "
+                "profile times follow the samples",
+                stem,
+                start_time,
+                (st - first).total_seconds(),
+                first.isoformat(),
+            )
+    return first.isoformat(), first.timestamp()
 
 
 def _extract_one(args: tuple) -> tuple[str, int]:

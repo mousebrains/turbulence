@@ -146,6 +146,18 @@ DECONV_DILATE_TAU = 3.0
 # in a speed input spreads either side by roughly the smoothing time constant.
 SPEED_DILATE_TAU = 1.0
 
+# An rsi-tpw nc (ATOMIX L1) file records every channel's mask, over the whole
+# record and on the channel's own axis, in this attribute of its L1_converted
+# group -- "name=start:length:grade,...;name=..." (:func:`encode_channel_spans`),
+# empty for a clean file -- so the profiles cut from it are masked as the .p
+# route masks them (#235). A file without it predates it and cannot say.
+L1_SPANS_ATTR = "bad_buffer_spans_by_channel"
+
+# Global attribute of a per-profile file cut from such an older L1 file, and of
+# the epsilon/chi products made from one: their bad_buffer_fraction and
+# interpolated_fraction are NaN, unknown, never 0, which would read as clean.
+UNKNOWN_ATTR = "bad_buffer_spans_unknown"
+
 
 def sample_masks(
     report: Mapping[str, Any],
@@ -199,6 +211,33 @@ def sample_masks(
         if mask.any():
             out[name] = mask
     return out
+
+
+def channel_masks(pf: Any) -> dict[str, np.ndarray]:
+    """Each channel's :func:`sample_masks` mask on the axis *pf* holds it on.
+
+    Re-expressed on each channel's OWN written axis so the per-profile writer
+    can slice them exactly like the data. Needed because detection runs
+    pre-deconvolution, which can move a channel between the two axes, so the
+    detection axis and the written axis are not always the same one. *pf* is
+    a PFile or a duck-typed shim (no ``bad_buffer_report``: no masks).
+    """
+    masks: dict[str, np.ndarray] = {}
+    for name, m in sample_masks(
+        getattr(pf, "bad_buffer_report", {}),
+        len(pf.t_fast),
+        len(pf.t_slow),
+        fs_fast=pf.fs_fast,
+        fs_slow=pf.fs_slow,
+    ).items():
+        arr = pf.channels.get(name)
+        if arr is None:
+            continue
+        if len(arr) == len(pf.t_fast) and m.size == len(pf.t_slow):
+            m = expand_to_fast(m, pf.t_slow, pf.t_fast)
+        if m.size == len(arr):
+            masks[name] = m
+    return masks
 
 
 def repair(values: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -460,6 +499,25 @@ def decode_spans(text: str, n: int) -> np.ndarray:
         if 0 <= start < n and length > 0 and grade in (INTERPOLATED, DROPPED):
             mask[start : min(start + length, n)] = grade
     return mask
+
+
+def encode_channel_spans(masks: Mapping[str, np.ndarray]) -> str:
+    """:data:`L1_SPANS_ATTR`'s value: ``"name=<encode_spans>;..."``, clean channels left out."""
+    return ";".join(f"{name}={encode_spans(m)}" for name, m in masks.items() if m.any())
+
+
+def decode_channel_spans(text: str) -> dict[str, str]:
+    """Inverse of :func:`encode_channel_spans`, to span text per channel.
+
+    The name is everything before the LAST ``=``: span text holds none, and a
+    channel name read from an INI line could.
+    """
+    out: dict[str, str] = {}
+    for part in str(text or "").split(";"):
+        name, sep, spans = part.rpartition("=")
+        if sep and name.strip():
+            out[name.strip()] = spans.strip()
+    return out
 
 
 def window_fractions(

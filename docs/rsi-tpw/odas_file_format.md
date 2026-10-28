@@ -239,9 +239,10 @@ of every channel's samples were header words, and everything after #13 was
   never used as data) and reported, on every channel, as a bad-buffer span,
   so `odas_tpw.rsi.bad_buffer` drops the epsilon/chi windows it touches:
   about 70 s per rebuilt record, because a span on `P_dP` is dilated forward
-  by three deconvolution time constants (20.6 s on SN 156). Consumers that do
-  not read the report (`rsi-tpw nc`, fp07-cal, mr-clocksync, perturb's speed,
-  hotel and CTD steps) see the interpolated counts across the slot.
+  by three deconvolution time constants (20.6 s on SN 156). `rsi-tpw nc`
+  records the spans in its L1 file for `rsi-tpw prof` to carry on. Consumers
+  that do not read the report (fp07-cal, mr-clocksync, perturb's speed, hotel
+  and CTD steps) see the interpolated counts across the slot.
   `PFile.framing_report` lists the irregular records, lost headers, rebuilt
   slots and their duration, and the trailing words dropped; one warning
   replaces the three misleading ones. A whole record followed by a remnant

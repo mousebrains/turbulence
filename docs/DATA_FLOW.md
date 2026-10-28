@@ -226,9 +226,10 @@ stacks into a multi-profile dataset.
 
 ## Modular commands
 
-The modular commands (`nc`, `prof`, `eps`, `chi`) can be run independently
-and accept input at any pipeline stage (.p files, full-record .nc, or
-per-profile .nc).
+The modular commands (`nc`, `prof`, `eps`, `chi`) can be run independently.
+`prof` takes .p files or full-record .nc; `eps` and `chi` take .p files or
+per-profile .nc, and refuse a full-record `rsi-tpw nc` file with a pointer to
+`prof`.
 
 ### `rsi-tpw cutp` — Copy debug records
 
@@ -260,12 +261,13 @@ units.  This is the starting point for downstream modular commands.
 ```
 
 Detects profiles by pressure/fall-rate criteria and writes one NetCDF per
-profile.
+profile. From an `rsi-tpw nc` file the profiles carry the channels, names and
+attributes of profiles cut from its .p file (#235; see the CLI reference).
 
 ### `rsi-tpw eps` — Compute epsilon
 
 ```
-.P, .nc, or per-profile .nc → L1→L2→L3→L4 → *_eps.nc per profile
+.P or per-profile .nc → L1→L2→L3→L4 → *_eps.nc per profile
 ```
 
 Runs the SCOR-160 shear spectral processing chain and writes per-profile
@@ -274,7 +276,7 @@ epsilon files.  Supports parallel processing (`-j N`).
 ### `rsi-tpw chi` — Compute chi
 
 ```
-.P, .nc, or per-profile .nc → L2_chi→L3_chi→L4_chi → *_chi.nc per profile
+.P or per-profile .nc → L2_chi→L3_chi→L4_chi → *_chi.nc per profile
 ```
 
 Optionally reads epsilon files from `--epsilon-dir` for Method 1.

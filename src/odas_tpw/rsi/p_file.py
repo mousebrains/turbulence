@@ -44,6 +44,14 @@ V1_PROVENANCE_KEYS = (
     "translated_on",
 )
 
+# channel_info["comment"] of every shear channel (#104 U1-1; see the conversion
+# loop in PFile). The L1 reader gives a restored shear channel the same one.
+SHEAR_INTERMEDIATE_COMMENT = (
+    "un-normalized ODAS shear intermediate; still missing the "
+    "/speed^2 fall-rate normalization applied downstream in the "
+    "epsilon/chi path (physical velocity shear, s-1, only after)"
+)
+
 # 0-indexed word positions (TN-051 rev. 2026-01-12 Table 3 uses 1-indexed)
 _H = {
     "file_number": 0,
@@ -1332,11 +1340,7 @@ class PFile:
             # state CF-legally in a free-text ``comment`` so a reader of the
             # per-profile NetCDF does not treat it as final shear. (#104 U1-1.)
             if ch_type == "shear":
-                self.channel_info[ch_name]["comment"] = (
-                    "un-normalized ODAS shear intermediate; still missing the "
-                    "/speed^2 fall-rate normalization applied downstream in the "
-                    "epsilon/chi path (physical velocity shear, s-1, only after)"
-                )
+                self.channel_info[ch_name]["comment"] = SHEAR_INTERMEDIATE_COMMENT
 
     def _framing_ok(self, records: np.ndarray) -> bool:
         """True when every data record read at the fixed record size starts

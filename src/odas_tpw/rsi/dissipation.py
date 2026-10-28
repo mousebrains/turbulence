@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from odas_tpw.rsi.p_file import PFile
 
 from odas_tpw._version_info import stamp_provenance
+from odas_tpw.rsi.bad_buffer import UNKNOWN_ATTR
 from odas_tpw.rsi.helpers import _build_l1data_from_channels, load_channels, prepare_profiles
 from odas_tpw.scor160.io import BAD_MAX_INTERP_FRACTION as MAX_INTERP_FRACTION
 from odas_tpw.scor160.l4 import (
@@ -491,6 +492,11 @@ def _compute_epsilon(
                         stacklevel=2,
                     )
 
+        if UNKNOWN_ATTR in data["metadata"]:
+            # The source could not say where its bad buffers were (#235).
+            bad_frac_out = np.full((n_sh, n_spec), np.nan)
+            interp_frac_out = np.full((n_sh, n_spec), np.nan)
+
         # F vector (constant across windows) — broadcast view is read-only
         # but suffices for xarray storage and NetCDF serialization.
         F = np.arange(n_freq) * fs_fast / fft_length
@@ -598,8 +604,8 @@ def get_diss(
     Parameters
     ----------
     source : PFile, str, or Path
-        A PFile object, .p file path, full-record .nc,
-        or per-profile .nc.
+        A PFile object, .p file path, or per-profile .nc (a full-record
+        ATOMIX L1 .nc is refused: extract its profiles first).
     fft_length : int
         FFT segment length in samples. Default: 1024 (2 s at 512 Hz).
     diss_length : int or None
@@ -933,7 +939,7 @@ def compute_diss_file(
     Parameters
     ----------
     source_path : str or Path
-        Input file (.p, full-record .nc, or per-profile .nc).
+        Input file (.p or per-profile .nc; not a full-record ATOMIX L1 .nc).
     output_dir : str or Path
         Output directory for epsilon .nc files.
     **diss_kwargs
