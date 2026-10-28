@@ -48,9 +48,18 @@ class FitResult:
     lag: float = float("nan")
     corr: float = float("nan")
     kept: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=bool))
+    fixed_terms: dict[str, float] | None = None
+    """The ``beta`` terms when the shape was HELD FIXED and only ``t_0`` fitted.
+
+    ``None`` for an ordinary fit.  Kept in config form so that
+    :attr:`config_equivalent` hands them back verbatim: ``1/(1/beta)`` need not
+    round-trip in float64, and the fixed shape must be the prior's, bit for bit.
+    """
 
     @property
     def config_equivalent(self) -> dict[str, float]:
+        if self.fixed_terms is not None:
+            return {"t_0": 1.0 / float(self.coeffs[0]), **self.fixed_terms}
         return coeffs_to_config(self.coeffs)
 
     def apply(self, L: np.ndarray) -> np.ndarray:
@@ -59,6 +68,35 @@ class FitResult:
 
 def _design(u: np.ndarray, order: int) -> np.ndarray:
     return np.column_stack([u**i for i in range(order + 1)])
+
+
+_BETA_KEYS = ("beta_1", "beta_2", "beta_3")
+
+
+def fixed_shape_poly(fixed_terms: dict[str, float]) -> np.ndarray:
+    """``{beta_1, ...}`` -> ``[0, 1/beta_1, ...]``: the shape with a zero offset.
+
+    ``1.0 / beta`` exactly as :attr:`registry.Calibration.poly` and the reader
+    (``config_to_coeffs``) compute it, so a fit with this shape held fixed
+    reproduces bit for bit once its ``t_0`` is patched next to these betas.
+    """
+    keys = [k for k in _BETA_KEYS if k in fixed_terms]
+    if not keys or keys != list(_BETA_KEYS[: len(keys)]) or set(fixed_terms) - set(keys):
+        raise ValueError(
+            f"a fixed shape needs consecutive beta_1..beta_n and nothing else, got "
+            f"{sorted(fixed_terms)}"
+        )
+    return np.array([0.0] + [1.0 / float(fixed_terms[k]) for k in keys], dtype=np.float64)
+
+
+def higher_terms(L: np.ndarray, coeffs: np.ndarray) -> np.ndarray:
+    """``sum_{i>=1} a_i L^i``: everything but the offset."""
+    out = np.zeros_like(L, dtype=np.float64)
+    for i, a in enumerate(coeffs):
+        if i == 0:
+            continue
+        out = out + a * L**i
+    return out
 
 
 def _uncenter(c: np.ndarray, center: float, scale: float) -> np.ndarray:
@@ -79,6 +117,7 @@ def fit_calibration(
     robust: bool = True,
     robust_sigma: float = 4.0,
     robust_iters: int = 3,
+    fixed_terms: dict[str, float] | None = None,
 ) -> FitResult:
     """Least-squares Steinhart-Hart fit over pooled pairs.
 
@@ -87,51 +126,72 @@ def fit_calibration(
     badly conditioned well before the higher-order terms stop being
     *statistically* meaningful, and a fit can be numerically junk while looking
     entirely healthy.
+
+    *fixed_terms* (``{beta_1, ...}`` in config form, e.g. a bead's prior from
+    the calibration sheet) holds the shape fixed and fits ``t_0`` alone, with
+    the same robust iteration.  *order* is then the shape's and is ignored.  An
+    offset needs almost no temperature range, so neither does this fit.
     """
+    shape = None if fixed_terms is None else fixed_shape_poly(fixed_terms)
+    if shape is not None:
+        order = shape.size - 1
     if order < 1 or order > 3:
         raise ValueError(f"order must be 1..3, got {order}")
+    # Fitted polynomial coefficients: all of them, or only the offset.
+    n_poly = order + 1 if shape is None else 1
     n_all = len(pairs)
-    if n_all < order + 2:
+    if n_all < n_poly + 1:
         raise ValueError(
             f"{pairs.channel}: {n_all} pairs is too few for an order-{order} fit"
         )
 
     L = np.asarray(pairs.L, dtype=np.float64)
     y = 1.0 / (np.asarray(pairs.T_ref, dtype=np.float64) + 273.15)
+    if shape is not None:
+        y = y - higher_terms(L, shape)
 
     center = float(np.mean(L))
     scale = float(np.std(L))
-    if not np.isfinite(scale) or scale == 0:
+    if shape is not None:
+        # The offset column is ones whatever the spread: an L that hardly
+        # moves is no obstacle to fitting an offset.
+        center, scale = 0.0, 1.0
+    elif not np.isfinite(scale) or scale == 0:
         raise ValueError(f"{pairs.channel}: L has zero spread; nothing to fit")
     u = (L - center) / scale
+    d_order = order if shape is None else 0
 
     keep = np.ones(n_all, dtype=bool)
-    coeffs_u = np.zeros(order + 1)
+    coeffs_u = np.zeros(n_poly)
     cond = float("nan")
     for _ in range(robust_iters if robust else 1):
-        X = _design(u[keep], order)
+        X = _design(u[keep], d_order)
         cond = float(np.linalg.cond(X))
         coeffs_u, *_ = np.linalg.lstsq(X, y[keep], rcond=None)
         if not robust:
             break
-        resid = y - _design(u, order) @ coeffs_u
+        resid = y - _design(u, d_order) @ coeffs_u
         mad = float(np.median(np.abs(resid[keep] - np.median(resid[keep]))))
         sigma = 1.4826 * mad
         if sigma <= 0 or not np.isfinite(sigma):
             break
         new_keep = np.abs(resid) <= robust_sigma * sigma
-        if new_keep.sum() < order + 2 or np.array_equal(new_keep, keep):
+        if new_keep.sum() < n_poly + 1 or np.array_equal(new_keep, keep):
             break
         keep = new_keep
     else:
         # Loop exhausted with `keep` freshly updated but never refitted: the
         # returned coefficients would describe the PREVIOUS keep set while n /
         # rms_K describe the final one (N3). One last solve reconciles them.
-        X = _design(u[keep], order)
+        X = _design(u[keep], d_order)
         cond = float(np.linalg.cond(X))
         coeffs_u, *_ = np.linalg.lstsq(X, y[keep], rcond=None)
 
-    coeffs = _uncenter(coeffs_u, center, scale)
+    if shape is None:
+        coeffs = _uncenter(coeffs_u, center, scale)
+    else:
+        coeffs = shape.copy()
+        coeffs[0] = float(coeffs_u[0])
 
     T_pred = temperature(L, coeffs)
     resid_K = np.asarray(pairs.T_ref, dtype=np.float64) - T_pred
@@ -145,7 +205,7 @@ def fit_calibration(
         )
 
     bracket = (float("nan"), float("nan"))
-    if order == 1:
+    if order == 1 and shape is None:
         bracket = _beta1_bracket(L[keep], y[keep])
 
     return FitResult(
@@ -166,6 +226,9 @@ def fit_calibration(
         lag=pairs.lag,
         corr=pairs.corr,
         kept=keep,
+        fixed_terms=None if fixed_terms is None else {
+            k: float(fixed_terms[k]) for k in _BETA_KEYS if k in fixed_terms
+        },
     )
 
 
@@ -238,50 +301,150 @@ def select_order(
     test exists to catch (its t-statistic of 10 would have called it
     "significant").
     """
-    T = np.asarray(pairs.T_ref, dtype=np.float64)
-    scores: dict[int, dict] = {}
-    fin = T[np.isfinite(T)]
-    if fin.size == 0:
+    folds = temperature_folds(pairs)
+    if folds is None:
         return min(candidates), {}
-    mid = 0.5 * (float(np.min(fin)) + float(np.max(fin)))
-    folds = ((mid <= T, mid > T), (mid > T, mid <= T))
+    scores: dict[int, dict] = {}
 
     def _fit(sub: PairSet, order: int):
         """The estimator actually shipped for this configuration."""
-        if use_geometry:
-            from odas_tpw.fp07cal.geometry import joint_fit
-
-            f, _geo = joint_fit(sub, order=order, robust=robust)
-            return f
-        return fit_calibration(sub, order=order, robust=robust)
+        return shipped_fit(sub, order=order, robust=robust, use_geometry=use_geometry)
 
     for order in candidates:
-        errs = []
         try:
             in_sample = _fit(pairs, order).rms_K
         except Exception:
             continue
-        for train, test in folds:
-            if int(train.sum()) < order + 5 or int(test.sum()) < 10:
-                continue
-            try:
-                sub = _subset(pairs, train)
-                f = _fit(sub, order)
-                # Held-out prediction from the CALIBRATION part alone: the
-                # geometry terms are per-sample corrections carried separately
-                # and identically across orders, so they cancel in the
-                # comparison; what is being selected is the polynomial.
-                pred = f.apply(np.asarray(pairs.L, dtype=np.float64)[test])
-                errs.append(float(np.sqrt(np.nanmean((T[test] - pred) ** 2))))
-            except Exception:
-                continue
-        if errs:
-            scores[order] = {"held_out_K": float(np.mean(errs)),
+        held = held_out_error(
+            pairs, lambda sub, o=order: _fit(sub, o), folds=folds, min_train=order + 5
+        )
+        if held is not None:
+            scores[order] = {"held_out_K": held,
                              "in_sample_K": float(in_sample)}
     if not scores:
         return min(candidates), {}
     best = min(scores, key=lambda o: scores[o]["held_out_K"])
     return best, scores
+
+
+def shipped_fit(
+    pairs: PairSet,
+    *,
+    order: int = 1,
+    robust: bool = True,
+    use_geometry: bool = False,
+    fixed_terms: dict[str, float] | None = None,
+) -> FitResult:
+    """The calibration part of the estimator ``fp07-cal fit`` ships.
+
+    :func:`~odas_tpw.fp07cal.geometry.joint_fit` when the sensor-geometry term
+    is on, else :func:`fit_calibration`; with *fixed_terms*, the same with the
+    shape held fixed.  Held-out scores must come from this, or the choice they
+    make can be optimal for a model nobody runs.
+    """
+    if use_geometry:
+        from odas_tpw.fp07cal.geometry import joint_fit
+
+        f, _geo = joint_fit(pairs, order=order, robust=robust, fixed_terms=fixed_terms)
+        return f
+    return fit_calibration(pairs, order=order, robust=robust, fixed_terms=fixed_terms)
+
+
+def temperature_folds(pairs: PairSet) -> tuple | None:
+    """``((train, test), (train, test))``: the warm and cold halves of the range.
+
+    Split at the middle of the temperature RANGE, not the median (see
+    :func:`select_order`).  ``None`` when no reference temperature is finite.
+    """
+    T = np.asarray(pairs.T_ref, dtype=np.float64)
+    fin = T[np.isfinite(T)]
+    if fin.size == 0:
+        return None
+    mid = 0.5 * (float(np.min(fin)) + float(np.max(fin)))
+    return ((mid <= T, mid > T), (mid > T, mid <= T))
+
+
+def held_out_error(
+    pairs: PairSet,
+    fitter,
+    *,
+    folds: tuple | None = None,
+    min_train: int,
+) -> float | None:
+    """Mean over the temperature folds of the rms error predicting the held-out half [K].
+
+    *fitter* maps a training :class:`PairSet` to a :class:`FitResult`.  A fold
+    whose training half has fewer than *min_train* pairs, or whose test half
+    has fewer than 10, is skipped, as is a fold whose fit fails; ``None`` when
+    no fold is left.  This is the one held-out estimator: :func:`select_order`
+    scores the polynomial orders with it, and the prior's fixed shape
+    (``fit.prior``) is scored with it as one more candidate.
+    """
+    folds = temperature_folds(pairs) if folds is None else folds
+    if folds is None:
+        return None
+    T = np.asarray(pairs.T_ref, dtype=np.float64)
+    errs = []
+    for train, test in folds:
+        if int(train.sum()) < min_train or int(test.sum()) < 10:
+            continue
+        try:
+            sub = _subset(pairs, train)
+            f = fitter(sub)
+            # Held-out prediction from the CALIBRATION part alone: the
+            # geometry terms are per-sample corrections carried separately
+            # and identically across candidates, so they cancel in the
+            # comparison; what is being selected is the polynomial.
+            pred = f.apply(np.asarray(pairs.L, dtype=np.float64)[test])
+            errs.append(float(np.sqrt(np.nanmean((T[test] - pred) ** 2))))
+        except Exception:
+            continue
+    return float(np.mean(errs)) if errs else None
+
+
+def held_out_errors(
+    pairs: PairSet,
+    fitters: dict,
+    *,
+    min_train: int,
+    folds: tuple | None = None,
+) -> tuple[dict, int]:
+    """:func:`held_out_error` for several candidates on the SAME folds.
+
+    *fitters* maps a name to a fitter as in :func:`held_out_error`.  A fold is
+    used only if every candidate can be fitted on it and predicts a finite
+    error; otherwise it is dropped for all of them, so no candidate is scored
+    on a fold another one was spared.  Returns ``({name: rms or None}, folds
+    used)``.
+    """
+    folds = temperature_folds(pairs) if folds is None else folds
+    names = list(fitters)
+    if folds is None:
+        return {n: None for n in names}, 0
+    T = np.asarray(pairs.T_ref, dtype=np.float64)
+    L = np.asarray(pairs.L, dtype=np.float64)
+    errs: dict[str, list[float]] = {n: [] for n in names}
+    used = 0
+    for train, test in folds:
+        if int(train.sum()) < min_train or int(test.sum()) < 10:
+            continue
+        sub = _subset(pairs, train)
+        fold: dict[str, float] = {}
+        for n in names:
+            try:
+                pred = fitters[n](sub).apply(L[test])
+                e = float(np.sqrt(np.nanmean((T[test] - pred) ** 2)))
+            except Exception:
+                break
+            if not np.isfinite(e):
+                break
+            fold[n] = e
+        if len(fold) != len(names):
+            continue
+        used += 1
+        for n, e in fold.items():
+            errs[n].append(e)
+    return {n: (float(np.mean(v)) if v else None) for n, v in errs.items()}, used
 
 
 def _subset(pairs: PairSet, mask: np.ndarray) -> PairSet:

@@ -36,13 +36,22 @@ bead's widest-range calibration not flagged ``short``, ``fast-descent`` or
 temperature range, and how far its most recent calibration sits from the prior.
 The loader also refuses coefficients that cannot describe an FP07 over the
 stated range (:class:`PlausibilityError`).  It returns exactly what a ``t_0``-only refit
-with the shape held fixed would need --- the fixed higher-order terms, the
-bridge constants that define their ``L``, a starting ``t_0`` with its
-uncertainty, and where the shape is constrained --- without doing that fit.
+with the shape held fixed needs --- the fixed higher-order terms, the bridge
+constants that define their ``L``, a starting ``t_0`` with its uncertainty, and
+where the shape is constrained.  :mod:`odas_tpw.fp07cal.prior` does that refit
+inside ``fp07-cal fit`` (``fit.prior``); an entry recorded from it has
+``order_choice: prior`` and names its source in ``fit.shape_from``, and never
+supplies a prior itself.
+
+:func:`add_entry` (``fp07-cal registry add``) records a fit: it inserts the
+entry as text in the sheet's own layout rather than re-dumping the YAML, so the
+hand-written comments and folded prose survive, and validates the whole sheet
+before writing.
 """
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import io
 import math
@@ -133,13 +142,21 @@ FLAGS: dict[str, str] = {
 ORDER_CHOICES: dict[str, str] = {
     "auto": "least held-out error, split on temperature (fp07-cal `fit.order: auto`)",
     "fixed": "set by hand",
+    "prior": (
+        "the shape (beta terms) held fixed from the bead's calibration named in "
+        "`fit.shape_from` and only t_0 fitted (fp07-cal `fit.prior`): kept over the full "
+        "fit by held-out error within a tie band, a range narrower than the shape span, "
+        "or no plausible full fit, or forced by `fit.prior.mode: offset`"
+    ),
 }
 
 PRIOR_RULE = (
     "The coefficients, shape and t_0 alike, come from the bead's widest-range "
     "unflagged calibration: the widest fitted temperature range among calibrations "
     "not flagged `short`, `fast-descent` or `episode` (ties go to the more recent), "
-    "counting only calibrations that ended by `as_of` when one is given. With a target "
+    "counting only calibrations that ended by `as_of` when one is given. A calibration "
+    "whose shape was itself held fixed from a prior (order `prior`) never supplies one: "
+    "its shape was not fitted over its range. With a target "
     "instrument (serial; 'SN' and leading zeros are ignored) and optionally a channel "
     "(any case), the widest unflagged calibration on that instrument and channel is "
     "preferred. If there is none, the bead's widest unflagged calibration is used, and "
@@ -226,14 +243,16 @@ class FitSettings:
     lag_s: float
     reference_pole_s: float
     software_version: str
+    shape_from: str | None = None  # order_choice "prior": the entry the shape came from
 
 
 @dataclass(frozen=True)
 class Uncertainty:
-    fit_rms_mK: float
+    fit_rms_mK: float  # over the pairs the robust fit KEPT
     held_out_mK: float
     block_sd_mK: float | None
     n_blocks: int
+    rms_all_mK: float | None = None  # over EVERY valid pair (fits made with fit.prior)
 
 
 @dataclass(frozen=True)
@@ -326,6 +345,8 @@ class Calibration:
                 "held_out_mK": self.uncertainty.held_out_mK,
                 "block_sd_mK": self.uncertainty.block_sd_mK,
                 "n_blocks": self.uncertainty.n_blocks,
+                **({} if self.uncertainty.rms_all_mK is None
+                   else {"rms_all_mK": self.uncertainty.rms_all_mK}),
             },
             "valid_T_degC": list(self.valid_T),
             "flags": list(self.flags),
@@ -335,6 +356,8 @@ class Calibration:
             out["instrument"]["platform"] = self.instrument.platform
         if self.reference.note is not None:
             out["reference"]["note"] = self.reference.note
+        if self.fit.shape_from is not None:
+            out["fit"]["shape_from"] = self.fit.shape_from
         return out
 
 
@@ -484,12 +507,17 @@ class Registry:
         instrument: str | None = None,
         channel: str | None = None,
         as_of: date | datetime | str | None = None,
+        excluding: tuple[datetime, datetime] | None = None,
     ) -> Prior:
         """A starting calibration for a fresh deployment of bead *serial*.
 
         *instrument* (a serial such as ``"194"``; ``"SN 194"`` and ``"0194"`` match
         too) and *channel* (``"T1"``, any case) describe where the bead is going;
         *as_of* restricts the evidence to calibrations that had ended by then.
+        *excluding* ``(first, last)`` drops every calibration of the bead whose
+        dates overlap that span: the deployment being fitted (a bead is in one
+        place at a time, so an overlap is that deployment's own entry) must not
+        be its own prior.
 
         The source, in order of preference (see :data:`PRIOR_RULE`):
 
@@ -512,12 +540,28 @@ class Registry:
                     f"no calibration of bead {serial!r} had ended by {as_of}; "
                     f"the first ended {_iso(history[0].last)}"
                 )
+        if excluding is not None:
+            ex_lo, ex_hi = (_datetime(x, "excluding") for x in excluding)
+            considered = [c for c in considered if c.last < ex_lo or c.first > ex_hi]
+            if not considered:
+                raise RegistryError(
+                    f"no calibration of bead {serial!r} outside {_iso(ex_lo)} .. {_iso(ex_hi)}, "
+                    f"the span being fitted"
+                )
         if channel is not None and instrument is None:
             raise RegistryError("a target channel needs a target instrument too")
 
-        unflagged = [c for c in considered if not set(c.flags) & set(DISQUALIFYING_FLAGS)]
+        # A shape held fixed from a prior was not fitted over its own range, so
+        # it cannot be the source of one (its source can).
+        fitted = [c for c in considered if c.fit.order_choice != "prior"]
+        if not fitted:
+            raise RegistryError(
+                f"every calibration of bead {serial!r} considered holds a borrowed shape "
+                f"(order_choice prior); none fitted its own"
+            )
+        unflagged = [c for c in fitted if not set(c.flags) & set(DISQUALIFYING_FLAGS)]
         fallback = not unflagged
-        pool = unflagged or considered
+        pool = unflagged or fitted
         target: Instrument | None = None
         if instrument is not None:
             target = Instrument(model="", serial=_target_serial(instrument),
@@ -663,17 +707,22 @@ def default_path() -> Path:
 
 def load(path: str | Path | None = None) -> Registry:
     """Read and validate the sheet.  Raises :class:`RegistryError` on any defect."""
-    from ruamel.yaml import YAML
-    from ruamel.yaml.error import YAMLError
-
     p = Path(path) if path is not None else default_path()
     if not p.exists():
         raise RegistryError(f"{p}: no such file")
+    return loads(p.read_text(encoding="utf-8"), source=p)
+
+
+def loads(text: str, *, source: Path | None = None) -> Registry:
+    """Validate the sheet from its text (what :func:`load` reads from disk)."""
+    from ruamel.yaml import YAML
+    from ruamel.yaml.error import YAMLError
+
     try:
-        data = YAML(typ="safe", pure=True).load(p.read_text(encoding="utf-8"))
+        data = YAML(typ="safe", pure=True).load(text)
     except YAMLError as exc:
-        raise RegistryError(f"{p}: not valid YAML ({exc})") from exc
-    return parse(data, source=p)
+        raise RegistryError(f"{source or 'registry'}: not valid YAML ({exc})") from exc
+    return parse(data, source=source)
 
 
 def prior_for(
@@ -702,6 +751,7 @@ def parse(data: object, *, source: Path | None = None) -> Registry:
     cals = [_parse_calibration(r, i, methods) for i, r in enumerate(raw)]
     _check_unique(cals)
     _check_occupancy(cals)
+    _check_shape_sources(cals)
     return Registry(
         schema=SCHEMA,
         transfer=transfer,
@@ -804,7 +854,7 @@ def _parse_calibration(raw: object, i: int, methods: dict[str, str]) -> Calibrat
             raise RegistryError(f"{w}.bridge.{k}: must be positive, got {bridge[k]}")
 
     um = _mapping(m["uncertainty"], f"{w}.uncertainty",
-                  ("fit_rms_mK", "held_out_mK", "block_sd_mK", "n_blocks"))
+                  ("fit_rms_mK", "held_out_mK", "block_sd_mK", "n_blocks"), ("rms_all_mK",))
     n_blocks = _int(um["n_blocks"], f"{w}.uncertainty.n_blocks", minimum=0)
     block_sd = um["block_sd_mK"]
     if block_sd is not None:
@@ -824,6 +874,8 @@ def _parse_calibration(raw: object, i: int, methods: dict[str, str]) -> Calibrat
         held_out_mK=_num(um["held_out_mK"], f"{w}.uncertainty.held_out_mK", nonneg=True),
         block_sd_mK=block_sd,
         n_blocks=n_blocks,
+        rms_all_mK=(None if um.get("rms_all_mK") is None
+                    else _num(um["rms_all_mK"], f"{w}.uncertainty.rms_all_mK", nonneg=True)),
     )
     _check_order_choice(fit, uncertainty, w)
 
@@ -886,7 +938,7 @@ def _parse_reference(raw: object, w: str) -> Reference:
 def _parse_fit(raw: object, w: str, methods: dict[str, str]) -> FitSettings:
     m = _mapping(raw, w, ("method", "pooled", "n_files", "n_profiles", "n_pairs", "order",
                           "order_choice", "robust", "geometry", "lag_s", "reference_pole_s",
-                          "software_version"), ("held_out_by_order_mK",))
+                          "software_version"), ("held_out_by_order_mK", "shape_from"))
     method = _str(m["method"], f"{w}.method")
     if method not in methods:
         raise RegistryError(f"{w}.method: {method!r} is not defined under `methods`")
@@ -912,6 +964,17 @@ def _parse_fit(raw: object, w: str, methods: dict[str, str]) -> FitSettings:
         raise MissingKeyError(
             f"{w}: order_choice auto needs held_out_by_order_mK (the record's "
             f"order_selection) so the choice can be checked; use `fixed` if it is unknown"
+        )
+    shape_from = _opt_str(m.get("shape_from"), f"{w}.shape_from")
+    if choice == "prior" and shape_from is None:
+        raise MissingKeyError(
+            f"{w}: order_choice prior needs shape_from, the deployment of this bead's "
+            f"calibration whose beta terms were held fixed"
+        )
+    if choice != "prior" and shape_from is not None:
+        raise OrderMismatchError(
+            f"{w}.shape_from is only for order_choice prior (the shape held fixed); "
+            f"order_choice is {choice}"
         )
     geo_raw = m["geometry"]
     geometry: dict[str, float] | None
@@ -939,6 +1002,7 @@ def _parse_fit(raw: object, w: str, methods: dict[str, str]) -> FitSettings:
         lag_s=_num(m["lag_s"], f"{w}.lag_s"),
         reference_pole_s=_num(m["reference_pole_s"], f"{w}.reference_pole_s", nonneg=True),
         software_version=_str(m["software_version"], f"{w}.software_version"),
+        shape_from=None if shape_from is None else " ".join(shape_from.split()),
     )
 
 
@@ -976,7 +1040,10 @@ def _parse_coefficients(raw: object, w: str, order: int) -> dict[str, float]:
 
 def _check_order_choice(fit: FitSettings, unc: Uncertainty, w: str) -> None:
     held = fit.held_out_by_order_mK
-    if held is None:
+    if held is None or fit.order_choice == "prior":
+        # With the shape held fixed, held_out_mK is the offset-only fit's own
+        # error, and held_out_by_order_mK (optional) the full fits' it was
+        # weighed against; `fit.prior.mode: offset` may have forced the choice.
         return
     if fit.order not in held:
         raise OrderMismatchError(
@@ -1006,6 +1073,42 @@ def _check_unique(cals: list[Calibration]) -> None:
                 f"{c.bead} / {c.deployment}; one entry per bead and deployment"
             )
         seen[key] = i
+
+
+def _check_shape_sources(cals: list[Calibration]) -> None:
+    """A borrowed shape must name its source, and be that source's shape exactly.
+
+    The source is another calibration of the same bead that fitted its own
+    shape (one hop, no chains), and its beta terms must equal this entry's: an
+    entry claiming a prior's shape while carrying different betas would record
+    a provenance that is not true.
+    """
+    by_key = {(c.bead, _norm_label(c.deployment)): c for c in cals}
+    for c in cals:
+        if c.fit.shape_from is None:
+            continue
+        w = f"{c.bead} / {c.deployment}: fit.shape_from"
+        src = by_key.get((c.bead, _norm_label(c.fit.shape_from)))
+        if src is None:
+            raise MissingKeyError(
+                f"{w} names {c.fit.shape_from!r}, which is not a calibration of {c.bead} "
+                f"in this sheet"
+            )
+        if src is c:
+            raise OrderMismatchError(f"{w} names the entry itself")
+        if src.fit.order_choice == "prior":
+            raise OrderMismatchError(
+                f"{w} names {src.deployment}, whose shape is itself borrowed (from "
+                f"{src.fit.shape_from}); name the calibration that fitted it"
+            )
+        mine = {k: v for k, v in c.coefficients.items() if k != "t_0"}
+        theirs = {k: v for k, v in src.coefficients.items() if k != "t_0"}
+        if mine.keys() != theirs.keys() or any(
+            abs(mine[k] - theirs[k]) > 1e-12 * abs(theirs[k]) for k in mine
+        ):
+            raise OrderMismatchError(
+                f"{w}: the beta terms {mine} are not those of {src.deployment} {theirs}"
+            )
 
 
 def _check_occupancy(cals: list[Calibration]) -> None:
@@ -1191,11 +1294,28 @@ def curve_difference(a: Calibration, b: Calibration, T_degC: float) -> float:
     resistance ratio through different bridges, so the difference then
     includes the cross-instrument effect.
     """
-    L = _L_at(b.poly, T_degC)
+    try:
+        return poly_difference_mK(a.poly, b.poly, T_degC)
+    except ValueError as exc:
+        raise RegistryError(f"{b.bead} / {b.deployment} never reads {T_degC} degC") from exc
+
+
+def poly_difference_mK(a: np.ndarray, b: np.ndarray, T_degC: float) -> float:
+    """Curve *a* minus curve *b* [mK] at the L where *b* reads *T_degC*.
+
+    Both are ``[a0, a1, ...]`` with ``1/T_K = sum a_i L^i``.  ``ValueError``
+    when *b* never reads *T_degC* on its physical branch.
+    """
+    L = _L_at(b, T_degC)
     if L is None:
-        raise RegistryError(f"{b.bead} / {b.deployment} never reads {T_degC} degC")
+        raise ValueError(f"the curve never reads {T_degC} degC")
     La = np.array([L])
-    return float((a.temperature(La)[0] - b.temperature(La)[0]) * 1e3)
+    return float((temperature(La, a)[0] - temperature(La, b)[0]) * 1e3)
+
+
+def is_bead_serial(s: object) -> bool:
+    """A Rockland FP07 serial (``T1592``), not the placeholder ``T`` or ``(no SN)``."""
+    return isinstance(s, str) and _BEAD_RE.fullmatch(s) is not None
 
 
 def _check_curve(poly: np.ndarray, valid_T: tuple[float, float], where: str) -> None:
@@ -1266,11 +1386,11 @@ CSV_COLUMNS = (
     "first", "last", "duration_days",
     "reference_kind", "reference_serial", "reference_cal_date", "reference_cal_age_years",
     "method", "pooled", "n_files", "n_profiles", "n_pairs", "order", "order_choice",
-    "held_out_order1_mK", "held_out_order2_mK", "held_out_order3_mK",
+    "shape_from", "held_out_order1_mK", "held_out_order2_mK", "held_out_order3_mK",
     "robust", "geometry_dz_m", "geometry_tau_s", "lag_s", "reference_pole_s",
     "t_0", "beta_1", "beta_2", "beta_3",
     "a", "b", "g", "e_b", "adc_fs", "adc_bits",
-    "fit_rms_mK", "held_out_mK", "block_sd_mK", "n_blocks",
+    "fit_rms_mK", "rms_all_mK", "held_out_mK", "block_sd_mK", "n_blocks",
     "T_min_degC", "T_max_degC", "flags", "software_version", "notes",
 )
 
@@ -1318,6 +1438,7 @@ def render_csv(reg: Registry) -> str:
             "n_pairs": c.fit.n_pairs,
             "order": c.fit.order,
             "order_choice": c.fit.order_choice,
+            "shape_from": c.fit.shape_from,
             "held_out_order1_mK": held.get(1),
             "held_out_order2_mK": held.get(2),
             "held_out_order3_mK": held.get(3),
@@ -1333,6 +1454,7 @@ def render_csv(reg: Registry) -> str:
             **{k: c.bridge[k] for k in BRIDGE_KEYS if k != "adc_bits"},
             "adc_bits": int(c.bridge["adc_bits"]),
             "fit_rms_mK": c.uncertainty.fit_rms_mK,
+            "rms_all_mK": c.uncertainty.rms_all_mK,
             "held_out_mK": c.uncertainty.held_out_mK,
             "block_sd_mK": c.uncertainty.block_sd_mK,
             "n_blocks": c.uncertainty.n_blocks,
@@ -1459,10 +1581,15 @@ def render_markdown(reg: Registry) -> str:
     P("**What the uncertainties mean.** Each is a temperature error in mK, measured "
       "against that entry's reference:")
     P("")
-    P("- *rms*: root-mean-square residual of the fit against the reference (in sample).")
+    P("- *rms*: root-mean-square residual of the fit against the reference, in sample, over "
+      "the pairs its robust 4-sigma clip kept. For fits made with `fit.prior` the notes also "
+      "give the rms over every pair (`rms_all_mK`): a shape that does not fit clips the ends "
+      "of the range and looks better over the pairs it kept.")
     P("- *held-out*: rms error predicting the cold half of the range from a fit to the "
       "warm half, and vice versa. It measures how well the shape extrapolates, and it "
-      "chose the order where the order is `auto`.")
+      "chose the order where the order is `auto`. Where the order is `prior`, the shape "
+      "was held fixed from the bead's calibration named in the notes and only `t_0` was "
+      "fitted (`fp07-cal fit` with `fit.prior`); held-out is then that fit's.")
     P("- *block SD*: the deployment is cut into equal-time blocks, each block's `t_0` "
       "offset is refitted with the shape held fixed (fp07-cal's stability check), and "
       "this is the standard deviation of those offsets. It measures how far the "
@@ -1500,9 +1627,16 @@ def render_markdown(reg: Registry) -> str:
       f"{_range(t.settling_days)} days | {_md(t.evidence['settling'])} |")
     P("")
     P("A `t_0`-only refit (the shape held fixed from the prior) removes the first term "
-      "and needs almost no temperature range. `fp07-cal registry show <serial>` prints "
+      "and needs almost no temperature range. `fp07-cal fit` does it when its config has "
+      "a `fit.prior` block. It keeps that refit unless the full fit is clearly better on "
+      "held-out error, and always over a range narrower than the shape span or when no "
+      "full fit is a plausible curve for the bead. It flags a result outside the prior's "
+      "uncertainty over their common range: a possible unrecorded bead swap, reference "
+      "problem or failing bead (see `docs/fp07cal/runbook.md`). "
+      "`fp07-cal registry show <serial>` prints "
       "a bead's prior, with `--instrument`/`--channel` for a different target and "
-      "`--as-of` to use only calibrations that had ended by a date.")
+      "`--as-of` to use only calibrations that had ended by a date. `fp07-cal registry "
+      "add` records a fit here from its `coefficients.json`.")
     P("")
     P("### Flags")
     P("")
@@ -1571,13 +1705,20 @@ def _bead_section(reg: Registry, bead: str) -> list[str]:
           f"{_beta(c, 'beta_3')} | {_g(br['a'])} | {_g(br['b'])} | {_g(br['g'])} | "
           f"{_g(br['e_b'])} | {_g(br['adc_fs'])} | {int(br['adc_bits'])} |")
     notes = [(i, c) for i, c in enumerate(h, start=1)
-             if c.notes or c.reference.note or c.fit.geometry]
+             if c.notes or c.reference.note or c.fit.geometry or c.fit.shape_from
+             or c.uncertainty.rms_all_mK is not None]
     if notes:
         P("")
         P("Notes:")
         P("")
         for i, c in notes:
             parts = []
+            if c.fit.shape_from:
+                parts.append(f"Shape (beta terms) held fixed from {c.fit.shape_from}; only "
+                             f"t_0 was fitted, and held-out is that fit's.")
+            if c.uncertainty.rms_all_mK is not None:
+                parts.append(f"rms over every pair {c.uncertainty.rms_all_mK:.1f} mK (the "
+                             f"rms column is over the pairs the robust fit kept).")
             if c.fit.geometry:
                 g = c.fit.geometry
                 parts.append(f"Sensor geometry fitted jointly: dz = {g['dz_m']:.3f} m, "
@@ -1659,3 +1800,427 @@ def write_views(path: str | Path | None = None) -> list[Path]:
 def stale_views(path: str | Path | None = None) -> list[Path]:
     """Views whose committed text differs from what the sheet renders."""
     return [dst for dst, text in rendered_views(path).items() if not _current(dst, text)]
+
+
+# ------------------------------------------------------------ adding a fit
+class AddError(RegistryError):
+    """A fit that cannot be recorded as given (a missing or contradictory field)."""
+
+
+_BLOCK_ROW = re.compile(r"^\|\s*\d+\s*\|[^|]*\|\s*\d+\s*\|[^|]*\|\s*([+-]?\d+(?:\.\d+)?)\s*±")
+
+
+def block_offsets_from_report(text: str) -> list[float]:
+    """The block offsets [K] in a ``<ch>_report.md``'s temporal-stability table.
+
+    ``coefficients.json`` keeps only the block count, so the block scatter the
+    sheet records comes from the report ``fp07-cal fit`` wrote beside it.
+    """
+    out: list[float] = []
+    in_table = False
+    for line in text.splitlines():
+        if line.startswith("| block | start | profiles | t_0 | offset [K] |"):
+            in_table = True
+            continue
+        if in_table:
+            if line.startswith("|---"):
+                continue
+            m = _BLOCK_ROW.match(line)
+            if not m:
+                break
+            out.append(float(m.group(1)))
+    return out
+
+
+def _epoch_iso(t: object, where: str) -> str:
+    if isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t):
+        raise AddError(f"{where}: expected epoch seconds, got {t!r}")
+    return _iso(datetime.fromtimestamp(float(t), UTC))
+
+
+def entry_from_record(
+    record: dict,
+    channel: str,
+    *,
+    deployment: str,
+    instrument_model: str,
+    method: str,
+    reference_kind: str,
+    reference_serial: str | None,
+    reference_cal_date: str | None,
+    reference_pole_s: float,
+    block_offsets_K: list[float],
+    reference_note: str | None = None,
+    bead: str | None = None,
+    instrument_serial: str | None = None,
+    platform: str | None = None,
+    robust: bool = True,
+    flags: list[str] | tuple[str, ...] = (),
+    notes: str = "",
+    allow_qc_flag: bool = False,
+) -> dict[str, Any]:
+    """One sheet entry, in the YAML's structure, from an ``fp07-cal fit`` record.
+
+    *record* is a ``coefficients.json`` and *channel* one of its channels.
+    Everything the record carries is taken from it; the keyword arguments
+    supply the rest, which has no safe default (the instrument model, the
+    reference's identity, the fit method, the reference pole, the block
+    offsets from the report).  Refuses (:class:`AddError`) a channel the fit
+    refused, a placeholder bead serial, a lag the trust gate rejected without
+    the ``lag-gate-overridden`` flag, a fit its prior QC flagged without
+    *allow_qc_flag*, and a fit with no held-out error for its chosen
+    candidate.  The entry is validated in full by :func:`add_entry`, against
+    the sheet it joins.
+    """
+    from odas_tpw.fp07cal.patch import validate_record
+
+    try:
+        validate_record(record)
+    except ValueError as exc:
+        raise AddError(str(exc)) from exc
+    chans = record["channels"]
+    if channel not in chans:
+        raise AddError(f"{channel}: not in the record (it has {sorted(chans)})")
+    e = chans[channel]
+    if "config_equivalent" not in e:
+        raise AddError(f"{channel}: the fit exported no coefficients ({e.get('error', '?')})")
+    flags = list(flags)
+    if not e.get("lag_trustworthy", True) and "lag-gate-overridden" not in flags:
+        raise AddError(
+            f"{channel}: fp07-cal's lag-trust gate rejected this fit's lag (lag_trustworthy "
+            f"false). Record it only with --flag lag-gate-overridden, and say why in the notes."
+        )
+    prior = e.get("prior") or {}
+    used = prior.get("status") == "used"
+    if used and prior["qc"]["verdict"] == "flag" and not allow_qc_flag:
+        raise AddError(
+            f"{channel}: the fit's QC against the bead's prior flagged it: "
+            f"{prior['qc']['message']} Resolve that first; --allow-qc-flag records it anyway."
+        )
+
+    fitted_bead = prior.get("bead") or None
+    file_sn = str(e.get("probe_sn", "") or "")
+    if bead is None:
+        bead = fitted_bead or file_sn
+        if not fitted_bead and not e.get("probe_sn_trusted", True):
+            raise AddError(
+                f"{channel}: the record's probe serial {file_sn!r} is shared between channels, "
+                f"so it is a placeholder; name the bead with --bead"
+            )
+    elif fitted_bead and bead != fitted_bead:
+        raise AddError(f"{channel}: --bead {bead} contradicts the bead the fit used for its "
+                       f"prior, {fitted_bead}")
+    if not is_bead_serial(bead):
+        raise AddError(f"{channel}: bead serial {bead!r} is a placeholder, not an identity; "
+                       f"name the bead with --bead T<number>")
+
+    inst = _target_serial(
+        instrument_serial if instrument_serial is not None else record["instrument_sn"]
+    )
+    if not inst.isdigit():
+        raise AddError(f"instrument serial {inst!r} is not a number; give --instrument-serial")
+
+    order = int(e["order"])
+    held_full = {int(k): float(v["held_out_K"]) * 1e3
+                 for k, v in (e.get("order_selection") or {}).items()}
+    if used and not held_full:
+        held_full = {int(c["order"]): float(c["held_out_K"]) * 1e3
+                     for c in prior["candidates"].values()
+                     if c["kind"] == "full" and c.get("held_out_K") is not None}
+    shape_from = None
+    held_out: float | None
+    if used and prior["chosen_kind"] == "offset":
+        choice = "prior"
+        shape_from = str(prior["source"]["deployment"])
+        h = prior["candidates"]["prior shape"].get("held_out_K")
+        held_out = None if h is None else float(h) * 1e3
+    elif e.get("order_selection") and held_full.get(order) == min(held_full.values()):
+        choice, held_out = "auto", held_full.get(order)
+    else:
+        # Forced, or (with fit.prior) the held-out-best order was not a plausible
+        # FP07 curve and the next plausible one was kept: not "auto" in the
+        # sheet's sense, which the loader checks is the held-out minimum.
+        choice, held_out = "fixed", held_full.get(order)
+    if held_out is None:
+        raise AddError(
+            f"{channel}: the record has no held-out error for the chosen fit (order {order}, "
+            f"{choice}); refit with fit.order: auto (or a fit.prior block), which scores it"
+        )
+
+    n_blocks = len(block_offsets_K)
+    rec_blocks = (e.get("stability") or {}).get("n_blocks")
+    if rec_blocks is not None and int(rec_blocks) != n_blocks:
+        raise AddError(f"{channel}: the report's block table has {n_blocks} block(s) but the "
+                       f"record says {rec_blocks}; is it the report from the same fit?")
+    block_sd = (round(float(np.std(np.asarray(block_offsets_K) * 1e3, ddof=1)), 2)
+                if n_blocks >= MIN_BLOCKS_FOR_SCATTER else None)
+
+    geo = e.get("geometry")
+    bridge = {k: float(e["bridge"][k]) for k in BRIDGE_KEYS}
+    lo, hi = (float(x) for x in e["T_range"])
+    fit: dict[str, Any] = {
+        "method": method,
+        "pooled": True,
+        "n_files": int(record.get("n_fit_files") or 0),
+        "n_profiles": int(e["n_profiles"]),
+        "n_pairs": int(e["n_pairs"]),
+        "order": order,
+        "order_choice": choice,
+    }
+    if held_full:
+        fit["held_out_by_order_mK"] = {k: round(v, 2) for k, v in sorted(held_full.items())}
+    if shape_from is not None:
+        fit["shape_from"] = shape_from
+    fit.update({
+        "robust": bool(robust),
+        "geometry": False if not geo else {"dz_m": round(float(geo["dz_m"]), 3),
+                                           "tau_s": round(float(geo["tau_s"]), 3)},
+        "lag_s": round(float(e["lag_s"]), 3),
+        "reference_pole_s": round(float(reference_pole_s), 3),
+        "software_version": str(record.get("software_version") or "unknown"),
+    })
+    ref: dict[str, Any] = {"kind": reference_kind, "serial": reference_serial,
+                           "cal_date": reference_cal_date}
+    if reference_note:
+        ref["note"] = " ".join(reference_note.split())
+    inst_d: dict[str, Any] = {"model": instrument_model, "serial": inst, "channel": channel}
+    if platform:
+        inst_d["platform"] = platform
+    entry: dict[str, Any] = {
+        "bead": bead,
+        "deployment": " ".join(deployment.split()),
+        "instrument": inst_d,
+        "first": _epoch_iso(record.get("time_start"), "time_start"),
+        "last": _epoch_iso(record.get("time_end"), "time_end"),
+        "reference": ref,
+        "fit": fit,
+        "coefficients": {k: float(v) for k, v in e["config_equivalent"].items()},
+        "bridge": {**bridge, "adc_bits": int(bridge["adc_bits"])},
+        "uncertainty": {"fit_rms_mK": round(float(e["rms_K"]) * 1e3, 2),
+                        "held_out_mK": round(held_out, 2),
+                        "block_sd_mK": block_sd, "n_blocks": n_blocks},
+        "valid_T_degC": [round(lo, 2), round(hi, 2)],
+    }
+    rms_all = (prior["candidates"].get(prior["choice"], {}).get("rms_all_K") if used else None)
+    if rms_all is not None:
+        entry["uncertainty"]["rms_all_mK"] = round(float(rms_all) * 1e3, 2)
+    if flags:
+        entry["flags"] = flags
+    if notes.strip():
+        entry["notes"] = " ".join(notes.split())
+    return entry
+
+
+_PLAIN_RE = re.compile(r"[A-Za-z][A-Za-z0-9 ._()/+-]*[A-Za-z0-9.)]|[A-Za-z]")
+_YAML_WORDS = {"true", "false", "yes", "no", "on", "off", "null", "y", "n"}
+
+
+def _scalar(v: Any, *, quote: bool = False) -> str:
+    """One YAML scalar in the sheet's style: plain where that is unambiguous."""
+    import json
+
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return _full(v)
+    s = str(v)
+    if (not quote and _PLAIN_RE.fullmatch(s) and s.lower() not in _YAML_WORDS
+            and ": " not in s and " #" not in s):
+        return s
+    return json.dumps(s, ensure_ascii=False)
+
+
+def _flow(d: dict) -> str:
+    return "{" + ", ".join(f"{k}: {_scalar(v)}" for k, v in d.items()) + "}"
+
+
+def _folded(key: str, text: str, indent: int) -> list[str]:
+    import textwrap
+
+    pad = " " * indent
+    body = textwrap.wrap(" ".join(text.split()), width=88 - indent - 2,
+                         break_long_words=False, break_on_hyphens=False)
+    return [f"{pad}{key}: >-"] + [f"{pad}  {line}" for line in body]
+
+
+def entry_yaml(entry: dict[str, Any], indent: int = 2) -> str:
+    """*entry* as text in the sheet's own layout (block style, flow maps for short ones).
+
+    *indent* is the column of the sequence's ``-`` (2 in the repository's sheet).
+    """
+    text = _entry_yaml2(entry)
+    if indent == 2:
+        return text
+    shift = " " * indent
+    return "".join(shift + line[2:] if line.strip() else line
+                   for line in text.splitlines(keepends=True))
+
+
+_TOP_KEY = re.compile(r"[A-Za-z_][\w-]*\s*:")
+_CALS_KEY = re.compile(r"calibrations\s*:\s*(\[\s*\])?\s*(#.*)?")
+_ITEM = re.compile(r"( *)- ")
+
+
+def _insertion_point(lines: list[str]) -> tuple[int, int]:
+    """``(line index, item indent)`` just after the last entry of ``calibrations:``.
+
+    Blank lines and column-0 comments immediately before the next top-level
+    key introduce that key, so the entry goes above them; an INDENTED comment
+    after the last entry belongs to that entry and stays with it.  An empty
+    ``calibrations: []`` is turned into block style in place (*lines* is
+    edited), and its first entry is indented 2.
+    """
+    starts = [i for i, ln in enumerate(lines) if _CALS_KEY.fullmatch(ln.rstrip("\n"))]
+    if len(starts) != 1:
+        raise AddError("the sheet has no block-style `calibrations:` key at column 0 to add to")
+    start = starts[0]
+    if "[" in lines[start]:
+        lines[start] = re.sub(r"\s*\[\s*\]", "", lines[start], count=1)
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if _TOP_KEY.match(lines[i]):
+            end = i
+            break
+    while end > start + 1 and (not lines[end - 1].strip() or lines[end - 1].startswith("#")):
+        end -= 1
+    items = [m.group(1) for ln in lines[start + 1:end] if (m := _ITEM.match(ln))]
+    return end, (len(items[0]) if items else 2)
+
+
+@contextlib.contextmanager
+def _locked(path: Path):
+    """An exclusive lock on a sidecar ``.<name>.lock`` (none where ``fcntl`` is missing)."""
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - not POSIX
+        yield
+        return
+    with open(path.parent / f".{path.name}.lock", "a") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _entry_yaml2(entry: dict[str, Any]) -> str:
+    i, f, r, u = entry["instrument"], entry["fit"], entry["reference"], entry["uncertainty"]
+    out = [f"  - bead: {_scalar(entry['bead'])}",
+           f"    deployment: {_scalar(entry['deployment'])}",
+           "    instrument:",
+           f"      model: {_scalar(i['model'])}",
+           f"      serial: {_scalar(i['serial'], quote=True)}",
+           f"      channel: {_scalar(i['channel'])}"]
+    if "platform" in i:
+        out.append(f"      platform: {_scalar(i['platform'])}")
+    out += [f"    first: {_scalar(entry['first'], quote=True)}",
+            f"    last: {_scalar(entry['last'], quote=True)}",
+            "    reference:",
+            f"      kind: {_scalar(r['kind'])}",
+            f"      serial: {_scalar(r['serial'], quote=True)}",
+            f"      cal_date: {_scalar(r['cal_date'], quote=True)}"]
+    if r.get("note"):
+        out += _folded("note", r["note"], 6)
+    out.append("    fit:")
+    for k, v in f.items():
+        if k == "held_out_by_order_mK" or (k == "geometry" and isinstance(v, dict)):
+            out.append(f"      {k}: {_flow(v)}")
+        else:
+            out.append(f"      {k}: {_scalar(v, quote=k == 'software_version')}")
+    out.append("    coefficients:")
+    out += [f"      {k}: {_scalar(v)}" for k, v in entry["coefficients"].items()]
+    out.append(f"    bridge: {_flow(entry['bridge'])}")
+    out.append("    uncertainty:")
+    out += [f"      {k}: {_scalar(u[k])}"
+            for k in ("fit_rms_mK", "rms_all_mK", "held_out_mK", "block_sd_mK", "n_blocks")
+            if k in u]
+    lo, hi = entry["valid_T_degC"]
+    out.append(f"    valid_T_degC: [{_scalar(lo)}, {_scalar(hi)}]")
+    if entry.get("flags"):
+        out.append("    flags: [" + ", ".join(entry["flags"]) + "]")
+    if entry.get("notes"):
+        out += _folded("notes", entry["notes"], 4)
+    return "\n".join(out) + "\n"
+
+
+def add_entry(path: str | Path, entry: dict[str, Any], *, dry_run: bool = False) -> str:
+    """Append *entry* to the sheet at *path*, validated, and re-render its views.
+
+    The sheet is hand-edited YAML with comments, so it is never re-dumped: a
+    ruamel round trip of the sheet as committed (0.19.1, nothing changed)
+    rewrote 2091 lines with default settings, re-wrapping the folded prose, and
+    every ``null`` even when tuned.  The entry is INSERTED as text, in the
+    sheet's own layout, after the last entry of ``calibrations:`` (the end of
+    the file in the repository's sheet), and every existing byte is kept, with
+    the file's line endings (LF or CRLF) and mode.  The loader sorts entries,
+    so position carries no meaning.  Before anything is written the whole new
+    text must pass the strict loader, and the inserted block must read back as
+    exactly *entry*.  A second entry for the same bead and deployment is
+    refused.  The read-modify-write holds an exclusive lock on a sidecar
+    ``.<name>.lock`` (git-ignored in ``microstructure_sensors/``), so
+    concurrent adds cannot lose one.  An empty ``calibrations:`` is accepted.
+    Returns the inserted text; with *dry_run* nothing is written or locked.
+    """
+    p = Path(path)
+    if dry_run:
+        return _add(p, entry, dry_run=True)
+    with _locked(p):  # read-modify-write: two concurrent adds must not lose one
+        return _add(p, entry, dry_run=False)
+
+
+def _add(p: Path, entry: dict[str, Any], *, dry_run: bool) -> str:
+    import os
+    import stat
+    import tempfile
+
+    from ruamel.yaml import YAML
+
+    raw = p.read_bytes().decode("utf-8")
+    crlf = "\r\n" in raw
+    text = raw.replace("\r\n", "\n")
+    try:
+        existing: tuple[Calibration, ...] = loads(text, source=p).calibrations
+    except RegistryError:
+        data = YAML(typ="safe", pure=True).load(text)
+        if not (isinstance(data, dict) and not data.get("calibrations")):
+            raise
+        existing = ()  # an empty sheet; the new text is validated in full below
+    key = (entry["bead"], _norm_label(entry["deployment"]))
+    for c in existing:
+        if (c.bead, _norm_label(c.deployment)) == key:
+            raise DuplicateEntryError(
+                f"{p} already has {c.bead} / {c.deployment}: one entry per bead and "
+                f"deployment. To replace it, edit the YAML by hand."
+            )
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    at, indent = _insertion_point(lines)
+    block = entry_yaml(entry, indent)
+    back = YAML(typ="safe", pure=True).load(block)
+    if back != [entry]:
+        raise AddError(f"the entry does not read back as written (a quoting defect):\n{block}")
+    head = "".join(lines[:at]).rstrip("\n") + "\n\n"
+    tail = "".join(lines[at:])
+    new = head + block + ("\n" + tail.lstrip("\n") if tail.strip() else "")
+    loads(new, source=p)  # the strict loader, over the whole sheet with the entry in it
+    if dry_run:
+        return block
+    if crlf:
+        new = new.replace("\n", "\r\n")
+    mode = stat.S_IMODE(os.stat(p).st_mode)
+    fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=f".{p.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(new)
+        os.chmod(tmp, mode)  # mkstemp makes it 0600; keep the sheet's own mode
+        os.replace(tmp, p)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    write_views(p)
+    return block

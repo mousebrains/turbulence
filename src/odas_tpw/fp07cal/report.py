@@ -70,7 +70,9 @@ def fit_text(
     stab: StabilityResult | None = None,
     t1t2: dict | None = None,
     min_corr: float = 0.7,
+    prior: dict | None = None,
 ) -> str:
+    """The per-channel report.  *prior* is the ``fit.prior`` record, when there is one."""
     cfgeq = fit.config_equivalent
     lo, hi = fit.beta1_bracket
     span = (
@@ -101,7 +103,7 @@ def fit_text(
                 f"understates beta_1."
             )
     T_lo, T_hi = fit.T_range
-    if np.isfinite(T_lo) and (T_hi - T_lo) < 8.0 and fit.order > 1:
+    if np.isfinite(T_lo) and (T_hi - T_lo) < 8.0 and fit.order > 1 and fit.fixed_terms is None:
         warn.append(
             f"**Order {fit.order} fitted over only {T_hi - T_lo:.1f} degC.** Poorly "
             f"constrained, and it extrapolates badly onto yos that went outside "
@@ -114,6 +116,10 @@ def fit_text(
         f"Generated {_iso(datetime.now(tz=UTC).timestamp())}",
         "",
     ]
+    if prior is not None:
+        from odas_tpw.fp07cal.prior import warnings_for_report
+
+        warn.extend(warnings_for_report(prior))
     if warn:
         lines += ["## ⚠ Warnings", ""] + [f"- {w}" for w in warn] + [""]
     else:
@@ -192,6 +198,11 @@ def fit_text(
                     "any drift conclusion as provisional.",
                 ]
 
+    if prior is not None:
+        from odas_tpw.fp07cal.prior import report_lines
+
+        lines += report_lines(prior)
+
     lines += [
         "",
         "## Coefficients",
@@ -205,6 +216,8 @@ def fit_text(
     ]
     for k, v in cfgeq.items():
         lines.append(f"| `{k}` | {v:.6f} |")
+    if fit.fixed_terms is not None:
+        lines += ["", "The `beta` terms are the prior's, held fixed; only `t_0` was fitted."]
     lines += [
         "",
         "These are only valid alongside the bridge constants they were fitted "

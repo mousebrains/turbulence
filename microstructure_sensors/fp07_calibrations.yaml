@@ -28,7 +28,11 @@
 #
 # uncertainty (mK of temperature, against this entry's reference, whose own error
 # is NOT included):
-#   fit_rms_mK   in-sample rms residual of the chosen order
+#   fit_rms_mK   in-sample rms residual of the chosen fit, over the pairs its robust
+#                4-sigma clip KEPT
+#   rms_all_mK   (optional; written by `registry add` for fits made with fit.prior) the
+#                same over EVERY valid pair: a fixed shape that does not fit clips the
+#                ends of the range and looks better over the pairs it kept
 #   held_out_mK  rms error of the chosen order predicting the cold half of the range
 #                from the warm half and vice versa (fp07-cal select_order)
 #   block_sd_mK  sample SD of the t_0 offsets of n_blocks equal-time blocks, shape

@@ -22,6 +22,14 @@ from odas_tpw._version_info import add_version_argument, software_version
 from odas_tpw.fp07cal.fit import fit_calibration, select_order
 from odas_tpw.fp07cal.lag import pressure_offset, temperature_lag
 from odas_tpw.fp07cal.pairs import PairConfig, build_pairs_multi
+from odas_tpw.fp07cal.prior import (
+    PriorError,
+    load_sheet,
+    no_prior_record,
+    parse_prior_config,
+    resolve_priors,
+)
+from odas_tpw.fp07cal.prior import choose as choose_with_prior
 from odas_tpw.fp07cal.report import coverage_text, figure, fit_text
 from odas_tpw.fp07cal.series import load_hotel_reference, load_probe_series
 from odas_tpw.fp07cal.stability import blocked_offsets, drift_fit, t1_t2_series
@@ -133,6 +141,33 @@ fit:
                        # dT/dz correlates with T on a monotone profile, so an
                        # ordinary fit absorbs it into t_0 (25 cm injected came
                        # back as 0.4 cm).
+  # prior:               # A bead calibrated before has a prior in the FP07
+  #                      # calibration sheet: its shape (beta terms) and t_0.
+  #                      # With this block the fit is made two ways -- the full
+  #                      # fit above, and t_0 alone with the prior's shape held
+  #                      # fixed (with dz/tau when geometry is on) -- scored by
+  #                      # HELD-OUT error on the same folds. The prior's shape is
+  #                      # kept unless the full fit is clearly better, and always
+  #                      # over a range narrower than 5 K or when no full order
+  #                      # is a plausible curve for this bead. Either way the
+  #                      # result is checked against the prior over the overlap
+  #                      # of their ranges; beyond the prior's uncertainty is
+  #                      # flagged: a possible unrecorded bead swap, reference
+  #                      # problem or failing bead. Omit the block for the
+  #                      # plain fit, unchanged.
+  #   sheet: "<CONFIG_DIR>/microstructure_sensors/fp07_calibrations.yaml"
+  #                      # REQUIRED: the sheet is in the repository, not in the
+  #                      # installed package
+  #   mode: auto         # auto: choose as above; offset: force the prior's
+  #                      # shape; full: keep the full fit and use the prior for
+  #                      # the QC only
+  #   tie_fraction: 0.05 # the full fit must beat the prior's held-out error by
+  #                      # more than this fraction (5%: what a shape error of the
+  #                      # sheet's own +/-5 mK costs on a wide synthetic range)
+  #   beads:             # per channel: auto = the serial in the .p configs
+  #     T1: auto         # (refused if the files disagree or it is the
+  #     T2: auto         # placeholder T), a serial such as T1592 to override,
+  #                      # or none for no prior on that channel
 
 stability:
   n_blocks: 6
@@ -144,6 +179,8 @@ stability:
 def _resolve(value, config_dir: Path):
     if isinstance(value, str):
         return value.replace("<CONFIG_DIR>", str(config_dir))
+    if isinstance(value, dict):  # a nested block such as fit.prior
+        return {k: _resolve(v, config_dir) for k, v in value.items()}
     return value
 
 
@@ -354,6 +391,15 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
         "time_end": float(max(p.time[-1] for p in probes)) if probes else None,
         "reference": ref.source,
     }
+    # fit.prior: resolved for every channel BEFORE any fitting, so an ambiguous
+    # bead refuses the run at once rather than after the first channel.
+    pcfg = parse_prior_config(fit_cfg, list(channels))
+    priors = {}
+    if pcfg is not None:
+        span = (
+            (provenance["time_start"], provenance["time_end"]) if probes else None
+        )
+        priors = resolve_priors(pcfg, probes, list(channels), span=span)
     po = pressure_offset(probes, ref)
     clock = (po.lag, po.score)
     print(f"  {po.summary()}")
@@ -427,6 +473,30 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             fit = fit_calibration(
                 pairs, order=order, robust=bool(fit_cfg.get("robust", True)),
             )
+        prior_rec = None
+        if pcfg is not None and ch in priors:
+            cp = priors[ch]
+            if cp.prior is None:
+                prior_rec = no_prior_record(cp, pcfg.mode)
+                print(f"  {ch} prior: none — {cp.reason}")
+            else:
+                chosen, geo, prior_rec = choose_with_prior(
+                    pairs, cp, mode=pcfg.mode, tie_fraction=pcfg.tie_fraction,
+                    full_fit=fit, full_geo=geo,
+                    orders=(1, 2, 3) if order_cfg in (None, "auto") else (order,),
+                    robust=bool(fit_cfg.get("robust", True)),
+                    geometry=bool(fit_cfg.get("geometry", True)),
+                )
+                if chosen is None:
+                    # mode offset and the offset-only fit failed: a channel-level
+                    # refusal, recorded like any other, never a mid-run exception
+                    # that would leave this run's reports beside an old record.
+                    results["channels"][ch] = {"error": "offset-only fit failed",
+                                               "prior": prior_rec}
+                    continue
+                fit = chosen
+                if prior_rec["chosen_kind"] == "offset" and geo is not None:
+                    print(f"  {ch} geometry (prior's shape): {geo.summary()}")
         # geo=... is load-bearing: without it the fitted dz/tau nuisance is
         # re-exposed to the blocks and a changing gradient across the deployment
         # is reported as bead drift (issue #180 F08).
@@ -460,6 +530,8 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
                     geo.smallest_singular_value if geo is not None else None
                 ),
             }
+            if prior_rec is not None:
+                results["channels"][ch]["prior"] = prior_rec
             continue
 
         blocks = blocked_offsets(
@@ -473,7 +545,7 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
         stab.channel = ch
 
         md = fit_text(pairs, fit, clock_offset=clock, stab=stab, t1t2=t1t2,
-                      min_corr=pc.min_corr)
+                      min_corr=pc.min_corr, prior=prior_rec)
         (out_dir / f"{ch}_report.md").write_text(md)
         if make_figure:
             figure(pairs, fit, stab=stab, t1t2=t1t2, path=out_dir / f"{ch}_diagnostics.png")
@@ -548,6 +620,8 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
                 "reason": stab.reason,
             },
         }
+        if prior_rec is not None:
+            results["channels"][ch]["prior"] = prior_rec
         print(f"  {ch}: {stab.summary()}")
         print(
             f"      t_0={fit.config_equivalent['t_0']:.4f} "
@@ -652,6 +726,14 @@ def _cmd_coverage(args) -> int:
 
 def _cmd_fit(args) -> int:
     cfg = _load_config(Path(args.config))
+    try:
+        # A bad fit.prior block fails here, before minutes of loading.
+        pcfg = parse_prior_config(cfg.get("fit"), cfg.get("channels"))
+        if pcfg is not None:
+            load_sheet(pcfg)
+    except PriorError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 1
     paths = _gather_paths(cfg)
     try:
         ref = _load_reference(cfg)
@@ -668,7 +750,11 @@ def _cmd_fit(args) -> int:
               "reference time range", file=sys.stderr)
         return 1
     print(f"fitting on {len(probes)} file(s) ({skipped} skipped)")
-    res = run_calibration(probes, ref, cfg, out_dir, make_figure=not args.no_figure)
+    try:
+        res = run_calibration(probes, ref, cfg, out_dir, make_figure=not args.no_figure)
+    except PriorError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 1
 
     if not args.no_stream and len(paths) > len(probes):
         print(f"streaming all {len(paths)} files for per-profile statistics...")
@@ -1064,6 +1150,65 @@ def _cmd_registry_show(args) -> int:
     return 0
 
 
+def _none(s: str | None) -> str | None:
+    return None if s is None or s.strip().lower() in ("", "none", "null") else s.strip()
+
+
+def _cmd_registry_add(args) -> int:
+    """Record one channel of an `fp07-cal fit` result in the sheet."""
+    from odas_tpw.fp07cal.registry import (
+        RegistryError,
+        add_entry,
+        block_offsets_from_report,
+        default_path,
+        entry_from_record,
+    )
+
+    path = Path(args.registry) if args.registry else default_path()
+    rec_path = Path(args.record)
+    try:
+        record = json.loads(rec_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"refusing: {rec_path}: {exc}", file=sys.stderr)
+        return 1
+    report = Path(args.report) if args.report else rec_path.parent / f"{args.channel}_report.md"
+    if not report.exists():
+        print(f"refusing: {report} not found. The block scatter comes from the report "
+              f"`fp07-cal fit` wrote beside {rec_path.name}; give it with --report.",
+              file=sys.stderr)
+        return 1
+    try:
+        entry = entry_from_record(
+            record, args.channel,
+            deployment=args.deployment,
+            instrument_model=args.instrument_model,
+            method=args.method,
+            reference_kind=args.reference_kind,
+            reference_serial=_none(args.reference_serial),
+            reference_cal_date=_none(args.reference_cal_date),
+            reference_note=args.reference_note,
+            reference_pole_s=args.reference_pole_s,
+            block_offsets_K=block_offsets_from_report(report.read_text(encoding="utf-8")),
+            bead=args.bead,
+            instrument_serial=args.instrument_serial,
+            platform=args.platform,
+            robust=args.robust,
+            flags=args.flag or [],
+            notes=args.notes or "",
+            allow_qc_flag=args.allow_qc_flag,
+        )
+        block = add_entry(path, entry, dry_run=args.dry_run)
+    except RegistryError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 1
+    print(block, end="")
+    if args.dry_run:
+        print(f"(dry run: valid against {path}; nothing written)")
+    else:
+        print(f"added {entry['bead']} / {entry['deployment']} to {path}; views re-rendered")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="fp07-cal",
@@ -1140,6 +1285,46 @@ def main(argv: list[str] | None = None) -> int:
                    "(YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ)")
     r.add_argument("--json", action="store_true", help="machine-readable output")
     r.set_defaults(func=_cmd_registry_show)
+    r = rsub.add_parser(
+        "add",
+        help="record one channel of an `fp07-cal fit` result in the sheet",
+        description="Append one bead x deployment entry, built from the fit's "
+        "coefficients.json and <channel>_report.md, to the sheet's YAML (existing text "
+        "and comments untouched), validate the whole sheet, and re-render its views. "
+        "Refuses a second entry for the same bead and deployment. The options below "
+        "are what the record cannot supply.",
+    )
+    r.add_argument("record", help="coefficients.json written by `fp07-cal fit`")
+    r.add_argument("--channel", required=True, help="the channel to record, e.g. T1")
+    r.add_argument("--deployment", required=True,
+                   help='a label unique for this bead, e.g. "SUNRISE 2021 WaltonSmith"')
+    r.add_argument("--instrument-model", required=True,
+                   help="as the sheet writes it, e.g. vmp-250 or MR1000RDL-EM")
+    r.add_argument("--method", required=True,
+                   help="one of the sheet's `methods` (e.g. vmp-own-jac, glider-ctd)")
+    r.add_argument("--reference-kind", required=True, help='e.g. "JAC CT"')
+    r.add_argument("--reference-serial", required=True,
+                   help="the reference's serial as printed (e.g. 23), or none")
+    r.add_argument("--reference-cal-date", required=True,
+                   help="its last calibration, YYYY-MM-DD, or none")
+    r.add_argument("--reference-note", help="required when a reference field is none")
+    r.add_argument("--reference-pole-s", type=float, required=True,
+                   help="the fit config's pairs.kernel_tau [s]")
+    r.add_argument("--bead", help="override the bead serial (required when the config's is "
+                   "a placeholder)")
+    r.add_argument("--instrument-serial", help="override the record's instrument_sn")
+    r.add_argument("--platform", help='e.g. "Slocum osu684"')
+    r.add_argument("--no-robust", dest="robust", action="store_false",
+                   help="the fit ran with fit.robust: false (fp07-cal's default is true)")
+    r.add_argument("--flag", action="append", help="a flag from the sheet's vocabulary "
+                   "(repeatable), e.g. lag-gate-overridden")
+    r.add_argument("--notes", help="anything a later reader needs")
+    r.add_argument("--report", help="<channel>_report.md (default: beside the record)")
+    r.add_argument("--allow-qc-flag", action="store_true",
+                   help="record a fit whose QC against the bead's prior was flagged")
+    r.add_argument("--dry-run", action="store_true", help="validate and print; write nothing")
+    r.add_argument("-r", "--registry", help=reg_help)
+    r.set_defaults(func=_cmd_registry_add)
 
     args = p.parse_args(argv)
     return int(args.func(args))

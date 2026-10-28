@@ -95,6 +95,7 @@ fp07-cal registry render          # after editing the YAML: rewrite the .md and 
 fp07-cal registry check           # validate the YAML; exit 1 if invalid or a view is stale
 fp07-cal registry show T1592      # one bead's history and its prior
 fp07-cal registry show T1592 --instrument 194 --channel T1 --as-of 2023-01-01 --json
+fp07-cal registry add fp07cal/coefficients.json --channel T1 --deployment "..." ...  # record a fit
 ```
 
 `check` and a test (`tests/test_fp07_registry.py`) both fail when a committed
@@ -126,7 +127,52 @@ date. A null serial or date needs a `note` saying why.
 
 ### Adding an entry after `fp07-cal fit`
 
-Everything comes from the fit's output directory, per channel:
+`fp07-cal registry add` does it, one channel at a time:
+
+```bash
+fp07-cal registry add <output_dir>/coefficients.json --channel T1 \
+    --deployment "SUNRISE 2021 WaltonSmith" --instrument-model vmp-250 \
+    --method vmp-own-jac --reference-kind "JAC CT" --reference-serial 23 \
+    --reference-cal-date 2016-02-15 --reference-pole-s 0.169 \
+    --flag lag-gate-overridden --notes "..." --dry-run
+```
+
+It reads `coefficients.json` and the block table of `<ch>_report.md` beside it
+(`--report` to point elsewhere). The options supply only what the record cannot:
+the deployment label, the instrument model, the fit `method` (one defined under
+`methods`), the reference's kind, serial and calibration date (`none`, with
+`--reference-note` saying why), and `pairs.kernel_tau` from the fit's config as
+`--reference-pole-s`. Optional: `--bead` (required when the config's serial is
+a placeholder), `--instrument-serial`, `--platform`, `--no-robust` (if the fit
+ran with `fit.robust: false`), `--flag` (repeatable), `--notes`.
+
+The sheet is never re-dumped. A ruamel round trip (load and dump, nothing
+changed) rewrote 2091 of its lines with default settings: it re-wraps the folded
+prose. Tuned for width and indentation, it still rewrote every `null`. So the
+entry is inserted as text, in the sheet's own layout, after the last
+entry of `calibrations:`, leaving every existing line and comment as it was.
+Before anything is written, the whole new sheet must pass the strict loader and
+the inserted text must read back as exactly the entry built. The views are then
+re-rendered. `--dry-run` prints the entry and writes nothing. `add` refuses:
+
+- a second entry for the same bead and deployment (edit the YAML by hand to
+  replace one);
+- a placeholder bead serial;
+- a lag that fp07-cal's trust gate rejected, unless `--flag lag-gate-overridden`;
+- a fit that its check against the bead's prior flagged, unless
+  `--allow-qc-flag`;
+- a fit with no held-out error for its chosen candidate (`fit.order` forced and
+  no `fit.prior`), because `held_out_mK` is required.
+
+It keeps the sheet's file mode and line endings (LF or CRLF). An indented
+comment after the last entry stays with that entry. An empty `calibrations:`
+(or `calibrations: []`) is accepted. Concurrent adds are serialized by a lock
+on a sidecar `.fp07_calibrations.yaml.lock`, which git ignores here. A fit
+whose held-out-best order was replaced by a plausible one (`fit.prior`) is
+recorded with `order_choice: fixed`, because `auto` claims the held-out
+minimum.
+
+Where each field comes from, per channel:
 
 | YAML | from |
 |---|---|
@@ -134,20 +180,23 @@ Everything comes from the fit's output directory, per channel:
 | `instrument.serial`, `.channel`, `.model` | `instrument_sn`, the channel, and the `.p` config's `instrument_info.model` |
 | `first`, `last` | `time_start`, `time_end` (epoch seconds → `YYYY-MM-DDTHH:MM:SSZ`) |
 | `fit.n_files`, `n_profiles`, `n_pairs`, `order`, `lag_s` | `n_fit_files`; `channels.<ch>.n_profiles`, `.n_pairs`, `.order`, `.lag_s` |
-| `fit.held_out_by_order_mK` | `channels.<ch>.order_selection.<n>.held_out_K` × 1000; required when `order_choice` is `auto`, so the choice can be checked |
+| `fit.order_choice` | `auto` when `order_selection` is filled, `prior` when the fit kept the prior's shape (`channels.<ch>.prior.chosen_kind` is `offset`), else `fixed` |
+| `fit.shape_from` | with `order_choice: prior` only: `channels.<ch>.prior.source.deployment`, the entry whose `beta` terms were held fixed (the loader checks they are that entry's exactly) |
+| `fit.held_out_by_order_mK` | `channels.<ch>.order_selection.<n>.held_out_K` × 1000 (the full fits'); required when `order_choice` is `auto`, so the choice can be checked |
 | `fit.geometry` | `channels.<ch>.geometry.dz_m`, `.tau_s`, or `false` when it was off |
 | `fit.reference_pole_s` | `pairs.kernel_tau` in the fp07-cal config |
 | `fit.software_version` | `software_version` |
 | `coefficients` | `channels.<ch>.config_equivalent`, verbatim |
 | `bridge` | `channels.<ch>.bridge` |
-| `uncertainty.fit_rms_mK`, `held_out_mK` | `rms_K` × 1000; the chosen order's `held_out_K` × 1000 |
+| `uncertainty.fit_rms_mK`, `held_out_mK` | `rms_K` × 1000, the rms over the pairs the robust fit **kept**; the chosen order's `held_out_K` × 1000 (with `order_choice: prior`, the `prior shape` candidate's) |
+| `uncertainty.rms_all_mK` | optional, fits made with `fit.prior` only: the chosen candidate's `rms_all_K` × 1000, the rms over **every** pair. A shape that does not fit clips the ends of the range, so its kept-pair rms looks better than it is |
 | `uncertainty.block_sd_mK`, `n_blocks` | sample SD and count of the offsets in the block table of `<ch>_report.md` (null below 3 blocks, and only then) |
 | `valid_T_degC` | `channels.<ch>.T_range` |
 
-Then add `flags` from the vocabulary in `registry.py` (`FLAGS`), and `notes` for
+`flags` come from the vocabulary in `registry.py` (`FLAGS`), and `notes` hold
 anything a later reader needs: what was screened, episodes, gates overridden.
-Run `fp07-cal registry render`, then `check`, and commit all three files
-together.
+Commit all three files together. An entry added by hand instead needs
+`fp07-cal registry render`, then `check`.
 
 ### The prior
 
@@ -171,10 +220,17 @@ They live in the YAML's `transfer` section with their evidence, and the
 generated sheet renders them. Update `transfer`, with its evidence, when new
 comparisons change them.
 
-`prior_for` returns what a `t_0`-only refit with the shape held fixed would
-need: the fixed `beta` terms, the bridge constants that define their L, a
-starting `t_0` with its uncertainty, and the range where the shape is
-constrained. That refit is not built into `fp07-cal fit` yet.
+`prior_for` returns what a `t_0`-only refit with the shape held fixed needs:
+the fixed `beta` terms, the bridge constants that define their L, a starting
+`t_0` with its uncertainty, and the range where the shape is constrained.
+`fp07-cal fit` makes that refit when its config has a `fit.prior` block. It
+scores the refit by held-out error against the full fits on the same folds. It
+keeps the prior's shape unless the full fit is clearly better (by more than
+`tie_fraction`, 5%), and always over a range narrower than 5 K or when no full
+order is a plausible curve for the bead. It then checks the result against the
+prior over their common range (`docs/fp07cal/runbook.md` §5). A
+calibration recorded with the prior's shape (`order_choice: prior`) never
+supplies a prior itself, because its shape was not fitted over its own range.
 
 ## sheet_requests.md
 

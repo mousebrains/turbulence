@@ -30,11 +30,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   instrument and channel. It carries the sheet's transfer uncertainties from
   the cross-deployment comparisons in issue #189 (sizes and evidence are in the
   generated sheet), and reports how far the most recent calibration sits from
-  it. It returns what a `t_0`-only refit would need, but that refit is not
-  built yet. Seeded with 23 pooled fits of 12 beads: T1592, T1593 and T2005 on
+  it. It returns what a `t_0`-only refit needs; `fp07-cal fit` makes that
+  refit with `fit.prior` (next entry). Seeded with 23 pooled fits of 12
+  beads: T1592, T1593 and T2005 on
   VMP SN194 from SUNRISE 2019-2022 and ARCTERX-2022; T1592 and T2007 on VMP
   SN142 in ARCTERX-2025; and eight MicroRider beads on two Slocums from
   ARCTERX-2023 and 2025 Interior.
+- **`fp07-cal fit` with a bead's prior (`fit.prior`)**: for a bead that is
+  already in the calibration sheet, the fit is made two ways. One is the full
+  fit (orders 1-3, as before). The other holds the prior's shape (`beta`
+  terms) fixed and fits only `t_0`, with the same robust iteration, and
+  jointly with `dz` and `tau` when `fit.geometry` is on. Every candidate is
+  scored by the temperature-split held-out error that picks the order, on the
+  same folds. In `mode: auto` the prior's shape is kept in three cases:
+  - no full order is a plausible curve for this bead (T falling as L rises,
+    dT/dL within 10% of the prior's; the sheet's 12 beads differ by at most
+    1.65%);
+  - the deployment spans less than the sheet's 5 K shape span;
+  - its held-out error is within `tie_fraction` (default 5%) of the full
+    fit's, so ties go to the prior.
+
+  `mode: offset` and `mode: full` force the choice. Either way the result is
+  checked against the prior at the same L over the overlap of their fitted
+  ranges. The limit is 2σ of `t_0` at the center, and 2√(σ_t0² + σ_shape²)
+  across the overlap, where σ_t0 is ±15 mK, or ±18 mK when the bridge
+  constants or the instrument differ. Without an overlap the prior is
+  compared over this deployment's range as an extrapolation. Beyond a limit,
+  or with an implausible exported fit, a `WARNING` goes to the log and the
+  report: a possible unrecorded bead swap, reference problem or failing bead.
+  A warning also fires when the offset-only fit's robust clip drops markedly
+  more pairs than the full fit's. The bead comes from the `.p` configs and is
+  refused when it is a placeholder or differs between the files of a run;
+  `fit.prior.beads` overrides it per channel. Sheet entries of the bead whose
+  dates overlap the fitted span are excluded from its prior.
+  `coefficients.json` and `<ch>_report.md` record:
+  - the source entry, the sheet's path and SHA-256, and the bridge comparison;
+  - every candidate's held-out error, rms over all pairs and over its kept
+    pairs, dropped fraction and plausibility;
+  - the margin, the choice and why, and the comparison and verdict.
+
+  The coefficients stay in config form, so `patch` is unchanged. A channel
+  whose forced offset-only fit fails is recorded as a channel error instead
+  of stopping the run. Without the block, every output is byte-identical to
+  before; checked on ARCTERX-2022 Wake (geometry on and off) and Interior.
+
+  On bead T1592's SUNRISE 2021 WaltonSmith (27.2-29.2 degC, narrow) the
+  prior's shape is kept, and its held-out error is also 5.4% better.
+  Extrapolated to 18 degC, the order-1 fit is 30 mK off ARCTERX-2022 Wake's
+  curve, where the prior's shape stays within 4-7 mK. That is the
+  independent comparison: the prior comes from ARCTERX-2022 Interior, so
+  agreement with Interior is circular. On ARCTERX-2022 Wake (18.4-28.2 degC)
+  the full fit wins by 10.3%. With another bead's prior applied deliberately,
+  the check flags -2.5 K.
+- **`fp07-cal registry add`**: records one channel of a fit in the sheet, from
+  its `coefficients.json` and the block table of its report. Options supply
+  only what the record lacks: the deployment label, the instrument model, the
+  method, the reference's identity, and the reference pole. The entry is
+  inserted as text in the sheet's own layout, so every existing line and
+  comment is kept. The whole sheet must then validate, and the views are
+  re-rendered. `add` refuses a duplicate bead and deployment, a placeholder
+  serial, an untrusted lag without `--flag lag-gate-overridden`, and a fit
+  flagged against its prior without `--allow-qc-flag`. A fit that kept the
+  prior's shape is recorded as `order_choice: prior`, with `fit.shape_from`
+  naming its source. The loader checks that its `beta` terms are the
+  source's, and such an entry never supplies a prior itself. `fit_rms_mK` is
+  the rms over the pairs the robust fit kept, as for every entry; fits made
+  with `fit.prior` also record `uncertainty.rms_all_mK`, the rms over every
+  pair. The sheet's file mode and line endings (LF or CRLF) are kept, an
+  indented comment after the last entry stays with it, an empty
+  `calibrations:` is accepted, and a lock file serializes concurrent adds.
 - **`epsilon.despike_half_width` (rsi-tpw and perturb)**: the shear
   despiker's removal half-width [s], hard-wired at 0.04 s until now. The
   despiker replaces `N//2` samples before each detected spike and `2(N//2)`

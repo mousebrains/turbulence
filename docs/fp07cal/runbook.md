@@ -88,7 +88,126 @@ extrapolation **four times worse** — while carrying a t-statistic of 10, which
 a significance test would have waved through. Over a narrow range (<8 °C) the
 same test will pick order 1.
 
-## 5. Patch
+## 5. Reusing a bead: fit with its prior
+
+A bead that has been calibrated before has a **prior** in the FP07 calibration
+sheet (`microstructure_sensors/fp07_calibrations.yaml`): the shape (`beta`
+terms) and `t_0` of its widest-range unflagged calibration. Across deployments
+a bead's shape carries to a few mK, its `t_0` only to ~15 mK (issue #189). So
+when a deployment cannot pin the shape itself, usually because its temperature
+range is narrow, the prior's shape with a freshly fitted `t_0` extrapolates
+better than the deployment's own full fit. Add a `fit.prior` block to the
+config (`fp07-cal init` writes it commented out):
+
+```yaml
+fit:
+  order: "auto"
+  prior:
+    sheet: "<CONFIG_DIR>/../microstructure_sensors/fp07_calibrations.yaml"  # required
+    mode: auto          # auto | offset | full
+    beads: {T1: auto, T2: auto}   # optional; auto, a serial (T1592), or none
+    tie_fraction: 0.05  # optional; see step 4
+```
+
+`sheet` is required: the sheet lives in the repository, not in the installed
+package. Without the block, `fit` writes exactly what it did before, byte for
+byte.
+
+What `fit` then does, per channel:
+
+1. **Identifies the bead** from the `.p` configs' serial. It refuses a
+   placeholder (`T`) and a serial that differs between the files of one run;
+   name the bead with `beads.T1: T1592`, or turn the prior off for a channel
+   with `none`. Every sheet entry of the bead whose dates overlap the span
+   being fitted is excluded from its prior. A bead is in one place at a time,
+   so that is the deployment's own entry when the sheet already has one.
+2. **Compares the bridge constants** of this channel with the prior source's.
+   They define L, the variable the shape is a function of. When they differ,
+   or the prior comes from another instrument or channel, the prior's `t_0`
+   uncertainty includes the cross-instrument term (±18 mK instead of ±15).
+3. **Fits two ways**: the full fit (orders 1–3, as in §4), and an
+   offset-only fit with the prior's shape held fixed and only `t_0` fitted,
+   with the same robust iteration. With `geometry: true` the offset-only fit
+   is joint too, so it solves for `t_0`, `dz` and `tau`.
+4. **Chooses.** Every candidate is scored on the same warm-half/cold-half
+   folds that pick the order; a fold that any candidate cannot be fitted on
+   is dropped for all of them. In `auto`, the prior's shape is kept:
+   - when no full order is a **plausible** curve for this bead: T must fall as
+     L rises, with dT/dL within ±10% of the prior's at the same L. Across the
+     sheet's 23 calibrations of 12 beads, dT/dL at one temperature varies by
+     at most 1.65%. In isothermal water a flat fit to noise wins on held-out
+     error with a slope 20 or more times wrong, sometimes of the right sign
+     (a synthetic exported β₁ = 6.8×10⁴, 7.6 K wrong at 20 °C, before this
+     bound). If only the held-out-best order is implausible, the next
+     plausible order stands in for it;
+   - when the deployment spans less than the sheet's shape span (5 K). Held-out
+     error over a 2 K range extrapolates only ~1 K and cannot test a shape that
+     will be used across 10 K;
+   - when its held-out error is within `tie_fraction` (default 5%) of the full
+     fit's. The full fit has to be clearly better: on a wide synthetic range a
+     prior shape wrong by the sheet's own ±5 mK lost by only 4%. A tie goes to
+     the prior.
+
+   `mode: offset` forces the prior's shape; `mode: full` keeps the full fit
+   (today's order, implausible or not) and uses the prior only for the check
+   below.
+5. **Checks the result against the prior**, whichever candidate won. It
+   compares the two curves at the same L over the overlap of the prior's
+   fitted range and this deployment's. The limit at the center is twice the
+   prior's `t_0` uncertainty. Anywhere else in the overlap it is twice
+   √(σ_t0² + σ_shape²), because the shape is known only to σ_shape away from
+   where the curves are pinned. When the ranges do not overlap, the comparison
+   runs over this deployment's range, where the prior is extrapolated, with
+   the wider limit everywhere, and the record says it is an extrapolation.
+   Beyond either limit the check prints a `WARNING` and heads the report: a
+   possible unrecorded bead swap, reference problem or failing bead, or a
+   wrong serial in the config. An exported fit that is not plausible (step 4)
+   is flagged too.
+
+`coefficients.json` carries a `prior` record per channel:
+
+- the source entry, and the sheet's path and SHA-256;
+- the bridge comparison;
+- every candidate's held-out error, its rms over **all** pairs (the same set
+  for every candidate) and over the pairs its own robust loop kept, the
+  fraction dropped, and its plausibility;
+- the margin, the choice and why;
+- the comparison with the prior over the overlap, and the verdict.
+
+A `WARNING` also fires when the offset-only fit's robust loop drops 2
+percentage points more of the pairs than the full fit's. A shape that does not
+fit clips the ends of the range, and looks better over the pairs it kept than
+it is. `<ch>_report.md` has the same as a "Prior" section. The exported
+coefficients stay in `.p` config form (`t_0` and the prior's `beta` terms,
+verbatim), so `patch` (§6) needs nothing new.
+
+Worked example, bead T1592 on VMP SN194 against its own JAC CT. The prior is
+ARCTERX-2022 Interior (order 3, 18.0–28.35 °C); in each case the deployment's
+own entry was excluded:
+
+| deployment | range [°C] | held-out, full fit | held-out, prior's shape | margin | kept |
+|---|---|---|---|---|---|
+| SUNRISE 2021 WaltonSmith | 27.2–29.2 | 5.49 mK (order 1) | 5.20 mK | −5.4% | prior's shape (narrow) |
+| ARCTERX-2022 Wake | 18.4–28.2 | 5.32 mK (order 2) | 5.87 mK | +10.3% | full fit |
+| ARCTERX-2022 Wake, geometry on | 18.4–28.2 | 5.53 mK (order 2) | 5.77 mK | +4.2% | prior's shape (tie band) |
+| SUNRISE 2022 PointSur (fast descents) | 22.5–32.1 | 24.11 mK (order 1) | 23.91 mK | −0.8% | prior's shape (tie band) |
+
+On WaltonSmith the two candidates agree to −0.5..+1.1 mK over the fitted range.
+Extrapolated to 18 °C they part:
+
+- **Against ARCTERX-2022 Wake** (a separate fit of separate data, a week after
+  the prior's source, through the same JAC), the prior's shape stays within
+  4–7 mK over 18–28 °C, while the full order-1 fit is 30 mK off at 18 °C.
+  This is the independent comparison.
+- **Against ARCTERX-2022 Interior** the prior's shape differs by a constant
+  −3.9 mK only because it IS that curve with another `t_0`: circular, so it
+  shows nothing about the shape.
+
+With T2005's prior deliberately applied to T1592's channel, the check reads
+−2500 mK against a 36 mK limit and flags it. The held-out choice cannot catch
+this, because the two beads' shapes are alike: identity shows in `t_0`.
+
+## 6. Patch
 
 ```bash
 fp07-cal patch -c fp07-cal.yaml --dry-run    # inspect the edits first
@@ -111,27 +230,40 @@ fp07:
   calibrate: false      # the files already carry the in-situ coefficients
 ```
 
-## 6. Record the fit in the calibration sheet
+## 7. Record the fit in the calibration sheet
 
 `coefficients.json` lives with the deployment's processing. The bead's history
-lives in `microstructure_sensors/fp07_calibrations.yaml`, the sheet of in-situ
-calibrations per FP07 bead. Add one entry per channel: one bead in one
-deployment. The field-by-field mapping from `coefficients.json` and
-`<ch>_report.md` is in `microstructure_sensors/README.md`. Then:
+lives in `microstructure_sensors/fp07_calibrations.yaml`. Record one entry per
+channel, one bead in one deployment:
 
 ```bash
-fp07-cal registry render     # regenerate fp07_calibrations.md and .csv
-fp07-cal registry check      # validate; exit 1 if invalid or a view is stale
+fp07-cal registry add fp07cal/coefficients.json --channel T1 \
+    --deployment "SUNRISE 2021 WaltonSmith" --instrument-model vmp-250 \
+    --method vmp-own-jac --reference-kind "JAC CT" --reference-serial 23 \
+    --reference-cal-date 2016-02-15 --reference-pole-s 0.169 \
+    --flag lag-gate-overridden --notes "..." --dry-run
 ```
 
-Commit all three files together; never edit the `.md` or `.csv` by hand. A
-deployment fit that lands further from the bead's history than the sheet's
-carried-over offset is worth a look before it is recorded. The usual causes are
-a reference problem, an unrecorded bead swap, a failing bead, or a wrong serial
-in the config (issue #189).
+It builds the entry from `coefficients.json` and the block table of
+`<ch>_report.md` beside it, and takes from the options only what the record
+cannot supply. It adds the entry to the YAML as text, leaving every existing
+line and comment untouched, then validates the whole sheet and re-renders the
+`.md` and `.csv`. `--dry-run` prints the entry and writes nothing. It refuses:
 
-The same sheet supplies a **prior** for a deployment that cannot be fitted in
-full (too little reference, or too narrow a temperature range for the shape):
+- a second entry for the same bead and deployment;
+- a placeholder serial (give `--bead`);
+- a lag the trust gate rejected, unless `--flag lag-gate-overridden`;
+- a fit the prior check flagged, unless `--allow-qc-flag`.
+
+A fit made with the prior's shape is recorded with `order_choice: prior` and
+`fit.shape_from` naming the source entry. The loader checks that its `beta`
+terms are that entry's exactly. Such an entry never becomes the source of a
+prior itself, because its shape was not fitted over its own range. The
+field-by-field mapping is in `microstructure_sensors/README.md`. Commit the
+three sheet files together; never edit the `.md` or `.csv` by hand.
+
+The sheet also prints a bead's prior directly, for a deployment with no
+reference at all:
 
 ```bash
 fp07-cal registry show T2811 --instrument 435 --channel T1
