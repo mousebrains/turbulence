@@ -179,37 +179,69 @@ def _write_mixing_combo(path, *, stimes=(1000.0, 1000.5), n_bin=5):
 
 
 def _write_profile(path, *, stime, n_slow=200, fast_ratio=8, lat=0.0,
-                   depth_max=100.0):
+                   depth_max=100.0, ct=("JAC_T", "JAC_C"), ct_fast=False,
+                   t1_fast=False, extra_c=None):
     """A minimal ``profiles_NN`` cast with the raw diagnostic channels.
 
     Slow inclinometer (offset), fast accel/shear (zero-mean) and fast
     temperature-gradient (large DC + small fluctuation, to exercise the HP
-    overlay).  Fast and slow clocks span the same time so pressure interpolates.
+    overlay), FP07 T1/T2 (T1 +0.01 K and T2 -0.02 K off the CT; T1 on the fast
+    clock when *t1_fast*), fall rate, fast speed, and ``CT`` — the TEOS-10
+    conservative temperature every real profiles file carries, set 0.3 K off
+    the in-situ CT so choosing it as the reference would show.  *ct* names the
+    CT temperature/conductivity channels (a VMP's JAC_T/JAC_C by default;
+    ``("sci_water_temp", "sci_water_cond")`` for a glider's hotel CT; either may
+    be None, or *ct* None for no CT), on the fast clock when *ct_fast*;
+    *extra_c* adds one more conductivity channel of that name (C = 40).  Fast
+    and slow clocks span the same time so pressure interpolates.
     """
     n_fast = n_slow * fast_ratio
     t_slow = np.arange(n_slow) / 64.0
     t_fast = np.arange(n_fast) / (64.0 * fast_ratio)
     P = np.linspace(0.5, depth_max, n_slow)  # dbar, descending
+    T_ct = 20.0 - 0.1 * P  # degC, cooling with depth
     rng = np.random.default_rng(1)
-    ds = xr.Dataset(
-        {
-            "P": (("time_slow",), P),
-            "Incl_X": (("time_slow",), -1.0 + 0.2 * rng.standard_normal(n_slow)),
-            "Incl_Y": (("time_slow",), 85.0 + 0.3 * rng.standard_normal(n_slow)),
-            "Ax": (("time_fast",), 50.0 * rng.standard_normal(n_fast)),
-            "Ay": (("time_fast",), 50.0 * rng.standard_normal(n_fast)),
-            "sh1": (("time_fast",), 0.05 * rng.standard_normal(n_fast)),
-            "sh2": (("time_fast",), 0.05 * rng.standard_normal(n_fast)),
-            "T1_dT1": (("time_fast",), 6.0 + 0.01 * rng.standard_normal(n_fast)),
-            "T2_dT2": (("time_fast",), 8.0 + 0.01 * rng.standard_normal(n_fast)),
-            "t_fast": (("time_fast",), t_fast),
-            "t_slow": (("time_slow",), t_slow),
-            "lat": ((), float(lat)),
-            "stime": ((), float(stime)),
-        },
+    t1 = (
+        (("time_fast",), np.interp(t_fast, t_slow, T_ct) + 0.01) if t1_fast
+        else (("time_slow",), T_ct + 0.01)
     )
-    ds.to_netcdf(path)
+    data = {
+        "P": (("time_slow",), P),
+        "Incl_X": (("time_slow",), -1.0 + 0.2 * rng.standard_normal(n_slow)),
+        "Incl_Y": (("time_slow",), 85.0 + 0.3 * rng.standard_normal(n_slow)),
+        "T1": t1,
+        "T2": (("time_slow",), T_ct - 0.02),
+        "CT": (("time_slow",), T_ct + 0.3),
+        "W_slow": (("time_slow",), np.full(n_slow, 0.7)),
+        "Ax": (("time_fast",), 50.0 * rng.standard_normal(n_fast)),
+        "Ay": (("time_fast",), 50.0 * rng.standard_normal(n_fast)),
+        "sh1": (("time_fast",), 0.05 * rng.standard_normal(n_fast)),
+        "sh2": (("time_fast",), 0.05 * rng.standard_normal(n_fast)),
+        "T1_dT1": (("time_fast",), 6.0 + 0.01 * rng.standard_normal(n_fast)),
+        "T2_dT2": (("time_fast",), 8.0 + 0.01 * rng.standard_normal(n_fast)),
+        "speed_fast": (("time_fast",), np.full(n_fast, 0.7)),
+        "t_fast": (("time_fast",), t_fast),
+        "t_slow": (("time_slow",), t_slow),
+        "lat": ((), float(lat)),
+        "stime": ((), float(stime)),
+    }
+    t_name, c_name = ct if ct is not None else (None, None)
+    dim, n = (("time_fast",), n_fast) if ct_fast else (("time_slow",), n_slow)
+    if t_name:
+        data[t_name] = (dim, np.interp(t_fast, t_slow, T_ct) if ct_fast else T_ct)
+    if c_name:
+        data[c_name] = (dim, np.full(n, 50.0))
+    if extra_c:
+        data[extra_c] = (("time_slow",), np.full(n_slow, 40.0))
+    xr.Dataset(data).to_netcdf(path)
     return P
+
+
+def _write_signature(directory, ct):
+    """A ``.params_sha256_*`` stage signature carrying only a ``ct`` section."""
+    import json
+
+    (directory / ".params_sha256_0000").write_text(json.dumps({"ct": ct}))
 
 
 # --------------------------------------------------------------------- overview
@@ -609,7 +641,9 @@ def test_draw_diag_strip_renders(tmp_path):
     render.draw_diag_strip(list(axes), cell)
     # Every panel drew at least one trace and labeled its x-axis.
     assert all(len(ax.lines) >= 1 for ax in axes)
-    assert axes[0].get_xlabel().startswith("Incl")
+    xlabels = [ax.get_xlabel() for ax in axes]
+    assert xlabels[0].startswith("T (")
+    assert any(x.startswith("Incl") for x in xlabels)
     plt.close(fig)
 
 
@@ -630,6 +664,416 @@ def test_draw_diag_strip_without_raw(tmp_path):
     render.draw_diag_strip(list(axes), cell)  # must not raise
     assert all(len(ax.lines) == 0 for ax in axes)
     plt.close(fig)
+
+
+# ------------------------------------------- scalar panels: T, delta-T, C, W
+def _panel(axes, prefix):
+    """The diag-row axis whose x-label starts with *prefix*."""
+    for ax in axes:
+        if ax.get_xlabel().startswith(prefix):
+            return ax
+    raise AssertionError(f"no panel labeled {prefix!r}")
+
+
+def _legend(ax):
+    leg = ax.get_legend()
+    return [t.get_text() for t in leg.get_texts()] if leg is not None else []
+
+
+def _texts(ax):
+    return [t.get_text() for t in ax.texts]
+
+
+def _draw_raw(rp, cell_kw=None):
+    """Draw the diag row for a RawProfile on a fresh figure; return its axes."""
+    import matplotlib.pyplot as plt
+
+    from odas_tpw.perturb.diag import render
+    from odas_tpw.perturb.diag.data import Cell
+
+    _fig, axes = plt.subplots(1, render.DIAG_PANEL_COUNT)
+    kw = cell_kw or {"profile": None, "window": -1, "depth": 50.0}
+    render.draw_diag_strip(list(axes), Cell(raw=rp, **kw))
+    return list(axes)
+
+
+class TestScalarChannels:
+    def test_vmp_ct_reference_and_delta_t(self, tmp_path):
+        from odas_tpw.perturb.diag.data import C_REF, T_REF, load_raw_profile
+
+        p = tmp_path / "a_prof001.nc"
+        _write_profile(p, stime=1000.0)
+        rp = load_raw_profile(str(p))
+        assert rp.names == {T_REF: "JAC_T", C_REF: "JAC_C"}
+        # FP07 minus CT, on the slow clock: T1 sits +0.01 K, T2 -0.02 K off.
+        np.testing.assert_allclose(rp.raw["dT1_ref"], 0.01, atol=1e-9)
+        np.testing.assert_allclose(rp.raw["dT2_ref"], -0.02, atol=1e-9)
+        assert not rp.is_fast["dT1_ref"]
+        assert rp.raw["dT1_ref"].size == rp.depth_slow.size
+        # Scalars are shown as recorded: no HP/despike for speed or T1.
+        assert rp.is_fast["speed_fast"] and not rp.is_fast["W_slow"]
+        for ch in ("speed_fast", "T1", "W_slow", T_REF, C_REF):
+            assert ch not in rp.hp and ch not in rp.proc
+
+    def test_glider_hotel_ct_found_by_default(self, tmp_path):
+        from odas_tpw.perturb.diag.data import C_REF, T_REF, load_raw_profile
+
+        p = tmp_path / "g_prof001.nc"
+        _write_profile(p, stime=1000.0, ct=("sci_water_temp", "sci_water_cond"))
+        rp = load_raw_profile(str(p))
+        assert rp.names == {T_REF: "sci_water_temp", C_REF: "sci_water_cond"}
+        np.testing.assert_allclose(rp.raw["dT1_ref"], 0.01, atol=1e-9)
+
+        axes = _draw_raw(rp)
+        assert "sci_water_temp" in _legend(_panel(axes, "T ("))
+        assert "T1 - sci_water_temp" in _legend(_panel(axes, r"$\delta$T"))
+        assert _legend(_panel(axes, "C (")) == ["sci_water_cond"]
+
+    def test_equal_length_clocks_keep_each_channel_on_its_own(self, tmp_path):
+        """fast == slow length: a known channel's clock is not guessed by size."""
+        from odas_tpw.perturb.diag.data import load_raw_profile
+
+        p = tmp_path / "e_prof001.nc"
+        _write_profile(p, stime=1000.0, fast_ratio=1)
+        rp = load_raw_profile(str(p))
+        assert not rp.is_fast["Incl_X"] and not rp.is_fast["T1"]
+        assert rp.is_fast["sh1"] and rp.is_fast["speed_fast"]
+
+    def test_fast_clock_reference_is_interpolated(self, tmp_path):
+        from odas_tpw.perturb.diag.data import T_REF, load_raw_profile
+
+        p = tmp_path / "f_prof001.nc"
+        _write_profile(p, stime=1000.0, ct_fast=True)
+        rp = load_raw_profile(str(p))
+        assert rp.is_fast[T_REF]
+        # delta-T stays on T1's slow clock, the CT interpolated onto it.
+        assert not rp.is_fast["dT1_ref"]
+        assert rp.raw["dT1_ref"].size == rp.depth_slow.size
+        np.testing.assert_allclose(rp.raw["dT1_ref"], 0.01, atol=1e-6)
+
+    def test_missing_ct_renders_na_not_raise(self, tmp_path):
+        from odas_tpw.perturb.diag.data import C_REF, T_REF, load_raw_profile
+
+        p = tmp_path / "n_prof001.nc"
+        _write_profile(p, stime=1000.0, ct=None)
+        rp = load_raw_profile(str(p))
+        assert T_REF not in rp.raw and C_REF not in rp.raw
+        assert "dT1_ref" not in rp.raw and rp.names == {}
+
+        axes = _draw_raw(rp)
+        t_ax = _panel(axes, "T (")
+        assert _legend(t_ax) == ["T1", "T2"]  # the FP07s still draw
+        for prefix in (r"$\delta$T", "C ("):
+            ax = _panel(axes, prefix)
+            assert len(ax.lines) == 0
+            assert _texts(ax) == ["n/a"]
+
+    def test_delta_t_range_is_robust_to_a_few_spikes(self, tmp_path):
+        """A couple of surface spikes must not flatten a 10 mK offset."""
+        from odas_tpw.perturb.diag.data import load_raw_profile
+
+        p = tmp_path / "s_prof001.nc"
+        _write_profile(p, stime=1000.0)
+        rp = load_raw_profile(str(p))
+        rp.raw["dT1_ref"][:1] = 5.0  # 1 of 200 samples (< 0.5%)
+        axes = _draw_raw(rp)
+        x0, x1 = _panel(axes, r"$\delta$T").get_xlim()
+        assert x0 < -0.02 < 0.0 < 0.01 < x1 < 0.1  # zero and both offsets in
+        assert axes[0].get_ylabel() == "Depth (m)"
+
+    def test_all_nan_reference_is_na(self, tmp_path):
+        """A hotel CT blanked over the whole cast draws nothing, says n/a."""
+        from odas_tpw.perturb.diag.data import load_raw_profile
+
+        p = tmp_path / "b_prof001.nc"
+        _write_profile(p, stime=1000.0, ct=("sci_water_temp", "sci_water_cond"))
+        with xr.open_dataset(p) as ds:
+            ds = ds.load()
+        ds["sci_water_cond"][:] = np.nan
+        ds.to_netcdf(tmp_path / "b2_prof001.nc")
+        rp = load_raw_profile(str(tmp_path / "b2_prof001.nc"))
+        assert _texts(_panel(_draw_raw(rp), "C (")) == ["n/a"]
+
+    def test_fast_clock_t1_is_kept_on_its_own_clock(self, tmp_path):
+        """The clock comes from T1's dimension, not a fixed list: a fast T1
+        draws on the fast depth (and delta-T with it), it does not vanish."""
+        from odas_tpw.perturb.diag.data import load_raw_profile
+
+        p = tmp_path / "t_prof001.nc"
+        _write_profile(p, stime=1000.0, t1_fast=True)
+        rp = load_raw_profile(str(p))
+        assert rp.is_fast["T1"] and rp.raw["T1"].size == rp.depth_fast.size
+        assert rp.is_fast["dT1_ref"] and not rp.is_fast["dT2_ref"]
+        np.testing.assert_allclose(rp.raw["dT1_ref"], 0.01, atol=1e-6)
+        assert "T1" in _legend(_panel(_draw_raw(rp), "T ("))
+
+    def test_conservative_temperature_is_never_the_reference(self, tmp_path):
+        """Every real profiles file carries ``CT`` (TEOS-10); it is not a CT."""
+        from odas_tpw.perturb.diag.data import (
+            T_REF,
+            ct_reference_families,
+            load_raw_profile,
+        )
+
+        p = tmp_path / "c_prof001.nc"
+        _write_profile(p, stime=1000.0, ct=None)
+        assert T_REF not in load_raw_profile(str(p)).raw
+        # ... not even when the run's ct.T_name names it.
+        _write_signature(tmp_path, {"T_name": "CT", "C_name": "JAC_C"})
+        fams = ct_reference_families(str(tmp_path))
+        assert all(t != "CT" for t, _c in fams)
+        assert T_REF not in load_raw_profile(str(p), ct_families=fams).raw
+
+        q = tmp_path / "j_prof001.nc"
+        _write_profile(q, stime=1000.0)  # JAC_T present alongside CT
+        rp = load_raw_profile(str(q), ct_families=fams)
+        assert rp.names[T_REF] == "JAC_T"
+        np.testing.assert_allclose(rp.raw["dT1_ref"], 0.01, atol=1e-9)
+
+    def test_scalar_panels_are_depth_clipped_on_a_normal_cell(self, tmp_path):
+        """Windows span 10-100 dbar, so the clip is ~4.5-105.5 m; the profile
+        starts at 0.5 dbar, which the new scalar panels must drop too."""
+        cell = _diag_cell(tmp_path)
+        assert cell.profile is not None
+        import matplotlib.pyplot as plt
+
+        from odas_tpw.perturb.diag import render
+
+        _fig, axes = plt.subplots(1, render.DIAG_PANEL_COUNT)
+        render.draw_diag_strip(list(axes), cell)
+        for prefix in ("T (", r"$\delta$T", "C (", "W ("):
+            ax = _panel(list(axes), prefix)
+            y = np.concatenate([ln.get_ydata() for ln in ax.lines])
+            assert 4.0 < np.nanmin(y) < 6.0, prefix
+
+    def test_w_panel_labels_w_slow_in_dbar_per_second(self, tmp_path):
+        from odas_tpw.perturb.diag.data import load_raw_profile
+
+        p = tmp_path / "w_prof001.nc"
+        _write_profile(p, stime=1000.0)
+        ax = _panel(_draw_raw(load_raw_profile(str(p))), "W (")
+        assert "dbar" in ax.get_xlabel()
+
+
+class TestCtReferenceFamilies:
+    def test_defaults_without_signature(self, tmp_path):
+        from odas_tpw.perturb.diag.data import ct_reference_families
+
+        fams = ct_reference_families(str(tmp_path))
+        assert fams == (
+            ("JAC_T", "JAC_C"),
+            ("sci_water_temp", "sci_water_cond"),
+            ("SBT1", "SBC1"),
+        )
+        assert ct_reference_families(None) == fams
+
+    def test_run_names_come_first(self, tmp_path):
+        from odas_tpw.perturb.diag.data import ct_reference_families
+
+        _write_signature(tmp_path, {"T_name": "ctd_T", "C_name": "ctd_C"})
+        fams = ct_reference_families(str(tmp_path))
+        assert fams[0] == ("ctd_T", "ctd_C") and len(fams) == 4
+        # A run naming a platform pair does not list it twice.
+        _write_signature(tmp_path, {"T_name": "JAC_T", "C_name": "JAC_C"})
+        assert len(ct_reference_families(str(tmp_path))) == 3
+
+    def test_fp07_named_as_ct_falls_back_to_the_platform_ct(self, tmp_path):
+        """A CT-less MicroRider run may set ct.T_name: T1.  T1 - T1 is no check,
+        so T1 is dropped, but a JAC_T the file carries is still used — and the
+        legend says JAC_T."""
+        from odas_tpw.perturb.diag.data import (
+            T_REF,
+            ct_reference_families,
+            load_raw_profile,
+        )
+
+        _write_signature(tmp_path, {"T_name": "T1", "C_name": "JAC_C"})
+        fams = ct_reference_families(str(tmp_path))
+        assert fams[0] == (None, "JAC_C")
+        assert all(t != "T1" for t, _c in fams)
+
+        p = tmp_path / "a_prof001.nc"
+        _write_profile(p, stime=1000.0)
+        rp = load_raw_profile(str(p), ct_families=fams)
+        assert rp.names[T_REF] == "JAC_T"
+        assert "T1 - JAC_T" in _legend(_panel(_draw_raw(rp), r"$\delta$T"))
+
+    def test_conductivity_follows_the_temperature_source(self, tmp_path):
+        """A glider file with a stray JAC_C: C comes from the glider CTD, not
+        from JAC_C just because the JAC pair is tried first."""
+        from odas_tpw.perturb.diag.data import C_REF, T_REF, load_raw_profile
+
+        p = tmp_path / "g_prof001.nc"
+        _write_profile(p, stime=1000.0, ct=("sci_water_temp", "sci_water_cond"),
+                       extra_c="JAC_C")
+        rp = load_raw_profile(str(p))
+        assert rp.names == {T_REF: "sci_water_temp", C_REF: "sci_water_cond"}
+
+    def test_conductivity_from_another_source_is_named(self, tmp_path):
+        """No conductivity beside the chosen temperature: the first other one
+        the file has is used, and the legend names it."""
+        from odas_tpw.perturb.diag.data import C_REF, T_REF, load_raw_profile
+
+        p = tmp_path / "m_prof001.nc"
+        _write_profile(p, stime=1000.0, ct=("sci_water_temp", None),
+                       extra_c="JAC_C")
+        rp = load_raw_profile(str(p))
+        assert rp.names == {T_REF: "sci_water_temp", C_REF: "JAC_C"}
+        assert _legend(_panel(_draw_raw(rp), "C (")) == ["JAC_C"]
+
+    def test_sea_bird_ct_found_by_default(self, tmp_path):
+        from odas_tpw.perturb.diag.data import C_REF, T_REF, load_raw_profile
+
+        p = tmp_path / "s_prof001.nc"
+        _write_profile(p, stime=1000.0, ct=("SBT1", "SBC1"))
+        rp = load_raw_profile(str(p))
+        assert rp.names == {T_REF: "SBT1", C_REF: "SBC1"}
+
+    def test_source_reads_the_run_names(self, tmp_path):
+        """End to end: a CT under a run-specific name is found via the signature."""
+        from odas_tpw.perturb.diag.data import T_REF, EpsilonCellSource
+
+        diss = tmp_path / "diss_00"
+        prof = tmp_path / "profiles_00"
+        diss.mkdir()
+        prof.mkdir()
+        _write_diss(diss / "a_prof001.nc", stime=1000.0)
+        _write_profile(prof / "a_prof001.nc", stime=1000.0, ct=("ctd_T", "ctd_C"))
+        cell = EpsilonCellSource(str(diss), profiles_dir=str(prof)).cell(1000.0, 50.0)
+        assert T_REF not in cell.raw.raw  # unsigned: the defaults miss ctd_T
+
+        _write_signature(prof, {"T_name": "ctd_T", "C_name": "ctd_C"})
+        cell = EpsilonCellSource(str(diss), profiles_dir=str(prof)).cell(1000.0, 50.0)
+        assert cell.raw.names[T_REF] == "ctd_T"
+
+
+# ---------------------------------------- raw-only cells (no product file)
+class TestRawOnlyCell:
+    def _dirs(self, tmp_path, *, diss_pressures=(10.0, 50.0, 100.0)):
+        """diss for cast 1000 only; profiles for 1000 and 1100 (100 s >> tol)."""
+        diss = tmp_path / "diss_00"
+        prof = tmp_path / "profiles_00"
+        diss.mkdir()
+        prof.mkdir()
+        _write_diss(diss / "a_prof001.nc", stime=1000.0, pressures=diss_pressures)
+        _write_profile(prof / "a_prof001.nc", stime=1000.0)
+        _write_profile(prof / "b_prof001.nc", stime=1100.0)
+        return str(diss), str(prof)
+
+    def test_missing_diss_gives_raw_only_cell(self, tmp_path):
+        from odas_tpw.perturb.diag.data import EpsilonCellSource
+
+        diss, prof = self._dirs(tmp_path)
+        cell = EpsilonCellSource(diss, profiles_dir=prof).cell(1100.0, 50.0)
+        assert cell is not None and cell.profile is None
+        assert cell.raw is not None and cell.raw.path.endswith("b_prof001.nc")
+        assert cell.note == "no diss_00 file for this cast"
+        assert cell.depth == 50.0
+
+    def test_no_profiles_match_is_still_none(self, tmp_path):
+        from odas_tpw.perturb.diag.data import EpsilonCellSource
+
+        diss, prof = self._dirs(tmp_path)
+        assert EpsilonCellSource(diss, profiles_dir=prof).cell(2000.0, 50.0) is None
+        assert EpsilonCellSource(diss).cell(1100.0, 50.0) is None  # --no-diag
+
+    def test_no_finite_window_gives_raw_only_cell(self, tmp_path):
+        from odas_tpw.perturb.diag.data import EpsilonCellSource
+
+        diss, prof = self._dirs(tmp_path, diss_pressures=(np.nan, np.nan))
+        cell = EpsilonCellSource(diss, profiles_dir=prof).cell(1000.0, 50.0)
+        assert cell is not None and cell.profile is None
+        assert cell.note == "no finite window in a_prof001.nc"
+
+    def test_raw_only_row_is_not_clipped(self, tmp_path):
+        """With no windows to clip to, the whole cast is drawn (0.5-100 dbar)."""
+        from odas_tpw.perturb.diag.data import EpsilonCellSource
+
+        diss, prof = self._dirs(tmp_path)
+        cell = EpsilonCellSource(diss, profiles_dir=prof).cell(1100.0, 50.0)
+        axes = _draw_raw(cell.raw, {"profile": None, "window": -1, "depth": 50.0})
+        y = np.concatenate([ln.get_ydata() for ln in _panel(axes, "T (").lines])
+        assert np.nanmin(y) < 2.0
+        assert all(len(ax.patches) == 1 for ax in axes)  # the +/-0.5 m band
+
+    def test_inspector_draws_raw_row_without_diss(self, tmp_path):
+        from odas_tpw.perturb.diag import render
+        from odas_tpw.perturb.diag.data import EpsilonCellSource, load_overview
+        from odas_tpw.perturb.diag.inspector import DiagInspector
+
+        diss, prof = self._dirs(tmp_path)
+        combo = tmp_path / "combo.nc"
+        _write_combo(combo, stimes=(1000.0, 1100.0))
+        insp = DiagInspector(
+            load_overview(str(combo), ("epsilonMean", "e_1", "e_2")),
+            EpsilonCellSource(diss, profiles_dir=prof),
+            field_specs=[("epsilonMean", "m"), ("e_1", "1"), ("e_2", "2")],
+            spectra_fn=render.draw_eps_spectra,
+            strip_fn=render.draw_diss_strip,
+            n_strip=5,
+            diag_fn=render.draw_diag_strip,
+            n_diag=render.DIAG_PANEL_COUNT,
+            title="t",
+        )
+        insp.select(1, 2)  # cast 2 has a profiles file but no diss file
+        spec = " ".join(_texts(insp.ax_spec))
+        assert "no diss_00 file for this cast" in spec
+        assert "b_prof001.nc" in spec
+        assert all(_texts(ax) == ["n/a"] for ax in insp.ax_strip)
+        assert all(len(ax.lines) >= 1 for ax in insp.ax_diag)
+        assert "no diss_00 file" in insp.fig.get_suptitle()
+        out = tmp_path / "raw_only.png"
+        insp.fig.savefig(out)
+        assert out.stat().st_size > 5000
+        # ... and a normal cast afterwards redraws the spectra as usual.
+        insp.select(0, 2)
+        assert len(insp.ax_spec.lines) >= 1 and not insp.ax_spec.texts
+
+    def test_mixing_source_raw_only_without_chi(self, tmp_path):
+        from odas_tpw.perturb.diag.data import MixingCellSource
+
+        diss, prof = self._dirs(tmp_path)
+        chi = tmp_path / "chi_00"
+        chi.mkdir()
+        _write_chi(chi / "a_prof001.nc", stime=1000.0)
+        src = MixingCellSource(diss, str(chi), profiles_dir=prof)
+        cell = src.cell(1100.0, 50.0)
+        assert cell is not None and cell.profile is None
+        assert cell.note == "no chi_00 file for this cast"
+        assert src.cell(1000.0, 50.0).profile is not None
+
+    def test_mixing_keeps_shear_spectrum_without_a_usable_chi_file(self, tmp_path):
+        """No finite chi window, but a diss file: K_rho still shows its shear
+        spectrum (K_rho needs epsilon, not chi); K_T says why it cannot."""
+        import matplotlib.pyplot as plt
+
+        from odas_tpw.perturb.diag import render
+        from odas_tpw.perturb.diag.data import MixingCellSource
+
+        diss, prof = self._dirs(tmp_path)
+        chi = tmp_path / "chi_00"
+        chi.mkdir()
+        _write_chi(chi / "a_prof001.nc", stime=1000.0, pressures=(np.nan, np.nan))
+        cell = MixingCellSource(diss, str(chi), profiles_dir=prof).cell(1000.0, 50.0)
+        assert cell is not None and cell.profile is None
+        assert cell.note == "no finite window in a_prof001.nc"
+        assert cell.profiles["eps"] is not None and cell.raw is not None
+
+        _fig, (ax, *strip) = plt.subplots(1, 4)
+        cell.field = "K_rho"
+        render.draw_no_product(ax, strip, cell)
+        assert len(ax.lines) >= 1  # the shear spectra
+        assert ax.get_title().startswith("no finite window in a_prof001.nc")
+        cell.field = "K_T"
+        render.draw_no_product(ax, strip, cell)
+        assert not ax.lines
+        assert "click K_rho" in " ".join(_texts(ax))
+
+        # Without a profiles dir the diss file alone still makes a cell.
+        src = MixingCellSource(diss, str(chi))
+        assert src.cell(1000.0, 50.0).raw is None
+        assert src.cell(1000.0, 50.0).profiles["eps"] is not None
+        assert src.cell(1100.0, 50.0) is None  # no chi, diss or profiles match
 
 
 # --------------------------------------------------------------- diag inspector

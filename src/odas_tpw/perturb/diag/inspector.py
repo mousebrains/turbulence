@@ -231,17 +231,24 @@ class DiagInspector:
             # Tell the renderer which overview field was selected; the mixing
             # drill-down keys its spectra off it (K_rho -> shear, K_T -> chi).
             cell.field = self.field_specs[self.iField][0]
-            self.spectra_fn(self.ax_spec, cell)
-            self.strip_fn(self.ax_strip, cell)
+            if cell.profile is None:  # no product file for this cast
+                render.draw_no_product(self.ax_spec, self.ax_strip, cell)
+                have = [cell.raw, *(cell.profiles or {}).values()]
+                src = next((p.path for p in have if p is not None), "")
+                tail = f"  ({cell.note})" if cell.note else ""
+            else:
+                self.spectra_fn(self.ax_spec, cell)
+                self.strip_fn(self.ax_strip, cell)
+                src, tail = cell.profile.path, ""
             for ax in self.ax_strip[1:]:
                 ax.tick_params(labelleft=False)
             if self.diag_fn is not None and self.ax_diag:
                 self.diag_fn(self.ax_diag, cell)
                 for ax in self.ax_diag[1:]:
                     ax.tick_params(labelleft=False)
-            src = cell.profile.path.rsplit("/", 1)[-1]
+            src = src.rsplit("/", 1)[-1]
             self.fig.suptitle(
-                f"{self.title}\ncast {self.iProfile + 1}/{n_prof}  —  {src}",
+                f"{self.title}\ncast {self.iProfile + 1}/{n_prof}  —  {src}{tail}",
                 fontsize=9,
             )
         self.ax_ov[0].set_ylim(depth_ylim)  # restore the shared depth range

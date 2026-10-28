@@ -59,9 +59,14 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
                    help="save a static snapshot of a representative cell to this "
                         "PNG instead of opening the interactive window")
     p.add_argument("--diag", dest="diag", action="store_true", default=True,
-                   help="show the raw instrument-diagnostics row "
-                        "(inclinometer/accel/shear/temp-gradient) below the "
-                        "drill-down (default; needs the profiles_NN dir)")
+                   help="show the raw diagnostics row below the drill-down: "
+                        "T1/T2 and the CT temperature, FP07 minus CT, "
+                        "conductivity, fall rate, inclinometer, accel, shear and "
+                        "temp-gradient (default; needs the profiles_NN dir). The "
+                        "CT is the run's ct.T_name/C_name, else JAC_T/JAC_C, a "
+                        "glider's sci_water_temp/cond or SBT1/SBC1; the legend "
+                        "names the one used. With it, a cast with no "
+                        "per-profile product file still draws this row")
     p.add_argument("--no-diag", dest="diag", action="store_false",
                    help="hide the raw instrument-diagnostics row")
 

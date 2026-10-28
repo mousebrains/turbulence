@@ -7,6 +7,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`perturb-diag`: temperature, delta-T, conductivity and fall-rate panels,
+  and a raw row for casts with no product file** (issue #210). The raw
+  diagnostics row (`--diag`, the default) now leads with T1/T2 against the CT
+  temperature, FP07 minus CT (on a robust x-range, so a few surface spikes
+  cannot flatten a millikelvin offset), the CT conductivity, and W_slow with
+  the speed used for epsilon, ahead of the inclinometer, accelerometer, shear
+  and temperature-gradient panels. The CT is the first of these (temperature,
+  conductivity) pairs the cast's file holds: the run's own
+  `ct.T_name`/`ct.C_name` (read from the profiles directory's signature), then
+  JAC_T/JAC_C, a glider's hotel `sci_water_temp`/`sci_water_cond`, and
+  SBT1/SBC1. The conductivity comes from the same CT as the temperature when
+  the file has it. A `ct.T_name` naming an FP07 channel (T1/T2) or the TEOS-10
+  `CT` is never used; those runs fall back to the platform pairs, and the
+  legends name whichever channel is plotted. Each channel is read on the clock
+  its own dimension names, and a panel whose channels a cast lacks reads
+  "n/a". A cast with a profiles file but no usable diss (or chi) file now
+  draws this row, with the spectra panel naming the missing file, instead of
+  a bare "no per-profile file" placeholder; in `perturb-diag mixing` a cast
+  with no usable chi file still shows its shear spectrum on a K_rho click.
 - **`PFile` refuses or repairs a mis-framed `.p` file instead of
   mis-assembling it.** Every reader, ODAS included, cuts a v6 file at a fixed
   record size, so one record of the wrong length puts every later header in
