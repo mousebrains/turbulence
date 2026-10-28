@@ -14,6 +14,7 @@ import difflib
 import hashlib
 import io
 import json
+import os
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -798,7 +799,8 @@ def test_registry_add_keeps_mode_line_endings_and_trailing_comments(fitted, shee
     i = lines.index("    # about the last entry")
     j = next(k for k, ln in enumerate(lines) if "deployment: Narrow 2023" in ln)
     assert i < j < lines.index("# about methods")  # after the entry's comment, before methods'
-    assert (sheet.stat().st_mode & 0o777) == 0o640
+    if os.name == "posix":  # Windows has no POSIX mode bits; chmod only sets read-only
+        assert (sheet.stat().st_mode & 0o777) == 0o640
     assert reg.load(sheet).calibrations
 
 
