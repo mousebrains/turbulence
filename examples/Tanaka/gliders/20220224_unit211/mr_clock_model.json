@@ -1,0 +1,16 @@
+{
+  "definition": "glider_time = MR_time + lag_s; perturb hotel.time_offset would be -lag_s",
+  "blocks": {
+    "2022-02-25..2022-02-27": {
+      "n_files": 20,
+      "t_ref_epoch": 1645894088.499,
+      "lag_at_ref_s": 0.7408294405165489,
+      "drift_s_per_day": -1.6126737277666163,
+      "residual_rms_s": 0.36761939929958515,
+      "t_min_epoch": 1645751487.999,
+      "t_max_epoch": 1646000123.499,
+      "sel_lo_epoch": null,
+      "sel_hi_epoch": null
+    }
+  }
+}
