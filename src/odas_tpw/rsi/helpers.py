@@ -417,8 +417,9 @@ def load_channels(
     Parameters
     ----------
     source : PFile, str, or Path
-        A PFile object, .p file path, full-record .nc path,
-        or per-profile .nc path.
+        A PFile object, .p file path, or per-profile .nc path. A
+        full-record ATOMIX L1 .nc (``rsi-tpw nc``) raises ValueError naming
+        ``rsi-tpw prof``, which restores the channels read here.
     shear_pattern : str
         Regex pattern matching shear channel names.
     accel_pattern : str
@@ -775,6 +776,15 @@ def _channels_from_nc(
     from odas_tpw.rsi.profile import _nc_filled
 
     ds = nc.Dataset(str(nc_path), "r")
+    if "t_fast" not in ds.variables and "L1_converted" in ds.groups:
+        # rsi-tpw nc output. Its profiles come from rsi-tpw prof, which restores
+        # the native channels this loader reads (#235); one route, not two.
+        ds.close()
+        raise ValueError(
+            f"{nc_path.name} is a full-record ATOMIX L1 file (rsi-tpw nc); epsilon and "
+            "chi take a .p file or per-profile NetCDF files. Extract its profiles "
+            f"first: rsi-tpw prof {nc_path.name} -o <dir>"
+        )
     sh_re = re.compile(sh_pat) if sh_pat != SH_PATTERN.pattern else SH_PATTERN
 
     fs_fast = float(ds.fs_fast)
@@ -852,6 +862,13 @@ def _channels_from_nc(
     ):
         if hasattr(ds, attr):
             metadata[attr] = getattr(ds, attr)
+    # Cut from an L1 file that did not record its bad buffers (#235): the
+    # products carry the note, and their bad-buffer fractions are NaN.
+    from odas_tpw.rsi.bad_buffer import UNKNOWN_ATTR
+
+    if hasattr(ds, UNKNOWN_ATTR):
+        metadata[UNKNOWN_ATTR] = str(getattr(ds, UNKNOWN_ATTR))
+        logger.warning("%s: bad-buffer spans unknown: %s", nc_path.name, metadata[UNKNOWN_ATTR])
 
     from odas_tpw.rsi.vehicle import vehicle_from_nc_attrs
 

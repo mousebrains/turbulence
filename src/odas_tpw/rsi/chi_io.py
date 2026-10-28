@@ -27,6 +27,7 @@ import numpy.typing as npt
 import xarray as xr
 
 from odas_tpw._version_info import stamp_provenance
+from odas_tpw.rsi.bad_buffer import UNKNOWN_ATTR
 from odas_tpw.rsi.channels import _is_infinity, config_number
 from odas_tpw.rsi.dissipation import DOF_NUTTALL
 
@@ -424,6 +425,10 @@ def _compute_chi(
             bad_frac=l3_chi.bad_fraction,
             interp_frac=l3_chi.interp_fraction,
         )
+        if UNKNOWN_ATTR in data["metadata"]:
+            # The source could not say where its bad buffers were (#235).
+            for name in ("bad_buffer_fraction", "interpolated_fraction"):
+                ds[name] = ds[name].copy(data=np.full(ds[name].shape, np.nan))
         ds.attrs.update(data["metadata"])
         # Per-thermistor FP07 time-constant multipliers, recorded per channel so
         # a chi file is traceable to the tau that produced it without the

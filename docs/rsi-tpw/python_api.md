@@ -152,7 +152,7 @@ eps_ds.close()
 | `p_file.py` | `PFile` class: reads `.p` binary files, parses headers, demultiplexes address matrix, converts to physical units |
 | `channels.py` | Sensor conversion functions (raw counts to physical units) |
 | `deconvolve.py` | Sensor deconvolution filters |
-| `convert.py` | `p_to_L1()` / `p_to_netcdf()` — full-record NetCDF export |
+| `convert.py` | `p_to_L1()` / `p_to_netcdf()` — full-record NetCDF export; `l1_native_channels()` — its inverse, the channels under their native names |
 | `profile.py` | Profile detection (re-exports from scor160) and per-profile NetCDF extraction |
 | `dissipation.py` | Core epsilon calculation (`get_diss`, `compute_diss_file`) |
 | `chi_io.py` | Chi orchestration: load instrument data and call chi computation |

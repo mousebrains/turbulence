@@ -1,6 +1,6 @@
 # Processing Pipeline
 
-The processing pipeline has four stages. Each stage produces NetCDF files, and any later stage can start from any earlier stage's output:
+The processing pipeline has four stages. Each stage produces NetCDF files, and a later stage can start from an earlier stage's output along the arrows (`prof` from a `.p` or a full-record `.nc`; `eps` and `chi` from a `.p` or a per-profile `.nc`):
 
 ```
 .p files ──> nc ──> full-record .nc ──> prof ──> per-profile .nc ──> eps ──> epsilon .nc

@@ -14,8 +14,8 @@ Subcommands:
     patch-config   — Edit config fields in .p file(s), writing new files
     patch-template — Scaffold a patch-config edit spec from a .p file
     prof     — Extract profiles from .p or full-record .nc files
-    eps      — Compute epsilon (TKE dissipation) from any pipeline stage
-    chi      — Compute chi (thermal variance dissipation) from any pipeline stage
+    eps      — Compute epsilon (TKE dissipation) from .p or per-profile .nc files
+    chi      — Compute chi (thermal variance dissipation) from .p or per-profile .nc files
     pipeline — Run full processing pipeline (.p → profiles → epsilon → chi)
     sensors  — Inventory shear/FP07 sensors across a .p file tree
     ql       — Interactive quick-look viewer
@@ -517,7 +517,7 @@ def _exit_on_bad_speed_selection(merged: dict[str, Any]) -> None:
 
 
 def _cmd_eps(args: argparse.Namespace) -> None:
-    """Compute epsilon (TKE dissipation rate) from any pipeline stage."""
+    """Compute epsilon (TKE dissipation rate) from .p or per-profile .nc files."""
     from odas_tpw.rsi.dissipation import _compute_diss_one, compute_diss_file
 
     files = _resolve_files(args.files, {".p", ".nc"})
@@ -592,7 +592,7 @@ def _chi_response_params(
 
 
 def _cmd_chi(args: argparse.Namespace) -> None:
-    """Compute chi (thermal variance dissipation rate) from any pipeline stage."""
+    """Compute chi (thermal variance dissipation rate) from .p or per-profile .nc files."""
     from odas_tpw.rsi.chi_io import _compute_chi_one, compute_chi_file
 
     files = _resolve_files(args.files, {".p", ".nc"})
@@ -1155,7 +1155,7 @@ def _add_eps_parser(subparsers: argparse._SubParsersAction) -> None:
         description="Compute TKE dissipation rate (epsilon) from VMP data.",
     )
     p.add_argument(
-        "files", nargs="+", metavar="FILE", help=".p, full-record .nc, or per-profile .nc file(s)"
+        "files", nargs="+", metavar="FILE", help=".p or per-profile .nc (rsi-tpw prof) file(s)"
     )
     p.add_argument(
         "-o",
@@ -1275,7 +1275,7 @@ def _add_chi_parser(subparsers: argparse._SubParsersAction) -> None:
         description="Compute thermal variance dissipation rate (chi) from VMP data.",
     )
     p.add_argument(
-        "files", nargs="+", metavar="FILE", help=".p, full-record .nc, or per-profile .nc file(s)"
+        "files", nargs="+", metavar="FILE", help=".p or per-profile .nc (rsi-tpw prof) file(s)"
     )
     p.add_argument(
         "-o",

@@ -104,7 +104,10 @@ rsi-tpw v1to6 VMP_002/TAI_013_00*.p -o translated/ --sens sh1=0.0893,sh2=0.0558
 
 ## `rsi-tpw nc`
 
-Convert `.p` files to NetCDF4 format.
+Convert `.p` files to NetCDF4 format: one ATOMIX L1 file per `.p`, its data in
+the `L1_converted` group under ATOMIX names (`SHEAR`, `VIB`, `TEMP`, `PRES`,
+...). `eps` and `chi` do not read it directly; `rsi-tpw prof` cuts it into the
+per-profile files they read (see [`rsi-tpw prof`](#rsi-tpw-prof)).
 
 ```bash
 rsi-tpw nc VMP/*.p -o nc/           # output to directory
@@ -181,7 +184,37 @@ Extract profiles from `.p` or full-record `.nc` files.
 
 ```bash
 rsi-tpw prof VMP/*.p -o profiles/
+rsi-tpw prof nc/*.nc -o profiles/     # from rsi-tpw nc output
 ```
+
+A profile cut from an `rsi-tpw nc` (ATOMIX L1) file carries what a profile cut
+from its `.p` file carries: the same channels under their native names (`sh1`,
+`Ax`, `T1_dT1`, `T1`, `P`, `JAC_T`, `Incl_X`, ...), the same `sensor_type`, FP07
+coefficient and record-framing attributes, the same `stime`/`etime`, so `eps`
+and `chi` give the same result from either. The L1 file stores them by ATOMIX
+role, and `prof` reads them back by inverting `rsi-tpw nc`'s own mapping: the
+rows of `SHEAR`, `VIB`, `ACC`, `TEMP` by their `sensor_names` (`SHEAR` times the
+square of the speed it was divided by), `TEMP_CTD`, `PITCH` and the other
+single-channel variables by the channel the embedded configuration gives that
+role, `PRES_SLOW` as `P`; `T1`, `P_dP` and the like, which `rsi-tpw nc` leaves out
+as copies, are rebuilt as the `.p` reader builds them. `GRADT` and `PRES` are
+derived and are not carried. RDL bad-buffer spans travel too: `rsi-tpw nc`
+records every channel's in the `L1_converted` group attribute
+`bad_buffer_spans_by_channel`, and the profiles carry them as the `.p` route's
+do, so epsilon and chi mask the same windows. Differences from the `.p` route:
+the piezo channels' `units` are the L1 file's `1` rather than `counts`, and the
+profile keeps the L1 file's `source` attribute and its `history`.
+
+An L1 file written before `rsi-tpw nc` recorded the spans cannot say whether its
+source had any. `prof` warns, its profiles carry `bad_buffer_spans_unknown`, and
+epsilon and chi from them report `bad_buffer_fraction` and
+`interpolated_fraction` as NaN, unknown, rather than 0, which would read as
+clean; re-running `rsi-tpw nc` on the `.p` file records them. `SHEAR` is
+restored with today's speed (unchanged since v0.3.0); a file whose
+`software_version` does not show v0.3.0 or later is restored with a warning.
+A row the file does not name, or a configured channel the file lacks, is logged
+at WARNING; without a `configuration_string` the single-channel variables keep
+their L1 names.
 
 | Flag | Description |
 |------|-------------|
@@ -226,6 +259,11 @@ rsi-tpw eps VMP/*.p -o epsilon/ --salinity 34.5
 | `--salinity PSU\|measured` | Salinity for viscosity: a PSU value, or `measured` = computed from the conductivity/temperature channels via TEOS-10 (default: 35, fixed S) |
 | `--temperature NAME\|degC` | Reference temperature for viscosity: a channel name (e.g. `T2`, `JAC_T`, or a hotel temperature channel), a fixed value [°C], or `auto` = first plausible of `T1`..`Tn`, `T`, `JAC_T` (default: auto). Implausible channels (railed, drifting, mostly non-finite) are skipped with a warning; an explicitly named channel that fails QC warns but is honored. The selection is recorded in the product attrs (`temperature_source`/`temperature_qc`). |
 | `--conductivity NAME` | Conductivity channel for `--salinity measured` (default: auto = `JAC_C` when present) |
+
+`eps` and `chi` take `.p` files or per-profile `.nc` files. Given a full-record
+`rsi-tpw nc` file they print `ERROR: ... Extract its profiles first: rsi-tpw prof
+<file> -o <dir>` and go on to the next file: `prof` then `eps` is the one route
+from an L1 file, and it gives the `.p` route's result.
 
 `eps` (and `chi`) exit with status 1 when **no** input file produced output —
 whether because every file failed or because no profiles were detected — and

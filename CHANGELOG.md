@@ -175,6 +175,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   "Record framing".
 
 ### Fixed
+- **`rsi-tpw prof` on an `rsi-tpw nc` (ATOMIX L1) file now gives usable
+  profiles (#235).** It copied only the L1 file's 1-D variables, under their
+  ATOMIX names, so every profile lacked the shear, vibration and FP07
+  channels and `P`, and `rsi-tpw eps` on one died with `KeyError: 'P'`, while
+  `prof` reported success. The L1 file is now read back by inverting
+  `rsi-tpw nc`'s own role tables (`convert.l1_native_channels`): stacked rows
+  by `sensor_names` (`SHEAR` times the square of the speed it was divided by),
+  single-channel variables by the channel the embedded configuration gives
+  their role, `PRES_SLOW` as `P`, and the channels the L1 file leaves out as
+  copies (`T1` = every n-th `T1_dT1` sample, `P_dP` = `P`) rebuilt as `PFile`
+  builds them; the decimal-day time axis snaps back to the sample grid it
+  rounds, anchored at `start_time`. RDL bad-buffer spans travel too: the L1
+  file's `L1_converted` group gains one attribute, `bad_buffer_spans_by_channel`
+  (every channel's spans, the left-out `T1`/`P_dP` included; empty when
+  clean), and the profiles carry them as the `.p` route's do. An L1 file
+  written before it cannot say: `prof` warns, the profiles carry
+  `bad_buffer_spans_unknown`, and epsilon/chi report `bad_buffer_fraction` and
+  `interpolated_fraction` as NaN rather than a clean 0. `SHEAR` is restored
+  with today's speed, unchanged since v0.3.0, with a warning when the file's
+  `software_version` does not show v0.3.0 or later; a NaN in `PRES_SLOW` is
+  repaired first, as for profile detection. On the committed SN479 file, the
+  repo's full ARCTERX SN479_0006 (2 profiles) and two MicroRider-on-glider
+  files, every channel of every profile is bit-identical to the `.p` route's,
+  and epsilon and chi are bit-identical too, as they are on SN479 with
+  injected dropouts and on SN479_0002, which has real ones; the profiles'
+  attributes differ only in the piezo `units` (`1` in the L1 file, `counts`
+  from `PFile`) and in the L1 file's `source` and history line, which they
+  carry. `rsi-tpw
+  eps`/`chi` given the full-record L1 file now stop with "extract its profiles
+  first: rsi-tpw prof ..." instead of a bare netCDF4 `AttributeError`.
+  `TEMP`'s `sensor_names` (`T1_dT1, T2_dT2`), suspected in the issue of
+  naming the gradient channels, is correct and unchanged: it names the
+  channel each row copies, and `PFile` keeps the deconvolved fast temperature
+  under the pre-emphasized channel's name. The `.p` route is bit-identical
+  to before, and so is every variable of the L1 writer's output.
 - **An `instruments:` key that matches no input file is no longer silent.**
   perturb looks a file's per-instrument settings up by the raw directory name
   of its `.p` file, and a key that matched none was ignored without a word, so
