@@ -342,7 +342,16 @@ class TestBadBufferMarkers:
         sentinel has no meaning there, so scanning would be pure false alarm."""
         row, col, _addr = self._slow_cell(src_bytes)
         mutated = self._inject(src_bytes, [(c, row, col) for c in range(100, 120)])
-        mutated = _patch_word(mutated, 10, 0x0600)  # claim v6.0
+        # Claim v6.0 in EVERY header, as a real v6.0 file does. Record 0 alone
+        # is ODAS patch_setupstr's rewrite of a v6.1 file, whose data records
+        # stay v6.1 and are scanned (test_p_file_framing.py).
+        words = _header_words(mutated)
+        first, size = words[17] + words[11], words[18]
+        mutated = _patch_word(mutated, 10, 0x0600)
+        out = bytearray(mutated)
+        for off in range(first, len(out) - size + 1, size):
+            out[off + 20 : off + 22] = struct.pack(f"{_endian(mutated)}H", 0x0600)
+        mutated = bytes(out)
         p = tmp_path / "v60.p"
         p.write_bytes(mutated)
 

@@ -375,7 +375,8 @@ def _compute_epsilon(
                     epsilon[hit] = np.nan
                     warnings.warn(
                         f"{int(hit.sum())} of {n_sh * n_spec} epsilon estimate(s) "
-                        "rejected: RDL bad-buffer gaps too long to interpolate, or "
+                        "rejected: bad-buffer gaps (RDL markers or records rebuilt "
+                        "after mis-framing) too long to interpolate, or "
                         f"more than {100 * MAX_INTERP_FRACTION:.0f}% of the window "
                         "interpolated "
                         f"({data['metadata'].get('bad_buffer_channels', '')})",
