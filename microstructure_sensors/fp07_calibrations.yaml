@@ -1,0 +1,1123 @@
+# FP07 in-situ calibration sheet: the SINGLE SOURCE OF TRUTH.
+#
+# fp07_calibrations.md (human-readable) and fp07_calibrations.csv (one row per
+# fit) are GENERATED from this file. Never edit them by hand:
+#
+#   fp07-cal registry render       # rewrite both views after editing this file
+#   fp07-cal registry check        # validate this file; fail if a view is stale
+#   fp07-cal registry show T1592   # one bead's history and its prior
+#
+# One entry = one FP07 bead x one deployment, fitted by `fp07-cal fit` pooled
+# over the deployment. The loader is strict: an unknown or missing key, a bad
+# serial (beads are T<number>, no leading zero; instrument serials are compared
+# as numbers), first > last, an order that disagrees with the beta terms or with
+# how it was chosen, a bead (or a channel) in two places at once, a second entry
+# for the same bead and deployment, or coefficients that cannot describe an FP07
+# over valid_T_degC (t_0 outside 250-320 K, beta_1 <= 0, |L| beyond the bridge's
+# 1.386, or T not falling with L) is an error.
+#
+# coefficients: the ODAS/perturb .p config form that `fp07-cal patch` writes and
+# rsi/channels.py::convert_therm reads,
+#     1/T_K = 1/t_0 + L/beta_1 + L^2/beta_2 + L^3/beta_3
+# t_0 and every beta in kelvin; each beta is a RECIPROCAL. An order-n fit has
+# exactly beta_1..beta_n; an absent term is no term (in a .p config, switch a
+# term off with beta_k = 1e30, never 0). Full float64 precision, as fitted.
+#
+# bridge: the channel's half-bridge constants, which define L = ln(R_T/R_0) from
+# raw counts. The coefficients reproduce only on a channel with these constants.
+#
+# uncertainty (mK of temperature, against this entry's reference, whose own error
+# is NOT included):
+#   fit_rms_mK   in-sample rms residual of the chosen order
+#   held_out_mK  rms error of the chosen order predicting the cold half of the range
+#                from the warm half and vice versa (fp07-cal select_order)
+#   block_sd_mK  sample SD of the t_0 offsets of n_blocks equal-time blocks, shape
+#                held fixed (fp07-cal blocked_offsets, the block table of the fit's
+#                T*_report.md); null below 3 blocks, and only then
+# fit.held_out_by_order_mK (the record's order_selection) is required when
+# order_choice is auto, so the choice can be checked; held_out_mK must equal its
+# entry for the chosen order. With order_choice fixed it may be omitted.
+# valid_T_degC: the reference temperature range the fit covered.
+# Dates are UTC. reference.cal_age_years is derived (first - cal_date), not stored.
+
+schema: fp07-calibrations/1
+
+# How far a calibration carries to another deployment: typical magnitudes observed
+# on a handful of beads (issue #189, results of 2026-10-28), not bounds and not
+# formal standard errors; each evidence text gives the largest seen.
+# registry.py's prior rule uses them (its source is the bead's widest-range
+# calibration not flagged short, fast-descent or episode); the sheet renders the
+# evidence and reference_caveat.
+transfer:
+  offset_mK: 15            # t_0 carried over to a new deployment
+  shape_mK: 5              # the beta terms (curve shape) ...
+  shape_span_K: [5, 10]    # ... over this span of temperature
+  cross_instrument_mK: 10  # other instrument or channel; added in quadrature
+  settling_mK: [5, 10]     # common settling early in a long deployment ...
+  settling_days: [7, 14]   # ... over its first 1-2 weeks
+  source: https://github.com/mousebrains/turbulence/issues/189#issuecomment-6475966024
+  evidence:
+    offset: >-
+      From the entries in this sheet, two curves of one bead compared at the same L
+      (registry.curve_difference). T1592 on VMP SN194 at 28 degC, against ARCTERX-2022
+      Interior: -11.6 mK (SUNRISE 2019), -2.9 and -3.6 mK (SUNRISE 2021), -9.2 mK
+      (SUNRISE 2022), +0.2 mK (ARCTERX-2022 Wake). T1593 from 2019 to 2021: +9.5 to
+      +17.1 mK over 26.56-29.40 degC, the largest seen. T2005 within -0.5 to +3.4 mK of
+      ARCTERX-2022 Interior over four deployments in 2021-2022. MicroRider SN435's beads
+      T2811 and T2813 one year apart (2025 to 2026; #189 analysis, not in this sheet):
+      -10.6 and -13.2 mK. The #189 comment quotes order-2 fits, which differ from these
+      auto-order entries by up to ~3 mK (SUNRISE 2019: -14 mK there). All the VMP
+      numbers were seen through one JAC CT (see the reference caveat).
+    shape: >-
+      Quiet-water fits only. Over the common range of two calibrations of one bead the
+      curves differ by 1.2-3.8 mK peak-to-peak (T1592 and T2005 against ARCTERX-2022
+      Interior, including T1592 on another instrument in 2025: 2.5 mK over 5.4 K); T2811
+      and T2813 one year apart (#189, not in this sheet) by 2.9 and 4.0 mK over 5-18.6
+      degC. Fast descents break this: T1592's SUNRISE 2019 and 2022 curves differ from
+      ARCTERX-2022 Interior by 16.1 and 16.7 mK peak-to-peak, which is why
+      `fast-descent` disqualifies a prior source.
+    cross_instrument: >-
+      One observation. T1592, moved from VMP SN194 T1 (2022) to VMP SN142 T2 (2025),
+      reads -8.3 to -10.8 mK (mean -9.1) against its ARCTERX-2022 Interior curve at the
+      same L over 19.85-25.26 degC; the #189 fixed-curve comparison against each JAC
+      gives +9.8 mK, the same shift seen from the bead's side. It combines bead change,
+      other bridge electronics and another JAC CT (SN 22).
+    settling: >-
+      Long Slocum and MicroRider deployments (ARCTERX-2023 and 2025 Interior, #189): a
+      common settling of 5-10 mK over the first 1-2 weeks, besides episodes of 10-40 mK
+      tied to electrical faults.
+  reference_caveat: >-
+    Every SN194 comparison was made through the same reference, JAC CT SN 23 (calibrated
+    2016-02-15), so a change in a bead cannot be separated from drift of that reference.
+    Against a fresher JAC (SN 79, calibrated 2021-10-20) on ARCTERX-2022 Interior,
+    mixed-layer casts within 30 minutes of each other give JAC 23 - JAC 79 = +15 mK (n =
+    29, MAD 19 mK). That is suggestive only: the two VMPs alternated rather than
+    profiling together, so it is confounded with position and time (+13 mK when SN194
+    cast second, +30 mK when it cast first). A recalibration of JAC 23 would settle it.
+
+# How the fits were made, referenced by each entry's fit.method.
+methods:
+  vmp-own-jac: >-
+    fp07-cal's run_calibration (the engine of `fp07-cal fit`) pooled over every VMP
+    descent of the deployment (P >= 3 dbar, fall rate >= 0.3 dbar/s, >= 20 s) against
+    the instrument's own JAC CT temperature (JAC_T): every 8th slow sample, none
+    interpolated, blanked over bad buffers plus 2 s, and +/-3 s around any sample more
+    than 1 K from its 0.5 s running median (this fired once, on SN142 in ARCTERX-2025
+    Interior). The reference pole is a single pole at the JAC's vendor response for the
+    median fall rate. Lag searched over +/-1 s after a 10 s high-pass; robust fit; the
+    sensor-geometry term off, because the 2021 descents span about 22 dbar, too short
+    for it.
+  glider-ctd: >-
+    fp07-cal fit against the Slocum's own CTD (sci_water_temp on sci_ctd41cp_timestamp),
+    real samples only, pooled over up to 100-160 files spread across the deployment. A
+    0.7 s single pole for the CTD's thermistor; lag searched over +/-20 s after a 30 s
+    high-pass and gated on peak sharpness; robust fit with the sensor-geometry term
+    (dz*dT/dz + tau*w*dT/dz) fitted jointly. In every glider fit here dz and tau are
+    collinear (0.86-0.94), so only their combination is resolved.
+
+calibrations:
+
+  - bead: T1592
+    deployment: SUNRISE 2019 Pelican
+    instrument:
+      model: vmp-250
+      serial: "194"
+      channel: T1
+    first: "2019-06-02T18:39:10Z"
+    last: "2019-06-08T17:50:39Z"
+    reference:
+      kind: JAC CT
+      serial: "23"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 43
+      n_profiles: 2383
+      n_pairs: 844788
+      order: 1
+      order_choice: auto
+      held_out_by_order_mK: {1: 22.19, 2: 30.79, 3: 29.24}
+      robust: true
+      geometry: false
+      lag_s: 0.144
+      reference_pole_s: 0.152
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 283.1929650435034
+      beta_1: 3079.8716480147123
+    bridge: {a: -9.7, b: 0.99878, g: 6.0, e_b: 0.68229, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 7.58
+      held_out_mK: 22.19
+      block_sd_mK: 4.13
+      n_blocks: 6
+    valid_T_degC: [19.23, 30.1]
+    flags: [lag-gate-overridden, fast-descent]
+    notes: >-
+      Median fall rate 1.28 dbar/s through strong gradients. The six block offsets span
+      10.4 mK, against 1-3 mK on the quieter deployments.
+
+  - bead: T1593
+    deployment: SUNRISE 2019 Pelican
+    instrument:
+      model: vmp-250
+      serial: "194"
+      channel: T2
+    first: "2019-06-02T18:39:10Z"
+    last: "2019-06-08T17:50:39Z"
+    reference:
+      kind: JAC CT
+      serial: "23"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 43
+      n_profiles: 2383
+      n_pairs: 844788
+      order: 1
+      order_choice: auto
+      held_out_by_order_mK: {1: 20.46, 2: 28.92, 3: 47.72}
+      robust: true
+      geometry: false
+      lag_s: 0.142
+      reference_pole_s: 0.152
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 283.5581049374451
+      beta_1: 3089.2864242929145
+    bridge: {a: -7.3, b: 0.99862, g: 6.0, e_b: 0.68224, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 8.26
+      held_out_mK: 20.46
+      block_sd_mK: 4.55
+      n_blocks: 6
+    valid_T_degC: [19.23, 30.1]
+    flags: [lag-gate-overridden, fast-descent]
+    notes: >-
+      Median fall rate 1.28 dbar/s through strong gradients. The six block offsets span
+      10.7 mK.
+
+  - bead: T1592
+    deployment: SUNRISE 2021 Pelican
+    instrument:
+      model: vmp-250
+      serial: "194"
+      channel: T1
+    first: "2021-06-22T01:39:05Z"
+    last: "2021-07-01T20:55:59Z"
+    reference:
+      kind: JAC CT
+      serial: "23"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 16
+      n_profiles: 1487
+      n_pairs: 272405
+      order: 1
+      order_choice: auto
+      held_out_by_order_mK: {1: 4.21, 2: 4.66, 3: 9.79}
+      robust: true
+      geometry: false
+      lag_s: 0.108
+      reference_pole_s: 0.17
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 283.2214580049832
+      beta_1: 3083.666775851881
+    bridge: {a: -9.7, b: 0.99878, g: 6.0, e_b: 0.68229, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 3.2
+      held_out_mK: 4.21
+      block_sd_mK: 0.53
+      n_blocks: 6
+    valid_T_degC: [26.56, 29.4]
+    flags: [lag-gate-overridden]
+    notes: >-
+      All 16 Pelican files. T2 was changed from T1593 to T2005 on 2021-06-29; T1 fits
+      split at that change agree with this one to 0.1 mK at 27-28 degC. The range is
+      only 2.8 K, so the shape is weakly constrained.
+
+  - bead: T1593
+    deployment: SUNRISE 2021 Pelican
+    instrument:
+      model: vmp-250
+      serial: "194"
+      channel: T2
+    first: "2021-06-22T01:39:05Z"
+    last: "2021-06-29T10:33:06Z"
+    reference:
+      kind: JAC CT
+      serial: "23"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 12
+      n_profiles: 1136
+      n_pairs: 207684
+      order: 1
+      order_choice: auto
+      held_out_by_order_mK: {1: 6.08, 2: 8.29, 3: 12.3}
+      robust: true
+      geometry: false
+      lag_s: 0.109
+      reference_pole_s: 0.169
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 283.6162071555889
+      beta_1: 3097.9513569174587
+    bridge: {a: -7.3, b: 0.99862, g: 6.0, e_b: 0.68224, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 3.95
+      held_out_mK: 6.08
+      block_sd_mK: 1.69
+      n_blocks: 6
+    valid_T_degC: [26.56, 29.4]
+    flags: [lag-gate-overridden]
+    notes: >-
+      The 12 files before T2 was changed to T2005. The range is only 2.8 K, so the shape
+      is weakly constrained. At the same L this curve reads +9.5 to +17.1 mK against the
+      bead's 2019 curve over their common 26.56-29.40 degC (+16.0 at 27, +13.3 at 28).
+
+  - bead: T2005
+    deployment: SUNRISE 2021 Pelican
+    instrument:
+      model: vmp-250
+      serial: "194"
+      channel: T2
+    first: "2021-06-29T18:17:47Z"
+    last: "2021-07-01T20:55:59Z"
+    reference:
+      kind: JAC CT
+      serial: "23"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 4
+      n_profiles: 243
+      n_pairs: 44721
+      order: 1
+      order_choice: auto
+      held_out_by_order_mK: {1: 9.51, 2: 12.63, 3: 53.02}
+      robust: true
+      geometry: false
+      lag_s: 0.083
+      reference_pole_s: 0.171
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 285.44964038810235
+      beta_1: 3079.709447103691
+    bridge: {a: -7.3, b: 0.99862, g: 6.0, e_b: 0.68224, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 2.71
+      held_out_mK: 9.51
+      block_sd_mK: null
+      n_blocks: 2
+    valid_T_degC: [27.88, 28.77]
+    flags: [lag-gate-overridden, short]
+    notes: >-
+      The 4 files after T2 was changed from T1593: 243 descents over 0.9 K. Only 2
+      blocks, so no block scatter.
+
+  - bead: T1592
+    deployment: SUNRISE 2021 WaltonSmith
+    instrument:
+      model: vmp-250
+      serial: "194"
+      channel: T1
+    first: "2021-07-02T01:27:15Z"
+    last: "2021-07-08T04:35:41Z"
+    reference:
+      kind: JAC CT
+      serial: "23"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 34
+      n_profiles: 2408
+      n_pairs: 436687
+      order: 1
+      order_choice: auto
+      held_out_by_order_mK: {1: 5.49, 2: 5.58, 3: 7.76}
+      robust: true
+      geometry: false
+      lag_s: 0.152
+      reference_pole_s: 0.169
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 283.22253671822995
+      beta_1: 3083.9875937673814
+    bridge: {a: -9.7, b: 0.99878, g: 6.0, e_b: 0.68229, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 3.93
+      held_out_mK: 5.49
+      block_sd_mK: 1.23
+      n_blocks: 6
+    valid_T_degC: [27.23, 29.16]
+    flags: [lag-gate-overridden]
+    notes: >-
+      The range is only 1.9 K, so the shape is weakly constrained.
+
+  - bead: T2005
+    deployment: SUNRISE 2021 WaltonSmith
+    instrument:
+      model: vmp-250
+      serial: "194"
+      channel: T2
+    first: "2021-07-02T01:27:15Z"
+    last: "2021-07-08T04:35:41Z"
+    reference:
+      kind: JAC CT
+      serial: "23"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 34
+      n_profiles: 2408
+      n_pairs: 436735
+      order: 2
+      order_choice: auto
+      held_out_by_order_mK: {1: 5.11, 2: 5.02, 3: 5.18}
+      robust: true
+      geometry: false
+      lag_s: 0.132
+      reference_pole_s: 0.169
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 286.1478238388657
+      beta_1: 3390.2833443385066
+      beta_2: -38648.213146382805
+    bridge: {a: -7.3, b: 0.99862, g: 6.0, e_b: 0.68224, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 3.54
+      held_out_mK: 5.02
+      block_sd_mK: 0.78
+      n_blocks: 6
+    valid_T_degC: [27.23, 29.16]
+    flags: [lag-gate-overridden]
+    notes: >-
+      The range is only 1.9 K. Order 2 beat order 1 by 0.09 mK of held-out error and
+      gives a negative beta_2, so do not extrapolate this shape.
+
+  - bead: T1592
+    deployment: SUNRISE 2022 PointSur
+    instrument:
+      model: vmp-250
+      serial: "194"
+      channel: T1
+    first: "2022-06-18T12:54:11Z"
+    last: "2022-07-05T22:52:32Z"
+    reference:
+      kind: JAC CT
+      serial: "23"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 77
+      n_profiles: 7385
+      n_pairs: 1799379
+      order: 1
+      order_choice: auto
+      held_out_by_order_mK: {1: 24.11, 2: 26.45, 3: 33.26}
+      robust: true
+      geometry: false
+      lag_s: 0.082
+      reference_pole_s: 0.175
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 283.22887932757067
+      beta_1: 3086.045064865419
+    bridge: {a: -9.7, b: 0.99878, g: 6.0, e_b: 0.68229, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 7.5
+      held_out_mK: 24.11
+      block_sd_mK: 3.33
+      n_blocks: 6
+    valid_T_degC: [22.48, 32.13]
+    flags: [lag-gate-overridden, export-gate-overridden, fast-descent]
+    notes: >-
+      fp07-cal's 1 K export gate refused both channels over one 4 K event at a
+      bottom-layer front, which the robust fit had already discarded. Refitted with the
+      gate at 10 K and a +/-0.5 s lag search. Median fall rate 0.96 dbar/s through
+      strong gradients; the six block offsets span 9.8 mK.
+
+  - bead: T2005
+    deployment: SUNRISE 2022 PointSur
+    instrument:
+      model: vmp-250
+      serial: "194"
+      channel: T2
+    first: "2022-06-18T12:54:11Z"
+    last: "2022-07-05T22:52:32Z"
+    reference:
+      kind: JAC CT
+      serial: "23"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 77
+      n_profiles: 7385
+      n_pairs: 1799379
+      order: 2
+      order_choice: auto
+      held_out_by_order_mK: {1: 25.41, 2: 24.97, 3: 34.65}
+      robust: true
+      geometry: false
+      lag_s: 0.082
+      reference_pole_s: 0.175
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 285.36762332617025
+      beta_1: 3043.8009544044476
+      beta_2: 275958.22680696065
+    bridge: {a: -7.3, b: 0.99862, g: 6.0, e_b: 0.68224, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 6.08
+      held_out_mK: 24.97
+      block_sd_mK: 1.46
+      n_blocks: 6
+    valid_T_degC: [22.48, 32.13]
+    flags: [lag-gate-overridden, export-gate-overridden, fast-descent]
+    notes: >-
+      fp07-cal's 1 K export gate refused both channels over one 4 K event at a
+      bottom-layer front, which the robust fit had already discarded. Refitted with the
+      gate at 10 K and a +/-0.5 s lag search. Median fall rate 0.96 dbar/s.
+
+  - bead: T1592
+    deployment: ARCTERX-2022 Interior
+    instrument:
+      model: vmp-250
+      serial: "194"
+      channel: T1
+    first: "2022-03-21T04:59:26Z"
+    last: "2022-03-30T18:45:16Z"
+    reference:
+      kind: JAC CT
+      serial: "23"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 30
+      n_profiles: 534
+      n_pairs: 606741
+      order: 3
+      order_choice: auto
+      held_out_by_order_mK: {1: 5.34, 2: 6.16, 3: 4.56}
+      robust: true
+      geometry: false
+      lag_s: 0.118
+      reference_pole_s: 0.177
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 283.1245701203119
+      beta_1: 3047.8872920200442
+      beta_2: 302761.4588270863
+      beta_3: 1700539.9960895304
+    bridge: {a: -9.7, b: 0.99878, g: 6.0, e_b: 0.68229, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 2.97
+      held_out_mK: 4.56
+      block_sd_mK: 1.0
+      n_blocks: 6
+    valid_T_degC: [18.0, 28.35]
+    flags: [lag-gate-overridden]
+    notes: >-
+      The baseline for the cross-deployment comparisons in issue #189.
+
+  - bead: T2005
+    deployment: ARCTERX-2022 Interior
+    instrument:
+      model: vmp-250
+      serial: "194"
+      channel: T2
+    first: "2022-03-21T04:59:26Z"
+    last: "2022-03-30T18:45:16Z"
+    reference:
+      kind: JAC CT
+      serial: "23"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 30
+      n_profiles: 534
+      n_pairs: 606753
+      order: 3
+      order_choice: auto
+      held_out_by_order_mK: {1: 6.07, 2: 4.2, 3: 4.19}
+      robust: true
+      geometry: false
+      lag_s: 0.099
+      reference_pole_s: 0.177
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 285.37000905262164
+      beta_1: 3044.669964813032
+      beta_2: 243256.0144392118
+      beta_3: 992652.9729320979
+    bridge: {a: -7.3, b: 0.99862, g: 6.0, e_b: 0.68224, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 2.75
+      held_out_mK: 4.19
+      block_sd_mK: 0.65
+      n_blocks: 6
+    valid_T_degC: [18.0, 28.35]
+    flags: [lag-gate-overridden]
+    notes: >-
+      Order 3 beat order 2 by 0.01 mK of held-out error, a tie.
+
+  - bead: T1592
+    deployment: ARCTERX-2022 Wake
+    instrument:
+      model: vmp-250
+      serial: "194"
+      channel: T1
+    first: "2022-04-07T07:44:31Z"
+    last: "2022-04-12T05:37:13Z"
+    reference:
+      kind: JAC CT
+      serial: "23"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 2
+      n_profiles: 36
+      n_pairs: 59678
+      order: 2
+      order_choice: auto
+      held_out_by_order_mK: {1: 12.24, 2: 5.32, 3: 10.68}
+      robust: true
+      geometry: false
+      lag_s: 0.123
+      reference_pole_s: 0.177
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 283.11349310852256
+      beta_1: 3042.299263289587
+      beta_2: 284194.1742231843
+    bridge: {a: -9.7, b: 0.99878, g: 6.0, e_b: 0.68229, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 2.8
+      held_out_mK: 5.32
+      block_sd_mK: null
+      n_blocks: 2
+    valid_T_degC: [18.37, 28.17]
+    flags: [lag-gate-overridden, short]
+    notes: >-
+      Only 2 files (36 descents) carried this bead. 2 blocks, so no block scatter.
+
+  - bead: T2005
+    deployment: ARCTERX-2022 Wake
+    instrument:
+      model: vmp-250
+      serial: "194"
+      channel: T2
+    first: "2022-04-07T07:44:31Z"
+    last: "2022-04-12T05:37:13Z"
+    reference:
+      kind: JAC CT
+      serial: "23"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 2
+      n_profiles: 36
+      n_pairs: 59677
+      order: 3
+      order_choice: auto
+      held_out_by_order_mK: {1: 11.96, 2: 9.57, 3: 7.69}
+      robust: true
+      geometry: false
+      lag_s: 0.105
+      reference_pole_s: 0.177
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 285.36503965828575
+      beta_1: 3042.32996749294
+      beta_2: 249649.81747302675
+      beta_3: 2503526.553635337
+    bridge: {a: -7.3, b: 0.99862, g: 6.0, e_b: 0.68224, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 2.86
+      held_out_mK: 7.69
+      block_sd_mK: null
+      n_blocks: 2
+    valid_T_degC: [18.37, 28.17]
+    flags: [lag-gate-overridden, short]
+    notes: >-
+      Only 2 files (36 descents); order 3 from 36 descents. 2 blocks, so no block
+      scatter.
+
+  - bead: T1592
+    deployment: ARCTERX-2025 Interior
+    instrument:
+      model: VMP250IR_RDL
+      serial: "142"
+      channel: T2
+    first: "2025-02-11T20:56:43Z"
+    last: "2025-02-17T21:38:48Z"
+    reference:
+      kind: JAC CT
+      serial: "22"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 3
+      n_profiles: 109
+      n_pairs: 130193
+      order: 2
+      order_choice: auto
+      held_out_by_order_mK: {1: 5.23, 2: 2.54, 3: 3.23}
+      robust: true
+      geometry: false
+      lag_s: 0.098
+      reference_pole_s: 0.166
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 283.07182766693546
+      beta_1: 3026.4199596817084
+      beta_2: 184195.00730711577
+    bridge: {a: -8.3, b: 0.99887, g: 6.0, e_b: 0.68265, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 2.41
+      held_out_mK: 2.54
+      block_sd_mK: 0.2
+      n_blocks: 3
+    valid_T_degC: [19.85, 25.26]
+    flags: [lag-gate-overridden, reference-edited]
+    notes: >-
+      Moved to VMP SN142, channel T2, so other bridge constants and another JAC CT. 3 of
+      SN142's 5 files had descents. The reference was blanked +/-3 s around one
+      instrument-wide transient (AIOP2_VMP142_0002 at 21:14:22Z: JAC_T to 5 degC and P
+      +3 dbar within 0.1 s, both FP07s ramping together). At the same L this curve reads
+      -8.3 to -10.8 mK (mean -9.1) against the bead's ARCTERX-2022 Interior curve over
+      19.85-25.26 degC, a nearly flat shift.
+
+  - bead: T2007
+    deployment: ARCTERX-2025 Interior
+    instrument:
+      model: VMP250IR_RDL
+      serial: "142"
+      channel: T1
+    first: "2025-02-11T20:56:43Z"
+    last: "2025-02-17T21:38:48Z"
+    reference:
+      kind: JAC CT
+      serial: "22"
+      cal_date: "2016-02-15"
+    fit:
+      method: vmp-own-jac
+      pooled: true
+      n_files: 3
+      n_profiles: 109
+      n_pairs: 130193
+      order: 2
+      order_choice: auto
+      held_out_by_order_mK: {1: 4.73, 2: 2.51, 3: 4.31}
+      robust: true
+      geometry: false
+      lag_s: 0.104
+      reference_pole_s: 0.166
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 283.1247773438556
+      beta_1: 3029.388690521734
+      beta_2: 213356.78684566598
+    bridge: {a: -11.5, b: 0.99954, g: 6.0, e_b: 0.68294, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 2.4
+      held_out_mK: 2.51
+      block_sd_mK: 0.18
+      n_blocks: 3
+    valid_T_degC: [19.85, 25.26]
+    flags: [lag-gate-overridden, reference-edited]
+    notes: >-
+      Fitted alongside T1592 (on T2) from the same 3 SN142 files, with the same
+      reference blanking (+/-3 s around one instrument-wide transient, AIOP2_VMP142_0002
+      at 21:14:22Z).
+
+  - bead: T2811
+    deployment: ARCTERX-2025 Interior
+    instrument:
+      model: MR1000RDL-EM
+      serial: "435"
+      channel: T1
+      platform: Slocum osu685
+    first: "2025-02-04T07:42:26Z"
+    last: "2025-04-10T15:36:58Z"
+    reference:
+      kind: SBE-41CP glider CTD
+      serial: "9410"
+      cal_date: null
+      note: >-
+        Serial from the glider's proglets.dat; its calibration date is not in the data.
+    fit:
+      method: glider-ctd
+      pooled: true
+      n_files: 103
+      n_profiles: 99
+      n_pairs: 218535
+      order: 2
+      order_choice: auto
+      held_out_by_order_mK: {1: 58.02, 2: 12.69, 3: 14.35}
+      robust: true
+      geometry: {dz_m: 0.665, tau_s: 2.1}
+      lag_s: 7.187
+      reference_pole_s: 0.7
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e, uncommitted changes, source a83ee6eba45b)"
+    coefficients:
+      t_0: 286.654005646593
+      beta_1: 3051.594540784931
+      beta_2: 259738.61892127435
+    bridge: {a: -12.3, b: 0.99921, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 5.49
+      held_out_mK: 12.69
+      block_sd_mK: 1.39
+      n_blocks: 20
+    valid_T_degC: [3.61, 27.57]
+    notes: >-
+      Drift over the deployment, from the streaming pass over all 757 profiles with the
+      fitted geometry removed: +0.022 +/- 0.015 mK/day (p = 0.18), not significant. This
+      record is the rerun after the streaming-pass fix (#237); its coefficients are
+      bit-identical to the fit by committed code (git v0.4.0-44-g5f7f1112353e).
+
+  - bead: T2813
+    deployment: ARCTERX-2025 Interior
+    instrument:
+      model: MR1000RDL-EM
+      serial: "435"
+      channel: T2
+      platform: Slocum osu685
+    first: "2025-02-04T07:42:26Z"
+    last: "2025-04-10T15:36:58Z"
+    reference:
+      kind: SBE-41CP glider CTD
+      serial: "9410"
+      cal_date: null
+      note: >-
+        Serial from the glider's proglets.dat; its calibration date is not in the data.
+    fit:
+      method: glider-ctd
+      pooled: true
+      n_files: 103
+      n_profiles: 99
+      n_pairs: 218522
+      order: 3
+      order_choice: auto
+      held_out_by_order_mK: {1: 58.2, 2: 11.94, 3: 10.55}
+      robust: true
+      geometry: {dz_m: 0.736, tau_s: 2.32}
+      lag_s: 7.232
+      reference_pole_s: 0.7
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e, uncommitted changes, source a83ee6eba45b)"
+    coefficients:
+      t_0: 287.73511226121155
+      beta_1: 3025.154428605665
+      beta_2: 254553.06996862197
+      beta_3: 16278810.34287678
+    bridge: {a: 0.2, b: 0.99943, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 5.89
+      held_out_mK: 10.55
+      block_sd_mK: 2.28
+      n_blocks: 20
+    valid_T_degC: [3.61, 27.57]
+    notes: >-
+      Drift over the deployment, from the streaming pass over all 757 profiles with the
+      fitted geometry removed: +0.074 +/- 0.020 mK/day (p = 0.004), about +4.9 mK over
+      66 days. Order 3 beat order 2 by 1.4 mK of held-out error. This record is the
+      rerun after the streaming-pass fix (#237); its coefficients are bit-identical to
+      the fit by committed code (git v0.4.0-44-g5f7f1112353e).
+
+  - bead: T2809
+    deployment: ARCTERX-2025 Interior
+    instrument:
+      model: MR1000RDL-EM
+      serial: "433"
+      channel: T1
+      platform: Slocum osu684
+    first: "2025-02-04T01:06:01Z"
+    last: "2025-02-10T01:21:19Z"
+    reference:
+      kind: SBE-41CP glider CTD
+      serial: "9421"
+      cal_date: null
+      note: >-
+        Serial from the glider's proglets.dat; its calibration date is not in the data.
+    fit:
+      method: glider-ctd
+      pooled: true
+      n_files: 45
+      n_profiles: 19
+      n_pairs: 32441
+      order: 2
+      order_choice: auto
+      held_out_by_order_mK: {1: 48.84, 2: 16.4, 3: 20.94}
+      robust: true
+      geometry: {dz_m: 0.84, tau_s: 2.94}
+      lag_s: 7.546
+      reference_pole_s: 0.7
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 284.8693675872002
+      beta_1: 3062.1855217366997
+      beta_2: 301056.8535023441
+    bridge: {a: -2.9, b: 0.99939, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 5.31
+      held_out_mK: 16.4
+      block_sd_mK: 1.75
+      n_blocks: 3
+    valid_T_degC: [5.04, 26.12]
+    flags: [short]
+    notes: >-
+      Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit
+      includes the climbs after it. Only 3 blocks, too few to test for drift.
+
+  - bead: T2810
+    deployment: ARCTERX-2025 Interior
+    instrument:
+      model: MR1000RDL-EM
+      serial: "433"
+      channel: T2
+      platform: Slocum osu684
+    first: "2025-02-04T01:06:01Z"
+    last: "2025-02-10T01:21:19Z"
+    reference:
+      kind: SBE-41CP glider CTD
+      serial: "9421"
+      cal_date: null
+      note: >-
+        Serial from the glider's proglets.dat; its calibration date is not in the data.
+    fit:
+      method: glider-ctd
+      pooled: true
+      n_files: 45
+      n_profiles: 19
+      n_pairs: 32436
+      order: 2
+      order_choice: auto
+      held_out_by_order_mK: {1: 49.82, 2: 21.55, 3: 26.41}
+      robust: true
+      geometry: {dz_m: 0.86, tau_s: 2.92}
+      lag_s: 7.622
+      reference_pole_s: 0.7
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 281.2492818916516
+      beta_1: 3013.9613103994766
+      beta_2: 299877.04652461346
+    bridge: {a: -6.7, b: 0.99893, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 6.96
+      held_out_mK: 21.55
+      block_sd_mK: 5.37
+      n_blocks: 3
+    valid_T_degC: [5.04, 26.12]
+    flags: [short, episode]
+    notes: >-
+      Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit
+      includes the climbs after it. T2 read +20 to +27 mK from about 4.5 h before the
+      failure; that episode is inside the fit and inflates the block scatter.
+
+  - bead: T2244
+    deployment: ARCTERX-2023 Interior
+    instrument:
+      model: MR1000RDL-EM
+      serial: "435"
+      channel: T1
+      platform: Slocum osu685
+    first: "2023-05-31T04:51:49Z"
+    last: "2023-08-05T20:34:38Z"
+    reference:
+      kind: SBE-41CP glider CTD
+      serial: "9410"
+      cal_date: null
+      note: >-
+        Serial from the glider's proglets.dat; its calibration date is not in the data.
+    fit:
+      method: glider-ctd
+      pooled: true
+      n_files: 154
+      n_profiles: 152
+      n_pairs: 413439
+      order: 2
+      order_choice: auto
+      held_out_by_order_mK: {1: 86.61, 2: 17.78, 3: 33.57}
+      robust: true
+      geometry: {dz_m: 0.512, tau_s: 1.43}
+      lag_s: 6.905
+      reference_pole_s: 0.7
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 284.1149145591465
+      beta_1: 3054.870104448486
+      beta_2: 268522.9247909007
+    bridge: {a: -12.3, b: 0.99921, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 8.0
+      held_out_mK: 17.78
+      block_sd_mK: 4.38
+      n_blocks: 12
+    valid_T_degC: [3.5, 30.46]
+    flags: [screened, episode]
+    notes: >-
+      Files A685_0005-0618 only: the fit stops at 2023-08-05, when the nose flooded. It
+      includes a +8 to +16 mK episode, 2023-06-19 to 07-01, while the EM channel was
+      pegged (one block offset of -11 mK). Profiles gated on fall rate only, because
+      U_EM was unreliable in 2023.
+
+  - bead: T2245
+    deployment: ARCTERX-2023 Interior
+    instrument:
+      model: MR1000RDL-EM
+      serial: "435"
+      channel: T2
+      platform: Slocum osu685
+    first: "2023-05-31T04:51:49Z"
+    last: "2023-06-12T15:03:12Z"
+    reference:
+      kind: SBE-41CP glider CTD
+      serial: "9410"
+      cal_date: null
+      note: >-
+        Serial from the glider's proglets.dat; its calibration date is not in the data.
+    fit:
+      method: glider-ctd
+      pooled: true
+      n_files: 131
+      n_profiles: 126
+      n_pairs: 287052
+      order: 2
+      order_choice: auto
+      held_out_by_order_mK: {1: 79.96, 2: 11.03, 3: 20.37}
+      robust: true
+      geometry: {dz_m: 0.46, tau_s: 1.18}
+      lag_s: 6.535
+      reference_pole_s: 0.7
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 281.1953031328784
+      beta_1: 3017.6049842750162
+      beta_2: 273292.7994601109
+    bridge: {a: 0.2, b: 0.99943, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 5.47
+      held_out_mK: 11.03
+      block_sd_mK: 1.88
+      n_blocks: 12
+    valid_T_degC: [3.51, 29.33]
+    flags: [screened]
+    notes: >-
+      Files A685_0005-0157 only: from 2023-06-12 17:17Z T2 sat on the bridge rail.
+      Profiles gated on fall rate only, because U_EM was unreliable in 2023.
+
+  - bead: T2239
+    deployment: ARCTERX-2023 Interior
+    instrument:
+      model: MR1000RDL-EM
+      serial: "433"
+      channel: T1
+      platform: Slocum osu684
+    first: "2023-05-31T04:35:17Z"
+    last: "2023-06-07T21:47:51Z"
+    reference:
+      kind: SBE-41CP glider CTD
+      serial: "9421"
+      cal_date: null
+      note: >-
+        Serial from the glider's proglets.dat; its calibration date is not in the data.
+    fit:
+      method: glider-ctd
+      pooled: true
+      n_files: 108
+      n_profiles: 103
+      n_pairs: 172658
+      order: 3
+      order_choice: auto
+      held_out_by_order_mK: {1: 75.07, 2: 14.5, 3: 12.28}
+      robust: true
+      geometry: {dz_m: 0.512, tau_s: 1.89}
+      lag_s: 6.89
+      reference_pole_s: 0.7
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 285.74701111613126
+      beta_1: 3042.08856705106
+      beta_2: 301514.8101183117
+      beta_3: -4356964.255649819
+    bridge: {a: -2.9, b: 0.99939, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 5.43
+      held_out_mK: 12.28
+      block_sd_mK: 1.83
+      n_blocks: 12
+    valid_T_degC: [3.81, 29.18]
+    flags: [short]
+    notes: >-
+      7.7 days. The pressure-matched clock offset (+9.8 s at r = 0.45) exceeds the
+      temperature lag (+6.9 s), which would make the CTD's response negative, so that
+      clock estimate is unreliable. The temperature lag itself passed the sharpness
+      gate. Profiles gated on fall rate only, because U_EM was unreliable in 2023.
+
+  - bead: T2240
+    deployment: ARCTERX-2023 Interior
+    instrument:
+      model: MR1000RDL-EM
+      serial: "433"
+      channel: T2
+      platform: Slocum osu684
+    first: "2023-05-31T04:35:17Z"
+    last: "2023-06-07T21:47:51Z"
+    reference:
+      kind: SBE-41CP glider CTD
+      serial: "9421"
+      cal_date: null
+      note: >-
+        Serial from the glider's proglets.dat; its calibration date is not in the data.
+    fit:
+      method: glider-ctd
+      pooled: true
+      n_files: 108
+      n_profiles: 103
+      n_pairs: 172658
+      order: 3
+      order_choice: auto
+      held_out_by_order_mK: {1: 75.49, 2: 15.34, 3: 12.73}
+      robust: true
+      geometry: {dz_m: 0.62, tau_s: 2.41}
+      lag_s: 6.892
+      reference_pole_s: 0.7
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+    coefficients:
+      t_0: 286.8339601245492
+      beta_1: 3058.7017690864777
+      beta_2: 307728.3594540873
+      beta_3: -3036194.6910411096
+    bridge: {a: -6.7, b: 0.99893, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
+    uncertainty:
+      fit_rms_mK: 5.67
+      held_out_mK: 12.73
+      block_sd_mK: 1.63
+      n_blocks: 12
+    valid_T_degC: [3.81, 29.18]
+    flags: [short]
+    notes: >-
+      7.7 days. The pressure-matched clock offset (+9.8 s at r = 0.45) exceeds the
+      temperature lag (+6.9 s), which would make the CTD's response negative, so that
+      clock estimate is unreliable. The temperature lag itself passed the sharpness
+      gate. Profiles gated on fall rate only, because U_EM was unreliable in 2023.

@@ -1,7 +1,8 @@
 # microstructure_sensors/
 
-Rockland calibration sheets (PDF, gitignored — large/vendor files) and the
-tracked **shear-probe sensitivity registry** `shear_sensitivities.csv`.
+Rockland calibration sheets (PDF, gitignored — large/vendor files), the
+tracked **shear-probe sensitivity registry** `shear_sensitivities.csv`, and our
+own **FP07 in-situ calibration sheet** `fp07_calibrations.yaml` (below).
 
 Holdings as of 2026-10-26: **200 shear-probe sheets for 116 serials**, dated
 2004-10-14 to 2026-06-22, plus eight FP07 production reports (below).
@@ -73,6 +74,107 @@ them. (T2 drifted +1.4% in resistance during the deployment.)
 This is the prerequisite for any per-bead calibration history, since a probe
 moves between channels and instruments between cruises — see issue #189 (FP07
 calibration sheets of our own). Rebuild by scanning a campaign's `.p` configs.
+
+## fp07_calibrations.yaml — the FP07 calibration sheet
+
+Rockland issues no calibration for an FP07 (its production report says "This
+probe is uncalibrated"), so this sheet is our own: per bead, the in-situ
+calibrations from `fp07-cal fit` that have been recorded, and a prior for a
+fresh deployment.
+
+**One file is the source of truth; two are generated from it.**
+
+| file | what | edit? |
+|---|---|---|
+| `fp07_calibrations.yaml` | the entries, the transfer uncertainties, the methods | **yes**, by hand |
+| `fp07_calibrations.md` | the human-readable sheet: one section per bead, with its deployments and its prior; explains units, L and the uncertainties | **never**, generated |
+| `fp07_calibrations.csv` | one row per fit, every value at full precision, for spreadsheets | **never**, generated |
+
+```bash
+fp07-cal registry render          # after editing the YAML: rewrite the .md and .csv
+fp07-cal registry check           # validate the YAML; exit 1 if invalid or a view is stale
+fp07-cal registry show T1592      # one bead's history and its prior
+fp07-cal registry show T1592 --instrument 194 --channel T1 --as-of 2023-01-01 --json
+```
+
+`check` and a test (`tests/test_fp07_registry.py`) both fail when a committed
+view differs from what the YAML renders, so the three cannot drift apart. The
+loader is strict. Each of these raises its own named error (`registry.py`):
+
+- an unknown or missing key;
+- a bead serial not of the form `T<number>` without a leading zero (the
+  placeholder `T` is not an identity);
+- an unquoted instrument or reference serial (YAML would read JAC `0079` as 79).
+  Instrument serials are compared as numbers, so `0194` is SN 194;
+- first after last, or a reference calibrated after the deployment began;
+- a bead in two places at once, or a channel carrying two beads at once;
+- an order that disagrees with the `beta` terms or with its held-out errors;
+- a second entry for the same bead and deployment, ignoring case and spacing in
+  the label;
+- coefficients that cannot describe an FP07 over `valid_T_degC`: `t_0` outside
+  250-320 K (degC typed for K), `beta_1` <= 0, a range that needs |L| beyond the
+  bridge's clip (|Z| <= 0.6, so |L| < 1.386), or T not falling as L rises.
+
+**An entry** is one bead in one deployment, fitted by `fp07-cal fit` pooled over
+the deployment. Its `coefficients` are in the `.p` config form (`t_0`,
+`beta_1` .. `beta_n`, each `beta` a reciprocal; an absent term is no term).
+Its `bridge` holds the six half-bridge constants that define L, because the
+coefficients reproduce only on a channel with those constants. Its
+`uncertainty` holds the fit's rms, held-out error and block scatter in mK. Its
+`reference` names the reference thermometer, its serial and its calibration
+date. A null serial or date needs a `note` saying why.
+
+### Adding an entry after `fp07-cal fit`
+
+Everything comes from the fit's output directory, per channel:
+
+| YAML | from |
+|---|---|
+| `bead` | `coefficients.json` → `channels.<ch>.probe_sn` (if it is a placeholder, identify the bead first) |
+| `instrument.serial`, `.channel`, `.model` | `instrument_sn`, the channel, and the `.p` config's `instrument_info.model` |
+| `first`, `last` | `time_start`, `time_end` (epoch seconds → `YYYY-MM-DDTHH:MM:SSZ`) |
+| `fit.n_files`, `n_profiles`, `n_pairs`, `order`, `lag_s` | `n_fit_files`; `channels.<ch>.n_profiles`, `.n_pairs`, `.order`, `.lag_s` |
+| `fit.held_out_by_order_mK` | `channels.<ch>.order_selection.<n>.held_out_K` × 1000; required when `order_choice` is `auto`, so the choice can be checked |
+| `fit.geometry` | `channels.<ch>.geometry.dz_m`, `.tau_s`, or `false` when it was off |
+| `fit.reference_pole_s` | `pairs.kernel_tau` in the fp07-cal config |
+| `fit.software_version` | `software_version` |
+| `coefficients` | `channels.<ch>.config_equivalent`, verbatim |
+| `bridge` | `channels.<ch>.bridge` |
+| `uncertainty.fit_rms_mK`, `held_out_mK` | `rms_K` × 1000; the chosen order's `held_out_K` × 1000 |
+| `uncertainty.block_sd_mK`, `n_blocks` | sample SD and count of the offsets in the block table of `<ch>_report.md` (null below 3 blocks, and only then) |
+| `valid_T_degC` | `channels.<ch>.T_range` |
+
+Then add `flags` from the vocabulary in `registry.py` (`FLAGS`), and `notes` for
+anything a later reader needs: what was screened, episodes, gates overridden.
+Run `fp07-cal registry render`, then `check`, and commit all three files
+together.
+
+### The prior
+
+The prior is for a deployment where a full fit is impossible: too little
+reference, or too narrow a temperature range to constrain the shape. Where a
+deployment has a decent reference, its own pooled fit beats any carried-over
+calibration (compare an entry's block SD with the sheet's transfer offset).
+
+The rule is stated in `fp07_calibrations.md` (`PRIOR_RULE` in `registry.py`)
+and implemented in `Registry.prior_for`. In short:
+
+- The source is the bead's widest-range calibration that is not flagged
+  `short`, `fast-descent` or `episode`, preferring the target instrument and
+  channel when they are given.
+- If the bead has no unflagged calibration, the prior falls back to its
+  widest-range one, says so, and widens the shape term.
+- The prior reports how far the most recent calibration sits from the source.
+
+The uncertainty sizes are not repeated here, so that they cannot go stale.
+They live in the YAML's `transfer` section with their evidence, and the
+generated sheet renders them. Update `transfer`, with its evidence, when new
+comparisons change them.
+
+`prior_for` returns what a `t_0`-only refit with the shape held fixed would
+need: the fixed `beta` terms, the bridge constants that define their L, a
+starting `t_0` with its uncertainty, and the range where the shape is
+constrained. That refit is not built into `fp07-cal fit` yet.
 
 ## sheet_requests.md
 
