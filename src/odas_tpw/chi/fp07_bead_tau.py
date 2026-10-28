@@ -137,6 +137,9 @@ FLAGS = {
                    "which biases tau",
     "drift": f"a bead's two time halves differ by more than {DRIFT_SIGMAS:g}x their combined "
              "1-sigma (16-84%) uncertainty",
+    "ratio-shift": f"the pair's 20 Hz power ratio differs between the time halves by more than "
+                   f"{DRIFT_SIGMAS:g}x their combined 1-sigma: one bead or both changed (model-"
+                   "free; it says nothing about which)",
 }
 
 
@@ -387,6 +390,15 @@ def drifted(a: TauFit, b: TauFit, c: int) -> bool:
         return False
     s = [0.5 * math.log(h.tau_ci[c][1] / h.tau_ci[c][0]) for h in (a, b)]
     return abs(math.log(b.tau[c] / a.tau[c])) > DRIFT_SIGMAS * math.hypot(*s)
+
+
+def ratio_shifted(a: TauFit, b: TauFit, f0: float = 20.0) -> bool:
+    """Did the pair's power ratio at *f0* change between halves *a* and *b*? (model-free)"""
+    r = [h.ln_ratio.get(f0, np.nan) for h in (a, b)]
+    s = [0.5 * (h.ln_ratio_ci[f0][1] - h.ln_ratio_ci[f0][0]) for h in (a, b)]
+    if not np.all(np.isfinite([*r, *s])):
+        return False
+    return abs(r[1] - r[0]) > DRIFT_SIGMAS * math.hypot(*s)
 
 
 def split_halves(t: Sequence[float]) -> int | None:
@@ -691,6 +703,8 @@ def measure(paths: Sequence[str], *, instrument: str, first: float, last: float,
                 drift[c] = drifted(halves[0], halves[1], c)
         if any(drift):
             flags.append("drift")
+        if halves is not None and ratio_shifted(*halves):
+            flags.append("ratio-shift")
         pt = PairTau(
             instrument=inst, channels=chans, serials=sers, tau_model=tau_model, W_ref=W_ref,
             band=band, requested=(first, last), all=fit_all, halves=halves, noise=noise,

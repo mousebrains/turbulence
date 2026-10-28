@@ -228,13 +228,13 @@ decides whether a pair identifies a tau at all are in
 |---|---|
 | `method`, `speed_scaling`, `band_Hz`, `software_version` | `method`, `speed_scaling` (the products' tau model), `band_Hz`, `software_version` |
 | `partner` | the other bead of `serials` (a placeholder is refused) |
-| `first`, `last`, `n_chi_files`, `n_windows` | `all.first`, `all.last` (first and last chi file `start_time`), `all.n_files`, `all.n_windows` |
+| `first`, `last`, `n_chi_files`, `n_recordings`, `n_windows` | `all.first`, `all.last` (first and last chi file `start_time`, dead files left out), `all.n_files`, `all.n_recordings` (distinct start times, the units the bootstrap resamples), `all.n_windows` |
 | `W_ref_m_s` | `W_ref_m_s`, the median speed of the pair's windows (3 decimals) |
 | `identified`, `reason` | `all.identified`; `all.reasons` joined, when not identified |
 | `tau_ms`, `tau_ms_16_84` | `all.tau_s`, `all.tau_16_84_s` for this bead's channel, x 1000 (0.01 ms); null when not identified |
-| `halves.first`, `halves.second` | `halves[0]`, `halves[1]`, the same fields; null when every file shares one start time |
+| `halves.first`, `halves.second` | `halves[0]`, `halves[1]`, the same fields, plus `power_ratio_20Hz` from the half's `ln_ratio` (turned round as below); null when every file shares one start time |
 | `power_ratio`, `power_ratio_16_84` | `exp(all.ln_ratio)` at 10 and 20 Hz, turned round for the bead on the first channel, so it is always this bead's power response over its partner's |
-| `flags` | the record's `amplitude`, `outlier`, `noise-model`, and `drift` when this bead's `drift` is set |
+| `flags` | the record's `amplitude`, `dead-bead`, `outlier`, `noise-model` and `ratio-shift`, and `drift` when this bead's `drift` is set |
 | `notes` | `--notes` |
 
 Tau at 1 m/s is derived from `tau_ms`, `W_ref_m_s` and `speed_scaling` when

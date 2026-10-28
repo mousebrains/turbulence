@@ -140,6 +140,20 @@ def test_drift_is_a_two_sigma_test_in_ln_tau():
     assert not B.drifted(a, fit(0.0116, (0.0110, 0.0122)), 1)  # the other bead held still
 
 
+def test_a_ratio_shift_between_halves_is_model_free():
+    # osu685 2025: the pair's 20 Hz ratio went 1.23 -> 0.81 while each tau's
+    # interval was too wide for `drift` to say which bead moved
+    def half(r20, hw):
+        return B.TauFit(first=0, last=1, n_files=20, n_recordings=10, n_windows=100,
+                        identified=False, reasons=(), tau=None, tau_fit=(0.01, 0.01),
+                        tau_ci=((0.008, 0.012), (0.008, 0.012)), ln_G_fit=0, ln_G=0, rms=0,
+                        fit_band=(1, 25), n_bins=25, ln_ratio={20.0: r20},
+                        ln_ratio_ci={20.0: (r20 - hw, r20 + hw)}, n_boot=10, n_boot_ok=10)
+    assert B.ratio_shifted(half(np.log(1.23), 0.02), half(np.log(0.81), 0.04))
+    assert not B.ratio_shifted(half(0.20, 0.05), half(0.25, 0.05))
+    assert not B.ratio_shifted(half(0.20, 0.05), half(np.nan, 0.05))
+
+
 # ------------------------------------------------------- the estimator
 def test_recovers_a_mismatched_pair(tmp_path):
     res = _measure(_deploy(tmp_path, (0.013, 0.0195), n=36, n_win=60))
@@ -336,9 +350,11 @@ def _resp(**over):
         "band_Hz": [1.0, 25.0], "identified": True, "tau_ms": 13.0, "tau_ms_16_84": [12.0, 14.0],
         "halves": {
             "first": {"first": "2024-01-02T00:00:00Z", "last": "2024-01-05T00:00:00Z",
-                      "n_chi_files": 20, "tau_ms": 11.0, "tau_ms_16_84": [10.0, 12.0]},
+                      "n_chi_files": 20, "tau_ms": 11.0, "tau_ms_16_84": [10.0, 12.0],
+                      "power_ratio_20Hz": 1.25},
             "second": {"first": "2024-01-05T06:00:00Z", "last": "2024-01-09T00:00:00Z",
-                       "n_chi_files": 20, "tau_ms": 15.0, "tau_ms_16_84": [14.0, 16.0]},
+                       "n_chi_files": 20, "tau_ms": 15.0, "tau_ms_16_84": [14.0, 16.0],
+                       "power_ratio_20Hz": 1.36},
         },
         "power_ratio": {10: 1.12, 20: 1.31},
         "power_ratio_16_84": {10: [1.1, 1.14], 20: [1.28, 1.35]},
@@ -365,6 +381,8 @@ def _reciprocal(r):
     q["power_ratio_16_84"] = {k: [round(1 / hi, 6), round(1 / lo, 6)]
                               for k, (lo, hi) in r["power_ratio_16_84"].items()}
     q["tau_ms"], q["tau_ms_16_84"] = 19.5, [18.0, 21.0]
+    for h in q["halves"].values():
+        h["power_ratio_20Hz"] = round(1 / h["power_ratio_20Hz"], 6)
     return q
 
 
@@ -405,7 +423,7 @@ def test_a_response_with_its_partner_reads_the_same_from_both_sides():
     ({"speed_scaling": "nope"}, reg.RegistryError, "speed_scaling"),
     ({"W_ref_m_s": 95.0}, reg.PlausibilityError, "m/s"),
     ({"power_ratio": {10: 1.1, 30: 1.3}}, reg.UnknownKeyError, "frequencies"),
-    ({"power_ratio": {10: 1.1, 20: None}}, reg.RegistryError, "together"),
+    ({"power_ratio": {10: 1.1, 20: None}}, reg.RegistryError, "without a power_ratio"),
     ({"flags": ["drifting"]}, reg.RegistryError, "unknown flag"),
     ({"flags": ["amplitude"]}, reg.RegistryError, "failing bead"),
     ({"flags": ["dead-bead"]}, reg.RegistryError, "failing bead"),
@@ -428,6 +446,10 @@ def test_unidentified_response_keeps_its_ratios():
     r = _resp(identified=False, tau_ms=None, tau_ms_16_84=None, reason="beads matched")
     c = reg.parse(_pair_sheet(r)).history("T100")[0]
     assert c.response.tau_1mps_ms is None and c.response.power_ratio[20] == 1.31
+    # one recording: a ratio, but no bootstrap interval
+    r["power_ratio_16_84"] = {10: None, 20: None}
+    c = reg.parse(_pair_sheet(r)).history("T100")[0]
+    assert c.response.power_ratio[20] == 1.31 and c.response.power_ratio_16_84[20] is None
 
 
 def test_halves_must_split_the_span():

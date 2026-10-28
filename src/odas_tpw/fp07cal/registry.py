@@ -184,6 +184,12 @@ RESPONSE_FLAGS: dict[str, str] = {
         "This bead's two time halves differ by more than twice their combined 1-sigma "
         "(16-84%) uncertainty: it changed within the deployment (fouling, aging)."
     ),
+    "ratio-shift": (
+        "The pair's 20 Hz power ratio differs between the time halves by more than twice "
+        "their combined 1-sigma: this bead, its partner, or both changed within the "
+        "deployment. Model-free, so more sensitive than `drift`, but it cannot say which "
+        "bead (compare the halves' taus)."
+    ),
 }
 RESPONSE_RATIO_F = (10, 20)  # Hz: the model-free power ratios recorded
 # fp07_bead_tau.TAU_BOUNDS, in ms: a tau at a bound is the fit's limit, not a value.
@@ -303,6 +309,7 @@ class ResponseHalf:
     n_chi_files: int
     tau_ms: float | None  # None when the half alone does not identify it
     tau_ms_16_84: tuple[float, float] | None
+    power_ratio_20Hz: float | None  # this bead's power / its partner's, model-free
 
 
 @dataclass(frozen=True)
@@ -350,7 +357,8 @@ class Response:
         def half(h: ResponseHalf) -> dict[str, Any]:
             return {"first": _iso(h.first), "last": _iso(h.last), "n_chi_files": h.n_chi_files,
                     "tau_ms": h.tau_ms,
-                    "tau_ms_16_84": None if h.tau_ms_16_84 is None else list(h.tau_ms_16_84)}
+                    "tau_ms_16_84": None if h.tau_ms_16_84 is None else list(h.tau_ms_16_84),
+                    "power_ratio_20Hz": h.power_ratio_20Hz}
 
         return {
             "method": self.method, "partner": self.partner,
@@ -1047,7 +1055,7 @@ _RESPONSE_KEYS = ("method", "partner", "first", "last", "n_chi_files", "n_record
                   "speed_scaling", "band_Hz", "identified", "tau_ms", "tau_ms_16_84", "halves",
                   "power_ratio", "power_ratio_16_84", "software_version")
 _RESPONSE_OPTIONAL = ("flags", "reason", "notes")
-_HALF_KEYS = ("first", "last", "n_chi_files", "tau_ms", "tau_ms_16_84")
+_HALF_KEYS = ("first", "last", "n_chi_files", "tau_ms", "tau_ms_16_84", "power_ratio_20Hz")
 
 
 def _tau_pair(v: object, ci: object, w: str) -> tuple[float | None, tuple[float, float] | None]:
@@ -1130,8 +1138,10 @@ def _parse_response(raw: object, w: str, bead: str, first: datetime,
             if h0 > h1:
                 raise DateOrderError(f"{wk}: first {_iso(h0)} is after last {_iso(h1)}")
             ht, hci = _tau_pair(h["tau_ms"], h["tau_ms_16_84"], wk)
+            hr = h["power_ratio_20Hz"]
             hs.append(ResponseHalf(h0, h1, _int(h["n_chi_files"], f"{wk}.n_chi_files", minimum=1),
-                                   ht, hci))
+                                   ht, hci, None if hr is None else
+                                   _num(hr, f"{wk}.power_ratio_20Hz", positive=True)))
         a, b = hs
         if a.first != r0 or b.last != r1 or not a.last < b.first:
             raise DateOrderError(
@@ -1153,9 +1163,9 @@ def _parse_response(raw: object, w: str, bead: str, first: datetime,
     ratio_ci: dict[int, tuple[float, float] | None] = {}
     for f0 in RESPONSE_RATIO_F:
         v, ci = m["power_ratio"][f0], m["power_ratio_16_84"][f0]
-        if (v is None) != (ci is None):
-            raise RegistryError(f"{w}: power_ratio and its interval at {f0} Hz are null together "
-                                f"or not at all")
+        if v is None and ci is not None:
+            # (a ratio without an interval is fine: one recording cannot be resampled)
+            raise RegistryError(f"{w}: power_ratio_16_84 at {f0} Hz without a power_ratio")
         ratio[f0] = None if v is None else _num(v, f"{w}.power_ratio.{f0}", positive=True)
         pair = None if ci is None else _pair(ci, f"{w}.power_ratio_16_84.{f0}")
         if pair is not None and pair[0] <= 0:
@@ -1424,9 +1434,14 @@ def _check_responses(cals: list[Calibration]) -> None:
                         f"{w}: the power ratio at {f0} Hz ({a}) is not the reciprocal of "
                         f"{o.bead}'s ({b}) from the same measurement"
                     )
+            def recip(a: float | None, b: float | None) -> bool:
+                return (a is None) == (b is None) and (
+                    a is None or b is None or abs(math.log(a * b)) <= 2e-3)
+
             if (r.halves is None) != (q.halves is None) or (
                     r.halves is not None and q.halves is not None and any(
                         (x.first, x.last, x.n_chi_files) != (y.first, y.last, y.n_chi_files)
+                        or not recip(x.power_ratio_20Hz, y.power_ratio_20Hz)
                         for x, y in zip(r.halves, q.halves, strict=True))):
                 raise RegistryError(f"{w}: the halves differ from {o.bead}'s record of the "
                                     f"same measurement")
@@ -1723,6 +1738,7 @@ CSV_COLUMNS = (
     "response_half1_tau_lo_ms", "response_half1_tau_hi_ms",
     "response_half2_first", "response_half2_n_chi_files", "response_half2_tau_ms",
     "response_half2_tau_lo_ms", "response_half2_tau_hi_ms",
+    "response_half1_power_ratio_20Hz", "response_half2_power_ratio_20Hz",
     "response_power_ratio_10Hz", "response_power_ratio_10Hz_lo", "response_power_ratio_10Hz_hi",
     "response_power_ratio_20Hz", "response_power_ratio_20Hz_lo", "response_power_ratio_20Hz_hi",
     "response_flags", "response_reason", "response_software_version", "response_notes",
@@ -1756,6 +1772,7 @@ def _response_row(r: Response | None) -> dict[str, Any]:
         ci = None if half is None else half.tau_ms_16_84
         row[p + "tau_lo_ms"] = None if ci is None else ci[0]
         row[p + "tau_hi_ms"] = None if ci is None else ci[1]
+        row[p + "power_ratio_20Hz"] = None if half is None else half.power_ratio_20Hz
     for f0 in RESPONSE_RATIO_F:
         p = f"response_power_ratio_{f0}Hz"
         rci = r.power_ratio_16_84[f0]
@@ -2069,11 +2086,14 @@ def _response_how_to_read() -> list[str]:
     P(RESPONSE_SEMANTICS)
     P("")
     P("**Identified or not.** Matched beads give a flat ratio and no tau, and a failing "
-      "bead loses amplitude, which is not a time constant. A pair is identified only when "
-      "the beads differ beyond bootstrap noise at 20 Hz, each tau's 16-84% interval is "
-      "bounded and spans at most a factor 1.5, the flat gain is below a factor 2, and "
-      "there are enough chi files and frequency bins (the full rule is in the runbook). "
-      "Otherwise tau is blank and only the power ratios are recorded.")
+      "bead (one that loses amplitude, or goes dead) has no time constant to measure. A pair "
+      "is identified only when the beads differ beyond bootstrap noise at 20 Hz, each tau's "
+      "16-84% interval is bounded and spans at most a factor 1.5, the flat gain is below a "
+      "factor 2, neither bead is dead in any chi file of the span, and there are enough chi "
+      "files, recordings and frequency points (the full rule is in the runbook). The "
+      "intervals come from resampling whole recordings (`.p` files), and they are sampling "
+      "intervals only: the choice of estimator and band moves the level by more. Otherwise "
+      "tau is blank and only the power ratios are recorded.")
     P("")
     P("**At 1 m/s** the table shows tau scaled from `W_ref` under the entry's "
       "`speed_scaling` (`lueck`: tau ~ W^-1/2). That column is derived, never stored. For "
@@ -2109,7 +2129,8 @@ def _response_section(h: list[Calibration]) -> list[str]:
       "[the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:")
     P("")
     P("| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | "
-      "halves [ms] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |")
+      "halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | "
+      "recordings / chi files / windows | flags |")
     P("|---|---|---|---|---|---|---|---|---|---|")
     for i, c in rows:
         r = c.response
@@ -2120,8 +2141,10 @@ def _response_section(h: list[Calibration]) -> list[str]:
         if r.halves is None:
             halves = "—"
         else:
-            halves = " → ".join("—" if x.tau_ms is None else f"{x.tau_ms:.1f}{_ci(x.tau_ms_16_84)}"
-                                for x in r.halves)
+            halves = " → ".join(
+                ("—" if x.tau_ms is None else f"{x.tau_ms:.1f}{_ci(x.tau_ms_16_84)}")
+                + ("" if x.power_ratio_20Hz is None else f" [{x.power_ratio_20Hz:.2f}]")
+                for x in r.halves)
         ratio = " / ".join("—" if r.power_ratio[f0] is None else f"{r.power_ratio[f0]:.2f}"
                            for f0 in RESPONSE_RATIO_F)
         flags = ", ".join(f"`{f}`" for f in r.flags) or "—"
@@ -2780,11 +2803,13 @@ def response_from_record(record: dict, cal: Calibration, *, notes: str = "") -> 
     def ratio(f0: int) -> tuple[float | None, list[float] | None]:
         v = a["ln_ratio"].get(f"{f0:g}")
         ci = a["ln_ratio_16_84"].get(f"{f0:g}")
-        if v is None or ci is None or None in ci:
+        if v is None:
             return None, None
-        lo, hi = sorted((sign * ci[0], sign * ci[1]))
         # 5 significant figures: both beads' ratios must multiply to 1 within 2e-3 (the
         # loader's check) however small the ratio, and an interval stays positive.
+        if ci is None or None in ci:  # one recording: no resampling, no interval
+            return _sig(math.exp(sign * v)), None
+        lo, hi = sorted((sign * ci[0], sign * ci[1]))
         return (_sig(math.exp(sign * v)),
                 [_sig(math.exp(lo)), _sig(math.exp(hi))])
 
@@ -2809,8 +2834,10 @@ def response_from_record(record: dict, cal: Calibration, *, notes: str = "") -> 
         hd = {}
         for k, h in zip(("first", "second"), halves, strict=True):
             ht, hci = tau(h)
+            hv = h["ln_ratio"].get("20")
             hd[k] = {"first": h["first"], "last": h["last"], "n_chi_files": int(h["n_files"]),
-                     "tau_ms": ht, "tau_ms_16_84": hci}
+                     "tau_ms": ht, "tau_ms_16_84": hci,
+                     "power_ratio_20Hz": None if hv is None else _sig(math.exp(sign * hv))}
         block["halves"] = hd
     else:
         block["halves"] = None
@@ -2861,6 +2888,7 @@ def response_yaml(block: dict[str, Any], indent: int = 4) -> str:
             out.append(f"{p2}    n_chi_files: {_scalar(h['n_chi_files'])}")
             out.append(f"{p2}    tau_ms: {_scalar(h['tau_ms'])}")
             out.append(f"{p2}    tau_ms_16_84: {pair(h['tau_ms_16_84'])}")
+            out.append(f"{p2}    power_ratio_20Hz: {_scalar(h['power_ratio_20Hz'])}")
     out.append(f"{p2}power_ratio: {{"
                + ", ".join(f"{k}: {_scalar(v)}" for k, v in block["power_ratio"].items()) + "}")
     out.append(f"{p2}power_ratio_16_84: {{"
