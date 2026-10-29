@@ -86,6 +86,31 @@ default tau model. It deliberately keeps the flat gain `ln G` (SN 194 -0.14,
 SN 428 +0.09), so the residual pair ratio says something about calibration,
 nothing about the absolute response.
 
+`fp07_slow_response` (issue #252) is relative too. It divides a bead's slow
+parallel path, `|(1-beta) + beta/(1 + i 2 pi f tau_s)|^2`, out of that bead's
+spectra; for T2005 (SN 194 T2, 2021-06-29 to 2022-06-20, beta 0.124, tau_s
+110 ms) that raises its Method-1 chi by 1.18-1.30x per window (median ln
++0.25 on a SUNRISE 2021 WaltonSmith file). Three limits:
+
+- **It corrects the bead to its partner's norm (A1).** T1592 reads like T1593
+  on the same port and every other pair checked is flat, but whether that norm
+  itself has a slow path is untested: JAC_T cannot test it, because its own
+  response time sits on tau_s. If the norm had one, T2005 is under-corrected,
+  never over-corrected.
+- **beta is not tightly constrained.** It ranges 0.09-0.13 across single-pole
+  model choices for the bead's fast response (0.124 with it fitted); the chi
+  change at the plateau is `(1-beta)^-2`, 1.21-1.32x over that range.
+- **It needs calibrated temperature.** The path is relative to the DC level
+  an in-situ calibration fixes (`|H_slow(0)| = 1`), and its products must not
+  carry `fp07_tau_scale` or `fp07_response`, which were fitted on spectra that
+  already contain it (refused).
+
+No decomposition of the T2005 pairs' chi ratio is claimed. The design review
+measured an uncorrected ln(chi2/chi1) of -0.54 on SUNRISE 2021 WaltonSmith
+(745 windows) and -0.76 on Pelican after the swap (167), with the same beads
+(not re-measured here). The 0.22 between them is not explained by the slow
+path, which is the same in both.
+
 Report an absolute systematic of order **1.5x**.
 
 ### `fom` near 1.0 does not mean the spectral fit is good

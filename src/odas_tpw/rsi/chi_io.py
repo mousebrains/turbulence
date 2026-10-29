@@ -128,6 +128,7 @@ def _compute_chi(
     mask_bad_buffers: bool = True,
     fp07_tau_scale: Mapping[str, float] | None = None,
     fp07_response: Sequence[Any] | None = None,
+    fp07_slow_response: Mapping[str, Any] | None = None,
     _pre_loaded: dict[str, Any] | None = None,
 ) -> list[xr.Dataset]:
     """Compute chi from temperature gradient spectra (internal, no deprecation warning).
@@ -169,6 +170,21 @@ def _compute_chi(
     the correction is measured relative to the pair, so stacking it on a
     tau scale would correct the relative part twice.
 
+    ``fp07_slow_response`` maps a bead serial to the slow parallel path of its
+    response, ``{T2005: [{beta, tau_s_ms, first, last}, ...]}`` (one mapping or
+    a list; :func:`odas_tpw.chi.fp07_slow.parse_slow_response`). A bead found
+    on this file's thermistors (read as ``fp07_pair.pair_identity`` reads them)
+    whose span contains the file's start_time has ``|H_slow|^2`` divided out of
+    its observed and noise spectra; a bead outside every span is recorded and
+    left uncorrected; a file without the bead keeps its chi and records only
+    its beads (``fp07_slow_response_serials``). The file's own 0.25->2 Hz pair
+    ratio is recorded beside the prediction, with a WARNING when they disagree
+    by more than ``fp07_slow.SLOW_GUARD_MAX`` over at least
+    ``fp07_slow.SLOW_GUARD_MIN_WINDOWS`` windows. Valid only on
+    calibrated temperature (the path is relative to the DC level an in-situ
+    calibration fixes). Refused with ``fp07_tau_scale`` or ``fp07_response``,
+    which were both fitted on spectra that already contain the path.
+
     ``mask_bad_buffers`` (default True) rejects a chi estimate whose window
     carries an RDL bad-buffer gap (TN-051 s3.2) too long to interpolate on a
     channel that thermistor depends on, or more than
@@ -205,6 +221,19 @@ def _compute_chi(
         overlap = diss_length // 2
     # Fail fast (before any file access); prepare_profiles re-validates.
     _validate_speed_selection(speed, speed_method)
+
+    # A bead's slow response path: validated before any file access too.
+    slow_spans = None
+    if fp07_slow_response:
+        from odas_tpw.chi.fp07_slow import parse_slow_response
+
+        if fp07_tau_scale or fp07_response:
+            raise ValueError(
+                "fp07_slow_response is mutually exclusive with fp07_tau_scale and "
+                "fp07_response: both were fitted on spectra that already contain the slow "
+                "path, so stacking either on it corrects the bead twice"
+            )
+        slow_spans = parse_slow_response(fp07_slow_response) or None
 
     # Validate the salinity form BEFORE any file access so a bad string fails
     # fast; "measured" itself is resolved after the channels are loaded.
@@ -249,6 +278,10 @@ def _compute_chi(
         pair_corr = _select_pair_correction(
             fp07_response, fp07_tau_scale, data, source, therm_names
         )
+
+    slow_sel = None
+    if slow_spans:
+        slow_sel = _select_slow_response(slow_spans, data, source, therm_names)
 
     fs_fast = data["fs_fast"]
     if vehicle is None:
@@ -380,6 +413,15 @@ def _compute_chi(
                 logger.warning("%s: fp07_response NOT applied: %s", fname, reason)
         pair_attrs, pair_vars = _pair_provenance(pair_corr, ok, delta, therm_names, reason)
 
+    # A bead's slow path: the guard reads the file's own gradient time series
+    # (the chi spectra cannot see below 2 Hz), then every section gets the factor.
+    slow_attrs: dict[str, Any] = {}
+    if slow_sel is not None:
+        slow_attrs = _apply_slow_response(
+            slow_sel, slow_spans or {}, sections, therm_names,
+            Path(str(data["metadata"].get("source", ""))).name,
+        )
+
     for l2_chi, l3_chi in sections:
         # L4_chi: chi estimation
         if epsilon_ds is not None:
@@ -447,6 +489,8 @@ def _compute_chi(
             ds.attrs["fp07_tau_model"] = default_tau_model(fp07_model)
             for vname, (dims, values, vattrs) in pair_vars.items():
                 ds[vname] = (dims, values, vattrs)
+        if slow_attrs:
+            ds.attrs.update(slow_attrs)
         stamp_provenance(ds.attrs, "chi")
         start_time = data["metadata"].get("start_time", "")
         t_units = f"seconds since {start_time}" if start_time else "seconds"
@@ -1291,6 +1335,126 @@ def fp07_pair_iso(t: float) -> str:
     return datetime.fromtimestamp(float(t), UTC).isoformat(timespec="seconds")
 
 
+def _select_slow_response(
+    spans: Mapping[str, Any], data: dict[str, Any], source: Any, therm_names: list[str]
+) -> Any:
+    """Which configured slow paths this file's beads carry at its start time.
+
+    The beads are read exactly as ``fp07_pair`` reads them, so a bead key and
+    a pair correction cannot name different channels. An unreadable
+    configuration is an error, never "no bead here": the bead may well be on it.
+    """
+    from odas_tpw.chi import fp07_slow
+
+    try:
+        _instrument, serials = _pair_identity(source, therm_names)
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"fp07_slow_response is configured but this file's beads cannot be "
+            f"identified: {exc}"
+        ) from exc
+    start = str(data["metadata"].get("start_time", ""))
+    if not start:
+        raise ValueError("fp07_slow_response needs the file's start_time to match a span")
+    t0 = datetime.fromisoformat(start.replace("Z", "+00:00"))
+    if t0.tzinfo is None:
+        t0 = t0.replace(tzinfo=UTC)  # the .p clock is UTC; never the local zone
+    return fp07_slow.select(spans, serials, t0.timestamp())
+
+
+def _apply_slow_response(
+    sel: Any,
+    spans: Mapping[str, Any],
+    sections: Sequence[tuple[Any, Any]],
+    therm_names: list[str],
+    fname: str,
+) -> dict[str, Any]:
+    """Guard, attach the factors to every section's L3, and return the attributes.
+
+    The guard's measured change is recorded for every configured bead found on
+    the file, corrected or not (a bead outside its spans is still worth a QC
+    number); it warns only where the correction is applied. A file that carries
+    none of the configured beads gets only ``fp07_slow_response_serials``, the
+    beads it does carry, so a run summary can say what a bead key that matched
+    nothing was compared against; its chi is untouched.
+    """
+    from odas_tpw.chi import fp07_slow as S
+
+    serials = {f"{S.ATTR}_serials": "/".join(sel.serials)}
+    if not sel.applied and not sel.outside:
+        return serials
+    n = len(therm_names)
+    present = {**{ci: s.bead for ci, s in sel.applied.items()}, **sel.outside}
+    attrs: dict[str, Any] = {
+        **serials,
+        f"{S.ATTR}_applied": int(bool(sel.applied)),
+        f"{S.ATTR}_model": S.MODEL_TEXT,
+        f"{S.ATTR}_guard_method": S.GUARD_TEXT,
+        f"{S.ATTR}_guard_limit": float(S.SLOW_GUARD_MAX),
+        f"{S.ATTR}_guard_min_windows": int(S.SLOW_GUARD_MIN_WINDOWS),
+    }
+    measured: dict[int, float] = {}
+    n_windows: dict[int, int] = {}
+    skipped: dict[int, str] = {}
+    for ci in present:
+        ch = therm_names[ci]
+        measured[ci], n_windows[ci] = float("nan"), 0
+        if n != 2:
+            skipped[ci] = f"skipped: the guard needs exactly two thermistors, this file has {n}"
+            continue
+        los, his = [], []
+        for l2c, _l3c in sections:
+            lo, hi = S.window_log_ratios(
+                l2c.gradt[ci], l2c.gradt[1 - ci], l2c.section_number, l2c.fs_fast
+            )
+            los.append(lo)
+            his.append(hi)
+        lo_all = np.concatenate(los) if los else np.zeros(0)
+        hi_all = np.concatenate(his) if his else np.zeros(0)
+        measured[ci], n_windows[ci] = S.guard_delta(lo_all, hi_all), int(lo_all.size)
+        attrs[f"{S.ATTR}_guard_windows_{ch}"] = n_windows[ci]
+        if lo_all.size:
+            # Each window's ln ratios, so a caller holding several profiles of
+            # one file (perturb) can pool them into a file-level verdict.
+            attrs[f"{S.ATTR}_guard_lnr_lo_{ch}"] = lo_all
+            attrs[f"{S.ATTR}_guard_lnr_hi_{ch}"] = hi_all
+
+    for ci, span in sorted(sel.applied.items()):
+        ch = therm_names[ci]
+        partner = sel.applied.get(1 - ci) if n == 2 else None
+        predicted = span.ln_change() - (partner.ln_change() if partner is not None else 0.0)
+        attrs.update({
+            f"{S.ATTR}_bead_{ch}": span.bead,
+            f"{S.ATTR}_beta_{ch}": float(span.beta),
+            f"{S.ATTR}_tau_s_ms_{ch}": float(span.tau_s_ms),
+            f"{S.ATTR}_span_{ch}": span.span_text(),
+            f"{S.ATTR}_delta_measured_{ch}": float(measured[ci]),
+            f"{S.ATTR}_delta_predicted_{ch}": float(predicted),
+        })
+        note = skipped.get(ci) or S.guard_verdict(measured[ci], predicted, n_windows[ci])
+        if note.startswith("WARNING"):
+            logger.warning("%s: fp07_slow_response %s on %s: %s", fname, span.bead, ch, note)
+        attrs[f"{S.ATTR}_guard_{ch}"] = note
+    reasons = []
+    for ci, bead in sorted(sel.outside.items()):
+        ch = therm_names[ci]
+        attrs[f"{S.ATTR}_bead_{ch}"] = bead
+        attrs[f"{S.ATTR}_delta_measured_{ch}"] = float(measured[ci])
+        attrs[f"{S.ATTR}_guard_{ch}"] = skipped.get(ci, "not applied: recorded for QC only")
+        listed = ", ".join(s.span_text() for s in spans.get(bead, ()))
+        reasons.append(
+            f"bead {bead} on {ch}: the file's start {fp07_pair_iso(sel.t)} is outside every "
+            f"configured span ({listed})"
+        )
+    if reasons:
+        attrs[f"{S.ATTR}_reason"] = "; ".join(reasons)
+        logger.info("%s: fp07_slow_response not applied to %s", fname, "; ".join(reasons))
+    if sel.applied:
+        for _l2c, l3c in sections:
+            S.apply_to_l3(l3c, sel, n)
+    return attrs
+
+
 def _load_therm_channels(
     source: PFile | str | Path,
     temperature_name: str | float = "auto",
@@ -1514,13 +1678,33 @@ def load_epsilon_dataset(
     return None
 
 
-def _compute_chi_one(args: tuple) -> tuple[str, int]:
+def slow_response_summary(paths: Sequence[str | Path]) -> dict[str, Any] | None:
+    """The ``fp07_slow_response`` outcome of one chi call, from its first product.
+
+    Every product of one ``_compute_chi`` call carries the same file-level
+    attributes, so the first is enough. None for no products, or products made
+    without the correction configured.
+    """
+    if not paths:
+        return None
+    import netCDF4
+
+    from odas_tpw.chi.fp07_slow import ATTR, product_summary
+
+    with netCDF4.Dataset(str(paths[0])) as ds:
+        attrs = {k: ds.getncattr(k) for k in ds.ncattrs() if k.startswith(ATTR)}
+    return product_summary(attrs)
+
+
+def _compute_chi_one(args: tuple) -> tuple[str, int, dict[str, Any] | None]:
     """Worker for parallel chi computation.
 
     args is (source_path, output_dir, kwargs) or
            (source_path, output_dir, kwargs, epsilon_dir).
     When epsilon_dir is provided, the worker opens the matching epsilon
     file itself (xr.Datasets cannot be pickled across process boundaries).
+    Returns (source, number of products, :func:`slow_response_summary` when
+    ``fp07_slow_response`` is configured, else None).
     """
     if len(args) == 4:
         source_path, output_dir, kwargs, epsilon_dir = args
@@ -1544,4 +1728,5 @@ def _compute_chi_one(args: tuple) -> tuple[str, int]:
                 "using Method 2"
             )
         paths = compute_chi_file(source_path, output_dir, **kwargs)
-    return str(source_path), len(paths)
+    slow = slow_response_summary(paths) if kwargs.get("fp07_slow_response") else None
+    return str(source_path), len(paths), slow

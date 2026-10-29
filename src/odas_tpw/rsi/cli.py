@@ -575,13 +575,34 @@ def _chi_response_params(
     the corrections' content digests, so a corrected run never shares a chi_NN
     with an uncorrected one or with a different correction, and moving a
     correction file does not re-version.
+
+    ``[chi] fp07_slow_response`` (config file only) is validated here, hashed
+    with its spans as epoch seconds, and refused beside fp07_response
+    (ValueError).
     """
     merged = dict(merged)
     from_file = merged.pop("fp07_response", None)
+    slow = merged.pop("fp07_slow_response", None)
     raw = list(cli_responses) or (
         [from_file] if isinstance(from_file, str) else list(from_file or [])
     )
     hash_params = dict(merged)
+    # A bead's slow path (config file only): hashed with its spans as epoch
+    # seconds, handed to the workers in a plain form no YAML type survives.
+    if slow is not None:
+        from odas_tpw.chi.fp07_slow import canonical_for_hash, config_form
+
+        where = "[chi] fp07_slow_response"
+        canon = canonical_for_hash(slow, where)
+        if canon:
+            if raw:
+                raise ValueError(
+                    "[chi] fp07_slow_response and fp07_response are mutually exclusive: the "
+                    "fp07-pair correction was fitted on spectra that already contain the slow "
+                    "path, so stacking them corrects the bead twice"
+                )
+            hash_params["fp07_slow_response"] = canon
+            merged["fp07_slow_response"] = config_form(slow, where)
     if raw:
         from odas_tpw.chi.fp07_pair import load_corrections
 
@@ -599,9 +620,13 @@ def _cmd_chi(args: argparse.Namespace) -> None:
 
     merged = _merge_for_section(args, "chi")
     _exit_on_bad_speed_selection(merged)
-    merged, hash_params = _chi_response_params(
-        merged, getattr(args, "fp07_response", None) or []
-    )
+    try:
+        merged, hash_params = _chi_response_params(
+            merged, getattr(args, "fp07_response", None) or []
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(2)
     output_dir = _setup_output_dir(args, "chi", "chi", hash_params)
     print(f"Output directory: {output_dir}")
 
@@ -613,6 +638,9 @@ def _cmd_chi(args: argparse.Namespace) -> None:
         jobs = os.cpu_count() or 1
 
     produced = 0
+    # fp07_slow_response outcome per input, for the end-of-run warnings.
+    slow_on = bool(merged.get("fp07_slow_response"))
+    slow: dict[str, dict | None] = {}
     if jobs == 1:
         for f in files:
             print(f"{f.name}:")
@@ -641,6 +669,10 @@ def _cmd_chi(args: argparse.Namespace) -> None:
                     produced += 1
                 else:
                     print("  no output produced (no profiles detected, or no spectra survived)")
+                if slow_on:
+                    from odas_tpw.rsi.chi_io import slow_response_summary
+
+                    slow[f.name] = slow_response_summary(paths)
             finally:
                 if eps_ds is not None:
                     eps_ds.close()
@@ -654,15 +686,81 @@ def _cmd_chi(args: argparse.Namespace) -> None:
             for future in as_completed(futures):
                 src = futures[future][0]
                 try:
-                    name, n_profiles = future.result()
+                    name, n_profiles, slow_summary = future.result()
                     print(f"  {Path(name).name}: {n_profiles} profile(s)")
                     if n_profiles:
                         produced += 1
+                    if slow_on:
+                        slow[Path(name).name] = slow_summary
                 except _BATCH_ERRORS as e:
                     print(f"  {Path(src).name}: ERROR: {e}")
     print(f"{produced} of {len(files)} file(s) produced output")
+    if slow_on:
+        for line in _slow_response_run_warnings(merged["fp07_slow_response"], slow, files):
+            print(f"WARNING: {line}", file=sys.stderr)
     if files and produced == 0:
         sys.exit(1)
+
+
+def _slow_response_run_warnings(
+    cfg: Any, outcomes: dict[str, dict | None], files: list[Path]
+) -> list[str]:
+    """End-of-run lines for ``[chi] fp07_slow_response`` (issue #252).
+
+    What perturb's run summary says, for ``rsi-tpw chi``: a bead key that
+    matched no thermistor in any input, inputs whose bead was outside every
+    span (computed uncorrected), inputs the guard flagged, and inputs it could
+    not judge. Per-profile NetCDF inputs can never reach the guard's window
+    count (a profile is one to a few 32-s windows), so they get one line saying
+    so instead of one per file. *outcomes* maps an input's name to its
+    :func:`odas_tpw.rsi.chi_io.slow_response_summary`.
+    """
+    from odas_tpw.chi.fp07_slow import SLOW_GUARD_MIN_WINDOWS, parse_slow_response
+
+    configured = sorted(parse_slow_response(cfg))
+    got = {name: s for name, s in outcomes.items() if s is not None}
+    lines: list[str] = []
+    if not got:
+        return lines
+    seen = sorted({b for s in got.values() for b in s["serials"]})
+    for bead in configured:
+        if bead not in seen:
+            lines.append(
+                f"fp07_slow_response.{bead} matched no thermistor in {len(got)} input(s) "
+                f"(beads seen: {', '.join(seen) or 'none'}), so it was NOT applied. The key "
+                "is the bead serial from the .p configuration."
+            )
+    outside = sorted(name for name, s in got.items() if s["outside"])
+    if outside:
+        lines.append(
+            f"fp07_slow_response: {len(outside)} input(s) carry a configured bead outside "
+            f"every span and were NOT corrected: {', '.join(outside)}"
+        )
+    flagged = sorted(name for name, s in got.items()
+                     if any(a["verdict"].startswith("WARNING") for a in s["applied"]))
+    if flagged:
+        lines.append(
+            f"fp07_slow_response: the 0.25->2 Hz guard disagrees with the configured path in "
+            f"{len(flagged)} input(s), corrected anyway (a swapped probe, a faded path?): "
+            f"{', '.join(flagged)}"
+        )
+    per_profile = {f.name for f in files if f.suffix.lower() == ".nc"}
+    thin = sorted(name for name, s in got.items() if name not in per_profile
+                  and any(a["verdict"].startswith(("no verdict", "skipped")) for a in s["applied"]))
+    if thin:
+        lines.append(
+            f"fp07_slow_response: {len(thin)} input(s) had too few guard windows (fewer than "
+            f"{SLOW_GUARD_MIN_WINDOWS}) or not exactly two thermistors, so the guard could "
+            f"not judge them: {', '.join(thin)}"
+        )
+    if any(name in per_profile and s["applied"] for name, s in got.items()):
+        lines.append(
+            f"fp07_slow_response: the inputs are per-profile NetCDFs; one profile is one to a "
+            f"few guard windows, fewer than the {SLOW_GUARD_MIN_WINDOWS} a verdict needs, so "
+            "a swapped probe or a faded path goes unnoticed. Run `rsi-tpw chi` on the .p "
+            "files, or perturb, which pools a file's profiles."
+        )
+    return lines
 
 
 def _cmd_pipeline(args: argparse.Namespace) -> None:
@@ -679,6 +777,13 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
         print(
             "Error: rsi-tpw pipeline does not apply fp07_response (it computes chi on "
             "its own path). Use `rsi-tpw chi --fp07-response` or perturb.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if chi_merged.get("fp07_slow_response"):
+        print(
+            "Error: rsi-tpw pipeline does not apply fp07_slow_response (it computes chi on "
+            "its own path). Use `rsi-tpw chi` or perturb.",
             file=sys.stderr,
         )
         sys.exit(2)

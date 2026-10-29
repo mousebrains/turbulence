@@ -520,6 +520,7 @@ identically to one with no `instruments` at all.
 | `exclude` | list of mappings | One probe (shear **or** thermistor) masked over a pressure and/or time window, the same way. Each entry is `{probe, P_min, P_max, start, stop, reason}`. An unknown probe is an error wherever the entry selects a window. See [`exclude`](#exclude--a-probe-bad-over-a-depth-or-time-window) below |
 | `fp07_tau_scale` | dict | Per-thermistor multiplier on the FP07 time constant, e.g. `{T1: 0.30, T2: 0.75}`. Keys accept the bead name (`T1`) or the gradient channel (`T1_dT1`); values must be finite and > 0. Default `{}` = every probe on the tau model, bit-identical to before |
 | `fp07_response` | path or list of paths | Measured per-bead response corrections from `fp07-pair fit` (`<CONFIG_DIR>/...` or relative to the working directory, like other paths). Hashed by content; versions chi only. **Mutually exclusive with `fp07_tau_scale`.** See [`fp07_response`](#fp07_response--a-measured-per-bead-correction) below |
+| `fp07_slow_response` | dict | A bead's slow parallel response path, keyed by **bead serial**: `{T2005: {beta, tau_s_ms, first, last}}` or a list of spans per bead. Hashed by value (spans as epoch seconds); versions chi only. **Mutually exclusive with `fp07_tau_scale` and `fp07_response`.** See [`fp07_slow_response`](#fp07_slow_response--a-beads-slow-response-path) below |
 
 ```yaml
 instruments:
@@ -711,6 +712,80 @@ not removed.
 - The chi product records `fp07_response_applied`, `fp07_response_reason`
   and the factor itself (`fp07_response_f`, `fp07_response_ln_e`).
 - Workflow, report fields and caveats: [`docs/fp07pair/runbook.md`](../fp07pair/runbook.md).
+
+#### `fp07_slow_response` — a bead's slow response path
+
+Some beads respond through a slow parallel path as well as the usual fast
+pole. Bead T2005 (SN 194 T2, 2021-06-29 to 2022-06-20) loses ~12% of its
+amplitude through a ~110 ms path (issue #252):
+
+```
+|H_slow(f)|^2 = |(1 - beta) + beta / (1 + i 2 pi f tau_s)|^2
+```
+
+It is 1 at f → 0 and `(1-beta)^2` above its ~1-1.5 Hz corner, so across the
+chi band it is a nearly flat 0.77-0.85 in power, and the bead's chi reads
+~20-25% low. Neither the chi spectra (first bin 2 Hz at a 0.5-s FFT) nor
+`fp07-pair` (which calls it `ln G`) can see the corner; it was measured from
+8-s spectra of the time series.
+
+```yaml
+instruments:
+  SN194:
+    fp07_slow_response:
+      T2005: {beta: 0.124, tau_s_ms: 110,
+              first: "2021-06-29T18:00:00Z", last: "2022-06-20T08:30:00Z"}
+```
+
+| Field | Meaning |
+|---|---|
+| key | The bead serial as the `.p` configuration names it (`T` + digits), matched on each file's thermistors as `fp07-pair` matches them. Not the channel: the correction follows the bead wherever it is mounted |
+| `beta` | Fraction of the response through the slow path, `0 <= beta < 1`. T2005: 0.124 (0.122-0.128 per deployment; 0.09-0.13 across single-pole model choices) |
+| `tau_s_ms` | Its time constant [ms], > 0. Held fixed in frequency (not scaled with speed). T2005: 110 (105-112) |
+| `first`, `last` | Mandatory span, UTC, inclusive, tested against each file's `start_time`. Quoted or unquoted ISO-8601; a bare date is 00:00 UTC. A list of spans per bead is allowed; they may not overlap |
+
+- chi divides the bead's observed **and** noise spectra by `|H_slow|^2` in
+  every bin, unweighted, before anything else uses them (both methods, the
+  detection gate, band, fom, K_max_ratio). Each bin keeps its S/N: under
+  Method 1 the gates, band, K_max and K_max_ratio are unchanged and chi rises
+  by a weighted mean of 1/e over the band (1.18-1.30x for T2005); under
+  Method 2 the fitted kB moves too. The stored spectra stay raw.
+- **Calibrated temperature only** (`fp07.calibrate: true`, or `fp07-cal`
+  patched files): `|H_slow(0)| = 1` is relative to the DC level that
+  calibration fixes.
+- **Assumption A1:** the bead is corrected to its partner's norm. T1592 reads
+  like T1593 on the same port and every other pair checked is flat; whether
+  the norm itself has a slow path is untested (JAC_T cannot test it, its own
+  response time sits on tau_s). If it had one, T2005 would be under-corrected,
+  never over-corrected.
+- **Refused beside `fp07_tau_scale` or `fp07_response`** on the same key: both
+  were fitted on spectra that already contain the path (ARCTERX-2022's tau
+  scales; an `fp07-pair` correction's `ln e`), so stacking corrects the bead
+  twice.
+- A file without the bead keeps its chi and records only the beads it carries
+  (`fp07_slow_response_serials`). A file with it outside every span is
+  computed uncorrected and says so (`fp07_slow_response_applied = 0`,
+  `..._reason`); the run summary names such files, and any bead key that
+  matched no thermistor, with the beads it was compared against. A bead on two
+  channels of one file inside its span, or a file whose configuration cannot
+  be read, is an error; outside every span the doubled serial is a
+  placeholder, recorded and otherwise ignored.
+- **Guard.** Each chi file records its own change in median
+  ln(S_bead/S_partner) from 0.25 to 2 Hz (32-s windows, 8-s Hann segments of
+  the gradient) as `fp07_slow_response_delta_measured_<channel>`, beside the
+  prediction `..._delta_predicted_<channel>`, and the per-window values
+  (`..._guard_lnr_lo/hi_<channel>`). A verdict needs 40 windows, so perturb
+  pools each `.p` file's profiles and warns (log and run summary) when the
+  file's change is more than 0.10 from the prediction: on 85 healthy T2005
+  files the difference was -0.08..+0.01 (5-95%), while a swapped probe flips
+  its sign and a faded path sits ~+0.18 off. It never refuses. Files with too
+  few windows for a verdict are named too. Each file's outcome is kept as
+  `chi_NN/<stem>.fp07_slow_response.json` (measured, predicted, windows,
+  verdict, software version), so a rerun that skips the file from its cache
+  repeats its notices; the cache itself ignores the file.
+- Also recorded: `..._bead_`, `..._beta_`, `..._tau_s_ms_`, `..._span_` and
+  `..._guard_<channel>` (the verdict), with `fp07_slow_response_model` stating
+  the convention. perturb-diag draws the factor into the bead's model curve.
 
 ---
 

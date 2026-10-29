@@ -451,6 +451,9 @@ DEFAULTS: dict[str, dict] = {
     #   fp07_tau_scale       : {probe: multiplier}
     #   fp07_response        : path | [paths] from `fp07-pair fit`
     #                          (mutually exclusive with fp07_tau_scale)
+    #   fp07_slow_response   : {bead: {beta, tau_s_ms, first, last} | [...]}
+    #                          a bead's slow response path (chi/fp07_slow.py,
+    #                          issue #252); exclusive with both of the above
     "instruments": {},
 }
 
@@ -471,7 +474,7 @@ _HASH_EXCLUDE_KEYS = frozenset(
 _DYNAMIC_KEY_SECTIONS = frozenset({"instruments"})
 
 _INSTRUMENT_VALID_KEYS = frozenset(
-    {"exclude_shear_probes", "exclude", "fp07_tau_scale", "fp07_response"}
+    {"exclude_shear_probes", "exclude", "fp07_tau_scale", "fp07_response", "fp07_slow_response"}
 )
 
 # Which `instruments.<SN>.*` keys actually reach each stage. The block is hashed
@@ -485,7 +488,9 @@ _INSTRUMENT_VALID_KEYS = frozenset(
 # entry by entry (_EXCLUDE_PRODUCTS_BY_STAGE).
 _INSTRUMENT_KEYS_BY_STAGE: dict[str, frozenset[str]] = {
     "diss": frozenset({"exclude_shear_probes", "exclude"}),
-    "chi": frozenset({"exclude_shear_probes", "exclude", "fp07_tau_scale", "fp07_response"}),
+    "chi": frozenset(
+        {"exclude_shear_probes", "exclude", "fp07_tau_scale", "fp07_response", "fp07_slow_response"}
+    ),
 }
 
 # Which `exclude` entries reach each stage, by the product their probe is masked
@@ -818,6 +823,22 @@ def _validate_instruments(instruments: dict) -> None:
                     "ARCTERX-2022 SN194 it would invert the T1/T2 disagreement). Remove "
                     "fp07_tau_scale, and expect chi to move by its geometric mean."
                 )
+        slow = settings.get("fp07_slow_response")
+        if slow is not None:
+            # Imported here, not at module top: building the CLI parser must
+            # not pull numpy in (see probe_exclusion).
+            from odas_tpw.chi.fp07_slow import parse_slow_response
+
+            if parse_slow_response(slow, where=f"instruments.{sn}.fp07_slow_response"):
+                stacked = [k for k in ("fp07_tau_scale", "fp07_response") if settings.get(k)]
+                if stacked:
+                    raise ValueError(
+                        f"instruments.{sn}: fp07_slow_response and {stacked[0]} are mutually "
+                        "exclusive. Both were fitted on spectra that already contain the slow "
+                        "path (ARCTERX-2022's tau scales; an fp07-pair correction's ln e), so "
+                        "stacking corrects the bead twice. Remove "
+                        f"{stacked[0]}; an fp07-pair fit on slow-corrected spectra is future work."
+                    )
 
 
 CONFIG_DIR_TOKEN = "<CONFIG_DIR>"
@@ -1182,6 +1203,21 @@ def canonical_instruments_for_hash(
         if response is not None:
             paths = [response] if isinstance(response, (str, os.PathLike)) else list(response)
             item["fp07_response"] = sorted(_fp07_response_digest(str(p)) for p in paths)
+        # A bead's slow path: beads sorted, numbers as floats, spans as epoch
+        # seconds (a quoted and an unquoted time hash alike, and no YAML date
+        # reaches json). Empty hashes as absent, like `exclude: []`.
+        if "fp07_slow_response" in item:
+            from odas_tpw.chi.fp07_slow import canonical_for_hash
+
+            slow = canonical_for_hash(
+                item["fp07_slow_response"], where=f"instruments.{key}.fp07_slow_response"
+            )
+            if slow:
+                item["fp07_slow_response"] = slow
+            else:
+                del item["fp07_slow_response"]
+                if keys is not None and not item:
+                    continue
         normalized[str(key)] = item
     return normalized
 
@@ -1797,6 +1833,20 @@ parallel:
 # each bead's response relative to its partner per time segment; list EVERY
 # file it writes (including *_notapplied.nc). A file matching none is an error.
 # See docs/fp07pair/runbook.md.
+#
+# fp07_slow_response divides a bead's slow parallel response path,
+# |(1-beta) + beta/(1 + i 2 pi f tau_s)|^2, out of its observed and noise
+# spectra (issue #252; T2005 on SN194 loses ~12% of its amplitude through a
+# ~110 ms path). Keyed by BEAD SERIAL as the .p configuration names it, not by
+# channel, with a mandatory span [first, last] (UTC, inclusive) tested
+# against each file's start_time; a list gives several spans. A file without
+# the bead is untouched; a file with it outside every span is left uncorrected
+# and named in the run summary. Needs calibrated temperature (fp07.calibrate:
+# true, or fp07-cal patched files): the path is relative to the DC level the
+# calibration fixes. Never with fp07_tau_scale or fp07_response, which were
+# both fitted on spectra that already contain the path. Each chi file records
+# its own 0.25 -> 2 Hz T-pair ratio change beside the prediction and warns
+# when they disagree by more than 0.10 (a swapped probe, a faded path).
 instruments: {}
 # Example:
 # instruments:
@@ -1817,6 +1867,10 @@ instruments: {}
 #   SN428:
 #     fp07_response:
 #       - <CONFIG_DIR>/fp07pair/fp07pair_SN428_T2232-T2234_20220322T1450Z.nc
+#   VMP:                   # .p files directly under VMP/; never on a key with
+#     fp07_slow_response:  # fp07_tau_scale or fp07_response
+#       T2005: {beta: 0.124, tau_s_ms: 110,
+#               first: "2021-06-29T18:00:00Z", last: "2022-06-20T08:30:00Z"}
 """
 
 
