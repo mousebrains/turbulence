@@ -142,7 +142,8 @@ def main(argv: list[str] | None = None) -> int:
     t = sub.add_parser(
         "tau", help="each bead's single-pole-equivalent tau over an explicit time span",
         description="Fit a single pole to each bead of a pair from the median ln(S2/S1) "
-        "over 1-25 Hz of reduced frequency, with file-bootstrap intervals, the model-free "
+        "over 1-25 Hz of reduced frequency, with intervals from resampling whole recordings "
+        "(.p files), the model-free "
         "power ratio at 10 and 20 Hz, and the same for each time half. Writes one JSON "
         "record (and a text report) per bead pair, for `fp07-cal registry response`. "
         "Matched beads give no tau, only ratios (see docs/fp07pair/runbook.md).")
@@ -155,7 +156,8 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("-o", "--output", required=True, help="output directory")
     t.add_argument("--band", nargs=2, type=float, default=list(B.FIT_BAND), metavar=("LO", "HI"),
                    help="fit band in Hz of reduced frequency (default: 1 25)")
-    t.add_argument("--n-boot", type=int, default=200, help="file-bootstrap replicates")
+    t.add_argument("--n-boot", type=int, default=200,
+                   help="bootstrap replicates (each resamples recordings)")
     t.add_argument("--min-files", type=int, default=B.MIN_FILES)
     t.add_argument("--min-recordings", type=int, default=B.MIN_RECORDINGS,
                    help="distinct start times (.p files) the bootstrap resamples")

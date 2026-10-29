@@ -44,7 +44,7 @@ import json
 import math
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -88,7 +88,7 @@ DIFFER_SIGMAS = 3.0  # |ln R'(20 Hz)| >= this many bootstrap half-widths ...
 # ... and at least this: the beads differ by 16% in power at 20 Hz. Synthetic
 # 11/10 ms pairs (|ln R'(20 Hz)| ~ 0.13) were still identified now and then, with
 # intervals that missed the truth by 35-50%: near-matched beads put the absolute
-# level on a ridge the file bootstrap does not see. 12/10 ms (0.26) is recovered.
+# level on a ridge the bootstrap does not see. 12/10 ms (0.26) is recovered.
 DIFFER_MIN = 0.15
 CI_MAX_FACTOR = 1.5  # each tau's 16-84% interval spans at most this factor
 BOUND_MARGIN = 1.05  # ... and stays this far inside TAU_BOUNDS
@@ -103,27 +103,81 @@ DEAD_FILE_FRAC = 0.5
 # intervals false-alarmed on up to 4 of 20 stationary synthetic pairs; this, 1 of 19.
 DRIFT_SIGMAS = 2.0
 
-# Noise-model check (a diagnostic, not part of the rule): in the quietest
-# windows the observed spectrum over this band should be the noise model.
+# The reference level of the model-free ratios: the pooled curve read at these
+# fixed points (Hz of reduced frequency) and averaged, so it does not depend on
+# the products' FFT resolution. (fp07-pair fit takes its lowest four usable bins,
+# ~1 Hz on 1 Hz FFTs and ~2 Hz on SUNRISE's 2 Hz FFTs; that is ~0.03 in ln R'(20 Hz)
+# for a 15/22 ms pair.)
+REF_POINTS = (2.0, 3.0, 4.0)
+
+# Noise-model check: in a probe's quietest usable windows (S/N >= 10 over
+# 1-10 Hz, their quietest decile) the observed spectrum over NOISE_BAND, above
+# the fit band and below the anti-alias corner (~98-110 Hz), should be the noise
+# model. NOISE_FLOOR_MAX is a REFUSAL (rule 7): see the module notes below.
 NOISE_BAND = (60.0, 100.0)  # Hz, raw frequency
 NOISE_QUIET = 0.1  # the quietest decile, by S/N over 1-10 Hz
-NOISE_TOL = 1.5  # obs/model outside [1/NOISE_TOL, NOISE_TOL] is flagged
+# Rule 7, set on synthetics (13/19.5 ms, 16 recordings, unmodelled content added
+# to one probe; docs/fp07pair/runbook.md section 6): white content that raises
+# this floor to 1.23x moves both taus by 1.0-1.5 of their 16-84% half-widths, to
+# 1.48x by 1.2-1.9; a peak at 30 Hz, inside the fit band, that raises it only to
+# 1.29x moves them by ~17. A noise MODEL 2-5x too high (the floor at 0.2-0.5x)
+# moves them by < 1, so that side is only flagged. Healthy identified deployments
+# read 1.00-1.21. Content confined to the fit band barely shows here (a 30 Hz peak
+# biasing tau by 8 half-widths read 1.08x): this test cannot catch it.
+NOISE_FLOOR_MAX = 1.25  # obs/model above this on either probe: no tau
+NOISE_TOL = 1.5  # obs/model below 1/NOISE_TOL (a model too high) is only flagged
 
-RULE = (
-    f"A bead pair's taus are identified when (1) at least {MIN_FILES} chi files and "
-    f"{MIN_FIT_BINS} measured fit points (every {FIT_STEP:g} Hz of reduced frequency) in "
-    f"{FIT_BAND[0]:g}-{FIT_BAND[1]:g} Hz reaching at least {MIN_TOP_HZ:g} Hz; (2) the flat "
-    f"gain |ln G| <= ln 2 (beyond it is a failing bead's amplitude loss, not a time "
-    f"constant); (3) the beads differ beyond bootstrap noise: |ln R'(20 Hz)| >= "
-    f"{DIFFER_SIGMAS:g} half-widths of its 16-84% file-bootstrap interval and >= "
-    f"{DIFFER_MIN:g}; (4) each tau and its 16-84% interval lie inside the fit bounds "
-    f"{TAU_BOUNDS[0] * 1e3:g}-{TAU_BOUNDS[1] * 1e3:g} ms with a "
-    f"{BOUND_MARGIN:g}x margin, and each interval spans at most a factor {CI_MAX_FACTOR:g}; "
-    f"(5) at least {BOOT_OK_FRAC:.0%} of the bootstrap replicates fit; (6) neither bead is dead "
-    f"in any chi file of the span (spectrum identically zero over 1-10 Hz in at least "
-    f"{DEAD_FILE_FRAC:.0%} of its windows; such files are left out). Otherwise tau is null "
-    f"and only the ratios are recorded."
-)
+
+@dataclass(frozen=True)
+class Rule:
+    """The identifiability thresholds a measurement was made with (recorded with it)."""
+
+    min_files: int = MIN_FILES
+    min_recordings: int = MIN_RECORDINGS
+    min_fit_points: int = MIN_FIT_BINS
+    min_top_Hz: float = MIN_TOP_HZ
+    differ_sigmas: float = DIFFER_SIGMAS
+    differ_min: float = DIFFER_MIN
+    ci_max_factor: float = CI_MAX_FACTOR
+    bound_margin: float = BOUND_MARGIN
+    boot_ok_frac: float = BOOT_OK_FRAC
+    dead_file_frac: float = DEAD_FILE_FRAC
+    noise_floor_max: float = NOISE_FLOOR_MAX
+    n_boot: int = 200
+
+    def to_dict(self) -> dict[str, float | int]:
+        from dataclasses import asdict
+
+        return asdict(self)
+
+    @property
+    def is_default(self) -> bool:
+        return self == Rule()
+
+    def text(self) -> str:
+        return (
+            f"A bead pair's taus are identified when (1) at least {self.min_files} chi files from "
+            f"at least {self.min_recordings} recordings, and {self.min_fit_points} measured fit "
+            f"points (every {FIT_STEP:g} Hz of reduced frequency) in "
+            f"{FIT_BAND[0]:g}-{FIT_BAND[1]:g} Hz reaching at least {self.min_top_Hz:g} Hz; (2) "
+            f"the flat gain |ln G| <= ln 2 (beyond it is a failing bead's amplitude loss, not a "
+            f"time constant); (3) the beads differ beyond bootstrap noise: |ln R'(20 Hz)| >= "
+            f"{self.differ_sigmas:g} half-widths of its 16-84% interval from {self.n_boot} "
+            f"resamples of whole recordings, and >= {self.differ_min:g}; (4) each tau and its "
+            f"16-84% interval lie inside the fit bounds {TAU_BOUNDS[0] * 1e3:g}-"
+            f"{TAU_BOUNDS[1] * 1e3:g} ms with a {self.bound_margin:g}x margin, and each interval "
+            f"spans at most a factor {self.ci_max_factor:g}; (5) at least "
+            f"{self.boot_ok_frac:.0%} of the bootstrap replicates fit; (6) neither bead is dead in "
+            f"any chi file of the span (spectrum identically zero over 1-10 Hz in at least "
+            f"{self.dead_file_frac:.0%} of its windows; such files are left out); (7) neither "
+            f"probe's observed spectrum over {NOISE_BAND[0]:g}-{NOISE_BAND[1]:g} Hz, in its "
+            f"quietest usable windows, exceeds its noise model by more than "
+            f"{self.noise_floor_max:g}x (unmodelled content biases both taus). Otherwise tau is "
+            f"null and only the ratios are recorded."
+        )
+
+
+RULE = Rule().text()
 
 FLAGS = {
     "amplitude": "flat gain |ln G| > ln 2: an amplitude-loss signature (a failing bead), "
@@ -133,8 +187,9 @@ FLAGS = {
     "outlier": f"|ln R'(20 Hz)| > {P.OUTLIER_LNR20:g}, beyond the fleet spread: possibly a "
                "failing bead",
     "noise-model": f"a probe's observed spectrum over {NOISE_BAND[0]:g}-{NOISE_BAND[1]:g} Hz in "
-                   f"its quietest windows is more than {NOISE_TOL:g}x off its noise model, "
-                   "which biases tau",
+                   f"its quietest usable windows is above {NOISE_FLOOR_MAX:g}x its noise model "
+                   f"(unmodelled content: no tau, rule 7) or below 1/{NOISE_TOL:g} of it (a "
+                   "model too high: flagged only)",
     "drift": f"a bead's two time halves differ by more than {DRIFT_SIGMAS:g}x their combined "
              "1-sigma (16-84%) uncertainty",
     "ratio-shift": f"the pair's 20 Hz power ratio differs between the time halves by more than "
@@ -232,15 +287,21 @@ def _curve_at(curve: np.ndarray, grid: np.ndarray, f: np.ndarray) -> np.ndarray:
     return out
 
 
-def _fit_curve(curve: np.ndarray, grid: np.ndarray, ref_bins: np.ndarray,
-               band: tuple[float, float]) -> _One:
-    ref = float(np.nanmean(curve[ref_bins])) if ref_bins.size else np.nan
+def reference_level(curve: np.ndarray, grid: np.ndarray) -> float:
+    """The ratios' reference level: the curve's mean over :data:`REF_POINTS`."""
+    v = _curve_at(curve, grid, np.asarray(REF_POINTS))
+    return float(np.mean(v[np.isfinite(v)])) if np.isfinite(v).any() else np.nan
+
+
+def _fit_curve(curve: np.ndarray, grid: np.ndarray, band: tuple[float, float],
+               min_points: int) -> _One:
+    ref = reference_level(curve, grid)
     ratios = tuple(_value_at(curve, grid, f0) - ref for f0 in RATIO_F)
     fx = fit_points(band)
     y = _curve_at(curve, grid, fx)
     sel = np.isfinite(y)
     n = int(sel.sum())
-    if n < MIN_FIT_BINS:
+    if n < min_points:
         return _One(False, n_bins=n, ln_ratio=ratios)
     lg, t1, t2, rms = fit_single_pole(fx[sel], y[sel])
     return _One(True, lg, (t1, t2), rms, n, (float(fx[sel][0]), float(fx[sel][-1])), ratios)
@@ -270,7 +331,7 @@ class TauFit:
     tau_fit: tuple[float, float]  # s, the fit's values whatever the verdict
     tau_ci: tuple[tuple[float, float], tuple[float, float]]
     ln_G_fit: float  # the fit's free gain
-    ln_G: float  # the reference-band level, as fp07-pair fit reports it
+    ln_G: float  # the reference level (mean over REF_POINTS) of ln(S2/S1)
     rms: float
     fit_band: tuple[float, float]
     n_bins: int
@@ -278,6 +339,7 @@ class TauFit:
     ln_ratio_ci: dict[float, tuple[float, float]]
     n_boot: int
     n_boot_ok: int
+    noise: tuple[float | None, float | None] = (None, None)  # per channel, see NOISE_BAND
 
     def to_dict(self) -> dict[str, Any]:
         def num(x: float) -> float | None:
@@ -297,13 +359,29 @@ class TauFit:
             "ln_ratio_16_84": {f"{f:g}": [num(a), num(b)]
                                for f, (a, b) in self.ln_ratio_ci.items()},
             "n_boot": self.n_boot, "n_boot_ok": self.n_boot_ok,
+            "noise_obs_over_model": list(self.noise),
         }
 
 
 def fit_files(files: list[P._FileRatio], grid: np.ndarray, *, band: tuple[float, float] = FIT_BAND,
-              n_boot: int = 200, min_windows: int = 200, rng: np.random.Generator | None = None,
-              min_files: int = MIN_FILES, min_recordings: int = MIN_RECORDINGS) -> TauFit:
-    """Fit one stretch of per-file ratios and apply :data:`RULE`."""
+              n_boot: int | None = None, min_windows: int = 200,
+              rng: np.random.Generator | None = None, min_files: int | None = None,
+              min_recordings: int | None = None, rule: Rule | None = None,
+              noise: tuple[float | None, float | None] = (None, None)) -> TauFit:
+    """Fit one stretch of per-file ratios and apply *rule* (default :class:`Rule`).
+
+    *n_boot*, *min_files* and *min_recordings*, when given, override the rule's.
+    *noise* is the stretch's per-channel noise-floor ratio (:func:`_noise_check`),
+    judged by rule 7.
+    """
+    rule = rule or Rule()
+    over = {k: v for k, v in (("n_boot", n_boot), ("min_files", min_files),
+                              ("min_recordings", min_recordings)) if v is not None}
+    if over:
+        from dataclasses import replace
+
+        rule = replace(rule, **over)
+    n_boot = rule.n_boot
     rng = rng or np.random.default_rng(0)
     n = len(files)
     t = [f.t0 for f in files]
@@ -315,16 +393,14 @@ def fit_files(files: list[P._FileRatio], grid: np.ndarray, *, band: tuple[float,
     recs = list(blocks.values())
     n_rec = len(recs)
     curve = _smoothed(files, grid, min_windows)
-    ok = np.isfinite(curve)
-    ref_bins = P.reference_bins(ok, grid)
-    point = _fit_curve(curve, grid, ref_bins, band)
-    ln_G = float(np.mean(curve[ref_bins])) if ref_bins.size else np.nan
+    point = _fit_curve(curve, grid, band, rule.min_fit_points)
+    ln_G = reference_level(curve, grid)
     taus: list[list[float]] = [[], []]
     rat: list[list[float]] = [[] for _ in RATIO_F]
     n_ok = 0
     for _ in range(n_boot if n_rec >= 2 else 0):
         pick = [f for i in rng.integers(0, n_rec, n_rec) for f in recs[i]]
-        rep = _fit_curve(_smoothed(pick, grid, min_windows), grid, ref_bins, band)
+        rep = _fit_curve(_smoothed(pick, grid, min_windows), grid, band, rule.min_fit_points)
         for k, v in enumerate(rep.ln_ratio):
             rat[k].append(v)
         if rep.ok:
@@ -336,17 +412,18 @@ def fit_files(files: list[P._FileRatio], grid: np.ndarray, *, band: tuple[float,
     ln_ratio = dict(zip(RATIO_F, point.ln_ratio or (np.nan,) * len(RATIO_F), strict=True))
 
     reasons: list[str] = []
-    if n < min_files:
-        reasons.append(f"{n} chi files < {min_files}")
-    if n_rec < min_recordings:
-        reasons.append(f"{n_rec} recordings (distinct start times) < {min_recordings}")
+    if n < rule.min_files:
+        reasons.append(f"{n} chi files < {rule.min_files}")
+    if n_rec < rule.min_recordings:
+        reasons.append(f"{n_rec} recordings (distinct start times) < {rule.min_recordings}")
     if not point.ok:
         reasons.append(f"{point.n_bins} measured fit points in {band[0]:g}-{band[1]:g} Hz "
-                       f"< {MIN_FIT_BINS}")
-    elif point.band[1] < MIN_TOP_HZ:
-        reasons.append(f"the usable band ends at {point.band[1]:.1f} Hz < {MIN_TOP_HZ:g} Hz")
+                       f"< {rule.min_fit_points}")
+    elif point.band[1] < rule.min_top_Hz:
+        reasons.append(f"the usable band ends at {point.band[1]:.1f} Hz < {rule.min_top_Hz:g} Hz")
     if not np.isfinite(ln_G):
-        reasons.append(f"no usable bins below {P.REF_BAND_MAX:g} Hz for the reference level")
+        reasons.append(f"no reference level (the curve at {REF_POINTS[0]:g}-{REF_POINTS[-1]:g} "
+                       f"Hz)")
     elif abs(ln_G) > P.LN_G_MAX:
         reasons.append(f"flat gain ln G = {ln_G:+.2f} beyond ln 2: an amplitude-loss "
                        f"signature (a failing bead), not a time constant")
@@ -357,12 +434,12 @@ def fit_files(files: list[P._FileRatio], grid: np.ndarray, *, band: tuple[float,
         reasons.append("no ratio at 20 Hz")
     elif not np.isfinite(hw):
         reasons.append("no bootstrap interval for the 20 Hz ratio")
-    elif abs(r20) < max(DIFFER_SIGMAS * hw, DIFFER_MIN):
+    elif abs(r20) < max(rule.differ_sigmas * hw, rule.differ_min):
         reasons.append(f"beads not distinguishable: |ln R'(20 Hz)| = {abs(r20):.3f} < "
-                       f"max({DIFFER_SIGMAS:g} x {hw:.3f}, {DIFFER_MIN:g})")
-    if n_boot and n_ok < BOOT_OK_FRAC * n_boot:
+                       f"max({rule.differ_sigmas:g} x {hw:.3f}, {rule.differ_min:g})")
+    if n_boot and n_ok < rule.boot_ok_frac * n_boot:
         reasons.append(f"{n_ok} of {n_boot} bootstrap replicates fitted")
-    lo_b, hi_b = TAU_BOUNDS[0] * BOUND_MARGIN, TAU_BOUNDS[1] / BOUND_MARGIN
+    lo_b, hi_b = TAU_BOUNDS[0] * rule.bound_margin, TAU_BOUNDS[1] / rule.bound_margin
     for k in (0, 1):
         a, b = tau_ci[k]
         v = point.tau[k]
@@ -371,9 +448,14 @@ def fit_files(files: list[P._FileRatio], grid: np.ndarray, *, band: tuple[float,
         elif not (lo_b < min(a, v) and max(b, v) < hi_b):
             reasons.append(f"tau{k + 1} = {v * 1e3:.1f} ms [{a * 1e3:.1f}-{b * 1e3:.1f}] at or "
                            f"near a fit bound")
-        elif b / a > CI_MAX_FACTOR:
+        elif b / a > rule.ci_max_factor:
             reasons.append(f"tau{k + 1} interval {a * 1e3:.1f}-{b * 1e3:.1f} ms spans "
-                           f"x{b / a:.2f} > x{CI_MAX_FACTOR:g}")
+                           f"x{b / a:.2f} > x{rule.ci_max_factor:g}")
+    for k, nv in enumerate(noise):
+        if nv is not None and nv > rule.noise_floor_max:
+            reasons.append(f"probe {k + 1}'s observed floor is {nv:.2f}x its noise model over "
+                           f"{NOISE_BAND[0]:g}-{NOISE_BAND[1]:g} Hz (> {rule.noise_floor_max:g}): "
+                           f"unmodelled content, which biases both taus")
     identified = not reasons
     return TauFit(
         first=float(min(t)) if t else np.nan, last=float(max(t)) if t else np.nan,
@@ -382,7 +464,7 @@ def fit_files(files: list[P._FileRatio], grid: np.ndarray, *, band: tuple[float,
         tau=point.tau if identified else None, tau_fit=point.tau, tau_ci=tau_ci,
         ln_G_fit=point.ln_G, ln_G=ln_G, rms=point.rms, fit_band=point.band,
         n_bins=point.n_bins, ln_ratio=ln_ratio, ln_ratio_ci=ratio_ci,
-        n_boot=n_boot, n_boot_ok=n_ok,
+        n_boot=n_boot, n_boot_ok=n_ok, noise=noise,
     )
 
 
@@ -432,7 +514,10 @@ def _peek(path: str) -> dict:
     import netCDF4
 
     with netCDF4.Dataset(path) as ds:
-        if "spec_gradT" not in ds.variables or ds["spec_gradT"].shape[0] < 2:
+        for v in ("spec_gradT", "spec_noise", "F", "speed"):
+            if v not in ds.variables:
+                raise ValueError(f"{path}: no {v}")
+        if ds["spec_gradT"].shape[0] < 2 or ds["spec_noise"].shape[0] < 2:
             raise ValueError(f"{path}: needs spectra from two thermistors")
         probes = None
         if "probe" in ds.variables:
@@ -513,6 +598,7 @@ class PairTau:
     created: str
     dead_files: tuple[list[str], list[str]] = ([], [])  # per channel: excluded, bead dead
     dead_windows: tuple[int, int] = (0, 0)  # per channel, in the files kept
+    rule: Rule = field(default_factory=Rule)  # the thresholds this measurement used
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -534,7 +620,11 @@ class PairTau:
             "dead_windows": list(self.dead_windows),
             "first_file": self.files[0],
             "last_file": self.files[1],
-            "rule": RULE,
+            "rule": self.rule.text(),
+            "rule_thresholds": self.rule.to_dict(),
+            "rule_is_default": self.rule.is_default,
+            "reference_points_Hz": list(REF_POINTS),
+            "noise_band_Hz": list(NOISE_BAND),
             "software_version": self.software_version,
             "created": self.created,
         }
@@ -567,8 +657,9 @@ class MeasureResult:
 
 def measure(paths: Sequence[str], *, instrument: str, first: float, last: float,
             beads: Sequence[str] | None = None, band: tuple[float, float] = FIT_BAND,
-            n_boot: int = 200, min_windows: int = 200, min_files: int = MIN_FILES,
-            min_recordings: int = MIN_RECORDINGS, rng_seed: int = 0) -> MeasureResult:
+            n_boot: int | None = None, min_windows: int = 200, min_files: int | None = None,
+            min_recordings: int | None = None, rule: Rule | None = None,
+            rng_seed: int = 0) -> MeasureResult:
     """Each bead pair's taus on *instrument* over files starting in [first, last].
 
     *paths* are chi product NetCDFs, as for ``fp07-pair fit``; a file belongs
@@ -577,10 +668,19 @@ def measure(paths: Sequence[str], *, instrument: str, first: float, last: float,
     each file's source configuration (:func:`fp07_pair.identity_from_source`),
     never from the file name. *beads*, when given, keeps only pairs holding
     every serial listed. Files are read twice (speeds, then spectra one file
-    at a time), so memory does not grow with the deployment.
+    at a time), so memory does not grow with the deployment; a file that cannot
+    be read is skipped and reported, never the end of the run. *rule* (default
+    :class:`Rule`) sets the thresholds; *n_boot*, *min_files* and *min_recordings*
+    override it, and the record carries the thresholds actually used.
     """
+    from dataclasses import replace
+
     from odas_tpw._version_info import software_version
     from odas_tpw.chi.fp07 import default_tau_model
+
+    rule = replace(rule or Rule(), **{k: v for k, v in (
+        ("n_boot", n_boot), ("min_files", min_files), ("min_recordings", min_recordings))
+        if v is not None})
 
     want = canonical_instrument(instrument)
     report: list[str] = []
@@ -647,38 +747,62 @@ def measure(paths: Sequence[str], *, instrument: str, first: float, last: float,
         quiet, high = [], []
         dead: tuple[list[tuple[str, float]], list[tuple[str, float]]] = ([], [])
         dead_windows = np.zeros(2, dtype=int)
+        n_unread = 0
         for p, meta in members:
-            prod = P._read_product(p)
+            try:
+                prod = P._read_product(p)
+                fr = P._file_ratio(prod, W_ref, tau_model, grid, p)
+            except (OSError, ValueError, KeyError) as exc:  # an SMB HDF error, a bad file
+                n_unread += 1
+                report.append(f"SKIPPED {os.path.basename(p)} (spectra): {exc}")
+                continue
             q, h, d = _noise_stats(prod)
             dead_frac = d.mean(axis=1) if d.shape[1] else np.zeros(2)
-            if np.any(dead_frac >= DEAD_FILE_FRAC):
-                for ci in np.flatnonzero(dead_frac >= DEAD_FILE_FRAC):
+            if np.any(dead_frac >= rule.dead_file_frac):
+                for ci in np.flatnonzero(dead_frac >= rule.dead_file_frac):
                     dead[int(ci)].append((os.path.basename(p), meta["t0"]))
                 continue  # a dead recording carries no ratio; it must not count as data
             dead_windows += d.sum(axis=1)
             kept.append((p, meta))
-            files.append(P._file_ratio(prod, W_ref, tau_model, grid, p))
+            files.append(fr)
             quiet.append(q)
             high.append(h)
         if not files:
-            report.append(f"{label}: every one of its {len(members)} chi files has a dead "
-                          f"bead; nothing to measure")
+            report.append(f"{label}: none of its {len(members)} chi files is usable (dead bead "
+                          f"or unreadable); nothing to measure")
             continue
         if len(kept) < len(members) and speed_ref(kept) != W_ref:
-            # W_ref is the speed of the files MEASURED: re-map them without the dead ones
+            # W_ref is the speed of the files MEASURED: re-map them without the others
             W_ref = speed_ref(kept)
-            files = [P._file_ratio(P._read_product(p), W_ref, tau_model, grid, p)
-                     for p, _m in kept]
+            remapped, keep2, q2, h2_ = [], [], [], []
+            for (p, m), q, h in zip(kept, quiet, high, strict=True):
+                try:
+                    remapped.append(P._file_ratio(P._read_product(p), W_ref, tau_model, grid, p))
+                except (OSError, ValueError, KeyError) as exc:
+                    n_unread += 1
+                    report.append(f"SKIPPED {os.path.basename(p)} (spectra, re-read): {exc}")
+                    continue
+                keep2.append((p, m))
+                q2.append(q)
+                h2_.append(h)
+            files, kept, quiet, high = remapped, keep2, q2, h2_
+            if not files:
+                report.append(f"{label}: no chi file could be re-read; nothing to measure")
+                continue
         rng = np.random.default_rng(rng_seed)
 
-        def fit(fs: list[P._FileRatio], _grid: np.ndarray = grid,
-                _rng: np.random.Generator = rng) -> TauFit:
-            return fit_files(fs, _grid, band=band, n_boot=n_boot, min_windows=min_windows,
-                             rng=_rng, min_files=min_files, min_recordings=min_recordings)
+        def noise_of(a: int, b: int, _q: list = quiet, _h: list = high) -> tuple:
+            v = _noise_check(np.concatenate(_q[a:b], axis=1), np.concatenate(_h[a:b], axis=1))
+            return (v[0], v[1])
 
-        fit_all = fit(files)
+        def fit(a: int, b: int, _files: list = files, _grid: np.ndarray = grid,
+                _rng: np.random.Generator = rng) -> TauFit:
+            return fit_files(_files[a:b], _grid, band=band, min_windows=min_windows, rng=_rng,
+                             rule=rule, noise=noise_of(a, b))
+
+        fit_all = fit(0, len(files))
         k = split_halves([f.t0 for f in files])
-        halves = None if k is None else (fit(files[:k]), fit(files[k:]))
+        halves = None if k is None else (fit(0, k), fit(k, len(files)))
         dead_files = ([n for n, _t in dead[0]], [n for n, _t in dead[1]])
         if any(dead_files):
             why = "; ".join(
@@ -695,7 +819,7 @@ def measure(paths: Sequence[str], *, instrument: str, first: float, last: float,
                     (halves[1], any(t >= split for t in t_dead))) if inside]
             for f in refused:
                 f.identified, f.tau, f.reasons = False, None, (*f.reasons, why)
-        noise = _noise_check(np.concatenate(quiet, axis=1), np.concatenate(high, axis=1))
+        noise = list(fit_all.noise)
         flags = []
         if any(dead_files):
             flags.append("dead-bead")
@@ -704,7 +828,7 @@ def measure(paths: Sequence[str], *, instrument: str, first: float, last: float,
         r20 = fit_all.ln_ratio.get(20.0, np.nan)
         if np.isfinite(r20) and abs(r20) > P.OUTLIER_LNR20:
             flags.append("outlier")
-        if any(v is not None and not 1 / NOISE_TOL <= v <= NOISE_TOL for v in noise):
+        if any(v is not None and not 1 / NOISE_TOL <= v <= rule.noise_floor_max for v in noise):
             flags.append("noise-model")
         drift = [False, False]
         if halves is not None and all(h.identified for h in halves):
@@ -712,7 +836,7 @@ def measure(paths: Sequence[str], *, instrument: str, first: float, last: float,
                 drift[c] = drifted(halves[0], halves[1], c)
         if any(drift):
             flags.append("drift")
-        if halves is not None and ratio_shifted(*halves, min_recordings=min_recordings):
+        if halves is not None and ratio_shifted(*halves, min_recordings=rule.min_recordings):
             flags.append("ratio-shift")
         pt = PairTau(
             instrument=inst, channels=chans, serials=sers, tau_model=tau_model, W_ref=W_ref,
@@ -721,6 +845,7 @@ def measure(paths: Sequence[str], *, instrument: str, first: float, last: float,
             files=(os.path.basename(files[0].path), os.path.basename(files[-1].path)),
             software_version=software_version(), created=created,
             dead_files=dead_files, dead_windows=(int(dead_windows[0]), int(dead_windows[1])),
+            rule=rule,
         )
         out.append(pt)
         report.extend(format_pair(pt))

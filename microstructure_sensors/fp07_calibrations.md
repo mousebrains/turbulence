@@ -86,7 +86,7 @@ An entry may carry the bead's FP07 time constant, measured by `fp07-pair tau` fr
 
 | method | what it does |
 |---|---|
-| `pair-ratio-sp` | `fp07-pair tau`: one single pole per bead fitted to the median over windows of ln(S2/S1), the bead pair's gradient-spectrum ratio from the deployment's chi products (built as `fp07-pair fit` builds it), read every 1 Hz across `band_Hz` of reduced frequency (frequency at the pair's median speed `W_ref_m_s`, windows at other speeds mapped by `speed_scaling`), with 16-84% intervals from a bootstrap over chi files. The flat gain between the beads is a free parameter. |
+| `pair-ratio-sp` | `fp07-pair tau`: one single pole per bead fitted to the median over windows of ln(S2/S1), the bead pair's gradient-spectrum ratio from the deployment's chi products (built as `fp07-pair fit` builds it), read every 1 Hz across `band_Hz` of reduced frequency (frequency at the pair's median speed `W_ref_m_s`, windows at other speeds mapped by `speed_scaling`), with 16-84% intervals from a bootstrap that resamples whole recordings (`.p` files). The flat gain between the beads is a free parameter. The power ratios are referenced to the curve's mean at 2, 3 and 4 Hz. |
 
 | response flag | meaning |
 |---|---|
@@ -102,7 +102,7 @@ An entry may carry the bead's FP07 time constant, measured by `fp07-pair tau` fr
 | bead | where | calibrations | first | last |
 |---|---|---|---|---|
 | [T1592](#t1592) | vmp-250 SN 194 T1 → VMP250IR_RDL SN 142 T2 | 7 | 2019-06-02 | 2025-02-17 |
-| [T1593](#t1593) | vmp-250 SN 194 T2 | 2 | 2019-06-02 | 2021-06-29 |
+| [T1593](#t1593) | vmp-250 SN 194 T2 | 2 | 2019-06-02 | 2021-06-28 |
 | [T2005](#t2005) | vmp-250 SN 194 T2 | 5 | 2021-06-29 | 2022-07-05 |
 | [T2007](#t2007) | VMP250IR_RDL SN 142 T1 | 1 | 2025-02-11 | 2025-02-17 |
 | [T2239](#t2239) | MR1000RDL-EM SN 433 T1 | 1 | 2023-05-31 | 2023-06-07 |
@@ -140,27 +140,15 @@ Coefficients and the bridge constants that define their L:
 | 6 | 283.228879 | 3086.0451 | — | — | -9.7 | 0.99878 | 6 | 0.68229 | 4.096 | 16 |
 | 7 | 283.071828 | 3026.4200 | 184195.0 | — | -8.3 | 0.99887 | 6 | 0.68265 | 4.096 | 16 |
 
-FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
-
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T1593 | 1.288 | 1-25 | **10.7** (9.3-11.3) | 12.1 (lueck) | 9.6 (8.6-12.1) [1.57] → 11.5 (10.6-13.7) [1.40] | 1.23 / 1.47 | 43 / 2419 / 88299 | — |
-| 2 | T2005 | 1.024 | 1-25 | **15.2** (14.2-16.1) | 15.4 (lueck) | — [1.79] → — [1.64] | 1.43 / 1.72 | 5 / 819 / 9134 | `noise-model` |
-| 3 | T2005 | 1.035 | 1-25 | **17.5** (15.9-18.9) | 17.8 (lueck) | 19.3 (17.1-21.9) [1.45] → 16.4 (15.0-17.6) [1.64] | 1.35 / 1.56 | 38 / 5552 / 78371 | `noise-model`, `ratio-shift` |
-| 4 | T2005 | 0.946 | 1-25 | **16.7** (15.9-17.7) | 16.3 (lueck) | 14.8 (14.3-15.2) [2.13] → 20.3 (19.6-21.9) [1.80] | 1.61 / 2.00 | 30 / 536 / 37212 | `drift`, `ratio-shift` |
-| 5 | T2005 | 0.935 | 1-25 | not identified | — | — | 1.60 / 1.99 | 1 / 31 / 3191 | — |
-| 6 | T2005 | 0.970 | 1-25 | **12.8** (12.3-13.4) | 12.6 (lueck) | 11.3 (10.3-11.7) [0.48] → 14.4 (13.5-15.5) [0.33] | 0.70 / 0.41 | 76 / 7557 / 182555 | `noise-model`, `drift`, `ratio-shift` |
-| 7 | T2007 | 1.077 | 1-25 | not identified | — | — [0.47] → — [0.46] | 0.74 / 0.47 | 3 / 110 / 16004 | — |
-
 Notes:
 
 1. **SUNRISE 2019 Pelican**: Median fall rate 1.28 dbar/s through strong gradients. The six block offsets span 10.4 mK, against 1-3 mK on the quieter deployments.
-2. **SUNRISE 2021 Pelican**: All 16 Pelican files. T2 was changed from T1593 to T2005 on 2021-06-29; T1 fits split at that change agree with this one to 0.1 mK at 27-28 degC. The range is only 2.8 K, so the shape is weakly constrained. FP07 time constant: Measured against T2005, which replaced T1593 on T2 on 2021-06-29 (the last 5 recordings); against T1593 the pair is refused (T1593 dead in SR1P_516, see its entry). From the swap on, both probes' observed high-frequency floor is 0.2-0.5x their noise model, against ~1 before it (noise-model).
-3. **SUNRISE 2021 WaltonSmith**: The range is only 1.9 K, so the shape is weakly constrained. FP07 time constant: Both probes' observed high-frequency floor is 0.3-0.4x their noise model (noise-model), as on the Pelican after the T2 swap.
-4. **ARCTERX-2022 Interior**: The baseline for the cross-deployment comparisons in issue #189. FP07 time constant: The acceptance case: on the same chi_00 products the analysis-era first pass (spectral sums) gave 13.0/19.5 ms and its median-of-log fit 17.4/25.6 (docs/fp07pair/runbook.md section 6).
-5. **ARCTERX-2022 Wake**: Only 2 files (36 descents) carried this bead. 2 blocks, so no block scatter. FP07 time constant not identified: 1 recordings (distinct start times) < 5; no bootstrap interval for the 20 Hz ratio; 0 of 200 bootstrap replicates fitted; tau1: no interval; tau2: no interval. FP07 time constant: ARC1A044 only: the products of ARC1A046.P were made before the mis-framing fix (bdd0a4d) and are left out. One recording, so no interval and no tau.
-6. **SUNRISE 2022 PointSur**: fp07-cal's 1 K export gate refused both channels over one 4 K event at a bottom-layer front, which the robust fit had already discarded. Refitted with the gate at 10 K and a +/-0.5 s lag search. Median fall rate 0.96 dbar/s through strong gradients; the six block offsets span 9.8 mK. FP07 time constant: T2's quiet-window floor is 1.5x its noise model at 60-100 Hz and up to 23x at 150-250 Hz, T1's about 1: excess high-frequency content on T2, which makes T2005 look fast. Treat T2005's value here as suspect (see its entry).
-7. **ARCTERX-2025 Interior**: Moved to VMP SN142, channel T2, so other bridge constants and another JAC CT. 3 of SN142's 5 files had descents. The reference was blanked +/-3 s around one instrument-wide transient (AIOP2_VMP142_0002 at 21:14:22Z: JAC_T to 5 degC and P +3 dbar within 0.1 s, both FP07s ramping together). At the same L this curve reads -8.3 to -10.8 mK (mean -9.1) against the bead's ARCTERX-2022 Interior curve over 19.85-25.26 degC, a nearly flat shift. FP07 time constant not identified: 3 recordings (distinct start times) < 5. FP07 time constant: Only 3 recordings (chi_01 products).
+2. **SUNRISE 2021 Pelican**: All 16 Pelican files. T2 was changed from T1593 to T2005 on 2021-06-29; T1 fits split at that change agree with this one to 0.1 mK at 27-28 degC. The range is only 2.8 K, so the shape is weakly constrained.
+3. **SUNRISE 2021 WaltonSmith**: The range is only 1.9 K, so the shape is weakly constrained.
+4. **ARCTERX-2022 Interior**: The baseline for the cross-deployment comparisons in issue #189.
+5. **ARCTERX-2022 Wake**: Only 2 files (36 descents) carried this bead. 2 blocks, so no block scatter.
+6. **SUNRISE 2022 PointSur**: fp07-cal's 1 K export gate refused both channels over one 4 K event at a bottom-layer front, which the robust fit had already discarded. Refitted with the gate at 10 K and a +/-0.5 s lag search. Median fall rate 0.96 dbar/s through strong gradients; the six block offsets span 9.8 mK.
+7. **ARCTERX-2025 Interior**: Moved to VMP SN142, channel T2, so other bridge constants and another JAC CT. 3 of SN142's 5 files had descents. The reference was blanked +/-3 s around one instrument-wide transient (AIOP2_VMP142_0002 at 21:14:22Z: JAC_T to 5 degC and P +3 dbar within 0.1 s, both FP07s ramping together). At the same L this curve reads -8.3 to -10.8 mK (mean -9.1) against the bead's ARCTERX-2022 Interior curve over 19.85-25.26 degC, a nearly flat shift.
 
 ### Prior for a fresh deployment of T1592
 
@@ -182,12 +170,12 @@ From **ARCTERX-2022 Interior** (vmp-250 SN 194 T1, 2022-03-21 to 2022-03-30), th
 
 ## T1593
 
-vmp-250 SN 194 T2. 2 calibrations, 2019-06-02 to 2021-06-29.
+vmp-250 SN 194 T2. 2 calibrations, 2019-06-02 to 2021-06-28.
 
 | # | deployment | instrument | first | last | reference | cal. age [y] | order | files / profiles | T range [°C] | rms [mK] | held-out [mK] | block SD [mK] | flags |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 1 | SUNRISE 2019 Pelican | vmp-250 SN 194 T2 | 2019-06-02 | 2019-06-08 | JAC CT SN 23, cal. 2016-02-15 | 3.3 | 1 (auto) | 43 / 2383 | 19.23 to 30.10 | 8.3 | 20.5 | 4.5 (6) | `lag-gate-overridden`, `fast-descent` |
-| 2 | SUNRISE 2021 Pelican | vmp-250 SN 194 T2 | 2021-06-22 | 2021-06-29 | JAC CT SN 23, cal. 2016-02-15 | 5.3 | 1 (auto) | 12 / 1136 | 26.56 to 29.40 | 4.0 | 6.1 | 1.7 (6) | `lag-gate-overridden` |
+| 2 | SUNRISE 2021 Pelican | vmp-250 SN 194 T2 | 2021-06-22 | 2021-06-28 | JAC CT SN 23, cal. 2016-02-15 | 5.3 | 1 (auto) | 11 / 1136 | 26.56 to 29.40 | 4.0 | 6.1 | 1.7 (6) | `lag-gate-overridden` |
 
 Coefficients and the bridge constants that define their L:
 
@@ -196,21 +184,14 @@ Coefficients and the bridge constants that define their L:
 | 1 | 283.558105 | 3089.2864 | — | — | -7.3 | 0.99862 | 6 | 0.68224 | 4.096 | 16 |
 | 2 | 283.616207 | 3097.9514 | — | — | -7.3 | 0.99862 | 6 | 0.68224 | 4.096 | 16 |
 
-FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
-
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T1592 | 1.288 | 1-25 | **14.2** (12.7-14.9) | 16.1 (lueck) | 13.4 (12.6-16.2) [0.64] → 14.7 (13.7-17.0) [0.71] | 0.81 / 0.68 | 43 / 2419 / 88299 | — |
-| 2 | T1592 | 1.040 | 1-25 | not identified | — | — [0.94] → — [0.71] | 0.93 / 0.82 | 11 / 1538 / 22868 | `dead-bead` |
-
 Notes:
 
 1. **SUNRISE 2019 Pelican**: Median fall rate 1.28 dbar/s through strong gradients. The six block offsets span 10.7 mK.
-2. **SUNRISE 2021 Pelican**: The 12 files before T2 was changed to T2005. The range is only 2.8 K, so the shape is weakly constrained. At the same L this curve reads +9.5 to +17.1 mK against the bead's 2019 curve over their common 26.56-29.40 degC (+16.0 at 27, +13.3 at 28). FP07 time constant not identified: beads not distinguishable: |ln R'(20 Hz)| = 0.199 < max(3 x 0.074, 0.15); tau1 interval 4.3-14.0 ms spans x3.27 > x1.5; tau2 interval 5.8-17.1 ms spans x2.92 > x1.5; bead T1593 (T2_dT2) dead in 144 chi file(s) (SR1P_516_prof001.nc .. SR1P_516_prof144.nc; spectrum identically zero over 1-10 Hz), which were left out: a failing bead's response is not a time constant. FP07 time constant: T1593 was dead (gradient spectrum identically zero) through all 144 profiles of SR1P_516, the last file before it was replaced on T2; those are left out. Before that, the pair's 20 Hz power ratio went from matched (first half) to T1593 losing high-frequency power (second half): a failing bead.
+2. **SUNRISE 2021 Pelican**: Fitted from the run over the 12 files before T2 was changed to T2005, to which T2 contributed 11: it sat on the ADC rail through all of SR1P_516 (2021-06-29, and the stub SR1P_517), whose 106,581 samples fp07-cal rejected as clipped_counts. `first`, `last` and `n_files` are therefore T2's own (the files it was fitted from, ending with SR1P_515 at 2021-06-28T02:58:43Z; last descent sample 02:54:59Z), not the run's (time_end 2021-06-29T10:33:06Z, 12 files; corrected 2026-10-28). The range is only 2.8 K, so the shape is weakly constrained. At the same L this curve reads +9.5 to +17.1 mK against the bead's 2019 curve over their common 26.56-29.40 degC (+16.0 at 27, +13.3 at 28).
 
 ### Prior for a fresh deployment of T1593
 
-From **SUNRISE 2021 Pelican** (vmp-250 SN 194 T2, 2021-06-22 to 2021-06-29), the widest-range unflagged calibration. Order 1.
+From **SUNRISE 2021 Pelican** (vmp-250 SN 194 T2, 2021-06-22 to 2021-06-28), the widest-range unflagged calibration. Order 1.
 
 | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] |
 |---|---|---|---|
@@ -248,23 +229,13 @@ Coefficients and the bridge constants that define their L:
 | 4 | 285.365040 | 3042.3300 | 249649.8 | 2503526.6 | -7.3 | 0.99862 | 6 | 0.68224 | 4.096 | 16 |
 | 5 | 285.367623 | 3043.8010 | 275958.2 | — | -7.3 | 0.99862 | 6 | 0.68224 | 4.096 | 16 |
 
-FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
-
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T1592 | 1.024 | 1-25 | **21.8** (20.5-22.9) | 22.1 (lueck) | — [0.56] → — [0.61] | 0.70 / 0.58 | 5 / 819 / 9134 | `noise-model` |
-| 2 | T1592 | 1.035 | 1-25 | **23.1** (20.8-24.9) | 23.6 (lueck) | 24.7 (21.9-27.6) [0.69] → 22.3 (20.6-23.7) [0.61] | 0.74 / 0.64 | 38 / 5552 / 78371 | `noise-model`, `ratio-shift` |
-| 3 | T1592 | 0.946 | 1-25 | **24.9** (24.0-25.7) | 24.2 (lueck) | 23.0 (22.4-23.5) [0.47] → 28.1 (27.4-29.9) [0.56] | 0.62 / 0.50 | 30 / 536 / 37212 | `drift`, `ratio-shift` |
-| 4 | T1592 | 0.935 | 1-25 | not identified | — | — | 0.62 / 0.50 | 1 / 31 / 3191 | — |
-| 5 | T1592 | 0.970 | 1-25 | **4.9** (4.6-5.3) | 4.8 (lueck) | 5.0 (4.1-5.4) [2.07] → 4.4 (4.0-4.7) [3.05] | 1.42 / 2.45 | 76 / 7557 / 182555 | `noise-model`, `ratio-shift` |
-
 Notes:
 
-1. **SUNRISE 2021 Pelican**: The 4 files after T2 was changed from T1593: 243 descents over 0.9 K. Only 2 blocks, so no block scatter. FP07 time constant: From the T2 swap on, both probes' observed high-frequency floor is 0.2-0.5x their noise model (noise-model).
-2. **SUNRISE 2021 WaltonSmith**: The range is only 1.9 K. Order 2 beat order 1 by 0.09 mK of held-out error and gives a negative beta_2, so do not extrapolate this shape. FP07 time constant: Noise model 2-3x above the observed floor on both probes (noise-model).
-3. **ARCTERX-2022 Interior**: Order 3 beat order 2 by 0.01 mK of held-out error, a tie. FP07 time constant: The acceptance case (see T1592's entry).
-4. **ARCTERX-2022 Wake**: Only 2 files (36 descents); order 3 from 36 descents. 2 blocks, so no block scatter. FP07 time constant not identified: 1 recordings (distinct start times) < 5; no bootstrap interval for the 20 Hz ratio; 0 of 200 bootstrap replicates fitted; tau1: no interval; tau2: no interval. FP07 time constant: ARC1A044 only (ARC1A046.P's products predate the mis-framing fix).
-5. **SUNRISE 2022 PointSur**: fp07-cal's 1 K export gate refused both channels over one 4 K event at a bottom-layer front, which the robust fit had already discarded. Refitted with the gate at 10 K and a +/-0.5 s lag search. Median fall rate 0.96 dbar/s. FP07 time constant: SUSPECT: 4-5 ms here against 22-25 ms in 2021 and March 2022, with the pair's 20 Hz ratio reversed. T2's quiet-window floor is 1.5x its noise model at 60-100 Hz and up to 23x at 150-250 Hz (T1 about 1): most likely contamination on the T2 channel, not a faster bead (unverified).
+1. **SUNRISE 2021 Pelican**: The 4 files after T2 was changed from T1593: 243 descents over 0.9 K. Only 2 blocks, so no block scatter.
+2. **SUNRISE 2021 WaltonSmith**: The range is only 1.9 K. Order 2 beat order 1 by 0.09 mK of held-out error and gives a negative beta_2, so do not extrapolate this shape.
+3. **ARCTERX-2022 Interior**: Order 3 beat order 2 by 0.01 mK of held-out error, a tie.
+4. **ARCTERX-2022 Wake**: Only 2 files (36 descents); order 3 from 36 descents. 2 blocks, so no block scatter.
+5. **SUNRISE 2022 PointSur**: fp07-cal's 1 K export gate refused both channels over one 4 K event at a bottom-layer front, which the robust fit had already discarded. Refitted with the gate at 10 K and a +/-0.5 s lag search. Median fall rate 0.96 dbar/s.
 
 ### Prior for a fresh deployment of T2005
 
@@ -298,15 +269,9 @@ Coefficients and the bridge constants that define their L:
 |---|---|---|---|---|---|---|---|---|---|---|
 | 1 | 283.124777 | 3029.3887 | 213356.8 | — | -11.5 | 0.99954 | 6 | 0.68294 | 4.096 | 16 |
 
-FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
-
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T1592 | 1.077 | 1-25 | not identified | — | — [2.11] → — [2.19] | 1.35 / 2.13 | 3 / 110 / 16004 | — |
-
 Notes:
 
-1. **ARCTERX-2025 Interior**: Fitted alongside T1592 (on T2) from the same 3 SN142 files, with the same reference blanking (+/-3 s around one instrument-wide transient, AIOP2_VMP142_0002 at 21:14:22Z). FP07 time constant not identified: 3 recordings (distinct start times) < 5. FP07 time constant: Only 3 recordings (chi_01 products).
+1. **ARCTERX-2025 Interior**: Fitted alongside T1592 (on T2) from the same 3 SN142 files, with the same reference blanking (+/-3 s around one instrument-wide transient, AIOP2_VMP142_0002 at 21:14:22Z).
 
 ### Prior for a fresh deployment of T2007
 
@@ -479,15 +444,9 @@ Coefficients and the bridge constants that define their L:
 |---|---|---|---|---|---|---|---|---|---|---|
 | 1 | 284.869368 | 3062.1855 | 301056.9 | — | -2.9 | 0.99939 | 6 | 0.6828 | 4.096 | 16 |
 
-FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
-
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T2810 | 0.384 | 1-25 | **9.6** (7.5-11.1) | 5.9 (lueck) | 7.2 (6.4-9.1) [1.41] → — [1.34] | 1.16 / 1.38 | 117 / 136 / 79769 | — |
-
 Notes:
 
-1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.840 m, tau = 2.94 s. Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit includes the climbs after it. Only 3 blocks, too few to test for drift. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data. FP07 time constant: Speed from the glider flight model (the proc/ pre- and post-wing-failure 'flight' runs together); U_EM read 4-15% higher (flight/EM speed 0.87 before the wing failure, 0.96 after; proc/WORKFLOW.md), which would move W_ref, not tau at W_ref.
+1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.840 m, tau = 2.94 s. Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit includes the climbs after it. Only 3 blocks, too few to test for drift. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data.
 
 ### Prior for a fresh deployment of T2809
 
@@ -520,15 +479,9 @@ Coefficients and the bridge constants that define their L:
 |---|---|---|---|---|---|---|---|---|---|---|
 | 1 | 281.249282 | 3013.9613 | 299877.0 | — | -6.7 | 0.99893 | 6 | 0.6828 | 4.096 | 16 |
 
-FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
-
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T2809 | 0.384 | 1-25 | **11.7** (9.6-13.6) | 7.3 (lueck) | 9.6 (8.9-11.4) [0.71] → — [0.74] | 0.86 / 0.72 | 117 / 136 / 79769 | — |
-
 Notes:
 
-1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.860 m, tau = 2.92 s. Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit includes the climbs after it. T2 read +20 to +27 mK from about 4.5 h before the failure; that episode is inside the fit and inflates the block scatter. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data. FP07 time constant: Speed from the glider flight model (the proc/ pre- and post-wing-failure 'flight' runs together); U_EM read 4-15% higher (flight/EM speed 0.87 before the wing failure, 0.96 after; proc/WORKFLOW.md), which would move W_ref, not tau at W_ref.
+1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.860 m, tau = 2.92 s. Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit includes the climbs after it. T2 read +20 to +27 mK from about 4.5 h before the failure; that episode is inside the fit and inflates the block scatter. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data.
 
 ### Prior for a fresh deployment of T2810
 
@@ -561,15 +514,9 @@ Coefficients and the bridge constants that define their L:
 |---|---|---|---|---|---|---|---|---|---|---|
 | 1 | 286.654006 | 3051.5945 | 259738.6 | — | -12.3 | 0.99921 | 6 | 0.6828 | 4.096 | 16 |
 
-FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
-
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T2813 | 0.441 | 1-25 | not identified | — | 20.8 (18.4-22.4) [0.82] → 15.2 (12.2-17.0) [1.24] | 0.94 / 0.92 | 786 / 786 / 864191 | `ratio-shift` |
-
 Notes:
 
-1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.665 m, tau = 2.10 s. Drift over the deployment, from the streaming pass over all 757 profiles with the fitted geometry removed: +0.022 +/- 0.015 mK/day (p = 0.18), not significant. This record is the rerun after the streaming-pass fix (#237); its coefficients are bit-identical to the fit by committed code (git v0.4.0-44-g5f7f1112353e). Reference: Serial from the glider's proglets.dat; its calibration date is not in the data. FP07 time constant not identified: beads not distinguishable: |ln R'(20 Hz)| = 0.087 < max(3 x 0.024, 0.15); tau1 interval 12.5-20.9 ms spans x1.68 > x1.5; tau2 interval 11.7-19.8 ms spans x1.69 > x1.5. FP07 time constant: Speed from U_EM (proc/results/em). The pair's 20 Hz power ratio changed between the halves (ratio-shift): over the whole deployment the beads look matched.
+1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.665 m, tau = 2.10 s. Drift over the deployment, from the streaming pass over all 757 profiles with the fitted geometry removed: +0.022 +/- 0.015 mK/day (p = 0.18), not significant. This record is the rerun after the streaming-pass fix (#237); its coefficients are bit-identical to the fit by committed code (git v0.4.0-44-g5f7f1112353e). Reference: Serial from the glider's proglets.dat; its calibration date is not in the data.
 
 ### Prior for a fresh deployment of T2811
 
@@ -601,15 +548,9 @@ Coefficients and the bridge constants that define their L:
 |---|---|---|---|---|---|---|---|---|---|---|
 | 1 | 287.735112 | 3025.1544 | 254553.1 | 16278810.3 | 0.2 | 0.99943 | 6 | 0.6828 | 4.096 | 16 |
 
-FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
-
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T2811 | 0.441 | 1-25 | not identified | — | 18.5 (16.2-20.0) [1.23] → 17.4 (14.2-19.3) [0.81] | 1.06 / 1.09 | 786 / 786 / 864191 | `ratio-shift` |
-
 Notes:
 
-1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.736 m, tau = 2.32 s. Drift over the deployment, from the streaming pass over all 757 profiles with the fitted geometry removed: +0.074 +/- 0.020 mK/day (p = 0.004), about +4.9 mK over 66 days. Order 3 beat order 2 by 1.4 mK of held-out error. This record is the rerun after the streaming-pass fix (#237); its coefficients are bit-identical to the fit by committed code (git v0.4.0-44-g5f7f1112353e). Reference: Serial from the glider's proglets.dat; its calibration date is not in the data. FP07 time constant not identified: beads not distinguishable: |ln R'(20 Hz)| = 0.087 < max(3 x 0.024, 0.15); tau1 interval 12.5-20.9 ms spans x1.68 > x1.5; tau2 interval 11.7-19.8 ms spans x1.69 > x1.5. FP07 time constant: Speed from U_EM (proc/results/em); see T2811's entry.
+1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.736 m, tau = 2.32 s. Drift over the deployment, from the streaming pass over all 757 profiles with the fitted geometry removed: +0.074 +/- 0.020 mK/day (p = 0.004), about +4.9 mK over 66 days. Order 3 beat order 2 by 1.4 mK of held-out error. This record is the rerun after the streaming-pass fix (#237); its coefficients are bit-identical to the fit by committed code (git v0.4.0-44-g5f7f1112353e). Reference: Serial from the glider's proglets.dat; its calibration date is not in the data.
 
 ### Prior for a fresh deployment of T2813
 

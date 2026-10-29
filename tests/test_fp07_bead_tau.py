@@ -216,6 +216,76 @@ def test_a_dead_bead_is_left_out_flagged_and_refused(tmp_path):
     assert ok.all.identified and "dead-bead" not in ok.flags
 
 
+def _contaminate(paths, *, white=0.0, model=1.0):
+    """Add unmodelled content (white, x the model) to probe 2, or scale both noise models."""
+    import netCDF4
+
+    for p in paths:
+        with netCDF4.Dataset(p, "a") as ds:
+            S, N = ds["spec_gradT"][:], ds["spec_noise"][:]
+            S[1] = S[1] + white * N[1]
+            ds["spec_gradT"][:] = S
+            ds["spec_noise"][:] = N * model
+
+
+def test_unmodelled_content_on_one_probe_is_refused(tmp_path):
+    # rule 7: the 60-100 Hz floor above NOISE_FLOOR_MAX biases BOTH taus
+    paths = _deploy(tmp_path, (0.013, 0.0195), n=36, n_win=60)
+    _contaminate(paths, white=1.0)  # the floor at ~2x the model on probe 2
+    (pt,) = _measure(paths).pairs
+    assert not pt.all.identified and pt.all.tau is None
+    assert any("unmodelled content" in r for r in pt.all.reasons)
+    assert pt.noise[1] > B.NOISE_FLOOR_MAX and "noise-model" in pt.flags
+    assert all(not h.identified for h in pt.halves)  # each half judged on its own floor
+
+
+def test_a_noise_model_too_high_is_only_flagged(tmp_path):
+    # the floor at 0.2-0.5x biases tau by less than its interval (synthetics)
+    paths = _deploy(tmp_path, (0.013, 0.0195), n=36, n_win=60)
+    _contaminate(paths, model=3.0)
+    (pt,) = _measure(paths).pairs
+    assert pt.all.identified and "noise-model" in pt.flags and pt.noise[0] < 0.6
+
+
+def test_the_reference_level_is_read_at_fixed_points():
+    grid = P._grid(100.0)
+    curve = np.where(grid >= 1.0, 0.0, np.nan)
+    curve[(grid >= 1.0) & (grid < 1.5)] = 5.0  # what the lowest bins would see
+    assert B.reference_level(curve, grid) == pytest.approx(0.0)
+    assert B.REF_POINTS == (2.0, 3.0, 4.0)
+
+
+def test_rule_overrides_are_recorded(tmp_path):
+    paths = _deploy(tmp_path, (0.013, 0.0195), n=8, n_win=40, per_start=4)
+    (pt,) = B.measure(paths, instrument="194", first=T0 - 10, last=T0 + 1e8, n_boot=5,
+                      min_files=4, min_recordings=2).pairs
+    rec = pt.to_dict()
+    assert rec["rule_thresholds"]["min_files"] == 4 and rec["rule_thresholds"]["n_boot"] == 5
+    assert rec["rule_thresholds"]["min_recordings"] == 2 and not rec["rule_is_default"]
+    assert "at least 4 chi files from at least 2 recordings" in rec["rule"]
+    assert rec["reference_points_Hz"] == [2.0, 3.0, 4.0]
+    (dflt,) = B.measure(paths, instrument="194", first=T0 - 10, last=T0 + 1e8).pairs
+    assert dflt.to_dict()["rule_is_default"] and dflt.to_dict()["rule"] == B.RULE
+
+
+def test_an_unreadable_product_is_skipped_and_counted(tmp_path, monkeypatch):
+    import netCDF4
+
+    paths = _deploy(tmp_path, (0.013, 0.0195), n=24)
+    with netCDF4.Dataset(paths[0], "a") as ds:  # no spec_noise: refused at the first read
+        ds.renameVariable("spec_noise", "spec_noise_gone")
+    real = P._read_product
+    monkeypatch.setattr(P, "_read_product", lambda p: (_ for _ in ()).throw(OSError("HDF error"))
+                        if p == paths[1] else real(p))
+    res = _measure(paths)
+    (pt,) = res.pairs
+    assert pt.all.n_files == 22
+    assert any(r.startswith("SKIPPED " + Path(paths[0]).name) and "spec_noise" in r
+               for r in res.report)
+    assert any(r.startswith("SKIPPED " + Path(paths[1]).name) and "HDF error" in r
+               for r in res.report)
+
+
 def test_too_few_files_is_refused(tmp_path):
     res = _measure(_deploy(tmp_path, (0.013, 0.0195), n=6, per_start=1, n_win=80))
     (pt,) = res.pairs
@@ -361,6 +431,9 @@ def _resp(**over):
         "power_ratio": {10: 1.12, 20: 1.31},
         "power_ratio_16_84": {10: [1.1, 1.14], 20: [1.28, 1.35]},
         "software_version": "test",
+        "rule": dict(reg.default_rule()),
+        "reference_band_Hz": [2.0, 4.0],
+        "noise_floor": {"bead": 1.02, "partner": 1.05},
     }
     r.update(over)
     return r
@@ -383,6 +456,7 @@ def _reciprocal(r):
     q["power_ratio_16_84"] = {k: [round(1 / hi, 6), round(1 / lo, 6)]
                               for k, (lo, hi) in r["power_ratio_16_84"].items()}
     q["tau_ms"], q["tau_ms_16_84"] = 19.5, [18.0, 21.0]
+    q["noise_floor"] = {"bead": r["noise_floor"]["partner"], "partner": r["noise_floor"]["bead"]}
     for h in q["halves"].values():
         h["power_ratio_20Hz"] = round(1 / h["power_ratio_20Hz"], 6)
     return q
@@ -435,6 +509,33 @@ def test_a_response_with_its_partner_reads_the_same_from_both_sides():
 def test_the_response_loader_is_strict(over, err, match):
     with pytest.raises(err, match=match):
         reg.parse(_pair_sheet(_resp(**over)))
+
+
+@pytest.mark.parametrize("over, match", [
+    ({"n_chi_files": 12, "n_recordings": 6, "halves": None}, "min_files"),
+    ({"n_recordings": 4}, "min_recordings"),
+    ({"tau_ms_16_84": [10.0, 16.0]}, "ci_max_factor"),
+    ({"power_ratio": {10: 1.05, 20: 1.10}}, "differ_min"),
+    ({"power_ratio_16_84": {10: [1.1, 1.14], 20: [1.0, 1.7]}}, "differ_sigmas"),
+    ({"noise_floor": {"bead": 1.3, "partner": 1.0}}, "noise_floor_max"),
+])
+def test_an_identified_block_must_meet_its_own_rule(over, match):
+    with pytest.raises(reg.PlausibilityError, match=match):
+        reg.parse(_pair_sheet(_resp(**over)))
+
+
+def test_a_looser_rule_is_kept_and_rendered():
+    rule = dict(reg.default_rule(), min_files=4, n_boot=5)
+    r = _resp(n_chi_files=12, n_recordings=6, halves=None, rule=rule)
+    sheet = reg.parse(_pair_sheet(r))
+    resp = sheet.history("T100")[0].response
+    assert resp.rule_overrides() == {"min_files": (4, 16), "n_boot": (5, 200)}
+    assert "non-default rule: min_files 4 (default 16), n_boot 5 (default 200)" in \
+        reg.render_markdown(sheet)
+    bad = dict(rule)
+    del bad["n_boot"]
+    with pytest.raises(reg.MissingKeyError, match="n_boot"):
+        reg.parse(_pair_sheet(_resp(rule=bad)))
 
 
 def test_missing_response_key_is_refused():

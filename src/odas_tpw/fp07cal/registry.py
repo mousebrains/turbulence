@@ -56,7 +56,7 @@ import csv
 import io
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from itertools import pairwise
 from pathlib import Path
@@ -158,8 +158,9 @@ RESPONSE_METHODS: dict[str, str] = {
         "ln(S2/S1), the bead pair's gradient-spectrum ratio from the deployment's chi "
         "products (built as `fp07-pair fit` builds it), read every 1 Hz across `band_Hz` of "
         "reduced frequency (frequency at the pair's median speed `W_ref_m_s`, windows at other "
-        "speeds mapped by `speed_scaling`), with 16-84% intervals from a bootstrap over chi "
-        "files. The flat gain between the beads is a free parameter."
+        "speeds mapped by `speed_scaling`), with 16-84% intervals from a bootstrap that "
+        "resamples whole recordings (`.p` files). The flat gain between the beads is a free "
+        "parameter. The power ratios are referenced to the curve's mean at 2, 3 and 4 Hz."
     ),
 }
 RESPONSE_FLAGS: dict[str, str] = {
@@ -340,6 +341,14 @@ class Response:
     software_version: str
     reason: str | None = None
     notes: str = ""
+    rule: dict[str, float] = field(default_factory=dict)  # the thresholds used
+    reference_band_Hz: tuple[float, float] = (2.0, 4.0)  # the ratios' reference level
+    noise_floor: dict[str, float | None] = field(default_factory=dict)  # bead / partner
+
+    def rule_overrides(self) -> dict[str, tuple[float, float]]:
+        """``{threshold: (used, package default)}`` where this measurement departed."""
+        d = default_rule()
+        return {k: (v, d[k]) for k, v in self.rule.items() if k in d and v != d[k]}
 
     def scale_to(self, W: float) -> float:
         """tau(W)/tau(W_ref) under :attr:`speed_scaling`."""
@@ -376,6 +385,8 @@ class Response:
             "power_ratio_16_84": {k: None if v is None else list(v)
                                   for k, v in self.power_ratio_16_84.items()},
             "flags": list(self.flags), "software_version": self.software_version,
+            "rule": dict(self.rule), "reference_band_Hz": list(self.reference_band_Hz),
+            "noise_floor": dict(self.noise_floor),
             **({"reason": self.reason} if self.reason else {}),
             **({"notes": self.notes} if self.notes else {}),
         }
@@ -1053,8 +1064,59 @@ def _parse_calibration(raw: object, i: int, methods: dict[str, str]) -> Calibrat
 _RESPONSE_KEYS = ("method", "partner", "first", "last", "n_chi_files", "n_recordings", "n_windows",
                   "W_ref_m_s",
                   "speed_scaling", "band_Hz", "identified", "tau_ms", "tau_ms_16_84", "halves",
-                  "power_ratio", "power_ratio_16_84", "software_version")
+                  "power_ratio", "power_ratio_16_84", "software_version", "rule",
+                  "reference_band_Hz", "noise_floor")
 _RESPONSE_OPTIONAL = ("flags", "reason", "notes")
+# The thresholds a measurement was made with (odas_tpw.chi.fp07_bead_tau.Rule's fields).
+RULE_KEYS = ("min_files", "min_recordings", "min_fit_points", "min_top_Hz", "differ_sigmas",
+             "differ_min", "ci_max_factor", "bound_margin", "boot_ok_frac", "dead_file_frac",
+             "noise_floor_max", "n_boot")
+_RULE_INTS = ("min_files", "min_recordings", "min_fit_points", "n_boot")
+
+
+def default_rule() -> dict[str, float]:
+    """The package's identifiability thresholds (``fp07_bead_tau.Rule()``)."""
+    from odas_tpw.chi.fp07_bead_tau import Rule
+
+    return {k: (int(v) if k in _RULE_INTS else float(v)) for k, v in Rule().to_dict().items()}
+
+
+def _parse_rule(raw: object, w: str) -> dict[str, float]:
+    m = _mapping(raw, w, RULE_KEYS)
+    out = {}
+    for k in RULE_KEYS:
+        out[k] = (float(_int(m[k], f"{w}.{k}", minimum=1)) if k in _RULE_INTS
+                  else _num(m[k], f"{w}.{k}", positive=True))
+    return out
+
+
+def _check_identified(w: str, rule: dict[str, float], n_files: int, n_rec: int,
+                      tau_ci: tuple[float, float] | None, r20: float | None,
+                      r20_ci: tuple[float, float] | None,
+                      floors: dict[str, float | None]) -> None:
+    """An identified block must satisfy its OWN stored thresholds (rounding allowed)."""
+    bad = []
+    if n_files < rule["min_files"]:
+        bad.append(f"{n_files} chi files < min_files {rule['min_files']:g}")
+    if n_rec < rule["min_recordings"]:
+        bad.append(f"{n_rec} recordings < min_recordings {rule['min_recordings']:g}")
+    if tau_ci is not None and tau_ci[1] / tau_ci[0] > rule["ci_max_factor"] * (1 + 2e-3):
+        bad.append(f"tau interval x{tau_ci[1] / tau_ci[0]:.3f} > ci_max_factor "
+                   f"{rule['ci_max_factor']:g}")
+    if r20 is None or r20_ci is None:
+        bad.append("no 20 Hz power ratio with its interval")
+    else:
+        lr, hw = abs(math.log(r20)), 0.5 * math.log(r20_ci[1] / r20_ci[0])
+        need = max(rule["differ_sigmas"] * hw, rule["differ_min"])
+        if lr < need * (1 - 2e-3) - 1e-4:
+            bad.append(f"|ln 20 Hz ratio| {lr:.3f} < max(differ_sigmas x {hw:.3f}, differ_min "
+                       f"{rule['differ_min']:g})")
+    for who, v in floors.items():
+        if v is not None and v > rule["noise_floor_max"] + 1e-3:
+            bad.append(f"the {who}'s noise floor {v:g} > noise_floor_max "
+                       f"{rule['noise_floor_max']:g}")
+    if bad:
+        raise PlausibilityError(f"{w}: identified, yet against its own rule: " + "; ".join(bad))
 _HALF_KEYS = ("first", "last", "n_chi_files", "tau_ms", "tau_ms_16_84", "power_ratio_20Hz")
 
 
@@ -1173,6 +1235,15 @@ def _parse_response(raw: object, w: str, bead: str, first: datetime,
         ratio_ci[f0] = pair
     if identified and ratio[20] is None:
         raise RegistryError(f"{w}: identified, yet no 20 Hz power ratio was measured")
+    rule = _parse_rule(m["rule"], f"{w}.rule")
+    ref_band = _pair(m["reference_band_Hz"], f"{w}.reference_band_Hz")
+    if not 0 < ref_band[0] <= ref_band[1] < band[1]:
+        raise RegistryError(f"{w}.reference_band_Hz: {list(ref_band)} is not inside the band")
+    fm = _mapping(m["noise_floor"], f"{w}.noise_floor", ("bead", "partner"))
+    floors = {k: None if fm[k] is None else _num(fm[k], f"{w}.noise_floor.{k}", positive=True)
+              for k in ("bead", "partner")}
+    if identified:
+        _check_identified(w, rule, n_files, n_rec, tau_ci, ratio[20], ratio_ci[20], floors)
 
     flags_raw = m.get("flags") or []
     if not isinstance(flags_raw, list):
@@ -1193,7 +1264,8 @@ def _parse_response(raw: object, w: str, bead: str, first: datetime,
         method=method, partner=partner, first=r0, last=r1, n_chi_files=n_files, n_recordings=n_rec,
         n_windows=n_windows, W_ref_m_s=W_ref, speed_scaling=scaling, band_Hz=band,
         identified=identified, tau_ms=tau, tau_ms_16_84=tau_ci, halves=halves,
-        power_ratio=ratio, power_ratio_16_84=ratio_ci,
+        power_ratio=ratio, power_ratio_16_84=ratio_ci, rule=rule, reference_band_Hz=ref_band,
+        noise_floor=floors,
         flags=tuple(f for f in RESPONSE_FLAGS if f in flags_raw),
         software_version=_str(m["software_version"], f"{w}.software_version"),
         reason=None if reason is None else " ".join(reason.split()),
@@ -1421,7 +1493,7 @@ def _check_responses(cals: list[Calibration]) -> None:
             if q is None or q.partner != c.bead or (q.first, q.last) != (r.first, r.last):
                 continue
             same = ("method", "n_chi_files", "n_recordings", "n_windows", "W_ref_m_s",
-                    "speed_scaling", "band_Hz", "identified")
+                    "speed_scaling", "band_Hz", "identified", "rule", "reference_band_Hz")
             diff = [k for k in same if getattr(q, k) != getattr(r, k)]
             if diff:
                 raise RegistryError(f"{w}: the same measurement on {o.bead} / {o.deployment} "
@@ -1742,6 +1814,8 @@ CSV_COLUMNS = (
     "response_power_ratio_10Hz", "response_power_ratio_10Hz_lo", "response_power_ratio_10Hz_hi",
     "response_power_ratio_20Hz", "response_power_ratio_20Hz_lo", "response_power_ratio_20Hz_hi",
     "response_flags", "response_reason", "response_software_version", "response_notes",
+    "response_rule", "response_reference_band_lo_Hz", "response_reference_band_hi_Hz",
+    "response_noise_floor", "response_partner_noise_floor",
 )
 
 
@@ -1761,6 +1835,11 @@ def _response_row(r: Response | None) -> dict[str, Any]:
         "response_tau_hi_ms": None if r.tau_ms_16_84 is None else r.tau_ms_16_84[1],
         "response_tau_1mps_ms": None if r.tau_1mps_ms is None else round(r.tau_1mps_ms, 2),
         "response_flags": ";".join(r.flags), "response_reason": r.reason,
+        "response_rule": ";".join(f"{k}={v:g}" for k, v in r.rule.items()),
+        "response_reference_band_lo_Hz": r.reference_band_Hz[0],
+        "response_reference_band_hi_Hz": r.reference_band_Hz[1],
+        "response_noise_floor": r.noise_floor.get("bead"),
+        "response_partner_noise_floor": r.noise_floor.get("partner"),
         "response_software_version": r.software_version, "response_notes": r.notes or None,
     }
     for k, half in ((1, h[0] if h else None), (2, h[1] if h else None)):
@@ -2197,7 +2276,8 @@ def _bead_section(reg: Registry, bead: str) -> list[str]:
     notes = [(i, c) for i, c in enumerate(h, start=1)
              if c.notes or c.reference.note or c.fit.geometry or c.fit.shape_from
              or c.uncertainty.rms_all_mK is not None
-             or (c.response is not None and (c.response.reason or c.response.notes))]
+             or (c.response is not None and (c.response.reason or c.response.notes
+                                             or c.response.rule_overrides()))]
     if notes:
         P("")
         P("Notes:")
@@ -2222,6 +2302,10 @@ def _bead_section(reg: Registry, bead: str) -> list[str]:
                 parts.append(f"FP07 time constant not identified: {c.response.reason}.")
             if c.response is not None and c.response.notes:
                 parts.append(f"FP07 time constant: {c.response.notes}")
+            if c.response is not None and c.response.rule_overrides():
+                parts.append("FP07 time constant measured with a non-default rule: " + ", ".join(
+                    f"{k} {v:g} (default {d:g})"
+                    for k, (v, d) in c.response.rule_overrides().items()) + ".")
             P(f"{i}. **{_md(c.deployment)}**: " + " ".join(parts))
     P("")
     out.extend(_prior_section(reg.prior_for(bead)))
@@ -2851,6 +2935,17 @@ def response_from_record(record: dict, cal: Calibration, *, notes: str = "") -> 
         block["flags"] = [f for f in RESPONSE_FLAGS if f in flags]
     if not a["identified"]:
         block["reason"] = "; ".join(a["reasons"]) or "not identified"
+    thresholds = record.get("rule_thresholds")
+    if not isinstance(thresholds, dict):
+        raise AddError("the record carries no rule_thresholds (made before they were "
+                       "recorded); re-run `fp07-pair tau`")
+    block["rule"] = {k: (int(thresholds[k]) if k in _RULE_INTS else float(thresholds[k]))
+                     for k in RULE_KEYS}
+    refp = record.get("reference_points_Hz") or []
+    block["reference_band_Hz"] = [float(min(refp)), float(max(refp))] if refp else None
+    nz = a.get("noise_obs_over_model") or record.get("noise_obs_over_model") or [None, None]
+    block["noise_floor"] = {"bead": None if nz[c] is None else _sig(nz[c], 4),
+                            "partner": None if nz[1 - c] is None else _sig(nz[1 - c], 4)}
     block["software_version"] = str(record.get("software_version") or "unknown")
     if notes.strip():
         block["notes"] = " ".join(notes.split())
@@ -2898,6 +2993,9 @@ def response_yaml(block: dict[str, Any], indent: int = 4) -> str:
         out.append(f"{p2}flags: [" + ", ".join(block["flags"]) + "]")
     if block.get("reason"):
         out += _folded("reason", block["reason"], indent + 2)
+    out.append(f"{p2}rule: {_flow(block['rule'])}")
+    out.append(f"{p2}reference_band_Hz: {pair(block['reference_band_Hz'])}")
+    out.append(f"{p2}noise_floor: {_flow(block['noise_floor'])}")
     out.append(f"{p2}software_version: {_scalar(block['software_version'], quote=True)}")
     if block.get("notes"):
         out += _folded("notes", block["notes"], indent + 2)
