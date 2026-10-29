@@ -75,7 +75,8 @@ def test_no_config_key_leaks_into_the_splat(section, exclude, func):
 _EXPLICIT_KWARGS = {
     "epsilon": frozenset({"salinity", "temperature", "_pre_loaded"}),
     "chi": frozenset(
-        {"epsilon_ds", "salinity", "temperature", "_pre_loaded", "fp07_tau_scale"}
+        {"epsilon_ds", "salinity", "temperature", "_pre_loaded", "fp07_tau_scale",
+         "fp07_slow_response"}
     ),
 }
 

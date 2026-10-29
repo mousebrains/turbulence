@@ -131,6 +131,13 @@ def _process_l4_chi(
     var_resolved_out = np.full((n_gradt, n_spec), np.nan)
     mad_shape_out = np.full((n_gradt, n_spec), np.nan)
 
+    # A bead's slow response path (chi.fp07_slow), per probe: F -> |H_slow|^2,
+    # independent of the window, so evaluated once.
+    slow_e = [
+        np.asarray(fac(l3_chi.freq), dtype=np.float64) if fac is not None else None
+        for fac in l3_chi.slow_factor[:n_gradt]
+    ]
+
     for j in range(n_spec):
         K = l3_chi.kcyc[:, j]
         W = l3_chi.pspd_rel[j]
@@ -144,6 +151,14 @@ def _process_l4_chi(
             H2 = l3_chi.H2_for(ci, j)
             spec_obs = l3_chi.gradt_spec[ci, :, j]
             noise_K = l3_chi.noise_spec[ci, :, j]
+            # A bead's slow parallel path (chi.fp07_slow) is divided out of the
+            # DATA in every bin, unweighted: the noise is unattenuated
+            # electronics noise, so S/e = B*H2 + N/e is exact, and 1/e is at
+            # most (1-beta)^-2 and nearly flat in band. Each bin keeps its S/N.
+            es = slow_e[ci] if ci < len(slow_e) else None
+            if es is not None:
+                spec_obs = spec_obs / es
+                noise_K = noise_K / es
             # A measured per-probe response factor (fp07_pair) equalizes the
             # DATA onto the default model's response. Dividing S and N alike
             # rescales each bin's S = B*H2*e + N to S/e = B*H2 + N/e, so the

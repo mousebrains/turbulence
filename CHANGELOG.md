@@ -7,6 +7,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **A bead's slow response path, divided out of its chi
+  (`instruments.<key>.fp07_slow_response`, rsi-tpw `[chi] fp07_slow_response`;
+  issue #252).** FP07 bead T2005 (VMP SN194 T2, 2021-06-29 to 2022-06-20) loses
+  ~12% of its amplitude through a ~110 ms parallel path,
+  `|H_slow|^2 = |(1-beta) + beta/(1 + i 2 pi f tau_s)|^2` (beta 0.124, tau_s
+  110 ms common to its deployments; beta 0.09-0.13 across single-pole model
+  choices). Above its ~1-1.5 Hz corner that is a near-flat 0.77-0.85 in power,
+  so its chi read ~20-25% low. The new module `chi/fp07_slow.py` holds the
+  response, the configuration parser and a per-file guard. Keyed by BEAD
+  SERIAL, read from each file's configuration exactly as `fp07-pair` reads it,
+  with a mandatory UTC span tested against the file's `start_time` (several
+  spans per bead allowed, never overlapping). `l4_chi` divides the bead's
+  observed AND noise spectra by `|H_slow|^2` in every bin, unweighted, before
+  the `fp07_response` step, for Method 1, Method 2 (iterative and MLE), the
+  detection gate, band, fom and K_max_ratio alike; stored spectra stay raw.
+  Dividing S and N by one factor keeps each bin's S/N: under Method 1 the
+  gates, band, K_max and K_max_ratio are unchanged and chi rises by a weighted
+  mean of 1/e over the band. On one SUNRISE 2021 WaltonSmith file (136
+  profiles, Method 1) T1's chi, K_max_ratio and chiQCFallback were identical,
+  fom moved by at most 0.14%, and T2's chi rose by a median ln 0.252
+  (per-window 1.20-1.30x). Under Method 2 the fitted kB moves too, by design:
+  on synthetics the corrected chi, kB and epsilon_T recover what a bead
+  without the path gives. A file whose bead is outside every span is left
+  uncorrected and says so; a file without the bead is untouched; a bead on two
+  channels or an unreadable configuration is an error. The guard measures the
+  file's own change in median ln(S_bead/S_partner) from 0.25 to 2 Hz (32-s
+  windows of 8-s Hann segments of the gradient), which the chi spectra cannot
+  see, and warns when it differs from the configured path's prediction by more
+  than 0.10 (set from 85 healthy T2005 files) with at least 40 windows; perturb
+  pools a `.p` file's profiles for that verdict, since one SUNRISE cast is one
+  window. It catches a probe swap without a config update and a faded path.
+  Refused beside `fp07_tau_scale` and `fp07_response` (both fitted on spectra
+  that already contain the path) and by `rsi-tpw pipeline`. Valid on
+  calibrated temperature only: the path is relative to the DC level an in-situ
+  calibration fixes. Products record `fp07_slow_response_*` attributes
+  (applied, bead, beta, `tau_s_ms`, span, the guard's measured and predicted
+  change, its verdict and windows); perturb-diag draws the factor into the
+  model; the run summary names bead keys that matched nothing, files outside
+  every span, and files the guard flagged or could not judge. Unset, every
+  product and every hash is unchanged.
 - **Each FP07 bead's time constant, measured and carried in the calibration
   sheet (`fp07-pair tau`, `fp07-cal registry response`; closes the last open
   question of issue #189).** `fp07-pair tau` fits one single pole per bead to

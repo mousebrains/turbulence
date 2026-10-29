@@ -575,13 +575,34 @@ def _chi_response_params(
     the corrections' content digests, so a corrected run never shares a chi_NN
     with an uncorrected one or with a different correction, and moving a
     correction file does not re-version.
+
+    ``[chi] fp07_slow_response`` (config file only) is validated here, hashed
+    with its spans as epoch seconds, and refused beside fp07_response
+    (ValueError).
     """
     merged = dict(merged)
     from_file = merged.pop("fp07_response", None)
+    slow = merged.pop("fp07_slow_response", None)
     raw = list(cli_responses) or (
         [from_file] if isinstance(from_file, str) else list(from_file or [])
     )
     hash_params = dict(merged)
+    # A bead's slow path (config file only): hashed with its spans as epoch
+    # seconds, handed to the workers in a plain form no YAML type survives.
+    if slow is not None:
+        from odas_tpw.chi.fp07_slow import canonical_for_hash, config_form
+
+        where = "[chi] fp07_slow_response"
+        canon = canonical_for_hash(slow, where)
+        if canon:
+            if raw:
+                raise ValueError(
+                    "[chi] fp07_slow_response and fp07_response are mutually exclusive: the "
+                    "fp07-pair correction was fitted on spectra that already contain the slow "
+                    "path, so stacking them corrects the bead twice"
+                )
+            hash_params["fp07_slow_response"] = canon
+            merged["fp07_slow_response"] = config_form(slow, where)
     if raw:
         from odas_tpw.chi.fp07_pair import load_corrections
 
@@ -599,9 +620,13 @@ def _cmd_chi(args: argparse.Namespace) -> None:
 
     merged = _merge_for_section(args, "chi")
     _exit_on_bad_speed_selection(merged)
-    merged, hash_params = _chi_response_params(
-        merged, getattr(args, "fp07_response", None) or []
-    )
+    try:
+        merged, hash_params = _chi_response_params(
+            merged, getattr(args, "fp07_response", None) or []
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(2)
     output_dir = _setup_output_dir(args, "chi", "chi", hash_params)
     print(f"Output directory: {output_dir}")
 
@@ -679,6 +704,13 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
         print(
             "Error: rsi-tpw pipeline does not apply fp07_response (it computes chi on "
             "its own path). Use `rsi-tpw chi --fp07-response` or perturb.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if chi_merged.get("fp07_slow_response"):
+        print(
+            "Error: rsi-tpw pipeline does not apply fp07_slow_response (it computes chi on "
+            "its own path). Use `rsi-tpw chi` or perturb.",
             file=sys.stderr,
         )
         sys.exit(2)

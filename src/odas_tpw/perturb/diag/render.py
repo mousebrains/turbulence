@@ -412,7 +412,9 @@ def _fp07_h2(
     (chi divided the raw spectrum and noise by e and fitted the default model;
     multiplying back gives this same curve against the stored raw data.) chi
     weights ln e by each bin's S/N (``fp07_pair.signal_weighted``); pass the
-    window's *obs* and *noise* spectra to reproduce that exactly.
+    window's *obs* and *noise* spectra to reproduce that exactly. A bead's slow
+    response path (``fp07_slow_response_beta_<probe>`` / ``_tau_s_ms_<probe>``)
+    multiplies in too, unweighted, as chi applied it.
     """
     from odas_tpw.chi.fp07 import (
         default_tau_model,
@@ -444,6 +446,15 @@ def _fp07_h2(
 
             e = signal_weighted(e, obs, noise)
         h2 = h2 * e
+    # A bead's slow response path (chi.fp07_slow), recorded per probe only where
+    # it was applied. chi divided raw S and N by it in every bin (unweighted),
+    # so against the raw data the model's response carries it as a factor.
+    beta = attrs.get(f"fp07_slow_response_beta_{probe}") if (attrs and probe) else None
+    if beta is not None:
+        from odas_tpw.chi.fp07_slow import slow_h2
+
+        tau_ms = float(attrs.get(f"fp07_slow_response_tau_s_ms_{probe}", np.nan))
+        h2 = h2 * slow_h2(f, float(beta), tau_ms / 1000.0)
     return h2
 
 

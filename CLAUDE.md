@@ -39,6 +39,7 @@ Installable Python package (`pip install -e ".[dev]"`). Source layout: `src/odas
 - `batchelor.py` — Batchelor and Kraichnan temperature gradient spectra.
 - `fp07.py` — FP07 thermistor transfer function and electronics noise model.
 - `fp07_pair.py` — per-bead FP07 response equalization (`ResponseCorrection`, estimator, guard); CLI in `fp07_pair_cli.py`.
+- `fp07_slow.py` — a bead's slow parallel response path (`fp07_slow_response`, issue #252): `|H_slow|^2`, config parsing, the 0.25->2 Hz guard.
 
 ### Key Modules (scor160)
 
@@ -282,8 +283,10 @@ Facts that are easy to get wrong:
   geometric mean stays on the tau model; the residual ln(chi2/chi1) is the
   flat gain at ~1 Hz, by design. That gain is calibration or diff_gain, OR a
   bead response component slower than ~1 Hz, which looks flat above its
-  corner: T2005 (SN194 T2, 2021-2022) loses ~10% of its amplitude through a
-  130-190 ms path, which is its pairs' ln G of -0.27 (issue #252).
+  corner: T2005 (SN194 T2, 2021-06-29 to 2022-06-20) loses ~12% of its
+  amplitude through a ~110 ms path (130-190 ms in issue #252's first fits,
+  which left the bead's own fast pole unfitted), which is its pairs' ln G of
+  -0.27. `fp07_slow_response` (below) now divides it out.
 - **Mutually exclusive with `fp07_tau_scale`** (refused at config load).
   Dropping ARCTERX-2022's production tau scales moves absolute chi by their
   geometric mean (~1.4x for SN194).
@@ -314,6 +317,53 @@ Facts that are easy to get wrong:
   `fp07-cal registry response` records it; nothing in chi reads it yet (a
   per-bead tau would be a third route beside `fp07_tau_scale` and
   `fp07_response`, which are mutually exclusive).
+
+### A bead's slow response path (`fp07_slow_response`)
+
+`chi/fp07_slow.py` (issue #252) divides a bead's slow parallel path,
+`|H_slow(f)|^2 = |(1-beta) + beta/(1 + i 2 pi f tau_s)|^2`, out of its
+spectra. perturb: `instruments.<dir>.fp07_slow_response: {T2005: {beta,
+tau_s_ms, first, last}}` (or a list of spans); rsi-tpw: `[chi]
+fp07_slow_response` in the config file (`rsi-tpw pipeline` refuses it). T2005:
+beta 0.124, tau_s 110 ms (0.122-0.128 / 105-112 ms per deployment; beta spans
+0.09-0.13 across single-pole model choices), first 2021-06-29T18:00Z, last
+2022-06-20T08:30Z (after that PointSur's T2005 changes and is excluded, not
+corrected).
+
+Facts that are easy to get wrong:
+
+- **Keyed by BEAD SERIAL, not channel**, read from each file's configuration
+  exactly as `fp07_pair.pair_identity` reads it; the span (`first <= start_time
+  <= last`, UTC) is mandatory. A file without the bead is untouched; one with
+  it outside every span is uncorrected and says so; a bead on two channels or
+  an unreadable configuration is an error.
+- **Divided from the DATA, in every bin, UNWEIGHTED** (`L3ChiData.slow_factor`,
+  before `response_factor`). The noise is unattenuated electronics noise, so
+  `S/e = B*H2 + N/e` is exact, and 1/e <= (1-beta)^-2 ~ 1.3 is nearly flat in
+  band: fp07_pair's S/N weighting would under-correct the low-chi windows.
+  Each bin keeps its S/N, so under Method 1 the gates, band, K_max and
+  K_max_ratio are unchanged and chi rises by a weighted mean of 1/e over the
+  band; under Method 2 the fitted kB moves too (that is the correction working).
+- **A1: the partner is the norm.** T2005 is corrected to T1592, which reads
+  like T1593 on the same port; every other pair checked is flat. Whether the
+  norm has a slow path is untested (JAC_T cannot test it: its own response time
+  sits on tau_s). If it had one, T2005 would be under-corrected, never over.
+- **Calibrated temperature only**: `|H_slow(0)| = 1` is relative to the DC level
+  an in-situ calibration (`fp07.calibrate: true`, `fp07-cal`) fixes.
+- **Never with `fp07_tau_scale` or `fp07_response`** (refused at load and in
+  chi): both were fitted on spectra that already contain the path
+  (ARCTERX-2022's tau scales; a pair correction's ln e holds part of it), so
+  stacking corrects the bead twice. Composition waits for fp07-pair to fit on
+  slow-corrected spectra.
+- **The guard is per FILE.** The chi spectra cannot see below 2 Hz, so chi
+  measures the change in median ln(S_bead/S_partner) from 0.25 to 2 Hz on the
+  gradient time series (32-s windows, 8-s Hann segments) and warns when it is
+  more than 0.10 from the prediction (85 healthy T2005 files: -0.08..+0.01,
+  5-95%; the pair's pole difference adds ~-0.03). It needs >= 40 windows: one
+  window scatters by ~0.17 at 2 Hz and a SUNRISE cast is one window, so perturb
+  pools a `.p` file's profiles (`guard_lnr_lo/hi` attributes) before judging.
+  It warns; it never refuses. The measured change is recorded even outside the
+  spans.
 
 ### Python API
 

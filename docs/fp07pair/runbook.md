@@ -26,9 +26,12 @@ What it does **not** do:
 - **It does not remove a flat gain.** The ratio at ~1 Hz (`ln G`) is a
   calibration or `diff_gain` difference, or a bead response component slower
   than ~1 Hz, which is flat above its corner. Nothing says which bead is
-  wrong. T2005 (SN194 T2, 2021-2022) has such a component: about 10% of its
-  amplitude through a 130-190 ms path. That is its pairs' `ln G` of -0.27,
-  and the chi products' 0.5-2 s FFTs cannot resolve it (issue #252).
+  wrong. T2005 (SN194 T2, 2021-06-29 to 2022-06-20) has such a component:
+  about 12% of its amplitude through a ~110 ms path (beta 0.124, tau_s
+  110 ms; 130-190 ms in the first fits, which left the bead's fast pole
+  unfitted). That is its pairs' `ln G` of -0.27, and the chi products'
+  0.5-2 s FFTs cannot resolve it (issue #252). It is corrected separately, by
+  `instruments.<dir>.fp07_slow_response` (§7).
   After correction, `ln(chi2/chi1)` sits at `ln G`, not at 0.
 - **It does not rescue a failing bead.** A failing bead loses microscale
   amplitude, which no response factor models; `|ln G| > ln 2` is refused as
@@ -464,3 +467,50 @@ pair's power ratio (T1592 2.0x T2005 at 20 Hz relative to the lowest bins;
 10.9/16.7 ms). The bootstrap intervals above are sampling intervals only; they
 do not include that. The noise model checks out on both probes (observed/model
 1.02 and 1.05 at 60-100 Hz in the quietest windows).
+
+## 7. A bead's slow response path (`fp07_slow_response`)
+
+A response component slower than ~1 Hz is invisible here: the chi products'
+FFTs start at 2 Hz, where it is a flat gain, so `fp07-pair` reports it as
+`ln G` and never corrects it. T2005 has one (issue #252). It is corrected by a
+separate key, measured from long-segment spectra of the time series, not from
+chi products:
+
+```yaml
+instruments:
+  SN194:
+    fp07_slow_response:
+      T2005: {beta: 0.124, tau_s_ms: 110,
+              first: "2021-06-29T18:00:00Z", last: "2022-06-20T08:30:00Z"}
+```
+
+`|H_slow(f)|^2 = |(1-beta) + beta/(1 + i 2 pi f tau_s)|^2` divides the bead's
+observed and noise spectra in every bin, unweighted (`chi/fp07_slow.py`). The
+key is the bead serial, the span is mandatory, and chi records
+`fp07_slow_response_*` attributes. beta 0.124 and tau_s 110 ms are T2005's
+common values (0.122-0.128 and 105-112 ms per deployment with the bead's own
+fast pole fitted); beta ranges 0.09-0.13 across single-pole model choices.
+After 2022-06-20 PointSur's T2005 changes and is excluded, not corrected.
+
+- **Not with `fp07_response` (or `fp07_tau_scale`) on the same instrument.**
+  A correction from this tool was fitted on raw spectra, whose ratio holds part
+  of the slow path (about -0.05 in ln e, split across both beads by the
+  geometric-mean anchor), and chi would then divide it out twice. Composition
+  waits for `fp07-pair fit` to divide by the recorded slow factor first.
+- **It needs calibrated temperature.** `|H_slow(0)| = 1`: the path is relative
+  to the DC level an in-situ calibration (`fp07.calibrate: true`, `fp07-cal`)
+  fixes.
+- **A1.** The bead is corrected to its partner's norm (T1592 reads like T1593
+  on the same port; every other pair checked is flat). Whether the norm has a
+  slow path is untested; if it had, T2005 would be under-corrected, never
+  over-corrected.
+- **Guard.** Each chi file records the change in median ln(S_bead/S_partner)
+  from 0.25 to 2 Hz on its own gradient time series
+  (`fp07_slow_response_delta_measured_<ch>`) beside the configured path's
+  (`..._delta_predicted_<ch>`), and warns when they differ by more than 0.10
+  over at least 40 windows. On 85 healthy T2005 files the difference was
+  -0.08..+0.01 (5-95%); the pair's own pole difference contributes ~-0.03. A
+  pair without the path (or a faded one) sits ~+0.18 off, and a swapped probe
+  flips the sign. perturb pools a `.p` file's profiles before judging (a
+  SUNRISE cast is one 32-s window) and names flagged files in the run summary.
+  The measured change is recorded even where the bead is outside its spans.

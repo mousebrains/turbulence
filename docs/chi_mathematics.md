@@ -206,6 +206,28 @@ The Goto model once omitted the `W^(-0.32)` and used a fixed 3 ms: 13% short at 
 
 At a typical profiling speed of `W = 0.7 m/s`, the Lueck model gives `tau_0 ~ 0.012 s`, corresponding to a half-power frequency of `f_{3dB} = 1/(2*pi*tau_0) ~ 13 Hz` or roughly `k_{3dB} ~ 19 cpm`. This means the FP07 attenuates the observed spectrum significantly in the viscous-diffusive subrange where the Batchelor spectrum rolls off — the correction for this attenuation is a central part of chi estimation.
 
+### A bead's slow response path (`fp07_slow_response`)
+
+A bead can also respond through a slow parallel path ([issue #252](https://github.com/mousebrains/turbulence/issues/252)): a fraction `beta` of the signal reaches the sensing element through a time constant `tau_s` of order 0.1 s, far slower than `tau_0`,
+
+```
+H_slow(f) = (1 - beta) + beta / (1 + i*2*pi*f*tau_s)
+
+|H_slow(f)|^2 = (1 - beta)^2 + beta*(2 - beta) / (1 + (2*pi*f*tau_s)^2)
+```
+
+which is 1 at `f = 0`, falls monotonically, and is `(1 - beta)^2` above the corner `~1/(2*pi*tau_s)`. For bead T2005 (beta 0.124, tau_s 110 ms) the corner is ~1.4 Hz, so over the chi band (first bin 2 Hz at a 0.5-s FFT) the path is a near-flat 0.85 → 0.77 in power. A pole model cannot represent it, and the chi spectra cannot see its corner.
+
+([`fp07_slow.py`](../src/odas_tpw/chi/fp07_slow.py)) It is applied by **equalizing the data**, as `fp07_response` is: with `e = |H_slow|^2` the observed spectrum is `S = B*|H|^2*e + N` (the electronics noise `N` is not attenuated by the bead), so
+
+```
+S/e = B*|H|^2 + N/e
+```
+
+and chi is computed from `S/e` with noise `N/e`, in every bin and without the S/N weighting `fp07_response` uses (here `1/e <= (1-beta)^-2 ~ 1.3` and nearly flat). The model, `|H|^2` and the variance correction stay on the default FP07 model. Every bin keeps its S/N, so the detection gate, the band and `K_max` are unchanged; with `kB` fixed (Method 1), chi rises by the noise-subtracted-variance-weighted mean of `1/e` over the band, between `1/e(f_first)` and `(1-beta)^-2`. Method 2 refits `kB` on the equalized (bluer) spectrum, so its chi, `kB` and `epsilon_T` all move; on synthetic spectra they recover what a bead without the path gives.
+
+`|H_slow(0)| = 1` makes the correction relative to the DC level an in-situ calibration fixes, so it applies to calibrated temperature only. It corrects the bead to its partner's response (the partner is assumed to have no slow path, assumption A1), and it is never combined with `fp07_tau_scale` or `fp07_response`, which were fitted on spectra that already contain the path.
+
 
 ## 5. Electronics Noise Model
 

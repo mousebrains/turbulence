@@ -74,14 +74,25 @@ DEFAULTS: dict[str, dict] = {
         # their CONTENT digests here; unset, the key is dropped from the
         # canonical view so every existing chi hash is unchanged.
         "fp07_response": None,
+        # A bead's slow response path, {bead: {beta, tau_s_ms, first, last}}
+        # (chi.fp07_slow, issue #252). Hashed with spans as epoch seconds;
+        # unset, dropped from the canonical view like fp07_response.
+        "fp07_slow_response": None,
     },
 }
+
+# chi keys whose unset (None) value is left out of the canonical view, so the
+# hash of every chi run from before the key existed is unchanged.
+_CHI_DROP_WHEN_UNSET = ("fp07_response", "fp07_slow_response")
 
 
 class _RsiConfigManager(ConfigManager):
     def _section_view_postprocess(self, section: str, mapping: dict) -> dict:
-        if section == "chi" and mapping.get("fp07_response") is None:
-            return {k: v for k, v in mapping.items() if k != "fp07_response"}
+        if section == "chi":
+            return {
+                k: v for k, v in mapping.items()
+                if not (k in _CHI_DROP_WHEN_UNSET and v is None)
+            }
         if section == "epsilon":
             # At the values that reproduce the code from before each key
             # existed, the key is left out, so those hashes are unchanged.
@@ -99,6 +110,11 @@ class _RsiConfigManager(ConfigManager):
         from odas_tpw.rsi.dissipation import validate_epsilon_options
 
         validate_epsilon_options(config.get("epsilon") or {})
+        slow = (config.get("chi") or {}).get("fp07_slow_response")
+        if slow is not None:
+            from odas_tpw.chi.fp07_slow import parse_slow_response
+
+            parse_slow_response(slow, where="[chi] fp07_slow_response")
 
 
 _mgr = _RsiConfigManager(DEFAULTS)
@@ -196,6 +212,13 @@ chi:
   fp07_response: null   # per-bead FP07 corrections from `fp07-pair fit` (a
                         # list of files; rsi-tpw chi only -- pipeline refuses
                         # it). See docs/fp07pair/runbook.md
+  fp07_slow_response: null  # a bead's slow response path divided out of its
+                        # spectra, keyed by bead serial with a mandatory UTC
+                        # span (rsi-tpw chi only; never with fp07_response):
+                        #   T2005: {beta: 0.124, tau_s_ms: 110,
+                        #           first: "2021-06-29T18:00:00Z",
+                        #           last: "2022-06-20T08:30:00Z"}
+                        # Calibrated temperature only. See chi/fp07_slow.py
 """
 
 

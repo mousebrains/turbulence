@@ -3944,6 +3944,23 @@ def process_file(
                 is_one = isinstance(response_cfg, (str, os.PathLike))
                 items = [response_cfg] if is_one else response_cfg
                 chi_kwargs["fp07_response"] = [str(x) for x in items]
+            # A bead's slow response path (issue #252), keyed by bead serial:
+            # chi matches it against each profile's configuration and start
+            # time. Validated again here (process_file can be handed a config
+            # that never went through load_config) and handed over in plain
+            # form, so no YAML type reaches the workers.
+            slow_cfg = instrument_cfg.get("fp07_slow_response")
+            slow_outcome: dict[str, Any] | None = None
+            if slow_cfg:
+                from odas_tpw.chi.fp07_slow import config_form
+
+                plain = config_form(slow_cfg, where=f"instruments.{inst_lookup}.fp07_slow_response")
+                if plain:
+                    chi_kwargs["fp07_slow_response"] = plain
+                    slow_outcome = {"instrument": inst_lookup, "configured": sorted(plain),
+                                    "profiles": 0, "seen": [], "outside": [], "pool": {},
+                                    "file_guard": [], "guard": []}
+                    result["fp07_slow_response"] = slow_outcome
             # Soft spectral-QC thresholds for mk_chi_mean — the SAME limits the rsi
             # pipeline's chi_final uses, so both pipelines filter chiMean/K_T/Gamma
             # identically (issue #104 U3-C2).
@@ -3996,6 +4013,10 @@ def process_file(
                             _pre_loaded=pre_loaded,
                         )
                         for chi_ds in chi_results:
+                            if slow_outcome is not None:
+                                _tally_slow_response(
+                                    slow_outcome, chi_ds.attrs, Path(prof_path).name
+                                )
                             # Thermistor entries, at the same point as the diss
                             # side: before the fom cut and mk_chi_mean. Shear
                             # entries are recorded too: they reach this file
@@ -4112,6 +4133,8 @@ def process_file(
                     finally:
                         if diss_ds is not None:
                             diss_ds.close()
+                if slow_outcome is not None:
+                    _slow_guard_file_verdicts(slow_outcome, p_path.name)
 
     return result
 
@@ -4687,9 +4710,10 @@ def _instrument_key_notices(instruments: dict | None, instrument_keys: set[str])
     naming anything else -- a serial when the files sit in ``VMP/``, a
     lower-case spelling -- is ignored without a word, whichever settings it
     holds (``exclude_shear_probes``, ``fp07_tau_scale``, ``fp07_response``,
-    ``exclude``). Reported, not refused: a shared config legitimately carries
-    keys for instruments a run does not include. *instrument_keys* are the keys
-    of every input file of the run, processed or skipped.
+    ``fp07_slow_response``, ``exclude``). Reported, not refused: a shared
+    config legitimately carries keys for instruments a run does not include.
+    *instrument_keys* are the keys of every input file of the run, processed or
+    skipped.
     """
     lines = []
     for sn, settings in sorted((instruments or {}).items(), key=lambda kv: str(kv[0])):
@@ -4767,6 +4791,136 @@ def _probe_exclusion_notices(
                 f"Probe exclusion: {label} masked NO windows ({c['n_total']} {where}). "
                 "If that is unexpected, check its bounds: P_min/P_max are dbar, "
                 "start/stop are UTC."
+            )
+    return lines
+
+
+def _tally_slow_response(rec: dict, attrs: dict[str, Any], label: str) -> None:
+    """Fold one chi product's ``fp07_slow_response_*`` attributes into *rec*.
+
+    *rec* is ``result["fp07_slow_response"]`` of :func:`process_file`. The bead
+    serials are known only here, from what chi found on each profile, so this
+    is what lets the run summary say that a configured bead matched nothing.
+    """
+    import numpy as np
+
+    from odas_tpw.chi.fp07_slow import ATTR
+
+    rec["profiles"] += 1
+    prefix = f"{ATTR}_bead_"
+    for key, bead in sorted(attrs.items()):
+        if not key.startswith(prefix):
+            continue
+        ch = key[len(prefix):]
+        if bead not in rec["seen"]:
+            rec["seen"].append(str(bead))
+        if f"{ATTR}_beta_{ch}" not in attrs:
+            rec["outside"].append([label, str(bead)])
+            continue
+        # One profile is a few windows at most, too few for the guard: pool
+        # the file's profiles (_slow_guard_file_verdicts).
+        pool = rec["pool"].setdefault(f"{bead} {ch}", {
+            "bead": str(bead), "channel": ch, "lo": [], "hi": [],
+            "predicted": float(attrs.get(f"{ATTR}_delta_predicted_{ch}", float("nan"))),
+        })
+        for side in ("lo", "hi"):
+            vals = attrs.get(f"{ATTR}_guard_lnr_{side}_{ch}")
+            if vals is not None:
+                pool[side].extend(float(v) for v in list(np.atleast_1d(vals)))
+
+
+def _slow_guard_file_verdicts(rec: dict, file_label: str) -> None:
+    """The slow-path guard for a whole .p file, from its profiles' pooled windows.
+
+    ``fp07_slow.SLOW_GUARD_MAX`` was set from per-FILE statistics; a profile is
+    one to a few 32-s windows, whose ln ratio scatters by ~0.2 at 2 Hz. Each
+    bead's verdict lands in ``rec["file_guard"]`` and, when it fails, in
+    ``rec["guard"]`` with a WARNING; the raw window pool is dropped.
+    """
+    import numpy as np
+
+    from odas_tpw.chi.fp07_slow import guard_delta, guard_verdict
+
+    for pool in rec.pop("pool", {}).values():
+        lo, hi = np.asarray(pool["lo"]), np.asarray(pool["hi"])
+        measured = guard_delta(lo, hi)
+        verdict = guard_verdict(measured, pool["predicted"], int(lo.size))
+        row = [pool["bead"], pool["channel"], measured, pool["predicted"], int(lo.size)]
+        rec["file_guard"].append([*row, verdict])
+        if verdict.startswith("WARNING"):
+            rec["guard"].append(row)
+            logger.warning("%s: fp07_slow_response %s on %s (file, %d windows): %s",
+                           file_label, pool["bead"], pool["channel"], lo.size, verdict)
+
+
+def _slow_response_notices(
+    instruments: dict | None, instrument_keys: set[str], outcomes: dict[str, dict]
+) -> list[str]:
+    """Run-summary lines for ``instruments.<key>.fp07_slow_response`` (issue #252).
+
+    Four ways the correction does less than the config says: a bead key that
+    matched no thermistor in any profile processed this run (a typo, or the
+    wrong instrument key), files where the bead was present but outside every
+    span (left uncorrected), files whose own 0.25 -> 2 Hz ratio contradicts the
+    configured path (a swapped probe, a faded path; corrected anyway), and
+    files with too few windows for that check. *outcomes* maps a processed file to its
+    ``result["fp07_slow_response"]``. Covers the files processed in THIS run; a
+    key that matches no input file at all is :func:`_instrument_key_notices`'.
+    """
+    from odas_tpw.chi.fp07_slow import SLOW_GUARD_MAX, SLOW_GUARD_MIN_WINDOWS
+
+    lines = []
+    for sn, settings in sorted((instruments or {}).items(), key=lambda kv: str(kv[0])):
+        if not isinstance(settings, dict) or not settings.get("fp07_slow_response"):
+            continue
+        if sn not in instrument_keys:
+            continue  # reported by _instrument_key_notices
+        recs = {name: r for name, r in sorted(outcomes.items()) if r.get("instrument") == sn}
+        n_prof = sum(int(r.get("profiles", 0)) for r in recs.values())
+        if not n_prof:
+            continue  # no chi product this run: nothing was checked
+        seen = {b for r in recs.values() for b in r.get("seen", [])}
+        configured = sorted({b for r in recs.values() for b in r.get("configured", [])})
+        for bead in configured:
+            if bead not in seen:
+                lines.append(
+                    f"FP07 slow response: instruments.{sn}.fp07_slow_response.{bead} matched no "
+                    f"thermistor in the {n_prof} chi profile(s) of {len(recs)} file(s) this run "
+                    f"(beads seen: {', '.join(sorted(seen)) or 'none'}), so it was NOT applied. "
+                    "The key is the bead serial from the .p configuration."
+                )
+        outside: dict[str, list[str]] = {}
+        for name, r in recs.items():
+            for _label, bead in r.get("outside", []):
+                if name not in outside.setdefault(bead, []):
+                    outside[bead].append(name)
+        for bead, names in sorted(outside.items()):
+            lines.append(
+                f"FP07 slow response: bead {bead} (instruments.{sn}) was on {len(names)} file(s) "
+                f"outside every configured span, which were NOT corrected: {', '.join(names)}"
+            )
+        # Per FILE, from its profiles' pooled windows (_slow_guard_file_verdicts).
+        guard = [(name, *g) for name, r in recs.items() for g in r.get("guard", [])]
+        if guard:
+            worst = max(guard, key=lambda g: abs(g[3] - g[4]))
+            names = sorted({g[0] for g in guard})
+            lines.append(
+                f"FP07 slow response: in {len(names)} file(s) (instruments.{sn}) the bead's own "
+                f"0.25->2 Hz ratio change disagrees with the configured path by more than "
+                f"{SLOW_GUARD_MAX:g} (worst {worst[0]} {worst[1]}: {worst[3]:+.3f} measured over "
+                f"{worst[5]} windows, {worst[4]:+.3f} predicted); corrected anyway. A swapped "
+                f"probe, a faded or changed path? Files: {', '.join(names)}"
+            )
+        thin = sorted(
+            name for name, r in recs.items()
+            if any(str(g[5]).startswith("no verdict") for g in r.get("file_guard", []))
+        )
+        if thin:
+            lines.append(
+                f"FP07 slow response: {len(thin)} file(s) (instruments.{sn}) had too few "
+                f"windows for a guard verdict (fewer than {SLOW_GUARD_MIN_WINDOWS}, or not "
+                "exactly two thermistors), so a swapped probe or a faded path there would go "
+                f"unnoticed: {', '.join(thin)}"
             )
     return lines
 
@@ -5071,6 +5225,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
     fp07_outcomes: dict[str, dict] = {}
     strat_outcomes: dict[str, dict] = {}
     exclusion_outcomes: dict[str, dict] = {}
+    slow_outcomes: dict[str, dict] = {}
     if jobs == 1:
         for p_path, cachekey in to_process:
             logger.info("Processing %s...", p_path.name)
@@ -5093,6 +5248,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                 strat_outcomes[p_path.name] = result["stratification"]
             if isinstance(result, dict) and "probe_exclusions" in result:
                 exclusion_outcomes[p_path.name] = result["probe_exclusions"]
+            if isinstance(result, dict) and "fp07_slow_response" in result:
+                slow_outcomes[p_path.name] = result["fp07_slow_response"]
     else:
         # Spawn workers each get a per-pid log file inside <output_root>/logs/
         # so multi-process runs are diagnosable.  ``run_stamp`` is the parent
@@ -5131,6 +5288,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                         strat_outcomes[p.name] = result["stratification"]
                     if isinstance(result, dict) and "probe_exclusions" in result:
                         exclusion_outcomes[p.name] = result["probe_exclusions"]
+                    if isinstance(result, dict) and "fp07_slow_response" in result:
+                        slow_outcomes[p.name] = result["fp07_slow_response"]
                 except Exception as exc:
                     # The worker died rather than returning a result, so its own
                     # `errors` list never made it back; record the future's
@@ -5151,6 +5310,9 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
         # The condition process_file runs chi on.
         chi_ran=bool(merge_config("chi", config.get("chi")).get("enable", False))
         and "chi" in output_dirs,
+    )
+    outcome.notices += _slow_response_notices(
+        config.get("instruments"), {_instrument_key(p) for p in p_files}, slow_outcomes
     )
     # Whole and at WARNING: the summary clips each line (a file list is longer
     # than that) and is logged at INFO on a run with no errors, which
