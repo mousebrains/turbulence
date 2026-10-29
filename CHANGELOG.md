@@ -375,9 +375,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Taiwan 2017 CAS_006) and takes the exact slope. It matches a finite
   difference of the conversion to within 2% on all 1386 curved fitted
   channels of the scanned deployments (1e-3 in the tests). Where the curve
-  cannot reach the window's temperature (no real root: 2 of the 6930
-  temperatures checked) it falls back to the ODAS form with a WARNING, and the
-  chi file counts those windows (`bead_inversion_fallback_windows_<channel>`).
+  has no NTC root at the window's temperature (past a quadratic's turning
+  point, or only roots where T rises with R) the noise model is NaN, so the
+  window gets no chi (every chi estimator returns NaN on it, as for a window
+  without a temperature), with a WARNING, and the chi file counts those
+  windows (`bead_inversion_unsolved_windows_<channel>`). The ODAS form is not
+  a fallback there: it is the value the exact inversion replaces, far off on
+  such curves (6x on DAT_048 T1 where it has a root), and it would jump at the
+  turning point, where the exact noise goes to zero. Only 2 of the 6930
+  temperatures checked (five per fitted channel) have no NTC root, but on that
+  channel they are a fifth of the file: Tanaka 2017-07 DAT_048 T1 (`beta_1`
+  −5034, `beta_2` −987) turns over at 1.65 °C inside its own 1.4-10.4 °C
+  data, and 562 of its 2779 T1 chi windows get no chi.
   The exact inversion is gated on the fit: an embedded configuration,
   `fp07-cal` patched or not, keeps the ODAS form and never reads `beta_3`, and
   an order-1 curve is inverted exactly by the ODAS form already.

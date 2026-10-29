@@ -377,13 +377,16 @@ def bead_inversion(
     ``convert_therm`` form) for its real roots at each temperature [deg C].
     The bead's branch is the NTC one, ``d(1/T)/dL > 0`` (R falls as T rises);
     among its roots the one nearest the order-1 estimate ``beta_1 (1/T - 1/T_0)``
-    is taken, and among all real roots when none is NTC. The two roots of a
-    quadratic share ``|d(1/T)/dL|`` and differ only in R, but a curved fit puts
-    the order-1 estimate on the wrong one: on CASPER 2015 doug CAS_024 the
-    nearest root was 0.04 in L from the file's data, the NTC root inside them.
+    is taken. The two roots of a quadratic share ``|d(1/T)/dL|`` and differ
+    only in R, but a curved fit puts the order-1 estimate on the wrong one: on
+    CASPER 2015 doug CAS_024 the nearest root was 0.04 in L from the file's
+    data, the NTC root inside them (and on every profile sample of the six
+    beta_1 < 0 CASPER channels checked).
 
     Returns ``(L, slope, solved)``; ``solved`` is False (L and slope NaN) where
-    no real root exists, and at a non-finite temperature.
+    the curve has no NTC root at that temperature -- no real root at all (past
+    a quadratic's turning point), or only roots where T rises with R, which no
+    working FP07 reads -- and at a non-finite temperature.
     """
     T_K = np.atleast_1d(np.asarray(T_mean, dtype=np.float64)) + 273.15
     a = [1.0 / T_0, 1.0 / beta_1]
@@ -402,11 +405,12 @@ def bead_inversion(
         if real.size == 0:
             continue
         ntc = real[dpoly(real) > 0]
-        pool = ntc if ntc.size else real
-        x = float(pool[np.argmin(np.abs(pool - beta_1 * (1.0 / tk - 1.0 / T_0)))])
+        if ntc.size == 0:
+            continue
+        x = float(ntc[np.argmin(np.abs(ntc - beta_1 * (1.0 / tk - 1.0 / T_0)))])
         for _ in range(2):  # polish the companion-matrix root
             d = float(dpoly(x))
-            if d == 0.0:
+            if d <= 0.0:
                 break
             x -= (float(poly(x)) - 1.0 / tk) / d
         L[i] = x
@@ -417,9 +421,14 @@ def bead_inversion(
 def _exact_R_and_slope(T_kelvin: np.ndarray, p: dict) -> tuple[np.ndarray, np.ndarray]:
     """R/R_0 and d(1/T)/dL from :func:`bead_inversion`, for the scale factor.
 
-    Where there is no real root it falls back, with a warning, to the order-1
-    inversion and the first-order beta_2 slope (the ODAS form); R < 0.1 is
-    clamped to 1 as there.
+    Where the curve has no NTC root at the temperature both are NaN, so is the
+    noise model, and so the window gets no chi (every chi estimator returns NaN
+    on a NaN noise spectrum, as for a window without a temperature). Falling
+    back to the ODAS form there would put back the very value the exact
+    inversion exists to replace, far off on such curves, and it would jump at
+    a quadratic's turning point where the exact noise goes to zero. The
+    count is warned here and recorded per chi file. R < 0.1 is clamped to 1, as
+    in the ODAS form.
     """
     L, slope, solved = bead_inversion(
         T_kelvin - 273.15, p["T_0"], p["beta_1"], p["beta_2"], p["beta_3"]
@@ -427,17 +436,11 @@ def _exact_R_and_slope(T_kelvin: np.ndarray, p: dict) -> tuple[np.ndarray, np.nd
     unsolved = ~solved & np.isfinite(T_kelvin)
     if np.any(unsolved):
         warnings.warn(
-            f"FP07 noise model: the bead's polynomial has no real root at "
-            f"{int(unsolved.sum())} of {unsolved.size} temperatures; those fall back "
-            "to the order-1 inversion",
+            f"FP07 noise model: the bead's fitted curve has no NTC root at "
+            f"{int(unsolved.sum())} of {unsolved.size} temperatures; no noise model "
+            "(NaN) there",
             stacklevel=3,
         )
-        L1 = p["beta_1"] * (1.0 / T_kelvin[unsolved] - 1.0 / p["T_0"])
-        s1 = 1.0 / p["beta_1"]
-        if p["beta_2"] is not None and np.isfinite(p["beta_2"]):
-            s1 = s1 * (1 + 2 * (p["beta_1"] / p["beta_2"]) * L1)
-        L[unsolved] = L1
-        slope[unsolved] = s1
     R_ratio = np.exp(L)
     low = R_ratio < 0.1
     if np.any(low):
@@ -558,7 +561,8 @@ def noise_thermchannel(
         first-order beta_2 correction. For an in-situ fit's curve (#245): a
         strongly curved per-file fit (beta_2 comparable to beta_1) put the
         ODAS form more than 2x off in power on 126 of CASPER 2015 doug's 272
-        fitted channels. An order-1 curve is unchanged.
+        fitted channels. Where the curve has no NTC root at *T_mean* the noise
+        is NaN, with a warning. An order-1 curve is unchanged.
 
     config : FP07NoiseConfig or None
         Hardware configuration dataclass.  When provided, its fields

@@ -245,6 +245,74 @@ class TestCalibrateFalseUnchanged:
         assert d["therm_cal_source"] == [None, None]
         assert d["therm_cal"] == [_embedded_cal("T1_dT1"), _embedded_cal("T2_dT2")]
 
+    def test_spec_noise_is_the_odas_form_on_the_embedded_coefficients(
+        self, tmp_path, monkeypatch
+    ):
+        """No exact inversion reaches the noise model without a fit, and the chi
+        product's noise is gradT_noise_batch's ODAS form bit for bit."""
+        from odas_tpw.chi import l3_chi
+
+        seen: list[dict] = []
+        real = l3_chi.gradT_noise_batch
+
+        def spy(*args, **kwargs):
+            seen.append(dict(kwargs))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(l3_chi, "gradT_noise_batch", spy)
+        _, dirs, _ = _run(tmp_path, P_FILE, {"calibrate": False})
+        assert seen and not [k for k in seen if "exact_inversion" in k]
+        _assert_spec_noise(dirs, [_embedded_cal("T1_dT1"), _embedded_cal("T2_dT2")])
+
+
+def _assert_spec_noise(dirs: dict, cals: list[dict]) -> None:
+    """Every chi window's spec_noise equals gradT_noise_batch on *cals*, exactly."""
+    from odas_tpw.chi.fp07 import gradT_noise_batch
+
+    prof = sorted(dirs["profiles"].glob("*.nc"))[0]
+    with xr.open_dataset(prof) as p:
+        fs = float(p.attrs["fs_fast"])
+    with xr.open_dataset(sorted(dirs["chi"].glob("*.nc"))[0]) as ds:
+        F = ds["F"].values[:, 0]
+        for ci, (cal, dg) in enumerate(zip(cals, (0.912, 0.92), strict=True)):
+            want = gradT_noise_batch(F, ds["T_mean"].values, ds["speed"].values, fs=fs,
+                                     diff_gain=dg, **cal)
+            assert np.array_equal(ds["spec_noise"].values[ci], want.T), ci
+
+
+class TestNoiseCalWiring:
+    """How the fit's flag and beta_3 reach the noise model (#245 review)."""
+
+    def test_only_a_fitted_source_asks_for_exact_inversion(self):
+        from odas_tpw.rsi.chi_io import _noise_cal
+
+        cal = [{"T_0": 289.3, "beta_1": 3100.0}, {"T_0": 290.0, "beta_1": 3080.0}]
+        out = _noise_cal(cal, [None, "in-situ (Steinhart-Hart order 2 vs JAC_T)"])
+        assert "exact_inversion" not in out[0]
+        assert out[1]["exact_inversion"] is True
+        assert cal[1] == {"T_0": 290.0, "beta_1": 3080.0}  # the input is not mutated
+
+    def test_a_short_source_list_is_an_error(self):
+        """Never a silent shift of later channels onto the defaults."""
+        from odas_tpw.rsi.chi_io import _noise_cal
+
+        with pytest.raises(ValueError):
+            _noise_cal([{}, {}], ["in-situ"])
+
+    def test_order_3_spec_noise_uses_beta_3(self, tmp_path, monkeypatch):
+        """attrs -> chi spec_noise: an order-3 fit's beta_3 reaches the noise model."""
+        _, dirs, fit = _run(tmp_path, P_FILE, {"calibrate": True, "order": 3}, monkeypatch)
+        cals, cals_no3 = [], []
+        for base in ("T1", "T2"):
+            c = coeffs_to_config(fit["coefficients"][base])
+            cal = {**_embedded_cal(f"{base}_d{base}"), "T_0": c["t_0"], "beta_1": c["beta_1"],
+                   "beta_2": c["beta_2"], "beta_3": c["beta_3"], "exact_inversion": True}
+            cals.append(cal)
+            cals_no3.append({k: v for k, v in cal.items() if k != "beta_3"})
+        _assert_spec_noise(dirs, cals)
+        with pytest.raises(AssertionError):  # the check can tell beta_3 is there
+            _assert_spec_noise(dirs, cals_no3)
+
 
 class TestNoiseSpectrum:
     """The chi product's noise spectrum is noise_thermchannel on the FITTED bead."""
@@ -468,13 +536,33 @@ class TestExactInversion:
         from odas_tpw.chi.fp07 import bead_inversion, noise_thermchannel
 
         kw = {"T_0": 289.98, "beta_1": 3078.6, "beta_2": 2.7e5}
-        with3 = noise_thermchannel(self.F, 8.0, beta_3=-2.0e3, exact_inversion=True, **kw)
+        with3 = noise_thermchannel(self.F, 8.0, beta_3=2.0e4, exact_inversion=True, **kw)
         without = noise_thermchannel(self.F, 8.0, exact_inversion=True, **kw)
+        assert np.all(np.isfinite(with3))
         assert not np.allclose(with3, without, rtol=1e-3)
-        L, slope, _ = bead_inversion(8.0, 289.98, 3078.6, 2.7e5, -2.0e3)
-        a = (1 / 289.98, 1 / 3078.6, 1 / 2.7e5, 1 / -2.0e3)
+        L, slope, solved = bead_inversion(8.0, 289.98, 3078.6, 2.7e5, 2.0e4)
+        a = (1 / 289.98, 1 / 3078.6, 1 / 2.7e5, 1 / 2.0e4)
+        assert solved[0] and slope[0] > 0
         assert sum(ai * L[0] ** i for i, ai in enumerate(a)) == pytest.approx(1 / 281.15)
         assert slope[0] == pytest.approx(a[1] + 2 * a[2] * L[0] + 3 * a[3] * L[0] ** 2)
+
+    def test_a_curve_with_no_ntc_root_is_unsolved(self):
+        """beta_3 = -2e3 at 8 C: real roots exist, but T rises with R on all of
+        them, which no working FP07 reads. Unsolved, counted, no noise model."""
+        from odas_tpw.chi.fp07 import bead_inversion, noise_thermchannel
+        from odas_tpw.rsi.chi_io import _count_unsolved_inversions
+
+        kw = {"T_0": 289.98, "beta_1": 3078.6, "beta_2": 2.7e5, "beta_3": -2.0e3}
+        a = (1 / kw["T_0"], 1 / kw["beta_1"], 1 / kw["beta_2"], 1 / kw["beta_3"])
+        roots = np.polynomial.Polynomial((a[0] - 1 / 281.15, *a[1:])).roots()
+        real = roots[np.abs(roots.imag) < 1e-12].real
+        assert real.size and np.all(a[1] + 2 * a[2] * real + 3 * a[3] * real**2 < 0)
+        L, slope, solved = bead_inversion(8.0, *kw.values())
+        assert not solved[0] and np.isnan(L[0]) and np.isnan(slope[0])
+        with pytest.warns(UserWarning, match="no NTC root"):
+            got = noise_thermchannel(self.F, 8.0, exact_inversion=True, **kw)
+        assert np.all(np.isnan(got))
+        assert _count_unsolved_inversions([8.0], {**kw, "exact_inversion": True}) == 1
 
     def test_order_1_is_the_odas_form_bit_for_bit(self):
         from odas_tpw.chi.fp07 import noise_thermchannel, noise_thermchannel_batch
@@ -497,21 +585,43 @@ class TestExactInversion:
                 noise_thermchannel(self.F, T, exact_inversion=True, **kw),
                 noise_thermchannel(self.F, T, **kw), rtol=1e-2)
 
-    def test_no_real_root_falls_back_with_a_warning(self):
-        """FSA_011 T1's parabola cannot reach 28 C (its turning point is ~27.08 C)."""
-        from odas_tpw.chi.fp07 import bead_inversion, noise_thermchannel
+    def test_no_real_root_gives_no_noise_model(self):
+        """FSA_011 T1's parabola cannot reach 28 C (its turning point is ~27.08 C).
+
+        No noise model there (NaN, so no chi), not the ODAS form: that is the
+        value the exact inversion replaces, far off on such curves, and it
+        would jump at the turning point, where the exact noise goes to zero.
+        """
+        from odas_tpw.chi.fp07 import bead_inversion, noise_thermchannel, noise_thermchannel_batch
         from odas_tpw.rsi.chi_io import _count_unsolved_inversions
 
         t_0, b1, b2, _ = CURVED_FITS["husker FSA_011 T1"]
+        kw = {"T_0": t_0, "beta_1": b1, "beta_2": b2, "exact_inversion": True}
         _, _, solved = bead_inversion(np.array([26.9, 28.0]), t_0, b1, b2)
         assert solved.tolist() == [True, False]
-        with pytest.warns(UserWarning, match="no real root"):
-            got = noise_thermchannel(self.F, 28.0, T_0=t_0, beta_1=b1, beta_2=b2,
-                                     exact_inversion=True)
+        with pytest.warns(UserWarning, match="no NTC root"):
+            got = noise_thermchannel(self.F, 28.0, **kw)
+        assert np.all(np.isnan(got))
+        with pytest.warns(UserWarning, match="1 of 2 temperatures"):
+            batch = noise_thermchannel_batch(self.F, [26.9, 28.0], **kw)
+        assert np.all(np.isfinite(batch[0])) and np.all(np.isnan(batch[1]))
+        assert _count_unsolved_inversions([26.9, 28.0, np.nan], kw) == 1
+        assert _count_unsolved_inversions([26.9, 28.0], {**kw, "exact_inversion": False}) == 0
+
+    def test_every_chi_estimator_returns_nan_on_a_nan_noise_model(self):
+        """What makes a NaN noise model safe downstream: no chi, no exception."""
+        from odas_tpw.chi.chi import _chi_from_epsilon, _iterative_fit, _mle_fit_kB
+        from odas_tpw.chi.fp07 import fp07_transfer
+
+        K = np.linspace(0.0, 120.0, 61)
+        S = 1e-3 * np.exp(-K / 40.0)
+        N = np.full_like(K, np.nan)
+        H2 = fp07_transfer(K * 0.5, 0.01)
+        args = (H2, 0.01, fp07_transfer, 88.2, 0.5, "kraichnan", 1.4e-7, 20.0)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            odas = noise_thermchannel(self.F, 28.0, T_0=t_0, beta_1=b1, beta_2=b2)
-        np.testing.assert_allclose(got, odas, rtol=1e-12)
-        cal = {"T_0": t_0, "beta_1": b1, "beta_2": b2, "exact_inversion": True}
-        assert _count_unsolved_inversions([26.9, 28.0, np.nan], cal) == 1
-        assert _count_unsolved_inversions([26.9, 28.0], {**cal, "exact_inversion": False}) == 0
+            assert np.isnan(_chi_from_epsilon(S, K, 1e-8, 1e-6, N, *args).chi)
+            assert np.isnan(_iterative_fit(S, K, 1e-6, N, *args).chi)
+            # l4's MLE path starts from chi_obs = 6 kappa int max(S - N, 0) dK,
+            # which a NaN noise makes NaN.
+            assert np.isnan(_mle_fit_kB(S, K, np.nan, 1e-6, N, *args).chi)

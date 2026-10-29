@@ -73,10 +73,10 @@ IN_SITU_COEFFS_KEY = "in_situ_coefficients"
 # product on the embedded configuration is unchanged; absent means embedded.
 BEAD_COEFFS_SOURCE_ATTR = "bead_coefficients_source"
 
-# Chi-file attr (``<prefix>_<channel>``): windows whose fitted curve had no real
-# root at the window's temperature, so the noise model fell back to the order-1
-# inversion there (with a warning). Written only when nonzero.
-BEAD_INVERSION_FALLBACK_ATTR = "bead_inversion_fallback_windows"
+# Chi-file attr (``<prefix>_<channel>``): windows whose fitted curve has no NTC
+# root at the window's temperature, so the noise model is NaN there (with a
+# warning) and the window gets no chi. Written only when nonzero.
+BEAD_INVERSION_UNSOLVED_ATTR = "bead_inversion_unsolved_windows"
 
 
 def resolve_tau_scales(
@@ -290,15 +290,8 @@ def _compute_chi(
     n_therm = len(therm_names)
     diff_gains = data.get("diff_gains", [_DEFAULT_DIFF_GAIN] * n_therm)
     therm_cal = data.get("therm_cal", [{}] * n_therm)
-    # A fitted bead's curve is inverted exactly by the noise model (#245): a
-    # strongly curved per-file fit put the ODAS order-1 inversion more than 2x
-    # off in power on 126 of CASPER 2015 doug's 272 fitted channels. Gated on
-    # the source, so the embedded configuration keeps the ODAS form bit for bit.
-    cal_sources = list(data.get("therm_cal_source") or [None] * n_therm)
-    noise_cal = [
-        {**cal, "exact_inversion": True} if src else cal
-        for cal, src in zip(therm_cal, cal_sources, strict=False)
-    ]
+    cal_sources = list(data.get("therm_cal_source") or [None] * len(therm_cal))
+    noise_cal = _noise_cal(therm_cal, cal_sources)
     tau_scales = resolve_tau_scales(therm_names, fp07_tau_scale)
 
     if n_therm == 0:
@@ -518,12 +511,12 @@ def _compute_chi(
         # Which thermistors' noise model ran on an in-situ fit's T_0/beta_*
         # rather than the embedded configuration's (#245). Only those: a file
         # on the embedded coefficients is unchanged.
-        for ci, (name, src) in enumerate(zip(therm_names, cal_sources, strict=False)):
+        for ci, (name, src) in enumerate(zip(therm_names, cal_sources, strict=True)):
             if src:
                 ds.attrs[f"{BEAD_COEFFS_SOURCE_ATTR}_{name}"] = src
                 n_unsolved = _count_unsolved_inversions(l3_chi.temp, noise_cal[ci])
                 if n_unsolved:
-                    ds.attrs[f"{BEAD_INVERSION_FALLBACK_ATTR}_{name}"] = n_unsolved
+                    ds.attrs[f"{BEAD_INVERSION_UNSOLVED_ATTR}_{name}"] = n_unsolved
         if pair_attrs:
             ds.attrs.update(pair_attrs)
             ds.attrs["fp07_tau_model"] = default_tau_model(fp07_model)
@@ -1302,8 +1295,26 @@ def _bead_coeffs_source(
     return str(tag) if tag else "in-situ fit"
 
 
+def _noise_cal(
+    therm_cal: Sequence[Mapping[str, Any]], sources: Sequence[str | None]
+) -> list[dict[str, Any]]:
+    """The per-thermistor noise-model coefficients: *therm_cal*, flagged for exact
+    inversion where *sources* says an in-situ fit supplied them (#245).
+
+    A strongly curved per-file fit put the ODAS order-1 inversion more than 2x
+    off in power on 126 of CASPER 2015 doug's 272 fitted channels. Gated on the
+    source, so the embedded configuration keeps the ODAS form bit for bit. The
+    two lists are parallel by construction (:func:`_load_therm_channels`); a
+    mismatch is an error, never a silent shift of later channels onto defaults.
+    """
+    return [
+        {**cal, "exact_inversion": True} if src else dict(cal)
+        for cal, src in zip(therm_cal, sources, strict=True)
+    ]
+
+
 def _count_unsolved_inversions(T_means: Any, cal: Mapping[str, Any]) -> int:
-    """Windows the noise model could not invert exactly (no real root).
+    """Windows the noise model could not invert exactly (no NTC root).
 
     Zero unless *cal* asks for the exact inversion of a curved polynomial;
     a non-finite temperature is not counted (it gives no noise model either way).
