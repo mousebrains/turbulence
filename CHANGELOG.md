@@ -7,6 +7,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Each FP07 bead's time constant, measured and carried in the calibration
+  sheet (`fp07-pair tau`, `fp07-cal registry response`; closes the last open
+  question of issue #189).** `fp07-pair tau` fits one single pole per bead to
+  the pair's median ln(S2/S1) (the `fp07-pair fit` machinery) over 1-25 Hz of
+  reduced frequency at the pair's median speed, over an explicit time span on
+  one instrument, with 16-84% intervals from a bootstrap over recordings
+  (`.p` files; their profiles are not independent); it also records the
+  model-free power ratio at 10 and 20 Hz and fits each time half, so a bead
+  that slowed within a deployment shows. A rule set on synthetics decides
+  whether a pair identifies a tau at all (>= 16 chi files from >= 5
+  recordings, the beads differing at 20 Hz by >= 3 bootstrap sigma and 16% in
+  power, each interval bounded and within a factor 1.5, flat gain below a
+  factor 2, no bead dead in any file, neither probe's 60-100 Hz floor above
+  1.25x its noise model); matched beads, a failing or dead bead, and
+  unmodelled content on a probe give no tau, only ratios. The thresholds used
+  (and `n_boot`) are recorded in the record and the sheet, and the loader
+  refuses an identified block that breaks its own. One JSON record per pair;
+  `fp07-cal registry response` inserts it into an entry as a strictly
+  validated `response:` block (text insertion, as `registry add`), and the
+  `.md`/`.csv` views render it at the pair's own speed `W_ref` only (W^-1/2
+  across gliders and VMPs is not established, so no tau at 1 m/s). It is a single-pole-equivalent value: the pole form is not
+  determined and no external reference anchors the absolute level. Nothing in
+  chi processing reads it yet. `fp07-pair fit` is unchanged (pinned by a golden
+  test against its pre-change output). The sheet now carries a response on 19
+  of its 23 entries (10 identified; the four ARCTERX-2023 MicroRider entries
+  have no chi products). The run found T1593 on the ADC rail (spectrum
+  identically zero) through the last SUNRISE 2021 Pelican file before its
+  replacement, a noise model 2-5x above the
+  observed floor on SN194 from that swap through WaltonSmith, and excess
+  high-frequency content on SN194 T2 in SUNRISE 2022 PointSur that makes T2005
+  read 4.9 ms. That last case prompted rule 7 (the floor refusal), a
+  tightening made after the real results were seen and set on synthetics; it
+  leaves SUNRISE 2022 PointSur without a tau for either bead. T1593's SUNRISE
+  2021 Pelican entry now ends with its own last file (SR1P_515), not the run's.
 - **FP07 calibration sheet (`fp07-cal registry`)**:
   `microstructure_sensors/fp07_calibrations.yaml` records the in-situ
   calibrations of individual FP07 beads. An entry is one bead in one deployment:

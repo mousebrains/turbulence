@@ -89,6 +89,8 @@ mr-clocksync report  -c clocksync.yaml         # re-print the report from a solv
 
 fp07-pair fit 'results/chi_00/*.nc' -o fp07pair/   # per-bead response corrections + report
 fp07-pair show fp07pair/*.nc                       # what a correction contains
+fp07-pair tau 'results/chi_00/*.nc' --instrument 194 --first ... --last ... -o fp07tau/  # each bead's tau
+fp07-cal registry response fp07tau/fp07tau_*.json --bead T1592 --deployment "..."  # tau into the sheet
 ```
 
 ### FP07 in-situ calibration (`fp07-cal`)
@@ -107,6 +109,10 @@ range or when no full order is a plausible curve for the bead (dT/dL within 10% 
 flags a result outside the prior's uncertainty over their common range (runbook §5). Without the
 block its output is byte-identical.
 `fp07-cal registry add` records a fit by inserting text, never re-dumping the hand-edited YAML.
+An entry may carry a `response:` block, the bead's measured FP07 tau (a bead property
+carried with its calibration); `fp07-cal registry response` inserts it as text from an
+`fp07-pair tau` record. Tau is at the pair's own speed `W_ref` and is never converted to
+another: W^-1/2 across gliders (~0.4 m/s) and VMPs (~1 m/s) is not established.
 
 Facts that are easy to get wrong:
 
@@ -290,6 +296,21 @@ Facts that are easy to get wrong:
   fp07-cal output). An unmatched key is no longer silent: a non-string key
   (`465:`) is refused at load, and a key matching no input file is a run-start
   WARNING and a summary `notice:` line. It is still a notice, not an error.
+- **`fp07-pair tau` gives each bead's tau for the FP07 sheet** (runbook §6):
+  single-pole-equivalent over 1-25 Hz at the pair's median speed, from the same
+  median ln(S2/S1). The pole form is undetermined and the absolute level is
+  anchored by nothing, so compare beads with it; the 10/20 Hz power ratios are
+  the robust part. Matched beads give NO tau (rule set on synthetics: >= 16 chi
+  files from >= 5 recordings, |ln R'(20 Hz)| >= max(3 bootstrap sigma, 0.15),
+  each 16-84% interval within x1.5), nor does a pair with a DEAD bead (spectrum
+  identically zero through a file; SUNRISE 2021 Pelican T1593), nor one whose
+  60-100 Hz quiet-window floor exceeds 1.25x a probe's noise model (unmodelled
+  content on ONE probe biases BOTH taus; SUNRISE 2022 PointSur T2). The
+  bootstrap resamples recordings (.p files), never profiles: profiles of one .p
+  are not independent. Records and sheet blocks carry the thresholds used.
+  `fp07-cal registry response` records it; nothing in chi reads it yet (a
+  per-bead tau would be a third route beside `fp07_tau_scale` and
+  `fp07_response`, which are mutually exclusive).
 
 ### Python API
 
