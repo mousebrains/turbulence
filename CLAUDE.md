@@ -158,6 +158,13 @@ Facts that are easy to get wrong:
 - Polynomial order is chosen by **held-out** error split on temperature, not by
   in-sample fit or a t-test: `beta_3` can carry a t-statistic of 10 while
   making extrapolation four times worse.
+- **The robust loops clip about the MEDIAN residual** (issue #246; least
+  squares centers the mean, which a minority population drags off the
+  majority). A minority offset by more than 4 sigma is rejected whole, at 5 K
+  or at 50 mK, and so drops out of the stability blocks too: a `WARNING` and
+  the record's `robust_rejection` mark a rejected POPULATION (> 15% of the
+  pairs, or >= half the rejections in profiles that lost over half their
+  pairs). On 11 real deployments: at most 6.9% and 12.7%.
 - **perturb refuses its own per-file fit against a hotel reference** unless
   `fp07.allow_hotel_reference: true`. A file the glider CTD did not cover
   keeps the factory coefficients while its neighbors are fitted, putting one

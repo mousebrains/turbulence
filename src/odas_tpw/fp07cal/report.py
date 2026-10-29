@@ -150,7 +150,8 @@ def fit_text(
         f"| beta_1 EIV bracket | {lo:.2f} .. {hi:.2f} | true slope lies inside; "
         f"wide = attenuated |",
         f"| condition number | {fit.condition:.3g} | of the centered design matrix |",
-        f"| pairs used / dropped | {fit.n} / {fit.n_dropped} | robust rejection at 4 sigma |",
+        f"| pairs used / dropped | {fit.n} / {fit.n_dropped} | robust rejection at 4 sigma "
+        f"about the median |",
         f"| profiles | {pairs.n_profiles()} | the independent unit |",
         f"| fitted T range | {T_lo:.3f} .. {T_hi:.3f} degC | do NOT extrapolate beyond |",
         f"| deployment span | {span:.2f} d | |",

@@ -77,7 +77,16 @@ Writes `coefficients.json`, a per-channel `*_report.md`, and diagnostics PNGs.
   is judged over the pairs the fit used: pairs its robust loop already
   rejected as outliers are reported in a `WARNING` (count, worst error, time,
   pressure, file) and in the record's `outliers_beyond_gate`, but no longer
-  refuse the fit. Nor do they set the fitted range (the report's "do NOT
+  refuse the fit. The loop judges each residual about the median of the pairs
+  it keeps, so a minority population (part of the reference a few K off, say)
+  is rejected whole instead of dragging the fit off the majority (issue #246).
+  It is rejected whole whatever its offset, 50 mK as well as 5 K, and is then
+  left out of the stability blocks too, so a `WARNING` and the record's
+  `robust_rejection` say when the loop rejected a population rather than a
+  tail: more than 15% of the pairs, or at least half of the rejections in
+  profiles that each lost more than half their pairs (11 real deployments: at
+  most 6.9% and 12.7%). Look at those times before trusting the fit or its
+  stability. Nor do rejected pairs set the fitted range (the report's "do NOT
   extrapolate" line, the record's `T_range`, `patch`'s extrapolation warning)
   or the warm/cold folds that choose the order: pairs every order rejects are
   left out of those. A fit that is not an FP07 curve is refused with

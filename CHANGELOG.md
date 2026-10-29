@@ -350,6 +350,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   "Record framing".
 
 ### Fixed
+- **`fp07-cal`'s robust loops judged residuals about zero, not about their
+  median (#246).** Both loops (the calibration's and the joint geometry
+  fit's) kept a pair when `|resid| <= 4 sigma`, with sigma itself measured
+  about the median. Least squares puts zero at the MEAN residual, which a
+  minority population offset by many sigma drags off the majority: every pair
+  then lay beyond 4 sigma, nothing was rejected, and the channel was refused at
+  the 1 K gate (a synthetic with 15% of the reference 2 K off: refused at
+  1.80 K). The test is now `|resid - median| <= 4 sigma`: that minority is
+  rejected and reported by the 1 K gate's `WARNING`, and the channel exports
+  with `t_0` within 0.1 mK of the truth. The same rule takes out WHOLE any
+  minority offset by more than 4 sigma, however small the offset: 40% of a
+  reference 50 mK off is now left out of the fit and of the stability blocks,
+  where before it was averaged in (rms 24 mK) and its step showed in the block
+  table. So a new `WARNING`, and the record's `robust_rejection`, say when the
+  loop rejected a population rather than a tail: more than 15% of the pairs,
+  or at least half of the rejections in profiles that lost more than half
+  their pairs (with those profiles' time span and the files). On 11 real
+  deployments (SUNRISE 2019-2022, ARCTERX-2022 Interior and Wake, ARCTERX-2025
+  Interior SN142, and the glider fits of osu684 2023/2025 and osu685
+  2023/2025; 30 fitted channels with their geometry and raw-reference
+  variants) the loops rejected 0.1-6.9% of the pairs and such profiles held at
+  most 12.7% of the rejections, so it fires on none. Their
+  orders, lags, pair counts and fitted ranges are unchanged and every curve
+  moves by at most 0.16 mK (osu684 2025 T1 at the range end; 0.10 mK on the
+  VMPs; median 0.008 mK); the chosen order's held-out score moves by
+  −2.6..+5.3% (median |0.2|%; +5.3% is ARCTERX-2022 Wake T2). Every
+  channel's console log has a new line with the rejection counts. The joint
+  fit still never judges pairs without a reference gradient, so with
+  `fit.geometry: true` the bimodal synthetic is still refused, by those.
 - **`fp07-cal` on a VMP against its own JAC CT (#238).** Six defects found
   fitting VMP beads against the instrument's own reference. On three glider
   deployments (osu684 2023/2025, osu685 2025) the coefficients, chosen

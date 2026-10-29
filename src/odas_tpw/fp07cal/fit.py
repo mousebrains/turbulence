@@ -178,11 +178,17 @@ def fit_calibration(
         if not robust:
             break
         resid = y - _design(u, d_order) @ coeffs_u
-        mad = float(np.median(np.abs(resid[keep] - np.median(resid[keep]))))
+        middle = float(np.median(resid[keep]))
+        mad = float(np.median(np.abs(resid[keep] - middle)))
         sigma = 1.4826 * mad
         if sigma <= 0 or not np.isfinite(sigma):
             break
-        new_keep = np.abs(resid) <= robust_sigma * sigma
+        # About the median, the center sigma is measured from, not about zero
+        # (issue #246). Least squares puts zero at the MEAN residual, which a
+        # minority offset by many sigma drags off the majority: every pair then
+        # lay beyond 4 sigma of zero, nothing was rejected, and the channel was
+        # refused at the 1 K gate instead of flagging the minority.
+        new_keep = np.abs(resid - middle) <= robust_sigma * sigma
         if new_keep.sum() < n_poly + 1 or np.array_equal(new_keep, keep):
             break
         keep = new_keep

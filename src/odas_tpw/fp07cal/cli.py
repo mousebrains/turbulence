@@ -478,6 +478,78 @@ def _outlier_warning(b: dict) -> str:
     )
 
 
+# When the robust loop rejects a second POPULATION rather than a tail (issue
+# #246). Judged about the median, it takes any minority offset by more than
+# 4 sigma out whole, however small the offset: 40% of a reference 50 mK off is
+# left out of the fit AND of the stability blocks, where before it was averaged
+# in (rms 24 mK) and its step showed in the block table. Measured on 11 real
+# deployments (7 VMP, 4 glider; 30 fitted channels with their variants):
+# 0.1-6.9% of the pairs rejected, and the profiles that lost more than half
+# their pairs (0-7 of them) held at most 12.7% of the rejections. A synthetic
+# minority of 5-40% put 83-100% of the rejections in such profiles.
+MAX_REJECTED_FRACTION = 0.15
+"""Warn when the robust fit rejects more than this fraction of the pairs it judged."""
+WHOLE_PROFILE_SHARE = 0.5
+"""... or when profiles that lost more than half their pairs hold at least this share."""
+
+
+def _robust_rejection(pairs, fit) -> dict:
+    """What the robust fit rejected, and how much of it came as whole profiles."""
+    outlier = (fit.outlier if fit.outlier.size == len(pairs)
+               else np.zeros(len(pairs), dtype=bool))
+    kept = fit.kept if fit.kept.size == len(pairs) else ~outlier
+    judged = kept | outlier
+    uid = np.asarray(pairs.profile_uid, dtype=object)
+    u, inv = np.unique(uid[judged], return_inverse=True)
+    n_prof = np.bincount(inv, minlength=u.size)
+    n_rej = np.bincount(inv, weights=outlier[judged].astype(np.float64), minlength=u.size)
+    mostly = n_rej > 0.5 * n_prof
+    whole = np.zeros(len(pairs), dtype=bool)
+    whole[np.flatnonzero(judged)[mostly[inv]]] = True
+    files: dict[str, int] = {}
+    for f in np.asarray(pairs.file_label, dtype=object)[outlier]:
+        files[str(f)] = files.get(str(f), 0) + 1
+    n = int(outlier.sum())
+    t = np.asarray(pairs.time, dtype=np.float64)
+    return {
+        "n_rejected": n,
+        "n_judged": int(judged.sum()),
+        "fraction": float(n / max(1, int(judged.sum()))),
+        "n_profiles": int(u.size),
+        "n_profiles_mostly_rejected": int(mostly.sum()),
+        "share_in_those_profiles": float(n_rej[mostly].sum() / n) if n else 0.0,
+        "first": float(t[whole].min()) if whole.any() else None,
+        "last": float(t[whole].max()) if whole.any() else None,
+        "files": dict(sorted(files.items(), key=lambda kv: -kv[1])[:5]),
+    }
+
+
+def _population_warning(rr: dict) -> str | None:
+    """The WARNING for a rejected population, or None for an ordinary tail."""
+    if not (rr["fraction"] > MAX_REJECTED_FRACTION
+            or (rr["n_profiles_mostly_rejected"]
+                and rr["share_in_those_profiles"] >= WHOLE_PROFILE_SHARE)):
+        return None
+    from datetime import UTC, datetime
+
+    def iso(x: float) -> str:
+        return datetime.fromtimestamp(x, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    where = ""
+    if rr["first"] is not None:
+        where = (f", {rr['n_profiles_mostly_rejected']} of {rr['n_profiles']} profiles "
+                 f"lost more than half their pairs ({100 * rr['share_in_those_profiles']:.0f}% "
+                 f"of the rejections, {iso(rr['first'])} .. {iso(rr['last'])})")
+    return (
+        f"the robust fit rejected {rr['n_rejected']} of {rr['n_judged']} pairs "
+        f"({100 * rr['fraction']:.1f}%){where}, most in "
+        + ", ".join(f"{k} ({v})" for k, v in rr["files"].items())
+        + ". That is a second population, not a tail: a reference or bead episode that "
+        "is left out of the fit and of the stability blocks, so neither shows it. "
+        "Check those pairs before trusting either"
+    )
+
+
 def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool = True) -> dict:
     """Lag -> pairs -> fit -> stability -> report, for each requested channel.
 
@@ -738,6 +810,16 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             extra["outliers_beyond_gate"] = beyond
             warnings.append(_outlier_warning(beyond))
             print(f"  {ch}: WARNING {_outlier_warning(beyond)}", file=sys.stderr)
+        rr = _robust_rejection(pairs, fit)
+        print(f"  {ch}: robust fit rejected {rr['n_rejected']} of {rr['n_judged']} pairs "
+              f"({100 * rr['fraction']:.2f}%); {rr['n_profiles_mostly_rejected']} of "
+              f"{rr['n_profiles']} profiles lost more than half, holding "
+              f"{100 * rr['share_in_those_profiles']:.1f}% of the rejections")
+        population = _population_warning(rr)
+        if population is not None:
+            extra["robust_rejection"] = rr
+            warnings.append(population)
+            print(f"  {ch}: WARNING {population}", file=sys.stderr)
 
         blocks = blocked_offsets(
             pairs, fit,

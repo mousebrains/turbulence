@@ -432,11 +432,13 @@ def joint_fit(
             break
         full = np.column_stack([_design(u, d_order), extra])
         resid = y - full @ coef
-        mad = float(np.median(np.abs(resid[keep] - np.median(resid[keep]))))
+        middle = float(np.median(resid[keep]))
+        mad = float(np.median(np.abs(resid[keep] - middle)))
         sigma = 1.4826 * mad
         if sigma <= 0 or not np.isfinite(sigma):
             break
-        new_keep = usable & (np.abs(resid) <= robust_sigma * sigma)
+        # About the median, as fit_calibration's loop (issue #246).
+        new_keep = usable & (np.abs(resid - middle) <= robust_sigma * sigma)
         if new_keep.sum() < n_poly + 3 or np.array_equal(new_keep, keep):
             break
         keep = new_keep
