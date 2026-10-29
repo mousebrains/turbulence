@@ -425,7 +425,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   rebuilt record in ARC1A046) 250 and 244 counts were blanked, 16 and 15
   kernels touched them, all outside the descents already, and the fit is the
   same pairs and the same curve to 1e-8 mK. The runbook's VMP reference
-  recipe (§8) blanks `JAC_T` and `P` the same way.
+  recipe (§8) blanks `JAC_T` and `P` the same way, through
+  `fp07cal.series.bad_buffer_mask`, which folds `P_dP`'s dilated mask into
+  `P`'s as chi does. A rebuilt record slot stays local because PFile
+  interpolates it before deconvolving; an RDL marker run (the sentinel, left
+  in place) on a thermistor or its pre-emphasised partner moves the
+  deconvolution's two whole-file regressions (issue #259, PFile's to fix): 64
+  sentinels injected into SN479_0006 moved `T1` by -8..+57 mK (in `T1_dT1`)
+  and -234..-64 mK (in `T1`), 5-95%, more than 20 s away and linearly in T,
+  where the local mask had reported them blanked. Such a channel is now left
+  out of that file whole rather than repaired a second way in fp07cal (one
+  file of a pooled fit), named in `ProbeSeries.bad_buffer_dropped`, the
+  record's `n_files_dropped`/`files_dropped`, the note and the streaming
+  pass's `bad_buffer_files_dropped`. None of 2248 glider and ARCTERX-2022
+  Wake files has a thermistor marker run (osu685 2023: U_EM in 22), so no
+  fit here changes. Not covered: a v6.0 file's records flagged in header
+  word 16, which PFile only warns about and does not report, are still
+  paired.
 - **`fp07-cal registry add` gave a bead the run's time span (#249).** A
   record carried one span, the run's, so a bead that stopped giving pairs
   before the run ended was entered with the run's `last` and file count:

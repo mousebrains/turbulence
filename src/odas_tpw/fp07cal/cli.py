@@ -481,12 +481,21 @@ def _channel_span(probes, pairs, fit) -> dict:
 
 
 def _bad_buffer_note(s: dict) -> str:
+    whole = ""
+    if s.get("n_files_dropped"):
+        whole = (
+            f" In {s['n_files_dropped']} of those file(s) an RDL marker run fell on this "
+            f"thermistor or its pre-emphasised partner, which PFile's deconvolution smears "
+            f"over the whole file (issue #259), so the channel was left out of each such "
+            f"file whole: {', '.join(s['files_dropped'])}."
+        )
     return (
-        f"{s['n_samples']} thermistor count(s) in {s['n_files']} file(s) were RDL bad "
-        f"buffers or record slots a framing repair rebuilt (PFile.bad_buffer_report), with "
-        f"the deconvolution's smear after them, as chi masks them. They were set to NaN, "
-        f"not paired: invented values are not calibration data (issue #248). The pairs "
-        f"they cost are counted under `thermistor_gap`."
+        f"{s['n_samples']} thermistor count(s) in {s['n_files']} file(s) were set to NaN, "
+        f"not paired: samples PFile reports as RDL bad buffers or as record slots a framing "
+        f"repair rebuilt (PFile.bad_buffer_report), with the deconvolution's local smear "
+        f"after them, as chi masks them (issue #248).{whole} The pairs they cost are "
+        f"counted under `thermistor_gap`. A v6.0 file's records flagged in header word 16 "
+        f"are not in that report and are still paired."
     )
 
 
@@ -680,10 +689,15 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
         blanked = {p.label: n for p in probes
                    if (n := int((getattr(p, "bad_buffer", None) or {}).get(ch, 0)))}
         if blanked:
+            whole = sorted(p.label for p in probes
+                           if ch in (getattr(p, "bad_buffer_dropped", None) or []))
             extra["bad_buffer_samples"] = {
                 "n_samples": sum(blanked.values()),
                 "n_files": len(blanked),
                 "files": sorted(blanked)[:20],
+                # left out whole: a marker run smears the deconvolution file-wide
+                **({"n_files_dropped": len(whole), "files_dropped": whole[:20]}
+                   if whole else {}),
             }
             notes.append(_bad_buffer_note(extra["bad_buffer_samples"]))
             print(f"  {ch}: NOTE {notes[-1]}")
@@ -1221,6 +1235,7 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
 
     recs: dict[str, list] = {ch: [] for ch in model}
     blanked: dict[str, int] = {ch: 0 for ch in model}
+    dropped: dict[str, int] = {ch: 0 for ch in model}
     n_files = 0
     failures: list[tuple[str, str]] = []
     for probe in _stream(paths, _profile_kwargs(cfg), failures):
@@ -1229,6 +1244,7 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
             if ch not in probe.counts:
                 continue
             blanked[ch] += int((getattr(probe, "bad_buffer", None) or {}).get(ch, 0))
+            dropped[ch] += ch in (getattr(probe, "bad_buffer_dropped", None) or [])
             ps = build_pairs(probe, ref, ch, lag=lag, cfg=pc)
             if len(ps) < 100:
                 continue
@@ -1344,6 +1360,8 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
     for ch, n in blanked.items():  # thermistor counts set NaN as bad buffers (#248)
         if n and ch in out["channels"]:
             out["channels"][ch]["bad_buffer_samples"] = n
+            if dropped[ch]:
+                out["channels"][ch]["bad_buffer_files_dropped"] = dropped[ch]
     return out
 
 

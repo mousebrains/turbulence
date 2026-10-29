@@ -297,6 +297,87 @@ def test_the_blanked_samples_are_counted_in_the_record_and_report(tmp_path, monk
     assert out["channels"]["T1"]["bad_buffer_samples"] == 64
 
 
+def _sentinels(raw: bytes, name: str, k: int, n: int = 64) -> bytes:
+    """*n* consecutive samples of channel *name* in data record *k* (0-based) replaced
+    by the RDL bad-buffer sentinel, as a v6.1+ logger writes a missing buffer."""
+    from odas_tpw.rsi.p_file import BAD_BUFFER_SENTINEL
+
+    pf = PFile(VMP_P)
+    endian = ">" if struct.unpack(">64H", raw[:128])[17] == 128 else "<"
+    w = struct.unpack(f"{endian}64H", raw[:128])
+    header, first, record = w[17], w[17] + w[11], w[18]
+    cid = next(int(str(c["id"]).replace(",", " ").split()[0])
+               for c in pf.config["channels"] if c.get("name") == name)
+    n_rows, n_cols = pf.matrix.shape
+    n_mat = (record - header) // 2 // (n_rows * n_cols)
+    rows, cols = np.where(pf.matrix == cid)
+    if np.all(pf.matrix[:, cols[0]] == cid):  # a fast channel: its whole column
+        slots = [(m * n_rows + r) * n_cols + int(cols[0])
+                 for m in range(n_mat) for r in range(n_rows)][n_mat:n_mat + n]
+    else:  # a slow one: its first cell, once per matrix
+        slots = [(m * n_rows + int(rows[0])) * n_cols + int(cols[0]) for m in range(n)]
+    out = bytearray(raw)
+    for j in slots:
+        struct.pack_into(f"{endian}h", out, first + k * record + header + 2 * j,
+                         BAD_BUFFER_SENTINEL)
+    return bytes(out)
+
+
+@pytest.mark.parametrize("name", ["T1_dT1", "T1"])
+def test_a_marker_run_on_a_deconvolved_thermistor_drops_it_from_the_file(
+        name, sn479, tmp_path):
+    """PFile deconvolves T1 from T1 and T1_dT1 with two regressions over the WHOLE
+    file, which one sentinel run moves (#259): injected here, T1 more than 20 s away
+    read -8..+57 mK (in T1_dT1) and -234..-64 mK (in T1), 5-95%. The 3 diff_gain
+    mask removes only the local part, so the channel is left out of the file."""
+    clean = sn479[0]
+    hit_path = tmp_path / "markers.p"
+    hit_path.write_bytes(_sentinels(VMP_P.read_bytes(), name, 200))
+    with pytest.warns(UserWarning, match="bad-buffer markers"):
+        hit = load_probe_series(hit_path, profiles=[], speed_var=None)
+    assert name in PFile(hit_path).bad_buffer_report["confirmed"]
+    assert hit.bad_buffer_dropped == ["T1"]
+    assert np.isnan(hit.counts["T1"]).all() and hit.bad_buffer["T1"] == hit.time.size
+    np.testing.assert_array_equal(hit.counts["T2"], clean.counts["T2"])  # its own pair
+
+
+def test_a_rebuilt_record_stays_local(sn479):
+    """Framing repair interpolates BEFORE the deconvolution: nothing is dropped whole."""
+    assert sn479[1].bad_buffer_dropped == []
+
+
+def test_a_dropped_file_is_named_in_the_record_and_report(tmp_path):
+    probes, ref, _truth = _dep()
+    p = probes[1]
+    p.counts["T1"] = np.full(p.time.size, np.nan)
+    p.bad_buffer, p.bad_buffer_dropped = {"T1": p.time.size}, ["T1"]
+    c = run_calibration(probes, ref, _cfg(), tmp_path, make_figure=False)["channels"]["T1"]
+    b = c["bad_buffer_samples"]
+    assert b["n_files_dropped"] == 1 and b["files_dropped"] == [p.label]
+    assert c["span"]["n_files"] == len(probes) - 1
+    report = (tmp_path / "T1_report.md").read_text(encoding="utf-8")
+    assert "left out of each such file whole" in report and "header word 16" in report
+
+
+def test_the_reference_recipe_masks_pressure_with_its_partner(tmp_path):
+    """Runbook section 8 blanks P where P_dP dropped out too, over the deconvolution's
+    3 diff_gain, as chi masks it; a clean channel gets an all-False mask."""
+    from odas_tpw.fp07cal.series import bad_buffer_mask
+    from odas_tpw.rsi.channels import config_number
+
+    hit = tmp_path / "pdp.p"
+    hit.write_bytes(_sentinels(VMP_P.read_bytes(), "P_dP", 200))
+    with pytest.warns(UserWarning, match="bad-buffer markers"):
+        pf = PFile(hit)
+    gain = config_number(next(c for c in pf.config["channels"] if c.get("name") == "P_dP")
+                         ["diff_gain"], key="diff_gain", channel="P_dP")
+    bad = bad_buffer_mask(pf, "P")
+    start, n = pf.bad_buffer_report["confirmed"]["P_dP"]["spans"][0]
+    run = np.flatnonzero(bad)
+    assert run[0] <= start and run[-1] + 1 >= start + n + round(3 * gain * pf.fs_slow) - 1
+    assert not bad_buffer_mask(pf, "JAC_T").any()
+
+
 # ---------------------------------- #249: each channel's own span in the record
 def _dead_t2(tmp_path):
     """Two beads, four files; T2 on the ADC rail through the last file (as SUNRISE 2021

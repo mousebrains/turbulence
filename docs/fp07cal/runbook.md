@@ -350,7 +350,9 @@ built from the instrument's own samples and a few settings changed.
 **The reference.** Every n-th slow sample of `JAC_T` and `P`, on the
 instrument's own time stamps. A subset is fine; nothing may be interpolated,
 so samples PFile reports as bad buffers (or rebuilt after a framing repair)
-are blanked, and the NaN drops them:
+are blanked, and the NaN drops them. `bad_buffer_mask` is chi's mask, as
+`fp07-cal` uses it for the thermistors: `P` with its pre-emphasised `P_dP`
+folded in and widened over the deconvolution's 3 `diff_gain`:
 
 ```python
 from pathlib import Path
@@ -358,19 +360,17 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from odas_tpw.rsi.bad_buffer import channel_masks
+from odas_tpw.fp07cal.series import bad_buffer_mask
 from odas_tpw.rsi.p_file import PFile
 
 t, T, P = [], [], []
 for path in sorted(Path("VMP").glob("*.p")):
     pf = PFile(path)
     ts = pf.start_time.timestamp() + np.asarray(pf.t_slow, dtype=np.float64)
-    bad = channel_masks(pf)  # per channel, on its own axis; nonzero = not a measurement
 
     def real(name):
         x = np.asarray(pf.channels[name], dtype=np.float64)[: ts.size].copy()
-        if name in bad:
-            x[np.asarray(bad[name][: ts.size]) != 0] = np.nan
+        x[bad_buffer_mask(pf, name)[: ts.size]] = np.nan  # not measurements
         return x[::8]
 
     t.append(ts[::8])
@@ -478,7 +478,17 @@ What then differs from a glider:
   the record's `bad_buffer_samples` and the streaming pass's `per_profile`
   count them. On ARCTERX-2022 Wake, whose ARC1A046 has one rebuilt record,
   250 and 244 counts were blanked and the fit is the same to round-off: the
-  slot lies before the first descent.
+  slot lies before the first descent. A rebuilt slot stays local because
+  PFile interpolates it BEFORE deconvolving; an RDL marker run (the -32753
+  sentinel, left in place) on `T1` or `T1_dT1` instead moves the
+  deconvolution's two whole-file regressions (issue #259): 64 sentinels
+  injected into SN479_0006 moved `T1` by -8..+57 mK (in `T1_dT1`) and
+  -234..-64 mK (in `T1`) more than 20 s away, linearly in T. So that channel
+  is left out of that file whole (`bad_buffer_dropped`; the record's
+  `n_files_dropped`/`files_dropped`). None of 2248 glider and ARCTERX-2022
+  Wake files has such a run (osu685 2023 has U_EM runs in 22). A v6.0 file
+  flags bad records in header word 16 instead, which PFile only warns about
+  and does not report: those records are still paired.
 - **The T1 − T2 check uses this run's fitted coefficients**, one set per
   channel. Each file's embedded set was used before, and where files had been
   patched one by one those differ by several K at fixed L, so `T1 − T2`

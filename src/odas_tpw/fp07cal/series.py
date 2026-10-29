@@ -53,6 +53,8 @@ class ProbeSeries:
     speed: np.ndarray | None = None  # m/s, for the flushing gate
     bad_buffer: dict[str, int] = field(default_factory=dict)
     """Channel -> counts blanked (set NaN) as RDL bad buffers; see :func:`load_probe_series`."""
+    bad_buffer_dropped: list[str] = field(default_factory=list)
+    """Channels blanked WHOLE in this file: a marker run smears their deconvolution file-wide."""
 
     @property
     def fs(self) -> float:
@@ -332,8 +334,12 @@ def load_probe_series(
     (issue #248), so ``pairs`` drops every kernel they touch (#238's gap
     path).  The mask is chi's per-thermistor one
     (:func:`odas_tpw.rsi.bad_buffer.probe_masks` on the channel's own
-    ``T*`` / ``T*_dT*`` reports, dilated over the deconvolution's smear).
-    ``bad_buffer`` counts what was blanked, per channel.
+    ``T*`` / ``T*_dT*`` reports, dilated over the deconvolution's local
+    smear).  A marker run on a deconvolved thermistor moves the whole file
+    (:func:`_smeared_file_wide`), so that channel is blanked in full and named
+    in ``bad_buffer_dropped``.  ``bad_buffer`` counts what was blanked, per
+    channel.  A v6.0 file's records flagged in header word 16 are not in the
+    report (PFile only warns), so they are not blanked.
     """
     from odas_tpw.rsi.p_file import PFile
 
@@ -355,6 +361,7 @@ def load_probe_series(
     beta_key: dict[str, str] = {}
     probe_sn: dict[str, str] = {}
     bad_buffer: dict[str, int] = {}
+    dropped: list[str] = []
     ratio = max(1, round(float(pf.fs_fast) / float(pf.fs_slow)))
     for name in wanted:
         if name not in pf.channels_raw or name not in by_name:
@@ -367,6 +374,9 @@ def load_probe_series(
             else np.pad(raw, (0, n - raw.size), constant_values=np.nan)
         )
         bad = _bad_buffer_mask(pf, name, by_name, n, ratio)
+        if bad is not None and _smeared_file_wide(pf, name):
+            bad = np.ones(n, dtype=bool)
+            dropped.append(name)
         if bad is not None:
             blank = bad & np.isfinite(counts[name])
             if blank.any():
@@ -425,13 +435,28 @@ def load_probe_series(
         probe_sn=probe_sn,
         speed=speed,
         bad_buffer=bad_buffer,
+        bad_buffer_dropped=dropped,
     )
+
+
+def bad_buffer_mask(pf: Any, name: str) -> np.ndarray:
+    """Channel *name*'s slow samples that PFile reports as bad buffers, masked as chi does.
+
+    For a reference built from the instrument's own channels (runbook section 8):
+    ``JAC_T`` as itself, ``P`` with its pre-emphasised ``P_dP`` folded in and
+    widened over the deconvolution's 3 ``diff_gain``.  True = not a measurement.
+    """
+    by_name = {str(c.get("name", "")).strip(): dict(c) for c in pf.config["channels"]}
+    n = len(pf.t_slow)
+    ratio = max(1, round(float(pf.fs_fast) / float(pf.fs_slow)))
+    bad = _bad_buffer_mask(pf, name, by_name, n, ratio)
+    return np.zeros(n, dtype=bool) if bad is None else bad
 
 
 def _bad_buffer_mask(
     pf: Any, name: str, by_name: dict[str, dict], n: int, ratio: int
 ) -> np.ndarray | None:
-    """Thermistor *name*'s bad-buffer samples on the slow grid, or None when it has none.
+    """Channel *name*'s bad-buffer samples on the slow grid, or None when it has none.
 
     The definition is chi's (:func:`odas_tpw.rsi.bad_buffer.probe_masks`), not a
     second one: the channel chi would read for this bead (``T1_dT1`` when the
@@ -465,3 +490,35 @@ def _bad_buffer_mask(
     bad = np.asarray(fast[0][::ratio] != 0)
     bad = bad[:n] if bad.size >= n else np.pad(bad, (0, n - bad.size))
     return bad if bad.any() else None
+
+
+def _smeared_file_wide(pf: Any, name: str) -> bool:
+    """Does an RDL marker run reach thermistor *name* through its deconvolution?
+
+    PFile leaves a marker (the -32753 sentinel) in place and deconvolves
+    ``T1`` from ``T1`` and ``T1_dT1`` with two regressions over the WHOLE
+    file, which one such run moves: 64 sentinels injected into SN479_0006
+    moved ``T1`` more than 20 s from the run by -8..+57 mK (5-95%, in
+    ``T1_dT1``) and -234..-64 mK (in ``T1``), linearly in T, where the
+    3 ``diff_gain`` mask reaches only the local part (issue #259 fixes it in
+    PFile).  So the channel is left out of that file whole rather than
+    repaired here a second way.  Record slots a framing repair rebuilt are
+    interpolated BEFORE the deconvolution and stay local; a thermistor with no
+    pre-emphasised partner is not deconvolved.
+    """
+    found = (getattr(pf, "bad_buffer_report", None) or {}).get("confirmed") or {}
+    partner = f"{name}_d{name}"
+    if partner not in pf.channels:
+        return False
+    spr = int(getattr(pf, "samples_per_record", 0) or 0)
+    slots = (getattr(pf, "framing_report", None) or {}).get("rebuilt_slots") or []
+    for ch in (name, partner):
+        entry = found.get(ch)
+        if not entry:
+            continue
+        per = spr if str(entry.get("rate", "slow")) == "fast" else spr // max(1, int(pf.n_rows))
+        rebuilt = [(a * per, (a + k) * per) for a, k in slots]
+        for start, length in entry.get("spans") or []:
+            if not any(lo <= start and start + length <= hi for lo, hi in rebuilt):
+                return True  # not (only) a rebuilt slot: a marker run
+    return False
