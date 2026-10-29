@@ -84,9 +84,12 @@ Writes `coefficients.json`, a per-channel `*_report.md`, and diagnostics PNGs.
   left out of the stability blocks too, so a `WARNING` and the record's
   `robust_rejection` say when the loop rejected a population rather than a
   tail: more than 15% of the pairs, or at least half of the rejections in
-  profiles that each lost more than half their pairs (11 real deployments: at
-  most 6.9% and 12.7%). Look at those times before trusting the fit or its
-  stability. Nor do rejected pairs set the fitted range (the report's "do NOT
+  profiles that each lost more than half their pairs, when those hold at least
+  0.5% of the pairs (11 real deployments: at most 7.5%, 12.7% and 0.44%). Look
+  at those times before trusting the fit or its stability. With the geometry
+  term the loop also judges the pairs it cannot fit for want of a reference
+  gradient (profile ends, short profiles), by the calibration's residual, so a
+  population is flagged there too. Nor do rejected pairs set the fitted range (the report's "do NOT
   extrapolate" line, the record's `T_range`, `patch`'s extrapolation warning)
   or the warm/cold folds that choose the order: pairs every order rejects are
   left out of those. A fit that is not an FP07 curve is refused with

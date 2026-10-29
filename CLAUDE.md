@@ -169,7 +169,9 @@ Facts that are easy to get wrong:
   or at 50 mK, and so drops out of the stability blocks too: a `WARNING` and
   the record's `robust_rejection` mark a rejected POPULATION (> 15% of the
   pairs, or >= half the rejections in profiles that lost over half their
-  pairs). On 11 real deployments: at most 6.9% and 12.7%.
+  pairs, holding >= 0.5% of all). On 11 real deployments: at most 7.5%, 12.7%
+  and 0.44%. The joint geometry fit judges the pairs it cannot fit (no
+  reference gradient) too, or a population there refused the channel.
 - **Bad-buffer thermistor counts are blanked, not paired** (#248). PFile
   reports bad buffers (and framing-repair slots) but leaves the values;
   `load_probe_series` sets to NaN what chi's per-thermistor mask marks

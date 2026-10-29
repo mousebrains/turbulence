@@ -85,17 +85,38 @@ def test_the_joint_loop_rejects_a_minority_about_the_median():
     assert fit.config_equivalent["t_0"] == pytest.approx(truth["t_0"], abs=1e-3)
 
 
-def test_a_bimodal_reference_flags_the_minority_and_exports(tmp_path):
-    """Issue #246's acceptance case: main refused it (1.80 K on the pairs it kept)."""
+def test_the_joint_loop_judges_the_pairs_it_does_not_fit():
+    """Pairs with no reference gradient stay out of the fit set but are judged, by
+    the calibration's residual: unjudged, they refused the channel at the 1 K gate."""
+    pairs, minority, _truth = _bimodal_pairs()
+    g = local_dTdz(pairs)
+    has = np.isfinite(g)
+    assert (~has & minority).sum() > 100  # the profile ends of the offset population
+    fit, _geo = joint_fit(pairs, order=1, dTdz=g)
+    assert not fit.kept[~has].any()  # still not fitted
+    assert fit.outlier[minority].all()  # gradient or not
+    assert fit.outlier[~minority].sum() <= 2
+    # ...and the fit set, so every coefficient, is what it was.
+    alone, _ = joint_fit(_subset(pairs, has), order=1, dTdz=g[has])
+    np.testing.assert_array_equal(fit.coeffs, alone.coeffs)
+    np.testing.assert_array_equal(fit.outlier[has], alone.outlier)
+
+
+@pytest.mark.parametrize("geometry", [False, True])
+@pytest.mark.parametrize("share", [0.15, 0.30])
+def test_a_bimodal_reference_flags_the_minority_and_exports(share, geometry, tmp_path):
+    """Issue #246's acceptance case: main refused it (1.80 K on the pairs it kept),
+    and with the geometry term (the default) so did the first fix (2.01 K)."""
     probes, ref, truth = _dep()
-    off = ref.time > np.quantile(ref.time, 0.85)
+    off = ref.time > np.quantile(ref.time, 1.0 - share)
     ref.value[off] += 2.0
-    c = run_calibration(probes, ref, _cfg(), tmp_path, make_figure=False)["channels"]["T1"]
+    c = run_calibration(probes, ref, _cfg(geometry=geometry), tmp_path,
+                        make_figure=False)["channels"]["T1"]
     assert "config_equivalent" in c, c
     assert c["config_equivalent"]["t_0"] == pytest.approx(truth["t_0"], abs=1e-3)
     assert c["config_equivalent"]["beta_1"] == pytest.approx(truth["beta_1"], rel=1e-3)
     beyond = c["outliers_beyond_gate"]
-    assert beyond["n"] > 0.14 * c["n_pairs"]  # the 15% minority, flagged
+    assert beyond["n"] > (share - 0.01) * c["n_pairs"]  # the minority, flagged
     assert beyond["max_error_K"] == pytest.approx(2.0, abs=0.05)
 
 
@@ -135,13 +156,18 @@ def test_the_population_rule_needs_a_fraction_or_whole_profiles():
 
     base = {"n_rejected": 50, "n_judged": 1000, "n_profiles": 20, "first": 1.7e9,
             "last": 1.7e9 + 600.0, "files": {"a.p": 50}}
-    tail = {**base, "fraction": 0.069, "n_profiles_mostly_rejected": 7,
-            "share_in_those_profiles": 0.127}  # the worst of 23 real channels, each way
+    tail = {**base, "fraction": 0.069, "n_profiles_mostly_rejected": 7,  # the worst real
+            "share_in_those_profiles": 0.127, "whole_profile_fraction": 0.0043}
     assert _population_warning(tail) is None
     assert _population_warning({**tail, "fraction": MAX_REJECTED_FRACTION + 0.01})
-    assert _population_warning({**tail, "share_in_those_profiles": 0.5})
+    assert _population_warning({**tail, "share_in_those_profiles": 0.5,
+                                "whole_profile_fraction": 0.005})
     assert _population_warning({**tail, "n_profiles_mostly_rejected": 0,
                                 "share_in_those_profiles": 0.0, "first": None}) is None
+    # One rejected pair in a one-pair profile: all of the rejections, but no population.
+    one = {**base, "n_rejected": 1, "fraction": 1e-5, "n_profiles_mostly_rejected": 1,
+           "share_in_those_profiles": 1.0, "whole_profile_fraction": 1e-5}
+    assert _population_warning(one) is None
 
 
 # ------------------------------- #247: a slope no FP07 has, without a prior

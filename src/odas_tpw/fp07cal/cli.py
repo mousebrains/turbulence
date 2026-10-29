@@ -532,6 +532,9 @@ MAX_REJECTED_FRACTION = 0.15
 """Warn when the robust fit rejects more than this fraction of the pairs it judged."""
 WHOLE_PROFILE_SHARE = 0.5
 """... or when profiles that lost more than half their pairs hold at least this share."""
+WHOLE_PROFILE_MIN_FRACTION = 0.005
+"""... and at least this fraction of every pair judged: one rejected pair in a one-pair
+profile is not a population. (Real data: at most 0.43%, in one profile.)"""
 
 
 def _robust_rejection(pairs, fit) -> dict:
@@ -539,7 +542,12 @@ def _robust_rejection(pairs, fit) -> dict:
     outlier = (fit.outlier if fit.outlier.size == len(pairs)
                else np.zeros(len(pairs), dtype=bool))
     kept = fit.kept if fit.kept.size == len(pairs) else ~outlier
-    judged = kept | outlier
+    # Every pair the loop judged: the joint fit judges pairs it does not fit.
+    judged = kept | outlier | (
+        np.isfinite(np.asarray(pairs.L, dtype=np.float64))
+        & np.isfinite(np.asarray(pairs.T_ref, dtype=np.float64))
+        & np.isfinite(np.asarray(pairs.w, dtype=np.float64))
+    )
     uid = np.asarray(pairs.profile_uid, dtype=object)
     u, inv = np.unique(uid[judged], return_inverse=True)
     n_prof = np.bincount(inv, minlength=u.size)
@@ -559,6 +567,7 @@ def _robust_rejection(pairs, fit) -> dict:
         "n_profiles": int(u.size),
         "n_profiles_mostly_rejected": int(mostly.sum()),
         "share_in_those_profiles": float(n_rej[mostly].sum() / n) if n else 0.0,
+        "whole_profile_fraction": float(n_rej[mostly].sum() / max(1, int(judged.sum()))),
         "first": float(t[whole].min()) if whole.any() else None,
         "last": float(t[whole].max()) if whole.any() else None,
         "files": dict(sorted(files.items(), key=lambda kv: -kv[1])[:5]),
@@ -569,7 +578,8 @@ def _population_warning(rr: dict) -> str | None:
     """The WARNING for a rejected population, or None for an ordinary tail."""
     if not (rr["fraction"] > MAX_REJECTED_FRACTION
             or (rr["n_profiles_mostly_rejected"]
-                and rr["share_in_those_profiles"] >= WHOLE_PROFILE_SHARE)):
+                and rr["share_in_those_profiles"] >= WHOLE_PROFILE_SHARE
+                and rr["whole_profile_fraction"] >= WHOLE_PROFILE_MIN_FRACTION)):
         return None
     from datetime import UTC, datetime
 

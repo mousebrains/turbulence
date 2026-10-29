@@ -421,6 +421,14 @@ def joint_fit(
         np.std(extra_raw[usable, k]) or 1.0 for k in range(extra_raw.shape[1])
     ])
     extra = extra_raw / extra_scale
+    # Pairs with no reference gradient are left out of the fit, but the export
+    # gate judges them, so the robust loop must too: their geometry columns are
+    # zero (g_eff), so their residual is the calibration's. Unjudged, a minority
+    # population offset by 2 K refused the channel at the 1 K gate through its
+    # pairs at the profile ends (issue #246 review). Only the outlier mask
+    # changes; the fit set, and so every coefficient, does not.
+    finite = np.isfinite(L_all) & np.isfinite(T_all) & np.isfinite(w_all)
+    inside = finite.copy()  # within the clip, as last judged
     keep = usable.copy()
     coef = np.zeros(n_poly + 2)
     cond = float("nan")
@@ -438,8 +446,12 @@ def joint_fit(
         if sigma <= 0 or not np.isfinite(sigma):
             break
         # About the median, as fit_calibration's loop (issue #246).
-        new_keep = usable & (np.abs(resid - middle) <= robust_sigma * sigma)
-        if new_keep.sum() < n_poly + 3 or np.array_equal(new_keep, keep):
+        new_inside = finite & (np.abs(resid - middle) <= robust_sigma * sigma)
+        new_keep = usable & new_inside
+        if new_keep.sum() < n_poly + 3:
+            break
+        inside = new_inside
+        if np.array_equal(new_keep, keep):
             break
         keep = new_keep
     else:
@@ -508,7 +520,7 @@ def joint_fit(
         T_range=(float(np.min(T_all[keep])), float(np.max(T_all[keep]))),
         L_range=(float(np.min(L_all[keep])), float(np.max(L_all[keep]))),
         dive_climb_split_K=split, channel=pairs.channel, lag=pairs.lag,
-        corr=pairs.corr, kept=keep, outlier=usable & ~keep,
+        corr=pairs.corr, kept=keep, outlier=finite & ~inside,
         fixed_terms=None if fixed_terms is None else {
             k: float(fixed_terms[k]) for k in _BETA_KEYS if k in fixed_terms
         },

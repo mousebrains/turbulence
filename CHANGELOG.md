@@ -366,19 +366,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   table. So a new `WARNING`, and the record's `robust_rejection`, say when the
   loop rejected a population rather than a tail: more than 15% of the pairs,
   or at least half of the rejections in profiles that lost more than half
-  their pairs (with those profiles' time span and the files). On 11 real
-  deployments (SUNRISE 2019-2022, ARCTERX-2022 Interior and Wake, ARCTERX-2025
-  Interior SN142, and the glider fits of osu684 2023/2025 and osu685
-  2023/2025; 30 fitted channels with their geometry and raw-reference
-  variants) the loops rejected 0.1-6.9% of the pairs and such profiles held at
-  most 12.7% of the rejections, so it fires on none. Their
+  their pairs, when those hold at least 0.5% of the pairs judged (one
+  rejected pair in a one-pair profile is not a population), with those
+  profiles' time span and the files. On 11 real deployments (SUNRISE
+  2019-2022, ARCTERX-2022 Interior and Wake, ARCTERX-2025 Interior SN142, and
+  the glider fits of osu684 2023/2025 and osu685 2023/2025; 30 fitted channels
+  with their geometry and raw-reference variants) the loops rejected 0.1-7.5%
+  of the pairs, and such profiles held at most 12.7% of the rejections and
+  0.44% of the pairs, so it fires on none. Their
   orders, lags, pair counts and fitted ranges are unchanged and every curve
   moves by at most 0.16 mK (osu684 2025 T1 at the range end; 0.10 mK on the
   VMPs; median 0.008 mK); the chosen order's held-out score moves by
   −2.6..+5.3% (median |0.2|%; +5.3% is ARCTERX-2022 Wake T2). Every
   channel's console log has a new line with the rejection counts. The joint
-  fit still never judges pairs without a reference gradient, so with
-  `fit.geometry: true` the bimodal synthetic is still refused, by those.
+  geometry fit (`fit.geometry: true`, the template default) also judges the
+  pairs it leaves out of its fit set for want of a reference gradient, by the
+  calibration's residual (their geometry columns are zero): unjudged, they
+  were neither kept nor outliers, the 1 K gate counted them, and the bimodal
+  synthetic was still refused through them (2.01 K, at 15% and 30%). Its fit
+  set and so every coefficient are unchanged; on the five glider fits (all
+  with geometry) those pairs now join the rejected and the fold screen, which
+  moves the chosen order's held-out score by −8.6..−0.3% (osu684 2025 T2:
+  17.5 → 16.0 mK) and no order. Unscreened osu685 2023 T1, refused at 32.7 K
+  before, now exports with the 2248 pairs of its failed files beyond 1 K
+  flagged (worst 35.4 K, A685_0620), within ±0.055 mK of the screened fit the
+  sheet's T2244 entry came from; its dead T2 is still refused.
 - **`fp07-cal fit` without a prior exported a fit to isothermal noise with a
   slope no FP07 has (#247).** #238 refuses a curve that is not NTC over its own
   range; that is necessary, not sufficient. Over isothermal synthetic water 18

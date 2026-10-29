@@ -49,11 +49,13 @@ class FitResult:
     corr: float = float("nan")
     kept: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=bool))
     outlier: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=bool))
-    """Pairs the robust loop REJECTED: in the design, but beyond ``robust_sigma``.
+    """Pairs the robust loop REJECTED: beyond ``robust_sigma`` of the median residual.
 
-    Not simply ``~kept``: the joint geometry fit also leaves out pairs with no
-    reference gradient, which it never judged.  The export gate is evaluated
-    over every pair but these (issue #238).
+    Not simply ``~kept``: the joint geometry fit leaves pairs with no reference
+    gradient out of its fit set, but still judges them, by the calibration's
+    residual (issue #246), so one of them is neither kept nor an outlier when
+    it lies within the clip.  The export gate is evaluated over every pair but
+    these (issue #238).
     """
     fixed_terms: dict[str, float] | None = None
     """The ``beta`` terms when the shape was HELD FIXED and only ``t_0`` fitted.
