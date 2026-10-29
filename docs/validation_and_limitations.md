@@ -113,6 +113,56 @@ path, which is the same in both.
 
 Report an absolute systematic of order **1.5x**.
 
+### The Kraichnan constant q is a second systematic
+
+Every chi product fits the Kraichnan spectrum with `q_K = 5.26`, a forced,
+unstratified DNS value
+([Bogucki et al. 1997](https://doi.org/10.1017/S0022112097005727)). The pool
+experiment often cited beside it
+([Bogucki et al. 2012](https://doi.org/10.1175/JPO-D-11-0214.1)) imposed 5.26
+rather than measuring it: its shear data were not usable (angle of attack
+~10 degrees). Estimates in stratified
+flow run 7.3-9.9: 7.3 +- 0.4 in sheared stratified DNS
+([Smyth 1999](https://doi.org/10.1017/S0022112099006734), as quoted by Bogucki
+et al. 2012) and, with epsilon fixed from shear probes, a geometric mean of 7.5
+(arithmetic 8.54;
+[Nash & Moum 2002](https://doi.org/10.1175/1520-0485(2002)032%3C2312:MEOTSF%3E2.0.CO;2))
+and 7.9 +- 2.5 at Cox number >= 50, 9.9 +- 2.4 over all segments
+([Sanchez et al. 2011](https://doi.org/10.1175/JPO-D-11-025.1)). Decaying DNS
+gives 3.4 ([Antonia & Orlandi 2003](https://doi.org/10.1063/1.1577346)). No
+value has been established for the water we sample, so q is an unpriced
+systematic ([issue #179](https://github.com/mousebrains/turbulence/issues/179))
+and is not part of the 1.5x above. Its effect depends on the method:
+
+- **Method 1** (`kB` from shear epsilon) fits the spectrum's level with `kB`
+  held, so a q error moves chi. If the water's `q_K` were 3.4 or 9.9, chi
+  analyzed at 5.26 would be about 20% low or up to 45% high: an elasticity
+  `d ln(chi) / d ln(q)` of 0.3-0.6, larger at large `kB`, where more of the
+  band lies below the spectral peak and the model's level there is
+  proportional to `q * chi`.
+- **Method 2** cannot see q. The Kraichnan shape depends on `kB` and `q` only
+  through `kB / sqrt(6 q)`, so for a temperature-spectrum fit "epsilon too
+  high" and "q too small" are one hypothesis
+  ([issue #256](https://github.com/mousebrains/turbulence/issues/256)). The
+  fitted `kB` absorbs the error: chi is nearly unchanged and epsilon_T scales
+  as `(5.26/q)^2` (x0.44 at 7.9, x0.28 at 9.9). A comparison of Method-2
+  epsilon with shear epsilon tests q and the FP07 response together.
+
+These are **simulation results**, not measurements of q: expected-value
+(scatter-free) Kraichnan spectra generated at `q_K` = 3.4, 5.26, 7.9 and 9.9,
+attenuated by the default `lueck` response at 0.7 m/s plus the electronics
+noise model (`nu` 1.2e-6, 1-s FFTs at 512 Hz), and analyzed at 5.26 by this
+package's Method 1 and iterative Method 2 (2026-10-29). Over epsilon 1e-9 to
+1e-7 W/kg, Method-1 chi was 0.76-0.84 of the truth at `q_K` 3.4 and 1.23-1.45
+at 9.9 (0.998-0.999 at 5.26). At epsilon <= 1e-8, Method-2 chi stayed within
+3% of its value at 5.26 and epsilon_T within 6% of `(5.26/q)^2`; at 1e-7 that
+speed no longer resolves the rolloff and both drift.
+
+The shear-anchored FP07 time constants in the literature (Goto et al. 2016,
+Ijichi & St. Laurent 2025) were fitted against shear epsilon at `q = 5.26`, so
+they carry this systematic too, along with their fitting method and their
+platform ([chi_mathematics.md](chi_mathematics.md#speed-dependent-time-constant)).
+
 ### `fom` near 1.0 does not mean the spectral fit is good
 
 Chi's figure of merit is the ratio of observed to model variance *integrated*
