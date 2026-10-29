@@ -791,6 +791,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `noise_shearchannel` — and a test probe is documented as reading the config's
   `T_0`, which is ~16 °C only with nominal coefficients.
 
+### Documentation
+- **The Kraichnan constant and published FP07 responses, from the
+  literature.** `q_K = 5.26` is a forced, unstratified DNS value; stratified
+  estimates run 7.3-9.9, and q is now documented as a second unpriced chi
+  systematic (#179, #256), with simulated Method-1 and Method-2 sensitivities
+  (`docs/validation_and_limitations.md`). Shear-anchored FP07 time constants
+  are effective and platform-dependent; Method 2's `k_star` is sourced; band
+  rules bearing on #191 are noted (`docs/chi_mathematics.md`). No code or
+  value changed.
+
 ## [0.4.0] - 2026-09-10
 
 ### Added

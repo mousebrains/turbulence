@@ -32,7 +32,16 @@ from scipy.special import erfc
 # See docs/chi_mathematics.md Section 11.
 KAPPA_T = 1.4e-7
 Q_BATCHELOR = 3.7  # Batchelor universal constant (Oakey 1982)
-Q_KRAICHNAN = 5.26  # Kraichnan universal constant (Bogucki et al. 1997)
+# Kraichnan universal constant. 5.26 is a forced, unstratified DNS value (Bogucki
+# et al. 1997); Bogucki et al. (2012) imposed it on their pool data rather than
+# measuring it. Stratified estimates run 7.3-9.9: sheared stratified DNS 7.3 (Smyth
+# 1999), and against shear epsilon 7.5-8.5 (Nash & Moum 2002) and 7.9 +/- 2.5 at
+# Cox >= 50 (Sanchez et al. 2011; 9.9 +/- 2.4 over all segments). Decaying DNS
+# gives 3.4 (Antonia & Orlandi 2003). q is an unpriced systematic (issue #179),
+# and a temperature-spectrum fit cannot separate it from epsilon: the Kraichnan
+# shape sees kB and q only through kB/sqrt(6q) (issue #256). See
+# docs/validation_and_limitations.md.
+Q_KRAICHNAN = 5.26
 _SQ6Q_KRAICHNAN = np.sqrt(6 * Q_KRAICHNAN)  # Precomputed for kraichnan_grad
 
 

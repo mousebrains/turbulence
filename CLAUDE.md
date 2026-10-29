@@ -424,7 +424,12 @@ python -m pytest tests/test_p_file.py::test_header  # single test
   product: `fp07_tau_scale` is an optional multiplier (default 1, nothing
   fits it), set only by a CASPER-West sensitivity variant. Compare models by
   3-dB frequency, not τ: a double pole rolls off sooner than a single pole
-  with the same τ.
+  with the same τ. Published taus fitted against shear epsilon are EFFECTIVE
+  values at q = 5.26 (Goto et al. 2016: double pole 3 ms on a VMP; Ijichi &
+  St. Laurent 2025, doi:10.1175/JTECH-D-24-0087.1: single pole ~6 ms on a
+  VMP-6000 at 0.67 m/s vs 8 ms·(U/1 m/s)^−½ on Slocum MicroRiders). They absorb
+  q and the fitting method, are all faster than `lueck`, and are not the
+  per-bead pair tau in the calibration sheet.
 - **K_max_ratio**: K_max/K_95 (epsilon) or K_max/kB (chi). Values < 0.5 mean most variance is extrapolated.
 - **Inclinometers**: on a VMP, `Incl_Y` is capped at 90° with **+90° = pointing
   straight down** (so a falling VMP reads Incl_Y ≈ +90). On an MR, `Incl_Y` is
