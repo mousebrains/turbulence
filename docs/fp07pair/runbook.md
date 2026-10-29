@@ -24,7 +24,11 @@ What it does **not** do:
   `docs/fp07_tau_prefactor_PLAN.md`).
   The pair's geometric-mean chi moved by less than 1% on ARCTERX-2022.
 - **It does not remove a flat gain.** The ratio at ~1 Hz (`ln G`) is a
-  calibration or `diff_gain` difference, and nothing says which bead is wrong.
+  calibration or `diff_gain` difference, or a bead response component slower
+  than ~1 Hz, which is flat above its corner. Nothing says which bead is
+  wrong. T2005 (SN194 T2, 2021-2022) has such a component: about 10% of its
+  amplitude through a 130-190 ms path. That is its pairs' `ln G` of -0.27,
+  and the chi products' 0.5-2 s FFTs cannot resolve it (issue #252).
   After correction, `ln(chi2/chi1)` sits at `ln G`, not at 0.
 - **It does not rescue a failing bead.** A failing bead loses microscale
   amplitude, which no response factor models; `|ln G| > ln 2` is refused as
@@ -64,7 +68,7 @@ Read the report before using anything:
 |---|---|
 | segments | Several per deployment is normal (SN 194: 2; SN 428: 2; the osu684 glider: 4). A segment boundary at a known service or swap is a good sign. |
 | `band` | `f_hi` well above 30 Hz. Above `f_hi` the factor is held constant. |
-| `ln G` | Small (<0.2). Large values mean a calibration problem, not response. |
+| `ln G` | Small (<0.2). Large values mean a calibration problem or a slow response component below ~1 Hz (T2005: -0.27, issue #252), which only long-segment spectra separate. |
 | `ln R' at 20 Hz` | The fleet spread is about +/-0.3. `|ln R'| > 0.9` is flagged `outlier`, possibly a failing bead. |
 | per-file mid-band spread | 0.08-0.16 on VMPs. Larger means the ratio is not stable file to file (glider: 0.14-0.29). |
 | REFUSED | A segment with too few files, too short a band, or an amplitude signature. A `*_notapplied.nc` record covers its span (see §4). |
