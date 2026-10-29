@@ -50,8 +50,17 @@ from odas_tpw.rsi.config_patch import (
 )
 from odas_tpw.rsi.p_file import parse_config
 
-SCHEMA = "fp07-cal/1"
-"""The ``schema`` value ``fp07-cal fit`` writes and ``patch`` requires."""
+SCHEMA = "fp07-cal/2"
+"""The ``schema`` value ``fp07-cal fit`` writes.
+
+``/2`` (issue #249) adds each exported channel's own ``span``: ``time_start``,
+``time_end`` and ``n_files`` of the files that gave it a pair its fit kept, and
+``first_pair``/``last_pair``.  Nothing else changed, so ``patch`` and
+``registry add`` read a ``/1`` record as before (:data:`LEGACY_SCHEMAS`).
+"""
+
+LEGACY_SCHEMAS = ("fp07-cal/1",)
+"""Older ``schema`` values still read: the record format changed only by addition."""
 
 AUTHOR = "fp07-cal"
 """Banner author written by :func:`patch_deployment`; what :func:`already_patched` looks for."""
@@ -256,7 +265,7 @@ _REQUIRED_TOP = ("instrument_sn", "channels")
 
 
 def validate_record(record: object) -> dict:
-    """Check that *record* is a complete ``fp07-cal/1`` coefficient record.
+    """Check that *record* is a complete ``fp07-cal/2`` (or ``/1``) coefficient record.
 
     Every safety gate in :func:`build_edits` is a comparison against a field of
     the record, so a record missing that field makes the gate vacuous.  A
@@ -266,7 +275,7 @@ def validate_record(record: object) -> dict:
     if not isinstance(record, dict):
         raise ValueError("coefficient record is not a JSON object")
     schema = record.get("schema")
-    if schema != SCHEMA:
+    if schema != SCHEMA and schema not in LEGACY_SCHEMAS:
         raise ValueError(
             f"coefficient record schema is {schema!r}, expected {SCHEMA!r}; "
             f"this is not an fp07-cal coefficients.json"

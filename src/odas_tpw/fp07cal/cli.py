@@ -22,6 +22,7 @@ from odas_tpw._version_info import add_version_argument, software_version
 from odas_tpw.fp07cal.fit import fit_calibration, outlier_screen, select_order
 from odas_tpw.fp07cal.lag import LagResult, pressure_offset, shares_clock, temperature_lag
 from odas_tpw.fp07cal.pairs import SETTLE_TAUS, PairConfig, build_pairs_multi
+from odas_tpw.fp07cal.patch import SCHEMA as RECORD_SCHEMA
 from odas_tpw.fp07cal.prior import (
     PriorError,
     fp07_slope,
@@ -450,6 +451,35 @@ def _gap_note(s: dict) -> str:
     )
 
 
+def _iso(t: float) -> str:
+    from datetime import UTC, datetime
+
+    return datetime.fromtimestamp(t, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _channel_span(probes, pairs, fit) -> dict:
+    """The files that gave this channel a pair its fit KEPT (issue #249).
+
+    ``time_start``/``time_end`` are the first sample of the first such file and
+    the last of the last, as the run's own span is over every file: the sheet's
+    ``first``/``last`` are spans of files.  A channel whose bead died before the
+    run ended (SUNRISE 2021 Pelican's T1593, on the ADC rail through the last
+    file) gets its own end and file count.  ``first_pair``/``last_pair`` are the
+    kept pairs' own, on the reference's clock.
+    """
+    kept = fit.kept if fit.kept.size == len(pairs) else np.ones(len(pairs), dtype=bool)
+    used = set(np.asarray(pairs.file_label, dtype=object)[kept].tolist())
+    files = [p for p in probes if p.label in used]
+    t = np.asarray(pairs.time, dtype=np.float64)[kept]
+    return {
+        "time_start": float(min(p.time[0] for p in files)),
+        "time_end": float(max(p.time[-1] for p in files)),
+        "n_files": len(files),
+        "first_pair": float(t.min()),
+        "last_pair": float(t.max()),
+    }
+
+
 def _bad_buffer_note(s: dict) -> str:
     return (
         f"{s['n_samples']} thermistor count(s) in {s['n_files']} file(s) were RDL bad "
@@ -606,7 +636,7 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
     clock = (po.lag, po.score)
     print(f"  {po.summary()}")
     results: dict = {
-        "schema": "fp07-cal/1",
+        "schema": RECORD_SCHEMA,
         "software_version": software_version(),
         "clock_offset_s": clock[0],
         "clock_offset_r": clock[1],
@@ -864,6 +894,11 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
         )
         stab = drift_fit(blocks)
         stab.channel = ch
+        own = _channel_span(probes, pairs, fit)
+        if own["n_files"] != len(probes):
+            print(f"  {ch}: pairs kept from {own['n_files']} of {len(probes)} file(s), "
+                  f"{_iso(own['time_start'])} .. {_iso(own['time_end'])}: the sheet's span "
+                  f"for this bead, not the run's")
         reported[ch] = {"pairs": pairs, "fit": fit, "stab": stab, "prior": prior_rec,
                         "notes": notes, "warnings": warnings}
 
@@ -881,6 +916,7 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             ),
             "n_pairs": len(pairs),
             "n_profiles": pairs.n_profiles(),
+            "span": own,
             "order": fit.order,
             "order_selection": {str(k): v for k, v in order_scores.items()},
             "coefficients": fit.coeffs.tolist(),
@@ -1618,6 +1654,10 @@ def _cmd_registry_add(args) -> int:
         print(f"refusing: {exc}", file=sys.stderr)
         return 1
     print(block, end="")
+    if "span" not in (record["channels"].get(args.channel) or {}):
+        print(f"NOTE {rec_path.name} is {record.get('schema')}, from before per-channel spans: "
+              f"first, last and n_files are the run's. If this bead stopped giving pairs "
+              f"before the run ended, correct them (issue #249).", file=sys.stderr)
     if args.dry_run:
         print(f"(dry run: valid against {path}; nothing written)")
     else:

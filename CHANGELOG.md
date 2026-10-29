@@ -414,6 +414,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   kernels touched them, all outside the descents already, and the fit is the
   same pairs and the same curve to 1e-8 mK. The runbook's VMP reference
   recipe (§8) blanks `JAC_T` and `P` the same way.
+- **`fp07-cal registry add` gave a bead the run's time span (#249).** A
+  record carried one span, the run's, so a bead that stopped giving pairs
+  before the run ended was entered with the run's `last` and file count:
+  SUNRISE 2021 Pelican's T1593 (on the ADC rail through SR1P_516) got
+  2021-06-29T10:33Z and 12 files, corrected by hand in #243 to
+  2021-06-28T02:58:43Z and 11. The record is now `schema: fp07-cal/2`: each
+  exported channel carries a `span` (`time_start`, `time_end` and `n_files`
+  of the files that gave it a pair its fit kept, first sample of the first to
+  last of the last, which is the sheet's convention for `first`/`last`; and
+  the kept pairs' own `first_pair`/`last_pair`), and `registry add` uses it.
+  The console says when a channel's files are fewer than the run's. Nothing
+  else in the record changed: `patch` and `registry add` still read an
+  `fp07-cal/1` record, and `registry add` takes the run's span from it, as
+  before, with a NOTE. Refitting SUNRISE 2021 Pelican's first 12 files and
+  adding T2 reproduces #243's corrected entry: first 2021-06-22T01:39:05Z,
+  last 2021-06-28T02:58:43Z, `n_files` 11.
 - **`fp07-cal` on a VMP against its own JAC CT (#238).** Six defects found
   fitting VMP beads against the instrument's own reference. On three glider
   deployments (osu684 2023/2025, osu685 2025) the coefficients, chosen

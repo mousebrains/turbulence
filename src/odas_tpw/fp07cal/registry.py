@@ -2408,6 +2408,37 @@ def _epoch_iso(t: object, where: str) -> str:
     return _iso(datetime.fromtimestamp(float(t), UTC))
 
 
+def channel_span(record: dict, channel: str) -> tuple[str, str, int]:
+    """``(first, last, n_files)`` of *channel* in an ``fp07-cal fit`` record, for the sheet.
+
+    An ``fp07-cal/2`` record carries each channel's own ``span``: the files
+    that gave the channel at least one pair its fit kept, from the first
+    sample of the first to the last sample of the last (issue #249).  That is
+    the sheet's convention for ``first``/``last``, a span of FILES, not of
+    pairs; a channel whose bead died before the run ended gets its own end.
+    An ``fp07-cal/1`` record predates it and has only the run's span and file
+    count, which are what it gives, as before.
+    """
+    from odas_tpw.fp07cal.patch import LEGACY_SCHEMAS
+
+    e = (record.get("channels") or {}).get(channel) or {}
+    span = e.get("span")
+    if span is None:
+        if record.get("schema") not in LEGACY_SCHEMAS:
+            raise AddError(f"{channel}: the record ({record.get('schema')}) has no per-channel "
+                           f"span; was it edited by hand?")
+        return (_epoch_iso(record.get("time_start"), "time_start"),
+                _epoch_iso(record.get("time_end"), "time_end"),
+                int(record.get("n_fit_files") or 0))
+    if not isinstance(span, dict):
+        raise AddError(f"{channel}.span: expected a mapping, got {span!r}")
+    n = span.get("n_files")
+    if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+        raise AddError(f"{channel}.span.n_files: expected a positive integer, got {n!r}")
+    return (_epoch_iso(span.get("time_start"), f"{channel}.span.time_start"),
+            _epoch_iso(span.get("time_end"), f"{channel}.span.time_end"), n)
+
+
 def entry_from_record(
     record: dict,
     channel: str,
@@ -2528,10 +2559,11 @@ def entry_from_record(
     geo = e.get("geometry")
     bridge = {k: float(e["bridge"][k]) for k in BRIDGE_KEYS}
     lo, hi = (float(x) for x in e["T_range"])
+    first, last, n_files = channel_span(record, channel)
     fit: dict[str, Any] = {
         "method": method,
         "pooled": True,
-        "n_files": int(record.get("n_fit_files") or 0),
+        "n_files": n_files,
         "n_profiles": int(e["n_profiles"]),
         "n_pairs": int(e["n_pairs"]),
         "order": order,
@@ -2560,8 +2592,8 @@ def entry_from_record(
         "bead": bead,
         "deployment": " ".join(deployment.split()),
         "instrument": inst_d,
-        "first": _epoch_iso(record.get("time_start"), "time_start"),
-        "last": _epoch_iso(record.get("time_end"), "time_end"),
+        "first": first,
+        "last": last,
         "reference": ref,
         "fit": fit,
         "coefficients": {k: float(v) for k, v in e["config_equivalent"].items()},

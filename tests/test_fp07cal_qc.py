@@ -9,6 +9,8 @@
       slope no FP07 has, and export.
 #248  Thermistor counts PFile reports as bad buffers (or rebuilt by a framing
       repair) reached the calibration as if they were measurements.
+#249  A record carried one time span, the run's, so `registry add` gave a bead
+      that stopped early the run's span and file count.
 """
 
 from __future__ import annotations
@@ -267,3 +269,68 @@ def test_the_blanked_samples_are_counted_in_the_record_and_report(tmp_path, monk
     monkeypatch.setattr(cli, "_stream", lambda paths, kw, failures=None: iter(probes))
     out = cli._stream_stats([None] * len(probes), ref, cfg, res, tmp_path)
     assert out["channels"]["T1"]["bad_buffer_samples"] == 64
+
+
+# ---------------------------------- #249: each channel's own span in the record
+def _dead_t2(tmp_path):
+    """Two beads, four files; T2 on the ADC rail through the last file (as SUNRISE 2021
+    Pelican's T1593 through SR1P_516)."""
+    probes, ref, _truth = make_deployment(SynthConfig(
+        n_yos=12, yo_seconds=1200.0, fs=4.0, ct_every_n=1, files_per_deployment=4))
+    for p in probes:
+        p.instrument_sn, p.probe_sn = "7", {"T1": "T100", "T2": "T101"}
+    probes[-1].counts["T2"] = np.full(probes[-1].counts["T2"].size, 32767.0)
+    cfg = {**_cfg(order="auto"), "channels": ["T1", "T2"]}
+    return probes, run_calibration(probes, ref, cfg, tmp_path, make_figure=False)
+
+
+def _utc(t: float) -> str:
+    from datetime import UTC, datetime
+
+    return datetime.fromtimestamp(t, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_each_channel_records_the_files_it_was_fitted_from(tmp_path):
+    probes, res = _dead_t2(tmp_path)
+    assert res["schema"] == "fp07-cal/2"
+    t1, t2 = res["channels"]["T1"], res["channels"]["T2"]
+    assert t1["span"]["n_files"] == 4 and t2["span"]["n_files"] == 3
+    assert t1["span"]["time_start"] == t2["span"]["time_start"] == res["time_start"]
+    assert t1["span"]["time_end"] == res["time_end"] == float(probes[3].time[-1])
+    assert t2["span"]["time_end"] == float(probes[2].time[-1]) < res["time_end"]
+    for s in (t1["span"], t2["span"]):
+        assert s["time_start"] <= s["first_pair"] < s["last_pair"] <= s["time_end"]
+    validate_record(res)
+
+
+def test_registry_add_gives_a_bead_its_own_span(tmp_path):
+    probes, res = _dead_t2(tmp_path)
+    def add(record, ch):
+        n_blocks = record["channels"][ch]["stability"]["n_blocks"]
+        return registry.entry_from_record(
+            record, ch, deployment="Synthetic", instrument_model="vmp-250",
+            method="vmp-own-jac", reference_kind="JAC CT", reference_serial="23",
+            reference_cal_date="2016-02-15", reference_pole_s=0.7,
+            block_offsets_K=[0.0] * n_blocks)
+
+    e2 = add(res, "T2")
+    assert e2["first"] == _utc(res["time_start"])
+    assert e2["last"] == _utc(probes[2].time[-1]) and e2["fit"]["n_files"] == 3
+    e1 = add(res, "T1")
+    assert e1["last"] == _utc(probes[3].time[-1]) and e1["fit"]["n_files"] == 4
+    # An fp07-cal/1 record has only the run's span, and still adds with it...
+    old = copy.deepcopy(res)
+    old["schema"] = "fp07-cal/1"
+    for c in old["channels"].values():
+        del c["span"]
+    validate_record(old)
+    e_old = add(old, "T2")
+    assert e_old["last"] == _utc(res["time_end"]) and e_old["fit"]["n_files"] == len(probes)
+    # ...but an fp07-cal/2 record without one has been edited.
+    old["schema"] = "fp07-cal/2"
+    with pytest.raises(registry.RegistryError, match="no per-channel span"):
+        add(old, "T2")
+    bad = copy.deepcopy(res)
+    bad["channels"]["T2"]["span"]["n_files"] = 0
+    with pytest.raises(registry.RegistryError, match="n_files"):
+        add(bad, "T2")
