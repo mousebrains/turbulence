@@ -444,20 +444,29 @@ def _load_source(source: "PFile | str | Path") -> dict[str, Any]:
 
 
 def _channel_attrs(
-    ch_name: str, dim: str, info: Mapping[str, Any], config: dict[str, Any] | None
+    ch_name: str,
+    dim: str,
+    info: Mapping[str, Any],
+    config: dict[str, Any] | None,
+    channel_info: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """A channel's variable attributes in a per-profile NetCDF.
 
     *info* is its ``PFile.channel_info`` entry (or the same shape, from
     :func:`~odas_tpw.rsi.convert.l1_native_channels`), *config* the parsed
     instrument configuration, or None when the source embeds none: then no
-    FP07 electronics coefficients are written, and chi falls back to its
-    defaults with a warning rather than reading defaults as coefficients.
+    FP07 coefficients are written, and chi falls back to its defaults with a
+    warning rather than reading defaults as coefficients. *channel_info* is
+    the whole ``PFile.channel_info``, where perturb's in-situ FP07 fit records
+    each fitted bead's coefficients on its base channel (#245).
     """
     # Lazy imports: chi_io pulls xarray; helpers is only needed for the
     # channel-name patterns. Keeps profile.py light at module-load time.
     from odas_tpw.rsi.chi_io import (
         _DEFAULT_DIFF_GAIN,
+        BEAD_COEFFS_SOURCE_ATTR,
+        _bead_coeffs_source,
+        _bead_fit,
         _extract_therm_cal,
         _therm_gradient_config,
     )
@@ -487,22 +496,25 @@ def _channel_attrs(
         attrs["hotel_max_gap"] = float(info["hotel_max_gap"])
     if config is None:
         return attrs
-    # FP07 electronics coefficients for the chi path (#131 m8): embed
-    # diff_gain plus exactly _extract_therm_cal's output for the base
-    # thermistor (including 'b' — noise_thermchannel's eta consumes it)
-    # as float attrs on each pre-emphasized gradient channel, so chi
-    # computed from a per-profile NetCDF uses the instrument's real
-    # coefficients instead of generic defaults (SN479: diff_gain=0.912,
-    # b=0.99861 vs the 0.94/1.0 fallbacks). NOTE: these attrs carry the
-    # FACTORY calibration from the embedded config string; perturb's fp07
-    # in-situ calibration may have rewritten the channel DATA in
-    # pf.channels before this write. That is intended — the attrs
-    # describe the electronics (noise floor, bilinear differentiator
-    # gain), and factory coefficients still beat generic defaults.
+    # FP07 coefficients for the chi path (#131 m8): embed diff_gain plus
+    # exactly _extract_therm_cal's output for the base thermistor (including
+    # 'b' — noise_thermchannel's eta consumes it) as float attrs on each
+    # pre-emphasized gradient channel, so chi computed from a per-profile
+    # NetCDF uses the instrument's real coefficients instead of generic
+    # defaults (SN479: diff_gain=0.912, b=0.99861 vs the 0.94/1.0 fallbacks).
+    # e_b, b, gain and adc_* describe the electronics and are the embedded
+    # config's. T_0/beta_1/beta_2 are the bead's R(T), with which the noise
+    # model converts counts to kelvin, so they must be what the channel's DATA
+    # were converted with: perturb's in-situ fit where it fitted the bead
+    # (recorded in channel_info, named by BEAD_COEFFS_SOURCE_ATTR), the
+    # embedded config's otherwise (#245).
     if dim == "time_fast" and DT_PATTERN.match(ch_name):
-        diff_gain, therm_cal = _therm_gradient_config(config, ch_name)
+        diff_gain, therm_cal = _therm_gradient_config(config, ch_name, channel_info)
         attrs["diff_gain"] = diff_gain
         attrs.update(therm_cal)
+        source = _bead_coeffs_source(channel_info, ch_name)
+        if source:
+            attrs[BEAD_COEFFS_SOURCE_ATTR] = source
     elif dim == "time_fast" and T_PATTERN.match(ch_name):
         # Plain fast T channel (no pre-emphasis): mirror the chi_io .p
         # branch's first-difference fallback exactly — diff_gain fixed at
@@ -515,7 +527,10 @@ def _channel_attrs(
             {},
         )
         attrs["diff_gain"] = _DEFAULT_DIFF_GAIN
-        attrs.update(_extract_therm_cal(ch_cfg))
+        attrs.update(_extract_therm_cal(ch_cfg, _bead_fit(channel_info, ch_name)))
+        source = _bead_coeffs_source(channel_info, ch_name)
+        if source:
+            attrs[BEAD_COEFFS_SOURCE_ATTR] = source
     return attrs
 
 
@@ -526,7 +541,9 @@ def _load_from_pfile(pf: "PFile") -> dict[str, Any]:
     channels = []
     for ch_name, ch_data in pf.channels.items():
         dim = "time_fast" if pf.is_fast(ch_name) else "time_slow"
-        attrs = _channel_attrs(ch_name, dim, pf.channel_info[ch_name], pf.config)
+        attrs = _channel_attrs(
+            ch_name, dim, pf.channel_info[ch_name], pf.config, pf.channel_info
+        )
         channels.append((ch_name, ch_data, dim, attrs))
 
     global_attrs = {

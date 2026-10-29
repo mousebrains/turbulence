@@ -120,7 +120,7 @@ Controls calibration of FP07 thermistors against a reference sensor.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `calibrate` | bool | `true` | Enable FP07 calibration |
+| `calibrate` | bool | `true` | Enable FP07 calibration. A fitted channel's chi noise model uses the fit too (its bead coefficients `T_0`, `beta_1`, `beta_2`; issue #245) |
 | `order` | int | `2` | Steinhart-Hart polynomial order |
 | `max_lag_seconds` | float | `10` | Max cross-correlation lag [seconds] |
 | `reference` | string | `"JAC_T"` | Reference temperature channel name |

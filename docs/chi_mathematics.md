@@ -296,6 +296,8 @@ noise_physical = Noise_counts * G_HP * scale^2
 
 where `T_in_situ` is the in-situ temperature in Kelvin (`T_mean + 273.15`), distinct from the fixed `T_K ≈ 295 K` operating temperature used in the Johnson-noise term above.
 
+`R/R_0 = exp(beta_1 (1/T_in_situ - 1/T_0))`, and a finite `beta_2` multiplies `scale` by `1 + 2 (beta_1/beta_2) ln(R/R_0)` (`gradT_noise_odas.m`). `b`, `E_b`, `G_1`, `V_FS` and `B` describe the electronics; `T_0`, `beta_1` and `beta_2` are the bead's R(T), so they must be the coefficients the temperature was converted with. Under perturb's `fp07.calibrate: true` that is the per-file in-situ fit for every channel it fitted (an order-1 fit has no `beta_2`, whatever the configuration carries) and the configuration's values for a channel it refused; the per-profile `T*_dT*` attributes carry the ones used, and `bead_coefficients_source` names an in-situ fit (issue #245). Before that fix the noise model always took the configuration's: on SUNRISE 2021 Pelican SN194 after its T2 bead swap (`t_0` 262.376, `beta_1` 708.07, `beta_2` 1000 embedded) that put the T2 noise model several times too high. There is no cubic term: an order-3 fit's `beta_3`, from perturb or from an `fp07-cal` patched configuration, is not in the noise model. Nor is `R/R_0` inverted beyond first order, which is close enough (< 2% in power) unless `beta_2` is comparable to `beta_1`: a near-degenerate order-2 fit (Taiwan 2013 husker FSA_011, `beta_1` 115, `beta_2` 145) puts the noise model 27-336x off.
+
 The conversion from frequency spectrum to wavenumber spectrum is:
 
 ```
