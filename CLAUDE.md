@@ -280,7 +280,10 @@ Facts that are easy to get wrong:
   the slow bead's chi on the osu684 glider's low-S/N windows.
 - **It never sets the absolute level and never removes ln G.** The pair's
   geometric mean stays on the tau model; the residual ln(chi2/chi1) is the
-  flat gain at ~1 Hz (calibration / diff_gain), by design.
+  flat gain at ~1 Hz, by design. That gain is calibration or diff_gain, OR a
+  bead response component slower than ~1 Hz, which looks flat above its
+  corner: T2005 (SN194 T2, 2021-2022) loses ~10% of its amplitude through a
+  130-190 ms path, which is its pairs' ln G of -0.27 (issue #252).
 - **Mutually exclusive with `fp07_tau_scale`** (refused at config load).
   Dropping ARCTERX-2022's production tau scales moves absolute chi by their
   geometric mean (~1.4x for SN194).
