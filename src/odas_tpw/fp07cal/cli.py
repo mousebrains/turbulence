@@ -24,6 +24,7 @@ from odas_tpw.fp07cal.lag import LagResult, pressure_offset, shares_clock, tempe
 from odas_tpw.fp07cal.pairs import SETTLE_TAUS, PairConfig, build_pairs_multi
 from odas_tpw.fp07cal.prior import (
     PriorError,
+    fp07_slope,
     is_ntc,
     load_sheet,
     no_prior_record,
@@ -783,6 +784,13 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
         # own fitted range, is a fit to noise (water with no temperature range)
         # and predicts its pairs within the 1 K gate all the same: without a
         # prior, an isothermal synthetic exported beta_1 = -1.06e5 (issue #238).
+        #
+        # Nor, with the right sign, is a slope no FP07 has (issue #247): over
+        # isothermal water 18 of 40 synthetic noise fits came out NTC with a
+        # local beta 14-42x an FP07's. Judged against every bead in the
+        # calibration sheet, so it needs no prior (prior.FP07_BETA_K).
+        why = ""
+        beta_span = None
         if not is_ntc(fit):
             lo, hi = fit.L_range
             why = (
@@ -791,6 +799,11 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
                 f"typically water with too little temperature range, where a fit to "
                 f"noise can take either sign"
             )
+        else:
+            slope_ok, slope_why, beta_span = fp07_slope(fit)
+            if not slope_ok:
+                why = slope_why
+        if why:
             print(f"  {ch}: REFUSED — {why}. No coefficients are exported for this "
                   f"channel; a fit.prior block lends such a deployment the bead's shape.",
                   file=sys.stderr)
@@ -801,6 +814,7 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
                 "refused_coefficients": fit.coeffs.tolist(),
                 "L_range": list(fit.L_range),
                 "T_range": list(fit.T_range),
+                **({"beta_range_K": beta_span} if beta_span is not None else {}),
             }
             if prior_rec is not None:
                 results["channels"][ch]["prior"] = prior_rec

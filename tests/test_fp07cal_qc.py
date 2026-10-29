@@ -5,17 +5,24 @@
       measured about the median: a minority population offset by many sigma
       dragged the least-squares zero off the majority, nothing was rejected and
       the channel was refused at the 1 K gate.
+#247  Without a prior, a fit to isothermal noise could be NTC and still have a
+      slope no FP07 has, and export.
 """
 
 from __future__ import annotations
 
+import copy
+
 import numpy as np
 import pytest
 
+from odas_tpw.fp07cal import registry
 from odas_tpw.fp07cal.cli import MAX_REJECTED_FRACTION, run_calibration
 from odas_tpw.fp07cal.fit import _subset, fit_calibration
 from odas_tpw.fp07cal.geometry import joint_fit, local_dTdz
 from odas_tpw.fp07cal.pairs import PairConfig, build_pairs_multi
+from odas_tpw.fp07cal.patch import validate_record
+from odas_tpw.fp07cal.prior import FP07_BETA_K, fp07_slope
 from odas_tpw.fp07cal.synth import SynthConfig, make_deployment
 
 
@@ -127,3 +134,57 @@ def test_the_population_rule_needs_a_fraction_or_whole_profiles():
     assert _population_warning({**tail, "share_in_those_profiles": 0.5})
     assert _population_warning({**tail, "n_profiles_mostly_rejected": 0,
                                 "share_in_those_profiles": 0.0, "first": None}) is None
+
+
+# ------------------------------- #247: a slope no FP07 has, without a prior
+def _iso(seed):
+    """Isothermal water (28 degC throughout, 2 mK noise): nothing to fit a slope to."""
+    from odas_tpw.fp07cal.synth import DEFAULT_COEFFS
+
+    cfg = SynthConfig(n_yos=16, yo_seconds=1200.0, fs=4.0, ct_every_n=1, T_surface=28.0,
+                      T_deep=28.0, files_per_deployment=4, seed=seed)
+    return make_deployment(cfg, coeffs=DEFAULT_COEFFS, channels=("T1",))[:2]
+
+
+def test_an_isothermal_fit_with_a_wrong_slope_is_refused(tmp_path):
+    """Seed 1: order 1 is NTC (T falls as L rises) with beta_1 = +4.47e4, 14x an FP07's.
+
+    It passed the NTC check and predicts its own pairs to a few mK, so before
+    #247 it was exported."""
+    probes, ref = _iso(1)
+    res = run_calibration(probes, ref, _cfg(), tmp_path, make_figure=False)
+    c = res["channels"]["T1"]
+    assert c["error"] == "not an FP07 curve"
+    assert "a slope no FP07 has" in c["reason"]
+    lo, hi = c["beta_range_K"]
+    assert 4.0e4 < lo <= hi < 5.0e4
+    assert 1.0 / c["refused_coefficients"][1] > 0  # the right sign: NTC passed
+    assert "config_equivalent" not in c and "coefficients" not in c
+    validate_record(res)
+    assert not (tmp_path / "T1_report.md").exists()
+
+
+def test_the_slope_bound_holds_every_calibration_in_the_sheet():
+    """FP07_BETA_K is the sheet's measured envelope: inside it, and not looser than 1%."""
+    reg = registry.load()
+    lo, hi = np.inf, -np.inf
+    for c in reg.calibrations:
+        ends = [registry._L_at(c.poly, T) for T in c.valid_T]
+        assert None not in ends, c.key
+        L = np.linspace(min(ends), max(ends), 201)
+        d = sum(i * a * L ** (i - 1) for i, a in enumerate(c.poly) if i)
+        beta = 1.0 / d
+        lo, hi = min(lo, float(beta.min())), max(hi, float(beta.max()))
+    assert FP07_BETA_K[0] <= lo and hi <= FP07_BETA_K[1], (lo, hi)
+    assert lo < FP07_BETA_K[0] * 1.01 and hi > FP07_BETA_K[1] / 1.01, (lo, hi)
+
+
+def test_fp07_slope_judges_the_local_beta_over_the_fits_range():
+    pairs, _minority, _truth = _bimodal_pairs(dT=0.0)
+    good = fit_calibration(pairs, order=2)
+    ok, why, span = fp07_slope(good)
+    assert ok and why == "" and 3000.0 < span[0] <= span[1] < 3200.0
+    for factor, expect in ((1.05, True), (1.25, False), (1 / 1.25, False)):
+        f = copy.copy(good)
+        f.coeffs = good.coeffs * np.array([1.0, 1 / factor, 1 / factor])  # beta x factor
+        assert fp07_slope(f)[0] is expect, factor

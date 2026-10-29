@@ -108,7 +108,9 @@ episode. With a `fit.prior` block, `fp07-cal fit` also fits `t_0` alone with the
 and keeps it unless the full fit is clearly better on held-out error (> 5%), and always over < 5 K of
 range or when no full order is a plausible curve for the bead (dT/dL within 10% of the prior's). It
 flags a result outside the prior's uncertainty over their common range (runbook §5). Without the
-block its output is byte-identical.
+block its output is byte-identical. With or without it, an exported curve must be NTC with a local
+beta `1/(d(1/T_K)/dL)` within 2723-3416 K over its range (`prior.FP07_BETA_K`, the sheet's
+2995-3105 K, +-10%; a test holds it to the sheet), or the channel is refused (#247).
 `fp07-cal registry add` records a fit by inserting text, never re-dumping the hand-edited YAML.
 An entry may carry a `response:` block, the bead's measured FP07 tau (a bead property
 carried with its calibration); `fp07-cal registry response` inserts it as text from an

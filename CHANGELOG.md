@@ -379,6 +379,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   channel's console log has a new line with the rejection counts. The joint
   fit still never judges pairs without a reference gradient, so with
   `fit.geometry: true` the bimodal synthetic is still refused, by those.
+- **`fp07-cal fit` without a prior exported a fit to isothermal noise with a
+  slope no FP07 has (#247).** #238 refuses a curve that is not NTC over its own
+  range; that is necessary, not sufficient. Over isothermal synthetic water 18
+  of 40 noise fits came out NTC, with a local beta (`1/(d(1/T_K)/dL)`, which is
+  dT/dL with the `T_K²` every thermistor shares divided out) 14-42 times an
+  FP07's, and exported. A fit is now also refused, `error: "not an FP07
+  curve"` with `beta_range_K` in the record, when its local beta leaves
+  2723-3416 K anywhere over its fitted range: the 2995-3105 K that all 23
+  calibrations of the sheet's 12 beads span (`prior.FP07_BETA_K`, 3.6% wide)
+  with the 10% the prior's check allows one bead. A constant, because a fit
+  without `fit.prior` has no sheet (it is in the repository, not the installed
+  package); a test fails when a calibration in the sheet leaves it, so it is
+  widened on purpose. Refused rather than flagged, like a non-NTC curve: a
+  refused channel can be refitted with `fit.prior` or looked into, while an
+  exported one is patched into the files. With a prior nothing changes
+  unless `mode: full` keeps a full fit outside the bound, which is now
+  refused too. Every calibration in the sheet, refitted without its prior
+  from the deployment its entry names (30 fitted channels with their variants,
+  above), still exports, its local beta at least 10% inside the bound.
 - **`fp07-cal` on a VMP against its own JAC CT (#238).** Six defects found
   fitting VMP beads against the instrument's own reference. On three glider
   deployments (osu684 2023/2025, osu685 2025) the coefficients, chosen

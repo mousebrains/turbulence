@@ -92,8 +92,14 @@ Writes `coefficients.json`, a per-channel `*_report.md`, and diagnostics PNGs.
   left out of those. A fit that is not an FP07 curve is refused with
   `error: "not an FP07 curve"`: typically water with too little temperature
   range, where a fit to noise can take either sign (an isothermal synthetic
-  gave β₁ = −1.06×10⁵). A `fit.prior` block (§5) lends such a deployment the
-  bead's shape.
+  gave β₁ = −1.06×10⁵). The same refusal, with `beta_range_K` in the record,
+  meets a curve of the right sign whose slope no FP07 has: a local beta
+  (`1/(d(1/T_K)/dL)`, the slope with the `T_K²` every thermistor shares
+  divided out) outside 2723-3416 K anywhere over the fitted range. Every
+  calibration in the sheet lies within 2995-3105 K (`prior.FP07_BETA_K`; a
+  test fails if one leaves it), and the bound adds 10% each way; isothermal
+  noise fits of the right sign came out 14-42 times an FP07's (issue #247). A
+  `fit.prior` block (§5) lends such a deployment the bead's shape.
 - **`## Notes` in the report.** A requested geometry term that could not be
   fitted (no profile spans the ~30 dbar the reference gradient needs; the fit
   is then made without it, and the record has `geometry_skipped`), and
