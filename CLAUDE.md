@@ -167,6 +167,11 @@ Facts that are easy to get wrong:
   the record's `robust_rejection` mark a rejected POPULATION (> 15% of the
   pairs, or >= half the rejections in profiles that lost over half their
   pairs). On 11 real deployments: at most 6.9% and 12.7%.
+- **Bad-buffer thermistor counts are blanked, not paired** (#248). PFile
+  reports bad buffers (and framing-repair slots) but leaves the values;
+  `load_probe_series` sets to NaN what chi's per-thermistor mask marks
+  (`rsi.bad_buffer.probe_masks` on `T*`/`T*_dT*`, with the deconvolution
+  smear; not pressure), and the record's `bad_buffer_samples` counts them.
 - **perturb refuses its own per-file fit against a hotel reference** unless
   `fp07.allow_hotel_reference: true`. A file the glider CTD did not cover
   keeps the factory coefficients while its neighbors are fitted, putting one

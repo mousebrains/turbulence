@@ -51,6 +51,8 @@ class ProbeSeries:
     instrument_sn: str = "?"
     probe_sn: dict[str, str] = field(default_factory=dict)
     speed: np.ndarray | None = None  # m/s, for the flushing gate
+    bad_buffer: dict[str, int] = field(default_factory=dict)
+    """Channel -> counts blanked (set NaN) as RDL bad buffers; see :func:`load_probe_series`."""
 
     @property
     def fs(self) -> float:
@@ -324,6 +326,14 @@ def load_probe_series(
     *direction* is passed to the profile detector: ``glide`` (both legs, a
     glider yo) or ``down`` (a VMP, whose hauled-in ascent puts the sensors in
     the body's wake) or ``up``.
+
+    Counts PFile reports as RDL bad buffers, or as record slots a framing
+    repair rebuilt by interpolation, are not measurements and are set to NaN
+    (issue #248), so ``pairs`` drops every kernel they touch (#238's gap
+    path).  The mask is chi's per-thermistor one
+    (:func:`odas_tpw.rsi.bad_buffer.probe_masks` on the channel's own
+    ``T*`` / ``T*_dT*`` reports, dilated over the deconvolution's smear).
+    ``bad_buffer`` counts what was blanked, per channel.
     """
     from odas_tpw.rsi.p_file import PFile
 
@@ -344,6 +354,7 @@ def load_probe_series(
     factory: dict[str, np.ndarray] = {}
     beta_key: dict[str, str] = {}
     probe_sn: dict[str, str] = {}
+    bad_buffer: dict[str, int] = {}
     ratio = max(1, round(float(pf.fs_fast) / float(pf.fs_slow)))
     for name in wanted:
         if name not in pf.channels_raw or name not in by_name:
@@ -355,6 +366,13 @@ def load_probe_series(
             raw[:n] if raw.size >= n
             else np.pad(raw, (0, n - raw.size), constant_values=np.nan)
         )
+        bad = _bad_buffer_mask(pf, name, by_name, n, ratio)
+        if bad is not None:
+            blank = bad & np.isfinite(counts[name])
+            if blank.any():
+                # A copy: the slice can be a view onto pf.channels_raw.
+                counts[name] = np.where(blank, np.nan, counts[name])
+                bad_buffer[name] = int(blank.sum())
         cfg = by_name[name]
         bridge[name] = BridgeParams.from_channel_config(cfg, name)
         factory[name] = config_to_coeffs(cfg)
@@ -406,4 +424,44 @@ def load_probe_series(
         instrument_sn=str(pf.config.get("instrument_info", {}).get("sn", "?") or "?"),
         probe_sn=probe_sn,
         speed=speed,
+        bad_buffer=bad_buffer,
     )
+
+
+def _bad_buffer_mask(
+    pf: Any, name: str, by_name: dict[str, dict], n: int, ratio: int
+) -> np.ndarray | None:
+    """Thermistor *name*'s bad-buffer samples on the slow grid, or None when it has none.
+
+    The definition is chi's (:func:`odas_tpw.rsi.bad_buffer.probe_masks`), not a
+    second one: the channel chi would read for this bead (``T1_dT1`` when the
+    file has it, else ``T1``) with the base ``T1`` folded in, every run of a
+    thermistor channel graded DROPPED, and a pre-emphasised pair's mask widened
+    over the 3 ``diff_gain`` the deconvolution smears a dropout forward (the
+    counts here ARE that deconvolution's output).  Taken on the fast grid at
+    every ``ratio``-th sample, which is where the counts were read.  Pressure is
+    left out: it does not enter a pair's value.
+    """
+    from odas_tpw.rsi.bad_buffer import probe_masks, sample_masks
+    from odas_tpw.rsi.channels import config_number
+
+    report = getattr(pf, "bad_buffer_report", None) or {}
+    if not report.get("confirmed"):
+        return None
+    t_fast, t_slow = np.asarray(pf.t_fast), np.asarray(pf.t_slow)
+    masks = sample_masks(report, t_fast.size, t_slow.size,
+                         fs_fast=pf.fs_fast, fs_slow=pf.fs_slow)
+    if not masks:
+        return None
+    probe = f"{name}_d{name}" if f"{name}_d{name}" in pf.channels else name
+    gains = {
+        k: config_number(c.get("diff_gain"), key="diff_gain", channel=k)
+        for k, c in by_name.items()
+        if k == probe and c.get("diff_gain") not in (None, "")
+    }
+    fast, _prov = probe_masks(masks=masks, probe_names=[probe], shared_names=(),
+                              t_fast=t_fast, t_slow=t_slow, fs_fast=float(pf.fs_fast),
+                              diff_gains=gains)
+    bad = np.asarray(fast[0][::ratio] != 0)
+    bad = bad[:n] if bad.size >= n else np.pad(bad, (0, n - bad.size))
+    return bad if bad.any() else None

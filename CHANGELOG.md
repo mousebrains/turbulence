@@ -398,6 +398,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   refused too. Every calibration in the sheet, refitted without its prior
   from the deployment its entry names (30 fitted channels with their variants,
   above), still exports, its local beta at least 10% inside the bound.
+- **`fp07-cal` paired thermistor counts PFile had reported as bad buffers
+  (#248).** PFile reports RDL bad-buffer runs, and the record slots a framing
+  repair rebuilds by interpolation, and leaves the values in place; they
+  reached the calibration as measurements. `load_probe_series` now sets them
+  to NaN, so #238's gap path drops every pair they touch. The mask is not a
+  second definition: it is chi's per-thermistor one
+  (`rsi.bad_buffer.probe_masks` over `T1` and `T1_dT1`, every thermistor run
+  DROPPED, widened over the 3 `diff_gain` the deconvolution smears a dropout
+  forward), without the pressure channels, which do not enter a pair's value.
+  `ProbeSeries.bad_buffer` counts them per channel; the record carries
+  `bad_buffer_samples` (samples, files) and the report a note, and the
+  streaming pass's `per_profile` its own count. On ARCTERX-2022 Wake (one
+  rebuilt record in ARC1A046) 250 and 244 counts were blanked, 16 and 15
+  kernels touched them, all outside the descents already, and the fit is the
+  same pairs and the same curve to 1e-8 mK. The runbook's VMP reference
+  recipe (§8) blanks `JAC_T` and `P` the same way.
 - **`fp07-cal` on a VMP against its own JAC CT (#238).** Six defects found
   fitting VMP beads against the instrument's own reference. On three glider
   deployments (osu684 2023/2025, osu685 2025) the coefficients, chosen

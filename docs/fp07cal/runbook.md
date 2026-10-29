@@ -336,7 +336,9 @@ same slow clock as the thermistors. The same commands apply, with a reference
 built from the instrument's own samples and a few settings changed.
 
 **The reference.** Every n-th slow sample of `JAC_T` and `P`, on the
-instrument's own time stamps. A subset is fine; nothing may be interpolated:
+instrument's own time stamps. A subset is fine; nothing may be interpolated,
+so samples PFile reports as bad buffers (or rebuilt after a framing repair)
+are blanked, and the NaN drops them:
 
 ```python
 from pathlib import Path
@@ -344,15 +346,24 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from odas_tpw.rsi.bad_buffer import channel_masks
 from odas_tpw.rsi.p_file import PFile
 
 t, T, P = [], [], []
 for path in sorted(Path("VMP").glob("*.p")):
     pf = PFile(path)
     ts = pf.start_time.timestamp() + np.asarray(pf.t_slow, dtype=np.float64)
+    bad = channel_masks(pf)  # per channel, on its own axis; nonzero = not a measurement
+
+    def real(name):
+        x = np.asarray(pf.channels[name], dtype=np.float64)[: ts.size].copy()
+        if name in bad:
+            x[np.asarray(bad[name][: ts.size]) != 0] = np.nan
+        return x[::8]
+
     t.append(ts[::8])
-    T.append(np.asarray(pf.channels["JAC_T"], dtype=np.float64)[: ts.size][::8])
-    P.append(np.asarray(pf.channels["P"], dtype=np.float64)[: ts.size][::8])
+    T.append(real("JAC_T"))
+    P.append(real("P"))
 ds = xr.Dataset({"JAC_T": ("obs", np.concatenate(T)), "P": ("obs", np.concatenate(P))},
                 coords={"time": ("obs", np.concatenate(t))})
 ds["time"].attrs["units"] = "seconds since 1970-01-01"
@@ -445,6 +456,17 @@ What then differs from a glider:
   pair is averaged over a shorter window than the rest. Before issue #238 one
   NaN turned the rest of the file to NaN. The report's Notes and the record's
   `thermistor_gaps` say what was lost.
+- **Bad-buffer thermistor counts are blanked, not paired** (issue #248).
+  PFile reports RDL bad-buffer runs and the record slots a framing repair
+  rebuilt by interpolation, and leaves the values in place; `fp07-cal` sets
+  those thermistor counts to NaN, so the gap path above drops every pair they
+  touch. The mask is chi's per-thermistor one (`T1` and `T1_dT1`, widened over
+  the 3 `diff_gain` the deconvolution smears a dropout forward), without the
+  pressure channels, which do not enter a pair's value. The report's Notes,
+  the record's `bad_buffer_samples` and the streaming pass's `per_profile`
+  count them. On ARCTERX-2022 Wake, whose ARC1A046 has one rebuilt record,
+  250 and 244 counts were blanked and the fit is the same to round-off: the
+  slot lies before the first descent.
 - **The T1 − T2 check uses this run's fitted coefficients**, one set per
   channel. Each file's embedded set was used before, and where files had been
   patched one by one those differ by several K at fixed L, so `T1 − T2`

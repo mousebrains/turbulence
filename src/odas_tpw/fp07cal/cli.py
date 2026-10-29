@@ -450,6 +450,16 @@ def _gap_note(s: dict) -> str:
     )
 
 
+def _bad_buffer_note(s: dict) -> str:
+    return (
+        f"{s['n_samples']} thermistor count(s) in {s['n_files']} file(s) were RDL bad "
+        f"buffers or record slots a framing repair rebuilt (PFile.bad_buffer_report), with "
+        f"the deconvolution's smear after them, as chi masks them. They were set to NaN, "
+        f"not paired: invented values are not calibration data (issue #248). The pairs "
+        f"they cost are counted under `thermistor_gap`."
+    )
+
+
 def _outliers_beyond_gate(pairs, pred_err: np.ndarray, outlier: np.ndarray) -> dict | None:
     """The pairs the robust fit rejected that the export gate would have refused on."""
     big = outlier & np.isfinite(pred_err) & (pred_err > MAX_PREDICTION_ERROR_K)
@@ -627,6 +637,16 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
 
         notes: list[str] = []
         extra: dict = {}
+        blanked = {p.label: n for p in probes
+                   if (n := int((getattr(p, "bad_buffer", None) or {}).get(ch, 0)))}
+        if blanked:
+            extra["bad_buffer_samples"] = {
+                "n_samples": sum(blanked.values()),
+                "n_files": len(blanked),
+                "files": sorted(blanked)[:20],
+            }
+            notes.append(_bad_buffer_note(extra["bad_buffer_samples"]))
+            print(f"  {ch}: NOTE {notes[-1]}")
         if pairs.gaps:
             extra["thermistor_gaps"] = _gap_summary(pairs)
             notes.append(_gap_note(extra["thermistor_gaps"]))
@@ -1154,6 +1174,7 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
             geometry[ch] = (dz, tau if np.isfinite(tau) else 0.0)
 
     recs: dict[str, list] = {ch: [] for ch in model}
+    blanked: dict[str, int] = {ch: 0 for ch in model}
     n_files = 0
     failures: list[tuple[str, str]] = []
     for probe in _stream(paths, _profile_kwargs(cfg), failures):
@@ -1161,6 +1182,7 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
         for ch, (coeffs, lag) in model.items():
             if ch not in probe.counts:
                 continue
+            blanked[ch] += int((getattr(probe, "bad_buffer", None) or {}).get(ch, 0))
             ps = build_pairs(probe, ref, ch, lag=lag, cfg=pc)
             if len(ps) < 100:
                 continue
@@ -1273,6 +1295,9 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
         }
         np.savez_compressed(out_dir / f"{ch}_profiles.npz",
                             t=t, a0=a0, resid=resid, T=Tm)
+    for ch, n in blanked.items():  # thermistor counts set NaN as bad buffers (#248)
+        if n and ch in out["channels"]:
+            out["channels"][ch]["bad_buffer_samples"] = n
     return out
 
 

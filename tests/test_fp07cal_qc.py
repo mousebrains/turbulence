@@ -7,11 +7,15 @@
       the channel was refused at the 1 K gate.
 #247  Without a prior, a fit to isothermal noise could be NTC and still have a
       slope no FP07 has, and export.
+#248  Thermistor counts PFile reports as bad buffers (or rebuilt by a framing
+      repair) reached the calibration as if they were measurements.
 """
 
 from __future__ import annotations
 
 import copy
+import struct
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -23,7 +27,9 @@ from odas_tpw.fp07cal.geometry import joint_fit, local_dTdz
 from odas_tpw.fp07cal.pairs import PairConfig, build_pairs_multi
 from odas_tpw.fp07cal.patch import validate_record
 from odas_tpw.fp07cal.prior import FP07_BETA_K, fp07_slope
+from odas_tpw.fp07cal.series import load_probe_series
 from odas_tpw.fp07cal.synth import SynthConfig, make_deployment
+from odas_tpw.rsi.p_file import PFile
 
 
 def _dep(**kw):
@@ -188,3 +194,76 @@ def test_fp07_slope_judges_the_local_beta_over_the_fits_range():
         f = copy.copy(good)
         f.coeffs = good.coeffs * np.array([1.0, 1 / factor, 1 / factor])  # beta x factor
         assert fp07_slope(f)[0] is expect, factor
+
+
+# ---------------------------------- #248: bad buffers are not thermistor samples
+VMP_P = Path(__file__).parent / "data" / "SN479_0006.p"  # VMP-250IR v6.1, T1/T1_dT1, T2/T2_dT2
+
+
+def _short_record(raw: bytes, k: int, keep: int = 33) -> bytes:
+    """Data record *k* (0-based) keeps only its first *keep* matrices: a mis-framed
+    record, which PFile rebuilds by interpolation and reports as a bad buffer."""
+    endian = ">" if struct.unpack(">64H", raw[:128])[17] == 128 else "<"
+    w = struct.unpack(f"{endian}64H", raw[:128])
+    header, first, record, matrix = w[17], w[17] + w[11], w[18], w[30] * (w[28] + w[29]) * 2
+    a = first + k * record + header + keep * matrix
+    return raw[:a] + raw[first + (k + 1) * record:]
+
+
+@pytest.fixture(scope="module")
+def sn479(tmp_path_factory):
+    """SN479_0006 as recorded, and with data record 100 mis-framed."""
+    damaged = tmp_path_factory.mktemp("p248") / "damaged.p"
+    damaged.write_bytes(_short_record(VMP_P.read_bytes(), 100))
+    clean = load_probe_series(VMP_P, profiles=[], speed_var=None)
+    with pytest.warns(UserWarning, match="mis-framed"):
+        hit = load_probe_series(damaged, profiles=[], speed_var=None)
+    pf = PFile(VMP_P)
+    per = int(pf.samples_per_record) // round(float(pf.fs_fast) / float(pf.fs_slow))
+    return clean, hit, per, float(pf.fs_slow)
+
+
+def test_a_clean_file_blanks_nothing(sn479):
+    clean, _hit, _per, _fs = sn479
+    assert clean.bad_buffer == {}
+    assert all(np.isfinite(c).all() for c in clean.counts.values())
+
+
+def test_the_rebuilt_record_is_blanked_with_the_deconvolution_smear(sn479):
+    """The slot PFile rebuilt is NaN, and so is the 3 diff_gain the deconvolution
+    smears it forward (chi's mask), and nothing else."""
+    clean, hit, per, fs = sn479
+    for ch in ("T1", "T2"):
+        c = hit.counts[ch]
+        bad = np.flatnonzero(np.isnan(c))
+        assert hit.bad_buffer[ch] == bad.size
+        assert bad[0] == 100 * per - 1  # the slow sample whose stencil reaches the slot
+        assert np.array_equal(bad, np.arange(bad[0], bad[-1] + 1))  # one run
+        smear_s = (bad[-1] + 1 - 101 * per) / fs
+        assert 2.5 < smear_s < 3.5, smear_s  # 3 x diff_gain (~1 s)
+        # Elsewhere the counts are the clean file's, but for the deconvolution's
+        # global regression, which the rebuilt slot moves by a fraction of a count.
+        rest = np.ones(c.size, dtype=bool)
+        rest[bad[0] - int(5 * fs): bad[-1] + 1 + int(5 * fs)] = False
+        np.testing.assert_allclose(c[rest], clean.counts[ch][rest], rtol=0, atol=1.0)
+
+
+def test_the_blanked_samples_are_counted_in_the_record_and_report(tmp_path, monkeypatch):
+    """As load_probe_series leaves them: NaN counts, and their number per channel."""
+    import odas_tpw.fp07cal.cli as cli
+
+    probes, ref, _truth = _dep()
+    p = probes[1]
+    i = np.arange(p.time.size)
+    p.counts["T1"] = np.where((i >= i.size // 2) & (i < i.size // 2 + 64), np.nan, p.counts["T1"])
+    p.bad_buffer = {"T1": 64}
+    cfg = _cfg()
+    res = run_calibration(probes, ref, cfg, tmp_path, make_figure=False)
+    e = res["channels"]["T1"]
+    assert e["bad_buffer_samples"] == {"n_samples": 64, "n_files": 1, "files": [p.label]}
+    assert e["thermistor_gaps"]["n_nonfinite_samples"] == 64  # the #238 gap path took them
+    assert "RDL bad buffers" in (tmp_path / "T1_report.md").read_text(encoding="utf-8")
+    # ...and the streaming pass over every file counts them too.
+    monkeypatch.setattr(cli, "_stream", lambda paths, kw, failures=None: iter(probes))
+    out = cli._stream_stats([None] * len(probes), ref, cfg, res, tmp_path)
+    assert out["channels"]["T1"]["bad_buffer_samples"] == 64
