@@ -8,8 +8,9 @@ situ. The per-bead correction the conclusions point to was built:
 branch ("per-bead tau goes into the #189 registry") was built 2026-10-28:
 `fp07-pair tau` measures each bead's single-pole-equivalent tau and the FP07
 calibration sheet carries it (`docs/fp07pair/runbook.md` §6). No lab measurement
-will be made, and the SBE7 route is closed (Starbuck is the only deployment
-with one, and its channel is unusable). Sections are kept in the order they
+will be made, and the micro-conductivity route is closed (Starbuck is the only
+deployment with one, and its `C1_dC1` behaves as a temperature sensor, not a
+conductivity cell: section "Starbuck micro-conductivity", revisited 2026-10-28). Sections are kept in the order they
 were written; later sections supersede earlier ones where they differ (the
 section-3 method was BLOCKED on VMP data, and the "a ~ 1" shape claim was
 WITHDRAWN; see "Fleet results and conclusions").
@@ -365,6 +366,38 @@ to 12 Hz — not an FP07 response. The channel itself:
 
 It cannot resolve the FP07 knee (~10 Hz at 0.5 m/s). Closed for this dataset.
 
+> **Revisited 2026-10-28: still not usable, but for a different reason.** Most
+> of the reasons above were analysis artifacts:
+> - **De-emphasized twice.** `PFile` overwrites `channels_raw['C1_dC1']` with
+>   the de-emphasized series, as it does every channel with a `diff_gain`.
+>   `uc_ratio.py` then divided by 1 + (2 pi f G)^2 again: 7x too small at 1 Hz,
+>   ~900x at 12 Hz. That is the ratio that "rises ~f^2", and the reason the
+>   transfer seemed to fall where it should rise.
+> - **The pre-emphasis matches the config.** Fitted against T1 at 0.03-1 Hz:
+>   G_C 0.357 s (MAD 0.033, n 11 files) against 0.4 configured.
+> - **It is not quantization-limited.** The floor is 0.2-0.3 mK/sqrt(Hz),
+>   white from 10 to 80 Hz. In the strongest 1-5% of windows C1 clears 3x its
+>   noise to 16-21 Hz, past the knee at 0.3-0.4 m/s.
+> - **No other C channel.** The address matrix never samples one. The channel
+>   is DC-coupled: it tracks the glider CTD's temperature from 12 to 28 C to
+>   0.6 counts rms.
+>
+> **The real reason: C1 does not see salinity.**
+> - **Salinity test.** Its fit gain is -2.2 counts/psu [file bootstrap 16-84%:
+>   -2.9 to -1.5; 101 files, 82,207 CTD samples], against +89 for a
+>   conductivity cell at its temperature gain. Its temperature curve has an NTC
+>   thermistor's curvature (C''/C' 0.028/K, against 0.006 for seawater
+>   conductivity).
+> - **Spectral ratio.** C1/T1 FALLS above the FP07 knee: 0.50-0.60 at 16-22 Hz
+>   in the strongest 1% of windows, against 0.95 at 1 Hz. A pole-free
+>   reference would make it rise. The same estimator on a synthetic pole-free
+>   C1 recovers a single-pole 15 ms T1 as 14.6 ms and a double-pole 10 ms as
+>   9.2 ms, so it would have seen a real reference.
+>
+> That C1 is a slow thermistor is a conjecture (~85%). Every file carries the
+> same 2012 configuration template, so whether an SBE7 was ever fitted is
+> unverified. `uc_ratio.py` is corrected.
+
 
 ## T1/T2 ratio on real data, first pass (2026-10-13; `run_fleet.py`)
 
@@ -566,6 +599,6 @@ Build the per-bead equalization: done as `fp07-pair` (PR #217), which on
 ARCTERX-2022 brought each pair's chi ratio onto its flat gain (SN194 -0.570 ->
 -0.142, SN428 +0.321 -> +0.088 in ln) and removed the K_max_ratio trend. No
 lab measurement. Starbuck is the only deployment with an SBE7, and its
-micro-conductivity channel cannot reach the FP07 knee (above), so there is no
-in-hand external reference. "The pair comparison is what is most practical
+micro-conductivity channel cannot serve (above: revisited 2026-10-28, it
+behaves as a temperature sensor), so there is no in-hand external reference. "The pair comparison is what is most practical
 now."

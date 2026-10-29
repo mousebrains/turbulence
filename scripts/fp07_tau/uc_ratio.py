@@ -19,8 +19,11 @@ uc_gate_synth.py: x <= 0.15 recovers tau within ~4% at a 30% salinity share).
 Both spectra are formed here, identically, from the raw channels:
   T: deconvolved temperature (PFile T1_dT1), first-differenced, times the
      bilinear correction the chi pipeline applies;
-  C: raw pre-emphasized counts, first-differenced, divided by the exact
-     analog pre-emphasis response 1 + (2 pi f G)^2.
+  C: PFile's C1_dC1 counts, first-differenced, times the same bilinear
+     correction with its own diff_gain. PFile.channels_raw already holds the
+     DE-EMPHASIZED series for every channel with a diff_gain; dividing by
+     1 + (2 pi f G)^2 again (as this script did until 2026-10-28) made the
+     ratio rise ~f^2.
 The first difference and the anti-alias filters are common and cancel.
 """
 
@@ -102,7 +105,7 @@ def accumulate(eps_glob, x_max=0.15, f_lo=0.5, f_hi=60.0, t_name="T1_dT1", c_nam
             F, sT = welch(xt, fs=fs, nperseg=nfft, noverlap=nfft // 2, window="hann", detrend="linear")
             _, sC = welch(xc, fs=fs, nperseg=nfft, noverlap=nfft // 2, window="hann", detrend="linear")
             sT = sT * _bilinear_correction(F, gT, fs)
-            sC = sC / (1 + (2 * np.pi * F * gC) ** 2) / alpha[k] ** 2
+            sC = sC * _bilinear_correction(F, gC, fs) / alpha[k] ** 2
             x = (F / W[k]) / kB[k]
             gate = (x <= x_max) & (f_lo <= F) & (f_hi >= F)
             b = 0 if w_edges is None else int(np.searchsorted(w_edges, W[k]) - 1)
